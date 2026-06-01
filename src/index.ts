@@ -1,10 +1,8 @@
 import { WebSocketServer } from "ws";
-import path from "node:path";
-import { notifyCodex } from "./codexApp.js";
-import { notifyCodexDesktop } from "./codexDesktopIpc.js";
 import { buildReply } from "./commands.js";
 import { config, isTargetGroup } from "./config.js";
-import { appendCodexNotification, appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "./history.js";
+import { forwardMessage, type ForwardRouteKind } from "./forwarding.js";
+import { appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "./history.js";
 import { sendGroupMessage, sendPrivateMessage } from "./napcat.js";
 
 type OneBotEvent = {
@@ -29,7 +27,7 @@ type OneBotMessageSegment = {
 };
 
 type GroupRoute = {
-  kind: "direct_at" | "direct_reply" | "indirect_reply";
+  kind: Extract<ForwardRouteKind, "direct_at" | "direct_reply" | "indirect_reply">;
 };
 
 function textFromEvent(event: OneBotEvent): string {
@@ -137,68 +135,8 @@ function getGroupRoute(event: OneBotEvent): GroupRoute | null {
   return null;
 }
 
-function templateForGroupRoute(route: GroupRoute): string {
-  if (route.kind === "direct_reply") {
-    return config.groupDirectReplyNotificationTemplate;
-  }
-  if (route.kind === "indirect_reply") {
-    return config.groupIndirectReplyNotificationTemplate;
-  }
-  return config.groupAtNotificationTemplate;
-}
-
-function formatTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleString("zh-CN", { hour12: false });
-}
-
-function renderTemplate(template: string, values: Record<string, string | number | undefined>): string {
-  return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: string) => {
-    const value = values[key];
-    return value == null ? match : String(value);
-  });
-}
-
-function commonTemplateValues(record: GroupMessageRecord | PrivateMessageRecord): Record<string, string | number | undefined> {
-  const sender = record.senderName || record.userId;
-  const isGroup = "groupId" in record;
-  const targetId = isGroup ? record.groupId : record.userId;
-  const targetType = isGroup ? "group" : "private";
-  return {
-    time: formatTime(record.time),
-    sender,
-    senderName: record.senderName,
-    userId: record.userId,
-    groupId: isGroup ? record.groupId : undefined,
-    targetType,
-    targetId,
-    messageTarget: isGroup ? `群 ${targetId}` : `私聊 ${targetId}`,
-    message: record.rawMessage,
-    rawMessage: record.rawMessage,
-    messageId: record.messageId,
-    botNickname: config.botNickname,
-    dataDir: config.dataDir,
-    groupLogPath: path.join(config.dataDir, "group-messages.jsonl"),
-    privateLogPath: path.join(config.dataDir, "private-messages.jsonl")
-  };
-}
-
 function isSelfMessage(event: OneBotEvent): boolean {
   return Boolean(event.self_id && event.user_id === event.self_id);
-}
-
-function notify(message: string, kind: "private" | "group_mention" = message.includes("群聊里有人") ? "group_mention" : "private"): void {
-  appendCodexNotification({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    time: Math.floor(Date.now() / 1000),
-    kind,
-    text: message
-  });
-
-  if (config.codexDesktopIpcNotify) {
-    void notifyCodexDesktop(message).catch((error) => console.error("Failed to notify Codex Desktop", error));
-  } else if (config.codexDirectNotify) {
-    void notifyCodex(message).catch((error) => console.error("Failed to notify Codex", error));
-  }
 }
 
 async function handleGroupMessage(event: OneBotEvent): Promise<void> {
@@ -222,13 +160,11 @@ async function handleGroupMessage(event: OneBotEvent): Promise<void> {
   const route = getGroupRoute(event);
   if (route) {
     const repliedMessage = findRepliedGroupMessage(event);
-    notify(renderTemplate(templateForGroupRoute(route), {
-      ...commonTemplateValues(record),
-      routeKind: route.kind,
+    forwardMessage(route.kind, record, {
       selfId: event.self_id,
       repliedMessageId: replyMessageId(event) ?? undefined,
       repliedMessage: repliedMessage?.rawMessage
-    }), "group_mention");
+    });
   }
 
   const reply = buildReply(record);
@@ -259,7 +195,7 @@ async function handlePrivateMessage(event: OneBotEvent): Promise<void> {
   };
 
   appendPrivateMessage(record);
-  notify(renderTemplate(config.privateNotificationTemplate, commonTemplateValues(record)));
+  forwardMessage("private", record);
 
   const content = record.rawMessage.trim();
   if (content === "/ping" || content === "ping") {

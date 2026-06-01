@@ -259,7 +259,7 @@ async function ensureMonitorThread(): Promise<string> {
     sessionStartSource: "startup",
     ephemeral: false,
     baseInstructions: null,
-    developerInstructions: "这是 QQ/NapCat 消息监听线程。收到提醒后，请读取 C:\\Data\\CottonProject\\qq-agent-gateway\\data 下的 JSONL 消息记录，理解最新 QQ 私聊或群 @ 的上下文，并在 Codex 会话里开始处理。",
+    developerInstructions: `这是 QQ/NapCat 消息监听线程。收到提醒后，请读取 ${config.dataDir} 下的 JSONL 消息记录，理解最新 QQ 私聊或群 @ 的上下文，并在 Codex 会话里开始处理。`,
     config: null,
     model: null
   }) as { thread?: { id?: string } };
@@ -330,7 +330,7 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
           text: [
             message,
             "",
-            "这是来自 QQ/NapCat 网关的消息更新提醒。请读取 C:\\Data\\CottonProject\\qq-agent-gateway\\data 下相关 JSONL 的最新记录，理解上下文，并在这个 Codex 会话里开始处理该消息。"
+            `这是来自 QQ/NapCat 网关的消息更新提醒。请读取 ${config.dataDir} 下相关 JSONL 的最新记录，理解上下文，并在这个 Codex 会话里开始处理该消息。`
           ].join("\n")
         }
       ],
