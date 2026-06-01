@@ -1,0 +1,363 @@
+import fs from "node:fs";
+import net from "node:net";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { config } from "./config.js";
+
+type IpcResponse = {
+  type: "response";
+  requestId: string;
+  resultType: "success" | "error";
+  method?: string;
+  result?: unknown;
+  error?: string;
+};
+
+type IpcMessage =
+  | IpcResponse
+  | {
+      type: "broadcast";
+      method: string;
+      params?: {
+        conversationId?: string;
+        change?: unknown;
+      };
+    }
+  | {
+      type: "client-discovery-request";
+      requestId: string;
+    };
+
+type IpcPending = {
+  resolve: (value: IpcResponse) => void;
+  reject: (reason: unknown) => void;
+  timer: NodeJS.Timeout;
+};
+
+type CodexState = {
+  monitorThreadId?: string;
+  notificationCount?: number;
+  lastNotificationAt?: string;
+};
+
+const pipePath = process.platform === "win32"
+  ? "\\\\.\\pipe\\codex-ipc"
+  : path.join("/tmp", "codex-ipc", typeof process.getuid === "function" ? `ipc-${process.getuid()}.sock` : "ipc.sock");
+
+const statePath = path.join(config.dataDir, "codex-state.json");
+const pending = new Map<string, IpcPending>();
+
+let socket: net.Socket | null = null;
+let connecting: Promise<net.Socket> | null = null;
+let clientId = "initializing-client";
+let readBuffer = Buffer.alloc(0);
+let nextFrameLength: number | null = null;
+let notificationQueue: Promise<void> = Promise.resolve();
+let monitorThreadActive = false;
+
+function readState(): CodexState {
+  if (!fs.existsSync(statePath)) {
+    return {};
+  }
+
+  return JSON.parse(fs.readFileSync(statePath, "utf8")) as CodexState;
+}
+
+function writeState(state: CodexState): void {
+  fs.mkdirSync(config.dataDir, { recursive: true });
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+}
+
+function encodeFrame(message: unknown): Buffer {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  const header = Buffer.alloc(4);
+  header.writeUInt32LE(body.length, 0);
+  return Buffer.concat([header, body]);
+}
+
+function send(message: unknown): void {
+  if (!socket?.writable) {
+    throw new Error("Codex Desktop IPC is not connected");
+  }
+
+  socket.write(encodeFrame(message));
+}
+
+function handleData(data: Buffer): void {
+  readBuffer = Buffer.concat([readBuffer, data]);
+
+  for (;;) {
+    if (nextFrameLength == null) {
+      if (readBuffer.length < 4) {
+        return;
+      }
+
+      nextFrameLength = readBuffer.readUInt32LE(0);
+      readBuffer = readBuffer.subarray(4);
+    }
+
+    if (readBuffer.length < nextFrameLength) {
+      return;
+    }
+
+    const frame = readBuffer.subarray(0, nextFrameLength);
+    readBuffer = readBuffer.subarray(nextFrameLength);
+    nextFrameLength = null;
+    handleMessage(JSON.parse(frame.toString("utf8")) as IpcMessage);
+  }
+}
+
+function handleMessage(message: IpcMessage): void {
+  if (message.type === "client-discovery-request") {
+    send({
+      type: "client-discovery-response",
+      requestId: message.requestId,
+      response: {
+        canHandle: false
+      }
+    });
+    return;
+  }
+
+  if (message.type === "broadcast") {
+    updateMonitorThreadActivity(message);
+    return;
+  }
+
+  if (message.type !== "response") {
+    return;
+  }
+
+  const item = pending.get(message.requestId);
+  if (!item) {
+    return;
+  }
+
+  pending.delete(message.requestId);
+  clearTimeout(item.timer);
+  item.resolve(message);
+}
+
+function updateMonitorThreadActivity(message: Extract<IpcMessage, { type: "broadcast" }>): void {
+  if (message.method !== "thread-stream-state-changed") {
+    return;
+  }
+
+  const state = readState();
+  if (!state.monitorThreadId || message.params?.conversationId !== state.monitorThreadId) {
+    return;
+  }
+
+  const changeText = JSON.stringify(message.params.change);
+  if (changeText.includes("\"threadRuntimeStatus\":{\"type\":\"active\"") || changeText.includes("\"status\":\"inProgress\"")) {
+    monitorThreadActive = true;
+    return;
+  }
+
+  if (changeText.includes("\"threadRuntimeStatus\":{\"type\":\"idle\"") || changeText.includes("\"status\":\"completed\"") || changeText.includes("\"status\":\"failed\"") || changeText.includes("\"status\":\"interrupted\"")) {
+    monitorThreadActive = false;
+  }
+}
+
+function connect(): Promise<net.Socket> {
+  if (socket?.writable && clientId !== "initializing-client") {
+    return Promise.resolve(socket);
+  }
+
+  if (connecting) {
+    return connecting;
+  }
+
+  connecting = new Promise((resolve, reject) => {
+    const next = net.connect(pipePath);
+    const onError = (error: Error) => {
+      socket = null;
+      reject(error);
+    };
+
+    next.once("error", onError);
+    next.once("connect", async () => {
+      next.off("error", onError);
+      socket = next;
+      readBuffer = Buffer.alloc(0);
+      nextFrameLength = null;
+      clientId = "initializing-client";
+
+      next.on("data", handleData);
+      next.on("close", () => {
+        socket = null;
+        clientId = "initializing-client";
+        for (const [id, item] of pending) {
+          pending.delete(id);
+          clearTimeout(item.timer);
+          item.reject(new Error("Codex Desktop IPC connection closed"));
+        }
+      });
+
+      try {
+        const response = await request("initialize", { clientType: "qq-agent-gateway" }, 0, true);
+        if (response.resultType !== "success" || !response.result || typeof response.result !== "object" || !("clientId" in response.result)) {
+          throw new Error(`Codex Desktop IPC initialize failed: ${JSON.stringify(response)}`);
+        }
+
+        clientId = String((response.result as { clientId: unknown }).clientId);
+        resolve(next);
+      } catch (error) {
+        next.destroy();
+        reject(error);
+      }
+    });
+  });
+
+  return connecting.finally(() => {
+    connecting = null;
+  });
+}
+
+async function request(method: string, params: unknown, version = 1, allowBeforeInitialized = false): Promise<IpcResponse> {
+  if (!allowBeforeInitialized) {
+    await connect();
+  }
+
+  const requestId = randomUUID();
+  send({
+    type: "request",
+    requestId,
+    sourceClientId: clientId,
+    version,
+    method,
+    params
+  });
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(requestId);
+      reject(new Error(`Codex Desktop IPC request timed out: ${method}`));
+    }, 20000);
+
+    pending.set(requestId, { resolve, reject, timer });
+  });
+}
+
+async function startNotificationTurn(threadId: string, message: string): Promise<void> {
+  const text = buildInputText(message, "start");
+  const response = await request("thread-follower-start-turn", {
+    conversationId: threadId,
+    turnStartParams: {
+      input: [
+        {
+          type: "text",
+          text,
+          text_elements: []
+        }
+      ],
+      cwd: config.codexCwd,
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess"
+      },
+      model: null,
+      effort: "high",
+      serviceTier: null,
+      attachments: [],
+      commentAttachments: [],
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: "gpt-5.5",
+          reasoning_effort: "high",
+          developer_instructions: null
+        }
+      },
+      outputSchema: null,
+      responsesapiClientMetadata: null
+    }
+  });
+
+  if (response.resultType !== "success") {
+    throw new Error(`Codex Desktop IPC turn failed: ${response.error ?? JSON.stringify(response)}`);
+  }
+
+  monitorThreadActive = true;
+}
+
+function buildInputText(message: string, mode: "start" | "steer"): string {
+  const instruction = mode === "start"
+    ? "这是来自 QQ/NapCat 网关的实时消息提醒。请读取 C:\\Data\\CottonProject\\qq-agent-gateway\\data 下相关 JSONL 的最新记录，理解上下文，并在这个 Codex 会话里开始处理该消息。"
+    : "这是运行中的 QQ/NapCat 实时补充消息。请把它作为当前任务的新上下文继续处理，不要另开思路。";
+
+  return [message, "", instruction].join("\n");
+}
+
+async function steerNotificationTurn(threadId: string, message: string): Promise<void> {
+  const text = buildInputText(message, "steer");
+  const response = await request("thread-follower-steer-turn", {
+    conversationId: threadId,
+    input: [
+      {
+        type: "text",
+        text,
+        text_elements: []
+      }
+    ],
+    attachments: [],
+    restoreMessage: {
+      id: randomUUID(),
+      text,
+      context: {
+        prompt: text,
+        addedFiles: [],
+        fileAttachments: [],
+        ideContext: null,
+        imageAttachments: [],
+        workspaceRoots: [config.codexCwd]
+      },
+      cwd: config.codexCwd,
+      createdAt: Date.now()
+    }
+  });
+
+  if (response.resultType !== "success") {
+    throw new Error(`Codex Desktop IPC steer failed: ${response.error ?? JSON.stringify(response)}`);
+  }
+}
+
+function isInactiveSteerError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes("SteerTurnInactiveError") || text.includes("active turn already ended");
+}
+
+export async function notifyCodexDesktop(message: string): Promise<void> {
+  notificationQueue = notificationQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const state = readState();
+      if (!state.monitorThreadId) {
+        throw new Error(`Missing monitorThreadId in ${statePath}. Open or create the "${config.codexThreadName}" thread once before enabling realtime IPC notifications.`);
+      }
+
+      await connect();
+      if (monitorThreadActive) {
+        try {
+          await steerNotificationTurn(state.monitorThreadId, message);
+        } catch (error) {
+          if (!isInactiveSteerError(error)) {
+            throw error;
+          }
+
+          monitorThreadActive = false;
+          await startNotificationTurn(state.monitorThreadId, message);
+        }
+      } else {
+        await startNotificationTurn(state.monitorThreadId, message);
+      }
+
+      writeState({
+        ...state,
+        notificationCount: (state.notificationCount ?? 0) + 1,
+        lastNotificationAt: new Date().toISOString()
+      });
+    });
+
+  return notificationQueue;
+}
