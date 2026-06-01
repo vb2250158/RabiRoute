@@ -1,14 +1,14 @@
 # NapCatCodexGateway
 
-NapCat Codex Gateway lets NapCat forward QQ group/private messages into a fixed Codex Desktop thread, while a NapCat WebUI plugin manages gateway instances and message templates.
+这是一个 NapCat 到 Codex Desktop 的 QQ 消息网关。它负责把 QQ 群聊和私聊消息转发到固定的 Codex 会话里，并提供一个 NapCat 插件页面，用来管理多个网关、选择 NapCat 网络配置、编辑发送给 Codex 的消息模板。
 
-## Repository Layout
+## 目录结构
 
-- `src/`: local gateway and manager service.
-- `napcat-plugin-codex-gateway/`: NapCat plugin package, following NapCat plugin mechanism with `package.json`, `index.mjs`, and `webui/`.
-- `gateways.example.json`: example multi-gateway configuration.
+- `src/`：本地网关和网关管理器源码。
+- `napcat-plugin-codex-gateway/`：NapCat 插件目录，包含 `package.json`、`index.mjs` 和 `webui/`，符合 NapCat 插件加载机制。
+- `gateways.example.json`：多网关示例配置。
 
-Runtime files are intentionally ignored:
+以下运行期文件不会提交到仓库：
 
 - `.env`
 - `gateways.json`
@@ -16,7 +16,7 @@ Runtime files are intentionally ignored:
 - `dist/`
 - `node_modules/`
 
-## Gateway Setup
+## 启动网关
 
 ```powershell
 cd C:\Data\CottonProject\qq-agent-gateway
@@ -26,48 +26,48 @@ copy gateways.example.json gateways.json
 npm run start:manager
 ```
 
-Default ports:
+默认端口：
 
-- Gateway manager: `http://127.0.0.1:8790`
-- NapCat reverse WebSocket target: `ws://127.0.0.1:8789`
-- NapCat HTTP API: `http://127.0.0.1:3000`
+- 网关管理器：`http://127.0.0.1:8790`
+- NapCat 反向 WebSocket 地址：`ws://127.0.0.1:8789`
+- NapCat HTTP API 地址：`http://127.0.0.1:3000`
 
-## NapCat Network Setup
+## NapCat 网络配置
 
-In NapCat WebUI, configure:
+在 NapCat WebUI 里配置：
 
-- WebSocket Client: `ws://127.0.0.1:8789`
-- HTTP Server: host `127.0.0.1`, port `3000`
+- WebSocket 客户端：`ws://127.0.0.1:8789`
+- HTTP 服务器：主机 `127.0.0.1`，端口 `3000`
 
-The WebSocket Client receives QQ events. The HTTP Server is used by the gateway to send QQ messages or call OneBot APIs.
+WebSocket 客户端用于接收 QQ 消息事件。HTTP 服务器用于让网关主动发送 QQ 消息或调用 OneBot API。
 
-## NapCat Plugin Install
+## 安装 NapCat 插件
 
-Copy `napcat-plugin-codex-gateway` into NapCat's plugin directory, then enable it in NapCat plugin management.
+把 `napcat-plugin-codex-gateway` 目录复制到 NapCat 插件目录，然后在 NapCat 插件管理里启用。
 
-Example plugin directory:
+示例插件目录：
 
 ```text
 NapCat.*/resources/app/napcat/plugins/napcat-plugin-codex-gateway
 ```
 
-The plugin registers:
+插件会注册：
 
-- Page: `gateways`
-- API: `/plugin/napcat-plugin-codex-gateway/api/...`
-- Static assets: `webui/`
+- 页面：`gateways`
+- API：`/plugin/napcat-plugin-codex-gateway/api/...`
+- 静态资源目录：`webui/`
 
-## Message Routes
+## 群消息路由
 
-Group messages are routed into Codex in three cases:
+群消息进入 Codex 的路由分为三类：
 
-- Direct at: current message directly mentions the bot.
-- Direct reply: current message directly replies to the bot.
-- Indirect reply: current message replies to another user, and the replied message mentioned the bot.
+- 直接 @：当前消息本身直接 @ 机器人。
+- 直接回复：当前消息直接回复机器人。QQ 回复通常会自动带 @，这类会优先归到“直接回复”。
+- 间接回复：当前消息回复了某个用户，而被回复的那条消息里曾经 @ 过机器人。
 
-Private messages are routed separately through the private-message template.
+私聊消息使用独立的私聊模板。
 
-Available template variables include:
+模板里可以使用以下变量：
 
 ```text
 {routeKind} {time} {targetType} {targetId} {messageTarget}
@@ -77,11 +77,11 @@ Available template variables include:
 {botNickname} {dataDir} {groupLogPath} {privateLogPath}
 ```
 
-## Development
+## 开发
 
 ```powershell
 npm run build
 npm run start:manager
 ```
 
-For local plugin iteration, copy updated files from `napcat-plugin-codex-gateway/` into the NapCat plugin directory and reload the plugin.
+本地调试插件时，把 `napcat-plugin-codex-gateway/` 里的文件复制到 NapCat 插件目录，然后重新加载插件。
