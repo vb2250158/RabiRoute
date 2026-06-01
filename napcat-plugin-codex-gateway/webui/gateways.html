@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Codex Gateway</title>
+  <title>消息网关</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; padding: 18px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #1f2328; background: transparent; }
@@ -39,7 +39,7 @@
 </head>
 <body>
   <div class="toolbar">
-    <h1>Codex Gateway</h1>
+    <h1>消息网关</h1>
     <div class="actions">
       <button id="refresh">刷新</button>
       <button id="start-manager" class="primary">启动 Manager</button>
@@ -102,14 +102,15 @@
             ${select(index, "gatewayPort", "WS 端口", gateway.gatewayPort || "", networkOptions.websocketClients)}
             ${select(index, "napcatHttpUrl", "NapCat HTTP", gateway.napcatHttpUrl || "http://127.0.0.1:3000", networkOptions.httpServers)}
             ${input(index, "targetGroupId", "目标群号 空=全部", gateway.targetGroupId || "")}
-            ${input(index, "botNickname", "机器人昵称", gateway.botNickname || "胖虎助手")}
+            ${input(index, "botNickname", "机器人昵称", gateway.botNickname || "QQ小助手")}
             ${input(index, "codexThreadName", "Codex 线程名", gateway.codexThreadName || "")}
-            ${input(index, "codexCwd", "Codex 工作目录", gateway.codexCwd || "C:\\\\Data\\\\CottonProject\\\\PangHu")}
+            ${input(index, "codexCwd", "Codex 工作目录", gateway.codexCwd || "C:\\\\Path\\\\To\\\\Your\\\\Project")}
+            ${input(index, "forwardTargets", "转发目标", Array.isArray(gateway.forwardTargets) ? gateway.forwardTargets.join(",") : gateway.forwardTargets || "codexDesktop")}
             ${input(index, "dataDir", "数据目录", gateway.dataDir || `./data/${gateway.id}`)}
           </div>
           <div class="hint template-help">
             <span>模板变量：{routeKind} {time} {targetType} {targetId} {messageTarget} {groupId} {userId} {selfId} {sender} {senderName} {message} {rawMessage} {messageId} {repliedMessageId} {repliedMessage} {botNickname} {dataDir} {groupLogPath} {privateLogPath}</span>
-            ${help("这些变量会在发送给 Codex 前替换成真实内容。messageTarget 是可读目标，例如 群 474222421 或 私聊 123456；repliedMessage 是当前消息回复/引用的原消息内容。未识别变量会原样保留。")}
+            ${help("这些变量会在转发前替换成真实内容。messageTarget 是可读目标，例如 群 123456 或 私聊 10001；repliedMessage 是当前消息回复/引用的原消息内容。未识别变量会原样保留。")}
           </div>
           <div class="template-fields">
             ${textarea(index, "groupAtNotificationTemplate", "直接 @ 模板", gateway.groupAtNotificationTemplate || gateway.groupNotificationTemplate || defaultGroupAtTemplate())}
@@ -126,17 +127,18 @@
       id: "Gateway 的唯一 ID，只能使用英文、数字、下划线或短横线。保存后会用于启动、停止、数据隔离和 API 路由。",
       name: "显示名称，只影响 NapCat 页面上的可读标题。",
       enabled: "是否由 manager 自动启动这条 gateway。关闭后配置保留，但 reload 时不会自动启动。",
-      gatewayPort: "用于接收 QQ 消息事件。\nNapCat 的 WebSocket 客户端会主动连接到这个本地端口，把群消息、私聊、@ 机器人等 OneBot 事件推给 Codex gateway。\n对应 NapCat 网络配置：WebSocket 客户端，例如 ws://127.0.0.1:8789。",
-      napcatHttpUrl: "用于主动发送 QQ 消息和调用 OneBot API。\nCodex gateway 要发群消息、私聊、查询状态时，会请求这个 NapCat HTTP Server。\n对应 NapCat 网络配置：HTTP 服务器，例如 http://127.0.0.1:3000。",
+      gatewayPort: "用于接收 QQ 消息事件。\nNapCat 的 WebSocket 客户端会主动连接到这个本地端口，把群消息、私聊、@ 机器人等 OneBot 事件推给本地 gateway。\n对应 NapCat 网络配置：WebSocket 客户端，例如 ws://127.0.0.1:8789。",
+      napcatHttpUrl: "用于主动发送 QQ 消息和调用 OneBot API。\n本地 gateway 要发群消息、私聊、查询状态时，会请求这个 NapCat HTTP Server。\n对应 NapCat 网络配置：HTTP 服务器，例如 http://127.0.0.1:3000。",
       targetGroupId: "只处理某个群时填写群号；留空表示所有群都会记录，群 @ 或私聊会推送到 Codex。",
       botNickname: "机器人昵称。用于判断文本里是否提到了机器人，也会作为模板变量 {botNickname}。",
       codexThreadName: "Codex 里接收 QQ 消息的固定线程名。建议每条 gateway 用不同名字，方便区分。",
-      codexCwd: "Codex 处理消息时使用的工作目录。PangHu 项目应为 C:\\\\Data\\\\CottonProject\\\\PangHu。",
+      codexCwd: "Codex 处理消息时使用的工作目录。这里填写你希望 Agent 打开的项目目录，例如 C:\\\\Path\\\\To\\\\Your\\\\Project。",
+      forwardTargets: "消息转发目标，多个目标用英文逗号分隔。当前支持 codexDesktop 和 codexApp；默认 codexDesktop。后续接别的 Agent 时在 gateway 代码里新增目标即可。",
       dataDir: "消息日志和 Codex 状态文件保存目录。相对路径以 qq-agent-gateway 根目录为基准。",
       groupAtNotificationTemplate: "直接 @ 机器人时使用。消息没有回复引用，只是当前消息本身 @ 了机器人。",
       groupDirectReplyNotificationTemplate: "直接回复机器人时使用。QQ 回复通常会同时带 @，这类会优先归到直接回复，而不是直接 @。",
       groupIndirectReplyNotificationTemplate: "间接回复时使用。当前消息回复了某个用户，而被回复的那条用户消息里曾经 @ 过机器人。",
-      privateNotificationTemplate: "私聊消息触发 Codex 时发送的提醒模板。所有非自己发送的私聊都会使用。",
+      privateNotificationTemplate: "私聊消息触发转发时使用的提醒模板。所有非自己发送的私聊都会使用。",
       groupNotificationTemplate: "旧版群消息模板字段。保留用于兼容旧配置；新配置请使用上面三个独立模板。"
     };
 
@@ -278,6 +280,7 @@
       const field = event.target.dataset.field;
       let value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
       if (field === "gatewayPort") value = Number(value);
+      if (field === "forwardTargets") value = String(value).split(",").map(item => item.trim()).filter(Boolean);
       state.gateways[index][field] = value;
     }
 
@@ -336,9 +339,10 @@
         gatewayPort: 8789 + next,
         napcatHttpUrl: "http://127.0.0.1:3000",
         targetGroupId: "",
-        botNickname: "胖虎助手",
+        botNickname: "QQ小助手",
         codexThreadName: `QQ 消息监听 ${next}`,
-        codexCwd: "C:\\\\Data\\\\CottonProject\\\\PangHu",
+        codexCwd: "C:\\\\Path\\\\To\\\\Your\\\\Project",
+        forwardTargets: ["codexDesktop"],
         dataDir: `./data/gateway-${next}`,
         groupNotificationTemplate: defaultGroupAtTemplate(),
         groupAtNotificationTemplate: defaultGroupAtTemplate(),

@@ -1,10 +1,10 @@
 {
   "name": "napcat-plugin-codex-gateway",
-  "plugin": "Codex Gateway",
+  "plugin": "QQ 消息网关",
   "version": "0.1.0",
   "type": "module",
   "main": "index.mjs",
-  "description": "在 NapCat 内管理多个 QQ 到 Codex 的 gateway",
+  "description": "在 NapCat 内管理多个 QQ 消息转发 gateway",
   "author": "vb2250158",
   "napcat": {
     "tags": [

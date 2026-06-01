@@ -54,6 +54,16 @@ let readBuffer = Buffer.alloc(0);
 let nextFrameLength: number | null = null;
 let notificationQueue: Promise<void> = Promise.resolve();
 let monitorThreadActive = false;
+let lastStartedTurnAt = 0;
+let pendingMessages: string[] = [];
+let flushTimer: NodeJS.Timeout | null = null;
+let flushWaiters: Array<{
+  resolve: () => void;
+  reject: (reason: unknown) => void;
+}> = [];
+
+const recentStartSteerWindowMs = 10 * 60 * 1000;
+const notificationBatchDelayMs = 2500;
 
 function readState(): CodexState {
   if (!fs.existsSync(statePath)) {
@@ -283,10 +293,25 @@ async function startNotificationTurn(threadId: string, message: string): Promise
 
 function buildInputText(message: string, mode: "start" | "steer"): string {
   const instruction = mode === "start"
-    ? "这是来自 QQ/NapCat 网关的实时消息提醒。请读取 C:\\Data\\CottonProject\\qq-agent-gateway\\data 下相关 JSONL 的最新记录，理解上下文，并在这个 Codex 会话里开始处理该消息。"
+    ? `这是来自 QQ/NapCat 网关的实时消息提醒。请读取 ${config.dataDir} 下相关 JSONL 的最新记录，理解上下文，并在这个 Codex 会话里开始处理该消息。`
     : "这是运行中的 QQ/NapCat 实时补充消息。请把它作为当前任务的新上下文继续处理，不要另开思路。";
 
   return [message, "", instruction].join("\n");
+}
+
+function combineMessages(messages: string[]): string {
+  if (messages.length === 1) {
+    return messages[0];
+  }
+
+  return [
+    `QQ/NapCat 网关在短时间内收到 ${messages.length} 条实时提醒，请按时间顺序一起处理。`,
+    "",
+    ...messages.map((message, index) => [
+      `--- 消息 ${index + 1}/${messages.length} ---`,
+      message
+    ].join("\n"))
+  ].join("\n\n");
 }
 
 async function steerNotificationTurn(threadId: string, message: string): Promise<void> {
@@ -324,10 +349,10 @@ async function steerNotificationTurn(threadId: string, message: string): Promise
 
 function isInactiveSteerError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
-  return text.includes("SteerTurnInactiveError") || text.includes("active turn already ended");
+  return text.includes("SteerTurnInactiveError") || text.includes("active turn already ended") || text.includes("no active turn to steer");
 }
 
-export async function notifyCodexDesktop(message: string): Promise<void> {
+async function deliverCodexDesktopNotification(message: string): Promise<void> {
   notificationQueue = notificationQueue
     .catch(() => undefined)
     .then(async () => {
@@ -337,7 +362,8 @@ export async function notifyCodexDesktop(message: string): Promise<void> {
       }
 
       await connect();
-      if (monitorThreadActive) {
+      const shouldTrySteer = monitorThreadActive || (lastStartedTurnAt > 0 && Date.now() - lastStartedTurnAt < recentStartSteerWindowMs);
+      if (shouldTrySteer) {
         try {
           await steerNotificationTurn(state.monitorThreadId, message);
         } catch (error) {
@@ -347,9 +373,11 @@ export async function notifyCodexDesktop(message: string): Promise<void> {
 
           monitorThreadActive = false;
           await startNotificationTurn(state.monitorThreadId, message);
+          lastStartedTurnAt = Date.now();
         }
       } else {
         await startNotificationTurn(state.monitorThreadId, message);
+        lastStartedTurnAt = Date.now();
       }
 
       writeState({
@@ -360,4 +388,38 @@ export async function notifyCodexDesktop(message: string): Promise<void> {
     });
 
   return notificationQueue;
+}
+
+function flushPendingMessages(): void {
+  const messages = pendingMessages;
+  const waiters = flushWaiters;
+  pendingMessages = [];
+  flushWaiters = [];
+  flushTimer = null;
+
+  void deliverCodexDesktopNotification(combineMessages(messages))
+    .then(() => {
+      for (const waiter of waiters) {
+        waiter.resolve();
+      }
+    })
+    .catch((error) => {
+      for (const waiter of waiters) {
+        waiter.reject(error);
+      }
+    });
+}
+
+export async function notifyCodexDesktop(message: string): Promise<void> {
+  pendingMessages.push(message);
+
+  const result = new Promise<void>((resolve, reject) => {
+    flushWaiters.push({ resolve, reject });
+  });
+
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushPendingMessages, notificationBatchDelayMs);
+  }
+
+  return result;
 }
