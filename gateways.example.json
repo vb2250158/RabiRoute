@@ -1,8 +1,8 @@
 {
   "gateways": [
     {
-      "id": "example-main",
-      "name": "ExampleProject QQ",
+      "id": "default-main",
+      "name": "默认 QQ 网关",
       "enabled": true,
       "gatewayPort": 8789,
       "napcatHttpUrl": "http://127.0.0.1:3000",
@@ -10,8 +10,9 @@
       "targetGroupId": "",
       "botNickname": "QQ小助手",
       "codexThreadName": "QQ 消息监听",
-      "codexCwd": "C:\\Data\\CottonProject\\ExampleProject",
-      "dataDir": "./data/example-main",
+      "codexCwd": "C:\\Path\\To\\Your\\Project",
+      "forwardTargets": ["codexDesktop"],
+      "dataDir": "./data/default-main",
       "groupNotificationTemplate": "QQ 消息更新提醒：群聊里有人 @ 了机器人。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
       "groupAtNotificationTemplate": "QQ 消息更新提醒：群聊里有人 @ 了机器人。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
       "groupDirectReplyNotificationTemplate": "QQ 消息更新提醒：群聊里有人直接回复机器人。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",

@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 
 let logger = null;
 let currentConfig = {
-  gatewayRoot: "C:\\Data\\CottonProject\\qq-agent-gateway",
+  gatewayRoot: "C:\\Path\\To\\NapCatCodexGateway",
   managerUrl: "http://127.0.0.1:8790",
   managerPort: 8790
 };
@@ -252,13 +252,13 @@ const plugin_init = async (ctx) => {
 
   ctx.router.page({
     path: "gateways",
-    title: "Codex Gateway",
+    title: "消息网关",
     icon: "🔀",
     htmlFile: "webui/gateways.html",
-    description: "管理多个 QQ 到 Codex 的网关"
+    description: "管理多个 QQ 消息转发网关"
   });
 
-  logger?.info("Codex Gateway 插件已初始化");
+  logger?.info("QQ 消息网关插件已初始化");
 };
 
 const plugin_get_config = async () => currentConfig;
@@ -272,7 +272,7 @@ const plugin_set_config = async (ctx, config) => {
 let plugin_config_ui = [];
 
 const plugin_cleanup = async () => {
-  logger?.info("Codex Gateway 插件已清理");
+  logger?.info("QQ 消息网关插件已清理");
 };
 
 export {

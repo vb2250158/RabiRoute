@@ -39,8 +39,12 @@ export const config = {
   codexAppServerUrl: process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500",
   codexDirectNotify: process.env.CODEX_DIRECT_NOTIFY === "1",
   codexDesktopIpcNotify: process.env.CODEX_DESKTOP_IPC_NOTIFY !== "0",
+  forwardTargets: (process.env.FORWARD_TARGETS ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item): item is "codexDesktop" | "codexApp" => item === "codexDesktop" || item === "codexApp"),
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",
-  codexCwd: process.env.CODEX_CWD ?? "C:\\Data\\CottonProject\\ExampleProject",
+  codexCwd: process.env.CODEX_CWD ?? process.cwd(),
   targetGroupId: process.env.TARGET_GROUP_ID ?? "",
   botNickname: process.env.BOT_NICKNAME ?? "QQ小助手",
   dataDir: path.resolve(rootDir, process.env.DATA_DIR ?? "./data"),

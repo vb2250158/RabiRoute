@@ -15,6 +15,7 @@ type GatewayDefinition = {
   botNickname?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  forwardTargets?: string[];
   dataDir?: string;
   groupNotificationTemplate?: string;
   groupAtNotificationTemplate?: string;
@@ -141,7 +142,8 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
     GATEWAY_PORT: String(definition.gatewayPort),
     CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
-    CODEX_CWD: definition.codexCwd ?? process.env.CODEX_CWD ?? "C:\\Data\\CottonProject\\ExampleProject",
+    CODEX_CWD: definition.codexCwd ?? process.env.CODEX_CWD ?? rootDir,
+    FORWARD_TARGETS: Array.isArray(definition.forwardTargets) ? definition.forwardTargets.join(",") : process.env.FORWARD_TARGETS ?? "",
     TARGET_GROUP_ID: definition.targetGroupId ?? "",
     BOT_NICKNAME: definition.botNickname ?? process.env.BOT_NICKNAME ?? "QQ小助手",
     DATA_DIR: definition.dataDir ?? `./data/${definition.id}`,

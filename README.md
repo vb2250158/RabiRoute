@@ -1,6 +1,8 @@
 # NapCatCodexGateway
 
-这是一个 NapCat 到 Codex Desktop 的 QQ 消息网关。它负责把 QQ 群聊和私聊消息转发到固定的 Codex 会话里，并提供一个 NapCat 插件页面，用来管理多个网关、选择 NapCat 网络配置、编辑发送给 Codex 的消息模板。
+这是一个 NapCat 到 Codex Desktop 的 QQ 消息网关。它负责把 QQ 群聊和私聊消息转发到固定的 Codex 会话里，并提供一个 NapCat 插件页面，用来管理多个网关、选择 NapCat 网络配置、编辑消息转发模板。
+
+当前默认转发目标是 `codexDesktop`。代码里已经把消息路由、模板渲染和目标投递拆开，后续要接入其他 Agent 或自动化目标时，可以在 `src/forwarding.ts` 里新增转发目标，而不用改 QQ 消息 handler。
 
 ## 目录结构
 
@@ -19,7 +21,7 @@
 ## 启动网关
 
 ```powershell
-cd C:\Data\CottonProject\qq-agent-gateway
+cd C:\Path\To\NapCatCodexGateway
 npm install
 npm run build
 copy gateways.example.json gateways.json
@@ -40,6 +42,19 @@ npm run start:manager
 - HTTP 服务器：主机 `127.0.0.1`，端口 `3000`
 
 WebSocket 客户端用于接收 QQ 消息事件。HTTP 服务器用于让网关主动发送 QQ 消息或调用 OneBot API。
+
+## 转发目标
+
+默认使用 Codex Desktop IPC 转发消息。也可以在环境变量或 `gateways.json` 里配置：
+
+```text
+FORWARD_TARGETS=codexDesktop
+```
+
+当前内置目标：
+
+- `codexDesktop`：发送到当前 Codex Desktop 固定线程，支持运行中追加引导。
+- `codexApp`：旧的 app-server 调试通道，主要用于旁路验证。
 
 ## 安装 NapCat 插件
 
@@ -66,6 +81,8 @@ NapCat.*/resources/app/napcat/plugins/napcat-plugin-codex-gateway
 - 间接回复：当前消息回复了某个用户，而被回复的那条消息里曾经 @ 过机器人。
 
 私聊消息使用独立的私聊模板。
+
+公开示例配置使用脱敏的机器人昵称和工作目录。实际使用时请在 NapCat 插件页面或 `gateways.json` 里填写自己的 `botNickname`、`codexCwd`、`targetGroupId` 和模板内容。
 
 模板里可以使用以下变量：
 
