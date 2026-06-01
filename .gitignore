@@ -1,0 +1,7 @@
+node_modules/
+dist/
+data/
+.env
+gateways.json
+tmp/
+npm-debug.log*
