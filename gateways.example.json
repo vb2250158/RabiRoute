@@ -1,0 +1,18 @@
+{
+  "gateways": [
+    {
+      "id": "qclaw-main",
+      "name": "QClaw QQ",
+      "enabled": true,
+      "gatewayPort": 8789,
+      "napcatHttpUrl": "http://127.0.0.1:3000",
+      "napcatAccessToken": "",
+      "targetGroupId": "",
+      "botNickname": "胖虎助手",
+      "qclawGatewayUrl": "http://127.0.0.1:10978",
+      "qclawGatewayToken": "",
+      "qclawModel": "qclaw/pool-deepseek-v4-pro",
+      "dataDir": "./data/qclaw-main"
+    }
+  ]
+}

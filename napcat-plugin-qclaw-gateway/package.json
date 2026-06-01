@@ -1,0 +1,16 @@
+{
+  "name": "napcat-plugin-qclaw-gateway",
+  "plugin": "QClaw Gateway",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "在 NapCat 内管理多个 QQ 到 QClaw (OpenClaw) 的 gateway",
+  "author": "GAN",
+  "napcat": {
+    "tags": [
+      "工具"
+    ],
+    "minVersion": "4.14.0",
+    "homepage": "https://github.com/vb2250158/NapCatCodexGateway"
+  }
+}

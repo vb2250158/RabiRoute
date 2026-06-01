@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QClaw Gateway</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 18px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #1f2328; background: transparent; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+    h1 { margin: 0; font-size: 22px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { border: 1px solid rgba(31,35,40,.18); border-radius: 8px; background: rgba(255,255,255,.72); padding: 8px 12px; cursor: pointer; font-weight: 600; }
+    button.primary { background: #ff2b75; border-color: #ff2b75; color: white; }
+    button.danger { color: #cf222e; }
+    .status { margin-bottom: 14px; padding: 12px; border: 1px solid rgba(31,35,40,.1); border-radius: 8px; background: rgba(255,255,255,.55); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+    .card { padding: 14px; border: 1px solid rgba(31,35,40,.1); border-radius: 10px; background: rgba(255,255,255,.68); box-shadow: 0 10px 26px rgba(31,35,40,.06); }
+    .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    h2 { margin: 0; font-size: 17px; }
+    .pill { padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .running { background: #dafbe1; color: #1a7f37; }
+    .stopped { background: #ffebe9; color: #cf222e; }
+    .meta { margin-top: 7px; color: #57606a; font-size: 13px; overflow-wrap: anywhere; }
+    .form { margin-top: 16px; padding: 14px; border: 1px solid rgba(31,35,40,.1); border-radius: 10px; background: rgba(255,255,255,.58); }
+    .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+    label { display: grid; gap: 5px; color: #57606a; font-size: 12px; }
+    .label-row { display: flex; align-items: center; gap: 6px; min-height: 18px; }
+    .help { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 1px solid rgba(31,35,40,.2); background: rgba(255,255,255,.8); color: #57606a; font-size: 12px; font-weight: 700; cursor: help; user-select: none; }
+    #tooltip { position: fixed; left: 0; top: 0; width: min(340px, calc(100vw - 24px)); padding: 9px 10px; border-radius: 8px; background: #24292f; color: #fff; font-size: 12px; line-height: 1.45; white-space: pre-wrap; box-shadow: 0 10px 28px rgba(31,35,40,.22); z-index: 9999; pointer-events: none; opacity: 0; transform: translate3d(-9999px, -9999px, 0); }
+    #tooltip.visible { opacity: 1; }
+    input, select, textarea { width: 100%; border: 1px solid rgba(31,35,40,.18); border-radius: 8px; padding: 8px; background: rgba(255,255,255,.85); color: #1f2328; font: inherit; }
+    textarea { min-height: 150px; resize: vertical; line-height: 1.45; font-family: "Cascadia Mono", Consolas, monospace; }
+    .template-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; margin-top: 10px; }
+    .hint { margin-top: 8px; color: #6e7781; font-size: 12px; }
+    .template-help { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    pre { max-height: 190px; overflow: auto; margin: 10px 0 0; padding: 10px; border-radius: 8px; background: #0d1117; color: #c9d1d9; font-size: 12px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <h1>QClaw Gateway</h1>
+    <div class="actions">
+      <button id="refresh">刷新</button>
+      <button id="start-manager" class="primary">启动 Manager</button>
+      <button id="add">新增 Gateway</button>
+      <button id="save" class="primary">保存配置</button>
+    </div>
+  </div>
+  <div id="status" class="status">加载中...</div>
+  <div id="grid" class="grid"></div>
+  <div id="forms"></div>
+  <div id="tooltip"></div>
+
+  <script>
+    const apiBase = "/plugin/napcat-plugin-qclaw-gateway/api";
+    let state = { gateways: [] };
+    let managerRows = [];
+    let networkOptions = { httpServers: [], websocketClients: [] };
+
+    function gatewayRuntime(id) {
+      return managerRows.find(row => row.id === id) || {};
+    }
+
+    function render() {
+      const status = document.getElementById("status");
+      const managerError = managerRows.error;
+      status.textContent = managerError
+        ? `Manager 未连接：${managerError}`
+        : `Manager 已连接，gateway 数量：${state.gateways.length}`;
+
+      document.getElementById("grid").innerHTML = state.gateways.map(gateway => {
+        const runtime = gatewayRuntime(gateway.id);
+        const running = runtime.running ? "running" : "stopped";
+        const logs = (runtime.log || []).slice(-8).join("\\n");
+        return `
+          <section class="card">
+            <div class="row">
+              <h2>${escapeHtml(gateway.name || gateway.id)}</h2>
+              <span class="pill ${running}">${runtime.running ? "运行中" : "已停止"}</span>
+            </div>
+            <div class="meta">id=${escapeHtml(gateway.id)} port=${gateway.gatewayPort} pid=${runtime.pid || "-"}</div>
+            <div class="meta">NapCat=${escapeHtml(gateway.napcatHttpUrl || "http://127.0.0.1:3000")}</div>
+            <div class="meta">QClaw=${escapeHtml(gateway.qclawGatewayUrl || "http://127.0.0.1:10978")} model=${escapeHtml(gateway.qclawModel || "default")}</div>
+            <div class="actions" style="margin-top:12px">
+              <button onclick="actionGateway('${gateway.id}', 'start')">启动</button>
+              <button onclick="actionGateway('${gateway.id}', 'stop')">停止</button>
+              <button onclick="actionGateway('${gateway.id}', 'restart')">重启</button>
+              <button class="danger" onclick="removeGateway('${gateway.id}')">删除</button>
+            </div>
+            <pre>${escapeHtml(logs)}</pre>
+          </section>
+        `;
+      }).join("");
+
+      document.getElementById("forms").innerHTML = state.gateways.map((gateway, index) => `
+        <section class="form">
+          <div class="row"><h2>${escapeHtml(gateway.name || gateway.id)}</h2><label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-index="${index}" data-field="enabled" ${gateway.enabled !== false ? "checked" : ""}>启用</label></div>
+          <div class="fields">
+            ${input(index, "id", "ID", gateway.id)}
+            ${input(index, "name", "名称", gateway.name || "")}
+            ${select(index, "gatewayPort", "WS 端口", gateway.gatewayPort || "", networkOptions.websocketClients)}
+            ${select(index, "napcatHttpUrl", "NapCat HTTP", gateway.napcatHttpUrl || "http://127.0.0.1:3000", networkOptions.httpServers)}
+            ${input(index, "targetGroupId", "目标群号 空=全部", gateway.targetGroupId || "")}
+            ${input(index, "botNickname", "机器人昵称", gateway.botNickname || "胖虎助手")}
+            ${input(index, "qclawGatewayUrl", "QClaw 网关地址", gateway.qclawGatewayUrl || "http://127.0.0.1:10978")}
+            ${input(index, "qclawGatewayToken", "QClaw Token", gateway.qclawGatewayToken || "")}
+            ${input(index, "qclawModel", "QClaw 模型", gateway.qclawModel || "qclaw/pool-deepseek-v4-pro")}
+            ${input(index, "dataDir", "数据目录", gateway.dataDir || `./data/${gateway.id}`)}
+          </div>
+          <div class="hint template-help">
+            <span>模板变量：{routeKind} {time} {targetType} {targetId} {messageTarget} {groupId} {userId} {selfId} {sender} {senderName} {message} {rawMessage} {messageId} {repliedMessageId} {repliedMessage} {botNickname} {dataDir} {groupLogPath} {privateLogPath}</span>
+            ${help("这些变量会在发送给 QClaw 前替换成真实内容。messageTarget 是可读目标，例如 群 474222421 或 私聊 123456；repliedMessage 是当前消息回复/引用的原消息内容。未识别变量会原样保留。")}
+          </div>
+          <div class="template-fields">
+            ${textarea(index, "groupAtNotificationTemplate", "直接 @ 模板", gateway.groupAtNotificationTemplate || gateway.groupNotificationTemplate || defaultGroupAtTemplate())}
+            ${textarea(index, "groupDirectReplyNotificationTemplate", "直接回复模板", gateway.groupDirectReplyNotificationTemplate || gateway.groupReplyNotificationTemplate || defaultGroupDirectReplyTemplate())}
+            ${textarea(index, "groupIndirectReplyNotificationTemplate", "间接回复模板", gateway.groupIndirectReplyNotificationTemplate || gateway.groupNicknameNotificationTemplate || defaultGroupIndirectReplyTemplate())}
+            ${textarea(index, "privateNotificationTemplate", "私聊消息模板", gateway.privateNotificationTemplate || defaultPrivateTemplate())}
+          </div>
+        </section>
+      `).join("");
+      bindInputs();
+    }
+
+    const helpText = {
+      id: "Gateway 的唯一 ID，只能使用英文、数字、下划线或短横线。保存后会用于启动、停止、数据隔离和 API 路由。",
+      name: "显示名称，只影响 NapCat 页面上的可读标题。",
+      enabled: "是否由 manager 自动启动这条 gateway。关闭后配置保留，但 reload 时不会自动启动。",
+      gatewayPort: "用于接收 QQ 消息事件。\nNapCat 的 WebSocket 客户端会主动连接到这个本地端口，把群消息、私聊、@ 机器人等 OneBot 事件推给 QClaw gateway。\n对应 NapCat 网络配置：WebSocket 客户端，例如 ws://127.0.0.1:8789。",
+      napcatHttpUrl: "用于主动发送 QQ 消息和调用 OneBot API。\nQClaw gateway 要发群消息、私聊、查询状态时，会请求这个 NapCat HTTP Server。\n对应 NapCat 网络配置：HTTP 服务器，例如 http://127.0.0.1:3000。",
+      targetGroupId: "只处理某个群时填写群号；留空表示所有群都会记录，群 @ 或私聊会推送到 QClaw。",
+      botNickname: "机器人昵称。用于判断文本里是否提到了机器人，也会作为模板变量 {botNickname}。",
+      qclawGatewayUrl: "QClaw Gateway 的地址。用于调用 Chat Completions API 生成 AI 回复。\n默认 http://127.0.0.1:10978。",
+      qclawGatewayToken: "QClaw Gateway 的认证 Token。在 QClaw 配置 gateway.http.auth.token 中查看。\n留空表示无认证（仅限本地回环）。",
+      qclawModel: "QClaw 使用的模型 ID。例如 qclaw/pool-deepseek-v4-pro。",
+      dataDir: "消息日志保存目录。相对路径以 NapCatQClawGateway 根目录为基准。"
+    };
+
+    function help(text) {
+      return `<span class="help" tabindex="0" data-help="${escapeAttr(text)}">?</span>`;
+    }
+
+    function input(index, field, label, value) {
+      return `<label><span class="label-row">${label}${help(helpText[field] || "")}</span><input data-index="${index}" data-field="${field}" value="${escapeAttr(String(value))}"></label>`;
+    }
+
+    function select(index, field, label, value, options) {
+      const stringValue = String(value);
+      const knownValues = new Set(options.map(option => String(option.value)));
+      const allOptions = knownValues.has(stringValue) || !stringValue
+        ? options
+        : [{ label: `当前配置 (${stringValue})`, value: stringValue }, ...options];
+      const optionHtml = allOptions.length
+        ? allOptions.map(option => `<option value="${escapeAttr(String(option.value))}" ${String(option.value) === stringValue ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")
+        : `<option value="${escapeAttr(stringValue)}">${escapeHtml(stringValue || "未从 NapCat 配置读取到选项")}</option>`;
+      return `<label><span class="label-row">${label}${help(helpText[field] || "")}</span><select data-index="${index}" data-field="${field}">${optionHtml}</select></label>`;
+    }
+
+    function textarea(index, field, label, value) {
+      return `<label><span class="label-row">${label}${help(helpText[field] || "")}</span><textarea data-index="${index}" data-field="${field}">${escapeHtml(String(value))}</textarea></label>`;
+    }
+
+    function groupTemplate(title) {
+      return [
+        `QQ 消息更新提醒：${title}。`,
+        "时间：{time}",
+        "目标：{messageTarget}",
+        "群号：{groupId}",
+        "发送者：{sender}",
+        "消息：{message}",
+        "",
+        "请在需要时读取 {groupLogPath} 查看上下文。"
+      ].join("\\n");
+    }
+
+    function defaultGroupAtTemplate() {
+      return groupTemplate("群聊里有人 @ 了机器人");
+    }
+
+    function defaultGroupDirectReplyTemplate() {
+      return groupTemplate("群聊里有人直接回复机器人");
+    }
+
+    function defaultGroupIndirectReplyTemplate() {
+      return [
+        "QQ 消息更新提醒：群聊里有人回复了一条提到机器人的消息。",
+        "时间：{time}",
+        "目标：{messageTarget}",
+        "群号：{groupId}",
+        "发送者：{sender}",
+        "被回复消息：{repliedMessage}",
+        "消息：{message}",
+        "",
+        "请在需要时读取 {groupLogPath} 查看上下文。"
+      ].join("\\n");
+    }
+
+    function defaultPrivateTemplate() {
+      return [
+        "QQ 消息更新提醒：收到一条私聊消息。",
+        "时间：{time}",
+        "目标：{messageTarget}",
+        "发送者：{sender}",
+        "QQ：{userId}",
+        "消息：{message}",
+        "",
+        "请在需要时读取 {privateLogPath} 查看上下文。"
+      ].join("\\n");
+    }
+
+    function bindInputs() {
+      document.querySelectorAll("[data-field]").forEach(element => {
+        element.addEventListener("input", updateValue);
+        element.addEventListener("change", updateValue);
+      });
+      document.querySelectorAll(".help").forEach(element => {
+        element.addEventListener("mouseenter", () => showTooltip(element));
+        element.addEventListener("mouseleave", () => {
+          if (!element.classList.contains("active")) hideTooltip();
+        });
+        element.addEventListener("focus", () => showTooltip(element));
+        element.addEventListener("blur", () => {
+          if (!element.classList.contains("active")) hideTooltip();
+        });
+        element.addEventListener("click", event => {
+          event.stopPropagation();
+          document.querySelectorAll(".help.active").forEach(active => {
+            if (active !== element) active.classList.remove("active");
+          });
+          element.classList.toggle("active");
+          if (element.classList.contains("active")) {
+            showTooltip(element);
+          } else {
+            hideTooltip();
+          }
+        });
+      });
+    }
+
+    function showTooltip(anchor) {
+      const tooltip = document.getElementById("tooltip");
+      tooltip.textContent = anchor.dataset.help || "";
+      tooltip.classList.add("visible");
+      tooltip.style.transform = "translate3d(0, 0, 0)";
+
+      const anchorRect = anchor.getBoundingClientRect();
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const margin = 12;
+      let left = anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2;
+      left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
+
+      let top = anchorRect.top - tooltipRect.height - 8;
+      if (top < margin) {
+        top = anchorRect.bottom + 8;
+      }
+      top = Math.max(margin, Math.min(top, window.innerHeight - tooltipRect.height - margin));
+
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+    }
+
+    function hideTooltip() {
+      const tooltip = document.getElementById("tooltip");
+      tooltip.classList.remove("visible");
+      tooltip.style.transform = "translate3d(-9999px, -9999px, 0)";
+    }
+
+    function updateValue(event) {
+      const index = Number(event.target.dataset.index);
+      const field = event.target.dataset.field;
+      let value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+      if (field === "gatewayPort") value = Number(value);
+      state.gateways[index][field] = value;
+    }
+
+    async function load() {
+      try {
+        const networkResponse = await fetch(`${apiBase}/network-options`);
+        const networkBody = await networkResponse.json();
+        if (networkResponse.ok && networkBody.code === 0 && networkBody.data) {
+          networkOptions = networkBody.data;
+        }
+      } catch {
+        networkOptions = { httpServers: [], websocketClients: [] };
+      }
+      const response = await fetch(`${apiBase}/gateways`);
+      const body = await response.json();
+      if (!response.ok || body.code !== 0 || !body.data || !body.data.config) {
+        throw new Error(body.message || body.error || "插件 API 没有返回 gateway 配置");
+      }
+      state = body.data.config;
+      managerRows = Array.isArray(body.data.manager) ? body.data.manager : Object.assign([], { error: body.data.manager.error });
+      render();
+    }
+
+    async function save() {
+      const response = await fetch(`${apiBase}/gateways`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(state)
+      });
+      const body = await response.json();
+      if (body.code !== 0) throw new Error(body.message);
+      await load();
+    }
+
+    async function startManager() {
+      await fetch(`${apiBase}/manager/start`, { method: "POST" });
+      setTimeout(load, 1200);
+    }
+
+    async function actionGateway(id, action) {
+      await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+      setTimeout(load, 700);
+    }
+
+    function removeGateway(id) {
+      state.gateways = state.gateways.filter(gateway => gateway.id !== id);
+      render();
+    }
+
+    function addGateway() {
+      const next = state.gateways.length + 1;
+      state.gateways.push({
+        id: `gateway-${next}`,
+        name: `网关 ${next}`,
+        enabled: true,
+        gatewayPort: 8789 + next,
+        napcatHttpUrl: "http://127.0.0.1:3000",
+        targetGroupId: "",
+        botNickname: "胖虎助手",
+        qclawGatewayUrl: "http://127.0.0.1:10978",
+        qclawGatewayToken: "",
+        qclawModel: "qclaw/pool-deepseek-v4-pro",
+        dataDir: `./data/gateway-${next}`,
+        groupNotificationTemplate: defaultGroupAtTemplate(),
+        groupAtNotificationTemplate: defaultGroupAtTemplate(),
+        groupDirectReplyNotificationTemplate: defaultGroupDirectReplyTemplate(),
+        groupIndirectReplyNotificationTemplate: defaultGroupIndirectReplyTemplate(),
+        privateNotificationTemplate: defaultPrivateTemplate(),
+      });
+      render();
+    }
+
+    function escapeHtml(value) {
+      return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value);
+    }
+
+    document.getElementById("refresh").addEventListener("click", load);
+    document.getElementById("save").addEventListener("click", save);
+    document.getElementById("add").addEventListener("click", addGateway);
+    document.getElementById("start-manager").addEventListener("click", startManager);
+    document.addEventListener("click", event => {
+      if (event.target.closest && event.target.closest(".help")) {
+        return;
+      }
+      document.querySelectorAll(".help.active").forEach(element => element.classList.remove("active"));
+      hideTooltip();
+    });
+    load().catch(error => {
+      document.getElementById("status").textContent = error.message;
+    });
+  </script>
+</body>
+</html>
