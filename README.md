@@ -1,4 +1,4 @@
-# NapCat Codex Gateway
+# NapCatCodexGateway
 
 NapCat Codex Gateway lets NapCat forward QQ group/private messages into a fixed Codex Desktop thread, while a NapCat WebUI plugin manages gateway instances and message templates.
 
