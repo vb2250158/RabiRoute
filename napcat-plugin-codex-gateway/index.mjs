@@ -39,14 +39,14 @@ function readGatewayConfig() {
 
 function writeGatewayConfig(config) {
   if (!Array.isArray(config.gateways)) {
-    throw new Error("gateways must be an array");
+    throw new Error("gateways 必须是数组");
   }
   for (const gateway of config.gateways) {
     if (!gateway.id || !/^[a-zA-Z0-9_-]+$/.test(gateway.id)) {
-      throw new Error(`Invalid gateway id: ${gateway.id}`);
+      throw new Error(`无效的网关 ID：${gateway.id}`);
     }
     if (!Number.isInteger(Number(gateway.gatewayPort)) || Number(gateway.gatewayPort) <= 0) {
-      throw new Error(`Invalid gateway port: ${gateway.gatewayPort}`);
+      throw new Error(`无效的网关端口：${gateway.gatewayPort}`);
     }
     gateway.gatewayPort = Number(gateway.gatewayPort);
     gateway.enabled = gateway.enabled !== false;
@@ -79,7 +79,7 @@ function readOneBotNetworkOptions() {
         const port = Number(server.port || 0);
         if (!port) continue;
         httpServers.push({
-          label: `${server.name || "HTTP Server"} (${host}:${port})`,
+          label: `${server.name || "HTTP 服务器"} (${host}:${port})`,
           value: `http://${host}:${port}`,
           file
         });
@@ -95,7 +95,7 @@ function readOneBotNetworkOptions() {
         }
         if (!port) continue;
         websocketClients.push({
-          label: `${client.name || "WebSocket Client"} (${client.url})`,
+          label: `${client.name || "WebSocket 客户端"} (${client.url})`,
           value: port,
           url: client.url,
           file
@@ -120,7 +120,7 @@ async function fetchManager(pathname, options = {}) {
     // Keep text body for redirects or html responses.
   }
   if (!response.ok) {
-    throw new Error(`manager ${pathname} failed: HTTP ${response.status} ${text}`);
+    throw new Error(`管理器请求失败 ${pathname}：HTTP ${response.status} ${text}`);
   }
   return body;
 }
@@ -140,7 +140,7 @@ function startManagerProcess() {
     stdio: "ignore"
   });
   managerProcess.unref();
-  logger?.info(`Codex gateway manager started pid=${managerProcess.pid ?? "unknown"}`);
+  logger?.info(`Codex 网关管理器已启动，pid=${managerProcess.pid ?? "未知"}`);
 }
 
 async function reloadManager() {
@@ -159,7 +159,7 @@ const plugin_init = async (ctx) => {
       Object.assign(currentConfig, JSON.parse(fs.readFileSync(ctx.configPath, "utf-8")));
     }
   } catch (error) {
-    logger?.warn("Failed to load Codex gateway plugin config", error);
+    logger?.warn("读取 Codex 网关插件配置失败", error);
   }
 
   ctx.router.static("/static", "webui");
@@ -175,7 +175,7 @@ const plugin_init = async (ctx) => {
       currentConfig = { ...currentConfig, ...req.body };
       fs.mkdirSync(path.dirname(ctx.configPath), { recursive: true });
       fs.writeFileSync(ctx.configPath, JSON.stringify(currentConfig, null, 2), "utf-8");
-      res.json({ code: 0, message: "saved" });
+      res.json({ code: 0, message: "已保存" });
     } catch (error) {
       res.status(500).json({ code: -1, message: error.message });
     }
@@ -226,7 +226,7 @@ const plugin_init = async (ctx) => {
   const handleStartManager = (_req, res) => {
     try {
       startManagerProcess();
-      res.json({ code: 0, message: "manager starting" });
+      res.json({ code: 0, message: "管理器正在启动" });
     } catch (error) {
       res.status(500).json({ code: -1, message: error.message });
     }
@@ -238,11 +238,11 @@ const plugin_init = async (ctx) => {
     try {
       const { id, action } = req.params;
       if (!["start", "stop", "restart"].includes(action)) {
-        res.status(400).json({ code: -1, message: "invalid action" });
+        res.status(400).json({ code: -1, message: "无效操作" });
         return;
       }
       await fetchManager(`/gateways/${encodeURIComponent(id)}/${action}`, { method: "POST" });
-      res.json({ code: 0, message: `${action} requested` });
+      res.json({ code: 0, message: `已请求执行 ${action}` });
     } catch (error) {
       res.status(500).json({ code: -1, message: error.message });
     }
@@ -255,10 +255,10 @@ const plugin_init = async (ctx) => {
     title: "Codex Gateway",
     icon: "🔀",
     htmlFile: "webui/gateways.html",
-    description: "管理多个 QQ 到 Codex 的 gateway"
+    description: "管理多个 QQ 到 Codex 的网关"
   });
 
-  logger?.info("Codex Gateway plugin initialized");
+  logger?.info("Codex Gateway 插件已初始化");
 };
 
 const plugin_get_config = async () => currentConfig;
@@ -272,7 +272,7 @@ const plugin_set_config = async (ctx, config) => {
 let plugin_config_ui = [];
 
 const plugin_cleanup = async () => {
-  logger?.info("Codex Gateway plugin cleaned up");
+  logger?.info("Codex Gateway 插件已清理");
 };
 
 export {

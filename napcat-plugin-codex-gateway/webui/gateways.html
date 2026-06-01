@@ -77,7 +77,7 @@
           <section class="card">
             <div class="row">
               <h2>${escapeHtml(gateway.name || gateway.id)}</h2>
-              <span class="pill ${running}">${running}</span>
+              <span class="pill ${running}">${runtime.running ? "运行中" : "已停止"}</span>
             </div>
             <div class="meta">id=${escapeHtml(gateway.id)} port=${gateway.gatewayPort} pid=${runtime.pid || "-"}</div>
             <div class="meta">NapCat=${escapeHtml(gateway.napcatHttpUrl || "http://127.0.0.1:3000")}</div>
@@ -331,7 +331,7 @@
       const next = state.gateways.length + 1;
       state.gateways.push({
         id: `gateway-${next}`,
-        name: `Gateway ${next}`,
+        name: `网关 ${next}`,
         enabled: true,
         gatewayPort: 8789 + next,
         napcatHttpUrl: "http://127.0.0.1:3000",
