@@ -3,16 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>消息网关</title>
+  <title>RabiRoute 拉比路由</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; padding: 18px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #1f2328; background: transparent; }
     .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
     h1 { margin: 0; font-size: 22px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    a.button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
     button { border: 1px solid rgba(31,35,40,.18); border-radius: 8px; background: rgba(255,255,255,.72); padding: 8px 12px; cursor: pointer; font-weight: 600; }
+    a.button { border: 1px solid rgba(31,35,40,.18); border-radius: 8px; background: rgba(255,255,255,.72); padding: 8px 12px; cursor: pointer; font-weight: 600; color: inherit; }
     button.primary { background: #ff2b75; border-color: #ff2b75; color: white; }
+    a.button.primary { background: #ff2b75; border-color: #ff2b75; color: white; }
     button.danger { color: #cf222e; }
+    .launch { margin-bottom: 14px; padding: 14px; border: 1px solid rgba(31,35,40,.1); border-radius: 10px; background: rgba(255,255,255,.72); }
+    .launch strong { display: block; margin-bottom: 6px; font-size: 15px; }
+    .launch p { margin: 0 0 10px; color: #57606a; font-size: 13px; line-height: 1.5; }
     .status { margin-bottom: 14px; padding: 12px; border: 1px solid rgba(31,35,40,.1); border-radius: 8px; background: rgba(255,255,255,.55); }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
     .card { padding: 14px; border: 1px solid rgba(31,35,40,.1); border-radius: 10px; background: rgba(255,255,255,.68); box-shadow: 0 10px 26px rgba(31,35,40,.06); }
@@ -39,7 +45,7 @@
 </head>
 <body>
   <div class="toolbar">
-    <h1>消息网关</h1>
+    <h1>RabiRoute</h1>
     <div class="actions">
       <button id="refresh">刷新</button>
       <button id="start-manager" class="primary">启动 Manager</button>
@@ -47,13 +53,20 @@
       <button id="save" class="primary">保存配置</button>
     </div>
   </div>
+  <div id="plugin-launch" class="launch" hidden>
+    <strong>拉比路由独立控制台</strong>
+    <p>RabiRoute 用于把 NapCat、AstrBot、Webhook 等聊天入口接入同一个 Agent 路由中枢，再通往 Codex、Copilot 或其他执行者。独立 WebUI 可脱离 NapCat 插件运行和配置。</p>
+    <a id="standalone-link" class="button primary" href="http://127.0.0.1:8790/" target="_blank" rel="noreferrer">打开 RabiRoute</a>
+  </div>
   <div id="status" class="status">加载中...</div>
   <div id="grid" class="grid"></div>
   <div id="forms"></div>
   <div id="tooltip"></div>
 
   <script>
-    const apiBase = "/plugin/napcat-plugin-codex-gateway/api";
+    const pluginApiBase = "/plugin/napcat-plugin-codex-gateway/api";
+    const isPluginShell = location.pathname.startsWith("/plugin/");
+    const apiBase = isPluginShell ? pluginApiBase : "";
     let state = { gateways: [] };
     let managerRows = [];
     let networkOptions = { httpServers: [], websocketClients: [] };
@@ -63,6 +76,7 @@
     }
 
     function render() {
+      document.getElementById("plugin-launch").hidden = !isPluginShell;
       const status = document.getElementById("status");
       const managerError = managerRows.error;
       status.textContent = managerError
@@ -134,7 +148,7 @@
       codexThreadName: "Codex 里接收 QQ 消息的固定线程名。建议每条 gateway 用不同名字，方便区分。",
       codexCwd: "Codex 处理消息时使用的工作目录。这里填写你希望 Agent 打开的项目目录，例如 C:\\\\Path\\\\To\\\\Your\\\\Project。",
       forwardTargets: "消息转发目标，多个目标用英文逗号分隔。当前支持 codexDesktop 和 codexApp；默认 codexDesktop。后续接别的 Agent 时在 gateway 代码里新增目标即可。",
-      dataDir: "消息日志和 Codex 状态文件保存目录。相对路径以 qq-agent-gateway 根目录为基准。",
+      dataDir: "消息日志和 Codex 状态文件保存目录。相对路径以 RabiRoute 根目录为基准。",
       groupAtNotificationTemplate: "直接 @ 机器人时使用。消息没有回复引用，只是当前消息本身 @ 了机器人。",
       groupDirectReplyNotificationTemplate: "直接回复机器人时使用。QQ 回复通常会同时带 @，这类会优先归到直接回复，而不是直接 @。",
       groupIndirectReplyNotificationTemplate: "间接回复时使用。当前消息回复了某个用户，而被回复的那条用户消息里曾经 @ 过机器人。",
@@ -285,6 +299,7 @@
     }
 
     async function load() {
+      await loadPluginConfig();
       try {
         const networkResponse = await fetch(`${apiBase}/network-options`);
         const networkBody = await networkResponse.json();
@@ -302,6 +317,22 @@
       state = body.data.config;
       managerRows = Array.isArray(body.data.manager) ? body.data.manager : Object.assign([], { error: body.data.manager.error });
       render();
+    }
+
+    async function loadPluginConfig() {
+      if (!isPluginShell) {
+        return;
+      }
+      try {
+        const response = await fetch(`${pluginApiBase}/config`);
+        const body = await response.json();
+        const managerUrl = body && body.code === 0 && body.data && body.data.managerUrl
+          ? body.data.managerUrl
+          : "http://127.0.0.1:8790";
+        document.getElementById("standalone-link").href = managerUrl.replace(/\/$/, "") + "/";
+      } catch {
+        document.getElementById("standalone-link").href = "http://127.0.0.1:8790/";
+      }
     }
 
     async function save() {
