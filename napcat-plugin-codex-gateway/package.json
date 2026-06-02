@@ -1,16 +1,16 @@
 {
   "name": "napcat-plugin-codex-gateway",
-  "plugin": "QQ 消息网关",
+  "plugin": "RabiRoute",
   "version": "0.1.0",
   "type": "module",
   "main": "index.mjs",
-  "description": "在 NapCat 内管理多个 QQ 消息转发 gateway",
+  "description": "拉比路由：聊天入口到 Agent 的可爱路由中枢",
   "author": "vb2250158",
   "napcat": {
     "tags": [
       "工具"
     ],
     "minVersion": "4.14.0",
-    "homepage": "https://github.com/vb2250158/NapCatCodexGateway"
+    "homepage": "https://github.com/vb2250158/RabiRoute"
   }
 }

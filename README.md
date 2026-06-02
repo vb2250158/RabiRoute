@@ -1,8 +1,12 @@
-# NapCatCodexGateway
+# RabiRoute
 
-这是一个 NapCat 到 Codex Desktop 的 QQ 消息网关。它负责把 QQ 群聊和私聊消息转发到固定的 Codex 会话里，并提供一个 NapCat 插件页面，用来管理多个网关、选择 NapCat 网络配置、编辑消息转发模板。
+![RabiRoute 拉比路由](assets/rabiroute-hero.png)
+
+拉比路由是一个聊天入口到 Agent 的可爱路由中枢。当前实现已经支持把 NapCat / OneBot 的 QQ 群聊和私聊消息转发到固定的 Codex Desktop 会话里，并提供独立 WebUI 与 NapCat 插件入口，用来管理多个网关、选择 NapCat 网络配置、编辑消息转发模板。
 
 当前默认转发目标是 `codexDesktop`。代码里已经把消息路由、模板渲染和目标投递拆开，后续要接入其他 Agent 或自动化目标时，可以在 `src/forwarding.ts` 里新增转发目标，而不用改 QQ 消息 handler。
+
+GitHub: https://github.com/vb2250158/RabiRoute
 
 ## 目录结构
 
@@ -21,7 +25,7 @@
 ## 启动网关
 
 ```powershell
-cd C:\Path\To\NapCatCodexGateway
+cd C:\Path\To\RabiRoute
 npm install
 npm run build
 copy gateways.example.json gateways.json
@@ -71,6 +75,12 @@ NapCat.*/resources/app/napcat/plugins/napcat-plugin-codex-gateway
 - 页面：`gateways`
 - API：`/plugin/napcat-plugin-codex-gateway/api/...`
 - 静态资源目录：`webui/`
+
+NapCat 插件页会提供入口跳转到独立控制台：
+
+```text
+http://127.0.0.1:8790/
+```
 
 ## 群消息路由
 

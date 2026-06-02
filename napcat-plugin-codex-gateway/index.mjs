@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 
 let logger = null;
 let currentConfig = {
-  gatewayRoot: "C:\\Path\\To\\NapCatCodexGateway",
+  gatewayRoot: "C:\\Path\\To\\RabiRoute",
   managerUrl: "http://127.0.0.1:8790",
   managerPort: 8790
 };
@@ -140,7 +140,7 @@ function startManagerProcess() {
     stdio: "ignore"
   });
   managerProcess.unref();
-  logger?.info(`Codex 网关管理器已启动，pid=${managerProcess.pid ?? "未知"}`);
+  logger?.info(`RabiRoute 管理器已启动，pid=${managerProcess.pid ?? "未知"}`);
 }
 
 async function reloadManager() {
@@ -159,7 +159,7 @@ const plugin_init = async (ctx) => {
       Object.assign(currentConfig, JSON.parse(fs.readFileSync(ctx.configPath, "utf-8")));
     }
   } catch (error) {
-    logger?.warn("读取 Codex 网关插件配置失败", error);
+    logger?.warn("读取 RabiRoute 插件配置失败", error);
   }
 
   ctx.router.static("/static", "webui");
@@ -252,13 +252,13 @@ const plugin_init = async (ctx) => {
 
   ctx.router.page({
     path: "gateways",
-    title: "消息网关",
-    icon: "🔀",
+    title: "RabiRoute",
+    icon: "✦",
     htmlFile: "webui/gateways.html",
-    description: "管理多个 QQ 消息转发网关"
+    description: "打开拉比路由独立控制台"
   });
 
-  logger?.info("QQ 消息网关插件已初始化");
+  logger?.info("RabiRoute 插件已初始化");
 };
 
 const plugin_get_config = async () => currentConfig;
@@ -272,7 +272,7 @@ const plugin_set_config = async (ctx, config) => {
 let plugin_config_ui = [];
 
 const plugin_cleanup = async () => {
-  logger?.info("QQ 消息网关插件已清理");
+  logger?.info("RabiRoute 插件已清理");
 };
 
 export {

@@ -46,6 +46,7 @@ type GatewayRuntime = {
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = path.resolve(rootDir, process.env.GATEWAY_MANAGER_CONFIG ?? "gateways.json");
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
+const standaloneWebuiPath = path.join(rootDir, "napcat-plugin-codex-gateway", "webui", "gateways.html");
 const runtimes = new Map<string, GatewayRuntime>();
 
 function ensureConfigFile(): void {
@@ -65,6 +66,18 @@ function readConfig(): GatewayConfigFile {
   }
 
   return parsed;
+}
+
+function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
+  if (!Array.isArray(config.gateways)) {
+    throw new Error("gateways must be an array");
+  }
+
+  const normalized = {
+    gateways: config.gateways.map(normalizeDefinition)
+  };
+  fs.writeFileSync(configPath, JSON.stringify(normalized, null, 2), "utf8");
+  return normalized;
 }
 
 function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
@@ -113,6 +126,17 @@ function loadRuntimes(): void {
         runtime.process.kill();
       }
       runtimes.delete(id);
+    }
+  }
+}
+
+function syncRunningGateways(): void {
+  for (const runtime of runtimes.values()) {
+    if (runtime.definition.enabled && !runtime.process) {
+      startGateway(runtime.definition.id);
+    }
+    if (!runtime.definition.enabled && runtime.process) {
+      stopGateway(runtime.definition.id);
     }
   }
 }
@@ -250,7 +274,49 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
   response.end(JSON.stringify(body, null, 2));
 }
 
+function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    request.on("end", () => {
+      try {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve((text ? JSON.parse(text) : {}) as T);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+function standaloneGatewayPayload(): Record<string, unknown> {
+  return {
+    code: 0,
+    data: {
+      config: readConfig(),
+      manager: [...runtimes.values()].map(runtimeStatus)
+    }
+  };
+}
+
+function networkOptionsPayload(): Record<string, unknown> {
+  return {
+    code: 0,
+    data: {
+      httpServers: [],
+      websocketClients: []
+    }
+  };
+}
+
 function htmlResponse(response: http.ServerResponse): void {
+  if (fs.existsSync(standaloneWebuiPath)) {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end(fs.readFileSync(standaloneWebuiPath, "utf8"));
+    return;
+  }
+
   const gateways = [...runtimes.values()].map(runtimeStatus);
   const cards = gateways.map((gateway) => {
     const running = gateway.running ? "running" : "stopped";
@@ -328,8 +394,7 @@ function handleAction(pathname: string, response: http.ServerResponse): boolean 
     setTimeout(() => startGateway(id), 1000);
   }
 
-  response.writeHead(303, { location: "/" });
-  response.end();
+  jsonResponse(response, 200, { code: 0, message: `requested ${action}`, data: [...runtimes.values()].map(runtimeStatus) });
   return true;
 }
 
@@ -347,17 +412,38 @@ function startManager(): void {
       if (request.method === "POST" && handleAction(requestUrl.pathname, response)) {
         return;
       }
+      if (request.method === "GET" && requestUrl.pathname === "/gateways") {
+        jsonResponse(response, 200, standaloneGatewayPayload());
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/gateways") {
+        void readJsonBody<GatewayConfigFile>(request)
+          .then((body) => {
+            writeConfig(body);
+            loadRuntimes();
+            syncRunningGateways();
+            jsonResponse(response, 200, standaloneGatewayPayload());
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/network-options") {
+        jsonResponse(response, 200, networkOptionsPayload());
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/manager/start") {
+        jsonResponse(response, 200, { code: 0, message: "manager is already running" });
+        return;
+      }
       if (requestUrl.pathname === "/api/gateways") {
         jsonResponse(response, 200, [...runtimes.values()].map(runtimeStatus));
         return;
       }
       if (requestUrl.pathname === "/reload") {
         loadRuntimes();
-        for (const runtime of runtimes.values()) {
-          if (runtime.definition.enabled && !runtime.process) {
-            startGateway(runtime.definition.id);
-          }
-        }
+        syncRunningGateways();
         if (request.headers.accept?.includes("application/json")) {
           jsonResponse(response, 200, { ok: true, gateways: [...runtimes.values()].map(runtimeStatus) });
         } else {
