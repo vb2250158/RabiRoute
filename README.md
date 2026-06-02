@@ -2,11 +2,94 @@
 
 ![RabiRoute 拉比路由](assets/rabiroute-hero.png)
 
-拉比路由是一个聊天入口到 Agent 的可爱路由中枢。当前实现已经支持把 NapCat / OneBot 的 QQ 群聊和私聊消息转发到固定的 Codex Desktop 会话里，并提供独立 WebUI 与 NapCat 插件入口，用来管理多个网关、选择 NapCat 网络配置、编辑消息转发模板。
+拉比路由是一个面向聊天入口和 Agent 系统的轻量 **Agent Gateway / Policy Router**。它关注的不是“怎么运行每一个 Agent”，而是“消息进来以后该交给谁、怎么包装上下文、注入什么提示词、结果如何反向路由回去”。
 
-当前默认转发目标是 `codexDesktop`。代码里已经把消息路由、模板渲染和目标投递拆开，后续要接入其他 Agent 或自动化目标时，可以在 `src/forwarding.ts` 里新增转发目标，而不用改 QQ 消息 handler。
+当前实现已经支持把 NapCat / OneBot 的 QQ 群聊和私聊消息转发到固定的 Codex Desktop 会话里，并提供独立 WebUI 与 NapCat 插件入口，用来管理多个网关、选择 NapCat 网络配置、编辑消息转发模板。代码里已经把消息路由、模板渲染和目标投递拆开，后续会继续升级为可配置的 Route DSL 和 Agent Target Registry。
 
 GitHub: https://github.com/vb2250158/RabiRoute
+
+## 项目定位
+
+RabiRoute 不计划做成另一个全量版 `cc-connect`。`cc-connect` 已经很好地解决了“多聊天平台接入多个 coding agent，并管理 project / provider / session / cron”的问题。RabiRoute 更适合站在它上层或旁路，做消息级策略路由：
+
+```text
+QQ / Webhook / CLI / HTTP API / Scheduler
+        ↓
+    RabiRoute
+        ↓
+统一事件 → 路由规则 → Prompt 注入 → Context 包装 → Target 选择
+        ↓
+Codex Desktop / cc-connect project / Copilot / AstrBot / Dify / n8n / Tool Runner
+```
+
+一句话：
+
+```text
+cc-connect 解决 “agent 怎么跑”。
+RabiRoute 解决 “消息该交给谁、怎么包装、注入什么提示词”。
+```
+
+## 当前状态
+
+已实现：
+
+- NapCat / OneBot WebSocket 接入 QQ 群聊和私聊。
+- 群消息路由：直接 @、直接回复、间接回复。
+- 私聊消息路由。
+- JSONL 消息记录和 Codex 投递记录。
+- 模板化 Prompt / 消息包装。
+- Codex Desktop IPC 投递，支持固定线程 `start` 和运行中 `steer`。
+- 独立 WebUI：`http://127.0.0.1:8790/`。
+- NapCat 插件入口：在 NapCat 插件页跳转到独立 WebUI。
+
+规划中：
+
+- 统一 `InboundMessage` 事件模型。
+- Route DSL：按平台、群、用户、关键词、route kind、意图等条件选择目标。
+- Agent Target Registry：`codexDesktop`、`ccConnectProject`、`webhook`、`astrbot`、`dify`、`n8n` 等。
+- 双向路由：Agent 输出经过输出模板包装后回到源平台或指定出口。
+- 路由审计 UI：查看消息、决策、投递、错误和回传链路。
+
+## 路线图草案
+
+未来配置形态会接近：
+
+```yaml
+targets:
+  codex-desktop:
+    type: codex_desktop_ipc
+    thread_name: "QQ 消息监听"
+
+  cc-codex:
+    type: cc_connect_bridge
+    url: "ws://127.0.0.1:9810/bridge/ws"
+    project: "codex"
+
+  astrbot:
+    type: webhook
+    url: "http://127.0.0.1:6185/webhook"
+
+routes:
+  - name: code-to-codex
+    match:
+      keywords: ["bug", "报错", "代码", "git", "构建失败"]
+    prompt_profile: "code-helper"
+    target: cc-codex
+
+  - name: reply-to-desktop
+    match:
+      route_kind: ["direct_reply", "indirect_reply"]
+    prompt_profile: "qq-context"
+    target: codex-desktop
+
+  - name: default-mention
+    match:
+      mention: true
+    prompt_profile: "default"
+    target: astrbot
+```
+
+当前版本仍以 QQ / NapCat + Codex Desktop 为第一条可用链路。
 
 ## 目录结构
 
