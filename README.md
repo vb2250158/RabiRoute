@@ -8,6 +8,8 @@
 
 GitHub: https://github.com/vb2250158/RabiRoute
 
+架构说明：[ARCHITECTURE.md](ARCHITECTURE.md)
+
 ## 项目定位
 
 RabiRoute 不计划做成另一个全量版 `cc-connect`。`cc-connect` 已经很好地解决了“多聊天平台接入多个 coding agent，并管理 project / provider / session / cron”的问题。RabiRoute 更适合站在它上层或旁路，做消息级策略路由：
