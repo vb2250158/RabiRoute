@@ -117,6 +117,7 @@ function readOneBotNetworkOptions() {
       webhook: {
         listeners: []
       },
+      heartbeat: {},
       disabled: {}
     }
   };

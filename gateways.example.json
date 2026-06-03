@@ -4,9 +4,15 @@
       "id": "default-main",
       "name": "默认 QQ 网关",
       "enabled": true,
+      "messageAdapters": [
+        "napcat",
+        "heartbeat"
+      ],
       "gatewayPort": 8789,
       "napcatHttpUrl": "http://127.0.0.1:3000",
       "napcatAccessToken": "",
+      "heartbeatIntervalSeconds": 900,
+      "heartbeatMessage": "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
       "codexThreadName": "QQ 消息监听",
       "codexCwd": "C:\\Path\\To\\Your\\Project",
       "rolesDir": "./data/default-main/roles",
@@ -64,6 +70,17 @@
           "template": "QQ 消息更新提醒：收到一条私聊消息。\n时间：{time}\n发送者：{sender}\nQQ：{userId}\n消息：{message}\n\n请在需要时读取 {privateLogPath} 查看上下文。",
           "routeKinds": [
             "private"
+          ]
+        },
+        {
+          "id": "heartbeat",
+          "name": "定时触发模板",
+          "enabled": true,
+          "targetGroupId": "",
+          "regex": "",
+          "template": "定时触发提醒：到了心跳路由时间。\n时间：{time}\n来源：{messageTarget}\n间隔：{heartbeatIntervalSeconds} 秒\n消息：{message}\n\n请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，主动检查是否有需要推进、整理或形成待审草稿的事项。",
+          "routeKinds": [
+            "heartbeat"
           ]
         }
       ],

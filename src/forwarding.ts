@@ -2,11 +2,12 @@ import path from "node:path";
 import { notifyCodex } from "./codexApp.js";
 import { notifyCodexDesktop } from "./codexDesktopIpc.js";
 import { config, rolePathsFor, type NotificationRule } from "./config.js";
-import { appendCodexNotificationToDir, appendGroupMessageToDir, appendPrivateMessageToDir, type GroupMessageRecord, type PrivateMessageRecord } from "./history.js";
+import { appendCodexNotificationToDir, appendGroupMessageToDir, appendHeartbeatEventToDir, appendPrivateMessageToDir, type GroupMessageRecord, type HeartbeatEventRecord, type PrivateMessageRecord } from "./history.js";
 
-export type ForwardRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply";
-type ForwardLogKind = "private" | "group_mention";
+export type ForwardRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat";
+type ForwardLogKind = "private" | "group_mention" | "heartbeat";
 type ForwardTarget = "codexDesktop" | "codexApp";
+type ForwardRecord = GroupMessageRecord | PrivateMessageRecord | HeartbeatEventRecord;
 
 export type ForwardTemplateValues = Record<string, string | number | undefined>;
 
@@ -48,11 +49,19 @@ function expandRouteVariables(pattern: string, variables: Record<string, string>
   return expanded;
 }
 
-function routeVariablesFor(record: GroupMessageRecord | PrivateMessageRecord, extraValues: ForwardTemplateValues): Record<string, string> {
+function isGroupRecord(record: ForwardRecord): record is GroupMessageRecord {
+  return "groupId" in record;
+}
+
+function isHeartbeatRecord(record: ForwardRecord): record is HeartbeatEventRecord {
+  return "intervalSeconds" in record || !("userId" in record);
+}
+
+function routeVariablesFor(record: ForwardRecord, extraValues: ForwardTemplateValues): Record<string, string> {
   const isGroup = "groupId" in record;
   const variables: Record<string, string> = {
     ...config.routeVariables,
-    SenderQQId: String(record.userId),
+    SenderQQId: "userId" in record ? String(record.userId) : "",
     GroupId: isGroup ? String(record.groupId) : "",
     ReplyMessageId: extraValues.repliedMessageId == null ? "" : String(extraValues.repliedMessageId)
   };
@@ -72,7 +81,7 @@ function routeTextFromRawMessage(rawMessage: string, variables: Record<string, s
     });
 }
 
-function routeMatchText(record: GroupMessageRecord | PrivateMessageRecord, variables: Record<string, string>, extraValues: ForwardTemplateValues): string {
+function routeMatchText(record: ForwardRecord, variables: Record<string, string>, extraValues: ForwardTemplateValues): string {
   const parts = [routeTextFromRawMessage(record.rawMessage, variables)];
   if (typeof extraValues.repliedMessage === "string" && extraValues.repliedMessage.trim()) {
     parts.push(routeTextFromRawMessage(extraValues.repliedMessage, variables));
@@ -96,7 +105,7 @@ function configuredForwardTargets(): ForwardTarget[] {
 function ruleMatches(
   rule: NotificationRule,
   routeKind: ForwardRouteKind,
-  record: GroupMessageRecord | PrivateMessageRecord,
+  record: ForwardRecord,
   extraValues: ForwardTemplateValues
 ): boolean {
   if (!rule.enabled) {
@@ -108,7 +117,7 @@ function ruleMatches(
   }
 
   if (rule.targetGroupId?.trim()) {
-    if (!("groupId" in record) || String(record.groupId) !== rule.targetGroupId.trim()) {
+    if (!isGroupRecord(record) || String(record.groupId) !== rule.targetGroupId.trim()) {
       return false;
     }
   }
@@ -128,21 +137,22 @@ function ruleMatches(
 
 function ruleForRoute(
   routeKind: ForwardRouteKind,
-  record: GroupMessageRecord | PrivateMessageRecord,
+  record: ForwardRecord,
   extraValues: ForwardTemplateValues
 ): NotificationRule | null {
   return config.notificationRules.find((item) => ruleMatches(item, routeKind, record, extraValues)) ?? null;
 }
 
 function commonTemplateValues(
-  record: GroupMessageRecord | PrivateMessageRecord,
+  record: ForwardRecord,
   extraValues: ForwardTemplateValues,
   roleContext = rolePathsFor(config.agentRoleId)
 ): ForwardTemplateValues {
-  const sender = record.senderName || record.userId;
-  const isGroup = "groupId" in record;
-  const targetId = isGroup ? record.groupId : record.userId;
-  const targetType = isGroup ? "group" : "private";
+  const sender = record.senderName || ("userId" in record ? record.userId : "RabiRoute");
+  const isGroup = isGroupRecord(record);
+  const isHeartbeat = isHeartbeatRecord(record);
+  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : "heartbeat";
+  const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : "private";
   const routeVariables = routeVariablesFor(record, extraValues);
   const routeText = routeTextFromRawMessage(record.rawMessage, routeVariables);
   const repliedRouteText = typeof extraValues.repliedMessage === "string"
@@ -153,11 +163,11 @@ function commonTemplateValues(
     time: formatTime(record.time),
     sender,
     senderName: record.senderName,
-    userId: record.userId,
+    userId: "userId" in record ? record.userId : undefined,
     groupId: isGroup ? record.groupId : undefined,
     targetType,
     targetId,
-    messageTarget: isGroup ? `群 ${targetId}` : `私聊 ${targetId}`,
+    messageTarget: isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText,
@@ -169,11 +179,16 @@ function commonTemplateValues(
     agentRoleDir: roleContext.roleDir,
     dataDir: roleContext.dataDir,
     groupLogPath: path.join(roleContext.dataDir, "group-messages.jsonl"),
-    privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl")
+    privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
+    heartbeatLogPath: path.join(roleContext.dataDir, "heartbeat-events.jsonl"),
+    heartbeatIntervalSeconds: "intervalSeconds" in record ? record.intervalSeconds : undefined
   };
 }
 
 function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
+  if (routeKind === "heartbeat") {
+    return "heartbeat";
+  }
   return routeKind === "private" ? "private" : "group_mention";
 }
 
@@ -188,7 +203,7 @@ function dispatchToTarget(target: ForwardTarget, message: string): void {
 
 export function forwardMessage(
   routeKind: ForwardRouteKind,
-  record: GroupMessageRecord | PrivateMessageRecord,
+  record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
 ): void {
   const rule = ruleForRoute(routeKind, record, extraValues);
@@ -198,8 +213,10 @@ export function forwardMessage(
   const roleContext = rolePathsFor(config.agentRoleId);
 
   if (path.resolve(roleContext.dataDir) !== path.resolve(config.dataDir)) {
-    if ("groupId" in record) {
+    if (isGroupRecord(record)) {
       appendGroupMessageToDir(record, roleContext.dataDir);
+    } else if (isHeartbeatRecord(record)) {
+      appendHeartbeatEventToDir(record, roleContext.dataDir);
     } else {
       appendPrivateMessageToDir(record, roleContext.dataDir);
     }

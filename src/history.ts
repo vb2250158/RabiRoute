@@ -19,10 +19,18 @@ export type PrivateMessageRecord = {
   senderName?: string;
 };
 
+export type HeartbeatEventRecord = {
+  time: number;
+  rawMessage: string;
+  messageId?: number | string;
+  senderName?: string;
+  intervalSeconds?: number;
+};
+
 export type CodexNotificationRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention";
+  kind: "private" | "group_mention" | "heartbeat";
   text: string;
 };
 
@@ -50,6 +58,19 @@ export function appendPrivateMessage(record: PrivateMessageRecord): void {
 
 export function appendPrivateMessageToDir(record: PrivateMessageRecord, dataDir: string): void {
   fs.appendFileSync(privateLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function heartbeatLogPath(dataDir = config.dataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "heartbeat-events.jsonl");
+}
+
+export function appendHeartbeatEvent(record: HeartbeatEventRecord): void {
+  fs.appendFileSync(heartbeatLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+export function appendHeartbeatEventToDir(record: HeartbeatEventRecord, dataDir: string): void {
+  fs.appendFileSync(heartbeatLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 function codexNotificationPath(dataDir = config.dataDir): string {

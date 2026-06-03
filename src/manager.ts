@@ -11,8 +11,11 @@ type GatewayDefinition = {
   name?: string;
   enabled?: boolean;
   messageAdapterType?: MessageAdapterType;
+  messageAdapters?: MessageAdapterType[];
   gatewayPort: number;
   webhookPath?: string;
+  heartbeatIntervalSeconds?: number;
+  heartbeatMessage?: string;
   napcatHttpUrl?: string;
   napcatAccessToken?: string;
   targetGroupId?: string;
@@ -124,17 +127,37 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   const rolesDir = definition.rolesDir ?? path.join(dataDir, "roles");
   const roleRouteFiles = readRoleRouteFiles(rolesDir);
   const { botNickname: _legacyBotNickname, ...cleanDefinition } = definition as GatewayDefinition & { botNickname?: string };
+  const messageAdapters = normalizeMessageAdapters(definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"]);
   return {
     ...cleanDefinition,
     name: definition.name ?? definition.id,
     enabled: definition.enabled !== false,
-    messageAdapterType: definition.messageAdapterType ?? "napcat",
+    messageAdapterType: messageAdapters[0] ?? "napcat",
+    messageAdapters,
+    heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
+    heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
     dataDir,
     rolesDir,
     agentRoleFile: definition.agentRoleFile ?? "persona.md",
     roleNotificationRules: definition.roleNotificationRules ?? roleRouteFiles.roleNotificationRules,
     roleRouteNames: definition.roleRouteNames ?? roleRouteFiles.roleRouteNames
   };
+}
+
+function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
+  const adapters = items
+    .map((item) => item == null ? "" : String(item))
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "webhook" || item === "heartbeat" || item === "disabled");
+  if (adapters.includes("disabled")) {
+    return ["disabled"];
+  }
+  const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
+  return unique.length > 0 ? unique : ["napcat"];
+}
+
+function normalizePositiveNumber(value: unknown, fallback: number): number {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
 }
 
 function readRoleRouteFiles(rolesDir: string): RoleRouteFiles {
@@ -278,7 +301,10 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     : definition.notificationRules;
   return {
     ...process.env,
-    MESSAGE_ADAPTER_TYPE: definition.messageAdapterType ?? "napcat",
+    MESSAGE_ADAPTER_TYPE: definition.messageAdapterType ?? definition.messageAdapters?.[0] ?? "napcat",
+    MESSAGE_ADAPTER_TYPES: JSON.stringify(definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"]),
+    HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
+    HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
     NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
     NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
     GATEWAY_PORT: String(definition.gatewayPort),
@@ -561,8 +587,11 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     name: runtime.definition.name,
     enabled: runtime.definition.enabled,
     messageAdapterType: runtime.definition.messageAdapterType ?? "napcat",
+    messageAdapters: runtime.definition.messageAdapters ?? [runtime.definition.messageAdapterType ?? "napcat"],
     gatewayPort: runtime.definition.gatewayPort,
     webhookPath: runtime.definition.webhookPath,
+    heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
+    heartbeatMessage: runtime.definition.heartbeatMessage ?? "",
     napcatHttpUrl: runtime.definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
     targetGroupId: runtime.definition.targetGroupId ?? "",
     routeVariables: runtime.definition.routeVariables,
@@ -634,6 +663,7 @@ function networkOptionsPayload(): Record<string, unknown> {
     webhook: {
       listeners: []
     },
+    heartbeat: {},
     disabled: {}
   };
   return {
