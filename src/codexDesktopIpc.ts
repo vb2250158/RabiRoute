@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
@@ -40,9 +41,25 @@ type CodexState = {
   lastNotificationAt?: string;
 };
 
-const pipePath = process.platform === "win32"
-  ? "\\\\.\\pipe\\codex-ipc"
-  : path.join("/tmp", "codex-ipc", typeof process.getuid === "function" ? `ipc-${process.getuid()}.sock` : "ipc.sock");
+function unique<T>(items: T[]): T[] {
+  return [...new Set(items)];
+}
+
+function getCodexIpcPaths(): string[] {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const socketName = uid == null ? "ipc.sock" : `ipc-${uid}.sock`;
+  const configuredPath = process.env.CODEX_DESKTOP_IPC_PATH?.trim();
+
+  if (process.platform === "win32") {
+    return unique([configuredPath, "\\\\.\\pipe\\codex-ipc"].filter(Boolean) as string[]);
+  }
+
+  return unique([
+    configuredPath,
+    path.join(os.tmpdir(), "codex-ipc", socketName),
+    path.join("/tmp", "codex-ipc", socketName),
+  ].filter(Boolean) as string[]);
+}
 
 const statePath = path.join(config.dataDir, "codex-state.json");
 const pending = new Map<string, IpcPending>();
@@ -179,44 +196,67 @@ function connect(): Promise<net.Socket> {
   }
 
   connecting = new Promise((resolve, reject) => {
-    const next = net.connect(pipePath);
-    const onError = (error: Error) => {
-      socket = null;
-      reject(error);
-    };
+    const pipePaths = getCodexIpcPaths();
+    const errors: string[] = [];
+    let index = 0;
+    let next: net.Socket | null = null;
 
-    next.once("error", onError);
-    next.once("connect", async () => {
-      next.off("error", onError);
-      socket = next;
-      readBuffer = Buffer.alloc(0);
-      nextFrameLength = null;
-      clientId = "initializing-client";
-
-      next.on("data", handleData);
-      next.on("close", () => {
+    const connectNext = () => {
+      const pipePath = pipePaths[index++];
+      if (!pipePath) {
         socket = null;
+        reject(new Error(`Codex Desktop IPC connection failed. Tried: ${pipePaths.join(", ")}. Errors: ${errors.join("; ")}`));
+        return;
+      }
+
+      next = net.connect(pipePath);
+      const onError = (error: NodeJS.ErrnoException) => {
+        next?.destroy();
+        errors.push(`${pipePath}: ${error.code ?? error.message}`);
+        connectNext();
+      };
+
+      next.once("error", onError);
+      next.once("connect", async () => {
+        next?.off("error", onError);
+        if (!next) {
+          reject(new Error("Codex Desktop IPC socket disappeared during connect"));
+          return;
+        }
+
+        const connected = next;
+        socket = connected;
+        readBuffer = Buffer.alloc(0);
+        nextFrameLength = null;
         clientId = "initializing-client";
-        for (const [id, item] of pending) {
-          pending.delete(id);
-          clearTimeout(item.timer);
-          item.reject(new Error("Codex Desktop IPC connection closed"));
+
+        connected.on("data", handleData);
+        connected.on("close", () => {
+          socket = null;
+          clientId = "initializing-client";
+          for (const [id, item] of pending) {
+            pending.delete(id);
+            clearTimeout(item.timer);
+            item.reject(new Error("Codex Desktop IPC connection closed"));
+          }
+        });
+
+        try {
+          const response = await request("initialize", { clientType: "rabiroute" }, 0, true);
+          if (response.resultType !== "success" || !response.result || typeof response.result !== "object" || !("clientId" in response.result)) {
+            throw new Error(`Codex Desktop IPC initialize failed: ${JSON.stringify(response)}`);
+          }
+
+          clientId = String((response.result as { clientId: unknown }).clientId);
+          resolve(connected);
+        } catch (error) {
+          connected.destroy();
+          reject(error);
         }
       });
+    };
 
-      try {
-        const response = await request("initialize", { clientType: "rabiroute" }, 0, true);
-        if (response.resultType !== "success" || !response.result || typeof response.result !== "object" || !("clientId" in response.result)) {
-          throw new Error(`Codex Desktop IPC initialize failed: ${JSON.stringify(response)}`);
-        }
-
-        clientId = String((response.result as { clientId: unknown }).clientId);
-        resolve(next);
-      } catch (error) {
-        next.destroy();
-        reject(error);
-      }
-    });
+    connectNext();
   });
 
   return connecting.finally(() => {
