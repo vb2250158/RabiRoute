@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import { createHeartbeatAdapter } from "./adapters/heartbeatAdapter.js";
 import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 
@@ -11,6 +12,12 @@ type GatewayStatus = {
     message?: string;
     updatedAt?: string;
   };
+  messageAdapters?: Record<string, {
+    type?: MessageAdapterType;
+    status?: "running" | "placeholder" | "disabled" | "error";
+    message?: string;
+    updatedAt?: string;
+  }>;
 };
 
 const statusPath = path.join(config.dataDir, "gateway-status.json");
@@ -30,12 +37,21 @@ function readGatewayStatus(): GatewayStatus {
 function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdapter"]>): void {
   fs.mkdirSync(config.dataDir, { recursive: true });
   const status = readGatewayStatus();
+  const type = patch.type ?? status.messageAdapter?.type ?? "disabled";
   fs.writeFileSync(statusPath, JSON.stringify({
     ...status,
     messageAdapter: {
       ...status.messageAdapter,
       ...patch,
       updatedAt: new Date().toISOString()
+    },
+    messageAdapters: {
+      ...status.messageAdapters,
+      [type]: {
+        ...status.messageAdapters?.[type],
+        ...patch,
+        updatedAt: new Date().toISOString()
+      }
     }
   }, null, 2), "utf8");
 }
@@ -61,14 +77,32 @@ function createMessageAdapter(): MessageAdapter {
   if (config.messageAdapterType === "napcat") {
     return createNapCatAdapter();
   }
+  if (config.messageAdapterType === "heartbeat") {
+    return createHeartbeatAdapter();
+  }
 
   return createPlaceholderAdapter(config.messageAdapterType);
 }
 
-const adapter = createMessageAdapter();
-patchMessageAdapterStatus({
-  type: adapter.type,
-  status: "running",
-  message: `Starting ${adapter.type} message adapter.`
-});
-void adapter.start();
+function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
+  if (type === "napcat") {
+    return createNapCatAdapter();
+  }
+  if (type === "heartbeat") {
+    return createHeartbeatAdapter();
+  }
+  return createPlaceholderAdapter(type);
+}
+
+const adapters = config.messageAdapterTypes.length > 0
+  ? config.messageAdapterTypes.map(createMessageAdapterByType)
+  : [createMessageAdapter()];
+
+for (const adapter of adapters) {
+  patchMessageAdapterStatus({
+    type: adapter.type,
+    status: "running",
+    message: `Starting ${adapter.type} message adapter.`
+  });
+  void adapter.start();
+}

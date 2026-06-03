@@ -33,7 +33,16 @@ export const defaultPrivateNotificationTemplate = [
   "请在需要时读取 {privateLogPath} 查看上下文。"
 ].join("\n");
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply";
+export const defaultHeartbeatNotificationTemplate = [
+  "心跳提醒：到了定时巡检时间。",
+  "时间：{time}",
+  "来源：{messageTarget}",
+  "消息：{message}",
+  "",
+  "请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，主动检查是否有需要推进、整理或形成待审草稿的事项。"
+].join("\n");
+
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat";
 
 export type NotificationRule = {
   id: string;
@@ -94,7 +103,39 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "heartbeat" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+}
+
+function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
+  const adapters = items
+    .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "webhook" || item === "heartbeat" || item === "disabled");
+  if (adapters.includes("disabled")) {
+    return ["disabled"];
+  }
+  return [...new Set(adapters)].filter((item) => item !== "disabled");
+}
+
+function parseMessageAdapterTypes(rawTypes: string | undefined, rawType: string | undefined): MessageAdapterType[] {
+  if (rawTypes?.trim()) {
+    try {
+      const parsed = JSON.parse(rawTypes) as unknown;
+      if (Array.isArray(parsed)) {
+        const adapters = normalizeMessageAdapterTypes(parsed);
+        return adapters.length > 0 ? adapters : ["napcat"];
+      }
+    } catch {
+      const adapters = normalizeMessageAdapterTypes(rawTypes.split(",").map((item) => item.trim()));
+      return adapters.length > 0 ? adapters : ["napcat"];
+    }
+  }
+
+  return [parseMessageAdapterType(rawType)];
+}
+
+function parsePositiveNumber(raw: string | undefined, fallback: number): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function normalizeNotificationRule(item: unknown, index: number): NotificationRule | null {
@@ -109,7 +150,7 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
 
   const routeKinds = Array.isArray(raw.routeKinds)
     ? raw.routeKinds.filter((kind): kind is NotificationRouteKind => {
-      return kind === "private" || kind === "group_message" || kind === "direct_at" || kind === "direct_reply" || kind === "indirect_reply";
+      return kind === "private" || kind === "group_message" || kind === "direct_at" || kind === "direct_reply" || kind === "indirect_reply" || kind === "heartbeat";
     })
     : [];
 
@@ -166,6 +207,15 @@ function defaultNotificationRules(): NotificationRule[] {
       targetGroupId: "",
       regex: "",
       template: process.env.PRIVATE_NOTIFICATION_TEMPLATE || defaultPrivateNotificationTemplate
+    },
+    {
+      id: "heartbeat",
+      name: "心跳巡检模板",
+      enabled: true,
+      routeKinds: ["heartbeat"],
+      targetGroupId: "",
+      regex: "",
+      template: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate
     }
   ];
 }
@@ -180,6 +230,9 @@ const agentRolePath = agentRoleDir ? path.join(agentRoleDir, agentRoleFile) : ""
 
 export const config = {
   messageAdapterType: parseMessageAdapterType(process.env.MESSAGE_ADAPTER_TYPE),
+  messageAdapterTypes: parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE),
+  heartbeatIntervalSeconds: parsePositiveNumber(process.env.HEARTBEAT_INTERVAL_SECONDS, 900),
+  heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
   napcatHttpUrl: process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
   napcatAccessToken: process.env.NAPCAT_ACCESS_TOKEN ?? "",
   gatewayPort: Number(process.env.GATEWAY_PORT ?? "8789"),
@@ -208,6 +261,7 @@ export const config = {
   groupDirectReplyNotificationTemplate: process.env.GROUP_DIRECT_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupDirectReplyNotificationTemplate,
   groupIndirectReplyNotificationTemplate: process.env.GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_NICKNAME_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupIndirectReplyNotificationTemplate,
   privateNotificationTemplate: process.env.PRIVATE_NOTIFICATION_TEMPLATE || defaultPrivateNotificationTemplate,
+  heartbeatNotificationTemplate: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate,
   notificationRules: parseNotificationRules(process.env.NOTIFICATION_RULES) ?? defaultNotificationRules()
 };
 
