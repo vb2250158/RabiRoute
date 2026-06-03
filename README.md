@@ -132,6 +132,16 @@ npm run start:manager
 - NapCat 反向 WebSocket 地址：`ws://127.0.0.1:8789`
 - NapCat HTTP API 地址：`http://127.0.0.1:3000`
 
+macOS 上同样使用这些命令启动，只是路径示例换成实际仓库目录：
+
+```bash
+cd /Users/<user>/Documents/RabiRoute
+npm install
+npm run build
+cp gateways.example.json gateways.json
+npm run start:manager
+```
+
 ## NapCat 网络配置
 
 在 NapCat WebUI 里配置：
@@ -176,6 +186,20 @@ NapCat 插件页会提供入口跳转到独立控制台：
 http://127.0.0.1:8790/
 ```
 
+## macOS 部署排障
+
+如果 NapCat 有消息、RabiRoute 日志也出现了 `NapCat connected from 127.0.0.1`，说明 QQ 到 RabiRoute 的链路已经通了。后续常见问题通常在 Codex Desktop 投递阶段：
+
+- `Missing monitorThreadId in .../codex-state.json`：还没有绑定 Codex 目标线程。先打开或创建用于处理 QQ 消息的 Codex 线程，再通过 RabiRoute 管理台绑定；也可以确认 `data/<gateway-id>/codex-state.json` 里已有 `monitorThreadId`。
+- `connect ENOENT /tmp/codex-ipc/ipc-501.sock`：旧版本只查 `/tmp`，但 macOS 上 Codex Desktop 的 socket 常在 `/var/folders/.../T/codex-ipc/ipc-501.sock`。当前版本会自动依次尝试 `CODEX_DESKTOP_IPC_PATH`、`os.tmpdir()/codex-ipc/ipc-<uid>.sock` 和 `/tmp/codex-ipc/ipc-<uid>.sock`。如果仍失败，可以临时指定：
+
+```bash
+export CODEX_DESKTOP_IPC_PATH="/var/folders/.../T/codex-ipc/ipc-501.sock"
+npm run start:manager
+```
+
+NapCat 新增插件、修改 OneBot 网络配置后通常不会完全热加载。配置写入后如果 `3000` / `3003` 这类 HTTP 端口没监听，或 WebSocket 客户端没有连到 RabiRoute，需要重启 QQ/NapCat，或者在 NapCat WebUI 里保存并重载网络配置。
+
 ## 群消息路由
 
 群消息触发转发的路由分为三类：
@@ -187,6 +211,8 @@ http://127.0.0.1:8790/
 私聊消息使用独立的私聊模板。
 
 公开示例配置使用脱敏的机器人昵称和工作目录。实际使用时请在 NapCat 插件页面或 `gateways.json` 里填写自己的 `botNickname`、`codexCwd`、`targetGroupId` 和模板内容。
+
+私聊发送给 Codex 的附加信息来自 WebUI 里的“私聊消息模板”，对应 `gateways.json` 的 `privateNotificationTemplate`。模板保存后 manager 会自动重启对应 gateway，让新的环境变量生效；如果使用的是旧版本，保存后还需要手动点击该 gateway 的 Restart。
 
 模板里可以使用以下变量：
 

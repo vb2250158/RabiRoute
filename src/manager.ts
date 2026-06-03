@@ -33,6 +33,7 @@ type GatewayConfigFile = {
 type GatewayRuntime = {
   definition: GatewayDefinition;
   process: ChildProcessWithoutNullStreams | null;
+  needsRestart: boolean;
   startedAt: string | null;
   stoppedAt: string | null;
   lastExit: {
@@ -48,6 +49,10 @@ const configPath = path.resolve(rootDir, process.env.GATEWAY_MANAGER_CONFIG ?? "
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
 const standaloneWebuiPath = path.join(rootDir, "napcat-plugin-codex-gateway", "webui", "gateways.html");
 const runtimes = new Map<string, GatewayRuntime>();
+
+function definitionFingerprint(definition: GatewayDefinition): string {
+  return JSON.stringify(definition);
+}
 
 function ensureConfigFile(): void {
   if (fs.existsSync(configPath)) {
@@ -105,6 +110,9 @@ function loadRuntimes(): void {
     seen.add(definition.id);
     const existing = runtimes.get(definition.id);
     if (existing) {
+      if (definitionFingerprint(existing.definition) !== definitionFingerprint(definition)) {
+        existing.needsRestart = true;
+      }
       existing.definition = definition;
       continue;
     }
@@ -112,6 +120,7 @@ function loadRuntimes(): void {
     runtimes.set(definition.id, {
       definition,
       process: null,
+      needsRestart: false,
       startedAt: null,
       stoppedAt: null,
       lastExit: null,
@@ -132,6 +141,11 @@ function loadRuntimes(): void {
 
 function syncRunningGateways(): void {
   for (const runtime of runtimes.values()) {
+    if (runtime.definition.enabled && runtime.process && runtime.needsRestart) {
+      appendLog(runtime, "restarting because gateway config changed");
+      runtime.process.kill();
+      continue;
+    }
     if (runtime.definition.enabled && !runtime.process) {
       startGateway(runtime.definition.id);
     }
@@ -202,6 +216,7 @@ function startGateway(id: string): void {
 
   runtime.log = [];
   runtime.process = child;
+  runtime.needsRestart = false;
   runtime.startedAt = new Date().toISOString();
   runtime.stoppedAt = null;
   appendLog(runtime, `started pid=${child.pid ?? "unknown"} port=${runtime.definition.gatewayPort}`);
@@ -227,6 +242,9 @@ function startGateway(id: string): void {
       at: runtime.stoppedAt
     };
     appendLog(runtime, `exited code=${code ?? ""} signal=${signal ?? ""}`);
+    if (runtime.needsRestart && runtime.definition.enabled) {
+      startGateway(runtime.definition.id);
+    }
   });
 }
 
