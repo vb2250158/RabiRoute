@@ -42,7 +42,18 @@ export const defaultHeartbeatNotificationTemplate = [
   "请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，主动检查是否有需要推进、整理或形成待审草稿的事项。"
 ].join("\n");
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat";
+export const defaultVoiceTranscriptNotificationTemplate = [
+  "语音转写更新提醒：FenneNote 捕获到一段新的语音笔记。",
+  "时间：{time}",
+  "来源：{messageTarget}",
+  "转写：{message}",
+  "时长：{voiceDurationSeconds} 秒",
+  "峰值：{voicePeak}",
+  "",
+  "请在需要时读取 {voiceTranscriptLogPath} 查看语音转写上下文。"
+].join("\n");
+
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "voice_transcript";
 
 export type NotificationRule = {
   id: string;
@@ -106,6 +117,16 @@ function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
   return raw === "webhook" || raw === "heartbeat" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
+function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
+  return kind === "private"
+    || kind === "group_message"
+    || kind === "direct_at"
+    || kind === "direct_reply"
+    || kind === "indirect_reply"
+    || kind === "heartbeat"
+    || kind === "voice_transcript";
+}
+
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
@@ -148,11 +169,7 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
     return null;
   }
 
-  const routeKinds = Array.isArray(raw.routeKinds)
-    ? raw.routeKinds.filter((kind): kind is NotificationRouteKind => {
-      return kind === "private" || kind === "group_message" || kind === "direct_at" || kind === "direct_reply" || kind === "indirect_reply" || kind === "heartbeat";
-    })
-    : [];
+  const routeKinds = Array.isArray(raw.routeKinds) ? raw.routeKinds.filter(isNotificationRouteKind) : [];
 
   return {
     id: raw.id || `rule-${index + 1}`,
@@ -216,6 +233,15 @@ function defaultNotificationRules(): NotificationRule[] {
       targetGroupId: "",
       regex: "",
       template: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate
+    },
+    {
+      id: "voice-transcript",
+      name: "语音转写模板",
+      enabled: true,
+      routeKinds: ["voice_transcript"],
+      targetGroupId: "",
+      regex: "",
+      template: process.env.VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE || defaultVoiceTranscriptNotificationTemplate
     }
   ];
 }
@@ -235,6 +261,7 @@ export const config = {
   heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
   napcatHttpUrl: process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
   napcatAccessToken: process.env.NAPCAT_ACCESS_TOKEN ?? "",
+  webhookPath: process.env.WEBHOOK_PATH ?? "/webhook",
   gatewayPort: Number(process.env.GATEWAY_PORT ?? "8789"),
   codexAppServerUrl: process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500",
   codexDirectNotify: process.env.CODEX_DIRECT_NOTIFY === "1",
@@ -262,6 +289,7 @@ export const config = {
   groupIndirectReplyNotificationTemplate: process.env.GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_NICKNAME_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupIndirectReplyNotificationTemplate,
   privateNotificationTemplate: process.env.PRIVATE_NOTIFICATION_TEMPLATE || defaultPrivateNotificationTemplate,
   heartbeatNotificationTemplate: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate,
+  voiceTranscriptNotificationTemplate: process.env.VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE || defaultVoiceTranscriptNotificationTemplate,
   notificationRules: parseNotificationRules(process.env.NOTIFICATION_RULES) ?? defaultNotificationRules()
 };
 

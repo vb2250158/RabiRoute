@@ -35,6 +35,7 @@ type GatewayDefinition = {
   groupReplyNotificationTemplate?: string;
   groupNicknameNotificationTemplate?: string;
   privateNotificationTemplate?: string;
+  voiceTranscriptNotificationTemplate?: string;
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
   roleRouteNames?: Record<string, string>;
@@ -308,6 +309,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
     NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
     GATEWAY_PORT: String(definition.gatewayPort),
+    WEBHOOK_PATH: definition.webhookPath ?? "/webhook",
     CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
     CODEX_CWD: definition.codexCwd ?? process.env.CODEX_CWD ?? rootDir,
     ROLES_DIR: definition.rolesDir ?? path.join(definition.dataDir ?? `./data/${definition.id}`, "roles"),
@@ -323,6 +325,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     GROUP_DIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupDirectReplyNotificationTemplate ?? definition.groupReplyNotificationTemplate ?? "",
     GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupIndirectReplyNotificationTemplate ?? definition.groupNicknameNotificationTemplate ?? "",
     PRIVATE_NOTIFICATION_TEMPLATE: definition.privateNotificationTemplate ?? "",
+    VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE: definition.voiceTranscriptNotificationTemplate ?? "",
     NOTIFICATION_RULES: Array.isArray(activeRoleRules) ? JSON.stringify(activeRoleRules) : "",
   };
 }

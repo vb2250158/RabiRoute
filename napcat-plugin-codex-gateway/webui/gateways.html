@@ -659,10 +659,11 @@
       indirect_reply: "群聊-间接回复",
       group_message: "群聊-普通消息",
       private: "私聊",
-      heartbeat: "定时触发"
+      heartbeat: "定时触发",
+      voice_transcript: "语音转写"
     };
     const templateVars = [
-      { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message、heartbeat。" },
+      { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message、heartbeat、voice_transcript。" },
       { name: "RobotQQId", description: "机器人 QQ 号，来自当前消息事件 self_id。" },
       { name: "SenderQQId", description: "发送者 QQ 号。" },
       { name: "GroupId", description: "群号；私聊时为空。" },
@@ -682,7 +683,11 @@
       { name: "groupLogPath", description: "群聊消息 JSONL 记录路径。" },
       { name: "privateLogPath", description: "私聊消息 JSONL 记录路径。" },
       { name: "heartbeatLogPath", description: "定时触发事件 JSONL 记录路径。" },
-      { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" }
+      { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" },
+      { name: "voiceTranscriptLogPath", description: "语音转写 JSONL 记录路径。" },
+      { name: "voiceSource", description: "语音来源，例如 fennenote。" },
+      { name: "voiceDurationSeconds", description: "语音片段时长，单位秒。" },
+      { name: "voicePeak", description: "语音片段峰值音量。" }
     ];
     let state = { gateways: [] };
     let managerRows = [];
@@ -999,7 +1004,7 @@
       return [
         { label: "NapCat / OneBot", value: "napcat" },
         { label: "定时触发", value: "heartbeat" },
-        { label: "Webhook（预留）", value: "webhook" },
+        { label: "Webhook / FenneNote", value: "webhook" },
         { label: "禁用消息端", value: "disabled" }
       ];
     }
@@ -1033,7 +1038,7 @@
     function adapterLabel(type) {
       if (type === "napcat") return "NapCat / OneBot";
       if (type === "heartbeat") return "定时触发";
-      if (type === "webhook") return "Webhook";
+      if (type === "webhook") return "Webhook / FenneNote";
       if (type === "disabled") return "禁用消息端";
       return type || "未知消息端";
     }
@@ -1087,9 +1092,9 @@
           const listeners = options.listeners || [];
           return `
             <div class="adapter-fieldset">
-              <div class="section-note">Webhook（预留）</div>
+              <div class="section-note">Webhook / FenneNote：接收 FenneNote 转写完成事件，并命中 voice_transcript 路由。</div>
               ${select(index, "gatewayPort", "Webhook 端口", gateway.gatewayPort || "", listeners)}
-              <label><span class="label-row">Webhook 路径${help("预留字段。后续接入 Webhook 消息端时，用来区分不同入口路径。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
+              <label><span class="label-row">Webhook 路径${help("FenneNote 的路由 URL 末尾路径。默认 /webhook。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
             </div>
           `;
         }
@@ -1112,7 +1117,7 @@
           return `
             <div class="section-note" style="margin-top:12px;color:var(--navy)">Webhook</div>
             <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">监听：${escapeHtml(String(gateway.gatewayPort || "-"))}${escapeHtml(gateway.webhookPath || "/webhook")}</div>
-            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：Webhook adapter 目前是预留入口。</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：接收 FenneNote voice_transcript 事件。</div>
           `;
         }
         return `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：消息端已禁用。</div>`;
@@ -1235,9 +1240,14 @@
       if (adapters.includes("webhook")) {
         definitions.push({
           adapter: "webhook",
-          title: "Webhook",
-          note: "预留入口",
-          groups: []
+          title: "Webhook / FenneNote",
+          note: "语音转写消息",
+          groups: [
+            {
+              title: "语音事件",
+              routeKinds: ["voice_transcript"]
+            }
+          ]
         });
       }
       return definitions;
@@ -1442,7 +1452,8 @@
         { id: "group-direct-reply", name: "直接回复模板", enabled: true, routeKinds: ["direct_reply"], targetGroupId: "", regex: "", template: gateway.groupDirectReplyNotificationTemplate || gateway.groupReplyNotificationTemplate || defaultGroupDirectReplyTemplate() },
         { id: "group-indirect-reply", name: "间接回复模板", enabled: true, routeKinds: ["indirect_reply"], targetGroupId: "", regex: "", template: gateway.groupIndirectReplyNotificationTemplate || gateway.groupNicknameNotificationTemplate || defaultGroupIndirectReplyTemplate() },
         { id: "private-message", name: "私聊消息模板", enabled: true, routeKinds: ["private"], targetGroupId: "", regex: "", template: gateway.privateNotificationTemplate || defaultPrivateTemplate() },
-        { id: "heartbeat", name: "定时触发模板", enabled: true, routeKinds: ["heartbeat"], targetGroupId: "", regex: "", template: gateway.heartbeatNotificationTemplate || defaultHeartbeatTemplate() }
+        { id: "heartbeat", name: "定时触发模板", enabled: true, routeKinds: ["heartbeat"], targetGroupId: "", regex: "", template: gateway.heartbeatNotificationTemplate || defaultHeartbeatTemplate() },
+        { id: "voice-transcript", name: "语音转写模板", enabled: true, routeKinds: ["voice_transcript"], targetGroupId: "", regex: "", template: gateway.voiceTranscriptNotificationTemplate || defaultVoiceTranscriptTemplate() }
       ];
     }
 
@@ -1501,6 +1512,18 @@
         "消息：{message}",
         "",
         "请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，主动检查是否有需要推进、整理或形成待审草稿的事项。"
+      ].join("\\n");
+    }
+    function defaultVoiceTranscriptTemplate() {
+      return [
+        "语音转写更新提醒：FenneNote 捕获到一段新的语音笔记。",
+        "时间：{time}",
+        "来源：{messageTarget}",
+        "转写：{message}",
+        "时长：{voiceDurationSeconds} 秒",
+        "峰值：{voicePeak}",
+        "",
+        "请在需要时读取 {voiceTranscriptLogPath} 查看语音转写上下文。"
       ].join("\\n");
     }
 

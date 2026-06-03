@@ -3,6 +3,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { createHeartbeatAdapter } from "./adapters/heartbeatAdapter.js";
 import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
+import { createWebhookAdapter } from "./adapters/webhookAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 
 type GatewayStatus = {
@@ -56,7 +57,7 @@ function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdap
   }, null, 2), "utf8");
 }
 
-function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat">): MessageAdapter {
+function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "webhook">): MessageAdapter {
   return {
     type,
     start() {
@@ -80,6 +81,9 @@ function createMessageAdapter(): MessageAdapter {
   if (config.messageAdapterType === "heartbeat") {
     return createHeartbeatAdapter();
   }
+  if (config.messageAdapterType === "webhook") {
+    return createWebhookAdapter();
+  }
 
   return createPlaceholderAdapter(config.messageAdapterType);
 }
@@ -90,6 +94,9 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   }
   if (type === "heartbeat") {
     return createHeartbeatAdapter();
+  }
+  if (type === "webhook") {
+    return createWebhookAdapter();
   }
   return createPlaceholderAdapter(type);
 }

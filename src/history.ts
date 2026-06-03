@@ -27,10 +27,22 @@ export type HeartbeatEventRecord = {
   intervalSeconds?: number;
 };
 
+export type VoiceTranscriptEventRecord = {
+  time: number;
+  rawMessage: string;
+  messageId?: number | string;
+  senderName?: string;
+  source?: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationSeconds?: number;
+  peak?: number;
+};
+
 export type CodexNotificationRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention" | "heartbeat";
+  kind: "private" | "group_mention" | "heartbeat" | "voice_transcript";
   text: string;
 };
 
@@ -71,6 +83,19 @@ export function appendHeartbeatEvent(record: HeartbeatEventRecord): void {
 
 export function appendHeartbeatEventToDir(record: HeartbeatEventRecord, dataDir: string): void {
   fs.appendFileSync(heartbeatLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function voiceTranscriptLogPath(dataDir = config.dataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "voice-transcripts.jsonl");
+}
+
+export function appendVoiceTranscriptEvent(record: VoiceTranscriptEventRecord): void {
+  fs.appendFileSync(voiceTranscriptLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+export function appendVoiceTranscriptEventToDir(record: VoiceTranscriptEventRecord, dataDir: string): void {
+  fs.appendFileSync(voiceTranscriptLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 function codexNotificationPath(dataDir = config.dataDir): string {

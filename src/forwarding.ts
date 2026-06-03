@@ -2,12 +2,12 @@ import path from "node:path";
 import { notifyCodex } from "./codexApp.js";
 import { notifyCodexDesktop } from "./codexDesktopIpc.js";
 import { config, rolePathsFor, type NotificationRule } from "./config.js";
-import { appendCodexNotificationToDir, appendGroupMessageToDir, appendHeartbeatEventToDir, appendPrivateMessageToDir, type GroupMessageRecord, type HeartbeatEventRecord, type PrivateMessageRecord } from "./history.js";
+import { appendCodexNotificationToDir, appendGroupMessageToDir, appendHeartbeatEventToDir, appendPrivateMessageToDir, appendVoiceTranscriptEventToDir, type GroupMessageRecord, type HeartbeatEventRecord, type PrivateMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
 
-export type ForwardRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat";
-type ForwardLogKind = "private" | "group_mention" | "heartbeat";
+export type ForwardRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "voice_transcript";
+type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "voice_transcript";
 type ForwardTarget = "codexDesktop" | "codexApp";
-type ForwardRecord = GroupMessageRecord | PrivateMessageRecord | HeartbeatEventRecord;
+type ForwardRecord = GroupMessageRecord | PrivateMessageRecord | HeartbeatEventRecord | VoiceTranscriptEventRecord;
 
 export type ForwardTemplateValues = Record<string, string | number | undefined>;
 
@@ -54,7 +54,11 @@ function isGroupRecord(record: ForwardRecord): record is GroupMessageRecord {
 }
 
 function isHeartbeatRecord(record: ForwardRecord): record is HeartbeatEventRecord {
-  return "intervalSeconds" in record || !("userId" in record);
+  return ("intervalSeconds" in record || !("userId" in record)) && !("source" in record);
+}
+
+function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceTranscriptEventRecord {
+  return "source" in record || "durationSeconds" in record || "peak" in record;
 }
 
 function routeVariablesFor(record: ForwardRecord, extraValues: ForwardTemplateValues): Record<string, string> {
@@ -151,8 +155,9 @@ function commonTemplateValues(
   const sender = record.senderName || ("userId" in record ? record.userId : "RabiRoute");
   const isGroup = isGroupRecord(record);
   const isHeartbeat = isHeartbeatRecord(record);
-  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : "heartbeat";
-  const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : "private";
+  const isVoiceTranscript = isVoiceTranscriptRecord(record);
+  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "fennenote" : "heartbeat";
+  const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isVoiceTranscript ? "voice_transcript" : "private";
   const routeVariables = routeVariablesFor(record, extraValues);
   const routeText = routeTextFromRawMessage(record.rawMessage, routeVariables);
   const repliedRouteText = typeof extraValues.repliedMessage === "string"
@@ -167,7 +172,7 @@ function commonTemplateValues(
     groupId: isGroup ? record.groupId : undefined,
     targetType,
     targetId,
-    messageTarget: isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : `私聊 ${targetId}`,
+    messageTarget: isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isVoiceTranscript ? `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText,
@@ -181,13 +186,22 @@ function commonTemplateValues(
     groupLogPath: path.join(roleContext.dataDir, "group-messages.jsonl"),
     privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
     heartbeatLogPath: path.join(roleContext.dataDir, "heartbeat-events.jsonl"),
-    heartbeatIntervalSeconds: "intervalSeconds" in record ? record.intervalSeconds : undefined
+    voiceTranscriptLogPath: path.join(roleContext.dataDir, "voice-transcripts.jsonl"),
+    heartbeatIntervalSeconds: "intervalSeconds" in record ? record.intervalSeconds : undefined,
+    voiceSource: isVoiceTranscript ? record.source : undefined,
+    voiceStartedAt: isVoiceTranscript ? record.startedAt : undefined,
+    voiceEndedAt: isVoiceTranscript ? record.endedAt : undefined,
+    voiceDurationSeconds: isVoiceTranscript ? record.durationSeconds : undefined,
+    voicePeak: isVoiceTranscript ? record.peak : undefined
   };
 }
 
 function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   if (routeKind === "heartbeat") {
     return "heartbeat";
+  }
+  if (routeKind === "voice_transcript") {
+    return "voice_transcript";
   }
   return routeKind === "private" ? "private" : "group_mention";
 }
@@ -217,6 +231,8 @@ export function forwardMessage(
       appendGroupMessageToDir(record, roleContext.dataDir);
     } else if (isHeartbeatRecord(record)) {
       appendHeartbeatEventToDir(record, roleContext.dataDir);
+    } else if (isVoiceTranscriptRecord(record)) {
+      appendVoiceTranscriptEventToDir(record, roleContext.dataDir);
     } else {
       appendPrivateMessageToDir(record, roleContext.dataDir);
     }

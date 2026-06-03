@@ -34,10 +34,11 @@ GitHub: https://github.com/vb2250158/RabiRoute
 - NapCat / OneBot WebSocket 接入 QQ 群聊和私聊。
 - 独立 WebUI 管理多个 Gateway：`http://127.0.0.1:8790/`。
 - NapCat 插件入口，可从 NapCat 插件页跳转到 RabiRoute 控制台。
-- 同一 Gateway 可启用多个消息适配端：NapCat / OneBot、定时触发、预留 Webhook、禁用消息端。
+- 同一 Gateway 可启用多个消息适配端：NapCat / OneBot、定时触发、Webhook / FenneNote、禁用消息端。
 - 群消息路由：直接 @、直接回复、间接回复、普通群消息关键词规则。
 - 私聊消息路由。
 - 定时触发 `heartbeat` 路由，用于周期巡检和提醒。
+- Webhook / FenneNote `voice_transcript` 路由，用于接收本地语音转写片段。
 - JSONL 消息记录、心跳记录、投递记录。
 - 可编辑 Prompt 模板和路由规则。
 - 路由人格包：每个角色用 `persona.md` 定义说话和判断方式，用 `routes.json` 定义它自己的触发规则和模板。
@@ -94,6 +95,7 @@ http://127.0.0.1:8790/
 
 - RabiRoute 管理器：`http://127.0.0.1:8790`
 - NapCat 反向 WebSocket：`ws://127.0.0.1:8789`
+- FenneNote Webhook：`http://127.0.0.1:8789/webhook`
 - NapCat HTTP API：`http://127.0.0.1:3000`
 
 ### 3. 配置第一个 Gateway
@@ -109,6 +111,12 @@ http://127.0.0.1:8790/
 - `消息规则`：确认哪些 route kind 会转发给处理端。
 
 如果只想本地试跑定时触发，可以把消息适配端设为 `heartbeat`，不用接 NapCat。
+
+如果要接入 FenneNote，把消息适配端设为 `webhook`，并在 FenneNote 的“路由”页勾选“转写完成后推送到 RabiRoute”。默认地址：
+
+```text
+http://127.0.0.1:8789/webhook
+```
 
 ### 4. 配置 NapCat
 
@@ -180,6 +188,7 @@ node_modules/
 重要字段：
 
 - `messageAdapters`：消息入口列表。支持 `napcat`、`heartbeat`、`webhook`、`disabled`。
+- `webhookPath`：Webhook 入口路径，FenneNote 默认使用 `/webhook`。
 - `gatewayPort`：NapCat WebSocket Client 连接的端口。
 - `napcatHttpUrl`：OneBot HTTP API 地址。
 - `forwardTargets`：处理端列表。当前支持 `codexDesktop`、`codexApp`。
@@ -228,6 +237,7 @@ node_modules/
 - `group_message`：普通群聊消息，通常配合 `regex` 使用。
 - `private`：私聊消息。
 - `heartbeat`：定时触发消息。
+- `voice_transcript`：FenneNote 语音转写消息。
 
 `regex` 会匹配规范化后的 `routeText`，也会在间接回复场景中匹配 `repliedRouteText`。它支持变量展开，例如 `{RobotQQId}`、`{SenderQQId}`、`{GroupId}`、`{ReplyMessageId}`。
 
@@ -241,7 +251,9 @@ node_modules/
 {repliedMessageId} {repliedMessage}
 {botNickname} {agentRoleId} {agentRolePath} {agentRoleDir}
 {dataDir} {groupLogPath} {privateLogPath} {heartbeatLogPath}
+{voiceTranscriptLogPath}
 {heartbeatIntervalSeconds}
+{voiceSource} {voiceDurationSeconds} {voicePeak}
 ```
 
 ## 路由人格

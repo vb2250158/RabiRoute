@@ -88,6 +88,39 @@
       "messageAdapterType": "napcat",
       "routeName": "默认路由",
       "roleRouteNames": {}
+    },
+    {
+      "id": "fennenote-voice",
+      "name": "FenneNote 语音网关",
+      "enabled": false,
+      "messageAdapters": [
+        "webhook"
+      ],
+      "gatewayPort": 8791,
+      "webhookPath": "/webhook",
+      "codexThreadName": "FenneNote 语音笔记",
+      "codexCwd": "C:\\Path\\To\\Your\\Project",
+      "forwardTargets": [
+        "codexDesktop"
+      ],
+      "dataDir": "./data/fennenote-voice",
+      "notificationRules": [
+        {
+          "id": "voice-transcript",
+          "name": "语音转写模板",
+          "enabled": true,
+          "targetGroupId": "",
+          "regex": "",
+          "template": "语音转写更新提醒：FenneNote 捕获到一段新的语音笔记。\n时间：{time}\n来源：{messageTarget}\n转写：{message}\n时长：{voiceDurationSeconds} 秒\n峰值：{voicePeak}\n\n请在需要时读取 {voiceTranscriptLogPath} 查看语音转写上下文。",
+          "routeKinds": [
+            "voice_transcript"
+          ]
+        }
+      ],
+      "routeVariables": {},
+      "messageAdapterType": "webhook",
+      "routeName": "FenneNote 语音路由",
+      "roleRouteNames": {}
     }
   ]
 }
