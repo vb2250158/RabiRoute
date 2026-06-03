@@ -404,6 +404,67 @@
     }
     .route-kind-box label { display: flex; align-items: center; gap: 6px; color: var(--ink); font-size: 12px; font-weight: 700; }
     .route-kind-box input { width: auto; }
+    .route-source-list { display: grid; gap: 8px; }
+    .route-source-card {
+      display: grid;
+      gap: 8px;
+      padding: 9px;
+      border: 1px solid rgba(25,191,193,.22);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.86), rgba(236,252,255,.58)),
+        linear-gradient(90deg, rgba(25,191,193,.08), rgba(255,109,157,.06));
+    }
+    .route-source-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: baseline;
+      color: var(--navy);
+      font-size: 12px;
+      font-weight: 950;
+    }
+    .route-source-head span:last-child {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      text-align: right;
+    }
+    .route-kind-group {
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.72);
+    }
+    .route-kind-group-title {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 950;
+    }
+    .route-kind-chip-list { display: grid; gap: 6px; }
+    .route-kind-chip-list label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .route-kind-chip-list input { width: auto; }
+    .route-group-filter {
+      padding-top: 6px;
+      border-top: 1px dashed rgba(31,45,61,.14);
+    }
+    .route-filter-card {
+      display: grid;
+      gap: 7px;
+      padding: 9px;
+      border: 1px solid rgba(255,109,157,.2);
+      border-radius: 8px;
+      background: rgba(255,247,251,.68);
+    }
     .adapter-list { grid-column: 1 / -1; display: grid; gap: 9px; }
     .adapter-row {
       display: grid;
@@ -891,9 +952,9 @@
       dataDir: "基础数据目录。未选择角色时日志写在这里；选择角色后日志写入角色目录。",
       ruleName: "规则名称，只用于管理台展示。",
       ruleEnabled: "关闭后这条规则会被跳过。",
-      ruleRouteKinds: "限定这条规则响应哪些消息路由。不勾选表示不限。",
-      ruleTargetGroupId: "只让这条规则响应某个群时填写群号；留空表示不限群。",
-      ruleRegex: "留空表示不做消息内容过滤；填写后会按正则匹配消息内容，适合让普通群消息按关键词触发，例如 需求|报错|构建失败。",
+      ruleRouteKinds: "路由类型由已启用的消息适配端动态提供。NapCat 提供群聊/私聊，定时触发提供 heartbeat。",
+      ruleTargetGroupId: "勾选任意群聊路由后可填写；只让这条规则响应某个群时填写群号，留空表示不限群。",
+      ruleRegex: "可选的通用消息内容过滤；填写后会按正则匹配消息内容，适合让普通群消息或心跳消息按关键词触发，例如 需求|报错|构建失败。",
       ruleTemplate: "命中这条规则时转发给 Agent 的消息模板。"
     };
 
@@ -1138,12 +1199,95 @@
       `).join("");
     }
 
+    function routeKindDefinitionsForGateway(gateway) {
+      const adapters = gatewayAdapterTypes(gateway);
+      const definitions = [];
+      if (adapters.includes("napcat")) {
+        definitions.push({
+          adapter: "napcat",
+          title: "NapCat / OneBot",
+          note: "QQ 实时消息",
+          groups: [
+            {
+              title: "群聊事件",
+              routeKinds: ["direct_at", "direct_reply", "indirect_reply", "group_message"]
+            },
+            {
+              title: "私聊事件",
+              routeKinds: ["private"]
+            }
+          ]
+        });
+      }
+      if (adapters.includes("heartbeat")) {
+        definitions.push({
+          adapter: "heartbeat",
+          title: "定时触发",
+          note: "内部心跳消息",
+          groups: [
+            {
+              title: "定时事件",
+              routeKinds: ["heartbeat"]
+            }
+          ]
+        });
+      }
+      if (adapters.includes("webhook")) {
+        definitions.push({
+          adapter: "webhook",
+          title: "Webhook",
+          note: "预留入口",
+          groups: []
+        });
+      }
+      return definitions;
+    }
+
+    function isGroupRouteKind(routeKind) {
+      return ["direct_at", "direct_reply", "indirect_reply", "group_message"].includes(routeKind);
+    }
+
+    function ruleHasGroupRoute(rule) {
+      return (Array.isArray(rule.routeKinds) ? rule.routeKinds : []).some(isGroupRouteKind);
+    }
+
+    function renderRouteKindPanels(index, ruleIndex, safeRule, gateway) {
+      const definitions = routeKindDefinitionsForGateway(gateway);
+      if (definitions.length === 0 || gatewayAdapterTypes(gateway).includes("disabled")) {
+        return `<div class="empty" style="padding:10px;text-align:left">当前没有启用可提供路由类型的消息适配器。</div>`;
+      }
+      return `
+        <div class="route-source-list">
+          ${definitions.map(definition => `
+            <div class="route-source-card">
+              <div class="route-source-head">
+                <span>${escapeHtml(definition.title)}</span>
+                <span>${escapeHtml(definition.note)}</span>
+              </div>
+              ${definition.groups.length > 0 ? definition.groups.map(group => `
+                <div class="route-kind-group">
+                  <div class="route-kind-group-title">${escapeHtml(group.title)}</div>
+                  <div class="route-kind-chip-list">
+                    ${group.routeKinds.map(value => `
+                      <label><input type="checkbox" data-index="${index}" data-rule-index="${ruleIndex}" data-route-kind="${value}" ${safeRule.routeKinds.includes(value) ? "checked" : ""}>${escapeHtml(routeKindLabels[value] || value)}</label>
+                    `).join("")}
+                  </div>
+                  ${group.routeKinds.some(isGroupRouteKind) && ruleHasGroupRoute(safeRule) ? `
+                    <div class="route-group-filter">
+                      <label><span class="label-row">目标群号${help(helpText.ruleTargetGroupId)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="targetGroupId" value="${escapeAttr(safeRule.targetGroupId || "")}" placeholder="留空=不限群"></label>
+                    </div>
+                  ` : ""}
+                </div>
+              `).join("") : `<div class="section-note">这个适配端还没有暴露可配置的路由类型。</div>`}
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
     function renderRule(index, ruleIndex, rule) {
       const gateway = state.gateways[index];
       const safeRule = normalizeRule(rule, ruleIndex);
-      const routeKindOptions = Object.entries(routeKindLabels).map(([value, label]) => `
-        <label><input type="checkbox" data-index="${index}" data-rule-index="${ruleIndex}" data-route-kind="${value}" ${safeRule.routeKinds.includes(value) ? "checked" : ""}>${label}</label>
-      `).join("");
 
       return `
         <article class="rule-card">
@@ -1155,16 +1299,12 @@
             <div class="rule-tools">
               <div class="route-kind-box">
                 <span class="label-row">路由类型${help(helpText.ruleRouteKinds)}</span>
-                ${routeKindOptions}
+                ${renderRouteKindPanels(index, ruleIndex, safeRule, gateway)}
               </div>
-              <details class="route-extension">
-                <summary>路由扩展规则</summary>
-                <div class="route-extension-content">
-                  <label><span class="label-row">目标群号${help(helpText.ruleTargetGroupId)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="targetGroupId" value="${escapeAttr(safeRule.targetGroupId || "")}" placeholder="留空=不限群"></label>
-                  <label><span class="label-row">消息匹配${help(helpText.ruleRegex)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="regex" value="${escapeAttr(safeRule.regex || "")}" placeholder="例如：需求|报错|构建失败"></label>
-                </div>
-              </details>
-              <div class="section-note rule-note">扩展规则留空时只看路由类型；填写后会继续按群号或关键词筛选。间接回复会同时匹配被回复消息。</div>
+              <div class="route-filter-card">
+                <label><span class="label-row">消息匹配${help(helpText.ruleRegex)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="regex" value="${escapeAttr(safeRule.regex || "")}" placeholder="例如：需求|报错|构建失败"></label>
+                <div class="section-note rule-note">消息匹配是所有路由类型的通用过滤；留空时只看路由类型。间接回复会同时匹配被回复消息。</div>
+              </div>
               <button type="button" class="danger" onclick="removeNotificationRule(${index}, ${ruleIndex})">删除规则</button>
             </div>
             <label class="template-editor"><span class="label-row">模板${help(helpText.ruleTemplate)}</span><textarea spellcheck="false" data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="template">${escapeHtml(String(safeRule.template))}</textarea></label>
@@ -1509,6 +1649,7 @@
       if (roleKey) {
         ensureRoleRuleStore(state.gateways[index])[roleKey] = cloneRules(rules);
       }
+      render();
     }
 
     function updateRouteVariable(event) {
