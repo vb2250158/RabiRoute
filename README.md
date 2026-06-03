@@ -2,28 +2,16 @@
 
 ![RabiRoute 拉比路由](assets/rabiroute-hero.png)
 
-拉比路由是一个面向聊天入口和处理端的轻量 **Message Gateway / Policy Router**。
+RabiRoute 是一个轻量 **Message Gateway / Policy Router**。它站在聊天平台、定时器、Webhook 和处理端之间，负责把一条消息规范化、分诊、补上下文、套模板，再投递给合适的 Agent、脚本、工作流或人工队列。
 
-它更像分诊台、调度台或转运中心：消息从 QQ、微信、Webhook、定时任务等入口进来以后，RabiRoute 先判断“这是什么事、该送到哪里、要带哪些材料、要不要审批、结果回到哪里”。真正写代码、回答问题、跑流程、查知识库或调用外部系统的，是后面的处理端。
-
-所以 RabiRoute 不是某个 AI 助手的外壳，也不是某个聊天机器人框架的替代品。它是消息流转之前的分诊和调度层。
-
-当前实现已经支持把 NapCat / OneBot 的 QQ 群聊和私聊消息转发到固定的 Agent 会话里，并提供独立 WebUI 与 NapCat 插件入口，用来管理多个网关、选择 NapCat 网络配置、编辑消息转发规则和模板。Codex Desktop 只是第一条验证链路，不是 RabiRoute 的产品边界；代码里已经把消息路由、模板渲染和目标投递拆开，后续会继续升级为可配置的 Route DSL 和 Target / Handler Registry。
-
-GitHub: https://github.com/vb2250158/RabiRoute
-
-架构说明：[ARCHITECTURE.md](ARCHITECTURE.md)
-
-## 项目定位
-
-RabiRoute 不计划做成某个 Agent、某个执行工具、某个聊天机器人或某个工作流平台的替代品。它更适合站在这些系统前面，做消息级分诊和策略调度：
+它更像分诊台、调度台或转运中心：
 
 ```text
-QQ / Webhook / CLI / HTTP API / Scheduler
+QQ / Webhook / Scheduler / CLI
         ↓
     RabiRoute
         ↓
-统一事件 → 路由规则 → Context 包装 → 策略判断 → 处理端选择
+消息记录 → 路由规则 → 上下文模板 → 处理端选择
         ↓
 Agent / Workflow / Script / Human Queue / External API
 ```
@@ -35,90 +23,48 @@ Agent / Workflow / Script / Human Queue / External API
 RabiRoute 解决 “这件事该送到哪里、带什么材料、按什么规则流转”。
 ```
 
-## 当前状态
+RabiRoute 不是一个完整个人 Agent OS，不是聊天机器人框架替代品，也不是某个 AI 工具的外壳。Codex Desktop 只是当前第一条已验证处理端；项目边界是消息级分诊和策略调度。
 
-已实现：
+GitHub: https://github.com/vb2250158/RabiRoute
+
+更深入的分层和演进说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+## 当前能力
 
 - NapCat / OneBot WebSocket 接入 QQ 群聊和私聊。
-- 消息适配端框架：同一 Gateway 可以启用多个消息入口；NapCat / OneBot 和定时触发当前可用，Webhook 等其它消息端预留为可扩展入口。
-- 定时触发消息端：按固定间隔生成 `heartbeat` 路由事件，直接发送给 Agent，可替代 Codex 自动化心跳任务。
-- 群消息路由：直接 @、直接回复、间接回复、普通群消息。
+- 独立 WebUI 管理多个 Gateway：`http://127.0.0.1:8790/`。
+- NapCat 插件入口，可从 NapCat 插件页跳转到 RabiRoute 控制台。
+- 同一 Gateway 可启用多个消息适配端：NapCat / OneBot、定时触发、预留 Webhook、禁用消息端。
+- 群消息路由：直接 @、直接回复、间接回复、普通群消息关键词规则。
 - 私聊消息路由。
-- JSONL 消息记录和投递记录。
-- 规则化 Prompt / 消息包装，支持按路由类型和可选消息正则筛选模板。
-- Agent 会话连接，当前驱动支持 Codex Desktop IPC 的固定线程 `start` 和运行中 `steer`。
-- 独立 WebUI：`http://127.0.0.1:8790/`。
-- NapCat 插件入口：在 NapCat 插件页跳转到独立 WebUI。
+- 定时触发 `heartbeat` 路由，用于周期巡检和提醒。
+- JSONL 消息记录、心跳记录、投递记录。
+- 可编辑 Prompt 模板和路由规则。
+- 路由人格包：每个角色用 `persona.md` 定义说话和判断方式，用 `routes.json` 定义它自己的触发规则和模板。
+- 处理端：当前支持 Codex Desktop IPC 和旧调试通道 `codexApp`。
 
 规划中：
 
-- 统一 `InboundMessage` 事件模型。
-- Route DSL：按平台、群、用户、关键词、route kind、意图等条件选择目标。
-- Target / Handler Registry：支持 Agent、Workflow、Webhook、Script、Human Queue、External API 等处理端。
-- 双向路由：处理端输出经过模板包装后回到源平台或指定出口。
-- 路由审计 UI：查看消息、决策、投递、错误和回传链路。
+- 统一 `InboundMessage` 和 `RouteDecision`。
+- Route DSL。
+- Target / Handler Registry。
+- Webhook target。
+- 路由审计、回放和 Action Queue。
+- 高风险动作先生成待审草稿，再由人确认执行。
 
-## 路线图草案
+## 快速上手
 
-未来配置形态会接近：
+### 1. 准备环境
 
-```yaml
-targets:
-  code-workbench:
-    type: agent
-    driver: codex_desktop_ipc
-    thread_name: "QQ 消息监听"
+需要：
 
-  qa-flow:
-    type: webhook
-    url: "http://127.0.0.1:6185/knowledge-webhook"
+- Node.js 20+ 或更新版本。
+- 一个可用的 NapCat / OneBot 环境。如果只想先体验 WebUI 和定时触发，可以暂时不接 QQ。
+- 可选：Codex Desktop，用作默认处理端。
 
-  human-review:
-    type: human_queue
-    queue: "manual-review"
+### 2. 安装和构建
 
-routes:
-  - name: code-question
-    match:
-      keywords: ["bug", "报错", "代码", "git", "构建失败"]
-    prompt_profile: "code-helper"
-    target: code-workbench
-
-  - name: group-reply
-    match:
-      route_kind: ["direct_reply", "indirect_reply"]
-    prompt_profile: "qq-context"
-    target: code-workbench
-
-  - name: default-question
-    match:
-      mention: true
-    prompt_profile: "knowledge-helper"
-    target: qa-flow
-
-  - name: risky-action
-    match:
-      intent: ["send_message", "write_external_system"]
-    target: human-review
-```
-
-当前版本仍以 QQ / NapCat + Agent 会话为第一条可用链路；这里的 Codex Desktop 只是一个已验证的处理端。
-
-## 目录结构
-
-- `src/`：本地网关和网关管理器源码。
-- `napcat-plugin-codex-gateway/`：NapCat 插件目录，包含 `package.json`、`index.mjs` 和 `webui/`，符合 NapCat 插件加载机制。
-- `gateways.example.json`：多网关示例配置。
-
-以下运行期文件不会提交到仓库：
-
-- `.env`
-- `gateways.json`
-- `data/`
-- `dist/`
-- `node_modules/`
-
-## 启动网关
+Windows PowerShell：
 
 ```powershell
 cd C:\Path\To\RabiRoute
@@ -128,72 +74,243 @@ copy gateways.example.json gateways.json
 npm run start:manager
 ```
 
-默认端口：
-
-- 网关管理器：`http://127.0.0.1:8790`
-- NapCat 反向 WebSocket 地址：`ws://127.0.0.1:8789`
-- NapCat HTTP API 地址：`http://127.0.0.1:3000`
-
-macOS 上同样使用这些命令启动，只是路径示例换成实际仓库目录：
+macOS / Linux：
 
 ```bash
-cd /Users/<user>/Documents/RabiRoute
+cd /path/to/RabiRoute
 npm install
 npm run build
 cp gateways.example.json gateways.json
 npm run start:manager
 ```
 
-## NapCat 网络配置
+打开：
+
+```text
+http://127.0.0.1:8790/
+```
+
+默认端口：
+
+- RabiRoute 管理器：`http://127.0.0.1:8790`
+- NapCat 反向 WebSocket：`ws://127.0.0.1:8789`
+- NapCat HTTP API：`http://127.0.0.1:3000`
+
+### 3. 配置第一个 Gateway
+
+首次启动时，如果没有 `gateways.json`，manager 会从 `gateways.example.json` 复制一份。
+
+在 WebUI 里重点检查：
+
+- `消息适配端`：默认启用 `NapCat / OneBot` 和 `定时触发`。
+- `Agent 端`：填写处理端线程名和工作目录，例如 Codex Desktop 的监听线程。
+- `通用配置`：确认 Gateway 端口、NapCat HTTP 地址、数据目录。
+- `路由人格`：选择或创建角色。想用示例 Rabi 时，先把 `examples/roles/Rabi/` 复制到当前 gateway 的 `rolesDir`。
+- `消息规则`：确认哪些 route kind 会转发给处理端。
+
+如果只想本地试跑定时触发，可以把消息适配端设为 `heartbeat`，不用接 NapCat。
+
+### 4. 配置 NapCat
 
 在 NapCat WebUI 里配置：
 
 - WebSocket 客户端：`ws://127.0.0.1:8789`
 - HTTP 服务器：主机 `127.0.0.1`，端口 `3000`
 
-WebSocket 客户端用于接收 QQ 消息事件。HTTP 服务器用于让网关主动发送 QQ 消息或调用 OneBot API。
+WebSocket 客户端用于接收 QQ 消息事件。HTTP 服务器用于后续主动发送 QQ 消息或调用 OneBot API。
+
+如果 NapCat 新增插件或修改 OneBot 网络配置后没有生效，通常需要重启 QQ/NapCat，或在 NapCat WebUI 中保存并重载网络配置。
+
+### 5. 验证链路
+
+1. 启动 manager：`npm run start:manager`。
+2. 打开 WebUI，确认 gateway 为运行中。
+3. 在 NapCat 侧确认 WebSocket 已连到 `127.0.0.1:8789`。
+4. 在 QQ 群里 @ 机器人，或发一条私聊。
+5. 查看 `data/<gateway-id>/` 下是否出现消息记录和投递记录。
+6. 如果使用 Codex Desktop，确认指定线程收到了转发提示。
+
+## 目录结构
+
+```text
+src/                                RabiRoute manager、gateway、adapter、forwarding 源码
+napcat-plugin-codex-gateway/         NapCat 插件入口和 WebUI
+examples/roles/Rabi/                 可开源示例人格
+skills/create-rabiroute-persona/     项目内 skill：指导创建 RabiRoute 人格
+assets/                              README 和 WebUI 视觉资源
+gateways.example.json                多 gateway 示例配置
+ARCHITECTURE.md                      架构边界和演进说明
+```
+
+运行期文件默认不提交：
+
+```text
+.env
+gateways.json
+data/
+dist/
+node_modules/
+```
+
+## Gateway 配置
+
+核心配置在 `gateways.json`：
+
+```json
+{
+  "gateways": [
+    {
+      "id": "default-main",
+      "enabled": true,
+      "messageAdapters": ["napcat", "heartbeat"],
+      "gatewayPort": 8789,
+      "napcatHttpUrl": "http://127.0.0.1:3000",
+      "codexThreadName": "QQ 消息监听",
+      "codexCwd": "C:\\Path\\To\\Your\\Project",
+      "forwardTargets": ["codexDesktop"],
+      "dataDir": "./data/default-main",
+      "rolesDir": "./data/default-main/roles",
+      "agentRoleId": "",
+      "notificationRules": []
+    }
+  ]
+}
+```
+
+重要字段：
+
+- `messageAdapters`：消息入口列表。支持 `napcat`、`heartbeat`、`webhook`、`disabled`。
+- `gatewayPort`：NapCat WebSocket Client 连接的端口。
+- `napcatHttpUrl`：OneBot HTTP API 地址。
+- `forwardTargets`：处理端列表。当前支持 `codexDesktop`、`codexApp`。
+- `codexThreadName`：Codex Desktop 固定线程名。
+- `codexCwd`：处理端收到任务后应工作的目录。
+- `dataDir`：消息记录、投递记录和心跳记录目录。
+- `rolesDir`：路由人格目录。
+- `agentRoleId`：当前 gateway 使用的角色目录名。
+- `notificationRules`：路由规则列表。
 
 ## 消息适配端
 
-RabiRoute 的消息入口已经抽成适配端列表。WebUI 的 `消息适配端` 区域可以点击 `添加消息适配器`，给同一个 Gateway 同时启用多个入口：
+当前可用：
 
-- `NapCat / OneBot`：当前可用实现，使用 WebSocket Client 接收 QQ 事件，使用 HTTP Server 调 OneBot API。
-- `定时触发`：当前可用实现，不依赖 QQ/NapCat；按配置间隔生成一条内部消息，命中 `heartbeat` 路由后直接发给 Agent，适合替代 Codex 的心跳任务。
-- `Webhook`：预留入口，后续可接企业微信、飞书、Discord、Slack、Telegram 或内部系统的 HTTP/WebSocket 事件。
-- `禁用消息端`：只保留 Agent 端、通用配置和路由人格，不监听外部消息。
+- `napcat`：通过 OneBot WebSocket 接收 QQ 事件，通过 OneBot HTTP 预留主动调用能力。
+- `heartbeat`：按固定间隔生成内部 `heartbeat` 路由事件，适合周期巡检。
+- `disabled`：不监听外部消息，只保留配置和角色。
 
-代码结构上，消息端实现放在 `src/adapters/`。新增软件时优先新增 adapter 模块，并输出统一消息记录和路由事件，不要把新平台逻辑写进 NapCat adapter。
+预留：
 
-定时触发会写入 `heartbeat-events.jsonl`，模板可使用：
+- `webhook`：后续用于企业微信、飞书、Discord、Slack、Telegram 或内部系统。
+
+新增平台时，优先在 `src/adapters/` 新增 adapter，并输出统一消息记录和路由事件，不要把新平台逻辑塞进 NapCat adapter。
+
+## 路由规则
+
+路由规则决定一条消息是否转发给处理端，以及使用哪段模板。
+
+```json
+{
+  "id": "group-direct-at",
+  "name": "直接 @ 模板",
+  "enabled": true,
+  "targetGroupId": "",
+  "regex": "",
+  "template": "QQ 消息更新提醒：群聊里有人 @ 了机器人。\n时间：{time}\n目标：{messageTarget}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
+  "routeKinds": ["direct_at"]
+}
+```
+
+支持的 route kind：
+
+- `direct_at`：群聊直接 @ 机器人。
+- `direct_reply`：当前消息直接回复机器人。
+- `indirect_reply`：当前消息回复了某条曾经 @ 机器人的消息。
+- `group_message`：普通群聊消息，通常配合 `regex` 使用。
+- `private`：私聊消息。
+- `heartbeat`：定时触发消息。
+
+`regex` 会匹配规范化后的 `routeText`，也会在间接回复场景中匹配 `repliedRouteText`。它支持变量展开，例如 `{RobotQQId}`、`{SenderQQId}`、`{GroupId}`、`{ReplyMessageId}`。
+
+模板常用变量：
 
 ```text
-{routeKind}
-{time}
-{message}
-{messageTarget}
+{routeKind} {time} {targetType} {targetId} {messageTarget}
+{groupId} {userId} {selfId} {sender} {senderName}
+{RobotQQId} {SenderQQId} {GroupId} {ReplyMessageId}
+{message} {rawMessage} {routeText} {repliedRouteText} {messageId}
+{repliedMessageId} {repliedMessage}
+{botNickname} {agentRoleId} {agentRolePath} {agentRoleDir}
+{dataDir} {groupLogPath} {privateLogPath} {heartbeatLogPath}
 {heartbeatIntervalSeconds}
-{heartbeatLogPath}
-{dataDir}
 ```
+
+## 路由人格
+
+RabiRoute 的“人格”不是单独一段 prompt，而是一个角色包。角色包同时决定两件事：
+
+- `persona.md`：这个角色如何说话、如何判断消息、如何整理上下文、哪些事不能做。
+- `routes.json`：这个角色关心哪些 route kind、普通群消息用什么关键词触发、命中后给处理端什么模板。
+
+一个角色目录通常包含：
+
+```text
+<RoleId>/
+├── persona.md
+└── routes.json
+```
+
+公开示例：
+
+- `examples/roles/Rabi/persona.md`
+- `examples/roles/Rabi/routes.json`
+
+Rabi 示例是一个轻量公开样例，主要演示 `persona.md` 和 `routes.json` 如何配合。真实项目可以在本地 `data/roles/<RoleId>/` 里扩展更完整的直接 @、回复、私聊、关键词和心跳规则。
+
+本地使用时，可以复制到 gateway 的角色目录：
+
+```powershell
+mkdir data\default-main\roles
+copy examples\roles\Rabi\persona.md data\default-main\roles\Rabi\persona.md
+copy examples\roles\Rabi\routes.json data\default-main\roles\Rabi\routes.json
+```
+
+然后在 WebUI 的 `路由人格` 中选择 `Rabi`。选择人格后，转发给处理端的提示末尾会追加角色文件路径，消息记录也会写入该角色目录。
+
+项目内还提供了一个开源 skill，用来指导创建新人格：
+
+- `skills/create-rabiroute-persona/SKILL.md`
+
+它说明了如何一起设计 `persona.md` 和 `routes.json`，让角色既有稳定气质，也有对应的路由触发策略。
 
 ## 处理端
 
-默认使用 Agent 会话接收消息，当前实现使用 Codex Desktop IPC 作为驱动。也可以在环境变量或 `gateways.json` 里配置：
-
-```text
-FORWARD_TARGETS=codexDesktop
-```
-
 当前内置处理端：
 
-- `codexDesktop`：发送到当前 Codex Desktop 固定线程，支持运行中追加引导。
-- `codexApp`：旧的 app-server 调试通道，主要用于旁路验证。
+- `codexDesktop`：通过 Codex Desktop IPC 投递到固定线程。空闲时 `start`，运行中用 `steer` 追加引导。
+- `codexApp`：旧 app-server 调试通道，主要用于旁路验证。
 
-## 安装 NapCat 插件
+默认建议使用：
 
-把 `napcat-plugin-codex-gateway` 目录复制到 NapCat 插件目录，然后在 NapCat 插件管理里启用。
+```json
+"forwardTargets": ["codexDesktop"]
+```
 
-示例插件目录：
+如果处理端没有收到消息，优先检查：
+
+- WebUI 中 gateway 是否运行。
+- `data/<gateway-id>/codex-notifications.jsonl` 是否有投递记录。
+- `codexThreadName` 是否能匹配到 Codex Desktop 中的线程。
+- `codexCwd` 是否是处理端应工作的项目目录。
+
+## NapCat 插件
+
+仓库包含一个 NapCat 插件目录：
+
+```text
+napcat-plugin-codex-gateway/
+```
+
+把该目录复制到 NapCat 插件目录后启用。示例路径：
 
 ```text
 NapCat.*/resources/app/napcat/plugins/napcat-plugin-codex-gateway
@@ -205,112 +322,65 @@ NapCat.*/resources/app/napcat/plugins/napcat-plugin-codex-gateway
 - API：`/plugin/napcat-plugin-codex-gateway/api/...`
 - 静态资源目录：`webui/`
 
-NapCat 插件页会提供入口跳转到独立控制台：
+插件页会提供入口跳转到 RabiRoute 独立控制台：
 
 ```text
 http://127.0.0.1:8790/
 ```
 
-## macOS 部署排障
-
-如果 NapCat 有消息、RabiRoute 日志也出现了 `NapCat connected from 127.0.0.1`，说明 QQ 到 RabiRoute 的链路已经通了。后续常见问题通常在 Agent 连接阶段：
-
-- `Missing monitorThreadId in .../codex-state.json`：还没有绑定 Agent 会话线程。先打开或创建用于处理 QQ 消息的 Agent 会话线程，再通过 RabiRoute 管理台绑定；也可以确认 `data/<gateway-id>/codex-state.json` 里已有 `monitorThreadId`。
-- `connect ENOENT /tmp/codex-ipc/ipc-501.sock`：旧版本只查 `/tmp`，但 macOS 上 Codex Desktop 的 socket 常在 `/var/folders/.../T/codex-ipc/ipc-501.sock`。当前版本会自动依次尝试 `CODEX_DESKTOP_IPC_PATH`、`os.tmpdir()/codex-ipc/ipc-<uid>.sock` 和 `/tmp/codex-ipc/ipc-<uid>.sock`。如果仍失败，可以临时指定：
-
-```bash
-export CODEX_DESKTOP_IPC_PATH="/var/folders/.../T/codex-ipc/ipc-501.sock"
-npm run start:manager
-```
-
-NapCat 新增插件、修改 OneBot 网络配置后通常不会完全热加载。配置写入后如果 `3000` / `3003` 这类 HTTP 端口没监听，或 WebSocket 客户端没有连到 RabiRoute，需要重启 QQ/NapCat，或者在 NapCat WebUI 里保存并重载网络配置。
-
-## 群消息路由
-
-群消息触发转发的路由分为四类：
-
-- 直接 @：当前消息本身直接 @ 机器人。
-- 直接回复：当前消息直接回复机器人。QQ 回复通常会自动带 @，这类会优先归到“直接回复”。
-- 间接回复：当前消息回复了某个用户，而被回复的那条消息里曾经 @ 过机器人。
-- 群聊-普通消息：未命中上面三类的普通群聊消息。
-
-消息转发模板已经抽成规则列表。每条规则包含：
-
-- `routeKinds`：路由类型勾选项，支持 `direct_at`、`direct_reply`、`indirect_reply`、`private`、`group_message`；不勾选表示不限路由类型。
-- `regex`：可选正则表达式，用来筛选消息内容，例如 `需求|报错|构建失败`；留空表示不做消息内容过滤，填写后会作为路由类型之外的额外过滤条件。
-- `template`：命中规则后转发给 Agent 的消息模板。
-
-`routeText` 是给路由规则看的可读文本。系统会保留原始 `rawMessage`，同时把 CQ 码转换成更容易写规则的形式：
-
-```text
-[CQ:reply,id=1901274225][CQ:at,qq=123456789] 等我上传dialogue表再打
-```
-
-如果 `RobotQQId = 123456789`，路由匹配时会使用：
-
-```text
-[Reply:1901274225] @123456789 等我上传dialogue表再打
-```
-
-正则匹配前会先展开内置变量。常用内置变量包括：
-
-```text
-{RobotQQId}
-{SenderQQId}
-{GroupId}
-{ReplyMessageId}
-```
-
-每个 gateway 也可以配置 `routeVariables` 来补充自定义变量，变量会在正则匹配前按字面量展开。
-
-默认的群路由主要按路由类型分流，不需要额外消息匹配：
-
-- 直接 @：命中 `direct_at` 路由。
-- 直接回复：命中 `direct_reply` 路由。
-- 间接回复：命中 `indirect_reply` 路由。
-- 群聊-普通消息：命中 `group_message` 路由。默认模板不会转发普通群消息，需要新增规则或勾选该路由后才会启用。
-- 私聊：命中 `private` 路由。
-
-如果需要更细的过滤，就在“消息匹配”里填写 `regex`，例如给“群聊-普通消息”规则填写 `需求|报错|构建失败`，让群里提到这些关键词时触发。间接回复会同时匹配当前消息的 `routeText` 和被回复消息的 `repliedRouteText`。
-
-默认配置等价于 5 条规则：直接 @、直接回复、间接回复、私聊、群聊-普通消息关键词提醒。运行时按顺序匹配第一条命中的规则；旧版 `groupAtNotificationTemplate`、`groupDirectReplyNotificationTemplate`、`groupIndirectReplyNotificationTemplate`、`privateNotificationTemplate` 字段仍会作为兼容默认值。
-
-公开示例配置使用脱敏的工作目录。实际使用时请在 NapCat 插件页面或 `gateways.json` 里填写自己的 Agent 工作目录、规则里的目标群号和模板内容。机器人昵称会从 NapCat 自动读取。
-
-WebUI 里的“新增规则”可以继续添加更细的筛选，例如只把包含 `需求|修复|报错` 的普通群消息转给 Agent。规则保存后 manager 会自动重启对应 gateway，让新的环境变量生效；如果使用的是旧版本，保存后还需要手动点击该 gateway 的 Restart。
-
-WebUI 的配置分成四块：`消息适配端`、`Agent 端`、`通用配置`、`路由人格`。前三块是 gateway 级运行配置；`路由人格` 从 `rolesDir` 扫描角色文件夹，每个角色一个子目录，默认引用其中的 `persona.md`，并可在同目录放置 `routes.json` 保存该人格自己的路由名称和规则列表。
-
-选择路由人格后，转发给 Agent 的消息末尾会追加角色文件路径，同时 `{groupLogPath}`、`{privateLogPath}` 等对话数据会写入该角色目录，例如 `data/roles/default/group-messages.jsonl`。切换路由人格时，WebUI 的路由名称和下方路由规则都会切换到该人格对应的 `routes.json`。
-
-`routes.json` 的形态如下：
-
-```json
-{
-  "routeName": "Rabi 路由",
-  "notificationRules": []
-}
-```
-
-仓库提供了可开源示例角色：`examples/roles/Rabi/persona.md` 和 `examples/roles/Rabi/routes.json`。使用时可以把角色目录复制到当前 gateway 的角色目录下，例如 `data/roles/Rabi/persona.md`，然后在 WebUI 的 `路由人格` 下拉里选择。
-
-模板里可以使用以下变量：
-
-```text
-{routeKind} {time} {targetType} {targetId} {messageTarget}
-{groupId} {userId} {selfId} {sender} {senderName}
-{RobotQQId} {SenderQQId} {GroupId} {ReplyMessageId}
-{message} {rawMessage} {routeText} {repliedRouteText} {messageId}
-{repliedMessageId} {repliedMessage}
-{botNickname} {agentRoleId} {agentRolePath} {agentRoleDir}
-{dataDir} {groupLogPath} {privateLogPath}
-```
-
 ## 开发
+
+常用命令：
 
 ```powershell
 npm run build
 npm run start:manager
 ```
 
-本地调试插件时，把 `napcat-plugin-codex-gateway/` 里的文件复制到 NapCat 插件目录，然后重新加载插件。
+开发期也可以直接用 TypeScript：
+
+```powershell
+npm run manager
+```
+
+源码入口：
+
+- `src/manager.ts`：读取 `gateways.json`、启动/停止 gateway、提供 WebUI API。
+- `src/index.ts`：单个 gateway 入口。
+- `src/adapters/`：消息适配端。
+- `src/forwarding.ts`：路由规则匹配、模板渲染、投递处理端。
+- `src/config.ts`：环境变量和默认配置。
+- `src/history.ts`：JSONL 记录。
+
+本地调试 NapCat 插件时，把 `napcat-plugin-codex-gateway/` 复制到 NapCat 插件目录，然后重新加载插件。
+
+## 常见问题
+
+### NapCat 已连接，但处理端没有收到消息
+
+先看 `data/<gateway-id>/`：
+
+- 有 `group-messages.jsonl` 或 `private-messages.jsonl`：说明 QQ 到 RabiRoute 已通。
+- 有 `codex-notifications.jsonl`：说明路由规则已命中并尝试投递。
+- 没有投递记录：检查 `notificationRules`、`routeKinds`、`regex` 和目标群过滤。
+
+### `Missing monitorThreadId`
+
+说明 RabiRoute 没找到对应 Codex Desktop 线程。先打开或创建用于处理 QQ 消息的 Codex 线程，再通过 WebUI 绑定；也可以检查 `data/<gateway-id>/codex-state.json`。
+
+### macOS 上 `connect ENOENT /tmp/codex-ipc/...`
+
+Codex Desktop 的 socket 可能不在 `/tmp`。当前版本会依次尝试 `CODEX_DESKTOP_IPC_PATH`、`os.tmpdir()/codex-ipc/ipc-<uid>.sock` 和 `/tmp/codex-ipc/ipc-<uid>.sock`。仍失败时可临时指定：
+
+```bash
+export CODEX_DESKTOP_IPC_PATH="/var/folders/.../T/codex-ipc/ipc-501.sock"
+npm run start:manager
+```
+
+### 普通群消息没有转发
+
+普通群消息默认不会无条件转发。需要添加 `group_message` 规则，并填写合适的 `regex`，例如：
+
+```text
+需求|报错|构建失败|提醒|记一下
+```
