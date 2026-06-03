@@ -200,8 +200,8 @@ async function connect(): Promise<WebSocket> {
 
     await request("initialize", {
       clientInfo: {
-        name: "qq-agent-gateway",
-        title: "QQ Agent Gateway",
+        name: "rabiroute",
+        title: "RabiRoute",
         version: "0.1.0"
       },
       capabilities: {
