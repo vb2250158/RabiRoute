@@ -230,7 +230,7 @@ server.on("connection", (socket, request) => {
 });
 
 server.on("listening", () => {
-  console.log(`qq-agent-gateway listening on ws://127.0.0.1:${config.gatewayPort}`);
+  console.log(`RabiRoute listening on ws://127.0.0.1:${config.gatewayPort}`);
   console.log(`NapCat HTTP API: ${config.napcatHttpUrl}`);
   console.log(config.targetGroupId ? `Target group: ${config.targetGroupId}` : "Target group: all groups");
 });

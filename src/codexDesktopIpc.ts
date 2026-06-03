@@ -205,7 +205,7 @@ function connect(): Promise<net.Socket> {
       });
 
       try {
-        const response = await request("initialize", { clientType: "qq-agent-gateway" }, 0, true);
+        const response = await request("initialize", { clientType: "rabiroute" }, 0, true);
         if (response.resultType !== "success" || !response.result || typeof response.result !== "object" || !("clientId" in response.result)) {
           throw new Error(`Codex Desktop IPC initialize failed: ${JSON.stringify(response)}`);
         }
