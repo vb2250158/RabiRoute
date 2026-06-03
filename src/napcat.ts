@@ -10,6 +10,17 @@ type SendPrivateMessageParams = {
   message: string;
 };
 
+type OneBotResponse<T> = {
+  status?: string;
+  retcode?: number;
+  data?: T;
+};
+
+export type LoginInfo = {
+  userId?: number | string;
+  nickname?: string;
+};
+
 export async function callNapCat<T>(action: string, payload: unknown): Promise<T> {
   const headers: Record<string, string> = {
     "content-type": "application/json"
@@ -31,6 +42,16 @@ export async function callNapCat<T>(action: string, payload: unknown): Promise<T
   }
 
   return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
+export async function getLoginInfo(): Promise<LoginInfo> {
+  const response = await callNapCat<OneBotResponse<{ user_id?: number | string; nickname?: string }> | { user_id?: number | string; nickname?: string }>("get_login_info", {});
+  const data: { user_id?: number | string; nickname?: string } =
+    "data" in response && response.data ? response.data : response as { user_id?: number | string; nickname?: string };
+  return {
+    userId: data.user_id,
+    nickname: data.nickname
+  };
 }
 
 export async function sendGroupMessage(params: SendGroupMessageParams): Promise<void> {

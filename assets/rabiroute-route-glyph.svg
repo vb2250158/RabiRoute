@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Rabi route glyph">
+  <defs>
+    <linearGradient id="route" x1="24" y1="90" x2="296" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#19BFC1"/>
+      <stop offset=".48" stop-color="#B8F5F0"/>
+      <stop offset=".72" stop-color="#FF89B2"/>
+      <stop offset="1" stop-color="#5D8CFF"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <path d="M26 92c42-58 80 58 122 0s80-58 146 0" fill="none" stroke="url(#route)" stroke-width="18" stroke-linecap="round" opacity=".22"/>
+  <path d="M26 92c42-58 80 58 122 0s80-58 146 0" fill="none" stroke="url(#route)" stroke-width="7" stroke-linecap="round" filter="url(#glow)"/>
+  <circle cx="26" cy="92" r="14" fill="#fff" stroke="#19BFC1" stroke-width="6"/>
+  <circle cx="148" cy="92" r="18" fill="#fff" stroke="#0C2A4A" stroke-width="6"/>
+  <circle cx="294" cy="92" r="14" fill="#fff" stroke="#FF7EAE" stroke-width="6"/>
+  <path d="M137 88h10V78h10v10h10v10h-10v10h-10V98h-10Z" fill="#19BFC1"/>
+  <path d="M54 46c-5-13-4-25 2-29 6-3 15 7 19 25M96 46c5-13 4-25-2-29-6-3-15 7-19 25" fill="#fff" stroke="#0C2A4A" stroke-width="5" stroke-linecap="round" opacity=".92"/>
+  <path d="M236 45h42c10 0 18 8 18 18v50c0 10-8 18-18 18h-42c-10 0-18-8-18-18V63c0-10 8-18 18-18Z" fill="#fff" opacity=".9"/>
+  <path d="M238 74h40M238 90h28M238 106h34" stroke="#19BFC1" stroke-width="6" stroke-linecap="round" opacity=".72"/>
+</svg>
