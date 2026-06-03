@@ -4,164 +4,863 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RabiRoute 拉比路由</title>
+  <link rel="icon" type="image/png" href="/assets/rabiroute-icon.png" />
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 18px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #1f2328; background: transparent; }
-    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-    h1 { margin: 0; font-size: 22px; }
-    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-    a.button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
-    button { border: 1px solid rgba(31,35,40,.18); border-radius: 8px; background: rgba(255,255,255,.72); padding: 8px 12px; cursor: pointer; font-weight: 600; }
-    a.button { border: 1px solid rgba(31,35,40,.18); border-radius: 8px; background: rgba(255,255,255,.72); padding: 8px 12px; cursor: pointer; font-weight: 600; color: inherit; }
-    button.primary { background: #ff2b75; border-color: #ff2b75; color: white; }
-    a.button.primary { background: #ff2b75; border-color: #ff2b75; color: white; }
-    button.danger { color: #cf222e; }
-    .launch { margin-bottom: 14px; padding: 14px; border: 1px solid rgba(31,35,40,.1); border-radius: 10px; background: rgba(255,255,255,.72); }
-    .launch strong { display: block; margin-bottom: 6px; font-size: 15px; }
-    .launch p { margin: 0 0 10px; color: #57606a; font-size: 13px; line-height: 1.5; }
-    .status { margin-bottom: 14px; padding: 12px; border: 1px solid rgba(31,35,40,.1); border-radius: 8px; background: rgba(255,255,255,.55); }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
-    .card { padding: 14px; border: 1px solid rgba(31,35,40,.1); border-radius: 10px; background: rgba(255,255,255,.68); box-shadow: 0 10px 26px rgba(31,35,40,.06); }
-    .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-    h2 { margin: 0; font-size: 17px; }
-    .pill { padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; }
-    .running { background: #dafbe1; color: #1a7f37; }
-    .stopped { background: #ffebe9; color: #cf222e; }
-    .meta { margin-top: 7px; color: #57606a; font-size: 13px; overflow-wrap: anywhere; }
-    .form { margin-top: 16px; padding: 14px; border: 1px solid rgba(31,35,40,.1); border-radius: 10px; background: rgba(255,255,255,.58); }
-    .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
-    label { display: grid; gap: 5px; color: #57606a; font-size: 12px; }
+    :root {
+      --bg: #f2fbff;
+      --panel: rgba(255,255,255,.84);
+      --panel-strong: #ffffff;
+      --ink: #112033;
+      --muted: #647386;
+      --line: rgba(17,32,51,.12);
+      --teal: #19bfc1;
+      --teal-dark: #087f91;
+      --navy: #0c2a4a;
+      --pink: #ff6d9d;
+      --amber: #f59e0b;
+      --green: #16a34a;
+      --red: #dc2626;
+      --shadow: 0 18px 48px rgba(12,42,74,.12);
+    }
+    html { background: var(--bg); overflow-x: hidden; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(25,191,193,.08) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(12,42,74,.045) 1px, transparent 1px),
+        linear-gradient(135deg, #fbfeff 0%, var(--bg) 48%, #fff7fb 100%);
+      background-size: 34px 34px, 34px 34px, auto;
+      overflow-x: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      right: clamp(-140px, -7vw, -52px);
+      bottom: clamp(-140px, -9vw, -54px);
+      width: min(58vw, 620px);
+      aspect-ratio: 1;
+      background: url("/assets/rabiroute-icon.png") center / contain no-repeat;
+      opacity: .13;
+      filter: saturate(1.08) drop-shadow(0 28px 64px rgba(25,191,193,.24));
+      pointer-events: none;
+      z-index: 0;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      background:
+        linear-gradient(115deg, transparent 0 12%, rgba(25,191,193,.08) 12.2% 12.6%, transparent 12.8% 40%, rgba(255,109,157,.08) 40.2% 40.6%, transparent 40.8%),
+        linear-gradient(180deg, rgba(255,255,255,.58), rgba(255,255,255,.18));
+    }
+    button, input, select, textarea { font: inherit; }
+    button, a.button {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.86);
+      color: var(--ink);
+      padding: 7px 11px;
+      cursor: pointer;
+      font-weight: 700;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    button:hover, a.button:hover { border-color: rgba(25,191,193,.48); box-shadow: 0 6px 18px rgba(25,191,193,.12); }
+    button.primary, a.button.primary { background: linear-gradient(135deg, var(--navy), #16466e); border-color: var(--navy); color: #fff; }
+    button.accent { background: linear-gradient(135deg, #35e0d6, #9cf4e8); border-color: rgba(25,191,193,.8); color: #06262d; }
+    button.danger { color: var(--red); }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 9px;
+      background: rgba(255,255,255,.92);
+      color: var(--ink);
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: rgba(25,191,193,.7); box-shadow: 0 0 0 3px rgba(25,191,193,.12); }
+    textarea {
+      min-height: 142px;
+      resize: vertical;
+      line-height: 1.48;
+      font-family: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+      font-size: 12px;
+    }
+    label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .app-shell { position: relative; z-index: 1; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.9), rgba(242,251,255,.82)),
+        linear-gradient(135deg, rgba(25,191,193,.18), rgba(255,109,157,.08));
+      backdrop-filter: blur(18px);
+    }
+    .topbar::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -1px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(25,191,193,.72), rgba(255,109,157,.58), transparent);
+      pointer-events: none;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand img {
+      width: 46px;
+      height: 46px;
+      border-radius: 12px;
+      border: 2px solid rgba(25,191,193,.58);
+      box-shadow: 0 10px 28px rgba(25,191,193,.22);
+      object-fit: cover;
+    }
+    .brand-icon-stack { position: relative; width: 46px; height: 46px; flex: 0 0 auto; }
+    .brand-icon-stack img { width: 46px; height: 46px; }
+    .brand-icon-stack::after {
+      content: "";
+      position: absolute;
+      right: -5px;
+      bottom: -5px;
+      width: 20px;
+      height: 20px;
+      background: url("/assets/rabiroute-mini-badge.svg") center / contain no-repeat;
+      filter: drop-shadow(0 4px 8px rgba(12,42,74,.16));
+    }
+    .brand-title { display: grid; gap: 2px; min-width: 0; }
+    h1 { margin: 0; font-size: 22px; letter-spacing: 0; color: var(--navy); }
+    .subtitle { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .health {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.78);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 4px rgba(220,38,38,.12); }
+    .dot.ok { background: var(--green); box-shadow: 0 0 0 4px rgba(22,163,74,.12); }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+      gap: 14px;
+      padding: 14px;
+      min-height: 0;
+    }
+    .sidebar, .main-panel, .side-panel, .section, .plugin-launch {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+    .sidebar { display: grid; grid-template-rows: auto 1fr; min-height: calc(100vh - 92px); overflow: hidden; }
+    .sidebar-head { padding: 14px; border-bottom: 1px solid var(--line); display: grid; gap: 12px; }
+    .mascot-card {
+      position: relative;
+      min-height: 118px;
+      overflow: hidden;
+      border: 1px solid rgba(25,191,193,.2);
+      border-radius: 10px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.88), rgba(235,252,255,.76)),
+        linear-gradient(90deg, rgba(25,191,193,.12), rgba(255,109,157,.1));
+    }
+    .mascot-card::before {
+      content: "";
+      position: absolute;
+      right: -46px;
+      bottom: -58px;
+      width: 190px;
+      height: 190px;
+      background: url("/assets/rabiroute-route-glyph.svg") center bottom / contain no-repeat;
+      opacity: .42;
+      filter: saturate(1.05);
+      pointer-events: none;
+    }
+    .mascot-card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(255,255,255,.9) 0 44%, rgba(255,255,255,.48));
+      pointer-events: none;
+    }
+    .mascot-copy {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 5px;
+      max-width: 190px;
+      padding: 12px;
+    }
+    .mascot-copy b { color: var(--navy); font-size: 14px; }
+    .mascot-copy span { color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1.45; }
+    .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metric {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(145deg, rgba(255,255,255,.82), rgba(236,252,255,.72));
+    }
+    .metric b { display: block; font-size: 18px; color: var(--navy); }
+    .metric span { color: var(--muted); font-size: 11px; font-weight: 800; }
+    .gateway-list { overflow: auto; padding: 10px; display: grid; gap: 8px; align-content: start; }
+    .gateway-item {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      text-align: left;
+      padding: 11px;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.68);
+    }
+    .gateway-item.active {
+      border-color: rgba(25,191,193,.72);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.96), rgba(232,253,255,.9)),
+        linear-gradient(90deg, rgba(25,191,193,.2), transparent);
+      box-shadow: 0 10px 24px rgba(25,191,193,.14);
+    }
+    .gateway-name { font-weight: 900; color: var(--navy); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gateway-meta { margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
+    .pill {
+      align-self: start;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 900;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .pill.running, .pill.enabled { background: rgba(22,163,74,.12); color: var(--green); border-color: rgba(22,163,74,.18); }
+    .pill.stopped { background: rgba(220,38,38,.1); color: var(--red); border-color: rgba(220,38,38,.16); }
+    .pill.draft { background: rgba(245,158,11,.13); color: #a16207; border-color: rgba(245,158,11,.18); }
+    .content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 14px; min-width: 0; }
+    .main-panel, .side-panel { min-width: 0; padding: 14px; display: grid; gap: 14px; align-content: start; }
+    .side-panel { overflow: visible; position: relative; }
+    .side-panel::after {
+      content: "";
+      position: absolute;
+      right: -42px;
+      top: 74px;
+      width: 170px;
+      height: 170px;
+      background: url("/assets/rabiroute-route-glyph.svg") center / contain no-repeat;
+      opacity: .08;
+      pointer-events: none;
+    }
+    .section { position: relative; padding: 14px; box-shadow: none; background: rgba(255,255,255,.74); }
+    .section::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      border-radius: 10px 0 0 10px;
+      background: linear-gradient(180deg, rgba(25,191,193,.86), rgba(255,109,157,.72));
+      opacity: .62;
+      pointer-events: none;
+    }
+    .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    h2 { margin: 0; font-size: 16px; color: var(--navy); }
+    h3 { margin: 0; font-size: 13px; color: var(--navy); }
+    .section-note { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .config-groups { display: grid; gap: 14px; }
+    .config-group {
+      display: grid;
+      gap: 9px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .config-group:first-child { padding-top: 0; border-top: 0; }
+    .config-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .field-wide { grid-column: 1 / -1; }
+    .route-persona-card {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 10px;
+      border: 1px solid rgba(25,191,193,.22);
+      border-radius: 10px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.9), rgba(236,252,255,.76)),
+        linear-gradient(90deg, rgba(255,109,157,.12), transparent);
+      overflow: hidden;
+      position: relative;
+    }
+    .route-persona-card::after {
+      content: "";
+      position: absolute;
+      right: -42px;
+      top: -54px;
+      width: 180px;
+      aspect-ratio: 1;
+      background: url("/assets/rabiroute-icon.png") center / contain no-repeat;
+      opacity: .08;
+      pointer-events: none;
+    }
+    .route-avatar {
+      width: 72px;
+      height: 72px;
+      border-radius: 16px;
+      padding: 5px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.82), rgba(255,255,255,.42)),
+        linear-gradient(135deg, rgba(25,191,193,.86), rgba(255,109,157,.62));
+      box-shadow: 0 14px 28px rgba(25,191,193,.18);
+    }
+    .route-avatar img { width: 100%; height: 100%; display: block; border-radius: 12px; object-fit: cover; background: #fff; }
+    .route-avatar.persona-mark { background: linear-gradient(135deg, rgba(25,191,193,.92), rgba(255,109,157,.7)); }
+    .route-avatar.persona-mark img { object-fit: contain; padding: 0; }
+    .route-persona-fields { position: relative; z-index: 1; }
+    .inline-check { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-weight: 800; }
+    .inline-check input { width: auto; }
+    .rule-list { display: grid; gap: 10px; }
+    .role-rule-group {
+      display: grid;
+      gap: 8px;
+    }
+    .role-rule-head {
+      display: grid;
+      grid-template-columns: minmax(180px, 260px) 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(7,24,39,.04);
+      color: var(--navy);
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .role-rule-head label { color: var(--muted); }
+    .rule-card {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(255,255,255,.94);
+      overflow: hidden;
+    }
+    .rule-top {
+      display: grid;
+      grid-template-columns: minmax(170px, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, rgba(25,191,193,.11), rgba(255,255,255,.82), rgba(255,109,157,.08));
+    }
+    .rule-body { display: grid; grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); gap: 10px; padding: 10px; }
+    .rule-tools {
+      display: grid;
+      gap: 7px;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(145deg, rgba(238,248,251,.78), rgba(255,247,251,.58));
+      align-content: start;
+    }
+    .rule-note { align-self: center; }
+    .template-editor textarea {
+      min-height: 210px;
+      max-height: 420px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+    .route-kind-box {
+      display: grid;
+      gap: 7px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.7);
+    }
+    .route-kind-box label { display: flex; align-items: center; gap: 6px; color: var(--ink); font-size: 12px; font-weight: 700; }
+    .route-kind-box input { width: auto; }
+    .route-extension {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.7);
+      overflow: hidden;
+    }
+    .route-extension summary {
+      padding: 8px;
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .route-extension-content {
+      display: grid;
+      gap: 8px;
+      padding: 0 8px 8px;
+    }
+    .variable-list { display: grid; gap: 8px; }
+    .variable-row { display: grid; grid-template-columns: minmax(150px, 220px) minmax(180px, 1fr) auto; gap: 8px; align-items: end; }
+    .template-vars {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 7px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .template-var {
+      display: grid;
+      gap: 3px;
+      padding: 7px 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.7);
+    }
+    .template-var code { color: var(--navy); font-weight: 900; }
+    .template-var span { line-height: 1.35; }
+    pre {
+      margin: 0;
+      min-height: 190px;
+      max-height: 330px;
+      overflow: auto;
+      padding: 12px;
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(25,191,193,.08), transparent),
+        #071827;
+      color: #d7f8ff;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+    .empty {
+      padding: 28px;
+      border: 1px dashed rgba(17,32,51,.2);
+      border-radius: 10px;
+      background: rgba(255,255,255,.55);
+      color: var(--muted);
+      font-weight: 800;
+      text-align: center;
+    }
+    .plugin-launch { padding: 12px; display: grid; gap: 8px; background: rgba(255,255,255,.72); }
+    .plugin-launch p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .label-row { display: flex; align-items: center; gap: 6px; min-height: 18px; }
-    .help { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 1px solid rgba(31,35,40,.2); background: rgba(255,255,255,.8); color: #57606a; font-size: 12px; font-weight: 700; cursor: help; user-select: none; }
-    #tooltip { position: fixed; left: 0; top: 0; width: min(340px, calc(100vw - 24px)); padding: 9px 10px; border-radius: 8px; background: #24292f; color: #fff; font-size: 12px; line-height: 1.45; white-space: pre-wrap; box-shadow: 0 10px 28px rgba(31,35,40,.22); z-index: 9999; pointer-events: none; opacity: 0; transform: translate3d(-9999px, -9999px, 0); }
+    .help {
+      display: inline-grid;
+      place-items: center;
+      width: 17px;
+      height: 17px;
+      border-radius: 50%;
+      border: 1px solid rgba(17,32,51,.18);
+      background: #fff;
+      color: var(--teal-dark);
+      font-size: 12px;
+      font-weight: 900;
+      cursor: help;
+      user-select: none;
+    }
+    #tooltip {
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: min(340px, calc(100vw - 24px));
+      padding: 9px 10px;
+      border-radius: 8px;
+      background: #071827;
+      color: #fff;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      box-shadow: 0 12px 30px rgba(7,24,39,.24);
+      z-index: 9999;
+      pointer-events: none;
+      opacity: 0;
+      transform: translate3d(-9999px, -9999px, 0);
+    }
     #tooltip.visible { opacity: 1; }
-    input, select, textarea { width: 100%; border: 1px solid rgba(31,35,40,.18); border-radius: 8px; padding: 8px; background: rgba(255,255,255,.85); color: #1f2328; font: inherit; }
-    textarea { min-height: 150px; resize: vertical; line-height: 1.45; font-family: "Cascadia Mono", Consolas, monospace; }
-    .template-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; margin-top: 10px; }
-    .hint { margin-top: 8px; color: #6e7781; font-size: 12px; }
-    .template-help { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-    pre { max-height: 190px; overflow: auto; margin: 10px 0 0; padding: 10px; border-radius: 8px; background: #0d1117; color: #c9d1d9; font-size: 12px; white-space: pre-wrap; }
+    @media (max-width: 1100px) {
+      .workspace, .content { grid-template-columns: 1fr; }
+      .sidebar { min-height: auto; }
+      .side-panel { position: static; max-height: none; }
+    }
+    @media (max-width: 760px) {
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .top-actions { width: 100%; justify-content: flex-start; }
+      .fields, .rule-top, .rule-body, .route-persona-card { grid-template-columns: 1fr; }
+      .route-avatar { display: none; }
+      .workspace { padding: 10px; }
+      body::before { opacity: .08; width: 92vw; }
+    }
   </style>
 </head>
 <body>
-  <div class="toolbar">
-    <h1>RabiRoute</h1>
-    <div class="actions">
-      <button id="refresh">刷新</button>
-      <button id="start-manager" class="primary">启动 Manager</button>
-      <button id="add">新增 Gateway</button>
-      <button id="save" class="primary">保存配置</button>
-    </div>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon-stack"><img src="/assets/rabiroute-icon.png" alt="RabiRoute" /></div>
+        <div class="brand-title">
+          <h1>RabiRoute</h1>
+          <div class="subtitle">消息入口、规则路由、Agent 连接</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div id="manager-health" class="health"><span class="dot"></span><span>加载中</span></div>
+        <button id="refresh">刷新</button>
+        <button id="start-manager">启动 Manager</button>
+        <button id="add">新增 Gateway</button>
+        <button id="save" class="primary">保存配置</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <div id="plugin-launch" class="plugin-launch" hidden>
+            <b>独立控制台</b>
+            <p>当前在 NapCat 插件壳内，可跳转到本地控制台。</p>
+            <a id="standalone-link" class="button primary" href="http://127.0.0.1:8790/" target="_blank" rel="noreferrer">打开 RabiRoute</a>
+          </div>
+          <div class="metric-row">
+            <div class="metric"><b id="metric-total">0</b><span>Gateways</span></div>
+            <div class="metric"><b id="metric-running">0</b><span>Running</span></div>
+          </div>
+          <div class="mascot-card">
+            <div class="mascot-copy">
+              <b>Rabi Online</b>
+              <span>Route · Persona · Agent</span>
+            </div>
+          </div>
+        </div>
+        <div id="gateway-list" class="gateway-list"></div>
+      </aside>
+
+      <div class="content">
+        <section id="editor" class="main-panel"></section>
+        <aside id="runtime-panel" class="side-panel"></aside>
+      </div>
+    </main>
   </div>
-  <div id="plugin-launch" class="launch" hidden>
-    <strong>拉比路由独立控制台</strong>
-    <p>RabiRoute 用于把 NapCat、AstrBot、Webhook 等聊天入口接入同一个 Agent 路由中枢，再通往 Codex、Copilot 或其他执行者。独立 WebUI 可脱离 NapCat 插件运行和配置。</p>
-    <a id="standalone-link" class="button primary" href="http://127.0.0.1:8790/" target="_blank" rel="noreferrer">打开 RabiRoute</a>
-  </div>
-  <div id="status" class="status">加载中...</div>
-  <div id="grid" class="grid"></div>
-  <div id="forms"></div>
   <div id="tooltip"></div>
 
   <script>
     const pluginApiBase = "/plugin/napcat-plugin-codex-gateway/api";
     const isPluginShell = location.pathname.startsWith("/plugin/");
     const apiBase = isPluginShell ? pluginApiBase : "";
+    const routeKindLabels = {
+      direct_at: "群聊-直接 @",
+      direct_reply: "群聊-直接回复",
+      indirect_reply: "群聊-间接回复",
+      group_message: "群聊-普通消息",
+      private: "私聊"
+    };
+    const templateVars = [
+      { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message。" },
+      { name: "RobotQQId", description: "机器人 QQ 号，来自当前消息事件 self_id。" },
+      { name: "SenderQQId", description: "发送者 QQ 号。" },
+      { name: "GroupId", description: "群号；私聊时为空。" },
+      { name: "ReplyMessageId", description: "被回复消息 ID；非回复消息时为空。" },
+      { name: "time", description: "消息时间，已格式化为本地时间。" },
+      { name: "messageTarget", description: "目标会话描述，例如群号或私聊对象。" },
+      { name: "groupId", description: "群消息的群号；私聊时不填充。" },
+      { name: "userId", description: "发送者 QQ 号。" },
+      { name: "sender", description: "发送者显示名，优先使用群名片或昵称。" },
+      { name: "message", description: "原始消息文本，包含 CQ 码。" },
+      { name: "routeText", description: "用于路由匹配的消息文本，@ 和回复 CQ 码会转成更易匹配的文本。" },
+      { name: "repliedRouteText", description: "被回复消息对应的路由匹配文本。" },
+      { name: "repliedMessage", description: "被回复消息的原始文本。" },
+      { name: "agentRoleId", description: "当前选择的路由人格 ID。" },
+      { name: "agentRolePath", description: "当前路由人格文件路径。" },
+      { name: "agentRoleDir", description: "当前路由人格的数据目录。" },
+      { name: "groupLogPath", description: "群聊消息 JSONL 记录路径。" },
+      { name: "privateLogPath", description: "私聊消息 JSONL 记录路径。" }
+    ];
     let state = { gateways: [] };
     let managerRows = [];
-    let networkOptions = { httpServers: [], websocketClients: [] };
+    let networkOptions = { adapters: {}, httpServers: [], websocketClients: [] };
+    let selectedGatewayId = "";
 
     function gatewayRuntime(id) {
       return managerRows.find(row => row.id === id) || {};
     }
 
+    function selectedIndex() {
+      const index = state.gateways.findIndex(gateway => gateway.id === selectedGatewayId);
+      return index >= 0 ? index : 0;
+    }
+
     function render() {
       document.getElementById("plugin-launch").hidden = !isPluginShell;
-      const status = document.getElementById("status");
+      if (!selectedGatewayId && state.gateways[0]) {
+        selectedGatewayId = state.gateways[0].id;
+      }
+      if (selectedGatewayId && !state.gateways.some(gateway => gateway.id === selectedGatewayId)) {
+        selectedGatewayId = state.gateways[0]?.id || "";
+      }
+
       const managerError = managerRows.error;
-      status.textContent = managerError
-        ? `Manager 未连接：${managerError}`
-        : `Manager 已连接，gateway 数量：${state.gateways.length}`;
+      const runningCount = state.gateways.filter(gateway => gatewayRuntime(gateway.id).running).length;
+      document.getElementById("metric-total").textContent = String(state.gateways.length);
+      document.getElementById("metric-running").textContent = String(runningCount);
+      document.getElementById("manager-health").innerHTML = managerError
+        ? `<span class="dot"></span><span>Manager 未连接</span>`
+        : `<span class="dot ok"></span><span>Manager 已连接</span>`;
 
-      document.getElementById("grid").innerHTML = state.gateways.map(gateway => {
-        const runtime = gatewayRuntime(gateway.id);
-        const running = runtime.running ? "running" : "stopped";
-        const logs = (runtime.log || []).slice(-8).join("\\n");
-        return `
-          <section class="card">
-            <div class="row">
-              <h2>${escapeHtml(gateway.name || gateway.id)}</h2>
-              <span class="pill ${running}">${runtime.running ? "运行中" : "已停止"}</span>
-            </div>
-            <div class="meta">id=${escapeHtml(gateway.id)} port=${gateway.gatewayPort} pid=${runtime.pid || "-"}</div>
-            <div class="meta">NapCat=${escapeHtml(gateway.napcatHttpUrl || "http://127.0.0.1:3000")}</div>
-            <div class="meta">Thread=${escapeHtml(gateway.codexThreadName || gateway.name || gateway.id)}</div>
-            <div class="actions" style="margin-top:12px">
-              <button onclick="actionGateway('${gateway.id}', 'start')">启动</button>
-              <button onclick="actionGateway('${gateway.id}', 'stop')">停止</button>
-              <button onclick="actionGateway('${gateway.id}', 'restart')">重启</button>
-              <button class="danger" onclick="removeGateway('${gateway.id}')">删除</button>
-            </div>
-            <pre>${escapeHtml(logs)}</pre>
-          </section>
-        `;
-      }).join("");
-
-      document.getElementById("forms").innerHTML = state.gateways.map((gateway, index) => `
-        <section class="form">
-          <div class="row"><h2>${escapeHtml(gateway.name || gateway.id)}</h2><label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-index="${index}" data-field="enabled" ${gateway.enabled !== false ? "checked" : ""}>启用</label></div>
-          <div class="fields">
-            ${input(index, "id", "ID", gateway.id)}
-            ${input(index, "name", "名称", gateway.name || "")}
-            ${select(index, "gatewayPort", "WS 端口", gateway.gatewayPort || "", networkOptions.websocketClients)}
-            ${select(index, "napcatHttpUrl", "NapCat HTTP", gateway.napcatHttpUrl || "http://127.0.0.1:3000", networkOptions.httpServers)}
-            ${input(index, "targetGroupId", "目标群号 空=全部", gateway.targetGroupId || "")}
-            ${input(index, "botNickname", "机器人昵称", gateway.botNickname || "QQ小助手")}
-            ${input(index, "codexThreadName", "Codex 线程名", gateway.codexThreadName || "")}
-            ${input(index, "codexCwd", "Codex 工作目录", gateway.codexCwd || "C:\\\\Path\\\\To\\\\Your\\\\Project")}
-            ${input(index, "forwardTargets", "转发目标", Array.isArray(gateway.forwardTargets) ? gateway.forwardTargets.join(",") : gateway.forwardTargets || "codexDesktop")}
-            ${input(index, "dataDir", "数据目录", gateway.dataDir || `./data/${gateway.id}`)}
-          </div>
-          <div class="hint template-help">
-            <span>模板变量：{routeKind} {time} {targetType} {targetId} {messageTarget} {groupId} {userId} {selfId} {sender} {senderName} {message} {rawMessage} {messageId} {repliedMessageId} {repliedMessage} {botNickname} {dataDir} {groupLogPath} {privateLogPath}</span>
-            ${help("这些变量会在转发前替换成真实内容。messageTarget 是可读目标，例如 群 123456 或 私聊 10001；repliedMessage 是当前消息回复/引用的原消息内容。未识别变量会原样保留。")}
-          </div>
-          <div class="template-fields">
-            ${textarea(index, "groupAtNotificationTemplate", "直接 @ 模板", gateway.groupAtNotificationTemplate || gateway.groupNotificationTemplate || defaultGroupAtTemplate())}
-            ${textarea(index, "groupDirectReplyNotificationTemplate", "直接回复模板", gateway.groupDirectReplyNotificationTemplate || gateway.groupReplyNotificationTemplate || defaultGroupDirectReplyTemplate())}
-            ${textarea(index, "groupIndirectReplyNotificationTemplate", "间接回复模板", gateway.groupIndirectReplyNotificationTemplate || gateway.groupNicknameNotificationTemplate || defaultGroupIndirectReplyTemplate())}
-            ${textarea(index, "privateNotificationTemplate", "私聊消息模板", gateway.privateNotificationTemplate || defaultPrivateTemplate())}
-          </div>
-        </section>
-      `).join("");
+      renderGatewayList();
+      renderEditor();
+      renderRuntimePanel();
       bindInputs();
     }
 
-    const helpText = {
-      id: "Gateway 的唯一 ID，只能使用英文、数字、下划线或短横线。保存后会用于启动、停止、数据隔离和 API 路由。",
-      name: "显示名称，只影响 NapCat 页面上的可读标题。",
-      enabled: "是否由 manager 自动启动这条 gateway。关闭后配置保留，但 reload 时不会自动启动。",
-      gatewayPort: "用于接收 QQ 消息事件。\nNapCat 的 WebSocket 客户端会主动连接到这个本地端口，把群消息、私聊、@ 机器人等 OneBot 事件推给本地 gateway。\n对应 NapCat 网络配置：WebSocket 客户端，例如 ws://127.0.0.1:8789。",
-      napcatHttpUrl: "用于主动发送 QQ 消息和调用 OneBot API。\n本地 gateway 要发群消息、私聊、查询状态时，会请求这个 NapCat HTTP Server。\n对应 NapCat 网络配置：HTTP 服务器，例如 http://127.0.0.1:3000。",
-      targetGroupId: "只处理某个群时填写群号；留空表示所有群都会记录，群 @ 或私聊会推送到 Codex。",
-      botNickname: "机器人昵称。用于判断文本里是否提到了机器人，也会作为模板变量 {botNickname}。",
-      codexThreadName: "Codex 里接收 QQ 消息的固定线程名。建议每条 gateway 用不同名字，方便区分。",
-      codexCwd: "Codex 处理消息时使用的工作目录。这里填写你希望 Agent 打开的项目目录，例如 C:\\\\Path\\\\To\\\\Your\\\\Project。",
-      forwardTargets: "消息转发目标，多个目标用英文逗号分隔。当前支持 codexDesktop 和 codexApp；默认 codexDesktop。后续接别的 Agent 时在 gateway 代码里新增目标即可。",
-      dataDir: "消息日志和 Codex 状态文件保存目录。相对路径以 RabiRoute 根目录为基准。",
-      groupAtNotificationTemplate: "直接 @ 机器人时使用。消息没有回复引用，只是当前消息本身 @ 了机器人。",
-      groupDirectReplyNotificationTemplate: "直接回复机器人时使用。QQ 回复通常会同时带 @，这类会优先归到直接回复，而不是直接 @。",
-      groupIndirectReplyNotificationTemplate: "间接回复时使用。当前消息回复了某个用户，而被回复的那条用户消息里曾经 @ 过机器人。",
-      privateNotificationTemplate: "私聊消息触发转发时使用的提醒模板。所有非自己发送的私聊都会使用。",
-      groupNotificationTemplate: "旧版群消息模板字段。保留用于兼容旧配置；新配置请使用上面三个独立模板。"
-    };
+    function renderGatewayList() {
+      const list = document.getElementById("gateway-list");
+      if (state.gateways.length === 0) {
+        list.innerHTML = `<div class="empty">暂无 Gateway</div>`;
+        return;
+      }
 
-    function help(text) {
-      return `<span class="help" tabindex="0" data-help="${escapeAttr(text)}">?</span>`;
+      list.innerHTML = state.gateways.map(gateway => {
+        const runtime = gatewayRuntime(gateway.id);
+        const runningClass = runtime.running ? "running" : "stopped";
+        const runningText = runtime.running ? "运行中" : "已停止";
+        const activeClass = gateway.id === selectedGatewayId ? "active" : "";
+        const title = activeRouteName(gateway) || gateway.name || gateway.id;
+        return `
+          <button class="gateway-item ${activeClass}" data-select-gateway="${escapeAttr(gateway.id)}">
+            <span>
+              <span class="gateway-name">${escapeHtml(title)}</span>
+              <span class="gateway-meta">:${gateway.gatewayPort || "-"} · ${escapeHtml(gateway.codexThreadName || gateway.id)}</span>
+            </span>
+            <span class="pill ${runningClass}">${runningText}</span>
+          </button>
+        `;
+      }).join("");
     }
 
-    function input(index, field, label, value) {
-      return `<label><span class="label-row">${label}${help(helpText[field] || "")}</span><input data-index="${index}" data-field="${field}" value="${escapeAttr(String(value))}"></label>`;
+    function renderEditor() {
+      const editor = document.getElementById("editor");
+      const index = selectedIndex();
+      const gateway = state.gateways[index];
+      if (!gateway) {
+        editor.innerHTML = `<div class="empty">选择或新增一个 Gateway</div>`;
+        return;
+      }
+
+      const rules = notificationRulesForGateway(gateway);
+      const title = activeRouteName(gateway) || gateway.name || gateway.id;
+      editor.innerHTML = `
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>${escapeHtml(title)}</h2>
+              <div class="section-note">${escapeHtml(gateway.id)} · ${rules.length} 条规则</div>
+            </div>
+            <label class="inline-check"><input type="checkbox" data-index="${index}" data-field="enabled" ${gateway.enabled !== false ? "checked" : ""}>启用</label>
+          </div>
+          <div class="config-groups">
+            <div class="config-group">
+              <div class="config-group-head">
+                <h3>消息适配端</h3>
+                <span class="section-note">NapCat 到 RabiRoute，再转发给处理端</span>
+              </div>
+              <div class="fields">
+                ${messageAdapterSelect(index, gateway)}
+                ${renderMessageAdapterFields(index, gateway)}
+              </div>
+            </div>
+            <div class="config-group">
+              <div class="config-group-head">
+                <h3>Agent 端</h3>
+                <span class="section-note">接收消息的会话、目录和角色</span>
+              </div>
+              <div class="fields">
+                ${agentConfigSelect(index, gateway)}
+                ${input(index, "codexThreadName", "Agent 会话线程名", gateway.codexThreadName || "")}
+                ${input(index, "codexCwd", "Agent 工作目录", gateway.codexCwd || "C:\\\\Path\\\\To\\\\Your\\\\Project", "field-wide")}
+              </div>
+            </div>
+            <div class="config-group">
+              <div class="config-group-head">
+                <h3>通用配置</h3>
+                <span class="section-note">显示和数据存储</span>
+              </div>
+              <div class="fields">
+                ${input(index, "dataDir", "基础数据目录", gateway.dataDir || `./data/${gateway.id}`)}
+                ${input(index, "rolesDir", "角色目录", gateway.rolesDir || `${gateway.dataDir || `./data/${gateway.id}`}/roles`)}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>路由人格</h2>
+              <div class="section-note">选择人格后，下方会切换到该人格自己的路由规则</div>
+            </div>
+            <button type="button" class="accent" onclick="addNotificationRule(${index})">新增规则</button>
+          </div>
+          <div class="route-persona-card">
+            <div class="route-avatar persona-mark"><img src="/assets/rabiroute-persona-mark.svg" alt="Rabi persona" /></div>
+            <div>
+              <div class="fields route-persona-fields">
+                ${input(index, "routeName", "路由名称", activeRouteName(gateway))}
+                ${roleSelect(index, gateway)}
+              </div>
+              <div class="section-note" style="margin-top:7px">名称、人格和规则会一起写入当前角色目录的 routes.json。</div>
+            </div>
+          </div>
+          <details class="route-extension" style="margin-bottom:10px">
+            <summary>角色预览</summary>
+            <div class="route-extension-content">
+              ${renderRolePreview(gateway, gateway.agentRoleId || "")}
+            </div>
+          </details>
+          <details class="route-extension">
+            <summary>变量</summary>
+            <div class="route-extension-content">
+              <div class="section-note">内置变量</div>
+              <div class="template-vars">${renderTemplateVars()}</div>
+              <div class="section-note" style="margin-top:4px">路由变量</div>
+              <div class="variable-list">
+                ${renderRouteVariables(index, gateway)}
+              </div>
+              <div>
+                <button type="button" class="accent" onclick="addRouteVariable(${index})">新增变量</button>
+              </div>
+            </div>
+          </details>
+          <div class="rule-list" style="margin-top:10px">
+            ${rules.map((rule, ruleIndex) => renderRule(index, ruleIndex, rule)).join("")}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderRuntimePanel() {
+      const panel = document.getElementById("runtime-panel");
+      const gateway = state.gateways[selectedIndex()];
+      if (!gateway) {
+        panel.innerHTML = `<div class="empty">暂无运行信息</div>`;
+        return;
+      }
+
+      const runtime = gatewayRuntime(gateway.id);
+      const logs = (runtime.log || []).slice(-18).join("\\n");
+      const running = runtime.running ? "running" : "stopped";
+      const gatewayStatus = runtime.gatewayStatus || {};
+      const adapterState = gatewayStatus.messageAdapter || {};
+      const adapterType = gateway.messageAdapterType || adapterState.type || "napcat";
+      const runtimeAdapterType = runtime.messageAdapterType || adapterState.type || "napcat";
+      const adapterPendingRestart = adapterType !== runtimeAdapterType;
+      const adapterMessage = adapterPendingRestart
+        ? `当前运行的是 ${adapterLabel(runtimeAdapterType)}，保存并重启后切换到 ${adapterLabel(adapterType)}。`
+        : adapterState.message || "";
+      const napcatState = gatewayStatus.napcat || {};
+      const napcatConnected = Boolean(napcatState.connected);
+      const napcatClass = adapterType === "disabled" ? "draft" : adapterType === "napcat" ? napcatConnected ? "running" : "stopped" : "draft";
+      const napcatText = adapterType === "disabled" ? "已禁用" : adapterType === "napcat" ? napcatConnected ? "已连接" : "未连接" : "预留";
+      const agentState = runtime.codexState || {};
+      const agentError = agentState.lastNotificationError || "";
+      const agentBound = Boolean(agentState.monitorThreadId);
+      const agentClass = agentError ? "stopped" : agentBound ? "running" : "draft";
+      const agentText = agentError ? "连接异常" : agentBound ? "已连接" : "未绑定";
+      panel.innerHTML = `
+        <section class="section">
+          <div class="section-head">
+            <h2>运行状态</h2>
+            <span class="pill ${running}">${runtime.running ? "运行中" : "已停止"}</span>
+          </div>
+          <div class="metric-row">
+            <div class="metric"><b>${adapterType === "disabled" ? "-" : gateway.gatewayPort || "-"}</b><span>${adapterType === "napcat" ? "WS Port" : adapterType === "webhook" ? "HTTP Port" : "Adapter"}</span></div>
+            <div class="metric"><b>${runtime.pid || "-"}</b><span>PID</span></div>
+          </div>
+          <div class="top-actions" style="justify-content:flex-start;margin-top:12px">
+            <button onclick="actionGateway('${escapeAttr(gateway.id)}', 'start')">启动</button>
+            <button onclick="actionGateway('${escapeAttr(gateway.id)}', 'stop')">停止</button>
+            <button class="primary" onclick="actionGateway('${escapeAttr(gateway.id)}', 'restart')">重启</button>
+            <button class="danger" onclick="removeGateway('${escapeAttr(gateway.id)}')">删除</button>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>消息端连接</h2>
+            <span class="pill ${napcatClass}">${napcatText}</span>
+          </div>
+          <div class="section-note" style="overflow-wrap:anywhere">类型：${escapeHtml(adapterLabel(adapterType))}</div>
+          ${adapterMessage ? `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">状态：${escapeHtml(adapterMessage)}</div>` : ""}
+          ${renderAdapterStatusDetails(gateway, adapterType, napcatState)}
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>Agent 连接</h2>
+            <span class="pill ${agentClass}">${agentText}</span>
+          </div>
+          <div class="section-note" style="overflow-wrap:anywhere">会话 ID：${escapeHtml(agentState.monitorThreadId || "-")}</div>
+          <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">会话线程名：${escapeHtml(agentState.monitorThreadName || gateway.codexThreadName || "-")}</div>
+          <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">自动发现：${escapeHtml(agentState.lastAutoDiscoveryAt || "-")}</div>
+          <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后成功：${escapeHtml(agentState.lastNotificationAt || "-")}</div>
+          <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">通知数：${escapeHtml(String(agentState.notificationCount || 0))}</div>
+          ${agentError ? `<div class="section-note" style="margin-top:9px;color:var(--red);overflow-wrap:anywhere">最后错误：${escapeHtml(agentError)}</div>` : ""}
+          ${agentState.lastNotificationErrorAt ? `<div class="section-note" style="margin-top:5px;overflow-wrap:anywhere">错误时间：${escapeHtml(agentState.lastNotificationErrorAt)}</div>` : ""}
+          <div class="section-note" style="margin-top:9px;overflow-wrap:anywhere">来源：${escapeHtml(agentState.monitorThreadSource || "-")}</div>
+          <div class="section-note" style="margin-top:9px;overflow-wrap:anywhere">Agent 状态文件：${escapeHtml(agentState.statePath || "-")}</div>
+        </section>
+        <section class="section">
+          <div class="section-head"><h2>日志</h2><span class="section-note">最近 18 行</span></div>
+          <pre>${escapeHtml(logs || "暂无日志")}</pre>
+        </section>
+      `;
+    }
+
+    const helpText = {
+      id: "Gateway 的唯一 ID，只能使用英文、数字、下划线或短横线。",
+      name: "显示名称，只影响管理台上的可读标题。",
+      routeName: "当前路由人格这套路由的名称，会和该人格的 routes.json 一起保存。",
+      enabled: "是否由 manager 自动启动这条 gateway。",
+      messageAdapterType: "选择消息进入 RabiRoute 的适配端。NapCat 当前可用，其他类型先作为框架预留。",
+      gatewayPort: "当前消息端使用的本地监听端口。不同消息端会有不同协议含义。",
+      napcatHttpUrl: "NapCat / OneBot HTTP Server 地址，用于主动调用 OneBot API。",
+      routeVariableName: "变量名只能使用英文、数字和下划线，并且不能以数字开头。正则里使用 {变量名}。",
+      routeVariableValue: "变量值会在匹配正则前按字面量转义，避免昵称里的特殊字符破坏正则。",
+      codexThreadName: "Agent 接收 QQ 消息的固定会话线程名。",
+      codexCwd: "Agent 处理消息时使用的工作目录。",
+      rolesDir: "存放角色文件夹的目录。每个角色一个子文件夹，默认读取其中的 persona.md。",
+      agentRoleId: "选择路由人格。不同人格有自己的 persona 和路由规则，对话日志也会写入对应角色目录。",
+      forwardTargets: "Agent 处理端配置，多个目标用英文逗号分隔。当前支持 codexDesktop 和 codexApp。",
+      dataDir: "基础数据目录。未选择角色时日志写在这里；选择角色后日志写入角色目录。",
+      ruleName: "规则名称，只用于管理台展示。",
+      ruleEnabled: "关闭后这条规则会被跳过。",
+      ruleRouteKinds: "限定这条规则响应哪些消息路由。不勾选表示不限。",
+      ruleTargetGroupId: "只让这条规则响应某个群时填写群号；留空表示不限群。",
+      ruleRegex: "留空表示不做消息内容过滤；填写后会按正则匹配消息内容，适合让普通群消息按关键词触发，例如 需求|报错|构建失败。",
+      ruleTemplate: "命中这条规则时转发给 Agent 的消息模板。"
+    };
+
+    function input(index, field, label, value, className = "") {
+      return `<label class="${className}"><span class="label-row">${label}${help(helpText[field] || "")}</span><input data-index="${index}" data-field="${field}" value="${escapeAttr(String(value))}"></label>`;
     }
 
     function select(index, field, label, value, options) {
@@ -172,12 +871,327 @@
         : [{ label: `当前配置 (${stringValue})`, value: stringValue }, ...options];
       const optionHtml = allOptions.length
         ? allOptions.map(option => `<option value="${escapeAttr(String(option.value))}" ${String(option.value) === stringValue ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")
-        : `<option value="${escapeAttr(stringValue)}">${escapeHtml(stringValue || "未从 NapCat 配置读取到选项")}</option>`;
+        : `<option value="${escapeAttr(stringValue)}">${escapeHtml(stringValue || "未读取到选项")}</option>`;
       return `<label><span class="label-row">${label}${help(helpText[field] || "")}</span><select data-index="${index}" data-field="${field}">${optionHtml}</select></label>`;
     }
 
-    function textarea(index, field, label, value) {
-      return `<label><span class="label-row">${label}${help(helpText[field] || "")}</span><textarea data-index="${index}" data-field="${field}">${escapeHtml(String(value))}</textarea></label>`;
+    function roleOptionsForGateway(gateway) {
+      const runtime = gatewayRuntime(gateway.id);
+      const roleInfo = runtime.roleInfo || {};
+      return [{ label: "不注入角色", value: "" }, ...((roleInfo.options || []).map(role => ({
+        label: role.label || role.value,
+        value: role.value
+      })))];
+    }
+
+    function roleSelect(index, gateway) {
+      return select(index, "agentRoleId", "路由人格", gateway.agentRoleId || "", roleOptionsForGateway(gateway));
+    }
+
+    function messageAdapterSelect(index, gateway) {
+      return select(index, "messageAdapterType", "消息端类型", gateway.messageAdapterType || "napcat", [
+        { label: "NapCat / OneBot", value: "napcat" },
+        { label: "Webhook（预留）", value: "webhook" },
+        { label: "禁用消息端", value: "disabled" }
+      ]);
+    }
+
+    function adapterLabel(type) {
+      if (type === "napcat") return "NapCat / OneBot";
+      if (type === "webhook") return "Webhook";
+      if (type === "disabled") return "禁用消息端";
+      return type || "未知消息端";
+    }
+
+    function adapterOptions(type) {
+      const adapters = networkOptions.adapters || {};
+      if (type === "napcat") {
+        return {
+          httpServers: adapters.napcat?.httpServers || networkOptions.httpServers || [],
+          websocketClients: adapters.napcat?.websocketClients || networkOptions.websocketClients || []
+        };
+      }
+      if (type === "webhook") {
+        return {
+          listeners: adapters.webhook?.listeners || []
+        };
+      }
+      return {};
+    }
+
+    function renderMessageAdapterFields(index, gateway) {
+      const type = gateway.messageAdapterType || "napcat";
+      const options = adapterOptions(type);
+      if (type === "napcat") {
+        return `
+          ${select(index, "gatewayPort", "NapCat WS", gateway.gatewayPort || "", options.websocketClients || [])}
+          ${select(index, "napcatHttpUrl", "NapCat HTTP", gateway.napcatHttpUrl || "http://127.0.0.1:3000", options.httpServers || [])}
+        `;
+      }
+      if (type === "webhook") {
+        const listeners = options.listeners || [];
+        return `
+          ${select(index, "gatewayPort", "Webhook 端口", gateway.gatewayPort || "", listeners)}
+          <label><span class="label-row">Webhook 路径${help("预留字段。后续接入 Webhook 消息端时，用来区分不同入口路径。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
+        `;
+      }
+      return `<div class="empty" style="padding:12px;text-align:left">当前 gateway 不监听外部消息。</div>`;
+    }
+
+    function renderAdapterStatusDetails(gateway, adapterType, napcatState) {
+      if (adapterType !== "napcat") {
+        if (adapterType === "webhook") {
+          return `
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">监听：${escapeHtml(String(gateway.gatewayPort || "-"))}${escapeHtml(gateway.webhookPath || "/webhook")}</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：Webhook adapter 目前是预留入口。</div>
+          `;
+        }
+        return `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：消息端已禁用。</div>`;
+      }
+      return `
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">HTTP: ${escapeHtml(gateway.napcatHttpUrl || "http://127.0.0.1:3000")}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">WS: ws://127.0.0.1:${escapeHtml(String(gateway.gatewayPort || "-"))}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">远端：${escapeHtml(napcatState.remoteAddress || "-")}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后连接：${escapeHtml(napcatState.lastConnectedAt || "-")}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后断开：${escapeHtml(napcatState.lastDisconnectedAt || "-")}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后消息：${escapeHtml(napcatState.lastMessageAt || "-")}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">消息数：${escapeHtml(String(napcatState.messageCount || 0))}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">机器人：${escapeHtml(napcatState.botNickname || "-")}${napcatState.botUserId ? ` (${escapeHtml(napcatState.botUserId)})` : ""}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">资料刷新：${escapeHtml(napcatState.lastLoginInfoAt || "-")}</div>
+        ${napcatState.loginInfoError ? `<div class="section-note" style="margin-top:9px;color:var(--red);overflow-wrap:anywhere">资料读取失败：${escapeHtml(napcatState.loginInfoError)}</div>` : ""}
+      `;
+    }
+
+    function applyAdapterDefaults(gateway) {
+      const type = gateway.messageAdapterType || "napcat";
+      const options = adapterOptions(type);
+      if (type === "napcat") {
+        const ws = options.websocketClients || [];
+        const http = options.httpServers || [];
+        if (ws.length > 0 && !ws.some(option => String(option.value) === String(gateway.gatewayPort))) {
+          gateway.gatewayPort = Number(ws[0].value);
+        }
+        if (http.length > 0 && !http.some(option => String(option.value) === String(gateway.napcatHttpUrl))) {
+          gateway.napcatHttpUrl = http[0].value;
+        }
+      }
+      if (type === "webhook") {
+        const listeners = options.listeners || [];
+        if (listeners.length > 0 && !listeners.some(option => String(option.value) === String(gateway.gatewayPort))) {
+          gateway.gatewayPort = Number(listeners[0].value);
+        }
+        gateway.webhookPath = gateway.webhookPath || "/webhook";
+      }
+    }
+
+    function agentConfigSelect(index, gateway) {
+      const selected = Array.isArray(gateway.forwardTargets) ? gateway.forwardTargets[0] : gateway.forwardTargets || "codexDesktop";
+      return select(index, "forwardTargets", "Agent 配置", selected, [
+        { label: "CodexDesktop", value: "codexDesktop" },
+        { label: "CodexApp", value: "codexApp" }
+      ]);
+    }
+
+    function renderRolePreview(gateway, roleId) {
+      const runtime = gatewayRuntime(gateway.id);
+      const roleInfo = runtime.roleInfo || {};
+      if (!roleId) {
+        return `<div class="empty">未选择角色，发送时不会注入人格提示词。</div>`;
+      }
+      const role = (roleInfo.options || []).find(item => item.value === roleId) || {};
+      const roleError = role.roleError || (roleId === roleInfo.selectedRoleId ? roleInfo.selectedRoleError : "");
+      if (roleError) {
+        return `<div class="empty">读取角色文件失败：${escapeHtml(roleError)}</div>`;
+      }
+      const content = role.roleContent || (roleId === roleInfo.selectedRoleId ? roleInfo.selectedRoleContent : "");
+      if (!content.trim()) {
+        return `<div class="empty">角色文件为空或尚未刷新。</div>`;
+      }
+      const rolePath = role.rolePath || (roleId === roleInfo.selectedRoleId ? roleInfo.selectedRolePath : "");
+      return `
+        <div class="section-note" style="overflow-wrap:anywhere">文件：${escapeHtml(rolePath || "")}</div>
+        <pre style="min-height:160px;max-height:360px;margin-top:8px">${escapeHtml(content)}</pre>
+      `;
+    }
+
+    function renderTemplateVars() {
+      return templateVars.map(item => `
+        <div class="template-var">
+          <code>{${escapeHtml(item.name)}}</code>
+          <span>${escapeHtml(item.description)}</span>
+        </div>
+      `).join("");
+    }
+
+    function renderRule(index, ruleIndex, rule) {
+      const gateway = state.gateways[index];
+      const safeRule = normalizeRule(rule, ruleIndex);
+      const routeKindOptions = Object.entries(routeKindLabels).map(([value, label]) => `
+        <label><input type="checkbox" data-index="${index}" data-rule-index="${ruleIndex}" data-route-kind="${value}" ${safeRule.routeKinds.includes(value) ? "checked" : ""}>${label}</label>
+      `).join("");
+
+      return `
+        <article class="rule-card">
+          <div class="rule-top">
+            <label><span class="label-row">名称${help(helpText.ruleName)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="name" value="${escapeAttr(safeRule.name)}"></label>
+            <label class="inline-check"><input type="checkbox" data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="enabled" ${safeRule.enabled !== false ? "checked" : ""}>启用</label>
+          </div>
+          <div class="rule-body">
+            <div class="rule-tools">
+              <div class="route-kind-box">
+                <span class="label-row">路由类型${help(helpText.ruleRouteKinds)}</span>
+                ${routeKindOptions}
+              </div>
+              <details class="route-extension">
+                <summary>路由扩展规则</summary>
+                <div class="route-extension-content">
+                  <label><span class="label-row">目标群号${help(helpText.ruleTargetGroupId)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="targetGroupId" value="${escapeAttr(safeRule.targetGroupId || "")}" placeholder="留空=不限群"></label>
+                  <label><span class="label-row">消息匹配${help(helpText.ruleRegex)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="regex" value="${escapeAttr(safeRule.regex || "")}" placeholder="例如：需求|报错|构建失败"></label>
+                </div>
+              </details>
+              <div class="section-note rule-note">扩展规则留空时只看路由类型；填写后会继续按群号或关键词筛选。间接回复会同时匹配被回复消息。</div>
+              <button type="button" class="danger" onclick="removeNotificationRule(${index}, ${ruleIndex})">删除规则</button>
+            </div>
+            <label class="template-editor"><span class="label-row">模板${help(helpText.ruleTemplate)}</span><textarea spellcheck="false" data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="template">${escapeHtml(String(safeRule.template))}</textarea></label>
+          </div>
+        </article>
+      `;
+    }
+
+    function notificationRulesForGateway(gateway) {
+      ensureActiveRoleRules(gateway);
+      if (Array.isArray(gateway.notificationRules) && gateway.notificationRules.length > 0) {
+        return gateway.notificationRules;
+      }
+      gateway.notificationRules = defaultNotificationRules(gateway);
+      return gateway.notificationRules;
+    }
+
+    function cloneRules(rules) {
+      return JSON.parse(JSON.stringify(Array.isArray(rules) ? rules : []));
+    }
+
+    function activeRoleKey(gateway) {
+      return gateway.agentRoleId || "";
+    }
+
+    function defaultRouteNameForRole(roleId, gateway) {
+      if (roleId === "AIPM") return "AI PM 路由";
+      if (roleId === "Rabi") return "Rabi 路由";
+      return roleId || gateway.name || gateway.id || "默认路由";
+    }
+
+    function ensureRoleRouteNameStore(gateway) {
+      if (!gateway.roleRouteNames || typeof gateway.roleRouteNames !== "object" || Array.isArray(gateway.roleRouteNames)) {
+        gateway.roleRouteNames = {};
+      }
+      return gateway.roleRouteNames;
+    }
+
+    function activeRouteName(gateway) {
+      const roleKey = activeRoleKey(gateway);
+      const store = ensureRoleRouteNameStore(gateway);
+      if (roleKey && typeof store[roleKey] === "string" && store[roleKey].trim()) {
+        gateway.routeName = store[roleKey];
+      }
+      if (gateway.routeName && String(gateway.routeName).trim()) {
+        return String(gateway.routeName);
+      }
+      return defaultRouteNameForRole(roleKey, gateway);
+    }
+
+    function ensureRoleRuleStore(gateway) {
+      if (!gateway.roleNotificationRules || typeof gateway.roleNotificationRules !== "object" || Array.isArray(gateway.roleNotificationRules)) {
+        gateway.roleNotificationRules = {};
+      }
+      return gateway.roleNotificationRules;
+    }
+
+    function ensureActiveRoleRules(gateway) {
+      const roleKey = activeRoleKey(gateway);
+      const store = ensureRoleRuleStore(gateway);
+      const nameStore = ensureRoleRouteNameStore(gateway);
+      if (roleKey && !Array.isArray(store[roleKey]) && Array.isArray(gateway.notificationRules) && gateway.notificationRules.length > 0) {
+        store[roleKey] = cloneRules(gateway.notificationRules);
+      }
+      if (roleKey && Array.isArray(store[roleKey])) {
+        gateway.notificationRules = cloneRules(store[roleKey]);
+      }
+      if (roleKey && typeof nameStore[roleKey] !== "string") {
+        nameStore[roleKey] = gateway.routeName || defaultRouteNameForRole(roleKey, gateway);
+      }
+      if (roleKey && typeof nameStore[roleKey] === "string") {
+        gateway.routeName = nameStore[roleKey];
+      }
+    }
+
+    function switchGatewayRole(index, nextRoleId) {
+      const gateway = state.gateways[index];
+      const store = ensureRoleRuleStore(gateway);
+      const nameStore = ensureRoleRouteNameStore(gateway);
+      const currentRoleId = activeRoleKey(gateway);
+      if (currentRoleId) {
+        store[currentRoleId] = cloneRules(notificationRulesForGateway(gateway));
+        nameStore[currentRoleId] = activeRouteName(gateway);
+      }
+      gateway.agentRoleId = nextRoleId;
+      if (nextRoleId && Array.isArray(store[nextRoleId])) {
+        gateway.notificationRules = cloneRules(store[nextRoleId]);
+      } else {
+        gateway.notificationRules = defaultNotificationRules({ ...gateway, agentRoleId: nextRoleId });
+        if (nextRoleId) store[nextRoleId] = cloneRules(gateway.notificationRules);
+      }
+      gateway.routeName = nextRoleId
+        ? nameStore[nextRoleId] || defaultRouteNameForRole(nextRoleId, gateway)
+        : nameStore[""] || gateway.name || gateway.id || "默认路由";
+      if (nextRoleId) nameStore[nextRoleId] = gateway.routeName;
+      render();
+    }
+
+    function ensureRouteVariables(gateway) {
+      if (!gateway.routeVariables || typeof gateway.routeVariables !== "object" || Array.isArray(gateway.routeVariables)) {
+        gateway.routeVariables = {};
+      }
+      return gateway.routeVariables;
+    }
+
+    function renderRouteVariables(index, gateway) {
+      const entries = Object.entries(ensureRouteVariables(gateway));
+      if (entries.length === 0) {
+        return `<div class="empty">暂无自定义路由变量</div>`;
+      }
+      return entries.map(([key, value]) => `
+        <div class="variable-row">
+          <label><span class="label-row">变量名${help(helpText.routeVariableName)}</span><input data-index="${index}" data-variable-field="key" data-variable-key="${escapeAttr(key)}" value="${escapeAttr(key)}"></label>
+          <label><span class="label-row">变量值${help(helpText.routeVariableValue)}</span><input data-index="${index}" data-variable-field="value" data-variable-key="${escapeAttr(key)}" value="${escapeAttr(String(value))}"></label>
+          <button type="button" class="danger" onclick="removeRouteVariable(${index}, '${escapeAttr(key)}')">删除</button>
+        </div>
+      `).join("");
+    }
+
+    function normalizeRule(rule, index) {
+      return {
+        id: rule.id || `rule-${index + 1}`,
+        name: rule.name || rule.id || `规则 ${index + 1}`,
+        enabled: rule.enabled !== false,
+        routeKinds: Array.isArray(rule.routeKinds) ? rule.routeKinds : [],
+        targetGroupId: rule.targetGroupId || "",
+        regex: rule.regex || "",
+        template: rule.template || defaultGroupAtTemplate()
+      };
+    }
+
+    function defaultNotificationRules(gateway = {}) {
+      return [
+        { id: "group-direct-at", name: "直接 @ 模板", enabled: true, routeKinds: ["direct_at"], targetGroupId: "", regex: "", template: gateway.groupAtNotificationTemplate || gateway.groupNotificationTemplate || defaultGroupAtTemplate() },
+        { id: "group-direct-reply", name: "直接回复模板", enabled: true, routeKinds: ["direct_reply"], targetGroupId: "", regex: "", template: gateway.groupDirectReplyNotificationTemplate || gateway.groupReplyNotificationTemplate || defaultGroupDirectReplyTemplate() },
+        { id: "group-indirect-reply", name: "间接回复模板", enabled: true, routeKinds: ["indirect_reply"], targetGroupId: "", regex: "", template: gateway.groupIndirectReplyNotificationTemplate || gateway.groupNicknameNotificationTemplate || defaultGroupIndirectReplyTemplate() },
+        { id: "private-message", name: "私聊消息模板", enabled: true, routeKinds: ["private"], targetGroupId: "", regex: "", template: gateway.privateNotificationTemplate || defaultPrivateTemplate() }
+      ];
+    }
+
+    function escapeRegex(value) {
+      return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
 
     function groupTemplate(title) {
@@ -192,19 +1206,8 @@
         "请在需要时读取 {groupLogPath} 查看上下文。"
       ].join("\\n");
     }
-
-    function defaultGroupAtTemplate() {
-      return groupTemplate("群聊里有人 @ 了机器人");
-    }
-
-    function defaultGroupReplyTemplate() {
-      return groupTemplate("群聊里有人直接回复机器人");
-    }
-
-    function defaultGroupDirectReplyTemplate() {
-      return defaultGroupReplyTemplate();
-    }
-
+    function defaultGroupAtTemplate() { return groupTemplate("群聊里有人 @ 了机器人"); }
+    function defaultGroupDirectReplyTemplate() { return groupTemplate("群聊里有人直接回复机器人"); }
     function defaultGroupIndirectReplyTemplate() {
       return [
         "QQ 消息更新提醒：群聊里有人回复了一条提到机器人的消息。",
@@ -218,7 +1221,6 @@
         "请在需要时读取 {groupLogPath} 查看上下文。"
       ].join("\\n");
     }
-
     function defaultPrivateTemplate() {
       return [
         "QQ 消息更新提醒：收到一条私聊消息。",
@@ -233,9 +1235,29 @@
     }
 
     function bindInputs() {
+      document.querySelectorAll("[data-select-gateway]").forEach(element => {
+        element.addEventListener("click", () => {
+          selectedGatewayId = element.dataset.selectGateway;
+          render();
+        });
+      });
       document.querySelectorAll("[data-field]").forEach(element => {
         element.addEventListener("input", updateValue);
         element.addEventListener("change", updateValue);
+      });
+      document.querySelectorAll("[data-rule-field]").forEach(element => {
+        element.addEventListener("input", updateRuleValue);
+        element.addEventListener("change", updateRuleValue);
+      });
+      document.querySelectorAll(".template-editor textarea").forEach(element => {
+        autoSizeTemplateTextarea(element);
+      });
+      document.querySelectorAll("[data-route-kind]").forEach(element => {
+        element.addEventListener("change", updateRuleKinds);
+      });
+      document.querySelectorAll("[data-variable-field]").forEach(element => {
+        element.addEventListener("input", updateRouteVariable);
+        element.addEventListener("change", updateRouteVariable);
       });
       document.querySelectorAll(".help").forEach(element => {
         element.addEventListener("mouseenter", () => showTooltip(element));
@@ -252,41 +1274,9 @@
             if (active !== element) active.classList.remove("active");
           });
           element.classList.toggle("active");
-          if (element.classList.contains("active")) {
-            showTooltip(element);
-          } else {
-            hideTooltip();
-          }
+          if (element.classList.contains("active")) showTooltip(element); else hideTooltip();
         });
       });
-    }
-
-    function showTooltip(anchor) {
-      const tooltip = document.getElementById("tooltip");
-      tooltip.textContent = anchor.dataset.help || "";
-      tooltip.classList.add("visible");
-      tooltip.style.transform = "translate3d(0, 0, 0)";
-
-      const anchorRect = anchor.getBoundingClientRect();
-      const tooltipRect = tooltip.getBoundingClientRect();
-      const margin = 12;
-      let left = anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2;
-      left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
-
-      let top = anchorRect.top - tooltipRect.height - 8;
-      if (top < margin) {
-        top = anchorRect.bottom + 8;
-      }
-      top = Math.max(margin, Math.min(top, window.innerHeight - tooltipRect.height - margin));
-
-      tooltip.style.left = `${left}px`;
-      tooltip.style.top = `${top}px`;
-    }
-
-    function hideTooltip() {
-      const tooltip = document.getElementById("tooltip");
-      tooltip.classList.remove("visible");
-      tooltip.style.transform = "translate3d(-9999px, -9999px, 0)";
     }
 
     function updateValue(event) {
@@ -294,8 +1284,168 @@
       const field = event.target.dataset.field;
       let value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
       if (field === "gatewayPort") value = Number(value);
-      if (field === "forwardTargets") value = String(value).split(",").map(item => item.trim()).filter(Boolean);
+      if (field === "forwardTargets") value = String(value).trim() ? [String(value).trim()] : [];
+      if (field === "agentRoleId") {
+        switchGatewayRole(index, String(value));
+        return;
+      }
+      if (field === "messageAdapterType") {
+        state.gateways[index].messageAdapterType = String(value);
+        applyAdapterDefaults(state.gateways[index]);
+        render();
+        return;
+      }
+      if (field === "routeName") {
+        state.gateways[index].routeName = String(value);
+        const roleKey = activeRoleKey(state.gateways[index]);
+        if (roleKey) {
+          ensureRoleRouteNameStore(state.gateways[index])[roleKey] = String(value);
+        }
+        renderGatewayList();
+        renderRuntimePanel();
+        return;
+      }
       state.gateways[index][field] = value;
+      if (field === "id") selectedGatewayId = value;
+      renderGatewayList();
+      renderRuntimePanel();
+    }
+
+    function updateRuleValue(event) {
+      const index = Number(event.target.dataset.index);
+      const ruleIndex = Number(event.target.dataset.ruleIndex);
+      const field = event.target.dataset.ruleField;
+      const rules = notificationRulesForGateway(state.gateways[index]);
+      rules[ruleIndex][field] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+      const roleKey = activeRoleKey(state.gateways[index]);
+      if (roleKey) {
+        ensureRoleRuleStore(state.gateways[index])[roleKey] = cloneRules(rules);
+      }
+      if (field === "template") {
+        autoSizeTemplateTextarea(event.target);
+      }
+    }
+
+    function autoSizeTemplateTextarea(element) {
+      element.style.height = "auto";
+      const maxHeight = 420;
+      const ruleBody = element.closest(".rule-body");
+      const toolsHeight = ruleBody ? ruleBody.querySelector(".rule-tools")?.scrollHeight || 0 : 0;
+      const nextHeight = Math.min(Math.max(element.scrollHeight + 2, toolsHeight, 210), maxHeight);
+      element.style.height = `${nextHeight}px`;
+    }
+
+    function updateRuleKinds(event) {
+      const index = Number(event.target.dataset.index);
+      const ruleIndex = Number(event.target.dataset.ruleIndex);
+      const routeKind = event.target.dataset.routeKind;
+      const rules = notificationRulesForGateway(state.gateways[index]);
+      const routeKinds = new Set(Array.isArray(rules[ruleIndex].routeKinds) ? rules[ruleIndex].routeKinds : []);
+      if (event.target.checked) {
+        routeKinds.add(routeKind);
+      } else {
+        routeKinds.delete(routeKind);
+      }
+      rules[ruleIndex].routeKinds = [...routeKinds];
+      const roleKey = activeRoleKey(state.gateways[index]);
+      if (roleKey) {
+        ensureRoleRuleStore(state.gateways[index])[roleKey] = cloneRules(rules);
+      }
+    }
+
+    function updateRouteVariable(event) {
+      const index = Number(event.target.dataset.index);
+      const oldKey = event.target.dataset.variableKey;
+      const field = event.target.dataset.variableField;
+      const variables = ensureRouteVariables(state.gateways[index]);
+      if (field === "value") {
+        variables[oldKey] = event.target.value;
+        return;
+      }
+
+      const nextKey = event.target.value.trim();
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(nextKey) || nextKey === oldKey) {
+        return;
+      }
+      variables[nextKey] = variables[oldKey] ?? "";
+      delete variables[oldKey];
+      render();
+    }
+
+    function addRouteVariable(index) {
+      const variables = ensureRouteVariables(state.gateways[index]);
+      let next = 1;
+      while (variables[`Variable${next}`] != null) next += 1;
+      variables[`Variable${next}`] = "";
+      render();
+    }
+
+    function removeRouteVariable(index, key) {
+      const variables = ensureRouteVariables(state.gateways[index]);
+      delete variables[key];
+      render();
+    }
+
+    function addNotificationRule(index) {
+      const rules = notificationRulesForGateway(state.gateways[index]);
+      const next = rules.length + 1;
+      rules.push({
+        id: `rule-${Date.now().toString(36)}-${next}`,
+        name: `规则 ${next}`,
+        enabled: true,
+        routeKinds: [],
+        targetGroupId: "",
+        regex: "",
+        template: defaultGroupAtTemplate()
+      });
+      const roleKey = activeRoleKey(state.gateways[index]);
+      if (roleKey) {
+        ensureRoleRuleStore(state.gateways[index])[roleKey] = cloneRules(rules);
+      }
+      render();
+    }
+
+    function removeNotificationRule(index, ruleIndex) {
+      const rules = notificationRulesForGateway(state.gateways[index]);
+      rules.splice(ruleIndex, 1);
+      const roleKey = activeRoleKey(state.gateways[index]);
+      if (roleKey) {
+        ensureRoleRuleStore(state.gateways[index])[roleKey] = cloneRules(rules);
+      }
+      render();
+    }
+
+    function addGateway() {
+      const next = state.gateways.length + 1;
+      const gateway = {
+        id: `gateway-${next}`,
+        name: `网关 ${next}`,
+        routeName: `路由 ${next}`,
+        enabled: true,
+        messageAdapterType: "napcat",
+        gatewayPort: 8789 + next,
+        napcatHttpUrl: "http://127.0.0.1:3000",
+        routeVariables: {},
+        codexThreadName: `QQ 消息监听 ${next}`,
+        codexCwd: "C:\\\\Path\\\\To\\\\Your\\\\Project",
+        rolesDir: `./data/gateway-${next}/roles`,
+        agentRoleId: "",
+        agentRoleFile: "persona.md",
+        forwardTargets: ["codexDesktop"],
+        dataDir: `./data/gateway-${next}`,
+        notificationRules: [],
+        roleRouteNames: {}
+      };
+      gateway.notificationRules = defaultNotificationRules(gateway);
+      state.gateways.push(gateway);
+      selectedGatewayId = gateway.id;
+      render();
+    }
+
+    function removeGateway(id) {
+      state.gateways = state.gateways.filter(gateway => gateway.id !== id);
+      if (selectedGatewayId === id) selectedGatewayId = state.gateways[0]?.id || "";
+      render();
     }
 
     async function load() {
@@ -304,11 +1454,16 @@
         const networkResponse = await fetch(`${apiBase}/network-options`);
         const networkBody = await networkResponse.json();
         if (networkResponse.ok && networkBody.code === 0 && networkBody.data) {
-          networkOptions = networkBody.data;
+          networkOptions = {
+            adapters: networkBody.data.adapters || {},
+            httpServers: networkBody.data.httpServers || [],
+            websocketClients: networkBody.data.websocketClients || []
+          };
         }
       } catch {
-        networkOptions = { httpServers: [], websocketClients: [] };
+        networkOptions = { adapters: {}, httpServers: [], websocketClients: [] };
       }
+
       const response = await fetch(`${apiBase}/gateways`);
       const body = await response.json();
       if (!response.ok || body.code !== 0 || !body.data || !body.data.config) {
@@ -320,15 +1475,11 @@
     }
 
     async function loadPluginConfig() {
-      if (!isPluginShell) {
-        return;
-      }
+      if (!isPluginShell) return;
       try {
         const response = await fetch(`${pluginApiBase}/config`);
         const body = await response.json();
-        const managerUrl = body && body.code === 0 && body.data && body.data.managerUrl
-          ? body.data.managerUrl
-          : "http://127.0.0.1:8790";
+        const managerUrl = body && body.code === 0 && body.data && body.data.managerUrl ? body.data.managerUrl : "http://127.0.0.1:8790";
         document.getElementById("standalone-link").href = managerUrl.replace(/\/$/, "") + "/";
       } catch {
         document.getElementById("standalone-link").href = "http://127.0.0.1:8790/";
@@ -356,55 +1507,51 @@
       setTimeout(load, 700);
     }
 
-    function removeGateway(id) {
-      state.gateways = state.gateways.filter(gateway => gateway.id !== id);
-      render();
+    function help(text) {
+      return `<span class="help" tabindex="0" data-help="${escapeAttr(text)}">?</span>`;
     }
 
-    function addGateway() {
-      const next = state.gateways.length + 1;
-      state.gateways.push({
-        id: `gateway-${next}`,
-        name: `网关 ${next}`,
-        enabled: true,
-        gatewayPort: 8789 + next,
-        napcatHttpUrl: "http://127.0.0.1:3000",
-        targetGroupId: "",
-        botNickname: "QQ小助手",
-        codexThreadName: `QQ 消息监听 ${next}`,
-        codexCwd: "C:\\\\Path\\\\To\\\\Your\\\\Project",
-        forwardTargets: ["codexDesktop"],
-        dataDir: `./data/gateway-${next}`,
-        groupNotificationTemplate: defaultGroupAtTemplate(),
-        groupAtNotificationTemplate: defaultGroupAtTemplate(),
-        groupDirectReplyNotificationTemplate: defaultGroupDirectReplyTemplate(),
-        groupIndirectReplyNotificationTemplate: defaultGroupIndirectReplyTemplate(),
-        privateNotificationTemplate: defaultPrivateTemplate(),
-      });
-      render();
+    function showTooltip(anchor) {
+      const tooltip = document.getElementById("tooltip");
+      tooltip.textContent = anchor.dataset.help || "";
+      tooltip.classList.add("visible");
+      tooltip.style.transform = "translate3d(0, 0, 0)";
+      const anchorRect = anchor.getBoundingClientRect();
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const margin = 12;
+      let left = anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2;
+      left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
+      let top = anchorRect.top - tooltipRect.height - 8;
+      if (top < margin) top = anchorRect.bottom + 8;
+      top = Math.max(margin, Math.min(top, window.innerHeight - tooltipRect.height - margin));
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+    }
+
+    function hideTooltip() {
+      const tooltip = document.getElementById("tooltip");
+      tooltip.classList.remove("visible");
+      tooltip.style.transform = "translate3d(-9999px, -9999px, 0)";
     }
 
     function escapeHtml(value) {
-      return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+      return String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
     }
-
-    function escapeAttr(value) {
-      return escapeHtml(value);
-    }
+    function escapeAttr(value) { return escapeHtml(value); }
 
     document.getElementById("refresh").addEventListener("click", load);
     document.getElementById("save").addEventListener("click", save);
     document.getElementById("add").addEventListener("click", addGateway);
     document.getElementById("start-manager").addEventListener("click", startManager);
     document.addEventListener("click", event => {
-      if (event.target.closest && event.target.closest(".help")) {
-        return;
-      }
+      if (event.target.closest && event.target.closest(".help")) return;
       document.querySelectorAll(".help.active").forEach(element => element.classList.remove("active"));
       hideTooltip();
     });
     load().catch(error => {
-      document.getElementById("status").textContent = error.message;
+      managerRows = Object.assign([], { error: error.message });
+      document.getElementById("editor").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      render();
     });
   </script>
 </body>
