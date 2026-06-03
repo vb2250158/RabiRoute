@@ -404,6 +404,29 @@
     }
     .route-kind-box label { display: flex; align-items: center; gap: 6px; color: var(--ink); font-size: 12px; font-weight: 700; }
     .route-kind-box input { width: auto; }
+    .adapter-list { grid-column: 1 / -1; display: grid; gap: 9px; }
+    .adapter-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.78);
+    }
+    .adapter-fieldset {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid rgba(25,191,193,.18);
+      border-radius: 8px;
+      background: rgba(236,252,255,.46);
+    }
+    .adapter-fieldset .section-note,
+    .adapter-fieldset .field-wide { grid-column: 1 / -1; }
     .route-extension {
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -574,10 +597,11 @@
       direct_reply: "群聊-直接回复",
       indirect_reply: "群聊-间接回复",
       group_message: "群聊-普通消息",
-      private: "私聊"
+      private: "私聊",
+      heartbeat: "定时触发"
     };
     const templateVars = [
-      { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message。" },
+      { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message、heartbeat。" },
       { name: "RobotQQId", description: "机器人 QQ 号，来自当前消息事件 self_id。" },
       { name: "SenderQQId", description: "发送者 QQ 号。" },
       { name: "GroupId", description: "群号；私聊时为空。" },
@@ -595,7 +619,9 @@
       { name: "agentRolePath", description: "当前路由人格文件路径。" },
       { name: "agentRoleDir", description: "当前路由人格的数据目录。" },
       { name: "groupLogPath", description: "群聊消息 JSONL 记录路径。" },
-      { name: "privateLogPath", description: "私聊消息 JSONL 记录路径。" }
+      { name: "privateLogPath", description: "私聊消息 JSONL 记录路径。" },
+      { name: "heartbeatLogPath", description: "定时触发事件 JSONL 记录路径。" },
+      { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" }
     ];
     let state = { gateways: [] };
     let managerRows = [];
@@ -683,7 +709,7 @@
             <div class="config-group">
               <div class="config-group-head">
                 <h3>消息适配端</h3>
-                <span class="section-note">NapCat 到 RabiRoute，再转发给处理端</span>
+                <span class="section-note">多个消息入口可以并存，定时触发会直接路由给 Agent</span>
               </div>
               <div class="fields">
                 ${messageAdapterSelect(index, gateway)}
@@ -772,16 +798,27 @@
       const running = runtime.running ? "running" : "stopped";
       const gatewayStatus = runtime.gatewayStatus || {};
       const adapterState = gatewayStatus.messageAdapter || {};
-      const adapterType = gateway.messageAdapterType || adapterState.type || "napcat";
-      const runtimeAdapterType = runtime.messageAdapterType || adapterState.type || "napcat";
-      const adapterPendingRestart = adapterType !== runtimeAdapterType;
+      const adapterTypes = gatewayAdapterTypes(gateway);
+      const runtimeAdapterTypes = Array.isArray(runtime.messageAdapters) && runtime.messageAdapters.length > 0
+        ? runtime.messageAdapters
+        : [runtime.messageAdapterType || adapterState.type || "napcat"];
+      const adapterPendingRestart = adapterTypes.join(",") !== runtimeAdapterTypes.join(",");
       const adapterMessage = adapterPendingRestart
-        ? `当前运行的是 ${adapterLabel(runtimeAdapterType)}，保存并重启后切换到 ${adapterLabel(adapterType)}。`
+        ? `当前运行的是 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${adapterTypes.map(adapterLabel).join(" + ")}。`
         : adapterState.message || "";
       const napcatState = gatewayStatus.napcat || {};
       const napcatConnected = Boolean(napcatState.connected);
-      const napcatClass = adapterType === "disabled" ? "draft" : adapterType === "napcat" ? napcatConnected ? "running" : "stopped" : "draft";
-      const napcatText = adapterType === "disabled" ? "已禁用" : adapterType === "napcat" ? napcatConnected ? "已连接" : "未连接" : "预留";
+      const heartbeatState = gatewayStatus.heartbeat || {};
+      const adapterClass = adapterTypes.includes("disabled")
+        ? "draft"
+        : adapterTypes.includes("napcat") && !napcatConnected
+          ? "stopped"
+          : "running";
+      const adapterText = adapterTypes.includes("disabled")
+        ? "已禁用"
+        : adapterTypes.includes("napcat") && !napcatConnected
+          ? "部分未连接"
+          : "已启用";
       const agentState = runtime.codexState || {};
       const agentError = agentState.lastNotificationError || "";
       const agentBound = Boolean(agentState.monitorThreadId);
@@ -794,7 +831,7 @@
             <span class="pill ${running}">${runtime.running ? "运行中" : "已停止"}</span>
           </div>
           <div class="metric-row">
-            <div class="metric"><b>${adapterType === "disabled" ? "-" : gateway.gatewayPort || "-"}</b><span>${adapterType === "napcat" ? "WS Port" : adapterType === "webhook" ? "HTTP Port" : "Adapter"}</span></div>
+            <div class="metric"><b>${adapterTypes.length}</b><span>消息端</span></div>
             <div class="metric"><b>${runtime.pid || "-"}</b><span>PID</span></div>
           </div>
           <div class="top-actions" style="justify-content:flex-start;margin-top:12px">
@@ -807,11 +844,11 @@
         <section class="section">
           <div class="section-head">
             <h2>消息端连接</h2>
-            <span class="pill ${napcatClass}">${napcatText}</span>
+            <span class="pill ${adapterClass}">${adapterText}</span>
           </div>
-          <div class="section-note" style="overflow-wrap:anywhere">类型：${escapeHtml(adapterLabel(adapterType))}</div>
+          <div class="section-note" style="overflow-wrap:anywhere">类型：${escapeHtml(adapterTypes.map(adapterLabel).join(" + "))}</div>
           ${adapterMessage ? `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">状态：${escapeHtml(adapterMessage)}</div>` : ""}
-          ${renderAdapterStatusDetails(gateway, adapterType, napcatState)}
+          ${adapterTypes.map(type => renderAdapterStatusDetails(gateway, type, napcatState, heartbeatState)).join("")}
         </section>
         <section class="section">
           <div class="section-head">
@@ -841,6 +878,7 @@
       routeName: "当前路由人格这套路由的名称，会和该人格的 routes.json 一起保存。",
       enabled: "是否由 manager 自动启动这条 gateway。",
       messageAdapterType: "选择消息进入 RabiRoute 的适配端。NapCat 当前可用，其他类型先作为框架预留。",
+      messageAdapters: "消息进入 RabiRoute 的入口列表。可以添加多个，例如 NapCat 接收实时 QQ 消息，同时用定时触发替代 Agent 心跳任务。",
       gatewayPort: "当前消息端使用的本地监听端口。不同消息端会有不同协议含义。",
       napcatHttpUrl: "NapCat / OneBot HTTP Server 地址，用于主动调用 OneBot API。",
       routeVariableName: "变量名只能使用英文、数字和下划线，并且不能以数字开头。正则里使用 {变量名}。",
@@ -888,16 +926,52 @@
       return select(index, "agentRoleId", "路由人格", gateway.agentRoleId || "", roleOptionsForGateway(gateway));
     }
 
-    function messageAdapterSelect(index, gateway) {
-      return select(index, "messageAdapterType", "消息端类型", gateway.messageAdapterType || "napcat", [
+    function gatewayAdapterTypes(gateway) {
+      const adapters = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
+        ? gateway.messageAdapters
+        : [gateway.messageAdapterType || "napcat"];
+      if (adapters.includes("disabled")) return ["disabled"];
+      return [...new Set(adapters)].filter(type => type && type !== "disabled");
+    }
+
+    function messageAdapterOptions() {
+      return [
         { label: "NapCat / OneBot", value: "napcat" },
+        { label: "定时触发", value: "heartbeat" },
         { label: "Webhook（预留）", value: "webhook" },
         { label: "禁用消息端", value: "disabled" }
-      ]);
+      ];
+    }
+
+    function adapterTypeSelect(index, adapterIndex, value) {
+      const options = messageAdapterOptions();
+      const optionHtml = options.map(option => `<option value="${escapeAttr(option.value)}" ${option.value === value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
+      return `
+        <label>
+          <span class="label-row">消息适配器${help(helpText.messageAdapters)}</span>
+          <select data-index="${index}" data-adapter-index="${adapterIndex}" data-adapter-field="type">${optionHtml}</select>
+        </label>
+      `;
+    }
+
+    function messageAdapterSelect(index, gateway) {
+      const adapters = gatewayAdapterTypes(gateway);
+      return `
+        <div class="adapter-list">
+          ${adapters.map((type, adapterIndex) => `
+            <div class="adapter-row">
+              ${adapterTypeSelect(index, adapterIndex, type)}
+              <button type="button" class="danger" onclick="removeMessageAdapter(${index}, ${adapterIndex})">删除</button>
+            </div>
+          `).join("")}
+          <button type="button" class="accent" onclick="addMessageAdapter(${index})">添加消息适配器</button>
+        </div>
+      `;
     }
 
     function adapterLabel(type) {
       if (type === "napcat") return "NapCat / OneBot";
+      if (type === "heartbeat") return "定时触发";
       if (type === "webhook") return "Webhook";
       if (type === "disabled") return "禁用消息端";
       return type || "未知消息端";
@@ -916,32 +990,66 @@
           listeners: adapters.webhook?.listeners || []
         };
       }
+      if (type === "heartbeat") {
+        return {};
+      }
       return {};
     }
 
     function renderMessageAdapterFields(index, gateway) {
-      const type = gateway.messageAdapterType || "napcat";
-      const options = adapterOptions(type);
-      if (type === "napcat") {
-        return `
-          ${select(index, "gatewayPort", "NapCat WS", gateway.gatewayPort || "", options.websocketClients || [])}
-          ${select(index, "napcatHttpUrl", "NapCat HTTP", gateway.napcatHttpUrl || "http://127.0.0.1:3000", options.httpServers || [])}
-        `;
+      const types = gatewayAdapterTypes(gateway);
+      if (types.includes("disabled")) {
+        return `<div class="empty" style="padding:12px;text-align:left">当前 gateway 不接收任何消息入口。</div>`;
       }
-      if (type === "webhook") {
-        const listeners = options.listeners || [];
-        return `
-          ${select(index, "gatewayPort", "Webhook 端口", gateway.gatewayPort || "", listeners)}
-          <label><span class="label-row">Webhook 路径${help("预留字段。后续接入 Webhook 消息端时，用来区分不同入口路径。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
-        `;
-      }
-      return `<div class="empty" style="padding:12px;text-align:left">当前 gateway 不监听外部消息。</div>`;
+
+      return types.map(type => {
+        const options = adapterOptions(type);
+        if (type === "napcat") {
+          return `
+            <div class="adapter-fieldset">
+              <div class="section-note">NapCat / OneBot</div>
+              ${select(index, "gatewayPort", "NapCat WS", gateway.gatewayPort || "", options.websocketClients || [])}
+              ${select(index, "napcatHttpUrl", "NapCat HTTP", gateway.napcatHttpUrl || "http://127.0.0.1:3000", options.httpServers || [])}
+            </div>
+          `;
+        }
+        if (type === "heartbeat") {
+          return `
+            <div class="adapter-fieldset">
+              <div class="section-note">定时触发：不依赖 QQ/NapCat，到点后直接命中心跳路由并发送给 Agent。</div>
+              <label><span class="label-row">触发间隔（秒）${help("多久触发一次心跳路由。比如 900 表示每 15 分钟。")}</span><input type="number" min="1" step="1" data-index="${index}" data-field="heartbeatIntervalSeconds" value="${escapeAttr(gateway.heartbeatIntervalSeconds || 900)}"></label>
+              <label class="field-wide"><span class="label-row">触发消息${help("这句话会作为心跳路由的 message 变量发给 Agent。")}</span><textarea spellcheck="false" data-index="${index}" data-field="heartbeatMessage">${escapeHtml(gateway.heartbeatMessage || defaultHeartbeatMessage())}</textarea></label>
+            </div>
+          `;
+        }
+        if (type === "webhook") {
+          const listeners = options.listeners || [];
+          return `
+            <div class="adapter-fieldset">
+              <div class="section-note">Webhook（预留）</div>
+              ${select(index, "gatewayPort", "Webhook 端口", gateway.gatewayPort || "", listeners)}
+              <label><span class="label-row">Webhook 路径${help("预留字段。后续接入 Webhook 消息端时，用来区分不同入口路径。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
+            </div>
+          `;
+        }
+        return "";
+      }).join("");
     }
 
-    function renderAdapterStatusDetails(gateway, adapterType, napcatState) {
+    function renderAdapterStatusDetails(gateway, adapterType, napcatState, heartbeatState = {}) {
       if (adapterType !== "napcat") {
+        if (adapterType === "heartbeat") {
+          return `
+            <div class="section-note" style="margin-top:12px;color:var(--navy)">定时触发</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">间隔：${escapeHtml(String(gateway.heartbeatIntervalSeconds || heartbeatState.intervalSeconds || 900))} 秒</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后触发：${escapeHtml(heartbeatState.lastTickAt || "-")}</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">触发次数：${escapeHtml(String(heartbeatState.tickCount || 0))}</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：定时触发会直接命中 heartbeat 路由并发送给 Agent。</div>
+          `;
+        }
         if (adapterType === "webhook") {
           return `
+            <div class="section-note" style="margin-top:12px;color:var(--navy)">Webhook</div>
             <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">监听：${escapeHtml(String(gateway.gatewayPort || "-"))}${escapeHtml(gateway.webhookPath || "/webhook")}</div>
             <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：Webhook adapter 目前是预留入口。</div>
           `;
@@ -949,6 +1057,7 @@
         return `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：消息端已禁用。</div>`;
       }
       return `
+        <div class="section-note" style="margin-top:12px;color:var(--navy)">NapCat / OneBot</div>
         <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">HTTP: ${escapeHtml(gateway.napcatHttpUrl || "http://127.0.0.1:3000")}</div>
         <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">WS: ws://127.0.0.1:${escapeHtml(String(gateway.gatewayPort || "-"))}</div>
         <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">远端：${escapeHtml(napcatState.remoteAddress || "-")}</div>
@@ -963,9 +1072,9 @@
     }
 
     function applyAdapterDefaults(gateway) {
-      const type = gateway.messageAdapterType || "napcat";
-      const options = adapterOptions(type);
-      if (type === "napcat") {
+      const types = gatewayAdapterTypes(gateway);
+      if (types.includes("napcat")) {
+        const options = adapterOptions("napcat");
         const ws = options.websocketClients || [];
         const http = options.httpServers || [];
         if (ws.length > 0 && !ws.some(option => String(option.value) === String(gateway.gatewayPort))) {
@@ -975,13 +1084,19 @@
           gateway.napcatHttpUrl = http[0].value;
         }
       }
-      if (type === "webhook") {
-        const listeners = options.listeners || [];
+      if (types.includes("webhook")) {
+        const listeners = adapterOptions("webhook").listeners || [];
         if (listeners.length > 0 && !listeners.some(option => String(option.value) === String(gateway.gatewayPort))) {
           gateway.gatewayPort = Number(listeners[0].value);
         }
         gateway.webhookPath = gateway.webhookPath || "/webhook";
       }
+      if (types.includes("heartbeat")) {
+        gateway.heartbeatIntervalSeconds = Number(gateway.heartbeatIntervalSeconds || 900);
+        gateway.heartbeatMessage = gateway.heartbeatMessage || defaultHeartbeatMessage();
+      }
+      gateway.messageAdapterType = types[0] || "napcat";
+      gateway.messageAdapters = types.length > 0 ? types : ["napcat"];
     }
 
     function agentConfigSelect(index, gateway) {
@@ -1186,7 +1301,8 @@
         { id: "group-direct-at", name: "直接 @ 模板", enabled: true, routeKinds: ["direct_at"], targetGroupId: "", regex: "", template: gateway.groupAtNotificationTemplate || gateway.groupNotificationTemplate || defaultGroupAtTemplate() },
         { id: "group-direct-reply", name: "直接回复模板", enabled: true, routeKinds: ["direct_reply"], targetGroupId: "", regex: "", template: gateway.groupDirectReplyNotificationTemplate || gateway.groupReplyNotificationTemplate || defaultGroupDirectReplyTemplate() },
         { id: "group-indirect-reply", name: "间接回复模板", enabled: true, routeKinds: ["indirect_reply"], targetGroupId: "", regex: "", template: gateway.groupIndirectReplyNotificationTemplate || gateway.groupNicknameNotificationTemplate || defaultGroupIndirectReplyTemplate() },
-        { id: "private-message", name: "私聊消息模板", enabled: true, routeKinds: ["private"], targetGroupId: "", regex: "", template: gateway.privateNotificationTemplate || defaultPrivateTemplate() }
+        { id: "private-message", name: "私聊消息模板", enabled: true, routeKinds: ["private"], targetGroupId: "", regex: "", template: gateway.privateNotificationTemplate || defaultPrivateTemplate() },
+        { id: "heartbeat", name: "定时触发模板", enabled: true, routeKinds: ["heartbeat"], targetGroupId: "", regex: "", template: gateway.heartbeatNotificationTemplate || defaultHeartbeatTemplate() }
       ];
     }
 
@@ -1233,6 +1349,20 @@
         "请在需要时读取 {privateLogPath} 查看上下文。"
       ].join("\\n");
     }
+    function defaultHeartbeatMessage() {
+      return "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。";
+    }
+    function defaultHeartbeatTemplate() {
+      return [
+        "定时触发提醒：到了心跳路由时间。",
+        "时间：{time}",
+        "来源：{messageTarget}",
+        "间隔：{heartbeatIntervalSeconds} 秒",
+        "消息：{message}",
+        "",
+        "请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，主动检查是否有需要推进、整理或形成待审草稿的事项。"
+      ].join("\\n");
+    }
 
     function bindInputs() {
       document.querySelectorAll("[data-select-gateway]").forEach(element => {
@@ -1258,6 +1388,9 @@
       document.querySelectorAll("[data-variable-field]").forEach(element => {
         element.addEventListener("input", updateRouteVariable);
         element.addEventListener("change", updateRouteVariable);
+      });
+      document.querySelectorAll("[data-adapter-field]").forEach(element => {
+        element.addEventListener("change", updateMessageAdapterRow);
       });
       document.querySelectorAll(".help").forEach(element => {
         element.addEventListener("mouseenter", () => showTooltip(element));
@@ -1291,10 +1424,12 @@
       }
       if (field === "messageAdapterType") {
         state.gateways[index].messageAdapterType = String(value);
+        state.gateways[index].messageAdapters = [String(value)];
         applyAdapterDefaults(state.gateways[index]);
         render();
         return;
       }
+      if (field === "heartbeatIntervalSeconds") value = Number(value);
       if (field === "routeName") {
         state.gateways[index].routeName = String(value);
         const roleKey = activeRoleKey(state.gateways[index]);
@@ -1309,6 +1444,29 @@
       if (field === "id") selectedGatewayId = value;
       renderGatewayList();
       renderRuntimePanel();
+    }
+
+    function updateMessageAdapterRow(event) {
+      const index = Number(event.target.dataset.index);
+      const adapterIndex = Number(event.target.dataset.adapterIndex);
+      const gateway = state.gateways[index];
+      const adapters = gatewayAdapterTypes(gateway);
+      adapters[adapterIndex] = String(event.target.value);
+      setGatewayAdapters(gateway, adapters);
+      applyAdapterDefaults(gateway);
+      render();
+    }
+
+    function setGatewayAdapters(gateway, adapters) {
+      let next = adapters.filter(Boolean);
+      if (next.includes("disabled")) {
+        next = ["disabled"];
+      } else {
+        next = [...new Set(next)].filter(type => type !== "disabled");
+      }
+      if (next.length === 0) next = ["napcat"];
+      gateway.messageAdapters = next;
+      gateway.messageAdapterType = next[0];
     }
 
     function updateRuleValue(event) {
@@ -1415,6 +1573,25 @@
       render();
     }
 
+    function addMessageAdapter(index) {
+      const gateway = state.gateways[index];
+      const adapters = gatewayAdapterTypes(gateway);
+      const order = ["napcat", "heartbeat", "webhook"];
+      const nextType = order.find(type => !adapters.includes(type)) || "heartbeat";
+      setGatewayAdapters(gateway, [...adapters.filter(type => type !== "disabled"), nextType]);
+      applyAdapterDefaults(gateway);
+      render();
+    }
+
+    function removeMessageAdapter(index, adapterIndex) {
+      const gateway = state.gateways[index];
+      const adapters = gatewayAdapterTypes(gateway);
+      adapters.splice(adapterIndex, 1);
+      setGatewayAdapters(gateway, adapters);
+      applyAdapterDefaults(gateway);
+      render();
+    }
+
     function addGateway() {
       const next = state.gateways.length + 1;
       const gateway = {
@@ -1423,8 +1600,11 @@
         routeName: `路由 ${next}`,
         enabled: true,
         messageAdapterType: "napcat",
+        messageAdapters: ["napcat"],
         gatewayPort: 8789 + next,
         napcatHttpUrl: "http://127.0.0.1:3000",
+        heartbeatIntervalSeconds: 900,
+        heartbeatMessage: defaultHeartbeatMessage(),
         routeVariables: {},
         codexThreadName: `QQ 消息监听 ${next}`,
         codexCwd: "C:\\\\Path\\\\To\\\\Your\\\\Project",

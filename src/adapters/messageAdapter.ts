@@ -1,4 +1,4 @@
-export type MessageAdapterType = "napcat" | "webhook" | "disabled";
+export type MessageAdapterType = "napcat" | "webhook" | "heartbeat" | "disabled";
 
 export type MessageAdapter = {
   type: MessageAdapterType;
