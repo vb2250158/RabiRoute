@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="RabiRoute persona route mark">
+  <defs>
+    <linearGradient id="bg" x1="14" y1="10" x2="114" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FEFF"/>
+      <stop offset=".58" stop-color="#E9FBFC"/>
+      <stop offset="1" stop-color="#FFF2F7"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="26" y1="20" x2="102" y2="110" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#23D7D2"/>
+      <stop offset=".7" stop-color="#0B8FA0"/>
+      <stop offset="1" stop-color="#0C2A4A"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="34" y1="22" x2="98" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB8C8"/>
+      <stop offset="1" stop-color="#FF6D9D"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="7" stdDeviation="7" flood-color="#19BFC1" flood-opacity=".18"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="30" fill="url(#bg)" stroke="#8EE8EA" stroke-width="3"/>
+  <circle cx="64" cy="70" r="40" fill="#19BFC1" opacity=".08"/>
+
+  <path d="M45 58C34 40 33 20 42 15c8-5 20 12 25 36" fill="#fff" stroke="url(#mint)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft)"/>
+  <path d="M83 58c11-18 12-38 3-43-8-5-20 12-25 36" fill="#fff" stroke="url(#mint)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft)"/>
+  <path d="M47 49c-5-11-5-23-1-25 4-2 11 9 15 25" fill="url(#pink)" opacity=".72"/>
+  <path d="M81 49c5-11 5-23 1-25-4-2-11 9-15 25" fill="url(#pink)" opacity=".72"/>
+
+  <path d="M34 78h50" fill="none" stroke="url(#mint)" stroke-width="8" stroke-linecap="round"/>
+  <path d="M76 66l16 12-16 12" fill="none" stroke="url(#mint)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M94 94H44" fill="none" stroke="url(#pink)" stroke-width="8" stroke-linecap="round"/>
+  <path d="M52 82L36 94l16 12" fill="none" stroke="url(#pink)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="64" cy="86" r="8" fill="#fff" stroke="#0C2A4A" stroke-width="4"/>
+  <path d="M59 86h10M64 81v10" stroke="#23D7D2" stroke-width="3" stroke-linecap="round"/>
+  <path d="M25 76h8M95 76h8M25 96h8M95 96h8" stroke="#B9EEF0" stroke-width="4" stroke-linecap="round"/>
+</svg>

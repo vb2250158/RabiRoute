@@ -106,7 +106,20 @@ function readOneBotNetworkOptions() {
     }
   }
 
-  return { httpServers, websocketClients };
+  return {
+    httpServers,
+    websocketClients,
+    adapters: {
+      napcat: {
+        httpServers,
+        websocketClients
+      },
+      webhook: {
+        listeners: []
+      },
+      disabled: {}
+    }
+  };
 }
 
 async function fetchManager(pathname, options = {}) {

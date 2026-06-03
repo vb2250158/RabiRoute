@@ -1,20 +1,28 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 
 type GatewayDefinition = {
   id: string;
   name?: string;
   enabled?: boolean;
+  messageAdapterType?: MessageAdapterType;
   gatewayPort: number;
+  webhookPath?: string;
   napcatHttpUrl?: string;
   napcatAccessToken?: string;
   targetGroupId?: string;
-  botNickname?: string;
+  routeVariables?: Record<string, string>;
+  routeName?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  rolesDir?: string;
+  agentRoleId?: string;
+  agentRoleFile?: string;
   forwardTargets?: string[];
   dataDir?: string;
   groupNotificationTemplate?: string;
@@ -24,10 +32,28 @@ type GatewayDefinition = {
   groupReplyNotificationTemplate?: string;
   groupNicknameNotificationTemplate?: string;
   privateNotificationTemplate?: string;
+  notificationRules?: NotificationRuleDefinition[];
+  roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
+  roleRouteNames?: Record<string, string>;
+};
+
+type NotificationRuleDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  routeKinds?: string[];
+  targetGroupId?: string;
+  regex?: string;
+  template: string;
 };
 
 type GatewayConfigFile = {
   gateways: GatewayDefinition[];
+};
+
+type RoleRouteFiles = {
+  roleNotificationRules: Record<string, NotificationRuleDefinition[]>;
+  roleRouteNames: Record<string, string>;
 };
 
 type GatewayRuntime = {
@@ -81,6 +107,7 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
   const normalized = {
     gateways: config.gateways.map(normalizeDefinition)
   };
+  writeRoleRuleFiles(normalized.gateways);
   fs.writeFileSync(configPath, JSON.stringify(normalized, null, 2), "utf8");
   return normalized;
 }
@@ -93,12 +120,84 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
     throw new Error(`Invalid gateway port for ${definition.id}: ${definition.gatewayPort}`);
   }
 
+  const dataDir = definition.dataDir ?? `./data/${definition.id}`;
+  const rolesDir = definition.rolesDir ?? path.join(dataDir, "roles");
+  const roleRouteFiles = readRoleRouteFiles(rolesDir);
+  const { botNickname: _legacyBotNickname, ...cleanDefinition } = definition as GatewayDefinition & { botNickname?: string };
   return {
-    ...definition,
+    ...cleanDefinition,
     name: definition.name ?? definition.id,
     enabled: definition.enabled !== false,
-    dataDir: definition.dataDir ?? `./data/${definition.id}`
+    messageAdapterType: definition.messageAdapterType ?? "napcat",
+    dataDir,
+    rolesDir,
+    agentRoleFile: definition.agentRoleFile ?? "persona.md",
+    roleNotificationRules: definition.roleNotificationRules ?? roleRouteFiles.roleNotificationRules,
+    roleRouteNames: definition.roleRouteNames ?? roleRouteFiles.roleRouteNames
   };
+}
+
+function readRoleRouteFiles(rolesDir: string): RoleRouteFiles {
+  const absoluteRolesDir = path.resolve(rootDir, rolesDir);
+  const result: RoleRouteFiles = {
+    roleNotificationRules: {},
+    roleRouteNames: {}
+  };
+  if (!fs.existsSync(absoluteRolesDir)) {
+    return result;
+  }
+
+  for (const entry of fs.readdirSync(absoluteRolesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
+      continue;
+    }
+    const routesPath = path.join(absoluteRolesDir, entry.name, "routes.json");
+    if (!fs.existsSync(routesPath)) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(routesPath, "utf8")) as unknown;
+      const rules = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === "object" && Array.isArray((parsed as { notificationRules?: unknown }).notificationRules)
+          ? (parsed as { notificationRules: unknown[] }).notificationRules
+          : [];
+      result.roleNotificationRules[entry.name] = rules as NotificationRuleDefinition[];
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof (parsed as { routeName?: unknown }).routeName === "string") {
+        result.roleRouteNames[entry.name] = ((parsed as { routeName: string }).routeName).trim();
+      }
+    } catch (error) {
+      console.warn(`Failed to read role routes: ${routesPath}`, error);
+    }
+  }
+  return result;
+}
+
+function writeRoleRuleFiles(gateways: GatewayDefinition[]): void {
+  for (const gateway of gateways) {
+    if (!gateway.roleNotificationRules || !gateway.rolesDir) {
+      continue;
+    }
+    const absoluteRolesDir = path.resolve(rootDir, gateway.rolesDir);
+    for (const [roleId, rules] of Object.entries(gateway.roleNotificationRules)) {
+      const safeRoleId = sanitizeRoleId(roleId);
+      if (!safeRoleId || !Array.isArray(rules)) {
+        continue;
+      }
+      const roleDir = path.join(absoluteRolesDir, safeRoleId);
+      fs.mkdirSync(roleDir, { recursive: true });
+      const routeName = gateway.roleRouteNames?.[safeRoleId] || (gateway.agentRoleId === safeRoleId ? gateway.routeName : "") || safeRoleId;
+      fs.writeFileSync(path.join(roleDir, "routes.json"), JSON.stringify({
+        routeName,
+        notificationRules: rules
+      }, null, 2), "utf8");
+    }
+  }
+}
+
+function sanitizeRoleId(raw: string | undefined): string {
+  const value = raw?.trim() ?? "";
+  return /^[a-zA-Z0-9_-]+$/.test(value) ? value : "";
 }
 
 function loadRuntimes(): void {
@@ -174,22 +273,31 @@ function childCommand(): { command: string; args: string[]; shell: boolean } {
 }
 
 function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
+  const activeRoleRules = definition.agentRoleId && definition.roleNotificationRules?.[definition.agentRoleId]
+    ? definition.roleNotificationRules[definition.agentRoleId]
+    : definition.notificationRules;
   return {
     ...process.env,
+    MESSAGE_ADAPTER_TYPE: definition.messageAdapterType ?? "napcat",
     NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
     NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
     GATEWAY_PORT: String(definition.gatewayPort),
     CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
     CODEX_CWD: definition.codexCwd ?? process.env.CODEX_CWD ?? rootDir,
+    ROLES_DIR: definition.rolesDir ?? path.join(definition.dataDir ?? `./data/${definition.id}`, "roles"),
+    AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
+    AGENT_ROLE_FILE: definition.agentRoleFile ?? "persona.md",
     FORWARD_TARGETS: Array.isArray(definition.forwardTargets) ? definition.forwardTargets.join(",") : process.env.FORWARD_TARGETS ?? "",
-    TARGET_GROUP_ID: definition.targetGroupId ?? "",
-    BOT_NICKNAME: definition.botNickname ?? process.env.BOT_NICKNAME ?? "QQ小助手",
+    TARGET_GROUP_ID: "",
+    BOT_NICKNAME: process.env.BOT_NICKNAME ?? "QQ小助手",
+    ROUTE_VARIABLES: definition.routeVariables ? JSON.stringify(definition.routeVariables) : "",
     DATA_DIR: definition.dataDir ?? `./data/${definition.id}`,
     GROUP_NOTIFICATION_TEMPLATE: definition.groupNotificationTemplate ?? "",
     GROUP_AT_NOTIFICATION_TEMPLATE: definition.groupAtNotificationTemplate ?? "",
     GROUP_DIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupDirectReplyNotificationTemplate ?? definition.groupReplyNotificationTemplate ?? "",
     GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupIndirectReplyNotificationTemplate ?? definition.groupNicknameNotificationTemplate ?? "",
     PRIVATE_NOTIFICATION_TEMPLATE: definition.privateNotificationTemplate ?? "",
+    NOTIFICATION_RULES: Array.isArray(activeRoleRules) ? JSON.stringify(activeRoleRules) : "",
   };
 }
 
@@ -261,15 +369,209 @@ function stopGateway(id: string): void {
   runtime.process.kill();
 }
 
+function dataDirFor(definition: GatewayDefinition): string {
+  const baseDataDir = path.resolve(rootDir, definition.dataDir ?? `./data/${definition.id}`);
+  const roleId = sanitizeRoleId(definition.agentRoleId);
+  if (!roleId) {
+    return baseDataDir;
+  }
+
+  return path.join(path.resolve(rootDir, definition.rolesDir ?? path.join(baseDataDir, "roles")), roleId);
+}
+
+function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
+  const baseDataDir = path.resolve(rootDir, definition.dataDir ?? `./data/${definition.id}`);
+  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join(baseDataDir, "roles"));
+  const roleFileName = definition.agentRoleFile ?? "persona.md";
+  const selectedRoleId = sanitizeRoleId(definition.agentRoleId);
+  const options: Array<Record<string, string>> = [];
+
+  if (fs.existsSync(rolesDir)) {
+    for (const entry of fs.readdirSync(rolesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
+        continue;
+      }
+
+      const roleDir = path.join(rolesDir, entry.name);
+      const markdownFiles = fs.readdirSync(roleDir)
+        .filter((file) => file.toLowerCase().endsWith(".md"))
+        .sort((left, right) => left.localeCompare(right));
+      const preferredFile = markdownFiles.includes(roleFileName) ? roleFileName : markdownFiles[0] ?? roleFileName;
+      const rolePath = path.join(roleDir, preferredFile);
+      let roleContent = "";
+      let roleError = "";
+      try {
+        roleContent = fs.readFileSync(rolePath, "utf8");
+      } catch (error) {
+        roleError = error instanceof Error ? error.message : String(error);
+      }
+      options.push({
+        label: entry.name,
+        value: entry.name,
+        rolePath,
+        roleContent,
+        roleError,
+        dataDir: roleDir
+      });
+    }
+  }
+
+  const selectedDir = selectedRoleId ? path.join(rolesDir, selectedRoleId) : "";
+  const selectedRolePath = selectedDir ? path.join(selectedDir, roleFileName) : "";
+  let selectedRoleContent = "";
+  let selectedRoleError = "";
+  if (selectedRolePath) {
+    try {
+      selectedRoleContent = fs.readFileSync(selectedRolePath, "utf8");
+    } catch (error) {
+      selectedRoleError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  return {
+    rolesDir,
+    selectedRoleId,
+    selectedRolePath,
+    selectedRoleContent,
+    selectedRoleError,
+    selectedRoleDataDir: selectedDir,
+    options
+  };
+}
+
+function readCodexState(definition: GatewayDefinition): Record<string, unknown> {
+  const statePath = path.join(dataDirFor(definition), "codex-state.json");
+  ensureCodexStateBinding(definition, statePath);
+  if (!fs.existsSync(statePath)) {
+    return {
+      statePath,
+      bound: false,
+      message: "未找到 codex-state.json，还没有绑定 Agent 会话。"
+    };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>;
+    return {
+      ...state,
+      statePath,
+      bound: Boolean(state.monitorThreadId)
+    };
+  } catch (error) {
+    return {
+      statePath,
+      bound: false,
+      lastNotificationError: error instanceof Error ? error.message : String(error),
+      lastNotificationErrorAt: new Date().toISOString()
+    };
+  }
+}
+
+function sessionIndexPath(): string {
+  return path.join(os.homedir(), ".codex", "session_index.jsonl");
+}
+
+function ensureCodexStateBinding(definition: GatewayDefinition, statePath: string): void {
+  if (fs.existsSync(statePath)) {
+    try {
+      const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>;
+      if (state.monitorThreadId) {
+        return;
+      }
+    } catch {
+      // Rewrite below if the state file is unreadable.
+    }
+  }
+
+  const indexPath = sessionIndexPath();
+  if (!fs.existsSync(indexPath)) {
+    return;
+  }
+
+  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
+  let best: { id: string; threadName: string; updatedAt: string } | null = null;
+  for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as { id?: unknown; thread_name?: unknown; updated_at?: unknown };
+      if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
+        continue;
+      }
+      if (parsed.thread_name !== targetName) {
+        continue;
+      }
+      if (!best || Date.parse(parsed.updated_at) > Date.parse(best.updatedAt)) {
+        best = {
+          id: parsed.id,
+          threadName: parsed.thread_name,
+          updatedAt: parsed.updated_at
+        };
+      }
+    } catch {
+      // Ignore malformed JSONL lines.
+    }
+  }
+
+  if (!best) {
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(statePath, JSON.stringify({
+    monitorThreadId: best.id,
+    monitorThreadName: best.threadName,
+    monitorThreadUpdatedAt: best.updatedAt,
+    monitorThreadSource: indexPath,
+    lastAutoDiscoveryAt: new Date().toISOString()
+  }, null, 2), "utf8");
+}
+
+function readGatewayStatus(definition: GatewayDefinition): Record<string, unknown> {
+  const statusPath = path.join(dataDirFor(definition), "gateway-status.json");
+  if (!fs.existsSync(statusPath)) {
+    return {
+      statusPath,
+      napcat: {
+        connected: false
+      }
+    };
+  }
+
+  try {
+    return {
+      ...JSON.parse(fs.readFileSync(statusPath, "utf8")) as Record<string, unknown>,
+      statusPath
+    };
+  } catch (error) {
+    return {
+      statusPath,
+      napcat: {
+        connected: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    };
+  }
+}
+
 function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
   return {
     id: runtime.definition.id,
     name: runtime.definition.name,
     enabled: runtime.definition.enabled,
+    messageAdapterType: runtime.definition.messageAdapterType ?? "napcat",
     gatewayPort: runtime.definition.gatewayPort,
+    webhookPath: runtime.definition.webhookPath,
     napcatHttpUrl: runtime.definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
     targetGroupId: runtime.definition.targetGroupId ?? "",
+    routeVariables: runtime.definition.routeVariables,
+    routeName: runtime.definition.routeName,
     codexThreadName: runtime.definition.codexThreadName ?? runtime.definition.name ?? runtime.definition.id,
+    rolesDir: runtime.definition.rolesDir,
+    agentRoleId: runtime.definition.agentRoleId,
+    agentRoleFile: runtime.definition.agentRoleFile,
+    roleInfo: roleInfoFor(runtime.definition),
     dataDir: runtime.definition.dataDir,
     groupNotificationTemplate: runtime.definition.groupNotificationTemplate,
     groupAtNotificationTemplate: runtime.definition.groupAtNotificationTemplate,
@@ -278,11 +580,16 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     groupReplyNotificationTemplate: runtime.definition.groupReplyNotificationTemplate,
     groupNicknameNotificationTemplate: runtime.definition.groupNicknameNotificationTemplate,
     privateNotificationTemplate: runtime.definition.privateNotificationTemplate,
+    notificationRules: runtime.definition.notificationRules,
+    roleNotificationRules: runtime.definition.roleNotificationRules,
+    roleRouteNames: runtime.definition.roleRouteNames,
     running: Boolean(runtime.process),
     pid: runtime.process?.pid ?? null,
     startedAt: runtime.startedAt,
     stoppedAt: runtime.stoppedAt,
     lastExit: runtime.lastExit,
+    gatewayStatus: readGatewayStatus(runtime.definition),
+    codexState: readCodexState(runtime.definition),
     log: runtime.log.slice(-30)
   };
 }
@@ -319,9 +626,20 @@ function standaloneGatewayPayload(): Record<string, unknown> {
 }
 
 function networkOptionsPayload(): Record<string, unknown> {
+  const adapters = {
+    napcat: {
+      httpServers: [],
+      websocketClients: []
+    },
+    webhook: {
+      listeners: []
+    },
+    disabled: {}
+  };
   return {
     code: 0,
     data: {
+      adapters,
       httpServers: [],
       websocketClients: []
     }
@@ -388,6 +706,28 @@ function htmlResponse(response: http.ServerResponse): void {
 </html>`);
 }
 
+function assetResponse(pathname: string, response: http.ServerResponse): boolean {
+  const match = pathname.match(/^\/assets\/([a-zA-Z0-9_.-]+)$/);
+  if (!match) {
+    return false;
+  }
+
+  const assetPath = path.join(rootDir, "assets", match[1]);
+  if (!fs.existsSync(assetPath)) {
+    return false;
+  }
+
+  const extension = path.extname(assetPath).toLowerCase();
+  const contentType = extension === ".png"
+    ? "image/png"
+    : extension === ".svg"
+      ? "image/svg+xml; charset=utf-8"
+      : "application/octet-stream";
+  response.writeHead(200, { "content-type": contentType });
+  response.end(fs.readFileSync(assetPath));
+  return true;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -427,6 +767,9 @@ function startManager(): void {
   const server = http.createServer((request, response) => {
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+      if (request.method === "GET" && assetResponse(requestUrl.pathname, response)) {
+        return;
+      }
       if (request.method === "POST" && handleAction(requestUrl.pathname, response)) {
         return;
       }

@@ -4,4 +4,6 @@ data/
 .env
 gateways.json
 tmp/
+logs/
 npm-debug.log*
+assets/reference-cache/

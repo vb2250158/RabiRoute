@@ -7,17 +7,70 @@
       "gatewayPort": 8789,
       "napcatHttpUrl": "http://127.0.0.1:3000",
       "napcatAccessToken": "",
-      "targetGroupId": "",
-      "botNickname": "QQ小助手",
       "codexThreadName": "QQ 消息监听",
       "codexCwd": "C:\\Path\\To\\Your\\Project",
-      "forwardTargets": ["codexDesktop"],
+      "rolesDir": "./data/default-main/roles",
+      "agentRoleId": "",
+      "agentRoleFile": "persona.md",
+      "forwardTargets": [
+        "codexDesktop"
+      ],
       "dataDir": "./data/default-main",
       "groupNotificationTemplate": "QQ 消息更新提醒：群聊里有人 @ 了机器人。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
       "groupAtNotificationTemplate": "QQ 消息更新提醒：群聊里有人 @ 了机器人。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
       "groupDirectReplyNotificationTemplate": "QQ 消息更新提醒：群聊里有人直接回复机器人。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
       "groupIndirectReplyNotificationTemplate": "QQ 消息更新提醒：群聊里有人回复了一条提到机器人的消息。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n被回复消息：{repliedMessage}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
-      "privateNotificationTemplate": "QQ 消息更新提醒：收到一条私聊消息。\n时间：{time}\n发送者：{sender}\nQQ：{userId}\n消息：{message}\n\n请在需要时读取 {privateLogPath} 查看上下文。"
+      "privateNotificationTemplate": "QQ 消息更新提醒：收到一条私聊消息。\n时间：{time}\n发送者：{sender}\nQQ：{userId}\n消息：{message}\n\n请在需要时读取 {privateLogPath} 查看上下文。",
+      "notificationRules": [
+        {
+          "id": "group-direct-at",
+          "name": "直接 @ 模板",
+          "enabled": true,
+          "targetGroupId": "",
+          "regex": "",
+          "template": "QQ 消息更新提醒：群聊里有人 @ 了机器人。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
+          "routeKinds": [
+            "direct_at"
+          ]
+        },
+        {
+          "id": "group-direct-reply",
+          "name": "直接回复模板",
+          "enabled": true,
+          "targetGroupId": "",
+          "regex": "",
+          "template": "QQ 消息更新提醒：群聊里有人直接回复机器人。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
+          "routeKinds": [
+            "direct_reply"
+          ]
+        },
+        {
+          "id": "group-indirect-reply",
+          "name": "间接回复模板",
+          "enabled": true,
+          "targetGroupId": "",
+          "regex": "",
+          "template": "QQ 消息更新提醒：群聊里有人回复了一条提到机器人的消息。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n被回复消息：{repliedMessage}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
+          "routeKinds": [
+            "indirect_reply"
+          ]
+        },
+        {
+          "id": "private-message",
+          "name": "私聊消息模板",
+          "enabled": true,
+          "targetGroupId": "",
+          "regex": "",
+          "template": "QQ 消息更新提醒：收到一条私聊消息。\n时间：{time}\n发送者：{sender}\nQQ：{userId}\n消息：{message}\n\n请在需要时读取 {privateLogPath} 查看上下文。",
+          "routeKinds": [
+            "private"
+          ]
+        }
+      ],
+      "routeVariables": {},
+      "messageAdapterType": "napcat",
+      "routeName": "默认路由",
+      "roleRouteNames": {}
     }
   ]
 }

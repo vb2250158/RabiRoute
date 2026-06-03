@@ -26,31 +26,43 @@ export type CodexNotificationRecord = {
   text: string;
 };
 
-function logPath(): string {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  return path.join(config.dataDir, "group-messages.jsonl");
+function logPath(dataDir = config.dataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "group-messages.jsonl");
 }
 
 export function appendGroupMessage(record: GroupMessageRecord): void {
   fs.appendFileSync(logPath(), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function privateLogPath(): string {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  return path.join(config.dataDir, "private-messages.jsonl");
+export function appendGroupMessageToDir(record: GroupMessageRecord, dataDir: string): void {
+  fs.appendFileSync(logPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function privateLogPath(dataDir = config.dataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "private-messages.jsonl");
 }
 
 export function appendPrivateMessage(record: PrivateMessageRecord): void {
   fs.appendFileSync(privateLogPath(), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function codexNotificationPath(): string {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  return path.join(config.dataDir, "codex-notifications.jsonl");
+export function appendPrivateMessageToDir(record: PrivateMessageRecord, dataDir: string): void {
+  fs.appendFileSync(privateLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function codexNotificationPath(dataDir = config.dataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "codex-notifications.jsonl");
 }
 
 export function appendCodexNotification(record: CodexNotificationRecord): void {
   fs.appendFileSync(codexNotificationPath(), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+export function appendCodexNotificationToDir(record: CodexNotificationRecord, dataDir: string): void {
+  fs.appendFileSync(codexNotificationPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 export function readGroupMessages(): GroupMessageRecord[] {

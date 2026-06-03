@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Rabi mini badge">
+  <rect x="4" y="4" width="56" height="56" rx="18" fill="#FBFEFF"/>
+  <rect x="4" y="4" width="56" height="56" rx="18" fill="#19BFC1" opacity=".14"/>
+  <path d="M21 29C16 20 16 11 20 9c4-2 10 6 12 19M43 29c5-9 5-18 1-20-4-2-10 6-12 19" fill="#fff" stroke="#0C2A4A" stroke-width="3" stroke-linecap="round"/>
+  <path d="M18 36c0-12 9-21 14-21s14 9 14 21-8 18-14 18-14-6-14-18Z" fill="#fff" stroke="#0C2A4A" stroke-width="3"/>
+  <circle cx="27" cy="37" r="3" fill="#19BFC1"/>
+  <circle cx="37" cy="37" r="3" fill="#19BFC1"/>
+  <path d="M29 45c2 2 5 2 7 0" fill="none" stroke="#0C2A4A" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

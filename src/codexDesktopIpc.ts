@@ -37,8 +37,27 @@ type IpcPending = {
 
 type CodexState = {
   monitorThreadId?: string;
+  monitorThreadName?: string;
+  monitorThreadUpdatedAt?: string;
+  monitorThreadSource?: string;
+  lastAutoDiscoveryAt?: string;
   notificationCount?: number;
   lastNotificationAt?: string;
+  lastNotificationError?: string;
+  lastNotificationErrorAt?: string;
+};
+
+type CodexSessionIndexRecord = {
+  id?: unknown;
+  thread_name?: unknown;
+  updated_at?: unknown;
+};
+
+type DiscoveredMonitorThread = {
+  id: string;
+  threadName: string;
+  updatedAt: string;
+  source: string;
 };
 
 function unique<T>(items: T[]): T[] {
@@ -93,6 +112,78 @@ function readState(): CodexState {
 function writeState(state: CodexState): void {
   fs.mkdirSync(config.dataDir, { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+}
+
+function sessionIndexPath(): string {
+  return path.join(os.homedir(), ".codex", "session_index.jsonl");
+}
+
+function discoverMonitorThread(): DiscoveredMonitorThread | null {
+  const indexPath = sessionIndexPath();
+  if (!fs.existsSync(indexPath)) {
+    return null;
+  }
+
+  const targetName = config.codexThreadName.trim();
+  const records = fs
+    .readFileSync(indexPath, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line): DiscoveredMonitorThread | null => {
+      try {
+        const parsed = JSON.parse(line) as CodexSessionIndexRecord;
+        if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
+          return null;
+        }
+        if (parsed.thread_name !== targetName) {
+          return null;
+        }
+        return {
+          id: parsed.id,
+          threadName: parsed.thread_name,
+          updatedAt: parsed.updated_at,
+          source: indexPath
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((item): item is DiscoveredMonitorThread => Boolean(item))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+
+  return records[0] ?? null;
+}
+
+function applyDiscoveredThread(state: CodexState, discovered: DiscoveredMonitorThread): CodexState {
+  return {
+    ...state,
+    monitorThreadId: discovered.id,
+    monitorThreadName: discovered.threadName,
+    monitorThreadUpdatedAt: discovered.updatedAt,
+    monitorThreadSource: discovered.source,
+    lastAutoDiscoveryAt: new Date().toISOString()
+  };
+}
+
+function resolveMonitorThread(state: CodexState, forceRefresh: boolean): CodexState {
+  const discovered = discoverMonitorThread();
+  if (!discovered) {
+    return state;
+  }
+
+  const discoveredIsNewer = !state.monitorThreadUpdatedAt || Date.parse(discovered.updatedAt) > Date.parse(state.monitorThreadUpdatedAt);
+  const shouldApply = forceRefresh
+    || !state.monitorThreadId
+    || state.monitorThreadName !== config.codexThreadName
+    || discoveredIsNewer;
+
+  if (!shouldApply) {
+    return state;
+  }
+
+  const nextState = applyDiscoveredThread(state, discovered);
+  writeState(nextState);
+  return nextState;
 }
 
 function encodeFrame(message: unknown): Buffer {
@@ -290,7 +381,7 @@ async function request(method: string, params: unknown, version = 1, allowBefore
 }
 
 async function startNotificationTurn(threadId: string, message: string): Promise<void> {
-  const text = buildInputText(message, "start");
+  const text = buildInputText(message);
   const response = await request("thread-follower-start-turn", {
     conversationId: threadId,
     turnStartParams: {
@@ -331,12 +422,8 @@ async function startNotificationTurn(threadId: string, message: string): Promise
   monitorThreadActive = true;
 }
 
-function buildInputText(message: string, mode: "start" | "steer"): string {
-  const instruction = mode === "start"
-    ? `这是来自 QQ/NapCat 网关的实时消息提醒。请读取 ${config.dataDir} 下相关 JSONL 的最新记录，理解上下文，并在这个 Codex 会话里开始处理该消息。`
-    : "这是运行中的 QQ/NapCat 实时补充消息。请把它作为当前任务的新上下文继续处理，不要另开思路。";
-
-  return [message, "", instruction].join("\n");
+function buildInputText(message: string): string {
+  return message;
 }
 
 function combineMessages(messages: string[]): string {
@@ -355,7 +442,7 @@ function combineMessages(messages: string[]): string {
 }
 
 async function steerNotificationTurn(threadId: string, message: string): Promise<void> {
-  const text = buildInputText(message, "steer");
+  const text = buildInputText(message);
   const response = await request("thread-follower-steer-turn", {
     conversationId: threadId,
     input: [
@@ -392,39 +479,75 @@ function isInactiveSteerError(error: unknown): boolean {
   return text.includes("SteerTurnInactiveError") || text.includes("active turn already ended") || text.includes("no active turn to steer");
 }
 
+function isNoClientFoundError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes("no-client-found");
+}
+
+async function deliverToMonitorThread(state: CodexState, message: string): Promise<void> {
+  if (!state.monitorThreadId) {
+    throw new Error(`Missing monitorThreadId in ${statePath}. RabiRoute tried to find "${config.codexThreadName}" in ${sessionIndexPath()}, but no matching Codex thread was found.`);
+  }
+
+  await connect();
+  const shouldTrySteer = monitorThreadActive || (lastStartedTurnAt > 0 && Date.now() - lastStartedTurnAt < recentStartSteerWindowMs);
+  if (shouldTrySteer) {
+    try {
+      await steerNotificationTurn(state.monitorThreadId, message);
+    } catch (error) {
+      if (!isInactiveSteerError(error)) {
+        throw error;
+      }
+
+      monitorThreadActive = false;
+      await startNotificationTurn(state.monitorThreadId, message);
+      lastStartedTurnAt = Date.now();
+    }
+  } else {
+    await startNotificationTurn(state.monitorThreadId, message);
+    lastStartedTurnAt = Date.now();
+  }
+}
+
 async function deliverCodexDesktopNotification(message: string): Promise<void> {
   notificationQueue = notificationQueue
     .catch(() => undefined)
     .then(async () => {
-      const state = readState();
-      if (!state.monitorThreadId) {
-        throw new Error(`Missing monitorThreadId in ${statePath}. Open or create the "${config.codexThreadName}" thread once before enabling realtime IPC notifications.`);
-      }
+      let state = resolveMonitorThread(readState(), false);
 
-      await connect();
-      const shouldTrySteer = monitorThreadActive || (lastStartedTurnAt > 0 && Date.now() - lastStartedTurnAt < recentStartSteerWindowMs);
-      if (shouldTrySteer) {
-        try {
-          await steerNotificationTurn(state.monitorThreadId, message);
-        } catch (error) {
-          if (!isInactiveSteerError(error)) {
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            await deliverToMonitorThread(state, message);
+            break;
+          } catch (error) {
+            if (attempt === 0 && isNoClientFoundError(error)) {
+              const refreshedState = resolveMonitorThread(state, true);
+              if (refreshedState.monitorThreadId && refreshedState.monitorThreadId !== state.monitorThreadId) {
+                state = refreshedState;
+                monitorThreadActive = false;
+                continue;
+              }
+            }
             throw error;
           }
-
-          monitorThreadActive = false;
-          await startNotificationTurn(state.monitorThreadId, message);
-          lastStartedTurnAt = Date.now();
         }
-      } else {
-        await startNotificationTurn(state.monitorThreadId, message);
-        lastStartedTurnAt = Date.now();
-      }
 
-      writeState({
-        ...state,
-        notificationCount: (state.notificationCount ?? 0) + 1,
-        lastNotificationAt: new Date().toISOString()
-      });
+        writeState({
+          ...state,
+          notificationCount: (state.notificationCount ?? 0) + 1,
+          lastNotificationAt: new Date().toISOString(),
+          lastNotificationError: undefined,
+          lastNotificationErrorAt: undefined
+        });
+      } catch (error) {
+        writeState({
+          ...state,
+          lastNotificationError: error instanceof Error ? error.message : String(error),
+          lastNotificationErrorAt: new Date().toISOString()
+        });
+        throw error;
+      }
     });
 
   return notificationQueue;
