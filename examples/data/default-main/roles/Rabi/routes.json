@@ -17,7 +17,7 @@
       "enabled": true,
       "targetGroupId": "",
       "regex": "",
-      "template": "定时触发提醒：到了 RabiRoute 的心跳路由时间。\n时间：{time}\n间隔：{heartbeatIntervalSeconds} 秒\n消息：{message}\n\n请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，用 Rabi 的语气主动检查是否有需要推进、整理或形成待审草稿的事项。",
+      "template": "定时触发提醒：到了 RabiRoute 的心跳路由时间。\n时间：{time}\n间隔：{heartbeatIntervalSeconds} 秒\n消息：{message}\n\n请读取 {dataDir} 下的消息日志和角色相关上下文，用 Rabi 的语气判断是否需要回应、记录、追问或保持安静。",
       "routeKinds": [
         "heartbeat"
       ]

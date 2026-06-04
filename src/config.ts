@@ -40,7 +40,7 @@ export const defaultHeartbeatNotificationTemplate = [
   "来源：{messageTarget}",
   "消息：{message}",
   "",
-  "请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，主动检查是否有需要推进、整理或形成待审草稿的事项。"
+  "请读取 {dataDir} 下的消息日志和角色相关上下文，按当前人格判断是否需要回应、记录、追问或保持安静。"
 ].join("\n");
 
 export const defaultVoiceTranscriptNotificationTemplate = [
@@ -353,7 +353,7 @@ export const config = {
   messageAdapterType: parseMessageAdapterType(process.env.MESSAGE_ADAPTER_TYPE),
   messageAdapterTypes: parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE),
   heartbeatIntervalSeconds: parsePositiveNumber(process.env.HEARTBEAT_INTERVAL_SECONDS, 900),
-  heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
+  heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请检查最近消息和角色相关上下文。",
   napcatHttpUrl: process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
   napcatAccessToken: process.env.NAPCAT_ACCESS_TOKEN ?? "",
   webhookPath: process.env.WEBHOOK_PATH ?? "/webhook",

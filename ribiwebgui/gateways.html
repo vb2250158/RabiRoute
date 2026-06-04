@@ -672,6 +672,19 @@
       { name: "GroupId", description: "群号；私聊时为空。" },
       { name: "ReplyMessageId", description: "被回复消息 ID；非回复消息时为空。" },
       { name: "time", description: "消息时间，已格式化为本地时间。" },
+      { name: "now", description: "模板渲染时的当前本地时间，等同 currentTime。" },
+      { name: "currentTime", description: "模板渲染时的当前本地时间。" },
+      { name: "currentDate", description: "当前日期，格式 YYYY-MM-DD。" },
+      { name: "currentClock", description: "当前时分秒，格式 HH:mm:ss。" },
+      { name: "currentIsoTime", description: "当前 ISO 时间字符串。" },
+      { name: "currentTimestamp", description: "当前 Unix 时间戳，单位秒。" },
+      { name: "currentYear", description: "当前年份。" },
+      { name: "currentMonth", description: "当前月份，补零为两位。" },
+      { name: "currentDay", description: "当前日期中的日，补零为两位。" },
+      { name: "currentWeekday", description: "当前星期，例如 星期四。" },
+      { name: "currentHour", description: "当前小时，补零为两位。" },
+      { name: "currentMinute", description: "当前分钟，补零为两位。" },
+      { name: "currentSecond", description: "当前秒数，补零为两位。" },
       { name: "messageTarget", description: "目标会话描述，例如群号或私聊对象。" },
       { name: "groupId", description: "群消息的群号；私聊时不填充。" },
       { name: "userId", description: "发送者 QQ 号。" },
@@ -1499,7 +1512,6 @@
     }
 
     function defaultRouteNameForRole(roleId, gateway) {
-      if (roleId === "AIPM") return "AI PM 路由";
       if (roleId === "Rabi") return "Rabi 路由";
       return roleId || gateway.name || gateway.id || "默认路由";
     }
@@ -1659,7 +1671,7 @@
       ].join("\n");
     }
     function defaultHeartbeatMessage() {
-      return "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。";
+      return "定时心跳巡检：请检查最近消息和角色相关上下文。";
     }
     function defaultHeartbeatTemplate() {
       return [
@@ -1669,7 +1681,7 @@
         "间隔：{heartbeatIntervalSeconds} 秒",
         "消息：{message}",
         "",
-        "请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，主动检查是否有需要推进、整理或形成待审草稿的事项。"
+        "请读取 {dataDir} 下的消息日志和角色相关上下文，按当前人格判断是否需要回应、记录、追问或保持安静。"
       ].join("\n");
     }
     function defaultVoiceTranscriptTemplate() {

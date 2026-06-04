@@ -14,6 +14,36 @@ function formatTime(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString("zh-CN", { hour12: false });
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function currentTimeValues(now = new Date()): ForwardTemplateValues {
+  const year = now.getFullYear();
+  const month = pad2(now.getMonth() + 1);
+  const day = pad2(now.getDate());
+  const hour = pad2(now.getHours());
+  const minute = pad2(now.getMinutes());
+  const second = pad2(now.getSeconds());
+  const weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+
+  return {
+    now: now.toLocaleString("zh-CN", { hour12: false }),
+    currentTime: now.toLocaleString("zh-CN", { hour12: false }),
+    currentDate: `${year}-${month}-${day}`,
+    currentClock: `${hour}:${minute}:${second}`,
+    currentIsoTime: now.toISOString(),
+    currentTimestamp: Math.floor(now.getTime() / 1000),
+    currentYear: year,
+    currentMonth: month,
+    currentDay: day,
+    currentWeekday: weekdays[now.getDay()],
+    currentHour: hour,
+    currentMinute: minute,
+    currentSecond: second
+  };
+}
+
 function renderTemplate(template: string, values: ForwardTemplateValues): string {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: string) => {
     const value = values[key];
@@ -169,6 +199,7 @@ function commonTemplateValues(
     : undefined;
   return {
     ...routeVariables,
+    ...currentTimeValues(),
     time: formatTime(record.time),
     sender,
     senderName: record.senderName,

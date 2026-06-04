@@ -40,6 +40,9 @@
 
 ```text
 {routeKind} {time} {targetType} {targetId} {messageTarget}
+{now} {currentTime} {currentDate} {currentClock} {currentIsoTime}
+{currentTimestamp} {currentYear} {currentMonth} {currentDay}
+{currentWeekday} {currentHour} {currentMinute} {currentSecond}
 {groupId} {userId} {selfId} {sender} {senderName}
 {RobotQQId} {SenderQQId} {GroupId} {ReplyMessageId}
 {message} {rawMessage} {routeText} {repliedRouteText} {messageId}
@@ -49,6 +52,8 @@
 {dataDir} {groupLogPath} {privateLogPath} {heartbeatLogPath}
 {heartbeatIntervalSeconds}
 ```
+
+`{time}` 是消息或事件发生时间；`{now}` / `{currentTime}` 是模板渲染时的当前本地时间。延迟补发或心跳巡检时，推荐同时写清这两个时间。
 
 ## 路由人格
 
@@ -77,7 +82,7 @@ Rabi 示例是一个轻量公开样例，主要演示 `persona.md` 和 `routes.j
 
 ```text
 data/default-main/roles/Rabi/routes.json
-data/default-main/roles/ProjectPM/routes.json
+data/default-main/roles/QAReviewer/routes.json
 data/default-main/roles/DevAssistant/routes.json
 ```
 

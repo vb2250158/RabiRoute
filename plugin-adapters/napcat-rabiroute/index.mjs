@@ -34,7 +34,7 @@ function defaultGatewayConfig() {
         napcatHttpUrl: "http://127.0.0.1:3000",
         napcatAccessToken: "",
         heartbeatIntervalSeconds: 900,
-        heartbeatMessage: "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
+        heartbeatMessage: "定时心跳巡检：请检查最近消息和角色相关上下文。",
         codexThreadName: "QQ 消息监听",
         codexCwd: "",
         rolesDir: "./data/default-main/roles",
