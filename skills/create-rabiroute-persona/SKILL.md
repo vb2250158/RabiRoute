@@ -181,10 +181,12 @@ data/roles/<RoleId>/
   "enabled": true,
   "targetGroupId": "",
   "regex": "<可选正则>",
-  "template": "<发给下游 agent 的提示>",
+  "template": "<由真实换行模板正文保存得到>",
   "routeKinds": ["group_message"]
 }
 ```
+
+不要让用户直接手写复杂 `template` JSON 字符串。先按 `references/message-template-structure.md` 写真实换行模板正文，再保存到 WebUI 或由工具序列化到 `routes.json`。
 
 支持的 route kind：
 
@@ -217,47 +219,14 @@ voice_transcript
 
 `{time}` 表示消息或事件发生时间；`{now}` / `{currentTime}` 表示模板渲染时的当前本地时间。需要日期判断时优先使用 `{currentDate}`、`{currentWeekday}`、`{currentHour}` 等内置变量，不要让下游 agent 自己猜。
 
-模板要把平台事件翻译成角色能理解的触发场景，而不是把内部字段堆给角色。
-
-示例：
-
-```text
-QQ 消息提醒：有人在群聊中直接 @ 了你。
-时间：{time}
-目标：{messageTarget}
-发送者：{sender}
-消息：{message}
-
-请按 persona.md 中的角色身份判断是否需要回应。需要上下文时读取 {groupLogPath}，不要在对外回复中暴露日志路径。
-```
-
-成长路由示例：
-
-普通消息、私聊或回复命中后，也可以在完成当前任务后附带一次内部复盘：
-
-```text
-请先按 persona.md 完成当前消息处理。处理完成后，如果发现本角色的表达、知识、判断标准或常用 skill 可以改进，可以更新 {agentRoleDir} 下的人格文件。更新前先把将被修改的旧文件复制到 {agentRoleDir}/old/，备份文件名加当前日期时间。
-```
-
-也可以添加一条低频心跳作为自检入口：
-
-```json
-{
-  "id": "<role-id>-growth-heartbeat",
-  "name": "<RoleName> 成长心跳",
-  "enabled": true,
-  "targetGroupId": "",
-  "regex": "",
-  "template": "定时触发提醒：到了 {routeProfileName} 的成长心跳时间。\n事件时间：{time}\n当前时间：{currentTime}\n星期：{currentWeekday}\n间隔：{heartbeatIntervalSeconds} 秒\n消息：{message}\n\n请先读取 {heartbeatLogPath} 和必要的消息日志，判断是否有未处理事项。若没有即时任务，请按 persona.md 的成长机制复盘自己如何更好地扮演当前角色。需要更新人格文件时，可以直接修改 {agentRoleDir} 下的对应文件；修改前必须先把旧文件复制到 {agentRoleDir}/old/，备份文件名加当前日期时间。",
-  "routeKinds": ["heartbeat"]
-}
-```
+模板要用“数据解构”写法，把平台事件拆成稳定字段，让角色不需要从一整段散文里猜上下文。需要写具体模板时，读取 `references/message-template-structure.md`，照里面的 text block 示例生成真实换行模板。
 
 ### 6. 模板换行规则
 
 - 在 WebUI 文本框中，模板必须使用真实换行，不要输入字面量 `\n`。
 - 在 `persona.md` 中，写正常 Markdown 段落和列表，不要给每个引号、斜杠或换行加转义。
-- 在 `routes.json` 中，JSON 字符串出现 `\n` 是格式要求。不要把 JSON 转义后的模板原样复制回 WebUI。
+- 在生成 `routes.json` 前，先把模板正文作为独立 text block 写好；保存 JSON 时才允许由编辑器/序列化器按 JSON 格式转义。
+- 不要手写一整条 `"template": "...\\n..."` 给用户复制到 WebUI；这会诱导出现可见 `\n`。
 - 路径占位优先使用 `C:/Path/To/Project` 或 `/path/to/project`。除非专门演示 JSON 转义，否则不要在示例里写 `C:\\Path\\To\\Project`。
 
 错误的 WebUI / 模板输出：
@@ -269,12 +238,15 @@ QQ 消息提醒：有人 @ 了你。\n时间：{time}\n消息：{message}
 正确的 WebUI / 模板输出：
 
 ```text
-QQ 消息提醒：有人 @ 了你。
-时间：{time}
-消息：{message}
+[RabiRoute 数据解构]
+事件：群聊直接 @ 触发
+事件时间：{time}
+
+[消息]
+{message}
 ```
 
-生成 `routes.json` 时，只按 JSON 要求转义一次。如果 WebUI 显示出可见的 `\n`，说明模板被双重转义，必须改成真实换行。
+生成 `routes.json` 时，只按 JSON 要求转义一次。如果 WebUI 显示出可见的 `\n`，说明模板被双重转义，必须改成真实换行。创建人格时优先输出可读模板正文，不要输出让人直接复制的 JSON 转义字符串。
 
 ## 好人格与坏人格
 
