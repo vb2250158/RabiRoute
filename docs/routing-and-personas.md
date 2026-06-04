@@ -67,7 +67,10 @@ RabiRoute 的“人格”不是单独一段 prompt，而是一个角色包。角
 ```text
 <RoleId>/
 ├── persona.md
-└── routes.json
+├── routes.json
+├── growth.md
+├── skills.md
+└── prompts/
 ```
 
 公开示例：
@@ -76,7 +79,7 @@ RabiRoute 的“人格”不是单独一段 prompt，而是一个角色包。角
 - `examples/roles/Rabi/routes.json`
 - `examples/data/default-main/roles/Rabi/`
 
-Rabi 示例是一个轻量公开样例，主要演示 `persona.md` 和 `routes.json` 如何配合。真实项目可以在本地 `data/<gateway-id>/roles/<RoleId>/` 里扩展更完整的直接 @、回复、私聊、关键词和心跳规则。
+Rabi 示例是 RabiRoute 默认的兔娘看板娘与陪伴型成长人格样例，主要演示 `persona.md`、`routes.json`、`growth.md`、`skills.md` 和 `prompts/` 如何配合。真实项目可以在本地 `data/<gateway-id>/roles/<RoleId>/` 里扩展更完整的直接 @、回复、私聊、关键词和成长规则。
 
 一个 gateway 可以同时拥有多个路由人格。每个角色目录里的 `routes.json` 会被 manager 组装成一个 route profile；这些 route profile 共用同一个 gateway 的消息端适配器。
 

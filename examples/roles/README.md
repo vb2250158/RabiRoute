@@ -5,12 +5,15 @@
 ```text
 <RoleId>/
 ├── persona.md
-└── routes.json
+├── routes.json
+├── growth.md
+├── skills.md
+└── prompts/
 ```
 
 ## 示例列表
 
-- `Rabi/`：轻量 QQ / NapCat 路由人格示例。
+- `Rabi/`：RabiRoute 默认兔娘看板娘与陪伴型成长人格示例，可通过 QQ / NapCat 路由触发，并能通过 `growth.md`、`skills.md` 和 `prompts/` 持续补充自己。
 
 ## 编写规则
 
