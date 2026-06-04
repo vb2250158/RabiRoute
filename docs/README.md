@@ -14,5 +14,5 @@
 
 ## 维护
 
-- [排障](troubleshooting.md)：NapCat 外发失败、Codex IPC、普通群消息不转发。
+- [排障](troubleshooting.md)：NapCat 外发失败、Windows 中文消息乱码、Codex IPC、普通群消息不转发。
 - [架构说明](architecture.md)：项目边界、分层、演进路线和红线。

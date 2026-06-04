@@ -27,6 +27,33 @@ retcode=1006514
 
 推荐把这条作为外发恢复链路的演示：心跳或健康检查发现外发失败后，不直接丢消息，而是把待发内容先作为草稿/待审 action 缓存；修复登录态后再补发，并把 NapCat 返回的 `message_id` 写入执行记录。当前版本已把 OneBot `retcode` 非 0 视为失败；完整 Action Queue / 补发队列仍属于后续演进。
 
+## 中文消息乱码或多行发送异常
+
+在 Windows 上，如果用 PowerShell `Invoke-WebRequest` 直接发送中文 JSON 到 OneBot HTTP，实际请求编码可能没有稳定按 UTF-8 发送，表现为 QQ 收到乱码，或多行消息内容异常。
+
+推荐做法：
+
+1. 用项目内 Node 脚本发送 OneBot HTTP 请求。
+2. 脚本会显式设置 `Content-Type: application/json; charset=utf-8`。
+3. 脚本会用 `JSON.stringify` 生成正文，不手工拼接中文 JSON 字符串。
+
+示例：
+
+```powershell
+npm run send:onebot -- --group 123456 --message "中文测试\n第二行"
+```
+
+如果 `data/gateways.json` reload 失败，或 WebUI 保存后配置异常，也检查是否误写入了字面量 `\n`：
+
+```powershell
+npm run check:config
+```
+
+- JSON 文件末尾不应该多出可见的 `\n` 字符。
+- 如果文件带 UTF-8 BOM，部分工具可能解析失败；`npm run check:config` 会提示并按去 BOM 后的内容检查。
+- WebUI 文本框里的模板应使用真实换行，不要输入字面量 `\n`。
+- 保存成 JSON 时，只允许由编辑器或序列化器按 JSON 格式转义一次。
+
 ## `Missing monitorThreadId`
 
 说明 RabiRoute 没找到对应 Codex Desktop 线程。先打开或创建用于处理 QQ 消息的 Codex 线程，再通过 WebUI 绑定；也可以检查 `data/<gateway-id>/codex-state.json`。

@@ -76,6 +76,17 @@ npm run start:manager
 http://127.0.0.1:8790/
 ```
 
+## Windows 中文消息注意
+
+如果要测试 OneBot HTTP 主动发中文或多行消息，优先使用项目内 Node 脚本，不要用 PowerShell `Invoke-WebRequest` 直接拼中文 JSON。脚本会使用 `fetch`、`Content-Type: application/json; charset=utf-8` 和 `JSON.stringify`，避免中文乱码或换行异常。
+
+```powershell
+npm run send:onebot -- --group 123456 --message "中文测试\n第二行"
+npm run check:config
+```
+
+配置文件也要避免混入字面量 `\n`。如果 `data/gateways.json` 末尾出现可见的 `\n`，可能导致 JSON 解析或 reload 异常。详见 [排障：中文消息乱码或多行发送异常](docs/troubleshooting.md#中文消息乱码或多行发送异常)。
+
 ## 目录结构
 
 ```text
