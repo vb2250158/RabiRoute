@@ -703,6 +703,64 @@
       return managerRows.find(row => row.id === id) || {};
     }
 
+    function renderReasonList(reasons) {
+      if (!reasons.length) return "";
+      return `
+        <div class="section-note" style="margin-top:9px;color:var(--red);overflow-wrap:anywhere">
+          ${reasons.map(reason => `<div>原因：${escapeHtml(reason)}</div>`).join("")}
+        </div>
+      `;
+    }
+
+    function adapterConnectionReasons(gateway, runtime, adapterTypes, napcatState, heartbeatState, adapterPendingRestart, runtimeAdapterTypes) {
+      const reasons = [];
+      if (!runtime.running) {
+        reasons.push("Gateway 进程未运行。");
+      }
+      if (adapterPendingRestart) {
+        reasons.push(`配置已变更但尚未重启：当前运行 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${adapterTypes.map(adapterLabel).join(" + ")}。`);
+      }
+      if (adapterTypes.includes("napcat")) {
+        const wsUrl = `ws://127.0.0.1:${gateway.gatewayPort || runtime.gatewayPort || "-"}`;
+        const httpUrl = gateway.napcatHttpUrl || runtime.napcatHttpUrl || "-";
+        if (!napcatState.connected) {
+          reasons.push(napcatState.lastDisconnectedAt
+            ? `NapCat WebSocket 当前未连接；最后断开时间：${napcatState.lastDisconnectedAt}。请检查 NapCat WebSocket Client 是否启用并连接到 ${wsUrl}。`
+            : `NapCat WebSocket 尚未连接。请在 NapCat OneBot 网络配置中启用 WebSocket Client，并连接到 ${wsUrl}。`);
+        }
+        if (napcatState.loginInfoError) {
+          reasons.push(`NapCat HTTP 不可用或登录资料读取失败：${napcatState.loginInfoError}。当前 HTTP 地址：${httpUrl}。`);
+        }
+      }
+      if (adapterTypes.includes("heartbeat") && heartbeatState.enabled === false) {
+        reasons.push("定时触发消息端未启用。");
+      }
+      return reasons;
+    }
+
+    function explainAgentError(error) {
+      const text = String(error || "");
+      if (!text) return "";
+      if (text.includes("no-client-found")) {
+        return "Codex Desktop IPC 没有找到可用客户端。请确认 Codex Desktop 正在运行，并且目标线程可被当前 Desktop 会话接收。";
+      }
+      if (text.includes("thread not found")) {
+        return "Codex 线程 ID 已失效。请在 RibiWebGUI 中重新绑定或让 manager 重新发现目标线程。";
+      }
+      return text;
+    }
+
+    function agentConnectionReasons(gateway, agentState, agentError) {
+      const reasons = [];
+      if (!agentState.monitorThreadId) {
+        reasons.push(agentState.message || `尚未绑定 Agent 会话。请确认 Codex Desktop 中存在名为“${gateway.codexThreadName || gateway.name || gateway.id}”的线程。`);
+      }
+      if (agentError) {
+        reasons.push(explainAgentError(agentError));
+      }
+      return reasons;
+    }
+
     function selectedIndex() {
       const index = state.gateways.findIndex(gateway => gateway.id === selectedGatewayId);
       return index >= 0 ? index : 0;
@@ -879,22 +937,29 @@
         : adapterState.message || "";
       const napcatState = gatewayStatus.napcat || {};
       const napcatConnected = Boolean(napcatState.connected);
+      const napcatHttpError = Boolean(napcatState.loginInfoError);
       const heartbeatState = gatewayStatus.heartbeat || {};
       const adapterClass = adapterTypes.includes("disabled")
         ? "draft"
-        : adapterTypes.includes("napcat") && !napcatConnected
+        : adapterTypes.includes("napcat") && (!napcatConnected || napcatHttpError)
           ? "stopped"
           : "running";
       const adapterText = adapterTypes.includes("disabled")
         ? "已禁用"
-        : adapterTypes.includes("napcat") && !napcatConnected
-          ? "部分未连接"
+        : adapterTypes.includes("napcat") && !napcatConnected && napcatHttpError
+          ? "NapCat 异常"
+          : adapterTypes.includes("napcat") && !napcatConnected
+            ? "WS 未连接"
+            : adapterTypes.includes("napcat") && napcatHttpError
+              ? "HTTP 异常"
           : "已启用";
+      const adapterReasons = adapterConnectionReasons(gateway, runtime, adapterTypes, napcatState, heartbeatState, adapterPendingRestart, runtimeAdapterTypes);
       const agentState = runtime.codexState || {};
       const agentError = agentState.lastNotificationError || "";
       const agentBound = Boolean(agentState.monitorThreadId);
       const agentClass = agentError ? "stopped" : agentBound ? "running" : "draft";
       const agentText = agentError ? "连接异常" : agentBound ? "已连接" : "未绑定";
+      const agentReasons = agentConnectionReasons(gateway, agentState, agentError);
       panel.innerHTML = `
         <section class="section">
           <div class="section-head">
@@ -919,6 +984,7 @@
           </div>
           <div class="section-note" style="overflow-wrap:anywhere">类型：${escapeHtml(adapterTypes.map(adapterLabel).join(" + "))}</div>
           ${adapterMessage ? `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">状态：${escapeHtml(adapterMessage)}</div>` : ""}
+          ${renderReasonList(adapterReasons)}
           ${adapterTypes.map(type => renderAdapterStatusDetails(gateway, type, napcatState, heartbeatState)).join("")}
         </section>
         <section class="section">
@@ -931,6 +997,7 @@
           <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">自动发现：${escapeHtml(agentState.lastAutoDiscoveryAt || "-")}</div>
           <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后成功：${escapeHtml(agentState.lastNotificationAt || "-")}</div>
           <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">通知数：${escapeHtml(String(agentState.notificationCount || 0))}</div>
+          ${renderReasonList(agentReasons)}
           ${agentError ? `<div class="section-note" style="margin-top:9px;color:var(--red);overflow-wrap:anywhere">最后错误：${escapeHtml(agentError)}</div>` : ""}
           ${agentState.lastNotificationErrorAt ? `<div class="section-note" style="margin-top:5px;overflow-wrap:anywhere">错误时间：${escapeHtml(agentState.lastNotificationErrorAt)}</div>` : ""}
           <div class="section-note" style="margin-top:9px;overflow-wrap:anywhere">来源：${escapeHtml(agentState.monitorThreadSource || "-")}</div>
@@ -1157,10 +1224,25 @@
         }
         return `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：消息端已禁用。</div>`;
       }
+      const wsUrl = `ws://127.0.0.1:${gateway.gatewayPort || "-"}`;
+      const httpUrl = gateway.napcatHttpUrl || "http://127.0.0.1:3000";
+      const napcatDiagnosis = [
+        napcatState.connected
+          ? `WS 已连接：${napcatState.remoteAddress || "远端未知"}`
+          : `WS 未连接：请检查 NapCat WebSocket Client 是否连接到 ${wsUrl}`,
+        napcatState.loginInfoError
+          ? `HTTP 异常：${napcatState.loginInfoError}，请检查 NapCat HTTP Server 是否运行在 ${httpUrl}`
+          : napcatState.lastLoginInfoAt
+            ? `HTTP 正常：资料刷新 ${napcatState.lastLoginInfoAt}`
+            : `HTTP 未验证：尚未成功读取登录资料，当前地址 ${httpUrl}`
+      ];
       return `
         <div class="section-note" style="margin-top:12px;color:var(--navy)">NapCat / OneBot</div>
-        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">HTTP: ${escapeHtml(gateway.napcatHttpUrl || "http://127.0.0.1:3000")}</div>
-        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">WS: ws://127.0.0.1:${escapeHtml(String(gateway.gatewayPort || "-"))}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">HTTP: ${escapeHtml(httpUrl)}</div>
+        <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">WS: ${escapeHtml(wsUrl)}</div>
+        <div class="section-note" style="margin-top:9px;color:${napcatState.connected && !napcatState.loginInfoError ? "var(--green)" : "var(--red)"};overflow-wrap:anywhere">
+          ${napcatDiagnosis.map(item => `<div>诊断：${escapeHtml(item)}</div>`).join("")}
+        </div>
         <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">远端：${escapeHtml(napcatState.remoteAddress || "-")}</div>
         <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后连接：${escapeHtml(napcatState.lastConnectedAt || "-")}</div>
         <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后断开：${escapeHtml(napcatState.lastDisconnectedAt || "-")}</div>
