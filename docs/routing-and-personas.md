@@ -61,3 +61,10 @@ xcopy examples\data data /E /I
 - `skills/create-rabiroute-persona/SKILL.md`
 
 它说明了如何一起设计 `persona.md` 和 `routes.json`，让角色既有稳定气质，也有对应的路由触发策略。
+
+如果要把语音输入、FenneNote 转录、角色回复和 OumuQ TTS 接成一个工作站，可参考：
+
+- `skills/rabiroute-voice-workstation/SKILL.md`
+- [语音交互工作站](voice-interaction-workstation.md)
+
+这套工作流的关键是：语音转录事件使用 `voice_transcript`，并由事件里的行动说明决定回复面。来自 Codex/FenneNote 的语音输入不等于 QQ/NapCat 外发；角色回复的可见文本和 TTS 文本都必须保留角色语气。

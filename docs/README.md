@@ -11,6 +11,7 @@
 
 - [路由配置](routing-configuration.md)：route kind、`routes.json`、`routeProfiles`、`regex`、模板正文和真实换行规范。
 - [路由人格](routing-and-personas.md)：`persona.md`、成长型人格包、Rabi 默认看板娘示例。
+- [语音交互工作站](voice-interaction-workstation.md)：FenneNote 转录、RabiRoute 路由、角色对话和 OumuQ TTS 的公开安全接线方式。
 
 ## 维护
 
