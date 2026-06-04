@@ -14,6 +14,7 @@ type GatewayDefinition = {
   messageAdapterType?: MessageAdapterType;
   messageAdapters?: MessageAdapterType[];
   gatewayPort: number;
+  webhookPort?: number;
   webhookPath?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
@@ -163,11 +164,24 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
   }
 
   const normalized = {
-    gateways: config.gateways.map(normalizeDefinition)
+    gateways: config.gateways.map((definition) => stripRoleRouteState(normalizeDefinition(definition), definition))
   };
-  writeRoleRuleFiles(normalized.gateways);
   fs.writeFileSync(configPath, JSON.stringify(normalized, null, 2), "utf8");
   return normalized;
+}
+
+function stripRoleRouteState(definition: GatewayDefinition, source: GatewayDefinition): GatewayDefinition {
+  const {
+    roleNotificationRules: _roleNotificationRules,
+    roleRouteNames: _roleRouteNames,
+    ...persistedDefinition
+  } = definition;
+
+  if (!Array.isArray(source.routeProfiles) || source.routeProfiles.length === 0) {
+    delete persistedDefinition.routeProfiles;
+  }
+
+  return persistedDefinition;
 }
 
 function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
@@ -176,6 +190,9 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   }
   if (!Number.isInteger(definition.gatewayPort) || definition.gatewayPort <= 0) {
     throw new Error(`Invalid gateway port for ${definition.id}: ${definition.gatewayPort}`);
+  }
+  if (definition.webhookPort != null && (!Number.isInteger(definition.webhookPort) || definition.webhookPort <= 0)) {
+    throw new Error(`Invalid webhook port for ${definition.id}: ${definition.webhookPort}`);
   }
 
   const dataDir = definition.dataDir ?? `./data/${definition.id}`;
@@ -207,8 +224,8 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
     dataDir,
     rolesDir,
     agentRoleFile: definition.agentRoleFile ?? "persona.md",
-    roleNotificationRules: normalizeRoleNotificationRules(definition.roleNotificationRules ?? roleRouteFiles.roleNotificationRules),
-    roleRouteNames: definition.roleRouteNames ?? roleRouteFiles.roleRouteNames,
+    roleNotificationRules: normalizeRoleNotificationRules(roleRouteFiles.roleNotificationRules),
+    roleRouteNames: roleRouteFiles.roleRouteNames,
     routeProfiles: normalizeRouteProfiles(definition, roleRouteFiles, dataDir, rolesDir)
   };
 }
@@ -223,8 +240,8 @@ function normalizeRouteProfiles(definition: GatewayDefinition, roleRouteFiles: R
     }
   }
 
-  const roleRules = normalizeRoleNotificationRules(definition.roleNotificationRules ?? roleRouteFiles.roleNotificationRules);
-  const roleNames = definition.roleRouteNames ?? roleRouteFiles.roleRouteNames;
+  const roleRules = normalizeRoleNotificationRules(roleRouteFiles.roleNotificationRules);
+  const roleNames = roleRouteFiles.roleRouteNames;
   const roleProfiles = Object.entries(roleRules).map(([roleId, rules]) => normalizeRouteProfile({
     id: roleId,
     name: roleNames[roleId] || roleId,
@@ -508,6 +525,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
     NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
     GATEWAY_PORT: String(definition.gatewayPort),
+    WEBHOOK_PORT: String(definition.webhookPort ?? definition.gatewayPort),
     WEBHOOK_PATH: definition.webhookPath ?? "/webhook",
     CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? process.env.CODEX_CWD ?? rootDir,
@@ -701,10 +719,13 @@ function sessionIndexPath(): string {
 }
 
 function ensureCodexStateBinding(definition: GatewayDefinition, statePath: string): void {
+  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
+  let existingState: Record<string, unknown> | null = null;
+
   if (fs.existsSync(statePath)) {
     try {
-      const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>;
-      if (state.monitorThreadId) {
+      existingState = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>;
+      if (existingState.monitorThreadId && existingState.monitorThreadName === targetName) {
         return;
       }
     } catch {
@@ -717,7 +738,7 @@ function ensureCodexStateBinding(definition: GatewayDefinition, statePath: strin
     return;
   }
 
-  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
+  const latestById = new Map<string, { id: string; threadName: string; updatedAt: string }>();
   let best: { id: string; threadName: string; updatedAt: string } | null = null;
   for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
     if (!line.trim()) {
@@ -728,22 +749,37 @@ function ensureCodexStateBinding(definition: GatewayDefinition, statePath: strin
       if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
         continue;
       }
-      if (parsed.thread_name !== targetName) {
-        continue;
-      }
-      if (!best || Date.parse(parsed.updated_at) > Date.parse(best.updatedAt)) {
-        best = {
-          id: parsed.id,
-          threadName: parsed.thread_name,
-          updatedAt: parsed.updated_at
-        };
+      const record = {
+        id: parsed.id,
+        threadName: parsed.thread_name,
+        updatedAt: parsed.updated_at
+      };
+      const existing = latestById.get(record.id);
+      if (!existing || Date.parse(record.updatedAt) > Date.parse(existing.updatedAt)) {
+        latestById.set(record.id, record);
       }
     } catch {
       // Ignore malformed JSONL lines.
     }
   }
 
+  for (const record of latestById.values()) {
+    if (record.threadName === targetName && (!best || Date.parse(record.updatedAt) > Date.parse(best.updatedAt))) {
+      best = record;
+    }
+  }
+
   if (!best) {
+    if (existingState?.monitorThreadId && existingState.monitorThreadName !== targetName) {
+      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify({
+        monitorThreadName: targetName,
+        monitorThreadSource: indexPath,
+        lastAutoDiscoveryAt: new Date().toISOString(),
+        lastNotificationError: `No Codex thread named "${targetName}" was found in ${indexPath}. Previous binding "${String(existingState.monitorThreadName ?? existingState.monitorThreadId)}" was cleared.`,
+        lastNotificationErrorAt: new Date().toISOString()
+      }, null, 2), "utf8");
+    }
     return;
   }
 
@@ -793,6 +829,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     messageAdapters: runtime.definition.messageAdapters ?? [runtime.definition.messageAdapterType ?? "napcat"],
     agentAdapters: runtime.definition.agentAdapters ?? ["codexDesktop"],
     gatewayPort: runtime.definition.gatewayPort,
+    webhookPort: runtime.definition.webhookPort,
     webhookPath: runtime.definition.webhookPath,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
     heartbeatMessage: runtime.definition.heartbeatMessage ?? "",

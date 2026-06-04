@@ -155,7 +155,7 @@ export function createWebhookAdapter(): MessageAdapter {
           const status = readGatewayStatus().webhook;
           patchWebhookStatus({
             path: webhookPath,
-            port: config.gatewayPort,
+            port: config.webhookPort,
             lastEventAt: new Date().toISOString(),
             eventCount: (status?.eventCount ?? 0) + 1
           });
@@ -169,20 +169,20 @@ export function createWebhookAdapter(): MessageAdapter {
             status: "error",
             message,
             path: webhookPath,
-            port: config.gatewayPort
+            port: config.webhookPort
           });
           response.writeHead(500).end(message);
         }
       });
 
-      server.listen(config.gatewayPort, "127.0.0.1", () => {
+      server.listen(config.webhookPort, "127.0.0.1", () => {
         patchWebhookStatus({
           status: "running",
           message: "Webhook 消息适配端已启动。",
           path: webhookPath,
-          port: config.gatewayPort
+          port: config.webhookPort
         });
-        console.log(`RabiRoute webhook adapter listening on http://127.0.0.1:${config.gatewayPort}${webhookPath}`);
+        console.log(`RabiRoute webhook adapter listening on http://127.0.0.1:${config.webhookPort}${webhookPath}`);
       });
     }
   };

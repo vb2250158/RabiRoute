@@ -22,6 +22,7 @@
       --green: #16a34a;
       --red: #dc2626;
       --shadow: 0 18px 48px rgba(12,42,74,.12);
+      --topbar-height: 76px;
     }
     html { background: var(--bg); overflow-x: hidden; }
     body {
@@ -100,11 +101,20 @@
       font-size: 12px;
     }
     label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
-    .app-shell { position: relative; z-index: 1; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    .app-shell {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: 1fr;
+      padding-top: var(--topbar-height);
+    }
     .topbar {
-      position: sticky;
+      position: fixed;
       top: 0;
-      z-index: 20;
+      left: 0;
+      right: 0;
+      z-index: 1000;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -115,6 +125,7 @@
         linear-gradient(90deg, rgba(255,255,255,.9), rgba(242,251,255,.82)),
         linear-gradient(135deg, rgba(25,191,193,.18), rgba(255,109,157,.08));
       backdrop-filter: blur(18px);
+      box-shadow: 0 14px 34px rgba(12,42,74,.12);
     }
     .topbar::before {
       content: "";
@@ -815,11 +826,12 @@
         const runningText = runtime.running ? "运行中" : "已停止";
         const activeClass = gateway.id === selectedGatewayId ? "active" : "";
         const title = activeRouteName(gateway) || gateway.name || gateway.id;
+        const webhookMeta = gateway.webhookPort ? ` · webhook:${gateway.webhookPort}${gateway.webhookPath || "/webhook"}` : "";
         return `
           <button class="gateway-item ${activeClass}" data-select-gateway="${escapeAttr(gateway.id)}">
             <span>
               <span class="gateway-name">${escapeHtml(title)}</span>
-              <span class="gateway-meta">:${gateway.gatewayPort || "-"} · ${escapeHtml(gateway.codexThreadName || gateway.id)}</span>
+              <span class="gateway-meta">:${gateway.gatewayPort || "-"}${escapeHtml(webhookMeta)} · ${escapeHtml(gateway.codexThreadName || gateway.id)}</span>
             </span>
             <span class="pill ${runningClass}">${runningText}</span>
           </button>
@@ -1208,7 +1220,7 @@
           return `
             <div class="adapter-fieldset">
               <div class="section-note">Webhook：接收外部系统 POST 事件，并命中预留路由。</div>
-              ${select(index, "gatewayPort", "Webhook 端口", gateway.gatewayPort || "", listeners)}
+              ${select(index, "webhookPort", "Webhook 端口", gateway.webhookPort || gateway.gatewayPort || "", listeners)}
               <label><span class="label-row">Webhook 路径${help("Webhook URL 末尾路径。默认 /webhook。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
             </div>
           `;
@@ -1231,7 +1243,7 @@
         if (adapterType === "webhook") {
           return `
             <div class="section-note" style="margin-top:12px;color:var(--navy)">Webhook</div>
-            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">监听：${escapeHtml(String(gateway.gatewayPort || "-"))}${escapeHtml(gateway.webhookPath || "/webhook")}</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">监听：${escapeHtml(String(gateway.webhookPort || gateway.gatewayPort || "-"))}${escapeHtml(gateway.webhookPath || "/webhook")}</div>
             <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：接收 Webhook 事件。</div>
           `;
         }
@@ -1282,8 +1294,11 @@
       }
       if (types.includes("webhook")) {
         const listeners = adapterOptions("webhook").listeners || [];
-        if (listeners.length > 0 && !listeners.some(option => String(option.value) === String(gateway.gatewayPort))) {
-          gateway.gatewayPort = Number(listeners[0].value);
+        if (gateway.webhookPort == null) {
+          gateway.webhookPort = gateway.gatewayPort;
+        }
+        if (listeners.length > 0 && !listeners.some(option => String(option.value) === String(gateway.webhookPort))) {
+          gateway.webhookPort = Number(listeners[0].value);
         }
         gateway.webhookPath = gateway.webhookPath || "/webhook";
       }
@@ -1686,14 +1701,14 @@
     }
     function defaultVoiceTranscriptTemplate() {
       return [
-        "Webhook 更新提醒：外部系统推送了一段文本。",
+        "语音转写更新提醒：FenneNote 捕获到一段来自电脑旁用户的语音输入。",
         "时间：{time}",
         "来源：{messageTarget}",
         "转写：{message}",
         "时长：{voiceDurationSeconds} 秒",
         "峰值：{voicePeak}",
         "",
-        "请在需要时读取 {voiceTranscriptLogPath} 查看语音转写上下文。"
+        "请直接在当前 Codex 会话里回复用户；不要生成 QQ 可发送回复，不要转交到 QQ/NapCat，也不要尝试通过 QQ 发送消息。需要上下文时再读取 {voiceTranscriptLogPath}。"
       ].join("\n");
     }
 
@@ -1749,7 +1764,7 @@
       const index = Number(event.target.dataset.index);
       const field = event.target.dataset.field;
       let value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
-      if (field === "gatewayPort") value = Number(value);
+      if (field === "gatewayPort" || field === "webhookPort") value = Number(value);
       if (field === "agentAdapters") value = String(value).trim() ? [String(value).trim()] : [];
       if (field === "agentRoleId") {
         switchGatewayRole(index, String(value));
@@ -2069,6 +2084,16 @@
     document.getElementById("save").addEventListener("click", save);
     document.getElementById("add").addEventListener("click", addGateway);
     document.getElementById("start-manager").addEventListener("click", startManager);
+    function syncTopbarHeight() {
+      const topbar = document.querySelector(".topbar");
+      if (!topbar) return;
+      document.documentElement.style.setProperty("--topbar-height", `${Math.ceil(topbar.getBoundingClientRect().height)}px`);
+    }
+    window.addEventListener("resize", syncTopbarHeight);
+    if ("ResizeObserver" in window) {
+      new ResizeObserver(syncTopbarHeight).observe(document.querySelector(".topbar"));
+    }
+    syncTopbarHeight();
     document.addEventListener("click", event => {
       if (event.target.closest && event.target.closest(".help")) return;
       document.querySelectorAll(".help.active").forEach(element => element.classList.remove("active"));

@@ -42,6 +42,7 @@ type GatewayStatus = {
   };
   napcat?: {
     connected?: boolean;
+    activeConnections?: number;
     connectionCount?: number;
     messageCount?: number;
     remoteAddress?: string;
@@ -305,25 +306,30 @@ export function createNapCatAdapter(): MessageAdapter {
   return {
     type: "napcat",
     start() {
+      const activeSockets = new Set<object>();
       const server = new WebSocketServer({
         host: "127.0.0.1",
         port: config.gatewayPort
       });
 
       server.on("connection", (socket, request) => {
+        activeSockets.add(socket);
         console.log(`NapCat connected from ${request.socket.remoteAddress}`);
         const connectedAt = new Date().toISOString();
         const currentStatus = readGatewayStatus().napcat;
         patchNapcatStatus({
           connected: true,
+          activeConnections: activeSockets.size,
           remoteAddress: request.socket.remoteAddress,
           lastConnectedAt: connectedAt,
           connectionCount: (currentStatus?.connectionCount ?? 0) + 1
         });
 
         socket.on("close", () => {
+          activeSockets.delete(socket);
           patchNapcatStatus({
-            connected: false,
+            connected: activeSockets.size > 0,
+            activeConnections: activeSockets.size,
             lastDisconnectedAt: new Date().toISOString()
           });
           console.log("NapCat disconnected");
