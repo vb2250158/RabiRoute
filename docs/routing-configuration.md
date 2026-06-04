@@ -11,15 +11,15 @@ RabiRoute 支持两种常用方式。
 推荐把路由规则放在角色目录：
 
 ```text
-data/<gateway-id>/roles/<RoleId>/routes.json
+data/roles/<RoleId>/routes.json
 ```
 
 示例：
 
 ```text
-data/default-main/roles/Rabi/routes.json
-data/default-main/roles/QAReviewer/routes.json
-data/default-main/roles/DevAssistant/routes.json
+data/roles/Rabi/routes.json
+data/roles/QAReviewer/routes.json
+data/roles/DevAssistant/routes.json
 ```
 
 manager 会把 `rolesDir` 下每个角色的 `routes.json` 组装成 route profile。这样同一个 gateway 可以共享一套 NapCat WS / HTTP，但同时拥有多个人格路由。

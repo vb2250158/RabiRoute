@@ -9,7 +9,7 @@
 ## 示例 data 包
 
 - `data/gateways.json`：默认 QQ / NapCat 到 Codex Desktop 的示例配置。
-- `data/default-main/roles/Rabi/`：默认 gateway 配套的 RabiRoute 兔娘看板娘与陪伴型成长人格，包含 `growth.md`、`skills.md`、`prompts/` 和备份用 `old/`。
+- `data/roles/Rabi/`：默认 gateway 配套的唯一 RabiRoute 兔娘看板娘与陪伴型成长人格，包含 `growth.md`、`skills.md`、`prompts/` 和备份用 `old/`。
 - `.env.example`：可选的环境变量样板，只用于不走 manager、直接用 env 启动单个 gateway 的场景。
 
 使用方式：
@@ -34,14 +34,4 @@ copy examples\.env.example .env
 cp examples/.env.example .env
 ```
 
-## 路由人格示例
-
-- `roles/Rabi/`：默认兔娘看板娘与陪伴型成长人格示例，包含 `persona.md`、`routes.json`、`growth.md`、`skills.md` 和 `prompts/`。
-
-复制到本地 gateway 的角色目录：
-
-```powershell
-mkdir data\default-main\roles
-copy examples\roles\Rabi\persona.md data\default-main\roles\Rabi\persona.md
-copy examples\roles\Rabi\routes.json data\default-main\roles\Rabi\routes.json
-```
+Rabi 只保留这一份示例，避免同一人格出现多份副本。

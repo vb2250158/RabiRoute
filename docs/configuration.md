@@ -18,8 +18,8 @@
       "codexThreadName": "QQ 消息监听",
       "codexCwd": "C:/Path/To/Your/Project",
       "agentAdapters": ["codexDesktop"],
-      "dataDir": "./data/default-main",
-      "rolesDir": "./data/default-main/roles",
+      "dataDir": "./data",
+      "rolesDir": "./data/roles",
       "agentRoleId": "",
       "notificationRules": []
     }

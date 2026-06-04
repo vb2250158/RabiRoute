@@ -83,8 +83,7 @@ src/                                RabiRoute manager、gateway、adapter、forw
 ribiwebgui/                          独立 RibiWebGUI 控制台
 plugin-adapters/                     插件侧适配入口，后续新增插件都放这里
 plugin-adapters/napcat-rabiroute/    可选 NapCat 插件入口
-examples/roles/Rabi/                 可开源示例人格
-examples/data/                       可复制到根目录 data/ 的完整示例包
+examples/data/                       可复制到根目录 data/ 的完整示例包，含唯一 Rabi 示例人格
 skills/create-rabiroute-persona/     项目内 skill：指导创建 RabiRoute 人格
 docs/                                分主题说明文档
 assets/                              README 和 RibiWebGUI 视觉资源

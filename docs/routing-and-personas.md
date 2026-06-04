@@ -22,18 +22,18 @@ RabiRoute 的“人格”不是单独一段 prompt，而是一个角色包。角
 
 公开示例：
 
-- `examples/roles/Rabi/persona.md`
-- `examples/roles/Rabi/routes.json`
-- `examples/data/default-main/roles/Rabi/`
+- `examples/data/roles/Rabi/persona.md`
+- `examples/data/roles/Rabi/routes.json`
+- `examples/data/roles/Rabi/`
 
 Rabi 示例是 RabiRoute 默认的兔娘看板娘与陪伴型成长人格样例，主要演示 `persona.md`、`routes.json`、`growth.md`、`skills.md` 和 `prompts/` 如何配合。真实项目可以在本地 `data/<gateway-id>/roles/<RoleId>/` 里扩展更完整的直接 @、回复、私聊、关键词和成长规则。
 
 一个 gateway 可以同时拥有多个路由人格。每个角色目录里的 `routes.json` 会被 manager 组装成一个 route profile；这些 route profile 共用同一个 gateway 的消息端适配器。
 
 ```text
-data/default-main/roles/Rabi/routes.json
-data/default-main/roles/QAReviewer/routes.json
-data/default-main/roles/DevAssistant/routes.json
+data/roles/Rabi/routes.json
+data/roles/QAReviewer/routes.json
+data/roles/DevAssistant/routes.json
 ```
 
 上面三套路由都会使用同一个 NapCat WebSocket 监听端口和同一个 NapCat HTTP 地址。不要为了多个路由人格复制多个 gateway，除非它们真的对应不同 QQ 号、不同平台账号或不同监听端口。
@@ -51,9 +51,7 @@ cp -R examples/data/. data/
 也可以只复制单个人格到 gateway 的角色目录：
 
 ```powershell
-mkdir data\default-main\roles
-copy examples\roles\Rabi\persona.md data\default-main\roles\Rabi\persona.md
-copy examples\roles\Rabi\routes.json data\default-main\roles\Rabi\routes.json
+xcopy examples\data data /E /I
 ```
 
 然后在 WebUI 的 `路由人格` 中选择 `Rabi`。选择人格后，转发给处理端的提示末尾会追加角色文件路径，消息记录也会写入该角色目录。

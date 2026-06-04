@@ -7,8 +7,8 @@
 用途：
 
 - 提供一份完整的 `data/gateways.json` 示例。
-- 给默认 gateway 提供角色 `Rabi`。
-- 演示本地 gateway 的 `rolesDir` 应该长什么样。
+- 给默认 gateway 提供唯一角色 `roles/Rabi`。
+- 演示本地 gateway 的 `rolesDir` 应该指向 `./data/roles`。
 - 让用户复制后可以直接在 WebUI 里选择并预览示例人格。
 
 使用方式：
