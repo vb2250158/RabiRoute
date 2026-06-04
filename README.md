@@ -41,11 +41,14 @@ GitHub: https://github.com/vb2250158/RabiRoute
 
 ## 文档索引
 
+所有项目级文档集中在 [docs/](docs/README.md)。
+
 - 新用户先看：[快速上手](docs/getting-started.md)
 - 配置 gateway、RibiWebGUI、Agent 端和可选 NapCat 入口：[配置与接入](docs/configuration.md)
-- 写路由规则、模板、人格角色包：[路由与人格](docs/routing-and-personas.md)
+- 配 `routes.json`、route kind、regex 和模板：[路由配置](docs/routing-configuration.md)
+- 写人格角色包和成长型人格：[路由人格](docs/routing-and-personas.md)
 - 外发失败、Codex IPC、普通群消息不转发：[排障](docs/troubleshooting.md)
-- 想理解边界和演进路线：[ARCHITECTURE.md](ARCHITECTURE.md)
+- 想理解边界和演进路线：[架构说明](docs/architecture.md)
 
 ## 最小启动
 
@@ -85,7 +88,6 @@ examples/data/                       可复制到根目录 data/ 的完整示例
 skills/create-rabiroute-persona/     项目内 skill：指导创建 RabiRoute 人格
 docs/                                分主题说明文档
 assets/                              README 和 RibiWebGUI 视觉资源
-ARCHITECTURE.md                      架构边界和演进说明
 ```
 
 运行期文件默认不提交：

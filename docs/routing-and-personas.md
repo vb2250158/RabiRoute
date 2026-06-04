@@ -1,59 +1,6 @@
 # 路由与人格
 
-## 路由规则
-
-路由规则决定一条消息是否转发给处理端，以及使用哪段模板。
-
-```json
-{
-  "id": "group-direct-at",
-  "name": "直接 @ 模板",
-  "enabled": true,
-  "targetGroupId": "",
-  "regex": "",
-  "template": "QQ 消息更新提醒：群聊里有人 @ 了机器人。\n时间：{time}\n目标：{messageTarget}\n发送者：{sender}\n消息：{message}\n\n请在需要时读取 {groupLogPath} 查看上下文。",
-  "routeKinds": ["direct_at"]
-}
-```
-
-支持的 route kind：
-
-- `direct_at`：群聊直接 @ 机器人。
-- `direct_reply`：当前消息直接回复机器人。
-- `indirect_reply`：当前消息回复了某条曾经 @ 机器人的消息。
-- `group_message`：普通群聊消息，通常配合 `regex` 使用。
-- `private`：私聊消息。
-- `heartbeat`：定时触发消息。
-
-`regex` 会匹配规范化后的 `routeText`，也会在间接回复场景中匹配 `repliedRouteText`。它支持变量展开，例如 `{RobotQQId}`、`{SenderQQId}`、`{GroupId}`、`{ReplyMessageId}`。
-
-## 模板填写规则
-
-- 在 WebUI 的模板文本框里直接换行，不要手写 `\n`。
-- 在 `persona.md` 里写 Markdown 正文，不要把整段人格包成 JSON 字符串。
-- 只有直接编辑 `routes.json` 或 `data/gateways.json` 时，JSON 字符串内部才会出现 `\n` 和 `\\` 这类转义。
-- 路径占位推荐用 `C:/Path/To/Project` 或 `/path/to/project`，避免公开示例里的 JSON 转义被误抄到 WebUI。
-
-如果 WebUI 里看到模板显示成 `消息：{message}\n\n请读取...`，说明模板被双重转义了。保存新版 WebUI 会自动把可见的 `\n` 转成真实换行；手工修时也应直接换行，而不是继续添加反斜杠。
-
-模板常用变量：
-
-```text
-{routeKind} {time} {targetType} {targetId} {messageTarget}
-{now} {currentTime} {currentDate} {currentClock} {currentIsoTime}
-{currentTimestamp} {currentYear} {currentMonth} {currentDay}
-{currentWeekday} {currentHour} {currentMinute} {currentSecond}
-{groupId} {userId} {selfId} {sender} {senderName}
-{RobotQQId} {SenderQQId} {GroupId} {ReplyMessageId}
-{message} {rawMessage} {routeText} {repliedRouteText} {messageId}
-{repliedMessageId} {repliedMessage}
-{botNickname} {routeProfileId} {routeProfileName}
-{agentRoleId} {agentRolePath} {agentRoleDir}
-{dataDir} {groupLogPath} {privateLogPath} {heartbeatLogPath}
-{heartbeatIntervalSeconds}
-```
-
-`{time}` 是消息或事件发生时间；`{now}` / `{currentTime}` 是模板渲染时的当前本地时间。延迟补发或心跳巡检时，推荐同时写清这两个时间。
+路由规则、`routes.json`、route kind、`regex` 和消息模板写法见 [路由配置](routing-configuration.md)。这里专门讲人格包。
 
 ## 路由人格
 

@@ -52,6 +52,8 @@ http://127.0.0.1:8790/
 - `路由人格`：选择或创建角色。想用完整示例 Rabi 时，可以先把 `examples/data` 复制到项目根目录的 `data`。
 - `消息规则`：确认哪些 route kind 会转发给处理端。
 
+需要手动写 `routes.json`、关键词规则或消息模板时，看 [路由配置](routing-configuration.md)。
+
 复制示例 data 包：
 
 ```powershell
