@@ -44,7 +44,8 @@
 {RobotQQId} {SenderQQId} {GroupId} {ReplyMessageId}
 {message} {rawMessage} {routeText} {repliedRouteText} {messageId}
 {repliedMessageId} {repliedMessage}
-{botNickname} {agentRoleId} {agentRolePath} {agentRoleDir}
+{botNickname} {routeProfileId} {routeProfileName}
+{agentRoleId} {agentRolePath} {agentRoleDir}
 {dataDir} {groupLogPath} {privateLogPath} {heartbeatLogPath}
 {heartbeatIntervalSeconds}
 ```
@@ -71,6 +72,16 @@ RabiRoute 的“人格”不是单独一段 prompt，而是一个角色包。角
 - `examples/data/default-main/roles/Rabi/`
 
 Rabi 示例是一个轻量公开样例，主要演示 `persona.md` 和 `routes.json` 如何配合。真实项目可以在本地 `data/<gateway-id>/roles/<RoleId>/` 里扩展更完整的直接 @、回复、私聊、关键词和心跳规则。
+
+一个 gateway 可以同时拥有多个路由人格。每个角色目录里的 `routes.json` 会被 manager 组装成一个 route profile；这些 route profile 共用同一个 gateway 的消息端适配器。
+
+```text
+data/default-main/roles/Rabi/routes.json
+data/default-main/roles/ProjectPM/routes.json
+data/default-main/roles/DevAssistant/routes.json
+```
+
+上面三套路由都会使用同一个 NapCat WebSocket 监听端口和同一个 NapCat HTTP 地址。不要为了多个路由人格复制多个 gateway，除非它们真的对应不同 QQ 号、不同平台账号或不同监听端口。
 
 本地使用时，推荐直接复制示例 data 包：
 

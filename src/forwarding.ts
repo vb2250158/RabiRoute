@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
-import { config, rolePathsFor, type NotificationRule } from "./config.js";
+import { config, rolePathsFor, rolePathsForRoute, type NotificationRule, type RouteProfile } from "./config.js";
 import { appendCodexNotificationToDir, appendGroupMessageToDir, appendHeartbeatEventToDir, appendPrivateMessageToDir, appendVoiceTranscriptEventToDir, type GroupMessageRecord, type HeartbeatEventRecord, type PrivateMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
 
 export type ForwardRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "voice_transcript";
@@ -60,10 +60,11 @@ function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceTranscri
   return "source" in record || "durationSeconds" in record || "peak" in record;
 }
 
-function routeVariablesFor(record: ForwardRecord, extraValues: ForwardTemplateValues): Record<string, string> {
+function routeVariablesFor(record: ForwardRecord, extraValues: ForwardTemplateValues, route?: RouteProfile): Record<string, string> {
   const isGroup = "groupId" in record;
   const variables: Record<string, string> = {
     ...config.routeVariables,
+    ...(route?.routeVariables ?? {}),
     SenderQQId: "userId" in record ? String(record.userId) : "",
     GroupId: isGroup ? String(record.groupId) : "",
     ReplyMessageId: extraValues.repliedMessageId == null ? "" : String(extraValues.repliedMessageId)
@@ -109,7 +110,8 @@ function ruleMatches(
   rule: NotificationRule,
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
-  extraValues: ForwardTemplateValues
+  extraValues: ForwardTemplateValues,
+  route?: RouteProfile
 ): boolean {
   if (!rule.enabled) {
     return false;
@@ -130,7 +132,7 @@ function ruleMatches(
   }
 
   try {
-    const variables = routeVariablesFor(record, extraValues);
+    const variables = routeVariablesFor(record, extraValues, route);
     return new RegExp(expandRouteVariables(rule.regex, variables)).test(routeMatchText(record, variables, extraValues));
   } catch (error) {
     console.error(`Invalid notification rule regex: ${rule.id}`, error);
@@ -141,15 +143,18 @@ function ruleMatches(
 function ruleForRoute(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
-  extraValues: ForwardTemplateValues
+  extraValues: ForwardTemplateValues,
+  route?: RouteProfile
 ): NotificationRule | null {
-  return config.notificationRules.find((item) => ruleMatches(item, routeKind, record, extraValues)) ?? null;
+  const rules = route?.notificationRules ?? config.notificationRules;
+  return rules.find((item) => ruleMatches(item, routeKind, record, extraValues, route)) ?? null;
 }
 
 function commonTemplateValues(
   record: ForwardRecord,
   extraValues: ForwardTemplateValues,
-  roleContext = rolePathsFor(config.agentRoleId)
+  roleContext = rolePathsFor(config.agentRoleId),
+  route?: RouteProfile
 ): ForwardTemplateValues {
   const sender = record.senderName || ("userId" in record ? record.userId : "RabiRoute");
   const isGroup = isGroupRecord(record);
@@ -157,7 +162,7 @@ function commonTemplateValues(
   const isVoiceTranscript = isVoiceTranscriptRecord(record);
   const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : "heartbeat";
   const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isVoiceTranscript ? "voice_transcript" : "private";
-  const routeVariables = routeVariablesFor(record, extraValues);
+  const routeVariables = routeVariablesFor(record, extraValues, route);
   const routeText = routeTextFromRawMessage(record.rawMessage, routeVariables);
   const repliedRouteText = typeof extraValues.repliedMessage === "string"
     ? routeTextFromRawMessage(extraValues.repliedMessage, routeVariables)
@@ -179,6 +184,8 @@ function commonTemplateValues(
     messageId: record.messageId,
     botNickname: config.botNickname,
     agentRoleId: roleContext.roleId,
+    routeProfileId: route?.id,
+    routeProfileName: route?.name,
     agentRolePath: roleContext.rolePath,
     agentRoleDir: roleContext.roleDir,
     dataDir: roleContext.dataDir,
@@ -210,16 +217,36 @@ function dispatchToAgentAdapter(type: AgentAdapterType, message: string): void {
   void adapter.deliver(message).catch((error) => console.error(`Failed to deliver message through ${adapter.type} agent adapter`, error));
 }
 
-export function forwardMessage(
+function fallbackRouteProfile(): RouteProfile {
+  return {
+    id: config.agentRoleId || "default",
+    name: config.agentRoleId || "默认路由",
+    enabled: true,
+    agentRoleId: config.agentRoleId,
+    agentRoleFile: config.agentRoleFile,
+    rolesDir: config.rolesDir,
+    dataDir: undefined,
+    routeVariables: {},
+    notificationRules: config.notificationRules
+  };
+}
+
+function activeRouteProfiles(): RouteProfile[] {
+  const routes = config.routeProfiles.length > 0 ? config.routeProfiles : [fallbackRouteProfile()];
+  return routes.filter((route) => route.enabled !== false);
+}
+
+function forwardMessageToRoute(
+  route: RouteProfile,
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
 ): void {
-  const rule = ruleForRoute(routeKind, record, extraValues);
+  const rule = ruleForRoute(routeKind, record, extraValues, route);
   if (!rule) {
     return;
   }
-  const roleContext = rolePathsFor(config.agentRoleId);
+  const roleContext = rolePathsForRoute(route);
 
   if (path.resolve(roleContext.dataDir) !== path.resolve(config.dataDir)) {
     if (isGroupRecord(record)) {
@@ -234,7 +261,7 @@ export function forwardMessage(
   }
 
   const message = appendAgentRoleReference(renderTemplate(rule.template, {
-    ...commonTemplateValues(record, extraValues, roleContext),
+    ...commonTemplateValues(record, extraValues, roleContext, route),
     ...extraValues,
     routeKind
   }), roleContext.rolePath);
@@ -248,5 +275,15 @@ export function forwardMessage(
 
   for (const adapter of configuredAgentAdapters()) {
     dispatchToAgentAdapter(adapter, message);
+  }
+}
+
+export function forwardMessage(
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  extraValues: ForwardTemplateValues = {}
+): void {
+  for (const route of activeRouteProfiles()) {
+    forwardMessageToRoute(route, routeKind, record, extraValues);
   }
 }

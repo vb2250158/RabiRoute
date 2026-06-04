@@ -66,6 +66,18 @@ export type NotificationRule = {
   template: string;
 };
 
+export type RouteProfile = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  agentRoleId?: string;
+  agentRoleFile: string;
+  rolesDir: string;
+  dataDir?: string;
+  routeVariables: Record<string, string>;
+  notificationRules: NotificationRule[];
+};
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -172,6 +184,25 @@ function parseAgentAdapters(rawTypes: string | undefined): AgentAdapterType[] {
   return [];
 }
 
+function parseRouteProfiles(raw: string | undefined): RouteProfile[] {
+  if (!raw?.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((item, index) => normalizeRouteProfile(item, index))
+      .filter((item): item is RouteProfile => Boolean(item));
+  } catch (error) {
+    console.error("Failed to parse ROUTE_PROFILES", error);
+    return [];
+  }
+}
+
 function parsePositiveNumber(raw: string | undefined, fallback: number): number {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -197,6 +228,34 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
     targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId.trim() : "",
     regex: typeof raw.regex === "string" ? raw.regex : "",
     template: normalizeTemplateText(raw.template)
+  };
+}
+
+function normalizeRouteProfile(item: unknown, index: number): RouteProfile | null {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const raw = item as Partial<RouteProfile>;
+  const roleId = sanitizeRoleId(raw.agentRoleId);
+  const id = sanitizeRoleId(raw.id) || roleId || `route-${index + 1}`;
+  const rules = parseNotificationRules(JSON.stringify(raw.notificationRules ?? [])) ?? [];
+  if (rules.length === 0) {
+    return null;
+  }
+
+  return {
+    id,
+    name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id,
+    enabled: raw.enabled !== false,
+    agentRoleId: roleId,
+    agentRoleFile: typeof raw.agentRoleFile === "string" && raw.agentRoleFile.trim() ? raw.agentRoleFile.trim() : "persona.md",
+    rolesDir: typeof raw.rolesDir === "string" && raw.rolesDir.trim() ? path.resolve(rootDir, raw.rolesDir) : rolesDir,
+    dataDir: typeof raw.dataDir === "string" && raw.dataDir.trim() ? path.resolve(rootDir, raw.dataDir) : undefined,
+    routeVariables: raw.routeVariables && typeof raw.routeVariables === "object" && !Array.isArray(raw.routeVariables)
+      ? Object.fromEntries(Object.entries(raw.routeVariables).map(([key, value]) => [key, String(value)]))
+      : {},
+    notificationRules: rules
   };
 }
 
@@ -287,6 +346,8 @@ const agentRoleId = sanitizeRoleId(process.env.AGENT_ROLE_ID);
 const agentRoleFile = process.env.AGENT_ROLE_FILE?.trim() || "persona.md";
 const agentRoleDir = agentRoleId ? path.join(rolesDir, agentRoleId) : "";
 const agentRolePath = agentRoleDir ? path.join(agentRoleDir, agentRoleFile) : "";
+const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES) ?? defaultNotificationRules();
+const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES);
 
 export const config = {
   messageAdapterType: parseMessageAdapterType(process.env.MESSAGE_ADAPTER_TYPE),
@@ -321,7 +382,8 @@ export const config = {
   privateNotificationTemplate: process.env.PRIVATE_NOTIFICATION_TEMPLATE || defaultPrivateNotificationTemplate,
   heartbeatNotificationTemplate: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate,
   voiceTranscriptNotificationTemplate: process.env.VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE || defaultVoiceTranscriptNotificationTemplate,
-  notificationRules: parseNotificationRules(process.env.NOTIFICATION_RULES) ?? defaultNotificationRules()
+  notificationRules,
+  routeProfiles
 };
 
 export function setBotProfile(profile: { nickname?: string; userId?: string | number }): void {
@@ -334,13 +396,24 @@ export function setBotProfile(profile: { nickname?: string; userId?: string | nu
 }
 
 export function rolePathsFor(agentRoleId: string | undefined): { roleId: string; roleDir: string; rolePath: string; dataDir: string } {
-  const roleId = sanitizeRoleId(agentRoleId) || config.agentRoleId;
-  const roleDir = roleId ? path.join(config.rolesDir, roleId) : "";
+  return rolePathsForRoute({
+    agentRoleId,
+    agentRoleFile: config.agentRoleFile,
+    rolesDir: config.rolesDir,
+    dataDir: undefined
+  });
+}
+
+export function rolePathsForRoute(route: Pick<RouteProfile, "agentRoleId" | "agentRoleFile" | "rolesDir" | "dataDir">): { roleId: string; roleDir: string; rolePath: string; dataDir: string } {
+  const roleId = sanitizeRoleId(route.agentRoleId) || config.agentRoleId;
+  const routeRolesDir = route.rolesDir || config.rolesDir;
+  const routeRoleFile = route.agentRoleFile || config.agentRoleFile;
+  const roleDir = roleId ? path.join(routeRolesDir, roleId) : "";
   return {
     roleId,
     roleDir,
-    rolePath: roleDir ? path.join(roleDir, config.agentRoleFile) : "",
-    dataDir: roleDir || config.baseDataDir
+    rolePath: roleDir ? path.join(roleDir, routeRoleFile) : "",
+    dataDir: roleDir || route.dataDir || config.baseDataDir
   };
 }
 

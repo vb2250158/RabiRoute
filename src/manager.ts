@@ -28,6 +28,7 @@ type GatewayDefinition = {
   agentRoleId?: string;
   agentRoleFile?: string;
   agentAdapters?: AgentAdapterType[];
+  routeProfiles?: RouteProfileDefinition[];
   dataDir?: string;
   groupNotificationTemplate?: string;
   groupAtNotificationTemplate?: string;
@@ -41,6 +42,18 @@ type GatewayDefinition = {
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
   roleRouteNames?: Record<string, string>;
+};
+
+type RouteProfileDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  agentRoleId?: string;
+  agentRoleFile?: string;
+  rolesDir?: string;
+  dataDir?: string;
+  routeVariables?: Record<string, string>;
+  notificationRules?: NotificationRuleDefinition[];
 };
 
 type NotificationRuleDefinition = {
@@ -195,7 +208,79 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
     rolesDir,
     agentRoleFile: definition.agentRoleFile ?? "persona.md",
     roleNotificationRules: normalizeRoleNotificationRules(definition.roleNotificationRules ?? roleRouteFiles.roleNotificationRules),
-    roleRouteNames: definition.roleRouteNames ?? roleRouteFiles.roleRouteNames
+    roleRouteNames: definition.roleRouteNames ?? roleRouteFiles.roleRouteNames,
+    routeProfiles: normalizeRouteProfiles(definition, roleRouteFiles, dataDir, rolesDir)
+  };
+}
+
+function normalizeRouteProfiles(definition: GatewayDefinition, roleRouteFiles: RoleRouteFiles, dataDir: string, rolesDir: string): RouteProfileDefinition[] {
+  if (Array.isArray(definition.routeProfiles) && definition.routeProfiles.length > 0) {
+    const explicitProfiles = definition.routeProfiles
+      .map((profile, index) => normalizeRouteProfile(profile, index, definition, dataDir, rolesDir))
+      .filter((profile): profile is RouteProfileDefinition => Boolean(profile));
+    if (explicitProfiles.length > 0) {
+      return explicitProfiles;
+    }
+  }
+
+  const roleRules = normalizeRoleNotificationRules(definition.roleNotificationRules ?? roleRouteFiles.roleNotificationRules);
+  const roleNames = definition.roleRouteNames ?? roleRouteFiles.roleRouteNames;
+  const roleProfiles = Object.entries(roleRules).map(([roleId, rules]) => normalizeRouteProfile({
+    id: roleId,
+    name: roleNames[roleId] || roleId,
+    enabled: true,
+    agentRoleId: roleId,
+    agentRoleFile: definition.agentRoleFile ?? "persona.md",
+    rolesDir,
+    routeVariables: definition.routeVariables,
+    notificationRules: rules
+  }, 0, definition, dataDir, rolesDir)).filter((profile): profile is RouteProfileDefinition => Boolean(profile));
+
+  if (roleProfiles.length > 0) {
+    return roleProfiles;
+  }
+
+  const fallbackRules = normalizeRuleDefinitions(definition.notificationRules) ?? [];
+  if (fallbackRules.length === 0) {
+    return [];
+  }
+
+  return [normalizeRouteProfile({
+    id: sanitizeRoleId(definition.agentRoleId) || "default",
+    name: definition.routeName || definition.name || "默认路由",
+    enabled: true,
+    agentRoleId: definition.agentRoleId,
+    agentRoleFile: definition.agentRoleFile ?? "persona.md",
+    rolesDir,
+    routeVariables: definition.routeVariables,
+    notificationRules: fallbackRules
+  }, 0, definition, dataDir, rolesDir)].filter((profile): profile is RouteProfileDefinition => Boolean(profile));
+}
+
+function normalizeRouteProfile(
+  profile: RouteProfileDefinition,
+  index: number,
+  definition: GatewayDefinition,
+  dataDir: string,
+  rolesDir: string
+): RouteProfileDefinition | null {
+  const roleId = sanitizeRoleId(profile.agentRoleId);
+  const id = sanitizeRoleId(profile.id) || roleId || `route-${index + 1}`;
+  const rules = normalizeRuleDefinitions(profile.notificationRules) ?? [];
+  if (rules.length === 0) {
+    return null;
+  }
+
+  return {
+    id,
+    name: profile.name?.trim() || id,
+    enabled: profile.enabled !== false,
+    agentRoleId: roleId,
+    agentRoleFile: profile.agentRoleFile?.trim() || definition.agentRoleFile || "persona.md",
+    rolesDir: profile.rolesDir?.trim() || rolesDir,
+    dataDir: profile.dataDir?.trim() || dataDir,
+    routeVariables: profile.routeVariables ?? definition.routeVariables ?? {},
+    notificationRules: rules
   };
 }
 
@@ -433,6 +518,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     TARGET_GROUP_ID: "",
     BOT_NICKNAME: process.env.BOT_NICKNAME ?? "QQ小助手",
     ROUTE_VARIABLES: definition.routeVariables ? JSON.stringify(definition.routeVariables) : "",
+    ROUTE_PROFILES: Array.isArray(definition.routeProfiles) ? JSON.stringify(definition.routeProfiles) : "",
     DATA_DIR: definition.dataDir ?? `./data/${definition.id}`,
     GROUP_NOTIFICATION_TEMPLATE: definition.groupNotificationTemplate ?? "",
     GROUP_AT_NOTIFICATION_TEMPLATE: definition.groupAtNotificationTemplate ?? "",
@@ -714,6 +800,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     targetGroupId: runtime.definition.targetGroupId ?? "",
     routeVariables: runtime.definition.routeVariables,
     routeName: runtime.definition.routeName,
+    routeProfiles: runtime.definition.routeProfiles ?? [],
     codexThreadName: runtime.definition.codexThreadName ?? runtime.definition.name ?? runtime.definition.id,
     rolesDir: runtime.definition.rolesDir,
     agentRoleId: runtime.definition.agentRoleId,
