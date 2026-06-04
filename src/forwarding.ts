@@ -1,12 +1,11 @@
 import path from "node:path";
-import { notifyCodex } from "./codexApp.js";
-import { notifyCodexDesktop } from "./codexDesktopIpc.js";
+import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
+import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, rolePathsFor, type NotificationRule } from "./config.js";
 import { appendCodexNotificationToDir, appendGroupMessageToDir, appendHeartbeatEventToDir, appendPrivateMessageToDir, appendVoiceTranscriptEventToDir, type GroupMessageRecord, type HeartbeatEventRecord, type PrivateMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
 
 export type ForwardRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "voice_transcript";
 type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "voice_transcript";
-type ForwardTarget = "codexDesktop" | "codexApp";
 type ForwardRecord = GroupMessageRecord | PrivateMessageRecord | HeartbeatEventRecord | VoiceTranscriptEventRecord;
 
 export type ForwardTemplateValues = Record<string, string | number | undefined>;
@@ -93,9 +92,9 @@ function routeMatchText(record: ForwardRecord, variables: Record<string, string>
   return parts.join("\n");
 }
 
-function configuredForwardTargets(): ForwardTarget[] {
-  if (config.forwardTargets.length > 0) {
-    return config.forwardTargets;
+function configuredAgentAdapters(): AgentAdapterType[] {
+  if (config.agentAdapters.length > 0) {
+    return config.agentAdapters;
   }
   if (config.codexDesktopIpcNotify) {
     return ["codexDesktop"];
@@ -156,7 +155,7 @@ function commonTemplateValues(
   const isGroup = isGroupRecord(record);
   const isHeartbeat = isHeartbeatRecord(record);
   const isVoiceTranscript = isVoiceTranscriptRecord(record);
-  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "fennenote" : "heartbeat";
+  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : "heartbeat";
   const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isVoiceTranscript ? "voice_transcript" : "private";
   const routeVariables = routeVariablesFor(record, extraValues);
   const routeText = routeTextFromRawMessage(record.rawMessage, routeVariables);
@@ -206,13 +205,9 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   return routeKind === "private" ? "private" : "group_mention";
 }
 
-function dispatchToTarget(target: ForwardTarget, message: string): void {
-  if (target === "codexDesktop") {
-    void notifyCodexDesktop(message).catch((error) => console.error("Failed to forward message to Codex Desktop", error));
-    return;
-  }
-
-  void notifyCodex(message).catch((error) => console.error("Failed to forward message to Codex app-server", error));
+function dispatchToAgentAdapter(type: AgentAdapterType, message: string): void {
+  const adapter = createAgentAdapter(type);
+  void adapter.deliver(message).catch((error) => console.error(`Failed to deliver message through ${adapter.type} agent adapter`, error));
 }
 
 export function forwardMessage(
@@ -251,7 +246,7 @@ export function forwardMessage(
     text: message
   }, roleContext.dataDir);
 
-  for (const target of configuredForwardTargets()) {
-    dispatchToTarget(target, message);
+  for (const adapter of configuredAgentAdapters()) {
+    dispatchToAgentAdapter(adapter, message);
   }
 }

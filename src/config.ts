@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
+import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 
 dotenv.config();
@@ -43,7 +44,7 @@ export const defaultHeartbeatNotificationTemplate = [
 ].join("\n");
 
 export const defaultVoiceTranscriptNotificationTemplate = [
-  "语音转写更新提醒：FenneNote 捕获到一段新的语音笔记。",
+  "Webhook 更新提醒：外部系统推送了一段文本。",
   "时间：{time}",
   "来源：{messageTarget}",
   "转写：{message}",
@@ -154,6 +155,23 @@ function parseMessageAdapterTypes(rawTypes: string | undefined, rawType: string 
   return [parseMessageAdapterType(rawType)];
 }
 
+function parseAgentAdapters(rawTypes: string | undefined): AgentAdapterType[] {
+  if (!rawTypes?.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawTypes) as unknown;
+    if (Array.isArray(parsed)) {
+      return normalizeAgentAdapters(parsed);
+    }
+  } catch {
+    return normalizeAgentAdapters(rawTypes.split(",").map((item) => item.trim()));
+  }
+
+  return [];
+}
+
 function parsePositiveNumber(raw: string | undefined, fallback: number): number {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -178,8 +196,24 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
     routeKinds,
     targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId.trim() : "",
     regex: typeof raw.regex === "string" ? raw.regex : "",
-    template: raw.template
+    template: normalizeTemplateText(raw.template)
   };
+}
+
+function normalizeTemplateText(value: string): string {
+  return value
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n");
+}
+
+function normalizeCodexCwd(value: string | undefined): string | undefined {
+  const trimmed = value?.trim() ?? "";
+  const compact = trimmed.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+  if (!trimmed || compact === "c:/path/to/your/project") {
+    return undefined;
+  }
+
+  return trimmed;
 }
 
 function sanitizeRoleId(raw: string | undefined): string {
@@ -266,12 +300,9 @@ export const config = {
   codexAppServerUrl: process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500",
   codexDirectNotify: process.env.CODEX_DIRECT_NOTIFY === "1",
   codexDesktopIpcNotify: process.env.CODEX_DESKTOP_IPC_NOTIFY !== "0",
-  forwardTargets: (process.env.FORWARD_TARGETS ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item): item is "codexDesktop" | "codexApp" => item === "codexDesktop" || item === "codexApp"),
+  agentAdapters: parseAgentAdapters(process.env.AGENT_ADAPTERS),
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",
-  codexCwd: process.env.CODEX_CWD ?? process.cwd(),
+  codexCwd: normalizeCodexCwd(process.env.CODEX_CWD) ?? process.cwd(),
   targetGroupId: process.env.TARGET_GROUP_ID ?? "",
   botNickname,
   botUserId: "",

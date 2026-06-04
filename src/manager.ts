@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 
 type GatewayDefinition = {
@@ -26,7 +27,7 @@ type GatewayDefinition = {
   rolesDir?: string;
   agentRoleId?: string;
   agentRoleFile?: string;
-  forwardTargets?: string[];
+  agentAdapters?: AgentAdapterType[];
   dataDir?: string;
   groupNotificationTemplate?: string;
   groupAtNotificationTemplate?: string;
@@ -35,6 +36,7 @@ type GatewayDefinition = {
   groupReplyNotificationTemplate?: string;
   groupNicknameNotificationTemplate?: string;
   privateNotificationTemplate?: string;
+  heartbeatNotificationTemplate?: string;
   voiceTranscriptNotificationTemplate?: string;
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
@@ -75,13 +77,42 @@ type GatewayRuntime = {
 };
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const configPath = path.resolve(rootDir, process.env.GATEWAY_MANAGER_CONFIG ?? "gateways.json");
+const configPath = path.resolve(rootDir, process.env.GATEWAY_MANAGER_CONFIG ?? path.join("data", "gateways.json"));
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
-const standaloneWebuiPath = path.join(rootDir, "napcat-plugin-codex-gateway", "webui", "gateways.html");
+const standaloneWebuiPath = path.join(rootDir, "ribiwebgui", "gateways.html");
 const runtimes = new Map<string, GatewayRuntime>();
 
 function definitionFingerprint(definition: GatewayDefinition): string {
   return JSON.stringify(definition);
+}
+
+function defaultGatewayConfig(): GatewayConfigFile {
+  return {
+    gateways: [
+      {
+        id: "default-main",
+        name: "默认 QQ 网关",
+        enabled: true,
+        messageAdapters: ["napcat", "heartbeat"],
+        gatewayPort: 8789,
+        napcatHttpUrl: "http://127.0.0.1:3000",
+        napcatAccessToken: "",
+        heartbeatIntervalSeconds: 900,
+        heartbeatMessage: "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
+        codexThreadName: "QQ 消息监听",
+        codexCwd: "",
+        rolesDir: "./data/default-main/roles",
+        agentRoleId: "",
+        agentRoleFile: "persona.md",
+        agentAdapters: ["codexDesktop"],
+        dataDir: "./data/default-main",
+        routeVariables: {},
+        messageAdapterType: "napcat",
+        routeName: "默认路由",
+        roleRouteNames: {}
+      }
+    ]
+  };
 }
 
 function ensureConfigFile(): void {
@@ -89,8 +120,18 @@ function ensureConfigFile(): void {
     return;
   }
 
-  const examplePath = path.join(rootDir, "gateways.example.json");
-  fs.copyFileSync(examplePath, configPath);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const exampleDataDir = path.join(rootDir, "examples", "data");
+  if (fs.existsSync(path.join(exampleDataDir, "gateways.json"))) {
+    fs.cpSync(exampleDataDir, path.dirname(configPath), {
+      recursive: true,
+      force: false,
+      errorOnExist: false
+    });
+    return;
+  }
+
+  fs.writeFileSync(configPath, JSON.stringify(defaultGatewayConfig(), null, 2), "utf8");
 }
 
 function readConfig(): GatewayConfigFile {
@@ -129,18 +170,31 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   const roleRouteFiles = readRoleRouteFiles(rolesDir);
   const { botNickname: _legacyBotNickname, ...cleanDefinition } = definition as GatewayDefinition & { botNickname?: string };
   const messageAdapters = normalizeMessageAdapters(definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"]);
+  const agentAdapters = normalizeAgentAdapters(definition.agentAdapters ?? ["codexDesktop"]);
   return {
     ...cleanDefinition,
     name: definition.name ?? definition.id,
     enabled: definition.enabled !== false,
     messageAdapterType: messageAdapters[0] ?? "napcat",
     messageAdapters,
+    agentAdapters,
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
+    codexCwd: normalizeCodexCwd(definition.codexCwd),
+    groupNotificationTemplate: normalizeOptionalTemplate(definition.groupNotificationTemplate),
+    groupAtNotificationTemplate: normalizeOptionalTemplate(definition.groupAtNotificationTemplate),
+    groupDirectReplyNotificationTemplate: normalizeOptionalTemplate(definition.groupDirectReplyNotificationTemplate),
+    groupIndirectReplyNotificationTemplate: normalizeOptionalTemplate(definition.groupIndirectReplyNotificationTemplate),
+    groupReplyNotificationTemplate: normalizeOptionalTemplate(definition.groupReplyNotificationTemplate),
+    groupNicknameNotificationTemplate: normalizeOptionalTemplate(definition.groupNicknameNotificationTemplate),
+    privateNotificationTemplate: normalizeOptionalTemplate(definition.privateNotificationTemplate),
+    heartbeatNotificationTemplate: normalizeOptionalTemplate(definition.heartbeatNotificationTemplate),
+    voiceTranscriptNotificationTemplate: normalizeOptionalTemplate(definition.voiceTranscriptNotificationTemplate),
+    notificationRules: normalizeRuleDefinitions(definition.notificationRules),
     dataDir,
     rolesDir,
     agentRoleFile: definition.agentRoleFile ?? "persona.md",
-    roleNotificationRules: definition.roleNotificationRules ?? roleRouteFiles.roleNotificationRules,
+    roleNotificationRules: normalizeRoleNotificationRules(definition.roleNotificationRules ?? roleRouteFiles.roleNotificationRules),
     roleRouteNames: definition.roleRouteNames ?? roleRouteFiles.roleRouteNames
   };
 }
@@ -159,6 +213,66 @@ function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
 function normalizePositiveNumber(value: unknown, fallback: number): number {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
+}
+
+function normalizeCodexCwd(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  const compact = trimmed.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+  if (!trimmed || compact === "c:/path/to/your/project") {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function normalizeTemplateText(value: string): string {
+  return value
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n");
+}
+
+function normalizeOptionalTemplate(value: unknown): string | undefined {
+  return typeof value === "string" ? normalizeTemplateText(value) : undefined;
+}
+
+function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefinition[] | undefined {
+  if (!Array.isArray(rules)) {
+    return undefined;
+  }
+
+  return rules.map((rule, index) => {
+    const raw = rule && typeof rule === "object" ? rule as Partial<NotificationRuleDefinition> : {};
+    return {
+      id: typeof raw.id === "string" && raw.id.trim() ? raw.id : `rule-${index + 1}`,
+      name: raw.name,
+      enabled: raw.enabled !== false,
+      routeKinds: Array.isArray(raw.routeKinds) ? raw.routeKinds.map(String) : [],
+      targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId : "",
+      regex: typeof raw.regex === "string" ? raw.regex : "",
+      template: normalizeTemplateText(typeof raw.template === "string" && raw.template.trim() ? raw.template : "")
+    };
+  }).filter((rule) => rule.template.trim());
+}
+
+function normalizeRoleNotificationRules(rawRules: unknown): Record<string, NotificationRuleDefinition[]> {
+  const result: Record<string, NotificationRuleDefinition[]> = {};
+  if (!rawRules || typeof rawRules !== "object" || Array.isArray(rawRules)) {
+    return result;
+  }
+
+  for (const [roleId, rules] of Object.entries(rawRules)) {
+    const safeRoleId = sanitizeRoleId(roleId);
+    const normalizedRules = normalizeRuleDefinitions(rules);
+    if (safeRoleId && normalizedRules && normalizedRules.length > 0) {
+      result[safeRoleId] = normalizedRules;
+    }
+  }
+
+  return result;
 }
 
 function readRoleRouteFiles(rolesDir: string): RoleRouteFiles {
@@ -311,11 +425,11 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     GATEWAY_PORT: String(definition.gatewayPort),
     WEBHOOK_PATH: definition.webhookPath ?? "/webhook",
     CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
-    CODEX_CWD: definition.codexCwd ?? process.env.CODEX_CWD ?? rootDir,
+    CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? process.env.CODEX_CWD ?? rootDir,
     ROLES_DIR: definition.rolesDir ?? path.join(definition.dataDir ?? `./data/${definition.id}`, "roles"),
     AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
     AGENT_ROLE_FILE: definition.agentRoleFile ?? "persona.md",
-    FORWARD_TARGETS: Array.isArray(definition.forwardTargets) ? definition.forwardTargets.join(",") : process.env.FORWARD_TARGETS ?? "",
+    AGENT_ADAPTERS: Array.isArray(definition.agentAdapters) ? definition.agentAdapters.join(",") : process.env.AGENT_ADAPTERS ?? "",
     TARGET_GROUP_ID: "",
     BOT_NICKNAME: process.env.BOT_NICKNAME ?? "QQ小助手",
     ROUTE_VARIABLES: definition.routeVariables ? JSON.stringify(definition.routeVariables) : "",
@@ -591,6 +705,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     enabled: runtime.definition.enabled,
     messageAdapterType: runtime.definition.messageAdapterType ?? "napcat",
     messageAdapters: runtime.definition.messageAdapters ?? [runtime.definition.messageAdapterType ?? "napcat"],
+    agentAdapters: runtime.definition.agentAdapters ?? ["codexDesktop"],
     gatewayPort: runtime.definition.gatewayPort,
     webhookPath: runtime.definition.webhookPath,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,

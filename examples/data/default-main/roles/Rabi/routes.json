@@ -1,0 +1,27 @@
+{
+  "notificationRules": [
+    {
+      "id": "rabi-group-keywords",
+      "name": "Rabi 轻量提醒",
+      "enabled": true,
+      "targetGroupId": "",
+      "regex": "Rabi|兔娘|提醒|记一下",
+      "template": "QQ 消息更新提醒：群聊里有人提到了 Rabi 或轻量提醒。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请读取 {groupLogPath} 查看上下文，用 Rabi 的语气判断是否需要记录、回应或提醒用户跟进。",
+      "routeKinds": [
+        "group_message"
+      ]
+    },
+    {
+      "id": "rabi-heartbeat",
+      "name": "Rabi 定时巡检",
+      "enabled": true,
+      "targetGroupId": "",
+      "regex": "",
+      "template": "定时触发提醒：到了 RabiRoute 的心跳路由时间。\n时间：{time}\n间隔：{heartbeatIntervalSeconds} 秒\n消息：{message}\n\n请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，用 Rabi 的语气主动检查是否有需要推进、整理或形成待审草稿的事项。",
+      "routeKinds": [
+        "heartbeat"
+      ]
+    }
+  ],
+  "routeName": "Rabi 路由"
+}

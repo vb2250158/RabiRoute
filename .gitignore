@@ -1,9 +1,10 @@
-node_modules/
-dist/
-data/
+/node_modules/
+/dist/
+/data/
+/tmp/
+/logs/
+/gateways.json
+/.idea/
 .env
-gateways.json
-tmp/
-logs/
 npm-debug.log*
 assets/reference-cache/

@@ -89,6 +89,9 @@
       outline: none;
     }
     input:focus, select:focus, textarea:focus { border-color: rgba(25,191,193,.7); box-shadow: 0 0 0 3px rgba(25,191,193,.12); }
+    .combo-field { display: grid; gap: 6px; }
+    .combo-field .combo-control { display: grid; grid-template-columns: minmax(180px, .72fr) minmax(220px, 1fr); gap: 8px; }
+    .combo-field input { font-family: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace; font-size: 12px; }
     textarea {
       min-height: 142px;
       resize: vertical;
@@ -593,7 +596,7 @@
     @media (max-width: 760px) {
       .topbar { align-items: flex-start; flex-direction: column; }
       .top-actions { width: 100%; justify-content: flex-start; }
-      .fields, .rule-top, .rule-body, .route-persona-card { grid-template-columns: 1fr; }
+      .fields, .rule-top, .rule-body, .route-persona-card, .combo-field .combo-control { grid-template-columns: 1fr; }
       .route-avatar { display: none; }
       .workspace { padding: 10px; }
       body::before { opacity: .08; width: 92vw; }
@@ -650,7 +653,7 @@
   <div id="tooltip"></div>
 
   <script>
-    const pluginApiBase = "/plugin/napcat-plugin-codex-gateway/api";
+    const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
     const isPluginShell = location.pathname.startsWith("/plugin/");
     const apiBase = isPluginShell ? pluginApiBase : "";
     const routeKindLabels = {
@@ -685,7 +688,7 @@
       { name: "heartbeatLogPath", description: "定时触发事件 JSONL 记录路径。" },
       { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" },
       { name: "voiceTranscriptLogPath", description: "语音转写 JSONL 记录路径。" },
-      { name: "voiceSource", description: "语音来源，例如 fennenote。" },
+      { name: "voiceSource", description: "Webhook 来源。" },
       { name: "voiceDurationSeconds", description: "语音片段时长，单位秒。" },
       { name: "voicePeak", description: "语音片段峰值音量。" }
     ];
@@ -790,7 +793,7 @@
               <div class="fields">
                 ${agentConfigSelect(index, gateway)}
                 ${input(index, "codexThreadName", "Agent 会话线程名", gateway.codexThreadName || "")}
-                ${input(index, "codexCwd", "Agent 工作目录", gateway.codexCwd || "C:\\\\Path\\\\To\\\\Your\\\\Project", "field-wide")}
+                ${codexCwdField(index, gateway)}
               </div>
             </div>
             <div class="config-group">
@@ -860,7 +863,7 @@
       }
 
       const runtime = gatewayRuntime(gateway.id);
-      const logs = (runtime.log || []).slice(-18).join("\\n");
+      const logs = (runtime.log || []).slice(-18).join("\n");
       const running = runtime.running ? "running" : "stopped";
       const gatewayStatus = runtime.gatewayStatus || {};
       const adapterState = gatewayStatus.messageAdapter || {};
@@ -950,10 +953,10 @@
       routeVariableName: "变量名只能使用英文、数字和下划线，并且不能以数字开头。正则里使用 {变量名}。",
       routeVariableValue: "变量值会在匹配正则前按字面量转义，避免昵称里的特殊字符破坏正则。",
       codexThreadName: "Agent 接收 QQ 消息的固定会话线程名。",
-      codexCwd: "Agent 处理消息时使用的工作目录。",
+      codexCwd: "Agent 处理消息时使用的工作目录。WebUI 里写普通路径，例如 C:/Path/To/Project 或 C:\\Path\\To\\Project；不要写 JSON 里的双反斜杠。",
       rolesDir: "存放角色文件夹的目录。每个角色一个子文件夹，默认读取其中的 persona.md。",
       agentRoleId: "选择路由人格。不同人格有自己的 persona 和路由规则，对话日志也会写入对应角色目录。",
-      forwardTargets: "Agent 处理端配置，多个目标用英文逗号分隔。当前支持 codexDesktop 和 codexApp。",
+      agentAdapters: "Agent 端适配器配置。当前支持 codexDesktop 和 codexApp。",
       dataDir: "基础数据目录。未选择角色时日志写在这里；选择角色后日志写入角色目录。",
       ruleName: "规则名称，只用于管理台展示。",
       ruleEnabled: "关闭后这条规则会被跳过。",
@@ -977,6 +980,36 @@
         ? allOptions.map(option => `<option value="${escapeAttr(String(option.value))}" ${String(option.value) === stringValue ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")
         : `<option value="${escapeAttr(stringValue)}">${escapeHtml(stringValue || "未读取到选项")}</option>`;
       return `<label><span class="label-row">${label}${help(helpText[field] || "")}</span><select data-index="${index}" data-field="${field}">${optionHtml}</select></label>`;
+    }
+
+    function codexCwdOptions(currentValue) {
+      const values = new Set();
+      if (currentValue) values.add(String(currentValue));
+      state.gateways.forEach(gateway => {
+        if (gateway.codexCwd) values.add(String(gateway.codexCwd));
+      });
+      values.delete("C:\\\\Path\\\\To\\\\Your\\\\Project");
+      values.delete("C:\\Path\\To\\Your\\Project");
+      values.delete("C:/Path/To/Your/Project");
+      return [...values].map(value => ({ label: value, value }));
+    }
+
+    function codexCwdField(index, gateway) {
+      const value = gateway.codexCwd || "";
+      const options = codexCwdOptions(value);
+      const optionHtml = [
+        `<option value="">选择已配置目录</option>`,
+        ...options.map(option => `<option value="${escapeAttr(option.value)}" ${option.value === value ? "selected" : ""}>${escapeHtml(option.label)}</option>`)
+      ].join("");
+      return `
+        <label class="field-wide combo-field">
+          <span class="label-row">Agent 工作目录${help(helpText.codexCwd || "")}</span>
+          <span class="combo-control">
+            <select data-index="${index}" data-field="codexCwd">${optionHtml}</select>
+            <input data-index="${index}" data-field="codexCwd" value="${escapeAttr(value)}" placeholder="C:/Path/To/Your/Project">
+          </span>
+        </label>
+      `;
     }
 
     function roleOptionsForGateway(gateway) {
@@ -1004,7 +1037,7 @@
       return [
         { label: "NapCat / OneBot", value: "napcat" },
         { label: "定时触发", value: "heartbeat" },
-        { label: "Webhook / FenneNote", value: "webhook" },
+        { label: "Webhook", value: "webhook" },
         { label: "禁用消息端", value: "disabled" }
       ];
     }
@@ -1038,7 +1071,7 @@
     function adapterLabel(type) {
       if (type === "napcat") return "NapCat / OneBot";
       if (type === "heartbeat") return "定时触发";
-      if (type === "webhook") return "Webhook / FenneNote";
+      if (type === "webhook") return "Webhook";
       if (type === "disabled") return "禁用消息端";
       return type || "未知消息端";
     }
@@ -1092,9 +1125,9 @@
           const listeners = options.listeners || [];
           return `
             <div class="adapter-fieldset">
-              <div class="section-note">Webhook / FenneNote：接收 FenneNote 转写完成事件，并命中 voice_transcript 路由。</div>
+              <div class="section-note">Webhook：接收外部系统 POST 事件，并命中预留路由。</div>
               ${select(index, "gatewayPort", "Webhook 端口", gateway.gatewayPort || "", listeners)}
-              <label><span class="label-row">Webhook 路径${help("FenneNote 的路由 URL 末尾路径。默认 /webhook。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
+              <label><span class="label-row">Webhook 路径${help("Webhook URL 末尾路径。默认 /webhook。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
             </div>
           `;
         }
@@ -1117,7 +1150,7 @@
           return `
             <div class="section-note" style="margin-top:12px;color:var(--navy)">Webhook</div>
             <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">监听：${escapeHtml(String(gateway.gatewayPort || "-"))}${escapeHtml(gateway.webhookPath || "/webhook")}</div>
-            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：接收 FenneNote voice_transcript 事件。</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：接收 Webhook 事件。</div>
           `;
         }
         return `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：消息端已禁用。</div>`;
@@ -1166,8 +1199,9 @@
     }
 
     function agentConfigSelect(index, gateway) {
-      const selected = Array.isArray(gateway.forwardTargets) ? gateway.forwardTargets[0] : gateway.forwardTargets || "codexDesktop";
-      return select(index, "forwardTargets", "Agent 配置", selected, [
+      const adapters = Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codexDesktop"];
+      const selected = adapters[0] || "codexDesktop";
+      return select(index, "agentAdapters", "Agent 配置", selected, [
         { label: "CodexDesktop", value: "codexDesktop" },
         { label: "CodexApp", value: "codexApp" }
       ]);
@@ -1240,8 +1274,8 @@
       if (adapters.includes("webhook")) {
         definitions.push({
           adapter: "webhook",
-          title: "Webhook / FenneNote",
-          note: "语音转写消息",
+          title: "Webhook",
+          note: "外部系统消息",
           groups: [
             {
               title: "语音事件",
@@ -1332,8 +1366,48 @@
       return gateway.notificationRules;
     }
 
+    function normalizeTemplateText(value) {
+      return String(value || "")
+        .replace(/\\r\\n/g, "\n")
+        .replace(/\\n/g, "\n");
+    }
+
     function cloneRules(rules) {
-      return JSON.parse(JSON.stringify(Array.isArray(rules) ? rules : []));
+      return JSON.parse(JSON.stringify(Array.isArray(rules) ? rules : [])).map((rule, index) => normalizeRule(rule, index));
+    }
+
+    function normalizeGatewayTemplates(gateway) {
+      const agentAdapters = Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codexDesktop"];
+      gateway.agentAdapters = [...new Set(agentAdapters.filter(item => item === "codexDesktop" || item === "codexApp"))];
+
+      [
+        "groupNotificationTemplate",
+        "groupAtNotificationTemplate",
+        "groupDirectReplyNotificationTemplate",
+        "groupIndirectReplyNotificationTemplate",
+        "groupReplyNotificationTemplate",
+        "groupNicknameNotificationTemplate",
+        "privateNotificationTemplate",
+        "heartbeatNotificationTemplate",
+        "voiceTranscriptNotificationTemplate"
+      ].forEach(field => {
+        if (typeof gateway[field] === "string") gateway[field] = normalizeTemplateText(gateway[field]);
+      });
+
+      if (Array.isArray(gateway.notificationRules)) {
+        gateway.notificationRules = gateway.notificationRules.map((rule, index) => normalizeRule(rule, index));
+      }
+      if (gateway.roleNotificationRules && typeof gateway.roleNotificationRules === "object" && !Array.isArray(gateway.roleNotificationRules)) {
+        Object.keys(gateway.roleNotificationRules).forEach(roleId => {
+          if (Array.isArray(gateway.roleNotificationRules[roleId])) {
+            gateway.roleNotificationRules[roleId] = gateway.roleNotificationRules[roleId].map((rule, index) => normalizeRule(rule, index));
+          }
+        });
+      }
+    }
+
+    function normalizeStateTemplates() {
+      state.gateways.forEach(normalizeGatewayTemplates);
     }
 
     function activeRoleKey(gateway) {
@@ -1442,7 +1516,7 @@
         routeKinds: Array.isArray(rule.routeKinds) ? rule.routeKinds : [],
         targetGroupId: rule.targetGroupId || "",
         regex: rule.regex || "",
-        template: rule.template || defaultGroupAtTemplate()
+        template: normalizeTemplateText(rule.template || defaultGroupAtTemplate())
       };
     }
 
@@ -1471,7 +1545,7 @@
         "消息：{message}",
         "",
         "请在需要时读取 {groupLogPath} 查看上下文。"
-      ].join("\\n");
+      ].join("\n");
     }
     function defaultGroupAtTemplate() { return groupTemplate("群聊里有人 @ 了机器人"); }
     function defaultGroupDirectReplyTemplate() { return groupTemplate("群聊里有人直接回复机器人"); }
@@ -1486,7 +1560,7 @@
         "消息：{message}",
         "",
         "请在需要时读取 {groupLogPath} 查看上下文。"
-      ].join("\\n");
+      ].join("\n");
     }
     function defaultPrivateTemplate() {
       return [
@@ -1498,7 +1572,7 @@
         "消息：{message}",
         "",
         "请在需要时读取 {privateLogPath} 查看上下文。"
-      ].join("\\n");
+      ].join("\n");
     }
     function defaultHeartbeatMessage() {
       return "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。";
@@ -1512,11 +1586,11 @@
         "消息：{message}",
         "",
         "请读取 {dataDir} 下的项目缓存、消息日志和必要上下文，主动检查是否有需要推进、整理或形成待审草稿的事项。"
-      ].join("\\n");
+      ].join("\n");
     }
     function defaultVoiceTranscriptTemplate() {
       return [
-        "语音转写更新提醒：FenneNote 捕获到一段新的语音笔记。",
+        "Webhook 更新提醒：外部系统推送了一段文本。",
         "时间：{time}",
         "来源：{messageTarget}",
         "转写：{message}",
@@ -1524,7 +1598,7 @@
         "峰值：{voicePeak}",
         "",
         "请在需要时读取 {voiceTranscriptLogPath} 查看语音转写上下文。"
-      ].join("\\n");
+      ].join("\n");
     }
 
     function bindInputs() {
@@ -1580,7 +1654,7 @@
       const field = event.target.dataset.field;
       let value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
       if (field === "gatewayPort") value = Number(value);
-      if (field === "forwardTargets") value = String(value).trim() ? [String(value).trim()] : [];
+      if (field === "agentAdapters") value = String(value).trim() ? [String(value).trim()] : [];
       if (field === "agentRoleId") {
         switchGatewayRole(index, String(value));
         return;
@@ -1604,6 +1678,11 @@
         return;
       }
       state.gateways[index][field] = value;
+      if (field === "codexCwd") {
+        document.querySelectorAll(`[data-index="${index}"][data-field="codexCwd"]`).forEach(element => {
+          if (element !== event.target && element.value !== value) element.value = value;
+        });
+      }
       if (field === "id") selectedGatewayId = value;
       renderGatewayList();
       renderRuntimePanel();
@@ -1637,7 +1716,12 @@
       const ruleIndex = Number(event.target.dataset.ruleIndex);
       const field = event.target.dataset.ruleField;
       const rules = notificationRulesForGateway(state.gateways[index]);
-      rules[ruleIndex][field] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+      let value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+      if (field === "template") {
+        value = normalizeTemplateText(value);
+        if (event.target.value !== value) event.target.value = value;
+      }
+      rules[ruleIndex][field] = value;
       const roleKey = activeRoleKey(state.gateways[index]);
       if (roleKey) {
         ensureRoleRuleStore(state.gateways[index])[roleKey] = cloneRules(rules);
@@ -1771,11 +1855,11 @@
         heartbeatMessage: defaultHeartbeatMessage(),
         routeVariables: {},
         codexThreadName: `QQ 消息监听 ${next}`,
-        codexCwd: "C:\\\\Path\\\\To\\\\Your\\\\Project",
+        codexCwd: "",
         rolesDir: `./data/gateway-${next}/roles`,
         agentRoleId: "",
         agentRoleFile: "persona.md",
-        forwardTargets: ["codexDesktop"],
+        agentAdapters: ["codexDesktop"],
         dataDir: `./data/gateway-${next}`,
         notificationRules: [],
         roleRouteNames: {}
@@ -1814,6 +1898,7 @@
         throw new Error(body.message || body.error || "插件 API 没有返回 gateway 配置");
       }
       state = body.data.config;
+      normalizeStateTemplates();
       managerRows = Array.isArray(body.data.manager) ? body.data.manager : Object.assign([], { error: body.data.manager.error });
       render();
     }
@@ -1831,6 +1916,7 @@
     }
 
     async function save() {
+      normalizeStateTemplates();
       const response = await fetch(`${apiBase}/gateways`, {
         method: "POST",
         headers: { "content-type": "application/json" },

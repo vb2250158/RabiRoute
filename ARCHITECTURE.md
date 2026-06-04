@@ -47,7 +47,7 @@ QQ / 微信 / 飞书 / Discord / Slack / Email / Webhook / Scheduler
         ↓
   Prompt / Context Template
         ↓
-  Target / Handler Registry
+  Agent Adapter / Handler Registry
         ↓
   Agent / Workflow / Script / Human Queue / External API
         ↓
@@ -91,7 +91,7 @@ QQ / 微信 / 飞书 / Discord / Slack / Email / Webhook / Scheduler
 
 ### 3. Router / Policy Engine
 
-负责判断事件是否触发、触发哪个 route kind、交给哪个 target。
+负责判断事件是否触发、触发哪个 route kind、交给哪个 Agent 端适配器。
 
 当前 QQ 群路由收敛为三类：
 
@@ -111,19 +111,19 @@ routes:
       route_kind: [direct_at, direct_reply]
       keywords: ["报错", "代码", "构建", "git"]
     prompt_profile: technical-helper
-    target: workbench-agent
+    agent_adapter: workbench-agent
 
   - name: personal-request
     match:
       platform: telegram
       chat_type: private
     prompt_profile: personal-assistant
-    target: personal-agent
+    agent_adapter: personal-agent
 
   - name: risky-action
     match:
       intent: [send_message, write_external_system]
-    target: human-review
+    agent_adapter: human-review
 ```
 
 ### 4. Prompt / Context Template
@@ -153,23 +153,23 @@ routes:
 - 用户可见模板直接写清触发语义，不依赖抽象的 `routeReason`。
 - 不同处理端可以有不同 prompt profile。
 
-### 5. Target / Handler Registry
+### 5. Agent Adapter / Handler Registry
 
-负责把包装后的消息投递给不同处理端。处理端可以是 Agent，也可以不是 Agent。
+负责把包装后的消息投递给不同处理端。当前代码里这层叫 Agent 端适配器；处理端可以是 Agent，也可以是 workflow、script、human queue 或 external API。
 
 当前内置：
 
 - `codexDesktop`：通过 Codex Desktop IPC 投递到固定线程，支持 `start` 和运行中 `steer`。
 - `codexApp`：旧 app-server 调试通道，作为旁路验证。
 
-未来处理端类型：
+未来 Agent 端适配器类型：
 
 - `agent`：把消息交给某个 AI Agent 或 Agent 平台。
 - `workflow`：把消息交给自动化流程。
 - `script`：调用本地脚本、CLI 或工具函数。
 - `humanQueue`：转成人工待处理事项。
 - `externalApi`：调用外部系统 API。
-- `webhook`：通用 HTTP target。
+- `webhook`：通用 HTTP Agent adapter。
 - `toolRunner`：本地脚本或 CLI。
 
 ### 6. Session / Turn Control
@@ -198,6 +198,7 @@ routes:
 - 群消息、文档写回、Issue 更新、自动化执行都先生成 draft / action。
 - 用户确认后再 commit。
 - 所有 commit 写 audit log。
+- 外发失败时不要只看平台健康状态。像 NapCat `get_status` 仍为 online/good、但 `send_group_msg` 在 QQ 内核 `sendMsg` 阶段返回 `EventChecker Failed` / `1006514` 的情况，应把待发内容保留为 draft，记录失败原因，修复登录态或时间同步后再补发，并记录返回的 `message_id`。
 
 ## 与完整个人 Agent OS 的关系
 
@@ -249,7 +250,7 @@ NapCat WebSocket Client
   -> QQ route detector
        direct_at / direct_reply / indirect_reply / private
   -> editable templates
-  -> forwarding target
+  -> agent adapter
        codexDesktop / codexApp
   -> Codex Desktop fixed thread
        start / steer
@@ -260,7 +261,7 @@ NapCat 插件不是业务核心，它只是控制面入口：
 ```text
 NapCat plugin page
   -> RabiRoute manager API
-  -> gateways.json
+  -> data/gateways.json
   -> start / stop / restart gateway process
 ```
 
@@ -269,9 +270,9 @@ NapCat plugin page
 推荐按这个顺序做，不要一口气做成大平台：
 
 1. 抽象统一 `InboundMessage`，把 QQ / OneBot 事件从核心路由里解耦。
-2. 抽象 `RouteDecision`，记录 route kind、target、prompt profile、priority、reason。
-3. 抽象 target / handler driver，把当前内置投递方式从默认实现变成一个处理端。
-4. 增加 `webhook` target，验证非固定 Agent 的处理端。
+2. 抽象 `RouteDecision`，记录 route kind、agent adapter、prompt profile、priority、reason。
+3. 扩展 Agent adapter / handler driver，把当前内置投递方式从默认实现变成可插拔处理端。
+4. 增加 `webhook` Agent adapter，验证非固定 Agent 的处理端。
 5. 增加 route decision 日志和 replay 页面。
 6. 做 Action Queue，所有外部发送和写入先进待审。
 7. 再考虑具体 Agent 平台、执行桥、聊天机器人框架、知识库和工作流系统集成。
@@ -279,7 +280,7 @@ NapCat plugin page
 ## 架构红线
 
 - 不把平台插件做成全部业务核心。
-- 不让 target / handler driver 反向侵入 router。
+- 不让 Agent adapter / handler driver 反向侵入 router。
 - 不把 prompt 模板写死在 handler 里。
 - 不让处理端直接群发或写外部系统，除非显式授权。
 - 不把 WebUI 做成项目事实源；项目事实应进入文档、Issue、工单或数据库。

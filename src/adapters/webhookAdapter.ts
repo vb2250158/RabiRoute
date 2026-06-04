@@ -115,9 +115,9 @@ function recordFromPayload(payload: WebhookPayload): VoiceTranscriptEventRecord 
   return {
     time: payload.time ?? Math.floor(Date.now() / 1000),
     rawMessage,
-    messageId: payload.messageId ?? payload.id ?? `fennenote-${Date.now()}`,
-    senderName: payload.source ?? "FenneNote",
-    source: payload.source ?? "fennenote",
+    messageId: payload.messageId ?? payload.id ?? `webhook-${Date.now()}`,
+    senderName: payload.source ?? "Webhook",
+    source: payload.source ?? "webhook",
     startedAt: payload.startedAt,
     endedAt: payload.endedAt,
     durationSeconds: payload.durationSeconds,
@@ -140,7 +140,7 @@ export function createWebhookAdapter(): MessageAdapter {
           const body = await readRequestBody(request);
           const payload = JSON.parse(body || "{}") as WebhookPayload;
           const eventType = payload.type ?? "voice_transcript";
-          if (eventType !== "voice_transcript" && eventType !== "fennenote.transcript") {
+          if (eventType !== "voice_transcript" && eventType !== "webhook.text") {
             response.writeHead(400).end("Unsupported webhook type");
             return;
           }

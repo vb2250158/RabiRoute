@@ -13,7 +13,13 @@ type SendPrivateMessageParams = {
 type OneBotResponse<T> = {
   status?: string;
   retcode?: number;
+  message?: string;
+  wording?: string;
   data?: T;
+};
+
+type SendMessageResult = {
+  messageId?: number | string;
 };
 
 export type LoginInfo = {
@@ -23,7 +29,7 @@ export type LoginInfo = {
 
 export async function callNapCat<T>(action: string, payload: unknown): Promise<T> {
   const headers: Record<string, string> = {
-    "content-type": "application/json"
+    "content-type": "application/json; charset=utf-8"
   };
 
   if (config.napcatAccessToken) {
@@ -41,7 +47,16 @@ export async function callNapCat<T>(action: string, payload: unknown): Promise<T
     throw new Error(`NapCat ${action} failed: HTTP ${response.status} ${text}`);
   }
 
-  return text ? (JSON.parse(text) as T) : ({} as T);
+  const parsed = text ? (JSON.parse(text) as OneBotResponse<T> | T) : ({} as T);
+  if (parsed && typeof parsed === "object" && ("retcode" in parsed || "status" in parsed)) {
+    const result = parsed as OneBotResponse<T>;
+    if ((result.retcode != null && result.retcode !== 0) || result.status === "failed") {
+      const detail = result.wording || result.message || text;
+      throw new Error(`NapCat ${action} failed: retcode=${result.retcode ?? "unknown"} status=${result.status ?? "unknown"} ${detail}`);
+    }
+  }
+
+  return parsed as T;
 }
 
 export async function getLoginInfo(): Promise<LoginInfo> {
@@ -54,16 +69,26 @@ export async function getLoginInfo(): Promise<LoginInfo> {
   };
 }
 
-export async function sendGroupMessage(params: SendGroupMessageParams): Promise<void> {
-  await callNapCat("send_group_msg", {
+function normalizeSendMessageResult(response: OneBotResponse<{ message_id?: number | string }> | { message_id?: number | string }): SendMessageResult {
+  const wrapped = response as OneBotResponse<{ message_id?: number | string }>;
+  const data = wrapped.data ?? (response as { message_id?: number | string });
+  return {
+    messageId: data.message_id
+  };
+}
+
+export async function sendGroupMessage(params: SendGroupMessageParams): Promise<SendMessageResult> {
+  const response = await callNapCat<OneBotResponse<{ message_id?: number | string }> | { message_id?: number | string }>("send_group_msg", {
     group_id: Number(params.groupId),
     message: params.message
   });
+  return normalizeSendMessageResult(response);
 }
 
-export async function sendPrivateMessage(params: SendPrivateMessageParams): Promise<void> {
-  await callNapCat("send_private_msg", {
+export async function sendPrivateMessage(params: SendPrivateMessageParams): Promise<SendMessageResult> {
+  const response = await callNapCat<OneBotResponse<{ message_id?: number | string }> | { message_id?: number | string }>("send_private_msg", {
     user_id: Number(params.userId),
     message: params.message
   });
+  return normalizeSendMessageResult(response);
 }

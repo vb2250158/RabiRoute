@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RabiRoute NapCat 入口</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      color: #112033;
+      background:
+        linear-gradient(90deg, rgba(25,191,193,.08) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(12,42,74,.045) 1px, transparent 1px),
+        linear-gradient(135deg, #fbfeff 0%, #f2fbff 48%, #fff7fb 100%);
+      background-size: 34px 34px, 34px 34px, auto;
+    }
+    main {
+      width: min(560px, 100%);
+      border: 1px solid rgba(17,32,51,.12);
+      border-radius: 12px;
+      background: rgba(255,255,255,.88);
+      box-shadow: 0 18px 48px rgba(12,42,74,.12);
+      padding: 22px;
+      display: grid;
+      gap: 16px;
+    }
+    h1 { margin: 0; font-size: 22px; color: #0c2a4a; }
+    p { margin: 0; line-height: 1.65; color: #647386; font-weight: 700; }
+    label { display: grid; gap: 7px; color: #647386; font-size: 12px; font-weight: 800; }
+    input {
+      width: 100%;
+      border: 1px solid rgba(17,32,51,.14);
+      border-radius: 8px;
+      padding: 9px 10px;
+      font: inherit;
+      color: #112033;
+    }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    button, a {
+      min-height: 36px;
+      border: 1px solid rgba(17,32,51,.14);
+      border-radius: 8px;
+      padding: 8px 12px;
+      background: #fff;
+      color: #112033;
+      cursor: pointer;
+      text-decoration: none;
+      font-weight: 900;
+    }
+    a.primary, button.primary {
+      background: linear-gradient(135deg, #0c2a4a, #16466e);
+      color: #fff;
+      border-color: #0c2a4a;
+    }
+    .status { min-height: 20px; font-size: 12px; color: #647386; font-weight: 800; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>RabiRoute NapCat 入口</h1>
+    <p>NapCat 只是 RabiRoute 的一个消息端适配器。完整的 RibiWebGUI 是独立控制台，默认运行在本机 manager 上。</p>
+    <label>
+      RibiWebGUI 地址
+      <input id="manager-url" value="http://127.0.0.1:8790" />
+    </label>
+    <div class="actions">
+      <a id="open-link" class="primary" href="http://127.0.0.1:8790/" target="_blank" rel="noreferrer">打开 RibiWebGUI</a>
+      <button id="save-button" type="button">保存入口地址</button>
+      <button id="start-button" type="button">启动 Manager</button>
+    </div>
+    <div id="status" class="status"></div>
+  </main>
+  <script>
+    const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
+    const managerUrlInput = document.getElementById("manager-url");
+    const openLink = document.getElementById("open-link");
+    const statusLine = document.getElementById("status");
+
+    function setStatus(message) {
+      statusLine.textContent = message || "";
+    }
+
+    function updateLink() {
+      const url = managerUrlInput.value.trim() || "http://127.0.0.1:8790";
+      openLink.href = url.replace(/\/$/, "") + "/";
+    }
+
+    async function loadConfig() {
+      try {
+        const response = await fetch(`${pluginApiBase}/config`);
+        const body = await response.json();
+        if (body.code === 0 && body.data && body.data.managerUrl) {
+          managerUrlInput.value = body.data.managerUrl;
+        }
+      } catch {
+        setStatus("未读取到插件配置，使用默认本机地址。");
+      }
+      updateLink();
+    }
+
+    async function saveConfig() {
+      updateLink();
+      try {
+        const response = await fetch(`${pluginApiBase}/config`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ managerUrl: managerUrlInput.value.trim() || "http://127.0.0.1:8790" })
+        });
+        const body = await response.json();
+        if (!response.ok || body.code !== 0) throw new Error(body.message || "保存失败");
+        setStatus("已保存入口地址。");
+      } catch (error) {
+        setStatus(`保存失败：${error.message || error}`);
+      }
+    }
+
+    async function startManager() {
+      try {
+        const response = await fetch(`${pluginApiBase}/manager/start`, { method: "POST" });
+        const body = await response.json();
+        if (!response.ok || body.code !== 0) throw new Error(body.message || "启动失败");
+        setStatus(body.message || "Manager 正在启动。");
+      } catch (error) {
+        setStatus(`启动失败：${error.message || error}`);
+      }
+    }
+
+    managerUrlInput.addEventListener("input", updateLink);
+    document.getElementById("save-button").addEventListener("click", saveConfig);
+    document.getElementById("start-button").addEventListener("click", startManager);
+    void loadConfig();
+  </script>
+</body>
+</html>

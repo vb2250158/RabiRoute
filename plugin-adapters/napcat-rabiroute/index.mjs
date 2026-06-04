@@ -11,11 +11,44 @@ let currentConfig = {
 let managerProcess = null;
 
 function gatewayConfigPath() {
-  return path.join(currentConfig.gatewayRoot, "gateways.json");
+  return path.join(currentConfig.gatewayRoot, "data", "gateways.json");
 }
 
 function gatewayExamplePath() {
-  return path.join(currentConfig.gatewayRoot, "gateways.example.json");
+  return path.join(currentConfig.gatewayRoot, "examples", "data", "gateways.json");
+}
+
+function gatewayExampleDataPath() {
+  return path.join(currentConfig.gatewayRoot, "examples", "data");
+}
+
+function defaultGatewayConfig() {
+  return {
+    gateways: [
+      {
+        id: "default-main",
+        name: "默认 QQ 网关",
+        enabled: true,
+        messageAdapters: ["napcat", "heartbeat"],
+        gatewayPort: 8789,
+        napcatHttpUrl: "http://127.0.0.1:3000",
+        napcatAccessToken: "",
+        heartbeatIntervalSeconds: 900,
+        heartbeatMessage: "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
+        codexThreadName: "QQ 消息监听",
+        codexCwd: "",
+        rolesDir: "./data/default-main/roles",
+        agentRoleId: "",
+        agentRoleFile: "persona.md",
+        agentAdapters: ["codexDesktop"],
+        dataDir: "./data/default-main",
+        routeVariables: {},
+        messageAdapterType: "napcat",
+        routeName: "默认路由",
+        roleRouteNames: {}
+      }
+    ]
+  };
 }
 
 function ensureGatewayConfig() {
@@ -26,10 +59,14 @@ function ensureGatewayConfig() {
   const dir = path.dirname(configPath);
   fs.mkdirSync(dir, { recursive: true });
   if (fs.existsSync(gatewayExamplePath())) {
-    fs.copyFileSync(gatewayExamplePath(), configPath);
+    fs.cpSync(gatewayExampleDataPath(), dir, {
+      recursive: true,
+      force: false,
+      errorOnExist: false
+    });
     return;
   }
-  fs.writeFileSync(configPath, JSON.stringify({ gateways: [] }, null, 2), "utf-8");
+  fs.writeFileSync(configPath, JSON.stringify(defaultGatewayConfig(), null, 2), "utf-8");
 }
 
 function readGatewayConfig() {
@@ -50,6 +87,8 @@ function writeGatewayConfig(config) {
     }
     gateway.gatewayPort = Number(gateway.gatewayPort);
     gateway.enabled = gateway.enabled !== false;
+    const agentAdapters = Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codexDesktop"];
+    gateway.agentAdapters = [...new Set(agentAdapters.filter((item) => item === "codexDesktop" || item === "codexApp"))];
   }
   fs.writeFileSync(gatewayConfigPath(), JSON.stringify(config, null, 2), "utf-8");
 }

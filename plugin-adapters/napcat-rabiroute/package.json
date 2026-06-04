@@ -1,10 +1,10 @@
 {
-  "name": "napcat-plugin-codex-gateway",
+  "name": "napcat-plugin-rabiroute",
   "plugin": "RabiRoute",
   "version": "0.1.0",
   "type": "module",
   "main": "index.mjs",
-  "description": "拉比路由：聊天入口到 Agent 的可爱路由中枢",
+  "description": "RabiRoute 的 NapCat 插件侧适配入口，可跳转到独立 RibiWebGUI",
   "author": "vb2250158",
   "napcat": {
     "tags": [

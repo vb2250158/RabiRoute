@@ -1,0 +1,34 @@
+{
+  "gateways": [
+    {
+      "id": "default-main",
+      "name": "默认 QQ 网关",
+      "enabled": true,
+      "messageAdapters": [
+        "napcat",
+        "heartbeat"
+      ],
+      "gatewayPort": 8789,
+      "napcatHttpUrl": "http://127.0.0.1:3000",
+      "napcatAccessToken": "",
+      "heartbeatIntervalSeconds": 900,
+      "heartbeatMessage": "定时心跳巡检：请检查最近消息、项目缓存、等待项和下一步动作。",
+      "codexThreadName": "QQ 消息监听",
+      "codexCwd": "C:/Path/To/Your/Project",
+      "rolesDir": "./data/default-main/roles",
+      "agentRoleId": "Rabi",
+      "agentRoleFile": "persona.md",
+      "agentAdapters": [
+        "codexDesktop"
+      ],
+      "dataDir": "./data/default-main",
+      "notificationRules": [],
+      "routeVariables": {},
+      "messageAdapterType": "napcat",
+      "routeName": "Rabi 路由",
+      "roleRouteNames": {
+        "Rabi": "Rabi 路由"
+      }
+    }
+  ]
+}

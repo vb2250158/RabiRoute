@@ -1,21 +1,21 @@
 ---
 name: create-rabiroute-persona
-description: Create or revise open-source RabiRoute role personas. Use when an agent needs to design a new RabiRoute persona directory, write persona.md, create routes.json notification rules, adapt an existing assistant character for QQ/NapCat/OneBot routing, or review whether a role is safe, concise, route-aware, and suitable for publication.
+description: 创建或修改 RabiRoute 路由人格。用于设计新人格目录、编写 persona.md、创建 routes.json 路由规则、把已有助手角色适配到 QQ/NapCat/OneBot 路由，或检查人格是否安全、简洁、路由感明确并适合公开示例。
 ---
 
-# Create RabiRoute Persona
+# 创建 RabiRoute 路由人格
 
-## Purpose
+## 目标
 
-Use this skill to create a RabiRoute role persona.
+使用这个 skill 创建或修改 RabiRoute 路由人格。
 
-A RabiRoute persona is not a full agent implementation. It is a role package that teaches the downstream agent how to interpret routed messages, speak in a consistent voice, decide whether to answer, record, ask, hand off, or wait, and stay within safety boundaries.
+RabiRoute 人格不是一个完整 Agent 实现，而是一个角色包。它告诉下游处理端如何理解被路由过来的消息、用什么语气说话、什么时候回应、记录、追问、转交或等待，以及哪些事不能越界。
 
-Each persona should be usable as an open-source example unless the user explicitly asks for a private local role.
+除非用户明确要求创建私有本地角色，否则每个人格都应按可公开示例来写。
 
-## Output Shape
+## 输出结构
 
-A persona directory should contain:
+一个人格目录通常包含：
 
 ```text
 <role-id>/
@@ -23,41 +23,43 @@ A persona directory should contain:
 └── routes.json
 ```
 
-`persona.md` defines the role voice, route behavior, output style, and safety rules.
+`persona.md` 定义角色语气、路由行为、输出方式和安全边界。
 
-`routes.json` defines the route name and optional notification rules for this role.
+`routes.json` 定义这套人格的路由名称和可选通知规则。
 
-For public examples, place roles under:
+不要把人格正文写成 JSON 字符串。`persona.md` 应该是正常可读的 Markdown，并使用真实换行。
+
+公开示例放在：
 
 ```text
 examples/roles/<RoleId>/
 ```
 
-For local/private gateway use, place roles under:
+本地或私有 gateway 使用的人格放在：
 
 ```text
 data/roles/<RoleId>/
 ```
 
-Do not commit private `data/` role content unless the user explicitly wants it and the content is sanitized.
+不要提交私有 `data/` 人格内容，除非用户明确要求，并且内容已经脱敏。
 
-## Creation Workflow
+## 创建流程
 
-### 1. Clarify The Role
+### 1. 明确角色
 
-Identify:
+先确认：
 
-- Role name and route name.
-- Who the role serves: project owner, group chat, operations, QA, PM, support, personal reminders, etc.
-- What messages should trigger it.
-- What it is allowed to do: draft only, record, handoff, ask questions, summarize, or call tools after approval.
-- What it must never expose or do.
+- 角色名和路由名。
+- 服务对象：项目负责人、群聊、运营、QA、PM、客服、个人提醒等。
+- 哪些消息应该触发它。
+- 它允许做什么：只生成草稿、记录、转交、追问、总结，或在审批后调用工具。
+- 它绝不能暴露或执行什么。
 
-If the user has not specified a style, default to concise, warm, and work-focused.
+如果用户没有指定风格，默认写成简洁、温和、偏工作协作的语气。
 
-### 2. Define Route-Aware Behavior
+### 2. 定义路由感
 
-Every persona must describe how it handles these route kinds:
+每个人格都必须说明如何处理这些 route kind：
 
 - `private`
 - `direct_at`
@@ -66,22 +68,22 @@ Every persona must describe how it handles these route kinds:
 - `group_message`
 - `heartbeat`
 
-It does not need long paragraphs for each kind, but it must make clear when to read context logs and when to stay quiet.
+不需要每一类都写长段落，但必须讲清楚什么时候读取上下文日志、什么时候只记录或保持安静。
 
-### 3. Write persona.md
+### 3. 编写 persona.md
 
-Use this structure unless the project already has a stronger local convention:
+除非项目已有更强的本地约定，否则使用下面结构：
 
 ```markdown
 # <RoleName>
 
-<One paragraph describing who the persona is and what it does in RabiRoute.>
+<用一段话说明这个人格是谁，以及它在 RabiRoute 中负责什么。>
 
 ## 回复姿态
 
-- <voice rule>
-- <clarity rule>
-- <context rule>
+- <语气规则>
+- <清晰度规则>
+- <上下文规则>
 
 ## 路由判断
 
@@ -103,20 +105,20 @@ Use this structure unless the project already has a stronger local convention:
 
 ## 输出口径
 
-<Internal summary format and external reply guidance.>
+<内部总结格式，以及对外回复话术的生成原则。>
 
 ## 安全边界
 
-- <secret/privacy rule>
-- <approval rule>
-- <public/private boundary rule>
+- <密钥和隐私规则>
+- <审批规则>
+- <公开/私有边界规则>
 ```
 
-Keep persona instructions concrete. Avoid generic assistant slogans.
+人格说明要具体，不要只写“乐于助人”“专业高效”这类泛泛口号。
 
-### 4. Write routes.json
+### 4. 编写 routes.json
 
-Use this minimal shape:
+最小结构：
 
 ```json
 {
@@ -125,21 +127,21 @@ Use this minimal shape:
 }
 ```
 
-For a rule:
+单条规则示例：
 
 ```json
 {
   "id": "<stable-kebab-id>",
-  "name": "<human readable name>",
+  "name": "<可读名称>",
   "enabled": true,
   "targetGroupId": "",
-  "regex": "<optional regex>",
-  "template": "<message sent to the downstream agent>",
+  "regex": "<可选正则>",
+  "template": "<发给下游处理端的提示>",
   "routeKinds": ["group_message"]
 }
 ```
 
-Supported route kinds include:
+支持的 route kind：
 
 ```text
 private
@@ -150,7 +152,7 @@ group_message
 heartbeat
 ```
 
-Useful template variables include:
+常用模板变量：
 
 ```text
 {routeKind} {time} {targetType} {targetId} {messageTarget}
@@ -162,42 +164,65 @@ Useful template variables include:
 {dataDir} {groupLogPath} {privateLogPath}
 ```
 
-### 5. Sanitize For Open Source
+模板书写规则：
 
-Before finishing, check:
+- 在 WebUI 文本框中，模板必须使用真实换行，不要输入字面量 `\n`。
+- 在 `persona.md` 中，写正常 Markdown 段落和列表，不要给每个引号、斜杠或换行加转义。
+- 在 `routes.json` 中，JSON 字符串出现转义是正常的，但那只是 JSON 格式要求。不要把 JSON 转义后的模板原样复制回 WebUI。
+- 公开示例路径优先使用 `C:/Path/To/Project` 或 `/path/to/project`。除非专门演示 JSON 转义，否则不要在示例里写 `C:\\Path\\To\\Project`。
 
-- No real QQ IDs, group IDs, account names, tokens, cookies, private URLs, local private paths, or personal chat content.
-- `targetGroupId` is empty in public examples unless the ID is intentionally fictional.
-- Templates tell the agent to read logs when needed, but do not expose sensitive paths in external replies.
-- Regex is broad enough to demonstrate the role but not so broad that it would route every ordinary message.
-- The persona does not promise background monitoring unless a heartbeat rule actually exists.
-- Do not copy content from `data/`, `.env`, `gateways.json`, JSONL logs, private chat records, or local Codex state into public examples.
-- Keep public paths as placeholders such as `C:\Path\To\Project` or `/path/to/project`; never include a real username or private workspace path.
+错误的 WebUI / 模板输出：
 
-## Good Persona Traits
+```text
+QQ 消息更新提醒：群聊里有人 @ 了机器人。\n时间：{time}\n目标：{messageTarget}
+```
 
-Good RabiRoute personas:
+正确的 WebUI / 模板输出：
 
-- Say what they do in the routing layer.
-- Know when to stay quiet.
-- Produce drafts instead of sending messages directly.
-- Ask one small question when blocked.
-- Preserve privacy boundaries between private chat, group chat, and internal agent context.
-- Hand off concrete task packets to downstream handlers.
+```text
+QQ 消息更新提醒：群聊里有人 @ 了机器人。
+时间：{time}
+目标：{messageTarget}
+```
 
-Poor personas:
+生成 `routes.json` 时，只按 JSON 要求转义一次。如果 WebUI 显示出可见的 `\n`，说明模板被双重转义，必须改成真实换行。
 
-- Claim to be an all-powerful agent OS.
-- Overuse cute roleplay and bury the actionable content.
-- Expose logs, paths, route internals, or thread state to group members.
-- Treat every group message as requiring a reply.
-- Commit real IDs or private operational details into examples.
+### 5. 开源脱敏检查
 
-## Final Check
+完成前检查：
 
-After creating or editing a persona:
+- 不包含真实 QQ 号、群号、账号名、token、Cookie、私有 URL、本机私有路径或个人聊天内容。
+- 公开示例里的 `targetGroupId` 默认留空，除非该 ID 明确是虚构值。
+- 模板可以要求处理端按需读取日志，但不要让对外回复暴露敏感路径。
+- `regex` 应足以演示角色触发意图，但不能宽到把所有普通群消息都转发。
+- 如果没有实际 `heartbeat` 规则，人格不要承诺后台定时监控。
+- 不要把 `data/`、`.env`、`gateways.json`、JSONL 日志、私聊记录或本地 Codex 状态复制进公开示例。
+- 公开路径使用 `C:/Path/To/Project` 或 `/path/to/project` 这类占位值，绝不能包含真实用户名或私有工作区路径。
 
-- Confirm `persona.md` is readable as a standalone role prompt.
-- Confirm `routes.json` is valid JSON.
-- Confirm the role directory can be copied into `data/roles/<RoleId>/`.
-- Summarize the role's trigger intent, safety boundaries, and any routes added.
+## 好人格与坏人格
+
+好的 RabiRoute 人格：
+
+- 清楚说明自己在路由层做什么。
+- 知道什么时候保持安静。
+- 默认生成草稿，而不是直接对外发送消息。
+- 卡住时只问一个小而具体的问题。
+- 区分私聊、群聊和内部 agent 上下文的隐私边界。
+- 能把任务整理成具体任务包交给下游处理端。
+
+差的人格：
+
+- 声称自己是全能 Agent OS。
+- 过度角色扮演，淹没可执行内容。
+- 把日志、路径、路由内部字段或线程状态暴露给群成员。
+- 把每条群消息都当成必须回复。
+- 在公开示例中提交真实 ID 或私有运行细节。
+
+## 最终检查
+
+创建或修改人格后：
+
+- 确认 `persona.md` 作为独立角色提示词是可读的。
+- 确认 `routes.json` 是合法 JSON。
+- 确认角色目录可以复制到 `data/roles/<RoleId>/` 使用。
+- 总结这个人格的触发意图、安全边界，以及新增或修改的路由规则。
