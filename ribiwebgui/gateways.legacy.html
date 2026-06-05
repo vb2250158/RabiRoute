@@ -8,11 +8,12 @@
   <style>
     * { box-sizing: border-box; }
     :root {
-      --bg: #f2fbff;
-      --panel: rgba(255,255,255,.84);
+      --bg: #f6f8fb;
+      --panel: rgba(255,255,255,.9);
       --panel-strong: #ffffff;
       --ink: #112033;
-      --muted: #647386;
+      --muted: #667586;
+      --subtle: #8b98a8;
       --line: rgba(17,32,51,.12);
       --teal: #19bfc1;
       --teal-dark: #087f91;
@@ -21,8 +22,10 @@
       --amber: #f59e0b;
       --green: #16a34a;
       --red: #dc2626;
-      --shadow: 0 18px 48px rgba(12,42,74,.12);
-      --topbar-height: 76px;
+      --shadow: 0 12px 28px rgba(15,23,42,.08);
+      --soft: rgba(25,191,193,.08);
+      --soft-strong: rgba(25,191,193,.14);
+      --topbar-height: 72px;
     }
     html { background: var(--bg); overflow-x: hidden; }
     body {
@@ -31,10 +34,11 @@
       font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
       color: var(--ink);
       background:
-        linear-gradient(90deg, rgba(25,191,193,.08) 1px, transparent 1px),
-        linear-gradient(0deg, rgba(12,42,74,.045) 1px, transparent 1px),
-        linear-gradient(135deg, #fbfeff 0%, var(--bg) 48%, #fff7fb 100%);
-      background-size: 34px 34px, 34px 34px, auto;
+        linear-gradient(90deg, rgba(12,42,74,.035) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(12,42,74,.03) 1px, transparent 1px),
+        radial-gradient(circle at 18% 0%, rgba(25,191,193,.12), transparent 28%),
+        linear-gradient(180deg, #fbfdff 0%, var(--bg) 58%, #f7f9fc 100%);
+      background-size: 36px 36px, 36px 36px, auto, auto;
       overflow-x: hidden;
     }
     body::before {
@@ -45,7 +49,7 @@
       width: min(58vw, 620px);
       aspect-ratio: 1;
       background: url("/assets/rabiroute-icon.png") center / contain no-repeat;
-      opacity: .13;
+      opacity: .075;
       filter: saturate(1.08) drop-shadow(0 28px 64px rgba(25,191,193,.24));
       pointer-events: none;
       z-index: 0;
@@ -57,8 +61,8 @@
       pointer-events: none;
       z-index: 0;
       background:
-        linear-gradient(115deg, transparent 0 12%, rgba(25,191,193,.08) 12.2% 12.6%, transparent 12.8% 40%, rgba(255,109,157,.08) 40.2% 40.6%, transparent 40.8%),
-        linear-gradient(180deg, rgba(255,255,255,.58), rgba(255,255,255,.18));
+        linear-gradient(115deg, transparent 0 13%, rgba(25,191,193,.055) 13.2% 13.5%, transparent 13.8% 42%, rgba(255,109,157,.05) 42.2% 42.5%, transparent 42.8%),
+        linear-gradient(180deg, rgba(255,255,255,.44), rgba(255,255,255,.08));
     }
     button, input, select, textarea { font: inherit; }
     button, a.button {
@@ -75,10 +79,11 @@
       align-items: center;
       justify-content: center;
       gap: 6px;
+      transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease, background-color .16s ease;
     }
-    button:hover, a.button:hover { border-color: rgba(25,191,193,.48); box-shadow: 0 6px 18px rgba(25,191,193,.12); }
-    button.primary, a.button.primary { background: linear-gradient(135deg, var(--navy), #16466e); border-color: var(--navy); color: #fff; }
-    button.accent { background: linear-gradient(135deg, #35e0d6, #9cf4e8); border-color: rgba(25,191,193,.8); color: #06262d; }
+    button:hover, a.button:hover { border-color: rgba(25,191,193,.48); box-shadow: 0 6px 18px rgba(25,191,193,.12); transform: translateY(-1px); }
+    button.primary, a.button.primary { background: #102a43; border-color: #102a43; color: #fff; }
+    button.accent { background: #d9fbf7; border-color: rgba(25,191,193,.55); color: #06262d; }
     button.danger { color: var(--red); }
     input, select, textarea {
       width: 100%;
@@ -119,13 +124,13 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      padding: 14px 18px;
+      padding: 11px 20px;
       border-bottom: 1px solid var(--line);
       background:
-        linear-gradient(90deg, rgba(255,255,255,.9), rgba(242,251,255,.82)),
-        linear-gradient(135deg, rgba(25,191,193,.18), rgba(255,109,157,.08));
+        linear-gradient(90deg, rgba(255,255,255,.94), rgba(248,251,253,.88)),
+        linear-gradient(135deg, rgba(25,191,193,.12), rgba(255,109,157,.045));
       backdrop-filter: blur(18px);
-      box-shadow: 0 14px 34px rgba(12,42,74,.12);
+      box-shadow: 0 10px 24px rgba(15,23,42,.08);
     }
     .topbar::before {
       content: "";
@@ -141,7 +146,7 @@
     .brand img {
       width: 46px;
       height: 46px;
-      border-radius: 12px;
+      border-radius: 10px;
       border: 2px solid rgba(25,191,193,.58);
       box-shadow: 0 10px 28px rgba(25,191,193,.22);
       object-fit: cover;
@@ -159,7 +164,7 @@
       filter: drop-shadow(0 4px 8px rgba(12,42,74,.16));
     }
     .brand-title { display: grid; gap: 2px; min-width: 0; }
-    h1 { margin: 0; font-size: 22px; letter-spacing: 0; color: var(--navy); }
+    h1 { margin: 0; font-size: 20px; letter-spacing: 0; color: var(--navy); }
     .subtitle { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .health {
@@ -178,23 +183,35 @@
     .dot.ok { background: var(--green); box-shadow: 0 0 0 4px rgba(22,163,74,.12); }
     .workspace {
       display: grid;
-      grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
-      gap: 14px;
-      padding: 14px;
+      grid-template-columns: minmax(248px, 286px) minmax(0, 1fr);
+      gap: 18px;
+      padding: 18px;
       min-height: 0;
+      max-width: 1580px;
+      width: 100%;
+      margin: 0 auto;
     }
     .sidebar, .main-panel, .side-panel, .section, .plugin-launch {
       border: 1px solid var(--line);
-      border-radius: 10px;
+      border-radius: 8px;
       background: var(--panel);
       box-shadow: var(--shadow);
       backdrop-filter: blur(16px);
     }
-    .sidebar { display: grid; grid-template-rows: auto 1fr; min-height: calc(100vh - 92px); overflow: hidden; }
+    .sidebar {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: calc(100vh - var(--topbar-height) - 36px);
+      max-height: calc(100vh - var(--topbar-height) - 36px);
+      overflow: hidden;
+      position: sticky;
+      top: calc(var(--topbar-height) + 18px);
+      align-self: start;
+    }
     .sidebar-head { padding: 14px; border-bottom: 1px solid var(--line); display: grid; gap: 12px; }
     .mascot-card {
       position: relative;
-      min-height: 118px;
+      min-height: 102px;
       overflow: hidden;
       border: 1px solid rgba(25,191,193,.2);
       border-radius: 10px;
@@ -205,10 +222,10 @@
     .mascot-card::before {
       content: "";
       position: absolute;
-      right: -46px;
-      bottom: -58px;
-      width: 190px;
-      height: 190px;
+      right: -38px;
+      bottom: -52px;
+      width: 172px;
+      height: 172px;
       background: url("/assets/rabiroute-route-glyph.svg") center bottom / contain no-repeat;
       opacity: .42;
       filter: saturate(1.05);
@@ -236,7 +253,7 @@
       padding: 10px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: linear-gradient(145deg, rgba(255,255,255,.82), rgba(236,252,255,.72));
+      background: linear-gradient(145deg, rgba(255,255,255,.92), rgba(236,252,255,.6));
     }
     .metric b { display: block; font-size: 18px; color: var(--navy); }
     .metric span { color: var(--muted); font-size: 11px; font-weight: 800; }
@@ -273,7 +290,45 @@
     .pill.running, .pill.enabled { background: rgba(22,163,74,.12); color: var(--green); border-color: rgba(22,163,74,.18); }
     .pill.stopped { background: rgba(220,38,38,.1); color: var(--red); border-color: rgba(220,38,38,.16); }
     .pill.draft { background: rgba(245,158,11,.13); color: #a16207; border-color: rgba(245,158,11,.18); }
-    .content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 14px; min-width: 0; }
+    .content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(292px, 360px); gap: 18px; min-width: 0; }
+    .work-area { display: grid; gap: 18px; min-width: 0; }
+    .overview-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      min-width: 0;
+    }
+    .overview-card {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+    .overview-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .overview-card b {
+      display: block;
+      margin-top: 8px;
+      color: var(--navy);
+      font-size: 24px;
+      line-height: 1.08;
+      overflow-wrap: anywhere;
+    }
+    .overview-card em {
+      display: block;
+      margin-top: 7px;
+      color: var(--subtle);
+      font-size: 12px;
+      font-style: normal;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
     .main-panel, .side-panel { min-width: 0; padding: 14px; display: grid; gap: 14px; align-content: start; }
     .side-panel { overflow: visible; position: relative; }
     .side-panel::after {
@@ -287,7 +342,7 @@
       opacity: .08;
       pointer-events: none;
     }
-    .section { position: relative; padding: 16px; box-shadow: none; background: rgba(255,255,255,.74); }
+    .section { position: relative; padding: 16px; box-shadow: none; background: rgba(255,255,255,.78); }
     .section::before {
       content: "";
       position: absolute;
@@ -300,10 +355,40 @@
       opacity: .62;
       pointer-events: none;
     }
-    .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+    .section-head > div { min-width: 0; }
+    .section-head .top-actions { max-width: 100%; }
     h2 { margin: 0; font-size: 16px; color: var(--navy); }
     h3 { margin: 0; font-size: 13px; color: var(--navy); }
     .section-note { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .status-stack { display: grid; gap: 8px; }
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .status-row:last-child { border-bottom: 0; }
+    .status-row span { min-width: 82px; color: var(--subtle); }
+    .status-row b {
+      min-width: 0;
+      color: var(--ink);
+      text-align: right;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .runtime-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .runtime-actions button { width: 100%; }
     .config-groups { display: grid; gap: 14px; }
     .config-group {
       display: grid;
@@ -330,6 +415,7 @@
       overflow: hidden;
       position: relative;
     }
+    .route-persona-card > div { min-width: 0; }
     .route-persona-card::after {
       content: "";
       position: absolute;
@@ -354,7 +440,7 @@
     .route-avatar img { width: 100%; height: 100%; display: block; border-radius: 12px; object-fit: cover; background: #fff; }
     .route-avatar.persona-mark { background: linear-gradient(135deg, rgba(25,191,193,.92), rgba(255,109,157,.7)); }
     .route-avatar.persona-mark img { object-fit: contain; padding: 0; }
-    .route-persona-fields { position: relative; z-index: 1; }
+    .route-persona-fields { position: relative; z-index: 1; grid-template-columns: 1fr; min-width: 0; }
     .persona-layout {
       display: grid;
       grid-template-columns: minmax(260px, .88fr) minmax(320px, 1.12fr);
@@ -843,21 +929,30 @@
     .rule-editor-pane { min-width: 0; }
     .rule-editor-pane .rule-card { height: 100%; }
     .rule-editor-pane .rule-body { grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); }
-    @media (max-width: 1100px) {
-      .workspace, .content { grid-template-columns: 1fr; }
-      .sidebar { min-height: auto; }
+    @media (max-width: 1320px) {
+      .content { grid-template-columns: 1fr; }
       .side-panel { position: static; max-height: none; }
+    }
+    @media (max-width: 1100px) {
+      .workspace { grid-template-columns: 1fr; }
+      .sidebar { min-height: auto; max-height: none; position: static; }
+      .overview-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .persona-layout { grid-template-columns: 1fr; }
       .message-source-panel { grid-template-columns: 1fr; }
       .modal-body { grid-template-columns: 1fr; }
       .rule-tabs { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
     }
     @media (max-width: 760px) {
-      .topbar { align-items: flex-start; flex-direction: column; }
+      .topbar { align-items: flex-start; flex-direction: column; gap: 10px; padding: 10px 12px; }
       .top-actions { width: 100%; justify-content: flex-start; }
+      .top-actions button,
+      .top-actions a.button,
+      .top-actions .health { min-height: 30px; padding: 6px 9px; font-size: 12px; }
       .fields, .rule-top, .rule-body, .route-persona-card, .combo-field .combo-control { grid-template-columns: 1fr; }
       .route-avatar { display: none; }
       .workspace { padding: 10px; }
+      .overview-strip { grid-template-columns: 1fr; }
+      .runtime-actions { grid-template-columns: 1fr 1fr; }
       body::before { opacity: .08; width: 92vw; }
     }
   </style>
@@ -905,7 +1000,15 @@
       </aside>
 
       <div class="content">
-        <section id="editor" class="main-panel"></section>
+        <div class="work-area">
+          <section id="overview-strip" class="overview-strip">
+            <div class="overview-card"><span>消息入口</span><b id="overview-adapters">0</b><em>已配置适配器</em></div>
+            <div class="overview-card"><span>模板规则</span><b id="overview-rules">0</b><em>当前路由人格</em></div>
+            <div class="overview-card"><span>Agent</span><b id="overview-agent">未绑定</b><em id="overview-agent-note">等待会话</em></div>
+            <div class="overview-card"><span>Manager</span><b id="overview-manager">加载中</b><em id="overview-manager-note">本地控制进程</em></div>
+          </section>
+          <section id="editor" class="main-panel"></section>
+        </div>
         <aside id="runtime-panel" class="side-panel"></aside>
       </div>
     </main>
@@ -1060,10 +1163,40 @@
         : `<span class="dot ok"></span><span>Manager 已连接</span>`;
 
       renderGatewayList();
+      renderOverviewStrip();
       renderEditor();
       renderRuntimePanel();
       renderRuleModal();
       bindInputs();
+    }
+
+    function renderOverviewStrip() {
+      const gateway = state.gateways[selectedIndex()];
+      const managerError = managerRows.error;
+      const managerRunning = Array.isArray(managerRows) ? managerRows.filter(row => row && row.running).length : 0;
+      if (!gateway) {
+        document.getElementById("overview-adapters").textContent = "0";
+        document.getElementById("overview-rules").textContent = "0";
+        document.getElementById("overview-agent").textContent = "未选择";
+        document.getElementById("overview-agent-note").textContent = "选择或新增路由";
+        document.getElementById("overview-manager").textContent = managerError ? "未连接" : "已连接";
+        document.getElementById("overview-manager-note").textContent = managerError || "本地控制进程";
+        return;
+      }
+
+      const runtime = gatewayRuntime(gateway.id);
+      const adapterTypes = gatewayAdapterTypes(gateway);
+      const rules = notificationRulesForGateway(gateway);
+      const agentState = runtime.codexState || {};
+      const agentError = agentState.lastNotificationError || "";
+      const agentBound = Boolean(agentState.monitorThreadId);
+
+      document.getElementById("overview-adapters").textContent = adapterTypes.includes("disabled") ? "禁用" : String(adapterTypes.length);
+      document.getElementById("overview-rules").textContent = String(rules.length);
+      document.getElementById("overview-agent").textContent = agentError ? "异常" : agentBound ? "已连接" : "未绑定";
+      document.getElementById("overview-agent-note").textContent = agentState.monitorThreadName || gateway.codexThreadName || "等待会话";
+      document.getElementById("overview-manager").textContent = managerError ? "未连接" : `${managerRunning}/${state.gateways.length}`;
+      document.getElementById("overview-manager-note").textContent = managerError || "运行中路由";
     }
 
     function renderGatewayList() {
@@ -1307,7 +1440,7 @@
             <div class="metric"><b>${adapterTypes.length}</b><span>消息端</span></div>
             <div class="metric"><b>${runtime.pid || "-"}</b><span>PID</span></div>
           </div>
-          <div class="top-actions" style="justify-content:flex-start;margin-top:12px">
+          <div class="runtime-actions">
             <button onclick="actionGateway('${escapeAttr(gateway.id)}', 'start')">启动</button>
             <button onclick="actionGateway('${escapeAttr(gateway.id)}', 'stop')">停止</button>
             <button class="primary" onclick="actionGateway('${escapeAttr(gateway.id)}', 'restart')">重启</button>
@@ -1319,8 +1452,10 @@
             <h2>消息端连接</h2>
             <span class="pill ${adapterClass}">${adapterText}</span>
           </div>
-          <div class="section-note" style="overflow-wrap:anywhere">类型：${escapeHtml(adapterTypes.map(adapterLabel).join(" + "))}</div>
-          ${adapterMessage ? `<div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">状态：${escapeHtml(adapterMessage)}</div>` : ""}
+          <div class="status-stack">
+            <div class="status-row"><span>类型</span><b>${escapeHtml(adapterTypes.map(adapterLabel).join(" + "))}</b></div>
+            ${adapterMessage ? `<div class="status-row"><span>状态</span><b>${escapeHtml(adapterMessage)}</b></div>` : ""}
+          </div>
           ${renderReasonList(adapterReasons)}
           ${adapterTypes.map(type => renderAdapterStatusDetails(gateway, type, napcatState, heartbeatState)).join("")}
         </section>
@@ -1329,16 +1464,18 @@
             <h2>Agent 连接</h2>
             <span class="pill ${agentClass}">${agentText}</span>
           </div>
-          <div class="section-note" style="overflow-wrap:anywhere">会话 ID：${escapeHtml(agentState.monitorThreadId || "-")}</div>
-          <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">会话线程名：${escapeHtml(agentState.monitorThreadName || gateway.codexThreadName || "-")}</div>
-          <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">自动发现：${escapeHtml(agentState.lastAutoDiscoveryAt || "-")}</div>
-          <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">最后成功：${escapeHtml(agentState.lastNotificationAt || "-")}</div>
-          <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">通知数：${escapeHtml(String(agentState.notificationCount || 0))}</div>
+          <div class="status-stack">
+            <div class="status-row"><span>会话 ID</span><b>${escapeHtml(agentState.monitorThreadId || "-")}</b></div>
+            <div class="status-row"><span>线程名</span><b>${escapeHtml(agentState.monitorThreadName || gateway.codexThreadName || "-")}</b></div>
+            <div class="status-row"><span>自动发现</span><b>${escapeHtml(agentState.lastAutoDiscoveryAt || "-")}</b></div>
+            <div class="status-row"><span>最后成功</span><b>${escapeHtml(agentState.lastNotificationAt || "-")}</b></div>
+            <div class="status-row"><span>通知数</span><b>${escapeHtml(String(agentState.notificationCount || 0))}</b></div>
+            <div class="status-row"><span>来源</span><b>${escapeHtml(agentState.monitorThreadSource || "-")}</b></div>
+            <div class="status-row"><span>状态文件</span><b>${escapeHtml(agentState.statePath || "-")}</b></div>
+          </div>
           ${renderReasonList(agentReasons)}
           ${agentError ? `<div class="section-note" style="margin-top:9px;color:var(--red);overflow-wrap:anywhere">最后错误：${escapeHtml(agentError)}</div>` : ""}
           ${agentState.lastNotificationErrorAt ? `<div class="section-note" style="margin-top:5px;overflow-wrap:anywhere">错误时间：${escapeHtml(agentState.lastNotificationErrorAt)}</div>` : ""}
-          <div class="section-note" style="margin-top:9px;overflow-wrap:anywhere">来源：${escapeHtml(agentState.monitorThreadSource || "-")}</div>
-          <div class="section-note" style="margin-top:9px;overflow-wrap:anywhere">Agent 状态文件：${escapeHtml(agentState.statePath || "-")}</div>
         </section>
         <section class="section">
           <div class="section-head"><h2>日志</h2><span class="section-note">最近 18 行</span></div>

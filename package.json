@@ -8,20 +8,31 @@
     "manager": "tsx src/manager.ts",
     "start": "node dist/index.js",
     "start:manager": "node dist/manager.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run webgui:build",
+    "build:backend": "tsc -p tsconfig.json",
+    "webgui:dev": "vite --config ribiwebgui/vite.config.ts --host 127.0.0.1",
+    "webgui:build": "vue-tsc -p ribiwebgui/tsconfig.json --noEmit && vite build --config ribiwebgui/vite.config.ts",
     "check:config": "node scripts/check-config-text.mjs",
     "send:onebot": "node scripts/send-onebot-message.mjs"
   },
   "dependencies": {
+    "@mdi/font": "^7.4.47",
     "@openai/codex": "^0.135.0",
     "@openai/codex-sdk": "^0.135.0",
     "dotenv": "^16.4.7",
+    "pinia": "^2.3.1",
+    "vue": "^3.5.35",
+    "vue-router": "^4.6.4",
+    "vuetify": "^3.12.8",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.7",
     "@types/ws": "^8.5.13",
+    "@vitejs/plugin-vue": "^5.2.4",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vite": "^6.4.3",
+    "vue-tsc": "^2.2.12"
   }
 }

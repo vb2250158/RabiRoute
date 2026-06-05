@@ -1,5 +1,6 @@
 /node_modules/
 /dist/
+/ribiwebgui/dist/
 /data/
 /tmp/
 /logs/

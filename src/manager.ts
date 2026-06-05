@@ -91,7 +91,9 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const rolesRoot = path.resolve(rootDir, process.env.ROLES_DIR ?? path.join("data", "roles"));
 const routeRoot = path.resolve(rootDir, process.env.ROUTE_DIR ?? path.join("data", "route"));
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
-const standaloneWebuiPath = path.join(rootDir, "ribiwebgui", "gateways.html");
+const packageJsonPath = path.join(rootDir, "package.json");
+const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
+const standaloneWebuiPath = path.join(rootDir, "ribiwebgui", "gateways.legacy.html");
 const runtimes = new Map<string, GatewayRuntime>();
 let watchedConfigSnapshot = "";
 
@@ -1054,7 +1056,70 @@ function networkOptionsPayload(): Record<string, unknown> {
   };
 }
 
-function htmlResponse(response: http.ServerResponse): void {
+function metaPayload(): Record<string, unknown> {
+  let version = "0.1.0";
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
+    if (typeof parsed.version === "string" && parsed.version.trim()) {
+      version = parsed.version;
+    }
+  } catch {
+    // Keep the baked fallback when package metadata is not readable.
+  }
+  return {
+    version,
+    githubUrl: "https://github.com/vb2250158/RabiRoute",
+    managerPort
+  };
+}
+
+function contentTypeFor(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".html") return "text/html; charset=utf-8";
+  if (extension === ".js" || extension === ".mjs") return "text/javascript; charset=utf-8";
+  if (extension === ".css") return "text/css; charset=utf-8";
+  if (extension === ".json") return "application/json; charset=utf-8";
+  if (extension === ".png") return "image/png";
+  if (extension === ".svg") return "image/svg+xml; charset=utf-8";
+  if (extension === ".woff") return "font/woff";
+  if (extension === ".woff2") return "font/woff2";
+  return "application/octet-stream";
+}
+
+function staticWebuiResponse(pathname: string, response: http.ServerResponse): boolean {
+  const indexPath = path.join(webuiDistPath, "index.html");
+  if (!fs.existsSync(indexPath)) {
+    return false;
+  }
+
+  const decoded = decodeURIComponent(pathname);
+  const normalized = path.normalize(decoded === "/" ? "/index.html" : decoded).replace(/^[/\\]+/, "");
+  const candidatePath = path.resolve(webuiDistPath, normalized);
+  const relativeToDist = path.relative(webuiDistPath, candidatePath);
+  if (relativeToDist.startsWith("..") || path.isAbsolute(relativeToDist)) {
+    return false;
+  }
+
+  if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
+    response.writeHead(200, { "content-type": contentTypeFor(candidatePath) });
+    response.end(fs.readFileSync(candidatePath));
+    return true;
+  }
+
+  if (path.extname(candidatePath)) {
+    return false;
+  }
+
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  response.end(fs.readFileSync(indexPath, "utf8"));
+  return true;
+}
+
+function htmlResponse(pathname: string, response: http.ServerResponse): void {
+  if (staticWebuiResponse(pathname, response)) {
+    return;
+  }
+
   if (fs.existsSync(standaloneWebuiPath)) {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(fs.readFileSync(standaloneWebuiPath, "utf8"));
@@ -1202,6 +1267,10 @@ function startManager(): void {
         jsonResponse(response, 200, networkOptionsPayload());
         return;
       }
+      if (request.method === "GET" && requestUrl.pathname === "/meta") {
+        jsonResponse(response, 200, metaPayload());
+        return;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/open-config-file") {
         jsonResponse(response, 200, openConfigFilePayload(
           requestUrl.searchParams.get("type"),
@@ -1229,7 +1298,7 @@ function startManager(): void {
         }
         return;
       }
-      htmlResponse(response);
+      htmlResponse(requestUrl.pathname, response);
     } catch (error) {
       jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }
