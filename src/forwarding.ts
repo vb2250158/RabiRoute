@@ -174,10 +174,9 @@ function ruleForRoute(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   extraValues: ForwardTemplateValues,
-  route?: RouteProfile
+  route: RouteProfile
 ): NotificationRule | null {
-  const rules = route?.notificationRules ?? config.notificationRules;
-  return rules.find((item) => ruleMatches(item, routeKind, record, extraValues, route)) ?? null;
+  return route.notificationRules.find((item) => ruleMatches(item, routeKind, record, extraValues, route)) ?? null;
 }
 
 function commonTemplateValues(
@@ -248,23 +247,8 @@ function dispatchToAgentAdapter(type: AgentAdapterType, message: string): void {
   void adapter.deliver(message).catch((error) => console.error(`Failed to deliver message through ${adapter.type} agent adapter`, error));
 }
 
-function fallbackRouteProfile(): RouteProfile {
-  return {
-    id: config.agentRoleId || "default",
-    name: config.agentRoleId || "默认路由",
-    enabled: true,
-    agentRoleId: config.agentRoleId,
-    agentRoleFile: config.agentRoleFile,
-    rolesDir: config.rolesDir,
-    dataDir: undefined,
-    routeVariables: {},
-    notificationRules: config.notificationRules
-  };
-}
-
 function activeRouteProfiles(): RouteProfile[] {
-  const routes = config.routeProfiles.length > 0 ? config.routeProfiles : [fallbackRouteProfile()];
-  return routes.filter((route) => route.enabled !== false);
+  return config.routeProfiles.filter((route) => route.enabled !== false);
 }
 
 function forwardMessageToRoute(

@@ -98,5 +98,5 @@
 
 - WebUI 文本框里必须是真实换行。
 - 不要输出让用户直接复制的 `"template": "...\\n..."` JSON 字符串。
-- 只有保存到 `routes.json` 时，JSON 序列化结果里才应该出现 `\n`。
+- 只有保存到 `roleMessageConfig.json` 时，JSON 序列化结果里才应该出现 `\n`。
 - 如果 WebUI 里显示可见的 `\n`，说明模板被双重转义，必须改成真实换行。

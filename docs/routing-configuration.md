@@ -6,57 +6,41 @@
 
 RabiRoute 支持两种常用方式。
 
-### 角色目录里的 routes.json
+### 角色目录里的 roleMessageConfig.json
 
-推荐把路由规则放在角色目录：
+消息路由配置跟随路由人格，放在角色目录：
 
 ```text
-data/roles/<RoleId>/routes.json
+data/roles/<RoleId>/roleMessageConfig.json
 ```
 
 示例：
 
 ```text
-data/roles/Rabi/routes.json
-data/roles/QAReviewer/routes.json
-data/roles/DevAssistant/routes.json
+data/roles/Rabi/roleMessageConfig.json
+data/roles/QAReviewer/roleMessageConfig.json
+data/roles/DevAssistant/roleMessageConfig.json
 ```
 
-manager 会把 `rolesDir` 下每个角色的 `routes.json` 组装成 route profile。这样同一个 gateway 可以共享一套 NapCat WS / HTTP，但同时拥有多个人格路由。
+manager 会扫描 `data/roles/*/roleMessageConfig.json`。每个文件里可以有多套 `configs`，一套 config 就是一条可启动的消息路由配置。
 
-### gateway 里的 routeProfiles
+人格文件仍放在同一个 `data/roles/<RoleId>/`。多个消息路由配置可以使用同一个路由人格，因为它们本来就跟随这个角色文件夹。
 
-也可以在 `data/gateways.json` 里显式写 `routeProfiles`：
+路由入口参数来自 `data/route/<配置名>/routeConfig.json`。manager 会用其中的 `agentRoleId` 找到对应角色，再从该角色的 `roleMessageConfig.json` 中读取相同 `configName` 的规则。没有有效配置时，消息不会投递给处理端。
 
-```json
-{
-  "routeProfiles": [
-    {
-      "id": "rabi",
-      "name": "Rabi 路由",
-      "agentRoleId": "Rabi",
-      "notificationRules": []
-    },
-    {
-      "id": "qa-reviewer",
-      "name": "QA 审校路由",
-      "agentRoleId": "QAReviewer",
-      "notificationRules": []
-    }
-  ]
-}
-```
-
-除非需要覆盖角色目录、数据目录或变量，优先使用角色目录里的 `routes.json`。
-
-## routes.json 结构
+## roleMessageConfig.json 结构
 
 最小结构：
 
 ```json
 {
-  "routeName": "Rabi 路由",
-  "notificationRules": []
+  "configs": [
+    {
+      "configName": "main",
+      "routeVariables": {},
+      "notificationRules": []
+    }
+  ]
 }
 ```
 
@@ -74,13 +58,13 @@ manager 会把 `rolesDir` 下每个角色的 `routes.json` 组装成 route profi
 }
 ```
 
-`template` 不建议手写成一整条 JSON 字符串。先在 WebUI 或文本块里写真实换行模板，再保存到 `routes.json`。
+`template` 不建议手写成一整条 JSON 字符串。先在 WebUI 或文本块里写真实换行模板，再保存到 `roleMessageConfig.json`。
 
 ## route kind
 
 - `direct_at`：群聊直接 @ 机器人。
 - `direct_reply`：当前消息直接回复机器人。
-- `indirect_reply`：当前消息回复了某条曾经 @ 机器人的消息。
+- `indirect_reply`：当前消息回复了某条曾经 @ 机器人的消息，或继续回复一条已经触发过路由的群聊回复链。路由层只识别回复链结构，不判断内容是否“值得回”；陪伴型角色可以订阅它来持续接住对话，工作型角色可以不订阅或配合 `regex` 降噪。
 - `group_message`：普通群聊消息，通常配合 `regex` 使用。
 - `private`：私聊消息。
 - `heartbeat`：定时触发消息。
@@ -154,7 +138,7 @@ manager 会把 `rolesDir` 下每个角色的 `routes.json` 组装成 route profi
 
 - WebUI 文本框里必须是真实换行。
 - 不要把模板写成用户要直接复制的 `"template": "...\\n..."` JSON 字符串。
-- 只有保存到 `routes.json` 时，JSON 序列化结果里才应该出现 `\n`。
+- 只有保存到 `roleMessageConfig.json` 时，JSON 序列化结果里才应该出现 `\n`。
 - 如果 WebUI 里显示可见的 `\n`，说明模板被双重转义，必须改成真实换行。
 
 ## 常用变量

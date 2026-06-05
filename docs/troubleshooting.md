@@ -2,11 +2,11 @@
 
 ## NapCat 已连接，但处理端没有收到消息
 
-先看 `data/<gateway-id>/`：
+先看 `data/route/<配置名>/`：
 
 - 有 `group-messages.jsonl` 或 `private-messages.jsonl`：说明 QQ 到 RabiRoute 已通。
 - 有 `codex-notifications.jsonl`：说明路由规则已命中并尝试投递。
-- 没有投递记录：检查 `notificationRules`、`routeKinds`、`regex` 和目标群过滤。
+- 没有投递记录：检查角色 `roleMessageConfig.json` 是否存在对应 `configName` 的有效 `notificationRules`，再检查 `routeKinds`、`regex` 和目标群过滤。
 
 ## `send_group_msg` 报 `EventChecker Failed` / `1006514`
 
@@ -23,7 +23,9 @@ retcode=1006514
 1. 查 NapCat/QQ 日志里的 quick login 和二维码登录状态；如果 quick login 失败，通常需要重新扫码登录。
 2. 如果 NapCat 启动日志提示本地时间和 ServerTime 有偏差，先同步 Windows 系统时间，再重启 NapCat/QQ。
 3. 重启 NapCat/QQ 后重新扫码登录，再测 OneBot HTTP、RabiRoute WebSocket 和 `send_group_msg`。
-4. RabiRoute 侧看 `data/<gateway-id>/gateway-status.json`、`group-messages.jsonl` 和 `codex-notifications.jsonl`，区分“能收不能发”和“路由没有命中”。
+4. RabiRoute 侧看 `data/route/<配置名>/gateway-status.json`、`group-messages.jsonl` 和 `codex-notifications.jsonl`，区分“能收不能发”和“路由没有命中”。
+
+如果目标是无值守登录，不要把 QQ 密码写进 RabiRoute 配置。用 NapCat WebUI 和 NapCat Shell 支持的 Windows 环境变量配置，详见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。
 
 推荐把这条作为外发恢复链路的演示：心跳或健康检查发现外发失败后，不直接丢消息，而是把待发内容先作为草稿/待审 action 缓存；修复登录态后再补发，并把 NapCat 返回的 `message_id` 写入执行记录。当前版本已把 OneBot `retcode` 非 0 视为失败；完整 Action Queue / 补发队列仍属于后续演进。
 
@@ -43,7 +45,7 @@ retcode=1006514
 npm run send:onebot -- --group 123456 --message "中文测试\n第二行"
 ```
 
-如果 `data/gateways.json` reload 失败，或 WebUI 保存后配置异常，也检查是否误写入了字面量 `\n`：
+如果 `data/route` 或 `data/roles` 下的 JSON reload 失败，或 WebUI 保存后配置异常，也检查是否误写入了字面量 `\n`：
 
 ```powershell
 npm run check:config
@@ -56,7 +58,7 @@ npm run check:config
 
 ## `Missing monitorThreadId`
 
-说明 RabiRoute 没找到对应 Codex Desktop 线程。先打开或创建用于处理 QQ 消息的 Codex 线程，再通过 WebUI 绑定；也可以检查 `data/<gateway-id>/codex-state.json`。
+说明 RabiRoute 没找到对应 Codex Desktop 线程。先打开或创建用于处理 QQ 消息的 Codex 线程，再通过 WebUI 绑定；也可以检查 `data/route/<配置名>/codex-state.json`。
 
 ## macOS 上 `connect ENOENT /tmp/codex-ipc/...`
 

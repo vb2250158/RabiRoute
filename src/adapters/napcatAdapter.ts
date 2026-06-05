@@ -42,6 +42,7 @@ type GatewayStatus = {
   };
   napcat?: {
     connected?: boolean;
+    activeConnections?: number;
     connectionCount?: number;
     messageCount?: number;
     remoteAddress?: string;
@@ -57,6 +58,7 @@ type GatewayStatus = {
 };
 
 const statusPath = path.join(config.dataDir, "gateway-status.json");
+const loginRefreshIntervalSeconds = Number(process.env.NAPCAT_LOGIN_REFRESH_SECONDS ?? "60");
 
 function readGatewayStatus(): GatewayStatus {
   if (!fs.existsSync(statusPath)) {
@@ -177,11 +179,6 @@ function findRepliedGroupMessage(event: OneBotEvent): GroupMessageRecord | null 
     .find((message) => message.groupId === event.group_id && String(message.messageId) === id) ?? null;
 }
 
-function repliedMessageMentionsBot(event: OneBotEvent): boolean {
-  const repliedMessage = findRepliedGroupMessage(event);
-  return repliedMessage ? contentMentionsBot(repliedMessage.rawMessage, event.self_id) : false;
-}
-
 async function refreshBotProfile(): Promise<void> {
   try {
     const loginInfo = await getLoginInfo();
@@ -210,12 +207,17 @@ function getGroupRoute(event: OneBotEvent): GroupRoute | null {
   const mentionsBotByText = contentMentionsBot(content, event.self_id);
   const mentionsBotBySegment = hasStructuredAtSelf(event);
   const isReply = hasReplySegment(event);
+  const repliedMessage = isReply ? findRepliedGroupMessage(event) : null;
 
   if (isReply && (mentionsBotBySegment || mentionsBotByText)) {
     return { kind: "direct_reply" };
   }
 
-  if (isReply && repliedMessageMentionsBot(event)) {
+  if (isReply && repliedMessage && contentMentionsBot(repliedMessage.rawMessage, event.self_id)) {
+    return { kind: "indirect_reply" };
+  }
+
+  if (isReply && repliedMessage?.routeKind) {
     return { kind: "indirect_reply" };
   }
 
@@ -244,16 +246,20 @@ async function handleGroupMessage(event: OneBotEvent): Promise<void> {
     userId: event.user_id,
     rawMessage: textFromEvent(event),
     messageId: event.message_id,
-    senderName: event.sender?.card || event.sender?.nickname
+    senderName: event.sender?.card || event.sender?.nickname,
+    repliedMessageId: replyMessageId(event) ?? undefined
   };
 
-  appendGroupMessage(record);
   const route = getGroupRoute(event);
+  if (route) {
+    record.routeKind = route.kind;
+  }
+  appendGroupMessage(record);
   if (route) {
     const repliedMessage = findRepliedGroupMessage(event);
     forwardMessage(route.kind, record, {
       selfId: event.self_id,
-      repliedMessageId: replyMessageId(event) ?? undefined,
+      repliedMessageId: record.repliedMessageId,
       repliedMessage: repliedMessage?.rawMessage
     });
   } else {
@@ -305,25 +311,30 @@ export function createNapCatAdapter(): MessageAdapter {
   return {
     type: "napcat",
     start() {
+      const activeSockets = new Set<object>();
       const server = new WebSocketServer({
         host: "127.0.0.1",
         port: config.gatewayPort
       });
 
       server.on("connection", (socket, request) => {
+        activeSockets.add(socket);
         console.log(`NapCat connected from ${request.socket.remoteAddress}`);
         const connectedAt = new Date().toISOString();
         const currentStatus = readGatewayStatus().napcat;
         patchNapcatStatus({
           connected: true,
+          activeConnections: activeSockets.size,
           remoteAddress: request.socket.remoteAddress,
           lastConnectedAt: connectedAt,
           connectionCount: (currentStatus?.connectionCount ?? 0) + 1
         });
 
         socket.on("close", () => {
+          activeSockets.delete(socket);
           patchNapcatStatus({
-            connected: false,
+            connected: activeSockets.size > 0,
+            activeConnections: activeSockets.size,
             lastDisconnectedAt: new Date().toISOString()
           });
           console.log("NapCat disconnected");
@@ -359,6 +370,11 @@ export function createNapCatAdapter(): MessageAdapter {
           message: "NapCat / OneBot 消息适配端已启动。"
         });
         void refreshBotProfile();
+        if (Number.isFinite(loginRefreshIntervalSeconds) && loginRefreshIntervalSeconds > 0) {
+          setInterval(() => {
+            void refreshBotProfile();
+          }, loginRefreshIntervalSeconds * 1000);
+        }
       });
     }
   };

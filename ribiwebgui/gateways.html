@@ -22,6 +22,7 @@
       --green: #16a34a;
       --red: #dc2626;
       --shadow: 0 18px 48px rgba(12,42,74,.12);
+      --topbar-height: 76px;
     }
     html { background: var(--bg); overflow-x: hidden; }
     body {
@@ -100,11 +101,20 @@
       font-size: 12px;
     }
     label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
-    .app-shell { position: relative; z-index: 1; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    .app-shell {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: 1fr;
+      padding-top: var(--topbar-height);
+    }
     .topbar {
-      position: sticky;
+      position: fixed;
       top: 0;
-      z-index: 20;
+      left: 0;
+      right: 0;
+      z-index: 1000;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -115,6 +125,7 @@
         linear-gradient(90deg, rgba(255,255,255,.9), rgba(242,251,255,.82)),
         linear-gradient(135deg, rgba(25,191,193,.18), rgba(255,109,157,.08));
       backdrop-filter: blur(18px);
+      box-shadow: 0 14px 34px rgba(12,42,74,.12);
     }
     .topbar::before {
       content: "";
@@ -276,7 +287,7 @@
       opacity: .08;
       pointer-events: none;
     }
-    .section { position: relative; padding: 14px; box-shadow: none; background: rgba(255,255,255,.74); }
+    .section { position: relative; padding: 16px; box-shadow: none; background: rgba(255,255,255,.74); }
     .section::before {
       content: "";
       position: absolute;
@@ -344,9 +355,110 @@
     .route-avatar.persona-mark { background: linear-gradient(135deg, rgba(25,191,193,.92), rgba(255,109,157,.7)); }
     .route-avatar.persona-mark img { object-fit: contain; padding: 0; }
     .route-persona-fields { position: relative; z-index: 1; }
+    .persona-layout {
+      display: grid;
+      grid-template-columns: minmax(260px, .88fr) minmax(320px, 1.12fr);
+      gap: 12px;
+      align-items: start;
+      margin-bottom: 12px;
+    }
+    .persona-info-card,
+    .persona-preview-card,
+    .message-rule-head {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.78);
+    }
+    .persona-info-card {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      background:
+        linear-gradient(135deg, rgba(236,252,255,.82), rgba(255,247,251,.68)),
+        rgba(255,255,255,.82);
+    }
+    .persona-info-top {
+      display: grid;
+      grid-template-columns: 56px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+    }
+    .persona-info-top .route-avatar { width: 56px; height: 56px; border-radius: 14px; }
+    .persona-path-list { display: grid; gap: 7px; }
+    .persona-path {
+      display: grid;
+      gap: 2px;
+      padding: 8px;
+      border: 1px solid rgba(17,32,51,.1);
+      border-radius: 8px;
+      background: rgba(255,255,255,.7);
+      overflow-wrap: anywhere;
+    }
+    .persona-path b { color: var(--navy); font-size: 12px; }
+    .persona-path span { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .persona-preview-card { overflow: hidden; }
+    .persona-preview-card .config-group-head { padding: 10px 12px; border-bottom: 1px solid var(--line); background: rgba(7,24,39,.035); }
+    .persona-preview-card .route-extension-content { padding: 10px 12px 12px; }
+    .message-rule-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 12px;
+      margin-top: 12px;
+      background:
+        linear-gradient(90deg, rgba(25,191,193,.1), rgba(255,255,255,.82), rgba(255,109,157,.08));
+    }
+    .message-rule-title { display: grid; gap: 2px; }
+    .message-rule-count {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: rgba(12,42,74,.08);
+      color: var(--navy);
+      font-size: 12px;
+      font-weight: 900;
+    }
     .inline-check { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-weight: 800; }
     .inline-check input { width: auto; }
-    .rule-list { display: grid; gap: 10px; }
+    .rule-list { display: grid; gap: 12px; }
+    .rule-overview-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.86);
+      text-align: left;
+    }
+    .rule-overview-card:hover { border-color: rgba(25,191,193,.5); box-shadow: 0 8px 22px rgba(25,191,193,.1); }
+    .rule-overview-main { display: grid; gap: 6px; min-width: 0; }
+    .rule-overview-title { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+    .rule-overview-title strong { color: var(--navy); font-size: 13px; }
+    .rule-overview-meta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 800; }
+    .rule-chip {
+      display: inline-flex;
+      width: fit-content;
+      max-width: 100%;
+      border-radius: 999px;
+      padding: 3px 7px;
+      background: rgba(7,24,39,.06);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .rule-overview-snippet {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .rule-overview-action { color: var(--teal-dark); font-size: 12px; font-weight: 900; }
     .role-rule-group {
       display: grid;
       gap: 8px;
@@ -371,16 +483,30 @@
       background: rgba(255,255,255,.94);
       overflow: hidden;
     }
+    .rule-title-stack { display: grid; gap: 5px; min-width: 0; }
+    .rule-id {
+      display: inline-flex;
+      width: fit-content;
+      max-width: 100%;
+      border-radius: 999px;
+      padding: 3px 7px;
+      background: rgba(7,24,39,.06);
+      color: var(--muted);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
     .rule-top {
       display: grid;
       grid-template-columns: minmax(170px, 1fr) auto;
       gap: 8px;
       align-items: center;
-      padding: 10px;
+      padding: 11px 12px;
       border-bottom: 1px solid var(--line);
       background: linear-gradient(90deg, rgba(25,191,193,.11), rgba(255,255,255,.82), rgba(255,109,157,.08));
     }
-    .rule-body { display: grid; grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); gap: 10px; padding: 10px; }
+    .rule-body { display: grid; grid-template-columns: minmax(230px, 290px) minmax(0, 1fr); gap: 12px; padding: 12px; }
     .rule-tools {
       display: grid;
       gap: 7px;
@@ -392,8 +518,8 @@
     }
     .rule-note { align-self: center; }
     .template-editor textarea {
-      min-height: 210px;
-      max-height: 420px;
+      min-height: 240px;
+      max-height: 520px;
       overflow: auto;
       white-space: pre-wrap;
     }
@@ -469,6 +595,77 @@
       background: rgba(255,247,251,.68);
     }
     .adapter-list { grid-column: 1 / -1; display: grid; gap: 9px; }
+    .adapter-choice-grid {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 9px;
+    }
+    .message-source-panel {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+      gap: 12px;
+      grid-column: 1 / -1;
+      align-items: start;
+    }
+    .message-source-list { display: grid; gap: 8px; }
+    .message-source-list .adapter-choice-grid { grid-template-columns: 1fr; }
+    .adapter-choice {
+      position: relative;
+      display: grid;
+      gap: 5px;
+      min-height: 92px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.72);
+      color: var(--ink);
+      text-align: left;
+      align-content: start;
+    }
+    .adapter-choice:hover { border-color: rgba(25,191,193,.48); box-shadow: 0 8px 20px rgba(25,191,193,.1); }
+    .adapter-choice.active {
+      border-color: rgba(25,191,193,.72);
+      background:
+        linear-gradient(135deg, rgba(236,252,255,.92), rgba(255,255,255,.86)),
+        linear-gradient(90deg, rgba(25,191,193,.14), rgba(255,109,157,.08));
+    }
+    .adapter-choice strong { color: var(--navy); font-size: 13px; }
+    .adapter-choice span { color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1.35; }
+    .adapter-choice::after {
+      content: "";
+      position: absolute;
+      right: 10px;
+      top: 10px;
+      width: 17px;
+      height: 17px;
+      border: 1px solid rgba(17,32,51,.18);
+      border-radius: 50%;
+      background: rgba(255,255,255,.86);
+    }
+    .adapter-choice.active::after {
+      border-color: rgba(25,191,193,.9);
+      background:
+        radial-gradient(circle at center, var(--teal) 0 42%, transparent 46%),
+        #fff;
+    }
+    .message-source-fields {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+    .message-source-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255,255,255,.78);
+    }
+    .message-source-summary strong { color: var(--navy); font-size: 13px; }
+    .message-source-summary span { color: var(--muted); font-size: 12px; font-weight: 800; }
     .adapter-row {
       display: grid;
       grid-template-columns: minmax(180px, 1fr) auto;
@@ -588,10 +785,72 @@
       transform: translate3d(-9999px, -9999px, 0);
     }
     #tooltip.visible { opacity: 1; }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: rgba(7,24,39,.42);
+      backdrop-filter: blur(8px);
+    }
+    .modal {
+      width: min(1120px, calc(100vw - 36px));
+      max-height: calc(100vh - 36px);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      border: 1px solid rgba(255,255,255,.38);
+      border-radius: 10px;
+      background: rgba(250,253,255,.96);
+      box-shadow: 0 28px 90px rgba(7,24,39,.34);
+      overflow: hidden;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, rgba(236,252,255,.9), rgba(255,247,251,.86));
+    }
+    .modal-head h2 { font-size: 16px; }
+    .modal-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px;
+      overflow: auto;
+    }
+    .rule-tabs {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+    .rule-tab {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+      border-radius: 8px;
+      background: rgba(255,255,255,.82);
+    }
+    .rule-tab.active {
+      border-color: rgba(25,191,193,.7);
+      background: rgba(236,252,255,.88);
+    }
+    .rule-editor-pane { min-width: 0; }
+    .rule-editor-pane .rule-card { height: 100%; }
+    .rule-editor-pane .rule-body { grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); }
     @media (max-width: 1100px) {
       .workspace, .content { grid-template-columns: 1fr; }
       .sidebar { min-height: auto; }
       .side-panel { position: static; max-height: none; }
+      .persona-layout { grid-template-columns: 1fr; }
+      .message-source-panel { grid-template-columns: 1fr; }
+      .modal-body { grid-template-columns: 1fr; }
+      .rule-tabs { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
     }
     @media (max-width: 760px) {
       .topbar { align-items: flex-start; flex-direction: column; }
@@ -617,7 +876,8 @@
         <div id="manager-health" class="health"><span class="dot"></span><span>加载中</span></div>
         <button id="refresh">刷新</button>
         <button id="start-manager">启动 Manager</button>
-        <button id="add">新增 Gateway</button>
+        <button id="add">新增路由配置</button>
+        <button id="open-manager-config">打开路由配置目录</button>
         <button id="save" class="primary">保存配置</button>
       </div>
     </header>
@@ -631,7 +891,7 @@
             <a id="standalone-link" class="button primary" href="http://127.0.0.1:8790/" target="_blank" rel="noreferrer">打开 RabiRoute</a>
           </div>
           <div class="metric-row">
-            <div class="metric"><b id="metric-total">0</b><span>Gateways</span></div>
+            <div class="metric"><b id="metric-total">0</b><span>路由配置</span></div>
             <div class="metric"><b id="metric-running">0</b><span>Running</span></div>
           </div>
           <div class="mascot-card">
@@ -651,6 +911,7 @@
     </main>
   </div>
   <div id="tooltip"></div>
+  <div id="modal-root"></div>
 
   <script>
     const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
@@ -710,7 +971,9 @@
     let state = { gateways: [] };
     let managerRows = [];
     let networkOptions = { adapters: {}, httpServers: [], websocketClients: [] };
+    let configFiles = {};
     let selectedGatewayId = "";
+    let ruleModalState = null;
 
     function gatewayRuntime(id) {
       return managerRows.find(row => row.id === id) || {};
@@ -799,13 +1062,14 @@
       renderGatewayList();
       renderEditor();
       renderRuntimePanel();
+      renderRuleModal();
       bindInputs();
     }
 
     function renderGatewayList() {
       const list = document.getElementById("gateway-list");
       if (state.gateways.length === 0) {
-        list.innerHTML = `<div class="empty">暂无 Gateway</div>`;
+        list.innerHTML = `<div class="empty">暂无路由配置</div>`;
         return;
       }
 
@@ -814,12 +1078,21 @@
         const runningClass = runtime.running ? "running" : "stopped";
         const runningText = runtime.running ? "运行中" : "已停止";
         const activeClass = gateway.id === selectedGatewayId ? "active" : "";
-        const title = activeRouteName(gateway) || gateway.name || gateway.id;
+        const title = configNameFor(gateway);
+        const webhookMeta = gatewayAdapterTypes(gateway).includes("webhook") && (gateway.webhookPort || gateway.gatewayPort)
+          ? `webhook:${gateway.webhookPort || gateway.gatewayPort}${gateway.webhookPath || "/webhook"}`
+          : "";
+        const metaParts = [
+          gateway.agentRoleId ? `人格 ${gateway.agentRoleId}` : "未指向人格",
+          `配置 ${configNameFor(gateway)}`,
+          gateway.gatewayPort ? `:${gateway.gatewayPort}` : "",
+          webhookMeta
+        ].filter(Boolean);
         return `
           <button class="gateway-item ${activeClass}" data-select-gateway="${escapeAttr(gateway.id)}">
             <span>
               <span class="gateway-name">${escapeHtml(title)}</span>
-              <span class="gateway-meta">:${gateway.gatewayPort || "-"} · ${escapeHtml(gateway.codexThreadName || gateway.id)}</span>
+              <span class="gateway-meta">${escapeHtml(metaParts.join(" · "))}</span>
             </span>
             <span class="pill ${runningClass}">${runningText}</span>
           </button>
@@ -832,20 +1105,100 @@
       const index = selectedIndex();
       const gateway = state.gateways[index];
       if (!gateway) {
-        editor.innerHTML = `<div class="empty">选择或新增一个 Gateway</div>`;
+        editor.innerHTML = `<div class="empty">选择或新增一个路由配置</div>`;
         return;
       }
 
       const rules = notificationRulesForGateway(gateway);
-      const title = activeRouteName(gateway) || gateway.name || gateway.id;
+      const title = configNameFor(gateway);
+      const runtime = gatewayRuntime(gateway.id);
+      const roleInfo = runtime.roleInfo || {};
+      const routesPath = routeConfigPathFor(gateway);
+      const routeFolderName = gateway.configName || configNameFor(gateway) || "未命名配置";
+      const personaSection = gateway.agentRoleId ? `
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <h2>人格配置</h2>
+              <div class="section-note">当前路由指向 ${escapeHtml(gateway.agentRoleId)}，消息包装、模板规则和人格信息都跟随这个角色</div>
+            </div>
+            <div class="top-actions" style="justify-content:flex-end">
+              <button type="button" onclick="openConfigFile('role', '${escapeAttr(gateway.id)}', '${escapeAttr(gateway.agentRoleId || "")}')">打开人格配置</button>
+              <button type="button" onclick="openConfigFile('role-message-config', '${escapeAttr(gateway.id)}', '${escapeAttr(gateway.agentRoleId || "")}')">打开消息模板配置</button>
+              <button type="button" class="accent" onclick="addNotificationRule(${index})">新增规则</button>
+            </div>
+          </div>
+          <div class="persona-layout">
+            <div class="persona-info-card">
+              <div class="persona-info-top">
+                <div class="route-avatar persona-mark"><img src="/assets/rabiroute-persona-mark.svg" alt="Rabi persona" /></div>
+                <div>
+                  <h3>${escapeHtml(gateway.agentRoleId)}</h3>
+                  <div class="section-note">人格文件与消息包装规则</div>
+                </div>
+              </div>
+              <div class="persona-path-list">
+                <div class="persona-path">
+                  <b>角色文件夹</b>
+                  <span>./data/roles/${escapeHtml(gateway.agentRoleId)}</span>
+                </div>
+                <div class="persona-path">
+                  <b>人格配置</b>
+                  <span>./data/roles/${escapeHtml(gateway.agentRoleId)}/persona.md</span>
+                </div>
+                <div class="persona-path">
+                  <b>消息模板配置</b>
+                  <span>./data/roles/${escapeHtml(gateway.agentRoleId)}/roleMessageConfig.json</span>
+                </div>
+              </div>
+            </div>
+            <div class="persona-preview-card">
+              <div class="config-group-head">
+                <h3>人格文件预览</h3>
+                <span class="section-note">persona.md</span>
+              </div>
+              <div class="route-extension-content">
+                ${renderRolePreview(gateway, gateway.agentRoleId || "")}
+              </div>
+            </div>
+          </div>
+          <details class="route-extension">
+            <summary>变量</summary>
+            <div class="route-extension-content">
+              <div class="section-note">内置变量</div>
+              <div class="template-vars">${renderTemplateVars()}</div>
+              <div class="section-note" style="margin-top:4px">人格消息变量</div>
+              <div class="variable-list">
+                ${renderRouteVariables(index, gateway)}
+              </div>
+              <div>
+                <button type="button" class="accent" onclick="addRouteVariable(${index})">新增变量</button>
+              </div>
+            </div>
+          </details>
+          <div class="message-rule-head">
+            <div class="message-rule-title">
+              <h3>消息模板规则</h3>
+              <span class="section-note">命中消息后，按这些模板包装再发送给 Agent</span>
+            </div>
+            <span class="message-rule-count">${rules.length} 条模板</span>
+          </div>
+          <div class="rule-list" style="margin-top:10px">
+            ${rules.length ? rules.map((rule, ruleIndex) => renderRuleOverview(index, ruleIndex, rule)).join("") : `<div class="empty">暂无消息模板规则</div>`}
+          </div>
+        </section>
+      ` : "";
       editor.innerHTML = `
         <section class="section">
           <div class="section-head">
             <div>
-              <h2>${escapeHtml(title)}</h2>
-              <div class="section-note">${escapeHtml(gateway.id)} · ${rules.length} 条规则</div>
+              <h2>路由配置</h2>
+              <div class="section-note">${escapeHtml(title)} · 接口参数</div>
             </div>
-            <label class="inline-check"><input type="checkbox" data-index="${index}" data-field="enabled" ${gateway.enabled !== false ? "checked" : ""}>启用</label>
+            <div class="top-actions" style="justify-content:flex-end">
+              <label class="inline-check"><input type="checkbox" data-index="${index}" data-field="enabled" ${gateway.enabled !== false ? "checked" : ""}>启用</label>
+              <button type="button" onclick="openConfigFile('routes', '${escapeAttr(gateway.id)}', '${escapeAttr(gateway.agentRoleId || "")}')">打开路由配置</button>
+            </div>
           </div>
           <div class="config-groups">
             <div class="config-group">
@@ -854,8 +1207,7 @@
                 <span class="section-note">多个消息入口可以并存，定时触发会直接路由给 Agent</span>
               </div>
               <div class="fields">
-                ${messageAdapterSelect(index, gateway)}
-                ${renderMessageAdapterFields(index, gateway)}
+                ${renderMessageSourcePanel(index, gateway)}
               </div>
             </div>
             <div class="config-group">
@@ -875,55 +1227,27 @@
                 <span class="section-note">显示和数据存储</span>
               </div>
               <div class="fields">
-                ${input(index, "dataDir", "基础数据目录", gateway.dataDir || `./data/${gateway.id}`)}
-                ${input(index, "rolesDir", "角色目录", gateway.rolesDir || `${gateway.dataDir || `./data/${gateway.id}`}/roles`)}
+                ${input(index, "dataDir", "数据目录", gateway.dataDir || roleMessageDataDirFor(gateway))}
+                ${input(index, "rolesDir", "角色目录", gateway.rolesDir || "./data/roles")}
               </div>
+              <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">路由目录：${escapeHtml(configFiles.routeRoot || configFiles.manager || "data/route")}</div>
+              <div class="section-note" style="margin-top:5px;overflow-wrap:anywhere">角色目录：${escapeHtml(roleInfo.rolesDir || gateway.rolesDir || "./data/roles")}</div>
             </div>
           </div>
-        </section>
 
-        <section class="section">
-          <div class="section-head">
-            <div>
-              <h2>路由人格</h2>
-              <div class="section-note">选择人格后，下方会切换到该人格自己的路由规则</div>
-            </div>
-            <button type="button" class="accent" onclick="addNotificationRule(${index})">新增规则</button>
-          </div>
           <div class="route-persona-card">
             <div class="route-avatar persona-mark"><img src="/assets/rabiroute-persona-mark.svg" alt="Rabi persona" /></div>
             <div>
               <div class="fields route-persona-fields">
-                ${input(index, "routeName", "路由名称", activeRouteName(gateway))}
                 ${roleSelect(index, gateway)}
               </div>
-              <div class="section-note" style="margin-top:7px">名称、人格和规则会一起写入当前角色目录的 routes.json。</div>
+              <div class="section-note" style="margin-top:7px">路由配置只保存接口和运行参数；选中人格后，下方显示该人格的消息模板规则。</div>
+              <div class="section-note" style="margin-top:5px;overflow-wrap:anywhere">配置文件：${escapeHtml(routesPath || "data/route/<配置名>/routeConfig.json")}</div>
             </div>
-          </div>
-          <details class="route-extension" style="margin-bottom:10px">
-            <summary>角色预览</summary>
-            <div class="route-extension-content">
-              ${renderRolePreview(gateway, gateway.agentRoleId || "")}
-            </div>
-          </details>
-          <details class="route-extension">
-            <summary>变量</summary>
-            <div class="route-extension-content">
-              <div class="section-note">内置变量</div>
-              <div class="template-vars">${renderTemplateVars()}</div>
-              <div class="section-note" style="margin-top:4px">路由变量</div>
-              <div class="variable-list">
-                ${renderRouteVariables(index, gateway)}
-              </div>
-              <div>
-                <button type="button" class="accent" onclick="addRouteVariable(${index})">新增变量</button>
-              </div>
-            </div>
-          </details>
-          <div class="rule-list" style="margin-top:10px">
-            ${rules.map((rule, ruleIndex) => renderRule(index, ruleIndex, rule)).join("")}
           </div>
         </section>
+
+        ${personaSection}
       `;
     }
 
@@ -1026,7 +1350,6 @@
     const helpText = {
       id: "Gateway 的唯一 ID，只能使用英文、数字、下划线或短横线。",
       name: "显示名称，只影响管理台上的可读标题。",
-      routeName: "当前路由人格这套路由的名称，会和该人格的 routes.json 一起保存。",
       enabled: "是否由 manager 自动启动这条 gateway。",
       messageAdapterType: "选择消息进入 RabiRoute 的适配端。NapCat 当前可用，其他类型先作为框架预留。",
       messageAdapters: "消息进入 RabiRoute 的入口列表。可以添加多个，例如 NapCat 接收实时 QQ 消息，同时用定时触发替代 Agent 心跳任务。",
@@ -1037,7 +1360,7 @@
       codexThreadName: "Agent 接收 QQ 消息的固定会话线程名。",
       codexCwd: "Agent 处理消息时使用的工作目录。WebUI 里写普通路径，例如 C:/Path/To/Project 或 C:\\Path\\To\\Project；不要写 JSON 里的双反斜杠。",
       rolesDir: "存放角色文件夹的目录。每个角色一个子文件夹，默认读取其中的 persona.md。",
-      agentRoleId: "选择路由人格。不同人格有自己的 persona 和路由规则，对话日志也会写入对应角色目录。",
+      agentRoleId: "选择这套路由指向的人格。选中后才会显示该角色的人格配置、路由配置和规则。",
       agentAdapters: "Agent 端适配器配置。当前支持 codexDesktop 和 codexApp。",
       dataDir: "基础数据目录。未选择角色时日志写在这里；选择角色后日志写入角色目录。",
       ruleName: "规则名称，只用于管理台展示。",
@@ -1097,14 +1420,14 @@
     function roleOptionsForGateway(gateway) {
       const runtime = gatewayRuntime(gateway.id);
       const roleInfo = runtime.roleInfo || {};
-      return [{ label: "不注入角色", value: "" }, ...((roleInfo.options || []).map(role => ({
+      return [{ label: "不注入人格", value: "" }, ...((roleInfo.options || []).map(role => ({
         label: role.label || role.value,
         value: role.value
       })))];
     }
 
     function roleSelect(index, gateway) {
-      return select(index, "agentRoleId", "路由人格", gateway.agentRoleId || "", roleOptionsForGateway(gateway));
+      return select(index, "agentRoleId", "指向人格", gateway.agentRoleId || "", roleOptionsForGateway(gateway));
     }
 
     function gatewayAdapterTypes(gateway) {
@@ -1137,15 +1460,41 @@
 
     function messageAdapterSelect(index, gateway) {
       const adapters = gatewayAdapterTypes(gateway);
+      const choices = [
+        { type: "napcat", title: "NapCat / OneBot", note: "接收 QQ 群聊和私聊实时消息" },
+        { type: "heartbeat", title: "定时触发", note: "按间隔主动生成内部消息" },
+        { type: "webhook", title: "Webhook", note: "接收外部系统 POST 事件" },
+        { type: "disabled", title: "禁用消息端", note: "保留配置但不接收消息" }
+      ];
       return `
-        <div class="adapter-list">
-          ${adapters.map((type, adapterIndex) => `
-            <div class="adapter-row">
-              ${adapterTypeSelect(index, adapterIndex, type)}
-              <button type="button" class="danger" onclick="removeMessageAdapter(${index}, ${adapterIndex})">删除</button>
-            </div>
+        <div class="adapter-choice-grid">
+          ${choices.map(choice => `
+            <button type="button" class="adapter-choice ${adapters.includes(choice.type) ? "active" : ""}" data-index="${index}" data-adapter-toggle="${choice.type}">
+              <strong>${escapeHtml(choice.title)}</strong>
+              <span>${escapeHtml(choice.note)}</span>
+            </button>
           `).join("")}
-          <button type="button" class="accent" onclick="addMessageAdapter(${index})">添加消息适配器</button>
+        </div>
+      `;
+    }
+
+    function renderMessageSourcePanel(index, gateway) {
+      const adapters = gatewayAdapterTypes(gateway);
+      const activeText = adapters.includes("disabled")
+        ? "已禁用"
+        : adapters.map(adapterLabel).join(" + ");
+      return `
+        <div class="message-source-panel">
+          <div class="message-source-list">
+            ${messageAdapterSelect(index, gateway)}
+          </div>
+          <div class="message-source-fields">
+            <div class="message-source-summary">
+              <strong>当前消息入口</strong>
+              <span>${escapeHtml(activeText)}</span>
+            </div>
+            ${renderMessageAdapterFields(index, gateway)}
+          </div>
         </div>
       `;
     }
@@ -1180,7 +1529,7 @@
     function renderMessageAdapterFields(index, gateway) {
       const types = gatewayAdapterTypes(gateway);
       if (types.includes("disabled")) {
-        return `<div class="empty" style="padding:12px;text-align:left">当前 gateway 不接收任何消息入口。</div>`;
+        return `<div class="empty" style="padding:18px;text-align:left">当前路由不接收任何消息入口。</div>`;
       }
 
       return types.map(type => {
@@ -1188,7 +1537,7 @@
         if (type === "napcat") {
           return `
             <div class="adapter-fieldset">
-              <div class="section-note">NapCat / OneBot</div>
+              <div class="section-note">NapCat / OneBot：QQ 实时消息入口</div>
               ${select(index, "gatewayPort", "NapCat WS", gateway.gatewayPort || "", options.websocketClients || [])}
               ${select(index, "napcatHttpUrl", "NapCat HTTP", gateway.napcatHttpUrl || "http://127.0.0.1:3000", options.httpServers || [])}
             </div>
@@ -1208,7 +1557,7 @@
           return `
             <div class="adapter-fieldset">
               <div class="section-note">Webhook：接收外部系统 POST 事件，并命中预留路由。</div>
-              ${select(index, "gatewayPort", "Webhook 端口", gateway.gatewayPort || "", listeners)}
+              ${select(index, "webhookPort", "Webhook 端口", gateway.webhookPort || gateway.gatewayPort || "", listeners)}
               <label><span class="label-row">Webhook 路径${help("Webhook URL 末尾路径。默认 /webhook。")}</span><input data-index="${index}" data-field="webhookPath" value="${escapeAttr(gateway.webhookPath || "/webhook")}"></label>
             </div>
           `;
@@ -1231,7 +1580,7 @@
         if (adapterType === "webhook") {
           return `
             <div class="section-note" style="margin-top:12px;color:var(--navy)">Webhook</div>
-            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">监听：${escapeHtml(String(gateway.gatewayPort || "-"))}${escapeHtml(gateway.webhookPath || "/webhook")}</div>
+            <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">监听：${escapeHtml(String(gateway.webhookPort || gateway.gatewayPort || "-"))}${escapeHtml(gateway.webhookPath || "/webhook")}</div>
             <div class="section-note" style="margin-top:7px;overflow-wrap:anywhere">说明：接收 Webhook 事件。</div>
           `;
         }
@@ -1282,8 +1631,11 @@
       }
       if (types.includes("webhook")) {
         const listeners = adapterOptions("webhook").listeners || [];
-        if (listeners.length > 0 && !listeners.some(option => String(option.value) === String(gateway.gatewayPort))) {
-          gateway.gatewayPort = Number(listeners[0].value);
+        if (gateway.webhookPort == null) {
+          gateway.webhookPort = gateway.gatewayPort;
+        }
+        if (listeners.length > 0 && !listeners.some(option => String(option.value) === String(gateway.webhookPort))) {
+          gateway.webhookPort = Number(listeners[0].value);
         }
         gateway.webhookPath = gateway.webhookPath || "/webhook";
       }
@@ -1324,6 +1676,44 @@
         <div class="section-note" style="overflow-wrap:anywhere">文件：${escapeHtml(rolePath || "")}</div>
         <pre style="min-height:160px;max-height:360px;margin-top:8px">${escapeHtml(content)}</pre>
       `;
+    }
+
+    function routeConfigPathFor(gateway) {
+      return `./data/route/${configNameFor(gateway)}/routeConfig.json`;
+    }
+
+    function configNameFor(gateway) {
+      if (gateway.configName) return gateway.configName;
+      const parts = String(gateway.id || "").split("__");
+      return parts.length > 1 ? parts.slice(1).join("__") : "default";
+    }
+
+    function roleMessageDataDirFor(gateway) {
+      return `./data/route/${configNameFor(gateway)}`;
+    }
+
+    async function openConfigFile(type, gatewayId = "", roleId = "") {
+      try {
+        const params = new URLSearchParams({ type });
+        if (gatewayId) params.set("gatewayId", gatewayId);
+        if (roleId) params.set("roleId", roleId);
+        const response = await fetch(`${apiBase}/open-config-file?${params.toString()}`, { method: "POST" });
+        const text = await response.text();
+        let body;
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch {
+          const preview = text.replace(/\s+/g, " ").slice(0, 120);
+          throw new Error(`打开配置文件接口没有返回 JSON，可能是 manager 尚未重启或请求路径不对。响应：${preview}`);
+        }
+        if (!response.ok || body.code !== 0) {
+          throw new Error(body.message || body.error || "打开配置文件失败");
+        }
+        return body.data;
+      } catch (error) {
+        alert(error instanceof Error ? error.message : String(error));
+        return null;
+      }
     }
 
     function renderTemplateVars() {
@@ -1426,6 +1816,37 @@
       `;
     }
 
+    function routeKindSummary(rule) {
+      const kinds = Array.isArray(rule.routeKinds) ? rule.routeKinds : [];
+      return kinds.length ? kinds.map(kind => routeKindLabels[kind] || kind).join(" / ") : "未选择路由类型";
+    }
+
+    function ruleTemplateSnippet(rule) {
+      return normalizeTemplateText(rule.template || "").replace(/\s+/g, " ").trim().slice(0, 120) || "暂无模板正文";
+    }
+
+    function renderRuleOverview(index, ruleIndex, rule) {
+      const safeRule = normalizeRule(rule, ruleIndex);
+      const matchText = safeRule.regex ? `匹配：${safeRule.regex}` : "不限关键词";
+      return `
+        <button type="button" class="rule-overview-card" onclick="openRuleModal(${index}, ${ruleIndex})">
+          <span class="rule-overview-main">
+            <span class="rule-overview-title">
+              <strong>${escapeHtml(safeRule.name)}</strong>
+              <span class="rule-chip">${safeRule.enabled !== false ? "启用" : "停用"}</span>
+              <span class="rule-chip">${escapeHtml(safeRule.id)}</span>
+            </span>
+            <span class="rule-overview-meta">
+              <span>${escapeHtml(routeKindSummary(safeRule))}</span>
+              <span>${escapeHtml(matchText)}</span>
+            </span>
+            <span class="rule-overview-snippet">${escapeHtml(ruleTemplateSnippet(safeRule))}</span>
+          </span>
+          <span class="rule-overview-action">编辑</span>
+        </button>
+      `;
+    }
+
     function renderRule(index, ruleIndex, rule) {
       const gateway = state.gateways[index];
       const safeRule = normalizeRule(rule, ruleIndex);
@@ -1433,7 +1854,10 @@
       return `
         <article class="rule-card">
           <div class="rule-top">
-            <label><span class="label-row">名称${help(helpText.ruleName)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="name" value="${escapeAttr(safeRule.name)}"></label>
+            <div class="rule-title-stack">
+              <label><span class="label-row">名称${help(helpText.ruleName)}</span><input data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="name" value="${escapeAttr(safeRule.name)}"></label>
+              <span class="rule-id">${escapeHtml(safeRule.id)}</span>
+            </div>
             <label class="inline-check"><input type="checkbox" data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="enabled" ${safeRule.enabled !== false ? "checked" : ""}>启用</label>
           </div>
           <div class="rule-body">
@@ -1448,18 +1872,91 @@
               </div>
               <button type="button" class="danger" onclick="removeNotificationRule(${index}, ${ruleIndex})">删除规则</button>
             </div>
-            <label class="template-editor"><span class="label-row">模板${help(helpText.ruleTemplate)}</span><textarea spellcheck="false" data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="template">${escapeHtml(String(safeRule.template))}</textarea></label>
+            <label class="template-editor"><span class="label-row">Agent 消息包装模板${help(helpText.ruleTemplate)}</span><textarea spellcheck="false" data-index="${index}" data-rule-index="${ruleIndex}" data-rule-field="template">${escapeHtml(String(safeRule.template))}</textarea></label>
           </div>
         </article>
       `;
     }
 
+    function renderRuleModal() {
+      const root = document.getElementById("modal-root");
+      if (!ruleModalState) {
+        root.innerHTML = "";
+        return;
+      }
+      const index = ruleModalState.gatewayIndex;
+      const gateway = state.gateways[index];
+      if (!gateway) {
+        ruleModalState = null;
+        root.innerHTML = "";
+        return;
+      }
+      const rules = notificationRulesForGateway(gateway);
+      if (rules.length === 0) {
+        root.innerHTML = "";
+        ruleModalState = null;
+        return;
+      }
+      const activeRuleIndex = Math.max(0, Math.min(ruleModalState.ruleIndex, rules.length - 1));
+      ruleModalState.ruleIndex = activeRuleIndex;
+      root.innerHTML = `
+        <div class="modal-backdrop" role="dialog" aria-modal="true" data-modal-backdrop="rule">
+          <div class="modal">
+            <div class="modal-head">
+              <div>
+                <h2>规则设置</h2>
+                <div class="section-note">${escapeHtml(gateway.agentRoleId || "未指向人格")} · ${rules.length} 条消息模板规则</div>
+              </div>
+              <div class="top-actions">
+                <button type="button" class="accent" onclick="addNotificationRule(${index})">新增规则</button>
+                <button type="button" onclick="closeRuleModal()">关闭</button>
+              </div>
+            </div>
+            <div class="modal-body">
+              <div class="rule-tabs">
+                ${rules.map((rule, ruleIndex) => {
+                  const safeRule = normalizeRule(rule, ruleIndex);
+                  return `
+                    <button type="button" class="rule-tab ${ruleIndex === activeRuleIndex ? "active" : ""}" onclick="selectRuleTab(${ruleIndex})">
+                      <span class="rule-overview-main">
+                        <span class="rule-overview-title"><strong>${escapeHtml(safeRule.name)}</strong></span>
+                        <span class="rule-overview-meta">${escapeHtml(routeKindSummary(safeRule))}</span>
+                      </span>
+                    </button>
+                  `;
+                }).join("")}
+              </div>
+              <div class="rule-editor-pane">
+                ${renderRule(index, activeRuleIndex, rules[activeRuleIndex])}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+      bindInputs();
+    }
+
+    function openRuleModal(index, ruleIndex = 0) {
+      ruleModalState = { gatewayIndex: index, ruleIndex };
+      renderRuleModal();
+    }
+
+    function closeRuleModal() {
+      ruleModalState = null;
+      renderRuleModal();
+    }
+
+    function selectRuleTab(ruleIndex) {
+      if (!ruleModalState) return;
+      ruleModalState.ruleIndex = ruleIndex;
+      renderRuleModal();
+    }
+
     function notificationRulesForGateway(gateway) {
       ensureActiveRoleRules(gateway);
-      if (Array.isArray(gateway.notificationRules) && gateway.notificationRules.length > 0) {
-        return gateway.notificationRules;
+      if (!Array.isArray(gateway.notificationRules)) {
+        gateway.notificationRules = [];
       }
-      gateway.notificationRules = defaultNotificationRules(gateway);
       return gateway.notificationRules;
     }
 
@@ -1508,31 +2005,7 @@
     }
 
     function activeRoleKey(gateway) {
-      return gateway.agentRoleId || "";
-    }
-
-    function defaultRouteNameForRole(roleId, gateway) {
-      if (roleId === "Rabi") return "Rabi 路由";
-      return roleId || gateway.name || gateway.id || "默认路由";
-    }
-
-    function ensureRoleRouteNameStore(gateway) {
-      if (!gateway.roleRouteNames || typeof gateway.roleRouteNames !== "object" || Array.isArray(gateway.roleRouteNames)) {
-        gateway.roleRouteNames = {};
-      }
-      return gateway.roleRouteNames;
-    }
-
-    function activeRouteName(gateway) {
-      const roleKey = activeRoleKey(gateway);
-      const store = ensureRoleRouteNameStore(gateway);
-      if (roleKey && typeof store[roleKey] === "string" && store[roleKey].trim()) {
-        gateway.routeName = store[roleKey];
-      }
-      if (gateway.routeName && String(gateway.routeName).trim()) {
-        return String(gateway.routeName);
-      }
-      return defaultRouteNameForRole(roleKey, gateway);
+      return gateway.id || "";
     }
 
     function ensureRoleRuleStore(gateway) {
@@ -1545,41 +2018,18 @@
     function ensureActiveRoleRules(gateway) {
       const roleKey = activeRoleKey(gateway);
       const store = ensureRoleRuleStore(gateway);
-      const nameStore = ensureRoleRouteNameStore(gateway);
-      if (roleKey && !Array.isArray(store[roleKey]) && Array.isArray(gateway.notificationRules) && gateway.notificationRules.length > 0) {
-        store[roleKey] = cloneRules(gateway.notificationRules);
-      }
       if (roleKey && Array.isArray(store[roleKey])) {
         gateway.notificationRules = cloneRules(store[roleKey]);
-      }
-      if (roleKey && typeof nameStore[roleKey] !== "string") {
-        nameStore[roleKey] = gateway.routeName || defaultRouteNameForRole(roleKey, gateway);
-      }
-      if (roleKey && typeof nameStore[roleKey] === "string") {
-        gateway.routeName = nameStore[roleKey];
+      } else if (roleKey) {
+        const currentRules = Array.isArray(gateway.notificationRules) ? gateway.notificationRules : [];
+        store[roleKey] = cloneRules(currentRules);
+        gateway.notificationRules = cloneRules(currentRules);
       }
     }
 
     function switchGatewayRole(index, nextRoleId) {
       const gateway = state.gateways[index];
-      const store = ensureRoleRuleStore(gateway);
-      const nameStore = ensureRoleRouteNameStore(gateway);
-      const currentRoleId = activeRoleKey(gateway);
-      if (currentRoleId) {
-        store[currentRoleId] = cloneRules(notificationRulesForGateway(gateway));
-        nameStore[currentRoleId] = activeRouteName(gateway);
-      }
       gateway.agentRoleId = nextRoleId;
-      if (nextRoleId && Array.isArray(store[nextRoleId])) {
-        gateway.notificationRules = cloneRules(store[nextRoleId]);
-      } else {
-        gateway.notificationRules = defaultNotificationRules({ ...gateway, agentRoleId: nextRoleId });
-        if (nextRoleId) store[nextRoleId] = cloneRules(gateway.notificationRules);
-      }
-      gateway.routeName = nextRoleId
-        ? nameStore[nextRoleId] || defaultRouteNameForRole(nextRoleId, gateway)
-        : nameStore[""] || gateway.name || gateway.id || "默认路由";
-      if (nextRoleId) nameStore[nextRoleId] = gateway.routeName;
       render();
     }
 
@@ -1614,17 +2064,6 @@
         regex: rule.regex || "",
         template: normalizeTemplateText(rule.template || defaultGroupAtTemplate())
       };
-    }
-
-    function defaultNotificationRules(gateway = {}) {
-      return [
-        { id: "group-direct-at", name: "直接 @ 模板", enabled: true, routeKinds: ["direct_at"], targetGroupId: "", regex: "", template: gateway.groupAtNotificationTemplate || gateway.groupNotificationTemplate || defaultGroupAtTemplate() },
-        { id: "group-direct-reply", name: "直接回复模板", enabled: true, routeKinds: ["direct_reply"], targetGroupId: "", regex: "", template: gateway.groupDirectReplyNotificationTemplate || gateway.groupReplyNotificationTemplate || defaultGroupDirectReplyTemplate() },
-        { id: "group-indirect-reply", name: "间接回复模板", enabled: true, routeKinds: ["indirect_reply"], targetGroupId: "", regex: "", template: gateway.groupIndirectReplyNotificationTemplate || gateway.groupNicknameNotificationTemplate || defaultGroupIndirectReplyTemplate() },
-        { id: "private-message", name: "私聊消息模板", enabled: true, routeKinds: ["private"], targetGroupId: "", regex: "", template: gateway.privateNotificationTemplate || defaultPrivateTemplate() },
-        { id: "heartbeat", name: "定时触发模板", enabled: true, routeKinds: ["heartbeat"], targetGroupId: "", regex: "", template: gateway.heartbeatNotificationTemplate || defaultHeartbeatTemplate() },
-        { id: "voice-transcript", name: "语音转写模板", enabled: true, routeKinds: ["voice_transcript"], targetGroupId: "", regex: "", template: gateway.voiceTranscriptNotificationTemplate || defaultVoiceTranscriptTemplate() }
-      ];
     }
 
     function escapeRegex(value) {
@@ -1686,14 +2125,14 @@
     }
     function defaultVoiceTranscriptTemplate() {
       return [
-        "Webhook 更新提醒：外部系统推送了一段文本。",
+        "语音转写更新提醒：FenneNote 捕获到一段来自电脑旁用户的语音输入。",
         "时间：{time}",
         "来源：{messageTarget}",
         "转写：{message}",
         "时长：{voiceDurationSeconds} 秒",
         "峰值：{voicePeak}",
         "",
-        "请在需要时读取 {voiceTranscriptLogPath} 查看语音转写上下文。"
+        "请直接在当前 Codex 会话里回复用户；不要生成 QQ 可发送回复，不要转交到 QQ/NapCat，也不要尝试通过 QQ 发送消息。需要上下文时再读取 {voiceTranscriptLogPath}。"
       ].join("\n");
     }
 
@@ -1725,6 +2164,9 @@
       document.querySelectorAll("[data-adapter-field]").forEach(element => {
         element.addEventListener("change", updateMessageAdapterRow);
       });
+      document.querySelectorAll("[data-adapter-toggle]").forEach(element => {
+        element.addEventListener("click", updateMessageAdapterToggle);
+      });
       document.querySelectorAll(".help").forEach(element => {
         element.addEventListener("mouseenter", () => showTooltip(element));
         element.addEventListener("mouseleave", () => {
@@ -1749,7 +2191,7 @@
       const index = Number(event.target.dataset.index);
       const field = event.target.dataset.field;
       let value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
-      if (field === "gatewayPort") value = Number(value);
+      if (field === "gatewayPort" || field === "webhookPort") value = Number(value);
       if (field === "agentAdapters") value = String(value).trim() ? [String(value).trim()] : [];
       if (field === "agentRoleId") {
         switchGatewayRole(index, String(value));
@@ -1763,16 +2205,6 @@
         return;
       }
       if (field === "heartbeatIntervalSeconds") value = Number(value);
-      if (field === "routeName") {
-        state.gateways[index].routeName = String(value);
-        const roleKey = activeRoleKey(state.gateways[index]);
-        if (roleKey) {
-          ensureRoleRouteNameStore(state.gateways[index])[roleKey] = String(value);
-        }
-        renderGatewayList();
-        renderRuntimePanel();
-        return;
-      }
       state.gateways[index][field] = value;
       if (field === "codexCwd") {
         document.querySelectorAll(`[data-index="${index}"][data-field="codexCwd"]`).forEach(element => {
@@ -1791,6 +2223,26 @@
       const adapters = gatewayAdapterTypes(gateway);
       adapters[adapterIndex] = String(event.target.value);
       setGatewayAdapters(gateway, adapters);
+      applyAdapterDefaults(gateway);
+      render();
+    }
+
+    function updateMessageAdapterToggle(event) {
+      const index = Number(event.currentTarget.dataset.index);
+      const type = String(event.currentTarget.dataset.adapterToggle || "");
+      const gateway = state.gateways[index];
+      const adapters = new Set(gatewayAdapterTypes(gateway));
+      if (type === "disabled") {
+        setGatewayAdapters(gateway, adapters.has("disabled") ? ["napcat"] : ["disabled"]);
+      } else {
+        adapters.delete("disabled");
+        if (adapters.has(type)) {
+          adapters.delete(type);
+        } else {
+          adapters.add(type);
+        }
+        setGatewayAdapters(gateway, [...adapters]);
+      }
       applyAdapterDefaults(gateway);
       render();
     }
@@ -1829,10 +2281,10 @@
 
     function autoSizeTemplateTextarea(element) {
       element.style.height = "auto";
-      const maxHeight = 420;
+      const maxHeight = 520;
       const ruleBody = element.closest(".rule-body");
       const toolsHeight = ruleBody ? ruleBody.querySelector(".rule-tools")?.scrollHeight || 0 : 0;
-      const nextHeight = Math.min(Math.max(element.scrollHeight + 2, toolsHeight, 210), maxHeight);
+      const nextHeight = Math.min(Math.max(element.scrollHeight + 2, toolsHeight, 240), maxHeight);
       element.style.height = `${nextHeight}px`;
     }
 
@@ -1852,6 +2304,7 @@
       if (roleKey) {
         ensureRoleRuleStore(state.gateways[index])[roleKey] = cloneRules(rules);
       }
+      ruleModalState = { gatewayIndex: index, ruleIndex: rules.length - 1 };
       render();
     }
 
@@ -1904,6 +2357,13 @@
       if (roleKey) {
         ensureRoleRuleStore(state.gateways[index])[roleKey] = cloneRules(rules);
       }
+      if (ruleModalState && ruleModalState.gatewayIndex === index) {
+        if (rules.length === 0) {
+          ruleModalState = null;
+        } else {
+          ruleModalState.ruleIndex = Math.max(0, Math.min(ruleModalState.ruleIndex, rules.length - 1));
+        }
+      }
       render();
     }
 
@@ -1938,10 +2398,12 @@
 
     function addGateway() {
       const next = state.gateways.length + 1;
+      const roleId = "Rabi";
+      const configName = `config-${next}`;
       const gateway = {
-        id: `gateway-${next}`,
-        name: `网关 ${next}`,
-        routeName: `路由 ${next}`,
+        id: `${roleId}__${configName}`,
+        configName,
+        name: `路由配置 ${next}`,
         enabled: true,
         messageAdapterType: "napcat",
         messageAdapters: ["napcat"],
@@ -1950,17 +2412,15 @@
         heartbeatIntervalSeconds: 900,
         heartbeatMessage: defaultHeartbeatMessage(),
         routeVariables: {},
-        codexThreadName: `QQ 消息监听 ${next}`,
+        codexThreadName: `路由配置 ${next}`,
         codexCwd: "",
-        rolesDir: `./data/gateway-${next}/roles`,
-        agentRoleId: "",
+        rolesDir: "./data/roles",
+        agentRoleId: roleId,
         agentRoleFile: "persona.md",
         agentAdapters: ["codexDesktop"],
-        dataDir: `./data/gateway-${next}`,
-        notificationRules: [],
-        roleRouteNames: {}
+        dataDir: `./data/route/${configName}`,
+        notificationRules: []
       };
-      gateway.notificationRules = defaultNotificationRules(gateway);
       state.gateways.push(gateway);
       selectedGatewayId = gateway.id;
       render();
@@ -1994,6 +2454,7 @@
         throw new Error(body.message || body.error || "插件 API 没有返回 gateway 配置");
       }
       state = body.data.config;
+      configFiles = body.data.configFiles || {};
       normalizeStateTemplates();
       managerRows = Array.isArray(body.data.manager) ? body.data.manager : Object.assign([], { error: body.data.manager.error });
       render();
@@ -2068,11 +2529,31 @@
     document.getElementById("refresh").addEventListener("click", load);
     document.getElementById("save").addEventListener("click", save);
     document.getElementById("add").addEventListener("click", addGateway);
+    document.getElementById("open-manager-config").addEventListener("click", () => openConfigFile("manager"));
     document.getElementById("start-manager").addEventListener("click", startManager);
+    function syncTopbarHeight() {
+      const topbar = document.querySelector(".topbar");
+      if (!topbar) return;
+      document.documentElement.style.setProperty("--topbar-height", `${Math.ceil(topbar.getBoundingClientRect().height)}px`);
+    }
+    window.addEventListener("resize", syncTopbarHeight);
+    if ("ResizeObserver" in window) {
+      new ResizeObserver(syncTopbarHeight).observe(document.querySelector(".topbar"));
+    }
+    syncTopbarHeight();
     document.addEventListener("click", event => {
+      if (event.target.dataset && event.target.dataset.modalBackdrop === "rule") {
+        closeRuleModal();
+        return;
+      }
       if (event.target.closest && event.target.closest(".help")) return;
       document.querySelectorAll(".help.active").forEach(element => element.classList.remove("active"));
       hideTooltip();
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && ruleModalState) {
+        closeRuleModal();
+      }
     });
     load().catch(error => {
       managerRows = Object.assign([], { error: error.message });

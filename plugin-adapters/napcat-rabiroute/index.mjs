@@ -10,89 +10,6 @@ let currentConfig = {
 };
 let managerProcess = null;
 
-function gatewayConfigPath() {
-  return path.join(currentConfig.gatewayRoot, "data", "gateways.json");
-}
-
-function gatewayExamplePath() {
-  return path.join(currentConfig.gatewayRoot, "examples", "data", "gateways.json");
-}
-
-function gatewayExampleDataPath() {
-  return path.join(currentConfig.gatewayRoot, "examples", "data");
-}
-
-function defaultGatewayConfig() {
-  return {
-    gateways: [
-      {
-        id: "default-main",
-        name: "默认 QQ 网关",
-        enabled: true,
-        messageAdapters: ["napcat", "heartbeat"],
-        gatewayPort: 8789,
-        napcatHttpUrl: "http://127.0.0.1:3000",
-        napcatAccessToken: "",
-        heartbeatIntervalSeconds: 900,
-        heartbeatMessage: "定时心跳巡检：请检查最近消息和角色相关上下文。",
-        codexThreadName: "QQ 消息监听",
-        codexCwd: "",
-        rolesDir: "./data/default-main/roles",
-        agentRoleId: "",
-        agentRoleFile: "persona.md",
-        agentAdapters: ["codexDesktop"],
-        dataDir: "./data/default-main",
-        routeVariables: {},
-        messageAdapterType: "napcat",
-        routeName: "默认路由",
-        roleRouteNames: {}
-      }
-    ]
-  };
-}
-
-function ensureGatewayConfig() {
-  const configPath = gatewayConfigPath();
-  if (fs.existsSync(configPath)) {
-    return;
-  }
-  const dir = path.dirname(configPath);
-  fs.mkdirSync(dir, { recursive: true });
-  if (fs.existsSync(gatewayExamplePath())) {
-    fs.cpSync(gatewayExampleDataPath(), dir, {
-      recursive: true,
-      force: false,
-      errorOnExist: false
-    });
-    return;
-  }
-  fs.writeFileSync(configPath, JSON.stringify(defaultGatewayConfig(), null, 2), "utf-8");
-}
-
-function readGatewayConfig() {
-  ensureGatewayConfig();
-  return JSON.parse(fs.readFileSync(gatewayConfigPath(), "utf-8"));
-}
-
-function writeGatewayConfig(config) {
-  if (!Array.isArray(config.gateways)) {
-    throw new Error("gateways 必须是数组");
-  }
-  for (const gateway of config.gateways) {
-    if (!gateway.id || !/^[a-zA-Z0-9_-]+$/.test(gateway.id)) {
-      throw new Error(`无效的网关 ID：${gateway.id}`);
-    }
-    if (!Number.isInteger(Number(gateway.gatewayPort)) || Number(gateway.gatewayPort) <= 0) {
-      throw new Error(`无效的网关端口：${gateway.gatewayPort}`);
-    }
-    gateway.gatewayPort = Number(gateway.gatewayPort);
-    gateway.enabled = gateway.enabled !== false;
-    const agentAdapters = Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codexDesktop"];
-    gateway.agentAdapters = [...new Set(agentAdapters.filter((item) => item === "codexDesktop" || item === "codexApp"))];
-  }
-  fs.writeFileSync(gatewayConfigPath(), JSON.stringify(config, null, 2), "utf-8");
-}
-
 function napcatConfigDir() {
   return path.resolve(path.dirname(currentConfigPath), "..", "..");
 }
@@ -237,14 +154,12 @@ const plugin_init = async (ctx) => {
   ctx.router.postNoAuth("/config", handlePostConfig);
 
   const handleGetGateways = async (_req, res) => {
-    const config = readGatewayConfig();
-    let manager = null;
     try {
-      manager = await fetchManager("/api/gateways", { headers: { accept: "application/json" } });
+      const payload = await fetchManager("/gateways", { headers: { accept: "application/json" } });
+      res.json(payload);
     } catch (error) {
-      manager = { error: error.message };
+      res.status(500).json({ code: -1, message: error.message });
     }
-    res.json({ code: 0, data: { config, manager } });
   };
   ctx.router.get("/gateways", handleGetGateways);
   ctx.router.getNoAuth("/gateways", handleGetGateways);
@@ -261,14 +176,12 @@ const plugin_init = async (ctx) => {
 
   const handlePostGateways = async (req, res) => {
     try {
-      writeGatewayConfig(req.body);
-      let manager = null;
-      try {
-        manager = await reloadManager();
-      } catch (error) {
-        manager = { error: error.message };
-      }
-      res.json({ code: 0, data: { config: readGatewayConfig(), manager } });
+      const payload = await fetchManager("/gateways", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(req.body)
+      });
+      res.json(payload);
     } catch (error) {
       res.status(400).json({ code: -1, message: error.message });
     }
@@ -286,6 +199,21 @@ const plugin_init = async (ctx) => {
   };
   ctx.router.post("/manager/start", handleStartManager);
   ctx.router.postNoAuth("/manager/start", handleStartManager);
+
+  const handleOpenConfigFile = async (req, res) => {
+    try {
+      const query = new URLSearchParams();
+      if (req.query.type) query.set("type", String(req.query.type));
+      if (req.query.gatewayId) query.set("gatewayId", String(req.query.gatewayId));
+      if (req.query.roleId) query.set("roleId", String(req.query.roleId));
+      const result = await fetchManager(`/open-config-file?${query.toString()}`, { method: "POST" });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ code: -1, message: error.message });
+    }
+  };
+  ctx.router.post("/open-config-file", handleOpenConfigFile);
+  ctx.router.postNoAuth("/open-config-file", handleOpenConfigFile);
 
   const handleGatewayAction = async (req, res) => {
     try {

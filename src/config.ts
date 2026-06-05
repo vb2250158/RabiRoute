@@ -44,14 +44,14 @@ export const defaultHeartbeatNotificationTemplate = [
 ].join("\n");
 
 export const defaultVoiceTranscriptNotificationTemplate = [
-  "Webhook 更新提醒：外部系统推送了一段文本。",
+  "语音转写更新提醒：FenneNote 捕获到一段来自电脑旁用户的语音输入。",
   "时间：{time}",
   "来源：{messageTarget}",
   "转写：{message}",
   "时长：{voiceDurationSeconds} 秒",
   "峰值：{voicePeak}",
   "",
-  "请在需要时读取 {voiceTranscriptLogPath} 查看语音转写上下文。"
+  "请直接在当前 Codex 会话里回复用户；不要生成 QQ 可发送回复，不要转交到 QQ/NapCat，也不要尝试通过 QQ 发送消息。需要上下文时再读取 {voiceTranscriptLogPath}。"
 ].join("\n");
 
 export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "voice_transcript";
@@ -280,65 +280,6 @@ function sanitizeRoleId(raw: string | undefined): string {
   return /^[a-zA-Z0-9_-]+$/.test(value) ? value : "";
 }
 
-function defaultNotificationRules(): NotificationRule[] {
-  return [
-    {
-      id: "group-direct-at",
-      name: "直接 @ 模板",
-      enabled: true,
-      routeKinds: ["direct_at"],
-      targetGroupId: "",
-      regex: "",
-      template: process.env.GROUP_AT_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupAtNotificationTemplate
-    },
-    {
-      id: "group-direct-reply",
-      name: "直接回复模板",
-      enabled: true,
-      routeKinds: ["direct_reply"],
-      targetGroupId: "",
-      regex: "",
-      template: process.env.GROUP_DIRECT_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupDirectReplyNotificationTemplate
-    },
-    {
-      id: "group-indirect-reply",
-      name: "间接回复模板",
-      enabled: true,
-      routeKinds: ["indirect_reply"],
-      targetGroupId: "",
-      regex: "",
-      template: process.env.GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_NICKNAME_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupIndirectReplyNotificationTemplate
-    },
-    {
-      id: "private-message",
-      name: "私聊消息模板",
-      enabled: true,
-      routeKinds: ["private"],
-      targetGroupId: "",
-      regex: "",
-      template: process.env.PRIVATE_NOTIFICATION_TEMPLATE || defaultPrivateNotificationTemplate
-    },
-    {
-      id: "heartbeat",
-      name: "心跳巡检模板",
-      enabled: true,
-      routeKinds: ["heartbeat"],
-      targetGroupId: "",
-      regex: "",
-      template: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate
-    },
-    {
-      id: "voice-transcript",
-      name: "语音转写模板",
-      enabled: true,
-      routeKinds: ["voice_transcript"],
-      targetGroupId: "",
-      regex: "",
-      template: process.env.VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE || defaultVoiceTranscriptNotificationTemplate
-    }
-  ];
-}
-
 const botNickname = process.env.BOT_NICKNAME ?? "QQ小助手";
 const baseDataDir = path.resolve(rootDir, process.env.DATA_DIR ?? "./data");
 const rolesDir = path.resolve(rootDir, process.env.ROLES_DIR ?? path.join(baseDataDir, "roles"));
@@ -346,7 +287,7 @@ const agentRoleId = sanitizeRoleId(process.env.AGENT_ROLE_ID);
 const agentRoleFile = process.env.AGENT_ROLE_FILE?.trim() || "persona.md";
 const agentRoleDir = agentRoleId ? path.join(rolesDir, agentRoleId) : "";
 const agentRolePath = agentRoleDir ? path.join(agentRoleDir, agentRoleFile) : "";
-const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES) ?? defaultNotificationRules();
+const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES) ?? [];
 const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES);
 
 export const config = {
@@ -358,6 +299,7 @@ export const config = {
   napcatAccessToken: process.env.NAPCAT_ACCESS_TOKEN ?? "",
   webhookPath: process.env.WEBHOOK_PATH ?? "/webhook",
   gatewayPort: Number(process.env.GATEWAY_PORT ?? "8789"),
+  webhookPort: Number(process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   codexAppServerUrl: process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500",
   codexDirectNotify: process.env.CODEX_DIRECT_NOTIFY === "1",
   codexDesktopIpcNotify: process.env.CODEX_DESKTOP_IPC_NOTIFY !== "0",
@@ -413,7 +355,7 @@ export function rolePathsForRoute(route: Pick<RouteProfile, "agentRoleId" | "age
     roleId,
     roleDir,
     rolePath: roleDir ? path.join(roleDir, routeRoleFile) : "",
-    dataDir: roleDir || route.dataDir || config.baseDataDir
+    dataDir: route.dataDir || roleDir || config.baseDataDir
   };
 }
 

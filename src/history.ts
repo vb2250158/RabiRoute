@@ -9,6 +9,8 @@ export type GroupMessageRecord = {
   rawMessage: string;
   messageId?: number | string;
   senderName?: string;
+  routeKind?: string;
+  repliedMessageId?: string;
 };
 
 export type PrivateMessageRecord = {

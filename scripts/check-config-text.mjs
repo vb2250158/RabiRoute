@@ -2,8 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 const defaultFiles = [
-  "data/gateways.json",
-  "examples/data/gateways.json"
+  "data/route/main/routeConfig.json",
+  "data/route/fennenote-voice/routeConfig.json",
+  "data/route/AIPM-main/routeConfig.json",
+  "data/roles/Rabi/roleMessageConfig.json",
+  "data/roles/Route/roleMessageConfig.json",
+  "data/roles/AIPM/roleMessageConfig.json",
+  "examples/data/route/main/routeConfig.json",
+  "examples/data/roles/Rabi/roleMessageConfig.json"
 ];
 
 const files = process.argv.slice(2);

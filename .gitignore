@@ -3,8 +3,14 @@
 /data/
 /tmp/
 /logs/
+/recordings/
+/transcripts/
+/voice-cache/
 /gateways.json
 /.idea/
 .env
+.env.*
+!**/.env.example
+*.secret.*
 npm-debug.log*
 assets/reference-cache/

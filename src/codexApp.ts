@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import WebSocket from "ws";
@@ -42,8 +43,27 @@ const statePath = path.join(config.dataDir, "codex-state.json");
 
 type CodexState = {
   monitorThreadId?: string;
+  monitorThreadName?: string;
+  monitorThreadUpdatedAt?: string;
+  monitorThreadSource?: string;
+  lastAutoDiscoveryAt?: string;
   notificationCount?: number;
   lastNotificationAt?: string;
+  lastNotificationError?: string;
+  lastNotificationErrorAt?: string;
+};
+
+type CodexSessionIndexRecord = {
+  id?: unknown;
+  thread_name?: unknown;
+  updated_at?: unknown;
+};
+
+type DiscoveredMonitorThread = {
+  id: string;
+  threadName: string;
+  updatedAt: string;
+  source: string;
 };
 
 function readState(): CodexState {
@@ -61,7 +81,12 @@ function writeState(state: CodexState): void {
 
 function clearMonitorThreadId(): void {
   const state = readState();
-  const { monitorThreadId: _monitorThreadId, ...rest } = state;
+  const {
+    monitorThreadId: _monitorThreadId,
+    monitorThreadUpdatedAt: _monitorThreadUpdatedAt,
+    monitorThreadSource: _monitorThreadSource,
+    ...rest
+  } = state;
   writeState(rest);
 }
 
@@ -148,6 +173,7 @@ async function ensureAppServer(): Promise<void> {
   const child = spawn(codexBin(), ["app-server", "--listen", config.codexAppServerUrl], {
     cwd: config.codexCwd,
     detached: true,
+    shell: process.platform === "win32",
     stdio: ["ignore", fs.openSync(out, "a"), fs.openSync(err, "a")]
   });
   child.unref();
@@ -243,11 +269,71 @@ async function canReadThread(threadId: string): Promise<boolean> {
   }
 }
 
-async function ensureMonitorThread(): Promise<string> {
+function sessionIndexPath(): string {
+  return path.join(os.homedir(), ".codex", "session_index.jsonl");
+}
+
+function findThreadByName(threadName: string): DiscoveredMonitorThread | null {
+  const indexPath = sessionIndexPath();
+  if (!fs.existsSync(indexPath)) {
+    return null;
+  }
+
+  const latestById = new Map<string, DiscoveredMonitorThread>();
+  for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(line) as CodexSessionIndexRecord;
+      if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
+        continue;
+      }
+
+      const record = {
+        id: parsed.id,
+        threadName: parsed.thread_name,
+        updatedAt: parsed.updated_at,
+        source: indexPath
+      };
+      const existing = latestById.get(record.id);
+      if (!existing || Date.parse(record.updatedAt) > Date.parse(existing.updatedAt)) {
+        latestById.set(record.id, record);
+      }
+    } catch {
+      // Ignore malformed JSONL lines.
+    }
+  }
+
+  return [...latestById.values()]
+    .filter((record) => record.threadName === threadName)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null;
+}
+
+function bindThread(state: CodexState, thread: DiscoveredMonitorThread): void {
+  writeState({
+    ...state,
+    monitorThreadId: thread.id,
+    monitorThreadName: thread.threadName,
+    monitorThreadUpdatedAt: thread.updatedAt,
+    monitorThreadSource: thread.source,
+    lastAutoDiscoveryAt: new Date().toISOString()
+  });
+}
+
+async function ensureMonitorThread(forceCreate = false): Promise<string> {
   const state = readState();
+  const threadName = config.codexThreadName;
   await connect();
 
-  if (state.monitorThreadId && await canReadThread(state.monitorThreadId)) {
+  const existingThread = forceCreate ? null : findThreadByName(threadName);
+  if (existingThread && await canReadThread(existingThread.id)) {
+    bindThread(state, existingThread);
+    return existingThread.id;
+  }
+
+  if (!forceCreate && state.monitorThreadId && (!state.monitorThreadName || state.monitorThreadName === threadName) && await canReadThread(state.monitorThreadId)) {
     return state.monitorThreadId;
   }
 
@@ -271,10 +357,17 @@ async function ensureMonitorThread(): Promise<string> {
 
   await request("thread/name/set", {
     threadId,
-    name: config.codexThreadName
+    name: threadName
   });
 
-  writeState({ ...state, monitorThreadId: threadId });
+  writeState({
+    ...state,
+    monitorThreadId: threadId,
+    monitorThreadName: threadName,
+    monitorThreadUpdatedAt: new Date().toISOString(),
+    monitorThreadSource: "codex app-server",
+    lastAutoDiscoveryAt: new Date().toISOString()
+  });
   return threadId;
 }
 
@@ -302,15 +395,18 @@ async function notifyCodexInternal(message: string): Promise<void> {
     }
 
     clearMonitorThreadId();
-    threadId = await ensureMonitorThread();
+    threadId = await ensureMonitorThread(true);
     await startNotificationTurn(threadId, threadName, message);
   }
 
   writeState({
     ...state,
     monitorThreadId: threadId,
+    monitorThreadName: threadName,
     notificationCount,
-    lastNotificationAt: now.toISOString()
+    lastNotificationAt: now.toISOString(),
+    lastNotificationError: undefined,
+    lastNotificationErrorAt: undefined
   });
 }
 

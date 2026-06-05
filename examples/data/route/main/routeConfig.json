@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "messageAdapters": [
+    "napcat",
+    "heartbeat"
+  ],
+  "gatewayPort": 8789,
+  "napcatHttpUrl": "http://127.0.0.1:3000",
+  "napcatAccessToken": "",
+  "heartbeatIntervalSeconds": 900,
+  "heartbeatMessage": "定时心跳巡检：请检查最近消息和角色相关上下文。",
+  "codexThreadName": "QQ 消息监听",
+  "codexCwd": "C:/Path/To/Your/Project",
+  "agentRoleFile": "persona.md",
+  "agentAdapters": [
+    "codexDesktop"
+  ],
+  "dataDir": "./data/route/main",
+  "configName": "main",
+  "agentRoleId": "Rabi",
+  "rolesDir": "./data/roles"
+}

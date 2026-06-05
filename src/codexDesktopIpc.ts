@@ -125,30 +125,35 @@ function discoverMonitorThread(): DiscoveredMonitorThread | null {
   }
 
   const targetName = config.codexThreadName.trim();
-  const records = fs
-    .readFileSync(indexPath, "utf8")
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line): DiscoveredMonitorThread | null => {
-      try {
-        const parsed = JSON.parse(line) as CodexSessionIndexRecord;
-        if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
-          return null;
-        }
-        if (parsed.thread_name !== targetName) {
-          return null;
-        }
-        return {
-          id: parsed.id,
-          threadName: parsed.thread_name,
-          updatedAt: parsed.updated_at,
-          source: indexPath
-        };
-      } catch {
-        return null;
+  const latestById = new Map<string, DiscoveredMonitorThread>();
+  for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(line) as CodexSessionIndexRecord;
+      if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
+        continue;
       }
-    })
-    .filter((item): item is DiscoveredMonitorThread => Boolean(item))
+
+      const record = {
+        id: parsed.id,
+        threadName: parsed.thread_name,
+        updatedAt: parsed.updated_at,
+        source: indexPath
+      };
+      const existing = latestById.get(record.id);
+      if (!existing || Date.parse(record.updatedAt) > Date.parse(existing.updatedAt)) {
+        latestById.set(record.id, record);
+      }
+    } catch {
+      // Ignore malformed JSONL lines.
+    }
+  }
+
+  const records = [...latestById.values()]
+    .filter((item) => item.threadName === targetName)
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
 
   return records[0] ?? null;
@@ -166,6 +171,10 @@ function applyDiscoveredThread(state: CodexState, discovered: DiscoveredMonitorT
 }
 
 function resolveMonitorThread(state: CodexState, forceRefresh: boolean): CodexState {
+  if (!forceRefresh && state.monitorThreadId && state.monitorThreadName === config.codexThreadName) {
+    return state;
+  }
+
   const discovered = discoverMonitorThread();
   if (!discovered) {
     return state;
@@ -182,6 +191,30 @@ function resolveMonitorThread(state: CodexState, forceRefresh: boolean): CodexSt
   }
 
   const nextState = applyDiscoveredThread(state, discovered);
+  writeState(nextState);
+  return nextState;
+}
+
+function resolveConfiguredMonitorThread(state: CodexState, forceRefresh: boolean): CodexState {
+  const resolvedState = resolveMonitorThread(state, forceRefresh);
+  if (!resolvedState.monitorThreadId || !resolvedState.monitorThreadName || resolvedState.monitorThreadName === config.codexThreadName) {
+    return resolvedState;
+  }
+
+  const refreshedState = resolveMonitorThread(readState(), true);
+  if (!refreshedState.monitorThreadId || !refreshedState.monitorThreadName || refreshedState.monitorThreadName === config.codexThreadName) {
+    return refreshedState;
+  }
+
+  const nextState = {
+    ...refreshedState,
+    monitorThreadId: undefined,
+    monitorThreadUpdatedAt: undefined,
+    monitorThreadSource: sessionIndexPath(),
+    lastAutoDiscoveryAt: new Date().toISOString(),
+    lastNotificationError: `No Codex thread named "${config.codexThreadName}" was found in ${sessionIndexPath()}. Previous binding "${refreshedState.monitorThreadName}" was cleared.`,
+    lastNotificationErrorAt: new Date().toISOString()
+  };
   writeState(nextState);
   return nextState;
 }
@@ -513,7 +546,7 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
   notificationQueue = notificationQueue
     .catch(() => undefined)
     .then(async () => {
-      let state = resolveMonitorThread(readState(), false);
+      let state = resolveConfiguredMonitorThread(readState(), false);
 
       try {
         for (let attempt = 0; attempt < 2; attempt += 1) {

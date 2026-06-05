@@ -97,7 +97,7 @@ QQ / 微信 / 飞书 / Discord / Slack / Email / Webhook / Scheduler
 
 - `direct_at`：当前消息直接 @ 机器人。
 - `direct_reply`：当前消息直接回复机器人。
-- `indirect_reply`：当前消息回复了某条曾经 @ 机器人的消息。
+- `indirect_reply`：当前消息回复了某条曾经 @ 机器人的消息，或继续回复一条已经触发过路由的群聊回复链；是否回应由角色路由和 Agent 自己判断。
 
 私聊当前默认触发。
 
@@ -261,8 +261,8 @@ NapCat 插件不是业务核心，它只是控制面入口：
 ```text
 NapCat plugin page
   -> RabiRoute manager API
-  -> data/gateways.json
-  -> start / stop / restart gateway process
+  -> data/route/*/routeConfig.json + data/roles/*/roleMessageConfig.json
+  -> start / stop / restart route process
 ```
 
 ## 后续演进顺序
