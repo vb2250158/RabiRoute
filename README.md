@@ -50,6 +50,7 @@ GitHub: https://github.com/vb2250158/RabiRoute
 - 接 FenneNote 转录、角色对话和 OumuQ TTS：[语音交互工作站](docs/voice-interaction-workstation.md)
 - 外发失败、Codex IPC、普通群消息不转发：[排障](docs/troubleshooting.md)
 - 想理解边界和演进路线：[架构说明](docs/architecture.md)
+- 看版本变更和迁移说明：[版本更新日志](版本更新日志.md)
 
 ## 最小启动
 
