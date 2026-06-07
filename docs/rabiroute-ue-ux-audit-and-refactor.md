@@ -17,7 +17,7 @@
 - RibiWebGUI：`ribiwebgui/src`
 - Qt 托盘与任务面板：`desktop/tray-task-window`
 - NapCat 插件入口页：`plugin-adapters/napcat-rabiroute/webui/gateways.html`
-- Windows 启动入口提示：`Start-RabiRoute-*.bat`、`scripts/start-rabiroute-windows.ps1`
+- Windows 启动入口提示：`Start-RabiRoute-Tray.bat`
 
 ## 当前主要问题
 

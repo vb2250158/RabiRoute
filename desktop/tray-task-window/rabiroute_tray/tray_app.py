@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -16,7 +17,12 @@ from .task_repository import TaskRepository
 from .task_window import TaskWindow
 
 
-def run(project_root: Path, manager_url: str = "http://127.0.0.1:8790", owns_manager: bool = False) -> int:
+def run(
+    project_root: Path,
+    manager_url: str = "http://127.0.0.1:8790",
+    owns_manager: bool = False,
+    manager_proc: "subprocess.Popen[bytes] | None" = None,
+) -> int:
     app = QApplication(sys.argv)
     lock = _app_lock(project_root)
     if not lock.tryLock(100):
@@ -107,7 +113,7 @@ def run(project_root: Path, manager_url: str = "http://127.0.0.1:8790", owns_man
     refresh_action.triggered.connect(refresh)
     webgui_action.triggered.connect(lambda: desktop.open_url(manager.manager_url))
     window_action.triggered.connect(toggle_window)
-    quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle))
+    quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle, manager_proc))
     window.refresh_button.clicked.connect(refresh)
     tray.activated.connect(lambda reason: toggle_window() if reason == QSystemTrayIcon.Trigger else None)
 
@@ -145,7 +151,13 @@ def _app_lock(project_root: Path) -> QLockFile:
     return lock
 
 
-def _quit(app: QApplication, tray: QSystemTrayIcon, tray_available: bool, lifecycle: LifecycleController) -> None:
+def _quit(
+    app: QApplication,
+    tray: QSystemTrayIcon,
+    tray_available: bool,
+    lifecycle: LifecycleController,
+    manager_proc: "subprocess.Popen[bytes] | None" = None,
+) -> None:
     if lifecycle.owns_manager:
         _show_message(
             tray,
@@ -156,6 +168,9 @@ def _quit(app: QApplication, tray: QSystemTrayIcon, tray_available: bool, lifecy
             2500,
         )
         lifecycle.request_exit()
+        # Always terminate the proc directly — HTTP shutdown may be slow or fail.
+        if manager_proc is not None and manager_proc.poll() is None:
+            manager_proc.terminate()
     app.quit()
 
 

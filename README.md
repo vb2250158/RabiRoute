@@ -132,19 +132,15 @@ py -m pip install -r desktop\tray-task-window\requirements.txt
 py desktop\tray-task-window\main.py
 ```
 
-Windows “1+1” 同生命周期入口优先使用：
+Windows “1+1” 同生命周期入口使用：
 
 ```powershell
 Start-RabiRoute-Tray.bat
 ```
 
-等价的旧入口仍可用：
-
-```powershell
-Start-RabiRoute-Windows.bat
-```
-
 它会启动/复用 manager，并启动 Qt 托盘/浮窗；只有当本次 launcher 启动了 manager 时，托盘右键退出才会带着 manager/gateway 一起 graceful shutdown。
+
+如需完整 Windows exe，可用 `scripts\build-tray-exe.ps1` 在本地打包 `RabiRoute-Tray.exe` 做本机测试；源码仓库只提交打包规范和脚本，不提交生成的 exe。公开发布包暂不启用，避免把本机路径或私有信息带进二进制资产。
 
 Mac / Linux 可以继续用上面的 Node 启动方式运行 manager/WebGUI；这部分已经是跨平台基线。未来如果需要桌面入口，应只新增 macOS/Linux 平台 launcher，复用同一套 Qt 面板、manager HTTP API、shutdown API、`ManagerClient`、`TaskRepository`、`RoleContextRepository`、路径解析和生命周期 ownership 规则；Windows exe 打包只是便利发布层，不应分叉服务端或 WebUI。
 

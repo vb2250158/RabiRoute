@@ -1,6 +1,7 @@
 /node_modules/
 /dist/
 /ribiwebgui/dist/
+/build/
 /data/
 /tmp/
 /logs/
@@ -8,6 +9,7 @@
 /transcripts/
 /voice-cache/
 /gateways.json
+/RabiRoute-Tray.exe
 /.idea/
 .venv/
 **/.venv/

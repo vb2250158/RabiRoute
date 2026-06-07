@@ -145,7 +145,7 @@ The tray never starts or kills RabiRoute core by itself. A platform launcher is 
 - The manager remains independently runnable on Windows/macOS/Linux via `npm run start:manager`.
 - If duplicate tray processes already exist from older builds, close the extra panel from its tray/window UI. Non-owned tray processes close only themselves.
 
-The ownership rule is implemented in `rabiroute_tray.lifecycle_controller`, which is platform-neutral. Windows currently supplies the first launcher through `scripts/start-rabiroute-windows.ps1`. A future macOS/Linux launcher should reuse the same flags and manager HTTP lifecycle protocol instead of forking tray behavior.
+The ownership rule is implemented in `rabiroute_tray.lifecycle_controller`, which is platform-neutral. Windows currently supplies the first launcher through `Start-RabiRoute-Tray.bat`. A future macOS/Linux launcher should reuse the same flags and manager HTTP lifecycle protocol instead of forking tray behavior.
 
 ## Code Layout
 

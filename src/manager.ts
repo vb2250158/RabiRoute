@@ -178,14 +178,18 @@ function readConfig(): GatewayConfigFile {
       continue;
     }
     const configName = sanitizeRoleId(routeEntry.name);
-    const configPath = routeConfigPath(configName);
+    const configPath = adapterConfigPath(configName);
     if (!fs.existsSync(configPath)) {
       continue;
     }
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
-    // routeConfig.json is the single source of truth; roleMessageConfig.json is no longer read.
+    // routeConfig.json is primary; fall back to personaConfig.json only when notificationRules is absent.
+    const personaConfig = (Array.isArray(raw.notificationRules) && raw.notificationRules.length > 0)
+      ? {}
+      : readRoleMessageConfigItem(raw.agentRoleId, configName);
     gateways.push({
       ...raw,
+      ...personaConfig,
       id: configName,
       configName,
       agentRoleId: raw.agentRoleId,
@@ -225,15 +229,19 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
       const oldConfigName = routeRuntimeParts(existingRuntime.definition.id).configName;
       const newConfigName = routeRuntimeParts(item.id).configName;
       if (oldConfigName !== newConfigName) {
-        const oldConfigPath = routeConfigPath(oldConfigName);
+        const oldConfigPath = adapterConfigPath(oldConfigName);
         if (fs.existsSync(oldConfigPath)) {
           try { fs.unlinkSync(oldConfigPath); } catch { /* non-fatal */ }
         }
       }
     }
-    writeRouteConfigFile(item);
+    writeAdapterConfigFile(item);
   }
-  // roleMessageConfig.json is no longer written; routeConfig.json is the single source of truth.
+  for (const [roleId, items] of grouped.entries()) {
+    if (roleId) {
+      writePersonaConfigFile(roleId, items);
+    }
+  }
   return normalized;
 }
 
@@ -400,23 +408,23 @@ function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefinition[] 
   }).filter((rule) => rule.template.trim());
 }
 
-function roleMessageConfigPath(roleId: string): string {
+function personaConfigPath(roleId: string): string {
   const safeRoleId = sanitizeRoleId(roleId);
   if (!safeRoleId) {
     throw new Error("Missing role folder name");
   }
-  return path.join(rolesRoot, safeRoleId, "roleMessageConfig.json");
+  return path.join(rolesRoot, safeRoleId, "personaConfig.json");
 }
 
-function routeConfigPath(configName: string): string {
+function adapterConfigPath(configName: string): string {
   const safeConfigName = sanitizeRoleId(configName);
   if (!safeConfigName) {
     throw new Error("Missing route folder name");
   }
-  return path.join(routeRoot, safeConfigName, "routeConfig.json");
+  return path.join(routeRoot, safeConfigName, "adapterConfig.json");
 }
 
-function routeConfigItem(definition: GatewayDefinition): Record<string, unknown> {
+function adapterConfigItem(definition: GatewayDefinition): Record<string, unknown> {
   return {
     configName: sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName,
     name: definition.name,
@@ -442,22 +450,21 @@ function routeConfigItem(definition: GatewayDefinition): Record<string, unknown>
     agentRoleId: definition.agentRoleId,
     agentRoleFile: definition.agentRoleFile,
     agentAdapters: definition.agentAdapters,
-    routeVariables: definition.routeVariables,
-    notificationRules: definition.notificationRules ?? []
+    routeVariables: definition.routeVariables
   };
 }
 
-function writeRouteConfigFile(definition: GatewayDefinition): void {
+function writeAdapterConfigFile(definition: GatewayDefinition): void {
   const configName = sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName;
-  const configPath = routeConfigPath(configName);
+  const configPath = adapterConfigPath(configName);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(routeConfigItem(definition), null, 2), "utf8");
+  fs.writeFileSync(configPath, JSON.stringify(adapterConfigItem(definition), null, 2), "utf8");
 }
 
 function readRoleMessageConfigShared(roleId: string | undefined): Partial<GatewayDefinition> {
   const safeRoleId = sanitizeRoleId(roleId);
   if (!safeRoleId) return {};
-  const configPath = roleMessageConfigPath(safeRoleId);
+  const configPath = personaConfigPath(safeRoleId);
   if (!fs.existsSync(configPath)) return {};
   const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
 
@@ -479,8 +486,8 @@ function readRoleMessageConfigItem(roleId: string | undefined, _configName: stri
   return readRoleMessageConfigShared(roleId);
 }
 
-function writeRoleMessageConfigFile(roleId: string, items: GatewayDefinition[]): void {
-  const configPath = roleMessageConfigPath(roleId);
+function writePersonaConfigFile(roleId: string, items: GatewayDefinition[]): void {
+  const configPath = personaConfigPath(roleId);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   // All gateways sharing this persona use the same rules; pick the first with rules, or fallback to first item
   const source = items.find(item => Array.isArray(item.notificationRules) && item.notificationRules.length > 0) ?? items[0];
@@ -489,8 +496,8 @@ function writeRoleMessageConfigFile(roleId: string, items: GatewayDefinition[]):
   }, null, 2), "utf8");
 }
 
-function ensureRoleMessageConfigFile(roleId: string): string {
-  const configPath = roleMessageConfigPath(roleId);
+function ensurePersonaConfigFile(roleId: string): string {
+  const configPath = personaConfigPath(roleId);
   if (!fs.existsSync(configPath)) {
     const safeRoleId = sanitizeRoleId(roleId);
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -554,9 +561,9 @@ function openConfigFilePayload(type: string | null, gatewayId: string | null, ro
     const runtime = gatewayId ? runtimes.get(gatewayId) : null;
     const safeRoleId = sanitizeRoleId(roleId ?? runtime?.definition.agentRoleId);
     if (!safeRoleId) {
-      throw new Error("请先选择一个路由人格，再打开 roleMessageConfig.json。");
+      throw new Error("请先选择一个路由人格，再打开 personaConfig.json。");
     }
-    const configPath = ensureRoleMessageConfigFile(safeRoleId);
+    const configPath = ensurePersonaConfigFile(safeRoleId);
     openFileWithDefaultApp(configPath);
     return { code: 0, data: { path: configPath } };
   }
@@ -578,10 +585,10 @@ function openConfigFilePayload(type: string | null, gatewayId: string | null, ro
   }
 
   const configName = sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName;
-  const configPath = routeConfigPath(configName);
+  const configPath = adapterConfigPath(configName);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   if (!fs.existsSync(configPath)) {
-    writeRouteConfigFile(runtime.definition);
+    writeAdapterConfigFile(runtime.definition);
   }
   const targetPath = type === "route-folder" ? path.dirname(configPath) : configPath;
   openFileWithDefaultApp(targetPath);
@@ -654,13 +661,13 @@ function watchedRouteFiles(): string[] {
     if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
       continue;
     }
-    files.add(routeConfigPath(entry.name));
+    files.add(adapterConfigPath(entry.name));
   }
   for (const entry of fs.readdirSync(rolesRoot, { withFileTypes: true })) {
     if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
       continue;
     }
-    const roleConfig = roleMessageConfigPath(entry.name);
+    const roleConfig = personaConfigPath(entry.name);
     if (fs.existsSync(roleConfig)) {
       files.add(roleConfig);
     }

@@ -5,8 +5,8 @@ RabiRoute still starts from the portable Node manager. The Windows launcher is a
 The Windows launcher is the supervisor for the "1+1" desktop experience:
 
 ```text
-Start-RabiRoute-Windows.bat
-  -> scripts/start-rabiroute-windows.ps1
+Start-RabiRoute-Tray.bat
+  -> embedded PowerShell launcher
      -> node dist/manager.js
         -> managed gateway child processes
      -> desktop/tray-task-window/main.py --owns-manager
@@ -24,17 +24,7 @@ From the project root, double-click:
 Start-RabiRoute-Tray.bat
 ```
 
-The older equivalent entry remains available:
-
-```text
-Start-RabiRoute-Windows.bat
-```
-
-Both `.bat` files call:
-
-```powershell
-scripts\start-rabiroute-windows.ps1
-```
+`Start-RabiRoute-Tray.bat` is a polyglot batch/PowerShell launcher. The old split launcher files were removed so there is only one Windows source entry to maintain.
 
 Default behavior:
 
@@ -68,11 +58,11 @@ tray-YYYYMMDD-HHMMSS.stderr.log
 Useful direct commands:
 
 ```powershell
-scripts\start-rabiroute-windows.ps1
-scripts\start-rabiroute-windows.ps1 -NoOpen
-scripts\start-rabiroute-windows.ps1 -NoBuild
-scripts\start-rabiroute-windows.ps1 -NoTray
-scripts\start-rabiroute-windows.ps1 -ManagerUrl http://127.0.0.1:8790
+.\Start-RabiRoute-Tray.bat
+.\Start-RabiRoute-Tray.bat -NoOpen
+.\Start-RabiRoute-Tray.bat -NoBuild
+.\Start-RabiRoute-Tray.bat -NoTray
+.\Start-RabiRoute-Tray.bat -ManagerUrl http://127.0.0.1:8790
 ```
 
 ## What the launcher does not do
@@ -116,8 +106,7 @@ That means the server, WebUI, manager API, gateway runtime, task repository layo
 What is Windows-only today is the convenience launcher:
 
 ```text
-Start-RabiRoute-Windows.bat
-scripts/start-rabiroute-windows.ps1
+Start-RabiRoute-Tray.bat
 ```
 
 A future macOS/Linux desktop entry should be another platform launcher, not another RabiRoute core. It should follow the same contract:
@@ -168,21 +157,35 @@ On desktop environments without a system tray, the Qt app should still show the 
 
 The Qt panel also has a cross-platform single-instance lock per project root. This protects macOS/Linux launchers too, not only the Windows PowerShell launcher.
 
-## True exe packaging options
+## Tray exe packaging
 
-Current conservative recommendation: keep this `.bat` / `.ps1` launcher as the reliable packaged entry, then decide later whether Windows distribution should be a small launcher exe or a full installer.
+The repository includes the packaging spec and build wrapper, but generated exe files are local artifacts, not source files.
 
-Options to evaluate:
+Build locally:
 
-- Small compiled launcher exe: wraps the PowerShell startup behavior and points at the checked-out or installed project directory. Lowest risk, because Node, `dist`, `ribiwebgui/dist`, and runtime `data` stay external and inspectable.
-- PyInstaller tray exe: packages the optional PySide6 tray entry. It should still connect to or invoke the Node launcher, not embed RabiRoute core as a tray-only product.
-- Electron shell: can provide a richer desktop window, but adds a large runtime and should only be used if the WebGUI truly needs desktop-window features.
-- `pkg` / `nexe`: less attractive here because RabiRoute serves built WebGUI assets, reads/writes runtime data, loads configuration folders, and spawns gateway child processes. Those file-system boundaries need careful packaging rules before a single-file Node exe is safe.
+```powershell
+.\scripts\build-tray-exe.ps1
+```
+
+The script runs `npm run build`, invokes PyInstaller with `RabiRoute-Tray.spec`, and copies `dist\RabiRoute-Tray.exe` to the repository root for local testing. `RabiRoute-Tray.exe` is ignored by Git. Do not publish the generated exe until the binary has a separate release sanitation pass, because PyInstaller outputs may contain build-machine paths.
+
+Runtime boundary:
+
+- The exe packages the PySide6 tray entry only.
+- The exe does not bundle Node.js, `dist/manager.js`, `ribiwebgui/dist`, or runtime `data`.
+- In frozen mode, `desktop/tray-task-window/main.py` resolves the project root from `Path(sys.executable).parent`.
+- If manager is not running, the exe starts `node dist/manager.js` and owns that process for shutdown.
 
 Before shipping a real exe, verify:
 
 - `dist/manager.js` and `dist/index.js` are built.
 - `ribiwebgui/dist/index.html` exists.
-- `data/route/<configName>/routeConfig.json` and `data/roles/<RoleId>/roleMessageConfig.json` remain writable runtime files.
+- `data/route/<configName>/adapterConfig.json` and `data/roles/<RoleId>/personaConfig.json` remain writable runtime files.
 - Logs are written outside bundled resources.
 - The desktop entry never becomes the only supported startup path.
+
+Potential future packaging:
+
+- GitHub Releases: use only after a separate binary sanitation and smoke-test pass.
+- Small installer: can lay down Node/runtime prerequisites and a checked-out project folder later.
+- Electron shell: only worth considering if the WebGUI truly needs desktop-window features.

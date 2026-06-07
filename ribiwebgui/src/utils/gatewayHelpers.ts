@@ -235,8 +235,8 @@ export function configNameFor(gateway: GatewayDefinition): string {
   return parts.length > 1 ? parts.slice(1).join("__") : gateway.id || "default";
 }
 
-export function routeConfigPathFor(gateway: GatewayDefinition): string {
-  return `./data/route/${configNameFor(gateway)}/routeConfig.json`;
+export function adapterConfigPathFor(gateway: GatewayDefinition): string {
+  return `./data/route/${configNameFor(gateway)}/adapterConfig.json`;
 }
 
 export function routeDataDirFor(gateway: GatewayDefinition): string {

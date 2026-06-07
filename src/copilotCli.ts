@@ -23,7 +23,10 @@ type CopilotCliState = {
 let notificationQueue: Promise<void> = Promise.resolve();
 
 const statePath = path.join(config.dataDir, "copilot-state.json");
-const defaultArgs = ["--silent", "--allow-all-tools", "--no-ask-user", "--prompt", "{prompt}"];
+// Do NOT inline {prompt} in args — long messages overflow Windows command-line limits
+// and crash Copilot CLI with a libuv UV_HANDLE_CLOSING assertion (code 3221226505).
+// Instead, write the prompt to stdin (writePromptToStdin = true when no {prompt} in args).
+const defaultArgs = ["--silent", "--allow-all-tools", "--no-ask-user"];
 
 // State is kept in memory only. On startup we overwrite any stale state file so
 // the manager never reads a stale error from a previous process run.
