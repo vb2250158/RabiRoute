@@ -1,0 +1,9 @@
+{
+  "speakerHost": "192.168.1.123",
+  "speakerUser": "root",
+  "speakerPassword": "change-me",
+  "remoteBindHost": "127.0.0.1",
+  "remotePort": 4399,
+  "localHost": "127.0.0.1",
+  "localPort": 4399
+}

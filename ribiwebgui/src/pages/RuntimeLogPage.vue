@@ -3,9 +3,11 @@ import { computed, ref } from "vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import {
   adapterConnectionReasons,
+  adapterDefaultWebhookPath,
   adapterLabel,
   agentConnectionReasons,
   gatewayAdapterTypes,
+  isWebhookLikeAdapter,
   isMessageInputsDisabled,
   routeKindLabels
 } from "../utils/gatewayHelpers";
@@ -46,6 +48,23 @@ const adapterText = computed(() => {
   if (adapters.value.includes("napcat") && napcatState.value.loginInfoError) return "HTTP 异常";
   return "已启用";
 });
+
+function webhookAddress(type: string): string {
+  const port = type === "fennenote"
+    ? gateway.value?.fenneNoteWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort
+    : type === "xiaoai"
+      ? gateway.value?.xiaoaiWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort
+      : gateway.value?.webhookPort || gateway.value?.gatewayPort;
+  const path = type === "fennenote"
+    ? gateway.value?.fenneNoteWebhookPath || adapterDefaultWebhookPath(type)
+    : type === "xiaoai"
+      ? gateway.value?.xiaoaiWebhookPath || adapterDefaultWebhookPath(type)
+      : gateway.value?.webhookPath || adapterDefaultWebhookPath(type);
+  return `http://127.0.0.1:${port || 8790}${path}`;
+}
+
+const webhookLikeAdapters = computed(() => adapters.value.filter(isWebhookLikeAdapter));
+
 async function triggerRule(rule: { id: string; displayName: string; routeKind: "manual_trigger" | "heartbeat" }): Promise<void> {
   if (!gateway.value) return;
   triggeringRuleId.value = rule.id;
@@ -157,8 +176,11 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
             <div class="status-row"><span>间隔</span><b>{{ gateway.heartbeatIntervalSeconds || runtime.heartbeatIntervalSeconds || 900 }} 秒</b></div>
             <div class="status-row"><span>状态</span><b>{{ heartbeatState.enabled === false ? "未启用" : "已启用" }}</b></div>
           </template>
-          <template v-if="adapters.includes('webhook')">
-            <div class="status-row"><span>地址</span><b>http://127.0.0.1:{{ gateway.webhookPort || gateway.gatewayPort }}{{ gateway.webhookPath || "/webhook" }}</b></div>
+          <template v-if="webhookLikeAdapters.length">
+            <div v-for="type in webhookLikeAdapters" :key="type" class="status-row">
+              <span>{{ adapterLabel(type) }}</span>
+              <b>{{ webhookAddress(type) }}</b>
+            </div>
           </template>
         </v-card>
 

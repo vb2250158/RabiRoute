@@ -5,9 +5,10 @@ import { config } from "./config.js";
 
 type CopilotCliState = {
   agentAdapterType: "copilotCli";
-  monitorThreadId: string;
+  monitorThreadId?: string;
   monitorThreadName: string;
   monitorThreadSource: string;
+  monitorProjectPath?: string;
   notificationCount?: number;
   lastNotificationAt?: string;
   lastNotificationError?: string;
@@ -23,10 +24,16 @@ type CopilotCliState = {
 let notificationQueue: Promise<void> = Promise.resolve();
 
 const statePath = path.join(config.dataDir, "copilot-state.json");
-// Do NOT inline {prompt} in args — long messages overflow Windows command-line limits
-// and crash Copilot CLI with a libuv UV_HANDLE_CLOSING assertion (code 3221226505).
-// Instead, write the prompt to stdin (writePromptToStdin = true when no {prompt} in args).
-const defaultArgs = ["--silent", "--allow-all-tools", "--no-ask-user"];
+// Always pass the prompt via --prompt flag (never via stdin).
+// Stdin-piped mode triggers a libuv UV_HANDLE_CLOSING assertion crash (code 3221226505) on Windows
+// when copilot is spawned with a pipe on stdin, even for short messages.
+// For large messages (> MAX_INLINE_PROMPT_LENGTH), write the real content to a file and pass
+// a short file-read instruction via --prompt to stay within Windows command-line limits.
+const defaultArgs = ["--silent", "--allow-all-tools", "--no-ask-user", "--prompt", "{prompt}"];
+
+// Messages longer than this threshold are saved to a file; copilot is instructed to read the file.
+// This avoids Windows command-line length limits while still using the safe --prompt flag path.
+const MAX_INLINE_PROMPT_LENGTH = 2000;
 
 // State is kept in memory only. On startup we overwrite any stale state file so
 // the manager never reads a stale error from a previous process run.
@@ -52,9 +59,9 @@ function flushState(state: CopilotCliState): void {
 function baseState(): CopilotCliState {
   return {
     agentAdapterType: "copilotCli",
-    monitorThreadId: "copilot-cli",
-    monitorThreadName: "Copilot CLI",
-    monitorThreadSource: copilotCommand()
+    monitorThreadName: copilotSessionName() || "Copilot CLI",
+    monitorThreadSource: copilotCommand(),
+    monitorProjectPath: copilotCwd()
   };
 }
 
@@ -156,14 +163,15 @@ function copilotSessionName(): string {
 function argsForPrompt(message: string): { args: string[]; writePromptToStdin: boolean } {
   const baseArgs = parseCopilotArgs();
 
-  // Prepend: [-C <cwd>] [--resume=<name>]
+  // Prepend: [-C <cwd>] [--name=<name>]
+  // NOTE: --resume=<Chinese> crashes on Windows (libuv UV_HANDLE_CLOSING, code 3221226505).
+  // Use --name= instead: it attaches to an existing named session or creates a new one with that name.
   const prefix: string[] = [];
   const cwd = copilotCwd();
   if (cwd) prefix.push("-C", cwd);
   const sessionName = copilotSessionName();
   if (sessionName) {
-    // --resume by name; if session doesn't exist yet, copilot starts a new one
-    prefix.push(`--resume=${sessionName}`);
+    prefix.push(`--name=${sessionName}`);
   }
 
   const args = [...prefix, ...baseArgs];
@@ -263,8 +271,17 @@ async function notifyCopilotCliInternal(message: string): Promise<void> {
   fs.mkdirSync(path.dirname(promptPath), { recursive: true });
   fs.writeFileSync(promptPath, message, "utf8");
 
+  // For long messages, tell copilot to read the file directly instead of inlining the content.
+  // This avoids Windows command-line length limits and stdin-pipe crash (UV_HANDLE_CLOSING).
+  let copilotPrompt: string;
+  if (message.length > MAX_INLINE_PROMPT_LENGTH) {
+    copilotPrompt = `消息内容已写入文件，请使用文件读取工具读取以下路径的完整内容，然后完全按照文件内的指令执行（不要跳过读取步骤，文件中有完整的任务说明）：\n${promptPath}`;
+  } else {
+    copilotPrompt = message;
+  }
+
   try {
-    const result = await runCopilotCli(message);
+    const result = await runCopilotCli(copilotPrompt);
     appendJsonl(outputPath, {
       id,
       time: now.toISOString(),
@@ -277,7 +294,9 @@ async function notifyCopilotCliInternal(message: string): Promise<void> {
     });
     writeState({
       ...state,
+      monitorThreadName: copilotSessionName() || state.monitorThreadName,
       monitorThreadSource: copilotCommand(),
+      monitorProjectPath: copilotCwd(),
       notificationCount: (state.notificationCount ?? 0) + 1,
       lastNotificationAt: new Date().toISOString(),
       lastNotificationError: undefined,
@@ -292,7 +311,9 @@ async function notifyCopilotCliInternal(message: string): Promise<void> {
   } catch (error) {
     writeState({
       ...state,
+      monitorThreadName: copilotSessionName() || state.monitorThreadName,
       monitorThreadSource: copilotCommand(),
+      monitorProjectPath: copilotCwd(),
       lastNotificationError: error instanceof Error ? error.message : String(error),
       lastNotificationErrorAt: new Date().toISOString(),
       lastPromptPath: promptPath

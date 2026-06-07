@@ -80,7 +80,7 @@ RabiRoute 决定自动执行、生成草稿、等待确认或拒绝。
 
 - 新用户先看：[快速上手](docs/getting-started.md)
 - 配置 gateway、RibiWebGUI、Agent 端和可选 NapCat 入口：[配置与接入](docs/configuration.md)
-- 配 `routeConfig.json`、消息端和路由入口：[路由配置](docs/routing-configuration.md)
+- 配 `adapterConfig.json`、消息端和路由入口：[路由配置](docs/routing-configuration.md)
 - 配 pipeline preset、输入输出适配器和 OumuQ TTS 意图：[Pipeline presets](docs/pipeline-presets.md)
 - 写人格角色包和成长型人格：[路由人格](docs/routing-and-personas.md)
 - 接 FenneNote 转录、角色对话和 OumuQ TTS：[语音交互工作站](docs/voice-interaction-workstation.md)

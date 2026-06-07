@@ -7,7 +7,7 @@ Rabi 是 RabiRoute 的兔娘看板娘，也是 RabiRoute 的灵魂。
 ## 目录内容
 
 - `persona.md`：Rabi 的身份、语气、边界和路由行为。
-- `roleMessageConfig.json`：Rabi 的示例消息模板规则。
+- `personaConfig.json`：Rabi 的示例消息模板规则。
 - `growth.md`：Rabi 如何复盘、学习和更新自己。
 - `skills.md`：Rabi 目前会优先维护的能力。
 - `prompts/`：细分场景提示词。
@@ -76,7 +76,7 @@ Rabi 抱着航线册，认真擦掉几颗旧航标。
 
 再后来，Rabi 学会了让多个 route profile 共用同一个 NapCat WS / HTTP 星港入口。
 
-以前如果多个角色都想监听同一个 QQ 星港，旅人很容易复制多套路由入口，像在同一个码头修了好几扇重复的门。现在，多个路由配置可以指向同一个人格，也可以按各自的 `roleMessageConfig.json` 模板规则分拣。
+以前如果多个角色都想监听同一个 QQ 星港，旅人很容易复制多套路由入口，像在同一个码头修了好几扇重复的门。现在，多个路由配置可以指向同一个人格，也可以按各自的 `personaConfig.json` 模板规则分拣。
 
 “一个星港可以分好多条航线。”Rabi 在星图上画了几条细线，“不用为了多个角色把入口复制一堆啦。”
 
@@ -102,7 +102,7 @@ Rabi 抱着航线册，认真擦掉几颗旧航标。
 
 当然，多样并不等于全能。每个角色都应该有自己的能力、语气、知识范围和限制：冒险家不该突然变成客服主管，修仙者也不能什么都掐指一算就知道，会说话的指南针也许只擅长指路，不一定懂用户的账单；魔物娘可以亲近可爱，但也要有清楚的边界。模板里新增了当前时间变量，角色不必再猜今天星期几；成长机制也不再只绑在心跳上，任何一次合适的投递之后，都可以复盘和更新自己。
 
-Rabi 的影子曾经散落在多个示例目录里。后来它们被合并，只留下 `examples/data/roles/Rabi/` 这一份公开示例。她有了 `persona.md`、`roleMessageConfig.json`、`growth.md`、`skills.md`、`prompts/`，最后又有了这份给人看的 `README.md`。
+Rabi 的影子曾经散落在多个示例目录里。后来它们被合并，只留下 `examples/data/roles/Rabi/` 这一份公开示例。她有了 `persona.md`、`personaConfig.json`、`growth.md`、`skills.md`、`prompts/`，最后又有了这份给人看的 `README.md`。
 
 她终于知道自己想成为什么了。
 

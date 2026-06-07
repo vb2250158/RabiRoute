@@ -1,4 +1,4 @@
-import { config } from "./config.js";
+import { config, type NapCatInstanceConfig } from "./config.js";
 
 type SendGroupMessageParams = {
   groupId: number | string;
@@ -22,21 +22,31 @@ type SendMessageResult = {
   messageId?: number | string;
 };
 
+export type NapCatEndpoint = Pick<NapCatInstanceConfig, "httpUrl" | "accessToken">;
+
 export type LoginInfo = {
   userId?: number | string;
   nickname?: string;
 };
 
-export async function callNapCat<T>(action: string, payload: unknown): Promise<T> {
+function endpointConfig(endpoint?: NapCatEndpoint): NapCatEndpoint {
+  return {
+    httpUrl: endpoint?.httpUrl || config.napcatHttpUrl,
+    accessToken: endpoint?.accessToken ?? config.napcatAccessToken
+  };
+}
+
+export async function callNapCat<T>(action: string, payload: unknown, endpoint?: NapCatEndpoint): Promise<T> {
+  const target = endpointConfig(endpoint);
   const headers: Record<string, string> = {
     "content-type": "application/json; charset=utf-8"
   };
 
-  if (config.napcatAccessToken) {
-    headers.authorization = `Bearer ${config.napcatAccessToken}`;
+  if (target.accessToken) {
+    headers.authorization = `Bearer ${target.accessToken}`;
   }
 
-  const response = await fetch(`${config.napcatHttpUrl.replace(/\/$/, "")}/${action}`, {
+  const response = await fetch(`${target.httpUrl.replace(/\/$/, "")}/${action}`, {
     method: "POST",
     headers,
     body: JSON.stringify(payload)
@@ -59,8 +69,8 @@ export async function callNapCat<T>(action: string, payload: unknown): Promise<T
   return parsed as T;
 }
 
-export async function getLoginInfo(): Promise<LoginInfo> {
-  const response = await callNapCat<OneBotResponse<{ user_id?: number | string; nickname?: string }> | { user_id?: number | string; nickname?: string }>("get_login_info", {});
+export async function getLoginInfo(endpoint?: NapCatEndpoint): Promise<LoginInfo> {
+  const response = await callNapCat<OneBotResponse<{ user_id?: number | string; nickname?: string }> | { user_id?: number | string; nickname?: string }>("get_login_info", {}, endpoint);
   const data: { user_id?: number | string; nickname?: string } =
     "data" in response && response.data ? response.data : response as { user_id?: number | string; nickname?: string };
   return {
@@ -77,18 +87,18 @@ function normalizeSendMessageResult(response: OneBotResponse<{ message_id?: numb
   };
 }
 
-export async function sendGroupMessage(params: SendGroupMessageParams): Promise<SendMessageResult> {
+export async function sendGroupMessage(params: SendGroupMessageParams, endpoint?: NapCatEndpoint): Promise<SendMessageResult> {
   const response = await callNapCat<OneBotResponse<{ message_id?: number | string }> | { message_id?: number | string }>("send_group_msg", {
     group_id: Number(params.groupId),
     message: params.message
-  });
+  }, endpoint);
   return normalizeSendMessageResult(response);
 }
 
-export async function sendPrivateMessage(params: SendPrivateMessageParams): Promise<SendMessageResult> {
+export async function sendPrivateMessage(params: SendPrivateMessageParams, endpoint?: NapCatEndpoint): Promise<SendMessageResult> {
   const response = await callNapCat<OneBotResponse<{ message_id?: number | string }> | { message_id?: number | string }>("send_private_msg", {
     user_id: Number(params.userId),
     message: params.message
-  });
+  }, endpoint);
   return normalizeSendMessageResult(response);
 }

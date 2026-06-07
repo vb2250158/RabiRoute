@@ -82,6 +82,18 @@ export type RouteProfile = {
   notificationRules: NotificationRule[];
 };
 
+export type NapCatInstanceConfig = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  gatewayPort: number;
+  httpUrl: string;
+  webuiUrl: string;
+  accessToken: string;
+  launchCommand?: string;
+  workingDir?: string;
+};
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -131,7 +143,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "heartbeat" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -148,7 +160,7 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "webhook" || item === "heartbeat" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "disabled");
   if (adapters.includes("disabled")) {
     return ["disabled"];
   }
@@ -187,6 +199,54 @@ function parseAgentAdapters(rawTypes: string | undefined): AgentAdapterType[] {
   }
 
   return [];
+}
+
+function sanitizeInstanceId(value: unknown, fallback: string): string {
+  const raw = String(value || "").trim();
+  return raw.replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "") || fallback;
+}
+
+function normalizeNapCatInstance(item: unknown, index: number): NapCatInstanceConfig | null {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return null;
+  }
+  const source = item as Record<string, unknown>;
+  const gatewayPort = Number(source.gatewayPort ?? source.wsPort ?? source.port);
+  if (!Number.isInteger(gatewayPort) || gatewayPort <= 0) {
+    return null;
+  }
+  const id = sanitizeInstanceId(source.id, `napcat-${index + 1}`);
+  return {
+    id,
+    name: String(source.name || source.label || id),
+    enabled: source.enabled !== false,
+    gatewayPort,
+    httpUrl: String(source.httpUrl || source.napcatHttpUrl || "http://127.0.0.1:3000"),
+    webuiUrl: String(source.webuiUrl || source.napcatWebuiUrl || "http://127.0.0.1:6099/webui"),
+    accessToken: String(source.accessToken || source.napcatAccessToken || ""),
+    launchCommand: typeof source.launchCommand === "string" ? source.launchCommand : undefined,
+    workingDir: typeof source.workingDir === "string" ? source.workingDir : undefined
+  };
+}
+
+function parseNapCatInstances(raw: string | undefined, fallback: NapCatInstanceConfig): NapCatInstanceConfig[] {
+  if (raw?.trim()) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        const instances = parsed
+          .map((item, index) => normalizeNapCatInstance(item, index))
+          .filter((item): item is NapCatInstanceConfig => Boolean(item));
+        if (instances.length > 0) {
+          return instances;
+        }
+      }
+    } catch (error) {
+      console.error("Failed to parse NAPCAT_INSTANCES", error);
+    }
+  }
+
+  return [fallback];
 }
 
 function parseRouteProfiles(raw: string | undefined): RouteProfile[] {
@@ -314,17 +374,36 @@ const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES)
 const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES);
 const pipelinePreset = process.env.PIPELINE_PRESET?.trim() || undefined;
 const pipeline = parsePipelineDefinition(process.env.PIPELINE);
+const defaultNapCatInstance: NapCatInstanceConfig = {
+  id: "default",
+  name: "默认 NapCat",
+  enabled: true,
+  gatewayPort: Number(process.env.GATEWAY_PORT ?? "8789"),
+  httpUrl: process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
+  webuiUrl: process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
+  accessToken: process.env.NAPCAT_ACCESS_TOKEN ?? "",
+  launchCommand: process.env.NAPCAT_LAUNCH_COMMAND,
+  workingDir: process.env.NAPCAT_WORKING_DIR
+};
+const napcatInstances = parseNapCatInstances(process.env.NAPCAT_INSTANCES, defaultNapCatInstance);
+const primaryNapcatInstance = napcatInstances.find((item) => item.enabled) ?? napcatInstances[0] ?? defaultNapCatInstance;
 
 export const config = {
   messageAdapterType: parseMessageAdapterType(process.env.MESSAGE_ADAPTER_TYPE),
   messageAdapterTypes: parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE),
   heartbeatIntervalSeconds: parsePositiveNumber(process.env.HEARTBEAT_INTERVAL_SECONDS, 900),
   heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请检查最近消息和角色相关上下文。",
-  napcatHttpUrl: process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
-  napcatAccessToken: process.env.NAPCAT_ACCESS_TOKEN ?? "",
+  napcatInstances,
+  napcatHttpUrl: primaryNapcatInstance.httpUrl,
+  napcatWebuiUrl: primaryNapcatInstance.webuiUrl,
+  napcatAccessToken: primaryNapcatInstance.accessToken,
   webhookPath: process.env.WEBHOOK_PATH ?? "/webhook",
-  gatewayPort: Number(process.env.GATEWAY_PORT ?? "8789"),
+  gatewayPort: primaryNapcatInstance.gatewayPort,
   webhookPort: Number(process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
+  fenneNoteWebhookPath: process.env.FENNENOTE_WEBHOOK_PATH ?? process.env.FENNOTE_WEBHOOK_PATH ?? "/fennenote",
+  fenneNoteWebhookPort: Number(process.env.FENNENOTE_WEBHOOK_PORT ?? process.env.FENNOTE_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
+  xiaoaiWebhookPath: process.env.XIAOAI_WEBHOOK_PATH ?? "/xiaoai",
+  xiaoaiWebhookPort: Number(process.env.XIAOAI_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   codexAppServerUrl: process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500",
   codexDirectNotify: process.env.CODEX_DIRECT_NOTIFY === "1",
   codexDesktopIpcNotify: process.env.CODEX_DESKTOP_IPC_NOTIFY !== "0",

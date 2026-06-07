@@ -1,6 +1,7 @@
 <# : batch portion
 @echo off
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~f0" %*
+set "RABIROUTE_LAUNCHER=%~f0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$script = [System.IO.File]::ReadAllText($env:RABIROUTE_LAUNCHER); & ([scriptblock]::Create($script)) @args" %*
 exit /b %errorlevel%
 : end batch / begin PowerShell #>
 param(
@@ -248,7 +249,7 @@ function Test-NeedsBuild {
 }
 
 try {
-  $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
+  $scriptPath = if ($env:RABIROUTE_LAUNCHER) { $env:RABIROUTE_LAUNCHER } elseif ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
   $projectRoot = Resolve-Path (Split-Path -Parent $scriptPath)
   Set-Location $projectRoot
 

@@ -1,7 +1,72 @@
-export type MessageAdapterType = "napcat" | "heartbeat" | "webhook" | "disabled";
+export type MessageAdapterType = "napcat" | "heartbeat" | "fennenote" | "xiaoai" | "webhook" | "disabled";
 export type AgentAdapterType = "codexDesktop" | "codexApp" | "copilotCli" | "marvis" | "astrbot";
 export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
+export type AgentMaturity = "verified" | "experimental" | "stub";
+
+export type AgentScanSession = {
+  id?: string;
+  name: string;
+  projectPath?: string;
+  projectId?: string;
+  updatedAt?: string;
+  userNamed?: boolean;
+};
+
+export type AgentScanProject = {
+  id?: string;
+  label: string;
+  path: string;
+  exists: boolean;
+};
+
+export type AgentScanResult = {
+  type: AgentAdapterType;
+  label: string;
+  maturity: AgentMaturity;
+  installed: boolean;
+  installCandidates?: Array<{ label: string; path?: string; url?: string }>;
+  auth?: { required: boolean; loggedIn?: boolean; loginUrl?: string; message?: string };
+  endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
+  projects?: AgentScanProject[];
+  sessions?: AgentScanSession[];
+  plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
+  warnings?: string[];
+};
+
+export type AdapterRequirement = {
+  id: string;
+  label: string;
+  required?: boolean;
+  ok?: boolean;
+  detail?: string;
+  actionLabel?: string;
+  url?: string;
+  path?: string;
+};
+
+export type AdapterEndpoint = {
+  label: string;
+  url: string;
+  healthy?: boolean;
+};
+
+export type AdapterInstallCandidate = {
+  label: string;
+  path?: string;
+  url?: string;
+};
+
+export type MessageAdapterScanResult = {
+  type: MessageAdapterType;
+  label: string;
+  maturity: AgentMaturity;
+  installed: boolean;
+  installCandidates?: AdapterInstallCandidate[];
+  endpoints?: AdapterEndpoint[];
+  requirements?: AdapterRequirement[];
+  warnings?: string[];
+};
 
 export type PipelineDefinition = {
   id?: string;
@@ -28,6 +93,25 @@ export type NotificationRule = {
   template: string;
 };
 
+export type NapCatInstance = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  gatewayPort: number;
+  httpUrl: string;
+  webuiUrl?: string;
+  accessToken?: string;
+  launchCommand?: string;
+  workingDir?: string;
+  botUserId?: string | number;
+  botNickname?: string;
+  connected?: boolean;
+  remoteAddress?: string;
+  lastConnectedAt?: string;
+  lastDisconnectedAt?: string;
+  loginInfoError?: string;
+};
+
 export type GatewayDefinition = {
   id: string;
   name?: string;
@@ -39,10 +123,16 @@ export type GatewayDefinition = {
   gatewayPort: number;
   webhookPort?: number;
   webhookPath?: string;
+  fenneNoteWebhookPort?: number;
+  fenneNoteWebhookPath?: string;
+  xiaoaiWebhookPort?: number;
+  xiaoaiWebhookPath?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   napcatHttpUrl?: string;
+  napcatWebuiUrl?: string;
   napcatAccessToken?: string;
+  napcatInstances?: NapCatInstance[];
   targetGroupId?: string;
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
@@ -54,7 +144,10 @@ export type GatewayDefinition = {
   copilotCliBin?: string;
   marvisAppId?: string;
   astrbotUrl?: string;
+  astrbotUsername?: string;
   astrbotPassword?: string;
+  astrbotProjectId?: string;
+  astrbotSessionId?: string;
   configName?: string;
   agentRoleId?: string;
   agentRoleFile?: string;
@@ -93,6 +186,15 @@ export type RuntimeStatus = GatewayDefinition & {
     options?: RoleOption[];
   };
   gatewayStatus?: Record<string, any>;
+  adapterLogs?: Record<string, {
+    paths?: string[];
+    entries?: Array<Record<string, any>>;
+  }>;
+  messageFiles?: Record<string, {
+    paths?: string[];
+    entries?: Array<Record<string, any>>;
+  }>;
+  agentStates?: Partial<Record<AgentAdapterType, Record<string, any>>>;
   codexState?: Record<string, any>;
   log?: string[];
 };

@@ -64,7 +64,7 @@ export const templateVars = [
   { name: "triggerId", description: "手动触发 ID。" },
   { name: "triggerName", description: "手动触发显示名称。" },
   { name: "voiceTranscriptLogPath", description: "语音转写 JSONL 记录路径。" },
-  { name: "voiceSource", description: "Webhook 来源。" },
+  { name: "voiceSource", description: "语音转写来源，例如 fennenote、xiaoai 或 webhook。" },
   { name: "voiceDurationSeconds", description: "语音片段时长，单位秒。" },
   { name: "voicePeak", description: "语音片段峰值音量。" }
 ];
@@ -208,9 +208,32 @@ export function setGatewayAdapters(gateway: GatewayDefinition, adapters: Message
 export function adapterLabel(type: string): string {
   if (type === "napcat") return "NapCat / OneBot";
   if (type === "heartbeat") return "定时触发";
-  if (type === "webhook") return "Webhook";
+  if (type === "fennenote") return "FenneNote / 芬妮笔记";
+  if (type === "xiaoai") return "小米音箱 / 小爱";
+  if (type === "webhook") return "通用 Webhook";
   if (type === "disabled") return "已禁用";
   return type;
+}
+
+export function adapterRuntimeKey(type: string): string {
+  return type;
+}
+
+export function isWebhookLikeAdapter(type: string): boolean {
+  return type === "webhook" || type === "fennenote" || type === "xiaoai";
+}
+
+export function adapterSourceAliases(type: string): string[] {
+  if (type === "fennenote") return ["fennenote", "fenne_note", "fenne-note", "fenne", "芬妮笔记", "芬妮"];
+  if (type === "xiaoai") return ["xiaoai", "xiao_ai", "xiao-ai", "mi_speaker", "mi-speaker", "xiaomi", "小爱", "小米音箱"];
+  if (type === "webhook") return ["webhook", "generic_webhook", "generic-webhook"];
+  return [type];
+}
+
+export function adapterDefaultWebhookPath(type: string): string {
+  if (type === "fennenote") return "/fennenote";
+  if (type === "xiaoai") return "/xiaoai";
+  return "/webhook";
 }
 
 export function applyAdapterDefaults(gateway: GatewayDefinition): void {
@@ -218,6 +241,18 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   if (adapters.includes("napcat")) {
     gateway.gatewayPort = Number(gateway.gatewayPort || 8790);
     gateway.napcatHttpUrl = gateway.napcatHttpUrl || "http://127.0.0.1:3000";
+    gateway.napcatWebuiUrl = gateway.napcatWebuiUrl || "http://127.0.0.1:6099/webui";
+    if (!Array.isArray(gateway.napcatInstances) || gateway.napcatInstances.length === 0) {
+      gateway.napcatInstances = [{
+        id: "default",
+        name: "默认 NapCat",
+        enabled: true,
+        gatewayPort: gateway.gatewayPort,
+        httpUrl: gateway.napcatHttpUrl,
+        webuiUrl: gateway.napcatWebuiUrl,
+        accessToken: gateway.napcatAccessToken || ""
+      }];
+    }
   }
   if (adapters.includes("heartbeat")) {
     gateway.heartbeatIntervalSeconds = Number(gateway.heartbeatIntervalSeconds || 900);
@@ -225,7 +260,15 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   }
   if (adapters.includes("webhook")) {
     gateway.webhookPort = Number(gateway.webhookPort || gateway.gatewayPort || 8790);
-    gateway.webhookPath = gateway.webhookPath || "/webhook";
+    gateway.webhookPath = gateway.webhookPath || adapterDefaultWebhookPath("webhook");
+  }
+  if (adapters.includes("fennenote")) {
+    gateway.fenneNoteWebhookPort = Number(gateway.fenneNoteWebhookPort || gateway.webhookPort || gateway.gatewayPort || 8790);
+    gateway.fenneNoteWebhookPath = gateway.fenneNoteWebhookPath || adapterDefaultWebhookPath("fennenote");
+  }
+  if (adapters.includes("xiaoai")) {
+    gateway.xiaoaiWebhookPort = Number(gateway.xiaoaiWebhookPort || gateway.webhookPort || gateway.gatewayPort || 8790);
+    gateway.xiaoaiWebhookPath = gateway.xiaoaiWebhookPath || adapterDefaultWebhookPath("xiaoai");
   }
 }
 
@@ -233,6 +276,14 @@ export function configNameFor(gateway: GatewayDefinition): string {
   if (gateway.configName) return gateway.configName;
   const parts = String(gateway.id || "").split("__");
   return parts.length > 1 ? parts.slice(1).join("__") : gateway.id || "default";
+}
+
+export function sanitizeConfigName(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/[^\p{L}\p{N}_-]+/gu, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "");
 }
 
 export function adapterConfigPathFor(gateway: GatewayDefinition): string {
@@ -292,10 +343,22 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       groups: [{ title: "手动事件", routeKinds: ["manual_trigger"] }]
     },
     {
+      adapter: "fennenote",
+      title: "FenneNote / 芬妮笔记",
+      note: "桌面语音笔记和转写输入；底层是 HTTP 回调，但日志和配置按 FenneNote 独立显示。",
+      groups: [{ title: "FenneNote 语音事件", routeKinds: ["voice_transcript"] }]
+    },
+    {
+      adapter: "xiaoai",
+      title: "小米音箱 / 小爱",
+      note: "来自小爱音箱的语音转写输入；底层是 HTTP 回调，但日志和配置按小米音箱独立显示。",
+      groups: [{ title: "小爱语音事件", routeKinds: ["voice_transcript"] }]
+    },
+    {
       adapter: "webhook",
-      title: "Webhook",
-      note: "外部系统事件；可用于语音转写、自动化或后续扩展。",
-      groups: [{ title: "语音 / 外部事件", routeKinds: ["voice_transcript"] }]
+      title: "通用 Webhook",
+      note: "通用 HTTP 事件兜底入口；用于尚未命名的外部系统。",
+      groups: [{ title: "通用外部事件", routeKinds: ["voice_transcript"] }]
     }
   ];
 }
@@ -326,12 +389,10 @@ export function explainAgentError(error: unknown): string {
   if (text.includes("thread not found")) {
     return "Codex 线程 ID 已失效。请在 RibiWebGUI 中重新绑定或让 manager 重新发现目标线程。";
   }
+  if (text.includes("ASTRBOT_PASSWORD environment variable is not set")) {
+    return "AstrBot 密码未配置。请在 AstrBot Agent 卡片里填写密码并保存，或设置 ASTRBOT_PASSWORD 环境变量。";
+  }
   return text;
-}
-
-function requiresCodexBinding(agentAdapters: AgentAdapterType[] | undefined): boolean {
-  const adapters = Array.isArray(agentAdapters) && agentAdapters.length ? agentAdapters : ["codexDesktop"];
-  return adapters.some(adapter => adapter === "codexDesktop" || adapter === "codexApp" || adapter === "copilotCli" || adapter === "astrbot");
 }
 
 export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: RuntimeStatus, adapterTypes: MessageAdapterType[]): string[] {
@@ -400,9 +461,22 @@ export function adapterErrorsFor(type: MessageAdapterType, gateway: GatewayDefin
 export function agentConnectionReasons(gateway: GatewayDefinition, runtime: RuntimeStatus): string[] {
   const agentState = runtime.codexState || {};
   const agentError = agentState.lastNotificationError || "";
+  const adapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codexDesktop"];
   const reasons: string[] = [];
   if (!agentState.monitorThreadId) {
-    reasons.push(agentState.message || `尚未绑定 Agent 会话。请确认 Codex Desktop 中存在名为“${gateway.codexThreadName || gateway.name || gateway.id}”的线程。`);
+    if (agentState.message) {
+      reasons.push(String(agentState.message));
+    } else if (adapters.includes("marvis") && !adapters.some(adapter => adapter === "codexDesktop" || adapter === "codexApp")) {
+      reasons.push("Marvis 当前是人工接力适配，不能验证会话绑定。");
+    } else if (adapters.includes("astrbot") && !adapters.some(adapter => adapter === "codexDesktop" || adapter === "codexApp")) {
+      reasons.push(gateway.astrbotSessionId
+        ? "AstrBot 已选择 ChatUI 会话，但尚未完成真实投递验证。"
+        : "AstrBot 未选择 ChatUI 会话；会回退到 rabiroute_agent 插件默认管线。");
+    } else if (adapters.includes("copilotCli") && !adapters.some(adapter => adapter === "codexDesktop" || adapter === "codexApp")) {
+      reasons.push("Copilot CLI 尚未成功投递到目标 session；请完成同一会话连续两次注入烟测后再视为可用。");
+    } else {
+      reasons.push(`尚未绑定 Agent 会话。请确认 Codex Desktop 中存在名为“${gateway.codexThreadName || gateway.name || gateway.id}”的线程。`);
+    }
   }
   if (agentError) reasons.push(explainAgentError(agentError));
   return reasons;
@@ -436,8 +510,12 @@ export function isQuickSetupNeeded(gateways: GatewayDefinition[]): boolean {
   if (gateways.length === 0) return true;
   return gateways.some((gateway) => {
     const adapters = gatewayAdapterTypes(gateway);
+    const agentAdapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codexDesktop"];
+    const missingCodexBinding = agentAdapters.some(agent => agent === "codexDesktop" || agent === "codexApp")
+      && (!gateway.codexThreadName || !gateway.codexCwd);
+    const missingCopilotBinding = agentAdapters.includes("copilotCli")
+      && (!gateway.codexThreadName || !gateway.copilotCwd);
     const missingMessageConfig = adapters.includes("napcat") && (!gateway.gatewayPort || !gateway.napcatHttpUrl);
-    const missingAgentBinding = requiresCodexBinding(gateway.agentAdapters) && (!gateway.codexThreadName || !gateway.codexCwd);
-    return !gateway.agentRoleId || missingAgentBinding || missingMessageConfig;
+    return !gateway.agentRoleId || missingCodexBinding || missingCopilotBinding || missingMessageConfig;
   });
 }

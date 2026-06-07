@@ -6,7 +6,7 @@
 
 - 有 `group-messages.jsonl` 或 `private-messages.jsonl`：说明 QQ 到 RabiRoute 已通。
 - 有 `codex-notifications.jsonl`：说明路由规则已命中并尝试投递。
-- 没有投递记录：检查角色 `roleMessageConfig.json` 是否存在对应 `configName` 的有效 `notificationRules`，再检查 `routeKinds`、`regex` 和目标群过滤。
+- 没有投递记录：检查角色 `personaConfig.json` 是否存在对应 `configName` 的有效 `notificationRules`，再检查 `routeKinds`、`regex` 和目标群过滤。
 
 ## `send_group_msg` 报 `EventChecker Failed` / `1006514`
 

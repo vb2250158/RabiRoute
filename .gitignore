@@ -23,3 +23,9 @@ __pycache__/
 npm-debug.log*
 assets/reference-cache/
 /plugin-adapters/xiaoai-rabiroute/vendor/open-xiaoai/
+/plugin-adapters/xiaoai-rabiroute/downloads/
+/plugin-adapters/xiaoai-rabiroute/vendor/
+/plugin-adapters/xiaoai-rabiroute/**/node_modules/
+/plugin-adapters/xiaoai-rabiroute/**/target/
+/plugin-adapters/xiaoai-rabiroute/**/migpt/open-xiaoai.node
+/plugin-adapters/xiaoai-rabiroute/xiaoai-local.config.json

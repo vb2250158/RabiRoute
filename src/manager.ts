@@ -20,10 +20,16 @@ type GatewayDefinition = {
   gatewayPort: number;
   webhookPort?: number;
   webhookPath?: string;
+  fenneNoteWebhookPort?: number;
+  fenneNoteWebhookPath?: string;
+  xiaoaiWebhookPort?: number;
+  xiaoaiWebhookPath?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   napcatHttpUrl?: string;
+  napcatWebuiUrl?: string;
   napcatAccessToken?: string;
+  napcatInstances?: NapCatInstanceDefinition[];
   targetGroupId?: string;
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
@@ -34,6 +40,11 @@ type GatewayDefinition = {
   copilotCwd?: string;
   copilotCliBin?: string;
   marvisAppId?: string;
+  astrbotUrl?: string;
+  astrbotUsername?: string;
+  astrbotPassword?: string;
+  astrbotProjectId?: string;
+  astrbotSessionId?: string;
   rolesDir?: string;
   routesDir?: string;
   configName?: string;
@@ -96,6 +107,78 @@ type GatewayRuntime = {
     at: string;
   } | null;
   log: string[];
+};
+
+type NapCatInstanceDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  gatewayPort: number;
+  httpUrl: string;
+  webuiUrl?: string;
+  accessToken?: string;
+  launchCommand?: string;
+  workingDir?: string;
+};
+
+type AgentMaturity = "verified" | "experimental" | "stub";
+
+type AgentScanSession = {
+  id?: string;
+  name: string;
+  projectPath?: string;
+  projectId?: string;
+  updatedAt?: string;
+  userNamed?: boolean;
+};
+
+type AgentScanProject = {
+  id?: string;
+  label: string;
+  path: string;
+  exists: boolean;
+};
+
+type AgentScanResult = {
+  type: AgentAdapterType;
+  label: string;
+  maturity: AgentMaturity;
+  installed: boolean;
+  installCandidates?: Array<{ label: string; path?: string; url?: string }>;
+  auth?: { required: boolean; loggedIn?: boolean; loginUrl?: string; message?: string };
+  endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
+  projects?: AgentScanProject[];
+  sessions?: AgentScanSession[];
+  plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
+  warnings?: string[];
+};
+
+type AdapterRequirement = {
+  id: string;
+  label: string;
+  required?: boolean;
+  ok?: boolean;
+  detail?: string;
+  actionLabel?: string;
+  url?: string;
+  path?: string;
+};
+
+type AdapterEndpoint = {
+  label: string;
+  url: string;
+  healthy?: boolean;
+};
+
+type MessageAdapterScanResult = {
+  type: Exclude<MessageAdapterType, "disabled">;
+  label: string;
+  maturity: AgentMaturity;
+  installed: boolean;
+  installCandidates?: Array<{ label: string; path?: string; url?: string }>;
+  endpoints?: AdapterEndpoint[];
+  requirements?: AdapterRequirement[];
+  warnings?: string[];
 };
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -183,7 +266,7 @@ function readConfig(): GatewayConfigFile {
       continue;
     }
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
-    // routeConfig.json is primary; fall back to personaConfig.json only when notificationRules is absent.
+    // adapterConfig.json is primary; fall back to personaConfig.json only when notificationRules is absent.
     const personaConfig = (Array.isArray(raw.notificationRules) && raw.notificationRules.length > 0)
       ? {}
       : readRoleMessageConfigItem(raw.agentRoleId, configName);
@@ -227,7 +310,7 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
       }
       // Remove old config file if id (configName) changed
       const oldConfigName = routeRuntimeParts(existingRuntime.definition.id).configName;
-      const newConfigName = routeRuntimeParts(item.id).configName;
+      const newConfigName = sanitizeRoleId(item.configName) || routeRuntimeParts(item.id).configName;
       if (oldConfigName !== newConfigName) {
         const oldConfigPath = adapterConfigPath(oldConfigName);
         if (fs.existsSync(oldConfigPath)) {
@@ -246,7 +329,7 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
 }
 
 function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
-  if (!definition.id || !/^[a-zA-Z0-9_-]+$/.test(definition.id)) {
+  if (!definition.id || !sanitizeRoleId(definition.id)) {
     throw new Error(`Invalid gateway id: ${definition.id}`);
   }
   if (!Number.isInteger(definition.gatewayPort) || definition.gatewayPort <= 0) {
@@ -254,6 +337,12 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   }
   if (definition.webhookPort != null && (!Number.isInteger(definition.webhookPort) || definition.webhookPort <= 0)) {
     throw new Error(`Invalid webhook port for ${definition.id}: ${definition.webhookPort}`);
+  }
+  if (definition.fenneNoteWebhookPort != null && (!Number.isInteger(definition.fenneNoteWebhookPort) || definition.fenneNoteWebhookPort <= 0)) {
+    throw new Error(`Invalid FenneNote webhook port for ${definition.id}: ${definition.fenneNoteWebhookPort}`);
+  }
+  if (definition.xiaoaiWebhookPort != null && (!Number.isInteger(definition.xiaoaiWebhookPort) || definition.xiaoaiWebhookPort <= 0)) {
+    throw new Error(`Invalid XiaoAI webhook port for ${definition.id}: ${definition.xiaoaiWebhookPort}`);
   }
 
   const parts = routeRuntimeParts(definition.id);
@@ -268,6 +357,8 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   const rawMessageAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
   const messageInputsDisabled = definition.messageInputsDisabled === true || rawMessageAdapters.includes("disabled");
   const messageAdapters = normalizeMessageAdapters(rawMessageAdapters);
+  const napcatInstances = normalizeNapCatInstances(definition);
+  const primaryNapcat = napcatInstances.find((item) => item.enabled) ?? napcatInstances[0];
   const agentAdapters = normalizeAgentAdapters(definition.agentAdapters ?? ["codexDesktop"]);
   const pipelinePreset = typeof definition.pipelinePreset === "string" && definition.pipelinePreset.trim()
     ? definition.pipelinePreset.trim()
@@ -288,6 +379,11 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
     routeName,
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
+    gatewayPort: primaryNapcat?.gatewayPort ?? definition.gatewayPort,
+    napcatHttpUrl: primaryNapcat?.httpUrl ?? definition.napcatHttpUrl,
+    napcatWebuiUrl: primaryNapcat?.webuiUrl ?? definition.napcatWebuiUrl,
+    napcatAccessToken: primaryNapcat?.accessToken ?? definition.napcatAccessToken,
+    napcatInstances,
     codexCwd: normalizeCodexCwd(definition.codexCwd),
     groupNotificationTemplate: normalizeOptionalTemplate(definition.groupNotificationTemplate),
     groupAtNotificationTemplate: normalizeOptionalTemplate(definition.groupAtNotificationTemplate),
@@ -355,9 +451,55 @@ function normalizeRouteProfile(
 function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "webhook" || item === "heartbeat" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "disabled");
   const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
   return unique.length > 0 ? unique : ["napcat"];
+}
+
+function sanitizeInstanceId(value: unknown, fallback: string): string {
+  const raw = String(value || "").trim();
+  return raw.replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "") || fallback;
+}
+
+function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstanceDefinition[] {
+  const raw = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
+  const source = raw.length > 0
+    ? raw
+    : [{
+        id: "default",
+        name: "默认 NapCat",
+        enabled: true,
+        gatewayPort: definition.gatewayPort,
+        httpUrl: definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
+        webuiUrl: definition.napcatWebuiUrl ?? "http://127.0.0.1:6099/webui",
+        accessToken: definition.napcatAccessToken
+      }];
+
+  const used = new Set<string>();
+  return source.map((item, index) => {
+    const baseId = sanitizeInstanceId(item.id, `napcat-${index + 1}`);
+    let id = baseId;
+    let suffix = 2;
+    while (used.has(id)) {
+      id = `${baseId}-${suffix++}`;
+    }
+    used.add(id);
+    const gatewayPort = Number(item.gatewayPort || definition.gatewayPort || 8790 + index);
+    if (!Number.isInteger(gatewayPort) || gatewayPort <= 0) {
+      throw new Error(`Invalid NapCat instance port for ${definition.id}/${id}: ${gatewayPort}`);
+    }
+    return {
+      id,
+      name: item.name?.trim() || id,
+      enabled: item.enabled !== false,
+      gatewayPort,
+      httpUrl: item.httpUrl?.trim() || definition.napcatHttpUrl || "http://127.0.0.1:3000",
+      webuiUrl: item.webuiUrl?.trim() || definition.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
+      accessToken: item.accessToken ?? definition.napcatAccessToken ?? "",
+      launchCommand: item.launchCommand?.trim() || undefined,
+      workingDir: item.workingDir?.trim() || undefined
+    };
+  });
 }
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {
@@ -437,8 +579,14 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     gatewayPort: definition.gatewayPort,
     webhookPort: definition.webhookPort,
     webhookPath: definition.webhookPath,
+    fenneNoteWebhookPort: definition.fenneNoteWebhookPort,
+    fenneNoteWebhookPath: definition.fenneNoteWebhookPath,
+    xiaoaiWebhookPort: definition.xiaoaiWebhookPort,
+    xiaoaiWebhookPath: definition.xiaoaiWebhookPath,
     napcatHttpUrl: definition.napcatHttpUrl,
+    napcatWebuiUrl: definition.napcatWebuiUrl,
     napcatAccessToken: definition.napcatAccessToken,
+    napcatInstances: definition.napcatInstances,
     heartbeatIntervalSeconds: definition.heartbeatIntervalSeconds,
     heartbeatMessage: definition.heartbeatMessage,
     codexThreadName: definition.codexThreadName,
@@ -446,6 +594,11 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     copilotCwd: definition.copilotCwd,
     copilotCliBin: definition.copilotCliBin,
     marvisAppId: definition.marvisAppId,
+    astrbotUrl: definition.astrbotUrl,
+    astrbotUsername: definition.astrbotUsername,
+    astrbotPassword: definition.astrbotPassword,
+    astrbotProjectId: definition.astrbotProjectId,
+    astrbotSessionId: definition.astrbotSessionId,
     rolesDir: definition.rolesDir,
     agentRoleId: definition.agentRoleId,
     agentRoleFile: definition.agentRoleFile,
@@ -502,13 +655,7 @@ function ensurePersonaConfigFile(roleId: string): string {
     const safeRoleId = sanitizeRoleId(roleId);
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({
-      configs: [
-        {
-          configName: "default",
-          routeVariables: {},
-          notificationRules: []
-        }
-      ]
+      notificationRules: []
     }, null, 2), "utf8");
   }
 
@@ -532,6 +679,39 @@ function openFileWithDefaultApp(filePath: string): void {
   }
   const child = spawn(command, args, { detached: true, stdio: "ignore" });
   child.unref();
+}
+
+function spawnDetached(command: string, args: string[]): void {
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.unref();
+}
+
+function openUrlWithDefaultApp(url: string): void {
+  if (process.platform === "win32") {
+    spawnDetached("cmd", ["/c", "start", "", url]);
+    return;
+  }
+  if (process.platform === "darwin") {
+    spawnDetached("open", [url]);
+    return;
+  }
+  spawnDetached("xdg-open", [url]);
+}
+
+function openMarvisPayload(request: MarvisOpenRequest): Record<string, unknown> {
+  const appId = request.appId?.trim() || process.env.MARVIS_APP_ID?.trim() || "Tencent.Marvis";
+  const url = request.url?.trim() || process.env.MARVIS_URL?.trim() || "https://marvis.qq.com/";
+  if (process.platform === "win32") {
+    spawnDetached("explorer.exe", [`shell:AppsFolder\\${appId}`]);
+    return { ok: true, mode: "desktop", target: appId, message: `已尝试打开 Marvis 应用：${appId}` };
+  }
+
+  openUrlWithDefaultApp(url);
+  return { ok: true, mode: "url", target: url, message: `已尝试打开 Marvis 页面：${url}` };
 }
 
 function openConfigFilePayload(type: string | null, gatewayId: string | null, roleId: string | null): Record<string, unknown> {
@@ -597,7 +777,7 @@ function openConfigFilePayload(type: string | null, gatewayId: string | null, ro
 
 function sanitizeRoleId(raw: string | undefined): string {
   const value = raw?.trim() ?? "";
-  return /^[a-zA-Z0-9_-]+$/.test(value) ? value : "";
+  return /^[\p{L}\p{N}_-]+$/u.test(value) ? value : "";
 }
 
 function loadRuntimes(): void {
@@ -759,14 +939,28 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
     HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
     NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
+    NAPCAT_WEBUI_URL: definition.napcatWebuiUrl ?? process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
     NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
+    NAPCAT_INSTANCES: JSON.stringify(definition.napcatInstances ?? normalizeNapCatInstances(definition)),
     GATEWAY_PORT: String(definition.gatewayPort),
     WEBHOOK_PORT: String(definition.webhookPort ?? definition.gatewayPort),
     WEBHOOK_PATH: definition.webhookPath ?? "/webhook",
+    FENNENOTE_WEBHOOK_PORT: String(definition.fenneNoteWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
+    FENNENOTE_WEBHOOK_PATH: definition.fenneNoteWebhookPath ?? "/fennenote",
+    FENNOTE_WEBHOOK_PORT: String(definition.fenneNoteWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
+    FENNOTE_WEBHOOK_PATH: definition.fenneNoteWebhookPath ?? "/fennenote",
+    XIAOAI_WEBHOOK_PORT: String(definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
+    XIAOAI_WEBHOOK_PATH: definition.xiaoaiWebhookPath ?? "/xiaoai",
     CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? process.env.CODEX_CWD ?? rootDir,
     COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
     COPILOT_CWD: definition.copilotCwd?.trim() || process.env.COPILOT_CWD || rootDir,
+    MARVIS_APP_ID: definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis",
+    ASTRBOT_URL: definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185",
+    ASTRBOT_USERNAME: definition.astrbotUsername?.trim() || process.env.ASTRBOT_USERNAME || "",
+    ASTRBOT_PASSWORD: definition.astrbotPassword?.trim() || process.env.ASTRBOT_PASSWORD || "",
+    ASTRBOT_PROJECT_ID: definition.astrbotProjectId?.trim() || process.env.ASTRBOT_PROJECT_ID || "",
+    ASTRBOT_SESSION_ID: definition.astrbotSessionId?.trim() || process.env.ASTRBOT_SESSION_ID || "",
     ROLES_DIR: routeRolesDir,
     AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
     AGENT_ROLE_FILE: definition.agentRoleFile ?? "persona.md",
@@ -942,10 +1136,35 @@ function readCodexState(definition: GatewayDefinition): Record<string, unknown> 
     return readAstrbotState(definition);
   }
 
+  return readCodexBindingState(definition);
+}
+
+function readAgentStates(definition: GatewayDefinition): Record<string, unknown> {
+  const adapters = definition.agentAdapters ?? ["codexDesktop"];
+  const states: Record<string, unknown> = {};
+  for (const adapter of adapters) {
+    if (adapter === "codexDesktop" || adapter === "codexApp") {
+      states[adapter] = {
+        ...readCodexBindingState(definition),
+        agentAdapterType: adapter
+      };
+    } else if (adapter === "copilotCli") {
+      states[adapter] = readCopilotState(definition);
+    } else if (adapter === "marvis") {
+      states[adapter] = readMarvisState(definition);
+    } else if (adapter === "astrbot") {
+      states[adapter] = readAstrbotState(definition);
+    }
+  }
+  return states;
+}
+
+function readCodexBindingState(definition: GatewayDefinition): Record<string, unknown> {
   const statePath = path.join(dataDirFor(definition), "codex-state.json");
   ensureCodexStateBinding(definition, statePath);
   if (!fs.existsSync(statePath)) {
     return {
+      agentAdapterType: "codexDesktop",
       statePath,
       bound: false,
       message: "未找到 codex-state.json，还没有绑定 Agent 会话。"
@@ -956,11 +1175,13 @@ function readCodexState(definition: GatewayDefinition): Record<string, unknown> 
     const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
     return {
       ...state,
+      agentAdapterType: String(state.agentAdapterType || "codexDesktop"),
       statePath,
       bound: Boolean(state.monitorThreadId)
     };
   } catch (error) {
     return {
+      agentAdapterType: "codexDesktop",
       statePath,
       bound: false,
       lastNotificationError: error instanceof Error ? error.message : String(error),
@@ -975,11 +1196,10 @@ function readCopilotState(definition: GatewayDefinition): Record<string, unknown
     return {
       agentAdapterType: "copilotCli",
       statePath,
-      bound: true,
-      monitorThreadId: "copilot-cli",
-      monitorThreadName: "Copilot CLI",
-      monitorThreadSource: process.env.COPILOT_CLI_BIN || "copilot",
-      message: "Copilot CLI adapter is configured, but no prompt has been delivered yet."
+      bound: false,
+      monitorThreadName: definition.codexThreadName || "Copilot CLI",
+      monitorThreadSource: definition.copilotCliBin || process.env.COPILOT_CLI_BIN || "copilot",
+      message: "Copilot CLI 已配置，但还没有成功投递记录；需要完成同一会话连续两次注入烟测后才能视为已验证。"
     };
   }
 
@@ -988,7 +1208,7 @@ function readCopilotState(definition: GatewayDefinition): Record<string, unknown
     return {
       ...state,
       statePath,
-      bound: true
+      bound: Boolean(state.lastNotificationAt && !state.lastNotificationError)
     };
   } catch (error) {
     return {
@@ -1003,16 +1223,16 @@ function readCopilotState(definition: GatewayDefinition): Record<string, unknown
 
 function readMarvisState(definition: GatewayDefinition): Record<string, unknown> {
   const statePath = path.join(dataDirFor(definition), "marvis-state.json");
-  const marvisTarget = process.env.MARVIS_APP_ID || "Tencent.Marvis";
+  const marvisTarget = definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis";
   if (!fs.existsSync(statePath)) {
     return {
       agentAdapterType: "marvis",
       statePath,
-      bound: true,
-      monitorThreadId: "marvis-desktop",
+      bound: false,
+      handoffOnly: true,
       monitorThreadName: "Marvis",
       monitorThreadSource: marvisTarget,
-      message: "Marvis adapter is configured, but no prompt has been delivered yet."
+      message: "Marvis 当前是打开桌面端并复制 prompt 的人工接力，不能证明线程已绑定。"
     };
   }
 
@@ -1021,7 +1241,8 @@ function readMarvisState(definition: GatewayDefinition): Record<string, unknown>
     return {
       ...state,
       statePath,
-      bound: true
+      bound: false,
+      handoffOnly: true
     };
   } catch (error) {
     return {
@@ -1036,25 +1257,29 @@ function readMarvisState(definition: GatewayDefinition): Record<string, unknown>
 
 function readAstrbotState(definition: GatewayDefinition): Record<string, unknown> {
   const statePath = path.join(dataDirFor(definition), "astrbot-agent-state.json");
-  const astrbotUrl = process.env.ASTRBOT_URL ?? "http://127.0.0.1:6185";
+  const astrbotUrl = definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185";
   if (!fs.existsSync(statePath)) {
     return {
       agentAdapterType: "astrbot",
       statePath,
-      bound: true,
-      monitorThreadId: "astrbot-agent",
+      bound: false,
       monitorThreadName: "AstrBot Agent",
       monitorThreadSource: astrbotUrl,
-      message: "AstrBot adapter is configured, but no notification has been delivered yet."
+      message: "AstrBot 已配置，但还没有成功投递记录；插件 API 尚未提供可选会话。"
     };
   }
 
   try {
     const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    const sessionId = definition.astrbotSessionId?.trim();
+    const hasSuccessfulDelivery = Boolean(state.lastNotificationAt && !state.lastNotificationError);
     return {
       ...state,
       statePath,
-      bound: true
+      bound: hasSuccessfulDelivery,
+      monitorThreadId: state.monitorThreadId ?? (hasSuccessfulDelivery ? (sessionId ? `astrbot-chatui:${sessionId}` : "astrbot-plugin:rabiroute_agent") : undefined),
+      monitorThreadName: state.monitorThreadName ?? (sessionId ? `AstrBot ChatUI ${sessionId}` : "AstrBot rabiroute_agent"),
+      monitorThreadSource: state.monitorThreadSource ?? astrbotUrl
     };
   } catch (error) {
     return {
@@ -1076,6 +1301,743 @@ type SessionThreadRecord = {
   threadName: string;
   updatedAt: string;
 };
+
+function normalizeComparablePath(value: string | undefined): string {
+  if (!value) return "";
+  const normalized = path.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function projectOptionsFromPaths(paths: string[]): Array<{ label: string; path: string; exists: boolean }> {
+  const byNormalized = new Map<string, { label: string; path: string; exists: boolean }>();
+  for (const item of paths) {
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const normalized = normalizeComparablePath(trimmed);
+    if (!normalized || byNormalized.has(normalized)) continue;
+    byNormalized.set(normalized, {
+      label: path.basename(trimmed) || trimmed,
+      path: trimmed,
+      exists: fs.existsSync(trimmed)
+    });
+  }
+  return [...byNormalized.values()];
+}
+
+async function checkHttpEndpoint(url: string, timeoutMs = 1200): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      signal: controller.signal
+    });
+    return response.status < 500;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function runtimeAdapterTypes(definition: GatewayDefinition): MessageAdapterType[] {
+  if (definition.messageInputsDisabled) return ["disabled"];
+  return definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
+}
+
+function adapterRuntimes(type: MessageAdapterType): GatewayRuntime[] {
+  return [...runtimes.values()].filter((runtime) => runtimeAdapterTypes(runtime.definition).includes(type));
+}
+
+function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType): AdapterEndpoint | null {
+  if (type !== "webhook" && type !== "fennenote" && type !== "xiaoai") return null;
+  const definition = runtime.definition;
+  const status = readGatewayStatus(definition) as Record<string, any>;
+  const callback = status.httpCallbacks?.[type];
+  const port = type === "fennenote"
+    ? definition.fenneNoteWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
+    : type === "xiaoai"
+      ? definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
+      : definition.webhookPort ?? definition.gatewayPort;
+  const pathValue = type === "fennenote"
+    ? definition.fenneNoteWebhookPath ?? "/fennenote"
+    : type === "xiaoai"
+      ? definition.xiaoaiWebhookPath ?? "/xiaoai"
+      : definition.webhookPath ?? "/webhook";
+  const normalized = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
+  const url = String(callback?.url || `http://127.0.0.1:${port}${normalized}`);
+  return {
+    label: `${sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName} 回调入口`,
+    url,
+    healthy: Boolean(runtime.process && callback)
+  };
+}
+
+function routeHasRecentMessages(runtime: GatewayRuntime, type: MessageAdapterType): boolean {
+  try {
+    const files = readMessageFiles(runtime.definition) as Record<string, { entries?: unknown[] }>;
+    return Boolean(files[type]?.entries?.length);
+  } catch {
+    return false;
+  }
+}
+
+async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterScanResult>> {
+  const napcatProcesses = await detectNapcatProcesses();
+  const napcatRuntimes = adapterRuntimes("napcat");
+  const napcatInstances = napcatRuntimes.flatMap((runtime) => runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition));
+  const napcatWebuiEndpointRows = await Promise.all(napcatInstances.map(async (instance) => ({
+    label: `${instance.name || instance.id} WebUI`,
+    url: instance.webuiUrl || "http://127.0.0.1:6099/webui",
+    healthy: await checkHttpEndpoint(instance.webuiUrl || "http://127.0.0.1:6099/webui", 1200)
+  })));
+  const napcatWebuiEndpoints = [...napcatWebuiEndpointRows.reduce((byUrl, endpoint) => {
+    const existing = byUrl.get(endpoint.url);
+    if (!existing || endpoint.healthy) byUrl.set(endpoint.url, endpoint);
+    return byUrl;
+  }, new Map<string, AdapterEndpoint>()).values()];
+  const napcatWebuiToken = readNapcatWebuiToken(napcatWebuiEndpoints[0]?.url || "http://127.0.0.1:6099/webui");
+  const napcatConnected = napcatRuntimes.some((runtime) => {
+    const status = readGatewayStatus(runtime.definition) as Record<string, any>;
+    const instances = status.napcatInstances;
+    if (instances && typeof instances === "object") {
+      return Object.values(instances).some((item: any) => Boolean(item?.connected || item?.botUserId));
+    }
+    return Boolean(status.napcat?.connected || status.napcat?.botUserId);
+  });
+
+  const fenneRuntimes = adapterRuntimes("fennenote");
+  const fenneCallbacks = fenneRuntimes.map((runtime) => routeCallbackEndpoint(runtime, "fennenote")).filter(Boolean) as AdapterEndpoint[];
+  const fenneCallbackReady = fenneCallbacks.some((endpoint) => endpoint.healthy);
+  const fennePlaybackHealthy = await checkHttpEndpoint(fenneNotePlaybackUrl, 1200);
+  const fenneRecent = fenneRuntimes.some((runtime) => routeHasRecentMessages(runtime, "fennenote"));
+
+  const xiaoaiRuntimes = adapterRuntimes("xiaoai");
+  const xiaoaiCallbacks = xiaoaiRuntimes.map((runtime) => routeCallbackEndpoint(runtime, "xiaoai")).filter(Boolean) as AdapterEndpoint[];
+  const xiaoaiCallbackReady = xiaoaiCallbacks.some((endpoint) => endpoint.healthy);
+  const xiaoaiBridgeDir = path.join(rootDir, "plugin-adapters", "xiaoai-rabiroute");
+  const xiaoaiBridgePackage = path.join(xiaoaiBridgeDir, "package.json");
+  const xiaoaiBridgeUrl = process.env.XIAOAI_BRIDGE_URL
+    || `http://127.0.0.1:${process.env.XIAOAI_BRIDGE_PORT || "8798"}`;
+  const xiaoaiBridgeHealthUrl = `${xiaoaiBridgeUrl.replace(/\/+$/, "")}/health`;
+  const xiaoaiBridgeHealthy = await checkHttpEndpoint(xiaoaiBridgeHealthUrl, 1200);
+  const xiaoaiRecent = xiaoaiRuntimes.some((runtime) => routeHasRecentMessages(runtime, "xiaoai"));
+  const xiaoaiLocalConfig = path.join(xiaoaiBridgeDir, "xiaoai-local.config.json");
+  const openXiaoAiDir = path.join(xiaoaiBridgeDir, "vendor", "open-xiaoai");
+
+  const webhookRuntimes = adapterRuntimes("webhook");
+  const webhookCallbacks = webhookRuntimes.map((runtime) => routeCallbackEndpoint(runtime, "webhook")).filter(Boolean) as AdapterEndpoint[];
+  const webhookCallbackReady = webhookCallbacks.some((endpoint) => endpoint.healthy);
+
+  return {
+    napcat: {
+      type: "napcat",
+      label: "NapCat / OneBot",
+      maturity: "verified",
+      installed: napcatProcesses.length > 0 || napcatWebuiEndpoints.some((endpoint) => endpoint.healthy),
+      installCandidates: [
+        { label: "NapCatQQ Shell / Windows 安装文档", url: "https://www.napcat.wiki/guide/boot/Shell" },
+        { label: "NapCatQQ Releases", url: "https://github.com/NapNeko/NapCatQQ/releases" }
+      ],
+      endpoints: napcatWebuiEndpoints,
+      requirements: [
+        { id: "process", label: "NapCat 或 QQNT 后台进程", required: true, ok: napcatProcesses.length > 0, detail: napcatProcesses.length ? napcatProcesses.slice(0, 3).map(item => `${item.name}(${item.pid})`).join(", ") : "未发现本机 NapCat/QQNT 进程。" },
+        { id: "route", label: "RabiRoute NapCat WS 入口", required: true, ok: napcatRuntimes.some((runtime) => Boolean(runtime.process)), detail: napcatRuntimes.length ? "已配置 NapCat 消息端。" : "还没有路由启用 NapCat。" },
+        { id: "login", label: "OneBot 登录资料", required: true, ok: napcatConnected, detail: napcatConnected ? "已读取到连接或登录资料。" : "尚未看到 WS 连接或 get_login_info 成功。" },
+        { id: "webui", label: "NapCat WebUI 可访问", required: false, ok: napcatWebuiEndpoints.some((endpoint) => endpoint.healthy), detail: "用于配置 WebSocket Client、HTTP Server 和多账号实例。" },
+        { id: "webui-token", label: "NapCat WebUI 登录 Token", required: true, ok: napcatWebuiToken.found, detail: napcatWebuiToken.found ? `已从 ${napcatWebuiToken.configPath} 读取到 ${napcatWebuiToken.tokenLength} 位登录密钥。` : napcatWebuiToken.message }
+      ],
+      warnings: [
+        ...(napcatConnected ? [] : ["NapCat 要在 WebUI 中把 WebSocket Client 连到 RabiRoute 对应 WS 地址。"]),
+        "多 QQ 需要多个 NapCat instance；每个实例单独配置 WS 端口、HTTP 地址、WebUI 和启动命令。"
+      ]
+    },
+    heartbeat: {
+      type: "heartbeat",
+      label: "定时触发",
+      maturity: "verified",
+      installed: true,
+      requirements: [
+        { id: "route", label: "RabiRoute 内部定时器", required: true, ok: true, detail: "无需额外安装。" },
+        { id: "agent", label: "Agent 端可接收消息", required: true, ok: undefined, detail: "保存后用“立即触发”或日志页验证投递。" }
+      ],
+      warnings: ["定时触发不会证明外部平台可用，只能验证路由到 Agent 的链路。"]
+    },
+    fennenote: {
+      type: "fennenote",
+      label: "FenneNote / 芬妮笔记",
+      maturity: "experimental",
+      installed: fenneCallbackReady || fennePlaybackHealthy,
+      installCandidates: [
+        { label: "语音交互工作站接线说明", url: "https://github.com/vb2250158/RabiRoute/blob/main/docs/voice-interaction-workstation.md" },
+        { label: "本地说明：docs/voice-interaction-workstation.md", path: path.join(rootDir, "docs", "voice-interaction-workstation.md") }
+      ],
+      endpoints: [
+        ...fenneCallbacks,
+        { label: "FenneNote 播放/回复端", url: fenneNotePlaybackUrl, healthy: fennePlaybackHealthy }
+      ],
+      requirements: [
+        { id: "callback", label: "RabiRoute FenneNote 回调入口", required: true, ok: fenneCallbackReady, detail: fenneCallbacks[0]?.url || "添加 FenneNote 消息端并重启 route 后生成。" },
+        { id: "app", label: "FenneNote 桌面端/语音转写端", required: true, ok: fennePlaybackHealthy || undefined, detail: fennePlaybackHealthy ? "检测到 FenneNote 本地播放/回复端可达。" : "此仓库不内置 FenneNote，需要按你的实际分发渠道安装并运行。" },
+        { id: "webhook-config", label: "FenneNote 已配置转写 webhook", required: true, ok: fenneRecent, detail: fenneRecent ? "已收到过 FenneNote 语音转写事件。" : "尚未收到 FenneNote 请求；请把回调地址填到 FenneNote 的转写/事件配置里。" },
+        { id: "tts", label: "OumuQ / TTS worker", required: false, ok: undefined, detail: "只做语音输入时可先不配；需要播报回复时再配置。" }
+      ],
+      warnings: [
+        "RabiRoute 只能检测自己的回调入口和可选播放端；FenneNote 是否真正录音/转写，需要 FenneNote 端或最近请求日志确认。",
+        "不要把 FenneNote 叫成 Webhook；日志和消息文件会按 FenneNote 独立分组。"
+      ]
+    },
+    xiaoai: {
+      type: "xiaoai",
+      label: "小米音箱 / 小爱",
+      maturity: "experimental",
+      installed: fs.existsSync(xiaoaiBridgePackage),
+      installCandidates: [
+        { label: "RabiRoute 小爱桥接适配器", path: xiaoaiBridgeDir },
+        { label: "小爱接入 Runbook", path: path.join(xiaoaiBridgeDir, "RUNBOOK.md") },
+        { label: "open-xiaoai 参考项目", url: "https://github.com/idootop/open-xiaoai" },
+        { label: "xiaogpt 参考项目", url: "https://github.com/yihong0618/xiaogpt" },
+        { label: "小爱音箱接入 RabiRoute 技术路线", url: "https://github.com/vb2250158/RabiRoute/blob/main/docs/xiaoai-integration/xiaoai-rabiroute-intercept-route.md" }
+      ],
+      endpoints: [
+        ...xiaoaiCallbacks,
+        { label: "小爱桥服务", url: xiaoaiBridgeHealthUrl, healthy: xiaoaiBridgeHealthy }
+      ],
+      requirements: [
+        { id: "bridge-package", label: "PC 侧小爱桥适配器", required: true, ok: fs.existsSync(xiaoaiBridgePackage), detail: fs.existsSync(xiaoaiBridgePackage) ? xiaoaiBridgeDir : "缺少 plugin-adapters/xiaoai-rabiroute。" },
+        { id: "bridge-running", label: "小爱桥服务已启动", required: true, ok: xiaoaiBridgeHealthy, detail: xiaoaiBridgeHealthy ? xiaoaiBridgeHealthUrl : `未访问到 ${xiaoaiBridgeHealthUrl}；在小爱桥目录运行 npm start。` },
+        { id: "speaker-client", label: "音箱侧 open-xiaoai / xiaogpt / 自定义桥", required: true, ok: undefined, detail: fs.existsSync(openXiaoAiDir) ? "已发现 vendor/open-xiaoai 参考代码；真机补丁/桥接仍需人工确认。" : "需要能从小爱音箱或桥服务把语音事件转发到 PC 侧。" },
+        { id: "local-config", label: "本地小爱配置", required: false, ok: fs.existsSync(xiaoaiLocalConfig), detail: fs.existsSync(xiaoaiLocalConfig) ? xiaoaiLocalConfig : "可从 xiaoai-local.config.example.json 复制生成本地配置。" },
+        { id: "callback", label: "RabiRoute 小爱回调入口", required: true, ok: xiaoaiCallbackReady, detail: xiaoaiCallbacks[0]?.url || "添加小米音箱消息端并重启 route 后生成。" },
+        { id: "recent-event", label: "最近收到小爱事件", required: true, ok: xiaoaiRecent, detail: xiaoaiRecent ? "已收到过小爱语音转写事件。" : "尚未收到小爱桥转发的事件。" }
+      ],
+      warnings: [
+        "小米音箱不是直接连 RabiRoute：需要 open-xiaoai/xiaogpt/自定义桥这类入口层，把语音文本 POST 到 RabiRoute。",
+        "open-xiaoai 路线涉及机型、固件和刷机风险；只在确认型号和备份后操作。"
+      ]
+    },
+    webhook: {
+      type: "webhook",
+      label: "通用 Webhook",
+      maturity: "experimental",
+      installed: webhookCallbackReady,
+      endpoints: webhookCallbacks,
+      requirements: [
+        { id: "callback", label: "RabiRoute 通用回调入口", required: true, ok: webhookCallbackReady, detail: webhookCallbacks[0]?.url || "添加通用 Webhook 消息端并重启 route 后生成。" },
+        { id: "sender", label: "外部系统已配置 POST", required: true, ok: webhookRuntimes.some((runtime) => routeHasRecentMessages(runtime, "webhook")), detail: "RabiRoute 无法自动知道外部系统是否已配置；以最近请求日志为准。" }
+      ],
+      warnings: ["只有真正不知道来源的外部 POST 才用通用 Webhook；FenneNote、小爱、Home Assistant 等应拆成具体消息端。"]
+    }
+  };
+}
+
+type AstrbotLoginTestRequest = {
+  url?: string;
+  username?: string;
+  password?: string;
+};
+
+type AstrbotSessionScan = {
+  authVerified: boolean;
+  authMessage?: string;
+  projects: AgentScanProject[];
+  sessions: AgentScanSession[];
+  source: "api" | "local-db" | "none";
+};
+
+type NapcatHealthRequest = {
+  httpUrl?: string;
+  webuiUrl?: string;
+  accessToken?: string;
+  gatewayPort?: number;
+};
+
+type NapcatWebuiTokenInfo = {
+  found: boolean;
+  token?: string;
+  tokenLength?: number;
+  configPath?: string;
+  loginUrl?: string;
+  message?: string;
+};
+
+type NapcatLaunchRequest = {
+  gatewayId?: string;
+  instanceId?: string;
+};
+
+type MarvisOpenRequest = {
+  appId?: string;
+  url?: string;
+};
+
+type NapcatOneBotResponse<T> = {
+  status?: string;
+  retcode?: number;
+  message?: string;
+  wording?: string;
+  data?: T;
+};
+
+async function testAstrbotLogin(request: AstrbotLoginTestRequest): Promise<Record<string, unknown>> {
+  const baseUrl = (request.url?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185").replace(/\/+$/, "");
+  const username = request.username?.trim() || process.env.ASTRBOT_USERNAME || "";
+  const password = request.password?.trim() || process.env.ASTRBOT_PASSWORD || "";
+  if (!password) {
+    return { ok: false, status: 400, message: "缺少 AstrBot 密码。" };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, password }),
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let body: { status?: string; data?: { token?: string } | null; message?: string; error?: string; detail?: string } = {};
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      body = { detail: text };
+    }
+
+    if (!response.ok || body.status === "error" || body.error) {
+      const rawMessage = body.message || body.error || body.detail || text || `HTTP ${response.status}`;
+      const credentialHint = response.status === 401 || response.status === 403 || /password|credential|用户名|密码|登录|auth/i.test(rawMessage);
+      return {
+        ok: false,
+        status: response.status,
+        message: credentialHint ? `AstrBot 登录失败：账号或密码可能不正确。(${rawMessage})` : `AstrBot 登录失败：${rawMessage}`
+      };
+    }
+
+    if (!body.data?.token) {
+      return { ok: false, status: response.status, message: "AstrBot 登录响应里没有 token，可能 API 版本不匹配。" };
+    }
+
+    const token = body.data.token;
+    const sessions = await scanAstrbotViaDashboardApi(baseUrl, username, token);
+    const counts = sessions.source === "api"
+      ? ` 已读取 ${sessions.projects.length} 个项目、${sessions.sessions.length} 个会话。`
+      : "";
+    return { ok: true, status: response.status, message: `AstrBot 登录验证成功。${counts}` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, status: 0, message: message.includes("abort") ? "AstrBot 登录验证超时。" : `AstrBot 登录验证失败：${message}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loginAstrbotDashboard(baseUrl: string, username: string, password: string): Promise<{ token?: string; message?: string }> {
+  if (!password) {
+    return { message: "缺少 AstrBot 密码。" };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4200);
+  try {
+    const response = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, password }),
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let body: { status?: string; data?: { token?: string } | null; message?: string; error?: string; detail?: string } = {};
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      body = { detail: text };
+    }
+    if (!response.ok || body.status === "error" || body.error) {
+      return { message: body.message || body.error || body.detail || `HTTP ${response.status}` };
+    }
+    return { token: body.data?.token, message: body.data?.token ? undefined : "登录响应缺少 token。" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { message: message.includes("abort") ? "登录请求超时。" : message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchAstrbotJson<T>(url: string, token: string): Promise<T | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) return null;
+    const body = await response.json() as { status?: string; data?: T };
+    if (body.status === "error") return null;
+    return body.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function scanAstrbotViaDashboardApi(baseUrl: string, username: string, token: string): Promise<AstrbotSessionScan> {
+  type ProjectApiItem = { project_id?: string; title?: string; emoji?: string; updated_at?: string };
+  type SessionApiItem = { session_id?: string; platform_id?: string; display_name?: string; updated_at?: string };
+  const projectsRaw = await fetchAstrbotJson<ProjectApiItem[]>(`${baseUrl}/api/chatui_project/list`, token);
+  const sessionsRaw = await fetchAstrbotJson<SessionApiItem[]>(`${baseUrl}/api/chat/sessions?platform_id=webchat`, token);
+  if (!projectsRaw && !sessionsRaw) {
+    return { authVerified: true, projects: [], sessions: [], source: "none", authMessage: "已登录，但未读取到项目/会话 API。" };
+  }
+  const projects: AgentScanProject[] = (projectsRaw ?? []).map((project) => {
+    const label = [project.emoji, project.title].filter(Boolean).join(" ") || project.project_id || "未命名项目";
+    const pathValue = project.title || label;
+    return {
+      id: project.project_id,
+      label,
+      path: pathValue,
+      exists: pathValue ? fs.existsSync(pathValue) : false
+    };
+  });
+  const sessions: AgentScanSession[] = (sessionsRaw ?? []).map((session) => ({
+    id: session.session_id,
+    name: session.display_name || session.session_id || "未命名会话",
+    updatedAt: session.updated_at
+  }));
+  for (const project of projectsRaw ?? []) {
+    if (!project.project_id) continue;
+    const projectSessions = await fetchAstrbotJson<SessionApiItem[]>(`${baseUrl}/api/chatui_project/get_sessions?project_id=${encodeURIComponent(project.project_id)}`, token);
+    for (const session of projectSessions ?? []) {
+      const existing = sessions.find((item) => item.id === session.session_id);
+      if (existing) {
+        existing.projectId = project.project_id;
+        existing.projectPath = project.title;
+      } else {
+        sessions.push({
+          id: session.session_id,
+          name: session.display_name || session.session_id || "未命名会话",
+          projectId: project.project_id,
+          projectPath: project.title,
+          updatedAt: session.updated_at
+        });
+      }
+    }
+  }
+  return { authVerified: true, projects, sessions, source: "api", authMessage: `已通过 Dashboard API 读取 ${projects.length} 个项目、${sessions.length} 个会话。` };
+}
+
+async function scanAstrbotLocalDb(): Promise<Pick<AstrbotSessionScan, "projects" | "sessions" | "source">> {
+  const dbPath = path.join(os.homedir(), ".astrbot", "data", "data_v4.db");
+  if (!fs.existsSync(dbPath)) {
+    return { projects: [], sessions: [], source: "none" };
+  }
+  const pyCandidates = [
+    "py",
+    "python",
+    path.join(process.env.LOCALAPPDATA ?? "", "AstrBot", "backend", "python", "python.exe")
+  ].filter(Boolean);
+  const script = `
+import json, sqlite3, sys
+db_path = sys.argv[1]
+con = sqlite3.connect(db_path)
+con.row_factory = sqlite3.Row
+projects = [dict(r) for r in con.execute("select project_id, title, emoji, updated_at from chatui_projects order by updated_at desc limit 100")]
+sessions = [dict(r) for r in con.execute("""select s.session_id, s.display_name, s.updated_at, p.project_id, p.title as project_title
+from platform_sessions s
+left join session_project_relations rel on rel.session_id=s.session_id
+left join chatui_projects p on p.project_id=rel.project_id
+where s.platform_id='webchat'
+order by s.updated_at desc limit 200""")]
+print(json.dumps({"projects": projects, "sessions": sessions}, ensure_ascii=False))
+con.close()
+`.trim();
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  for (const py of pyCandidates) {
+    try {
+      const args = path.basename(py).toLowerCase() === "py"
+        ? ["-3", "-c", script, dbPath]
+        : ["-c", script, dbPath];
+      const { stdout } = await execFileAsync(py, args, {
+        timeout: 3000,
+        windowsHide: true,
+        encoding: "utf8",
+        env: { ...process.env, PYTHONIOENCODING: "utf-8" }
+      });
+      const parsed = JSON.parse(stdout) as {
+        projects?: Array<{ project_id?: string; title?: string; emoji?: string; updated_at?: string }>;
+        sessions?: Array<{ session_id?: string; display_name?: string; updated_at?: string; project_id?: string; project_title?: string }>;
+      };
+      const projects: AgentScanProject[] = (parsed.projects ?? []).map((project) => {
+        const label = [project.emoji, project.title].filter(Boolean).join(" ") || project.project_id || "未命名项目";
+        const pathValue = project.title || label;
+        return {
+          id: project.project_id,
+          label,
+          path: pathValue,
+          exists: pathValue ? fs.existsSync(pathValue) : false
+        };
+      });
+      const sessions: AgentScanSession[] = (parsed.sessions ?? []).map((session) => ({
+        id: session.session_id,
+        name: session.display_name || session.session_id || "未命名会话",
+        projectId: session.project_id,
+        projectPath: session.project_title,
+        updatedAt: session.updated_at
+      }));
+      return { projects, sessions, source: "local-db" };
+    } catch {
+      // try next interpreter
+    }
+  }
+  return { projects: [], sessions: [], source: "none" };
+}
+
+async function detectNapcatProcesses(): Promise<Array<{ name: string; pid: string }>> {
+  if (process.platform !== "win32") {
+    return [];
+  }
+  try {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    const { stdout } = await execFileAsync("tasklist.exe", ["/FO", "CSV", "/NH"], { timeout: 2500 });
+    return stdout.split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => line.match(/^"([^"]+)","([^"]+)"/))
+      .filter((match): match is RegExpMatchArray => Boolean(match))
+      .map(match => ({ name: match[1], pid: match[2] }))
+      .filter(item => /napcat|qqnt|^qq\.exe$/i.test(item.name));
+  } catch {
+    return [];
+  }
+}
+
+function napcatWebuiLoginUrl(webuiUrl: string, token: string): string {
+  try {
+    const parsed = new URL(webuiUrl);
+    parsed.searchParams.set("token", token);
+    return parsed.toString();
+  } catch {
+    const separator = webuiUrl.includes("?") ? "&" : "?";
+    return `${webuiUrl}${separator}token=${encodeURIComponent(token)}`;
+  }
+}
+
+function addNapcatWebuiConfigCandidate(candidates: Set<string>, candidate: string | undefined): void {
+  const value = candidate?.trim();
+  if (!value) return;
+  candidates.add(path.resolve(value));
+}
+
+function napcatWebuiConfigCandidates(): string[] {
+  const candidates = new Set<string>();
+  addNapcatWebuiConfigCandidate(candidates, process.env.NAPCAT_WEBUI_CONFIG);
+  if (process.env.NAPCAT_CONFIG_DIR) {
+    addNapcatWebuiConfigCandidate(candidates, path.join(process.env.NAPCAT_CONFIG_DIR, "webui.json"));
+  }
+
+  for (const runtime of runtimes.values()) {
+    for (const instance of runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)) {
+      const workingDir = instance.workingDir?.trim();
+      if (workingDir) {
+        addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "napcat", "config", "webui.json"));
+        addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "config", "webui.json"));
+        addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "webui.json"));
+      }
+      const launchCommand = instance.launchCommand?.trim();
+      if (launchCommand) {
+        const commandPath = launchCommand.match(/^"([^"]+)"/)?.[1] || launchCommand.split(/\s+/)[0];
+        if (commandPath && (commandPath.includes("\\") || commandPath.includes("/"))) {
+          const commandDir = path.dirname(path.resolve(workingDir || rootDir, commandPath));
+          addNapcatWebuiConfigCandidate(candidates, path.join(commandDir, "napcat", "config", "webui.json"));
+          addNapcatWebuiConfigCandidate(candidates, path.join(commandDir, "config", "webui.json"));
+        }
+      }
+    }
+  }
+
+  const searchRoots = [
+    path.resolve(rootDir, "..", "tools", "NapCat"),
+    path.resolve(rootDir, "tools", "NapCat"),
+    path.resolve(os.homedir(), "NapCat"),
+    path.resolve(os.homedir(), "AppData", "Local", "NapCat")
+  ];
+  for (const base of searchRoots) {
+    try {
+      if (!fs.existsSync(base)) continue;
+      addNapcatWebuiConfigCandidate(candidates, path.join(base, "napcat", "config", "webui.json"));
+      addNapcatWebuiConfigCandidate(candidates, path.join(base, "config", "webui.json"));
+      for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const dir = path.join(base, entry.name);
+        addNapcatWebuiConfigCandidate(candidates, path.join(dir, "napcat", "config", "webui.json"));
+        addNapcatWebuiConfigCandidate(candidates, path.join(dir, "config", "webui.json"));
+      }
+    } catch {
+      // Ignore inaccessible candidate roots.
+    }
+  }
+
+  return [...candidates].filter((candidate) => fs.existsSync(candidate));
+}
+
+function readNapcatWebuiToken(webuiUrl: string): NapcatWebuiTokenInfo {
+  let expectedPort = 0;
+  try {
+    expectedPort = Number(new URL(webuiUrl).port || 6099);
+  } catch {
+    expectedPort = 0;
+  }
+
+  const candidates = napcatWebuiConfigCandidates();
+  let fallback: NapcatWebuiTokenInfo | null = null;
+  for (const configPath of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")) as { token?: unknown; port?: unknown; disableWebUI?: unknown };
+      const token = String(parsed.token || "").trim();
+      if (!token || parsed.disableWebUI === true) continue;
+      const info: NapcatWebuiTokenInfo = {
+        found: true,
+        token,
+        tokenLength: token.length,
+        configPath,
+        loginUrl: napcatWebuiLoginUrl(webuiUrl, token)
+      };
+      const port = Number(parsed.port || 0);
+      if (!fallback) fallback = info;
+      if (!expectedPort || !port || port === expectedPort) {
+        return info;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return fallback ?? {
+    found: false,
+    message: candidates.length
+      ? "已找到 NapCat webui.json，但没有读到可用 token。"
+      : "未找到 NapCat config/webui.json；可在 NapCat 启动日志里查看 WebUI token。"
+  };
+}
+
+async function testNapcatHealth(request: NapcatHealthRequest): Promise<Record<string, unknown>> {
+  const httpUrl = (request.httpUrl?.trim() || "http://127.0.0.1:3000").replace(/\/+$/, "");
+  const webuiUrl = request.webuiUrl?.trim() || "http://127.0.0.1:6099/webui";
+  const token = request.accessToken?.trim() || "";
+  const gatewayPort = Number(request.gatewayPort || 0);
+  const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8" };
+  if (token) headers.authorization = `Bearer ${token}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  let http: Record<string, unknown>;
+  try {
+    const response = await fetch(`${httpUrl}/get_login_info`, {
+      method: "POST",
+      headers,
+      body: "{}",
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let body: NapcatOneBotResponse<{ user_id?: number | string; nickname?: string }> = {};
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      body = { message: text };
+    }
+    const failed = !response.ok
+      || (body.retcode != null && body.retcode !== 0)
+      || body.status === "failed";
+    if (failed) {
+      http = {
+        ok: false,
+        status: response.status,
+        message: body.wording || body.message || text || `HTTP ${response.status}`
+      };
+    } else {
+      http = {
+        ok: true,
+        status: response.status,
+        userId: body.data?.user_id,
+        nickname: body.data?.nickname
+      };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    http = { ok: false, status: 0, message: message.includes("abort") ? "NapCat HTTP 检查超时。" : message };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const webui = {
+    url: webuiUrl,
+    reachable: await checkHttpEndpoint(webuiUrl, 1600),
+    ...readNapcatWebuiToken(webuiUrl)
+  };
+  const processes = await detectNapcatProcesses();
+  return {
+    ok: Boolean(http.ok),
+    http,
+    webui,
+    gatewayPort,
+    wsUrl: gatewayPort > 0 ? `ws://127.0.0.1:${gatewayPort}` : "",
+    process: {
+      found: processes.length > 0,
+      candidates: processes.slice(0, 8)
+    }
+  };
+}
+
+function launchNapcatInstance(request: NapcatLaunchRequest): Record<string, unknown> {
+  const gatewayId = request.gatewayId?.trim();
+  const instanceId = request.instanceId?.trim();
+  if (!gatewayId || !instanceId) {
+    throw new Error("缺少 gatewayId 或 instanceId。");
+  }
+  const runtime = runtimes.get(gatewayId);
+  if (!runtime) {
+    throw new Error(`未找到路由：${gatewayId}`);
+  }
+  const instance = (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition))
+    .find((item) => item.id === instanceId);
+  if (!instance) {
+    throw new Error(`未找到 NapCat 实例：${instanceId}`);
+  }
+  const command = instance.launchCommand?.trim();
+  if (!command) {
+    throw new Error("这个 NapCat 实例还没有填写启动命令。");
+  }
+  const cwd = instance.workingDir?.trim() || rootDir;
+  if (process.platform === "win32") {
+    const child = spawn("cmd", ["/c", "start", "", "/D", cwd, "cmd", "/c", command], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true
+    });
+    child.unref();
+  } else {
+    const child = spawn(command, [], {
+      cwd,
+      detached: true,
+      shell: true,
+      stdio: "ignore"
+    });
+    child.unref();
+  }
+  appendLog(runtime, `launch NapCat instance ${instance.name || instance.id}: ${command}`);
+  return {
+    ok: true,
+    message: `已尝试启动 NapCat 后台：${instance.name || instance.id}`,
+    instance: {
+      id: instance.id,
+      name: instance.name,
+      gatewayPort: instance.gatewayPort,
+      httpUrl: instance.httpUrl,
+      webuiUrl: instance.webuiUrl
+    }
+  };
+}
 
 function readLatestSessionThreads(indexPath: string): SessionThreadRecord[] {
   if (!fs.existsSync(indexPath)) {
@@ -1198,6 +2160,201 @@ function readGatewayStatus(definition: GatewayDefinition): Record<string, unknow
   }
 }
 
+function readJsonlTail(filePath: string, limit = 8): Array<Record<string, unknown>> {
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  try {
+    return fs.readFileSync(filePath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-limit)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          return { rawLine: line };
+        }
+      });
+  } catch (error) {
+    return [{
+      error: error instanceof Error ? error.message : String(error),
+      path: filePath
+    }];
+  }
+}
+
+function messageFileCandidateDirs(definition: GatewayDefinition): string[] {
+  const dirs = new Set<string>();
+  dirs.add(dataDirFor(definition));
+  const roleId = sanitizeRoleId(definition.agentRoleId);
+  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
+  if (roleId) {
+    dirs.add(path.join(rolesDir, roleId));
+  }
+  for (const profile of definition.routeProfiles ?? []) {
+    if (profile.dataDir) {
+      dirs.add(path.resolve(rootDir, profile.dataDir));
+    }
+    const profileRole = sanitizeRoleId(profile.agentRoleId);
+    if (profileRole) {
+      dirs.add(path.join(rolesDir, profileRole));
+    }
+  }
+  return [...dirs];
+}
+
+function recordTimeMs(record: Record<string, unknown>): number {
+  const time = record.time;
+  if (typeof time === "number") {
+    return time < 10_000_000_000 ? time * 1000 : time;
+  }
+  for (const key of ["createdAt", "lastEventAt", "startedAt", "endedAt"]) {
+    const value = record[key];
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return 0;
+}
+
+function messageFileEntry(source: string, filePath: string, record: Record<string, unknown>): Record<string, unknown> {
+  const groupId = record.groupId ?? record.group_id;
+  const userId = record.userId ?? record.user_id;
+  const text = record.rawMessage ?? record.message ?? record.text ?? record.content ?? record.rawLine ?? "";
+  return {
+    source,
+    path: filePath,
+    time: record.time,
+    timeMs: recordTimeMs(record),
+    messageId: record.messageId ?? record.message_id,
+    instanceId: record.instanceId,
+    adapterType: record.adapterType,
+    sender: record.senderName ?? record.sender ?? record.source,
+    target: groupId ? `群 ${String(groupId)}` : userId ? `私聊 ${String(userId)}` : record.source ?? source,
+    text: typeof text === "string" ? text : JSON.stringify(text),
+    raw: record
+  };
+}
+
+function adapterLogEntry(filePath: string, record: Record<string, unknown>): Record<string, unknown> {
+  const data = record.data && typeof record.data === "object" ? record.data as Record<string, unknown> : {};
+  const text = record.message ?? data.text ?? data.rawMessage ?? data.eventType ?? record.rawLine ?? "";
+  return {
+    adapter: record.adapter,
+    event: record.event ?? "log",
+    level: record.level ?? "info",
+    instanceId: record.instanceId,
+    path: filePath,
+    time: record.time,
+    timeMs: recordTimeMs(record),
+    messageId: data.messageId ?? data.message_id,
+    sender: data.senderName ?? data.sender ?? data.source,
+    target: data.groupId ? `群 ${String(data.groupId)}` : data.userId ? `私聊 ${String(data.userId)}` : data.path ?? data.name,
+    text: typeof text === "string" ? text : JSON.stringify(text),
+    raw: record
+  };
+}
+
+function readMessageFiles(definition: GatewayDefinition): Record<string, unknown> {
+  const dirs = messageFileCandidateDirs(definition);
+  const readEntries = (source: string, fileName: string) => dirs.flatMap((dir) => {
+    const filePath = path.join(dir, fileName);
+    return readJsonlTail(filePath, 8).map((record) => messageFileEntry(source, filePath, record));
+  });
+  const sortTail = (items: Array<Record<string, unknown>>) => items
+    .sort((left, right) => Number(left.timeMs || 0) - Number(right.timeMs || 0))
+    .slice(-8)
+    .reverse();
+
+  const napcatEntries = sortTail([
+    ...readEntries("群聊", "group-messages.jsonl"),
+    ...readEntries("私聊", "private-messages.jsonl")
+  ]);
+  const heartbeatEntries = sortTail(readEntries("定时触发", "heartbeat-events.jsonl"));
+  const fenneNoteEntries = sortTail([
+    ...readEntries("FenneNote / 芬妮笔记", "fennenote-voice-transcripts.jsonl"),
+    ...readEntries("FenneNote / 芬妮笔记", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "fennenote")
+  ]);
+  const xiaoaiEntries = sortTail([
+    ...readEntries("小米音箱 / 小爱", "xiaoai-voice-transcripts.jsonl"),
+    ...readEntries("小米音箱 / 小爱", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "xiaoai")
+  ]);
+  const webhookEntries = sortTail(readEntries("通用 Webhook", "voice-transcripts.jsonl")
+    .filter((entry) => {
+      const adapterType = String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase();
+      return !adapterType || adapterType === "webhook";
+    }));
+
+  return {
+    napcat: {
+      paths: dirs.flatMap((dir) => [
+        path.join(dir, "group-messages.jsonl"),
+        path.join(dir, "private-messages.jsonl")
+      ]),
+      entries: napcatEntries
+    },
+    heartbeat: {
+      paths: dirs.map((dir) => path.join(dir, "heartbeat-events.jsonl")),
+      entries: heartbeatEntries
+    },
+    fennenote: {
+      paths: dirs.flatMap((dir) => [
+        path.join(dir, "fennenote-voice-transcripts.jsonl"),
+        path.join(dir, "voice-transcripts.jsonl")
+      ]),
+      entries: fenneNoteEntries
+    },
+    xiaoai: {
+      paths: dirs.flatMap((dir) => [
+        path.join(dir, "xiaoai-voice-transcripts.jsonl"),
+        path.join(dir, "voice-transcripts.jsonl")
+      ]),
+      entries: xiaoaiEntries
+    },
+    webhook: {
+      paths: dirs.map((dir) => path.join(dir, "voice-transcripts.jsonl")),
+      entries: webhookEntries
+    }
+  };
+}
+
+function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown> {
+  const dir = dataDirFor(definition);
+  const readEntries = (adapter: MessageAdapterType) => {
+    const filePath = path.join(dir, `${adapter}-adapter.log.jsonl`);
+    return readJsonlTail(filePath, 12)
+      .map((record) => adapterLogEntry(filePath, record))
+      .sort((left, right) => Number(left.timeMs || 0) - Number(right.timeMs || 0))
+      .reverse();
+  };
+
+  return {
+    napcat: {
+      paths: [path.join(dir, "napcat-adapter.log.jsonl")],
+      entries: readEntries("napcat")
+    },
+    heartbeat: {
+      paths: [path.join(dir, "heartbeat-adapter.log.jsonl")],
+      entries: readEntries("heartbeat")
+    },
+    fennenote: {
+      paths: [path.join(dir, "fennenote-adapter.log.jsonl")],
+      entries: readEntries("fennenote")
+    },
+    xiaoai: {
+      paths: [path.join(dir, "xiaoai-adapter.log.jsonl")],
+      entries: readEntries("xiaoai")
+    },
+    webhook: {
+      paths: [path.join(dir, "webhook-adapter.log.jsonl")],
+      entries: readEntries("webhook")
+    }
+  };
+}
+
 function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
   return {
     id: runtime.definition.id,
@@ -1212,14 +2369,30 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     gatewayPort: runtime.definition.gatewayPort,
     webhookPort: runtime.definition.webhookPort,
     webhookPath: runtime.definition.webhookPath,
+    fenneNoteWebhookPort: runtime.definition.fenneNoteWebhookPort,
+    fenneNoteWebhookPath: runtime.definition.fenneNoteWebhookPath,
+    xiaoaiWebhookPort: runtime.definition.xiaoaiWebhookPort,
+    xiaoaiWebhookPath: runtime.definition.xiaoaiWebhookPath,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
     heartbeatMessage: runtime.definition.heartbeatMessage ?? "",
     napcatHttpUrl: runtime.definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
+    napcatWebuiUrl: runtime.definition.napcatWebuiUrl ?? "http://127.0.0.1:6099/webui",
+    napcatAccessToken: runtime.definition.napcatAccessToken ?? "",
+    napcatInstances: runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition),
     targetGroupId: runtime.definition.targetGroupId ?? "",
     routeVariables: runtime.definition.routeVariables,
     routeName: runtime.definition.routeName,
     routeProfiles: runtime.definition.routeProfiles ?? [],
     codexThreadName: runtime.definition.codexThreadName ?? runtime.definition.name ?? runtime.definition.id,
+    codexCwd: runtime.definition.codexCwd,
+    copilotCwd: runtime.definition.copilotCwd,
+    copilotCliBin: runtime.definition.copilotCliBin,
+    marvisAppId: runtime.definition.marvisAppId,
+    astrbotUrl: runtime.definition.astrbotUrl,
+    astrbotUsername: runtime.definition.astrbotUsername,
+    astrbotPassword: runtime.definition.astrbotPassword,
+    astrbotProjectId: runtime.definition.astrbotProjectId,
+    astrbotSessionId: runtime.definition.astrbotSessionId,
     rolesDir: runtime.definition.rolesDir,
     routesDir: runtime.definition.routesDir,
     agentRoleId: runtime.definition.agentRoleId,
@@ -1242,6 +2415,9 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     stoppedAt: runtime.stoppedAt,
     lastExit: runtime.lastExit,
     gatewayStatus: readGatewayStatus(runtime.definition),
+    adapterLogs: readAdapterLogs(runtime.definition),
+    messageFiles: readMessageFiles(runtime.definition),
+    agentStates: readAgentStates(runtime.definition),
     codexState: readCodexState(runtime.definition),
     log: runtime.log.slice(-30)
   };
@@ -1503,7 +2679,8 @@ function handleAction(pathname: string, response: http.ServerResponse): boolean 
     return false;
   }
 
-  const [, id, action] = match;
+  const [, encodedId, action] = match;
+  const id = decodeURIComponent(encodedId);
   if (action === "start") {
     startGateway(id);
   } else if (action === "stop") {
@@ -1603,6 +2780,16 @@ function startManager(): void {
       }
       if (request.method === "GET" && requestUrl.pathname === "/meta") {
         jsonResponse(response, 200, metaPayload());
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/scan/message-adapters") {
+        void messageAdapterScanPayload()
+          .then((adapters) => {
+            jsonResponse(response, 200, { adapters });
+          })
+          .catch((error) => {
+            jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
+          });
         return;
       }
       if (request.method === "POST" && (requestUrl.pathname === "/api/playback/request" || requestUrl.pathname === "/api/fennenote/playback")) {
@@ -1709,7 +2896,7 @@ function startManager(): void {
 
           // copilot bin paths
           const copilotBins: string[] = [];
-          for (const bin of ["copilot", "gh"]) {
+          for (const bin of ["copilot"]) {
             try {
               const { stdout } = await execFileAsync(whereCmd, [bin], { timeout: 2000 });
               copilotBins.push(...stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean));
@@ -1785,7 +2972,176 @@ function startManager(): void {
             }
           }
 
+          const projects = projectOptionsFromPaths(cwdOptions);
+          const codexSessions: AgentScanSession[] = legacySessionThreads.map((record) => ({
+            id: record.id,
+            name: record.threadName,
+            updatedAt: record.updatedAt
+          }));
+          const copilotScanSessions: AgentScanSession[] = copilotSessions.map((session) => ({
+            id: session.id,
+            name: session.name,
+            projectPath: session.cwd,
+            updatedAt: session.updatedAt,
+            userNamed: session.userNamed
+          }));
+          const copilotHome = process.env.COPILOT_HOME ?? path.join(os.homedir(), ".copilot");
+          let copilotLoggedIn = false;
+          try {
+            const configPath = path.join(copilotHome, "config.json");
+            if (fs.existsSync(configPath)) {
+              const raw = fs.readFileSync(configPath, "utf8").replace(/^\s*\/\/[^\n]*\n/gm, "");
+              const cfg = JSON.parse(raw) as { loggedInUsers?: unknown[] };
+              copilotLoggedIn = Array.isArray(cfg.loggedInUsers) && cfg.loggedInUsers.length > 0;
+            }
+          } catch { /* ignore */ }
+
+          const configuredAstrbotUrls = [...runtimes.values()]
+            .map((runtime) => runtime.definition.astrbotUrl?.trim())
+            .filter(Boolean) as string[];
+          const configuredAstrbotPasswords = [...runtimes.values()]
+            .map((runtime) => runtime.definition.astrbotPassword?.trim())
+            .filter(Boolean) as string[];
+          const configuredAstrbotUsernames = [...runtimes.values()]
+            .map((runtime) => runtime.definition.astrbotUsername?.trim())
+            .filter(Boolean) as string[];
+          const astrbotUrls = [...new Set([
+            ...configuredAstrbotUrls,
+            process.env.ASTRBOT_URL,
+            "http://127.0.0.1:6185"
+          ].filter(Boolean) as string[])];
+          const astrbotEndpoints = await Promise.all(astrbotUrls.map(async (url) => ({
+            label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 AstrBot" : "AstrBot",
+            url,
+            healthy: await checkHttpEndpoint(url)
+          })));
+          const astrbotPluginDir = path.join(os.homedir(), ".astrbot", "data", "plugins", "rabiroute_agent");
+          const astrbotPluginInstalled = fs.existsSync(path.join(astrbotPluginDir, "main.py"))
+            && fs.existsSync(path.join(astrbotPluginDir, "metadata.yaml"));
+          const astrbotPluginSourceReady = fs.existsSync(path.join(rootDir, "scripts", "rabiroute_agent", "main.py"))
+            && fs.existsSync(path.join(rootDir, "scripts", "rabiroute_agent", "metadata.yaml"));
+          const astrbotPasswordPresent = Boolean(process.env.ASTRBOT_PASSWORD?.trim() || configuredAstrbotPasswords.length > 0);
+          const astrbotBaseUrl = (configuredAstrbotUrls[0] || process.env.ASTRBOT_URL || "http://127.0.0.1:6185").replace(/\/+$/, "");
+          const astrbotUsername = configuredAstrbotUsernames[0] || process.env.ASTRBOT_USERNAME || "";
+          const astrbotPassword = configuredAstrbotPasswords[0] || process.env.ASTRBOT_PASSWORD || "";
+          let astrbotSessionScan: AstrbotSessionScan = {
+            authVerified: false,
+            authMessage: astrbotPasswordPresent ? "已填写 AstrBot 凭据，尚未验证 Dashboard 登录。" : "缺少 AstrBot 密码；请填写本地配置或设置 ASTRBOT_PASSWORD。",
+            projects: [],
+            sessions: [],
+            source: "none"
+          };
+          if (astrbotPasswordPresent && astrbotEndpoints.some((endpoint) => endpoint.healthy)) {
+            const login = await loginAstrbotDashboard(astrbotBaseUrl, astrbotUsername, astrbotPassword);
+            if (login.token) {
+              astrbotSessionScan = await scanAstrbotViaDashboardApi(astrbotBaseUrl, astrbotUsername, login.token);
+            } else {
+              astrbotSessionScan.authMessage = `已填写 AstrBot 凭据，但 Dashboard 登录未通过：${login.message || "未知错误"}`;
+            }
+          }
+          if (astrbotSessionScan.sessions.length === 0 || astrbotSessionScan.projects.length === 0) {
+            const localScan = await scanAstrbotLocalDb();
+            astrbotSessionScan = {
+              ...astrbotSessionScan,
+              projects: astrbotSessionScan.projects.length ? astrbotSessionScan.projects : localScan.projects,
+              sessions: astrbotSessionScan.sessions.length ? astrbotSessionScan.sessions : localScan.sessions,
+              source: astrbotSessionScan.source === "api" ? "api" : localScan.source
+            };
+          }
+
+          const agents: Record<AgentAdapterType, AgentScanResult> = {
+            codexDesktop: {
+              type: "codexDesktop",
+              label: "Codex Desktop",
+              maturity: "verified",
+              installed: fs.existsSync(sessionIndexPath()),
+              projects,
+              sessions: codexSessions,
+              warnings: [
+                ...(codexSessions.length === 0 ? [`未在 ${sessionIndexPath()} 发现 Codex 会话索引。`] : []),
+                "本页不会自动向现有 Codex 会话发送烟测消息；同会话重复注入需要人工确认后再测。"
+              ]
+            },
+            codexApp: {
+              type: "codexApp",
+              label: "Codex App",
+              maturity: "verified",
+              installed: fs.existsSync(sessionIndexPath()),
+              projects,
+              sessions: codexSessions,
+              warnings: [
+                ...(codexSessions.length === 0 ? [`未在 ${sessionIndexPath()} 发现 Codex 会话索引。`] : []),
+                "复用 Codex 会话/项目模型；真实消息注入仍以绑定线程状态为准。"
+              ]
+            },
+            copilotCli: {
+              type: "copilotCli",
+              label: "Copilot CLI",
+              maturity: "experimental",
+              installed: copilotBins.length > 0,
+              installCandidates: copilotBins.map((binPath) => ({ label: path.basename(binPath), path: binPath })),
+              auth: {
+                required: true,
+                loggedIn: copilotLoggedIn,
+                loginUrl: "https://github.com/login/device",
+                message: copilotLoggedIn ? "已发现 Copilot 登录状态。" : `未在 ${copilotHome} 发现登录状态。`
+              },
+              projects,
+              sessions: copilotScanSessions,
+              warnings: [
+                "尚未完成真实端到端烟测：需确认 --name 会复用同一会话，且连续两次注入不会新开线程。",
+                ...(copilotScanSessions.length === 0 ? ["未发现 Copilot session-state；会话下拉需要先运行过 Copilot CLI。"] : [])
+              ]
+            },
+            marvis: {
+              type: "marvis",
+              label: "Marvis",
+              maturity: "stub",
+              installed: marvisAppIds.length > 0,
+              installCandidates: marvisAppIds.map((id) => ({ label: id })),
+              warnings: [
+                "当前 Marvis 适配更像打开 App/复制 prompt 的人工接力，不是可靠的线程消息注入。",
+                "不能列会话、不能创建会话，也不能验证同会话重复注入；不要标为 verified。"
+              ]
+            },
+            astrbot: {
+              type: "astrbot",
+              label: "AstrBot",
+              maturity: "experimental",
+              installed: astrbotEndpoints.some((endpoint) => endpoint.healthy),
+              auth: {
+                required: true,
+                loggedIn: astrbotSessionScan.authVerified,
+                message: astrbotSessionScan.authMessage
+              },
+              endpoints: astrbotEndpoints,
+              projects: astrbotSessionScan.projects,
+              sessions: astrbotSessionScan.sessions,
+              plugins: [{
+                id: "rabiroute_agent",
+                name: "RabiRoute Agent 插件",
+                installed: astrbotPluginInstalled,
+                healthy: astrbotPluginInstalled,
+                version: astrbotPluginSourceReady ? "source-ready" : undefined
+              }],
+              warnings: [
+                ...(astrbotSessionScan.source === "local-db" ? ["已从本机 AstrBot 数据库读取项目/会话；发送前仍需 Dashboard 登录或 API Key 验证。"] : []),
+                ...(astrbotSessionScan.sessions.length === 0 ? ["未读取到 AstrBot WebChat 会话；可以在 AstrBot ChatUI 创建对话后重新扫描。"] : []),
+                "尚未自动执行真实消息注入烟测；同会话连续两次发送需用户确认后再测。",
+                ...(astrbotPluginInstalled ? [] : [`插件未安装到 ${astrbotPluginDir}。`])
+              ]
+            }
+          };
+
           jsonResponse(response, 200, {
+            agents,
+            legacy: {
+              threadNames,
+              cwdOptions,
+              copilotSessions: copilotSessions.map(s => ({ name: s.name, cwd: s.cwd, userNamed: s.userNamed })),
+              copilotBins: [...new Set(copilotBins)],
+              marvisAppIds: [...new Set(marvisAppIds)],
+            },
             threadNames,
             cwdOptions,
             copilotSessions: copilotSessions.map(s => ({ name: s.name, cwd: s.cwd, userNamed: s.userNamed })),
@@ -1908,6 +3264,85 @@ function startManager(): void {
             }
           } catch { /* ignore */ }
           jsonResponse(response, 200, { installed, binPath, loggedIn, copilotHome });
+        })();
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/agent/astrbot-login-test" && request.method === "POST") {
+        void readJsonBody<AstrbotLoginTestRequest>(request)
+          .then((body) => testAstrbotLogin(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 200 : 400, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-health" && request.method === "POST") {
+        void readJsonBody<NapcatHealthRequest>(request)
+          .then((body) => testNapcatHealth(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 200 : 400, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-launch" && request.method === "POST") {
+        void readJsonBody<NapcatLaunchRequest>(request)
+          .then((body) => {
+            jsonResponse(response, 200, launchNapcatInstance(body));
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/agent/marvis-open" && request.method === "POST") {
+        void readJsonBody<MarvisOpenRequest>(request)
+          .then((body) => {
+            jsonResponse(response, 200, openMarvisPayload(body));
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/deploy-astrbot-adapter" && request.method === "POST") {
+        void (async () => {
+          try {
+            const scriptPath = path.resolve(rootDir, "scripts", "deploy-astrbot-adapter.cmd");
+            if (!fs.existsSync(scriptPath)) {
+              jsonResponse(response, 404, { ok: false, error: `部署脚本未找到: ${scriptPath}` });
+              return;
+            }
+            const { spawn } = await import("node:child_process");
+            const child = spawn(scriptPath, [], {
+              cwd: rootDir,
+              shell: true,
+              windowsHide: true,
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            let stdout = "";
+            let stderr = "";
+            child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+            child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+            child.on("exit", (code) => {
+              if (code === 0) {
+                jsonResponse(response, 200, { ok: true, message: "AstrBot Adapter 部署成功", stdout: stdout.slice(0, 2000) });
+              } else {
+                jsonResponse(response, 500, { ok: false, error: `部署失败 (exit ${code})`, stderr: stderr.slice(0, 2000) });
+              }
+            });
+          } catch (err: unknown) {
+            jsonResponse(response, 500, { ok: false, error: String(err) });
+          }
         })();
         return;
       }

@@ -1,0 +1,4 @@
+name: rabiroute_agent
+desc: RabiRoute agent adapter plugin — exposes a simple chat endpoint so RabiRoute can use AstrBot as an AI agent backend (analogous to how RabiRoute adapts Codex).
+author: GAN
+version: 0.1.0

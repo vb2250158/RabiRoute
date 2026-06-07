@@ -48,6 +48,14 @@ $env:RABIROUTE_WEBHOOK_URL = "http://127.0.0.1:8791/webhook"
 npm.cmd start
 ```
 
+Current low-latency bridge endpoint:
+
+```text
+http://127.0.0.1:8798/v1/xiaoai/decision
+```
+
+This endpoint forwards all transcripts to RabiRoute, but only returns `intercept` when the local first-stage rule matches. Native XiaoAI should continue for `ignore`.
+
 Smoke test:
 
 ```powershell
@@ -184,6 +192,40 @@ curl -L -o /data/init.sh https://gitee.com/idootop/artifacts/releases/download/o
 reboot
 ```
 
+Current LX06 status after setup:
+
+```text
+Speaker IP: stored locally in xiaoai-local.config.json
+PC LAN IP: stored locally in xiaoai-local.config.json or tunnel runtime
+Client path: /data/open-xiaoai/client
+Configured server: ws://127.0.0.1:4399
+Autostart script: /data/init.sh installed
+```
+
+The configured server uses an SSH reverse tunnel when Windows firewall blocks direct speaker -> PC access to `PC_LAN_IP:4399`.
+
+Private local tunnel settings live in:
+
+```text
+plugin-adapters/xiaoai-rabiroute/xiaoai-local.config.json
+```
+
+That file is ignored by git. Commit only the placeholder example JSON.
+
+PC-side tunnel:
+
+```powershell
+cd <repo>\plugin-adapters\xiaoai-rabiroute
+py -3 reverse-tunnel.py
+```
+
+Speaker-side manual client start:
+
+```shell
+echo ws://127.0.0.1:4399 > /data/open-xiaoai/server.txt
+/data/open-xiaoai/client ws://127.0.0.1:4399 >/tmp/open-xiaoai-client.log 2>&1 &
+```
+
 ## Phase 8: Server Choice
 
 Open-XiaoAI examples use a WebSocket server on port `4399`.
@@ -196,7 +238,7 @@ For RabiRoute integration, use one of two approaches:
 The current bridge endpoint is:
 
 ```text
-http://PC_LAN_IP:8798/v1/xiaoai/transcript
+http://127.0.0.1:8798/v1/xiaoai/decision
 ```
 
 RabiRoute receives:

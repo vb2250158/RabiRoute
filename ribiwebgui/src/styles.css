@@ -541,6 +541,60 @@ body::before {
   border-bottom: 0;
 }
 
+.compact-status-row {
+  padding-block: 7px;
+}
+
+.dependency-panel {
+  min-width: 0;
+  border: 1px solid rgba(17, 32, 51, .1);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(255, 255, 255, .66);
+}
+
+.dependency-list {
+  display: grid;
+  gap: 8px;
+}
+
+.dependency-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+  border: 1px solid rgba(17, 32, 51, .08);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, .7);
+}
+
+.dependency-row strong {
+  display: block;
+  color: #0c2a4a;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.dependency-row span {
+  display: block;
+  margin-top: 3px;
+  color: #667586;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.dependency-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .status-row span {
   color: #8b98a8;
   font-size: 12px;
@@ -579,6 +633,73 @@ body::before {
   white-space: pre-wrap;
 }
 
+.compact-mono {
+  min-height: 96px;
+  max-height: 260px;
+  margin-top: 8px;
+}
+
+.adapter-log-panel {
+  border-top: 1px solid #dbe3ec;
+  padding-top: 12px;
+}
+
+.compact-row {
+  margin-bottom: 8px;
+}
+
+.small-title {
+  font-size: 14px;
+}
+
+.adapter-log-title {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.adapter-log-title span,
+.adapter-log-title b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adapter-log-text {
+  color: #667586;
+}
+
+.adapter-log-list .v-expansion-panel-title {
+  min-height: 42px;
+}
+
+.adapter-message-file-panel {
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+.adapter-message-preview {
+  margin-top: 8px;
+  display: grid;
+  gap: 4px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.adapter-message-preview > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .muted-text {
   color: #667586;
 }
@@ -613,6 +734,51 @@ body::before {
 
 .adapter-card.compact {
   min-height: 104px;
+}
+
+.napcat-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.napcat-account-card {
+  min-width: 0;
+  border: 1px solid rgba(108, 92, 231, .28);
+  border-radius: 8px;
+  padding: 12px;
+  background: linear-gradient(135deg, rgba(246, 243, 255, .94), rgba(255, 255, 255, .88));
+}
+
+.napcat-account-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.napcat-account-title {
+  color: #35236f;
+  font-size: 18px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.napcat-add-card {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  min-height: 180px;
+  border-style: dashed;
+  color: #4c3b8f;
+  cursor: pointer;
+}
+
+.napcat-add-card span {
+  color: #667586;
+  font-size: 12px;
 }
 
 .config-toolbar {
@@ -790,6 +956,15 @@ body::before {
   flex-wrap: wrap;
 }
 
+.deploy-output {
+  margin-top: 8px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+}
+
 .route-kind-group {
   display: grid;
   gap: 7px;
@@ -946,6 +1121,19 @@ body::before {
 .quick-setup-main {
   min-width: 0;
   padding-top: 4px;
+}
+
+.quick-agent-panel {
+  margin: 0;
+  max-width: 100%;
+}
+
+.quick-agent-select {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .quick-review {

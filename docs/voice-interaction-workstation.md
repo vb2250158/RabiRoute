@@ -1,4 +1,4 @@
-﻿# Voice Interaction Workstation
+# Voice Interaction Workstation
 
 这份说明用于把 RabiRoute、FenneNote 转录、角色对话和 OumuQ TTS 连接成一套可复用的语音交互工作站。它只描述公开安全的接口和工作流，不包含私聊日志、真实 QQ 号、token、cookie、个人路径、webhook 密钥或私有角色设定。
 
@@ -129,7 +129,7 @@ Keep the role voice in visible text and in speech text.
 
 1. FenneNote 配置 webhook，把每条语音转录提交为 `voice_transcript` 事件。
 2. RabiRoute 记录原始事件和规范化事件，并用 `eventId` 去重。
-3. 在角色 `roleMessageConfig.json` 中启用 `voice_transcript` 消息模板规则，模板包含 `replySurface`、`allowExternalSend` 和 `allowTts`。
+3. 在角色 `personaConfig.json` 中启用 `voice_transcript` 消息模板规则，模板包含 `replySurface`、`allowExternalSend` 和 `allowTts`。
 4. RabiRoute 把事件投递给固定 Codex/Agent thread；空闲时 start，运行中 steer。
 5. Agent 根据角色包生成 `visibleText` 和可选 `ttsText`，并严格遵守目标回复面。
 6. OumuQ 只接收已经确认可朗读的 `ttsText`。

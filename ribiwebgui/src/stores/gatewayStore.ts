@@ -11,6 +11,7 @@ import {
   isQuickSetupNeeded,
   notificationRulesForGateway,
   normalizeRule,
+  sanitizeConfigName,
   saveActiveRoleRules,
   setGatewayAdapters
 } from "../utils/gatewayHelpers";
@@ -45,6 +46,8 @@ export const useGatewayStore = defineStore("gateway", () => {
   const saving = ref(false);
   const dirty = ref(false);
   const error = ref("");
+  const quickSetupDialogOpen = ref(false);
+  const pendingSelectedConfigName = ref("");
   const meta = ref<MetaPayload>({
     version: "0.1.0",
     githubUrl: "https://github.com/vb2250158/RabiRoute",
@@ -73,6 +76,14 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   function touch(): void {
     dirty.value = true;
+  }
+
+  function openQuickSetup(): void {
+    quickSetupDialogOpen.value = true;
+  }
+
+  function closeQuickSetup(): void {
+    quickSetupDialogOpen.value = false;
   }
 
   function normalizeGateways(): void {
@@ -134,6 +145,11 @@ export const useGatewayStore = defineStore("gateway", () => {
       managerRows.value = asManagerRows(body.data.manager);
       managerError.value = managerErrorOf(body.data.manager);
       normalizeGateways();
+      if (pendingSelectedConfigName.value) {
+        const renamed = gateways.value.find(gateway => configNameFor(gateway) === pendingSelectedConfigName.value);
+        if (renamed) selectedGatewayId.value = renamed.id;
+        pendingSelectedConfigName.value = "";
+      }
       if (!selectedGatewayId.value && gateways.value[0]) selectedGatewayId.value = gateways.value[0].id;
       if (selectedGatewayId.value && !gateways.value.some(gateway => gateway.id === selectedGatewayId.value)) {
         selectedGatewayId.value = gateways.value[0]?.id || "";
@@ -224,6 +240,29 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateways.value.push(gateway);
     selectedGatewayId.value = gateway.id;
     touch();
+  }
+
+  function addGatewayAndOpenQuickSetup(): void {
+    addGateway();
+    openQuickSetup();
+  }
+
+  function renameGatewayConfig(id: string, rawName: unknown): { ok: boolean; name: string; message?: string } {
+    const gateway = gateways.value.find(item => item.id === id);
+    if (!gateway) return { ok: false, name: "", message: "未找到当前路由" };
+    const currentName = configNameFor(gateway);
+    const nextName = sanitizeConfigName(rawName);
+    if (!nextName) {
+      return { ok: false, name: currentName, message: "配置名只能包含中文、字母、数字、下划线或短横线" };
+    }
+    const duplicated = gateways.value.some(item => item.id !== id && configNameFor(item) === nextName);
+    if (duplicated) {
+      return { ok: false, name: currentName, message: `配置名 ${nextName} 已存在` };
+    }
+    gateway.configName = nextName;
+    pendingSelectedConfigName.value = nextName;
+    touch();
+    return { ok: true, name: nextName };
   }
 
   function removeGateway(id: string): void {
@@ -319,8 +358,17 @@ export const useGatewayStore = defineStore("gateway", () => {
     agentRoleId: string;
     codexThreadName: string;
     codexCwd: string;
+    copilotCliBin?: string;
+    copilotCwd?: string;
+    marvisAppId?: string;
+    astrbotUrl?: string;
+    astrbotUsername?: string;
+    astrbotPassword?: string;
+    astrbotProjectId?: string;
+    astrbotSessionId?: string;
     gatewayPort: number;
     napcatHttpUrl: string;
+    napcatWebuiUrl?: string;
     adapters?: MessageAdapterType[];
     messageInputsDisabled?: boolean;
     agentAdapters?: AgentAdapterType[];
@@ -328,6 +376,10 @@ export const useGatewayStore = defineStore("gateway", () => {
     heartbeatMessage?: string;
     webhookPort?: number;
     webhookPath?: string;
+    fenneNoteWebhookPort?: number;
+    fenneNoteWebhookPath?: string;
+    xiaoaiWebhookPort?: number;
+    xiaoaiWebhookPath?: string;
   }): void {
     if (gateways.value.length === 0) addGateway();
     const gateway = selectedGateway.value;
@@ -340,12 +392,51 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway.codexThreadName = values.codexThreadName;
     gateway.codexCwd = values.codexCwd;
     gateway.agentAdapters = values.agentAdapters?.length ? values.agentAdapters : gateway.agentAdapters;
+    if (gateway.agentAdapters?.includes("copilotCli")) {
+      gateway.copilotCliBin = values.copilotCliBin || gateway.copilotCliBin;
+      gateway.copilotCwd = values.copilotCwd || values.codexCwd;
+    }
+    if (gateway.agentAdapters?.includes("marvis")) {
+      gateway.marvisAppId = values.marvisAppId || gateway.marvisAppId;
+    }
+    if (gateway.agentAdapters?.includes("astrbot")) {
+      gateway.astrbotUrl = values.astrbotUrl || gateway.astrbotUrl;
+      gateway.astrbotUsername = values.astrbotUsername || gateway.astrbotUsername;
+      gateway.astrbotPassword = values.astrbotPassword || gateway.astrbotPassword;
+      gateway.astrbotProjectId = values.astrbotProjectId || gateway.astrbotProjectId;
+      gateway.astrbotSessionId = values.astrbotSessionId || gateway.astrbotSessionId;
+    }
     gateway.gatewayPort = values.gatewayPort;
     gateway.napcatHttpUrl = values.napcatHttpUrl;
+    gateway.napcatWebuiUrl = values.napcatWebuiUrl || gateway.napcatWebuiUrl;
+    if (gateway.messageAdapters?.includes("napcat") || gateway.messageAdapterType === "napcat") {
+      if (!Array.isArray(gateway.napcatInstances) || gateway.napcatInstances.length === 0) {
+        gateway.napcatInstances = [{
+          id: "default",
+          name: "默认 NapCat",
+          enabled: true,
+          gatewayPort: values.gatewayPort,
+          httpUrl: values.napcatHttpUrl,
+          webuiUrl: values.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
+          accessToken: gateway.napcatAccessToken || ""
+        }];
+      } else {
+        gateway.napcatInstances[0] = {
+          ...gateway.napcatInstances[0],
+          gatewayPort: values.gatewayPort,
+          httpUrl: values.napcatHttpUrl,
+          webuiUrl: values.napcatWebuiUrl || gateway.napcatInstances[0].webuiUrl
+        };
+      }
+    }
     gateway.heartbeatIntervalSeconds = values.heartbeatIntervalSeconds || gateway.heartbeatIntervalSeconds;
     gateway.heartbeatMessage = values.heartbeatMessage || gateway.heartbeatMessage;
     gateway.webhookPort = values.webhookPort || gateway.webhookPort;
     gateway.webhookPath = values.webhookPath || gateway.webhookPath;
+    gateway.fenneNoteWebhookPort = values.fenneNoteWebhookPort || gateway.fenneNoteWebhookPort;
+    gateway.fenneNoteWebhookPath = values.fenneNoteWebhookPath || gateway.fenneNoteWebhookPath;
+    gateway.xiaoaiWebhookPort = values.xiaoaiWebhookPort || gateway.xiaoaiWebhookPort;
+    gateway.xiaoaiWebhookPath = values.xiaoaiWebhookPath || gateway.xiaoaiWebhookPath;
     gateway.agentRoleFile = gateway.agentRoleFile || "persona.md";
     applyAdapterDefaults(gateway);
     touch();
@@ -365,11 +456,14 @@ export const useGatewayStore = defineStore("gateway", () => {
     saving,
     dirty,
     error,
+    quickSetupDialogOpen,
     meta,
     runningCount,
     quickSetupNeeded,
     runtimeFor,
     touch,
+    openQuickSetup,
+    closeQuickSetup,
     load,
     save,
     startManager,
@@ -378,6 +472,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     openConfigFile,
     selectGateway,
     addGateway,
+    addGatewayAndOpenQuickSetup,
+    renameGatewayConfig,
     removeGateway,
     updateGatewayField,
     updateAdapters,

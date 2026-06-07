@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import QuickSetupDialog from "../components/QuickSetupDialog.vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { adapterLabel, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
 const router = useRouter();
-const quickSetupOpen = ref(false);
 
 const routeDir = ref("");
 const rolesDir = ref("");
@@ -97,7 +95,7 @@ const selectedRuntimeLabel = computed(() => {
         <div class="status-row"><span>运行状态</span><b>{{ selectedRuntimeLabel }}</b></div>
         <div class="status-row"><span>消息入口</span><b>{{ selectedAdapters }}</b></div>
         <div class="hero-actions">
-          <v-btn prepend-icon="mdi-lightning-bolt-outline" color="secondary" variant="tonal" @click="quickSetupOpen = true">快速配置</v-btn>
+          <v-btn prepend-icon="mdi-lightning-bolt-outline" color="secondary" variant="tonal" @click="store.openQuickSetup">快速配置</v-btn>
           <v-btn prepend-icon="mdi-play-circle-outline" variant="tonal" @click="store.startManager">启动 Manager</v-btn>
         </div>
       </div>
@@ -133,7 +131,7 @@ const selectedRuntimeLabel = computed(() => {
             <div class="section-title">路由列表</div>
             <div class="section-note">选择一条路由后，其余页面会编辑同一条配置。</div>
           </div>
-          <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="store.addGateway">新增</v-btn>
+          <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="store.addGatewayAndOpenQuickSetup">新增</v-btn>
         </div>
         <v-list bg-color="transparent">
           <v-list-item
@@ -210,7 +208,5 @@ const selectedRuntimeLabel = computed(() => {
           <v-text-field v-model="rolesDir" label="角色目录" placeholder="data/roles" density="compact" hide-details />
         </div>
       </v-card>
-
-    <QuickSetupDialog v-model="quickSetupOpen" />
   </div>
 </template>

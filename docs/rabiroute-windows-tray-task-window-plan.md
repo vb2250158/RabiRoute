@@ -70,7 +70,7 @@ Windows 桌面便利入口
 
 - manager API：`http://127.0.0.1:8790/meta`、`/gateways`、`/gateways/<id>/start|stop|restart`。
 - WebGUI 入口：`http://127.0.0.1:8790/`。
-- 路由运行配置：`data/route/<configName>/routeConfig.json`。
+- 路由运行配置：`data/route/<configName>/adapterConfig.json`。
 - 路由运行状态：`data/route/<configName>/gateway-status.json`。
 - Codex 线程状态：`data/route/<configName>/codex-state.json`。
 - 人格目录：`data/roles/<RoleId>/`。
@@ -256,8 +256,8 @@ MVP 启动策略：
 MVP 明确不做：
 
 - 不编辑 RibiWebGUI 配置。
-- 不修改 `routeConfig.json`。
-- 不修改 `roleMessageConfig.json`。
+- 不修改 `adapterConfig.json`。
+- 不修改 `personaConfig.json`。
 - 不创建、完成、删除任务。
 - 不发送 QQ / NapCat 消息。
 - 不启动外部主控台。

@@ -46,7 +46,7 @@ setx NAPCAT_QUICK_PASSWORD "<qq-password>"
 
 ## 进程守护
 
-RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/routeConfig.json` 或 `data/roles/*/roleMessageConfig.json` 改动后自动重载受影响路由。它不会启动或重启 NapCat 本体。
+RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/adapterConfig.json` 或 `data/roles/*/personaConfig.json` 改动后自动重载受影响路由。它不会启动或重启 NapCat 本体。
 
 NapCat 本体建议用以下方式之一守护：
 

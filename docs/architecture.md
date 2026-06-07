@@ -261,7 +261,7 @@ NapCat 插件不是业务核心，它只是控制面入口：
 ```text
 NapCat plugin page
   -> RabiRoute manager API
-  -> data/route/*/routeConfig.json + data/roles/*/roleMessageConfig.json
+  -> data/route/*/adapterConfig.json + data/roles/*/personaConfig.json
   -> start / stop / restart route process
 ```
 

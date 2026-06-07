@@ -16,6 +16,9 @@ import { config } from "../config.js";
 
 type AstrBotAgentState = {
   agentAdapterType: "astrbot";
+  monitorThreadId?: string;
+  monitorThreadName?: string;
+  monitorThreadSource?: string;
   notificationCount?: number;
   lastNotificationAt?: string;
   lastNotificationError?: string;
@@ -61,11 +64,15 @@ function getAstrBotUrl(): string {
 }
 
 function getAstrBotUsername(): string {
-  return process.env.ASTRBOT_USERNAME ?? "vb2250158";
+  return process.env.ASTRBOT_USERNAME ?? "";
 }
 
 function getAstrBotPassword(): string {
   return process.env.ASTRBOT_PASSWORD ?? "";
+}
+
+function getAstrBotSessionId(): string {
+  return process.env.ASTRBOT_SESSION_ID ?? "";
 }
 
 let cachedToken: string | null = null;
@@ -101,7 +108,10 @@ async function login(): Promise<string> {
     throw new Error(`AstrBot login failed (HTTP ${response.status}): ${text}`);
   }
 
-  const body = (await response.json()) as { data?: { token?: string } };
+  const body = (await response.json()) as { status?: string; message?: string; error?: string; data?: { token?: string } | null };
+  if (body.status === "error" || body.error) {
+    throw new Error(`AstrBot login failed: ${body.message || body.error || "unknown error"}`);
+  }
   const token = body?.data?.token;
   if (!token) {
     throw new Error("AstrBot login response missing token");
@@ -139,35 +149,16 @@ async function deliverOnce(message: string): Promise<void> {
   try {
     const token = await login();
     const baseUrl = getAstrBotUrl().replace(/\/$/, "");
-    const chatUrl = `${baseUrl}/api/plugins/rabiroute_agent/chat`;
-
-    const response = await fetch(chatUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ message }),
-    });
-
-    const text = await response.text();
-    let body: { response?: string; error?: string } = {};
-    try {
-      body = JSON.parse(text);
-    } catch {
-      // keep as raw text
-    }
-
-    if (!response.ok || body.error) {
-      throw new Error(
-        body.error || `AstrBot chat failed (HTTP ${response.status}): ${text}`
-      );
-    }
-
-    const reply = body.response ?? "";
+    const sessionId = getAstrBotSessionId().trim();
+    const reply = sessionId
+      ? await deliverToChatUiSession(baseUrl, token, sessionId, message)
+      : await deliverToLegacyPlugin(baseUrl, token, message);
 
     writeState({
       ...state,
+      monitorThreadId: sessionId ? `astrbot-chatui:${sessionId}` : "astrbot-plugin:rabiroute_agent",
+      monitorThreadName: sessionId ? `AstrBot ChatUI ${sessionId}` : "AstrBot rabiroute_agent",
+      monitorThreadSource: baseUrl,
       notificationCount: (state.notificationCount ?? 0) + 1,
       lastNotificationAt: new Date().toISOString(),
       lastResponsePreview: reply.slice(0, 500),
@@ -190,5 +181,71 @@ async function deliverOnce(message: string): Promise<void> {
       lastNotificationError: messageText,
       lastNotificationErrorAt: new Date().toISOString(),
     });
+    throw error;
   }
+}
+
+async function deliverToLegacyPlugin(baseUrl: string, token: string, message: string): Promise<string> {
+  const chatUrl = `${baseUrl}/api/plug/rabiroute_agent/chat`;
+  const response = await fetch(chatUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ message }),
+  });
+
+  const text = await response.text();
+  let body: { response?: string; error?: string } = {};
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // keep as raw text
+  }
+
+  if (!response.ok || body.error) {
+    throw new Error(
+      body.error || `AstrBot plugin chat failed (HTTP ${response.status}): ${text}`
+    );
+  }
+
+  return body.response ?? "";
+}
+
+async function deliverToChatUiSession(baseUrl: string, token: string, sessionId: string, message: string): Promise<string> {
+  const response = await fetch(`${baseUrl}/api/chat/send`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      session_id: sessionId,
+      message,
+      enable_streaming: false,
+    }),
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`AstrBot ChatUI send failed (HTTP ${response.status}): ${text}`);
+  }
+
+  const plainParts: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload) continue;
+    try {
+      const event = JSON.parse(payload) as { type?: string; data?: unknown; chain_type?: string };
+      if (event.type === "plain" && typeof event.data === "string") {
+        plainParts.push(event.data);
+      }
+    } catch {
+      // ignore non-json SSE lines
+    }
+  }
+  return plainParts.join("").trim();
 }

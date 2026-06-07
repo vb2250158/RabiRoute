@@ -3,7 +3,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { createHeartbeatAdapter } from "./adapters/heartbeatAdapter.js";
 import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
-import { createWebhookAdapter } from "./adapters/webhookAdapter.js";
+import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
 
@@ -79,7 +79,7 @@ function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdap
   }, null, 2), "utf8");
 }
 
-function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "webhook">): MessageAdapter {
+function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "webhook">): MessageAdapter {
   return {
     type,
     start() {
@@ -103,6 +103,12 @@ function createMessageAdapter(): MessageAdapter {
   if (config.messageAdapterType === "heartbeat") {
     return createHeartbeatAdapter();
   }
+  if (config.messageAdapterType === "fennenote") {
+    return createFenneNoteAdapter();
+  }
+  if (config.messageAdapterType === "xiaoai") {
+    return createXiaoAiAdapter();
+  }
   if (config.messageAdapterType === "webhook") {
     return createWebhookAdapter();
   }
@@ -116,6 +122,12 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   }
   if (type === "heartbeat") {
     return createHeartbeatAdapter();
+  }
+  if (type === "fennenote") {
+    return createFenneNoteAdapter();
+  }
+  if (type === "xiaoai") {
+    return createXiaoAiAdapter();
   }
   if (type === "webhook") {
     return createWebhookAdapter();

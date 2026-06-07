@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import { forwardMessage } from "../forwarding.js";
-import { appendHeartbeatEvent, type HeartbeatEventRecord } from "../history.js";
+import { appendAdapterLog, appendHeartbeatEvent, type HeartbeatEventRecord } from "../history.js";
 import type { MessageAdapter } from "./messageAdapter.js";
 
 type GatewayStatus = {
@@ -81,6 +81,14 @@ function tickHeartbeat(): void {
   };
 
   appendHeartbeatEvent(record);
+  appendAdapterLog("heartbeat", {
+    event: "tick",
+    message: config.heartbeatMessage.slice(0, 500),
+    data: {
+      messageId: record.messageId,
+      intervalSeconds: config.heartbeatIntervalSeconds
+    }
+  });
   const tickCount = (status?.tickCount ?? 0) + 1;
   patchHeartbeatStatus({
     enabled: true,
@@ -100,6 +108,14 @@ export function createHeartbeatAdapter(): MessageAdapter {
         enabled: true,
         intervalSeconds: config.heartbeatIntervalSeconds,
         message: config.heartbeatMessage
+      });
+      appendAdapterLog("heartbeat", {
+        event: "enabled",
+        message: `Heartbeat enabled, interval=${config.heartbeatIntervalSeconds}s`,
+        data: {
+          intervalSeconds: config.heartbeatIntervalSeconds,
+          heartbeatMessage: config.heartbeatMessage
+        }
       });
       console.log(`RabiRoute heartbeat adapter enabled, interval=${config.heartbeatIntervalSeconds}s`);
       setInterval(tickHeartbeat, config.heartbeatIntervalSeconds * 1000);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import { useGatewayStore } from "./stores/gatewayStore";
@@ -9,7 +9,6 @@ const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
 const drawer = ref(true);
-const quickSetupOpen = ref(false);
 const snackbar = ref("");
 
 const navItems = [
@@ -35,16 +34,12 @@ const selectedRuntimeLabel = computed(() => {
 onMounted(async () => {
   drawer.value = window.innerWidth >= 960;
   await store.load();
-  quickSetupOpen.value = store.quickSetupNeeded;
+  if (store.gateways.length === 0) store.openQuickSetup();
   window.addEventListener("beforeunload", beforeUnload);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", beforeUnload);
-});
-
-watch(() => store.quickSetupNeeded, (needed) => {
-  if (needed && !quickSetupOpen.value) quickSetupOpen.value = true;
 });
 
 async function save() {
@@ -128,7 +123,7 @@ function selectGateway(id: string) {
 
       <template #append>
         <div class="sidebar-footer">
-          <v-btn block class="sidebar-footer-btn" variant="tonal" color="primary" prepend-icon="mdi-lightning-bolt-outline" @click="quickSetupOpen = true">
+          <v-btn block class="sidebar-footer-btn" variant="tonal" color="primary" prepend-icon="mdi-lightning-bolt-outline" @click="store.openQuickSetup">
             快速配置
           </v-btn>
           <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-github" :href="store.meta.githubUrl" target="_blank">
@@ -155,8 +150,8 @@ function selectGateway(id: string) {
           <span class="manager-chip-text">Manager {{ managerConnected ? "已连接" : "未连接" }}</span>
         </v-chip>
         <v-btn icon="mdi-refresh" :loading="store.loading" aria-label="刷新状态" @click="refresh" />
-        <v-btn class="desktop-action" prepend-icon="mdi-plus" variant="tonal" @click="store.addGateway">新增航线</v-btn>
-        <v-btn class="mobile-action" icon="mdi-plus" variant="tonal" aria-label="新增航线" @click="store.addGateway" />
+        <v-btn class="desktop-action" prepend-icon="mdi-plus" variant="tonal" @click="store.addGatewayAndOpenQuickSetup">新增航线</v-btn>
+        <v-btn class="mobile-action" icon="mdi-plus" variant="tonal" aria-label="新增航线" @click="store.addGatewayAndOpenQuickSetup" />
         <v-btn class="desktop-action" color="primary" prepend-icon="mdi-content-save" :loading="store.saving" @click="save">
           保存配置
         </v-btn>
@@ -169,7 +164,7 @@ function selectGateway(id: string) {
       <router-view />
     </v-main>
 
-    <QuickSetupDialog v-model="quickSetupOpen" />
+    <QuickSetupDialog v-model="store.quickSetupDialogOpen" />
     <v-snackbar :model-value="!!snackbar" timeout="1800" @update:model-value="value => { if (!value) snackbar = '' }">
       {{ snackbar }}
     </v-snackbar>

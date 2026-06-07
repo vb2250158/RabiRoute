@@ -11,6 +11,10 @@ export type GroupMessageRecord = {
   senderName?: string;
   routeKind?: string;
   repliedMessageId?: string;
+  instanceId?: string;
+  adapterType?: string;
+  botUserId?: string;
+  botNickname?: string;
 };
 
 export type PrivateMessageRecord = {
@@ -19,6 +23,10 @@ export type PrivateMessageRecord = {
   rawMessage: string;
   messageId?: number | string;
   senderName?: string;
+  instanceId?: string;
+  adapterType?: string;
+  botUserId?: string;
+  botNickname?: string;
 };
 
 export type HeartbeatEventRecord = {
@@ -44,6 +52,7 @@ export type VoiceTranscriptEventRecord = {
   rawMessage: string;
   messageId?: number | string;
   senderName?: string;
+  adapterType?: string;
   source?: string;
   sourceDeviceId?: string;
   sourceDeviceName?: string;
@@ -61,6 +70,41 @@ export type CodexNotificationRecord = {
   kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "voice_transcript";
   text: string;
 };
+
+export type AdapterLogRecord = {
+  time: number;
+  adapter: string;
+  event: string;
+  level?: "info" | "warning" | "error";
+  instanceId?: string;
+  message?: string;
+  data?: unknown;
+};
+
+function adapterLogPath(adapter: string, dataDir = config.dataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, `${adapter}-adapter.log.jsonl`);
+}
+
+export function appendAdapterLog(adapter: string, record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>): void {
+  const normalized: AdapterLogRecord = {
+    time: Math.floor(Date.now() / 1000),
+    level: "info",
+    ...record,
+    adapter
+  };
+  fs.appendFileSync(adapterLogPath(adapter), `${JSON.stringify(normalized)}\n`, "utf8");
+}
+
+export function appendAdapterLogToDir(adapter: string, record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>, dataDir: string): void {
+  const normalized: AdapterLogRecord = {
+    time: Math.floor(Date.now() / 1000),
+    level: "info",
+    ...record,
+    adapter
+  };
+  fs.appendFileSync(adapterLogPath(adapter, dataDir), `${JSON.stringify(normalized)}\n`, "utf8");
+}
 
 function logPath(dataDir = config.memoryDataDir): string {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -114,9 +158,9 @@ export function appendManualTriggerEventToDir(record: ManualTriggerRecord, dataD
   fs.appendFileSync(manualTriggerLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function voiceTranscriptLogPath(dataDir = config.memoryDataDir): string {
+function voiceTranscriptLogPath(dataDir = config.memoryDataDir, fileName = "voice-transcripts.jsonl"): string {
   fs.mkdirSync(dataDir, { recursive: true });
-  return path.join(dataDir, "voice-transcripts.jsonl");
+  return path.join(dataDir, fileName);
 }
 
 export function appendVoiceTranscriptEvent(record: VoiceTranscriptEventRecord): void {
@@ -125,6 +169,23 @@ export function appendVoiceTranscriptEvent(record: VoiceTranscriptEventRecord): 
 
 export function appendVoiceTranscriptEventToDir(record: VoiceTranscriptEventRecord, dataDir: string): void {
   fs.appendFileSync(voiceTranscriptLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function voiceTranscriptFileNameForAdapter(adapter: string): string {
+  if (adapter === "fennenote") return "fennenote-voice-transcripts.jsonl";
+  if (adapter === "xiaoai") return "xiaoai-voice-transcripts.jsonl";
+  return "voice-transcripts.jsonl";
+}
+
+export function appendVoiceTranscriptEventForAdapter(adapter: string, record: VoiceTranscriptEventRecord): void {
+  const normalized = {
+    ...record,
+    adapterType: record.adapterType ?? adapter
+  };
+  fs.appendFileSync(voiceTranscriptLogPath(config.memoryDataDir, voiceTranscriptFileNameForAdapter(adapter)), `${JSON.stringify(normalized)}\n`, "utf8");
+  if (adapter !== "webhook") {
+    fs.appendFileSync(voiceTranscriptLogPath(config.memoryDataDir), `${JSON.stringify(normalized)}\n`, "utf8");
+  }
 }
 
 function codexNotificationPath(dataDir = config.memoryDataDir): string {

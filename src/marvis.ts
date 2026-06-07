@@ -5,10 +5,11 @@ import { config } from "./config.js";
 
 type MarvisState = {
   agentAdapterType: "marvis";
-  monitorThreadId: string;
+  monitorThreadId?: string;
   monitorThreadName: string;
   monitorThreadSource: string;
   bound: boolean;
+  handoffOnly?: boolean;
   notificationCount?: number;
   lastNotificationAt?: string;
   lastNotificationError?: string;
@@ -46,10 +47,10 @@ function shouldCopyToClipboard(): boolean {
 function baseState(): MarvisState {
   return {
     agentAdapterType: "marvis",
-    monitorThreadId: "marvis-web",
     monitorThreadName: "Marvis",
     monitorThreadSource: marvisUrl(),
-    bound: true
+    bound: false,
+    handoffOnly: true
   };
 }
 
