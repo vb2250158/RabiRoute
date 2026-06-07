@@ -1,5 +1,22 @@
 export type MessageAdapterType = "napcat" | "heartbeat" | "webhook" | "disabled";
-export type AgentAdapterType = "codexDesktop" | "codexApp";
+export type AgentAdapterType = "codexDesktop" | "codexApp" | "copilotCli" | "marvis" | "astrbot";
+export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "none";
+export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
+
+export type PipelineDefinition = {
+  id?: string;
+  name?: string;
+  inputAdapter?: MessageAdapterType;
+  outputAdapter?: OutputAdapterType;
+  outputPipeline?: string;
+  promptOutputMode?: PromptOutputMode;
+  ttsProvider?: string;
+  ttsVoice?: string;
+  ttsWorkerUrl?: string;
+  ttsPlay?: boolean;
+  preventFeedbackLoop?: boolean;
+  replyToSource?: boolean;
+};
 
 export type NotificationRule = {
   id: string;
@@ -17,6 +34,8 @@ export type GatewayDefinition = {
   enabled?: boolean;
   messageAdapterType?: MessageAdapterType;
   messageAdapters?: MessageAdapterType[];
+  messageAdaptersDisabled?: MessageAdapterType[];
+  messageInputsDisabled?: boolean;
   gatewayPort: number;
   webhookPort?: number;
   webhookPath?: string;
@@ -25,17 +44,21 @@ export type GatewayDefinition = {
   napcatHttpUrl?: string;
   napcatAccessToken?: string;
   targetGroupId?: string;
+  pipelinePreset?: string;
+  pipeline?: PipelineDefinition;
   routeVariables?: Record<string, string>;
   routeName?: string;
   codexThreadName?: string;
   codexCwd?: string;
-  rolesDir?: string;
-  routesDir?: string;
+  copilotCwd?: string;
+  copilotCliBin?: string;
+  marvisAppId?: string;
+  astrbotUrl?: string;
+  astrbotPassword?: string;
   configName?: string;
   agentRoleId?: string;
   agentRoleFile?: string;
   agentAdapters?: AgentAdapterType[];
-  dataDir?: string;
   notificationRules?: NotificationRule[];
   roleNotificationRules?: Record<string, NotificationRule[]>;
   roleRouteNames?: Record<string, string>;

@@ -12,6 +12,7 @@
 
 - [路由配置](routing-configuration.md)：`routeConfig.json`、消息端、Agent 端和路由入口参数。
 - [路由人格](routing-and-personas.md)：`persona.md`、`roleMessageConfig.json`、成长型人格包、Rabi 默认看板娘示例。
+- [Pipeline presets](pipeline-presets.md)：把默认输入端、输出端、TTS 和提示词输出模式打成一组。
 - [语音交互工作站](voice-interaction-workstation.md)：FenneNote 转录、RabiRoute 路由、角色对话和 OumuQ TTS 的公开安全接线方式。
 
 ## 维护

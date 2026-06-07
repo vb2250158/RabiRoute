@@ -8,9 +8,9 @@ export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: "/", redirect: "/overview" },
-    { path: "/overview", component: OverviewPage, meta: { title: "总览" } },
-    { path: "/routes", component: RouteConfigPage, meta: { title: "路由配置" } },
-    { path: "/persona", component: PersonaTemplatePage, meta: { title: "人格与模板" } },
-    { path: "/runtime", component: RuntimeLogPage, meta: { title: "运行日志" } }
+    { path: "/overview", component: OverviewPage, meta: { title: "控制台" } },
+    { path: "/routes/:id?", component: RouteConfigPage, meta: { title: "消息适配器" } },
+    { path: "/persona/:id?", component: PersonaTemplatePage, meta: { title: "Rabi 人格" } },
+    { path: "/runtime", component: RuntimeLogPage, meta: { title: "日志诊断" } }
   ]
 });

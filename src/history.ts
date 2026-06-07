@@ -29,12 +29,26 @@ export type HeartbeatEventRecord = {
   intervalSeconds?: number;
 };
 
+export type ManualTriggerRecord = {
+  time: number;
+  rawMessage: string;
+  messageId?: number | string;
+  senderName?: string;
+  triggerId?: string;
+  triggerName?: string;
+  intervalSeconds?: number;
+};
+
 export type VoiceTranscriptEventRecord = {
   time: number;
   rawMessage: string;
   messageId?: number | string;
   senderName?: string;
   source?: string;
+  sourceDeviceId?: string;
+  sourceDeviceName?: string;
+  sourceArea?: string;
+  sessionId?: string;
   startedAt?: string;
   endedAt?: string;
   durationSeconds?: number;
@@ -44,11 +58,11 @@ export type VoiceTranscriptEventRecord = {
 export type CodexNotificationRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention" | "heartbeat" | "voice_transcript";
+  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "voice_transcript";
   text: string;
 };
 
-function logPath(dataDir = config.dataDir): string {
+function logPath(dataDir = config.memoryDataDir): string {
   fs.mkdirSync(dataDir, { recursive: true });
   return path.join(dataDir, "group-messages.jsonl");
 }
@@ -61,7 +75,7 @@ export function appendGroupMessageToDir(record: GroupMessageRecord, dataDir: str
   fs.appendFileSync(logPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function privateLogPath(dataDir = config.dataDir): string {
+function privateLogPath(dataDir = config.memoryDataDir): string {
   fs.mkdirSync(dataDir, { recursive: true });
   return path.join(dataDir, "private-messages.jsonl");
 }
@@ -74,7 +88,7 @@ export function appendPrivateMessageToDir(record: PrivateMessageRecord, dataDir:
   fs.appendFileSync(privateLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function heartbeatLogPath(dataDir = config.dataDir): string {
+function heartbeatLogPath(dataDir = config.memoryDataDir): string {
   fs.mkdirSync(dataDir, { recursive: true });
   return path.join(dataDir, "heartbeat-events.jsonl");
 }
@@ -87,7 +101,20 @@ export function appendHeartbeatEventToDir(record: HeartbeatEventRecord, dataDir:
   fs.appendFileSync(heartbeatLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function voiceTranscriptLogPath(dataDir = config.dataDir): string {
+function manualTriggerLogPath(dataDir = config.memoryDataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "manual-trigger-events.jsonl");
+}
+
+export function appendManualTriggerEvent(record: ManualTriggerRecord): void {
+  fs.appendFileSync(manualTriggerLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+export function appendManualTriggerEventToDir(record: ManualTriggerRecord, dataDir: string): void {
+  fs.appendFileSync(manualTriggerLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function voiceTranscriptLogPath(dataDir = config.memoryDataDir): string {
   fs.mkdirSync(dataDir, { recursive: true });
   return path.join(dataDir, "voice-transcripts.jsonl");
 }
@@ -100,7 +127,7 @@ export function appendVoiceTranscriptEventToDir(record: VoiceTranscriptEventReco
   fs.appendFileSync(voiceTranscriptLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function codexNotificationPath(dataDir = config.dataDir): string {
+function codexNotificationPath(dataDir = config.memoryDataDir): string {
   fs.mkdirSync(dataDir, { recursive: true });
   return path.join(dataDir, "codex-notifications.jsonl");
 }

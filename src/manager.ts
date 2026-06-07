@@ -6,6 +6,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
+import type { ForwardRouteKind } from "./forwarding.js";
+import { normalizePipelineDefinition, type PipelineDefinition } from "./pipelines.js";
 
 type GatewayDefinition = {
   id: string;
@@ -13,6 +15,8 @@ type GatewayDefinition = {
   enabled?: boolean;
   messageAdapterType?: MessageAdapterType;
   messageAdapters?: MessageAdapterType[];
+  messageAdaptersDisabled?: MessageAdapterType[];
+  messageInputsDisabled?: boolean;
   gatewayPort: number;
   webhookPort?: number;
   webhookPath?: string;
@@ -21,10 +25,15 @@ type GatewayDefinition = {
   napcatHttpUrl?: string;
   napcatAccessToken?: string;
   targetGroupId?: string;
+  pipelinePreset?: string;
+  pipeline?: PipelineDefinition;
   routeVariables?: Record<string, string>;
   routeName?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  copilotCwd?: string;
+  copilotCliBin?: string;
+  marvisAppId?: string;
   rolesDir?: string;
   routesDir?: string;
   configName?: string;
@@ -51,6 +60,8 @@ type RouteProfileDefinition = {
   id: string;
   name?: string;
   enabled?: boolean;
+  pipelinePreset?: string;
+  pipeline?: PipelineDefinition;
   agentRoleId?: string;
   agentRoleFile?: string;
   rolesDir?: string;
@@ -88,12 +99,30 @@ type GatewayRuntime = {
 };
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const rolesRoot = path.resolve(rootDir, process.env.ROLES_DIR ?? path.join("data", "roles"));
-const routeRoot = path.resolve(rootDir, process.env.ROUTE_DIR ?? path.join("data", "route"));
+const managerConfigPath = path.join(rootDir, "data", "manager.json");
+
+type ManagerConfig = { routeDir?: string; rolesDir?: string };
+
+function readManagerConfig(): ManagerConfig {
+  if (!fs.existsSync(managerConfigPath)) return {};
+  try { return JSON.parse(fs.readFileSync(managerConfigPath, "utf8")) as ManagerConfig; } catch { return {}; }
+}
+
+function writeManagerConfig(cfg: ManagerConfig): void {
+  fs.mkdirSync(path.dirname(managerConfigPath), { recursive: true });
+  fs.writeFileSync(managerConfigPath, JSON.stringify(cfg, null, 2), "utf8");
+}
+
+const _managerCfg = readManagerConfig();
+let rolesRoot = path.resolve(rootDir, _managerCfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
+let routeRoot = path.resolve(rootDir, _managerCfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
+const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback";
+const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
+const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
+const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlaybackToken;
 const packageJsonPath = path.join(rootDir, "package.json");
 const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
-const standaloneWebuiPath = path.join(rootDir, "ribiwebgui", "gateways.legacy.html");
 const runtimes = new Map<string, GatewayRuntime>();
 let watchedConfigSnapshot = "";
 
@@ -154,10 +183,9 @@ function readConfig(): GatewayConfigFile {
       continue;
     }
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
-    const roleMessageConfig = readRoleMessageConfigItem(raw.agentRoleId, configName);
+    // routeConfig.json is the single source of truth; roleMessageConfig.json is no longer read.
     gateways.push({
       ...raw,
-      ...roleMessageConfig,
       id: configName,
       configName,
       agentRoleId: raw.agentRoleId,
@@ -175,16 +203,37 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
 
   const normalized = { gateways: config.gateways.map(normalizeDefinition) };
   const grouped = new Map<string, GatewayDefinition[]>();
-  for (const item of normalized.gateways) {
+  for (let i = 0; i < normalized.gateways.length; i++) {
+    const item = normalized.gateways[i];
+    const rawItem = config.gateways[i];
     const roleId = sanitizeRoleId(item.agentRoleId) || routeRuntimeParts(item.id).roleId;
     grouped.set(roleId, [...(grouped.get(roleId) ?? []), item]);
+    // Rename data dir if configName changed (look up existing runtime by original/raw id)
+    const existingRuntime = runtimes.get(rawItem.id) ?? runtimes.get(item.id);
+    if (existingRuntime) {
+      const oldDataDir = dataDirFor(existingRuntime.definition);
+      const newDataDir = dataDirFor(item);
+      if (oldDataDir !== newDataDir && fs.existsSync(oldDataDir)) {
+        try {
+          fs.mkdirSync(path.dirname(newDataDir), { recursive: true });
+          fs.renameSync(oldDataDir, newDataDir);
+        } catch {
+          // Non-fatal: folder rename failed (e.g. cross-drive), data stays at old location
+        }
+      }
+      // Remove old config file if id (configName) changed
+      const oldConfigName = routeRuntimeParts(existingRuntime.definition.id).configName;
+      const newConfigName = routeRuntimeParts(item.id).configName;
+      if (oldConfigName !== newConfigName) {
+        const oldConfigPath = routeConfigPath(oldConfigName);
+        if (fs.existsSync(oldConfigPath)) {
+          try { fs.unlinkSync(oldConfigPath); } catch { /* non-fatal */ }
+        }
+      }
+    }
     writeRouteConfigFile(item);
   }
-  for (const [roleId, items] of grouped.entries()) {
-    if (roleId) {
-      writeRoleMessageConfigFile(roleId, items);
-    }
-  }
+  // roleMessageConfig.json is no longer written; routeConfig.json is the single source of truth.
   return normalized;
 }
 
@@ -203,13 +252,19 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   const agentRoleId = sanitizeRoleId(definition.agentRoleId) || parts.roleId;
   const configName = sanitizeRoleId(definition.configName) || parts.configName;
   const runtimeId = routeRuntimeId(agentRoleId, configName);
-  const dataDir = definition.dataDir ?? path.relative(rootDir, path.join(routeRoot, configName)).replace(/\\/g, "/");
-  const rolesDir = definition.rolesDir ?? path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
+  const dataDir = path.relative(rootDir, path.join(routeRoot, configName)).replace(/\\/g, "/");
+  const rolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
   const routeName = definition.routeName?.trim() || definition.name?.trim() || configName;
   const notificationRules = normalizeRuleDefinitions(definition.notificationRules) ?? [];
   const { botNickname: _legacyBotNickname, ...cleanDefinition } = definition as GatewayDefinition & { botNickname?: string };
-  const messageAdapters = normalizeMessageAdapters(definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"]);
+  const rawMessageAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
+  const messageInputsDisabled = definition.messageInputsDisabled === true || rawMessageAdapters.includes("disabled");
+  const messageAdapters = normalizeMessageAdapters(rawMessageAdapters);
   const agentAdapters = normalizeAgentAdapters(definition.agentAdapters ?? ["codexDesktop"]);
+  const pipelinePreset = typeof definition.pipelinePreset === "string" && definition.pipelinePreset.trim()
+    ? definition.pipelinePreset.trim()
+    : undefined;
+  const pipeline = normalizePipelineDefinition(definition.pipeline);
   return {
     ...cleanDefinition,
     id: runtimeId,
@@ -218,7 +273,10 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
     enabled: definition.enabled !== false,
     messageAdapterType: messageAdapters[0] ?? "napcat",
     messageAdapters,
+    messageInputsDisabled,
     agentAdapters,
+    pipelinePreset,
+    pipeline,
     routeName,
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
@@ -247,6 +305,8 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
       agentRoleFile: definition.agentRoleFile ?? "persona.md",
       rolesDir,
       dataDir,
+      pipelinePreset,
+      pipeline,
       routeVariables: definition.routeVariables,
       notificationRules
     }, 0, definition, dataDir, rolesDir)].filter((profile): profile is RouteProfileDefinition => Boolean(profile))
@@ -271,6 +331,10 @@ function normalizeRouteProfile(
     id,
     name: profile.name?.trim() || id,
     enabled: profile.enabled !== false,
+    pipelinePreset: typeof profile.pipelinePreset === "string" && profile.pipelinePreset.trim()
+      ? profile.pipelinePreset.trim()
+      : definition.pipelinePreset,
+    pipeline: normalizePipelineDefinition(profile.pipeline) ?? normalizePipelineDefinition(definition.pipeline),
     agentRoleId: roleId,
     agentRoleFile: profile.agentRoleFile?.trim() || definition.agentRoleFile || "persona.md",
     rolesDir: profile.rolesDir?.trim() || rolesDir,
@@ -284,9 +348,6 @@ function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => item == null ? "" : String(item))
     .filter((item): item is MessageAdapterType => item === "napcat" || item === "webhook" || item === "heartbeat" || item === "disabled");
-  if (adapters.includes("disabled")) {
-    return ["disabled"];
-  }
   const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
   return unique.length > 0 ? unique : ["napcat"];
 }
@@ -358,8 +419,13 @@ function routeConfigPath(configName: string): string {
 function routeConfigItem(definition: GatewayDefinition): Record<string, unknown> {
   return {
     configName: sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName,
+    name: definition.name,
+    routeName: definition.routeName,
     enabled: definition.enabled !== false,
     messageAdapters: definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"],
+    messageAdaptersDisabled: definition.messageAdaptersDisabled,
+    pipelinePreset: definition.pipelinePreset,
+    pipeline: definition.pipeline,
     gatewayPort: definition.gatewayPort,
     webhookPort: definition.webhookPort,
     webhookPath: definition.webhookPath,
@@ -369,11 +435,15 @@ function routeConfigItem(definition: GatewayDefinition): Record<string, unknown>
     heartbeatMessage: definition.heartbeatMessage,
     codexThreadName: definition.codexThreadName,
     codexCwd: definition.codexCwd,
+    copilotCwd: definition.copilotCwd,
+    copilotCliBin: definition.copilotCliBin,
+    marvisAppId: definition.marvisAppId,
     rolesDir: definition.rolesDir,
     agentRoleId: definition.agentRoleId,
     agentRoleFile: definition.agentRoleFile,
     agentAdapters: definition.agentAdapters,
-    dataDir: definition.dataDir
+    routeVariables: definition.routeVariables,
+    notificationRules: definition.notificationRules ?? []
   };
 }
 
@@ -384,46 +454,38 @@ function writeRouteConfigFile(definition: GatewayDefinition): void {
   fs.writeFileSync(configPath, JSON.stringify(routeConfigItem(definition), null, 2), "utf8");
 }
 
-function roleMessageConfigItem(definition: GatewayDefinition): Record<string, unknown> {
-  const parts = routeRuntimeParts(definition.id);
-  return {
-    configName: sanitizeRoleId(definition.configName) || parts.configName,
-    routeVariables: definition.routeVariables ?? {},
-    notificationRules: definition.notificationRules ?? []
-  };
+function readRoleMessageConfigShared(roleId: string | undefined): Partial<GatewayDefinition> {
+  const safeRoleId = sanitizeRoleId(roleId);
+  if (!safeRoleId) return {};
+  const configPath = roleMessageConfigPath(safeRoleId);
+  if (!fs.existsSync(configPath)) return {};
+  const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+
+  // New flat format: { notificationRules: [...], routeVariables: {} }
+  if (Array.isArray(parsed.notificationRules)) {
+    return { notificationRules: parsed.notificationRules as GatewayDefinition["notificationRules"] };
+  }
+
+  // Legacy per-configName format: pick the entry with the most rules as the shared source
+  const configs: unknown[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed.configs) ? parsed.configs as unknown[] : [];
+  const best = configs
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+    .sort((a, b) => ((b.notificationRules as unknown[])?.length ?? 0) - ((a.notificationRules as unknown[])?.length ?? 0))[0];
+  if (!best) return {};
+  return { notificationRules: best.notificationRules as GatewayDefinition["notificationRules"] };
 }
 
-function readRoleMessageConfigItem(roleId: string | undefined, configName: string): Partial<GatewayDefinition> {
-  const safeRoleId = sanitizeRoleId(roleId);
-  if (!safeRoleId) {
-    return {};
-  }
-  const configPath = roleMessageConfigPath(safeRoleId);
-  if (!fs.existsSync(configPath)) {
-    return {};
-  }
-  const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as { configs?: unknown } | unknown[];
-  const configs = Array.isArray(parsed) ? parsed : Array.isArray(parsed.configs) ? parsed.configs : [];
-  const item = configs.find((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    const raw = entry as Partial<GatewayDefinition>;
-    return (sanitizeRoleId(raw.configName) || sanitizeRoleId(raw.id)) === configName;
-  });
-  if (!item || typeof item !== "object") {
-    return {};
-  }
-  const raw = item as Partial<GatewayDefinition>;
-  return {
-    routeVariables: raw.routeVariables,
-    notificationRules: raw.notificationRules
-  };
+function readRoleMessageConfigItem(roleId: string | undefined, _configName: string): Partial<GatewayDefinition> {
+  return readRoleMessageConfigShared(roleId);
 }
 
 function writeRoleMessageConfigFile(roleId: string, items: GatewayDefinition[]): void {
   const configPath = roleMessageConfigPath(roleId);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  // All gateways sharing this persona use the same rules; pick the first with rules, or fallback to first item
+  const source = items.find(item => Array.isArray(item.notificationRules) && item.notificationRules.length > 0) ?? items[0];
   fs.writeFileSync(configPath, JSON.stringify({
-    configs: items.map(roleMessageConfigItem)
+    notificationRules: source?.notificationRules ?? []
   }, null, 2), "utf8");
 }
 
@@ -449,12 +511,19 @@ function ensureRoleMessageConfigFile(roleId: string): string {
 function openFileWithDefaultApp(filePath: string): void {
   const target = path.resolve(filePath);
   const platform = process.platform;
-  const command = platform === "win32" ? "cmd" : platform === "darwin" ? "open" : "xdg-open";
-  const args = platform === "win32" ? ["/c", "start", "", target] : [target];
-  const child = spawn(command, args, {
-    detached: true,
-    stdio: "ignore"
-  });
+  let command: string;
+  let args: string[];
+  if (platform === "win32") {
+    command = "cmd";
+    args = ["/c", "explorer", target];
+  } else if (platform === "darwin") {
+    command = "open";
+    args = [target];
+  } else {
+    command = "xdg-open";
+    args = [target];
+  }
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
   child.unref();
 }
 
@@ -497,12 +566,15 @@ function openConfigFilePayload(type: string | null, gatewayId: string | null, ro
   }
 
   if (!gatewayId) {
-    throw new Error("Missing gateway id");
+    openFileWithDefaultApp(routeRoot);
+    return { code: 0, data: { path: routeRoot } };
   }
 
   const runtime = runtimes.get(gatewayId);
   if (!runtime) {
-    throw new Error(`Gateway not found: ${gatewayId}`);
+    // fallback: open routeRoot if runtime not found (e.g. unsaved configName change)
+    openFileWithDefaultApp(routeRoot);
+    return { code: 0, data: { path: routeRoot } };
   }
 
   const configName = sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName;
@@ -639,20 +711,44 @@ function appendLog(runtime: GatewayRuntime, line: string): void {
   console.log(`[${runtime.definition.id}] ${line}`);
 }
 
-function childCommand(): { command: string; args: string[]; shell: boolean } {
+function childCommand(extraArgs: string[] = []): { command: string; args: string[]; shell: boolean } {
   const distEntry = path.join(rootDir, "dist", "index.js");
   if (fs.existsSync(distEntry)) {
-    return { command: process.execPath, args: [distEntry], shell: false };
+    return { command: process.execPath, args: [distEntry, ...extraArgs], shell: false };
   }
 
-  return { command: "npm", args: ["run", "dev"], shell: true };
+  return { command: "npm", args: ["run", "dev", "--", ...extraArgs], shell: true };
+}
+
+function resolveWingetCopilot(): string | null {
+  if (!process.env.LOCALAPPDATA) return null;
+  const wingetBase = path.join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Packages");
+  try {
+    for (const entry of fs.readdirSync(wingetBase)) {
+      if (entry.startsWith("GitHub.Copilot")) {
+        const exe = path.join(wingetBase, entry, "copilot.exe");
+        if (fs.existsSync(exe)) return exe;
+      }
+    }
+  } catch { /* skip */ }
+  return null;
 }
 
 function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
+  const parts = routeRuntimeParts(definition.id);
+  const configName = sanitizeRoleId(definition.configName) || parts.configName;
+  const routeDataDir = path.relative(rootDir, path.join(routeRoot, configName)).replace(/\\/g, "/");
+  const routeRolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
+  const configuredAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
+  const disabledAdapters = new Set(definition.messageAdaptersDisabled ?? []);
+  const activeAdapters = configuredAdapters.filter(t => !disabledAdapters.has(t));
+  const runtimeAdapters = definition.messageInputsDisabled ? ["disabled" as MessageAdapterType] : activeAdapters;
   return {
     ...process.env,
-    MESSAGE_ADAPTER_TYPE: definition.messageAdapterType ?? definition.messageAdapters?.[0] ?? "napcat",
-    MESSAGE_ADAPTER_TYPES: JSON.stringify(definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"]),
+    MESSAGE_ADAPTER_TYPE: runtimeAdapters[0] ?? "napcat",
+    MESSAGE_ADAPTER_TYPES: JSON.stringify(runtimeAdapters),
+    PIPELINE_PRESET: definition.pipelinePreset ?? "",
+    PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
     HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
     NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
@@ -662,7 +758,9 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     WEBHOOK_PATH: definition.webhookPath ?? "/webhook",
     CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? process.env.CODEX_CWD ?? rootDir,
-    ROLES_DIR: definition.rolesDir ?? path.join(definition.dataDir ?? `./data/${definition.id}`, "roles"),
+    COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
+    COPILOT_CWD: definition.copilotCwd?.trim() || process.env.COPILOT_CWD || rootDir,
+    ROLES_DIR: routeRolesDir,
     AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
     AGENT_ROLE_FILE: definition.agentRoleFile ?? "persona.md",
     AGENT_ADAPTERS: Array.isArray(definition.agentAdapters) ? definition.agentAdapters.join(",") : process.env.AGENT_ADAPTERS ?? "",
@@ -670,14 +768,14 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     BOT_NICKNAME: process.env.BOT_NICKNAME ?? "QQ小助手",
     ROUTE_VARIABLES: definition.routeVariables ? JSON.stringify(definition.routeVariables) : "",
     ROUTE_PROFILES: Array.isArray(definition.routeProfiles) ? JSON.stringify(definition.routeProfiles) : "",
-    DATA_DIR: definition.dataDir ?? `./data/${definition.id}`,
+    DATA_DIR: routeDataDir,
     GROUP_NOTIFICATION_TEMPLATE: definition.groupNotificationTemplate ?? "",
     GROUP_AT_NOTIFICATION_TEMPLATE: definition.groupAtNotificationTemplate ?? "",
     GROUP_DIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupDirectReplyNotificationTemplate ?? definition.groupReplyNotificationTemplate ?? "",
     GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupIndirectReplyNotificationTemplate ?? definition.groupNicknameNotificationTemplate ?? "",
     PRIVATE_NOTIFICATION_TEMPLATE: definition.privateNotificationTemplate ?? "",
     VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE: definition.voiceTranscriptNotificationTemplate ?? "",
-    NOTIFICATION_RULES: "",
+    NOTIFICATION_RULES: Array.isArray(definition.notificationRules) ? JSON.stringify(definition.notificationRules) : "",
   };
 }
 
@@ -749,16 +847,24 @@ function stopGateway(id: string): void {
   runtime.process.kill();
 }
 
+function stopAllGateways(): void {
+  for (const runtime of runtimes.values()) {
+    runtime.needsRestart = false;
+    if (runtime.process) {
+      appendLog(runtime, "stopping because manager is shutting down");
+      runtime.process.kill();
+    }
+  }
+}
+
 function dataDirFor(definition: GatewayDefinition): string {
   const parts = routeRuntimeParts(definition.id);
-  const roleId = sanitizeRoleId(definition.agentRoleId) || parts.roleId;
   const configName = sanitizeRoleId(definition.configName) || parts.configName;
-  return path.resolve(rootDir, definition.dataDir ?? path.join("data", "roles", roleId, "roleMessageConfig", configName));
+  return path.resolve(routeRoot, configName);
 }
 
 function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
-  const baseDataDir = path.resolve(rootDir, definition.dataDir ?? `./data/${definition.id}`);
-  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join(baseDataDir, "roles"));
+  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
   const roleFileName = definition.agentRoleFile ?? "persona.md";
   const selectedRoleId = sanitizeRoleId(definition.agentRoleId);
   const options: Array<Record<string, string>> = [];
@@ -817,6 +923,18 @@ function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
 }
 
 function readCodexState(definition: GatewayDefinition): Record<string, unknown> {
+  const agentAdapters = definition.agentAdapters ?? ["codexDesktop"];
+  const hasCodexAdapter = agentAdapters.some((adapter) => adapter === "codexDesktop" || adapter === "codexApp");
+  if (agentAdapters.includes("copilotCli") && !agentAdapters.some((adapter) => adapter === "codexDesktop" || adapter === "codexApp")) {
+    return readCopilotState(definition);
+  }
+  if (agentAdapters.includes("marvis") && !hasCodexAdapter) {
+    return readMarvisState(definition);
+  }
+  if (agentAdapters.includes("astrbot") && !hasCodexAdapter) {
+    return readAstrbotState(definition);
+  }
+
   const statePath = path.join(dataDirFor(definition), "codex-state.json");
   ensureCodexStateBinding(definition, statePath);
   if (!fs.existsSync(statePath)) {
@@ -828,7 +946,7 @@ function readCodexState(definition: GatewayDefinition): Record<string, unknown> 
   }
 
   try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>;
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
     return {
       ...state,
       statePath,
@@ -844,32 +962,120 @@ function readCodexState(definition: GatewayDefinition): Record<string, unknown> 
   }
 }
 
+function readCopilotState(definition: GatewayDefinition): Record<string, unknown> {
+  const statePath = path.join(dataDirFor(definition), "copilot-state.json");
+  if (!fs.existsSync(statePath)) {
+    return {
+      agentAdapterType: "copilotCli",
+      statePath,
+      bound: true,
+      monitorThreadId: "copilot-cli",
+      monitorThreadName: "Copilot CLI",
+      monitorThreadSource: process.env.COPILOT_CLI_BIN || "copilot",
+      message: "Copilot CLI adapter is configured, but no prompt has been delivered yet."
+    };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    return {
+      ...state,
+      statePath,
+      bound: true
+    };
+  } catch (error) {
+    return {
+      agentAdapterType: "copilotCli",
+      statePath,
+      bound: false,
+      lastNotificationError: error instanceof Error ? error.message : String(error),
+      lastNotificationErrorAt: new Date().toISOString()
+    };
+  }
+}
+
+function readMarvisState(definition: GatewayDefinition): Record<string, unknown> {
+  const statePath = path.join(dataDirFor(definition), "marvis-state.json");
+  const marvisTarget = process.env.MARVIS_APP_ID || "Tencent.Marvis";
+  if (!fs.existsSync(statePath)) {
+    return {
+      agentAdapterType: "marvis",
+      statePath,
+      bound: true,
+      monitorThreadId: "marvis-desktop",
+      monitorThreadName: "Marvis",
+      monitorThreadSource: marvisTarget,
+      message: "Marvis adapter is configured, but no prompt has been delivered yet."
+    };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    return {
+      ...state,
+      statePath,
+      bound: true
+    };
+  } catch (error) {
+    return {
+      agentAdapterType: "marvis",
+      statePath,
+      bound: false,
+      lastNotificationError: error instanceof Error ? error.message : String(error),
+      lastNotificationErrorAt: new Date().toISOString()
+    };
+  }
+}
+
+function readAstrbotState(definition: GatewayDefinition): Record<string, unknown> {
+  const statePath = path.join(dataDirFor(definition), "astrbot-agent-state.json");
+  const astrbotUrl = process.env.ASTRBOT_URL ?? "http://127.0.0.1:6185";
+  if (!fs.existsSync(statePath)) {
+    return {
+      agentAdapterType: "astrbot",
+      statePath,
+      bound: true,
+      monitorThreadId: "astrbot-agent",
+      monitorThreadName: "AstrBot Agent",
+      monitorThreadSource: astrbotUrl,
+      message: "AstrBot adapter is configured, but no notification has been delivered yet."
+    };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    return {
+      ...state,
+      statePath,
+      bound: true
+    };
+  } catch (error) {
+    return {
+      agentAdapterType: "astrbot",
+      statePath,
+      bound: false,
+      lastNotificationError: error instanceof Error ? error.message : String(error),
+      lastNotificationErrorAt: new Date().toISOString()
+    };
+  }
+}
+
 function sessionIndexPath(): string {
   return path.join(os.homedir(), ".codex", "session_index.jsonl");
 }
 
-function ensureCodexStateBinding(definition: GatewayDefinition, statePath: string): void {
-  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
-  let existingState: Record<string, unknown> | null = null;
+type SessionThreadRecord = {
+  id: string;
+  threadName: string;
+  updatedAt: string;
+};
 
-  if (fs.existsSync(statePath)) {
-    try {
-      existingState = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>;
-      if (existingState.monitorThreadId && existingState.monitorThreadName === targetName) {
-        return;
-      }
-    } catch {
-      // Rewrite below if the state file is unreadable.
-    }
-  }
-
-  const indexPath = sessionIndexPath();
+function readLatestSessionThreads(indexPath: string): SessionThreadRecord[] {
   if (!fs.existsSync(indexPath)) {
-    return;
+    return [];
   }
 
-  const latestById = new Map<string, { id: string; threadName: string; updatedAt: string }>();
-  let best: { id: string; threadName: string; updatedAt: string } | null = null;
+  const latestById = new Map<string, SessionThreadRecord>();
   for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
@@ -893,16 +1099,50 @@ function ensureCodexStateBinding(definition: GatewayDefinition, statePath: strin
     }
   }
 
-  for (const record of latestById.values()) {
+  return [...latestById.values()];
+}
+
+function ensureCodexStateBinding(definition: GatewayDefinition, statePath: string): void {
+  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
+  let existingState: Record<string, unknown> | null = null;
+  const indexPath = sessionIndexPath();
+  const sessionThreads = readLatestSessionThreads(indexPath);
+
+  if (fs.existsSync(statePath)) {
+    try {
+      existingState = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+      const currentRecord = typeof existingState.monitorThreadId === "string"
+        ? sessionThreads.find((record) => record.id === existingState?.monitorThreadId)
+        : null;
+      const stateStillMatchesTarget = existingState.monitorThreadId
+        && existingState.monitorThreadName === targetName
+        && (!currentRecord || currentRecord.threadName === targetName);
+      if (stateStillMatchesTarget) {
+        return;
+      }
+    } catch {
+      // Rewrite below if the state file is unreadable.
+    }
+  }
+
+  if (sessionThreads.length === 0) {
+    return;
+  }
+
+  let best: SessionThreadRecord | null = null;
+  for (const record of sessionThreads) {
     if (record.threadName === targetName && (!best || Date.parse(record.updatedAt) > Date.parse(best.updatedAt))) {
       best = record;
     }
   }
 
   if (!best) {
-    if (existingState?.monitorThreadId && existingState.monitorThreadName !== targetName) {
+    if (existingState?.monitorThreadId) {
       fs.mkdirSync(path.dirname(statePath), { recursive: true });
       fs.writeFileSync(statePath, JSON.stringify({
+        ...existingState,
+        monitorThreadId: undefined,
+        monitorThreadUpdatedAt: undefined,
         monitorThreadName: targetName,
         monitorThreadSource: indexPath,
         lastAutoDiscoveryAt: new Date().toISOString(),
@@ -915,6 +1155,7 @@ function ensureCodexStateBinding(definition: GatewayDefinition, statePath: strin
 
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify({
+    ...existingState,
     monitorThreadId: best.id,
     monitorThreadName: best.threadName,
     monitorThreadUpdatedAt: best.updatedAt,
@@ -954,10 +1195,13 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
   return {
     id: runtime.definition.id,
     name: runtime.definition.name,
+    configName: sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName,
     enabled: runtime.definition.enabled,
     messageAdapterType: runtime.definition.messageAdapterType ?? "napcat",
     messageAdapters: runtime.definition.messageAdapters ?? [runtime.definition.messageAdapterType ?? "napcat"],
     agentAdapters: runtime.definition.agentAdapters ?? ["codexDesktop"],
+    pipelinePreset: runtime.definition.pipelinePreset,
+    pipeline: runtime.definition.pipeline,
     gatewayPort: runtime.definition.gatewayPort,
     webhookPort: runtime.definition.webhookPort,
     webhookPath: runtime.definition.webhookPath,
@@ -1017,6 +1261,107 @@ function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
   });
 }
 
+type ManualTriggerRequest = {
+  triggerId?: string;
+  triggerName?: string;
+  message?: string;
+  routeKind?: string;
+  ruleId?: string;
+};
+
+function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): Promise<void> {
+  const runtime = runtimes.get(id);
+  if (!runtime) {
+    throw new Error(`Gateway not found: ${id}`);
+  }
+
+  const triggerId = sanitizeRoleId(request.triggerId) || "manual";
+  const triggerName = request.triggerName?.trim() || triggerId;
+  const message = request.message?.trim() || triggerName;
+  const routeKind = normalizeManualRouteKind(request.routeKind);
+  const ruleId = sanitizeRoleId(request.ruleId) || triggerId;
+  const command = childCommand([
+    `--manual-trigger=${triggerId}`,
+    `--manual-name=${encodeURIComponent(triggerName)}`,
+    `--manual-message=${encodeURIComponent(message)}`,
+    `--manual-route-kind=${routeKind}`,
+    `--manual-rule=${ruleId}`
+  ]);
+  appendLog(runtime, `manual trigger requested: ${triggerName}`);
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+
+    child.stdout.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `manual trigger: ${line}`);
+      }
+    });
+    child.stderr.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `manual trigger error: ${line}`);
+      }
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        appendLog(runtime, `manual trigger completed: ${triggerName}`);
+        resolve();
+        return;
+      }
+      reject(new Error(`manual trigger failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
+    });
+  });
+}
+
+function normalizeManualRouteKind(value: unknown): ForwardRouteKind {
+  return value === "heartbeat" ? "heartbeat" : "manual_trigger";
+}
+
+async function forwardFenneNoteRequest(
+  body: unknown,
+  targetUrl: string,
+  token: string
+): Promise<Record<string, unknown>> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json; charset=utf-8",
+    "user-agent": "RabiRoute"
+  };
+  if (token) {
+    headers.authorization = `Bearer ${token}`;
+  }
+  const forwarded = await fetch(targetUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body ?? {})
+  });
+  const text = await forwarded.text();
+  let data: unknown = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+  return {
+    ok: forwarded.ok,
+    status: forwarded.status,
+    target: targetUrl,
+    response: data
+  };
+}
+
+async function forwardPlaybackRequest(body: unknown): Promise<Record<string, unknown>> {
+  return forwardFenneNoteRequest(body, fenneNotePlaybackUrl, fenneNotePlaybackToken);
+}
+
+async function forwardFenneNoteReply(body: unknown): Promise<Record<string, unknown>> {
+  return forwardFenneNoteRequest(body, fenneNoteReplyUrl, fenneNoteReplyToken);
+}
+
 function standaloneGatewayPayload(): Record<string, unknown> {
   return {
     code: 0,
@@ -1025,9 +1370,8 @@ function standaloneGatewayPayload(): Record<string, unknown> {
         gateways: [...runtimes.values()].map((runtime) => runtime.definition)
       },
       configFiles: {
-        manager: routeRoot,
-        routeRoot,
-        rolesRoot
+        routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
+        rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
       },
       manager: [...runtimes.values()].map(runtimeStatus)
     }
@@ -1120,63 +1464,8 @@ function htmlResponse(pathname: string, response: http.ServerResponse): void {
     return;
   }
 
-  if (fs.existsSync(standaloneWebuiPath)) {
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end(fs.readFileSync(standaloneWebuiPath, "utf8"));
-    return;
-  }
-
-  const gateways = [...runtimes.values()].map(runtimeStatus);
-  const cards = gateways.map((gateway) => {
-    const running = gateway.running ? "running" : "stopped";
-    const log = (gateway.log as string[]).map((line) => `<div>${escapeHtml(line)}</div>`).join("");
-    return `
-      <section class="card">
-        <div class="row">
-          <h2>${escapeHtml(String(gateway.name))}</h2>
-          <span class="pill ${running}">${running}</span>
-        </div>
-        <div class="meta">id=${escapeHtml(String(gateway.id))} port=${gateway.gatewayPort} pid=${gateway.pid ?? "-"}</div>
-        <div class="meta">thread=${escapeHtml(String(gateway.codexThreadName))}</div>
-        <div class="actions">
-          <form method="post" action="/gateways/${gateway.id}/start"><button>Start</button></form>
-          <form method="post" action="/gateways/${gateway.id}/stop"><button>Stop</button></form>
-          <form method="post" action="/gateways/${gateway.id}/restart"><button>Restart</button></form>
-        </div>
-        <pre>${log}</pre>
-      </section>
-    `;
-  }).join("");
-
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  response.end(`<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gateway Manager</title>
-  <style>
-    body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: #f6f7fb; color: #1f2328; }
-    header { padding: 20px 28px; background: #ffffff; border-bottom: 1px solid #dde1e7; }
-    h1 { margin: 0; font-size: 22px; }
-    main { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; padding: 18px; }
-    .card { background: #ffffff; border: 1px solid #dde1e7; border-radius: 8px; padding: 16px; box-shadow: 0 8px 24px rgba(31, 35, 40, 0.06); }
-    .row { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
-    h2 { margin: 0; font-size: 18px; }
-    .pill { border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 700; }
-    .running { background: #ddf4e4; color: #1a7f37; }
-    .stopped { background: #ffebe9; color: #cf222e; }
-    .meta { margin-top: 8px; color: #57606a; font-size: 13px; overflow-wrap: anywhere; }
-    .actions { display: flex; gap: 8px; margin: 14px 0; }
-    button { border: 1px solid #afb8c1; border-radius: 6px; background: #f6f8fa; padding: 6px 12px; cursor: pointer; }
-    pre { min-height: 140px; max-height: 260px; overflow: auto; margin: 0; padding: 10px; background: #0d1117; color: #c9d1d9; border-radius: 6px; font-size: 12px; white-space: pre-wrap; }
-  </style>
-</head>
-<body>
-  <header><h1>Gateway Manager</h1></header>
-  <main>${cards}</main>
-</body>
-</html>`);
+  response.writeHead(503, { "content-type": "text/plain; charset=utf-8" });
+  response.end("RabiRoute WebGUI build is missing. Run `npm run webgui:build` or `npm run build`.");
 }
 
 function assetResponse(pathname: string, response: http.ServerResponse): boolean {
@@ -1201,14 +1490,6 @@ function assetResponse(pathname: string, response: http.ServerResponse): boolean
   return true;
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function handleAction(pathname: string, response: http.ServerResponse): boolean {
   const match = pathname.match(/^\/gateways\/([^/]+)\/(start|stop|restart)$/);
   if (!match) {
@@ -1229,6 +1510,24 @@ function handleAction(pathname: string, response: http.ServerResponse): boolean 
   return true;
 }
 
+function handleTriggerAction(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+  const match = pathname.match(/^\/gateways\/([^/]+)\/manual-trigger$/);
+  if (!match) {
+    return false;
+  }
+
+  const [, id] = match;
+  void readJsonBody<ManualTriggerRequest>(request)
+    .then((body) => triggerGatewayManualRule(decodeURIComponent(id), body))
+    .then(() => {
+      jsonResponse(response, 202, { code: 0, message: "manual trigger completed", data: [...runtimes.values()].map(runtimeStatus) });
+    })
+    .catch((error) => {
+      jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    });
+  return true;
+}
+
 function startManager(): void {
   loadRuntimes();
   for (const runtime of runtimes.values()) {
@@ -1244,6 +1543,9 @@ function startManager(): void {
         return;
       }
       if (request.method === "POST" && handleAction(requestUrl.pathname, response)) {
+        return;
+      }
+      if (request.method === "POST" && handleTriggerAction(request, requestUrl.pathname, response)) {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/gateways") {
@@ -1267,8 +1569,55 @@ function startManager(): void {
         jsonResponse(response, 200, networkOptionsPayload());
         return;
       }
+      if (request.method === "GET" && requestUrl.pathname === "/manager-config") {
+        jsonResponse(response, 200, {
+          code: 0,
+          routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
+          rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
+        });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/manager-config") {
+        void readJsonBody<ManagerConfig>(request)
+          .then((body) => {
+            const cfg = readManagerConfig();
+            if (body.routeDir !== undefined) cfg.routeDir = body.routeDir || undefined;
+            if (body.rolesDir !== undefined) cfg.rolesDir = body.rolesDir || undefined;
+            writeManagerConfig(cfg);
+            routeRoot = path.resolve(rootDir, cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
+            rolesRoot = path.resolve(rootDir, cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
+            ensureDataDirs();
+            jsonResponse(response, 200, { code: 0, routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"), rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/") });
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
       if (request.method === "GET" && requestUrl.pathname === "/meta") {
         jsonResponse(response, 200, metaPayload());
+        return;
+      }
+      if (request.method === "POST" && (requestUrl.pathname === "/api/playback/request" || requestUrl.pathname === "/api/fennenote/playback")) {
+        void readJsonBody<unknown>(request)
+          .then((body) => forwardPlaybackRequest(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 202 : 502, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 502, { ok: false, error: error instanceof Error ? error.message : String(error), target: fenneNotePlaybackUrl });
+        });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/fennenote/reply") {
+        void readJsonBody<unknown>(request)
+          .then((body) => forwardFenneNoteReply(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 202 : 502, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 502, { ok: false, error: error instanceof Error ? error.message : String(error), target: fenneNoteReplyUrl });
+          });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/open-config-file") {
@@ -1283,10 +1632,279 @@ function startManager(): void {
         jsonResponse(response, 200, { code: 0, message: "manager is already running" });
         return;
       }
+      if (request.method === "POST" && requestUrl.pathname === "/manager/shutdown") {
+        jsonResponse(response, 200, { code: 0, message: "manager shutdown requested" });
+        setTimeout(() => shutdownManager("api"), 20);
+        return;
+      }
       if (requestUrl.pathname === "/api/gateways") {
         jsonResponse(response, 200, [...runtimes.values()].map(runtimeStatus));
         return;
       }
+      if (requestUrl.pathname === "/api/scan/agents" && request.method === "GET") {
+        void (async () => {
+          const { execFile } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const execFileAsync = promisify(execFile);
+          const whereCmd = process.platform === "win32" ? "where.exe" : "which";
+
+          // thread names from copilot session-state workspace.yaml + codex session_index + existing configs
+          const copilotSessionStateDir = path.join(os.homedir(), ".copilot", "session-state");
+          type CopilotSessionEntry = { id: string; name: string; cwd?: string; userNamed?: boolean; updatedAt?: string };
+          const copilotSessions: CopilotSessionEntry[] = [];
+          try {
+            for (const entry of fs.readdirSync(copilotSessionStateDir, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              const yamlPath = path.join(copilotSessionStateDir, entry.name, "workspace.yaml");
+              if (!fs.existsSync(yamlPath)) continue;
+              try {
+                const yamlContent = fs.readFileSync(yamlPath, "utf8");
+                const idMatch = yamlContent.match(/^id:\s*(.+)$/m);
+                const nameMatch = yamlContent.match(/^name:\s*(.+)$/m);
+                const cwdMatch = yamlContent.match(/^cwd:\s*(.+)$/m);
+                const userNamedMatch = yamlContent.match(/^user_named:\s*(.+)$/m);
+                const updatedMatch = yamlContent.match(/^updated_at:\s*(.+)$/m);
+                if (idMatch && nameMatch) {
+                  copilotSessions.push({
+                    id: idMatch[1].trim(),
+                    name: nameMatch[1].trim(),
+                    cwd: cwdMatch?.[1].trim(),
+                    userNamed: userNamedMatch?.[1].trim() === "true",
+                    updatedAt: updatedMatch?.[1].trim()
+                  });
+                }
+              } catch { /* skip malformed */ }
+            }
+          } catch { /* dir not found */ }
+          const copilotSessionNames = [...new Set(copilotSessions.map(s => s.name))];
+
+          const legacySessionThreads = readLatestSessionThreads(sessionIndexPath());
+          const legacyThreadNames = [...new Set(legacySessionThreads.map(r => r.threadName))];
+          const configThreadNames = [...runtimes.values()].map(r => r.definition.codexThreadName).filter(Boolean) as string[];
+          const threadNames = [...new Set([...copilotSessionNames, ...legacyThreadNames, ...configThreadNames])];
+
+          // cwd options from copilot sessions + existing configs + sibling dirs of rootDir
+          const copilotCwds = [...new Set(copilotSessions.map(s => s.cwd).filter(Boolean) as string[])].filter(fs.existsSync);
+
+          // cwd options: copilot sessions + existing configs + sibling dirs of rootDir
+          const cwdSet = new Set<string>(copilotCwds);
+          for (const rt of runtimes.values()) {
+            if (rt.definition.codexCwd && fs.existsSync(rt.definition.codexCwd)) cwdSet.add(rt.definition.codexCwd);
+            if (rt.definition.copilotCwd && fs.existsSync(rt.definition.copilotCwd)) cwdSet.add(rt.definition.copilotCwd);
+          }
+          try {
+            const parentDir = path.dirname(rootDir);
+            for (const entry of fs.readdirSync(parentDir, { withFileTypes: true })) {
+              if (entry.isDirectory()) cwdSet.add(path.join(parentDir, entry.name));
+            }
+          } catch { /* skip */ }
+          const cwdOptions = [...cwdSet];
+
+          // copilot bin paths
+          const copilotBins: string[] = [];
+          for (const bin of ["copilot", "gh"]) {
+            try {
+              const { stdout } = await execFileAsync(whereCmd, [bin], { timeout: 2000 });
+              copilotBins.push(...stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean));
+            } catch { /* not found */ }
+          }
+          if (process.platform === "win32") {
+            const localAppData = process.env.LOCALAPPDATA ?? "";
+            const userProfile = process.env.USERPROFILE ?? "";
+            // winget install GitHub.Copilot -> native .exe
+            const wingetBase = path.join(localAppData, "Microsoft", "WinGet", "Packages");
+            try {
+              for (const entry of fs.readdirSync(wingetBase)) {
+                if (entry.startsWith("GitHub.Copilot")) {
+                  const exe = path.join(wingetBase, entry, "copilot.exe");
+                  if (fs.existsSync(exe)) copilotBins.unshift(exe); // prefer winget
+                }
+              }
+            } catch { /* skip */ }
+            // VS Code extensions
+            for (const root of [
+              path.join(localAppData, "Programs", "Microsoft VS Code"),
+              path.join(localAppData, "Programs", "Microsoft VS Code Insiders"),
+              path.join(userProfile, ".vscode", "extensions"),
+            ]) {
+              try {
+                const extDir = path.join(root, "resources", "app", "extensions");
+                if (!fs.existsSync(extDir)) continue;
+                for (const entry of fs.readdirSync(extDir)) {
+                  if (!entry.startsWith("github.copilot-chat")) continue;
+                  for (const binName of ["copilot.exe", "copilot", "cli/copilot.exe"]) {
+                    const p = path.join(extDir, entry, "dist", binName);
+                    if (fs.existsSync(p)) copilotBins.push(p);
+                  }
+                }
+              } catch { /* skip */ }
+            }
+            // Visual Studio Copilot extension: %LOCALAPPDATA%\Microsoft\VisualStudio\*\Extensions\*\service\dist\copilot-agent*.exe
+            try {
+              const vsDir = path.join(localAppData, "Microsoft", "VisualStudio");
+              if (fs.existsSync(vsDir)) {
+                for (const vsVer of fs.readdirSync(vsDir, { withFileTypes: true })) {
+                  if (!vsVer.isDirectory()) continue;
+                  const extRoot = path.join(vsDir, vsVer.name, "Extensions");
+                  if (!fs.existsSync(extRoot)) continue;
+                  for (const extId of fs.readdirSync(extRoot, { withFileTypes: true })) {
+                    if (!extId.isDirectory()) continue;
+                    const distDir = path.join(extRoot, extId.name, "service", "dist");
+                    if (!fs.existsSync(distDir)) continue;
+                    for (const f of fs.readdirSync(distDir)) {
+                      if (f.startsWith("copilot-agent") && f.endsWith(".exe")) {
+                        copilotBins.push(path.join(distDir, f));
+                      }
+                    }
+                  }
+                }
+              }
+            } catch { /* skip */ }
+          }
+
+          // marvis app ids
+          const marvisAppIds = ["Tencent.Marvis"];
+          if (process.platform === "win32") {
+            const appData = process.env.APPDATA ?? "";
+            const localAppData = process.env.LOCALAPPDATA ?? "";
+            for (const base of [appData, localAppData]) {
+              try {
+                for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+                  if (entry.isDirectory() && entry.name.toLowerCase().includes("marvis")) {
+                    marvisAppIds.push(entry.name);
+                  }
+                }
+              } catch { /* skip */ }
+            }
+          }
+
+          jsonResponse(response, 200, {
+            threadNames,
+            cwdOptions,
+            copilotSessions: copilotSessions.map(s => ({ name: s.name, cwd: s.cwd, userNamed: s.userNamed })),
+            copilotBins: [...new Set(copilotBins)],
+            marvisAppIds: [...new Set(marvisAppIds)],
+          });
+        })();
+        return;
+      }
+      if (requestUrl.pathname === "/api/agent/copilot-install" && request.method === "POST") {
+        void (async () => {
+          const { execFile } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const execFileAsync = promisify(execFile);
+          try {
+            const { stdout, stderr } = await execFileAsync("npm", ["install", "-g", "@github/copilot"], {
+              shell: true,
+              timeout: 120_000,
+              env: { ...process.env }
+            });
+            jsonResponse(response, 200, { ok: true, stdout: stdout.trim(), stderr: stderr.trim() });
+          } catch (err: unknown) {
+            const e = err as { message?: string; stdout?: string; stderr?: string };
+            jsonResponse(response, 500, { ok: false, error: e.message, stderr: e.stderr });
+          }
+        })();
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/agent/copilot-login" && request.method === "POST") {
+        void (async () => {
+          const { spawn } = await import("node:child_process");
+          try {
+            // Find copilot bin
+            const { execFile } = await import("node:child_process");
+            const { promisify } = await import("node:util");
+            const execFileAsync = promisify(execFile);
+            let copilotBin = "copilot";
+            try {
+              const { stdout } = await execFileAsync(process.platform === "win32" ? "where.exe" : "which", ["copilot"], { timeout: 2000 });
+              const first = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0];
+              if (first) copilotBin = first;
+            } catch { /* use default */ }
+
+            // Spawn copilot login, capture device code from stdout
+            const child = spawn(copilotBin, ["login"], {
+              env: { ...process.env },
+              shell: process.platform === "win32",
+              windowsHide: true
+            });
+
+            let output = "";
+            let code: string | null = null;
+            let url: string | null = null;
+
+            const codeTimer = setTimeout(() => {
+              if (!code) {
+                child.kill();
+                jsonResponse(response, 408, { ok: false, error: "Timeout waiting for device code" });
+              }
+            }, 15_000);
+
+            child.stdout?.on("data", (d: Buffer) => {
+              output += d.toString();
+              const codeMatch = output.match(/code\s+([A-Z0-9]{4}-[A-Z0-9]{4})/i);
+              const urlMatch = output.match(/https:\/\/github\.com\/login\/device/);
+              if (codeMatch && !code) {
+                code = codeMatch[1];
+                url = urlMatch ? "https://github.com/login/device" : null;
+                clearTimeout(codeTimer);
+                jsonResponse(response, 200, { ok: true, code, url, pid: child.pid });
+              }
+            });
+
+            child.stderr?.on("data", (d: Buffer) => { output += d.toString(); });
+
+            child.on("exit", (exitCode) => {
+              clearTimeout(codeTimer);
+              if (exitCode === 0 && !code) {
+                jsonResponse(response, 200, { ok: true, done: true });
+              } else if (exitCode !== 0 && !code) {
+                jsonResponse(response, 500, { ok: false, error: output.trim() });
+              }
+            });
+          } catch (err: unknown) {
+            jsonResponse(response, 500, { ok: false, error: String(err) });
+          }
+        })();
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/agent/copilot-status" && request.method === "GET") {
+        void (async () => {
+          const { execFile } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const execFileAsync = promisify(execFile);
+          // Check if installed: prefer winget .exe, then where.exe
+          let installed = false;
+          let binPath = resolveWingetCopilot() ?? "";
+          if (binPath) {
+            installed = true;
+          } else {
+            const whereCmd = process.platform === "win32" ? "where.exe" : "which";
+            try {
+              const { stdout } = await execFileAsync(whereCmd, ["copilot"], { timeout: 2000 });
+              const first = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+                .find(p => !p.endsWith(".ps1")); // skip PowerShell wrappers
+              if (first) { installed = true; binPath = first; }
+            } catch { /* not installed */ }
+          }
+          // Check if logged in via ~/.copilot/config.json loggedInUsers
+          let loggedIn = false;
+          const copilotHome = process.env.COPILOT_HOME ?? path.join(os.homedir(), ".copilot");
+          try {
+            const configPath = path.join(copilotHome, "config.json");
+            if (fs.existsSync(configPath)) {
+              const raw = fs.readFileSync(configPath, "utf8").replace(/^\s*\/\/[^\n]*\n/gm, "");
+              const cfg = JSON.parse(raw) as { loggedInUsers?: unknown[] };
+              loggedIn = Array.isArray(cfg.loggedInUsers) && cfg.loggedInUsers.length > 0;
+            }
+          } catch { /* ignore */ }
+          jsonResponse(response, 200, { installed, binPath, loggedIn, copilotHome });
+        })();
+        return;
+      }
+
       if (requestUrl.pathname === "/reload") {
         loadRuntimes();
         syncRunningGateways();
@@ -1312,13 +1930,24 @@ function startManager(): void {
 
   const configWatcher = startConfigWatcher();
 
-  process.on("SIGINT", () => {
-    clearInterval(configWatcher);
-    for (const runtime of runtimes.values()) {
-      runtime.process?.kill();
+  let shuttingDown = false;
+
+  function shutdownManager(reason: string): void {
+    if (shuttingDown) {
+      return;
     }
-    process.exit(0);
-  });
+    shuttingDown = true;
+    console.log(`gateway-manager shutting down: ${reason}`);
+    clearInterval(configWatcher);
+    stopAllGateways();
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 2500).unref();
+  }
+
+  process.on("SIGINT", () => shutdownManager("SIGINT"));
+  process.on("SIGTERM", () => shutdownManager("SIGTERM"));
 }
 
 startManager();

@@ -34,7 +34,7 @@
 - `webhookPort`：Webhook 监听端口。未配置时回退到 `gatewayPort`。
 - `webhookPath`：Webhook 入口路径，默认 `/webhook`。
 - `napcatHttpUrl`：OneBot HTTP API 地址。
-- `agentAdapters`：Agent 端适配器列表。当前支持 `codexDesktop`、`codexApp`。
+- `agentAdapters`：Agent 端适配器列表。当前支持 `codexDesktop`、`codexApp`、`copilotCli`、`marvis`。
 - `codexThreadName`：Codex Desktop 固定线程名。
 - `codexCwd`：处理端收到任务后应工作的目录。使用 Codex 时建议填目标项目的绝对路径；WebUI 会把已配置过的目录放进 `Agent 工作目录` 下拉，方便复用。
 - `dataDir`：消息记录、投递记录和心跳记录目录。
@@ -89,11 +89,44 @@ data/roles/Rabi/roleMessageConfig.json
 
 - `codexDesktop`：通过 Codex Desktop IPC 投递到固定线程。空闲时 `start`，运行中用 `steer` 追加引导。
 - `codexApp`：旧 app-server 调试通道，主要用于旁路验证。
+- `copilotCli`：通过本机 Copilot CLI 命令投递一次性 prompt，输出写入 `copilot-output.jsonl`，状态写入 `copilot-state.json`。它不会注入已有 VS Code Copilot 面板线程；如需后台调用，请确保 CLI 可执行文件在 PATH 中，或设置 `COPILOT_CLI_BIN`。
+- `marvis`：通过本机 handoff 方式接入 Marvis 桌面端。RabiRoute 会把 prompt 写入 `marvis-prompts/`、复制到剪贴板，并优先启动/聚焦 Windows 桌面应用 `Tencent.Marvis`；由于 Marvis 当前未提供稳定公开后台 API，这个适配器不会自动点击发送。
 
 默认建议使用：
 
 ```json
 "agentAdapters": ["codexDesktop"]
+```
+
+使用 Copilot CLI 时：
+
+```json
+"agentAdapters": ["copilotCli"]
+```
+
+可选环境变量：
+
+```text
+COPILOT_CLI_BIN=C:/Path/To/copilot.cmd
+COPILOT_CLI_ARGS=["--silent","--allow-all-tools","--no-ask-user","--prompt","{prompt}"]
+COPILOT_CLI_TIMEOUT_MS=600000
+COPILOT_CWD=C:/Path/To/Your/Project
+```
+
+使用 Marvis 时：
+
+```json
+"agentAdapters": ["marvis"]
+```
+
+可选环境变量：
+
+```text
+MARVIS_APP_ID=Tencent.Marvis
+MARVIS_OPEN_DESKTOP_APP=1
+MARVIS_URL=https://marvis.qq.com/
+MARVIS_OPEN_ON_NOTIFY=1
+MARVIS_COPY_TO_CLIPBOARD=1
 ```
 
 如果处理端没有收到消息，优先检查：

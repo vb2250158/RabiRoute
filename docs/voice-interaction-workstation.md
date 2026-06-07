@@ -55,7 +55,7 @@ FenneNote 或其他转录端应向 RabiRoute 提交结构化 webhook，而不是
 - `tts`：生成可朗读文本并交给 OumuQ；是否同时显示文本由调用端决定。
 - `none`：只记录或触发内部整理，不生成对外回复。
 
-如果事件来自 Codex/FenneNote 语音输入，必须先读 `actionInstruction`。不要因为内容像聊天，就自动发到 QQ；也不要因为启用了 TTS，就跳过 Codex 可见回复。
+如果事件来自 Codex/FenneNote 语音输入，必须先读 `actionInstruction` 和转写文本里的显式指令。不要因为内容像聊天，就自动发到 QQ；也不要因为来源是 `voice_transcript`，就把用户明确说出的“发到群里 / 发 QQ / 你直接发”一律降级成本地回复。语音只是输入方式，不等于禁止外发。
 
 ## RabiRoute 路由规则
 
@@ -78,6 +78,7 @@ Read the reply surface before acting.
 If replySurface is codex, answer in the current Codex conversation.
 If replySurface is qq, prepare a draft QQ/NapCat reply unless explicit approval is present.
 If replySurface is tts, produce role-faithful visible text that can be sent to OumuQ.
+If the transcript itself clearly asks to send to QQ/NapCat, treat that as an external-send request and follow the existing send or draft-and-approval flow.
 Keep the role voice in visible text and in speech text.
 ```
 
@@ -115,7 +116,7 @@ Keep the role voice in visible text and in speech text.
 - 可以自动投递或引导 Codex/Agent 内部会话。
 - 可以自动生成 Codex 可见回复草稿。
 - 可以自动生成 OumuQ TTS 草稿或本地播放请求，前提是事件允许 TTS。
-- QQ/NapCat 群发、私聊、写外部系统和修改角色私有数据默认都要 draft + approval。
+- QQ/NapCat 群发、私聊、写外部系统和修改角色私有数据默认都要经过安全门。语音里已经明确给出目标、内容和发送授权时，可以进入现有发送流程；缺少目标、内容或权限时才生成 draft 并等待确认。
 
 提交到公开仓库前必须确认：
 
@@ -132,7 +133,7 @@ Keep the role voice in visible text and in speech text.
 4. RabiRoute 把事件投递给固定 Codex/Agent thread；空闲时 start，运行中 steer。
 5. Agent 根据角色包生成 `visibleText` 和可选 `ttsText`，并严格遵守目标回复面。
 6. OumuQ 只接收已经确认可朗读的 `ttsText`。
-7. QQ/NapCat 外发必须经过 action draft；获得明确授权后再 commit。
+7. QQ/NapCat 外发必须经过 action safety gate；语音指令已经明确授权且信息完整时可以发送，信息不足时先 draft，获得确认后再 commit。
 
 ## 三个分项目的交接边界
 

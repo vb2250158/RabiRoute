@@ -8,6 +8,7 @@
     "manager": "tsx src/manager.ts",
     "start": "node dist/index.js",
     "start:manager": "node dist/manager.js",
+    "start:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-rabiroute-windows.ps1",
     "build": "tsc -p tsconfig.json && npm run webgui:build",
     "build:backend": "tsc -p tsconfig.json",
     "webgui:dev": "vite --config ribiwebgui/vite.config.ts --host 127.0.0.1",

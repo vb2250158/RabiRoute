@@ -2,11 +2,11 @@ import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, rolePathsFor, rolePathsForRoute, type NotificationRule, type RouteProfile } from "./config.js";
-import { appendCodexNotificationToDir, appendGroupMessageToDir, appendHeartbeatEventToDir, appendPrivateMessageToDir, appendVoiceTranscriptEventToDir, type GroupMessageRecord, type HeartbeatEventRecord, type PrivateMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
+import { appendCodexNotificationToDir, appendGroupMessageToDir, appendHeartbeatEventToDir, appendManualTriggerEventToDir, appendPrivateMessageToDir, appendVoiceTranscriptEventToDir, type GroupMessageRecord, type HeartbeatEventRecord, type ManualTriggerRecord, type PrivateMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
 
-export type ForwardRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "voice_transcript";
-type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "voice_transcript";
-type ForwardRecord = GroupMessageRecord | PrivateMessageRecord | HeartbeatEventRecord | VoiceTranscriptEventRecord;
+export type ForwardRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "voice_transcript";
+type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "voice_transcript";
+type ForwardRecord = GroupMessageRecord | PrivateMessageRecord | HeartbeatEventRecord | ManualTriggerRecord | VoiceTranscriptEventRecord;
 
 export type ForwardTemplateValues = Record<string, string | number | undefined>;
 
@@ -83,7 +83,11 @@ function isGroupRecord(record: ForwardRecord): record is GroupMessageRecord {
 }
 
 function isHeartbeatRecord(record: ForwardRecord): record is HeartbeatEventRecord {
-  return ("intervalSeconds" in record || !("userId" in record)) && !("source" in record);
+  return ("intervalSeconds" in record || !("userId" in record)) && !("source" in record) && !("triggerId" in record) && !("triggerName" in record);
+}
+
+function isManualTriggerRecord(record: ForwardRecord): record is ManualTriggerRecord {
+  return "triggerId" in record || "triggerName" in record;
 }
 
 function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceTranscriptEventRecord {
@@ -133,6 +137,9 @@ function configuredAgentAdapters(): AgentAdapterType[] {
   if (config.codexDirectNotify) {
     return ["codexApp"];
   }
+  if (process.env.ASTRBOT_URL) {
+    return ["astrbot"];
+  }
   return [];
 }
 
@@ -148,6 +155,10 @@ function ruleMatches(
   }
 
   if (rule.routeKinds.length > 0 && !rule.routeKinds.includes(routeKind)) {
+    return false;
+  }
+
+  if (typeof extraValues.triggerRuleId === "string" && extraValues.triggerRuleId.trim() && rule.id !== extraValues.triggerRuleId.trim()) {
     return false;
   }
 
@@ -170,15 +181,6 @@ function ruleMatches(
   }
 }
 
-function ruleForRoute(
-  routeKind: ForwardRouteKind,
-  record: ForwardRecord,
-  extraValues: ForwardTemplateValues,
-  route: RouteProfile
-): NotificationRule | null {
-  return route.notificationRules.find((item) => ruleMatches(item, routeKind, record, extraValues, route)) ?? null;
-}
-
 function commonTemplateValues(
   record: ForwardRecord,
   extraValues: ForwardTemplateValues,
@@ -189,9 +191,11 @@ function commonTemplateValues(
   const isGroup = isGroupRecord(record);
   const isHeartbeat = isHeartbeatRecord(record);
   const isVoiceTranscript = isVoiceTranscriptRecord(record);
-  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : "heartbeat";
-  const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isVoiceTranscript ? "voice_transcript" : "private";
+  const isManualTrigger = isManualTriggerRecord(record);
+  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : "heartbeat";
+  const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isVoiceTranscript ? "voice_transcript" : "private";
   const routeVariables = routeVariablesFor(record, extraValues, route);
+  const pipeline = route?.resolvedPipeline ?? config.resolvedPipeline;
   const routeText = routeTextFromRawMessage(record.rawMessage, routeVariables);
   const repliedRouteText = typeof extraValues.repliedMessage === "string"
     ? routeTextFromRawMessage(extraValues.repliedMessage, routeVariables)
@@ -206,7 +210,7 @@ function commonTemplateValues(
     groupId: isGroup ? record.groupId : undefined,
     targetType,
     targetId,
-    messageTarget: isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isVoiceTranscript ? `语音转写 ${targetId}` : `私聊 ${targetId}`,
+    messageTarget: isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isVoiceTranscript ? `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText,
@@ -219,12 +223,31 @@ function commonTemplateValues(
     agentRolePath: roleContext.rolePath,
     agentRoleDir: roleContext.roleDir,
     dataDir: roleContext.dataDir,
+    pipelinePreset: pipeline.id,
+    channelPreset: pipeline.id,
+    inputAdapter: pipeline.inputAdapter,
+    outputAdapter: pipeline.outputAdapter,
+    outputPipeline: pipeline.outputPipeline,
+    promptOutputMode: pipeline.promptOutputMode,
+    ttsProvider: pipeline.ttsProvider,
+    ttsVoice: pipeline.ttsVoice,
+    ttsWorkerUrl: pipeline.ttsWorkerUrl,
+    ttsPlay: String(pipeline.ttsPlay),
+    preventFeedbackLoop: String(pipeline.preventFeedbackLoop),
+    replyToSource: String(pipeline.replyToSource),
     groupLogPath: path.join(roleContext.dataDir, "group-messages.jsonl"),
     privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
     heartbeatLogPath: path.join(roleContext.dataDir, "heartbeat-events.jsonl"),
+    manualTriggerLogPath: path.join(roleContext.dataDir, "manual-trigger-events.jsonl"),
     voiceTranscriptLogPath: path.join(roleContext.dataDir, "voice-transcripts.jsonl"),
     heartbeatIntervalSeconds: "intervalSeconds" in record ? record.intervalSeconds : undefined,
+    triggerId: isManualTrigger ? record.triggerId : undefined,
+    triggerName: isManualTrigger ? record.triggerName : undefined,
     voiceSource: isVoiceTranscript ? record.source : undefined,
+    voiceSourceDeviceId: isVoiceTranscript ? record.sourceDeviceId : undefined,
+    voiceSourceDeviceName: isVoiceTranscript ? record.sourceDeviceName : undefined,
+    voiceSourceArea: isVoiceTranscript ? record.sourceArea : undefined,
+    voiceSessionId: isVoiceTranscript ? record.sessionId : undefined,
     voiceStartedAt: isVoiceTranscript ? record.startedAt : undefined,
     voiceEndedAt: isVoiceTranscript ? record.endedAt : undefined,
     voiceDurationSeconds: isVoiceTranscript ? record.durationSeconds : undefined,
@@ -236,38 +259,43 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   if (routeKind === "heartbeat") {
     return "heartbeat";
   }
+  if (routeKind === "manual_trigger") {
+    return "manual_trigger";
+  }
   if (routeKind === "voice_transcript") {
     return "voice_transcript";
   }
   return routeKind === "private" ? "private" : "group_mention";
 }
 
-function dispatchToAgentAdapter(type: AgentAdapterType, message: string): void {
+function dispatchToAgentAdapter(type: AgentAdapterType, message: string): Promise<void> {
   const adapter = createAgentAdapter(type);
-  void adapter.deliver(message).catch((error) => console.error(`Failed to deliver message through ${adapter.type} agent adapter`, error));
+  return adapter.deliver(message);
 }
 
 function activeRouteProfiles(): RouteProfile[] {
   return config.routeProfiles.filter((route) => route.enabled !== false);
 }
 
-function forwardMessageToRoute(
+async function forwardMessageToRoute(
   route: RouteProfile,
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
-): void {
-  const rule = ruleForRoute(routeKind, record, extraValues, route);
-  if (!rule) {
+): Promise<void> {
+  const rules = route.notificationRules.filter((item) => ruleMatches(item, routeKind, record, extraValues, route));
+  if (rules.length === 0) {
     return;
   }
   const roleContext = rolePathsForRoute(route);
 
-  if (path.resolve(roleContext.dataDir) !== path.resolve(config.dataDir)) {
+  if (path.resolve(roleContext.dataDir) !== path.resolve(config.memoryDataDir)) {
     if (isGroupRecord(record)) {
       appendGroupMessageToDir(record, roleContext.dataDir);
     } else if (isHeartbeatRecord(record)) {
       appendHeartbeatEventToDir(record, roleContext.dataDir);
+    } else if (isManualTriggerRecord(record)) {
+      appendManualTriggerEventToDir(record, roleContext.dataDir);
     } else if (isVoiceTranscriptRecord(record)) {
       appendVoiceTranscriptEventToDir(record, roleContext.dataDir);
     } else {
@@ -275,21 +303,31 @@ function forwardMessageToRoute(
     }
   }
 
-  const message = appendAgentRoleReference(renderTemplate(rule.template, {
-    ...commonTemplateValues(record, extraValues, roleContext, route),
-    ...extraValues,
-    routeKind
-  }), roleContext.rolePath);
+  for (const rule of rules) {
+    const message = appendAgentRoleReference(renderTemplate(rule.template, {
+      ...commonTemplateValues(record, extraValues, roleContext, route),
+      ...extraValues,
+      routeKind
+    }), roleContext.rolePath);
 
-  appendCodexNotificationToDir({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    time: Math.floor(Date.now() / 1000),
-    kind: logKindForRoute(routeKind),
-    text: message
-  }, roleContext.dataDir);
+    appendCodexNotificationToDir({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      time: Math.floor(Date.now() / 1000),
+      kind: logKindForRoute(routeKind),
+      text: message
+    }, roleContext.dataDir);
 
-  for (const adapter of configuredAgentAdapters()) {
-    dispatchToAgentAdapter(adapter, message);
+    await Promise.all(configuredAgentAdapters().map((adapter) => dispatchToAgentAdapter(adapter, message)));
+  }
+}
+
+export async function forwardMessageAndWait(
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  extraValues: ForwardTemplateValues = {}
+): Promise<void> {
+  for (const route of activeRouteProfiles()) {
+    await forwardMessageToRoute(route, routeKind, record, extraValues);
   }
 }
 
@@ -298,7 +336,6 @@ export function forwardMessage(
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
 ): void {
-  for (const route of activeRouteProfiles()) {
-    forwardMessageToRoute(route, routeKind, record, extraValues);
-  }
+  void forwardMessageAndWait(routeKind, record, extraValues)
+    .catch((error) => console.error("Failed to deliver routed message", error));
 }

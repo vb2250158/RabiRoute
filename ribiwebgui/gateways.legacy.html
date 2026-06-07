@@ -2269,7 +2269,7 @@
         "时长：{voiceDurationSeconds} 秒",
         "峰值：{voicePeak}",
         "",
-        "请直接在当前 Codex 会话里回复用户；不要生成 QQ 可发送回复，不要转交到 QQ/NapCat，也不要尝试通过 QQ 发送消息。需要上下文时再读取 {voiceTranscriptLogPath}。"
+        "默认在当前 Codex 会话里承接语音输入，并在需要时生成适合 TTS 的短回复。若转写文本明确要求发送到 QQ/NapCat，且目标、内容和授权足够清楚，请按现有外发流程处理；缺少信息时只追问最小缺口，不要因为来源是 voice_transcript 就一律拒绝发送。需要上下文时再读取 {voiceTranscriptLogPath}。"
       ].join("\n");
     }
 

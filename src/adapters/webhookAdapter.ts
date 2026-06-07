@@ -9,6 +9,13 @@ import type { MessageAdapter } from "./messageAdapter.js";
 type WebhookPayload = {
   type?: string;
   source?: string;
+  sourceDeviceId?: string;
+  sourceDeviceName?: string;
+  sourceArea?: string;
+  deviceId?: string;
+  deviceName?: string;
+  area?: string;
+  sessionId?: string;
   text?: string;
   message?: string;
   content?: string;
@@ -118,6 +125,10 @@ function recordFromPayload(payload: WebhookPayload): VoiceTranscriptEventRecord 
     messageId: payload.messageId ?? payload.id ?? `webhook-${Date.now()}`,
     senderName: payload.source ?? "Webhook",
     source: payload.source ?? "webhook",
+    sourceDeviceId: payload.sourceDeviceId ?? payload.deviceId,
+    sourceDeviceName: payload.sourceDeviceName ?? payload.deviceName,
+    sourceArea: payload.sourceArea ?? payload.area,
+    sessionId: payload.sessionId,
     startedAt: payload.startedAt,
     endedAt: payload.endedAt,
     durationSeconds: payload.durationSeconds,

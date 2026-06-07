@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { NotificationRule } from "../types";
 import {
+  configNameFor,
   notificationRulesForGateway,
   routeKindDefinitionsForGateway,
   routeKindLabels,
@@ -13,8 +15,13 @@ import {
 } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
+const route = useRoute();
+const router = useRouter();
 const ruleDialog = ref(false);
 const activeRuleIndex = ref(0);
+const ruleMatchParamsOpen = ref(true);
+const ruleRouteKindsOpen = ref(true);
+const ruleTemplateOpen = ref(true);
 
 const gateway = computed(() => store.selectedGateway);
 const runtime = computed(() => store.selectedRuntime);
@@ -29,9 +36,39 @@ const selectedRole = computed(() => {
 const rules = computed(() => gateway.value ? notificationRulesForGateway(gateway.value) : []);
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
 const variableEntries = computed(() => Object.entries(gateway.value?.routeVariables || {}));
+const roleDirLabel = computed(() => runtime.value.roleInfo?.rolesDir || "./data/roles");
+const routeKindQuery = ref("");
+const routeKindDefinitions = computed(() => routeKindDefinitionsForGateway(gateway.value || undefined));
+const selectedRouteKindCount = computed(() => activeRule.value?.routeKinds?.length || 0);
+const visibleRouteKindDefinitions = computed(() => {
+  const query = routeKindQuery.value.trim().toLowerCase();
+  if (!query) return routeKindDefinitions.value;
+  return routeKindDefinitions.value
+    .map(definition => ({
+      ...definition,
+      groups: definition.groups
+        .map(group => ({
+          ...group,
+          routeKinds: group.routeKinds.filter(kind => {
+            return [
+              definition.title,
+              definition.note,
+              group.title,
+              kind,
+              routeKindLabels[kind] || ""
+            ].join(" ").toLowerCase().includes(query);
+          })
+        }))
+        .filter(group => group.routeKinds.length > 0)
+    }))
+    .filter(definition => definition.groups.length > 0);
+});
 
 function openRule(index: number): void {
   activeRuleIndex.value = index;
+  ruleMatchParamsOpen.value = true;
+  ruleRouteKindsOpen.value = true;
+  ruleTemplateOpen.value = true;
   ruleDialog.value = true;
 }
 
@@ -47,6 +84,16 @@ function toggleRouteKind(kind: string, checked: boolean): void {
   patchRule({ routeKinds: [...next] });
 }
 
+function setRouteKinds(kinds: string[], checked: boolean): void {
+  if (!activeRule.value) return;
+  const next = new Set(activeRule.value.routeKinds || []);
+  kinds.forEach(kind => {
+    if (checked) next.add(kind);
+    else next.delete(kind);
+  });
+  patchRule({ routeKinds: [...next] });
+}
+
 function setRole(value: string): void {
   if (!gateway.value) return;
   gateway.value.agentRoleId = value;
@@ -57,25 +104,53 @@ function updateVariableKey(oldKey: string, value: string, event: Event): void {
   const target = event.target as HTMLInputElement | null;
   store.updateRouteVariable(oldKey, target?.value || oldKey, value);
 }
+
+// URL ↔ gateway 双向同步（放最后避免 TDZ）
+watch([() => route.params.id as string, () => store.gateways], ([id]) => {
+  if (!id || !store.gateways.length) return;
+  const found = store.gateways.find(g => configNameFor(g) === id || g.id === id);
+  if (found && found.id !== store.selectedGatewayId) store.selectGateway(found.id);
+}, { immediate: true });
+
+watch(() => store.selectedGatewayId, (id) => {
+  const gw = store.gateways.find(g => g.id === id);
+  const name = gw ? configNameFor(gw) : id;
+  if (name && route.params.id !== name) router.replace(`/persona/${name}`);
+});
 </script>
 
 <template>
   <div class="page-shell">
     <div class="page-header">
       <div>
-        <h1 class="page-title">人格与模板</h1>
+        <h1 class="page-title">人格配置</h1>
         <div class="page-subtitle">选择路由人格，维护变量和 Agent 消息包装模板。</div>
       </div>
-      <div class="d-flex ga-2 flex-wrap" v-if="gateway">
+      <div class="page-actions" v-if="gateway">
         <v-btn prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')">打开人格配置</v-btn>
         <v-btn prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开消息模板配置</v-btn>
-        <v-btn prepend-icon="mdi-plus" color="secondary" variant="tonal" @click="store.addRule">新增规则</v-btn>
+        <v-btn prepend-icon="mdi-plus" color="secondary" variant="tonal" @click="store.addRule">新增消息模板规则</v-btn>
       </div>
     </div>
 
     <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
 
     <template v-if="gateway">
+      <div class="summary-grid">
+        <div class="summary-tile">
+          <span>当前人格</span>
+          <b>{{ gateway.agentRoleId || "不注入人格" }}</b>
+        </div>
+        <div class="summary-tile">
+          <span>消息模板</span>
+          <b>{{ rules.length }} 条规则</b>
+        </div>
+        <div class="summary-tile">
+          <span>角色目录</span>
+          <b>{{ roleDirLabel }}</b>
+        </div>
+      </div>
+
       <div class="two-column">
         <v-card class="app-card glass-card section-card">
           <div class="section-title-row">
@@ -93,7 +168,7 @@ function updateVariableKey(oldKey: string, value: string, event: Event): void {
             />
             <v-text-field v-model="gateway.agentRoleFile" label="人格文件名" placeholder="persona.md" @update:model-value="store.touch" />
           </div>
-          <div class="status-row mt-3"><span>角色目录</span><b>{{ runtime.roleInfo?.rolesDir || gateway.rolesDir || "./data/roles" }}</b></div>
+          <div class="status-row mt-3"><span>角色目录</span><b>{{ roleDirLabel }}</b></div>
           <div class="status-row"><span>人格路径</span><b>{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "-" }}</b></div>
         </v-card>
 
@@ -119,7 +194,12 @@ function updateVariableKey(oldKey: string, value: string, event: Event): void {
           </div>
           <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="store.addRouteVariable">新增变量</v-btn>
         </div>
-        <v-alert v-if="variableEntries.length === 0" type="info" variant="tonal">暂无自定义路由变量</v-alert>
+        <div v-if="variableEntries.length === 0" class="empty-state">
+          <div>
+            <strong>暂无自定义路由变量</strong>
+            <span>需要给群名、项目名或关键词做别名时，再新增变量。</span>
+          </div>
+        </div>
         <div v-else class="form-grid">
           <template v-for="[key, value] in variableEntries" :key="key">
             <v-text-field :model-value="key" label="变量名" @change="updateVariableKey(key, value, $event)" />
@@ -139,7 +219,12 @@ function updateVariableKey(oldKey: string, value: string, event: Event): void {
           </div>
           <v-chip color="secondary" variant="tonal">{{ rules.length }} 条模板</v-chip>
         </div>
-        <v-alert v-if="rules.length === 0" type="info" variant="tonal">暂无消息模板规则</v-alert>
+        <div v-if="rules.length === 0" class="empty-state">
+          <div>
+            <strong>暂无消息模板规则</strong>
+            <span>新增消息模板规则后，RabiRoute 才知道命中的消息要怎样包装给 Agent。</span>
+          </div>
+        </div>
         <div v-else class="rule-list">
           <div v-for="(rule, index) in rules" :key="rule.id" class="rule-card">
             <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
@@ -148,8 +233,17 @@ function updateVariableKey(oldKey: string, value: string, event: Event): void {
                 <div class="section-note">{{ routeKindSummary(rule) }} · {{ rule.regex ? `匹配：${rule.regex}` : "不限关键词" }}</div>
                 <div class="section-note mt-1">{{ ruleTemplateSnippet(rule) }}</div>
               </div>
-              <div class="d-flex ga-2">
-                <v-chip size="small" :color="rule.enabled !== false ? 'success' : 'warning'" variant="tonal">{{ rule.enabled !== false ? "启用" : "停用" }}</v-chip>
+              <div class="rule-card-actions">
+                <v-switch
+                  :model-value="rule.enabled !== false"
+                  :label="rule.enabled !== false ? '启用规则' : '停用规则'"
+                  color="success"
+                  density="compact"
+                  inset
+                  hide-details
+                  @click.stop
+                  @update:model-value="value => store.updateRule(index, { enabled: Boolean(value) })"
+                />
                 <v-btn size="small" variant="tonal" @click="openRule(index)">编辑</v-btn>
               </div>
             </div>
@@ -180,54 +274,133 @@ function updateVariableKey(oldKey: string, value: string, event: Event): void {
             <div class="section-title">规则设置</div>
             <div class="section-note">{{ gateway.agentRoleId || "未指向人格" }} · {{ activeRule.id }}</div>
           </div>
-          <v-btn icon="mdi-close" variant="text" @click="ruleDialog = false" />
+          <div class="rule-dialog-actions">
+            <v-switch
+              :model-value="activeRule.enabled !== false"
+              label="启用规则"
+              color="success"
+              inset
+              hide-details
+              @update:model-value="value => patchRule({ enabled: Boolean(value) })"
+            />
+            <v-btn icon="mdi-close" variant="text" @click="ruleDialog = false" />
+          </div>
         </v-card-title>
         <v-card-text>
-          <div class="form-grid">
-            <v-text-field :model-value="activeRule.name" label="规则名称" @update:model-value="value => patchRule({ name: String(value || '') })" />
-            <v-switch :model-value="activeRule.enabled !== false" label="启用" color="success" @update:model-value="value => patchRule({ enabled: Boolean(value) })" />
-            <v-text-field class="full-span" :model-value="activeRule.regex" label="消息匹配正则" placeholder="例如：需求|报错|构建失败" @update:model-value="value => patchRule({ regex: String(value || '') })" />
-          </div>
-
-          <div class="section-title mt-4 mb-2">路由类型</div>
-          <div class="adapter-grid">
-            <v-card v-for="definition in routeKindDefinitionsForGateway(gateway)" :key="definition.adapter" class="app-card" variant="flat">
-              <v-card-text>
-                <div class="font-weight-bold">{{ definition.title }}</div>
-                <div class="section-note mb-2">{{ definition.note }}</div>
-                <div v-for="group in definition.groups" :key="group.title" class="mb-2">
-                  <div class="section-note">{{ group.title }}</div>
-                  <v-checkbox
-                    v-for="kind in group.routeKinds"
-                    :key="kind"
-                    density="compact"
-                    hide-details
-                    :label="routeKindLabels[kind] || kind"
-                    :model-value="activeRule.routeKinds?.includes(kind)"
-                    @update:model-value="value => toggleRouteKind(kind, Boolean(value))"
+          <section class="fold-section">
+            <button class="fold-section-head" type="button" @click="ruleMatchParamsOpen = !ruleMatchParamsOpen">
+              <span>
+                <strong>规则参数</strong>
+                <small>名称、匹配正则和目标群号</small>
+              </span>
+              <v-icon>{{ ruleMatchParamsOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
+            </button>
+            <v-expand-transition>
+              <div v-if="ruleMatchParamsOpen" class="fold-section-body">
+                <div class="form-grid">
+                  <v-text-field :model-value="activeRule.name" label="规则名称" @update:model-value="value => patchRule({ name: String(value || '') })" />
+                  <v-text-field :model-value="activeRule.regex" label="消息匹配正则" placeholder="例如：需求|报错|构建失败" @update:model-value="value => patchRule({ regex: String(value || '') })" />
+                  <v-text-field
+                    v-if="ruleHasGroupRoute(activeRule)"
+                    class="full-span"
+                    :model-value="activeRule.targetGroupId"
+                    label="目标群号"
+                    placeholder="留空=不限群"
+                    @update:model-value="value => patchRule({ targetGroupId: String(value || '') })"
                   />
                 </div>
-              </v-card-text>
-            </v-card>
-          </div>
+              </div>
+            </v-expand-transition>
+          </section>
 
-          <v-text-field
-            v-if="ruleHasGroupRoute(activeRule)"
-            class="mt-4"
-            :model-value="activeRule.targetGroupId"
-            label="目标群号"
-            placeholder="留空=不限群"
-            @update:model-value="value => patchRule({ targetGroupId: String(value || '') })"
-          />
-          <v-textarea
-            class="mt-4"
-            :model-value="activeRule.template"
-            label="Agent 消息包装模板"
-            rows="14"
-            auto-grow
-            spellcheck="false"
-            @update:model-value="value => patchRule({ template: String(value || '') })"
-          />
+          <section class="fold-section">
+            <button class="fold-section-head" type="button" @click="ruleRouteKindsOpen = !ruleRouteKindsOpen">
+              <span>
+                <strong>路由类型</strong>
+                <small>一条规则可以同时作用于多个管道</small>
+              </span>
+              <v-icon>{{ ruleRouteKindsOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
+            </button>
+            <v-expand-transition>
+              <div v-if="ruleRouteKindsOpen" class="fold-section-body">
+                <div class="config-toolbar">
+                  <v-text-field
+                    v-model="routeKindQuery"
+                    density="compact"
+                    prepend-inner-icon="mdi-magnify"
+                    label="搜索路由类型"
+                    hide-details
+                    clearable
+                  />
+                  <div class="selected-pill-row">
+                    <v-chip size="small" color="secondary" variant="tonal">已选 {{ selectedRouteKindCount }}</v-chip>
+                    <v-btn size="small" variant="text" @click="setRouteKinds(activeRule.routeKinds || [], false)">清空</v-btn>
+                  </div>
+                </div>
+                <div class="route-kind-catalog">
+                  <section v-for="definition in visibleRouteKindDefinitions" :key="definition.adapter" class="catalog-section">
+                    <div class="catalog-section-head">
+                      <div>
+                        <div class="catalog-section-title">{{ definition.title }}</div>
+                        <div class="section-note">{{ definition.note }}</div>
+                      </div>
+                    </div>
+                    <div v-for="group in definition.groups" :key="group.title" class="route-kind-group">
+                      <div class="route-kind-group-head">
+                        <span>{{ group.title }}</span>
+                        <div class="d-flex ga-1">
+                          <v-btn size="x-small" variant="text" @click="setRouteKinds(group.routeKinds, true)">全选</v-btn>
+                          <v-btn size="x-small" variant="text" @click="setRouteKinds(group.routeKinds, false)">清空</v-btn>
+                        </div>
+                      </div>
+                      <div class="route-kind-chip-grid">
+                        <button
+                          v-for="kind in group.routeKinds"
+                          :key="kind"
+                          class="route-kind-chip"
+                          :class="{ active: activeRule.routeKinds?.includes(kind) }"
+                          type="button"
+                          @click="toggleRouteKind(kind, !activeRule.routeKinds?.includes(kind))"
+                        >
+                          <v-icon size="18">{{ activeRule.routeKinds?.includes(kind) ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                          <span>{{ routeKindLabels[kind] || kind }}</span>
+                          <code>{{ kind }}</code>
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                  <div v-if="visibleRouteKindDefinitions.length === 0" class="empty-state compact-empty">
+                    <div>
+                      <strong>没有匹配的路由类型</strong>
+                      <span>清空搜索后可以看到全部类型。</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </v-expand-transition>
+          </section>
+
+          <section class="fold-section">
+            <button class="fold-section-head" type="button" @click="ruleTemplateOpen = !ruleTemplateOpen">
+              <span>
+                <strong>Agent 消息包装模板</strong>
+                <small>命中后发送给 Agent 的正文</small>
+              </span>
+              <v-icon>{{ ruleTemplateOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
+            </button>
+            <v-expand-transition>
+              <div v-if="ruleTemplateOpen" class="fold-section-body">
+                <v-textarea
+                  :model-value="activeRule.template"
+                  label="Agent 消息包装模板"
+                  rows="14"
+                  auto-grow
+                  spellcheck="false"
+                  @update:model-value="value => patchRule({ template: String(value || '') })"
+                />
+              </div>
+            </v-expand-transition>
+          </section>
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
           <v-btn color="error" variant="text" @click="store.removeRule(activeRuleIndex); ruleDialog = false">删除规则</v-btn>

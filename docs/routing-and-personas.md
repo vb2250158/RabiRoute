@@ -129,4 +129,4 @@ xcopy examples\data data /E /I
 - `skills/rabiroute-voice-workstation/SKILL.md`
 - [语音交互工作站](voice-interaction-workstation.md)
 
-这套工作流的关键是：语音转录事件使用 `voice_transcript`，并由事件里的行动说明决定回复面。来自 Codex/FenneNote 的语音输入不等于 QQ/NapCat 外发；角色回复的可见文本和 TTS 文本都必须保留角色语气。
+这套工作流的关键是：语音转录事件使用 `voice_transcript`，并由事件里的行动说明决定回复面。来自 Codex/FenneNote 的语音输入不等于自动 QQ/NapCat 外发，但如果用户在语音里明确要求“发到群里 / 发 QQ / 你直接发”，且目标、内容和授权足够清楚，就应进入现有外发流程，而不是一律拒绝。角色回复的可见文本和 TTS 文本都必须保留角色语气。

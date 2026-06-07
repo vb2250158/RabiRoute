@@ -1,0 +1,17 @@
+{
+  "configName": "xiaoai",
+  "routeVariables": {},
+  "notificationRules": [
+    {
+      "id": "rabi-xiaoai-explicit",
+      "name": "XiaoAI explicit Rabi route",
+      "enabled": true,
+      "targetGroupId": "",
+      "regex": "^(问\\s*Rabi|让\\s*Rabi|Rabi|找\\s*Rabi)",
+      "template": "[RabiRoute XiaoAI]\n路由类型：{routeKind}\n来源：{voiceSource}\n来源设备：{voiceSourceDeviceName}\n来源设备 ID：{voiceSourceDeviceId}\n来源区域：{voiceSourceArea}\n会话：{voiceSessionId}\n时间：{time}\n\n[语音输入]\n{message}\n\n[上下文]\n语音日志：{voiceTranscriptLogPath}\n角色文件：{agentRolePath}\n输出管道：{outputPipeline}\n回复来源：{replyToSource}\n\n[行动]\n这是来自小爱音箱桥接层的语音文本。只有显式呼叫 Rabi 的请求会进入这里。请把它当作家中语音入口请求处理，默认生成适合小爱播报的短回复。如果需要调用家居、脚本或外部系统，只生成明确的工具调用建议或待审动作，不要假设已经执行。若需要长内容，请说明已整理到文件、QQ 草稿或任务窗口。",
+      "routeKinds": [
+        "voice_transcript"
+      ]
+    }
+  ]
+}

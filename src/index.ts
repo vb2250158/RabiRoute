@@ -5,6 +5,7 @@ import { createHeartbeatAdapter } from "./adapters/heartbeatAdapter.js";
 import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
 import { createWebhookAdapter } from "./adapters/webhookAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
+import { triggerManualRule } from "./manualTrigger.js";
 
 type GatewayStatus = {
   messageAdapter?: {
@@ -22,6 +23,27 @@ type GatewayStatus = {
 };
 
 const statusPath = path.join(config.dataDir, "gateway-status.json");
+
+const manualTriggerArg = process.argv.find((arg) => arg.startsWith("--manual-trigger="));
+if (manualTriggerArg) {
+  const triggerId = manualTriggerArg.slice("--manual-trigger=".length).trim() || "manual";
+  const messageArg = process.argv.find((arg) => arg.startsWith("--manual-message="));
+  const nameArg = process.argv.find((arg) => arg.startsWith("--manual-name="));
+  const routeKindArg = process.argv.find((arg) => arg.startsWith("--manual-route-kind="));
+  const ruleArg = process.argv.find((arg) => arg.startsWith("--manual-rule="));
+  const message = messageArg ? decodeURIComponent(messageArg.slice("--manual-message=".length)) : triggerId;
+  const triggerName = nameArg ? decodeURIComponent(nameArg.slice("--manual-name=".length)) : triggerId;
+  const routeKind = routeKindArg?.slice("--manual-route-kind=".length) === "heartbeat" ? "heartbeat" : "manual_trigger";
+  const triggerRuleId = ruleArg?.slice("--manual-rule=".length).trim() || triggerId;
+  try {
+    await triggerManualRule(triggerId, message, triggerName, routeKind, triggerRuleId);
+    console.log(`RabiRoute manual trigger completed: ${triggerId}`);
+    process.exit(0);
+  } catch (error) {
+    console.error(`RabiRoute manual trigger failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
 
 function readGatewayStatus(): GatewayStatus {
   if (!fs.existsSync(statusPath)) {

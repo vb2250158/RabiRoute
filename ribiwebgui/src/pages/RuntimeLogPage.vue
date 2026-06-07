@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import {
   adapterConnectionReasons,
   adapterLabel,
   agentConnectionReasons,
-  gatewayAdapterTypes
+  gatewayAdapterTypes,
+  isMessageInputsDisabled,
+  routeKindLabels
 } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
@@ -18,24 +20,57 @@ const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {});
 const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || {});
 const agentState = computed(() => runtime.value.codexState || {});
 const logs = computed(() => (runtime.value.log || []).slice(-30).join("\n") || "暂无日志");
+const triggeringRuleId = ref("");
+const triggerableRules = computed(() => {
+  return (gateway.value?.notificationRules || [])
+    .filter(rule => Array.isArray(rule.routeKinds) && rule.routeKinds.some(kind => kind === "manual_trigger" || kind === "heartbeat"))
+    .map(rule => {
+      const routeKind: "manual_trigger" | "heartbeat" = rule.routeKinds?.includes("manual_trigger") ? "manual_trigger" : "heartbeat";
+      return {
+        ...rule,
+        routeKind,
+        displayName: rule.name || rule.id,
+        routeKindLabel: routeKindLabels[routeKind] || routeKind
+      };
+    });
+});
+const diagnosisItems = computed(() => [
+  ...adapterReasons.value.map(reason => ({ type: "消息端", reason })),
+  ...agentReasons.value.map(reason => ({ type: "Agent", reason }))
+]);
 
 const adapterText = computed(() => {
-  if (adapters.value.includes("disabled")) return "已禁用";
+  if (gateway.value && isMessageInputsDisabled(gateway.value)) return "已禁用";
   if (adapters.value.includes("napcat") && !napcatState.value.connected && napcatState.value.loginInfoError) return "NapCat 异常";
   if (adapters.value.includes("napcat") && !napcatState.value.connected) return "WS 未连接";
   if (adapters.value.includes("napcat") && napcatState.value.loginInfoError) return "HTTP 异常";
   return "已启用";
 });
+async function triggerRule(rule: { id: string; displayName: string; routeKind: "manual_trigger" | "heartbeat" }): Promise<void> {
+  if (!gateway.value) return;
+  triggeringRuleId.value = rule.id;
+  try {
+    await store.manualTriggerGateway(gateway.value.id, {
+      triggerId: rule.id,
+      ruleId: rule.id,
+      triggerName: rule.displayName,
+      routeKind: rule.routeKind,
+      message: `Manual trigger: ${rule.displayName} (${rule.id})`
+    });
+  } finally {
+    triggeringRuleId.value = "";
+  }
+}
 </script>
 
 <template>
   <div class="page-shell">
     <div class="page-header">
       <div>
-        <h1 class="page-title">运行日志</h1>
-        <div class="page-subtitle">查看 Gateway 进程、消息端连接和 Agent 投递状态。</div>
+        <h1 class="page-title">日志诊断</h1>
+        <div class="page-subtitle">先看连接诊断，再看运行细节和最近日志。</div>
       </div>
-      <div class="d-flex ga-2 flex-wrap" v-if="gateway">
+      <div class="page-actions" v-if="gateway">
         <v-btn prepend-icon="mdi-play" variant="tonal" @click="store.actionGateway(gateway.id, 'start')">启动</v-btn>
         <v-btn prepend-icon="mdi-stop" variant="tonal" @click="store.actionGateway(gateway.id, 'stop')">停止</v-btn>
         <v-btn prepend-icon="mdi-restart" color="primary" @click="store.actionGateway(gateway.id, 'restart')">重启</v-btn>
@@ -46,6 +81,35 @@ const adapterText = computed(() => {
     <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
 
     <template v-if="gateway">
+      <v-card class="app-card glass-card section-card">
+        <div class="section-title-row">
+          <div>
+            <div class="section-title">诊断摘要</div>
+            <div class="section-note">先把需要处理的断点摆在前面。</div>
+          </div>
+          <v-chip :color="diagnosisItems.length ? 'warning' : 'success'" variant="tonal">
+            {{ diagnosisItems.length ? `${diagnosisItems.length} 个待检查项` : "链路正常" }}
+          </v-chip>
+        </div>
+        <div v-if="diagnosisItems.length" class="rule-list">
+          <div v-for="item in diagnosisItems" :key="`${item.type}-${item.reason}`" class="rule-card">
+            <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
+              <div>
+                <div class="font-weight-bold text-primary">{{ item.type }}</div>
+                <div class="section-note mt-1">{{ item.reason }}</div>
+              </div>
+              <v-chip size="small" color="warning" variant="tonal">需要检查</v-chip>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state">
+          <div>
+            <strong>暂未发现明显断点</strong>
+            <span>如果消息仍没有投递，请继续查看下方连接详情和最近日志。</span>
+          </div>
+        </div>
+      </v-card>
+
       <div class="overview-grid">
         <v-card class="app-card glass-card stat-card">
           <div class="stat-label">运行状态</div>
@@ -102,7 +166,6 @@ const adapterText = computed(() => {
           <div class="section-title-row">
             <div>
               <div class="section-title">Agent 连接</div>
-              <div class="section-note">按线程名绑定 Codex / Agent 会话。</div>
             </div>
             <v-chip :color="agentReasons.length ? 'warning' : 'success'" variant="tonal">{{ agentState.monitorThreadId ? "已连接" : "未绑定" }}</v-chip>
           </div>
@@ -118,6 +181,40 @@ const adapterText = computed(() => {
           <div v-if="agentState.lastNotificationError" class="status-row"><span>最后错误</span><b>{{ agentState.lastNotificationError }}</b></div>
         </v-card>
       </div>
+
+      <v-card class="app-card glass-card section-card">
+        <div class="section-title-row">
+          <div>
+            <div class="section-title">Manual Triggers</div>
+            <div class="section-note">Run manual_trigger or heartbeat rules with their selected message template.</div>
+          </div>
+          <v-chip variant="tonal">{{ triggerableRules.length }}</v-chip>
+        </div>
+        <div v-if="triggerableRules.length" class="rule-list">
+          <div v-for="rule in triggerableRules" :key="rule.id" class="rule-card">
+            <div class="d-flex justify-space-between ga-3 align-center flex-wrap">
+              <div>
+                <div class="font-weight-bold text-primary">{{ rule.displayName }}</div>
+                <div class="section-note mt-1">{{ rule.routeKindLabel }} / {{ rule.id }}</div>
+              </div>
+              <v-btn
+                size="small"
+                color="primary"
+                prepend-icon="mdi-play-circle-outline"
+                :loading="triggeringRuleId === rule.id"
+                :disabled="rule.enabled === false || Boolean(triggeringRuleId)"
+                @click="triggerRule(rule)"
+              >Run</v-btn>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state">
+          <div>
+            <strong>No manual trigger rules</strong>
+            <span>Add a manual_trigger or heartbeat rule in persona templates first.</span>
+          </div>
+        </div>
+      </v-card>
 
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">

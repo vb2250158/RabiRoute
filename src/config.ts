@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
+import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 
 dotenv.config();
 
@@ -51,10 +52,10 @@ export const defaultVoiceTranscriptNotificationTemplate = [
   "时长：{voiceDurationSeconds} 秒",
   "峰值：{voicePeak}",
   "",
-  "请直接在当前 Codex 会话里回复用户；不要生成 QQ 可发送回复，不要转交到 QQ/NapCat，也不要尝试通过 QQ 发送消息。需要上下文时再读取 {voiceTranscriptLogPath}。"
+  "默认在当前 Codex 会话里承接语音输入，并在需要时生成适合 TTS 的短回复。若转写文本明确要求发送到 QQ/NapCat，且目标、内容和授权足够清楚，请按现有外发流程处理；缺少信息时只追问最小缺口，不要因为来源是 voice_transcript 就一律拒绝发送。需要上下文时再读取 {voiceTranscriptLogPath}。"
 ].join("\n");
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "voice_transcript";
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "voice_transcript";
 
 export type NotificationRule = {
   id: string;
@@ -70,6 +71,9 @@ export type RouteProfile = {
   id: string;
   name: string;
   enabled: boolean;
+  pipelinePreset?: string;
+  pipeline?: PipelineDefinition;
+  resolvedPipeline: ResolvedPipeline;
   agentRoleId?: string;
   agentRoleFile: string;
   rolesDir: string;
@@ -137,6 +141,7 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "direct_reply"
     || kind === "indirect_reply"
     || kind === "heartbeat"
+    || kind === "manual_trigger"
     || kind === "voice_transcript";
 }
 
@@ -203,6 +208,19 @@ function parseRouteProfiles(raw: string | undefined): RouteProfile[] {
   }
 }
 
+function parsePipelineDefinition(raw: string | undefined): PipelineDefinition | undefined {
+  if (!raw?.trim()) {
+    return undefined;
+  }
+
+  try {
+    return normalizePipelineDefinition(JSON.parse(raw));
+  } catch (error) {
+    console.error("Failed to parse PIPELINE", error);
+    return undefined;
+  }
+}
+
 function parsePositiveNumber(raw: string | undefined, fallback: number): number {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -240,6 +258,8 @@ function normalizeRouteProfile(item: unknown, index: number): RouteProfile | nul
   const roleId = sanitizeRoleId(raw.agentRoleId);
   const id = sanitizeRoleId(raw.id) || roleId || `route-${index + 1}`;
   const rules = parseNotificationRules(JSON.stringify(raw.notificationRules ?? [])) ?? [];
+  const pipelinePreset = typeof raw.pipelinePreset === "string" && raw.pipelinePreset.trim() ? raw.pipelinePreset.trim() : undefined;
+  const pipeline = normalizePipelineDefinition(raw.pipeline);
   if (rules.length === 0) {
     return null;
   }
@@ -248,6 +268,9 @@ function normalizeRouteProfile(item: unknown, index: number): RouteProfile | nul
     id,
     name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id,
     enabled: raw.enabled !== false,
+    pipelinePreset,
+    pipeline,
+    resolvedPipeline: resolvePipeline(pipelinePreset, pipeline),
     agentRoleId: roleId,
     agentRoleFile: typeof raw.agentRoleFile === "string" && raw.agentRoleFile.trim() ? raw.agentRoleFile.trim() : "persona.md",
     rolesDir: typeof raw.rolesDir === "string" && raw.rolesDir.trim() ? path.resolve(rootDir, raw.rolesDir) : rolesDir,
@@ -281,14 +304,16 @@ function sanitizeRoleId(raw: string | undefined): string {
 }
 
 const botNickname = process.env.BOT_NICKNAME ?? "QQ小助手";
-const baseDataDir = path.resolve(rootDir, process.env.DATA_DIR ?? "./data");
-const rolesDir = path.resolve(rootDir, process.env.ROLES_DIR ?? path.join(baseDataDir, "roles"));
+const baseDataDir = path.resolve(rootDir, process.env.DATA_DIR ?? path.join("data", "route", "default"));
+const rolesDir = path.resolve(rootDir, process.env.ROLES_DIR ?? path.join("data", "roles"));
 const agentRoleId = sanitizeRoleId(process.env.AGENT_ROLE_ID);
 const agentRoleFile = process.env.AGENT_ROLE_FILE?.trim() || "persona.md";
 const agentRoleDir = agentRoleId ? path.join(rolesDir, agentRoleId) : "";
 const agentRolePath = agentRoleDir ? path.join(agentRoleDir, agentRoleFile) : "";
 const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES) ?? [];
 const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES);
+const pipelinePreset = process.env.PIPELINE_PRESET?.trim() || undefined;
+const pipeline = parsePipelineDefinition(process.env.PIPELINE);
 
 export const config = {
   messageAdapterType: parseMessageAdapterType(process.env.MESSAGE_ADAPTER_TYPE),
@@ -310,13 +335,17 @@ export const config = {
   botNickname,
   botUserId: "",
   routeVariables: parseRouteVariables(process.env.ROUTE_VARIABLES),
+  pipelinePreset,
+  pipeline,
+  resolvedPipeline: resolvePipeline(pipelinePreset, pipeline),
   baseDataDir,
   rolesDir,
   agentRoleId,
   agentRoleFile,
   agentRoleDir,
   agentRolePath,
-  dataDir: agentRoleDir || baseDataDir,
+  memoryDataDir: agentRoleDir || baseDataDir,
+  dataDir: baseDataDir,
   groupNotificationTemplate: process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupNotificationTemplate,
   groupAtNotificationTemplate: process.env.GROUP_AT_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupAtNotificationTemplate,
   groupDirectReplyNotificationTemplate: process.env.GROUP_DIRECT_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupDirectReplyNotificationTemplate,
@@ -355,7 +384,7 @@ export function rolePathsForRoute(route: Pick<RouteProfile, "agentRoleId" | "age
     roleId,
     roleDir,
     rolePath: roleDir ? path.join(roleDir, routeRoleFile) : "",
-    dataDir: route.dataDir || roleDir || config.baseDataDir
+    dataDir: roleDir || route.dataDir || config.memoryDataDir
   };
 }
 

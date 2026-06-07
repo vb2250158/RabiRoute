@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
+import { notifyCodex } from "./codexApp.js";
 
 type IpcResponse = {
   type: "response";
@@ -106,7 +107,7 @@ function readState(): CodexState {
     return {};
   }
 
-  return JSON.parse(fs.readFileSync(statePath, "utf8")) as CodexState;
+  return JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as CodexState;
 }
 
 function writeState(state: CodexState): void {
@@ -118,13 +119,12 @@ function sessionIndexPath(): string {
   return path.join(os.homedir(), ".codex", "session_index.jsonl");
 }
 
-function discoverMonitorThread(): DiscoveredMonitorThread | null {
+function readLatestSessionThreads(): DiscoveredMonitorThread[] {
   const indexPath = sessionIndexPath();
   if (!fs.existsSync(indexPath)) {
-    return null;
+    return [];
   }
 
-  const targetName = config.codexThreadName.trim();
   const latestById = new Map<string, DiscoveredMonitorThread>();
   for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
     if (!line.trim()) {
@@ -152,11 +152,26 @@ function discoverMonitorThread(): DiscoveredMonitorThread | null {
     }
   }
 
-  const records = [...latestById.values()]
+  return [...latestById.values()];
+}
+
+function discoverMonitorThread(): DiscoveredMonitorThread | null {
+  const targetName = config.codexThreadName.trim();
+  const records = readLatestSessionThreads()
     .filter((item) => item.threadName === targetName)
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
 
   return records[0] ?? null;
+}
+
+function stateStillPointsToTargetThread(state: CodexState): boolean {
+  const targetName = config.codexThreadName.trim();
+  if (!state.monitorThreadId || state.monitorThreadName !== targetName) {
+    return false;
+  }
+
+  const currentRecord = readLatestSessionThreads().find((item) => item.id === state.monitorThreadId);
+  return !currentRecord || currentRecord.threadName === targetName;
 }
 
 function applyDiscoveredThread(state: CodexState, discovered: DiscoveredMonitorThread): CodexState {
@@ -171,12 +186,25 @@ function applyDiscoveredThread(state: CodexState, discovered: DiscoveredMonitorT
 }
 
 function resolveMonitorThread(state: CodexState, forceRefresh: boolean): CodexState {
-  if (!forceRefresh && state.monitorThreadId && state.monitorThreadName === config.codexThreadName) {
+  if (!forceRefresh && stateStillPointsToTargetThread(state)) {
     return state;
   }
 
   const discovered = discoverMonitorThread();
   if (!discovered) {
+    if (state.monitorThreadId) {
+      const nextState = {
+        ...state,
+        monitorThreadId: undefined,
+        monitorThreadUpdatedAt: undefined,
+        monitorThreadSource: sessionIndexPath(),
+        lastAutoDiscoveryAt: new Date().toISOString(),
+        lastNotificationError: `No Codex thread named "${config.codexThreadName}" was found in ${sessionIndexPath()}. Previous binding "${String(state.monitorThreadName ?? state.monitorThreadId)}" was cleared.`,
+        lastNotificationErrorAt: new Date().toISOString()
+      };
+      writeState(nextState);
+      return nextState;
+    }
     return state;
   }
 
@@ -517,6 +545,10 @@ function isNoClientFoundError(error: unknown): boolean {
   return text.includes("no-client-found");
 }
 
+function shouldUseAppServerFallback(): boolean {
+  return process.env.CODEX_DESKTOP_IPC_APP_SERVER_FALLBACK !== "0";
+}
+
 async function deliverToMonitorThread(state: CodexState, message: string): Promise<void> {
   if (!state.monitorThreadId) {
     throw new Error(`Missing monitorThreadId in ${statePath}. RabiRoute tried to find "${config.codexThreadName}" in ${sessionIndexPath()}, but no matching Codex thread was found.`);
@@ -574,6 +606,30 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
           lastNotificationErrorAt: undefined
         });
       } catch (error) {
+        if (isNoClientFoundError(error) && shouldUseAppServerFallback()) {
+          try {
+            await notifyCodex(message);
+            writeState({
+              ...readState(),
+              lastNotificationError: undefined,
+              lastNotificationErrorAt: undefined,
+              lastDesktopIpcError: error instanceof Error ? error.message : String(error),
+              lastDesktopIpcErrorAt: new Date().toISOString(),
+              lastDesktopIpcFallbackAt: new Date().toISOString()
+            } as CodexState & Record<string, unknown>);
+            return;
+          } catch (fallbackError) {
+            writeState({
+              ...state,
+              lastNotificationError: [
+                error instanceof Error ? error.message : String(error),
+                `app-server fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`
+              ].join("; "),
+              lastNotificationErrorAt: new Date().toISOString()
+            });
+            throw fallbackError;
+          }
+        }
         writeState({
           ...state,
           lastNotificationError: error instanceof Error ? error.message : String(error),

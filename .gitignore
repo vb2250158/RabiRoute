@@ -9,9 +9,15 @@
 /voice-cache/
 /gateways.json
 /.idea/
+.venv/
+**/.venv/
+__pycache__/
+*.py[cod]
 .env
 .env.*
 !**/.env.example
 *.secret.*
+*.log
 npm-debug.log*
 assets/reference-cache/
+/plugin-adapters/xiaoai-rabiroute/vendor/open-xiaoai/

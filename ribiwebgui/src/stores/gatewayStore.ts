@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import type { GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, RuntimeStatus } from "../types";
+import type { AgentAdapterType, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, RuntimeStatus } from "../types";
 import {
   applyAdapterDefaults,
   configNameFor,
@@ -28,6 +28,10 @@ function managerErrorOf(value: unknown): string {
     return String((value as { error?: unknown }).error || "");
   }
   return "";
+}
+
+function isAgentAdapterType(value: unknown): value is AgentAdapterType {
+  return value === "codexDesktop" || value === "codexApp" || value === "copilotCli" || value === "marvis" || value === "astrbot";
 }
 
 export const useGatewayStore = defineStore("gateway", () => {
@@ -73,7 +77,7 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   function normalizeGateways(): void {
     gateways.value.forEach(gateway => {
-      gateway.agentAdapters = [...new Set((Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codexDesktop"]).filter(item => item === "codexDesktop" || item === "codexApp"))];
+      gateway.agentAdapters = [...new Set((Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codexDesktop"]).filter(isAgentAdapterType))];
       if (Array.isArray(gateway.notificationRules)) {
         gateway.notificationRules = gateway.notificationRules.map((rule, index) => normalizeRule(rule, index));
       }
@@ -175,6 +179,25 @@ export const useGatewayStore = defineStore("gateway", () => {
   async function actionGateway(id: string, action: "start" | "stop" | "restart"): Promise<void> {
     await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/${action}`, { method: "POST" });
     window.setTimeout(() => void load(), action === "restart" ? 1000 : 700);
+  }
+
+  async function manualTriggerGateway(id: string, payload: {
+    triggerId: string;
+    triggerName?: string;
+    message?: string;
+    routeKind?: "manual_trigger" | "heartbeat";
+    ruleId?: string;
+  }): Promise<void> {
+    const response = await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/manual-trigger`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.code !== 0) {
+      throw new Error(body.message || body.error || "manual trigger failed");
+    }
+    await load();
   }
 
   async function openConfigFile(type: string, gatewayId = "", roleId = ""): Promise<void> {
@@ -299,7 +322,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     gatewayPort: number;
     napcatHttpUrl: string;
     adapters?: MessageAdapterType[];
-    agentAdapters?: Array<"codexDesktop" | "codexApp">;
+    messageInputsDisabled?: boolean;
+    agentAdapters?: AgentAdapterType[];
     heartbeatIntervalSeconds?: number;
     heartbeatMessage?: string;
     webhookPort?: number;
@@ -311,6 +335,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     if (values.adapters?.length) {
       setGatewayAdapters(gateway, values.adapters);
     }
+    gateway.messageInputsDisabled = values.messageInputsDisabled === true;
     gateway.agentRoleId = values.agentRoleId;
     gateway.codexThreadName = values.codexThreadName;
     gateway.codexCwd = values.codexCwd;
@@ -321,7 +346,6 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway.heartbeatMessage = values.heartbeatMessage || gateway.heartbeatMessage;
     gateway.webhookPort = values.webhookPort || gateway.webhookPort;
     gateway.webhookPath = values.webhookPath || gateway.webhookPath;
-    gateway.rolesDir = gateway.rolesDir || "./data/roles";
     gateway.agentRoleFile = gateway.agentRoleFile || "persona.md";
     applyAdapterDefaults(gateway);
     touch();
@@ -350,6 +374,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     save,
     startManager,
     actionGateway,
+    manualTriggerGateway,
     openConfigFile,
     selectGateway,
     addGateway,

@@ -1,7 +1,7 @@
-export type AgentAdapterType = "codexDesktop" | "codexApp";
+export type AgentAdapterType = "codexDesktop" | "codexApp" | "copilotCli" | "marvis" | "astrbot";
 
 export function parseAgentAdapterType(value: string | undefined): AgentAdapterType | null {
-  return value === "codexDesktop" || value === "codexApp" ? value : null;
+  return value === "codexDesktop" || value === "codexApp" || value === "copilotCli" || value === "marvis" || value === "astrbot" ? value : null;
 }
 
 export function normalizeAgentAdapters(items: unknown[]): AgentAdapterType[] {

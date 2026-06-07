@@ -9,6 +9,7 @@
 ## 示例 data 包
 
 - `data/route/main/routeConfig.json`：默认 QQ / NapCat 到 Codex Desktop 的示例路由配置。
+- `data/route/voice-chat/routeConfig.json`：FenneNote/Webhook 输入到 FenneNote 播放请求转发的 `voice_chat` pipeline preset 示例。
 - `data/roles/Rabi/`：默认路由配置配套的唯一 RabiRoute 兔娘看板娘与陪伴型成长人格，包含 `growth.md`、`skills.md`、`prompts/` 和备份用 `old/`。
 - `data/roles/Rabi/roleMessageConfig.json`：默认人格消息模板规则，包含 Rabi 使用的 route kind、规则和模板。
 - `.env.example`：可选的环境变量样板，只用于不走 manager、直接用 env 启动单个 gateway 的场景。

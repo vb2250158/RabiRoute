@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { AgentAdapterType, MessageAdapterType } from "../types";
-import { adapterLabel, defaultHeartbeatMessage, gatewayAdapterTypes } from "../utils/gatewayHelpers";
+import { adapterLabel, defaultHeartbeatMessage, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
@@ -16,6 +16,7 @@ const open = computed({
 const activeStep = ref(1);
 const form = reactive({
   adapters: ["napcat"] as MessageAdapterType[],
+  messageInputsDisabled: false,
   agentAdapters: ["codexDesktop"] as AgentAdapterType[],
   agentRoleId: "Rabi",
   codexThreadName: "QQ 消息监听",
@@ -31,19 +32,23 @@ const form = reactive({
 const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> = [
   { type: "napcat", title: "NapCat / OneBot", note: "QQ 群聊、私聊实时入口", icon: "mdi-message-badge-outline" },
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
-  { type: "webhook", title: "Webhook", note: "接收外部系统 POST 事件", icon: "mdi-webhook" },
-  { type: "disabled", title: "暂不启用", note: "先保存 Agent 和人格配置", icon: "mdi-pause-circle-outline" }
+  { type: "webhook", title: "Webhook", note: "接收外部系统 POST 事件", icon: "mdi-webhook" }
 ];
 
+const messageInputsDisabled = computed(() => form.messageInputsDisabled);
 const messageReady = computed(() => {
-  if (form.adapters.includes("disabled")) return true;
+  if (form.messageInputsDisabled) return true;
   if (form.adapters.includes("napcat") && (!form.gatewayPort || !form.napcatHttpUrl.trim())) return false;
   if (form.adapters.includes("heartbeat") && !form.heartbeatIntervalSeconds) return false;
   if (form.adapters.includes("webhook") && (!form.webhookPort || !form.webhookPath.trim())) return false;
   return form.adapters.length > 0;
 });
 
-const agentReady = computed(() => Boolean(form.codexThreadName.trim() && form.codexCwd.trim() && form.agentAdapters.length));
+const agentReady = computed(() => {
+  if (!form.agentAdapters.length) return false;
+  if (form.agentAdapters.every(adapter => adapter === "marvis" || adapter === "astrbot")) return true;
+  return Boolean(form.codexThreadName.trim() && form.codexCwd.trim());
+});
 const personaReady = computed(() => Boolean(form.agentRoleId.trim()));
 const canSave = computed(() => messageReady.value && agentReady.value && personaReady.value);
 const completedSteps = computed(() => [messageReady.value, agentReady.value, personaReady.value].filter(Boolean).length);
@@ -52,7 +57,7 @@ const steps = computed(() => [
   {
     value: 1,
     title: "消息入口",
-    note: form.adapters.map(adapterLabel).join(" + "),
+    note: form.messageInputsDisabled ? `已禁用 · 保留 ${form.adapters.map(adapterLabel).join(" + ")}` : form.adapters.map(adapterLabel).join(" + "),
     done: messageReady.value,
     icon: "mdi-numeric-1"
   },
@@ -75,6 +80,7 @@ const steps = computed(() => [
 function syncFromGateway() {
   const gateway = store.selectedGateway;
   form.adapters = gateway ? gatewayAdapterTypes(gateway) : ["napcat"];
+  form.messageInputsDisabled = gateway ? isMessageInputsDisabled(gateway) : false;
   form.agentAdapters = Array.isArray(gateway?.agentAdapters) && gateway.agentAdapters.length
     ? [...gateway.agentAdapters]
     : ["codexDesktop"];
@@ -101,15 +107,14 @@ watch(
 );
 
 function toggleAdapter(type: MessageAdapterType) {
-  if (type === "disabled") {
-    form.adapters = form.adapters.includes("disabled") ? ["napcat"] : ["disabled"];
-    return;
-  }
-
-  const next = new Set(form.adapters.filter(adapter => adapter !== "disabled"));
+  const next = new Set<MessageAdapterType>(form.adapters.filter(adapter => adapter !== "disabled"));
   if (next.has(type)) next.delete(type);
   else next.add(type);
   form.adapters = next.size ? [...next] : ["napcat"];
+}
+
+function setMessageInputsDisabled(disabled: boolean) {
+  form.messageInputsDisabled = disabled;
 }
 
 function goNext() {
@@ -117,7 +122,7 @@ function goNext() {
 }
 
 async function apply() {
-  store.applyQuickSetup(form);
+  store.applyQuickSetup({ ...form });
   await store.save();
   open.value = false;
 }
@@ -173,6 +178,14 @@ async function apply() {
                     <div class="section-title">选择消息入口</div>
                     <div class="section-note">可以组合多个入口；禁用入口时仍可先保存 Agent 和人格配置。</div>
                   </div>
+                  <v-switch
+                    :model-value="messageInputsDisabled"
+                    label="禁用消息端"
+                    color="warning"
+                    inset
+                    hide-details
+                    @update:model-value="value => setMessageInputsDisabled(Boolean(value))"
+                  />
                 </div>
 
                 <div class="adapter-grid mb-4">
@@ -194,7 +207,7 @@ async function apply() {
                   </div>
                 </div>
 
-                <div class="form-grid" v-if="!form.adapters.includes('disabled')">
+                <div class="form-grid" v-if="!form.messageInputsDisabled">
                   <template v-if="form.adapters.includes('napcat')">
                     <v-text-field v-model.number="form.gatewayPort" type="number" label="NapCat WebSocket 端口" />
                     <v-text-field v-model="form.napcatHttpUrl" label="NapCat HTTP 地址" />
@@ -208,7 +221,7 @@ async function apply() {
                     <v-text-field v-model="form.webhookPath" label="Webhook 路径" />
                   </template>
                 </div>
-                <v-alert v-else type="info" variant="tonal">你可以先完成 Agent 绑定，稍后再回到“路由配置”启用消息入口。</v-alert>
+                <v-alert v-else type="info" variant="tonal">已暂时禁用消息端；入口选择和参数会保留，关闭禁用后继续使用。</v-alert>
               </v-window-item>
 
               <v-window-item :value="2">
@@ -223,7 +236,9 @@ async function apply() {
                     v-model="form.agentAdapters"
                     :items="[
                       { title: 'Codex Desktop', value: 'codexDesktop' },
-                      { title: 'Codex App', value: 'codexApp' }
+                      { title: 'Codex App', value: 'codexApp' },
+                      { title: 'Copilot CLI', value: 'copilotCli' },
+                      { title: 'Marvis', value: 'marvis' }
                     ]"
                     label="Agent 处理端"
                     multiple

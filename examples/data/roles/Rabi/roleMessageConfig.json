@@ -60,6 +60,23 @@
           ]
         }
       ]
+    },
+    {
+      "configName": "voice-chat",
+      "routeVariables": {},
+      "notificationRules": [
+        {
+          "id": "rabi-voice-chat",
+          "name": "Rabi voice chat",
+          "enabled": true,
+          "targetGroupId": "",
+          "regex": "",
+          "template": "[RabiRoute voice pipeline]\nRoute kind: {routeKind}\nPipeline preset: {pipelinePreset}\nInput adapter: {inputAdapter}\nOutput adapter: {outputAdapter}\nOutput pipeline: {outputPipeline}\nPrompt output mode: {promptOutputMode}\nTTS provider: {ttsProvider}\nTTS voice: {ttsVoice}\nFenneNote playback endpoint: {ttsWorkerUrl}\nTTS play: {ttsPlay}\nPrevent feedback loop: {preventFeedbackLoop}\nReply to source: {replyToSource}\n\n[Transcript]\n{message}\n\n[Context]\nVoice transcript log: {voiceTranscriptLogPath}\nRole file: {agentRolePath}\n\n[Instruction]\nThis route is intended for short spoken replies. Produce role-faithful visibleText and a playback request object. Keep request.text conversational, concise, and suitable for FenneNote to forward to OumuQ. RabiRoute only forwards the request packet; it does not synthesize audio. Do not send a QQ/NapCat reply just because this is a voice transcript. If the transcript clearly asks to send to QQ/NapCat and provides enough target, content, and authorization context, follow the existing send or draft-and-approval flow; otherwise ask only for the missing minimum detail.",
+          "routeKinds": [
+            "voice_transcript"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -1,4 +1,4 @@
-import type { GatewayDefinition, MessageAdapterType, NotificationRule, RuntimeStatus } from "../types";
+import type { AgentAdapterType, GatewayDefinition, MessageAdapterType, NotificationRule, RuntimeStatus } from "../types";
 
 export const routeKindLabels: Record<string, string> = {
   direct_at: "群聊-直接 @",
@@ -7,11 +7,12 @@ export const routeKindLabels: Record<string, string> = {
   group_message: "群聊-普通消息",
   private: "私聊",
   heartbeat: "定时触发",
+  manual_trigger: "手动触发",
   voice_transcript: "语音转写"
 };
 
 export const templateVars = [
-  { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message、heartbeat、voice_transcript。" },
+  { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message、heartbeat、manual_trigger、voice_transcript。" },
   { name: "RobotQQId", description: "机器人 QQ 号，来自当前消息事件 self_id。" },
   { name: "SenderQQId", description: "发送者 QQ 号。" },
   { name: "GroupId", description: "群号；私聊时为空。" },
@@ -40,13 +41,28 @@ export const templateVars = [
   { name: "repliedMessage", description: "被回复消息的原始文本。" },
   { name: "routeProfileId", description: "当前命中的 route profile ID。" },
   { name: "routeProfileName", description: "当前命中的 route profile 名称。" },
+  { name: "pipelinePreset", description: "当前 pipeline preset / channel preset ID，例如 qq_chat、voice_chat、webhook_task。" },
+  { name: "channelPreset", description: "pipelinePreset 的别名，供使用 channel 命名的模板使用。" },
+  { name: "inputAdapter", description: "pipeline 默认输入适配端。" },
+  { name: "outputAdapter", description: "pipeline 默认输出适配端，例如 qq、tts、file、codex。" },
+  { name: "outputPipeline", description: "输出管道 ID，例如 qq、oumuq、file。" },
+  { name: "promptOutputMode", description: "提示词输出模式，例如 qq_text、voice_short、markdown、json。" },
+  { name: "ttsProvider", description: "TTS provider，语音模式通常为 oumuq。" },
+  { name: "ttsVoice", description: "TTS 声线 / character_id。" },
+  { name: "ttsWorkerUrl", description: "TTS worker 地址，只作为路由决策上下文。" },
+  { name: "ttsPlay", description: "是否建议 worker 播放，true / false。" },
+  { name: "preventFeedbackLoop", description: "是否开启防回流策略，true / false。" },
+  { name: "replyToSource", description: "是否默认回到原来消息端，true / false。" },
   { name: "agentRoleId", description: "当前选择的路由人格 ID。" },
   { name: "agentRolePath", description: "当前路由人格文件路径。" },
-  { name: "agentRoleDir", description: "当前路由人格的数据目录。" },
+  { name: "agentRoleDir", description: "当前路由人格配置目录。" },
   { name: "groupLogPath", description: "群聊消息 JSONL 记录路径。" },
   { name: "privateLogPath", description: "私聊消息 JSONL 记录路径。" },
   { name: "heartbeatLogPath", description: "定时触发事件 JSONL 记录路径。" },
+  { name: "manualTriggerLogPath", description: "手动触发事件 JSONL 记录路径。" },
   { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" },
+  { name: "triggerId", description: "手动触发 ID。" },
+  { name: "triggerName", description: "手动触发显示名称。" },
   { name: "voiceTranscriptLogPath", description: "语音转写 JSONL 记录路径。" },
   { name: "voiceSource", description: "Webhook 来源。" },
   { name: "voiceDurationSeconds", description: "语音片段时长，单位秒。" },
@@ -132,7 +148,7 @@ export function defaultVoiceTranscriptTemplate(): string {
     "时长：{voiceDurationSeconds} 秒",
     "峰值：{voicePeak}",
     "",
-    "请直接在当前 Codex 会话里回复用户；不要生成 QQ 可发送回复，不要转交到 QQ/NapCat，也不要尝试通过 QQ 发送消息。需要上下文时再读取 {voiceTranscriptLogPath}。"
+    "默认在当前 Codex 会话里承接语音输入，并在需要时生成适合 TTS 的短回复。若转写文本明确要求发送到 QQ/NapCat，且目标、内容和授权足够清楚，请按现有外发流程处理；缺少信息时只追问最小缺口，不要因为来源是 voice_transcript 就一律拒绝发送。需要上下文时再读取 {voiceTranscriptLogPath}。"
   ].join("\n");
 }
 
@@ -156,20 +172,37 @@ export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageAdapterT
   const adapters = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
     ? gateway.messageAdapters
     : [gateway.messageAdapterType || "napcat"];
-  if (adapters.includes("disabled")) return ["disabled"];
-  return [...new Set(adapters)].filter((type): type is MessageAdapterType => Boolean(type) && type !== "disabled");
+  const disabled = new Set(gateway.messageAdaptersDisabled ?? []);
+  const next = [...new Set(adapters)]
+    .filter((type): type is MessageAdapterType => Boolean(type) && type !== "disabled" && !disabled.has(type));
+  return next.length > 0 ? next : [];
+}
+
+export function isAdapterDisabled(gateway: GatewayDefinition, type: MessageAdapterType): boolean {
+  return gateway.messageAdaptersDisabled?.includes(type) === true;
+}
+
+export function toggleAdapterDisabled(gateway: GatewayDefinition, type: MessageAdapterType): void {
+  const disabled = gateway.messageAdaptersDisabled ?? [];
+  if (disabled.includes(type)) {
+    gateway.messageAdaptersDisabled = disabled.filter(t => t !== type);
+  } else {
+    gateway.messageAdaptersDisabled = [...disabled, type];
+  }
+}
+
+export function isMessageInputsDisabled(gateway: GatewayDefinition): boolean {
+  return gateway.messageInputsDisabled === true || gateway.messageAdapters?.includes("disabled") === true;
 }
 
 export function setGatewayAdapters(gateway: GatewayDefinition, adapters: MessageAdapterType[]): void {
-  let next = adapters.filter(Boolean);
-  if (next.includes("disabled")) {
-    next = ["disabled"];
-  } else {
-    next = [...new Set(next)].filter(type => type !== "disabled");
+  const next = [...new Set(adapters.filter(Boolean))].filter(type => type !== "disabled");
+  gateway.messageAdapters = next.length > 0 ? next : ["napcat"];
+  gateway.messageAdapterType = gateway.messageAdapters[0];
+  // clean up disabled list for removed adapters
+  if (gateway.messageAdaptersDisabled) {
+    gateway.messageAdaptersDisabled = gateway.messageAdaptersDisabled.filter(t => gateway.messageAdapters!.includes(t));
   }
-  if (next.length === 0) next = ["napcat"];
-  gateway.messageAdapters = next;
-  gateway.messageAdapterType = next[0];
 }
 
 export function adapterLabel(type: string): string {
@@ -206,8 +239,8 @@ export function routeConfigPathFor(gateway: GatewayDefinition): string {
   return `./data/route/${configNameFor(gateway)}/routeConfig.json`;
 }
 
-export function roleMessageDataDirFor(gateway: GatewayDefinition): string {
-  return `./data/route/${configNameFor(gateway)}`;
+export function routeDataDirFor(gateway: GatewayDefinition): string {
+  return `./data/route`;
 }
 
 export function ensureRouteVariables(gateway: GatewayDefinition): Record<string, string> {
@@ -218,70 +251,53 @@ export function ensureRouteVariables(gateway: GatewayDefinition): Record<string,
 }
 
 export function activeRoleKey(gateway: GatewayDefinition): string {
-  return gateway.id || "";
+  return gateway.agentRoleId || gateway.id || "";
 }
 
 export function ensureActiveRoleRules(gateway: GatewayDefinition): NotificationRule[] {
-  const roleKey = activeRoleKey(gateway);
-  if (!gateway.roleNotificationRules || typeof gateway.roleNotificationRules !== "object" || Array.isArray(gateway.roleNotificationRules)) {
-    gateway.roleNotificationRules = {};
-  }
-  if (roleKey && Array.isArray(gateway.roleNotificationRules[roleKey])) {
-    gateway.notificationRules = cloneRules(gateway.roleNotificationRules[roleKey]);
-  } else if (roleKey) {
-    const currentRules = Array.isArray(gateway.notificationRules) ? gateway.notificationRules : [];
-    gateway.roleNotificationRules[roleKey] = cloneRules(currentRules);
-    gateway.notificationRules = cloneRules(currentRules);
-  }
-  return gateway.notificationRules || [];
-}
-
-export function saveActiveRoleRules(gateway: GatewayDefinition): void {
-  const roleKey = activeRoleKey(gateway);
-  if (!roleKey) return;
-  if (!gateway.roleNotificationRules || typeof gateway.roleNotificationRules !== "object" || Array.isArray(gateway.roleNotificationRules)) {
-    gateway.roleNotificationRules = {};
-  }
-  gateway.roleNotificationRules[roleKey] = cloneRules(gateway.notificationRules);
-}
-
-export function notificationRulesForGateway(gateway: GatewayDefinition): NotificationRule[] {
-  ensureActiveRoleRules(gateway);
   if (!Array.isArray(gateway.notificationRules)) gateway.notificationRules = [];
   return gateway.notificationRules;
 }
 
-export function routeKindDefinitionsForGateway(gateway: GatewayDefinition) {
-  const adapters = gatewayAdapterTypes(gateway);
-  const definitions: Array<{ adapter: string; title: string; note: string; groups: Array<{ title: string; routeKinds: string[] }> }> = [];
-  if (adapters.includes("napcat")) {
-    definitions.push({
+export function saveActiveRoleRules(_gateway: GatewayDefinition): void {
+  // Rules are shared per persona; no per-gateway cache needed
+}
+
+export function notificationRulesForGateway(gateway: GatewayDefinition): NotificationRule[] {
+  if (!Array.isArray(gateway.notificationRules)) gateway.notificationRules = [];
+  return gateway.notificationRules;
+}
+
+export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
+  return [
+    {
       adapter: "napcat",
       title: "NapCat / OneBot",
-      note: "QQ 实时消息",
+      note: "QQ 实时消息；可先配置规则，再回到消息适配器启用入口。",
       groups: [
         { title: "群聊事件", routeKinds: ["direct_at", "direct_reply", "indirect_reply", "group_message"] },
         { title: "私聊事件", routeKinds: ["private"] }
       ]
-    });
-  }
-  if (adapters.includes("heartbeat")) {
-    definitions.push({
+    },
+    {
       adapter: "heartbeat",
       title: "定时触发",
-      note: "内部心跳消息",
+      note: "内部定时事件；勾选后仅在规则启用且入口产生 heartbeat 时投递。",
       groups: [{ title: "定时事件", routeKinds: ["heartbeat"] }]
-    });
-  }
-  if (adapters.includes("webhook")) {
-    definitions.push({
+    },
+    {
+      adapter: "manual",
+      title: "手动触发",
+      note: "托盘或本地 API 主动触发；不依赖消息 adapter。",
+      groups: [{ title: "手动事件", routeKinds: ["manual_trigger"] }]
+    },
+    {
       adapter: "webhook",
       title: "Webhook",
-      note: "外部系统消息",
-      groups: [{ title: "语音事件", routeKinds: ["voice_transcript"] }]
-    });
-  }
-  return definitions;
+      note: "外部系统事件；可用于语音转写、自动化或后续扩展。",
+      groups: [{ title: "语音 / 外部事件", routeKinds: ["voice_transcript"] }]
+    }
+  ];
 }
 
 export function isGroupRouteKind(routeKind: string): boolean {
@@ -313,19 +329,30 @@ export function explainAgentError(error: unknown): string {
   return text;
 }
 
+function requiresCodexBinding(agentAdapters: AgentAdapterType[] | undefined): boolean {
+  const adapters = Array.isArray(agentAdapters) && agentAdapters.length ? agentAdapters : ["codexDesktop"];
+  return adapters.some(adapter => adapter === "codexDesktop" || adapter === "codexApp" || adapter === "copilotCli" || adapter === "astrbot");
+}
+
 export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: RuntimeStatus, adapterTypes: MessageAdapterType[]): string[] {
   const gatewayStatus = runtime.gatewayStatus || {};
   const adapterState = gatewayStatus.messageAdapter || {};
   const napcatState = gatewayStatus.napcat || {};
   const heartbeatState = gatewayStatus.heartbeat || {};
-  const runtimeAdapterTypes = Array.isArray(runtime.messageAdapters) && runtime.messageAdapters.length > 0
-    ? runtime.messageAdapters
-    : [runtime.messageAdapterType || adapterState.type || "napcat"];
-  const adapterPendingRestart = adapterTypes.join(",") !== runtimeAdapterTypes.join(",");
+  const expectedRuntimeAdapters: MessageAdapterType[] = isMessageInputsDisabled(gateway) ? ["disabled"] : adapterTypes;
+  const runtimeAdapterTypes = isMessageInputsDisabled(gateway)
+    ? [adapterState.type || "disabled"]
+    : Array.isArray(runtime.messageAdapters) && runtime.messageAdapters.length > 0
+      ? runtime.messageAdapters
+      : [runtime.messageAdapterType || adapterState.type || "napcat"];
+  const adapterPendingRestart = expectedRuntimeAdapters.join(",") !== runtimeAdapterTypes.join(",");
   const reasons: string[] = [];
   if (!runtime.running) reasons.push("Gateway 进程未运行。");
   if (adapterPendingRestart) {
-    reasons.push(`配置已变更但尚未重启：当前运行 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${adapterTypes.map(adapterLabel).join(" + ")}。`);
+    reasons.push(`配置已变更但尚未重启：当前运行 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${expectedRuntimeAdapters.map(adapterLabel).join(" + ")}。`);
+  }
+  if (isMessageInputsDisabled(gateway)) {
+    return reasons;
   }
   if (adapterTypes.includes("napcat")) {
     const wsUrl = `ws://127.0.0.1:${gateway.gatewayPort || runtime.gatewayPort || "-"}`;
@@ -340,6 +367,33 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
     }
   }
   if (adapterTypes.includes("heartbeat") && heartbeatState.enabled === false) reasons.push("定时触发消息端未启用。");
+  return reasons;
+}
+
+export function adapterErrorsFor(type: MessageAdapterType, gateway: GatewayDefinition, runtime: RuntimeStatus): string[] {
+  const gatewayStatus = runtime.gatewayStatus || {};
+  const napcatState = gatewayStatus.napcat || {};
+  const heartbeatState = gatewayStatus.heartbeat || {};
+  const reasons: string[] = [];
+  if (!runtime.running) {
+    reasons.push("Gateway 进程未运行。");
+    return reasons;
+  }
+  if (type === "napcat") {
+    const wsUrl = `ws://127.0.0.1:${gateway.gatewayPort || runtime.gatewayPort || "-"}`;
+    const httpUrl = gateway.napcatHttpUrl || runtime.napcatHttpUrl || "-";
+    if (!napcatState.connected) {
+      reasons.push(napcatState.lastDisconnectedAt
+        ? `WebSocket 当前未连接；最后断开：${napcatState.lastDisconnectedAt}。请检查 NapCat WebSocket Client 是否连接到 ${wsUrl}。`
+        : `WebSocket 尚未连接。请在 NapCat 网络配置中启用 WebSocket Client，连接到 ${wsUrl}。`);
+    }
+    if (napcatState.loginInfoError) {
+      reasons.push(`HTTP 不可用或登录资料读取失败：${napcatState.loginInfoError}。地址：${httpUrl}`);
+    }
+  }
+  if (type === "heartbeat" && heartbeatState.enabled === false) {
+    reasons.push("定时触发消息端未启用。");
+  }
   return reasons;
 }
 
@@ -371,11 +425,9 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     routeVariables: {},
     codexThreadName: `路由配置 ${next}`,
     codexCwd: "",
-    rolesDir: "./data/roles",
     agentRoleId: roleId,
     agentRoleFile: "persona.md",
     agentAdapters: ["codexDesktop"],
-    dataDir: `./data/route/${configName}`,
     notificationRules: []
   };
 }
@@ -385,6 +437,7 @@ export function isQuickSetupNeeded(gateways: GatewayDefinition[]): boolean {
   return gateways.some((gateway) => {
     const adapters = gatewayAdapterTypes(gateway);
     const missingMessageConfig = adapters.includes("napcat") && (!gateway.gatewayPort || !gateway.napcatHttpUrl);
-    return !gateway.agentRoleId || !gateway.codexThreadName || !gateway.codexCwd || missingMessageConfig;
+    const missingAgentBinding = requiresCodexBinding(gateway.agentAdapters) && (!gateway.codexThreadName || !gateway.codexCwd);
+    return !gateway.agentRoleId || missingAgentBinding || missingMessageConfig;
   });
 }
