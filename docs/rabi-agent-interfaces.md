@@ -1,0 +1,359 @@
+﻿# Agent 需要关注的 Rabi 接口
+
+本文说明 Agent 在处理 RabiRoute 消息时需要关注的 Rabi 内置接口。它不是普通用户操作手册，而是给 Agent 注入上下文后使用的接口说明。
+
+这些接口用于让 Agent 主动维护计划和记忆，并把普通回复交回 RabiRoute。RabiRoute 负责存储、权限边界、自动归档、记忆沉淀触发、上下文注入和回复回传；Agent 需要关注的是：什么时候新增或更新计划、什么时候记录近期记忆、收到记忆整理触发时如何返回沉淀记忆，以及需要普通聊天回复时把内容交给回传接口。
+
+## 上下文注入
+
+RabiRoute 投递消息给 Agent 时，应在上下文中注入本接口文档链接，让 Agent 知道当前可以关注和使用哪些 Rabi 接口：
+
+```text
+Agent 需要关注的 Rabi 接口：{agentInterfaceDocPath}
+```
+
+推荐路径：
+
+```text
+docs/rabi-agent-interfaces.md
+```
+
+同时默认注入轻量索引：
+
+```text
+进行中计划：
+- plan-001：完善计划和记忆机制文档
+
+近期记忆：
+- memory-001：计划和记忆由 Agent 主动维护
+```
+
+近期记忆统一指 `memory/recent/` 里的记忆。默认配置下，最近 24 小时内更新过的近期记忆会直接注入；超过 24 小时且尚未沉淀的近期记忆不默认显示，只有用户消息命中标题或 `keywords` 时才会被召回。Agent 需要详情时，再通过接口按 ID 查询，不默认接收全部内容。
+
+普通回复上下文会一并注入：
+
+```text
+普通回复 API：http://127.0.0.1:8790/api/agent/replies
+当前回复上下文：{"routeProfileId":"main","routeKind":"direct_at","targetType":"group","messageId":123,"groupId":456,"userId":789,"instanceId":"default","outputAdapter":"qq","outputPipeline":"qq","replyToSource":true}
+```
+
+## 普通回复回传接口
+
+Agent 的普通聊天回复应默认交给 RabiRoute，而不是直接调用 NapCat 或其他消息平台。
+
+```http
+POST /api/agent/replies
+```
+
+请求体示例：
+
+```json
+{
+  "text": "收到，我来处理。",
+  "replyContext": {
+    "routeProfileId": "main",
+    "targetType": "group",
+    "messageId": 123,
+    "groupId": 456,
+    "userId": 789,
+    "instanceId": "default"
+  }
+}
+```
+
+RabiRoute 只会在满足以下条件时自动发送：
+
+- 原始消息上下文能在当前 route 的消息日志中找到。
+- route pipeline 配置为 `replyToSource=true` 且 `outputAdapter=qq`。
+- 来源是当前 QQ 群聊或私聊消息；群聊调用 NapCat `send_group_msg`，私聊调用 `send_private_msg`。
+
+跨群、跨私聊、广播、缺少 `messageId` 或缺少原始来源日志的请求不会自动外发。接口会返回 `draft` 或 `blocked`，Agent 可以把内容作为草稿展示给用户或等待进一步授权。
+
+返回示例：
+
+```json
+{
+  "code": 0,
+  "ok": true,
+  "status": "sent",
+  "routeProfileId": "main",
+  "messageId": "123",
+  "targetType": "group",
+  "groupId": "456",
+  "instanceId": "default",
+  "sentMessageId": "124"
+}
+```
+
+被阻断示例：
+
+```json
+{
+  "code": -1,
+  "ok": false,
+  "status": "blocked",
+  "reason": "Missing original source message context; automatic external send is not allowed.",
+  "draft": {
+    "text": "这条只能作为草稿。",
+    "targetType": "group",
+    "groupId": "456"
+  }
+}
+```
+
+## 计划接口
+
+计划是 Agent 需要关注的事项。计划不按短期、长期拆目录，而是通过状态和字段表达当前进展、优先级、项目归属和下一步。
+
+```text
+未开始
+进行中
+已完成
+已归档
+```
+
+查询计划：
+
+```http
+GET /roles/:roleId/plans
+GET /roles/:roleId/plans/:planId
+```
+
+新增计划：
+
+```http
+POST /roles/:roleId/plans
+```
+
+请求体示例：
+
+```json
+{
+  "title": "完善计划和记忆机制文档",
+  "status": "进行中",
+  "priority": "medium",
+  "kind": "documentation",
+  "currentStep": "确认接口文档注入方式",
+  "nextAction": "补充 Rabi Agent 接口文档",
+  "keywords": ["计划", "记忆", "接口", "上下文"],
+  "source": {
+    "kind": "agent",
+    "summary": "Agent 根据用户讨论新增计划"
+  }
+}
+```
+
+更新计划：
+
+```http
+PATCH /roles/:roleId/plans/:planId
+```
+
+常见用途：
+
+- 更新标题。
+- 更新当前步骤。
+- 更新下一步。
+- 更新关键词。
+- 将状态改为 `进行中`。
+- 将状态改为 `已完成`。
+
+计划归档不需要 Agent 处理。计划变为 `已完成` 后，RabiRoute 按人格配置的 `completedArchiveAfterHours` 自动转为 `已归档`。
+
+归档计时以计划的 `updatedAt` 为准。Agent 更新计划后，RabiRoute 会刷新 `updatedAt`，该计划重新进入活跃窗口；只有 `已完成` 且距离最后更新时间超过归档窗口时才会自动归档。
+
+## 近期记忆接口
+
+近期记忆是 Agent 主动记录、仍处于可修改或待沉淀窗口内的记忆。近期记忆没有计划状态。
+
+查询近期记忆：
+
+```http
+GET /roles/:roleId/memory/recent
+GET /roles/:roleId/memory/recent/:memoryId
+```
+
+新增近期记忆：
+
+```http
+POST /roles/:roleId/memory/recent
+```
+
+请求体示例：
+
+```json
+{
+  "title": "计划和记忆由 Agent 主动维护",
+  "content": "用户希望计划和记忆都由 Agent 主动维护，RabiRoute 负责提供接口、自动归档和记忆沉淀触发。",
+  "keywords": ["计划", "记忆", "主动维护", "接口"],
+  "source": {
+    "kind": "agent",
+    "summary": "Agent 根据当前对话记录"
+  }
+}
+```
+
+更新近期记忆：
+
+```http
+PATCH /roles/:roleId/memory/recent/:memoryId
+```
+
+近期记忆可以通过 ID 修改，用于修正、补充、合并或降噪。超过 `recentEditableHours` 的近期记忆是否允许修改，由 RabiRoute 按人格配置判断。
+
+记忆时间窗口以 `updatedAt` 为准。Agent 更新近期记忆后，RabiRoute 会刷新 `updatedAt`，该记忆重新进入活跃窗口；只有距离最后更新时间超过可编辑窗口的记忆才会进入待沉淀范围。
+
+Agent 新增或更新近期记忆时，应主动填写 `keywords`。RabiRoute 在消息投递前只使用标题和 `keywords` 做轻量召回，不对记忆内容进行实时智能分词。
+
+`keywords` 是必填项。新增近期记忆时必须提供至少一个关键词；更新近期记忆时如果改写 `keywords`，也必须保留至少一个关键词。
+
+## 沉淀记忆接口
+
+沉淀记忆是近期记忆经过整理后的稳定记录。Agent 不能直接修改已有沉淀记忆。
+
+查询沉淀记忆：
+
+```http
+GET /roles/:roleId/memory/consolidated
+GET /roles/:roleId/memory/consolidated/:memoryId
+```
+
+沉淀记忆不提供普通 `PATCH` 接口。如果 Agent 发现沉淀记忆需要修正，应新增一条近期记忆说明修正内容，等待下一轮沉淀流程生成新的稳定结论。
+
+## 内置记忆整理触发
+
+记忆整理是一种内置手动触发消息。它走与普通 `manual_trigger` 一致的 Agent 投递链路。
+
+触发来源：
+
+- RabiRoute 根据人格配置和时间窗口自动触发。
+- 用户主动触发。
+
+RabiRoute 创建的沉淀请求包含待整理的近期记忆。负责投递的链路可以把这个请求交给 Agent；Agent 只需要返回沉淀后的记忆。
+
+手动创建沉淀请求：
+
+```http
+POST /roles/:roleId/memory/consolidation-requests
+```
+
+请求体可选：
+
+```json
+{
+  "triggerSource": "manual",
+  "triggerOlderThanHours": 72,
+  "includeOlderThanHours": 24,
+  "force": false
+}
+```
+
+默认情况下，只有存在 `updatedAt` 超过 72 小时且尚未沉淀的近期记忆时，RabiRoute 才创建请求；请求输入为所有 `updatedAt` 超过 24 小时且尚未沉淀的近期记忆。
+
+创建后 API 返回本轮整理 run 和输入记忆。负责投递的链路可以把这些内容包装成 `memory_consolidation_request` 交给 Agent。
+
+API 返回示例：
+
+```json
+{
+  "code": 0,
+  "data": {
+    "run": {
+      "id": "memory-consolidation-run-001",
+      "roleDir": "data/roles/Rabi",
+      "requestedAt": "2026-06-08T00:00:00+08:00",
+      "trigger": "api",
+      "recentEditableHours": 24,
+      "recentConsolidationHours": 72,
+      "inputMemoryIds": ["memory-001"],
+      "status": "requested",
+      "instruction": "请将以下近期记忆整理为稳定、简洁、可长期保留的沉淀记忆，只返回沉淀记忆内容。"
+    },
+    "memories": [
+      {
+        "id": "memory-001",
+        "title": "计划和记忆由 Agent 主动维护",
+        "content": "用户希望计划和记忆都由 Agent 主动维护，RabiRoute 提供接口。",
+        "keywords": ["计划", "记忆", "接口"],
+        "createdAt": "2026-06-06T12:00:00+08:00",
+        "updatedAt": "2026-06-06T12:00:00+08:00"
+      }
+    ]
+  }
+}
+```
+
+投递给 Agent 的抽象消息示例：
+
+```json
+{
+  "type": "memory_consolidation_request",
+  "routeKind": "manual_trigger",
+  "triggerId": "memory-consolidation",
+  "triggerName": "记忆整理",
+  "triggerSource": "manual",
+  "roleId": "Rabi",
+  "runId": "memory-consolidation-run-001",
+  "requestedAt": "2026-06-08T00:00:00+08:00",
+  "window": {
+    "triggerOlderThanHours": 72,
+    "includeOlderThanHours": 24
+  },
+  "instruction": "请将以下近期记忆整理为稳定、简洁、可长期保留的沉淀记忆，只返回沉淀记忆内容。",
+  "memories": [
+    {
+      "id": "memory-001",
+      "title": "计划和记忆由 Agent 主动维护",
+      "content": "用户希望计划和记忆都由 Agent 主动维护，RabiRoute 提供接口。"
+    }
+  ]
+}
+```
+
+返回示例：
+
+```json
+{
+  "type": "memory_consolidation_result",
+  "memories": [
+    {
+      "title": "计划和记忆维护边界",
+      "content": "计划和记忆由 Agent 主动维护；RabiRoute 负责提供接口、注入索引、自动归档已完成计划，并触发记忆沉淀流程。"
+    }
+  ]
+}
+```
+
+接收 Agent 返回并落盘：
+
+```http
+POST /roles/:roleId/memory/consolidation-runs/:runId/result
+```
+
+请求体可以直接是 `memory_consolidation_result`，RabiRoute 会读取其中的 `memories` 数组。
+
+RabiRoute 负责写入沉淀记忆、记录整理轮次和标记近期记忆已沉淀。Agent 不需要移动文件、更新沉淀标记或判断触发时机。
+
+查询整理轮次：
+
+```http
+GET /roles/:roleId/memory/consolidation-runs
+GET /roles/:roleId/memory/consolidation-runs/:runId
+```
+
+## 错误边界
+
+Agent 不应该：
+
+- 直接修改沉淀记忆。
+- 把聊天日志原样写成记忆。
+- 把计划归档当成需要自己判断的事项。
+- 在没有需要时请求全量记忆或全量计划。
+- 把 RabiRoute 当成完整 Agent OS 或执行器队列。
+
+Agent 应该：
+
+- 用计划接口维护关注项。
+- 用近期记忆接口记录自己主动总结出的上下文，并填写可召回的 `keywords`。
+- 需要详情时按 ID 查询。
+- 收到记忆整理触发时只返回沉淀记忆。

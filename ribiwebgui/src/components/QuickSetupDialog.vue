@@ -21,6 +21,7 @@ const form = reactive({
   messageInputsDisabled: false,
   agentAdapters: ["codexDesktop"] as AgentAdapterType[],
   agentRoleId: "Rabi",
+  agentModel: "",
   codexThreadName: "QQ 消息监听",
   codexCwd: "",
   copilotCliBin: "",
@@ -84,6 +85,7 @@ const napcatHealthResult = ref<{
     token?: string;
     tokenLength?: number;
     configPath?: string;
+    source?: "provided" | "config";
     loginUrl?: string;
     message?: string;
   };
@@ -356,6 +358,20 @@ function openExternalUrl(url: string | undefined): void {
   window.open(target, "_blank", "noopener,noreferrer");
 }
 
+function napcatWebuiUrlWithToken(webuiUrl: string | undefined, token: string | undefined): string {
+  const url = webuiUrl?.trim() || defaultNapcatWebuiUrl();
+  const value = token?.trim();
+  if (!value) return url;
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set("token", value);
+    return parsed.toString();
+  } catch {
+    const separator = url.includes("?") ? "&" : "?";
+    return `${url}${separator}token=${encodeURIComponent(value)}`;
+  }
+}
+
 async function copyText(text: string, message = "已复制"): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
@@ -412,7 +428,6 @@ async function testNapcatHealth(): Promise<void> {
 
 async function openNapcatWebuiWithToken(): Promise<void> {
   const fallbackUrl = defaultNapcatWebuiUrl();
-  const popup = window.open("about:blank", "_blank", "noopener,noreferrer");
   try {
     const resp = await fetch("/api/message/napcat-health", {
       method: "POST",
@@ -425,12 +440,20 @@ async function openNapcatWebuiWithToken(): Promise<void> {
     });
     const body = await resp.json().catch(() => ({}));
     napcatHealthResult.value = { ok: Boolean(body.ok), ...body };
-    const target = body?.webui?.loginUrl || body?.webui?.url || fallbackUrl;
-    if (popup) popup.location.href = target;
-    else openExternalUrl(target);
-  } catch {
-    if (popup) popup.location.href = fallbackUrl;
-    else openExternalUrl(fallbackUrl);
+    const target = body?.webui?.loginUrl
+      || (body?.webui?.token ? napcatWebuiUrlWithToken(body?.webui?.url || fallbackUrl, body.webui.token) : "")
+      || (body?.webui?.reachable ? body?.webui?.url : "");
+    if (target) {
+      openExternalUrl(target);
+      return;
+    }
+    napcatHealthResult.value = {
+      ok: false,
+      ...body,
+      message: body?.webui?.message || body?.message || `NapCat WebUI 未响应：${fallbackUrl}`
+    };
+  } catch (e: unknown) {
+    napcatHealthResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -451,9 +474,9 @@ async function copyNapcatWebuiToken(): Promise<void> {
     napcatHealthResult.value = { ok: Boolean(body.ok), ...body };
     const token = body?.webui?.token;
     if (token) {
-      await copyText(token, "已复制 NapCat WebUI Token");
+      await copyText(token, "已复制 NapCat WebUI 登录密钥");
     } else {
-      showCopyResult(body?.webui?.message || "未读取到 NapCat WebUI Token，请检查 NapCat config/webui.json 或启动日志。");
+      showCopyResult(body?.webui?.message || "未读取到 NapCat WebUI 登录密钥，请检查 NapCat config/webui.json 或启动日志。");
     }
   } catch (e: unknown) {
     showCopyResult(e instanceof Error ? e.message : String(e));
@@ -579,6 +602,7 @@ function syncFromGateway() {
     ? [...gateway.agentAdapters]
     : ["codexDesktop"];
   form.agentRoleId = gateway?.agentRoleId || "Rabi";
+  form.agentModel = gateway?.agentModel || "";
   form.codexThreadName = gateway?.codexThreadName || "QQ 消息监听";
   form.codexCwd = gateway?.codexCwd || "";
   form.copilotCliBin = gateway?.copilotCliBin || "";
@@ -722,7 +746,7 @@ async function apply() {
 
                 <div class="catalog-param-grid" v-if="!form.messageInputsDisabled">
                   <template v-if="form.adapters.includes('napcat')">
-                    <v-text-field v-model.number="form.gatewayPort" type="number" label="NapCat WebSocket 端口" />
+                    <v-text-field v-model.number="form.gatewayPort" type="number" label="RabiRoute WS 端口" />
                     <v-text-field v-model="form.napcatHttpUrl" label="NapCat HTTP 地址" />
                     <v-text-field v-model="form.napcatWebuiUrl" class="full-span" label="NapCat WebUI 地址" />
                     <div class="quick-agent-status full-span">
@@ -742,7 +766,7 @@ async function apply() {
                             :disabled="copyingNapcatToken"
                             @click="copyNapcatWebuiToken"
                           >
-                            复制 Token
+                            复制 WebUI 登录密钥
                           </v-btn>
                           <v-btn
                             size="small"
@@ -753,7 +777,7 @@ async function apply() {
                             :disabled="testingNapcatHealth"
                             @click="testNapcatHealth"
                           >
-                            检查启动
+                            检查并补齐
                           </v-btn>
                           <v-btn size="small" variant="text" prepend-icon="mdi-content-copy" @click="copyText(napcatWsUrl(), '已复制 NapCat WS 地址')">
                             复制 WS
@@ -769,10 +793,13 @@ async function apply() {
                           WebUI：{{ napcatHealthResult.webui.reachable ? "可访问" : "未响应" }} · {{ napcatHealthResult.webui.url }}
                         </div>
                         <div v-if="napcatHealthResult.webui?.found">
-                          WebUI Token：已从配置读取 {{ napcatHealthResult.webui.tokenLength || "-" }} 位登录密钥。
+                          WebUI 登录密钥：已从 NapCat webui.json 读取 {{ napcatHealthResult.webui.tokenLength || "-" }} 位；只用于打开管理页。
+                        </div>
+                        <div v-else-if="napcatHealthResult.webui?.source === 'provided'">
+                          WebUI 登录密钥：使用当前配置保存的 {{ napcatHealthResult.webui.tokenLength || "-" }} 位登录密钥。
                         </div>
                         <div v-else-if="napcatHealthResult.webui?.message">
-                          WebUI Token：{{ napcatHealthResult.webui.message }}
+                          WebUI 登录密钥：{{ napcatHealthResult.webui.message }}
                         </div>
                         <div>WS：请在 NapCat WebSocket Client 里连接 {{ napcatHealthResult.wsUrl || napcatWsUrl() }}</div>
                         <div v-if="napcatHealthResult.process">
@@ -787,16 +814,16 @@ async function apply() {
                             prepend-icon="mdi-open-in-new"
                             @click="openExternalUrl(napcatHealthResult.webui.loginUrl)"
                           >
-                            打开带 Token
+                            打开 WebUI
                           </v-btn>
                           <v-btn
                             v-if="napcatHealthResult.webui?.token"
                             size="small"
                             variant="text"
                             prepend-icon="mdi-key-variant"
-                            @click="copyText(napcatHealthResult.webui.token, '已复制 NapCat WebUI Token')"
+                            @click="copyText(napcatHealthResult.webui.token, '已复制 NapCat WebUI 登录密钥')"
                           >
-                            复制 WebUI Token
+                            复制 WebUI 登录密钥
                           </v-btn>
                         </div>
                       </v-alert>
@@ -1127,6 +1154,15 @@ async function apply() {
                       <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描" @click.stop="runAgentScan" />
                     </template>
                   </v-combobox>
+                  <v-text-field
+                    v-if="selectedAgent === 'codexDesktop' || selectedAgent === 'codexApp'"
+                    v-model="form.agentModel"
+                    class="full-span"
+                    label="模型覆盖"
+                    placeholder="留空，沿用原会话模型"
+                    hint="只在需要强制指定 Agent 模型时填写"
+                    persistent-hint
+                  />
                   </div>
                 </div>
               </v-window-item>

@@ -1,0 +1,2947 @@
+﻿import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { normalizeAgentAdapters, type AgentAdapterType } from "../agentAdapters/types.js";
+import {
+  deployAstrbotAdapter,
+  getCopilotStatus,
+  openMarvis,
+  scanAgentAdapters,
+  testAstrbotLogin as testAstrbotLoginEndpoint,
+  type AgentManagerApiContext,
+  type AstrbotLoginTestRequest,
+  type MarvisOpenRequest
+} from "../agentAdapters/managerApi.js";
+import type { MessageAdapterType } from "../adapters/messageAdapter.js";
+import type { ForwardRouteKind } from "../forwarding.js";
+import {
+  configureNapcatOneBot,
+  launchNapcatInstance as launchNapcatInstanceEndpoint,
+  nextFreeLocalPort,
+  prepareManagedNapcatInstance,
+  scanNapcatEndpoint,
+  stopNapcatInstance as stopNapcatInstanceEndpoint,
+  testNapcatHealth as testNapcatHealthEndpoint
+} from "../messageEndpoints/napcatManager.js";
+import {
+  scanFenneNoteEndpoint,
+  scanWebhookEndpoint,
+  scanXiaoAiEndpoint
+} from "../messageEndpoints/webhookLikeScans.js";
+import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
+import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
+import {
+  autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
+  definitionUsesNapcat as sharedDefinitionUsesNapcat,
+  gatewayAdapterTypes as sharedGatewayAdapterTypes,
+  normalizeGatewayDefinition as sharedNormalizeGatewayDefinition,
+  validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
+  type MessageAdapterPolicies
+} from "../shared/gatewayConfigModel.js";
+import { ManagerConfigRepository } from "./configRepository.js";
+import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
+import {
+  applyMemoryConsolidationResult,
+  createPlan,
+  createRecentMemory,
+  listConsolidatedMemories,
+  listConsolidationRuns,
+  listPlans,
+  listRecentMemories,
+  pendingMemoryConsolidation,
+  updatePlan,
+  updateRecentMemory
+} from "../roleKnowledge.js";
+
+type GatewayDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  messageAdapterType?: MessageAdapterType;
+  messageAdapters?: MessageAdapterType[];
+  messageAdaptersDisabled?: MessageAdapterType[];
+  messageInputsDisabled?: boolean;
+  messageAdapterPolicies?: MessageAdapterPolicies;
+  gatewayPort: number;
+  webhookPort?: number;
+  webhookPath?: string;
+  fenneNoteWebhookPort?: number;
+  fenneNoteWebhookPath?: string;
+  xiaoaiWebhookPort?: number;
+  xiaoaiWebhookPath?: string;
+  heartbeatIntervalSeconds?: number;
+  heartbeatMessage?: string;
+  napcatHttpUrl?: string;
+  napcatWebuiUrl?: string;
+  napcatAccessToken?: string;
+  napcatWebuiToken?: string;
+  napcatInstances?: NapCatInstanceDefinition[];
+  ignoredNapcatInstanceIds?: string[];
+  targetGroupId?: string;
+  pipelinePreset?: string;
+  pipeline?: PipelineDefinition;
+  routeVariables?: Record<string, string>;
+  routeName?: string;
+  agentModel?: string;
+  codexThreadName?: string;
+  codexCwd?: string;
+  copilotCwd?: string;
+  copilotCliBin?: string;
+  marvisAppId?: string;
+  astrbotUrl?: string;
+  astrbotUsername?: string;
+  astrbotPassword?: string;
+  astrbotProjectId?: string;
+  astrbotSessionId?: string;
+  rolesDir?: string;
+  routesDir?: string;
+  configName?: string;
+  agentRoleId?: string;
+  agentRoleFile?: string;
+  agentAdapters?: AgentAdapterType[];
+  routeProfiles?: RouteProfileDefinition[];
+  dataDir?: string;
+  groupNotificationTemplate?: string;
+  groupAtNotificationTemplate?: string;
+  groupDirectReplyNotificationTemplate?: string;
+  groupIndirectReplyNotificationTemplate?: string;
+  groupReplyNotificationTemplate?: string;
+  groupNicknameNotificationTemplate?: string;
+  privateNotificationTemplate?: string;
+  heartbeatNotificationTemplate?: string;
+  voiceTranscriptNotificationTemplate?: string;
+  notificationRules?: NotificationRuleDefinition[];
+  roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
+  roleRouteNames?: Record<string, string>;
+};
+
+type RouteProfileDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  pipelinePreset?: string;
+  pipeline?: PipelineDefinition;
+  agentRoleId?: string;
+  agentRoleFile?: string;
+  rolesDir?: string;
+  dataDir?: string;
+  routeVariables?: Record<string, string>;
+  notificationRules?: NotificationRuleDefinition[];
+};
+
+type NotificationRuleDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  routeKinds?: string[];
+  targetGroupId?: string;
+  regex?: string;
+  template: string;
+};
+
+type GatewayConfigFile = {
+  gateways: GatewayDefinition[];
+};
+
+type GatewayRuntime = {
+  definition: GatewayDefinition;
+  process: ChildProcessWithoutNullStreams | null;
+  needsRestart: boolean;
+  startedAt: string | null;
+  stoppedAt: string | null;
+  lastExit: {
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    at: string;
+  } | null;
+  log: string[];
+};
+
+type NapCatInstanceDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  gatewayPort: number;
+  httpUrl: string;
+  webuiUrl?: string;
+  accessToken?: string;
+  webuiToken?: string;
+  launchCommand?: string;
+  workingDir?: string;
+};
+
+type AgentMaturity = "verified" | "experimental" | "stub";
+
+type AgentScanSession = {
+  id?: string;
+  name: string;
+  projectPath?: string;
+  projectId?: string;
+  updatedAt?: string;
+  userNamed?: boolean;
+};
+
+type AgentScanProject = {
+  id?: string;
+  label: string;
+  path: string;
+  exists: boolean;
+};
+
+type AgentScanResult = {
+  type: AgentAdapterType;
+  label: string;
+  maturity: AgentMaturity;
+  installed: boolean;
+  installCandidates?: Array<{ label: string; path?: string; url?: string }>;
+  auth?: { required: boolean; loggedIn?: boolean; loginUrl?: string; message?: string };
+  endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
+  projects?: AgentScanProject[];
+  sessions?: AgentScanSession[];
+  plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
+  warnings?: string[];
+};
+
+type AdapterRequirement = {
+  id: string;
+  label: string;
+  required?: boolean;
+  ok?: boolean;
+  detail?: string;
+  actionLabel?: string;
+  url?: string;
+  path?: string;
+};
+
+type AdapterEndpoint = {
+  label: string;
+  url: string;
+  healthy?: boolean;
+};
+
+type MessageAdapterScanResult = {
+  type: Exclude<MessageAdapterType, "disabled">;
+  label: string;
+  maturity: AgentMaturity;
+  installed: boolean;
+  installCandidates?: Array<{ label: string; path?: string; url?: string }>;
+  endpoints?: AdapterEndpoint[];
+  requirements?: AdapterRequirement[];
+  warnings?: string[];
+};
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
+const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
+
+type ManagerConfig = { routeDir?: string; rolesDir?: string };
+
+function readManagerConfig(): ManagerConfig {
+  return configRepository.readManagerConfig();
+}
+
+function writeManagerConfig(cfg: ManagerConfig): void {
+  configRepository.writeManagerConfig(cfg);
+  routeRoot = configRepository.routeRoot;
+  rolesRoot = configRepository.rolesRoot;
+}
+
+let rolesRoot = configRepository.rolesRoot;
+let routeRoot = configRepository.routeRoot;
+const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback";
+const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
+const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
+const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlaybackToken;
+const packageJsonPath = path.join(rootDir, "package.json");
+const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
+const runtimes = new RuntimeRegistry();
+let watchedConfigSnapshot = "";
+
+function definitionFingerprint(definition: GatewayDefinition): string {
+  return JSON.stringify(definition);
+}
+
+function routeRuntimeParts(id: string): { roleId: string; configName: string } {
+  const [roleId, ...rest] = id.split("__");
+  if (rest.length === 0) {
+    return {
+      roleId: "",
+      configName: sanitizeRoleId(id) || "default"
+    };
+  }
+  return {
+    roleId: sanitizeRoleId(roleId) || id,
+    configName: sanitizeRoleId(rest.join("__")) || "default"
+  };
+}
+
+function ensureDataDirs(): void {
+  configRepository.ensureDataDirs();
+  routeRoot = configRepository.routeRoot;
+  rolesRoot = configRepository.rolesRoot;
+}
+
+function readConfig(): GatewayConfigFile {
+  ensureDataDirs();
+  const gateways: GatewayDefinition[] = [];
+  for (const routeEntry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
+    if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) {
+      continue;
+    }
+    const configName = sanitizeRoleId(routeEntry.name);
+    const configPath = adapterConfigPath(configName);
+    if (!fs.existsSync(configPath)) {
+      continue;
+    }
+    const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
+    // adapterConfig.json is primary; fall back to personaConfig.json only when notificationRules is absent.
+    const personaConfig = (Array.isArray(raw.notificationRules) && raw.notificationRules.length > 0)
+      ? {}
+      : readRoleMessageConfigItem(raw.agentRoleId, configName);
+    gateways.push({
+      ...raw,
+      ...personaConfig,
+      id: configName,
+      configName,
+      agentRoleId: raw.agentRoleId,
+      rolesDir: raw.rolesDir,
+      agentRoleFile: raw.agentRoleFile
+    } as GatewayDefinition & { configName: string });
+  }
+  return { gateways };
+}
+
+function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
+  if (!Array.isArray(config.gateways)) {
+    throw new Error("routes must be an array");
+  }
+
+  const normalized = { gateways: config.gateways.map(normalizeDefinition) };
+  sharedAutoAssignGatewayPorts(normalized.gateways, managerPort);
+  sharedValidateGatewayPortConflicts(normalized.gateways);
+  const grouped = new Map<string, GatewayDefinition[]>();
+  for (let i = 0; i < normalized.gateways.length; i++) {
+    const item = normalized.gateways[i];
+    const rawItem = config.gateways[i];
+    const roleId = sanitizeRoleId(item.agentRoleId) || routeRuntimeParts(item.id).roleId;
+    grouped.set(roleId, [...(grouped.get(roleId) ?? []), item]);
+    // Rename data dir if configName changed (look up existing runtime by original/raw id)
+    const existingRuntime = runtimes.get(rawItem.id) ?? runtimes.get(item.id);
+    if (existingRuntime) {
+      const oldDataDir = dataDirFor(existingRuntime.definition);
+      const newDataDir = dataDirFor(item);
+      if (oldDataDir !== newDataDir && fs.existsSync(oldDataDir)) {
+        try {
+          fs.mkdirSync(path.dirname(newDataDir), { recursive: true });
+          fs.renameSync(oldDataDir, newDataDir);
+        } catch {
+          // Non-fatal: folder rename failed (e.g. cross-drive), data stays at old location
+        }
+      }
+      // Remove old config file if id (configName) changed
+      const oldConfigName = routeRuntimeParts(existingRuntime.definition.id).configName;
+      const newConfigName = sanitizeRoleId(item.configName) || routeRuntimeParts(item.id).configName;
+      if (oldConfigName !== newConfigName) {
+        const oldConfigPath = adapterConfigPath(oldConfigName);
+        if (fs.existsSync(oldConfigPath)) {
+          try { fs.unlinkSync(oldConfigPath); } catch { /* non-fatal */ }
+        }
+      }
+    }
+    writeAdapterConfigFile(item);
+  }
+  for (const [roleId, items] of grouped.entries()) {
+    if (roleId) {
+      writePersonaConfigFile(roleId, items);
+    }
+  }
+  return normalized;
+}
+
+function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
+  return sharedNormalizeGatewayDefinition(definition, {
+    managerPort,
+    routeDataDir: (configName) => path.relative(rootDir, path.join(routeRoot, configName)).replace(/\\/g, "/"),
+    rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/"),
+    normalizeAgentAdapters: (adapters) => normalizeAgentAdapters(adapters ?? []),
+    normalizePipeline: (pipeline) => normalizePipelineDefinition(pipeline) as GatewayDefinition["pipeline"]
+  }) as GatewayDefinition;
+}
+
+function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
+  const adapters = items
+    .map((item) => item == null ? "" : String(item))
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "disabled");
+  const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
+  return unique.length > 0 ? unique : ["napcat"];
+}
+
+function sanitizeInstanceId(value: unknown, fallback: string): string {
+  const raw = String(value || "").trim();
+  return raw.replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "") || fallback;
+}
+
+function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstanceDefinition[] {
+  const raw = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
+  const source = raw.length > 0
+    ? raw
+    : [{
+        id: "default",
+        name: "默认 NapCat",
+        enabled: true,
+        gatewayPort: definition.gatewayPort,
+        httpUrl: definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
+        webuiUrl: definition.napcatWebuiUrl ?? "http://127.0.0.1:6099/webui",
+        accessToken: definition.napcatAccessToken,
+        webuiToken: definition.napcatWebuiToken
+      }];
+
+  const used = new Set<string>();
+  return source.map((item, index) => {
+    const baseId = sanitizeInstanceId(item.id, `napcat-${index + 1}`);
+    let id = baseId;
+    let suffix = 2;
+    while (used.has(id)) {
+      id = `${baseId}-${suffix++}`;
+    }
+    used.add(id);
+    const gatewayPort = Number(item.gatewayPort || definition.gatewayPort || 8790 + index);
+    assertValidPort(gatewayPort, `NapCat instance port for ${definition.id}/${id}`);
+    return {
+      id,
+      name: item.name?.trim() || id,
+      enabled: item.enabled !== false,
+      gatewayPort,
+      httpUrl: item.httpUrl?.trim() || definition.napcatHttpUrl || "http://127.0.0.1:3000",
+      webuiUrl: item.webuiUrl?.trim() || definition.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
+      accessToken: item.accessToken ?? definition.napcatAccessToken ?? "",
+      webuiToken: item.webuiToken ?? definition.napcatWebuiToken ?? "",
+      launchCommand: item.launchCommand?.trim() || undefined,
+      workingDir: item.workingDir?.trim() || undefined
+    };
+  });
+}
+
+function normalizeCodexCwd(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  const compact = trimmed.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+  if (!trimmed || compact === "c:/path/to/your/project") {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function normalizeIgnoredNapcatInstanceIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map(item => String(item || "").trim()).filter(Boolean))];
+}
+
+function assertValidPort(value: unknown, label: string): void {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid ${label}: ${value}. Port must be an integer from 1 to 65535.`);
+  }
+}
+
+function personaConfigPath(roleId: string): string {
+  const safeRoleId = sanitizeRoleId(roleId);
+  if (!safeRoleId) {
+    throw new Error("Missing role folder name");
+  }
+  return path.join(rolesRoot, safeRoleId, "personaConfig.json");
+}
+
+function adapterConfigPath(configName: string): string {
+  const safeConfigName = sanitizeRoleId(configName);
+  if (!safeConfigName) {
+    throw new Error("Missing route folder name");
+  }
+  return path.join(routeRoot, safeConfigName, "adapterConfig.json");
+}
+
+function definitionUsesNapcat(definition: GatewayDefinition): boolean {
+  return sharedDefinitionUsesNapcat(definition);
+}
+
+function adapterConfigItem(definition: GatewayDefinition): Record<string, unknown> {
+  const usesNapcat = definitionUsesNapcat(definition);
+  return {
+    configName: sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName,
+    name: definition.name,
+    routeName: definition.routeName,
+    enabled: definition.enabled !== false,
+    messageAdapters: definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"],
+    messageAdaptersDisabled: definition.messageAdaptersDisabled,
+    messageInputsDisabled: definition.messageInputsDisabled,
+    messageAdapterPolicies: definition.messageAdapterPolicies,
+    pipelinePreset: definition.pipelinePreset,
+    pipeline: definition.pipeline,
+    gatewayPort: definition.gatewayPort,
+    webhookPort: definition.webhookPort,
+    webhookPath: definition.webhookPath,
+    fenneNoteWebhookPort: definition.fenneNoteWebhookPort,
+    fenneNoteWebhookPath: definition.fenneNoteWebhookPath,
+    xiaoaiWebhookPort: definition.xiaoaiWebhookPort,
+    xiaoaiWebhookPath: definition.xiaoaiWebhookPath,
+    napcatHttpUrl: definition.napcatHttpUrl,
+    napcatWebuiUrl: definition.napcatWebuiUrl,
+    napcatAccessToken: definition.napcatAccessToken,
+    napcatWebuiToken: definition.napcatWebuiToken,
+    napcatInstances: usesNapcat ? definition.napcatInstances : undefined,
+    ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
+    heartbeatIntervalSeconds: definition.heartbeatIntervalSeconds,
+    heartbeatMessage: definition.heartbeatMessage,
+    agentModel: definition.agentModel,
+    codexThreadName: definition.codexThreadName,
+    codexCwd: definition.codexCwd,
+    copilotCwd: definition.copilotCwd,
+    copilotCliBin: definition.copilotCliBin,
+    marvisAppId: definition.marvisAppId,
+    astrbotUrl: definition.astrbotUrl,
+    astrbotUsername: definition.astrbotUsername,
+    astrbotPassword: definition.astrbotPassword,
+    astrbotProjectId: definition.astrbotProjectId,
+    astrbotSessionId: definition.astrbotSessionId,
+    rolesDir: definition.rolesDir,
+    agentRoleId: definition.agentRoleId,
+    agentRoleFile: definition.agentRoleFile,
+    agentAdapters: definition.agentAdapters,
+    routeVariables: definition.routeVariables
+  };
+}
+
+function writeAdapterConfigFile(definition: GatewayDefinition): void {
+  const configName = sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName;
+  const configPath = adapterConfigPath(configName);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify(adapterConfigItem(definition), null, 2), "utf8");
+}
+
+function backfillNapcatInstanceWebuiToken(definition: GatewayDefinition, instanceId: string, token: unknown): string | null {
+  const value = String(token || "").trim();
+  if (!value) return null;
+  const instances = normalizeNapCatInstances(definition);
+  const target = instances.find((item) => item.id === instanceId);
+  if (!target) return null;
+  let changed = false;
+  if (target.webuiToken !== value) {
+    target.webuiToken = value;
+    changed = true;
+  }
+  if (target.accessToken === value) {
+    target.accessToken = "";
+    changed = true;
+  }
+  if (!changed) return null;
+  definition.napcatInstances = instances;
+  const primary = instances.find((item) => item.enabled !== false) ?? instances[0];
+  if (primary) {
+    definition.napcatAccessToken = primary.accessToken ?? "";
+    definition.napcatWebuiToken = primary.webuiToken ?? "";
+  }
+  writeAdapterConfigFile(definition);
+  return value;
+}
+
+function napcatInstanceIgnoreKeys(instance: Partial<NapCatInstanceDefinition> & { botUserId?: unknown }): string[] {
+  const keys = new Set<string>();
+  const add = (prefix: string, value: unknown): void => {
+    const text = String(value ?? "").trim();
+    if (text) keys.add(`${prefix}:${text}`);
+  };
+  add("id", instance.id);
+  add("ws", instance.gatewayPort);
+  add("http", instance.httpUrl);
+  add("webui", instance.webuiUrl);
+  add("qq", instance.botUserId);
+  return [...keys];
+}
+
+function ignoreNapcatInstance(definition: GatewayDefinition, instance: Partial<NapCatInstanceDefinition> & { botUserId?: unknown }): void {
+  const next = new Set(normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds));
+  for (const key of napcatInstanceIgnoreKeys(instance)) next.add(key);
+  definition.ignoredNapcatInstanceIds = [...next];
+}
+
+async function addManagedNapcatInstance(request: NapcatAddRequest): Promise<Record<string, unknown>> {
+  const gatewayId = request.gatewayId?.trim();
+  if (!gatewayId) throw new Error("缺少 gatewayId。");
+  const runtime = runtimes.get(gatewayId);
+  if (!runtime) throw new Error(`未找到路由：${gatewayId}`);
+  const definition = runtime.definition;
+  const instances = normalizeNapCatInstances(definition);
+  const index = instances.length + 1;
+  const usedIds = new Set(instances.map((item) => item.id));
+  let id = sanitizeInstanceId(`napcat-${index}`, `napcat-${index}`);
+  let idSuffix = index + 1;
+  while (usedIds.has(id)) {
+    id = sanitizeInstanceId(`napcat-${idSuffix}`, `napcat-${idSuffix}`);
+    idSuffix += 1;
+  }
+  const used = new Set<number>();
+  for (const runtimeItem of runtimes.values()) {
+    for (const item of normalizeNapCatInstances(runtimeItem.definition)) {
+      used.add(Number(item.gatewayPort || 0));
+      try { used.add(Number(new URL(item.httpUrl).port || 0)); } catch { /* ignore */ }
+      try { used.add(Number(new URL(item.webuiUrl || "").port || 0)); } catch { /* ignore */ }
+    }
+  }
+
+  const steps = ["正在准备 NapCat 实例...", "正在查找合适端口..."];
+  const webuiPort = await nextFreeLocalPort(6099 + instances.length, used);
+  const httpPort = await nextFreeLocalPort(3000 + instances.length, used);
+  const wsPort = await nextFreeLocalPort(Number(definition.gatewayPort || 8789) + instances.length, used);
+  steps.push(`已分配端口：WebUI ${webuiPort} / HTTP ${httpPort} / WS ${wsPort}`);
+
+  const prepared = prepareManagedNapcatInstance(napcatManagerCtx(), {
+    id,
+    name: `QQ ${index}`,
+    gatewayPort: wsPort,
+    httpPort,
+    webuiPort,
+    index
+  });
+  const instance = prepared.instance;
+  steps.push(...prepared.steps);
+
+  definition.napcatInstances = [...instances, instance];
+  const primary = definition.napcatInstances.find((item) => item.enabled !== false) ?? instance;
+  definition.gatewayPort = primary.gatewayPort;
+  definition.napcatHttpUrl = primary.httpUrl;
+  definition.napcatWebuiUrl = primary.webuiUrl;
+  definition.napcatAccessToken = primary.accessToken ?? "";
+  definition.napcatWebuiToken = primary.webuiToken ?? "";
+  writeAdapterConfigFile(definition);
+  loadRuntimes();
+
+  const launchResult = launchNapcatInstanceEndpoint(napcatManagerCtx(), { gatewayId, instanceId: id });
+  steps.push("正在执行启动命令...");
+  return {
+    ok: true,
+    message: "已创建并尝试启动 NapCat，请在自动打开的 WebUI 中登录 QQ。",
+    steps,
+    launch: launchResult,
+    instance,
+    webuiUrl: instance.webuiUrl,
+    loginUrl: prepared.loginUrl || instance.webuiUrl
+  };
+}
+
+async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promise<Record<string, unknown>> {
+  const gatewayId = request.gatewayId?.trim();
+  const instanceId = request.instanceId?.trim();
+  if (!gatewayId || !instanceId) throw new Error("缺少 gatewayId 或 instanceId。");
+  const runtime = runtimes.get(gatewayId);
+  if (!runtime) throw new Error(`未找到路由：${gatewayId}`);
+  const instances = normalizeNapCatInstances(runtime.definition);
+  const existing = instances.find((item) => item.id === instanceId);
+  ignoreNapcatInstance(runtime.definition, {
+    ...(existing || {}),
+    id: instanceId,
+    gatewayPort: request.gatewayPort ?? existing?.gatewayPort,
+    httpUrl: request.httpUrl ?? existing?.httpUrl,
+    webuiUrl: request.webuiUrl ?? existing?.webuiUrl,
+    botUserId: request.botUserId
+  });
+  const stop = await stopNapcatInstanceEndpoint(napcatManagerCtx(), {
+    gatewayId,
+    instanceId,
+    name: request.name,
+    gatewayPort: request.gatewayPort,
+    httpUrl: request.httpUrl,
+    webuiUrl: request.webuiUrl,
+    accessToken: request.accessToken,
+    webuiToken: request.webuiToken,
+    launchCommand: request.launchCommand,
+    workingDir: request.workingDir
+  });
+  if (!existing) {
+    writeAdapterConfigFile(runtime.definition);
+    loadRuntimes();
+    return {
+      ok: true,
+      message: "已关闭并忽略扫描发现的 NapCat 实例。",
+      stop
+    };
+  }
+  runtime.definition.napcatInstances = instances.filter((item) => item.id !== instanceId);
+  const primary = runtime.definition.napcatInstances.find((item) => item.enabled !== false);
+  if (primary) {
+    runtime.definition.gatewayPort = primary.gatewayPort;
+    runtime.definition.napcatHttpUrl = primary.httpUrl;
+    runtime.definition.napcatWebuiUrl = primary.webuiUrl;
+    runtime.definition.napcatAccessToken = primary.accessToken ?? "";
+    runtime.definition.napcatWebuiToken = primary.webuiToken ?? "";
+  } else {
+    runtime.definition.messageAdaptersDisabled = [...new Set([...(runtime.definition.messageAdaptersDisabled ?? []), "napcat" as MessageAdapterType])];
+    runtime.definition.messageAdapterPolicies = {
+      ...(runtime.definition.messageAdapterPolicies ?? {}),
+      napcat: {
+        ...(runtime.definition.messageAdapterPolicies?.napcat ?? {}),
+        inputEnabled: false
+      }
+    };
+    runtime.definition.napcatAccessToken = "";
+    runtime.definition.napcatWebuiToken = "";
+  }
+  writeAdapterConfigFile(runtime.definition);
+  loadRuntimes();
+  return {
+    ok: true,
+    message: "已停止并移除 NapCat 实例。",
+    stop
+  };
+}
+
+function readRoleMessageConfigShared(roleId: string | undefined): Partial<GatewayDefinition> {
+  const safeRoleId = sanitizeRoleId(roleId);
+  if (!safeRoleId) return {};
+  const configPath = personaConfigPath(safeRoleId);
+  if (!fs.existsSync(configPath)) return {};
+  const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+
+  // New flat format: { notificationRules: [...], routeVariables: {} }
+  if (Array.isArray(parsed.notificationRules)) {
+    return { notificationRules: parsed.notificationRules as GatewayDefinition["notificationRules"] };
+  }
+
+  // Legacy per-configName format: pick the entry with the most rules as the shared source
+  const configs: unknown[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed.configs) ? parsed.configs as unknown[] : [];
+  const best = configs
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+    .sort((a, b) => ((b.notificationRules as unknown[])?.length ?? 0) - ((a.notificationRules as unknown[])?.length ?? 0))[0];
+  if (!best) return {};
+  return { notificationRules: best.notificationRules as GatewayDefinition["notificationRules"] };
+}
+
+function readRoleMessageConfigItem(roleId: string | undefined, _configName: string): Partial<GatewayDefinition> {
+  return readRoleMessageConfigShared(roleId);
+}
+
+function writePersonaConfigFile(roleId: string, items: GatewayDefinition[]): void {
+  const configPath = personaConfigPath(roleId);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  // All gateways sharing this persona use the same rules; pick the first with rules, or fallback to first item
+  const source = items.find(item => Array.isArray(item.notificationRules) && item.notificationRules.length > 0) ?? items[0];
+  fs.writeFileSync(configPath, JSON.stringify({
+    notificationRules: source?.notificationRules ?? []
+  }, null, 2), "utf8");
+}
+
+function ensurePersonaConfigFile(roleId: string): string {
+  const configPath = personaConfigPath(roleId);
+  if (!fs.existsSync(configPath)) {
+    const safeRoleId = sanitizeRoleId(roleId);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      notificationRules: []
+    }, null, 2), "utf8");
+  }
+
+  return configPath;
+}
+
+function openFileWithDefaultApp(filePath: string): void {
+  const target = path.resolve(filePath);
+  const platform = process.platform;
+  let command: string;
+  let args: string[];
+  if (platform === "win32") {
+    command = "cmd";
+    args = ["/c", "explorer", target];
+  } else if (platform === "darwin") {
+    command = "open";
+    args = [target];
+  } else {
+    command = "xdg-open";
+    args = [target];
+  }
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
+function openConfigFilePayload(type: string | null, gatewayId: string | null, roleId: string | null): Record<string, unknown> {
+  if (type === "manager") {
+    ensureDataDirs();
+    openFileWithDefaultApp(routeRoot);
+    return { code: 0, data: { path: routeRoot } };
+  }
+
+  if (type === "role" || type === "persona") {
+    const runtime = gatewayId ? runtimes.get(gatewayId) : null;
+    const safeRoleId = sanitizeRoleId(roleId ?? runtime?.definition.agentRoleId);
+    if (!safeRoleId) {
+      throw new Error("请先选择一个路由人格，再打开 persona.md。");
+    }
+    const roleFileName = runtime?.definition.agentRoleFile ?? "persona.md";
+    const rolePath = path.join(rolesRoot, safeRoleId, roleFileName);
+    if (!fs.existsSync(rolePath)) {
+      fs.mkdirSync(path.dirname(rolePath), { recursive: true });
+      fs.writeFileSync(rolePath, "", "utf8");
+    }
+    openFileWithDefaultApp(rolePath);
+    return { code: 0, data: { path: rolePath } };
+  }
+
+  if (type === "role-message-config") {
+    const runtime = gatewayId ? runtimes.get(gatewayId) : null;
+    const safeRoleId = sanitizeRoleId(roleId ?? runtime?.definition.agentRoleId);
+    if (!safeRoleId) {
+      throw new Error("请先选择一个路由人格，再打开 personaConfig.json。");
+    }
+    const configPath = ensurePersonaConfigFile(safeRoleId);
+    openFileWithDefaultApp(configPath);
+    return { code: 0, data: { path: configPath } };
+  }
+
+  if (type !== "routes" && type !== "route-folder") {
+    throw new Error(`Unsupported config file type: ${type || ""}`);
+  }
+
+  if (!gatewayId) {
+    openFileWithDefaultApp(routeRoot);
+    return { code: 0, data: { path: routeRoot } };
+  }
+
+  const runtime = runtimes.get(gatewayId);
+  if (!runtime) {
+    // fallback: open routeRoot if runtime not found (e.g. unsaved configName change)
+    openFileWithDefaultApp(routeRoot);
+    return { code: 0, data: { path: routeRoot } };
+  }
+
+  const configName = sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName;
+  const configPath = adapterConfigPath(configName);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  if (!fs.existsSync(configPath)) {
+    writeAdapterConfigFile(runtime.definition);
+  }
+  const targetPath = type === "route-folder" ? path.dirname(configPath) : configPath;
+  openFileWithDefaultApp(targetPath);
+  return { code: 0, data: { path: targetPath } };
+}
+
+function sanitizeRoleId(raw: string | undefined): string {
+  const value = raw?.trim() ?? "";
+  return /^[\p{L}\p{N}_-]+$/u.test(value) ? value : "";
+}
+
+function loadRuntimes(): void {
+  const config = readConfig();
+  const seen = new Set<string>();
+
+  for (const rawDefinition of config.gateways) {
+    const definition = normalizeDefinition(rawDefinition);
+    seen.add(definition.id);
+    const existing = runtimes.get(definition.id);
+    if (existing) {
+      if (definitionFingerprint(existing.definition) !== definitionFingerprint(definition)) {
+        existing.needsRestart = true;
+      }
+      existing.definition = definition;
+      continue;
+    }
+
+    runtimes.set(definition.id, {
+      definition,
+      process: null,
+      needsRestart: false,
+      startedAt: null,
+      stoppedAt: null,
+      lastExit: null,
+      log: []
+    });
+  }
+
+  for (const id of [...runtimes.keys()]) {
+    if (!seen.has(id)) {
+      const runtime = runtimes.get(id);
+      if (runtime?.process) {
+        runtime.process.kill();
+      }
+      runtimes.delete(id);
+    }
+  }
+}
+
+function syncRunningGateways(): void {
+  for (const runtime of runtimes.values()) {
+    if (runtime.definition.enabled && runtime.process && runtime.needsRestart) {
+      appendLog(runtime, "restarting because gateway config changed");
+      runtime.process.kill();
+      continue;
+    }
+    if (runtime.definition.enabled && !runtime.process) {
+      startGateway(runtime.definition.id);
+    }
+    if (!runtime.definition.enabled && runtime.process) {
+      stopGateway(runtime.definition.id);
+    }
+  }
+}
+
+function watchedRouteFiles(): string[] {
+  ensureDataDirs();
+  const files = new Set<string>();
+  for (const entry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
+      continue;
+    }
+    files.add(adapterConfigPath(entry.name));
+  }
+  for (const entry of fs.readdirSync(rolesRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
+      continue;
+    }
+    const roleConfig = personaConfigPath(entry.name);
+    if (fs.existsSync(roleConfig)) {
+      files.add(roleConfig);
+    }
+  }
+
+  return [...files].sort((left, right) => left.localeCompare(right));
+}
+
+function configSnapshot(): string {
+  return watchedRouteFiles().map((file) => {
+    try {
+      const stat = fs.statSync(file);
+      return `${file}|${stat.mtimeMs}|${stat.size}`;
+    } catch {
+      return `${file}|missing`;
+    }
+  }).join("\n");
+}
+
+function reloadChangedConfig(reason: string): void {
+  try {
+    loadRuntimes();
+    syncRunningGateways();
+    console.log(`gateway-manager reloaded ${reason}`);
+  } catch (error) {
+    console.error(`Failed to reload gateway config ${reason}`, error);
+  }
+}
+
+function startConfigWatcher(): NodeJS.Timeout {
+  watchedConfigSnapshot = configSnapshot();
+  return setInterval(() => {
+    const nextSnapshot = configSnapshot();
+    if (nextSnapshot === watchedConfigSnapshot) {
+      return;
+    }
+    watchedConfigSnapshot = nextSnapshot;
+    reloadChangedConfig("after config file change");
+  }, 2000);
+}
+
+function appendLog(runtime: GatewayRuntime, line: string): void {
+  runtimes.appendLog(runtime, line);
+  console.log(`[${runtime.definition.id}] ${line}`);
+}
+
+function childCommand(extraArgs: string[] = []): { command: string; args: string[]; shell: boolean } {
+  const distEntry = path.join(rootDir, "dist", "index.js");
+  if (fs.existsSync(distEntry)) {
+    return { command: process.execPath, args: [distEntry, ...extraArgs], shell: false };
+  }
+
+  return { command: "npm", args: ["run", "dev", "--", ...extraArgs], shell: true };
+}
+
+function resolveWingetCopilot(): string | null {
+  if (!process.env.LOCALAPPDATA) return null;
+  const wingetBase = path.join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Packages");
+  try {
+    for (const entry of fs.readdirSync(wingetBase)) {
+      if (entry.startsWith("GitHub.Copilot")) {
+        const exe = path.join(wingetBase, entry, "copilot.exe");
+        if (fs.existsSync(exe)) return exe;
+      }
+    }
+  } catch { /* skip */ }
+  return null;
+}
+
+function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
+  const parts = routeRuntimeParts(definition.id);
+  const configName = sanitizeRoleId(definition.configName) || parts.configName;
+  const routeDataDir = path.relative(rootDir, path.join(routeRoot, configName)).replace(/\\/g, "/");
+  const routeRolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
+  const activeAdapters = sharedGatewayAdapterTypes(definition);
+  const runtimeAdapters = activeAdapters.length > 0 ? activeAdapters : ["disabled" as MessageAdapterType];
+  return {
+    ...process.env,
+    MESSAGE_ADAPTER_TYPE: runtimeAdapters[0] ?? "napcat",
+    MESSAGE_ADAPTER_TYPES: JSON.stringify(runtimeAdapters),
+    AGENT_MODEL: definition.agentModel?.trim() || "",
+    PIPELINE_PRESET: definition.pipelinePreset ?? "",
+    PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
+    HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
+    HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
+    NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
+    NAPCAT_WEBUI_URL: definition.napcatWebuiUrl ?? process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
+    NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
+    NAPCAT_WEBUI_TOKEN: definition.napcatWebuiToken ?? process.env.NAPCAT_WEBUI_TOKEN ?? "",
+    NAPCAT_INSTANCES: JSON.stringify(definition.napcatInstances ?? normalizeNapCatInstances(definition)),
+    GATEWAY_PORT: String(definition.gatewayPort),
+    WEBHOOK_PORT: String(definition.webhookPort ?? definition.gatewayPort),
+    WEBHOOK_PATH: definition.webhookPath ?? "/webhook",
+    FENNENOTE_WEBHOOK_PORT: String(definition.fenneNoteWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
+    FENNENOTE_WEBHOOK_PATH: definition.fenneNoteWebhookPath ?? "/fennenote",
+    FENNOTE_WEBHOOK_PORT: String(definition.fenneNoteWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
+    FENNOTE_WEBHOOK_PATH: definition.fenneNoteWebhookPath ?? "/fennenote",
+    XIAOAI_WEBHOOK_PORT: String(definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
+    XIAOAI_WEBHOOK_PATH: definition.xiaoaiWebhookPath ?? "/xiaoai",
+    CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
+    CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? process.env.CODEX_CWD ?? rootDir,
+    COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
+    COPILOT_CWD: definition.copilotCwd?.trim() || process.env.COPILOT_CWD || rootDir,
+    MARVIS_APP_ID: definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis",
+    ASTRBOT_URL: definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185",
+    ASTRBOT_USERNAME: definition.astrbotUsername?.trim() || process.env.ASTRBOT_USERNAME || "",
+    ASTRBOT_PASSWORD: definition.astrbotPassword?.trim() || process.env.ASTRBOT_PASSWORD || "",
+    ASTRBOT_PROJECT_ID: definition.astrbotProjectId?.trim() || process.env.ASTRBOT_PROJECT_ID || "",
+    ASTRBOT_SESSION_ID: definition.astrbotSessionId?.trim() || process.env.ASTRBOT_SESSION_ID || "",
+    ROLES_DIR: routeRolesDir,
+    AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
+    AGENT_ROLE_FILE: definition.agentRoleFile ?? "persona.md",
+    AGENT_ADAPTERS: Array.isArray(definition.agentAdapters) ? definition.agentAdapters.join(",") : process.env.AGENT_ADAPTERS ?? "",
+    TARGET_GROUP_ID: "",
+    BOT_NICKNAME: process.env.BOT_NICKNAME ?? "QQ小助手",
+    ROUTE_VARIABLES: definition.routeVariables ? JSON.stringify(definition.routeVariables) : "",
+    ROUTE_PROFILES: Array.isArray(definition.routeProfiles) ? JSON.stringify(definition.routeProfiles) : "",
+    DATA_DIR: routeDataDir,
+    GROUP_NOTIFICATION_TEMPLATE: definition.groupNotificationTemplate ?? "",
+    GROUP_AT_NOTIFICATION_TEMPLATE: definition.groupAtNotificationTemplate ?? "",
+    GROUP_DIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupDirectReplyNotificationTemplate ?? definition.groupReplyNotificationTemplate ?? "",
+    GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupIndirectReplyNotificationTemplate ?? definition.groupNicknameNotificationTemplate ?? "",
+    PRIVATE_NOTIFICATION_TEMPLATE: definition.privateNotificationTemplate ?? "",
+    VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE: definition.voiceTranscriptNotificationTemplate ?? "",
+    NOTIFICATION_RULES: Array.isArray(definition.notificationRules) ? JSON.stringify(definition.notificationRules) : "",
+  };
+}
+
+function startGateway(id: string): void {
+  const runtime = runtimes.get(id);
+  if (!runtime) {
+    throw new Error(`Gateway not found: ${id}`);
+  }
+  if (!runtime.definition.enabled) {
+    appendLog(runtime, "skip start because gateway is disabled");
+    return;
+  }
+  if (runtime.process && !runtime.process.killed) {
+    return;
+  }
+
+  const command = childCommand();
+  const child = spawn(command.command, command.args, {
+    cwd: rootDir,
+    env: envFor(runtime.definition),
+    shell: command.shell,
+    windowsHide: true
+  });
+
+  runtime.log = [];
+  runtime.process = child;
+  runtime.needsRestart = false;
+  runtime.startedAt = new Date().toISOString();
+  runtime.stoppedAt = null;
+  appendLog(runtime, `started pid=${child.pid ?? "unknown"} port=${runtime.definition.gatewayPort}`);
+
+  child.stdout.on("data", (data) => {
+    for (const line of data.toString().split(/\r?\n/).filter(Boolean)) {
+      appendLog(runtime, line);
+    }
+  });
+
+  child.stderr.on("data", (data) => {
+    for (const line of data.toString().split(/\r?\n/).filter(Boolean)) {
+      appendLog(runtime, `ERR ${line}`);
+    }
+  });
+
+  child.on("exit", (code, signal) => {
+    runtime.process = null;
+    runtime.stoppedAt = new Date().toISOString();
+    runtime.lastExit = {
+      code,
+      signal,
+      at: runtime.stoppedAt
+    };
+    appendLog(runtime, `exited code=${code ?? ""} signal=${signal ?? ""}`);
+    if (runtime.needsRestart && runtime.definition.enabled) {
+      startGateway(runtime.definition.id);
+    }
+  });
+}
+
+function stopGateway(id: string): void {
+  const runtime = runtimes.get(id);
+  if (!runtime) {
+    throw new Error(`Gateway not found: ${id}`);
+  }
+  if (!runtime.process) {
+    return;
+  }
+
+  appendLog(runtime, "stopping");
+  runtime.process.kill();
+}
+
+function stopAllGateways(): void {
+  for (const runtime of runtimes.values()) {
+    runtime.needsRestart = false;
+    if (runtime.process) {
+      appendLog(runtime, "stopping because manager is shutting down");
+      runtime.process.kill();
+    }
+  }
+}
+
+function dataDirFor(definition: GatewayDefinition): string {
+  const parts = routeRuntimeParts(definition.id);
+  const configName = sanitizeRoleId(definition.configName) || parts.configName;
+  return path.resolve(routeRoot, configName);
+}
+
+function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
+  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
+  const roleFileName = definition.agentRoleFile ?? "persona.md";
+  const selectedRoleId = sanitizeRoleId(definition.agentRoleId);
+  const options: Array<Record<string, string>> = [];
+
+  if (fs.existsSync(rolesDir)) {
+    for (const entry of fs.readdirSync(rolesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
+        continue;
+      }
+
+      const roleDir = path.join(rolesDir, entry.name);
+      const markdownFiles = fs.readdirSync(roleDir)
+        .filter((file) => file.toLowerCase().endsWith(".md"))
+        .sort((left, right) => left.localeCompare(right));
+      const preferredFile = markdownFiles.includes(roleFileName) ? roleFileName : markdownFiles[0] ?? roleFileName;
+      const rolePath = path.join(roleDir, preferredFile);
+      let roleContent = "";
+      let roleError = "";
+      try {
+        roleContent = fs.readFileSync(rolePath, "utf8");
+      } catch (error) {
+        roleError = error instanceof Error ? error.message : String(error);
+      }
+      options.push({
+        label: entry.name,
+        value: entry.name,
+        rolePath,
+        roleContent,
+        roleError,
+        dataDir: roleDir
+      });
+    }
+  }
+
+  const selectedDir = selectedRoleId ? path.join(rolesDir, selectedRoleId) : "";
+  const selectedRolePath = selectedDir ? path.join(selectedDir, roleFileName) : "";
+  let selectedRoleContent = "";
+  let selectedRoleError = "";
+  if (selectedRolePath) {
+    try {
+      selectedRoleContent = fs.readFileSync(selectedRolePath, "utf8");
+    } catch (error) {
+      selectedRoleError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  return {
+    rolesDir,
+    selectedRoleId,
+    selectedRolePath,
+    selectedRoleContent,
+    selectedRoleError,
+    selectedRoleDataDir: selectedDir,
+    options
+  };
+}
+
+function readCodexState(definition: GatewayDefinition): Record<string, unknown> {
+  const agentAdapters = definition.agentAdapters ?? ["codexDesktop"];
+  const hasCodexAdapter = agentAdapters.some((adapter) => adapter === "codexDesktop" || adapter === "codexApp");
+  if (agentAdapters.includes("copilotCli") && !agentAdapters.some((adapter) => adapter === "codexDesktop" || adapter === "codexApp")) {
+    return readCopilotState(definition);
+  }
+  if (agentAdapters.includes("marvis") && !hasCodexAdapter) {
+    return readMarvisState(definition);
+  }
+  if (agentAdapters.includes("astrbot") && !hasCodexAdapter) {
+    return readAstrbotState(definition);
+  }
+
+  return readCodexBindingState(definition);
+}
+
+function readAgentStates(definition: GatewayDefinition): Record<string, unknown> {
+  const adapters = definition.agentAdapters ?? ["codexDesktop"];
+  const states: Record<string, unknown> = {};
+  for (const adapter of adapters) {
+    if (adapter === "codexDesktop" || adapter === "codexApp") {
+      states[adapter] = {
+        ...readCodexBindingState(definition),
+        agentAdapterType: adapter
+      };
+    } else if (adapter === "copilotCli") {
+      states[adapter] = readCopilotState(definition);
+    } else if (adapter === "marvis") {
+      states[adapter] = readMarvisState(definition);
+    } else if (adapter === "astrbot") {
+      states[adapter] = readAstrbotState(definition);
+    }
+  }
+  return states;
+}
+
+function readCodexBindingState(definition: GatewayDefinition): Record<string, unknown> {
+  const statePath = path.join(dataDirFor(definition), "codex-state.json");
+  ensureCodexStateBinding(definition, statePath);
+  if (!fs.existsSync(statePath)) {
+    return {
+      agentAdapterType: "codexDesktop",
+      statePath,
+      bound: false,
+      message: "未找到 codex-state.json，还没有绑定 Agent 会话。"
+    };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    return {
+      ...state,
+      agentAdapterType: String(state.agentAdapterType || "codexDesktop"),
+      statePath,
+      bound: Boolean(state.monitorThreadId)
+    };
+  } catch (error) {
+    return {
+      agentAdapterType: "codexDesktop",
+      statePath,
+      bound: false,
+      lastNotificationError: error instanceof Error ? error.message : String(error),
+      lastNotificationErrorAt: new Date().toISOString()
+    };
+  }
+}
+
+function readCopilotState(definition: GatewayDefinition): Record<string, unknown> {
+  const statePath = path.join(dataDirFor(definition), "copilot-state.json");
+  if (!fs.existsSync(statePath)) {
+    return {
+      agentAdapterType: "copilotCli",
+      statePath,
+      bound: false,
+      monitorThreadName: definition.codexThreadName || "Copilot CLI",
+      monitorThreadSource: definition.copilotCliBin || process.env.COPILOT_CLI_BIN || "copilot",
+      message: "Copilot CLI 已配置，但还没有成功投递记录；需要完成同一会话连续两次注入烟测后才能视为已验证。"
+    };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    return {
+      ...state,
+      statePath,
+      bound: Boolean(state.lastNotificationAt && !state.lastNotificationError)
+    };
+  } catch (error) {
+    return {
+      agentAdapterType: "copilotCli",
+      statePath,
+      bound: false,
+      lastNotificationError: error instanceof Error ? error.message : String(error),
+      lastNotificationErrorAt: new Date().toISOString()
+    };
+  }
+}
+
+function readMarvisState(definition: GatewayDefinition): Record<string, unknown> {
+  const statePath = path.join(dataDirFor(definition), "marvis-state.json");
+  const marvisTarget = definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis";
+  if (!fs.existsSync(statePath)) {
+    return {
+      agentAdapterType: "marvis",
+      statePath,
+      bound: false,
+      handoffOnly: true,
+      monitorThreadName: "Marvis",
+      monitorThreadSource: marvisTarget,
+      message: "Marvis 当前是打开桌面端并复制 prompt 的人工接力，不能证明线程已绑定。"
+    };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    return {
+      ...state,
+      statePath,
+      bound: false,
+      handoffOnly: true
+    };
+  } catch (error) {
+    return {
+      agentAdapterType: "marvis",
+      statePath,
+      bound: false,
+      lastNotificationError: error instanceof Error ? error.message : String(error),
+      lastNotificationErrorAt: new Date().toISOString()
+    };
+  }
+}
+
+function readAstrbotState(definition: GatewayDefinition): Record<string, unknown> {
+  const statePath = path.join(dataDirFor(definition), "astrbot-agent-state.json");
+  const astrbotUrl = definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185";
+  if (!fs.existsSync(statePath)) {
+    return {
+      agentAdapterType: "astrbot",
+      statePath,
+      bound: false,
+      monitorThreadName: "AstrBot Agent",
+      monitorThreadSource: astrbotUrl,
+      message: "AstrBot 已配置，但还没有成功投递记录；插件 API 尚未提供可选会话。"
+    };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    const sessionId = definition.astrbotSessionId?.trim();
+    const hasSuccessfulDelivery = Boolean(state.lastNotificationAt && !state.lastNotificationError);
+    return {
+      ...state,
+      statePath,
+      bound: hasSuccessfulDelivery,
+      monitorThreadId: state.monitorThreadId ?? (hasSuccessfulDelivery ? (sessionId ? `astrbot-chatui:${sessionId}` : "astrbot-plugin:rabiroute_agent") : undefined),
+      monitorThreadName: state.monitorThreadName ?? (sessionId ? `AstrBot ChatUI ${sessionId}` : "AstrBot rabiroute_agent"),
+      monitorThreadSource: state.monitorThreadSource ?? astrbotUrl
+    };
+  } catch (error) {
+    return {
+      agentAdapterType: "astrbot",
+      statePath,
+      bound: false,
+      lastNotificationError: error instanceof Error ? error.message : String(error),
+      lastNotificationErrorAt: new Date().toISOString()
+    };
+  }
+}
+
+function sessionIndexPath(): string {
+  return path.join(os.homedir(), ".codex", "session_index.jsonl");
+}
+
+type SessionThreadRecord = {
+  id: string;
+  threadName: string;
+  updatedAt: string;
+};
+
+function normalizeComparablePath(value: string | undefined): string {
+  if (!value) return "";
+  const normalized = path.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+async function checkHttpEndpoint(url: string, timeoutMs = 1200): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      signal: controller.signal
+    });
+    return response.status < 500;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function runtimeAdapterTypes(definition: GatewayDefinition): MessageAdapterType[] {
+  const active = sharedGatewayAdapterTypes(definition);
+  return active.length > 0 ? active : ["disabled"];
+}
+
+function adapterRuntimes(type: MessageAdapterType): GatewayRuntime[] {
+  return [...runtimes.values()].filter((runtime) => runtimeAdapterTypes(runtime.definition).includes(type));
+}
+
+function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType): AdapterEndpoint | null {
+  if (type !== "webhook" && type !== "fennenote" && type !== "xiaoai") return null;
+  const definition = runtime.definition;
+  const status = readGatewayStatus(definition) as Record<string, any>;
+  const callback = status.httpCallbacks?.[type];
+  const port = type === "fennenote"
+    ? definition.fenneNoteWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
+    : type === "xiaoai"
+      ? definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
+      : definition.webhookPort ?? definition.gatewayPort;
+  const pathValue = type === "fennenote"
+    ? definition.fenneNoteWebhookPath ?? "/fennenote"
+    : type === "xiaoai"
+      ? definition.xiaoaiWebhookPath ?? "/xiaoai"
+      : definition.webhookPath ?? "/webhook";
+  const normalized = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
+  const url = String(callback?.url || `http://127.0.0.1:${port}${normalized}`);
+  return {
+    label: `${sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName} 回调入口`,
+    url,
+    healthy: Boolean(runtime.process && callback)
+  };
+}
+
+function routeHasRecentMessages(runtime: GatewayRuntime, type: MessageAdapterType): boolean {
+  try {
+    const files = readMessageFiles(runtime.definition) as Record<string, { entries?: unknown[] }>;
+    return Boolean(files[type]?.entries?.length);
+  } catch {
+    return false;
+  }
+}
+
+function napcatManagerCtx() {
+  return {
+    rootDir,
+    getRuntimes: () => [...runtimes.values()].map((runtime) => ({
+      ...runtime,
+      status: readGatewayStatus(runtime.definition) as Record<string, unknown>
+    })),
+    normalizeNapCatInstances,
+    appendLog,
+    checkHttpEndpoint
+  };
+}
+
+function agentManagerApiCtx(): AgentManagerApiContext {
+  return {
+    rootDir,
+    getRuntimes: () => runtimes.values(),
+    sessionIndexPath,
+    checkHttpEndpoint,
+    resolveWingetCopilot
+  };
+}
+
+function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: boolean; messages: string[] } {
+  const original = readConfig().gateways;
+  const messages: string[] = [];
+  const managedNapcatRoot = path.resolve(rootDir, "data", "napcat");
+  const normalized = original.map((definition) => {
+    if (!definitionUsesNapcat(definition) && Array.isArray(definition.napcatInstances) && definition.napcatInstances.length > 0) {
+      messages.push(`已移除 ${definition.id} 中残留的 NapCat 实例配置。`);
+    }
+    const cleanedDefinition = { ...definition };
+    if (Array.isArray(cleanedDefinition.napcatInstances)) {
+      const kept = cleanedDefinition.napcatInstances.filter((instance) => {
+        const workingDir = instance.workingDir?.trim();
+        if (!workingDir) return true;
+        const resolved = path.resolve(workingDir);
+        const relative = path.relative(managedNapcatRoot, resolved);
+        const isManaged = relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+        const keep = !isManaged || fs.existsSync(resolved);
+        if (!keep) {
+          messages.push(`已移除 ${definition.id}/${instance.id} 中已删除的受管 NapCat 实例配置。`);
+        }
+        return keep;
+      });
+      cleanedDefinition.napcatInstances = kept;
+      if ((definition.napcatInstances?.length ?? 0) > 0 && kept.length === 0) {
+        cleanedDefinition.messageInputsDisabled = true;
+      }
+    }
+    return normalizeDefinition(cleanedDefinition);
+  });
+  sharedAutoAssignGatewayPorts(normalized, managerPort);
+  sharedValidateGatewayPortConflicts(normalized);
+
+  const byId = new Map(original.map((definition) => [definition.id, definition]));
+  for (const repaired of normalized) {
+    const before = byId.get(repaired.id);
+    if (!before) {
+      messages.push(`已补齐路由 ${repaired.id} 的标准配置。`);
+      continue;
+    }
+    if (before.gatewayPort !== repaired.gatewayPort) {
+      messages.push(`已为 ${repaired.id} 重新分配入口端口：${before.gatewayPort} -> ${repaired.gatewayPort}。`);
+    }
+    if (before.webhookPort !== repaired.webhookPort && repaired.webhookPort) {
+      messages.push(`已为 ${repaired.id} 重新分配 Webhook 端口：${before.webhookPort || "-"} -> ${repaired.webhookPort}。`);
+    }
+    if (before.fenneNoteWebhookPort !== repaired.fenneNoteWebhookPort && repaired.fenneNoteWebhookPort) {
+      messages.push(`已为 ${repaired.id} 重新分配 FenneNote 端口：${before.fenneNoteWebhookPort || "-"} -> ${repaired.fenneNoteWebhookPort}。`);
+    }
+    if (before.xiaoaiWebhookPort !== repaired.xiaoaiWebhookPort && repaired.xiaoaiWebhookPort) {
+      messages.push(`已为 ${repaired.id} 重新分配 XiaoAI 端口：${before.xiaoaiWebhookPort || "-"} -> ${repaired.xiaoaiWebhookPort}。`);
+    }
+    if (definitionUsesNapcat(repaired)) {
+      const beforeInstances = before.napcatInstances ?? [];
+      const repairedInstances = repaired.napcatInstances ?? [];
+      for (const instance of repairedInstances) {
+        const old = beforeInstances.find((item) => item.id === instance.id);
+        if (!old) continue;
+        if (old.gatewayPort !== instance.gatewayPort) {
+          messages.push(`已为 ${repaired.id}/${instance.id} 重新分配 WS 端口：${old.gatewayPort} -> ${instance.gatewayPort}。`);
+        }
+        if (old.httpUrl !== instance.httpUrl) {
+          messages.push(`已为 ${repaired.id}/${instance.id} 重新分配 HTTP 地址：${old.httpUrl || "-"} -> ${instance.httpUrl}。`);
+        }
+      }
+    }
+  }
+
+  const changed = messages.length > 0;
+  if (changed) {
+    writeConfig({ gateways: normalized });
+    loadRuntimes();
+    syncRunningGateways();
+  }
+  return { changed, messages };
+}
+
+function ensureGatewayRunningForScan(targetGatewayId?: string): string[] {
+  const targetId = sanitizeRoleId(targetGatewayId);
+  if (!targetId) return [];
+  const runtime = runtimes.get(targetId);
+  if (!runtime || !definitionUsesNapcat(runtime.definition)) return [];
+  if (runtime.definition.enabled === false) return [];
+  const messages: string[] = [];
+  if (!runtime.process) {
+    startGateway(runtime.definition.id);
+    messages.push(`已启动当前路由监听进程：${runtime.definition.id}。`);
+  }
+  return messages;
+}
+
+async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterScanResult>> {
+  const webhookLikeScanCtx = {
+    rootDir,
+    adapterRuntimes,
+    routeCallbackEndpoint,
+    routeHasRecentMessages,
+    checkHttpEndpoint,
+    fenneNotePlaybackUrl
+  };
+  const [napcat, fennenote, xiaoai, webhook] = await Promise.all([
+    scanNapcatEndpoint(napcatManagerCtx()),
+    scanFenneNoteEndpoint(webhookLikeScanCtx),
+    scanXiaoAiEndpoint(webhookLikeScanCtx),
+    scanWebhookEndpoint(webhookLikeScanCtx)
+  ]);
+
+  return {
+    napcat,
+    heartbeat: {
+      type: "heartbeat",
+      label: "定时触发",
+      maturity: "verified",
+      installed: true,
+      requirements: [
+        { id: "route", label: "RabiRoute 内部定时器", required: true, ok: true, detail: "无需额外安装。" },
+        { id: "agent", label: "Agent 端可接收消息", required: true, ok: undefined, detail: "保存后用“立即触发”或日志页验证投递。" }
+      ],
+      warnings: ["定时触发不会证明外部平台可用，只能验证路由到 Agent 的链路。"]
+    },
+    fennenote,
+    xiaoai,
+    webhook
+  };
+}
+
+async function napcatScanHealthPayload(): Promise<Record<string, { instances: Record<string, unknown> }>> {
+  const ctx = napcatManagerCtx();
+  const result: Record<string, { instances: Record<string, unknown> }> = {};
+  for (const runtime of runtimes.values()) {
+    if (!definitionUsesNapcat(runtime.definition)) continue;
+    const instances = runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition);
+    const rows = await Promise.all(instances.map(async (instance) => {
+      let health = await testNapcatHealthEndpoint(ctx, {
+        httpUrl: instance.httpUrl,
+        webuiUrl: instance.webuiUrl,
+        accessToken: instance.accessToken,
+        webuiToken: instance.webuiToken,
+        gatewayPort: instance.gatewayPort
+      }) as Record<string, unknown>;
+      const scannedWebui = (health.webui ?? {}) as Record<string, unknown>;
+      const scannedToken = scannedWebui.token;
+      const backfilledToken = backfillNapcatInstanceWebuiToken(runtime.definition, instance.id, scannedToken);
+      if (backfilledToken) {
+        instance.webuiToken = backfilledToken;
+        const diagnostics = Array.isArray(health.diagnostics) ? health.diagnostics : [];
+        health = {
+          ...health,
+          diagnostics: [
+            ...diagnostics,
+            "已从 NapCat webui.json 读取 WebUI token 并回填到服务器配置。"
+          ]
+        };
+      }
+      const webui = (health.webui ?? {}) as Record<string, unknown>;
+      if (instance.enabled !== false && instance.launchCommand?.trim() && webui.reachable !== true) {
+        const autoLaunchSteps: string[] = [];
+        try {
+          const launch = launchNapcatInstanceEndpoint(ctx, {
+            gatewayId: runtime.definition.id,
+            instanceId: instance.id
+          }) as Record<string, unknown>;
+          autoLaunchSteps.push(String(launch.message || "已自动尝试后台启动 NapCat。"));
+          for (let i = 0; i < 10; i += 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const reachable = await checkHttpEndpoint(instance.webuiUrl || "", 900);
+            if (reachable) break;
+          }
+          const afterLaunch = await testNapcatHealthEndpoint(ctx, {
+            httpUrl: instance.httpUrl,
+            webuiUrl: instance.webuiUrl,
+            accessToken: instance.accessToken,
+            webuiToken: instance.webuiToken,
+            gatewayPort: instance.gatewayPort
+          }) as Record<string, unknown>;
+          const diagnostics = Array.isArray(afterLaunch.diagnostics) ? afterLaunch.diagnostics : [];
+          const afterWebui = (afterLaunch.webui ?? {}) as Record<string, unknown>;
+          const afterBackfilled = backfillNapcatInstanceWebuiToken(runtime.definition, instance.id, afterWebui.token);
+          if (afterBackfilled) instance.webuiToken = afterBackfilled;
+          health = {
+            ...afterLaunch,
+            diagnostics: [
+              ...autoLaunchSteps,
+              ...(afterBackfilled ? ["已从 NapCat webui.json 读取 WebUI token 并回填到服务器配置。"] : []),
+              ...diagnostics
+            ],
+            autoLaunch: {
+              ok: ((afterLaunch.webui ?? {}) as Record<string, unknown>).reachable === true,
+              steps: autoLaunchSteps
+            }
+          };
+        } catch (error) {
+          const diagnostics = Array.isArray(health.diagnostics) ? health.diagnostics : [];
+          health = {
+            ...health,
+            diagnostics: [
+              ...diagnostics,
+              `自动后台启动 NapCat 失败：${error instanceof Error ? error.message : String(error)}`
+            ],
+            autoLaunch: {
+              ok: false,
+              steps: [error instanceof Error ? error.message : String(error)]
+            }
+          };
+        }
+      }
+      return [instance.id, health] as const;
+    }));
+    result[runtime.definition.id] = {
+      instances: Object.fromEntries(rows)
+    };
+  }
+  return result;
+}
+
+type NapcatHealthRequest = {
+  httpUrl?: string;
+  webuiUrl?: string;
+  accessToken?: string;
+  webuiToken?: string;
+  gatewayPort?: number;
+};
+
+type NapcatAddRequest = {
+  gatewayId?: string;
+};
+
+type NapcatRemoveRequest = {
+  gatewayId?: string;
+  instanceId?: string;
+  name?: string;
+  gatewayPort?: number;
+  httpUrl?: string;
+  webuiUrl?: string;
+  accessToken?: string;
+  webuiToken?: string;
+  launchCommand?: string;
+  workingDir?: string;
+  botUserId?: string | number;
+  botNickname?: string;
+};
+
+type NapcatLaunchRequest = {
+  gatewayId?: string;
+  instanceId?: string;
+};
+function readLatestSessionThreads(indexPath: string): SessionThreadRecord[] {
+  if (!fs.existsSync(indexPath)) {
+    return [];
+  }
+
+  const latestById = new Map<string, SessionThreadRecord>();
+  for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as { id?: unknown; thread_name?: unknown; updated_at?: unknown };
+      if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
+        continue;
+      }
+      const record = {
+        id: parsed.id,
+        threadName: parsed.thread_name,
+        updatedAt: parsed.updated_at
+      };
+      const existing = latestById.get(record.id);
+      if (!existing || Date.parse(record.updatedAt) > Date.parse(existing.updatedAt)) {
+        latestById.set(record.id, record);
+      }
+    } catch {
+      // Ignore malformed JSONL lines.
+    }
+  }
+
+  return [...latestById.values()];
+}
+
+function ensureCodexStateBinding(definition: GatewayDefinition, statePath: string): void {
+  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
+  let existingState: Record<string, unknown> | null = null;
+  const indexPath = sessionIndexPath();
+  const sessionThreads = readLatestSessionThreads(indexPath);
+
+  if (fs.existsSync(statePath)) {
+    try {
+      existingState = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+      const currentRecord = typeof existingState.monitorThreadId === "string"
+        ? sessionThreads.find((record) => record.id === existingState?.monitorThreadId)
+        : null;
+      const stateStillMatchesTarget = existingState.monitorThreadId
+        && existingState.monitorThreadName === targetName
+        && (!currentRecord || currentRecord.threadName === targetName);
+      if (stateStillMatchesTarget) {
+        return;
+      }
+    } catch {
+      // Rewrite below if the state file is unreadable.
+    }
+  }
+
+  if (sessionThreads.length === 0) {
+    return;
+  }
+
+  let best: SessionThreadRecord | null = null;
+  for (const record of sessionThreads) {
+    if (record.threadName === targetName && (!best || Date.parse(record.updatedAt) > Date.parse(best.updatedAt))) {
+      best = record;
+    }
+  }
+
+  if (!best) {
+    if (existingState?.monitorThreadId) {
+      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify({
+        ...existingState,
+        monitorThreadId: undefined,
+        monitorThreadUpdatedAt: undefined,
+        monitorThreadName: targetName,
+        monitorThreadSource: indexPath,
+        lastAutoDiscoveryAt: new Date().toISOString(),
+        lastNotificationError: `No Codex thread named "${targetName}" was found in ${indexPath}. Previous binding "${String(existingState.monitorThreadName ?? existingState.monitorThreadId)}" was cleared.`,
+        lastNotificationErrorAt: new Date().toISOString()
+      }, null, 2), "utf8");
+    }
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(statePath, JSON.stringify({
+    ...existingState,
+    monitorThreadId: best.id,
+    monitorThreadName: best.threadName,
+    monitorThreadUpdatedAt: best.updatedAt,
+    monitorThreadSource: indexPath,
+    lastAutoDiscoveryAt: new Date().toISOString()
+  }, null, 2), "utf8");
+}
+
+function readGatewayStatus(definition: GatewayDefinition): Record<string, unknown> {
+  const statusPath = path.join(dataDirFor(definition), "gateway-status.json");
+  if (!fs.existsSync(statusPath)) {
+    return {
+      statusPath,
+      napcat: {
+        connected: false
+      }
+    };
+  }
+
+  try {
+    return {
+      ...JSON.parse(fs.readFileSync(statusPath, "utf8")) as Record<string, unknown>,
+      statusPath
+    };
+  } catch (error) {
+    return {
+      statusPath,
+      napcat: {
+        connected: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    };
+  }
+}
+
+function readJsonlTail(filePath: string, limit = 8): Array<Record<string, unknown>> {
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  try {
+    return fs.readFileSync(filePath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-limit)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          return { rawLine: line };
+        }
+      });
+  } catch (error) {
+    return [{
+      error: error instanceof Error ? error.message : String(error),
+      path: filePath
+    }];
+  }
+}
+
+function messageFileCandidateDirs(definition: GatewayDefinition): string[] {
+  const dirs = new Set<string>();
+  dirs.add(dataDirFor(definition));
+  const roleId = sanitizeRoleId(definition.agentRoleId);
+  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
+  if (roleId) {
+    dirs.add(path.join(rolesDir, roleId));
+  }
+  for (const profile of definition.routeProfiles ?? []) {
+    if (profile.dataDir) {
+      dirs.add(path.resolve(rootDir, profile.dataDir));
+    }
+    const profileRole = sanitizeRoleId(profile.agentRoleId);
+    if (profileRole) {
+      dirs.add(path.join(rolesDir, profileRole));
+    }
+  }
+  return [...dirs];
+}
+
+function recordTimeMs(record: Record<string, unknown>): number {
+  const time = record.time;
+  if (typeof time === "number") {
+    return time < 10_000_000_000 ? time * 1000 : time;
+  }
+  for (const key of ["createdAt", "lastEventAt", "startedAt", "endedAt"]) {
+    const value = record[key];
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return 0;
+}
+
+function messageFileEntry(source: string, filePath: string, record: Record<string, unknown>): Record<string, unknown> {
+  const groupId = record.groupId ?? record.group_id;
+  const userId = record.userId ?? record.user_id;
+  const text = record.rawMessage ?? record.message ?? record.text ?? record.content ?? record.rawLine ?? "";
+  return {
+    source,
+    path: filePath,
+    time: record.time,
+    timeMs: recordTimeMs(record),
+    messageId: record.messageId ?? record.message_id,
+    instanceId: record.instanceId,
+    adapterType: record.adapterType,
+    sender: record.senderName ?? record.sender ?? record.source,
+    target: groupId ? `群 ${String(groupId)}` : userId ? `私聊 ${String(userId)}` : record.source ?? source,
+    text: typeof text === "string" ? text : JSON.stringify(text),
+    raw: record
+  };
+}
+
+function adapterLogEntry(filePath: string, record: Record<string, unknown>): Record<string, unknown> {
+  const data = record.data && typeof record.data === "object" ? record.data as Record<string, unknown> : {};
+  const text = record.message ?? data.text ?? data.rawMessage ?? data.eventType ?? record.rawLine ?? "";
+  return {
+    adapter: record.adapter,
+    event: record.event ?? "log",
+    level: record.level ?? "info",
+    instanceId: record.instanceId,
+    path: filePath,
+    time: record.time,
+    timeMs: recordTimeMs(record),
+    messageId: data.messageId ?? data.message_id,
+    sender: data.senderName ?? data.sender ?? data.source,
+    target: data.groupId ? `群 ${String(data.groupId)}` : data.userId ? `私聊 ${String(data.userId)}` : data.path ?? data.name,
+    text: typeof text === "string" ? text : JSON.stringify(text),
+    raw: record
+  };
+}
+
+function readMessageFiles(definition: GatewayDefinition): Record<string, unknown> {
+  const dirs = messageFileCandidateDirs(definition);
+  const readEntries = (source: string, fileName: string) => dirs.flatMap((dir) => {
+    const filePath = path.join(dir, fileName);
+    return readJsonlTail(filePath, 8).map((record) => messageFileEntry(source, filePath, record));
+  });
+  const sortTail = (items: Array<Record<string, unknown>>) => items
+    .sort((left, right) => Number(left.timeMs || 0) - Number(right.timeMs || 0))
+    .slice(-8)
+    .reverse();
+
+  const napcatEntries = sortTail([
+    ...readEntries("群聊", "group-messages.jsonl"),
+    ...readEntries("私聊", "private-messages.jsonl")
+  ]);
+  const heartbeatEntries = sortTail(readEntries("定时触发", "heartbeat-events.jsonl"));
+  const fenneNoteEntries = sortTail([
+    ...readEntries("FenneNote / 芬妮笔记", "fennenote-voice-transcripts.jsonl"),
+    ...readEntries("FenneNote / 芬妮笔记", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "fennenote")
+  ]);
+  const xiaoaiEntries = sortTail([
+    ...readEntries("小米音箱 / 小爱", "xiaoai-voice-transcripts.jsonl"),
+    ...readEntries("小米音箱 / 小爱", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "xiaoai")
+  ]);
+  const webhookEntries = sortTail(readEntries("通用 Webhook", "voice-transcripts.jsonl")
+    .filter((entry) => {
+      const adapterType = String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase();
+      return !adapterType || adapterType === "webhook";
+    }));
+
+  return {
+    napcat: {
+      paths: dirs.flatMap((dir) => [
+        path.join(dir, "group-messages.jsonl"),
+        path.join(dir, "private-messages.jsonl")
+      ]),
+      entries: napcatEntries
+    },
+    heartbeat: {
+      paths: dirs.map((dir) => path.join(dir, "heartbeat-events.jsonl")),
+      entries: heartbeatEntries
+    },
+    fennenote: {
+      paths: dirs.flatMap((dir) => [
+        path.join(dir, "fennenote-voice-transcripts.jsonl"),
+        path.join(dir, "voice-transcripts.jsonl")
+      ]),
+      entries: fenneNoteEntries
+    },
+    xiaoai: {
+      paths: dirs.flatMap((dir) => [
+        path.join(dir, "xiaoai-voice-transcripts.jsonl"),
+        path.join(dir, "voice-transcripts.jsonl")
+      ]),
+      entries: xiaoaiEntries
+    },
+    webhook: {
+      paths: dirs.map((dir) => path.join(dir, "voice-transcripts.jsonl")),
+      entries: webhookEntries
+    }
+  };
+}
+
+function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown> {
+  const dir = dataDirFor(definition);
+  const readEntries = (adapter: MessageAdapterType | "outbox") => {
+    const filePath = path.join(dir, `${adapter}-adapter.log.jsonl`);
+    return readJsonlTail(filePath, 12)
+      .map((record) => adapterLogEntry(filePath, record))
+      .sort((left, right) => Number(left.timeMs || 0) - Number(right.timeMs || 0))
+      .reverse();
+  };
+
+  return {
+    napcat: {
+      paths: [path.join(dir, "napcat-adapter.log.jsonl")],
+      entries: readEntries("napcat")
+    },
+    heartbeat: {
+      paths: [path.join(dir, "heartbeat-adapter.log.jsonl")],
+      entries: readEntries("heartbeat")
+    },
+    fennenote: {
+      paths: [path.join(dir, "fennenote-adapter.log.jsonl")],
+      entries: readEntries("fennenote")
+    },
+    xiaoai: {
+      paths: [path.join(dir, "xiaoai-adapter.log.jsonl")],
+      entries: readEntries("xiaoai")
+    },
+    webhook: {
+      paths: [path.join(dir, "webhook-adapter.log.jsonl")],
+      entries: readEntries("webhook")
+    },
+    outbox: {
+      paths: [path.join(dir, "outbox-adapter.log.jsonl")],
+      entries: readEntries("outbox")
+    }
+  };
+}
+
+function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
+  const usesNapcat = definitionUsesNapcat(runtime.definition);
+  return {
+    id: runtime.definition.id,
+    name: runtime.definition.name,
+    configName: sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName,
+    enabled: runtime.definition.enabled,
+    messageAdapterType: runtime.definition.messageAdapterType ?? "napcat",
+    messageAdapters: runtime.definition.messageAdapters ?? [runtime.definition.messageAdapterType ?? "napcat"],
+    messageAdaptersDisabled: runtime.definition.messageAdaptersDisabled ?? [],
+    messageInputsDisabled: runtime.definition.messageInputsDisabled === true,
+    messageAdapterPolicies: runtime.definition.messageAdapterPolicies ?? {},
+    agentAdapters: runtime.definition.agentAdapters ?? ["codexDesktop"],
+    pipelinePreset: runtime.definition.pipelinePreset,
+    pipeline: runtime.definition.pipeline,
+    gatewayPort: runtime.definition.gatewayPort,
+    webhookPort: runtime.definition.webhookPort,
+    webhookPath: runtime.definition.webhookPath,
+    fenneNoteWebhookPort: runtime.definition.fenneNoteWebhookPort,
+    fenneNoteWebhookPath: runtime.definition.fenneNoteWebhookPath,
+    xiaoaiWebhookPort: runtime.definition.xiaoaiWebhookPort,
+    xiaoaiWebhookPath: runtime.definition.xiaoaiWebhookPath,
+    heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
+    heartbeatMessage: runtime.definition.heartbeatMessage ?? "",
+    napcatHttpUrl: runtime.definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
+    napcatWebuiUrl: runtime.definition.napcatWebuiUrl ?? "http://127.0.0.1:6099/webui",
+    napcatAccessToken: runtime.definition.napcatAccessToken ?? "",
+    napcatWebuiToken: runtime.definition.napcatWebuiToken ?? "",
+    napcatInstances: usesNapcat ? (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)) : [],
+    targetGroupId: runtime.definition.targetGroupId ?? "",
+    routeVariables: runtime.definition.routeVariables,
+    routeName: runtime.definition.routeName,
+    routeProfiles: runtime.definition.routeProfiles ?? [],
+    codexThreadName: runtime.definition.codexThreadName ?? runtime.definition.name ?? runtime.definition.id,
+    codexCwd: runtime.definition.codexCwd,
+    copilotCwd: runtime.definition.copilotCwd,
+    copilotCliBin: runtime.definition.copilotCliBin,
+    marvisAppId: runtime.definition.marvisAppId,
+    astrbotUrl: runtime.definition.astrbotUrl,
+    astrbotUsername: runtime.definition.astrbotUsername,
+    astrbotPassword: runtime.definition.astrbotPassword,
+    astrbotProjectId: runtime.definition.astrbotProjectId,
+    astrbotSessionId: runtime.definition.astrbotSessionId,
+    rolesDir: runtime.definition.rolesDir,
+    routesDir: runtime.definition.routesDir,
+    agentRoleId: runtime.definition.agentRoleId,
+    agentRoleFile: runtime.definition.agentRoleFile,
+    roleInfo: roleInfoFor(runtime.definition),
+    dataDir: runtime.definition.dataDir,
+    groupNotificationTemplate: runtime.definition.groupNotificationTemplate,
+    groupAtNotificationTemplate: runtime.definition.groupAtNotificationTemplate,
+    groupDirectReplyNotificationTemplate: runtime.definition.groupDirectReplyNotificationTemplate,
+    groupIndirectReplyNotificationTemplate: runtime.definition.groupIndirectReplyNotificationTemplate,
+    groupReplyNotificationTemplate: runtime.definition.groupReplyNotificationTemplate,
+    groupNicknameNotificationTemplate: runtime.definition.groupNicknameNotificationTemplate,
+    privateNotificationTemplate: runtime.definition.privateNotificationTemplate,
+    notificationRules: runtime.definition.notificationRules,
+    roleNotificationRules: runtime.definition.roleNotificationRules,
+    roleRouteNames: runtime.definition.roleRouteNames,
+    running: Boolean(runtime.process),
+    pid: runtime.process?.pid ?? null,
+    startedAt: runtime.startedAt,
+    stoppedAt: runtime.stoppedAt,
+    lastExit: runtime.lastExit,
+    gatewayStatus: readGatewayStatus(runtime.definition),
+    adapterLogs: readAdapterLogs(runtime.definition),
+    messageFiles: readMessageFiles(runtime.definition),
+    agentStates: readAgentStates(runtime.definition),
+    codexState: readCodexState(runtime.definition),
+    log: runtime.log.slice(-30)
+  };
+}
+
+function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+  response.end(JSON.stringify(body, null, 2));
+}
+
+function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    request.on("end", () => {
+      try {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolve((text ? JSON.parse(text) : {}) as T);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+type ManualTriggerRequest = {
+  triggerId?: string;
+  triggerName?: string;
+  message?: string;
+  routeKind?: string;
+  ruleId?: string;
+};
+
+function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): Promise<void> {
+  const runtime = runtimes.get(id);
+  if (!runtime) {
+    throw new Error(`Gateway not found: ${id}`);
+  }
+
+  const triggerId = sanitizeRoleId(request.triggerId) || "manual";
+  const triggerName = request.triggerName?.trim() || triggerId;
+  const message = request.message?.trim() || triggerName;
+  const routeKind = normalizeManualRouteKind(request.routeKind);
+  const ruleId = sanitizeRoleId(request.ruleId) || triggerId;
+  const command = childCommand([
+    `--manual-trigger=${triggerId}`,
+    `--manual-name=${encodeURIComponent(triggerName)}`,
+    `--manual-message=${encodeURIComponent(message)}`,
+    `--manual-route-kind=${routeKind}`,
+    `--manual-rule=${ruleId}`
+  ]);
+  appendLog(runtime, `manual trigger requested: ${triggerName}`);
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+
+    child.stdout.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `manual trigger: ${line}`);
+      }
+    });
+    child.stderr.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `manual trigger error: ${line}`);
+      }
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        appendLog(runtime, `manual trigger completed: ${triggerName}`);
+        resolve();
+        return;
+      }
+      reject(new Error(`manual trigger failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
+    });
+  });
+}
+
+function normalizeManualRouteKind(value: unknown): ForwardRouteKind {
+  return value === "heartbeat" ? "heartbeat" : "manual_trigger";
+}
+
+function roleDirForApi(roleId: string): string {
+  const safeRoleId = sanitizeRoleId(roleId);
+  if (!safeRoleId) {
+    throw new Error("Missing role id.");
+  }
+  return path.join(rolesRoot, safeRoleId);
+}
+
+function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+  const consolidationResultMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/memory\/consolidation-runs\/([^/]+)\/result$/);
+  if (consolidationResultMatch) {
+    const roleId = decodeURIComponent(consolidationResultMatch[1]);
+    const runId = decodeURIComponent(consolidationResultMatch[2]);
+    try {
+      const roleDir = roleDirForApi(roleId);
+      if (request.method === "POST") {
+        void readJsonBody<Record<string, unknown>>(request)
+          .then((body) => applyMemoryConsolidationResult(roleDir, runId, body))
+          .then((data) => jsonResponse(response, 200, { code: 0, data }))
+          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return true;
+      }
+      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+      return true;
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      return true;
+    }
+  }
+
+  const match = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/(plans|memory|memory\/recent|memory\/consolidated|memory\/consolidation-requests|memory\/consolidation-runs)(?:\/([^/]+))?$/);
+  if (!match) {
+    return false;
+  }
+
+  const roleId = decodeURIComponent(match[1]);
+  const resource = match[2];
+  const itemId = match[3] ? decodeURIComponent(match[3]) : "";
+
+  try {
+    const roleDir = roleDirForApi(roleId);
+    if (request.method === "GET" && resource === "plans") {
+      const plans = listPlans(roleDir);
+      const data = itemId ? plans.find((item) => item.id === itemId) : plans;
+      if (itemId && !data) {
+        jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
+        return true;
+      }
+      jsonResponse(response, 200, { code: 0, data });
+      return true;
+    }
+    if (request.method === "GET" && resource === "memory" && !itemId) {
+      jsonResponse(response, 200, {
+        code: 0,
+        data: {
+          recent: listRecentMemories(roleDir),
+          consolidated: listConsolidatedMemories(roleDir),
+          consolidationRuns: listConsolidationRuns(roleDir)
+        }
+      });
+      return true;
+    }
+    if (request.method === "POST" && resource === "plans" && !itemId) {
+      void readJsonBody<Record<string, unknown>>(request)
+        .then((body) => createPlan(roleDir, body))
+        .then((data) => jsonResponse(response, 201, { code: 0, data }))
+        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    if (request.method === "PATCH" && resource === "plans" && itemId) {
+      void readJsonBody<Record<string, unknown>>(request)
+        .then((body) => updatePlan(roleDir, itemId, body))
+        .then((data) => jsonResponse(response, 200, { code: 0, data }))
+        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    if (request.method === "GET" && resource === "memory/recent") {
+      const memories = listRecentMemories(roleDir);
+      const data = itemId ? memories.find((item) => item.id === itemId) : memories;
+      if (itemId && !data) {
+        jsonResponse(response, 404, { code: -1, message: `Memory not found: ${itemId}` });
+        return true;
+      }
+      jsonResponse(response, 200, { code: 0, data });
+      return true;
+    }
+    if (request.method === "GET" && resource === "memory/consolidated") {
+      const memories = listConsolidatedMemories(roleDir);
+      const data = itemId ? memories.find((item) => item.id === itemId) : memories;
+      if (itemId && !data) {
+        jsonResponse(response, 404, { code: -1, message: `Consolidated memory not found: ${itemId}` });
+        return true;
+      }
+      jsonResponse(response, 200, { code: 0, data });
+      return true;
+    }
+    if (request.method === "POST" && resource === "memory/recent" && !itemId) {
+      void readJsonBody<Record<string, unknown>>(request)
+        .then((body) => createRecentMemory(roleDir, body))
+        .then((data) => jsonResponse(response, 201, { code: 0, data }))
+        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    if (request.method === "PATCH" && resource === "memory/recent" && itemId) {
+      void readJsonBody<Record<string, unknown>>(request)
+        .then((body) => updateRecentMemory(roleDir, itemId, body))
+        .then((data) => jsonResponse(response, 200, { code: 0, data }))
+        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    if (request.method === "GET" && resource === "memory/consolidation-runs") {
+      const runs = listConsolidationRuns(roleDir);
+      const data = itemId ? runs.find((item) => item.id === itemId) : runs;
+      if (itemId && !data) {
+        jsonResponse(response, 404, { code: -1, message: `Consolidation run not found: ${itemId}` });
+        return true;
+      }
+      jsonResponse(response, 200, { code: 0, data });
+      return true;
+    }
+    if (request.method === "POST" && resource === "memory/consolidation-requests" && !itemId) {
+      void readJsonBody<Record<string, unknown>>(request)
+        .then((body) => pendingMemoryConsolidation(
+          roleDir,
+          body.triggerSource === "auto" ? "auto" : "api",
+          typeof body.includeOlderThanHours === "number" ? body.includeOlderThanHours : undefined,
+          typeof body.triggerOlderThanHours === "number" ? body.triggerOlderThanHours : undefined,
+          body.force === true
+        ))
+        .then((data) => {
+          if (!data) {
+            jsonResponse(response, 409, { code: -1, message: "No memory consolidation is due." });
+            return;
+          }
+          jsonResponse(response, 201, { code: 0, data });
+        })
+        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+    return true;
+  } catch (error) {
+    jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    return true;
+  }
+}
+
+async function forwardFenneNoteRequest(
+  body: unknown,
+  targetUrl: string,
+  token: string
+): Promise<Record<string, unknown>> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json; charset=utf-8",
+    "user-agent": "RabiRoute"
+  };
+  if (token) {
+    headers.authorization = `Bearer ${token}`;
+  }
+  const forwarded = await fetch(targetUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body ?? {})
+  });
+  const text = await forwarded.text();
+  let data: unknown = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+  return {
+    ok: forwarded.ok,
+    status: forwarded.status,
+    target: targetUrl,
+    response: data
+  };
+}
+
+async function forwardPlaybackRequest(body: unknown): Promise<Record<string, unknown>> {
+  return forwardFenneNoteRequest(body, fenneNotePlaybackUrl, fenneNotePlaybackToken);
+}
+
+async function forwardFenneNoteReply(body: unknown): Promise<Record<string, unknown>> {
+  return forwardFenneNoteRequest(body, fenneNoteReplyUrl, fenneNoteReplyToken);
+}
+
+function standaloneGatewayPayload(): Record<string, unknown> {
+  return buildStandaloneGatewayPayload({
+    runtimes: runtimes.values(),
+    runtimeStatus,
+    routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
+    rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
+  });
+}
+
+function networkOptionsPayload(): Record<string, unknown> {
+  const adapters = {
+    napcat: {
+      httpServers: [],
+      websocketClients: []
+    },
+    webhook: {
+      listeners: []
+    },
+    heartbeat: {},
+    disabled: {}
+  };
+  return {
+    code: 0,
+    data: {
+      adapters,
+      httpServers: [],
+      websocketClients: []
+    }
+  };
+}
+
+function metaPayload(): Record<string, unknown> {
+  let version = "0.1.0";
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
+    if (typeof parsed.version === "string" && parsed.version.trim()) {
+      version = parsed.version;
+    }
+  } catch {
+    // Keep the baked fallback when package metadata is not readable.
+  }
+  return {
+    version,
+    githubUrl: "https://github.com/vb2250158/RabiRoute",
+    managerPort
+  };
+}
+
+function contentTypeFor(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".html") return "text/html; charset=utf-8";
+  if (extension === ".js" || extension === ".mjs") return "text/javascript; charset=utf-8";
+  if (extension === ".css") return "text/css; charset=utf-8";
+  if (extension === ".json") return "application/json; charset=utf-8";
+  if (extension === ".png") return "image/png";
+  if (extension === ".svg") return "image/svg+xml; charset=utf-8";
+  if (extension === ".woff") return "font/woff";
+  if (extension === ".woff2") return "font/woff2";
+  return "application/octet-stream";
+}
+
+function staticWebuiResponse(pathname: string, response: http.ServerResponse): boolean {
+  const indexPath = path.join(webuiDistPath, "index.html");
+  if (!fs.existsSync(indexPath)) {
+    return false;
+  }
+
+  const decoded = decodeURIComponent(pathname);
+  const normalized = path.normalize(decoded === "/" ? "/index.html" : decoded).replace(/^[/\\]+/, "");
+  const candidatePath = path.resolve(webuiDistPath, normalized);
+  const relativeToDist = path.relative(webuiDistPath, candidatePath);
+  if (relativeToDist.startsWith("..") || path.isAbsolute(relativeToDist)) {
+    return false;
+  }
+
+  if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
+    response.writeHead(200, { "content-type": contentTypeFor(candidatePath) });
+    response.end(fs.readFileSync(candidatePath));
+    return true;
+  }
+
+  if (path.extname(candidatePath)) {
+    return false;
+  }
+
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  response.end(fs.readFileSync(indexPath, "utf8"));
+  return true;
+}
+
+function htmlResponse(pathname: string, response: http.ServerResponse): void {
+  if (staticWebuiResponse(pathname, response)) {
+    return;
+  }
+
+  response.writeHead(503, { "content-type": "text/plain; charset=utf-8" });
+  response.end("RabiRoute WebGUI build is missing. Run `npm run webgui:build` or `npm run build`.");
+}
+
+function assetResponse(pathname: string, response: http.ServerResponse): boolean {
+  const match = pathname.match(/^\/assets\/([a-zA-Z0-9_.-]+)$/);
+  if (!match) {
+    return false;
+  }
+
+  const assetPath = path.join(rootDir, "assets", match[1]);
+  if (!fs.existsSync(assetPath)) {
+    return false;
+  }
+
+  const extension = path.extname(assetPath).toLowerCase();
+  const contentType = extension === ".png"
+    ? "image/png"
+    : extension === ".svg"
+      ? "image/svg+xml; charset=utf-8"
+      : "application/octet-stream";
+  response.writeHead(200, { "content-type": contentType });
+  response.end(fs.readFileSync(assetPath));
+  return true;
+}
+
+function handleAction(pathname: string, response: http.ServerResponse): boolean {
+  const match = pathname.match(/^\/gateways\/([^/]+)\/(start|stop|restart)$/);
+  if (!match) {
+    return false;
+  }
+
+  const [, encodedId, action] = match;
+  const id = decodeURIComponent(encodedId);
+  if (action === "start") {
+    startGateway(id);
+  } else if (action === "stop") {
+    stopGateway(id);
+  } else {
+    stopGateway(id);
+    setTimeout(() => startGateway(id), 1000);
+  }
+
+  jsonResponse(response, 200, { code: 0, message: `requested ${action}`, data: [...runtimes.values()].map(runtimeStatus) });
+  return true;
+}
+
+function handleTriggerAction(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+  const match = pathname.match(/^\/gateways\/([^/]+)\/manual-trigger$/);
+  if (!match) {
+    return false;
+  }
+
+  const [, id] = match;
+  void readJsonBody<ManualTriggerRequest>(request)
+    .then((body) => triggerGatewayManualRule(decodeURIComponent(id), body))
+    .then(() => {
+      jsonResponse(response, 202, { code: 0, message: "manual trigger completed", data: [...runtimes.values()].map(runtimeStatus) });
+    })
+    .catch((error) => {
+      jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    });
+  return true;
+}
+
+export function startManager(): void {
+  loadRuntimes();
+  for (const runtime of runtimes.values()) {
+    if (runtime.definition.enabled) {
+      startGateway(runtime.definition.id);
+    }
+  }
+
+  const server = http.createServer((request, response) => {
+    try {
+      const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+      if (request.method === "GET" && assetResponse(requestUrl.pathname, response)) {
+        return;
+      }
+      if (request.method === "POST" && handleAction(requestUrl.pathname, response)) {
+        return;
+      }
+      if (request.method === "POST" && handleTriggerAction(request, requestUrl.pathname, response)) {
+        return;
+      }
+      if ((request.method === "GET" || request.method === "POST" || request.method === "PATCH") && handleRoleKnowledgeApi(request, requestUrl.pathname, response)) {
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/gateways") {
+        jsonResponse(response, 200, standaloneGatewayPayload());
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/gateways") {
+        void readJsonBody<GatewayConfigFile>(request)
+          .then((body) => {
+            writeConfig(body);
+            loadRuntimes();
+            syncRunningGateways();
+            jsonResponse(response, 200, standaloneGatewayPayload());
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/network-options") {
+        jsonResponse(response, 200, networkOptionsPayload());
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/manager-config") {
+        jsonResponse(response, 200, {
+          code: 0,
+          routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
+          rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
+        });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/manager-config") {
+        void readJsonBody<ManagerConfig>(request)
+          .then((body) => {
+            const cfg = readManagerConfig();
+            if (body.routeDir !== undefined) cfg.routeDir = body.routeDir || undefined;
+            if (body.rolesDir !== undefined) cfg.rolesDir = body.rolesDir || undefined;
+            writeManagerConfig(cfg);
+            ensureDataDirs();
+            jsonResponse(response, 200, { code: 0, routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"), rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/") });
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/meta") {
+        jsonResponse(response, 200, metaPayload());
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/scan/message-adapters") {
+        void Promise.resolve()
+          .then(async () => {
+            const gatewayId = requestUrl.searchParams.get("gatewayId") || undefined;
+            const repair = repairGatewayConfigsForScan(gatewayId);
+            const startMessages = ensureGatewayRunningForScan(gatewayId);
+            if (startMessages.length > 0) {
+              repair.changed = true;
+              repair.messages.push(...startMessages);
+            }
+            const adapters = await messageAdapterScanPayload();
+            const napcatHealth = await napcatScanHealthPayload();
+            return { adapters, repair, napcatHealth, gatewayPayload: standaloneGatewayPayload() };
+          })
+          .then((payload) => {
+            jsonResponse(response, 200, payload);
+          })
+          .catch((error) => {
+            jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+      if (request.method === "POST" && (requestUrl.pathname === "/api/playback/request" || requestUrl.pathname === "/api/fennenote/playback")) {
+        void readJsonBody<unknown>(request)
+          .then((body) => forwardPlaybackRequest(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 202 : 502, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 502, { ok: false, error: error instanceof Error ? error.message : String(error), target: fenneNotePlaybackUrl });
+        });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/fennenote/reply") {
+        void readJsonBody<unknown>(request)
+          .then((body) => forwardFenneNoteReply(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 202 : 502, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 502, { ok: false, error: error instanceof Error ? error.message : String(error), target: fenneNoteReplyUrl });
+          });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/agent/replies") {
+        void readJsonBody<AgentReplyRequest>(request)
+          .then((body) => handleAgentReply(body, {
+            rootDir,
+            routeRoot,
+            rolesRoot,
+            runtimes: [...runtimes.values()].map((runtime) => ({
+              ...runtime.definition,
+              napcatInstances: (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)).map((instance) => ({
+                ...instance,
+                accessToken: instance.accessToken ?? ""
+              }))
+            }))
+          }))
+          .then((result) => {
+            const status = result.status === "sent" ? 202 : result.status === "draft" ? 200 : result.status === "failed" ? 502 : 403;
+            jsonResponse(response, status, { code: result.ok ? 0 : -1, ...result });
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { code: -1, ok: false, status: "blocked", message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/open-config-file") {
+        jsonResponse(response, 200, openConfigFilePayload(
+          requestUrl.searchParams.get("type"),
+          requestUrl.searchParams.get("gatewayId"),
+          requestUrl.searchParams.get("roleId")
+        ));
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/manager/start") {
+        jsonResponse(response, 200, { code: 0, message: "manager is already running" });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/manager/shutdown") {
+        jsonResponse(response, 200, { code: 0, message: "manager shutdown requested" });
+        setTimeout(() => shutdownManager("api"), 20);
+        return;
+      }
+      if (requestUrl.pathname === "/api/gateways") {
+        jsonResponse(response, 200, [...runtimes.values()].map(runtimeStatus));
+        return;
+      }
+      if (requestUrl.pathname === "/api/scan/agents" && request.method === "GET") {
+        void (async () => {
+          jsonResponse(response, 200, await scanAgentAdapters(agentManagerApiCtx()));
+        })();
+        return;
+      }
+      if (requestUrl.pathname === "/api/agent/copilot-install" && request.method === "POST") {
+        void (async () => {
+          const { execFile } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const execFileAsync = promisify(execFile);
+          try {
+            const { stdout, stderr } = await execFileAsync("npm", ["install", "-g", "@github/copilot"], {
+              shell: true,
+              timeout: 120_000,
+              env: { ...process.env }
+            });
+            jsonResponse(response, 200, { ok: true, stdout: stdout.trim(), stderr: stderr.trim() });
+          } catch (err: unknown) {
+            const e = err as { message?: string; stdout?: string; stderr?: string };
+            jsonResponse(response, 500, { ok: false, error: e.message, stderr: e.stderr });
+          }
+        })();
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/agent/copilot-login" && request.method === "POST") {
+        void (async () => {
+          const { spawn } = await import("node:child_process");
+          try {
+            // Find copilot bin
+            const { execFile } = await import("node:child_process");
+            const { promisify } = await import("node:util");
+            const execFileAsync = promisify(execFile);
+            let copilotBin = "copilot";
+            try {
+              const { stdout } = await execFileAsync(process.platform === "win32" ? "where.exe" : "which", ["copilot"], { timeout: 2000 });
+              const first = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0];
+              if (first) copilotBin = first;
+            } catch { /* use default */ }
+
+            // Spawn copilot login, capture device code from stdout
+            const child = spawn(copilotBin, ["login"], {
+              env: { ...process.env },
+              shell: process.platform === "win32",
+              windowsHide: true
+            });
+
+            let output = "";
+            let code: string | null = null;
+            let url: string | null = null;
+
+            const codeTimer = setTimeout(() => {
+              if (!code) {
+                child.kill();
+                jsonResponse(response, 408, { ok: false, error: "Timeout waiting for device code" });
+              }
+            }, 15_000);
+
+            child.stdout?.on("data", (d: Buffer) => {
+              output += d.toString();
+              const codeMatch = output.match(/code\s+([A-Z0-9]{4}-[A-Z0-9]{4})/i);
+              const urlMatch = output.match(/https:\/\/github\.com\/login\/device/);
+              if (codeMatch && !code) {
+                code = codeMatch[1];
+                url = urlMatch ? "https://github.com/login/device" : null;
+                clearTimeout(codeTimer);
+                jsonResponse(response, 200, { ok: true, code, url, pid: child.pid });
+              }
+            });
+
+            child.stderr?.on("data", (d: Buffer) => { output += d.toString(); });
+
+            child.on("exit", (exitCode) => {
+              clearTimeout(codeTimer);
+              if (exitCode === 0 && !code) {
+                jsonResponse(response, 200, { ok: true, done: true });
+              } else if (exitCode !== 0 && !code) {
+                jsonResponse(response, 500, { ok: false, error: output.trim() });
+              }
+            });
+          } catch (err: unknown) {
+            jsonResponse(response, 500, { ok: false, error: String(err) });
+          }
+        })();
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/agent/copilot-status" && request.method === "GET") {
+        void (async () => {
+          jsonResponse(response, 200, await getCopilotStatus(agentManagerApiCtx()));
+        })();
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/agent/astrbot-login-test" && request.method === "POST") {
+        void readJsonBody<AstrbotLoginTestRequest>(request)
+          .then((body) => testAstrbotLoginEndpoint(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 200 : 400, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-repair-all" && request.method === "POST") {
+        void (async () => {
+          const scanRepair = repairGatewayConfigsForScan();
+          const ctx = napcatManagerCtx();
+          const results: Array<Record<string, unknown>> = [];
+          for (const runtime of runtimes.values()) {
+            if (!definitionUsesNapcat(runtime.definition)) continue;
+            for (const instance of runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)) {
+              const health = await testNapcatHealthEndpoint(ctx, {
+                httpUrl: instance.httpUrl,
+                webuiUrl: instance.webuiUrl,
+                accessToken: instance.accessToken,
+                webuiToken: instance.webuiToken,
+                gatewayPort: instance.gatewayPort
+              });
+              if (health.fixAvailable) {
+                try {
+                  const fixed = await configureNapcatOneBot(ctx, {
+                    httpUrl: instance.httpUrl,
+                    webuiUrl: instance.webuiUrl,
+                    accessToken: instance.accessToken,
+                    webuiToken: instance.webuiToken,
+                    gatewayPort: instance.gatewayPort
+                  });
+                  results.push({ gatewayId: runtime.definition.id, instanceId: instance.id, ok: true, action: "configure-onebot", ...fixed });
+                } catch (error) {
+                  results.push({ gatewayId: runtime.definition.id, instanceId: instance.id, ok: false, action: "configure-onebot", message: error instanceof Error ? error.message : String(error) });
+                }
+              } else {
+                results.push({ gatewayId: runtime.definition.id, instanceId: instance.id, ok: Boolean(health.ok), action: "health-check", message: health.ok ? "已连通，无需修复。" : String(health.message || "没有可自动修复项。") });
+              }
+            }
+          }
+          jsonResponse(response, 200, {
+            ok: true,
+            repair: scanRepair,
+            results,
+            napcatHealth: await napcatScanHealthPayload(),
+            gatewayPayload: standaloneGatewayPayload()
+          });
+        })().catch((error) => {
+          jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+        });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-health" && request.method === "POST") {
+        void readJsonBody<NapcatHealthRequest>(request)
+          .then((body) => testNapcatHealthEndpoint(napcatManagerCtx(), body))
+          .then((result) => {
+            jsonResponse(response, 200, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-configure-onebot" && request.method === "POST") {
+        void readJsonBody<NapcatHealthRequest>(request)
+          .then((body) => configureNapcatOneBot(napcatManagerCtx(), body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 200 : 400, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-add" && request.method === "POST") {
+        void readJsonBody<NapcatAddRequest>(request)
+          .then((body) => addManagedNapcatInstance(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 200 : 400, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-launch" && request.method === "POST") {
+        void readJsonBody<NapcatLaunchRequest>(request)
+          .then((body) => {
+            jsonResponse(response, 200, launchNapcatInstanceEndpoint(napcatManagerCtx(), body));
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-remove" && request.method === "POST") {
+        void readJsonBody<NapcatRemoveRequest>(request)
+          .then((body) => removeManagedNapcatInstance(body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 200 : 400, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/agent/marvis-open" && request.method === "POST") {
+        void readJsonBody<MarvisOpenRequest>(request)
+          .then((body) => {
+            jsonResponse(response, 200, openMarvis(agentManagerApiCtx(), body));
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/deploy-astrbot-adapter" && request.method === "POST") {
+        void (async () => {
+          try {
+            const result = await deployAstrbotAdapter(agentManagerApiCtx());
+            jsonResponse(response, result.status, result.body);
+          } catch (err: unknown) {
+            jsonResponse(response, 500, { ok: false, error: String(err) });
+          }
+        })();
+        return;
+      }
+
+      if (requestUrl.pathname === "/reload") {
+        loadRuntimes();
+        syncRunningGateways();
+        if (request.headers.accept?.includes("application/json")) {
+          jsonResponse(response, 200, { ok: true, gateways: [...runtimes.values()].map(runtimeStatus) });
+        } else {
+          response.writeHead(303, { location: "/" });
+          response.end();
+        }
+        return;
+      }
+      htmlResponse(requestUrl.pathname, response);
+    } catch (error) {
+      jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  server.listen(managerPort, "127.0.0.1", () => {
+    console.log(`gateway-manager listening on http://127.0.0.1:${managerPort}`);
+    console.log(`roles: ${rolesRoot}`);
+    console.log(`route: ${routeRoot}`);
+  });
+
+  const configWatcher = startConfigWatcher();
+
+  let shuttingDown = false;
+
+  function shutdownManager(reason: string): void {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    console.log(`gateway-manager shutting down: ${reason}`);
+    clearInterval(configWatcher);
+    stopAllGateways();
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 2500).unref();
+  }
+
+  process.on("SIGINT", () => shutdownManager("SIGINT"));
+  process.on("SIGTERM", () => shutdownManager("SIGTERM"));
+}

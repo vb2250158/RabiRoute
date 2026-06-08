@@ -1,42 +1,43 @@
-# RabiRoute Qt Task Panel
+# RabiRoute Qt 计划与记忆面板
 
-Minimal PySide6/Qt MVP for the RabiRoute desktop task panel.
+这是 RabiRoute 桌面面板的最小 PySide6/Qt 版本。
 
-This is an extra desktop convenience entry. Qt/PySide6 is cross-platform, so the floating task panel and most tray code should be reusable on Windows, macOS, and Linux. RabiRoute itself, its manager client, task repository, path resolution, lifecycle rules, and role task reads must stay portable. Platform launchers and packaging are the adapter layer.
+它是额外的桌面便利入口。Qt/PySide6 本身跨平台，所以浮动面板和大部分托盘代码应尽量复用于 Windows、macOS 和 Linux。RabiRoute 本体、manager client、计划仓储、路径解析、生命周期规则和角色数据读取都必须保持可移植；平台启动器和打包脚本才是平台适配层。
 
-## Purpose
+## 用途
 
-This app is a desktop entry for RabiRoute tasks, not a replacement for RibiWebGUI or the external control console.
+这个应用是 RabiRoute 计划和记忆的桌面入口，不替代 RibiWebGUI，也不替代外部控制台。
 
-MVP scope:
+MVP 范围：
 
-- Stay resident in the desktop system tray when the current platform and desktop environment support `QSystemTrayIcon`.
-- Fall back to a normal floating panel when a desktop environment does not expose a system tray.
-- Right-click tray menu opens RibiWebGUI.
-- Right-click tray menu shows or hides the current task floating window.
-- Right-click tray menu refreshes task and manager status.
-- Right-click tray menu opens the role task directory, role directory, current project directory, and runtime state directory.
-- Read manager status from `http://127.0.0.1:8790`.
-- Read Rabi task files from `data/roles/Rabi/tasks` under the project root, or from the role directory reported by manager.
-- Show an empty state when the task directory exists but no official task JSON has been confirmed yet.
-- Open folders through Qt desktop services, which gives Windows Explorer, macOS Finder, or Linux file-manager behavior depending on platform support.
-- Provide a usable floating window with switchable read-only views: current plan/task, short-term plan, long-term plan, short-term memory, long-term memory, tasks, and status/route status.
+- 当前平台和桌面环境支持 `QSystemTrayIcon` 时，常驻系统托盘。
+- 桌面环境不支持系统托盘时，退化为普通浮动面板。
+- 托盘右键菜单可以打开 RibiWebGUI。
+- 托盘右键菜单可以显示或隐藏浮动面板。
+- 托盘右键菜单可以刷新计划、记忆和 manager 状态。
+- 托盘右键菜单可以打开角色计划目录、角色目录、当前项目目录和运行状态目录。
+- 从 `http://127.0.0.1:8790` 读取 manager 状态。
+- 从 `data/roles/<RoleId>/plans` 读取计划文件。
+- 从 `data/roles/<RoleId>/memory` 读取记忆文件。
+- 没有正式计划或记忆 JSON 时，展示清晰的空状态。
+- 通过 Qt desktop services 打开文件夹，让 Windows Explorer、macOS Finder 或 Linux 文件管理器按平台能力处理。
+- 提供可切换的只读视图：当前、计划、近期记忆、沉淀记忆和状态。
 
-Out of scope for this MVP:
+MVP 不包含：
 
-- Replacing `npm run start:manager`, `npm run manager`, or `node dist/manager.js`.
-- Making RabiRoute Windows-only.
-- Treating a bat file as the only startup method.
-- Writing task facts.
-- Adding Windows startup registration or exe packaging.
-- Sending QQ / NapCat messages.
-- Adding an MCP server, local port server, or heavyweight command protocol. Keep only extension points for later.
+- 替代 `npm run start:manager`、`npm run manager` 或 `node dist/manager.js`。
+- 把 RabiRoute 做成 Windows-only。
+- 把 bat 文件当成唯一启动方式。
+- 写入计划或记忆事实。
+- 增加 Windows 开机启动注册或 exe 打包。
+- 发送 QQ / NapCat 消息。
+- 增加 MCP server、本地端口服务或重型命令协议。
 
-## Startup Model
+## 启动模型
 
-RabiRoute itself remains cross-platform.
+RabiRoute 本体保持跨平台。
 
-Windows PowerShell:
+Windows PowerShell：
 
 ```powershell
 npm run start:manager
@@ -44,7 +45,7 @@ npm run manager
 node dist\manager.js
 ```
 
-macOS / Linux:
+macOS / Linux：
 
 ```bash
 npm run start:manager
@@ -52,117 +53,122 @@ npm run manager
 node dist/manager.js
 ```
 
-The Qt panel is a convenience layer. Windows currently has the first launcher; macOS/Linux can add launchers later while reusing the same Qt panel, manager client, task repository, role context repository, path resolver, and lifecycle controller.
+Qt 面板只是便利层。当前先提供 Windows 启动器；macOS/Linux 后续可以新增启动器，同时复用同一套 Qt 面板、manager client、计划仓储、角色上下文仓储、路径解析和生命周期控制器。
 
-## Dependency
+## 依赖
 
-Requires Python 3 and PySide6. Do not install dependencies automatically from this MVP.
+需要 Python 3 和 PySide6。MVP 不自动安装依赖。
 
-Suggested manual install when ready:
+准备使用时可以手动安装：
 
 ```powershell
 py -m pip install -r desktop\tray-task-window\requirements.txt
 ```
 
-If PySide6 is missing, the entry script exits with an install hint instead of a Python traceback.
+如果缺少 PySide6，入口脚本会给出安装提示，而不是直接抛出 Python traceback。
 
-## Run
+## 运行
 
 ```powershell
 py desktop\tray-task-window\main.py
 ```
 
-Standalone mode only connects to an existing manager. Closing the tray in standalone mode does not stop the manager.
+独立模式只连接已经存在的 manager。关闭独立模式的托盘面板不会停止 manager。
 
-The Qt panel is single-instance per project. If another copy is already running for the same project root, a new launch exits with a clear message instead of creating another tray icon/window.
+Qt 面板按项目根目录保持单实例。如果同一项目已经有一个面板在运行，新启动的进程会给出清晰提示并退出，而不是创建第二个托盘图标或窗口。
 
-The Windows launcher can start it as part of the "1+1" lifecycle:
+Windows 启动器可以按“1+1”生命周期启动：
 
 ```powershell
 Start-RabiRoute-Tray.bat
 ```
 
-Direct equivalent command:
+等价命令：
 
 ```powershell
-py desktop\tray-task-window\main.py --manager-url http://127.0.0.1:8790 --owns-manager
+py desktop\tray-task-window\main.py --manager-url http://127.0.0.1:8790
 ```
 
-Use `--owns-manager` only when the same launcher started the manager process. In that mode, tray `Exit RabiRoute` calls the manager's local graceful shutdown endpoint before closing the tray.
+托盘里的 `退出 RabiRoute` 表示退出本地 RabiRoute 桌面运行态。它会先调用 manager 本地优雅关闭接口，manager 再停止 gateway 子进程并关闭 Web 服务，最后托盘入口退出。
 
-## Floating Window Views
+## 浮动窗口视图
 
-The floating window is intentionally plain for the MVP: a status header, view buttons, a read-only text area, and a refresh button.
+浮动窗口在 MVP 阶段保持朴素：状态头、视图按钮、只读文本区和刷新按钮。
 
-Current views:
+当前视图：
 
-- `当前`: official current task JSON when available, plus read-only runtime `todoNotes` as a clearly marked supplement.
-- `短期计划`: official short-term task JSON.
-- `长期计划`: official long-term task JSON.
-- `短期记忆`: recent role JSONL summaries from message, voice, and heartbeat logs.
-- `长期记忆`: `longTermContextNotes` from route state, falling back to role markdown summaries.
-- `任务`: all official task JSON found under known task locations.
-- `状态`: manager reachability plus route status files such as gateway adapters, NapCat, heartbeat, and role voice/audience mode.
+- `当前`：进行中的计划。
+- `计划`：所有未归档计划，并显示已归档计划数量。
+- `近期记忆`：Agent 通过 RabiRoute 接口维护的近期记忆 JSON。
+- `沉淀记忆`：RabiRoute 记忆整理流程写入的沉淀记忆 JSON。
+- `状态`：manager 可达性，以及 gateway adapter、NapCat、heartbeat、角色语音/听众模式等运行状态文件。
 
-No view writes task or memory data.
+所有视图都不写入计划或记忆数据。
 
-## Data Boundary
+## 数据边界
 
-Task facts must live under the active role directory:
+计划事实源位于当前角色目录：
 
 ```text
-data/roles/<RoleId>/tasks
+data/roles/<RoleId>/plans
 ```
 
-The MVP currently understands:
+面板读取：
 
 ```text
-tasks/current.json
-tasks/short-term.json
-tasks/long-term.json
-tasks/current/*.json
-tasks/short-term/*.json
-tasks/long-term/*.json
-tasks/items/current/*.json
-tasks/items/short-term/*.json
-tasks/items/long-term/*.json
+plans/items/active/*.json
+plans/archive/*.json
 ```
 
-It still treats the folder as read-only. It does not create, complete, delete, normalize, or migrate tasks.
+记忆事实源位于：
 
-This tray app must not store task facts in Qt resources, app resources, installer data, or temporary caches. Internally the manager client and task repository use HTTP, JSON, and `pathlib` so the non-tray logic stays portable. Windows-specific packaging, startup registration, or tray behavior differences belong in a later platform layer.
+```text
+data/roles/<RoleId>/memory
+```
 
-## Later Extension Point
+面板读取：
 
-MCP/server/port integration is deliberately paused for this MVP. If RabiRoute later needs to control the floating window externally, add a small cross-platform command adapter around the existing snapshots and view keys instead of coupling UI widgets directly to MCP.
+```text
+memory/recent/*.json
+memory/consolidated/*.json
+```
 
-## Lifecycle Boundary
+这些目录在托盘面板里一律只读。面板不会创建、完成、归档、删除、规范化或迁移计划/记忆文件。
 
-The tray never starts or kills RabiRoute core by itself. A platform launcher is the supervisor:
+托盘应用不能把计划或记忆事实存到 Qt resources、应用资源、安装目录或临时缓存里。内部 manager client 和仓储层使用 HTTP、JSON 和 `pathlib`，让非托盘逻辑保持可移植。Windows 专属的打包、开机启动注册或托盘行为差异属于平台层。
 
-- If the launcher starts manager, it starts tray with `--owns-manager`; tray exit stops that manager.
-- If manager was already running, the launcher starts tray without ownership; tray exit closes only the tray.
-- The manager remains independently runnable on Windows/macOS/Linux via `npm run start:manager`.
-- If duplicate tray processes already exist from older builds, close the extra panel from its tray/window UI. Non-owned tray processes close only themselves.
+## 后续扩展点
 
-The ownership rule is implemented in `rabiroute_tray.lifecycle_controller`, which is platform-neutral. Windows currently supplies the first launcher through `Start-RabiRoute-Tray.bat`. A future macOS/Linux launcher should reuse the same flags and manager HTTP lifecycle protocol instead of forking tray behavior.
+MVP 阶段暂缓 MCP/server/port 集成。如果后续 RabiRoute 需要从外部控制浮动窗口，应围绕已有 snapshot 和 view key 增加一个小型跨平台命令适配层，不要让外部协议直接耦合 UI widget。
 
-## Code Layout
+## 生命周期边界
 
-Portable layers:
+托盘程序是本地 RabiRoute 桌面运行态的退出入口。平台启动器负责启动，manager 负责停止 gateway 子进程：
 
-- `ManagerClient`: HTTP API adapter for manager status and graceful shutdown.
-- `TaskRepository`: read-only task files under `data/roles/<RoleId>/tasks`.
-- `RoleContextRepository`: read-only role memory/status summaries.
-- `LifecycleController`: ownership and shutdown decision rules.
-- `app_paths`: manager/gateway payload to local path resolution.
-- `TaskWindow`: PySide6 view state and rendering.
-- `DesktopAdapter`: Qt desktop services for opening URLs, files, folders, and app icon lookup.
-- `tray_app`: Qt application wiring, tray menu, refresh loop, and floating panel startup.
+- 托盘菜单里的 `退出 RabiRoute` 始终会请求 `POST /manager/shutdown`。
+- manager 收到 shutdown 后停止受管 gateway 子进程、关闭 HTTP server 并退出。
+- 如果 shutdown 请求失败，托盘不会静默退出，避免 Web 服务仍留在后台。
+- manager 在 Windows/macOS/Linux 上仍可通过 `npm run start:manager` 独立运行。
+- 如果旧版本已经残留多个托盘进程，先从当前新版托盘执行 `退出 RabiRoute`，再检查是否仍有旧进程残留。
 
-Platform-specific layers:
+退出规则由 `rabiroute_tray.lifecycle_controller` 实现，保持平台无关。当前 Windows 通过 `Start-RabiRoute-Tray.bat` 提供第一版启动器；未来 macOS/Linux 启动器应复用同样的 manager HTTP 生命周期协议，不另起一套托盘行为。
 
-- Windows `.bat` / PowerShell launcher.
-- Future macOS `.command` / LaunchAgent / app bundle launcher.
-- Future Linux `.desktop` / systemd user unit / shell launcher.
-- Packaging, autostart registration, and OS-specific tray availability handling.
+## 代码布局
+
+可移植层：
+
+- `ManagerClient`：manager 状态和优雅关闭的 HTTP API 适配。
+- `PlanRepository`：只读读取 `data/roles/<RoleId>/plans` 下的计划文件。
+- `RoleContextRepository`：只读读取角色记忆和状态摘要。
+- `LifecycleController`：本地 RabiRoute 关闭决策规则。
+- `app_paths`：把 manager/gateway payload 解析为本地路径。
+- `TaskWindow`：PySide6 视图状态和渲染。
+- `DesktopAdapter`：通过 Qt desktop services 打开 URL、文件、文件夹并查找应用图标。
+- `tray_app`：Qt 应用装配、托盘菜单、刷新循环和浮动面板启动。
+
+平台专属层：
+
+- Windows `.bat` / PowerShell 启动器。
+- 未来 macOS `.command` / LaunchAgent / app bundle 启动器。
+- 未来 Linux `.desktop` / systemd user unit / shell 启动器。
+- 打包、开机启动注册，以及 OS 专属托盘可用性处理。

@@ -742,12 +742,86 @@ body::before {
   gap: 12px;
 }
 
+.napcat-manager-panel {
+  align-items: start;
+}
+
+.napcat-setup-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid rgba(17, 32, 51, .12);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, .86);
+}
+
+.napcat-setup-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.napcat-setup-main strong,
+.napcat-compat-title strong {
+  display: block;
+  color: #0c2a4a;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.napcat-setup-main span,
+.napcat-compat-title span {
+  display: block;
+  color: #667586;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.napcat-setup-stats {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.napcat-setup-stats > div {
+  min-width: 72px;
+  border: 1px solid rgba(17, 32, 51, .1);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: rgba(246, 248, 251, .78);
+  text-align: center;
+}
+
+.napcat-setup-stats b {
+  display: block;
+  color: #0c2a4a;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.napcat-setup-stats span {
+  color: #667586;
+  font-size: 11px;
+  font-weight: 750;
+}
+
 .napcat-account-card {
   min-width: 0;
   border: 1px solid rgba(108, 92, 231, .28);
   border-radius: 8px;
   padding: 12px;
-  background: linear-gradient(135deg, rgba(246, 243, 255, .94), rgba(255, 255, 255, .88));
+  background: rgba(255, 255, 255, .9);
+}
+
+.napcat-account-card.disabled {
+  opacity: .72;
+  background: rgba(246, 248, 251, .82);
 }
 
 .napcat-account-head {
@@ -758,11 +832,93 @@ body::before {
   margin-bottom: 8px;
 }
 
+.napcat-card-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .napcat-account-title {
   color: #35236f;
   font-size: 18px;
   font-weight: 900;
   overflow-wrap: anywhere;
+}
+
+.napcat-card-summary {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(17, 32, 51, .1);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: rgba(246, 248, 251, .7);
+}
+
+.napcat-card-summary > div {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.napcat-card-summary span {
+  color: #667586;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.napcat-card-summary b {
+  color: #0c2a4a;
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.napcat-auto-summary {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(17, 32, 51, .1);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, .72);
+}
+
+.napcat-auto-summary > div {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+}
+
+.napcat-auto-summary span {
+  color: #667586;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.napcat-auto-summary b {
+  color: #0c2a4a;
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.napcat-detail-panel .v-expansion-panel-title {
+  min-height: 38px !important;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.health-diagnostics {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #31515d;
+  font-size: 0.86rem;
+  line-height: 1.6;
 }
 
 .napcat-add-card {

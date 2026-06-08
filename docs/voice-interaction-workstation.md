@@ -1,4 +1,4 @@
-# Voice Interaction Workstation
+# 语音交互工作站
 
 这份说明用于把 RabiRoute、FenneNote 转录、角色对话和 OumuQ TTS 连接成一套可复用的语音交互工作站。它只描述公开安全的接口和工作流，不包含私聊日志、真实 QQ 号、token、cookie、个人路径、webhook 密钥或私有角色设定。
 
@@ -7,13 +7,13 @@
 RabiRoute 在这条链路里只做消息和事件路由：
 
 ```text
-Microphone / voice message
-  -> FenneNote transcript webhook
-  -> RabiRoute event normalize / route policy
-  -> Codex or another Agent runtime
-  -> role dialogue result
-  -> action decision
-  -> Codex visible reply, QQ/NapCat reply, or OumuQ TTS playback
+麦克风 / 语音消息
+  -> FenneNote 转写 webhook
+  -> RabiRoute 事件规范化 / 路由策略
+  -> Codex 或其他 Agent runtime
+  -> 角色对话结果
+  -> 动作决策
+  -> Codex 可见回复、QQ/NapCat 回复或 OumuQ TTS 播放
 ```
 
 FenneNote 负责把语音变成文本；Codex 或下游 Agent 负责理解上下文、扮演角色和生成回复；OumuQ 负责把已确认的回复文本变成语音。RabiRoute 不替代这些系统，只负责接收事件、记录可审计上下文、选择处理端、套用提示模板、维护会话投递方式，并把外部动作放进安全门。
@@ -62,24 +62,24 @@ FenneNote 或其他转录端应向 RabiRoute 提交结构化 webhook，而不是
 语音转录建议使用 `voice_transcript` route kind，并把转录文本、来源、目标回复面和安全授权显式写入模板。模板可以使用真实换行，避免字面量 `\n`：
 
 ```text
-[RabiRoute voice transcript]
-Event time: {time}
-Route kind: {routeKind}
-Reply surface: {replySurface}
-External send allowed: {allowExternalSend}
-TTS allowed: {allowTts}
-Source channel: {sourceChannel}
+[RabiRoute 语音转写]
+事件时间：{time}
+路由类型：{routeKind}
+回复目标面：{replySurface}
+允许外发：{allowExternalSend}
+允许 TTS：{allowTts}
+来源通道：{sourceChannel}
 
-[Transcript]
+[转写内容]
 {message}
 
-[Instruction]
-Read the reply surface before acting.
-If replySurface is codex, answer in the current Codex conversation.
-If replySurface is qq, prepare a draft QQ/NapCat reply unless explicit approval is present.
-If replySurface is tts, produce role-faithful visible text that can be sent to OumuQ.
-If the transcript itself clearly asks to send to QQ/NapCat, treat that as an external-send request and follow the existing send or draft-and-approval flow.
-Keep the role voice in visible text and in speech text.
+[行动说明]
+行动前先读取回复目标面。
+如果 replySurface 是 codex，请在当前 Codex 对话中回复。
+如果 replySurface 是 qq，除非已有明确授权，否则只准备 QQ/NapCat 回复草稿。
+如果 replySurface 是 tts，请生成符合角色语气、可交给 OumuQ 的可见文本。
+如果转写内容本身明确要求发送到 QQ/NapCat，把它视为外发请求，并遵循现有发送流程或草稿审批流程。
+可见文本和朗读文本都要保持角色语气。
 ```
 
 下游 Agent 需要拿到的不是“请回复一句话”，而是完整的决策材料：转录文本、事件来源、目标回复面、是否允许外发、是否允许 TTS、角色包路径和最近上下文日志。

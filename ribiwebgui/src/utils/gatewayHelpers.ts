@@ -1,4 +1,13 @@
-import type { AgentAdapterType, GatewayDefinition, MessageAdapterType, NotificationRule, RuntimeStatus } from "../types";
+import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, NotificationRule, RuntimeStatus } from "../types";
+import {
+  gatewayAdapterTypes as sharedGatewayAdapterTypes,
+  messageAdapterPolicyFor as sharedMessageAdapterPolicyFor,
+  normalizeMessageAdapterPolicies,
+  normalizeRuleDefinitions,
+  normalizeTemplateText as sharedNormalizeTemplateText,
+  sanitizeConfigName as sharedSanitizeConfigName,
+  setGatewayAdapters as sharedSetGatewayAdapters
+} from "@shared/gatewayConfigModel";
 
 export const routeKindLabels: Record<string, string> = {
   direct_at: "群聊-直接 @",
@@ -70,22 +79,12 @@ export const templateVars = [
 ];
 
 export function normalizeTemplateText(value: unknown): string {
-  return String(value || "")
-    .replace(/\\r\\n/g, "\n")
-    .replace(/\\n/g, "\n");
+  return sharedNormalizeTemplateText(value);
 }
 
 export function groupTemplate(title: string): string {
-  return [
-    `QQ 消息更新提醒：${title}。`,
-    "时间：{time}",
-    "目标：{messageTarget}",
-    "群号：{groupId}",
-    "发送者：{sender}",
-    "消息：{message}",
-    "",
-    "请在需要时读取 {groupLogPath} 查看上下文。"
-  ].join("\n");
+  void title;
+  return "";
 }
 
 export function defaultGroupAtTemplate(): string {
@@ -97,30 +96,11 @@ export function defaultGroupDirectReplyTemplate(): string {
 }
 
 export function defaultGroupIndirectReplyTemplate(): string {
-  return [
-    "QQ 消息更新提醒：群聊里有人回复了一条提到机器人的消息。",
-    "时间：{time}",
-    "目标：{messageTarget}",
-    "群号：{groupId}",
-    "发送者：{sender}",
-    "被回复消息：{repliedMessage}",
-    "消息：{message}",
-    "",
-    "请在需要时读取 {groupLogPath} 查看上下文。"
-  ].join("\n");
+  return "";
 }
 
 export function defaultPrivateTemplate(): string {
-  return [
-    "QQ 消息更新提醒：收到一条私聊消息。",
-    "时间：{time}",
-    "目标：{messageTarget}",
-    "发送者：{sender}",
-    "QQ：{userId}",
-    "消息：{message}",
-    "",
-    "请在需要时读取 {privateLogPath} 查看上下文。"
-  ].join("\n");
+  return "";
 }
 
 export function defaultHeartbeatMessage(): string {
@@ -128,39 +108,19 @@ export function defaultHeartbeatMessage(): string {
 }
 
 export function defaultHeartbeatTemplate(): string {
-  return [
-    "定时触发提醒：到了心跳路由时间。",
-    "时间：{time}",
-    "来源：{messageTarget}",
-    "间隔：{heartbeatIntervalSeconds} 秒",
-    "消息：{message}",
-    "",
-    "请读取 {dataDir} 下的消息日志和角色相关上下文，按当前人格判断是否需要回应、记录、追问或保持安静。"
-  ].join("\n");
+  return "";
 }
 
 export function defaultVoiceTranscriptTemplate(): string {
-  return [
-    "语音转写更新提醒：FenneNote 捕获到一段来自电脑旁用户的语音输入。",
-    "时间：{time}",
-    "来源：{messageTarget}",
-    "转写：{message}",
-    "时长：{voiceDurationSeconds} 秒",
-    "峰值：{voicePeak}",
-    "",
-    "默认在当前 Codex 会话里承接语音输入，并在需要时生成适合 TTS 的短回复。若转写文本明确要求发送到 QQ/NapCat，且目标、内容和授权足够清楚，请按现有外发流程处理；缺少信息时只追问最小缺口，不要因为来源是 voice_transcript 就一律拒绝发送。需要上下文时再读取 {voiceTranscriptLogPath}。"
-  ].join("\n");
+  return "";
 }
 
 export function normalizeRule(rule: Partial<NotificationRule> | undefined, index: number): NotificationRule {
+  const [normalized] = normalizeRuleDefinitions([rule ?? {}]) ?? [];
   return {
-    id: rule?.id || `rule-${index + 1}`,
-    name: rule?.name || rule?.id || `规则 ${index + 1}`,
-    enabled: rule?.enabled !== false,
-    routeKinds: Array.isArray(rule?.routeKinds) ? rule.routeKinds : [],
-    targetGroupId: rule?.targetGroupId || "",
-    regex: rule?.regex || "",
-    template: normalizeTemplateText(rule?.template || defaultGroupAtTemplate())
+    ...normalized,
+    id: rule?.id || normalized.id || `rule-${index + 1}`,
+    name: rule?.name || rule?.id || `规则 ${index + 1}`
   };
 }
 
@@ -169,25 +129,25 @@ export function cloneRules(rules: NotificationRule[] | undefined): NotificationR
 }
 
 export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageAdapterType[] {
-  const adapters = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
-    ? gateway.messageAdapters
-    : [gateway.messageAdapterType || "napcat"];
-  const disabled = new Set(gateway.messageAdaptersDisabled ?? []);
-  const next = [...new Set(adapters)]
-    .filter((type): type is MessageAdapterType => Boolean(type) && type !== "disabled" && !disabled.has(type));
-  return next.length > 0 ? next : [];
+  return sharedGatewayAdapterTypes(gateway);
 }
 
 export function isAdapterDisabled(gateway: GatewayDefinition, type: MessageAdapterType): boolean {
-  return gateway.messageAdaptersDisabled?.includes(type) === true;
+  if (type === "disabled") return true;
+  return gateway.messageAdaptersDisabled?.includes(type) === true || sharedMessageAdapterPolicyFor(gateway, type).inputEnabled === false;
 }
 
 export function toggleAdapterDisabled(gateway: GatewayDefinition, type: MessageAdapterType): void {
+  if (type === "disabled") return;
   const disabled = gateway.messageAdaptersDisabled ?? [];
-  if (disabled.includes(type)) {
+  gateway.messageAdapterPolicies = gateway.messageAdapterPolicies ?? {};
+  const current = sharedMessageAdapterPolicyFor(gateway, type);
+  if (disabled.includes(type) || current.inputEnabled === false) {
     gateway.messageAdaptersDisabled = disabled.filter(t => t !== type);
+    gateway.messageAdapterPolicies[type] = { ...current, inputEnabled: true };
   } else {
     gateway.messageAdaptersDisabled = [...disabled, type];
+    gateway.messageAdapterPolicies[type] = { ...current, inputEnabled: false };
   }
 }
 
@@ -196,12 +156,25 @@ export function isMessageInputsDisabled(gateway: GatewayDefinition): boolean {
 }
 
 export function setGatewayAdapters(gateway: GatewayDefinition, adapters: MessageAdapterType[]): void {
-  const next = [...new Set(adapters.filter(Boolean))].filter(type => type !== "disabled");
-  gateway.messageAdapters = next.length > 0 ? next : ["napcat"];
-  gateway.messageAdapterType = gateway.messageAdapters[0];
-  // clean up disabled list for removed adapters
-  if (gateway.messageAdaptersDisabled) {
-    gateway.messageAdaptersDisabled = gateway.messageAdaptersDisabled.filter(t => gateway.messageAdapters!.includes(t));
+  sharedSetGatewayAdapters(gateway, adapters);
+}
+
+export function messageAdapterPolicyFor(gateway: GatewayDefinition, type: MessageAdapterType): Required<MessageAdapterPolicy> {
+  return sharedMessageAdapterPolicyFor(gateway, type);
+}
+
+export function setMessageAdapterPolicy(gateway: GatewayDefinition, type: MessageAdapterType, patch: Partial<MessageAdapterPolicy>): void {
+  if (type === "disabled") return;
+  gateway.messageAdapterPolicies = gateway.messageAdapterPolicies ?? {};
+  gateway.messageAdapterPolicies[type] = {
+    ...sharedMessageAdapterPolicyFor(gateway, type),
+    ...patch
+  };
+  if (patch.inputEnabled != null) {
+    const disabled = gateway.messageAdaptersDisabled ?? [];
+    gateway.messageAdaptersDisabled = patch.inputEnabled
+      ? disabled.filter(item => item !== type)
+      : [...new Set([...disabled, type])];
   }
 }
 
@@ -237,6 +210,10 @@ export function adapterDefaultWebhookPath(type: string): string {
 }
 
 export function applyAdapterDefaults(gateway: GatewayDefinition): void {
+  const configuredAdapters = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
+    ? gateway.messageAdapters
+    : [gateway.messageAdapterType || "napcat"];
+  gateway.messageAdapterPolicies = normalizeMessageAdapterPolicies(gateway.messageAdapterPolicies, configuredAdapters, gateway.messageAdaptersDisabled);
   const adapters = gatewayAdapterTypes(gateway);
   if (adapters.includes("napcat")) {
     gateway.gatewayPort = Number(gateway.gatewayPort || 8790);
@@ -250,7 +227,8 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
         gatewayPort: gateway.gatewayPort,
         httpUrl: gateway.napcatHttpUrl,
         webuiUrl: gateway.napcatWebuiUrl,
-        accessToken: gateway.napcatAccessToken || ""
+        accessToken: gateway.napcatAccessToken || "",
+        webuiToken: gateway.napcatWebuiToken || ""
       }];
     }
   }
@@ -259,15 +237,15 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     gateway.heartbeatMessage = gateway.heartbeatMessage || defaultHeartbeatMessage();
   }
   if (adapters.includes("webhook")) {
-    gateway.webhookPort = Number(gateway.webhookPort || gateway.gatewayPort || 8790);
+    gateway.webhookPort = Number(gateway.webhookPort || Number(gateway.gatewayPort || 8790) + 1);
     gateway.webhookPath = gateway.webhookPath || adapterDefaultWebhookPath("webhook");
   }
   if (adapters.includes("fennenote")) {
-    gateway.fenneNoteWebhookPort = Number(gateway.fenneNoteWebhookPort || gateway.webhookPort || gateway.gatewayPort || 8790);
+    gateway.fenneNoteWebhookPort = Number(gateway.fenneNoteWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     gateway.fenneNoteWebhookPath = gateway.fenneNoteWebhookPath || adapterDefaultWebhookPath("fennenote");
   }
   if (adapters.includes("xiaoai")) {
-    gateway.xiaoaiWebhookPort = Number(gateway.xiaoaiWebhookPort || gateway.webhookPort || gateway.gatewayPort || 8790);
+    gateway.xiaoaiWebhookPort = Number(gateway.xiaoaiWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     gateway.xiaoaiWebhookPath = gateway.xiaoaiWebhookPath || adapterDefaultWebhookPath("xiaoai");
   }
 }
@@ -279,11 +257,7 @@ export function configNameFor(gateway: GatewayDefinition): string {
 }
 
 export function sanitizeConfigName(value: unknown): string {
-  return String(value || "")
-    .trim()
-    .replace(/[^\p{L}\p{N}_-]+/gu, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "");
+  return sharedSanitizeConfigName(value);
 }
 
 export function adapterConfigPathFor(gateway: GatewayDefinition): string {
@@ -408,12 +382,15 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
       : [runtime.messageAdapterType || adapterState.type || "napcat"];
   const adapterPendingRestart = expectedRuntimeAdapters.join(",") !== runtimeAdapterTypes.join(",");
   const reasons: string[] = [];
-  if (!runtime.running) reasons.push("Gateway 进程未运行。");
-  if (adapterPendingRestart) {
-    reasons.push(`配置已变更但尚未重启：当前运行 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${expectedRuntimeAdapters.map(adapterLabel).join(" + ")}。`);
+  if (gateway.enabled === false || runtime.enabled === false) {
+    return reasons;
   }
   if (isMessageInputsDisabled(gateway)) {
     return reasons;
+  }
+  if (!runtime.running) reasons.push("RabiRoute 监听进程未运行。一个监听进程可以承载多个 NapCat/QQ 实例；请启动当前路由。");
+  if (adapterPendingRestart) {
+    reasons.push(`配置已变更但尚未重启：当前运行 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${expectedRuntimeAdapters.map(adapterLabel).join(" + ")}。`);
   }
   if (adapterTypes.includes("napcat")) {
     const wsUrl = `ws://127.0.0.1:${gateway.gatewayPort || runtime.gatewayPort || "-"}`;
@@ -436,8 +413,11 @@ export function adapterErrorsFor(type: MessageAdapterType, gateway: GatewayDefin
   const napcatState = gatewayStatus.napcat || {};
   const heartbeatState = gatewayStatus.heartbeat || {};
   const reasons: string[] = [];
+  if (gateway.enabled === false || runtime.enabled === false || isMessageInputsDisabled(gateway)) {
+    return [];
+  }
   if (!runtime.running) {
-    reasons.push("Gateway 进程未运行。");
+    reasons.push("RabiRoute 监听进程未运行。一个监听进程可以承载多个 NapCat/QQ 实例；请启动当前路由。");
     return reasons;
   }
   if (type === "napcat") {
@@ -492,11 +472,22 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     enabled: true,
     messageAdapterType: "napcat",
     messageAdapters: ["napcat"],
+    messageAdapterPolicies: {
+      napcat: {
+        inputEnabled: true,
+        outputEnabled: true,
+        outputMode: "replyOnly",
+        supportedOutputs: ["text", "image", "voice", "file"],
+        allowedGroups: [],
+        allowedUsers: []
+      }
+    },
     gatewayPort: 8789 + next,
     napcatHttpUrl: "http://127.0.0.1:3000",
     heartbeatIntervalSeconds: 900,
     heartbeatMessage: defaultHeartbeatMessage(),
     routeVariables: {},
+    agentModel: "",
     codexThreadName: `路由配置 ${next}`,
     codexCwd: "",
     agentRoleId: roleId,

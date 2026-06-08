@@ -1,6 +1,6 @@
 ---
 name: create-rabiroute-agent-adapter
-description: 新增或改造 RabiRoute Agent 端适配器时使用。覆盖后端 agent adapter、Manager 扫描/安装/登录/健康检查 API、RibiWebGUI 自动化配置、项目目录筛选会话、消息投递协议、运行状态诊断和验证流程；适用于 Codex Desktop、Codex App、Copilot CLI、Marvis、AstrBot、Hermes、脚本、Webhook 或其他 Agent 处理端。
+description: 新增或改造 RabiRoute Agent 端适配器时使用。覆盖后端 agent adapter、独立 Agent Manager API 模块、扫描/安装/登录/健康检查 API、RibiWebGUI 自动化配置、项目目录筛选会话、消息投递协议、运行状态诊断和验证流程；适用于 Codex Desktop、Codex App、Copilot CLI、Marvis、AstrBot、Hermes、脚本、Webhook 或其他 Agent 处理端。
 ---
 
 # 创建 RabiRoute Agent 端适配器
@@ -141,13 +141,30 @@ RabiRoute Agent 端适配烟测消息 #2。请在同一个会话里回复：Rabi
 - `src/agentAdapters/types.ts`：扩展 `AgentAdapterType`、`parseAgentAdapterType`。
 - `src/agentAdapters/agentAdapter.ts`：把 type 映射到 `deliver(message)`。
 - `src/agentAdapters/<name>Adapter.ts`：优先新增接口化 adapter；旧式模块只作为兼容。
-- `src/manager.ts`：扩展 `GatewayDefinition` 字段、env 注入、运行态 state 读取、扫描/状态/安装/登录/部署 API。
+- `src/agentAdapters/managerApi.ts` 或同目录按端拆分的 manager-facing 模块：实现扫描、状态、安装、登录、部署、打开外部应用等 Agent 专属逻辑。
+- `src/manager.ts`：只扩展通用 `GatewayDefinition` 字段、env 注入、运行态 state 读取和 HTTP 路由接线；不要把 Agent 专属扫描/安装/登录/部署实现写进 manager。
 - `ribiwebgui/src/types.ts`：同步 gateway 字段和扫描结果类型。
 - `ribiwebgui/src/pages/RouteConfigPage.vue`：添加 Agent 卡片、参数面板、自动扫描、状态和动作按钮。
 - `ribiwebgui/src/components/QuickSetupDialog.vue`：如果该 Agent 适合首次配置，也同步快速配置。
 - `README.md`、`docs/configuration.md` 或示例：只补公开、安全、可复制的说明。
 
 如果新增的是消息入口，不要用本 skill；消息入口走 `src/adapters/`。
+
+## Manager 模块化边界
+
+`src/manager.ts` 是 Agent 端编排层，不是某个 Agent 的实现层。新增或改造 Agent 端时，遵守这个边界：
+
+- Agent 专属逻辑放在 `src/agentAdapters/`：安装/登录检测、Dashboard/API 探测、项目/会话扫描、插件部署、打开外部 app、scan payload 组装。
+- `manager.ts` 只构造上下文 `ctx` 并接 HTTP API：`rootDir`、runtime 读取器、`sessionIndexPath`、通用 HTTP 检查、通用安装路径 helper。
+- 通用 runtime 管理、配置 normalize、env 注入和状态文件读取可以暂留 `manager.ts`；不要为了新增一个 Agent 把专属逻辑塞进 manager。
+- 新模块不能 import `src/manager.ts`，也不能依赖 `ribiwebgui`、浏览器 `window/document` 或前端状态。
+- `/api/scan/agents` 应调用 `scanAgentAdapters(ctx)` 或各 Agent scan 函数组合；旧平铺字段只作为兼容输出。
+
+当前参考模块：
+
+- `src/agentAdapters/managerApi.ts`：Codex/Copilot/Marvis/AstrBot 的 manager-facing scan、status、login、deploy、open 动作。
+
+如果某个 Agent 后续变复杂，优先新增 `src/agentAdapters/<type>ManagerApi.ts` 并由 `managerApi.ts` 聚合，不要继续扩大 `src/manager.ts`。
 
 ## UX 合同
 
@@ -189,6 +206,19 @@ POST /api/agents/<type>/install
 POST /api/agents/<type>/login
 POST /api/agents/<type>/deploy-plugin
 ```
+
+实现时优先让 `src/agentAdapters/managerApi.ts` 或 `src/agentAdapters/<type>ManagerApi.ts` 暴露这些函数，再由 `manager.ts` 接线：
+
+```ts
+scanAgentAdapters(ctx)
+scan<Type>Agent(ctx)
+test<Type>Login(ctx, request)
+get<Type>Status(ctx, request)
+deploy<Type>Plugin(ctx, request)
+open<Type>(ctx, request)
+```
+
+返回 JSON shape 必须和 WebGUI 已消费的结构兼容。迁移旧逻辑时先接新模块再删除 manager 内旧实现，并运行 `npm run build`。
 
 扫描结果至少表达这些信息：
 

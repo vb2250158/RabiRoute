@@ -1,6 +1,30 @@
-export type MessageAdapterType = "napcat" | "heartbeat" | "fennenote" | "xiaoai" | "webhook" | "disabled";
-export type AgentAdapterType = "codexDesktop" | "codexApp" | "copilotCli" | "marvis" | "astrbot";
-export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "none";
+import type {
+  AgentAdapterType,
+  GatewayDefinition,
+  MessageAdapterOutputMode,
+  MessageAdapterPolicies,
+  MessageAdapterPolicy,
+  MessageAdapterType,
+  MessagePayloadKind,
+  NapCatInstanceDefinition,
+  NotificationRuleDefinition,
+  PipelineDefinition
+} from "@shared/gatewayConfigModel";
+
+export type {
+  AgentAdapterType,
+  GatewayDefinition,
+  MessageAdapterOutputMode,
+  MessageAdapterPolicies,
+  MessageAdapterPolicy,
+  MessageAdapterType,
+  MessagePayloadKind,
+  PipelineDefinition
+} from "@shared/gatewayConfigModel";
+
+export type NotificationRule = NotificationRuleDefinition;
+export type NapCatInstance = NapCatInstanceDefinition;
+export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -66,95 +90,6 @@ export type MessageAdapterScanResult = {
   endpoints?: AdapterEndpoint[];
   requirements?: AdapterRequirement[];
   warnings?: string[];
-};
-
-export type PipelineDefinition = {
-  id?: string;
-  name?: string;
-  inputAdapter?: MessageAdapterType;
-  outputAdapter?: OutputAdapterType;
-  outputPipeline?: string;
-  promptOutputMode?: PromptOutputMode;
-  ttsProvider?: string;
-  ttsVoice?: string;
-  ttsWorkerUrl?: string;
-  ttsPlay?: boolean;
-  preventFeedbackLoop?: boolean;
-  replyToSource?: boolean;
-};
-
-export type NotificationRule = {
-  id: string;
-  name?: string;
-  enabled?: boolean;
-  routeKinds?: string[];
-  targetGroupId?: string;
-  regex?: string;
-  template: string;
-};
-
-export type NapCatInstance = {
-  id: string;
-  name?: string;
-  enabled?: boolean;
-  gatewayPort: number;
-  httpUrl: string;
-  webuiUrl?: string;
-  accessToken?: string;
-  launchCommand?: string;
-  workingDir?: string;
-  botUserId?: string | number;
-  botNickname?: string;
-  connected?: boolean;
-  remoteAddress?: string;
-  lastConnectedAt?: string;
-  lastDisconnectedAt?: string;
-  loginInfoError?: string;
-};
-
-export type GatewayDefinition = {
-  id: string;
-  name?: string;
-  enabled?: boolean;
-  messageAdapterType?: MessageAdapterType;
-  messageAdapters?: MessageAdapterType[];
-  messageAdaptersDisabled?: MessageAdapterType[];
-  messageInputsDisabled?: boolean;
-  gatewayPort: number;
-  webhookPort?: number;
-  webhookPath?: string;
-  fenneNoteWebhookPort?: number;
-  fenneNoteWebhookPath?: string;
-  xiaoaiWebhookPort?: number;
-  xiaoaiWebhookPath?: string;
-  heartbeatIntervalSeconds?: number;
-  heartbeatMessage?: string;
-  napcatHttpUrl?: string;
-  napcatWebuiUrl?: string;
-  napcatAccessToken?: string;
-  napcatInstances?: NapCatInstance[];
-  targetGroupId?: string;
-  pipelinePreset?: string;
-  pipeline?: PipelineDefinition;
-  routeVariables?: Record<string, string>;
-  routeName?: string;
-  codexThreadName?: string;
-  codexCwd?: string;
-  copilotCwd?: string;
-  copilotCliBin?: string;
-  marvisAppId?: string;
-  astrbotUrl?: string;
-  astrbotUsername?: string;
-  astrbotPassword?: string;
-  astrbotProjectId?: string;
-  astrbotSessionId?: string;
-  configName?: string;
-  agentRoleId?: string;
-  agentRoleFile?: string;
-  agentAdapters?: AgentAdapterType[];
-  notificationRules?: NotificationRule[];
-  roleNotificationRules?: Record<string, NotificationRule[]>;
-  roleRouteNames?: Record<string, string>;
 };
 
 export type RoleOption = {

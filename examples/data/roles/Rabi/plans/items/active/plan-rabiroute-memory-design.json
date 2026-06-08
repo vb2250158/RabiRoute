@@ -1,0 +1,20 @@
+{
+  "id": "plan-rabiroute-memory-design",
+  "title": "完善 RabiRoute 计划和记忆机制",
+  "status": "进行中",
+  "priority": "medium",
+  "kind": "documentation",
+  "currentStep": "确认上下文注入和 Agent 接口文档",
+  "nextAction": "根据确认后的机制实现计划和记忆接口",
+  "project": {
+    "name": "RabiRoute",
+    "path": "./"
+  },
+  "source": {
+    "kind": "example",
+    "summary": "公开示例计划"
+  },
+  "createdAt": "2026-06-08T00:00:00+08:00",
+  "updatedAt": "2026-06-08T00:00:00+08:00",
+  "keywords": ["计划", "记忆", "上下文", "接口"]
+}

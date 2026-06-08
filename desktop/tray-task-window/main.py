@@ -51,27 +51,24 @@ def _start_manager(project_root: Path, manager_url: str) -> "subprocess.Popen[by
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="RabiRoute Qt 任务面板")
+    parser = argparse.ArgumentParser(description="RabiRoute Qt 计划与记忆面板")
     parser.add_argument("--manager-url", default="http://127.0.0.1:8790")
-    parser.add_argument("--owns-manager", action="store_true", help="退出面板时同时关闭本次托管的 manager。")
+    parser.add_argument("--owns-manager", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     project_root = _resolve_project_root()
 
-    # When packaged as an exe, auto-start the manager if it's not running.
-    owns_manager = args.owns_manager
+    # Frozen desktop entry auto-starts manager if it is not running.
     proc: "subprocess.Popen[bytes] | None" = None
     if getattr(sys, "frozen", False) and not _manager_alive(args.manager_url):
         proc = _start_manager(project_root, args.manager_url)
-        if proc is not None:
-            owns_manager = True
 
     try:
         from rabiroute_tray.tray_app import run
     except ModuleNotFoundError as error:
         if error.name == "PySide6":
             print(
-                "RabiRoute Qt 任务面板需要 PySide6。\n"
+                "RabiRoute Qt 计划与记忆面板需要 PySide6。\n"
                 "请手动安装：\n"
                 "  py -m pip install -r desktop\\tray-task-window\\requirements.txt\n"
                 "\n"
@@ -81,7 +78,7 @@ def main() -> int:
             )
             return 1
         raise
-    return run(project_root, manager_url=args.manager_url, owns_manager=owns_manager, manager_proc=proc if owns_manager else None)
+    return run(project_root, manager_url=args.manager_url, manager_proc=proc)
 
 
 if __name__ == "__main__":

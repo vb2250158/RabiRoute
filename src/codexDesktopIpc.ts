@@ -443,6 +443,7 @@ async function request(method: string, params: unknown, version = 1, allowBefore
 
 async function startNotificationTurn(threadId: string, message: string): Promise<void> {
   const text = buildInputText(message);
+  const modelOverride = config.agentModel ?? null;
   const response = await request("thread-follower-start-turn", {
     conversationId: threadId,
     turnStartParams: {
@@ -466,7 +467,7 @@ async function startNotificationTurn(threadId: string, message: string): Promise
       collaborationMode: {
         mode: "default",
         settings: {
-          model: "gpt-5.5",
+          model: modelOverride,
           reasoning_effort: "high",
           developer_instructions: null
         }

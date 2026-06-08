@@ -1,6 +1,6 @@
 ---
 name: create-rabiroute-message-adapter
-description: 新增或改造 RabiRoute 消息端适配器时使用。覆盖平台接入、多个实例/账号、启动后台、WebSocket/HTTP/Webhook/定时触发、事件规范化、消息历史、路由触发、安全外发边界、Manager 健康检查 API、RibiWebGUI 自动化配置和验证流程；适用于 NapCat/OneBot、小米音箱/小爱、FenneNote/芬妮笔记、Heartbeat、QQ、微信、飞书、Discord、Slack、Telegram、AstrBot 平台入口、通用 Webhook 或其他消息来源。
+description: 新增或改造 RabiRoute 消息端适配器时使用。覆盖平台接入、多个实例/账号、启动后台、WebSocket/HTTP/Webhook/定时触发、事件规范化、消息历史、路由触发、安全外发边界、独立消息端 Manager 模块、RibiWebGUI 自动化配置和验证流程；适用于 NapCat/OneBot、小米音箱/小爱、FenneNote/芬妮笔记、Heartbeat、QQ、微信、飞书、Discord、Slack、Telegram、AstrBot 平台入口、通用 Webhook 或其他消息来源。
 ---
 
 # 创建 RabiRoute 消息端适配器
@@ -123,7 +123,8 @@ type MessageAdapterCapability = {
 - `src/adapters/<name>Adapter.ts`：实现 `MessageAdapter.start()`，负责接收事件、规范化、落盘、路由。
 - `src/index.ts`：把 type 映射到 adapter，并支持多 adapter 并存。
 - `src/config.ts`：解析环境变量和结构化配置；多实例用 JSON 配置。
-- `src/manager.ts`：扩展 `GatewayDefinition` 字段、normalize、env 注入、运行态读取、健康检查/启动 API。
+- `src/messageEndpoints/<name>Manager.ts` 或同目录聚合模块：实现该消息端的扫描、健康检查、启动、打开管理页、实例发现和修复建议。
+- `src/manager.ts`：只扩展通用 `GatewayDefinition` 字段、normalize、env 注入和 HTTP 路由接线；不要把消息端专属扫描/启动/健康检查实现写进 manager。
 - `ribiwebgui/src/types.ts`：同步 gateway 字段、实例类型和状态类型。
 - `ribiwebgui/src/utils/gatewayHelpers.ts`：默认值、校验、错误解释。
 - `ribiwebgui/src/pages/RouteConfigPage.vue`：消息端卡片、参数面板、实例列表、检查/启动/打开/复制按钮。
@@ -132,6 +133,23 @@ type MessageAdapterCapability = {
 - `README.md`、`docs/configuration.md` 或示例：只补公开、安全、可复制的说明。
 
 如果新增的是 Agent 处理端，不要用本 skill；Agent 端走 `create-rabiroute-agent-adapter`。
+
+## Manager 模块化边界
+
+`src/manager.ts` 是编排层，不是消息端实现层。新增或改造消息端时，遵守这个边界：
+
+- 消息端专属逻辑放在 `src/messageEndpoints/`：进程发现、Dashboard/WebUI token、插件目录扫描、服务 health、实例列表、启动命令、修复建议和 scan payload 组装。
+- `manager.ts` 只构造上下文 `ctx` 并接 HTTP API：`rootDir`、runtime 读取器、状态读取器、日志追加、通用 HTTP 检查、通用路径/配置 helper。
+- 通用配置 normalize、runtime start/stop、日志读取、端口校验可以暂留 `manager.ts`；不要为了新增一个端把通用逻辑重写一份。
+- 新模块不能 import `src/manager.ts`，也不能依赖 `ribiwebgui`、浏览器 `window/document` 或前端状态。
+- 多端扫描用组合方式：`messageAdapterScanPayload()` 调 `scan<Name>Endpoint(ctx)`，再拼成统一响应。
+
+当前参考模块：
+
+- `src/messageEndpoints/napcatManager.ts`：NapCat 进程、WebUI token、health、launch、scan。
+- `src/messageEndpoints/webhookLikeScans.ts`：FenneNote / XiaoAI / 通用 Webhook scan。
+
+如果一个消息端后续变复杂，优先新增自己的 `src/messageEndpoints/<type>Manager.ts`，不要继续扩大 `webhookLikeScans.ts`。
 
 ## UX 合同
 
@@ -260,6 +278,17 @@ POST /api/message/<type>/launch
 POST /api/message/<type>/open
 POST /api/message/<type>/dry-run
 ```
+
+实现时优先让 `src/messageEndpoints/<type>Manager.ts` 暴露这些函数，再由 `manager.ts` 接线：
+
+```ts
+scan<Type>Endpoint(ctx)
+test<Type>Health(ctx, request)
+launch<Type>Instance(ctx, request)
+open<Type>Dashboard(ctx, request)
+```
+
+返回 JSON shape 必须和 WebGUI 已消费的结构兼容。迁移旧逻辑时先接新模块再删除 manager 内旧实现，并运行 `npm run build`。
 
 健康检查结果至少表达：
 

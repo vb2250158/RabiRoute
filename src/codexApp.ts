@@ -347,7 +347,7 @@ async function ensureMonitorThread(forceCreate = false): Promise<string> {
     baseInstructions: null,
     developerInstructions: `这是 QQ/NapCat 消息监听线程。收到提醒后，请读取 ${config.memoryDataDir} 下的 JSONL 消息记录，理解最新 QQ 私聊或群 @ 的上下文，并在 Codex 会话里开始处理。`,
     config: null,
-    model: null
+    model: config.agentModel ?? null
   }) as { thread?: { id?: string } };
 
   const threadId = result.thread?.id;
@@ -438,7 +438,7 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
         writableRoots: []
       },
       effort: "high",
-      model: null,
+      model: config.agentModel ?? null,
       personality: "friendly"
     });
   } catch (error) {

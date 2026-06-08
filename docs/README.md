@@ -12,6 +12,9 @@
 
 - [路由配置](routing-configuration.md)：`adapterConfig.json`、消息端、Agent 端和路由入口参数。
 - [路由人格](routing-and-personas.md)：`persona.md`、`personaConfig.json`、成长型人格包、Rabi 默认看板娘示例。
+- [计划和记忆机制](plan-and-memory-model.md)：说明计划、近期记忆、沉淀记忆、托盘视图和 Agent 获取上下文的方式。
+- [Agent 需要关注的 Rabi 接口](rabi-agent-interfaces.md)：给 Agent 注入的计划、记忆和内置触发接口说明。
+- [Agent 上下文注入说明](agent-context-injection.md)：说明默认注入项、按需注入项和最终投递给 Agent 的消息格式。
 - [Pipeline presets](pipeline-presets.md)：把默认输入端、输出端、TTS 和提示词输出模式打成一组。
 - [语音交互工作站](voice-interaction-workstation.md)：FenneNote 转录、RabiRoute 路由、角色对话和 OumuQ TTS 的公开安全接线方式。
 
@@ -19,3 +22,4 @@
 
 - [排障](troubleshooting.md)：NapCat 登录/外发失败、Windows 中文消息乱码、Codex IPC、普通群消息不转发。
 - [架构说明](architecture.md)：项目边界、分层、演进路线和红线。
+- [代码架构](code-architecture.md)：后端 Module、消息主链路、manager 控制面、WebGUI 和常见修改入口。

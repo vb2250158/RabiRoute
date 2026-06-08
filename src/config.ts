@@ -9,51 +9,13 @@ dotenv.config();
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export const defaultGroupNotificationTemplate = [
-  "QQ 消息更新提醒：群聊里有人 @ 了机器人。",
-  "时间：{time}",
-  "目标：{messageTarget}",
-  "群号：{groupId}",
-  "发送者：{sender}",
-  "消息：{message}",
-  "",
-  "请在需要时读取 {groupLogPath} 查看上下文。"
-].join("\n");
-
-export const defaultGroupAtNotificationTemplate = defaultGroupNotificationTemplate;
-export const defaultGroupDirectReplyNotificationTemplate = defaultGroupNotificationTemplate.replace("群聊里有人 @ 了机器人", "群聊里有人直接回复机器人");
-export const defaultGroupIndirectReplyNotificationTemplate = defaultGroupNotificationTemplate.replace("群聊里有人 @ 了机器人", "群聊里有人回复了一条提到机器人的消息");
-
-export const defaultPrivateNotificationTemplate = [
-  "QQ 消息更新提醒：收到一条私聊消息。",
-  "时间：{time}",
-  "目标：{messageTarget}",
-  "发送者：{sender}",
-  "QQ：{userId}",
-  "消息：{message}",
-  "",
-  "请在需要时读取 {privateLogPath} 查看上下文。"
-].join("\n");
-
-export const defaultHeartbeatNotificationTemplate = [
-  "心跳提醒：到了定时巡检时间。",
-  "时间：{time}",
-  "来源：{messageTarget}",
-  "消息：{message}",
-  "",
-  "请读取 {dataDir} 下的消息日志和角色相关上下文，按当前人格判断是否需要回应、记录、追问或保持安静。"
-].join("\n");
-
-export const defaultVoiceTranscriptNotificationTemplate = [
-  "语音转写更新提醒：FenneNote 捕获到一段来自电脑旁用户的语音输入。",
-  "时间：{time}",
-  "来源：{messageTarget}",
-  "转写：{message}",
-  "时长：{voiceDurationSeconds} 秒",
-  "峰值：{voicePeak}",
-  "",
-  "默认在当前 Codex 会话里承接语音输入，并在需要时生成适合 TTS 的短回复。若转写文本明确要求发送到 QQ/NapCat，且目标、内容和授权足够清楚，请按现有外发流程处理；缺少信息时只追问最小缺口，不要因为来源是 voice_transcript 就一律拒绝发送。需要上下文时再读取 {voiceTranscriptLogPath}。"
-].join("\n");
+export const defaultGroupNotificationTemplate = "";
+export const defaultGroupAtNotificationTemplate = "";
+export const defaultGroupDirectReplyNotificationTemplate = "";
+export const defaultGroupIndirectReplyNotificationTemplate = "";
+export const defaultPrivateNotificationTemplate = "";
+export const defaultHeartbeatNotificationTemplate = "";
+export const defaultVoiceTranscriptNotificationTemplate = "";
 
 export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "voice_transcript";
 
@@ -82,6 +44,11 @@ export type RouteProfile = {
   notificationRules: NotificationRule[];
 };
 
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export type NapCatInstanceConfig = {
   id: string;
   name: string;
@@ -90,6 +57,7 @@ export type NapCatInstanceConfig = {
   httpUrl: string;
   webuiUrl: string;
   accessToken: string;
+  webuiToken?: string;
   launchCommand?: string;
   workingDir?: string;
 };
@@ -224,6 +192,7 @@ function normalizeNapCatInstance(item: unknown, index: number): NapCatInstanceCo
     httpUrl: String(source.httpUrl || source.napcatHttpUrl || "http://127.0.0.1:3000"),
     webuiUrl: String(source.webuiUrl || source.napcatWebuiUrl || "http://127.0.0.1:6099/webui"),
     accessToken: String(source.accessToken || source.napcatAccessToken || ""),
+    webuiToken: String(source.webuiToken || source.napcatWebuiToken || ""),
     launchCommand: typeof source.launchCommand === "string" ? source.launchCommand : undefined,
     workingDir: typeof source.workingDir === "string" ? source.workingDir : undefined
   };
@@ -292,10 +261,6 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
   }
 
   const raw = item as Partial<NotificationRule>;
-  if (typeof raw.template !== "string" || !raw.template.trim()) {
-    return null;
-  }
-
   const routeKinds = Array.isArray(raw.routeKinds) ? raw.routeKinds.filter(isNotificationRouteKind) : [];
 
   return {
@@ -305,7 +270,7 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
     routeKinds,
     targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId.trim() : "",
     regex: typeof raw.regex === "string" ? raw.regex : "",
-    template: normalizeTemplateText(raw.template)
+    template: normalizeTemplateText(typeof raw.template === "string" ? raw.template : "")
   };
 }
 
@@ -374,6 +339,7 @@ const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES)
 const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES);
 const pipelinePreset = process.env.PIPELINE_PRESET?.trim() || undefined;
 const pipeline = parsePipelineDefinition(process.env.PIPELINE);
+const agentModel = normalizeOptionalString(process.env.AGENT_MODEL);
 const defaultNapCatInstance: NapCatInstanceConfig = {
   id: "default",
   name: "默认 NapCat",
@@ -382,6 +348,7 @@ const defaultNapCatInstance: NapCatInstanceConfig = {
   httpUrl: process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
   webuiUrl: process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
   accessToken: process.env.NAPCAT_ACCESS_TOKEN ?? "",
+  webuiToken: process.env.NAPCAT_WEBUI_TOKEN ?? "",
   launchCommand: process.env.NAPCAT_LAUNCH_COMMAND,
   workingDir: process.env.NAPCAT_WORKING_DIR
 };
@@ -397,6 +364,7 @@ export const config = {
   napcatHttpUrl: primaryNapcatInstance.httpUrl,
   napcatWebuiUrl: primaryNapcatInstance.webuiUrl,
   napcatAccessToken: primaryNapcatInstance.accessToken,
+  napcatWebuiToken: primaryNapcatInstance.webuiToken ?? "",
   webhookPath: process.env.WEBHOOK_PATH ?? "/webhook",
   gatewayPort: primaryNapcatInstance.gatewayPort,
   webhookPort: Number(process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
@@ -408,6 +376,7 @@ export const config = {
   codexDirectNotify: process.env.CODEX_DIRECT_NOTIFY === "1",
   codexDesktopIpcNotify: process.env.CODEX_DESKTOP_IPC_NOTIFY !== "0",
   agentAdapters: parseAgentAdapters(process.env.AGENT_ADAPTERS),
+  agentModel,
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",
   codexCwd: normalizeCodexCwd(process.env.CODEX_CWD) ?? process.cwd(),
   targetGroupId: process.env.TARGET_GROUP_ID ?? "",

@@ -17,6 +17,21 @@
   "messageAdapters": [
     "fennenote"
   ],
+  "messageAdapterPolicies": {
+    "fennenote": {
+      "inputEnabled": true,
+      "outputEnabled": true,
+      "outputMode": "replyOnly",
+      "supportedOutputs": [
+        "text",
+        "image",
+        "voice",
+        "file"
+      ],
+      "allowedGroups": [],
+      "allowedUsers": []
+    }
+  },
   "gatewayPort": 8791,
   "webhookPort": 8791,
   "webhookPath": "/webhook",

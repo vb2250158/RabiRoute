@@ -168,15 +168,14 @@ function Start-TrayWindow {
     [string]$ManagerUrl,
     [string]$LauncherLog,
     [string]$TrayOutLog,
-    [string]$TrayErrLog,
-    [switch]$OwnsManager
+    [string]$TrayErrLog
   )
 
   $existingTray = Get-ExistingTrayProcesses -ProjectRoot $ProjectRoot
   $existingTray = Stop-DuplicateTrayProcesses -TrayProcesses $existingTray -LauncherLog $LauncherLog
   if ($existingTray.Count -gt 0) {
     $pids = ($existingTray | ForEach-Object { $_.ProcessId }) -join ", "
-    $message = "Qt tray task panel is already running. Reusing existing process group root pid(s): $pids"
+    $message = "Qt tray desktop entry is already running. Reusing existing process group root pid(s): $pids"
     Write-Info $message
     Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
     return $existingTray[0]
@@ -184,7 +183,7 @@ function Start-TrayWindow {
 
   $python = Resolve-TrayPython -ProjectRoot $ProjectRoot
   if (-not $python) {
-    $message = "Python was not found; skipping Qt tray task panel. Manager/WebGUI remain available."
+    $message = "Python was not found; skipping Qt tray desktop entry. Manager/WebGUI remain available."
     Write-Info $message
     Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
     return $null
@@ -192,7 +191,7 @@ function Start-TrayWindow {
 
   $trayMain = Join-Path $ProjectRoot "desktop\tray-task-window\main.py"
   if (-not (Test-Path $trayMain)) {
-    $message = "Tray entry was not found at $trayMain; skipping Qt tray task panel."
+    $message = "Tray entry was not found at $trayMain; skipping Qt tray desktop entry."
     Write-Info $message
     Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
     return $null
@@ -201,11 +200,8 @@ function Start-TrayWindow {
   $arguments = @()
   $arguments += $python.Prefix
   $arguments += @($trayMain, "--manager-url", $ManagerUrl)
-  if ($OwnsManager) {
-    $arguments += "--owns-manager"
-  }
 
-  Write-Info "Starting Qt tray task panel..."
+  Write-Info "Starting Qt tray desktop entry..."
   Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Starting tray: $($python.FilePath) $($arguments -join ' ')"
   $tray = Start-Process `
     -FilePath $python.FilePath `
@@ -215,8 +211,8 @@ function Start-TrayWindow {
     -RedirectStandardError $TrayErrLog `
     -WindowStyle Hidden `
     -PassThru
-  Write-Info "Qt tray task panel process started: pid=$($tray.Id)"
-  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Tray pid=$($tray.Id), ownsManager=$($OwnsManager.IsPresent)"
+  Write-Info "Qt tray desktop entry process started: pid=$($tray.Id)"
+  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Tray pid=$($tray.Id), exitClosesManager=true"
   return $tray
 }
 
@@ -367,8 +363,7 @@ try {
       -ManagerUrl $ManagerUrl `
       -LauncherLog $launcherLog `
       -TrayOutLog $trayOutLog `
-      -TrayErrLog $trayErrLog `
-      -OwnsManager | Out-Null
+      -TrayErrLog $trayErrLog | Out-Null
   }
 
   Wait-ForEnter

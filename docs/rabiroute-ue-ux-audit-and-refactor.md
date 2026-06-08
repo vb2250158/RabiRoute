@@ -15,7 +15,7 @@
 ## 界面范围
 
 - RibiWebGUI：`ribiwebgui/src`
-- Qt 托盘与任务面板：`desktop/tray-task-window`
+- Qt 托盘与计划记忆面板：`desktop/tray-task-window`
 - NapCat 插件入口页：`plugin-adapters/napcat-rabiroute/webui/gateways.html`
 - Windows 启动入口提示：`Start-RabiRoute-Tray.bat`
 
@@ -78,7 +78,7 @@
 3. 重构路由配置页：按“消息入口 -> Agent 投递 -> 数据目录”组织。
 4. 重构人格配置页：把人格、变量、模板规则分成更清楚的区块，规则列表更易扫描。
 5. 重构运行日志页：先健康诊断，再连接详情，再日志。
-6. 重构 Qt 任务面板：统一 Rabi 风格、分组视图按钮、强化只读与空状态。
+6. 重构 Qt 计划记忆面板：统一 Rabi 风格、分组视图按钮、强化只读与空状态。
 7. 调整 NapCat 入口页：只做视觉统一和启动反馈，不扩展功能。
 8. 验证 WebGUI 构建、TypeScript、PySide6 语法和启动入口。
 
@@ -86,7 +86,7 @@
 
 - `http://127.0.0.1:8790/` 刷新后四个 WebGUI 页面中文清晰、布局稳定。
 - WebGUI 能保留新增、保存、刷新、启动、停止、重启、打开配置文件等现有功能。
-- Qt 面板能显示当前 / 短期计划 / 长期计划 / 短期记忆 / 长期记忆 / 任务 / 状态，并保持只读。
-- 托盘菜单全中文，退出语义符合 ownership：拥有 manager 时退出 RabiRoute，不拥有时只退出面板。
+- Qt 面板能显示当前 / 计划 / 近期记忆 / 沉淀记忆 / 状态，并保持只读。
+- 托盘菜单全中文，退出语义统一为退出本地 RabiRoute：关闭 manager、gateway 和 Web 服务，不留下半运行状态。
 - NapCat 插件页仍只跳转 WebGUI，不成为第二套配置台。
 - Windows 启动入口继续优先启动 manager + tray；Mac / Linux 继续通过 Node/WebGUI 使用核心能力。

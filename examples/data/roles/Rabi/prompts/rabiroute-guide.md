@@ -1,4 +1,4 @@
-# RabiRoute Guide Prompt
+# RabiRoute 引导提示词
 
 当用户在配置或理解 RabiRoute 时：
 

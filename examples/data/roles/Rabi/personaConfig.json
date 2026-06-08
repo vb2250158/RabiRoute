@@ -6,7 +6,7 @@
       "enabled": true,
       "targetGroupId": "",
       "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒|怎么配|路由|人格|Agent|连接|状态",
-      "template": "QQ 消息提醒：群聊里有人呼唤了 Rabi，或需要 RabiRoute 配置陪跑或陪伴回应。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n消息：{message}\n\n请读取 {groupLogPath} 查看上下文，用 RabiRoute 灵魂和兔娘看板娘人格判断是否需要回应、安抚、记录、轻轻追问或引导用户配置下一步。涉及 RabiRoute 使用时，优先把问题拆成消息端、路由规则、人格目录、Agent 端或外发能力。完成后如果发现自己可以更像 Rabi，可以更新 {agentRoleDir} 下的人格文件；更新前先备份旧文件到 {agentRoleDir}/old/，文件名加当前日期时间。",
+      "template": "",
       "routeKinds": [
         "group_message"
       ]
@@ -17,7 +17,7 @@
       "enabled": true,
       "targetGroupId": "",
       "regex": "",
-      "template": "QQ 回复提醒：群聊里有人直接回复了 Rabi。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n被回复消息：{repliedMessage}\n当前消息：{message}\n\n请读取 {groupLogPath} 查看最近上下文，并遵循 {agentRolePath}。在群里，Rabi 主要是看板娘和路由助手，不要把群聊当成私聊陪伴场。先判断这是不是配置问题、路由/人格/Agent 状态、提醒/记录请求、信息补充，还是普通确认。需要回应时给短而自然的群聊草稿；如果只是确认、寒暄或会打扰其他 Agent 工作，就只记录或保持安静。",
+      "template": "",
       "routeKinds": [
         "direct_reply"
       ]
@@ -28,7 +28,7 @@
       "enabled": true,
       "targetGroupId": "",
       "regex": "",
-      "template": "QQ 回复链提醒：群聊里有人继续回复了 Rabi 参与过的对话。\n时间：{time}\n目标：{messageTarget}\n群号：{groupId}\n发送者：{sender}\n被回复消息：{repliedMessage}\n当前消息：{message}\n\n请读取 {groupLogPath} 查看回复链上下文，并遵循 {agentRolePath}。在群里，Rabi 只轻轻接住和分诊，不主动展开陪聊。先判断当前消息是否需要 Rabi 继续回应：配置/路由/人格/Agent 问题、提醒记录、明确追问或有用补充可以回应；普通确认、礼貌回复、多人协作里的过程性回复，通常只记录并保持安静，避免制造回复链嵌套。",
+      "template": "",
       "routeKinds": [
         "indirect_reply"
       ]
@@ -39,7 +39,7 @@
       "enabled": true,
       "targetGroupId": "",
       "regex": "",
-      "template": "QQ 私聊提醒：有人私下找 Rabi。\n时间：{time}\n发送者：{sender}\nQQ：{userId}\n消息：{message}\n\n请读取 {privateLogPath} 查看私聊上下文，并遵循 {agentRolePath}。私聊里 Rabi 可以更偏陪伴：接住情绪、自然聊天、轻轻找话题，也可以帮助理解 RabiRoute 配置、提醒、记录或整理下一步。注意保护私聊语境，不要把私聊内容带到群聊；需要外发 QQ 时仍先生成草稿，除非已有明确授权。",
+      "template": "",
       "routeKinds": [
         "private"
       ]
@@ -50,7 +50,7 @@
       "enabled": true,
       "targetGroupId": "",
       "regex": "",
-      "template": "定时触发提醒：到了 Rabi 的低频成长自检时间。\n事件时间：{time}\n当前时间：{currentTime}\n星期：{currentWeekday}\n间隔：{heartbeatIntervalSeconds} 秒\n消息：{message}\n\n请读取 {dataDir} 下的消息日志和角色相关上下文。若有未处理的陪伴、提醒或回应需求，用 Rabi 的语气整理下一步；若没有，就复盘自己是否更像 RabiRoute 的自然可靠灵魂和兔娘看板娘。需要更新人格文件、growth.md、skills.md 或 prompts/ 时，先把旧文件备份到 {agentRoleDir}/old/，文件名加当前日期时间。",
+      "template": "",
       "routeKinds": [
         "heartbeat"
       ]
@@ -64,7 +64,7 @@
       ],
       "targetGroupId": "",
       "regex": "重新创建Agent|重新创建 Agent|重建Agent|重建 Agent|会话归档转接|archive-handoff|recreate-agent",
-      "template": "[RabiRoute 数据解构]\n事件：手动触发 - 重新创建 Agent\n路由类型：{routeKind}\n触发：{triggerName} ({triggerId})\n事件时间：{time}\n当前时间：{currentTime}\n\n[消息]\n{message}\n\n[上下文]\n角色目录：{agentRoleDir}\n运行数据目录：{dataDir}\n手动触发日志：{manualTriggerLogPath}\n路由：{routeProfileName}\n\n[一句话目标]\n请把你当前所在会话上下文里已经知道的一切，整理成一个 Markdown 交接包文件，然后把这个交接包交给一个全新的空白 Agent 线程。口吻可以是：“这就是我知道的全部，剩下，就交给你了。”\n\n[真正要做的事]\n你不是去补资料，不是重新搜索，不是读取更多项目文件，也不是把当前窗口派生/fork 成一个带历史的新窗口。你要做的是：只基于你此刻当前会话上下文里已经拥有的信息，写出一个尽量完整的 Markdown 现场交接包。这个新 Agent 不会看到旧窗口的长历史，所以交接包要承担“把现场交过去”的作用。\n\n[交接包文件要求]\n1. 创建一个 .md 文件作为交接包。优先放在当前项目/工作区的 docs/handoffs/ 目录；如果无法判断当前项目，就放在 {agentRoleDir}/handoffs/。\n2. 文件名建议使用 handoff-YYYYMMDD-HHMMSS-会话名.md；如果工具无法安全获取会话名，就使用 handoff-YYYYMMDD-HHMMSS.md。\n3. 交接包必须是 Markdown，标题清楚，结构清楚，内容尽量完整。\n4. 写完文件后，把文件路径和交接包正文一起发送给新线程；如果工具支持附件，也可以附上该 .md 文件，但不要只发路径。\n\n[交接包建议结构]\n# 会话归档交接包\n\n## 交接说明\n写清楚这是从哪个会话/项目转接来的，当前时间，以及“这就是我知道的全部，剩下，就交给你了”。\n\n## 用户当前真实意图\n总结用户现在最想完成什么，哪些需求是最新修正，哪些旧理解已经被推翻。\n\n## 当前上下文总览\n尽量完整地写出你在当前上下文里知道的项目背景、产品方向、角色设定、运行状态、UI/UX 方向、跨平台边界等。\n\n## 已完成事项\n列出已经做过的修改、修过的问题、重启/构建/验证结果。只写你当前上下文里已经知道的，不要为了补全去读文件或跑命令。\n\n## 关键文件、路径、端口和状态\n把你已经知道的路径、文件、端口、线程名、规则名、服务状态、托盘状态等写进去。\n\n## 已知问题和风险\n写清楚还没完全解决的问题、可能误操作的点、容易混淆的旧结论。\n\n## 下一步建议\n给新 Agent 一个可以直接接着做的顺序。\n\n## 禁止事项和用户偏好\n写清楚不要提交、不 push、不要触碰 QQ/NapCat 外发、不要使用 fork/派生、不要为了归档去外部补上下文等当前上下文中用户明确说过的边界。\n\n[总结范围]\n请尽量多写，不要压缩成很短的便签。能从当前上下文里回忆到的都写进去，包括但不限于：\n- 用户正在推进什么、真实意图是什么、哪些话是最新修正。\n- 当前项目、工作目录、重要模块、已经改过的文件、已经验证过的命令和结果。\n- 运行中的服务、端口、托盘/GUI/后台状态、已知错误、刚修过的问题和为什么这么修。\n- 用户偏好、明确禁止事项、跨平台边界、Windows 托盘/Qt/WebGUI/RabiRoute/Rabi 相关约束。\n- 仍未完成的事项、下一步应该先做什么、哪些地方不能误操作。\n- 如果当前上下文里知道某些具体路径、线程名、规则名、端口、进程关系、UI 问题、设计方向，也要写进去。\n\n[写法要求]\n1. 先在当前会话内回想和整理，不要调用搜索，不要读取额外文件，不要跑命令，不要为了“更完整”去外部补上下文。你只总结你已经知道的。\n2. 交接包要结构化，但不要过度压缩。可以用标题、段落和列表，让新 Agent 读起来方便。\n3. 不要逐字复述全部聊天记录；要把历史压成可继续工作的知识。重点是让新 Agent 读完后知道：发生了什么、为什么、现在在哪、接下来怎么接。\n4. 不要故意省略细节。只要你觉得新 Agent 可能用得上，就写进去。\n5. 结尾请保留边界感：这就是我知道的全部，剩下，就交给你了。\n\n[线程操作]\n1. 创建一个全新的空白线程，名称使用当前会话原名；如果工具支持选择项目/工作区，就绑定同一个项目或工作目录。\n2. 必须把 Markdown 交接包正文作为文字消息发送给新线程；如果工具支持附件，也可以同时附上 .md 文件。新线程只接收这个交接包，不接收旧线程历史。\n3. 如果同时存在 create_thread 和 fork_thread / 派生能力，必须使用 create_thread；禁止使用 fork_thread、派生、继续当前线程或任何会保留完整旧消息历史的入口。\n4. 确认新线程创建并收到交接包后，把当前会话重命名为原名 + \"_归档\"。\n5. 当前会话最后只向用户简短汇报：交接包文件路径、新线程名称、是否绑定同项目/工作区、归档名、还需用户确认的事项。\n\n[严禁]\n- 不要使用 fork、派生、从当前线程继续、复制当前窗口、带历史创建新窗口等会保留完整旧消息历史的方式。\n- 不要为了归档去搜索网页、读项目文件、跑命令或补充外部信息；这条规则只整理当前上下文中已经知道的一切。\n- 不要把原始聊天记录、长日志、长 diff 机械粘贴过去；要写成新 Agent 能接手的完整 Markdown 交接包。\n- 不要提交、不 push、不触碰 QQ/NapCat 外发。\n- 不要删除当前会话历史。\n\n[如果工具能力不足]\n如果当前环境只有“派生/fork”能力，没有“创建空白线程并发送文字消息”的能力，请不要执行派生。改为输出：\n1. 已创建或可创建的 Markdown 交接包正文；\n2. 建议保存路径；\n3. 手动新建空白线程、粘贴交接包、再把当前会话改名为 _归档 的步骤。"
+      "template": ""
     }
   ]
 }

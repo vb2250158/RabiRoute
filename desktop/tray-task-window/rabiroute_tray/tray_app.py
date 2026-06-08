@@ -11,23 +11,22 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from .app_paths import project_dir_from_gateway, role_dir_from_gateway, role_id_from_gateway, runtime_dir_from_gateway
 from .desktop_adapter import DesktopAdapter
 from .lifecycle_controller import LifecycleController
-from .manager_client import ManagerClient
+from .manager_client import ManagerClient, ManagerSnapshot
 from .role_context_repository import RoleContextRepository
-from .task_repository import TaskRepository
+from .task_repository import PlanRepository
 from .task_window import TaskWindow
 
 
 def run(
     project_root: Path,
     manager_url: str = "http://127.0.0.1:8790",
-    owns_manager: bool = False,
     manager_proc: "subprocess.Popen[bytes] | None" = None,
 ) -> int:
     app = QApplication(sys.argv)
     lock = _app_lock(project_root)
     if not lock.tryLock(100):
         print(
-            "这个项目的 RabiRoute Qt 任务面板已经在运行。\n"
+            "这个项目的 RabiRoute Qt 计划与记忆面板已经在运行。\n"
             "请使用现有托盘图标或窗口，不要重复启动。",
             file=sys.stderr,
         )
@@ -37,18 +36,18 @@ def run(
     app.setQuitOnLastWindowClosed(not tray_available)
 
     manager = ManagerClient(manager_url=manager_url)
-    lifecycle = LifecycleController(manager=manager, owns_manager=owns_manager)
+    lifecycle = LifecycleController(manager=manager)
     desktop = DesktopAdapter(project_root)
-    tasks = TaskRepository(project_root, "Rabi")
+    plans = PlanRepository(project_root, "Rabi")
     role_context = RoleContextRepository(project_root)
-    window = TaskWindow()
+    app_icon = desktop.app_icon()
+    panel_windows: dict[str, TaskWindow] = {}
 
-    tray = QSystemTrayIcon(desktop.app_icon(), app)
+    tray = QSystemTrayIcon(app_icon, app)
     tray.setToolTip("RabiRoute / Rabi 桌面分诊台")
 
     refresh_action = QAction("刷新")
     webgui_action = QAction("打开 RabiRoute WebGUI")
-    window_action = QAction("显示 Rabi 桌面面板")
     status_action = QAction("状态：加载中")
     routes_menu = QMenu("航线")
     quit_action = QAction(lifecycle.exit_label)
@@ -58,7 +57,6 @@ def run(
     menu.addAction(status_action)
     menu.addSeparator()
     menu.addAction(webgui_action)
-    menu.addAction(window_action)
     menu.addAction(refresh_action)
     menu.addSeparator()
     menu.addMenu(routes_menu)
@@ -72,20 +70,37 @@ def run(
     initial_route_dir = runtime_dir_from_gateway(project_root, initial_manager.selected_gateway)
     state = {
         "manager": initial_manager,
-        "tasks": tasks.load(initial_role_dir, initial_role_id),
+        "plans": plans.load(initial_role_dir, initial_role_id),
         "context": role_context.load(initial_role_dir, initial_route_dir),
     }
     lifecycle.observe(initial_manager)
 
+    def open_panel(gateway: dict) -> None:
+        role_id = role_id_from_gateway(gateway, "未指定人格")
+        role_dir = role_dir_from_gateway(project_root, gateway, role_id)
+        route_dir = runtime_dir_from_gateway(project_root, gateway)
+        key = _panel_key(gateway, role_id, role_dir, route_dir)
+        panel = panel_windows.get(key)
+        if panel is None:
+            panel = TaskWindow(app_icon)
+            panel.refresh_button.clicked.connect(refresh)
+            panel.destroyed.connect(lambda _obj=None, panel_key=key: panel_windows.pop(panel_key, None))
+            panel_windows[key] = panel
+        panel.set_actions(_panel_actions(gateway, project_root, desktop, manager, tray, tray_available, refresh))
+        _render_panel(panel, state["manager"], gateway, plans.load(role_dir, role_id), role_context.load(role_dir, route_dir))
+        panel.show()
+        panel.raise_()
+        panel.activateWindow()
+
     def refresh() -> None:
         state["manager"] = manager.snapshot()
         if lifecycle.observe(state["manager"]):
-            status_action.setText("状态：Manager 已离线，正在退出面板")
+            status_action.setText("状态：Manager 已离线，正在退出 RabiRoute 桌面入口")
             _show_message(
                 tray,
                 tray_available,
                 "RabiRoute / 当前人格",
-                "RabiRoute manager 已离线，任务面板将退出。",
+                "RabiRoute manager 已离线，桌面入口将退出。",
                 QSystemTrayIcon.Warning,
                 3000,
             )
@@ -93,29 +108,24 @@ def run(
         role_id = role_id_from_gateway(state["manager"].selected_gateway)
         role_dir = role_dir_from_gateway(project_root, state["manager"].selected_gateway, role_id)
         route_dir = runtime_dir_from_gateway(project_root, state["manager"].selected_gateway)
-        state["tasks"] = tasks.load(role_dir, role_id)
+        state["plans"] = plans.load(role_dir, role_id)
         state["context"] = role_context.load(role_dir, route_dir)
-        window.render(state["manager"], state["tasks"], state["context"])
-        tray.setToolTip(_tooltip(state["manager"], state["tasks"]))
+        for panel_key, panel in list(panel_windows.items()):
+            gateway = _gateway_for_panel_key(project_root, state["manager"].gateways, panel_key)
+            if gateway is None:
+                continue
+            panel_role_id = role_id_from_gateway(gateway, "未指定人格")
+            panel_role_dir = role_dir_from_gateway(project_root, gateway, panel_role_id)
+            panel_route_dir = runtime_dir_from_gateway(project_root, gateway)
+            panel.set_actions(_panel_actions(gateway, project_root, desktop, manager, tray, tray_available, refresh))
+            _render_panel(panel, state["manager"], gateway, plans.load(panel_role_dir, panel_role_id), role_context.load(panel_role_dir, panel_route_dir))
+        tray.setToolTip(_tooltip(state["manager"], state["plans"]))
         status_action.setText(_status_text(state["manager"]))
-        _rebuild_routes_menu(routes_menu, state["manager"], project_root, desktop, manager, tray, tray_available, refresh)
-
-    def toggle_window() -> None:
-        refresh()
-        if window.isVisible():
-            window.hide()
-            window_action.setText("显示 Rabi 桌面面板")
-        else:
-            window.show()
-            window.raise_()
-            window_action.setText("隐藏 Rabi 桌面面板")
+        _rebuild_routes_menu(routes_menu, state["manager"], open_panel)
 
     refresh_action.triggered.connect(refresh)
     webgui_action.triggered.connect(lambda: desktop.open_url(manager.manager_url))
-    window_action.triggered.connect(toggle_window)
     quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle, manager_proc))
-    window.refresh_button.clicked.connect(refresh)
-    tray.activated.connect(lambda reason: toggle_window() if reason == QSystemTrayIcon.Trigger else None)
 
     timer = QTimer()
     timer.timeout.connect(refresh)
@@ -124,15 +134,11 @@ def run(
     refresh()
     if tray_available:
         tray.show()
-    window.show()
-    window.raise_()
-    window.activateWindow()
-    window_action.setText("隐藏 Rabi 桌面面板")
     _show_message(
         tray,
         tray_available,
         "RabiRoute / 当前人格",
-        "桌面分诊面板已启动。点击托盘图标可显示或隐藏。",
+        "桌面入口已启动。请从托盘菜单的“航线”选择人格。",
         QSystemTrayIcon.Information,
         3000,
     )
@@ -158,19 +164,29 @@ def _quit(
     lifecycle: LifecycleController,
     manager_proc: "subprocess.Popen[bytes] | None" = None,
 ) -> None:
-    if lifecycle.owns_manager:
+    _show_message(
+        tray,
+        tray_available,
+        "RabiRoute / 当前人格",
+        "正在退出 RabiRoute...",
+        QSystemTrayIcon.Information,
+        2500,
+    )
+    shutdown_requested = lifecycle.request_exit()
+    if manager_proc is not None and manager_proc.poll() is None:
+        # HTTP shutdown may be slow or fail for the manager started by this process.
+        manager_proc.terminate()
+        shutdown_requested = True
+    if not shutdown_requested:
         _show_message(
             tray,
             tray_available,
             "RabiRoute / 当前人格",
-            "正在关闭 RabiRoute manager 和任务面板...",
-            QSystemTrayIcon.Information,
-            2500,
+            "未能关闭 RabiRoute manager，桌面入口保持运行。请检查 manager 状态后再退出。",
+            QSystemTrayIcon.Warning,
+            5000,
         )
-        lifecycle.request_exit()
-        # Always terminate the proc directly — HTTP shutdown may be slow or fail.
-        if manager_proc is not None and manager_proc.poll() is None:
-            manager_proc.terminate()
+        return
     app.quit()
 
 
@@ -179,15 +195,81 @@ def _show_message(tray: QSystemTrayIcon, tray_available: bool, title: str, messa
         tray.showMessage(title, message, icon, timeout)
 
 
-def _rebuild_routes_menu(
-    routes_menu: QMenu,
-    manager_snapshot,
+def _panel_key(gateway: dict, role_id: str, role_dir: Path, route_dir: Path) -> str:
+    gateway_id = str(gateway.get("id") or gateway.get("configName") or gateway.get("routeName") or gateway.get("name") or "")
+    return "|".join([gateway_id, role_id, str(role_dir.resolve()), str(route_dir.resolve())])
+
+
+def _gateway_for_panel_key(project_root: Path, gateways: list[dict], panel_key: str) -> dict | None:
+    for gateway in gateways:
+        role_id = role_id_from_gateway(gateway, "未指定人格")
+        role_dir = role_dir_from_gateway(project_root, gateway, role_id)
+        route_dir = runtime_dir_from_gateway(project_root, gateway)
+        if _panel_key(gateway, role_id, role_dir, route_dir) == panel_key:
+            return gateway
+    return None
+
+
+def _render_panel(panel: TaskWindow, manager_snapshot: ManagerSnapshot, gateway: dict, plan_snapshot, context_snapshot) -> None:
+    panel_manager = ManagerSnapshot(
+        connected=manager_snapshot.connected,
+        manager_url=manager_snapshot.manager_url,
+        meta=manager_snapshot.meta,
+        gateways=[gateway],
+        error=manager_snapshot.error,
+    )
+    panel.render(panel_manager, plan_snapshot, context_snapshot)
+
+
+def _panel_actions(
+    gateway: dict,
     project_root: Path,
     desktop: DesktopAdapter,
     manager: ManagerClient,
     tray: QSystemTrayIcon,
     tray_available: bool,
     refresh_callback,
+) -> list[tuple[str, object, bool]]:
+    role_id = role_id_from_gateway(gateway, "未指定人格")
+    role_dir = role_dir_from_gateway(project_root, gateway, role_id)
+    actions: list[tuple[str, object, bool]] = [
+        ("人格目录", lambda checked=False: desktop.open_path(role_dir), True),
+        ("计划目录", lambda checked=False: desktop.open_path(role_dir / "plans"), True),
+        ("记忆目录", lambda checked=False: desktop.open_path(role_dir / "memory"), True),
+        ("项目目录", lambda checked=False: desktop.open_path(project_dir_from_gateway(project_root, gateway)), True),
+        ("状态目录", lambda checked=False: desktop.open_path(runtime_dir_from_gateway(project_root, gateway)), True),
+    ]
+    rules = _manual_trigger_rules(gateway)
+    if rules:
+        for rule in rules:
+            rule_name = str(rule.get("name") or rule.get("id") or "未命名手动规则")
+            rule_id = str(rule.get("id") or rule_name)
+            route_kind = _manual_trigger_route_kind(rule)
+            enabled = rule.get("enabled") is not False
+            actions.append((
+                f"触发：{rule_name}",
+                lambda checked=False, item=gateway, rid=rule_id, name=rule_name, kind=route_kind: _manual_trigger(
+                    manager,
+                    item,
+                    rid,
+                    name,
+                    kind,
+                    _manual_trigger_message(name, rid),
+                    tray,
+                    tray_available,
+                    refresh_callback,
+                ),
+                enabled,
+            ))
+    else:
+        actions.append(("暂无手动触发", lambda checked=False: None, False))
+    return actions
+
+
+def _rebuild_routes_menu(
+    routes_menu: QMenu,
+    manager_snapshot,
+    open_panel_callback,
 ) -> None:
     routes_menu.clear()
     if not manager_snapshot.connected:
@@ -204,54 +286,9 @@ def _rebuild_routes_menu(
     menu_refs = []
     for gateway in manager_snapshot.gateways:
         role_id = role_id_from_gateway(gateway, "未指定人格")
-        route_menu = QMenu(_route_label(gateway), routes_menu)
-        routes_menu.addMenu(route_menu)
-        menu_refs.append(route_menu)
-        role_menu = QMenu(str(role_id), route_menu)
-        route_menu.addMenu(role_menu)
-        menu_refs.append(role_menu)
-        role_menu.addAction(_action("打开人格目录", role_menu, lambda checked=False, item=gateway: desktop.open_path(
-            role_dir_from_gateway(project_root, item, role_id_from_gateway(item, "未指定人格"))
-        )))
-        role_menu.addAction(_action("打开任务目录", role_menu, lambda checked=False, item=gateway: desktop.open_path(
-            role_dir_from_gateway(project_root, item, role_id_from_gateway(item, "未指定人格")) / "tasks"
-        )))
-        role_menu.addAction(_action("打开项目目录", role_menu, lambda checked=False, item=gateway: desktop.open_path(
-            project_dir_from_gateway(project_root, item)
-        )))
-        role_menu.addAction(_action("打开运行状态目录", role_menu, lambda checked=False, item=gateway: desktop.open_path(
-            runtime_dir_from_gateway(project_root, item)
-        )))
-        role_menu.addSeparator()
-        manual_menu = QMenu("手动触发", role_menu)
-        role_menu.addMenu(manual_menu)
-        menu_refs.append(manual_menu)
-        manual_rules = _manual_trigger_rules(gateway)
-        if not manual_rules:
-            empty_action = QAction("暂无手动触发规则", manual_menu)
-            empty_action.setEnabled(False)
-            manual_menu.addAction(empty_action)
-            continue
-        for rule in manual_rules:
-            rule_name = str(rule.get("name") or rule.get("id") or "未命名手动规则")
-            rule_id = str(rule.get("id") or rule_name)
-            enabled = rule.get("enabled") is not False
-            route_kind = _manual_trigger_route_kind(rule)
-            action = _action(rule_name, manual_menu, lambda checked=False, item=gateway, rid=rule_id, name=rule_name, kind=route_kind: _manual_trigger(
-                manager,
-                item,
-                rid,
-                name,
-                kind,
-                _manual_trigger_message(name, rid),
-                tray,
-                tray_available,
-                refresh_callback,
-            ))
-            action.setEnabled(enabled)
-            if not enabled:
-                action.setText(f"{rule_name}（已停用）")
-            manual_menu.addAction(action)
+        action = _action(str(role_id), routes_menu, lambda checked=False, item=gateway: open_panel_callback(item))
+        action.setToolTip(_route_label(gateway))
+        routes_menu.addAction(action)
 
     routes_menu._rabiroute_menu_refs = menu_refs
 
@@ -324,12 +361,11 @@ def _route_label(gateway: dict) -> str:
     return f"{name} / {running}"
 
 
-def _tooltip(manager_snapshot, task_snapshot) -> str:
-    current_count = len(task_snapshot.current)
-    short_count = len(task_snapshot.short_term)
-    long_count = len(task_snapshot.long_term)
+def _tooltip(manager_snapshot, plan_snapshot) -> str:
+    current_count = len(plan_snapshot.current)
+    active_count = len(plan_snapshot.active)
     manager_text = "已连接" if manager_snapshot.connected else "离线"
-    return f"RabiRoute / {task_snapshot.role_id}\nManager：{manager_text}\n当前任务：{current_count}\n短期任务：{short_count}\n长期任务：{long_count}"
+    return f"RabiRoute / {plan_snapshot.role_id}\nManager：{manager_text}\n进行中计划：{current_count}\n未归档计划：{active_count}"
 
 
 def _status_text(manager_snapshot) -> str:

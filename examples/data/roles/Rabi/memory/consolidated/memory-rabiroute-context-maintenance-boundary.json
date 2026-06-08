@@ -1,0 +1,14 @@
+{
+  "id": "memory-rabiroute-context-maintenance-boundary",
+  "title": "RabiRoute context maintenance boundary",
+  "content": "Plans and recent memory are maintained by the Agent through RabiRoute interfaces. RabiRoute stores them, injects lightweight indexes, archives completed plans after the retention window, and writes consolidated memory from consolidation results.",
+  "source": {
+    "kind": "example",
+    "summary": "Example consolidated memory written by RabiRoute"
+  },
+  "createdAt": "2026-06-08T00:00:00+08:00",
+  "updatedAt": "2026-06-08T00:00:00+08:00",
+  "inputMemoryIds": ["memory-rabiroute-agent-maintains-context"],
+  "consolidationRunId": "memory-consolidation-run-example",
+  "keywords": ["plans", "memory", "consolidation", "boundary"]
+}

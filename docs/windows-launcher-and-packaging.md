@@ -1,51 +1,48 @@
-# Windows double-click launcher and packaging
+# Windows 双击启动器与打包说明
 
-RabiRoute still starts from the portable Node manager. The Windows launcher is a desktop convenience entry: it detects an existing manager, starts one only when needed, writes logs under the route data directory, opens RibiWebGUI, and starts the PySide6/Qt task panel when Python/PySide6 are available.
+RabiRoute 仍然从可移植的 Node manager 启动。Windows 启动器只是桌面便利入口：它会检测已有 manager，只在需要时启动一个新的 manager，把日志写到路由数据目录，打开 RibiWebGUI，并在 Python/PySide6 可用时启动 PySide6/Qt 计划与记忆面板。
 
-The Windows launcher is the supervisor for the "1+1" desktop experience:
+Windows 启动器是“1+1”桌面体验的监督者：
 
 ```text
 Start-RabiRoute-Tray.bat
-  -> embedded PowerShell launcher
+  -> 内嵌 PowerShell 启动器
      -> node dist/manager.js
-        -> managed gateway child processes
-     -> desktop/tray-task-window/main.py --owns-manager
+        -> 由 manager 管理的 gateway 子进程
+     -> desktop/tray-task-window/main.py --manager-url http://127.0.0.1:8790
 ```
 
-When the launcher starts the manager itself, the tray receives `--owns-manager`. In that mode, right-clicking the tray and choosing `Exit RabiRoute` calls the local manager shutdown API, then exits the tray. The manager stops its gateway child processes and closes its HTTP server.
+托盘里的 `退出 RabiRoute` 始终表示退出本地 RabiRoute 桌面运行态。它会调用本地 manager 关闭 API；manager 停止受管 gateway 子进程、关闭 HTTP server 并退出；随后托盘入口退出。
 
-If the launcher finds an already-running manager, it still starts the tray, but without `--owns-manager`. In that mode, `Exit tray` closes only the tray so it does not accidentally stop a manager started by `npm run start:manager`, another terminal, or another tool.
+## 双击启动
 
-## Double-click startup
-
-From the project root, double-click:
+在项目根目录双击：
 
 ```text
 Start-RabiRoute-Tray.bat
 ```
 
-`Start-RabiRoute-Tray.bat` is a polyglot batch/PowerShell launcher. The old split launcher files were removed so there is only one Windows source entry to maintain.
+`Start-RabiRoute-Tray.bat` 是一个 batch/PowerShell 混合启动器。旧的拆分启动文件已经移除，现在 Windows 只有这一个需要维护的源码入口。
 
-Default behavior:
+默认行为：
 
-- Uses project root as the working directory.
-- Checks `http://127.0.0.1:8790/meta`.
-- If RabiRoute manager is already running, reuses it and opens `http://127.0.0.1:8790/`.
-- If port `8790` is occupied by something that is not RabiRoute manager, exits without starting a duplicate process.
-- If `dist/manager.js` is missing or older than source files, runs `npm.cmd run build` unless `-NoBuild` is passed.
-- Starts `node dist\manager.js` in the background when no manager is running.
-- Opens RibiWebGUI after the manager answers.
-- Starts the PySide6/Qt task panel unless `-NoTray` is passed.
-- Starts the tray with `--owns-manager` only when this launcher started the manager.
-- Reuses an already-running Qt task panel instead of launching duplicate tray windows.
+- 使用项目根目录作为工作目录。
+- 检查 `http://127.0.0.1:8790/meta`。
+- 如果 RabiRoute manager 已经运行，复用它并打开 `http://127.0.0.1:8790/`。
+- 如果端口 `8790` 被非 RabiRoute manager 占用，直接退出，不启动重复进程。
+- 如果 `dist/manager.js` 缺失，或比源码更旧，会运行 `npm.cmd run build`，除非传入 `-NoBuild`。
+- 没有 manager 运行时，在后台启动 `node dist\manager.js`。
+- manager 响应后打开 RibiWebGUI。
+- 除非传入 `-NoTray`，否则启动 PySide6/Qt 计划与记忆面板。
+- 如果 Qt 面板已经运行，会复用已有面板，不创建重复托盘窗口。
 
-Logs go to:
+日志写入：
 
 ```text
 data/route/default-main/logs/
 ```
 
-Each launcher run creates timestamped files such as:
+每次启动器运行都会创建带时间戳的文件，例如：
 
 ```text
 launcher-YYYYMMDD-HHMMSS.log
@@ -55,7 +52,7 @@ tray-YYYYMMDD-HHMMSS.stdout.log
 tray-YYYYMMDD-HHMMSS.stderr.log
 ```
 
-Useful direct commands:
+常用直接命令：
 
 ```powershell
 .\Start-RabiRoute-Tray.bat
@@ -65,29 +62,29 @@ Useful direct commands:
 .\Start-RabiRoute-Tray.bat -ManagerUrl http://127.0.0.1:8790
 ```
 
-## What the launcher does not do
+## 启动器不负责的事
 
-The launcher does not start or stop NapCat, QQ, or any non-RabiRoute process. It also does not kill an existing RabiRoute manager or gateway that it did not start. If a port conflict exists, it reports the conflict and leaves processes alone.
+启动器不会启动或停止 NapCat、QQ 或任何非 RabiRoute 进程。如果存在端口冲突，它只报告冲突并保持现有进程不动。RabiRoute 的退出由 manager 本地 shutdown API 统一处理，不靠启动器直接杀进程。
 
-## Manager shutdown API
+## Manager 关闭 API
 
-The portable Node manager exposes a local-only graceful shutdown endpoint:
+可移植的 Node manager 暴露一个仅本机可用的优雅关闭端点：
 
 ```text
 POST http://127.0.0.1:8790/manager/shutdown
 ```
 
-This endpoint exists so the Windows tray can stop the manager it owns without using Windows-only process killing. The manager is already bound to `127.0.0.1`; the endpoint should not be exposed to the network. It stops managed gateway child processes, closes the HTTP server, and exits. The same shutdown path is used for `SIGINT` and `SIGTERM`.
+这个端点让 Windows 托盘可以停止本地 manager，而不需要使用 Windows-only 的杀进程方式。manager 已经绑定在 `127.0.0.1`；这个端点不应该暴露到网络。它会停止受管 gateway 子进程、关闭 HTTP server 并退出。`SIGINT` 和 `SIGTERM` 也使用同一条关闭路径。
 
-Alternatives considered:
+曾考虑但暂不采用的方案：
 
-- Killing the manager PID from the tray: rejected for MVP because it is Windows-specific and more likely to leave child processes or logs in a rough state.
-- Signal files: possible later, but slower to observe and less direct than a local HTTP API already served by manager.
-- Making the tray the long-running parent process: avoided for now so the Node manager remains the portable core and the Windows tray stays a convenience layer.
+- 从托盘直接杀 manager PID：MVP 阶段拒绝，因为它是 Windows 专属行为，也更容易留下子进程或不完整日志。
+- signal file：后续可以考虑，但观察延迟更高，也不如已有本地 HTTP API 直接。
+- 让托盘成为长期父进程：暂不采用，让 Node manager 保持可移植核心，Windows 托盘只做便利层。
 
-## macOS and Linux
+## macOS 和 Linux
 
-The portable startup path is already supported and remains the baseline:
+可移植启动路径已经支持，并且仍然是基线：
 
 ```bash
 npm install
@@ -95,46 +92,46 @@ npm run build
 npm run start:manager
 ```
 
-Then open:
+然后打开：
 
 ```text
 http://127.0.0.1:8790/
 ```
 
-That means the server, WebUI, manager API, gateway runtime, task repository layout, and graceful shutdown protocol are not Windows-only.
+这意味着 server、WebUI、manager API、gateway runtime、计划仓储布局和优雅关闭协议都不是 Windows-only。
 
-What is Windows-only today is the convenience launcher:
+当前只有便利启动器是 Windows 专属：
 
 ```text
 Start-RabiRoute-Tray.bat
 ```
 
-A future macOS/Linux desktop entry should be another platform launcher, not another RabiRoute core. It should follow the same contract:
+未来 macOS/Linux 桌面入口应该是另一个平台启动器，而不是另一个 RabiRoute core。它应遵守同一组约定：
 
-1. Detect `http://127.0.0.1:8790/meta`.
-2. Start `node dist/manager.js` only when no manager is running.
-3. Start the tray/floating panel with `--manager-url`.
-4. Pass `--owns-manager` only if that launcher started the manager.
-5. Let tray exit call `POST /manager/shutdown` only when it owns the manager.
+1. 检测 `http://127.0.0.1:8790/meta`。
+2. 只有没有 manager 运行时，才启动 `node dist/manager.js`。
+3. 使用 `--manager-url` 启动托盘/浮动面板。
+4. 托盘退出始终调用 `POST /manager/shutdown`。
+5. shutdown 失败时，托盘不应静默退出，以免 Web 服务残留。
 
-Possible platform launchers:
+可能的平台启动器：
 
-- macOS: `.command` script first, then a small `.app` wrapper or LaunchAgent later.
-- Linux: `.desktop` file plus shell script first, systemd user unit only if long-running autostart is needed.
-- Both: reuse the same PySide6/Qt panel code where the desktop environment supports system tray; otherwise run the floating window as a normal desktop panel without relying on tray-only behavior.
+- macOS：先提供 `.command` 脚本，后续再考虑小型 `.app` wrapper 或 LaunchAgent。
+- Linux：先提供 `.desktop` 文件加 shell 脚本；只有需要长期自启动时，再考虑 systemd user unit。
+- 两者都应复用同一套 PySide6/Qt 面板代码。桌面环境支持系统托盘时走托盘；不支持时，以普通浮动窗口运行。
 
-The code boundary to preserve is:
+需要保持的代码边界：
 
 ```text
-Portable: manager HTTP API, shutdown API, ManagerClient, TaskRepository, RoleContextRepository, LifecycleController, app_paths, Qt TaskWindow.
-Platform adapter: launch script, packaging, autostart, OS-specific tray availability and startup behavior.
+可移植层：manager HTTP API、shutdown API、ManagerClient、PlanRepository、RoleContextRepository、LifecycleController、app_paths、Qt TaskWindow。
+平台适配层：启动脚本、打包、开机启动、OS 专属托盘可用性和启动行为。
 ```
 
-## Qt task panel
+## Qt 计划与记忆面板
 
-The PySide6/Qt task panel under `desktop/tray-task-window` is optional for cross-platform Node manager startup, but it is part of the Windows "1+1" desktop entry. Qt is cross-platform, so the panel code should stay reusable on Windows, macOS, and Linux.
+`desktop/tray-task-window` 下的 PySide6/Qt 面板，对跨平台 Node manager 启动来说是可选的；但它属于 Windows “1+1” 桌面入口的一部分。Qt 是跨平台的，所以面板代码应继续可复用于 Windows、macOS 和 Linux。
 
-Recommended local setup when the tray entry is needed:
+需要托盘入口时，推荐本地准备方式：
 
 ```powershell
 py -m venv .venv-tray
@@ -142,50 +139,50 @@ py -m venv .venv-tray
 .\.venv-tray\Scripts\python.exe desktop\tray-task-window\main.py
 ```
 
-Do not install PySide6 globally unless that is explicitly desired for the machine.
+除非这台机器明确希望全局安装 PySide6，否则不要全局安装。
 
-The launcher looks for Python in this order:
+启动器按以下顺序查找 Python：
 
 1. `desktop\tray-task-window\.venv\Scripts\python.exe`
 2. `.venv-tray\Scripts\python.exe`
 3. `py.exe -3`
 4. `python.exe`
 
-If Python or PySide6 is missing, the tray process exits with a clear message in the tray stderr log while manager/WebGUI remain available.
+如果缺少 Python 或 PySide6，托盘进程会在 tray stderr 日志中给出清晰提示后退出；manager/WebGUI 仍保持可用。
 
-On desktop environments without a system tray, the Qt app should still show the floating panel as a normal window. The platform launcher is responsible for choosing whether that is acceptable UX for that OS/package.
+没有系统托盘的桌面环境中，Qt app 应该仍然以普通窗口显示浮动面板。平台启动器负责判断这种体验对目标 OS/package 是否可接受。
 
-The Qt panel also has a cross-platform single-instance lock per project root. This protects macOS/Linux launchers too, not only the Windows PowerShell launcher.
+Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同样适用于 macOS/Linux 启动器，不只是 Windows PowerShell 启动器。
 
-## Tray exe packaging
+## 托盘 exe 打包
 
-The repository includes the packaging spec and build wrapper, but generated exe files are local artifacts, not source files.
+仓库包含打包 spec 和构建 wrapper，但生成的 exe 是本地构建产物，不是源码文件。
 
-Build locally:
+本地构建：
 
 ```powershell
 .\scripts\build-tray-exe.ps1
 ```
 
-The script runs `npm run build`, invokes PyInstaller with `RabiRoute-Tray.spec`, and copies `dist\RabiRoute-Tray.exe` to the repository root for local testing. `RabiRoute-Tray.exe` is ignored by Git. Do not publish the generated exe until the binary has a separate release sanitation pass, because PyInstaller outputs may contain build-machine paths.
+脚本会运行 `npm run build`，用 `RabiRoute-Tray.spec` 调用 PyInstaller，并把 `dist\RabiRoute-Tray.exe` 复制到仓库根目录方便本地测试。`RabiRoute-Tray.exe` 已被 Git 忽略。正式发布二进制前必须单独做一次发布脱敏检查，因为 PyInstaller 输出可能包含构建机路径。
 
-Runtime boundary:
+运行边界：
 
-- The exe packages the PySide6 tray entry only.
-- The exe does not bundle Node.js, `dist/manager.js`, `ribiwebgui/dist`, or runtime `data`.
-- In frozen mode, `desktop/tray-task-window/main.py` resolves the project root from `Path(sys.executable).parent`.
-- If manager is not running, the exe starts `node dist/manager.js` and owns that process for shutdown.
+- exe 只打包 PySide6 托盘入口。
+- exe 不打包 Node.js、`dist/manager.js`、`ribiwebgui/dist` 或运行期 `data`。
+- frozen 模式下，`desktop/tray-task-window/main.py` 会从 `Path(sys.executable).parent` 解析项目根目录。
+- 如果 manager 没有运行，exe 会启动 `node dist/manager.js`，并拥有该进程的关闭权。
 
-Before shipping a real exe, verify:
+真实发布 exe 前，需要确认：
 
-- `dist/manager.js` and `dist/index.js` are built.
-- `ribiwebgui/dist/index.html` exists.
-- `data/route/<configName>/adapterConfig.json` and `data/roles/<RoleId>/personaConfig.json` remain writable runtime files.
-- Logs are written outside bundled resources.
-- The desktop entry never becomes the only supported startup path.
+- `dist/manager.js` 和 `dist/index.js` 已构建。
+- `ribiwebgui/dist/index.html` 存在。
+- `data/route/<configName>/adapterConfig.json` 和 `data/roles/<RoleId>/personaConfig.json` 仍是可写的运行期文件。
+- 日志写在 bundled resources 外部。
+- 桌面入口永远不能成为唯一受支持的启动路径。
 
-Potential future packaging:
+后续可能的打包方向：
 
-- GitHub Releases: use only after a separate binary sanitation and smoke-test pass.
-- Small installer: can lay down Node/runtime prerequisites and a checked-out project folder later.
-- Electron shell: only worth considering if the WebGUI truly needs desktop-window features.
+- GitHub Releases：只有完成单独的二进制脱敏和冒烟测试后再使用。
+- 小型 installer：后续可以安装 Node/runtime 前置条件，并放置检出的项目目录。
+- Electron shell：只有 WebGUI 真正需要桌面窗口能力时才值得考虑。

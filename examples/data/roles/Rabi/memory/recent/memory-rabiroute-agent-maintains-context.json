@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-agent-maintains-context",
+  "title": "计划和记忆由 Agent 主动维护",
+  "content": "RabiRoute 提供计划和记忆接口、上下文注入、自动归档和记忆沉淀触发；Agent 主动新增或更新计划和近期记忆。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆"
+  },
+  "createdAt": "2026-06-08T00:00:00+08:00",
+  "updatedAt": "2026-06-08T00:00:00+08:00",
+  "keywords": ["计划", "记忆", "Agent", "接口"]
+}

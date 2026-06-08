@@ -42,11 +42,18 @@ const diagnosisItems = computed(() => [
 ]);
 
 const adapterText = computed(() => {
+  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "已关闭";
   if (gateway.value && isMessageInputsDisabled(gateway.value)) return "已禁用";
+  if (!runtime.value.running) return "已停止";
   if (adapters.value.includes("napcat") && !napcatState.value.connected && napcatState.value.loginInfoError) return "NapCat 异常";
   if (adapters.value.includes("napcat") && !napcatState.value.connected) return "WS 未连接";
   if (adapters.value.includes("napcat") && napcatState.value.loginInfoError) return "HTTP 异常";
   return "已启用";
+});
+
+const adapterChipColor = computed(() => {
+  if (gateway.value?.enabled === false || runtime.value.enabled === false || (gateway.value && isMessageInputsDisabled(gateway.value))) return "grey";
+  return adapterReasons.value.length ? "error" : "success";
 });
 
 function webhookAddress(type: string): string {
@@ -159,7 +166,7 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
               <div class="section-title">消息端连接</div>
               <div class="section-note">当前类型：{{ adapters.map(adapterLabel).join(" + ") }}</div>
             </div>
-            <v-chip :color="adapterReasons.length ? 'error' : 'success'" variant="tonal">{{ adapterText }}</v-chip>
+            <v-chip :color="adapterChipColor" variant="tonal">{{ adapterText }}</v-chip>
           </div>
           <v-alert v-if="adapterReasons.length" type="error" variant="tonal" class="mb-3">
             <div v-for="reason in adapterReasons" :key="reason">原因：{{ reason }}</div>

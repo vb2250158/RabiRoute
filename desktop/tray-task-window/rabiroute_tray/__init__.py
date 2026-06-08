@@ -1,6 +1,6 @@
-"""RabiRoute Qt desktop task panel.
+"""RabiRoute Qt desktop plan and memory entry.
 
-The Qt panel, manager client, task repository, role context reader, and
-lifecycle controller are platform-neutral. Platform launchers decide how to
-start Python/Node, package the app, and register desktop shortcuts.
+The Qt entry, manager client, plan repository, role context reader, and
+lifecycle controller are platform-neutral. Exiting the tray means exiting
+the local RabiRoute desktop runtime, including the manager.
 """

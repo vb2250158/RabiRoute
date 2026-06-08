@@ -1,13 +1,20 @@
 import { config, type NapCatInstanceConfig } from "./config.js";
 
+export type OneBotMessageSegment = {
+  type: "text" | "image" | "record" | "file";
+  data: Record<string, unknown>;
+};
+
+export type OneBotMessage = string | OneBotMessageSegment[];
+
 type SendGroupMessageParams = {
   groupId: number | string;
-  message: string;
+  message: OneBotMessage;
 };
 
 type SendPrivateMessageParams = {
   userId: number | string;
-  message: string;
+  message: OneBotMessage;
 };
 
 type OneBotResponse<T> = {

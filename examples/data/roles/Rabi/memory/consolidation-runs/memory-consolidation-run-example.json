@@ -1,0 +1,50 @@
+{
+  "id": "memory-consolidation-run-example",
+  "type": "memory_consolidation_run",
+  "roleId": "Rabi",
+  "status": "completed",
+  "triggerSource": "manual",
+  "requestedAt": "2026-06-08T00:00:00+08:00",
+  "completedAt": "2026-06-08T00:05:00+08:00",
+  "window": {
+    "triggerOlderThanHours": 72,
+    "includeOlderThanHours": 24
+  },
+  "inputMemoryIds": ["memory-rabiroute-agent-maintains-context"],
+  "writtenMemoryIds": ["memory-rabiroute-context-maintenance-boundary"],
+  "request": {
+    "type": "memory_consolidation_request",
+    "routeKind": "manual_trigger",
+    "triggerId": "memory-consolidation",
+    "triggerName": "记忆整理",
+    "triggerSource": "manual",
+    "roleId": "Rabi",
+    "runId": "memory-consolidation-run-example",
+    "requestedAt": "2026-06-08T00:00:00+08:00",
+    "window": {
+      "triggerOlderThanHours": 72,
+      "includeOlderThanHours": 24
+    },
+    "instruction": "请将以下近期记忆整理为稳定、简洁、可长期保留的沉淀记忆，只返回 memory_consolidation_result JSON。",
+    "memories": [
+      {
+        "id": "memory-rabiroute-agent-maintains-context",
+        "title": "计划和记忆由 Agent 主动维护",
+        "content": "RabiRoute 提供计划和记忆接口、上下文注入、自动归档和记忆沉淀触发；Agent 主动新增或更新计划和近期记忆。",
+        "createdAt": "2026-06-08T00:00:00+08:00",
+        "updatedAt": "2026-06-08T00:00:00+08:00",
+        "keywords": ["计划", "记忆", "Agent", "接口"]
+      }
+    ]
+  },
+  "result": {
+    "type": "memory_consolidation_result",
+    "memories": [
+      {
+        "title": "RabiRoute context maintenance boundary",
+        "content": "Plans and recent memory are maintained by the Agent through RabiRoute interfaces. RabiRoute stores them, injects lightweight indexes, archives completed plans after the retention window, and writes consolidated memory from consolidation results.",
+        "keywords": ["plans", "memory", "consolidation", "boundary"]
+      }
+    ]
+  }
+}

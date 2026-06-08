@@ -63,7 +63,9 @@ const adapterHealth = computed(() => {
   const runtime = selectedRuntime.value;
   const adapters = gatewayAdapterTypes(gateway);
   const napcat = runtime.gatewayStatus?.napcat || {};
+  if (gateway.enabled === false || runtime.enabled === false) return "已关闭";
   if (isMessageInputsDisabled(gateway)) return "已禁用";
+  if (!runtime.running) return "已停止";
   if (adapters.includes("napcat") && !napcat.connected) return "WS 未连接";
   if (adapters.includes("napcat") && napcat.loginInfoError) return "HTTP 异常";
   return "已启用";
@@ -76,6 +78,7 @@ const selectedAdapters = computed(() => {
 });
 const selectedRuntimeLabel = computed(() => {
   if (!store.selectedGateway) return "未配置";
+  if (store.selectedGateway.enabled === false || selectedRuntime.value.enabled === false) return "已关闭";
   return selectedRuntime.value.running ? "运行中" : "已停止";
 });
 </script>

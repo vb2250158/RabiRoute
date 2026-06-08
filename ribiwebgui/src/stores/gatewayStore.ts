@@ -5,7 +5,6 @@ import {
   applyAdapterDefaults,
   configNameFor,
   createDefaultGateway,
-  defaultGroupAtTemplate,
   ensureActiveRoleRules,
   gatewayAdapterTypes,
   isQuickSetupNeeded,
@@ -15,6 +14,10 @@ import {
   saveActiveRoleRules,
   setGatewayAdapters
 } from "../utils/gatewayHelpers";
+import {
+  autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
+  validateGatewayPortConflicts
+} from "@shared/gatewayConfigModel";
 
 const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
 const isPluginShell = window.location.pathname.startsWith("/plugin/");
@@ -29,6 +32,142 @@ function managerErrorOf(value: unknown): string {
     return String((value as { error?: unknown }).error || "");
   }
   return "";
+}
+
+function assertValidPort(value: unknown, label: string): number {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${label} 必须是 1-65535 的整数，当前是 ${value || "空"}`);
+  }
+  return port;
+}
+
+function portFromUrl(value: string | undefined, label: string): number | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    const port = Number(parsed.port || (parsed.protocol === "https:" ? 443 : parsed.protocol === "http:" ? 80 : 0));
+    return port ? assertValidPort(port, `${label} 端口`) : null;
+  } catch {
+    throw new Error(`${label} 不是有效 URL：${value}`);
+  }
+}
+
+function validateGatewayPorts(items: GatewayDefinition[], managerPort: number): void {
+  const claims = new Map<number, string>();
+  const claim = (port: number | null | undefined, label: string): void => {
+    if (port == null) return;
+    const validPort = assertValidPort(port, label);
+    const existing = claims.get(validPort);
+    if (existing) {
+      throw new Error(`${label} 使用端口 ${validPort}，但已经被 ${existing} 占用`);
+    }
+    claims.set(validPort, label);
+  };
+
+  if (managerPort) {
+    claim(managerPort, "RibiWebGUI manager");
+  }
+
+  for (const gateway of items) {
+    const adapters = gatewayAdapterTypes(gateway);
+    const activeNapcatInstances = adapters.includes("napcat")
+      ? (gateway.napcatInstances ?? []).filter(instance => instance.enabled !== false)
+      : [];
+    if (adapters.includes("napcat") && activeNapcatInstances.length === 0) {
+      claim(gateway.gatewayPort, `${configNameFor(gateway)} RabiRoute WS`);
+    }
+    if (adapters.includes("webhook")) {
+      claim(gateway.webhookPort ?? gateway.gatewayPort, `${configNameFor(gateway)} Webhook`);
+    }
+    if (adapters.includes("fennenote")) {
+      claim(gateway.fenneNoteWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${configNameFor(gateway)} FenneNote Webhook`);
+    }
+    if (adapters.includes("xiaoai")) {
+      claim(gateway.xiaoaiWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${configNameFor(gateway)} XiaoAI Webhook`);
+    }
+    for (const instance of activeNapcatInstances) {
+      const name = `${configNameFor(gateway)} / ${instance.name || instance.id}`;
+      claim(instance.gatewayPort, `${name} RabiRoute WS`);
+      claim(portFromUrl(instance.httpUrl, `${name} HTTP 地址`), `${name} NapCat HTTP`);
+    }
+  }
+}
+
+function nextAvailablePort(used: Set<number>, preferred: number): number {
+  let port = Number.isInteger(preferred) && preferred >= 1 && preferred <= 65535 ? preferred : 8790;
+  while (port <= 65535 && used.has(port)) port += 1;
+  if (port > 65535) {
+    throw new Error("没有可用端口了，请手动释放一个 1-65535 范围内的端口。");
+  }
+  used.add(port);
+  return port;
+}
+
+function nextAvailableLocalUrl(baseUrl: string | undefined, used: Set<number>, fallbackPort: number): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl || `http://127.0.0.1:${fallbackPort}`);
+  } catch {
+    parsed = new URL(`http://127.0.0.1:${fallbackPort}`);
+  }
+  const current = Number(parsed.port || 0);
+  const nextPort = nextAvailablePort(used, current || fallbackPort);
+  parsed.port = String(nextPort);
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function autoAssignGatewayPorts(items: GatewayDefinition[], managerPort: number): void {
+  const usedIngress = new Set<number>();
+  const usedHttp = new Set<number>();
+  if (managerPort) usedIngress.add(assertValidPort(managerPort, "RibiWebGUI manager"));
+
+  const assignIngress = (value: unknown, fallback: number): number => {
+    const current = Number(value || 0);
+    if (Number.isInteger(current) && current >= 1 && current <= 65535 && !usedIngress.has(current)) {
+      usedIngress.add(current);
+      return current;
+    }
+    return nextAvailablePort(usedIngress, Math.max(1, Math.min(65535, Number(fallback) || 8790)));
+  };
+
+  for (const gateway of items) {
+    const adapters = gatewayAdapterTypes(gateway);
+    const activeNapcatInstances = adapters.includes("napcat")
+      ? (gateway.napcatInstances ?? []).filter(instance => instance.enabled !== false)
+      : [];
+
+    if (adapters.includes("napcat") && activeNapcatInstances.length > 0) {
+      for (const instance of activeNapcatInstances) {
+        instance.gatewayPort = assignIngress(instance.gatewayPort, Number(gateway.gatewayPort || 8790) + 1);
+        const httpPort = portFromUrl(instance.httpUrl, `${configNameFor(gateway)} / ${instance.name || instance.id} HTTP 地址`);
+        if (!httpPort || usedHttp.has(httpPort)) {
+          instance.httpUrl = nextAvailableLocalUrl(instance.httpUrl || gateway.napcatHttpUrl, usedHttp, 3000);
+        } else {
+          usedHttp.add(httpPort);
+        }
+      }
+      const primary = activeNapcatInstances[0];
+      gateway.gatewayPort = Number(primary.gatewayPort);
+      gateway.napcatHttpUrl = primary.httpUrl || gateway.napcatHttpUrl;
+      gateway.napcatWebuiUrl = primary.webuiUrl || gateway.napcatWebuiUrl;
+      gateway.napcatAccessToken = primary.accessToken || gateway.napcatAccessToken;
+      gateway.napcatWebuiToken = primary.webuiToken || gateway.napcatWebuiToken;
+    } else if (adapters.includes("napcat")) {
+      gateway.gatewayPort = assignIngress(gateway.gatewayPort, 8790);
+    }
+
+    if (adapters.includes("webhook")) {
+      gateway.webhookPort = assignIngress(gateway.webhookPort, Number(gateway.gatewayPort || 8790) + 1);
+    }
+    if (adapters.includes("fennenote")) {
+      gateway.fenneNoteWebhookPort = assignIngress(gateway.fenneNoteWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+    }
+    if (adapters.includes("xiaoai")) {
+      gateway.xiaoaiWebhookPort = assignIngress(gateway.xiaoaiWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+    }
+  }
 }
 
 function isAgentAdapterType(value: unknown): value is AgentAdapterType {
@@ -100,6 +239,7 @@ export const useGatewayStore = defineStore("gateway", () => {
           }
         });
       }
+      applyAdapterDefaults(gateway);
       ensureActiveRoleRules(gateway);
     });
   }
@@ -169,6 +309,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     saving.value = true;
     error.value = "";
     try {
+      sharedAutoAssignGatewayPorts(gateways.value, Number(meta.value.managerPort || 0));
+      validateGatewayPortConflicts(gateways.value);
       const response = await fetch(`${apiBase}/gateways`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -300,7 +442,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       routeKinds: [],
       targetGroupId: "",
       regex: "",
-      template: defaultGroupAtTemplate()
+      template: ""
     });
     saveActiveRoleRules(gateway);
     touch();
@@ -356,6 +498,7 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   function applyQuickSetup(values: {
     agentRoleId: string;
+    agentModel?: string;
     codexThreadName: string;
     codexCwd: string;
     copilotCliBin?: string;
@@ -389,6 +532,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     }
     gateway.messageInputsDisabled = values.messageInputsDisabled === true;
     gateway.agentRoleId = values.agentRoleId;
+    gateway.agentModel = values.agentModel?.trim() || "";
     gateway.codexThreadName = values.codexThreadName;
     gateway.codexCwd = values.codexCwd;
     gateway.agentAdapters = values.agentAdapters?.length ? values.agentAdapters : gateway.agentAdapters;
@@ -418,7 +562,8 @@ export const useGatewayStore = defineStore("gateway", () => {
           gatewayPort: values.gatewayPort,
           httpUrl: values.napcatHttpUrl,
           webuiUrl: values.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
-          accessToken: gateway.napcatAccessToken || ""
+          accessToken: gateway.napcatAccessToken || "",
+          webuiToken: gateway.napcatWebuiToken || ""
         }];
       } else {
         gateway.napcatInstances[0] = {

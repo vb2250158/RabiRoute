@@ -83,9 +83,12 @@ RabiRoute 决定自动执行、生成草稿、等待确认或拒绝。
 - 配 `adapterConfig.json`、消息端和路由入口：[路由配置](docs/routing-configuration.md)
 - 配 pipeline preset、输入输出适配器和 OumuQ TTS 意图：[Pipeline presets](docs/pipeline-presets.md)
 - 写人格角色包和成长型人格：[路由人格](docs/routing-and-personas.md)
+- 理解计划、记忆和 Agent 上下文注入：[计划和记忆机制](docs/plan-and-memory-model.md)
+- 给处理端 Agent 对接内置计划、记忆和回复接口：[Agent 需要关注的 Rabi 接口](docs/rabi-agent-interfaces.md)
 - 接 FenneNote 转录、角色对话和 OumuQ TTS：[语音交互工作站](docs/voice-interaction-workstation.md)
 - 外发失败、Codex IPC、普通群消息不转发：[排障](docs/troubleshooting.md)
 - 想理解边界和演进路线：[架构说明](docs/architecture.md)
+- 找后端、manager、WebGUI 和托盘窗口改动入口：[代码架构](docs/code-architecture.md)
 - 看版本变更和迁移说明：[版本更新日志](版本更新日志.md)
 
 ## 最小启动

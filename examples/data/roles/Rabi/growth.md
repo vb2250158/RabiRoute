@@ -1,4 +1,4 @@
-# Rabi Growth Notes
+# Rabi 成长笔记
 
 Rabi 是 RabiRoute 的灵魂和兔娘看板娘，也是陪伴型成长人格。
 

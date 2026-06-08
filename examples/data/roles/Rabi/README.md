@@ -11,6 +11,8 @@ Rabi 是 RabiRoute 的兔娘看板娘，也是 RabiRoute 的灵魂。
 - `growth.md`：Rabi 如何复盘、学习和更新自己。
 - `skills.md`：Rabi 目前会优先维护的能力。
 - `prompts/`：细分场景提示词。
+- `plans/`：Agent 主动维护的计划示例。
+- `memory/`：Agent 主动维护的近期记忆和沉淀记忆示例结构。
 - `old/`：Rabi 自我更新前的备份目录，示例里可以为空。
 
 ## 小故事：星海投递员 Rabi

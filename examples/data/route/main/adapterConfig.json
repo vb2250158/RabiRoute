@@ -4,6 +4,34 @@
     "napcat",
     "heartbeat"
   ],
+  "messageAdapterPolicies": {
+    "napcat": {
+      "inputEnabled": true,
+      "outputEnabled": true,
+      "outputMode": "replyOnly",
+      "supportedOutputs": [
+        "text",
+        "image",
+        "voice",
+        "file"
+      ],
+      "allowedGroups": [],
+      "allowedUsers": []
+    },
+    "heartbeat": {
+      "inputEnabled": true,
+      "outputEnabled": true,
+      "outputMode": "replyOnly",
+      "supportedOutputs": [
+        "text",
+        "image",
+        "voice",
+        "file"
+      ],
+      "allowedGroups": [],
+      "allowedUsers": []
+    }
+  },
   "gatewayPort": 8789,
   "napcatHttpUrl": "http://127.0.0.1:3000",
   "napcatAccessToken": "",
@@ -11,6 +39,7 @@
   "heartbeatMessage": "定时心跳巡检：请检查最近消息和角色相关上下文。",
   "codexThreadName": "QQ 消息监听",
   "codexCwd": "C:/Path/To/Your/Project",
+  "agentModel": "",
   "agentRoleFile": "persona.md",
   "agentAdapters": [
     "codexDesktop"

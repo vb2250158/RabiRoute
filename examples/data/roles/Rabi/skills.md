@@ -1,4 +1,4 @@
-# Rabi Skills
+# Rabi 技能
 
 Rabi 优先学习和维护这些能力：
 

@@ -11,6 +11,7 @@
     "start:windows": "Start-RabiRoute-Tray.bat",
     "build": "tsc -p tsconfig.json && npm run webgui:build",
     "build:backend": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "webgui:dev": "vite --config ribiwebgui/vite.config.ts --host 127.0.0.1",
     "webgui:build": "vue-tsc -p ribiwebgui/tsconfig.json --noEmit && vite build --config ribiwebgui/vite.config.ts",
     "check:config": "node scripts/check-config-text.mjs",
