@@ -41,6 +41,19 @@ let notificationQueue: Promise<void> = Promise.resolve();
 
 const statePath = path.join(config.dataDir, "codex-state.json");
 
+function defaultCodexModel(): string {
+  const envModel = process.env.RABIROUTE_CODEX_MODEL?.trim() || process.env.CODEX_MODEL?.trim();
+  if (envModel) return envModel;
+  try {
+    const configText = fs.readFileSync(path.join(os.homedir(), ".codex", "config.toml"), "utf8");
+    const match = configText.match(/^\s*model\s*=\s*"([^"]+)"/m);
+    if (match?.[1]?.trim()) return match[1].trim();
+  } catch {
+    // Fall back to the current Codex ChatGPT-account default used by this setup.
+  }
+  return "gpt-5.5";
+}
+
 type CodexState = {
   monitorThreadId?: string;
   monitorThreadName?: string;
@@ -337,18 +350,18 @@ async function ensureMonitorThread(forceCreate = false): Promise<string> {
     return state.monitorThreadId;
   }
 
-  const result = await request("thread/start", {
+  const threadStartParams: Record<string, unknown> = {
     cwd: config.codexCwd,
     approvalPolicy: "never",
     sandbox: "workspace-write",
     threadSource: "user",
     sessionStartSource: "startup",
     ephemeral: false,
-    baseInstructions: null,
     developerInstructions: `这是 QQ/NapCat 消息监听线程。收到提醒后，请读取 ${config.memoryDataDir} 下的 JSONL 消息记录，理解最新 QQ 私聊或群 @ 的上下文，并在 Codex 会话里开始处理。`,
-    config: null,
-    model: config.agentModel ?? null
-  }) as { thread?: { id?: string } };
+  };
+  threadStartParams.model = config.agentModel || defaultCodexModel();
+
+  const result = await request("thread/start", threadStartParams) as { thread?: { id?: string } };
 
   const threadId = result.thread?.id;
   if (!threadId) {
@@ -418,7 +431,7 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
 
   const idle = waitForThreadIdle(threadId);
   try {
-    await request("turn/start", {
+    const turnStartParams: Record<string, unknown> = {
       threadId,
       input: [
         {
@@ -438,9 +451,11 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
         writableRoots: []
       },
       effort: "high",
-      model: config.agentModel ?? null,
       personality: "friendly"
-    });
+    };
+    turnStartParams.model = config.agentModel || defaultCodexModel();
+
+    await request("turn/start", turnStartParams);
   } catch (error) {
     idle.catch(() => undefined);
     throw error;

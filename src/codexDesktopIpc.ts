@@ -102,6 +102,19 @@ let flushWaiters: Array<{
 const recentStartSteerWindowMs = 10 * 60 * 1000;
 const notificationBatchDelayMs = 2500;
 
+function defaultCodexModel(): string {
+  const envModel = process.env.RABIROUTE_CODEX_MODEL?.trim() || process.env.CODEX_MODEL?.trim();
+  if (envModel) return envModel;
+  try {
+    const configText = fs.readFileSync(path.join(os.homedir(), ".codex", "config.toml"), "utf8");
+    const match = configText.match(/^\s*model\s*=\s*"([^"]+)"/m);
+    if (match?.[1]?.trim()) return match[1].trim();
+  } catch {
+    // Fall back to the current Codex ChatGPT-account default used by this setup.
+  }
+  return "gpt-5.5";
+}
+
 function readState(): CodexState {
   if (!fs.existsSync(statePath)) {
     return {};
@@ -443,38 +456,38 @@ async function request(method: string, params: unknown, version = 1, allowBefore
 
 async function startNotificationTurn(threadId: string, message: string): Promise<void> {
   const text = buildInputText(message);
-  const modelOverride = config.agentModel ?? null;
+  const modelOverride = config.agentModel || defaultCodexModel();
+  const turnStartParams: Record<string, unknown> = {
+    input: [
+      {
+        type: "text",
+        text,
+        text_elements: []
+      }
+    ],
+    cwd: config.codexCwd,
+    approvalPolicy: "never",
+    sandboxPolicy: {
+      type: "dangerFullAccess"
+    },
+    effort: "high",
+    model: modelOverride,
+    serviceTier: "",
+    attachments: [],
+    commentAttachments: [],
+    collaborationMode: {
+      mode: "default",
+      settings: {
+        model: modelOverride,
+        reasoning_effort: "high",
+        developer_instructions: ""
+      }
+    }
+  };
+
   const response = await request("thread-follower-start-turn", {
     conversationId: threadId,
-    turnStartParams: {
-      input: [
-        {
-          type: "text",
-          text,
-          text_elements: []
-        }
-      ],
-      cwd: config.codexCwd,
-      approvalPolicy: "never",
-      sandboxPolicy: {
-        type: "dangerFullAccess"
-      },
-      model: null,
-      effort: "high",
-      serviceTier: null,
-      attachments: [],
-      commentAttachments: [],
-      collaborationMode: {
-        mode: "default",
-        settings: {
-          model: modelOverride,
-          reasoning_effort: "high",
-          developer_instructions: null
-        }
-      },
-      outputSchema: null,
-      responsesapiClientMetadata: null
-    }
+    turnStartParams
   });
 
   if (response.resultType !== "success") {
@@ -522,7 +535,6 @@ async function steerNotificationTurn(threadId: string, message: string): Promise
         prompt: text,
         addedFiles: [],
         fileAttachments: [],
-        ideContext: null,
         imageAttachments: [],
         workspaceRoots: [config.codexCwd]
       },

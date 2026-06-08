@@ -326,11 +326,11 @@ function policyAllowsTarget(policy: Required<MessageAdapterPolicy>, target: Sour
   if (policy.allowBroadcast) return true;
   if (target.targetType === "group" && target.groupId) {
     if (policy.allowedGroups.length > 0) return policy.allowedGroups.includes(String(target.groupId));
-    return isSourceReply && policy.outputMode === "replyOnly";
+    return true;
   }
   if (target.targetType === "private" && target.userId) {
     if (policy.allowedUsers.length > 0) return policy.allowedUsers.includes(String(target.userId));
-    return isSourceReply && policy.outputMode === "replyOnly";
+    return true;
   }
   return false;
 }
@@ -383,8 +383,27 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   const policy = napcatPolicy(route);
   const isSourceReply = Boolean(messageId && loggedTarget);
 
-  if (pipeline.outputAdapter !== "qq" || (!pipeline.replyToSource && policy.outputMode !== "direct")) {
-    const result = draft(`Pipeline does not allow automatic QQ send: outputAdapter=${pipeline.outputAdapter}, replyToSource=${pipeline.replyToSource}.`, text, target, route.profile?.id ?? route.runtime.id);
+  if (pipeline.outputAdapter === "codex") {
+    const result: AgentReplyResult = {
+      ok: true,
+      status: "sent",
+      reason: "Accepted by Codex output adapter.",
+      routeProfileId: route.profile?.id ?? route.runtime.id,
+      messageId,
+      targetType: target.targetType,
+      groupId: target.groupId,
+      userId: target.userId,
+      instanceId: target.instanceId
+    };
+    appendOutboxLog(options, route, "info", "codex_reply_accepted", text.slice(0, 500), {
+      ...result,
+      text
+    });
+    return result;
+  }
+
+  if (pipeline.outputAdapter !== "qq") {
+    const result = draft(`Pipeline does not use QQ output: outputAdapter=${pipeline.outputAdapter}.`, text, target, route.profile?.id ?? route.runtime.id);
     appendOutboxLog(options, route, "warning", "reply_draft", result.reason ?? "draft", result);
     return result;
   }
@@ -410,12 +429,6 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   if (policy.outputMode === "draft") {
     const result = draft("NapCat route policy is draft-only.", text, target, route.profile?.id ?? route.runtime.id);
     appendOutboxLog(options, route, "warning", "reply_draft", result.reason ?? "draft", result);
-    return result;
-  }
-
-  if (!isSourceReply && policy.outputMode !== "direct") {
-    const result: AgentReplyResult = { ...draft("Missing original source message context; automatic external send is not allowed.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
-    appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
     return result;
   }
 
