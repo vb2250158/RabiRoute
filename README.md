@@ -114,6 +114,31 @@ npm run start:manager
 http://127.0.0.1:8790/
 ```
 
+## 当前数据格式
+
+运行期数据按“路由入口”和“人格规则”分开保存：
+
+```text
+data/route/<configName>/adapterConfig.json
+data/roles/<RoleId>/persona.md
+data/roles/<RoleId>/personaConfig.json
+```
+
+`adapterConfig.json` 负责消息适配器、端口、Agent 适配器、工作目录、pipeline preset 和指向哪个人格；`personaConfig.json` 负责该人格的消息模板规则。不要再把消息入口和人格模板规则混进同一个配置文件。
+
+旧本地数据迁移时，按下面关系处理：
+
+```text
+data/route/<configName>/routeConfig.json        -> data/route/<configName>/adapterConfig.json
+data/roles/<RoleId>/roleMessageConfig.json      -> data/roles/<RoleId>/personaConfig.json
+```
+
+旧的 `data/gateways.json` 和 `data/roles/<RoleId>/routes.json` 不再作为新版主配置入口。迁移真实运行期数据前，先备份整个 `data/`，迁移后运行：
+
+```powershell
+npm run check:config
+```
+
 ## 桌面任务托盘 MVP
 
 RabiRoute 本体仍以 Node / CLI / npm scripts 作为跨平台基础启动方式。桌面任务面板使用 PySide6/Qt，面板代码本身按 Windows/macOS/Linux 可复用来组织；当前 Windows 额外提供启动器，用作打开 WebGUI、查看 Rabi 任务目录空状态或任务摘要的便利入口。它只读读取 `data/roles/<RoleId>/tasks` 和角色目录里的现有状态/记忆材料，不写任务数据，也不替代 RibiWebGUI。
@@ -140,7 +165,13 @@ Start-RabiRoute-Tray.bat
 
 它会启动/复用 manager，并启动 Qt 托盘/浮窗；只有当本次 launcher 启动了 manager 时，托盘右键退出才会带着 manager/gateway 一起 graceful shutdown。
 
-如需完整 Windows exe，可用 `scripts\build-tray-exe.ps1` 在本地打包 `RabiRoute-Tray.exe` 做本机测试；源码仓库只提交打包规范和脚本，不提交生成的 exe。公开发布包暂不启用，避免把本机路径或私有信息带进二进制资产。
+如需 Windows exe，可用 `scripts\build-tray-exe.ps1` 在本地打包 `RabiRoute-Tray.exe` 做本机测试：
+
+```powershell
+.\scripts\build-tray-exe.ps1
+```
+
+这个 exe 只打包 PySide6 托盘入口，不内置 Node.js、`dist/manager.js`、RibiWebGUI 构建产物或运行期 `data/`。运行时仍需要 Node.js 在 PATH，并且 exe 放在项目根目录，才能定位并启动 `node dist/manager.js`。源码仓库只提交打包规范和脚本，不提交生成的 exe。公开发布包暂不启用，避免把本机路径或私有信息带进二进制资产。
 
 Mac / Linux 可以继续用上面的 Node 启动方式运行 manager/WebGUI；这部分已经是跨平台基线。未来如果需要桌面入口，应只新增 macOS/Linux 平台 launcher，复用同一套 Qt 面板、manager HTTP API、shutdown API、`ManagerClient`、`TaskRepository`、`RoleContextRepository`、路径解析和生命周期 ownership 规则；Windows exe 打包只是便利发布层，不应分叉服务端或 WebUI。
 
