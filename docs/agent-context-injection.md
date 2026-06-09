@@ -102,6 +102,7 @@ Agent 需要关注的 Rabi 接口文档链接
 
 ```text
 更新记忆与计划的说明文档路径
+可用 API 提示：查看/更新计划、查看记忆、新增近期记忆、更新指定近期记忆
 进行中计划索引：计划 ID + 标题
 近期记忆索引：记忆 ID + 标题
 命中召回索引：被当前消息命中的计划/记忆 ID + 标题
@@ -109,7 +110,7 @@ Agent 需要关注的 Rabi 接口文档链接
 
 ## 命中召回规则
 
-`[记忆与计划]` 默认显示进行中计划和近期记忆。近期记忆统一指 `memory/recent/` 里的记忆，只是会根据 `updatedAt` 所在时间窗口有不同处理。默认配置下，最近 24 小时内更新过的近期记忆会直接显示。
+`[记忆与计划]` 默认显示进行中计划和近期记忆。近期记忆统一指 `memory/recent/` 里的记忆，只是会根据记忆活跃时间所在窗口有不同处理。记忆活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个；默认配置下，最近 24 小时内更新、按 ID 查看或被关键词命中过的近期记忆会直接显示。
 
 除此之外，RabiRoute 还会在投递消息给 Agent 之前，根据当前用户消息做轻量命中召回，把相关但默认不显示的条目临时列出来。
 
@@ -125,6 +126,8 @@ Agent 需要关注的 Rabi 接口文档链接
 - 未归档计划，包括 `未开始`、`进行中`、`已完成` 等状态。
 
 如果用户消息包含这些条目的标题或 `keywords`，RabiRoute 就把它们以 ID + 标题的形式加入 `[记忆与计划]`。
+
+命中召回近期记忆时，RabiRoute 会刷新该条记忆的 `viewedAt`。按 ID 查看近期记忆或沉淀记忆也会刷新 `viewedAt`；更新近期记忆会同时刷新 `updatedAt` 和 `viewedAt`。
 
 沉淀记忆、已归档计划和其他更老的历史内容不参与常规命中召回。用户明确要求查看沉淀记忆、归档计划或历史记录时，再按需查询。
 
@@ -173,6 +176,12 @@ MVP 使用标题 `includes` 和 Agent 写入的 `keywords` 做匹配。不在投
 
 [记忆与计划]
 更新记忆与计划的说明文档：<agentInterfaceDocPath>
+可用 API 提示：
+- 查看/更新计划：GET /api/roles/<roleId>/plans、GET /api/roles/<roleId>/plans/{planId}、POST /api/roles/<roleId>/plans、PATCH /api/roles/<roleId>/plans/{planId}
+- 查看记忆：GET /api/roles/<roleId>/memory、GET /api/roles/<roleId>/memory/recent、GET /api/roles/<roleId>/memory/recent/{memoryId}、GET /api/roles/<roleId>/memory/consolidated、GET /api/roles/<roleId>/memory/consolidated/{memoryId}
+- 新增近期记忆：POST /api/roles/<roleId>/memory/recent
+- 更新指定近期记忆：PATCH /api/roles/<roleId>/memory/recent/{memoryId}
+- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；关键词命中召回会刷新 viewedAt
 
 进行中计划：
 - <planId>：<planTitle>
@@ -218,6 +227,12 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 
 [记忆与计划]
 更新记忆与计划的说明文档：C:/Path/To/RabiRoute/docs/rabi-agent-interfaces.md
+可用 API 提示：
+- 查看/更新计划：GET /api/roles/Rabi/plans、GET /api/roles/Rabi/plans/{planId}、POST /api/roles/Rabi/plans、PATCH /api/roles/Rabi/plans/{planId}
+- 查看记忆：GET /api/roles/Rabi/memory、GET /api/roles/Rabi/memory/recent、GET /api/roles/Rabi/memory/recent/{memoryId}、GET /api/roles/Rabi/memory/consolidated、GET /api/roles/Rabi/memory/consolidated/{memoryId}
+- 新增近期记忆：POST /api/roles/Rabi/memory/recent
+- 更新指定近期记忆：PATCH /api/roles/Rabi/memory/recent/{memoryId}
+- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；关键词命中召回会刷新 viewedAt
 
 进行中计划：
 - plan-001：完善计划和记忆机制文档

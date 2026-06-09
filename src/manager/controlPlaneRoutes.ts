@@ -48,6 +48,8 @@ import {
   applyMemoryConsolidationResult,
   createPlan,
   createRecentMemory,
+  getConsolidatedMemory,
+  getRecentMemory,
   listConsolidatedMemories,
   listConsolidationRuns,
   listPlans,
@@ -2237,8 +2239,7 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
       return true;
     }
     if (request.method === "GET" && resource === "memory/recent") {
-      const memories = listRecentMemories(roleDir);
-      const data = itemId ? memories.find((item) => item.id === itemId) : memories;
+      const data = itemId ? getRecentMemory(roleDir, itemId) : listRecentMemories(roleDir);
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Memory not found: ${itemId}` });
         return true;
@@ -2247,8 +2248,7 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
       return true;
     }
     if (request.method === "GET" && resource === "memory/consolidated") {
-      const memories = listConsolidatedMemories(roleDir);
-      const data = itemId ? memories.find((item) => item.id === itemId) : memories;
+      const data = itemId ? getConsolidatedMemory(roleDir, itemId) : listConsolidatedMemories(roleDir);
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Consolidated memory not found: ${itemId}` });
         return true;

@@ -80,6 +80,23 @@ function section(title: string, lines: string[]): string {
   return content ? `[${title}]\n${content}` : "";
 }
 
+function roleApiBase(roleId: unknown): string {
+  const id = String(roleId || ":roleId");
+  return `/api/roles/${id === ":roleId" ? id : encodeURIComponent(id)}`;
+}
+
+function planMemoryApiHint(roleId: unknown): string[] {
+  const base = roleApiBase(roleId);
+  return [
+    "可用 API 提示：",
+    `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
+    `- 查看记忆：GET ${base}/memory、GET ${base}/memory/recent、GET ${base}/memory/recent/{memoryId}、GET ${base}/memory/consolidated、GET ${base}/memory/consolidated/{memoryId}`,
+    `- 新增近期记忆：POST ${base}/memory/recent`,
+    `- 更新指定近期记忆：PATCH ${base}/memory/recent/{memoryId}`,
+    "- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；关键词命中召回会刷新 viewedAt"
+  ];
+}
+
 function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "private") return "QQ 私聊消息提醒";
   if (routeKind === "group_message") return "QQ 群聊消息提醒";
@@ -234,6 +251,7 @@ function buildAgentMessage(
     ]),
     section("记忆与计划", [
       optionalLine("更新记忆与计划的说明文档", knowledge?.agentInterfaceDocPath ?? values.agentInterfaceDocPath),
+      ...planMemoryApiHint(values.agentRoleId),
       "",
       "进行中计划：",
       activePlanIndex,

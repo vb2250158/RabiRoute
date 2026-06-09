@@ -204,16 +204,16 @@ recentConsolidationHours = 72
 
 含义：
 
-- `recentEditableHours`：距离最后更新时间多少小时内的近期记忆允许 Agent 通过记忆 ID 直接修改，默认 24 小时。
-- `recentConsolidationHours`：当存在距离最后更新时间超过多少小时的近期记忆时，触发一次整理流程，默认 72 小时。
+- `recentEditableHours`：距离最后活跃时间多少小时内的近期记忆允许 Agent 通过记忆 ID 直接修改，默认 24 小时。
+- `recentConsolidationHours`：当存在距离最后活跃时间超过多少小时的近期记忆时，触发一次整理流程，默认 72 小时。
 
-记忆窗口以近期记忆的 `updatedAt` 为准，不以 `createdAt` 为准。近期记忆只要被 Agent 更新过，就重新进入活跃窗口。
+记忆窗口以近期记忆的活跃时间为准，不以 `createdAt` 为准。活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个。近期记忆只要被 Agent 更新、按 ID 查看，或被当前消息通过标题/`keywords` 命中召回，就重新进入活跃窗口。
 
-上下文默认显示的记忆也是按 `recentEditableHours` 判断。默认配置下，`[记忆与计划]` 中默认列出最近 24 小时内更新过的近期记忆。距离最后更新时间超过 24 小时、且尚未沉淀的近期记忆，不默认显示；只有用户消息命中标题或 `keywords` 时，才作为命中召回临时列入上下文。
+上下文默认显示的记忆也是按 `recentEditableHours` 判断。默认配置下，`[记忆与计划]` 中默认列出最近 24 小时内活跃过的近期记忆。距离最后活跃时间超过 24 小时、且尚未沉淀的近期记忆，不默认显示；只有用户消息命中标题或 `keywords` 时，才作为命中召回临时列入上下文，并刷新 `viewedAt`。
 
 记忆整理的触发时机由 RabiRoute 处理，不由 Agent 判断。RabiRoute 按人格配置和本地时间窗口检查近期记忆，决定是否启动一次沉淀流程。
 
-默认策略是：当 RabiRoute 发现存在 `updatedAt` 超过 `recentConsolidationHours` 的近期记忆时，触发一次记忆整理。触发后，RabiRoute 取所有 `updatedAt` 超过 `recentEditableHours` 且尚未沉淀的近期记忆，组成待整理记忆列表。RabiRoute 再通过现有 Agent adapter 投递链路向 Agent 发送一条记忆整理消息，并把需要整理的记忆一起发过去。
+默认策略是：当 RabiRoute 发现存在最后活跃时间超过 `recentConsolidationHours` 的近期记忆时，触发一次记忆整理。触发后，RabiRoute 取所有最后活跃时间超过 `recentEditableHours` 且尚未沉淀的近期记忆，组成待整理记忆列表。RabiRoute 再通过现有 Agent adapter 投递链路向 Agent 发送一条记忆整理消息，并把需要整理的记忆一起发过去。
 
 这条消息属于一种内置手动触发消息。它不是额外开一条特殊私有通道，而是作为 RabiRoute 内置的 `manual_trigger` 进入同一套模板、投递和 Agent 接收流程。
 
@@ -339,20 +339,19 @@ Agent 需要关注的 Rabi 接口：{agentInterfaceDocPath}
 ```text
 GET /roles/:roleId/plans
 GET /roles/:roleId/memory
+GET /roles/:roleId/memory/recent/:memoryId
+GET /roles/:roleId/memory/consolidated/:memoryId
 POST /roles/:roleId/plans
 PATCH /roles/:roleId/plans/:planId
 POST /roles/:roleId/memory/recent
 PATCH /roles/:roleId/memory/recent/:memoryId
-POST /roles/:roleId/memory/consolidation-requests
-POST /roles/:roleId/memory/consolidation-runs/:runId/result
-GET /roles/:roleId/memory/consolidation-runs
 ```
 
 这是后续扩展方向。manager 可以统一读取本地文件并提供计划/记忆接口，Agent adapter 或外部工作台按需查询和更新。
 
 计划接口可以新增计划、更新已有计划、修改状态、更新下一步或归档。记忆接口可以新增近期记忆，也可以通过记忆 ID 修改近期记忆。沉淀记忆不提供直接修改接口。
 
-近期记忆新增和更新都要求保留 `keywords`。RabiRoute 在消息投递前只匹配标题和 `keywords`，不做智能分词。
+近期记忆新增和更新都要求保留 `keywords`。RabiRoute 在消息投递前只匹配标题和 `keywords`，不做智能分词。按 ID 查看近期记忆或沉淀记忆会刷新 `viewedAt`；更新近期记忆会刷新 `updatedAt` 和 `viewedAt`；消息命中近期记忆标题或 `keywords` 时也会刷新该条近期记忆的 `viewedAt`。
 
 ## 注入时机
 
@@ -389,6 +388,8 @@ GET /roles/:roleId/memory/consolidation-runs
 记忆更新由 Agent 主动发起。RabiRoute 不应该自动把聊天记录变成记忆，只提供新增、修改、读取和沉淀接口。
 
 近期记忆可以修改。Agent 通过记忆 ID 更新已有近期记忆，用于修正措辞、补充上下文或合并重复记录。
+
+查看记忆也是一次活跃行为。按 ID 查看近期记忆或沉淀记忆时，RabiRoute 自动刷新 `viewedAt`；更新近期记忆时，RabiRoute 自动刷新 `updatedAt` 和 `viewedAt`。近期记忆的默认注入、关键词命中召回和沉淀窗口都按 `updatedAt` / `viewedAt` 中较新的时间判断。
 
 沉淀记忆不可直接修改。沉淀记忆来自总结流程，生成后只作为稳定记录读取。如果后来发现沉淀记忆不准确，Agent 应新增一条近期记忆说明修正，等待下一轮沉淀生成新的稳定结论。
 

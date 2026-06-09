@@ -28,7 +28,7 @@ docs/rabi-agent-interfaces.md
 - memory-001：计划和记忆由 Agent 主动维护
 ```
 
-近期记忆统一指 `memory/recent/` 里的记忆。默认配置下，最近 24 小时内更新过的近期记忆会直接注入；超过 24 小时且尚未沉淀的近期记忆不默认显示，只有用户消息命中标题或 `keywords` 时才会被召回。Agent 需要详情时，再通过接口按 ID 查询，不默认接收全部内容。
+近期记忆统一指 `memory/recent/` 里的记忆。默认配置下，最近 24 小时内活跃过的近期记忆会直接注入；超过 24 小时且尚未沉淀的近期记忆不默认显示，只有用户消息命中标题或 `keywords` 时才会被召回。活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个；按 ID 查询记忆、更新近期记忆、关键词命中召回都会刷新对应时间。
 
 普通回复上下文会一并注入：
 
@@ -201,9 +201,9 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 近期记忆可以通过 ID 修改，用于修正、补充、合并或降噪。超过 `recentEditableHours` 的近期记忆是否允许修改，由 RabiRoute 按人格配置判断。
 
-记忆时间窗口以 `updatedAt` 为准。Agent 更新近期记忆后，RabiRoute 会刷新 `updatedAt`，该记忆重新进入活跃窗口；只有距离最后更新时间超过可编辑窗口的记忆才会进入待沉淀范围。
+记忆时间窗口以活跃时间为准。活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个。Agent 按 ID 查询近期记忆时，RabiRoute 会刷新 `viewedAt`；Agent 更新近期记忆时，RabiRoute 会刷新 `updatedAt` 和 `viewedAt`；只有距离最后活跃时间超过可编辑窗口的记忆才会进入待沉淀范围。
 
-Agent 新增或更新近期记忆时，应主动填写 `keywords`。RabiRoute 在消息投递前只使用标题和 `keywords` 做轻量召回，不对记忆内容进行实时智能分词。
+Agent 新增或更新近期记忆时，应主动填写 `keywords`。RabiRoute 在消息投递前只使用标题和 `keywords` 做轻量召回，不对记忆内容进行实时智能分词。当前消息命中近期记忆标题或 `keywords` 时，RabiRoute 会刷新该条记忆的 `viewedAt`。
 
 `keywords` 是必填项。新增近期记忆时必须提供至少一个关键词；更新近期记忆时如果改写 `keywords`，也必须保留至少一个关键词。
 
@@ -219,6 +219,8 @@ GET /roles/:roleId/memory/consolidated/:memoryId
 ```
 
 沉淀记忆不提供普通 `PATCH` 接口。如果 Agent 发现沉淀记忆需要修正，应新增一条近期记忆说明修正内容，等待下一轮沉淀流程生成新的稳定结论。
+
+按 ID 查询沉淀记忆会刷新该条沉淀记忆的 `viewedAt`。沉淀记忆没有更新接口，`viewedAt` 只表示近期被查看或召回过。
 
 ## 内置记忆整理触发
 
@@ -248,7 +250,7 @@ POST /roles/:roleId/memory/consolidation-requests
 }
 ```
 
-默认情况下，只有存在 `updatedAt` 超过 72 小时且尚未沉淀的近期记忆时，RabiRoute 才创建请求；请求输入为所有 `updatedAt` 超过 24 小时且尚未沉淀的近期记忆。
+默认情况下，只有存在最后活跃时间超过 72 小时且尚未沉淀的近期记忆时，RabiRoute 才创建请求；请求输入为所有最后活跃时间超过 24 小时且尚未沉淀的近期记忆。
 
 创建后 API 返回本轮整理 run 和输入记忆。负责投递的链路可以把这些内容包装成 `memory_consolidation_request` 交给 Agent。
 

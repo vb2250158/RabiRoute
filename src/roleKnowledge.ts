@@ -40,6 +40,7 @@ export type RecentMemoryItem = {
   source?: KnowledgeSource;
   createdAt: string;
   updatedAt: string;
+  viewedAt?: string;
   consolidatedAt?: string;
   consolidationRunId?: string;
   keywords: string[];
@@ -52,6 +53,7 @@ export type ConsolidatedMemoryItem = {
   source?: KnowledgeSource;
   createdAt: string;
   updatedAt: string;
+  viewedAt?: string;
   inputMemoryIds?: string[];
   consolidationRunId?: string;
   keywords: string[];
@@ -155,6 +157,18 @@ function ageHours(updatedAt: string, now = Date.now()): number {
   return Math.max(0, (now - parsed) / 3_600_000);
 }
 
+function laterIso(left?: string, right?: string): string {
+  const leftMs = Date.parse(left || "");
+  const rightMs = Date.parse(right || "");
+  if (!Number.isFinite(leftMs)) return right || left || nowIso();
+  if (!Number.isFinite(rightMs)) return left || right || nowIso();
+  return rightMs > leftMs ? right as string : left as string;
+}
+
+function memoryActivityAt(memory: { updatedAt: string; viewedAt?: string }): string {
+  return laterIso(memory.updatedAt, memory.viewedAt);
+}
+
 function normalizeKeywords(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 24);
@@ -205,6 +219,7 @@ function normalizeRecentMemory(raw: Partial<RecentMemoryItem> & Record<string, u
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
+    viewedAt: typeof raw.viewedAt === "string" ? raw.viewedAt : undefined,
     consolidatedAt: typeof raw.consolidatedAt === "string" ? raw.consolidatedAt : undefined,
     consolidationRunId: typeof raw.consolidationRunId === "string" ? raw.consolidationRunId : undefined,
     keywords: normalizeKeywords(raw.keywords)
@@ -223,6 +238,7 @@ function normalizeConsolidatedMemory(raw: Partial<ConsolidatedMemoryItem> & Reco
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
+    viewedAt: typeof raw.viewedAt === "string" ? raw.viewedAt : undefined,
     inputMemoryIds: Array.isArray(raw.inputMemoryIds) ? raw.inputMemoryIds.map(String) : undefined,
     consolidationRunId: typeof raw.consolidationRunId === "string" ? raw.consolidationRunId : undefined,
     keywords: normalizeKeywords(raw.keywords)
@@ -283,12 +299,34 @@ export function listRecentMemories(roleDir: string): RecentMemoryItem[] {
   });
 }
 
+export function getRecentMemory(roleDir: string, memoryId: string): RecentMemoryItem | undefined {
+  const memory = listRecentMemories(roleDir).find((item) => item.id === memoryId);
+  if (!memory) return undefined;
+  const viewed = { ...memory, viewedAt: nowIso() };
+  writeJson(recentMemoryFile(roleDir, viewed), viewed);
+  return viewed;
+}
+
+function touchRecentMemoryView(roleDir: string, memory: RecentMemoryItem, viewedAt = nowIso()): RecentMemoryItem {
+  const viewed = { ...memory, viewedAt };
+  writeJson(recentMemoryFile(roleDir, viewed), viewed);
+  return viewed;
+}
+
 export function listConsolidatedMemories(roleDir: string): ConsolidatedMemoryItem[] {
   return jsonFiles(path.join(memoryDir(roleDir), "consolidated")).flatMap((file) => {
     const raw = readJson<Record<string, unknown>>(file);
     const item = raw ? normalizeConsolidatedMemory(raw, path.basename(file, ".json")) : null;
     return item ? [item] : [];
   });
+}
+
+export function getConsolidatedMemory(roleDir: string, memoryId: string): ConsolidatedMemoryItem | undefined {
+  const memory = listConsolidatedMemories(roleDir).find((item) => item.id === memoryId);
+  if (!memory) return undefined;
+  const viewed = { ...memory, viewedAt: nowIso() };
+  writeJson(consolidatedMemoryFile(roleDir, viewed), viewed);
+  return viewed;
 }
 
 export function listConsolidationRuns(roleDir: string): MemoryConsolidationRun[] {
@@ -338,7 +376,8 @@ export function createRecentMemory(roleDir: string, input: Record<string, unknow
 export function updateRecentMemory(roleDir: string, memoryId: string, patch: Record<string, unknown>): RecentMemoryItem {
   const existing = listRecentMemories(roleDir).find((item) => item.id === memoryId);
   if (!existing) throw new Error(`Memory not found: ${memoryId}`);
-  const next = normalizeRecentMemory({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: nowIso() });
+  const touchedAt = nowIso();
+  const next = normalizeRecentMemory({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: touchedAt, viewedAt: touchedAt });
   if (!next) throw new Error("Memory title and content are required.");
   requireKeywords(next.keywords, "Memory");
   writeJson(recentMemoryFile(roleDir, next), next);
@@ -364,10 +403,10 @@ export function pendingMemoryConsolidation(
   force = false
 ): MemoryConsolidationRequest | null {
   const memories = listRecentMemories(roleDir).filter((item) => !item.consolidatedAt);
-  const shouldTrigger = force || memories.some((item) => ageHours(item.updatedAt) > recentConsolidationHours);
+  const shouldTrigger = force || memories.some((item) => ageHours(memoryActivityAt(item)) > recentConsolidationHours);
   if (!shouldTrigger) return null;
 
-  const input = memories.filter((item) => ageHours(item.updatedAt) > recentEditableHours);
+  const input = memories.filter((item) => ageHours(memoryActivityAt(item)) > recentEditableHours);
   if (input.length === 0) return null;
 
   const inputIds = input.map((item) => item.id).sort();
@@ -498,13 +537,14 @@ export function roleKnowledgeSnapshot(
   const plans = listPlans(roleDir);
   const memories = listRecentMemories(roleDir);
   const activePlans = plans.filter((item) => item.status === "进行中");
-  const recentMemories = memories.filter((item) => !item.consolidatedAt && ageHours(item.updatedAt) <= DEFAULT_RECENT_EDITABLE_HOURS);
+  const recentMemories = memories.filter((item) => !item.consolidatedAt && ageHours(memoryActivityAt(item)) <= DEFAULT_RECENT_EDITABLE_HOURS);
   const matchedPlans = plans
     .filter((item) => item.status !== "已归档" && !activePlans.some((active) => active.id === item.id) && matchesText(messageText, item))
     .map((item) => ({ id: item.id, title: item.title, type: "plan" as const }));
-  const matchedMemories = memories
+  const matchedMemoryItems = memories
     .filter((item) => !item.consolidatedAt && !recentMemories.some((memory) => memory.id === item.id) && matchesText(messageText, item))
-    .map((item) => ({ id: item.id, title: item.title, type: "memory" as const }));
+    .map((item) => touchRecentMemoryView(roleDir, item));
+  const matchedMemories = matchedMemoryItems.map((item) => ({ id: item.id, title: item.title, type: "memory" as const }));
   return {
     roleDir,
     plansDir: plansDir(roleDir),
