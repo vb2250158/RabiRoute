@@ -5,6 +5,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { notifyCodex } from "./codexApp.js";
+import { reportAgentState } from "./agentAdapters/stateReporter.js";
 
 type IpcResponse = {
   type: "response";
@@ -81,8 +82,8 @@ function getCodexIpcPaths(): string[] {
   ].filter(Boolean) as string[]);
 }
 
-const statePath = path.join(config.dataDir, "codex-state.json");
 const pending = new Map<string, IpcPending>();
+let memoryState: CodexState = {};
 
 let socket: net.Socket | null = null;
 let connecting: Promise<net.Socket> | null = null;
@@ -116,16 +117,12 @@ function defaultCodexModel(): string {
 }
 
 function readState(): CodexState {
-  if (!fs.existsSync(statePath)) {
-    return {};
-  }
-
-  return JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as CodexState;
+  return memoryState;
 }
 
 function writeState(state: CodexState): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+  memoryState = state;
+  reportAgentState("codex", state);
 }
 
 function sessionIndexPath(): string {
@@ -564,7 +561,7 @@ function shouldUseAppServerFallback(): boolean {
 
 async function deliverToMonitorThread(state: CodexState, message: string): Promise<void> {
   if (!state.monitorThreadId) {
-    throw new Error(`Missing monitorThreadId in ${statePath}. RabiRoute tried to find "${config.codexThreadName}" in ${sessionIndexPath()}, but no matching Codex thread was found.`);
+    throw new Error(`Missing monitorThreadId. RabiRoute tried to find "${config.codexThreadName}" in ${sessionIndexPath()}, but no matching Codex thread was found.`);
   }
 
   await connect();

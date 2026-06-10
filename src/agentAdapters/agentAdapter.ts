@@ -1,4 +1,3 @@
-import { notifyCodex } from "../codexApp.js";
 import { notifyCodexDesktop } from "../codexDesktopIpc.js";
 import { notifyCopilotCli } from "../copilotCli.js";
 import { notifyMarvis } from "../marvis.js";
@@ -11,7 +10,7 @@ export type AgentAdapter = {
 };
 
 export function createAgentAdapter(type: AgentAdapterType): AgentAdapter {
-  if (type === "codexDesktop") {
+  if (type === "codex") {
     return {
       type,
       deliver: notifyCodexDesktop
@@ -39,8 +38,5 @@ export function createAgentAdapter(type: AgentAdapterType): AgentAdapter {
     };
   }
 
-  return {
-    type,
-    deliver: notifyCodex
-  };
+  throw new Error(`Unsupported agent adapter: ${type}`);
 }

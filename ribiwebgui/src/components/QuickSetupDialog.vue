@@ -3,7 +3,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterType } from "../types";
-import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isMessageInputsDisabled, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
+import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
@@ -18,8 +18,7 @@ const open = computed({
 const activeStep = ref(1);
 const form = reactive({
   adapters: ["napcat"] as MessageAdapterType[],
-  messageInputsDisabled: false,
-  agentAdapters: ["codexDesktop"] as AgentAdapterType[],
+  agentAdapters: ["codex"] as AgentAdapterType[],
   agentRoleId: "Rabi",
   agentModel: "",
   codexThreadName: "QQ 消息监听",
@@ -54,8 +53,7 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
 ];
 
 const quickAgentChoices: Array<{ type: AgentAdapterType; title: string; note: string; icon: string }> = [
-  { type: "codexDesktop", title: "Codex Desktop", note: "已验证，适合默认首配", icon: "mdi-monitor-dashboard" },
-  { type: "codexApp", title: "Codex App", note: "复用 Codex 会话和项目目录", icon: "mdi-application-outline" },
+  { type: "codex", title: "Codex", note: "投递到当前 Codex 聊天线程", icon: "mdi-monitor-dashboard" },
   { type: "copilotCli", title: "Copilot CLI", note: "实验支持，需要本机登录状态", icon: "mdi-robot-outline" },
   { type: "marvis", title: "Marvis", note: "占位支持，人工接力模式", icon: "mdi-message-processing-outline" },
   { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" }
@@ -116,8 +114,8 @@ async function runAgentScan(): Promise<void> {
   }
 }
 
-const selectedAgent = computed<AgentAdapterType>(() => form.agentAdapters[0] ?? "codexDesktop");
-const agentNeedsCodexProject = computed(() => selectedAgent.value === "codexDesktop" || selectedAgent.value === "codexApp");
+const selectedAgent = computed<AgentAdapterType>(() => form.agentAdapters[0] ?? "codex");
+const agentNeedsCodexProject = computed(() => selectedAgent.value === "codex");
 const agentNeedsCopilotProject = computed(() => selectedAgent.value === "copilotCli");
 const agentNeedsAstrbotEndpoint = computed(() => selectedAgent.value === "astrbot");
 const agentNeedsMarvisApp = computed(() => selectedAgent.value === "marvis");
@@ -129,11 +127,18 @@ function selectAgent(type: AgentAdapterType): void {
   }
 }
 
-function selectAgentValue(value: unknown): void {
+function normalizeAgentAdapterValue(value: unknown): AgentAdapterType | null {
   const text = String(value || "");
-  if (text === "codexDesktop" || text === "codexApp" || text === "copilotCli" || text === "marvis" || text === "astrbot") {
-    selectAgent(text);
+  const normalized = text === "codexDesktop" || text === "codexApp" ? "codex" : text;
+  if (normalized === "codex" || normalized === "copilotCli" || normalized === "marvis" || normalized === "astrbot") {
+    return normalized;
   }
+  return null;
+}
+
+function selectAgentValue(value: unknown): void {
+  const normalized = normalizeAgentAdapterValue(value);
+  if (normalized) selectAgent(normalized);
 }
 
 function normalizeClientPath(value?: string): string {
@@ -549,11 +554,8 @@ async function testAstrbotLogin(): Promise<void> {
   }
 }
 
-const messageInputsDisabled = computed(() => form.messageInputsDisabled);
 const messageReady = computed(() => {
-  if (form.messageInputsDisabled) return true;
   if (form.adapters.includes("napcat") && (!form.gatewayPort || !form.napcatHttpUrl.trim())) return false;
-  if (form.adapters.includes("heartbeat") && !form.heartbeatIntervalSeconds) return false;
   if (form.adapters.some(isWebhookLikeAdapter) && selectedWebhookAdapters().some(type => !webhookPortFor(type) || !webhookPathFor(type).trim())) return false;
   return form.adapters.length > 0;
 });
@@ -574,7 +576,7 @@ const steps = computed(() => [
   {
     value: 1,
     title: "消息入口",
-    note: form.messageInputsDisabled ? `已禁用 · 保留 ${form.adapters.map(adapterLabel).join(" + ")}` : form.adapters.map(adapterLabel).join(" + "),
+    note: form.adapters.map(adapterLabel).join(" + "),
     done: messageReady.value,
     icon: "mdi-numeric-1"
   },
@@ -597,10 +599,13 @@ const steps = computed(() => [
 function syncFromGateway() {
   const gateway = store.selectedGateway;
   form.adapters = gateway ? gatewayAdapterTypes(gateway) : ["napcat"];
-  form.messageInputsDisabled = gateway ? isMessageInputsDisabled(gateway) : false;
-  form.agentAdapters = Array.isArray(gateway?.agentAdapters) && gateway.agentAdapters.length
-    ? [...gateway.agentAdapters]
-    : ["codexDesktop"];
+  const rawAgentAdapters = Array.isArray(gateway?.agentAdapters) ? gateway.agentAdapters as unknown[] : [];
+  const normalizedAgentAdapters = rawAgentAdapters
+    .map(normalizeAgentAdapterValue)
+    .filter((adapter): adapter is AgentAdapterType => Boolean(adapter));
+  form.agentAdapters = normalizedAgentAdapters.length
+    ? [...new Set(normalizedAgentAdapters)]
+    : ["codex"];
   form.agentRoleId = gateway?.agentRoleId || "Rabi";
   form.agentModel = gateway?.agentModel || "";
   form.codexThreadName = gateway?.codexThreadName || "QQ 消息监听";
@@ -647,10 +652,6 @@ function toggleAdapter(type: MessageAdapterType) {
   if (next.has(type)) next.delete(type);
   else next.add(type);
   form.adapters = next.size ? [...next] : ["napcat"];
-}
-
-function setMessageInputsDisabled(disabled: boolean) {
-  form.messageInputsDisabled = disabled;
 }
 
 function goNext() {
@@ -712,16 +713,8 @@ async function apply() {
                 <div class="section-title-row">
                   <div>
                     <div class="section-title">选择消息入口</div>
-                    <div class="section-note">可以组合多个入口；禁用入口时仍可先保存 Agent 和人格配置。</div>
+                    <div class="section-note">可以组合多个入口；单个入口可在消息适配器页继续停用或调整权限。</div>
                   </div>
-                  <v-switch
-                    :model-value="messageInputsDisabled"
-                    label="禁用消息端"
-                    color="warning"
-                    inset
-                    hide-details
-                    @update:model-value="value => setMessageInputsDisabled(Boolean(value))"
-                  />
                 </div>
 
                 <div class="catalog-param-panel quick-agent-panel">
@@ -744,7 +737,7 @@ async function apply() {
                     </v-select>
                   </div>
 
-                <div class="catalog-param-grid" v-if="!form.messageInputsDisabled">
+                <div class="catalog-param-grid">
                   <template v-if="form.adapters.includes('napcat')">
                     <v-text-field v-model.number="form.gatewayPort" type="number" label="RabiRoute WS 端口" />
                     <v-text-field v-model="form.napcatHttpUrl" label="NapCat HTTP 地址" />
@@ -830,8 +823,9 @@ async function apply() {
                     </div>
                   </template>
                   <template v-if="form.adapters.includes('heartbeat')">
-                    <v-text-field v-model.number="form.heartbeatIntervalSeconds" type="number" label="定时触发间隔（秒）" />
-                    <v-text-field v-model="form.heartbeatMessage" label="定时触发消息" />
+                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
+                      定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。
+                    </v-alert>
                     <div class="quick-agent-status full-span">
                       <div class="agent-action-bar">
                         <div class="agent-action-status">
@@ -873,7 +867,6 @@ async function apply() {
                 <v-alert v-if="copyResult" type="success" variant="tonal" density="compact" class="mt-2">
                   {{ copyResult }}
                 </v-alert>
-                <v-alert v-if="form.messageInputsDisabled" type="info" variant="tonal">已暂时禁用消息端；入口选择和参数会保留，关闭禁用后继续使用。</v-alert>
                 </div>
               </v-window-item>
 
@@ -1155,7 +1148,7 @@ async function apply() {
                     </template>
                   </v-combobox>
                   <v-text-field
-                    v-if="selectedAgent === 'codexDesktop' || selectedAgent === 'codexApp'"
+                    v-if="selectedAgent === 'codex'"
                     v-model="form.agentModel"
                     class="full-span"
                     label="模型覆盖"

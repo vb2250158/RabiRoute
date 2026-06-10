@@ -1,12 +1,12 @@
 import type {
   AgentAdapterType,
   GatewayDefinition,
-  MessageAdapterOutputMode,
   MessageAdapterPolicies,
   MessageAdapterPolicy,
   MessageAdapterType,
   MessagePayloadKind,
   NapCatInstanceDefinition,
+  NotificationScheduleDefinition,
   NotificationRuleDefinition,
   PipelineDefinition
 } from "@shared/gatewayConfigModel";
@@ -14,11 +14,11 @@ import type {
 export type {
   AgentAdapterType,
   GatewayDefinition,
-  MessageAdapterOutputMode,
   MessageAdapterPolicies,
   MessageAdapterPolicy,
   MessageAdapterType,
   MessagePayloadKind,
+  NotificationScheduleDefinition,
   PipelineDefinition
 } from "@shared/gatewayConfigModel";
 

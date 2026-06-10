@@ -42,7 +42,7 @@ retcode=1006514
 示例：
 
 ```powershell
-npm run send:onebot -- --group 123456 --message "中文测试\n第二行"
+npm run send:onebot -- --group YOUR_GROUP_ID --message "中文测试\n第二行"
 ```
 
 如果 `data/route` 或 `data/roles` 下的 JSON reload 失败，或 WebUI 保存后配置异常，也检查是否误写入了字面量 `\n`：
@@ -58,7 +58,7 @@ npm run check:config
 
 ## `Missing monitorThreadId`
 
-说明 RabiRoute 没找到对应 Codex Desktop 线程。先打开或创建用于处理 QQ 消息的 Codex 线程，再通过 WebUI 绑定；也可以检查 `data/route/<配置名>/codex-state.json`。
+说明 RabiRoute 没找到对应 Codex Desktop 线程。先打开或创建用于处理 QQ 消息的 Codex 线程，再检查 WebUI 里的 Agent 状态；Manager 会按配置的线程名从 Codex session index 自动发现线程。
 
 ## macOS 上 `connect ENOENT /tmp/codex-ipc/...`
 

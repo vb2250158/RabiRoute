@@ -8,28 +8,22 @@
     "napcat": {
       "inputEnabled": true,
       "outputEnabled": true,
-      "outputMode": "replyOnly",
       "supportedOutputs": [
         "text",
         "image",
         "voice",
         "file"
-      ],
-      "allowedGroups": [],
-      "allowedUsers": []
+      ]
     },
     "heartbeat": {
       "inputEnabled": true,
       "outputEnabled": true,
-      "outputMode": "replyOnly",
       "supportedOutputs": [
         "text",
         "image",
         "voice",
         "file"
-      ],
-      "allowedGroups": [],
-      "allowedUsers": []
+      ]
     }
   },
   "gatewayPort": 8789,
@@ -42,7 +36,7 @@
   "agentModel": "",
   "agentRoleFile": "persona.md",
   "agentAdapters": [
-    "codexDesktop"
+    "codex"
   ],
   "dataDir": "./data/route/main",
   "configName": "main",

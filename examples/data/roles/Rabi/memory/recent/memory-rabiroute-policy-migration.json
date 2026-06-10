@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-policy-migration",
+  "title": "消息端收发权限应看 messageAdapterPolicies",
+  "content": "新配置用 messageAdapterPolicies 表达每个消息端的 inputEnabled、outputEnabled 和 supportedOutputs。旧的 messageInputsDisabled、messageAdaptersDisabled 只作为兼容字段；allowedGroups、allowedUsers、outputMode、enabledPipelines、disabledPipelines 不再作为新版细粒度过滤条件。Rabi 看配置时先看新牌子，不要被旧航标带偏。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：配置迁移关注点"
+  },
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "keywords": ["messageAdapterPolicies", "inputEnabled", "outputEnabled", "supportedOutputs", "配置迁移"]
+}

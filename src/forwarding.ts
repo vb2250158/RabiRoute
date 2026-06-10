@@ -35,10 +35,10 @@ function configuredAgentAdapters(): AgentAdapterType[] {
     return config.agentAdapters;
   }
   if (config.codexDesktopIpcNotify) {
-    return ["codexDesktop"];
+    return ["codex"];
   }
   if (config.codexDirectNotify) {
-    return ["codexApp"];
+    return ["codex"];
   }
   if (process.env.ASTRBOT_URL) {
     return ["astrbot"];
@@ -52,6 +52,9 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   }
   if (routeKind === "manual_trigger") {
     return "manual_trigger";
+  }
+  if (routeKind === "role_panel_message") {
+    return "role_panel_message";
   }
   if (routeKind === "voice_transcript") {
     return "voice_transcript";

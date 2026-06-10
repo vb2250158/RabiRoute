@@ -6,6 +6,8 @@ import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
 import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
+import { forwardMessageAndWait } from "./forwarding.js";
+import type { RolePanelMessageRecord } from "./history.js";
 
 type GatewayStatus = {
   messageAdapter?: {
@@ -34,13 +36,55 @@ if (manualTriggerArg) {
   const message = messageArg ? decodeURIComponent(messageArg.slice("--manual-message=".length)) : triggerId;
   const triggerName = nameArg ? decodeURIComponent(nameArg.slice("--manual-name=".length)) : triggerId;
   const routeKind = routeKindArg?.slice("--manual-route-kind=".length) === "heartbeat" ? "heartbeat" : "manual_trigger";
-  const triggerRuleId = ruleArg?.slice("--manual-rule=".length).trim() || triggerId;
+  const triggerRuleId = ruleArg ? ruleArg.slice("--manual-rule=".length).trim() || undefined : routeKind === "heartbeat" ? undefined : triggerId;
   try {
     await triggerManualRule(triggerId, message, triggerName, routeKind, triggerRuleId);
     console.log(`RabiRoute manual trigger completed: ${triggerId}`);
     process.exit(0);
   } catch (error) {
     console.error(`RabiRoute manual trigger failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
+const rolePanelMessageArg = process.argv.find((arg) => arg.startsWith("--role-panel-message="));
+if (rolePanelMessageArg) {
+  const messageId = rolePanelMessageArg.slice("--role-panel-message=".length).trim() || `role-panel-${Date.now()}`;
+  const messageArg = process.argv.find((arg) => arg.startsWith("--role-panel-text="));
+  const roleArg = process.argv.find((arg) => arg.startsWith("--role-panel-role="));
+  const gatewayArg = process.argv.find((arg) => arg.startsWith("--role-panel-gateway="));
+  const profileArg = process.argv.find((arg) => arg.startsWith("--role-panel-route-profile="));
+  const attachmentArg = process.argv.find((arg) => arg.startsWith("--role-panel-attachments="));
+  const text = messageArg ? decodeURIComponent(messageArg.slice("--role-panel-text=".length)) : "";
+  const roleId = roleArg ? decodeURIComponent(roleArg.slice("--role-panel-role=".length)) : config.agentRoleId;
+  const gatewayId = gatewayArg ? decodeURIComponent(gatewayArg.slice("--role-panel-gateway=".length)) : process.env.GATEWAY_ID;
+  const routeProfileId = profileArg ? decodeURIComponent(profileArg.slice("--role-panel-route-profile=".length)) : undefined;
+  let attachments: unknown[] = [];
+  if (attachmentArg) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(attachmentArg.slice("--role-panel-attachments=".length))) as unknown;
+      attachments = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      attachments = [];
+    }
+  }
+  const record: RolePanelMessageRecord = {
+    time: Math.floor(Date.now() / 1000),
+    rawMessage: text,
+    messageId,
+    senderName: roleId ? `${roleId} 角色面板` : "角色面板",
+    roleId,
+    gatewayId,
+    routeProfileId,
+    attachments,
+    adapterType: "rolePanel"
+  };
+  try {
+    await forwardMessageAndWait("role_panel_message", record);
+    console.log(`RabiRoute role panel message completed: ${messageId}`);
+    process.exit(0);
+  } catch (error) {
+    console.error(`RabiRoute role panel message failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
 }
@@ -83,9 +127,11 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
   return {
     type,
     start() {
-      const status = type === "disabled" ? "disabled" : "placeholder";
+      const status = type === "disabled" ? "disabled" : type === "rolePanel" ? "running" : "placeholder";
       const message = type === "disabled"
         ? "消息适配端已禁用。"
+        : type === "rolePanel"
+          ? "角色面板是 RabiRoute 内置本地消息端，由 manager/托盘窗口提供入口。"
         : `${type} 消息适配端尚未实现，当前仅作为框架占位。`;
       patchMessageAdapterStatus({ type, status, message });
       console.log(message);

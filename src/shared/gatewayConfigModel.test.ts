@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   autoAssignGatewayPorts,
+  collectGatewayPortClaims,
   gatewayAdapterTypes,
   messageAdapterPolicyFor,
   normalizeGatewayDefinition,
+  normalizeGatewayNapCatConfig,
   normalizeNapCatInstances,
   normalizeRuleDefinitions,
+  resolvePrimaryNapCatInstance,
   sanitizeConfigName,
+  syncPrimaryNapCatInstanceFields,
   validateGatewayPortConflicts,
   type GatewayDefinition
 } from "./gatewayConfigModel.js";
@@ -47,13 +51,40 @@ test("message adapter policies control input while keeping output defaults enabl
     messageAdapters: ["napcat", "heartbeat"],
     messageAdapterPolicies: {
       napcat: { inputEnabled: false },
-      heartbeat: { outputMode: "direct", allowedGroups: ["10001"] }
+      heartbeat: { outputEnabled: false }
     }
   }));
   assert.deepEqual(gatewayAdapterTypes(normalized), ["heartbeat"]);
   assert.equal(messageAdapterPolicyFor(normalized, "napcat").outputEnabled, true);
-  assert.equal(messageAdapterPolicyFor(normalized, "heartbeat").outputMode, "direct");
+  assert.equal(messageAdapterPolicyFor(normalized, "heartbeat").outputEnabled, false);
   assert.deepEqual(messageAdapterPolicyFor(normalized, "heartbeat").supportedOutputs, ["text", "image", "voice", "file"]);
+});
+
+test("legacy Codex agent adapter ids are upgraded to codex", () => {
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexDesktop"] as any })).agentAdapters, ["codex"]);
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexApp"] as any })).agentAdapters, ["codex"]);
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexDesktop", "codexApp"] as any })).agentAdapters, ["codex"]);
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexApp", "copilotCli"] as any })).agentAdapters, ["codex", "copilotCli"]);
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["unknown"] as any })).agentAdapters, ["codex"]);
+});
+
+test("default gateway agent adapter uses codex", () => {
+  assert.deepEqual(normalizeGatewayDefinition(gateway()).agentAdapters, ["codex"]);
+});
+
+test("legacy message adapter target restrictions are ignored", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapters: ["napcat"],
+    messageAdapterPolicies: {
+      napcat: { allowedGroups: ["10001"], allowedUsers: ["10002"], allowBroadcast: false, disabledPipelines: ["qq"] } as any
+    }
+  }));
+
+  assert.deepEqual(Object.keys(messageAdapterPolicyFor(normalized, "napcat")).sort(), [
+    "inputEnabled",
+    "outputEnabled",
+    "supportedOutputs"
+  ].sort());
 });
 
 test("legacy disabled adapter list backfills policy input state", () => {
@@ -77,6 +108,58 @@ test("NapCat instances receive defaults and unique ids", () => {
   assert.equal(instances[0].webuiUrl, "http://127.0.0.1:6099/webui");
 });
 
+test("NapCat primary resolution chooses the first enabled normalized instance", () => {
+  const resolved = normalizeGatewayNapCatConfig(gateway({
+    gatewayPort: 8791,
+    napcatHttpUrl: "http://127.0.0.1:3001",
+    napcatInstances: [
+      { id: "off", enabled: false, gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002" },
+      { id: "on", gatewayPort: 8793, httpUrl: "http://127.0.0.1:3003", accessToken: "bot-token" }
+    ]
+  }));
+
+  assert.equal(resolved.primaryIndex, 1);
+  assert.equal(resolved.primary?.id, "on");
+  assert.equal(resolved.instances[0].enabled, false);
+  assert.equal(resolved.instances[1].webuiUrl, "http://127.0.0.1:6099/webui");
+});
+
+test("NapCat primary sync backfills gateway fields and clears stale tokens", () => {
+  const definition = gateway({
+    gatewayPort: 8791,
+    napcatHttpUrl: "http://127.0.0.1:3001",
+    napcatAccessToken: "stale-access",
+    napcatWebuiToken: "stale-webui",
+    napcatInstances: [
+      { id: "old", enabled: false, gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002", accessToken: "old-access", webuiToken: "old-webui" },
+      { id: "primary", gatewayPort: 8793, httpUrl: "http://127.0.0.1:3003", webuiUrl: "http://127.0.0.1:6103/webui", accessToken: "", webuiToken: "" }
+    ]
+  });
+
+  const resolved = syncPrimaryNapCatInstanceFields(definition);
+
+  assert.equal(resolved.primary?.id, "primary");
+  assert.equal(definition.gatewayPort, 8793);
+  assert.equal(definition.napcatHttpUrl, "http://127.0.0.1:3003");
+  assert.equal(definition.napcatWebuiUrl, "http://127.0.0.1:6103/webui");
+  assert.equal(definition.napcatAccessToken, "");
+  assert.equal(definition.napcatWebuiToken, "");
+});
+
+test("NapCat primary resolution falls back to the first instance when all are disabled", () => {
+  const instances = normalizeNapCatInstances(gateway({
+    napcatInstances: [
+      { id: "a", enabled: false, gatewayPort: 8791, httpUrl: "http://127.0.0.1:3001" },
+      { id: "b", enabled: false, gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002" }
+    ]
+  }));
+
+  const resolved = resolvePrimaryNapCatInstance(gateway(), instances);
+
+  assert.equal(resolved.primaryIndex, 0);
+  assert.equal(resolved.primary?.id, "a");
+});
+
 test("NapCat invalid ports are rejected", () => {
   assert.throws(
     () => normalizeNapCatInstances(gateway({ napcatInstances: [{ id: "bad", gatewayPort: 70000, httpUrl: "http://127.0.0.1:3000" }] })),
@@ -89,6 +172,57 @@ test("auto assignment skips the manager port", () => {
   autoAssignGatewayPorts(items, 8790);
   assert.notEqual(items[0].gatewayPort, 8790);
   assert.equal(items[0].gatewayPort, 8791);
+});
+
+test("auto assignment allocates unique NapCat instance ports and syncs primary", () => {
+  const items = [
+    gateway({
+      id: "Rabi__a",
+      gatewayPort: 8790,
+      napcatInstances: [
+        { id: "a1", gatewayPort: 8790, httpUrl: "http://127.0.0.1:3000", webuiUrl: "http://127.0.0.1:6099/webui", accessToken: "a1" },
+        { id: "a2", gatewayPort: 8790, httpUrl: "http://127.0.0.1:3000", webuiUrl: "http://127.0.0.1:6100/webui", accessToken: "a2" }
+      ]
+    }),
+    gateway({
+      id: "Rabi__b",
+      gatewayPort: 8790,
+      messageAdapters: ["napcat", "webhook"],
+      webhookPort: 8790,
+      napcatInstances: [
+        { id: "b1", gatewayPort: 8790, httpUrl: "http://127.0.0.1:3000", webuiUrl: "http://127.0.0.1:6101/webui", accessToken: "b1" }
+      ]
+    })
+  ];
+
+  autoAssignGatewayPorts(items, 8790);
+
+  const claims = collectGatewayPortClaims(items, { managerPort: 8790 });
+  assert.equal(new Set(claims.map((claim) => claim.port)).size, claims.length);
+  assert.equal(items[0].gatewayPort, items[0].napcatInstances?.[0].gatewayPort);
+  assert.equal(items[0].napcatHttpUrl, items[0].napcatInstances?.[0].httpUrl);
+  assert.equal(items[0].napcatAccessToken, "a1");
+  assert.notEqual(items[0].napcatInstances?.[0].gatewayPort, items[0].napcatInstances?.[1].gatewayPort);
+  assert.notEqual(items[0].napcatInstances?.[0].httpUrl, items[0].napcatInstances?.[1].httpUrl);
+  validateGatewayPortConflicts(items);
+});
+
+test("port claims expose NapCat WS and HTTP ownership", () => {
+  const claims = collectGatewayPortClaims([
+    gateway({
+      id: "Rabi__a",
+      napcatInstances: [
+        { id: "a1", gatewayPort: 8791, httpUrl: "http://127.0.0.1:3001" },
+        { id: "a2", enabled: false, gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002" }
+      ]
+    })
+  ], { managerPort: 8790 });
+
+  assert.deepEqual(claims.map((claim) => [claim.kind, claim.gatewayId, claim.instanceId, claim.port]), [
+    ["manager", undefined, undefined, 8790],
+    ["napcat-ws", "Rabi__a", "a1", 8791],
+    ["napcat-http", "Rabi__a", "a1", 3001]
+  ]);
 });
 
 test("port conflicts are detected across gateway, webhook and NapCat HTTP ports", () => {
@@ -110,8 +244,29 @@ test("port conflicts are detected across gateway, webhook and NapCat HTTP ports"
 });
 
 test("notification rules and escaped newlines are normalized", () => {
-  const [rule] = normalizeRuleDefinitions([{ routeKinds: [123], template: "a\\nb" }]) ?? [];
+  const [rule] = normalizeRuleDefinitions([{
+    routeKinds: [123],
+    template: "a\\nb",
+    schedules: [{
+      id: "daytime",
+      type: "interval",
+      intervalSeconds: 900,
+      windowStartTime: "09:30",
+      windowEndTime: "19:00"
+    }]
+  }]) ?? [];
   assert.equal(rule.id, "rule-1");
   assert.deepEqual(rule.routeKinds, ["123"]);
   assert.equal(rule.template, "a\nb");
+  assert.deepEqual(rule.schedules?.[0], {
+    id: "daytime",
+    name: undefined,
+    enabled: true,
+    type: "interval",
+    intervalSeconds: 900,
+    windowStartTime: "09:30",
+    windowEndTime: "19:00",
+    timeOfDay: undefined,
+    onceAt: undefined
+  });
 });

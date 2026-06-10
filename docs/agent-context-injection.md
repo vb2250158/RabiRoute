@@ -211,7 +211,7 @@ MVP 使用标题 `includes` 和 Agent 写入的 `keywords` 做匹配。不在投
 路由类型：group_message
 事件时间：2026/6/8 20:12:00
 当前时间：2026/6/8 20:12:03
-来源：群 123456
+来源：群 <group-id>
 发送者：Alice
 
 [消息]

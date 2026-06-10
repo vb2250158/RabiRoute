@@ -190,28 +190,16 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
   }
 
   const agents: Record<AgentAdapterType, AgentScanResult> = {
-    codexDesktop: {
-      type: "codexDesktop",
-      label: "Codex Desktop",
+    codex: {
+      type: "codex",
+      label: "Codex",
       maturity: "verified",
       installed: fs.existsSync(sessionIndex),
       projects,
       sessions: codexSessions,
       warnings: [
         ...(codexSessions.length === 0 ? [`未在 ${sessionIndex} 发现 Codex 会话索引。`] : []),
-        "本页不会自动向现有 Codex 会话发送烟测消息；同会话重复注入需要人工确认后再测。"
-      ]
-    },
-    codexApp: {
-      type: "codexApp",
-      label: "Codex App",
-      maturity: "verified",
-      installed: fs.existsSync(sessionIndex),
-      projects,
-      sessions: codexSessions,
-      warnings: [
-        ...(codexSessions.length === 0 ? [`未在 ${sessionIndex} 发现 Codex 会话索引。`] : []),
-        "复用 Codex 会话/项目模型；真实消息注入仍以绑定线程状态为准。"
+        "通过 Codex Desktop 会话投递；Desktop IPC 不可用时可按 fallback 配置尝试旧 app-server 通道。"
       ]
     },
     copilotCli: {

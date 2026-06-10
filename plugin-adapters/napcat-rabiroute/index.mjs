@@ -218,12 +218,12 @@ const plugin_init = async (ctx) => {
   const handleGatewayAction = async (req, res) => {
     try {
       const { id, action } = req.params;
-      if (!["start", "stop", "restart"].includes(action)) {
+      if (!["start", "stop", "restart", "delete"].includes(action)) {
         res.status(400).json({ code: -1, message: "无效操作" });
         return;
       }
-      await fetchManager(`/gateways/${encodeURIComponent(id)}/${action}`, { method: "POST" });
-      res.json({ code: 0, message: `已请求执行 ${action}` });
+      const result = await fetchManager(`/gateways/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+      res.json(action === "delete" ? result : { code: 0, message: `已请求执行 ${action}` });
     } catch (error) {
       res.status(500).json({ code: -1, message: error.message });
     }

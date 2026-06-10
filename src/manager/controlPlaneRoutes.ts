@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { normalizeAgentAdapters, type AgentAdapterType } from "../agentAdapters/types.js";
+import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 import {
   deployAstrbotAdapter,
   getCopilotStatus,
@@ -22,6 +22,7 @@ import {
   launchNapcatInstance as launchNapcatInstanceEndpoint,
   nextFreeLocalPort,
   prepareManagedNapcatInstance,
+  restartNapcatInstance as restartNapcatInstanceEndpoint,
   scanNapcatEndpoint,
   stopNapcatInstance as stopNapcatInstanceEndpoint,
   testNapcatHealth as testNapcatHealthEndpoint
@@ -33,6 +34,13 @@ import {
 } from "../messageEndpoints/webhookLikeScans.js";
 import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
+import {
+  appendRolePanelTimelineMessage,
+  createRolePanelMessageId,
+  normalizeRolePanelAttachments,
+  readRolePanelTimeline,
+  type RolePanelAttachment
+} from "../rolePanelTimeline.js";
 import {
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
   definitionUsesNapcat as sharedDefinitionUsesNapcat,
@@ -142,7 +150,20 @@ type NotificationRuleDefinition = {
   routeKinds?: string[];
   targetGroupId?: string;
   regex?: string;
+  schedules?: NotificationScheduleDefinition[];
   template: string;
+};
+
+type NotificationScheduleDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  type: "interval" | "daily_time" | "once_at";
+  intervalSeconds?: number;
+  windowStartTime?: string;
+  windowEndTime?: string;
+  timeOfDay?: string;
+  onceAt?: string;
 };
 
 type GatewayConfigFile = {
@@ -161,6 +182,16 @@ type GatewayRuntime = {
     at: string;
   } | null;
   log: string[];
+};
+
+type AgentRuntimeState = Record<string, unknown> & {
+  agentAdapterType: AgentAdapterType;
+};
+
+type AgentStateReportRequest = {
+  gatewayId?: string;
+  adapterType?: AgentAdapterType;
+  state?: Record<string, unknown>;
 };
 
 type NapCatInstanceDefinition = {
@@ -261,6 +292,7 @@ const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlayback
 const packageJsonPath = path.join(rootDir, "package.json");
 const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
 const runtimes = new RuntimeRegistry();
+const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
 let watchedConfigSnapshot = "";
 
 function definitionFingerprint(definition: GatewayDefinition): string {
@@ -317,6 +349,40 @@ function readConfig(): GatewayConfigFile {
   return { gateways };
 }
 
+function removeConfigFilesMissingFrom(activeConfigNames: Set<string>): void {
+  ensureDataDirs();
+  for (const routeEntry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
+    if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) {
+      continue;
+    }
+    const configName = sanitizeRoleId(routeEntry.name);
+    if (!configName || activeConfigNames.has(configName)) {
+      continue;
+    }
+    const configPath = adapterConfigPath(configName);
+    if (fs.existsSync(configPath)) {
+      try { fs.unlinkSync(configPath); } catch { /* non-fatal */ }
+    }
+  }
+}
+
+function removeGatewayConfig(id: string): void {
+  ensureDataDirs();
+  const decodedId = decodeURIComponent(id);
+  const runtime = runtimes.get(decodedId);
+  const configName = runtime
+    ? sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName
+    : routeRuntimeParts(decodedId).configName || sanitizeRoleId(decodedId);
+  if (!configName) {
+    throw new Error(`Invalid gateway id: ${decodedId}`);
+  }
+  const configPath = adapterConfigPath(configName);
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`Gateway config not found: ${decodedId}`);
+  }
+  fs.unlinkSync(configPath);
+}
+
 function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
   if (!Array.isArray(config.gateways)) {
     throw new Error("routes must be an array");
@@ -326,10 +392,13 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
   sharedAutoAssignGatewayPorts(normalized.gateways, managerPort);
   sharedValidateGatewayPortConflicts(normalized.gateways);
   const grouped = new Map<string, GatewayDefinition[]>();
+  const activeConfigNames = new Set<string>();
   for (let i = 0; i < normalized.gateways.length; i++) {
     const item = normalized.gateways[i];
     const rawItem = config.gateways[i];
     const roleId = sanitizeRoleId(item.agentRoleId) || routeRuntimeParts(item.id).roleId;
+    const configName = sanitizeRoleId(item.configName) || routeRuntimeParts(item.id).configName;
+    activeConfigNames.add(configName);
     grouped.set(roleId, [...(grouped.get(roleId) ?? []), item]);
     // Rename data dir if configName changed (look up existing runtime by original/raw id)
     const existingRuntime = runtimes.get(rawItem.id) ?? runtimes.get(item.id);
@@ -346,8 +415,7 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
       }
       // Remove old config file if id (configName) changed
       const oldConfigName = routeRuntimeParts(existingRuntime.definition.id).configName;
-      const newConfigName = sanitizeRoleId(item.configName) || routeRuntimeParts(item.id).configName;
-      if (oldConfigName !== newConfigName) {
+      if (oldConfigName !== configName) {
         const oldConfigPath = adapterConfigPath(oldConfigName);
         if (fs.existsSync(oldConfigPath)) {
           try { fs.unlinkSync(oldConfigPath); } catch { /* non-fatal */ }
@@ -361,6 +429,7 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
       writePersonaConfigFile(roleId, items);
     }
   }
+  removeConfigFilesMissingFrom(activeConfigNames);
   return normalized;
 }
 
@@ -377,7 +446,7 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
 function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
   return unique.length > 0 ? unique : ["napcat"];
 }
@@ -983,6 +1052,9 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
   const runtimeAdapters = activeAdapters.length > 0 ? activeAdapters : ["disabled" as MessageAdapterType];
   return {
     ...process.env,
+    GATEWAY_ID: definition.id,
+    GATEWAY_MANAGER_PORT: String(managerPort),
+    GATEWAY_MANAGER_URL: `http://127.0.0.1:${managerPort}`,
     MESSAGE_ADAPTER_TYPE: runtimeAdapters[0] ?? "napcat",
     MESSAGE_ADAPTER_TYPES: JSON.stringify(runtimeAdapters),
     AGENT_MODEL: definition.agentModel?.trim() || "",
@@ -1018,7 +1090,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
     AGENT_ROLE_FILE: definition.agentRoleFile ?? "persona.md",
     AGENT_ADAPTERS: Array.isArray(definition.agentAdapters) ? definition.agentAdapters.join(",") : process.env.AGENT_ADAPTERS ?? "",
-    TARGET_GROUP_ID: "",
+    TARGET_GROUP_ID: definition.targetGroupId ?? "",
     BOT_NICKNAME: process.env.BOT_NICKNAME ?? "QQ小助手",
     ROUTE_VARIABLES: definition.routeVariables ? JSON.stringify(definition.routeVariables) : "",
     ROUTE_PROFILES: Array.isArray(definition.routeProfiles) ? JSON.stringify(definition.routeProfiles) : "",
@@ -1177,172 +1249,107 @@ function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
 }
 
 function readCodexState(definition: GatewayDefinition): Record<string, unknown> {
-  const agentAdapters = definition.agentAdapters ?? ["codexDesktop"];
-  const hasCodexAdapter = agentAdapters.some((adapter) => adapter === "codexDesktop" || adapter === "codexApp");
-  if (agentAdapters.includes("copilotCli") && !agentAdapters.some((adapter) => adapter === "codexDesktop" || adapter === "codexApp")) {
-    return readCopilotState(definition);
+  const agentAdapters = definition.agentAdapters ?? ["codex"];
+  const hasCodexAdapter = agentAdapters.includes("codex");
+  if (agentAdapters.includes("copilotCli") && !hasCodexAdapter) {
+    return readAgentState(definition, "copilotCli");
   }
   if (agentAdapters.includes("marvis") && !hasCodexAdapter) {
-    return readMarvisState(definition);
+    return readAgentState(definition, "marvis");
   }
   if (agentAdapters.includes("astrbot") && !hasCodexAdapter) {
-    return readAstrbotState(definition);
+    return readAgentState(definition, "astrbot");
   }
 
-  return readCodexBindingState(definition);
+  return readAgentState(definition, "codex");
 }
 
 function readAgentStates(definition: GatewayDefinition): Record<string, unknown> {
-  const adapters = definition.agentAdapters ?? ["codexDesktop"];
+  const adapters = definition.agentAdapters ?? ["codex"];
   const states: Record<string, unknown> = {};
   for (const adapter of adapters) {
-    if (adapter === "codexDesktop" || adapter === "codexApp") {
-      states[adapter] = {
-        ...readCodexBindingState(definition),
-        agentAdapterType: adapter
-      };
-    } else if (adapter === "copilotCli") {
-      states[adapter] = readCopilotState(definition);
-    } else if (adapter === "marvis") {
-      states[adapter] = readMarvisState(definition);
-    } else if (adapter === "astrbot") {
-      states[adapter] = readAstrbotState(definition);
-    }
+    states[adapter] = readAgentState(definition, adapter);
   }
   return states;
 }
 
-function readCodexBindingState(definition: GatewayDefinition): Record<string, unknown> {
-  const statePath = path.join(dataDirFor(definition), "codex-state.json");
-  ensureCodexStateBinding(definition, statePath);
-  if (!fs.existsSync(statePath)) {
+function readAgentState(definition: GatewayDefinition, adapterType: AgentAdapterType): Record<string, unknown> {
+  const reported = agentStateByGateway.get(definition.id)?.[adapterType] ?? {};
+  const base = defaultAgentState(definition, adapterType);
+  if (adapterType === "codex") {
     return {
-      agentAdapterType: "codexDesktop",
-      statePath,
-      bound: false,
-      message: "未找到 codex-state.json，还没有绑定 Agent 会话。"
+      ...base,
+      ...reported,
+      ...codexBindingState(definition, adapterType)
     };
   }
-
-  try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
-    return {
-      ...state,
-      agentAdapterType: String(state.agentAdapterType || "codexDesktop"),
-      statePath,
-      bound: Boolean(state.monitorThreadId)
-    };
-  } catch (error) {
-    return {
-      agentAdapterType: "codexDesktop",
-      statePath,
-      bound: false,
-      lastNotificationError: error instanceof Error ? error.message : String(error),
-      lastNotificationErrorAt: new Date().toISOString()
-    };
-  }
+  const merged: Record<string, unknown> = {
+    ...base,
+    ...reported,
+    agentAdapterType: adapterType
+  };
+  return {
+    ...merged,
+    bound: adapterType === "marvis"
+      ? false
+      : Boolean(merged.lastNotificationAt && !merged.lastNotificationError)
+  };
 }
 
-function readCopilotState(definition: GatewayDefinition): Record<string, unknown> {
-  const statePath = path.join(dataDirFor(definition), "copilot-state.json");
-  if (!fs.existsSync(statePath)) {
+function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdapterType): Record<string, unknown> {
+  if (adapterType === "copilotCli") {
     return {
-      agentAdapterType: "copilotCli",
-      statePath,
+      agentAdapterType: adapterType,
       bound: false,
       monitorThreadName: definition.codexThreadName || "Copilot CLI",
       monitorThreadSource: definition.copilotCliBin || process.env.COPILOT_CLI_BIN || "copilot",
-      message: "Copilot CLI 已配置，但还没有成功投递记录；需要完成同一会话连续两次注入烟测后才能视为已验证。"
+      monitorProjectPath: definition.copilotCwd || rootDir,
+      message: "Copilot CLI 已配置；等待当前 Manager 进程收到成功投递上报。"
     };
   }
 
-  try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+  if (adapterType === "marvis") {
     return {
-      ...state,
-      statePath,
-      bound: Boolean(state.lastNotificationAt && !state.lastNotificationError)
-    };
-  } catch (error) {
-    return {
-      agentAdapterType: "copilotCli",
-      statePath,
-      bound: false,
-      lastNotificationError: error instanceof Error ? error.message : String(error),
-      lastNotificationErrorAt: new Date().toISOString()
-    };
-  }
-}
-
-function readMarvisState(definition: GatewayDefinition): Record<string, unknown> {
-  const statePath = path.join(dataDirFor(definition), "marvis-state.json");
-  const marvisTarget = definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis";
-  if (!fs.existsSync(statePath)) {
-    return {
-      agentAdapterType: "marvis",
-      statePath,
+      agentAdapterType: adapterType,
       bound: false,
       handoffOnly: true,
       monitorThreadName: "Marvis",
-      monitorThreadSource: marvisTarget,
-      message: "Marvis 当前是打开桌面端并复制 prompt 的人工接力，不能证明线程已绑定。"
+      monitorThreadSource: definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis",
+      message: "Marvis 当前是打开桌面端并复制 prompt 的人工接力，不做线程绑定。"
     };
   }
 
-  try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+  if (adapterType === "astrbot") {
+    const astrbotUrl = definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185";
     return {
-      ...state,
-      statePath,
-      bound: false,
-      handoffOnly: true
-    };
-  } catch (error) {
-    return {
-      agentAdapterType: "marvis",
-      statePath,
-      bound: false,
-      lastNotificationError: error instanceof Error ? error.message : String(error),
-      lastNotificationErrorAt: new Date().toISOString()
-    };
-  }
-}
-
-function readAstrbotState(definition: GatewayDefinition): Record<string, unknown> {
-  const statePath = path.join(dataDirFor(definition), "astrbot-agent-state.json");
-  const astrbotUrl = definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185";
-  if (!fs.existsSync(statePath)) {
-    return {
-      agentAdapterType: "astrbot",
-      statePath,
+      agentAdapterType: adapterType,
       bound: false,
       monitorThreadName: "AstrBot Agent",
       monitorThreadSource: astrbotUrl,
-      message: "AstrBot 已配置，但还没有成功投递记录；插件 API 尚未提供可选会话。"
+      message: "AstrBot 已配置；等待当前 Manager 进程收到成功投递上报。"
     };
   }
 
-  try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
-    const sessionId = definition.astrbotSessionId?.trim();
-    const hasSuccessfulDelivery = Boolean(state.lastNotificationAt && !state.lastNotificationError);
-    return {
-      ...state,
-      statePath,
-      bound: hasSuccessfulDelivery,
-      monitorThreadId: state.monitorThreadId ?? (hasSuccessfulDelivery ? (sessionId ? `astrbot-chatui:${sessionId}` : "astrbot-plugin:rabiroute_agent") : undefined),
-      monitorThreadName: state.monitorThreadName ?? (sessionId ? `AstrBot ChatUI ${sessionId}` : "AstrBot rabiroute_agent"),
-      monitorThreadSource: state.monitorThreadSource ?? astrbotUrl
-    };
-  } catch (error) {
-    return {
-      agentAdapterType: "astrbot",
-      statePath,
-      bound: false,
-      lastNotificationError: error instanceof Error ? error.message : String(error),
-      lastNotificationErrorAt: new Date().toISOString()
-    };
-  }
+  return codexBindingState(definition, adapterType);
+}
+
+function codexBindingState(definition: GatewayDefinition, adapterType: Extract<AgentAdapterType, "codex">): Record<string, unknown> {
+  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
+  const indexPath = sessionIndexPath();
+  const best = readLatestSessionThreads(indexPath)
+    .filter((record) => record.threadName === targetName)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+
+  return {
+    agentAdapterType: adapterType,
+    bound: Boolean(best),
+    monitorThreadId: best?.id,
+    monitorThreadName: best?.threadName ?? targetName,
+    monitorThreadUpdatedAt: best?.updatedAt,
+    monitorThreadSource: indexPath,
+    lastAutoDiscoveryAt: best ? new Date().toISOString() : undefined,
+    message: best ? undefined : `No Codex thread named "${targetName}" was found in ${indexPath}.`
+  };
 }
 
 function sessionIndexPath(): string {
@@ -1466,7 +1473,14 @@ function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: bool
       });
       cleanedDefinition.napcatInstances = kept;
       if ((definition.napcatInstances?.length ?? 0) > 0 && kept.length === 0) {
-        cleanedDefinition.messageInputsDisabled = true;
+        cleanedDefinition.messageAdaptersDisabled = [...new Set([...(cleanedDefinition.messageAdaptersDisabled ?? []), "napcat" as MessageAdapterType])];
+        cleanedDefinition.messageAdapterPolicies = {
+          ...(cleanedDefinition.messageAdapterPolicies ?? {}),
+          napcat: {
+            ...(cleanedDefinition.messageAdapterPolicies?.napcat ?? {}),
+            inputEnabled: false
+          }
+        };
       }
     }
     return normalizeDefinition(cleanedDefinition);
@@ -1560,6 +1574,17 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
         { id: "agent", label: "Agent 端可接收消息", required: true, ok: undefined, detail: "保存后用“立即触发”或日志页验证投递。" }
       ],
       warnings: ["定时触发不会证明外部平台可用，只能验证路由到 Agent 的链路。"]
+    },
+    rolePanel: {
+      type: "rolePanel",
+      label: "角色面板",
+      maturity: "verified",
+      installed: true,
+      requirements: [
+        { id: "builtin", label: "RabiRoute 内置角色面板", required: true, ok: true, detail: "无需安装；托盘打开后可作为本地消息端使用。" },
+        { id: "timeline", label: "角色聊天记录", required: true, ok: true, detail: "按角色写入 data/roles/<RoleId>/role-panel/messages.jsonl。" }
+      ],
+      warnings: ["角色面板是固定内置消息端，不能删除或禁用；自由聊天使用 role_panel_message 路由类型。"]
     },
     fennenote,
     xiaoai,
@@ -1719,68 +1744,6 @@ function readLatestSessionThreads(indexPath: string): SessionThreadRecord[] {
   return [...latestById.values()];
 }
 
-function ensureCodexStateBinding(definition: GatewayDefinition, statePath: string): void {
-  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
-  let existingState: Record<string, unknown> | null = null;
-  const indexPath = sessionIndexPath();
-  const sessionThreads = readLatestSessionThreads(indexPath);
-
-  if (fs.existsSync(statePath)) {
-    try {
-      existingState = JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
-      const currentRecord = typeof existingState.monitorThreadId === "string"
-        ? sessionThreads.find((record) => record.id === existingState?.monitorThreadId)
-        : null;
-      const stateStillMatchesTarget = existingState.monitorThreadId
-        && existingState.monitorThreadName === targetName
-        && (!currentRecord || currentRecord.threadName === targetName);
-      if (stateStillMatchesTarget) {
-        return;
-      }
-    } catch {
-      // Rewrite below if the state file is unreadable.
-    }
-  }
-
-  if (sessionThreads.length === 0) {
-    return;
-  }
-
-  let best: SessionThreadRecord | null = null;
-  for (const record of sessionThreads) {
-    if (record.threadName === targetName && (!best || Date.parse(record.updatedAt) > Date.parse(best.updatedAt))) {
-      best = record;
-    }
-  }
-
-  if (!best) {
-    if (existingState?.monitorThreadId) {
-      fs.mkdirSync(path.dirname(statePath), { recursive: true });
-      fs.writeFileSync(statePath, JSON.stringify({
-        ...existingState,
-        monitorThreadId: undefined,
-        monitorThreadUpdatedAt: undefined,
-        monitorThreadName: targetName,
-        monitorThreadSource: indexPath,
-        lastAutoDiscoveryAt: new Date().toISOString(),
-        lastNotificationError: `No Codex thread named "${targetName}" was found in ${indexPath}. Previous binding "${String(existingState.monitorThreadName ?? existingState.monitorThreadId)}" was cleared.`,
-        lastNotificationErrorAt: new Date().toISOString()
-      }, null, 2), "utf8");
-    }
-    return;
-  }
-
-  fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify({
-    ...existingState,
-    monitorThreadId: best.id,
-    monitorThreadName: best.threadName,
-    monitorThreadUpdatedAt: best.updatedAt,
-    monitorThreadSource: indexPath,
-    lastAutoDiscoveryAt: new Date().toISOString()
-  }, null, 2), "utf8");
-}
-
 function readGatewayStatus(definition: GatewayDefinition): Record<string, unknown> {
   const statusPath = path.join(dataDirFor(definition), "gateway-status.json");
   if (!fs.existsSync(statusPath)) {
@@ -1922,6 +1885,10 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     ...readEntries("私聊", "private-messages.jsonl")
   ]);
   const heartbeatEntries = sortTail(readEntries("定时触发", "heartbeat-events.jsonl"));
+  const rolePanelEntries = sortTail(dirs.flatMap((dir) => {
+    const filePath = path.join(dir, "role-panel", "messages.jsonl");
+    return readJsonlTail(filePath, 8).map((record) => messageFileEntry("角色面板", filePath, record));
+  }));
   const fenneNoteEntries = sortTail([
     ...readEntries("FenneNote / 芬妮笔记", "fennenote-voice-transcripts.jsonl"),
     ...readEntries("FenneNote / 芬妮笔记", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "fennenote")
@@ -1947,6 +1914,10 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     heartbeat: {
       paths: dirs.map((dir) => path.join(dir, "heartbeat-events.jsonl")),
       entries: heartbeatEntries
+    },
+    rolePanel: {
+      paths: dirs.map((dir) => path.join(dir, "role-panel", "messages.jsonl")),
+      entries: rolePanelEntries
     },
     fennenote: {
       paths: dirs.flatMap((dir) => [
@@ -1988,6 +1959,10 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
       paths: [path.join(dir, "heartbeat-adapter.log.jsonl")],
       entries: readEntries("heartbeat")
     },
+    rolePanel: {
+      paths: [path.join(dir, "rolePanel-adapter.log.jsonl")],
+      entries: readEntries("rolePanel")
+    },
     fennenote: {
       paths: [path.join(dir, "fennenote-adapter.log.jsonl")],
       entries: readEntries("fennenote")
@@ -2019,7 +1994,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     messageAdaptersDisabled: runtime.definition.messageAdaptersDisabled ?? [],
     messageInputsDisabled: runtime.definition.messageInputsDisabled === true,
     messageAdapterPolicies: runtime.definition.messageAdapterPolicies ?? {},
-    agentAdapters: runtime.definition.agentAdapters ?? ["codexDesktop"],
+    agentAdapters: runtime.definition.agentAdapters ?? ["codex"],
     pipelinePreset: runtime.definition.pipelinePreset,
     pipeline: runtime.definition.pipeline,
     gatewayPort: runtime.definition.gatewayPort,
@@ -2109,6 +2084,12 @@ type ManualTriggerRequest = {
   ruleId?: string;
 };
 
+type RolePanelMessageRequest = {
+  gatewayId?: string;
+  text?: string;
+  attachments?: RolePanelAttachment[];
+};
+
 function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): Promise<void> {
   const runtime = runtimes.get(id);
   if (!runtime) {
@@ -2119,14 +2100,17 @@ function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}
   const triggerName = request.triggerName?.trim() || triggerId;
   const message = request.message?.trim() || triggerName;
   const routeKind = normalizeManualRouteKind(request.routeKind);
-  const ruleId = sanitizeRoleId(request.ruleId) || triggerId;
-  const command = childCommand([
+  const ruleId = sanitizeRoleId(request.ruleId) || (routeKind === "heartbeat" ? "" : triggerId);
+  const args = [
     `--manual-trigger=${triggerId}`,
     `--manual-name=${encodeURIComponent(triggerName)}`,
     `--manual-message=${encodeURIComponent(message)}`,
-    `--manual-route-kind=${routeKind}`,
-    `--manual-rule=${ruleId}`
-  ]);
+    `--manual-route-kind=${routeKind}`
+  ];
+  if (ruleId) {
+    args.push(`--manual-rule=${ruleId}`);
+  }
+  const command = childCommand(args);
   appendLog(runtime, `manual trigger requested: ${triggerName}`);
   return new Promise((resolve, reject) => {
     const child = spawn(command.command, command.args, {
@@ -2160,6 +2144,123 @@ function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}
 
 function normalizeManualRouteKind(value: unknown): ForwardRouteKind {
   return value === "heartbeat" ? "heartbeat" : "manual_trigger";
+}
+
+function roleDirForDefinition(definition: GatewayDefinition): string {
+  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
+  const roleId = sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId || "Rabi";
+  return path.join(rolesDir, roleId);
+}
+
+function roleIdForDefinition(definition: GatewayDefinition): string {
+  return sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId || "Rabi";
+}
+
+function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: string, text: string, attachments: RolePanelAttachment[]): Promise<void> {
+  const roleId = roleIdForDefinition(runtime.definition);
+  const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
+  const command = childCommand([
+    `--role-panel-message=${encodeURIComponent(messageId)}`,
+    `--role-panel-text=${encodeURIComponent(text)}`,
+    `--role-panel-role=${encodeURIComponent(roleId)}`,
+    `--role-panel-gateway=${encodeURIComponent(runtime.definition.id)}`,
+    `--role-panel-route-profile=${encodeURIComponent(routeProfileId)}`,
+    `--role-panel-attachments=${encodeURIComponent(JSON.stringify(attachments))}`
+  ]);
+  appendLog(runtime, `role panel message requested: ${messageId}`);
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+
+    child.stdout.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `role panel: ${line}`);
+      }
+    });
+    child.stderr.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `role panel error: ${line}`);
+      }
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        appendLog(runtime, `role panel message completed: ${messageId}`);
+        resolve();
+        return;
+      }
+      reject(new Error(`role panel message failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
+    });
+  });
+}
+
+function handleRolePanelApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  const messageListMatch = requestUrl.pathname.match(/^\/api\/roles\/([^/]+)\/role-panel\/messages$/);
+  if (request.method === "GET" && messageListMatch) {
+    const roleId = sanitizeRoleId(decodeURIComponent(messageListMatch[1]));
+    if (!roleId) {
+      jsonResponse(response, 400, { code: -1, message: "Missing role id." });
+      return true;
+    }
+    const limit = Number(requestUrl.searchParams.get("limit") || "120");
+    const roleDir = path.join(rolesRoot, roleId);
+    jsonResponse(response, 200, {
+      code: 0,
+      roleId,
+      messages: readRolePanelTimeline(roleDir, Number.isFinite(limit) && limit > 0 ? limit : 120)
+    });
+    return true;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/role-panel/messages") {
+    void readJsonBody<RolePanelMessageRequest>(request)
+      .then(async (body) => {
+        const gatewayId = sanitizeRoleId(body.gatewayId);
+        const runtime = gatewayId ? runtimes.get(gatewayId) : [...runtimes.values()][0];
+        if (!runtime) throw new Error(gatewayId ? `Gateway not found: ${gatewayId}` : "No gateway is configured.");
+        const text = String(body.text || "").trim();
+        const attachments = normalizeRolePanelAttachments(body.attachments);
+        if (!text && attachments.length === 0) throw new Error("Missing role panel message text or attachment.");
+        const roleId = roleIdForDefinition(runtime.definition);
+        const roleDir = roleDirForDefinition(runtime.definition);
+        const messageId = createRolePanelMessageId("role-panel-user");
+        const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
+        const replyContext = {
+          runtimeRouteId: runtime.definition.id,
+          gatewayId: runtime.definition.id,
+          routeProfileId,
+          routeKind: "role_panel_message",
+          targetType: "role_panel",
+          adapterType: "rolePanel",
+          messageId,
+          roleId
+        };
+        const message = appendRolePanelTimelineMessage(roleDir, {
+          id: messageId,
+          time: Math.floor(Date.now() / 1000),
+          roleId,
+          gatewayId: runtime.definition.id,
+          routeProfileId,
+          direction: "user",
+          sender: roleId,
+          text,
+          attachments,
+          status: "sent",
+          replyContext
+        });
+        await triggerGatewayRolePanelMessage(runtime, messageId, text, attachments);
+        return { roleId, message };
+      })
+      .then((payload) => jsonResponse(response, 202, { code: 0, ...payload }))
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
+  return false;
 }
 
 function roleDirForApi(roleId: string): string {
@@ -2469,20 +2570,31 @@ function assetResponse(pathname: string, response: http.ServerResponse): boolean
 }
 
 function handleAction(pathname: string, response: http.ServerResponse): boolean {
-  const match = pathname.match(/^\/gateways\/([^/]+)\/(start|stop|restart)$/);
+  const match = pathname.match(/^\/gateways\/([^/]+)\/(start|stop|restart|delete)$/);
   if (!match) {
     return false;
   }
 
   const [, encodedId, action] = match;
   const id = decodeURIComponent(encodedId);
-  if (action === "start") {
-    startGateway(id);
-  } else if (action === "stop") {
-    stopGateway(id);
-  } else {
-    stopGateway(id);
-    setTimeout(() => startGateway(id), 1000);
+  try {
+    if (action === "start") {
+      startGateway(id);
+    } else if (action === "stop") {
+      stopGateway(id);
+    } else if (action === "restart") {
+      stopGateway(id);
+      setTimeout(() => startGateway(id), 1000);
+    } else {
+      removeGatewayConfig(id);
+      loadRuntimes();
+      syncRunningGateways();
+      jsonResponse(response, 200, standaloneGatewayPayload());
+      return true;
+    }
+  } catch (error) {
+    jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    return true;
   }
 
   jsonResponse(response, 200, { code: 0, message: `requested ${action}`, data: [...runtimes.values()].map(runtimeStatus) });
@@ -2507,6 +2619,34 @@ function handleTriggerAction(request: http.IncomingMessage, pathname: string, re
   return true;
 }
 
+function handleAgentStateReport(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+  if (pathname !== "/api/agent-state") {
+    return false;
+  }
+
+  void readJsonBody<AgentStateReportRequest>(request)
+    .then((body) => {
+      const gatewayId = sanitizeRoleId(body.gatewayId);
+      const adapterType = parseAgentAdapterType(body.adapterType);
+      if (!gatewayId || !adapterType || !runtimes.get(gatewayId)) {
+        throw new Error("Invalid agent state report target.");
+      }
+      const previous = agentStateByGateway.get(gatewayId) ?? {};
+      previous[adapterType] = {
+        ...(previous[adapterType] ?? {}),
+        ...(body.state ?? {}),
+        agentAdapterType: adapterType,
+        updatedAt: new Date().toISOString()
+      };
+      agentStateByGateway.set(gatewayId, previous);
+      jsonResponse(response, 200, { code: 0 });
+    })
+    .catch((error) => {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    });
+  return true;
+}
+
 export function startManager(): void {
   loadRuntimes();
   for (const runtime of runtimes.values()) {
@@ -2525,6 +2665,12 @@ export function startManager(): void {
         return;
       }
       if (request.method === "POST" && handleTriggerAction(request, requestUrl.pathname, response)) {
+        return;
+      }
+      if (request.method === "POST" && handleAgentStateReport(request, requestUrl.pathname, response)) {
+        return;
+      }
+      if (handleRolePanelApi(request, requestUrl, response)) {
         return;
       }
       if ((request.method === "GET" || request.method === "POST" || request.method === "PATCH") && handleRoleKnowledgeApi(request, requestUrl.pathname, response)) {
@@ -2859,6 +3005,18 @@ export function startManager(): void {
         void readJsonBody<NapcatLaunchRequest>(request)
           .then((body) => {
             jsonResponse(response, 200, launchNapcatInstanceEndpoint(napcatManagerCtx(), body));
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/message/napcat-restart" && request.method === "POST") {
+        void readJsonBody<NapcatLaunchRequest>(request)
+          .then((body) => restartNapcatInstanceEndpoint(napcatManagerCtx(), body))
+          .then((result) => {
+            jsonResponse(response, result.ok ? 200 : 400, result);
           })
           .catch((error) => {
             jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });

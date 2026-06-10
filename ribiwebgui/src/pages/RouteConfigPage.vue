@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
-import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance, MessageAdapterPolicy, MessageAdapterOutputMode, MessagePayloadKind } from "../types";
+import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance, MessageAdapterPolicy, MessagePayloadKind } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled, messageAdapterPolicyFor, setMessageAdapterPolicy } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
@@ -140,6 +140,7 @@ watch(
 
 
 const adapterParamOpen = ref<Record<string, boolean>>({
+  rolePanel: false,
   napcat: false,
   heartbeat: false,
   fennenote: false,
@@ -148,6 +149,13 @@ const adapterParamOpen = ref<Record<string, boolean>>({
 });
 const addAdapterMenu = ref(false);
 const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> }> = [
+  {
+    title: "本地桌面",
+    note: "RabiRoute 内置的角色面板入口。",
+    choices: [
+      { type: "rolePanel", title: "角色面板", note: "托盘打开的本地聊天和计划记忆面板", icon: "mdi-view-dashboard-outline" }
+    ]
+  },
   {
     title: "实时消息",
     note: "来自聊天软件或即时通信平台的入口。",
@@ -178,11 +186,6 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     ]
   }
 ];
-const messageOutputModeItems: Array<{ title: string; value: MessageAdapterOutputMode }> = [
-  { title: "只回复来源", value: "replyOnly" },
-  { title: "允许主动发送", value: "direct" },
-  { title: "只生成草稿", value: "draft" }
-];
 const messagePayloadKindItems: Array<{ title: string; value: MessagePayloadKind }> = [
   { title: "文字", value: "text" },
   { title: "图片", value: "image" },
@@ -196,9 +199,10 @@ const gateway = computed(() => store.selectedGateway);
 const addedAdapters = computed<MessageAdapterType[]>(() => {
   const gw = gateway.value;
   if (!gw) return [];
-  if (Array.isArray(gw.messageAdapters) && gw.messageAdapters.length > 0)
-    return gw.messageAdapters.filter((t): t is MessageAdapterType => t !== "disabled");
-  return [gw.messageAdapterType || "napcat"] as MessageAdapterType[];
+  const configured = Array.isArray(gw.messageAdapters) && gw.messageAdapters.length > 0
+    ? gw.messageAdapters.filter((t): t is MessageAdapterType => t !== "disabled")
+    : [gw.messageAdapterType || "napcat"] as MessageAdapterType[];
+  return [...new Set(["rolePanel" as MessageAdapterType, ...configured])];
 });
 // 仅启用的 adapter（不含禁用）
 const adapters = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value) : []);
@@ -207,10 +211,12 @@ const messageAdapterInactive = computed(() => Boolean(gateway.value?.enabled ===
 const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {} as Record<string, any>);
 const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || {} as Record<string, any>);
 const adapterErrors = (type: MessageAdapterType) => gateway.value ? adapterErrorsFor(type, gateway.value, runtime.value) : [];
-const activeAdapterCount = computed(() => adapters.value.length);
+const visibleActiveAdapters = computed<MessageAdapterType[]>(() => [...new Set(["rolePanel" as MessageAdapterType, ...adapters.value])]);
+const activeAdapterCount = computed(() => visibleActiveAdapters.value.length);
 const testingNapcatHealth = ref(false);
 const testingNapcatInstance = ref<Record<string, boolean>>({});
 const launchingNapcatInstance = ref<Record<string, boolean>>({});
+const restartingNapcatInstance = ref<Record<string, boolean>>({});
 const copyingNapcatToken = ref(false);
 const copyingNapcatInstanceToken = ref<Record<string, boolean>>({});
 const fixingNapcatPorts = ref(false);
@@ -248,6 +254,8 @@ const napcatHealthPausedAfterFix = ref<Record<string, boolean>>({});
 const copyResult = ref("");
 const triggeringHeartbeat = ref(false);
 const heartbeatTriggerResult = ref<{ ok: boolean; message: string } | null>(null);
+const deletingGateway = ref(false);
+const deleteError = ref("");
 const openingMarvis = ref(false);
 const marvisOpenResult = ref<{ ok: boolean; message: string } | null>(null);
 const visibleAdapterGroups = computed(() => {
@@ -278,14 +286,9 @@ const codexCwdOptions = computed(() => {
 });
 
 function toggleAdapter(type: MessageAdapterType): void {
+  if (type === "rolePanel") return;
   if (!gateway.value) return;
   toggleAdapterDisabled(gateway.value, type);
-  store.touch();
-}
-
-function setMessageInputsDisabled(disabled: boolean): void {
-  if (!gateway.value) return;
-  gateway.value.messageInputsDisabled = disabled;
   store.touch();
 }
 
@@ -300,20 +303,8 @@ function updateAdapterPolicy(type: MessageAdapterType, patch: Partial<MessageAda
   store.touch();
 }
 
-function policyListText(type: MessageAdapterType, key: "allowedGroups" | "allowedUsers" | "enabledPipelines" | "disabledPipelines"): string {
-  return adapterPolicy(type)[key].join(", ");
-}
-
-function setPolicyList(type: MessageAdapterType, key: "allowedGroups" | "allowedUsers" | "enabledPipelines" | "disabledPipelines", value: unknown): void {
-  const items = String(value || "")
-    .split(/[,\s，]+/u)
-    .map(item => item.trim())
-    .filter(Boolean);
-  updateAdapterPolicy(type, { [key]: [...new Set(items)] } as Partial<MessageAdapterPolicy>);
-}
-
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "napcat" || type === "heartbeat" || isWebhookLikeAdapter(type);
+  return type === "rolePanel" || type === "napcat" || type === "heartbeat" || isWebhookLikeAdapter(type);
 }
 
 function adapterLogEntries(type: MessageAdapterType): Array<Record<string, any>> {
@@ -371,6 +362,7 @@ function toggleAdapterParams(type: MessageAdapterType): void {
 }
 
 function removeAdapter(type: MessageAdapterType): void {
+  if (type === "rolePanel") return;
   if (!gateway.value) return;
   const next = adapters.value.filter(t => t !== type);
   setGatewayAdapters(gateway.value, next as MessageAdapterType[]);
@@ -1086,7 +1078,8 @@ function resolveConfiguredNapcatInstance(instance: NapCatInstance): NapCatInstan
   return ensureNapcatInstances().find(item => item.id === instance.id) ?? instance;
 }
 
-function applyNapcatHealthToInstance(instance: NapCatInstance, body: Record<string, any>): boolean {
+function applyNapcatHealthToInstance(instance: NapCatInstance, body: Record<string, any>, options: { updateConfig?: boolean } = {}): boolean {
+  if (options.updateConfig === false) return false;
   let changed = false;
   const userId = body.http?.userId || body.loginInfo?.userId || body.webui?.loginInfo?.userId;
   const nickname = body.http?.nickname || body.loginInfo?.nickname || body.webui?.loginInfo?.nickname;
@@ -1111,19 +1104,15 @@ async function applyNapcatScanHealth(payload: unknown): Promise<void> {
   const byGateway = payload as Record<string, { instances?: Record<string, Record<string, any>> }>;
   const current = byGateway[gateway.value.id]?.instances;
   if (!current || typeof current !== "object") return;
-  const instances = ensureNapcatInstances();
   const nextHealth = { ...napcatInstanceHealthResult.value };
   const nextPaused = { ...napcatHealthPausedAfterFix.value };
   for (const [id, raw] of Object.entries(current)) {
     const body = { ok: Boolean(raw?.ok), ...(raw || {}) };
     nextHealth[id] = body;
     delete nextPaused[id];
-    const instance = instances.find(item => item.id === id);
-    if (instance) applyNapcatHealthToInstance(instance, body);
   }
   napcatInstanceHealthResult.value = nextHealth;
   napcatHealthPausedAfterFix.value = nextPaused;
-  if (store.dirty) await store.save();
 }
 
 function napcatHealthUserId(body: Record<string, any>): string {
@@ -1375,6 +1364,7 @@ function napcatAccountLogTitle(instance: NapCatInstance): string {
 }
 
 function napcatAccountConnected(instance: NapCatInstance): boolean {
+  if (napcatAccountOffline(instance)) return false;
   const runtimeInfo = napcatRuntimeFor(instance);
   const health = napcatHealthFor(instance);
   if (typeof instance.connected === "boolean") return instance.connected;
@@ -1384,10 +1374,29 @@ function napcatAccountConnected(instance: NapCatInstance): boolean {
   return false;
 }
 
+function napcatAccountOffline(instance: NapCatInstance): boolean {
+  const runtimeInfo = napcatRuntimeFor(instance);
+  const health = napcatHealthFor(instance);
+  return runtimeInfo.online === false
+    || runtimeInfo.good === false
+    || health.http?.online === false
+    || health.http?.good === false
+    || health.loginInfo?.online === false
+    || health.webui?.loginInfo?.online === false
+    || /online:false|已离线/.test(String(runtimeInfo.loginInfoError || instance.loginInfoError || ""));
+}
+
+function napcatPrimaryOffline(): boolean {
+  return napcatState.value.online === false
+    || napcatState.value.good === false
+    || /online:false|已离线/.test(String(napcatState.value.loginInfoError || ""));
+}
+
 function napcatAccountLoginLabel(instance: NapCatInstance): string {
   const userId = napcatAccountUserId(instance);
   const runtimeInfo = napcatRuntimeFor(instance);
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "正在查询";
+  if (napcatAccountOffline(instance)) return "QQ 已离线";
   if (runtimeInfo.loginInfoError || instance.loginInfoError) return String(runtimeInfo.loginInfoError || instance.loginInfoError);
   if (userId && (napcatHealthFor(instance).loginInfo?.source === "webui" || napcatHealthFor(instance).webui?.loginInfo)) return "WebUI 已登录";
   if (userId) return "已登录";
@@ -1407,6 +1416,7 @@ function napcatInstanceStatusLabel(instance: NapCatInstance): string {
   if ((instance as Record<string, any>).__discovered && !isConfiguredNapcatInstance(instance)) return "已发现";
   if (instance.enabled === false) return "已停用";
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "查询中";
+  if (napcatAccountOffline(instance)) return "QQ 已离线";
   if (napcatAccountConnected(instance)) return "WS 已连接";
   if (napcatHealthFor(instance).loginInfo?.source === "webui" || napcatHealthFor(instance).webui?.loginInfo) return "WebUI 已登录";
   if (napcatAccountUserId(instance)) return "HTTP 已登录";
@@ -1418,6 +1428,7 @@ function napcatInstanceStatusColor(instance: NapCatInstance): string {
   if ((instance as Record<string, any>).__discovered && !isConfiguredNapcatInstance(instance)) return "info";
   if (instance.enabled === false) return "secondary";
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "info";
+  if (napcatAccountOffline(instance)) return "error";
   if (napcatAccountConnected(instance)) return "success";
   if (napcatAccountUserId(instance)) return "info";
   const runtimeInfo = napcatRuntimeFor(instance);
@@ -1605,6 +1616,22 @@ function showCopyResult(message: string): void {
 
 function openRuntimeLog(): void {
   void router.push("/runtime");
+}
+
+async function deleteCurrentGateway(): Promise<void> {
+  if (!gateway.value || deletingGateway.value) return;
+  const name = store.configNameFor(gateway.value);
+  const confirmed = window.confirm(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`);
+  if (!confirmed) return;
+  deletingGateway.value = true;
+  deleteError.value = "";
+  try {
+    await store.deleteGateway(gateway.value.id);
+  } catch (error) {
+    deleteError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    deletingGateway.value = false;
+  }
 }
 
 async function triggerHeartbeatNow(): Promise<void> {
@@ -1891,6 +1918,37 @@ async function launchNapcatInstance(instance: NapCatInstance): Promise<void> {
   }
 }
 
+async function restartNapcatInstance(instance: NapCatInstance): Promise<void> {
+  if (!gateway.value) return;
+  restartingNapcatInstance.value = { ...restartingNapcatInstance.value, [instance.id]: true };
+  napcatLaunchResult.value = { ...napcatLaunchResult.value, [instance.id]: { ok: true, message: "正在重启 NapCat..." } };
+  try {
+    if (store.dirty) await store.save();
+    const resp = await fetch("/api/message/napcat-restart", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ gatewayId: gateway.value.id, instanceId: instance.id })
+    });
+    const body = await resp.json().catch(() => ({}));
+    napcatLaunchResult.value = {
+      ...napcatLaunchResult.value,
+      [instance.id]: {
+        ok: resp.ok && body.ok !== false,
+        message: body.message || (resp.ok ? "已尝试重启 NapCat。" : "重启失败。")
+      }
+    };
+    await sleep(2500);
+    await testNapcatInstanceHealth(resolveConfiguredNapcatInstance(instance));
+  } catch (e: unknown) {
+    napcatLaunchResult.value = {
+      ...napcatLaunchResult.value,
+      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+    };
+  } finally {
+    restartingNapcatInstance.value = { ...restartingNapcatInstance.value, [instance.id]: false };
+  }
+}
+
 function renameCurrentConfig(value: unknown): void {
   if (!gateway.value) return;
   const result = store.renameGatewayConfig(gateway.value.id, value);
@@ -1898,8 +1956,7 @@ function renameCurrentConfig(value: unknown): void {
 }
 
 const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; icon: string; hasCwd: boolean; hasThread: boolean }> = [
-  { type: "codexDesktop", title: "Codex Desktop", note: "通过 Codex Desktop 桌面端投递消息", icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
-  { type: "codexApp",     title: "Codex App",     note: "通过 Codex App 投递消息",          icon: "mdi-application-outline", hasCwd: true, hasThread: true },
+  { type: "codex",       title: "Codex",          note: "投递到当前 Codex 聊天线程",       icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
   { type: "copilotCli",  title: "Copilot CLI",   note: "通过 GitHub Copilot CLI 投递消息",  icon: "mdi-robot-outline", hasCwd: true, hasThread: true },
   { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
@@ -1919,7 +1976,7 @@ function agentStateFor(type: AgentAdapterType): Record<string, any> {
   const states = runtime.value.agentStates;
   if (states) return states[type] ?? {};
   const runtimeAgents = runtime.value.agentAdapters ?? [];
-  const canUseLegacyCodexState = (type === "codexDesktop" || type === "codexApp")
+  const canUseLegacyCodexState = type === "codex"
     && (runtimeAgents.length === 0 || runtimeAgents.includes(type))
     && (!runtime.value.codexState?.agentAdapterType || runtime.value.codexState.agentAdapterType === type);
   return canUseLegacyCodexState ? runtime.value.codexState ?? {} : {};
@@ -2008,7 +2065,7 @@ function agentConnectionColor(type: AgentAdapterType): string {
 function currentAgentProject(type: AgentAdapterType): string {
   if (!gateway.value) return "";
   if (type === "copilotCli") return gateway.value.copilotCwd || "";
-  if (type === "codexDesktop" || type === "codexApp") return gateway.value.codexCwd || "";
+  if (type === "codex") return gateway.value.codexCwd || "";
   return "";
 }
 
@@ -2028,7 +2085,7 @@ function agentSessions(type: AgentAdapterType): AgentScanSession[] {
       userNamed: session.userNamed
     }));
   }
-  if (type === "codexDesktop" || type === "codexApp") {
+  if (type === "codex") {
     return agentScan.value.threadNames.map(name => ({ name }));
   }
   return [];
@@ -2186,6 +2243,7 @@ function toggleAgentParams(type: AgentAdapterType): void {
 
 async function refreshVisibleNapcatHealth(): Promise<void> {
   if (!gateway.value || !gatewayAdapterTypes(gateway.value).includes("napcat")) return;
+  if (store.dirty) return;
   if (repairingNapcatAll.value) return;
   const instances = ensureNapcatInstances().filter(instance => instance.enabled !== false && !napcatHealthPausedAfterFix.value[instance.id]);
   if (instances.length === 0) return;
@@ -2194,7 +2252,6 @@ async function refreshVisibleNapcatHealth(): Promise<void> {
     const results = await Promise.all(instances.map(async (instance) => {
       try {
         const body = await runNapcatInstanceHealth(instance);
-        applyNapcatHealthToInstance(instance, body);
         return [instance.id, body] as const;
       } catch (e: unknown) {
         return [instance.id, { ok: false, message: e instanceof Error ? e.message : String(e) }] as const;
@@ -2204,7 +2261,6 @@ async function refreshVisibleNapcatHealth(): Promise<void> {
       ...napcatInstanceHealthResult.value,
       ...Object.fromEntries(results)
     };
-    if (store.dirty) await store.save();
   } finally {
     autoCheckingNapcat.value = false;
   }
@@ -2229,9 +2285,15 @@ watch(() => gateway.value?.configName, (name) => {
 });
 
 watch(
-  () => [store.loading, gateway.value?.id, JSON.stringify(gateway.value?.napcatInstances ?? [])],
-  ([loading, gatewayId, instancesKey]) => {
-    if (loading || autoCheckingNapcat.value || repairingNapcatAll.value) return;
+  () => [store.loading, store.dirty, gateway.value?.id, JSON.stringify((gateway.value?.napcatInstances ?? []).map(instance => ({
+    id: instance.id,
+    enabled: instance.enabled,
+    gatewayPort: instance.gatewayPort,
+    httpUrl: instance.httpUrl,
+    webuiUrl: instance.webuiUrl
+  })))],
+  ([loading, dirty, gatewayId, instancesKey]) => {
+    if (loading || dirty || autoCheckingNapcat.value || repairingNapcatAll.value) return;
     const key = `${gatewayId || ""}:${instancesKey || ""}`;
     if (key === lastAutoNapcatHealthKey.value) return;
     lastAutoNapcatHealthKey.value = key;
@@ -2253,9 +2315,13 @@ watch(
         <v-btn prepend-icon="mdi-folder-open-outline" variant="tonal" @click="store.openConfigFile('route-folder', gateway.id, gateway.agentRoleId || '')">
           打开航线配置
         </v-btn>
+        <v-btn prepend-icon="mdi-delete" color="error" variant="text" :loading="deletingGateway" @click="deleteCurrentGateway">
+          删除
+        </v-btn>
       </div>
     </div>
 
+    <v-alert v-if="deleteError" type="error" variant="tonal" class="mb-4">{{ deleteError }}</v-alert>
     <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
 
     <template v-if="gateway">
@@ -2277,17 +2343,9 @@ watch(
         <div class="section-title-row">
           <div>
             <div class="section-title">消息端</div>
-            <div class="section-note">这里决定 RabiRoute 从哪些入口接收消息。多个入口可以并存，禁用时仅保留配置。</div>
+            <div class="section-note">这里决定 RabiRoute 从哪些入口接收消息。多个入口可以并存，也可以分别停用或调整权限。</div>
           </div>
           <div class="adapter-master-actions">
-            <v-switch
-              :model-value="messageInputsDisabled"
-              label="禁用消息端"
-              color="warning"
-              inset
-              hide-details
-              @update:model-value="value => setMessageInputsDisabled(Boolean(value))"
-            />
             <v-chip color="secondary" variant="tonal">{{ activeAdapterCount }} 个入口启用</v-chip>
           </div>
         </div>
@@ -2302,7 +2360,7 @@ watch(
             clearable
           />
           <div class="selected-pill-row">
-            <v-chip v-for="type in adapters" :key="type" size="small" color="secondary" variant="tonal">
+            <v-chip v-for="type in visibleActiveAdapters" :key="type" size="small" color="secondary" variant="tonal">
               {{ adapterLabel(type) }}
             </v-chip>
           </div>
@@ -2323,7 +2381,7 @@ watch(
             >
               <div
                 class="catalog-row"
-                :class="{ active: adapters.includes(choice.type) }"
+                :class="{ active: choice.type === 'rolePanel' || adapters.includes(choice.type) }"
                 @click="toggleAdapterParams(choice.type)"
               >
                 <v-icon class="catalog-row-icon" color="secondary">{{ choice.icon }}</v-icon>
@@ -2346,7 +2404,7 @@ watch(
                     :title="adapterParamOpen[choice.type] ? '收起参数' : '展开参数'"
                     @click.stop="toggleAdapterParams(choice.type)"
                   />
-                  <div @click.stop>
+                  <div v-if="choice.type !== 'rolePanel'" @click.stop>
                     <v-switch
                       class="catalog-row-toggle"
                       color="success"
@@ -2358,6 +2416,7 @@ watch(
                     />
                   </div>
                   <v-btn
+                    v-if="choice.type !== 'rolePanel'"
                     icon="mdi-close"
                     size="small"
                     variant="text"
@@ -2472,16 +2531,6 @@ watch(
                         @update:model-value="value => updateAdapterPolicy(choice.type, { outputEnabled: Boolean(value) })"
                       />
                       <v-select
-                        :model-value="adapterPolicy(choice.type).outputMode"
-                        :items="messageOutputModeItems"
-                        item-title="title"
-                        item-value="value"
-                        label="发送模式"
-                        density="compact"
-                        hide-details
-                        @update:model-value="value => updateAdapterPolicy(choice.type, { outputMode: value as MessageAdapterOutputMode })"
-                      />
-                      <v-select
                         :model-value="adapterPolicy(choice.type).supportedOutputs"
                         :items="messagePayloadKindItems"
                         item-title="title"
@@ -2493,46 +2542,6 @@ watch(
                         closable-chips
                         hide-details
                         @update:model-value="value => updateAdapterPolicy(choice.type, { supportedOutputs: value as MessagePayloadKind[] })"
-                      />
-                      <v-text-field
-                        :model-value="policyListText(choice.type, 'allowedGroups')"
-                        label="允许群号"
-                        placeholder="群号用逗号分隔"
-                        density="compact"
-                        hide-details
-                        @update:model-value="value => setPolicyList(choice.type, 'allowedGroups', value)"
-                      />
-                      <v-text-field
-                        :model-value="policyListText(choice.type, 'allowedUsers')"
-                        label="允许私聊 QQ"
-                        placeholder="QQ 号用逗号分隔"
-                        density="compact"
-                        hide-details
-                        @update:model-value="value => setPolicyList(choice.type, 'allowedUsers', value)"
-                      />
-                      <v-text-field
-                        :model-value="policyListText(choice.type, 'enabledPipelines')"
-                        label="只允许管道"
-                        placeholder="留空表示不限，例如 qq, oumuq"
-                        density="compact"
-                        hide-details
-                        @update:model-value="value => setPolicyList(choice.type, 'enabledPipelines', value)"
-                      />
-                      <v-text-field
-                        :model-value="policyListText(choice.type, 'disabledPipelines')"
-                        label="禁用管道"
-                        placeholder="例如 file, console"
-                        density="compact"
-                        hide-details
-                        @update:model-value="value => setPolicyList(choice.type, 'disabledPipelines', value)"
-                      />
-                      <v-switch
-                        :model-value="adapterPolicy(choice.type).allowBroadcast"
-                        label="允许未列入白名单的目标"
-                        color="warning"
-                        inset
-                        hide-details
-                        @update:model-value="value => updateAdapterPolicy(choice.type, { allowBroadcast: Boolean(value) })"
                       />
                     </div>
                   </div>
@@ -2627,7 +2636,7 @@ watch(
                           <div class="napcat-card-summary">
                             <div><span>WS</span><b :class="napcatInstancePortError(instance) ? 'text-error' : ''">{{ napcatInstanceWsUrl(instance) }}</b></div>
                             <div><span>HTTP</span><b>{{ instance.httpUrl || "-" }}</b></div>
-                            <div><span>登录</span><b :class="napcatAccountUserId(instance) ? 'text-success' : 'text-warning'">{{ napcatAccountLoginLabel(instance) }}</b></div>
+                            <div><span>登录</span><b :class="napcatAccountOffline(instance) ? 'text-error' : napcatAccountUserId(instance) ? 'text-success' : 'text-warning'">{{ napcatAccountLoginLabel(instance) }}</b></div>
                           </div>
                           <div class="agent-action-bar mt-2">
                             <div class="agent-action-status">
@@ -2669,6 +2678,18 @@ watch(
                                 @click="launchNapcatInstance(instance)"
                               >
                                 {{ instance.launchCommand ? "启动后台" : "先填启动命令" }}
+                              </v-btn>
+                              <v-btn
+                                size="small"
+                                variant="tonal"
+                                color="warning"
+                                prepend-icon="mdi-restart"
+                                :loading="restartingNapcatInstance[instance.id]"
+                                :disabled="restartingNapcatInstance[instance.id] || (!instance.webuiUrl && !instance.launchCommand)"
+                                :title="instance.webuiUrl || instance.launchCommand ? '重启这个 NapCat 后台并复查状态' : '请先填写 WebUI 地址或启动命令'"
+                                @click="restartNapcatInstance(instance)"
+                              >
+                                重启 NapCat
                               </v-btn>
                               <v-btn size="small" variant="text" prepend-icon="mdi-content-copy" @click="copyText(napcatInstanceWsUrl(instance), '已复制 NapCat WS 地址')">
                                 复制 WS
@@ -2932,15 +2953,31 @@ watch(
                       <div v-for="reason in adapterErrors('napcat')" :key="reason" class="text-body-2">{{ reason }}</div>
                     </v-alert>
                     <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>WS 连接</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : napcatState.connected ? 'text-success' : 'text-error'">{{ messageAdapterInactive ? "未启用" : napcatState.connected ? "已连接" : "未连接" }}</b></div>
+                    <div class="status-row"><span>WS 连接</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : napcatPrimaryOffline() ? 'text-error' : napcatState.connected ? 'text-success' : 'text-error'">{{ messageAdapterInactive ? "未启用" : napcatPrimaryOffline() ? "QQ 已离线" : napcatState.connected ? "已连接" : "未连接" }}</b></div>
                     <div class="status-row"><span>远端地址</span><b>{{ napcatState.remoteAddress || "-" }}</b></div>
                     <div class="status-row"><span>最后连接</span><b>{{ napcatState.lastConnectedAt || "-" }}</b></div>
                     <div class="status-row"><span>最后断开</span><b>{{ napcatState.lastDisconnectedAt || "-" }}</b></div>
                     <div class="status-row"><span>登录资料</span><b :class="napcatState.loginInfoError ? 'text-error' : ''">{{ napcatState.loginInfoError || napcatState.lastLoginInfoAt || "-" }}</b></div>
                   </template>
+                  <div v-else-if="choice.type === 'rolePanel'" class="catalog-param-grid">
+                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
+                      角色面板是内置本地消息端，不需要端口、外部登录或安装。托盘打开后，聊天视图会把用户输入作为 role_panel_message 投递给 Agent，Agent 默认回到同一个角色面板时间线。
+                    </v-alert>
+                    <div class="full-span adapter-message-file-panel">
+                      <div class="section-title small-title">聊天记录</div>
+                      <div class="section-note">{{ messageFilePaths('rolePanel').join(' / ') || '发送角色面板消息后生成 messages.jsonl。' }}</div>
+                      <div v-if="messageFileEntries('rolePanel').length" class="adapter-message-preview">
+                        <div
+                          v-for="(entry, messageIndex) in messageFileEntries('rolePanel').slice(0, 3)"
+                          :key="`${entry.path}-${entry.messageId || messageIndex}`"
+                        >
+                          {{ formatLogTime(entry) }} · {{ entry.sender || entry.source || '角色面板' }} · {{ logPreview(entry) }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
-                    <v-text-field v-model.number="gateway.heartbeatIntervalSeconds" type="number" label="触发间隔（秒）" @update:model-value="touch" />
-                    <v-text-field v-model="gateway.heartbeatMessage" label="触发消息" @update:model-value="touch" />
+                    <div class="section-note">定时触发参数在“人格配置 / 消息模板规则”的 heartbeat 规则里维护；这里仅启用内部定时来源。</div>
                   </div>
                   <template v-if="choice.type === 'heartbeat' && runtime.running !== undefined">
                     <v-alert v-if="adapterErrors('heartbeat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
@@ -2948,6 +2985,8 @@ watch(
                     </v-alert>
                     <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
                     <div class="status-row"><span>触发器状态</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : heartbeatState.enabled === false ? 'text-error' : 'text-success'">{{ messageAdapterInactive ? "未启用" : heartbeatState.enabled === false ? "未启用" : "已启用" }}</b></div>
+                    <div class="status-row"><span>计划数量</span><b>{{ heartbeatState.scheduleCount ?? "-" }}</b></div>
+                    <div class="status-row"><span>下次触发</span><b>{{ heartbeatState.nextTickAt || "-" }}</b></div>
                     <div class="agent-action-bar mt-2">
                       <div class="agent-action-status">
                         <span class="section-note">立即触发会向当前 Agent 端投递一条心跳消息；日志页可看完整结果。</span>
@@ -3146,7 +3185,7 @@ watch(
           </v-menu>
         </div>
 
-        <v-alert v-if="messageInputsDisabled" type="info" variant="tonal">当前路由暂时不接收任何消息入口；下面的入口启用状态会保留，关闭禁用后继续使用。</v-alert>
+        <v-alert v-if="messageInputsDisabled" type="info" variant="tonal">当前配置仍带有旧版全局消息禁用字段；请移除该字段，或分别关闭不需要的消息端。</v-alert>
       </v-card>
 
       <v-card class="app-card glass-card section-card">
@@ -3287,56 +3326,30 @@ watch(
                 >
                   {{ warning }}
                 </v-alert>
-                <!-- Codex Desktop -->
-                <template v-if="agent.type === 'codexDesktop'">
+                <!-- Codex -->
+                <template v-if="agent.type === 'codex'">
                   <div class="catalog-param-grid">
-                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codexDesktop')" label="工作目录" placeholder="C:/Path/To/Project" hint="Agent 打开的项目目录" persistent-hint @update:model-value="touch">
+                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="C:/Path/To/Project" hint="Agent 打开的项目目录" persistent-hint @update:model-value="touch">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentProjectItems('codexDesktop').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
+                        <v-icon v-else-if="agentProjectItems('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-combobox v-model="gateway.codexThreadName" :items="sessionNamesFor('codexDesktop')" label="会话线程名" placeholder="Rabi" hint="Codex Desktop 里对话窗口的名称" persistent-hint @update:model-value="touch">
+                    <v-combobox v-model="gateway.codexThreadName" :items="sessionNamesFor('codex')" label="会话线程名" placeholder="Rabi" hint="Codex 里的对话窗口名称" persistent-hint @update:model-value="touch">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="sessionNamesFor('codexDesktop').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
+                        <v-icon v-else-if="sessionNamesFor('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
                     <v-text-field v-model="gateway.agentModel" class="full-span" label="模型覆盖" placeholder="留空，沿用原会话模型" hint="只在需要强制指定 Agent 模型时填写" persistent-hint @update:model-value="touch" />
                   </div>
                   <template v-if="runtime.running !== undefined">
-                    <v-alert v-if="agentStateFor('codexDesktop').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
-                      {{ agentStateFor('codexDesktop').lastNotificationError }}
+                    <v-alert v-if="agentStateFor('codex').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
+                      {{ agentStateFor('codex').lastNotificationError }}
                     </v-alert>
-                    <div class="status-row mt-1"><span>连接状态</span><b :class="agentStateFor('codexDesktop').monitorThreadId ? 'text-success' : 'text-warning'">{{ agentStateFor('codexDesktop').monitorThreadId ? '已绑定' : '未绑定' }}</b></div>
-                    <div class="status-row"><span>线程名</span><b>{{ agentStateFor('codexDesktop').monitorThreadName || "-" }}</b></div>
-                    <div class="status-row"><span>最后成功</span><b>{{ agentStateFor('codexDesktop').lastNotificationAt || "-" }}</b></div>
-                  </template>
-                </template>
-                <!-- Codex App -->
-                <template v-else-if="agent.type === 'codexApp'">
-                  <div class="catalog-param-grid">
-                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codexApp')" label="工作目录" placeholder="C:/Path/To/Project" hint="Agent 打开的项目目录" persistent-hint @update:model-value="touch">
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentProjectItems('codexApp').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
-                      </template>
-                    </v-combobox>
-                    <v-combobox v-model="gateway.codexThreadName" :items="sessionNamesFor('codexApp')" label="会话线程名" placeholder="Rabi" hint="Codex App 里的对话线程名" persistent-hint @update:model-value="touch">
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="sessionNamesFor('codexApp').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
-                      </template>
-                    </v-combobox>
-                    <v-text-field v-model="gateway.agentModel" class="full-span" label="模型覆盖" placeholder="留空，沿用原会话模型" hint="只在需要强制指定 Agent 模型时填写" persistent-hint @update:model-value="touch" />
-                  </div>
-                  <template v-if="runtime.running !== undefined">
-                    <v-alert v-if="agentStateFor('codexApp').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
-                      {{ agentStateFor('codexApp').lastNotificationError }}
-                    </v-alert>
-                    <div class="status-row mt-1"><span>连接状态</span><b :class="agentStateFor('codexApp').monitorThreadId ? 'text-success' : 'text-warning'">{{ agentStateFor('codexApp').monitorThreadId ? '已绑定' : '未绑定' }}</b></div>
-                    <div class="status-row"><span>线程名</span><b>{{ agentStateFor('codexApp').monitorThreadName || "-" }}</b></div>
-                    <div class="status-row"><span>最后成功</span><b>{{ agentStateFor('codexApp').lastNotificationAt || "-" }}</b></div>
+                    <div class="status-row mt-1"><span>连接状态</span><b :class="agentStateFor('codex').monitorThreadId ? 'text-success' : 'text-warning'">{{ agentStateFor('codex').monitorThreadId ? '已绑定' : '未绑定' }}</b></div>
+                    <div class="status-row"><span>线程名</span><b>{{ agentStateFor('codex').monitorThreadName || "-" }}</b></div>
+                    <div class="status-row"><span>最后成功</span><b>{{ agentStateFor('codex').lastNotificationAt || "-" }}</b></div>
                   </template>
                 </template>
                 <!-- Copilot CLI -->

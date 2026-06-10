@@ -3,6 +3,12 @@ import path from "node:path";
 import { sendGroupMessage, sendPrivateMessage, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { resolvePipeline, type PipelineDefinition } from "./pipelines.js";
 import {
+  appendRolePanelTimelineMessage,
+  createRolePanelMessageId,
+  normalizeRolePanelAttachments,
+  type RolePanelAttachment
+} from "./rolePanelTimeline.js";
+import {
   messageAdapterPolicyFor,
   type MessageAdapterPolicies,
   type MessageAdapterPolicy,
@@ -30,6 +36,9 @@ export type AgentReplyRequest = {
   groupId?: unknown;
   userId?: unknown;
   instanceId?: unknown;
+  adapterType?: unknown;
+  botUserId?: unknown;
+  roleId?: unknown;
   replyContext?: unknown;
 };
 
@@ -54,6 +63,7 @@ export type AgentReplyRuntime = {
   id: string;
   name?: string;
   enabled?: boolean;
+  targetGroupId?: string;
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   dataDir?: string;
@@ -77,7 +87,7 @@ export type AgentReplyResult = {
   reason?: string;
   routeProfileId?: string;
   messageId?: string;
-  targetType?: "group" | "private";
+  targetType?: "group" | "private" | "role_panel";
   groupId?: string;
   userId?: string;
   instanceId?: string;
@@ -92,18 +102,23 @@ export type AgentReplyResult = {
 
 type SourceRecord = {
   messageId?: string;
-  targetType?: "group" | "private";
+  targetType?: "group" | "private" | "role_panel";
   groupId?: string;
   userId?: string;
   instanceId?: string;
   adapterType?: string;
   botUserId?: string;
+  roleId?: string;
   raw?: Record<string, unknown>;
 };
 
 type ResolvedRoute = {
   runtime: AgentReplyRuntime;
   profile?: AgentReplyRouteProfile;
+};
+
+type ResolvedReplyRoute = ResolvedRoute & {
+  sourceRecord?: SourceRecord;
 };
 
 type ReplyContent = {
@@ -154,6 +169,17 @@ function payloadValue(request: AgentReplyRequest, payload: Record<string, unknow
     if (text) return text;
   }
   return undefined;
+}
+
+function rolePanelAttachmentsForRequest(request: AgentReplyRequest, content: ReplyContent): RolePanelAttachment[] {
+  const payload = payloadObject(request);
+  const rawAttachments = normalizeRolePanelAttachments(payload.attachments ?? (request as Record<string, unknown>).attachments);
+  if (rawAttachments.length > 0) return rawAttachments;
+  if (content.kind === "text") return [];
+  const filePath = payloadValue(request, payload, "filePath", "imagePath", "voicePath", "audioPath", "path", "file");
+  const url = payloadValue(request, payload, "fileUrl", "imageUrl", "voiceUrl", "audioUrl", "url");
+  const name = payloadValue(request, payload, "fileName", "name") ?? filePath?.split(/[\\/]/).pop() ?? url?.split("/").pop();
+  return normalizeRolePanelAttachments([{ kind: content.kind, name, path: filePath, url }]);
 }
 
 function requestContent(request: AgentReplyRequest): ReplyContent {
@@ -223,6 +249,16 @@ function dataDirsForRoute(options: AgentReplyOptions, route: ResolvedRoute): str
   return [...dirs];
 }
 
+function routeCandidates(options: AgentReplyOptions): ResolvedRoute[] {
+  return options.runtimes.flatMap((runtime) => {
+    const profiles = runtime.routeProfiles ?? [];
+    if (profiles.length === 0) {
+      return [{ runtime }];
+    }
+    return profiles.map((profile) => ({ runtime, profile }));
+  });
+}
+
 function readJsonl(filePath: string): Record<string, unknown>[] {
   if (!fs.existsSync(filePath)) return [];
   return fs.readFileSync(filePath, "utf8")
@@ -265,7 +301,47 @@ function findSourceRecord(options: AgentReplyOptions, route: ResolvedRoute, mess
   return undefined;
 }
 
-function resolveRoute(options: AgentReplyOptions, routeProfileId?: string): ResolvedRoute | undefined {
+function findSourceRoute(options: AgentReplyOptions, messageId?: string, contextTarget?: SourceRecord): ResolvedReplyRoute | undefined {
+  if (messageId) {
+    for (const route of routeCandidates(options)) {
+      const sourceRecord = findSourceRecord(options, route, messageId);
+      if (sourceRecord) {
+        return { ...route, sourceRecord };
+      }
+    }
+  }
+
+  if (contextTarget?.instanceId) {
+    const runtime = options.runtimes.find((item) =>
+      (item.napcatInstances ?? []).some((instance) => instance.id === contextTarget.instanceId && instance.enabled !== false)
+    );
+    if (runtime) {
+      return { runtime, profile: runtime.routeProfiles?.[0] };
+    }
+  }
+
+  return undefined;
+}
+
+function runtimeCanUseNapCat(runtime: AgentReplyRuntime): boolean {
+  return (runtime.napcatInstances ?? []).some((instance) => instance.enabled !== false);
+}
+
+function resolveExplicitTargetRoute(options: AgentReplyOptions, contextTarget?: SourceRecord): ResolvedReplyRoute | undefined {
+  if (!contextTarget?.targetType || (!contextTarget.groupId && !contextTarget.userId)) {
+    return undefined;
+  }
+
+  if (contextTarget.targetType === "group" && contextTarget.groupId) {
+    const matched = options.runtimes.find((runtime) => runtime.targetGroupId && String(runtime.targetGroupId) === String(contextTarget.groupId));
+    if (matched) return { runtime: matched, profile: matched.routeProfiles?.[0] };
+  }
+
+  const runtime = options.runtimes.find(runtimeCanUseNapCat) ?? options.runtimes[0];
+  return runtime ? { runtime, profile: runtime.routeProfiles?.[0] } : undefined;
+}
+
+function resolveRouteById(options: AgentReplyOptions, routeProfileId?: string): ResolvedRoute | undefined {
   if (routeProfileId) {
     for (const runtime of options.runtimes) {
       const profile = runtime.routeProfiles?.find((item) => item.id === routeProfileId);
@@ -276,6 +352,16 @@ function resolveRoute(options: AgentReplyOptions, routeProfileId?: string): Reso
   if (options.runtimes.length === 1) {
     return { runtime: options.runtimes[0], profile: options.runtimes[0].routeProfiles?.[0] };
   }
+  return undefined;
+}
+
+function resolveRoute(options: AgentReplyOptions, routeProfileId?: string, messageId?: string, contextTarget?: SourceRecord): ResolvedReplyRoute | undefined {
+  const sourceRoute = findSourceRoute(options, messageId, contextTarget);
+  if (sourceRoute) return sourceRoute;
+  const explicitTargetRoute = resolveExplicitTargetRoute(options, contextTarget);
+  if (explicitTargetRoute) return explicitTargetRoute;
+  const routeById = resolveRouteById(options, routeProfileId);
+  if (routeById) return routeById;
   return undefined;
 }
 
@@ -316,25 +402,6 @@ function napcatPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "napcat");
 }
 
-function policyAllowsPipeline(policy: Required<MessageAdapterPolicy>, pipeline: ReturnType<typeof routePipeline>): boolean {
-  const ids = [pipeline.outputPipeline, pipeline.outputAdapter].map(item => String(item || "").trim()).filter(Boolean);
-  if (ids.some(id => policy.disabledPipelines.includes(id))) return false;
-  return policy.enabledPipelines.length === 0 || ids.some(id => policy.enabledPipelines.includes(id));
-}
-
-function policyAllowsTarget(policy: Required<MessageAdapterPolicy>, target: SourceRecord, isSourceReply: boolean): boolean {
-  if (policy.allowBroadcast) return true;
-  if (target.targetType === "group" && target.groupId) {
-    if (policy.allowedGroups.length > 0) return policy.allowedGroups.includes(String(target.groupId));
-    return true;
-  }
-  if (target.targetType === "private" && target.userId) {
-    if (policy.allowedUsers.length > 0) return policy.allowedUsers.includes(String(target.userId));
-    return true;
-  }
-  return false;
-}
-
 function draft(reason: string, text: string, target: SourceRecord, routeProfileId?: string): AgentReplyResult {
   return {
     ok: false,
@@ -355,35 +422,99 @@ function draft(reason: string, text: string, target: SourceRecord, routeProfileI
   };
 }
 
+function appendRolePanelReply(
+  options: AgentReplyOptions,
+  route: ResolvedRoute,
+  target: SourceRecord,
+  text: string,
+  attachments: RolePanelAttachment[],
+  request: AgentReplyRequest
+): AgentReplyResult {
+  const roleDir = roleDirFor(options.rootDir, options.rolesRoot, {
+    rolesDir: route.profile?.rolesDir ?? route.runtime.rolesDir,
+    agentRoleId: target.roleId ?? route.profile?.agentRoleId ?? route.runtime.agentRoleId
+  });
+  if (!roleDir) {
+    return { ok: false, status: "blocked", reason: "Role panel reply requires a role id.", routeProfileId: route.profile?.id ?? route.runtime.id, messageId: target.messageId };
+  }
+  const roleId = valueString(target.roleId ?? route.profile?.agentRoleId ?? route.runtime.agentRoleId) ?? path.basename(roleDir);
+  appendRolePanelTimelineMessage(roleDir, {
+    id: createRolePanelMessageId("role-panel-assistant"),
+    time: Math.floor(Date.now() / 1000),
+    roleId,
+    gatewayId: route.runtime.id,
+    routeProfileId: route.profile?.id ?? route.runtime.id,
+    direction: "assistant",
+    sender: "Agent",
+    text,
+    attachments,
+    status: "sent",
+    replyContext: contextObject(request)
+  });
+  return {
+    ok: true,
+    status: "sent",
+    reason: "Sent to role panel timeline.",
+    routeProfileId: route.profile?.id ?? route.runtime.id,
+    messageId: target.messageId,
+    targetType: "role_panel"
+  };
+}
+
 export async function handleAgentReply(request: AgentReplyRequest, options: AgentReplyOptions): Promise<AgentReplyResult> {
   const content = requestContent(request);
   const text = content.text;
   const routeProfileId = requestField(request, "routeProfileId");
   const messageId = requestField(request, "messageId");
-  const route = resolveRoute(options, routeProfileId);
+  const contextTarget: SourceRecord = {
+    messageId,
+    targetType: requestField(request, "targetType") === "group"
+      ? "group"
+      : requestField(request, "targetType") === "private"
+        ? "private"
+        : requestField(request, "targetType") === "role_panel" || requestField(request, "adapterType") === "rolePanel"
+          ? "role_panel"
+        : requestField(request, "groupId")
+          ? "group"
+          : requestField(request, "userId")
+            ? "private"
+            : undefined,
+    groupId: requestField(request, "groupId"),
+    userId: requestField(request, "userId"),
+    instanceId: requestField(request, "instanceId"),
+    adapterType: requestField(request, "adapterType"),
+    botUserId: requestField(request, "botUserId"),
+    roleId: requestField(request, "roleId")
+  };
+  const route = resolveRoute(options, routeProfileId, messageId, contextTarget);
   appendOutboxLog(options, route, "info", "reply_requested", text.slice(0, 500), { routeProfileId, messageId, payloadKind: content.kind, request });
 
   if (!route) {
-    const result: AgentReplyResult = { ok: false, status: "blocked", reason: "Route profile is required when multiple routes are configured.", routeProfileId, messageId, draft: { text } };
+    const result: AgentReplyResult = { ok: false, status: "blocked", reason: "Route source context is required when multiple routes are configured.", routeProfileId, messageId, draft: { text } };
     appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
     return result;
   }
 
-  const contextTarget: SourceRecord = {
-    routeProfileId,
-    messageId,
-    targetType: requestField(request, "targetType") === "group" ? "group" : requestField(request, "targetType") === "private" ? "private" : undefined,
-    groupId: requestField(request, "groupId"),
-    userId: requestField(request, "userId"),
-    instanceId: requestField(request, "instanceId")
-  } as SourceRecord;
-  const loggedTarget = findSourceRecord(options, route, messageId);
+  const loggedTarget = route.sourceRecord ?? findSourceRecord(options, route, messageId);
   const target = { ...contextTarget, ...loggedTarget };
+  if (target.targetType === "group" && !target.groupId && route.runtime.targetGroupId) {
+    target.groupId = String(route.runtime.targetGroupId);
+  }
+  if (target.targetType === "role_panel" || target.adapterType === "rolePanel") {
+    const result = appendRolePanelReply(options, route, target, text, rolePanelAttachmentsForRequest(request, content), request);
+    appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "role_panel_reply_sent" : "reply_blocked", result.reason ?? "", result);
+    return result;
+  }
   const pipeline = routePipeline(route);
   const policy = napcatPolicy(route);
-  const isSourceReply = Boolean(messageId && loggedTarget);
+  const hasExplicitQqTarget = Boolean(target.targetType && (target.groupId || target.userId));
+  const isSourceReply = Boolean(
+    target.adapterType === "napcat" ||
+    (messageId && loggedTarget) ||
+    hasExplicitQqTarget
+  );
 
-  if (pipeline.outputAdapter === "codex") {
+  if (pipeline.outputAdapter === "codex" && !isSourceReply) {
     const result: AgentReplyResult = {
       ok: true,
       status: "sent",
@@ -402,7 +533,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     return result;
   }
 
-  if (pipeline.outputAdapter !== "qq") {
+  if (pipeline.outputAdapter !== "qq" && !isSourceReply) {
     const result = draft(`Pipeline does not use QQ output: outputAdapter=${pipeline.outputAdapter}.`, text, target, route.profile?.id ?? route.runtime.id);
     appendOutboxLog(options, route, "warning", "reply_draft", result.reason ?? "draft", result);
     return result;
@@ -420,18 +551,6 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     return result;
   }
 
-  if (!policyAllowsPipeline(policy, pipeline)) {
-    const result: AgentReplyResult = { ...draft(`NapCat route policy does not allow pipeline ${pipeline.outputPipeline || pipeline.outputAdapter}.`, text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
-    appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
-    return result;
-  }
-
-  if (policy.outputMode === "draft") {
-    const result = draft("NapCat route policy is draft-only.", text, target, route.profile?.id ?? route.runtime.id);
-    appendOutboxLog(options, route, "warning", "reply_draft", result.reason ?? "draft", result);
-    return result;
-  }
-
   if (target.adapterType && target.adapterType !== "napcat") {
     const result: AgentReplyResult = { ...draft(`Source adapter is not QQ/NapCat: ${target.adapterType}.`, text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
     appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
@@ -440,12 +559,6 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
 
   if (target.botUserId && target.userId && target.botUserId === target.userId) {
     const result: AgentReplyResult = { ...draft("Original source message is from the bot itself.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
-    appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
-    return result;
-  }
-
-  if (!policyAllowsTarget(policy, target, isSourceReply)) {
-    const result: AgentReplyResult = { ...draft("Target is not allowed by this NapCat route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
     appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
     return result;
   }

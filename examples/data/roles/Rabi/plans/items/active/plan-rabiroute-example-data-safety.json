@@ -1,0 +1,24 @@
+{
+  "id": "plan-rabiroute-example-data-safety",
+  "title": "维护公开示例数据的脱敏边界",
+  "status": "进行中",
+  "priority": "high",
+  "kind": "maintenance",
+  "currentStep": "examples/data 只保留可公开复制的路由、人格式、计划和记忆示例",
+  "nextAction": "每次新增示例时检查真实 QQ 号、群号、token、Cookie、本机用户名、私有路径和运行期 data 日志是否被误提交",
+  "waitingFor": "",
+  "project": {
+    "name": "RabiRoute",
+    "path": "./"
+  },
+  "source": {
+    "kind": "example",
+    "summary": "公开示例计划：开源示例必须可复制且不泄露私有环境"
+  },
+  "dueAt": "",
+  "completedAt": "",
+  "archivedAt": "",
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "keywords": ["examples/data", "脱敏", "token", "Cookie", "QQ", "私有路径"]
+}

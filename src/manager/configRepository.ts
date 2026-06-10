@@ -132,16 +132,31 @@ export class ManagerConfigRepository {
     return { gateways };
   }
 
+  private removeConfigFilesMissingFrom(activeConfigNames: Set<string>): void {
+    if (!fs.existsSync(this.routeRoot)) return;
+    for (const routeEntry of fs.readdirSync(this.routeRoot, { withFileTypes: true })) {
+      if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) continue;
+      const configName = sanitizeRoleId(routeEntry.name);
+      if (!configName || activeConfigNames.has(configName)) continue;
+      const configPath = this.adapterConfigPath(configName);
+      if (fs.existsSync(configPath)) {
+        try { fs.unlinkSync(configPath); } catch { /* non-fatal */ }
+      }
+    }
+  }
+
   writeConfig(config: GatewayConfigFile): GatewayConfigFile {
     if (!Array.isArray(config.gateways)) throw new Error("routes must be an array");
     const normalized = { gateways: config.gateways.map((definition) => this.normalize(definition)) };
     autoAssignGatewayPorts(normalized.gateways, this.managerPort);
     validateGatewayPortConflicts(normalized.gateways);
+    const activeConfigNames = new Set<string>();
     for (let i = 0; i < normalized.gateways.length; i += 1) {
       const definition = normalized.gateways[i];
       const raw = config.gateways[i];
       const oldConfigName = routeRuntimeParts(raw.id).configName || sanitizeRoleId(raw.configName);
       const configName = sanitizeRoleId(definition.configName) || definition.id;
+      activeConfigNames.add(configName);
       if (oldConfigName && oldConfigName !== configName) {
         const oldConfigPath = this.adapterConfigPath(oldConfigName);
         if (fs.existsSync(oldConfigPath)) {
@@ -152,6 +167,7 @@ export class ManagerConfigRepository {
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify(definition, null, 2), "utf8");
     }
+    this.removeConfigFilesMissingFrom(activeConfigNames);
     return normalized;
   }
 }

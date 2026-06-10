@@ -47,6 +47,18 @@ export type ManualTriggerRecord = {
   intervalSeconds?: number;
 };
 
+export type RolePanelMessageRecord = {
+  time: number;
+  rawMessage: string;
+  messageId?: number | string;
+  senderName?: string;
+  roleId?: string;
+  gatewayId?: string;
+  routeProfileId?: string;
+  attachments?: unknown[];
+  adapterType?: "rolePanel";
+};
+
 export type VoiceTranscriptEventRecord = {
   time: number;
   rawMessage: string;
@@ -67,7 +79,7 @@ export type VoiceTranscriptEventRecord = {
 export type CodexNotificationRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "voice_transcript";
+  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript";
   text: string;
 };
 

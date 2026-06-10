@@ -8,9 +8,8 @@
  * (places it in %USERPROFILE%\.astrbot\data\plugins\rabiroute_agent\ on Windows).
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import { config } from "../config.js";
+import { reportAgentState } from "./stateReporter.js";
 
 // --------------- types ---------------
 
@@ -28,27 +27,16 @@ type AstrBotAgentState = {
 
 // --------------- state ---------------
 
-const statePath = path.join(config.dataDir, "astrbot-agent-state.json");
+let memoryState: AstrBotAgentState | null = null;
 
 function readState(): AstrBotAgentState {
-  if (!fs.existsSync(statePath)) {
-    return baseState();
-  }
-  try {
-    return {
-      ...baseState(),
-      ...JSON.parse(
-        fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")
-      ) as Partial<AstrBotAgentState>,
-    };
-  } catch {
-    return baseState();
-  }
+  memoryState ??= baseState();
+  return memoryState;
 }
 
 function writeState(state: AstrBotAgentState): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+  memoryState = state;
+  reportAgentState("astrbot", state);
 }
 
 function baseState(): AstrBotAgentState {

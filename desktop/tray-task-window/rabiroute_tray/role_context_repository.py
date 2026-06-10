@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +11,8 @@ class ContextEntry:
     title: str
     detail: str = ""
     source: str = ""
+    updated_at: str = ""
+    keywords: list[str] = field(default_factory=list)
     path: Path | None = None
 
 
@@ -44,7 +46,7 @@ class RoleContextRepository:
         )
 
     def _resolve_route_dir(self, route_dir: Path) -> Path:
-        if (route_dir / "gateway-status.json").exists() or (route_dir / "codex-state.json").exists():
+        if (route_dir / "adapterConfig.json").exists() or (route_dir / "gateway-status.json").exists():
             return route_dir
         default_main = self.project_root / "data" / "route" / "default-main"
         if default_main.exists():
@@ -62,8 +64,18 @@ class RoleContextRepository:
             title = str(item.get("title") or item.get("id") or label)
             content = str(item.get("content") or "")
             updated_at = str(item.get("updatedAt") or "")
-            detail = "\n".join(part for part in [content, self._kv("updatedAt", updated_at)] if part)
-            entries.append(ContextEntry(title=title, detail=detail, source=label, path=file_path))
+            source = item.get("source") if isinstance(item.get("source"), dict) else {}
+            source_text = str(source.get("summary") or source.get("kind") or "")
+            entries.append(
+                ContextEntry(
+                    title=title,
+                    detail=content,
+                    source=source_text,
+                    updated_at=updated_at,
+                    keywords=_normalize_keywords(item.get("keywords")),
+                    path=file_path,
+                )
+            )
         return entries
 
     def _load_status_lines(self, role_dir: Path, route_dir: Path) -> list[str]:
@@ -90,3 +102,14 @@ class RoleContextRepository:
 
     def _kv(self, label: str, value: Any) -> str:
         return f"{label}: {value}" if value not in (None, "") else ""
+
+
+def _normalize_keywords(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    keywords: list[str] = []
+    for keyword in value:
+        text = str(keyword).strip()
+        if text:
+            keywords.append(text)
+    return keywords

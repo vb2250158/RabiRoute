@@ -1,0 +1,24 @@
+{
+  "id": "plan-rabiroute-webgui-and-tray",
+  "title": "让 RibiWebGUI 和托盘面板清楚展示路由状态与角色上下文",
+  "status": "进行中",
+  "priority": "medium",
+  "kind": "ui",
+  "currentStep": "RibiWebGUI 管理 Gateway、路由、人格式配置；托盘面板读取计划、任务、记忆和运行状态摘要",
+  "nextAction": "继续把状态原因、计划/记忆摘要和角色目录读取逻辑做成可扫描、可排障的界面",
+  "waitingFor": "",
+  "project": {
+    "name": "RabiRoute",
+    "path": "./"
+  },
+  "source": {
+    "kind": "example",
+    "summary": "公开示例计划：控制面负责观察和配置，不替代 router 或 Agent runtime"
+  },
+  "dueAt": "",
+  "completedAt": "",
+  "archivedAt": "",
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "keywords": ["RibiWebGUI", "托盘", "Gateway", "状态", "计划", "记忆"]
+}

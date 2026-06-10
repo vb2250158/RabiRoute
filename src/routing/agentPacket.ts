@@ -7,6 +7,7 @@ import {
   isGroupRecord,
   isHeartbeatRecord,
   isManualTriggerRecord,
+  isRolePanelRecord,
   isVoiceTranscriptRecord
 } from "./routeDecision.js";
 
@@ -105,6 +106,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "indirect_reply") return "QQ 回复链提醒";
   if (routeKind === "heartbeat") return "定时心跳提醒";
   if (routeKind === "manual_trigger") return "手动触发提醒";
+  if (routeKind === "role_panel_message") return "角色面板消息";
   if (routeKind === "voice_transcript") return "语音转写提醒";
   return "RabiRoute 消息提醒";
 }
@@ -117,12 +119,15 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const isHeartbeat = isHeartbeatRecord(record);
   const isVoiceTranscript = isVoiceTranscriptRecord(record);
   const isManualTrigger = isManualTriggerRecord(record);
-  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : "heartbeat";
-  const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isVoiceTranscript ? "voice_transcript" : "private";
+  const isRolePanel = isRolePanelRecord(record);
+  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
+  const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isRolePanel ? "role_panel" : isVoiceTranscript ? "voice_transcript" : "private";
   const pipeline = route.resolvedPipeline ?? config.resolvedPipeline;
   const replyApiPath = "/api/agent/replies";
   const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
   const replyContext = {
+    runtimeRouteId: process.env.GATEWAY_ID,
+    gatewayId: process.env.GATEWAY_ID,
     routeProfileId: route.id,
     routeProfileName: route.name,
     routeKind: decision.routeKind,
@@ -130,9 +135,15 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     messageId: record.messageId,
     groupId: isGroup ? record.groupId : undefined,
     userId: "userId" in record ? record.userId : undefined,
+    targetGroupId: config.targetGroupId || undefined,
     instanceId: "instanceId" in record ? record.instanceId : undefined,
-    adapterType: "adapterType" in record ? record.adapterType : undefined,
+    adapterType: isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
+    roleId: isRolePanel ? record.roleId : undefined,
     botUserId: "botUserId" in record ? record.botUserId : undefined,
+    dataDir: roleContext.dataDir,
+    groupLogPath: path.join(roleContext.dataDir, "group-messages.jsonl"),
+    privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
+    replyApiUrl,
     outputAdapter: pipeline.outputAdapter,
     outputPipeline: pipeline.outputPipeline,
     replyToSource: pipeline.replyToSource
@@ -147,7 +158,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     groupId: isGroup ? record.groupId : undefined,
     targetType,
     targetId,
-    messageTarget: isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isVoiceTranscript ? `语音转写 ${targetId}` : `私聊 ${targetId}`,
+    messageTarget: isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText: decision.routeText,
@@ -157,6 +168,9 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     agentRoleId: roleContext.roleId,
     routeProfileId: route.id,
     routeProfileName: route.name,
+    runtimeRouteId: process.env.GATEWAY_ID,
+    gatewayId: process.env.GATEWAY_ID,
+    targetGroupId: config.targetGroupId,
     agentRolePath: roleContext.rolePath,
     agentRoleDir: roleContext.roleDir,
     plansDir: roleContext.roleDir ? path.join(roleContext.roleDir, "plans") : undefined,
@@ -182,6 +196,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
     heartbeatLogPath: path.join(roleContext.dataDir, "heartbeat-events.jsonl"),
     manualTriggerLogPath: path.join(roleContext.dataDir, "manual-trigger-events.jsonl"),
+    rolePanelLogPath: path.join(roleContext.roleDir || roleContext.dataDir, "role-panel", "messages.jsonl"),
     voiceTranscriptLogPath: path.join(roleContext.dataDir, "voice-transcripts.jsonl"),
     heartbeatIntervalSeconds: "intervalSeconds" in record ? record.intervalSeconds : undefined,
     triggerId: isManualTrigger ? record.triggerId : undefined,
@@ -267,6 +282,7 @@ function buildAgentMessage(
       optionalLine("私聊日志", values.privateLogPath),
       optionalLine("心跳日志", values.heartbeatLogPath),
       optionalLine("手动触发日志", values.manualTriggerLogPath),
+      optionalLine("角色面板记录", values.rolePanelLogPath),
       optionalLine("语音转写日志", values.voiceTranscriptLogPath)
     ]),
     section("回传", [

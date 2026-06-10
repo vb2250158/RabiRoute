@@ -1037,7 +1037,18 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
   const timer = setTimeout(() => controller.abort(), 5000);
   let http: Record<string, unknown>;
   let loginInfo: NapcatLoginInfo | null = null;
+  let onebotStatus: { online?: boolean; good?: boolean } | null = null;
   try {
+    const statusResponse = await fetch(`${httpUrl}/get_status`, {
+      method: "POST",
+      headers,
+      body: "{}",
+      signal: controller.signal
+    });
+    const statusBody = await statusResponse.json().catch(() => ({})) as NapcatOneBotResponse<{ online?: boolean; good?: boolean }>;
+    if (statusResponse.ok && (statusBody.retcode == null || statusBody.retcode === 0)) {
+      onebotStatus = statusBody.data ?? null;
+    }
     const response = await fetch(`${httpUrl}/get_login_info`, {
       method: "POST",
       headers,
@@ -1065,11 +1076,14 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
         ok: true,
         status: response.status,
         userId: body.data?.user_id,
-        nickname: body.data?.nickname
+        nickname: body.data?.nickname,
+        online: onebotStatus?.online,
+        good: onebotStatus?.good
       };
       loginInfo = {
         userId: body.data?.user_id,
         nickname: body.data?.nickname,
+        online: onebotStatus?.online,
         source: "onebot-http"
       };
     }
@@ -1100,6 +1114,12 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
   const onebotConfig = readOneBotNetworkConfig(onebotPath);
   const onebotConfigured = onebotConfigMatches(onebotConfig, httpPort, wsUrl);
   const diagnostics: string[] = [];
+  if (http.ok && onebotStatus?.online === false) {
+    diagnostics.push(`${httpUrl}/get_status 返回 online:false；WS 或登录资料可能仍有旧连接，但 QQ 实际已经离线。`);
+  }
+  if (http.ok && onebotStatus?.good === false) {
+    diagnostics.push(`${httpUrl}/get_status 返回 good:false；NapCat 进程仍在，但 OneBot 当前不可健康投递。`);
+  }
   if (!http.ok && webuiLoginInfo?.userId) {
     diagnostics.push(`当前 WebUI 登录 QQ ${webuiLoginInfo.userId}，但 ${httpUrl}/get_login_info 不可用。`);
     if (onebotConfigured) {
@@ -1115,7 +1135,7 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
   const fixAvailable = Boolean(!http.ok && webuiLoginInfo?.userId && tokenInfo.configPath && onebotPath);
   const processes = await detectNapcatProcesses();
   return {
-    ok: Boolean(http.ok),
+    ok: Boolean(http.ok && onebotStatus?.online !== false && onebotStatus?.good !== false),
     fixAvailable,
     diagnostics,
     message: !http.ok && webuiLoginInfo?.userId
@@ -1175,6 +1195,81 @@ export function launchNapcatInstance(ctx: NapcatManagerContext, request: NapcatL
   return {
     ok: true,
     message: `已尝试启动 NapCat 后台：${instance.name || instance.id}`,
+    instance: {
+      id: instance.id,
+      name: instance.name,
+      gatewayPort: instance.gatewayPort,
+      httpUrl: instance.httpUrl,
+      webuiUrl: instance.webuiUrl
+    }
+  };
+}
+
+export async function restartNapcatInstance(ctx: NapcatManagerContext, request: NapcatLaunchRequest): Promise<Record<string, unknown>> {
+  const gatewayId = request.gatewayId?.trim();
+  const instanceId = request.instanceId?.trim();
+  if (!gatewayId || !instanceId) {
+    throw new Error("缺少 gatewayId 或 instanceId。");
+  }
+  const runtime = [...ctx.getRuntimes()].find((item) => item.definition.id === gatewayId);
+  if (!runtime) {
+    throw new Error(`未找到路由：${gatewayId}`);
+  }
+  const instance = napcatInstancesFor(ctx, runtime).find((item) => item.id === instanceId);
+  if (!instance) {
+    throw new Error(`未找到 NapCat 实例：${instanceId}`);
+  }
+
+  const steps: string[] = [];
+  let restartedViaWebui = false;
+  if (instance.webuiUrl) {
+    const tokenInfo = readNapcatWebuiToken(ctx, instance.webuiUrl, instance.webuiToken);
+    const webuiSteps = await restartNapcatViaWebui(instance.webuiUrl, tokenInfo);
+    restartedViaWebui = webuiSteps.some((step) => step.startsWith("已调用 NapCat 重启接口"));
+    steps.push(...webuiSteps);
+  }
+
+  const ports = [
+    portFromUrl(instance.httpUrl),
+    portFromUrl(instance.webuiUrl)
+  ].filter((port) => Number.isInteger(port) && port > 0);
+  const stopped: string[] = [];
+  if (!restartedViaWebui) {
+    const pids = await napcatInstanceProcessPids(ctx, instance, ports);
+    for (const pid of pids) {
+      try {
+        await execFileAsync("taskkill.exe", ["/PID", pid, "/T", "/F"], { timeout: 5000 });
+        stopped.push(pid);
+      } catch {
+        steps.push(`停止 PID ${pid} 失败，已跳过。`);
+      }
+    }
+    if (stopped.length) {
+      steps.push(`已停止旧 NapCat 进程：${stopped.join(", ")}`);
+      await waitForPortsReleased(ports, 2000);
+    }
+  }
+
+  let launchResult: Record<string, unknown> | null = null;
+  if (!restartedViaWebui) {
+    if (!instance.launchCommand?.trim()) {
+      steps.push("没有启动命令，无法在 WebUI 重启失败后自动拉起后台。");
+    } else {
+      launchResult = launchNapcatInstance(ctx, request);
+      steps.push(String(launchResult.message || "已尝试启动 NapCat 后台。"));
+    }
+  }
+
+  const ok = restartedViaWebui || Boolean(launchResult && launchResult.ok !== false);
+  ctx.appendLog(runtime, `restart NapCat instance ${instance.name || instance.id}: webui=${restartedViaWebui ? "ok" : "skipped"} stopped=${stopped.join(",") || "none"} launched=${launchResult ? "yes" : "no"}`);
+  return {
+    ok,
+    message: ok
+      ? `已尝试重启 NapCat：${instance.name || instance.id}`
+      : `未能自动重启 NapCat：${instance.name || instance.id}`,
+    steps,
+    stoppedPids: stopped,
+    launch: launchResult,
     instance: {
       id: instance.id,
       name: instance.name,

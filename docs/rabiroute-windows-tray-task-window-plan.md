@@ -24,7 +24,7 @@ data/roles/<RoleId>/memory/recent/*.json
 data/roles/<RoleId>/memory/consolidated/*.json
 ```
 
-托盘窗口不读取旧任务目录，不从聊天日志合成近期记忆，也不把运行态 `codex-state.json` 当作正式计划或记忆数据库。
+托盘窗口不读取旧任务目录，不从聊天日志合成近期记忆，也不把路由运行态当作正式计划或记忆数据库。
 
 ## 展示视图
 

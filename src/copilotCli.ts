@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { config } from "./config.js";
+import { reportAgentState } from "./agentAdapters/stateReporter.js";
 
 type CopilotCliState = {
   agentAdapterType: "copilotCli";
@@ -23,7 +24,6 @@ type CopilotCliState = {
 
 let notificationQueue: Promise<void> = Promise.resolve();
 
-const statePath = path.join(config.dataDir, "copilot-state.json");
 // Always pass the prompt via --prompt flag (never via stdin).
 // Stdin-piped mode triggers a libuv UV_HANDLE_CLOSING assertion crash (code 3221226505) on Windows
 // when copilot is spawned with a pipe on stdin, even for short messages.
@@ -35,10 +35,7 @@ const defaultArgs = ["--silent", "--allow-all-tools", "--no-ask-user", "--prompt
 // This avoids Windows command-line length limits while still using the safe --prompt flag path.
 const MAX_INLINE_PROMPT_LENGTH = 2000;
 
-// State is kept in memory only. On startup we overwrite any stale state file so
-// the manager never reads a stale error from a previous process run.
 let memoryState: CopilotCliState = baseState();
-flushState(memoryState);
 
 function readState(): CopilotCliState {
   return memoryState;
@@ -46,14 +43,7 @@ function readState(): CopilotCliState {
 
 function writeState(state: CopilotCliState): void {
   memoryState = state;
-  flushState(state);
-}
-
-function flushState(state: CopilotCliState): void {
-  try {
-    fs.mkdirSync(config.dataDir, { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
-  } catch { /* non-fatal */ }
+  reportAgentState("copilotCli", state);
 }
 
 function baseState(): CopilotCliState {
@@ -67,15 +57,13 @@ function baseState(): CopilotCliState {
 
 function copilotCommand(): string {
   if (process.env.COPILOT_CLI_BIN?.trim()) return process.env.COPILOT_CLI_BIN.trim();
-  const fs = require("fs") as typeof import("fs");
-  const p = require("path") as typeof import("path");
   // winget install GitHub.Copilot -> native .exe (preferred, no execution policy issues)
   if (process.env.LOCALAPPDATA) {
-    const wingetBase = p.join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Packages");
+    const wingetBase = path.join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Packages");
     try {
       for (const entry of fs.readdirSync(wingetBase)) {
         if (entry.startsWith("GitHub.Copilot")) {
-          const exe = p.join(wingetBase, entry, "copilot.exe");
+          const exe = path.join(wingetBase, entry, "copilot.exe");
           if (fs.existsSync(exe)) return exe;
         }
       }
@@ -83,7 +71,7 @@ function copilotCommand(): string {
   }
   // Fallback: npm global .cmd wrapper (requires shell: true on Windows)
   const npmGlobal = process.env.APPDATA
-    ? p.join(process.env.APPDATA, "npm", "copilot.cmd")
+    ? path.join(process.env.APPDATA, "npm", "copilot.cmd")
     : null;
   if (npmGlobal && fs.existsSync(npmGlobal)) return npmGlobal;
   return "copilot";

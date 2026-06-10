@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { config } from "./config.js";
+import { reportAgentState } from "./agentAdapters/stateReporter.js";
 
 type MarvisState = {
   agentAdapterType: "marvis";
@@ -22,7 +23,7 @@ type MarvisState = {
 
 const defaultMarvisUrl = "https://marvis.qq.com/";
 const defaultMarvisAppId = "Tencent.Marvis";
-const statePath = path.join(config.dataDir, "marvis-state.json");
+let memoryState: MarvisState | null = null;
 
 function marvisUrl(): string {
   return process.env.MARVIS_URL?.trim() || defaultMarvisUrl;
@@ -55,19 +56,13 @@ function baseState(): MarvisState {
 }
 
 function readState(): MarvisState {
-  if (!fs.existsSync(statePath)) {
-    return baseState();
-  }
-
-  return {
-    ...baseState(),
-    ...JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as Partial<MarvisState>
-  };
+  memoryState ??= baseState();
+  return memoryState;
 }
 
 function writeState(state: MarvisState): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+  memoryState = state;
+  reportAgentState("marvis", state);
 }
 
 function writePrompt(message: string): string {

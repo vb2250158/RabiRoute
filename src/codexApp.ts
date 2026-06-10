@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import WebSocket from "ws";
 import { config } from "./config.js";
+import { reportAgentState } from "./agentAdapters/stateReporter.js";
 
 type JsonRpcResponse = {
   id?: number;
@@ -38,8 +39,7 @@ let connecting: Promise<WebSocket> | null = null;
 const pending = new Map<number, JsonRpcPending>();
 const threadStatusWaiters: ThreadStatusWaiter[] = [];
 let notificationQueue: Promise<void> = Promise.resolve();
-
-const statePath = path.join(config.dataDir, "codex-state.json");
+let memoryState: CodexState = {};
 
 function defaultCodexModel(): string {
   const envModel = process.env.RABIROUTE_CODEX_MODEL?.trim() || process.env.CODEX_MODEL?.trim();
@@ -80,16 +80,12 @@ type DiscoveredMonitorThread = {
 };
 
 function readState(): CodexState {
-  if (!fs.existsSync(statePath)) {
-    return {};
-  }
-
-  return JSON.parse(fs.readFileSync(statePath, "utf8").replace(/^\uFEFF/, "")) as CodexState;
+  return memoryState;
 }
 
 function writeState(state: CodexState): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+  memoryState = state;
+  reportAgentState("codex", state);
 }
 
 function clearMonitorThreadId(): void {

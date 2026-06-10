@@ -1,0 +1,14 @@
+{
+  "id": "memory-rabiroute-extension-boundary",
+  "title": "新增入口和处理端要沿既有适配层扩展",
+  "content": "新增聊天平台、Webhook、语音或设备入口时，优先在 src/adapters/ 新增 message adapter，并输出统一事件记录和路由事件；不要把新平台逻辑塞进 NapCat adapter。新增 Agent、workflow、script、human queue 或 external API 时，优先扩展 Agent adapter 层。Rabi 要记住：星港可以越来越多，但航线图不能被某一个星港反过来改名。",
+  "source": {
+    "kind": "example",
+    "summary": "公开文档沉淀：适配器扩展规则"
+  },
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "inputMemoryIds": [],
+  "consolidationRunId": "",
+  "keywords": ["src/adapters", "message adapter", "Agent adapter", "NapCat", "webhook", "workflow", "解耦"]
+}

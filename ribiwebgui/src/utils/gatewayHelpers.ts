@@ -1,4 +1,4 @@
-import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, NotificationRule, RuntimeStatus } from "../types";
+import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, NotificationRule, NotificationScheduleDefinition, RuntimeStatus } from "../types";
 import {
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
   messageAdapterPolicyFor as sharedMessageAdapterPolicyFor,
@@ -17,11 +17,12 @@ export const routeKindLabels: Record<string, string> = {
   private: "私聊",
   heartbeat: "定时触发",
   manual_trigger: "手动触发",
+  role_panel_message: "角色面板消息",
   voice_transcript: "语音转写"
 };
 
 export const templateVars = [
-  { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message、heartbeat、manual_trigger、voice_transcript。" },
+  { name: "routeKind", description: "当前命中的路由类型，例如 direct_at、private、group_message、heartbeat、manual_trigger、role_panel_message、voice_transcript。" },
   { name: "RobotQQId", description: "机器人 QQ 号，来自当前消息事件 self_id。" },
   { name: "SenderQQId", description: "发送者 QQ 号。" },
   { name: "GroupId", description: "群号；私聊时为空。" },
@@ -69,7 +70,10 @@ export const templateVars = [
   { name: "privateLogPath", description: "私聊消息 JSONL 记录路径。" },
   { name: "heartbeatLogPath", description: "定时触发事件 JSONL 记录路径。" },
   { name: "manualTriggerLogPath", description: "手动触发事件 JSONL 记录路径。" },
+  { name: "rolePanelLogPath", description: "角色面板聊天记录 JSONL 路径。" },
   { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" },
+  { name: "scheduleId", description: "当前定时计划 ID；仅定时触发时填充。" },
+  { name: "scheduleName", description: "当前定时计划显示名称；仅定时触发时填充。" },
   { name: "triggerId", description: "手动触发 ID。" },
   { name: "triggerName", description: "手动触发显示名称。" },
   { name: "voiceTranscriptLogPath", description: "语音转写 JSONL 记录路径。" },
@@ -181,6 +185,7 @@ export function setMessageAdapterPolicy(gateway: GatewayDefinition, type: Messag
 export function adapterLabel(type: string): string {
   if (type === "napcat") return "NapCat / OneBot";
   if (type === "heartbeat") return "定时触发";
+  if (type === "rolePanel") return "角色面板";
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
   if (type === "xiaoai") return "小米音箱 / 小爱";
   if (type === "webhook") return "通用 Webhook";
@@ -235,6 +240,7 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   if (adapters.includes("heartbeat")) {
     gateway.heartbeatIntervalSeconds = Number(gateway.heartbeatIntervalSeconds || 900);
     gateway.heartbeatMessage = gateway.heartbeatMessage || defaultHeartbeatMessage();
+    migrateLegacyHeartbeatSchedules(gateway);
   }
   if (adapters.includes("webhook")) {
     gateway.webhookPort = Number(gateway.webhookPort || Number(gateway.gatewayPort || 8790) + 1);
@@ -288,6 +294,25 @@ export function saveActiveRoleRules(_gateway: GatewayDefinition): void {
   // Rules are shared per persona; no per-gateway cache needed
 }
 
+export function defaultHeartbeatSchedule(gateway: GatewayDefinition, name = "定时触发"): NotificationScheduleDefinition {
+  return {
+    id: `schedule-${Date.now().toString(36)}`,
+    name,
+    enabled: true,
+    type: "interval",
+    intervalSeconds: Number(gateway.heartbeatIntervalSeconds || 900)
+  };
+}
+
+export function migrateLegacyHeartbeatSchedules(gateway: GatewayDefinition): void {
+  const rules = notificationRulesForGateway(gateway);
+  for (const rule of rules) {
+    if (!Array.isArray(rule.routeKinds) || !rule.routeKinds.includes("heartbeat")) continue;
+    if (Array.isArray(rule.schedules) && rule.schedules.length > 0) continue;
+    rule.schedules = [defaultHeartbeatSchedule(gateway, rule.name || rule.id || "定时触发")];
+  }
+}
+
 export function notificationRulesForGateway(gateway: GatewayDefinition): NotificationRule[] {
   if (!Array.isArray(gateway.notificationRules)) gateway.notificationRules = [];
   return gateway.notificationRules;
@@ -311,10 +336,13 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       groups: [{ title: "定时事件", routeKinds: ["heartbeat"] }]
     },
     {
-      adapter: "manual",
-      title: "手动触发",
-      note: "托盘或本地 API 主动触发；不依赖消息 adapter。",
-      groups: [{ title: "手动事件", routeKinds: ["manual_trigger"] }]
+      adapter: "rolePanel",
+      title: "角色面板",
+      note: "托盘打开的本地桌面入口；自由聊天使用角色面板消息，按钮动作使用手动触发。",
+      groups: [
+        { title: "聊天事件", routeKinds: ["role_panel_message"] },
+        { title: "手动事件", routeKinds: ["manual_trigger"] }
+      ]
     },
     {
       adapter: "fennenote",
@@ -374,13 +402,15 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
   const adapterState = gatewayStatus.messageAdapter || {};
   const napcatState = gatewayStatus.napcat || {};
   const heartbeatState = gatewayStatus.heartbeat || {};
-  const expectedRuntimeAdapters: MessageAdapterType[] = isMessageInputsDisabled(gateway) ? ["disabled"] : adapterTypes;
+  const externalAdapterTypes = adapterTypes.filter(type => type !== "rolePanel");
+  const expectedRuntimeAdapters: MessageAdapterType[] = isMessageInputsDisabled(gateway) ? ["disabled"] : externalAdapterTypes;
   const runtimeAdapterTypes = isMessageInputsDisabled(gateway)
     ? [adapterState.type || "disabled"]
     : Array.isArray(runtime.messageAdapters) && runtime.messageAdapters.length > 0
       ? runtime.messageAdapters
       : [runtime.messageAdapterType || adapterState.type || "napcat"];
-  const adapterPendingRestart = expectedRuntimeAdapters.join(",") !== runtimeAdapterTypes.join(",");
+  const externalRuntimeAdapterTypes = runtimeAdapterTypes.filter(type => type !== "rolePanel");
+  const adapterPendingRestart = expectedRuntimeAdapters.join(",") !== externalRuntimeAdapterTypes.join(",");
   const reasons: string[] = [];
   if (gateway.enabled === false || runtime.enabled === false) {
     return reasons;
@@ -392,7 +422,7 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
   if (adapterPendingRestart) {
     reasons.push(`配置已变更但尚未重启：当前运行 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${expectedRuntimeAdapters.map(adapterLabel).join(" + ")}。`);
   }
-  if (adapterTypes.includes("napcat")) {
+  if (externalAdapterTypes.includes("napcat")) {
     const wsUrl = `ws://127.0.0.1:${gateway.gatewayPort || runtime.gatewayPort || "-"}`;
     const httpUrl = gateway.napcatHttpUrl || runtime.napcatHttpUrl || "-";
     if (!napcatState.connected) {
@@ -404,7 +434,7 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
       reasons.push(`NapCat HTTP 不可用或登录资料读取失败：${napcatState.loginInfoError}。当前 HTTP 地址：${httpUrl}。`);
     }
   }
-  if (adapterTypes.includes("heartbeat") && heartbeatState.enabled === false) reasons.push("定时触发消息端未启用。");
+  if (externalAdapterTypes.includes("heartbeat") && heartbeatState.enabled === false) reasons.push("定时触发消息端未启用。");
   return reasons;
 }
 
@@ -441,21 +471,22 @@ export function adapterErrorsFor(type: MessageAdapterType, gateway: GatewayDefin
 export function agentConnectionReasons(gateway: GatewayDefinition, runtime: RuntimeStatus): string[] {
   const agentState = runtime.codexState || {};
   const agentError = agentState.lastNotificationError || "";
-  const adapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codexDesktop"];
+  const adapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codex"];
+  const hasCodexAdapter = adapters.includes("codex");
   const reasons: string[] = [];
   if (!agentState.monitorThreadId) {
     if (agentState.message) {
       reasons.push(String(agentState.message));
-    } else if (adapters.includes("marvis") && !adapters.some(adapter => adapter === "codexDesktop" || adapter === "codexApp")) {
+    } else if (adapters.includes("marvis") && !hasCodexAdapter) {
       reasons.push("Marvis 当前是人工接力适配，不能验证会话绑定。");
-    } else if (adapters.includes("astrbot") && !adapters.some(adapter => adapter === "codexDesktop" || adapter === "codexApp")) {
+    } else if (adapters.includes("astrbot") && !hasCodexAdapter) {
       reasons.push(gateway.astrbotSessionId
         ? "AstrBot 已选择 ChatUI 会话，但尚未完成真实投递验证。"
         : "AstrBot 未选择 ChatUI 会话；会回退到 rabiroute_agent 插件默认管线。");
-    } else if (adapters.includes("copilotCli") && !adapters.some(adapter => adapter === "codexDesktop" || adapter === "codexApp")) {
+    } else if (adapters.includes("copilotCli") && !hasCodexAdapter) {
       reasons.push("Copilot CLI 尚未成功投递到目标 session；请完成同一会话连续两次注入烟测后再视为可用。");
     } else {
-      reasons.push(`尚未绑定 Agent 会话。请确认 Codex Desktop 中存在名为“${gateway.codexThreadName || gateway.name || gateway.id}”的线程。`);
+      reasons.push(`尚未绑定 Agent 会话。请确认 Codex 中存在名为“${gateway.codexThreadName || gateway.name || gateway.id}”的线程。`);
     }
   }
   if (agentError) reasons.push(explainAgentError(agentError));
@@ -476,10 +507,7 @@ export function createDefaultGateway(next: number): GatewayDefinition {
       napcat: {
         inputEnabled: true,
         outputEnabled: true,
-        outputMode: "replyOnly",
-        supportedOutputs: ["text", "image", "voice", "file"],
-        allowedGroups: [],
-        allowedUsers: []
+        supportedOutputs: ["text", "image", "voice", "file"]
       }
     },
     gatewayPort: 8789 + next,
@@ -492,7 +520,7 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     codexCwd: "",
     agentRoleId: roleId,
     agentRoleFile: "persona.md",
-    agentAdapters: ["codexDesktop"],
+    agentAdapters: ["codex"],
     notificationRules: []
   };
 }
@@ -501,8 +529,8 @@ export function isQuickSetupNeeded(gateways: GatewayDefinition[]): boolean {
   if (gateways.length === 0) return true;
   return gateways.some((gateway) => {
     const adapters = gatewayAdapterTypes(gateway);
-    const agentAdapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codexDesktop"];
-    const missingCodexBinding = agentAdapters.some(agent => agent === "codexDesktop" || agent === "codexApp")
+    const agentAdapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codex"];
+    const missingCodexBinding = agentAdapters.includes("codex")
       && (!gateway.codexThreadName || !gateway.codexCwd);
     const missingCopilotBinding = agentAdapters.includes("copilotCli")
       && (!gateway.codexThreadName || !gateway.copilotCwd);

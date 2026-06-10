@@ -1,0 +1,24 @@
+{
+  "id": "plan-rabiroute-adapter-expansion",
+  "title": "保持消息端和处理端适配器解耦扩展",
+  "status": "进行中",
+  "priority": "medium",
+  "kind": "architecture",
+  "currentStep": "消息端 adapter 已按 napcat、heartbeat、webhook 等入口拆分，Agent 端 adapter 独立投递处理端",
+  "nextAction": "新增平台时优先扩展 src/adapters/，新增处理端时优先扩展 src/agentAdapters/，避免让 NapCat 或 Codex 反向定义项目边界",
+  "waitingFor": "",
+  "project": {
+    "name": "RabiRoute",
+    "path": "./"
+  },
+  "source": {
+    "kind": "example",
+    "summary": "公开示例计划：维护 RabiRoute 的 Agent-neutral router 边界"
+  },
+  "dueAt": "",
+  "completedAt": "",
+  "archivedAt": "",
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "NapCat", "Codex", "解耦", "扩展"]
+}

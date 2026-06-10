@@ -21,15 +21,12 @@
     "fennenote": {
       "inputEnabled": true,
       "outputEnabled": true,
-      "outputMode": "replyOnly",
       "supportedOutputs": [
         "text",
         "image",
         "voice",
         "file"
-      ],
-      "allowedGroups": [],
-      "allowedUsers": []
+      ]
     }
   },
   "gatewayPort": 8791,
@@ -41,7 +38,7 @@
   "codexCwd": "C:/Path/To/Your/Project",
   "agentRoleFile": "persona.md",
   "agentAdapters": [
-    "codexDesktop"
+    "codex"
   ],
   "dataDir": "./data/route/voice-chat",
   "configName": "voice-chat",

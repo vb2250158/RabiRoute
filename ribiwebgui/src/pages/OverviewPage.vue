@@ -12,6 +12,9 @@ const rolesDir = ref("");
 const dirSaving = ref(false);
 const dirSaved = ref(false);
 const dirError = ref("");
+const gatewayActionId = ref("");
+const gatewayActionError = ref("");
+const deletingGatewayId = ref("");
 
 async function loadDirConfig() {
   try {
@@ -56,17 +59,63 @@ function toggleGatewayEnabled(gateway: any): void {
   store.touch();
 }
 
+async function runGatewayAction(id: string, action: "start" | "stop" | "restart"): Promise<void> {
+  if (!id || gatewayActionId.value) return;
+  gatewayActionId.value = `${id}:${action}`;
+  gatewayActionError.value = "";
+  try {
+    await store.actionGateway(id, action);
+  } catch (error) {
+    gatewayActionError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    window.setTimeout(() => {
+      gatewayActionId.value = "";
+    }, action === "restart" ? 1000 : 700);
+  }
+}
+
+async function deleteGatewayFromConsole(gateway: any): Promise<void> {
+  if (!gateway?.id || deletingGatewayId.value) return;
+  const name = store.configNameFor(gateway);
+  const confirmed = window.confirm(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`);
+  if (!confirmed) return;
+  deletingGatewayId.value = gateway.id;
+  gatewayActionError.value = "";
+  try {
+    await store.deleteGateway(gateway.id);
+  } catch (error) {
+    gatewayActionError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    deletingGatewayId.value = "";
+  }
+}
+
+function napcatRuntimeRows(raw: any): Record<string, any>[] {
+  const instances = raw?.gatewayStatus?.napcatInstances;
+  if (Array.isArray(instances)) return instances;
+  if (instances && typeof instances === "object") return Object.values(instances) as Record<string, any>[];
+  const napcat = raw?.gatewayStatus?.napcat;
+  return napcat ? [napcat] : [];
+}
+
+function napcatIsOffline(row: Record<string, any>): boolean {
+  return row.online === false || row.good === false || /online:false|已离线/.test(String(row.loginInfoError || ""));
+}
+
 const selectedRuntime = computed(() => store.selectedRuntime);
 const adapterHealth = computed(() => {
   const gateway = store.selectedGateway;
   if (!gateway) return "未选择";
   const runtime = selectedRuntime.value;
   const adapters = gatewayAdapterTypes(gateway);
+  const napcatRows = napcatRuntimeRows(runtime);
   const napcat = runtime.gatewayStatus?.napcat || {};
   if (gateway.enabled === false || runtime.enabled === false) return "已关闭";
   if (isMessageInputsDisabled(gateway)) return "已禁用";
   if (!runtime.running) return "已停止";
-  if (adapters.includes("napcat") && !napcat.connected) return "WS 未连接";
+  if (adapters.includes("napcat") && napcatRows.some(napcatIsOffline)) return "QQ 已离线";
+  if (adapters.includes("napcat") && napcatRows.length && napcatRows.every(row => !row.connected)) return "WS 未连接";
+  if (adapters.includes("napcat") && !napcatRows.length && !napcat.connected) return "WS 未连接";
   if (adapters.includes("napcat") && napcat.loginInfoError) return "HTTP 异常";
   return "已启用";
 });
@@ -100,7 +149,18 @@ const selectedRuntimeLabel = computed(() => {
         <div class="hero-actions">
           <v-btn prepend-icon="mdi-lightning-bolt-outline" color="secondary" variant="tonal" @click="store.openQuickSetup">快速配置</v-btn>
           <v-btn prepend-icon="mdi-play-circle-outline" variant="tonal" @click="store.startManager">启动 Manager</v-btn>
+          <v-btn
+            prepend-icon="mdi-restart"
+            variant="tonal"
+            color="primary"
+            :loading="gatewayActionId === `${store.selectedGatewayId}:restart`"
+            :disabled="!store.selectedGatewayId || Boolean(gatewayActionId)"
+            @click="runGatewayAction(store.selectedGatewayId, 'restart')"
+          >
+            重启当前路由
+          </v-btn>
         </div>
+        <v-alert v-if="gatewayActionError" type="error" variant="tonal" density="compact" class="mt-3">{{ gatewayActionError }}</v-alert>
       </div>
     </div>
 
@@ -169,11 +229,30 @@ const selectedRuntimeLabel = computed(() => {
                   @update:model-value="() => toggleGatewayEnabled(gw)"
                 />
                 <v-btn
+                  icon="mdi-restart"
+                  size="small"
+                  variant="text"
+                  title="重启此路由"
+                  :loading="gatewayActionId === `${gw.id}:restart`"
+                  :disabled="Boolean(gatewayActionId)"
+                  @click.stop="runGatewayAction(gw.id, 'restart')"
+                />
+                <v-btn
                   icon="mdi-arrow-right"
                   size="small"
                   variant="text"
                   title="跳转到消息适配器配置"
                   @click.stop="goToRoute(gw.id)"
+                />
+                <v-btn
+                  icon="mdi-delete"
+                  size="small"
+                  variant="text"
+                  color="error"
+                  title="删除路由配置"
+                  :loading="deletingGatewayId === gw.id"
+                  :disabled="Boolean(deletingGatewayId)"
+                  @click.stop="deleteGatewayFromConsole(gw)"
                 />
               </div>
             </template>

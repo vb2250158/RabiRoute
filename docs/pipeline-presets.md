@@ -73,9 +73,9 @@ POST /api/agent/replies
 }
 ```
 
-自动发送还会经过 `messageAdapterPolicies.napcat`。默认策略是 `inputEnabled=true`、`outputEnabled=true`、`outputMode=replyOnly`，也就是只允许回复当前来源消息。只有路由 pipeline 满足 `outputAdapter=qq`，并且在 `replyOnly` 模式下能从路由日志解析到原始来源消息时，才会真正发送。
+自动发送还会经过 `messageAdapterPolicies.napcat`。默认策略是 `inputEnabled=true`、`outputEnabled=true`，也就是 NapCat 消息端默认不做群号、私聊 QQ 或管道细分限制，允许 Agent 通过 RabiRoute 主动发送到明确的群聊或私聊目标。
 
-如果确实要让 Agent 主动发送到指定群或私聊，需要把 `messageAdapterPolicies.napcat.outputMode` 改成 `direct`，并配置 `allowedGroups` / `allowedUsers`，或显式打开 `allowBroadcast`。缺少白名单、发送关闭、消息类型不在 `supportedOutputs` 内、管道被 `disabledPipelines` 禁用，都会返回 `draft` 或 `blocked`，不会调用 NapCat。
+旧配置如果手写了 `allowedGroups` / `allowedUsers`、`outputMode`、`enabledPipelines` 或 `disabledPipelines`，这些具体过滤字段不再生效。发送关闭或消息类型不在 `supportedOutputs` 内时，会返回 `blocked`，不会调用 NapCat。
 
 允许发送时，RabiRoute 使用 UTF-8 JSON 调用 NapCat HTTP。群聊走 `send_group_msg`，私聊走 `send_private_msg`。请求可以是旧的纯文本 `text/message/content`，也可以传 `payloadType=image|voice|file` 搭配 `imageUrl/imagePath`、`voiceUrl/voicePath`、`fileUrl/filePath` 等字段。回复请求、成功、失败、草稿和拦截记录都会写入路由数据目录下的 `outbox-adapter.log.jsonl`。
 

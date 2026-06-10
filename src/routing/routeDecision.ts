@@ -8,6 +8,7 @@ import type {
   GroupMessageRecord,
   HeartbeatEventRecord,
   ManualTriggerRecord,
+  RolePanelMessageRecord,
   VoiceTranscriptEventRecord
 } from "../history.js";
 
@@ -46,11 +47,15 @@ export function isGroupRecord(record: ForwardRecord): record is GroupMessageReco
 }
 
 export function isHeartbeatRecord(record: ForwardRecord): record is HeartbeatEventRecord {
-  return ("intervalSeconds" in record || !("userId" in record)) && !("source" in record) && !("triggerId" in record) && !("triggerName" in record);
+  return ("intervalSeconds" in record || !("userId" in record)) && !("source" in record) && !("triggerId" in record) && !("triggerName" in record) && !isRolePanelRecord(record);
 }
 
 export function isManualTriggerRecord(record: ForwardRecord): record is ManualTriggerRecord {
   return "triggerId" in record || "triggerName" in record;
+}
+
+export function isRolePanelRecord(record: ForwardRecord): record is RolePanelMessageRecord {
+  return ("adapterType" in record && record.adapterType === "rolePanel") || "roleId" in record || "routeProfileId" in record;
 }
 
 export function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceTranscriptEventRecord {
@@ -102,6 +107,10 @@ function ruleMatches(
   }
 
   if (rule.routeKinds.length > 0 && !rule.routeKinds.includes(routeKind)) {
+    return false;
+  }
+
+  if (typeof extraValues.triggerRouteId === "string" && extraValues.triggerRouteId.trim() && route.id !== extraValues.triggerRouteId.trim()) {
     return false;
   }
 

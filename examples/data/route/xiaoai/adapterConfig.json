@@ -21,15 +21,12 @@
     "xiaoai": {
       "inputEnabled": true,
       "outputEnabled": true,
-      "outputMode": "replyOnly",
       "supportedOutputs": [
         "text",
         "image",
         "voice",
         "file"
-      ],
-      "allowedGroups": [],
-      "allowedUsers": []
+      ]
     }
   },
   "gatewayPort": 8791,
@@ -40,7 +37,7 @@
   "codexThreadName": "RabiRoute XiaoAI",
   "codexCwd": "C:/Path/To/Your/Project",
   "agentAdapters": [
-    "codexDesktop"
+    "codex"
   ],
   "dataDir": "./data/route/xiaoai",
   "configName": "xiaoai",

@@ -34,7 +34,7 @@ docs/rabi-agent-interfaces.md
 
 ```text
 普通回复 API：http://127.0.0.1:8790/api/agent/replies
-当前回复上下文：{"routeProfileId":"main","routeKind":"direct_at","targetType":"group","messageId":123,"groupId":456,"userId":789,"instanceId":"default","outputAdapter":"qq","outputPipeline":"qq","replyToSource":true}
+当前回复上下文：{"gatewayId":"main","runtimeRouteId":"main","routeProfileId":"main","routeKind":"direct_at","targetType":"group","messageId":123,"groupId":456,"userId":789,"targetGroupId":456,"instanceId":"default","replyApiUrl":"http://127.0.0.1:8790/api/agent/replies","groupLogPath":"data/route/main/group-messages.jsonl","privateLogPath":"data/route/main/private-messages.jsonl","outputAdapter":"codex","outputPipeline":"codex","replyToSource":false}
 ```
 
 ## 普通回复回传接口
@@ -63,11 +63,11 @@ POST /api/agent/replies
 
 RabiRoute 只会在满足以下条件时自动发送：
 
-- 原始消息上下文能在当前 route 的消息日志中找到。
-- route pipeline 配置为 `replyToSource=true` 且 `outputAdapter=qq`。
-- 来源是当前 QQ 群聊或私聊消息；群聊调用 NapCat `send_group_msg`，私聊调用 `send_private_msg`。
+- 请求带有明确 QQ 目标：`targetType=group` 加 `groupId`，或 `targetType=private` 加 `userId`。
+- 或请求带有原始消息上下文，RabiRoute 能从消息日志中定位来源群聊或私聊。
+- 对应路由的 NapCat 发送管道未关闭，且 payload 类型在 `supportedOutputs` 内。
 
-跨群、跨私聊、广播、缺少 `messageId` 或缺少原始来源日志的请求不会自动外发。接口会返回 `draft` 或 `blocked`，Agent 可以把内容作为草稿展示给用户或等待进一步授权。
+Agent 可以主动向自己已经掌握的群号发送推进消息，不需要 `messageId`、`replyToSource=true` 或 `outputAdapter=qq`。RabiRoute 不再按群号、私聊 QQ 或具体 pipeline ID 做细粒度过滤；是否能发由消息端发送开关、NapCat 可用性和明确目标决定。
 
 返回示例：
 

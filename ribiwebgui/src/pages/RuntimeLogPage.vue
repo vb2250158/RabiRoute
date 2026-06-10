@@ -23,6 +23,8 @@ const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || 
 const agentState = computed(() => runtime.value.codexState || {});
 const logs = computed(() => (runtime.value.log || []).slice(-30).join("\n") || "暂无日志");
 const triggeringRuleId = ref("");
+const deletingGateway = ref(false);
+const deleteError = ref("");
 const triggerableRules = computed(() => {
   return (gateway.value?.notificationRules || [])
     .filter(rule => Array.isArray(rule.routeKinds) && rule.routeKinds.some(kind => kind === "manual_trigger" || kind === "heartbeat"))
@@ -87,6 +89,22 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
     triggeringRuleId.value = "";
   }
 }
+
+async function deleteCurrentGateway(): Promise<void> {
+  if (!gateway.value || deletingGateway.value) return;
+  const name = store.configNameFor(gateway.value);
+  const confirmed = window.confirm(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`);
+  if (!confirmed) return;
+  deletingGateway.value = true;
+  deleteError.value = "";
+  try {
+    await store.deleteGateway(gateway.value.id);
+  } catch (error) {
+    deleteError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    deletingGateway.value = false;
+  }
+}
 </script>
 
 <template>
@@ -100,10 +118,11 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
         <v-btn prepend-icon="mdi-play" variant="tonal" @click="store.actionGateway(gateway.id, 'start')">启动</v-btn>
         <v-btn prepend-icon="mdi-stop" variant="tonal" @click="store.actionGateway(gateway.id, 'stop')">停止</v-btn>
         <v-btn prepend-icon="mdi-restart" color="primary" @click="store.actionGateway(gateway.id, 'restart')">重启</v-btn>
-        <v-btn prepend-icon="mdi-delete" color="error" variant="text" @click="store.removeGateway(gateway.id)">删除</v-btn>
+        <v-btn prepend-icon="mdi-delete" color="error" variant="text" :loading="deletingGateway" @click="deleteCurrentGateway">删除</v-btn>
       </div>
     </div>
 
+    <v-alert v-if="deleteError" type="error" variant="tonal" class="mb-4">{{ deleteError }}</v-alert>
     <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
 
     <template v-if="gateway">
@@ -180,7 +199,8 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
             <div class="status-row"><span>登录资料</span><b>{{ napcatState.loginInfoError || napcatState.lastLoginInfoAt || "未验证" }}</b></div>
           </template>
           <template v-if="adapters.includes('heartbeat')">
-            <div class="status-row"><span>间隔</span><b>{{ gateway.heartbeatIntervalSeconds || runtime.heartbeatIntervalSeconds || 900 }} 秒</b></div>
+            <div class="status-row"><span>计划数量</span><b>{{ heartbeatState.scheduleCount ?? "-" }}</b></div>
+            <div class="status-row"><span>下次触发</span><b>{{ heartbeatState.nextTickAt || "-" }}</b></div>
             <div class="status-row"><span>状态</span><b>{{ heartbeatState.enabled === false ? "未启用" : "已启用" }}</b></div>
           </template>
           <template v-if="webhookLikeAdapters.length">

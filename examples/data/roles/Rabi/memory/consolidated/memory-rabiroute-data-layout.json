@@ -1,0 +1,14 @@
+{
+  "id": "memory-rabiroute-data-layout",
+  "title": "运行期数据按 route profile 和 role persona 分开",
+  "content": "RabiRoute 的运行期配置分为 data/route/<configName>/adapterConfig.json 和 data/roles/<RoleId>/persona.md、personaConfig.json、plans、memory。route profile 像航线牌，保存消息端、端口、Agent 端、工作目录、pipeline preset 和指向的人格；role persona 像收件人的随身册，保存人格正文、消息模板规则、成长记录、计划、记忆和提示词。多个路由可以复用同一个人格，不要为了多个入口复制 Rabi。",
+  "source": {
+    "kind": "example",
+    "summary": "公开文档沉淀：配置与路由人格"
+  },
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "inputMemoryIds": [],
+  "consolidationRunId": "",
+  "keywords": ["data/route", "data/roles", "adapterConfig.json", "persona.md", "personaConfig.json", "路由人格"]
+}

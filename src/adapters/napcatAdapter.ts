@@ -5,7 +5,7 @@ import { buildReply } from "../commands.js";
 import { config, setBotProfile, type NapCatInstanceConfig } from "../config.js";
 import { forwardMessage, type ForwardRouteKind } from "../forwarding.js";
 import { appendAdapterLog, appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "../history.js";
-import { getLoginInfo, sendGroupMessage, sendPrivateMessage, type NapCatEndpoint } from "../napcat.js";
+import { getLoginInfo, getStatus, sendGroupMessage, sendPrivateMessage, type NapCatEndpoint } from "../napcat.js";
 import type { MessageAdapter } from "./messageAdapter.js";
 
 type OneBotEvent = {
@@ -51,6 +51,8 @@ type GatewayStatus = {
     lastMessageAt?: string;
     botUserId?: string;
     botNickname?: string;
+    online?: boolean;
+    good?: boolean;
     lastLoginInfoAt?: string;
     loginInfoError?: string;
     loginInfoErrorAt?: string;
@@ -231,16 +233,25 @@ function eventSummary(event: OneBotEvent): Record<string, unknown> {
 
 async function refreshBotProfile(instance = config.napcatInstances[0]): Promise<void> {
   try {
+    let botStatus: { online?: boolean; good?: boolean } = {};
+    try {
+      botStatus = await getStatus(endpointFor(instance));
+    } catch {
+      botStatus = {};
+    }
     const loginInfo = await getLoginInfo(endpointFor(instance));
     if (instance.id === "default" || config.napcatInstances[0]?.id === instance.id) {
       setBotProfile(loginInfo);
     }
+    const offline = botStatus.online === false || botStatus.good === false;
     const patch = {
       botUserId: loginInfo.userId != null ? String(loginInfo.userId) : config.botUserId,
       botNickname: loginInfo.nickname ?? config.botNickname,
+      online: botStatus.online,
+      good: botStatus.good,
       lastLoginInfoAt: new Date().toISOString(),
-      loginInfoError: "",
-      loginInfoErrorAt: ""
+      loginInfoError: offline ? "OneBot get_status 显示 QQ 已离线" : "",
+      loginInfoErrorAt: offline ? new Date().toISOString() : ""
     };
     patchNapcatInstanceStatus(instance, patch);
     if (instance.id === "default" || config.napcatInstances[0]?.id === instance.id) {

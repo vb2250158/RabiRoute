@@ -23,6 +23,10 @@ const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
 const isPluginShell = window.location.pathname.startsWith("/plugin/");
 const apiBase = isPluginShell ? pluginApiBase : "";
 
+type LoadOptions = {
+  replaceDirtyConfig?: boolean;
+};
+
 function asManagerRows(value: unknown): RuntimeStatus[] {
   return Array.isArray(value) ? value as RuntimeStatus[] : [];
 }
@@ -171,7 +175,12 @@ function autoAssignGatewayPorts(items: GatewayDefinition[], managerPort: number)
 }
 
 function isAgentAdapterType(value: unknown): value is AgentAdapterType {
-  return value === "codexDesktop" || value === "codexApp" || value === "copilotCli" || value === "marvis" || value === "astrbot";
+  return value === "codex" || value === "copilotCli" || value === "marvis" || value === "astrbot";
+}
+
+function normalizeAgentAdapterType(value: unknown): AgentAdapterType | null {
+  if (value === "codex" || value === "codexDesktop" || value === "codexApp") return "codex";
+  return isAgentAdapterType(value) ? value : null;
 }
 
 export const useGatewayStore = defineStore("gateway", () => {
@@ -184,6 +193,7 @@ export const useGatewayStore = defineStore("gateway", () => {
   const loading = ref(false);
   const saving = ref(false);
   const dirty = ref(false);
+  const editVersion = ref(0);
   const error = ref("");
   const quickSetupDialogOpen = ref(false);
   const pendingSelectedConfigName = ref("");
@@ -215,6 +225,7 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   function touch(): void {
     dirty.value = true;
+    editVersion.value += 1;
   }
 
   function openQuickSetup(): void {
@@ -227,7 +238,10 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   function normalizeGateways(): void {
     gateways.value.forEach(gateway => {
-      gateway.agentAdapters = [...new Set((Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codexDesktop"]).filter(isAgentAdapterType))];
+      const agentAdapters = (Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codex"])
+        .map(normalizeAgentAdapterType)
+        .filter((item): item is AgentAdapterType => Boolean(item));
+      gateway.agentAdapters = [...new Set(agentAdapters)].length ? [...new Set(agentAdapters)] : ["codex"];
       if (Array.isArray(gateway.notificationRules)) {
         gateway.notificationRules = gateway.notificationRules.map((rule, index) => normalizeRule(rule, index));
       }
@@ -270,7 +284,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     }
   }
 
-  async function load(): Promise<void> {
+  async function load(options: LoadOptions = {}): Promise<void> {
     loading.value = true;
     error.value = "";
     try {
@@ -280,21 +294,23 @@ export const useGatewayStore = defineStore("gateway", () => {
       if (!response.ok || body.code !== 0 || !body.data?.config) {
         throw new Error(body.message || "插件 API 没有返回 gateway 配置");
       }
-      gateways.value = body.data.config.gateways || [];
-      configFiles.value = body.data.configFiles || {};
       managerRows.value = asManagerRows(body.data.manager);
       managerError.value = managerErrorOf(body.data.manager);
-      normalizeGateways();
-      if (pendingSelectedConfigName.value) {
-        const renamed = gateways.value.find(gateway => configNameFor(gateway) === pendingSelectedConfigName.value);
-        if (renamed) selectedGatewayId.value = renamed.id;
-        pendingSelectedConfigName.value = "";
+      if (!dirty.value || options.replaceDirtyConfig) {
+        gateways.value = body.data.config.gateways || [];
+        configFiles.value = body.data.configFiles || {};
+        normalizeGateways();
+        if (pendingSelectedConfigName.value) {
+          const renamed = gateways.value.find(gateway => configNameFor(gateway) === pendingSelectedConfigName.value);
+          if (renamed) selectedGatewayId.value = renamed.id;
+          pendingSelectedConfigName.value = "";
+        }
+        if (!selectedGatewayId.value && gateways.value[0]) selectedGatewayId.value = gateways.value[0].id;
+        if (selectedGatewayId.value && !gateways.value.some(gateway => gateway.id === selectedGatewayId.value)) {
+          selectedGatewayId.value = gateways.value[0]?.id || "";
+        }
+        dirty.value = false;
       }
-      if (!selectedGatewayId.value && gateways.value[0]) selectedGatewayId.value = gateways.value[0].id;
-      if (selectedGatewayId.value && !gateways.value.some(gateway => gateway.id === selectedGatewayId.value)) {
-        selectedGatewayId.value = gateways.value[0]?.id || "";
-      }
-      dirty.value = false;
     } catch (loadError) {
       error.value = loadError instanceof Error ? loadError.message : String(loadError);
       managerRows.value = [];
@@ -311,6 +327,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     try {
       sharedAutoAssignGatewayPorts(gateways.value, Number(meta.value.managerPort || 0));
       validateGatewayPortConflicts(gateways.value);
+      const savedEditVersion = editVersion.value;
       const response = await fetch(`${apiBase}/gateways`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -320,7 +337,12 @@ export const useGatewayStore = defineStore("gateway", () => {
       if (!response.ok || body.code !== 0) {
         throw new Error(body.message || body.error || "保存配置失败");
       }
-      await load();
+      if (editVersion.value === savedEditVersion) {
+        dirty.value = false;
+        await load({ replaceDirtyConfig: true });
+      } else {
+        await load();
+      }
     } catch (saveError) {
       error.value = saveError instanceof Error ? saveError.message : String(saveError);
       throw saveError;
@@ -335,7 +357,11 @@ export const useGatewayStore = defineStore("gateway", () => {
   }
 
   async function actionGateway(id: string, action: "start" | "stop" | "restart"): Promise<void> {
-    await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    const response = await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.code !== 0) {
+      throw new Error(body.message || body.error || `${action} gateway failed`);
+    }
     window.setTimeout(() => void load(), action === "restart" ? 1000 : 700);
   }
 
@@ -411,6 +437,41 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateways.value = gateways.value.filter(gateway => gateway.id !== id);
     if (selectedGatewayId.value === id) selectedGatewayId.value = gateways.value[0]?.id || "";
     touch();
+  }
+
+  async function deleteGateway(id: string): Promise<void> {
+    const nextSelectedGatewayId = selectedGatewayId.value === id
+      ? gateways.value.find(gateway => gateway.id !== id)?.id || ""
+      : selectedGatewayId.value;
+    saving.value = true;
+    error.value = "";
+    try {
+      const response = await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/delete`, { method: "POST" });
+      const text = await response.text();
+      let body: any = {};
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        body = {};
+      }
+      if (!response.ok || body.code !== 0) {
+        const fallbackMessage = response.status === 404 || /<!doctype html|<html/i.test(text)
+          ? "当前 Manager 还没有加载删除接口，请重启 Manager 后再删除。"
+          : `删除路由失败（HTTP ${response.status}）：${text.replace(/\s+/g, " ").slice(0, 160) || "没有返回错误详情"}`;
+        throw new Error(body.message || body.error || fallbackMessage);
+      }
+      selectedGatewayId.value = nextSelectedGatewayId;
+      dirty.value = false;
+      await load();
+      if (gateways.value.some(gateway => gateway.id === id)) {
+        throw new Error("删除请求已返回成功，但 Manager 刷新后仍返回该路由；请重启 Manager 后再试。");
+      }
+    } catch (deleteError) {
+      error.value = deleteError instanceof Error ? deleteError.message : String(deleteError);
+      throw deleteError;
+    } finally {
+      saving.value = false;
+    }
   }
 
   function updateGatewayField<K extends keyof GatewayDefinition>(field: K, value: GatewayDefinition[K]): void {
@@ -620,6 +681,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     addGatewayAndOpenQuickSetup,
     renameGatewayConfig,
     removeGateway,
+    deleteGateway,
     updateGatewayField,
     updateAdapters,
     addRule,

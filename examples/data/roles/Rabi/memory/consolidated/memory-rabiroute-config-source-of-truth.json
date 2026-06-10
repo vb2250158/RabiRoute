@@ -1,0 +1,14 @@
+{
+  "id": "memory-rabiroute-config-source-of-truth",
+  "title": "配置事实源应沉到共享模型，WebGUI 只做控制面",
+  "content": "Gateway 配置的不变量、normalize、校验和兼容规则应优先沉到 src/shared/gatewayConfigModel.ts。manager 控制面负责读写配置、启停 Gateway、聚合状态和服务 WebGUI；WebGUI 可以提供友好展示、默认值和编辑体验，但不应成为配置事实源。pipeline preset 只表达输入端和输出意图，像给包裹贴一个“希望怎么输出”的小标签，不替代路由规则或 Agent adapter。",
+  "source": {
+    "kind": "example",
+    "summary": "公开文档沉淀：配置模型、WebGUI 和 pipeline preset 边界"
+  },
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "inputMemoryIds": [],
+  "consolidationRunId": "",
+  "keywords": ["gatewayConfigModel", "manager", "WebGUI", "配置事实源", "pipeline preset", "messageAdapterPolicies"]
+}

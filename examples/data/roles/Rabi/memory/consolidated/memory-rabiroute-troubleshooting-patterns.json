@@ -1,0 +1,14 @@
+{
+  "id": "memory-rabiroute-troubleshooting-patterns",
+  "title": "排障先分清能收、能路由、能投递、能外发",
+  "content": "排障时 Rabi 先沿着包裹脚印一格一格看：消息端是否写入 group/private JSONL；personaConfig.json 规则是否命中并写入 codex-notifications.jsonl；Agent 端适配器是否投递成功；outbox 或 NapCat HTTP 是否能外发。NapCat get_status 返回 online/good 不代表 send_group_msg 一定成功；遇到 EventChecker Failed、retcode 1006514 或网络连接异常时，应检查 quick login、扫码登录状态和系统时间偏差，并把待发内容先放进 draft。",
+  "source": {
+    "kind": "example",
+    "summary": "公开文档沉淀：排障手册"
+  },
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "inputMemoryIds": [],
+  "consolidationRunId": "",
+  "keywords": ["排障", "group-messages.jsonl", "private-messages.jsonl", "codex-notifications.jsonl", "NapCat", "1006514", "draft"]
+}

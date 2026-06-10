@@ -1,0 +1,24 @@
+{
+  "id": "plan-rabiroute-route-observability",
+  "title": "补齐路由决策和投递包可观测记录",
+  "status": "未开始",
+  "priority": "medium",
+  "kind": "observability",
+  "currentStep": "RouteDecision 与 AgentPacket 已从 forwarding 主链路拆出",
+  "nextAction": "增加 route-decisions.jsonl 和 packet log，便于区分路由命中问题与上下文拼装问题",
+  "waitingFor": "",
+  "project": {
+    "name": "RabiRoute",
+    "path": "./"
+  },
+  "source": {
+    "kind": "example",
+    "summary": "公开示例计划：让路由命中和投递包构造更容易回放与排障"
+  },
+  "dueAt": "",
+  "completedAt": "",
+  "archivedAt": "",
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "keywords": ["RouteDecision", "AgentPacket", "route-decisions", "packet log", "replay", "排障"]
+}

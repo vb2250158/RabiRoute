@@ -36,6 +36,11 @@ export type LoginInfo = {
   nickname?: string;
 };
 
+export type BotStatus = {
+  online?: boolean;
+  good?: boolean;
+};
+
 function endpointConfig(endpoint?: NapCatEndpoint): NapCatEndpoint {
   return {
     httpUrl: endpoint?.httpUrl || config.napcatHttpUrl,
@@ -83,6 +88,16 @@ export async function getLoginInfo(endpoint?: NapCatEndpoint): Promise<LoginInfo
   return {
     userId: data.user_id,
     nickname: data.nickname
+  };
+}
+
+export async function getStatus(endpoint?: NapCatEndpoint): Promise<BotStatus> {
+  const response = await callNapCat<OneBotResponse<{ online?: boolean; good?: boolean }> | { online?: boolean; good?: boolean }>("get_status", {}, endpoint);
+  const data: { online?: boolean; good?: boolean } =
+    "data" in response && response.data ? response.data : response as { online?: boolean; good?: boolean };
+  return {
+    online: data.online,
+    good: data.good
   };
 }
 

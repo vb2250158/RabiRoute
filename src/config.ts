@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
+import { normalizeScheduleDefinitions, type NotificationScheduleDefinition } from "./shared/gatewayConfigModel.js";
 
 dotenv.config();
 
@@ -17,7 +18,7 @@ export const defaultPrivateNotificationTemplate = "";
 export const defaultHeartbeatNotificationTemplate = "";
 export const defaultVoiceTranscriptNotificationTemplate = "";
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "voice_transcript";
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript";
 
 export type NotificationRule = {
   id: string;
@@ -26,6 +27,7 @@ export type NotificationRule = {
   routeKinds: NotificationRouteKind[];
   targetGroupId?: string;
   regex?: string;
+  schedules?: NotificationScheduleDefinition[];
   template: string;
 };
 
@@ -111,7 +113,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -122,13 +124,14 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "indirect_reply"
     || kind === "heartbeat"
     || kind === "manual_trigger"
+    || kind === "role_panel_message"
     || kind === "voice_transcript";
 }
 
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   if (adapters.includes("disabled")) {
     return ["disabled"];
   }
@@ -270,6 +273,7 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
     routeKinds,
     targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId.trim() : "",
     regex: typeof raw.regex === "string" ? raw.regex : "",
+    schedules: normalizeScheduleDefinitions(raw.schedules),
     template: normalizeTemplateText(typeof raw.template === "string" ? raw.template : "")
   };
 }

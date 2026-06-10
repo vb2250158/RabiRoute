@@ -1,0 +1,24 @@
+{
+  "id": "plan-rabiroute-agent-context-injection",
+  "title": "稳定 Agent 上下文注入格式",
+  "status": "进行中",
+  "priority": "high",
+  "kind": "architecture",
+  "currentStep": "让 RabiRoute 自动注入事件、角色路径、计划索引、记忆索引、日志路径和接口文档链接",
+  "nextAction": "继续为 src/routing/agentPacket.ts 和相关测试补齐上下文注入场景",
+  "waitingFor": "",
+  "project": {
+    "name": "RabiRoute",
+    "path": "./"
+  },
+  "source": {
+    "kind": "example",
+    "summary": "公开示例计划：Agent 收到的上下文应轻量、可追踪、可按需查询"
+  },
+  "dueAt": "",
+  "completedAt": "",
+  "archivedAt": "",
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "keywords": ["AgentPacket", "上下文注入", "计划索引", "记忆索引", "接口文档"]
+}

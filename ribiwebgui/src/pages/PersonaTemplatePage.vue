@@ -2,9 +2,10 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
-import type { NotificationRule } from "../types";
+import type { NotificationRule, NotificationScheduleDefinition } from "../types";
 import {
   configNameFor,
+  defaultHeartbeatSchedule,
   notificationRulesForGateway,
   routeKindDefinitionsForGateway,
   routeKindLabels,
@@ -21,6 +22,7 @@ const ruleDialog = ref(false);
 const activeRuleIndex = ref(0);
 const ruleMatchParamsOpen = ref(true);
 const ruleRouteKindsOpen = ref(true);
+const ruleSchedulesOpen = ref(true);
 const ruleTemplateOpen = ref(true);
 
 const gateway = computed(() => store.selectedGateway);
@@ -40,6 +42,12 @@ const roleDirLabel = computed(() => runtime.value.roleInfo?.rolesDir || "./data/
 const routeKindQuery = ref("");
 const routeKindDefinitions = computed(() => routeKindDefinitionsForGateway(gateway.value || undefined));
 const selectedRouteKindCount = computed(() => activeRule.value?.routeKinds?.length || 0);
+const scheduleTypeOptions = [
+  { title: "每隔一段时间", value: "interval" },
+  { title: "每天指定时间", value: "daily_time" },
+  { title: "某一天指定时间", value: "once_at" }
+];
+const activeRuleHasHeartbeat = computed(() => activeRule.value?.routeKinds?.includes("heartbeat") === true);
 const visibleRouteKindDefinitions = computed(() => {
   const query = routeKindQuery.value.trim().toLowerCase();
   if (!query) return routeKindDefinitions.value;
@@ -68,6 +76,7 @@ function openRule(index: number): void {
   activeRuleIndex.value = index;
   ruleMatchParamsOpen.value = true;
   ruleRouteKindsOpen.value = true;
+  ruleSchedulesOpen.value = true;
   ruleTemplateOpen.value = true;
   ruleDialog.value = true;
 }
@@ -92,6 +101,34 @@ function setRouteKinds(kinds: string[], checked: boolean): void {
     else next.delete(kind);
   });
   patchRule({ routeKinds: [...next] });
+}
+
+function addSchedule(): void {
+  if (!activeRule.value || !gateway.value) return;
+  const schedules = Array.isArray(activeRule.value.schedules) ? [...activeRule.value.schedules] : [];
+  const schedule = defaultHeartbeatSchedule(gateway.value, `计划 ${schedules.length + 1}`);
+  patchRule({ schedules: [...schedules, schedule] });
+}
+
+function updateSchedule(index: number, patch: Partial<NotificationScheduleDefinition>): void {
+  if (!activeRule.value) return;
+  const schedules = Array.isArray(activeRule.value.schedules) ? [...activeRule.value.schedules] : [];
+  const current = schedules[index];
+  if (!current) return;
+  schedules[index] = { ...current, ...patch };
+  patchRule({ schedules });
+}
+
+function setScheduleType(index: number, type: string): void {
+  if (type !== "interval" && type !== "daily_time" && type !== "once_at") return;
+  updateSchedule(index, { type });
+}
+
+function removeSchedule(index: number): void {
+  if (!activeRule.value) return;
+  const schedules = Array.isArray(activeRule.value.schedules) ? [...activeRule.value.schedules] : [];
+  schedules.splice(index, 1);
+  patchRule({ schedules });
 }
 
 function setRole(value: string): void {
@@ -373,6 +410,102 @@ watch(() => store.selectedGatewayId, (id) => {
                     <div>
                       <strong>没有匹配的路由类型</strong>
                       <span>清空搜索后可以看到全部类型。</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </v-expand-transition>
+          </section>
+
+          <section v-if="activeRuleHasHeartbeat" class="fold-section">
+            <button class="fold-section-head" type="button" @click="ruleSchedulesOpen = !ruleSchedulesOpen">
+              <span>
+                <strong>定时计划</strong>
+                <small>一条 heartbeat 模板规则可以有多个触发计划</small>
+              </span>
+              <v-icon>{{ ruleSchedulesOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
+            </button>
+            <v-expand-transition>
+              <div v-if="ruleSchedulesOpen" class="fold-section-body">
+                <div class="section-title-row compact-row">
+                  <div>
+                    <div class="section-title small-title">触发计划</div>
+                    <div class="section-note">消息端只负责启用内部定时来源；这里决定什么时候触发这条模板。</div>
+                  </div>
+                  <v-btn size="small" color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="addSchedule">新增计划</v-btn>
+                </div>
+                <div v-if="!activeRule.schedules?.length" class="empty-state compact-empty">
+                  <div>
+                    <strong>暂无定时计划</strong>
+                    <span>新增后，这条 heartbeat 模板才会被定时触发。</span>
+                  </div>
+                </div>
+                <div v-else class="rule-list">
+                  <div v-for="(schedule, scheduleIndex) in activeRule.schedules" :key="schedule.id" class="rule-card">
+                    <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
+                      <div class="min-w-0 flex-grow-1">
+                        <div class="form-grid">
+                          <v-text-field
+                            :model-value="schedule.name"
+                            label="计划名称"
+                            @update:model-value="value => updateSchedule(scheduleIndex, { name: String(value || '') })"
+                          />
+                          <v-select
+                            :model-value="schedule.type"
+                            :items="scheduleTypeOptions"
+                            label="定时类型"
+                            @update:model-value="value => setScheduleType(scheduleIndex, String(value || 'interval'))"
+                          />
+                          <template v-if="schedule.type === 'interval'">
+                            <v-text-field
+                              :model-value="schedule.intervalSeconds"
+                              type="number"
+                              min="1"
+                              step="1"
+                              label="间隔秒数"
+                              @update:model-value="value => updateSchedule(scheduleIndex, { intervalSeconds: Number(value || 900) })"
+                            />
+                            <v-text-field
+                              :model-value="schedule.windowStartTime"
+                              label="时间段开始"
+                              placeholder="09:30"
+                              @update:model-value="value => updateSchedule(scheduleIndex, { windowStartTime: String(value || '') })"
+                            />
+                            <v-text-field
+                              :model-value="schedule.windowEndTime"
+                              label="时间段结束"
+                              placeholder="19:00"
+                              @update:model-value="value => updateSchedule(scheduleIndex, { windowEndTime: String(value || '') })"
+                            />
+                          </template>
+                          <v-text-field
+                            v-else-if="schedule.type === 'daily_time'"
+                            :model-value="schedule.timeOfDay"
+                            label="每天时间"
+                            placeholder="09:30"
+                            @update:model-value="value => updateSchedule(scheduleIndex, { timeOfDay: String(value || '') })"
+                          />
+                          <v-text-field
+                            v-else
+                            :model-value="schedule.onceAt"
+                            type="datetime-local"
+                            label="指定日期时间"
+                            @update:model-value="value => updateSchedule(scheduleIndex, { onceAt: String(value || '') })"
+                          />
+                        </div>
+                      </div>
+                      <div class="rule-card-actions">
+                        <v-switch
+                          :model-value="schedule.enabled !== false"
+                          :label="schedule.enabled !== false ? '启用计划' : '停用计划'"
+                          color="success"
+                          density="compact"
+                          inset
+                          hide-details
+                          @update:model-value="value => updateSchedule(scheduleIndex, { enabled: Boolean(value) })"
+                        />
+                        <v-btn size="small" color="error" variant="text" @click="removeSchedule(scheduleIndex)">删除</v-btn>
+                      </div>
                     </div>
                   </div>
                 </div>

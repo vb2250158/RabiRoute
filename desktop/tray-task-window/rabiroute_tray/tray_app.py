@@ -41,7 +41,6 @@ def run(
     plans = PlanRepository(project_root, "Rabi")
     role_context = RoleContextRepository(project_root)
     app_icon = desktop.app_icon()
-    panel_windows: dict[str, TaskWindow] = {}
 
     tray = QSystemTrayIcon(app_icon, app)
     tray.setToolTip("RabiRoute / Rabi 桌面分诊台")
@@ -65,6 +64,8 @@ def run(
     tray.setContextMenu(menu)
 
     initial_manager = manager.snapshot()
+    panel: TaskWindow | None = None
+    selected_gateway_id = str(initial_manager.selected_gateway.get("id") or "") if initial_manager.selected_gateway else ""
     initial_role_id = role_id_from_gateway(initial_manager.selected_gateway)
     initial_role_dir = role_dir_from_gateway(project_root, initial_manager.selected_gateway, initial_role_id)
     initial_route_dir = runtime_dir_from_gateway(project_root, initial_manager.selected_gateway)
@@ -75,24 +76,43 @@ def run(
     }
     lifecycle.observe(initial_manager)
 
-    def open_panel(gateway: dict) -> None:
+    def open_panel(gateway: dict | None = None) -> None:
+        nonlocal panel, selected_gateway_id
+        if gateway is None:
+            gateway = _gateway_by_id(state["manager"].gateways, selected_gateway_id) or state["manager"].selected_gateway
+        if gateway is None:
+            return
+        selected_gateway_id = str(gateway.get("id") or selected_gateway_id)
         role_id = role_id_from_gateway(gateway, "未指定人格")
         role_dir = role_dir_from_gateway(project_root, gateway, role_id)
         route_dir = runtime_dir_from_gateway(project_root, gateway)
-        key = _panel_key(gateway, role_id, role_dir, route_dir)
-        panel = panel_windows.get(key)
         if panel is None:
             panel = TaskWindow(app_icon)
             panel.refresh_button.clicked.connect(refresh)
-            panel.destroyed.connect(lambda _obj=None, panel_key=key: panel_windows.pop(panel_key, None))
-            panel_windows[key] = panel
+            panel.route_selected.connect(lambda item_id: open_panel(_gateway_by_id(state["manager"].gateways, item_id)))
+            panel.send_message_requested.connect(lambda text, attachments: _send_role_panel_message(
+                manager,
+                selected_gateway_id,
+                str(text),
+                attachments if isinstance(attachments, list) else [],
+                tray,
+                tray_available,
+                refresh,
+            ))
         panel.set_actions(_panel_actions(gateway, project_root, desktop, manager, tray, tray_available, refresh))
-        _render_panel(panel, state["manager"], gateway, plans.load(role_dir, role_id), role_context.load(role_dir, route_dir))
+        _render_panel(
+            panel,
+            state["manager"],
+            gateway,
+            plans.load(role_dir, role_id),
+            role_context.load(role_dir, route_dir),
+            manager.role_panel_messages(role_id),
+        )
         panel.show()
         panel.raise_()
         panel.activateWindow()
 
-    def refresh() -> None:
+    def refresh(auto: bool = False) -> None:
         state["manager"] = manager.snapshot()
         if lifecycle.observe(state["manager"]):
             status_action.setText("状态：Manager 已离线，正在退出 RabiRoute 桌面入口")
@@ -105,20 +125,25 @@ def run(
                 3000,
             )
             QTimer.singleShot(1500, app.quit)
-        role_id = role_id_from_gateway(state["manager"].selected_gateway)
-        role_dir = role_dir_from_gateway(project_root, state["manager"].selected_gateway, role_id)
-        route_dir = runtime_dir_from_gateway(project_root, state["manager"].selected_gateway)
+        selected_gateway = _gateway_by_id(state["manager"].gateways, selected_gateway_id) or state["manager"].selected_gateway
+        role_id = role_id_from_gateway(selected_gateway)
+        role_dir = role_dir_from_gateway(project_root, selected_gateway, role_id)
+        route_dir = runtime_dir_from_gateway(project_root, selected_gateway)
         state["plans"] = plans.load(role_dir, role_id)
         state["context"] = role_context.load(role_dir, route_dir)
-        for panel_key, panel in list(panel_windows.items()):
-            gateway = _gateway_for_panel_key(project_root, state["manager"].gateways, panel_key)
-            if gateway is None:
-                continue
-            panel_role_id = role_id_from_gateway(gateway, "未指定人格")
-            panel_role_dir = role_dir_from_gateway(project_root, gateway, panel_role_id)
-            panel_route_dir = runtime_dir_from_gateway(project_root, gateway)
-            panel.set_actions(_panel_actions(gateway, project_root, desktop, manager, tray, tray_available, refresh))
-            _render_panel(panel, state["manager"], gateway, plans.load(panel_role_dir, panel_role_id), role_context.load(panel_role_dir, panel_route_dir))
+        if panel is not None and selected_gateway is not None and not (auto and panel.is_user_interacting()):
+            panel_role_id = role_id_from_gateway(selected_gateway, "未指定人格")
+            panel_role_dir = role_dir_from_gateway(project_root, selected_gateway, panel_role_id)
+            panel_route_dir = runtime_dir_from_gateway(project_root, selected_gateway)
+            panel.set_actions(_panel_actions(selected_gateway, project_root, desktop, manager, tray, tray_available, refresh))
+            _render_panel(
+                panel,
+                state["manager"],
+                selected_gateway,
+                plans.load(panel_role_dir, panel_role_id),
+                role_context.load(panel_role_dir, panel_route_dir),
+                manager.role_panel_messages(panel_role_id),
+            )
         tray.setToolTip(_tooltip(state["manager"], state["plans"]))
         status_action.setText(_status_text(state["manager"]))
         _rebuild_routes_menu(routes_menu, state["manager"], open_panel)
@@ -128,7 +153,7 @@ def run(
     quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle, manager_proc))
 
     timer = QTimer()
-    timer.timeout.connect(refresh)
+    timer.timeout.connect(lambda: refresh(auto=True))
     timer.start(10_000)
 
     refresh()
@@ -195,30 +220,45 @@ def _show_message(tray: QSystemTrayIcon, tray_available: bool, title: str, messa
         tray.showMessage(title, message, icon, timeout)
 
 
-def _panel_key(gateway: dict, role_id: str, role_dir: Path, route_dir: Path) -> str:
-    gateway_id = str(gateway.get("id") or gateway.get("configName") or gateway.get("routeName") or gateway.get("name") or "")
-    return "|".join([gateway_id, role_id, str(role_dir.resolve()), str(route_dir.resolve())])
-
-
-def _gateway_for_panel_key(project_root: Path, gateways: list[dict], panel_key: str) -> dict | None:
+def _gateway_by_id(gateways: list[dict], gateway_id: str) -> dict | None:
+    if not gateway_id:
+        return None
     for gateway in gateways:
-        role_id = role_id_from_gateway(gateway, "未指定人格")
-        role_dir = role_dir_from_gateway(project_root, gateway, role_id)
-        route_dir = runtime_dir_from_gateway(project_root, gateway)
-        if _panel_key(gateway, role_id, role_dir, route_dir) == panel_key:
+        if str(gateway.get("id") or "") == gateway_id:
             return gateway
     return None
 
 
-def _render_panel(panel: TaskWindow, manager_snapshot: ManagerSnapshot, gateway: dict, plan_snapshot, context_snapshot) -> None:
-    panel_manager = ManagerSnapshot(
-        connected=manager_snapshot.connected,
-        manager_url=manager_snapshot.manager_url,
-        meta=manager_snapshot.meta,
-        gateways=[gateway],
-        error=manager_snapshot.error,
-    )
-    panel.render(panel_manager, plan_snapshot, context_snapshot)
+def _render_panel(
+    panel: TaskWindow,
+    manager_snapshot: ManagerSnapshot,
+    gateway: dict,
+    plan_snapshot,
+    context_snapshot,
+    role_messages: list[dict],
+) -> None:
+    panel.render(manager_snapshot, gateway, plan_snapshot, context_snapshot, role_messages)
+
+
+def _send_role_panel_message(
+    manager: ManagerClient,
+    gateway_id: str,
+    text: str,
+    attachments: list[dict],
+    tray: QSystemTrayIcon,
+    tray_available: bool,
+    refresh_callback,
+) -> None:
+    if not gateway_id:
+        _show_message(tray, tray_available, "RabiRoute", "请先选择一条航线。", QSystemTrayIcon.Warning, 2500)
+        return
+    result = manager.send_role_panel_message(gateway_id, text, attachments)
+    if result.ok:
+        _show_message(tray, tray_available, "角色面板", "消息已发送给 Agent。", QSystemTrayIcon.Information, 1800)
+        refresh_callback()
+    else:
+        detail = f"\n{result.message}" if result.message else ""
+        _show_message(tray, tray_available, "角色面板", f"发送失败。{detail}", QSystemTrayIcon.Warning, 5000)
 
 
 def _panel_actions(

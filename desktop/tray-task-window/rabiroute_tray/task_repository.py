@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ class PlanItem:
     project_path: str = ""
     source: str = ""
     updated_at: str = ""
+    keywords: list[str] = field(default_factory=list)
     path: Path | None = None
 
 
@@ -91,5 +92,17 @@ class PlanRepository:
             project_path=str(project.get("path") or item.get("projectPath") or ""),
             source=str(source.get("summary") or source.get("kind") or ""),
             updated_at=str(item.get("updatedAt") or item.get("updated_at") or ""),
+            keywords=_normalize_keywords(item.get("keywords")),
             path=path,
         )
+
+
+def _normalize_keywords(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    keywords: list[str] = []
+    for keyword in value:
+        text = str(keyword).strip()
+        if text:
+            keywords.append(text)
+    return keywords

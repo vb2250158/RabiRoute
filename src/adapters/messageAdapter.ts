@@ -1,4 +1,4 @@
-export type MessageAdapterType = "napcat" | "fennenote" | "xiaoai" | "webhook" | "heartbeat" | "disabled";
+export type MessageAdapterType = "napcat" | "fennenote" | "xiaoai" | "webhook" | "heartbeat" | "rolePanel" | "disabled";
 
 export type MessageAdapter = {
   type: MessageAdapterType;

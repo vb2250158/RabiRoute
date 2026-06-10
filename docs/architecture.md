@@ -159,8 +159,7 @@ routes:
 
 当前内置：
 
-- `codexDesktop`：通过 Codex Desktop IPC 投递到固定线程，支持 `start` 和运行中 `steer`。
-- `codexApp`：旧 app-server 调试通道，作为旁路验证。
+- `codex`：通过 Codex Desktop IPC 投递到固定线程，支持 `start` 和运行中 `steer`；旧 app-server 通道只作为内部 fallback / 调试能力保留。
 
 未来 Agent 端适配器类型：
 
@@ -176,7 +175,7 @@ routes:
 
 负责避免连续消息开出多个并行 Agent。
 
-当前 Codex Desktop 规则：
+当前 Codex 规则：
 
 - 固定线程名，例如 `QQ 消息监听`。
 - 空闲时 `start` 新 turn。
@@ -251,8 +250,8 @@ NapCat WebSocket Client
        direct_at / direct_reply / indirect_reply / private
   -> editable templates
   -> agent adapter
-       codexDesktop / codexApp
-  -> Codex Desktop fixed thread
+       codex
+  -> Codex fixed thread
        start / steer
 ```
 

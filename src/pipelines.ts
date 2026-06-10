@@ -91,7 +91,7 @@ const fallbackPipeline: ResolvedPipeline = {
 };
 
 function isMessageAdapterType(value: string): value is MessageAdapterType {
-  return value === "napcat" || value === "fennenote" || value === "xiaoai" || value === "webhook" || value === "heartbeat" || value === "disabled";
+  return value === "napcat" || value === "fennenote" || value === "xiaoai" || value === "webhook" || value === "heartbeat" || value === "rolePanel" || value === "disabled";
 }
 
 function isOutputAdapterType(value: string): value is OutputAdapterType {

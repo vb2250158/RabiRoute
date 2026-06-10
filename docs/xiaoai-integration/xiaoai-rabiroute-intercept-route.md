@@ -715,7 +715,7 @@ data/roles/Rabi/personaConfig.json 里新增 configName = "xiaoai"
   "webhookPort": 8791,
   "webhookPath": "/webhook",
   "codexThreadName": "RabiRoute XiaoAI",
-  "agentAdapters": ["codexDesktop"],
+  "agentAdapters": ["codex"],
   "dataDir": "./data/route/xiaoai",
   "configName": "xiaoai",
   "agentRoleId": "Rabi",
@@ -930,7 +930,7 @@ personaConfig notificationRules
 template
   = Prompt / Context Template
 
-codexDesktop
+codex
   = Agent Adapter / Handler Registry
 
 XiaoAI speak / HA service / device control
@@ -943,7 +943,7 @@ XiaoAI speak / HA service / device control
 
 1. 不改代码，先用现有 `/webhook` 测通小爱文本进入 `voice_transcript`。
 2. 新增 `data/route/xiaoai/adapterConfig.json` 和 `personaConfig` 的 `xiaoai` config。
-3. 用 `curl` 模拟小爱 payload，确认命中 `voice_transcript` 规则并投递到 Codex Desktop 固定线程。
+3. 用 `curl` 模拟小爱 payload，确认命中 `voice_transcript` 规则并投递到 Codex 固定线程。
 4. 接一个最小 XiaoAI Bridge，让它把小爱识别文本 POST 到 RabiRoute。
 5. 扩展 payload 字段，保存 `deviceId/area/sessionId`。
 6. 增加小爱回复通道 `/speak`，先手动/脚本消费 Agent 的 `ttsText`。
@@ -971,6 +971,6 @@ Invoke-RestMethod `
 1. HTTP 204。
 2. `data/route/xiaoai/voice-transcripts.jsonl` 追加记录。
 3. `data/route/xiaoai/codex-notifications.jsonl` 追加投递记录。
-4. Codex Desktop 固定线程 `RabiRoute XiaoAI` 收到一条语音入口提醒。
+4. Codex 固定线程 `RabiRoute XiaoAI` 收到一条语音入口提醒。
 
 如果这四个点都成立，说明小爱入口已经按 RabiRoute 的设计理念接入成功。

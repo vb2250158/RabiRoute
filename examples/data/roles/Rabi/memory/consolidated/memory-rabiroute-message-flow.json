@@ -1,0 +1,14 @@
+{
+  "id": "memory-rabiroute-message-flow",
+  "title": "消息主链路从 adapter 到 RouteDecision 再到 AgentPacket",
+  "content": "一条消息进入 RabiRoute 后，Rabi 会先看它从哪个星港来：消息端 adapter 只做协议翻译和轻量入口判断；history 负责写 JSONL 事件；forwarding 遍历 RouteProfile；RouteDecision 判断是否命中规则和 route kind；AgentPacket 把处理端消息、角色路径、日志路径、计划/记忆索引和 replyContext 打成包；Agent Adapter 再把包裹投递给 Codex、Copilot、Marvis、脚本、workflow 或其他处理端。",
+  "source": {
+    "kind": "example",
+    "summary": "公开文档沉淀：代码架构与消息主链路"
+  },
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "inputMemoryIds": [],
+  "consolidationRunId": "",
+  "keywords": ["adapter", "history", "forwarding", "RouteDecision", "AgentPacket", "Agent Adapter", "消息链路"]
+}

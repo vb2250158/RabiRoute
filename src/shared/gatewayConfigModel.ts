@@ -1,20 +1,13 @@
-export type MessageAdapterType = "napcat" | "heartbeat" | "fennenote" | "xiaoai" | "webhook" | "disabled";
-export type AgentAdapterType = "codexDesktop" | "codexApp" | "copilotCli" | "marvis" | "astrbot";
+export type MessageAdapterType = "napcat" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "webhook" | "disabled";
+export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
 export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
-export type MessageAdapterOutputMode = "draft" | "replyOnly" | "direct";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
 
 export type MessageAdapterPolicy = {
   inputEnabled?: boolean;
   outputEnabled?: boolean;
-  outputMode?: MessageAdapterOutputMode;
-  allowedGroups?: string[];
-  allowedUsers?: string[];
-  allowBroadcast?: boolean;
   supportedOutputs?: MessagePayloadKind[];
-  enabledPipelines?: string[];
-  disabledPipelines?: string[];
 };
 
 export type MessageAdapterPolicies = Partial<Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterPolicy>>;
@@ -41,7 +34,22 @@ export type NotificationRuleDefinition = {
   routeKinds?: string[];
   targetGroupId?: string;
   regex?: string;
+  schedules?: NotificationScheduleDefinition[];
   template: string;
+};
+
+export type NotificationScheduleType = "interval" | "daily_time" | "once_at";
+
+export type NotificationScheduleDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  type: NotificationScheduleType;
+  intervalSeconds?: number;
+  windowStartTime?: string;
+  windowEndTime?: string;
+  timeOfDay?: string;
+  onceAt?: string;
 };
 
 export type RouteProfileDefinition = {
@@ -76,6 +84,12 @@ export type NapCatInstanceDefinition = {
   lastConnectedAt?: string;
   lastDisconnectedAt?: string;
   loginInfoError?: string;
+};
+
+export type ResolvedNapCatInstances = {
+  instances: NapCatInstanceDefinition[];
+  primary?: NapCatInstanceDefinition;
+  primaryIndex: number;
 };
 
 export type GatewayDefinition = {
@@ -144,6 +158,23 @@ export type GatewayConfigFile = {
   gateways: GatewayDefinition[];
 };
 
+export type GatewayPortClaimKind =
+  | "manager"
+  | "gateway-ws"
+  | "napcat-ws"
+  | "napcat-http"
+  | "webhook"
+  | "fennenote-webhook"
+  | "xiaoai-webhook";
+
+export type GatewayPortClaim = {
+  port: number;
+  label: string;
+  kind: GatewayPortClaimKind;
+  gatewayId?: string;
+  instanceId?: string;
+};
+
 export type GatewayConfigModelOptions = {
   managerPort?: number;
   routeDataDir?: (configName: string) => string;
@@ -152,10 +183,9 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "heartbeat", "fennenote", "xiaoai", "webhook", "disabled"]);
-const agentAdapterValues = new Set<AgentAdapterType>(["codexDesktop", "codexApp", "copilotCli", "marvis", "astrbot"]);
+const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "heartbeat", "rolePanel", "fennenote", "xiaoai", "webhook", "disabled"]);
+const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
-const messageAdapterOutputModeValues = new Set<MessageAdapterOutputMode>(["draft", "replyOnly", "direct"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
 
 export function sanitizeConfigName(value: unknown): string {
@@ -213,7 +243,38 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
       routeKinds: Array.isArray(raw.routeKinds) ? raw.routeKinds.map(String) : [],
       targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId : "",
       regex: typeof raw.regex === "string" ? raw.regex : "",
+      schedules: normalizeScheduleDefinitions(raw.schedules),
       template: normalizeTemplateText(typeof raw.template === "string" && raw.template.trim() ? raw.template : "")
+    };
+  });
+}
+
+function normalizeScheduleType(value: unknown): NotificationScheduleType {
+  return value === "daily_time" || value === "once_at" || value === "interval" ? value : "interval";
+}
+
+function normalizeOptionalTimeString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function normalizeScheduleDefinitions(schedules: unknown): NotificationScheduleDefinition[] | undefined {
+  if (!Array.isArray(schedules)) {
+    return undefined;
+  }
+
+  return schedules.map((schedule, index) => {
+    const raw = schedule && typeof schedule === "object" ? schedule as Partial<NotificationScheduleDefinition> : {};
+    const type = normalizeScheduleType(raw.type);
+    return {
+      id: typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `schedule-${index + 1}`,
+      name: typeof raw.name === "string" ? raw.name : undefined,
+      enabled: raw.enabled !== false,
+      type,
+      intervalSeconds: type === "interval" ? normalizePositiveNumber(raw.intervalSeconds, 900) : undefined,
+      windowStartTime: type === "interval" ? normalizeOptionalTimeString(raw.windowStartTime) : undefined,
+      windowEndTime: type === "interval" ? normalizeOptionalTimeString(raw.windowEndTime) : undefined,
+      timeOfDay: type === "daily_time" ? normalizeOptionalTimeString(raw.timeOfDay) : undefined,
+      onceAt: type === "once_at" ? normalizeOptionalTimeString(raw.onceAt) : undefined
     };
   });
 }
@@ -233,11 +294,6 @@ function normalizeOptionalMessageAdapters(items: unknown): MessageAdapterType[] 
     .filter((item): item is MessageAdapterType => messageAdapterValues.has(item as MessageAdapterType) && item !== "disabled"))];
 }
 
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map(item => String(item || "").trim()).filter(Boolean))];
-}
-
 function normalizePayloadKinds(value: unknown): MessagePayloadKind[] {
   if (!Array.isArray(value)) return defaultSupportedOutputs;
   const kinds = [...new Set(value
@@ -252,17 +308,10 @@ export function normalizeMessageAdapterPolicy(
   options: { legacyInputDisabled?: boolean } = {}
 ): Required<MessageAdapterPolicy> {
   const raw = value && typeof value === "object" ? value as MessageAdapterPolicy : {};
-  const requestedMode = String(raw.outputMode || "");
   return {
     inputEnabled: raw.inputEnabled ?? !options.legacyInputDisabled,
     outputEnabled: raw.outputEnabled ?? true,
-    outputMode: messageAdapterOutputModeValues.has(requestedMode as MessageAdapterOutputMode) ? requestedMode as MessageAdapterOutputMode : "replyOnly",
-    allowedGroups: normalizeStringList(raw.allowedGroups),
-    allowedUsers: normalizeStringList(raw.allowedUsers),
-    allowBroadcast: raw.allowBroadcast === true,
-    supportedOutputs: adapterType === "napcat" ? normalizePayloadKinds(raw.supportedOutputs) : normalizePayloadKinds(raw.supportedOutputs),
-    enabledPipelines: normalizeStringList(raw.enabledPipelines),
-    disabledPipelines: normalizeStringList(raw.disabledPipelines)
+    supportedOutputs: normalizePayloadKinds(raw.supportedOutputs)
   };
 }
 
@@ -413,10 +462,46 @@ export function normalizeNapCatInstances(definition: GatewayDefinition): NapCatI
   });
 }
 
+export function resolvePrimaryNapCatInstance(
+  definition: GatewayDefinition,
+  instances: NapCatInstanceDefinition[] = normalizeNapCatInstances(definition)
+): ResolvedNapCatInstances {
+  const enabledIndex = instances.findIndex((item) => item.enabled !== false);
+  const primaryIndex = enabledIndex >= 0 ? enabledIndex : (instances.length > 0 ? 0 : -1);
+  return {
+    instances,
+    primary: primaryIndex >= 0 ? instances[primaryIndex] : undefined,
+    primaryIndex
+  };
+}
+
+export function normalizeGatewayNapCatConfig(definition: GatewayDefinition): ResolvedNapCatInstances {
+  return resolvePrimaryNapCatInstance(definition, normalizeNapCatInstances(definition));
+}
+
+export function syncPrimaryNapCatInstanceFields(
+  definition: GatewayDefinition,
+  instances: NapCatInstanceDefinition[] = normalizeNapCatInstances(definition)
+): ResolvedNapCatInstances {
+  const resolved = resolvePrimaryNapCatInstance(definition, instances);
+  definition.napcatInstances = resolved.instances;
+  if (resolved.primary) {
+    definition.gatewayPort = resolved.primary.gatewayPort;
+    definition.napcatHttpUrl = resolved.primary.httpUrl;
+    definition.napcatWebuiUrl = resolved.primary.webuiUrl;
+    definition.napcatAccessToken = resolved.primary.accessToken ?? "";
+    definition.napcatWebuiToken = resolved.primary.webuiToken ?? "";
+  }
+  return resolved;
+}
+
 function normalizeAgentAdaptersFallback(adapters: AgentAdapterType[] | undefined): AgentAdapterType[] {
-  const next = (adapters ?? ["codexDesktop"])
-    .filter((item): item is AgentAdapterType => agentAdapterValues.has(item));
-  return [...new Set(next)].length ? [...new Set(next)] : ["codexDesktop"];
+  const rawItems = (adapters ?? ["codex"]) as unknown[];
+  const next = rawItems
+    .map((item) => item === "codexDesktop" || item === "codexApp" ? "codex" : item)
+    .filter((item): item is AgentAdapterType => agentAdapterValues.has(item as AgentAdapterType));
+  const unique = [...new Set(next)];
+  return unique.length ? unique : ["codex"];
 }
 
 function normalizePipelineFallback(pipeline: PipelineDefinition | undefined): PipelineDefinition | undefined {
@@ -487,8 +572,9 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     messageInputsDisabled
   });
   const usesNapcat = activeMessageAdapters.includes("napcat");
-  const napcatInstances = usesNapcat ? normalizeNapCatInstances(definition) : [];
-  const primaryNapcat = usesNapcat ? (napcatInstances.find((item) => item.enabled) ?? napcatInstances[0]) : undefined;
+  const napcatConfig = usesNapcat ? normalizeGatewayNapCatConfig(definition) : undefined;
+  const napcatInstances = napcatConfig?.instances ?? [];
+  const primaryNapcat = napcatConfig?.primary;
   const normalizeAgentAdapters = options.normalizeAgentAdapters ?? normalizeAgentAdaptersFallback;
   const normalizePipeline = options.normalizePipeline ?? normalizePipelineFallback;
   const agentAdapters = normalizeAgentAdapters(definition.agentAdapters);
@@ -554,17 +640,26 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   };
 }
 
-export function validateGatewayPortConflicts(gateways: GatewayDefinition[]): void {
-  const claims = new Map<number, string>();
-  const claim = (port: number | null | undefined, label: string): void => {
+export function collectGatewayPortClaims(
+  gateways: GatewayDefinition[],
+  options: { managerPort?: number } = {}
+): GatewayPortClaim[] {
+  const claims: GatewayPortClaim[] = [];
+  const claim = (
+    port: number | null | undefined,
+    label: string,
+    kind: GatewayPortClaimKind,
+    gatewayId?: string,
+    instanceId?: string
+  ): void => {
     if (port == null) return;
     assertValidPort(port, label);
-    const existing = claims.get(port);
-    if (existing) {
-      throw new Error(`Port conflict: ${label} uses ${port}, already used by ${existing}.`);
-    }
-    claims.set(port, label);
+    claims.push({ port, label, kind, gatewayId, instanceId });
   };
+
+  if (options.managerPort != null) {
+    claim(options.managerPort, "manager", "manager");
+  }
 
   for (const gateway of gateways) {
     const activeAdapters = new Set(gatewayAdapterTypes(gateway));
@@ -572,16 +667,29 @@ export function validateGatewayPortConflicts(gateways: GatewayDefinition[]): voi
       ? (gateway.napcatInstances ?? []).filter((instance) => instance.enabled !== false)
       : [];
     if (activeAdapters.has("napcat") && enabledNapcatInstances.length === 0) {
-      claim(gateway.gatewayPort, `${gateway.id} gateway WS`);
+      claim(gateway.gatewayPort, `${gateway.id} gateway WS`, "gateway-ws", gateway.id);
     }
-    if (activeAdapters.has("webhook")) claim(gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} webhook`);
-    if (activeAdapters.has("fennenote")) claim(gateway.fenneNoteWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} FenneNote webhook`);
-    if (activeAdapters.has("xiaoai")) claim(gateway.xiaoaiWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} XiaoAI webhook`);
+    if (activeAdapters.has("webhook")) claim(gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} webhook`, "webhook", gateway.id);
+    if (activeAdapters.has("fennenote")) claim(gateway.fenneNoteWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} FenneNote webhook`, "fennenote-webhook", gateway.id);
+    if (activeAdapters.has("xiaoai")) claim(gateway.xiaoaiWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} XiaoAI webhook`, "xiaoai-webhook", gateway.id);
     for (const instance of enabledNapcatInstances) {
       const prefix = `${gateway.id}/${instance.id}`;
-      claim(instance.gatewayPort, `${prefix} RabiRoute WS`);
-      claim(portFromUrl(instance.httpUrl), `${prefix} NapCat HTTP`);
+      claim(instance.gatewayPort, `${prefix} RabiRoute WS`, "napcat-ws", gateway.id, instance.id);
+      claim(portFromUrl(instance.httpUrl), `${prefix} NapCat HTTP`, "napcat-http", gateway.id, instance.id);
     }
+  }
+
+  return claims;
+}
+
+export function validateGatewayPortConflicts(gateways: GatewayDefinition[]): void {
+  const ports = new Map<number, GatewayPortClaim>();
+  for (const claim of collectGatewayPortClaims(gateways)) {
+    const existing = ports.get(claim.port);
+    if (existing) {
+      throw new Error(`Port conflict: ${claim.label} uses ${claim.port}, already used by ${existing.label}.`);
+    }
+    ports.set(claim.port, claim);
   }
 }
 
@@ -638,12 +746,7 @@ export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPor
         instance.gatewayPort = assignIngress(instance.gatewayPort, Number(gateway.gatewayPort || 8790) + 1);
         instance.httpUrl = assignHttpUrl(instance.httpUrl || gateway.napcatHttpUrl, 3000);
       }
-      const primary = enabledNapcatInstances[0];
-      gateway.gatewayPort = Number(primary.gatewayPort);
-      gateway.napcatHttpUrl = primary.httpUrl || gateway.napcatHttpUrl;
-      gateway.napcatWebuiUrl = primary.webuiUrl || gateway.napcatWebuiUrl;
-      gateway.napcatAccessToken = primary.accessToken || gateway.napcatAccessToken;
-      gateway.napcatWebuiToken = primary.webuiToken || gateway.napcatWebuiToken;
+      syncPrimaryNapCatInstanceFields(gateway, gateway.napcatInstances ?? enabledNapcatInstances);
     } else if (activeAdapters.has("napcat")) {
       gateway.gatewayPort = assignIngress(gateway.gatewayPort, 8790);
     }

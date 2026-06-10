@@ -28,7 +28,6 @@ data/roles/<RoleId>/
 
 ```text
 data/route/<RouteName>/
-  codex-state.json
   gateway-status.json
   heartbeat-events.jsonl
 ```

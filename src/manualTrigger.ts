@@ -6,7 +6,7 @@ export async function triggerManualRule(
   message: string,
   triggerName = triggerId,
   routeKind: ForwardRouteKind = "manual_trigger",
-  triggerRuleId = triggerId
+  triggerRuleId?: string
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const record: ManualTriggerRecord = {
@@ -20,5 +20,5 @@ export async function triggerManualRule(
   };
 
   appendManualTriggerEvent(record);
-  await forwardMessageAndWait(routeKind, record, { triggerRuleId });
+  await forwardMessageAndWait(routeKind, record, triggerRuleId ? { triggerRuleId } : {});
 }

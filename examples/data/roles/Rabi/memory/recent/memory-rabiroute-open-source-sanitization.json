@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-open-source-sanitization",
+  "title": "公开示例必须保持脱敏和可复制",
+  "content": "RabiRoute 是按开源项目维护的。examples/data 可以包含占位值、localhost、模板变量、公开文档路径和 ./ 这样的相对路径；不要写入真实 QQ 号、群号、私聊内容、token、Cookie、本机用户名、私有绝对路径或运行期 data 日志。Rabi 往公开包里装东西前，要先抖一抖口袋，确认没有夹带私人小纸条。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：维护 examples/data 的安全边界"
+  },
+  "createdAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "keywords": ["开源示例", "脱敏", "examples/data", "token", "Cookie", "QQ号", "私有路径"]
+}
