@@ -26,6 +26,16 @@ type WebhookPayload = {
   endedAt?: string;
   durationSeconds?: number;
   peak?: number;
+  speaker_id?: string;
+  speakerId?: string;
+  speaker_name?: string;
+  speakerName?: string;
+  speaker_kind?: string;
+  speakerKind?: string;
+  speaker_confidence?: number;
+  speakerConfidence?: number;
+  speaker_decision?: string;
+  speakerDecision?: string;
 };
 
 type GatewayStatus = {
@@ -179,6 +189,11 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
     senderName: payload.source ?? profile.label,
     adapterType: profile.type,
     source: payload.source ?? profile.source,
+    speakerId: payload.speakerId ?? payload.speaker_id,
+    speakerName: payload.speakerName ?? payload.speaker_name,
+    speakerKind: payload.speakerKind ?? payload.speaker_kind,
+    speakerConfidence: payload.speakerConfidence ?? payload.speaker_confidence,
+    speakerDecision: payload.speakerDecision ?? payload.speaker_decision,
     sourceDeviceId: payload.sourceDeviceId ?? payload.deviceId,
     sourceDeviceName: payload.sourceDeviceName ?? payload.deviceName,
     sourceArea: payload.sourceArea ?? payload.area,

@@ -85,12 +85,40 @@ function appendRecordToRoleDataDir(record: ForwardRecord, dataDir: string): void
   }
 }
 
+function isLowSignalVoiceTranscript(record: ForwardRecord): boolean {
+  if (!isVoiceTranscriptRecord(record)) {
+    return false;
+  }
+
+  const text = record.rawMessage
+    .replace(/[\s，。！？!?、,.~…]+/g, "")
+    .trim();
+  if (!text) {
+    return true;
+  }
+
+  const fillerOnly = /^(嗯+|呃+|啊+|唔+|哦+|咳+|咳咳|哼+)$/.test(text);
+  if (!fillerOnly) {
+    return false;
+  }
+
+  const speakerName = record.speakerName ?? "";
+  const likelyUnstableSpeaker = record.speakerDecision === "auto_enrolled"
+    || record.speakerKind === "unknown"
+    || speakerName.startsWith("unknown_");
+  return likelyUnstableSpeaker || text.length <= 2;
+}
+
 async function forwardMessageToRoute(
   route: RouteProfile,
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
 ): Promise<void> {
+  if (routeKind === "voice_transcript" && isLowSignalVoiceTranscript(record)) {
+    return;
+  }
+
   const decision = createRouteDecision(route, routeKind, record, extraValues);
   if (!decision) {
     return;

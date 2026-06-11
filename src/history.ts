@@ -66,6 +66,11 @@ export type VoiceTranscriptEventRecord = {
   senderName?: string;
   adapterType?: string;
   source?: string;
+  speakerId?: string;
+  speakerName?: string;
+  speakerKind?: string;
+  speakerConfidence?: number;
+  speakerDecision?: string;
   sourceDeviceId?: string;
   sourceDeviceName?: string;
   sourceArea?: string;

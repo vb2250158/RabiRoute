@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +13,31 @@ function optionsWithRuntime(runtime: AgentReplyOptions["runtimes"][number]): Age
     rolesRoot: "data/roles",
     runtimes: [runtime]
   };
+}
+
+async function withJsonServer<T>(
+  handler: (body: Record<string, unknown>) => Record<string, unknown> | void,
+  run: (url: string) => Promise<T>
+): Promise<T> {
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      const body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+      const data = handler(body) ?? { ok: true, id: "fenne-reply-1" };
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(data));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  try {
+    return await run(`http://127.0.0.1:${address.port}/api/fennenote/playback`);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 }
 
 test("Codex output adapter accepts replies without turning them into drafts", async () => {
@@ -170,4 +196,140 @@ test("source reply resolves runtime route from message log and bypasses codex ou
   assert.equal(result.targetType, "private");
   assert.equal(result.userId, "10001");
   assert.equal(result.instanceId, "main-qq");
+});
+
+test("FenneNote voice output forwards agent reply to playback with original voice parameters", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-fennenote-"));
+  let forwarded: Record<string, unknown> | undefined;
+  const result = await withJsonServer((body) => {
+    forwarded = body;
+    return { ok: true, id: "fenne-play-1" };
+  }, (url) => handleAgentReply({
+    text: "已经走拉比回复端。",
+    payload: {
+      character_id: "rabi",
+      language: "zh",
+      emotion_vector: [0.2, 0.1, 0],
+      worker_url: "http://127.0.0.1:8793/api/tts"
+    },
+    replyContext: {
+      routeProfileId: "Rabi",
+      routeKind: "voice_transcript",
+      targetType: "voice_transcript",
+      messageId: "voice-1",
+      adapterType: "fennenote",
+      speakerName: "秋雨",
+      outputAdapter: "fennenote",
+      outputPipeline: "fennenote",
+      replyToSource: false
+    }
+  }, {
+    rootDir,
+    routeRoot: path.join(rootDir, "data", "route"),
+    rolesRoot: path.join(rootDir, "data", "roles"),
+    runtimes: [
+      {
+        id: "拉比路由",
+        routeProfiles: [{
+          id: "Rabi",
+          name: "Rabi route",
+          pipeline: {
+            outputAdapter: "codex",
+            outputPipeline: "codex"
+          }
+        }],
+        messageAdapterPolicies: {
+          fennenote: {
+            outputEnabled: true,
+            supportedOutputs: ["text"]
+          }
+        }
+      }
+    ],
+    fenneNotePlaybackUrl: url
+  }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "sent");
+  assert.equal(result.reason, "Sent to FenneNote playback endpoint.");
+  assert.equal(result.sentMessageId, "fenne-play-1");
+  assert.ok(forwarded);
+  assert.equal(forwarded.text, "已经走拉比回复端。");
+  assert.equal(forwarded.adapterType, "fennenote");
+  assert.equal(forwarded.routeProfileId, "Rabi");
+  assert.equal(forwarded.messageId, "voice-1");
+  assert.equal(forwarded.speakerName, "秋雨");
+  assert.equal(forwarded.character_id, "rabi");
+  assert.equal(forwarded.language, "zh");
+  assert.equal(forwarded.worker_url, "http://127.0.0.1:8793/api/tts");
+  assert.deepEqual(forwarded.emotion_vector, [0.2, 0.1, 0]);
+});
+
+test("FenneNote source reply resolves runtime by role fallback and voice transcript log", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-voice-"));
+  const roleDir = path.join(rootDir, "data", "roles", "Rabi");
+  fs.mkdirSync(roleDir, { recursive: true });
+  fs.writeFileSync(path.join(roleDir, "voice-transcripts.jsonl"), `${JSON.stringify({
+    time: 1,
+    messageId: "voice-log-1",
+    adapterType: "fennenote",
+    source: "fennenote",
+    speakerName: "秋雨",
+    rawMessage: "语音输入"
+  })}\n`, "utf8");
+
+  let forwarded: Record<string, unknown> | undefined;
+  const result = await withJsonServer((body) => {
+    forwarded = body;
+    return { ok: true, id: "fenne-play-2" };
+  }, (url) => handleAgentReply({
+    text: "走拉比回复端。",
+    replyContext: {
+      runtimeRouteId: "拉比路由",
+      gatewayId: "拉比路由",
+      routeProfileId: "Rabi",
+      routeKind: "voice_transcript",
+      targetType: "voice_transcript",
+      messageId: "voice-log-1",
+      adapterType: "fennenote",
+      speakerName: "秋雨",
+      outputAdapter: "fennenote",
+      outputPipeline: "fennenote",
+      replyToSource: false
+    }
+  }, {
+    rootDir,
+    routeRoot: path.join(rootDir, "data", "route"),
+    rolesRoot: path.join(rootDir, "data", "roles"),
+    runtimes: [
+      {
+        id: "拉比路由",
+        configName: "拉比路由",
+        name: "路由配置 2",
+        agentRoleId: "Rabi",
+        rolesDir: path.join("data", "roles"),
+        messageAdapterPolicies: {
+          fennenote: {
+            outputEnabled: true,
+            supportedOutputs: ["text"]
+          }
+        }
+      },
+      {
+        id: "其他路由",
+        agentRoleId: "Other"
+      }
+    ],
+    fenneNotePlaybackUrl: url
+  }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "sent");
+  assert.equal(result.routeProfileId, "拉比路由");
+  assert.equal(result.targetType, "voice_transcript");
+  assert.equal(result.sentMessageId, "fenne-play-2");
+  assert.ok(forwarded);
+  assert.equal(forwarded.routeProfileId, "拉比路由");
+  assert.equal(forwarded.messageId, "voice-log-1");
+  assert.equal(forwarded.speakerName, "秋雨");
 });

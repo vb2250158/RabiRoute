@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sendGroupMessage, sendPrivateMessage, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
-import { resolvePipeline, type PipelineDefinition } from "./pipelines.js";
+import { resolvePipeline, type OutputAdapterType, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import {
   appendRolePanelTimelineMessage,
   createRolePanelMessageId,
@@ -62,6 +62,7 @@ export type AgentReplyRouteProfile = {
 export type AgentReplyRuntime = {
   id: string;
   name?: string;
+  configName?: string;
   enabled?: boolean;
   targetGroupId?: string;
   pipelinePreset?: string;
@@ -79,6 +80,10 @@ export type AgentReplyOptions = {
   routeRoot: string;
   rolesRoot: string;
   runtimes: AgentReplyRuntime[];
+  fenneNotePlaybackUrl?: string;
+  fenneNotePlaybackToken?: string;
+  fenneNoteReplyUrl?: string;
+  fenneNoteReplyToken?: string;
 };
 
 export type AgentReplyResult = {
@@ -87,7 +92,7 @@ export type AgentReplyResult = {
   reason?: string;
   routeProfileId?: string;
   messageId?: string;
-  targetType?: "group" | "private" | "role_panel";
+  targetType?: "group" | "private" | "role_panel" | "voice_transcript";
   groupId?: string;
   userId?: string;
   instanceId?: string;
@@ -102,7 +107,7 @@ export type AgentReplyResult = {
 
 type SourceRecord = {
   messageId?: string;
-  targetType?: "group" | "private" | "role_panel";
+  targetType?: "group" | "private" | "role_panel" | "voice_transcript";
   groupId?: string;
   userId?: string;
   instanceId?: string;
@@ -131,6 +136,17 @@ function valueString(value: unknown): string | undefined {
   if (value == null) return undefined;
   const text = String(value).trim();
   return text ? text : undefined;
+}
+
+function isOutputAdapterType(value: string | undefined): value is OutputAdapterType {
+  return value === "qq"
+    || value === "codex"
+    || value === "file"
+    || value === "console"
+    || value === "tts"
+    || value === "webhook"
+    || value === "fennenote"
+    || value === "none";
 }
 
 function contextObject(request: AgentReplyRequest): Record<string, unknown> {
@@ -249,6 +265,10 @@ function dataDirsForRoute(options: AgentReplyOptions, route: ResolvedRoute): str
   return [...dirs];
 }
 
+function idMatches(value: unknown, expected?: string): boolean {
+  return Boolean(expected && value != null && String(value) === expected);
+}
+
 function routeCandidates(options: AgentReplyOptions): ResolvedRoute[] {
   return options.runtimes.flatMap((runtime) => {
     const profiles = runtime.routeProfiles ?? [];
@@ -273,7 +293,7 @@ function readJsonl(filePath: string): Record<string, unknown>[] {
     });
 }
 
-function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group" | "private"): SourceRecord {
+function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group" | "private" | "voice_transcript"): SourceRecord {
   return {
     messageId: valueString(record.messageId ?? record.message_id),
     targetType,
@@ -289,7 +309,12 @@ function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group
 function findSourceRecord(options: AgentReplyOptions, route: ResolvedRoute, messageId?: string): SourceRecord | undefined {
   if (!messageId) return undefined;
   for (const dir of dataDirsForRoute(options, route)) {
-    for (const [fileName, targetType] of [["group-messages.jsonl", "group"], ["private-messages.jsonl", "private"]] as const) {
+    for (const [fileName, targetType] of [
+      ["group-messages.jsonl", "group"],
+      ["private-messages.jsonl", "private"],
+      ["voice-transcripts.jsonl", "voice_transcript"],
+      ["fennenote-voice-transcripts.jsonl", "voice_transcript"]
+    ] as const) {
       const found = readJsonl(path.join(dir, fileName))
         .reverse()
         .find((record) => String(record.messageId ?? record.message_id ?? "") === messageId);
@@ -341,12 +366,23 @@ function resolveExplicitTargetRoute(options: AgentReplyOptions, contextTarget?: 
   return runtime ? { runtime, profile: runtime.routeProfiles?.[0] } : undefined;
 }
 
-function resolveRouteById(options: AgentReplyOptions, routeProfileId?: string): ResolvedRoute | undefined {
-  if (routeProfileId) {
+function resolveRouteById(options: AgentReplyOptions, routeProfileId?: string, runtimeRouteId?: string): ResolvedRoute | undefined {
+  if (routeProfileId || runtimeRouteId) {
     for (const runtime of options.runtimes) {
-      const profile = runtime.routeProfiles?.find((item) => item.id === routeProfileId);
+      const runtimeMatched = idMatches(runtime.id, runtimeRouteId)
+        || idMatches(runtime.configName, runtimeRouteId)
+        || idMatches(runtime.name, runtimeRouteId)
+        || idMatches(runtime.id, routeProfileId)
+        || idMatches(runtime.configName, routeProfileId)
+        || idMatches(runtime.name, routeProfileId)
+        || idMatches(runtime.agentRoleId, routeProfileId);
+      const profile = runtime.routeProfiles?.find((item) =>
+        idMatches(item.id, routeProfileId)
+        || idMatches(item.name, routeProfileId)
+        || idMatches(item.agentRoleId, routeProfileId)
+      );
       if (profile) return { runtime, profile };
-      if (runtime.id === routeProfileId) return { runtime, profile: runtime.routeProfiles?.[0] };
+      if (runtimeMatched) return { runtime, profile: runtime.routeProfiles?.[0] };
     }
   }
   if (options.runtimes.length === 1) {
@@ -355,12 +391,12 @@ function resolveRouteById(options: AgentReplyOptions, routeProfileId?: string): 
   return undefined;
 }
 
-function resolveRoute(options: AgentReplyOptions, routeProfileId?: string, messageId?: string, contextTarget?: SourceRecord): ResolvedReplyRoute | undefined {
+function resolveRoute(options: AgentReplyOptions, routeProfileId?: string, messageId?: string, contextTarget?: SourceRecord, runtimeRouteId?: string): ResolvedReplyRoute | undefined {
   const sourceRoute = findSourceRoute(options, messageId, contextTarget);
   if (sourceRoute) return sourceRoute;
   const explicitTargetRoute = resolveExplicitTargetRoute(options, contextTarget);
   if (explicitTargetRoute) return explicitTargetRoute;
-  const routeById = resolveRouteById(options, routeProfileId);
+  const routeById = resolveRouteById(options, routeProfileId, runtimeRouteId);
   if (routeById) return routeById;
   return undefined;
 }
@@ -386,11 +422,23 @@ function endpointFor(route: ResolvedRoute, instanceId?: string): AgentReplyNapCa
   return instances.find((item) => item.enabled !== false) ?? instances[0];
 }
 
-function routePipeline(route: ResolvedRoute) {
+function routePipeline(route: ResolvedRoute): ResolvedPipeline {
   return resolvePipeline(
     route.profile?.pipelinePreset ?? route.runtime.pipelinePreset,
     route.profile?.pipeline ?? route.runtime.pipeline
   );
+}
+
+function replyPipeline(route: ResolvedRoute, request: AgentReplyRequest): ResolvedPipeline {
+  const pipeline = routePipeline(route);
+  const context = contextObject(request);
+  const outputAdapter = valueString(context.outputAdapter);
+  return {
+    ...pipeline,
+    outputAdapter: isOutputAdapterType(outputAdapter) ? outputAdapter : pipeline.outputAdapter,
+    outputPipeline: valueString(context.outputPipeline) ?? pipeline.outputPipeline,
+    replyToSource: typeof context.replyToSource === "boolean" ? context.replyToSource : pipeline.replyToSource
+  };
 }
 
 function napcatPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
@@ -400,6 +448,15 @@ function napcatPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
     messageAdapters: ["napcat"],
     messageAdapterPolicies: route.runtime.messageAdapterPolicies
   }, "napcat");
+}
+
+function fenneNotePolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+  return messageAdapterPolicyFor({
+    id: route.runtime.id,
+    gatewayPort: 0,
+    messageAdapters: ["fennenote"],
+    messageAdapterPolicies: route.runtime.messageAdapterPolicies
+  }, "fennenote");
 }
 
 function draft(reason: string, text: string, target: SourceRecord, routeProfileId?: string): AgentReplyResult {
@@ -461,10 +518,100 @@ function appendRolePanelReply(
   };
 }
 
+function fenneNoteReplyPayload(
+  request: AgentReplyRequest,
+  route: ResolvedRoute,
+  target: SourceRecord,
+  content: ReplyContent
+): Record<string, unknown> {
+  const context = contextObject(request);
+  const payload = payloadObject(request);
+  const requestFields = request as Record<string, unknown>;
+  return {
+    ...payload,
+    ...requestFields,
+    text: content.text,
+    message: requestFields.message ?? payload.message ?? content.text,
+    content: requestFields.content ?? payload.content ?? content.text,
+    payloadType: requestFields.payloadType ?? payload.payloadType ?? payload.type ?? content.kind,
+    routeProfileId: route.profile?.id ?? route.runtime.id,
+    routeProfileName: route.profile?.name ?? route.runtime.name,
+    messageId: target.messageId ?? valueString(context.messageId),
+    targetType: target.targetType ?? valueString(context.targetType) ?? "voice_transcript",
+    adapterType: "fennenote",
+    speakerId: context.speakerId,
+    speakerName: context.speakerName,
+    speakerKind: context.speakerKind,
+    speakerConfidence: context.speakerConfidence,
+    speakerDecision: context.speakerDecision,
+    replyContext: context,
+    payload
+  };
+}
+
+function shouldUseFenneNotePlayback(
+  request: AgentReplyRequest,
+  target: SourceRecord,
+  pipeline: ResolvedPipeline
+): boolean {
+  const context = contextObject(request);
+  const payload = payloadObject(request);
+  return target.targetType === "voice_transcript"
+    || valueString(context.routeKind) === "voice_transcript"
+    || pipeline.ttsPlay
+    || typeof payload.play === "boolean"
+    || Boolean(valueString(payload.character_id))
+    || Boolean(valueString(payload.worker_url))
+    || Array.isArray(payload.emotion_vector);
+}
+
+async function postFenneNoteOutput(
+  options: AgentReplyOptions,
+  body: Record<string, unknown>,
+  mode: "reply" | "playback"
+): Promise<Record<string, unknown>> {
+  const targetUrl = mode === "playback"
+    ? options.fenneNotePlaybackUrl ?? process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback"
+    : options.fenneNoteReplyUrl ?? process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
+  const token = mode === "playback"
+    ? options.fenneNotePlaybackToken ?? process.env.FENNOTE_PLAYBACK_TOKEN ?? ""
+    : options.fenneNoteReplyToken ?? process.env.FENNOTE_REPLY_TOKEN ?? process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
+  const headers: Record<string, string> = {
+    "content-type": "application/json; charset=utf-8",
+    "user-agent": "RabiRoute"
+  };
+  if (token) {
+    headers.authorization = `Bearer ${token}`;
+  }
+  const response = await fetch(targetUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+  const text = await response.text();
+  let parsed: unknown = {};
+  try {
+    parsed = text ? JSON.parse(text) as unknown : {};
+  } catch {
+    parsed = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(`FenneNote reply endpoint returned ${response.status}: ${text || response.statusText}`);
+  }
+  return {
+    mode,
+    status: response.status,
+    target: targetUrl,
+    response: parsed
+  };
+}
+
 export async function handleAgentReply(request: AgentReplyRequest, options: AgentReplyOptions): Promise<AgentReplyResult> {
   const content = requestContent(request);
   const text = content.text;
+  const context = contextObject(request);
   const routeProfileId = requestField(request, "routeProfileId");
+  const runtimeRouteId = valueString(context.runtimeRouteId ?? context.gatewayId);
   const messageId = requestField(request, "messageId");
   const contextTarget: SourceRecord = {
     messageId,
@@ -474,11 +621,13 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         ? "private"
         : requestField(request, "targetType") === "role_panel" || requestField(request, "adapterType") === "rolePanel"
           ? "role_panel"
-        : requestField(request, "groupId")
-          ? "group"
-          : requestField(request, "userId")
-            ? "private"
-            : undefined,
+          : requestField(request, "targetType") === "voice_transcript" || requestField(request, "adapterType") === "fennenote"
+            ? "voice_transcript"
+            : requestField(request, "groupId")
+              ? "group"
+              : requestField(request, "userId")
+                ? "private"
+                : undefined,
     groupId: requestField(request, "groupId"),
     userId: requestField(request, "userId"),
     instanceId: requestField(request, "instanceId"),
@@ -486,7 +635,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     botUserId: requestField(request, "botUserId"),
     roleId: requestField(request, "roleId")
   };
-  const route = resolveRoute(options, routeProfileId, messageId, contextTarget);
+  const route = resolveRoute(options, routeProfileId, messageId, contextTarget, runtimeRouteId);
   appendOutboxLog(options, route, "info", "reply_requested", text.slice(0, 500), { routeProfileId, messageId, payloadKind: content.kind, request });
 
   if (!route) {
@@ -505,7 +654,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "role_panel_reply_sent" : "reply_blocked", result.reason ?? "", result);
     return result;
   }
-  const pipeline = routePipeline(route);
+  const pipeline = replyPipeline(route, request);
   const policy = napcatPolicy(route);
   const hasExplicitQqTarget = Boolean(target.targetType && (target.groupId || target.userId));
   const isSourceReply = Boolean(
@@ -531,6 +680,54 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       text
     });
     return result;
+  }
+
+  if (pipeline.outputAdapter === "fennenote") {
+    const fennePolicy = fenneNotePolicy(route);
+    if (!fennePolicy.outputEnabled) {
+      const result: AgentReplyResult = { ...draft("FenneNote message sending is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    if (!fennePolicy.supportedOutputs.includes(content.kind)) {
+      const result: AgentReplyResult = { ...draft(`FenneNote route policy does not allow ${content.kind} payloads.`, text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+
+    try {
+      const outputMode = shouldUseFenneNotePlayback(request, target, pipeline) ? "playback" : "reply";
+      const forwarded = await postFenneNoteOutput(options, fenneNoteReplyPayload(request, route, target, content), outputMode);
+      const result: AgentReplyResult = {
+        ok: true,
+        status: "sent",
+        reason: outputMode === "playback" ? "Sent to FenneNote playback endpoint." : "Sent to FenneNote reply endpoint.",
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId,
+        targetType: target.targetType,
+        groupId: target.groupId,
+        userId: target.userId,
+        instanceId: target.instanceId,
+        sentMessageId: valueString((forwarded.response as Record<string, unknown>)?.messageId ?? (forwarded.response as Record<string, unknown>)?.id)
+      };
+      appendOutboxLog(options, route, "info", outputMode === "playback" ? "fennenote_playback_sent" : "fennenote_reply_sent", text.slice(0, 500), { ...result, forwarded });
+      return result;
+    } catch (error) {
+      const result: AgentReplyResult = {
+        ok: false,
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId,
+        targetType: target.targetType,
+        groupId: target.groupId,
+        userId: target.userId,
+        instanceId: target.instanceId,
+        draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId }
+      };
+      appendOutboxLog(options, route, "error", "fennenote_reply_failed", result.reason ?? "failed", result);
+      return result;
+    }
   }
 
   if (pipeline.outputAdapter !== "qq" && !isSourceReply) {

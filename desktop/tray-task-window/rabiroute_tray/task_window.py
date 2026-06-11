@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .manager_client import ManagerSnapshot
+from .display_helpers import route_enabled_label, route_running_label, route_state, route_status_label, route_subtitle, route_title
 from .role_context_repository import ContextEntry, RoleContextSnapshot
 from .task_repository import PlanItem, PlanSnapshot
 
@@ -507,6 +508,7 @@ class TaskWindow(QWidget):
 
         self.setWindowTitle(role_id or plans.role_id or "角色面板")
         self.title_label.setText(role_id or plans.role_id)
+        self.subtitle_label.setText(route_subtitle(gateway) if gateway else "角色面板")
         self.status_chip.setText(self._chip_text(manager.connected, running))
         self.status_detail.setText(
             f"Manager：{'已连接' if manager.connected else '离线'}  "
@@ -542,10 +544,10 @@ class TaskWindow(QWidget):
         selected_id = str((self.selected_gateway or {}).get("id") or "")
         for gateway in self.manager.gateways:
             gateway_id = str(gateway.get("id") or "")
-            role_id = str(gateway.get("agentRoleId") or "未指定人格")
             label = self._gateway_label(gateway)
-            button = QPushButton(f"{role_id}\n{label}")
+            button = QPushButton(f"{route_title(gateway)}\n{route_subtitle(gateway)}\n{route_enabled_label(gateway)} / {route_running_label(gateway)}")
             button.setObjectName("routeButton")
+            button.setProperty("routeState", route_state(gateway))
             button.setCheckable(True)
             button.setChecked(gateway_id == selected_id)
             button.setToolTip(label)
@@ -556,9 +558,7 @@ class TaskWindow(QWidget):
     def _gateway_label(self, gateway: dict | None) -> str:
         if not gateway:
             return "未选择航线"
-        name = str(gateway.get("routeName") or gateway.get("name") or gateway.get("configName") or gateway.get("id") or "未命名航线")
-        running = "运行中" if gateway.get("running") else "已停止"
-        return f"{name} / {running}"
+        return route_status_label(gateway)
 
     def _choose_attachment(self) -> None:
         paths, _selected_filter = QFileDialog.getOpenFileNames(self, "选择发送文件")
@@ -1005,14 +1005,27 @@ QLabel#routeSearch {
 }
 QPushButton#routeButton {
     background: transparent;
-    border: 0;
+    border: 1px solid transparent;
     border-radius: 8px;
     color: #f1f1f1;
-    min-height: 62px;
+    min-height: 78px;
     margin: 0 4px;
     padding: 8px 12px;
     text-align: left;
     font-weight: 800;
+}
+QPushButton#routeButton[routeState="running"] {
+    background: rgba(22, 163, 74, 0.13);
+    border-left: 4px solid #16a34a;
+}
+QPushButton#routeButton[routeState="stopped"] {
+    background: rgba(234, 179, 8, 0.12);
+    border-left: 4px solid #eab308;
+}
+QPushButton#routeButton[routeState="disabled"] {
+    background: rgba(148, 163, 184, 0.10);
+    border-left: 4px solid #94a3b8;
+    color: #a9a9a9;
 }
 QPushButton#routeButton:hover {
     background: #303030;

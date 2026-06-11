@@ -2,8 +2,8 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
-import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance, MessageAdapterPolicy, MessagePayloadKind } from "../types";
-import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled, messageAdapterPolicyFor, setMessageAdapterPolicy } from "../utils/gatewayHelpers";
+import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
+import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
 const route = useRoute();
@@ -186,13 +186,6 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     ]
   }
 ];
-const messagePayloadKindItems: Array<{ title: string; value: MessagePayloadKind }> = [
-  { title: "文字", value: "text" },
-  { title: "图片", value: "image" },
-  { title: "语音", value: "voice" },
-  { title: "文件", value: "file" }
-];
-
 const gateway = computed(() => store.selectedGateway);
 
 // 所有已添加的 adapter（含禁用），用于 UI 列表显示
@@ -289,17 +282,6 @@ function toggleAdapter(type: MessageAdapterType): void {
   if (type === "rolePanel") return;
   if (!gateway.value) return;
   toggleAdapterDisabled(gateway.value, type);
-  store.touch();
-}
-
-function adapterPolicy(type: MessageAdapterType): Required<MessageAdapterPolicy> {
-  return gateway.value ? messageAdapterPolicyFor(gateway.value, type) : messageAdapterPolicyFor({ id: "preview", gatewayPort: 0 }, type);
-}
-
-function updateAdapterPolicy(type: MessageAdapterType, patch: Partial<MessageAdapterPolicy>): void {
-  if (!gateway.value) return;
-  setMessageAdapterPolicy(gateway.value, type, patch);
-  applyAdapterDefaults(gateway.value);
   store.touch();
 }
 
@@ -2502,48 +2484,6 @@ watch(
                       </v-alert>
                     </template>
                     <div v-else class="section-note">尚未扫描。展开面板后会自动扫描，也可以手动刷新。</div>
-                  </div>
-                  <div class="dependency-panel mb-3">
-                    <div class="section-title-row compact-row">
-                      <div>
-                        <div class="section-title small-title">消息权限</div>
-                        <div class="section-note">控制这个消息端是否接收、是否允许出站，以及出站目标和消息类型。</div>
-                      </div>
-                      <v-chip size="small" :color="adapterPolicy(choice.type).outputEnabled ? 'success' : 'warning'" variant="tonal">
-                        {{ adapterPolicy(choice.type).outputEnabled ? "发送启用" : "发送关闭" }}
-                      </v-chip>
-                    </div>
-                    <div class="catalog-param-grid">
-                      <v-switch
-                        :model-value="adapterPolicy(choice.type).inputEnabled"
-                        label="启用消息进入"
-                        color="success"
-                        inset
-                        hide-details
-                        @update:model-value="value => updateAdapterPolicy(choice.type, { inputEnabled: Boolean(value) })"
-                      />
-                      <v-switch
-                        :model-value="adapterPolicy(choice.type).outputEnabled"
-                        label="启用消息发送"
-                        color="success"
-                        inset
-                        hide-details
-                        @update:model-value="value => updateAdapterPolicy(choice.type, { outputEnabled: Boolean(value) })"
-                      />
-                      <v-select
-                        :model-value="adapterPolicy(choice.type).supportedOutputs"
-                        :items="messagePayloadKindItems"
-                        item-title="title"
-                        item-value="value"
-                        label="允许消息类型"
-                        density="compact"
-                        multiple
-                        chips
-                        closable-chips
-                        hide-details
-                        @update:model-value="value => updateAdapterPolicy(choice.type, { supportedOutputs: value as MessagePayloadKind[] })"
-                      />
-                    </div>
                   </div>
                   <div v-if="choice.type === 'napcat'" class="catalog-param-grid napcat-manager-panel">
                     <div class="full-span napcat-setup-strip">

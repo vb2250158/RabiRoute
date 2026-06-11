@@ -79,6 +79,13 @@ type DiscoveredMonitorThread = {
   source: string;
 };
 
+export type CodexAppMonitorThread = {
+  id: string;
+  threadName: string;
+  updatedAt: string;
+  source: string;
+};
+
 function readState(): CodexState {
   return memoryState;
 }
@@ -380,6 +387,17 @@ async function ensureMonitorThread(forceCreate = false): Promise<string> {
   return threadId;
 }
 
+export async function createCodexAppMonitorThread(forceCreate = false): Promise<CodexAppMonitorThread> {
+  const threadId = await ensureMonitorThread(forceCreate);
+  const state = readState();
+  return {
+    id: threadId,
+    threadName: state.monitorThreadName ?? config.codexThreadName,
+    updatedAt: state.monitorThreadUpdatedAt ?? new Date().toISOString(),
+    source: state.monitorThreadSource ?? "codex app-server"
+  };
+}
+
 export async function notifyCodex(message: string): Promise<void> {
   notificationQueue = notificationQueue
     .catch(() => undefined)
@@ -425,7 +443,9 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
     name: threadName
   });
 
-  const idle = waitForThreadIdle(threadId);
+  const idle = process.env.CODEX_APP_NOTIFY_WAIT_FOR_IDLE === "1"
+    ? waitForThreadIdle(threadId)
+    : undefined;
   try {
     const turnStartParams: Record<string, unknown> = {
       threadId,
@@ -442,9 +462,7 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
       cwd: config.codexCwd,
       approvalPolicy: "never",
       sandboxPolicy: {
-        type: "workspaceWrite",
-        networkAccess: false,
-        writableRoots: []
+        type: "dangerFullAccess"
       },
       effort: "high",
       personality: "friendly"
@@ -453,7 +471,7 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
 
     await request("turn/start", turnStartParams);
   } catch (error) {
-    idle.catch(() => undefined);
+    idle?.catch(() => undefined);
     throw error;
   }
 

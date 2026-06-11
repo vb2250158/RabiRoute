@@ -4,12 +4,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QLockFile, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QDir, QLockFile, QTimer, Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .app_paths import project_dir_from_gateway, role_dir_from_gateway, role_id_from_gateway, runtime_dir_from_gateway
 from .desktop_adapter import DesktopAdapter
+from .display_helpers import route_enabled_label, route_menu_label, route_running_label, route_state, route_status_label
 from .lifecycle_controller import LifecycleController
 from .manager_client import ManagerClient, ManagerSnapshot
 from .role_context_repository import RoleContextRepository
@@ -325,12 +326,33 @@ def _rebuild_routes_menu(
 
     menu_refs = []
     for gateway in manager_snapshot.gateways:
-        role_id = role_id_from_gateway(gateway, "未指定人格")
-        action = _action(str(role_id), routes_menu, lambda checked=False, item=gateway: open_panel_callback(item))
+        action = _action(_route_menu_text(gateway), routes_menu, lambda checked=False, item=gateway: open_panel_callback(item))
+        action.setIcon(_route_state_icon(route_state(gateway)))
         action.setToolTip(_route_label(gateway))
         routes_menu.addAction(action)
 
     routes_menu._rabiroute_menu_refs = menu_refs
+
+
+def _route_menu_text(gateway: dict) -> str:
+    return f"{route_menu_label(gateway)} · {route_enabled_label(gateway)} / {route_running_label(gateway)}"
+
+
+def _route_state_icon(state: str) -> QIcon:
+    colors = {
+        "running": "#16a34a",
+        "stopped": "#eab308",
+        "disabled": "#94a3b8",
+    }
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setBrush(QColor(colors.get(state, "#94a3b8")))
+    painter.setPen(Qt.NoPen)
+    painter.drawEllipse(3, 3, 10, 10)
+    painter.end()
+    return QIcon(pixmap)
 
 
 def _action(text: str, parent, callback) -> QAction:
@@ -389,16 +411,14 @@ def _manual_trigger(
 
 
 def _gateway_label(gateway: dict, role_id: str | None = None) -> str:
-    name = str(gateway.get("routeName") or gateway.get("name") or gateway.get("configName") or gateway.get("id") or "未命名航线")
-    role = role_id or str(gateway.get("agentRoleId") or "")
-    running = "运行中" if gateway.get("running") else "已停止"
-    return f"{name} / {role} / {running}" if role else f"{name} / {running}"
+    if role_id:
+        running = "运行中" if gateway.get("running") else "已停止"
+        return f"{route_menu_label(gateway)} / {running}"
+    return route_status_label(gateway)
 
 
 def _route_label(gateway: dict) -> str:
-    name = str(gateway.get("routeName") or gateway.get("name") or gateway.get("configName") or gateway.get("id") or "未命名航线")
-    running = "运行中" if gateway.get("running") else "已停止"
-    return f"{name} / {running}"
+    return route_status_label(gateway)
 
 
 def _tooltip(manager_snapshot, plan_snapshot) -> str:

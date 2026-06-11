@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { notifyCodex } from "./codexApp.js";
+import { createCodexAppMonitorThread, notifyCodex } from "./codexApp.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
 
 type IpcResponse = {
@@ -102,6 +102,14 @@ let flushWaiters: Array<{
 
 const recentStartSteerWindowMs = 10 * 60 * 1000;
 const notificationBatchDelayMs = 2500;
+const defaultIpcRequestTimeoutMs = 30 * 60 * 1000;
+
+function positiveIntegerFromEnv(name: string, fallback: number): number {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+const ipcRequestTimeoutMs = positiveIntegerFromEnv("CODEX_DESKTOP_IPC_REQUEST_TIMEOUT_MS", defaultIpcRequestTimeoutMs);
 
 function defaultCodexModel(): string {
   const envModel = process.env.RABIROUTE_CODEX_MODEL?.trim() || process.env.CODEX_MODEL?.trim();
@@ -445,7 +453,7 @@ async function request(method: string, params: unknown, version = 1, allowBefore
     const timer = setTimeout(() => {
       pending.delete(requestId);
       reject(new Error(`Codex Desktop IPC request timed out: ${method}`));
-    }, 20000);
+    }, ipcRequestTimeoutMs);
 
     pending.set(requestId, { resolve, reject, timer });
   });
@@ -550,13 +558,71 @@ function isInactiveSteerError(error: unknown): boolean {
   return text.includes("SteerTurnInactiveError") || text.includes("active turn already ended") || text.includes("no active turn to steer");
 }
 
+function isDesktopRequestTimeoutError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes("request-timeout") || text.includes("request timed out");
+}
+
 function isNoClientFoundError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return text.includes("no-client-found");
 }
 
+function isMissingMonitorThreadError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes("Missing monitorThreadId") || text.includes("no matching Codex thread was found");
+}
+
+function shouldUseAppServerFallbackFor(error: unknown): boolean {
+  return shouldUseAppServerFallback() && (isNoClientFoundError(error) || isMissingMonitorThreadError(error));
+}
+
 function shouldUseAppServerFallback(): boolean {
-  return process.env.CODEX_DESKTOP_IPC_APP_SERVER_FALLBACK !== "0";
+  return process.env.CODEX_DESKTOP_IPC_APP_SERVER_FALLBACK === "1";
+}
+
+function shouldAutoCreateMonitorThread(): boolean {
+  return process.env.CODEX_DESKTOP_IPC_AUTO_CREATE_THREAD !== "0";
+}
+
+async function createMonitorThreadForDesktopDelivery(state: CodexState): Promise<CodexState> {
+  const created = await createCodexAppMonitorThread();
+  const nextState = {
+    ...state,
+    monitorThreadId: created.id,
+    monitorThreadName: created.threadName,
+    monitorThreadUpdatedAt: created.updatedAt,
+    monitorThreadSource: `${created.source}; delivery=desktop-ipc`,
+    lastAutoDiscoveryAt: new Date().toISOString(),
+    lastNotificationError: undefined,
+    lastNotificationErrorAt: undefined
+  };
+  writeState(nextState);
+  monitorThreadActive = false;
+  return nextState;
+}
+
+async function startNotificationTurnWithFallback(threadId: string, message: string): Promise<"started" | "steered"> {
+  try {
+    await startNotificationTurn(threadId, message);
+    return "started";
+  } catch (error) {
+    if (!isDesktopRequestTimeoutError(error)) {
+      throw error;
+    }
+
+    try {
+      await steerNotificationTurn(threadId, message);
+      return "steered";
+    } catch (steerError) {
+      if (!isInactiveSteerError(steerError)) {
+        throw steerError;
+      }
+
+      await startNotificationTurn(threadId, message);
+      return "started";
+    }
+  }
 }
 
 async function deliverToMonitorThread(state: CodexState, message: string): Promise<void> {
@@ -575,12 +641,14 @@ async function deliverToMonitorThread(state: CodexState, message: string): Promi
       }
 
       monitorThreadActive = false;
-      await startNotificationTurn(state.monitorThreadId, message);
+      const result = await startNotificationTurnWithFallback(state.monitorThreadId, message);
       lastStartedTurnAt = Date.now();
+      monitorThreadActive = result === "started" || result === "steered";
     }
   } else {
-    await startNotificationTurn(state.monitorThreadId, message);
+    const result = await startNotificationTurnWithFallback(state.monitorThreadId, message);
     lastStartedTurnAt = Date.now();
+    monitorThreadActive = result === "started" || result === "steered";
   }
 }
 
@@ -589,6 +657,9 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
     .catch(() => undefined)
     .then(async () => {
       let state = resolveConfiguredMonitorThread(readState(), false);
+      if (!state.monitorThreadId && shouldAutoCreateMonitorThread()) {
+        state = await createMonitorThreadForDesktopDelivery(state);
+      }
 
       try {
         for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -616,7 +687,7 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
           lastNotificationErrorAt: undefined
         });
       } catch (error) {
-        if (isNoClientFoundError(error) && shouldUseAppServerFallback()) {
+        if (shouldUseAppServerFallbackFor(error)) {
           try {
             await notifyCodex(message);
             writeState({

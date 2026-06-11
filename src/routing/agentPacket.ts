@@ -1,5 +1,6 @@
 import path from "node:path";
 import { config, type NotificationRule } from "../config.js";
+import { resolvePipeline, type ResolvedPipeline } from "../pipelines.js";
 import { indexLines, roleKnowledgeSnapshot } from "../roleKnowledge.js";
 import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
@@ -111,18 +112,37 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   return "RabiRoute 消息提醒";
 }
 
+function outputPipelineForDecision(decision: RouteDecision): ResolvedPipeline {
+  const record = decision.record;
+  const pipeline = decision.route.resolvedPipeline ?? config.resolvedPipeline;
+  if (
+    decision.routeKind === "voice_transcript" &&
+    isVoiceTranscriptRecord(record) &&
+    (record.adapterType === "fennenote" || record.source === "fennenote")
+  ) {
+    return resolvePipeline("voice_chat", {
+      inputAdapter: "fennenote",
+      ttsVoice: pipeline.ttsVoice,
+      ttsWorkerUrl: pipeline.outputAdapter === "fennenote" && pipeline.ttsWorkerUrl ? pipeline.ttsWorkerUrl : undefined
+    });
+  }
+  return pipeline;
+}
+
 function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRoleContext): ForwardTemplateValues {
   const record = decision.record;
   const route = decision.route;
-  const sender = record.senderName || ("userId" in record ? record.userId : "RabiRoute");
+  const isVoiceTranscript = isVoiceTranscriptRecord(record);
+  const sender = isVoiceTranscript
+    ? record.speakerName || record.senderName || record.source || "voice_transcript"
+    : record.senderName || ("userId" in record ? record.userId : "RabiRoute");
   const isGroup = isGroupRecord(record);
   const isHeartbeat = isHeartbeatRecord(record);
-  const isVoiceTranscript = isVoiceTranscriptRecord(record);
   const isManualTrigger = isManualTriggerRecord(record);
   const isRolePanel = isRolePanelRecord(record);
   const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
   const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isRolePanel ? "role_panel" : isVoiceTranscript ? "voice_transcript" : "private";
-  const pipeline = route.resolvedPipeline ?? config.resolvedPipeline;
+  const pipeline = outputPipelineForDecision(decision);
   const replyApiPath = "/api/agent/replies";
   const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
   const replyContext = {
@@ -138,6 +158,11 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     targetGroupId: config.targetGroupId || undefined,
     instanceId: "instanceId" in record ? record.instanceId : undefined,
     adapterType: isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
+    speakerId: isVoiceTranscript ? record.speakerId : undefined,
+    speakerName: isVoiceTranscript ? record.speakerName : undefined,
+    speakerKind: isVoiceTranscript ? record.speakerKind : undefined,
+    speakerConfidence: isVoiceTranscript ? record.speakerConfidence : undefined,
+    speakerDecision: isVoiceTranscript ? record.speakerDecision : undefined,
     roleId: isRolePanel ? record.roleId : undefined,
     botUserId: "botUserId" in record ? record.botUserId : undefined,
     dataDir: roleContext.dataDir,
@@ -202,6 +227,11 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     triggerId: isManualTrigger ? record.triggerId : undefined,
     triggerName: isManualTrigger ? record.triggerName : undefined,
     voiceSource: isVoiceTranscript ? record.source : undefined,
+    voiceSpeakerId: isVoiceTranscript ? record.speakerId : undefined,
+    voiceSpeakerName: isVoiceTranscript ? record.speakerName : undefined,
+    voiceSpeakerKind: isVoiceTranscript ? record.speakerKind : undefined,
+    voiceSpeakerConfidence: isVoiceTranscript ? record.speakerConfidence : undefined,
+    voiceSpeakerDecision: isVoiceTranscript ? record.speakerDecision : undefined,
     voiceSourceDeviceId: isVoiceTranscript ? record.sourceDeviceId : undefined,
     voiceSourceDeviceName: isVoiceTranscript ? record.sourceDeviceName : undefined,
     voiceSourceArea: isVoiceTranscript ? record.sourceArea : undefined,
@@ -252,6 +282,9 @@ function buildAgentMessage(
       optionalLine("当前时间", values.currentTime),
       optionalLine("来源", values.messageTarget),
       optionalLine("发送者", values.sender),
+      optionalLine("说话人", values.voiceSpeakerName),
+      optionalLine("说话人置信度", values.voiceSpeakerConfidence),
+      optionalLine("说话人判定", values.voiceSpeakerDecision),
       optionalLine("触发 ID", values.triggerId),
       optionalLine("触发名称", values.triggerName)
     ]),

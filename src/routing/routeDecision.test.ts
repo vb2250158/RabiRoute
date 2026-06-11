@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RouteProfile } from "../config.js";
-import type { GroupMessageRecord } from "../history.js";
+import type { GroupMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import { resolvePipeline } from "../pipelines.js";
 import { buildAgentPacket } from "./agentPacket.js";
 import { createRouteDecision } from "./routeDecision.js";
@@ -28,6 +28,18 @@ function groupMessage(patch: Partial<GroupMessageRecord> = {}): GroupMessageReco
     rawMessage: "[CQ:at,qq=12345] hello",
     messageId: "msg-1",
     senderName: "Alice",
+    ...patch
+  };
+}
+
+function voiceTranscript(patch: Partial<VoiceTranscriptEventRecord> = {}): VoiceTranscriptEventRecord {
+  return {
+    time: 1710000000,
+    rawMessage: "语音输入测试",
+    messageId: "voice-1",
+    senderName: "fennenote",
+    adapterType: "fennenote",
+    source: "fennenote",
     ...patch
   };
 }
@@ -102,4 +114,38 @@ test("AgentPacket renders rule template and reply context from a decision", () =
   assert.equal(replyContext.routeKind, "direct_at");
   assert.equal(replyContext.outputAdapter, "qq");
   assert.equal(replyContext.replyToSource, true);
+});
+
+test("AgentPacket routes FenneNote voice transcript replies through FenneNote output", () => {
+  const route = routeProfile({
+    resolvedPipeline: resolvePipeline(undefined, {
+      outputAdapter: "codex",
+      outputPipeline: "codex",
+      replyToSource: false
+    }),
+    notificationRules: [{
+      id: "voice",
+      name: "voice",
+      enabled: true,
+      routeKinds: ["voice_transcript"],
+      template: "voice={message}"
+    }]
+  });
+  const decision = createRouteDecision(route, "voice_transcript", voiceTranscript(), {});
+  assert.ok(decision);
+
+  const packet = buildAgentPacket(decision, decision.matchedRules[0], {
+    roleId: "Rabi",
+    roleDir: "",
+    rolePath: "",
+    dataDir: "data/route/main"
+  });
+
+  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+  assert.equal(replyContext.routeKind, "voice_transcript");
+  assert.equal(replyContext.adapterType, "fennenote");
+  assert.equal(replyContext.outputAdapter, "fennenote");
+  assert.equal(replyContext.outputPipeline, "fennenote");
+  assert.equal(replyContext.replyToSource, false);
+  assert.equal(packet.templateValues.promptOutputMode, "voice_short");
 });
