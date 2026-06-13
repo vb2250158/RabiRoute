@@ -4,9 +4,10 @@ import { config } from "./config.js";
 import { createHeartbeatAdapter } from "./adapters/heartbeatAdapter.js";
 import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
 import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
+import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
-import { forwardMessageAndWait } from "./forwarding.js";
+import { forwardMessageAndWait, type ForwardDeliveryResult } from "./forwarding.js";
 import type { RolePanelMessageRecord } from "./history.js";
 
 type GatewayStatus = {
@@ -26,6 +27,13 @@ type GatewayStatus = {
 
 const statusPath = path.join(config.dataDir, "gateway-status.json");
 
+function deliverySummary(result: ForwardDeliveryResult): string {
+  const failedAdapters = result.adapterOutcomes.filter((outcome) => outcome.status === "failed").length;
+  const deliveredAdapters = result.adapterOutcomes.filter((outcome) => outcome.status === "delivered").length;
+  const reason = result.reason ? ` reason=${result.reason}` : "";
+  return `status=${result.status} matched=${result.matchedRuleCount} packets=${result.sentPacketCount} adapters=${deliveredAdapters}/${result.adapterOutcomes.length} failed=${failedAdapters}${reason}`;
+}
+
 const manualTriggerArg = process.argv.find((arg) => arg.startsWith("--manual-trigger="));
 if (manualTriggerArg) {
   const triggerId = manualTriggerArg.slice("--manual-trigger=".length).trim() || "manual";
@@ -38,8 +46,13 @@ if (manualTriggerArg) {
   const routeKind = routeKindArg?.slice("--manual-route-kind=".length) === "heartbeat" ? "heartbeat" : "manual_trigger";
   const triggerRuleId = ruleArg ? ruleArg.slice("--manual-rule=".length).trim() || undefined : routeKind === "heartbeat" ? undefined : triggerId;
   try {
-    await triggerManualRule(triggerId, message, triggerName, routeKind, triggerRuleId);
-    console.log(`RabiRoute manual trigger completed: ${triggerId}`);
+    const result = await triggerManualRule(triggerId, message, triggerName, routeKind, triggerRuleId);
+    const summary = deliverySummary(result);
+    if (result.status === "failed") {
+      console.error(`RabiRoute manual trigger failed: ${triggerId} ${summary}`);
+      process.exit(1);
+    }
+    console.log(`RabiRoute manual trigger completed: ${triggerId} ${summary}`);
     process.exit(0);
   } catch (error) {
     console.error(`RabiRoute manual trigger failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -80,11 +93,42 @@ if (rolePanelMessageArg) {
     adapterType: "rolePanel"
   };
   try {
-    await forwardMessageAndWait("role_panel_message", record);
-    console.log(`RabiRoute role panel message completed: ${messageId}`);
+    const result = await forwardMessageAndWait("role_panel_message", record);
+    const summary = deliverySummary(result);
+    if (result.status === "failed") {
+      console.error(`RabiRoute role panel message failed: ${messageId} ${summary}`);
+      process.exit(1);
+    }
+    if (result.status === "missed" || result.status === "routed" || result.status === "skipped") {
+      console.warn(`RabiRoute role panel message not delivered: ${messageId} ${summary}`);
+    } else {
+      console.log(`RabiRoute role panel message delivered: ${messageId} ${summary}`);
+    }
     process.exit(0);
   } catch (error) {
     console.error(`RabiRoute role panel message failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
+const directAgentMessageArg = process.argv.find((arg) => arg.startsWith("--direct-agent-message="));
+if (directAgentMessageArg) {
+  const message = decodeURIComponent(directAgentMessageArg.slice("--direct-agent-message=".length));
+  const adapters = config.agentAdapters.length > 0
+    ? config.agentAdapters
+    : config.codexDesktopIpcNotify || config.codexDirectNotify
+      ? ["codex" as const]
+      : [];
+  if (adapters.length === 0) {
+    console.error("RabiRoute direct agent message failed: no agent adapters configured");
+    process.exit(1);
+  }
+  try {
+    await Promise.all(adapters.map((adapter) => createAgentAdapter(adapter).deliver(message)));
+    console.log("RabiRoute direct agent message completed");
+    process.exit(0);
+  } catch (error) {
+    console.error(`RabiRoute direct agent message failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
 }
@@ -132,6 +176,8 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
         ? "消息适配端已禁用。"
         : type === "rolePanel"
           ? "角色面板是 RabiRoute 内置本地消息端，由 manager/托盘窗口提供入口。"
+        : type === "remoteAgent"
+          ? "远端 Agent 消息端由 manager 的 /api/remote-agent 与 WebSocket bridge 提供入口；gateway 子进程不单独监听。"
         : `${type} 消息适配端尚未实现，当前仅作为框架占位。`;
       patchMessageAdapterStatus({ type, status, message });
       console.log(message);

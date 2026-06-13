@@ -3,14 +3,29 @@ import path from "node:path";
 import {
   autoAssignGatewayPorts,
   normalizeGatewayDefinition,
-  routeRuntimeParts,
-  sanitizeRoleId,
   validateGatewayPortConflicts,
   type GatewayConfigFile,
-  type GatewayDefinition
+  type GatewayDefinition,
+  type NotificationRuleDefinition
 } from "../shared/gatewayConfigModel.js";
+import {
+  routeRuntimeParts,
+  sanitizeConfigName,
+  sanitizeRoleId
+} from "../shared/routeIdentity.js";
+import {
+  adapterConfigPath as resolveAdapterConfigPath,
+  personaConfigPath as resolvePersonaConfigPath,
+  routeFolderPath
+} from "../shared/routePaths.js";
 import { normalizeAgentAdapters } from "../agentAdapters/types.js";
 import { normalizePipelineDefinition } from "../pipelines.js";
+import {
+  mergeNotificationRules,
+  migrateLegacyConfigs,
+  readPersonaConfigFragment,
+  writePersonaRules
+} from "./configMigration.js";
 
 export type ManagerConfig = {
   routeDir?: string;
@@ -70,37 +85,35 @@ export class ManagerConfigRepository {
     }
     fs.mkdirSync(this.rolesRoot, { recursive: true });
     fs.mkdirSync(this.routeRoot, { recursive: true });
+    this.migrateLegacyConfigs();
   }
 
   adapterConfigPath(configName: string): string {
-    const safeConfigName = sanitizeRoleId(configName);
-    if (!safeConfigName) throw new Error("Missing route folder name");
-    return path.join(this.routeRoot, safeConfigName, "adapterConfig.json");
+    return resolveAdapterConfigPath(this.routeRoot, configName);
   }
 
   readRoleMessageConfig(roleId: string | undefined): Partial<GatewayDefinition> {
     const safeRoleId = sanitizeRoleId(roleId);
     if (!safeRoleId) return {};
-    const configPath = this.personaConfigPath(safeRoleId);
-    if (!fs.existsSync(configPath)) return {};
-    try {
-      const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
-      return Array.isArray(parsed.notificationRules) ? { notificationRules: parsed.notificationRules } : {};
-    } catch {
-      return {};
-    }
+    return readPersonaConfigFragment(this.personaConfigPath(safeRoleId));
   }
 
   personaConfigPath(roleId: string): string {
-    const safeRoleId = sanitizeRoleId(roleId);
-    if (!safeRoleId) throw new Error("Missing role folder name");
-    return path.join(this.rolesRoot, safeRoleId, "personaConfig.json");
+    return resolvePersonaConfigPath(this.rolesRoot, roleId);
+  }
+
+  writePersonaRules(roleId: string, rules: NotificationRuleDefinition[] | undefined): void {
+    writePersonaRules(this.personaConfigPath(roleId), rules);
+  }
+
+  migrateLegacyConfigs(): void {
+    migrateLegacyConfigs({ routeRoot: this.routeRoot, rolesRoot: this.rolesRoot });
   }
 
   normalize(definition: GatewayDefinition): GatewayDefinition {
     return normalizeGatewayDefinition(definition, {
       managerPort: this.managerPort,
-      routeDataDir: (configName) => path.relative(this.rootDir, path.join(this.routeRoot, configName)).replace(/\\/g, "/"),
+      routeDataDir: (configName) => path.relative(this.rootDir, routeFolderPath(this.routeRoot, configName)).replace(/\\/g, "/"),
       rolesDir: path.relative(this.rootDir, this.rolesRoot).replace(/\\/g, "/"),
       normalizeAgentAdapters: (adapters) => normalizeAgentAdapters(adapters ?? []),
       normalizePipeline: (pipeline) => normalizePipelineDefinition(pipeline) as GatewayDefinition["pipeline"]
@@ -112,13 +125,11 @@ export class ManagerConfigRepository {
     const gateways: GatewayDefinition[] = [];
     for (const routeEntry of fs.readdirSync(this.routeRoot, { withFileTypes: true })) {
       if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) continue;
-      const configName = sanitizeRoleId(routeEntry.name);
+      const configName = sanitizeConfigName(routeEntry.name);
       const configPath = this.adapterConfigPath(configName);
       if (!fs.existsSync(configPath)) continue;
       const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
-      const personaConfig = (Array.isArray(raw.notificationRules) && raw.notificationRules.length > 0)
-        ? {}
-        : this.readRoleMessageConfig(raw.agentRoleId);
+      const personaConfig = this.readRoleMessageConfig(raw.agentRoleId);
       gateways.push(this.normalize({
         ...raw,
         ...personaConfig,
@@ -136,7 +147,7 @@ export class ManagerConfigRepository {
     if (!fs.existsSync(this.routeRoot)) return;
     for (const routeEntry of fs.readdirSync(this.routeRoot, { withFileTypes: true })) {
       if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) continue;
-      const configName = sanitizeRoleId(routeEntry.name);
+      const configName = sanitizeConfigName(routeEntry.name);
       if (!configName || activeConfigNames.has(configName)) continue;
       const configPath = this.adapterConfigPath(configName);
       if (fs.existsSync(configPath)) {
@@ -151,11 +162,12 @@ export class ManagerConfigRepository {
     autoAssignGatewayPorts(normalized.gateways, this.managerPort);
     validateGatewayPortConflicts(normalized.gateways);
     const activeConfigNames = new Set<string>();
+    const groupedByRole = new Map<string, NotificationRuleDefinition[]>();
     for (let i = 0; i < normalized.gateways.length; i += 1) {
       const definition = normalized.gateways[i];
       const raw = config.gateways[i];
-      const oldConfigName = routeRuntimeParts(raw.id).configName || sanitizeRoleId(raw.configName);
-      const configName = sanitizeRoleId(definition.configName) || definition.id;
+      const oldConfigName = routeRuntimeParts(raw.id).configName || sanitizeConfigName(raw.configName);
+      const configName = sanitizeConfigName(definition.configName) || definition.id;
       activeConfigNames.add(configName);
       if (oldConfigName && oldConfigName !== configName) {
         const oldConfigPath = this.adapterConfigPath(oldConfigName);
@@ -165,9 +177,28 @@ export class ManagerConfigRepository {
       }
       const configPath = this.adapterConfigPath(configName);
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, JSON.stringify(definition, null, 2), "utf8");
+      fs.writeFileSync(configPath, JSON.stringify(this.adapterConfigItem(definition), null, 2), "utf8");
+      const roleId = sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId;
+      if (roleId) {
+        groupedByRole.set(roleId, mergeNotificationRules(groupedByRole.get(roleId), definition.notificationRules));
+      }
+    }
+    for (const [roleId, rules] of groupedByRole.entries()) {
+      this.writePersonaRules(roleId, rules);
     }
     this.removeConfigFilesMissingFrom(activeConfigNames);
     return normalized;
+  }
+
+  private adapterConfigItem(definition: GatewayDefinition): Partial<GatewayDefinition> {
+    const {
+      notificationRules: _notificationRules,
+      roleNotificationRules: _roleNotificationRules,
+      roleRouteNames: _roleRouteNames,
+      routeProfiles: _routeProfiles,
+      dataDir: _dataDir,
+      ...adapterOnly
+    } = definition;
+    return adapterOnly;
   }
 }

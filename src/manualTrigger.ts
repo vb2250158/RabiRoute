@@ -1,4 +1,4 @@
-import { forwardMessageAndWait, type ForwardRouteKind } from "./forwarding.js";
+import { forwardMessageAndWait, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
 import { appendManualTriggerEvent, type ManualTriggerRecord } from "./history.js";
 
 export async function triggerManualRule(
@@ -7,7 +7,7 @@ export async function triggerManualRule(
   triggerName = triggerId,
   routeKind: ForwardRouteKind = "manual_trigger",
   triggerRuleId?: string
-): Promise<void> {
+): Promise<ForwardDeliveryResult> {
   const now = Math.floor(Date.now() / 1000);
   const record: ManualTriggerRecord = {
     time: now,
@@ -20,5 +20,5 @@ export async function triggerManualRule(
   };
 
   appendManualTriggerEvent(record);
-  await forwardMessageAndWait(routeKind, record, triggerRuleId ? { triggerRuleId } : {});
+  return forwardMessageAndWait(routeKind, record, triggerRuleId ? { triggerRuleId } : {});
 }

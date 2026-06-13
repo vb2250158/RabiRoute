@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   autoAssignGatewayPorts,
   collectGatewayPortClaims,
+  ensureDefaultPersonaRules,
   gatewayAdapterTypes,
+  isBuiltinRolePanelNotificationRule,
   messageAdapterPolicyFor,
   normalizeGatewayDefinition,
   normalizeGatewayNapCatConfig,
@@ -268,5 +270,43 @@ test("notification rules and escaped newlines are normalized", () => {
     windowEndTime: "19:00",
     timeOfDay: undefined,
     onceAt: undefined
+  });
+});
+
+test("persona rules always include the builtin role panel message rule", () => {
+  const rules = ensureDefaultPersonaRules([
+    { id: "direct", routeKinds: ["direct_at"], template: "hello" }
+  ]);
+
+  assert.deepEqual(rules.map(rule => rule.id), ["direct", "role-panel-message"]);
+  assert.equal(isBuiltinRolePanelNotificationRule(rules[1]), true);
+  assert.deepEqual(rules[1].routeKinds, ["role_panel_message"]);
+  assert.equal(rules[1].enabled, true);
+});
+
+test("legacy role panel persona rules are canonicalized", () => {
+  const rules = ensureDefaultPersonaRules([
+    {
+      id: "old-role-panel",
+      name: "  ",
+      enabled: false,
+      routeKinds: ["role_panel_message", "manual_trigger"],
+      targetGroupId: "10001",
+      regex: "hello",
+      template: "a\\nb",
+      schedules: [{ id: "unused", type: "interval", intervalSeconds: 30 }]
+    }
+  ]);
+
+  assert.equal(rules.length, 1);
+  assert.deepEqual(rules[0], {
+    id: "role-panel-message",
+    name: "角色面板消息",
+    enabled: true,
+    routeKinds: ["role_panel_message"],
+    targetGroupId: "",
+    regex: "",
+    schedules: undefined,
+    template: "a\nb"
   });
 });

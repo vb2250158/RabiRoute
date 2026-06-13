@@ -412,6 +412,7 @@ export function createNapCatAdapter(): MessageAdapter {
     type: "napcat",
     start() {
       const instances = config.napcatInstances.filter((instance) => instance.enabled);
+      const startedInstanceIds = new Set<string>();
       for (const instance of instances) {
         const activeSockets = new Set<object>();
         const server = new WebSocketServer({
@@ -515,6 +516,7 @@ export function createNapCatAdapter(): MessageAdapter {
       });
 
       server.on("listening", () => {
+        startedInstanceIds.add(instance.id);
         appendAdapterLog("napcat", {
           event: "listening",
           instanceId: instance.id,
@@ -533,7 +535,7 @@ export function createNapCatAdapter(): MessageAdapter {
         patchMessageAdapterStatus({
           type: "napcat",
           status: "running",
-          message: `NapCat / OneBot 消息适配端已启动：${instances.length} 个实例。`
+          message: `NapCat / OneBot 消息适配端已启动：${startedInstanceIds.size} 个实例。`
         });
         patchNapcatInstanceStatus(instance, {
           connected: false,

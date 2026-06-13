@@ -1087,6 +1087,37 @@ body::before {
   gap: 10px;
 }
 
+.remote-agent-device-select {
+  justify-content: space-between;
+  min-height: 48px;
+  text-transform: none;
+}
+
+.remote-agent-device-select .v-btn__content {
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.remote-agent-device-select-main {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-agent-device-menu {
+  min-width: min(545px, calc(100vw - 32px));
+}
+
+.field-hint {
+  margin-top: 4px;
+  color: rgba(var(--v-theme-on-surface), 0.62);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .scan-btn {
   cursor: pointer;
   opacity: 0.6;

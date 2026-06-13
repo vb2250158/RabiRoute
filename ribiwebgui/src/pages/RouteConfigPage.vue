@@ -25,6 +25,26 @@ const messageAdapterScan = ref({
   adapters: {} as Partial<Record<MessageAdapterType, MessageAdapterScanResult>>,
   loading: false
 });
+type RemoteAgentDeviceStatus = {
+  deviceId: string;
+  deviceName?: string;
+  agentType?: string;
+  os?: string;
+  osVersion?: string;
+  arch?: string;
+  declaredIp?: string;
+  observedIp?: string;
+  defaultCwd?: string;
+  defaultThreadName?: string;
+  connected?: boolean;
+  connectedAt?: string;
+  lastSeenAt?: string;
+  lastTaskAt?: string;
+};
+const remoteAgentDevices = ref<RemoteAgentDeviceStatus[]>([]);
+const remoteAgentDevicesLoading = ref(false);
+const remoteAgentDeviceError = ref("");
+const remoteAgentDeviceMenu = ref(false);
 const addingNapcatInstance = ref(false);
 const repairingNapcatAll = ref(false);
 const napcatAutoSteps = ref<Record<string, { ok?: boolean; message: string; steps: string[] }>>({});
@@ -142,6 +162,7 @@ watch(
 const adapterParamOpen = ref<Record<string, boolean>>({
   rolePanel: false,
   napcat: false,
+  remoteAgent: false,
   heartbeat: false,
   fennenote: false,
   xiaoai: false,
@@ -161,6 +182,13 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     note: "来自聊天软件或即时通信平台的入口。",
     choices: [
       { type: "napcat", title: "NapCat / OneBot", note: "接收 QQ 群聊和私聊实时消息", icon: "mdi-message-badge-outline" }
+    ]
+  },
+  {
+    title: "远端设备",
+    note: "连接远端 Agent 设备，让本机人格按需投递下游任务。",
+    choices: [
+      { type: "remoteAgent", title: "远端 Agent", note: "远端设备只运行独立 bridge，按参数声明实际 Agent 类型", icon: "mdi-lan-connect" }
     ]
   },
   {
@@ -206,6 +234,34 @@ const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || 
 const adapterErrors = (type: MessageAdapterType) => gateway.value ? adapterErrorsFor(type, gateway.value, runtime.value) : [];
 const visibleActiveAdapters = computed<MessageAdapterType[]>(() => [...new Set(["rolePanel" as MessageAdapterType, ...adapters.value])]);
 const activeAdapterCount = computed(() => visibleActiveAdapters.value.length);
+const selectedRemoteAgentDeviceId = computed({
+  get: () => gateway.value?.remoteAgentDefaultDeviceId || "",
+  set: (value: string | null) => {
+    if (!gateway.value) return;
+    gateway.value.remoteAgentDefaultDeviceId = String(value || "");
+    const selected = remoteAgentDevices.value.find(device => device.deviceId === gateway.value?.remoteAgentDefaultDeviceId);
+    if (selected?.defaultCwd && !gateway.value.remoteAgentDefaultCwd) gateway.value.remoteAgentDefaultCwd = selected.defaultCwd;
+    if (selected?.defaultThreadName && !gateway.value.remoteAgentDefaultThreadName) gateway.value.remoteAgentDefaultThreadName = selected.defaultThreadName;
+    store.touch();
+  }
+});
+const remoteAgentDeviceOptions = computed(() => {
+  const configuredId = gateway.value?.remoteAgentDefaultDeviceId?.trim();
+  const devices = [...remoteAgentDevices.value];
+  if (configuredId && !devices.some(device => device.deviceId === configuredId)) {
+    devices.push({ deviceId: configuredId, deviceName: `${configuredId}（未连接）`, connected: false });
+  }
+  return devices.map(device => ({
+    ...device,
+    label: remoteAgentDeviceTitle(device),
+    subtitle: remoteAgentDeviceSubtitle(device)
+  }));
+});
+const selectedRemoteAgentDevice = computed(() => remoteAgentDevices.value.find(device => device.deviceId === selectedRemoteAgentDeviceId.value));
+const selectedRemoteAgentDeviceLabel = computed(() => {
+  const option = remoteAgentDeviceOptions.value.find(device => device.deviceId === selectedRemoteAgentDeviceId.value);
+  return option?.label || "选择远端 Agent 设备";
+});
 const testingNapcatHealth = ref(false);
 const testingNapcatInstance = ref<Record<string, boolean>>({});
 const launchingNapcatInstance = ref<Record<string, boolean>>({});
@@ -286,7 +342,7 @@ function toggleAdapter(type: MessageAdapterType): void {
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "rolePanel" || type === "napcat" || type === "heartbeat" || isWebhookLikeAdapter(type);
+  return type === "rolePanel" || type === "napcat" || type === "remoteAgent" || type === "heartbeat" || isWebhookLikeAdapter(type);
 }
 
 function adapterLogEntries(type: MessageAdapterType): Array<Record<string, any>> {
@@ -341,6 +397,7 @@ function rawLogJson(entry: Record<string, any>): string {
 function toggleAdapterParams(type: MessageAdapterType): void {
   adapterParamOpen.value[type] = !adapterParamOpen.value[type];
   if (adapterParamOpen.value[type]) void runMessageAdapterScan();
+  if (adapterParamOpen.value[type] && type === "remoteAgent") void refreshRemoteAgentDevices();
 }
 
 function removeAdapter(type: MessageAdapterType): void {
@@ -354,9 +411,16 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "heartbeat", "fennenote", "xiaoai", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "remoteAgent", "heartbeat", "fennenote", "xiaoai", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
+
+watch(
+  () => [gateway.value?.id, adapterParamOpen.value.remoteAgent] as const,
+  ([id, open]) => {
+    if (id && open) void refreshRemoteAgentDevices();
+  }
+);
 
 function addAdapter(type: MessageAdapterType): void {
   if (!gateway.value) return;
@@ -365,6 +429,7 @@ function addAdapter(type: MessageAdapterType): void {
   applyAdapterDefaults(gateway.value);
   adapterParamOpen.value[type] = true;
   void runMessageAdapterScan();
+  if (type === "remoteAgent") void refreshRemoteAgentDevices();
   store.touch();
 }
 
@@ -746,7 +811,26 @@ function removeNapcatInstanceById(id: string): void {
 }
 
 function isConfiguredNapcatInstance(instance: NapCatInstance): boolean {
-  return ensureNapcatInstances().some(item => item.id === instance.id);
+  return ensureNapcatInstances().some(item => sameNapcatInstance(item as NapCatInstance & Record<string, any>, instance as NapCatInstance & Record<string, any>));
+}
+
+async function setNapcatInstanceEnabled(instance: NapCatInstance, value: boolean | null): Promise<void> {
+  const enabled = value === true;
+  const configured = ensureNapcatInstances().find(item => sameNapcatInstance(item as NapCatInstance & Record<string, any>, instance as NapCatInstance & Record<string, any>));
+  if (configured) {
+    configured.enabled = enabled;
+    instance.enabled = enabled;
+    syncPrimaryNapcatFromInstances();
+    store.touch();
+    await store.save();
+    return;
+  }
+
+  instance.enabled = enabled;
+  if (enabled) {
+    addDiscoveredNapcatInstance(instance);
+    await store.save();
+  }
 }
 
 function openExternalUrl(url: string | undefined): void {
@@ -823,6 +907,41 @@ function messageScanFor(type: MessageAdapterType): MessageAdapterScanResult | un
   return messageAdapterScan.value.adapters[type];
 }
 
+function remoteAgentDeviceTitle(device: RemoteAgentDeviceStatus): string {
+  const name = device.deviceName || device.deviceId;
+  return name === device.deviceId ? name : `${name} (${device.deviceId})`;
+}
+
+function remoteAgentDeviceSubtitle(device: RemoteAgentDeviceStatus): string {
+  const status = device.connected === false ? "未连接" : "在线";
+  const system = [device.os, device.osVersion, device.arch].filter(Boolean).join(" ");
+  const ip = device.observedIp || device.declaredIp || "";
+  return [status, device.agentType, system, ip].filter(Boolean).join(" · ");
+}
+
+function selectRemoteAgentDevice(deviceId: string): void {
+  selectedRemoteAgentDeviceId.value = deviceId;
+  remoteAgentDeviceMenu.value = false;
+}
+
+async function refreshRemoteAgentDevices(): Promise<void> {
+  if (remoteAgentDevicesLoading.value) return;
+  remoteAgentDevicesLoading.value = true;
+  remoteAgentDeviceError.value = "";
+  try {
+    const res = await fetch("/api/remote-agent/devices");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.code === -1) {
+      throw new Error(data.message || `HTTP ${res.status}`);
+    }
+    remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : [];
+  } catch (error: unknown) {
+    remoteAgentDeviceError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    remoteAgentDevicesLoading.value = false;
+  }
+}
+
 function requirementColor(requirement: { ok?: boolean }): string {
   if (requirement.ok === true) return "success";
   if (requirement.ok === false) return "warning";
@@ -863,6 +982,37 @@ function napcatRuntimeInstances(): Record<string, any>[] {
   if (Array.isArray(raw)) return raw;
   if (raw && typeof raw === "object") return Object.entries(raw).map(([id, value]) => ({ id, ...(value as Record<string, any>) }));
   return [];
+}
+
+function napcatInstanceSourceId(instance: Partial<NapCatInstance> & Record<string, any>): string {
+  return String(instance.sourceInstanceId || instance.instanceId || instance.id || "").trim();
+}
+
+function napcatInstanceScope(instance: Partial<NapCatInstance> & Record<string, any>): string {
+  return String(instance.routeId || instance.gatewayId || instance.configName || gateway.value?.id || "").trim();
+}
+
+function sameNapcatInstance(left: Partial<NapCatInstance> & Record<string, any>, right: Partial<NapCatInstance> & Record<string, any>): boolean {
+  const leftPort = Number(left.gatewayPort || left.port || left.wsPort || 0);
+  const rightPort = Number(right.gatewayPort || right.port || right.wsPort || 0);
+  if (leftPort > 0 && rightPort > 0 && leftPort === rightPort) return true;
+
+  const leftHttp = String(left.httpUrl || left.napcatHttpUrl || "").trim();
+  const rightHttp = String(right.httpUrl || right.napcatHttpUrl || "").trim();
+  if (leftHttp && rightHttp && leftHttp === rightHttp) return true;
+
+  const leftId = napcatInstanceSourceId(left);
+  const rightId = napcatInstanceSourceId(right);
+  if (!leftId || !rightId || leftId !== rightId) return false;
+
+  return napcatInstanceScope(left) === napcatInstanceScope(right);
+}
+
+function scopedRuntimeNapcatId(item: Record<string, any>, rawId: string, port: number): string {
+  const scope = napcatInstanceScope(item).replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^-+|-+$/g, "");
+  const id = rawId || `ws-${port || "unknown"}`;
+  if (!scope || scope === gateway.value?.id || scope === store.configNameFor(gateway.value as any)) return id;
+  return `${scope}-${id}`;
 }
 
 function napcatIdFromFile(file: string | undefined, fallback: string): string {
@@ -943,28 +1093,21 @@ function napcatAccountInstances(): NapCatInstance[] {
   const merged = [...configured];
   const pushIfMissing = (candidate: NapCatInstance) => {
     if (isIgnoredNapcatInstance(candidate)) return;
-    const id = String(candidate.id || "");
-    const port = Number(candidate.gatewayPort || 0);
-    const httpUrl = String(candidate.httpUrl || "");
-    const exists = merged.some(instance =>
-      (id && String(instance.id) === id) ||
-      (port && Number(instance.gatewayPort || 0) === port) ||
-      (httpUrl && String(instance.httpUrl || "") === httpUrl)
-    );
+    const exists = merged.some(instance => sameNapcatInstance(instance as NapCatInstance & Record<string, any>, candidate as NapCatInstance & Record<string, any>));
     if (!exists) merged.push(candidate);
   };
   for (const item of napcatRuntimeInstances()) {
-    const id = String(item.id || item.instanceId || item.name || item.botUserId || item.userId || item.selfId || "");
+    const sourceInstanceId = String(item.id || item.instanceId || item.name || item.botUserId || item.userId || item.selfId || "");
     const port = Number(item.gatewayPort || item.port || item.wsPort || 0);
-    const exists = merged.some(instance =>
-      (id && String(instance.id) === id) ||
-      (port && Number(instance.gatewayPort || 0) === port)
-    );
+    const exists = merged.some(instance => sameNapcatInstance(instance as NapCatInstance & Record<string, any>, item as Record<string, any>));
     if (exists) continue;
     const candidate = {
-      id: id || `runtime-${merged.length + 1}`,
+      id: scopedRuntimeNapcatId(item, sourceInstanceId, port) || `runtime-${merged.length + 1}`,
+      sourceInstanceId,
+      routeId: item.routeId,
+      configName: item.configName,
       name: item.name || item.instanceName || "运行中 NapCat",
-      enabled: item.enabled !== false,
+      enabled: false,
       gatewayPort: port || Number(gateway.value?.gatewayPort || 8790),
       httpUrl: item.httpUrl || item.napcatHttpUrl || gateway.value?.napcatHttpUrl || "http://127.0.0.1:3000",
       webuiUrl: item.webuiUrl || item.napcatWebuiUrl || gateway.value?.napcatWebuiUrl,
@@ -987,6 +1130,12 @@ function addDiscoveredNapcatInstance(instance: NapCatInstance): void {
   clearIgnoredNapcatInstance(instance);
   const clean = { ...instance } as NapCatInstance & Record<string, any>;
   delete clean.__discovered;
+  delete clean.sourceInstanceId;
+  delete clean.routeId;
+  delete clean.configName;
+  delete clean.botUserId;
+  delete clean.botNickname;
+  delete clean.connected;
   clean.enabled = true;
   clean.name = clean.name || `QQ ${configured.length + 1}`;
   clean.gatewayPort = Number(clean.gatewayPort || nextNapcatPort(Number(gateway.value?.gatewayPort || 8789) + 1));
@@ -1304,8 +1453,7 @@ function napcatRuntimeFor(instance: NapCatInstance): Record<string, any> {
   const id = String(instance.id || "");
   const port = Number(instance.gatewayPort || 0);
   const found = napcatRuntimeInstances().find(item =>
-    String(item.id || item.instanceId || "") === id ||
-    Number(item.gatewayPort || item.port || item.wsPort || 0) === port
+    sameNapcatInstance(instance as NapCatInstance & Record<string, any>, item as Record<string, any>)
   );
   if (found) return found;
   if (id === "default" || port === Number(gateway.value?.gatewayPort || 0)) return napcatState.value;
@@ -2565,8 +2713,7 @@ watch(
                                 density="compact"
                                 hide-details
                                 inset
-                                :disabled="!isConfiguredNapcatInstance(instance)"
-                                @update:model-value="touch"
+                                @update:model-value="value => void setNapcatInstanceEnabled(instance, value)"
                               />
                               <v-chip size="x-small" :color="napcatInstanceStatusColor(instance)" variant="tonal">
                                 {{ napcatInstanceStatusLabel(instance) }}
@@ -2913,6 +3060,79 @@ watch(
                         >
                           {{ formatLogTime(entry) }} · {{ entry.sender || entry.source || '角色面板' }} · {{ logPreview(entry) }}
                         </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else-if="choice.type === 'remoteAgent'" class="catalog-param-grid">
+                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
+                      远端 Agent 是下游 Agent 设备入口。远端机器不需要安装完整 RabiRoute，只运行 <code>plugin-adapters/remote-agent-rabiroute</code> bridge；本机人格会通过 Rabi API 发现设备并投递任务。
+                    </v-alert>
+                    <div class="full-span">
+                      <v-menu v-model="remoteAgentDeviceMenu" location="bottom start" :close-on-content-click="false">
+                        <template #activator="{ props }">
+                          <v-btn
+                            v-bind="props"
+                            class="remote-agent-device-select"
+                            variant="outlined"
+                            block
+                            append-icon="mdi-menu-down"
+                            :loading="remoteAgentDevicesLoading"
+                            @click="remoteAgentDeviceOptions.length ? undefined : refreshRemoteAgentDevices()"
+                          >
+                            <span class="remote-agent-device-select-main">{{ selectedRemoteAgentDeviceLabel }}</span>
+                          </v-btn>
+                        </template>
+                        <v-list class="remote-agent-device-menu" density="compact">
+                          <v-list-item
+                            v-for="device in remoteAgentDeviceOptions"
+                            :key="device.deviceId"
+                            prepend-icon="mdi-lan-connect"
+                            :title="device.label"
+                            :subtitle="device.subtitle"
+                            @click="selectRemoteAgentDevice(device.deviceId)"
+                          />
+                          <v-list-item
+                            v-if="remoteAgentDeviceOptions.length === 0"
+                            prepend-icon="mdi-lan-disconnect"
+                            title="没有在线远端 Agent 设备"
+                            subtitle="先在另一台设备运行 remote-agent-rabiroute bridge，再刷新。"
+                          />
+                        </v-list>
+                      </v-menu>
+                      <div class="field-hint">选择当前路由默认投递的远端设备；任务仍可在 API 请求里指定其他 deviceId。</div>
+                    </div>
+                    <v-alert v-if="remoteAgentDeviceError" class="full-span" type="warning" variant="tonal" density="compact">
+                      {{ remoteAgentDeviceError }}
+                    </v-alert>
+                    <div v-if="selectedRemoteAgentDevice" class="full-span">
+                      <div class="status-row"><span>选中设备</span><b>{{ remoteAgentDeviceTitle(selectedRemoteAgentDevice) }}</b></div>
+                      <div class="status-row"><span>Agent 类型</span><b>{{ selectedRemoteAgentDevice.agentType || "agent" }}</b></div>
+                      <div class="status-row"><span>系统</span><b>{{ [selectedRemoteAgentDevice.os, selectedRemoteAgentDevice.osVersion, selectedRemoteAgentDevice.arch].filter(Boolean).join(" ") || "-" }}</b></div>
+                      <div class="status-row"><span>IP</span><b>{{ selectedRemoteAgentDevice.observedIp || selectedRemoteAgentDevice.declaredIp || "-" }}</b></div>
+                      <div class="status-row"><span>默认 cwd</span><b>{{ selectedRemoteAgentDevice.defaultCwd || "-" }}</b></div>
+                      <div class="status-row"><span>默认线程</span><b>{{ selectedRemoteAgentDevice.defaultThreadName || "-" }}</b></div>
+                    </div>
+                    <div class="full-span">
+                      <div class="status-row"><span>设备发现 API</span><b>/api/remote-agent/devices</b></div>
+                      <div class="status-row"><span>任务投递 API</span><b>/api/remote-agent/tasks</b></div>
+                      <div class="status-row"><span>连接地址</span><b>{{ messageScanFor('remoteAgent')?.endpoints?.[0]?.url || 'ws://<this-host>:8790/api/remote-agent/connect' }}</b></div>
+                      <div class="status-row"><span>局域网发现</span><b>默认开启；设置 REMOTE_AGENT_DISCOVERABLE=0 可关闭</b></div>
+                      <div class="status-row"><span>在线状态</span><b :class="messageScanFor('remoteAgent')?.installed ? 'text-success' : 'text-warning'">{{ messageScanFor('remoteAgent')?.installed ? '已有设备连接' : '等待远端 bridge 连接' }}</b></div>
+                    </div>
+                    <div class="agent-action-bar full-span mt-2">
+                      <div class="agent-action-status">
+                        <span class="section-note">开启后，Agent prompt 会注入远端 Agent 设备 API。远端 bridge 通过参数声明 agentType，例如 codex。</span>
+                      </div>
+                      <div class="d-flex ga-2 flex-wrap">
+                        <v-btn size="small" variant="tonal" color="secondary" prepend-icon="mdi-refresh" :loading="remoteAgentDevicesLoading" @click="refreshRemoteAgentDevices">
+                          刷新设备
+                        </v-btn>
+                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText('/api/remote-agent/devices', '已复制远端 Agent 设备 API')">
+                          复制设备 API
+                        </v-btn>
+                        <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">
+                          打开日志
+                        </v-btn>
                       </div>
                     </div>
                   </div>

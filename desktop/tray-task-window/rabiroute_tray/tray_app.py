@@ -16,6 +16,7 @@ from .manager_client import ManagerClient, ManagerSnapshot
 from .role_context_repository import RoleContextRepository
 from .task_repository import PlanRepository
 from .task_window import TaskWindow
+from .windows_app_identity import apply_qt_app_metadata
 
 
 def run(
@@ -24,6 +25,7 @@ def run(
     manager_proc: "subprocess.Popen[bytes] | None" = None,
 ) -> int:
     app = QApplication(sys.argv)
+    apply_qt_app_metadata(app)
     lock = _app_lock(project_root)
     if not lock.tryLock(100):
         print(

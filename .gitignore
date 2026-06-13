@@ -8,6 +8,7 @@
 /recordings/
 /transcripts/
 /voice-cache/
+/.codex-logs/
 /gateways.json
 /RabiRoute-Tray.exe
 /.idea/

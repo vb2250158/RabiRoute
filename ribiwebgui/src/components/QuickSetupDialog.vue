@@ -46,6 +46,7 @@ const form = reactive({
 
 const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> = [
   { type: "napcat", title: "NapCat / OneBot", note: "QQ 群聊、私聊实时入口", icon: "mdi-message-badge-outline" },
+  { type: "remoteAgent", title: "远端 Agent", note: "下游 Agent 设备入口，支持局域网发现和任务投递", icon: "mdi-lan-connect" },
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
   { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "桌面语音笔记转写入口", icon: "mdi-note-edit-outline" },
   { type: "xiaoai", title: "小米音箱 / 小爱", note: "小爱音箱语音转写入口", icon: "mdi-speaker-wireless" },
@@ -836,6 +837,11 @@ async function apply() {
                         </v-btn>
                       </div>
                     </div>
+                  </template>
+                  <template v-if="form.adapters.includes('remoteAgent')">
+                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
+                      远端 Agent 是下游 Agent 设备入口；远端设备只运行独立 bridge。保存后在“消息适配器”页刷新在线设备并选择默认远端 Agent 设备。
+                    </v-alert>
                   </template>
                   <template v-for="webhookAdapter in selectedWebhookAdapters()" :key="webhookAdapter">
                     <v-text-field :model-value="webhookPortFor(webhookAdapter)" type="number" :label="`${adapterLabel(webhookAdapter)} 端口`" @update:model-value="value => setWebhookPort(webhookAdapter, value)" />

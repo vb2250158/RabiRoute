@@ -95,7 +95,57 @@ function planMemoryApiHint(roleId: unknown): string[] {
     `- 查看记忆：GET ${base}/memory、GET ${base}/memory/recent、GET ${base}/memory/recent/{memoryId}、GET ${base}/memory/consolidated、GET ${base}/memory/consolidated/{memoryId}`,
     `- 新增近期记忆：POST ${base}/memory/recent`,
     `- 更新指定近期记忆：PATCH ${base}/memory/recent/{memoryId}`,
-    "- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；关键词命中召回会刷新 viewedAt"
+    "- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；相关记忆进入处理前确认队列时会刷新 viewedAt"
+  ];
+}
+
+function remoteAgentApiHint(values: ForwardTemplateValues): string[] {
+  const managerPort = process.env.GATEWAY_MANAGER_PORT ?? "8790";
+  const baseUrl = `http://127.0.0.1:${managerPort}`;
+  const gatewayId = String(values.gatewayId || values.runtimeRouteId || "");
+  const replyContext = String(values.replyContextJson || "{}");
+  const defaultDeviceId = String(values.remoteAgentDefaultDeviceId || config.remoteAgentDefaultDeviceId || "").trim();
+  const defaultCwd = String(values.remoteAgentDefaultCwd || config.remoteAgentDefaultCwd || "").trim();
+  const defaultThreadName = String(values.remoteAgentDefaultThreadName || config.remoteAgentDefaultThreadName || "").trim();
+  return [
+    "远端 Agent 设备 API：",
+    `- 查看在线远端 Agent 设备：GET ${baseUrl}/api/remote-agent/devices`,
+    `- 投递远端任务：POST ${baseUrl}/api/remote-agent/tasks`,
+    defaultDeviceId ? `- 当前路由默认远端设备 deviceId：${defaultDeviceId}` : "",
+    defaultCwd ? `- 当前路由默认远端 cwd：${defaultCwd}` : "",
+    defaultThreadName ? `- 当前路由默认远端线程：${defaultThreadName}` : "",
+    "投递请求示例：",
+    JSON.stringify({
+      originGatewayId: gatewayId,
+      deviceId: defaultDeviceId || "<从 devices 里选择；如果当前路由已设置默认设备，也可省略>",
+      taskKind: "build-desktop",
+      cwd: defaultCwd || "<远端工作目录，可省略使用设备默认值>",
+      threadName: defaultThreadName || "<远端 Agent 线程名，可省略使用设备默认值>",
+      message: "请在远端执行任务，完成后按提示回传结果。",
+      originReplyContext: "__replyContextJson__"
+    }, null, 2).replace("\"__replyContextJson__\"", replyContext),
+    "远端结果会回传到本机 RabiRoute，并投递回当前本机人格线程；远端 Agent 不应直接回复 QQ。"
+  ];
+}
+
+function requiredReadTypeLabel(type: string): string {
+  if (type === "plan") return "计划";
+  if (type === "recent_memory") return "近期记忆";
+  if (type === "consolidated_memory") return "沉淀记忆";
+  return type;
+}
+
+function requiredReadLines(items: Array<{ id: string; title: string; type: string; endpoint: string; score: number }>): string[] {
+  if (items.length === 0) {
+    return [
+      "本次没有高相关必读项。仍需先扫一遍上方可见的进行中计划、近期记忆和命中召回索引；如发现与当前处理有关的条目，请先按 ID 查询内容再行动。"
+    ];
+  }
+  return [
+    "以下条目与当前消息高相关。回复、发布任务、更新计划、写入记忆或执行外部动作之前，必须先按 GET 路径读取每一项内容；不要只凭标题行动。",
+    "如果任一必读项无法读取或内容不足以确认，请说明上下文无法确认，或先向用户追问。",
+    "",
+    ...items.map((item) => `- ${item.id}：${item.title}（${requiredReadTypeLabel(item.type)}，score=${item.score}） GET ${item.endpoint}`)
   ];
 }
 
@@ -197,6 +247,9 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     gatewayId: process.env.GATEWAY_ID,
     targetGroupId: config.targetGroupId,
     agentRolePath: roleContext.rolePath,
+    remoteAgentDefaultDeviceId: config.remoteAgentDefaultDeviceId,
+    remoteAgentDefaultCwd: config.remoteAgentDefaultCwd,
+    remoteAgentDefaultThreadName: config.remoteAgentDefaultThreadName,
     agentRoleDir: roleContext.roleDir,
     plansDir: roleContext.roleDir ? path.join(roleContext.roleDir, "plans") : undefined,
     memoryDir: roleContext.roleDir ? path.join(roleContext.roleDir, "memory") : undefined,
@@ -255,6 +308,7 @@ function buildAgentMessage(
   const shouldAttachMemoryConsolidation = routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation";
   const knowledge = roleDir
     ? roleKnowledgeSnapshot(roleDir, String(values.message || ""), {
+        roleId: String(values.agentRoleId || ""),
         includePendingConsolidation: shouldAttachMemoryConsolidation,
         consolidationTrigger: shouldAttachMemoryConsolidation ? "manual" : undefined,
         forceConsolidation: shouldAttachMemoryConsolidation
@@ -263,6 +317,7 @@ function buildAgentMessage(
   const activePlanIndex = knowledge ? indexLines(knowledge.activePlans) : "- 暂无";
   const recentMemoryIndex = knowledge ? indexLines(knowledge.recentMemories) : "- 暂无";
   const matchedIndex = knowledge ? indexLines(knowledge.matchedItems) : "- 暂无";
+  const requiredReadIndex = knowledge ? requiredReadLines(knowledge.requiredReadItems) : requiredReadLines([]);
   const pendingConsolidation = knowledge?.pendingConsolidation;
   const pendingConsolidationLines = pendingConsolidation
     ? [
@@ -310,6 +365,7 @@ function buildAgentMessage(
       "命中召回：",
       matchedIndex
     ]),
+    section("处理前上下文确认", requiredReadIndex),
     section("日志", [
       optionalLine("群聊日志", values.groupLogPath),
       optionalLine("私聊日志", values.privateLogPath),
@@ -322,6 +378,9 @@ function buildAgentMessage(
       optionalLine("普通回复 API", values.replyApiUrl),
       optionalLine("当前回复上下文", values.replyContextJson)
     ]),
+    config.messageAdapterTypes.includes("remoteAgent")
+      ? section("远端 Agent 设备", remoteAgentApiHint(values))
+      : "",
     pendingConsolidation ? section("待整理记忆", pendingConsolidationLines) : "",
     userTemplateText.trim() ? section("用户模板补充", [userTemplateText.trim()]) : ""
   ];

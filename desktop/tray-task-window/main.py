@@ -7,6 +7,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from rabiroute_tray.windows_app_identity import configure_process_app_identity, ensure_start_menu_shortcut
+
 
 def _resolve_project_root() -> Path:
     """
@@ -57,6 +59,8 @@ def main() -> int:
     args = parser.parse_args()
 
     project_root = _resolve_project_root()
+    configure_process_app_identity()
+    ensure_start_menu_shortcut(project_root)
 
     # Frozen desktop entry auto-starts manager if it is not running.
     proc: "subprocess.Popen[bytes] | None" = None

@@ -26,6 +26,7 @@ a = Analysis(
         "rabiroute_tray.task_repository",
         "rabiroute_tray.task_window",
         "rabiroute_tray.tray_app",
+        "rabiroute_tray.windows_app_identity",
     ],
     hookspath=[],
     hooksconfig={},
@@ -56,5 +57,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version=str(tray_dir / "version_info.txt"),
     # icon=str(repo_root / "assets" / "rabiroute-icon.ico"),  # uncomment when .ico exists
 )

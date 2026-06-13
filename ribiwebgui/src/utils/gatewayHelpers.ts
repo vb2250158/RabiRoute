@@ -1,6 +1,9 @@
 import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, NotificationRule, NotificationScheduleDefinition, RuntimeStatus } from "../types";
 import {
+  defaultRolePanelNotificationRule,
+  ensureDefaultPersonaRules,
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
+  isBuiltinRolePanelNotificationRule,
   messageAdapterPolicyFor as sharedMessageAdapterPolicyFor,
   normalizeMessageAdapterPolicies,
   normalizeRuleDefinitions,
@@ -184,6 +187,7 @@ export function setMessageAdapterPolicy(gateway: GatewayDefinition, type: Messag
 
 export function adapterLabel(type: string): string {
   if (type === "napcat") return "NapCat / OneBot";
+  if (type === "remoteAgent") return "远端 Agent";
   if (type === "heartbeat") return "定时触发";
   if (type === "rolePanel") return "角色面板";
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
@@ -199,6 +203,14 @@ export function adapterRuntimeKey(type: string): string {
 
 export function isWebhookLikeAdapter(type: string): boolean {
   return type === "webhook" || type === "fennenote" || type === "xiaoai";
+}
+
+export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
+  return type === "napcat" || type === "heartbeat" || isWebhookLikeAdapter(type);
+}
+
+export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean {
+  return types.some(adapterNeedsGatewayRuntime);
 }
 
 export function adapterSourceAliases(type: string): string[] {
@@ -286,8 +298,7 @@ export function activeRoleKey(gateway: GatewayDefinition): string {
 }
 
 export function ensureActiveRoleRules(gateway: GatewayDefinition): NotificationRule[] {
-  if (!Array.isArray(gateway.notificationRules)) gateway.notificationRules = [];
-  return gateway.notificationRules;
+  return notificationRulesForGateway(gateway);
 }
 
 export function saveActiveRoleRules(_gateway: GatewayDefinition): void {
@@ -314,8 +325,16 @@ export function migrateLegacyHeartbeatSchedules(gateway: GatewayDefinition): voi
 }
 
 export function notificationRulesForGateway(gateway: GatewayDefinition): NotificationRule[] {
-  if (!Array.isArray(gateway.notificationRules)) gateway.notificationRules = [];
+  gateway.notificationRules = ensureDefaultPersonaRules(gateway.notificationRules);
   return gateway.notificationRules;
+}
+
+export function defaultRolePanelRule(): NotificationRule {
+  return defaultRolePanelNotificationRule();
+}
+
+export function isBuiltinRolePanelRule(rule: NotificationRule | null | undefined): boolean {
+  return isBuiltinRolePanelNotificationRule(rule);
 }
 
 export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
@@ -343,6 +362,12 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
         { title: "聊天事件", routeKinds: ["role_panel_message"] },
         { title: "手动事件", routeKinds: ["manual_trigger"] }
       ]
+    },
+    {
+      adapter: "remoteAgent",
+      title: "远端 Agent",
+      note: "远端 Agent 设备入口；本机人格可通过 Rabi API 把任务投递到远端设备。",
+      groups: [{ title: "远端任务结果", routeKinds: ["manual_trigger"] }]
     },
     {
       adapter: "fennenote",
@@ -403,6 +428,7 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
   const napcatState = gatewayStatus.napcat || {};
   const heartbeatState = gatewayStatus.heartbeat || {};
   const externalAdapterTypes = adapterTypes.filter(type => type !== "rolePanel");
+  const externalAdaptersNeedRuntime = externalAdapterTypes.some(adapterNeedsGatewayRuntime);
   const expectedRuntimeAdapters: MessageAdapterType[] = isMessageInputsDisabled(gateway) ? ["disabled"] : externalAdapterTypes;
   const runtimeAdapterTypes = isMessageInputsDisabled(gateway)
     ? [adapterState.type || "disabled"]
@@ -410,7 +436,7 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
       ? runtime.messageAdapters
       : [runtime.messageAdapterType || adapterState.type || "napcat"];
   const externalRuntimeAdapterTypes = runtimeAdapterTypes.filter(type => type !== "rolePanel");
-  const adapterPendingRestart = expectedRuntimeAdapters.join(",") !== externalRuntimeAdapterTypes.join(",");
+  const adapterPendingRestart = externalAdaptersNeedRuntime && expectedRuntimeAdapters.join(",") !== externalRuntimeAdapterTypes.join(",");
   const reasons: string[] = [];
   if (gateway.enabled === false || runtime.enabled === false) {
     return reasons;
@@ -418,7 +444,11 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
   if (isMessageInputsDisabled(gateway)) {
     return reasons;
   }
-  if (!runtime.running) reasons.push("RabiRoute 监听进程未运行。一个监听进程可以承载多个 NapCat/QQ 实例；请启动当前路由。");
+  if (!runtime.running && externalAdaptersNeedRuntime) {
+    reasons.push(externalAdapterTypes.includes("napcat")
+      ? "RabiRoute 监听进程未运行。一个监听进程可以承载多个 NapCat/QQ 实例；请启动当前路由。"
+      : "RabiRoute 监听进程未运行。当前消息端需要本地监听服务；请启动当前路由。");
+  }
   if (adapterPendingRestart) {
     reasons.push(`配置已变更但尚未重启：当前运行 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${expectedRuntimeAdapters.map(adapterLabel).join(" + ")}。`);
   }
@@ -446,8 +476,10 @@ export function adapterErrorsFor(type: MessageAdapterType, gateway: GatewayDefin
   if (gateway.enabled === false || runtime.enabled === false || isMessageInputsDisabled(gateway)) {
     return [];
   }
-  if (!runtime.running) {
-    reasons.push("RabiRoute 监听进程未运行。一个监听进程可以承载多个 NapCat/QQ 实例；请启动当前路由。");
+  if (!runtime.running && adapterNeedsGatewayRuntime(type)) {
+    reasons.push(type === "napcat"
+      ? "RabiRoute 监听进程未运行。一个监听进程可以承载多个 NapCat/QQ 实例；请启动当前路由。"
+      : "RabiRoute 监听进程未运行。当前消息端需要本地监听服务；请启动当前路由。");
     return reasons;
   }
   if (type === "napcat") {
@@ -521,7 +553,7 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     agentRoleId: roleId,
     agentRoleFile: "persona.md",
     agentAdapters: ["codex"],
-    notificationRules: []
+    notificationRules: [defaultRolePanelRule()]
   };
 }
 

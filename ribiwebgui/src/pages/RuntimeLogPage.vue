@@ -5,6 +5,7 @@ import {
   adapterConnectionReasons,
   adapterDefaultWebhookPath,
   adapterLabel,
+  adaptersNeedGatewayRuntime,
   agentConnectionReasons,
   gatewayAdapterTypes,
   isWebhookLikeAdapter,
@@ -16,6 +17,7 @@ const store = useGatewayStore();
 const gateway = computed(() => store.selectedGateway);
 const runtime = computed(() => store.selectedRuntime);
 const adapters = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value) : []);
+const needsGatewayRuntime = computed(() => adaptersNeedGatewayRuntime(adapters.value));
 const adapterReasons = computed(() => gateway.value ? adapterConnectionReasons(gateway.value, runtime.value, adapters.value) : []);
 const agentReasons = computed(() => gateway.value ? agentConnectionReasons(gateway.value, runtime.value) : []);
 const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {});
@@ -44,8 +46,9 @@ const diagnosisItems = computed(() => [
 ]);
 
 const adapterText = computed(() => {
-  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "已关闭";
-  if (gateway.value && isMessageInputsDisabled(gateway.value)) return "已禁用";
+  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "禁用中";
+  if (gateway.value && isMessageInputsDisabled(gateway.value)) return "禁用中";
+  if (!needsGatewayRuntime.value) return "启用中";
   if (!runtime.value.running) return "已停止";
   if (adapters.value.includes("napcat") && !napcatState.value.connected && napcatState.value.loginInfoError) return "NapCat 异常";
   if (adapters.value.includes("napcat") && !napcatState.value.connected) return "WS 未连接";
@@ -57,6 +60,14 @@ const adapterChipColor = computed(() => {
   if (gateway.value?.enabled === false || runtime.value.enabled === false || (gateway.value && isMessageInputsDisabled(gateway.value))) return "grey";
   return adapterReasons.value.length ? "error" : "success";
 });
+
+const runtimeText = computed(() => {
+  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "禁用中";
+  if (!needsGatewayRuntime.value) return "启用中";
+  return runtime.value.running ? "运行中" : "已停止";
+});
+
+const runtimeNote = computed(() => needsGatewayRuntime.value ? `PID ${runtime.value.pid || "-"}` : "无需独立子进程");
 
 function webhookAddress(type: string): string {
   const port = type === "fennenote"
@@ -158,8 +169,8 @@ async function deleteCurrentGateway(): Promise<void> {
       <div class="overview-grid">
         <v-card class="app-card glass-card stat-card">
           <div class="stat-label">运行状态</div>
-          <div class="stat-value">{{ runtime.running ? "运行中" : "已停止" }}</div>
-          <div class="stat-note">PID {{ runtime.pid || "-" }}</div>
+          <div class="stat-value">{{ runtimeText }}</div>
+          <div class="stat-note">{{ runtimeNote }}</div>
         </v-card>
         <v-card class="app-card glass-card stat-card">
           <div class="stat-label">消息端</div>

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { RouteProfile } from "../config.js";
 import type { GroupMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
@@ -42,6 +45,16 @@ function voiceTranscript(patch: Partial<VoiceTranscriptEventRecord> = {}): Voice
     source: "fennenote",
     ...patch
   };
+}
+
+function makeRoleDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-packet-role-"));
+}
+
+function writeRecentMemory(roleDir: string, memory: Record<string, unknown>): void {
+  const filePath = path.join(roleDir, "memory", "recent", `${memory.id}.json`);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(memory, null, 2), "utf8");
 }
 
 test("RouteDecision records matched rules and normalized route text", () => {
@@ -148,4 +161,39 @@ test("AgentPacket routes FenneNote voice transcript replies through FenneNote ou
   assert.equal(replyContext.outputPipeline, "fennenote");
   assert.equal(replyContext.replyToSource, false);
   assert.equal(packet.templateValues.promptOutputMode, "voice_short");
+});
+
+test("AgentPacket injects processing-time context confirmation protocol", () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-required",
+    title: "任务发布上下文",
+    content: "发布任务前需要先确认角色计划和近期记忆。",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    keywords: ["任务发布"]
+  });
+  const route = routeProfile({
+    notificationRules: [{
+      id: "direct",
+      name: "direct",
+      enabled: true,
+      routeKinds: ["direct_at"],
+      template: ""
+    }]
+  });
+  const decision = createRouteDecision(route, "direct_at", groupMessage({ rawMessage: "[CQ:at,qq=12345] 准备任务发布" }), {});
+  assert.ok(decision);
+
+  const packet = buildAgentPacket(decision, decision.matchedRules[0], {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: "",
+    dataDir: "data/route/main"
+  });
+
+  assert.match(packet.message, /\[处理前上下文确认\]/);
+  assert.match(packet.message, /回复、发布任务、更新计划、写入记忆或执行外部动作之前/);
+  assert.match(packet.message, /GET \/api\/roles\/Rabi\/memory\/recent\/memory-required/);
+  assert.match(packet.message, /\[近期记忆\] memory-required：任务发布上下文/);
 });

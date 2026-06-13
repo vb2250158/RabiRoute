@@ -4,6 +4,7 @@ import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
 import {
   appendCodexNotificationToDir,
+  appendAdapterLogToDir,
   appendGroupMessageToDir,
   appendHeartbeatEventToDir,
   appendManualTriggerEventToDir,
@@ -29,6 +30,40 @@ export type {
   ForwardRouteKind,
   ForwardTemplateValues
 } from "./routing/types.js";
+
+export type ForwardDeliveryStatus = "delivered" | "routed" | "missed" | "failed" | "skipped";
+export type ForwardDeliveryReason = "no_active_route_profile" | "no_matching_rule" | "low_signal_voice_transcript" | "no_agent_adapter";
+
+export type ForwardAdapterOutcome = {
+  routeId: string;
+  ruleId: string;
+  adapter: AgentAdapterType;
+  status: "delivered" | "failed";
+  error?: string;
+};
+
+export type ForwardRouteDeliveryResult = {
+  routeId: string;
+  routeName: string;
+  status: ForwardDeliveryStatus;
+  matchedRuleIds: string[];
+  matchedRuleCount: number;
+  sentPacketCount: number;
+  adapterOutcomes: ForwardAdapterOutcome[];
+  reason?: ForwardDeliveryReason;
+};
+
+export type ForwardDeliveryResult = {
+  routeKind: ForwardRouteKind;
+  messageId: string;
+  status: ForwardDeliveryStatus;
+  matchedRuleIds: string[];
+  matchedRuleCount: number;
+  sentPacketCount: number;
+  adapterOutcomes: ForwardAdapterOutcome[];
+  routes: ForwardRouteDeliveryResult[];
+  reason?: ForwardDeliveryReason;
+};
 
 function configuredAgentAdapters(): AgentAdapterType[] {
   if (config.agentAdapters.length > 0) {
@@ -67,8 +102,115 @@ function dispatchToAgentAdapter(type: AgentAdapterType, message: string): Promis
   return adapter.deliver(message);
 }
 
+async function deliverPacketToAgentAdapters(routeId: string, ruleId: string, message: string): Promise<ForwardAdapterOutcome[]> {
+  return Promise.all(configuredAgentAdapters().map(async (adapter) => {
+    try {
+      await dispatchToAgentAdapter(adapter, message);
+      return {
+        routeId,
+        ruleId,
+        adapter,
+        status: "delivered" as const
+      };
+    } catch (error) {
+      return {
+        routeId,
+        ruleId,
+        adapter,
+        status: "failed" as const,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }));
+}
+
 function activeRouteProfiles(): RouteProfile[] {
   return config.routeProfiles.filter((route) => route.enabled !== false);
+}
+
+function recordId(record: ForwardRecord): string {
+  return String(record.messageId ?? record.time ?? "unknown");
+}
+
+function previewMessage(record: ForwardRecord): string {
+  return record.rawMessage.replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function logRouteMiss(routeKind: ForwardRouteKind, record: ForwardRecord, reason: string, route?: RouteProfile): void {
+  const message = route
+    ? `No route rule matched routeKind=${routeKind} route=${route.id} rules=${route.notificationRules.length} messageId=${recordId(record)} message="${previewMessage(record)}"`
+    : `No active route profile for routeKind=${routeKind} messageId=${recordId(record)} message="${previewMessage(record)}"`;
+  appendAdapterLogToDir("router", {
+    event: "route_miss",
+    level: "warning",
+    message,
+    data: {
+      reason,
+      routeKind,
+      routeId: route?.id,
+      routeName: route?.name,
+      ruleCount: route?.notificationRules.length ?? 0,
+      messageId: record.messageId,
+      preview: previewMessage(record)
+    }
+  }, config.dataDir);
+  console.warn(message);
+}
+
+function routeResult(
+  route: RouteProfile,
+  status: ForwardDeliveryStatus,
+  patch: Partial<Omit<ForwardRouteDeliveryResult, "routeId" | "routeName" | "status">> = {}
+): ForwardRouteDeliveryResult {
+  const matchedRuleIds = patch.matchedRuleIds ?? [];
+  const adapterOutcomes = patch.adapterOutcomes ?? [];
+  return {
+    routeId: route.id,
+    routeName: route.name,
+    status,
+    matchedRuleIds,
+    matchedRuleCount: patch.matchedRuleCount ?? matchedRuleIds.length,
+    sentPacketCount: patch.sentPacketCount ?? 0,
+    adapterOutcomes,
+    reason: patch.reason
+  };
+}
+
+function summarizeDeliveryResult(routeKind: ForwardRouteKind, record: ForwardRecord, routes: ForwardRouteDeliveryResult[], fallbackReason?: ForwardDeliveryReason): ForwardDeliveryResult {
+  const adapterOutcomes = routes.flatMap((route) => route.adapterOutcomes);
+  const matchedRuleIds = routes.flatMap((route) => route.matchedRuleIds);
+  const sentPacketCount = routes.reduce((sum, route) => sum + route.sentPacketCount, 0);
+  const matchedRuleCount = routes.reduce((sum, route) => sum + route.matchedRuleCount, 0);
+  const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");
+  const delivered = adapterOutcomes.some((outcome) => outcome.status === "delivered");
+  const routed = routes.some((route) => route.status === "routed" || route.status === "delivered" || route.status === "failed");
+  const skipped = routes.length > 0 && routes.every((route) => route.status === "skipped");
+  const missed = routes.length === 0 || routes.every((route) => route.status === "missed" || route.status === "skipped");
+  const status: ForwardDeliveryStatus = failed
+    ? "failed"
+    : delivered
+      ? "delivered"
+      : routed
+        ? "routed"
+        : skipped
+          ? "skipped"
+          : missed
+            ? "missed"
+            : "routed";
+  const reasons = [...new Set(routes.map((route) => route.reason).filter((reason): reason is ForwardDeliveryReason => Boolean(reason)))];
+  const reason = fallbackReason ?? (reasons.length === 1 ? reasons[0] : undefined);
+
+  return {
+    routeKind,
+    messageId: recordId(record),
+    status,
+    matchedRuleIds,
+    matchedRuleCount,
+    sentPacketCount,
+    adapterOutcomes,
+    routes,
+    reason
+  };
 }
 
 function appendRecordToRoleDataDir(record: ForwardRecord, dataDir: string): void {
@@ -114,14 +256,15 @@ async function forwardMessageToRoute(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
-): Promise<void> {
+): Promise<ForwardRouteDeliveryResult> {
   if (routeKind === "voice_transcript" && isLowSignalVoiceTranscript(record)) {
-    return;
+    return routeResult(route, "skipped", { reason: "low_signal_voice_transcript" });
   }
 
   const decision = createRouteDecision(route, routeKind, record, extraValues);
   if (!decision) {
-    return;
+    logRouteMiss(routeKind, record, "no_matching_rule", route);
+    return routeResult(route, "missed", { reason: "no_matching_rule" });
   }
 
   const roleContext = rolePathsForRoute(route);
@@ -129,6 +272,8 @@ async function forwardMessageToRoute(
     appendRecordToRoleDataDir(record, roleContext.dataDir);
   }
 
+  const adapterOutcomes: ForwardAdapterOutcome[] = [];
+  let sentPacketCount = 0;
   for (const rule of decision.matchedRules) {
     const packet = buildAgentPacket(decision, rule, roleContext);
 
@@ -139,18 +284,35 @@ async function forwardMessageToRoute(
       text: packet.message
     }, roleContext.dataDir);
 
-    await Promise.all(configuredAgentAdapters().map((adapter) => dispatchToAgentAdapter(adapter, packet.message)));
+    sentPacketCount += 1;
+    adapterOutcomes.push(...await deliverPacketToAgentAdapters(route.id, rule.id, packet.message));
   }
+
+  const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");
+  const delivered = adapterOutcomes.some((outcome) => outcome.status === "delivered");
+  return routeResult(route, failed ? "failed" : delivered ? "delivered" : "routed", {
+    matchedRuleIds: decision.matchedRules.map((rule) => rule.id),
+    sentPacketCount,
+    adapterOutcomes,
+    reason: adapterOutcomes.length === 0 ? "no_agent_adapter" : undefined
+  });
 }
 
 export async function forwardMessageAndWait(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
-): Promise<void> {
-  for (const route of activeRouteProfiles()) {
-    await forwardMessageToRoute(route, routeKind, record, extraValues);
+): Promise<ForwardDeliveryResult> {
+  const routes = activeRouteProfiles();
+  if (routes.length === 0) {
+    logRouteMiss(routeKind, record, "no_active_route_profile");
+    return summarizeDeliveryResult(routeKind, record, [], "no_active_route_profile");
   }
+  const results: ForwardRouteDeliveryResult[] = [];
+  for (const route of routes) {
+    results.push(await forwardMessageToRoute(route, routeKind, record, extraValues));
+  }
+  return summarizeDeliveryResult(routeKind, record, results);
 }
 
 export function forwardMessage(

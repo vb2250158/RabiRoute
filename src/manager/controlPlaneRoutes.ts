@@ -32,6 +32,7 @@ import {
   scanWebhookEndpoint,
   scanXiaoAiEndpoint
 } from "../messageEndpoints/webhookLikeScans.js";
+import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../messageEndpoints/remoteAgentManager.js";
 import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
@@ -49,6 +50,18 @@ import {
   validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
   type MessageAdapterPolicies
 } from "../shared/gatewayConfigModel.js";
+import {
+  routeRuntimeParts,
+  sanitizeConfigName,
+  sanitizeRoleId
+} from "../shared/routeIdentity.js";
+import {
+  adapterConfigPath as resolveAdapterConfigPath,
+  roleFilePath,
+  roleFolderPath,
+  routeFolderPath,
+  personaConfigPath as resolvePersonaConfigPath
+} from "../shared/routePaths.js";
 import { ManagerConfigRepository } from "./configRepository.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
@@ -85,6 +98,9 @@ type GatewayDefinition = {
   xiaoaiWebhookPath?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
+  remoteAgentDefaultDeviceId?: string;
+  remoteAgentDefaultCwd?: string;
+  remoteAgentDefaultThreadName?: string;
   napcatHttpUrl?: string;
   napcatWebuiUrl?: string;
   napcatAccessToken?: string;
@@ -269,6 +285,8 @@ type MessageAdapterScanResult = {
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
+const managerHost = process.env.GATEWAY_MANAGER_HOST ?? "127.0.0.1";
+const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
 
 type ManagerConfig = { routeDir?: string; rolesDir?: string };
@@ -293,24 +311,41 @@ const packageJsonPath = path.join(rootDir, "package.json");
 const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
 const runtimes = new RuntimeRegistry();
 const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
+const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
+const remoteAgentHub = new RemoteAgentHub({
+  managerPort,
+  managerHost,
+  discoveryPort: Number(process.env.REMOTE_AGENT_DISCOVERY_PORT ?? "8798"),
+  token: process.env.REMOTE_AGENT_TOKEN,
+  getDefaultGatewayId: () => [...runtimes.values()][0]?.definition.id,
+  onTaskEvent: handleRemoteAgentTaskEvent
+});
 let watchedConfigSnapshot = "";
+
+function headerValue(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function isLoopbackRemoteAddress(value: string | undefined): boolean {
+  const address = (value || "").replace(/^::ffff:/, "");
+  return address === "::1" || address === "localhost" || address === "127.0.0.1" || address.startsWith("127.");
+}
+
+function remoteAgentRequestToken(request: http.IncomingMessage, requestUrl: URL): string {
+  const bearer = headerValue(request.headers.authorization).match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || "";
+  return requestUrl.searchParams.get("token")?.trim()
+    || headerValue(request.headers["x-remote-agent-token"]).trim()
+    || bearer;
+}
+
+function isRemoteAgentRequestAuthorized(request: http.IncomingMessage, requestUrl: URL): boolean {
+  if (isLoopbackRemoteAddress(request.socket.remoteAddress)) return true;
+  if (!remoteAgentToken) return false;
+  return remoteAgentRequestToken(request, requestUrl) === remoteAgentToken;
+}
 
 function definitionFingerprint(definition: GatewayDefinition): string {
   return JSON.stringify(definition);
-}
-
-function routeRuntimeParts(id: string): { roleId: string; configName: string } {
-  const [roleId, ...rest] = id.split("__");
-  if (rest.length === 0) {
-    return {
-      roleId: "",
-      configName: sanitizeRoleId(id) || "default"
-    };
-  }
-  return {
-    roleId: sanitizeRoleId(roleId) || id,
-    configName: sanitizeRoleId(rest.join("__")) || "default"
-  };
 }
 
 function ensureDataDirs(): void {
@@ -332,10 +367,7 @@ function readConfig(): GatewayConfigFile {
       continue;
     }
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
-    // adapterConfig.json is primary; fall back to personaConfig.json only when notificationRules is absent.
-    const personaConfig = (Array.isArray(raw.notificationRules) && raw.notificationRules.length > 0)
-      ? {}
-      : readRoleMessageConfigItem(raw.agentRoleId, configName);
+    const personaConfig = readRoleMessageConfigItem(raw.agentRoleId, configName);
     gateways.push({
       ...raw,
       ...personaConfig,
@@ -371,8 +403,8 @@ function removeGatewayConfig(id: string): void {
   const decodedId = decodeURIComponent(id);
   const runtime = runtimes.get(decodedId);
   const configName = runtime
-    ? sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName
-    : routeRuntimeParts(decodedId).configName || sanitizeRoleId(decodedId);
+    ? sanitizeConfigName(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName
+    : routeRuntimeParts(decodedId).configName || sanitizeConfigName(decodedId);
   if (!configName) {
     throw new Error(`Invalid gateway id: ${decodedId}`);
   }
@@ -397,7 +429,7 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
     const item = normalized.gateways[i];
     const rawItem = config.gateways[i];
     const roleId = sanitizeRoleId(item.agentRoleId) || routeRuntimeParts(item.id).roleId;
-    const configName = sanitizeRoleId(item.configName) || routeRuntimeParts(item.id).configName;
+    const configName = sanitizeConfigName(item.configName) || routeRuntimeParts(item.id).configName;
     activeConfigNames.add(configName);
     grouped.set(roleId, [...(grouped.get(roleId) ?? []), item]);
     // Rename data dir if configName changed (look up existing runtime by original/raw id)
@@ -436,7 +468,7 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
 function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   return sharedNormalizeGatewayDefinition(definition, {
     managerPort,
-    routeDataDir: (configName) => path.relative(rootDir, path.join(routeRoot, configName)).replace(/\\/g, "/"),
+    routeDataDir: (configName) => path.relative(rootDir, routeFolderPath(routeRoot, configName)).replace(/\\/g, "/"),
     rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/"),
     normalizeAgentAdapters: (adapters) => normalizeAgentAdapters(adapters ?? []),
     normalizePipeline: (pipeline) => normalizePipelineDefinition(pipeline) as GatewayDefinition["pipeline"]
@@ -446,7 +478,7 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
 function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
   return unique.length > 0 ? unique : ["napcat"];
 }
@@ -524,19 +556,11 @@ function assertValidPort(value: unknown, label: string): void {
 }
 
 function personaConfigPath(roleId: string): string {
-  const safeRoleId = sanitizeRoleId(roleId);
-  if (!safeRoleId) {
-    throw new Error("Missing role folder name");
-  }
-  return path.join(rolesRoot, safeRoleId, "personaConfig.json");
+  return resolvePersonaConfigPath(rolesRoot, roleId);
 }
 
 function adapterConfigPath(configName: string): string {
-  const safeConfigName = sanitizeRoleId(configName);
-  if (!safeConfigName) {
-    throw new Error("Missing route folder name");
-  }
-  return path.join(routeRoot, safeConfigName, "adapterConfig.json");
+  return resolveAdapterConfigPath(routeRoot, configName);
 }
 
 function definitionUsesNapcat(definition: GatewayDefinition): boolean {
@@ -546,7 +570,7 @@ function definitionUsesNapcat(definition: GatewayDefinition): boolean {
 function adapterConfigItem(definition: GatewayDefinition): Record<string, unknown> {
   const usesNapcat = definitionUsesNapcat(definition);
   return {
-    configName: sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName,
+    configName: sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName,
     name: definition.name,
     routeName: definition.routeName,
     enabled: definition.enabled !== false,
@@ -571,6 +595,9 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
     heartbeatIntervalSeconds: definition.heartbeatIntervalSeconds,
     heartbeatMessage: definition.heartbeatMessage,
+    remoteAgentDefaultDeviceId: definition.remoteAgentDefaultDeviceId,
+    remoteAgentDefaultCwd: definition.remoteAgentDefaultCwd,
+    remoteAgentDefaultThreadName: definition.remoteAgentDefaultThreadName,
     agentModel: definition.agentModel,
     codexThreadName: definition.codexThreadName,
     codexCwd: definition.codexCwd,
@@ -591,7 +618,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
 }
 
 function writeAdapterConfigFile(definition: GatewayDefinition): void {
-  const configName = sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName;
+  const configName = sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName;
   const configPath = adapterConfigPath(configName);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, JSON.stringify(adapterConfigItem(definition), null, 2), "utf8");
@@ -774,24 +801,7 @@ async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promis
 }
 
 function readRoleMessageConfigShared(roleId: string | undefined): Partial<GatewayDefinition> {
-  const safeRoleId = sanitizeRoleId(roleId);
-  if (!safeRoleId) return {};
-  const configPath = personaConfigPath(safeRoleId);
-  if (!fs.existsSync(configPath)) return {};
-  const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
-
-  // New flat format: { notificationRules: [...], routeVariables: {} }
-  if (Array.isArray(parsed.notificationRules)) {
-    return { notificationRules: parsed.notificationRules as GatewayDefinition["notificationRules"] };
-  }
-
-  // Legacy per-configName format: pick the entry with the most rules as the shared source
-  const configs: unknown[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed.configs) ? parsed.configs as unknown[] : [];
-  const best = configs
-    .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
-    .sort((a, b) => ((b.notificationRules as unknown[])?.length ?? 0) - ((a.notificationRules as unknown[])?.length ?? 0))[0];
-  if (!best) return {};
-  return { notificationRules: best.notificationRules as GatewayDefinition["notificationRules"] };
+  return configRepository.readRoleMessageConfig(roleId) as Partial<GatewayDefinition>;
 }
 
 function readRoleMessageConfigItem(roleId: string | undefined, _configName: string): Partial<GatewayDefinition> {
@@ -799,23 +809,16 @@ function readRoleMessageConfigItem(roleId: string | undefined, _configName: stri
 }
 
 function writePersonaConfigFile(roleId: string, items: GatewayDefinition[]): void {
-  const configPath = personaConfigPath(roleId);
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
   // All gateways sharing this persona use the same rules; pick the first with rules, or fallback to first item
   const source = items.find(item => Array.isArray(item.notificationRules) && item.notificationRules.length > 0) ?? items[0];
-  fs.writeFileSync(configPath, JSON.stringify({
-    notificationRules: source?.notificationRules ?? []
-  }, null, 2), "utf8");
+  configRepository.writePersonaRules(roleId, source?.notificationRules);
 }
 
 function ensurePersonaConfigFile(roleId: string): string {
   const configPath = personaConfigPath(roleId);
   if (!fs.existsSync(configPath)) {
     const safeRoleId = sanitizeRoleId(roleId);
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify({
-      notificationRules: []
-    }, null, 2), "utf8");
+    configRepository.writePersonaRules(safeRoleId, []);
   }
 
   return configPath;
@@ -854,7 +857,7 @@ function openConfigFilePayload(type: string | null, gatewayId: string | null, ro
       throw new Error("请先选择一个路由人格，再打开 persona.md。");
     }
     const roleFileName = runtime?.definition.agentRoleFile ?? "persona.md";
-    const rolePath = path.join(rolesRoot, safeRoleId, roleFileName);
+    const rolePath = roleFilePath(rolesRoot, safeRoleId, roleFileName);
     if (!fs.existsSync(rolePath)) {
       fs.mkdirSync(path.dirname(rolePath), { recursive: true });
       fs.writeFileSync(rolePath, "", "utf8");
@@ -890,7 +893,7 @@ function openConfigFilePayload(type: string | null, gatewayId: string | null, ro
     return { code: 0, data: { path: routeRoot } };
   }
 
-  const configName = sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName;
+  const configName = sanitizeConfigName(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName;
   const configPath = adapterConfigPath(configName);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   if (!fs.existsSync(configPath)) {
@@ -899,11 +902,6 @@ function openConfigFilePayload(type: string | null, gatewayId: string | null, ro
   const targetPath = type === "route-folder" ? path.dirname(configPath) : configPath;
   openFileWithDefaultApp(targetPath);
   return { code: 0, data: { path: targetPath } };
-}
-
-function sanitizeRoleId(raw: string | undefined): string {
-  const value = raw?.trim() ?? "";
-  return /^[\p{L}\p{N}_-]+$/u.test(value) ? value : "";
 }
 
 function loadRuntimes(): void {
@@ -1045,8 +1043,8 @@ function resolveWingetCopilot(): string | null {
 
 function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
   const parts = routeRuntimeParts(definition.id);
-  const configName = sanitizeRoleId(definition.configName) || parts.configName;
-  const routeDataDir = path.relative(rootDir, path.join(routeRoot, configName)).replace(/\\/g, "/");
+  const configName = sanitizeConfigName(definition.configName) || parts.configName;
+  const routeDataDir = path.relative(rootDir, routeFolderPath(routeRoot, configName)).replace(/\\/g, "/");
   const routeRolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
   const activeAdapters = sharedGatewayAdapterTypes(definition);
   const runtimeAdapters = activeAdapters.length > 0 ? activeAdapters : ["disabled" as MessageAdapterType];
@@ -1062,6 +1060,9 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
     HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
+    REMOTE_AGENT_DEFAULT_DEVICE_ID: definition.remoteAgentDefaultDeviceId?.trim() || "",
+    REMOTE_AGENT_DEFAULT_CWD: definition.remoteAgentDefaultCwd?.trim() || "",
+    REMOTE_AGENT_DEFAULT_THREAD_NAME: definition.remoteAgentDefaultThreadName?.trim() || "",
     NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
     NAPCAT_WEBUI_URL: definition.napcatWebuiUrl ?? process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
     NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
@@ -1185,8 +1186,8 @@ function stopAllGateways(): void {
 
 function dataDirFor(definition: GatewayDefinition): string {
   const parts = routeRuntimeParts(definition.id);
-  const configName = sanitizeRoleId(definition.configName) || parts.configName;
-  return path.resolve(routeRoot, configName);
+  const configName = sanitizeConfigName(definition.configName) || parts.configName;
+  return routeFolderPath(routeRoot, configName);
 }
 
 function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
@@ -1201,12 +1202,12 @@ function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
         continue;
       }
 
-      const roleDir = path.join(rolesDir, entry.name);
+      const roleDir = roleFolderPath(rolesDir, entry.name);
       const markdownFiles = fs.readdirSync(roleDir)
         .filter((file) => file.toLowerCase().endsWith(".md"))
         .sort((left, right) => left.localeCompare(right));
       const preferredFile = markdownFiles.includes(roleFileName) ? roleFileName : markdownFiles[0] ?? roleFileName;
-      const rolePath = path.join(roleDir, preferredFile);
+      const rolePath = roleFilePath(rolesDir, entry.name, preferredFile);
       let roleContent = "";
       let roleError = "";
       try {
@@ -1225,8 +1226,8 @@ function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
     }
   }
 
-  const selectedDir = selectedRoleId ? path.join(rolesDir, selectedRoleId) : "";
-  const selectedRolePath = selectedDir ? path.join(selectedDir, roleFileName) : "";
+  const selectedDir = selectedRoleId ? roleFolderPath(rolesDir, selectedRoleId) : "";
+  const selectedRolePath = selectedRoleId ? roleFilePath(rolesDir, selectedRoleId, roleFileName) : "";
   let selectedRoleContent = "";
   let selectedRoleError = "";
   if (selectedRolePath) {
@@ -1411,7 +1412,7 @@ function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType
   const normalized = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
   const url = String(callback?.url || `http://127.0.0.1:${port}${normalized}`);
   return {
-    label: `${sanitizeRoleId(definition.configName) || routeRuntimeParts(definition.id).configName} 回调入口`,
+    label: `${sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName} 回调入口`,
     url,
     healthy: Boolean(runtime.process && callback)
   };
@@ -1564,6 +1565,7 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
 
   return {
     napcat,
+    remoteAgent: remoteAgentHub.localScanResult(),
     heartbeat: {
       type: "heartbeat",
       label: "定时触发",
@@ -1771,6 +1773,94 @@ function readGatewayStatus(definition: GatewayDefinition): Record<string, unknow
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function napcatStatusRows(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) {
+    return value.filter(isRecord);
+  }
+  if (isRecord(value)) {
+    const rows: Array<Record<string, unknown>> = [];
+    for (const [id, item] of Object.entries(value)) {
+      if (isRecord(item)) {
+        rows.push({
+          id,
+          ...item
+        });
+      }
+    }
+    return rows;
+  }
+  return [];
+}
+
+function collectStartedNapcatInstances(): Array<Record<string, unknown>> {
+  const rows: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+
+  for (const runtime of runtimes.values()) {
+    if (!runtime.process || !definitionUsesNapcat(runtime.definition)) {
+      continue;
+    }
+
+    const configName = sanitizeConfigName(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName;
+    const configuredInstances = runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition);
+    const status = readGatewayStatus(runtime.definition);
+    const statusInstances = napcatStatusRows(status.napcatInstances);
+    const sourceRows = statusInstances.length > 0
+      ? statusInstances
+      : napcatStatusRows(status.napcat ? { default: status.napcat } : {});
+
+    for (const row of sourceRows) {
+      const rowId = String(row.id || row.instanceId || "default");
+      const rowPort = Number(row.gatewayPort || row.port || row.wsPort || 0);
+      const configured = configuredInstances.find((instance) =>
+        String(instance.id) === rowId || (rowPort > 0 && Number(instance.gatewayPort) === rowPort)
+      );
+      const gatewayPort = Number(row.gatewayPort || configured?.gatewayPort || runtime.definition.gatewayPort || 0);
+      const key = [
+        runtime.definition.id,
+        rowId,
+        gatewayPort || "",
+        row.httpUrl || configured?.httpUrl || ""
+      ].join(":");
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      rows.push({
+        ...configured,
+        ...row,
+        id: rowId,
+        name: row.name || configured?.name || rowId,
+        enabled: configured?.enabled !== false,
+        gatewayPort,
+        httpUrl: row.httpUrl || configured?.httpUrl || runtime.definition.napcatHttpUrl,
+        webuiUrl: row.webuiUrl || configured?.webuiUrl || runtime.definition.napcatWebuiUrl,
+        routeId: runtime.definition.id,
+        routeName: runtime.definition.name || runtime.definition.routeName || configName,
+        configName,
+        started: true,
+        running: true
+      });
+    }
+  }
+
+  return rows;
+}
+
+function gatewayStatusForRuntime(runtime: GatewayRuntime, startedNapcatInstances = collectStartedNapcatInstances()): Record<string, unknown> {
+  const status = readGatewayStatus(runtime.definition);
+  return {
+    ...status,
+    napcatInstances: startedNapcatInstances,
+    napcatInstanceCount: startedNapcatInstances.length,
+    napcatStartedInstanceCount: startedNapcatInstances.length
+  };
+}
+
 function readJsonlTail(filePath: string, limit = 8): Array<Record<string, unknown>> {
   if (!fs.existsSync(filePath)) {
     return [];
@@ -1802,7 +1892,7 @@ function messageFileCandidateDirs(definition: GatewayDefinition): string[] {
   const roleId = sanitizeRoleId(definition.agentRoleId);
   const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
   if (roleId) {
-    dirs.add(path.join(rolesDir, roleId));
+    dirs.add(roleFolderPath(rolesDir, roleId));
   }
   for (const profile of definition.routeProfiles ?? []) {
     if (profile.dataDir) {
@@ -1810,7 +1900,7 @@ function messageFileCandidateDirs(definition: GatewayDefinition): string[] {
     }
     const profileRole = sanitizeRoleId(profile.agentRoleId);
     if (profileRole) {
-      dirs.add(path.join(rolesDir, profileRole));
+      dirs.add(roleFolderPath(rolesDir, profileRole));
     }
   }
   return [...dirs];
@@ -1984,10 +2074,11 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
 
 function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
   const usesNapcat = definitionUsesNapcat(runtime.definition);
+  const gatewayStatus = gatewayStatusForRuntime(runtime);
   return {
     id: runtime.definition.id,
     name: runtime.definition.name,
-    configName: sanitizeRoleId(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName,
+    configName: sanitizeConfigName(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName,
     enabled: runtime.definition.enabled,
     messageAdapterType: runtime.definition.messageAdapterType ?? "napcat",
     messageAdapters: runtime.definition.messageAdapters ?? [runtime.definition.messageAdapterType ?? "napcat"],
@@ -2006,6 +2097,9 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     xiaoaiWebhookPath: runtime.definition.xiaoaiWebhookPath,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
     heartbeatMessage: runtime.definition.heartbeatMessage ?? "",
+    remoteAgentDefaultDeviceId: runtime.definition.remoteAgentDefaultDeviceId ?? "",
+    remoteAgentDefaultCwd: runtime.definition.remoteAgentDefaultCwd ?? "",
+    remoteAgentDefaultThreadName: runtime.definition.remoteAgentDefaultThreadName ?? "",
     napcatHttpUrl: runtime.definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
     napcatWebuiUrl: runtime.definition.napcatWebuiUrl ?? "http://127.0.0.1:6099/webui",
     napcatAccessToken: runtime.definition.napcatAccessToken ?? "",
@@ -2046,7 +2140,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     startedAt: runtime.startedAt,
     stoppedAt: runtime.stoppedAt,
     lastExit: runtime.lastExit,
-    gatewayStatus: readGatewayStatus(runtime.definition),
+    gatewayStatus,
     adapterLogs: readAdapterLogs(runtime.definition),
     messageFiles: readMessageFiles(runtime.definition),
     agentStates: readAgentStates(runtime.definition),
@@ -2149,7 +2243,7 @@ function normalizeManualRouteKind(value: unknown): ForwardRouteKind {
 function roleDirForDefinition(definition: GatewayDefinition): string {
   const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
   const roleId = sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId || "Rabi";
-  return path.join(rolesDir, roleId);
+  return roleFolderPath(rolesDir, roleId);
 }
 
 function roleIdForDefinition(definition: GatewayDefinition): string {
@@ -2198,6 +2292,143 @@ function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: stri
   });
 }
 
+function triggerGatewayDirectAgentMessage(id: string, message: string): Promise<void> {
+  const runtime = runtimes.get(id);
+  if (!runtime) {
+    throw new Error(`Gateway not found: ${id}`);
+  }
+  const args = [`--direct-agent-message=${encodeURIComponent(message)}`];
+  const command = childCommand(args);
+  appendLog(runtime, "remote agent result requested direct delivery");
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+    child.stdout.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `remote agent result: ${line}`);
+      }
+    });
+    child.stderr.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `remote agent result error: ${line}`);
+      }
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        appendLog(runtime, "remote agent result delivered to local agent");
+        resolve();
+        return;
+      }
+      reject(new Error(`remote agent result delivery failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
+    });
+  });
+}
+
+function remoteAgentResultMessage(task: RemoteAgentTask, event: RemoteAgentTaskEvent): string {
+  const lines = [
+    "[远端 Agent 任务结果]",
+    `任务 ID：${task.taskId}`,
+    `远端设备：${task.deviceId}`,
+    `任务类型：${task.taskKind}`,
+    `状态：${event.status ?? task.status}`,
+    event.summary ? `摘要：${event.summary}` : "",
+    event.message ? `消息：${event.message}` : "",
+    event.artifactPath ? `产物路径：${event.artifactPath}` : "",
+    event.logPath ? `日志路径：${event.logPath}` : "",
+    event.error ? `错误：${event.error}` : "",
+    "",
+    "原始任务：",
+    task.message
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+async function handleRemoteAgentTaskEvent(task: RemoteAgentTask, event: RemoteAgentTaskEvent): Promise<void> {
+  const runtime = runtimes.get(task.originGatewayId);
+  if (runtime) {
+    appendLog(runtime, `remote agent task ${task.taskId} ${event.status ?? task.status}: ${event.summary || event.message || event.error || ""}`.trim());
+  }
+  if (event.status === "completed" || event.status === "failed") {
+    if (!runtime) {
+      console.warn(`Remote Agent task ${task.taskId} finished but origin gateway was not found: ${task.originGatewayId}`);
+      return;
+    }
+    await triggerGatewayDirectAgentMessage(task.originGatewayId, remoteAgentResultMessage(task, event));
+  }
+}
+
+function remoteAgentTaskWithGatewayDefaults(request: RemoteAgentTaskRequest): RemoteAgentTaskRequest {
+  if (request.deviceId && request.cwd && request.threadName) {
+    return request;
+  }
+  const originGatewayId = String(
+    request.originGatewayId
+    || request.gatewayId
+    || request.originReplyContext?.gatewayId
+    || [...runtimes.values()][0]?.definition.id
+    || ""
+  ).trim();
+  const definition = originGatewayId ? runtimes.get(originGatewayId)?.definition : undefined;
+  if (!definition) {
+    return request;
+  }
+  return {
+    ...request,
+    deviceId: request.deviceId || definition.remoteAgentDefaultDeviceId,
+    cwd: request.cwd || definition.remoteAgentDefaultCwd,
+    threadName: request.threadName || definition.remoteAgentDefaultThreadName
+  };
+}
+
+function handleRemoteAgentApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  if (requestUrl.pathname.startsWith("/api/remote-agent/") && !isRemoteAgentRequestAuthorized(request, requestUrl)) {
+    jsonResponse(response, 401, {
+      code: -1,
+      message: remoteAgentToken
+        ? "Remote Agent API requires a valid token for non-local requests."
+        : "Remote Agent API requires REMOTE_AGENT_TOKEN before accepting non-local requests."
+    });
+    return true;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/remote-agent/devices") {
+    jsonResponse(response, 200, {
+      code: 0,
+      devices: remoteAgentHub.listDevices(),
+      tasks: remoteAgentHub.listTasks(20)
+    });
+    return true;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/remote-agent/tasks") {
+    jsonResponse(response, 200, { code: 0, tasks: remoteAgentHub.listTasks(100) });
+    return true;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/tasks") {
+    void readJsonBody<RemoteAgentTaskRequest>(request)
+      .then((body) => remoteAgentHub.createTask(remoteAgentTaskWithGatewayDefaults(body)))
+      .then((task) => jsonResponse(response, 202, { code: 0, task }))
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/task-events") {
+    void readJsonBody<RemoteAgentTaskEvent>(request)
+      .then((event) => remoteAgentHub.receiveTaskEvent(event))
+      .then((task) => jsonResponse(response, 202, { code: 0, task }))
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
+  return false;
+}
+
 function handleRolePanelApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
   const messageListMatch = requestUrl.pathname.match(/^\/api\/roles\/([^/]+)\/role-panel\/messages$/);
   if (request.method === "GET" && messageListMatch) {
@@ -2207,7 +2438,7 @@ function handleRolePanelApi(request: http.IncomingMessage, requestUrl: URL, resp
       return true;
     }
     const limit = Number(requestUrl.searchParams.get("limit") || "120");
-    const roleDir = path.join(rolesRoot, roleId);
+    const roleDir = roleFolderPath(rolesRoot, roleId);
     jsonResponse(response, 200, {
       code: 0,
       roleId,
@@ -2268,7 +2499,7 @@ function roleDirForApi(roleId: string): string {
   if (!safeRoleId) {
     throw new Error("Missing role id.");
   }
-  return path.join(rolesRoot, safeRoleId);
+  return roleFolderPath(rolesRoot, safeRoleId);
 }
 
 function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
@@ -2668,6 +2899,9 @@ export function startManager(): void {
         return;
       }
       if (request.method === "POST" && handleAgentStateReport(request, requestUrl.pathname, response)) {
+        return;
+      }
+      if (handleRemoteAgentApi(request, requestUrl, response)) {
         return;
       }
       if (handleRolePanelApi(request, requestUrl, response)) {
@@ -3076,8 +3310,15 @@ export function startManager(): void {
     }
   });
 
-  server.listen(managerPort, "127.0.0.1", () => {
-    console.log(`gateway-manager listening on http://127.0.0.1:${managerPort}`);
+  remoteAgentHub.attach(server);
+  if (remoteAgentDiscoverable) {
+    remoteAgentHub.startDiscoveryResponder();
+  } else {
+    console.log("Remote Agent LAN discovery responder disabled by REMOTE_AGENT_DISCOVERABLE=0");
+  }
+
+  server.listen(managerPort, managerHost, () => {
+    console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
     console.log(`roles: ${rolesRoot}`);
     console.log(`route: ${routeRoot}`);
   });

@@ -3,10 +3,12 @@ import { computed, ref } from "vue";
 import type { AgentAdapterType, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, RuntimeStatus } from "../types";
 import {
   applyAdapterDefaults,
+  adaptersNeedGatewayRuntime,
   configNameFor,
   createDefaultGateway,
   ensureActiveRoleRules,
   gatewayAdapterTypes,
+  isBuiltinRolePanelRule,
   isQuickSetupNeeded,
   notificationRulesForGateway,
   normalizeRule,
@@ -216,7 +218,12 @@ export const useGatewayStore = defineStore("gateway", () => {
     return managerRows.value.find(row => row.id === gateway.id) || {} as RuntimeStatus;
   });
 
-  const runningCount = computed(() => gateways.value.filter(gateway => runtimeFor(gateway.id).running).length);
+  const runningCount = computed(() => gateways.value.filter(gateway => {
+    const runtime = runtimeFor(gateway.id);
+    if (gateway.enabled === false || runtime.enabled === false) return false;
+    if (!adaptersNeedGatewayRuntime(gatewayAdapterTypes(gateway))) return true;
+    return runtime.running;
+  }).length);
   const quickSetupNeeded = computed(() => isQuickSetupNeeded(gateways.value));
 
   function runtimeFor(id: string): RuntimeStatus {
@@ -513,6 +520,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     const gateway = selectedGateway.value;
     if (!gateway) return;
     const rules = notificationRulesForGateway(gateway);
+    if (isBuiltinRolePanelRule(rules[ruleIndex])) return;
     rules.splice(ruleIndex, 1);
     saveActiveRoleRules(gateway);
     touch();

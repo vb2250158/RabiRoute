@@ -6,6 +6,7 @@ import type { NotificationRule, NotificationScheduleDefinition } from "../types"
 import {
   configNameFor,
   defaultHeartbeatSchedule,
+  isBuiltinRolePanelRule,
   notificationRulesForGateway,
   routeKindDefinitionsForGateway,
   routeKindLabels,
@@ -272,6 +273,7 @@ watch(() => store.selectedGatewayId, (id) => {
               </div>
               <div class="rule-card-actions">
                 <v-switch
+                  v-if="!isBuiltinRolePanelRule(rule)"
                   :model-value="rule.enabled !== false"
                   :label="rule.enabled !== false ? '启用规则' : '停用规则'"
                   color="success"
@@ -313,6 +315,7 @@ watch(() => store.selectedGatewayId, (id) => {
           </div>
           <div class="rule-dialog-actions">
             <v-switch
+              v-if="!isBuiltinRolePanelRule(activeRule)"
               :model-value="activeRule.enabled !== false"
               label="启用规则"
               color="success"
@@ -536,7 +539,7 @@ watch(() => store.selectedGatewayId, (id) => {
           </section>
         </v-card-text>
         <v-card-actions class="px-6 pb-5">
-          <v-btn color="error" variant="text" @click="store.removeRule(activeRuleIndex); ruleDialog = false">删除规则</v-btn>
+          <v-btn v-if="!isBuiltinRolePanelRule(activeRule)" color="error" variant="text" @click="store.removeRule(activeRuleIndex); ruleDialog = false">删除规则</v-btn>
           <v-spacer />
           <v-btn color="primary" @click="ruleDialog = false">完成</v-btn>
         </v-card-actions>

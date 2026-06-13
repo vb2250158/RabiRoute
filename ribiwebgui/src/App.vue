@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import { useGatewayStore } from "./stores/gatewayStore";
-import { adapterLabel, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "./utils/gatewayHelpers";
+import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "./utils/gatewayHelpers";
 
 const store = useGatewayStore();
 const route = useRoute();
@@ -28,6 +28,8 @@ const selectedGatewayAdapters = computed(() => {
 });
 const selectedRuntimeLabel = computed(() => {
   if (!store.selectedGateway) return "未配置";
+  if (store.selectedGateway.enabled === false || store.selectedRuntime.enabled === false) return "禁用中";
+  if (!adaptersNeedGatewayRuntime(gatewayAdapterTypes(store.selectedGateway))) return "启用中";
   return store.selectedRuntime.running ? "运行中" : "已停止";
 });
 

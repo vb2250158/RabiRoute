@@ -36,6 +36,110 @@ test("repository reads route config and falls back to personaConfig rules", () =
   assert.equal(config.gateways[0].notificationRules?.[0]?.template, "tick\ntock");
 });
 
+test("repository migrates legacy role rules to personaConfig and keeps adapter config clean", () => {
+  const rootDir = makeTempRoot();
+  const adapterPath = path.join(rootDir, "data", "route", "config-1", "adapterConfig.json");
+  const legacyPath = path.join(rootDir, "data", "roles", "Rabi", "roleMessageConfig.json");
+  const routesPath = path.join(rootDir, "data", "roles", "Rabi", "routes.json");
+  const personaPath = path.join(rootDir, "data", "roles", "Rabi", "personaConfig.json");
+  writeJson(adapterPath, {
+    enabled: true,
+    messageAdapters: ["rolePanel"],
+    gatewayPort: 8789,
+    agentRoleId: "Rabi",
+    notificationRules: [{ id: "legacy-adapter", routeKinds: ["private"], template: "" }],
+    roleNotificationRules: {
+      "Rabi__config-1": [{ id: "legacy-role-map", routeKinds: ["group_message"], template: "" }]
+    },
+    roleRouteNames: {
+      "Rabi__config-1": "Old Route"
+    },
+    routeProfiles: [{
+      id: "profile-rabi",
+      agentRoleId: "Rabi",
+      notificationRules: [{ id: "legacy-profile", routeKinds: ["heartbeat"], template: "" }]
+    }, {
+      id: "profile-momo",
+      agentRoleId: "Momo",
+      notificationRules: [{ id: "momo-profile", routeKinds: ["private"], template: "" }]
+    }]
+  });
+  writeJson(legacyPath, {
+    configs: [{
+      configName: "main",
+      notificationRules: [{ id: "legacy-role", routeKinds: ["heartbeat"], template: "" }]
+    }]
+  });
+  writeJson(routesPath, {
+    notificationRules: [{ id: "legacy-routes", routeKinds: ["group_message"], template: "" }]
+  });
+
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  const config = repo.readConfig();
+
+  assert.equal(fs.existsSync(adapterPath), true);
+  assert.equal(fs.existsSync(legacyPath), false);
+  assert.equal(fs.existsSync(routesPath), false);
+  const adapter = JSON.parse(fs.readFileSync(adapterPath, "utf8")) as GatewayDefinition;
+  assert.equal(Array.isArray(adapter.notificationRules), false);
+  assert.equal(Array.isArray(adapter.routeProfiles), false);
+  assert.equal(adapter.roleNotificationRules, undefined);
+  assert.equal(adapter.roleRouteNames, undefined);
+  const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition;
+  assert.deepEqual(persona.notificationRules?.map(rule => rule.id), [
+    "legacy-role",
+    "legacy-routes",
+    "legacy-adapter",
+    "legacy-profile",
+    "legacy-role-map",
+    "role-panel-message"
+  ]);
+  assert.deepEqual(config.gateways[0].notificationRules?.map(rule => rule.id), [
+    "legacy-role",
+    "legacy-routes",
+    "legacy-adapter",
+    "legacy-profile",
+    "legacy-role-map",
+    "role-panel-message"
+  ]);
+  const momoPersona = JSON.parse(fs.readFileSync(path.join(rootDir, "data", "roles", "Momo", "personaConfig.json"), "utf8")) as GatewayDefinition;
+  assert.deepEqual(momoPersona.notificationRules?.map(rule => rule.id), [
+    "momo-profile",
+    "role-panel-message"
+  ]);
+});
+
+test("repository migration preserves existing personaConfig fields and rules", () => {
+  const rootDir = makeTempRoot();
+  const adapterPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
+  const personaPath = path.join(rootDir, "data", "roles", "Rabi", "personaConfig.json");
+  writeJson(adapterPath, {
+    enabled: true,
+    messageAdapters: ["heartbeat"],
+    gatewayPort: 8789,
+    agentRoleId: "Rabi",
+    notificationRules: [{ id: "adapter-new", routeKinds: ["heartbeat"], template: "from adapter" }]
+  });
+  writeJson(personaPath, {
+    routeVariables: { tone: "warm" },
+    notificationRules: [
+      { id: "existing", routeKinds: ["private"], template: "keep me" },
+      { id: "adapter-new", routeKinds: ["private"], template: "persona wins by id" }
+    ]
+  });
+
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  repo.ensureDataDirs();
+
+  const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition & { routeVariables?: Record<string, string> };
+  assert.deepEqual(persona.routeVariables, { tone: "warm" });
+  assert.deepEqual(persona.notificationRules?.map(rule => [rule.id, rule.template]), [
+    ["existing", "keep me"],
+    ["adapter-new", "persona wins by id"],
+    ["role-panel-message", ""]
+  ]);
+});
+
 test("repository writes normalized configs and removes renamed route files", () => {
   const rootDir = makeTempRoot();
   const oldConfigPath = path.join(rootDir, "data", "route", "old", "adapterConfig.json");

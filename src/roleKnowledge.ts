@@ -78,6 +78,19 @@ export type MemoryConsolidationRequest = {
   memories: RecentMemoryItem[];
 };
 
+export type RoleKnowledgeItemType = "plan" | "recent_memory" | "consolidated_memory";
+
+export type RoleKnowledgeIndexItem = {
+  id: string;
+  title: string;
+  type: RoleKnowledgeItemType;
+};
+
+export type RequiredReadItem = RoleKnowledgeIndexItem & {
+  endpoint: string;
+  score: number;
+};
+
 export type CreateMemoryConsolidationRequestOptions = {
   roleId?: string;
   triggerSource?: "auto" | "manual" | "api";
@@ -93,14 +106,17 @@ export type RoleKnowledgeSnapshot = {
   agentInterfaceDocPath: string;
   activePlans: PlanItem[];
   recentMemories: RecentMemoryItem[];
-  matchedItems: Array<{ id: string; title: string; type: "plan" | "memory" }>;
+  matchedItems: RoleKnowledgeIndexItem[];
+  requiredReadItems: RequiredReadItem[];
   pendingConsolidation?: MemoryConsolidationRequest;
 };
 
 export type RoleKnowledgeSnapshotOptions = {
+  roleId?: string;
   includePendingConsolidation?: boolean;
   consolidationTrigger?: "auto" | "manual" | "api";
   forceConsolidation?: boolean;
+  requiredReadLimit?: number;
 };
 
 export const DEFAULT_PLAN_ARCHIVE_AFTER_HOURS = 72;
@@ -329,6 +345,12 @@ export function getConsolidatedMemory(roleDir: string, memoryId: string): Consol
   return viewed;
 }
 
+function touchConsolidatedMemoryView(roleDir: string, memory: ConsolidatedMemoryItem, viewedAt = nowIso()): ConsolidatedMemoryItem {
+  const viewed = { ...memory, viewedAt };
+  writeJson(consolidatedMemoryFile(roleDir, viewed), viewed);
+  return viewed;
+}
+
 export function listConsolidationRuns(roleDir: string): MemoryConsolidationRun[] {
   return jsonFiles(path.join(memoryDir(roleDir), "consolidation-runs")).flatMap((file) => {
     const raw = readJson<MemoryConsolidationRun>(file);
@@ -522,10 +544,73 @@ export function applyMemoryConsolidationResult(roleDir: string, runId: string, b
   return completeMemoryConsolidation(roleDir, runId, items);
 }
 
-function matchesText(text: string, item: { title: string; keywords?: string[] }): boolean {
-  const normalized = text.toLowerCase();
-  if (item.title && normalized.includes(item.title.toLowerCase())) return true;
-  return (item.keywords ?? []).some((keyword) => keyword && normalized.includes(keyword.toLowerCase()));
+type ScoredKnowledgeCandidate = RoleKnowledgeIndexItem & {
+  endpoint: string;
+  score: number;
+  activityAt: string;
+  memory?: RecentMemoryItem | ConsolidatedMemoryItem;
+};
+
+const DEFAULT_REQUIRED_READ_LIMIT = 5;
+const MATCHED_ITEM_LIMIT = 12;
+
+function normalizedText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function usefulKeyword(keyword: string): string {
+  const normalized = normalizedText(keyword);
+  if (normalized.length < 2) return "";
+  if (/^[\s\p{P}\p{S}]+$/u.test(normalized)) return "";
+  return normalized;
+}
+
+function scoreKnowledgeMatch(
+  messageText: string,
+  item: { id: string; title: string; keywords?: string[] },
+  activeBoost = 0
+): number {
+  const normalized = normalizedText(messageText);
+  if (!normalized) return 0;
+
+  let baseScore = 0;
+  const id = normalizedText(item.id);
+  const title = normalizedText(item.title);
+  if (id && normalized.includes(id)) baseScore += 100;
+  if (title.length >= 2 && normalized.includes(title)) baseScore += 80;
+
+  let keywordScore = 0;
+  for (const keyword of item.keywords ?? []) {
+    const normalizedKeyword = usefulKeyword(keyword);
+    if (normalizedKeyword && normalized.includes(normalizedKeyword)) {
+      keywordScore += 20;
+    }
+  }
+  baseScore += Math.min(keywordScore, 60);
+
+  return baseScore > 0 ? baseScore + activeBoost : 0;
+}
+
+function roleApiBase(roleId: string): string {
+  return `/api/roles/${encodeURIComponent(roleId)}`;
+}
+
+function requiredReadEndpoint(roleId: string, type: RoleKnowledgeItemType, id: string): string {
+  const base = roleApiBase(roleId);
+  const encodedId = encodeURIComponent(id);
+  if (type === "plan") return `${base}/plans/${encodedId}`;
+  if (type === "recent_memory") return `${base}/memory/recent/${encodedId}`;
+  return `${base}/memory/consolidated/${encodedId}`;
+}
+
+function sortScoredCandidates(left: ScoredKnowledgeCandidate, right: ScoredKnowledgeCandidate): number {
+  if (right.score !== left.score) return right.score - left.score;
+  const rightTime = Date.parse(right.activityAt);
+  const leftTime = Date.parse(left.activityAt);
+  if (Number.isFinite(rightTime) && Number.isFinite(leftTime) && rightTime !== leftTime) {
+    return rightTime - leftTime;
+  }
+  return `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`);
 }
 
 export function roleKnowledgeSnapshot(
@@ -536,15 +621,65 @@ export function roleKnowledgeSnapshot(
   archiveCompletedPlans(roleDir);
   const plans = listPlans(roleDir);
   const memories = listRecentMemories(roleDir);
+  const consolidatedMemories = listConsolidatedMemories(roleDir);
   const activePlans = plans.filter((item) => item.status === "进行中");
   const recentMemories = memories.filter((item) => !item.consolidatedAt && ageHours(memoryActivityAt(item)) <= DEFAULT_RECENT_EDITABLE_HOURS);
-  const matchedPlans = plans
-    .filter((item) => item.status !== "已归档" && !activePlans.some((active) => active.id === item.id) && matchesText(messageText, item))
-    .map((item) => ({ id: item.id, title: item.title, type: "plan" as const }));
-  const matchedMemoryItems = memories
-    .filter((item) => !item.consolidatedAt && !recentMemories.some((memory) => memory.id === item.id) && matchesText(messageText, item))
-    .map((item) => touchRecentMemoryView(roleDir, item));
-  const matchedMemories = matchedMemoryItems.map((item) => ({ id: item.id, title: item.title, type: "memory" as const }));
+  const roleId = options.roleId || path.basename(roleDir);
+  const recentMemoryIds = new Set(recentMemories.map((item) => item.id));
+  const scoredCandidates: ScoredKnowledgeCandidate[] = [
+    ...plans
+      .filter((item) => item.status !== "已归档")
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        type: "plan" as const,
+        endpoint: requiredReadEndpoint(roleId, "plan", item.id),
+        score: scoreKnowledgeMatch(messageText, item, item.status === "进行中" ? 5 : 0),
+        activityAt: item.updatedAt
+      })),
+    ...memories
+      .filter((item) => !item.consolidatedAt)
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        type: "recent_memory" as const,
+        endpoint: requiredReadEndpoint(roleId, "recent_memory", item.id),
+        score: scoreKnowledgeMatch(messageText, item, recentMemoryIds.has(item.id) ? 5 : 0),
+        activityAt: memoryActivityAt(item),
+        memory: item
+      })),
+    ...consolidatedMemories.map((item) => ({
+      id: item.id,
+      title: item.title,
+      type: "consolidated_memory" as const,
+      endpoint: requiredReadEndpoint(roleId, "consolidated_memory", item.id),
+      score: scoreKnowledgeMatch(messageText, item),
+      activityAt: memoryActivityAt(item),
+      memory: item
+    }))
+  ].filter((item) => item.score > 0).sort(sortScoredCandidates);
+
+  const requiredReadItems = scoredCandidates
+    .slice(0, options.requiredReadLimit ?? DEFAULT_REQUIRED_READ_LIMIT)
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      type: item.type,
+      endpoint: item.endpoint,
+      score: item.score
+    }));
+
+  const touchedAt = nowIso();
+  for (const item of requiredReadItems) {
+    const candidate = scoredCandidates.find((candidateItem) => candidateItem.type === item.type && candidateItem.id === item.id);
+    if (candidate?.type === "recent_memory" && candidate.memory) {
+      touchRecentMemoryView(roleDir, candidate.memory as RecentMemoryItem, touchedAt);
+    }
+    if (candidate?.type === "consolidated_memory" && candidate.memory) {
+      touchConsolidatedMemoryView(roleDir, candidate.memory as ConsolidatedMemoryItem, touchedAt);
+    }
+  }
+
   return {
     roleDir,
     plansDir: plansDir(roleDir),
@@ -552,7 +687,8 @@ export function roleKnowledgeSnapshot(
     agentInterfaceDocPath: path.join(rootDir, "docs", "rabi-agent-interfaces.md"),
     activePlans,
     recentMemories,
-    matchedItems: [...matchedPlans, ...matchedMemories].slice(0, 12),
+    matchedItems: scoredCandidates.slice(0, MATCHED_ITEM_LIMIT).map((item) => ({ id: item.id, title: item.title, type: item.type })),
+    requiredReadItems,
     pendingConsolidation: options.includePendingConsolidation
       ? pendingMemoryConsolidation(
           roleDir,
@@ -565,7 +701,17 @@ export function roleKnowledgeSnapshot(
   };
 }
 
+function indexTypeLabel(type: RoleKnowledgeItemType): string {
+  if (type === "plan") return "计划";
+  if (type === "recent_memory") return "近期记忆";
+  return "沉淀记忆";
+}
+
 export function indexLines<T extends { id: string; title: string }>(items: T[], empty = "- 暂无"): string {
   if (items.length === 0) return empty;
-  return items.map((item) => `- ${item.id}：${item.title}`).join("\n");
+  return items.map((item) => {
+    const type = "type" in item ? (item as T & { type?: RoleKnowledgeItemType }).type : undefined;
+    const prefix = type ? `[${indexTypeLabel(type)}] ` : "";
+    return `- ${prefix}${item.id}：${item.title}`;
+  }).join("\n");
 }

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
-import { adapterLabel, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
+import { adapterLabel, adaptersNeedGatewayRuntime, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
 const router = useRouter();
@@ -102,6 +102,24 @@ function napcatIsOffline(row: Record<string, any>): boolean {
   return row.online === false || row.good === false || /online:false|已离线/.test(String(row.loginInfoError || ""));
 }
 
+function gatewayNeedsRuntime(gateway: any): boolean {
+  return adaptersNeedGatewayRuntime(gatewayAdapterTypes(gateway));
+}
+
+function gatewayRuntimeLabel(gateway: any): string {
+  const runtime = store.runtimeFor(gateway.id);
+  if (gateway.enabled === false || runtime.enabled === false) return "禁用中";
+  if (!gatewayNeedsRuntime(gateway)) return "启用中";
+  return runtime.running ? "运行中" : "已停止";
+}
+
+function gatewayRuntimeColor(gateway: any): string {
+  const runtime = store.runtimeFor(gateway.id);
+  if (gateway.enabled === false || runtime.enabled === false) return "grey";
+  if (!gatewayNeedsRuntime(gateway)) return "success";
+  return runtime.running ? "success" : "error";
+}
+
 const selectedRuntime = computed(() => store.selectedRuntime);
 const adapterHealth = computed(() => {
   const gateway = store.selectedGateway;
@@ -110,8 +128,9 @@ const adapterHealth = computed(() => {
   const adapters = gatewayAdapterTypes(gateway);
   const napcatRows = napcatRuntimeRows(runtime);
   const napcat = runtime.gatewayStatus?.napcat || {};
-  if (gateway.enabled === false || runtime.enabled === false) return "已关闭";
-  if (isMessageInputsDisabled(gateway)) return "已禁用";
+  if (gateway.enabled === false || runtime.enabled === false) return "禁用中";
+  if (isMessageInputsDisabled(gateway)) return "禁用中";
+  if (!adaptersNeedGatewayRuntime(adapters)) return "启用中";
   if (!runtime.running) return "已停止";
   if (adapters.includes("napcat") && napcatRows.some(napcatIsOffline)) return "QQ 已离线";
   if (adapters.includes("napcat") && napcatRows.length && napcatRows.every(row => !row.connected)) return "WS 未连接";
@@ -127,7 +146,8 @@ const selectedAdapters = computed(() => {
 });
 const selectedRuntimeLabel = computed(() => {
   if (!store.selectedGateway) return "未配置";
-  if (store.selectedGateway.enabled === false || selectedRuntime.value.enabled === false) return "已关闭";
+  if (store.selectedGateway.enabled === false || selectedRuntime.value.enabled === false) return "禁用中";
+  if (!gatewayNeedsRuntime(store.selectedGateway)) return "启用中";
   return selectedRuntime.value.running ? "运行中" : "已停止";
 });
 </script>
@@ -171,9 +191,9 @@ const selectedRuntimeLabel = computed(() => {
         <div class="stat-note">当前 manager 管理的 gateway 数量</div>
       </v-card>
       <v-card class="app-card glass-card stat-card">
-        <div class="stat-label">运行中</div>
+        <div class="stat-label">可用入口</div>
         <div class="stat-value">{{ store.runningCount }}/{{ store.gateways.length }}</div>
-        <div class="stat-note">已启动的路由进程</div>
+        <div class="stat-note">子进程运行或入口已启用</div>
       </v-card>
       <v-card class="app-card glass-card stat-card">
         <div class="stat-label">消息端健康</div>
@@ -215,8 +235,8 @@ const selectedRuntimeLabel = computed(() => {
             </v-list-item-subtitle>
             <template #append>
               <div class="route-list-actions">
-                <v-chip size="small" :color="store.runtimeFor(gw.id).running ? 'success' : 'error'" variant="tonal">
-                  {{ store.runtimeFor(gw.id).running ? "运行中" : "已停止" }}
+                <v-chip size="small" :color="gatewayRuntimeColor(gw)" variant="tonal">
+                  {{ gatewayRuntimeLabel(gw) }}
                 </v-chip>
                 <v-switch
                   :model-value="gw.enabled !== false"

@@ -5,6 +5,8 @@ import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/t
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeScheduleDefinitions, type NotificationScheduleDefinition } from "./shared/gatewayConfigModel.js";
+import { resolveRouteIdentity, sanitizeRoleId } from "./shared/routeIdentity.js";
+import { resolveRolePaths, roleFilePath, roleFolderPath } from "./shared/routePaths.js";
 
 dotenv.config();
 
@@ -113,7 +115,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "remoteAgent" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -131,7 +133,7 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   if (adapters.includes("disabled")) {
     return ["disabled"];
   }
@@ -284,8 +286,13 @@ function normalizeRouteProfile(item: unknown, index: number): RouteProfile | nul
   }
 
   const raw = item as Partial<RouteProfile>;
-  const roleId = sanitizeRoleId(raw.agentRoleId);
-  const id = sanitizeRoleId(raw.id) || roleId || `route-${index + 1}`;
+  const identity = resolveRouteIdentity({
+    id: raw.id,
+    agentRoleId: raw.agentRoleId,
+    fallbackConfigName: `route-${index + 1}`
+  });
+  const roleId = identity.roleId;
+  const id = identity.runtimeId;
   const rules = parseNotificationRules(JSON.stringify(raw.notificationRules ?? [])) ?? [];
   const pipelinePreset = typeof raw.pipelinePreset === "string" && raw.pipelinePreset.trim() ? raw.pipelinePreset.trim() : undefined;
   const pipeline = normalizePipelineDefinition(raw.pipeline);
@@ -327,18 +334,13 @@ function normalizeCodexCwd(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function sanitizeRoleId(raw: string | undefined): string {
-  const value = raw?.trim() ?? "";
-  return /^[a-zA-Z0-9_-]+$/.test(value) ? value : "";
-}
-
 const botNickname = process.env.BOT_NICKNAME ?? "QQ小助手";
 const baseDataDir = path.resolve(rootDir, process.env.DATA_DIR ?? path.join("data", "route", "default"));
 const rolesDir = path.resolve(rootDir, process.env.ROLES_DIR ?? path.join("data", "roles"));
 const agentRoleId = sanitizeRoleId(process.env.AGENT_ROLE_ID);
 const agentRoleFile = process.env.AGENT_ROLE_FILE?.trim() || "persona.md";
-const agentRoleDir = agentRoleId ? path.join(rolesDir, agentRoleId) : "";
-const agentRolePath = agentRoleDir ? path.join(agentRoleDir, agentRoleFile) : "";
+const agentRoleDir = agentRoleId ? roleFolderPath(rolesDir, agentRoleId) : "";
+const agentRolePath = agentRoleId ? roleFilePath(rolesDir, agentRoleId, agentRoleFile) : "";
 const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES) ?? [];
 const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES);
 const pipelinePreset = process.env.PIPELINE_PRESET?.trim() || undefined;
@@ -364,6 +366,9 @@ export const config = {
   messageAdapterTypes: parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE),
   heartbeatIntervalSeconds: parsePositiveNumber(process.env.HEARTBEAT_INTERVAL_SECONDS, 900),
   heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请检查最近消息和角色相关上下文。",
+  remoteAgentDefaultDeviceId: process.env.REMOTE_AGENT_DEFAULT_DEVICE_ID?.trim() || "",
+  remoteAgentDefaultCwd: process.env.REMOTE_AGENT_DEFAULT_CWD?.trim() || "",
+  remoteAgentDefaultThreadName: process.env.REMOTE_AGENT_DEFAULT_THREAD_NAME?.trim() || "",
   napcatInstances,
   napcatHttpUrl: primaryNapcatInstance.httpUrl,
   napcatWebuiUrl: primaryNapcatInstance.webuiUrl,
@@ -428,16 +433,15 @@ export function rolePathsFor(agentRoleId: string | undefined): { roleId: string;
 }
 
 export function rolePathsForRoute(route: Pick<RouteProfile, "agentRoleId" | "agentRoleFile" | "rolesDir" | "dataDir">): { roleId: string; roleDir: string; rolePath: string; dataDir: string } {
-  const roleId = sanitizeRoleId(route.agentRoleId) || config.agentRoleId;
-  const routeRolesDir = route.rolesDir || config.rolesDir;
-  const routeRoleFile = route.agentRoleFile || config.agentRoleFile;
-  const roleDir = roleId ? path.join(routeRolesDir, roleId) : "";
-  return {
-    roleId,
-    roleDir,
-    rolePath: roleDir ? path.join(roleDir, routeRoleFile) : "",
-    dataDir: roleDir || route.dataDir || config.memoryDataDir
-  };
+  return resolveRolePaths({
+    agentRoleId: route.agentRoleId,
+    agentRoleFile: route.agentRoleFile,
+    rolesDir: route.rolesDir || config.rolesDir,
+    dataDir: route.dataDir,
+    fallbackRoleId: config.agentRoleId,
+    fallbackAgentRoleFile: config.agentRoleFile,
+    fallbackDataDir: config.memoryDataDir
+  });
 }
 
 export function isTargetGroup(groupId: number | string | undefined): boolean {

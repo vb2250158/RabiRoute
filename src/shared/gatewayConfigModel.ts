@@ -1,4 +1,34 @@
-export type MessageAdapterType = "napcat" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "webhook" | "disabled";
+import {
+  resolveRouteIdentity,
+  sanitizeRoleId
+} from "./routeIdentity.js";
+
+export {
+  routeRuntimeId,
+  routeRuntimeParts,
+  sanitizeConfigName,
+  sanitizeRoleId
+} from "./routeIdentity.js";
+
+import {
+  createBuiltinRolePanelRule,
+  ensureBuiltinPersonaRules,
+  isBuiltinRolePanelRule as sharedIsBuiltinRolePanelRule
+} from "./personaRulePolicy.js";
+
+export {
+  builtinRolePanelRouteKind,
+  builtinRolePanelRuleId,
+  builtinRolePanelRuleName,
+  canonicalizeBuiltinRolePanelRule,
+  createBuiltinRolePanelRule,
+  ensureBuiltinPersonaRules,
+  isBuiltinRolePanelRule,
+  rolePanelPersonaRulePolicy,
+  type BuiltinPersonaRulePolicy
+} from "./personaRulePolicy.js";
+
+export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "webhook" | "disabled";
 export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
 export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
@@ -110,6 +140,9 @@ export type GatewayDefinition = {
   xiaoaiWebhookPath?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
+  remoteAgentDefaultDeviceId?: string;
+  remoteAgentDefaultCwd?: string;
+  remoteAgentDefaultThreadName?: string;
   napcatHttpUrl?: string;
   napcatWebuiUrl?: string;
   napcatAccessToken?: string;
@@ -183,41 +216,10 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "heartbeat", "rolePanel", "fennenote", "xiaoai", "webhook", "disabled"]);
+const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "fennenote", "xiaoai", "webhook", "disabled"]);
 const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
-
-export function sanitizeConfigName(value: unknown): string {
-  return String(value || "")
-    .trim()
-    .replace(/[^\p{L}\p{N}_-]+/gu, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "");
-}
-
-export function sanitizeRoleId(raw: string | undefined): string {
-  const value = raw?.trim() ?? "";
-  return /^[\p{L}\p{N}_-]+$/u.test(value) ? value : "";
-}
-
-export function routeRuntimeId(roleId: string, configName: string): string {
-  return configName;
-}
-
-export function routeRuntimeParts(id: string): { roleId: string; configName: string } {
-  const [roleId, ...rest] = id.split("__");
-  if (rest.length === 0) {
-    return {
-      roleId: "",
-      configName: sanitizeRoleId(id) || "default"
-    };
-  }
-  return {
-    roleId: sanitizeRoleId(roleId) || id,
-    configName: sanitizeRoleId(rest.join("__")) || "default"
-  };
-}
 
 export function normalizeTemplateText(value: unknown): string {
   return String(value || "")
@@ -247,6 +249,19 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
       template: normalizeTemplateText(typeof raw.template === "string" && raw.template.trim() ? raw.template : "")
     };
   });
+}
+
+export function defaultRolePanelNotificationRule(): NotificationRuleDefinition {
+  return createBuiltinRolePanelRule();
+}
+
+export function ensureDefaultPersonaRules(rules: NotificationRuleDefinition[] | undefined): NotificationRuleDefinition[] {
+  const normalized = normalizeRuleDefinitions(rules) ?? [];
+  return ensureBuiltinPersonaRules(normalized);
+}
+
+export function isBuiltinRolePanelNotificationRule(rule: NotificationRuleDefinition | null | undefined): boolean {
+  return sharedIsBuiltinRolePanelRule(rule);
 }
 
 function normalizeScheduleType(value: unknown): NotificationScheduleType {
@@ -550,10 +565,10 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   if (definition.fenneNoteWebhookPort != null) assertValidPort(definition.fenneNoteWebhookPort, `FenneNote webhook port for ${definition.id}`);
   if (definition.xiaoaiWebhookPort != null) assertValidPort(definition.xiaoaiWebhookPort, `XiaoAI webhook port for ${definition.id}`);
 
-  const parts = routeRuntimeParts(definition.id);
-  const agentRoleId = sanitizeRoleId(definition.agentRoleId) || parts.roleId;
-  const configName = sanitizeRoleId(definition.configName) || parts.configName;
-  const runtimeId = routeRuntimeId(agentRoleId, configName);
+  const identity = resolveRouteIdentity(definition);
+  const agentRoleId = identity.roleId;
+  const configName = identity.configName;
+  const runtimeId = identity.runtimeId;
   const dataDir = options.routeDataDir?.(configName) ?? `data/route/${configName}`;
   const rolesDir = options.rolesDir ?? definition.rolesDir ?? "data/roles";
   const routeName = definition.routeName?.trim() || definition.name?.trim() || configName;

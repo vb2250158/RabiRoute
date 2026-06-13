@@ -30,6 +30,8 @@ docs/rabi-agent-interfaces.md
 
 近期记忆统一指 `memory/recent/` 里的记忆。默认配置下，最近 24 小时内活跃过的近期记忆会直接注入；超过 24 小时且尚未沉淀的近期记忆不默认显示，只有用户消息命中标题或 `keywords` 时才会被召回。活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个；按 ID 查询记忆、更新近期记忆、关键词命中召回都会刷新对应时间。
 
+RabiRoute 还会注入 `[处理前上下文确认]`。它会从未归档计划、近期记忆和沉淀记忆中按 ID、标题和 `keywords` 做轻量打分，列出默认最多 5 条高相关必读项。Agent 在回复、发布任务、更新计划、写入记忆或执行外部动作之前，必须先按该小节里的 GET 路径读取内容；不能只凭标题行动。若必读项无法读取或内容不足以确认，应说明上下文无法确认，或先向用户追问。
+
 普通回复上下文会一并注入：
 
 ```text
@@ -335,6 +337,45 @@ POST /roles/:roleId/memory/consolidation-runs/:runId/result
 请求体可以直接是 `memory_consolidation_result`，RabiRoute 会读取其中的 `memories` 数组。
 
 RabiRoute 负责写入沉淀记忆、记录整理轮次和标记近期记忆已沉淀。Agent 不需要移动文件、更新沉淀标记或判断触发时机。
+
+## 远端 Agent 设备接口
+
+当路由启用了“远端 Agent”消息端时，本机 Agent 可以把需要特定设备/系统完成的任务投递给远端 Agent 设备。远端机器只需要运行 `plugin-adapters/remote-agent-rabiroute` bridge，不需要安装完整 RabiRoute。
+
+安全边界：
+
+- 本机 loopback 调用用于 WebGUI 和本机人格线程。
+- 非本机 HTTP 调用 `/api/remote-agent/*` 必须携带和 manager `REMOTE_AGENT_TOKEN` 相同的 token，可使用 `Authorization: Bearer <token>`、`X-Remote-Agent-Token` 或 `?token=`。
+- WebSocket bridge 连接同样使用 `REMOTE_AGENT_TOKEN`。
+- 任务事件必须来自任务所属的 `deviceId`；其他设备不能把别人的任务标记为 completed/failed。
+
+查询在线远端设备：
+
+```http
+GET /api/remote-agent/devices
+```
+
+创建设备任务：
+
+```http
+POST /api/remote-agent/tasks
+```
+
+请求体示例：
+
+```json
+{
+  "originGatewayId": "main",
+  "deviceId": "builder-device",
+  "taskKind": "build-desktop",
+  "cwd": "/path/to/project",
+  "threadName": "远端构建小助手",
+  "message": "请在远端设备执行打包任务，完成后回传产物路径和日志路径。",
+  "originReplyContext": {}
+}
+```
+
+远端结果会先回到本机 RabiRoute，再投递回发起任务的本机人格线程。远端 Agent 不应直接回复 QQ；是否回复 QQ 仍由本机人格通过普通回复接口决定。
 
 查询整理轮次：
 
