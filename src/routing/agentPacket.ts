@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { config, type NotificationRule } from "../config.js";
 import { resolvePipeline, type ResolvedPipeline } from "../pipelines.js";
@@ -80,6 +81,46 @@ function optionalLine(label: string, value: unknown): string {
 function section(title: string, lines: string[]): string {
   const content = lines.filter((line) => line !== "").join("\n").trim();
   return content ? `[${title}]\n${content}` : "";
+}
+
+function extractPlanIds(text: string): string[] {
+  return [...new Set([...text.matchAll(/\bplan-[a-zA-Z0-9_-]+\b/g)].map((match) => match[0]))];
+}
+
+function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
+  if (!roleDir) {
+    return [];
+  }
+
+  const summaries: string[] = [];
+  for (const planId of extractPlanIds(text)) {
+    const candidates = [
+      path.join(roleDir, "plans", "items", "active", `${planId}.json`),
+      path.join(roleDir, "plans", "items", "archived", `${planId}.json`),
+      path.join(roleDir, "plans", `${planId}.json`)
+    ];
+    const planPath = candidates.find((candidate) => fs.existsSync(candidate));
+    if (!planPath) {
+      summaries.push(`- ${planId}：未找到对应计划文件。`);
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(fs.readFileSync(planPath, "utf8")) as Record<string, unknown>;
+      summaries.push([
+        `- ${planId}`,
+        optionalLine("  标题", parsed.title),
+        optionalLine("  状态", parsed.status),
+        optionalLine("  当前步骤", parsed.currentStep),
+        optionalLine("  下一步", parsed.nextAction),
+        optionalLine("  等待", parsed.waitingFor),
+        `  路径：${planPath}`
+      ].filter(Boolean).join("\n"));
+    } catch (error) {
+      summaries.push(`- ${planId}：读取失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return summaries;
 }
 
 function roleApiBase(roleId: unknown): string {
@@ -306,6 +347,9 @@ function buildAgentMessage(
   const record = decision.record;
   const routeKind = decision.routeKind;
   const shouldAttachMemoryConsolidation = routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation";
+  const referencedPlanSummaries = routeKind === "manual_trigger"
+    ? readReferencedPlanSummaries(roleDir, userTemplateText)
+    : [];
   const knowledge = roleDir
     ? roleKnowledgeSnapshot(roleDir, String(values.message || ""), {
         roleId: String(values.agentRoleId || ""),
@@ -382,6 +426,15 @@ function buildAgentMessage(
       ? section("远端 Agent 设备", remoteAgentApiHint(values))
       : "",
     pendingConsolidation ? section("待整理记忆", pendingConsolidationLines) : "",
+    referencedPlanSummaries.length > 0 ? section("指定计划内容", referencedPlanSummaries) : "",
+    routeKind === "manual_trigger" || routeKind === "heartbeat" ? section("事件执行要求", [
+      routeKind === "manual_trigger"
+        ? "这是一条人工点击的手动触发，不要只把消息写入线程后结束。"
+        : "这是一条定时心跳触发，不要只把消息写入线程后结束。",
+      "请在当前 Codex 会话中按事件和模板执行，并输出可见结果。",
+      "如果没有需要继续处理的新事项，也请明确说明已检查范围、当前无新事项和下一步。",
+      "如果因为规则限制不能执行，请明确说明不能执行的具体限制和下一步。"
+    ]) : "",
     userTemplateText.trim() ? section("用户模板补充", [userTemplateText.trim()]) : ""
   ];
 

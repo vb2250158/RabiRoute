@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
@@ -81,8 +82,9 @@ class ManagerClient:
         rule_id: str | None = None,
     ) -> ManualTriggerResult:
         try:
+            encoded_gateway_id = quote(gateway_id, safe="")
             self._post_json(
-                f"/gateways/{gateway_id}/manual-trigger",
+                f"/gateways/{encoded_gateway_id}/manual-trigger",
                 {
                     "triggerId": trigger_id,
                     "triggerName": trigger_name,

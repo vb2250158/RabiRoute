@@ -1,6 +1,6 @@
 import { OpenXiaoAIConfig } from "./migpt/xiaoai.js";
 
-const bridgeUrl = process.env.RABIROUTE_XIAOAI_BRIDGE_URL || "http://host.docker.internal:8798";
+const bridgeUrl = process.env.RABIROUTE_XIAOAI_BRIDGE_URL || "http://host.docker.internal:8799";
 
 type XiaoAIDecision = {
   ok: boolean;
@@ -52,17 +52,6 @@ export const kOpenXiaoAIConfig: OpenXiaoAIConfig = {
       return { handled: true };
     }
 
-    if (decision.action !== "intercept") {
-      return { handled: true };
-    }
-
-    await engine.speaker.abortXiaoAI();
-    if (decision.speakText) {
-      await engine.speaker.play({
-        text: decision.speakText,
-        blocking: true
-      });
-    }
     return { handled: true };
   }
 };

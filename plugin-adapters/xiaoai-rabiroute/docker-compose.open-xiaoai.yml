@@ -5,7 +5,7 @@ services:
     ports:
       - "4399:4399"
     environment:
-      RABIROUTE_XIAOAI_BRIDGE_URL: "http://host.docker.internal:8798"
+      RABIROUTE_XIAOAI_BRIDGE_URL: "http://host.docker.internal:8799"
       XIAOAI_DEVICE_ID: "xiaoai_lx06"
       XIAOAI_DEVICE_NAME: "小爱音箱 Pro"
       XIAOAI_AREA: "home"

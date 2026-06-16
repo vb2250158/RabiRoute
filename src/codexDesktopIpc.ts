@@ -111,17 +111,14 @@ function positiveIntegerFromEnv(name: string, fallback: number): number {
 
 const ipcRequestTimeoutMs = positiveIntegerFromEnv("CODEX_DESKTOP_IPC_REQUEST_TIMEOUT_MS", defaultIpcRequestTimeoutMs);
 
-function defaultCodexModel(): string {
+function explicitCodexModel(): string | undefined {
   const envModel = process.env.RABIROUTE_CODEX_MODEL?.trim() || process.env.CODEX_MODEL?.trim();
   if (envModel) return envModel;
-  try {
-    const configText = fs.readFileSync(path.join(os.homedir(), ".codex", "config.toml"), "utf8");
-    const match = configText.match(/^\s*model\s*=\s*"([^"]+)"/m);
-    if (match?.[1]?.trim()) return match[1].trim();
-  } catch {
-    // Fall back to the current Codex ChatGPT-account default used by this setup.
-  }
-  return "gpt-5.5";
+  return undefined;
+}
+
+function codexModelField(): string {
+  return config.agentModel || explicitCodexModel() || "gpt-5.5";
 }
 
 function readState(): CodexState {
@@ -461,7 +458,12 @@ async function request(method: string, params: unknown, version = 1, allowBefore
 
 async function startNotificationTurn(threadId: string, message: string): Promise<void> {
   const text = buildInputText(message);
-  const modelOverride = config.agentModel || defaultCodexModel();
+  const modelOverride = codexModelField();
+  const collaborationSettings: Record<string, unknown> = {
+    model: modelOverride,
+    reasoning_effort: "high",
+    developer_instructions: ""
+  };
   const turnStartParams: Record<string, unknown> = {
     input: [
       {
@@ -482,11 +484,7 @@ async function startNotificationTurn(threadId: string, message: string): Promise
     commentAttachments: [],
     collaborationMode: {
       mode: "default",
-      settings: {
-        model: modelOverride,
-        reasoning_effort: "high",
-        developer_instructions: ""
-      }
+      settings: collaborationSettings
     }
   };
 
@@ -573,20 +571,32 @@ function isMissingMonitorThreadError(error: unknown): boolean {
   return text.includes("Missing monitorThreadId") || text.includes("no matching Codex thread was found");
 }
 
-function shouldUseAppServerFallbackFor(error: unknown): boolean {
-  return shouldUseAppServerFallback() && (isNoClientFoundError(error) || isMissingMonitorThreadError(error));
+function shouldUseAppServerFallbackFor(error: unknown, state: CodexState): boolean {
+  if (!shouldUseAppServerFallback()) {
+    return false;
+  }
+
+  if (isNoClientFoundError(error) && (state.monitorThreadId || discoverMonitorThread())) {
+    return false;
+  }
+
+  if (isMissingMonitorThreadError(error) && !shouldAutoCreateMonitorThread()) {
+    return false;
+  }
+
+  return isNoClientFoundError(error) || isMissingMonitorThreadError(error);
 }
 
 function shouldUseAppServerFallback(): boolean {
-  return process.env.CODEX_DESKTOP_IPC_APP_SERVER_FALLBACK === "1";
+  return process.env.CODEX_DESKTOP_IPC_APP_SERVER_FALLBACK !== "0";
 }
 
 function shouldAutoCreateMonitorThread(): boolean {
   return process.env.CODEX_DESKTOP_IPC_AUTO_CREATE_THREAD !== "0";
 }
 
-async function createMonitorThreadForDesktopDelivery(state: CodexState): Promise<CodexState> {
-  const created = await createCodexAppMonitorThread();
+async function createMonitorThreadForDesktopDelivery(state: CodexState, forceCreate = false): Promise<CodexState> {
+  const created = await createCodexAppMonitorThread(forceCreate);
   const nextState = {
     ...state,
     monitorThreadId: created.id,
@@ -662,12 +672,12 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
       }
 
       try {
-        for (let attempt = 0; attempt < 2; attempt += 1) {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
           try {
             await deliverToMonitorThread(state, message);
             break;
           } catch (error) {
-            if (attempt === 0 && isNoClientFoundError(error)) {
+            if (isNoClientFoundError(error)) {
               const refreshedState = resolveMonitorThread(state, true);
               if (refreshedState.monitorThreadId && refreshedState.monitorThreadId !== state.monitorThreadId) {
                 state = refreshedState;
@@ -687,7 +697,7 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
           lastNotificationErrorAt: undefined
         });
       } catch (error) {
-        if (shouldUseAppServerFallbackFor(error)) {
+        if (shouldUseAppServerFallbackFor(error, state)) {
           try {
             await notifyCodex(message);
             writeState({

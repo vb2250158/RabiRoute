@@ -41,17 +41,14 @@ const threadStatusWaiters: ThreadStatusWaiter[] = [];
 let notificationQueue: Promise<void> = Promise.resolve();
 let memoryState: CodexState = {};
 
-function defaultCodexModel(): string {
+function explicitCodexModel(): string | undefined {
   const envModel = process.env.RABIROUTE_CODEX_MODEL?.trim() || process.env.CODEX_MODEL?.trim();
   if (envModel) return envModel;
-  try {
-    const configText = fs.readFileSync(path.join(os.homedir(), ".codex", "config.toml"), "utf8");
-    const match = configText.match(/^\s*model\s*=\s*"([^"]+)"/m);
-    if (match?.[1]?.trim()) return match[1].trim();
-  } catch {
-    // Fall back to the current Codex ChatGPT-account default used by this setup.
-  }
-  return "gpt-5.5";
+  return undefined;
+}
+
+function codexModelField(): string {
+  return config.agentModel || explicitCodexModel() || "gpt-5.5";
 }
 
 type CodexState = {
@@ -338,15 +335,26 @@ function bindThread(state: CodexState, thread: DiscoveredMonitorThread): void {
   });
 }
 
+function duplicateThreadRefusalError(thread: DiscoveredMonitorThread): Error {
+  return new Error([
+    `Codex thread named "${thread.threadName}" already exists in ${thread.source} as ${thread.id},`,
+    "but the app-server channel cannot read it. Refusing to auto-create another thread with the same name."
+  ].join(" "));
+}
+
 async function ensureMonitorThread(forceCreate = false): Promise<string> {
   const state = readState();
   const threadName = config.codexThreadName;
   await connect();
 
   const existingThread = forceCreate ? null : findThreadByName(threadName);
-  if (existingThread && await canReadThread(existingThread.id)) {
-    bindThread(state, existingThread);
-    return existingThread.id;
+  if (existingThread) {
+    if (await canReadThread(existingThread.id)) {
+      bindThread(state, existingThread);
+      return existingThread.id;
+    }
+
+    throw duplicateThreadRefusalError(existingThread);
   }
 
   if (!forceCreate && state.monitorThreadId && (!state.monitorThreadName || state.monitorThreadName === threadName) && await canReadThread(state.monitorThreadId)) {
@@ -362,7 +370,7 @@ async function ensureMonitorThread(forceCreate = false): Promise<string> {
     ephemeral: false,
     developerInstructions: `这是 QQ/NapCat 消息监听线程。收到提醒后，请读取 ${config.memoryDataDir} 下的 JSONL 消息记录，理解最新 QQ 私聊或群 @ 的上下文，并在 Codex 会话里开始处理。`,
   };
-  threadStartParams.model = config.agentModel || defaultCodexModel();
+  threadStartParams.model = codexModelField();
 
   const result = await request("thread/start", threadStartParams) as { thread?: { id?: string } };
 
@@ -421,6 +429,11 @@ async function notifyCodexInternal(message: string): Promise<void> {
       throw error;
     }
 
+    const indexedThread = findThreadByName(threadName);
+    if (indexedThread) {
+      throw duplicateThreadRefusalError(indexedThread);
+    }
+
     clearMonitorThreadId();
     threadId = await ensureMonitorThread(true);
     await startNotificationTurn(threadId, threadName, message);
@@ -467,7 +480,7 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
       effort: "high",
       personality: "friendly"
     };
-    turnStartParams.model = config.agentModel || defaultCodexModel();
+    turnStartParams.model = codexModelField();
 
     await request("turn/start", turnStartParams);
   } catch (error) {
