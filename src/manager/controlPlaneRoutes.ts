@@ -286,6 +286,7 @@ type MessageAdapterScanResult = {
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
 const managerHost = process.env.GATEWAY_MANAGER_HOST ?? "127.0.0.1";
+const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
 const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
 
@@ -315,6 +316,7 @@ const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
 const remoteAgentHub = new RemoteAgentHub({
   managerPort,
   managerHost,
+  publicHost: remoteAgentPublicHost,
   discoveryPort: Number(process.env.REMOTE_AGENT_DISCOVERY_PORT ?? "8798"),
   token: process.env.REMOTE_AGENT_TOKEN,
   getDefaultGatewayId: () => [...runtimes.values()][0]?.definition.id,

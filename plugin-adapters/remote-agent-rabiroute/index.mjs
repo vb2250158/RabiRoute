@@ -6,8 +6,10 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import WebSocket from "ws";
 
-let managerWsUrl = process.env.RABIROUTE_MANAGER_WS || "";
-let token = process.env.REMOTE_AGENT_TOKEN || "";
+const configPath = process.env.REMOTE_AGENT_CONFIG_PATH || path.join(os.homedir(), ".rabiroute", "remote-agent-bridge.json");
+const savedConfig = loadBridgeConfig();
+let managerWsUrl = process.env.RABIROUTE_MANAGER_WS ?? savedConfig.managerWsUrl ?? "";
+let token = process.env.REMOTE_AGENT_TOKEN ?? savedConfig.token ?? "";
 const deviceId = process.env.REMOTE_AGENT_DEVICE_ID || os.hostname();
 const deviceName = process.env.REMOTE_AGENT_DEVICE_NAME || os.hostname();
 const agentType = process.env.REMOTE_AGENT_TYPE || "codex";
@@ -16,15 +18,46 @@ const defaultThreadName = process.env.REMOTE_AGENT_DEFAULT_THREAD || "Remote Age
 const callbackHost = process.env.REMOTE_AGENT_CALLBACK_HOST || "127.0.0.1";
 const callbackPort = Number(process.env.REMOTE_AGENT_CALLBACK_PORT || "8797");
 const discoveryPort = Number(process.env.REMOTE_AGENT_DISCOVERY_PORT || "8798");
-let autoDiscoverEnabled = process.env.REMOTE_AGENT_AUTO_DISCOVER !== "0";
+let autoDiscoverEnabled = process.env.REMOTE_AGENT_AUTO_DISCOVER === undefined
+  ? savedConfig.autoDiscoverEnabled !== false
+  : process.env.REMOTE_AGENT_AUTO_DISCOVER !== "0";
+const discoveryIntervalMs = Number(process.env.REMOTE_AGENT_DISCOVERY_INTERVAL_MS || "10000");
 const codexAppServerUrl = process.env.REMOTE_AGENT_CODEX_APP_SERVER_URL || "ws://127.0.0.1:4510";
 const codexBin = process.env.REMOTE_AGENT_CODEX_BIN || "codex";
 
 let socket = null;
+let reconnectTimer = null;
+let reconnectAttempt = 0;
+let discoveryInFlight = false;
 let appSocket = null;
 let appNextId = 1;
 const appPending = new Map();
 let discoveredManagers = [];
+
+function loadBridgeConfig() {
+  try {
+    if (!fs.existsSync(configPath)) return {};
+    const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    return raw && typeof raw === "object" ? raw : {};
+  } catch (error) {
+    console.warn(`Failed to read bridge config ${configPath}: ${error.message}`);
+    return {};
+  }
+}
+
+function saveBridgeConfig() {
+  try {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      managerWsUrl,
+      token,
+      autoDiscoverEnabled,
+      updatedAt: new Date().toISOString()
+    }, null, 2), "utf8");
+  } catch (error) {
+    console.warn(`Failed to save bridge config ${configPath}: ${error.message}`);
+  }
+}
 
 function firstLocalIp() {
   for (const entries of Object.values(os.networkInterfaces())) {
@@ -33,6 +66,30 @@ function firstLocalIp() {
     }
   }
   return "127.0.0.1";
+}
+
+function ipv4ToInt(value) {
+  const parts = value.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return parts.reduce((acc, part) => ((acc << 8) | part) >>> 0, 0);
+}
+
+function intToIpv4(value) {
+  return [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join(".");
+}
+
+function discoveryTargets() {
+  const targets = new Set(["255.255.255.255"]);
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const item of entries || []) {
+      if (item.family !== "IPv4" || item.internal || !item.address || !item.netmask) continue;
+      const address = ipv4ToInt(item.address);
+      const netmask = ipv4ToInt(item.netmask);
+      if (address == null || netmask == null) continue;
+      targets.add(intToIpv4((address | (~netmask >>> 0)) >>> 0));
+    }
+  }
+  return [...targets];
 }
 
 function deviceInfo() {
@@ -56,6 +113,42 @@ function managerUrlWithToken() {
   const url = new URL(managerWsUrl);
   if (token) url.searchParams.set("token", token);
   return url.toString();
+}
+
+function managerUrlKey(value) {
+  try {
+    const url = new URL(value);
+    url.searchParams.delete("token");
+    return url.toString();
+  } catch {
+    return String(value || "").trim();
+  }
+}
+
+function chooseManager(managers) {
+  if (!Array.isArray(managers) || managers.length === 0) return null;
+  const currentKey = managerUrlKey(managerWsUrl);
+  return managers.find((item) => managerUrlKey(item.wsUrl) === currentKey)
+    || managers.find((item) => !item.tokenRequired || token)
+    || managers[0];
+}
+
+function setManagerConfig(next) {
+  let changed = false;
+  if (typeof next.managerWsUrl === "string" && next.managerWsUrl.trim() !== managerWsUrl) {
+    managerWsUrl = next.managerWsUrl.trim();
+    changed = true;
+  }
+  if (typeof next.token === "string" && next.token !== token) {
+    token = next.token;
+    changed = true;
+  }
+  if (typeof next.autoDiscoverEnabled === "boolean" && next.autoDiscoverEnabled !== autoDiscoverEnabled) {
+    autoDiscoverEnabled = next.autoDiscoverEnabled;
+    changed = true;
+  }
+  if (changed) saveBridgeConfig();
+  return changed;
 }
 
 function sendToManager(payload) {
@@ -197,10 +290,36 @@ function discoverManagers(timeoutMs = 1400) {
     });
     socket.bind(() => {
       socket.setBroadcast(true);
-      socket.send(probe, discoveryPort, "255.255.255.255");
+      for (const target of discoveryTargets()) {
+        socket.send(probe, discoveryPort, target);
+      }
     });
     setTimeout(finish, timeoutMs);
   });
+}
+
+async function discoverAndMaybeReconnect(reason) {
+  if (!autoDiscoverEnabled || discoveryInFlight) return;
+  discoveryInFlight = true;
+  try {
+    const managers = await discoverManagers();
+    const selected = chooseManager(managers);
+    if (!selected?.wsUrl) {
+      if (!managerWsUrl) console.log(`No RabiRoute manager discovered yet (${reason}).`);
+      return;
+    }
+    const changed = setManagerConfig({ managerWsUrl: selected.wsUrl });
+    if (changed) {
+      console.log(`Selected RabiRoute manager from LAN discovery: ${managerWsUrl}`);
+      reconnectManager();
+    } else if (!socket || socket.readyState === WebSocket.CLOSED) {
+      connectManager();
+    }
+  } catch (error) {
+    console.warn(`Remote Agent discovery failed: ${error.message}`);
+  } finally {
+    discoveryInFlight = false;
+  }
 }
 
 function startCallbackServer() {
@@ -217,17 +336,20 @@ function startCallbackServer() {
       }
       if (request.method === "POST" && url.pathname === "/api/config") {
         const body = await readJson(request);
-        managerWsUrl = String(body.managerWsUrl || "").trim();
-        token = String(body.token || "");
-        autoDiscoverEnabled = body.autoDiscoverEnabled !== false;
+        setManagerConfig({
+          managerWsUrl: String(body.managerWsUrl || "").trim(),
+          token: String(body.token || ""),
+          autoDiscoverEnabled: body.autoDiscoverEnabled !== false
+        });
         reconnectManager();
         jsonResponse(response, 200, { ok: true, managerWsUrl, autoDiscoverEnabled });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/discover") {
         const managers = await discoverManagers();
-        if (!managerWsUrl && managers[0]?.wsUrl) {
-          managerWsUrl = managers[0].wsUrl;
+        const selected = chooseManager(managers);
+        if (selected?.wsUrl) {
+          setManagerConfig({ managerWsUrl: selected.wsUrl });
           reconnectManager();
         }
         jsonResponse(response, 200, { ok: true, managers });
@@ -237,7 +359,7 @@ function startCallbackServer() {
         const body = await readJson(request);
         const item = discoveredManagers[Number(body.index)];
         if (!item?.wsUrl) throw new Error("Selected manager not found.");
-        managerWsUrl = item.wsUrl;
+        setManagerConfig({ managerWsUrl: item.wsUrl });
         reconnectManager();
         jsonResponse(response, 200, { ok: true, managerWsUrl });
         return;
@@ -428,10 +550,20 @@ async function handleTask(task) {
 function connectManager() {
   if (!managerWsUrl) {
     console.log("No RabiRoute manager selected yet. Open the bridge UI to scan/select one.");
+    scheduleReconnect();
+    void discoverAndMaybeReconnect("no manager selected");
     return;
+  }
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
   socket = new WebSocket(managerUrlWithToken());
   socket.on("open", () => {
+    reconnectAttempt = 0;
     console.log(`Connected to RabiRoute manager: ${managerWsUrl}`);
     sendToManager({ type: "register", device: deviceInfo() });
   });
@@ -446,8 +578,10 @@ function connectManager() {
     }
   });
   socket.on("close", () => {
+    socket = null;
     console.log("Disconnected from RabiRoute manager; reconnecting soon.");
-    setTimeout(connectManager, 3000);
+    scheduleReconnect();
+    void discoverAndMaybeReconnect("socket closed");
   });
   socket.on("error", (error) => {
     console.error(`Manager connection error: ${error.message}`);
@@ -455,6 +589,10 @@ function connectManager() {
 }
 
 function reconnectManager() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (socket) {
     socket.removeAllListeners();
     socket.close();
@@ -463,14 +601,30 @@ function reconnectManager() {
   connectManager();
 }
 
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  const delay = Math.min(30000, 2000 * (2 ** Math.min(reconnectAttempt++, 4)));
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectManager();
+  }, delay);
+}
+
 startCallbackServer();
 if (!managerWsUrl && autoDiscoverEnabled) {
   const managers = await discoverManagers();
-  if (managers[0]?.wsUrl) {
-    managerWsUrl = managers[0].wsUrl;
+  const selected = chooseManager(managers);
+  if (selected?.wsUrl) {
+    setManagerConfig({ managerWsUrl: selected.wsUrl });
   }
 }
 connectManager();
+setInterval(() => {
+  if (!autoDiscoverEnabled) return;
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    void discoverAndMaybeReconnect("background scan");
+  }
+}, discoveryIntervalMs).unref();
 setInterval(() => {
   try {
     if (socket?.readyState === WebSocket.OPEN) sendToManager({ type: "heartbeat", device: deviceInfo() });

@@ -4,8 +4,8 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "architecture",
-  "currentStep": "消息端 adapter 已按 napcat、remoteAgent、heartbeat、webhook 等入口拆分，Agent 端 adapter 独立投递处理端；remoteAgent 作为下游远端设备入口，结果仍回到本机人格线程",
-  "nextAction": "新增平台时优先扩展 src/adapters/，新增处理端时优先扩展 src/agentAdapters/；继续把 remoteAgent 的鉴权、任务归属、回传上下文和 per-agent binding 收口，避免让某个处理端反向定义项目边界",
+  "currentStep": "消息端 adapter 已按 napcat、remoteAgent、heartbeat、webhook 等入口拆分，Agent 端 adapter 独立投递处理端；remoteAgent 作为下游远端设备入口，结果仍回到本机人格线程，bridge 已补齐启动后持续发现、断线重连和 manager 公告地址固定能力",
+  "nextAction": "新增平台时优先扩展 src/adapters/，新增处理端时优先扩展 src/agentAdapters/；继续区分远端 Agent 设备入口和真正的远端消息端 bridge，并把鉴权、任务归属、回传上下文和 per-agent binding 收口",
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-06-11T00:00:00+08:00",
-  "keywords": ["message adapter", "agent adapter", "remoteAgent", "远端 Agent", "NapCat", "Codex", "解耦", "扩展"]
+  "updatedAt": "2026-06-16T00:00:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "remoteAgent", "远端 Agent", "自动发现", "重连", "NapCat", "Codex", "解耦", "扩展"]
 }

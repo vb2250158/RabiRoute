@@ -75,6 +75,7 @@ type RemoteAgentDeviceRecord = {
 type RemoteAgentHubOptions = {
   managerPort: number;
   managerHost?: string;
+  publicHost?: string;
   discoveryPort?: number;
   token?: string;
   getDefaultGatewayId: () => string | undefined;
@@ -102,12 +103,21 @@ function localDeviceInfo(): RemoteAgentDeviceInfo {
 }
 
 function firstLocalIp(): string {
-  for (const entries of Object.values(os.networkInterfaces())) {
+  const scored: Array<{ address: string; score: number }> = [];
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
     for (const item of entries || []) {
-      if (item.family === "IPv4" && !item.internal) return item.address;
+      if (item.family !== "IPv4" || item.internal) continue;
+      const label = name.toLowerCase();
+      let score = 0;
+      if (item.address.startsWith("192.168.") || item.address.startsWith("10.") || item.address.startsWith("172.")) score += 20;
+      if (label.includes("wi-fi") || label.includes("wifi") || label.includes("ethernet") || label.includes("以太网") || label.includes("wlan")) score += 10;
+      if (label.includes("zerotier") || label.includes("tailscale")) score += 8;
+      if (label.includes("wsl") || label.includes("vethernet") || label.includes("tap") || label.includes("loopback")) score -= 30;
+      if (item.address.startsWith("169.254.") || item.address.startsWith("26.")) score -= 20;
+      scored.push({ address: item.address, score });
     }
   }
-  return "127.0.0.1";
+  return scored.sort((left, right) => right.score - left.score)[0]?.address ?? "127.0.0.1";
 }
 
 function normalizeDeviceInfo(input: Partial<RemoteAgentDeviceInfo> | undefined, fallbackId: string): RemoteAgentDeviceInfo {
@@ -172,9 +182,10 @@ export class RemoteAgentHub {
       if (payload.type !== "rabiroute.remoteAgent.discover") {
         return;
       }
-      const host = this.options.managerHost && this.options.managerHost !== "0.0.0.0"
+      const host = this.options.publicHost
+        || (this.options.managerHost && this.options.managerHost !== "0.0.0.0"
         ? this.options.managerHost
-        : firstLocalIp();
+        : firstLocalIp());
       const response = Buffer.from(JSON.stringify({
         type: "rabiroute.remoteAgent.manager",
         name: "RabiRoute Manager",
