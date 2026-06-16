@@ -571,12 +571,8 @@ function isMissingMonitorThreadError(error: unknown): boolean {
   return text.includes("Missing monitorThreadId") || text.includes("no matching Codex thread was found");
 }
 
-function shouldUseAppServerFallbackFor(error: unknown, state: CodexState): boolean {
+export function shouldUseAppServerFallbackFor(error: unknown, state: CodexState): boolean {
   if (!shouldUseAppServerFallback()) {
-    return false;
-  }
-
-  if (isNoClientFoundError(error) && (state.monitorThreadId || discoverMonitorThread())) {
     return false;
   }
 
@@ -604,8 +600,8 @@ async function createMonitorThreadForDesktopDelivery(state: CodexState, forceCre
     monitorThreadUpdatedAt: created.updatedAt,
     monitorThreadSource: `${created.source}; delivery=desktop-ipc`,
     lastAutoDiscoveryAt: new Date().toISOString(),
-    lastNotificationError: undefined,
-    lastNotificationErrorAt: undefined
+    lastNotificationError: "",
+    lastNotificationErrorAt: ""
   };
   writeState(nextState);
   monitorThreadActive = false;
@@ -693,17 +689,17 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
           ...state,
           notificationCount: (state.notificationCount ?? 0) + 1,
           lastNotificationAt: new Date().toISOString(),
-          lastNotificationError: undefined,
-          lastNotificationErrorAt: undefined
+          lastNotificationError: "",
+          lastNotificationErrorAt: ""
         });
       } catch (error) {
         if (shouldUseAppServerFallbackFor(error, state)) {
           try {
-            await notifyCodex(message);
+            await notifyCodex(message, { forceCreateUnreadableThread: isNoClientFoundError(error) });
             writeState({
               ...readState(),
-              lastNotificationError: undefined,
-              lastNotificationErrorAt: undefined,
+              lastNotificationError: "",
+              lastNotificationErrorAt: "",
               lastDesktopIpcError: error instanceof Error ? error.message : String(error),
               lastDesktopIpcErrorAt: new Date().toISOString(),
               lastDesktopIpcFallbackAt: new Date().toISOString()

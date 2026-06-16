@@ -406,21 +406,38 @@ export async function createCodexAppMonitorThread(forceCreate = false): Promise<
   };
 }
 
-export async function notifyCodex(message: string): Promise<void> {
+export type NotifyCodexOptions = {
+  forceCreateUnreadableThread?: boolean;
+};
+
+function isUnreadableDuplicateThreadError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("app-server channel cannot read it");
+}
+
+export async function notifyCodex(message: string, options: NotifyCodexOptions = {}): Promise<void> {
   notificationQueue = notificationQueue
     .catch(() => undefined)
-    .then(() => notifyCodexInternal(message));
+    .then(() => notifyCodexInternal(message, options));
 
   return notificationQueue;
 }
 
-async function notifyCodexInternal(message: string): Promise<void> {
+async function notifyCodexInternal(message: string, options: NotifyCodexOptions): Promise<void> {
   const state = readState();
   const notificationCount = (state.notificationCount ?? 0) + 1;
   const now = new Date();
   const threadName = config.codexThreadName;
 
-  let threadId = await ensureMonitorThread();
+  let threadId: string;
+  try {
+    threadId = await ensureMonitorThread();
+  } catch (error) {
+    if (!options.forceCreateUnreadableThread || !isUnreadableDuplicateThreadError(error)) {
+      throw error;
+    }
+
+    threadId = await ensureMonitorThread(true);
+  }
 
   try {
     await startNotificationTurn(threadId, threadName, message);
@@ -445,8 +462,8 @@ async function notifyCodexInternal(message: string): Promise<void> {
     monitorThreadName: threadName,
     notificationCount,
     lastNotificationAt: now.toISOString(),
-    lastNotificationError: undefined,
-    lastNotificationErrorAt: undefined
+    lastNotificationError: "",
+    lastNotificationErrorAt: ""
   });
 }
 
