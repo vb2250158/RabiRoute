@@ -34,15 +34,26 @@ type RemoteAgentDeviceStatus = {
   arch?: string;
   declaredIp?: string;
   observedIp?: string;
+  host?: string;
+  port?: number;
+  controlUrl?: string;
+  discoveryPort?: number;
+  protocolVersion?: number;
   defaultCwd?: string;
   defaultThreadName?: string;
   connected?: boolean;
+  passwordSaved?: boolean;
+  connectionError?: string;
+  discoveredAt?: string;
   connectedAt?: string;
   lastSeenAt?: string;
   lastTaskAt?: string;
 };
 const remoteAgentDevices = ref<RemoteAgentDeviceStatus[]>([]);
 const remoteAgentDevicesLoading = ref(false);
+const remoteAgentConnecting = ref(false);
+const remoteAgentPassword = ref("");
+const remoteAgentConnectResult = ref<{ ok: boolean; message: string } | null>(null);
 const remoteAgentDeviceError = ref("");
 const remoteAgentDeviceMenu = ref(false);
 const addingNapcatInstance = ref(false);
@@ -261,6 +272,11 @@ const selectedRemoteAgentDevice = computed(() => remoteAgentDevices.value.find(d
 const selectedRemoteAgentDeviceLabel = computed(() => {
   const option = remoteAgentDeviceOptions.value.find(device => device.deviceId === selectedRemoteAgentDeviceId.value);
   return option?.label || "选择远端 Agent 设备";
+});
+const remoteAgentConnected = computed(() => remoteAgentDevices.value.some(device => device.connected));
+const remoteAgentDiscoveryDetail = computed(() => {
+  const requirement = messageScanFor("remoteAgent")?.requirements?.find(item => item.id === "discovery");
+  return requirement?.detail || "扫描远端 bridge 公告，无需输入端口。";
 });
 const testingNapcatHealth = ref(false);
 const testingNapcatInstance = ref<Record<string, boolean>>({});
@@ -913,14 +929,16 @@ function remoteAgentDeviceTitle(device: RemoteAgentDeviceStatus): string {
 }
 
 function remoteAgentDeviceSubtitle(device: RemoteAgentDeviceStatus): string {
-  const status = device.connected === false ? "未连接" : "在线";
+  const status = device.connected ? "已连接" : device.connectionError ? "连接异常" : "已发现";
   const system = [device.os, device.osVersion, device.arch].filter(Boolean).join(" ");
-  const ip = device.observedIp || device.declaredIp || "";
-  return [status, device.agentType, system, ip].filter(Boolean).join(" · ");
+  const ip = device.observedIp || device.declaredIp || device.host || "";
+  const password = device.passwordSaved ? "已记住密码" : "";
+  return [status, device.agentType, system, ip, password].filter(Boolean).join(" · ");
 }
 
 function selectRemoteAgentDevice(deviceId: string): void {
   selectedRemoteAgentDeviceId.value = deviceId;
+  remoteAgentConnectResult.value = null;
   remoteAgentDeviceMenu.value = false;
 }
 
@@ -939,6 +957,88 @@ async function refreshRemoteAgentDevices(): Promise<void> {
     remoteAgentDeviceError.value = error instanceof Error ? error.message : String(error);
   } finally {
     remoteAgentDevicesLoading.value = false;
+  }
+}
+
+async function scanRemoteAgentDevices(): Promise<void> {
+  if (remoteAgentDevicesLoading.value) return;
+  remoteAgentDevicesLoading.value = true;
+  remoteAgentDeviceError.value = "";
+  remoteAgentConnectResult.value = null;
+  try {
+    const res = await fetch("/api/remote-agent/scan", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.code === -1) {
+      throw new Error(data.message || `HTTP ${res.status}`);
+    }
+    remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : [];
+    const selectedId = selectedRemoteAgentDeviceId.value;
+    if (!selectedId && remoteAgentDevices.value[0]) {
+      selectedRemoteAgentDeviceId.value = remoteAgentDevices.value[0].deviceId;
+    }
+  } catch (error: unknown) {
+    remoteAgentDeviceError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    remoteAgentDevicesLoading.value = false;
+  }
+}
+
+async function connectRemoteAgentDevice(): Promise<void> {
+  if (!selectedRemoteAgentDeviceId.value || remoteAgentConnecting.value) return;
+  remoteAgentConnecting.value = true;
+  remoteAgentDeviceError.value = "";
+  remoteAgentConnectResult.value = null;
+  try {
+    const res = await fetch("/api/remote-agent/connect", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        deviceId: selectedRemoteAgentDeviceId.value,
+        password: remoteAgentPassword.value
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.code === -1) {
+      throw new Error(data.message || `HTTP ${res.status}`);
+    }
+    remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : remoteAgentDevices.value;
+    const device = data.device as RemoteAgentDeviceStatus | undefined;
+    if (device?.deviceId && gateway.value) {
+      gateway.value.remoteAgentDefaultDeviceId = device.deviceId;
+      if (device.defaultCwd && !gateway.value.remoteAgentDefaultCwd) gateway.value.remoteAgentDefaultCwd = device.defaultCwd;
+      if (device.defaultThreadName && !gateway.value.remoteAgentDefaultThreadName) gateway.value.remoteAgentDefaultThreadName = device.defaultThreadName;
+      store.touch();
+    }
+    remoteAgentPassword.value = "";
+    remoteAgentConnectResult.value = { ok: true, message: "已连接远端 Agent，密码已记住。" };
+  } catch (error: unknown) {
+    remoteAgentConnectResult.value = { ok: false, message: error instanceof Error ? error.message : String(error) };
+  } finally {
+    remoteAgentConnecting.value = false;
+  }
+}
+
+async function disconnectRemoteAgentDevice(): Promise<void> {
+  if (!selectedRemoteAgentDeviceId.value || remoteAgentConnecting.value) return;
+  remoteAgentConnecting.value = true;
+  remoteAgentDeviceError.value = "";
+  remoteAgentConnectResult.value = null;
+  try {
+    const res = await fetch("/api/remote-agent/disconnect", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ deviceId: selectedRemoteAgentDeviceId.value })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.code === -1) {
+      throw new Error(data.message || `HTTP ${res.status}`);
+    }
+    remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : remoteAgentDevices.value;
+    remoteAgentConnectResult.value = { ok: true, message: "已断开远端 Agent。" };
+  } catch (error: unknown) {
+    remoteAgentConnectResult.value = { ok: false, message: error instanceof Error ? error.message : String(error) };
+  } finally {
+    remoteAgentConnecting.value = false;
   }
 }
 
@@ -3065,7 +3165,7 @@ watch(
                   </div>
                   <div v-else-if="choice.type === 'remoteAgent'" class="catalog-param-grid">
                     <v-alert class="full-span" type="info" variant="tonal" density="compact">
-                      远端 Agent 是下游 Agent 设备入口。远端机器不需要安装完整 RabiRoute，只运行 <code>plugin-adapters/remote-agent-rabiroute</code> bridge；本机人格会通过 Rabi API 发现设备并投递任务。
+                      远端 Agent 是下游 Agent 设备入口。远端机器只运行 <code>plugin-adapters/remote-agent-rabiroute</code> bridge，无人值守等待 RabiGUI 扫描；选择设备并输入密码后，本机人格会通过 Rabi API 投递任务。
                     </v-alert>
                     <div class="full-span">
                       <v-menu v-model="remoteAgentDeviceMenu" location="bottom start" :close-on-content-click="false">
@@ -3077,7 +3177,7 @@ watch(
                             block
                             append-icon="mdi-menu-down"
                             :loading="remoteAgentDevicesLoading"
-                            @click="remoteAgentDeviceOptions.length ? undefined : refreshRemoteAgentDevices()"
+                            @click="remoteAgentDeviceOptions.length ? undefined : scanRemoteAgentDevices()"
                           >
                             <span class="remote-agent-device-select-main">{{ selectedRemoteAgentDeviceLabel }}</span>
                           </v-btn>
@@ -3094,38 +3194,57 @@ watch(
                           <v-list-item
                             v-if="remoteAgentDeviceOptions.length === 0"
                             prepend-icon="mdi-lan-disconnect"
-                            title="没有在线远端 Agent 设备"
-                            subtitle="先在另一台设备运行 remote-agent-rabiroute bridge，再刷新。"
+                            title="还没有扫描到远端 Agent 设备"
+                            subtitle="先在另一台设备运行 remote-agent-rabiroute bridge，再扫描局域网。"
                           />
                         </v-list>
                       </v-menu>
-                      <div class="field-hint">选择当前路由默认投递的远端设备；任务仍可在 API 请求里指定其他 deviceId。</div>
+                      <div class="field-hint">选择当前路由默认投递的远端设备；端口占用会由 bridge 和 Rabi 扫描自动处理。</div>
                     </div>
+                    <v-text-field
+                      v-model="remoteAgentPassword"
+                      class="full-span"
+                      type="password"
+                      label="连接密码"
+                      :placeholder="selectedRemoteAgentDevice?.passwordSaved ? '已记住密码，留空可直接连接' : '默认密码 123456'"
+                      autocomplete="current-password"
+                    />
+                    <v-alert v-if="remoteAgentConnectResult" class="full-span" :type="remoteAgentConnectResult.ok ? 'success' : 'warning'" variant="tonal" density="compact">
+                      {{ remoteAgentConnectResult.message }}
+                    </v-alert>
                     <v-alert v-if="remoteAgentDeviceError" class="full-span" type="warning" variant="tonal" density="compact">
                       {{ remoteAgentDeviceError }}
                     </v-alert>
                     <div v-if="selectedRemoteAgentDevice" class="full-span">
                       <div class="status-row"><span>选中设备</span><b>{{ remoteAgentDeviceTitle(selectedRemoteAgentDevice) }}</b></div>
+                      <div class="status-row"><span>连接状态</span><b :class="selectedRemoteAgentDevice.connected ? 'text-success' : 'text-warning'">{{ selectedRemoteAgentDevice.connected ? "已连接" : "未连接" }}</b></div>
                       <div class="status-row"><span>Agent 类型</span><b>{{ selectedRemoteAgentDevice.agentType || "agent" }}</b></div>
                       <div class="status-row"><span>系统</span><b>{{ [selectedRemoteAgentDevice.os, selectedRemoteAgentDevice.osVersion, selectedRemoteAgentDevice.arch].filter(Boolean).join(" ") || "-" }}</b></div>
-                      <div class="status-row"><span>IP</span><b>{{ selectedRemoteAgentDevice.observedIp || selectedRemoteAgentDevice.declaredIp || "-" }}</b></div>
+                      <div class="status-row"><span>IP</span><b>{{ selectedRemoteAgentDevice.observedIp || selectedRemoteAgentDevice.declaredIp || selectedRemoteAgentDevice.host || "-" }}</b></div>
+                      <div class="status-row"><span>密码</span><b>{{ selectedRemoteAgentDevice.passwordSaved ? "已记住" : "未保存" }}</b></div>
                       <div class="status-row"><span>默认 cwd</span><b>{{ selectedRemoteAgentDevice.defaultCwd || "-" }}</b></div>
                       <div class="status-row"><span>默认线程</span><b>{{ selectedRemoteAgentDevice.defaultThreadName || "-" }}</b></div>
+                      <div v-if="selectedRemoteAgentDevice.connectionError" class="status-row"><span>连接诊断</span><b class="text-warning">{{ selectedRemoteAgentDevice.connectionError }}</b></div>
                     </div>
                     <div class="full-span">
                       <div class="status-row"><span>设备发现 API</span><b>/api/remote-agent/devices</b></div>
                       <div class="status-row"><span>任务投递 API</span><b>/api/remote-agent/tasks</b></div>
-                      <div class="status-row"><span>连接地址</span><b>{{ messageScanFor('remoteAgent')?.endpoints?.[0]?.url || 'ws://<this-host>:8790/api/remote-agent/connect' }}</b></div>
-                      <div class="status-row"><span>局域网发现</span><b>默认开启；设置 REMOTE_AGENT_DISCOVERABLE=0 可关闭</b></div>
-                      <div class="status-row"><span>在线状态</span><b :class="messageScanFor('remoteAgent')?.installed ? 'text-success' : 'text-warning'">{{ messageScanFor('remoteAgent')?.installed ? '已有设备连接' : '等待远端 bridge 连接' }}</b></div>
+                      <div class="status-row"><span>局域网扫描</span><b>{{ remoteAgentDiscoveryDetail }}</b></div>
+                      <div class="status-row"><span>在线状态</span><b :class="remoteAgentConnected ? 'text-success' : 'text-warning'">{{ remoteAgentConnected ? '已有设备连接' : '等待扫描并连接' }}</b></div>
                     </div>
                     <div class="agent-action-bar full-span mt-2">
                       <div class="agent-action-status">
-                        <span class="section-note">开启后，Agent prompt 会注入远端 Agent 设备 API。远端 bridge 通过参数声明 agentType，例如 codex。</span>
+                        <span class="section-note">开启后，Agent prompt 会注入远端 Agent 设备 API。默认密码是 123456，连接成功后会记住密码。</span>
                       </div>
                       <div class="d-flex ga-2 flex-wrap">
-                        <v-btn size="small" variant="tonal" color="secondary" prepend-icon="mdi-refresh" :loading="remoteAgentDevicesLoading" @click="refreshRemoteAgentDevices">
-                          刷新设备
+                        <v-btn size="small" variant="tonal" color="secondary" prepend-icon="mdi-lan-pending" :loading="remoteAgentDevicesLoading" @click="scanRemoteAgentDevices">
+                          扫描局域网
+                        </v-btn>
+                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-lan-connect" :loading="remoteAgentConnecting" :disabled="!selectedRemoteAgentDeviceId" @click="connectRemoteAgentDevice">
+                          连接
+                        </v-btn>
+                        <v-btn size="small" variant="text" prepend-icon="mdi-lan-disconnect" :loading="remoteAgentConnecting" :disabled="!selectedRemoteAgentDeviceId || !selectedRemoteAgentDevice?.connected" @click="disconnectRemoteAgentDevice">
+                          断开
                         </v-btn>
                         <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText('/api/remote-agent/devices', '已复制远端 Agent 设备 API')">
                           复制设备 API

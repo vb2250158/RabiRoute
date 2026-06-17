@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-remote-agent-boundary",
   "title": "远端 Agent 是下游设备入口，不是绕过安全门的回复通道",
-  "content": "remoteAgent 让本机人格把任务投递给远端设备上的 Agent bridge。远端结果必须先回到本机 RabiRoute，再注入发起任务的人格线程；远端 Agent 不直接回复 QQ 或外部系统。非本机 remote-agent REST 请求需要 token，任务事件还要匹配任务所属 deviceId。bridge 应当能在 manager 晚启动、网卡地址变化或连接断开后继续自动发现和重连，manager discovery 可用 REMOTE_AGENT_PUBLIC_HOST 固定公告地址。",
+  "content": "remoteAgent 让本机人格把任务投递给远端设备上的 Agent bridge。远端结果必须先回到本机 RabiRoute，再注入发起任务的人格线程；远端 Agent 不直接回复 QQ 或外部系统。RabiGUI 是主控端：扫描局域网远端 bridge，用户输入密码连接，密码握手通过 WebSocket 首包完成，不再通过 token 或 URL query。bridge 零配置无人值守启动，控制端口和 discovery 端口被占用时会自动顺延，RabiGUI 使用扫描公告的真实端口。",
   "source": {
     "kind": "example",
     "summary": "公开示例近期记忆：远端 Agent 设备边界和安全门"
   },
   "createdAt": "2026-06-11T00:00:00+08:00",
-  "updatedAt": "2026-06-16T00:00:00+08:00",
-  "keywords": ["remoteAgent", "远端 Agent", "deviceId", "REMOTE_AGENT_TOKEN", "REMOTE_AGENT_PUBLIC_HOST", "自动发现", "重连", "Action Gate", "安全门", "回传"]
+  "updatedAt": "2026-06-17T00:00:00+08:00",
+  "keywords": ["remoteAgent", "远端 Agent", "deviceId", "密码握手", "RabiGUI", "主控扫描", "端口顺延", "Action Gate", "安全门", "回传"]
 }

@@ -840,7 +840,7 @@ async function apply() {
                   </template>
                   <template v-if="form.adapters.includes('remoteAgent')">
                     <v-alert type="info" variant="tonal" density="compact" class="full-span">
-                      远端 Agent 是下游 Agent 设备入口；远端设备只运行独立 bridge。保存后在“消息适配器”页刷新在线设备并选择默认远端 Agent 设备。
+                      远端 Agent 是下游 Agent 设备入口；远端设备只运行独立 bridge，无人值守等待 RabiGUI 扫描。保存后在“消息适配器”页扫描局域网，选择设备并输入密码连接。
                     </v-alert>
                   </template>
                   <template v-for="webhookAdapter in selectedWebhookAdapters()" :key="webhookAdapter">

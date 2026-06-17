@@ -4,92 +4,49 @@ import dgram from "node:dgram";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 
-const configPath = process.env.REMOTE_AGENT_CONFIG_PATH || path.join(os.homedir(), ".rabiroute", "remote-agent-bridge.json");
-const savedConfig = loadBridgeConfig();
-let managerWsUrl = process.env.RABIROUTE_MANAGER_WS ?? savedConfig.managerWsUrl ?? "";
-let token = process.env.REMOTE_AGENT_TOKEN ?? savedConfig.token ?? "";
+const PROTOCOL_VERSION = 2;
+const DEFAULT_PASSWORD = "123456";
+const controlHost = process.env.REMOTE_AGENT_CONTROL_HOST || "0.0.0.0";
+const controlPortStart = Number(process.env.REMOTE_AGENT_CONTROL_PORT || "8797");
+const discoveryPortStart = Number(process.env.REMOTE_AGENT_DISCOVERY_PORT_START || process.env.REMOTE_AGENT_DISCOVERY_PORT || "8798");
+const discoveryPortEnd = Number(process.env.REMOTE_AGENT_DISCOVERY_PORT_END || "8818");
+const password = process.env.REMOTE_AGENT_PASSWORD || DEFAULT_PASSWORD;
 const deviceId = process.env.REMOTE_AGENT_DEVICE_ID || os.hostname();
 const deviceName = process.env.REMOTE_AGENT_DEVICE_NAME || os.hostname();
 const agentType = process.env.REMOTE_AGENT_TYPE || "codex";
 const defaultCwd = process.env.REMOTE_AGENT_DEFAULT_CWD || process.cwd();
 const defaultThreadName = process.env.REMOTE_AGENT_DEFAULT_THREAD || "Remote Agent";
-const callbackHost = process.env.REMOTE_AGENT_CALLBACK_HOST || "127.0.0.1";
-const callbackPort = Number(process.env.REMOTE_AGENT_CALLBACK_PORT || "8797");
-const discoveryPort = Number(process.env.REMOTE_AGENT_DISCOVERY_PORT || "8798");
-let autoDiscoverEnabled = process.env.REMOTE_AGENT_AUTO_DISCOVER === undefined
-  ? savedConfig.autoDiscoverEnabled !== false
-  : process.env.REMOTE_AGENT_AUTO_DISCOVER !== "0";
-const discoveryIntervalMs = Number(process.env.REMOTE_AGENT_DISCOVERY_INTERVAL_MS || "10000");
 const codexAppServerUrl = process.env.REMOTE_AGENT_CODEX_APP_SERVER_URL || "ws://127.0.0.1:4510";
 const codexBin = process.env.REMOTE_AGENT_CODEX_BIN || "codex";
+const publicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || "";
 
-let socket = null;
-let reconnectTimer = null;
-let reconnectAttempt = 0;
-let discoveryInFlight = false;
+let actualControlPort = 0;
+let discoveryPort = 0;
+let discoveryWarning = "";
+let managerSocket = null;
+let managerInfo = null;
 let appSocket = null;
 let appNextId = 1;
 const appPending = new Map();
-let discoveredManagers = [];
-
-function loadBridgeConfig() {
-  try {
-    if (!fs.existsSync(configPath)) return {};
-    const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    return raw && typeof raw === "object" ? raw : {};
-  } catch (error) {
-    console.warn(`Failed to read bridge config ${configPath}: ${error.message}`);
-    return {};
-  }
-}
-
-function saveBridgeConfig() {
-  try {
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify({
-      managerWsUrl,
-      token,
-      autoDiscoverEnabled,
-      updatedAt: new Date().toISOString()
-    }, null, 2), "utf8");
-  } catch (error) {
-    console.warn(`Failed to save bridge config ${configPath}: ${error.message}`);
-  }
-}
 
 function firstLocalIp() {
-  for (const entries of Object.values(os.networkInterfaces())) {
+  const scored = [];
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
     for (const item of entries || []) {
-      if (item.family === "IPv4" && !item.internal) return item.address;
+      if (item.family !== "IPv4" || item.internal) continue;
+      const label = name.toLowerCase();
+      let score = 0;
+      if (item.address.startsWith("192.168.") || item.address.startsWith("10.") || item.address.startsWith("172.")) score += 20;
+      if (label.includes("wi-fi") || label.includes("wifi") || label.includes("ethernet") || label.includes("以太网") || label.includes("wlan")) score += 10;
+      if (label.includes("zerotier") || label.includes("tailscale")) score += 8;
+      if (label.includes("wsl") || label.includes("vethernet") || label.includes("tap") || label.includes("loopback")) score -= 30;
+      if (item.address.startsWith("169.254.")) score -= 20;
+      scored.push({ address: item.address, score });
     }
   }
-  return "127.0.0.1";
-}
-
-function ipv4ToInt(value) {
-  const parts = value.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
-  return parts.reduce((acc, part) => ((acc << 8) | part) >>> 0, 0);
-}
-
-function intToIpv4(value) {
-  return [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join(".");
-}
-
-function discoveryTargets() {
-  const targets = new Set(["255.255.255.255"]);
-  for (const entries of Object.values(os.networkInterfaces())) {
-    for (const item of entries || []) {
-      if (item.family !== "IPv4" || item.internal || !item.address || !item.netmask) continue;
-      const address = ipv4ToInt(item.address);
-      const netmask = ipv4ToInt(item.netmask);
-      if (address == null || netmask == null) continue;
-      targets.add(intToIpv4((address | (~netmask >>> 0)) >>> 0));
-    }
-  }
-  return [...targets];
+  return scored.sort((left, right) => right.score - left.score)[0]?.address ?? "127.0.0.1";
 }
 
 function deviceInfo() {
@@ -106,60 +63,9 @@ function deviceInfo() {
   };
 }
 
-function managerUrlWithToken() {
-  if (!managerWsUrl) {
-    throw new Error("RABIROUTE_MANAGER_WS is not set and no LAN manager has been selected.");
-  }
-  const url = new URL(managerWsUrl);
-  if (token) url.searchParams.set("token", token);
-  return url.toString();
-}
-
-function managerUrlKey(value) {
-  try {
-    const url = new URL(value);
-    url.searchParams.delete("token");
-    return url.toString();
-  } catch {
-    return String(value || "").trim();
-  }
-}
-
-function chooseManager(managers) {
-  if (!Array.isArray(managers) || managers.length === 0) return null;
-  const currentKey = managerUrlKey(managerWsUrl);
-  return managers.find((item) => managerUrlKey(item.wsUrl) === currentKey)
-    || managers.find((item) => !item.tokenRequired || token)
-    || managers[0];
-}
-
-function setManagerConfig(next) {
-  let changed = false;
-  if (typeof next.managerWsUrl === "string" && next.managerWsUrl.trim() !== managerWsUrl) {
-    managerWsUrl = next.managerWsUrl.trim();
-    changed = true;
-  }
-  if (typeof next.token === "string" && next.token !== token) {
-    token = next.token;
-    changed = true;
-  }
-  if (typeof next.autoDiscoverEnabled === "boolean" && next.autoDiscoverEnabled !== autoDiscoverEnabled) {
-    autoDiscoverEnabled = next.autoDiscoverEnabled;
-    changed = true;
-  }
-  if (changed) saveBridgeConfig();
-  return changed;
-}
-
-function sendToManager(payload) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    throw new Error("Remote Agent bridge is not connected to RabiRoute manager.");
-  }
-  socket.send(JSON.stringify(payload));
-}
-
-function sendTaskEvent(event) {
-  sendToManager({ type: "taskEvent", ...event, device: deviceInfo() });
+function localRemoteAddress(value) {
+  const address = String(value || "").replace(/^::ffff:/, "");
+  return address === "::1" || address === "localhost" || address === "127.0.0.1" || address.startsWith("127.");
 }
 
 function readJson(request) {
@@ -185,199 +91,102 @@ function jsonResponse(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
-function htmlResponse(response, body) {
+function htmlResponse(response) {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  response.end(body);
-}
-
-function bridgePage() {
-  const rows = discoveredManagers.map((manager, index) => `
-    <tr>
-      <td>${manager.name || "RabiRoute Manager"}</td>
-      <td><code>${manager.wsUrl}</code></td>
-      <td>${manager.tokenRequired ? "需要" : "不需要"}</td>
-      <td><button onclick="selectManager(${index})">选择</button></td>
-    </tr>
-  `).join("");
-  return `<!doctype html>
+  response.end(`<!doctype html>
   <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>远端 Agent Bridge</title>
+    <title>RabiRoute Remote Agent</title>
     <style>
       body { font-family: system-ui, sans-serif; margin: 24px; color: #172026; background: #f7f8fa; }
-      main { max-width: 980px; margin: auto; background: white; border: 1px solid #dde3ea; border-radius: 8px; padding: 20px; }
-      input { width: min(720px, 100%); padding: 8px; margin: 4px 0 12px; }
-      button { padding: 7px 12px; margin-right: 8px; cursor: pointer; }
-      table { border-collapse: collapse; width: 100%; margin-top: 12px; }
-      td, th { border-bottom: 1px solid #e7ebf0; padding: 8px; text-align: left; }
+      main { max-width: 760px; margin: auto; background: white; border: 1px solid #dde3ea; border-radius: 8px; padding: 20px; }
       code { word-break: break-all; }
       .status { color: #496579; margin: 8px 0 16px; }
     </style>
   </head>
   <body>
     <main>
-      <h1>远端 Agent Bridge</h1>
+      <h1>RabiRoute Remote Agent</h1>
       <div class="status">设备：${deviceName} (${deviceId}) · agentType=${agentType} · ${process.platform}/${process.arch}</div>
-      <label><input id="autoDiscover" type="checkbox" ${autoDiscoverEnabled ? "checked" : ""} style="width:auto" /> 启用局域网自动发现</label>
-      <h2>连接 RabiRoute Manager</h2>
-      <label>Manager WebSocket</label><br />
-      <input id="managerWsUrl" value="${managerWsUrl}" placeholder="ws://<rabi-host>:8790/api/remote-agent/connect" /><br />
-      <label>Token</label><br />
-      <input id="token" value="${token}" placeholder="REMOTE_AGENT_TOKEN，可为空" /><br />
-      <button onclick="saveConfig()">保存并连接</button>
-      <button onclick="scanLan()">扫描局域网</button>
-      <h2>发现到的 Manager</h2>
-      <table>
-        <thead><tr><th>名称</th><th>地址</th><th>Token</th><th></th></tr></thead>
-        <tbody>${rows || "<tr><td colspan='4'>尚未发现，点击“扫描局域网”。</td></tr>"}</tbody>
-      </table>
+      <p>远端 Agent 已无人值守启动。请回到 RabiGUI 扫描局域网远端 Agent，并输入密码连接。</p>
+      <p>默认密码：<code>${password === DEFAULT_PASSWORD ? DEFAULT_PASSWORD : "已通过 REMOTE_AGENT_PASSWORD 覆盖"}</code></p>
+      <p>控制端口：<code>${actualControlPort || "-"}</code></p>
+      <p>发现端口：<code>${discoveryPort || discoveryWarning || "-"}</code></p>
     </main>
-    <script>
-      async function saveConfig() {
-        const resp = await fetch('/api/config', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            managerWsUrl: document.getElementById('managerWsUrl').value,
-            token: document.getElementById('token').value,
-            autoDiscoverEnabled: document.getElementById('autoDiscover').checked
-          })
-        });
-        if (!resp.ok) alert(await resp.text());
-        else location.reload();
-      }
-      async function scanLan() {
-        await fetch('/api/discover', { method: 'POST' });
-        location.reload();
-      }
-      async function selectManager(index) {
-        const resp = await fetch('/api/select-manager', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ index })
-        });
-        if (!resp.ok) alert(await resp.text());
-        else location.reload();
-      }
-    </script>
   </body>
-  </html>`;
+  </html>`);
 }
 
-function discoverManagers(timeoutMs = 1400) {
-  return new Promise((resolve) => {
-    const socket = dgram.createSocket("udp4");
-    const found = [];
-    const seen = new Set();
-    const probe = Buffer.from(JSON.stringify({ type: "rabiroute.remoteAgent.discover", device: deviceInfo() }));
-    const finish = () => {
-      socket.close();
-      discoveredManagers = found;
-      resolve(found);
-    };
-    socket.on("message", (message, remote) => {
-      try {
-        const item = JSON.parse(message.toString("utf8"));
-        if (item.type !== "rabiroute.remoteAgent.manager" || !item.wsUrl) return;
-        const key = item.wsUrl;
-        if (seen.has(key)) return;
-        seen.add(key);
-        found.push({ ...item, remoteAddress: remote.address });
-      } catch {
-        // ignore malformed response
-      }
-    });
-    socket.bind(() => {
-      socket.setBroadcast(true);
-      for (const target of discoveryTargets()) {
-        socket.send(probe, discoveryPort, target);
-      }
-    });
-    setTimeout(finish, timeoutMs);
-  });
-}
-
-async function discoverAndMaybeReconnect(reason) {
-  if (!autoDiscoverEnabled || discoveryInFlight) return;
-  discoveryInFlight = true;
-  try {
-    const managers = await discoverManagers();
-    const selected = chooseManager(managers);
-    if (!selected?.wsUrl) {
-      if (!managerWsUrl) console.log(`No RabiRoute manager discovered yet (${reason}).`);
-      return;
-    }
-    const changed = setManagerConfig({ managerWsUrl: selected.wsUrl });
-    if (changed) {
-      console.log(`Selected RabiRoute manager from LAN discovery: ${managerWsUrl}`);
-      reconnectManager();
-    } else if (!socket || socket.readyState === WebSocket.CLOSED) {
-      connectManager();
-    }
-  } catch (error) {
-    console.warn(`Remote Agent discovery failed: ${error.message}`);
-  } finally {
-    discoveryInFlight = false;
+function sendToManager(payload) {
+  if (!managerSocket || managerSocket.readyState !== WebSocket.OPEN) {
+    throw new Error("Remote Agent bridge is not connected to RabiRoute manager.");
   }
+  managerSocket.send(JSON.stringify(payload));
 }
 
-function startCallbackServer() {
-  const server = http.createServer(async (request, response) => {
+function sendTaskEvent(event) {
+  sendToManager({ type: "taskEvent", ...event, device: deviceInfo() });
+}
+
+function tryListenServer(server, port, host) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve(port);
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+}
+
+async function listenServerFrom(server, startPort, host) {
+  for (let port = startPort; port <= 65535; port += 1) {
     try {
-      const url = new URL(request.url || "/", `http://${request.headers.host || `${callbackHost}:${callbackPort}`}`);
-      if (request.method === "GET" && url.pathname === "/health") {
-        jsonResponse(response, 200, { ok: true, device: deviceInfo(), connected: socket?.readyState === WebSocket.OPEN, managerWsUrl, autoDiscoverEnabled, discoveredManagers });
-        return;
-      }
-      if (request.method === "GET" && url.pathname === "/") {
-        htmlResponse(response, bridgePage());
-        return;
-      }
-      if (request.method === "POST" && url.pathname === "/api/config") {
-        const body = await readJson(request);
-        setManagerConfig({
-          managerWsUrl: String(body.managerWsUrl || "").trim(),
-          token: String(body.token || ""),
-          autoDiscoverEnabled: body.autoDiscoverEnabled !== false
-        });
-        reconnectManager();
-        jsonResponse(response, 200, { ok: true, managerWsUrl, autoDiscoverEnabled });
-        return;
-      }
-      if (request.method === "POST" && url.pathname === "/api/discover") {
-        const managers = await discoverManagers();
-        const selected = chooseManager(managers);
-        if (selected?.wsUrl) {
-          setManagerConfig({ managerWsUrl: selected.wsUrl });
-          reconnectManager();
-        }
-        jsonResponse(response, 200, { ok: true, managers });
-        return;
-      }
-      if (request.method === "POST" && url.pathname === "/api/select-manager") {
-        const body = await readJson(request);
-        const item = discoveredManagers[Number(body.index)];
-        if (!item?.wsUrl) throw new Error("Selected manager not found.");
-        setManagerConfig({ managerWsUrl: item.wsUrl });
-        reconnectManager();
-        jsonResponse(response, 200, { ok: true, managerWsUrl });
-        return;
-      }
-      if (request.method === "POST" && url.pathname === "/v1/remote-agent/task-events") {
-        const body = await readJson(request);
-        sendTaskEvent(body);
-        jsonResponse(response, 202, { ok: true });
-        return;
-      }
-      jsonResponse(response, 404, { ok: false, error: "Not found" });
+      await tryListenServer(server, port, host);
+      return port;
     } catch (error) {
-      jsonResponse(response, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      if (error?.code !== "EADDRINUSE" && error?.code !== "EACCES") throw error;
     }
+  }
+  throw new Error(`No available control port found from ${startPort}.`);
+}
+
+function bindUdp(socket, port) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      socket.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      socket.off("error", onError);
+      resolve(port);
+    };
+    socket.once("error", onError);
+    socket.once("listening", onListening);
+    socket.bind(port, "0.0.0.0");
   });
-  server.listen(callbackPort, callbackHost, () => {
-    console.log(`Remote Agent callback listening on http://${callbackHost}:${callbackPort}`);
-  });
+}
+
+async function bindDiscoverySocket() {
+  const end = Math.max(discoveryPortStart, discoveryPortEnd);
+  for (let port = discoveryPortStart; port <= end; port += 1) {
+    const socket = dgram.createSocket("udp4");
+    try {
+      await bindUdp(socket, port);
+      socket.setBroadcast(true);
+      return { socket, port };
+    } catch (error) {
+      try { socket.close(); } catch { /* ignore */ }
+      if (error?.code !== "EADDRINUSE" && error?.code !== "EACCES") throw error;
+    }
+  }
+  throw new Error(`Remote Agent discovery port range ${discoveryPortStart}-${end} is occupied.`);
 }
 
 async function ensureCodexAppServer(cwd) {
@@ -495,7 +304,7 @@ async function ensureThread(threadName, cwd) {
 }
 
 function buildTaskPrompt(task) {
-  const callbackUrl = `http://${callbackHost}:${callbackPort}/v1/remote-agent/task-events`;
+  const callbackUrl = `http://127.0.0.1:${actualControlPort}/v1/remote-agent/task-events`;
   return [
     "[RabiRoute 远端 Agent 任务]",
     `任务 ID：${task.taskId}`,
@@ -547,88 +356,145 @@ async function handleTask(task) {
   }
 }
 
-function connectManager() {
-  if (!managerWsUrl) {
-    console.log("No RabiRoute manager selected yet. Open the bridge UI to scan/select one.");
-    scheduleReconnect();
-    void discoverAndMaybeReconnect("no manager selected");
-    return;
-  }
-  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-    return;
-  }
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  socket = new WebSocket(managerUrlWithToken());
-  socket.on("open", () => {
-    reconnectAttempt = 0;
-    console.log(`Connected to RabiRoute manager: ${managerWsUrl}`);
-    sendToManager({ type: "register", device: deviceInfo() });
-  });
-  socket.on("message", (data) => {
-    const msg = JSON.parse(data.toString());
-    if (msg.type === "task") {
-      void handleTask(msg.task);
-    } else if (msg.type === "registered") {
-      console.log(`Registered remote Agent device ${msg.deviceId}; observedIp=${msg.observedIp || "-"}`);
-    } else if (msg.type === "error") {
-      console.error(`Manager error: ${msg.error}`);
+function createControlServer() {
+  const server = http.createServer(async (request, response) => {
+    try {
+      const url = new URL(request.url || "/", `http://${request.headers.host || `127.0.0.1:${actualControlPort || controlPortStart}`}`);
+      if (request.method === "GET" && url.pathname === "/health") {
+        jsonResponse(response, 200, {
+          ok: true,
+          protocolVersion: PROTOCOL_VERSION,
+          device: deviceInfo(),
+          connected: managerSocket?.readyState === WebSocket.OPEN,
+          manager: managerInfo,
+          controlPort: actualControlPort,
+          discoveryPort,
+          discoveryWarning
+        });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/") {
+        htmlResponse(response);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/v1/remote-agent/task-events") {
+        if (!localRemoteAddress(request.socket.remoteAddress)) {
+          jsonResponse(response, 403, { ok: false, error: "Task event callback only accepts local requests." });
+          return;
+        }
+        const body = await readJson(request);
+        sendTaskEvent(body);
+        jsonResponse(response, 202, { ok: true });
+        return;
+      }
+      jsonResponse(response, 404, { ok: false, error: "Not found" });
+    } catch (error) {
+      jsonResponse(response, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   });
-  socket.on("close", () => {
-    socket = null;
-    console.log("Disconnected from RabiRoute manager; reconnecting soon.");
-    scheduleReconnect();
-    void discoverAndMaybeReconnect("socket closed");
+
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (requestUrl.pathname !== "/api/remote-agent/control") return;
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      let authenticated = false;
+      const authTimer = setTimeout(() => {
+        if (!authenticated) {
+          ws.send(JSON.stringify({ type: "error", error: "Password handshake timed out." }));
+          ws.close();
+        }
+      }, 5000);
+      ws.on("message", (data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (!authenticated) {
+            if (msg.type !== "hello" || String(msg.password || "") !== password) {
+              ws.send(JSON.stringify({ type: "error", error: "Invalid remote Agent password." }));
+              ws.close();
+              return;
+            }
+            authenticated = true;
+            clearTimeout(authTimer);
+            if (managerSocket && managerSocket !== ws) {
+              try { managerSocket.close(); } catch { /* ignore */ }
+            }
+            managerSocket = ws;
+            managerInfo = msg.manager || null;
+            ws.send(JSON.stringify({
+              type: "registered",
+              protocolVersion: PROTOCOL_VERSION,
+              device: deviceInfo(),
+              managerTime: new Date().toISOString()
+            }));
+            return;
+          }
+          if (msg.type === "task") {
+            void handleTask(msg.task);
+          }
+        } catch (error) {
+          ws.send(JSON.stringify({ type: "error", error: error instanceof Error ? error.message : String(error) }));
+        }
+      });
+      ws.on("close", () => {
+        if (managerSocket === ws) {
+          managerSocket = null;
+          managerInfo = null;
+        }
+      });
+    });
   });
-  socket.on("error", (error) => {
-    console.error(`Manager connection error: ${error.message}`);
+  return server;
+}
+
+async function startDiscoveryResponder() {
+  let socket = null;
+  try {
+    const bound = await bindDiscoverySocket();
+    socket = bound.socket;
+    discoveryPort = bound.port;
+  } catch (error) {
+    discoveryWarning = error instanceof Error ? error.message : String(error);
+    console.warn(discoveryWarning);
+    return;
+  }
+  socket.on("message", (message, remote) => {
+    let payload = {};
+    try {
+      payload = JSON.parse(message.toString("utf8"));
+    } catch {
+      return;
+    }
+    if (payload.type !== "rabiroute.remoteAgent.client.discover") return;
+    const host = publicHost || firstLocalIp();
+    const response = Buffer.from(JSON.stringify({
+      type: "rabiroute.remoteAgent.client",
+      protocolVersion: PROTOCOL_VERSION,
+      device: deviceInfo(),
+      host,
+      port: actualControlPort,
+      controlUrl: `ws://${host}:${actualControlPort}/api/remote-agent/control`,
+      discoveryPort,
+      passwordRequired: true,
+      sentAt: new Date().toISOString()
+    }));
+    socket.send(response, remote.port, remote.address);
   });
+  console.log(`Remote Agent discovery listening on udp://0.0.0.0:${discoveryPort}`);
 }
 
-function reconnectManager() {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  if (socket) {
-    socket.removeAllListeners();
-    socket.close();
-    socket = null;
-  }
-  connectManager();
-}
+const server = createControlServer();
+actualControlPort = await listenServerFrom(server, controlPortStart, controlHost);
+console.log(`Remote Agent control listening on http://${controlHost}:${actualControlPort}`);
+console.log(`Remote Agent password: ${password === DEFAULT_PASSWORD ? "123456 (default)" : "set by REMOTE_AGENT_PASSWORD"}`);
+await startDiscoveryResponder();
 
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  const delay = Math.min(30000, 2000 * (2 ** Math.min(reconnectAttempt++, 4)));
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connectManager();
-  }, delay);
-}
-
-startCallbackServer();
-if (!managerWsUrl && autoDiscoverEnabled) {
-  const managers = await discoverManagers();
-  const selected = chooseManager(managers);
-  if (selected?.wsUrl) {
-    setManagerConfig({ managerWsUrl: selected.wsUrl });
-  }
-}
-connectManager();
-setInterval(() => {
-  if (!autoDiscoverEnabled) return;
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    void discoverAndMaybeReconnect("background scan");
-  }
-}, discoveryIntervalMs).unref();
 setInterval(() => {
   try {
-    if (socket?.readyState === WebSocket.OPEN) sendToManager({ type: "heartbeat", device: deviceInfo() });
+    if (managerSocket?.readyState === WebSocket.OPEN) {
+      managerSocket.send(JSON.stringify({ type: "heartbeat", device: deviceInfo() }));
+    }
   } catch {
-    // reconnect loop handles the socket state
+    // next manager connection will refresh state
   }
 }, 15000).unref();

@@ -318,7 +318,7 @@ const remoteAgentHub = new RemoteAgentHub({
   managerHost,
   publicHost: remoteAgentPublicHost,
   discoveryPort: Number(process.env.REMOTE_AGENT_DISCOVERY_PORT ?? "8798"),
-  token: process.env.REMOTE_AGENT_TOKEN,
+  passwordStorePath: path.join(rootDir, "data", "remote-agent-connections.json"),
   getDefaultGatewayId: () => [...runtimes.values()][0]?.definition.id,
   onTaskEvent: handleRemoteAgentTaskEvent
 });
@@ -2388,22 +2388,39 @@ function remoteAgentTaskWithGatewayDefaults(request: RemoteAgentTaskRequest): Re
 }
 
 function handleRemoteAgentApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
-  if (requestUrl.pathname.startsWith("/api/remote-agent/") && !isRemoteAgentRequestAuthorized(request, requestUrl)) {
-    jsonResponse(response, 401, {
-      code: -1,
-      message: remoteAgentToken
-        ? "Remote Agent API requires a valid token for non-local requests."
-        : "Remote Agent API requires REMOTE_AGENT_TOKEN before accepting non-local requests."
-    });
-    return true;
-  }
-
   if (request.method === "GET" && requestUrl.pathname === "/api/remote-agent/devices") {
     jsonResponse(response, 200, {
       code: 0,
       devices: remoteAgentHub.listDevices(),
       tasks: remoteAgentHub.listTasks(20)
     });
+    return true;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/scan") {
+    void remoteAgentHub.scanLan()
+      .then((devices) => jsonResponse(response, 200, {
+        code: 0,
+        devices,
+        tasks: remoteAgentHub.listTasks(20)
+      }))
+      .catch((error) => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/connect") {
+    void readJsonBody<{ deviceId?: string; password?: string }>(request)
+      .then((body) => remoteAgentHub.connectDevice(body))
+      .then((device) => jsonResponse(response, 200, { code: 0, device, devices: remoteAgentHub.listDevices() }))
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/disconnect") {
+    void readJsonBody<{ deviceId?: string }>(request)
+      .then((body) => remoteAgentHub.disconnectDevice(String(body.deviceId || "")))
+      .then((device) => jsonResponse(response, 200, { code: 0, device, devices: remoteAgentHub.listDevices() }))
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;
   }
 
