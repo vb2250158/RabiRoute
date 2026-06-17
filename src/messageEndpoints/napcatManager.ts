@@ -19,6 +19,7 @@ type NapCatInstanceDefinition = {
   webuiToken?: string;
   launchCommand?: string;
   workingDir?: string;
+  botUserId?: string | number;
 };
 
 type GatewayDefinition = {
@@ -99,6 +100,17 @@ type NapcatWebuiTokenInfo = {
 type NapcatLaunchRequest = {
   gatewayId?: string;
   instanceId?: string;
+};
+
+type NapcatLaunchPlan = {
+  command: string;
+  cwd: string;
+  commandPath: string;
+  args: string[];
+  commandLine: string;
+  redirectedFromOuterShell: boolean;
+  botUserId?: string;
+  warnings: string[];
 };
 
 type NapcatStopRequest = {
@@ -211,11 +223,106 @@ function psQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function launchHiddenOnWindows(command: string, cwd: string): void {
-  const exePath = path.join(cwd, "NapCatWinBootMain.exe");
-  const script = fs.existsSync(exePath)
-    ? `Start-Process -FilePath ${psQuote(exePath)} -WorkingDirectory ${psQuote(cwd)} -WindowStyle Hidden`
-    : `Start-Process -FilePath 'cmd.exe' -ArgumentList ${psQuote(`/d /s /c "${command.replace(/"/g, '\\"')}"`)} -WorkingDirectory ${psQuote(cwd)} -WindowStyle Hidden`;
+function commandLineQuote(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function splitCommandLine(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (/\s/.test(char) && !quoted) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+function resolveCommandPath(commandPath: string, cwd: string): string {
+  if (path.isAbsolute(commandPath)) return path.resolve(commandPath);
+  if (commandPath.includes("\\") || commandPath.includes("/")) return path.resolve(cwd, commandPath);
+  return path.resolve(cwd, commandPath);
+}
+
+function findInnerNapcatLauncher(shellDir: string): string | null {
+  const direct = path.join(shellDir, "launcher-user.bat");
+  if (fs.existsSync(direct)) return direct;
+
+  const versionsDir = path.join(shellDir, "versions");
+  try {
+    if (!fs.existsSync(versionsDir)) return null;
+    const candidates: Array<{ file: string; mtimeMs: number }> = [];
+    for (const entry of fs.readdirSync(versionsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const file = path.join(versionsDir, entry.name, "resources", "app", "napcat", "launcher-user.bat");
+      if (!fs.existsSync(file)) continue;
+      const stat = fs.statSync(file);
+      candidates.push({ file, mtimeMs: stat.mtimeMs });
+    }
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs || b.file.localeCompare(a.file));
+    return candidates[0]?.file ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function commandHasQuickLoginArg(args: string[]): boolean {
+  return args.some((arg) => arg === "-q" || arg === "--quick-login" || arg === "--uin");
+}
+
+export function resolveNapcatLaunchPlan(instance: NapCatInstanceDefinition, rootDir: string): NapcatLaunchPlan {
+  const command = instance.launchCommand?.trim();
+  if (!command) {
+    throw new Error("这个 NapCat 实例还没有填写启动命令。");
+  }
+  const cwd = path.resolve(instance.workingDir?.trim() || rootDir);
+  const parts = splitCommandLine(command);
+  const commandPath = resolveCommandPath(parts[0] || command, cwd);
+  const args = parts.slice(1);
+  const innerLauncher = findInnerNapcatLauncher(cwd);
+  const commandBase = path.basename(commandPath).toLowerCase();
+  const outerShellDetected = Boolean(innerLauncher)
+    && (commandBase === "napcat.bat"
+      || commandBase === "napcatwinbootmain.exe");
+  const warnings: string[] = [];
+  const botUserId = String(instance.botUserId || "").trim();
+  let resolvedPath = commandPath;
+  let resolvedArgs = [...args];
+  if (outerShellDetected && innerLauncher) {
+    resolvedPath = innerLauncher;
+    if (botUserId && !commandHasQuickLoginArg(resolvedArgs)) {
+      resolvedArgs = [...resolvedArgs, "-q", botUserId];
+    } else if (!botUserId) {
+      warnings.push("已识别外层 NapCat Shell 并切到内层 launcher-user.bat，但实例缺少 botUserId，无法自动追加 -q。");
+    }
+  }
+  const commandLine = [resolvedPath, ...resolvedArgs].map(commandLineQuote).join(" ");
+  return {
+    command,
+    cwd,
+    commandPath: resolvedPath,
+    args: resolvedArgs,
+    commandLine,
+    redirectedFromOuterShell: outerShellDetected,
+    botUserId: botUserId || undefined,
+    warnings
+  };
+}
+
+function launchHiddenOnWindows(plan: NapcatLaunchPlan): void {
+  const script = `Start-Process -FilePath 'cmd.exe' -ArgumentList ${psQuote(`/d /c ${plan.commandLine}`)} -WorkingDirectory ${psQuote(plan.cwd)} -WindowStyle Hidden`;
   const child = spawn("powershell.exe", [
     "-NoLogo",
     "-NoProfile",
@@ -779,6 +886,51 @@ async function napcatHttpOk(httpUrl: string, token: string | undefined, timeoutM
   }
 }
 
+async function napcatStatusEndpointOk(httpUrl: string | undefined, token: string | undefined, timeoutMs = 3000): Promise<boolean> {
+  const url = httpUrl?.trim();
+  if (!url) return false;
+  const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8" };
+  if (token?.trim()) headers.authorization = `Bearer ${token.trim()}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${url.replace(/\/+$/, "")}/get_status`, {
+      method: "POST",
+      headers,
+      body: "{}",
+      signal: controller.signal
+    });
+    if (!response.ok) return false;
+    const body = await response.json().catch(() => ({})) as NapcatOneBotResponse<{ online?: boolean; good?: boolean }>;
+    if (body.retcode != null && body.retcode !== 0) return false;
+    return body.data?.online !== false && body.data?.good !== false;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForNapcatReady(ctx: NapcatManagerContext, instance: NapCatInstanceDefinition, timeoutMs = 35000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  const httpUrl = instance.httpUrl?.trim();
+  const webuiUrl = instance.webuiUrl?.trim();
+  while (Date.now() < deadline) {
+    if (await napcatStatusEndpointOk(httpUrl, instance.accessToken, 2500)) {
+      return { ok: true, kind: "onebot-status", url: `${httpUrl?.replace(/\/+$/, "")}/get_status` };
+    }
+    if (webuiUrl && await ctx.checkHttpEndpoint(webuiUrl, 1200)) {
+      return { ok: true, kind: "webui", url: webuiUrl };
+    }
+    await wait(1000);
+  }
+  return {
+    ok: false,
+    kind: "timeout",
+    message: `启动命令已执行，但等待 ${httpUrl ? `${httpUrl.replace(/\/+$/, "")}/get_status` : "OneBot get_status"} 或 ${webuiUrl || "NapCat WebUI"} 可达超时。`
+  };
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -1160,7 +1312,7 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
   };
 }
 
-export function launchNapcatInstance(ctx: NapcatManagerContext, request: NapcatLaunchRequest): Record<string, unknown> {
+export async function launchNapcatInstance(ctx: NapcatManagerContext, request: NapcatLaunchRequest): Promise<Record<string, unknown>> {
   const gatewayId = request.gatewayId?.trim();
   const instanceId = request.instanceId?.trim();
   if (!gatewayId || !instanceId) {
@@ -1175,26 +1327,35 @@ export function launchNapcatInstance(ctx: NapcatManagerContext, request: NapcatL
   if (!instance) {
     throw new Error(`未找到 NapCat 实例：${instanceId}`);
   }
-  const command = instance.launchCommand?.trim();
-  if (!command) {
-    throw new Error("这个 NapCat 实例还没有填写启动命令。");
-  }
-  const cwd = instance.workingDir?.trim() || ctx.rootDir;
+  const plan = resolveNapcatLaunchPlan(instance, ctx.rootDir);
   if (process.platform === "win32") {
-    launchHiddenOnWindows(command, cwd);
+    launchHiddenOnWindows(plan);
   } else {
-    const child = spawn(command, [], {
-      cwd,
+    const child = spawn(plan.commandLine, [], {
+      cwd: plan.cwd,
       detached: true,
       shell: true,
       stdio: "ignore"
     });
     child.unref();
   }
-  ctx.appendLog(runtime, `launch NapCat instance ${instance.name || instance.id}: ${command}`);
+  const ready = await waitForNapcatReady(ctx, instance);
+  const readyOk = ready.ok !== false;
+  ctx.appendLog(runtime, `launch NapCat instance ${instance.name || instance.id}: ${plan.commandLine} ready=${readyOk ? String(ready.kind || "ok") : "timeout"}`);
+  const steps = [
+    ...(plan.redirectedFromOuterShell ? [`已识别外层 NapCat Shell，改用内层启动器：${plan.commandPath}`] : []),
+    ...(plan.botUserId && plan.redirectedFromOuterShell ? [`已追加 quick login 参数：-q ${plan.botUserId}`] : []),
+    ...plan.warnings,
+    readyOk ? `NapCat 已可达：${ready.url || ready.kind || "health"}` : String(ready.message || "NapCat 健康检查超时。")
+  ];
   return {
-    ok: true,
-    message: `已尝试启动 NapCat 后台：${instance.name || instance.id}`,
+    ok: readyOk,
+    message: readyOk
+      ? `已启动 NapCat：${instance.name || instance.id}`
+      : `NapCat 启动命令已执行，但后台未在超时时间内可达：${instance.name || instance.id}`,
+    steps,
+    health: ready,
+    launchCommand: plan.commandLine,
     instance: {
       id: instance.id,
       name: instance.name,
@@ -1227,6 +1388,9 @@ export async function restartNapcatInstance(ctx: NapcatManagerContext, request: 
     const webuiSteps = await restartNapcatViaWebui(instance.webuiUrl, tokenInfo);
     restartedViaWebui = webuiSteps.some((step) => step.startsWith("已调用 NapCat 重启接口"));
     steps.push(...webuiSteps);
+    if (restartedViaWebui) {
+      await wait(1500);
+    }
   }
 
   const ports = [
@@ -1251,25 +1415,34 @@ export async function restartNapcatInstance(ctx: NapcatManagerContext, request: 
   }
 
   let launchResult: Record<string, unknown> | null = null;
+  let ready: Record<string, unknown> | null = null;
   if (!restartedViaWebui) {
     if (!instance.launchCommand?.trim()) {
       steps.push("没有启动命令，无法在 WebUI 重启失败后自动拉起后台。");
     } else {
-      launchResult = launchNapcatInstance(ctx, request);
+      launchResult = await launchNapcatInstance(ctx, request);
       steps.push(String(launchResult.message || "已尝试启动 NapCat 后台。"));
     }
+  } else {
+    ready = await waitForNapcatReady(ctx, instance);
+    steps.push(ready.ok !== false
+      ? `NapCat 重启后已可达：${ready.url || ready.kind || "health"}`
+      : String(ready.message || "NapCat 重启后健康检查超时。"));
   }
 
-  const ok = restartedViaWebui || Boolean(launchResult && launchResult.ok !== false);
-  ctx.appendLog(runtime, `restart NapCat instance ${instance.name || instance.id}: webui=${restartedViaWebui ? "ok" : "skipped"} stopped=${stopped.join(",") || "none"} launched=${launchResult ? "yes" : "no"}`);
+  const ok = restartedViaWebui
+    ? Boolean(ready && ready.ok !== false)
+    : Boolean(launchResult && launchResult.ok !== false);
+  ctx.appendLog(runtime, `restart NapCat instance ${instance.name || instance.id}: webui=${restartedViaWebui ? "ok" : "skipped"} stopped=${stopped.join(",") || "none"} launched=${launchResult ? "yes" : "no"} ready=${ready ? String(ready.kind || ready.ok) : String(launchResult?.health ? (launchResult.health as Record<string, unknown>).kind || (launchResult.health as Record<string, unknown>).ok : "none")}`);
   return {
     ok,
     message: ok
-      ? `已尝试重启 NapCat：${instance.name || instance.id}`
-      : `未能自动重启 NapCat：${instance.name || instance.id}`,
+      ? `已重启 NapCat：${instance.name || instance.id}`
+      : `已执行 NapCat 重启流程，但后台未在超时时间内可达：${instance.name || instance.id}`,
     steps,
     stoppedPids: stopped,
     launch: launchResult,
+    health: ready ?? launchResult?.health,
     instance: {
       id: instance.id,
       name: instance.name,

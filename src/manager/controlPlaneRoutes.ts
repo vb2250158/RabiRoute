@@ -723,11 +723,14 @@ async function addManagedNapcatInstance(request: NapcatAddRequest): Promise<Reco
   writeAdapterConfigFile(definition);
   loadRuntimes();
 
-  const launchResult = launchNapcatInstanceEndpoint(napcatManagerCtx(), { gatewayId, instanceId: id });
   steps.push("正在执行启动命令...");
+  const launchResult = await launchNapcatInstanceEndpoint(napcatManagerCtx(), { gatewayId, instanceId: id });
+  steps.push(String(launchResult.message || "已尝试启动 NapCat 后台。"));
   return {
-    ok: true,
-    message: "已创建并尝试启动 NapCat，请在自动打开的 WebUI 中登录 QQ。",
+    ok: launchResult.ok !== false,
+    message: launchResult.ok !== false
+      ? "已创建并启动 NapCat，请在自动打开的 WebUI 中登录 QQ。"
+      : "已创建 NapCat 实例，但后台未在超时时间内可达；请检查启动命令或手动打开 WebUI。",
     steps,
     launch: launchResult,
     instance,
@@ -1628,7 +1631,7 @@ async function napcatScanHealthPayload(): Promise<Record<string, { instances: Re
       if (instance.enabled !== false && instance.launchCommand?.trim() && webui.reachable !== true) {
         const autoLaunchSteps: string[] = [];
         try {
-          const launch = launchNapcatInstanceEndpoint(ctx, {
+          const launch = await launchNapcatInstanceEndpoint(ctx, {
             gatewayId: runtime.definition.id,
             instanceId: instance.id
           }) as Record<string, unknown>;
@@ -3256,8 +3259,9 @@ export function startManager(): void {
 
       if (requestUrl.pathname === "/api/message/napcat-launch" && request.method === "POST") {
         void readJsonBody<NapcatLaunchRequest>(request)
-          .then((body) => {
-            jsonResponse(response, 200, launchNapcatInstanceEndpoint(napcatManagerCtx(), body));
+          .then((body) => launchNapcatInstanceEndpoint(napcatManagerCtx(), body))
+          .then((result) => {
+            jsonResponse(response, result.ok !== false ? 200 : 400, result);
           })
           .catch((error) => {
             jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
