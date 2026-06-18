@@ -134,6 +134,7 @@ function planMemoryApiHint(roleId: unknown): string[] {
     "可用 API 提示：",
     `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
     `- 查看记忆：GET ${base}/memory、GET ${base}/memory/recent、GET ${base}/memory/recent/{memoryId}、GET ${base}/memory/consolidated、GET ${base}/memory/consolidated/{memoryId}`,
+    `- 查看角色技能：GET ${base}/skills、GET ${base}/skills/{skillId}`,
     `- 新增近期记忆：POST ${base}/memory/recent`,
     `- 更新指定近期记忆：PATCH ${base}/memory/recent/{memoryId}`,
     "- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；相关记忆进入处理前确认队列时会刷新 viewedAt"
@@ -176,7 +177,14 @@ function requiredReadTypeLabel(type: string): string {
   if (type === "plan") return "计划";
   if (type === "recent_memory") return "近期记忆";
   if (type === "consolidated_memory") return "沉淀记忆";
+  if (type === "role_skill") return "角色技能";
   return type;
+}
+
+function skillIndexLines(roleId: unknown, items: Array<{ id: string; title: string; summary: string }>): string {
+  if (items.length === 0) return "- 暂无";
+  const base = roleApiBase(roleId);
+  return items.map((item) => `- ${item.id}：${item.title} - ${item.summary}（GET ${base}/skills/${encodeURIComponent(item.id)}）`).join("\n");
 }
 
 function requiredReadLines(items: Array<{ id: string; title: string; type: string; endpoint: string; score: number }>): string[] {
@@ -362,8 +370,10 @@ function buildAgentMessage(
       })
     : null;
   const activePlanIndex = knowledge ? indexLines(knowledge.activePlans) : "- 暂无";
+  const activeSkillIndex = knowledge ? skillIndexLines(values.agentRoleId, knowledge.activeSkills) : "- 暂无";
   const recentMemoryIndex = knowledge ? indexLines(knowledge.recentMemories) : "- 暂无";
   const matchedIndex = knowledge ? indexLines(knowledge.matchedItems) : "- 暂无";
+  const matchedSkillIndex = knowledge ? skillIndexLines(values.agentRoleId, knowledge.matchedSkills) : "- 暂无";
   const requiredReadIndex = knowledge ? requiredReadLines(knowledge.requiredReadItems) : requiredReadLines([]);
   const pendingConsolidation = knowledge?.pendingConsolidation;
   const pendingConsolidationLines = pendingConsolidation
@@ -403,11 +413,17 @@ function buildAgentMessage(
       optionalLine("更新记忆与计划的说明文档", knowledge?.agentInterfaceDocPath ?? values.agentInterfaceDocPath),
       ...planMemoryApiHint(values.agentRoleId),
       "",
+      "可用技能：",
+      activeSkillIndex,
+      "",
       "进行中计划：",
       activePlanIndex,
       "",
       "近期记忆：",
       recentMemoryIndex,
+      "",
+      "命中技能：",
+      matchedSkillIndex,
       "",
       "命中召回：",
       matchedIndex

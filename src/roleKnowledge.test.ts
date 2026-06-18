@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import {
   getRecentMemory,
+  getRoleSkill,
+  listRoleSkills,
   pendingMemoryConsolidation,
   roleKnowledgeSnapshot,
   updateRecentMemory
@@ -24,6 +26,12 @@ function writeConsolidatedMemory(roleDir: string, memory: Record<string, unknown
   const filePath = path.join(roleDir, "memory", "consolidated", `${memory.id}.json`);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(memory, null, 2), "utf8");
+}
+
+function writeSkill(roleDir: string, fileName: string, text: string): void {
+  const filePath = path.join(roleDir, "skills", fileName);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, text, "utf8");
 }
 
 function readRecentMemory(roleDir: string, id: string): Record<string, unknown> {
@@ -145,4 +153,55 @@ test("memory content alone does not create a required read match", () => {
   const snapshot = roleKnowledgeSnapshot(roleDir, "隐藏短语");
   assert.deepEqual(snapshot.requiredReadItems, []);
   assert.deepEqual(snapshot.matchedItems, []);
+});
+
+test("role skills are listed from markdown metadata without content", () => {
+  const roleDir = makeRoleDir();
+  writeSkill(roleDir, "companionship.md", `---
+id: companionship-response
+title: Companionship response
+summary: Respond to emotion before solving the task.
+keywords: companionship, emotion, comfort
+source: example role skill
+updatedAt: 2026-06-18T00:00:00.000Z
+status: active
+---
+# Companionship response
+
+This full body should only appear when the skill is read directly.
+`);
+
+  const skills = listRoleSkills(roleDir);
+  assert.equal(skills.length, 1);
+  assert.equal(skills[0].id, "companionship-response");
+  assert.equal(skills[0].summary, "Respond to emotion before solving the task.");
+  assert.equal("content" in skills[0], false);
+
+  const detail = getRoleSkill(roleDir, "companionship-response");
+  assert.match(detail?.content ?? "", /full body/);
+});
+
+test("role skill metadata can enter required read without scanning body text", () => {
+  const roleDir = makeRoleDir();
+  writeSkill(roleDir, "routing-guide.md", `---
+id: routing-guide
+title: Routing guide
+summary: Explain route kind and policy router concepts.
+keywords: route kind, policy router
+updatedAt: 2026-06-18T00:00:00.000Z
+status: active
+---
+# Routing guide
+
+Hidden-only body phrase.
+`);
+
+  const matched = roleKnowledgeSnapshot(roleDir, "Please explain route kind.");
+  assert.equal(matched.requiredReadItems[0]?.id, "routing-guide");
+  assert.equal(matched.requiredReadItems[0]?.type, "role_skill");
+  assert.equal(matched.requiredReadItems[0]?.endpoint.endsWith("/skills/routing-guide"), true);
+  assert.deepEqual(matched.matchedSkills.map((item) => item.id), ["routing-guide"]);
+
+  const hidden = roleKnowledgeSnapshot(roleDir, "Hidden-only body phrase.");
+  assert.deepEqual(hidden.requiredReadItems, []);
 });

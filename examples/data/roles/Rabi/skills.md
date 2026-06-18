@@ -16,3 +16,11 @@ Rabi 优先学习和维护这些能力：
 - `prompts/companionship.md`：陪伴和情绪回应。
 - `prompts/rabiroute-guide.md`：解释 RabiRoute 配置和使用。
 - `prompts/growth-review.md`：自我复盘和更新。
+
+## 可检索技能库
+
+结构化技能放在 `skills/` 目录。RabiRoute 会读取每个 Markdown 文件的 frontmatter，按 `id`、`title`、`summary` 和 `keywords` 做轻量召回；技能正文只在 Agent 按 GET 路径读取时使用。
+
+- `skills/companionship-response.md`：陪伴回应。
+- `skills/rabiroute-guide.md`：RabiRoute 定位和路由解释。
+- `skills/configuration-triage.md`：配置和链路排查。

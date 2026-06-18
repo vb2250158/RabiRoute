@@ -17,6 +17,7 @@ Agent 自己需要看的接口说明是 [Agent 需要关注的 Rabi 接口](rabi
 - Agent 需要关注的接口文档链接。
 - 进行中计划索引。
 - 近期记忆索引。
+- 可用技能索引。
 - 当前消息命中的计划和记忆索引。
 
 默认不注入：
@@ -105,6 +106,7 @@ Agent 需要关注的 Rabi 接口文档链接
 可用 API 提示：查看/更新计划、查看记忆、新增近期记忆、更新指定近期记忆
 进行中计划索引：计划 ID + 标题
 近期记忆索引：记忆 ID + 标题
+可用技能索引：技能 ID + 标题 + 摘要 + GET 路径
 命中召回索引：被当前消息命中的计划/记忆 ID + 标题
 ```
 
@@ -125,6 +127,7 @@ Agent 需要关注的 Rabi 接口文档链接
 - 近期记忆，包括默认已显示的活跃近期记忆，以及不默认显示但尚未沉淀的近期记忆。
 - 未归档计划，包括 `未开始`、`进行中`、`已完成` 等状态。
 - 沉淀记忆，只参与标题和 `keywords` 打分，不默认注入全文。
+- 角色技能，只参与 `id`、标题、摘要和 `keywords` 打分，不默认注入正文。
 
 如果用户消息包含这些条目的 ID、标题或 `keywords`，RabiRoute 会把得分最高的条目以 ID + 标题 + GET 路径的形式加入 `[处理前上下文确认]`，默认最多 5 条。
 
@@ -189,6 +192,12 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 近期记忆：
 - <memoryId>：<memoryTitle>
+
+可用技能：
+- <skillId>：<skillTitle> - <skillSummary>（GET /api/roles/<roleId>/skills/<skillId>）
+
+命中技能：
+- <skillId>：<skillTitle> - <skillSummary>（GET /api/roles/<roleId>/skills/<skillId>）
 
 命中召回：
 - <itemId>：<itemTitle>

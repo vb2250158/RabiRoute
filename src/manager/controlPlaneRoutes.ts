@@ -71,10 +71,12 @@ import {
   createRecentMemory,
   getConsolidatedMemory,
   getRecentMemory,
+  getRoleSkill,
   listConsolidatedMemories,
   listConsolidationRuns,
   listPlans,
   listRecentMemories,
+  listRoleSkills,
   pendingMemoryConsolidation,
   updatePlan,
   updateRecentMemory
@@ -2588,7 +2590,7 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
     }
   }
 
-  const match = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/(plans|memory|memory\/recent|memory\/consolidated|memory\/consolidation-requests|memory\/consolidation-runs)(?:\/([^/]+))?$/);
+  const match = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/(plans|skills|memory|memory\/recent|memory\/consolidated|memory\/consolidation-requests|memory\/consolidation-runs)(?:\/([^/]+))?$/);
   if (!match) {
     return false;
   }
@@ -2604,6 +2606,15 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
       const data = itemId ? plans.find((item) => item.id === itemId) : plans;
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
+        return true;
+      }
+      jsonResponse(response, 200, { code: 0, data });
+      return true;
+    }
+    if (request.method === "GET" && resource === "skills") {
+      const data = itemId ? getRoleSkill(roleDir, itemId) : listRoleSkills(roleDir);
+      if (itemId && !data) {
+        jsonResponse(response, 404, { code: -1, message: `Skill not found: ${itemId}` });
         return true;
       }
       jsonResponse(response, 200, { code: 0, data });

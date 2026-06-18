@@ -59,6 +59,23 @@ export type ConsolidatedMemoryItem = {
   keywords: string[];
 };
 
+export type RoleSkillStatus = "active" | "draft" | "archived";
+
+export type RoleSkillItem = {
+  id: string;
+  title: string;
+  summary: string;
+  source?: KnowledgeSource;
+  updatedAt: string;
+  status: RoleSkillStatus;
+  keywords: string[];
+  path: string;
+};
+
+export type RoleSkillDetail = RoleSkillItem & {
+  content: string;
+};
+
 export type MemoryConsolidationRun = {
   id: string;
   roleDir: string;
@@ -78,7 +95,7 @@ export type MemoryConsolidationRequest = {
   memories: RecentMemoryItem[];
 };
 
-export type RoleKnowledgeItemType = "plan" | "recent_memory" | "consolidated_memory";
+export type RoleKnowledgeItemType = "plan" | "recent_memory" | "consolidated_memory" | "role_skill";
 
 export type RoleKnowledgeIndexItem = {
   id: string;
@@ -105,8 +122,10 @@ export type RoleKnowledgeSnapshot = {
   memoryDir: string;
   agentInterfaceDocPath: string;
   activePlans: PlanItem[];
+  activeSkills: RoleSkillItem[];
   recentMemories: RecentMemoryItem[];
   matchedItems: RoleKnowledgeIndexItem[];
+  matchedSkills: RoleSkillItem[];
   requiredReadItems: RequiredReadItem[];
   pendingConsolidation?: MemoryConsolidationRequest;
 };
@@ -167,6 +186,18 @@ function jsonFiles(dir: string): string[] {
   }
 }
 
+function markdownFiles(dir: string): string[] {
+  try {
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .map((entry) => path.join(dir, entry.name))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 function ageHours(updatedAt: string, now = Date.now()): number {
   const parsed = Date.parse(updatedAt);
   if (!Number.isFinite(parsed)) return 0;
@@ -188,6 +219,14 @@ function memoryActivityAt(memory: { updatedAt: string; viewedAt?: string }): str
 function normalizeKeywords(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 24);
+}
+
+function parseKeywordValue(value: unknown): string[] {
+  if (Array.isArray(value)) return normalizeKeywords(value);
+  const text = String(value || "").trim();
+  if (!text) return [];
+  const inner = text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1) : text;
+  return normalizeKeywords(inner.split(",").map((item) => item.trim().replace(/^["']|["']$/g, "")));
 }
 
 function requireKeywords(keywords: string[], label: string): void {
@@ -261,12 +300,53 @@ function normalizeConsolidatedMemory(raw: Partial<ConsolidatedMemoryItem> & Reco
   };
 }
 
+function parseSkillMarkdown(filePath: string): RoleSkillDetail | null {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const metadata: Record<string, string> = {};
+  let content = raw.trim();
+  const frontmatter = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (frontmatter) {
+    content = raw.slice(frontmatter[0].length).trim();
+    for (const line of frontmatter[1].split(/\r?\n/)) {
+      const pair = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+      if (pair) {
+        metadata[pair[1]] = pair[2].trim().replace(/^["']|["']$/g, "");
+      }
+    }
+  }
+
+  const fallbackId = path.basename(filePath, ".md");
+  const title = String(metadata.title || content.match(/^#\s+(.+)$/m)?.[1] || fallbackId).trim();
+  const summary = String(metadata.summary || content.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("#")) || "").trim();
+  const keywords = parseKeywordValue(metadata.keywords);
+  if (!title || !summary || keywords.length === 0) return null;
+
+  const statusText = String(metadata.status || "active").trim();
+  const status: RoleSkillStatus = statusText === "draft" || statusText === "archived" ? statusText : "active";
+  const sourceSummary = String(metadata.source || "").trim();
+  return {
+    id: String(metadata.id || fallbackId).trim(),
+    title,
+    summary,
+    source: sourceSummary ? { kind: "skill", summary: sourceSummary } : undefined,
+    updatedAt: String(metadata.updatedAt || "").trim() || fs.statSync(filePath).mtime.toISOString(),
+    status,
+    keywords,
+    path: filePath,
+    content
+  };
+}
+
 function plansDir(roleDir: string): string {
   return path.join(roleDir, "plans");
 }
 
 function memoryDir(roleDir: string): string {
   return path.join(roleDir, "memory");
+}
+
+function skillsDir(roleDir: string): string {
+  return path.join(roleDir, "skills");
 }
 
 function planFile(roleDir: string, plan: PlanItem): string {
@@ -335,6 +415,25 @@ export function listConsolidatedMemories(roleDir: string): ConsolidatedMemoryIte
     const item = raw ? normalizeConsolidatedMemory(raw, path.basename(file, ".json")) : null;
     return item ? [item] : [];
   });
+}
+
+export function listRoleSkillDetails(roleDir: string): RoleSkillDetail[] {
+  return markdownFiles(skillsDir(roleDir)).flatMap((file) => {
+    try {
+      const item = parseSkillMarkdown(file);
+      return item ? [item] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export function listRoleSkills(roleDir: string): RoleSkillItem[] {
+  return listRoleSkillDetails(roleDir).map(({ content: _content, ...item }) => item);
+}
+
+export function getRoleSkill(roleDir: string, skillId: string): RoleSkillDetail | undefined {
+  return listRoleSkillDetails(roleDir).find((item) => item.id === skillId);
 }
 
 export function getConsolidatedMemory(roleDir: string, memoryId: string): ConsolidatedMemoryItem | undefined {
@@ -549,6 +648,7 @@ type ScoredKnowledgeCandidate = RoleKnowledgeIndexItem & {
   score: number;
   activityAt: string;
   memory?: RecentMemoryItem | ConsolidatedMemoryItem;
+  skill?: RoleSkillItem;
 };
 
 const DEFAULT_REQUIRED_READ_LIMIT = 5;
@@ -591,6 +691,14 @@ function scoreKnowledgeMatch(
   return baseScore > 0 ? baseScore + activeBoost : 0;
 }
 
+export function scoreSkillMatch(messageText: string, skill: RoleSkillItem): number {
+  return scoreKnowledgeMatch(messageText, {
+    id: skill.id,
+    title: skill.title,
+    keywords: [skill.summary, ...skill.keywords]
+  }, skill.status === "active" ? 5 : 0);
+}
+
 function roleApiBase(roleId: string): string {
   return `/api/roles/${encodeURIComponent(roleId)}`;
 }
@@ -600,6 +708,7 @@ function requiredReadEndpoint(roleId: string, type: RoleKnowledgeItemType, id: s
   const encodedId = encodeURIComponent(id);
   if (type === "plan") return `${base}/plans/${encodedId}`;
   if (type === "recent_memory") return `${base}/memory/recent/${encodedId}`;
+  if (type === "role_skill") return `${base}/skills/${encodedId}`;
   return `${base}/memory/consolidated/${encodedId}`;
 }
 
@@ -622,7 +731,9 @@ export function roleKnowledgeSnapshot(
   const plans = listPlans(roleDir);
   const memories = listRecentMemories(roleDir);
   const consolidatedMemories = listConsolidatedMemories(roleDir);
+  const skills = listRoleSkills(roleDir);
   const activePlans = plans.filter((item) => item.status === "进行中");
+  const activeSkills = skills.filter((item) => item.status === "active");
   const recentMemories = memories.filter((item) => !item.consolidatedAt && ageHours(memoryActivityAt(item)) <= DEFAULT_RECENT_EDITABLE_HOURS);
   const roleId = options.roleId || path.basename(roleDir);
   const recentMemoryIds = new Set(recentMemories.map((item) => item.id));
@@ -656,7 +767,18 @@ export function roleKnowledgeSnapshot(
       score: scoreKnowledgeMatch(messageText, item),
       activityAt: memoryActivityAt(item),
       memory: item
-    }))
+    })),
+    ...skills
+      .filter((item) => item.status !== "archived")
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        type: "role_skill" as const,
+        endpoint: requiredReadEndpoint(roleId, "role_skill", item.id),
+        score: scoreSkillMatch(messageText, item),
+        activityAt: item.updatedAt,
+        skill: item
+      }))
   ].filter((item) => item.score > 0).sort(sortScoredCandidates);
 
   const requiredReadItems = scoredCandidates
@@ -686,8 +808,10 @@ export function roleKnowledgeSnapshot(
     memoryDir: memoryDir(roleDir),
     agentInterfaceDocPath: path.join(rootDir, "docs", "rabi-agent-interfaces.md"),
     activePlans,
+    activeSkills,
     recentMemories,
     matchedItems: scoredCandidates.slice(0, MATCHED_ITEM_LIMIT).map((item) => ({ id: item.id, title: item.title, type: item.type })),
+    matchedSkills: scoredCandidates.filter((item) => item.type === "role_skill" && item.skill).slice(0, MATCHED_ITEM_LIMIT).map((item) => item.skill as RoleSkillItem),
     requiredReadItems,
     pendingConsolidation: options.includePendingConsolidation
       ? pendingMemoryConsolidation(
@@ -704,6 +828,7 @@ export function roleKnowledgeSnapshot(
 function indexTypeLabel(type: RoleKnowledgeItemType): string {
   if (type === "plan") return "计划";
   if (type === "recent_memory") return "近期记忆";
+  if (type === "role_skill") return "角色技能";
   return "沉淀记忆";
 }
 

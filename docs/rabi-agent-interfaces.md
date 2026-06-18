@@ -410,3 +410,38 @@ Agent 应该：
 - 用近期记忆接口记录自己主动总结出的上下文，并填写可召回的 `keywords`。
 - 需要详情时按 ID 查询。
 - 收到记忆整理触发时只返回沉淀记忆。
+
+## 角色技能接口
+
+角色技能是角色目录下的可复用操作指南，放在：
+
+```text
+data/roles/<RoleId>/skills/*.md
+```
+
+每个技能文件使用 Markdown 正文和简单 frontmatter：
+
+```markdown
+---
+id: configuration-triage
+title: Configuration triage
+summary: Diagnose setup issues by separating input, route match, delivery, and reply.
+keywords: configuration, route miss, agent delivery, outbox
+updatedAt: 2026-06-18T00:00:00.000Z
+status: active
+---
+# Configuration triage
+
+...
+```
+
+RabiRoute 在投递前只读取技能元信息：`id`、`title`、`summary` 和 `keywords`。技能正文不会默认进入每条 Agent 消息。
+
+查询角色技能：
+
+```http
+GET /roles/:roleId/skills
+GET /roles/:roleId/skills/:skillId
+```
+
+列表接口只返回元信息。单项接口返回完整正文。Agent 在 `[处理前上下文确认]` 里看到 `role_skill` 条目时，回复、更新计划/记忆或执行外部动作前应先按 GET 路径读取技能全文。

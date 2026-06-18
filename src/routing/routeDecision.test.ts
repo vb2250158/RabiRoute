@@ -57,6 +57,12 @@ function writeRecentMemory(roleDir: string, memory: Record<string, unknown>): vo
   fs.writeFileSync(filePath, JSON.stringify(memory, null, 2), "utf8");
 }
 
+function writeSkill(roleDir: string, fileName: string, text: string): void {
+  const filePath = path.join(roleDir, "skills", fileName);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, text, "utf8");
+}
+
 test("RouteDecision records matched rules and normalized route text", () => {
   const route = routeProfile({
     routeVariables: { BotAlias: "12345" },
@@ -196,4 +202,43 @@ test("AgentPacket injects processing-time context confirmation protocol", () => 
   assert.match(packet.message, /回复、发布任务、更新计划、写入记忆或执行外部动作之前/);
   assert.match(packet.message, /GET \/api\/roles\/Rabi\/memory\/recent\/memory-required/);
   assert.match(packet.message, /\[近期记忆\] memory-required：任务发布上下文/);
+});
+
+test("AgentPacket injects skill indexes without embedding skill bodies", () => {
+  const roleDir = makeRoleDir();
+  writeSkill(roleDir, "routing-guide.md", `---
+id: routing-guide
+title: Routing guide
+summary: Explain route kind and policy router concepts.
+keywords: route kind, policy router
+updatedAt: 2026-06-18T00:00:00.000Z
+status: active
+---
+# Routing guide
+
+SECRET BODY SHOULD NOT BE IN PACKET
+`);
+  const route = routeProfile({
+    notificationRules: [{
+      id: "direct",
+      name: "direct",
+      enabled: true,
+      routeKinds: ["direct_at"],
+      template: ""
+    }]
+  });
+  const decision = createRouteDecision(route, "direct_at", groupMessage({ rawMessage: "[CQ:at,qq=12345] explain route kind" }), {});
+  assert.ok(decision);
+
+  const packet = buildAgentPacket(decision, decision.matchedRules[0], {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: "",
+    dataDir: "data/route/main"
+  });
+
+  assert.match(packet.message, /可用技能/);
+  assert.match(packet.message, /routing-guide：Routing guide - Explain route kind and policy router concepts/);
+  assert.match(packet.message, /GET \/api\/roles\/Rabi\/skills\/routing-guide/);
+  assert.doesNotMatch(packet.message, /SECRET BODY SHOULD NOT BE IN PACKET/);
 });

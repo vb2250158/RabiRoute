@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-skill-library-context",
+  "title": "角色技能库进入上下文注入",
+  "content": "RabiRoute 的角色目录可以包含 skills/*.md 技能文件。每个技能用 Markdown 正文和 frontmatter 描述 id、title、summary、keywords、updatedAt 和 status；RabiRoute 只在投递前读取技能元信息，把可用技能和命中技能作为轻量索引注入 AgentPacket，技能正文需要 Agent 按 GET /api/roles/<RoleId>/skills/<skillId> 主动读取。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：Skill Library 上下文注入"
+  },
+  "createdAt": "2026-06-18T00:00:00+08:00",
+  "updatedAt": "2026-06-18T00:00:00+08:00",
+  "keywords": ["技能库", "Skill Library", "AgentPacket", "上下文注入", "role_skill", "按需读取"]
+}
