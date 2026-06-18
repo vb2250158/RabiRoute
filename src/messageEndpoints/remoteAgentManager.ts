@@ -195,6 +195,20 @@ function discoveryPorts(): number[] {
   return ports;
 }
 
+export function controlUrlFromObservedAddress(rawControlUrl: unknown, observedAddress: string, port: number): string {
+  const host = observedAddress.includes(":") && !observedAddress.startsWith("[")
+    ? `[${observedAddress}]`
+    : observedAddress;
+  try {
+    const parsed = new URL(String(rawControlUrl || ""));
+    parsed.hostname = host;
+    parsed.port = String(port);
+    return parsed.toString();
+  } catch {
+    return `ws://${host}:${port}/api/remote-agent/control`;
+  }
+}
+
 function defaultPasswordStorePath(): string {
   return path.join(process.cwd(), "data", "remote-agent-connections.json");
 }
@@ -504,11 +518,12 @@ export class RemoteAgentHub {
           const key = deviceId;
           if (seen.has(key)) return;
           seen.add(key);
+          const controlUrl = controlUrlFromObservedAddress(item.controlUrl, remote.address, port);
           found.push({
             ...normalizeDeviceInfo(device, deviceId),
-            host: String(item.host || remote.address),
+            host: remote.address,
             port,
-            controlUrl: String(item.controlUrl),
+            controlUrl,
             discoveryPort: Number(item.discoveryPort || remote.port),
             protocolVersion: Number(item.protocolVersion || 1),
             observedIp: remote.address,

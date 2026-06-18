@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
-import { RemoteAgentHub } from "./remoteAgentManager.js";
+import { controlUrlFromObservedAddress, RemoteAgentHub } from "./remoteAgentManager.js";
 
 test("RemoteAgentHub rejects task events from devices that do not own the task", async () => {
   const hub = new RemoteAgentHub({
@@ -112,4 +112,15 @@ test("RemoteAgentHub connects to scanned devices with password handshake", async
   assert.equal(connected.deviceId, "builder-device");
   assert.equal(connected.passwordSaved, true);
   assert.equal(connected.defaultCwd, "C:/work");
+});
+
+test("RemoteAgentHub uses the observed discovery address for control URLs", () => {
+  assert.equal(
+    controlUrlFromObservedAddress("ws://192.168.0.57:8797/api/remote-agent/control", "26.26.26.1", 8801),
+    "ws://26.26.26.1:8801/api/remote-agent/control"
+  );
+  assert.equal(
+    controlUrlFromObservedAddress("", "10.0.0.5", 8797),
+    "ws://10.0.0.5:8797/api/remote-agent/control"
+  );
 });
