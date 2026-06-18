@@ -286,10 +286,10 @@ function sessionIndexPath(): string {
   return path.join(os.homedir(), ".codex", "session_index.jsonl");
 }
 
-function findThreadByName(threadName: string): DiscoveredMonitorThread | null {
+function findThreadsByName(threadName: string): DiscoveredMonitorThread[] {
   const indexPath = sessionIndexPath();
   if (!fs.existsSync(indexPath)) {
-    return null;
+    return [];
   }
 
   const latestById = new Map<string, DiscoveredMonitorThread>();
@@ -321,7 +321,11 @@ function findThreadByName(threadName: string): DiscoveredMonitorThread | null {
 
   return [...latestById.values()]
     .filter((record) => record.threadName === threadName)
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null;
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+}
+
+function findThreadByName(threadName: string): DiscoveredMonitorThread | null {
+  return findThreadsByName(threadName)[0] ?? null;
 }
 
 function bindThread(state: CodexState, thread: DiscoveredMonitorThread): void {
@@ -347,14 +351,16 @@ async function ensureMonitorThread(forceCreate = false): Promise<string> {
   const threadName = config.codexThreadName;
   await connect();
 
-  const existingThread = forceCreate ? null : findThreadByName(threadName);
-  if (existingThread) {
-    if (await canReadThread(existingThread.id)) {
-      bindThread(state, existingThread);
-      return existingThread.id;
+  const existingThreads = forceCreate ? [] : findThreadsByName(threadName);
+  if (existingThreads.length > 0) {
+    for (const existingThread of existingThreads) {
+      if (await canReadThread(existingThread.id)) {
+        bindThread(state, existingThread);
+        return existingThread.id;
+      }
     }
 
-    throw duplicateThreadRefusalError(existingThread);
+    throw duplicateThreadRefusalError(existingThreads[0]);
   }
 
   if (!forceCreate && state.monitorThreadId && (!state.monitorThreadName || state.monitorThreadName === threadName) && await canReadThread(state.monitorThreadId)) {
@@ -406,38 +412,21 @@ export async function createCodexAppMonitorThread(forceCreate = false): Promise<
   };
 }
 
-export type NotifyCodexOptions = {
-  forceCreateUnreadableThread?: boolean;
-};
-
-function isUnreadableDuplicateThreadError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("app-server channel cannot read it");
-}
-
-export async function notifyCodex(message: string, options: NotifyCodexOptions = {}): Promise<void> {
+export async function notifyCodex(message: string): Promise<void> {
   notificationQueue = notificationQueue
     .catch(() => undefined)
-    .then(() => notifyCodexInternal(message, options));
+    .then(() => notifyCodexInternal(message));
 
   return notificationQueue;
 }
 
-async function notifyCodexInternal(message: string, options: NotifyCodexOptions): Promise<void> {
+async function notifyCodexInternal(message: string): Promise<void> {
   const state = readState();
   const notificationCount = (state.notificationCount ?? 0) + 1;
   const now = new Date();
   const threadName = config.codexThreadName;
 
-  let threadId: string;
-  try {
-    threadId = await ensureMonitorThread();
-  } catch (error) {
-    if (!options.forceCreateUnreadableThread || !isUnreadableDuplicateThreadError(error)) {
-      throw error;
-    }
-
-    threadId = await ensureMonitorThread(true);
-  }
+  let threadId = await ensureMonitorThread();
 
   try {
     await startNotificationTurn(threadId, threadName, message);

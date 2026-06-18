@@ -1322,8 +1322,9 @@ function applyNapcatHealthToInstance(instance: NapCatInstance, body: Record<stri
     instance.botNickname = nickname;
     changed = true;
   }
-  if (body.webui?.url && !instance.webuiUrl) {
-    instance.webuiUrl = body.webui.url;
+  const correctedWebuiUrl = body.webui?.correctedUrl || body.webui?.correctedWebuiUrl || body.webui?.url;
+  if (correctedWebuiUrl && instance.webuiUrl !== correctedWebuiUrl) {
+    instance.webuiUrl = correctedWebuiUrl;
     changed = true;
   }
   if (changed) store.touch();
@@ -1933,6 +1934,8 @@ async function testNapcatHealth(): Promise<void> {
 function napcatHealthPayload(instance?: NapCatInstance): Record<string, unknown> {
   if (instance) {
     return {
+      gatewayId: gateway.value?.id,
+      instanceId: instance.id,
       httpUrl: instance.httpUrl,
       webuiUrl: instance.webuiUrl || defaultNapcatWebuiUrl(),
       accessToken: instance.accessToken,
@@ -1941,6 +1944,7 @@ function napcatHealthPayload(instance?: NapCatInstance): Record<string, unknown>
     };
   }
   return {
+    gatewayId: gateway.value?.id,
     httpUrl: gateway.value?.napcatHttpUrl,
     webuiUrl: defaultNapcatWebuiUrl(),
     accessToken: gateway.value?.napcatAccessToken,

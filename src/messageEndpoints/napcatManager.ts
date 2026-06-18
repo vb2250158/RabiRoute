@@ -78,6 +78,8 @@ type NapcatManagerContext = {
 };
 
 type NapcatHealthRequest = {
+  gatewayId?: string;
+  instanceId?: string;
   httpUrl?: string;
   webuiUrl?: string;
   accessToken?: string;
@@ -92,6 +94,8 @@ type NapcatWebuiTokenInfo = {
   token?: string;
   tokenLength?: number;
   configPath?: string;
+  configPort?: number;
+  correctedWebuiUrl?: string;
   loginUrl?: string;
   message?: string;
   source?: "provided" | "config";
@@ -217,6 +221,20 @@ function portFromUrl(value: string | undefined): number {
 
 function localUrl(port: number, pathname = ""): string {
   return `http://127.0.0.1:${port}${pathname}`;
+}
+
+function localWebuiUrlWithPort(webuiUrl: string, port: number): string {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return "";
+  try {
+    const parsed = new URL(webuiUrl || localUrl(port, "/webui"));
+    const host = parsed.hostname.toLowerCase();
+    if (!["127.0.0.1", "localhost", "::1"].includes(host)) return "";
+    parsed.port = String(port);
+    if (!parsed.pathname || parsed.pathname === "/") parsed.pathname = "/webui";
+    return parsed.toString();
+  } catch {
+    return localUrl(port, "/webui");
+  }
 }
 
 function psQuote(value: string): string {
@@ -645,34 +663,42 @@ function napcatRuntimes(ctx: NapcatManagerContext): GatewayRuntime[] {
   return [...ctx.getRuntimes()].filter((runtime) => runtimeUsesNapcat(runtime.definition));
 }
 
-function napcatWebuiConfigCandidates(ctx: NapcatManagerContext): string[] {
+function addNapcatWebuiConfigCandidatesForInstance(candidates: Set<string>, ctx: NapcatManagerContext, instance: NapCatInstanceDefinition): void {
+  const workingDir = instance.workingDir?.trim();
+  if (workingDir) {
+    addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "napcat", "config", "webui.json"));
+    addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "config", "webui.json"));
+    addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "webui.json"));
+    const nestedConfigDir = findNapcatConfigDir(workingDir);
+    if (nestedConfigDir) {
+      addNapcatWebuiConfigCandidate(candidates, path.join(nestedConfigDir, "webui.json"));
+    }
+  }
+  const launchCommand = instance.launchCommand?.trim();
+  if (launchCommand) {
+    const commandPath = launchCommand.match(/^"([^"]+)"/)?.[1] || launchCommand.split(/\s+/)[0];
+    if (commandPath && (commandPath.includes("\\") || commandPath.includes("/"))) {
+      const commandDir = path.dirname(path.resolve(workingDir || ctx.rootDir, commandPath));
+      addNapcatWebuiConfigCandidate(candidates, path.join(commandDir, "napcat", "config", "webui.json"));
+      addNapcatWebuiConfigCandidate(candidates, path.join(commandDir, "config", "webui.json"));
+    }
+  }
+}
+
+function napcatWebuiConfigCandidates(ctx: NapcatManagerContext, preferredInstances: NapCatInstanceDefinition[] = []): string[] {
   const candidates = new Set<string>();
   addNapcatWebuiConfigCandidate(candidates, process.env.NAPCAT_WEBUI_CONFIG);
   if (process.env.NAPCAT_CONFIG_DIR) {
     addNapcatWebuiConfigCandidate(candidates, path.join(process.env.NAPCAT_CONFIG_DIR, "webui.json"));
   }
 
+  for (const instance of preferredInstances) {
+    addNapcatWebuiConfigCandidatesForInstance(candidates, ctx, instance);
+  }
+
   for (const runtime of ctx.getRuntimes()) {
     for (const instance of napcatInstancesFor(ctx, runtime)) {
-      const workingDir = instance.workingDir?.trim();
-      if (workingDir) {
-        addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "napcat", "config", "webui.json"));
-        addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "config", "webui.json"));
-        addNapcatWebuiConfigCandidate(candidates, path.join(workingDir, "webui.json"));
-        const nestedConfigDir = findNapcatConfigDir(workingDir);
-        if (nestedConfigDir) {
-          addNapcatWebuiConfigCandidate(candidates, path.join(nestedConfigDir, "webui.json"));
-        }
-      }
-      const launchCommand = instance.launchCommand?.trim();
-      if (launchCommand) {
-        const commandPath = launchCommand.match(/^"([^"]+)"/)?.[1] || launchCommand.split(/\s+/)[0];
-        if (commandPath && (commandPath.includes("\\") || commandPath.includes("/"))) {
-          const commandDir = path.dirname(path.resolve(workingDir || ctx.rootDir, commandPath));
-          addNapcatWebuiConfigCandidate(candidates, path.join(commandDir, "napcat", "config", "webui.json"));
-          addNapcatWebuiConfigCandidate(candidates, path.join(commandDir, "config", "webui.json"));
-        }
-      }
+      addNapcatWebuiConfigCandidatesForInstance(candidates, ctx, instance);
     }
   }
 
@@ -709,7 +735,24 @@ function napcatWebuiConfigCandidates(ctx: NapcatManagerContext): string[] {
   return [...candidates].filter((candidate) => fs.existsSync(candidate));
 }
 
-function readNapcatWebuiToken(ctx: NapcatManagerContext, webuiUrl: string, providedToken?: string): NapcatWebuiTokenInfo {
+function preferredNapcatInstancesForHealth(ctx: NapcatManagerContext, request: NapcatHealthRequest): NapCatInstanceDefinition[] {
+  const result: NapCatInstanceDefinition[] = [];
+  for (const runtime of ctx.getRuntimes()) {
+    if (request.gatewayId && runtime.definition.id !== request.gatewayId) continue;
+    for (const instance of napcatInstancesFor(ctx, runtime)) {
+      const matchesInstanceId = request.instanceId && instance.id === request.instanceId;
+      const matchesHttp = request.httpUrl && instance.httpUrl === request.httpUrl;
+      const matchesWebui = request.webuiUrl && instance.webuiUrl === request.webuiUrl;
+      const matchesGatewayPort = request.gatewayPort && Number(instance.gatewayPort || 0) === Number(request.gatewayPort);
+      if (matchesInstanceId || (!request.instanceId && (matchesHttp || matchesWebui || matchesGatewayPort))) {
+        result.push(instance);
+      }
+    }
+  }
+  return result;
+}
+
+function readNapcatWebuiToken(ctx: NapcatManagerContext, webuiUrl: string, providedToken?: string, preferredInstances: NapCatInstanceDefinition[] = []): NapcatWebuiTokenInfo {
   const provided = providedToken?.trim();
   let expectedPort = 0;
   try {
@@ -718,7 +761,7 @@ function readNapcatWebuiToken(ctx: NapcatManagerContext, webuiUrl: string, provi
     expectedPort = 0;
   }
 
-  const candidates = napcatWebuiConfigCandidates(ctx);
+  const candidates = napcatWebuiConfigCandidates(ctx, preferredInstances);
   let fallback: NapcatWebuiTokenInfo | null = provided
     ? {
         found: true,
@@ -734,15 +777,20 @@ function readNapcatWebuiToken(ctx: NapcatManagerContext, webuiUrl: string, provi
       const fileToken = String(parsed.token || "").trim();
       const token = fileToken || provided || "";
       if (!token || parsed.disableWebUI === true) continue;
+      const port = Number(parsed.port || 0);
+      const correctedWebuiUrl = port && port !== expectedPort
+        ? localWebuiUrlWithPort(webuiUrl, port)
+        : "";
       const info: NapcatWebuiTokenInfo = {
         found: true,
         token,
         tokenLength: token.length,
         configPath,
+        ...(port ? { configPort: port } : {}),
+        ...(correctedWebuiUrl ? { correctedWebuiUrl } : {}),
         loginUrl: napcatWebuiLoginUrl(webuiUrl, token),
         source: fileToken ? "config" : "provided"
       };
-      const port = Number(parsed.port || 0);
       if (!fallback) fallback = info;
       if (!expectedPort || !port || port === expectedPort) {
         return info;
@@ -1246,17 +1294,34 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
     clearTimeout(timer);
   }
 
-  const tokenInfo = readNapcatWebuiToken(ctx, webuiUrl, request.webuiToken);
+  const preferredInstances = preferredNapcatInstancesForHealth(ctx, request);
+  let tokenInfo = readNapcatWebuiToken(ctx, webuiUrl, request.webuiToken, preferredInstances);
+  let effectiveWebuiUrl = webuiUrl;
+  let webuiReachable = await ctx.checkHttpEndpoint(webuiUrl, 1600);
+  const correctedWebuiUrl = tokenInfo.correctedWebuiUrl?.trim();
+  if (!webuiReachable && correctedWebuiUrl && correctedWebuiUrl !== webuiUrl) {
+    const correctedReachable = await ctx.checkHttpEndpoint(correctedWebuiUrl, 1600);
+    if (correctedReachable) {
+      effectiveWebuiUrl = correctedWebuiUrl;
+      webuiReachable = true;
+      tokenInfo = {
+        ...tokenInfo,
+        loginUrl: tokenInfo.token ? napcatWebuiLoginUrl(effectiveWebuiUrl, tokenInfo.token) : tokenInfo.loginUrl
+      };
+    }
+  }
   let webuiLoginInfo: NapcatLoginInfo | null = null;
   try {
-    webuiLoginInfo = await readNapcatWebuiLoginInfo(webuiUrl, tokenInfo);
+    webuiLoginInfo = await readNapcatWebuiLoginInfo(effectiveWebuiUrl, tokenInfo);
     if (!loginInfo && webuiLoginInfo) loginInfo = webuiLoginInfo;
   } catch {
     webuiLoginInfo = null;
   }
   const webui = {
-    url: webuiUrl,
-    reachable: await ctx.checkHttpEndpoint(webuiUrl, 1600),
+    url: effectiveWebuiUrl,
+    configuredUrl: webuiUrl,
+    correctedUrl: effectiveWebuiUrl !== webuiUrl ? effectiveWebuiUrl : undefined,
+    reachable: webuiReachable,
     ...tokenInfo,
     loginInfo: webuiLoginInfo
   };

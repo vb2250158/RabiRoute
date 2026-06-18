@@ -652,6 +652,39 @@ function backfillNapcatInstanceWebuiToken(definition: GatewayDefinition, instanc
   return value;
 }
 
+function backfillNapcatInstanceWebuiUrl(definition: GatewayDefinition, instanceId: string, webuiUrl: unknown): string | null {
+  const value = String(webuiUrl || "").trim();
+  if (!value) return null;
+  const instances = normalizeNapCatInstances(definition);
+  const target = instances.find((item) => item.id === instanceId);
+  if (!target || target.webuiUrl === value) return null;
+  target.webuiUrl = value;
+  definition.napcatInstances = instances;
+  const primary = instances.find((item) => item.enabled !== false) ?? instances[0];
+  if (primary) {
+    definition.napcatWebuiUrl = primary.webuiUrl;
+    definition.napcatWebuiToken = primary.webuiToken ?? "";
+  }
+  writeAdapterConfigFile(definition);
+  return value;
+}
+
+function correctedNapcatWebuiUrlFromHealth(health: Record<string, unknown>): string {
+  const webui = (health.webui ?? {}) as Record<string, unknown>;
+  return String(webui.correctedUrl || webui.correctedWebuiUrl || "").trim();
+}
+
+function addHealthDiagnostic(health: Record<string, unknown>, message: string): Record<string, unknown> {
+  const diagnostics = Array.isArray(health.diagnostics) ? health.diagnostics : [];
+  return {
+    ...health,
+    diagnostics: [
+      ...diagnostics,
+      message
+    ]
+  };
+}
+
 function napcatInstanceIgnoreKeys(instance: Partial<NapCatInstanceDefinition> & { botUserId?: unknown }): string[] {
   const keys = new Set<string>();
   const add = (prefix: string, value: unknown): void => {
@@ -1614,6 +1647,12 @@ async function napcatScanHealthPayload(): Promise<Record<string, { instances: Re
         gatewayPort: instance.gatewayPort
       }) as Record<string, unknown>;
       const scannedWebui = (health.webui ?? {}) as Record<string, unknown>;
+      const scannedCorrectedWebuiUrl = correctedNapcatWebuiUrlFromHealth(health);
+      const backfilledWebuiUrl = backfillNapcatInstanceWebuiUrl(runtime.definition, instance.id, scannedCorrectedWebuiUrl);
+      if (backfilledWebuiUrl) {
+        instance.webuiUrl = backfilledWebuiUrl;
+        health = addHealthDiagnostic(health, `已根据 NapCat webui.json 自动修正 WebUI 地址：${backfilledWebuiUrl}`);
+      }
       const scannedToken = scannedWebui.token;
       const backfilledToken = backfillNapcatInstanceWebuiToken(runtime.definition, instance.id, scannedToken);
       if (backfilledToken) {
@@ -1689,6 +1728,8 @@ async function napcatScanHealthPayload(): Promise<Record<string, { instances: Re
 }
 
 type NapcatHealthRequest = {
+  gatewayId?: string;
+  instanceId?: string;
   httpUrl?: string;
   webuiUrl?: string;
   accessToken?: string;
@@ -3222,14 +3263,39 @@ export function startManager(): void {
       }
 
       if (requestUrl.pathname === "/api/message/napcat-health" && request.method === "POST") {
-        void readJsonBody<NapcatHealthRequest>(request)
-          .then((body) => testNapcatHealthEndpoint(napcatManagerCtx(), body))
-          .then((result) => {
-            jsonResponse(response, 200, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
+        void (async () => {
+          const body = await readJsonBody<NapcatHealthRequest>(request);
+          let result = await testNapcatHealthEndpoint(napcatManagerCtx(), body) as Record<string, unknown>;
+          const correctedWebuiUrl = correctedNapcatWebuiUrlFromHealth(result);
+          if (correctedWebuiUrl) {
+            const runtime = body.gatewayId
+              ? runtimes.get(body.gatewayId)
+              : [...runtimes.values()].find((item) => {
+                  const instances = item.definition.napcatInstances ?? normalizeNapCatInstances(item.definition);
+                  return instances.some((instance) =>
+                    (body.instanceId && instance.id === body.instanceId)
+                    || (body.httpUrl && instance.httpUrl === body.httpUrl)
+                    || (body.webuiUrl && instance.webuiUrl === body.webuiUrl)
+                  );
+                });
+            const instances = runtime ? runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition) : [];
+            const instance = runtime
+              ? instances.find((item) => item.id === body.instanceId)
+                ?? instances.find((item) => body.httpUrl && item.httpUrl === body.httpUrl)
+                ?? instances.find((item) => body.webuiUrl && item.webuiUrl === body.webuiUrl)
+              : undefined;
+            if (runtime && instance) {
+              const backfilled = backfillNapcatInstanceWebuiUrl(runtime.definition, instance.id, correctedWebuiUrl);
+              if (backfilled) {
+                instance.webuiUrl = backfilled;
+                result = addHealthDiagnostic(result, `已根据 NapCat webui.json 自动修正 WebUI 地址：${backfilled}`);
+              }
+            }
+          }
+          jsonResponse(response, 200, result);
+        })().catch((error) => {
+          jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+        });
         return;
       }
 

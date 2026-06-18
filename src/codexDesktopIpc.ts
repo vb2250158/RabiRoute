@@ -695,7 +695,7 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
       } catch (error) {
         if (shouldUseAppServerFallbackFor(error, state)) {
           try {
-            await notifyCodex(message, { forceCreateUnreadableThread: isNoClientFoundError(error) });
+            await notifyCodex(message);
             writeState({
               ...readState(),
               lastNotificationError: "",
