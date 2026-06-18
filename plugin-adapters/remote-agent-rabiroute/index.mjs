@@ -3,6 +3,7 @@ import http from "node:http";
 import dgram from "node:dgram";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import WebSocket, { WebSocketServer } from "ws";
 
@@ -21,6 +22,9 @@ const defaultThreadName = process.env.REMOTE_AGENT_DEFAULT_THREAD || "Remote Age
 const codexAppServerUrl = process.env.REMOTE_AGENT_CODEX_APP_SERVER_URL || "ws://127.0.0.1:4510";
 const codexBin = process.env.REMOTE_AGENT_CODEX_BIN || "codex";
 const publicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || "";
+const fileStoreDir = process.env.REMOTE_AGENT_FILE_DIR || path.join(os.tmpdir(), "rabiroute-remote-agent-files", deviceId);
+const singleFileLimitBytes = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 0);
+const totalFileLimitBytes = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 0);
 
 let actualControlPort = 0;
 let discoveryPort = 0;
@@ -129,6 +133,110 @@ function sendTaskEvent(event) {
   sendToManager({ type: "taskEvent", ...event, device: deviceInfo() });
 }
 
+function safeFileName(value, fallback) {
+  const base = path.basename(String(value || "").trim()).replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_");
+  return base || fallback;
+}
+
+function sha256(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function assertFileTransferSize(size, total, label) {
+  if (singleFileLimitBytes > 0 && size > singleFileLimitBytes) {
+    throw new Error(`Remote Agent file is too large (${size} bytes): ${label}. Limit: ${singleFileLimitBytes} bytes.`);
+  }
+  if (totalFileLimitBytes > 0 && total > totalFileLimitBytes) {
+    throw new Error(`Remote Agent files exceed total limit (${total} bytes). Limit: ${totalFileLimitBytes} bytes.`);
+  }
+}
+
+function taskFileDir(taskId) {
+  return path.join(fileStoreDir, "inbox", safeFileName(taskId, "task"));
+}
+
+function materializeTaskFiles(task) {
+  const files = Array.isArray(task.files) ? task.files : [];
+  if (!files.length) return [];
+  const dir = taskFileDir(task.taskId);
+  fs.mkdirSync(dir, { recursive: true });
+  let total = 0;
+  return files.map((file, index) => {
+    const buffer = Buffer.from(String(file.contentBase64 || ""), "base64");
+    total += buffer.byteLength;
+    assertFileTransferSize(buffer.byteLength, total, file.name || `file-${index + 1}`);
+    const name = safeFileName(file.name || `file-${index + 1}`, `file-${index + 1}`);
+    const outPath = path.join(dir, name);
+    fs.writeFileSync(outPath, buffer);
+    const digest = sha256(buffer);
+    if (file.sha256 && file.sha256 !== digest) {
+      throw new Error(`Remote Agent file checksum mismatch: ${name}`);
+    }
+    return {
+      name,
+      path: outPath,
+      relativePath: file.relativePath,
+      mimeType: file.mimeType,
+      size: buffer.byteLength,
+      sha256: digest
+    };
+  });
+}
+
+function readTransferFile(filePath, fallbackName) {
+  const resolved = path.resolve(String(filePath || ""));
+  if (!fs.existsSync(resolved)) throw new Error(`Remote Agent result file does not exist: ${resolved}`);
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) throw new Error(`Remote Agent result path is not a regular file: ${resolved}`);
+  assertFileTransferSize(stat.size, stat.size, resolved);
+  const buffer = fs.readFileSync(resolved);
+  return {
+    name: safeFileName(fallbackName || path.basename(resolved), "remote-agent-result"),
+    path: resolved,
+    size: buffer.byteLength,
+    sha256: sha256(buffer),
+    contentBase64: buffer.toString("base64")
+  };
+}
+
+function filesFromCallback(body) {
+  const files = [];
+  let total = 0;
+  const candidates = [];
+  if (body.artifactPath) candidates.push({ path: body.artifactPath });
+  if (body.logPath && body.logPath !== body.artifactPath) candidates.push({ path: body.logPath });
+  if (Array.isArray(body.files)) {
+    for (const item of body.files) candidates.push(item);
+  }
+  const seenPaths = new Set();
+  for (const item of candidates) {
+    if (item?.contentBase64) {
+      const buffer = Buffer.from(String(item.contentBase64), "base64");
+      total += buffer.byteLength;
+      assertFileTransferSize(buffer.byteLength, total, item.name || item.path || "inline result");
+      files.push({
+        name: safeFileName(item.name || item.path || `result-${files.length + 1}`, `result-${files.length + 1}`),
+        relativePath: item.relativePath,
+        mimeType: item.mimeType,
+        size: buffer.byteLength,
+        sha256: item.sha256 || sha256(buffer),
+        contentBase64: buffer.toString("base64")
+      });
+      continue;
+    }
+    if (item?.path) {
+      const resolvedPath = path.resolve(String(item.path));
+      if (seenPaths.has(resolvedPath)) continue;
+      seenPaths.add(resolvedPath);
+      const file = readTransferFile(item.path, item.name);
+      total += file.size;
+      assertFileTransferSize(file.size, total, item.path);
+      files.push(file);
+    }
+  }
+  return files;
+}
+
 function tryListenServer(server, port, host) {
   return new Promise((resolve, reject) => {
     const onError = (error) => {
@@ -149,12 +257,51 @@ async function listenServerFrom(server, startPort, host) {
   for (let port = startPort; port <= 65535; port += 1) {
     try {
       await tryListenServer(server, port, host);
+      const loopbackOk = await verifyLoopbackControlPort(port);
+      if (!loopbackOk) {
+        console.warn(`Remote Agent control port ${port} is not reachable on 127.0.0.1 by this bridge; trying next port.`);
+        await closeServer(server);
+        continue;
+      }
       return port;
     } catch (error) {
       if (error?.code !== "EADDRINUSE" && error?.code !== "EACCES") throw error;
     }
   }
   throw new Error(`No available control port found from ${startPort}.`);
+}
+
+function closeServer(server) {
+  return new Promise((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+function verifyLoopbackControlPort(port) {
+  return new Promise((resolve) => {
+    const request = http.get({
+      hostname: "127.0.0.1",
+      port,
+      path: "/health",
+      timeout: 1000
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          resolve(body?.device?.deviceId === deviceId);
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on("error", () => resolve(false));
+  });
 }
 
 function bindUdp(socket, port) {
@@ -303,8 +450,15 @@ async function ensureThread(threadName, cwd) {
   return threadId;
 }
 
-function buildTaskPrompt(task) {
+function buildTaskPrompt(task, localFiles = []) {
   const callbackUrl = `http://127.0.0.1:${actualControlPort}/v1/remote-agent/task-events`;
+  const fileLines = localFiles.length
+    ? [
+        "",
+        "[随任务传入的文件]",
+        ...localFiles.map((file, index) => `${index + 1}. ${file.name} (${file.size} bytes, sha256=${file.sha256})：${file.path}`)
+      ]
+    : [];
   return [
     "[RabiRoute 远端 Agent 任务]",
     `任务 ID：${task.taskId}`,
@@ -318,22 +472,24 @@ function buildTaskPrompt(task) {
       status: "completed",
       summary: "任务完成摘要",
       artifactPath: "可选：产物路径",
-      logPath: "可选：日志路径"
+      logPath: "可选：日志路径",
+      files: [{ path: "可选：需要回传给主控端的本机文件路径" }]
     }, null, 2),
+    ...fileLines,
     "",
     "[任务正文]",
     task.message
   ].join("\n");
 }
 
-async function deliverToCodex(task) {
+async function deliverToCodex(task, localFiles = []) {
   const cwd = task.cwd || defaultCwd;
   const threadName = task.threadName || defaultThreadName;
   await connectCodexAppServer(cwd);
   const threadId = await ensureThread(threadName, cwd);
   await codexRequest("turn/start", {
     threadId,
-    input: [{ type: "text", text: buildTaskPrompt(task) }],
+    input: [{ type: "text", text: buildTaskPrompt(task, localFiles) }],
     cwd,
     approvalPolicy: "never",
     sandboxPolicy: { type: "dangerFullAccess" },
@@ -349,8 +505,9 @@ async function handleTask(task) {
     if (agentType !== "codex") {
       throw new Error(`Unsupported REMOTE_AGENT_TYPE: ${agentType}. This bridge currently implements codex.`);
     }
-    const delivered = await deliverToCodex(task);
-    sendTaskEvent({ taskId: task.taskId, status: "progress", summary: "Task injected into remote Codex thread.", data: delivered });
+    const localFiles = materializeTaskFiles(task);
+    const delivered = await deliverToCodex(task, localFiles);
+    sendTaskEvent({ taskId: task.taskId, status: "progress", summary: "Task injected into remote Codex thread.", data: { ...delivered, files: localFiles } });
   } catch (error) {
     sendTaskEvent({ taskId: task.taskId, status: "failed", error: error instanceof Error ? error.message : String(error) });
   }
@@ -383,7 +540,8 @@ function createControlServer() {
           return;
         }
         const body = await readJson(request);
-        sendTaskEvent(body);
+        const files = filesFromCallback(body);
+        sendTaskEvent(files.length ? { ...body, files } : body);
         jsonResponse(response, 202, { ok: true });
         return;
       }

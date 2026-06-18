@@ -163,8 +163,11 @@ function remoteAgentApiHint(values: ForwardTemplateValues): string[] {
       cwd: defaultCwd || "<远端工作目录，可省略使用设备默认值>",
       threadName: defaultThreadName || "<远端 Agent 线程名，可省略使用设备默认值>",
       message: "请在远端执行任务，完成后按提示回传结果。",
+      filePaths: ["<可选：本机要随任务传给远端的文件路径>"],
       originReplyContext: "__replyContextJson__"
     }, null, 2).replace("\"__replyContextJson__\"", replyContext),
+    "- 可选文件传输：请求体可传 filePaths、files 或 attachments；manager 会把文件内容随任务发给远端 bridge。",
+    "- 远端回传文件：远端回调可以传 artifactPath、logPath 或 files，bridge 会把文件内容带回本机并保存到 data/remote-agent-files/<taskId>/。",
     "远端结果会回传到本机 RabiRoute，并投递回当前本机人格线程；远端 Agent 不应直接回复 QQ。"
   ];
 }

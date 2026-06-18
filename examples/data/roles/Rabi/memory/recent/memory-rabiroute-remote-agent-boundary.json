@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-remote-agent-boundary",
   "title": "远端 Agent 是下游设备入口，不是绕过安全门的回复通道",
-  "content": "remoteAgent 让本机人格把任务投递给远端设备上的 Agent bridge。远端结果必须先回到本机 RabiRoute，再注入发起任务的人格线程；远端 Agent 不直接回复 QQ 或外部系统。RabiGUI 是主控端：扫描局域网远端 bridge，用户输入密码连接，密码握手通过 WebSocket 首包完成，不再通过 token 或 URL query。bridge 零配置无人值守启动，控制端口和 discovery 端口被占用时会自动顺延，RabiGUI 使用扫描公告的真实端口。遇到 scan 成功但 control timeout，要优先确认 manager 是新进程，并检查控制连接是否错误使用了 bridge 自报的另一个网卡地址；manager 应使用 UDP discovery 响应的实际来源 IP 拼接控制 WebSocket。",
+  "content": "remoteAgent 让本机人格把任务投递给远端设备上的 Agent bridge。远端结果必须先回到本机 RabiRoute，再注入发起任务的人格线程；远端 Agent 不直接回复 QQ 或外部系统。RabiGUI 是主控端：扫描局域网远端 bridge，用户输入密码连接，密码握手通过 WebSocket 首包完成，不再通过 token 或 URL query。bridge 零配置无人值守启动，控制端口和 discovery 端口被占用时会自动顺延，RabiGUI 使用扫描公告的真实端口。遇到 scan 成功但 control timeout，要优先确认 manager 是新进程，并检查控制连接是否错误使用了 bridge 自报的另一个网卡地址；manager 应使用 UDP discovery 响应的实际来源 IP 拼接控制 WebSocket。remoteAgent 任务可以通过 filePaths/files/attachments 随消息传文件，bridge 会把文件落到远端 inbox 并在任务提示中列出路径；远端回调 artifactPath/logPath/files 时，manager 会把文件保存到 data/remote-agent-files/<taskId>/。文件传输默认不限制大小。排查中文乱码时要区分 Rabi HTTP/WebSocket 链路和测试脚本入口编码，PowerShell 管道可能先把中文转成问号；用 UTF-8 JSON 或 Unicode escape 验证链路。",
   "source": {
     "kind": "example",
     "summary": "公开示例近期记忆：远端 Agent 设备边界和安全门"
   },
   "createdAt": "2026-06-11T00:00:00+08:00",
   "updatedAt": "2026-06-18T00:00:00+08:00",
-  "keywords": ["remoteAgent", "远端 Agent", "deviceId", "密码握手", "RabiGUI", "主控扫描", "端口顺延", "control timeout", "observed IP", "Action Gate", "安全门", "回传"]
+  "keywords": ["remoteAgent", "远端 Agent", "deviceId", "密码握手", "RabiGUI", "主控扫描", "端口顺延", "control timeout", "observed IP", "文件传输", "UTF-8", "Action Gate", "安全门", "回传"]
 }

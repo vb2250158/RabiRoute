@@ -65,8 +65,34 @@ Remote Codex receives this URL in its prompt. When it finishes a task, it should
   "status": "completed",
   "summary": "Build completed.",
   "artifactPath": "/path/to/artifact",
-  "logPath": "/path/to/log"
+  "logPath": "/path/to/log",
+  "files": [
+    { "path": "/path/to/extra-result.zip" }
+  ]
 }
 ```
 
-The bridge forwards the event over the authenticated Rabi control connection, and the manager delivers the result back to the originating local persona thread.
+The bridge reads `artifactPath`, `logPath`, and any `files[].path` from the remote machine, sends their content over the authenticated Rabi control connection, and the manager stores returned files under `data/remote-agent-files/<taskId>/` before delivering the result back to the originating local persona thread.
+
+## File Transfer
+
+Tasks may include files from the Rabi manager side. The manager accepts `filePaths`, `files`, or `attachments` in `POST /api/remote-agent/tasks`, reads local file content, and sends it with the task.
+
+The bridge writes incoming task files to:
+
+```text
+<tmp>/rabiroute-remote-agent-files/<deviceId>/inbox/<taskId>/
+```
+
+Override the directory with:
+
+```bash
+REMOTE_AGENT_FILE_DIR="/path/to/remote-agent-files" npm start
+```
+
+File transfer is unlimited by default. To add optional protection for a deployment, set byte limits explicitly:
+
+```bash
+REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES=10485760
+REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES=26214400
+```

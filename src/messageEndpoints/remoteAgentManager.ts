@@ -3,13 +3,15 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 
 export const REMOTE_AGENT_CONTROL_PORT_START = 8797;
 export const REMOTE_AGENT_DISCOVERY_PORT_START = 8798;
 export const REMOTE_AGENT_DISCOVERY_PORT_END = 8818;
 export const REMOTE_AGENT_PROTOCOL_VERSION = 2;
+export const REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 0);
+export const REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 0);
 
 export type RemoteAgentDeviceInfo = {
   deviceId: string;
@@ -30,9 +32,22 @@ export type RemoteAgentTaskRequest = {
   taskKind?: string;
   cwd?: string;
   threadName?: string;
+  filePaths?: string[];
+  files?: RemoteAgentFileTransfer[];
+  attachments?: Array<RemoteAgentFileTransfer | { path?: string; name?: string; kind?: string }>;
   originGatewayId?: string;
   gatewayId?: string;
   originReplyContext?: Record<string, unknown>;
+};
+
+export type RemoteAgentFileTransfer = {
+  name: string;
+  relativePath?: string;
+  path?: string;
+  mimeType?: string;
+  size?: number;
+  sha256?: string;
+  contentBase64?: string;
 };
 
 export type RemoteAgentTaskEvent = {
@@ -42,6 +57,8 @@ export type RemoteAgentTaskEvent = {
   message?: string;
   artifactPath?: string;
   logPath?: string;
+  files?: RemoteAgentFileTransfer[];
+  savedFiles?: RemoteAgentFileTransfer[];
   error?: string;
   data?: unknown;
   device?: Partial<RemoteAgentDeviceInfo>;
@@ -54,6 +71,7 @@ export type RemoteAgentTask = {
   taskKind: string;
   cwd?: string;
   threadName?: string;
+  files: RemoteAgentFileTransfer[];
   originGatewayId: string;
   originReplyContext?: Record<string, unknown>;
   status: "queued" | "delivered" | "started" | "progress" | "completed" | "failed";
@@ -114,6 +132,7 @@ type RemoteAgentHubOptions = {
   publicHost?: string;
   discoveryPort?: number;
   passwordStorePath?: string;
+  fileStoreDir?: string;
   getDefaultGatewayId: () => string | undefined;
   onTaskEvent?: (task: RemoteAgentTask, event: RemoteAgentTaskEvent) => void | Promise<void>;
 };
@@ -211,6 +230,29 @@ export function controlUrlFromObservedAddress(rawControlUrl: unknown, observedAd
 
 function defaultPasswordStorePath(): string {
   return path.join(process.cwd(), "data", "remote-agent-connections.json");
+}
+
+function defaultFileStoreDir(): string {
+  return path.join(process.cwd(), "data", "remote-agent-files");
+}
+
+function safeFileName(value: string, fallback: string): string {
+  const base = path.basename(String(value || "").trim()).replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_");
+  return base || fallback;
+}
+
+function sha256(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function decodeTransferContent(file: RemoteAgentFileTransfer): Buffer {
+  const content = String(file.contentBase64 || "");
+  return Buffer.from(content, "base64");
+}
+
+function stripTransferContent(file: RemoteAgentFileTransfer): RemoteAgentFileTransfer {
+  const { contentBase64: _contentBase64, ...metadata } = file;
+  return metadata;
 }
 
 export class RemoteAgentHub {
@@ -439,6 +481,7 @@ export class RemoteAgentHub {
     if (!message) {
       throw new Error("Missing remote Agent task message.");
     }
+    const files = this.prepareTaskFiles(request);
     const task: RemoteAgentTask = {
       taskId: randomUUID(),
       deviceId: targetDevice.deviceId,
@@ -446,6 +489,7 @@ export class RemoteAgentHub {
       taskKind: String(request.taskKind || "remote-agent-task"),
       cwd: request.cwd || targetDevice.defaultCwd,
       threadName: request.threadName || targetDevice.defaultThreadName,
+      files: files.map(stripTransferContent),
       originGatewayId,
       originReplyContext: request.originReplyContext,
       status: "queued",
@@ -457,7 +501,7 @@ export class RemoteAgentHub {
     record.lastTaskAt = task.updatedAt;
     record.socket.send(JSON.stringify({
       type: "task",
-      task,
+      task: { ...task, files },
       center: {
         ...localDeviceInfo(),
         sentAt: task.createdAt
@@ -482,8 +526,11 @@ export class RemoteAgentHub {
     if (normalizedSourceDeviceId !== existing.deviceId) {
       throw new Error(`Remote Agent device ${normalizedSourceDeviceId} does not own task ${event.taskId}.`);
     }
-    const task = this.patchTask(event.taskId, event);
-    void Promise.resolve(this.options.onTaskEvent?.(task, event))
+    const storedEvent = event.files?.length
+      ? { ...event, files: event.files.map(stripTransferContent), savedFiles: this.saveReturnedFiles(existing, event.files) }
+      : event;
+    const task = this.patchTask(event.taskId, storedEvent);
+    void Promise.resolve(this.options.onTaskEvent?.(task, storedEvent))
       .catch((error) => {
         this.patchTask(task.taskId, {
           status: "failed",
@@ -578,6 +625,10 @@ export class RemoteAgentHub {
     return this.options.passwordStorePath || defaultPasswordStorePath();
   }
 
+  private fileStoreDir(): string {
+    return this.options.fileStoreDir || defaultFileStoreDir();
+  }
+
   private readPasswordStore(): PasswordStore {
     try {
       const file = this.passwordStorePath();
@@ -604,6 +655,85 @@ export class RemoteAgentHub {
     store.devices = store.devices || {};
     store.devices[deviceId] = { password, updatedAt: nowIso() };
     this.writePasswordStore(store);
+  }
+
+  private prepareTaskFiles(request: RemoteAgentTaskRequest): RemoteAgentFileTransfer[] {
+    const rawFiles: Array<RemoteAgentFileTransfer | { path?: string; name?: string; kind?: string } | string> = [
+      ...(Array.isArray(request.filePaths) ? request.filePaths : []),
+      ...(Array.isArray(request.files) ? request.files : []),
+      ...(Array.isArray(request.attachments) ? request.attachments : [])
+    ];
+    const files: RemoteAgentFileTransfer[] = [];
+    let total = 0;
+    for (const raw of rawFiles) {
+      const item = typeof raw === "string" ? { path: raw } : raw;
+      const sourcePath = String(item.path || "").trim();
+      if (!sourcePath) {
+        if ("contentBase64" in item && item.contentBase64) {
+          const buffer = decodeTransferContent(item as RemoteAgentFileTransfer);
+          total += buffer.byteLength;
+          this.assertFileTransferSize(buffer.byteLength, total, item.name || "inline file");
+          files.push({
+            name: safeFileName(item.name || "remote-agent-file", `file-${files.length + 1}`),
+            relativePath: item.relativePath,
+            mimeType: item.mimeType,
+            size: buffer.byteLength,
+            sha256: item.sha256 || sha256(buffer),
+            contentBase64: buffer.toString("base64")
+          });
+          if (item.sha256 && item.sha256 !== files.at(-1)?.sha256) {
+            throw new Error(`Remote Agent inline file checksum mismatch: ${item.name || "inline file"}`);
+          }
+        }
+        continue;
+      }
+      if (!fs.existsSync(sourcePath)) throw new Error(`Remote Agent file does not exist: ${sourcePath}`);
+      const stat = fs.statSync(sourcePath);
+      if (!stat.isFile()) throw new Error(`Remote Agent file is not a regular file: ${sourcePath}`);
+      total += stat.size;
+      this.assertFileTransferSize(stat.size, total, sourcePath);
+      const buffer = fs.readFileSync(sourcePath);
+      files.push({
+        name: safeFileName(item.name || path.basename(sourcePath), `file-${files.length + 1}`),
+        relativePath: "relativePath" in item ? item.relativePath : undefined,
+        path: sourcePath,
+        size: buffer.byteLength,
+        sha256: sha256(buffer),
+        contentBase64: buffer.toString("base64")
+      });
+    }
+    return files;
+  }
+
+  private assertFileTransferSize(size: number, total: number, label: string): void {
+    if (REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES > 0 && size > REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES) {
+      throw new Error(`Remote Agent file is too large (${size} bytes): ${label}. Limit: ${REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES} bytes.`);
+    }
+    if (REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES > 0 && total > REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES) {
+      throw new Error(`Remote Agent files exceed total limit (${total} bytes). Limit: ${REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES} bytes.`);
+    }
+  }
+
+  private saveReturnedFiles(task: RemoteAgentTask, files: RemoteAgentFileTransfer[]): RemoteAgentFileTransfer[] {
+    const dir = path.join(this.fileStoreDir(), task.taskId);
+    fs.mkdirSync(dir, { recursive: true });
+    let total = 0;
+    return files.map((file, index) => {
+      const buffer = decodeTransferContent(file);
+      total += buffer.byteLength;
+      this.assertFileTransferSize(buffer.byteLength, total, file.name || `returned-${index + 1}`);
+      const name = safeFileName(file.name || file.path || `returned-${index + 1}`, `returned-${index + 1}`);
+      const outPath = path.join(dir, name);
+      fs.writeFileSync(outPath, buffer);
+      return {
+        name,
+        path: outPath,
+        relativePath: file.relativePath,
+        mimeType: file.mimeType,
+        size: buffer.byteLength,
+        sha256: sha256(buffer)
+      };
+    });
   }
 
   private patchTask(taskId: string, event: RemoteAgentTaskEvent): RemoteAgentTask {

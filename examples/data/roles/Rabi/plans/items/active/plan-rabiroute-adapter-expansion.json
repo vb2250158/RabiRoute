@@ -4,8 +4,8 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "architecture",
-  "currentStep": "消息端 adapter 已按 napcat、remoteAgent、heartbeat、webhook 等入口拆分，Agent 端 adapter 独立投递处理端；remoteAgent 作为下游远端设备入口，结果仍回到本机人格线程。远端 bridge 已改为无人值守等待 RabiGUI 主控扫描，连接鉴权从 token 改为密码握手，端口占用由 bridge 和扫描公告自动处理。",
-  "nextAction": "新增平台时优先扩展 src/adapters/，新增处理端时优先扩展 src/agentAdapters/；继续区分远端 Agent 设备入口和真正的远端消息端 bridge，并把任务归属、回传上下文、密码记忆和 per-agent binding 收口",
+  "currentStep": "消息端 adapter 已按 napcat、remoteAgent、heartbeat、webhook 等入口拆分，Agent 端 adapter 独立投递处理端；remoteAgent 作为下游远端设备入口，结果仍回到本机人格线程。远端 bridge 已改为无人值守等待 RabiGUI 主控扫描，连接鉴权从 token 改为密码握手，端口占用由 bridge 和扫描公告自动处理。remoteAgent 任务已支持随消息传文件和回传产物文件，主控端保存回传文件到 data/remote-agent-files/<taskId>/。",
+  "nextAction": "新增平台时优先扩展 src/adapters/，新增处理端时优先扩展 src/agentAdapters/；继续区分远端 Agent 设备入口和真正的远端消息端 bridge，并把任务归属、回传上下文、密码记忆、文件产物展示和 per-agent binding 收口",
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-06-17T00:00:00+08:00",
-  "keywords": ["message adapter", "agent adapter", "remoteAgent", "远端 Agent", "密码握手", "主控扫描", "端口顺延", "NapCat", "Codex", "解耦", "扩展"]
+  "updatedAt": "2026-06-18T00:00:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "remoteAgent", "远端 Agent", "密码握手", "主控扫描", "端口顺延", "文件传输", "NapCat", "Codex", "解耦", "扩展"]
 }

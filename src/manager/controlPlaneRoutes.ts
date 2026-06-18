@@ -319,6 +319,7 @@ const remoteAgentHub = new RemoteAgentHub({
   publicHost: remoteAgentPublicHost,
   discoveryPort: Number(process.env.REMOTE_AGENT_DISCOVERY_PORT ?? "8798"),
   passwordStorePath: path.join(rootDir, "data", "remote-agent-connections.json"),
+  fileStoreDir: path.join(rootDir, "data", "remote-agent-files"),
   getDefaultGatewayId: () => [...runtimes.values()][0]?.definition.id,
   onTaskEvent: handleRemoteAgentTaskEvent
 });
