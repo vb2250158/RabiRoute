@@ -4,6 +4,7 @@ import type {
   ManualTriggerRecord,
   PrivateMessageRecord,
   RolePanelMessageRecord,
+  WeComMessageRecord,
   VoiceTranscriptEventRecord
 } from "../history.js";
 
@@ -16,9 +17,10 @@ export type ForwardRouteKind =
   | "heartbeat"
   | "manual_trigger"
   | "role_panel_message"
-  | "voice_transcript";
+  | "voice_transcript"
+  | "wecom_message";
 
-export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript";
+export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "wecom_message";
 
 export type ForwardRecord =
   | GroupMessageRecord
@@ -26,6 +28,7 @@ export type ForwardRecord =
   | HeartbeatEventRecord
   | ManualTriggerRecord
   | RolePanelMessageRecord
+  | WeComMessageRecord
   | VoiceTranscriptEventRecord;
 
 export type ForwardTemplateValues = Record<string, string | number | undefined>;

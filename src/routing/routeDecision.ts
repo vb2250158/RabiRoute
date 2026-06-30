@@ -9,6 +9,7 @@ import type {
   HeartbeatEventRecord,
   ManualTriggerRecord,
   RolePanelMessageRecord,
+  WeComMessageRecord,
   VoiceTranscriptEventRecord
 } from "../history.js";
 
@@ -43,7 +44,11 @@ function expandRouteVariables(pattern: string, variables: Record<string, string>
 }
 
 export function isGroupRecord(record: ForwardRecord): record is GroupMessageRecord {
-  return "groupId" in record;
+  return "groupId" in record && !isWeComRecord(record);
+}
+
+export function isWeComRecord(record: ForwardRecord): record is WeComMessageRecord {
+  return "adapterType" in record && record.adapterType === "wecom";
 }
 
 export function isHeartbeatRecord(record: ForwardRecord): record is HeartbeatEventRecord {
@@ -63,12 +68,13 @@ export function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceT
 }
 
 export function routeVariablesFor(record: ForwardRecord, extraValues: ForwardTemplateValues, route?: RouteProfile): Record<string, string> {
-  const isGroup = "groupId" in record;
+  const isGroup = isGroupRecord(record);
+  const groupId = isGroup || isWeComRecord(record) ? record.groupId : undefined;
   const variables: Record<string, string> = {
     ...config.routeVariables,
     ...(route?.routeVariables ?? {}),
     SenderQQId: "userId" in record ? String(record.userId) : "",
-    GroupId: isGroup ? String(record.groupId) : "",
+    GroupId: groupId == null ? "" : String(groupId),
     ReplyMessageId: extraValues.repliedMessageId == null ? "" : String(extraValues.repliedMessageId)
   };
 
@@ -119,7 +125,8 @@ function ruleMatches(
   }
 
   if (rule.targetGroupId?.trim()) {
-    if (!isGroupRecord(record) || String(record.groupId) !== rule.targetGroupId.trim()) {
+    const groupId = isGroupRecord(record) || isWeComRecord(record) ? record.groupId : undefined;
+    if (groupId == null || String(groupId) !== rule.targetGroupId.trim()) {
       return false;
     }
   }

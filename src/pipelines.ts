@@ -1,9 +1,9 @@
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 
-export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "none";
+export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 
-export type PipelinePresetId = "qq_chat" | "voice_chat" | "webhook_task";
+export type PipelinePresetId = "qq_chat" | "wecom_chat" | "voice_chat" | "webhook_task";
 
 export type PipelineDefinition = {
   id?: string;
@@ -38,6 +38,20 @@ export const pipelinePresets: Record<PipelinePresetId, ResolvedPipeline> = {
     outputAdapter: "qq",
     outputPipeline: "qq",
     promptOutputMode: "qq_text",
+    ttsProvider: "",
+    ttsVoice: "",
+    ttsWorkerUrl: "",
+    ttsPlay: false,
+    preventFeedbackLoop: true,
+    replyToSource: true
+  },
+  wecom_chat: {
+    id: "wecom_chat",
+    name: "WeCom chat",
+    inputAdapter: "wecom",
+    outputAdapter: "wecom",
+    outputPipeline: "wecom",
+    promptOutputMode: "markdown",
     ttsProvider: "",
     ttsVoice: "",
     ttsWorkerUrl: "",
@@ -91,11 +105,11 @@ const fallbackPipeline: ResolvedPipeline = {
 };
 
 function isMessageAdapterType(value: string): value is MessageAdapterType {
-  return value === "napcat" || value === "fennenote" || value === "xiaoai" || value === "webhook" || value === "heartbeat" || value === "rolePanel" || value === "disabled";
+  return value === "napcat" || value === "fennenote" || value === "xiaoai" || value === "webhook" || value === "wecom" || value === "heartbeat" || value === "rolePanel" || value === "disabled";
 }
 
 function isOutputAdapterType(value: string): value is OutputAdapterType {
-  return value === "qq" || value === "codex" || value === "file" || value === "console" || value === "tts" || value === "webhook" || value === "fennenote" || value === "none";
+  return value === "qq" || value === "codex" || value === "file" || value === "console" || value === "tts" || value === "webhook" || value === "fennenote" || value === "wecom" || value === "none";
 }
 
 function isPromptOutputMode(value: string): value is PromptOutputMode {

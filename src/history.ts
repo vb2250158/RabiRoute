@@ -81,10 +81,29 @@ export type VoiceTranscriptEventRecord = {
   peak?: number;
 };
 
+export type WeComMessageRecord = {
+  time: number;
+  rawMessage: string;
+  messageId?: number | string;
+  senderName?: string;
+  adapterType: "wecom";
+  reqId?: string;
+  conversationId?: string;
+  chatId?: string;
+  groupId?: string;
+  userId?: string;
+  senderId?: string;
+  messageType?: string;
+  repliedMessageId?: string;
+  isSelf?: boolean;
+  segments?: unknown[];
+  raw?: unknown;
+};
+
 export type CodexNotificationRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript";
+  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "wecom_message";
   text: string;
 };
 
@@ -203,6 +222,19 @@ export function appendVoiceTranscriptEventForAdapter(adapter: string, record: Vo
   if (adapter !== "webhook") {
     fs.appendFileSync(voiceTranscriptLogPath(config.memoryDataDir), `${JSON.stringify(normalized)}\n`, "utf8");
   }
+}
+
+function wecomLogPath(dataDir = config.memoryDataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "wecom-messages.jsonl");
+}
+
+export function appendWeComMessage(record: WeComMessageRecord): void {
+  fs.appendFileSync(wecomLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+export function appendWeComMessageToDir(record: WeComMessageRecord, dataDir: string): void {
+  fs.appendFileSync(wecomLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 function codexNotificationPath(dataDir = config.memoryDataDir): string {

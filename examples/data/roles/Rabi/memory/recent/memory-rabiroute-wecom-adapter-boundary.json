@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-wecom-adapter-boundary",
+  "title": "WeCom 是独立消息端，不是 Webhook 或 NapCat 分支",
+  "content": "企业微信接入应走独立 wecom message adapter：用企业微信智能机器人 WebSocket 收消息，记录 wecom-messages.jsonl，生成 wecom_message 路由和 WeCom 专用 replyContext，再由统一 outbox 按 messageAdapterPolicies.wecom 回发。不要把 WeCom 实现塞进 webhook，也不要让 Agent 直接调用企业微信 SDK。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：企业微信接入的适配层边界"
+  },
+  "createdAt": "2026-06-30T00:00:00+08:00",
+  "updatedAt": "2026-06-30T00:00:00+08:00",
+  "keywords": ["wecom", "企业微信", "message adapter", "wecom_message", "outbox", "replyContextJson", "messageAdapterPolicies"]
+}

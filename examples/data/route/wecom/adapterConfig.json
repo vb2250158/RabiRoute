@@ -1,0 +1,67 @@
+{
+  "enabled": true,
+  "messageAdapters": [
+    "wecom",
+    "heartbeat"
+  ],
+  "messageAdapterPolicies": {
+    "wecom": {
+      "inputEnabled": true,
+      "outputEnabled": true,
+      "supportedOutputs": [
+        "text",
+        "image",
+        "voice",
+        "file"
+      ]
+    },
+    "heartbeat": {
+      "inputEnabled": true,
+      "outputEnabled": true,
+      "supportedOutputs": [
+        "text",
+        "image",
+        "voice",
+        "file"
+      ]
+    }
+  },
+  "pipelinePreset": "wecom_chat",
+  "pipeline": {
+    "inputAdapter": "wecom",
+    "outputAdapter": "wecom",
+    "outputPipeline": "wecom",
+    "promptOutputMode": "markdown",
+    "replyToSource": true,
+    "preventFeedbackLoop": true
+  },
+  "wecomBotId": "WECOM_BOT_ID_PLACEHOLDER",
+  "wecomBotSecret": "WECOM_BOT_SECRET_PLACEHOLDER",
+  "wecomWsUrl": "",
+  "heartbeatIntervalSeconds": 900,
+  "heartbeatMessage": "Scheduled heartbeat: check recent WeCom messages and route context.",
+  "codexThreadName": "WeCom message monitor",
+  "codexCwd": "C:/Path/To/Your/Project",
+  "agentModel": "",
+  "agentRoleFile": "persona.md",
+  "agentAdapters": [
+    "codex"
+  ],
+  "dataDir": "./data/route/wecom",
+  "configName": "wecom",
+  "agentRoleId": "Rabi",
+  "rolesDir": "./data/roles",
+  "notificationRules": [
+    {
+      "id": "wecom-group-message",
+      "name": "WeCom group message",
+      "enabled": true,
+      "routeKinds": [
+        "wecom_message"
+      ],
+      "targetGroupId": "",
+      "regex": "",
+      "template": "WeCom group message\nTarget: {messageTarget}\nGroup: {groupId}\nSender: {sender} ({userId})\nMessageId: {messageId}\nReqId: {wecomReqId}\nChatId: {wecomChatId}\n\n{message}\n\nReply through {replyApiUrl} with replyContextJson when a WeCom response is allowed."
+    }
+  ]
+}

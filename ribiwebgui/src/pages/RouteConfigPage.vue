@@ -173,6 +173,7 @@ watch(
 const adapterParamOpen = ref<Record<string, boolean>>({
   rolePanel: false,
   napcat: false,
+  wecom: false,
   remoteAgent: false,
   heartbeat: false,
   fennenote: false,
@@ -192,7 +193,8 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     title: "实时消息",
     note: "来自聊天软件或即时通信平台的入口。",
     choices: [
-      { type: "napcat", title: "NapCat / OneBot", note: "接收 QQ 群聊和私聊实时消息", icon: "mdi-message-badge-outline" }
+      { type: "napcat", title: "NapCat / OneBot", note: "接收 QQ 群聊和私聊实时消息", icon: "mdi-message-badge-outline" },
+      { type: "wecom", title: "企业微信 / WeCom", note: "接收企业微信群聊并支持回发消息", icon: "mdi-domain" }
     ]
   },
   {
@@ -241,6 +243,7 @@ const adapters = computed(() => gateway.value ? gatewayAdapterTypes(gateway.valu
 const messageInputsDisabled = computed(() => gateway.value ? isMessageInputsDisabled(gateway.value) : false);
 const messageAdapterInactive = computed(() => Boolean(gateway.value?.enabled === false || runtime.value.enabled === false || messageInputsDisabled.value));
 const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {} as Record<string, any>);
+const wecomState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.wecom || runtime.value.gatewayStatus?.wecom || {} as Record<string, any>);
 const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || {} as Record<string, any>);
 const adapterErrors = (type: MessageAdapterType) => gateway.value ? adapterErrorsFor(type, gateway.value, runtime.value) : [];
 const visibleActiveAdapters = computed<MessageAdapterType[]>(() => [...new Set(["rolePanel" as MessageAdapterType, ...adapters.value])]);
@@ -358,7 +361,7 @@ function toggleAdapter(type: MessageAdapterType): void {
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "rolePanel" || type === "napcat" || type === "remoteAgent" || type === "heartbeat" || isWebhookLikeAdapter(type);
+  return type === "rolePanel" || type === "napcat" || type === "wecom" || type === "remoteAgent" || type === "heartbeat" || isWebhookLikeAdapter(type);
 }
 
 function adapterLogEntries(type: MessageAdapterType): Array<Record<string, any>> {
@@ -427,7 +430,7 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "remoteAgent", "heartbeat", "fennenote", "xiaoai", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "heartbeat", "fennenote", "xiaoai", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
 
@@ -3341,6 +3344,71 @@ watch(
                         <div v-if="messageFileEntries('heartbeat').length" class="adapter-message-preview">
                           <div
                             v-for="(entry, messageIndex) in messageFileEntries('heartbeat').slice(0, 3)"
+                            :key="`${entry.path}-${entry.messageId || messageIndex}`"
+                          >
+                            {{ formatLogTime(entry) }} · {{ logPreview(entry) }}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                  <div v-else-if="choice.type === 'wecom'" class="catalog-param-grid">
+                    <v-text-field v-model="gateway.wecomBotId" label="企业微信 Bot ID" placeholder="可留空使用 WECOM_BOT_ID" @update:model-value="touch" />
+                    <v-text-field v-model="gateway.wecomBotSecret" type="password" label="企业微信 Bot Secret" placeholder="可留空使用 WECOM_BOT_SECRET" @update:model-value="touch" />
+                    <v-text-field v-model="gateway.wecomWsUrl" class="full-span" label="企业微信 WebSocket 地址" placeholder="留空使用 SDK 默认地址；私有部署时填写" @update:model-value="touch" />
+                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
+                      企业微信消息端使用智能机器人 WebSocket 长连接，主场景是企业微信群聊；模板变量会尽量对齐 NapCat 的 groupId、userId、sender、message 和 messageId。
+                    </v-alert>
+                  </div>
+                  <template v-if="choice.type === 'wecom' && runtime.running !== undefined">
+                    <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
+                    <div class="status-row"><span>连接</span><b :class="wecomState.connected && wecomState.authenticated ? 'text-success' : 'text-warning'">{{ wecomState.connected && wecomState.authenticated ? "已认证" : wecomState.message || "未连接" }}</b></div>
+                    <div class="status-row"><span>最近消息</span><b>{{ wecomState.lastMessageAt || "-" }}</b></div>
+                    <div class="status-row"><span>消息数</span><b>{{ wecomState.messageCount ?? 0 }}</b></div>
+                    <v-alert v-if="wecomState.lastError" type="error" variant="tonal" density="compact" class="mt-2">
+                      {{ wecomState.lastError }}
+                    </v-alert>
+                    <div class="adapter-log-panel mt-3">
+                      <div class="section-title-row compact-row">
+                        <div>
+                          <div class="section-title small-title">企业微信适配器日志</div>
+                          <div class="section-note">连接、认证、消息接收和错误日志。</div>
+                        </div>
+                        <v-btn size="small" variant="text" prepend-icon="mdi-refresh" @click="store.load">刷新</v-btn>
+                      </div>
+                      <div v-if="adapterLogEntries('wecom').length" class="adapter-log-list">
+                        <v-expansion-panels variant="accordion" density="compact">
+                          <v-expansion-panel
+                            v-for="(entry, logIndex) in adapterLogEntries('wecom')"
+                            :key="`${entry.path}-${entry.messageId || logIndex}`"
+                          >
+                            <v-expansion-panel-title>
+                              <div class="adapter-log-title">
+                                <span>{{ formatLogTime(entry) }}</span>
+                                <b>{{ logEventTitle(entry) }}</b>
+                                <span class="adapter-log-text">{{ logPreview(entry) }}</span>
+                              </div>
+                            </v-expansion-panel-title>
+                            <v-expansion-panel-text>
+                              <div class="status-row"><span>消息 ID</span><b>{{ entry.messageId || "-" }}</b></div>
+                              <div class="status-row"><span>日志文件</span><b>{{ entry.path }}</b></div>
+                              <pre class="mono-box compact-mono">{{ rawLogJson(entry) }}</pre>
+                            </v-expansion-panel-text>
+                          </v-expansion-panel>
+                        </v-expansion-panels>
+                      </div>
+                      <div v-else class="empty-state compact-empty">
+                        <div>
+                          <strong>暂无企业微信适配器日志</strong>
+                          <span>{{ adapterLogPaths('wecom').join(' / ') || '等待启动后生成日志。' }}</span>
+                        </div>
+                      </div>
+                      <div class="adapter-message-file-panel mt-2">
+                        <div class="section-title small-title">消息文件</div>
+                        <div class="section-note">{{ messageFilePaths('wecom').join(' / ') || '尚未生成消息文件。' }}</div>
+                        <div v-if="messageFileEntries('wecom').length" class="adapter-message-preview">
+                          <div
+                            v-for="(entry, messageIndex) in messageFileEntries('wecom').slice(0, 3)"
                             :key="`${entry.path}-${entry.messageId || messageIndex}`"
                           >
                             {{ formatLogTime(entry) }} · {{ logPreview(entry) }}

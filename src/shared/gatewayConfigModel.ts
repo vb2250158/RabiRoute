@@ -28,9 +28,9 @@ export {
   type BuiltinPersonaRulePolicy
 } from "./personaRulePolicy.js";
 
-export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "webhook" | "disabled";
+export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "webhook" | "wecom" | "disabled";
 export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
-export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "none";
+export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
 
@@ -138,6 +138,9 @@ export type GatewayDefinition = {
   fenneNoteWebhookPath?: string;
   xiaoaiWebhookPort?: number;
   xiaoaiWebhookPath?: string;
+  wecomBotId?: string;
+  wecomBotSecret?: string;
+  wecomWsUrl?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   remoteAgentDefaultDeviceId?: string;
@@ -216,7 +219,7 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "fennenote", "xiaoai", "webhook", "disabled"]);
+const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "fennenote", "xiaoai", "webhook", "wecom", "disabled"]);
 const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];

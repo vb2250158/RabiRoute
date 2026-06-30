@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { handleAgentReply, type AgentReplyOptions } from "./outbox.js";
+import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
 
 function optionsWithRuntime(runtime: AgentReplyOptions["runtimes"][number]): AgentReplyOptions {
   return {
@@ -332,4 +333,153 @@ test("FenneNote source reply resolves runtime by role fallback and voice transcr
   assert.equal(forwarded.routeProfileId, "拉比路由");
   assert.equal(forwarded.messageId, "voice-log-1");
   assert.equal(forwarded.speakerName, "秋雨");
+});
+
+test("explicit WeCom group target sends through the WeCom SDK wrapper", async () => {
+  const sent: Array<{ chatId: string; body: Record<string, unknown> }> = [];
+  setWeComClientFactory(() => ({
+    isConnected: true,
+    connect() {},
+    disconnect() {},
+    on() { return undefined; },
+    async sendMessage(chatId: string, body: Record<string, unknown>) {
+      sent.push({ chatId, body });
+      return { headers: { req_id: "wecom-send-1" }, body: { msgid: "wecom-msg-out-1" } };
+    },
+    async replyStream() { return { headers: { req_id: "unused" }, body: {} }; },
+    async uploadMedia() { return { media_id: "media-1" }; },
+    async sendMediaMessage() { return { headers: { req_id: "media-send-1" }, body: { msgid: "media-msg-1" } }; },
+    async replyMedia() { return { headers: { req_id: "reply-media-1" }, body: {} }; }
+  } as unknown as WeComClientLike));
+
+  try {
+    const result = await handleAgentReply({
+      text: "hello wecom",
+      adapterType: "wecom",
+      targetType: "group",
+      groupId: "wrCHATID"
+    }, optionsWithRuntime({
+      id: "wecom-route",
+      pipeline: {
+        outputAdapter: "codex",
+        outputPipeline: "codex"
+      },
+      wecomBotId: "bot-id",
+      wecomBotSecret: "bot-secret",
+      messageAdapterPolicies: {
+        wecom: {
+          outputEnabled: true,
+          supportedOutputs: ["text"]
+        }
+      }
+    }));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "sent");
+    assert.equal(result.groupId, "wrCHATID");
+    assert.equal(result.sentMessageId, "wecom-msg-out-1");
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].chatId, "wrCHATID");
+    assert.deepEqual(sent[0].body, {
+      msgtype: "markdown",
+      markdown: { content: "hello wecom" }
+    });
+  } finally {
+    resetWeComClientFactory();
+  }
+});
+
+test("WeCom source reply resolves chat id from wecom message log", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-wecom-"));
+  const routeDir = path.join(rootDir, "data", "route", "wecom-route");
+  fs.mkdirSync(routeDir, { recursive: true });
+  fs.writeFileSync(path.join(routeDir, "wecom-messages.jsonl"), `${JSON.stringify({
+    time: 1,
+    adapterType: "wecom",
+    messageId: "wecom-source-1",
+    reqId: "req-source-1",
+    chatId: "wrSOURCECHAT",
+    conversationId: "conversation-1",
+    senderId: "zhangsan",
+    rawMessage: "ping"
+  })}\n`, "utf8");
+
+  const sent: Array<{ chatId: string; body: Record<string, unknown> }> = [];
+  setWeComClientFactory(() => ({
+    isConnected: true,
+    connect() {},
+    disconnect() {},
+    on() { return undefined; },
+    async sendMessage(chatId: string, body: Record<string, unknown>) {
+      sent.push({ chatId, body });
+      return { headers: { req_id: "wecom-send-2" }, body: { msgid: "wecom-msg-out-2" } };
+    },
+    async replyStream() { return { headers: { req_id: "unused" }, body: {} }; },
+    async uploadMedia() { return { media_id: "media-1" }; },
+    async sendMediaMessage() { return { headers: { req_id: "media-send-1" }, body: { msgid: "media-msg-1" } }; },
+    async replyMedia() { return { headers: { req_id: "reply-media-1" }, body: {} }; }
+  } as unknown as WeComClientLike));
+
+  try {
+    const result = await handleAgentReply({
+      text: "pong",
+      messageId: "wecom-source-1"
+    }, {
+      rootDir,
+      routeRoot: path.join(rootDir, "data", "route"),
+      rolesRoot: path.join(rootDir, "data", "roles"),
+      runtimes: [{
+        id: "wecom-route",
+        dataDir: path.join("data", "route", "wecom-route"),
+        pipeline: {
+          outputAdapter: "codex",
+          outputPipeline: "codex"
+        },
+        wecomBotId: "bot-id",
+        wecomBotSecret: "bot-secret",
+        messageAdapterPolicies: {
+          wecom: {
+            outputEnabled: true,
+            supportedOutputs: ["text"]
+          }
+        }
+      }]
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "sent");
+    assert.equal(result.groupId, "wrSOURCECHAT");
+    assert.equal(result.userId, "zhangsan");
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].chatId, "wrSOURCECHAT");
+  } finally {
+    resetWeComClientFactory();
+  }
+});
+
+test("WeCom output policy blocks disabled sending", async () => {
+  const result = await handleAgentReply({
+    text: "blocked",
+    adapterType: "wecom",
+    targetType: "group",
+    groupId: "wrCHATID"
+  }, optionsWithRuntime({
+    id: "wecom-route",
+    pipeline: {
+      outputAdapter: "wecom",
+      outputPipeline: "wecom"
+    },
+    wecomBotId: "bot-id",
+    wecomBotSecret: "bot-secret",
+    messageAdapterPolicies: {
+      wecom: {
+        outputEnabled: false,
+        supportedOutputs: ["text"]
+      }
+    }
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "blocked");
+  assert.equal(result.reason, "WeCom message sending is disabled by this route policy.");
 });

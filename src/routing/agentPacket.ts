@@ -10,6 +10,7 @@ import {
   isHeartbeatRecord,
   isManualTriggerRecord,
   isRolePanelRecord,
+  isWeComRecord,
   isVoiceTranscriptRecord
 } from "./routeDecision.js";
 
@@ -211,6 +212,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "manual_trigger") return "手动触发提醒";
   if (routeKind === "role_panel_message") return "角色面板消息";
   if (routeKind === "voice_transcript") return "语音转写提醒";
+  if (routeKind === "wecom_message") return "企业微信群聊消息提醒";
   return "RabiRoute 消息提醒";
 }
 
@@ -242,8 +244,10 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const isHeartbeat = isHeartbeatRecord(record);
   const isManualTrigger = isManualTriggerRecord(record);
   const isRolePanel = isRolePanelRecord(record);
+  const isWeCom = isWeComRecord(record);
   const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
-  const targetType = isGroup ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isRolePanel ? "role_panel" : isVoiceTranscript ? "voice_transcript" : "private";
+  const wecomGroupId = isWeCom ? record.groupId ?? record.chatId ?? record.conversationId : undefined;
+  const targetType = isGroup || isWeCom ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isRolePanel ? "role_panel" : isVoiceTranscript ? "voice_transcript" : "private";
   const pipeline = outputPipelineForDecision(decision);
   const replyApiPath = "/api/agent/replies";
   const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
@@ -255,7 +259,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     routeKind: decision.routeKind,
     targetType,
     messageId: record.messageId,
-    groupId: isGroup ? record.groupId : undefined,
+    groupId: isGroup ? record.groupId : wecomGroupId,
     userId: "userId" in record ? record.userId : undefined,
     targetGroupId: config.targetGroupId || undefined,
     instanceId: "instanceId" in record ? record.instanceId : undefined,
@@ -267,8 +271,13 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     speakerDecision: isVoiceTranscript ? record.speakerDecision : undefined,
     roleId: isRolePanel ? record.roleId : undefined,
     botUserId: "botUserId" in record ? record.botUserId : undefined,
+    wecomReqId: isWeCom ? record.reqId : undefined,
+    wecomConversationId: isWeCom ? record.conversationId : undefined,
+    wecomChatId: isWeCom ? record.chatId : undefined,
+    wecomSenderId: isWeCom ? record.senderId ?? record.userId : undefined,
+    wecomMessageType: isWeCom ? record.messageType : undefined,
     dataDir: roleContext.dataDir,
-    groupLogPath: path.join(roleContext.dataDir, "group-messages.jsonl"),
+    groupLogPath: path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : "group-messages.jsonl"),
     privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
     replyApiUrl,
     outputAdapter: pipeline.outputAdapter,
@@ -282,10 +291,10 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     sender,
     senderName: record.senderName,
     userId: "userId" in record ? record.userId : undefined,
-    groupId: isGroup ? record.groupId : undefined,
+    groupId: isGroup ? record.groupId : wecomGroupId,
     targetType,
-    targetId,
-    messageTarget: isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? `语音转写 ${targetId}` : `私聊 ${targetId}`,
+    targetId: isWeCom ? wecomGroupId : targetId,
+    messageTarget: isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText: decision.routeText,
@@ -322,7 +331,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     ttsPlay: String(pipeline.ttsPlay),
     preventFeedbackLoop: String(pipeline.preventFeedbackLoop),
     replyToSource: String(pipeline.replyToSource),
-    groupLogPath: path.join(roleContext.dataDir, "group-messages.jsonl"),
+    groupLogPath: path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : "group-messages.jsonl"),
     privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
     heartbeatLogPath: path.join(roleContext.dataDir, "heartbeat-events.jsonl"),
     manualTriggerLogPath: path.join(roleContext.dataDir, "manual-trigger-events.jsonl"),
@@ -344,7 +353,12 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     voiceStartedAt: isVoiceTranscript ? record.startedAt : undefined,
     voiceEndedAt: isVoiceTranscript ? record.endedAt : undefined,
     voiceDurationSeconds: isVoiceTranscript ? record.durationSeconds : undefined,
-    voicePeak: isVoiceTranscript ? record.peak : undefined
+    voicePeak: isVoiceTranscript ? record.peak : undefined,
+    wecomReqId: isWeCom ? record.reqId : undefined,
+    wecomConversationId: isWeCom ? record.conversationId : undefined,
+    wecomChatId: isWeCom ? record.chatId : undefined,
+    wecomSenderId: isWeCom ? record.senderId ?? record.userId : undefined,
+    wecomMessageType: isWeCom ? record.messageType : undefined
   };
 }
 

@@ -9,7 +9,8 @@ import {
   appendHeartbeatEventToDir,
   appendManualTriggerEventToDir,
   appendPrivateMessageToDir,
-  appendVoiceTranscriptEventToDir
+  appendVoiceTranscriptEventToDir,
+  appendWeComMessageToDir
 } from "./history.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
 import {
@@ -17,6 +18,7 @@ import {
   isGroupRecord,
   isHeartbeatRecord,
   isManualTriggerRecord,
+  isWeComRecord,
   isVoiceTranscriptRecord
 } from "./routing/routeDecision.js";
 import type {
@@ -93,6 +95,9 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   }
   if (routeKind === "voice_transcript") {
     return "voice_transcript";
+  }
+  if (routeKind === "wecom_message") {
+    return "wecom_message";
   }
   return routeKind === "private" ? "private" : "group_mention";
 }
@@ -214,7 +219,9 @@ function summarizeDeliveryResult(routeKind: ForwardRouteKind, record: ForwardRec
 }
 
 function appendRecordToRoleDataDir(record: ForwardRecord, dataDir: string): void {
-  if (isGroupRecord(record)) {
+  if (isWeComRecord(record)) {
+    appendWeComMessageToDir(record, dataDir);
+  } else if (isGroupRecord(record)) {
     appendGroupMessageToDir(record, dataDir);
   } else if (isHeartbeatRecord(record)) {
     appendHeartbeatEventToDir(record, dataDir);

@@ -20,7 +20,7 @@ export const defaultPrivateNotificationTemplate = "";
 export const defaultHeartbeatNotificationTemplate = "";
 export const defaultVoiceTranscriptNotificationTemplate = "";
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript";
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "wecom_message";
 
 export type NotificationRule = {
   id: string;
@@ -115,7 +115,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "remoteAgent" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "wecom" || raw === "remoteAgent" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -127,13 +127,14 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "heartbeat"
     || kind === "manual_trigger"
     || kind === "role_panel_message"
-    || kind === "voice_transcript";
+    || kind === "voice_transcript"
+    || kind === "wecom_message";
 }
 
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   if (adapters.includes("disabled")) {
     return ["disabled"];
   }
@@ -381,6 +382,9 @@ export const config = {
   fenneNoteWebhookPort: Number(process.env.FENNENOTE_WEBHOOK_PORT ?? process.env.FENNOTE_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   xiaoaiWebhookPath: process.env.XIAOAI_WEBHOOK_PATH ?? "/xiaoai",
   xiaoaiWebhookPort: Number(process.env.XIAOAI_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
+  wecomBotId: process.env.WECOM_BOT_ID?.trim() || "",
+  wecomBotSecret: process.env.WECOM_BOT_SECRET?.trim() || "",
+  wecomWsUrl: process.env.WECOM_WS_URL?.trim() || "",
   codexAppServerUrl: process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500",
   codexDirectNotify: process.env.CODEX_DIRECT_NOTIFY === "1",
   codexDesktopIpcNotify: process.env.CODEX_DESKTOP_IPC_NOTIFY !== "0",

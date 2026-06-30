@@ -32,6 +32,7 @@ import {
   scanWebhookEndpoint,
   scanXiaoAiEndpoint
 } from "../messageEndpoints/webhookLikeScans.js";
+import { scanWeComEndpoint } from "../messageEndpoints/wecomManager.js";
 import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../messageEndpoints/remoteAgentManager.js";
 import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
@@ -98,6 +99,9 @@ type GatewayDefinition = {
   fenneNoteWebhookPath?: string;
   xiaoaiWebhookPort?: number;
   xiaoaiWebhookPath?: string;
+  wecomBotId?: string;
+  wecomBotSecret?: string;
+  wecomWsUrl?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   remoteAgentDefaultDeviceId?: string;
@@ -483,7 +487,7 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
 function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
   return unique.length > 0 ? unique : ["napcat"];
 }
@@ -1118,6 +1122,9 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     FENNOTE_WEBHOOK_PATH: definition.fenneNoteWebhookPath ?? "/fennenote",
     XIAOAI_WEBHOOK_PORT: String(definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
     XIAOAI_WEBHOOK_PATH: definition.xiaoaiWebhookPath ?? "/xiaoai",
+    WECOM_BOT_ID: definition.wecomBotId?.trim() || process.env.WECOM_BOT_ID || "",
+    WECOM_BOT_SECRET: definition.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET || "",
+    WECOM_WS_URL: definition.wecomWsUrl?.trim() || process.env.WECOM_WS_URL || "",
     CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? process.env.CODEX_CWD ?? rootDir,
     COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
@@ -1597,11 +1604,16 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     checkHttpEndpoint,
     fenneNotePlaybackUrl
   };
-  const [napcat, fennenote, xiaoai, webhook] = await Promise.all([
+  const [napcat, fennenote, xiaoai, webhook, wecom] = await Promise.all([
     scanNapcatEndpoint(napcatManagerCtx()),
     scanFenneNoteEndpoint(webhookLikeScanCtx),
     scanXiaoAiEndpoint(webhookLikeScanCtx),
-    scanWebhookEndpoint(webhookLikeScanCtx)
+    scanWebhookEndpoint(webhookLikeScanCtx),
+    scanWeComEndpoint({
+      rootDir,
+      adapterRuntimes,
+      routeHasRecentMessages
+    })
   ]);
 
   return {
@@ -1631,6 +1643,7 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     },
     fennenote,
     xiaoai,
+    wecom,
     webhook
   };
 }
@@ -2041,6 +2054,7 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
       const adapterType = String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase();
       return !adapterType || adapterType === "webhook";
     }));
+  const wecomEntries = sortTail(readEntries("企业微信 / WeCom", "wecom-messages.jsonl"));
 
   return {
     napcat: {
@@ -2071,6 +2085,10 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
         path.join(dir, "voice-transcripts.jsonl")
       ]),
       entries: xiaoaiEntries
+    },
+    wecom: {
+      paths: dirs.map((dir) => path.join(dir, "wecom-messages.jsonl")),
+      entries: wecomEntries
     },
     webhook: {
       paths: dirs.map((dir) => path.join(dir, "voice-transcripts.jsonl")),
@@ -2110,6 +2128,10 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
       paths: [path.join(dir, "xiaoai-adapter.log.jsonl")],
       entries: readEntries("xiaoai")
     },
+    wecom: {
+      paths: [path.join(dir, "wecom-adapter.log.jsonl")],
+      entries: readEntries("wecom")
+    },
     webhook: {
       paths: [path.join(dir, "webhook-adapter.log.jsonl")],
       entries: readEntries("webhook")
@@ -2144,6 +2166,9 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     fenneNoteWebhookPath: runtime.definition.fenneNoteWebhookPath,
     xiaoaiWebhookPort: runtime.definition.xiaoaiWebhookPort,
     xiaoaiWebhookPath: runtime.definition.xiaoaiWebhookPath,
+    wecomBotId: runtime.definition.wecomBotId,
+    wecomBotSecret: runtime.definition.wecomBotSecret,
+    wecomWsUrl: runtime.definition.wecomWsUrl,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
     heartbeatMessage: runtime.definition.heartbeatMessage ?? "",
     remoteAgentDefaultDeviceId: runtime.definition.remoteAgentDefaultDeviceId ?? "",

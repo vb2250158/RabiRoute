@@ -592,6 +592,9 @@ export const useGatewayStore = defineStore("gateway", () => {
     fenneNoteWebhookPath?: string;
     xiaoaiWebhookPort?: number;
     xiaoaiWebhookPath?: string;
+    wecomBotId?: string;
+    wecomBotSecret?: string;
+    wecomWsUrl?: string;
   }): void {
     if (gateways.value.length === 0) addGateway();
     const gateway = selectedGateway.value;
@@ -651,6 +654,9 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway.fenneNoteWebhookPath = values.fenneNoteWebhookPath || gateway.fenneNoteWebhookPath;
     gateway.xiaoaiWebhookPort = values.xiaoaiWebhookPort || gateway.xiaoaiWebhookPort;
     gateway.xiaoaiWebhookPath = values.xiaoaiWebhookPath || gateway.xiaoaiWebhookPath;
+    gateway.wecomBotId = values.wecomBotId || gateway.wecomBotId;
+    gateway.wecomBotSecret = values.wecomBotSecret || gateway.wecomBotSecret;
+    gateway.wecomWsUrl = values.wecomWsUrl || gateway.wecomWsUrl;
     gateway.agentRoleFile = gateway.agentRoleFile || "persona.md";
     applyAdapterDefaults(gateway);
     touch();

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sendGroupMessage, sendPrivateMessage, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { resolvePipeline, type OutputAdapterType, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
+import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
 import {
   appendRolePanelTimelineMessage,
   createRolePanelMessageId,
@@ -40,6 +41,11 @@ export type AgentReplyRequest = {
   botUserId?: unknown;
   roleId?: unknown;
   replyContext?: unknown;
+  wecomReqId?: unknown;
+  wecomConversationId?: unknown;
+  wecomChatId?: unknown;
+  wecomSenderId?: unknown;
+  wecomMessageType?: unknown;
 };
 
 export type AgentReplyNapCatInstance = NapCatEndpoint & {
@@ -71,6 +77,9 @@ export type AgentReplyRuntime = {
   agentRoleId?: string;
   rolesDir?: string;
   napcatInstances?: AgentReplyNapCatInstance[];
+  wecomBotId?: string;
+  wecomBotSecret?: string;
+  wecomWsUrl?: string;
   routeProfiles?: AgentReplyRouteProfile[];
   messageAdapterPolicies?: MessageAdapterPolicies;
 };
@@ -114,6 +123,10 @@ type SourceRecord = {
   adapterType?: string;
   botUserId?: string;
   roleId?: string;
+  reqId?: string;
+  conversationId?: string;
+  chatId?: string;
+  messageType?: string;
   raw?: Record<string, unknown>;
 };
 
@@ -146,6 +159,7 @@ function isOutputAdapterType(value: string | undefined): value is OutputAdapterT
     || value === "tts"
     || value === "webhook"
     || value === "fennenote"
+    || value === "wecom"
     || value === "none";
 }
 
@@ -293,15 +307,19 @@ function readJsonl(filePath: string): Record<string, unknown>[] {
     });
 }
 
-function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group" | "private" | "voice_transcript"): SourceRecord {
+function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group" | "private" | "voice_transcript", adapterType?: string): SourceRecord {
   return {
     messageId: valueString(record.messageId ?? record.message_id),
     targetType,
-    groupId: valueString(record.groupId ?? record.group_id),
-    userId: valueString(record.userId ?? record.user_id),
+    groupId: valueString(record.groupId ?? record.group_id ?? record.chatId ?? record.chatid ?? record.conversationId),
+    userId: valueString(record.userId ?? record.user_id ?? record.senderId),
     instanceId: valueString(record.instanceId),
-    adapterType: valueString(record.adapterType),
+    adapterType: valueString(record.adapterType) ?? adapterType,
     botUserId: valueString(record.botUserId),
+    reqId: valueString(record.reqId),
+    conversationId: valueString(record.conversationId),
+    chatId: valueString(record.chatId ?? record.chatid),
+    messageType: valueString(record.messageType ?? record.msgtype),
     raw: record
   };
 }
@@ -313,13 +331,14 @@ function findSourceRecord(options: AgentReplyOptions, route: ResolvedRoute, mess
       ["group-messages.jsonl", "group"],
       ["private-messages.jsonl", "private"],
       ["voice-transcripts.jsonl", "voice_transcript"],
-      ["fennenote-voice-transcripts.jsonl", "voice_transcript"]
+      ["fennenote-voice-transcripts.jsonl", "voice_transcript"],
+      ["wecom-messages.jsonl", "group"]
     ] as const) {
       const found = readJsonl(path.join(dir, fileName))
         .reverse()
         .find((record) => String(record.messageId ?? record.message_id ?? "") === messageId);
       if (found) {
-        return sourceRecordFromLog(found, targetType);
+        return sourceRecordFromLog(found, targetType, fileName === "wecom-messages.jsonl" ? "wecom" : undefined);
       }
     }
   }
@@ -352,9 +371,18 @@ function runtimeCanUseNapCat(runtime: AgentReplyRuntime): boolean {
   return (runtime.napcatInstances ?? []).some((instance) => instance.enabled !== false);
 }
 
+function runtimeCanUseWeCom(runtime: AgentReplyRuntime): boolean {
+  return Boolean(runtime.wecomBotId?.trim() || process.env.WECOM_BOT_ID?.trim());
+}
+
 function resolveExplicitTargetRoute(options: AgentReplyOptions, contextTarget?: SourceRecord): ResolvedReplyRoute | undefined {
   if (!contextTarget?.targetType || (!contextTarget.groupId && !contextTarget.userId)) {
     return undefined;
+  }
+
+  if (contextTarget.adapterType === "wecom") {
+    const runtime = options.runtimes.find(runtimeCanUseWeCom) ?? options.runtimes[0];
+    return runtime ? { runtime, profile: runtime.routeProfiles?.[0] } : undefined;
   }
 
   if (contextTarget.targetType === "group" && contextTarget.groupId) {
@@ -457,6 +485,26 @@ function fenneNotePolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
     messageAdapters: ["fennenote"],
     messageAdapterPolicies: route.runtime.messageAdapterPolicies
   }, "fennenote");
+}
+
+function wecomPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+  return messageAdapterPolicyFor({
+    id: route.runtime.id,
+    gatewayPort: 0,
+    messageAdapters: ["wecom"],
+    messageAdapterPolicies: route.runtime.messageAdapterPolicies
+  }, "wecom");
+}
+
+function wecomEndpoint(route: ResolvedRoute): WeComEndpoint | undefined {
+  const botId = route.runtime.wecomBotId?.trim() || process.env.WECOM_BOT_ID?.trim() || "";
+  const secret = route.runtime.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET?.trim() || "";
+  if (!botId || !secret) return undefined;
+  return {
+    botId,
+    secret,
+    wsUrl: route.runtime.wecomWsUrl?.trim() || process.env.WECOM_WS_URL?.trim() || undefined
+  };
 }
 
 function draft(reason: string, text: string, target: SourceRecord, routeProfileId?: string): AgentReplyResult {
@@ -633,7 +681,11 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     instanceId: requestField(request, "instanceId"),
     adapterType: requestField(request, "adapterType"),
     botUserId: requestField(request, "botUserId"),
-    roleId: requestField(request, "roleId")
+    roleId: requestField(request, "roleId"),
+    reqId: requestField(request, "wecomReqId"),
+    conversationId: requestField(request, "wecomConversationId"),
+    chatId: requestField(request, "wecomChatId"),
+    messageType: requestField(request, "wecomMessageType")
   };
   const route = resolveRoute(options, routeProfileId, messageId, contextTarget, runtimeRouteId);
   appendOutboxLog(options, route, "info", "reply_requested", text.slice(0, 500), { routeProfileId, messageId, payloadKind: content.kind, request });
@@ -726,6 +778,75 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId }
       };
       appendOutboxLog(options, route, "error", "fennenote_reply_failed", result.reason ?? "failed", result);
+      return result;
+    }
+  }
+
+  const shouldUseWeCom = pipeline.outputAdapter === "wecom" || target.adapterType === "wecom" || contextTarget.adapterType === "wecom";
+  if (shouldUseWeCom) {
+    const policy = wecomPolicy(route);
+    if (!policy.outputEnabled) {
+      const result: AgentReplyResult = { ...draft("WeCom message sending is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    if (!policy.supportedOutputs.includes(content.kind)) {
+      const result: AgentReplyResult = { ...draft(`WeCom route policy does not allow ${content.kind} payloads.`, text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+
+    const endpoint = wecomEndpoint(route);
+    if (!endpoint) {
+      const result: AgentReplyResult = { ...draft("No WeCom bot id/secret is configured for this route.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    const chatId = target.chatId || target.groupId || target.conversationId;
+    if (!chatId) {
+      const result: AgentReplyResult = { ...draft("Only current WeCom group source replies or explicit WeCom group targets can be sent automatically.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    try {
+      const payload = payloadObject(request);
+      const sent = await sendWeComMessage(endpoint, {
+        chatId,
+        text,
+        markdown: text,
+        payloadType: content.kind === "text" ? "text" : content.kind,
+        filePath: payloadValue(request, payload, "filePath", "imagePath", "voicePath", "audioPath", "path", "file"),
+        fileUrl: payloadValue(request, payload, "fileUrl", "imageUrl", "voiceUrl", "audioUrl", "url"),
+        fileName: payloadValue(request, payload, "fileName", "name")
+      });
+      const result: AgentReplyResult = {
+        ok: true,
+        status: "sent",
+        reason: target.reqId ? "Sent to WeCom source chat." : "Sent to WeCom chat.",
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId,
+        targetType: "group",
+        groupId: chatId,
+        userId: target.userId,
+        instanceId: target.instanceId,
+        sentMessageId: valueString(sent.messageId ?? sent.reqId)
+      };
+      appendOutboxLog(options, route, "info", "wecom_reply_sent", text.slice(0, 500), { ...result, sent });
+      return result;
+    } catch (error) {
+      const result: AgentReplyResult = {
+        ok: false,
+        status: "failed",
+        reason: normalizeWeComError(error),
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId,
+        targetType: "group",
+        groupId: chatId,
+        userId: target.userId,
+        instanceId: target.instanceId,
+        draft: { text, targetType: "group", groupId: chatId, userId: target.userId }
+      };
+      appendOutboxLog(options, route, "error", "wecom_reply_failed", result.reason ?? "failed", result);
       return result;
     }
   }

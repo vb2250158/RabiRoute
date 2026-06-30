@@ -62,6 +62,28 @@ test("message adapter policies control input while keeping output defaults enabl
   assert.deepEqual(messageAdapterPolicyFor(normalized, "heartbeat").supportedOutputs, ["text", "image", "voice", "file"]);
 });
 
+test("WeCom is a message/output adapter and does not claim a local ingress port", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapters: ["wecom"],
+    pipeline: {
+      inputAdapter: "wecom",
+      outputAdapter: "wecom",
+      outputPipeline: "wecom"
+    },
+    wecomBotId: "bot-id-placeholder",
+    wecomBotSecret: "secret-placeholder",
+    wecomWsUrl: "wss://example.invalid/wecom"
+  }));
+
+  assert.deepEqual(gatewayAdapterTypes(normalized), ["wecom"]);
+  assert.equal(normalized.pipeline?.inputAdapter, "wecom");
+  assert.equal(normalized.pipeline?.outputAdapter, "wecom");
+  assert.equal(messageAdapterPolicyFor(normalized, "wecom").outputEnabled, true);
+
+  const claims = collectGatewayPortClaims([normalized], { managerPort: 8790 });
+  assert.deepEqual(claims.map((claim) => claim.kind), ["manager"]);
+});
+
 test("legacy Codex agent adapter ids are upgraded to codex", () => {
   assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexDesktop"] as any })).agentAdapters, ["codex"]);
   assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexApp"] as any })).agentAdapters, ["codex"]);

@@ -3,6 +3,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { createHeartbeatAdapter } from "./adapters/heartbeatAdapter.js";
 import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
+import { createWeComAdapter } from "./adapters/wecomAdapter.js";
 import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
@@ -204,6 +205,9 @@ function createMessageAdapter(): MessageAdapter {
   if (config.messageAdapterType === "webhook") {
     return createWebhookAdapter();
   }
+  if (config.messageAdapterType === "wecom") {
+    return createWeComAdapter();
+  }
 
   return createPlaceholderAdapter(config.messageAdapterType);
 }
@@ -223,6 +227,9 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   }
   if (type === "webhook") {
     return createWebhookAdapter();
+  }
+  if (type === "wecom") {
+    return createWeComAdapter();
   }
   return createPlaceholderAdapter(type);
 }

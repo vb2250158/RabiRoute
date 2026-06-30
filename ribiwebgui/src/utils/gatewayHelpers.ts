@@ -21,7 +21,8 @@ export const routeKindLabels: Record<string, string> = {
   heartbeat: "定时触发",
   manual_trigger: "手动触发",
   role_panel_message: "角色面板消息",
-  voice_transcript: "语音转写"
+  voice_transcript: "语音转写",
+  wecom_message: "企业微信消息"
 };
 
 export const templateVars = [
@@ -82,7 +83,12 @@ export const templateVars = [
   { name: "voiceTranscriptLogPath", description: "语音转写 JSONL 记录路径。" },
   { name: "voiceSource", description: "语音转写来源，例如 fennenote、xiaoai 或 webhook。" },
   { name: "voiceDurationSeconds", description: "语音片段时长，单位秒。" },
-  { name: "voicePeak", description: "语音片段峰值音量。" }
+  { name: "voicePeak", description: "语音片段峰值音量。" },
+  { name: "wecomReqId", description: "企业微信 WebSocket 请求 ID，用于定位来源消息。" },
+  { name: "wecomConversationId", description: "企业微信会话 ID。" },
+  { name: "wecomChatId", description: "企业微信群聊 chat id；模板里的 groupId 会优先使用这个值。" },
+  { name: "wecomSenderId", description: "企业微信发送者 userid；模板里的 userId 会优先使用这个值。" },
+  { name: "wecomMessageType", description: "企业微信消息类型，例如 text、mixed、image、voice、file。" }
 ];
 
 export function normalizeTemplateText(value: unknown): string {
@@ -192,6 +198,7 @@ export function adapterLabel(type: string): string {
   if (type === "rolePanel") return "角色面板";
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
   if (type === "xiaoai") return "小米音箱 / 小爱";
+  if (type === "wecom") return "企业微信 / WeCom";
   if (type === "webhook") return "通用 Webhook";
   if (type === "disabled") return "已禁用";
   return type;
@@ -206,7 +213,7 @@ export function isWebhookLikeAdapter(type: string): boolean {
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
-  return type === "napcat" || type === "heartbeat" || isWebhookLikeAdapter(type);
+  return type === "napcat" || type === "wecom" || type === "heartbeat" || isWebhookLikeAdapter(type);
 }
 
 export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean {
@@ -216,6 +223,7 @@ export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean
 export function adapterSourceAliases(type: string): string[] {
   if (type === "fennenote") return ["fennenote", "fenne_note", "fenne-note", "fenne", "芬妮笔记", "芬妮"];
   if (type === "xiaoai") return ["xiaoai", "xiao_ai", "xiao-ai", "mi_speaker", "mi-speaker", "xiaomi", "小爱", "小米音箱"];
+  if (type === "wecom") return ["wecom", "wechat-work", "企业微信", "企微"];
   if (type === "webhook") return ["webhook", "generic_webhook", "generic-webhook"];
   return [type];
 }
@@ -265,6 +273,11 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   if (adapters.includes("xiaoai")) {
     gateway.xiaoaiWebhookPort = Number(gateway.xiaoaiWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     gateway.xiaoaiWebhookPath = gateway.xiaoaiWebhookPath || adapterDefaultWebhookPath("xiaoai");
+  }
+  if (adapters.includes("wecom")) {
+    gateway.wecomBotId = gateway.wecomBotId || "";
+    gateway.wecomBotSecret = gateway.wecomBotSecret || "";
+    gateway.wecomWsUrl = gateway.wecomWsUrl || "";
   }
 }
 
@@ -380,6 +393,12 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       title: "小米音箱 / 小爱",
       note: "来自小爱音箱的语音转写输入；底层是 HTTP 回调，但日志和配置按小米音箱独立显示。",
       groups: [{ title: "小爱语音事件", routeKinds: ["voice_transcript"] }]
+    },
+    {
+      adapter: "wecom",
+      title: "企业微信 / WeCom",
+      note: "企业微信群聊消息；变量尽量对齐 NapCat 群聊，并额外提供 wecomReqId / wecomChatId。",
+      groups: [{ title: "企业微信群聊", routeKinds: ["wecom_message"] }]
     },
     {
       adapter: "webhook",

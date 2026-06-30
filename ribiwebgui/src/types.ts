@@ -24,7 +24,7 @@ export type {
 
 export type NotificationRule = NotificationRuleDefinition;
 export type NapCatInstance = NapCatInstanceDefinition;
-export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "none";
+export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type AgentMaturity = "verified" | "experimental" | "stub";
 

@@ -65,11 +65,35 @@ POST /api/agent/replies
 
 RabiRoute 只会在满足以下条件时自动发送：
 
-- 请求带有明确 QQ 目标：`targetType=group` 加 `groupId`，或 `targetType=private` 加 `userId`。
+- 请求带有明确聊天目标：`targetType=group` 加 `groupId`，或 `targetType=private` 加 `userId`。
 - 或请求带有原始消息上下文，RabiRoute 能从消息日志中定位来源群聊或私聊。
-- 对应路由的 NapCat 发送管道未关闭，且 payload 类型在 `supportedOutputs` 内。
+- 对应路由的消息端发送管道未关闭，且 payload 类型在 `supportedOutputs` 内。
 
-Agent 可以主动向自己已经掌握的群号发送推进消息，不需要 `messageId`、`replyToSource=true` 或 `outputAdapter=qq`。RabiRoute 不再按群号、私聊 QQ 或具体 pipeline ID 做细粒度过滤；是否能发由消息端发送开关、NapCat 可用性和明确目标决定。
+Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发送推进消息，不需要 `messageId`、`replyToSource=true` 或固定某个 output adapter。RabiRoute 不再按群号、私聊账号或具体 pipeline ID 做细粒度过滤；是否能发由消息端发送开关、消息端可用性和明确目标决定。
+
+企业微信群聊消息使用同一个回复接口。企业微信的 `replyContext` 会尽量和 NapCat 群聊保持一致：`targetType=group`、`groupId` 表示企业微信群聊或 chat id，`userId` 表示发送者企业微信用户 ID；同时补充 `adapterType=wecom`、`wecomReqId`、`wecomConversationId`、`wecomChatId`、`outputAdapter=wecom`。Agent 回复当前企业微信群聊时，应原样带回 `replyContextJson`；主动发送到企业微信群时，至少提供 `adapterType=wecom`、`targetType=group` 和 `groupId`。
+
+企业微信回复示例：
+
+```json
+{
+  "text": "收到，我来整理一下。",
+  "replyContext": {
+    "adapterType": "wecom",
+    "routeKind": "wecom_message",
+    "targetType": "group",
+    "messageId": "wecom-msg-001",
+    "groupId": "wrCHATID",
+    "userId": "zhangsan",
+    "wecomReqId": "REQ_ID",
+    "wecomConversationId": "CONVERSATION_ID",
+    "wecomChatId": "wrCHATID",
+    "outputAdapter": "wecom",
+    "outputPipeline": "wecom",
+    "replyToSource": true
+  }
+}
+```
 
 返回示例：
 

@@ -17,6 +17,7 @@
 - [Agent 上下文注入说明](agent-context-injection.md)：说明默认注入项、按需注入项和最终投递给 Agent 的消息格式。
 - [Pipeline presets](pipeline-presets.md)：把默认输入端、输出端、TTS 和提示词输出模式打成一组。
 - [语音交互工作站](voice-interaction-workstation.md)：FenneNote 转录、RabiRoute 路由、角色对话和 OumuQ TTS 的公开安全接线方式。
+- [企业微信接入](wecom-integration.md)：企业微信智能机器人 WebSocket 双向群聊消息端设计、配置、模板变量和回传边界。
 
 ## 维护
 

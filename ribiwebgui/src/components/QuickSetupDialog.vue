@@ -41,11 +41,15 @@ const form = reactive({
   fenneNoteWebhookPort: 8790,
   fenneNoteWebhookPath: "/fennenote",
   xiaoaiWebhookPort: 8790,
-  xiaoaiWebhookPath: "/xiaoai"
+  xiaoaiWebhookPath: "/xiaoai",
+  wecomBotId: "",
+  wecomBotSecret: "",
+  wecomWsUrl: ""
 });
 
 const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> = [
   { type: "napcat", title: "NapCat / OneBot", note: "QQ 群聊、私聊实时入口", icon: "mdi-message-badge-outline" },
+  { type: "wecom", title: "企业微信 / WeCom", note: "企业微信群聊双向入口", icon: "mdi-domain" },
   { type: "remoteAgent", title: "远端 Agent", note: "下游 Agent 设备入口，支持局域网发现和任务投递", icon: "mdi-lan-connect" },
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
   { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "桌面语音笔记转写入口", icon: "mdi-note-edit-outline" },
@@ -630,6 +634,9 @@ function syncFromGateway() {
   form.fenneNoteWebhookPath = gateway?.fenneNoteWebhookPath || "/fennenote";
   form.xiaoaiWebhookPort = Number(gateway?.xiaoaiWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);
   form.xiaoaiWebhookPath = gateway?.xiaoaiWebhookPath || "/xiaoai";
+  form.wecomBotId = gateway?.wecomBotId || "";
+  form.wecomBotSecret = gateway?.wecomBotSecret || "";
+  form.wecomWsUrl = gateway?.wecomWsUrl || "";
   napcatHealthResult.value = null;
   astrbotLoginResult.value = null;
   marvisOpenResult.value = null;
@@ -820,6 +827,36 @@ async function apply() {
                             复制 WebUI 登录密钥
                           </v-btn>
                         </div>
+                      </v-alert>
+                    </div>
+                  </template>
+                  <template v-if="form.adapters.includes('wecom')">
+                    <v-text-field
+                      v-model="form.wecomBotId"
+                      label="企业微信 Bot ID"
+                      placeholder="可留空后改用 WECOM_BOT_ID"
+                      hint="企业微信智能机器人 Bot ID；群聊消息会映射到 groupId。"
+                      persistent-hint
+                    />
+                    <v-text-field
+                      v-model="form.wecomBotSecret"
+                      type="password"
+                      label="企业微信 Bot Secret"
+                      placeholder="可留空后改用 WECOM_BOT_SECRET"
+                      hint="保存到本地 route 配置；公开示例不要写真实密钥。"
+                      persistent-hint
+                    />
+                    <v-text-field
+                      v-model="form.wecomWsUrl"
+                      class="full-span"
+                      label="企业微信 WebSocket 地址"
+                      placeholder="留空使用 SDK 默认地址；私有部署或调试时填写"
+                    />
+                    <div class="quick-agent-status full-span">
+                      <div class="status-row"><span>消息端</span><b>企业微信智能机器人 WebSocket</b></div>
+                      <div class="status-row"><span>群聊变量</span><b>groupId / userId / sender / message / messageId</b></div>
+                      <v-alert type="info" variant="tonal" density="compact" class="mt-2">
+                        WeCom 会作为独立消息端启动，本地 gateway 主动连接企业微信；Agent 回发仍经过 RabiRoute outbox 和 messageAdapterPolicies.wecom。
                       </v-alert>
                     </div>
                   </template>
