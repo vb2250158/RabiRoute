@@ -1,0 +1,45 @@
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+}
+
+android {
+    namespace "com.rabiroute.bandprobe"
+    compileSdk 34
+
+    def velaDebugKeystore = rootProject.file("signing/vela-debug.p12")
+
+    signingConfigs {
+        velaDebug {
+            storeFile velaDebugKeystore
+            storeType "pkcs12"
+            storePassword "rabiroute"
+            keyAlias "vela-debug"
+            keyPassword "rabiroute"
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.rabiroute.bandprobe"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "0.1.0"
+        buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""
+    }
+
+    buildTypes {
+        debug {
+            if (velaDebugKeystore.exists()) {
+                signingConfig signingConfigs.velaDebug
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: "libs", include: ["*.jar"])
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+    implementation "androidx.activity:activity-ktx:1.7.2"
+    implementation "androidx.health.connect:connect-client:1.1.0-alpha07"
+}

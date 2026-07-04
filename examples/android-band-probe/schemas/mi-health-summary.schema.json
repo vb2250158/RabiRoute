@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rabiroute.local/schemas/mi-health-summary.schema.json",
+  "title": "MiHealthSummary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source",
+    "status",
+    "heartRate",
+    "sleep",
+    "healthConnect",
+    "provider"
+  ],
+  "properties": {
+    "source": {
+      "const": "mi-health/summary"
+    },
+    "status": {
+      "const": "composite"
+    },
+    "heartRate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "latest",
+        "availableApis",
+        "blockedApis",
+        "reason"
+      ],
+      "properties": {
+        "latest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "bpm",
+            "localTime"
+          ],
+          "properties": {
+            "status": {
+              "$ref": "#/$defs/status"
+            },
+            "bpm": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "localTime": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "availableApis": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockedApis": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "sleep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providerPaths",
+        "scheduleStatus",
+        "schedule",
+        "configStatus",
+        "config",
+        "reportSearchStatus",
+        "searchedDaysBack",
+        "availableDays",
+        "reason"
+      ],
+      "properties": {
+        "providerPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scheduleStatus": {
+          "$ref": "#/$defs/status"
+        },
+        "schedule": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "configStatus": {
+          "$ref": "#/$defs/status"
+        },
+        "config": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "reportSearchStatus": {
+          "$ref": "#/$defs/status"
+        },
+        "searchedDaysBack": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "availableDays": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "date",
+              "reportStatus",
+              "stagesStatus"
+            ],
+            "properties": {
+              "date": {
+                "type": "string"
+              },
+              "reportStatus": {
+                "$ref": "#/$defs/status"
+              },
+              "stagesStatus": {
+                "$ref": "#/$defs/status"
+              }
+            }
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "healthConnect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "heartRateSampleCount",
+        "sleepRecordCount",
+        "stepsRecordCount",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "heartRateSampleCount": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "sleepRecordCount": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "stepsRecordCount": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "categoryScanStatus",
+        "categoryScanReason",
+        "availableCategories",
+        "blockedCategories",
+        "healthProviderServiceStatus",
+        "healthProviderServiceReason"
+      ],
+      "properties": {
+        "categoryScanStatus": {
+          "$ref": "#/$defs/status"
+        },
+        "categoryScanReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "availableCategories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockedCategories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "healthProviderServiceStatus": {
+          "$ref": "#/$defs/status"
+        },
+        "healthProviderServiceReason": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "status": {
+      "enum": [
+        "available",
+        "empty",
+        "blocked",
+        "expected-blocked",
+        "skipped",
+        "probe-required",
+        "composite"
+      ]
+    }
+  }
+}

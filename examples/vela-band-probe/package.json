@@ -1,0 +1,23 @@
+{
+  "name": "rabi-vela-band-probe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RabiRoute Xiaomi Vela watch/band capability probe",
+  "scripts": {
+    "start": "aiot start --watch",
+    "build": "aiot build",
+    "release": "aiot release",
+    "create:aiot": "create-aiot",
+    "build:note": "node scripts/build-note.mjs",
+    "android:keystore": "node scripts/create-android-keystore.mjs",
+    "lint": "eslint --format codeframe --fix --ext .ux,.js src/"
+  },
+  "devDependencies": {
+    "@aiot-toolkit/compiler": "^1.1.4",
+    "@aiot-toolkit/jsc": "^1.0.3",
+    "@aiot-toolkit/packager": "^1.1.4",
+    "aiot-toolkit": "^2.0.5",
+    "create-aiot": "2.0.5",
+    "node-forge": "^1.4.0"
+  }
+}

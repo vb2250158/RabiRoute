@@ -16,6 +16,8 @@
 - [Agent 需要关注的 Rabi 接口](rabi-agent-interfaces.md)：给 Agent 注入的计划、记忆和内置触发接口说明。
 - [Agent 上下文注入说明](agent-context-injection.md)：说明默认注入项、按需注入项和最终投递给 Agent 的消息格式。
 - [Pipeline presets](pipeline-presets.md)：把默认输入端、输出端、TTS 和提示词输出模式打成一组。
+- [手机 App 远程接入](mobile-app-webhook-integration.md)：通过公网 HTTPS、Webhook、WebSocket 和消息状态队列接入 RabiRoute 的双向方案。
+- [小米手环心率列表探针交接](xiaomi-band-heart-rate-probe-handoff.md)：Android APK / Vela 快应用探针、云端心率列表拉取、ZIP 证据包解析和下一台电脑继续开发说明。
 - [语音交互工作站](voice-interaction-workstation.md)：FenneNote 转录、RabiRoute 路由、角色对话和 OumuQ TTS 的公开安全接线方式。
 - [企业微信接入](wecom-integration.md)：企业微信智能机器人 WebSocket 双向群聊消息端设计、配置、模板变量和回传边界。
 

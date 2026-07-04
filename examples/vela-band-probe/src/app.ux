@@ -1,0 +1,10 @@
+<script>
+export default {
+  onCreate() {
+    console.info('Rabi Vela band probe created')
+  },
+  onDestroy() {
+    console.info('Rabi Vela band probe destroyed')
+  }
+}
+</script>

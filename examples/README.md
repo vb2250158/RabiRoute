@@ -13,6 +13,7 @@
 - `data/roles/Rabi/`：默认路由配置配套的唯一 RabiRoute 兔娘看板娘与陪伴型成长人格，包含 `growth.md`、`skills.md`、`prompts/` 和备份用 `old/`。
 - `data/roles/Rabi/personaConfig.json`：默认人格消息模板规则，包含 Rabi 使用的 route kind、规则和模板。
 - `.env.example`：可选的环境变量样板，只用于不走 manager、直接用 env 启动单个 gateway 的场景。
+- `send-webhook-demo.mjs` / `send-webhook-demo.py`：向通用 Webhook 入口发送一条测试消息的 Node.js / Python 标准库示例。
 
 使用方式：
 
@@ -37,3 +38,30 @@ cp examples/.env.example .env
 ```
 
 Rabi 只保留这一份示例，避免同一人格出现多份副本。
+
+## Webhook 发送示例
+
+先启动一条包含 `webhook` 消息端的路由，并确认它监听类似下面的地址：
+
+```text
+http://127.0.0.1:8791/webhook
+```
+
+Node.js 版本：
+
+```bash
+node examples/send-webhook-demo.mjs
+```
+
+Python 版本：
+
+```bash
+python examples/send-webhook-demo.py
+```
+
+也可以显式传入 endpoint 和消息正文：
+
+```bash
+node examples/send-webhook-demo.mjs http://127.0.0.1:8791/webhook "来自外部系统的测试任务"
+python examples/send-webhook-demo.py http://127.0.0.1:8791/webhook "来自外部系统的测试任务"
+```
