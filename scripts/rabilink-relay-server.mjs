@@ -18,13 +18,13 @@ const dataDir = path.resolve(process.env.RABILINK_RELAY_DATA_DIR || path.join(pr
 const eventLogPath = path.join(dataDir, "events.jsonl");
 const openApiFileCandidates = [
   process.env.RABILINK_RELAY_OPENAPI_FILE ? path.resolve(process.env.RABILINK_RELAY_OPENAPI_FILE) : "",
-  path.join(process.cwd(), "rokid-rabilink-plugin.CURRENT.openapi.json"),
-  path.join(process.cwd(), "docs", "rokid-rabilink-plugin.CURRENT.openapi.json")
+  path.join(dataDir, "rokid-rabilink-plugin.CURRENT.openapi.json"),
+  path.join(process.cwd(), "rokid-rabilink-plugin.CURRENT.openapi.json")
 ].filter(Boolean);
 const manualAuthOpenApiFileCandidates = [
   process.env.RABILINK_RELAY_MANUAL_AUTH_OPENAPI_FILE ? path.resolve(process.env.RABILINK_RELAY_MANUAL_AUTH_OPENAPI_FILE) : "",
-  path.join(process.cwd(), "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"),
-  path.join(process.cwd(), "docs", "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json")
+  path.join(dataDir, "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"),
+  path.join(process.cwd(), "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json")
 ].filter(Boolean);
 
 if (!token && !allowInsecure) {

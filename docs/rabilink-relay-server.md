@@ -341,17 +341,29 @@ Authorization: Bearer <token>
 | `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志目录 |
 | `RABILINK_RELAY_ALLOW_INSECURE` | `0` | 本地测试可设为 `1` 跳过 token |
 
-## 当前 Rizon 导入文件
+## Rizon 导入文件
 
-当前优先导入：
+真实运行导入文件放在：
+
+```text
+data/rabilink-relay/rokid-rabilink-plugin.CURRENT.openapi.json
+data/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.openapi.json
+```
+
+公开示例文件放在：
+
+```text
+examples/rabilink-relay/rokid-rabilink-plugin.CURRENT.example.json
+examples/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.example.json
+```
+
+URL 导入时，使用当前运行配置里的真实域名，把下面的占位域名替换成实际入口：
 
 ```text
 https://rabi.example.com/rokid/rabilink/openapi.json
 ```
 
-如果 Rizon 使用“URL 和原始数据”导入，优先填这个 HTTPS 域名 URL，避免从本地文件夹里点错历史 JSON。
-
-备用同内容 URL：
+备用同内容路径：
 
 ```text
 https://rabi.example.com/openapi/rokid-rabilink-plugin.json
@@ -375,15 +387,15 @@ Service token / API key：填当前 Relay token
 本地文件导入时使用：
 
 ```text
-<repo>\docs\rokid-rabilink-plugin.CURRENT.openapi.json
+<repo>\data\rabilink-relay\rokid-rabilink-plugin.CURRENT.openapi.json
 ```
 
-它是当前域名版的易识别副本。旧的 `rizon` / `rizon-ip` / `submit-only` 文件已经删除，避免误导导入。
+它是当前运行用的易识别副本。旧的 `rizon` / `rizon-ip` / `submit-only` 文件已经删除，避免误导导入。
 
 手动鉴权版本地文件：
 
 ```text
-<repo>\docs\rokid-rabilink-plugin.MANUAL_AUTH.openapi.json
+<repo>\data\rabilink-relay\rokid-rabilink-plugin.MANUAL_AUTH.openapi.json
 ```
 
 这个文件使用：

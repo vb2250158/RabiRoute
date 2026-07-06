@@ -2,7 +2,7 @@ param(
     [string]$ServerIp = "",
     [string]$Username = "Administrator",
     [string]$KeyPath = "$HOME\.ssh\id_ed25519",
-    [string]$Domain = "www.rabiroute.com",
+    [string]$Domain = "",
     [string]$Token = $env:RABILINK_RELAY_TOKEN,
     [string]$RemoteRoot = "C:\opt\rabilink-relay",
     [string]$CaddyVersion = "2.8.4",
@@ -11,10 +11,52 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if (-not $ServerIp.Trim()) {
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$configPath = Join-Path $repoRoot "data\rabilink-relay\config.json"
+$relayConfig = $null
+if (Test-Path -LiteralPath $configPath) {
+    $relayConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+}
+
+function Get-ConfigString {
+    param(
+        [object]$Config,
+        [string]$Name
+    )
+
+    if ($null -eq $Config) {
+        return ""
+    }
+    $property = $Config.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return ""
+    }
+    return [string]$property.Value
+}
+
+if ([string]::IsNullOrWhiteSpace($ServerIp)) {
+    $ServerIp = Get-ConfigString -Config $relayConfig -Name "serverIp"
+}
+if ([string]::IsNullOrWhiteSpace($Domain)) {
+    $Domain = Get-ConfigString -Config $relayConfig -Name "publicHost"
+}
+if ([string]::IsNullOrWhiteSpace($Domain)) {
+    $publicBaseUrl = Get-ConfigString -Config $relayConfig -Name "publicBaseUrl"
+    if (-not [string]::IsNullOrWhiteSpace($publicBaseUrl)) {
+        $Domain = ([Uri]$publicBaseUrl).Host
+    }
+}
+if ([string]::IsNullOrWhiteSpace($Token)) {
+    $Token = Get-ConfigString -Config $relayConfig -Name "token"
+}
+
+if ([string]::IsNullOrWhiteSpace($ServerIp)) {
     throw "ServerIp is required. Pass -ServerIp <public-ip-or-host>."
 }
-if (-not $Token.Trim()) {
+if ([string]::IsNullOrWhiteSpace($Domain)) {
+    throw "Domain is required. Pass -Domain <public-domain> or set data\rabilink-relay\config.json publicBaseUrl/publicHost."
+}
+if ([string]::IsNullOrWhiteSpace($Token)) {
     throw "Token is required. Pass -Token <long-random-token> or set RABILINK_RELAY_TOKEN."
 }
 
@@ -39,10 +81,9 @@ function New-AsciiFile {
     [IO.File]::WriteAllText($Path, $Content, [Text.Encoding]::ASCII)
 }
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
 $relayScript = Join-Path $repoRoot "scripts\rabilink-relay-server.mjs"
-$openApiFile = Join-Path $repoRoot "docs\rokid-rabilink-plugin.CURRENT.openapi.json"
-$manualAuthOpenApiFile = Join-Path $repoRoot "docs\rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"
+$openApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.CURRENT.openapi.json"
+$manualAuthOpenApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"
 if (-not (Test-Path -LiteralPath $relayScript)) {
     throw "Relay server script was not found: $relayScript"
 }
@@ -60,9 +101,11 @@ $bundleRoot = Join-Path $env:TEMP ("rabilink-relay-deploy-" + [DateTime]::Now.To
 $bundleZip = "$bundleRoot.zip"
 New-Item -ItemType Directory -Path $bundleRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $bundleRoot "logs") -Force | Out-Null
+$bundleDataRoot = Join-Path $bundleRoot "data"
+New-Item -ItemType Directory -Path $bundleDataRoot -Force | Out-Null
 Copy-Item -LiteralPath $relayScript -Destination (Join-Path $bundleRoot "rabilink-relay-server.mjs") -Force
-Copy-Item -LiteralPath $openApiFile -Destination (Join-Path $bundleRoot "rokid-rabilink-plugin.CURRENT.openapi.json") -Force
-Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleRoot "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json") -Force
+Copy-Item -LiteralPath $openApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.CURRENT.openapi.json") -Force
+Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json") -Force
 
 New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 {

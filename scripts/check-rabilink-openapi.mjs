@@ -6,14 +6,26 @@ const repoRoot = process.cwd();
 
 const candidates = [
   {
-    file: "docs/rokid-rabilink-plugin.CURRENT.openapi.json",
+    file: "examples/rabilink-relay/rokid-rabilink-plugin.CURRENT.example.json",
     serverUrl: "https://rabi.example.com",
     requiresSecurityScheme: true,
   },
   {
-    file: "docs/rokid-rabilink-plugin.MANUAL_AUTH.openapi.json",
+    file: "examples/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.example.json",
     serverUrl: "https://rabi.example.com",
     requiresSecurityScheme: false,
+  },
+  {
+    file: "data/rabilink-relay/rokid-rabilink-plugin.CURRENT.openapi.json",
+    requiresSecurityScheme: true,
+    rejectExampleServer: true,
+    optional: true,
+  },
+  {
+    file: "data/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.openapi.json",
+    requiresSecurityScheme: false,
+    rejectExampleServer: true,
+    optional: true,
   },
 ];
 
@@ -60,11 +72,20 @@ function validateResponses(relativePath, operation, routePath, method) {
 }
 
 function validateDocument(candidate) {
+  const absolutePath = path.join(repoRoot, candidate.file);
+  if (candidate.optional && !fs.existsSync(absolutePath)) {
+    return null;
+  }
   const document = readJson(candidate.file);
+  const actualServerUrl = document.servers?.[0]?.url || "";
+  const expectedServerUrl = candidate.serverUrl || actualServerUrl;
 
   assert(document.openapi?.startsWith("3."), `${candidate.file}: openapi must be 3.x.`);
   assert(document.info?.title === "RabiLinkMessage", `${candidate.file}: title must be RabiLinkMessage.`);
-  assert(document.servers?.[0]?.url === candidate.serverUrl, `${candidate.file}: server URL must be ${candidate.serverUrl}.`);
+  assert(actualServerUrl === expectedServerUrl, `${candidate.file}: server URL must be ${expectedServerUrl}.`);
+  if (candidate.rejectExampleServer) {
+    assert(!actualServerUrl.includes("example.com"), `${candidate.file}: data OpenAPI must use the real relay URL, not ${actualServerUrl}.`);
+  }
 
   for (const [routePath, method] of requiredPaths) {
     const operation = getOperation(document, routePath, method);
@@ -90,13 +111,13 @@ function validateDocument(candidate) {
   return {
     file: candidate.file,
     title: document.info.title,
-    serverUrl: document.servers[0].url,
+    serverUrl: actualServerUrl,
     security: hasSecurityScheme ? "openapi" : "manual",
   };
 }
 
 try {
-  const results = candidates.map(validateDocument);
+  const results = candidates.map(validateDocument).filter(Boolean);
   for (const result of results) {
     console.log(`[ok] ${result.file} title=${result.title} server=${result.serverUrl} auth=${result.security}`);
   }

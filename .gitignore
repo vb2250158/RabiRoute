@@ -3,8 +3,11 @@
 /ribiwebgui/dist/
 /build/
 /.tmp/
+/.codex-tmp/
 /out/
 /reports/
+
+# Private runtime state, live relay config, tokens, logs, and current import JSON.
 /data/
 /tmp/
 /logs/
@@ -13,6 +16,7 @@
 /voice-cache/
 /.codex-logs/
 /gateways.json
+/docs/rokid-rabilink-plugin.*.openapi.json
 /RabiRoute-Tray.exe
 /RabiRoute-Tray.exe.bak-*
 /.idea/

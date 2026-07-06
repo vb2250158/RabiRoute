@@ -105,8 +105,8 @@
             "schema": {
               "type": "string"
             }
-        }
-      ],
+          }
+        ],
         "responses": {
           "200": {
             "description": "成功返回下行新增消息。",
@@ -210,8 +210,8 @@
             "schema": {
               "type": "string"
             }
-        }
-      ],
+          }
+        ],
         "responses": {
           "200": {
             "description": "成功返回 JSON。",
