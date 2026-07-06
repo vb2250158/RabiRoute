@@ -128,7 +128,7 @@ test("RabiLink is a named webhook-like message adapter", () => {
 
   assert.deepEqual(gatewayAdapterTypes(normalized), ["rabilink"]);
   assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["default-rabilink"]);
-  assert.deepEqual(normalized.notificationRules?.[0]?.routeKinds, ["voice_transcript"]);
+  assert.deepEqual(normalized.notificationRules?.[0]?.routeKinds, ["rabilink"]);
 
   const claims = collectGatewayPortClaims([normalized], { managerPort: 8790 });
   assert.equal(claims.find(claim => claim.kind === "rabilink-webhook")?.port, 8794);

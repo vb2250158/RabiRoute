@@ -20,7 +20,7 @@ export const defaultPrivateNotificationTemplate = "";
 export const defaultHeartbeatNotificationTemplate = "";
 export const defaultVoiceTranscriptNotificationTemplate = "";
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "wecom_message";
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wecom_message";
 
 export type NotificationRule = {
   id: string;
@@ -129,6 +129,7 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "manual_trigger"
     || kind === "role_panel_message"
     || kind === "voice_transcript"
+    || kind === "rabilink"
     || kind === "wecom_message";
 }
 

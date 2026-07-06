@@ -81,6 +81,7 @@ type WebhookAdapterProfile = {
   port: number;
   host?: string;
   acceptedTypes: string[];
+  routeKind: "voice_transcript" | "rabilink";
   missingTextMessage: string;
 };
 
@@ -304,6 +305,7 @@ function defaultWebhookProfile(): WebhookAdapterProfile {
     path: config.webhookPath,
     port: config.webhookPort,
     acceptedTypes: ["voice_transcript", "webhook.text"],
+    routeKind: "voice_transcript",
     missingTextMessage: "Webhook payload has no text/message/content"
   };
 }
@@ -316,6 +318,7 @@ export function createFenneNoteAdapter(): MessageAdapter {
     path: config.fenneNoteWebhookPath,
     port: config.fenneNoteWebhookPort,
     acceptedTypes: ["voice_transcript", "fennenote.voice_transcript", "fennenote.transcript", "webhook.text"],
+    routeKind: "voice_transcript",
     missingTextMessage: "FenneNote payload has no text/message/content"
   });
 }
@@ -328,6 +331,7 @@ export function createXiaoAiAdapter(): MessageAdapter {
     path: config.xiaoaiWebhookPath,
     port: config.xiaoaiWebhookPort,
     acceptedTypes: ["voice_transcript", "xiaoai.voice_transcript", "xiaoai.transcript", "webhook.text"],
+    routeKind: "voice_transcript",
     missingTextMessage: "XiaoAI payload has no text/message/content"
   });
 }
@@ -341,6 +345,7 @@ export function createRabiLinkAdapter(): MessageAdapter {
     port: config.rabiLinkWebhookPort,
     host: config.rabiLinkWebhookHost,
     acceptedTypes: ["voice_transcript", "rabilink", "rabilink.text", "rabilink.message", "webhook.text"],
+    routeKind: "rabilink",
     missingTextMessage: "RabiLink payload has no text/message/content/query/input"
   });
 }
@@ -431,7 +436,7 @@ export function createWebhookAdapter(profile = defaultWebhookProfile()): Message
             lastEventAt: new Date().toISOString(),
             eventCount: (status?.eventCount ?? 0) + 1
           });
-          forwardMessage("voice_transcript", record, {
+          forwardMessage(profile.routeKind, record, {
             webhookPath,
             inputAdapter: profile.type,
             voiceSource: record.source

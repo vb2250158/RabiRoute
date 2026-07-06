@@ -270,7 +270,8 @@ function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string
   if (adapter === "napcat") return ["private", "direct_at", "direct_reply", "indirect_reply"];
   if (adapter === "heartbeat") return ["heartbeat"];
   if (adapter === "rolePanel") return ["role_panel_message", "manual_trigger"];
-  if (adapter === "fennenote" || adapter === "xiaoai" || adapter === "rabilink" || adapter === "webhook") return ["voice_transcript"];
+  if (adapter === "fennenote" || adapter === "xiaoai" || adapter === "webhook") return ["voice_transcript"];
+  if (adapter === "rabilink") return ["rabilink"];
   if (adapter === "wecom") return ["wecom_message"];
   return [];
 }
@@ -281,7 +282,7 @@ function defaultRuleNameForMessageAdapter(adapter: MessageAdapterType): string {
   if (adapter === "rolePanel") return "面板默认消息";
   if (adapter === "fennenote") return "FenneNote 默认语音";
   if (adapter === "xiaoai") return "小爱默认语音";
-  if (adapter === "rabilink") return "RabiLink 默认语音";
+  if (adapter === "rabilink") return "RabiLink 默认消息";
   if (adapter === "wecom") return "企业微信默认消息";
   if (adapter === "webhook") return "Webhook 默认消息";
   return "默认消息";

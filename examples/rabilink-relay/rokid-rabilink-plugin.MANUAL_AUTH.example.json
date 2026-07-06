@@ -15,7 +15,7 @@
       "post": {
         "operationId": "submitRabiLinkTask",
         "summary": "提交 RabiLink 任务",
-        "description": "把用户原话提交到 RabiLink Relay，并立即返回 taskId。提交后不要在本轮长时间等待；另用 getRabiLinkMessages 按全局下行队列拉取可复述消息。",
+        "description": "把用户原话提交到 RabiLink Relay，并立即返回新的 taskId。每次用户新输入都会创建新 taskId；后续用 getRabiLinkTaskMessages 按该 taskId 拉取消息列表，直到 shouldContinue=false。",
         "requestBody": {
           "required": true,
           "content": {
@@ -91,17 +91,26 @@
         }
       }
     },
-    "/rokid/rabilink/messages": {
+    "/rokid/rabilink/tasks/{taskId}/messages": {
       "get": {
-        "operationId": "getRabiLinkMessages",
-        "summary": "拉取 RabiLink 下行消息",
-        "description": "按全局下行队列获取新增回复，不需要 taskId。服务器只会短暂等待；智能体应立即逐条转述 messages 中的内容。没有消息时结束本轮，不要继续占住思考态。",
+        "operationId": "getRabiLinkTaskMessages",
+        "summary": "拉取指定 RabiLink 任务消息列表",
+        "description": "按 submitRabiLinkTask 返回的 taskId 拉取该任务下的新增回复列表。每次处理 messages 后保存 nextCursor，下次作为 after 传入；直到 messages 为空且 shouldContinue=false 才结束本轮。",
         "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "description": "submitRabiLinkTask 返回的任务 ID。",
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "after",
             "in": "query",
             "required": false,
-            "description": "已经读过的最后一条下行消息 ID。第一次拉取时留空，后续使用上一次返回的 nextCursor。",
+            "description": "已经读过的该任务内最后一条消息 ID。第一次拉取留空，后续使用上一次返回的 nextCursor。",
             "schema": {
               "type": "string"
             }
@@ -109,7 +118,7 @@
         ],
         "responses": {
           "200": {
-            "description": "成功返回下行新增消息。",
+            "description": "成功返回该任务下的新增消息列表。",
             "content": {
               "application/json": {
                 "schema": {
@@ -125,15 +134,19 @@
                     },
                     "status": {
                       "type": "string",
-                      "description": "下行队列状态。messages 表示本次有消息，idle 表示暂无消息，done 表示当前无未完成任务。"
+                      "description": "任务消息流状态。messages/done/failed/streaming。"
+                    },
+                    "taskId": {
+                      "type": "string",
+                      "description": "submitRabiLinkTask 返回的任务 ID。"
                     },
                     "done": {
                       "type": "boolean",
-                      "description": "当前是否没有未完成任务且没有新增消息。"
+                      "description": "手机桥是否已调用 finish 结束该任务。"
                     },
                     "shouldContinue": {
                       "type": "boolean",
-                      "description": "是否建议本轮继续拉取。RabiLink 当前固定返回 false，避免眼镜端一直显示思考。"
+                      "description": "是否继续调用本接口。true 表示任务未结束，或本次仍返回了需要处理的 messages；false 表示该 taskId 的消息已拉空且任务已结束。"
                     },
                     "nextCursor": {
                       "type": "string",
@@ -141,7 +154,7 @@
                     },
                     "text": {
                       "type": "string",
-                      "description": "合并后的新增消息文本。"
+                      "description": "本次 messages 合并后的文本。"
                     },
                     "answer": {
                       "type": "string",
@@ -157,25 +170,21 @@
                     },
                     "messages": {
                       "type": "array",
-                      "description": "新增下行消息列表。智能体应逐条立即转述给用户，拉出来的都要显示。",
+                      "description": "该 taskId 下 after 之后的新消息列表。智能体应逐条转述，处理完后保存 nextCursor。",
                       "items": {
                         "type": "object",
                         "properties": {
                           "id": {
                             "type": "string",
-                            "description": "消息游标 ID。"
+                            "description": "任务内消息游标 ID。"
                           },
                           "seq": {
                             "type": "integer",
-                            "description": "消息序号。"
+                            "description": "任务内消息序号。"
                           },
-                          "taskId": {
-                            "type": "string",
-                            "description": "这条回复归属的上行任务 ID。只用于关联，不作为拉取前提。"
-                          },
-                          "taskMessageId": {
-                            "type": "string",
-                            "description": "任务内部消息 ID。"
+                          "createdAt": {
+                            "type": "integer",
+                            "description": "创建时间戳。"
                           },
                           "text": {
                             "type": "string",
@@ -187,6 +196,10 @@
                           }
                         }
                       }
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "失败原因。"
                     }
                   }
                 }
@@ -200,7 +213,7 @@
       "get": {
         "operationId": "getRabiLinkTaskResult",
         "summary": "查询 RabiLink 任务状态",
-        "description": "查询指定 RabiLink 任务状态。status 为 done 或 failed 时停止轮询。",
+        "description": "查询指定 RabiLink 任务状态。主要用于调试；眼镜端回复拉取应使用 getRabiLinkTaskMessages，不要把本接口的 text/reply/answer 当成用户回复重复播报。",
         "parameters": [
           {
             "name": "taskId",

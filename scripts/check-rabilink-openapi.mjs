@@ -31,8 +31,8 @@ const candidates = [
 
 const requiredPaths = [
   ["/rokid/rabilink/tasks", "post"],
+  ["/rokid/rabilink/tasks/{taskId}/messages", "get"],
   ["/rokid/rabilink/tasks/{taskId}", "get"],
-  ["/rokid/rabilink/messages", "get"],
 ];
 
 function readJson(relativePath) {
@@ -96,10 +96,12 @@ function validateDocument(candidate) {
     }
   }
 
-  const messagesGet = getOperation(document, "/rokid/rabilink/messages", "get");
+  assert(!getOperation(document, "/rokid/rabilink/messages", "get"), `${candidate.file}: global GET /rokid/rabilink/messages should not be exposed in the Rokid plugin; use taskId messages.`);
+
+  const messagesGet = getOperation(document, "/rokid/rabilink/tasks/{taskId}/messages", "get");
   const messageParamNames = new Set((messagesGet.parameters || []).map((parameter) => parameter.name));
-  assert(messageParamNames.has("after"), `${candidate.file}: GET /rokid/rabilink/messages should expose after cursor.`);
-  assert(!messageParamNames.has("taskId"), `${candidate.file}: GET /rokid/rabilink/messages must not require taskId.`);
+  assert(messageParamNames.has("taskId"), `${candidate.file}: GET /rokid/rabilink/tasks/{taskId}/messages should require taskId.`);
+  assert(messageParamNames.has("after"), `${candidate.file}: GET /rokid/rabilink/tasks/{taskId}/messages should expose after cursor.`);
 
   const hasSecurityScheme = Boolean(document.components?.securitySchemes?.RabiLinkToken);
   if (candidate.requiresSecurityScheme) {

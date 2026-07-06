@@ -122,6 +122,7 @@ function recordFileNameForRouteKind(routeKind: ForwardRouteKind): string | null 
   if (routeKind === "heartbeat") return "heartbeat-events.jsonl";
   if (routeKind === "manual_trigger") return "manual-trigger-events.jsonl";
   if (routeKind === "voice_transcript") return "voice-transcripts.jsonl";
+  if (routeKind === "rabilink") return "rabilink-voice-transcripts.jsonl";
   return null;
 }
 

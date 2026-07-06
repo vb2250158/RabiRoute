@@ -409,6 +409,10 @@ function appendOutboxMessages(task, messages) {
   notifyOutboxWaiters();
 }
 
+function currentOutboxCursor() {
+  return outboxMessages[outboxMessages.length - 1]?.id || "";
+}
+
 function messageForResponse(message) {
   return {
     id: message.id,
@@ -466,12 +470,13 @@ function outboxMessagesResponse(after) {
   const last = messages[messages.length - 1] || outboxMessages[outboxMessages.length - 1];
   const openTasks = hasOpenTasks();
   const text = messages.map((message) => message.text).join("\n");
+  const shouldContinue = openTasks || messages.length > 0;
   return {
     code: 0,
     ok: true,
     status: messages.length > 0 ? "messages" : openTasks ? "idle" : "done",
     done: !openTasks && messages.length === 0,
-    shouldContinue: false,
+    shouldContinue,
     cursor: last?.id || stringValue(after),
     nextCursor: last?.id || stringValue(after),
     messages: messages.map(outboxMessageForResponse),
@@ -505,13 +510,14 @@ function taskMessagesResponse(task, after) {
   });
   const last = messages[messages.length - 1] || task.messages[task.messages.length - 1];
   const done = task.status === "done" || task.status === "failed" || task.status === "expired";
+  const shouldContinue = !done || messages.length > 0;
   return {
     code: task.status === "failed" ? -1 : 0,
     ok: task.status !== "failed" && task.status !== "expired",
     status: task.status === "done" ? "done" : task.status === "failed" || task.status === "expired" ? "failed" : "streaming",
     taskId: task.id,
     done,
-    shouldContinue: !done,
+    shouldContinue,
     cursor: last?.id || afterText || "",
     nextCursor: last?.id || afterText || "",
     messages: messages.map(messageForResponse),
@@ -634,12 +640,15 @@ async function handleRokid(req, url, res, body) {
 
 function handleRokidCreateTask(req, url, res, body) {
   if (!assertAuthorized(req, url, body)) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  const outboxCursor = currentOutboxCursor();
   const task = createTask(body, req);
   sendJson(res, 200, {
     code: 0,
     ok: true,
     status: "pending",
     taskId: task.id,
+    cursor: outboxCursor,
+    nextCursor: outboxCursor,
     text: "已收到，正在转交手机 RabiLink 和 Codex 处理。请稍后查询结果。",
     answer: "已收到，正在转交手机 RabiLink 和 Codex 处理。请稍后查询结果。",
     reply: "已收到，正在转交手机 RabiLink 和 Codex 处理。请稍后查询结果。",
@@ -694,7 +703,10 @@ async function handleRokidTaskMessages(req, url, res, body) {
 async function handleRokidOutboxMessages(req, url, res, body) {
   if (!assertAuthorized(req, url, body)) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
   cleanupTasks();
-  const after = url.searchParams.get("after") || url.searchParams.get("cursor") || "";
+  const hasCursor = url.searchParams.has("after") || url.searchParams.has("cursor");
+  const after = hasCursor
+    ? url.searchParams.get("after") || url.searchParams.get("cursor") || ""
+    : currentOutboxCursor();
   const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || outboxWaitMs), 0, 5000);
   await waitForOutboxMessagesAfter(after, waitMs);
   sendJson(res, 200, outboxMessagesResponse(after));

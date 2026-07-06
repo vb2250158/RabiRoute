@@ -102,7 +102,7 @@ export type AgentReplyResult = {
   reason?: string;
   routeProfileId?: string;
   messageId?: string;
-  targetType?: "group" | "private" | "role_panel" | "voice_transcript";
+  targetType?: "group" | "private" | "role_panel" | "voice_transcript" | "rabilink";
   groupId?: string;
   userId?: string;
   instanceId?: string;
@@ -117,7 +117,7 @@ export type AgentReplyResult = {
 
 type SourceRecord = {
   messageId?: string;
-  targetType?: "group" | "private" | "role_panel" | "voice_transcript";
+  targetType?: "group" | "private" | "role_panel" | "voice_transcript" | "rabilink";
   groupId?: string;
   userId?: string;
   instanceId?: string;
@@ -308,14 +308,15 @@ function readJsonl(filePath: string): Record<string, unknown>[] {
     });
 }
 
-function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group" | "private" | "voice_transcript", adapterType?: string): SourceRecord {
+function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group" | "private" | "voice_transcript" | "rabilink", adapterType?: string): SourceRecord {
+  const normalizedAdapterType = valueString(record.adapterType) ?? adapterType;
   return {
     messageId: valueString(record.messageId ?? record.message_id),
-    targetType,
+    targetType: normalizedAdapterType === "rabilink" ? "rabilink" : targetType,
     groupId: valueString(record.groupId ?? record.group_id ?? record.chatId ?? record.chatid ?? record.conversationId),
     userId: valueString(record.userId ?? record.user_id ?? record.senderId),
     instanceId: valueString(record.instanceId),
-    adapterType: valueString(record.adapterType) ?? adapterType,
+    adapterType: normalizedAdapterType,
     botUserId: valueString(record.botUserId),
     reqId: valueString(record.reqId),
     conversationId: valueString(record.conversationId),
@@ -333,7 +334,7 @@ function findSourceRecord(options: AgentReplyOptions, route: ResolvedRoute, mess
       ["private-messages.jsonl", "private"],
       ["voice-transcripts.jsonl", "voice_transcript"],
       ["fennenote-voice-transcripts.jsonl", "voice_transcript"],
-      ["rabilink-voice-transcripts.jsonl", "voice_transcript"],
+      ["rabilink-voice-transcripts.jsonl", "rabilink"],
       ["wecom-messages.jsonl", "group"]
     ] as const) {
       const found = readJsonl(path.join(dir, fileName))
@@ -740,7 +741,9 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         ? "private"
         : requestField(request, "targetType") === "role_panel" || requestField(request, "adapterType") === "rolePanel"
           ? "role_panel"
-          : requestField(request, "targetType") === "voice_transcript" || requestField(request, "adapterType") === "fennenote" || requestField(request, "adapterType") === "rabilink"
+          : requestField(request, "targetType") === "rabilink" || requestField(request, "adapterType") === "rabilink"
+            ? "rabilink"
+            : requestField(request, "targetType") === "voice_transcript" || requestField(request, "adapterType") === "fennenote"
             ? "voice_transcript"
             : requestField(request, "groupId")
               ? "group"

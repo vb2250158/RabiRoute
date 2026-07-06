@@ -518,7 +518,7 @@ test("RabiLink source reply is gated by route policy and queued for the phone br
   assert.equal(result.ok, true);
   assert.equal(result.status, "sent");
   assert.equal(result.reason, "Queued for rabilink output.");
-  assert.equal(result.targetType, "voice_transcript");
+  assert.equal(result.targetType, "rabilink");
   const replyLog = path.join(rootDir, "data", "route", "RabiLink", "rabilink-replies.jsonl");
   const rows = fs.readFileSync(replyLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
   assert.equal(rows.length, 1);

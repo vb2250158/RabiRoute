@@ -1,8 +1,10 @@
 package com.rabi.link
 
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -28,6 +30,7 @@ import com.rabi.link.modules.rabiroute.RabiLinkRelayBridgeService
 import com.rabiroute.sdk.RabiInstance
 import com.rabiroute.sdk.RabiRouteInfo
 import com.rabiroute.sdk.RabiRouteSdk
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -44,18 +47,53 @@ class MainActivity : Activity() {
     private lateinit var managerAdapter: ArrayAdapter<String>
     private lateinit var routeSpinner: Spinner
     private lateinit var routeAdapter: ArrayAdapter<String>
+    private lateinit var scanButton: Button
+    private lateinit var refreshRouteButton: Button
     private lateinit var relayBaseInput: EditText
     private lateinit var relayTokenInput: EditText
     private lateinit var callbackView: TextView
     private lateinit var bridgeStateView: TextView
+    private lateinit var startBridgeButton: Button
+    private lateinit var stopBridgeButton: Button
     private lateinit var logView: TextView
+    private var bridgeRunning = false
+    private var scanningManagers = false
+
+    private val bridgeEventReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != RabiLinkRelayBridgeService.ACTION_BRIDGE_LOG) return
+            intent.getStringExtra(RabiLinkRelayBridgeService.EXTRA_LOG_MESSAGE)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { appendLog(it, includeTime = false) }
+            if (intent.hasExtra(RabiLinkRelayBridgeService.EXTRA_RUNNING)) {
+                setBridgeRunning(intent.getBooleanExtra(RabiLinkRelayBridgeService.EXTRA_RUNNING, bridgeRunning))
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
         restoreRelayFields()
+        loadBridgeLogTail()
         refreshStatus("等待扫描")
         appendLog("RabiLink 已启动。先扫描 RabiRoute，再选择 Route。")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val filter = IntentFilter(RabiLinkRelayBridgeService.ACTION_BRIDGE_LOG)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(bridgeEventReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(bridgeEventReceiver, filter)
+        }
+        loadBridgeLogTail()
+    }
+
+    override fun onPause() {
+        runCatching { unregisterReceiver(bridgeEventReceiver) }
+        super.onPause()
     }
 
     private fun buildUi() {
@@ -132,9 +170,11 @@ class MainActivity : Activity() {
         card.addView(routeSpinner, fullWidth(0, 0, 0, 10))
 
         val row = row()
-        row.addView(primaryButton("扫描") { scanManagers() }, LinearLayout.LayoutParams(0, -2, 1f))
+        scanButton = primaryButton("扫描") { scanManagers() }
+        row.addView(scanButton, LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
-        row.addView(secondaryButton("刷新 Route") { readRoutes() }, LinearLayout.LayoutParams(0, -2, 1f))
+        refreshRouteButton = secondaryButton("刷新 Route") { readRoutes() }
+        row.addView(refreshRouteButton, LinearLayout.LayoutParams(0, -2, 1f))
         card.addView(row)
         content.addView(card, fullWidth(0, 0, 0, 12))
     }
@@ -159,9 +199,11 @@ class MainActivity : Activity() {
         card.addView(bridgeStateView)
 
         val row = row()
-        row.addView(primaryButton("启动常驻桥") { startBridge() }, LinearLayout.LayoutParams(0, -2, 1f))
+        startBridgeButton = primaryButton("启动常驻桥") { startBridge() }
+        row.addView(startBridgeButton, LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
-        row.addView(secondaryButton("停止") { stopBridge() }, LinearLayout.LayoutParams(0, -2, 1f))
+        stopBridgeButton = secondaryButton("停止") { stopBridge() }
+        row.addView(stopBridgeButton, LinearLayout.LayoutParams(0, -2, 1f))
         card.addView(row, fullWidth(0, 6, 0, 6))
         card.addView(secondaryButton("电池常驻设置") { openBatteryOptimizationSettings() })
         content.addView(card, fullWidth(0, 0, 0, 12))
@@ -178,6 +220,8 @@ class MainActivity : Activity() {
     }
 
     private fun scanManagers() {
+        if (scanningManagers) return
+        setScanningManagers(true)
         appendLog("正在扫描局域网 RabiRoute...")
         refreshStatus("扫描中")
         runAsync(
@@ -200,7 +244,8 @@ class MainActivity : Activity() {
                     appendLog("扫描到 ${found.size} 个 RabiRoute。")
                 }
                 managerAdapter.notifyDataSetChanged()
-            }
+            },
+            complete = { setScanningManagers(false) }
         )
     }
 
@@ -248,7 +293,7 @@ class MainActivity : Activity() {
         saveBridgeConfig(instance, route.id, callbackUrl, relayBaseUrl, token, enabled = true)
         val intent = bridgeIntent(instance, route.id, callbackUrl, relayBaseUrl, token)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
-        bridgeStateView.text = "状态：常驻桥已启动"
+        setBridgeRunning(true, "状态：已绑定运行\nRoute：${routeDisplayName(route)}\n回调：$callbackUrl")
         appendLog("常驻桥已启动：${routeDisplayName(route)} -> ${instance.host}")
         refreshStatus("手机桥运行中")
     }
@@ -259,7 +304,7 @@ class MainActivity : Activity() {
             .putBoolean(RabiLinkRelayBridgeService.PREF_ENABLED, false)
             .apply()
         startService(Intent(this, RabiLinkRelayBridgeService::class.java).setAction(RabiLinkRelayBridgeService.ACTION_STOP))
-        bridgeStateView.text = "状态：已停止"
+        setBridgeRunning(false, "状态：已停止")
         appendLog("常驻桥已停止。")
         refreshStatus("手机桥已停止")
     }
@@ -297,10 +342,82 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(RabiLinkRelayBridgeService.PREFS_NAME, Context.MODE_PRIVATE)
         relayBaseInput.setText(prefs.getString(RabiLinkRelayBridgeService.EXTRA_RELAY_BASE_URL, "https://rabi.example.com"))
         relayTokenInput.setText(prefs.getString(RabiLinkRelayBridgeService.EXTRA_TOKEN, ""))
-        bridgeStateView.text = if (prefs.getBoolean(RabiLinkRelayBridgeService.PREF_ENABLED, false)) {
-            "状态：已保存为后台常驻"
+        restoreSavedManager(prefs)
+        if (prefs.getBoolean(RabiLinkRelayBridgeService.PREF_ENABLED, false)) {
+            setBridgeRunning(true, buildString {
+                appendLine("状态：已保存为后台常驻")
+                appendLine("Route：${prefs.getString(RabiLinkRelayBridgeService.EXTRA_ROUTE_ID, "") ?: ""}")
+                append("回调：${prefs.getString(RabiLinkRelayBridgeService.EXTRA_CALLBACK_URL, "") ?: ""}")
+            })
+            refreshStatus("手机桥后台常驻中")
         } else {
-            "状态：未启动"
+            setBridgeRunning(false, "状态：未启动")
+        }
+    }
+
+    private fun restoreSavedManager(prefs: android.content.SharedPreferences) {
+        val guid = prefs.getString(RabiLinkRelayBridgeService.EXTRA_INSTANCE_GUID, "")?.takeIf { it.isNotBlank() } ?: return
+        val baseUrl = prefs.getString(RabiLinkRelayBridgeService.EXTRA_MANAGER_BASE_URL, "")?.trimEnd('/') ?: ""
+        val host = runCatching { java.net.URL(baseUrl).host }.getOrDefault("").ifBlank { return }
+        val port = runCatching { java.net.URL(baseUrl).port.takeIf { it > 0 } ?: 8790 }.getOrDefault(8790)
+        selectedInstance = RabiInstance(
+            guid = guid,
+            name = prefs.getString(RabiLinkRelayBridgeService.EXTRA_INSTANCE_NAME, "")?.ifBlank { "RabiRoute" } ?: "RabiRoute",
+            computerName = prefs.getString(RabiLinkRelayBridgeService.EXTRA_COMPUTER_NAME, "") ?: "",
+            deviceType = prefs.getString(RabiLinkRelayBridgeService.EXTRA_DEVICE_TYPE, "") ?: "",
+            baseUrl = baseUrl,
+            host = host,
+            port = port,
+            version = null
+        )
+        callbackView.text = "RabiLink 回调：${prefs.getString(RabiLinkRelayBridgeService.EXTRA_CALLBACK_URL, "") ?: ""}"
+    }
+
+    private fun setBridgeRunning(running: Boolean, stateText: String? = null) {
+        bridgeRunning = running
+        bridgeStateView.text = stateText ?: if (running) "状态：已绑定运行" else "状态：未启动"
+        refreshInteractionState()
+    }
+
+    private fun setScanningManagers(scanning: Boolean) {
+        scanningManagers = scanning
+        refreshInteractionState()
+    }
+
+    private fun refreshInteractionState() {
+        val canUseDiscovery = !scanningManagers
+        val canEditServerBinding = !bridgeRunning
+        managerSpinner.isEnabled = canUseDiscovery
+        routeSpinner.isEnabled = canUseDiscovery
+        relayBaseInput.isEnabled = canEditServerBinding
+        relayTokenInput.isEnabled = canEditServerBinding
+        scanButton.isEnabled = canUseDiscovery
+        scanButton.text = when {
+            scanningManagers -> "扫描中..."
+            else -> "扫描"
+        }
+        refreshRouteButton.isEnabled = canUseDiscovery
+        startBridgeButton.isEnabled = canEditServerBinding
+        stopBridgeButton.isEnabled = bridgeRunning
+        applyEnabledAlpha(managerSpinner)
+        applyEnabledAlpha(routeSpinner)
+        applyEnabledAlpha(relayBaseInput)
+        applyEnabledAlpha(relayTokenInput)
+        applyEnabledAlpha(scanButton)
+        applyEnabledAlpha(refreshRouteButton)
+        applyEnabledAlpha(startBridgeButton)
+        applyEnabledAlpha(stopBridgeButton)
+    }
+
+    private fun loadBridgeLogTail() {
+        val file = File(filesDir, RabiLinkRelayBridgeService.LOG_FILE_NAME)
+        if (!file.exists()) return
+        val text = runCatching { file.readText() }.getOrDefault("")
+        if (text.isBlank()) return
+        logLines.clear()
+        logLines.append(text.takeLast(4000))
+        if (::logView.isInitialized) {
+            logView.text = logLines.toString()
         }
     }
 
@@ -370,23 +487,27 @@ class MainActivity : Activity() {
         root.addView(panel, LinearLayout.LayoutParams(-1, -2))
     }
 
-    private fun appendLog(message: String) {
+    private fun appendLog(message: String, includeTime: Boolean = true) {
         val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        logLines.append("[$time] $message\n")
+        logLines.append(if (includeTime) "[$time] $message\n" else "$message\n")
         logView.text = logLines.toString().takeLast(2500)
         val scrollAmount = logView.layout?.let { it.getLineTop(logView.lineCount) - logView.height } ?: 0
         if (scrollAmount > 0) logView.scrollTo(0, scrollAmount)
     }
 
-    private fun <T> runAsync(work: () -> T, success: (T) -> Unit) {
+    private fun <T> runAsync(work: () -> T, success: (T) -> Unit, complete: () -> Unit = {}) {
         Thread {
             try {
                 val result = work()
-                runOnUiThread { success(result) }
+                runOnUiThread {
+                    success(result)
+                    complete()
+                }
             } catch (error: Throwable) {
                 runOnUiThread {
                     appendLog("失败：${error.message ?: error.javaClass.simpleName}")
                     refreshStatus("操作失败")
+                    complete()
                 }
             }
         }.start()
@@ -449,6 +570,10 @@ class MainActivity : Activity() {
         setTextColor(Color.rgb(38, 48, 68))
         background = panelBackground(Color.rgb(239, 242, 247), Color.rgb(213, 218, 226), dp(8).toFloat())
         setOnClickListener { action() }
+    }
+
+    private fun applyEnabledAlpha(view: View) {
+        view.alpha = if (view.isEnabled) 1f else 0.45f
     }
 
     private fun row(): LinearLayout = LinearLayout(this).apply {

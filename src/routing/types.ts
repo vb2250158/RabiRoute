@@ -18,9 +18,10 @@ export type ForwardRouteKind =
   | "manual_trigger"
   | "role_panel_message"
   | "voice_transcript"
+  | "rabilink"
   | "wecom_message";
 
-export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "wecom_message";
+export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wecom_message";
 
 export type ForwardRecord =
   | GroupMessageRecord

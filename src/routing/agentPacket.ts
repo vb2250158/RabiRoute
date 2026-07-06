@@ -90,7 +90,10 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
     return [];
   }
 
-  const shouldExplainReplyApi = forceMessagePipeline || replyToSource || (outputAdapter === "fennenote" && routeKind === "voice_transcript");
+  const shouldExplainReplyApi = forceMessagePipeline
+    || replyToSource
+    || (outputAdapter === "fennenote" && routeKind === "voice_transcript")
+    || routeKind === "rabilink";
   if (!shouldExplainReplyApi) return [];
 
   const intro = forceMessagePipeline
@@ -98,7 +101,12 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
         "当前路由未绑定人格。凡是要对消息来源说出的自然语言回复，都必须先 POST 到普通回复 API，由 RabiRoute 投递到对应消息管道；不能只在 Codex 线程里写最终文本。",
         "不要扮演角色，也不要把当前 Codex 可见最终文本当成已经发回消息端。"
       ]
-    : outputAdapter === "fennenote" && routeKind === "voice_transcript"
+    : routeKind === "rabilink"
+      ? [
+          "本次来自 RabiLink 手机桥，不能只在 Codex 线程里写最终文本。",
+          "如果判断需要回应，请把要写回手机和公网 Relay 的短句 POST 到普通回复 API；RabiRoute 会把它放入 RabiLink 回包队列。"
+        ]
+      : outputAdapter === "fennenote" && routeKind === "voice_transcript"
       ? [
           "本次是语音对话回复，不能只在 Codex 线程里写最终文本。",
           "如果判断需要回应，请把要播出的短句 POST 到普通回复 API；RabiRoute 会转给 FenneNote/OumuQ 播放，并写入转写预览。"
@@ -267,6 +275,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "manual_trigger") return "手动触发提醒";
   if (routeKind === "role_panel_message") return "角色面板消息";
   if (routeKind === "voice_transcript") return "语音转写提醒";
+  if (routeKind === "rabilink") return "RabiLink 手机桥消息";
   if (routeKind === "wecom_message") return "企业微信群聊消息提醒";
   return "RabiRoute 消息提醒";
 }
@@ -302,7 +311,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const isWeCom = isWeComRecord(record);
   const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
   const wecomGroupId = isWeCom ? record.groupId ?? record.chatId ?? record.conversationId : undefined;
-  const targetType = isGroup || isWeCom ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isRolePanel ? "role_panel" : isVoiceTranscript ? "voice_transcript" : "private";
+  const targetType = isGroup || isWeCom ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isRolePanel ? "role_panel" : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
   const pipeline = outputPipelineForDecision(decision);
   const replyApiPath = "/api/agent/replies";
   const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
@@ -349,7 +358,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     groupId: isGroup ? record.groupId : wecomGroupId,
     targetType,
     targetId: isWeCom ? wecomGroupId : targetId,
-    messageTarget: isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? `语音转写 ${targetId}` : `私聊 ${targetId}`,
+    messageTarget: isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText: decision.routeText,

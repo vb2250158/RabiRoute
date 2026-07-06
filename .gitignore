@@ -42,6 +42,9 @@ examples/rabi-link-vela-probe/node_modules/
 examples/rabi-link-vela-probe/build/
 examples/rabi-link-vela-probe/dist/
 examples/rabi-link-vela-probe/*.log
+# Legacy local probe workspaces kept out of public submissions.
+examples/android-band-probe/
+examples/vela-band-probe/
 assets/reference-cache/
 /plugin-adapters/xiaoai-rabiroute/vendor/open-xiaoai/
 /plugin-adapters/xiaoai-rabiroute/downloads/

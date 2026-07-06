@@ -103,7 +103,7 @@ export type WeComMessageRecord = {
 export type CodexNotificationRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "wecom_message";
+  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wecom_message";
   text: string;
 };
 

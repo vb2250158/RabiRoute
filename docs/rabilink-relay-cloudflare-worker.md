@@ -48,7 +48,8 @@ Worker 会代理这些路径：
 /openapi/rokid-rabilink-plugin.json
 /openapi/rokid-rabilink-plugin.manual-auth.json
 /rokid/rabilink/tasks
-/rokid/rabilink/messages
+/rokid/rabilink/tasks/<taskId>/messages
+/rokid/rabilink/messages（兼容/调试）
 /phone/tasks/*
 ```
 
@@ -150,7 +151,7 @@ $env:RABILINK_RELAY_TOKEN = "填入当前 Relay token"
 - `/health` 返回 `ok: true`
 - OpenAPI 返回 `info.title = RabiLinkMessage`
 - OpenAPI 的 `servers[0].url` 是 Worker 自己的 `https://...workers.dev`
-- 未带 token 访问 `/rokid/rabilink/messages` 返回 401
-- 带 token 的队列烟测能提交任务、模拟手机完成任务、从 Worker 拉到下行消息
+- 未带 token 访问 `/rokid/rabilink/tasks/<taskId>/messages` 返回 401
+- 带 token 的队列烟测能提交任务、模拟手机完成任务、按 `taskId` 从 Worker 拉到本轮消息，拉空后 `shouldContinue=false`
 
 如果 Worker 通而 Rizon 不通，再查插件鉴权和工具配置；不要回头把 `old-relay.example.com` 当成可用域名测试。

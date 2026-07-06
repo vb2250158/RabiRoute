@@ -16,7 +16,11 @@ import com.rabi.link.MainActivity
 import com.rabi.link.R
 import com.rabiroute.sdk.RabiInstance
 import com.rabiroute.sdk.RabiRouteSdk
+import java.io.File
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class RabiLinkRelayBridgeService : Service() {
@@ -55,15 +59,18 @@ class RabiLinkRelayBridgeService : Service() {
         val instance = instanceFromIntent(intent)
         if (relayBaseUrl.isBlank() || token.isBlank() || routeId.isBlank() || callbackUrl.isBlank() || instance == null) {
             Log.e(TAG, "缺少启动参数，无法启动 RabiLink Relay 桥。")
+            emitBridgeLog("缺少启动参数，无法启动 RabiLink Relay 桥。", running = false)
             stopSelf()
             return
         }
 
         running = true
+        emitBridgeLog("RabiLink Relay 桥已绑定：route=$routeId callback=$callbackUrl", running = true)
         bridgeThread = Thread {
-            Log.i(TAG, "RabiLink Relay 桥已启动：relay=$relayBaseUrl route=$routeId callback=$callbackUrl")
+            emitBridgeLog("RabiLink Relay 桥已启动：relay=$relayBaseUrl route=$routeId callback=$callbackUrl", running = true)
             while (running) {
                 try {
+                    emitBridgeLog("等待公网 Relay 任务...")
                     val tasks = sdk.claimRabiLinkRelayTasks(
                         relayBaseUrl = relayBaseUrl,
                         token = token,
@@ -77,10 +84,11 @@ class RabiLinkRelayBridgeService : Service() {
                     }
                 } catch (error: Throwable) {
                     Log.e(TAG, "RabiLink Relay 桥异常：${error.message ?: error}", error)
+                    emitBridgeLog("RabiLink Relay 桥异常：${error.message ?: error}", running = running)
                     sleepQuietly(1200)
                 }
             }
-            Log.i(TAG, "RabiLink Relay 桥已停止。")
+            emitBridgeLog("RabiLink Relay 桥已停止。", running = false)
         }.apply {
             name = "RabiLinkRelayBridgeService"
             start()
@@ -91,6 +99,7 @@ class RabiLinkRelayBridgeService : Service() {
         running = false
         bridgeThread?.interrupt()
         bridgeThread = null
+        emitBridgeLog("正在停止 RabiLink Relay 桥...", running = false)
     }
 
     private fun handleRelayTask(
@@ -126,13 +135,14 @@ class RabiLinkRelayBridgeService : Service() {
         taskId: String,
         text: String
     ) {
-        Log.i(TAG, "取到公网任务：$taskId")
+        emitBridgeLog("取到公网任务：$taskId")
         val baselineReplies = sdk.getRabiLinkReplies(callbackUrl, routeId, 1)
         var afterReplyId = lastReplyId(baselineReplies)
         val inbound = sdk.deliverRabiLinkMessage(callbackUrl, text, routeId)
-        Log.i(TAG, "已投递到 RabiRoute：messageId=${inbound.messageId} ok=${inbound.ok}")
+        emitBridgeLog("已投递到 RabiRoute：messageId=${inbound.messageId} ok=${inbound.ok}")
         if (!inbound.ok || inbound.messageId.isBlank()) {
             sdk.finishRabiLinkRelayTask(relayBaseUrl, token, taskId, "手机桥投递到 RabiRoute 失败。", ok = false)
+            emitBridgeLog("公网任务失败：手机桥投递到 RabiRoute 失败 task=$taskId")
             return
         }
 
@@ -153,12 +163,12 @@ class RabiLinkRelayBridgeService : Service() {
                     sdk.appendRabiLinkRelayMessage(relayBaseUrl, token, taskId, replyText, final = false)
                     appendedCount += 1
                     lastAppendAt = System.currentTimeMillis()
-                    Log.i(TAG, "已写回公网 Relay：$replyId")
+                    emitBridgeLog("已写回公网 Relay：$replyId")
                 }
             }
             if (appendedCount > 0 && System.currentTimeMillis() - lastAppendAt > 2500) {
                 sdk.finishRabiLinkRelayTask(relayBaseUrl, token, taskId, ok = true)
-                Log.i(TAG, "公网任务完成：$taskId replies=$appendedCount")
+                emitBridgeLog("公网任务完成：$taskId replies=$appendedCount")
                 return
             }
             sleepQuietly(250)
@@ -166,11 +176,29 @@ class RabiLinkRelayBridgeService : Service() {
 
         if (appendedCount > 0) {
             sdk.finishRabiLinkRelayTask(relayBaseUrl, token, taskId, ok = true)
-            Log.i(TAG, "公网任务超时结束：$taskId replies=$appendedCount")
+            emitBridgeLog("公网任务超时结束：$taskId replies=$appendedCount")
         } else {
             sdk.finishRabiLinkRelayTask(relayBaseUrl, token, taskId, "电脑端暂时没有返回回复。", ok = false)
-            Log.w(TAG, "公网任务无回包：$taskId")
+            emitBridgeLog("公网任务无回包：$taskId")
         }
+    }
+
+    private fun emitBridgeLog(message: String, running: Boolean = this.running) {
+        Log.i(TAG, message)
+        val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        val line = "[$time] $message"
+        runCatching {
+            val file = File(filesDir, LOG_FILE_NAME)
+            file.appendText("$line\n")
+            if (file.length() > 96 * 1024) {
+                file.writeText(file.readText().takeLast(48 * 1024))
+            }
+        }
+        sendBroadcast(Intent(ACTION_BRIDGE_LOG).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_LOG_MESSAGE, line)
+            putExtra(EXTRA_RUNNING, running)
+        })
     }
 
     private fun startAsForeground() {
@@ -273,6 +301,10 @@ class RabiLinkRelayBridgeService : Service() {
         const val PREFS_NAME = "rabi_link_relay_bridge"
         const val PREF_ENABLED = "enabled"
         const val ACTION_STOP = "com.rabi.link.modules.rabiroute.STOP_RELAY_BRIDGE"
+        const val ACTION_BRIDGE_LOG = "com.rabi.link.modules.rabiroute.BRIDGE_LOG"
+        const val EXTRA_LOG_MESSAGE = "logMessage"
+        const val EXTRA_RUNNING = "running"
+        const val LOG_FILE_NAME = "rabilink-relay-bridge.log"
         const val EXTRA_RELAY_BASE_URL = "relayBaseUrl"
         const val EXTRA_TOKEN = "token"
         const val EXTRA_ROUTE_ID = "routeId"

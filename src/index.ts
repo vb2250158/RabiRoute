@@ -46,6 +46,7 @@ function parseReplayRouteKind(value: string | undefined): ForwardRouteKind | und
     || value === "manual_trigger"
     || value === "role_panel_message"
     || value === "voice_transcript"
+    || value === "rabilink"
     ? value
     : undefined;
 }

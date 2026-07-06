@@ -118,6 +118,9 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   if (routeKind === "voice_transcript") {
     return "voice_transcript";
   }
+  if (routeKind === "rabilink") {
+    return "rabilink";
+  }
   if (routeKind === "wecom_message") {
     return "wecom_message";
   }
