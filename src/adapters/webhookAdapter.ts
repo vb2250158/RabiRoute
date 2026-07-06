@@ -86,6 +86,46 @@ type WebhookAdapterProfile = {
 
 const statusPath = path.join(config.dataDir, "gateway-status.json");
 
+function readJsonlTail(filePath: string, limit: number, afterId: string): Record<string, unknown>[] {
+  if (!fs.existsSync(filePath)) return [];
+  const rows = fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((item): item is Record<string, unknown> => Boolean(item));
+  const afterIndex = afterId ? rows.findIndex((item) => String(item.id ?? "") === afterId) : -1;
+  const selected = afterIndex >= 0 ? rows.slice(afterIndex + 1) : rows.slice(-limit);
+  return selected.slice(-limit);
+}
+
+function localRabiLinkReplies(requestUrl: URL): Record<string, unknown> {
+  const limit = Math.max(1, Math.min(100, Number(requestUrl.searchParams.get("limit") || 20) || 20));
+  const afterId = String(requestUrl.searchParams.get("afterId") || requestUrl.searchParams.get("after") || "");
+  const filePath = path.join(config.dataDir, "rabilink-replies.jsonl");
+  const replies = readJsonlTail(filePath, limit, afterId);
+  const cursor = String(replies.at(-1)?.id ?? "");
+  return {
+    ok: true,
+    code: 0,
+    data: {
+      file: path.relative(process.cwd(), filePath).replace(/\\/g, "/"),
+      replies,
+      cursor,
+      nextCursor: cursor
+    },
+    replies,
+    cursor,
+    nextCursor: cursor
+  };
+}
+
 function readGatewayStatus(): GatewayStatus {
   if (!fs.existsSync(statusPath)) {
     return {};
@@ -310,7 +350,13 @@ export function createWebhookAdapter(profile = defaultWebhookProfile()): Message
     start() {
       const webhookPath = normalizeWebhookPath(profile.path);
       const server = http.createServer(async (request, response) => {
-        const requestPath = request.url?.split("?", 1)[0];
+        const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+        const requestPath = requestUrl.pathname;
+        if (profile.type === "rabilink" && request.method === "GET" && requestPath === `${webhookPath}/replies`) {
+          response.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify(localRabiLinkReplies(requestUrl)));
+          return;
+        }
+
         if (request.method === "GET" && requestPath === webhookPath) {
           response.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({
             ok: true,

@@ -96,14 +96,38 @@ class RabiLinkRelayBridgeService : Service() {
     private fun handleRelayTask(
         relayBaseUrl: String,
         token: String,
-        instance: RabiInstance,
+        _instance: RabiInstance,
+        routeId: String,
+        callbackUrl: String,
+        taskId: String,
+        text: String
+    ) {
+        try {
+            handleRelayTaskUnchecked(relayBaseUrl, token, routeId, callbackUrl, taskId, text)
+        } catch (error: Throwable) {
+            Log.e(TAG, "公网任务处理异常：$taskId ${error.message ?: error}", error)
+            runCatching {
+                sdk.finishRabiLinkRelayTask(
+                    relayBaseUrl,
+                    token,
+                    taskId,
+                    "手机桥处理异常：${error.message ?: error}",
+                    ok = false
+                )
+            }
+        }
+    }
+
+    private fun handleRelayTaskUnchecked(
+        relayBaseUrl: String,
+        token: String,
         routeId: String,
         callbackUrl: String,
         taskId: String,
         text: String
     ) {
         Log.i(TAG, "取到公网任务：$taskId")
-        val baselineReplies = sdk.getRabiLinkReplies(instance, routeId, 1)
+        val baselineReplies = sdk.getRabiLinkReplies(callbackUrl, routeId, 1)
         var afterReplyId = lastReplyId(baselineReplies)
         val inbound = sdk.deliverRabiLinkMessage(callbackUrl, text, routeId)
         Log.i(TAG, "已投递到 RabiRoute：messageId=${inbound.messageId} ok=${inbound.ok}")
@@ -116,7 +140,7 @@ class RabiLinkRelayBridgeService : Service() {
         val startedAt = System.currentTimeMillis()
         var lastAppendAt = 0L
         while (running && System.currentTimeMillis() - startedAt < 60000) {
-            val repliesJson = sdk.getRabiLinkReplies(instance, routeId, 50, afterReplyId)
+            val repliesJson = sdk.getRabiLinkReplies(callbackUrl, routeId, 50, afterReplyId)
             val replies = repliesJson.optJSONArray("replies")
             if (replies != null) {
                 for (index in 0 until replies.length()) {

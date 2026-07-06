@@ -758,14 +758,38 @@ class RabiRouteSdkProbeActivity : Activity() {
     private fun handleRelayTask(
         relayBaseUrl: String,
         token: String,
-        instance: RabiInstance,
+        _instance: RabiInstance,
+        routeId: String,
+        callbackUrl: String,
+        taskId: String,
+        text: String
+    ) {
+        try {
+            handleRelayTaskUnchecked(relayBaseUrl, token, routeId, callbackUrl, taskId, text)
+        } catch (error: Throwable) {
+            appendFromBackground("公网任务处理异常：${error.message ?: error}")
+            runCatching {
+                sdk.finishRabiLinkRelayTask(
+                    relayBaseUrl,
+                    token,
+                    taskId,
+                    "手机桥处理异常：${error.message ?: error}",
+                    ok = false
+                )
+            }
+        }
+    }
+
+    private fun handleRelayTaskUnchecked(
+        relayBaseUrl: String,
+        token: String,
         routeId: String,
         callbackUrl: String,
         taskId: String,
         text: String
     ) {
         appendFromBackground("取到公网任务：$taskId")
-        val baselineReplies = sdk.getRabiLinkReplies(instance, routeId, 1)
+        val baselineReplies = sdk.getRabiLinkReplies(callbackUrl, routeId, 1)
         var afterReplyId = lastReplyId(baselineReplies)
         val inbound = sdk.deliverRabiLinkMessage(callbackUrl, text, routeId)
         appendFromBackground("已投递到本机 RabiRoute：messageId=${inbound.messageId} ok=${inbound.ok}")
@@ -778,7 +802,7 @@ class RabiRouteSdkProbeActivity : Activity() {
         val startedAt = System.currentTimeMillis()
         var lastAppendAt = 0L
         while (relayBridgeRunning && System.currentTimeMillis() - startedAt < 60000) {
-            val repliesJson = sdk.getRabiLinkReplies(instance, routeId, 50, afterReplyId)
+            val repliesJson = sdk.getRabiLinkReplies(callbackUrl, routeId, 50, afterReplyId)
             val replies = repliesJson.optJSONArray("replies")
             if (replies != null) {
                 for (index in 0 until replies.length()) {

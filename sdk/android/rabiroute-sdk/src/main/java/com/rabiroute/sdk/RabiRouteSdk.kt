@@ -243,6 +243,16 @@ class RabiRouteSdk(
         return getJson(url).getJSONObject("data")
     }
 
+    fun getRabiLinkReplies(callbackUrl: String, routeId: String, limit: Int = 10, afterId: String = ""): JSONObject {
+        val safeLimit = limit.coerceIn(1, 100)
+        val trimmed = callbackUrl.trimEnd('/')
+        val base = if (trimmed.endsWith("/rabilink")) trimmed else "$trimmed/rabilink"
+        val after = if (afterId.isBlank()) "" else "&afterId=${encodeQuery(afterId)}"
+        val route = if (routeId.isBlank()) "" else "&routeId=${encodeQuery(routeId)}"
+        val json = getJson("$base/replies?limit=$safeLimit$route$after")
+        return json.optJSONObject("data") ?: json
+    }
+
     fun runRabiLinkBidirectionalSmoke(instance: RabiInstance, routeId: String, callbackUrl: String): RabiLinkBidirectionalResult {
         val inbound = deliverRabiLinkMessage(
             callbackUrl,
