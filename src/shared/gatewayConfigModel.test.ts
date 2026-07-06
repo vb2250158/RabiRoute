@@ -18,13 +18,17 @@ import {
   type GatewayDefinition
 } from "./gatewayConfigModel.js";
 
+function localUrl(port: number, pathname = ""): string {
+  return `http://127.0.0.1:${port}${pathname}`;
+}
+
 function gateway(patch: Partial<GatewayDefinition> = {}): GatewayDefinition {
   return {
     id: "Rabi__main",
     enabled: true,
     messageAdapters: ["napcat"],
     gatewayPort: 8789,
-    napcatHttpUrl: "http://127.0.0.1:3000",
+    napcatHttpUrl: localUrl(3000),
     agentRoleId: "Rabi",
     notificationRules: [{
       id: "direct",
@@ -96,6 +100,40 @@ test("default gateway agent adapter uses codex", () => {
   assert.deepEqual(normalizeGatewayDefinition(gateway()).agentAdapters, ["codex"]);
 });
 
+test("persona-free gateways get default message adapter rules", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    id: "Rabi__plain",
+    agentRoleId: "",
+    messageAdapters: ["napcat", "fennenote"],
+    notificationRules: []
+  }));
+
+  assert.equal(normalized.id, "plain");
+  assert.equal(normalized.agentRoleId, "");
+  assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["default-napcat", "default-fennenote"]);
+  assert.deepEqual(normalized.notificationRules?.[0]?.routeKinds, ["private", "direct_at", "direct_reply", "indirect_reply"]);
+  assert.deepEqual(normalized.notificationRules?.[1]?.routeKinds, ["voice_transcript"]);
+  assert.deepEqual(normalized.roleNotificationRules, {});
+  assert.equal(normalized.routeProfiles?.[0]?.agentRoleId, "");
+});
+test("RabiLink is a named webhook-like message adapter", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    id: "Rabi__rabilink",
+    agentRoleId: "",
+    messageAdapters: ["rabilink"],
+    rabiLinkWebhookPort: 8794,
+    rabiLinkWebhookPath: "/rabilink",
+    notificationRules: []
+  }));
+
+  assert.deepEqual(gatewayAdapterTypes(normalized), ["rabilink"]);
+  assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["default-rabilink"]);
+  assert.deepEqual(normalized.notificationRules?.[0]?.routeKinds, ["voice_transcript"]);
+
+  const claims = collectGatewayPortClaims([normalized], { managerPort: 8790 });
+  assert.equal(claims.find(claim => claim.kind === "rabilink-webhook")?.port, 8794);
+});
+
 test("legacy message adapter target restrictions are ignored", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     messageAdapters: ["napcat"],
@@ -123,40 +161,52 @@ test("legacy disabled adapter list backfills policy input state", () => {
 test("NapCat instances receive defaults and unique ids", () => {
   const instances = normalizeNapCatInstances(gateway({
     napcatInstances: [
-      { id: "bot", gatewayPort: 8791, httpUrl: "http://127.0.0.1:3001" },
-      { id: "bot", gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002" }
+      { id: "bot", gatewayPort: 8791, httpUrl: localUrl(3001) },
+      { id: "bot", gatewayPort: 8792, httpUrl: localUrl(3002) }
     ]
   }));
   assert.equal(instances[0].id, "bot");
   assert.equal(instances[1].id, "bot-2");
-  assert.equal(instances[0].webuiUrl, "http://127.0.0.1:6099/webui");
+  assert.equal(instances[0].webuiUrl, localUrl(6099, "/webui"));
+});
+
+test("legacy NapCat endpoint fields do not create a runnable default instance", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    gatewayPort: 8791,
+    napcatHttpUrl: localUrl(3001),
+    napcatWebuiUrl: localUrl(6099, "/webui")
+  }));
+
+  assert.deepEqual(normalized.napcatInstances, []);
+  assert.equal(normalized.gatewayPort, 8791);
+  assert.equal(normalized.napcatHttpUrl, localUrl(3001));
 });
 
 test("NapCat primary resolution chooses the first enabled normalized instance", () => {
   const resolved = normalizeGatewayNapCatConfig(gateway({
     gatewayPort: 8791,
-    napcatHttpUrl: "http://127.0.0.1:3001",
+    napcatHttpUrl: localUrl(3001),
     napcatInstances: [
-      { id: "off", enabled: false, gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002" },
-      { id: "on", gatewayPort: 8793, httpUrl: "http://127.0.0.1:3003", accessToken: "bot-token" }
+      { id: "off", enabled: false, gatewayPort: 8792, httpUrl: localUrl(3002) },
+      { id: "on", gatewayPort: 8793, httpUrl: localUrl(3003), accessToken: "bot-token" }
     ]
   }));
 
   assert.equal(resolved.primaryIndex, 1);
   assert.equal(resolved.primary?.id, "on");
   assert.equal(resolved.instances[0].enabled, false);
-  assert.equal(resolved.instances[1].webuiUrl, "http://127.0.0.1:6099/webui");
+  assert.equal(resolved.instances[1].webuiUrl, localUrl(6099, "/webui"));
 });
 
 test("NapCat primary sync backfills gateway fields and clears stale tokens", () => {
   const definition = gateway({
     gatewayPort: 8791,
-    napcatHttpUrl: "http://127.0.0.1:3001",
+    napcatHttpUrl: localUrl(3001),
     napcatAccessToken: "stale-access",
     napcatWebuiToken: "stale-webui",
     napcatInstances: [
-      { id: "old", enabled: false, gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002", accessToken: "old-access", webuiToken: "old-webui" },
-      { id: "primary", gatewayPort: 8793, httpUrl: "http://127.0.0.1:3003", webuiUrl: "http://127.0.0.1:6103/webui", accessToken: "", webuiToken: "" }
+      { id: "old", enabled: false, gatewayPort: 8792, httpUrl: localUrl(3002), accessToken: "old-access", webuiToken: "old-webui" },
+      { id: "primary", gatewayPort: 8793, httpUrl: localUrl(3003), webuiUrl: localUrl(6103, "/webui"), accessToken: "", webuiToken: "" }
     ]
   });
 
@@ -164,8 +214,8 @@ test("NapCat primary sync backfills gateway fields and clears stale tokens", () 
 
   assert.equal(resolved.primary?.id, "primary");
   assert.equal(definition.gatewayPort, 8793);
-  assert.equal(definition.napcatHttpUrl, "http://127.0.0.1:3003");
-  assert.equal(definition.napcatWebuiUrl, "http://127.0.0.1:6103/webui");
+  assert.equal(definition.napcatHttpUrl, localUrl(3003));
+  assert.equal(definition.napcatWebuiUrl, localUrl(6103, "/webui"));
   assert.equal(definition.napcatAccessToken, "");
   assert.equal(definition.napcatWebuiToken, "");
 });
@@ -173,8 +223,8 @@ test("NapCat primary sync backfills gateway fields and clears stale tokens", () 
 test("NapCat primary resolution falls back to the first instance when all are disabled", () => {
   const instances = normalizeNapCatInstances(gateway({
     napcatInstances: [
-      { id: "a", enabled: false, gatewayPort: 8791, httpUrl: "http://127.0.0.1:3001" },
-      { id: "b", enabled: false, gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002" }
+      { id: "a", enabled: false, gatewayPort: 8791, httpUrl: localUrl(3001) },
+      { id: "b", enabled: false, gatewayPort: 8792, httpUrl: localUrl(3002) }
     ]
   }));
 
@@ -186,7 +236,7 @@ test("NapCat primary resolution falls back to the first instance when all are di
 
 test("NapCat invalid ports are rejected", () => {
   assert.throws(
-    () => normalizeNapCatInstances(gateway({ napcatInstances: [{ id: "bad", gatewayPort: 70000, httpUrl: "http://127.0.0.1:3000" }] })),
+    () => normalizeNapCatInstances(gateway({ napcatInstances: [{ id: "bad", gatewayPort: 70000, httpUrl: localUrl(3000) }] })),
     /Port must be an integer/
   );
 });
@@ -204,8 +254,8 @@ test("auto assignment allocates unique NapCat instance ports and syncs primary",
       id: "Rabi__a",
       gatewayPort: 8790,
       napcatInstances: [
-        { id: "a1", gatewayPort: 8790, httpUrl: "http://127.0.0.1:3000", webuiUrl: "http://127.0.0.1:6099/webui", accessToken: "a1" },
-        { id: "a2", gatewayPort: 8790, httpUrl: "http://127.0.0.1:3000", webuiUrl: "http://127.0.0.1:6100/webui", accessToken: "a2" }
+        { id: "a1", gatewayPort: 8790, httpUrl: localUrl(3000), webuiUrl: localUrl(6099, "/webui"), accessToken: "a1" },
+        { id: "a2", gatewayPort: 8790, httpUrl: localUrl(3000), webuiUrl: localUrl(6100, "/webui"), accessToken: "a2" }
       ]
     }),
     gateway({
@@ -214,7 +264,7 @@ test("auto assignment allocates unique NapCat instance ports and syncs primary",
       messageAdapters: ["napcat", "webhook"],
       webhookPort: 8790,
       napcatInstances: [
-        { id: "b1", gatewayPort: 8790, httpUrl: "http://127.0.0.1:3000", webuiUrl: "http://127.0.0.1:6101/webui", accessToken: "b1" }
+        { id: "b1", gatewayPort: 8790, httpUrl: localUrl(3000), webuiUrl: localUrl(6101, "/webui"), accessToken: "b1" }
       ]
     })
   ];
@@ -236,8 +286,8 @@ test("port claims expose NapCat WS and HTTP ownership", () => {
     gateway({
       id: "Rabi__a",
       napcatInstances: [
-        { id: "a1", gatewayPort: 8791, httpUrl: "http://127.0.0.1:3001" },
-        { id: "a2", enabled: false, gatewayPort: 8792, httpUrl: "http://127.0.0.1:3002" }
+        { id: "a1", gatewayPort: 8791, httpUrl: localUrl(3001) },
+        { id: "a2", enabled: false, gatewayPort: 8792, httpUrl: localUrl(3002) }
       ]
     })
   ], { managerPort: 8790 });
@@ -260,8 +310,8 @@ test("port conflicts are detected across gateway, webhook and NapCat HTTP ports"
 
   assert.throws(
     () => validateGatewayPortConflicts([
-      gateway({ id: "Rabi__a", gatewayPort: 8791, napcatInstances: [{ id: "a", gatewayPort: 8791, httpUrl: "http://127.0.0.1:3000" }] }),
-      gateway({ id: "Rabi__b", gatewayPort: 8792, napcatInstances: [{ id: "b", gatewayPort: 8792, httpUrl: "http://127.0.0.1:3000" }] })
+      gateway({ id: "Rabi__a", gatewayPort: 8791, napcatInstances: [{ id: "a", gatewayPort: 8791, httpUrl: localUrl(3000) }] }),
+      gateway({ id: "Rabi__b", gatewayPort: 8792, napcatInstances: [{ id: "b", gatewayPort: 8792, httpUrl: localUrl(3000) }] })
     ]),
     /NapCat HTTP/
   );
@@ -327,6 +377,7 @@ test("legacy role panel persona rules are canonicalized", () => {
     enabled: true,
     routeKinds: ["role_panel_message"],
     targetGroupId: "",
+    allowedSpeakerNames: [],
     regex: "",
     schedules: undefined,
     template: "a\nb"

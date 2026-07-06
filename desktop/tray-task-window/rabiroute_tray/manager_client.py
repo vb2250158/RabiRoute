@@ -40,13 +40,23 @@ class RolePanelSendResult:
 
 
 class ManagerClient:
-    def __init__(self, manager_url: str = "http://127.0.0.1:8790", timeout_seconds: float = 1.5) -> None:
+    def __init__(self, manager_url: str = "http://127.0.0.1:8790", timeout_seconds: float = 3.0) -> None:
         self.manager_url = manager_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
 
     def snapshot(self) -> ManagerSnapshot:
         try:
             meta = self._get_json("/meta")
+        except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
+            return ManagerSnapshot(
+                connected=False,
+                manager_url=self.manager_url,
+                meta={},
+                gateways=[],
+                error=str(error),
+            )
+
+        try:
             gateway_payload = self._get_json("/gateways")
             manager_rows = gateway_payload.get("data", {}).get("manager", [])
             gateways = manager_rows if isinstance(manager_rows, list) else []
@@ -58,11 +68,11 @@ class ManagerClient:
             )
         except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
             return ManagerSnapshot(
-                connected=False,
+                connected=True,
                 manager_url=self.manager_url,
-                meta={},
+                meta=meta if isinstance(meta, dict) else {},
                 gateways=[],
-                error=str(error),
+                error=f"gateway status unavailable: {error}",
             )
 
     def shutdown(self) -> bool:

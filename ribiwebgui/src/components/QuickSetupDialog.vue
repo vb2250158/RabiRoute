@@ -19,9 +19,9 @@ const activeStep = ref(1);
 const form = reactive({
   adapters: ["napcat"] as MessageAdapterType[],
   agentAdapters: ["codex"] as AgentAdapterType[],
-  agentRoleId: "Rabi",
+  agentRoleId: "",
   agentModel: "",
-  codexThreadName: "QQ 消息监听",
+  codexThreadName: "",
   codexCwd: "",
   copilotCliBin: "",
   copilotCwd: "",
@@ -42,6 +42,9 @@ const form = reactive({
   fenneNoteWebhookPath: "/fennenote",
   xiaoaiWebhookPort: 8790,
   xiaoaiWebhookPath: "/xiaoai",
+  rabiLinkWebhookPort: 8790,
+  rabiLinkWebhookPath: "/rabilink",
+  rabiLinkWebhookHost: "0.0.0.0",
   wecomBotId: "",
   wecomBotSecret: "",
   wecomWsUrl: ""
@@ -54,6 +57,7 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
   { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "桌面语音笔记转写入口", icon: "mdi-note-edit-outline" },
   { type: "xiaoai", title: "小米音箱 / 小爱", note: "小爱音箱语音转写入口", icon: "mdi-speaker-wireless" },
+  { type: "rabilink", title: "RabiLink / 手机桥", note: "手机端集成管理和 Rokid 文本转发入口", icon: "mdi-cellphone-link" },
   { type: "webhook", title: "通用 Webhook", note: "没有专用消息端时的通用 POST 兜底入口", icon: "mdi-webhook" }
 ];
 
@@ -119,7 +123,12 @@ async function runAgentScan(): Promise<void> {
   }
 }
 
+const runtime = computed(() => store.selectedRuntime);
 const selectedAgent = computed<AgentAdapterType>(() => form.agentAdapters[0] ?? "codex");
+const roleOptions = computed(() => [
+  { title: "不配置人格", value: "" },
+  ...((runtime.value.roleInfo?.options || []).map(role => ({ title: role.label || role.value, value: role.value })))
+]);
 const agentNeedsCodexProject = computed(() => selectedAgent.value === "codex");
 const agentNeedsCopilotProject = computed(() => selectedAgent.value === "copilotCli");
 const agentNeedsAstrbotEndpoint = computed(() => selectedAgent.value === "astrbot");
@@ -217,6 +226,18 @@ function currentProject(): string {
   return agentNeedsCopilotProject.value ? form.copilotCwd : form.codexCwd;
 }
 
+function fallbackCodexThreadName(): string {
+  const gateway = store.selectedGateway;
+  if (!gateway) return "RabiRoute";
+  return gateway.routeName || gateway.name || store.configNameFor(gateway) || gateway.id || "RabiRoute";
+}
+
+function codexBindingSummary(): string {
+  const project = form.codexCwd || "RabiRoute 根目录";
+  const thread = form.codexThreadName || `自动：${fallbackCodexThreadName()}`;
+  return `${project} / ${thread}`;
+}
+
 function agentPrimaryLabel(): string {
   if (agentNeedsAstrbotEndpoint.value) return "AstrBot 地址/项目";
   if (agentNeedsMarvisApp.value) return "应用 ID";
@@ -234,6 +255,7 @@ function agentSessionSummary(): string {
     return astrbotSessionItems().find(session => session.value === form.astrbotSessionId)?.title || "未选择，使用插件默认管线";
   }
   if (agentNeedsMarvisApp.value) return "不绑定会话";
+  if (selectedAgent.value === "codex") return form.codexThreadName || `自动：${fallbackCodexThreadName()}`;
   return form.codexThreadName || "未填写";
 }
 
@@ -314,19 +336,45 @@ function selectedWebhookAdapters(): MessageAdapterType[] {
 function webhookPortFor(type: MessageAdapterType): number {
   if (type === "fennenote") return Number(form.fenneNoteWebhookPort || form.webhookPort || form.gatewayPort || 8790);
   if (type === "xiaoai") return Number(form.xiaoaiWebhookPort || form.webhookPort || form.gatewayPort || 8790);
+  if (type === "rabilink") return Number(form.rabiLinkWebhookPort || form.webhookPort || form.gatewayPort || 8790);
   return Number(form.webhookPort || form.gatewayPort || 8790);
 }
 
 function webhookPathFor(type: MessageAdapterType): string {
   if (type === "fennenote") return form.fenneNoteWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "xiaoai") return form.xiaoaiWebhookPath || adapterDefaultWebhookPath(type);
+  if (type === "rabilink") return form.rabiLinkWebhookPath || adapterDefaultWebhookPath(type);
   return form.webhookPath || adapterDefaultWebhookPath(type);
+}
+
+function webhookHostFor(type: MessageAdapterType): string {
+  if (type === "rabilink") return form.rabiLinkWebhookHost || "0.0.0.0";
+  return "127.0.0.1";
+}
+
+function isUnspecifiedHttpHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]";
+}
+
+function localCallbackHost(): string {
+  const browserHost = window.location.hostname;
+  if (browserHost && !isUnspecifiedHttpHost(browserHost) && browserHost !== "localhost" && !browserHost.startsWith("127.")) {
+    return browserHost;
+  }
+  return store.networkOptions.localAddresses?.find((item) => item.address)?.address || "127.0.0.1";
+}
+
+function callbackHostFor(type: MessageAdapterType): string {
+  const host = webhookHostFor(type);
+  return type === "rabilink" && isUnspecifiedHttpHost(host) ? localCallbackHost() : host;
 }
 
 function setWebhookPort(type: MessageAdapterType, value: unknown): void {
   const port = Number(value || 0);
   if (type === "fennenote") form.fenneNoteWebhookPort = port;
   else if (type === "xiaoai") form.xiaoaiWebhookPort = port;
+  else if (type === "rabilink") form.rabiLinkWebhookPort = port;
   else form.webhookPort = port;
 }
 
@@ -334,18 +382,35 @@ function setWebhookPath(type: MessageAdapterType, value: unknown): void {
   const path = String(value || "");
   if (type === "fennenote") form.fenneNoteWebhookPath = path;
   else if (type === "xiaoai") form.xiaoaiWebhookPath = path;
+  else if (type === "rabilink") form.rabiLinkWebhookPath = path;
   else form.webhookPath = path;
 }
 
+function setWebhookHost(type: MessageAdapterType, value: unknown): void {
+  if (type !== "rabilink") return;
+  form.rabiLinkWebhookHost = String(value || "").trim() || "0.0.0.0";
+}
+
 function webhookUrl(type: MessageAdapterType = selectedWebhookAdapter()): string {
-  return `http://127.0.0.1:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
+  return `http://${webhookHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
+}
+
+function callbackUrl(type: MessageAdapterType = selectedWebhookAdapter()): string {
+  return `http://${callbackHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
+}
+
+function webhookTestEventType(type: MessageAdapterType): string {
+  if (type === "fennenote") return "fennenote.transcript";
+  if (type === "xiaoai") return "xiaoai.transcript";
+  if (type === "rabilink") return "rabilink.message";
+  return "webhook.text";
 }
 
 function webhookCurl(type: MessageAdapterType = selectedWebhookAdapter()): string {
   const source = adapterSourceAliases(type)[0] || type;
-  return `curl -X POST "${webhookUrl(type)}" -H "content-type: application/json" -d "{\"source\":\"${source}\",\"type\":\"test\",\"message\":\"hello from RabiRoute\"}"`;
+  const eventType = webhookTestEventType(type);
+  return `curl -X POST "${callbackUrl(type)}" -H "content-type: application/json" -d "{\"source\":\"${source}\",\"type\":\"${eventType}\",\"message\":\"hello from RabiRoute\"}"`;
 }
-
 function webhookSetupHint(type: MessageAdapterType): string {
   if (type === "fennenote") {
     return "需要先安装并运行 FenneNote/芬妮笔记，再把语音转写 webhook 指到这个地址；需要播报回复时再接 OumuQ/TTS worker。";
@@ -353,11 +418,15 @@ function webhookSetupHint(type: MessageAdapterType): string {
   if (type === "xiaoai") {
     return "需要小爱桥接层：PC 侧 xiaoai-rabiroute 服务 + 音箱侧 open-xiaoai/xiaogpt/自定义桥，把语音文本转发到这个地址。";
   }
+  if (type === "rabilink") {
+    return "手机 RabiLink 作为集成管理端：配置电脑局域网地址后，可测试文本转发、查看状态，再把 Rokid/灵珠文本转给 Codex。";
+  }
   return "通用 Webhook 只适合未命名外部系统；如果来源是具体工具，建议添加对应的专用消息端。";
 }
 
 function webhookSetupDocUrl(type: MessageAdapterType): string {
   if (type === "xiaoai") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/xiaoai-integration/xiaoai-rabiroute-intercept-route.md";
+  if (type === "rabilink") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/mobile-app-webhook-integration.md";
   if (type === "fennenote") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/voice-interaction-workstation.md";
   return "https://github.com/vb2250158/RabiRoute/blob/main/docs/configuration.md";
 }
@@ -570,10 +639,10 @@ const agentReady = computed(() => {
   if (agentNeedsAstrbotEndpoint.value) return Boolean(form.astrbotUrl.trim());
   if (agentNeedsMarvisApp.value) return true;
   if (agentNeedsCopilotProject.value) return Boolean(form.codexThreadName.trim() && form.copilotCwd.trim());
-  if (agentNeedsCodexProject.value) return Boolean(form.codexThreadName.trim() && form.codexCwd.trim());
+  if (agentNeedsCodexProject.value) return true;
   return true;
 });
-const personaReady = computed(() => Boolean(form.agentRoleId.trim()));
+const personaReady = computed(() => true);
 const canSave = computed(() => messageReady.value && agentReady.value && personaReady.value);
 const completedSteps = computed(() => [messageReady.value, agentReady.value, personaReady.value].filter(Boolean).length);
 
@@ -588,14 +657,14 @@ const steps = computed(() => [
   {
     value: 2,
     title: "Agent 绑定",
-    note: currentProject() || form.codexThreadName || "选择项目目录和会话线程",
+    note: selectedAgent.value === "codex" ? codexBindingSummary() : (currentProject() || form.codexThreadName || "选择项目目录和会话线程"),
     done: agentReady.value,
     icon: "mdi-numeric-2"
   },
   {
     value: 3,
     title: "人格与保存",
-    note: form.agentRoleId || "确认默认人格",
+    note: form.agentRoleId || "不配置人格",
     done: personaReady.value,
     icon: "mdi-numeric-3"
   }
@@ -611,9 +680,9 @@ function syncFromGateway() {
   form.agentAdapters = normalizedAgentAdapters.length
     ? [...new Set(normalizedAgentAdapters)]
     : ["codex"];
-  form.agentRoleId = gateway?.agentRoleId || "Rabi";
+  form.agentRoleId = gateway?.agentRoleId || "";
   form.agentModel = gateway?.agentModel || "";
-  form.codexThreadName = gateway?.codexThreadName || "QQ 消息监听";
+  form.codexThreadName = gateway?.codexThreadName || "";
   form.codexCwd = gateway?.codexCwd || "";
   form.copilotCliBin = gateway?.copilotCliBin || "";
   form.copilotCwd = gateway?.copilotCwd || gateway?.codexCwd || "";
@@ -634,6 +703,9 @@ function syncFromGateway() {
   form.fenneNoteWebhookPath = gateway?.fenneNoteWebhookPath || "/fennenote";
   form.xiaoaiWebhookPort = Number(gateway?.xiaoaiWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);
   form.xiaoaiWebhookPath = gateway?.xiaoaiWebhookPath || "/xiaoai";
+  form.rabiLinkWebhookPort = Number(gateway?.rabiLinkWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);
+  form.rabiLinkWebhookPath = gateway?.rabiLinkWebhookPath || "/rabilink";
+  form.rabiLinkWebhookHost = gateway?.rabiLinkWebhookHost || "0.0.0.0";
   form.wecomBotId = gateway?.wecomBotId || "";
   form.wecomBotSecret = gateway?.wecomBotSecret || "";
   form.wecomWsUrl = gateway?.wecomWsUrl || "";
@@ -667,7 +739,7 @@ function goNext() {
 }
 
 async function apply() {
-  store.applyQuickSetup({ ...form });
+  store.applyQuickSetup({ ...form, agentRoleId: String(form.agentRoleId || "") });
   await store.save();
   open.value = false;
 }
@@ -881,10 +953,12 @@ async function apply() {
                     </v-alert>
                   </template>
                   <template v-for="webhookAdapter in selectedWebhookAdapters()" :key="webhookAdapter">
+                    <v-text-field v-if="webhookAdapter === 'rabilink'" :model-value="webhookHostFor(webhookAdapter)" :label="`${adapterLabel(webhookAdapter)} 监听地址`" placeholder="0.0.0.0" @update:model-value="value => setWebhookHost(webhookAdapter, value)" />
                     <v-text-field :model-value="webhookPortFor(webhookAdapter)" type="number" :label="`${adapterLabel(webhookAdapter)} 端口`" @update:model-value="value => setWebhookPort(webhookAdapter, value)" />
                     <v-text-field :model-value="webhookPathFor(webhookAdapter)" :label="`${adapterLabel(webhookAdapter)} 路径`" :placeholder="adapterDefaultWebhookPath(webhookAdapter)" @update:model-value="value => setWebhookPath(webhookAdapter, value)" />
                     <div class="quick-agent-status full-span">
-                      <div class="status-row"><span>{{ adapterLabel(webhookAdapter) }} 地址</span><b>{{ webhookUrl(webhookAdapter) }}</b></div>
+                      <div class="status-row"><span>{{ adapterLabel(webhookAdapter) }} 监听</span><b>{{ webhookUrl(webhookAdapter) }}</b></div>
+                      <div v-if="webhookAdapter === 'rabilink'" class="status-row"><span>{{ adapterLabel(webhookAdapter) }} 回调</span><b>{{ callbackUrl(webhookAdapter) }}</b></div>
                       <v-alert type="info" variant="tonal" density="compact" class="mt-2">
                         {{ webhookSetupHint(webhookAdapter) }}
                       </v-alert>
@@ -896,8 +970,11 @@ async function apply() {
                           <v-btn size="small" variant="tonal" color="secondary" prepend-icon="mdi-book-open-variant" @click="openExternalUrl(webhookSetupDocUrl(webhookAdapter))">
                             配置说明
                           </v-btn>
-                          <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText(webhookUrl(webhookAdapter), `已复制 ${adapterLabel(webhookAdapter)} 地址`)">
-                            复制地址
+                          <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText(callbackUrl(webhookAdapter), `已复制 ${adapterLabel(webhookAdapter)} 回调地址`)">
+                            复制回调
+                          </v-btn>
+                          <v-btn v-if="webhookAdapter === 'rabilink'" size="small" variant="text" prepend-icon="mdi-access-point" @click="copyText(webhookUrl(webhookAdapter), '已复制监听地址')">
+                            复制监听
                           </v-btn>
                           <v-btn size="small" variant="text" prepend-icon="mdi-console" @click="copyText(webhookCurl(webhookAdapter), '已复制 curl 示例')">
                             复制 curl
@@ -1165,8 +1242,8 @@ async function apply() {
                     :items="projectItems()"
                     class="full-span"
                     label="项目目录"
-                    placeholder="C:/Path/To/Project"
-                    hint="先选项目，再选该项目下的会话"
+                    placeholder="留空，使用 RabiRoute 根目录"
+                    hint="可不绑定项目；留空时 Codex 在 RabiRoute 根目录创建或投递"
                     persistent-hint
                   >
                     <template #append-inner>
@@ -1180,8 +1257,8 @@ async function apply() {
                     v-model="form.codexThreadName"
                     :items="sessionNames()"
                     label="会话线程名"
-                    placeholder="Rabi"
-                    hint="没有扫到时也可以手动填写"
+                    placeholder="留空，按路由名自动创建"
+                    :hint="selectedAgent === 'codex' ? `留空使用：${fallbackCodexThreadName()}` : '没有扫到时也可以手动填写'"
                     persistent-hint
                     @update:model-value="selectSession"
                   >
@@ -1206,17 +1283,27 @@ async function apply() {
               <v-window-item :value="3">
                 <div class="section-title-row">
                   <div>
-                    <div class="section-title">确认人格与配置</div>
-                    <div class="section-note">保存后会写入与旧 WebGUI 相同的 gateway 数据结构。</div>
+                    <div class="section-title">人格可选与配置确认</div>
+                    <div class="section-note">不配置人格时，只按消息入口默认模板把来源和回传 API 投递给 Agent。</div>
                   </div>
                 </div>
-                <v-text-field v-model="form.agentRoleId" label="默认人格 ID" class="mb-4" />
+                <v-combobox
+                  v-model="form.agentRoleId"
+                  :items="roleOptions"
+                  item-title="title"
+                  item-value="value"
+                  :return-object="false"
+                  label="默认人格 ID"
+                  placeholder="留空，不配置人格"
+                  clearable
+                  class="mb-4"
+                />
                 <div class="quick-review">
                   <div class="status-row"><span>消息入口</span><b>{{ form.adapters.map(adapterLabel).join(" + ") }}</b></div>
                   <div class="status-row"><span>Agent</span><b>{{ quickAgentChoices.find(agent => agent.type === selectedAgent)?.title || selectedAgent }}</b></div>
                   <div class="status-row"><span>{{ agentPrimaryLabel() }}</span><b>{{ currentProject() || "未填写" }}</b></div>
                   <div class="status-row"><span>{{ agentSessionLabel() }}</span><b>{{ agentSessionSummary() }}</b></div>
-                  <div class="status-row"><span>人格</span><b>{{ form.agentRoleId || "未填写" }}</b></div>
+                  <div class="status-row"><span>人格</span><b>{{ form.agentRoleId || "不配置人格" }}</b></div>
                 </div>
                 <v-alert v-if="!canSave" class="mt-4" type="warning" variant="tonal">
                   还有必要字段没有填写，请回到对应步骤补全。

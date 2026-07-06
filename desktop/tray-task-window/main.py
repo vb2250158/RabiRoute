@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +31,47 @@ def _manager_alive(manager_url: str) -> bool:
         return False
 
 
+def _append_startup_log(project_root: Path, message: str) -> None:
+    try:
+        logs_dir = project_root / "data" / "route" / "default-main" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        with (logs_dir / "tray-startup.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
+def _node_executable(project_root: Path) -> tuple[str, str]:
+    env_node = os.environ.get("RABIROUTE_NODE")
+    executable_name = "node.exe" if sys.platform == "win32" else "node"
+    path_node = shutil.which("node")
+    candidates: list[tuple[str, Path | None]] = [
+        ("RABIROUTE_NODE", Path(env_node) if env_node else None),
+        ("PATH", Path(path_node) if path_node else None),
+        ("project portable node", project_root / executable_name),
+        ("project .node", project_root / ".node" / executable_name),
+        ("project tools/node", project_root / "tools" / "node" / executable_name),
+        ("project tools/nodejs", project_root / "tools" / "nodejs" / executable_name),
+        ("workspace tools/node", project_root.parent / "tools" / "node" / executable_name),
+        ("workspace tools/nodejs", project_root.parent / "tools" / "nodejs" / executable_name),
+    ]
+    for source, candidate in candidates:
+        if candidate and candidate.exists():
+            return str(candidate), source
+
+    tools_root = project_root.parent / "tools"
+    if tools_root.exists():
+        ignored_parts = {"node_modules", ".git", "build", "dist"}
+        matches = (
+            path
+            for path in tools_root.rglob(executable_name)
+            if not ignored_parts.intersection(path.parts)
+        )
+        for candidate in sorted(matches, key=lambda path: (len(path.parts), str(path).lower())):
+            return str(candidate), "workspace tools search"
+    return "node", "PATH fallback"
+
+
 def _start_manager(project_root: Path, manager_url: str) -> "subprocess.Popen[bytes] | None":
     """Start node dist/manager.js and wait up to 15 s for it to answer."""
     dist_manager = project_root / "dist" / "manager.js"
@@ -37,8 +80,10 @@ def _start_manager(project_root: Path, manager_url: str) -> "subprocess.Popen[by
         return None
 
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    node, node_source = _node_executable(project_root)
+    _append_startup_log(project_root, f"Using Node from {node_source}: {node}")
     proc = subprocess.Popen(
-        ["node", str(dist_manager)],
+        [node, str(dist_manager)],
         cwd=str(project_root),
         creationflags=flags,
     )

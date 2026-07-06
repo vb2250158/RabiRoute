@@ -963,19 +963,26 @@ async function waitForNapcatReady(ctx: NapcatManagerContext, instance: NapCatIns
   const deadline = Date.now() + timeoutMs;
   const httpUrl = instance.httpUrl?.trim();
   const webuiUrl = instance.webuiUrl?.trim();
+  let webuiReachable = false;
   while (Date.now() < deadline) {
     if (await napcatStatusEndpointOk(httpUrl, instance.accessToken, 2500)) {
       return { ok: true, kind: "onebot-status", url: `${httpUrl?.replace(/\/+$/, "")}/get_status` };
     }
-    if (webuiUrl && await ctx.checkHttpEndpoint(webuiUrl, 1200)) {
+    if (!httpUrl && webuiUrl && await ctx.checkHttpEndpoint(webuiUrl, 1200)) {
       return { ok: true, kind: "webui", url: webuiUrl };
+    }
+    if (httpUrl && webuiUrl && !webuiReachable) {
+      webuiReachable = await ctx.checkHttpEndpoint(webuiUrl, 1200);
     }
     await wait(1000);
   }
   return {
     ok: false,
     kind: "timeout",
-    message: `启动命令已执行，但等待 ${httpUrl ? `${httpUrl.replace(/\/+$/, "")}/get_status` : "OneBot get_status"} 或 ${webuiUrl || "NapCat WebUI"} 可达超时。`
+    webuiReachable,
+    message: httpUrl
+      ? `启动命令已执行，${webuiUrl && webuiReachable ? "NapCat WebUI 可达，但 " : ""}${httpUrl.replace(/\/+$/, "")}/get_status 未在超时时间内返回 online/good。`
+      : `启动命令已执行，但等待 ${webuiUrl || "NapCat WebUI"} 可达超时。`
   };
 }
 
@@ -1463,6 +1470,19 @@ export async function restartNapcatInstance(ctx: NapcatManagerContext, request: 
     portFromUrl(instance.webuiUrl)
   ].filter((port) => Number.isInteger(port) && port > 0);
   const stopped: string[] = [];
+  let launchResult: Record<string, unknown> | null = null;
+  let ready: Record<string, unknown> | null = null;
+  if (restartedViaWebui) {
+    ready = await waitForNapcatReady(ctx, instance);
+    steps.push(ready.ok !== false
+      ? `NapCat 重启后已可达：${ready.url || ready.kind || "health"}`
+      : String(ready.message || "NapCat 重启后健康检查超时。"));
+    if (ready.ok === false) {
+      steps.push("WebUI 重启后 OneBot 仍未在线，改用进程级硬重启。");
+      restartedViaWebui = false;
+    }
+  }
+
   if (!restartedViaWebui) {
     const pids = await napcatInstanceProcessPids(ctx, instance, ports);
     for (const pid of pids) {
@@ -1479,8 +1499,6 @@ export async function restartNapcatInstance(ctx: NapcatManagerContext, request: 
     }
   }
 
-  let launchResult: Record<string, unknown> | null = null;
-  let ready: Record<string, unknown> | null = null;
   if (!restartedViaWebui) {
     if (!instance.launchCommand?.trim()) {
       steps.push("没有启动命令，无法在 WebUI 重启失败后自动拉起后台。");
@@ -1488,11 +1506,6 @@ export async function restartNapcatInstance(ctx: NapcatManagerContext, request: 
       launchResult = await launchNapcatInstance(ctx, request);
       steps.push(String(launchResult.message || "已尝试启动 NapCat 后台。"));
     }
-  } else {
-    ready = await waitForNapcatReady(ctx, instance);
-    steps.push(ready.ok !== false
-      ? `NapCat 重启后已可达：${ready.url || ready.kind || "health"}`
-      : String(ready.message || "NapCat 重启后健康检查超时。"));
   }
 
   const ok = restartedViaWebui

@@ -36,6 +36,7 @@ const selectedRole = computed(() => {
   const roleId = gateway.value?.agentRoleId || "";
   return (runtime.value.roleInfo?.options || []).find(role => role.value === roleId);
 });
+const hasPersona = computed(() => Boolean(gateway.value?.agentRoleId));
 const rules = computed(() => gateway.value ? notificationRulesForGateway(gateway.value) : []);
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
 const variableEntries = computed(() => Object.entries(gateway.value?.routeVariables || {}));
@@ -135,6 +136,7 @@ function removeSchedule(index: number): void {
 function setRole(value: string): void {
   if (!gateway.value) return;
   gateway.value.agentRoleId = value;
+  if (!value) gateway.value.notificationRules = [];
   store.touch();
 }
 
@@ -162,12 +164,12 @@ watch(() => store.selectedGatewayId, (id) => {
     <div class="page-header">
       <div>
         <h1 class="page-title">人格配置</h1>
-        <div class="page-subtitle">选择路由人格，维护变量和 Agent 消息包装模板。</div>
+        <div class="page-subtitle">人格可以留空；留空时只使用消息入口默认包装和回传 API。</div>
       </div>
       <div class="page-actions" v-if="gateway">
-        <v-btn prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')">打开人格配置</v-btn>
-        <v-btn prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开消息模板配置</v-btn>
-        <v-btn prepend-icon="mdi-plus" color="secondary" variant="tonal" @click="store.addRule">新增消息模板规则</v-btn>
+        <v-btn v-if="hasPersona" prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')">打开人格配置</v-btn>
+        <v-btn v-if="hasPersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开消息模板配置</v-btn>
+        <v-btn v-if="hasPersona" prepend-icon="mdi-plus" color="secondary" variant="tonal" @click="store.addRule">新增消息模板规则</v-btn>
       </div>
     </div>
 
@@ -181,11 +183,11 @@ watch(() => store.selectedGatewayId, (id) => {
         </div>
         <div class="summary-tile">
           <span>消息模板</span>
-          <b>{{ rules.length }} 条规则</b>
+          <b>{{ hasPersona ? `${rules.length} 条规则` : "入口默认" }}</b>
         </div>
         <div class="summary-tile">
-          <span>角色目录</span>
-          <b>{{ roleDirLabel }}</b>
+          <span>{{ hasPersona ? "角色目录" : "运行模式" }}</span>
+          <b>{{ hasPersona ? roleDirLabel : "无人格直通" }}</b>
         </div>
       </div>
 
@@ -194,7 +196,7 @@ watch(() => store.selectedGatewayId, (id) => {
           <div class="section-title-row">
             <div>
               <div class="section-title">人格配置</div>
-              <div class="section-note">当前路由指向 {{ gateway.agentRoleId || "无人格" }}。</div>
+              <div class="section-note">当前路由指向 {{ gateway.agentRoleId || "无人格直通模式" }}。</div>
             </div>
           </div>
           <div class="form-grid">
@@ -204,13 +206,18 @@ watch(() => store.selectedGatewayId, (id) => {
               label="指向人格"
               @update:model-value="value => setRole(String(value || ''))"
             />
-            <v-text-field v-model="gateway.agentRoleFile" label="人格文件名" placeholder="persona.md" @update:model-value="store.touch" />
+            <v-text-field v-if="hasPersona" v-model="gateway.agentRoleFile" label="人格文件名" placeholder="persona.md" @update:model-value="store.touch" />
           </div>
-          <div class="status-row mt-3"><span>角色目录</span><b>{{ roleDirLabel }}</b></div>
-          <div class="status-row"><span>人格路径</span><b>{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "-" }}</b></div>
+          <template v-if="hasPersona">
+            <div class="status-row mt-3"><span>角色目录</span><b>{{ roleDirLabel }}</b></div>
+            <div class="status-row"><span>人格路径</span><b>{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "-" }}</b></div>
+          </template>
+          <v-alert v-else class="mt-3" type="info" variant="tonal">
+            这条路由不会注入人格、计划或记忆；RabiRoute 只把消息来源、原文和回复 API 包装后投递给 Agent。
+          </v-alert>
         </v-card>
 
-        <v-card class="app-card glass-card section-card">
+        <v-card v-if="hasPersona" class="app-card glass-card section-card">
           <div class="section-title-row">
             <div>
               <div class="section-title">persona.md 预览</div>
@@ -221,6 +228,20 @@ watch(() => store.selectedGatewayId, (id) => {
             {{ selectedRole?.roleError || runtime.roleInfo?.selectedRoleError }}
           </v-alert>
           <pre v-else class="mono-box">{{ selectedRole?.roleContent || runtime.roleInfo?.selectedRoleContent || "角色文件为空或尚未刷新。" }}</pre>
+        </v-card>
+        <v-card v-else class="app-card glass-card section-card">
+          <div class="section-title-row">
+            <div>
+              <div class="section-title">默认消息包装</div>
+              <div class="section-note">消息命中后会直接进入 Agent，不读取角色文件。</div>
+            </div>
+          </div>
+          <div class="empty-state compact-empty">
+            <div>
+              <strong>回复必须走 RabiRoute 回传 API</strong>
+              <span>Agent 会看到来源、发送者、消息目标和 `/api/agent/replies`，需要发回消息端的文本都应通过该 API 投递。</span>
+            </div>
+          </div>
         </v-card>
       </div>
 
@@ -249,7 +270,23 @@ watch(() => store.selectedGatewayId, (id) => {
         </div>
       </v-card>
 
-      <v-card class="app-card glass-card section-card">
+      <v-card v-if="!hasPersona" class="app-card glass-card section-card">
+        <div class="section-title-row">
+          <div>
+            <div class="section-title">默认消息规则</div>
+            <div class="section-note">无人格模式按已启用消息入口生成默认命中规则。</div>
+          </div>
+          <v-chip color="secondary" variant="tonal">入口默认</v-chip>
+        </div>
+        <div class="rule-list">
+          <div v-for="rule in rules" :key="rule.id" class="rule-card">
+            <div class="font-weight-bold text-primary">{{ rule.name }}</div>
+            <div class="section-note">{{ routeKindSummary(rule) }}</div>
+          </div>
+        </div>
+      </v-card>
+
+      <v-card v-if="hasPersona" class="app-card glass-card section-card">
         <div class="section-title-row">
           <div>
             <div class="section-title">消息模板规则</div>

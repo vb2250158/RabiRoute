@@ -483,3 +483,69 @@ test("WeCom output policy blocks disabled sending", async () => {
   assert.equal(result.status, "blocked");
   assert.equal(result.reason, "WeCom message sending is disabled by this route policy.");
 });
+
+test("RabiLink source reply is gated by route policy and queued for the phone bridge", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-rabilink-"));
+  const result = await handleAgentReply({
+    text: "RabiLink 回传测试。",
+    replyContext: {
+      runtimeRouteId: "RabiLink",
+      gatewayId: "RabiLink",
+      routeProfileId: "RabiLink",
+      routeKind: "voice_transcript",
+      targetType: "voice_transcript",
+      messageId: "rabilink-source-1",
+      adapterType: "rabilink",
+      outputAdapter: "codex",
+      outputPipeline: "codex",
+      replyToSource: false
+    }
+  }, {
+    rootDir,
+    routeRoot: path.join(rootDir, "data", "route"),
+    rolesRoot: path.join(rootDir, "data", "roles"),
+    runtimes: [{
+      id: "RabiLink",
+      messageAdapterPolicies: {
+        rabilink: {
+          outputEnabled: true,
+          supportedOutputs: ["text"]
+        }
+      }
+    }]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "sent");
+  assert.equal(result.reason, "Queued for rabilink output.");
+  assert.equal(result.targetType, "voice_transcript");
+  const replyLog = path.join(rootDir, "data", "route", "RabiLink", "rabilink-replies.jsonl");
+  const rows = fs.readFileSync(replyLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].text, "RabiLink 回传测试。");
+  assert.equal(rows[0].adapterType, "rabilink");
+});
+
+test("RabiLink source reply respects disabled route output policy", async () => {
+  const result = await handleAgentReply({
+    text: "不应发送。",
+    replyContext: {
+      runtimeRouteId: "RabiLink",
+      routeProfileId: "RabiLink",
+      targetType: "voice_transcript",
+      adapterType: "rabilink"
+    }
+  }, optionsWithRuntime({
+    id: "RabiLink",
+    messageAdapterPolicies: {
+      rabilink: {
+        outputEnabled: false,
+        supportedOutputs: ["text"]
+      }
+    }
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "blocked");
+  assert.equal(result.reason, "RabiLink message sending is disabled by this route policy.");
+});

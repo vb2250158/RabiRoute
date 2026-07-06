@@ -19,6 +19,12 @@ type WebhookPayload = {
   text?: string;
   message?: string;
   content?: string;
+  query?: string;
+  prompt?: string;
+  input?: string;
+  question?: string;
+  data?: unknown;
+  messages?: unknown;
   id?: string;
   messageId?: string;
   time?: number;
@@ -65,7 +71,7 @@ type GatewayStatus = {
   }>;
 };
 
-type HttpWebhookAdapterType = Extract<MessageAdapterType, "webhook" | "fennenote" | "xiaoai">;
+type HttpWebhookAdapterType = Extract<MessageAdapterType, "webhook" | "fennenote" | "xiaoai" | "rabilink">;
 
 type WebhookAdapterProfile = {
   type: HttpWebhookAdapterType;
@@ -73,6 +79,7 @@ type WebhookAdapterProfile = {
   source: string;
   path: string;
   port: number;
+  host?: string;
   acceptedTypes: string[];
   missingTextMessage: string;
 };
@@ -100,12 +107,13 @@ function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<G
   const status = readGatewayStatus();
   const current = status.messageAdapters?.[profile.type] ?? {};
   const shouldKeepGenericWebhook = profile.type === "webhook" || config.messageAdapterTypes.includes("webhook");
+  const host = profile.host || "127.0.0.1";
   const nextCallback = {
     ...status.httpCallbacks?.[profile.type],
     label: profile.label,
     path: patch.path ?? status.httpCallbacks?.[profile.type]?.path,
     port: patch.port ?? status.httpCallbacks?.[profile.type]?.port,
-    url: patch.path && patch.port ? `http://127.0.0.1:${patch.port}${patch.path}` : status.httpCallbacks?.[profile.type]?.url,
+    url: patch.path && patch.port ? `http://${host}:${patch.port}${patch.path}` : status.httpCallbacks?.[profile.type]?.url,
     lastEventAt: patch.lastEventAt ?? status.httpCallbacks?.[profile.type]?.lastEventAt,
     eventCount: patch.eventCount ?? status.httpCallbacks?.[profile.type]?.eventCount
   };
@@ -176,8 +184,51 @@ function readRequestBody(request: http.IncomingMessage): Promise<string> {
   });
 }
 
+function stringPayloadField(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function nestedTextFromData(data: unknown): string {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return "";
+  }
+  const source = data as Record<string, unknown>;
+  return stringPayloadField(source.text)
+    || stringPayloadField(source.message)
+    || stringPayloadField(source.content)
+    || stringPayloadField(source.query)
+    || stringPayloadField(source.prompt)
+    || stringPayloadField(source.input)
+    || stringPayloadField(source.question);
+}
+
+function textFromMessages(messages: unknown): string {
+  if (!Array.isArray(messages)) {
+    return "";
+  }
+  for (const item of [...messages].reverse()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const message = item as Record<string, unknown>;
+    const text = stringPayloadField(message.content) || stringPayloadField(message.text);
+    if (text) return text;
+  }
+  return "";
+}
+
+function textFromPayload(payload: WebhookPayload): string {
+  return stringPayloadField(payload.text)
+    || stringPayloadField(payload.message)
+    || stringPayloadField(payload.content)
+    || stringPayloadField(payload.query)
+    || stringPayloadField(payload.prompt)
+    || stringPayloadField(payload.input)
+    || stringPayloadField(payload.question)
+    || nestedTextFromData(payload.data)
+    || textFromMessages(payload.messages);
+}
+
 function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfile): VoiceTranscriptEventRecord | null {
-  const rawMessage = String(payload.text ?? payload.message ?? payload.content ?? "").trim();
+  const rawMessage = textFromPayload(payload);
   if (!rawMessage) {
     return null;
   }
@@ -241,13 +292,38 @@ export function createXiaoAiAdapter(): MessageAdapter {
   });
 }
 
+export function createRabiLinkAdapter(): MessageAdapter {
+  return createWebhookAdapter({
+    type: "rabilink",
+    label: "RabiLink / Rokid 手机桥",
+    source: "rabilink",
+    path: config.rabiLinkWebhookPath,
+    port: config.rabiLinkWebhookPort,
+    host: config.rabiLinkWebhookHost,
+    acceptedTypes: ["voice_transcript", "rabilink", "rabilink.text", "rabilink.message", "webhook.text"],
+    missingTextMessage: "RabiLink payload has no text/message/content/query/input"
+  });
+}
 export function createWebhookAdapter(profile = defaultWebhookProfile()): MessageAdapter {
   return {
     type: profile.type,
     start() {
       const webhookPath = normalizeWebhookPath(profile.path);
       const server = http.createServer(async (request, response) => {
-        if (request.method !== "POST" || request.url?.split("?", 1)[0] !== webhookPath) {
+        const requestPath = request.url?.split("?", 1)[0];
+        if (request.method === "GET" && requestPath === webhookPath) {
+          response.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({
+            ok: true,
+            adapterType: profile.type,
+            label: profile.label,
+            path: webhookPath,
+            port: profile.port,
+            status: "ready"
+          }));
+          return;
+        }
+
+        if (request.method !== "POST" || requestPath !== webhookPath) {
           appendAdapterLog(profile.type, {
             level: "warning",
             event: "rejected_request",
@@ -268,7 +344,7 @@ export function createWebhookAdapter(profile = defaultWebhookProfile()): Message
           const eventType = payload.type ?? "voice_transcript";
           appendAdapterLog(profile.type, {
             event: "inbound_request",
-            message: String(payload.text ?? payload.message ?? payload.content ?? "").slice(0, 500),
+            message: textFromPayload(payload).slice(0, 500),
             data: {
               adapterType: profile.type,
               label: profile.label,
@@ -326,7 +402,20 @@ export function createWebhookAdapter(profile = defaultWebhookProfile()): Message
               sessionId: record.sessionId
             }
           });
-          response.writeHead(204).end();
+          if (profile.type === "rabilink") {
+            const replyText = "已转交 Codex 处理。";
+            response.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({
+              ok: true,
+              status: "accepted",
+              messageId: record.messageId,
+              text: replyText,
+              answer: replyText,
+              reply: replyText,
+              content: replyText
+            }));
+          } else {
+            response.writeHead(204).end();
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           patchWebhookStatus(profile, {
@@ -348,23 +437,26 @@ export function createWebhookAdapter(profile = defaultWebhookProfile()): Message
         }
       });
 
-      server.listen(profile.port, "127.0.0.1", () => {
+      const host = profile.host || "127.0.0.1";
+      server.listen(profile.port, host, () => {
         patchWebhookStatus(profile, {
           status: "running",
           message: `${profile.label} 消息端已启动。`,
           path: webhookPath,
           port: profile.port
         });
+        const url = `http://${host}:${profile.port}${webhookPath}`;
         appendAdapterLog(profile.type, {
           event: "listening",
-          message: `${profile.label} listening on http://127.0.0.1:${profile.port}${webhookPath}`,
+          message: `${profile.label} listening on ${url}`,
           data: {
             path: webhookPath,
             port: profile.port,
-            url: `http://127.0.0.1:${profile.port}${webhookPath}`
+            host,
+            url
           }
         });
-        console.log(`RabiRoute ${profile.label} adapter listening on http://127.0.0.1:${profile.port}${webhookPath}`);
+        console.log(`RabiRoute ${profile.label} adapter listening on ${url}`);
       });
     }
   };

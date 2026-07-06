@@ -45,6 +45,19 @@ const diagnosisItems = computed(() => [
   ...agentReasons.value.map(reason => ({ type: "Agent", reason }))
 ]);
 
+function codexDeliveryChannelLabel(state: Record<string, any>): string {
+  if (state.lastDeliveryChannel === "desktop-ipc") return "Codex Desktop IPC";
+  if (state.lastDeliveryChannel === "app-server-fallback") return "app-server fallback";
+  return "-";
+}
+
+function codexDeliveryVisibilityLabel(state: Record<string, any>): string {
+  if (state.lastDeliveryVisibility === "desktop-client-confirmed") return "当前 Desktop 客户端已确认";
+  if (state.lastDeliveryVisibility === "desktop-client-not-loaded") return "Desktop 会话未确认加载";
+  if (state.lastDeliveryVisibility === "unknown") return "可见性未知";
+  return "-";
+}
+
 const adapterText = computed(() => {
   if (gateway.value?.enabled === false || runtime.value.enabled === false) return "禁用中";
   if (gateway.value && isMessageInputsDisabled(gateway.value)) return "禁用中";
@@ -74,12 +87,16 @@ function webhookAddress(type: string): string {
     ? gateway.value?.fenneNoteWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort
     : type === "xiaoai"
       ? gateway.value?.xiaoaiWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort
-      : gateway.value?.webhookPort || gateway.value?.gatewayPort;
+      : type === "rabilink"
+        ? gateway.value?.rabiLinkWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort
+        : gateway.value?.webhookPort || gateway.value?.gatewayPort;
   const path = type === "fennenote"
     ? gateway.value?.fenneNoteWebhookPath || adapterDefaultWebhookPath(type)
     : type === "xiaoai"
       ? gateway.value?.xiaoaiWebhookPath || adapterDefaultWebhookPath(type)
-      : gateway.value?.webhookPath || adapterDefaultWebhookPath(type);
+      : type === "rabilink"
+        ? gateway.value?.rabiLinkWebhookPath || adapterDefaultWebhookPath(type)
+        : gateway.value?.webhookPath || adapterDefaultWebhookPath(type);
   return `http://127.0.0.1:${port || 8790}${path}`;
 }
 
@@ -236,6 +253,8 @@ async function deleteCurrentGateway(): Promise<void> {
           <div class="status-row"><span>线程名</span><b>{{ agentState.monitorThreadName || gateway.codexThreadName || "-" }}</b></div>
           <div class="status-row"><span>自动发现</span><b>{{ agentState.lastAutoDiscoveryAt || "-" }}</b></div>
           <div class="status-row"><span>最后成功</span><b>{{ agentState.lastNotificationAt || "-" }}</b></div>
+          <div class="status-row"><span>最近通道</span><b>{{ codexDeliveryChannelLabel(agentState) }}</b></div>
+          <div class="status-row"><span>可见性</span><b>{{ codexDeliveryVisibilityLabel(agentState) }}</b></div>
           <div class="status-row"><span>来源</span><b>{{ agentState.monitorThreadSource || "-" }}</b></div>
           <div class="status-row"><span>状态文件</span><b>{{ agentState.statePath || "-" }}</b></div>
           <div v-if="agentState.lastNotificationError" class="status-row"><span>最后错误</span><b>{{ agentState.lastNotificationError }}</b></div>

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
-import { forwardMessage } from "../forwarding.js";
+import { forwardMessageAndWait, type ForwardDeliveryResult } from "../forwarding.js";
 import { appendAdapterLog, appendHeartbeatEvent, type HeartbeatEventRecord } from "../history.js";
 import {
   collectHeartbeatScheduleTasks,
@@ -21,6 +21,12 @@ type GatewayStatus = {
     tickCount?: number;
     scheduleCount?: number;
     nextTickAt?: string;
+    lastDeliveryAt?: string;
+    lastDeliveryStatus?: string;
+    lastDeliveryMessageId?: string;
+    lastDeliveryMatchedRuleCount?: number;
+    lastDeliverySentPacketCount?: number;
+    lastDeliveryError?: string;
   }>;
   messageAdapter?: {
     type?: string;
@@ -38,6 +44,12 @@ type GatewayStatus = {
     nextTickAt?: string;
     lastScheduleId?: string;
     lastScheduleName?: string;
+    lastDeliveryAt?: string;
+    lastDeliveryStatus?: string;
+    lastDeliveryMessageId?: string;
+    lastDeliveryMatchedRuleCount?: number;
+    lastDeliverySentPacketCount?: number;
+    lastDeliveryError?: string;
   };
 };
 
@@ -114,6 +126,54 @@ function scheduleMessage(task: RunningHeartbeatTask): string {
   return `定时计划触发：${heartbeatScheduleLabel(task)}`;
 }
 
+function deliveryLogLevel(result: ForwardDeliveryResult): "info" | "warning" | "error" {
+  if (result.status === "failed") {
+    return "error";
+  }
+  if (result.status === "missed" || result.status === "skipped") {
+    return "warning";
+  }
+  return "info";
+}
+
+function recordHeartbeatDelivery(record: HeartbeatEventRecord, result: ForwardDeliveryResult): void {
+  appendAdapterLog("heartbeat", {
+    event: "delivery_result",
+    level: deliveryLogLevel(result),
+    message: `Heartbeat delivery ${result.status} messageId=${record.messageId} matched=${result.matchedRuleCount} sent=${result.sentPacketCount}`,
+    data: result
+  });
+  patchHeartbeatStatus({
+    lastDeliveryAt: new Date().toISOString(),
+    lastDeliveryStatus: result.status,
+    lastDeliveryMessageId: String(record.messageId ?? result.messageId),
+    lastDeliveryMatchedRuleCount: result.matchedRuleCount,
+    lastDeliverySentPacketCount: result.sentPacketCount,
+    lastDeliveryError: result.adapterOutcomes.find((outcome) => outcome.status === "failed")?.error ?? ""
+  });
+}
+
+function recordHeartbeatDeliveryError(record: HeartbeatEventRecord, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  appendAdapterLog("heartbeat", {
+    event: "delivery_error",
+    level: "error",
+    message: `Heartbeat delivery failed messageId=${record.messageId}: ${message}`,
+    data: {
+      messageId: record.messageId,
+      error: message
+    }
+  });
+  patchHeartbeatStatus({
+    lastDeliveryAt: new Date().toISOString(),
+    lastDeliveryStatus: "failed",
+    lastDeliveryMessageId: String(record.messageId ?? ""),
+    lastDeliveryMatchedRuleCount: 0,
+    lastDeliverySentPacketCount: 0,
+    lastDeliveryError: message
+  });
+}
+
 function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: RunningHeartbeatTask[]): void {
   const now = Math.floor(Date.now() / 1000);
   const scheduleName = task.schedule.name?.trim() || task.schedule.id;
@@ -154,12 +214,14 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
     tickCount,
     scheduleCount: tasks.length
   });
-  forwardMessage("heartbeat", record, {
+  void forwardMessageAndWait("heartbeat", record, {
     triggerRouteId: task.routeId,
     triggerRuleId: task.ruleId,
     scheduleId: task.schedule.id,
     scheduleName
-  });
+  })
+    .then((result) => recordHeartbeatDelivery(record, result))
+    .catch((error) => recordHeartbeatDeliveryError(record, error));
 }
 
 function armTask(task: RunningHeartbeatTask, tasks: RunningHeartbeatTask[], lastScheduledAt?: Date): void {
@@ -179,7 +241,6 @@ function armTask(task: RunningHeartbeatTask, tasks: RunningHeartbeatTask[], last
     tickHeartbeat(task, nextAt, tasks);
     armTask(task, tasks, nextAt);
   }, delay);
-  task.timer.unref();
   patchScheduleSummary(tasks);
 }
 

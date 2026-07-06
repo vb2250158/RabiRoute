@@ -1,5 +1,0 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <instrumentation
-        android:name="com.rabiroute.bandprobe.MiHealthInstrumentation"
-        android:targetPackage="com.rabiroute.bandprobe" />
-</manifest>

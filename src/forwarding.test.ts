@@ -8,6 +8,8 @@ import { config, type RouteProfile } from "./config.js";
 import { forwardMessageAndWait } from "./forwarding.js";
 import type { GroupMessageRecord } from "./history.js";
 import { resolvePipeline } from "./pipelines.js";
+import { readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
+import { replayDeliveryAttempts } from "./deliveryReplay.js";
 
 type ForwardingConfigPatch = Partial<Pick<typeof config,
   "agentAdapters"
@@ -189,5 +191,119 @@ test("forwardMessageAndWait surfaces adapter delivery failures", async () => {
     assert.equal(result.adapterOutcomes[0].adapter, "unsupported");
     assert.equal(result.adapterOutcomes[0].status, "failed");
     assert.match(result.adapterOutcomes[0].error ?? "", /Unsupported agent adapter/);
+  });
+});
+
+test("forwardMessageAndWait records replayable delivery attempts", async () => {
+  const root = tempDir();
+  const dataDir = path.join(root, "data");
+  const route = routeProfile(root, {
+    notificationRules: [{
+      id: "direct",
+      name: "direct",
+      enabled: true,
+      routeKinds: ["direct_at"],
+      template: "matched {message}"
+    }]
+  });
+
+  await withForwardingConfig({
+    agentAdapters: [],
+    codexDesktopIpcNotify: false,
+    codexDirectNotify: false,
+    dataDir,
+    memoryDataDir: path.join(root, "route-data"),
+    routeProfiles: [route]
+  }, async () => {
+    const result = await forwardMessageAndWait("direct_at", groupMessage());
+    const attempts = readDeliveryReplayAttempts(dataDir);
+
+    assert.equal(result.status, "routed");
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].routeKind, "direct_at");
+    assert.equal(attempts[0].messageId, "msg-1");
+    assert.equal(attempts[0].packets.length, 1);
+    assert.match(attempts[0].packets[0].message, /matched/);
+  });
+});
+
+test("replayDeliveryAttempts can merge failed attempts into one agent packet", async () => {
+  const root = tempDir();
+  const dataDir = path.join(root, "data");
+  const route = routeProfile(root, {
+    notificationRules: [{
+      id: "direct",
+      name: "direct",
+      enabled: true,
+      routeKinds: ["direct_at"],
+      template: "matched {message}"
+    }]
+  });
+
+  await withForwardingConfig({
+    agentAdapters: ["unsupported" as AgentAdapterType],
+    codexDesktopIpcNotify: false,
+    codexDirectNotify: false,
+    dataDir,
+    memoryDataDir: path.join(root, "route-data"),
+    routeProfiles: [route]
+  }, async () => {
+    await forwardMessageAndWait("direct_at", groupMessage({ messageId: "msg-1", rawMessage: "[CQ:at,qq=12345] one" }));
+    await forwardMessageAndWait("direct_at", groupMessage({ messageId: "msg-2", rawMessage: "[CQ:at,qq=12345] two" }));
+    const failedAttempts = readDeliveryReplayAttempts(dataDir).filter((attempt) => attempt.result.status === "failed");
+
+    const replay = await replayDeliveryAttempts(dataDir, {
+      mode: "merge",
+      attemptIds: failedAttempts.map((attempt) => attempt.attemptId)
+    });
+
+    assert.equal(replay.mode, "merge");
+    assert.equal(replay.ok, false);
+    assert.equal(replay.replayedAttemptIds.length, 2);
+    assert.equal(replay.result?.sentPacketCount, 1);
+    assert.match(replay.result?.adapterOutcomes[0].error ?? "", /Unsupported agent adapter/);
+  });
+});
+
+test("replayDeliveryAttempts can backfill a stored message by route kind and message id", async () => {
+  const root = tempDir();
+  const dataDir = path.join(root, "data");
+  const memoryDataDir = path.join(root, "route-data");
+  fs.mkdirSync(memoryDataDir, { recursive: true });
+  fs.appendFileSync(path.join(memoryDataDir, "private-messages.jsonl"), `${JSON.stringify({
+    time: 1710000000,
+    userId: 42,
+    rawMessage: "old private message",
+    messageId: "old-1",
+    senderName: "Alice"
+  })}\n`, "utf8");
+  const route = routeProfile(root, {
+    notificationRules: [{
+      id: "private",
+      name: "private",
+      enabled: true,
+      routeKinds: ["private"],
+      template: "matched {message}"
+    }]
+  });
+
+  await withForwardingConfig({
+    agentAdapters: [],
+    codexDesktopIpcNotify: false,
+    codexDirectNotify: false,
+    dataDir,
+    memoryDataDir,
+    routeProfiles: [route]
+  }, async () => {
+    const replay = await replayDeliveryAttempts(dataDir, {
+      routeKind: "private",
+      messageId: "old-1"
+    });
+
+    assert.equal(replay.ok, true);
+    assert.equal(replay.result?.status, "routed");
+    assert.equal(replay.result?.sentPacketCount, 1);
+    const attempts = readDeliveryReplayAttempts(dataDir);
+    assert.equal(attempts.at(-1)?.replayOfAttemptId, "stored:private:old-1");
   });
 });

@@ -27,6 +27,11 @@ import type {
   ForwardRouteKind,
   ForwardTemplateValues
 } from "./routing/types.js";
+import {
+  appendDeliveryReplayAttempt,
+  createDeliveryReplayAttemptId,
+  type DeliveryReplayPacket
+} from "./deliveryReplayLedger.js";
 
 export type {
   ForwardRouteKind,
@@ -66,6 +71,23 @@ export type ForwardDeliveryResult = {
   routes: ForwardRouteDeliveryResult[];
   reason?: ForwardDeliveryReason;
 };
+
+export type ForwardMessageOptions = {
+  appendRoleRecord?: boolean;
+  logReplayAttempt?: boolean;
+  replayOfAttemptId?: string;
+};
+
+function logDeliveryResult(result: ForwardDeliveryResult): void {
+  const failed = result.status === "failed";
+  const missed = result.status === "missed" || result.status === "skipped";
+  appendAdapterLogToDir("router", {
+    event: "delivery_result",
+    level: failed ? "error" : missed ? "warning" : "info",
+    message: `Delivery ${result.status} routeKind=${result.routeKind} messageId=${result.messageId} matched=${result.matchedRuleCount} sent=${result.sentPacketCount}`,
+    data: result
+  }, config.dataDir);
+}
 
 function configuredAgentAdapters(): AgentAdapterType[] {
   if (config.agentAdapters.length > 0) {
@@ -107,7 +129,7 @@ function dispatchToAgentAdapter(type: AgentAdapterType, message: string): Promis
   return adapter.deliver(message);
 }
 
-async function deliverPacketToAgentAdapters(routeId: string, ruleId: string, message: string): Promise<ForwardAdapterOutcome[]> {
+export async function deliverPacketToAgentAdapters(routeId: string, ruleId: string, message: string): Promise<ForwardAdapterOutcome[]> {
   return Promise.all(configuredAgentAdapters().map(async (adapter) => {
     try {
       await dispatchToAgentAdapter(adapter, message);
@@ -262,7 +284,9 @@ async function forwardMessageToRoute(
   route: RouteProfile,
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
-  extraValues: ForwardTemplateValues = {}
+  extraValues: ForwardTemplateValues = {},
+  options: ForwardMessageOptions = {},
+  packets: DeliveryReplayPacket[] = []
 ): Promise<ForwardRouteDeliveryResult> {
   if (routeKind === "voice_transcript" && isLowSignalVoiceTranscript(record)) {
     return routeResult(route, "skipped", { reason: "low_signal_voice_transcript" });
@@ -275,7 +299,7 @@ async function forwardMessageToRoute(
   }
 
   const roleContext = rolePathsForRoute(route);
-  if (path.resolve(roleContext.dataDir) !== path.resolve(config.memoryDataDir)) {
+  if (options.appendRoleRecord !== false && path.resolve(roleContext.dataDir) !== path.resolve(config.memoryDataDir)) {
     appendRecordToRoleDataDir(record, roleContext.dataDir);
   }
 
@@ -283,6 +307,11 @@ async function forwardMessageToRoute(
   let sentPacketCount = 0;
   for (const rule of decision.matchedRules) {
     const packet = buildAgentPacket(decision, rule, roleContext);
+    packets.push({
+      routeId: route.id,
+      ruleId: rule.id,
+      message: packet.message
+    });
 
     appendCodexNotificationToDir({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -308,18 +337,51 @@ async function forwardMessageToRoute(
 export async function forwardMessageAndWait(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
-  extraValues: ForwardTemplateValues = {}
+  extraValues: ForwardTemplateValues = {},
+  options: ForwardMessageOptions = {}
 ): Promise<ForwardDeliveryResult> {
   const routes = activeRouteProfiles();
+  const packets: DeliveryReplayPacket[] = [];
   if (routes.length === 0) {
     logRouteMiss(routeKind, record, "no_active_route_profile");
-    return summarizeDeliveryResult(routeKind, record, [], "no_active_route_profile");
+    const result = summarizeDeliveryResult(routeKind, record, [], "no_active_route_profile");
+    logDeliveryResult(result);
+    if (options.logReplayAttempt !== false) {
+      logDeliveryReplayAttempt(routeKind, record, extraValues, result, packets, options);
+    }
+    return result;
   }
   const results: ForwardRouteDeliveryResult[] = [];
   for (const route of routes) {
-    results.push(await forwardMessageToRoute(route, routeKind, record, extraValues));
+    results.push(await forwardMessageToRoute(route, routeKind, record, extraValues, options, packets));
   }
-  return summarizeDeliveryResult(routeKind, record, results);
+  const result = summarizeDeliveryResult(routeKind, record, results);
+  logDeliveryResult(result);
+  if (options.logReplayAttempt !== false) {
+    logDeliveryReplayAttempt(routeKind, record, extraValues, result, packets, options);
+  }
+  return result;
+}
+
+function logDeliveryReplayAttempt(
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  extraValues: ForwardTemplateValues,
+  result: ForwardDeliveryResult,
+  packets: DeliveryReplayPacket[],
+  options: ForwardMessageOptions
+): void {
+  appendDeliveryReplayAttempt(config.dataDir, {
+    attemptId: createDeliveryReplayAttemptId(routeKind, result.messageId),
+    time: Math.floor(Date.now() / 1000),
+    routeKind,
+    messageId: result.messageId,
+    record,
+    extraValues,
+    packets,
+    result,
+    replayOfAttemptId: options.replayOfAttemptId
+  });
 }
 
 export function forwardMessage(
@@ -328,5 +390,17 @@ export function forwardMessage(
   extraValues: ForwardTemplateValues = {}
 ): void {
   void forwardMessageAndWait(routeKind, record, extraValues)
-    .catch((error) => console.error("Failed to deliver routed message", error));
+    .catch((error) => {
+      appendAdapterLogToDir("router", {
+        event: "delivery_error",
+        level: "error",
+        message: `Failed to deliver routed message routeKind=${routeKind} messageId=${recordId(record)}`,
+        data: {
+          routeKind,
+          messageId: recordId(record),
+          error: error instanceof Error ? error.message : String(error)
+        }
+      }, config.dataDir);
+      console.error("Failed to deliver routed message", error);
+    });
 }

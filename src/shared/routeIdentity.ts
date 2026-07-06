@@ -54,7 +54,9 @@ export function routeRuntimeParts(id: unknown): RouteRuntimeParts {
 export function resolveRouteIdentity(input: RouteIdentityInput): RouteIdentity {
   const parts = routeRuntimeParts(input.id);
   const hasRuntimeId = Boolean(text(input.id));
-  const roleId = sanitizeRoleId(input.agentRoleId) || parts.roleId || sanitizeRoleId(input.fallbackRoleId);
+  const roleId = typeof input.agentRoleId === "string"
+    ? sanitizeRoleId(input.agentRoleId)
+    : parts.roleId || sanitizeRoleId(input.fallbackRoleId);
   const configName = sanitizeConfigName(input.configName)
     || (hasRuntimeId ? parts.configName : "")
     || sanitizeConfigName(input.fallbackConfigName)

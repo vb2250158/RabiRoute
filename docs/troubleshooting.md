@@ -60,6 +60,14 @@ npm run check:config
 
 说明 RabiRoute 没找到对应 Codex Desktop 线程。先打开或创建用于处理 QQ 消息的 Codex 线程，再检查 WebUI 里的 Agent 状态；Manager 会按配置的线程名从 Codex session index 自动发现线程。
 
+## `no-client-found`
+
+说明 RabiRoute 已经从 Codex session index 找到目标线程，但 Codex Desktop 当前没有加载这个线程，Desktop IPC 无法对它 `start/steer`。当前投递会先通过 app-server `thread/resume` 尝试唤醒目标线程，然后立即重试 Desktop IPC 投递；如果仍失败，默认改走 app-server `turn/start` 兜底投递，同时暂存在 RabiRoute 进程内，并按 `CODEX_DESKTOP_IPC_RETRY_DELAY_MS` 定时重试。默认保留最近 20 条，可用 `CODEX_DESKTOP_IPC_MAX_RETRY_MESSAGES` 调整。线程重新加载后，下一次重试会自动补投。
+
+健康巡检会把这类状态标成错误，并显示待补投数量和下一次重试时间。自动唤醒可用 `CODEX_DESKTOP_IPC_WAKE_ON_NO_CLIENT=0` 关闭；no-client app-server 兜底可用 `CODEX_DESKTOP_IPC_FALLBACK_ON_NO_CLIENT=0` 关闭。若长时间不恢复，仍可以在 Codex Desktop 手动打开目标线程，让 Desktop IPC 客户端重新注册。
+
+RabiRoute 进程本身不能直接调用 `codex_app.send_message_to_thread` 这类 Codex 连接器工具；这些工具属于当前 Codex 会话环境，不是 RabiRoute Node 运行时的稳定 API。这里使用的是 Codex app-server 的 `turn/start` 方法，不依赖目标线程已经有已加载的 Desktop 前端客户端。
+
 ## macOS 上 `connect ENOENT /tmp/codex-ipc/...`
 
 Codex Desktop 的 socket 可能不在 `/tmp`。当前版本会依次尝试 `CODEX_DESKTOP_IPC_PATH`、`os.tmpdir()/codex-ipc/ipc-<uid>.sock` 和 `/tmp/codex-ipc/ipc-<uid>.sock`。仍失败时可临时指定：

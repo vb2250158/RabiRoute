@@ -1,0 +1,6 @@
+name = "rabilink-relay"
+main = "scripts/rabilink-relay-cloudflare-worker.mjs"
+compatibility_date = "2026-07-06"
+
+[vars]
+RABILINK_UPSTREAM = "https://rabi.example.com"

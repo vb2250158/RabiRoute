@@ -41,7 +41,7 @@ export type WebhookLikeScanContext<Runtime> = {
   fenneNotePlaybackUrl: string;
 };
 
-function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<MessageAdapterType, "fennenote" | "xiaoai" | "webhook">): {
+function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<MessageAdapterType, "fennenote" | "xiaoai" | "rabilink" | "webhook">): {
   runtimes: Runtime[];
   callbacks: AdapterEndpoint[];
   callbackReady: boolean;
@@ -123,6 +123,25 @@ export async function scanXiaoAiEndpoint<Runtime>(ctx: WebhookLikeScanContext<Ru
       "小米音箱不是直接连 RabiRoute：需要 open-xiaoai/xiaogpt/自定义桥这类入口层，把语音文本 POST 到 RabiRoute。",
       "open-xiaoai 路线涉及机型、固件和刷机风险；只在确认型号和备份后操作。"
     ]
+  };
+}
+
+export async function scanRabiLinkEndpoint<Runtime>(ctx: WebhookLikeScanContext<Runtime>): Promise<MessageAdapterScanResult> {
+  const { runtimes: rabiLinkRuntimes, callbacks: rabiLinkCallbacks, callbackReady: rabiLinkCallbackReady } = scanCallbacks(ctx, "rabilink");
+  const rabiLinkRecent = rabiLinkRuntimes.some((runtime) => ctx.routeHasRecentMessages(runtime, "rabilink"));
+
+  return {
+    type: "rabilink",
+    label: "RabiLink / 手机桥",
+    maturity: "experimental",
+    installed: rabiLinkCallbackReady,
+    endpoints: rabiLinkCallbacks,
+    requirements: [
+      { id: "callback", label: "RabiRoute RabiLink 回调入口", required: true, ok: rabiLinkCallbackReady, detail: rabiLinkCallbacks[0]?.url || "添加 RabiLink 消息端并重启 route 后生成。" },
+      { id: "phone-app", label: "手机 RabiLink 已配置回调", required: true, ok: rabiLinkRecent, detail: rabiLinkRecent ? "已收到过 RabiLink 手机端事件。" : "尚未收到手机 RabiLink POST。" },
+      { id: "public-url", label: "公网 HTTPS 或局域网测试地址", required: false, ok: undefined, detail: "灵珠云端需要公网 HTTPS；手机局域网测试可用电脑 IP。" }
+    ],
+    warnings: ["RabiLink 是手机消息端；眼镜/灵珠只负责把语音变成手机侧文本或调用手机桥。"]
   };
 }
 

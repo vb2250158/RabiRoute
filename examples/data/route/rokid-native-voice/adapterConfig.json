@@ -1,0 +1,51 @@
+{
+  "enabled": true,
+  "pipelinePreset": "voice_chat",
+  "pipeline": {
+    "id": "rokid_native_voice",
+    "inputAdapter": "webhook",
+    "outputAdapter": "fennenote",
+    "outputPipeline": "rokid-native-tts",
+    "promptOutputMode": "voice_short",
+    "ttsProvider": "rokid-native",
+    "ttsVoice": "rokid-glass",
+    "ttsWorkerUrl": "http://127.0.0.1:8794/api/fennenote/playback",
+    "ttsPlay": true,
+    "preventFeedbackLoop": true,
+    "replyToSource": false
+  },
+  "messageAdapters": [
+    "webhook"
+  ],
+  "messageAdapterPolicies": {
+    "webhook": {
+      "inputEnabled": true,
+      "outputEnabled": false,
+      "supportedOutputs": [
+        "text"
+      ]
+    },
+    "fennenote": {
+      "inputEnabled": false,
+      "outputEnabled": true,
+      "supportedOutputs": [
+        "text"
+      ]
+    }
+  },
+  "gatewayPort": 8791,
+  "webhookPort": 8791,
+  "webhookPath": "/webhook",
+  "fenneNoteWebhookPort": 8791,
+  "fenneNoteWebhookPath": "/fennenote",
+  "codexThreadName": "RabiRoute Rokid Native Voice",
+  "codexCwd": "C:/Path/To/Your/Project",
+  "agentRoleFile": "persona.md",
+  "agentAdapters": [
+    "codex"
+  ],
+  "dataDir": "./data/route/rokid-native-voice",
+  "configName": "rokid-native-voice",
+  "agentRoleId": "Rabi",
+  "rolesDir": "./data/roles"
+}

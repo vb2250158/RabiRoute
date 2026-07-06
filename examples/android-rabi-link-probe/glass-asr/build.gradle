@@ -1,0 +1,49 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.rabi.link.glass"
+    compileSdk 34
+
+    def rokidAiSdkAssetsDir = rootProject.file("out/reference/RokidAiSdkDemo/app/src/main/assets")
+
+    defaultConfig {
+        applicationId "com.rabi.link.glass"
+        minSdk 31
+        targetSdk 34
+        versionCode 7
+        versionName "0.1.6"
+        ndk {
+            abiFilters "armeabi-v7a"
+        }
+    }
+
+    sourceSets {
+        main {
+            if (rokidAiSdkAssetsDir.exists()) {
+                assets.srcDir(rokidAiSdkAssetsDir)
+            }
+        }
+    }
+
+    packagingOptions {
+        pickFirst "lib/armeabi-v7a/librlog.so"
+        pickFirst "lib/armeabi-v7a/libcaps.so"
+        pickFirst "lib/armeabi-v7a/libflora-cli.so"
+    }
+}
+
+dependencies {
+    implementation("com.rokid.cxr:cxr-service-bridge:1.0-20260417.063502-103") {
+        exclude group: "androidx.test"
+        exclude group: "androidx.concurrent"
+    }
+    implementation "com.rokid.security:glass3.open.sdk:2.5.1-P"
+    implementation(name: "basic-1.4.3", ext: "aar")
+    implementation(name: "turenso-1.4.3", ext: "aar")
+    implementation(name: "nlpconsumer-1.4.3", ext: "aar")
+    implementation(name: "audioai-1.4.3", ext: "aar")
+    implementation "com.google.code.gson:gson:2.8.5"
+    implementation "io.reactivex.rxjava2:rxjava:2.1.12"
+}

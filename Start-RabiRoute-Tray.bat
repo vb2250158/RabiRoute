@@ -86,25 +86,12 @@ function Stop-DuplicateTrayProcesses {
     return @($TrayProcesses)
   }
 
-  $ordered = @($TrayProcesses | Sort-Object CreationDate -Descending)
-  $keep = $ordered[0]
-  $duplicates = @($ordered | Select-Object -Skip 1)
-  $duplicatePids = ($duplicates | ForEach-Object { $_.ProcessId }) -join ", "
-  $message = "Multiple Qt tray process groups were found. Keeping pid=$($keep.ProcessId), stopping duplicate root pid(s): $duplicatePids"
+  $pids = ($TrayProcesses | ForEach-Object { $_.ProcessId }) -join ", "
+  $message = "Multiple Qt tray process groups were found. Leaving pid(s) running because the tray may use a parent/child process group: $pids"
   Write-Info $message
   Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
 
-  foreach ($duplicate in $duplicates) {
-    try {
-      Stop-Process -Id $duplicate.ProcessId -Force -ErrorAction Stop
-    } catch {
-      $errorMessage = "Failed to stop duplicate tray root pid=$($duplicate.ProcessId): $($_.Exception.Message)"
-      Write-Info $errorMessage
-      Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $errorMessage"
-    }
-  }
-
-  return @($keep)
+  return @($TrayProcesses)
 }
 
 function Invoke-LoggedCommand {
@@ -244,6 +231,50 @@ function Test-NeedsBuild {
   return $false
 }
 
+function Resolve-NodeExe {
+  param([string]$ProjectRoot)
+
+  if ($env:RABIROUTE_NODE -and (Test-Path -LiteralPath $env:RABIROUTE_NODE)) {
+    return [pscustomobject]@{ Source = (Resolve-Path -LiteralPath $env:RABIROUTE_NODE).Path; Reason = "RABIROUTE_NODE" }
+  }
+
+  $pathNode = Get-Command node.exe -ErrorAction SilentlyContinue
+  if ($pathNode) {
+    return [pscustomobject]@{ Source = $pathNode.Source; Reason = "PATH" }
+  }
+
+  $candidates = @(
+    [pscustomobject]@{ Path = (Join-Path $ProjectRoot "node.exe"); Reason = "project portable node" },
+    [pscustomobject]@{ Path = (Join-Path $ProjectRoot ".node\node.exe"); Reason = "project .node" },
+    [pscustomobject]@{ Path = (Join-Path $ProjectRoot "tools\node\node.exe"); Reason = "project tools/node" },
+    [pscustomobject]@{ Path = (Join-Path $ProjectRoot "tools\nodejs\node.exe"); Reason = "project tools/nodejs" },
+    [pscustomobject]@{ Path = (Join-Path (Split-Path -Parent $ProjectRoot) "tools\node\node.exe"); Reason = "workspace tools/node" },
+    [pscustomobject]@{ Path = (Join-Path (Split-Path -Parent $ProjectRoot) "tools\nodejs\node.exe"); Reason = "workspace tools/nodejs" }
+  )
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate.Path) {
+      return [pscustomobject]@{ Source = (Resolve-Path -LiteralPath $candidate.Path).Path; Reason = $candidate.Reason }
+    }
+  }
+
+  $toolsRoot = Join-Path (Split-Path -Parent $ProjectRoot) "tools"
+  if (Test-Path -LiteralPath $toolsRoot) {
+    $ignored = @("node_modules", ".git", "build", "dist")
+    $toolNode = Get-ChildItem -LiteralPath $toolsRoot -Recurse -Filter node.exe -File -ErrorAction SilentlyContinue |
+      Where-Object {
+        $path = $_.FullName
+        -not ($ignored | Where-Object { $path -match "\\$([Regex]::Escape($_))\\" })
+      } |
+      Sort-Object @{ Expression = { $_.FullName.Split([IO.Path]::DirectorySeparatorChar).Count } }, FullName |
+      Select-Object -First 1
+    if ($toolNode) {
+      return [pscustomobject]@{ Source = $toolNode.FullName; Reason = "workspace tools search" }
+    }
+  }
+
+  return $null
+}
+
 try {
   $scriptPath = if ($env:RABIROUTE_LAUNCHER) { $env:RABIROUTE_LAUNCHER } elseif ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
   $projectRoot = Resolve-Path (Split-Path -Parent $scriptPath)
@@ -307,10 +338,12 @@ try {
     Invoke-LoggedCommand -FilePath $npm.Source -Arguments @("run", "build") -LogPath $launcherLog -WorkingDirectory $projectRoot
   }
 
-  $node = Get-Command node.exe -ErrorAction SilentlyContinue
+  $node = Resolve-NodeExe -ProjectRoot $projectRoot
   if (-not $node) {
-    throw "node.exe was not found. Install Node.js or run from an environment that has Node on PATH."
+    throw "node.exe was not found. Install Node.js, set RABIROUTE_NODE, or place node.exe in .\node.exe, .\.node\, .\tools\node\, .\tools\nodejs\, ..\tools\node\, or ..\tools\nodejs."
   }
+  Write-Info "Using Node from $($node.Reason): $($node.Source)"
+  Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Using Node from $($node.Reason): $($node.Source)"
 
   Write-Info "Starting manager in background..."
   Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Starting $($node.Source) $distManager"

@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,6 +15,12 @@
     "webgui:dev": "vite --config ribiwebgui/vite.config.ts --host 127.0.0.1",
     "webgui:build": "vue-tsc -p ribiwebgui/tsconfig.json --noEmit && vite build --config ribiwebgui/vite.config.ts",
     "check:config": "node scripts/check-config-text.mjs",
+    "relay:rabilink": "node scripts/rabilink-relay-server.mjs",
+    "relay:rabilink:openapi:check": "node scripts/check-rabilink-openapi.mjs",
+    "relay:rabilink:test:public": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RabiLinkRelayPublic.ps1 -BaseUrl https://rabi.example.com -SkipQueueSmoke",
+    "relay:rabilink:test:public:custom": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RabiLinkRelayPublic.ps1",
+    "relay:rabilink:worker:check": "node --check scripts/rabilink-relay-cloudflare-worker.mjs",
+    "relay:rabilink:worker:deploy": "npx wrangler deploy --config wrangler.rabilink-relay.toml",
     "send:onebot": "node scripts/send-onebot-message.mjs"
   },
   "dependencies": {

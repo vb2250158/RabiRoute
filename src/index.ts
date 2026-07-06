@@ -4,12 +4,13 @@ import { config } from "./config.js";
 import { createHeartbeatAdapter } from "./adapters/heartbeatAdapter.js";
 import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
 import { createWeComAdapter } from "./adapters/wecomAdapter.js";
-import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
+import { createFenneNoteAdapter, createRabiLinkAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
-import { forwardMessageAndWait, type ForwardDeliveryResult } from "./forwarding.js";
+import { forwardMessageAndWait, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
 import type { RolePanelMessageRecord } from "./history.js";
+import { replayDeliveryAttempts } from "./deliveryReplay.js";
 
 type GatewayStatus = {
   messageAdapter?: {
@@ -33,6 +34,54 @@ function deliverySummary(result: ForwardDeliveryResult): string {
   const deliveredAdapters = result.adapterOutcomes.filter((outcome) => outcome.status === "delivered").length;
   const reason = result.reason ? ` reason=${result.reason}` : "";
   return `status=${result.status} matched=${result.matchedRuleCount} packets=${result.sentPacketCount} adapters=${deliveredAdapters}/${result.adapterOutcomes.length} failed=${failedAdapters}${reason}`;
+}
+
+function parseReplayRouteKind(value: string | undefined): ForwardRouteKind | undefined {
+  return value === "private"
+    || value === "group_message"
+    || value === "direct_at"
+    || value === "direct_reply"
+    || value === "indirect_reply"
+    || value === "heartbeat"
+    || value === "manual_trigger"
+    || value === "role_panel_message"
+    || value === "voice_transcript"
+    ? value
+    : undefined;
+}
+
+const deliveryReplayArg = process.argv.find((arg) => arg.startsWith("--delivery-replay="));
+const deliveryReplayMessageArg = process.argv.find((arg) => arg.startsWith("--delivery-replay-message="));
+if (deliveryReplayArg || deliveryReplayMessageArg) {
+  const attemptIds = deliveryReplayArg
+    ? deliveryReplayArg
+      .slice("--delivery-replay=".length)
+      .split(",")
+      .map((item) => decodeURIComponent(item).trim())
+      .filter(Boolean)
+    : [];
+  const modeArg = process.argv.find((arg) => arg.startsWith("--delivery-replay-mode="));
+  const routeKindArg = process.argv.find((arg) => arg.startsWith("--delivery-replay-route-kind="));
+  const routeKind = parseReplayRouteKind(routeKindArg?.slice("--delivery-replay-route-kind=".length));
+  const messageId = deliveryReplayMessageArg ? decodeURIComponent(deliveryReplayMessageArg.slice("--delivery-replay-message=".length)).trim() : undefined;
+  const mode = modeArg?.slice("--delivery-replay-mode=".length) === "merge" ? "merge" : "single";
+  try {
+    const result = await replayDeliveryAttempts(config.dataDir, {
+      attemptIds,
+      mode,
+      routeKind,
+      messageId
+    });
+    if (!result.ok) {
+      console.error(`RabiRoute delivery replay failed: ${result.error ?? result.result?.status ?? "unknown"}`);
+      process.exit(1);
+    }
+    console.log(`RabiRoute delivery replay completed: mode=${result.mode} attempts=${result.replayedAttemptIds.length} status=${result.result?.status ?? "unknown"}`);
+    process.exit(0);
+  } catch (error) {
+    console.error(`RabiRoute delivery replay failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
 
 const manualTriggerArg = process.argv.find((arg) => arg.startsWith("--manual-trigger="));
@@ -168,7 +217,7 @@ function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdap
   }, null, 2), "utf8");
 }
 
-function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "webhook">): MessageAdapter {
+function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "rabilink" | "webhook">): MessageAdapter {
   return {
     type,
     start() {
@@ -202,6 +251,9 @@ function createMessageAdapter(): MessageAdapter {
   if (config.messageAdapterType === "xiaoai") {
     return createXiaoAiAdapter();
   }
+  if (config.messageAdapterType === "rabilink") {
+    return createRabiLinkAdapter();
+  }
   if (config.messageAdapterType === "webhook") {
     return createWebhookAdapter();
   }
@@ -224,6 +276,9 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   }
   if (type === "xiaoai") {
     return createXiaoAiAdapter();
+  }
+  if (type === "rabilink") {
+    return createRabiLinkAdapter();
   }
   if (type === "webhook") {
     return createWebhookAdapter();

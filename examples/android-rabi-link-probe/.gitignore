@@ -1,0 +1,10 @@
+/.gradle/
+/app/build/
+/glass-asr/build/
+/build/
+/out/
+/secrets/
+/local.properties
+*.hprof
+*.keystore
+*.jks

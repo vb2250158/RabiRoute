@@ -1,4 +1,4 @@
-﻿import fs from "node:fs";
+import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +17,7 @@ import {
 } from "../agentAdapters/managerApi.js";
 import type { MessageAdapterType } from "../adapters/messageAdapter.js";
 import type { ForwardRouteKind } from "../forwarding.js";
+import { listDeliveryReplayAttempts } from "../deliveryReplayLedger.js";
 import {
   configureNapcatOneBot,
   launchNapcatInstance as launchNapcatInstanceEndpoint,
@@ -29,6 +30,7 @@ import {
 } from "../messageEndpoints/napcatManager.js";
 import {
   scanFenneNoteEndpoint,
+  scanRabiLinkEndpoint,
   scanWebhookEndpoint,
   scanXiaoAiEndpoint
 } from "../messageEndpoints/webhookLikeScans.js";
@@ -64,6 +66,8 @@ import {
   personaConfigPath as resolvePersonaConfigPath
 } from "../shared/routePaths.js";
 import { ManagerConfigRepository } from "./configRepository.js";
+import { RabiGlobalConfigStore } from "./globalConfig.js";
+import { handleRabiApi } from "./rabiApi.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import {
@@ -99,6 +103,9 @@ type GatewayDefinition = {
   fenneNoteWebhookPath?: string;
   xiaoaiWebhookPort?: number;
   xiaoaiWebhookPath?: string;
+  rabiLinkWebhookPort?: number;
+  rabiLinkWebhookPath?: string;
+  rabiLinkWebhookHost?: string;
   wecomBotId?: string;
   wecomBotSecret?: string;
   wecomWsUrl?: string;
@@ -171,6 +178,7 @@ type NotificationRuleDefinition = {
   enabled?: boolean;
   routeKinds?: string[];
   targetGroupId?: string;
+  allowedSpeakerNames?: string[];
   regex?: string;
   schedules?: NotificationScheduleDefinition[];
   template: string;
@@ -295,6 +303,7 @@ const managerHost = process.env.GATEWAY_MANAGER_HOST ?? "127.0.0.1";
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
 const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
+const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
 
 type ManagerConfig = { routeDir?: string; rolesDir?: string };
 
@@ -487,7 +496,7 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
 function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
   return unique.length > 0 ? unique : ["napcat"];
 }
@@ -498,19 +507,7 @@ function sanitizeInstanceId(value: unknown, fallback: string): string {
 }
 
 function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstanceDefinition[] {
-  const raw = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
-  const source = raw.length > 0
-    ? raw
-    : [{
-        id: "default",
-        name: "默认 NapCat",
-        enabled: true,
-        gatewayPort: definition.gatewayPort,
-        httpUrl: definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
-        webuiUrl: definition.napcatWebuiUrl ?? "http://127.0.0.1:6099/webui",
-        accessToken: definition.napcatAccessToken,
-        webuiToken: definition.napcatWebuiToken
-      }];
+  const source = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
 
   const used = new Set<string>();
   return source.map((item, index) => {
@@ -549,7 +546,15 @@ function normalizeCodexCwd(value: unknown): string | undefined {
     return undefined;
   }
 
-  return trimmed;
+  return path.isAbsolute(trimmed) ? trimmed : path.resolve(rootDir, trimmed);
+}
+
+function resolveCodexThreadName(definition: GatewayDefinition): string {
+  return definition.codexThreadName?.trim()
+    || definition.routeName?.trim()
+    || definition.name?.trim()
+    || routeRuntimeParts(definition.id).configName
+    || definition.id;
 }
 
 function normalizeIgnoredNapcatInstanceIds(raw: unknown): string[] {
@@ -596,6 +601,9 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     fenneNoteWebhookPath: definition.fenneNoteWebhookPath,
     xiaoaiWebhookPort: definition.xiaoaiWebhookPort,
     xiaoaiWebhookPath: definition.xiaoaiWebhookPath,
+    rabiLinkWebhookPort: definition.rabiLinkWebhookPort,
+    rabiLinkWebhookPath: definition.rabiLinkWebhookPath,
+    rabiLinkWebhookHost: definition.rabiLinkWebhookHost,
     napcatHttpUrl: definition.napcatHttpUrl,
     napcatWebuiUrl: definition.napcatWebuiUrl,
     napcatAccessToken: definition.napcatAccessToken,
@@ -1122,10 +1130,13 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     FENNOTE_WEBHOOK_PATH: definition.fenneNoteWebhookPath ?? "/fennenote",
     XIAOAI_WEBHOOK_PORT: String(definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
     XIAOAI_WEBHOOK_PATH: definition.xiaoaiWebhookPath ?? "/xiaoai",
+    RABILINK_WEBHOOK_PORT: String(definition.rabiLinkWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
+    RABILINK_WEBHOOK_PATH: definition.rabiLinkWebhookPath ?? "/rabilink",
+    RABILINK_WEBHOOK_HOST: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
     WECOM_BOT_ID: definition.wecomBotId?.trim() || process.env.WECOM_BOT_ID || "",
     WECOM_BOT_SECRET: definition.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET || "",
     WECOM_WS_URL: definition.wecomWsUrl?.trim() || process.env.WECOM_WS_URL || "",
-    CODEX_THREAD_NAME: definition.codexThreadName ?? definition.name ?? definition.id,
+    CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? process.env.CODEX_CWD ?? rootDir,
     COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
     COPILOT_CWD: definition.copilotCwd?.trim() || process.env.COPILOT_CWD || rootDir,
@@ -1323,13 +1334,37 @@ function readAgentStates(definition: GatewayDefinition): Record<string, unknown>
 }
 
 function readAgentState(definition: GatewayDefinition, adapterType: AgentAdapterType): Record<string, unknown> {
-  const reported = agentStateByGateway.get(definition.id)?.[adapterType] ?? {};
+  const reported: Record<string, unknown> = agentStateByGateway.get(definition.id)?.[adapterType] ?? {};
   const base = defaultAgentState(definition, adapterType);
   if (adapterType === "codex") {
-    return {
+    const merged: Record<string, unknown> = {
       ...base,
       ...reported,
       ...codexBindingState(definition, adapterType)
+    };
+    const lastNotificationError = String(merged.lastNotificationError ?? "").trim();
+    const lastDeliveryVisibility = String(merged.lastDeliveryVisibility ?? "").trim();
+    if (lastDeliveryVisibility === "desktop-client-not-loaded") {
+      return {
+        ...merged,
+        bound: Boolean(merged.monitorThreadId),
+        deliveryHealthy: false,
+        message: "Codex app-server fallback 已接受最近投递，但目标 Desktop 会话当前没有确认加载；这不等同于当前窗口可见。"
+      };
+    }
+    if (!lastNotificationError) {
+      return merged;
+    }
+
+    return {
+      ...merged,
+      bound: false,
+      deliveryHealthy: false,
+      message: codexDeliveryErrorSummary(
+        lastNotificationError,
+        Number(merged.retryPendingCount ?? 0),
+        String(merged.nextRetryAt ?? "")
+      )
     };
   }
   const merged: Record<string, unknown> = {
@@ -1343,6 +1378,21 @@ function readAgentState(definition: GatewayDefinition, adapterType: AgentAdapter
       ? false
       : Boolean(merged.lastNotificationAt && !merged.lastNotificationError)
   };
+}
+
+function codexDeliveryErrorSummary(error: string, retryPendingCount = 0, nextRetryAt = ""): string {
+  if (error.includes("no-client-found")) {
+    const lines = [
+      "Codex Desktop 线程已在 session index 中找到，但当前没有加载成可投递客户端。",
+      "需要打开/唤醒目标线程，或迁移到常驻 worker。"
+    ];
+    if (retryPendingCount > 0) {
+      lines.push(`RabiRoute 已暂存 ${retryPendingCount} 条待补投消息${nextRetryAt ? `，下一次重试：${nextRetryAt}` : ""}。`);
+    }
+    return lines.join(" ");
+  }
+
+  return `Codex delivery failed: ${error}`;
 }
 
 function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdapterType): Record<string, unknown> {
@@ -1383,7 +1433,7 @@ function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdap
 }
 
 function codexBindingState(definition: GatewayDefinition, adapterType: Extract<AgentAdapterType, "codex">): Record<string, unknown> {
-  const targetName = definition.codexThreadName ?? definition.name ?? definition.id;
+  const targetName = resolveCodexThreadName(definition);
   const indexPath = sessionIndexPath();
   const best = readLatestSessionThreads(indexPath)
     .filter((record) => record.threadName === targetName)
@@ -1397,7 +1447,7 @@ function codexBindingState(definition: GatewayDefinition, adapterType: Extract<A
     monitorThreadUpdatedAt: best?.updatedAt,
     monitorThreadSource: indexPath,
     lastAutoDiscoveryAt: best ? new Date().toISOString() : undefined,
-    message: best ? undefined : `No Codex thread named "${targetName}" was found in ${indexPath}.`
+    message: best ? undefined : `No Codex thread named "${targetName}" was found in ${indexPath}. It will be auto-created on first delivery when Codex auto-create is enabled.`
   };
 }
 
@@ -1442,8 +1492,34 @@ function adapterRuntimes(type: MessageAdapterType): GatewayRuntime[] {
   return [...runtimes.values()].filter((runtime) => runtimeAdapterTypes(runtime.definition).includes(type));
 }
 
+function firstLocalIpv4Address(): string {
+  for (const addresses of Object.values(os.networkInterfaces())) {
+    const match = (addresses ?? []).find((address) => address.family === "IPv4" && !address.internal);
+    if (match?.address) return match.address;
+  }
+  return "127.0.0.1";
+}
+
+function isUnspecifiedHttpHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]";
+}
+
+function callbackUrlForCopy(url: string, type: MessageAdapterType): string {
+  if (type !== "rabilink") return url;
+  try {
+    const parsed = new URL(url);
+    if (isUnspecifiedHttpHost(parsed.hostname)) {
+      parsed.hostname = firstLocalIpv4Address();
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return url;
+  }
+}
+
 function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType): AdapterEndpoint | null {
-  if (type !== "webhook" && type !== "fennenote" && type !== "xiaoai") return null;
+  if (type !== "webhook" && type !== "fennenote" && type !== "xiaoai" && type !== "rabilink") return null;
   const definition = runtime.definition;
   const status = readGatewayStatus(definition) as Record<string, any>;
   const callback = status.httpCallbacks?.[type];
@@ -1451,14 +1527,19 @@ function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType
     ? definition.fenneNoteWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
     : type === "xiaoai"
       ? definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
-      : definition.webhookPort ?? definition.gatewayPort;
+      : type === "rabilink"
+        ? definition.rabiLinkWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
+        : definition.webhookPort ?? definition.gatewayPort;
   const pathValue = type === "fennenote"
     ? definition.fenneNoteWebhookPath ?? "/fennenote"
     : type === "xiaoai"
       ? definition.xiaoaiWebhookPath ?? "/xiaoai"
-      : definition.webhookPath ?? "/webhook";
+      : type === "rabilink"
+        ? definition.rabiLinkWebhookPath ?? "/rabilink"
+        : definition.webhookPath ?? "/webhook";
   const normalized = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
-  const url = String(callback?.url || `http://127.0.0.1:${port}${normalized}`);
+  const host = type === "rabilink" ? definition.rabiLinkWebhookHost?.trim() || "0.0.0.0" : "127.0.0.1";
+  const url = callbackUrlForCopy(String(callback?.url || `http://${host}:${port}${normalized}`), type);
   return {
     label: `${sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName} 回调入口`,
     url,
@@ -1604,10 +1685,11 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     checkHttpEndpoint,
     fenneNotePlaybackUrl
   };
-  const [napcat, fennenote, xiaoai, webhook, wecom] = await Promise.all([
+  const [napcat, fennenote, xiaoai, rabilink, webhook, wecom] = await Promise.all([
     scanNapcatEndpoint(napcatManagerCtx()),
     scanFenneNoteEndpoint(webhookLikeScanCtx),
     scanXiaoAiEndpoint(webhookLikeScanCtx),
+    scanRabiLinkEndpoint(webhookLikeScanCtx),
     scanWebhookEndpoint(webhookLikeScanCtx),
     scanWeComEndpoint({
       rootDir,
@@ -1643,6 +1725,7 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     },
     fennenote,
     xiaoai,
+    rabilink,
     wecom,
     webhook
   };
@@ -1881,6 +1964,9 @@ function collectStartedNapcatInstances(): Array<Record<string, unknown>> {
       const configured = configuredInstances.find((instance) =>
         String(instance.id) === rowId || (rowPort > 0 && Number(instance.gatewayPort) === rowPort)
       );
+      if (!configured) {
+        continue;
+      }
       const gatewayPort = Number(row.gatewayPort || configured?.gatewayPort || runtime.definition.gatewayPort || 0);
       const key = [
         runtime.definition.id,
@@ -2049,6 +2135,10 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     ...readEntries("小米音箱 / 小爱", "xiaoai-voice-transcripts.jsonl"),
     ...readEntries("小米音箱 / 小爱", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "xiaoai")
   ]);
+  const rabiLinkEntries = sortTail([
+    ...readEntries("RabiLink / 手机桥", "rabilink-voice-transcripts.jsonl"),
+    ...readEntries("RabiLink / 手机桥", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "rabilink")
+  ]);
   const webhookEntries = sortTail(readEntries("通用 Webhook", "voice-transcripts.jsonl")
     .filter((entry) => {
       const adapterType = String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase();
@@ -2085,6 +2175,13 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
         path.join(dir, "voice-transcripts.jsonl")
       ]),
       entries: xiaoaiEntries
+    },
+    rabilink: {
+      paths: dirs.flatMap((dir) => [
+        path.join(dir, "rabilink-voice-transcripts.jsonl"),
+        path.join(dir, "voice-transcripts.jsonl")
+      ]),
+      entries: rabiLinkEntries
     },
     wecom: {
       paths: dirs.map((dir) => path.join(dir, "wecom-messages.jsonl")),
@@ -2128,6 +2225,10 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
       paths: [path.join(dir, "xiaoai-adapter.log.jsonl")],
       entries: readEntries("xiaoai")
     },
+    rabilink: {
+      paths: [path.join(dir, "rabilink-adapter.log.jsonl")],
+      entries: readEntries("rabilink")
+    },
     wecom: {
       paths: [path.join(dir, "wecom-adapter.log.jsonl")],
       entries: readEntries("wecom")
@@ -2166,6 +2267,9 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     fenneNoteWebhookPath: runtime.definition.fenneNoteWebhookPath,
     xiaoaiWebhookPort: runtime.definition.xiaoaiWebhookPort,
     xiaoaiWebhookPath: runtime.definition.xiaoaiWebhookPath,
+    rabiLinkWebhookPort: runtime.definition.rabiLinkWebhookPort,
+    rabiLinkWebhookPath: runtime.definition.rabiLinkWebhookPath,
+    rabiLinkWebhookHost: runtime.definition.rabiLinkWebhookHost,
     wecomBotId: runtime.definition.wecomBotId,
     wecomBotSecret: runtime.definition.wecomBotSecret,
     wecomWsUrl: runtime.definition.wecomWsUrl,
@@ -2183,7 +2287,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     routeVariables: runtime.definition.routeVariables,
     routeName: runtime.definition.routeName,
     routeProfiles: runtime.definition.routeProfiles ?? [],
-    codexThreadName: runtime.definition.codexThreadName ?? runtime.definition.name ?? runtime.definition.id,
+    codexThreadName: resolveCodexThreadName(runtime.definition),
     codexCwd: runtime.definition.codexCwd,
     copilotCwd: runtime.definition.copilotCwd,
     copilotCliBin: runtime.definition.copilotCliBin,
@@ -2252,6 +2356,14 @@ type ManualTriggerRequest = {
   ruleId?: string;
 };
 
+type DeliveryReplayRequest = {
+  attemptId?: string;
+  attemptIds?: string[];
+  routeKind?: string;
+  messageId?: string;
+  mode?: "single" | "merge";
+};
+
 type RolePanelMessageRequest = {
   gatewayId?: string;
   text?: string;
@@ -2312,6 +2424,108 @@ function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}
 
 function normalizeManualRouteKind(value: unknown): ForwardRouteKind {
   return value === "heartbeat" ? "heartbeat" : "manual_trigger";
+}
+
+function routeDataDirForDefinition(definition: GatewayDefinition): string {
+  const configName = routeRuntimeParts(definition.id).configName || sanitizeConfigName(definition.name ?? definition.id);
+  return routeFolderPath(routeRoot, configName);
+}
+
+function listGatewayDeliveryReplayAttempts(id: string, limit: number, status: string | null): Record<string, unknown> {
+  const runtime = runtimes.get(id);
+  if (!runtime) {
+    throw new Error(`Gateway not found: ${id}`);
+  }
+  const dataDir = routeDataDirForDefinition(runtime.definition);
+  return {
+    gatewayId: id,
+    dataDir: path.relative(rootDir, dataDir).replace(/\\/g, "/"),
+    attempts: listDeliveryReplayAttempts(dataDir, {
+      status: status === "failed" || status === "delivered" || status === "missed" || status === "routed" || status === "skipped" ? status : undefined,
+      limit
+    }).map((attempt) => ({
+      attemptId: attempt.attemptId,
+      time: attempt.time,
+      routeKind: attempt.routeKind,
+      messageId: attempt.messageId,
+      status: attempt.result.status,
+      matchedRuleCount: attempt.result.matchedRuleCount,
+      sentPacketCount: attempt.result.sentPacketCount,
+      failedAdapterCount: attempt.result.adapterOutcomes.filter((outcome) => outcome.status === "failed").length,
+      packetCount: attempt.packets.length,
+      replayOfAttemptId: attempt.replayOfAttemptId
+    }))
+  };
+}
+
+function replayGatewayDelivery(id: string, request: DeliveryReplayRequest = {}): Promise<void> {
+  const runtime = runtimes.get(id);
+  if (!runtime) {
+    throw new Error(`Gateway not found: ${id}`);
+  }
+  const attemptIds = (request.attemptIds?.length ? request.attemptIds : request.attemptId ? [request.attemptId] : [])
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+  const routeKind = parseReplayRouteKind(request.routeKind);
+  const messageId = request.messageId?.trim();
+  if (attemptIds.length === 0 && (!routeKind || !messageId)) {
+    throw new Error("No delivery replay attempt id was provided.");
+  }
+
+  const mode = request.mode === "merge" || attemptIds.length > 1 ? "merge" : "single";
+  const args = [
+    `--delivery-replay-mode=${mode}`
+  ];
+  if (attemptIds.length > 0) {
+    args.push(`--delivery-replay=${encodeURIComponent(attemptIds.join(","))}`);
+  }
+  if (routeKind && messageId) {
+    args.push(`--delivery-replay-route-kind=${routeKind}`, `--delivery-replay-message=${encodeURIComponent(messageId)}`);
+  }
+  const command = childCommand(args);
+  appendLog(runtime, `delivery replay requested: mode=${mode} attempts=${attemptIds.join(",") || "none"} message=${routeKind && messageId ? `${routeKind}:${messageId}` : "none"}`);
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+
+    child.stdout.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `delivery replay: ${line}`);
+      }
+    });
+    child.stderr.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `delivery replay error: ${line}`);
+      }
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        appendLog(runtime, `delivery replay completed: mode=${mode} attempts=${attemptIds.length}`);
+        resolve();
+        return;
+      }
+      reject(new Error(`delivery replay failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
+    });
+  });
+}
+
+function parseReplayRouteKind(value: unknown): ForwardRouteKind | undefined {
+  return value === "private"
+    || value === "group_message"
+    || value === "direct_at"
+    || value === "direct_reply"
+    || value === "indirect_reply"
+    || value === "heartbeat"
+    || value === "manual_trigger"
+    || value === "role_panel_message"
+    || value === "voice_transcript"
+    ? value
+    : undefined;
 }
 
 function roleDirForDefinition(definition: GatewayDefinition): string {
@@ -2789,6 +3003,14 @@ function standaloneGatewayPayload(): Record<string, unknown> {
 }
 
 function networkOptionsPayload(): Record<string, unknown> {
+  const localAddresses = Object.entries(os.networkInterfaces())
+    .flatMap(([name, addresses]) => (addresses ?? [])
+      .filter((address) => address.family === "IPv4" && !address.internal)
+      .map((address) => ({
+        name,
+        address: address.address,
+        cidr: address.cidr
+      })));
   const adapters = {
     napcat: {
       httpServers: [],
@@ -2804,6 +3026,7 @@ function networkOptionsPayload(): Record<string, unknown> {
     code: 0,
     data: {
       adapters,
+      localAddresses,
       httpServers: [],
       websocketClients: []
     }
@@ -2811,6 +3034,19 @@ function networkOptionsPayload(): Record<string, unknown> {
 }
 
 function metaPayload(): Record<string, unknown> {
+  const version = packageVersion();
+  const globalConfig = rabiGlobalConfig.read();
+  return {
+    version,
+    githubUrl: "https://github.com/vb2250158/RabiRoute",
+    managerPort,
+    rabiGuid: globalConfig.rabiGuid,
+    rabiName: globalConfig.rabiName,
+    computerName: os.hostname()
+  };
+}
+
+function packageVersion(): string {
   let version = "0.1.0";
   try {
     const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
@@ -2820,11 +3056,7 @@ function metaPayload(): Record<string, unknown> {
   } catch {
     // Keep the baked fallback when package metadata is not readable.
   }
-  return {
-    version,
-    githubUrl: "https://github.com/vb2250158/RabiRoute",
-    managerPort
-  };
+  return version;
 }
 
 function contentTypeFor(filePath: string): string {
@@ -2950,6 +3182,40 @@ function handleTriggerAction(request: http.IncomingMessage, pathname: string, re
   return true;
 }
 
+function handleDeliveryReplayAction(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  const match = requestUrl.pathname.match(/^\/gateways\/([^/]+)\/delivery-replay$/);
+  if (!match) {
+    return false;
+  }
+
+  const id = decodeURIComponent(match[1]);
+  if (request.method === "GET") {
+    try {
+      const limit = Number(requestUrl.searchParams.get("limit") ?? "50") || 50;
+      const status = requestUrl.searchParams.get("status");
+      jsonResponse(response, 200, { code: 0, ...listGatewayDeliveryReplayAttempts(id, limit, status) });
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  }
+
+  if (request.method === "POST") {
+    void readJsonBody<DeliveryReplayRequest>(request)
+      .then((body) => replayGatewayDelivery(id, body))
+      .then(() => {
+        jsonResponse(response, 202, { code: 0, message: "delivery replay requested", data: [...runtimes.values()].map(runtimeStatus) });
+      })
+      .catch((error) => {
+        jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      });
+    return true;
+  }
+
+  jsonResponse(response, 405, { code: -1, message: "Method not allowed" });
+  return true;
+}
+
 function handleAgentStateReport(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
   if (pathname !== "/api/agent-state") {
     return false;
@@ -2998,7 +3264,27 @@ export function startManager(): void {
       if (request.method === "POST" && handleTriggerAction(request, requestUrl.pathname, response)) {
         return;
       }
+      if ((request.method === "GET" || request.method === "POST") && handleDeliveryReplayAction(request, requestUrl, response)) {
+        return;
+      }
       if (request.method === "POST" && handleAgentStateReport(request, requestUrl.pathname, response)) {
+        return;
+      }
+      if (handleRabiApi(request, requestUrl, response, {
+        rootDir,
+        routeRoot,
+        managerPort,
+        managerHost,
+        version: packageVersion,
+        globalConfig: rabiGlobalConfig,
+        runtimes: () => runtimes.values(),
+        runtimeStatus,
+        readConfig,
+        writeConfig,
+        loadRuntimes,
+        syncRunningGateways,
+        agentManagerApiCtx
+      })) {
         return;
       }
       if (handleRemoteAgentApi(request, requestUrl, response)) {

@@ -178,6 +178,7 @@ const adapterParamOpen = ref<Record<string, boolean>>({
   heartbeat: false,
   fennenote: false,
   xiaoai: false,
+  rabilink: false,
   webhook: false
 });
 const addAdapterMenu = ref(false);
@@ -216,7 +217,8 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     note: "来自具体设备或笔记工具的语音输入。",
     choices: [
       { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "接收 FenneNote 桌面语音转写", icon: "mdi-note-edit-outline" },
-      { type: "xiaoai", title: "小米音箱 / 小爱", note: "接收小爱音箱语音转写", icon: "mdi-speaker-wireless" }
+      { type: "xiaoai", title: "小米音箱 / 小爱", note: "接收小爱音箱语音转写", icon: "mdi-speaker-wireless" },
+      { type: "rabilink", title: "RabiLink / 手机桥", note: "手机端集成管理、测试和转发 Rokid 文本到 Codex", icon: "mdi-cellphone-link" }
     ]
   },
   {
@@ -430,7 +432,7 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "heartbeat", "fennenote", "xiaoai", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "heartbeat", "fennenote", "xiaoai", "rabilink", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
 
@@ -502,6 +504,7 @@ function nextNapcatPort(base: number): number {
       Number(item.webhookPort),
       Number(item.fenneNoteWebhookPort),
       Number(item.xiaoaiWebhookPort),
+      Number(item.rabiLinkWebhookPort),
       ...(Array.isArray(item.napcatInstances) ? item.napcatInstances.map(instance => Number(instance.gatewayPort)) : [])
     ]),
     ...store.managerRows.flatMap((item) => [
@@ -509,6 +512,7 @@ function nextNapcatPort(base: number): number {
       Number(item.webhookPort),
       Number(item.fenneNoteWebhookPort),
       Number(item.xiaoaiWebhookPort),
+      Number(item.rabiLinkWebhookPort),
       ...(Array.isArray(item.napcatInstances) ? item.napcatInstances.map(instance => Number(instance.gatewayPort)) : [])
     ])
   ].filter(port => Number.isFinite(port) && port > 0));
@@ -542,6 +546,7 @@ function autoAssignNapcatPortsForAllGateways(): boolean {
     if (activeAdapters.includes("webhook")) claim(item.webhookPort ?? item.gatewayPort);
     if (activeAdapters.includes("fennenote")) claim(item.fenneNoteWebhookPort ?? item.webhookPort ?? item.gatewayPort);
     if (activeAdapters.includes("xiaoai")) claim(item.xiaoaiWebhookPort ?? item.webhookPort ?? item.gatewayPort);
+    if (activeAdapters.includes("rabilink")) claim(item.rabiLinkWebhookPort ?? item.webhookPort ?? item.gatewayPort);
   }
 
   let changed = false;
@@ -874,13 +879,38 @@ function napcatInstanceWsUrl(instance: NapCatInstance): string {
 function webhookPortFor(type: MessageAdapterType): number {
   if (type === "fennenote") return Number(gateway.value?.fenneNoteWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
   if (type === "xiaoai") return Number(gateway.value?.xiaoaiWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
+  if (type === "rabilink") return Number(gateway.value?.rabiLinkWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
   return Number(gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
 }
 
 function webhookPathFor(type: MessageAdapterType): string {
   if (type === "fennenote") return gateway.value?.fenneNoteWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "xiaoai") return gateway.value?.xiaoaiWebhookPath || adapterDefaultWebhookPath(type);
+  if (type === "rabilink") return gateway.value?.rabiLinkWebhookPath || adapterDefaultWebhookPath(type);
   return gateway.value?.webhookPath || adapterDefaultWebhookPath(type);
+}
+
+function webhookHostFor(type: MessageAdapterType): string {
+  if (type === "rabilink") return gateway.value?.rabiLinkWebhookHost || "0.0.0.0";
+  return "127.0.0.1";
+}
+
+function isUnspecifiedHttpHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]";
+}
+
+function localCallbackHost(): string {
+  const browserHost = window.location.hostname;
+  if (browserHost && !isUnspecifiedHttpHost(browserHost) && browserHost !== "localhost" && !browserHost.startsWith("127.")) {
+    return browserHost;
+  }
+  return store.networkOptions.localAddresses?.find((item) => item.address)?.address || "127.0.0.1";
+}
+
+function callbackHostFor(type: MessageAdapterType): string {
+  const host = webhookHostFor(type);
+  return type === "rabilink" && isUnspecifiedHttpHost(host) ? localCallbackHost() : host;
 }
 
 function setWebhookPort(type: MessageAdapterType, value: unknown): void {
@@ -888,6 +918,7 @@ function setWebhookPort(type: MessageAdapterType, value: unknown): void {
   const port = Number(value || 0);
   if (type === "fennenote") gateway.value.fenneNoteWebhookPort = port;
   else if (type === "xiaoai") gateway.value.xiaoaiWebhookPort = port;
+  else if (type === "rabilink") gateway.value.rabiLinkWebhookPort = port;
   else gateway.value.webhookPort = port;
   touch();
 }
@@ -897,19 +928,37 @@ function setWebhookPath(type: MessageAdapterType, value: unknown): void {
   const path = String(value || "");
   if (type === "fennenote") gateway.value.fenneNoteWebhookPath = path;
   else if (type === "xiaoai") gateway.value.xiaoaiWebhookPath = path;
+  else if (type === "rabilink") gateway.value.rabiLinkWebhookPath = path;
   else gateway.value.webhookPath = path;
   touch();
 }
 
+function setWebhookHost(type: MessageAdapterType, value: unknown): void {
+  if (!gateway.value || type !== "rabilink") return;
+  gateway.value.rabiLinkWebhookHost = String(value || "").trim() || "0.0.0.0";
+  touch();
+}
+
 function webhookUrl(type: MessageAdapterType = "webhook"): string {
-  return `http://127.0.0.1:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
+  return `http://${webhookHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
+}
+
+function callbackUrl(type: MessageAdapterType = "webhook"): string {
+  return `http://${callbackHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
+}
+
+function webhookTestEventType(type: MessageAdapterType): string {
+  if (type === "fennenote") return "fennenote.transcript";
+  if (type === "xiaoai") return "xiaoai.transcript";
+  if (type === "rabilink") return "rabilink.message";
+  return "webhook.text";
 }
 
 function webhookCurl(type: MessageAdapterType = "webhook"): string {
   const source = adapterSourceAliases(type)[0] || type;
-  return `curl -X POST "${webhookUrl(type)}" -H "content-type: application/json" -d "{\"source\":\"${source}\",\"type\":\"test\",\"message\":\"hello from RabiRoute\"}"`;
+  const eventType = webhookTestEventType(type);
+  return `curl -X POST "${callbackUrl(type)}" -H "content-type: application/json" -d "{\"source\":\"${source}\",\"type\":\"${eventType}\",\"message\":\"hello from RabiRoute\"}"`;
 }
-
 function sourceLogEntries(type: MessageAdapterType): Array<Record<string, any>> {
   return adapterLogEntries(type);
 }
@@ -1437,6 +1486,7 @@ function collectUsedWsPorts(excludeInstance?: NapCatInstance): Set<number> {
     if (activeAdapters.includes("webhook")) claim(item.webhookPort ?? item.gatewayPort);
     if (activeAdapters.includes("fennenote")) claim(item.fenneNoteWebhookPort ?? item.webhookPort ?? item.gatewayPort);
     if (activeAdapters.includes("xiaoai")) claim(item.xiaoaiWebhookPort ?? item.webhookPort ?? item.gatewayPort);
+    if (activeAdapters.includes("rabilink")) claim(item.rabiLinkWebhookPort ?? item.webhookPort ?? item.gatewayPort);
     for (const instance of item.napcatInstances ?? []) {
       if (excludeInstance && item.id === gateway.value?.id && instance.id === excludeInstance.id) continue;
       if (instance.enabled === false) continue;
@@ -2219,6 +2269,19 @@ function agentStateFor(type: AgentAdapterType): Record<string, any> {
   return canUseLegacyCodexState ? runtime.value.codexState ?? {} : {};
 }
 
+function codexDeliveryChannelLabel(state: Record<string, any>): string {
+  if (state.lastDeliveryChannel === "desktop-ipc") return "Codex Desktop IPC";
+  if (state.lastDeliveryChannel === "app-server-fallback") return "app-server fallback";
+  return "-";
+}
+
+function codexDeliveryVisibilityLabel(state: Record<string, any>): string {
+  if (state.lastDeliveryVisibility === "desktop-client-confirmed") return "当前 Desktop 客户端已确认";
+  if (state.lastDeliveryVisibility === "desktop-client-not-loaded") return "Desktop 会话未确认加载";
+  if (state.lastDeliveryVisibility === "unknown") return "可见性未知";
+  return "-";
+}
+
 function normalizeClientPath(value?: string): string {
   return (value || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
@@ -2304,6 +2367,11 @@ function currentAgentProject(type: AgentAdapterType): string {
   if (type === "copilotCli") return gateway.value.copilotCwd || "";
   if (type === "codex") return gateway.value.codexCwd || "";
   return "";
+}
+
+function fallbackCodexThreadName(): string {
+  if (!gateway.value) return "RabiRoute";
+  return gateway.value.routeName || gateway.value.name || store.configNameFor(gateway.value) || gateway.value.id || "RabiRoute";
 }
 
 function agentProjectItems(type: AgentAdapterType): string[] {
@@ -3418,19 +3486,24 @@ watch(
                     </div>
                   </template>
                   <div v-else-if="isWebhookLikeAdapter(choice.type)" class="catalog-param-grid">
+                    <v-text-field v-if="choice.type === 'rabilink'" :model-value="webhookHostFor(choice.type)" :label="`${sourceTitle(choice.type)} 监听地址`" placeholder="0.0.0.0" @update:model-value="value => setWebhookHost(choice.type, value)" />
                     <v-text-field :model-value="webhookPortFor(choice.type)" type="number" :label="`${sourceTitle(choice.type)} 监听端口`" @update:model-value="value => setWebhookPort(choice.type, value)" />
                     <v-text-field :model-value="webhookPathFor(choice.type)" :label="`${sourceTitle(choice.type)} 路径`" :placeholder="adapterDefaultWebhookPath(choice.type)" @update:model-value="value => setWebhookPath(choice.type, value)" />
                   </div>
                   <template v-if="isWebhookLikeAdapter(choice.type) && runtime.running !== undefined">
                     <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
                     <div class="status-row"><span>监听地址</span><b>{{ webhookUrl(choice.type) }}</b></div>
+                    <div v-if="choice.type === 'rabilink'" class="status-row"><span>复制回调</span><b>{{ callbackUrl(choice.type) }}</b></div>
                     <div class="agent-action-bar mt-2">
                       <div class="agent-action-status">
-                        <span class="section-note">{{ sourceTitle(choice.type) }} 使用底层 HTTP 回调；这里只复制测试命令，不会自动发送。</span>
+                        <span class="section-note">{{ sourceTitle(choice.type) }} 使用底层 HTTP 回调；RabiLink 的回调地址会把 0.0.0.0 换成本机可访问 IP。</span>
                       </div>
                       <div class="d-flex ga-2 flex-wrap">
-                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText(webhookUrl(choice.type), `已复制 ${sourceTitle(choice.type)} 地址`)">
-                          复制地址
+                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText(callbackUrl(choice.type), `已复制 ${sourceTitle(choice.type)} 回调地址`)">
+                          复制回调
+                        </v-btn>
+                        <v-btn v-if="choice.type === 'rabilink'" size="small" variant="text" prepend-icon="mdi-access-point" @click="copyText(webhookUrl(choice.type), '已复制监听地址')">
+                          复制监听
                         </v-btn>
                         <v-btn size="small" variant="text" prepend-icon="mdi-console" @click="copyText(webhookCurl(choice.type), '已复制 curl 示例')">
                           复制 curl
@@ -3680,13 +3753,13 @@ watch(
                 <!-- Codex -->
                 <template v-if="agent.type === 'codex'">
                   <div class="catalog-param-grid">
-                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="C:/Path/To/Project" hint="Agent 打开的项目目录" persistent-hint @update:model-value="touch">
+                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="可不绑定项目；留空时 Codex 在 RabiRoute 根目录创建或投递" persistent-hint @update:model-value="touch">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
                         <v-icon v-else-if="agentProjectItems('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-combobox v-model="gateway.codexThreadName" :items="sessionNamesFor('codex')" label="会话线程名" placeholder="Rabi" hint="Codex 里的对话窗口名称" persistent-hint @update:model-value="touch">
+                    <v-combobox v-model="gateway.codexThreadName" :items="sessionNamesFor('codex')" label="会话线程名" placeholder="留空，按路由名自动创建" :hint="`留空使用：${fallbackCodexThreadName()}`" persistent-hint @update:model-value="touch">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
                         <v-icon v-else-if="sessionNamesFor('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
@@ -3698,9 +3771,14 @@ watch(
                     <v-alert v-if="agentStateFor('codex').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
                       {{ agentStateFor('codex').lastNotificationError }}
                     </v-alert>
+                    <v-alert v-else-if="agentStateFor('codex').message" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
+                      {{ agentStateFor('codex').message }}
+                    </v-alert>
                     <div class="status-row mt-1"><span>连接状态</span><b :class="agentStateFor('codex').monitorThreadId ? 'text-success' : 'text-warning'">{{ agentStateFor('codex').monitorThreadId ? '已绑定' : '未绑定' }}</b></div>
                     <div class="status-row"><span>线程名</span><b>{{ agentStateFor('codex').monitorThreadName || "-" }}</b></div>
                     <div class="status-row"><span>最后成功</span><b>{{ agentStateFor('codex').lastNotificationAt || "-" }}</b></div>
+                    <div class="status-row"><span>最近通道</span><b>{{ codexDeliveryChannelLabel(agentStateFor('codex')) }}</b></div>
+                    <div class="status-row"><span>可见性</span><b>{{ codexDeliveryVisibilityLabel(agentStateFor('codex')) }}</b></div>
                   </template>
                 </template>
                 <!-- Copilot CLI -->

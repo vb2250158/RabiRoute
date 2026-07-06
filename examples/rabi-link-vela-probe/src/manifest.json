@@ -1,0 +1,30 @@
+{
+  "package": "com.rabi.link",
+  "name": "Rabi Link Vela 探针",
+  "versionName": "0.1.0",
+  "versionCode": 1,
+  "minPlatformVersion": 1200,
+  "icon": "/common/logo.png",
+  "simulationVersion": "default",
+  "deviceTypeList": [
+    "watch"
+  ],
+  "features": [
+    { "name": "system.router" },
+    { "name": "system.configuration" },
+    { "name": "system.device" },
+    { "name": "system.battery" }
+  ],
+  "router": {
+    "entry": "pages/index",
+    "pages": {
+      "pages/index": {
+        "component": "index"
+      }
+    }
+  },
+  "config": {
+    "logLevel": "debug",
+    "designWidth": 480
+  }
+}

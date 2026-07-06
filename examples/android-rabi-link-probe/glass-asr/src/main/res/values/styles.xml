@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="RabiGlassTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#05070A</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#3DDC97</item>
+    </style>
+</resources>

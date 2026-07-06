@@ -86,10 +86,29 @@ function writeGatewayStatus(nextStatus: GatewayStatus): void {
   fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
 }
 
+function configuredNapcatInstanceIds(): Set<string> {
+  return new Set(config.napcatInstances.map((instance) => instance.id));
+}
+
+function pruneNapcatInstanceStatus(
+  instances: GatewayStatus["napcatInstances"] | undefined
+): GatewayStatus["napcatInstances"] | undefined {
+  if (!instances) {
+    return undefined;
+  }
+
+  const configuredIds = configuredNapcatInstanceIds();
+  const kept = Object.fromEntries(
+    Object.entries(instances).filter(([id]) => configuredIds.has(id))
+  ) as NonNullable<GatewayStatus["napcatInstances"]>;
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
 function patchNapcatStatus(patch: NonNullable<GatewayStatus["napcat"]>): void {
   const status = readGatewayStatus();
   writeGatewayStatus({
     ...status,
+    napcatInstances: pruneNapcatInstanceStatus(status.napcatInstances),
     napcat: {
       ...status.napcat,
       ...patch
@@ -113,7 +132,7 @@ function patchNapcatInstanceStatus(instance: NapCatInstanceConfig, patch: NonNul
     ...status,
     napcat: instance.id === "default" ? { ...status.napcat, ...patch } : status.napcat,
     napcatInstances: {
-      ...status.napcatInstances,
+      ...pruneNapcatInstanceStatus(status.napcatInstances),
       [instance.id]: next
     }
   });
@@ -413,6 +432,11 @@ export function createNapCatAdapter(): MessageAdapter {
     start() {
       const instances = config.napcatInstances.filter((instance) => instance.enabled);
       const startedInstanceIds = new Set<string>();
+      const status = readGatewayStatus();
+      writeGatewayStatus({
+        ...status,
+        napcatInstances: pruneNapcatInstanceStatus(status.napcatInstances)
+      });
       for (const instance of instances) {
         const activeSockets = new Set<object>();
         const server = new WebSocketServer({

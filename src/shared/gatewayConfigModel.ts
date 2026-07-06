@@ -28,7 +28,7 @@ export {
   type BuiltinPersonaRulePolicy
 } from "./personaRulePolicy.js";
 
-export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "webhook" | "wecom" | "disabled";
+export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "rabilink" | "webhook" | "wecom" | "disabled";
 export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
 export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
@@ -63,6 +63,7 @@ export type NotificationRuleDefinition = {
   enabled?: boolean;
   routeKinds?: string[];
   targetGroupId?: string;
+  allowedSpeakerNames?: string[];
   regex?: string;
   schedules?: NotificationScheduleDefinition[];
   template: string;
@@ -138,6 +139,9 @@ export type GatewayDefinition = {
   fenneNoteWebhookPath?: string;
   xiaoaiWebhookPort?: number;
   xiaoaiWebhookPath?: string;
+  rabiLinkWebhookPort?: number;
+  rabiLinkWebhookPath?: string;
+  rabiLinkWebhookHost?: string;
   wecomBotId?: string;
   wecomBotSecret?: string;
   wecomWsUrl?: string;
@@ -201,7 +205,8 @@ export type GatewayPortClaimKind =
   | "napcat-http"
   | "webhook"
   | "fennenote-webhook"
-  | "xiaoai-webhook";
+  | "xiaoai-webhook"
+  | "rabilink-webhook";
 
 export type GatewayPortClaim = {
   port: number;
@@ -219,7 +224,7 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "fennenote", "xiaoai", "webhook", "wecom", "disabled"]);
+const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "fennenote", "xiaoai", "rabilink", "webhook", "wecom", "disabled"]);
 const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
@@ -247,6 +252,9 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
       enabled: raw.enabled !== false,
       routeKinds: Array.isArray(raw.routeKinds) ? raw.routeKinds.map(String) : [],
       targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId : "",
+      allowedSpeakerNames: Array.isArray(raw.allowedSpeakerNames)
+        ? raw.allowedSpeakerNames.map((item) => String(item).trim()).filter(Boolean)
+        : [],
       regex: typeof raw.regex === "string" ? raw.regex : "",
       schedules: normalizeScheduleDefinitions(raw.schedules),
       template: normalizeTemplateText(typeof raw.template === "string" && raw.template.trim() ? raw.template : "")
@@ -256,6 +264,44 @@ export function normalizeRuleDefinitions(rules: unknown): NotificationRuleDefini
 
 export function defaultRolePanelNotificationRule(): NotificationRuleDefinition {
   return createBuiltinRolePanelRule();
+}
+
+function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string[] {
+  if (adapter === "napcat") return ["private", "direct_at", "direct_reply", "indirect_reply"];
+  if (adapter === "heartbeat") return ["heartbeat"];
+  if (adapter === "rolePanel") return ["role_panel_message", "manual_trigger"];
+  if (adapter === "fennenote" || adapter === "xiaoai" || adapter === "rabilink" || adapter === "webhook") return ["voice_transcript"];
+  if (adapter === "wecom") return ["wecom_message"];
+  return [];
+}
+
+function defaultRuleNameForMessageAdapter(adapter: MessageAdapterType): string {
+  if (adapter === "napcat") return "QQ 默认消息";
+  if (adapter === "heartbeat") return "定时默认消息";
+  if (adapter === "rolePanel") return "面板默认消息";
+  if (adapter === "fennenote") return "FenneNote 默认语音";
+  if (adapter === "xiaoai") return "小爱默认语音";
+  if (adapter === "rabilink") return "RabiLink 默认语音";
+  if (adapter === "wecom") return "企业微信默认消息";
+  if (adapter === "webhook") return "Webhook 默认消息";
+  return "默认消息";
+}
+
+export function defaultMessageAdapterNotificationRules(adapters: MessageAdapterType[]): NotificationRuleDefinition[] {
+  return adapters.flatMap((adapter) => {
+    const routeKinds = defaultRouteKindsForMessageAdapter(adapter);
+    if (routeKinds.length === 0) return [];
+    return [{
+      id: `default-${adapter}`,
+      name: defaultRuleNameForMessageAdapter(adapter),
+      enabled: true,
+      routeKinds,
+      targetGroupId: "",
+      allowedSpeakerNames: [],
+      regex: "",
+      template: ""
+    }];
+  });
 }
 
 export function ensureDefaultPersonaRules(rules: NotificationRuleDefinition[] | undefined): NotificationRuleDefinition[] {
@@ -439,19 +485,7 @@ export function sanitizeInstanceId(value: unknown, fallback: string): string {
 }
 
 export function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstanceDefinition[] {
-  const raw = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
-  const source = raw.length > 0
-    ? raw
-    : [{
-        id: "default",
-        name: "默认 NapCat",
-        enabled: true,
-        gatewayPort: definition.gatewayPort,
-        httpUrl: definition.napcatHttpUrl ?? "http://127.0.0.1:3000",
-        webuiUrl: definition.napcatWebuiUrl ?? "http://127.0.0.1:6099/webui",
-        accessToken: definition.napcatAccessToken,
-        webuiToken: definition.napcatWebuiToken
-      }];
+  const source = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
 
   const used = new Set<string>();
   return source.map((item, index) => {
@@ -567,6 +601,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   if (definition.webhookPort != null) assertValidPort(definition.webhookPort, `webhook port for ${definition.id}`);
   if (definition.fenneNoteWebhookPort != null) assertValidPort(definition.fenneNoteWebhookPort, `FenneNote webhook port for ${definition.id}`);
   if (definition.xiaoaiWebhookPort != null) assertValidPort(definition.xiaoaiWebhookPort, `XiaoAI webhook port for ${definition.id}`);
+  if (definition.rabiLinkWebhookPort != null) assertValidPort(definition.rabiLinkWebhookPort, `RabiLink webhook port for ${definition.id}`);
 
   const identity = resolveRouteIdentity(definition);
   const agentRoleId = identity.roleId;
@@ -575,7 +610,6 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const dataDir = options.routeDataDir?.(configName) ?? `data/route/${configName}`;
   const rolesDir = options.rolesDir ?? definition.rolesDir ?? "data/roles";
   const routeName = definition.routeName?.trim() || definition.name?.trim() || configName;
-  const notificationRules = normalizeRuleDefinitions(definition.notificationRules) ?? [];
   const { botNickname: _legacyBotNickname, ...cleanDefinition } = definition as GatewayDefinition & { botNickname?: string };
   const rawMessageAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
   const messageInputsDisabled = definition.messageInputsDisabled === true || rawMessageAdapters.includes("disabled");
@@ -600,6 +634,11 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     ? definition.pipelinePreset.trim()
     : undefined;
   const pipeline = normalizePipeline(definition.pipeline);
+  const configuredNotificationRules = normalizeRuleDefinitions(definition.notificationRules) ?? [];
+  const hasPersonaOnlyRules = !agentRoleId && configuredNotificationRules.some(sharedIsBuiltinRolePanelRule);
+  const notificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
+    ? configuredNotificationRules
+    : defaultMessageAdapterNotificationRules(activeMessageAdapters);
   return {
     ...cleanDefinition,
     id: runtimeId,
@@ -619,6 +658,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
     gatewayPort: primaryNapcat?.gatewayPort ?? definition.gatewayPort,
+    rabiLinkWebhookHost: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
     napcatHttpUrl: primaryNapcat?.httpUrl ?? definition.napcatHttpUrl,
     napcatWebuiUrl: primaryNapcat?.webuiUrl ?? definition.napcatWebuiUrl,
     napcatAccessToken: primaryNapcat?.accessToken ?? definition.napcatAccessToken,
@@ -640,7 +680,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     rolesDir,
     agentRoleId,
     agentRoleFile: definition.agentRoleFile ?? "persona.md",
-    roleNotificationRules: { [runtimeId]: notificationRules },
+    roleNotificationRules: agentRoleId ? { [runtimeId]: notificationRules } : {},
     roleRouteNames: { [runtimeId]: routeName },
     routeProfiles: [normalizeRouteProfile({
       id: runtimeId,
@@ -690,6 +730,7 @@ export function collectGatewayPortClaims(
     if (activeAdapters.has("webhook")) claim(gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} webhook`, "webhook", gateway.id);
     if (activeAdapters.has("fennenote")) claim(gateway.fenneNoteWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} FenneNote webhook`, "fennenote-webhook", gateway.id);
     if (activeAdapters.has("xiaoai")) claim(gateway.xiaoaiWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} XiaoAI webhook`, "xiaoai-webhook", gateway.id);
+    if (activeAdapters.has("rabilink")) claim(gateway.rabiLinkWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} RabiLink webhook`, "rabilink-webhook", gateway.id);
     for (const instance of enabledNapcatInstances) {
       const prefix = `${gateway.id}/${instance.id}`;
       claim(instance.gatewayPort, `${prefix} RabiRoute WS`, "napcat-ws", gateway.id, instance.id);
@@ -777,6 +818,9 @@ export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPor
     }
     if (activeAdapters.has("xiaoai")) {
       gateway.xiaoaiWebhookPort = assignIngress(gateway.xiaoaiWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+    }
+    if (activeAdapters.has("rabilink")) {
+      gateway.rabiLinkWebhookPort = assignIngress(gateway.rabiLinkWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     }
   }
 }

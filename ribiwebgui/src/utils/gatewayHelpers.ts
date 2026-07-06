@@ -1,6 +1,7 @@
 import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, NotificationRule, NotificationScheduleDefinition, RuntimeStatus } from "../types";
 import {
   defaultRolePanelNotificationRule,
+  defaultMessageAdapterNotificationRules,
   ensureDefaultPersonaRules,
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
   isBuiltinRolePanelNotificationRule,
@@ -198,6 +199,7 @@ export function adapterLabel(type: string): string {
   if (type === "rolePanel") return "角色面板";
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
   if (type === "xiaoai") return "小米音箱 / 小爱";
+  if (type === "rabilink") return "RabiLink / 手机桥";
   if (type === "wecom") return "企业微信 / WeCom";
   if (type === "webhook") return "通用 Webhook";
   if (type === "disabled") return "已禁用";
@@ -209,7 +211,7 @@ export function adapterRuntimeKey(type: string): string {
 }
 
 export function isWebhookLikeAdapter(type: string): boolean {
-  return type === "webhook" || type === "fennenote" || type === "xiaoai";
+  return type === "webhook" || type === "fennenote" || type === "xiaoai" || type === "rabilink";
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
@@ -223,6 +225,7 @@ export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean
 export function adapterSourceAliases(type: string): string[] {
   if (type === "fennenote") return ["fennenote", "fenne_note", "fenne-note", "fenne", "芬妮笔记", "芬妮"];
   if (type === "xiaoai") return ["xiaoai", "xiao_ai", "xiao-ai", "mi_speaker", "mi-speaker", "xiaomi", "小爱", "小米音箱"];
+  if (type === "rabilink") return ["rabilink", "rabi_link", "rabi-link", "rokid", "rokid_glass", "phone_bridge", "手机桥", "乐奇", "乐棋"];
   if (type === "wecom") return ["wecom", "wechat-work", "企业微信", "企微"];
   if (type === "webhook") return ["webhook", "generic_webhook", "generic-webhook"];
   return [type];
@@ -231,6 +234,7 @@ export function adapterSourceAliases(type: string): string[] {
 export function adapterDefaultWebhookPath(type: string): string {
   if (type === "fennenote") return "/fennenote";
   if (type === "xiaoai") return "/xiaoai";
+  if (type === "rabilink") return "/rabilink";
   return "/webhook";
 }
 
@@ -274,6 +278,11 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     gateway.xiaoaiWebhookPort = Number(gateway.xiaoaiWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     gateway.xiaoaiWebhookPath = gateway.xiaoaiWebhookPath || adapterDefaultWebhookPath("xiaoai");
   }
+  if (adapters.includes("rabilink")) {
+    gateway.rabiLinkWebhookPort = Number(gateway.rabiLinkWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+    gateway.rabiLinkWebhookPath = gateway.rabiLinkWebhookPath || adapterDefaultWebhookPath("rabilink");
+    gateway.rabiLinkWebhookHost = gateway.rabiLinkWebhookHost || "0.0.0.0";
+  }
   if (adapters.includes("wecom")) {
     gateway.wecomBotId = gateway.wecomBotId || "";
     gateway.wecomBotSecret = gateway.wecomBotSecret || "";
@@ -307,7 +316,7 @@ export function ensureRouteVariables(gateway: GatewayDefinition): Record<string,
 }
 
 export function activeRoleKey(gateway: GatewayDefinition): string {
-  return gateway.agentRoleId || gateway.id || "";
+  return gateway.agentRoleId || "";
 }
 
 export function ensureActiveRoleRules(gateway: GatewayDefinition): NotificationRule[] {
@@ -338,7 +347,16 @@ export function migrateLegacyHeartbeatSchedules(gateway: GatewayDefinition): voi
 }
 
 export function notificationRulesForGateway(gateway: GatewayDefinition): NotificationRule[] {
-  gateway.notificationRules = ensureDefaultPersonaRules(gateway.notificationRules);
+  if (gateway.agentRoleId) {
+    gateway.notificationRules = ensureDefaultPersonaRules(gateway.notificationRules);
+  } else if (
+    !Array.isArray(gateway.notificationRules)
+    || gateway.notificationRules.length === 0
+    || gateway.notificationRules.some(isBuiltinRolePanelNotificationRule)
+  ) {
+    gateway.notificationRules = defaultMessageAdapterNotificationRules(gatewayAdapterTypes(gateway))
+      .map((rule, index) => normalizeRule(rule, index));
+  }
   return gateway.notificationRules;
 }
 
@@ -393,6 +411,12 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       title: "小米音箱 / 小爱",
       note: "来自小爱音箱的语音转写输入；底层是 HTTP 回调，但日志和配置按小米音箱独立显示。",
       groups: [{ title: "小爱语音事件", routeKinds: ["voice_transcript"] }]
+    },
+    {
+      adapter: "rabilink",
+      title: "RabiLink / 手机桥",
+      note: "手机 RabiLink 文本入口；用于接住 Rokid/灵珠转出的文本，再投递到 Codex。",
+      groups: [{ title: "RabiLink 文本事件", routeKinds: ["voice_transcript"] }]
     },
     {
       adapter: "wecom",
@@ -545,10 +569,9 @@ export function agentConnectionReasons(gateway: GatewayDefinition, runtime: Runt
 }
 
 export function createDefaultGateway(next: number): GatewayDefinition {
-  const roleId = "Rabi";
   const configName = `config-${next}`;
   return {
-    id: `${roleId}__${configName}`,
+    id: configName,
     configName,
     name: `路由配置 ${next}`,
     enabled: true,
@@ -569,10 +592,10 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     agentModel: "",
     codexThreadName: `路由配置 ${next}`,
     codexCwd: "",
-    agentRoleId: roleId,
+    agentRoleId: "",
     agentRoleFile: "persona.md",
     agentAdapters: ["codex"],
-    notificationRules: [defaultRolePanelRule()]
+    notificationRules: []
   };
 }
 
@@ -581,11 +604,9 @@ export function isQuickSetupNeeded(gateways: GatewayDefinition[]): boolean {
   return gateways.some((gateway) => {
     const adapters = gatewayAdapterTypes(gateway);
     const agentAdapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codex"];
-    const missingCodexBinding = agentAdapters.includes("codex")
-      && (!gateway.codexThreadName || !gateway.codexCwd);
     const missingCopilotBinding = agentAdapters.includes("copilotCli")
       && (!gateway.codexThreadName || !gateway.copilotCwd);
     const missingMessageConfig = adapters.includes("napcat") && (!gateway.gatewayPort || !gateway.napcatHttpUrl);
-    return !gateway.agentRoleId || missingCodexBinding || missingCopilotBinding || missingMessageConfig;
+    return missingCopilotBinding || missingMessageConfig;
   });
 }

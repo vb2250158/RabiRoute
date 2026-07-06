@@ -448,9 +448,12 @@ function readCopilotSessions(): CopilotSessionEntry[] {
 function collectCwdOptions(rootDir: string, runtimes: RuntimeLike[], copilotSessions: CopilotSessionEntry[]): string[] {
   const copilotCwds = [...new Set(copilotSessions.map((s) => s.cwd).filter(Boolean) as string[])].filter(fs.existsSync);
   const cwdSet = new Set<string>(copilotCwds);
+  if (fs.existsSync(rootDir)) cwdSet.add(rootDir);
   for (const rt of runtimes) {
-    if (rt.definition.codexCwd && fs.existsSync(rt.definition.codexCwd)) cwdSet.add(rt.definition.codexCwd);
-    if (rt.definition.copilotCwd && fs.existsSync(rt.definition.copilotCwd)) cwdSet.add(rt.definition.copilotCwd);
+    const codexCwd = rt.definition.codexCwd ? path.resolve(rootDir, rt.definition.codexCwd) : "";
+    const copilotCwd = rt.definition.copilotCwd ? path.resolve(rootDir, rt.definition.copilotCwd) : "";
+    if (codexCwd && fs.existsSync(codexCwd)) cwdSet.add(codexCwd);
+    if (copilotCwd && fs.existsSync(copilotCwd)) cwdSet.add(copilotCwd);
   }
   try {
     const parentDir = path.dirname(rootDir);

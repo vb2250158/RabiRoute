@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { createCodexAppMonitorThread, notifyCodex } from "./codexApp.js";
+import { createCodexAppMonitorThread, notifyCodex, resumeCodexAppThread } from "./codexApp.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
 
 type IpcResponse = {
@@ -47,6 +47,15 @@ type CodexState = {
   lastNotificationAt?: string;
   lastNotificationError?: string;
   lastNotificationErrorAt?: string;
+  retryPendingCount?: number;
+  nextRetryAt?: string;
+  lastRetryAt?: string;
+  lastDeliveryChannel?: "desktop-ipc" | "app-server-fallback";
+  lastDeliveryVisibility?: "desktop-client-confirmed" | "desktop-client-not-loaded" | "unknown";
+  lastDeliveryAcceptedAt?: string;
+  lastDesktopIpcError?: string;
+  lastDesktopIpcErrorAt?: string;
+  lastDesktopIpcFallbackAt?: string;
 };
 
 type CodexSessionIndexRecord = {
@@ -103,6 +112,8 @@ let flushWaiters: Array<{
 const recentStartSteerWindowMs = 10 * 60 * 1000;
 const notificationBatchDelayMs = 2500;
 const defaultIpcRequestTimeoutMs = 30 * 60 * 1000;
+const defaultRetryDelayMs = 60 * 1000;
+const defaultMaxRetryMessages = 20;
 
 function positiveIntegerFromEnv(name: string, fallback: number): number {
   const value = Number.parseInt(process.env[name] ?? "", 10);
@@ -110,6 +121,16 @@ function positiveIntegerFromEnv(name: string, fallback: number): number {
 }
 
 const ipcRequestTimeoutMs = positiveIntegerFromEnv("CODEX_DESKTOP_IPC_REQUEST_TIMEOUT_MS", defaultIpcRequestTimeoutMs);
+const desktopRetryDelayMs = positiveIntegerFromEnv("CODEX_DESKTOP_IPC_RETRY_DELAY_MS", defaultRetryDelayMs);
+const desktopMaxRetryMessages = positiveIntegerFromEnv("CODEX_DESKTOP_IPC_MAX_RETRY_MESSAGES", defaultMaxRetryMessages);
+
+let retryMessages: string[] = [];
+let retryTimer: NodeJS.Timeout | null = null;
+let retryNextAt = "";
+
+type DeliveryOptions = {
+  fromRetry?: boolean;
+};
 
 function explicitCodexModel(): string | undefined {
   const envModel = process.env.RABIROUTE_CODEX_MODEL?.trim() || process.env.CODEX_MODEL?.trim();
@@ -128,6 +149,20 @@ function readState(): CodexState {
 function writeState(state: CodexState): void {
   memoryState = state;
   reportAgentState("codex", state);
+}
+
+function retryStatePatch(): Pick<CodexState, "retryPendingCount" | "nextRetryAt"> {
+  return {
+    retryPendingCount: retryMessages.length,
+    nextRetryAt: retryNextAt
+  };
+}
+
+function writeStateWithRetryMetadata(state: CodexState): void {
+  writeState({
+    ...state,
+    ...retryStatePatch()
+  });
 }
 
 function sessionIndexPath(): string {
@@ -179,14 +214,28 @@ function discoverMonitorThread(): DiscoveredMonitorThread | null {
   return records[0] ?? null;
 }
 
-function stateStillPointsToTargetThread(state: CodexState): boolean {
-  const targetName = config.codexThreadName.trim();
+export function codexStateStillPointsToTargetThreadForTest(
+  state: CodexState,
+  records: DiscoveredMonitorThread[],
+  targetName: string
+): boolean {
   if (!state.monitorThreadId || state.monitorThreadName !== targetName) {
     return false;
   }
 
-  const currentRecord = readLatestSessionThreads().find((item) => item.id === state.monitorThreadId);
-  return !currentRecord || currentRecord.threadName === targetName;
+  const currentRecord = records.find((item) => item.id === state.monitorThreadId);
+  if (currentRecord) {
+    return currentRecord.threadName === targetName;
+  }
+
+  // If the session index already has another record for the configured name,
+  // the cached id is stale and must not remain the binding source of truth.
+  return !records.some((item) => item.threadName === targetName);
+}
+
+function stateStillPointsToTargetThread(state: CodexState): boolean {
+  const targetName = config.codexThreadName.trim();
+  return codexStateStillPointsToTargetThreadForTest(state, readLatestSessionThreads(), targetName);
 }
 
 function applyDiscoveredThread(state: CodexState, discovered: DiscoveredMonitorThread): CodexState {
@@ -519,6 +568,46 @@ function combineMessages(messages: string[]): string {
   ].join("\n\n");
 }
 
+function scheduleRetry(state: CodexState): void {
+  if (retryTimer || retryMessages.length === 0) {
+    writeStateWithRetryMetadata(state);
+    return;
+  }
+
+  retryNextAt = new Date(Date.now() + desktopRetryDelayMs).toISOString();
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    retryNextAt = "";
+    void retryQueuedNotifications();
+  }, desktopRetryDelayMs);
+  writeStateWithRetryMetadata(state);
+}
+
+function enqueueRetryMessage(message: string, state: CodexState): void {
+  retryMessages.push(message);
+  if (retryMessages.length > desktopMaxRetryMessages) {
+    retryMessages = retryMessages.slice(-desktopMaxRetryMessages);
+  }
+  scheduleRetry(state);
+}
+
+async function retryQueuedNotifications(): Promise<void> {
+  if (retryMessages.length === 0) {
+    writeStateWithRetryMetadata(readState());
+    return;
+  }
+
+  const messages = retryMessages;
+  retryMessages = [];
+  writeStateWithRetryMetadata(readState());
+  try {
+    await deliverCodexDesktopNotification(combineMessages(messages), { fromRetry: true });
+  } catch {
+    // The delivery path records the concrete failure and requeues no-client-found
+    // messages. Health patrols read that state instead of relying on this timer.
+  }
+}
+
 async function steerNotificationTurn(threadId: string, message: string): Promise<void> {
   const text = buildInputText(message);
   const response = await request("thread-follower-steer-turn", {
@@ -580,15 +669,54 @@ export function shouldUseAppServerFallbackFor(error: unknown, state: CodexState)
     return false;
   }
 
-  return isNoClientFoundError(error) || isMissingMonitorThreadError(error);
+  if (isNoClientFoundError(error)) {
+    return shouldFallbackOnNoClientFound();
+  }
+
+  return isMissingMonitorThreadError(error);
+}
+
+export function formatCodexDesktopDeliveryError(error: unknown, state: CodexState): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!isNoClientFoundError(error)) {
+    return message;
+  }
+
+  const threadName = state.monitorThreadName || config.codexThreadName;
+  const threadId = state.monitorThreadId || "<unknown>";
+  return [
+    `Codex Desktop 已找到线程 "${threadName}" (${threadId})，但该线程当前没有已加载的 Desktop 客户端。`,
+    "RabiRoute 会先尝试通过 app-server thread/resume 唤醒这个线程。",
+    "如果自动唤醒仍失败，默认会改走 app-server turn/start 兜底投递。",
+    "RabiRoute 仍会暂存这次投递并定时重试；线程恢复加载后会自动补投。",
+    "当前 codex_app.send_message_to_thread 是 Codex 连接器工具，不是 RabiRoute Node 运行时可直接调用的稳定 API。",
+    `原始错误：${message}`
+  ].join(" ");
 }
 
 function shouldUseAppServerFallback(): boolean {
   return process.env.CODEX_DESKTOP_IPC_APP_SERVER_FALLBACK !== "0";
 }
 
+function shouldFallbackOnNoClientFound(): boolean {
+  return process.env.CODEX_DESKTOP_IPC_FALLBACK_ON_NO_CLIENT !== "0";
+}
+
+function shouldWakeOnNoClientFound(): boolean {
+  return process.env.CODEX_DESKTOP_IPC_WAKE_ON_NO_CLIENT !== "0";
+}
+
 function shouldAutoCreateMonitorThread(): boolean {
   return process.env.CODEX_DESKTOP_IPC_AUTO_CREATE_THREAD !== "0";
+}
+
+async function wakeMonitorThreadForDesktopDelivery(state: CodexState): Promise<boolean> {
+  if (!state.monitorThreadId || !shouldWakeOnNoClientFound()) {
+    return false;
+  }
+
+  await resumeCodexAppThread(state.monitorThreadId);
+  return true;
 }
 
 async function createMonitorThreadForDesktopDelivery(state: CodexState, forceCreate = false): Promise<CodexState> {
@@ -601,7 +729,9 @@ async function createMonitorThreadForDesktopDelivery(state: CodexState, forceCre
     monitorThreadSource: `${created.source}; delivery=desktop-ipc`,
     lastAutoDiscoveryAt: new Date().toISOString(),
     lastNotificationError: "",
-    lastNotificationErrorAt: ""
+    lastNotificationErrorAt: "",
+    retryPendingCount: retryMessages.length,
+    nextRetryAt: retryNextAt
   };
   writeState(nextState);
   monitorThreadActive = false;
@@ -658,10 +788,11 @@ async function deliverToMonitorThread(state: CodexState, message: string): Promi
   }
 }
 
-async function deliverCodexDesktopNotification(message: string): Promise<void> {
+async function deliverCodexDesktopNotification(message: string, options: DeliveryOptions = {}): Promise<void> {
   notificationQueue = notificationQueue
     .catch(() => undefined)
     .then(async () => {
+      const retryAttemptAt = options.fromRetry ? new Date().toISOString() : undefined;
       let state = resolveConfiguredMonitorThread(readState(), false);
       if (!state.monitorThreadId && shouldAutoCreateMonitorThread()) {
         state = await createMonitorThreadForDesktopDelivery(state);
@@ -680,6 +811,10 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
                 monitorThreadActive = false;
                 continue;
               }
+              if (attempt === 0 && await wakeMonitorThreadForDesktopDelivery(state)) {
+                monitorThreadActive = false;
+                continue;
+              }
             }
             throw error;
           }
@@ -690,39 +825,66 @@ async function deliverCodexDesktopNotification(message: string): Promise<void> {
           notificationCount: (state.notificationCount ?? 0) + 1,
           lastNotificationAt: new Date().toISOString(),
           lastNotificationError: "",
-          lastNotificationErrorAt: ""
+          lastNotificationErrorAt: "",
+          retryPendingCount: retryMessages.length,
+          nextRetryAt: retryNextAt,
+          lastRetryAt: retryAttemptAt ?? state.lastRetryAt,
+          lastDeliveryChannel: "desktop-ipc",
+          lastDeliveryVisibility: "desktop-client-confirmed",
+          lastDeliveryAcceptedAt: new Date().toISOString()
         });
       } catch (error) {
+        const deliveryErrorMessage = formatCodexDesktopDeliveryError(error, state);
         if (shouldUseAppServerFallbackFor(error, state)) {
           try {
             await notifyCodex(message);
+            const now = new Date().toISOString();
             writeState({
               ...readState(),
+              lastNotificationAt: now,
               lastNotificationError: "",
               lastNotificationErrorAt: "",
               lastDesktopIpcError: error instanceof Error ? error.message : String(error),
-              lastDesktopIpcErrorAt: new Date().toISOString(),
-              lastDesktopIpcFallbackAt: new Date().toISOString()
+              lastDesktopIpcErrorAt: now,
+              lastDesktopIpcFallbackAt: now,
+              retryPendingCount: retryMessages.length,
+              nextRetryAt: retryNextAt,
+              lastRetryAt: retryAttemptAt ?? readState().lastRetryAt,
+              lastDeliveryChannel: "app-server-fallback",
+              lastDeliveryVisibility: isNoClientFoundError(error) ? "desktop-client-not-loaded" : "unknown",
+              lastDeliveryAcceptedAt: now
             } as CodexState & Record<string, unknown>);
             return;
           } catch (fallbackError) {
-            writeState({
+            const failedState = {
               ...state,
               lastNotificationError: [
-                error instanceof Error ? error.message : String(error),
+                deliveryErrorMessage,
                 `app-server fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`
               ].join("; "),
-              lastNotificationErrorAt: new Date().toISOString()
-            });
+              lastNotificationErrorAt: new Date().toISOString(),
+              lastRetryAt: retryAttemptAt ?? state.lastRetryAt
+            };
+            if (isNoClientFoundError(error)) {
+              enqueueRetryMessage(message, failedState);
+            } else {
+              writeStateWithRetryMetadata(failedState);
+            }
             throw fallbackError;
           }
         }
-        writeState({
+        const failedState = {
           ...state,
-          lastNotificationError: error instanceof Error ? error.message : String(error),
-          lastNotificationErrorAt: new Date().toISOString()
-        });
-        throw error;
+          lastNotificationError: deliveryErrorMessage,
+          lastNotificationErrorAt: new Date().toISOString(),
+          lastRetryAt: retryAttemptAt ?? state.lastRetryAt
+        };
+        if (isNoClientFoundError(error)) {
+          enqueueRetryMessage(message, failedState);
+        } else {
+          writeStateWithRetryMetadata(failedState);
+        }
+        throw new Error(deliveryErrorMessage);
       }
     });
 

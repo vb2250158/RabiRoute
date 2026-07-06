@@ -11,6 +11,7 @@ import {
 } from "./rolePanelTimeline.js";
 import {
   messageAdapterPolicyFor,
+  type MessageAdapterType,
   type MessageAdapterPolicies,
   type MessageAdapterPolicy,
   type MessagePayloadKind
@@ -332,6 +333,7 @@ function findSourceRecord(options: AgentReplyOptions, route: ResolvedRoute, mess
       ["private-messages.jsonl", "private"],
       ["voice-transcripts.jsonl", "voice_transcript"],
       ["fennenote-voice-transcripts.jsonl", "voice_transcript"],
+      ["rabilink-voice-transcripts.jsonl", "voice_transcript"],
       ["wecom-messages.jsonl", "group"]
     ] as const) {
       const found = readJsonl(path.join(dir, fileName))
@@ -496,6 +498,14 @@ function wecomPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "wecom");
 }
 
+function rabiLinkPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+  return messageAdapterPolicyFor({
+    id: route.runtime.id,
+    gatewayPort: 0,
+    messageAdapters: ["rabilink"],
+    messageAdapterPolicies: route.runtime.messageAdapterPolicies
+  }, "rabilink");
+}
 function wecomEndpoint(route: ResolvedRoute): WeComEndpoint | undefined {
   const botId = route.runtime.wecomBotId?.trim() || process.env.WECOM_BOT_ID?.trim() || "";
   const secret = route.runtime.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET?.trim() || "";
@@ -504,6 +514,42 @@ function wecomEndpoint(route: ResolvedRoute): WeComEndpoint | undefined {
     botId,
     secret,
     wsUrl: route.runtime.wecomWsUrl?.trim() || process.env.WECOM_WS_URL?.trim() || undefined
+  };
+}
+
+function appendAdapterReply(
+  options: AgentReplyOptions,
+  route: ResolvedRoute,
+  adapterType: MessageAdapterType,
+  target: SourceRecord,
+  content: ReplyContent,
+  request: AgentReplyRequest
+): AgentReplyResult {
+  const dir = dataDirsForRoute(options, route)[0];
+  fs.mkdirSync(dir, { recursive: true });
+  const id = `${adapterType}-reply-${Date.now()}`;
+  fs.appendFileSync(path.join(dir, `${adapterType}-replies.jsonl`), `${JSON.stringify({
+    time: Math.floor(Date.now() / 1000),
+    id,
+    messageId: target.messageId,
+    targetType: target.targetType,
+    adapterType,
+    text: content.text,
+    payloadType: content.kind,
+    replyContext: contextObject(request),
+    payload: payloadObject(request)
+  })}\n`, "utf8");
+  return {
+    ok: true,
+    status: "sent",
+    reason: `Queued for ${adapterType} output.`,
+    routeProfileId: route.profile?.id ?? route.runtime.id,
+    messageId: target.messageId,
+    targetType: target.targetType,
+    groupId: target.groupId,
+    userId: target.userId,
+    instanceId: target.instanceId,
+    sentMessageId: id
   };
 }
 
@@ -566,7 +612,30 @@ function appendRolePanelReply(
   };
 }
 
+function stripRouteSuffix(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const text = value.replace(/\s*路由\s*$/, "").trim();
+  return text || value;
+}
+
+function personaNameForFenneNote(options: AgentReplyOptions, route: ResolvedRoute): string | undefined {
+  const roleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId);
+  const rolesDir = valueString(route.profile?.rolesDir ?? route.runtime.rolesDir) ?? options.rolesRoot;
+  if (roleId && rolesDir) {
+    const rolePath = path.join(path.isAbsolute(rolesDir) ? rolesDir : path.resolve(options.rootDir, rolesDir), roleId, "persona.md");
+    try {
+      const firstHeading = fs.readFileSync(rolePath, "utf8").split(/\r?\n/).find((line) => line.trim().startsWith("# "));
+      const name = firstHeading?.replace(/^#\s+/, "").trim();
+      if (name) return name;
+    } catch {
+      // Best-effort display name only; route ids remain the durable identity.
+    }
+  }
+  return stripRouteSuffix(route.profile?.name ?? route.runtime.name ?? roleId);
+}
+
 function fenneNoteReplyPayload(
+  options: AgentReplyOptions,
   request: AgentReplyRequest,
   route: ResolvedRoute,
   target: SourceRecord,
@@ -584,6 +653,8 @@ function fenneNoteReplyPayload(
     payloadType: requestFields.payloadType ?? payload.payloadType ?? payload.type ?? content.kind,
     routeProfileId: route.profile?.id ?? route.runtime.id,
     routeProfileName: route.profile?.name ?? route.runtime.name,
+    agentRoleId: route.profile?.agentRoleId ?? route.runtime.agentRoleId,
+    agentRoleName: personaNameForFenneNote(options, route),
     messageId: target.messageId ?? valueString(context.messageId),
     targetType: target.targetType ?? valueString(context.targetType) ?? "voice_transcript",
     adapterType: "fennenote",
@@ -669,7 +740,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         ? "private"
         : requestField(request, "targetType") === "role_panel" || requestField(request, "adapterType") === "rolePanel"
           ? "role_panel"
-          : requestField(request, "targetType") === "voice_transcript" || requestField(request, "adapterType") === "fennenote"
+          : requestField(request, "targetType") === "voice_transcript" || requestField(request, "adapterType") === "fennenote" || requestField(request, "adapterType") === "rabilink"
             ? "voice_transcript"
             : requestField(request, "groupId")
               ? "group"
@@ -704,6 +775,22 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   if (target.targetType === "role_panel" || target.adapterType === "rolePanel") {
     const result = appendRolePanelReply(options, route, target, text, rolePanelAttachmentsForRequest(request, content), request);
     appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "role_panel_reply_sent" : "reply_blocked", result.reason ?? "", result);
+    return result;
+  }
+  if (target.adapterType === "rabilink") {
+    const policy = rabiLinkPolicy(route);
+    if (!policy.outputEnabled) {
+      const result: AgentReplyResult = { ...draft("RabiLink message sending is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    if (!policy.supportedOutputs.includes(content.kind)) {
+      const result: AgentReplyResult = { ...draft(`RabiLink route policy does not allow ${content.kind} payloads.`, text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    const result = appendAdapterReply(options, route, "rabilink", target, content, request);
+    appendOutboxLog(options, route, "info", "rabilink_reply_queued", text.slice(0, 500), result);
     return result;
   }
   const pipeline = replyPipeline(route, request);
@@ -749,7 +836,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
 
     try {
       const outputMode = shouldUseFenneNotePlayback(request, target, pipeline) ? "playback" : "reply";
-      const forwarded = await postFenneNoteOutput(options, fenneNoteReplyPayload(request, route, target, content), outputMode);
+      const forwarded = await postFenneNoteOutput(options, fenneNoteReplyPayload(options, request, route, target, content), outputMode);
       const result: AgentReplyResult = {
         ok: true,
         status: "sent",

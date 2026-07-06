@@ -93,6 +93,9 @@ function validateGatewayPorts(items: GatewayDefinition[], managerPort: number): 
     if (adapters.includes("xiaoai")) {
       claim(gateway.xiaoaiWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${configNameFor(gateway)} XiaoAI Webhook`);
     }
+    if (adapters.includes("rabilink")) {
+      claim(gateway.rabiLinkWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${configNameFor(gateway)} RabiLink Webhook`);
+    }
     for (const instance of activeNapcatInstances) {
       const name = `${configNameFor(gateway)} / ${instance.name || instance.id}`;
       claim(instance.gatewayPort, `${name} RabiRoute WS`);
@@ -173,6 +176,9 @@ function autoAssignGatewayPorts(items: GatewayDefinition[], managerPort: number)
     if (adapters.includes("xiaoai")) {
       gateway.xiaoaiWebhookPort = assignIngress(gateway.xiaoaiWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     }
+    if (adapters.includes("rabilink")) {
+      gateway.rabiLinkWebhookPort = assignIngress(gateway.rabiLinkWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+    }
   }
 }
 
@@ -189,7 +195,7 @@ export const useGatewayStore = defineStore("gateway", () => {
   const gateways = ref<GatewayDefinition[]>([]);
   const managerRows = ref<RuntimeStatus[]>([]);
   const managerError = ref("");
-  const networkOptions = ref<NetworkOptions>({ adapters: {}, httpServers: [], websocketClients: [] });
+  const networkOptions = ref<NetworkOptions>({ adapters: {}, localAddresses: [], httpServers: [], websocketClients: [] });
   const configFiles = ref<Record<string, string>>({});
   const selectedGatewayId = ref("");
   const loading = ref(false);
@@ -202,7 +208,10 @@ export const useGatewayStore = defineStore("gateway", () => {
   const meta = ref<MetaPayload>({
     version: "0.1.0",
     githubUrl: "https://github.com/vb2250158/RabiRoute",
-    managerPort: 8790
+    managerPort: 8790,
+    rabiGuid: "",
+    rabiName: "",
+    computerName: ""
   });
 
   const selectedIndex = computed(() => {
@@ -282,12 +291,13 @@ export const useGatewayStore = defineStore("gateway", () => {
       if (response.ok && body.code === 0 && body.data) {
         networkOptions.value = {
           adapters: body.data.adapters || {},
+          localAddresses: body.data.localAddresses || [],
           httpServers: body.data.httpServers || [],
           websocketClients: body.data.websocketClients || []
         };
       }
     } catch {
-      networkOptions.value = { adapters: {}, httpServers: [], websocketClients: [] };
+      networkOptions.value = { adapters: {}, localAddresses: [], httpServers: [], websocketClients: [] };
     }
   }
 
@@ -486,7 +496,10 @@ export const useGatewayStore = defineStore("gateway", () => {
     if (!gateway) return;
     gateway[field] = value;
     if (field === "id") selectedGatewayId.value = String(value || "");
-    if (field === "agentRoleId") ensureActiveRoleRules(gateway);
+    if (field === "agentRoleId") {
+      if (!String(value || "").trim()) gateway.notificationRules = [];
+      ensureActiveRoleRules(gateway);
+    }
     touch();
   }
 
@@ -592,6 +605,9 @@ export const useGatewayStore = defineStore("gateway", () => {
     fenneNoteWebhookPath?: string;
     xiaoaiWebhookPort?: number;
     xiaoaiWebhookPath?: string;
+    rabiLinkWebhookPort?: number;
+    rabiLinkWebhookPath?: string;
+    rabiLinkWebhookHost?: string;
     wecomBotId?: string;
     wecomBotSecret?: string;
     wecomWsUrl?: string;
@@ -604,6 +620,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     }
     gateway.messageInputsDisabled = values.messageInputsDisabled === true;
     gateway.agentRoleId = values.agentRoleId;
+    if (!gateway.agentRoleId) gateway.notificationRules = [];
     gateway.agentModel = values.agentModel?.trim() || "";
     gateway.codexThreadName = values.codexThreadName;
     gateway.codexCwd = values.codexCwd;
@@ -654,6 +671,9 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway.fenneNoteWebhookPath = values.fenneNoteWebhookPath || gateway.fenneNoteWebhookPath;
     gateway.xiaoaiWebhookPort = values.xiaoaiWebhookPort || gateway.xiaoaiWebhookPort;
     gateway.xiaoaiWebhookPath = values.xiaoaiWebhookPath || gateway.xiaoaiWebhookPath;
+    gateway.rabiLinkWebhookPort = values.rabiLinkWebhookPort || gateway.rabiLinkWebhookPort;
+    gateway.rabiLinkWebhookPath = values.rabiLinkWebhookPath || gateway.rabiLinkWebhookPath;
+    gateway.rabiLinkWebhookHost = values.rabiLinkWebhookHost || gateway.rabiLinkWebhookHost;
     gateway.wecomBotId = values.wecomBotId || gateway.wecomBotId;
     gateway.wecomBotSecret = values.wecomBotSecret || gateway.wecomBotSecret;
     gateway.wecomWsUrl = values.wecomWsUrl || gateway.wecomWsUrl;

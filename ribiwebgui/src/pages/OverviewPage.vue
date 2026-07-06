@@ -12,6 +12,10 @@ const rolesDir = ref("");
 const dirSaving = ref(false);
 const dirSaved = ref(false);
 const dirError = ref("");
+const rabiName = ref("");
+const rabiSaving = ref(false);
+const rabiSaved = ref(false);
+const rabiError = ref("");
 const gatewayActionId = ref("");
 const gatewayActionError = ref("");
 const deletingGatewayId = ref("");
@@ -23,6 +27,7 @@ async function loadDirConfig() {
     routeDir.value = data.routeDir ?? "";
     rolesDir.value = data.rolesDir ?? "";
   } catch { /* ignore */ }
+  rabiName.value = store.meta.rabiName || store.meta.computerName || "";
 }
 
 async function saveDirConfig() {
@@ -44,6 +49,28 @@ async function saveDirConfig() {
     dirError.value = String(e);
   } finally {
     dirSaving.value = false;
+  }
+}
+
+async function saveRabiIdentity() {
+  rabiSaving.value = true;
+  rabiSaved.value = false;
+  rabiError.value = "";
+  try {
+    const res = await fetch("/api/rabi/identity", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rabiName: rabiName.value })
+    });
+    const data = await res.json();
+    if (data.code !== 0) throw new Error(data.message || "保存失败");
+    await store.load({ replaceDirtyConfig: true });
+    rabiName.value = store.meta.rabiName || "";
+    rabiSaved.value = true;
+  } catch (e) {
+    rabiError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    rabiSaving.value = false;
   }
 }
 
@@ -166,6 +193,7 @@ const selectedRuntimeLabel = computed(() => {
         <div class="status-row"><span>当前路由</span><b>{{ selectedGatewayName }}</b></div>
         <div class="status-row"><span>运行状态</span><b>{{ selectedRuntimeLabel }}</b></div>
         <div class="status-row"><span>消息入口</span><b>{{ selectedAdapters }}</b></div>
+        <div class="status-row"><span>Rabi 实例</span><b>{{ store.meta.rabiName || store.meta.computerName || "-" }}</b></div>
         <div class="hero-actions">
           <v-btn prepend-icon="mdi-lightning-bolt-outline" color="secondary" variant="tonal" @click="store.openQuickSetup">快速配置</v-btn>
           <v-btn prepend-icon="mdi-play-circle-outline" variant="tonal" @click="store.startManager">启动 Manager</v-btn>
@@ -294,6 +322,22 @@ const selectedRuntimeLabel = computed(() => {
         <div class="status-row"><span>配置目录</span><b>{{ store.configFiles.routeDir || "data/route" }}</b></div>
       </v-card>
     </div>
+
+      <v-card class="app-card glass-card section-card">
+        <div class="section-title-row">
+          <div>
+            <div class="section-title">Rabi 实例</div>
+            <div class="section-note">保存到 data/Config.json，供 RabiAPI / Android SDK 发现和识别。</div>
+          </div>
+          <v-btn color="primary" size="small" :loading="rabiSaving" @click="saveRabiIdentity">保存</v-btn>
+        </div>
+        <v-alert v-if="rabiError" type="error" variant="tonal" density="compact" class="mb-3">{{ rabiError }}</v-alert>
+        <v-alert v-if="rabiSaved" type="success" variant="tonal" density="compact" class="mb-3">已保存实例名称。</v-alert>
+        <div class="form-grid">
+          <v-text-field v-model="rabiName" label="RabiRoute 实例名" :placeholder="store.meta.computerName || 'RabiRoute'" density="compact" hide-details />
+          <v-text-field :model-value="store.meta.rabiGuid || '-'" label="RabiRoute GUID" density="compact" readonly hide-details />
+        </div>
+      </v-card>
 
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">

@@ -58,5 +58,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=str(tray_dir / "version_info.txt"),
-    # icon=str(repo_root / "assets" / "rabiroute-icon.ico"),  # uncomment when .ico exists
+    icon=str(repo_root / "assets" / "rabiroute-icon.ico"),
 )

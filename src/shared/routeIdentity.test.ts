@@ -36,6 +36,17 @@ test("route identity normalizes legacy runtime ids and explicit config names", (
   });
 });
 
+test("explicit empty role id keeps a route persona-free", () => {
+  assert.deepEqual(resolveRouteIdentity({
+    id: "Rabi__old",
+    agentRoleId: ""
+  }), {
+    roleId: "",
+    configName: "old",
+    runtimeId: "old"
+  });
+});
+
 test("route and role path helpers keep ids under configured roots", () => {
   const root = path.join(os.tmpdir(), "rabiroute-route-identity");
   const routeRoot = path.join(root, "data", "route");

@@ -167,6 +167,9 @@ test("AgentPacket routes FenneNote voice transcript replies through FenneNote ou
   assert.equal(replyContext.outputPipeline, "fennenote");
   assert.equal(replyContext.replyToSource, false);
   assert.equal(packet.templateValues.promptOutputMode, "voice_short");
+  assert.match(packet.message, /回复回传要求/);
+  assert.match(packet.message, /不能只在 Codex 线程里写最终文本/);
+  assert.match(packet.message, /普通回复 API/);
 });
 
 test("AgentPacket injects processing-time context confirmation protocol", () => {

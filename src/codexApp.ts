@@ -111,6 +111,23 @@ function codexBin(): string {
   return path.resolve(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "codex.cmd" : "codex");
 }
 
+export function buildChildEnvWithNodeOnPath(
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath,
+  delimiter: string = path.delimiter
+): NodeJS.ProcessEnv {
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+  const currentPath = env[pathKey] || "";
+  const nextEnv: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toLowerCase() !== "path") {
+      nextEnv[key] = value;
+    }
+  }
+  nextEnv[pathKey] = [path.dirname(execPath), currentPath].filter(Boolean).join(delimiter);
+  return nextEnv;
+}
+
 function handleNotification(msg: JsonRpcResponse): void {
   if (msg.method !== "thread/status/changed") {
     return;
@@ -187,6 +204,7 @@ async function ensureAppServer(): Promise<void> {
     cwd: config.codexCwd,
     detached: true,
     shell: process.platform === "win32",
+    env: buildChildEnvWithNodeOnPath(),
     stdio: ["ignore", fs.openSync(out, "a"), fs.openSync(err, "a")]
   });
   child.unref();
@@ -410,6 +428,11 @@ export async function createCodexAppMonitorThread(forceCreate = false): Promise<
     updatedAt: state.monitorThreadUpdatedAt ?? new Date().toISOString(),
     source: state.monitorThreadSource ?? "codex app-server"
   };
+}
+
+export async function resumeCodexAppThread(threadId: string): Promise<void> {
+  await connect();
+  await request("thread/resume", { threadId });
 }
 
 export async function notifyCodex(message: string): Promise<void> {

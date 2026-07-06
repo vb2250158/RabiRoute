@@ -79,6 +79,61 @@ function optionalLine(label: string, value: unknown): string {
   return value == null || value === "" ? "" : `${label}：${value}`;
 }
 
+function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline = false): string[] {
+  const outputAdapter = String(values.outputAdapter ?? "");
+  const routeKind = String(values.routeKind ?? "");
+  const replyApiUrl = String(values.replyApiUrl ?? "");
+  const replyContextJson = String(values.replyContextJson ?? "");
+  const replyToSource = String(values.replyToSource ?? "").toLowerCase() === "true";
+
+  if (!replyApiUrl || !replyContextJson) {
+    return [];
+  }
+
+  const shouldExplainReplyApi = forceMessagePipeline || replyToSource || (outputAdapter === "fennenote" && routeKind === "voice_transcript");
+  if (!shouldExplainReplyApi) return [];
+
+  const intro = forceMessagePipeline
+    ? [
+        "当前路由未绑定人格。凡是要对消息来源说出的自然语言回复，都必须先 POST 到普通回复 API，由 RabiRoute 投递到对应消息管道；不能只在 Codex 线程里写最终文本。",
+        "不要扮演角色，也不要把当前 Codex 可见最终文本当成已经发回消息端。"
+      ]
+    : outputAdapter === "fennenote" && routeKind === "voice_transcript"
+      ? [
+          "本次是语音对话回复，不能只在 Codex 线程里写最终文本。",
+          "如果判断需要回应，请把要播出的短句 POST 到普通回复 API；RabiRoute 会转给 FenneNote/OumuQ 播放，并写入转写预览。"
+        ]
+      : [
+          "如果判断需要回应消息来源，请把回复 POST 到普通回复 API；RabiRoute 会按当前管道投递。"
+        ];
+
+  return [
+    ...intro,
+    "请求体必须包含 text 和 replyContext，其中 replyContext 使用上方“当前回复上下文”的 JSON 原样传入。",
+    "示例：",
+    "```json",
+    JSON.stringify({
+      text: "这里填写夜雨要说的话。",
+      replyContext: JSON.parse(replyContextJson)
+    }, null, 2),
+    "```",
+    "API 调用成功后，可见最终回复只需同步已投递的简短结果；如果决定不对消息来源回复，请说明保持安静或不回传的原因。"
+  ];
+}
+
+function directMessageModeLines(values: ForwardTemplateValues): string[] {
+  return [
+    "当前路由没有绑定任何人格，这是无人格直通模式。",
+    "不要扮演角色，不读取或更新角色计划、记忆、技能，也不要提示需要配置人格。",
+    optionalLine("消息来源", values.messageTarget),
+    optionalLine("发送者", values.sender),
+    optionalLine("输入适配器", values.inputAdapter),
+    optionalLine("输出适配器", values.outputAdapter),
+    "只根据本次消息、日志路径和路由变量处理任务。",
+    "需要对消息来源说出的每一句话，都通过“回传”里的普通回复 API 投递到 RabiRoute；RabiRoute 会按 replyContext 送回对应消息管道。"
+  ];
+}
+
 function section(title: string, lines: string[]): string {
   const content = lines.filter((line) => line !== "").join("\n").trim();
   return content ? `[${title}]\n${content}` : "";
@@ -372,10 +427,11 @@ function buildAgentMessage(
   const record = decision.record;
   const routeKind = decision.routeKind;
   const shouldAttachMemoryConsolidation = routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation";
+  const hasPersona = Boolean(String(values.agentRoleId || "").trim() && roleDir);
   const referencedPlanSummaries = routeKind === "manual_trigger"
     ? readReferencedPlanSummaries(roleDir, userTemplateText)
     : [];
-  const knowledge = roleDir
+  const knowledge = hasPersona
     ? roleKnowledgeSnapshot(roleDir, String(values.message || ""), {
         roleId: String(values.agentRoleId || ""),
         includePendingConsolidation: shouldAttachMemoryConsolidation,
@@ -388,7 +444,7 @@ function buildAgentMessage(
   const recentMemoryIndex = knowledge ? indexLines(knowledge.recentMemories) : "- 暂无";
   const matchedIndex = knowledge ? indexLines(knowledge.matchedItems) : "- 暂无";
   const matchedSkillIndex = knowledge ? skillIndexLines(values.agentRoleId, knowledge.matchedSkills) : "- 暂无";
-  const requiredReadIndex = knowledge ? requiredReadLines(knowledge.requiredReadItems) : requiredReadLines([]);
+  const requiredReadIndex = knowledge ? requiredReadLines(knowledge.requiredReadItems) : [];
   const pendingConsolidation = knowledge?.pendingConsolidation;
   const pendingConsolidationLines = pendingConsolidation
     ? [
@@ -415,15 +471,15 @@ function buildAgentMessage(
       optionalLine("触发名称", values.triggerName)
     ]),
     section("消息", [String(values.message || record.rawMessage || "")]),
-    section("角色和路径", [
+    hasPersona ? section("角色和路径", [
       optionalLine("角色", values.agentRoleId),
       optionalLine("角色文件", values.agentRolePath || rolePath),
       optionalLine("角色目录", values.agentRoleDir || roleDir),
       optionalLine("运行数据目录", values.dataDir),
       optionalLine("计划目录", knowledge?.plansDir ?? values.plansDir),
       optionalLine("记忆目录", knowledge?.memoryDir ?? values.memoryDir)
-    ]),
-    section("记忆与计划", [
+    ]) : section("无人格直通模式", directMessageModeLines(values)),
+    hasPersona ? section("记忆与计划", [
       optionalLine("更新记忆与计划的说明文档", knowledge?.agentInterfaceDocPath ?? values.agentInterfaceDocPath),
       ...planMemoryApiHint(values.agentRoleId),
       "",
@@ -441,8 +497,8 @@ function buildAgentMessage(
       "",
       "命中召回：",
       matchedIndex
-    ]),
-    section("处理前上下文确认", requiredReadIndex),
+    ]) : "",
+    hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",
     section("日志", [
       optionalLine("群聊日志", values.groupLogPath),
       optionalLine("私聊日志", values.privateLogPath),
@@ -455,6 +511,7 @@ function buildAgentMessage(
       optionalLine("普通回复 API", values.replyApiUrl),
       optionalLine("当前回复上下文", values.replyContextJson)
     ]),
+    section("回复回传要求", replyDeliveryLines(values, !hasPersona)),
     config.messageAdapterTypes.includes("remoteAgent")
       ? section("远端 Agent 设备", remoteAgentApiHint(values))
       : "",
@@ -471,7 +528,7 @@ function buildAgentMessage(
     userTemplateText.trim() ? section("用户模板补充", [userTemplateText.trim()]) : ""
   ];
 
-  return appendAgentRoleReference(blocks.filter(Boolean).join("\n\n"), rolePath);
+  return appendAgentRoleReference(blocks.filter(Boolean).join("\n\n"), hasPersona ? rolePath : "");
 }
 
 export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule, roleContext: AgentRoleContext): AgentPacket {

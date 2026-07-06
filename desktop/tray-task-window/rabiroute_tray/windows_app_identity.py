@@ -68,6 +68,9 @@ def _shortcut_target(project_root: Path) -> tuple[Path, str]:
 
 
 def _shortcut_icon(project_root: Path, target_path: Path) -> Path:
+    asset_icon = project_root / "assets" / "rabiroute-icon.ico"
+    if asset_icon.exists():
+        return asset_icon
     exe_icon = project_root / "RabiRoute-Tray.exe"
     if exe_icon.exists():
         return exe_icon

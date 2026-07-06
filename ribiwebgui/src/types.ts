@@ -148,6 +148,7 @@ export type GatewayPayload = {
 
 export type NetworkOptions = {
   adapters: Record<string, unknown>;
+  localAddresses?: Array<{ name?: string; address: string; cidr?: string }>;
   httpServers: unknown[];
   websocketClients: unknown[];
 };
@@ -156,4 +157,7 @@ export type MetaPayload = {
   version: string;
   githubUrl: string;
   managerPort: number;
+  rabiGuid?: string;
+  rabiName?: string;
+  computerName?: string;
 };

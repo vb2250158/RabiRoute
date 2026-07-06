@@ -131,6 +131,16 @@ function ruleMatches(
     }
   }
 
+  if (rule.allowedSpeakerNames?.length) {
+    if (!isVoiceTranscriptRecord(record)) {
+      return false;
+    }
+    const speakerName = String(record.speakerName ?? "").trim();
+    if (!speakerName || !rule.allowedSpeakerNames.includes(speakerName)) {
+      return false;
+    }
+  }
+
   if (!rule.regex?.trim()) {
     return true;
   }

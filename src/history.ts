@@ -210,6 +210,7 @@ export function appendVoiceTranscriptEventToDir(record: VoiceTranscriptEventReco
 function voiceTranscriptFileNameForAdapter(adapter: string): string {
   if (adapter === "fennenote") return "fennenote-voice-transcripts.jsonl";
   if (adapter === "xiaoai") return "xiaoai-voice-transcripts.jsonl";
+  if (adapter === "rabilink") return "rabilink-voice-transcripts.jsonl";
   return "voice-transcripts.jsonl";
 }
 
