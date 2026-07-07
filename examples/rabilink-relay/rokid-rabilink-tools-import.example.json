@@ -1,0 +1,186 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "RabiLinkMessage Tools",
+    "description": "RabiLinkMessage tools for forwarding Rokid agent utterances to RabiLink Relay and pulling downstream messages.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://rabi.example.com"
+    }
+  ],
+  "paths": {
+    "/rokid/rabilink/tasks": {
+      "post": {
+        "operationId": "submitRabiLinkTask",
+        "summary": "提交 RabiLink 任务",
+        "description": "把用户在 Rokid 智能体中说出的完整内容提交到 RabiLink Relay。调用成功后返回 taskId，随后用 getRabiLinkMessages 拉取下行消息。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "用户原始说话内容，或需要通过 RabiLink 转交给后端 Agent 的完整请求。"
+                  },
+                  "sender": {
+                    "type": "string",
+                    "description": "可选发送者显示名称，例如 Rokid Glass。"
+                  },
+                  "context": {
+                    "type": "string",
+                    "description": "可选简短上下文；如果用户发送照片，请放入视觉观察、OCR、场景和用户意图。"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "任务提交结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "code",
+                    "status",
+                    "taskId",
+                    "text"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "接口是否调用成功。"
+                    },
+                    "code": {
+                      "type": "integer",
+                      "description": "0 表示成功。"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "任务状态，例如 pending。"
+                    },
+                    "taskId": {
+                      "type": "string",
+                      "description": "任务 ID，可用于日志和调试；正常拉取消息不需要它。"
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "提交确认文案，不是后端 Agent 的最终回答。"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rokid/rabilink/messages": {
+      "get": {
+        "operationId": "getRabiLinkMessages",
+        "summary": "拉取 RabiLink 下行消息",
+        "description": "从 RabiLink Relay 拉取全局下行消息。每次拿到 messages 中的新 text，都应立即自然转述给用户。此接口不需要 taskId。",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "已经读过的最后一条下行消息 ID 或 cursor。第一次拉取时留空。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "下行消息列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "code",
+                    "messages",
+                    "done",
+                    "shouldContinue"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "description": "接口是否调用成功。"
+                    },
+                    "code": {
+                      "type": "integer",
+                      "description": "0 表示成功。"
+                    },
+                    "messages": {
+                      "type": "array",
+                      "description": "新增下行消息；智能体应逐条自然转述其中的 text。",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "text"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "下行消息 ID。"
+                          },
+                          "taskId": {
+                            "type": "string",
+                            "description": "消息关联的任务 ID。"
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "需要转述给用户的文本。"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "description": "消息创建时间。"
+                          }
+                        }
+                      }
+                    },
+                    "cursor": {
+                      "type": "string",
+                      "description": "当前读取游标。"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "description": "下一次拉取时传给 after 的游标。"
+                    },
+                    "done": {
+                      "type": "boolean",
+                      "description": "是否已经结束。"
+                    },
+                    "shouldContinue": {
+                      "type": "boolean",
+                      "description": "是否建议继续轮询。"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "聚合状态，例如 streaming、completed。"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -49,9 +49,11 @@ Worker 会代理这些路径：
 /openapi/rokid-rabilink-plugin.manual-auth.json
 /rokid/rabilink/tasks
 /rokid/rabilink/tasks/<taskId>/messages
-/rokid/rabilink/messages（兼容/调试）
-/phone/tasks/*
+/rokid/rabilink/messages
+/worker/tasks/*
 ```
+
+`/rokid/rabilink/messages` 是眼镜端正式播报用的全局下行队列：第一次使用 `submitRabiLinkTask` 返回的 `cursor` / `nextCursor` 作为 `after`，之后每次用返回的 `nextCursor` 继续拉取。这个接口不需要 `taskId`，返回的每条消息会自己带 `taskId`；眼镜端应拉到一句说一句，不设置固定轮询次数。
 
 导入 OpenAPI 时，Worker 会自动把 OpenAPI 的 `servers[0].url` 改成 Worker 自己的域名，避免 Rizon 导入后又回到 IP 地址。
 
@@ -152,6 +154,6 @@ $env:RABILINK_RELAY_TOKEN = "填入当前 Relay token"
 - OpenAPI 返回 `info.title = RabiLinkMessage`
 - OpenAPI 的 `servers[0].url` 是 Worker 自己的 `https://...workers.dev`
 - 未带 token 访问 `/rokid/rabilink/tasks/<taskId>/messages` 返回 401
-- 带 token 的队列烟测能提交任务、模拟手机完成任务、按 `taskId` 从 Worker 拉到本轮消息，拉空后 `shouldContinue=false`
+- 带 token 的队列烟测能提交任务、模拟手机完成任务、从全局 `/rokid/rabilink/messages` 拉到带 `taskId` 的下行消息
 
 如果 Worker 通而 Rizon 不通，再查插件鉴权和工具配置；不要回头把 `old-relay.example.com` 当成可用域名测试。

@@ -138,19 +138,6 @@
             android:exported="true"
             android:foregroundServiceType="dataSync" />
 
-        <service
-            android:name=".modules.rabiroute.RabiLinkRelayBridgeService"
-            android:exported="true"
-            android:foregroundServiceType="dataSync" />
-
-        <receiver
-            android:name=".modules.rabiroute.RabiLinkRelayBridgeBootReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
-
         <receiver
             android:name=".BondedGattProbeReceiver"
             android:exported="true" />

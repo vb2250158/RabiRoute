@@ -9,6 +9,8 @@ import type { MessageAdapter, MessageAdapterType } from "./messageAdapter.js";
 type WebhookPayload = {
   type?: string;
   source?: string;
+  sender?: string;
+  context?: string;
   sourceDeviceId?: string;
   sourceDeviceName?: string;
   sourceArea?: string;
@@ -54,6 +56,9 @@ type GatewayStatus = {
     port?: number;
     lastEventAt?: string;
     eventCount?: number;
+    relayUrl?: string;
+    relayDeviceId?: string;
+    relayWorker?: "running" | "disabled" | "error";
   }>;
   webhook?: {
     path?: string;
@@ -109,7 +114,7 @@ function readJsonlTail(filePath: string, limit: number, afterId: string): Record
 function localRabiLinkReplies(requestUrl: URL): Record<string, unknown> {
   const limit = Math.max(1, Math.min(100, Number(requestUrl.searchParams.get("limit") || 20) || 20));
   const afterId = String(requestUrl.searchParams.get("afterId") || requestUrl.searchParams.get("after") || "");
-  const filePath = path.join(config.dataDir, "rabilink-replies.jsonl");
+  const filePath = replyLogFilePath();
   const replies = readJsonlTail(filePath, limit, afterId);
   const cursor = String(replies.at(-1)?.id ?? "");
   return {
@@ -125,6 +130,10 @@ function localRabiLinkReplies(requestUrl: URL): Record<string, unknown> {
     cursor,
     nextCursor: cursor
   };
+}
+
+function replyLogFilePath(): string {
+  return path.join(config.dataDir, "rabilink-replies.jsonl");
 }
 
 function readGatewayStatus(): GatewayStatus {
@@ -168,6 +177,9 @@ function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<G
       updatedAt: new Date().toISOString(),
       path: patch.path,
       port: patch.port,
+      relayUrl: current.relayUrl,
+      relayDeviceId: current.relayDeviceId,
+      relayWorker: current.relayWorker,
       lastEventAt: patch.lastEventAt,
       eventCount: patch.eventCount
     }
@@ -203,6 +215,37 @@ function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<G
   }
 
   writeGatewayStatus(nextStatus);
+}
+
+function patchRelayStatus(profile: WebhookAdapterProfile, patch: {
+  status?: "running" | "error";
+  message?: string;
+  relayWorker?: "running" | "disabled" | "error";
+  relayUrl?: string;
+  relayDeviceId?: string;
+}): void {
+  const status = readGatewayStatus();
+  const current = status.messageAdapters?.[profile.type] ?? {};
+  writeGatewayStatus({
+    ...status,
+    messageAdapters: {
+      ...status.messageAdapters,
+      [profile.type]: {
+        ...current,
+        type: profile.type,
+        status: patch.status ?? current.status ?? "running",
+        message: patch.message ?? current.message,
+        updatedAt: new Date().toISOString(),
+        path: current.path,
+        port: current.port,
+        lastEventAt: current.lastEventAt,
+        eventCount: current.eventCount,
+        relayUrl: patch.relayUrl ?? current.relayUrl,
+        relayDeviceId: patch.relayDeviceId ?? current.relayDeviceId,
+        relayWorker: patch.relayWorker ?? current.relayWorker
+      }
+    }
+  });
 }
 
 function normalizeWebhookPath(rawPath: string): string {
@@ -278,9 +321,9 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
     time: payload.time ?? Math.floor(Date.now() / 1000),
     rawMessage,
     messageId: payload.messageId ?? payload.id ?? `${profile.type}-${Date.now()}`,
-    senderName: payload.source ?? profile.label,
+    senderName: payload.sender ?? payload.source ?? profile.label,
     adapterType: profile.type,
-    source: payload.source ?? profile.source,
+    source: payload.source ?? payload.sender ?? profile.source,
     speakerId: payload.speakerId ?? payload.speaker_id,
     speakerName: payload.speakerName ?? payload.speaker_name,
     speakerKind: payload.speakerKind ?? payload.speaker_kind,
@@ -289,12 +332,318 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
     sourceDeviceId: payload.sourceDeviceId ?? payload.deviceId,
     sourceDeviceName: payload.sourceDeviceName ?? payload.deviceName,
     sourceArea: payload.sourceArea ?? payload.area,
-    sessionId: payload.sessionId,
+    sessionId: payload.sessionId ?? payload.context,
     startedAt: payload.startedAt,
     endedAt: payload.endedAt,
     durationSeconds: payload.durationSeconds,
     peak: payload.peak
   };
+}
+
+function acceptWebhookPayload(profile: WebhookAdapterProfile, webhookPath: string, payload: WebhookPayload, bodyBytes: number): VoiceTranscriptEventRecord {
+  const eventType = payload.type ?? "voice_transcript";
+  appendAdapterLog(profile.type, {
+    event: "inbound_request",
+    message: textFromPayload(payload).slice(0, 500),
+    data: {
+      adapterType: profile.type,
+      label: profile.label,
+      path: webhookPath,
+      eventType,
+      bodyBytes,
+      payload
+    }
+  });
+  if (!profile.acceptedTypes.includes(eventType)) {
+    appendAdapterLog(profile.type, {
+      level: "warning",
+      event: "unsupported_type",
+      message: `Unsupported ${profile.label} type: ${eventType}`,
+      data: { path: webhookPath, eventType }
+    });
+    throw new Error(`Unsupported ${profile.label} type`);
+  }
+
+  const record = recordFromPayload(payload, profile);
+  if (!record) {
+    appendAdapterLog(profile.type, {
+      level: "warning",
+      event: "missing_text",
+      message: profile.missingTextMessage,
+      data: { path: webhookPath, eventType, payload }
+    });
+    throw new Error("Missing text");
+  }
+
+  appendVoiceTranscriptEventForAdapter(profile.type, record);
+  const status = readGatewayStatus().messageAdapters?.[profile.type];
+  patchWebhookStatus(profile, {
+    path: webhookPath,
+    port: profile.port,
+    lastEventAt: new Date().toISOString(),
+    eventCount: (status?.eventCount ?? 0) + 1
+  });
+  forwardMessage(profile.routeKind, record, {
+    webhookPath,
+    inputAdapter: profile.type,
+    voiceSource: record.source
+  });
+  appendAdapterLog(profile.type, {
+    event: "accepted",
+    message: record.rawMessage.slice(0, 500),
+    data: {
+      adapterType: profile.type,
+      label: profile.label,
+      path: webhookPath,
+      messageId: record.messageId,
+      source: record.source,
+      sessionId: record.sessionId
+    }
+  });
+  return record;
+}
+
+type RelayTask = Record<string, unknown>;
+
+const runningRelayWorkers = new Set<string>();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizedRelayBaseUrl(): string {
+  return config.rabiLinkRelayUrl.trim().replace(/\/+$/, "");
+}
+
+function relayHeaders(hasBody = false): Record<string, string> {
+  const headers: Record<string, string> = {
+    "X-RabiLink-Token": config.rabiLinkRelayToken,
+    "User-Agent": "RabiRoute/1.0"
+  };
+  if (hasBody) {
+    headers["Content-Type"] = "application/json";
+  }
+  return headers;
+}
+
+async function fetchRelayJson(pathname: string, init: RequestInit = {}, fallbackPathname?: string): Promise<Record<string, unknown>> {
+  const baseUrl = normalizedRelayBaseUrl();
+  const response = await fetch(`${baseUrl}${pathname}`, init);
+  if (response.status === 404 && fallbackPathname) {
+    return fetchRelayJson(fallbackPathname, init);
+  }
+  const text = await response.text();
+  const body = text.trim() ? JSON.parse(text) as Record<string, unknown> : {};
+  if (!response.ok) {
+    throw new Error(String(body.message || body.error || `${response.status} ${response.statusText}`));
+  }
+  return body;
+}
+
+function taskFromClaimResponse(body: Record<string, unknown>): RelayTask | null {
+  if (body.task && typeof body.task === "object" && !Array.isArray(body.task)) {
+    return body.task as RelayTask;
+  }
+  if (body.data && typeof body.data === "object" && !Array.isArray(body.data)) {
+    const data = body.data as Record<string, unknown>;
+    if (data.task && typeof data.task === "object" && !Array.isArray(data.task)) {
+      return data.task as RelayTask;
+    }
+    if (Array.isArray(data.tasks) && data.tasks[0] && typeof data.tasks[0] === "object") {
+      return data.tasks[0] as RelayTask;
+    }
+  }
+  if (Array.isArray(body.tasks) && body.tasks[0] && typeof body.tasks[0] === "object") {
+    return body.tasks[0] as RelayTask;
+  }
+  return null;
+}
+
+function relayTaskId(task: RelayTask): string {
+  return stringPayloadField(task.id) || stringPayloadField(task.taskId);
+}
+
+function relayTaskText(task: RelayTask): string {
+  return stringPayloadField(task.text)
+    || stringPayloadField(task.normalizedText)
+    || stringPayloadField(task.message)
+    || stringPayloadField(task.content)
+    || stringPayloadField(task.query)
+    || stringPayloadField(task.prompt)
+    || nestedTextFromData(task.data);
+}
+
+function payloadFromRelayTask(task: RelayTask, taskId: string): WebhookPayload {
+  const sender = stringPayloadField(task.sender) || stringPayloadField(task.source) || "Rokid Glass";
+  return {
+    type: "rabilink",
+    id: taskId,
+    messageId: taskId,
+    sender,
+    source: sender,
+    context: stringPayloadField(task.context),
+    sessionId: stringPayloadField(task.conversationId) || stringPayloadField(task.sessionId),
+    text: relayTaskText(task),
+    data: task,
+    sourceDeviceId: stringPayloadField(task.deviceId),
+    sourceDeviceName: stringPayloadField(task.deviceName) || "Rokid Relay"
+  };
+}
+
+function replyContextOf(row: Record<string, unknown>): Record<string, unknown> {
+  const context = row.replyContext;
+  return context && typeof context === "object" && !Array.isArray(context) ? context as Record<string, unknown> : {};
+}
+
+function replyMatchesTask(row: Record<string, unknown>, taskId: string): boolean {
+  const context = replyContextOf(row);
+  const messageId = stringPayloadField(row.messageId) || stringPayloadField(context.messageId);
+  return messageId === taskId;
+}
+
+function replyText(row: Record<string, unknown>): string {
+  return stringPayloadField(row.text)
+    || stringPayloadField(row.reply)
+    || stringPayloadField(row.answer)
+    || stringPayloadField(row.content)
+    || nestedTextFromData(row.payload);
+}
+
+function replyIsFinal(row: Record<string, unknown>): boolean {
+  const status = stringPayloadField(row.status).toLowerCase();
+  const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
+    ? row.payload as Record<string, unknown>
+    : {};
+  return row.done === true
+    || row.final === true
+    || payload.done === true
+    || payload.final === true
+    || status === "done"
+    || status === "failed";
+}
+
+function replyKey(row: Record<string, unknown>, index: number): string {
+  return stringPayloadField(row.id)
+    || stringPayloadField(row.sentMessageId)
+    || `${stringPayloadField(row.messageId)}:${row.time ?? ""}:${replyText(row).slice(0, 80)}:${index}`;
+}
+
+async function appendRelayMessage(taskId: string, text: string, raw: Record<string, unknown>): Promise<void> {
+  const body = JSON.stringify({ text, raw });
+  await fetchRelayJson(`/worker/tasks/${encodeURIComponent(taskId)}/messages`, {
+    method: "POST",
+    headers: relayHeaders(true),
+    body
+  });
+}
+
+async function finishRelayTask(taskId: string, body: Record<string, unknown>): Promise<void> {
+  await fetchRelayJson(`/worker/tasks/${encodeURIComponent(taskId)}/finish`, {
+    method: "POST",
+    headers: relayHeaders(true),
+    body: JSON.stringify(body)
+  });
+}
+
+async function streamRepliesToRelay(taskId: string): Promise<{ deliveredCount: number; sawFinal: boolean }> {
+  const delivered = new Set<string>();
+  let lastActivityAt = Date.now();
+  let sawFinal = false;
+  let deliveredCount = 0;
+  const idleTimeoutMs = config.rabiLinkRelayReplyIdleTimeoutMs;
+  while (Date.now() - lastActivityAt <= idleTimeoutMs) {
+    const rows = readJsonlTail(replyLogFilePath(), 500, "").filter((row) => replyMatchesTask(row, taskId));
+    for (const [index, row] of rows.entries()) {
+      const key = replyKey(row, index);
+      const text = replyText(row);
+      if (text && !delivered.has(key)) {
+        await appendRelayMessage(taskId, text, row);
+        delivered.add(key);
+        deliveredCount += 1;
+        lastActivityAt = Date.now();
+      }
+      if (replyIsFinal(row)) {
+        sawFinal = true;
+      }
+    }
+    if (sawFinal) {
+      return { deliveredCount, sawFinal: true };
+    }
+    await sleep(config.rabiLinkRelayReplyPollMs);
+  }
+  return { deliveredCount, sawFinal: false };
+}
+
+async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: string, task: RelayTask): Promise<void> {
+  const taskId = relayTaskId(task);
+  if (!taskId) {
+    throw new Error("Relay task has no id.");
+  }
+  const payload = payloadFromRelayTask(task, taskId);
+  const record = acceptWebhookPayload(profile, webhookPath, payload, Buffer.byteLength(JSON.stringify(payload)));
+  appendAdapterLog(profile.type, {
+    event: "relay_task_claimed",
+    message: record.rawMessage.slice(0, 500),
+    data: { taskId, relayUrl: normalizedRelayBaseUrl() }
+  });
+  const result = await streamRepliesToRelay(taskId);
+  await finishRelayTask(taskId, result.deliveredCount > 0
+    ? { ok: true, status: "done", idleTimeout: !result.sawFinal }
+    : { ok: false, status: "failed", error: "RabiLink PC worker timed out waiting for a final reply." });
+}
+
+async function claimRelayTask(): Promise<RelayTask | null> {
+  const waitMs = config.rabiLinkRelayClaimWaitMs;
+  const params = new URLSearchParams({
+    limit: "1",
+    deviceId: config.rabiLinkRelayDeviceId,
+    waitMs: String(waitMs)
+  });
+  const body = await fetchRelayJson(`/worker/tasks?${params}`, {
+    method: "GET",
+    headers: relayHeaders()
+  });
+  return taskFromClaimResponse(body);
+}
+
+function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhookPath: string): void {
+  if (profile.type !== "rabilink") return;
+  if (!config.rabiLinkRelayEnabled || !normalizedRelayBaseUrl()) {
+    patchRelayStatus(profile, { relayWorker: "disabled", message: "RabiLink Relay worker is disabled." });
+    return;
+  }
+  const workerKey = `${profile.type}:${normalizedRelayBaseUrl()}:${config.rabiLinkRelayDeviceId}`;
+  if (runningRelayWorkers.has(workerKey)) return;
+  runningRelayWorkers.add(workerKey);
+  void (async () => {
+    patchRelayStatus(profile, {
+      relayWorker: "running",
+      relayUrl: normalizedRelayBaseUrl(),
+      relayDeviceId: config.rabiLinkRelayDeviceId,
+      message: "RabiLink Relay worker 已启动。"
+    });
+    while (true) {
+      try {
+        const task = await claimRelayTask();
+        if (!task) continue;
+        await handleRelayTask(profile, webhookPath, task);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        patchRelayStatus(profile, { status: "error", relayWorker: "error", message });
+        appendAdapterLog(profile.type, {
+          level: "error",
+          event: "relay_worker_error",
+          message,
+          data: {
+            relayUrl: normalizedRelayBaseUrl(),
+            relayDeviceId: config.rabiLinkRelayDeviceId
+          }
+        });
+        await sleep(3000);
+        patchRelayStatus(profile, { status: "running", relayWorker: "running", message: "RabiLink Relay worker 已恢复轮询。" });
+      }
+    }
+  })();
 }
 
 function defaultWebhookProfile(): WebhookAdapterProfile {
@@ -339,7 +688,7 @@ export function createXiaoAiAdapter(): MessageAdapter {
 export function createRabiLinkAdapter(): MessageAdapter {
   return createWebhookAdapter({
     type: "rabilink",
-    label: "RabiLink / Rokid 手机桥",
+    label: "RabiLink / Relay 直连",
     source: "rabilink",
     path: config.rabiLinkWebhookPath,
     port: config.rabiLinkWebhookPort,
@@ -392,67 +741,7 @@ export function createWebhookAdapter(profile = defaultWebhookProfile()): Message
         try {
           const body = await readRequestBody(request);
           const payload = JSON.parse(body || "{}") as WebhookPayload;
-          const eventType = payload.type ?? "voice_transcript";
-          appendAdapterLog(profile.type, {
-            event: "inbound_request",
-            message: textFromPayload(payload).slice(0, 500),
-            data: {
-              adapterType: profile.type,
-              label: profile.label,
-              path: webhookPath,
-              eventType,
-              bodyBytes: Buffer.byteLength(body),
-              payload
-            }
-          });
-          if (!profile.acceptedTypes.includes(eventType)) {
-            appendAdapterLog(profile.type, {
-              level: "warning",
-              event: "unsupported_type",
-              message: `Unsupported ${profile.label} type: ${eventType}`,
-              data: { path: webhookPath, eventType }
-            });
-            response.writeHead(400).end(`Unsupported ${profile.label} type`);
-            return;
-          }
-
-          const record = recordFromPayload(payload, profile);
-          if (!record) {
-            appendAdapterLog(profile.type, {
-              level: "warning",
-              event: "missing_text",
-              message: profile.missingTextMessage,
-              data: { path: webhookPath, eventType, payload }
-            });
-            response.writeHead(400).end("Missing text");
-            return;
-          }
-
-          appendVoiceTranscriptEventForAdapter(profile.type, record);
-          const status = readGatewayStatus().messageAdapters?.[profile.type];
-          patchWebhookStatus(profile, {
-            path: webhookPath,
-            port: profile.port,
-            lastEventAt: new Date().toISOString(),
-            eventCount: (status?.eventCount ?? 0) + 1
-          });
-          forwardMessage(profile.routeKind, record, {
-            webhookPath,
-            inputAdapter: profile.type,
-            voiceSource: record.source
-          });
-          appendAdapterLog(profile.type, {
-            event: "accepted",
-            message: record.rawMessage.slice(0, 500),
-            data: {
-              adapterType: profile.type,
-              label: profile.label,
-              path: webhookPath,
-              messageId: record.messageId,
-              source: record.source,
-              sessionId: record.sessionId
-            }
-          });
+          const record = acceptWebhookPayload(profile, webhookPath, payload, Buffer.byteLength(body));
           if (profile.type === "rabilink") {
             const replyText = "已转交 Codex 处理。";
             response.writeHead(200, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({
@@ -496,6 +785,7 @@ export function createWebhookAdapter(profile = defaultWebhookProfile()): Message
           path: webhookPath,
           port: profile.port
         });
+        startRabiLinkRelayWorker(profile, webhookPath);
         const url = `http://${host}:${profile.port}${webhookPath}`;
         appendAdapterLog(profile.type, {
           event: "listening",

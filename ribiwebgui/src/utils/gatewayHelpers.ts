@@ -199,7 +199,7 @@ export function adapterLabel(type: string): string {
   if (type === "rolePanel") return "角色面板";
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
   if (type === "xiaoai") return "小米音箱 / 小爱";
-  if (type === "rabilink") return "RabiLink / 手机桥";
+  if (type === "rabilink") return "RabiLink / Relay 直连";
   if (type === "wecom") return "企业微信 / WeCom";
   if (type === "webhook") return "通用 Webhook";
   if (type === "disabled") return "已禁用";
@@ -225,7 +225,7 @@ export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean
 export function adapterSourceAliases(type: string): string[] {
   if (type === "fennenote") return ["fennenote", "fenne_note", "fenne-note", "fenne", "芬妮笔记", "芬妮"];
   if (type === "xiaoai") return ["xiaoai", "xiao_ai", "xiao-ai", "mi_speaker", "mi-speaker", "xiaomi", "小爱", "小米音箱"];
-  if (type === "rabilink") return ["rabilink", "rabi_link", "rabi-link", "rokid", "rokid_glass", "phone_bridge", "手机桥", "乐奇", "乐棋"];
+  if (type === "rabilink") return ["rabilink", "rabi_link", "rabi-link", "rokid", "rokid_glass", "rizon", "lingzhu", "relay", "服务器", "直连", "乐奇", "乐棋"];
   if (type === "wecom") return ["wecom", "wechat-work", "企业微信", "企微"];
   if (type === "webhook") return ["webhook", "generic_webhook", "generic-webhook"];
   return [type];
@@ -414,8 +414,8 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
     },
     {
       adapter: "rabilink",
-      title: "RabiLink / 手机桥",
-      note: "手机 RabiLink 文本入口；用于接住 Rokid/灵珠转出的文本，再投递到 Codex。",
+      title: "RabiLink / Relay 直连",
+      note: "电脑端直连 Relay；接住 Rokid/灵珠转出的文本，再投递到当前路由和 Codex。",
       groups: [{ title: "RabiLink 文本事件", routeKinds: ["voice_transcript"] }]
     },
     {

@@ -263,6 +263,18 @@ function parsePositiveNumber(raw: string | undefined, fallback: number): number 
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function parseBoolean(raw: string | undefined, fallback = false): boolean {
+  const value = raw?.trim().toLowerCase();
+  if (!value) return fallback;
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+function parseClampedNumber(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
 function normalizeNotificationRule(item: unknown, index: number): NotificationRule | null {
   if (!item || typeof item !== "object") {
     return null;
@@ -391,6 +403,15 @@ export const config = {
   rabiLinkWebhookPath: process.env.RABILINK_WEBHOOK_PATH ?? "/rabilink",
   rabiLinkWebhookPort: Number(process.env.RABILINK_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   rabiLinkWebhookHost: process.env.RABILINK_WEBHOOK_HOST ?? "0.0.0.0",
+  rabiLinkRelayEnabled: parseBoolean(process.env.RABILINK_RELAY_ENABLED, Boolean(normalizeOptionalString(process.env.RABILINK_RELAY_URL))),
+  rabiLinkRelayUrl: normalizeOptionalString(process.env.RABILINK_RELAY_URL) ?? "",
+  rabiLinkRelayToken: normalizeOptionalString(process.env.RABILINK_RELAY_TOKEN) ?? "",
+  rabiLinkRelayDeviceId: normalizeOptionalString(process.env.RABILINK_RELAY_DEVICE_ID)
+    ?? normalizeOptionalString(process.env.COMPUTERNAME)
+    ?? "rabilink-pc",
+  rabiLinkRelayClaimWaitMs: parseClampedNumber(process.env.RABILINK_RELAY_CLAIM_WAIT_MS, 60000, 0, 60000),
+  rabiLinkRelayReplyPollMs: parseClampedNumber(process.env.RABILINK_RELAY_REPLY_POLL_MS, 500, 100, 5000),
+  rabiLinkRelayReplyIdleTimeoutMs: parseClampedNumber(process.env.RABILINK_RELAY_REPLY_IDLE_TIMEOUT_MS, 60000, 1000, 120000),
   wecomBotId: process.env.WECOM_BOT_ID?.trim() || "",
   wecomBotSecret: process.env.WECOM_BOT_SECRET?.trim() || "",
   wecomWsUrl: process.env.WECOM_WS_URL?.trim() || "",

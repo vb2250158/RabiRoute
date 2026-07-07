@@ -4,15 +4,11 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
 import android.text.InputType
 import android.text.method.ScrollingMovementMethod
 import android.util.Log
@@ -58,10 +54,6 @@ class RabiRouteSdkProbeActivity : Activity() {
     private lateinit var threadAdapter: ArrayAdapter<String>
     private lateinit var baseUrlInput: EditText
     private lateinit var callbackUrlInput: EditText
-    private lateinit var relayBaseUrlInput: EditText
-    private lateinit var relayTokenInput: EditText
-    @Volatile private var relayBridgeRunning = false
-    private var relayBridgeThread: Thread? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,16 +65,9 @@ class RabiRouteSdkProbeActivity : Activity() {
         }
         append("RabiRoute / RabiLink 测试台已启动。")
         append("先扫描局域网 RabiRoute；扫到后自动推导 Manager 和 RabiLink URL。")
-        maybeResumeRelayBridge()
         if (autoProbe) {
             baseUrlInput.post { runFullProbeFromBaseUrl() }
         }
-    }
-
-    override fun onDestroy() {
-        relayBridgeRunning = false
-        relayBridgeThread?.interrupt()
-        super.onDestroy()
     }
 
     private fun buildUi() {
@@ -99,13 +84,8 @@ class RabiRouteSdkProbeActivity : Activity() {
         baseUrlInput.setText("http://127.0.0.1:8790")
         callbackUrlInput = plainInput("RabiLink 回调 URL，默认 USB 反向端口")
         callbackUrlInput.setText("http://127.0.0.1:8794/rabilink")
-        relayBaseUrlInput = plainInput("公网 RabiLink Relay URL")
-        relayBaseUrlInput.setText("https://rabi.example.com")
-        relayTokenInput = plainInput("公网 Relay Token")
-        relayTokenInput.setText("")
         val managerSelectorPanel = managerSelectorPanel()
         val routeBindingPanel = routeBindingPanel()
-        val relayBridgePanel = relayBridgePanel()
 
         addSectionTitle(content, "测试矩阵")
         addCapabilityBlockWithExtra(
@@ -133,16 +113,12 @@ class RabiRouteSdkProbeActivity : Activity() {
         )
         addCapabilityBlockWithExtra(
             content,
-            "03 公网 Relay 手机桥",
-            "手机作为低延迟桥：从公网 relay 长轮询取眼镜任务，转交本机 RabiRoute/Codex，再把回包写回 relay。",
-            "用途：这是 Rokid 智能体真正连到 Codex 的关键桥。启动后，Rizon 后台或眼镜里的 RabiLink 请求会被手机取走处理。",
-            "前置：第一张卡片已经选中 RabiRoute 和 Route；手机能访问公网 relay，也能访问电脑的 RabiLink 回调端。",
-            "证据：日志会显示 claim task、投递到本机 messageId、append 回公网 relay 的回复。",
-            relayBridgePanel,
-            button("启动极速桥") { startRelayBridge() },
-            button("停止桥") { stopRelayBridge() },
-            button("只取一次公网任务") { claimRelayOnce() },
-            button("电池常驻设置") { openBatteryOptimizationSettings() }
+            "03 公网 Relay 直连",
+            "Rokid 云侧插件把任务写入公网 Relay；电脑端 RabiLink worker 直接领取任务并写回增量消息。",
+            "用途：这是当前正式链路。手机不再作为消息中转，只保留本页做局域网和回调探针。",
+            "前置：在电脑 WebGUI 的 RabiLink 消息端配置 Relay URL、Token、设备 ID 和超时时间。",
+            "证据：电脑端 gateway-status 显示 relayWorker=running；公网 Relay 可看到 worker claim、append message、finish task。",
+            relayDirectPanel()
         )
         addCapabilityBlockWithExtra(
             content,
@@ -332,15 +308,11 @@ class RabiRouteSdkProbeActivity : Activity() {
             addView(threadSelector, fullWidthWithMargins(0, 0, 0, 0))
         }
 
-    private fun relayBridgePanel(): View =
+    private fun relayDirectPanel(): View =
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(8), 0, dp(6))
-            addView(text("公网 Relay", 12, Color.rgb(72, 78, 88)), fullWidthWithMargins(0, 0, 0, 3))
-            addView(relayBaseUrlInput, fullWidthWithMargins(0, 0, 0, 6))
-            addView(text("Token", 12, Color.rgb(72, 78, 88)), fullWidthWithMargins(0, 0, 0, 3))
-            addView(relayTokenInput, fullWidthWithMargins(0, 0, 0, 6))
-            addView(text("启动后保持本页打开。低延迟模式使用 30 秒长轮询，服务器一有任务就立即返回。", 12, Color.rgb(92, 98, 108)), LinearLayout.LayoutParams(-1, -2))
+            addView(text("旧转发入口已移除。要测试眼镜到 Codex 的公网链路，请使用电脑端 WebGUI 的 RabiLink 消息端和 Relay 服务日志。", 12, Color.rgb(92, 98, 108)), LinearLayout.LayoutParams(-1, -2))
         }
 
     private fun advancedPanel(): View =
@@ -354,8 +326,6 @@ class RabiRouteSdkProbeActivity : Activity() {
             addView(text("这里只放全局连接兜底参数；Codex 绑定参数在自己的卡片里。", 12, Color.rgb(92, 98, 108)), fullWidthWithMargins(0, 4, 0, 8))
             addLabeledInput(this, "Manager URL", baseUrlInput)
             addLabeledInput(this, "RabiLink 回调 URL", callbackUrlInput)
-            addLabeledInput(this, "公网 Relay URL", relayBaseUrlInput)
-            addLabeledInput(this, "公网 Relay Token", relayTokenInput)
         }
 
     private fun addLabeledInput(root: LinearLayout, label: String, input: EditText) {
@@ -607,231 +577,6 @@ class RabiRouteSdkProbeActivity : Activity() {
                 appendLine("回包队列：")
                 appendLine(result.repliesJson.toString(2))
             }
-        }
-    }
-
-    private fun claimRelayOnce() {
-        val relayBaseUrl = relayBaseUrlInput.text.toString().trim()
-        val token = relayTokenInput.text.toString().trim()
-        if (relayBaseUrl.isBlank() || token.isBlank()) return append("请先填写公网 Relay URL 和 Token。")
-        append("正在从公网 Relay 取一次任务，最长等待 30 秒 ...")
-        runAsync {
-            val tasks = sdk.claimRabiLinkRelayTasks(relayBaseUrl, token, deviceId(), waitMs = 30000, limit = 1)
-            if (tasks.isEmpty()) {
-                "公网 Relay 暂无任务。"
-            } else {
-                buildString {
-                    appendLine("取到 ${tasks.size} 个公网任务：")
-                    for (task in tasks) {
-                        appendLine("- ${task.id}")
-                        appendLine("  text=${task.text}")
-                    }
-                }
-            }
-        }
-    }
-
-    private fun startRelayBridge() {
-        if (relayBridgeRunning) return append("公网 Relay 桥已经在运行。")
-        val instance = selectedInstance ?: return append("请先在第一张卡片选择 RabiRoute。")
-        val routeId = selectedRouteId()
-        if (routeId.isBlank()) return append("请先在第一张卡片读取并选择 Route。")
-        val relayBaseUrl = relayBaseUrlInput.text.toString().trim()
-        val token = relayTokenInput.text.toString().trim()
-        if (relayBaseUrl.isBlank() || token.isBlank()) return append("请先填写公网 Relay URL 和 Token。")
-        val callbackUrl = "http://${instance.host}:8794/rabilink"
-        callbackUrlInput.setText(callbackUrl)
-        relayBridgeRunning = true
-        saveRelayBridgeConfig(relayBaseUrl, token, instance, routeId, callbackUrl, enabled = true)
-        startRelayBridgeService(relayBaseUrl, token, instance, routeId, callbackUrl)
-        append("公网 Relay 常驻桥已启动：relay=$relayBaseUrl route=$routeId callback=$callbackUrl")
-        append("状态栏会出现常驻通知；熄屏后仍由 Android 前台服务继续长轮询。")
-    }
-
-    private fun stopRelayBridge() {
-        relayBridgeRunning = false
-        relayBridgeThread?.interrupt()
-        getSharedPreferences(RabiLinkRelayBridgeService.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(RabiLinkRelayBridgeService.PREF_ENABLED, false)
-            .apply()
-        val intent = Intent(this, RabiLinkRelayBridgeService::class.java)
-            .setAction(RabiLinkRelayBridgeService.ACTION_STOP)
-        startService(intent)
-        append("正在停止公网 Relay 常驻桥 ...")
-    }
-
-    private fun saveRelayBridgeConfig(
-        relayBaseUrl: String,
-        token: String,
-        instance: RabiInstance,
-        routeId: String,
-        callbackUrl: String,
-        enabled: Boolean
-    ) {
-        getSharedPreferences(RabiLinkRelayBridgeService.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(RabiLinkRelayBridgeService.PREF_ENABLED, enabled)
-            .putString(RabiLinkRelayBridgeService.EXTRA_RELAY_BASE_URL, relayBaseUrl)
-            .putString(RabiLinkRelayBridgeService.EXTRA_TOKEN, token)
-            .putString(RabiLinkRelayBridgeService.EXTRA_ROUTE_ID, routeId)
-            .putString(RabiLinkRelayBridgeService.EXTRA_CALLBACK_URL, callbackUrl)
-            .putString(RabiLinkRelayBridgeService.EXTRA_MANAGER_BASE_URL, instance.baseUrl)
-            .putString(RabiLinkRelayBridgeService.EXTRA_INSTANCE_GUID, instance.guid)
-            .putString(RabiLinkRelayBridgeService.EXTRA_INSTANCE_NAME, instance.name)
-            .putString(RabiLinkRelayBridgeService.EXTRA_COMPUTER_NAME, instance.computerName)
-            .putString(RabiLinkRelayBridgeService.EXTRA_DEVICE_TYPE, instance.deviceType)
-            .apply()
-    }
-
-    private fun startRelayBridgeService(
-        relayBaseUrl: String,
-        token: String,
-        instance: RabiInstance,
-        routeId: String,
-        callbackUrl: String
-    ) {
-        val intent = Intent(this, RabiLinkRelayBridgeService::class.java).apply {
-            putExtra(RabiLinkRelayBridgeService.EXTRA_RELAY_BASE_URL, relayBaseUrl)
-            putExtra(RabiLinkRelayBridgeService.EXTRA_TOKEN, token)
-            putExtra(RabiLinkRelayBridgeService.EXTRA_ROUTE_ID, routeId)
-            putExtra(RabiLinkRelayBridgeService.EXTRA_CALLBACK_URL, callbackUrl)
-            putExtra(RabiLinkRelayBridgeService.EXTRA_MANAGER_BASE_URL, instance.baseUrl)
-            putExtra(RabiLinkRelayBridgeService.EXTRA_INSTANCE_GUID, instance.guid)
-            putExtra(RabiLinkRelayBridgeService.EXTRA_INSTANCE_NAME, instance.name)
-            putExtra(RabiLinkRelayBridgeService.EXTRA_COMPUTER_NAME, instance.computerName)
-            putExtra(RabiLinkRelayBridgeService.EXTRA_DEVICE_TYPE, instance.deviceType)
-        }
-        if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-    }
-
-    private fun maybeResumeRelayBridge() {
-        val prefs = getSharedPreferences(RabiLinkRelayBridgeService.PREFS_NAME, Context.MODE_PRIVATE)
-        if (!prefs.getBoolean(RabiLinkRelayBridgeService.PREF_ENABLED, false)) return
-        val baseUrl = prefs.getString(RabiLinkRelayBridgeService.EXTRA_MANAGER_BASE_URL, "").orEmpty()
-        val guid = prefs.getString(RabiLinkRelayBridgeService.EXTRA_INSTANCE_GUID, "").orEmpty()
-        val routeId = prefs.getString(RabiLinkRelayBridgeService.EXTRA_ROUTE_ID, "").orEmpty()
-        val relayBaseUrl = prefs.getString(RabiLinkRelayBridgeService.EXTRA_RELAY_BASE_URL, "").orEmpty()
-        val token = prefs.getString(RabiLinkRelayBridgeService.EXTRA_TOKEN, "").orEmpty()
-        val callbackUrl = prefs.getString(RabiLinkRelayBridgeService.EXTRA_CALLBACK_URL, "").orEmpty()
-        if (baseUrl.isBlank() || guid.isBlank() || routeId.isBlank() || relayBaseUrl.isBlank() || token.isBlank() || callbackUrl.isBlank()) return
-        val instance = RabiInstance(
-            guid = guid,
-            name = prefs.getString(RabiLinkRelayBridgeService.EXTRA_INSTANCE_NAME, "RabiRoute") ?: "RabiRoute",
-            computerName = prefs.getString(RabiLinkRelayBridgeService.EXTRA_COMPUTER_NAME, "") ?: "",
-            deviceType = prefs.getString(RabiLinkRelayBridgeService.EXTRA_DEVICE_TYPE, "") ?: "",
-            baseUrl = baseUrl.trimEnd('/'),
-            host = Uri.parse(baseUrl).host.orEmpty(),
-            port = Uri.parse(baseUrl).port.takeIf { it > 0 } ?: 8790,
-            version = null
-        )
-        selectedInstance = instance
-        startRelayBridgeService(relayBaseUrl, token, instance, routeId, callbackUrl)
-        append("已恢复后台 RabiLink Relay 常驻桥。")
-    }
-
-    private fun openBatteryOptimizationSettings() {
-        try {
-            if (Build.VERSION.SDK_INT >= 23) {
-                val powerManager = getSystemService(PowerManager::class.java)
-                if (powerManager?.isIgnoringBatteryOptimizations(packageName) != true) {
-                    startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:$packageName")
-                    })
-                    append("请允许 Rabi Link 忽略电池优化，这样后台桥不会被系统清掉。")
-                    return
-                }
-            }
-            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.parse("package:$packageName")
-            })
-            append("已打开应用设置；建议开启自启动、锁定后台、允许通知。")
-        } catch (error: Throwable) {
-            append("无法打开电池设置：${error.message ?: error}")
-        }
-    }
-
-    private fun handleRelayTask(
-        relayBaseUrl: String,
-        token: String,
-        _instance: RabiInstance,
-        routeId: String,
-        callbackUrl: String,
-        taskId: String,
-        text: String
-    ) {
-        try {
-            handleRelayTaskUnchecked(relayBaseUrl, token, routeId, callbackUrl, taskId, text)
-        } catch (error: Throwable) {
-            appendFromBackground("公网任务处理异常：${error.message ?: error}")
-            runCatching {
-                sdk.finishRabiLinkRelayTask(
-                    relayBaseUrl,
-                    token,
-                    taskId,
-                    "手机桥处理异常：${error.message ?: error}",
-                    ok = false
-                )
-            }
-        }
-    }
-
-    private fun handleRelayTaskUnchecked(
-        relayBaseUrl: String,
-        token: String,
-        routeId: String,
-        callbackUrl: String,
-        taskId: String,
-        text: String
-    ) {
-        appendFromBackground("取到公网任务：$taskId")
-        val baselineReplies = sdk.getRabiLinkReplies(callbackUrl, routeId, 1)
-        var afterReplyId = lastReplyId(baselineReplies)
-        val inbound = sdk.deliverRabiLinkMessage(callbackUrl, text, routeId)
-        appendFromBackground("已投递到本机 RabiRoute：messageId=${inbound.messageId} ok=${inbound.ok}")
-        if (!inbound.ok || inbound.messageId.isBlank()) {
-            sdk.finishRabiLinkRelayTask(relayBaseUrl, token, taskId, "手机桥投递到 RabiRoute 失败。", ok = false)
-            return
-        }
-
-        var appendedCount = 0
-        val startedAt = System.currentTimeMillis()
-        var lastAppendAt = 0L
-        while (relayBridgeRunning && System.currentTimeMillis() - startedAt < 60000) {
-            val repliesJson = sdk.getRabiLinkReplies(callbackUrl, routeId, 50, afterReplyId)
-            val replies = repliesJson.optJSONArray("replies")
-            if (replies != null) {
-                for (index in 0 until replies.length()) {
-                    val reply = replies.optJSONObject(index) ?: continue
-                    val replyId = reply.optString("id")
-                    if (replyId.isNotBlank()) afterReplyId = replyId
-                    if (reply.optString("messageId") != inbound.messageId) continue
-                    val replyText = reply.optString("text")
-                    if (replyText.isBlank()) continue
-                    sdk.appendRabiLinkRelayMessage(relayBaseUrl, token, taskId, replyText, final = false)
-                    appendedCount += 1
-                    lastAppendAt = System.currentTimeMillis()
-                    appendFromBackground("已写回公网 Relay：$replyId")
-                }
-            }
-            if (appendedCount > 0 && System.currentTimeMillis() - lastAppendAt > 2500) {
-                sdk.finishRabiLinkRelayTask(relayBaseUrl, token, taskId, ok = true)
-                appendFromBackground("公网任务完成：$taskId replies=$appendedCount")
-                return
-            }
-            sleepQuietly(350)
-        }
-
-        if (appendedCount > 0) {
-            sdk.finishRabiLinkRelayTask(relayBaseUrl, token, taskId, ok = true)
-            appendFromBackground("公网任务超时结束：$taskId replies=$appendedCount")
-        } else {
-            sdk.finishRabiLinkRelayTask(relayBaseUrl, token, taskId, "电脑端暂时没有返回回复。", ok = false)
-            appendFromBackground("公网任务无回包：$taskId")
         }
     }
 

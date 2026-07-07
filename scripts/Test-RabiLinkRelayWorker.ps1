@@ -53,7 +53,8 @@ $openApiUrl = Join-Url $base "/rokid/rabilink/openapi.json"
 $openApi = Invoke-RestMethod -Method Get -Uri $openApiUrl -TimeoutSec 20
 Assert-True ($openApi.info.title -eq "RabiLinkMessage") "Worker OpenAPI title was not RabiLinkMessage."
 Assert-True ($openApi.servers[0].url -eq $base) "Worker OpenAPI server URL was not rewritten to WorkerBaseUrl."
-Assert-True (-not [bool]$openApi.paths."/rokid/rabilink/messages") "Worker OpenAPI should not expose global /rokid/rabilink/messages."
+Assert-True ([bool]$openApi.paths."/rokid/rabilink/messages".get) "Worker OpenAPI should expose global /rokid/rabilink/messages."
+Assert-True (-not $openApi.paths."/rokid/rabilink/messages".get.requestBody) "Worker GET /rokid/rabilink/messages should not define requestBody."
 Assert-True ([bool]$openApi.paths."/rokid/rabilink/tasks/{taskId}/messages".get) "Worker OpenAPI should expose taskId message list."
 Assert-True (-not $openApi.paths."/rokid/rabilink/tasks/{taskId}/messages".get.requestBody) "GET /rokid/rabilink/tasks/{taskId}/messages should not define requestBody."
 Write-Step "worker openapi" $openApiUrl
@@ -63,7 +64,8 @@ $manualAuthOpenApi = Invoke-RestMethod -Method Get -Uri $manualAuthOpenApiUrl -T
 Assert-True ($manualAuthOpenApi.info.title -eq "RabiLinkMessage") "Worker manual-auth OpenAPI title was not RabiLinkMessage."
 Assert-True ($manualAuthOpenApi.servers[0].url -eq $base) "Worker manual-auth OpenAPI server URL was not rewritten to WorkerBaseUrl."
 Assert-True (-not [bool]$manualAuthOpenApi.components.securitySchemes.RabiLinkToken) "Worker manual-auth OpenAPI should not define RabiLinkToken security scheme."
-Assert-True (-not [bool]$manualAuthOpenApi.paths."/rokid/rabilink/messages") "Worker manual-auth OpenAPI should not expose global /rokid/rabilink/messages."
+Assert-True ([bool]$manualAuthOpenApi.paths."/rokid/rabilink/messages".get) "Worker manual-auth OpenAPI should expose global /rokid/rabilink/messages."
+Assert-True (-not $manualAuthOpenApi.paths."/rokid/rabilink/messages".get.requestBody) "Worker manual-auth GET /rokid/rabilink/messages should not define requestBody."
 Assert-True ([bool]$manualAuthOpenApi.paths."/rokid/rabilink/tasks/{taskId}/messages".get) "Worker manual-auth OpenAPI should expose taskId message list."
 Assert-True (-not $manualAuthOpenApi.paths."/rokid/rabilink/tasks/{taskId}/messages".get.requestBody) "Manual-auth GET /rokid/rabilink/tasks/{taskId}/messages should not define requestBody."
 Write-Step "worker manual-auth openapi" $manualAuthOpenApiUrl
@@ -103,23 +105,19 @@ $submit = Invoke-RestMethod -Method Post -Uri (Join-Url $base "/rokid/rabilink/t
 Assert-True ($submit.ok -eq $true) "Worker task submit did not return ok=true."
 $taskId = [string]$submit.taskId
 Assert-True ([bool]$taskId) "Worker task submit did not return taskId."
+$globalAfter = [string]$submit.nextCursor
 
 $finishBody = @{
     text = "rabilink worker smoke ok"
     ok = $true
 } | ConvertTo-Json -Compress
-$finish = Invoke-RestMethod -Method Post -Uri (Join-Url $base "/phone/tasks/$taskId/finish") -Headers $jsonHeaders -Body $finishBody -TimeoutSec 20
+$finish = Invoke-RestMethod -Method Post -Uri (Join-Url $base "/worker/tasks/$taskId/finish") -Headers $jsonHeaders -Body $finishBody -TimeoutSec 20
 Assert-True ($finish.ok -eq $true) "Worker task finish did not return ok=true."
 
-$messagesUrl = Join-Url $base ("/rokid/rabilink/tasks/{0}/messages?waitMs=0" -f [uri]::EscapeDataString($taskId))
+$messagesUrl = Join-Url $base ("/rokid/rabilink/messages?after={0}&waitMs=0" -f [uri]::EscapeDataString($globalAfter))
 $outbox = Invoke-RestMethod -Method Get -Uri $messagesUrl -Headers $authHeaders -TimeoutSec 20
-Assert-True ($outbox.ok -eq $true) "Worker task messages did not return ok=true."
-Assert-True (@($outbox.messages).Count -ge 1) "Worker task messages did not return smoke message."
-Assert-True (($outbox.text -like "*rabilink worker smoke ok*") -or (($outbox.messages | ConvertTo-Json -Depth 5) -like "*rabilink worker smoke ok*")) "Worker task messages did not contain smoke reply."
-$after = [string]$outbox.nextCursor
-$drainUrl = Join-Url $base ("/rokid/rabilink/tasks/{0}/messages?after={1}&waitMs=0" -f [uri]::EscapeDataString($taskId), [uri]::EscapeDataString($after))
-$drained = Invoke-RestMethod -Method Get -Uri $drainUrl -Headers $authHeaders -TimeoutSec 20
-Assert-True ($drained.ok -eq $true) "Worker drained task messages did not return ok=true."
-Assert-True (@($drained.messages).Count -eq 0) "Worker drained task messages should be empty."
-Assert-True ($drained.shouldContinue -eq $false) "Worker drained finished task should return shouldContinue=false."
-Write-Step "worker queue smoke" ("taskId present, messages={0}, nextCursor={1}, drained=true" -f @($outbox.messages).Count, $outbox.nextCursor)
+Assert-True ($outbox.ok -eq $true) "Worker global messages did not return ok=true."
+Assert-True (@($outbox.messages).Count -ge 1) "Worker global messages did not return smoke message."
+Assert-True (($outbox.messages | ConvertTo-Json -Depth 5) -like "*$taskId*") "Worker global messages did not include the smoke taskId."
+Assert-True (($outbox.text -like "*rabilink worker smoke ok*") -or (($outbox.messages | ConvertTo-Json -Depth 5) -like "*rabilink worker smoke ok*")) "Worker global messages did not contain smoke reply."
+Write-Step "worker queue smoke" ("taskId present, global messages={0}, nextCursor={1}" -f @($outbox.messages).Count, $outbox.nextCursor)

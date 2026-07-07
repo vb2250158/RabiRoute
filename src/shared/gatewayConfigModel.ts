@@ -142,6 +142,12 @@ export type GatewayDefinition = {
   rabiLinkWebhookPort?: number;
   rabiLinkWebhookPath?: string;
   rabiLinkWebhookHost?: string;
+  rabiLinkRelayEnabled?: boolean;
+  rabiLinkRelayUrl?: string;
+  rabiLinkRelayToken?: string;
+  rabiLinkRelayDeviceId?: string;
+  rabiLinkRelayClaimWaitMs?: number;
+  rabiLinkRelayReplyIdleTimeoutMs?: number;
   wecomBotId?: string;
   wecomBotSecret?: string;
   wecomWsUrl?: string;
@@ -660,6 +666,12 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
     gatewayPort: primaryNapcat?.gatewayPort ?? definition.gatewayPort,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
+    rabiLinkRelayEnabled: definition.rabiLinkRelayEnabled ?? Boolean(definition.rabiLinkRelayUrl?.trim()),
+    rabiLinkRelayUrl: definition.rabiLinkRelayUrl?.trim() || "",
+    rabiLinkRelayToken: definition.rabiLinkRelayToken?.trim() || "",
+    rabiLinkRelayDeviceId: definition.rabiLinkRelayDeviceId?.trim() || runtimeId,
+    rabiLinkRelayClaimWaitMs: normalizePositiveNumber(definition.rabiLinkRelayClaimWaitMs, 60000),
+    rabiLinkRelayReplyIdleTimeoutMs: normalizePositiveNumber(definition.rabiLinkRelayReplyIdleTimeoutMs, 60000),
     napcatHttpUrl: primaryNapcat?.httpUrl ?? definition.napcatHttpUrl,
     napcatWebuiUrl: primaryNapcat?.webuiUrl ?? definition.napcatWebuiUrl,
     napcatAccessToken: primaryNapcat?.accessToken ?? definition.napcatAccessToken,

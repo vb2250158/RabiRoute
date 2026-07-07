@@ -132,16 +132,16 @@ export async function scanRabiLinkEndpoint<Runtime>(ctx: WebhookLikeScanContext<
 
   return {
     type: "rabilink",
-    label: "RabiLink / 手机桥",
+    label: "RabiLink / Relay 直连",
     maturity: "experimental",
     installed: rabiLinkCallbackReady,
     endpoints: rabiLinkCallbacks,
     requirements: [
-      { id: "callback", label: "RabiRoute RabiLink 回调入口", required: true, ok: rabiLinkCallbackReady, detail: rabiLinkCallbacks[0]?.url || "添加 RabiLink 消息端并重启 route 后生成。" },
-      { id: "phone-app", label: "手机 RabiLink 已配置回调", required: true, ok: rabiLinkRecent, detail: rabiLinkRecent ? "已收到过 RabiLink 手机端事件。" : "尚未收到手机 RabiLink POST。" },
-      { id: "public-url", label: "公网 HTTPS 或局域网测试地址", required: false, ok: undefined, detail: "灵珠云端需要公网 HTTPS；手机局域网测试可用电脑 IP。" }
+      { id: "callback", label: "RabiRoute RabiLink 本地入口", required: true, ok: rabiLinkCallbackReady, detail: rabiLinkCallbacks[0]?.url || "添加 RabiLink 消息端并重启 route 后生成。" },
+      { id: "relay-worker", label: "电脑端 Relay worker 已接入", required: true, ok: rabiLinkRecent, detail: rabiLinkRecent ? "已收到过 RabiLink Relay 事件。" : "尚未收到 RabiLink Relay 任务。" },
+      { id: "public-url", label: "公网 HTTPS Relay 地址", required: true, ok: undefined, detail: "Rokid/灵珠插件调用公网 Relay；RabiRoute 电脑端负责从 Relay 领取任务并回填回复。" }
     ],
-    warnings: ["RabiLink 是手机消息端；眼镜/灵珠只负责把语音变成手机侧文本或调用手机桥。"]
+    warnings: ["RabiLink 现在走电脑端直连 Relay；手机 App 只保留为可选调试入口，不再作为主消息中转。"]
   };
 }
 

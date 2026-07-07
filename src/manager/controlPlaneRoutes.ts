@@ -106,6 +106,12 @@ type GatewayDefinition = {
   rabiLinkWebhookPort?: number;
   rabiLinkWebhookPath?: string;
   rabiLinkWebhookHost?: string;
+  rabiLinkRelayEnabled?: boolean;
+  rabiLinkRelayUrl?: string;
+  rabiLinkRelayToken?: string;
+  rabiLinkRelayDeviceId?: string;
+  rabiLinkRelayClaimWaitMs?: number;
+  rabiLinkRelayReplyIdleTimeoutMs?: number;
   wecomBotId?: string;
   wecomBotSecret?: string;
   wecomWsUrl?: string;
@@ -604,6 +610,12 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     rabiLinkWebhookPort: definition.rabiLinkWebhookPort,
     rabiLinkWebhookPath: definition.rabiLinkWebhookPath,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost,
+    rabiLinkRelayEnabled: definition.rabiLinkRelayEnabled,
+    rabiLinkRelayUrl: definition.rabiLinkRelayUrl,
+    rabiLinkRelayToken: definition.rabiLinkRelayToken,
+    rabiLinkRelayDeviceId: definition.rabiLinkRelayDeviceId,
+    rabiLinkRelayClaimWaitMs: definition.rabiLinkRelayClaimWaitMs,
+    rabiLinkRelayReplyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs,
     napcatHttpUrl: definition.napcatHttpUrl,
     napcatWebuiUrl: definition.napcatWebuiUrl,
     napcatAccessToken: definition.napcatAccessToken,
@@ -1133,6 +1145,12 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     RABILINK_WEBHOOK_PORT: String(definition.rabiLinkWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
     RABILINK_WEBHOOK_PATH: definition.rabiLinkWebhookPath ?? "/rabilink",
     RABILINK_WEBHOOK_HOST: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
+    RABILINK_RELAY_ENABLED: definition.rabiLinkRelayEnabled ? "1" : "",
+    RABILINK_RELAY_URL: definition.rabiLinkRelayUrl?.trim() || "",
+    RABILINK_RELAY_TOKEN: definition.rabiLinkRelayToken?.trim() || "",
+    RABILINK_RELAY_DEVICE_ID: definition.rabiLinkRelayDeviceId?.trim() || definition.id,
+    RABILINK_RELAY_CLAIM_WAIT_MS: String(definition.rabiLinkRelayClaimWaitMs ?? 60000),
+    RABILINK_RELAY_REPLY_IDLE_TIMEOUT_MS: String(definition.rabiLinkRelayReplyIdleTimeoutMs ?? 60000),
     WECOM_BOT_ID: definition.wecomBotId?.trim() || process.env.WECOM_BOT_ID || "",
     WECOM_BOT_SECRET: definition.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET || "",
     WECOM_WS_URL: definition.wecomWsUrl?.trim() || process.env.WECOM_WS_URL || "",
@@ -2136,8 +2154,8 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     ...readEntries("小米音箱 / 小爱", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "xiaoai")
   ]);
   const rabiLinkEntries = sortTail([
-    ...readEntries("RabiLink / 手机桥", "rabilink-voice-transcripts.jsonl"),
-    ...readEntries("RabiLink / 手机桥", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "rabilink")
+    ...readEntries("RabiLink / Relay", "rabilink-voice-transcripts.jsonl"),
+    ...readEntries("RabiLink / Relay", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "rabilink")
   ]);
   const webhookEntries = sortTail(readEntries("通用 Webhook", "voice-transcripts.jsonl")
     .filter((entry) => {
@@ -2270,6 +2288,12 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     rabiLinkWebhookPort: runtime.definition.rabiLinkWebhookPort,
     rabiLinkWebhookPath: runtime.definition.rabiLinkWebhookPath,
     rabiLinkWebhookHost: runtime.definition.rabiLinkWebhookHost,
+    rabiLinkRelayEnabled: runtime.definition.rabiLinkRelayEnabled,
+    rabiLinkRelayUrl: runtime.definition.rabiLinkRelayUrl,
+    rabiLinkRelayToken: runtime.definition.rabiLinkRelayToken ? "********" : "",
+    rabiLinkRelayDeviceId: runtime.definition.rabiLinkRelayDeviceId,
+    rabiLinkRelayClaimWaitMs: runtime.definition.rabiLinkRelayClaimWaitMs,
+    rabiLinkRelayReplyIdleTimeoutMs: runtime.definition.rabiLinkRelayReplyIdleTimeoutMs,
     wecomBotId: runtime.definition.wecomBotId,
     wecomBotSecret: runtime.definition.wecomBotSecret,
     wecomWsUrl: runtime.definition.wecomWsUrl,

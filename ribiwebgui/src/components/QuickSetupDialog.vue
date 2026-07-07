@@ -57,7 +57,7 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
   { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "桌面语音笔记转写入口", icon: "mdi-note-edit-outline" },
   { type: "xiaoai", title: "小米音箱 / 小爱", note: "小爱音箱语音转写入口", icon: "mdi-speaker-wireless" },
-  { type: "rabilink", title: "RabiLink / 手机桥", note: "手机端集成管理和 Rokid 文本转发入口", icon: "mdi-cellphone-link" },
+  { type: "rabilink", title: "RabiLink / Relay 直连", note: "电脑端直连 Relay，转发 Rokid/灵珠文本入口", icon: "mdi-access-point-network" },
   { type: "webhook", title: "通用 Webhook", note: "没有专用消息端时的通用 POST 兜底入口", icon: "mdi-webhook" }
 ];
 
@@ -419,7 +419,7 @@ function webhookSetupHint(type: MessageAdapterType): string {
     return "需要小爱桥接层：PC 侧 xiaoai-rabiroute 服务 + 音箱侧 open-xiaoai/xiaogpt/自定义桥，把语音文本转发到这个地址。";
   }
   if (type === "rabilink") {
-    return "手机 RabiLink 作为集成管理端：配置电脑局域网地址后，可测试文本转发、查看状态，再把 Rokid/灵珠文本转给 Codex。";
+    return "RabiLink 电脑端直连 Relay：在消息端配置公网 Relay 地址和 token 后，可把 Rokid/灵珠文本转给 Codex，并把回复写回眼镜侧。";
   }
   return "通用 Webhook 只适合未命名外部系统；如果来源是具体工具，建议添加对应的专用消息端。";
 }

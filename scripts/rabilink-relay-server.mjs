@@ -8,10 +8,10 @@ const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 8788)
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
 const token = process.env.RABILINK_RELAY_TOKEN || "";
 const allowInsecure = process.env.RABILINK_RELAY_ALLOW_INSECURE === "1";
-const replyTimeoutMs = clamp(Number(process.env.RABILINK_RELAY_REPLY_TIMEOUT_MS || 25000), 1000, 120000);
-const messageWaitMs = clamp(Number(process.env.RABILINK_RELAY_MESSAGE_WAIT_MS || 12000), 0, 30000);
-const outboxWaitMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 1500), 0, 5000);
-const phoneTaskWaitMs = clamp(Number(process.env.RABILINK_RELAY_PHONE_TASK_WAIT_MS || 30000), 0, 60000);
+const replyTimeoutMs = clamp(Number(process.env.RABILINK_RELAY_REPLY_TIMEOUT_MS || 60000), 1000, 120000);
+const messageWaitMs = clamp(Number(process.env.RABILINK_RELAY_MESSAGE_WAIT_MS || 60000), 0, 60000);
+const outboxWaitMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 60000), 0, 60000);
+const workerTaskWaitMs = clamp(Number(process.env.RABILINK_RELAY_WORKER_TASK_WAIT_MS || 60000), 0, 60000);
 const taskTtlMs = clamp(Number(process.env.RABILINK_RELAY_TASK_TTL_MS || 10 * 60 * 1000), 60000, 24 * 60 * 60 * 1000);
 const leaseMs = clamp(Number(process.env.RABILINK_RELAY_LEASE_MS || 45000), 5000, 10 * 60 * 1000);
 const dataDir = path.resolve(process.env.RABILINK_RELAY_DATA_DIR || path.join(process.cwd(), "data", "rabilink-relay"));
@@ -25,6 +25,11 @@ const manualAuthOpenApiFileCandidates = [
   process.env.RABILINK_RELAY_MANUAL_AUTH_OPENAPI_FILE ? path.resolve(process.env.RABILINK_RELAY_MANUAL_AUTH_OPENAPI_FILE) : "",
   path.join(dataDir, "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"),
   path.join(process.cwd(), "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json")
+].filter(Boolean);
+const toolImportPostmanFileCandidates = [
+  process.env.RABILINK_RELAY_TOOL_IMPORT_POSTMAN_FILE ? path.resolve(process.env.RABILINK_RELAY_TOOL_IMPORT_POSTMAN_FILE) : "",
+  path.join(dataDir, "rokid-rabilink-tools-import.CURRENT.postman.json"),
+  path.join(process.cwd(), "rokid-rabilink-tools-import.CURRENT.postman.json")
 ].filter(Boolean);
 
 if (!token && !allowInsecure) {
@@ -42,7 +47,7 @@ let nextOutboxMessageSeq = 1;
 /** @type {Array<{ resolve: (value: RelayTask) => void; taskId: string; timer: NodeJS.Timeout }>} */
 const waiters = [];
 /** @type {Array<{ resolve: () => void; timer: NodeJS.Timeout }>} */
-const phoneTaskWaiters = [];
+const workerTaskWaiters = [];
 /** @type {Array<{ resolve: () => void; timer: NodeJS.Timeout }>} */
 const outboxWaiters = [];
 
@@ -246,7 +251,7 @@ function createTask(raw, req) {
   };
   tasks.set(task.id, task);
   writeEvent("task_created", taskForResponse(task));
-  notifyPhoneTaskWaiters();
+  notifyWorkerTaskWaiters();
   return task;
 }
 
@@ -256,7 +261,7 @@ function cleanupTasks() {
     if (task.status !== "done" && task.status !== "failed" && task.expiresAt <= now) {
       task.status = "expired";
       task.updatedAt = now;
-      task.error = "Task expired before phone returned a result.";
+      task.error = "Task expired before RabiLink worker returned a result.";
       finishWaiters(task);
       writeEvent("task_expired", taskForResponse(task));
     }
@@ -308,11 +313,11 @@ function hasClaimableTasks() {
   return false;
 }
 
-function notifyPhoneTaskWaiters() {
-  for (let index = phoneTaskWaiters.length - 1; index >= 0; index -= 1) {
-    const waiter = phoneTaskWaiters[index];
+function notifyWorkerTaskWaiters() {
+  for (let index = workerTaskWaiters.length - 1; index >= 0; index -= 1) {
+    const waiter = workerTaskWaiters[index];
     clearTimeout(waiter.timer);
-    phoneTaskWaiters.splice(index, 1);
+    workerTaskWaiters.splice(index, 1);
     waiter.resolve();
   }
 }
@@ -330,11 +335,11 @@ function waitForClaimableTask(timeoutMs) {
   if (hasClaimableTasks() || timeoutMs <= 0) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      const index = phoneTaskWaiters.findIndex((item) => item.resolve === resolve);
-      if (index >= 0) phoneTaskWaiters.splice(index, 1);
+      const index = workerTaskWaiters.findIndex((item) => item.resolve === resolve);
+      if (index >= 0) workerTaskWaiters.splice(index, 1);
       resolve();
     }, timeoutMs);
-    phoneTaskWaiters.push({ resolve, timer });
+    workerTaskWaiters.push({ resolve, timer });
   });
 }
 
@@ -470,12 +475,12 @@ function outboxMessagesResponse(after) {
   const last = messages[messages.length - 1] || outboxMessages[outboxMessages.length - 1];
   const openTasks = hasOpenTasks();
   const text = messages.map((message) => message.text).join("\n");
-  const shouldContinue = openTasks || messages.length > 0;
+  const shouldContinue = openTasks;
   return {
     code: 0,
     ok: true,
     status: messages.length > 0 ? "messages" : openTasks ? "idle" : "done",
-    done: !openTasks && messages.length === 0,
+    done: !openTasks,
     shouldContinue,
     cursor: last?.id || stringValue(after),
     nextCursor: last?.id || stringValue(after),
@@ -510,7 +515,7 @@ function taskMessagesResponse(task, after) {
   });
   const last = messages[messages.length - 1] || task.messages[task.messages.length - 1];
   const done = task.status === "done" || task.status === "failed" || task.status === "expired";
-  const shouldContinue = !done || messages.length > 0;
+  const shouldContinue = !done;
   return {
     code: task.status === "failed" ? -1 : 0,
     ok: task.status !== "failed" && task.status !== "expired",
@@ -560,8 +565,9 @@ function finishTask(taskId, body) {
   task.leaseUntil = 0;
   task.replyText = replyText;
   task.replyRaw = body;
-  task.error = ok ? "" : stringValue(body?.error || body?.reason || "Phone reported failure.");
+  task.error = ok ? "" : stringValue(body?.error || body?.reason || "RabiLink worker reported failure.");
   finishWaiters(task);
+  notifyOutboxWaiters();
   writeEvent(ok ? "task_done" : "task_failed", taskForResponse(task));
   return task;
 }
@@ -615,7 +621,7 @@ function rokidResponse(task) {
       content: text
     };
   }
-  const text = "已收到，正在转交手机 RabiLink 和 Codex 处理。";
+  const text = "已收到，正在转交电脑端 RabiLink 和 Codex 处理。";
   return {
     code: 0,
     ok: true,
@@ -649,10 +655,10 @@ function handleRokidCreateTask(req, url, res, body) {
     taskId: task.id,
     cursor: outboxCursor,
     nextCursor: outboxCursor,
-    text: "已收到，正在转交手机 RabiLink 和 Codex 处理。请稍后查询结果。",
-    answer: "已收到，正在转交手机 RabiLink 和 Codex 处理。请稍后查询结果。",
-    reply: "已收到，正在转交手机 RabiLink 和 Codex 处理。请稍后查询结果。",
-    content: "已收到，正在转交手机 RabiLink 和 Codex 处理。请稍后查询结果。"
+    text: "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。",
+    answer: "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。",
+    reply: "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。",
+    content: "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。"
   });
 }
 
@@ -695,7 +701,7 @@ async function handleRokidTaskMessages(req, url, res, body) {
   });
   cleanupTasks();
   const after = url.searchParams.get("after") || url.searchParams.get("cursor") || "";
-  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || messageWaitMs), 0, 30000);
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || messageWaitMs), 0, 60000);
   const finalTask = await waitForMessagesAfter(task, after, waitMs);
   sendJson(res, 200, taskMessagesResponse(finalTask, after));
 }
@@ -707,18 +713,18 @@ async function handleRokidOutboxMessages(req, url, res, body) {
   const after = hasCursor
     ? url.searchParams.get("after") || url.searchParams.get("cursor") || ""
     : currentOutboxCursor();
-  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || outboxWaitMs), 0, 5000);
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || outboxWaitMs), 0, 60000);
   await waitForOutboxMessagesAfter(after, waitMs);
   sendJson(res, 200, outboxMessagesResponse(after));
 }
 
-async function handlePhoneTasks(req, url, res, body) {
+async function handleWorkerTasks(req, url, res, body) {
   if (!assertAuthorized(req, url, body)) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
   const limit = clamp(Number(url.searchParams.get("limit") || 1), 1, 10);
   const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
   let claimed = claimTasks(limit, deviceId);
   if (claimed.length === 0) {
-    const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || phoneTaskWaitMs), 0, 60000);
+    const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
     await waitForClaimableTask(waitMs);
     claimed = claimTasks(limit, deviceId);
   }
@@ -733,7 +739,7 @@ async function handlePhoneTasks(req, url, res, body) {
 
 function handleTaskResult(req, url, res, body) {
   if (!assertAuthorized(req, url, body)) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
-  const match = url.pathname.match(/^\/phone\/tasks\/([^/]+)\/result$/);
+  const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)\/result$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const task = finishTask(taskId, body);
   sendJson(res, 200, { code: 0, ok: true, task: taskForResponse(task) });
@@ -741,7 +747,7 @@ function handleTaskResult(req, url, res, body) {
 
 function handleTaskMessagesAppend(req, url, res, body) {
   if (!assertAuthorized(req, url, body)) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
-  const match = url.pathname.match(/^\/phone\/tasks\/([^/]+)\/messages$/);
+  const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)\/messages$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const result = appendTaskMessages(taskId, body, { finish: false });
   sendJson(res, 200, {
@@ -755,7 +761,7 @@ function handleTaskMessagesAppend(req, url, res, body) {
 
 function handleTaskFinish(req, url, res, body) {
   if (!assertAuthorized(req, url, body)) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
-  const match = url.pathname.match(/^\/phone\/tasks\/([^/]+)\/finish$/);
+  const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)\/finish$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const task = findTaskOrThrow(taskId);
   const finalText = extractText(body);
@@ -765,7 +771,7 @@ function handleTaskFinish(req, url, res, body) {
   task.status = body?.ok === false || body?.status === "failed" ? "failed" : "done";
   task.updatedAt = Date.now();
   task.leaseUntil = 0;
-  task.error = task.status === "failed" ? stringValue(body?.error || body?.reason || "Phone reported failure.") : "";
+  task.error = task.status === "failed" ? stringValue(body?.error || body?.reason || "RabiLink worker reported failure.") : "";
   finishWaiters(task);
   writeEvent(task.status === "done" ? "task_finished" : "task_failed", taskForResponse(task));
   sendJson(res, 200, {
@@ -779,7 +785,7 @@ function handleTaskFinish(req, url, res, body) {
 
 function handleTaskRead(req, url, res, body) {
   if (!assertAuthorized(req, url, body)) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
-  const match = url.pathname.match(/^\/phone\/tasks\/([^/]+)$/);
+  const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const task = tasks.get(taskId);
   if (!task) return sendJson(res, 404, { code: -1, ok: false, message: `Task not found: ${taskId}` });
@@ -810,6 +816,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && (url.pathname === "/rokid/rabilink/openapi.manual-auth.json" || url.pathname === "/openapi/rokid-rabilink-plugin.manual-auth.json")) {
       return sendOpenApi(res, manualAuthOpenApiFileCandidates);
     }
+    if (req.method === "GET" && (url.pathname === "/rokid/rabilink/tools.postman.json" || url.pathname === "/openapi/rokid-rabilink-tools.postman.json")) {
+      return sendOpenApi(res, toolImportPostmanFileCandidates);
+    }
     const body = req.method === "GET" ? {} : await readBody(req);
     if (req.method === "POST" && (url.pathname === "/rokid/rabilink" || url.pathname === "/api/rokid/rabilink")) {
       return await handleRokid(req, url, res, body);
@@ -826,19 +835,19 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && (url.pathname === "/rokid/rabilink/messages" || url.pathname === "/api/rokid/rabilink/messages")) {
       return await handleRokidOutboxMessages(req, url, res, body);
     }
-    if (req.method === "GET" && url.pathname === "/phone/tasks") {
-      return await handlePhoneTasks(req, url, res, body);
+    if (req.method === "GET" && url.pathname === "/worker/tasks") {
+      return await handleWorkerTasks(req, url, res, body);
     }
-    if (req.method === "POST" && /^\/phone\/tasks\/[^/]+\/messages$/.test(url.pathname)) {
+    if (req.method === "POST" && /^\/worker\/tasks\/[^/]+\/messages$/.test(url.pathname)) {
       return handleTaskMessagesAppend(req, url, res, body);
     }
-    if (req.method === "POST" && /^\/phone\/tasks\/[^/]+\/finish$/.test(url.pathname)) {
+    if (req.method === "POST" && /^\/worker\/tasks\/[^/]+\/finish$/.test(url.pathname)) {
       return handleTaskFinish(req, url, res, body);
     }
-    if (req.method === "POST" && /^\/phone\/tasks\/[^/]+\/result$/.test(url.pathname)) {
+    if (req.method === "POST" && /^\/worker\/tasks\/[^/]+\/result$/.test(url.pathname)) {
       return handleTaskResult(req, url, res, body);
     }
-    if (req.method === "GET" && /^\/phone\/tasks\/[^/]+$/.test(url.pathname)) {
+    if (req.method === "GET" && /^\/worker\/tasks\/[^/]+$/.test(url.pathname)) {
       return handleTaskRead(req, url, res, body);
     }
     return sendJson(res, 404, { code: -1, ok: false, message: "Not found" });

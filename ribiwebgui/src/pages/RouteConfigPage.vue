@@ -218,7 +218,7 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     choices: [
       { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "接收 FenneNote 桌面语音转写", icon: "mdi-note-edit-outline" },
       { type: "xiaoai", title: "小米音箱 / 小爱", note: "接收小爱音箱语音转写", icon: "mdi-speaker-wireless" },
-      { type: "rabilink", title: "RabiLink / 手机桥", note: "手机端集成管理、测试和转发 Rokid 文本到 Codex", icon: "mdi-cellphone-link" }
+      { type: "rabilink", title: "RabiLink / Relay 直连", note: "电脑端直连 Relay，转发 Rokid/灵珠文本到 Codex", icon: "mdi-access-point-network" }
     ]
   },
   {
@@ -936,6 +936,42 @@ function setWebhookPath(type: MessageAdapterType, value: unknown): void {
 function setWebhookHost(type: MessageAdapterType, value: unknown): void {
   if (!gateway.value || type !== "rabilink") return;
   gateway.value.rabiLinkWebhookHost = String(value || "").trim() || "0.0.0.0";
+  touch();
+}
+
+function setRabiLinkRelayEnabled(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.rabiLinkRelayEnabled = value === true;
+  touch();
+}
+
+function setRabiLinkRelayUrl(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.rabiLinkRelayUrl = String(value || "").trim();
+  touch();
+}
+
+function setRabiLinkRelayToken(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.rabiLinkRelayToken = String(value || "").trim();
+  touch();
+}
+
+function setRabiLinkRelayDeviceId(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.rabiLinkRelayDeviceId = String(value || "").trim();
+  touch();
+}
+
+function setRabiLinkRelayClaimWaitMs(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.rabiLinkRelayClaimWaitMs = Number(value || 0);
+  touch();
+}
+
+function setRabiLinkRelayReplyIdleTimeoutMs(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.rabiLinkRelayReplyIdleTimeoutMs = Number(value || 0);
   touch();
 }
 
@@ -3489,6 +3525,56 @@ watch(
                     <v-text-field v-if="choice.type === 'rabilink'" :model-value="webhookHostFor(choice.type)" :label="`${sourceTitle(choice.type)} 监听地址`" placeholder="0.0.0.0" @update:model-value="value => setWebhookHost(choice.type, value)" />
                     <v-text-field :model-value="webhookPortFor(choice.type)" type="number" :label="`${sourceTitle(choice.type)} 监听端口`" @update:model-value="value => setWebhookPort(choice.type, value)" />
                     <v-text-field :model-value="webhookPathFor(choice.type)" :label="`${sourceTitle(choice.type)} 路径`" :placeholder="adapterDefaultWebhookPath(choice.type)" @update:model-value="value => setWebhookPath(choice.type, value)" />
+                    <template v-if="choice.type === 'rabilink'">
+                      <v-switch
+                        :model-value="gateway?.rabiLinkRelayEnabled === true"
+                        class="full-span"
+                        color="primary"
+                        density="compact"
+                        hide-details
+                        label="启用 Relay 直连"
+                        @update:model-value="setRabiLinkRelayEnabled"
+                      />
+                      <v-text-field
+                        :model-value="gateway?.rabiLinkRelayUrl || ''"
+                        class="full-span"
+                        label="Relay 服务器地址"
+                        placeholder="https://rabiroute.cottongame.com"
+                        @update:model-value="setRabiLinkRelayUrl"
+                      />
+                      <v-text-field
+                        :model-value="gateway?.rabiLinkRelayToken || ''"
+                        class="full-span"
+                        label="Relay Token"
+                        placeholder="X-RabiLink-Token"
+                        type="password"
+                        @update:model-value="setRabiLinkRelayToken"
+                      />
+                      <v-text-field
+                        :model-value="gateway?.rabiLinkRelayDeviceId || ''"
+                        label="电脑端设备名"
+                        placeholder="当前电脑或 RabiRoute 名称"
+                        @update:model-value="setRabiLinkRelayDeviceId"
+                      />
+                      <v-text-field
+                        :model-value="gateway?.rabiLinkRelayClaimWaitMs || 60000"
+                        label="领取任务等待毫秒"
+                        min="0"
+                        max="60000"
+                        step="1000"
+                        type="number"
+                        @update:model-value="setRabiLinkRelayClaimWaitMs"
+                      />
+                      <v-text-field
+                        :model-value="gateway?.rabiLinkRelayReplyIdleTimeoutMs || 60000"
+                        label="回复空闲超时毫秒"
+                        min="1000"
+                        max="120000"
+                        step="1000"
+                        type="number"
+                        @update:model-value="setRabiLinkRelayReplyIdleTimeoutMs"
+                      />
+                    </template>
                   </div>
                   <template v-if="isWebhookLikeAdapter(choice.type) && runtime.running !== undefined">
                     <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>

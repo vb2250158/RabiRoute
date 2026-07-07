@@ -1,6 +1,6 @@
 # RabiLink Relay 公网中继
 
-这个服务用于把 Rokid 云侧插件和手机 RabiLink App 接起来。
+这个服务用于把 Rokid 云侧插件和电脑端 RabiRoute/RabiLink 消息端接起来。主链路不经过手机桥，由电脑端 RabiLink worker 直接领取任务并回写回复。
 
 链路：
 
@@ -8,10 +8,10 @@
 Rokid 眼镜 / 灵珠智能体
 -> Rokid 云侧插件
 -> RabiLink Relay 公网 HTTPS
--> 手机 RabiLink App 轮询取任务
--> 手机 POST 到电脑 RabiRoute /rabilink
+-> 电脑端 RabiLink worker 轮询取任务
+-> RabiRoute 本地 rabilink 消息端
 -> Codex
--> 手机把回复 POST 回 Relay
+-> 电脑端 worker 把回复 POST 回 Relay
 -> Relay 返回给 Rokid 插件
 ```
 
@@ -74,7 +74,7 @@ Authorization: Bearer <token>
 - `data.text`
 - `messages` 最后一条的 `content`
 
-默认会等待手机回填结果，最多等 `RABILINK_RELAY_REPLY_TIMEOUT_MS`，默认 25 秒。
+默认会等待电脑端 RabiLink worker 回填结果，最多等 `RABILINK_RELAY_REPLY_TIMEOUT_MS`，默认 60 秒。
 
 ### 异步轮询接口
 
@@ -98,7 +98,7 @@ Authorization: Bearer <token>
   "ok": true,
   "status": "pending",
   "taskId": "rabilink-relay-...",
-  "text": "已收到，正在转交手机 RabiLink 和 Codex 处理。请稍后查询结果。"
+  "text": "已收到，正在转交电脑端 RabiLink 和 Codex 处理。请稍后查询结果。"
 }
 ```
 
@@ -111,14 +111,14 @@ Authorization: Bearer <token>
 
 当 `status=done` 时，把 `text`/`answer` 读给用户并停止调用插件；当 `status=failed` 时说明失败并停止调用插件；当 `status=pending` 时可以稍后再查。
 
-如果需要 Codex 分多次回复、眼镜立刻逐条转述，优先使用当前任务的消息列表。每次用户新输入都会由 `submitRabiLinkTask` 创建一个新的 `taskId`；后续只用这个 `taskId` 拉取本轮消息，避免复述历史会话：
+如果需要 Codex 分多次回复、眼镜立刻逐条转述，优先使用全局下行消息列表。每次用户新输入都会由 `submitRabiLinkTask` 创建一个新的 `taskId`，同时返回当前全局下行游标 `cursor` / `nextCursor`；眼镜端后续用这个游标调用 `getRabiLinkMessages`，不需要传 `taskId`：
 
 ```http
-GET /rokid/rabilink/tasks/<taskId>/messages?after=<lastMessageId>
+GET /rokid/rabilink/messages?after=<lastOutboxMessageId>
 Authorization: Bearer <token>
 ```
 
-第一次查询不带 `after`。如果本次返回了 `nextCursor`，下一次把它作为 `after`。服务器会短暂等待本任务的新消息；手机桥调用 `/phone/tasks/<taskId>/finish` 后，任务才算进入结束态。为了不漏最后一批消息，眼镜端应持续拉取到 `messages=[]` 且 `shouldContinue=false`。
+第一次查询使用 `submitRabiLinkTask` 返回的 `cursor` / `nextCursor` 作为 `after`。如果本次返回了 `nextCursor`，下一次继续把它作为 `after`。服务器会长轮询等待新消息；电脑端 RabiLink worker 调用 `/worker/tasks/<taskId>/finish` 后，任务才算进入结束态。眼镜端不要限制轮询次数：拉到一句说一句，拉到一句说一句；直到 Rabi/Codex 侧通过电脑端 worker 返回结束，本轮才结束。
 
 返回示例：
 
@@ -127,20 +127,23 @@ Authorization: Bearer <token>
   "code": 0,
   "ok": true,
   "status": "messages",
-  "taskId": "rabilink-relay-...",
   "done": false,
   "shouldContinue": true,
-  "nextCursor": "msg-000002",
+  "nextCursor": "out-000000002",
   "messages": [
     {
-      "id": "msg-000001",
+      "id": "out-000000001",
       "seq": 1,
+      "taskId": "rabilink-relay-...",
+      "taskMessageId": "msg-000001",
       "text": "第一句回复。",
       "final": false
     },
     {
-      "id": "msg-000002",
+      "id": "out-000000002",
       "seq": 2,
+      "taskId": "rabilink-relay-...",
+      "taskMessageId": "msg-000002",
       "text": "第二句回复。",
       "final": false
     }
@@ -151,16 +154,17 @@ Authorization: Bearer <token>
 眼镜智能体策略：
 
 ```text
-1. 调用 submitRabiLinkTask 提交用户原话，保存返回的 taskId。
-2. 调用 getRabiLinkTaskMessages(taskId)，第一次 after 留空。
-3. messages 里有几条就按顺序复述几条，拉出来的都要显示。
-4. 保存 nextCursor，下次拉同一个 taskId 时作为 after。
-5. 如果 shouldContinue=true，继续调用 getRabiLinkTaskMessages(taskId, after=nextCursor)。
-6. 只有当 messages 为空且 shouldContinue=false 时，才结束本轮。
-7. 不要把 getRabiLinkTaskResult 的 text/reply/answer/content 当成用户回复复述，避免重复。
+1. 调用 submitRabiLinkTask 提交用户原话，保存返回的 cursor / nextCursor。
+2. 调用 getRabiLinkMessages(after=cursor) 拉取全局下行消息；这个接口不需要 taskId。
+3. messages 里有几条就按顺序复述几条，拉出来的都要显示；拉到一句说一句，不要攒到最后。
+4. 每次处理完 messages 后保存 nextCursor，下次作为 after。
+5. 不要设置 3 次之类的调用次数限制。只要还在对话，就继续用 nextCursor 拉取。
+6. 如果 messages 为空但 shouldContinue=true，说明电脑端仍在处理，继续等待下一轮长轮询。
+7. 只有当 Rabi/Codex 侧已经返回结束、电脑端 worker 完成 finish，并且 messages 为空且 shouldContinue=false 时，才结束本轮。
+8. 不要把 getRabiLinkTaskResult 的 text/reply/answer/content 当成用户回复复述，避免重复。
 ```
 
-兼容旧工具仍然保留全局下行消息列表 `/rokid/rabilink/messages`，但它不应暴露给眼镜插件作为主路径；公开 OpenAPI 只暴露按 `taskId` 拉取的消息列表。
+按 `taskId` 查询单个任务的消息流仍然保留，主要用于调试或只关心单个任务的场景。眼镜端常驻播报应优先使用全局 `getRabiLinkMessages(after)`。
 
 按 `taskId` 查询单个任务的消息流：
 
@@ -169,12 +173,12 @@ GET /rokid/rabilink/tasks/<taskId>/messages?after=<lastMessageId>
 Authorization: Bearer <token>
 ```
 
-第一次查询不带 `after`。当没有新消息且任务未结束时，服务器默认最多等待 12 秒；有新消息、任务结束或等待超时后返回。这样眼镜智能体不需要在短时间内频繁调用插件。
+第一次查询不带 `after`。当没有新消息且任务未结束时，服务器默认最多等待 60 秒；有新消息、任务结束或等待超时后返回。这个接口主要用于排查单个 task，眼镜正式播报不要依赖它作为主循环。
 
 可选参数：
 
 - `after`：已经读过的最后一条消息 ID。
-- `waitMs`：本次长轮询最长等待时间，范围 0-30000 毫秒。缺省使用服务端 `RABILINK_RELAY_MESSAGE_WAIT_MS`，当前默认 12000。
+- `waitMs`：本次长轮询最长等待时间，范围 0-60000 毫秒。缺省使用服务端 `RABILINK_RELAY_MESSAGE_WAIT_MS`，当前默认 60000。
 
 返回示例：
 
@@ -204,19 +208,19 @@ Authorization: Bearer <token>
 }
 ```
 
-眼镜智能体策略：
+按任务调试策略：
 
 ```text
 1. 如果 messages 不为空，按顺序立刻转述给用户。
 2. 保存 nextCursor。
-3. 如果 shouldContinue=true，稍后继续调用本接口，并把 nextCursor 作为 after。由于接口本身会短暂等待，智能体不要做高频空轮询。
-4. 如果 shouldContinue=false，停止调用插件。
+3. 如果 shouldContinue=true，稍后继续调用本接口，并把 nextCursor 作为 after。由于接口本身会等待，智能体不要做高频空轮询。
+4. 如果 shouldContinue=false，说明这个 task 的调试视角已经结束；正式播报仍以全局 `getRabiLinkMessages(after)` 为准。
 ```
 
-## 手机取任务
+## 电脑端 RabiLink worker 取任务
 
 ```http
-GET /phone/tasks?limit=1&deviceId=phone-main
+GET /worker/tasks?limit=1&deviceId=rabilink-pc
 Authorization: Bearer <token>
 ```
 
@@ -236,7 +240,7 @@ Authorization: Bearer <token>
 }
 ```
 
-手机拿到任务后，调用电脑 RabiRoute：
+电脑端 RabiLink worker 拿到任务后，会在本机内部调用 RabiRoute `rabilink` 消息端。局域网脚本或手工调试仍可直接 POST 到本地 `/rabilink`：
 
 ```http
 POST http://电脑IP:8794/rabilink
@@ -251,12 +255,12 @@ Content-Type: application/json
 }
 ```
 
-## 手机回填结果
+## 电脑端 worker 回填结果
 
 ### 兼容：一次性回填最终结果
 
 ```http
-POST /phone/tasks/<taskId>/result
+POST /worker/tasks/<taskId>/result
 Content-Type: application/json
 Authorization: Bearer <token>
 
@@ -270,10 +274,10 @@ Authorization: Bearer <token>
 
 ### 消息流：追加一条或多条回复
 
-手机或本地同步器每拿到 Codex 一句回复，就调用：
+电脑端 RabiLink worker 每拿到 Codex 一句回复，就调用：
 
 ```http
-POST /phone/tasks/<taskId>/messages
+POST /worker/tasks/<taskId>/messages
 Content-Type: application/json
 Authorization: Bearer <token>
 
@@ -300,7 +304,7 @@ Authorization: Bearer <token>
 任务结束时调用：
 
 ```http
-POST /phone/tasks/<taskId>/finish
+POST /worker/tasks/<taskId>/finish
 Content-Type: application/json
 Authorization: Bearer <token>
 
@@ -323,7 +327,7 @@ Authorization: Bearer <token>
 ```json
 {
   "ok": false,
-  "error": "手机转发到 RabiRoute 失败"
+  "error": "RabiLink worker 转发到 RabiRoute 失败"
 }
 ```
 
@@ -334,21 +338,29 @@ Authorization: Bearer <token>
 | `RABILINK_RELAY_TOKEN` | 空 | 公网部署必填 |
 | `RABILINK_RELAY_PORT` / `PORT` | `8788` | 监听端口 |
 | `RABILINK_RELAY_HOST` / `HOST` | `0.0.0.0` | 监听地址 |
-| `RABILINK_RELAY_REPLY_TIMEOUT_MS` | `25000` | Rokid 请求最多等待手机回填多久 |
-| `RABILINK_RELAY_MESSAGE_WAIT_MS` | `12000` | 眼镜按 taskId 拉取消息列表的长轮询等待时间 |
-| `RABILINK_RELAY_OUTBOX_WAIT_MS` | `1500` | 兼容全局下行消息列表短等待时间 |
+| `RABILINK_RELAY_REPLY_TIMEOUT_MS` | `60000` | Rokid 请求最多等待 worker 回填多久 |
+| `RABILINK_RELAY_MESSAGE_WAIT_MS` | `60000` | 眼镜按 taskId 拉取消息列表的长轮询等待时间 |
+| `RABILINK_RELAY_OUTBOX_WAIT_MS` | `60000` | 兼容全局下行消息列表长轮询等待时间 |
+| `RABILINK_RELAY_WORKER_TASK_WAIT_MS` | `60000` | 电脑端 worker 领取任务的长轮询等待时间 |
 | `RABILINK_RELAY_TASK_TTL_MS` | `600000` | 任务保留时间 |
-| `RABILINK_RELAY_LEASE_MS` | `45000` | 手机取到任务后的租约时间 |
+| `RABILINK_RELAY_LEASE_MS` | `45000` | worker 取到任务后的租约时间 |
 | `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志目录 |
 | `RABILINK_RELAY_ALLOW_INSECURE` | `0` | 本地测试可设为 `1` 跳过 token |
 
 ## Rizon 导入文件
+
+先区分两个入口：
+
+- 在资源库创建新插件时点“导入”，使用完整插件导入文件。
+- 在已经创建好的插件详情页里点“导入工具”，使用工具导入文件，不要再选完整插件导入文件。
 
 真实运行导入文件放在：
 
 ```text
 data/rabilink-relay/rokid-rabilink-plugin.CURRENT.openapi.json
 data/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.openapi.json
+data/rabilink-relay/rokid-rabilink-tools-import.CURRENT.postman.json
+data/rabilink-relay/rokid-rabilink-tools-import.CURRENT.openapi.json
 ```
 
 公开示例文件放在：
@@ -356,7 +368,44 @@ data/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.openapi.json
 ```text
 examples/rabilink-relay/rokid-rabilink-plugin.CURRENT.example.json
 examples/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.example.json
+examples/rabilink-relay/rokid-rabilink-tools-import.example.postman.json
+examples/rabilink-relay/rokid-rabilink-tools-import.example.json
 ```
+
+如果已经有 `RabiLinkMessage` 插件，只想在插件详情页重新“导入工具”，选：
+
+```text
+<repo>\data\rabilink-relay\rokid-rabilink-tools-import.CURRENT.postman.json
+```
+
+这个工具导入文件只包含正式交互用的两个工具：
+
+- `submitRabiLinkTask`：提交用户语音或图片整理后的请求。
+- `getRabiLinkMessages`：拉取全局下行消息队列，不需要 `taskId`。
+
+工具导入首选 Postman Collection 版，因为 Rizon 的插件详情页“导入工具”入口对 OpenAPI 的多 API 前缀转换比较挑剔，可能报 `convert protocol failed: inconsistent API URL prefix`。Postman 版要把两个工具都写成同一个完整 HTTPS 域名前缀，例如 `https://rabi.example.com/rokid/rabilink/...`；不要使用 `{{base_url}}`，Rizon 当前不会展开 Postman 变量，会把它当成非法 URL。
+
+如果需要 OpenAPI 备用文件，再选：
+
+```text
+<repo>\data\rabilink-relay\rokid-rabilink-tools-import.CURRENT.openapi.json
+```
+
+OpenAPI 工具导入版会把 `servers.url` 写到 `https://<domain>`，路径写完整 `/rokid/rabilink/tasks` 和 `/rokid/rabilink/messages`。这是给 Rizon “导入工具”入口准备的保守格式，避免它把 server 前缀和 path 前缀拆错。
+
+如果用 Rizon 的“URL 和原始数据”页签导入工具，可以填：
+
+```text
+https://rabi.example.com/rokid/rabilink/tools.postman.json
+```
+
+备用同内容路径：
+
+```text
+https://rabi.example.com/openapi/rokid-rabilink-tools.postman.json
+```
+
+它刻意不包含旧的 `getRabiLinkTaskMessages`，避免 Rokid 智能体继续按 taskId 拉取导致眼镜端一直显示“思考中”。
 
 URL 导入时，使用当前运行配置里的真实域名，把下面的占位域名替换成实际入口：
 
@@ -430,7 +479,7 @@ npm run relay:rabilink:openapi:check
 注意：
 
 - 如果 Rizon 后台已经导入过旧插件，建议删除旧插件后重新导入，或至少重新导入覆盖。
-- 插件主路径应使用 `getRabiLinkTaskMessages(taskId, after)`；全局 `getRabiLinkMessages` 只作兼容/调试，不应暴露给眼镜端主流程。
+- 插件主路径应使用 `getRabiLinkMessages(after)` 持续消费全局下行队列；`getRabiLinkTaskMessages(taskId, after)` 只作调试或单任务查看。
 - GET 工具不应带 requestBody；旧文件可能会让 Rizon 试运行显示空对象或异常。
 - 当前域名 `old-relay.example.com` 已确认被 DNSPod / 腾讯云域名拦截：带 Host 访问会返回 `https://dnspod.qcloud.com/static/webblock.html?d=old-relay.example.com`。不要再用它排查 Relay。
 - 同样测试过 `<relay-server-ip>.sslip.io`、`<relay-server-ip-with-dashes>.sslip.io`、`<relay-server-ip>.nip.io` 后仍可能被跳到 DNSPod webblock。说明问题不在 Caddy vhost，而是腾讯云大陆机房对未备案域名 Host 的拦截。
@@ -444,7 +493,7 @@ npm run relay:rabilink:openapi:check
 - `GET https://rabi.example.com/rokid/rabilink/openapi.manual-auth.json` 返回 HTTP 200、`application/json`，可作为 Rizon 手动鉴权导入备用。
 - 如需直接排查服务器入口，用你的服务器 IP 或备用域名请求 `/health`。
 - 未带 token 访问任务接口返回 HTTP 401，说明公网请求已经进入 Caddy 和 Relay。
-- 带 token 做公网双向队列烟测通过：提交 task 成功，模拟手机侧 finish 成功，`GET /rokid/rabilink/tasks/<taskId>/messages?waitMs=0` 能拉到本轮下行消息。
+- 带 token 做公网双向队列烟测通过：提交 task 成功，模拟 worker 侧 finish 成功，`GET /rokid/rabilink/tasks/<taskId>/messages?waitMs=0` 能拉到本轮下行消息。
 - 服务器 Caddy 正常监听 `80`、`443`；当前推荐入口是你的 HTTPS Relay 域名。
 
 可以用脚本复查当前公网状态：
@@ -503,10 +552,10 @@ $rokid = Start-Job -ScriptBlock {
     -Body '{"text":"RabiLink Relay 本地烟测"}'
 }
 
-$task = Invoke-RestMethod -Uri "http://127.0.0.1:8788/phone/tasks?limit=1"
+$task = Invoke-RestMethod -Uri "http://127.0.0.1:8788/worker/tasks?limit=1"
 $id = $task.tasks[0].id
 
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8788/phone/tasks/$id/result" `
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8788/worker/tasks/$id/result" `
   -ContentType "application/json" `
   -Body '{"ok":true,"replyText":"Relay 回包成功"}'
 

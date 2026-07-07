@@ -103,8 +103,8 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
       ]
     : routeKind === "rabilink"
       ? [
-          "本次来自 RabiLink 手机桥，不能只在 Codex 线程里写最终文本。",
-          "如果判断需要回应，请把要写回手机和公网 Relay 的短句 POST 到普通回复 API；RabiRoute 会把它放入 RabiLink 回包队列。"
+          "本次来自 RabiLink Relay，不能只在 Codex 线程里写最终文本。",
+          "如果判断需要回应，请把要写回 Rokid/灵珠侧的短句 POST 到普通回复 API；RabiRoute 会把它放入 RabiLink 下行消息队列。"
         ]
       : outputAdapter === "fennenote" && routeKind === "voice_transcript"
       ? [
@@ -275,7 +275,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "manual_trigger") return "手动触发提醒";
   if (routeKind === "role_panel_message") return "角色面板消息";
   if (routeKind === "voice_transcript") return "语音转写提醒";
-  if (routeKind === "rabilink") return "RabiLink 手机桥消息";
+  if (routeKind === "rabilink") return "RabiLink 消息";
   if (routeKind === "wecom_message") return "企业微信群聊消息提醒";
   return "RabiRoute 消息提醒";
 }

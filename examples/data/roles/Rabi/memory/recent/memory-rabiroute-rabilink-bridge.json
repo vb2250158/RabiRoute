@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-rabilink-bridge",
   "title": "RabiLink 是手机和 Rokid 的专用桥接消息端",
-  "content": "RabiLink 接入应走独立 rabilink message adapter 和 rabilink route kind：手机 App、Rokid 或灵珠桥接出的文本请求进入 /rabilink，记录到 rabilink-voice-transcripts.jsonl，并在 AgentPacket 中明确要求回复必须经普通回复 API 回到手机桥/公网 Relay。公网 Relay 只负责云端插件与手机 RabiLink 之间的任务转交和回复回填；Rokid/灵珠插件应先 submitRabiLinkTask 获取新的 taskId，再按 taskId 调用 getRabiLinkTaskMessages 拉本轮消息列表，直到 messages 为空且 shouldContinue=false 才结束，避免复述历史会话。不应在公开示例里写真实域名、服务器 IP、token、设备 ID 或本机路径。",
+  "content": "RabiLink 接入应走独立 rabilink message adapter 和 rabilink route kind：Rokid/灵珠插件把用户原话提交到公网 Relay，电脑端 RabiLink worker 直接从 Relay 领取任务并交给本机 RabiRoute，记录到 rabilink-voice-transcripts.jsonl，并在 AgentPacket 中明确要求回复必须经普通回复 API 回到 Relay 下行消息队列。手机 App 只作为可选调试入口，不再作为主消息中转。Rokid/灵珠插件应先 submitRabiLinkTask 获取新的 taskId 和 cursor，再调用 getRabiLinkMessages(after) 拉全局下行消息；每次拉到一句就说一句，直到 messages 为空且 shouldContinue=false 才结束，避免复述历史会话。不应在公开示例里写真实域名、服务器 IP、token、设备 ID 或本机路径。",
   "source": {
     "kind": "example",
-    "summary": "公开示例记忆：RabiLink 手机/Rokid 桥接边界和脱敏规则"
+    "summary": "公开示例记忆：RabiLink Rokid/Relay 直连边界和脱敏规则"
   },
   "createdAt": "2026-07-06T00:00:00+08:00",
   "updatedAt": "2026-07-06T20:05:00+08:00",
-  "keywords": ["RabiLink", "rabilink", "Rokid", "手机桥", "message adapter", "route kind", "taskId", "getRabiLinkTaskMessages", "relay", "outbox", "脱敏"]
+  "keywords": ["RabiLink", "rabilink", "Rokid", "Relay", "worker", "message adapter", "route kind", "taskId", "getRabiLinkMessages", "outbox", "脱敏"]
 }

@@ -154,7 +154,7 @@ http://:$PublicHttpPort {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /phone/tasks* {
+    handle /worker/tasks* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -185,7 +185,7 @@ http://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /phone/tasks* {
+    handle /worker/tasks* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -209,7 +209,7 @@ http://:80 {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /phone/tasks* {
+    handle /worker/tasks* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -233,7 +233,7 @@ https://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /phone/tasks* {
+    handle /worker/tasks* {
         reverse_proxy 127.0.0.1:8788
     }
 

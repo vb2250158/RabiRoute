@@ -484,7 +484,7 @@ test("WeCom output policy blocks disabled sending", async () => {
   assert.equal(result.reason, "WeCom message sending is disabled by this route policy.");
 });
 
-test("RabiLink source reply is gated by route policy and queued for the phone bridge", async () => {
+test("RabiLink source reply is gated by route policy and queued for the Relay worker", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-rabilink-"));
   const result = await handleAgentReply({
     text: "RabiLink 回传测试。",

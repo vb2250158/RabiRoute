@@ -1,0 +1,106 @@
+{
+  "info": {
+    "_postman_id": "8c4f8f7a-6ce0-4bb4-a6a1-1c5af37c0f10",
+    "name": "RabiLinkMessage Tools",
+    "description": "RabiLinkMessage 工具导入示例。用于把 Rokid 智能体里的用户原话提交到 RabiLink Relay，并持续拉取后端 Agent 的下行消息。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "rabiroute-example"
+  },
+  "item": [
+    {
+      "name": "submitRabiLinkTask",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"text\": \"帮我看一下今天 RabiRoute 还有什么没做。\",\n  \"sender\": \"Rokid Glass\",\n  \"context\": \"用户正在通过 Rokid 眼镜和 RabiLink 对话。\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "https://rabi.example.com/rokid/rabilink/tasks",
+          "protocol": "https",
+          "host": [
+            "rabi",
+            "example",
+            "com"
+          ],
+          "path": [
+            "rokid",
+            "rabilink",
+            "tasks"
+          ]
+        },
+        "description": "提交 RabiLink 任务。text 填用户完整原话；sender 通常填 Rokid Glass；context 填当前对话或照片观察上下文。"
+      },
+      "response": [
+        {
+          "name": "200 task accepted",
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"ok\": true,\n  \"code\": 0,\n  \"status\": \"pending\",\n  \"taskId\": \"rabilink-relay-example\",\n  \"text\": \"已收到，正在转交 RabiLink 和后端 Agent。请稍后查询结果。\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "getRabiLinkMessages",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://rabi.example.com/rokid/rabilink/messages?after=",
+          "protocol": "https",
+          "host": [
+            "rabi",
+            "example",
+            "com"
+          ],
+          "path": [
+            "rokid",
+            "rabilink",
+            "messages"
+          ],
+          "query": [
+            {
+              "key": "after",
+              "value": "",
+              "description": "已经读过的最后一条下行消息 ID。第一次拉取时留空，之后填上一次返回的 nextCursor 或 cursor。"
+            }
+          ]
+        },
+        "description": "拉取 RabiLink 下行消息。这个接口不需要 taskId；返回的每条 message 会自带 id 和可能的 taskId。拿到新 text 后应立刻转述给用户。"
+      },
+      "response": [
+        {
+          "name": "200 messages",
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"ok\": true,\n  \"code\": 0,\n  \"status\": \"messages\",\n  \"done\": false,\n  \"shouldContinue\": true,\n  \"cursor\": \"msg-example-1\",\n  \"nextCursor\": \"msg-example-1\",\n  \"messages\": [\n    {\n      \"id\": \"msg-example-1\",\n      \"taskId\": \"rabilink-relay-example\",\n      \"text\": \"这里是后端 Agent 返回的一句话。\",\n      \"createdAt\": \"2026-07-06T00:00:00.000Z\"\n    }\n  ]\n}"
+        }
+      ]
+    }
+  ]
+}

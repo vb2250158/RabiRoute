@@ -263,7 +263,7 @@ class RabiRouteSdk(
             instance,
             routeId,
             inbound.messageId,
-            "RabiLink 双向烟测回包：Codex 到手机桥，请忽略。"
+            "RabiLink 双向烟测回包：Codex 到电脑端 worker，请忽略。"
         )
         val replies = getRabiLinkReplies(instance, routeId, 10)
         return RabiLinkBidirectionalResult(inbound, outbound, replies)
@@ -273,10 +273,10 @@ class RabiRouteSdk(
         relayBaseUrl: String,
         token: String,
         deviceId: String,
-        waitMs: Int = 30000,
+        waitMs: Int = 60000,
         limit: Int = 1
     ): List<RabiLinkRelayTask> {
-        val url = "${relayBaseUrl.trimEnd('/')}/phone/tasks" +
+        val url = "${relayBaseUrl.trimEnd('/')}/worker/tasks" +
             "?limit=${limit.coerceIn(1, 10)}" +
             "&waitMs=${waitMs.coerceIn(0, 60000)}" +
             "&deviceId=${encodeQuery(deviceId)}"
@@ -306,7 +306,7 @@ class RabiRouteSdk(
             .put("text", text)
             .put("final", final)
         return requestJson(
-            "${relayBaseUrl.trimEnd('/')}/phone/tasks/${encodePath(taskId)}/messages",
+            "${relayBaseUrl.trimEnd('/')}/worker/tasks/${encodePath(taskId)}/messages",
             "POST",
             payload.toString(),
             mapOf("X-RabiLink-Token" to token),
@@ -320,7 +320,7 @@ class RabiRouteSdk(
             .put("final", true)
         if (text.isNotBlank()) payload.put("text", text)
         return requestJson(
-            "${relayBaseUrl.trimEnd('/')}/phone/tasks/${encodePath(taskId)}/finish",
+            "${relayBaseUrl.trimEnd('/')}/worker/tasks/${encodePath(taskId)}/finish",
             "POST",
             payload.toString(),
             mapOf("X-RabiLink-Token" to token),

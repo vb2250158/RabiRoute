@@ -1,7 +1,7 @@
 {
   "id": "memory-rabiroute-routing-kinds",
   "title": "Rabi 常见 route kind 和回应边界",
-  "content": "Rabi 常见 route kind 包括 private、direct_at、direct_reply、indirect_reply、group_message、heartbeat、manual_trigger、voice_transcript 和 rabilink。网关负责识别包裹形状并套模板；是否回应、记录、追问、安静陪着或生成草稿，应由 persona.md、personaConfig.json 和处理端结合上下文判断。RabiLink 手机桥消息应使用 rabilink route kind，并通过普通回复 API 回到手机桥/Relay，不要只在处理端线程里写最终文本。普通群消息应优先通过 group_message + regex 降噪，不建议空 regex 全量转发。",
+  "content": "Rabi 常见 route kind 包括 private、direct_at、direct_reply、indirect_reply、group_message、heartbeat、manual_trigger、voice_transcript 和 rabilink。网关负责识别包裹形状并套模板；是否回应、记录、追问、安静陪着或生成草稿，应由 persona.md、personaConfig.json 和处理端结合上下文判断。RabiLink 消息应使用 rabilink route kind，并通过普通回复 API 回到 Relay 下行队列，不要只在处理端线程里写最终文本。普通群消息应优先通过 group_message + regex 降噪，不建议空 regex 全量转发。",
   "source": {
     "kind": "example",
     "summary": "公开文档沉淀：路由与人格模板设计"
