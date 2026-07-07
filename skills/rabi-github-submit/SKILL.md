@@ -1,90 +1,90 @@
 ---
 name: rabi-github-submit
-description: Prepare RabiRoute changes for GitHub submission with commit-specific project-context maintenance. Use when the user asks to submit, commit, push, publish, or prepare RabiRoute GitHub changes, especially when update logs, local Rabi persona data, or the public example Rabi persona must be updated according to the current commit's actual project progress.
+description: 为 RabiRoute 的 GitHub 提交做提交前准备，并按本次提交的真实进展维护项目上下文。用于用户要求 submit、commit、push、publish 或准备 RabiRoute GitHub 改动，尤其是需要根据当前提交更新版本日志、本地 Rabi 人格数据或公开示例 Rabi 人格时。
 ---
 
-# Rabi Github Submit
+# Rabi GitHub 提交
 
-## Overview
+## 概览
 
-Use this skill as the RabiRoute-specific submission checklist before staging, committing, pushing, or opening a PR. It adds one project rule on top of the normal GitHub workflow: the current commit's concrete progress must be reflected not only in the update log, but also in Rabi's local runtime persona and the sanitized public example persona when relevant.
+在 stage、commit、push 或创建 PR 之前，使用这个 skill 作为 RabiRoute 专用提交检查清单。它在常规 GitHub 流程之上增加一条项目规则：当前提交完成的具体进展不仅要反映在更新日志里，必要时也要同步到 Rabi 的本地运行期人格，以及脱敏后的公开示例人格。
 
-## Required Context
+## 必要上下文
 
-Work from the RabiRoute repo root. On this machine the repo is usually `C:\Data\CottonProject\RabiRoute`; in WSL use the equivalent `/mnt/c/Data/CottonProject/RabiRoute`.
+从 RabiRoute 仓库根目录工作。本机通常是 `C:\Data\CottonProject\RabiRoute`；在 WSL 中使用对应的 `/mnt/c/Data/CottonProject/RabiRoute`。
 
-Important paths:
+重要路径：
 
-- `版本更新日志.md`: public project update log.
-- `data/roles/Rabi/`: local runtime Rabi persona, private by default and not normally committed.
-- `examples/data/roles/Rabi/`: public example Rabi persona, safe to commit after sanitization.
-- `examples/data/roles/Rabi/plans/` and `data/roles/Rabi/plans/`: Rabi's project plans.
-- `examples/data/roles/Rabi/memory/` and `data/roles/Rabi/memory/`: recent and consolidated project memories.
-- `examples/data/roles/Rabi/README.md` and nested README files: human-facing explanation of the example persona.
+- `版本更新日志.md`：公开项目更新日志。
+- `data/roles/Rabi/`：本地运行期 Rabi 人格，默认私有，通常不提交。
+- `examples/data/roles/Rabi/`：公开示例 Rabi 人格，脱敏后可以提交。
+- `examples/data/roles/Rabi/plans/` 和 `data/roles/Rabi/plans/`：Rabi 的项目计划。
+- `examples/data/roles/Rabi/memory/` 和 `data/roles/Rabi/memory/`：近期记忆和沉淀记忆。
+- `examples/data/roles/Rabi/README.md` 及下级 README：面向人的示例人格说明。
 
-## Workflow
+## 工作流程
 
-1. Inspect the current change set before writing submission text or editing Rabi context.
-   - Run `git status --short` and review changed files.
-   - Read the relevant diffs, docs, or code paths enough to understand the actual project progress.
-   - Treat the diff being submitted as the source of truth. Do not infer progress from file names alone, old plans alone, or general project direction.
+1. 写提交说明或编辑 Rabi 上下文前，先检查当前变更集。
+   - 运行 `git status --short` 并审阅改动文件。
+   - 阅读相关 diff、文档或代码路径，直到足以理解本次项目实际进展。
+   - 以待提交 diff 为事实来源；不要只凭文件名、旧计划或泛泛的项目方向推断进展。
 
-2. Update the project update log when the change is user-facing, architectural, release-worthy, or operationally important.
-   - Prefer concise entries in `版本更新日志.md`.
-   - Mention behavior, migration notes, and validation that future maintainers would care about.
+2. 当改动面向用户、涉及架构、值得发布或对运维重要时，更新项目日志。
+   - 优先在 `版本更新日志.md` 写简洁条目。
+   - 说明行为变化、迁移注意事项和未来维护者会关心的验证结果。
 
-3. Check whether local Rabi exists, then update it only for this submission's progress.
-   - If `data/roles/Rabi/` exists, treat it as the runtime source of Rabi's current private project context.
-   - Update its `plans/`, `memory/`, and README-like docs when the current commit changes RabiRoute's direction, boundaries, adapter model, route kinds, WebGUI behavior, persona lifecycle, troubleshooting knowledge, or example-data policy.
-   - Review active/in-progress plans as part of that check: this commit may complete a slice, change the next step, add evidence, or make a plan stale even when the plan is not finished.
-   - If active/in-progress plans and memories already describe the post-commit state accurately, leave them unchanged and note that they were checked.
-   - Record what this commit completed, changed, or newly revealed; avoid unrelated backlog grooming.
-   - Keep local runtime secrets, real IDs, private messages, logs, and tokens out of committed files.
+3. 检查本地 Rabi 是否存在，并且只按本次提交的进展更新它。
+   - 如果 `data/roles/Rabi/` 存在，把它视为 Rabi 当前私有项目上下文的运行期来源。
+   - 当本次提交改变 RabiRoute 的方向、边界、adapter 模型、route kind、WebGUI 行为、人格生命周期、排障知识或示例数据策略时，更新其 `plans/`、`memory/` 和 README 类文档。
+   - 把 active/in-progress 计划也纳入检查：本次提交可能完成一个切片、改变下一步、增加证据，或让某个计划描述过期，即使整个计划尚未完成。
+   - 如果 active/in-progress 计划和记忆已经准确描述提交后的状态，就保持不变，并在最终说明中提到已检查。
+   - 记录本次提交完成、改变或新揭示的内容；避免做无关 backlog 整理。
+   - 不要把本地运行密钥、真实 ID、私聊内容、日志或 token 写进可提交文件。
 
-4. Update the public example Rabi persona according to this commit.
-   - Always inspect `examples/data/roles/Rabi/` before submission.
-   - Mirror durable, public-safe project knowledge from local Rabi into the example persona when it helps new users understand what this commit changed or made current.
-   - Update example `plans/` to reflect completed, active, in-progress, or newly discovered RabiRoute work affected by this commit.
-   - Update example `memory/recent/` or `memory/consolidated/` with sanitized project lessons that should ship with the open-source example.
-   - Update `examples/data/roles/Rabi/README.md`, `plans/README.md`, or `memory/README.md` when directory meaning, workflow, or story has changed.
-   - If the example persona is already current for this commit, do not churn files just to show activity.
+4. 按本次提交更新公开示例 Rabi 人格。
+   - 提交前始终检查 `examples/data/roles/Rabi/`。
+   - 当本地 Rabi 中有持久且公开安全的项目知识，且它能帮助新用户理解本次提交变化时，将其改写进公开示例人格。
+   - 更新 example `plans/`，反映本次提交影响到的 completed、active、in-progress 或新发现工作。
+   - 更新 example `memory/recent/` 或 `memory/consolidated/`，写入应随开源示例发布的脱敏项目经验。
+   - 当目录意义、工作流或项目叙事会过期时，更新 `examples/data/roles/Rabi/README.md`、`plans/README.md` 或 `memory/README.md`。
+   - 如果公开示例人格对本次提交已经是最新，不要为了显示动作而制造 churn。
 
-5. Sanitize public example data before staging.
-   - Public example files may use localhost, placeholders, template variables, fictional sample content, and project-generic details.
-   - Do not commit real QQ IDs, group IDs, private chats, tokens, cookies, machine-specific usernames, private paths, or runtime-only `data/` contents.
-   - If the local Rabi data contains a useful lesson, rewrite it into a public-safe example instead of copying it directly.
+5. stage 前检查公开示例数据脱敏。
+   - 公开示例文件可以使用 localhost、占位符、模板变量、虚构样例内容和项目通用细节。
+   - 不要提交真实 QQ 号、群号、私聊、token、Cookie、本机用户名、私有路径或运行期 `data/` 内容。
+   - 如果本地 Rabi 数据里有有用经验，应改写成公开安全的示例，而不是直接复制。
 
-6. Validate the full submission.
-   - Run the repo's normal tests, type checks, build, or targeted validation appropriate to the changed files.
-   - Re-run `git diff --check`.
-   - Review `git diff -- examples/data/roles/Rabi` when example persona files changed.
-   - Review `git status --short` and stage only intentional public files.
+6. 验证完整提交。
+   - 根据改动文件运行仓库常规测试、类型检查、build 或针对性验证。
+   - 重新运行 `git diff --check`。
+   - 如果修改了示例人格，检查 `git diff -- examples/data/roles/Rabi`。
+   - 检查 `git status --short`，只 stage 有意提交的公开文件。
 
-7. Submit using the normal GitHub flow.
-   - Compose the commit/PR summary from actual changes and validation.
-   - Mention Rabi persona/example updates when they are part of the submission.
-   - If local `data/roles/Rabi/` was updated but not committed, say so explicitly in the final handoff.
-   - On this machine, if `git push` over CLI repeatedly fails due to GitHub network, proxy, TLS, or credential timeouts after the local commit is created, it is OK to try GitHub Desktop as a push fallback for the existing local commit. Do not use GitHub Desktop to change the commit contents; use it only to publish the already-reviewed branch/commit, then re-check `git status -sb`.
+7. 使用正常 GitHub 流程提交。
+   - 根据实际改动和验证结果编写 commit/PR 摘要。
+   - 如果本次提交包含 Rabi 人格或公开示例更新，在说明里提到。
+   - 如果更新了本地 `data/roles/Rabi/` 但没有提交，最终交接里要明确说明。
+   - 在这台机器上，如果本地 commit 创建后，CLI `git push` 多次因 GitHub 网络、代理、TLS 或凭证超时失败，可以用 GitHub Desktop 作为推送 fallback。不要用 GitHub Desktop 改提交内容；只发布已经审阅过的本地 commit，然后重新检查 `git status -sb`。
 
-## What To Update In Rabi
+## Rabi 上下文应该更新什么
 
-Use judgment; do not mechanically edit every file. Update Rabi context when the current commit teaches Rabi something durable.
+凭判断行动，不要机械修改每个文件。只有当前提交教会了 Rabi 某种持久知识时才更新上下文。
 
-- Plans: inspect active and in-progress work, move work between active/archive states, adjust statuses, add newly discovered follow-up plans, or revise plan descriptions after implementation.
-- Memory: add small recent memories for new lessons; consolidate only when the lesson is stable and broadly useful.
-- README files: update when the example structure, project story, setup expectations, or public-facing explanation would otherwise be stale.
-- Persona prompts or skills: update only when Rabi's behavior, boundaries, or capabilities changed.
+- Plans：检查 active 和 in-progress 工作，必要时移动 active/archive 状态、调整状态、增加新发现的后续计划，或根据实现修订计划描述。
+- Memory：为新经验添加小型近期记忆；只有经验稳定且广泛有用时才沉淀。
+- README：当示例结构、项目叙事、设置预期或公开说明会过期时更新。
+- Persona prompts 或 skills：只有 Rabi 的行为、边界或能力发生变化时才更新。
 
-## Decision Rules
+## 判断规则
 
-- If a change only fixes an internal typo or mechanical formatting, the update log and Rabi persona may not need edits.
-- If a change affects how users understand, configure, debug, extend, or safely publish RabiRoute, update the log and at least inspect both Rabi persona locations.
-- If a plan remains in progress, still check whether this commit changes its status, evidence, risks, next step, or wording; if it is already accurate, keep it as-is.
-- If local Rabi and public example Rabi diverge, preserve private/local specificity in `data/roles/Rabi/` and convert only safe durable lessons into `examples/data/roles/Rabi/`.
-- If `data/roles/Rabi/` is absent, continue with the public example persona and mention that the local runtime Rabi directory was not present.
-- Never stage runtime `data/`, logs, `.env`, `dist`, or `node_modules` unless the user explicitly asks and the file is safe.
+- 如果改动只是内部 typo 或机械格式调整，更新日志和 Rabi 人格可能无需修改。
+- 如果改动影响用户理解、配置、调试、扩展或安全发布 RabiRoute，应更新日志，并至少检查本地和公开示例两个 Rabi 人格位置。
+- 如果某个计划仍在进行中，也要检查本次提交是否改变它的状态、证据、风险、下一步或措辞；如果已经准确，就保持不变。
+- 如果本地 Rabi 和公开示例 Rabi 有差异，保留 `data/roles/Rabi/` 的私有/本地具体性，只把安全且持久的经验转换进 `examples/data/roles/Rabi/`。
+- 如果 `data/roles/Rabi/` 不存在，继续处理公开示例人格，并说明本地运行期 Rabi 目录不存在。
+- 除非用户明确要求且文件确认安全，否则绝不 stage 运行期 `data/`、日志、`.env`、`dist` 或 `node_modules`。
 
-## Useful Commands
+## 常用命令
 
 ```bash
 git status --short
@@ -93,7 +93,7 @@ git diff --check
 rg -n "Rabi|persona|memory|plans|route kind|adapter|WebGUI|update log" README.md docs src examples/data/roles/Rabi
 ```
 
-On Windows PowerShell, prefer explicit UTF-8 when reading or writing Chinese Markdown:
+在 Windows PowerShell 读取或写入中文 Markdown 时，优先显式指定 UTF-8：
 
 ```powershell
 Get-Content -LiteralPath '.\版本更新日志.md' -Encoding UTF8
