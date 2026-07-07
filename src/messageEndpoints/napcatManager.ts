@@ -1338,6 +1338,12 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
   const onebotConfig = readOneBotNetworkConfig(onebotPath);
   const onebotConfigured = onebotConfigMatches(onebotConfig, httpPort, wsUrl);
   const diagnostics: string[] = [];
+  if (effectiveWebuiUrl !== webuiUrl) {
+    diagnostics.push(`已自动改用 NapCat webui.json 中的 WebUI 地址：${effectiveWebuiUrl}。`);
+  }
+  if (!http.ok && webuiReachable && tokenInfo.found && !webuiLoginInfo?.userId) {
+    diagnostics.push("NapCat WebUI 可以打开，但还没有读到 QQ 登录态；通常需要在 WebUI 里扫码/前台登录。");
+  }
   if (http.ok && onebotStatus?.online === false) {
     diagnostics.push(`${httpUrl}/get_status 返回 online:false；WS 或登录资料可能仍有旧连接，但 QQ 实际已经离线。`);
   }
@@ -1362,10 +1368,14 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
     ok: Boolean(http.ok && onebotStatus?.online !== false && onebotStatus?.good !== false),
     fixAvailable,
     diagnostics,
-    message: !http.ok && webuiLoginInfo?.userId
-      ? onebotConfigured
-        ? `已为当前 QQ ${webuiLoginInfo.userId} 写入 OneBot HTTP/WS 配置，但 NapCat 尚未重载生效，可一键尝试应用/重启 NapCat。`
-        : `WebUI 已登录 ${webuiLoginInfo.userId}，但 OneBot HTTP 未连通，可一键写入当前 QQ 的 HTTP/WS 配置。`
+    message: !http.ok
+      ? webuiLoginInfo?.userId
+        ? onebotConfigured
+          ? `已为当前 QQ ${webuiLoginInfo.userId} 写入 OneBot HTTP/WS 配置，但 NapCat 尚未重载生效；打开 WebUI 时会自动尝试应用。`
+          : `WebUI 已登录 ${webuiLoginInfo.userId}，但 OneBot HTTP 未连通；打开 WebUI 时会自动写入当前 QQ 的 HTTP/WS 配置。`
+        : webuiReachable
+          ? "NapCat WebUI 可打开，但当前 QQ 还未登录；请在 WebUI 完成扫码/前台登录。"
+          : undefined
       : undefined,
     http,
     webui,

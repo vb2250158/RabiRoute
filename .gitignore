@@ -21,6 +21,7 @@
 /RabiRoute-Tray.exe.bak-*
 /.idea/
 .venv/
+/.venv-tray/
 **/.venv/
 __pycache__/
 *.py[cod]

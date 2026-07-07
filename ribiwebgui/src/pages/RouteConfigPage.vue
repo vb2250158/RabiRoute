@@ -1639,6 +1639,71 @@ async function configureNapcatOneBot(instance: NapCatInstance): Promise<void> {
   }
 }
 
+async function autoConfigureNapcatOneBotIfAvailable(instance: NapCatInstance, body: Record<string, any>): Promise<Record<string, any>> {
+  if (!gateway.value || !body?.fixAvailable) return body;
+  configuringNapcatOneBot.value = { ...configuringNapcatOneBot.value, [instance.id]: true };
+  try {
+    const resp = await fetch("/api/message/napcat-configure-onebot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(napcatHealthPayload(instance))
+    });
+    const fixBody = await resp.json().catch(() => ({}));
+    const steps = Array.isArray(fixBody.steps) ? fixBody.steps : [];
+    const diagnostics = [
+      ...(Array.isArray(body.diagnostics) ? body.diagnostics : []),
+      ...(steps.length ? steps : [fixBody.message || "已尝试自动写入 NapCat OneBot 配置。"])
+    ];
+    napcatOneBotFixResult.value = {
+      ...napcatOneBotFixResult.value,
+      [instance.id]: {
+        ok: resp.ok && fixBody.ok !== false,
+        message: fixBody.message || (resp.ok ? "已自动写入 NapCat OneBot 配置。" : "自动写入 NapCat 配置失败。")
+      }
+    };
+    if (fixBody.userId && !instance.botUserId) instance.botUserId = fixBody.userId;
+    if (fixBody.nickname && !instance.botNickname) instance.botNickname = fixBody.nickname;
+    if (fixBody.webuiToken && !instance.webuiToken) instance.webuiToken = fixBody.webuiToken;
+    if (fixBody.userId || fixBody.nickname || fixBody.webuiToken) store.touch();
+    return {
+      ...body,
+      ok: Boolean(fixBody.httpReady) || Boolean(body.ok),
+      fixAvailable: false,
+      message: fixBody.message || body.message,
+      diagnostics,
+      onebot: {
+        ...(body.onebot || {}),
+        currentUserId: fixBody.userId || body.onebot?.currentUserId,
+        currentNickname: fixBody.nickname || body.onebot?.currentNickname,
+        configPath: fixBody.configPath || body.onebot?.configPath
+      },
+      wsUrl: fixBody.wsUrl || body.wsUrl || napcatInstanceWsUrl(instance)
+    };
+  } finally {
+    configuringNapcatOneBot.value = { ...configuringNapcatOneBot.value, [instance.id]: false };
+  }
+}
+
+async function prepareNapcatInstanceForWebui(instance: NapCatInstance): Promise<NapCatInstance> {
+  if (!gateway.value) return instance;
+  let target = instance;
+  const wasConfigured = isConfiguredNapcatInstance(target);
+  if (!wasConfigured) {
+    addDiscoveredNapcatInstance(target);
+    target = ensureNapcatInstances().find(item => item.id === instance.id) ?? target;
+  }
+  if (!wasConfigured) target.enabled = true;
+  await autofillNapcatInstance(target);
+  autoAssignNapcatPortsForAllGateways();
+  syncPrimaryNapcatFromInstances();
+  store.touch();
+  if (store.dirty) {
+    await store.save();
+    target = resolveConfiguredNapcatInstance(target);
+  }
+  return target;
+}
+
 function napcatRuntimeFor(instance: NapCatInstance): Record<string, any> {
   const id = String(instance.id || "");
   const port = Number(instance.gatewayPort || 0);
@@ -2058,34 +2123,42 @@ function napcatWebuiUrlWithToken(webuiUrl: string | undefined, token: string | u
 
 async function openNapcatWebuiWithToken(instance?: NapCatInstance): Promise<void> {
   try {
+    const targetInstance = instance ? await prepareNapcatInstanceForWebui(instance) : undefined;
     const resp = await fetch("/api/message/napcat-health", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(napcatHealthPayload(instance))
+      body: JSON.stringify(napcatHealthPayload(targetInstance))
     });
     const body = await resp.json().catch(() => ({}));
-    const result = { ok: Boolean(body.ok), ...body };
-    if (instance?.id) {
+    let result = { ok: Boolean(body.ok), ...body };
+    if (targetInstance) {
+      if (applyNapcatHealthToInstance(targetInstance, result) && store.dirty) {
+        await store.save();
+      }
+      result = await autoConfigureNapcatOneBotIfAvailable(targetInstance, result);
+      if (store.dirty) {
+        await store.save();
+      }
       napcatInstanceHealthResult.value = {
         ...napcatInstanceHealthResult.value,
-        [instance.id]: result
+        [targetInstance.id]: result
       };
     } else {
       napcatHealthResult.value = result;
     }
-    const target = body?.webui?.loginUrl
-      || (body?.webui?.token ? napcatWebuiUrlWithToken(body?.webui?.url || instance?.webuiUrl || defaultNapcatWebuiUrl(), body.webui.token) : "")
-      || (body?.webui?.reachable ? body?.webui?.url : "");
+    const target = result?.webui?.loginUrl
+      || (result?.webui?.token ? napcatWebuiUrlWithToken(result?.webui?.url || targetInstance?.webuiUrl || defaultNapcatWebuiUrl(), result.webui.token) : "")
+      || (result?.webui?.reachable ? result?.webui?.url : "");
     if (target) {
       openExternalUrl(target);
       return;
     }
-    const message = body?.webui?.message || body?.message || `NapCat WebUI 未响应：${instance?.webuiUrl || defaultNapcatWebuiUrl()}`;
-    const failed = { ok: false, ...body, message };
-    if (instance?.id) {
+    const message = result?.webui?.message || result?.message || `NapCat WebUI 未响应：${targetInstance?.webuiUrl || defaultNapcatWebuiUrl()}`;
+    const failed = { ok: false, ...result, message };
+    if (targetInstance?.id) {
       napcatInstanceHealthResult.value = {
         ...napcatInstanceHealthResult.value,
-        [instance.id]: failed
+        [targetInstance.id]: failed
       };
     } else {
       napcatHealthResult.value = failed;
@@ -2877,21 +2950,9 @@ watch(
                       <div class="section-title-row mb-2">
                         <div>
                           <div class="section-title small-title">QQ 实例</div>
-                          <div class="section-note">每个 QQ 独立配置 WS、HTTP、WebUI、启动命令和工作目录；收到哪个 QQ 的消息，就用哪个 QQ 的 HTTP 出口回复。</div>
+                          <div class="section-note">每个 QQ 对应一个 NapCat 实例；打开 WebUI 会自动维护连接配置，开关只决定这个 QQ 是否参与路由。</div>
                         </div>
                         <div class="d-flex ga-2 flex-wrap">
-                          <v-btn
-                            v-if="napcatAutoFixCount() > 0"
-                            size="small"
-                            variant="tonal"
-                            color="success"
-                            prepend-icon="mdi-auto-fix"
-                            :loading="repairingNapcatAll"
-                            :disabled="repairingNapcatAll || messageAdapterScan.loading"
-                            @click="repairAllNapcatIssues"
-                          >
-                            修复全部可自动处理项（{{ napcatAutoFixCount() }}）
-                          </v-btn>
                           <v-btn
                             size="small"
                             variant="tonal"
@@ -2938,59 +2999,11 @@ watch(
                           </div>
                           <div class="agent-action-bar mt-2">
                             <div class="agent-action-status">
-                              <span class="section-note">{{ instance.enabled === false ? "停用后保存不会启动监听" : "先检查，再把 WS 地址填到对应 NapCat WebSocket Client" }}</span>
+                              <span class="section-note">{{ instance.enabled === false ? "已停用；打开开关后此 QQ 才参与路由" : "打开 WebUI 会自动检查并维护 OneBot / WS 配置" }}</span>
                             </div>
                             <div class="d-flex ga-2 flex-wrap">
-                              <v-btn
-                                v-if="!isConfiguredNapcatInstance(instance)"
-                                size="small"
-                                variant="tonal"
-                                color="primary"
-                                prepend-icon="mdi-plus-circle-outline"
-                                @click="addDiscoveredNapcatInstance(instance)"
-                              >
-                                添加到配置
-                              </v-btn>
-                              <v-btn size="small" variant="tonal" prepend-icon="mdi-open-in-new" @click="openNapcatWebuiWithToken(instance)">
+                              <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-open-in-new" @click="openNapcatWebuiWithToken(instance)">
                                 打开 WebUI
-                              </v-btn>
-                              <v-btn
-                                size="small"
-                                variant="tonal"
-                                color="secondary"
-                                prepend-icon="mdi-stethoscope"
-                                :loading="testingNapcatInstance[instance.id]"
-                                :disabled="testingNapcatInstance[instance.id]"
-                                @click="testNapcatInstanceHealth(instance)"
-                              >
-                                检查
-                              </v-btn>
-                              <v-btn
-                                size="small"
-                                variant="tonal"
-                                color="primary"
-                                prepend-icon="mdi-play"
-                                :loading="launchingNapcatInstance[instance.id]"
-                                :disabled="launchingNapcatInstance[instance.id] || !instance.launchCommand"
-                                :title="instance.launchCommand ? '启动这个已保存的 NapCat 后台' : '请先填写启动命令并保存配置'"
-                                @click="launchNapcatInstance(instance)"
-                              >
-                                {{ instance.launchCommand ? "启动后台" : "先填启动命令" }}
-                              </v-btn>
-                              <v-btn
-                                size="small"
-                                variant="tonal"
-                                color="warning"
-                                prepend-icon="mdi-restart"
-                                :loading="restartingNapcatInstance[instance.id]"
-                                :disabled="restartingNapcatInstance[instance.id] || (!instance.webuiUrl && !instance.launchCommand)"
-                                :title="instance.webuiUrl || instance.launchCommand ? '重启这个 NapCat 后台并复查状态' : '请先填写 WebUI 地址或启动命令'"
-                                @click="restartNapcatInstance(instance)"
-                              >
-                                重启 NapCat
-                              </v-btn>
-                              <v-btn size="small" variant="text" prepend-icon="mdi-content-copy" @click="copyText(napcatInstanceWsUrl(instance), '已复制 NapCat WS 地址')">
-                                复制 WS
                               </v-btn>
                               <v-btn
                                 v-if="isConfiguredNapcatInstance(instance) || (instance as Record<string, any>).__discovered"
@@ -3138,32 +3151,6 @@ watch(
                             <ul v-if="napcatInstanceHealthResult[instance.id]?.diagnostics?.length" class="health-diagnostics">
                               <li v-for="item in napcatInstanceHealthResult[instance.id]?.diagnostics" :key="item">{{ item }}</li>
                             </ul>
-                            <div v-if="napcatInstanceHealthResult[instance.id]?.fixAvailable" class="d-flex ga-2 flex-wrap mt-2">
-                              <v-btn
-                                size="small"
-                                color="primary"
-                                variant="tonal"
-                                prepend-icon="mdi-wrench-cog"
-                                :loading="configuringNapcatOneBot[instance.id]"
-                                :disabled="configuringNapcatOneBot[instance.id]"
-                                @click="configureNapcatOneBot(instance)"
-                              >
-                                一键修复 NapCat 配置
-                              </v-btn>
-                            </div>
-                            <div v-if="napcatInstancePortError(instance)" class="d-flex ga-2 flex-wrap mt-2">
-                              <v-btn
-                                size="small"
-                                color="error"
-                                variant="tonal"
-                                prepend-icon="mdi-auto-fix"
-                                :loading="fixingNapcatPorts"
-                                :disabled="fixingNapcatPorts"
-                                @click="fixNapcatPorts(instance)"
-                              >
-                                自动分配端口并保存
-                              </v-btn>
-                            </div>
                             <div class="d-flex ga-2 flex-wrap mt-2">
                               <v-btn
                                 v-if="napcatInstanceHealthResult[instance.id]?.webui?.loginUrl"
