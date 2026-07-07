@@ -19,10 +19,19 @@ Rokid 眼镜 / 灵珠智能体
 
 ```powershell
 cd C:\Path\To\RabiRoute
-$env:RABILINK_RELAY_TOKEN="换成一段长随机字符串"
 $env:RABILINK_RELAY_PORT="8788"
 node scripts/rabilink-relay-server.mjs
 ```
+
+启动后先打开服务器 WebGUI：
+
+```text
+https://你的域名/admin
+```
+
+首次进入时注册一个服务器账号，然后创建 RabiLink 应用。每个应用会生成独立 `rbl_...` token；完整 token 只在创建或重新生成时显示一次。Rokid/灵珠插件和电脑端 RabiLink worker 都使用同一个应用 token，Relay 会按应用隔离 task 和下行消息队列。
+
+`RABILINK_RELAY_TOKEN` 仍然兼容旧部署；设置后它是全局 token，可以访问所有应用的任务。新部署优先使用 `/admin` 创建的应用 token。
 
 公网部署时建议放到 HTTPS 反代后面，例如：
 
@@ -33,19 +42,19 @@ https://你的域名/rokid/rabilink
 Rokid 插件 URL 填：
 
 ```text
-https://你的域名/rokid/rabilink?token=换成一段长随机字符串
+https://你的域名/rokid/rabilink?token=应用 token
 ```
 
 如果 Rokid 插件支持请求头，更推荐：
 
 ```text
-Authorization: Bearer 换成一段长随机字符串
+Authorization: Bearer 应用 token
 ```
 
 或：
 
 ```text
-X-RabiLink-Token: 换成一段长随机字符串
+X-RabiLink-Token: 应用 token
 ```
 
 ## Rokid 入站接口
@@ -335,7 +344,7 @@ Authorization: Bearer <token>
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `RABILINK_RELAY_TOKEN` | 空 | 公网部署必填 |
+| `RABILINK_RELAY_TOKEN` | 空 | 兼容旧部署的全局 token；新部署优先用 `/admin` 创建应用 token |
 | `RABILINK_RELAY_PORT` / `PORT` | `8788` | 监听端口 |
 | `RABILINK_RELAY_HOST` / `HOST` | `0.0.0.0` | 监听地址 |
 | `RABILINK_RELAY_REPLY_TIMEOUT_MS` | `60000` | Rokid 请求最多等待 worker 回填多久 |
@@ -344,7 +353,8 @@ Authorization: Bearer <token>
 | `RABILINK_RELAY_WORKER_TASK_WAIT_MS` | `60000` | 电脑端 worker 领取任务的长轮询等待时间 |
 | `RABILINK_RELAY_TASK_TTL_MS` | `600000` | 任务保留时间 |
 | `RABILINK_RELAY_LEASE_MS` | `45000` | worker 取到任务后的租约时间 |
-| `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志目录 |
+| `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志和服务器 WebGUI 账号/应用数据目录 |
+| `RABILINK_RELAY_APP_STORE_FILE` | `<dataDir>/apps.json` | 账号、密码哈希、应用和 token 存储文件 |
 | `RABILINK_RELAY_ALLOW_INSECURE` | `0` | 本地测试可设为 `1` 跳过 token |
 
 ## Rizon 导入文件
@@ -431,7 +441,7 @@ https://rabi.example.com/rokid/rabilink/openapi.manual-auth.json
 授权方式：Service token / API key
 位置：Header
 Parameter name：X-RabiLink-Token
-Service token / API key：填当前 Relay token
+Service token / API key：填 `/admin` 里对应 RabiLink 应用的 token
 ```
 
 本地文件导入时使用：
@@ -460,6 +470,7 @@ https://rabi.example.com
 Service token / API key
 位置：Header
 Parameter name：X-RabiLink-Token
+Service token / API key：填对应 RabiLink 应用的 token
 ```
 
 导入前先校验本地 OpenAPI 文件：
@@ -493,7 +504,7 @@ npm run relay:rabilink:openapi:check
 - `GET https://rabi.example.com/rokid/rabilink/openapi.manual-auth.json` 返回 HTTP 200、`application/json`，可作为 Rizon 手动鉴权导入备用。
 - 如需直接排查服务器入口，用你的服务器 IP 或备用域名请求 `/health`。
 - 未带 token 访问任务接口返回 HTTP 401，说明公网请求已经进入 Caddy 和 Relay。
-- 带 token 做公网双向队列烟测通过：提交 task 成功，模拟 worker 侧 finish 成功，`GET /rokid/rabilink/tasks/<taskId>/messages?waitMs=0` 能拉到本轮下行消息。
+- 带应用 token 做公网双向队列烟测通过：提交 task 成功，模拟 worker 侧 finish 成功，`GET /rokid/rabilink/tasks/<taskId>/messages?waitMs=0` 能拉到本轮下行消息。
 - 服务器 Caddy 正常监听 `80`、`443`；当前推荐入口是你的 HTTPS Relay 域名。
 
 可以用脚本复查当前公网状态：
@@ -517,10 +528,10 @@ npm run relay:rabilink:test:public:custom -- -BaseUrl https://rabi.example.com -
 
 默认脚本检查 `https://rabi.example.com` 示例地址。真实部署时用上面的 custom 命令指定你的 Relay 地址，并保留 OpenAPI 对外声明的域名。
 
-如果有 Relay token，可以跑完整双向队列烟测：
+如果有应用 token 或旧版全局 Relay token，可以跑完整双向队列烟测：
 
 ```powershell
-$env:RABILINK_RELAY_TOKEN = "填入当前 Relay token"
+$env:RABILINK_RELAY_TOKEN = "填入当前应用 token"
 .\scripts\Test-RabiLinkRelayPublic.ps1 -BaseUrl https://rabi.example.com
 ```
 

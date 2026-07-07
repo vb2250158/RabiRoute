@@ -4,7 +4,7 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "architecture",
-  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端；WeCom 作为独立企业微信智能机器人 WebSocket 消息端，使用 wecom_message route kind、wecom_chat pipeline preset、wecom-messages.jsonl 和统一 outbox 回传，不复用 webhook 或 NapCat。RabiLink 作为手机/Rokid 桥接消息端，使用 rabilink route kind、RabiLink 专用回复队列和按 taskId 拉取的 Relay 消息流，不再复用 voice_transcript 语义。remoteAgent 作为下游远端设备入口，结果仍回到本机人格线程。remoteAgent 任务已支持随消息传文件和回传产物文件，主控端保存回传文件到 data/remote-agent-files/<taskId>/。",
+  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端；WeCom 作为独立企业微信智能机器人 WebSocket 消息端，使用 wecom_message route kind、wecom_chat pipeline preset、wecom-messages.jsonl 和统一 outbox 回传，不复用 webhook 或 NapCat。RabiLink 作为 Rokid/灵珠桥接消息端，使用 rabilink route kind、电脑端 worker 直连公网 Relay、RabiLink 专用回复队列和全局 getRabiLinkMessages(after) 下行消息流，不再复用 voice_transcript 语义；Relay server 的 /admin 管理账号和 RabiLink 应用 token，task/worker/messages 按 app 隔离，旧 RABILINK_RELAY_TOKEN 只作兼容全局 token。remoteAgent 作为下游远端设备入口，结果仍回到本机人格线程。remoteAgent 任务已支持随消息传文件和回传产物文件，主控端保存回传文件到 data/remote-agent-files/<taskId>/。",
   "nextAction": "新增聊天平台时优先扩展 src/adapters/、src/routing/ 和 src/outbox.ts 的统一边界，新增处理端时优先扩展 src/agentAdapters/；继续区分远端 Agent 设备入口、平台消息端和真正的处理端，避免让某个协议反向定义项目边界",
   "waitingFor": "",
   "project": {
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-06T20:05:00+08:00",
-  "keywords": ["message adapter", "agent adapter", "wecom", "企业微信", "wecom_message", "rabilink", "RabiLink", "taskId", "outbox", "remoteAgent", "远端 Agent", "文件传输", "NapCat", "Codex", "解耦", "扩展"]
+  "updatedAt": "2026-07-07T14:45:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "wecom", "企业微信", "wecom_message", "rabilink", "RabiLink", "taskId", "getRabiLinkMessages", "应用 token", "outbox", "remoteAgent", "远端 Agent", "文件传输", "NapCat", "Codex", "解耦", "扩展"]
 }
