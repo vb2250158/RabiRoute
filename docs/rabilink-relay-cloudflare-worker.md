@@ -92,11 +92,7 @@ npx wrangler secret put RABILINK_UPSTREAM
 https://rabi.example.com
 ```
 
-通常不建议把 Relay token 写进 Worker。让 Rizon 插件用 `X-RabiLink-Token` 请求头传 token 更清楚。如果必须由 Worker 注入 token，再设置：
-
-```powershell
-npx wrangler secret put RABILINK_FORWARD_TOKEN
-```
+不要把 RabiLink 应用 token 写进 Worker。Worker 只负责改写 OpenAPI 的 `servers[0].url` 并透明转发请求；Rizon/灵珠插件或智能体工具参数必须自己传对应应用 token。这样同一个 Worker 才能服务多个账号、多个应用和多台 PC Rabi，不会退回“公共转发 token”。
 
 ## Rizon 导入
 
@@ -124,7 +120,7 @@ https://rabilink-relay.<你的 workers 子域>.workers.dev/rokid/rabilink/openap
 授权方式：Service token / API key
 位置：Header
 Parameter name：X-RabiLink-Token
-Service token / API key：填当前 Relay token
+Service token / API key：填当前 RabiLink 应用 token
 ```
 
 如果要做公开/模板插件，不要把发布者 token 写到插件级鉴权里。导入 agent-token 版：
@@ -151,10 +147,10 @@ cd <repo>
 .\scripts\Test-RabiLinkRelayWorker.ps1 -WorkerBaseUrl https://rabilink-relay.<你的 workers 子域>.workers.dev -SkipQueueSmoke
 ```
 
-如果有 Relay token，可以跑 Worker 端到端队列烟测：
+如果有 RabiLink 应用 token，可以跑 Worker 端到端队列烟测：
 
 ```powershell
-$env:RABILINK_RELAY_TOKEN = "填入当前 Relay token"
+$env:RABILINK_RELAY_APP_TOKEN = "填入当前 RabiLink 应用 token"
 .\scripts\Test-RabiLinkRelayWorker.ps1 -WorkerBaseUrl https://rabilink-relay.<你的 workers 子域>.workers.dev
 ```
 
@@ -164,6 +160,6 @@ $env:RABILINK_RELAY_TOKEN = "填入当前 Relay token"
 - OpenAPI 返回 `info.title = RabiLinkMessage`
 - OpenAPI 的 `servers[0].url` 是 Worker 自己的 `https://...workers.dev`
 - 未带 token 访问 `/rokid/rabilink/tasks/<taskId>/messages` 返回 401
-- 带 token 的队列烟测能提交任务、模拟手机完成任务、从全局 `/rokid/rabilink/messages` 拉到带 `taskId` 的下行消息
+- 带应用 token 的队列烟测能提交任务、模拟 PC worker 完成任务、从全局 `/rokid/rabilink/messages` 拉到带 `taskId` 的下行消息
 
 如果 Worker 通而 Rizon 不通，再查插件鉴权和工具配置；不要回头把 `old-relay.example.com` 当成可用域名测试。

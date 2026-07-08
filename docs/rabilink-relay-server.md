@@ -617,10 +617,10 @@ npm run relay:rabilink:test:public:custom -- -BaseUrl https://rabi.example.com -
 
 默认脚本检查 `https://rabi.example.com` 示例地址。真实部署时用上面的 custom 命令指定你的 Relay 地址，并保留 OpenAPI 对外声明的域名。
 
-如果有应用 token 或旧版全局 Relay token，可以跑完整双向队列烟测：
+如果有 RabiLink 应用 token，可以跑完整双向队列烟测：
 
 ```powershell
-$env:RABILINK_RELAY_TOKEN = "填入当前应用 token"
+$env:RABILINK_RELAY_APP_TOKEN = "填入当前 RabiLink 应用 token"
 .\scripts\Test-RabiLinkRelayPublic.ps1 -BaseUrl https://rabi.example.com
 ```
 

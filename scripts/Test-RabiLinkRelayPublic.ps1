@@ -2,7 +2,7 @@ param(
     [string]$BaseUrl = "",
     [string]$DomainBaseUrl = "",
     [string]$ExpectedOpenApiServerUrl = "",
-    [string]$Token = $env:RABILINK_RELAY_TOKEN,
+    [string]$Token = $env:RABILINK_RELAY_APP_TOKEN,
     [switch]$SkipQueueSmoke
 )
 
@@ -23,8 +23,12 @@ if (-not $ExpectedOpenApiServerUrl.Trim() -and $config -and [string]$config.open
 if (-not $DomainBaseUrl.Trim() -and $config -and [string]$config.domainBaseUrl) {
     $DomainBaseUrl = [string]$config.domainBaseUrl
 }
-if (-not $Token.Trim() -and $config -and [string]$config.token) {
-    $Token = [string]$config.token
+if ([string]::IsNullOrWhiteSpace($Token) -and $env:RABILINK_RELAY_TOKEN) {
+    Write-Host "[warn] RABILINK_RELAY_TOKEN is a legacy server token name. Prefer RABILINK_RELAY_APP_TOKEN or -Token with a /manage app token." -ForegroundColor Yellow
+    $Token = [string]$env:RABILINK_RELAY_TOKEN
+}
+if ([string]::IsNullOrWhiteSpace($Token) -and $config -and [string]$config.appToken) {
+    $Token = [string]$config.appToken
 }
 
 function Join-Url {
@@ -172,8 +176,8 @@ if ($SkipQueueSmoke) {
     exit 0
 }
 
-if (-not $Token.Trim()) {
-    throw "Token is required for queue smoke. Pass -Token or set RABILINK_RELAY_TOKEN. Use -SkipQueueSmoke to skip authenticated checks."
+if ([string]::IsNullOrWhiteSpace($Token)) {
+    throw "An app token is required for queue smoke. Pass -Token or set RABILINK_RELAY_APP_TOKEN to a /manage application token. Use -SkipQueueSmoke to skip authenticated checks."
 }
 
 $authHeaders = @{

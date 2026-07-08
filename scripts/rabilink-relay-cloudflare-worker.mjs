@@ -50,10 +50,6 @@ function buildForwardHeaders(request, env) {
   headers.set("x-forwarded-host", new URL(request.url).host);
   headers.set("x-forwarded-proto", new URL(request.url).protocol.replace(":", ""));
 
-  if (env.RABILINK_FORWARD_TOKEN && !headers.has("x-rabilink-token")) {
-    headers.set("x-rabilink-token", env.RABILINK_FORWARD_TOKEN);
-  }
-
   return headers;
 }
 

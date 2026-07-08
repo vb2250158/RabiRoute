@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-rabilink-bridge",
   "title": "RabiLink 是手机和 Rokid 的专用桥接消息端",
-  "content": "RabiLink 接入应走独立 rabilink message adapter 和 rabilink route kind：Rokid/灵珠插件把用户原话提交到公网 Relay，电脑端 RabiLink worker 直接从 Relay 领取任务并交给本机 RabiRoute，记录到 rabilink-voice-transcripts.jsonl，并在 AgentPacket 中明确要求回复必须经普通回复 API 回到 Relay 下行消息队列。Relay server 自带服务器侧 /manage WebGUI：首次注册账号后创建 RabiLink 应用，每个应用生成独立 rbl_... token，Rokid/灵珠插件和电脑端 worker 使用同一个应用 token，task、worker claim、task messages 和全局下行 messages 都按 app 隔离；旧公共 token 不再参与 RabiLink 任务鉴权，任务必须发送到该应用当前选择的 Rabi PC。服务器控制台的最近日志也按账号隔离，只保存插件提交、轮询、PC 领取/回复和 WebGUI 代理的脱敏摘要，用来排查消息有没有到达服务器，不应保存完整 token 或原始请求体。公开/模板插件不要把发布者 token 写进插件级 Service token/API key，应使用 AGENT_TOKEN OpenAPI，让智能体引用工具时把 token 参数绑定为该智能体自己的 RabiLink 应用 token。手机 App 只作为可选调试入口，不再作为主消息中转。Rokid/灵珠插件应先 submitRabiLinkTask 获取新的 taskId 和 cursor，再调用 getRabiLinkMessages(after) 拉全局下行消息；每次拉到一句就说一句，直到 messages 为空且 shouldContinue=false 才结束，避免复述历史会话。不应在公开示例里写真实域名、服务器 IP、token、设备 ID 或本机路径。",
+  "content": "RabiLink 接入应走独立 rabilink message adapter 和 rabilink route kind：Rokid/灵珠插件把用户原话提交到公网 Relay，电脑端 RabiLink worker 直接从 Relay 领取任务并交给本机 RabiRoute，记录到 rabilink-voice-transcripts.jsonl，并在 AgentPacket 中明确要求回复必须经普通回复 API 回到 Relay 下行消息队列。Relay server 自带服务器侧 /manage WebGUI：首次注册账号后创建 RabiLink 应用，每个应用生成独立 rbl_... token，Rokid/灵珠插件和电脑端 worker 使用同一个应用 token，task、worker claim、task messages 和全局下行 messages 都按 app 隔离；旧公共 token 不再参与 RabiLink 任务鉴权，任务必须发送到该应用当前选择的 Rabi PC。服务器控制台的最近日志也按账号隔离，只保存插件提交、轮询、PC 领取/回复和 WebGUI 代理的脱敏摘要，用来排查消息有没有到达服务器，不应保存完整 token 或原始请求体。公开/模板插件不要把发布者 token 写进插件级 Service token/API key，应使用 AGENT_TOKEN OpenAPI，让智能体引用工具时把 token 参数绑定为该智能体自己的 RabiLink 应用 token；Cloudflare Worker 只能透明代理和改写 OpenAPI server URL，不应保存或注入公共转发 token。手机 App 只作为可选调试入口，不再作为主消息中转。Rokid/灵珠插件应先 submitRabiLinkTask 获取新的 taskId 和 cursor，再调用 getRabiLinkMessages(after) 拉全局下行消息；每次拉到一句就说一句，直到 messages 为空且 shouldContinue=false 才结束，避免复述历史会话。不应在公开示例里写真实域名、服务器 IP、token、设备 ID 或本机路径。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：RabiLink Rokid/Relay 直连边界和脱敏规则"
   },
   "createdAt": "2026-07-06T00:00:00+08:00",
-  "updatedAt": "2026-07-08T23:32:00+08:00",
-  "keywords": ["RabiLink", "rabilink", "Rokid", "Relay", "worker", "message adapter", "route kind", "taskId", "getRabiLinkMessages", "应用 token", "AGENT_TOKEN", "server admin", "account logs", "outbox", "脱敏"]
+  "updatedAt": "2026-07-08T23:48:00+08:00",
+  "keywords": ["RabiLink", "rabilink", "Rokid", "Relay", "worker", "Cloudflare Worker", "message adapter", "route kind", "taskId", "getRabiLinkMessages", "应用 token", "AGENT_TOKEN", "server admin", "account logs", "outbox", "脱敏"]
 }

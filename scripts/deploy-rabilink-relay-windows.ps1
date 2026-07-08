@@ -3,7 +3,7 @@ param(
     [string]$Username = "Administrator",
     [string]$KeyPath = "$HOME\.ssh\id_ed25519",
     [string]$Domain = "",
-    [string]$Token = $env:RABILINK_RELAY_TOKEN,
+    [string]$Token = $env:RABILINK_RELAY_LEGACY_TOKEN,
     [string]$RemoteRoot = "C:\opt\rabilink-relay",
     [string]$CaddyVersion = "2.8.4",
     [int]$PublicHttpPort = 0
@@ -47,7 +47,11 @@ if ([string]::IsNullOrWhiteSpace($Domain)) {
     }
 }
 if ([string]::IsNullOrWhiteSpace($Token)) {
-    $Token = Get-ConfigString -Config $relayConfig -Name "token"
+    $Token = Get-ConfigString -Config $relayConfig -Name "legacyToken"
+}
+if ([string]::IsNullOrWhiteSpace($Token) -and $env:RABILINK_RELAY_TOKEN) {
+    Write-Host "[deploy] RABILINK_RELAY_TOKEN is a legacy server token name. Prefer deploying without it, or use -Token only for old-client error compatibility." -ForegroundColor Yellow
+    $Token = [string]$env:RABILINK_RELAY_TOKEN
 }
 
 if ([string]::IsNullOrWhiteSpace($ServerIp)) {
@@ -56,10 +60,6 @@ if ([string]::IsNullOrWhiteSpace($ServerIp)) {
 if ([string]::IsNullOrWhiteSpace($Domain)) {
     throw "Domain is required. Pass -Domain <public-domain> or set data\rabilink-relay\config.json publicBaseUrl/publicHost."
 }
-if ([string]::IsNullOrWhiteSpace($Token)) {
-    throw "Token is required. Pass -Token <long-random-token> or set RABILINK_RELAY_TOKEN."
-}
-
 function Invoke-RemotePowerShell {
     param(
         [string]$Command
@@ -123,6 +123,13 @@ Copy-Item -LiteralPath $openApiFile -Destination (Join-Path $bundleDataRoot "rok
 Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json") -Force
 Copy-Item -LiteralPath $agentTokenOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.AGENT_TOKEN.openapi.json") -Force
 
+$escapedLegacyToken = ([string]$Token).Replace('`', '``').Replace('"', '`"')
+$legacyTokenBootstrap = if ([string]::IsNullOrWhiteSpace($Token)) {
+    'Remove-Item Env:RABILINK_RELAY_TOKEN -ErrorAction SilentlyContinue'
+} else {
+    "`$env:RABILINK_RELAY_TOKEN = `"$escapedLegacyToken`""
+}
+
 New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 {
   "name": "rabilink-relay",
@@ -137,7 +144,7 @@ New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 
 New-AsciiFile -Path (Join-Path $bundleRoot "start-rabilink-relay.ps1") -Content @"
 `$ErrorActionPreference = "Continue"
-`$env:RABILINK_RELAY_TOKEN = "$Token"
+$legacyTokenBootstrap
 `$env:RABILINK_RELAY_PORT = "8788"
 `$env:RABILINK_RELAY_HOST = "127.0.0.1"
 `$env:RABILINK_RELAY_DATA_DIR = "$RemoteRoot\data"

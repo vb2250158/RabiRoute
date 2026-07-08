@@ -1,11 +1,16 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$WorkerBaseUrl,
-    [string]$Token = $env:RABILINK_RELAY_TOKEN,
+    [string]$Token = $env:RABILINK_RELAY_APP_TOKEN,
     [switch]$SkipQueueSmoke
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($Token) -and $env:RABILINK_RELAY_TOKEN) {
+    Write-Host "[warn] RABILINK_RELAY_TOKEN is a legacy server token name. Prefer RABILINK_RELAY_APP_TOKEN or -Token with a /manage app token." -ForegroundColor Yellow
+    $Token = [string]$env:RABILINK_RELAY_TOKEN
+}
 
 function Join-Url {
     param(
@@ -84,8 +89,8 @@ if ($SkipQueueSmoke) {
     exit 0
 }
 
-if (-not $Token.Trim()) {
-    throw "Token is required for worker queue smoke. Pass -Token or set RABILINK_RELAY_TOKEN. Use -SkipQueueSmoke to skip authenticated checks."
+if ([string]::IsNullOrWhiteSpace($Token)) {
+    throw "An app token is required for worker queue smoke. Pass -Token or set RABILINK_RELAY_APP_TOKEN to a /manage application token. Use -SkipQueueSmoke to skip authenticated checks."
 }
 
 $authHeaders = @{
