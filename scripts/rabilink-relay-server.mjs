@@ -360,7 +360,7 @@ function accountStorePayload(account, options = {}) {
     ok: true,
     setupRequired: store.accounts.length === 0,
     account: account ? publicAccount(account) : null,
-    apps: apps.map((app) => publicApp(app, { revealToken: app.id === options.revealAppId })),
+    apps: apps.map((app) => publicApp(app, { revealToken: true })),
     workers: workers.map((worker) => publicWorker(worker, appsById.get(worker.appId))),
     dataPath: path.relative(process.cwd(), appStorePath).replace(/\\/g, "/")
   };
@@ -1833,7 +1833,7 @@ function adminPageHtml() {
           <div class="title-row">
             <div>
               <div class="title">应用列表</div>
-              <div class="note">完整 token 只在创建或重新生成时显示；每个应用可以指定要通讯的 Rabi PC。</div>
+              <div class="note">卡片默认显示 token 预览，登录后可以随时复制完整 token；每个应用可以指定要通讯的 Rabi PC。</div>
             </div>
           </div>
           <div id="apps" class="app-list"></div>
@@ -2016,7 +2016,7 @@ function adminPageHtml() {
         });
         if (body.app?.token) state.revealed[body.app.id] = body.app.token;
         el("appNotes").value = "";
-        flash("notice", "应用已创建，token 仅本次显示。");
+        flash("notice", "应用已创建，可随时复制完整 token。");
         await load();
       } catch (error) {
         flash("alert", error.message);
@@ -2046,9 +2046,10 @@ function adminPageHtml() {
     }
 
     async function copyToken(id) {
-      const token = state.revealed[id];
+      const app = state.apps.find((item) => item.id === id);
+      const token = app?.token || state.revealed[id];
       if (!token) {
-        flash("notice", "完整 token 只显示一次；需要查看请重新生成。");
+        flash("notice", "未拿到完整 token，请刷新后重试。");
         return;
       }
       await navigator.clipboard.writeText(token);
@@ -2215,7 +2216,7 @@ function adminPageHtml() {
       container.innerHTML = "";
       el("empty").classList.toggle("hidden", state.apps.length > 0);
       for (const app of state.apps) {
-        const token = state.revealed[app.id] || app.tokenPreview || "";
+        const token = app.tokenPreview || (state.revealed[app.id] ? "完整 token 已加载" : "");
         const node = document.createElement("div");
         node.className = "app";
         node.innerHTML =

@@ -29,7 +29,7 @@ node scripts/rabilink-relay-server.mjs
 https://你的域名/manage
 ```
 
-首次进入时注册一个服务器账号，然后创建 RabiLink 应用。每个应用会生成独立 `rbl_...` token；完整 token 只在创建或重新生成时显示一次。Rokid/灵珠插件和电脑端 RabiLink worker 都使用同一个应用 token，Relay 会按应用隔离 task 和下行消息队列。
+首次进入时注册一个服务器账号，然后创建 RabiLink 应用。每个应用会生成独立 `rbl_...` token；控制台卡片默认显示 token 预览，但登录后可以随时复制完整 token。Rokid/灵珠插件和电脑端 RabiLink worker 都使用同一个应用 token，Relay 会按应用隔离 task 和下行消息队列。
 
 `RABILINK_RELAY_TOKEN` 仍然兼容旧部署；设置后它是全局 token，可以访问所有应用的任务。新部署优先使用 `/manage` 创建的应用 token。
 
