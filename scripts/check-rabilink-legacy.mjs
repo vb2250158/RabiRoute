@@ -70,6 +70,51 @@ const checks = [
       [/\$env:RABILINK_RELAY_APP_TOKEN/, "worker smoke test should use the app token env var."],
     ],
   },
+  {
+    file: "docs/mobile-app-webhook-integration.md",
+    required: [
+      [/手机 App 远程接入 RabiRoute 历史方案/, "old mobile webhook document should be clearly marked historical."],
+      [/当前真源：Rokid\/灵珠公网主链路和手机端 RabiLink 绑定流程见 `docs\/rabilink-relay-server\.md`/, "old mobile webhook document should point to the current Relay source of truth."],
+      [/不要把这里的 `rabi\.example\.com`、`\/webhook`、`\/api\/mobile\/\*` 或手机桥 outbox 当作当前 RabiLink 主链路/, "old mobile webhook document should explicitly reject the old path as current RabiLink."],
+    ],
+  },
+  {
+    file: "docs/README.md",
+    required: [
+      [/\[RabiLink Relay 公网中继\]\(rabilink-relay-server\.md\).*当前 Rokid\/灵珠和手机端 RabiLink 主链路/s, "docs index should put the current RabiLink Relay document in front."],
+      [/\[手机 App 远程接入历史方案\]\(mobile-app-webhook-integration\.md\).*仅作历史参考/s, "docs index should mark the old mobile document as historical."],
+    ],
+  },
+  {
+    file: "docs/project-function-map.md",
+    forbidden: [
+      [/\| RabiLink 直连 \|/, "project function map should not present the local /rabilink endpoint as the current public direct path."],
+      [/RabiLink \/ Relay \/ Rokid：看 RabiLink 直连/, "project function map search guide should not point to the old direct name."],
+    ],
+    required: [
+      [/\| RabiLink 本地兼容入口 \|/, "project function map should name /rabilink as a local compatibility endpoint."],
+      [/公网主链路走 Relay worker/, "project function map should state that the public RabiLink path goes through the Relay worker."],
+    ],
+  },
+  {
+    file: "ribiwebgui/src/components/QuickSetupDialog.vue",
+    forbidden: [
+      [/docs\/mobile-app-webhook-integration\.md/, "RabiLink quick setup help must not send users to the old mobile webhook document."],
+    ],
+    required: [
+      [/docs\/rabilink-relay-server\.md/, "RabiLink quick setup help should point to the current Relay document."],
+      [/全局 RabiLink 配置里填写公网 Relay 地址和应用 token/, "RabiLink quick setup copy should refer to global config and app token."],
+    ],
+  },
+  {
+    file: "ribiwebgui/src/pages/ProjectDocsPage.vue",
+    forbidden: [
+      [/docs: \["docs\/mobile-app-webhook-integration\.md", "docs\/rabilink-relay-server\.md"\]/, "RabiLink docs page should not prioritize the old mobile webhook document."],
+    ],
+    required: [
+      [/docs: \["docs\/rabilink-relay-server\.md", "docs\/rabilink-relay-cloudflare-worker\.md", "docs\/mobile-app-webhook-integration\.md"\]/, "RabiLink docs page should prioritize current Relay docs, with old mobile docs last."],
+    ],
+  },
 ];
 
 function readText(relativePath) {
