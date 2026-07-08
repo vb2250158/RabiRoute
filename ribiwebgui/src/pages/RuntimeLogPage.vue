@@ -25,6 +25,7 @@ const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || 
 const agentState = computed(() => runtime.value.codexState || {});
 const logs = computed(() => (runtime.value.log || []).slice(-30).join("\n") || "暂无日志");
 const triggeringRuleId = ref("");
+const triggerResult = ref<{ ok: boolean; message: string } | null>(null);
 const deletingGateway = ref(false);
 const deleteError = ref("");
 const triggerableRules = computed(() => {
@@ -105,6 +106,7 @@ const webhookLikeAdapters = computed(() => adapters.value.filter(isWebhookLikeAd
 async function triggerRule(rule: { id: string; displayName: string; routeKind: "manual_trigger" | "heartbeat" }): Promise<void> {
   if (!gateway.value) return;
   triggeringRuleId.value = rule.id;
+  triggerResult.value = null;
   try {
     await store.manualTriggerGateway(gateway.value.id, {
       triggerId: rule.id,
@@ -113,6 +115,15 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
       routeKind: rule.routeKind,
       message: `Manual trigger: ${rule.displayName} (${rule.id})`
     });
+    triggerResult.value = {
+      ok: true,
+      message: `已触发「${rule.displayName}」，请在最近日志和通知数里确认投递结果。`
+    };
+  } catch (error) {
+    triggerResult.value = {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    };
   } finally {
     triggeringRuleId.value = "";
   }
@@ -264,11 +275,20 @@ async function deleteCurrentGateway(): Promise<void> {
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">
           <div>
-            <div class="section-title">Manual Triggers</div>
-            <div class="section-note">Run manual_trigger or heartbeat rules with their selected message template.</div>
+            <div class="section-title">手动触发</div>
+            <div class="section-note">用当前消息模板投递一次 manual_trigger 或 heartbeat，用来验证 Agent 端接收链路。</div>
           </div>
           <v-chip variant="tonal">{{ triggerableRules.length }}</v-chip>
         </div>
+        <v-alert
+          v-if="triggerResult"
+          :type="triggerResult.ok ? 'success' : 'error'"
+          variant="tonal"
+          density="compact"
+          class="mb-3"
+        >
+          {{ triggerResult.message }}
+        </v-alert>
         <div v-if="triggerableRules.length" class="rule-list">
           <div v-for="rule in triggerableRules" :key="rule.id" class="rule-card">
             <div class="d-flex justify-space-between ga-3 align-center flex-wrap">
@@ -283,14 +303,14 @@ async function deleteCurrentGateway(): Promise<void> {
                 :loading="triggeringRuleId === rule.id"
                 :disabled="rule.enabled === false || Boolean(triggeringRuleId)"
                 @click="triggerRule(rule)"
-              >Run</v-btn>
+              >触发</v-btn>
             </div>
           </div>
         </div>
         <div v-else class="empty-state">
           <div>
-            <strong>No manual trigger rules</strong>
-            <span>Add a manual_trigger or heartbeat rule in persona templates first.</span>
+            <strong>暂无可手动触发的规则</strong>
+            <span>请先在人格模板里新增 manual_trigger 或 heartbeat 规则。</span>
           </div>
         </div>
       </v-card>

@@ -44,6 +44,9 @@ const roleDirLabel = computed(() => runtime.value.roleInfo?.rolesDir || "./data/
 const routeKindQuery = ref("");
 const routeKindDefinitions = computed(() => routeKindDefinitionsForGateway(gateway.value || undefined));
 const selectedRouteKindCount = computed(() => activeRule.value?.routeKinds?.length || 0);
+const activeRuleDiagnostics = computed(() => activeRule.value ? ruleDiagnostics(activeRule.value) : []);
+const activeRuleNotes = computed(() => activeRule.value ? ruleNotes(activeRule.value) : []);
+const ruleDiagnosticsCount = computed(() => rules.value.reduce((count, rule) => count + ruleDiagnostics(rule).length, 0));
 const scheduleTypeOptions = [
   { title: "每隔一段时间", value: "interval" },
   { title: "每天指定时间", value: "daily_time" },
@@ -85,6 +88,35 @@ function openRule(index: number): void {
 
 function patchRule(patch: Partial<NotificationRule>): void {
   store.updateRule(activeRuleIndex.value, patch);
+}
+
+function ruleDiagnostics(rule: NotificationRule): string[] {
+  const issues: string[] = [];
+  if (!Array.isArray(rule.routeKinds) || rule.routeKinds.length === 0) {
+    issues.push("未选择路由类型时会匹配全部入口；建议明确选择要接收的消息来源。");
+  }
+  if (rule.regex && !/\{[a-zA-Z0-9_]+\}/.test(rule.regex)) {
+    try {
+      new RegExp(rule.regex);
+    } catch {
+      issues.push("消息匹配正则无法解析，保存后可能导致匹配失败。");
+    }
+  }
+  if (rule.routeKinds?.includes("heartbeat") && (!Array.isArray(rule.schedules) || rule.schedules.length === 0)) {
+    issues.push("包含 heartbeat 但没有定时计划，只能通过手动触发验证。");
+  }
+  return issues;
+}
+
+function ruleNotes(rule: NotificationRule): string[] {
+  const notes: string[] = [];
+  if (!String(rule.template || "").trim()) {
+    notes.push("模板为空时仍会发送基础 AgentPacket，只是不追加自定义模板正文。");
+  }
+  if (rule.regex && /\{[a-zA-Z0-9_]+\}/.test(rule.regex)) {
+    notes.push("正则包含路由变量，保存后会按运行时变量展开再匹配。");
+  }
+  return notes;
 }
 
 function toggleRouteKind(kind: string, checked: boolean): void {
@@ -292,8 +324,14 @@ watch(() => store.selectedGatewayId, (id) => {
             <div class="section-title">消息模板规则</div>
             <div class="section-note">命中消息后，按这些模板包装再发送给 Agent。</div>
           </div>
-          <v-chip color="secondary" variant="tonal">{{ rules.length }} 条模板</v-chip>
+          <div class="d-flex ga-2 flex-wrap">
+            <v-chip v-if="ruleDiagnosticsCount" color="warning" variant="tonal">{{ ruleDiagnosticsCount }} 个待检查项</v-chip>
+            <v-chip color="secondary" variant="tonal">{{ rules.length }} 条模板</v-chip>
+          </div>
         </div>
+        <v-alert v-if="ruleDiagnosticsCount" type="warning" variant="tonal" density="compact" class="mb-3">
+          有规则可能无法按预期命中。展开对应规则后可查看具体提示，修正后再保存。
+        </v-alert>
         <div v-if="rules.length === 0" class="empty-state">
           <div>
             <strong>暂无消息模板规则</strong>
@@ -307,6 +345,28 @@ watch(() => store.selectedGatewayId, (id) => {
                 <div class="font-weight-bold text-primary">{{ rule.name }}</div>
                 <div class="section-note">{{ routeKindSummary(rule) }} · {{ rule.regex ? `匹配：${rule.regex}` : "不限关键词" }}</div>
                 <div class="section-note mt-1">{{ ruleTemplateSnippet(rule) }}</div>
+                <div v-if="ruleDiagnostics(rule).length" class="mt-2 d-flex ga-2 flex-wrap">
+                  <v-chip
+                    v-for="issue in ruleDiagnostics(rule)"
+                    :key="issue"
+                    size="small"
+                    color="warning"
+                    variant="tonal"
+                  >
+                    {{ issue }}
+                  </v-chip>
+                </div>
+                <div v-if="ruleNotes(rule).length" class="mt-2 d-flex ga-2 flex-wrap">
+                  <v-chip
+                    v-for="note in ruleNotes(rule)"
+                    :key="note"
+                    size="small"
+                    color="secondary"
+                    variant="tonal"
+                  >
+                    {{ note }}
+                  </v-chip>
+                </div>
               </div>
               <div class="rule-card-actions">
                 <v-switch
@@ -364,6 +424,12 @@ watch(() => store.selectedGatewayId, (id) => {
           </div>
         </v-card-title>
         <v-card-text>
+          <v-alert v-if="activeRuleDiagnostics.length" type="warning" variant="tonal" density="compact" class="mb-3">
+            <div v-for="issue in activeRuleDiagnostics" :key="issue">{{ issue }}</div>
+          </v-alert>
+          <v-alert v-if="activeRuleNotes.length" type="info" variant="tonal" density="compact" class="mb-3">
+            <div v-for="note in activeRuleNotes" :key="note">{{ note }}</div>
+          </v-alert>
           <section class="fold-section">
             <button class="fold-section-head" type="button" @click="ruleMatchParamsOpen = !ruleMatchParamsOpen">
               <span>

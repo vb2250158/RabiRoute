@@ -103,6 +103,8 @@ const napcatHealthResult = ref<{
 const copyResult = ref("");
 const openingMarvis = ref(false);
 const marvisOpenResult = ref<{ ok: boolean; message: string } | null>(null);
+const applySaving = ref(false);
+const applyError = ref("");
 
 async function runAgentScan(): Promise<void> {
   if (agentScan.value.loading) return;
@@ -645,6 +647,11 @@ const agentReady = computed(() => {
 const personaReady = computed(() => true);
 const canSave = computed(() => messageReady.value && agentReady.value && personaReady.value);
 const completedSteps = computed(() => [messageReady.value, agentReady.value, personaReady.value].filter(Boolean).length);
+const saveBlockReason = computed(() => {
+  if (!messageReady.value) return "消息入口还有必要字段没有填写，请回到第一步补全端口、地址或路径。";
+  if (!agentReady.value) return "Agent 绑定还有必要字段没有填写，请回到第二步补全项目目录、会话或服务地址。";
+  return "";
+});
 
 const steps = computed(() => [
   {
@@ -713,6 +720,7 @@ function syncFromGateway() {
   astrbotLoginResult.value = null;
   marvisOpenResult.value = null;
   copyResult.value = "";
+  applyError.value = "";
 }
 
 watch(
@@ -739,9 +747,22 @@ function goNext() {
 }
 
 async function apply() {
-  store.applyQuickSetup({ ...form, agentRoleId: String(form.agentRoleId || "") });
-  await store.save();
-  open.value = false;
+  if (!canSave.value || applySaving.value) {
+    applyError.value = saveBlockReason.value || "当前配置还不能保存。";
+    return;
+  }
+  applySaving.value = true;
+  applyError.value = "";
+  try {
+    store.applyQuickSetup({ ...form, agentRoleId: String(form.agentRoleId || "") });
+    await store.save();
+    open.value = false;
+  } catch (error: unknown) {
+    applyError.value = error instanceof Error ? error.message : String(error);
+    activeStep.value = messageReady.value ? (agentReady.value ? 3 : 2) : 1;
+  } finally {
+    applySaving.value = false;
+  }
 }
 </script>
 
@@ -1306,7 +1327,10 @@ async function apply() {
                   <div class="status-row"><span>人格</span><b>{{ form.agentRoleId || "不配置人格" }}</b></div>
                 </div>
                 <v-alert v-if="!canSave" class="mt-4" type="warning" variant="tonal">
-                  还有必要字段没有填写，请回到对应步骤补全。
+                  {{ saveBlockReason || "还有必要字段没有填写，请回到对应步骤补全。" }}
+                </v-alert>
+                <v-alert v-if="applyError" class="mt-4" type="error" variant="tonal">
+                  {{ applyError }}
                 </v-alert>
               </v-window-item>
             </v-window>
@@ -1319,7 +1343,7 @@ async function apply() {
         <v-spacer />
         <v-btn variant="text" @click="open = false">稍后再配</v-btn>
         <v-btn v-if="activeStep < 3" color="primary" variant="tonal" @click="goNext">下一步</v-btn>
-        <v-btn v-else color="primary" :disabled="!canSave" :loading="store.saving" @click="apply">保存配置</v-btn>
+        <v-btn v-else color="primary" :disabled="!canSave || applySaving" :loading="applySaving || store.saving" @click="apply">保存配置</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
