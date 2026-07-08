@@ -25,8 +25,10 @@ function isOpenApiPath(pathname) {
   return (
     pathname === "/rokid/rabilink/openapi.json" ||
     pathname === "/rokid/rabilink/openapi.manual-auth.json" ||
+    pathname === "/rokid/rabilink/openapi.agent-token.json" ||
     pathname === "/openapi/rokid-rabilink-plugin.json" ||
-    pathname === "/openapi/rokid-rabilink-plugin.manual-auth.json"
+    pathname === "/openapi/rokid-rabilink-plugin.manual-auth.json" ||
+    pathname === "/openapi/rokid-rabilink-plugin.agent-token.json"
   );
 }
 
@@ -97,6 +99,7 @@ async function proxyRequest(request, env) {
       upstream: upstreamBase,
       openapi: `${requestUrl.origin}/rokid/rabilink/openapi.json`,
       manualAuthOpenapi: `${requestUrl.origin}/rokid/rabilink/openapi.manual-auth.json`,
+      agentTokenOpenapi: `${requestUrl.origin}/rokid/rabilink/openapi.agent-token.json`,
     });
   }
 

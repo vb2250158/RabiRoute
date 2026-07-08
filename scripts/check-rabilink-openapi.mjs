@@ -16,6 +16,12 @@ const candidates = [
     requiresSecurityScheme: false,
   },
   {
+    file: "examples/rabilink-relay/rokid-rabilink-plugin.AGENT_TOKEN.example.json",
+    serverUrl: "https://rabi.example.com",
+    requiresSecurityScheme: false,
+    requiresTokenParameter: true,
+  },
+  {
     file: "data/rabilink-relay/rokid-rabilink-plugin.CURRENT.openapi.json",
     requiresSecurityScheme: true,
     rejectExampleServer: true,
@@ -24,6 +30,13 @@ const candidates = [
   {
     file: "data/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.openapi.json",
     requiresSecurityScheme: false,
+    rejectExampleServer: true,
+    optional: true,
+  },
+  {
+    file: "data/rabilink-relay/rokid-rabilink-plugin.AGENT_TOKEN.openapi.json",
+    requiresSecurityScheme: false,
+    requiresTokenParameter: true,
     rejectExampleServer: true,
     optional: true,
   },
@@ -124,6 +137,20 @@ function validateDocument(candidate) {
     validateResponses(candidate.file, operation, routePath, method);
     if (method === "get") {
       assert(!operation.requestBody, `${candidate.file}: GET ${routePath} must not define requestBody.`);
+    }
+  }
+
+  if (candidate.requiresTokenParameter) {
+    for (const [routePath, method] of requiredPaths) {
+      const operation = getOperation(document, routePath, method);
+      if (method === "get") {
+        const paramNames = new Set((operation.parameters || []).map((parameter) => parameter.name));
+        assert(paramNames.has("token"), `${candidate.file}: GET ${routePath} should expose token query parameter.`);
+      } else {
+        const schema = operation.requestBody?.content?.["application/json"]?.schema;
+        assert(schema?.properties?.token, `${candidate.file}: ${method.toUpperCase()} ${routePath} should expose token body property.`);
+        assert((schema.required || []).includes("token"), `${candidate.file}: ${method.toUpperCase()} ${routePath} should require token body property.`);
+      }
     }
   }
 

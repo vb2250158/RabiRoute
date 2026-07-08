@@ -45,8 +45,10 @@ Worker 会代理这些路径：
 /health
 /rokid/rabilink/openapi.json
 /rokid/rabilink/openapi.manual-auth.json
+/rokid/rabilink/openapi.agent-token.json
 /openapi/rokid-rabilink-plugin.json
 /openapi/rokid-rabilink-plugin.manual-auth.json
+/openapi/rokid-rabilink-plugin.agent-token.json
 /rokid/rabilink/tasks
 /rokid/rabilink/tasks/<taskId>/messages
 /rokid/rabilink/messages
@@ -124,6 +126,14 @@ https://rabilink-relay.<你的 workers 子域>.workers.dev/rokid/rabilink/openap
 Parameter name：X-RabiLink-Token
 Service token / API key：填当前 Relay token
 ```
+
+如果要做公开/模板插件，不要把发布者 token 写到插件级鉴权里。导入 agent-token 版：
+
+```text
+https://rabilink-relay.<你的 workers 子域>.workers.dev/rokid/rabilink/openapi.agent-token.json
+```
+
+然后在智能体引用工具的参数配置里，把 `token` 绑定为该智能体自己的 RabiLink 应用 token。这个版本的 POST 接口使用 body `token`，GET 接口使用 query `token`。
 
 ## 验证
 

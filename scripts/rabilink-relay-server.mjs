@@ -7,7 +7,6 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypt
 const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 8788);
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
 const legacyToken = process.env.RABILINK_RELAY_TOKEN || "";
-const allowInsecure = process.env.RABILINK_RELAY_ALLOW_INSECURE === "1";
 const replyTimeoutMs = clamp(Number(process.env.RABILINK_RELAY_REPLY_TIMEOUT_MS || 60000), 1000, 120000);
 const messageWaitMs = clamp(Number(process.env.RABILINK_RELAY_MESSAGE_WAIT_MS || 60000), 0, 60000);
 const outboxWaitMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 60000), 0, 60000);
@@ -31,6 +30,11 @@ const manualAuthOpenApiFileCandidates = [
   path.join(dataDir, "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"),
   path.join(process.cwd(), "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json")
 ].filter(Boolean);
+const agentTokenOpenApiFileCandidates = [
+  process.env.RABILINK_RELAY_AGENT_TOKEN_OPENAPI_FILE ? path.resolve(process.env.RABILINK_RELAY_AGENT_TOKEN_OPENAPI_FILE) : "",
+  path.join(dataDir, "rokid-rabilink-plugin.AGENT_TOKEN.openapi.json"),
+  path.join(process.cwd(), "rokid-rabilink-plugin.AGENT_TOKEN.openapi.json")
+].filter(Boolean);
 const toolImportPostmanFileCandidates = [
   process.env.RABILINK_RELAY_TOOL_IMPORT_POSTMAN_FILE ? path.resolve(process.env.RABILINK_RELAY_TOOL_IMPORT_POSTMAN_FILE) : "",
   path.join(dataDir, "rokid-rabilink-tools-import.CURRENT.postman.json"),
@@ -38,8 +42,8 @@ const toolImportPostmanFileCandidates = [
 ].filter(Boolean);
 
 fs.mkdirSync(dataDir, { recursive: true });
-if (!legacyToken && !allowInsecure && !hasEnabledRabiLinkApps()) {
-  console.warn("RABILINK_RELAY_TOKEN is not set and no enabled app tokens exist yet. Open /manage to create the first account and app token.");
+if (!hasEnabledRabiLinkApps()) {
+  console.warn("No enabled RabiLink app tokens exist yet. Open /manage to create the first account and app token.");
 }
 
 /** @type {Map<string, RelayTask>} */
@@ -307,6 +311,19 @@ function findEnabledAppByToken(value) {
   return readAppStore().apps.find((app) => app.enabled !== false && app.token === requestText) || null;
 }
 
+function workerOnline(worker) {
+  const lastSeenMs = Date.parse(worker?.lastSeenAt || "");
+  if (!Number.isFinite(lastSeenMs)) return false;
+  return Date.now() - lastSeenMs <= Math.max(workerTaskWaitMs * 2, 120000);
+}
+
+function selectedWorkerForApp(app) {
+  const targetDeviceId = stringValue(app?.targetDeviceId);
+  if (!app || !targetDeviceId) return null;
+  return readAppStore().workers.find((worker) => worker.appId === app.id
+    && (worker.id === targetDeviceId || worker.guid === targetDeviceId)) || null;
+}
+
 function publicAccount(account) {
   return {
     id: account.id,
@@ -332,8 +349,6 @@ function publicApp(app, options = {}) {
 }
 
 function publicWorker(worker, app) {
-  const lastSeenMs = Date.parse(worker.lastSeenAt || "");
-  const lastSeenAgeMs = Number.isFinite(lastSeenMs) ? Date.now() - lastSeenMs : null;
   const appTokenPreview = app ? app.tokenPreview || rabiLinkTokenPreview(app.token) : "";
   return {
     id: worker.id,
@@ -344,7 +359,7 @@ function publicWorker(worker, app) {
     appTokenPreview,
     firstSeenAt: worker.firstSeenAt || "",
     lastSeenAt: worker.lastSeenAt || "",
-    online: typeof lastSeenAgeMs === "number" && lastSeenAgeMs <= Math.max(workerTaskWaitMs * 2, 120000)
+    online: workerOnline(worker)
   };
 }
 
@@ -620,21 +635,68 @@ function requestToken(req, url, body) {
 
 function authorizeRabiLinkRequest(req, url, body) {
   const requestTokenValue = requestToken(req, url, body);
-  if (legacyToken && requestTokenValue === legacyToken) {
-    return { ok: true, app: null, legacy: true, insecure: false };
-  }
   const app = findEnabledAppByToken(requestTokenValue);
   if (app) {
     return { ok: true, app, legacy: false, insecure: false };
   }
-  if (!legacyToken && allowInsecure) {
-    return { ok: true, app: null, legacy: false, insecure: true };
+  if (legacyToken && requestTokenValue === legacyToken) {
+    return {
+      ok: false,
+      app: null,
+      legacy: true,
+      insecure: false,
+      statusCode: 401,
+      message: "旧版公共 token 已停用。请在 RabiLink服务器控制台复制对应应用 token，并让灵珠插件和 PC Rabi 使用同一个应用 token。"
+    };
   }
   return { ok: false, app: null, legacy: false, insecure: false };
 }
 
+function sendRabiLinkAuthError(res, auth) {
+  return sendRabiLinkError(res, auth.statusCode || 401, auth.message || "Unauthorized");
+}
+
+function sendRabiLinkError(res, statusCode, message) {
+  return sendJson(res, statusCode, {
+    code: -1,
+    ok: false,
+    status: "failed",
+    done: true,
+    shouldContinue: false,
+    message,
+    text: message,
+    answer: message,
+    reply: message,
+    content: message
+  });
+}
+
+function requireRokidAppTarget(auth) {
+  if (!auth.app) {
+    const error = new Error("请使用 RabiLink服务器控制台里对应应用的 token。");
+    error.statusCode = 401;
+    throw error;
+  }
+  if (!auth.app.targetDeviceId) {
+    const error = new Error("这个 RabiLink 应用还没有选择要通讯的 Rabi PC。请先在 RabiLink服务器控制台为该应用选择一台已连接的 Rabi PC。");
+    error.statusCode = 409;
+    throw error;
+  }
+  const worker = selectedWorkerForApp(auth.app);
+  if (!worker) {
+    const error = new Error(`找不到这个应用绑定的 Rabi PC：${auth.app.targetDeviceId}`);
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!workerOnline(worker)) {
+    const error = new Error(`这个应用绑定的 Rabi PC 当前未连接：${worker.name || worker.id}`);
+    error.statusCode = 503;
+    throw error;
+  }
+  return worker;
+}
+
 function canAccessTask(auth, task) {
-  if (auth.legacy || auth.insecure) return true;
   return Boolean(auth.app && task.appId === auth.app.id);
 }
 
@@ -1361,7 +1423,8 @@ function rokidResponse(task) {
 
 async function handleRokid(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  requireRokidAppTarget(auth);
   const task = createTask(body, req, auth);
   const wait = url.searchParams.get("wait");
   const shouldWait = wait == null || wait === "1" || wait.toLowerCase() === "true";
@@ -1372,7 +1435,8 @@ async function handleRokid(req, url, res, body) {
 
 function handleRokidCreateTask(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  requireRokidAppTarget(auth);
   const outboxCursor = currentOutboxCursor();
   const task = createTask(body, req, auth);
   sendJson(res, 200, {
@@ -1391,7 +1455,7 @@ function handleRokidCreateTask(req, url, res, body) {
 
 function handleRokidTaskRead(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/rokid\/rabilink\/tasks\/([^/]+)$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const task = tasks.get(taskId);
@@ -1412,7 +1476,7 @@ function handleRokidTaskRead(req, url, res, body) {
 
 async function handleRokidTaskMessages(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/rokid\/rabilink\/tasks\/([^/]+)\/messages$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const task = tasks.get(taskId);
@@ -1439,7 +1503,7 @@ async function handleRokidTaskMessages(req, url, res, body) {
 
 async function handleRokidOutboxMessages(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   cleanupTasks();
   const appId = auth.app?.id || "";
   const hasCursor = url.searchParams.has("after") || url.searchParams.has("cursor");
@@ -1453,7 +1517,7 @@ async function handleRokidOutboxMessages(req, url, res, body) {
 
 async function handleWorkerTasks(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const limit = clamp(Number(url.searchParams.get("limit") || 1), 1, 10);
   const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
   const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || deviceId);
@@ -1479,7 +1543,7 @@ async function handleWorkerTasks(req, url, res, body) {
 
 async function handleWorkerWebguiRequests(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const limit = clamp(Number(url.searchParams.get("limit") || 1), 1, 5);
   const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
   const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || deviceId);
@@ -1505,12 +1569,12 @@ async function handleWorkerWebguiRequests(req, url, res, body) {
 
 function handleWorkerWebguiResponse(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/worker\/webgui-requests\/([^/]+)\/response$/);
   const requestId = match ? decodeURIComponent(match[1]) : "";
   const request = webguiRequests.get(requestId);
   if (!request) return sendJson(res, 404, { code: -1, ok: false, message: `WebGUI request not found: ${requestId}` });
-  if (!auth.legacy && !auth.insecure && auth.app?.id !== request.appId) {
+  if (auth.app?.id !== request.appId) {
     return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
   }
   const finished = finishWebguiRequest(requestId, body);
@@ -1519,7 +1583,7 @@ function handleWorkerWebguiResponse(req, url, res, body) {
 
 function handleTaskResult(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)\/result$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const taskBefore = findTaskOrThrow(taskId);
@@ -1530,7 +1594,7 @@ function handleTaskResult(req, url, res, body) {
 
 function handleTaskMessagesAppend(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)\/messages$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const taskBefore = findTaskOrThrow(taskId);
@@ -1547,7 +1611,7 @@ function handleTaskMessagesAppend(req, url, res, body) {
 
 function handleTaskFinish(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)\/finish$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const task = findTaskOrThrow(taskId);
@@ -1573,7 +1637,7 @@ function handleTaskFinish(req, url, res, body) {
 
 function handleTaskRead(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const task = tasks.get(taskId);
@@ -2559,7 +2623,8 @@ async function mobileProxyJson(app, worker, method, localPath, body = null) {
 
 async function handleMobileApi(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
-  if (!auth.ok || !auth.app) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  if (!auth.app) return sendRabiLinkError(res, 401, "请使用 RabiLink服务器控制台里对应应用的 token。");
   const app = auth.app;
   if (req.method === "GET" && url.pathname === "/api/rabilink/mobile/state") {
     return sendJson(res, 200, mobileStatePayload(app));
@@ -2693,7 +2758,8 @@ const server = http.createServer(async (req, res) => {
           accounts: store.accounts.length,
           apps: store.apps.length,
           enabledApps: store.apps.filter((app) => app.enabled !== false).length,
-          legacyToken: Boolean(legacyToken)
+          publicTokenConfigured: Boolean(legacyToken),
+          publicTokenAccepted: false
         },
         queue: {
           total: tasks.size,
@@ -2707,6 +2773,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && (url.pathname === "/rokid/rabilink/openapi.manual-auth.json" || url.pathname === "/openapi/rokid-rabilink-plugin.manual-auth.json")) {
       return sendOpenApi(res, manualAuthOpenApiFileCandidates);
+    }
+    if (req.method === "GET" && (url.pathname === "/rokid/rabilink/openapi.agent-token.json" || url.pathname === "/openapi/rokid-rabilink-plugin.agent-token.json")) {
+      return sendOpenApi(res, agentTokenOpenApiFileCandidates);
     }
     if (req.method === "GET" && (url.pathname === "/rokid/rabilink/tools.postman.json" || url.pathname === "/openapi/rokid-rabilink-tools.postman.json")) {
       return sendOpenApi(res, toolImportPostmanFileCandidates);
@@ -2758,6 +2827,12 @@ const server = http.createServer(async (req, res) => {
     const statusCode = Number(error.statusCode || 500);
     const message = error instanceof Error ? error.message : String(error);
     writeEvent("request_error", { path: url.pathname, message });
+    if (url.pathname === "/rokid/rabilink"
+      || url.pathname === "/api/rokid/rabilink"
+      || url.pathname.startsWith("/rokid/rabilink/")
+      || url.pathname.startsWith("/api/rokid/rabilink/")) {
+      return sendRabiLinkError(res, statusCode, message);
+    }
     return sendJson(res, statusCode, { code: -1, ok: false, message });
   }
 });

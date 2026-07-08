@@ -31,7 +31,9 @@ https://你的域名/manage
 
 首次进入时注册一个服务器账号，然后创建 RabiLink 应用。每个应用会生成独立 `rbl_...` token；控制台卡片默认显示 token 预览，但登录后可以随时复制完整 token。Rokid/灵珠插件和电脑端 RabiLink worker 都使用同一个应用 token，Relay 会按应用隔离 task 和下行消息队列。
 
-`RABILINK_RELAY_TOKEN` 仍然兼容旧部署；设置后它是全局 token，可以访问所有应用的任务。新部署优先使用 `/manage` 创建的应用 token。
+旧公共 token 不再参与 RabiLink 任务鉴权。Rokid/灵珠插件、手机端和电脑端 worker 都必须使用对应应用 token；服务器会按应用隔离 task、worker 领取、WebGUI 请求和下行消息队列，避免任务绕过应用绑定并被多台 PC 广播领取。
+
+每个应用必须在控制台选择一台要通讯的 Rabi PC。眼镜提交任务时，如果这个应用没有选择 PC、选中的 PC 不存在或已经离线，服务器会直接返回错误，不会创建无目标任务。
 
 绑定电脑端 RabiLink worker 后，服务器也可以通过同一条 Relay 通道访问这台 PC 的 RibiWebGUI。服务器路径中的 RabiGUID 根路径等同于 PC 本机 manager 根路径：
 
@@ -389,7 +391,7 @@ Authorization: Bearer <token>
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `RABILINK_RELAY_TOKEN` | 空 | 兼容旧部署的全局 token；新部署优先用 `/manage` 创建应用 token |
+| `RABILINK_RELAY_TOKEN` | 空 | 已废弃的旧公共 token；Relay server 不再接受它处理 RabiLink 任务。PC worker 侧同名环境变量如仍使用，必须填 `/manage` 创建的应用 token 值。 |
 | `RABILINK_RELAY_PORT` / `PORT` | `8788` | 监听端口 |
 | `RABILINK_RELAY_HOST` / `HOST` | `0.0.0.0` | 监听地址 |
 | `RABILINK_RELAY_REPLY_TIMEOUT_MS` | `60000` | Rokid 请求最多等待 worker 回填多久 |
@@ -402,7 +404,6 @@ Authorization: Bearer <token>
 | `RABILINK_RELAY_LEASE_MS` | `45000` | worker 取到任务后的租约时间 |
 | `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志和服务器 WebGUI 账号/应用数据目录 |
 | `RABILINK_RELAY_APP_STORE_FILE` | `<dataDir>/apps.json` | 账号、密码哈希、应用和 token 存储文件 |
-| `RABILINK_RELAY_ALLOW_INSECURE` | `0` | 本地测试可设为 `1` 跳过 token |
 
 ## Rizon 导入文件
 
@@ -416,6 +417,7 @@ Authorization: Bearer <token>
 ```text
 data/rabilink-relay/rokid-rabilink-plugin.CURRENT.openapi.json
 data/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.openapi.json
+data/rabilink-relay/rokid-rabilink-plugin.AGENT_TOKEN.openapi.json
 data/rabilink-relay/rokid-rabilink-tools-import.CURRENT.postman.json
 data/rabilink-relay/rokid-rabilink-tools-import.CURRENT.openapi.json
 ```
@@ -425,6 +427,7 @@ data/rabilink-relay/rokid-rabilink-tools-import.CURRENT.openapi.json
 ```text
 examples/rabilink-relay/rokid-rabilink-plugin.CURRENT.example.json
 examples/rabilink-relay/rokid-rabilink-plugin.MANUAL_AUTH.example.json
+examples/rabilink-relay/rokid-rabilink-plugin.AGENT_TOKEN.example.json
 examples/rabilink-relay/rokid-rabilink-tools-import.example.postman.json
 examples/rabilink-relay/rokid-rabilink-tools-import.example.json
 ```
@@ -491,6 +494,20 @@ Parameter name：X-RabiLink-Token
 Service token / API key：填 `/manage` 里对应 RabiLink 应用的 token
 ```
 
+公开插件不要在插件级 `Service token / API key` 里写入发布者自己的 token。公开/模板分发时使用 agent-token 版：
+
+```text
+https://rabi.example.com/rokid/rabilink/openapi.agent-token.json
+```
+
+备用同内容路径：
+
+```text
+https://rabi.example.com/openapi/rokid-rabilink-plugin.agent-token.json
+```
+
+这个版本不声明 OpenAPI security scheme。它把 `token` 暴露成工具参数：`submitRabiLinkTask` 通过 JSON body 的 `token` 传入，`getRabiLinkMessages` 和调试查询接口通过 query `token` 传入。导入后应在智能体引用工具的参数配置里，把 `token` 绑定为该智能体自己的 RabiLink 应用 token（固定值或变量），不要让模型临时生成、朗读或询问用户的 token。
+
 本地文件导入时使用：
 
 ```text
@@ -503,6 +520,12 @@ Service token / API key：填 `/manage` 里对应 RabiLink 应用的 token
 
 ```text
 <repo>\data\rabilink-relay\rokid-rabilink-plugin.MANUAL_AUTH.openapi.json
+```
+
+公开/模板版本地文件：
+
+```text
+<repo>\data\rabilink-relay\rokid-rabilink-plugin.AGENT_TOKEN.openapi.json
 ```
 
 这个文件使用：
@@ -597,7 +620,15 @@ $env:RABILINK_RELAY_TOKEN = "填入当前应用 token"
 开一个终端启动：
 
 ```powershell
-$env:RABILINK_RELAY_ALLOW_INSECURE="1"
+$tmp = Join-Path $env:TEMP "rabilink-relay-smoke"
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$now = (Get-Date).ToUniversalTime().ToString("o")
+@{
+  accounts = @(@{ id="account-smoke"; username="smoke"; passwordHash=""; passwordSalt=""; createdAt=$now; updatedAt=$now })
+  apps = @(@{ id="app-smoke"; name="Rokid Glass"; ownerAccountId="account-smoke"; enabled=$true; token="app-token-smoke"; targetDeviceId="pc-a"; createdAt=$now; updatedAt=$now })
+  workers = @(@{ id="pc-a"; guid="guid-pc-a"; name="pc-a"; appId="app-smoke"; firstSeenAt=$now; lastSeenAt=$now })
+} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $tmp "apps.json") -Encoding UTF8
+$env:RABILINK_RELAY_DATA_DIR=$tmp
 node scripts/rabilink-relay-server.mjs
 ```
 
@@ -606,14 +637,17 @@ node scripts/rabilink-relay-server.mjs
 ```powershell
 $rokid = Start-Job -ScriptBlock {
   Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8788/rokid/rabilink" `
+    -Headers @{ "X-RabiLink-Token" = "app-token-smoke" } `
     -ContentType "application/json" `
     -Body '{"text":"RabiLink Relay 本地烟测"}'
 }
 
-$task = Invoke-RestMethod -Uri "http://127.0.0.1:8788/worker/tasks?limit=1"
+$task = Invoke-RestMethod -Uri "http://127.0.0.1:8788/worker/tasks?limit=1&deviceId=pc-a" `
+  -Headers @{ "X-RabiLink-Token" = "app-token-smoke" }
 $id = $task.tasks[0].id
 
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8788/worker/tasks/$id/result" `
+  -Headers @{ "X-RabiLink-Token" = "app-token-smoke" } `
   -ContentType "application/json" `
   -Body '{"ok":true,"replyText":"Relay 回包成功"}'
 

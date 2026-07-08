@@ -1,0 +1,438 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "RabiLinkMessage",
+    "version": "1.0.0",
+    "description": "RabiLinkMessage 用于把用户在 Rokid 智能体中说出的内容转发到 RabiLink Relay。电脑端 RabiLink worker 会直接领取任务，交给 RabiRoute 和 Codex 处理，并把回复返回给眼镜智能体。 这是公开/模板版：OpenAPI 内不声明 securitySchemes，也不要在插件级 Service token/API key 写入个人 token。请在智能体引用工具时，把 token 参数绑定到该智能体自己的 RabiLink 应用 token。POST 接口通过 JSON body.token 传入，GET 接口通过 query token 传入。"
+  },
+  "servers": [
+    {
+      "url": "https://rabi.example.com"
+    }
+  ],
+  "paths": {
+    "/rokid/rabilink/tasks": {
+      "post": {
+        "operationId": "submitRabiLinkTask",
+        "summary": "提交 RabiLink 任务",
+        "description": "把用户原话提交到 RabiLink Relay，并立即返回新的 taskId 和当前下行 cursor。每次用户新输入都会创建新 taskId；眼镜端后续优先调用 getRabiLinkMessages，把 submit 返回的 cursor 或 nextCursor 作为 after，持续拉取下行消息并逐条转述。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text",
+                  "token"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "用户原始说话内容，或需要通过 RabiLink 转交给 Codex 的请求。"
+                  },
+                  "sender": {
+                    "type": "string",
+                    "description": "可选发送者显示名称，例如 Rokid user。"
+                  },
+                  "context": {
+                    "type": "string",
+                    "description": "可选简短上下文，帮助 RabiLink 理解消息来源和对话场景。"
+                  },
+                  "token": {
+                    "type": "string",
+                    "description": "RabiLink 应用 token。公开插件模板中不要让模型生成或朗读此值，应在智能体工具参数里绑定为固定值或变量。"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功返回 JSON。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "0 表示成功，非 0 表示失败。"
+                    },
+                    "ok": {
+                      "type": "boolean",
+                      "description": "接口是否成功。"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "任务状态。"
+                    },
+                    "taskId": {
+                      "type": "string",
+                      "description": "任务 ID，后续轮询时使用。"
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "智能体可以转述给用户的文本。"
+                    },
+                    "answer": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "reply": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "cursor": {
+                      "type": "string",
+                      "description": "提交任务时的全局下行游标，可作为 getRabiLinkMessages 第一次调用的 after。"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "description": "与 cursor 相同，可作为 getRabiLinkMessages 第一次调用的 after。"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rokid/rabilink/messages": {
+      "get": {
+        "operationId": "getRabiLinkMessages",
+        "summary": "拉取 RabiLink 下行消息",
+        "description": "持续拉取 RabiLink Relay 的全局下行消息队列，不需要传 taskId。第一次使用 submitRabiLinkTask 返回的 cursor 或 nextCursor 作为 after；之后每次使用本接口返回的 nextCursor 继续拉取。messages 中每一条都是需要立刻对用户转述的一句话；拉到一句说一句，不要合并等待，不要限制轮询次数。返回的每条 message 会带 taskId，用来标识它属于哪次用户请求。",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "已经读过的最后一条全局下行消息 ID。第一次使用 submitRabiLinkTask 返回的 cursor 或 nextCursor；如果没有 cursor，可留空。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "RabiLink 应用 token。公开插件模板中不要让模型生成或朗读此值，应在智能体工具参数里绑定为固定值或变量。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回 after 之后的新增下行消息列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "0 表示成功，非 0 表示失败。"
+                    },
+                    "ok": {
+                      "type": "boolean",
+                      "description": "接口是否成功。"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "下行队列状态。messages 表示本次有新消息；idle 表示当前没有新消息但仍有任务处理中；done 表示当前没有新消息且没有打开任务。"
+                    },
+                    "done": {
+                      "type": "boolean",
+                      "description": "当前是否没有打开任务且没有新消息。"
+                    },
+                    "shouldContinue": {
+                      "type": "boolean",
+                      "description": "是否继续调用本接口。眼镜端作为常驻播报通道时，即使为 false，也可以在下一次用户输入后继续从保存的 nextCursor 拉取。"
+                    },
+                    "cursor": {
+                      "type": "string",
+                      "description": "当前全局下行游标。"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "description": "下一次轮询时传入 after。"
+                    },
+                    "messages": {
+                      "type": "array",
+                      "description": "after 之后的新下行消息列表。智能体必须按顺序逐条自然转述，拉到一句说一句。",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "全局下行消息游标 ID，后续可作为 after。"
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "description": "全局下行消息序号。"
+                          },
+                          "taskId": {
+                            "type": "string",
+                            "description": "这条下行消息所属的 RabiLink 任务 ID。"
+                          },
+                          "taskMessageId": {
+                            "type": "string",
+                            "description": "该任务内的消息 ID。"
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "description": "创建时间戳。"
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "要立刻转述给用户的一条消息。"
+                          },
+                          "final": {
+                            "type": "boolean",
+                            "description": "是否为该任务的最后一条消息。"
+                          },
+                          "status": {
+                            "type": "string",
+                            "description": "消息产生时任务状态。"
+                          }
+                        }
+                      }
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "本次 messages 合并后的文本，仅用于调试；眼镜端应优先逐条处理 messages。"
+                    },
+                    "answer": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "reply": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "失败原因。"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rokid/rabilink/tasks/{taskId}/messages": {
+      "get": {
+        "operationId": "getRabiLinkTaskMessages",
+        "summary": "调试：拉取指定 RabiLink 任务消息列表",
+        "description": "按 submitRabiLinkTask 返回的 taskId 拉取该任务下的新增回复列表。这个接口主要用于调试或只关心单个任务的场景；眼镜端常驻播报优先使用不需要 taskId 的 getRabiLinkMessages。",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "description": "submitRabiLinkTask 返回的任务 ID。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "已经读过的该任务内最后一条消息 ID。第一次拉取留空，后续使用上一次返回的 nextCursor。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "RabiLink 应用 token。公开插件模板中不要让模型生成或朗读此值，应在智能体工具参数里绑定为固定值或变量。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回该任务下的新增消息列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "0 表示成功，非 0 表示失败。"
+                    },
+                    "ok": {
+                      "type": "boolean",
+                      "description": "接口是否成功。"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "任务消息流状态。messages/done/failed/streaming。"
+                    },
+                    "taskId": {
+                      "type": "string",
+                      "description": "submitRabiLinkTask 返回的任务 ID。"
+                    },
+                    "done": {
+                      "type": "boolean",
+                      "description": "电脑端 RabiLink worker 是否已调用 finish 结束该任务。"
+                    },
+                    "shouldContinue": {
+                      "type": "boolean",
+                      "description": "是否继续调用本接口。true 表示任务未结束，或本次仍返回了需要处理的 messages；false 表示该 taskId 的消息已拉空且任务已结束。"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "description": "下一次轮询时传入 after。"
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "本次 messages 合并后的文本。"
+                    },
+                    "answer": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "reply": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "messages": {
+                      "type": "array",
+                      "description": "该 taskId 下 after 之后的新消息列表。智能体应逐条转述，处理完后保存 nextCursor。",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "任务内消息游标 ID。"
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "description": "任务内消息序号。"
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "description": "创建时间戳。"
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "要转述给用户的一条消息。"
+                          },
+                          "final": {
+                            "type": "boolean",
+                            "description": "是否为最后一条消息。"
+                          }
+                        }
+                      }
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "失败原因。"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rokid/rabilink/tasks/{taskId}": {
+      "get": {
+        "operationId": "getRabiLinkTaskResult",
+        "summary": "查询 RabiLink 任务状态",
+        "description": "查询指定 RabiLink 任务状态。主要用于调试；眼镜端回复拉取应优先使用 getRabiLinkMessages，不要把本接口的 text/reply/answer/content 当成用户回复重复播报。",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "description": "submitRabiLinkTask 返回的任务 ID。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "RabiLink 应用 token。公开插件模板中不要让模型生成或朗读此值，应在智能体工具参数里绑定为固定值或变量。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回 JSON。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "0 表示成功，非 0 表示失败。"
+                    },
+                    "ok": {
+                      "type": "boolean",
+                      "description": "接口是否成功。"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "任务状态。"
+                    },
+                    "taskId": {
+                      "type": "string",
+                      "description": "任务 ID，后续轮询时使用。"
+                    },
+                    "text": {
+                      "type": "string",
+                      "description": "智能体可以转述给用户的文本。"
+                    },
+                    "answer": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "reply": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "与 text 相同，用于兼容平台。"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

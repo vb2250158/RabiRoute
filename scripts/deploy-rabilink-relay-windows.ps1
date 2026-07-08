@@ -86,6 +86,7 @@ $webguiDist = Join-Path $repoRoot "ribiwebgui\dist"
 $webguiAssets = Join-Path $repoRoot "assets"
 $openApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.CURRENT.openapi.json"
 $manualAuthOpenApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"
+$agentTokenOpenApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.AGENT_TOKEN.openapi.json"
 if (-not (Test-Path -LiteralPath $relayScript)) {
     throw "Relay server script was not found: $relayScript"
 }
@@ -100,6 +101,9 @@ if (-not (Test-Path -LiteralPath $openApiFile)) {
 }
 if (-not (Test-Path -LiteralPath $manualAuthOpenApiFile)) {
     throw "RabiLink manual auth OpenAPI document was not found: $manualAuthOpenApiFile"
+}
+if (-not (Test-Path -LiteralPath $agentTokenOpenApiFile)) {
+    throw "RabiLink agent token OpenAPI document was not found: $agentTokenOpenApiFile"
 }
 if (-not (Test-Path -LiteralPath $KeyPath)) {
     throw "SSH key was not found: $KeyPath"
@@ -117,6 +121,7 @@ Copy-Item -LiteralPath $webguiDist -Destination (Join-Path $bundleRoot "ribiwebg
 Copy-Item -LiteralPath $webguiAssets -Destination (Join-Path $bundleRoot "assets") -Recurse -Force
 Copy-Item -LiteralPath $openApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.CURRENT.openapi.json") -Force
 Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json") -Force
+Copy-Item -LiteralPath $agentTokenOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.AGENT_TOKEN.openapi.json") -Force
 
 New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 {
