@@ -18,6 +18,7 @@ const checks = [
     file: "src/manager/controlPlaneRoutes.ts",
     forbidden: [
       [/RABILINK_RELAY_TOKEN/, "gateway child env must not emit the legacy relay token variable."],
+      [/legacy-route/, "runtime status should call route-level migration fallback route-fallback, not legacy-route."],
       [/url\.pathname\.startsWith\(["']\/admin\/api\//, "server control APIs should only live under /manage/api."],
       [/url\.pathname\s*===\s*["']\/admin["']/, "server control UI should only live under /manage."],
     ],

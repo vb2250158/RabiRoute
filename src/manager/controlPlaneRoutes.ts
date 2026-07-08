@@ -2342,7 +2342,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     rabiLinkRelayDeviceId: rabiLinkRelay.deviceId,
     rabiLinkRelayClaimWaitMs: rabiLinkRelay.claimWaitMs,
     rabiLinkRelayReplyIdleTimeoutMs: rabiLinkRelay.replyIdleTimeoutMs,
-    rabiLinkRelayConfigScope: hasGlobalRabiLinkRelayConfig() ? "global" : "legacy-route",
+    rabiLinkRelayConfigScope: hasGlobalRabiLinkRelayConfig() ? "global" : "route-fallback",
     wecomBotId: runtime.definition.wecomBotId,
     wecomBotSecret: runtime.definition.wecomBotSecret,
     wecomWsUrl: runtime.definition.wecomWsUrl,
