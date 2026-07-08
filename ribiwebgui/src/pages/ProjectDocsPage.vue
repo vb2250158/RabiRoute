@@ -136,7 +136,7 @@ const features: DocFeature[] = [
     sideEffects: "写消息 / 回复日志，可能投递 Agent；relay worker 会轮询云端",
     entry: "/rabilink、/rabilink/replies、relay scripts",
     code: ["src/adapters/rabilinkAdapter.ts", "src/adapters/rabilinkRelayWorker.ts", "src/adapters/rabilinkReplies.ts"],
-    docs: ["docs/mobile-app-webhook-integration.md", "docs/rabilink-relay-server.md"],
+    docs: ["docs/rabilink-relay-server.md", "docs/rabilink-relay-cloudflare-worker.md", "docs/mobile-app-webhook-integration.md"],
     keywords: "RabiLink Rokid relay replies worker webgui"
   },
   {
@@ -279,7 +279,7 @@ const features: DocFeature[] = [
     sideEffects: "创建任务、代理请求、启动 / 退出 manager",
     entry: "/api/remote-agent/*、/api/rabi/*、Start-RabiRoute-Tray.bat",
     code: ["src/messageEndpoints/remoteAgentManager.ts", "src/manager/rabiApi.ts", "desktop/tray-task-window/"],
-    docs: ["docs/mobile-app-webhook-integration.md", "docs/windows-launcher-and-packaging.md"],
+    docs: ["docs/rabi-agent-interfaces.md", "docs/windows-launcher-and-packaging.md"],
     keywords: "remote agent rabi instances tray windows"
   },
   {

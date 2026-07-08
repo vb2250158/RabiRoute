@@ -421,14 +421,14 @@ function webhookSetupHint(type: MessageAdapterType): string {
     return "需要小爱桥接层：PC 侧 xiaoai-rabiroute 服务 + 音箱侧 open-xiaoai/xiaogpt/自定义桥，把语音文本转发到这个地址。";
   }
   if (type === "rabilink") {
-    return "RabiLink 电脑端直连 Relay：在消息端配置公网 Relay 地址和 token 后，可把 Rokid/灵珠文本转给 Codex，并把回复写回眼镜侧。";
+    return "RabiLink 电脑端直连 Relay：在全局 RabiLink 配置里填写公网 Relay 地址和应用 token 后，可把 Rokid/灵珠文本转给 Codex，并把回复写回眼镜侧。";
   }
   return "通用 Webhook 只适合未命名外部系统；如果来源是具体工具，建议添加对应的专用消息端。";
 }
 
 function webhookSetupDocUrl(type: MessageAdapterType): string {
   if (type === "xiaoai") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/xiaoai-integration/xiaoai-rabiroute-intercept-route.md";
-  if (type === "rabilink") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/mobile-app-webhook-integration.md";
+  if (type === "rabilink") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/rabilink-relay-server.md";
   if (type === "fennenote") return "https://github.com/vb2250158/RabiRoute/blob/main/docs/voice-interaction-workstation.md";
   return "https://github.com/vb2250158/RabiRoute/blob/main/docs/configuration.md";
 }

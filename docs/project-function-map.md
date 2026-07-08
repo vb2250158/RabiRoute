@@ -55,7 +55,7 @@ Message Adapter
 | QQ / NapCat 消息端 | 已有 | NapCat WS / HTTP、route config、`group-messages.jsonl`、`private-messages.jsonl` | forwarding、Outbox QQ 发送 | 收到 QQ 事件时 | 写消息日志，可能投递 Agent；`/ping` 可能直接回复 | route 消息端、NapCat 管理 API | `src/adapters/napcatAdapter.ts`、`src/napcat.ts`、`src/messageEndpoints/napcatManager.ts` | `docs/napcat-unattended.md` |
 | QQ route kind 判断 | 已有 | OneBot event、回复链日志 | `forwardMessage(routeKind, record)` | 收到群消息时 | 影响规则匹配 | NapCat adapter | `src/adapters/napcatAdapter.ts` | `docs/routing-and-personas.md` |
 | Webhook / FenneNote / XiaoAi | 已有 | HTTP payload、`voice-transcripts.jsonl` | forwarding、语音工作站 | HTTP callback 到达时 | 写转写日志，可能投递 Agent | webhook 端口 / 路径 | `src/adapters/webhookAdapter.ts`、`src/messageEndpoints/webhookLikeScans.ts` | `docs/voice-interaction-workstation.md` |
-| RabiLink 直连 | 已有 | HTTP payload、`rabilink-voice-transcripts.jsonl`、`rabilink-replies.jsonl` | forwarding、RabiLink 下行回复查询 | RabiLink 请求到达或拉取回复时 | 写消息 / 回复日志，可能投递 Agent | `/rabilink`、`/rabilink/replies` | `src/adapters/rabilinkAdapter.ts`、`src/adapters/rabilinkReplies.ts` | `docs/mobile-app-webhook-integration.md` |
+| RabiLink 本地兼容入口 | 已有 | HTTP payload、`rabilink-voice-transcripts.jsonl`、`rabilink-replies.jsonl` | forwarding、RabiLink 下行回复查询 | 本地调试 POST `/rabilink` 或 relay worker 转交任务时 | 写消息 / 回复日志，可能投递 Agent | `/rabilink`、`/rabilink/replies`；公网主链路走 Relay worker | `src/adapters/rabilinkAdapter.ts`、`src/adapters/rabilinkReplies.ts` | `docs/rabilink-relay-server.md` |
 | RabiLink Relay worker | 已有 | Relay URL / 应用 token / device id、relay tasks | RabiLink PC worker、WebGUI 远程代理 | gateway 启动且 relay 启用后 | 轮询云端、转发本地 WebGUI 请求、回传回复 | 全局 RabiLink 配置、relay scripts | `src/adapters/rabilinkRelayWorker.ts`、`scripts/rabilink-relay-server.mjs` | `docs/rabilink-relay-server.md` |
 | 企业微信消息端 | 已有 | WeCom SDK frame、route config、`wecom-messages.jsonl` | forwarding、Outbox WeCom 回复 | WebSocket 收到消息时 | 写消息日志，可能投递 Agent | route 消息端 | `src/adapters/wecomAdapter.ts`、`src/wecom.ts`、`src/messageEndpoints/wecomManager.ts` | `docs/wecom-integration.md` |
 | Heartbeat | 已有 | `notificationRules[].schedules`、heartbeat config | forwarding、AgentPacket | 定时器触发时 | 写 heartbeat 日志，可能投递 Agent | route 启用 heartbeat | `src/adapters/heartbeatAdapter.ts`、`src/scheduling/heartbeatSchedules.ts` | `docs/routing-and-personas.md` |
@@ -77,8 +77,8 @@ Message Adapter
 | 角色技能 | 已有 | `data/roles/<RoleId>/skills/*.md` | roleKnowledgeSnapshot、AgentPacket 技能索引 | AgentPacket 构造时 | 一般只读 | `/api/roles/:roleId/skills` | `src/roleKnowledge.ts` | `docs/plan-and-memory-model.md` |
 | Runtime log | 已有 | runtime stdout/stderr、adapter logs | WebGUI 日志页、排障 | 运行时持续产生 | 只读展示 | WebGUI 日志诊断 | `src/manager/runtimeRegistry.ts`、`ribiwebgui/src/pages/RuntimeLogPage.vue` | `docs/troubleshooting.md` |
 | Delivery replay | 已有 | `delivery-replay-ledger.jsonl` | replay API / manager child process | 投递后记录，用户触发 replay 时重放 | replay 会再次进入真实投递链路 | `/gateways/:id/delivery-replay` | `src/deliveryReplay.ts`、`src/deliveryReplayLedger.ts` | `docs/troubleshooting.md` |
-| Remote Agent | 已有 | remote-agent devices / tasks | 远端设备、manager API | 设备连接 / 任务创建 / 事件回报时 | 创建任务、接收任务事件，完成后可投递回本地 Agent | `/api/remote-agent/*` | `src/messageEndpoints/remoteAgentManager.ts` | `docs/mobile-app-webhook-integration.md` |
-| Rabi 多实例 API | 已有 | `manager.json`、runtime identity | 远端 / 多实例控制面 | API 调用时 | 代理其它实例的 routes / binding / replies | `/api/rabi/*` | `src/manager/rabiApi.ts` | `docs/mobile-app-webhook-integration.md` |
+| Remote Agent | 已有 | remote-agent devices / tasks | 远端设备、manager API | 设备连接 / 任务创建 / 事件回报时 | 创建任务、接收任务事件，完成后可投递回本地 Agent | `/api/remote-agent/*` | `src/messageEndpoints/remoteAgentManager.ts` | `docs/rabi-agent-interfaces.md` |
+| Rabi 多实例 API | 已有 | `manager.json`、runtime identity | 远端 / 多实例控制面 | API 调用时 | 代理其它实例的 routes / binding / replies | `/api/rabi/*` | `src/manager/rabiApi.ts` | `docs/rabi-agent-interfaces.md` |
 | Windows 托盘 | 已有 | manager HTTP API、打包资源 | Windows 桌面入口 | 用户启动托盘时 | 启动 / 退出 manager，显示任务窗口 | `Start-RabiRoute-Tray.bat`、托盘 exe | `desktop/tray-task-window/`、`scripts/build-tray-exe.ps1` | `docs/windows-launcher-and-packaging.md` |
 | 示例数据 | 已有 | `examples/data/` | 初次初始化、公开示例 | 首次无 data 目录时可复制 | 不应包含真实账号和 token | 仓库示例 | `examples/data/roles`、`examples/data/route` | `examples/data/README.md` |
 | 项目内 Skills | 已有 | `skills/` | Codex / Agent 开发指南 | Agent 读取 skill 时 | 无运行时副作用 | 仓库文件 | `skills/*/SKILL.md` | `skills/create-rabiroute-persona/SKILL.md` |
@@ -147,7 +147,7 @@ Message Adapter
 - 人格 / persona / role / `agentRoleId`：看人格绑定、人格正文、消息模板规则、计划、记忆、技能。
 - 规则 / route kind / notificationRules：看消息模板规则、RouteDecision、Heartbeat。
 - QQ / NapCat / OneBot：看 QQ 消息端、QQ route kind、Outbox QQ 回复。
-- RabiLink / Relay / Rokid：看 RabiLink 直连、Relay worker、RabiLink 回复。
+- RabiLink / Relay / Rokid：看 RabiLink 本地兼容入口、Relay worker、RabiLink 回复。
 - WeCom / 企业微信：看企业微信消息端、Outbox 回传。
 - Codex / Copilot / AstrBot / Marvis：看 Agent adapter。
 - 回复 / 外发 / draft / approval：看 Outbox / Reply、Pipeline presets。
