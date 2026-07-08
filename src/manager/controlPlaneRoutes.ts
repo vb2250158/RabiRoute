@@ -1192,7 +1192,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     RABILINK_WEBHOOK_HOST: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
     RABILINK_RELAY_ENABLED: rabiLinkRelay.url && rabiLinkRelay.token ? "1" : "",
     RABILINK_RELAY_URL: rabiLinkRelay.url,
-    RABILINK_RELAY_TOKEN: rabiLinkRelay.token,
+    RABILINK_RELAY_APP_TOKEN: rabiLinkRelay.token,
     RABILINK_RELAY_DEVICE_ID: rabiLinkRelay.deviceId || definition.id,
     RABILINK_RELAY_DEVICE_GUID: globalConfig.rabiGuid,
     RABILINK_RELAY_WEBGUI_URL: `http://127.0.0.1:${managerPort}`,
