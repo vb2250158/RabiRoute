@@ -7,11 +7,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if ([string]::IsNullOrWhiteSpace($Token) -and $env:RABILINK_RELAY_TOKEN) {
-    Write-Host "[warn] RABILINK_RELAY_TOKEN is a legacy server token name. Prefer RABILINK_RELAY_APP_TOKEN or -Token with a /manage app token." -ForegroundColor Yellow
-    $Token = [string]$env:RABILINK_RELAY_TOKEN
-}
-
 function Join-Url {
     param(
         [string]$Base,

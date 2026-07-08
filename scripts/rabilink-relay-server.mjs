@@ -6,7 +6,6 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypt
 
 const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 8788);
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
-const legacyToken = process.env.RABILINK_RELAY_TOKEN || "";
 const replyTimeoutMs = clamp(Number(process.env.RABILINK_RELAY_REPLY_TIMEOUT_MS || 60000), 1000, 120000);
 const messageWaitMs = clamp(Number(process.env.RABILINK_RELAY_MESSAGE_WAIT_MS || 60000), 0, 60000);
 const outboxWaitMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 60000), 0, 60000);
@@ -777,19 +776,9 @@ function authorizeRabiLinkRequest(req, url, body) {
   const requestTokenValue = requestToken(req, url, body);
   const app = findEnabledAppByToken(requestTokenValue);
   if (app) {
-    return { ok: true, app, legacy: false, insecure: false };
+    return { ok: true, app, insecure: false };
   }
-  if (legacyToken && requestTokenValue === legacyToken) {
-    return {
-      ok: false,
-      app: null,
-      legacy: true,
-      insecure: false,
-      statusCode: 401,
-      message: "旧版公共 token 已停用。请在 RabiLink服务器控制台复制对应应用 token，并让灵珠插件和 PC Rabi 使用同一个应用 token。"
-    };
-  }
-  return { ok: false, app: null, legacy: false, insecure: false };
+  return { ok: false, app: null, insecure: false };
 }
 
 function sendRabiLinkAuthError(res, auth) {
@@ -2460,11 +2449,7 @@ function adminPageHtml() {
 
     function targetOptionsForApp(app) {
       const appWorkers = workersForApp(app.id);
-      const options = [{
-        value: "",
-        title: appWorkers.length > 0 ? "自动选择可用 Rabi PC" : "自动选择（暂无已绑定 PC）",
-        subtitle: appWorkers.length > 0 ? "由服务器把任务交给当前可用的绑定 PC" : "绑定 PC 上线后会自动出现在这里"
-      }];
+      const options = [];
       for (const worker of appWorkers) {
         options.push({
           value: worker.id,
@@ -2498,8 +2483,8 @@ function adminPageHtml() {
       const search = combo.querySelector(".combo-search");
       const optionsNode = combo.querySelector(".combo-options");
       const options = targetOptionsForApp(app);
-      const selected = options.find((option) => option.value === (app.targetDeviceId || "")) || options[0];
-      valueNode.textContent = selected?.title || "自动选择";
+      const selected = options.find((option) => option.value === (app.targetDeviceId || ""));
+      valueNode.textContent = selected?.title || "未选择 Rabi PC";
 
       function paintOptions(filterText = "") {
         const normalized = filterText.trim().toLowerCase();
@@ -2528,7 +2513,7 @@ function adminPageHtml() {
           const empty = document.createElement("div");
           empty.className = "empty";
           empty.style.padding = "12px";
-          empty.textContent = "没有匹配的 Rabi PC";
+          empty.textContent = options.length === 0 ? "暂无使用这个应用 token 连接的 Rabi PC" : "没有匹配的 Rabi PC";
           optionsNode.appendChild(empty);
         }
       }
@@ -2714,7 +2699,6 @@ function adminPageHtml() {
 
 function manageApiPath(url) {
   if (url.pathname.startsWith("/manage/api/")) return url.pathname.slice("/manage/api".length) || "/";
-  if (url.pathname.startsWith("/admin/api/")) return url.pathname.slice("/admin/api".length) || "/";
   return "";
 }
 
@@ -2752,10 +2736,15 @@ function resolveOwnedWebguiTarget(account, targetRef, url) {
   const app = appsById.get(targetRef);
   if (app) {
     const appWorkers = ownedWorkers.filter((item) => item.appId === app.id);
+    if (!app.targetDeviceId) {
+      const error = new Error(`No Rabi PC is selected for this app: ${app.name || app.id}`);
+      error.statusCode = 409;
+      throw error;
+    }
     const selected = app.targetDeviceId
       ? appWorkers.find((item) => item.id === app.targetDeviceId || item.guid === app.targetDeviceId)
       : null;
-    worker = selected || appWorkers[0] || null;
+    worker = selected || null;
     if (worker) return { app, worker };
   }
   const error = new Error(`Rabi PC not found or offline for this account: ${targetRef}`);
@@ -2910,7 +2899,7 @@ function selectedMobileWorker(app, workers = mobileWorkersForApp(app)) {
     const selected = workers.find((worker) => worker.id === app.targetDeviceId || worker.guid === app.targetDeviceId);
     if (selected) return selected;
   }
-  return workers.find((worker) => worker.online) || workers[0] || null;
+  return null;
 }
 
 function mobileStatePayload(app) {
@@ -2956,6 +2945,11 @@ function mobileWorkerTarget(app, url, body = {}) {
   const worker = requested
     ? workers.find((item) => item.id === requested || item.guid === requested)
     : selectedMobileWorker(app, workers);
+  if (!requested && !app.targetDeviceId) {
+    const error = new Error("No Rabi PC is selected for this app token.");
+    error.statusCode = 409;
+    throw error;
+  }
   if (!worker) {
     const error = new Error("No Rabi PC is connected for this app token.");
     error.statusCode = 404;
@@ -3106,16 +3100,13 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   try {
     if (req.method === "OPTIONS") return sendJson(res, 204, {});
-    if (req.method === "GET" && (url.pathname === "/admin" || url.pathname === "/admin/")) {
-      return redirect(res, "/manage");
-    }
     if (url.pathname.startsWith("/manage/") && manageWebguiMatch(url)) {
       return await handleManageWebgui(req, url, res);
     }
     if (req.method === "GET" && (url.pathname === "/manage" || url.pathname === "/manage/" || /^\/manage\/[^/]+\/?$/.test(url.pathname))) {
       return sendHtml(res, adminPageHtml());
     }
-    if (url.pathname.startsWith("/admin/api/") || url.pathname.startsWith("/manage/api/")) {
+    if (url.pathname.startsWith("/manage/api/")) {
       return await handleAdminApi(req, url, res);
     }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
@@ -3131,7 +3122,7 @@ const server = http.createServer(async (req, res) => {
           accounts: store.accounts.length,
           apps: store.apps.length,
           enabledApps: store.apps.filter((app) => app.enabled !== false).length,
-          publicTokenConfigured: Boolean(legacyToken),
+          publicTokenConfigured: false,
           publicTokenAccepted: false
         },
         queue: {

@@ -391,7 +391,8 @@ Authorization: Bearer <token>
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `RABILINK_RELAY_TOKEN` | 空 | 已废弃的旧公共 token；Relay server 不再接受它处理 RabiLink 任务。PC worker 侧同名环境变量如仍使用，必须填 `/manage` 创建的应用 token 值。 |
+| `RABILINK_RELAY_APP_TOKEN` | 空 | 电脑端 RabiLink worker 使用的应用 token；从 `/manage/<账号>` 对应应用卡片复制。Relay server 自身不读取这个变量。 |
+| `RABILINK_RELAY_TOKEN` | 空 | 已废弃；不要再用于 Relay server 或 PC worker。 |
 | `RABILINK_RELAY_PORT` / `PORT` | `8788` | 监听端口 |
 | `RABILINK_RELAY_HOST` / `HOST` | `0.0.0.0` | 监听地址 |
 | `RABILINK_RELAY_REPLY_TIMEOUT_MS` | `60000` | Rokid 请求最多等待 worker 回填多久 |

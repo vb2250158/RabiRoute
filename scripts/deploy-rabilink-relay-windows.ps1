@@ -3,7 +3,6 @@ param(
     [string]$Username = "Administrator",
     [string]$KeyPath = "$HOME\.ssh\id_ed25519",
     [string]$Domain = "",
-    [string]$Token = "",
     [string]$RemoteRoot = "C:\opt\rabilink-relay",
     [string]$CaddyVersion = "2.8.4",
     [int]$PublicHttpPort = 0
@@ -115,13 +114,6 @@ Copy-Item -LiteralPath $openApiFile -Destination (Join-Path $bundleDataRoot "rok
 Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json") -Force
 Copy-Item -LiteralPath $agentTokenOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.AGENT_TOKEN.openapi.json") -Force
 
-$escapedLegacyToken = ([string]$Token).Replace('`', '``').Replace('"', '`"')
-$legacyTokenBootstrap = if ([string]::IsNullOrWhiteSpace($Token)) {
-    'Remove-Item Env:RABILINK_RELAY_TOKEN -ErrorAction SilentlyContinue'
-} else {
-    "`$env:RABILINK_RELAY_TOKEN = `"$escapedLegacyToken`""
-}
-
 New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 {
   "name": "rabilink-relay",
@@ -136,7 +128,7 @@ New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 
 New-AsciiFile -Path (Join-Path $bundleRoot "start-rabilink-relay.ps1") -Content @"
 `$ErrorActionPreference = "Continue"
-$legacyTokenBootstrap
+Remove-Item Env:RABILINK_RELAY_TOKEN -ErrorAction SilentlyContinue
 `$env:RABILINK_RELAY_PORT = "8788"
 `$env:RABILINK_RELAY_HOST = "127.0.0.1"
 `$env:RABILINK_RELAY_DATA_DIR = "$RemoteRoot\data"
@@ -185,9 +177,6 @@ http://:$PublicHttpPort {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /admin* {
-        reverse_proxy 127.0.0.1:8788
-    }
 
     handle {
         respond 404
@@ -232,9 +221,6 @@ http://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /admin* {
-        reverse_proxy 127.0.0.1:8788
-    }
 
     handle {
         respond 404
@@ -272,9 +258,6 @@ http://:80 {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /admin* {
-        reverse_proxy 127.0.0.1:8788
-    }
 
     handle {
         respond 404
@@ -312,9 +295,6 @@ https://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /admin* {
-        reverse_proxy 127.0.0.1:8788
-    }
 
     handle {
         respond 404

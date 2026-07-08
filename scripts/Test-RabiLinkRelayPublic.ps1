@@ -23,10 +23,6 @@ if (-not $ExpectedOpenApiServerUrl.Trim() -and $config -and [string]$config.open
 if (-not $DomainBaseUrl.Trim() -and $config -and [string]$config.domainBaseUrl) {
     $DomainBaseUrl = [string]$config.domainBaseUrl
 }
-if ([string]::IsNullOrWhiteSpace($Token) -and $env:RABILINK_RELAY_TOKEN) {
-    Write-Host "[warn] RABILINK_RELAY_TOKEN is a legacy server token name. Prefer RABILINK_RELAY_APP_TOKEN or -Token with a /manage app token." -ForegroundColor Yellow
-    $Token = [string]$env:RABILINK_RELAY_TOKEN
-}
 if ([string]::IsNullOrWhiteSpace($Token) -and $config -and [string]$config.appToken) {
     $Token = [string]$config.appToken
 }

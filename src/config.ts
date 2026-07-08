@@ -415,10 +415,10 @@ export const config = {
   rabiLinkWebhookHost: process.env.RABILINK_WEBHOOK_HOST ?? "0.0.0.0",
   rabiLinkRelayEnabled: parseBoolean(
     process.env.RABILINK_RELAY_ENABLED,
-    Boolean(normalizeOptionalString(process.env.RABILINK_RELAY_URL) && normalizeOptionalString(process.env.RABILINK_RELAY_TOKEN))
+    Boolean(normalizeOptionalString(process.env.RABILINK_RELAY_URL) && normalizeOptionalString(process.env.RABILINK_RELAY_APP_TOKEN))
   ),
   rabiLinkRelayUrl: normalizeOptionalString(process.env.RABILINK_RELAY_URL) ?? "",
-  rabiLinkRelayToken: normalizeOptionalString(process.env.RABILINK_RELAY_TOKEN) ?? "",
+  rabiLinkRelayToken: normalizeOptionalString(process.env.RABILINK_RELAY_APP_TOKEN) ?? "",
   rabiLinkRelayDeviceId: normalizeOptionalString(process.env.RABILINK_RELAY_DEVICE_ID)
     ?? normalizeOptionalString(process.env.COMPUTERNAME)
     ?? "rabilink-pc",
