@@ -167,8 +167,32 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+const sensitiveEventKeyPattern = /token|authorization|cookie|password|secret|text|message|content|raw|headers|body|response|reply/i;
+
+function sanitizeSharedEventData(value, depth = 0, key = "") {
+  if (depth > 6) return "[truncated]";
+  if (key && sensitiveEventKeyPattern.test(key)) {
+    if (value == null || value === "") return value;
+    if (Array.isArray(value)) return `[redacted:${value.length}]`;
+    if (typeof value === "object") return "[redacted]";
+    return "[redacted]";
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeSharedEventData(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        sanitizeSharedEventData(entryValue, depth + 1, entryKey)
+      ])
+    );
+  }
+  return value;
+}
+
 function writeEvent(event, data) {
-  const row = JSON.stringify({ time: nowIso(), event, data });
+  const row = JSON.stringify({ time: nowIso(), event, data: sanitizeSharedEventData(data) });
   fs.appendFile(eventLogPath, `${row}\n`, () => {});
 }
 
