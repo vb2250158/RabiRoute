@@ -39,7 +39,7 @@ function normalizedRelayBaseUrl(): string {
 
 function relayHeaders(hasBody = false): Record<string, string> {
   const headers: Record<string, string> = {
-    "X-RabiLink-Token": config.rabiLinkRelayToken,
+    "X-RabiLink-Token": config.rabiLinkRelayAppToken,
     "User-Agent": "RabiRoute/1.0"
   };
   if (hasBody) {

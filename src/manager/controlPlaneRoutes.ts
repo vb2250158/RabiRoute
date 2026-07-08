@@ -664,7 +664,7 @@ function rabiLinkRelayConfigFor(definition: GatewayDefinition): RabiLinkRelayGlo
   };
 }
 
-function firstLegacyRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null {
+function firstRouteLevelRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null {
   const globalConfig = rabiGlobalConfig.read();
   for (const definition of readConfig().gateways) {
     if (!definition.rabiLinkRelayUrl?.trim() && !definition.rabiLinkRelayToken?.trim()) continue;
@@ -685,7 +685,7 @@ function firstLegacyRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null {
 function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
   const globalRelay = rabiGlobalConfig.read().rabiLinkRelay;
   if (hasGlobalRabiLinkRelayConfig(globalRelay)) return globalRelay;
-  return firstLegacyRabiLinkRelayConfig() || globalRelay;
+  return firstRouteLevelRabiLinkRelayConfig() || globalRelay;
 }
 
 function writeAdapterConfigFile(definition: GatewayDefinition): void {

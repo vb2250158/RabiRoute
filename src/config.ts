@@ -418,7 +418,7 @@ export const config = {
     Boolean(normalizeOptionalString(process.env.RABILINK_RELAY_URL) && normalizeOptionalString(process.env.RABILINK_RELAY_APP_TOKEN))
   ),
   rabiLinkRelayUrl: normalizeOptionalString(process.env.RABILINK_RELAY_URL) ?? "",
-  rabiLinkRelayToken: normalizeOptionalString(process.env.RABILINK_RELAY_APP_TOKEN) ?? "",
+  rabiLinkRelayAppToken: normalizeOptionalString(process.env.RABILINK_RELAY_APP_TOKEN) ?? "",
   rabiLinkRelayDeviceId: normalizeOptionalString(process.env.RABILINK_RELAY_DEVICE_ID)
     ?? normalizeOptionalString(process.env.COMPUTERNAME)
     ?? "rabilink-pc",

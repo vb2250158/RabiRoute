@@ -9,9 +9,11 @@ const checks = [
     file: "src/config.ts",
     forbidden: [
       [/process\.env\.RABILINK_RELAY_TOKEN/, "runtime config must read RABILINK_RELAY_APP_TOKEN, not the legacy relay token name."],
+      [/rabiLinkRelayToken:/, "runtime config property should be named rabiLinkRelayAppToken."],
     ],
     required: [
       [/process\.env\.RABILINK_RELAY_APP_TOKEN/, "runtime config should read RABILINK_RELAY_APP_TOKEN."],
+      [/rabiLinkRelayAppToken:/, "runtime config should expose the application token as rabiLinkRelayAppToken."],
     ],
   },
   {
@@ -19,6 +21,7 @@ const checks = [
     forbidden: [
       [/RABILINK_RELAY_TOKEN/, "gateway child env must not emit the legacy relay token variable."],
       [/legacy-route/, "runtime status should call route-level migration fallback route-fallback, not legacy-route."],
+      [/firstLegacyRabiLinkRelayConfig/, "route-level migration fallback should not be named legacy."],
       [/url\.pathname\.startsWith\(["']\/admin\/api\//, "server control APIs should only live under /manage/api."],
       [/url\.pathname\s*===\s*["']\/admin["']/, "server control UI should only live under /manage."],
     ],

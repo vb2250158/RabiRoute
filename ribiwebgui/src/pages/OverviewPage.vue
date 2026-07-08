@@ -17,7 +17,7 @@ const rabiSaving = ref(false);
 const rabiSaved = ref(false);
 const rabiError = ref("");
 const rabiLinkRelayUrl = ref("");
-const rabiLinkRelayToken = ref("");
+const rabiLinkRelayAppToken = ref("");
 const rabiLinkRelayDeviceId = ref("");
 const rabiLinkRelayClaimWaitMs = ref(60000);
 const rabiLinkRelayReplyIdleTimeoutMs = ref(60000);
@@ -39,7 +39,7 @@ async function loadDirConfig() {
 function loadRabiLinkRelayForm(): void {
   const relay = store.meta.rabiLinkRelay || {};
   rabiLinkRelayUrl.value = relay.url || "";
-  rabiLinkRelayToken.value = relay.token || "";
+  rabiLinkRelayAppToken.value = relay.token || "";
   rabiLinkRelayDeviceId.value = relay.deviceId || store.meta.computerName || "";
   rabiLinkRelayClaimWaitMs.value = Number(relay.claimWaitMs || 60000);
   rabiLinkRelayReplyIdleTimeoutMs.value = Number(relay.replyIdleTimeoutMs || 60000);
@@ -79,7 +79,7 @@ async function saveRabiIdentity() {
         rabiName: rabiName.value,
         rabiLinkRelay: {
           url: rabiLinkRelayUrl.value,
-          token: rabiLinkRelayToken.value,
+          token: rabiLinkRelayAppToken.value,
           deviceId: rabiLinkRelayDeviceId.value,
           claimWaitMs: Number(rabiLinkRelayClaimWaitMs.value || 60000),
           replyIdleTimeoutMs: Number(rabiLinkRelayReplyIdleTimeoutMs.value || 60000)
@@ -373,7 +373,7 @@ const selectedRuntimeLabel = computed(() => {
         <div class="form-grid">
           <v-text-field v-model="rabiLinkRelayDeviceId" label="本机 Rabi PC 标识" :placeholder="store.meta.computerName || 'rabilink-pc'" density="compact" hide-details />
           <v-text-field v-model="rabiLinkRelayUrl" label="Relay 服务器地址" placeholder="https://rabiroute.example.com" density="compact" hide-details />
-          <v-text-field v-model="rabiLinkRelayToken" label="Relay 应用 token" placeholder="X-RabiLink-Token" type="password" density="compact" hide-details />
+          <v-text-field v-model="rabiLinkRelayAppToken" label="Relay 应用 token" placeholder="X-RabiLink-Token" type="password" density="compact" hide-details />
           <v-text-field v-model.number="rabiLinkRelayClaimWaitMs" label="领取任务等待毫秒" type="number" min="0" max="60000" step="1000" density="compact" hide-details />
           <v-text-field v-model.number="rabiLinkRelayReplyIdleTimeoutMs" label="回复空闲超时毫秒" type="number" min="1000" max="120000" step="1000" density="compact" hide-details />
         </div>
