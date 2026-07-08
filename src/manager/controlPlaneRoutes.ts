@@ -159,6 +159,7 @@ type GatewayDefinition = {
   privateNotificationTemplate?: string;
   heartbeatNotificationTemplate?: string;
   voiceTranscriptNotificationTemplate?: string;
+  recentMessageLimit?: number;
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
   roleRouteNames?: Record<string, string>;
@@ -168,6 +169,7 @@ type RouteProfileDefinition = {
   id: string;
   name?: string;
   enabled?: boolean;
+  recentMessageLimit?: number;
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   agentRoleId?: string;

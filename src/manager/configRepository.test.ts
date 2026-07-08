@@ -36,6 +36,35 @@ test("repository reads route config and falls back to personaConfig rules", () =
   assert.equal(config.gateways[0].notificationRules?.[0]?.template, "tick\ntock");
 });
 
+test("repository reads and writes persona recent message limit", () => {
+  const rootDir = makeTempRoot();
+  const adapterPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
+  const personaPath = path.join(rootDir, "data", "roles", "Rabi", "personaConfig.json");
+  writeJson(adapterPath, {
+    enabled: true,
+    messageAdapters: ["heartbeat"],
+    gatewayPort: 8789,
+    agentRoleId: "Rabi"
+  });
+  writeJson(personaPath, {
+    recentMessageLimit: 3,
+    notificationRules: [{ id: "heartbeat", routeKinds: ["heartbeat"], template: "tick" }]
+  });
+
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  const config = repo.readConfig();
+
+  assert.equal(config.gateways[0].recentMessageLimit, 3);
+  assert.equal(config.gateways[0].routeProfiles?.[0]?.recentMessageLimit, 3);
+
+  config.gateways[0].recentMessageLimit = 2;
+  repo.writeConfig(config);
+  const adapter = JSON.parse(fs.readFileSync(adapterPath, "utf8")) as GatewayDefinition;
+  const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition;
+  assert.equal(adapter.recentMessageLimit, undefined);
+  assert.equal(persona.recentMessageLimit, 2);
+});
+
 test("repository migrates legacy role rules to personaConfig and keeps adapter config clean", () => {
   const rootDir = makeTempRoot();
   const adapterPath = path.join(rootDir, "data", "route", "config-1", "adapterConfig.json");

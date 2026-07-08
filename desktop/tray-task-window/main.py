@@ -41,6 +41,98 @@ def _append_startup_log(project_root: Path, message: str) -> None:
         pass
 
 
+def _runtime_logs_dir(project_root: Path) -> Path:
+    logs_dir = project_root / "data" / "route" / "default-main" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    return logs_dir
+
+
+def _newer_than(target_time: float, paths: list[Path], suffixes: tuple[str, ...]) -> bool:
+    for source_path in paths:
+        if not source_path.exists():
+            continue
+        if source_path.is_file():
+            if source_path.stat().st_mtime > target_time:
+                return True
+            continue
+        for child in source_path.rglob("*"):
+            if child.is_file() and child.suffix.lower() in suffixes and child.stat().st_mtime > target_time:
+                return True
+    return False
+
+
+def _backend_needs_build(project_root: Path) -> bool:
+    dist_manager = project_root / "dist" / "manager.js"
+    if not dist_manager.exists():
+        return True
+    return _newer_than(
+        dist_manager.stat().st_mtime,
+        [project_root / "src"],
+        (".ts", ".tsx"),
+    )
+
+
+def _webgui_needs_build(project_root: Path) -> bool:
+    webgui_index = project_root / "ribiwebgui" / "dist" / "index.html"
+    webgui_assets = project_root / "ribiwebgui" / "dist" / "assets"
+    if not webgui_index.exists() or not webgui_assets.exists():
+        return True
+    return _newer_than(
+        webgui_index.stat().st_mtime,
+        [
+            project_root / "ribiwebgui" / "src",
+            project_root / "ribiwebgui" / "index.html",
+            project_root / "ribiwebgui" / "vite.config.ts",
+            project_root / "ribiwebgui" / "tsconfig.json",
+        ],
+        (".ts", ".tsx", ".vue", ".html", ".json"),
+    )
+
+
+def _npm_command() -> str | None:
+    return shutil.which("npm.cmd") or shutil.which("npm")
+
+
+def _run_npm_script(project_root: Path, script_name: str) -> bool:
+    npm = _npm_command()
+    if not npm:
+        _append_startup_log(project_root, f"npm was not found; cannot run npm run {script_name}.")
+        return False
+
+    try:
+        logs_dir = _runtime_logs_dir(project_root)
+        log_path = logs_dir / f"tray-npm-{script_name.replace(':', '-')}.log"
+        _append_startup_log(project_root, f"Running npm run {script_name}: {npm}")
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        with log_path.open("ab") as handle:
+            handle.write(f"\n[{time.strftime('%Y-%m-%dT%H:%M:%S')}] > {npm} run {script_name}\n".encode("utf-8"))
+            result = subprocess.run(
+                [npm, "run", script_name],
+                cwd=str(project_root),
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                creationflags=flags,
+                check=False,
+            )
+        if result.returncode != 0:
+            _append_startup_log(project_root, f"npm run {script_name} failed with code {result.returncode}. See {log_path}.")
+            return False
+        _append_startup_log(project_root, f"npm run {script_name} finished.")
+        return True
+    except Exception as error:
+        _append_startup_log(project_root, f"npm run {script_name} failed: {error}")
+        return False
+
+
+def _ensure_runtime_build(project_root: Path, manager_running: bool) -> None:
+    if manager_running:
+        if _webgui_needs_build(project_root):
+            _run_npm_script(project_root, "webgui:build")
+        return
+    if _backend_needs_build(project_root) or _webgui_needs_build(project_root):
+        _run_npm_script(project_root, "build")
+
+
 def _node_executable(project_root: Path) -> tuple[str, str]:
     env_node = os.environ.get("RABIROUTE_NODE")
     executable_name = "node.exe" if sys.platform == "win32" else "node"
@@ -107,9 +199,13 @@ def main() -> int:
     configure_process_app_identity()
     ensure_start_menu_shortcut(project_root)
 
+    manager_running = _manager_alive(args.manager_url)
+    if getattr(sys, "frozen", False):
+        _ensure_runtime_build(project_root, manager_running)
+
     # Frozen desktop entry auto-starts manager if it is not running.
     proc: "subprocess.Popen[bytes] | None" = None
-    if getattr(sys, "frozen", False) and not _manager_alive(args.manager_url):
+    if getattr(sys, "frozen", False) and not manager_running:
         proc = _start_manager(project_root, args.manager_url)
 
     try:

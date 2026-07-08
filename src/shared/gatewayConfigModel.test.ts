@@ -100,6 +100,16 @@ test("default gateway agent adapter uses codex", () => {
   assert.deepEqual(normalizeGatewayDefinition(gateway()).agentAdapters, ["codex"]);
 });
 
+test("recent message limit defaults to 10 and can be set per persona", () => {
+  const defaulted = normalizeGatewayDefinition(gateway());
+  assert.equal(defaulted.recentMessageLimit, 10);
+  assert.equal(defaulted.routeProfiles?.[0]?.recentMessageLimit, 10);
+
+  const customized = normalizeGatewayDefinition(gateway({ recentMessageLimit: 4 }));
+  assert.equal(customized.recentMessageLimit, 4);
+  assert.equal(customized.routeProfiles?.[0]?.recentMessageLimit, 4);
+});
+
 test("persona-free gateways get default message adapter rules", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     id: "Rabi__plain",

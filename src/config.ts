@@ -38,6 +38,7 @@ export type RouteProfile = {
   id: string;
   name: string;
   enabled: boolean;
+  recentMessageLimit: number;
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   resolvedPipeline: ResolvedPipeline;
@@ -275,6 +276,14 @@ function parseClampedNumber(raw: string | undefined, fallback: number, min: numb
   return Math.min(max, Math.max(min, value));
 }
 
+function normalizeRecentMessageLimit(value: unknown, fallback = 10): number {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+  return Math.min(100, Math.max(0, Math.floor(numberValue)));
+}
+
 function normalizeNotificationRule(item: unknown, index: number): NotificationRule | null {
   if (!item || typeof item !== "object") {
     return null;
@@ -323,6 +332,7 @@ function normalizeRouteProfile(item: unknown, index: number): RouteProfile | nul
     id,
     name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id,
     enabled: raw.enabled !== false,
+    recentMessageLimit: normalizeRecentMessageLimit(raw.recentMessageLimit),
     pipelinePreset,
     pipeline,
     resolvedPipeline: resolvePipeline(pipelinePreset, pipeline),

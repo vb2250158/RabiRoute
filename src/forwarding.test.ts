@@ -44,6 +44,7 @@ function routeProfile(root: string, patch: Partial<RouteProfile> = {}): RoutePro
     id: "main",
     name: "Main route",
     enabled: true,
+    recentMessageLimit: 10,
     resolvedPipeline: resolvePipeline("qq_chat"),
     agentRoleId: "Rabi",
     agentRoleFile: "persona.md",

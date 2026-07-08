@@ -14,6 +14,7 @@ function routeProfile(patch: Partial<RouteProfile> = {}): RouteProfile {
     id: "main",
     name: "Main route",
     enabled: true,
+    recentMessageLimit: 10,
     resolvedPipeline: resolvePipeline("qq_chat"),
     agentRoleFile: "persona.md",
     rolesDir: "data/roles",
@@ -61,6 +62,11 @@ function writeSkill(roleDir: string, fileName: string, text: string): void {
   const filePath = path.join(roleDir, "skills", fileName);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, text, "utf8");
+}
+
+function appendJsonl(filePath: string, items: unknown[]): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.appendFileSync(filePath, items.map((item) => JSON.stringify(item)).join("\n") + "\n", "utf8");
 }
 
 test("RouteDecision records matched rules and normalized route text", () => {
@@ -244,4 +250,40 @@ SECRET BODY SHOULD NOT BE IN PACKET
   assert.match(packet.message, /routing-guide：Routing guide - Explain route kind and policy router concepts/);
   assert.match(packet.message, /GET \/api\/roles\/Rabi\/skills\/routing-guide/);
   assert.doesNotMatch(packet.message, /SECRET BODY SHOULD NOT BE IN PACKET/);
+});
+
+test("AgentPacket injects route recent messages using the persona limit", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-packet-data-"));
+  appendJsonl(path.join(dataDir, "group-messages.jsonl"), [
+    { time: 1710000000, groupId: 10001, userId: 1, senderName: "Old", rawMessage: "old message", messageId: "old" },
+    { time: 1710000002, groupId: 10001, userId: 2, senderName: "Bob", rawMessage: "second recent", messageId: "second" }
+  ]);
+  appendJsonl(path.join(dataDir, "private-messages.jsonl"), [
+    { time: 1710000001, userId: 3, senderName: "Carol", rawMessage: "first recent", messageId: "first" }
+  ]);
+  const route = routeProfile({
+    recentMessageLimit: 2,
+    notificationRules: [{
+      id: "direct",
+      name: "direct",
+      enabled: true,
+      routeKinds: ["direct_at"],
+      template: "recent={recentMessages}"
+    }]
+  });
+  const decision = createRouteDecision(route, "direct_at", groupMessage(), {});
+  assert.ok(decision);
+
+  const packet = buildAgentPacket(decision, decision.matchedRules[0], {
+    roleId: "Rabi",
+    roleDir: "",
+    rolePath: "",
+    dataDir
+  });
+
+  assert.equal(packet.templateValues.recentMessageLimit, 2);
+  assert.match(packet.message, /\[最近消息\]/);
+  assert.match(packet.message, /first recent/);
+  assert.match(packet.message, /second recent/);
+  assert.doesNotMatch(packet.message, /old message/);
 });

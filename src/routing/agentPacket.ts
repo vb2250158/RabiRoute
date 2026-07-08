@@ -27,6 +27,15 @@ export type AgentPacket = {
   message: string;
 };
 
+type RecentMessageItem = {
+  time: number;
+  source: string;
+  sender?: string;
+  target?: string;
+  text: string;
+  messageId?: string | number;
+};
+
 function formatTime(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString("zh-CN", { hour12: false });
 }
@@ -145,6 +154,93 @@ function directMessageModeLines(values: ForwardTemplateValues): string[] {
 function section(title: string, lines: string[]): string {
   const content = lines.filter((line) => line !== "").join("\n").trim();
   return content ? `[${title}]\n${content}` : "";
+}
+
+function parseJsonlFile<T>(filePath: string): T[] {
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as T];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function messageText(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function recentMessageItems(dataDir: string, limit: number): RecentMessageItem[] {
+  if (!dataDir || limit <= 0) {
+    return [];
+  }
+
+  const groupMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "group-messages.jsonl"))
+    .map((item) => ({
+      time: Number(item.time) || 0,
+      source: "群聊",
+      sender: messageText(item.senderName || item.userId),
+      target: item.groupId == null ? undefined : `群 ${item.groupId}`,
+      text: messageText(item.rawMessage),
+      messageId: item.messageId as string | number | undefined
+    }));
+  const privateMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "private-messages.jsonl"))
+    .map((item) => ({
+      time: Number(item.time) || 0,
+      source: "私聊",
+      sender: messageText(item.senderName || item.userId),
+      target: item.userId == null ? undefined : `用户 ${item.userId}`,
+      text: messageText(item.rawMessage),
+      messageId: item.messageId as string | number | undefined
+    }));
+  const wecomMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "wecom-messages.jsonl"))
+    .map((item) => ({
+      time: Number(item.time) || 0,
+      source: "企业微信",
+      sender: messageText(item.senderName || item.senderId || item.userId),
+      target: messageText(item.groupId || item.chatId || item.conversationId),
+      text: messageText(item.rawMessage),
+      messageId: item.messageId as string | number | undefined
+    }));
+  const voiceTranscripts = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "voice-transcripts.jsonl"))
+    .map((item) => ({
+      time: Number(item.time) || 0,
+      source: "语音转写",
+      sender: messageText(item.speakerName || item.senderName || item.source),
+      target: messageText(item.sourceDeviceName || item.sourceDeviceId || item.source),
+      text: messageText(item.rawMessage),
+      messageId: item.messageId as string | number | undefined
+    }));
+
+  return [...groupMessages, ...privateMessages, ...wecomMessages, ...voiceTranscripts]
+    .filter((item) => item.text)
+    .sort((left, right) => left.time - right.time)
+    .slice(-limit);
+}
+
+function recentMessagesText(dataDir: string, limit: number): string {
+  const items = recentMessageItems(dataDir, limit);
+  if (items.length === 0) {
+    return "- 暂无";
+  }
+
+  return items.map((item) => {
+    const parts = [
+      item.time ? formatTime(item.time) : "",
+      item.source,
+      item.target,
+      item.sender ? `发送者：${item.sender}` : "",
+      item.messageId != null ? `messageId=${item.messageId}` : ""
+    ].filter(Boolean);
+    return `- ${parts.join(" | ")}\n  ${item.text}`;
+  }).join("\n");
 }
 
 function extractPlanIds(text: string): string[] {
@@ -366,6 +462,8 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     messageId: record.messageId,
     botNickname: config.botNickname,
     agentRoleId: roleContext.roleId,
+    recentMessageLimit: route.recentMessageLimit,
+    recentMessages: recentMessagesText(roleContext.dataDir, route.recentMessageLimit),
     routeProfileId: route.id,
     routeProfileName: route.name,
     runtimeRouteId: process.env.GATEWAY_ID,
@@ -455,6 +553,7 @@ function buildAgentMessage(
   const matchedSkillIndex = knowledge ? skillIndexLines(values.agentRoleId, knowledge.matchedSkills) : "- 暂无";
   const requiredReadIndex = knowledge ? requiredReadLines(knowledge.requiredReadItems) : [];
   const pendingConsolidation = knowledge?.pendingConsolidation;
+  const recentMessageLimit = Number(values.recentMessageLimit ?? 0);
   const pendingConsolidationLines = pendingConsolidation
     ? [
         `runId：${pendingConsolidation.run.id}`,
@@ -480,6 +579,10 @@ function buildAgentMessage(
       optionalLine("触发名称", values.triggerName)
     ]),
     section("消息", [String(values.message || record.rawMessage || "")]),
+    recentMessageLimit > 0 ? section("最近消息", [
+      `最近 ${recentMessageLimit} 条：`,
+      String(values.recentMessages || "- 暂无")
+    ]) : "",
     hasPersona ? section("角色和路径", [
       optionalLine("角色", values.agentRoleId),
       optionalLine("角色文件", values.agentRolePath || rolePath),

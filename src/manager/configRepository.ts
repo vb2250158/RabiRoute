@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   autoAssignGatewayPorts,
+  ensureDefaultPersonaRules,
   normalizeGatewayDefinition,
   validateGatewayPortConflicts,
   type GatewayConfigFile,
@@ -23,6 +24,7 @@ import { normalizePipelineDefinition } from "../pipelines.js";
 import {
   mergeNotificationRules,
   migrateLegacyConfigs,
+  readJsonFile,
   readPersonaConfigFragment,
   writePersonaRules
 } from "./configMigration.js";
@@ -106,6 +108,18 @@ export class ManagerConfigRepository {
     writePersonaRules(this.personaConfigPath(roleId), rules);
   }
 
+  writePersonaConfig(roleId: string, fragment: Pick<GatewayDefinition, "notificationRules" | "recentMessageLimit">): void {
+    const configPath = this.personaConfigPath(roleId);
+    const existing = readJsonFile(configPath);
+    const base = existing && typeof existing === "object" && !Array.isArray(existing) ? existing as Record<string, unknown> : {};
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...base,
+      recentMessageLimit: fragment.recentMessageLimit,
+      notificationRules: ensureDefaultPersonaRules(mergeNotificationRules(fragment.notificationRules))
+    }, null, 2), "utf8");
+  }
+
   migrateLegacyConfigs(): void {
     migrateLegacyConfigs({ routeRoot: this.routeRoot, rolesRoot: this.rolesRoot });
   }
@@ -162,7 +176,7 @@ export class ManagerConfigRepository {
     autoAssignGatewayPorts(normalized.gateways, this.managerPort);
     validateGatewayPortConflicts(normalized.gateways);
     const activeConfigNames = new Set<string>();
-    const groupedByRole = new Map<string, NotificationRuleDefinition[]>();
+    const groupedByRole = new Map<string, Pick<GatewayDefinition, "notificationRules" | "recentMessageLimit">>();
     for (let i = 0; i < normalized.gateways.length; i += 1) {
       const definition = normalized.gateways[i];
       const raw = config.gateways[i];
@@ -180,11 +194,15 @@ export class ManagerConfigRepository {
       fs.writeFileSync(configPath, JSON.stringify(this.adapterConfigItem(definition), null, 2), "utf8");
       const roleId = sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId;
       if (roleId) {
-        groupedByRole.set(roleId, mergeNotificationRules(groupedByRole.get(roleId), definition.notificationRules));
+        const previous = groupedByRole.get(roleId);
+        groupedByRole.set(roleId, {
+          recentMessageLimit: definition.recentMessageLimit,
+          notificationRules: mergeNotificationRules(previous?.notificationRules, definition.notificationRules)
+        });
       }
     }
-    for (const [roleId, rules] of groupedByRole.entries()) {
-      this.writePersonaRules(roleId, rules);
+    for (const [roleId, fragment] of groupedByRole.entries()) {
+      this.writePersonaConfig(roleId, fragment);
     }
     this.removeConfigFilesMissingFrom(activeConfigNames);
     return normalized;
@@ -197,6 +215,7 @@ export class ManagerConfigRepository {
       roleRouteNames: _roleRouteNames,
       routeProfiles: _routeProfiles,
       dataDir: _dataDir,
+      recentMessageLimit: _recentMessageLimit,
       rabiLinkRelayEnabled: _rabiLinkRelayEnabled,
       rabiLinkRelayUrl: _rabiLinkRelayUrl,
       rabiLinkRelayToken: _rabiLinkRelayToken,

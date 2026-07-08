@@ -87,6 +87,7 @@ export type RouteProfileDefinition = {
   id: string;
   name?: string;
   enabled?: boolean;
+  recentMessageLimit?: number;
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   agentRoleId?: string;
@@ -195,6 +196,7 @@ export type GatewayDefinition = {
   privateNotificationTemplate?: string;
   heartbeatNotificationTemplate?: string;
   voiceTranscriptNotificationTemplate?: string;
+  recentMessageLimit?: number;
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
   roleRouteNames?: Record<string, string>;
@@ -472,6 +474,12 @@ export function normalizePositiveNumber(value: unknown, fallback: number): numbe
   return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
 }
 
+export function normalizeRecentMessageLimit(value: unknown, fallback = 10): number {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.min(100, Math.max(0, Math.floor(numberValue)));
+}
+
 export function normalizeCodexCwd(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -587,6 +595,7 @@ function normalizeRouteProfile(
     id,
     name: profile.name?.trim() || id,
     enabled: profile.enabled !== false,
+    recentMessageLimit: normalizeRecentMessageLimit(profile.recentMessageLimit, normalizeRecentMessageLimit(definition.recentMessageLimit)),
     pipelinePreset: typeof profile.pipelinePreset === "string" && profile.pipelinePreset.trim()
       ? profile.pipelinePreset.trim()
       : definition.pipelinePreset,
@@ -688,6 +697,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     privateNotificationTemplate: normalizeOptionalTemplate(definition.privateNotificationTemplate),
     heartbeatNotificationTemplate: normalizeOptionalTemplate(definition.heartbeatNotificationTemplate),
     voiceTranscriptNotificationTemplate: normalizeOptionalTemplate(definition.voiceTranscriptNotificationTemplate),
+    recentMessageLimit: normalizeRecentMessageLimit(definition.recentMessageLimit),
     notificationRules,
     dataDir,
     rolesDir,
@@ -703,6 +713,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
       agentRoleFile: definition.agentRoleFile ?? "persona.md",
       rolesDir,
       dataDir,
+      recentMessageLimit: definition.recentMessageLimit,
       pipelinePreset,
       pipeline,
       routeVariables: definition.routeVariables,

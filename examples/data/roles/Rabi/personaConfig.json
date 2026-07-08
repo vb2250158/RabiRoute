@@ -1,4 +1,5 @@
 {
+  "recentMessageLimit": 10,
   "notificationRules": [
     {
       "id": "rabi-group-keywords",

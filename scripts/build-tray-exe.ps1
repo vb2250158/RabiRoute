@@ -1,5 +1,8 @@
 # scripts/build-tray-exe.ps1
-# 把 RabiRoute 托盘程序打包成单个 Windows exe。
+# Windows 完整桌面运行包的本地构建入口。
+# 唯一真源见 docs/windows-launcher-and-packaging.md。
+# 注意：RabiRoute-Tray.exe 只是托盘入口，不是单文件完整包；完整运行态还需要
+# dist/ 后端产物、ribiwebgui/dist 前端产物、Node runtime、npm 依赖和外置可写 data/。
 # 用法：
 #   cd <repo>
 #   .\scripts\build-tray-exe.ps1
@@ -25,6 +28,12 @@ if (-not $SkipNodeBuild) {
     if (-not $npm) { throw "npm.cmd not found. Install Node.js first." }
     & cmd /c "cd /d `"$repo`" && npm run build"
     if ($LASTEXITCODE -ne 0) { throw "npm run build failed." }
+    if (-not (Test-Path (Join-Path $repo "dist\manager.js"))) {
+        throw "Backend build output is missing: dist\manager.js"
+    }
+    if (-not (Test-Path (Join-Path $repo "ribiwebgui\dist\index.html"))) {
+        throw "WebGUI build output is missing: ribiwebgui\dist\index.html"
+    }
     Write-Step "Node.js build done."
 }
 
@@ -66,12 +75,21 @@ Write-Step "Built: $exeSrc"
 # ── 5. 复制到项目根目录 ──────────────────────────────────────────────────────
 if (-not $SkipCopy) {
     $exeDst = Join-Path $repo "RabiRoute-Tray.exe"
-    Copy-Item -LiteralPath $exeSrc -Destination $exeDst -Force
-    Write-Step "Copied to: $exeDst"
+    try {
+        Copy-Item -LiteralPath $exeSrc -Destination $exeDst -Force -ErrorAction Stop
+        Write-Step "Copied to: $exeDst"
+    } catch {
+        $fallbackExe = Join-Path $repo "RabiRoute-Tray.new.exe"
+        Copy-Item -LiteralPath $exeSrc -Destination $fallbackExe -Force
+        Write-Step "Could not replace $exeDst because it is probably running."
+        Write-Step "Copied the new build to: $fallbackExe"
+        Write-Step "Close the existing RabiRoute tray process, then replace RabiRoute-Tray.exe with this file."
+    }
     Write-Step ""
     Write-Step "Done! Double-click RabiRoute-Tray.exe to launch."
     Write-Step "  - Starts RabiRoute manager (node dist/manager.js) automatically if not running."
+    Write-Step "  - Serves RibiWebGUI from ribiwebgui/dist through the manager."
     Write-Step "  - Shows system tray icon + Rabi task window."
     Write-Step ""
-    Write-Step "Requires Node.js on PATH at runtime (for the manager)."
+    Write-Step "Requires Node.js and npm dependencies at runtime; see docs/windows-launcher-and-packaging.md."
 }

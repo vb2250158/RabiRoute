@@ -4,6 +4,8 @@
 
 它是额外的桌面便利入口。Qt/PySide6 本身跨平台，所以浮动面板和大部分托盘代码应尽量复用于 Windows、macOS 和 Linux。RabiRoute 本体、manager client、计划仓储、路径解析、生命周期规则和角色数据读取都必须保持可移植；平台启动器和打包脚本才是平台适配层。
 
+Windows 桌面启动和完整打包的唯一真源是 `docs/windows-launcher-and-packaging.md`。本 README 只说明 Qt 面板自身，不重复定义 exe、后端 `dist/`、RibiWebGUI 前端产物和运行期 `data/` 的打包边界。
+
 ## 用途
 
 这个应用是 RabiRoute 计划和记忆的桌面入口，不替代 RibiWebGUI，也不替代外部控制台。

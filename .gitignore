@@ -18,6 +18,7 @@
 /gateways.json
 /docs/rokid-rabilink-plugin.*.openapi.json
 /RabiRoute-Tray.exe
+/RabiRoute-Tray.new.exe
 /RabiRoute-Tray.exe.bak-*
 /.idea/
 .venv/

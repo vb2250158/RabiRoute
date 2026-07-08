@@ -208,15 +208,22 @@ function Test-NeedsBuild {
     [string]$ProjectRoot,
     [string]$DistManager
   )
+  if (Test-BackendNeedsBuild -ProjectRoot $ProjectRoot -DistManager $DistManager) {
+    return $true
+  }
+  return Test-WebGuiNeedsBuild -ProjectRoot $ProjectRoot
+}
+
+function Test-BackendNeedsBuild {
+  param(
+    [string]$ProjectRoot,
+    [string]$DistManager
+  )
   if (-not (Test-Path $DistManager)) {
     return $true
   }
-
   $distTime = (Get-Item $DistManager).LastWriteTimeUtc
-  $sourceRoots = @(
-    (Join-Path $ProjectRoot "src"),
-    (Join-Path $ProjectRoot "ribiwebgui\src")
-  )
+  $sourceRoots = @((Join-Path $ProjectRoot "src"))
   foreach ($sourceRoot in $sourceRoots) {
     if (-not (Test-Path $sourceRoot)) {
       continue
@@ -229,6 +236,56 @@ function Test-NeedsBuild {
     }
   }
   return $false
+}
+
+function Test-WebGuiNeedsBuild {
+  param([string]$ProjectRoot)
+
+  $webGuiIndex = Join-Path $ProjectRoot "ribiwebgui\dist\index.html"
+  $webGuiAssets = Join-Path $ProjectRoot "ribiwebgui\dist\assets"
+  if (-not (Test-Path $webGuiIndex) -or -not (Test-Path $webGuiAssets)) {
+    return $true
+  }
+
+  $distTime = (Get-Item $webGuiIndex).LastWriteTimeUtc
+  $sourcePaths = @(
+    (Join-Path $ProjectRoot "ribiwebgui\src"),
+    (Join-Path $ProjectRoot "ribiwebgui\index.html"),
+    (Join-Path $ProjectRoot "ribiwebgui\vite.config.ts"),
+    (Join-Path $ProjectRoot "ribiwebgui\tsconfig.json")
+  )
+  foreach ($sourcePath in $sourcePaths) {
+    if (-not (Test-Path $sourcePath)) {
+      continue
+    }
+    $item = Get-Item -LiteralPath $sourcePath
+    if (-not $item.PSIsContainer) {
+      if ($item.LastWriteTimeUtc -gt $distTime) {
+        return $true
+      }
+      continue
+    }
+    $newerSource = Get-ChildItem -LiteralPath $sourcePath -Recurse -File -Include *.ts,*.tsx,*.vue,*.html -ErrorAction SilentlyContinue |
+      Where-Object { $_.LastWriteTimeUtc -gt $distTime } |
+      Select-Object -First 1
+    if ($newerSource) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Invoke-NpmScript {
+  param(
+    [string]$ProjectRoot,
+    [string]$ScriptName,
+    [string]$LauncherLog
+  )
+  $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+  if (-not $npm) {
+    throw "npm.cmd was not found. Install Node.js/npm or build RabiRoute before using this launcher."
+  }
+  Invoke-LoggedCommand -FilePath $npm.Source -Arguments @("run", $ScriptName) -LogPath $LauncherLog -WorkingDirectory $ProjectRoot
 }
 
 function Resolve-NodeExe {
@@ -296,10 +353,20 @@ try {
   Write-Info "Project: $projectRoot"
   Write-Info "Logs: $logsDir"
 
+  $distManager = Join-Path $projectRoot "dist\manager.js"
   $manager = Test-Manager -Url $ManagerUrl
   if ($manager) {
     Write-Info "Manager is already running at $ManagerUrl. Reusing it."
     Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Manager already running."
+    if (Test-WebGuiNeedsBuild -ProjectRoot $projectRoot) {
+      if ($NoBuild) {
+        Write-Info "RibiWebGUI build is missing or stale, but -NoBuild was passed. Browser may show the missing build page."
+        Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] WebGUI build needed but skipped because -NoBuild was passed."
+      } else {
+        Write-Info "RibiWebGUI build is missing or stale; running npm.cmd run webgui:build."
+        Invoke-NpmScript -ProjectRoot $projectRoot -ScriptName "webgui:build" -LauncherLog $launcherLog
+      }
+    }
     if (-not $NoTray) {
       Start-TrayWindow `
         -ProjectRoot $projectRoot `
@@ -325,17 +392,12 @@ try {
     exit 2
   }
 
-  $distManager = Join-Path $projectRoot "dist\manager.js"
   if (Test-NeedsBuild -ProjectRoot $projectRoot -DistManager $distManager) {
     if ($NoBuild) {
-      throw "dist\manager.js is missing or older than source files. Run npm.cmd run build first, or rerun without -NoBuild."
+      throw "dist\manager.js or the RibiWebGUI build is missing/stale. Run npm.cmd run build first, or rerun without -NoBuild."
     }
-    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-    if (-not $npm) {
-      throw "npm.cmd was not found. Install Node.js/npm or build RabiRoute before using this launcher."
-    }
-    Write-Info "dist\manager.js is missing or stale; running npm.cmd run build."
-    Invoke-LoggedCommand -FilePath $npm.Source -Arguments @("run", "build") -LogPath $launcherLog -WorkingDirectory $projectRoot
+    Write-Info "Backend or RibiWebGUI build is missing/stale; running npm.cmd run build."
+    Invoke-NpmScript -ProjectRoot $projectRoot -ScriptName "build" -LauncherLog $launcherLog
   }
 
   $node = Resolve-NodeExe -ProjectRoot $projectRoot

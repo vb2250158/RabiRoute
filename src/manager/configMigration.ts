@@ -81,8 +81,16 @@ export function readPersonaRules(personaConfigPath: string): NotificationRuleDef
 }
 
 export function readPersonaConfigFragment(personaConfigPath: string): Partial<GatewayDefinition> {
+  const parsed = readJsonFile(personaConfigPath);
   const rules = readPersonaRules(personaConfigPath);
-  return rules ? { notificationRules: defaultPersonaRules(rules) } : {};
+  const fragment: Partial<GatewayDefinition> = {};
+  if (isJsonObject(parsed) && parsed.recentMessageLimit != null) {
+    fragment.recentMessageLimit = Number(parsed.recentMessageLimit);
+  }
+  if (rules) {
+    fragment.notificationRules = defaultPersonaRules(rules);
+  }
+  return fragment;
 }
 
 export function writePersonaRules(personaConfigPath: string, rules: NotificationRuleDefinition[] | undefined): void {

@@ -8,7 +8,7 @@
 
 - 提供一份完整的 `data/route/main/adapterConfig.json` 示例。
 - 给默认路由配置提供唯一角色 `roles/Rabi`。
-- 给默认人格提供 `roles/Rabi/personaConfig.json` 消息模板规则。
+- 给默认人格提供 `roles/Rabi/personaConfig.json` 消息模板规则和最近消息投递数量。
 - 给默认人格提供 `roles/Rabi/plans` 和 `roles/Rabi/memory` 的公开示例结构。
 - 演示本地路由配置的 `rolesDir` 应该指向 `./data/roles`。
 - 让用户复制后可以直接在 WebUI 里选择并预览示例人格。

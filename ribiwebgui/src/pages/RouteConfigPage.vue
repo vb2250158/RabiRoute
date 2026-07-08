@@ -182,6 +182,7 @@ const adapterParamOpen = ref<Record<string, boolean>>({
   webhook: false
 });
 const addAdapterMenu = ref(false);
+const adapterCatalogCache = ref<Record<string, MessageAdapterType[]>>({});
 const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> }> = [
   {
     title: "本地桌面",
@@ -231,14 +232,24 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
 ];
 const gateway = computed(() => store.selectedGateway);
 
+function uniqueAdapters(types: MessageAdapterType[]): MessageAdapterType[] {
+  return [...new Set(types.filter((type) => type !== "disabled"))];
+}
+
+function configuredAdapterCatalog(gw: NonNullable<typeof gateway.value>): MessageAdapterType[] {
+  if (Array.isArray(gw.messageAdapters) && gw.messageAdapters.length > 0) {
+    return uniqueAdapters(["rolePanel", ...gw.messageAdapters]);
+  }
+  const cached = adapterCatalogCache.value[gw.id];
+  if (cached?.length) return uniqueAdapters(["rolePanel", ...cached]);
+  return uniqueAdapters(["rolePanel", gw.messageAdapterType || "napcat"]);
+}
+
 // 所有已添加的 adapter（含禁用），用于 UI 列表显示
 const addedAdapters = computed<MessageAdapterType[]>(() => {
   const gw = gateway.value;
   if (!gw) return [];
-  const configured = Array.isArray(gw.messageAdapters) && gw.messageAdapters.length > 0
-    ? gw.messageAdapters.filter((t): t is MessageAdapterType => t !== "disabled")
-    : [gw.messageAdapterType || "napcat"] as MessageAdapterType[];
-  return [...new Set(["rolePanel" as MessageAdapterType, ...configured])];
+  return configuredAdapterCatalog(gw);
 });
 // 仅启用的 adapter（不含禁用）
 const adapters = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value) : []);
@@ -435,6 +446,21 @@ const availableToAdd = computed(() => {
   const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "heartbeat", "fennenote", "xiaoai", "rabilink", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
+
+watch(
+  () => [gateway.value?.id, gateway.value?.messageAdapterType, JSON.stringify(gateway.value?.messageAdapters ?? [])] as const,
+  ([id]) => {
+    const configured = Array.isArray(gateway.value?.messageAdapters)
+      ? uniqueAdapters(gateway.value.messageAdapters)
+      : [];
+    if (!id || configured.length === 0) return;
+    adapterCatalogCache.value = {
+      ...adapterCatalogCache.value,
+      [id]: addedAdapters.value
+    };
+  },
+  { immediate: true }
+);
 
 watch(
   () => [gateway.value?.id, adapterParamOpen.value.remoteAgent] as const,

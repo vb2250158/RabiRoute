@@ -127,7 +127,7 @@ data/roles/<RoleId>/persona.md
 data/roles/<RoleId>/personaConfig.json
 ```
 
-`adapterConfig.json` 负责消息适配器、端口、Agent 适配器、工作目录、pipeline preset 和指向哪个人格；`personaConfig.json` 负责该人格的消息模板规则。不要再把消息入口和人格模板规则混进同一个配置文件。
+`adapterConfig.json` 负责消息适配器、端口、Agent 适配器、工作目录、pipeline preset 和指向哪个人格；`personaConfig.json` 负责该人格的消息模板规则，以及投递时附带的最近消息数量 `recentMessageLimit`（默认 10，设为 0 可关闭）。不要再把消息入口和人格模板规则混进同一个配置文件。
 
 旧本地数据迁移时，按下面关系处理：
 
@@ -145,6 +145,8 @@ npm run check:config
 ## 桌面任务托盘 MVP
 
 RabiRoute 本体仍以 Node / CLI / npm scripts 作为跨平台基础启动方式。桌面任务面板使用 PySide6/Qt，面板代码本身按 Windows/macOS/Linux 可复用来组织；当前 Windows 额外提供启动器，用作打开 WebGUI、查看 Rabi 任务目录空状态或任务摘要的便利入口。它只读读取 `data/roles/<RoleId>/tasks` 和角色目录里的现有状态/记忆材料，不写任务数据，也不替代 RibiWebGUI。
+
+Windows 桌面启动和完整打包的唯一真源是 [Windows 桌面启动与完整打包](docs/windows-launcher-and-packaging.md)。这里不重复维护打包边界，避免 README、脚本和真实启动器出现历史分叉。
 
 悬浮窗当前包含这些可切换视图：当前计划/当前任务、未归档计划、近期记忆、沉淀记忆、任务、状态/路由状态。MCP/server/端口接口先不做，后续如需要再挂跨平台命令适配层。
 
@@ -174,7 +176,7 @@ Start-RabiRoute-Tray.bat
 .\scripts\build-tray-exe.ps1
 ```
 
-这个 exe 只打包 PySide6 托盘入口，不内置 Node.js、`dist/manager.js`、RibiWebGUI 构建产物或运行期 `data/`。运行时仍需要 Node.js 在 PATH，并且 exe 放在项目根目录，才能定位并启动 `node dist/manager.js`。源码仓库只提交打包规范和脚本，不提交生成的 exe。公开发布包暂不启用，避免把本机路径或私有信息带进二进制资产。
+注意：`RabiRoute-Tray.exe` 只是 Windows 完整桌面运行包里的托盘入口，不是单文件完整包。完整运行态还需要后端 `dist/`、前端 `ribiwebgui/dist/`、可写运行期 `data/`、Node runtime 和 npm 依赖。源码仓库只提交打包规范和脚本，不提交生成的 exe。公开发布包暂不启用，避免把本机路径或私有信息带进二进制资产。
 
 Mac / Linux 可以继续用上面的 Node 启动方式运行 manager/WebGUI；这部分已经是跨平台基线。未来如果需要桌面入口，应只新增 macOS/Linux 平台 launcher，复用同一套 Qt 面板、manager HTTP API、shutdown API、`ManagerClient`、`TaskRepository`、`RoleContextRepository`、路径解析和生命周期 ownership 规则；Windows exe 打包只是便利发布层，不应分叉服务端或 WebUI。
 
