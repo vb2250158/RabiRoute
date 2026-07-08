@@ -197,6 +197,12 @@ export class ManagerConfigRepository {
       roleRouteNames: _roleRouteNames,
       routeProfiles: _routeProfiles,
       dataDir: _dataDir,
+      rabiLinkRelayEnabled: _rabiLinkRelayEnabled,
+      rabiLinkRelayUrl: _rabiLinkRelayUrl,
+      rabiLinkRelayToken: _rabiLinkRelayToken,
+      rabiLinkRelayDeviceId: _rabiLinkRelayDeviceId,
+      rabiLinkRelayClaimWaitMs: _rabiLinkRelayClaimWaitMs,
+      rabiLinkRelayReplyIdleTimeoutMs: _rabiLinkRelayReplyIdleTimeoutMs,
       ...adapterOnly
     } = definition;
     return adapterOnly;

@@ -77,7 +77,7 @@ tasks.register("copyGlassAsrDebugApk", Copy) {
     dependsOn(":glass-asr:assembleDebug")
     from(rootProject.file("glass-asr/build/outputs/apk/debug/glass-asr-debug.apk"))
     into("$buildDir/generated/assets/glassAsr/debug")
-    rename { "rabi-glass-asr-debug.apk" }
+    rename { "rabi-glass-test-debug.apk" }
 }
 
 tasks.matching { it.name == "mergeDebugAssets" }.configureEach {

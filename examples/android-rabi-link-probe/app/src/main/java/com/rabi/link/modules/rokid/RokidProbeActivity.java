@@ -44,7 +44,7 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
     private static final int REQUEST_ANDROID_RECOGNIZER_INTENT = 7103;
     private static final int REQUEST_PHONE_COMPANION_ASSOCIATION = 7104;
     private static final long NATIVE_VOICE_TIMEOUT_MS = 7000L;
-    private static final String GLASS_ASR_ASSET = "rabi-glass-asr-debug.apk";
+    private static final String GLASS_ASR_ASSET = "rabi-glass-test-debug.apk";
     private static final String PREFS_NAME = "rokid_probe";
     private static final String PREF_ROKID_TOKEN = "rokid_token";
     private static final String PREF_NATIVE_VOICE_ACCESS_KEY = "native_voice_access_key";
@@ -579,7 +579,7 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
             return;
         }
         cxrController.queryGlassAsrApp();
-        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求查询眼镜端 ASR APK 安装状态", "", "");
+        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求查询 Rabi Glass Test 安装状态", "", "");
         updateDashboard();
     }
 
@@ -602,22 +602,22 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
     @Override
     public void startGlassAsrApp() {
         if (!isGlassAppLinkReady()) {
-            recordResult(RokidGlassModule.CAP_GLASS_ASR, "failed", "眼镜应用会话未就绪，不能启动 ASR 应用", "", "custom app session is not ready");
+            recordResult(RokidGlassModule.CAP_GLASS_ASR, "failed", "眼镜应用会话未就绪，不能启动 Rabi Glass Test", "", "custom app session is not ready");
             return;
         }
         cxrController.startGlassAsrApp();
-        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求启动眼镜端 ASR 应用", RokidCxrController.GLASS_ASR_ENTRY, "");
+        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求启动 Rabi Glass Test", RokidCxrController.GLASS_ASR_ENTRY, "");
         updateDashboard();
     }
 
     @Override
     public void stopGlassAsrApp() {
         if (!isGlassAppLinkReady()) {
-            recordResult(RokidGlassModule.CAP_GLASS_ASR, "failed", "眼镜应用会话未就绪，不能停止 ASR 应用", "", "custom app session is not ready");
+            recordResult(RokidGlassModule.CAP_GLASS_ASR, "failed", "眼镜应用会话未就绪，不能停止 Rabi Glass Test", "", "custom app session is not ready");
             return;
         }
         cxrController.stopGlassAsrApp();
-        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求停止眼镜端 ASR 应用", "", "");
+        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求停止 Rabi Glass Test", "", "");
         updateDashboard();
     }
 
@@ -2749,11 +2749,6 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
         boolean glassNativeAppReady = glassAppReady && glassAsrAppStarted;
         boolean glassNativeAsrReady = glassNativeAppReady && nativeVoiceReachable && lastNativeVoiceStatus.isAsrReady();
         boolean glassNativeTtsReady = glassNativeAppReady && nativeVoiceReachable && lastNativeVoiceStatus.isTtsReady();
-        boolean phoneAsrFeeding = nativeVoiceBridge != null && nativeVoiceBridge.isPhoneAsrFeeding();
-        boolean phoneVoiceOnlineReady = nativeVoiceBridge != null && nativeVoiceBridge.isPhoneVoiceOnlineReady();
-        boolean phoneVoiceCredentialReady = nativeVoiceAuthConfigured();
-        boolean rokidAiSdkConfigured = rokidAiSdkConfigured();
-        boolean rokidAiSdkConnected = rokidAiSdkVoiceBridge != null && rokidAiSdkVoiceBridge.isServiceConnected();
         boolean customViewOpened = isCustomViewOpened();
         boolean hasAudio = lastAudioUri != null;
         boolean playing = audioPlayer != null;
@@ -2765,8 +2760,6 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
         uiViews.setCapabilityVisible(RokidGlassModule.CAP_PHOTO, linkReady);
         uiViews.setCapabilityVisible(RokidGlassModule.CAP_DEVICE_CONTROL, linkReady);
         uiViews.setCapabilityVisible(RokidGlassModule.CAP_GLASS_ASR, tokenReady);
-        uiViews.setCapabilityVisible(RokidGlassModule.CAP_ANDROID_SYSTEM_VOICE, true);
-        uiViews.setCapabilityVisible(RokidGlassModule.CAP_ROKID_AI_SDK_VOICE, true);
 
         uiViews.setActionVisible(RokidProbeUi.ACTION_CONNECT, tokenReady && (!linkReady || !customViewSession));
         uiViews.setActionVisible(RokidProbeUi.ACTION_OPEN_CUSTOM_VIEW, linkReady && !customViewOpened);
@@ -2786,21 +2779,8 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
         uiViews.setActionVisible(RokidProbeUi.ACTION_PING_NATIVE_VOICE, glassNativeAppReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_QUERY_NATIVE_STATUS, glassNativeAppReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_QUERY_NATIVE_DIAGNOSTICS, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_NATIVE_ASR, glassNativeAsrReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_NATIVE_ASR, glassNativeAsrReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_SEND_NATIVE_TTS, glassNativeTtsReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_NATIVE_ECHO, glassNativeAsrReady && glassNativeTtsReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_ARM_OFFLINE_VOICE_CMD, glassNativeAppReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_CLEAR_OFFLINE_VOICE_CMD, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_GLASS_ANDROID_VOICE, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_GLASS_ANDROID_ASR, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_GLASS_ANDROID_ASR, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_SEND_GLASS_ANDROID_TTS, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_GLASS_ROKID_AI_SDK, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_SAVE_GLASS_ROKID_AI_SDK_CONFIG, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_GLASS_ROKID_AI_SDK, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_SEND_GLASS_ROKID_AI_SDK_TTS, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_GLASS_ROKID_AI_SDK, glassNativeAppReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_SCAN_PHONE_BT, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_PHONE_DEVICE_LINK, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_ASSOCIATE_PHONE_COMPANION, tokenReady);
@@ -2809,30 +2789,7 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
         uiViews.setActionVisible(RokidProbeUi.ACTION_REQUEST_PHONE_SYSTEM_INFO, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_REQUEST_PHONE_DEVICE_AUDIO_HANDSHAKE, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_PHONE_GLASS_DEVICE, tokenReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_PHONE_VOICE_AUTH, tokenReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_APPLY_PHONE_VOICE_AUTH, tokenReady && phoneVoiceCredentialReady && !phoneVoiceOnlineReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_INIT_PHONE_VOICE, phoneVoiceOnlineReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_PHONE_ASR_FEED, phoneVoiceOnlineReady && linkReady && !phoneAsrFeeding);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_PHONE_ASR_FEED, phoneAsrFeeding);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_SEND_PHONE_TTS, phoneVoiceOnlineReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_ANDROID_SYSTEM_VOICE, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_ROUTE_ANDROID_SYSTEM_BLUETOOTH, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_CLEAR_ANDROID_SYSTEM_BLUETOOTH, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_ANDROID_HEADSET_VOICE, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_ANDROID_HEADSET_VOICE, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_ANDROID_SYSTEM_ASR, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_ANDROID_SYSTEM_ASR_INTENT, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_ANDROID_SYSTEM_ASR, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_SEND_ANDROID_SYSTEM_TTS, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_ANDROID_SYSTEM_LOOPBACK, true);
         uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_GLASS_ASR, glassNativeAppReady);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_ROKID_AI_SDK, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_SAVE_ROKID_AI_SDK_CONFIG, true);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_START_ROKID_AI_SDK_ASR, rokidAiSdkConfigured && !rokidAiSdkConnected);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_ROKID_AI_SDK_PICKUP_ON, rokidAiSdkConnected);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_ROKID_AI_SDK_PICKUP_OFF, rokidAiSdkConnected);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_SEND_ROKID_AI_SDK_TTS, rokidAiSdkConnected);
-        uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_ROKID_AI_SDK, rokidAiSdkConnected);
     }
 
     private boolean isLinkReady() {

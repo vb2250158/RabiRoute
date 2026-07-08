@@ -159,5 +159,13 @@ export type MetaPayload = {
   managerPort: number;
   rabiGuid?: string;
   rabiName?: string;
+  rabiLinkRelay?: {
+    enabled?: boolean;
+    url?: string;
+    token?: string;
+    deviceId?: string;
+    claimWaitMs?: number;
+    replyIdleTimeoutMs?: number;
+  };
   computerName?: string;
 };

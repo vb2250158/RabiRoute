@@ -14,7 +14,8 @@ public final class RokidGlassModule implements DeviceModule {
     public static final String CAP_AUDIO = "rokid.audio";
     public static final String CAP_PHOTO = "rokid.photo";
     public static final String CAP_DEVICE_CONTROL = "rokid.device_control";
-    public static final String CAP_GLASS_ASR = "rokid.glass_asr";
+    public static final String CAP_GLASS_TEST = "rokid.glass_test";
+    public static final String CAP_GLASS_ASR = CAP_GLASS_TEST;
     public static final String CAP_ANDROID_SYSTEM_VOICE = "rokid.android_system_voice";
     public static final String CAP_ROKID_AI_SDK_VOICE = "rokid.ai_sdk_voice";
 
@@ -25,9 +26,7 @@ public final class RokidGlassModule implements DeviceModule {
             new Capability(CAP_AUDIO, "音频流", "audio", true, true, "短时接收 PCM 音频并保存 WAV 证据。"),
             new Capability(CAP_PHOTO, "拍照", "camera", true, true, "调用拍照接口并保存 JPEG 证据。"),
             new Capability(CAP_DEVICE_CONTROL, "设备信息与控制", "device", true, true, "读取设备信息并测试亮度、音量设置。"),
-            new Capability(CAP_GLASS_ASR, "眼镜端 ASR/TTS", "glass-app", true, true, "安装并启动眼镜端最小应用，验证眼镜原生语音转文本和 TTS。"),
-            new Capability(CAP_ANDROID_SYSTEM_VOICE, "Android 系统 ASR/TTS", "system-voice", true, true, "验证 Android 原生 SpeechRecognizer 和 TextToSpeech 是否能通过已连接眼镜输入/输出。"),
-            new Capability(CAP_ROKID_AI_SDK_VOICE, "RokidAiSdk ASR/TTS", "rokid-ai-sdk", true, true, "调用 RokidAiSdk 官方 AudioAi service，验证是否能拿到 ASR 文本和发起 TTS 播报。")
+            new Capability(CAP_GLASS_TEST, "眼镜端测试 APK", "glass-app", true, true, "安装并启动 Rabi Glass Test，验证眼镜端测试 APK、CXR CustomCmd 和基础回包。")
     );
 
     @Override

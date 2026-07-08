@@ -403,12 +403,21 @@ export const config = {
   rabiLinkWebhookPath: process.env.RABILINK_WEBHOOK_PATH ?? "/rabilink",
   rabiLinkWebhookPort: Number(process.env.RABILINK_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   rabiLinkWebhookHost: process.env.RABILINK_WEBHOOK_HOST ?? "0.0.0.0",
-  rabiLinkRelayEnabled: parseBoolean(process.env.RABILINK_RELAY_ENABLED, Boolean(normalizeOptionalString(process.env.RABILINK_RELAY_URL))),
+  rabiLinkRelayEnabled: parseBoolean(
+    process.env.RABILINK_RELAY_ENABLED,
+    Boolean(normalizeOptionalString(process.env.RABILINK_RELAY_URL) && normalizeOptionalString(process.env.RABILINK_RELAY_TOKEN))
+  ),
   rabiLinkRelayUrl: normalizeOptionalString(process.env.RABILINK_RELAY_URL) ?? "",
   rabiLinkRelayToken: normalizeOptionalString(process.env.RABILINK_RELAY_TOKEN) ?? "",
   rabiLinkRelayDeviceId: normalizeOptionalString(process.env.RABILINK_RELAY_DEVICE_ID)
     ?? normalizeOptionalString(process.env.COMPUTERNAME)
     ?? "rabilink-pc",
+  rabiLinkRelayDeviceGuid: normalizeOptionalString(process.env.RABILINK_RELAY_DEVICE_GUID)
+    ?? normalizeOptionalString(process.env.RABI_GUID)
+    ?? "",
+  rabiLinkRelayWebguiUrl: normalizeOptionalString(process.env.RABILINK_RELAY_WEBGUI_URL)
+    ?? normalizeOptionalString(process.env.GATEWAY_MANAGER_URL)
+    ?? "http://127.0.0.1:8790",
   rabiLinkRelayClaimWaitMs: parseClampedNumber(process.env.RABILINK_RELAY_CLAIM_WAIT_MS, 60000, 0, 60000),
   rabiLinkRelayReplyPollMs: parseClampedNumber(process.env.RABILINK_RELAY_REPLY_POLL_MS, 500, 100, 5000),
   rabiLinkRelayReplyIdleTimeoutMs: parseClampedNumber(process.env.RABILINK_RELAY_REPLY_IDLE_TIMEOUT_MS, 60000, 1000, 120000),

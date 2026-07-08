@@ -16,6 +16,11 @@ const rabiName = ref("");
 const rabiSaving = ref(false);
 const rabiSaved = ref(false);
 const rabiError = ref("");
+const rabiLinkRelayUrl = ref("");
+const rabiLinkRelayToken = ref("");
+const rabiLinkRelayDeviceId = ref("");
+const rabiLinkRelayClaimWaitMs = ref(60000);
+const rabiLinkRelayReplyIdleTimeoutMs = ref(60000);
 const gatewayActionId = ref("");
 const gatewayActionError = ref("");
 const deletingGatewayId = ref("");
@@ -28,6 +33,16 @@ async function loadDirConfig() {
     rolesDir.value = data.rolesDir ?? "";
   } catch { /* ignore */ }
   rabiName.value = store.meta.rabiName || store.meta.computerName || "";
+  loadRabiLinkRelayForm();
+}
+
+function loadRabiLinkRelayForm(): void {
+  const relay = store.meta.rabiLinkRelay || {};
+  rabiLinkRelayUrl.value = relay.url || "";
+  rabiLinkRelayToken.value = relay.token || "";
+  rabiLinkRelayDeviceId.value = relay.deviceId || store.meta.computerName || "";
+  rabiLinkRelayClaimWaitMs.value = Number(relay.claimWaitMs || 60000);
+  rabiLinkRelayReplyIdleTimeoutMs.value = Number(relay.replyIdleTimeoutMs || 60000);
 }
 
 async function saveDirConfig() {
@@ -60,12 +75,22 @@ async function saveRabiIdentity() {
     const res = await fetch("/api/rabi/identity", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ rabiName: rabiName.value })
+      body: JSON.stringify({
+        rabiName: rabiName.value,
+        rabiLinkRelay: {
+          url: rabiLinkRelayUrl.value,
+          token: rabiLinkRelayToken.value,
+          deviceId: rabiLinkRelayDeviceId.value,
+          claimWaitMs: Number(rabiLinkRelayClaimWaitMs.value || 60000),
+          replyIdleTimeoutMs: Number(rabiLinkRelayReplyIdleTimeoutMs.value || 60000)
+        }
+      })
     });
     const data = await res.json();
     if (data.code !== 0) throw new Error(data.message || "保存失败");
     await store.load({ replaceDirtyConfig: true });
     rabiName.value = store.meta.rabiName || "";
+    loadRabiLinkRelayForm();
     rabiSaved.value = true;
   } catch (e) {
     rabiError.value = e instanceof Error ? e.message : String(e);
@@ -323,19 +348,34 @@ const selectedRuntimeLabel = computed(() => {
       </v-card>
     </div>
 
+    <div class="two-column">
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">
           <div>
             <div class="section-title">Rabi 实例</div>
-            <div class="section-note">保存到 data/Config.json，供 RabiAPI / Android SDK 发现和识别。</div>
+            <div class="section-note">保存到 data/Config.json，作为这台 Rabi PC 的全局身份。</div>
           </div>
           <v-btn color="primary" size="small" :loading="rabiSaving" @click="saveRabiIdentity">保存</v-btn>
         </div>
         <v-alert v-if="rabiError" type="error" variant="tonal" density="compact" class="mb-3">{{ rabiError }}</v-alert>
-        <v-alert v-if="rabiSaved" type="success" variant="tonal" density="compact" class="mb-3">已保存实例名称。</v-alert>
+        <v-alert v-if="rabiSaved" type="success" variant="tonal" density="compact" class="mb-3">已保存 Rabi 实例配置。</v-alert>
         <div class="form-grid">
           <v-text-field v-model="rabiName" label="RabiRoute 实例名" :placeholder="store.meta.computerName || 'RabiRoute'" density="compact" hide-details />
           <v-text-field :model-value="store.meta.rabiGuid || '-'" label="RabiRoute GUID" density="compact" readonly hide-details />
+        </div>
+        <v-divider class="my-4" />
+        <div class="section-title-row compact-row mb-2">
+          <div>
+            <div class="section-title small-title">RabiLink Relay</div>
+            <div class="section-note">全局上游服务器配置。启用状态由服务器应用管理。</div>
+          </div>
+        </div>
+        <div class="form-grid">
+          <v-text-field v-model="rabiLinkRelayDeviceId" label="本机 Rabi PC 标识" :placeholder="store.meta.computerName || 'rabilink-pc'" density="compact" hide-details />
+          <v-text-field v-model="rabiLinkRelayUrl" label="Relay 服务器地址" placeholder="https://rabiroute.example.com" density="compact" hide-details />
+          <v-text-field v-model="rabiLinkRelayToken" label="Relay 应用 token" placeholder="X-RabiLink-Token" type="password" density="compact" hide-details />
+          <v-text-field v-model.number="rabiLinkRelayClaimWaitMs" label="领取任务等待毫秒" type="number" min="0" max="60000" step="1000" density="compact" hide-details />
+          <v-text-field v-model.number="rabiLinkRelayReplyIdleTimeoutMs" label="回复空闲超时毫秒" type="number" min="1000" max="120000" step="1000" density="compact" hide-details />
         </div>
       </v-card>
 
@@ -354,5 +394,6 @@ const selectedRuntimeLabel = computed(() => {
           <v-text-field v-model="rolesDir" label="角色目录" placeholder="data/roles" density="compact" hide-details />
         </div>
       </v-card>
+    </div>
   </div>
 </template>

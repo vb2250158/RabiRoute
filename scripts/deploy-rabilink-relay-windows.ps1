@@ -82,10 +82,18 @@ function New-AsciiFile {
 }
 
 $relayScript = Join-Path $repoRoot "scripts\rabilink-relay-server.mjs"
+$webguiDist = Join-Path $repoRoot "ribiwebgui\dist"
+$webguiAssets = Join-Path $repoRoot "assets"
 $openApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.CURRENT.openapi.json"
 $manualAuthOpenApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"
 if (-not (Test-Path -LiteralPath $relayScript)) {
     throw "Relay server script was not found: $relayScript"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $webguiDist "index.html"))) {
+    throw "RabiRoute WebGUI build was not found: $webguiDist. Run the WebGUI build before deploying."
+}
+if (-not (Test-Path -LiteralPath $webguiAssets)) {
+    throw "RabiRoute WebGUI asset directory was not found: $webguiAssets"
 }
 if (-not (Test-Path -LiteralPath $openApiFile)) {
     throw "RabiLink OpenAPI document was not found: $openApiFile"
@@ -104,6 +112,9 @@ New-Item -ItemType Directory -Path (Join-Path $bundleRoot "logs") -Force | Out-N
 $bundleDataRoot = Join-Path $bundleRoot "data"
 New-Item -ItemType Directory -Path $bundleDataRoot -Force | Out-Null
 Copy-Item -LiteralPath $relayScript -Destination (Join-Path $bundleRoot "rabilink-relay-server.mjs") -Force
+New-Item -ItemType Directory -Path (Join-Path $bundleRoot "ribiwebgui") -Force | Out-Null
+Copy-Item -LiteralPath $webguiDist -Destination (Join-Path $bundleRoot "ribiwebgui\dist") -Recurse -Force
+Copy-Item -LiteralPath $webguiAssets -Destination (Join-Path $bundleRoot "assets") -Recurse -Force
 Copy-Item -LiteralPath $openApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.CURRENT.openapi.json") -Force
 Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json") -Force
 
@@ -150,11 +161,27 @@ http://:$PublicHttpPort {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /api/rabilink/mobile* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /openapi* {
         reverse_proxy 127.0.0.1:8788
     }
 
     handle /worker/tasks* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /worker/webgui-requests* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /manage* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /admin* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -181,11 +208,27 @@ http://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /api/rabilink/mobile* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /openapi* {
         reverse_proxy 127.0.0.1:8788
     }
 
     handle /worker/tasks* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /worker/webgui-requests* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /manage* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /admin* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -205,11 +248,27 @@ http://:80 {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /api/rabilink/mobile* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /openapi* {
         reverse_proxy 127.0.0.1:8788
     }
 
     handle /worker/tasks* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /worker/webgui-requests* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /manage* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /admin* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -229,11 +288,27 @@ https://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /api/rabilink/mobile* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /openapi* {
         reverse_proxy 127.0.0.1:8788
     }
 
     handle /worker/tasks* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /worker/webgui-requests* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /manage* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /admin* {
         reverse_proxy 127.0.0.1:8788
     }
 

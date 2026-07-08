@@ -26,12 +26,23 @@ node scripts/rabilink-relay-server.mjs
 启动后先打开服务器 WebGUI：
 
 ```text
-https://你的域名/admin
+https://你的域名/manage
 ```
 
 首次进入时注册一个服务器账号，然后创建 RabiLink 应用。每个应用会生成独立 `rbl_...` token；完整 token 只在创建或重新生成时显示一次。Rokid/灵珠插件和电脑端 RabiLink worker 都使用同一个应用 token，Relay 会按应用隔离 task 和下行消息队列。
 
-`RABILINK_RELAY_TOKEN` 仍然兼容旧部署；设置后它是全局 token，可以访问所有应用的任务。新部署优先使用 `/admin` 创建的应用 token。
+`RABILINK_RELAY_TOKEN` 仍然兼容旧部署；设置后它是全局 token，可以访问所有应用的任务。新部署优先使用 `/manage` 创建的应用 token。
+
+绑定电脑端 RabiLink worker 后，服务器也可以通过同一条 Relay 通道访问这台 PC 的 RibiWebGUI。服务器路径中的 RabiGUID 根路径等同于 PC 本机 manager 根路径：
+
+```text
+https://你的域名/manage/<账号>/<RabiGUID>/#/routes
+= http://127.0.0.1:8790/#/routes
+```
+
+这里的 `<RabiGUID>` 来自 PC 端 `data/Config.json` 的 `rabiGuid`，不是显示名。浏览器必须先登录 `/manage` 中对应账号；每个浏览器只保留一个当前登录账号。这个入口会把 WebGUI 的 `GET` / `POST` / `PATCH` 等请求排队给对应 PC worker，由 PC worker 在本机访问 `http://127.0.0.1:8790`，因此可以在服务器页面里修改这台 PC 的 Rabi 配置。服务器不会直接连入用户电脑。
+
+旧路径 `/manage/<账号>/<RabiGUID>/webgui/...` 保留兼容，但推荐使用上面的根路径。
 
 公网部署时建议放到 HTTPS 反代后面，例如：
 
@@ -264,6 +275,40 @@ Content-Type: application/json
 }
 ```
 
+## 电脑端 worker 转发本机 WebGUI
+
+服务器上的远程 WebGUI 入口会创建 WebGUI 请求，电脑端 worker 通过长轮询领取：
+
+```http
+GET /worker/webgui-requests?limit=1&deviceId=<RabiPC>&deviceGuid=<RabiGUID>
+Authorization: Bearer <token>
+```
+
+worker 会在本机访问 `RABILINK_RELAY_WEBGUI_URL`，默认是 `GATEWAY_MANAGER_URL`，通常即：
+
+```text
+http://127.0.0.1:8790
+```
+
+随后把本机 WebGUI 响应回填：
+
+```http
+POST /worker/webgui-requests/<requestId>/response
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "ok": true,
+  "statusCode": 200,
+  "headers": {
+    "content-type": "text/html; charset=utf-8"
+  },
+  "bodyBase64": "..."
+}
+```
+
+`bodyBase64` 用于保留 HTML、JS、图片和 JSON 等响应体。服务器会对 HTML/JS/CSS 中常见的 `/api`、`/manager-config` 和 `/assets` 路径做前缀改写，让远程 WebGUI 的保存配置、读取状态和静态资源请求仍然回到同一台 PC Rabi。
+
 ## 电脑端 worker 回填结果
 
 ### 兼容：一次性回填最终结果
@@ -344,13 +389,15 @@ Authorization: Bearer <token>
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `RABILINK_RELAY_TOKEN` | 空 | 兼容旧部署的全局 token；新部署优先用 `/admin` 创建应用 token |
+| `RABILINK_RELAY_TOKEN` | 空 | 兼容旧部署的全局 token；新部署优先用 `/manage` 创建应用 token |
 | `RABILINK_RELAY_PORT` / `PORT` | `8788` | 监听端口 |
 | `RABILINK_RELAY_HOST` / `HOST` | `0.0.0.0` | 监听地址 |
 | `RABILINK_RELAY_REPLY_TIMEOUT_MS` | `60000` | Rokid 请求最多等待 worker 回填多久 |
 | `RABILINK_RELAY_MESSAGE_WAIT_MS` | `60000` | 眼镜按 taskId 拉取消息列表的长轮询等待时间 |
 | `RABILINK_RELAY_OUTBOX_WAIT_MS` | `60000` | 兼容全局下行消息列表长轮询等待时间 |
 | `RABILINK_RELAY_WORKER_TASK_WAIT_MS` | `60000` | 电脑端 worker 领取任务的长轮询等待时间 |
+| `RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS` | `30000` | 服务器等待电脑端 worker 回填 WebGUI 响应的时间 |
+| `RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES` | `10485760` | 单次远程 WebGUI 请求体大小上限 |
 | `RABILINK_RELAY_TASK_TTL_MS` | `600000` | 任务保留时间 |
 | `RABILINK_RELAY_LEASE_MS` | `45000` | worker 取到任务后的租约时间 |
 | `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志和服务器 WebGUI 账号/应用数据目录 |
@@ -441,7 +488,7 @@ https://rabi.example.com/rokid/rabilink/openapi.manual-auth.json
 授权方式：Service token / API key
 位置：Header
 Parameter name：X-RabiLink-Token
-Service token / API key：填 `/admin` 里对应 RabiLink 应用的 token
+Service token / API key：填 `/manage` 里对应 RabiLink 应用的 token
 ```
 
 本地文件导入时使用：

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentManagerApiContext } from "../agentAdapters/managerApi.js";
 import { scanAgentAdapters } from "../agentAdapters/managerApi.js";
-import type { GatewayDefinition, GatewayConfigFile } from "../shared/gatewayConfigModel.js";
+import { gatewayAdapterTypes, type GatewayDefinition, type GatewayConfigFile } from "../shared/gatewayConfigModel.js";
 import { sanitizeConfigName } from "../shared/routeIdentity.js";
 import { routeFolderPath } from "../shared/routePaths.js";
 import type { RabiGlobalConfigStore } from "./globalConfig.js";
@@ -113,6 +113,7 @@ function identityPayload(ctx: RabiApiContext, request: http.IncomingMessage): { 
       version: ctx.version(),
       addresses: localIpv4Addresses(),
       managerHost: ctx.managerHost,
+      rabiLinkRelay: config.rabiLinkRelay,
       configPath: ctx.globalConfig.configPath,
       self: true
     }
@@ -353,8 +354,21 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
     return true;
   }
   if (request.method === "PATCH" && pathname === "/api/rabi/identity") {
-    void readJsonBody<Partial<{ rabiName: string }>>(request)
-      .then((body) => ctx.globalConfig.patch({ rabiName: body.rabiName }))
+    void readJsonBody<Partial<{ rabiName: string; rabiLinkRelay: unknown }>>(request)
+      .then((body) => {
+        const beforeRelay = JSON.stringify(ctx.globalConfig.read().rabiLinkRelay);
+        const config = ctx.globalConfig.patch({ rabiName: body.rabiName, rabiLinkRelay: body.rabiLinkRelay as any });
+        const relayChanged = beforeRelay !== JSON.stringify(config.rabiLinkRelay);
+        if (relayChanged) {
+          for (const runtime of ctx.runtimes()) {
+            if (gatewayAdapterTypes(runtime.definition).includes("rabilink")) {
+              runtime.needsRestart = true;
+            }
+          }
+          ctx.syncRunningGateways();
+        }
+        return config;
+      })
       .then((config) => jsonResponse(response, 200, { code: 0, data: config }))
       .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;

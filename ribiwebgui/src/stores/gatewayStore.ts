@@ -211,6 +211,14 @@ export const useGatewayStore = defineStore("gateway", () => {
     managerPort: 8790,
     rabiGuid: "",
     rabiName: "",
+    rabiLinkRelay: {
+      enabled: false,
+      url: "",
+      token: "",
+      deviceId: "",
+      claimWaitMs: 60000,
+      replyIdleTimeoutMs: 60000
+    },
     computerName: ""
   });
 

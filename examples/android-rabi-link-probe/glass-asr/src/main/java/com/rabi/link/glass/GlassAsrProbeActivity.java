@@ -6,10 +6,13 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -17,10 +20,13 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.util.Base64;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -44,6 +50,11 @@ import java.util.Locale;
 
 public class GlassAsrProbeActivity extends Activity {
     private static final String TAG = "RabiGlassAsr";
+    private static final float FOCUSED_BUTTON_SCALE = 1.10f;
+    private static final long ACTION_NAVIGATION_DEBOUNCE_MS = 260L;
+    private static final long ACTION_NAVIGATION_KEY_LOCK_MS = 700L;
+    // Rokid AR display treats black pixels as optically transparent; Android window transparency reveals the launcher.
+    private static final int GLASS_BACKGROUND_COLOR = Color.BLACK;
     private static final int REQUEST_RECORD_AUDIO = 8101;
     private static final String CLIENT_ID = "GlassSample";
     private static final String CUSTOM_CMD_CLIENT_KEY = "rabi_native_voice_client";
@@ -89,6 +100,15 @@ public class GlassAsrProbeActivity extends Activity {
 
     private TextView statusView;
     private TextView logView;
+    private HorizontalScrollView buttonScrollView;
+    private final List<Button> actionButtons = new ArrayList<>();
+    private int selectedActionIndex;
+    private float touchStartX;
+    private float touchStartY;
+    private boolean touchGestureActive;
+    private boolean navigationKeyGestureActive;
+    private long lastActionNavigationAtMs;
+    private int lastActionNavigationDirection;
     private String latestText = "";
     private String pendingProtocolAfterSdkReady = "";
     private String lastGlassSdkEvent = "not_initialized";
@@ -311,14 +331,28 @@ public class GlassAsrProbeActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        prepareGlassWindow();
         setContentView(buildUi());
-        append("Rabi Glass ASR probe started.");
-        append("点击“开始识别”，或按 Enter / 眼镜点击键启动语音转文本。");
-        append("完整识别文本会显示在本页，并尝试通过 Glass message service 发给手机端。");
+        append("Rabi Glass Test started.");
+        append("用于验证眼镜端测试 APK、CXR CustomCmd 和基础回包。");
+        append("按钮可用触摸板逐项切换；选中项会放大并显示 > 光标。");
         initCustomCmdBridge();
         initAndroidSystemTts();
         initGlassSdk();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        prepareGlassWindow();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            prepareGlassWindow();
+        }
     }
 
     @Override
@@ -354,11 +388,62 @@ public class GlassAsrProbeActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
-            startAsr(false);
-            return true;
+        int keyCode = event.getKeyCode();
+        if (isNavigationActionKey(keyCode)) {
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                navigationKeyGestureActive = false;
+                return true;
+            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                long now = SystemClock.uptimeMillis();
+                if (navigationKeyGestureActive && now - lastActionNavigationAtMs < ACTION_NAVIGATION_KEY_LOCK_MS) {
+                    Log.d(TAG, "suppress active key navigation keyCode=" + keyCode);
+                    return true;
+                }
+                navigationKeyGestureActive = true;
+                return guardedMoveActionFocus(isNextActionKey(keyCode) ? 1 : -1, "key", event.getRepeatCount());
+            }
+        }
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (isConfirmActionKey(keyCode)) {
+                performSelectedAction();
+                return true;
+            }
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            touchStartX = event.getX();
+            touchStartY = event.getY();
+            touchGestureActive = true;
+            return true;
+        }
+        if (action == MotionEvent.ACTION_CANCEL) {
+            touchGestureActive = false;
+            return true;
+        }
+        if (action == MotionEvent.ACTION_MOVE) {
+            return true;
+        }
+        if (action == MotionEvent.ACTION_UP && touchGestureActive) {
+            touchGestureActive = false;
+            float deltaX = event.getX() - touchStartX;
+            float deltaY = event.getY() - touchStartY;
+            float threshold = dp(24);
+            if (Math.abs(deltaX) < threshold && Math.abs(deltaY) < threshold) {
+                performSelectedAction();
+                return true;
+            }
+            if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+                return guardedMoveActionFocus(deltaX < 0 ? 1 : -1, "touch", 0);
+            }
+            return guardedMoveActionFocus(deltaY > 0 ? 1 : -1, "touch", 0);
+        }
+        return super.dispatchTouchEvent(event);
     }
 
     @Override
@@ -380,61 +465,256 @@ public class GlassAsrProbeActivity extends Activity {
     private View buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(24, 22, 24, 22);
-        root.setBackgroundColor(Color.rgb(5, 7, 10));
+        root.setGravity(Gravity.BOTTOM);
+        root.setPadding(dp(16), 0, dp(16), dp(16));
+        root.setBackgroundColor(GLASS_BACKGROUND_COLOR);
+
+        root.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 1));
+
+        LinearLayout hud = new LinearLayout(this);
+        hud.setOrientation(LinearLayout.VERTICAL);
+        hud.setBackgroundColor(Color.TRANSPARENT);
 
         TextView title = new TextView(this);
-        title.setText("Rabi Glass ASR");
+        title.setText("Rabi Glass Test");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(26);
-        title.setPadding(0, 0, 0, 10);
-        root.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        title.setTextSize(13);
+        title.setPadding(0, 0, 0, dp(2));
+        hud.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         statusView = new TextView(this);
         statusView.setText("初始化中");
         statusView.setTextColor(Color.rgb(61, 220, 151));
-        statusView.setTextSize(18);
-        statusView.setPadding(0, 0, 0, 14);
-        root.addView(statusView, new LinearLayout.LayoutParams(-1, -2));
+        statusView.setTextSize(11);
+        statusView.setSingleLine(true);
+        statusView.setPadding(0, 0, 0, dp(6));
+        hud.addView(statusView, new LinearLayout.LayoutParams(-1, -2));
 
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
-        buttons.addView(button("开始识别", v -> startAsr(false)), new LinearLayout.LayoutParams(0, -2, 1));
-        buttons.addView(button("停止", v -> stopAsr(false)), new LinearLayout.LayoutParams(0, -2, 1));
-        buttons.addView(button("发送文本", v -> sendLatestTextToPhone()), new LinearLayout.LayoutParams(0, -2, 1));
-        buttons.addView(button("TTS", v -> speakLatestText()), new LinearLayout.LayoutParams(0, -2, 1));
-        root.addView(buttons, new LinearLayout.LayoutParams(-1, -2));
-
-        LinearLayout offlineButtons = new LinearLayout(this);
-        offlineButtons.setOrientation(LinearLayout.HORIZONTAL);
-        offlineButtons.addView(button("注册离线指令", v -> armOfflineCommands(false)), new LinearLayout.LayoutParams(0, -2, 1));
-        offlineButtons.addView(button("清除离线指令", v -> clearOfflineCommands(false)), new LinearLayout.LayoutParams(0, -2, 1));
-        root.addView(offlineButtons, new LinearLayout.LayoutParams(-1, -2));
-
-        LinearLayout androidVoiceButtons = new LinearLayout(this);
-        androidVoiceButtons.setOrientation(LinearLayout.HORIZONTAL);
-        androidVoiceButtons.addView(button("系统语音状态", v -> sendTextToPhone(ANDROID_STATUS_PREFIX + androidVoiceStatusSummary())), new LinearLayout.LayoutParams(0, -2, 1));
-        androidVoiceButtons.addView(button("系统ASR", v -> startAndroidSystemAsr(false)), new LinearLayout.LayoutParams(0, -2, 1));
-        androidVoiceButtons.addView(button("停系统ASR", v -> stopAndroidSystemAsr(false)), new LinearLayout.LayoutParams(0, -2, 1));
-        androidVoiceButtons.addView(button("系统TTS", v -> speakAndroidSystemTts("Rabi 眼镜系统 TTS 测试", false)), new LinearLayout.LayoutParams(0, -2, 1));
-        root.addView(androidVoiceButtons, new LinearLayout.LayoutParams(-1, -2));
+        hud.addView(buttonRow(
+                button("发送文本", v -> sendLatestTextToPhone()),
+                button("Ping", v -> handleProtocol(PING_CMD)),
+                button("状态", v -> handleProtocol(STATUS_CMD)),
+                button("诊断", v -> handleProtocol(DIAG_CMD)),
+                button("注册离线", v -> armOfflineCommands(false)),
+                button("清除离线", v -> clearOfflineCommands(false))
+        ), new LinearLayout.LayoutParams(-1, -2));
 
         ScrollView scroll = new ScrollView(this);
         logView = new TextView(this);
-        logView.setTextColor(Color.rgb(220, 227, 235));
-        logView.setTextSize(14);
-        logView.setPadding(0, 18, 0, 0);
+        logView.setTextColor(Color.rgb(188, 200, 210));
+        logView.setTextSize(9);
+        logView.setPadding(0, dp(4), 0, 0);
         scroll.addView(logView, new ScrollView.LayoutParams(-1, -2));
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        hud.addView(scroll, new LinearLayout.LayoutParams(-1, dp(44)));
+
+        root.addView(hud, new LinearLayout.LayoutParams(-1, -2));
         return root;
+    }
+
+    private HorizontalScrollView buttonRow(Button... buttons) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(dp(116), 0, dp(116), dp(4));
+        actionButtons.clear();
+        for (Button button : buttons) {
+            button.setId(View.generateViewId());
+            actionButtons.add(button);
+        }
+        for (int i = 0; i < buttons.length; i++) {
+            int next = buttons[(i + 1) % buttons.length].getId();
+            int previous = buttons[(i + buttons.length - 1) % buttons.length].getId();
+            buttons[i].setNextFocusForwardId(next);
+            buttons[i].setNextFocusRightId(next);
+            buttons[i].setNextFocusDownId(next);
+            buttons[i].setNextFocusLeftId(previous);
+            buttons[i].setNextFocusUpId(previous);
+        }
+        for (Button button : buttons) {
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(112), dp(36));
+            params.setMargins(0, 0, dp(6), 0);
+            row.addView(button, params);
+        }
+        buttonScrollView = new HorizontalScrollView(this);
+        buttonScrollView.setHorizontalScrollBarEnabled(false);
+        buttonScrollView.setFillViewport(false);
+        buttonScrollView.addView(row, new HorizontalScrollView.LayoutParams(-2, -2));
+        if (buttons.length > 0) {
+            row.post(() -> selectAction(0, false));
+        }
+        return buttonScrollView;
+    }
+
+    private boolean isNextActionKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                || keyCode == KeyEvent.KEYCODE_NAVIGATE_NEXT
+                || keyCode == KeyEvent.KEYCODE_FORWARD
+                || keyCode == KeyEvent.KEYCODE_MEDIA_NEXT
+                || keyCode == KeyEvent.KEYCODE_PAGE_DOWN
+                || keyCode == KeyEvent.KEYCODE_TAB;
+    }
+
+    private boolean isPreviousActionKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                || keyCode == KeyEvent.KEYCODE_DPAD_UP
+                || keyCode == KeyEvent.KEYCODE_NAVIGATE_PREVIOUS
+                || keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                || keyCode == KeyEvent.KEYCODE_PAGE_UP;
+    }
+
+    private boolean isNavigationActionKey(int keyCode) {
+        return isNextActionKey(keyCode) || isPreviousActionKey(keyCode);
+    }
+
+    private boolean isConfirmActionKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_ENTER
+                || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+                || keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                || keyCode == KeyEvent.KEYCODE_BUTTON_A
+                || keyCode == KeyEvent.KEYCODE_SPACE;
+    }
+
+    private boolean moveActionFocus(int direction) {
+        if (actionButtons.isEmpty()) {
+            return false;
+        }
+        selectAction(selectedActionIndex + direction, true);
+        return true;
+    }
+
+    private boolean guardedMoveActionFocus(int direction, String source, int repeatCount) {
+        if (repeatCount > 0) {
+            Log.d(TAG, "suppress repeated navigation source=" + source + " direction=" + direction + " repeat=" + repeatCount);
+            return true;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (lastActionNavigationDirection == direction
+                && now - lastActionNavigationAtMs < ACTION_NAVIGATION_DEBOUNCE_MS) {
+            Log.d(TAG, "suppress duplicate navigation source=" + source + " direction=" + direction);
+            return true;
+        }
+        lastActionNavigationDirection = direction;
+        lastActionNavigationAtMs = now;
+        Log.d(TAG, "navigation source=" + source + " direction=" + direction);
+        return moveActionFocus(direction);
+    }
+
+    private void selectAction(int index, boolean announce) {
+        if (actionButtons.isEmpty()) {
+            return;
+        }
+        selectedActionIndex = (index % actionButtons.size() + actionButtons.size()) % actionButtons.size();
+        Button button = actionButtons.get(selectedActionIndex);
+        button.requestFocus();
+        centerFocusedButton(button);
+        if (announce) {
+            Object tag = button.getTag();
+            String label = tag == null ? "" : tag.toString();
+            setStatus("选择 " + (selectedActionIndex + 1) + "/" + actionButtons.size() + ": " + label);
+            Log.d(TAG, "selected action " + (selectedActionIndex + 1) + "/" + actionButtons.size() + " " + label);
+        }
+    }
+
+    private void performSelectedAction() {
+        if (actionButtons.isEmpty()) {
+            startAsr(false);
+            return;
+        }
+        View focused = getCurrentFocus();
+        int current = actionButtons.indexOf(focused);
+        if (current >= 0) {
+            selectedActionIndex = current;
+        }
+        Button button = actionButtons.get(selectedActionIndex);
+        button.requestFocus();
+        centerFocusedButton(button);
+        Object tag = button.getTag();
+        Log.d(TAG, "perform action " + (selectedActionIndex + 1) + "/" + actionButtons.size() + " " + (tag == null ? "" : tag.toString()));
+        button.performClick();
     }
 
     private Button button(String text, View.OnClickListener listener) {
         Button button = new Button(this);
-        button.setText(text);
+        button.setTag(text);
+        button.setText("  " + text);
         button.setAllCaps(false);
+        button.setTextSize(13);
+        button.setTextColor(Color.WHITE);
+        button.setMinHeight(dp(32));
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(dp(4), 0, dp(4), 0);
+        button.setFocusable(true);
+        button.setFocusableInTouchMode(true);
+        button.setBackground(buttonBackground(false));
+        button.setOnFocusChangeListener((view, focused) -> updateButtonFocus((Button) view, focused));
         button.setOnClickListener(listener);
         return button;
+    }
+
+    private void updateButtonFocus(Button button, boolean focused) {
+        Object tag = button.getTag();
+        String label = tag == null ? "" : tag.toString();
+        button.setText((focused ? "> " : "  ") + label);
+        button.setTextColor(focused ? Color.rgb(61, 220, 151) : Color.WHITE);
+        button.setScaleX(focused ? FOCUSED_BUTTON_SCALE : 1.0f);
+        button.setScaleY(focused ? FOCUSED_BUTTON_SCALE : 1.0f);
+        button.setBackground(buttonBackground(focused));
+        if (focused) {
+            int index = actionButtons.indexOf(button);
+            if (index >= 0) {
+                selectedActionIndex = index;
+            }
+            centerFocusedButton(button);
+        }
+    }
+
+    private void centerFocusedButton(Button button) {
+        if (buttonScrollView == null) {
+            return;
+        }
+        button.post(() -> {
+            int viewportWidth = buttonScrollView.getWidth();
+            int buttonCenter = button.getLeft() + button.getWidth() / 2;
+            int targetScrollX = Math.max(0, buttonCenter - viewportWidth / 2);
+            buttonScrollView.smoothScrollTo(targetScrollX, 0);
+        });
+    }
+
+    private GradientDrawable buttonBackground(boolean focused) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(Color.TRANSPARENT);
+        drawable.setCornerRadius(8);
+        drawable.setStroke(focused ? 2 : 1, focused ? Color.rgb(61, 220, 151) : Color.TRANSPARENT);
+        return drawable;
+    }
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void prepareGlassWindow() {
+        getWindow().setBackgroundDrawable(new ColorDrawable(GLASS_BACKGROUND_COLOR));
+        getWindow().addFlags(
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                        | WindowManager.LayoutParams.FLAG_FULLSCREEN
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        );
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowManager.LayoutParams params = getWindow().getAttributes();
+            params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(params);
+        }
+        View decor = getWindow().getDecorView();
+        decor.setBackgroundColor(GLASS_BACKGROUND_COLOR);
+        decor.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
     }
 
     private void initGlassSdk() {

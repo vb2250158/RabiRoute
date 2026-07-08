@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import { hostname } from "node:os";
 import path from "node:path";
 import { config } from "../config.js";
 import { forwardMessage } from "../forwarding.js";
@@ -404,6 +405,13 @@ function acceptWebhookPayload(profile: WebhookAdapterProfile, webhookPath: strin
 }
 
 type RelayTask = Record<string, unknown>;
+type RelayWebguiRequest = {
+  id?: string;
+  method?: string;
+  path?: string;
+  headers?: Record<string, string>;
+  bodyBase64?: string;
+};
 
 const runningRelayWorkers = new Set<string>();
 
@@ -457,6 +465,11 @@ function taskFromClaimResponse(body: Record<string, unknown>): RelayTask | null 
     return body.tasks[0] as RelayTask;
   }
   return null;
+}
+
+function webguiRequestsFromClaimResponse(body: Record<string, unknown>): RelayWebguiRequest[] {
+  const requests = Array.isArray(body.requests) ? body.requests : [];
+  return requests.filter((item): item is RelayWebguiRequest => Boolean(item && typeof item === "object" && !Array.isArray(item)));
 }
 
 function relayTaskId(task: RelayTask): string {
@@ -545,6 +558,81 @@ async function finishRelayTask(taskId: string, body: Record<string, unknown>): P
   });
 }
 
+async function finishRelayWebguiRequest(requestId: string, body: Record<string, unknown>): Promise<void> {
+  await fetchRelayJson(`/worker/webgui-requests/${encodeURIComponent(requestId)}/response`, {
+    method: "POST",
+    headers: relayHeaders(true),
+    body: JSON.stringify(body)
+  });
+}
+
+function normalizedRelayWebguiBaseUrl(): string {
+  return config.rabiLinkRelayWebguiUrl.trim().replace(/\/+$/, "") || "http://127.0.0.1:8790";
+}
+
+function safeWebguiLocalUrl(pathname: string): string {
+  const base = normalizedRelayWebguiBaseUrl();
+  const localUrl = new URL(pathname && pathname.startsWith("/") ? pathname : `/${pathname || ""}`, base);
+  const baseUrl = new URL(base);
+  localUrl.protocol = baseUrl.protocol;
+  localUrl.host = baseUrl.host;
+  return localUrl.toString();
+}
+
+function relayWebguiRequestId(request: RelayWebguiRequest): string {
+  return stringPayloadField(request.id);
+}
+
+function compactRelayWebguiResponse(method: string, localPath: string, statusCode: number, body: Buffer): Buffer {
+  const upperMethod = method.toUpperCase();
+  if (!["POST", "PATCH", "PUT", "DELETE"].includes(upperMethod)) return body;
+  if (!localPath.startsWith("/gateways") && !localPath.startsWith("/manager-config")) return body;
+  if (statusCode < 200 || statusCode >= 300) return body;
+  return Buffer.from(JSON.stringify({ code: 0, ok: true }), "utf8");
+}
+
+async function handleRelayWebguiRequest(request: RelayWebguiRequest): Promise<void> {
+  const requestId = relayWebguiRequestId(request);
+  if (!requestId) return;
+  try {
+    const method = stringPayloadField(request.method).toUpperCase() || "GET";
+    const localPath = stringPayloadField(request.path) || "/";
+    const localUrl = safeWebguiLocalUrl(localPath);
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(request.headers || {})) {
+      const lower = key.toLowerCase();
+      if (!["accept", "content-type", "user-agent"].includes(lower)) continue;
+      headers[lower] = String(value || "");
+    }
+    const body = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
+    const response = await fetch(localUrl, {
+      method,
+      headers,
+      body: method === "GET" || method === "HEAD" ? undefined : body
+    });
+    const rawResponseBuffer = Buffer.from(await response.arrayBuffer());
+    const responseBuffer = compactRelayWebguiResponse(method, localPath, response.status, rawResponseBuffer);
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+    await finishRelayWebguiRequest(requestId, {
+      ok: true,
+      statusCode: response.status,
+      headers: responseHeaders,
+      bodyBase64: responseBuffer.toString("base64")
+    });
+  } catch (error) {
+    await finishRelayWebguiRequest(requestId, {
+      ok: false,
+      statusCode: 502,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+      bodyBase64: Buffer.from(error instanceof Error ? error.message : String(error), "utf8").toString("base64"),
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
 async function streamRepliesToRelay(taskId: string): Promise<{ deliveredCount: number; sawFinal: boolean }> {
   const delivered = new Set<string>();
   let lastActivityAt = Date.now();
@@ -597,6 +685,8 @@ async function claimRelayTask(): Promise<RelayTask | null> {
   const params = new URLSearchParams({
     limit: "1",
     deviceId: config.rabiLinkRelayDeviceId,
+    deviceGuid: config.rabiLinkRelayDeviceGuid,
+    deviceName: hostname(),
     waitMs: String(waitMs)
   });
   const body = await fetchRelayJson(`/worker/tasks?${params}`, {
@@ -604,6 +694,53 @@ async function claimRelayTask(): Promise<RelayTask | null> {
     headers: relayHeaders()
   });
   return taskFromClaimResponse(body);
+}
+
+async function claimRelayWebguiRequests(): Promise<RelayWebguiRequest[]> {
+  const waitMs = config.rabiLinkRelayClaimWaitMs;
+  const params = new URLSearchParams({
+    limit: "1",
+    deviceId: config.rabiLinkRelayDeviceId,
+    deviceGuid: config.rabiLinkRelayDeviceGuid,
+    deviceName: hostname(),
+    waitMs: String(waitMs)
+  });
+  const body = await fetchRelayJson(`/worker/webgui-requests?${params}`, {
+    method: "GET",
+    headers: relayHeaders()
+  });
+  return webguiRequestsFromClaimResponse(body);
+}
+
+function startRabiLinkRelayWebguiWorker(profile: WebhookAdapterProfile): void {
+  if (profile.type !== "rabilink") return;
+  if (!config.rabiLinkRelayEnabled || !normalizedRelayBaseUrl()) return;
+  const workerKey = `${profile.type}:webgui:${normalizedRelayBaseUrl()}:${config.rabiLinkRelayDeviceGuid || config.rabiLinkRelayDeviceId}`;
+  if (runningRelayWorkers.has(workerKey)) return;
+  runningRelayWorkers.add(workerKey);
+  void (async () => {
+    while (true) {
+      try {
+        const requests = await claimRelayWebguiRequests();
+        for (const request of requests) {
+          await handleRelayWebguiRequest(request);
+        }
+      } catch (error) {
+        appendAdapterLog(profile.type, {
+          level: "error",
+          event: "relay_webgui_worker_error",
+          message: error instanceof Error ? error.message : String(error),
+          data: {
+            relayUrl: normalizedRelayBaseUrl(),
+            relayDeviceId: config.rabiLinkRelayDeviceId,
+            relayDeviceGuid: config.rabiLinkRelayDeviceGuid,
+            localWebguiUrl: normalizedRelayWebguiBaseUrl()
+          }
+        });
+        await sleep(3000);
+      }
+    }
+  })();
 }
 
 function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhookPath: string): void {
@@ -616,9 +753,9 @@ function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhookPath: s
   if (runningRelayWorkers.has(workerKey)) return;
   runningRelayWorkers.add(workerKey);
   void (async () => {
-    patchRelayStatus(profile, {
-      relayWorker: "running",
-      relayUrl: normalizedRelayBaseUrl(),
+        patchRelayStatus(profile, {
+          relayWorker: "running",
+          relayUrl: normalizedRelayBaseUrl(),
       relayDeviceId: config.rabiLinkRelayDeviceId,
       message: "RabiLink Relay worker 已启动。"
     });
@@ -786,6 +923,7 @@ export function createWebhookAdapter(profile = defaultWebhookProfile()): Message
           port: profile.port
         });
         startRabiLinkRelayWorker(profile, webhookPath);
+        startRabiLinkRelayWebguiWorker(profile);
         const url = `http://${host}:${profile.port}${webhookPath}`;
         appendAdapterLog(profile.type, {
           event: "listening",

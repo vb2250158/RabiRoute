@@ -157,6 +157,7 @@ final class RokidCxrController {
     }
 
     void startGlassAsrApp() {
+        closeCustomViewBeforeGlassAppStart();
         log("appStart entry=" + GLASS_ASR_ENTRY);
         cxrLink.appStart(GLASS_ASR_ENTRY, glassAppCallback());
     }
@@ -244,6 +245,18 @@ final class RokidCxrController {
         }
         audioCapture.reset();
         linkState.reset();
+    }
+
+    private void closeCustomViewBeforeGlassAppStart() {
+        if (!isCustomViewOpened()) {
+            return;
+        }
+        try {
+            boolean closed = cxrLink.customViewClose();
+            log("customViewClose before appStart=" + closed);
+        } catch (Throwable error) {
+            log("customViewClose before appStart failed: " + error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
     }
 
     private IGlassAppCbk glassAppCallback() {

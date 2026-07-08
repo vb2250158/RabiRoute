@@ -66,7 +66,7 @@ import {
   personaConfigPath as resolvePersonaConfigPath
 } from "../shared/routePaths.js";
 import { ManagerConfigRepository } from "./configRepository.js";
-import { RabiGlobalConfigStore } from "./globalConfig.js";
+import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import { handleRabiApi } from "./rabiApi.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
@@ -610,12 +610,6 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     rabiLinkWebhookPort: definition.rabiLinkWebhookPort,
     rabiLinkWebhookPath: definition.rabiLinkWebhookPath,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost,
-    rabiLinkRelayEnabled: definition.rabiLinkRelayEnabled,
-    rabiLinkRelayUrl: definition.rabiLinkRelayUrl,
-    rabiLinkRelayToken: definition.rabiLinkRelayToken,
-    rabiLinkRelayDeviceId: definition.rabiLinkRelayDeviceId,
-    rabiLinkRelayClaimWaitMs: definition.rabiLinkRelayClaimWaitMs,
-    rabiLinkRelayReplyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs,
     napcatHttpUrl: definition.napcatHttpUrl,
     napcatWebuiUrl: definition.napcatWebuiUrl,
     napcatAccessToken: definition.napcatAccessToken,
@@ -644,6 +638,52 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     agentAdapters: definition.agentAdapters,
     routeVariables: definition.routeVariables
   };
+}
+
+function hasGlobalRabiLinkRelayConfig(config = rabiGlobalConfig.read().rabiLinkRelay): boolean {
+  return Boolean(config.url || config.token);
+}
+
+function rabiLinkRelayConfigFor(definition: GatewayDefinition): RabiLinkRelayGlobalConfig {
+  const globalConfig = rabiGlobalConfig.read();
+  const globalRelay = globalConfig.rabiLinkRelay;
+  if (hasGlobalRabiLinkRelayConfig(globalRelay)) {
+    return globalRelay;
+  }
+  const url = definition.rabiLinkRelayUrl?.trim() || "";
+  const token = definition.rabiLinkRelayToken?.trim() || "";
+  return {
+    enabled: Boolean(url && token),
+    url,
+    token,
+    deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalRelay.deviceId || globalConfig.rabiName || definition.id,
+    claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalRelay.claimWaitMs,
+    replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalRelay.replyIdleTimeoutMs
+  };
+}
+
+function firstLegacyRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null {
+  const globalConfig = rabiGlobalConfig.read();
+  for (const definition of readConfig().gateways) {
+    if (!definition.rabiLinkRelayUrl?.trim() && !definition.rabiLinkRelayToken?.trim()) continue;
+    const url = definition.rabiLinkRelayUrl?.trim() || "";
+    const token = definition.rabiLinkRelayToken?.trim() || "";
+    return {
+      enabled: Boolean(url && token),
+      url,
+      token,
+      deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalConfig.rabiLinkRelay.deviceId || globalConfig.rabiName || definition.id,
+      claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalConfig.rabiLinkRelay.claimWaitMs,
+      replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalConfig.rabiLinkRelay.replyIdleTimeoutMs
+    };
+  }
+  return null;
+}
+
+function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
+  const globalRelay = rabiGlobalConfig.read().rabiLinkRelay;
+  if (hasGlobalRabiLinkRelayConfig(globalRelay)) return globalRelay;
+  return firstLegacyRabiLinkRelayConfig() || globalRelay;
 }
 
 function writeAdapterConfigFile(definition: GatewayDefinition): void {
@@ -1113,9 +1153,12 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
   const routeRolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
   const activeAdapters = sharedGatewayAdapterTypes(definition);
   const runtimeAdapters = activeAdapters.length > 0 ? activeAdapters : ["disabled" as MessageAdapterType];
+  const rabiLinkRelay = rabiLinkRelayConfigFor(definition);
+  const globalConfig = rabiGlobalConfig.read();
   return {
     ...process.env,
     GATEWAY_ID: definition.id,
+    RABI_GUID: globalConfig.rabiGuid,
     GATEWAY_MANAGER_PORT: String(managerPort),
     GATEWAY_MANAGER_URL: `http://127.0.0.1:${managerPort}`,
     MESSAGE_ADAPTER_TYPE: runtimeAdapters[0] ?? "napcat",
@@ -1145,12 +1188,14 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     RABILINK_WEBHOOK_PORT: String(definition.rabiLinkWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
     RABILINK_WEBHOOK_PATH: definition.rabiLinkWebhookPath ?? "/rabilink",
     RABILINK_WEBHOOK_HOST: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
-    RABILINK_RELAY_ENABLED: definition.rabiLinkRelayEnabled ? "1" : "",
-    RABILINK_RELAY_URL: definition.rabiLinkRelayUrl?.trim() || "",
-    RABILINK_RELAY_TOKEN: definition.rabiLinkRelayToken?.trim() || "",
-    RABILINK_RELAY_DEVICE_ID: definition.rabiLinkRelayDeviceId?.trim() || definition.id,
-    RABILINK_RELAY_CLAIM_WAIT_MS: String(definition.rabiLinkRelayClaimWaitMs ?? 60000),
-    RABILINK_RELAY_REPLY_IDLE_TIMEOUT_MS: String(definition.rabiLinkRelayReplyIdleTimeoutMs ?? 60000),
+    RABILINK_RELAY_ENABLED: rabiLinkRelay.url && rabiLinkRelay.token ? "1" : "",
+    RABILINK_RELAY_URL: rabiLinkRelay.url,
+    RABILINK_RELAY_TOKEN: rabiLinkRelay.token,
+    RABILINK_RELAY_DEVICE_ID: rabiLinkRelay.deviceId || definition.id,
+    RABILINK_RELAY_DEVICE_GUID: globalConfig.rabiGuid,
+    RABILINK_RELAY_WEBGUI_URL: `http://127.0.0.1:${managerPort}`,
+    RABILINK_RELAY_CLAIM_WAIT_MS: String(rabiLinkRelay.claimWaitMs),
+    RABILINK_RELAY_REPLY_IDLE_TIMEOUT_MS: String(rabiLinkRelay.replyIdleTimeoutMs),
     WECOM_BOT_ID: definition.wecomBotId?.trim() || process.env.WECOM_BOT_ID || "",
     WECOM_BOT_SECRET: definition.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET || "",
     WECOM_WS_URL: definition.wecomWsUrl?.trim() || process.env.WECOM_WS_URL || "",
@@ -2265,6 +2310,7 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
 function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
   const usesNapcat = definitionUsesNapcat(runtime.definition);
   const gatewayStatus = gatewayStatusForRuntime(runtime);
+  const rabiLinkRelay = rabiLinkRelayConfigFor(runtime.definition);
   return {
     id: runtime.definition.id,
     name: runtime.definition.name,
@@ -2288,12 +2334,13 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     rabiLinkWebhookPort: runtime.definition.rabiLinkWebhookPort,
     rabiLinkWebhookPath: runtime.definition.rabiLinkWebhookPath,
     rabiLinkWebhookHost: runtime.definition.rabiLinkWebhookHost,
-    rabiLinkRelayEnabled: runtime.definition.rabiLinkRelayEnabled,
-    rabiLinkRelayUrl: runtime.definition.rabiLinkRelayUrl,
-    rabiLinkRelayToken: runtime.definition.rabiLinkRelayToken ? "********" : "",
-    rabiLinkRelayDeviceId: runtime.definition.rabiLinkRelayDeviceId,
-    rabiLinkRelayClaimWaitMs: runtime.definition.rabiLinkRelayClaimWaitMs,
-    rabiLinkRelayReplyIdleTimeoutMs: runtime.definition.rabiLinkRelayReplyIdleTimeoutMs,
+    rabiLinkRelayEnabled: rabiLinkRelay.enabled,
+    rabiLinkRelayUrl: rabiLinkRelay.url,
+    rabiLinkRelayToken: rabiLinkRelay.token ? "********" : "",
+    rabiLinkRelayDeviceId: rabiLinkRelay.deviceId,
+    rabiLinkRelayClaimWaitMs: rabiLinkRelay.claimWaitMs,
+    rabiLinkRelayReplyIdleTimeoutMs: rabiLinkRelay.replyIdleTimeoutMs,
+    rabiLinkRelayConfigScope: hasGlobalRabiLinkRelayConfig() ? "global" : "legacy-route",
     wecomBotId: runtime.definition.wecomBotId,
     wecomBotSecret: runtime.definition.wecomBotSecret,
     wecomWsUrl: runtime.definition.wecomWsUrl,
@@ -3066,6 +3113,7 @@ function metaPayload(): Record<string, unknown> {
     managerPort,
     rabiGuid: globalConfig.rabiGuid,
     rabiName: globalConfig.rabiName,
+    rabiLinkRelay: rabiLinkRelayConfigForMeta(),
     computerName: os.hostname()
   };
 }

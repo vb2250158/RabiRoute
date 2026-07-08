@@ -24,6 +24,7 @@ export default defineConfig({
       "/open-config-file": "http://127.0.0.1:8790",
       "/manager": "http://127.0.0.1:8790",
       "/meta": "http://127.0.0.1:8790",
+      "/api": "http://127.0.0.1:8790",
       "/assets": "http://127.0.0.1:8790"
     }
   }

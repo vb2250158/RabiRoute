@@ -1,7 +1,7 @@
 {
   "id": "memory-rabiroute-rabilink-bridge",
   "title": "RabiLink 是手机和 Rokid 的专用桥接消息端",
-  "content": "RabiLink 接入应走独立 rabilink message adapter 和 rabilink route kind：Rokid/灵珠插件把用户原话提交到公网 Relay，电脑端 RabiLink worker 直接从 Relay 领取任务并交给本机 RabiRoute，记录到 rabilink-voice-transcripts.jsonl，并在 AgentPacket 中明确要求回复必须经普通回复 API 回到 Relay 下行消息队列。Relay server 自带服务器侧 /admin WebGUI：首次注册账号后创建 RabiLink 应用，每个应用生成独立 rbl_... token，Rokid/灵珠插件和电脑端 worker 使用同一个应用 token，task、worker claim、task messages 和全局下行 messages 都按 app 隔离；RABILINK_RELAY_TOKEN 只作为旧部署的全局兼容 token。手机 App 只作为可选调试入口，不再作为主消息中转。Rokid/灵珠插件应先 submitRabiLinkTask 获取新的 taskId 和 cursor，再调用 getRabiLinkMessages(after) 拉全局下行消息；每次拉到一句就说一句，直到 messages 为空且 shouldContinue=false 才结束，避免复述历史会话。不应在公开示例里写真实域名、服务器 IP、token、设备 ID 或本机路径。",
+  "content": "RabiLink 接入应走独立 rabilink message adapter 和 rabilink route kind：Rokid/灵珠插件把用户原话提交到公网 Relay，电脑端 RabiLink worker 直接从 Relay 领取任务并交给本机 RabiRoute，记录到 rabilink-voice-transcripts.jsonl，并在 AgentPacket 中明确要求回复必须经普通回复 API 回到 Relay 下行消息队列。Relay server 自带服务器侧 /manage WebGUI：首次注册账号后创建 RabiLink 应用，每个应用生成独立 rbl_... token，Rokid/灵珠插件和电脑端 worker 使用同一个应用 token，task、worker claim、task messages 和全局下行 messages 都按 app 隔离；RABILINK_RELAY_TOKEN 只作为旧部署的全局兼容 token。手机 App 只作为可选调试入口，不再作为主消息中转。Rokid/灵珠插件应先 submitRabiLinkTask 获取新的 taskId 和 cursor，再调用 getRabiLinkMessages(after) 拉全局下行消息；每次拉到一句就说一句，直到 messages 为空且 shouldContinue=false 才结束，避免复述历史会话。不应在公开示例里写真实域名、服务器 IP、token、设备 ID 或本机路径。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：RabiLink Rokid/Relay 直连边界和脱敏规则"

@@ -12,11 +12,15 @@ const replyTimeoutMs = clamp(Number(process.env.RABILINK_RELAY_REPLY_TIMEOUT_MS 
 const messageWaitMs = clamp(Number(process.env.RABILINK_RELAY_MESSAGE_WAIT_MS || 60000), 0, 60000);
 const outboxWaitMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 60000), 0, 60000);
 const workerTaskWaitMs = clamp(Number(process.env.RABILINK_RELAY_WORKER_TASK_WAIT_MS || 60000), 0, 60000);
+const webguiRequestWaitMs = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS || 30000), 5000, 120000);
+const webguiBodyMaxBytes = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES || 10 * 1024 * 1024), 1024 * 1024, 50 * 1024 * 1024);
 const taskTtlMs = clamp(Number(process.env.RABILINK_RELAY_TASK_TTL_MS || 10 * 60 * 1000), 60000, 24 * 60 * 60 * 1000);
 const leaseMs = clamp(Number(process.env.RABILINK_RELAY_LEASE_MS || 45000), 5000, 10 * 60 * 1000);
 const dataDir = path.resolve(process.env.RABILINK_RELAY_DATA_DIR || path.join(process.cwd(), "data", "rabilink-relay"));
 const eventLogPath = path.join(dataDir, "events.jsonl");
 const appStorePath = path.resolve(process.env.RABILINK_RELAY_APP_STORE_FILE || path.join(dataDir, "apps.json"));
+const webguiDistPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_DIST_DIR || path.join(process.cwd(), "ribiwebgui", "dist"));
+const webguiAssetPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_ASSET_DIR || path.join(process.cwd(), "assets"));
 const openApiFileCandidates = [
   process.env.RABILINK_RELAY_OPENAPI_FILE ? path.resolve(process.env.RABILINK_RELAY_OPENAPI_FILE) : "",
   path.join(dataDir, "rokid-rabilink-plugin.CURRENT.openapi.json"),
@@ -35,7 +39,7 @@ const toolImportPostmanFileCandidates = [
 
 fs.mkdirSync(dataDir, { recursive: true });
 if (!legacyToken && !allowInsecure && !hasEnabledRabiLinkApps()) {
-  console.warn("RABILINK_RELAY_TOKEN is not set and no enabled app tokens exist yet. Open /admin to create the first account and app token.");
+  console.warn("RABILINK_RELAY_TOKEN is not set and no enabled app tokens exist yet. Open /manage to create the first account and app token.");
 }
 
 /** @type {Map<string, RelayTask>} */
@@ -49,6 +53,12 @@ const waiters = [];
 const workerTaskWaiters = [];
 /** @type {Array<{ resolve: () => void; timer: NodeJS.Timeout }>} */
 const outboxWaiters = [];
+/** @type {Map<string, RelayWebguiRequest>} */
+const webguiRequests = new Map();
+/** @type {Array<{ resolve: () => void; timer: NodeJS.Timeout }>} */
+const webguiRequestWaiters = [];
+/** @type {Map<string, ManageSession>} */
+const manageSessions = new Map();
 
 /**
  * @typedef {object} RelayTask
@@ -63,6 +73,7 @@ const outboxWaiters = [];
  * @property {string} normalizedText
  * @property {string} appId
  * @property {string} appName
+ * @property {string} targetDeviceId
  * @property {Record<string, unknown>} source
  * @property {unknown} raw
  * @property {RelayMessage[]} messages
@@ -93,6 +104,51 @@ const outboxWaiters = [];
  * @property {string} text
  * @property {boolean} final
  * @property {string} status
+ */
+
+/**
+ * @typedef {object} RelayWorker
+ * @property {string} id
+ * @property {string} guid
+ * @property {string} name
+ * @property {string} appId
+ * @property {string} firstSeenAt
+ * @property {string} lastSeenAt
+ */
+
+/**
+ * @typedef {object} RelayWebguiRequest
+ * @property {string} id
+ * @property {string} status
+ * @property {number} createdAt
+ * @property {number} updatedAt
+ * @property {number} expiresAt
+ * @property {number} leaseUntil
+ * @property {number} attempts
+ * @property {string} appId
+ * @property {string} appName
+ * @property {string} targetDeviceId
+ * @property {string} method
+ * @property {string} path
+ * @property {Record<string, string>} headers
+ * @property {string} bodyBase64
+ * @property {RelayWebguiResponse | null} response
+ * @property {string} [error]
+ */
+
+/**
+ * @typedef {object} RelayWebguiResponse
+ * @property {number} statusCode
+ * @property {Record<string, string>} headers
+ * @property {string} bodyBase64
+ */
+
+/**
+ * @typedef {object} ManageSession
+ * @property {string} token
+ * @property {string} accountId
+ * @property {string} username
+ * @property {number} expiresAt
  */
 
 function clamp(value, min, max) {
@@ -136,14 +192,81 @@ function verifyPassword(password, account) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+function parseCookies(req) {
+  return Object.fromEntries(String(req.headers.cookie || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const split = part.indexOf("=");
+      if (split < 0) return [part, ""];
+      return [part.slice(0, split), decodeURIComponent(part.slice(split + 1))];
+    }));
+}
+
+function cleanupManageSessions(now = Date.now()) {
+  for (const [token, session] of manageSessions.entries()) {
+    if (session.expiresAt <= now) manageSessions.delete(token);
+  }
+}
+
+function createManageSession(account) {
+  cleanupManageSessions();
+  const token = randomBytes(32).toString("base64url");
+  const session = {
+    token,
+    accountId: account.id,
+    username: account.username,
+    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
+  };
+  manageSessions.set(token, session);
+  return session;
+}
+
+function manageSessionCookie(session) {
+  return `rabilink_manage_session=${encodeURIComponent(session.token)}; Path=/manage; HttpOnly; SameSite=Lax; Max-Age=604800`;
+}
+
+function clearManageSessionCookie() {
+  return "rabilink_manage_session=; Path=/manage; HttpOnly; SameSite=Lax; Max-Age=0";
+}
+
+function accountFromManageSession(req) {
+  cleanupManageSessions();
+  const token = parseCookies(req).rabilink_manage_session || "";
+  if (!token) return null;
+  const session = manageSessions.get(token);
+  if (!session) return null;
+  const account = readAppStore().accounts.find((item) => item.id === session.accountId);
+  if (!account) {
+    manageSessions.delete(token);
+    return null;
+  }
+  return account;
+}
+
 function sanitizeRabiLinkId(value, fallback) {
   const raw = String(value || "").trim();
   return raw.replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "") || fallback;
 }
 
+function normalizeStoredWorker(worker) {
+  const id = String(worker?.id || "").trim();
+  if (!id) return null;
+  const time = String(worker?.lastSeenAt || worker?.firstSeenAt || nowIso());
+  return {
+    id,
+    guid: String(worker?.guid || "").trim(),
+    name: String(worker?.name || id).trim() || id,
+    appId: String(worker?.appId || "").trim(),
+    firstSeenAt: String(worker?.firstSeenAt || time),
+    lastSeenAt: String(worker?.lastSeenAt || time)
+  };
+}
+
 function readAppStore() {
   if (!fs.existsSync(appStorePath)) {
-    return { accounts: [], apps: [] };
+    return { accounts: [], apps: [], workers: [] };
   }
   try {
     const raw = JSON.parse(fs.readFileSync(appStorePath, "utf8"));
@@ -153,13 +276,15 @@ function readAppStore() {
         ? raw.apps.map((app) => ({
           ...app,
           enabled: app.enabled !== false,
-          tokenPreview: app.tokenPreview || rabiLinkTokenPreview(app.token)
+          tokenPreview: app.tokenPreview || rabiLinkTokenPreview(app.token),
+          targetDeviceId: String(app.targetDeviceId || "").trim()
         }))
-        : []
+        : [],
+      workers: Array.isArray(raw.workers) ? raw.workers.map(normalizeStoredWorker).filter(Boolean) : []
     };
   } catch (error) {
     writeEvent("app_store_read_failed", { path: appStorePath, message: error instanceof Error ? error.message : String(error) });
-    return { accounts: [], apps: [] };
+    return { accounts: [], apps: [], workers: [] };
   }
 }
 
@@ -167,7 +292,8 @@ function writeAppStore(store) {
   fs.mkdirSync(path.dirname(appStorePath), { recursive: true });
   fs.writeFileSync(appStorePath, JSON.stringify({
     accounts: store.accounts,
-    apps: store.apps
+    apps: store.apps,
+    workers: store.workers || []
   }, null, 2), "utf8");
 }
 
@@ -199,8 +325,26 @@ function publicApp(app, options = {}) {
     tokenPreview: app.tokenPreview || rabiLinkTokenPreview(app.token),
     token: options.revealToken ? app.token : undefined,
     notes: app.notes || "",
+    targetDeviceId: app.targetDeviceId || "",
     createdAt: app.createdAt,
     updatedAt: app.updatedAt
+  };
+}
+
+function publicWorker(worker, app) {
+  const lastSeenMs = Date.parse(worker.lastSeenAt || "");
+  const lastSeenAgeMs = Number.isFinite(lastSeenMs) ? Date.now() - lastSeenMs : null;
+  const appTokenPreview = app ? app.tokenPreview || rabiLinkTokenPreview(app.token) : "";
+  return {
+    id: worker.id,
+    guid: worker.guid || "",
+    name: worker.name || worker.id,
+    appId: worker.appId || "",
+    appName: app?.name || "",
+    appTokenPreview,
+    firstSeenAt: worker.firstSeenAt || "",
+    lastSeenAt: worker.lastSeenAt || "",
+    online: typeof lastSeenAgeMs === "number" && lastSeenAgeMs <= Math.max(workerTaskWaitMs * 2, 120000)
   };
 }
 
@@ -209,14 +353,45 @@ function accountStorePayload(account, options = {}) {
   const apps = account
     ? store.apps.filter((app) => app.ownerAccountId === account.id)
     : [];
+  const appsById = new Map(apps.map((app) => [app.id, app]));
+  const workers = store.workers.filter((worker) => appsById.has(worker.appId));
   return {
     code: 0,
     ok: true,
     setupRequired: store.accounts.length === 0,
     account: account ? publicAccount(account) : null,
     apps: apps.map((app) => publicApp(app, { revealToken: app.id === options.revealAppId })),
+    workers: workers.map((worker) => publicWorker(worker, appsById.get(worker.appId))),
     dataPath: path.relative(process.cwd(), appStorePath).replace(/\\/g, "/")
   };
+}
+
+function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "") {
+  const id = sanitizeRabiLinkId(deviceId || deviceName, "rabi-pc");
+  if (!id) return null;
+  const guid = stringValue(deviceGuid);
+  const store = readAppStore();
+  const time = nowIso();
+  const name = stringValue(deviceName || id) || id;
+  let worker = store.workers.find((item) => item.appId === appId && (item.id === id || (guid && item.guid === guid)));
+  if (worker) {
+    worker.id = worker.id || id;
+    worker.guid = guid || worker.guid || "";
+    worker.name = name;
+    worker.lastSeenAt = time;
+  } else {
+    worker = {
+      id,
+      guid,
+      name,
+      appId,
+      firstSeenAt: time,
+      lastSeenAt: time
+    };
+    store.workers.push(worker);
+  }
+  writeAppStore(store);
+  return worker;
 }
 
 function createAccount(body) {
@@ -291,11 +466,16 @@ function authorizeAdmin(req, url, body = {}) {
   const store = readAppStore();
   if (store.accounts.length === 0) return { ok: false, setupRequired: true, account: null };
   const credentials = adminCredentials(req, url, body);
-  const account = store.accounts.find((item) => item.username.toLowerCase() === credentials.username.toLowerCase());
-  if (!account || !verifyPassword(credentials.password, account)) {
-    return { ok: false, setupRequired: false, account: null };
+  if (credentials.username || credentials.password) {
+    const account = store.accounts.find((item) => item.username.toLowerCase() === credentials.username.toLowerCase());
+    if (!account || !verifyPassword(credentials.password, account)) {
+      return { ok: false, setupRequired: false, account: null };
+    }
+    return { ok: true, setupRequired: false, account };
   }
-  return { ok: true, setupRequired: false, account };
+  const sessionAccount = accountFromManageSession(req);
+  if (sessionAccount) return { ok: true, setupRequired: false, account: sessionAccount };
+  return { ok: false, setupRequired: false, account: null };
 }
 
 function createAppForAccount(account, body) {
@@ -316,6 +496,7 @@ function createAppForAccount(account, body) {
     token: tokenValue,
     tokenPreview: rabiLinkTokenPreview(tokenValue),
     notes: String(body.notes || "").trim(),
+    targetDeviceId: String(body.targetDeviceId || "").trim(),
     createdAt: time,
     updatedAt: time
   };
@@ -336,6 +517,7 @@ function patchOwnedApp(account, appId, body) {
   if (body.name !== undefined) app.name = String(body.name || "").trim() || app.name;
   if (body.notes !== undefined) app.notes = String(body.notes || "").trim();
   if (body.enabled !== undefined) app.enabled = body.enabled !== false;
+  if (body.targetDeviceId !== undefined) app.targetDeviceId = String(body.targetDeviceId || "").trim();
   const revealToken = body.regenerateToken === true;
   if (revealToken) {
     app.token = generateRabiLinkToken();
@@ -356,17 +538,19 @@ function deleteOwnedApp(account, appId) {
     throw error;
   }
   const [removed] = store.apps.splice(index, 1);
+  store.workers = (store.workers || []).filter((worker) => worker.appId !== removed.id);
   writeAppStore(store);
   writeEvent("admin_app_deleted", { app: publicApp(removed) });
 }
 
-function sendJson(res, statusCode, body) {
+function sendJson(res, statusCode, body, extraHeaders = {}) {
   const text = JSON.stringify(body, null, 2);
   res.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-rabilink-token,x-rabilink-admin-auth"
+    "access-control-allow-headers": "content-type,authorization,x-rabilink-token,x-rabilink-admin-auth",
+    ...extraHeaders
   });
   res.end(text);
 }
@@ -379,12 +563,39 @@ function sendHtml(res, html) {
   res.end(html);
 }
 
+function redirect(res, location, statusCode = 302) {
+  res.writeHead(statusCode, {
+    location,
+    "cache-control": "no-store"
+  });
+  res.end();
+}
+
 function sendText(res, statusCode, text) {
   res.writeHead(statusCode, {
     "content-type": "text/plain; charset=utf-8",
     "access-control-allow-origin": "*"
   });
   res.end(text);
+}
+
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on("data", (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.byteLength;
+      if (total > webguiBodyMaxBytes) {
+        reject(Object.assign(new Error("WebGUI request body is too large."), { statusCode: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(buffer);
+    });
+    req.on("error", reject);
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+  });
 }
 
 function sendOpenApi(res, candidates = openApiFileCandidates) {
@@ -491,6 +702,7 @@ function taskForResponse(task) {
     normalizedText: task.normalizedText,
     appId: task.appId || "",
     appName: task.appName || "",
+    targetDeviceId: task.targetDeviceId || "",
     source: task.source,
     messageCount: task.messages.length,
     nextMessageSeq: task.nextMessageSeq,
@@ -519,13 +731,15 @@ function createTask(raw, req, auth = { app: null }) {
     normalizedText: normalizeText(text),
     appId: auth.app?.id || "",
     appName: auth.app?.name || "",
+    targetDeviceId: auth.app?.targetDeviceId || "",
     source: {
       userAgent: String(req.headers["user-agent"] || ""),
       ip: String(req.socket.remoteAddress || ""),
       rokidRequestId: stringValue(raw?.requestId || raw?.id || raw?.messageId),
       sender: stringValue(raw?.sender || raw?.user || raw?.deviceId),
       appId: auth.app?.id || "",
-      appName: auth.app?.name || ""
+      appName: auth.app?.name || "",
+      targetDeviceId: auth.app?.targetDeviceId || ""
     },
     raw,
     messages: [],
@@ -535,6 +749,220 @@ function createTask(raw, req, auth = { app: null }) {
   writeEvent("task_created", taskForResponse(task));
   notifyWorkerTaskWaiters();
   return task;
+}
+
+function webguiRequestForResponse(request) {
+  return {
+    id: request.id,
+    status: request.status,
+    createdAt: request.createdAt,
+    updatedAt: request.updatedAt,
+    expiresAt: request.expiresAt,
+    attempts: request.attempts,
+    appId: request.appId || "",
+    appName: request.appName || "",
+    targetDeviceId: request.targetDeviceId || "",
+    method: request.method,
+    path: request.path,
+    headers: request.headers,
+    bodyBase64: request.bodyBase64 || "",
+    error: request.error || ""
+  };
+}
+
+function cleanupWebguiRequests(now = Date.now()) {
+  for (const [id, request] of webguiRequests.entries()) {
+    if (request.status !== "done" && request.status !== "failed" && request.expiresAt <= now) {
+      request.status = "failed";
+      request.updatedAt = now;
+      request.error = "WebGUI request timed out before the Rabi PC returned a response.";
+      finishWebguiWaiters(request);
+      writeEvent("webgui_request_expired", webguiRequestForResponse(request));
+    }
+    if ((request.status === "done" || request.status === "failed") && request.updatedAt + taskTtlMs <= now) {
+      webguiRequests.delete(id);
+    }
+  }
+}
+
+function canWorkerClaimWebguiRequest(request, appId = "", deviceId = "") {
+  if (appId && request.appId !== appId) return false;
+  if (request.targetDeviceId && request.targetDeviceId !== deviceId) return false;
+  return true;
+}
+
+function hasClaimableWebguiRequests(appId = "", deviceId = "") {
+  cleanupWebguiRequests();
+  const now = Date.now();
+  for (const request of webguiRequests.values()) {
+    if (!canWorkerClaimWebguiRequest(request, appId, deviceId)) continue;
+    if (request.status === "queued") return true;
+    if (request.status === "leased" && request.leaseUntil <= now) return true;
+  }
+  return false;
+}
+
+function claimWebguiRequests(limit, deviceId, appId = "") {
+  cleanupWebguiRequests();
+  const now = Date.now();
+  const result = [];
+  for (const request of webguiRequests.values()) {
+    if (result.length >= limit) break;
+    if (!canWorkerClaimWebguiRequest(request, appId, deviceId)) continue;
+    if (request.status === "leased" && request.leaseUntil <= now) {
+      request.status = "queued";
+      request.leaseUntil = 0;
+    }
+    if (request.status !== "queued") continue;
+    request.status = "leased";
+    request.updatedAt = now;
+    request.leaseUntil = now + leaseMs;
+    request.attempts += 1;
+    result.push(webguiRequestForResponse(request));
+    writeEvent("webgui_request_leased", webguiRequestForResponse(request));
+  }
+  return result;
+}
+
+function notifyWebguiRequestWaiters() {
+  for (let index = webguiRequestWaiters.length - 1; index >= 0; index -= 1) {
+    const waiter = webguiRequestWaiters[index];
+    clearTimeout(waiter.timer);
+    webguiRequestWaiters.splice(index, 1);
+    waiter.resolve();
+  }
+}
+
+function waitForClaimableWebguiRequest(timeoutMs, appId = "", deviceId = "") {
+  if (hasClaimableWebguiRequests(appId, deviceId) || timeoutMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      const index = webguiRequestWaiters.findIndex((item) => item.resolve === resolve);
+      if (index >= 0) webguiRequestWaiters.splice(index, 1);
+      resolve();
+    }, timeoutMs);
+    webguiRequestWaiters.push({ resolve, timer });
+  });
+}
+
+function finishWebguiWaiters(request) {
+  for (let index = waiters.length - 1; index >= 0; index -= 1) {
+    const waiter = waiters[index];
+    if (waiter.taskId !== request.id) continue;
+    clearTimeout(waiter.timer);
+    waiters.splice(index, 1);
+    waiter.resolve(request);
+  }
+}
+
+function waitForWebguiRequest(request, timeoutMs) {
+  if (request.status === "done" || request.status === "failed") return Promise.resolve(request);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      const index = waiters.findIndex((item) => item.taskId === request.id && item.resolve === resolve);
+      if (index >= 0) waiters.splice(index, 1);
+      resolve(request);
+    }, timeoutMs);
+    waiters.push({ taskId: request.id, resolve, timer });
+  });
+}
+
+function finishWebguiRequest(requestId, body) {
+  const request = webguiRequests.get(requestId);
+  if (!request) {
+    const error = new Error(`WebGUI request not found: ${requestId}`);
+    error.statusCode = 404;
+    throw error;
+  }
+  const ok = body?.ok !== false && Number(body?.statusCode || 0) >= 100;
+  request.status = ok ? "done" : "failed";
+  request.updatedAt = Date.now();
+  request.leaseUntil = 0;
+  request.response = ok
+    ? {
+      statusCode: clamp(Number(body.statusCode || 200), 100, 599),
+      headers: normalizeProxyResponseHeaders(body.headers),
+      bodyBase64: stringValue(body.bodyBase64)
+    }
+    : null;
+  request.error = ok ? "" : stringValue(body?.error || "Rabi PC failed to proxy WebGUI request.");
+  finishWebguiWaiters(request);
+  writeEvent(ok ? "webgui_request_done" : "webgui_request_failed", webguiRequestForResponse(request));
+  return request;
+}
+
+function normalizeProxyRequestHeaders(headers) {
+  const result = {};
+  for (const [key, value] of Object.entries(headers || {})) {
+    const lower = key.toLowerCase();
+    if (!["accept", "content-type", "user-agent"].includes(lower)) continue;
+    result[lower] = Array.isArray(value) ? value.join(", ") : String(value || "");
+  }
+  return result;
+}
+
+function normalizeProxyResponseHeaders(headers) {
+  const result = {};
+  for (const [key, value] of Object.entries(headers || {})) {
+    const lower = key.toLowerCase();
+    if (["connection", "content-length", "content-encoding", "transfer-encoding", "keep-alive", "set-cookie"].includes(lower)) continue;
+    result[lower] = Array.isArray(value) ? value.join(", ") : String(value || "");
+  }
+  return result;
+}
+
+function createWebguiRequest(req, target, localPath, rawBody) {
+  const now = Date.now();
+  const request = {
+    id: `rabilink-webgui-${now}-${randomUUID().slice(0, 8)}`,
+    status: "queued",
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: now + webguiRequestWaitMs,
+    leaseUntil: 0,
+    attempts: 0,
+    appId: target.app.id,
+    appName: target.app.name || "",
+    targetDeviceId: target.worker.id,
+    method: String(req.method || "GET").toUpperCase(),
+    path: localPath,
+    headers: normalizeProxyRequestHeaders(req.headers),
+    bodyBase64: Buffer.isBuffer(rawBody) && rawBody.length > 0 ? rawBody.toString("base64") : "",
+    response: null
+  };
+  webguiRequests.set(request.id, request);
+  writeEvent("webgui_request_created", webguiRequestForResponse(request));
+  notifyWebguiRequestWaiters();
+  return request;
+}
+
+function createMobileWebguiRequest(app, worker, method, localPath, body = null) {
+  const now = Date.now();
+  const bodyBuffer = body == null ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body), "utf8");
+  const request = {
+    id: `rabilink-webgui-${now}-${randomUUID().slice(0, 8)}`,
+    status: "queued",
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: now + webguiRequestWaitMs,
+    leaseUntil: 0,
+    attempts: 0,
+    appId: app.id,
+    appName: app.name || "",
+    targetDeviceId: worker.id,
+    method: String(method || "GET").toUpperCase(),
+    path: localPath,
+    headers: {
+      accept: "application/json",
+      ...(body == null ? {} : { "content-type": "application/json; charset=utf-8" })
+    },
+    bodyBase64: bodyBuffer.length > 0 ? bodyBuffer.toString("base64") : "",
+    response: null
+  };
+  webguiRequests.set(request.id, request);
+  writeEvent("webgui_request_created", webguiRequestForResponse(request));
+  notifyWebguiRequestWaiters();
+  return request;
 }
 
 function cleanupTasks() {
@@ -552,6 +980,7 @@ function cleanupTasks() {
     }
   }
   cleanupOutboxMessages(now);
+  cleanupWebguiRequests(now);
 }
 
 function cleanupOutboxMessages(now = Date.now()) {
@@ -563,13 +992,19 @@ function cleanupOutboxMessages(now = Date.now()) {
   }
 }
 
+function canWorkerClaimTask(task, appId = "", deviceId = "") {
+  if (appId && task.appId !== appId) return false;
+  if (task.targetDeviceId && task.targetDeviceId !== deviceId) return false;
+  return true;
+}
+
 function claimTasks(limit, deviceId, appId = "") {
   cleanupTasks();
   const now = Date.now();
   const result = [];
   for (const task of tasks.values()) {
     if (result.length >= limit) break;
-    if (appId && task.appId !== appId) continue;
+    if (!canWorkerClaimTask(task, appId, deviceId)) continue;
     if (task.status === "leased" && task.leaseUntil <= now) {
       task.status = "queued";
       task.leaseUntil = 0;
@@ -586,11 +1021,11 @@ function claimTasks(limit, deviceId, appId = "") {
   return result;
 }
 
-function hasClaimableTasks(appId = "") {
+function hasClaimableTasks(appId = "", deviceId = "") {
   cleanupTasks();
   const now = Date.now();
   for (const task of tasks.values()) {
-    if (appId && task.appId !== appId) continue;
+    if (!canWorkerClaimTask(task, appId, deviceId)) continue;
     if (task.status === "queued") return true;
     if (task.status === "leased" && task.leaseUntil <= now) return true;
   }
@@ -615,8 +1050,8 @@ function notifyOutboxWaiters() {
   }
 }
 
-function waitForClaimableTask(timeoutMs, appId = "") {
-  if (hasClaimableTasks(appId) || timeoutMs <= 0) return Promise.resolve();
+function waitForClaimableTask(timeoutMs, appId = "", deviceId = "") {
+  if (hasClaimableTasks(appId, deviceId) || timeoutMs <= 0) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       const index = workerTaskWaiters.findIndex((item) => item.resolve === resolve);
@@ -1021,11 +1456,16 @@ async function handleWorkerTasks(req, url, res, body) {
   if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
   const limit = clamp(Number(url.searchParams.get("limit") || 1), 1, 10);
   const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
+  const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || deviceId);
+  const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
   const appId = auth.app?.id || "";
+  if (deviceId || deviceName) {
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid);
+  }
   let claimed = claimTasks(limit, deviceId, appId);
   if (claimed.length === 0) {
     const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
-    await waitForClaimableTask(waitMs, appId);
+    await waitForClaimableTask(waitMs, appId, deviceId);
     claimed = claimTasks(limit, deviceId, appId);
   }
   sendJson(res, 200, {
@@ -1035,6 +1475,46 @@ async function handleWorkerTasks(req, url, res, body) {
     shouldContinue: true,
     tasks: claimed
   });
+}
+
+async function handleWorkerWebguiRequests(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  const limit = clamp(Number(url.searchParams.get("limit") || 1), 1, 5);
+  const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
+  const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || deviceId);
+  const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
+  const appId = auth.app?.id || "";
+  if (deviceId || deviceName) {
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid);
+  }
+  let claimed = claimWebguiRequests(limit, deviceId, appId);
+  if (claimed.length === 0) {
+    const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
+    await waitForClaimableWebguiRequest(waitMs, appId, deviceId);
+    claimed = claimWebguiRequests(limit, deviceId, appId);
+  }
+  sendJson(res, 200, {
+    code: 0,
+    ok: true,
+    status: claimed.length > 0 ? "claimed" : "empty",
+    shouldContinue: true,
+    requests: claimed
+  });
+}
+
+function handleWorkerWebguiResponse(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  const match = url.pathname.match(/^\/worker\/webgui-requests\/([^/]+)\/response$/);
+  const requestId = match ? decodeURIComponent(match[1]) : "";
+  const request = webguiRequests.get(requestId);
+  if (!request) return sendJson(res, 404, { code: -1, ok: false, message: `WebGUI request not found: ${requestId}` });
+  if (!auth.legacy && !auth.insecure && auth.app?.id !== request.appId) {
+    return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
+  }
+  const finished = finishWebguiRequest(requestId, body);
+  sendJson(res, 200, { code: 0, ok: true, request: webguiRequestForResponse(finished) });
 }
 
 function handleTaskResult(req, url, res, body) {
@@ -1108,83 +1588,161 @@ function adminPageHtml() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RabiLink Relay Admin</title>
+  <title>RabiLink服务器控制台</title>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f6f8f7;
+      --bg: #f6f8fb;
       --panel: #ffffff;
-      --ink: #17211d;
-      --muted: #607069;
-      --line: #d8e1dc;
-      --brand: #107e6b;
+      --ink: #112033;
+      --title: #0c2a4a;
+      --muted: #667586;
+      --line: rgba(17, 32, 51, .1);
+      --brand: #102a43;
+      --accent: #19bfc1;
       --brand-ink: #ffffff;
       --warn: #9a6700;
-      --danger: #b42318;
-      --soft: #edf5f2;
+      --danger: #dc2626;
+      --soft: rgba(25, 191, 193, .12);
+      --field: rgba(255, 255, 255, .86);
+      --field-hover: rgba(236, 252, 255, .74);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      background: var(--bg);
+      background:
+        linear-gradient(90deg, rgba(12, 42, 74, .04) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(12, 42, 74, .032) 1px, transparent 1px),
+        linear-gradient(180deg, #fbfdff 0%, #f2f8fa 52%, #f8fbfd 100%);
+      background-size: 40px 40px, 40px 40px, auto;
       color: var(--ink);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
     }
     button, input, textarea { font: inherit; }
     .shell { width: min(1160px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 44px; }
     .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
     .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-    .mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 8px; background: var(--brand); color: var(--brand-ink); font-weight: 800; }
+    .mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 8px; background: linear-gradient(135deg, var(--brand), #0f8b8d); color: var(--brand-ink); font-weight: 900; }
     h1 { margin: 0; font-size: clamp(22px, 3vw, 32px); line-height: 1.1; letter-spacing: 0; }
     .subtitle { margin-top: 4px; color: var(--muted); font-size: 14px; }
     .grid { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 16px; align-items: start; }
-    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; box-shadow: 0 12px 28px rgba(17, 37, 31, .05); }
+    .card { background: rgba(255, 255, 255, .92); border: 1px solid var(--line); border-radius: 8px; padding: 18px; box-shadow: 0 10px 24px rgba(15, 23, 42, .07); backdrop-filter: blur(14px); }
     .card + .card { margin-top: 16px; }
     .title-row { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 14px; }
-    .title { font-size: 16px; font-weight: 760; }
+    .title { color: var(--title); font-size: 16px; font-weight: 800; }
     .note { color: var(--muted); font-size: 13px; line-height: 1.5; }
-    label { display: grid; gap: 6px; color: #31443c; font-size: 13px; font-weight: 650; }
-    input, textarea {
+    .rabi-field {
+      position: relative;
+      display: block;
+      min-width: 0;
+    }
+    .rabi-field input,
+    .rabi-field textarea,
+    .combo-trigger {
       width: 100%;
-      border: 1px solid var(--line);
+      min-height: 48px;
+      border: 1px solid rgba(17, 32, 51, .18);
       border-radius: 8px;
-      padding: 11px 12px;
-      background: #fbfdfc;
+      padding: 17px 12px 7px;
+      background: var(--field);
       color: var(--ink);
       outline: none;
+      transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
     }
-    textarea { min-height: 74px; resize: vertical; }
-    input:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(16, 126, 107, .12); }
+    .rabi-field textarea { min-height: 82px; resize: vertical; }
+    .rabi-field input:focus,
+    .rabi-field textarea:focus,
+    .combo.open .combo-trigger,
+    .combo-trigger:focus { border-color: rgba(25, 191, 193, .72); box-shadow: 0 0 0 3px rgba(25, 191, 193, .14); background: #fff; }
+    .field-label {
+      position: absolute;
+      left: 11px;
+      top: -7px;
+      z-index: 1;
+      max-width: calc(100% - 22px);
+      padding: 0 5px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(255, 255, 255, .96));
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .form { display: grid; gap: 12px; }
+    .password-field input { padding-right: 50px; }
+    .password-field button {
+      position: absolute;
+      right: 4px;
+      top: 4px;
+      display: inline-grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      background: transparent;
+      color: var(--muted);
+    }
+    .password-field button:hover { background: var(--field-hover); color: var(--title); }
+    .password-field svg { width: 20px; height: 20px; stroke: currentColor; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
     button {
       border: 0;
       border-radius: 8px;
       padding: 10px 13px;
       background: var(--soft);
-      color: var(--brand);
+      color: #0f8b8d;
       cursor: pointer;
       font-weight: 720;
     }
-    button.primary { background: var(--brand); color: var(--brand-ink); }
+    button.primary { background: var(--brand); color: var(--brand-ink); box-shadow: 0 8px 18px rgba(17, 32, 51, .16); }
     button.danger { background: #fff0ee; color: var(--danger); }
     button:disabled { opacity: .55; cursor: wait; }
     .status { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-    .pill { display: inline-flex; align-items: center; min-height: 30px; border-radius: 999px; padding: 5px 10px; background: var(--soft); color: var(--brand); font-size: 13px; font-weight: 700; }
+    .pill { display: inline-flex; align-items: center; min-height: 30px; border-radius: 999px; padding: 5px 10px; background: var(--soft); color: #0f8b8d; font-size: 13px; font-weight: 800; }
     .pill.warn { background: #fff6df; color: var(--warn); }
     .alert { border-radius: 8px; padding: 11px 12px; margin-bottom: 14px; background: #fff0ee; color: var(--danger); border: 1px solid #ffd1ca; }
-    .notice { border-radius: 8px; padding: 11px 12px; margin-bottom: 14px; background: var(--soft); color: var(--brand); border: 1px solid #cde5dc; }
+    .notice { border-radius: 8px; padding: 11px 12px; margin-bottom: 14px; background: var(--soft); color: #0f8b8d; border: 1px solid rgba(25, 191, 193, .28); }
     .app-list { display: grid; gap: 12px; }
-    .app { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: #fbfdfc; }
+    .app { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: rgba(255, 255, 255, .74); }
     .app-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-    .app-name { font-weight: 780; }
+    .app-name { color: var(--title); font-weight: 850; }
     .app-id { color: var(--muted); font-size: 13px; word-break: break-all; }
-    .meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
-    .tile { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; min-width: 0; }
-    .tile span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+    .tile { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: rgba(255, 255, 255, .82); min-width: 0; }
+    .tile > span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; font-weight: 750; }
     .tile b { display: block; min-height: 20px; overflow-wrap: anywhere; font-size: 13px; }
-    .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; background: #fbfdfc; }
+    .switch-field { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; color: var(--title); font-weight: 800; user-select: none; }
+    .switch-field input { position: absolute; opacity: 0; pointer-events: none; }
+    .switch-track { position: relative; width: 54px; height: 28px; border-radius: 999px; background: rgba(17, 32, 51, .42); box-shadow: inset 0 1px 2px rgba(17, 32, 51, .14); transition: background .16s ease; }
+    .switch-thumb { position: absolute; left: -2px; top: -2px; width: 32px; height: 32px; border-radius: 50%; background: #fffaf0; box-shadow: 0 8px 18px rgba(17, 32, 51, .2); transition: transform .16s ease; }
+    .switch-field input:checked + .switch-track { background: var(--accent); }
+    .switch-field input:checked + .switch-track .switch-thumb { transform: translateX(26px); }
+    .switch-field input:focus-visible + .switch-track { box-shadow: 0 0 0 3px rgba(25, 191, 193, .18), inset 0 1px 2px rgba(17, 32, 51, .14); }
+    .combo { position: relative; min-width: 0; }
+    .combo-trigger { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 48px; text-align: left; color: var(--ink); cursor: pointer; }
+    .combo-trigger::after { content: ""; width: 7px; height: 7px; border-right: 2px solid #667586; border-bottom: 2px solid #667586; transform: rotate(45deg); margin-top: -4px; }
+    .combo-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 750; }
+    .combo-panel { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); display: grid; gap: 8px; border: 1px solid rgba(17, 32, 51, .14); border-radius: 8px; padding: 8px; background: #fff; box-shadow: 0 18px 34px rgba(15, 23, 42, .14); }
+    .combo-search { min-height: 38px !important; padding: 8px 10px !important; border-radius: 8px !important; font-size: 13px; }
+    .combo-options { display: grid; gap: 4px; max-height: 220px; overflow: auto; }
+    .combo-option { display: grid; gap: 2px; width: 100%; border: 1px solid transparent; border-radius: 8px; padding: 8px 9px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+    .combo-option:hover, .combo-option.active { border-color: rgba(25, 191, 193, .42); background: rgba(236, 252, 255, .82); }
+    .combo-option strong { min-width: 0; color: var(--title); font-size: 13px; font-weight: 850; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .combo-option span { min-width: 0; color: var(--muted); font-size: 12px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .worker-list { display: grid; gap: 10px; }
+    .worker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: rgba(255, 255, 255, .74); }
+    .worker-name { color: var(--title); font-weight: 850; overflow-wrap: anywhere; }
+    .worker-meta { margin-top: 3px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .worker-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .webgui { display: inline-flex; align-items: center; min-height: 26px; border-radius: 6px; padding: 4px 9px; background: rgba(25, 191, 193, .12); color: #0f8b8d; font-size: 12px; font-weight: 760; text-decoration: none; }
+    .webgui:hover { background: #d1fae5; }
+    .webgui.disabled { color: var(--muted); background: #eef1f0; pointer-events: none; }
+    .dot { display: inline-flex; align-items: center; min-height: 26px; border-radius: 999px; padding: 4px 9px; background: var(--soft); color: #0f8b8d; font-size: 12px; font-weight: 760; }
+    .dot.idle { background: #eef1f0; color: var(--muted); }
+    .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed rgba(17, 32, 51, .18); border-radius: 8px; background: rgba(255, 255, 255, .7); }
     .hidden { display: none !important; }
     @media (max-width: 820px) {
       .topbar { align-items: start; flex-direction: column; }
@@ -1200,8 +1758,8 @@ function adminPageHtml() {
       <div class="brand">
         <div class="mark">Rb</div>
         <div>
-          <h1>RabiLink Relay Admin</h1>
-          <div class="subtitle">服务器侧账号、应用和 token 管理</div>
+          <h1>RabiLink服务器控制台</h1>
+          <div class="subtitle">管理控制台：账号、应用 token、PC Rabi 连接和远程 WebGUI</div>
         </div>
       </div>
       <div class="actions">
@@ -1216,6 +1774,7 @@ function adminPageHtml() {
       <span id="setupPill" class="pill warn">等待初始化</span>
       <span id="accountPill" class="pill">未登录</span>
       <span id="countPill" class="pill">0 个应用</span>
+      <span id="workerCountPill" class="pill">0 台 PC Rabi</span>
     </div>
 
     <section class="grid">
@@ -1224,12 +1783,16 @@ function adminPageHtml() {
           <div class="title-row">
             <div>
               <div id="authTitle" class="title">登录</div>
-              <div id="authNote" class="note">使用服务器账号进入 RabiLink 应用管理。</div>
+              <div id="authNote" class="note">使用服务器账号进入 RabiLink服务器控制台。</div>
             </div>
           </div>
           <div class="form">
-            <label>账号 <input id="username" autocomplete="username" /></label>
-            <label>密码 <input id="password" type="password" autocomplete="current-password" /></label>
+            <label class="rabi-field"><span class="field-label">账号</span><input id="username" autocomplete="username" /></label>
+            <label class="rabi-field password-field">
+              <span class="field-label">密码</span>
+              <input id="password" type="password" autocomplete="current-password" />
+              <button id="togglePasswordButton" type="button" aria-label="显示密码" title="显示密码"></button>
+            </label>
           </div>
           <div class="actions">
             <button id="loginButton" class="primary">登录</button>
@@ -1245,8 +1808,8 @@ function adminPageHtml() {
             </div>
           </div>
           <div class="form">
-            <label>应用名称 <input id="appName" value="Rokid Glass" /></label>
-            <label>备注 <textarea id="appNotes" placeholder="例如：生产眼镜、测试手机、家里局域网"></textarea></label>
+            <label class="rabi-field"><span class="field-label">应用名称</span><input id="appName" value="Rokid Glass" /></label>
+            <label class="rabi-field"><span class="field-label">备注</span><textarea id="appNotes" placeholder="例如：生产眼镜、测试手机、家里局域网"></textarea></label>
           </div>
           <div class="actions">
             <button id="createAppButton" class="primary">创建应用</button>
@@ -1254,39 +1817,100 @@ function adminPageHtml() {
         </div>
       </div>
 
-      <div class="card">
-        <div class="title-row">
-          <div>
-            <div class="title">应用列表</div>
-            <div class="note">完整 token 只在创建或重新生成时显示；刷新后只保留预览。</div>
+      <div>
+        <div class="card">
+          <div class="title-row">
+            <div>
+              <div class="title">已连接的 PC Rabi</div>
+              <div class="note">当前账号下所有应用 token 连上的 PC Rabi 都会显示在这里，可直接跳转到对应 WebGUI。</div>
+            </div>
           </div>
+          <div id="workers" class="worker-list"></div>
+          <div id="workersEmpty" class="empty">还没有 PC Rabi 上线。启动已绑定服务器 token 的 RabiRoute 后会自动出现。</div>
         </div>
-        <div id="apps" class="app-list"></div>
-        <div id="empty" class="empty">还没有应用。先登录或完成首次注册，然后创建一个 RabiLink 应用。</div>
+
+        <div class="card">
+          <div class="title-row">
+            <div>
+              <div class="title">应用列表</div>
+              <div class="note">完整 token 只在创建或重新生成时显示；每个应用可以指定要通讯的 Rabi PC。</div>
+            </div>
+          </div>
+          <div id="apps" class="app-list"></div>
+          <div id="empty" class="empty">还没有应用。先登录或完成首次注册，然后创建一个 RabiLink 应用。</div>
+        </div>
       </div>
     </section>
   </main>
 
   <script>
-    const state = { account: null, apps: [], revealed: {}, credentials: loadCredentials(), setupRequired: false };
+    const apiBase = "/manage/api";
+    const credentialStorageKey = "rabilinkManageCredentials";
+    const legacyCredentialStorageKey = "rabilinkAdminCredentials";
+    const state = { account: null, apps: [], workers: [], revealed: {}, credentials: loadCredentials(), setupRequired: false };
     const el = (id) => document.getElementById(id);
 
     function encodeAuth(username, password) {
       return btoa(unescape(encodeURIComponent(username + ":" + password)));
     }
 
+    function passwordIcon(visible) {
+      return visible
+        ? '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 3l18 18" stroke-width="2" stroke-linecap="round"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" stroke-width="2" stroke-linecap="round"/><path d="M9.9 4.2A9.7 9.7 0 0 1 12 4c5 0 8.7 4 10 8a12.5 12.5 0 0 1-2.4 3.9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.1 6.4A12.3 12.3 0 0 0 2 12c1.3 4 5 8 10 8 1.4 0 2.8-.3 4-.9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke-width="2"/></svg>';
+    }
+
+    function setPasswordVisible(visible) {
+      const passwordInput = el("password");
+      const toggleButton = el("togglePasswordButton");
+      passwordInput.type = visible ? "text" : "password";
+      toggleButton.innerHTML = passwordIcon(visible);
+      toggleButton.setAttribute("aria-label", visible ? "隐藏密码" : "显示密码");
+      toggleButton.title = visible ? "隐藏密码" : "显示密码";
+    }
+
+    function consoleAccountFromPath() {
+      const prefix = "/manage/";
+      if (!window.location.pathname.startsWith(prefix)) return "";
+      const segment = window.location.pathname.slice(prefix.length).split("/")[0] || "";
+      try { return decodeURIComponent(segment); } catch { return segment; }
+    }
+
+    function consolePathFor(username) {
+      return "/manage/" + encodeURIComponent(username);
+    }
+
+    function setConsolePath(username, replace = true) {
+      if (!username) return;
+      const target = consolePathFor(username);
+      if (window.location.pathname === target) return;
+      const method = replace ? "replaceState" : "pushState";
+      window.history[method](null, "", target);
+    }
+
     function loadCredentials() {
-      try { return JSON.parse(localStorage.getItem("rabilinkAdminCredentials") || "null"); } catch { return null; }
+      try {
+        const current = localStorage.getItem(credentialStorageKey);
+        const legacy = localStorage.getItem(legacyCredentialStorageKey);
+        const parsed = JSON.parse(current || legacy || "null");
+        if (parsed && !current) {
+          localStorage.setItem(credentialStorageKey, JSON.stringify(parsed));
+          localStorage.removeItem(legacyCredentialStorageKey);
+        }
+        return parsed;
+      } catch { return null; }
     }
 
     function saveCredentials(username, password) {
       state.credentials = { username, auth: encodeAuth(username, password) };
-      localStorage.setItem("rabilinkAdminCredentials", JSON.stringify(state.credentials));
+      localStorage.setItem(credentialStorageKey, JSON.stringify(state.credentials));
+      localStorage.removeItem(legacyCredentialStorageKey);
     }
 
     function clearCredentials() {
       state.credentials = null;
-      localStorage.removeItem("rabilinkAdminCredentials");
+      localStorage.removeItem(credentialStorageKey);
+      localStorage.removeItem(legacyCredentialStorageKey);
     }
 
     function headers(json) {
@@ -1316,13 +1940,22 @@ function adminPageHtml() {
     async function load() {
       flash("alert", "");
       try {
-        const body = await request("/admin/api/state");
+        const body = await request(apiBase + "/state");
         state.account = body.account;
         state.apps = body.apps || [];
+        state.workers = body.workers || [];
         state.setupRequired = Boolean(body.setupRequired);
+        if (state.account?.username) {
+          const pathAccount = consoleAccountFromPath();
+          if (pathAccount && pathAccount !== state.account.username) {
+            flash("notice", "当前浏览器已登录 " + state.account.username + "，已切回该账号控制台。");
+          }
+          setConsolePath(state.account.username);
+        }
       } catch (error) {
         state.account = null;
         state.apps = [];
+        state.workers = [];
         state.setupRequired = !state.credentials;
         if (state.credentials) flash("alert", error.message);
       }
@@ -1335,13 +1968,14 @@ function adminPageHtml() {
       setBusy(el("loginButton"), true);
       flash("alert", "");
       try {
-        await request("/admin/api/login", {
+        await request(apiBase + "/login", {
           method: "POST",
           body: JSON.stringify({ username, password })
         });
         saveCredentials(username, password);
         el("password").value = "";
         flash("notice", "已登录。");
+        setConsolePath(username, false);
         await load();
       } catch (error) {
         flash("alert", error.message);
@@ -1356,13 +1990,14 @@ function adminPageHtml() {
       setBusy(el("registerButton"), true);
       flash("alert", "");
       try {
-        await request("/admin/api/accounts", {
+        await request(apiBase + "/accounts", {
           method: "POST",
           body: JSON.stringify({ username, password })
         });
         saveCredentials(username, password);
         el("password").value = "";
         flash("notice", "账号已创建。");
+        setConsolePath(username, false);
         await load();
       } catch (error) {
         flash("alert", error.message);
@@ -1375,7 +2010,7 @@ function adminPageHtml() {
       setBusy(el("createAppButton"), true);
       flash("alert", "");
       try {
-        const body = await request("/admin/api/apps", {
+        const body = await request(apiBase + "/apps", {
           method: "POST",
           body: JSON.stringify({ name: el("appName").value, notes: el("appNotes").value })
         });
@@ -1391,7 +2026,7 @@ function adminPageHtml() {
     }
 
     async function patchApp(id, patch) {
-      const body = await request("/admin/api/apps/" + encodeURIComponent(id), {
+      const body = await request(apiBase + "/apps/" + encodeURIComponent(id), {
         method: "PATCH",
         body: JSON.stringify(patch)
       });
@@ -1404,7 +2039,7 @@ function adminPageHtml() {
 
     async function deleteApp(id, name) {
       if (!confirm("删除 RabiLink 应用「" + name + "」？")) return;
-      await request("/admin/api/apps/" + encodeURIComponent(id), { method: "DELETE" });
+      await request(apiBase + "/apps/" + encodeURIComponent(id), { method: "DELETE" });
       delete state.revealed[id];
       flash("notice", "应用已删除。");
       await load();
@@ -1420,6 +2055,147 @@ function adminPageHtml() {
       flash("notice", "token 已复制。");
     }
 
+    function workerLabel(worker) {
+      if (!worker) return "未指定";
+      return worker.name && worker.name !== worker.id ? worker.name + " (" + worker.id + ")" : worker.id;
+    }
+
+    function workerGuid(worker) {
+      return worker?.guid || worker?.id || "";
+    }
+
+    function workerWebguiUrl(worker) {
+      if (!state.account || !workerGuid(worker)) return "";
+      return "/manage/" + encodeURIComponent(state.account.username) + "/" + encodeURIComponent(workerGuid(worker)) + "/#/routes";
+    }
+
+    function workersForApp(appId) {
+      return state.workers.filter((worker) => worker.appId === appId);
+    }
+
+    function targetOptionsForApp(app) {
+      const appWorkers = workersForApp(app.id);
+      const options = [{
+        value: "",
+        title: appWorkers.length > 0 ? "自动选择可用 Rabi PC" : "自动选择（暂无已绑定 PC）",
+        subtitle: appWorkers.length > 0 ? "由服务器把任务交给当前可用的绑定 PC" : "绑定 PC 上线后会自动出现在这里"
+      }];
+      for (const worker of appWorkers) {
+        options.push({
+          value: worker.id,
+          title: workerLabel(worker),
+          subtitle: (worker.guid ? "GUID " + worker.guid + " · " : "") + (worker.online ? "在线" : "最近离线")
+        });
+      }
+      if (app.targetDeviceId && !appWorkers.some((worker) => worker.id === app.targetDeviceId)) {
+        options.push({
+          value: app.targetDeviceId,
+          title: app.targetDeviceId,
+          subtitle: "未上线"
+        });
+      }
+      return options;
+    }
+
+    function closeCombos(except) {
+      document.querySelectorAll(".combo.open").forEach((node) => {
+        if (node !== except) node.classList.remove("open");
+      });
+      document.querySelectorAll(".combo-panel").forEach((node) => {
+        if (!except || !except.contains(node)) node.classList.add("hidden");
+      });
+    }
+
+    function renderTargetCombo(combo, app) {
+      const trigger = combo.querySelector(".combo-trigger");
+      const valueNode = combo.querySelector(".combo-value");
+      const panel = combo.querySelector(".combo-panel");
+      const search = combo.querySelector(".combo-search");
+      const optionsNode = combo.querySelector(".combo-options");
+      const options = targetOptionsForApp(app);
+      const selected = options.find((option) => option.value === (app.targetDeviceId || "")) || options[0];
+      valueNode.textContent = selected?.title || "自动选择";
+
+      function paintOptions(filterText = "") {
+        const normalized = filterText.trim().toLowerCase();
+        const visibleOptions = options.filter((option) => !normalized
+          || option.title.toLowerCase().includes(normalized)
+          || option.subtitle.toLowerCase().includes(normalized)
+          || option.value.toLowerCase().includes(normalized));
+        optionsNode.innerHTML = "";
+        for (const option of visibleOptions) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "combo-option";
+          button.classList.toggle("active", option.value === (app.targetDeviceId || ""));
+          button.innerHTML = "<strong></strong><span></span>";
+          button.querySelector("strong").textContent = option.title;
+          button.querySelector("span").textContent = option.subtitle;
+          button.addEventListener("click", () => {
+            closeCombos();
+            if (option.value !== (app.targetDeviceId || "")) {
+              patchApp(app.id, { targetDeviceId: option.value }).catch((error) => flash("alert", error.message));
+            }
+          });
+          optionsNode.appendChild(button);
+        }
+        if (visibleOptions.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.style.padding = "12px";
+          empty.textContent = "没有匹配的 Rabi PC";
+          optionsNode.appendChild(empty);
+        }
+      }
+
+      paintOptions();
+      trigger.addEventListener("click", () => {
+        const isOpen = combo.classList.contains("open");
+        closeCombos(combo);
+        combo.classList.toggle("open", !isOpen);
+        panel.classList.toggle("hidden", isOpen);
+        if (!isOpen) {
+          search.value = "";
+          paintOptions();
+          window.setTimeout(() => search.focus(), 0);
+        }
+      });
+      search.addEventListener("input", () => paintOptions(search.value));
+    }
+
+    function renderWorkers() {
+      const container = el("workers");
+      container.innerHTML = "";
+      el("workersEmpty").classList.toggle("hidden", state.workers.length > 0);
+      for (const worker of state.workers) {
+        const node = document.createElement("div");
+        node.className = "worker";
+        node.innerHTML =
+          '<div>' +
+            '<div class="worker-name"></div>' +
+            '<div class="worker-meta"></div>' +
+          '</div>' +
+          '<div class="worker-actions"><a class="webgui" target="_blank" rel="noopener">打开 PC WebGUI</a><span class="dot"></span></div>';
+        node.querySelector(".worker-name").textContent = workerLabel(worker);
+        const appLabel = worker.appName || worker.appId || "-";
+        const tokenLabel = worker.appTokenPreview ? "（" + worker.appTokenPreview + "）" : "";
+        node.querySelector(".worker-meta").textContent =
+          "应用 token：" + appLabel + tokenLabel + " · GUID：" + (worker.guid || "-") + " · 最近连接：" + (worker.lastSeenAt || "-");
+        const webgui = node.querySelector(".webgui");
+        const webguiUrl = workerWebguiUrl(worker);
+        if (webguiUrl) {
+          webgui.href = webguiUrl;
+        } else {
+          webgui.removeAttribute("href");
+          webgui.classList.add("disabled");
+        }
+        const dot = node.querySelector(".dot");
+        dot.textContent = worker.online ? "在线" : "最近离线";
+        dot.classList.toggle("idle", !worker.online);
+        container.appendChild(node);
+      }
+    }
+
     function render() {
       const loggedIn = Boolean(state.account);
       el("loginCard").classList.toggle("hidden", loggedIn && !state.setupRequired);
@@ -1429,9 +2205,11 @@ function adminPageHtml() {
       el("setupPill").classList.toggle("warn", state.setupRequired);
       el("accountPill").textContent = state.account ? "账号：" + state.account.username : "未登录";
       el("countPill").textContent = state.apps.length + " 个应用";
+      el("workerCountPill").textContent = state.workers.length + " 台 PC Rabi";
       el("authTitle").textContent = state.setupRequired ? "首次注册" : "登录";
-      el("authNote").textContent = state.setupRequired ? "创建服务器上的第一个管理账号。" : "使用服务器账号进入 RabiLink 应用管理。";
+      el("authNote").textContent = state.setupRequired ? "创建服务器上的第一个管理账号。" : "每个浏览器只保留一个当前登录账号，用于进入 RabiLink服务器控制台。";
       el("registerButton").textContent = state.setupRequired ? "创建第一个账号" : "新增账号";
+      renderWorkers();
 
       const container = el("apps");
       container.innerHTML = "";
@@ -1443,11 +2221,12 @@ function adminPageHtml() {
         node.innerHTML =
           '<div class="app-head">' +
             '<div><div class="app-name"></div><div class="app-id"></div></div>' +
-            '<label style="display:flex;align-items:center;gap:8px;font-weight:700;"><input class="enabled" type="checkbox" style="width:auto;">启用</label>' +
+            '<label class="switch-field"><input class="enabled" type="checkbox"><span class="switch-track"><span class="switch-thumb"></span></span><b>启用</b></label>' +
           '</div>' +
           '<div class="meta">' +
             '<div class="tile"><span>Token</span><b class="token"></b></div>' +
             '<div class="tile"><span>备注</span><b class="notes"></b></div>' +
+            '<div class="tile"><div class="rabi-field combo target-worker"><span class="field-label">通讯 Rabi PC</span><button class="combo-trigger" type="button"><span class="combo-value"></span></button><div class="combo-panel hidden"><input class="combo-search" placeholder="搜索 Rabi PC / GUID"><div class="combo-options"></div></div></div></div>' +
             '<div class="tile"><span>更新时间</span><b class="updated"></b></div>' +
           '</div>' +
           '<div class="actions">' +
@@ -1461,6 +2240,7 @@ function adminPageHtml() {
         node.querySelector(".token").textContent = token;
         node.querySelector(".notes").textContent = app.notes || "-";
         node.querySelector(".updated").textContent = app.updatedAt || "-";
+        renderTargetCombo(node.querySelector(".target-worker"), app);
         node.querySelector(".enabled").addEventListener("change", (event) => patchApp(app.id, { enabled: event.target.checked }).catch((error) => flash("alert", error.message)));
         node.querySelector(".copy").addEventListener("click", () => copyToken(app.id));
         node.querySelector(".regen").addEventListener("click", () => patchApp(app.id, { regenerateToken: true }).catch((error) => flash("alert", error.message)));
@@ -1472,41 +2252,406 @@ function adminPageHtml() {
     el("refreshButton").addEventListener("click", load);
     el("loginButton").addEventListener("click", login);
     el("registerButton").addEventListener("click", registerAccount);
+    el("togglePasswordButton").addEventListener("click", () => {
+      const passwordInput = el("password");
+      setPasswordVisible(passwordInput.type !== "text");
+      passwordInput.focus();
+    });
     el("createAppButton").addEventListener("click", createApp);
-    el("logoutButton").addEventListener("click", () => { clearCredentials(); state.account = null; state.apps = []; flash("notice", "已退出。"); render(); });
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".combo")) closeCombos();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeCombos();
+    });
+    el("logoutButton").addEventListener("click", () => {
+      request(apiBase + "/logout", { method: "POST" }).catch(() => {});
+      clearCredentials();
+      state.account = null;
+      state.apps = [];
+      state.workers = [];
+      window.history.replaceState(null, "", "/manage");
+      flash("notice", "已退出。");
+      render();
+    });
+    setPasswordVisible(false);
     load();
   </script>
 </body>
 </html>`;
 }
 
+function manageApiPath(url) {
+  if (url.pathname.startsWith("/manage/api/")) return url.pathname.slice("/manage/api".length) || "/";
+  if (url.pathname.startsWith("/admin/api/")) return url.pathname.slice("/admin/api".length) || "/";
+  return "";
+}
+
+function manageWebguiMatch(url) {
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts[0] !== "manage" || parts[1] === "api" || parts.length < 3) return null;
+  let restParts = parts.slice(3);
+  const legacyWebgui = restParts[0] === "webgui";
+  if (restParts[0] === "webgui") {
+    restParts = restParts.slice(1);
+  }
+  return {
+    username: decodeURIComponent(parts[1]),
+    targetRef: decodeURIComponent(parts[2]),
+    legacyWebgui,
+    restPath: restParts.length > 0 ? `/${restParts.map((part) => decodeURIComponent(part)).join("/")}` : "/"
+  };
+}
+
+function resolveOwnedWebguiTarget(account, targetRef, url) {
+  const store = readAppStore();
+  const ownedApps = store.apps.filter((app) => app.ownerAccountId === account.id && app.enabled !== false);
+  const appsById = new Map(ownedApps.map((app) => [app.id, app]));
+  const ownedWorkers = store.workers.filter((worker) => appsById.has(worker.appId));
+  const requestedAppId = stringValue(url.searchParams.get("appId"));
+  const requestedApp = requestedAppId ? appsById.get(requestedAppId) : null;
+  let worker = ownedWorkers.find((item) => item.guid === targetRef)
+    || ownedWorkers.find((item) => item.id === targetRef);
+  if (worker && requestedApp && worker.appId !== requestedApp.id) {
+    worker = null;
+  }
+  if (worker) {
+    return { app: appsById.get(worker.appId), worker };
+  }
+  const app = appsById.get(targetRef);
+  if (app) {
+    const appWorkers = ownedWorkers.filter((item) => item.appId === app.id);
+    const selected = app.targetDeviceId
+      ? appWorkers.find((item) => item.id === app.targetDeviceId || item.guid === app.targetDeviceId)
+      : null;
+    worker = selected || appWorkers[0] || null;
+    if (worker) return { app, worker };
+  }
+  const error = new Error(`Rabi PC not found or offline for this account: ${targetRef}`);
+  error.statusCode = 404;
+  throw error;
+}
+
+function contentTypeForFile(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".html") return "text/html; charset=utf-8";
+  if (extension === ".js" || extension === ".mjs") return "text/javascript; charset=utf-8";
+  if (extension === ".css") return "text/css; charset=utf-8";
+  if (extension === ".json") return "application/json; charset=utf-8";
+  if (extension === ".png") return "image/png";
+  if (extension === ".ico") return "image/x-icon";
+  if (extension === ".svg") return "image/svg+xml; charset=utf-8";
+  if (extension === ".ttf") return "font/ttf";
+  if (extension === ".woff") return "font/woff";
+  if (extension === ".woff2") return "font/woff2";
+  if (extension === ".eot") return "application/vnd.ms-fontobject";
+  return "application/octet-stream";
+}
+
+function safeChildPath(rootPath, requestPath) {
+  const normalized = path.normalize(decodeURIComponent(requestPath)).replace(/^[/\\]+/, "");
+  const candidate = path.resolve(rootPath, normalized);
+  const relative = path.relative(rootPath, candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return "";
+  return candidate;
+}
+
+function remoteWebguiPrefix(account, targetRef) {
+  return `/manage/${encodeURIComponent(account.username)}/${encodeURIComponent(targetRef)}`;
+}
+
+function remoteWebguiManagerPath(restPath) {
+  return restPath === "/manager-config"
+    || restPath === "/meta"
+    || restPath === "/network-options"
+    || restPath === "/open-config-file"
+    || restPath === "/manager"
+    || restPath.startsWith("/manager/")
+    || restPath === "/gateways"
+    || restPath.startsWith("/gateways/")
+    || restPath === "/api"
+    || restPath.startsWith("/api/");
+}
+
+function rewriteRemoteWebguiAssetUrls(text, externalPrefix) {
+  return text
+    .replaceAll('"/assets/', `"${externalPrefix}/assets/`)
+    .replaceAll("'/assets/", `'${externalPrefix}/assets/`)
+    .replaceAll("`/assets/", "`" + externalPrefix + "/assets/")
+    .replaceAll("url(/assets/", `url(${externalPrefix}/assets/`)
+    .replaceAll('url("/assets/', `url("${externalPrefix}/assets/`)
+    .replaceAll("url('/assets/", `url('${externalPrefix}/assets/`);
+}
+
+function remoteWebguiIndexHtml(externalPrefix) {
+  const indexPath = path.join(webguiDistPath, "index.html");
+  if (!fs.existsSync(indexPath)) return "";
+  const bootstrap = `<base href="${externalPrefix}/"><script>window.__RABI_MANAGER_API_BASE__=${JSON.stringify(externalPrefix)};</script>`;
+  let text = fs.readFileSync(indexPath, "utf8");
+  text = text.replace(/<base\s+[^>]*>/gi, "");
+  text = text.replace(/<head([^>]*)>/i, `<head$1>${bootstrap}`);
+  return rewriteRemoteWebguiAssetUrls(text, externalPrefix);
+}
+
+function sendRemoteWebguiStatic(res, match, account) {
+  const externalPrefix = remoteWebguiPrefix(account, match.targetRef);
+  if (match.restPath === "/" || !path.extname(match.restPath)) {
+    const index = remoteWebguiIndexHtml(externalPrefix);
+    if (!index) return sendText(res, 503, "RabiRoute WebGUI build is missing on the RabiLink server.");
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    res.end(index);
+    return true;
+  }
+
+  if (match.restPath.startsWith("/assets/")) {
+    const assetRelativePath = match.restPath.slice("/assets/".length);
+    const candidatePaths = [
+      safeChildPath(path.join(webguiDistPath, "assets"), assetRelativePath),
+      safeChildPath(webguiAssetPath, assetRelativePath)
+    ].filter(Boolean);
+    const filePath = candidatePaths.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+    if (!filePath) return sendText(res, 404, "Remote WebGUI asset was not found.");
+    const contentType = contentTypeForFile(filePath);
+    let body = fs.readFileSync(filePath);
+    if (/text\/javascript|text\/css|application\/json/.test(contentType)) {
+      body = Buffer.from(rewriteRemoteWebguiAssetUrls(body.toString("utf8"), externalPrefix), "utf8");
+    }
+    res.writeHead(200, {
+      "content-type": contentType,
+      "cache-control": contentType.startsWith("font/") || contentType.startsWith("image/") ? "public, max-age=3600" : "no-store",
+      "content-length": String(body.byteLength)
+    });
+    res.end(body);
+    return true;
+  }
+
+  return sendText(res, 404, "Remote WebGUI static file was not found.");
+}
+
+function rewriteWebguiText(text, externalPrefix, contentType) {
+  let next = text
+    .replaceAll("\"/api/", `"${externalPrefix}/api/`)
+    .replaceAll("'/api/", `'${externalPrefix}/api/`)
+    .replaceAll("`/api/", "`" + externalPrefix + "/api/")
+    .replaceAll("\"/manager-config", `"${externalPrefix}/manager-config`)
+    .replaceAll("'/manager-config", `'${externalPrefix}/manager-config`)
+    .replaceAll("`/manager-config", "`" + externalPrefix + "/manager-config")
+    .replaceAll("\"/assets/", `"${externalPrefix}/assets/`)
+    .replaceAll("'/assets/", `'${externalPrefix}/assets/`)
+    .replaceAll("`/assets/", "`" + externalPrefix + "/assets/");
+  if (contentType.includes("text/html") && !/<base\s/i.test(next)) {
+    next = next.replace(/<head([^>]*)>/i, `<head$1><base href="${externalPrefix}/">`);
+  }
+  return next;
+}
+
+function sendWebguiProxyResponse(res, request, externalPrefix) {
+  if (request.status !== "done" || !request.response) {
+    return sendText(res, request.status === "failed" ? 502 : 504, request.error || "Rabi PC WebGUI request timed out.");
+  }
+  const headers = normalizeProxyResponseHeaders(request.response.headers);
+  const contentType = headers["content-type"] || "application/octet-stream";
+  let body = Buffer.from(request.response.bodyBase64 || "", "base64");
+  if (/text\/html|javascript|text\/css|application\/json/.test(contentType)) {
+    body = Buffer.from(rewriteWebguiText(body.toString("utf8"), externalPrefix, contentType), "utf8");
+  }
+  res.writeHead(request.response.statusCode || 200, {
+    ...headers,
+    "content-type": contentType,
+    "content-length": String(body.byteLength),
+    "cache-control": "no-store"
+  });
+  res.end(body);
+}
+
+function mobileWorkersForApp(app) {
+  const store = readAppStore();
+  return store.workers
+    .filter((worker) => worker.appId === app.id)
+    .map((worker) => publicWorker(worker, app));
+}
+
+function selectedMobileWorker(app, workers = mobileWorkersForApp(app)) {
+  if (app.targetDeviceId) {
+    const selected = workers.find((worker) => worker.id === app.targetDeviceId || worker.guid === app.targetDeviceId);
+    if (selected) return selected;
+  }
+  return workers.find((worker) => worker.online) || workers[0] || null;
+}
+
+function mobileStatePayload(app) {
+  const workers = mobileWorkersForApp(app);
+  return {
+    code: 0,
+    ok: true,
+    app: publicApp(app),
+    selectedTargetDeviceId: app.targetDeviceId || "",
+    selectedWorker: selectedMobileWorker(app, workers),
+    workers
+  };
+}
+
+function patchMobileAppTarget(app, targetDeviceId) {
+  const store = readAppStore();
+  const storedApp = store.apps.find((item) => item.id === app.id);
+  if (!storedApp) {
+    const error = new Error(`RabiLink app not found: ${app.id}`);
+    error.statusCode = 404;
+    throw error;
+  }
+  const normalized = stringValue(targetDeviceId);
+  if (normalized) {
+    const worker = store.workers.find((item) => item.appId === app.id && (item.id === normalized || item.guid === normalized));
+    if (!worker) {
+      const error = new Error(`Rabi PC not found for this app token: ${normalized}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    storedApp.targetDeviceId = worker.id;
+  } else {
+    storedApp.targetDeviceId = "";
+  }
+  storedApp.updatedAt = nowIso();
+  writeAppStore(store);
+  return storedApp;
+}
+
+function mobileWorkerTarget(app, url, body = {}) {
+  const requested = stringValue(url.searchParams.get("targetDeviceId") || url.searchParams.get("rabiGuid") || body?.targetDeviceId || body?.rabiGuid);
+  const workers = mobileWorkersForApp(app);
+  const worker = requested
+    ? workers.find((item) => item.id === requested || item.guid === requested)
+    : selectedMobileWorker(app, workers);
+  if (!worker) {
+    const error = new Error("No Rabi PC is connected for this app token.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!worker.online) {
+    const error = new Error(`Rabi PC is offline or stale: ${worker.name || worker.id}`);
+    error.statusCode = 503;
+    throw error;
+  }
+  return worker;
+}
+
+async function mobileProxyJson(app, worker, method, localPath, body = null) {
+  const request = createMobileWebguiRequest(app, worker, method, localPath, body);
+  const finalRequest = await waitForWebguiRequest(request, webguiRequestWaitMs);
+  if (finalRequest.status !== "done" || !finalRequest.response) {
+    const error = new Error(finalRequest.error || "Rabi PC WebGUI request timed out.");
+    error.statusCode = finalRequest.status === "failed" ? 502 : 504;
+    throw error;
+  }
+  const responseBody = Buffer.from(finalRequest.response.bodyBase64 || "", "base64").toString("utf8");
+  let parsed = {};
+  try {
+    parsed = responseBody.trim() ? JSON.parse(responseBody) : {};
+  } catch {
+    parsed = { code: -1, message: responseBody };
+  }
+  return { statusCode: finalRequest.response.statusCode || 200, body: parsed };
+}
+
+async function handleMobileApi(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok || !auth.app) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  const app = auth.app;
+  if (req.method === "GET" && url.pathname === "/api/rabilink/mobile/state") {
+    return sendJson(res, 200, mobileStatePayload(app));
+  }
+  if ((req.method === "PATCH" || req.method === "POST") && url.pathname === "/api/rabilink/mobile/target") {
+    const updated = patchMobileAppTarget(app, body?.targetDeviceId || body?.rabiGuid || "");
+    return sendJson(res, 200, mobileStatePayload(updated));
+  }
+
+  const routeMatch = url.pathname.match(/^\/api\/rabilink\/mobile\/routes(?:\/([^/]+)(?:\/(agent-options|agent-binding))?)?$/);
+  if (!routeMatch) return sendJson(res, 404, { code: -1, ok: false, message: "Not found" });
+
+  const worker = mobileWorkerTarget(app, url, body);
+  const rabiGuid = worker.guid || worker.id;
+  const routeId = routeMatch[1] ? decodeURIComponent(routeMatch[1]) : "";
+  const action = routeMatch[2] || "";
+  if (req.method === "GET" && !routeId && !action) {
+    const result = await mobileProxyJson(app, worker, "GET", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes`);
+    return sendJson(res, result.statusCode, result.body);
+  }
+  if (req.method === "GET" && routeId && action === "agent-options") {
+    const result = await mobileProxyJson(app, worker, "GET", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes/${encodeURIComponent(routeId)}/agent-options`);
+    return sendJson(res, result.statusCode, result.body);
+  }
+  if ((req.method === "PATCH" || req.method === "POST") && routeId && action === "agent-binding") {
+    const result = await mobileProxyJson(app, worker, "PATCH", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes/${encodeURIComponent(routeId)}/agent-binding`, body || {});
+    return sendJson(res, result.statusCode, result.body);
+  }
+  return sendJson(res, 405, { code: -1, ok: false, message: "Method not allowed" });
+}
+
+async function handleManageWebgui(req, url, res) {
+  const match = manageWebguiMatch(url);
+  if (!match) return false;
+  const auth = authorizeAdmin(req, url);
+  if (!auth.ok) {
+    if (req.method === "GET") return redirect(res, "/manage");
+    return sendText(res, 401, "Unauthorized");
+  }
+  if (auth.account.username !== match.username) {
+    const target = `/manage/${encodeURIComponent(auth.account.username)}`;
+    if (req.method === "GET") return redirect(res, target);
+    return sendText(res, 403, "Forbidden");
+  }
+  const target = resolveOwnedWebguiTarget(auth.account, match.targetRef, url);
+  const externalPrefix = remoteWebguiPrefix(auth.account, match.targetRef);
+  if (match.legacyWebgui && req.method === "GET") {
+    const targetUrl = `${externalPrefix}${match.restPath === "/" ? "/" : match.restPath}${url.search}`;
+    return redirect(res, targetUrl, 308);
+  }
+  if (!remoteWebguiManagerPath(match.restPath)) {
+    if (req.method !== "GET" && req.method !== "HEAD") return sendText(res, 405, "Method Not Allowed");
+    return sendRemoteWebguiStatic(res, match, auth.account);
+  }
+  const proxySearch = new URLSearchParams(url.searchParams);
+  proxySearch.delete("appId");
+  const localPath = `${match.restPath}${proxySearch.toString() ? `?${proxySearch}` : ""}`;
+  const rawBody = req.method === "GET" || req.method === "HEAD" ? Buffer.alloc(0) : await readRawBody(req);
+  const proxyRequest = createWebguiRequest(req, target, localPath, rawBody);
+  const finalRequest = await waitForWebguiRequest(proxyRequest, webguiRequestWaitMs);
+  sendWebguiProxyResponse(res, finalRequest, externalPrefix);
+  return true;
+}
+
 async function handleAdminApi(req, url, res) {
   const body = req.method === "GET" ? {} : await readBody(req);
-  if (req.method === "GET" && url.pathname === "/admin/api/state") {
+  const apiPath = manageApiPath(url);
+  if (req.method === "GET" && apiPath === "/state") {
     const auth = authorizeAdmin(req, url, body);
     if (!auth.ok && !auth.setupRequired) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
-    return sendJson(res, 200, accountStorePayload(auth.account));
+    const headers = auth.account ? { "set-cookie": manageSessionCookie(createManageSession(auth.account)) } : {};
+    return sendJson(res, 200, accountStorePayload(auth.account), headers);
   }
-  if (req.method === "POST" && url.pathname === "/admin/api/login") {
+  if (req.method === "POST" && apiPath === "/login") {
     const account = loginAccount(body);
-    return sendJson(res, 200, { code: 0, ok: true, account: publicAccount(account) });
+    const session = createManageSession(account);
+    return sendJson(res, 200, { code: 0, ok: true, account: publicAccount(account) }, { "set-cookie": manageSessionCookie(session) });
   }
-  if (req.method === "POST" && url.pathname === "/admin/api/accounts") {
-    const store = readAppStore();
-    if (store.accounts.length > 0) {
-      const auth = authorizeAdmin(req, url, body);
-      if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
-    }
+  if (req.method === "POST" && apiPath === "/accounts") {
     const account = createAccount(body);
-    return sendJson(res, 200, { code: 0, ok: true, account: publicAccount(account) });
+    const session = createManageSession(account);
+    return sendJson(res, 200, { code: 0, ok: true, account: publicAccount(account) }, { "set-cookie": manageSessionCookie(session) });
+  }
+  if (req.method === "POST" && apiPath === "/logout") {
+    return sendJson(res, 200, { code: 0, ok: true }, { "set-cookie": clearManageSessionCookie() });
   }
   const auth = authorizeAdmin(req, url, body);
   if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
-  if (req.method === "POST" && url.pathname === "/admin/api/apps") {
+  if (req.method === "POST" && apiPath === "/apps") {
     const app = createAppForAccount(auth.account, body);
     return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken: true }) });
   }
-  const appMatch = url.pathname.match(/^\/admin\/api\/apps\/([^/]+)$/);
+  const appMatch = apiPath.match(/^\/apps\/([^/]+)$/);
   if (appMatch && req.method === "PATCH") {
     const { app, revealToken } = patchOwnedApp(auth.account, decodeURIComponent(appMatch[1]), body);
     return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken }) });
@@ -1523,9 +2668,15 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") return sendJson(res, 204, {});
     if (req.method === "GET" && (url.pathname === "/admin" || url.pathname === "/admin/")) {
+      return redirect(res, "/manage");
+    }
+    if (url.pathname.startsWith("/manage/") && manageWebguiMatch(url)) {
+      return await handleManageWebgui(req, url, res);
+    }
+    if (req.method === "GET" && (url.pathname === "/manage" || url.pathname === "/manage/" || /^\/manage\/[^/]+\/?$/.test(url.pathname))) {
       return sendHtml(res, adminPageHtml());
     }
-    if (url.pathname.startsWith("/admin/api/")) {
+    if (url.pathname.startsWith("/admin/api/") || url.pathname.startsWith("/manage/api/")) {
       return await handleAdminApi(req, url, res);
     }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
@@ -1537,7 +2688,7 @@ const server = http.createServer(async (req, res) => {
         name: "RabiLink Relay",
         time: nowIso(),
         admin: {
-          url: "/admin",
+          url: "/manage",
           accounts: store.accounts.length,
           apps: store.apps.length,
           enabledApps: store.apps.filter((app) => app.enabled !== false).length,
@@ -1560,6 +2711,11 @@ const server = http.createServer(async (req, res) => {
       return sendOpenApi(res, toolImportPostmanFileCandidates);
     }
     const body = req.method === "GET" ? {} : await readBody(req);
+    if (url.pathname === "/api/rabilink/mobile/state"
+      || url.pathname === "/api/rabilink/mobile/target"
+      || url.pathname.startsWith("/api/rabilink/mobile/routes")) {
+      return await handleMobileApi(req, url, res, body);
+    }
     if (req.method === "POST" && (url.pathname === "/rokid/rabilink" || url.pathname === "/api/rokid/rabilink")) {
       return await handleRokid(req, url, res, body);
     }
@@ -1577,6 +2733,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/worker/tasks") {
       return await handleWorkerTasks(req, url, res, body);
+    }
+    if (req.method === "GET" && url.pathname === "/worker/webgui-requests") {
+      return await handleWorkerWebguiRequests(req, url, res, body);
+    }
+    if (req.method === "POST" && /^\/worker\/webgui-requests\/[^/]+\/response$/.test(url.pathname)) {
+      return handleWorkerWebguiResponse(req, url, res, body);
     }
     if (req.method === "POST" && /^\/worker\/tasks\/[^/]+\/messages$/.test(url.pathname)) {
       return handleTaskMessagesAppend(req, url, res, body);

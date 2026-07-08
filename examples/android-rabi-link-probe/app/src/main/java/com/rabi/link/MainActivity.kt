@@ -19,9 +19,12 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import com.rabiroute.sdk.RabiAgentBinding
 import com.rabiroute.sdk.RabiInstance
+import com.rabiroute.sdk.RabiLinkPc
 import com.rabiroute.sdk.RabiRouteInfo
 import com.rabiroute.sdk.RabiRouteSdk
+import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -29,20 +32,37 @@ import java.util.Locale
 class MainActivity : Activity() {
     private val sdk = RabiRouteSdk()
     private val managers = mutableListOf<RabiInstance>()
+    private val pcs = mutableListOf<RabiLinkPc>()
     private val routes = mutableListOf<RabiRouteInfo>()
+    private val cwdOptions = mutableListOf<String>()
+    private val threadOptions = mutableListOf<String>()
     private val logLines = StringBuilder()
     private var selectedInstance: RabiInstance? = null
+    private var selectedPc: RabiLinkPc? = null
 
     private lateinit var statusView: TextView
+    private lateinit var relayUrlInput: EditText
+    private lateinit var relayTokenInput: EditText
+    private lateinit var pcSpinner: Spinner
+    private lateinit var pcAdapter: ArrayAdapter<String>
     private lateinit var managerSpinner: Spinner
     private lateinit var managerAdapter: ArrayAdapter<String>
     private lateinit var routeSpinner: Spinner
     private lateinit var routeAdapter: ArrayAdapter<String>
+    private lateinit var cwdSpinner: Spinner
+    private lateinit var cwdAdapter: ArrayAdapter<String>
+    private lateinit var threadSpinner: Spinner
+    private lateinit var threadAdapter: ArrayAdapter<String>
+    private lateinit var connectServerButton: Button
+    private lateinit var bindPcButton: Button
     private lateinit var scanButton: Button
     private lateinit var refreshRouteButton: Button
+    private lateinit var loadAgentOptionsButton: Button
+    private lateinit var saveAgentBindingButton: Button
     private lateinit var callbackView: TextView
     private lateinit var logView: TextView
     private var scanningManagers = false
+    private var serverBusy = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,8 +88,9 @@ class MainActivity : Activity() {
         addHeader(content)
         statusView = statusPanel()
         content.addView(statusView, fullWidth(0, 0, 0, 14))
-        addManagerCard(content)
-        addRelayDirectCard(content)
+        addServerCard(content)
+        addRouteCard(content)
+        addAgentBindingCard(content)
         addToolsCard(content)
 
         val scroll = ScrollView(this)
@@ -99,10 +120,46 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(-1, -2))
     }
 
-    private fun addManagerCard(content: LinearLayout) {
+    private fun addServerCard(content: LinearLayout) {
         val card = card()
-        card.addView(cardTitle("1. 选择 RabiRoute"))
-        card.addView(cardText("先从局域网扫描 RabiRoute Manager。扫到后会显示电脑名、Rabi 名字和 IP，再选择要投递到 Codex 的 Route。"))
+        card.addView(cardTitle("1. 连接 RabiLink 服务器"))
+        card.addView(cardText("手机只保存服务器地址和应用 token。服务器根据 token 找到已连接的 PC Rabi，再通过 worker 修改对应 PC 的本机 Manager 配置。"))
+
+        relayUrlInput = input("https://rabi.example.com")
+        relayTokenInput = input("粘贴 RabiLink 应用 token")
+        card.addView(label("服务器 URL"))
+        card.addView(relayUrlInput, fullWidth(0, 0, 0, 8))
+        card.addView(label("应用 token"))
+        card.addView(relayTokenInput, fullWidth(0, 0, 0, 8))
+
+        pcAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf("尚未连接服务器"))
+        pcAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        pcSpinner = Spinner(this).apply {
+            adapter = pcAdapter
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    pcs.getOrNull(position)?.let { selectServerPc(it) }
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
+        }
+        card.addView(label("PC Rabi"))
+        card.addView(pcSpinner, fullWidth(0, 0, 0, 10))
+
+        val row = row()
+        connectServerButton = primaryButton("连接服务器") { connectServer() }
+        row.addView(connectServerButton, LinearLayout.LayoutParams(0, -2, 1f))
+        row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
+        bindPcButton = secondaryButton("绑定此 PC") { bindSelectedPc() }
+        row.addView(bindPcButton, LinearLayout.LayoutParams(0, -2, 1f))
+        card.addView(row)
+        content.addView(card, fullWidth(0, 0, 0, 12))
+    }
+
+    private fun addRouteCard(content: LinearLayout) {
+        val card = card()
+        card.addView(cardTitle("2. 选择 Route"))
+        card.addView(cardText("读取当前 token 绑定的 PC Rabi 配置，选择要接到 Codex 的 route。"))
 
         managerAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf("尚未扫描到 RabiRoute"))
         managerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
@@ -115,8 +172,6 @@ class MainActivity : Activity() {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             }
         }
-        card.addView(label("RabiRoute"))
-        card.addView(managerSpinner, fullWidth(0, 0, 0, 8))
 
         routeAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf("先读取 Route"))
         routeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
@@ -133,33 +188,212 @@ class MainActivity : Activity() {
         card.addView(routeSpinner, fullWidth(0, 0, 0, 10))
 
         val row = row()
-        scanButton = primaryButton("扫描") { scanManagers() }
-        row.addView(scanButton, LinearLayout.LayoutParams(0, -2, 1f))
-        row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
-        refreshRouteButton = secondaryButton("刷新 Route") { readRoutes() }
+        refreshRouteButton = primaryButton("读取服务器 Route") { readServerRoutes() }
         row.addView(refreshRouteButton, LinearLayout.LayoutParams(0, -2, 1f))
+        row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
+        scanButton = secondaryButton("局域网扫描备用") { scanManagers() }
+        row.addView(scanButton, LinearLayout.LayoutParams(0, -2, 1f))
         card.addView(row)
         content.addView(card, fullWidth(0, 0, 0, 12))
     }
 
-    private fun addRelayDirectCard(content: LinearLayout) {
+    private fun addAgentBindingCard(content: LinearLayout) {
         val card = card()
-        card.addView(cardTitle("2. Relay 直连状态"))
-        card.addView(cardText("Rokid 云侧插件会把消息写入公网 Relay；电脑端 RabiLink worker 直接领取任务、投递到 RabiRoute，并把增量回复写回 Relay。手机不再作为消息中转。"))
-        callbackView = cardText("RabiLink 回调：未选择 RabiRoute")
+        card.addView(cardTitle("3. Codex 绑定"))
+        card.addView(cardText("选择工作空间和 Codex 会话后保存，会直接写回所选 PC Rabi 的 Route 配置。"))
+        callbackView = cardText("当前绑定：未读取")
         card.addView(callbackView)
-        card.addView(cardText("配置入口：在电脑 WebGUI 的 RabiLink 消息端里配置 Relay 地址、Token、设备 ID 和超时时间。"))
+
+        cwdAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf("先读取选项"))
+        cwdAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        cwdSpinner = Spinner(this).apply { adapter = cwdAdapter }
+        threadAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf("先读取选项"))
+        threadAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        threadSpinner = Spinner(this).apply { adapter = threadAdapter }
+        card.addView(label("Codex 工作空间"))
+        card.addView(cwdSpinner, fullWidth(0, 0, 0, 8))
+        card.addView(label("Codex 会话"))
+        card.addView(threadSpinner, fullWidth(0, 0, 0, 10))
+
+        val row = row()
+        loadAgentOptionsButton = secondaryButton("读取选项") { loadServerAgentOptions() }
+        row.addView(loadAgentOptionsButton, LinearLayout.LayoutParams(0, -2, 1f))
+        row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
+        saveAgentBindingButton = primaryButton("保存绑定") { saveServerAgentBinding() }
+        row.addView(saveAgentBindingButton, LinearLayout.LayoutParams(0, -2, 1f))
+        card.addView(row)
         content.addView(card, fullWidth(0, 0, 0, 12))
     }
 
     private fun addToolsCard(content: LinearLayout) {
         val card = card()
-        card.addView(cardTitle("3. 测试与诊断"))
-        card.addView(cardText("设备接口探针先放在这里。正式使用时只需要前两张卡。"))
+        card.addView(cardTitle("4. 测试与诊断"))
+        card.addView(cardText("设备接口探针先放在这里。正式使用时只需要前三张卡。"))
         card.addView(secondaryButton("打开接口测试中心") {
             startActivity(Intent(this, TestCenterActivity::class.java))
         })
         content.addView(card, fullWidth(0, 0, 0, 12))
+    }
+
+    private fun relayBaseUrl(): String = relayUrlInput.text.toString().trim().ifBlank { "https://rabi.example.com" }.trimEnd('/')
+    private fun relayToken(): String = relayTokenInput.text.toString().trim()
+
+    private fun requireServerToken(): String? {
+        val token = relayToken()
+        if (token.isBlank()) {
+            toast("请先粘贴应用 token")
+            return null
+        }
+        return token
+    }
+
+    private fun connectServer() {
+        val token = requireServerToken() ?: return
+        setServerBusy(true)
+        appendLog("正在连接 RabiLink 服务器...")
+        refreshStatus("连接服务器中")
+        runAsync(
+            work = { sdk.getMobileState(relayBaseUrl(), token) },
+            success = { state ->
+                updateServerState(state)
+                appendLog("服务器已连接：${state.appName.ifBlank { state.appId }}，${state.workers.size} 台 PC Rabi。")
+                refreshStatus("服务器已连接")
+            },
+            complete = { setServerBusy(false) }
+        )
+    }
+
+    private fun updateServerState(state: com.rabiroute.sdk.RabiLinkMobileState) {
+        pcs.clear()
+        pcs.addAll(state.workers)
+        pcAdapter.clear()
+        if (pcs.isEmpty()) {
+            pcAdapter.add("没有 PC Rabi 连接此 token")
+            selectedPc = null
+        } else {
+            pcAdapter.addAll(pcs.map { pcLabel(it) })
+            val selectedIndex = pcs.indexOfFirst { pc ->
+                pc.id == state.selectedWorker?.id || pc.guid == state.selectedWorker?.guid || pc.id == state.selectedTargetDeviceId || pc.guid == state.selectedTargetDeviceId
+            }.let { if (it >= 0) it else 0 }
+            pcSpinner.setSelection(selectedIndex)
+            selectedPc = pcs[selectedIndex]
+        }
+        pcAdapter.notifyDataSetChanged()
+        callbackView.text = "当前绑定：${state.selectedWorker?.let { pcLabel(it) } ?: "未选择 PC Rabi"}"
+    }
+
+    private fun selectServerPc(pc: RabiLinkPc) {
+        val changed = selectedPc?.id != pc.id && selectedPc?.guid != pc.guid
+        selectedPc = pc
+        if (changed) {
+            updateRoutes(emptyList())
+            clearAgentOptions()
+        }
+        refreshStatus("已选择 PC Rabi")
+    }
+
+    private fun bindSelectedPc() {
+        val token = requireServerToken() ?: return
+        val pc = selectedPc ?: return toast("请先选择 PC Rabi")
+        setServerBusy(true)
+        appendLog("正在把应用 token 绑定到 ${pc.name}...")
+        runAsync(
+            work = { sdk.selectMobileRabiPc(relayBaseUrl(), token, pc.id) },
+            success = { state ->
+                updateServerState(state)
+                appendLog("已绑定 PC Rabi：${state.selectedWorker?.name ?: pc.name}")
+                readServerRoutes()
+            },
+            complete = { setServerBusy(false) }
+        )
+    }
+
+    private fun readServerRoutes() {
+        val token = requireServerToken() ?: return
+        val pc = selectedPc ?: return toast("请先连接服务器并选择 PC Rabi")
+        setServerBusy(true)
+        appendLog("正在读取 ${pc.name} 的 Route 列表...")
+        runAsync(
+            work = { sdk.getMobileRoutes(relayBaseUrl(), token, pc.id) },
+            success = { result ->
+                updateRoutes(result)
+                appendLog("读取到 ${result.size} 条 Route。")
+                refreshStatus("Route 已刷新")
+            },
+            complete = { setServerBusy(false) }
+        )
+    }
+
+    private fun loadServerAgentOptions() {
+        val token = requireServerToken() ?: return
+        val pc = selectedPc ?: return toast("请先选择 PC Rabi")
+        val route = selectedRoute() ?: return toast("请先选择 Route")
+        setServerBusy(true)
+        appendLog("正在读取 Codex 工作空间和会话选项...")
+        runAsync(
+            work = { sdk.getMobileAgentOptions(relayBaseUrl(), token, route.id, pc.id) },
+            success = { data ->
+                updateAgentOptions(route, data)
+                appendLog("Codex 选项已刷新。")
+                refreshStatus("Codex 选项已刷新")
+            },
+            complete = { setServerBusy(false) }
+        )
+    }
+
+    private fun saveServerAgentBinding() {
+        val token = requireServerToken() ?: return
+        val pc = selectedPc ?: return toast("请先选择 PC Rabi")
+        val route = selectedRoute() ?: return toast("请先选择 Route")
+        val cwd = cwdOptions.getOrNull(cwdSpinner.selectedItemPosition).orEmpty()
+        val thread = threadOptions.getOrNull(threadSpinner.selectedItemPosition).orEmpty()
+        setServerBusy(true)
+        appendLog("正在保存 ${routeDisplayName(route)} 的 Codex 绑定...")
+        val binding = RabiAgentBinding(agentAdapter = "codex", codexCwd = cwd, codexThreadName = thread)
+        runAsync(
+            work = { sdk.setMobileAgentBinding(relayBaseUrl(), token, route.id, binding, pc.id) },
+            success = {
+                appendLog("已保存 Codex 绑定：${cwd.ifBlank { "默认工作目录" }} / ${thread.ifBlank { "默认会话" }}")
+                readServerRoutes()
+            },
+            complete = { setServerBusy(false) }
+        )
+    }
+
+    private fun updateAgentOptions(route: RabiRouteInfo, data: org.json.JSONObject) {
+        val routeJson = data.optJSONObject("route")
+        val cwdValues = LinkedHashSet<String>()
+        cwdValues.add(routeJson?.optString("codexCwd").orEmpty().ifBlank { route.codexCwd })
+        cwdValues.addAll(data.optJSONArray("cwdOptions").toStringList())
+        cwdValues.remove("")
+        cwdOptions.clear()
+        cwdOptions.addAll(cwdValues.ifEmpty { linkedSetOf("") })
+        cwdAdapter.clear()
+        cwdAdapter.addAll(cwdOptions.map { it.ifBlank { "默认工作目录" } })
+        cwdAdapter.notifyDataSetChanged()
+
+        val threadValues = LinkedHashSet<String>()
+        threadValues.add(routeJson?.optString("codexThreadName").orEmpty().ifBlank { route.codexThreadName })
+        threadValues.addAll(data.optJSONArray("threadNames").toStringList())
+        threadValues.remove("")
+        threadOptions.clear()
+        threadOptions.addAll(threadValues.ifEmpty { linkedSetOf("") })
+        threadAdapter.clear()
+        threadAdapter.addAll(threadOptions.map { it.ifBlank { "默认会话" } })
+        threadAdapter.notifyDataSetChanged()
+        callbackView.text = "当前绑定：${routeDisplayName(route)} / ${routeJson?.optString("codexCwd").orEmpty().ifBlank { route.codexCwd.ifBlank { "默认工作目录" } }} / ${routeJson?.optString("codexThreadName").orEmpty().ifBlank { route.codexThreadName.ifBlank { "默认会话" } }}"
+    }
+
+    private fun clearAgentOptions() {
+        cwdOptions.clear()
+        threadOptions.clear()
+        cwdAdapter.clear()
+        cwdAdapter.add("先读取选项")
+        cwdAdapter.notifyDataSetChanged()
+        threadAdapter.clear()
+        threadAdapter.add("先读取选项")
+        threadAdapter.notifyDataSetChanged()
+        callbackView.text = "当前绑定：未读取"
     }
 
     private fun scanManagers() {
@@ -230,24 +464,46 @@ class MainActivity : Activity() {
         refreshInteractionState()
     }
 
+    private fun setServerBusy(busy: Boolean) {
+        serverBusy = busy
+        refreshInteractionState()
+    }
+
     private fun refreshInteractionState() {
-        val canUseDiscovery = !scanningManagers
+        val canUseDiscovery = !scanningManagers && !serverBusy
+        val canUseServer = !serverBusy
+        relayUrlInput.isEnabled = canUseServer
+        relayTokenInput.isEnabled = canUseServer
+        pcSpinner.isEnabled = canUseServer
+        connectServerButton.isEnabled = canUseServer
+        bindPcButton.isEnabled = canUseServer
         managerSpinner.isEnabled = canUseDiscovery
         routeSpinner.isEnabled = canUseDiscovery
         scanButton.isEnabled = canUseDiscovery
         scanButton.text = when {
             scanningManagers -> "扫描中..."
-            else -> "扫描"
+            else -> "局域网扫描备用"
         }
         refreshRouteButton.isEnabled = canUseDiscovery
+        loadAgentOptionsButton.isEnabled = canUseServer
+        saveAgentBindingButton.isEnabled = canUseServer
+        connectServerButton.text = if (serverBusy) "处理中..." else "连接服务器"
+        applyEnabledAlpha(relayUrlInput)
+        applyEnabledAlpha(relayTokenInput)
+        applyEnabledAlpha(pcSpinner)
+        applyEnabledAlpha(connectServerButton)
+        applyEnabledAlpha(bindPcButton)
         applyEnabledAlpha(managerSpinner)
         applyEnabledAlpha(routeSpinner)
         applyEnabledAlpha(scanButton)
         applyEnabledAlpha(refreshRouteButton)
+        applyEnabledAlpha(loadAgentOptionsButton)
+        applyEnabledAlpha(saveAgentBindingButton)
     }
 
     private fun selectedRoute(): RabiRouteInfo? = routes.getOrNull(routeSpinner.selectedItemPosition)
     private fun managerLabel(instance: RabiInstance): String = "${instance.name} · ${instance.host}"
+    private fun pcLabel(pc: RabiLinkPc): String = "${pc.name} · ${if (pc.online) "在线" else "离线"} · ${pc.guid.ifBlank { pc.id }}"
     private fun routeLabel(route: RabiRouteInfo): String = "${routeDisplayName(route)} · ${if (route.enabled) "启用" else "停用"}"
     private fun routeDisplayName(route: RabiRouteInfo): String =
         route.configName.ifBlank { routeRuntimeConfigName(route.id).ifBlank { route.name.ifBlank { route.id } } }
@@ -262,9 +518,10 @@ class MainActivity : Activity() {
         val route = selectedRoute()
         statusView.text = buildString {
             appendLine("当前连接")
-            appendLine("RabiRoute：${instance?.name ?: "未选择"}")
-            appendLine("电脑：${instance?.computerName ?: "未选择"}")
-            appendLine("IP：${instance?.host ?: "未选择"}")
+            appendLine("服务器：${if (::relayUrlInput.isInitialized) relayBaseUrl() else "未填写"}")
+            appendLine("PC Rabi：${selectedPc?.name ?: instance?.name ?: "未选择"}")
+            appendLine("电脑：${selectedPc?.guid ?: instance?.computerName ?: "未选择"}")
+            appendLine("IP：${instance?.host ?: "服务器转发"}")
             appendLine("Route：${route?.let { routeDisplayName(it) } ?: "未选择"}")
             if (extra.isNotBlank()) appendLine(extra)
         }.trimEnd()
@@ -407,4 +664,9 @@ class MainActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
+
+    private fun JSONArray?.toStringList(): List<String> {
+        if (this == null) return emptyList()
+        return (0 until length()).map { optString(it) }.filter { it.isNotBlank() }
+    }
 }

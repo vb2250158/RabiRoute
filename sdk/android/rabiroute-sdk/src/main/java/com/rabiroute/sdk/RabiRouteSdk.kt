@@ -55,6 +55,26 @@ data class RabiLinkRelayTask(
     val rawJson: JSONObject
 )
 
+data class RabiLinkPc(
+    val id: String,
+    val guid: String,
+    val name: String,
+    val appId: String,
+    val appName: String,
+    val online: Boolean,
+    val lastSeenAt: String,
+    val rawJson: JSONObject
+)
+
+data class RabiLinkMobileState(
+    val appId: String,
+    val appName: String,
+    val selectedTargetDeviceId: String,
+    val selectedWorker: RabiLinkPc?,
+    val workers: List<RabiLinkPc>,
+    val rawJson: JSONObject
+)
+
 data class RabiRouteInfo(
     val id: String,
     val name: String,
@@ -328,6 +348,64 @@ class RabiRouteSdk(
         )
     }
 
+    fun getMobileState(relayBaseUrl: String, token: String): RabiLinkMobileState {
+        val json = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/state",
+            "GET",
+            null,
+            mapOf("X-RabiLink-Token" to token),
+            readTimeoutMs = 10000
+        )
+        return mobileStateFromJson(json)
+    }
+
+    fun selectMobileRabiPc(relayBaseUrl: String, token: String, targetDeviceId: String): RabiLinkMobileState {
+        val payload = JSONObject().put("targetDeviceId", targetDeviceId)
+        val json = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/target",
+            "PATCH",
+            payload.toString(),
+            mapOf("X-RabiLink-Token" to token),
+            readTimeoutMs = 10000
+        )
+        return mobileStateFromJson(json)
+    }
+
+    fun getMobileRoutes(relayBaseUrl: String, token: String, targetDeviceId: String = ""): List<RabiRouteInfo> {
+        val target = targetQuery(targetDeviceId)
+        val json = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes$target",
+            "GET",
+            null,
+            mapOf("X-RabiLink-Token" to token),
+            readTimeoutMs = 45000
+        )
+        val routes = json.getJSONObject("data").getJSONArray("routes")
+        return (0 until routes.length()).map { index -> routeInfoFromJson(routes.getJSONObject(index)) }
+    }
+
+    fun getMobileAgentOptions(relayBaseUrl: String, token: String, routeId: String, targetDeviceId: String = ""): JSONObject {
+        val target = targetQuery(targetDeviceId)
+        return requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes/${encodePath(routeId)}/agent-options$target",
+            "GET",
+            null,
+            mapOf("X-RabiLink-Token" to token),
+            readTimeoutMs = 45000
+        ).getJSONObject("data")
+    }
+
+    fun setMobileAgentBinding(relayBaseUrl: String, token: String, routeId: String, binding: RabiAgentBinding, targetDeviceId: String = ""): JSONObject {
+        val target = targetQuery(targetDeviceId)
+        return requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes/${encodePath(routeId)}/agent-binding$target",
+            "PATCH",
+            binding.toJson().toString(),
+            mapOf("X-RabiLink-Token" to token),
+            readTimeoutMs = 45000
+        ).getJSONObject("data")
+    }
+
     private fun getJson(url: String): JSONObject = requestJson(url, "GET", null)
 
     private fun probeRabiLinkCallback(host: String, port: Int): RabiLinkEndpoint? {
@@ -427,6 +505,51 @@ class RabiRouteSdk(
 
     private fun encodeQuery(value: String): String =
         java.net.URLEncoder.encode(value, "UTF-8")
+
+    private fun targetQuery(targetDeviceId: String): String =
+        if (targetDeviceId.isBlank()) "" else "?targetDeviceId=${encodeQuery(targetDeviceId)}"
+
+    private fun routeInfoFromJson(item: JSONObject): RabiRouteInfo =
+        RabiRouteInfo(
+            id = item.optString("id"),
+            name = item.optString("name"),
+            configName = item.optString("configName"),
+            routeName = item.optString("routeName"),
+            enabled = item.optBoolean("enabled"),
+            running = item.optBoolean("running"),
+            agentAdapters = item.optJSONArray("agentAdapters").toStringList(),
+            codexCwd = item.optString("codexCwd"),
+            codexThreadName = item.optString("codexThreadName"),
+            rawJson = item
+        )
+
+    private fun rabiLinkPcFromJson(item: JSONObject): RabiLinkPc =
+        RabiLinkPc(
+            id = item.optString("id"),
+            guid = item.optString("guid"),
+            name = item.optString("name", item.optString("id", "Rabi PC")),
+            appId = item.optString("appId"),
+            appName = item.optString("appName"),
+            online = item.optBoolean("online"),
+            lastSeenAt = item.optString("lastSeenAt"),
+            rawJson = item
+        )
+
+    private fun mobileStateFromJson(json: JSONObject): RabiLinkMobileState {
+        val workersJson = json.optJSONArray("workers")
+        val workers = (0 until (workersJson?.length() ?: 0)).mapNotNull { index ->
+            workersJson?.optJSONObject(index)?.let { rabiLinkPcFromJson(it) }
+        }
+        val app = json.optJSONObject("app") ?: JSONObject()
+        return RabiLinkMobileState(
+            appId = app.optString("id"),
+            appName = app.optString("name"),
+            selectedTargetDeviceId = json.optString("selectedTargetDeviceId"),
+            selectedWorker = json.optJSONObject("selectedWorker")?.let { rabiLinkPcFromJson(it) },
+            workers = workers,
+            rawJson = json
+        )
+    }
 
     private fun JSONArray?.toStringList(): List<String> {
         if (this == null) return emptyList()

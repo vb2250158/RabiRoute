@@ -32,14 +32,16 @@
 
     <application
         android:allowBackup="false"
-        android:label="Rabi Glass ASR"
+        android:label="Rabi Glass Test"
         android:supportsRtl="true"
         android:theme="@style/RabiGlassTheme"
         android:usesCleartextTraffic="true"
         tools:replace="android:allowBackup">
         <activity
             android:name=".GlassAsrProbeActivity"
-            android:exported="true">
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
