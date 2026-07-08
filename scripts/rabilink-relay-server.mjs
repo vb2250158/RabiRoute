@@ -17,6 +17,8 @@ const taskTtlMs = clamp(Number(process.env.RABILINK_RELAY_TASK_TTL_MS || 10 * 60
 const leaseMs = clamp(Number(process.env.RABILINK_RELAY_LEASE_MS || 45000), 5000, 10 * 60 * 1000);
 const dataDir = path.resolve(process.env.RABILINK_RELAY_DATA_DIR || path.join(process.cwd(), "data", "rabilink-relay"));
 const eventLogPath = path.join(dataDir, "events.jsonl");
+const accountLogDir = path.join(dataDir, "account-logs");
+const accountLogMaxRows = clamp(Number(process.env.RABILINK_RELAY_ACCOUNT_LOG_MAX_ROWS || 300), 50, 2000);
 const appStorePath = path.resolve(process.env.RABILINK_RELAY_APP_STORE_FILE || path.join(dataDir, "apps.json"));
 const webguiDistPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_DIST_DIR || path.join(process.cwd(), "ribiwebgui", "dist"));
 const webguiAssetPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_ASSET_DIR || path.join(process.cwd(), "assets"));
@@ -42,6 +44,7 @@ const toolImportPostmanFileCandidates = [
 ].filter(Boolean);
 
 fs.mkdirSync(dataDir, { recursive: true });
+fs.mkdirSync(accountLogDir, { recursive: true });
 if (!hasEnabledRabiLinkApps()) {
   console.warn("No enabled RabiLink app tokens exist yet. Open /manage to create the first account and app token.");
 }
@@ -167,6 +170,79 @@ function nowIso() {
 function writeEvent(event, data) {
   const row = JSON.stringify({ time: nowIso(), event, data });
   fs.appendFile(eventLogPath, `${row}\n`, () => {});
+}
+
+function textPreview(value, maxLength = 140) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function accountLogPath(accountId) {
+  const id = sanitizeRabiLinkId(accountId, "");
+  if (!id) return "";
+  return path.join(accountLogDir, `${id}.jsonl`);
+}
+
+function trimAccountLogFile(filePath) {
+  fs.readFile(filePath, "utf8", (readError, text) => {
+    if (readError) return;
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    if (lines.length <= accountLogMaxRows) return;
+    fs.writeFile(filePath, `${lines.slice(-accountLogMaxRows).join("\n")}\n`, () => {});
+  });
+}
+
+function writeAccountLog(account, event, data = {}) {
+  if (!account?.id) return;
+  const filePath = accountLogPath(account.id);
+  if (!filePath) return;
+  const row = {
+    id: randomId("log"),
+    time: nowIso(),
+    event,
+    level: data.level || "info",
+    title: data.title || event,
+    detail: data.detail || "",
+    appId: data.appId || "",
+    appName: data.appName || "",
+    workerId: data.workerId || "",
+    workerName: data.workerName || "",
+    taskId: data.taskId || "",
+    status: data.status || "",
+    method: data.method || "",
+    path: data.path || "",
+    messageCount: Number(data.messageCount || 0),
+    waitMs: Number(data.waitMs || 0),
+    textPreview: textPreview(data.textPreview || data.text || ""),
+    error: textPreview(data.error || "", 220)
+  };
+  fs.appendFile(filePath, `${JSON.stringify(row)}\n`, () => trimAccountLogFile(filePath));
+}
+
+function writeAccountLogForApp(app, event, data = {}) {
+  if (!app?.ownerAccountId) return;
+  writeAccountLog({ id: app.ownerAccountId }, event, {
+    appId: app.id,
+    appName: app.name || "",
+    ...data
+  });
+}
+
+function readAccountLogs(account, limit = 120) {
+  const filePath = accountLogPath(account?.id || "");
+  if (!filePath || !fs.existsSync(filePath)) return [];
+  const max = clamp(Number(limit || 120), 1, 300);
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean).slice(-max);
+  return lines
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .reverse();
 }
 
 function rabiLinkTokenPreview(value) {
@@ -377,6 +453,7 @@ function accountStorePayload(account, options = {}) {
     account: account ? publicAccount(account) : null,
     apps: apps.map((app) => publicApp(app, { revealToken: true })),
     workers: workers.map((worker) => publicWorker(worker, appsById.get(worker.appId))),
+    logs: account ? readAccountLogs(account, options.logLimit || 80) : [],
     dataPath: path.relative(process.cwd(), appStorePath).replace(/\\/g, "/")
   };
 }
@@ -389,11 +466,22 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "") {
   const time = nowIso();
   const name = stringValue(deviceName || id) || id;
   let worker = store.workers.find((item) => item.appId === appId && (item.id === id || (guid && item.guid === guid)));
+  const app = store.apps.find((item) => item.id === appId);
   if (worker) {
+    const wasOnline = workerOnline(worker);
     worker.id = worker.id || id;
     worker.guid = guid || worker.guid || "";
     worker.name = name;
     worker.lastSeenAt = time;
+    if (!wasOnline) {
+      writeAccountLogForApp(app, "pc_reconnected", {
+        title: "PC Rabi 重新连接",
+        detail: `${name} 已重新上线。`,
+        workerId: worker.id,
+        workerName: worker.name,
+        status: "online"
+      });
+    }
   } else {
     worker = {
       id,
@@ -404,6 +492,13 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "") {
       lastSeenAt: time
     };
     store.workers.push(worker);
+    writeAccountLogForApp(app, "pc_connected", {
+      title: "PC Rabi 已连接",
+      detail: `${name} 第一次使用这个应用 token 连接服务器。`,
+      workerId: worker.id,
+      workerName: worker.name,
+      status: "online"
+    });
   }
   writeAppStore(store);
   return worker;
@@ -518,6 +613,13 @@ function createAppForAccount(account, body) {
   store.apps.push(app);
   writeAppStore(store);
   writeEvent("admin_app_created", { app: publicApp(app) });
+  writeAccountLog(account, "app_created", {
+    title: "应用已创建",
+    detail: `创建了应用 ${app.name}。`,
+    appId: app.id,
+    appName: app.name,
+    status: "ok"
+  });
   return app;
 }
 
@@ -541,6 +643,13 @@ function patchOwnedApp(account, appId, body) {
   app.updatedAt = nowIso();
   writeAppStore(store);
   writeEvent("admin_app_updated", { app: publicApp(app), regenerateToken: revealToken });
+  writeAccountLog(account, "app_updated", {
+    title: revealToken ? "应用 token 已重新生成" : "应用配置已更新",
+    detail: revealToken ? `${app.name} 的旧 token 已失效。` : `${app.name} 的配置已保存。`,
+    appId: app.id,
+    appName: app.name,
+    status: "ok"
+  });
   return { app, revealToken };
 }
 
@@ -556,6 +665,13 @@ function deleteOwnedApp(account, appId) {
   store.workers = (store.workers || []).filter((worker) => worker.appId !== removed.id);
   writeAppStore(store);
   writeEvent("admin_app_deleted", { app: publicApp(removed) });
+  writeAccountLog(account, "app_deleted", {
+    title: "应用已删除",
+    detail: `删除了应用 ${removed.name}，关联 PC Rabi 记录也已移除。`,
+    appId: removed.id,
+    appName: removed.name,
+    status: "ok"
+  });
 }
 
 function sendJson(res, statusCode, body, extraHeaders = {}) {
@@ -678,17 +794,38 @@ function requireRokidAppTarget(auth) {
     throw error;
   }
   if (!auth.app.targetDeviceId) {
+    writeAccountLogForApp(auth.app, "task_rejected_no_target", {
+      title: "RabiLink 消息未转发",
+      detail: "这个应用还没有选择要通讯的 Rabi PC。",
+      status: "failed",
+      error: "No target Rabi PC selected."
+    });
     const error = new Error("这个 RabiLink 应用还没有选择要通讯的 Rabi PC。请先在 RabiLink服务器控制台为该应用选择一台已连接的 Rabi PC。");
     error.statusCode = 409;
     throw error;
   }
   const worker = selectedWorkerForApp(auth.app);
   if (!worker) {
+    writeAccountLogForApp(auth.app, "task_rejected_missing_target", {
+      title: "RabiLink 消息未转发",
+      detail: `找不到绑定的 Rabi PC：${auth.app.targetDeviceId}`,
+      workerId: auth.app.targetDeviceId,
+      status: "failed",
+      error: "Selected Rabi PC was not found."
+    });
     const error = new Error(`找不到这个应用绑定的 Rabi PC：${auth.app.targetDeviceId}`);
     error.statusCode = 409;
     throw error;
   }
   if (!workerOnline(worker)) {
+    writeAccountLogForApp(auth.app, "task_rejected_offline_target", {
+      title: "RabiLink 消息未转发",
+      detail: `绑定的 Rabi PC 当前未连接：${worker.name || worker.id}`,
+      workerId: worker.id,
+      workerName: worker.name || worker.id,
+      status: "failed",
+      error: "Selected Rabi PC is offline."
+    });
     const error = new Error(`这个应用绑定的 Rabi PC 当前未连接：${worker.name || worker.id}`);
     error.statusCode = 503;
     throw error;
@@ -809,6 +946,14 @@ function createTask(raw, req, auth = { app: null }) {
   };
   tasks.set(task.id, task);
   writeEvent("task_created", taskForResponse(task));
+  writeAccountLogForApp(auth.app, "task_created", {
+    title: "收到 RabiLink 消息",
+    detail: `${task.source.sender || "外部入口"} 提交了一条消息，等待 ${task.targetDeviceId || "Rabi PC"} 领取。`,
+    taskId: task.id,
+    workerId: task.targetDeviceId || "",
+    status: task.status,
+    text: task.text
+  });
   notifyWorkerTaskWaiters();
   return task;
 }
@@ -840,6 +985,17 @@ function cleanupWebguiRequests(now = Date.now()) {
       request.error = "WebGUI request timed out before the Rabi PC returned a response.";
       finishWebguiWaiters(request);
       writeEvent("webgui_request_expired", webguiRequestForResponse(request));
+      const app = readAppStore().apps.find((item) => item.id === request.appId);
+      writeAccountLogForApp(app, "webgui_request_expired", {
+        title: "PC WebGUI 请求超时",
+        detail: `${request.method} ${request.path}`,
+        workerId: request.targetDeviceId,
+        taskId: request.id,
+        status: request.status,
+        method: request.method,
+        path: request.path,
+        error: request.error
+      });
     }
     if ((request.status === "done" || request.status === "failed") && request.updatedAt + taskTtlMs <= now) {
       webguiRequests.delete(id);
@@ -882,6 +1038,16 @@ function claimWebguiRequests(limit, deviceId, appId = "") {
     request.attempts += 1;
     result.push(webguiRequestForResponse(request));
     writeEvent("webgui_request_leased", webguiRequestForResponse(request));
+    const app = readAppStore().apps.find((item) => item.id === request.appId);
+    writeAccountLogForApp(app, "webgui_request_leased", {
+      title: "PC Rabi 已领取 WebGUI 请求",
+      detail: `${request.method} ${request.path}`,
+      workerId: deviceId || request.targetDeviceId,
+      taskId: request.id,
+      status: request.status,
+      method: request.method,
+      path: request.path
+    });
   }
   return result;
 }
@@ -950,6 +1116,17 @@ function finishWebguiRequest(requestId, body) {
   request.error = ok ? "" : stringValue(body?.error || "Rabi PC failed to proxy WebGUI request.");
   finishWebguiWaiters(request);
   writeEvent(ok ? "webgui_request_done" : "webgui_request_failed", webguiRequestForResponse(request));
+  const app = readAppStore().apps.find((item) => item.id === request.appId);
+  writeAccountLogForApp(app, ok ? "webgui_request_done" : "webgui_request_failed", {
+    title: ok ? "PC WebGUI 请求已返回" : "PC WebGUI 请求失败",
+    detail: `${request.method} ${request.path}`,
+    workerId: request.targetDeviceId,
+    taskId: request.id,
+    status: request.status,
+    method: request.method,
+    path: request.path,
+    error: request.error || ""
+  });
   return request;
 }
 
@@ -994,6 +1171,16 @@ function createWebguiRequest(req, target, localPath, rawBody) {
   };
   webguiRequests.set(request.id, request);
   writeEvent("webgui_request_created", webguiRequestForResponse(request));
+  writeAccountLogForApp(target.app, "webgui_request_created", {
+    title: "创建 PC WebGUI 请求",
+    detail: `${request.method} ${localPath}`,
+    workerId: target.worker.id,
+    workerName: target.worker.name || target.worker.id,
+    taskId: request.id,
+    status: request.status,
+    method: request.method,
+    path: localPath
+  });
   notifyWebguiRequestWaiters();
   return request;
 }
@@ -1023,6 +1210,16 @@ function createMobileWebguiRequest(app, worker, method, localPath, body = null) 
   };
   webguiRequests.set(request.id, request);
   writeEvent("webgui_request_created", webguiRequestForResponse(request));
+  writeAccountLogForApp(app, "webgui_request_created", {
+    title: "创建手机端 PC WebGUI 请求",
+    detail: `${request.method} ${localPath}`,
+    workerId: worker.id,
+    workerName: worker.name || worker.id,
+    taskId: request.id,
+    status: request.status,
+    method: request.method,
+    path: localPath
+  });
   notifyWebguiRequestWaiters();
   return request;
 }
@@ -1036,6 +1233,16 @@ function cleanupTasks() {
       task.error = "Task expired before RabiLink worker returned a result.";
       finishWaiters(task);
       writeEvent("task_expired", taskForResponse(task));
+      const app = readAppStore().apps.find((item) => item.id === task.appId);
+      writeAccountLogForApp(app, "task_expired", {
+        title: "RabiLink 任务已超时",
+        detail: "PC Rabi 没有在有效期内完成这条消息。",
+        workerId: task.targetDeviceId || "",
+        taskId: task.id,
+        status: task.status,
+        text: task.text,
+        error: task.error
+      });
     }
     if ((task.status === "done" || task.status === "failed" || task.status === "expired") && task.updatedAt + taskTtlMs <= now) {
       tasks.delete(id);
@@ -1079,6 +1286,15 @@ function claimTasks(limit, deviceId, appId = "") {
     task.source = { ...task.source, leasedBy: deviceId || "" };
     result.push(taskForResponse(task));
     writeEvent("task_leased", taskForResponse(task));
+    const app = readAppStore().apps.find((item) => item.id === task.appId);
+    writeAccountLogForApp(app, "task_leased", {
+      title: "PC Rabi 已领取消息",
+      detail: `${deviceId || "Rabi PC"} 已领取任务。`,
+      workerId: deviceId || "",
+      taskId: task.id,
+      status: task.status,
+      text: task.text
+    });
   }
   return result;
 }
@@ -1173,6 +1389,16 @@ function appendTaskMessages(taskId, body, options = {}) {
   writeEvent(options.finish ? "task_messages_finished" : "task_messages_appended", {
     task: taskForResponse(task),
     messages: created.map(messageForResponse)
+  });
+  const app = readAppStore().apps.find((item) => item.id === task.appId);
+  writeAccountLogForApp(app, options.finish ? "task_messages_finished" : "task_messages_appended", {
+    title: options.finish ? "PC Rabi 返回最终回复" : "PC Rabi 返回增量回复",
+    detail: `新增 ${created.length} 条下行消息。`,
+    workerId: task.source?.leasedBy || task.targetDeviceId || "",
+    taskId: task.id,
+    status: task.status,
+    messageCount: created.length,
+    text: created.map((message) => message.text).join("\n")
   });
   return { task, messages: created };
 }
@@ -1356,6 +1582,16 @@ function finishTask(taskId, body) {
   finishWaiters(task);
   notifyOutboxWaiters();
   writeEvent(ok ? "task_done" : "task_failed", taskForResponse(task));
+  const app = readAppStore().apps.find((item) => item.id === task.appId);
+  writeAccountLogForApp(app, ok ? "task_done" : "task_failed", {
+    title: ok ? "RabiLink 任务已完成" : "RabiLink 任务失败",
+    detail: ok ? "PC Rabi 已提交最终状态。" : task.error,
+    workerId: task.source?.leasedBy || task.targetDeviceId || "",
+    taskId: task.id,
+    status: task.status,
+    text: replyText,
+    error: task.error || ""
+  });
   return task;
 }
 
@@ -1471,7 +1707,14 @@ function handleRokidTaskRead(req, url, res, body) {
   });
   if (!canAccessTask(auth, task)) return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
   cleanupTasks();
-  sendJson(res, 200, rokidResponse(task));
+  const response = rokidResponse(task);
+  writeAccountLogForApp(auth.app, "task_status_read", {
+    title: "插件查询任务状态",
+    detail: `状态：${response.status}`,
+    taskId: task.id,
+    status: response.status
+  });
+  sendJson(res, 200, response);
 }
 
 async function handleRokidTaskMessages(req, url, res, body) {
@@ -1498,7 +1741,17 @@ async function handleRokidTaskMessages(req, url, res, body) {
   const after = url.searchParams.get("after") || url.searchParams.get("cursor") || "";
   const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || messageWaitMs), 0, 60000);
   const finalTask = await waitForMessagesAfter(task, after, waitMs);
-  sendJson(res, 200, taskMessagesResponse(finalTask, after));
+  const response = taskMessagesResponse(finalTask, after);
+  writeAccountLogForApp(auth.app, "task_messages_polled", {
+    title: response.messages.length > 0 ? "插件拉取到任务回复" : "插件轮询任务回复",
+    detail: response.messages.length > 0 ? `拉取到 ${response.messages.length} 条任务回复。` : `暂无新任务回复，状态：${response.status}。`,
+    taskId: task.id,
+    status: response.status,
+    messageCount: response.messages.length,
+    waitMs,
+    text: response.text || ""
+  });
+  sendJson(res, 200, response);
 }
 
 async function handleRokidOutboxMessages(req, url, res, body) {
@@ -1512,7 +1765,16 @@ async function handleRokidOutboxMessages(req, url, res, body) {
     : currentOutboxCursor();
   const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || outboxWaitMs), 0, 60000);
   await waitForOutboxMessagesAfter(after, waitMs, appId);
-  sendJson(res, 200, outboxMessagesResponse(after, appId));
+  const response = outboxMessagesResponse(after, appId);
+  writeAccountLogForApp(auth.app, "outbox_messages_polled", {
+    title: response.messages.length > 0 ? "插件拉取到下行消息" : "插件轮询下行消息",
+    detail: response.messages.length > 0 ? `拉取到 ${response.messages.length} 条下行消息。` : `暂无新下行消息，状态：${response.status}。`,
+    status: response.status,
+    messageCount: response.messages.length,
+    waitMs,
+    text: response.text || ""
+  });
+  sendJson(res, 200, response);
 }
 
 async function handleWorkerTasks(req, url, res, body) {
@@ -1806,6 +2068,15 @@ function adminPageHtml() {
     .webgui.disabled { color: var(--muted); background: #eef1f0; pointer-events: none; }
     .dot { display: inline-flex; align-items: center; min-height: 26px; border-radius: 999px; padding: 4px 9px; background: var(--soft); color: #0f8b8d; font-size: 12px; font-weight: 760; }
     .dot.idle { background: #eef1f0; color: var(--muted); }
+    .log-list { display: grid; gap: 8px; max-height: 360px; overflow: auto; padding-right: 2px; }
+    .log-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: rgba(255, 255, 255, .74); }
+    .log-title { color: var(--title); font-weight: 850; overflow-wrap: anywhere; }
+    .log-detail { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+    .log-meta { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; color: var(--muted); font-size: 12px; }
+    .log-badge { display: inline-flex; align-items: center; min-height: 24px; border-radius: 999px; padding: 3px 8px; background: #eef1f0; color: var(--muted); font-weight: 760; }
+    .log-badge.ok { background: var(--soft); color: #0f8b8d; }
+    .log-badge.failed { background: #fff0ee; color: var(--danger); }
+    .log-text { margin-top: 6px; border-left: 3px solid rgba(25, 191, 193, .32); padding-left: 8px; color: var(--ink); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed rgba(17, 32, 51, .18); border-radius: 8px; background: rgba(255, 255, 255, .7); }
     .hidden { display: none !important; }
     @media (max-width: 820px) {
@@ -1903,6 +2174,18 @@ function adminPageHtml() {
           <div id="apps" class="app-list"></div>
           <div id="empty" class="empty">还没有应用。先登录或完成首次注册，然后创建一个 RabiLink 应用。</div>
         </div>
+
+        <div id="logsCard" class="card hidden">
+          <div class="title-row">
+            <div>
+              <div class="title">最近日志</div>
+              <div class="note">只显示当前账号的脱敏事件，用来确认插件、PC Rabi 和远程 WebGUI 是否连通。</div>
+            </div>
+            <button id="refreshLogsButton" type="button">刷新日志</button>
+          </div>
+          <div id="logs" class="log-list"></div>
+          <div id="logsEmpty" class="empty">还没有日志。提交消息、连接 PC Rabi 或打开 WebGUI 后会显示在这里。</div>
+        </div>
       </div>
     </section>
   </main>
@@ -1911,7 +2194,7 @@ function adminPageHtml() {
     const apiBase = "/manage/api";
     const credentialStorageKey = "rabilinkManageCredentials";
     const legacyCredentialStorageKey = "rabilinkAdminCredentials";
-    const state = { account: null, apps: [], workers: [], revealed: {}, credentials: loadCredentials(), setupRequired: false };
+    const state = { account: null, apps: [], workers: [], logs: [], revealed: {}, credentials: loadCredentials(), setupRequired: false };
     const el = (id) => document.getElementById(id);
 
     function encodeAuth(username, password) {
@@ -2008,6 +2291,7 @@ function adminPageHtml() {
         state.account = body.account;
         state.apps = body.apps || [];
         state.workers = body.workers || [];
+        state.logs = body.logs || [];
         state.setupRequired = Boolean(body.setupRequired);
         if (state.account?.username) {
           const pathAccount = consoleAccountFromPath();
@@ -2020,6 +2304,7 @@ function adminPageHtml() {
         state.account = null;
         state.apps = [];
         state.workers = [];
+        state.logs = [];
         state.setupRequired = !state.credentials;
         if (state.credentials) flash("alert", error.message);
       }
@@ -2086,6 +2371,17 @@ function adminPageHtml() {
         flash("alert", error.message);
       } finally {
         setBusy(el("createAppButton"), false);
+      }
+    }
+
+    async function loadLogs() {
+      if (!state.account) return;
+      try {
+        const body = await request(apiBase + "/logs?limit=120");
+        state.logs = body.logs || [];
+        renderLogs();
+      } catch (error) {
+        flash("alert", error.message);
       }
     }
 
@@ -2261,10 +2557,53 @@ function adminPageHtml() {
       }
     }
 
+    function formatLogTime(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value || "-";
+      return date.toLocaleTimeString("zh-CN", { hour12: false });
+    }
+
+    function renderLogs() {
+      const container = el("logs");
+      container.innerHTML = "";
+      el("logsEmpty").classList.toggle("hidden", state.logs.length > 0);
+      for (const log of state.logs) {
+        const node = document.createElement("div");
+        node.className = "log-item";
+        node.innerHTML =
+          '<div>' +
+            '<div class="log-title"></div>' +
+            '<div class="log-detail"></div>' +
+            '<div class="log-text hidden"></div>' +
+          '</div>' +
+          '<div class="log-meta"><span class="log-badge time"></span><span class="log-badge status"></span></div>';
+        node.querySelector(".log-title").textContent = log.title || log.event || "日志";
+        const bits = [];
+        if (log.detail) bits.push(log.detail);
+        if (log.appName) bits.push("应用：" + log.appName);
+        if (log.workerName || log.workerId) bits.push("PC：" + (log.workerName || log.workerId));
+        if (log.taskId) bits.push("ID：" + log.taskId);
+        if (log.error) bits.push("错误：" + log.error);
+        node.querySelector(".log-detail").textContent = bits.join(" · ") || "-";
+        const textNode = node.querySelector(".log-text");
+        if (log.textPreview) {
+          textNode.textContent = log.textPreview;
+          textNode.classList.remove("hidden");
+        }
+        node.querySelector(".time").textContent = formatLogTime(log.time);
+        const status = node.querySelector(".status");
+        status.textContent = log.status || log.level || "-";
+        status.classList.toggle("ok", ["ok", "done", "messages", "online", "queued", "leased", "streaming", "pending", "idle"].includes(String(log.status || "").toLowerCase()));
+        status.classList.toggle("failed", ["failed", "expired"].includes(String(log.status || "").toLowerCase()) || log.level === "error");
+        container.appendChild(node);
+      }
+    }
+
     function render() {
       const loggedIn = Boolean(state.account);
       el("loginCard").classList.toggle("hidden", loggedIn && !state.setupRequired);
       el("appCard").classList.toggle("hidden", !loggedIn);
+      el("logsCard").classList.toggle("hidden", !loggedIn);
       el("logoutButton").classList.toggle("hidden", !state.credentials);
       el("setupPill").textContent = state.setupRequired ? "首次初始化" : "已初始化";
       el("setupPill").classList.toggle("warn", state.setupRequired);
@@ -2275,6 +2614,7 @@ function adminPageHtml() {
       el("authNote").textContent = state.setupRequired ? "创建服务器上的第一个管理账号。" : "每个浏览器只保留一个当前登录账号，用于进入 RabiLink服务器控制台。";
       el("registerButton").textContent = state.setupRequired ? "创建第一个账号" : "新增账号";
       renderWorkers();
+      renderLogs();
 
       const container = el("apps");
       container.innerHTML = "";
@@ -2315,6 +2655,7 @@ function adminPageHtml() {
     }
 
     el("refreshButton").addEventListener("click", load);
+    el("refreshLogsButton").addEventListener("click", loadLogs);
     el("loginButton").addEventListener("click", login);
     el("registerButton").addEventListener("click", registerAccount);
     el("togglePasswordButton").addEventListener("click", () => {
@@ -2335,6 +2676,7 @@ function adminPageHtml() {
       state.account = null;
       state.apps = [];
       state.workers = [];
+      state.logs = [];
       window.history.replaceState(null, "", "/manage");
       flash("notice", "已退出。");
       render();
@@ -2716,6 +3058,13 @@ async function handleAdminApi(req, url, res) {
   if (req.method === "POST" && apiPath === "/apps") {
     const app = createAppForAccount(auth.account, body);
     return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken: true }) });
+  }
+  if (req.method === "GET" && apiPath === "/logs") {
+    return sendJson(res, 200, {
+      code: 0,
+      ok: true,
+      logs: readAccountLogs(auth.account, url.searchParams.get("limit") || 120)
+    });
   }
   const appMatch = apiPath.match(/^\/apps\/([^/]+)$/);
   if (appMatch && req.method === "PATCH") {

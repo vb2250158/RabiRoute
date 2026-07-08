@@ -403,7 +403,18 @@ Authorization: Bearer <token>
 | `RABILINK_RELAY_TASK_TTL_MS` | `600000` | 任务保留时间 |
 | `RABILINK_RELAY_LEASE_MS` | `45000` | worker 取到任务后的租约时间 |
 | `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志和服务器 WebGUI 账号/应用数据目录 |
+| `RABILINK_RELAY_ACCOUNT_LOG_MAX_ROWS` | `300` | 每个管理账号保留的控制台脱敏日志行数 |
 | `RABILINK_RELAY_APP_STORE_FILE` | `<dataDir>/apps.json` | 账号、密码哈希、应用和 token 存储文件 |
+
+## 控制台日志
+
+`/manage/<账号>` 会显示“最近日志”卡片，用于确认灵珠/Rokid 插件、PC Rabi worker 和远程 PC WebGUI 是否连通。日志按账号分离，落在：
+
+```text
+data/rabilink-relay/account-logs/<accountId>.jsonl
+```
+
+控制台只读取当前登录账号自己的日志，不混看其他账号。日志内容只保存脱敏摘要：事件标题、应用名、PC Rabi 标识、任务 ID、状态、短文本预览和错误摘要；不会保存完整 token 或原始请求体。
 
 ## Rizon 导入文件
 
