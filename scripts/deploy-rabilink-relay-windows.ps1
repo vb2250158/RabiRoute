@@ -3,7 +3,7 @@ param(
     [string]$Username = "Administrator",
     [string]$KeyPath = "$HOME\.ssh\id_ed25519",
     [string]$Domain = "",
-    [string]$Token = $env:RABILINK_RELAY_LEGACY_TOKEN,
+    [string]$Token = "",
     [string]$RemoteRoot = "C:\opt\rabilink-relay",
     [string]$CaddyVersion = "2.8.4",
     [int]$PublicHttpPort = 0
@@ -46,14 +46,6 @@ if ([string]::IsNullOrWhiteSpace($Domain)) {
         $Domain = ([Uri]$publicBaseUrl).Host
     }
 }
-if ([string]::IsNullOrWhiteSpace($Token)) {
-    $Token = Get-ConfigString -Config $relayConfig -Name "legacyToken"
-}
-if ([string]::IsNullOrWhiteSpace($Token) -and $env:RABILINK_RELAY_TOKEN) {
-    Write-Host "[deploy] RABILINK_RELAY_TOKEN is a legacy server token name. Prefer deploying without it, or use -Token only for old-client error compatibility." -ForegroundColor Yellow
-    $Token = [string]$env:RABILINK_RELAY_TOKEN
-}
-
 if ([string]::IsNullOrWhiteSpace($ServerIp)) {
     throw "ServerIp is required. Pass -ServerIp <public-ip-or-host>."
 }
