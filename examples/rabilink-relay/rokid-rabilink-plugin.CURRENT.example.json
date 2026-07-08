@@ -3,7 +3,15 @@
   "info": {
     "title": "RabiLinkMessage",
     "version": "1.0.0",
-    "description": "RabiLinkMessage 用于把用户在 Rokid 智能体中说出的内容转发到 RabiLink Relay。电脑端 RabiLink worker 会直接领取任务，交给 RabiRoute 和 Codex 处理，并把回复返回给眼镜智能体。"
+    "description": "RabiLinkMessage 用于把 Rokid 智能体中的语音或图片上下文转发到电脑端 RabiRoute/Codex，并把回复逐条返回眼镜。使用说明和源码：https://github.com/vb2250158/RabiRoute。私有插件可在鉴权里填写 RabiLink 应用 token。",
+    "contact": {
+      "name": "RabiRoute",
+      "url": "https://github.com/vb2250158/RabiRoute"
+    },
+    "x-logo": {
+      "url": "https://raw.githubusercontent.com/vb2250158/RabiRoute/main/assets/rabiroute-icon.png",
+      "altText": "RabiRoute icon"
+    }
   },
   "servers": [
     {

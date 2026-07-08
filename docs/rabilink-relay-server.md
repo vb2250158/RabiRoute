@@ -508,6 +508,14 @@ https://rabi.example.com/openapi/rokid-rabilink-plugin.agent-token.json
 
 这个版本不声明 OpenAPI security scheme。它把 `token` 暴露成工具参数：`submitRabiLinkTask` 通过 JSON body 的 `token` 传入，`getRabiLinkMessages` 和调试查询接口通过 query `token` 传入。导入后应在智能体引用工具的参数配置里，把 `token` 绑定为该智能体自己的 RabiLink 应用 token（固定值或变量），不要让模型临时生成、朗读或询问用户的 token。
 
+插件描述里应保留项目地址，方便用户找到安装和 token 绑定说明：
+
+```text
+https://github.com/vb2250158/RabiRoute
+```
+
+插件图标使用仓库的 `assets/rabiroute-icon.png`。OpenAPI 里已经写入 `info.x-logo.url` 指向 GitHub raw 图标；如果 Rizon/灵珠不读取 `x-logo`，就在插件编辑页手动上传这个图标。
+
 本地文件导入时使用：
 
 ```text
