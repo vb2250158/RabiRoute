@@ -850,6 +850,27 @@ function canAccessTask(auth, task) {
   return Boolean(auth.app && task.appId === auth.app.id);
 }
 
+function workerIdentityFromBody(body = {}) {
+  return {
+    deviceId: stringValue(body?.deviceId || body?.workerId || body?.sourceDeviceId),
+    deviceGuid: stringValue(body?.deviceGuid || body?.workerGuid || body?.sourceDeviceGuid)
+  };
+}
+
+function workerIdentityMatchesTarget(targetDeviceId, identity) {
+  const target = stringValue(targetDeviceId);
+  if (!target) return true;
+  return Boolean(identity.deviceId === target || identity.deviceGuid === target);
+}
+
+function requireWorkerOwnsTarget(targetDeviceId, body, label) {
+  const identity = workerIdentityFromBody(body);
+  if (workerIdentityMatchesTarget(targetDeviceId, identity)) return identity;
+  const error = new Error(`${label} can only be completed by the selected Rabi PC.`);
+  error.statusCode = identity.deviceId || identity.deviceGuid ? 403 : 400;
+  throw error;
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -1852,6 +1873,7 @@ function handleWorkerWebguiResponse(req, url, res, body) {
   if (auth.app?.id !== request.appId) {
     return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
   }
+  requireWorkerOwnsTarget(request.targetDeviceId, body, "WebGUI request");
   const finished = finishWebguiRequest(requestId, body);
   sendJson(res, 200, { code: 0, ok: true, request: webguiRequestForResponse(finished) });
 }
@@ -1863,6 +1885,7 @@ function handleTaskResult(req, url, res, body) {
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const taskBefore = findTaskOrThrow(taskId);
   if (!canAccessTask(auth, taskBefore)) return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
+  requireWorkerOwnsTarget(taskBefore.targetDeviceId, body, "RabiLink task");
   const task = finishTask(taskId, body);
   sendJson(res, 200, { code: 0, ok: true, task: taskForResponse(task) });
 }
@@ -1874,6 +1897,7 @@ function handleTaskMessagesAppend(req, url, res, body) {
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const taskBefore = findTaskOrThrow(taskId);
   if (!canAccessTask(auth, taskBefore)) return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
+  requireWorkerOwnsTarget(taskBefore.targetDeviceId, body, "RabiLink task");
   const result = appendTaskMessages(taskId, body, { finish: false });
   sendJson(res, 200, {
     code: 0,
@@ -1891,6 +1915,7 @@ function handleTaskFinish(req, url, res, body) {
   const taskId = match ? decodeURIComponent(match[1]) : "";
   const task = findTaskOrThrow(taskId);
   if (!canAccessTask(auth, task)) return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
+  requireWorkerOwnsTarget(task.targetDeviceId, body, "RabiLink task");
   const finalText = extractText(body);
   const appended = finalText
     ? appendTaskMessages(taskId, { text: finalText, final: true, raw: body }, { finish: true, final: true })

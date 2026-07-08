@@ -48,6 +48,13 @@ function relayHeaders(hasBody = false): Record<string, string> {
   return headers;
 }
 
+function relayWorkerIdentityPayload(): Record<string, string> {
+  return {
+    deviceId: config.rabiLinkRelayDeviceId,
+    deviceGuid: config.rabiLinkRelayDeviceGuid
+  };
+}
+
 async function fetchRelayJson(pathname: string, init: RequestInit = {}, fallbackPathname?: string): Promise<Record<string, unknown>> {
   const baseUrl = normalizedRelayBaseUrl();
   const response = await fetch(`${baseUrl}${pathname}`, init);
@@ -118,7 +125,7 @@ function payloadFromRelayTask(task: RelayTask, taskId: string): WebhookPayload {
 }
 
 async function appendRelayMessage(taskId: string, text: string, raw: Record<string, unknown>): Promise<void> {
-  const body = JSON.stringify({ text, raw });
+  const body = JSON.stringify({ text, raw, ...relayWorkerIdentityPayload() });
   await fetchRelayJson(`/worker/tasks/${encodeURIComponent(taskId)}/messages`, {
     method: "POST",
     headers: relayHeaders(true),
@@ -130,7 +137,7 @@ async function finishRelayTask(taskId: string, body: Record<string, unknown>): P
   await fetchRelayJson(`/worker/tasks/${encodeURIComponent(taskId)}/finish`, {
     method: "POST",
     headers: relayHeaders(true),
-    body: JSON.stringify(body)
+    body: JSON.stringify({ ...body, ...relayWorkerIdentityPayload() })
   });
 }
 
@@ -138,7 +145,7 @@ async function finishRelayWebguiRequest(requestId: string, body: Record<string, 
   await fetchRelayJson(`/worker/webgui-requests/${encodeURIComponent(requestId)}/response`, {
     method: "POST",
     headers: relayHeaders(true),
-    body: JSON.stringify(body)
+    body: JSON.stringify({ ...body, ...relayWorkerIdentityPayload() })
   });
 }
 

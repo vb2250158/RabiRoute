@@ -415,7 +415,7 @@ Authorization: Bearer <token>
 data/rabilink-relay/account-logs/<accountId>.jsonl
 ```
 
-控制台只读取当前登录账号自己的日志，不混看其他账号。日志内容只保存脱敏摘要：事件标题、应用名、PC Rabi 标识、任务 ID、状态、短文本预览和错误摘要；不会保存完整 token 或原始请求体。
+控制台只读取当前登录账号自己的日志，不混看其他账号。每个账号的数据边界是：账号拥有应用，应用拥有应用 token，PC Rabi worker、任务队列、远程 WebGUI 请求和控制台日志都只能通过所属应用归到这个账号；worker 回传消息和 WebGUI 响应时也必须带上自己的 `deviceId` / `deviceGuid`，并且只能完成服务器选中的那台 PC Rabi 对应的任务。日志内容只保存脱敏摘要：事件标题、应用名、PC Rabi 标识、任务 ID、状态、短文本预览和错误摘要；不会保存完整 token 或原始请求体。
 
 ## Rizon 导入文件
 
