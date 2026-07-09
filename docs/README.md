@@ -18,6 +18,7 @@
 - [Agent 上下文注入说明](agent-context-injection.md)：说明默认注入项、按需注入项和最终投递给 Agent 的消息格式。
 - [Pipeline presets](pipeline-presets.md)：把默认输入端、输出端、TTS 和提示词输出模式打成一组。
 - [RabiLink Relay 公网中继](rabilink-relay-server.md)：当前 Rokid/灵珠和手机端 RabiLink 主链路，使用服务器应用 token、PC worker 直连、账号隔离和远程 PC WebGUI。
+- [RabiLink 原生主动智能应用设计](rabilink-glasses-app-design.md)：原生手机常驻录音桥、随身本地 Agent、`Rabi Glass` HUD、手机配置主控台和 `RabiLink Lab` 测试入口收纳方案。
 - [手机 App 远程接入历史方案](mobile-app-webhook-integration.md)：早期 Webhook / WebSocket 双向接入设计稿，仅作历史参考；当前 RabiLink 主链路以上一篇为准。
 - [小米手环心率列表探针交接](xiaomi-band-heart-rate-probe-handoff.md)：Android APK / Vela 快应用探针、云端心率列表拉取、ZIP 证据包解析和下一台电脑继续开发说明。
 - [语音交互工作站](voice-interaction-workstation.md)：FenneNote 转录、RabiRoute 路由、角色对话和 OumuQ TTS 的公开安全接线方式。

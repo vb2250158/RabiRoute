@@ -1,6 +1,6 @@
 {
   "roleId": "Rabi",
-  "updatedAt": "2026-06-11T00:00:00+08:00",
+  "updatedAt": "2026-07-09T00:00:00+08:00",
   "unarchivedPlanIds": [
     "plan-rabiroute-memory-design",
     "plan-rabiroute-agent-context-injection",
@@ -9,7 +9,8 @@
     "plan-rabiroute-webgui-and-tray",
     "plan-rabiroute-example-data-safety",
     "plan-rabiroute-route-observability",
-    "plan-rabiroute-config-and-pipeline-model"
+    "plan-rabiroute-config-and-pipeline-model",
+    "plan-rabiroute-rabilink-active-intelligence"
   ],
   "archivedPlanIds": [],
   "notes": "Public, sanitized example index for the Rabi persona. unarchivedPlanIds means plans that are not archived, including 未开始、进行中 and 已完成. Plan details live in items/active/*.json."

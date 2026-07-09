@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-rabilink-active-intelligence",
+  "title": "RabiLink 下一阶段主线是原生主动智能",
+  "content": "RabiLink 的下一阶段不应继续把官方助手唤醒词或测试探针当主流程，而是以原生手机 App 为主动智能控制台和常驻录音桥：手机负责显式开启后的持续录音、VAD 切句、ASR、Relay task 提交、全局下行消息拉取、通知和 WebGUI 配置入口；PC Rabi worker 仍通过 RabiRoute 的 rabilink route kind 投递本地 Agent；眼镜端收敛为 Rabi Glass 低干扰 HUD，只显示状态、最近回复和少量开始/暂停控制，不保存 token，也不直接访问 Relay。Rokid/灵珠官方助手、RabiLink Lab、原生 ASR/TTS 探针和其他测试能力都保留为兼容或排障入口，但不要反向定义普通用户主链路。常驻感知必须默认透明可控：用户显式开启，手机和眼镜持续显示正在听/看/分析的状态，原始音频和图片默认不长期保存，保存、上传、投递、重试和清除都要可见、可暂停、可配置。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：RabiLink 原生主动智能、Rabi Glass HUD 和隐私边界"
+  },
+  "createdAt": "2026-07-09T00:00:00+08:00",
+  "updatedAt": "2026-07-09T00:00:00+08:00",
+  "keywords": ["RabiLink", "Rabi Glass", "主动智能", "常驻录音", "手机 App", "HUD", "Relay", "rabilink", "ASR", "RabiLink Lab", "隐私", "低干扰"]
+}
