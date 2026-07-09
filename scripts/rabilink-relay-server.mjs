@@ -1991,7 +1991,8 @@ function adminPageHtml() {
     h1 { margin: 0; font-size: clamp(22px, 3vw, 32px); line-height: 1.1; letter-spacing: 0; }
     .subtitle { margin-top: 4px; color: var(--muted); font-size: 14px; }
     .grid { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 16px; align-items: start; }
-    .card { background: rgba(255, 255, 255, .92); border: 1px solid var(--line); border-radius: 8px; padding: 18px; box-shadow: 0 10px 24px rgba(15, 23, 42, .07); backdrop-filter: blur(14px); }
+    .card { position: relative; background: rgba(255, 255, 255, .92); border: 1px solid var(--line); border-radius: 8px; padding: 18px; box-shadow: 0 10px 24px rgba(15, 23, 42, .07); backdrop-filter: blur(14px); }
+    .card.combo-layer { z-index: 60; }
     .card + .card { margin-top: 16px; }
     .title-row { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 14px; }
     .title { color: var(--title); font-size: 16px; font-weight: 800; }
@@ -2085,11 +2086,12 @@ function adminPageHtml() {
     .switch-field input:checked + .switch-track { background: var(--accent); }
     .switch-field input:checked + .switch-track .switch-thumb { transform: translateX(26px); }
     .switch-field input:focus-visible + .switch-track { box-shadow: 0 0 0 3px rgba(25, 191, 193, .18), inset 0 1px 2px rgba(17, 32, 51, .14); }
-    .combo { position: relative; min-width: 0; }
+    .combo { position: relative; min-width: 0; z-index: 1; }
+    .combo.open { z-index: 70; }
     .combo-trigger { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 48px; text-align: left; color: var(--ink); cursor: pointer; }
     .combo-trigger::after { content: ""; width: 7px; height: 7px; border-right: 2px solid #667586; border-bottom: 2px solid #667586; transform: rotate(45deg); margin-top: -4px; }
     .combo-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 750; }
-    .combo-panel { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); display: grid; gap: 8px; border: 1px solid rgba(17, 32, 51, .14); border-radius: 8px; padding: 8px; background: #fff; box-shadow: 0 18px 34px rgba(15, 23, 42, .14); }
+    .combo-panel { position: absolute; z-index: 80; left: 0; right: 0; top: calc(100% + 4px); display: grid; gap: 8px; border: 1px solid rgba(17, 32, 51, .14); border-radius: 8px; padding: 8px; background: #fff; box-shadow: 0 18px 34px rgba(15, 23, 42, .14); }
     .combo-search { min-height: 38px !important; padding: 8px 10px !important; border-radius: 8px !important; font-size: 13px; }
     .combo-options { display: grid; gap: 4px; max-height: 220px; overflow: auto; }
     .combo-option { display: grid; gap: 2px; width: 100%; border: 1px solid transparent; border-radius: 8px; padding: 8px 9px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
@@ -2494,11 +2496,22 @@ function adminPageHtml() {
 
     function closeCombos(except) {
       document.querySelectorAll(".combo.open").forEach((node) => {
-        if (node !== except) node.classList.remove("open");
+        if (node !== except) {
+          node.classList.remove("open");
+          setComboLayer(node, false);
+        }
       });
       document.querySelectorAll(".combo-panel").forEach((node) => {
         if (!except || !except.contains(node)) node.classList.add("hidden");
       });
+      if (!except) {
+        document.querySelectorAll(".card.combo-layer").forEach((node) => node.classList.remove("combo-layer"));
+      }
+    }
+
+    function setComboLayer(combo, enabled) {
+      const card = combo?.closest(".card");
+      if (card) card.classList.toggle("combo-layer", enabled);
     }
 
     function renderTargetCombo(combo, app) {
@@ -2549,6 +2562,7 @@ function adminPageHtml() {
         closeCombos(combo);
         combo.classList.toggle("open", !isOpen);
         panel.classList.toggle("hidden", isOpen);
+        setComboLayer(combo, !isOpen);
         if (!isOpen) {
           search.value = "";
           paintOptions();

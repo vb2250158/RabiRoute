@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 
 const repoRoot = process.cwd();
+const selfFile = "scripts/check-rabilink-legacy.mjs";
 
 const checks = [
   {
@@ -40,6 +41,18 @@ const checks = [
       [/自动选择（暂无已绑定 PC）/, "control console should not offer automatic PC selection when no PC is bound."],
       [/workers\.find\(\(worker\)\s*=>\s*worker\.online\)\s*\|\|\s*workers\[0\]/, "mobile/WebGUI target selection must not fall back to the first PC."],
     ],
+    required: [
+      [/const accountLogDir = path\.join\(dataDir, "account-logs"\)/, "relay server should keep control-console logs in the per-account log directory."],
+      [/function accountLogPath\(accountId\)[\s\S]*?return path\.join\(accountLogDir, `\$\{id\}\.jsonl`\);/, "relay server should derive log files from the current account id."],
+      [/const apps = account\s*\? store\.apps\.filter\(\(app\) => app\.ownerAccountId === account\.id\)\s*: \[\];/, "control-console state must only expose apps owned by the current account."],
+      [/const workers = store\.workers\.filter\(\(worker\) => appsById\.has\(worker\.appId\)\);/, "control-console state must only expose workers attached to the current account's apps."],
+      [/logs: account \? readAccountLogs\(account, options\.logLimit \|\| 80\) : \[\]/, "control-console state must only include logs for the current account."],
+      [/ownerAccountId: account\.id/, "new RabiLink apps must be owned by the current account."],
+      [/store\.apps\.find\(\(item\) => item\.id === appId && item\.ownerAccountId === account\.id\)/, "patching an app must require current-account ownership."],
+      [/store\.apps\.findIndex\(\(item\) => item\.id === appId && item\.ownerAccountId === account\.id\)/, "deleting an app must require current-account ownership."],
+      [/const ownedApps = store\.apps\.filter\(\(app\) => app\.ownerAccountId === account\.id && app\.enabled !== false\);/, "remote PC WebGUI target resolution must only use apps owned by the current account."],
+      [/logs: readAccountLogs\(auth\.account, url\.searchParams\.get\("limit"\) \|\| 120\)/, "logs API must read only the authenticated account's log file."],
+    ],
   },
   {
     file: "scripts/deploy-rabilink-relay-windows.ps1",
@@ -68,6 +81,15 @@ const checks = [
     ],
     required: [
       [/\$env:RABILINK_RELAY_APP_TOKEN/, "worker smoke test should use the app token env var."],
+    ],
+  },
+  {
+    file: "docs/rabilink-relay-server.md",
+    required: [
+      [/服务器会按应用隔离 task、worker 领取、WebGUI 请求和下行消息队列/, "Relay docs should state that runtime queues are isolated by app token."],
+      [/日志按账号分离，落在：[\s\S]*data\/rabilink-relay\/account-logs\/<accountId>\.jsonl/, "Relay docs should document per-account control-console logs."],
+      [/控制台只读取当前登录账号自己的日志，不混看其他账号/, "Relay docs should explicitly state that console logs are account-isolated."],
+      [/账号拥有应用，应用拥有应用 token，PC Rabi worker、任务队列、远程 WebGUI 请求和控制台日志都只能通过所属应用归到这个账号/, "Relay docs should define the account -> app -> token/worker/task/log ownership boundary."],
     ],
   },
   {
@@ -137,6 +159,133 @@ for (const check of checks) {
   }
 }
 
+function normalizePath(value) {
+  return value.replace(/\\/g, "/");
+}
+
+function collectFiles(relativePath) {
+  const absolutePath = path.join(repoRoot, relativePath);
+  if (!fs.existsSync(absolutePath)) return [];
+  const stat = fs.statSync(absolutePath);
+  if (stat.isFile()) return [normalizePath(relativePath)];
+  const result = [];
+  for (const entry of fs.readdirSync(absolutePath, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") continue;
+    const childPath = normalizePath(path.join(relativePath, entry.name));
+    if (entry.isDirectory()) {
+      result.push(...collectFiles(childPath));
+    } else if (entry.isFile() && !entry.name.endsWith(".jsonl")) {
+      result.push(childPath);
+    }
+  }
+  return result;
+}
+
+function isAllowed(file, allowList = []) {
+  return allowList.some((item) => {
+    if (typeof item === "string") return item === file;
+    return item.test(file);
+  });
+}
+
+function firstMatchLine(text, pattern) {
+  const match = pattern.exec(text);
+  if (!match) return 0;
+  return text.slice(0, match.index).split(/\r?\n/).length;
+}
+
+const globalScanFiles = [
+  "README.md",
+  ...collectFiles("src"),
+  ...collectFiles("scripts"),
+  ...collectFiles("docs"),
+  ...collectFiles("ribiwebgui/src"),
+  ...collectFiles("examples/rabilink-relay"),
+].filter((file, index, files) => files.indexOf(file) === index);
+
+const globalForbidden = [
+  {
+    pattern: /process\.env\.RABILINK_RELAY_TOKEN/,
+    message: "runtime code must not read the legacy public Relay token env var.",
+    allow: [selfFile],
+  },
+  {
+    pattern: /\bRABILINK_RELAY_TOKEN\b/,
+    message: "current code/docs must not reintroduce the legacy public Relay token except as explicit cleanup or deprecated docs.",
+    allow: [
+      selfFile,
+      "scripts/deploy-rabilink-relay-windows.ps1",
+      "docs/rabilink-relay-server.md",
+      "docs/rabilink-rokid-handoff-20260706.md",
+    ],
+  },
+  {
+    pattern: /\brabiLinkRelayToken\b/,
+    message: "route-level rabiLinkRelayToken should only remain in migration compatibility code and docs.",
+    allow: [
+      selfFile,
+      "docs/configuration.md",
+      "src/manager/controlPlaneRoutes.ts",
+      "src/manager/configRepository.ts",
+      "src/shared/gatewayConfigModel.ts",
+    ],
+  },
+  {
+    pattern: /\/api\/mobile\//,
+    message: "old mobile bridge API paths must not be current RabiLink implementation paths.",
+    allow: [selfFile, "docs/mobile-app-webhook-integration.md"],
+  },
+  {
+    pattern: /\/admin\b|\/admin\*/,
+    message: "old Relay admin route must not return as a current route or deploy target.",
+    allow: [selfFile, "docs/rabilink-rokid-handoff-20260706.md"],
+  },
+  {
+    pattern: /phone\/tasks/,
+    message: "old phone task bridge path must not return.",
+    allow: [selfFile],
+  },
+  {
+    pattern: /RabiLink 直连/,
+    message: "current docs should not name the local compatibility endpoint as RabiLink direct connection.",
+    allow: [selfFile],
+  },
+  {
+    pattern: /自动选择可用 Rabi PC|自动选择（暂无已绑定 PC）/,
+    message: "control surfaces must not offer automatic first-PC selection.",
+    allow: [selfFile],
+  },
+  {
+    pattern: /workers\.find\(\(worker\)\s*=>\s*worker\.online\)\s*\|\|\s*workers\[0\]/,
+    message: "target selection must not fall back to the first online worker.",
+    allow: [selfFile],
+  },
+  {
+    pattern: /firstLegacyRabiLinkRelayConfig/,
+    message: "migration fallback must not use legacy naming.",
+    allow: [selfFile],
+  },
+  {
+    pattern: /["']legacy-route["']/,
+    message: "runtime status should not use legacy-route naming.",
+    allow: [selfFile],
+  },
+  {
+    pattern: /const\s+legacyToken\b/,
+    message: "Relay server must not configure a legacy public token.",
+    allow: [selfFile],
+  },
+];
+
+for (const file of globalScanFiles) {
+  const text = readText(file);
+  for (const rule of globalForbidden) {
+    rule.pattern.lastIndex = 0;
+    if (!rule.pattern.test(text) || isAllowed(file, rule.allow)) continue;
+    failures.push(`${file}:${firstMatchLine(text, rule.pattern)}: global forbidden pattern ${rule.pattern}: ${rule.message}`);
+  }
+}
+
 if (failures.length > 0) {
   for (const failure of failures) {
     console.error(`[fail] ${failure}`);
@@ -147,3 +296,4 @@ if (failures.length > 0) {
 for (const check of checks) {
   console.log(`[ok] ${check.file}`);
 }
+console.log(`[ok] global RabiLink legacy scan (${globalScanFiles.length} files)`);

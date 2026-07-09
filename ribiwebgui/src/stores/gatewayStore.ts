@@ -191,6 +191,19 @@ function normalizeAgentAdapterType(value: unknown): AgentAdapterType | null {
   return isAgentAdapterType(value) ? value : null;
 }
 
+function selectedGatewayIdFromLocation(items: GatewayDefinition[]): string {
+  const match = window.location.hash.match(/^#\/(?:routes|persona)\/([^/?#]+)/);
+  const raw = match?.[1];
+  if (!raw) return "";
+  const decoded = decodeURIComponent(raw);
+  return items.find(gateway =>
+    gateway.id === decoded
+    || configNameFor(gateway) === decoded
+    || gateway.id === raw
+    || configNameFor(gateway) === raw
+  )?.id || "";
+}
+
 export const useGatewayStore = defineStore("gateway", () => {
   const gateways = ref<GatewayDefinition[]>([]);
   const managerRows = ref<RuntimeStatus[]>([]);
@@ -325,10 +338,13 @@ export const useGatewayStore = defineStore("gateway", () => {
         gateways.value = body.data.config.gateways || [];
         configFiles.value = body.data.configFiles || {};
         normalizeGateways();
+        const routeSelectedGatewayId = selectedGatewayIdFromLocation(gateways.value);
         if (pendingSelectedConfigName.value) {
           const renamed = gateways.value.find(gateway => configNameFor(gateway) === pendingSelectedConfigName.value);
           if (renamed) selectedGatewayId.value = renamed.id;
           pendingSelectedConfigName.value = "";
+        } else if (routeSelectedGatewayId) {
+          selectedGatewayId.value = routeSelectedGatewayId;
         }
         if (!selectedGatewayId.value && gateways.value[0]) selectedGatewayId.value = gateways.value[0].id;
         if (selectedGatewayId.value && !gateways.value.some(gateway => gateway.id === selectedGatewayId.value)) {

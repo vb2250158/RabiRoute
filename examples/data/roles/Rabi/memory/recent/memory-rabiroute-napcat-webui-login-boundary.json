@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-napcat-webui-login-boundary",
   "title": "NapCat WebUI 是登录入口，RabiRoute 维护连接配置",
-  "content": "RibiWebGUI 打开 NapCat WebUI 前可以自动收纳发现到的 QQ 实例、启用路由实例、补齐端口，并在可判断时写入 OneBot HTTP/WS 配置；但 QQ 扫码、前台登录、验证码和风控确认仍属于 NapCat/QQNT。排障时如果 WebUI 可达但 OneBot HTTP 不通，先确认 WebUI 是否已经读到当前 QQ 登录态，再看 OneBot 网络配置和重载状态。",
+  "content": "RibiWebGUI 打开 NapCat WebUI 前可以自动收纳发现到的 QQ 实例、启用路由实例、补齐端口，并优先使用 Manager 读取到的 WebUI token 打开带登录态的地址；在可判断当前 QQ 时，它会写入 OneBot HTTP/WS 配置并同步 NapCat 新协议网络配置。QQ 扫码、前台登录、验证码和风控确认仍属于 NapCat/QQNT，RabiRoute 只维护连接配置和诊断。排障时如果 WebUI 可达但 OneBot HTTP 不通，先确认 WebUI 登录态是否属于这个 Rabi 实例绑定的 QQ；如果 WebUI 是其他账号会话，必须先切换账号，避免把 OneBot 配置写到错误实例。",
   "source": {
     "kind": "example",
     "summary": "公开示例近期记忆：NapCat WebUI 自动配置与登录边界"
   },
   "createdAt": "2026-07-07T00:00:00+08:00",
-  "updatedAt": "2026-07-07T00:00:00+08:00",
-  "keywords": ["NapCat", "WebUI", "OneBot", "QQ 登录", "RibiWebGUI", "健康检查", "连接配置", "安全边界"]
+  "updatedAt": "2026-07-09T00:00:00+08:00",
+  "keywords": ["NapCat", "WebUI", "OneBot", "QQ 登录", "RibiWebGUI", "健康检查", "连接配置", "WebUI token", "账号不匹配", "安全边界"]
 }
