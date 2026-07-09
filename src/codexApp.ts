@@ -4,6 +4,10 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import WebSocket from "ws";
 import { config } from "./config.js";
+import {
+  codexAppVisibilityStatePatch,
+  ensureCodexAppVisible
+} from "./codexAppVisibility.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
 
 type JsonRpcResponse = {
@@ -61,6 +65,11 @@ type CodexState = {
   lastNotificationAt?: string;
   lastNotificationError?: string;
   lastNotificationErrorAt?: string;
+  lastCodexAppVisibilityAt?: string;
+  lastCodexAppVisibilityReason?: string;
+  lastCodexAppVisibilityMode?: string;
+  lastCodexAppVisibilityTarget?: string;
+  lastCodexAppVisibilityError?: string;
 };
 
 type CodexSessionIndexRecord = {
@@ -408,8 +417,10 @@ async function ensureMonitorThread(forceCreate = false): Promise<string> {
     name: threadName
   });
 
+  const visibility = await ensureCodexAppVisible("app-server-create-thread", { force: true });
   writeState({
     ...state,
+    ...codexAppVisibilityStatePatch(visibility),
     monitorThreadId: threadId,
     monitorThreadName: threadName,
     monitorThreadUpdatedAt: new Date().toISOString(),
@@ -433,6 +444,14 @@ export async function createCodexAppMonitorThread(forceCreate = false): Promise<
 export async function resumeCodexAppThread(threadId: string): Promise<void> {
   await connect();
   await request("thread/resume", { threadId });
+  const visibility = await ensureCodexAppVisible("app-server-resume-thread", { force: true });
+  const patch = codexAppVisibilityStatePatch(visibility);
+  if (Object.keys(patch).length > 0) {
+    writeState({
+      ...readState(),
+      ...patch
+    });
+  }
 }
 
 export async function notifyCodex(message: string): Promise<void> {
@@ -469,7 +488,7 @@ async function notifyCodexInternal(message: string): Promise<void> {
   }
 
   writeState({
-    ...state,
+    ...readState(),
     monitorThreadId: threadId,
     monitorThreadName: threadName,
     notificationCount,
@@ -484,6 +503,14 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
     threadId,
     name: threadName
   });
+  const visibility = await ensureCodexAppVisible("app-server-turn-start");
+  const visibilityPatch = codexAppVisibilityStatePatch(visibility);
+  if (Object.keys(visibilityPatch).length > 0) {
+    writeState({
+      ...readState(),
+      ...visibilityPatch
+    });
+  }
 
   const idle = process.env.CODEX_APP_NOTIFY_WAIT_FOR_IDLE === "1"
     ? waitForThreadIdle(threadId)

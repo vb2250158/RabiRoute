@@ -26,7 +26,7 @@ test("Codex Desktop IPC falls back through app-server when a bound thread is unl
         new Error("Codex Desktop IPC turn failed: no-client-found"),
         { monitorThreadId: "thread-1", monitorThreadName: "MonsterGirl / 伊莉娅 策划美术" }
       ),
-      /thread\/resume 唤醒这个线程/
+      /启动\/聚焦 Codex App/
     );
   } finally {
     if (previous == null) {

@@ -62,9 +62,9 @@ npm run check:config
 
 ## `no-client-found`
 
-说明 RabiRoute 已经从 Codex session index 找到目标线程，但 Codex Desktop 当前没有加载这个线程，Desktop IPC 无法对它 `start/steer`。当前投递会先通过 app-server `thread/resume` 尝试唤醒目标线程，然后立即重试 Desktop IPC 投递；如果仍失败，默认改走 app-server `turn/start` 兜底投递，同时暂存在 RabiRoute 进程内，并按 `CODEX_DESKTOP_IPC_RETRY_DELAY_MS` 定时重试。默认保留最近 20 条，可用 `CODEX_DESKTOP_IPC_MAX_RETRY_MESSAGES` 调整。线程重新加载后，下一次重试会自动补投。
+说明 RabiRoute 已经从 Codex session index 找到目标线程，但 Codex Desktop 当前没有加载这个线程，Desktop IPC 无法对它 `start/steer`。当前投递会先尝试启动/聚焦 Windows Codex App，再通过 app-server `thread/resume` 唤醒目标线程，然后立即重试 Desktop IPC 投递；如果仍失败，默认改走 app-server `turn/start` 兜底投递，同时暂存在 RabiRoute 进程内，并按 `CODEX_DESKTOP_IPC_RETRY_DELAY_MS` 定时重试。默认保留最近 20 条，可用 `CODEX_DESKTOP_IPC_MAX_RETRY_MESSAGES` 调整。线程重新加载后，下一次重试会自动补投。
 
-健康巡检会把这类状态标成错误，并显示待补投数量和下一次重试时间。自动唤醒可用 `CODEX_DESKTOP_IPC_WAKE_ON_NO_CLIENT=0` 关闭；no-client app-server 兜底可用 `CODEX_DESKTOP_IPC_FALLBACK_ON_NO_CLIENT=0` 关闭。若长时间不恢复，仍可以在 Codex Desktop 手动打开目标线程，让 Desktop IPC 客户端重新注册。
+健康巡检会把这类状态标成错误，并显示待补投数量、下一次重试时间和 `lastCodexAppVisibility*` 可见性诊断。自动唤醒可用 `CODEX_DESKTOP_IPC_WAKE_ON_NO_CLIENT=0` 关闭；no-client app-server 兜底可用 `CODEX_DESKTOP_IPC_FALLBACK_ON_NO_CLIENT=0` 关闭。Codex App 可见性保障默认启用，可用 `CODEX_APP_VISIBILITY_NOTIFY=0` 关闭；如 WindowsApps 路径不可读，可用 `CODEX_APP_EXE_PATH` 指向 `C:\Program Files\WindowsApps\OpenAI.Codex_*\app\Codex.exe`。Windows 可能拒绝后台进程抢前台，这种情况下仍可以在 Codex Desktop 手动打开目标线程，让 Desktop IPC 客户端重新注册。
 
 RabiRoute 进程本身不能直接调用 `codex_app.send_message_to_thread` 这类 Codex 连接器工具；这些工具属于当前 Codex 会话环境，不是 RabiRoute Node 运行时的稳定 API。这里使用的是 Codex app-server 的 `turn/start` 方法，不依赖目标线程已经有已加载的 Desktop 前端客户端。
 

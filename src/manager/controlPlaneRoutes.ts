@@ -1410,11 +1410,14 @@ function readAgentState(definition: GatewayDefinition, adapterType: AgentAdapter
     const lastNotificationError = String(merged.lastNotificationError ?? "").trim();
     const lastDeliveryVisibility = String(merged.lastDeliveryVisibility ?? "").trim();
     if (lastDeliveryVisibility === "desktop-client-not-loaded") {
+      const visibilityError = String(merged.lastCodexAppVisibilityError ?? "").trim();
       return {
         ...merged,
         bound: Boolean(merged.monitorThreadId),
         deliveryHealthy: false,
-        message: "Codex app-server fallback 已接受最近投递，但目标 Desktop 会话当前没有确认加载；这不等同于当前窗口可见。"
+        message: visibilityError
+          ? `Codex app-server fallback 已接受最近投递，但 Codex App 可见性保障失败：${visibilityError}`
+          : "Codex app-server fallback 已接受最近投递；RabiRoute 已尝试启动/聚焦 Codex App，但目标 Desktop 会话当前没有确认加载。"
       };
     }
     if (!lastNotificationError) {

@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
+import {
+  type CodexAppVisibilityReason,
+  codexAppVisibilityStatePatch,
+  ensureCodexAppVisible
+} from "./codexAppVisibility.js";
 import { createCodexAppMonitorThread, notifyCodex, resumeCodexAppThread } from "./codexApp.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
 
@@ -56,6 +61,11 @@ type CodexState = {
   lastDesktopIpcError?: string;
   lastDesktopIpcErrorAt?: string;
   lastDesktopIpcFallbackAt?: string;
+  lastCodexAppVisibilityAt?: string;
+  lastCodexAppVisibilityReason?: string;
+  lastCodexAppVisibilityMode?: string;
+  lastCodexAppVisibilityTarget?: string;
+  lastCodexAppVisibilityError?: string;
 };
 
 type CodexSessionIndexRecord = {
@@ -686,9 +696,10 @@ export function formatCodexDesktopDeliveryError(error: unknown, state: CodexStat
   const threadId = state.monitorThreadId || "<unknown>";
   return [
     `Codex Desktop 已找到线程 "${threadName}" (${threadId})，但该线程当前没有已加载的 Desktop 客户端。`,
-    "RabiRoute 会先尝试通过 app-server thread/resume 唤醒这个线程。",
+    "RabiRoute 会先尝试启动/聚焦 Codex App，再通过 app-server thread/resume 唤醒这个线程。",
     "如果自动唤醒仍失败，默认会改走 app-server turn/start 兜底投递。",
     "RabiRoute 仍会暂存这次投递并定时重试；线程恢复加载后会自动补投。",
+    "Codex App 可见性动作会记录到 lastCodexAppVisibility* 诊断字段。",
     "当前 codex_app.send_message_to_thread 是 Codex 连接器工具，不是 RabiRoute Node 运行时可直接调用的稳定 API。",
     `原始错误：${message}`
   ].join(" ");
@@ -710,19 +721,41 @@ function shouldAutoCreateMonitorThread(): boolean {
   return process.env.CODEX_DESKTOP_IPC_AUTO_CREATE_THREAD !== "0";
 }
 
+async function ensureCodexAppVisibleForDelivery(
+  state: CodexState,
+  reason: CodexAppVisibilityReason,
+  force = false
+): Promise<CodexState> {
+  const result = await ensureCodexAppVisible(reason, { force });
+  const patch = codexAppVisibilityStatePatch(result);
+  if (Object.keys(patch).length === 0) {
+    return state;
+  }
+
+  const nextState = {
+    ...state,
+    ...patch
+  };
+  writeStateWithRetryMetadata(nextState);
+  return nextState;
+}
+
 async function wakeMonitorThreadForDesktopDelivery(state: CodexState): Promise<boolean> {
   if (!state.monitorThreadId || !shouldWakeOnNoClientFound()) {
     return false;
   }
 
+  await ensureCodexAppVisibleForDelivery(state, "app-server-resume-thread", true);
   await resumeCodexAppThread(state.monitorThreadId);
   return true;
 }
 
 async function createMonitorThreadForDesktopDelivery(state: CodexState, forceCreate = false): Promise<CodexState> {
   const created = await createCodexAppMonitorThread(forceCreate);
+  const visibility = await ensureCodexAppVisible("app-server-create-thread", { force: true });
   const nextState = {
     ...state,
+    ...codexAppVisibilityStatePatch(visibility),
     monitorThreadId: created.id,
     monitorThreadName: created.threadName,
     monitorThreadUpdatedAt: created.updatedAt,
@@ -766,23 +799,28 @@ async function deliverToMonitorThread(state: CodexState, message: string): Promi
     throw new Error(`Missing monitorThreadId. RabiRoute tried to find "${config.codexThreadName}" in ${sessionIndexPath()}, but no matching Codex thread was found.`);
   }
 
+  state = await ensureCodexAppVisibleForDelivery(state, "desktop-ipc-delivery");
+  const threadId = state.monitorThreadId;
+  if (!threadId) {
+    throw new Error(`Missing monitorThreadId after Codex App visibility check for "${config.codexThreadName}".`);
+  }
   await connect();
   const shouldTrySteer = monitorThreadActive || (lastStartedTurnAt > 0 && Date.now() - lastStartedTurnAt < recentStartSteerWindowMs);
   if (shouldTrySteer) {
     try {
-      await steerNotificationTurn(state.monitorThreadId, message);
+      await steerNotificationTurn(threadId, message);
     } catch (error) {
       if (!isInactiveSteerError(error)) {
         throw error;
       }
 
       monitorThreadActive = false;
-      const result = await startNotificationTurnWithFallback(state.monitorThreadId, message);
+      const result = await startNotificationTurnWithFallback(threadId, message);
       lastStartedTurnAt = Date.now();
       monitorThreadActive = result === "started" || result === "steered";
     }
   } else {
-    const result = await startNotificationTurnWithFallback(state.monitorThreadId, message);
+    const result = await startNotificationTurnWithFallback(threadId, message);
     lastStartedTurnAt = Date.now();
     monitorThreadActive = result === "started" || result === "steered";
   }
@@ -838,9 +876,12 @@ async function deliverCodexDesktopNotification(message: string, options: Deliver
         if (shouldUseAppServerFallbackFor(error, state)) {
           try {
             await notifyCodex(message);
+            const visibility = await ensureCodexAppVisible("app-server-fallback", { force: true });
+            const fallbackState = readState();
             const now = new Date().toISOString();
             writeState({
-              ...readState(),
+              ...fallbackState,
+              ...codexAppVisibilityStatePatch(visibility),
               lastNotificationAt: now,
               lastNotificationError: "",
               lastNotificationErrorAt: "",
@@ -849,7 +890,7 @@ async function deliverCodexDesktopNotification(message: string, options: Deliver
               lastDesktopIpcFallbackAt: now,
               retryPendingCount: retryMessages.length,
               nextRetryAt: retryNextAt,
-              lastRetryAt: retryAttemptAt ?? readState().lastRetryAt,
+              lastRetryAt: retryAttemptAt ?? fallbackState.lastRetryAt,
               lastDeliveryChannel: "app-server-fallback",
               lastDeliveryVisibility: isNoClientFoundError(error) ? "desktop-client-not-loaded" : "unknown",
               lastDeliveryAcceptedAt: now

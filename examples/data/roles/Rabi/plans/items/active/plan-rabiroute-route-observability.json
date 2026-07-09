@@ -4,8 +4,8 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "observability",
-  "currentStep": "RouteDecision 与 AgentPacket 已从 forwarding 主链路拆出，项目功能手册和 WebGUI 文档页已补充真源、消费点和副作用索引",
-  "nextAction": "增加无副作用 route / AgentPacket preview，再评估是否需要 route-decisions.jsonl 和 packet log",
+  "currentStep": "RouteDecision 与 AgentPacket 已从 forwarding 主链路拆出，项目功能手册和 WebGUI 文档页已补充真源、消费点和副作用索引；Codex 投递链路已增加 lastCodexAppVisibility* 诊断字段，用于区分消息已被 app-server 接受和 Codex App 前端是否可见",
+  "nextAction": "增加无副作用 route / AgentPacket preview，再评估是否需要 route-decisions.jsonl、packet log 或更细的 Agent 投递可见性页面",
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-08T00:00:00+08:00",
-  "keywords": ["RouteDecision", "AgentPacket", "项目文档", "preview", "route-decisions", "packet log", "replay", "排障"]
+  "updatedAt": "2026-07-09T00:00:00+08:00",
+  "keywords": ["RouteDecision", "AgentPacket", "Codex", "lastCodexAppVisibility", "项目文档", "preview", "route-decisions", "packet log", "replay", "排障"]
 }
