@@ -71,6 +71,20 @@ RabiRoute 只会在满足以下条件时自动发送：
 
 Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发送推进消息，不需要 `messageId`、`replyToSource=true` 或固定某个 output adapter。RabiRoute 不再按群号、私聊账号或具体 pipeline ID 做细粒度过滤；是否能发由消息端发送开关、消息端可用性和明确目标决定。
 
+主动投递到 RabiLink 眼镜也使用同一个动作安全门，不要直接绕过到 Relay：
+
+```json
+{
+  "routeProfileId": "RabiLink",
+  "targetType": "rabilink",
+  "proactive": true,
+  "source": "scheduler",
+  "text": "该休息一下了。"
+}
+```
+
+`routeProfileId` 必须指向启用了 RabiLink 输出策略且已配置 Relay 的 Route。该请求不需要 `messageId`；通过策略后，RabiRoute 会把消息写入应用级持续下行队列，眼镜即使刚才没有说话也能收到。普通 RabiLink 来源回复仍保留来源关联，不会走主动分支，从而避免重复投递。
+
 企业微信群聊消息使用同一个回复接口。企业微信的 `replyContext` 会尽量和 NapCat 群聊保持一致：`targetType=group`、`groupId` 表示企业微信群聊或 chat id，`userId` 表示发送者企业微信用户 ID；同时补充 `adapterType=wecom`、`wecomReqId`、`wecomConversationId`、`wecomChatId`、`outputAdapter=wecom`。Agent 回复当前企业微信群聊时，应原样带回 `replyContextJson`；主动发送到企业微信群时，至少提供 `adapterType=wecom`、`targetType=group` 和 `groupId`。
 
 企业微信回复示例：

@@ -138,6 +138,11 @@
             android:exported="true"
             android:foregroundServiceType="dataSync" />
 
+        <service
+            android:name=".modules.rokid.RokidDeviceStatusSyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <receiver
             android:name=".BondedGattProbeReceiver"
             android:exported="true" />

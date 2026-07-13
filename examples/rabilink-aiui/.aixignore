@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.git/
+*.log
+*.tmp
+*.bak
+*.local.*
+*.secret.*
+package-lock.json

@@ -17,7 +17,7 @@ function optionsWithRuntime(runtime: AgentReplyOptions["runtimes"][number]): Age
 }
 
 async function withJsonServer<T>(
-  handler: (body: Record<string, unknown>) => Record<string, unknown> | void,
+  handler: (body: Record<string, unknown>, request: http.IncomingMessage) => Record<string, unknown> | void,
   run: (url: string) => Promise<T>
 ): Promise<T> {
   const server = http.createServer((request, response) => {
@@ -26,7 +26,7 @@ async function withJsonServer<T>(
     request.on("end", () => {
       const raw = Buffer.concat(chunks).toString("utf8");
       const body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
-      const data = handler(body) ?? { ok: true, id: "fenne-reply-1" };
+      const data = handler(body, request) ?? { ok: true, id: "fenne-reply-1" };
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(data));
     });
@@ -524,6 +524,53 @@ test("RabiLink source reply is gated by route policy and queued for the Relay wo
   assert.equal(rows.length, 1);
   assert.equal(rows[0].text, "RabiLink 回传测试。");
   assert.equal(rows[0].adapterType, "rabilink");
+});
+
+test("proactive RabiLink output enters the continuous Relay stream without a source task", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-rabilink-proactive-"));
+  let deliveredBody: Record<string, unknown> = {};
+  let deliveredToken = "";
+  await withJsonServer((body, request) => {
+    deliveredBody = body;
+    deliveredToken = String(request.headers["x-rabilink-token"] || "");
+    return { ok: true, status: "queued", messages: [{ id: "out-1", proactive: true }] };
+  }, async (url) => {
+      const result = await handleAgentReply({
+        routeProfileId: "RabiLink",
+        targetType: "rabilink",
+        proactive: true,
+        source: "scheduler-test",
+        text: "该休息一下了。"
+      }, {
+        rootDir,
+        routeRoot: path.join(rootDir, "data", "route"),
+        rolesRoot: path.join(rootDir, "data", "roles"),
+        runtimes: [{
+          id: "RabiLink",
+          rabiLinkRelay: {
+            enabled: true,
+            url: new URL(url).origin,
+            token: "test-relay-token",
+            deviceId: "pc-test"
+          },
+          messageAdapterPolicies: {
+            rabilink: {
+              outputEnabled: true,
+              supportedOutputs: ["text"]
+            }
+          }
+        }]
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.status, "sent");
+      assert.equal(result.reason, "Queued in the RabiLink continuous message stream.");
+      assert.equal(deliveredBody.text, "该休息一下了。");
+      assert.equal(deliveredBody.source, "scheduler-test");
+      assert.equal(deliveredBody.deviceId, "pc-test");
+      assert.equal(deliveredToken, "test-relay-token");
+      assert.equal(result.messageId, undefined);
+  });
 });
 
 test("RabiLink source reply respects disabled route output policy", async () => {

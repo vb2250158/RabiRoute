@@ -1,12 +1,13 @@
 {
   "id": "plan-rabiroute-rabilink-active-intelligence",
   "title": "推进 RabiLink 原生主动智能闭环",
+  "focus": "RabiLink 原生主动智能闭环",
   "status": "进行中",
   "priority": "high",
   "kind": "product",
-  "currentStep": "RabiLink 已完成原生主动智能应用设计：第一版主线是手机常驻录音、VAD 切句、手机 ASR、Relay task 提交、PC Rabi worker、RabiRoute rabilink route 和全局下行消息；眼镜端定位为 Rabi Glass 低干扰 HUD，显示状态和最近回复并提供少量开始/暂停控制；现有测试中心收纳为 RabiLink Lab，Rokid/灵珠官方助手保留为兼容路径而不是主线。",
-  "nextAction": "先落 M0-M2：把 Rabi Glass Test 和接口测试中心命名收敛为 Rabi Glass / RabiLink Lab，调整手机首页为主动智能状态面板和配置主控台，并补齐 Android SDK 的 submitRabiLinkTask 与 getRabiLinkMessages 用户侧 API；后续再实现常驻录音、ASR、下行 poller 和 HUD 命令。",
-  "waitingFor": "",
+  "currentStep": "RabiLink AIUI 已完成首个本地闭环：连接对话用眼镜原生 ASR 发布输入事件，并持续按 cursor 消费普通回复和主动消息共用的应用级下行队列；原生 TTS 播报前释放 ASR，结束后恢复。配置助手由 Rokid 原生 Agent 理解自然语言，页面只执行明确 intent。Relay 已支持无 taskId 的主动追加，RabiRoute `/api/agent/replies` 继续负责输出策略和审计。源码、真实 HTTP 集成、Ink 运行、AIX 验包与本地验收均通过。",
+  "nextAction": "完成外部真机闭环：上传并审核当前 AIX，在手机和眼镜同步后验证触摸板切换、真实 ASR、普通回复、无前置语音的主动播报、TTS/ASR 交接和原生 Agent 配置 intent；手机后台常驻感知作为独立后续路线评估。",
+  "waitingFor": "可用的 Rokid 手机、眼镜和 Craft 发布流程",
   "project": {
     "name": "RabiRoute",
     "path": "./"
@@ -19,6 +20,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-09T00:00:00+08:00",
-  "keywords": ["RabiLink", "Rabi Glass", "主动智能", "常驻录音", "ASR", "Relay", "rabilink", "HUD", "Android SDK", "RabiLink Lab", "手机配置主控台"]
+  "updatedAt": "2026-07-13T00:00:00+08:00",
+  "keywords": ["RabiLink", "AIUI", "主动智能", "持续消息流", "主动投递", "原生 ASR", "原生 TTS", "配置助手", "原生 Agent", "Relay", "Action Gate", "真机验收"]
 }

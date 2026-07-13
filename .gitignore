@@ -44,6 +44,8 @@ examples/rabi-link-vela-probe/node_modules/
 examples/rabi-link-vela-probe/build/
 examples/rabi-link-vela-probe/dist/
 examples/rabi-link-vela-probe/*.log
+examples/rabilink-aiui/node_modules/
+examples/rabilink-aiui/dist/
 # Legacy local probe workspaces kept out of public submissions.
 examples/android-band-probe/
 examples/vela-band-probe/

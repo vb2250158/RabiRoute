@@ -3471,13 +3471,17 @@ export function startManager(): void {
             rootDir,
             routeRoot,
             rolesRoot,
-            runtimes: [...runtimes.values()].map((runtime) => ({
-              ...runtime.definition,
-              napcatInstances: (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)).map((instance) => ({
-                ...instance,
-                accessToken: instance.accessToken ?? ""
-              }))
-            }))
+            runtimes: [...runtimes.values()].map((runtime) => {
+              const relay = rabiLinkRelayConfigFor(runtime.definition);
+              return {
+                ...runtime.definition,
+                rabiLinkRelay: relay,
+                napcatInstances: (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)).map((instance) => ({
+                  ...instance,
+                  accessToken: instance.accessToken ?? ""
+                }))
+              };
+            })
           }))
           .then((result) => {
             const status = result.status === "sent" ? 202 : result.status === "draft" ? 200 : result.status === "failed" ? 502 : 403;

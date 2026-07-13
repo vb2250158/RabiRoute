@@ -75,6 +75,15 @@ data class RabiLinkMobileState(
     val rawJson: JSONObject
 )
 
+data class RabiLinkDeviceStatus(
+    val batteryLevel: Int,
+    val charging: Boolean,
+    val observedAt: String,
+    val receivedAt: String,
+    val stale: Boolean,
+    val rawJson: JSONObject
+)
+
 data class RabiRouteInfo(
     val id: String,
     val name: String,
@@ -121,7 +130,7 @@ data class RabiAgentBinding(
     }
 }
 
-class RabiRouteSdk(
+class RabiRouteSdk @JvmOverloads constructor(
     private val ports: List<Int> = listOf(8790),
     private val rabiLinkPorts: List<Int> = listOf(8794),
     private val timeoutMs: Int = 650
@@ -357,6 +366,35 @@ class RabiRouteSdk(
             readTimeoutMs = 10000
         )
         return mobileStateFromJson(json)
+    }
+
+    fun publishMobileDeviceStatus(
+        relayBaseUrl: String,
+        token: String,
+        batteryLevel: Int,
+        charging: Boolean,
+        observedAt: String
+    ): RabiLinkDeviceStatus {
+        val payload = JSONObject()
+            .put("batteryLevel", batteryLevel.coerceIn(0, 100))
+            .put("charging", charging)
+            .put("observedAt", observedAt)
+        val json = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/device-status",
+            "POST",
+            payload.toString(),
+            mapOf("X-RabiLink-Token" to token),
+            readTimeoutMs = 10000
+        )
+        val status = json.getJSONObject("deviceStatus")
+        return RabiLinkDeviceStatus(
+            batteryLevel = status.getInt("batteryLevel"),
+            charging = status.optBoolean("charging"),
+            observedAt = status.optString("observedAt"),
+            receivedAt = status.optString("receivedAt"),
+            stale = status.optBoolean("stale"),
+            rawJson = status
+        )
     }
 
     fun selectMobileRabiPc(relayBaseUrl: String, token: String, targetDeviceId: String): RabiLinkMobileState {

@@ -8,6 +8,7 @@ import com.rokid.cxr.link.callbacks.ICXRSessionCbk;
 import com.rokid.cxr.link.callbacks.ICustomCmdCbk;
 import com.rokid.cxr.link.callbacks.IGlassAppCbk;
 import com.rokid.cxr.link.utils.CxrDefs;
+import com.rokid.cxr.link.utils.GlassInfo;
 
 final class RokidCxrController {
     static final String GLASS_ASR_PACKAGE = "com.rabi.link.glass";
@@ -17,6 +18,12 @@ final class RokidCxrController {
 
     interface Listener {
         void onLog(String line);
+
+        void onCxrConnectionChanged(boolean connected);
+
+        void onGlassBtConnectionChanged(boolean connected);
+
+        void onGlassDeviceInfo(GlassInfo info);
 
         void onPhoto(byte[] data);
 
@@ -110,6 +117,14 @@ final class RokidCxrController {
         sessionType = "CUSTOMVIEW";
         boolean connected = cxrLink.connect(token);
         log("connect=" + connected);
+        return connected;
+    }
+
+    boolean connectStatusOnly(String token) {
+        prepareSessionSwitch();
+        sessionType = "STATUS";
+        boolean connected = cxrLink.connect(token);
+        log("connectStatusOnly=" + connected);
         return connected;
     }
 

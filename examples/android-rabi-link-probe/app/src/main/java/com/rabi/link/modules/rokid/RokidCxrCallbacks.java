@@ -22,17 +22,20 @@ final class RokidCxrCallbacks {
             public void onCXRLConnected(boolean connected) {
                 linkState.setCxrConnected(connected);
                 log(listener, "onCXRLConnected=" + connected);
+                listener.onCxrConnectionChanged(connected);
             }
 
             @Override
             public void onGlassBtConnected(boolean connected) {
                 linkState.setGlassBtConnected(connected);
                 log(listener, "onGlassBtConnected=" + connected);
+                listener.onGlassBtConnectionChanged(connected);
             }
 
             @Override
             public void onGlassDeviceInfo(GlassInfo info) {
                 log(listener, "onGlassDeviceInfo=" + RokidProbeText.formatGlassInfo(info));
+                listener.onGlassDeviceInfo(info);
             }
 
             @Override

@@ -186,6 +186,21 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
             }
 
             @Override
+            public void onCxrConnectionChanged(boolean connected) {
+                // The probe dashboard already receives the same state through onLog.
+            }
+
+            @Override
+            public void onGlassBtConnectionChanged(boolean connected) {
+                // The probe dashboard already receives the same state through onLog.
+            }
+
+            @Override
+            public void onGlassDeviceInfo(com.rokid.cxr.link.utils.GlassInfo info) {
+                // The probe dashboard already receives the formatted device info through onLog.
+            }
+
+            @Override
             public void onPhoto(byte[] data) {
                 saveJpeg(data);
             }

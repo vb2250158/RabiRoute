@@ -16,6 +16,7 @@ import {
   type MessageAdapterPolicy,
   type MessagePayloadKind
 } from "./shared/gatewayConfigModel.js";
+import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -47,6 +48,8 @@ export type AgentReplyRequest = {
   wecomChatId?: unknown;
   wecomSenderId?: unknown;
   wecomMessageType?: unknown;
+  proactive?: unknown;
+  source?: unknown;
 };
 
 export type AgentReplyNapCatInstance = NapCatEndpoint & {
@@ -83,6 +86,13 @@ export type AgentReplyRuntime = {
   wecomWsUrl?: string;
   routeProfiles?: AgentReplyRouteProfile[];
   messageAdapterPolicies?: MessageAdapterPolicies;
+  rabiLinkRelay?: {
+    enabled?: boolean;
+    url?: string;
+    token?: string;
+    deviceId?: string;
+    deviceGuid?: string;
+  };
 };
 
 export type AgentReplyOptions = {
@@ -242,6 +252,13 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
 function requestField(request: AgentReplyRequest, key: keyof AgentReplyRequest): string | undefined {
   const ctx = contextObject(request);
   return valueString(request[key] ?? ctx[key]);
+}
+
+function requestFlag(request: AgentReplyRequest, key: keyof AgentReplyRequest): boolean {
+  const ctx = contextObject(request);
+  const value = request[key] ?? ctx[key];
+  if (typeof value === "boolean") return value;
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
 function routeConfigName(runtimeId: string): string {
@@ -780,7 +797,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "role_panel_reply_sent" : "reply_blocked", result.reason ?? "", result);
     return result;
   }
-  if (target.adapterType === "rabilink") {
+  if (target.adapterType === "rabilink" || target.targetType === "rabilink") {
     const policy = rabiLinkPolicy(route);
     if (!policy.outputEnabled) {
       const result: AgentReplyResult = { ...draft("RabiLink message sending is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
@@ -791,6 +808,34 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       const result: AgentReplyResult = { ...draft(`RabiLink route policy does not allow ${content.kind} payloads.`, text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
       appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
       return result;
+    }
+    const proactive = requestFlag(request, "proactive") || (!messageId && contextTarget.targetType === "rabilink");
+    if (proactive) {
+      try {
+        const relayResult = await publishRabiLinkRelayMessage(content.text, {
+          source: requestField(request, "source") || "RabiRoute active intelligence",
+          relay: route.runtime.rabiLinkRelay,
+          metadata: {
+            routeProfileId: route.profile?.id ?? route.runtime.id,
+            payloadType: content.kind
+          }
+        });
+        const result = appendAdapterReply(options, route, "rabilink", target, content, request);
+        result.reason = "Queued in the RabiLink continuous message stream.";
+        appendOutboxLog(options, route, "info", "rabilink_proactive_queued", text.slice(0, 500), { ...result, relayResult });
+        return result;
+      } catch (error) {
+        const result: AgentReplyResult = {
+          ok: false,
+          status: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+          routeProfileId: route.profile?.id ?? route.runtime.id,
+          messageId: target.messageId,
+          targetType: "rabilink"
+        };
+        appendOutboxLog(options, route, "error", "rabilink_proactive_failed", text.slice(0, 500), result);
+        return result;
+      }
     }
     const result = appendAdapterReply(options, route, "rabilink", target, content, request);
     appendOutboxLog(options, route, "info", "rabilink_reply_queued", text.slice(0, 500), result);

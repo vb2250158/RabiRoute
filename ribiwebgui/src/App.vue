@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import { useGatewayStore } from "./stores/gatewayStore";
@@ -8,7 +8,36 @@ import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapter
 const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
-const drawer = ref(true);
+const DRAWER_PREFERENCES_KEY = "rabiroute:webgui:drawer-preferences";
+
+type DrawerPreferences = {
+  default: boolean;
+  docs: boolean;
+};
+
+function readDrawerPreferences(): DrawerPreferences {
+  const fallback = { default: window.innerWidth >= 960, docs: false };
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(DRAWER_PREFERENCES_KEY) || "null") as Partial<DrawerPreferences> | null;
+    return {
+      default: typeof stored?.default === "boolean" ? stored.default : fallback.default,
+      docs: typeof stored?.docs === "boolean" ? stored.docs : fallback.docs
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeDrawerPreferences(preferences: DrawerPreferences): void {
+  try {
+    window.localStorage.setItem(DRAWER_PREFERENCES_KEY, JSON.stringify(preferences));
+  } catch {
+    // 浏览器禁用本地存储时仍保留当前会话内的抽屉状态。
+  }
+}
+
+const drawerPreferences = readDrawerPreferences();
+const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
 
 const navItems = [
@@ -34,10 +63,26 @@ const selectedRuntimeLabel = computed(() => {
 });
 
 onMounted(async () => {
-  drawer.value = window.innerWidth >= 960;
   await store.load();
   if (store.gateways.length === 0) store.openQuickSetup();
   window.addEventListener("beforeunload", beforeUnload);
+});
+
+watch(
+  () => route.path,
+  (path) => {
+    if (path === "/docs") {
+      drawer.value = false;
+      return;
+    }
+    drawer.value = drawerPreferences.default;
+  }
+);
+
+watch(drawer, (value) => {
+  if (route.path === "/docs") drawerPreferences.docs = value;
+  else drawerPreferences.default = value;
+  writeDrawerPreferences(drawerPreferences);
 });
 
 onBeforeUnmount(() => {

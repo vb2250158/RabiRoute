@@ -55,11 +55,16 @@ function relayWorkerIdentityPayload(): Record<string, string> {
   };
 }
 
-async function fetchRelayJson(pathname: string, init: RequestInit = {}, fallbackPathname?: string): Promise<Record<string, unknown>> {
-  const baseUrl = normalizedRelayBaseUrl();
+async function fetchRelayJson(
+  pathname: string,
+  init: RequestInit = {},
+  fallbackPathname?: string,
+  relayBaseUrl = ""
+): Promise<Record<string, unknown>> {
+  const baseUrl = relayBaseUrl.trim().replace(/\/+$/, "") || normalizedRelayBaseUrl();
   const response = await fetch(`${baseUrl}${pathname}`, init);
   if (response.status === 404 && fallbackPathname) {
-    return fetchRelayJson(fallbackPathname, init);
+    return fetchRelayJson(fallbackPathname, init, undefined, baseUrl);
   }
   const text = await response.text();
   const body = text.trim() ? JSON.parse(text) as Record<string, unknown> : {};
@@ -139,6 +144,47 @@ async function finishRelayTask(taskId: string, body: Record<string, unknown>): P
     headers: relayHeaders(true),
     body: JSON.stringify({ ...body, ...relayWorkerIdentityPayload() })
   });
+}
+
+export async function publishRabiLinkRelayMessage(
+  text: string,
+  options: {
+    source?: string;
+    metadata?: Record<string, unknown>;
+    relay?: {
+      enabled?: boolean;
+      url?: string;
+      token?: string;
+      deviceId?: string;
+      deviceGuid?: string;
+    };
+  } = {}
+): Promise<Record<string, unknown>> {
+  const value = text.trim();
+  if (!value) throw new Error("RabiLink proactive message text is empty.");
+  const relayUrl = options.relay?.url?.trim().replace(/\/+$/, "") || normalizedRelayBaseUrl();
+  const relayToken = options.relay?.token?.trim() || config.rabiLinkRelayAppToken.trim();
+  const relayEnabled = options.relay
+    ? options.relay.enabled !== false && Boolean(relayUrl && relayToken)
+    : config.rabiLinkRelayEnabled && Boolean(relayUrl && relayToken);
+  if (!relayEnabled) {
+    throw new Error("RabiLink Relay is not configured for proactive delivery.");
+  }
+  return fetchRelayJson("/worker/messages", {
+    method: "POST",
+    headers: {
+      "X-RabiLink-Token": relayToken,
+      "User-Agent": "RabiRoute/1.0",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      text: value,
+      source: options.source?.trim() || "RabiRoute active intelligence",
+      metadata: options.metadata || {},
+      deviceId: options.relay?.deviceId?.trim() || config.rabiLinkRelayDeviceId,
+      deviceGuid: options.relay?.deviceGuid?.trim() || config.rabiLinkRelayDeviceGuid
+    })
+  }, undefined, relayUrl);
 }
 
 async function finishRelayWebguiRequest(requestId: string, body: Record<string, unknown>): Promise<void> {

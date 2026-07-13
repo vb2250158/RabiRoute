@@ -17,8 +17,16 @@ const leaseMs = clamp(Number(process.env.RABILINK_RELAY_LEASE_MS || 45000), 5000
 const dataDir = path.resolve(process.env.RABILINK_RELAY_DATA_DIR || path.join(process.cwd(), "data", "rabilink-relay"));
 const eventLogPath = path.join(dataDir, "events.jsonl");
 const accountLogDir = path.join(dataDir, "account-logs");
+const mobileProofDir = path.join(dataDir, "mobile-proofs");
+const mobileDeviceStatusDir = path.join(dataDir, "mobile-device-status");
+const mobileDeviceStatusStaleMs = clamp(
+  Number(process.env.RABILINK_RELAY_MOBILE_DEVICE_STATUS_STALE_MS || 3 * 60 * 1000),
+  60000,
+  15 * 60 * 1000
+);
 const accountLogMaxRows = clamp(Number(process.env.RABILINK_RELAY_ACCOUNT_LOG_MAX_ROWS || 300), 50, 2000);
 const appStorePath = path.resolve(process.env.RABILINK_RELAY_APP_STORE_FILE || path.join(dataDir, "apps.json"));
+const runtimeStatePath = path.join(dataDir, "runtime-state.json");
 const webguiDistPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_DIST_DIR || path.join(process.cwd(), "ribiwebgui", "dist"));
 const webguiAssetPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_ASSET_DIR || path.join(process.cwd(), "assets"));
 const openApiFileCandidates = [
@@ -41,9 +49,12 @@ const toolImportPostmanFileCandidates = [
   path.join(dataDir, "rokid-rabilink-tools-import.CURRENT.postman.json"),
   path.join(process.cwd(), "rokid-rabilink-tools-import.CURRENT.postman.json")
 ].filter(Boolean);
+const sensitiveEventKeyPattern = /token|authorization|cookie|password|secret|text|message|content|raw|headers|body|response|reply/i;
 
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(accountLogDir, { recursive: true });
+fs.mkdirSync(mobileProofDir, { recursive: true });
+fs.mkdirSync(mobileDeviceStatusDir, { recursive: true });
 if (!hasEnabledRabiLinkApps()) {
   console.warn("No enabled RabiLink app tokens exist yet. Open /manage to create the first account and app token.");
 }
@@ -65,6 +76,60 @@ const webguiRequests = new Map();
 const webguiRequestWaiters = [];
 /** @type {Map<string, ManageSession>} */
 const manageSessions = new Map();
+/** @type {Map<string, Set<http.ServerResponse>>} */
+const accountLogStreams = new Map();
+loadRelayRuntimeState();
+
+function replaceMapFromArray(map, items, idKey = "id") {
+  map.clear();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const id = typeof item[idKey] === "string" ? item[idKey] : "";
+    if (!id) continue;
+    map.set(id, item);
+  }
+}
+
+function loadRelayRuntimeState() {
+  if (!fs.existsSync(runtimeStatePath)) return;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(runtimeStatePath, "utf8"));
+    replaceMapFromArray(tasks, parsed?.tasks);
+    outboxMessages.splice(
+      0,
+      outboxMessages.length,
+      ...(Array.isArray(parsed?.outboxMessages) ? parsed.outboxMessages.filter((item) => item && typeof item === "object" && !Array.isArray(item)) : [])
+    );
+    const storedNextSeq = Number(parsed?.nextOutboxMessageSeq);
+    const maxOutboxSeq = outboxMessages.reduce((max, message) => Math.max(max, Number(message.seq) || 0), 0);
+    nextOutboxMessageSeq = Math.max(Number.isFinite(storedNextSeq) ? storedNextSeq : 1, maxOutboxSeq + 1, 1);
+  } catch (error) {
+    console.warn(`Failed to read RabiLink runtime state: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function saveRelayRuntimeState() {
+  const tmpPath = `${runtimeStatePath}.${process.pid}.tmp`;
+  const state = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    nextOutboxMessageSeq,
+    tasks: [...tasks.values()],
+    outboxMessages
+  };
+  try {
+    fs.mkdirSync(path.dirname(runtimeStatePath), { recursive: true });
+    fs.writeFileSync(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    fs.renameSync(tmpPath, runtimeStatePath);
+  } catch (error) {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // Ignore cleanup errors for a best-effort runtime cache.
+    }
+    console.warn(`Failed to write RabiLink runtime state: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 /**
  * @typedef {object} RelayTask
@@ -110,6 +175,8 @@ const manageSessions = new Map();
  * @property {string} text
  * @property {boolean} final
  * @property {string} status
+ * @property {boolean} [proactive]
+ * @property {string} [source]
  */
 
 /**
@@ -165,8 +232,6 @@ function clamp(value, min, max) {
 function nowIso() {
   return new Date().toISOString();
 }
-
-const sensitiveEventKeyPattern = /token|authorization|cookie|password|secret|text|message|content|raw|headers|body|response|reply/i;
 
 function sanitizeSharedEventData(value, depth = 0, key = "") {
   if (depth > 6) return "[truncated]";
@@ -239,7 +304,11 @@ function writeAccountLog(account, event, data = {}) {
     textPreview: textPreview(data.textPreview || data.text || ""),
     error: textPreview(data.error || "", 220)
   };
-  fs.appendFile(filePath, `${JSON.stringify(row)}\n`, () => trimAccountLogFile(filePath));
+  fs.appendFile(filePath, `${JSON.stringify(row)}\n`, (error) => {
+    if (error) return;
+    trimAccountLogFile(filePath);
+    broadcastAccountLog(account.id, row);
+  });
 }
 
 function writeAccountLogForApp(app, event, data = {}) {
@@ -266,6 +335,48 @@ function readAccountLogs(account, limit = 120) {
     })
     .filter(Boolean)
     .reverse();
+}
+
+function writeSse(res, event, data, id = "") {
+  if (id) res.write(`id: ${String(id).replace(/\r?\n/g, "")}\n`);
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function broadcastAccountLog(accountId, row) {
+  const streams = accountLogStreams.get(accountId);
+  if (!streams?.size) return;
+  for (const stream of streams) {
+    writeSse(stream, "log", row, row.id);
+  }
+}
+
+function handleAccountLogStream(req, res, account) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store, no-transform",
+    "connection": "keep-alive",
+    "x-accel-buffering": "no"
+  });
+  res.write(": connected\n\n");
+  writeSse(res, "snapshot", { logs: readAccountLogs(account, 120) });
+
+  let streams = accountLogStreams.get(account.id);
+  if (!streams) {
+    streams = new Set();
+    accountLogStreams.set(account.id, streams);
+  }
+  streams.add(res);
+
+  const keepAlive = setInterval(() => {
+    res.write(": ping\n\n");
+  }, 25000);
+
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    streams.delete(res);
+    if (streams.size === 0) accountLogStreams.delete(account.id);
+  });
 }
 
 function rabiLinkTokenPreview(value) {
@@ -372,7 +483,7 @@ function readAppStore() {
     return { accounts: [], apps: [], workers: [] };
   }
   try {
-    const raw = JSON.parse(fs.readFileSync(appStorePath, "utf8"));
+    const raw = JSON.parse(fs.readFileSync(appStorePath, "utf8").replace(/^\uFEFF/, ""));
     return {
       accounts: Array.isArray(raw.accounts) ? raw.accounts : [],
       apps: Array.isArray(raw.apps)
@@ -945,6 +1056,7 @@ function taskForResponse(task) {
 }
 
 function createTask(raw, req, auth = { app: null }) {
+  loadRelayRuntimeState();
   const text = extractText(raw);
   if (!text) {
     const error = new Error("Missing text/message/query/content in request body.");
@@ -979,6 +1091,7 @@ function createTask(raw, req, auth = { app: null }) {
     nextMessageSeq: 1
   };
   tasks.set(task.id, task);
+  saveRelayRuntimeState();
   writeEvent("task_created", taskForResponse(task));
   writeAccountLogForApp(auth.app, "task_created", {
     title: "收到 RabiLink 消息",
@@ -1259,12 +1372,15 @@ function createMobileWebguiRequest(app, worker, method, localPath, body = null) 
 }
 
 function cleanupTasks() {
+  loadRelayRuntimeState();
   const now = Date.now();
+  let changed = false;
   for (const [id, task] of tasks.entries()) {
     if (task.status !== "done" && task.status !== "failed" && task.expiresAt <= now) {
       task.status = "expired";
       task.updatedAt = now;
       task.error = "Task expired before RabiLink worker returned a result.";
+      changed = true;
       finishWaiters(task);
       writeEvent("task_expired", taskForResponse(task));
       const app = readAppStore().apps.find((item) => item.id === task.appId);
@@ -1280,19 +1396,24 @@ function cleanupTasks() {
     }
     if ((task.status === "done" || task.status === "failed" || task.status === "expired") && task.updatedAt + taskTtlMs <= now) {
       tasks.delete(id);
+      changed = true;
     }
   }
-  cleanupOutboxMessages(now);
+  changed = cleanupOutboxMessages(now) || changed;
   cleanupWebguiRequests(now);
+  if (changed) saveRelayRuntimeState();
 }
 
 function cleanupOutboxMessages(now = Date.now()) {
   const firstLiveIndex = outboxMessages.findIndex((message) => message.createdAt + taskTtlMs > now);
   if (firstLiveIndex > 0) {
     outboxMessages.splice(0, firstLiveIndex);
+    return true;
   } else if (firstLiveIndex < 0 && outboxMessages.length > 0) {
     outboxMessages.splice(0, outboxMessages.length);
+    return true;
   }
+  return false;
 }
 
 function canWorkerClaimTask(task, appId = "", deviceId = "") {
@@ -1305,12 +1426,14 @@ function claimTasks(limit, deviceId, appId = "") {
   cleanupTasks();
   const now = Date.now();
   const result = [];
+  let changed = false;
   for (const task of tasks.values()) {
     if (result.length >= limit) break;
     if (!canWorkerClaimTask(task, appId, deviceId)) continue;
     if (task.status === "leased" && task.leaseUntil <= now) {
       task.status = "queued";
       task.leaseUntil = 0;
+      changed = true;
     }
     if (task.status !== "queued") continue;
     task.status = "leased";
@@ -1319,6 +1442,7 @@ function claimTasks(limit, deviceId, appId = "") {
     task.attempts += 1;
     task.source = { ...task.source, leasedBy: deviceId || "" };
     result.push(taskForResponse(task));
+    changed = true;
     writeEvent("task_leased", taskForResponse(task));
     const app = readAppStore().apps.find((item) => item.id === task.appId);
     writeAccountLogForApp(app, "task_leased", {
@@ -1330,6 +1454,7 @@ function claimTasks(limit, deviceId, appId = "") {
       text: task.text
     });
   }
+  if (changed) saveRelayRuntimeState();
   return result;
 }
 
@@ -1362,19 +1487,25 @@ function notifyOutboxWaiters() {
   }
 }
 
-function waitForClaimableTask(timeoutMs, appId = "", deviceId = "") {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForSharedRuntimeCondition(timeoutMs, predicate) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
+  }
+}
+
+async function waitForClaimableTask(timeoutMs, appId = "", deviceId = "") {
   if (hasClaimableTasks(appId, deviceId) || timeoutMs <= 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      const index = workerTaskWaiters.findIndex((item) => item.resolve === resolve);
-      if (index >= 0) workerTaskWaiters.splice(index, 1);
-      resolve();
-    }, timeoutMs);
-    workerTaskWaiters.push({ resolve, timer });
-  });
+  await waitForSharedRuntimeCondition(timeoutMs, () => hasClaimableTasks(appId, deviceId));
 }
 
 function findTaskOrThrow(taskId) {
+  loadRelayRuntimeState();
   const task = tasks.get(taskId);
   if (!task) {
     const error = new Error(`Task not found: ${taskId}`);
@@ -1419,6 +1550,7 @@ function appendTaskMessages(taskId, body, options = {}) {
     task.status = "done";
   }
   appendOutboxMessages(task, created);
+  saveRelayRuntimeState();
   finishWaiters(task);
   writeEvent(options.finish ? "task_messages_finished" : "task_messages_appended", {
     task: taskForResponse(task),
@@ -1453,10 +1585,12 @@ function appendOutboxMessages(task, messages) {
       status: task.status
     });
   }
+  saveRelayRuntimeState();
   notifyOutboxWaiters();
 }
 
 function currentOutboxCursor() {
+  loadRelayRuntimeState();
   return outboxMessages[outboxMessages.length - 1]?.id || "";
 }
 
@@ -1480,7 +1614,9 @@ function outboxMessageForResponse(message) {
     createdAt: message.createdAt,
     text: message.text,
     final: message.final,
-    status: message.status
+    status: message.status,
+    proactive: message.proactive === true,
+    source: stringValue(message.source)
   };
 }
 
@@ -1494,6 +1630,7 @@ function hasOpenTasks(appId = "") {
 }
 
 function hasOutboxMessagesAfter(after, appId = "") {
+  loadRelayRuntimeState();
   const afterText = stringValue(after);
   const afterSeq = Number(afterText.replace(/^out-/, ""));
   return outboxMessages.some((message) => {
@@ -1505,6 +1642,7 @@ function hasOutboxMessagesAfter(after, appId = "") {
 }
 
 function outboxMessagesAfter(after, appId = "") {
+  loadRelayRuntimeState();
   const afterText = stringValue(after);
   const afterSeq = Number(afterText.replace(/^out-/, ""));
   return outboxMessages.filter((message) => {
@@ -1515,19 +1653,19 @@ function outboxMessagesAfter(after, appId = "") {
   });
 }
 
-function outboxMessagesResponse(after, appId = "") {
+function outboxMessagesResponse(after, appId = "", continuous = false) {
   cleanupTasks();
   const messages = outboxMessagesAfter(after, appId);
   const visibleMessages = appId ? outboxMessages.filter((message) => message.appId === appId) : outboxMessages;
   const last = messages[messages.length - 1] || visibleMessages[visibleMessages.length - 1];
   const openTasks = hasOpenTasks(appId);
   const text = messages.map((message) => message.text).join("\n");
-  const shouldContinue = openTasks;
+  const shouldContinue = continuous || openTasks;
   return {
     code: 0,
     ok: true,
-    status: messages.length > 0 ? "messages" : openTasks ? "idle" : "done",
-    done: !openTasks,
+    status: messages.length > 0 ? "messages" : shouldContinue ? "idle" : "done",
+    done: !shouldContinue,
     shouldContinue,
     cursor: last?.id || stringValue(after),
     nextCursor: last?.id || stringValue(after),
@@ -1540,16 +1678,44 @@ function outboxMessagesResponse(after, appId = "") {
   };
 }
 
+function markOutboxTimeout(response, waitMs, continuous = false) {
+  if (response.messages.length > 0 || !response.shouldContinue || waitMs <= 0) {
+    return response;
+  }
+  if (continuous) {
+    return {
+      ...response,
+      code: 0,
+      ok: true,
+      status: "idle",
+      done: false,
+      shouldContinue: true,
+      text: "",
+      answer: "",
+      reply: "",
+      content: "",
+      error: ""
+    };
+  }
+  const text = `RabiLink 下行消息等待超时：${waitMs}ms 内没有收到电脑端 Rabi/Codex 回复。`;
+  return {
+    ...response,
+    code: -1,
+    ok: false,
+    status: "timeout",
+    done: true,
+    shouldContinue: false,
+    text,
+    answer: text,
+    reply: text,
+    content: text,
+    error: text
+  };
+}
+
 async function waitForOutboxMessagesAfter(after, timeoutMs, appId = "") {
   if (hasOutboxMessagesAfter(after, appId) || timeoutMs <= 0) return;
-  await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      const index = outboxWaiters.findIndex((item) => item.resolve === resolve);
-      if (index >= 0) outboxWaiters.splice(index, 1);
-      resolve();
-    }, timeoutMs);
-    outboxWaiters.push({ resolve, timer });
-  });
+  await waitForSharedRuntimeCondition(timeoutMs, () => hasOutboxMessagesAfter(after, appId));
 }
 
 function taskMessagesResponse(task, after) {
@@ -1613,6 +1779,7 @@ function finishTask(taskId, body) {
   task.replyText = replyText;
   task.replyRaw = body;
   task.error = ok ? "" : stringValue(body?.error || body?.reason || "RabiLink worker reported failure.");
+  saveRelayRuntimeState();
   finishWaiters(task);
   notifyOutboxWaiters();
   writeEvent(ok ? "task_done" : "task_failed", taskForResponse(task));
@@ -1645,7 +1812,8 @@ function waitForTask(task, timeoutMs) {
     const timer = setTimeout(() => {
       const index = waiters.findIndex((item) => item.taskId === task.id && item.resolve === resolve);
       if (index >= 0) waiters.splice(index, 1);
-      resolve(task);
+      loadRelayRuntimeState();
+      resolve(tasks.get(task.id) || task);
     }, timeoutMs);
     waiters.push({ taskId: task.id, resolve, timer });
   });
@@ -1728,6 +1896,7 @@ function handleRokidTaskRead(req, url, res, body) {
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/rokid\/rabilink\/tasks\/([^/]+)$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
+  loadRelayRuntimeState();
   const task = tasks.get(taskId);
   if (!task) return sendJson(res, 404, {
     code: -1,
@@ -1756,6 +1925,7 @@ async function handleRokidTaskMessages(req, url, res, body) {
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/rokid\/rabilink\/tasks\/([^/]+)\/messages$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
+  loadRelayRuntimeState();
   const task = tasks.get(taskId);
   if (!task) return sendJson(res, 404, {
     code: -1,
@@ -1793,13 +1963,17 @@ async function handleRokidOutboxMessages(req, url, res, body) {
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   cleanupTasks();
   const appId = auth.app?.id || "";
+  const continuous = ["1", "true", "yes"].includes(String(url.searchParams.get("stream") || "").toLowerCase());
+  const tailOnly = ["1", "true", "yes"].includes(String(url.searchParams.get("tail") || "").toLowerCase());
   const hasCursor = url.searchParams.has("after") || url.searchParams.has("cursor");
-  const after = hasCursor
+  const after = tailOnly
+    ? currentOutboxCursor()
+    : hasCursor
     ? url.searchParams.get("after") || url.searchParams.get("cursor") || ""
     : currentOutboxCursor();
   const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || outboxWaitMs), 0, 60000);
-  await waitForOutboxMessagesAfter(after, waitMs, appId);
-  const response = outboxMessagesResponse(after, appId);
+  if (!tailOnly) await waitForOutboxMessagesAfter(after, waitMs, appId);
+  const response = markOutboxTimeout(outboxMessagesResponse(after, appId, continuous), waitMs, continuous);
   writeAccountLogForApp(auth.app, "outbox_messages_polled", {
     title: response.messages.length > 0 ? "插件拉取到下行消息" : "插件轮询下行消息",
     detail: response.messages.length > 0 ? `拉取到 ${response.messages.length} 条下行消息。` : `暂无新下行消息，状态：${response.status}。`,
@@ -1809,6 +1983,81 @@ async function handleRokidOutboxMessages(req, url, res, body) {
     text: response.text || ""
   });
   sendJson(res, 200, response);
+}
+
+function handleRokidInput(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  requireRokidAppTarget(auth);
+  const outboxCursor = currentOutboxCursor();
+  const event = createTask({
+    ...body,
+    type: stringValue(body?.type || "voice_transcript"),
+    source: stringValue(body?.source || "rabilink-aiui")
+  }, req, auth);
+  sendJson(res, 202, {
+    code: 0,
+    ok: true,
+    status: "accepted",
+    eventId: event.id,
+    cursor: outboxCursor,
+    nextCursor: outboxCursor,
+    acceptedAt: event.createdAt
+  });
+}
+
+function handleWorkerMessageAppend(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  requireRokidAppTarget(auth);
+  loadRelayRuntimeState();
+  const candidates = Array.isArray(body?.messages) ? body.messages : [body];
+  const source = stringValue(body?.source || body?.sender || "Rabi");
+  const created = [];
+  for (const candidate of candidates.slice(0, 50)) {
+    const text = extractText(candidate);
+    if (!text) continue;
+    const seq = nextOutboxMessageSeq;
+    nextOutboxMessageSeq += 1;
+    const message = {
+      id: `out-${String(seq).padStart(9, "0")}`,
+      seq,
+      appId: auth.app?.id || "",
+      taskId: stringValue(candidate?.taskId || body?.taskId),
+      taskMessageId: stringValue(candidate?.id) || `push-${randomUUID()}`,
+      createdAt: Date.now(),
+      text,
+      final: candidate?.final !== false,
+      status: "proactive",
+      proactive: true,
+      source
+    };
+    outboxMessages.push(message);
+    created.push(message);
+  }
+  if (!created.length) {
+    return sendJson(res, 400, { code: -1, ok: false, message: "Proactive RabiLink message text is empty." });
+  }
+  saveRelayRuntimeState();
+  notifyOutboxWaiters();
+  writeEvent("proactive_messages_appended", {
+    appId: auth.app?.id || "",
+    messageCount: created.length,
+    source
+  });
+  writeAccountLogForApp(auth.app, "proactive_messages_appended", {
+    title: "Rabi 主动投递消息",
+    detail: `新增 ${created.length} 条主动下行消息。`,
+    messageCount: created.length,
+    source
+  });
+  sendJson(res, 200, {
+    code: 0,
+    ok: true,
+    status: "queued",
+    nextCursor: created[created.length - 1].id,
+    messages: created.map(outboxMessageForResponse)
+  });
 }
 
 async function handleWorkerTasks(req, url, res, body) {
@@ -1924,6 +2173,7 @@ function handleTaskFinish(req, url, res, body) {
   task.updatedAt = Date.now();
   task.leaseUntil = 0;
   task.error = task.status === "failed" ? stringValue(body?.error || body?.reason || "RabiLink worker reported failure.") : "";
+  saveRelayRuntimeState();
   finishWaiters(task);
   writeEvent(task.status === "done" ? "task_finished" : "task_failed", taskForResponse(task));
   sendJson(res, 200, {
@@ -1940,6 +2190,7 @@ function handleTaskRead(req, url, res, body) {
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const match = url.pathname.match(/^\/worker\/tasks\/([^/]+)$/);
   const taskId = match ? decodeURIComponent(match[1]) : "";
+  loadRelayRuntimeState();
   const task = tasks.get(taskId);
   if (!task) return sendJson(res, 404, { code: -1, ok: false, message: `Task not found: ${taskId}` });
   if (!canAccessTask(auth, task)) return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
@@ -2235,6 +2486,8 @@ function adminPageHtml() {
     const credentialStorageKey = "rabilinkManageCredentials";
     const legacyCredentialStorageKey = "rabilinkAdminCredentials";
     const state = { account: null, apps: [], workers: [], logs: [], revealed: {}, credentials: loadCredentials(), setupRequired: false };
+    let logStream = null;
+    let logStreamAccountId = "";
     const el = (id) => document.getElementById(id);
 
     function encodeAuth(username, password) {
@@ -2340,12 +2593,14 @@ function adminPageHtml() {
           }
           setConsolePath(state.account.username);
         }
+        connectLogStream();
       } catch (error) {
         state.account = null;
         state.apps = [];
         state.workers = [];
         state.logs = [];
         state.setupRequired = !state.credentials;
+        closeLogStream();
         if (state.credentials) flash("alert", error.message);
       }
       render();
@@ -2423,6 +2678,39 @@ function adminPageHtml() {
       } catch (error) {
         flash("alert", error.message);
       }
+    }
+
+    function closeLogStream() {
+      if (!logStream) return;
+      logStream.close();
+      logStream = null;
+      logStreamAccountId = "";
+    }
+
+    function upsertLog(log) {
+      if (!log?.id) return;
+      state.logs = [log, ...state.logs.filter((item) => item.id !== log.id)].slice(0, 120);
+      renderLogs();
+    }
+
+    function connectLogStream() {
+      if (!state.account || typeof EventSource === "undefined") return;
+      if (logStream && logStreamAccountId === state.account.id) return;
+      closeLogStream();
+      logStreamAccountId = state.account.id;
+      logStream = new EventSource(apiBase + "/logs/stream");
+      logStream.addEventListener("snapshot", (event) => {
+        const body = JSON.parse(event.data || "{}");
+        state.logs = body.logs || [];
+        renderLogs();
+      });
+      logStream.addEventListener("log", (event) => {
+        upsertLog(JSON.parse(event.data || "{}"));
+      });
+      logStream.onerror = () => {
+        closeLogStream();
+        if (state.account) window.setTimeout(connectLogStream, 2000);
+      };
     }
 
     async function patchApp(id, patch) {
@@ -2720,6 +3008,7 @@ function adminPageHtml() {
     });
     el("logoutButton").addEventListener("click", () => {
       request(apiBase + "/logout", { method: "POST" }).catch(() => {});
+      closeLogStream();
       clearCredentials();
       state.account = null;
       state.apps = [];
@@ -2941,6 +3230,96 @@ function selectedMobileWorker(app, workers = mobileWorkersForApp(app)) {
   return null;
 }
 
+function mobileDeviceStatusPath(appId) {
+  const id = sanitizeRabiLinkId(appId, "");
+  return id ? path.join(mobileDeviceStatusDir, `${id}.json`) : "";
+}
+
+function normalizeMobileDeviceStatus(body = {}) {
+  const level = Number(body?.batteryLevel ?? body?.level);
+  if (!Number.isFinite(level) || level < 0 || level > 100) {
+    const error = new Error("batteryLevel must be a number between 0 and 100.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (typeof body?.charging !== "boolean") {
+    const error = new Error("charging must be a boolean.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const observedAtMs = Date.parse(stringValue(body?.observedAt));
+  return {
+    batteryLevel: Math.round(level),
+    charging: body.charging,
+    observedAt: Number.isFinite(observedAtMs) ? new Date(observedAtMs).toISOString() : nowIso(),
+    receivedAt: nowIso(),
+    source: "rokid-cxr-phone"
+  };
+}
+
+function publicMobileDeviceStatus(status) {
+  if (!status) return null;
+  const receivedAtMs = Date.parse(status.receivedAt || "");
+  if (!Number.isFinite(receivedAtMs)) return null;
+  const ageMs = Math.max(0, Date.now() - receivedAtMs);
+  return {
+    batteryLevel: status.batteryLevel,
+    charging: status.charging === true,
+    observedAt: status.observedAt || status.receivedAt,
+    receivedAt: status.receivedAt,
+    source: "rokid-cxr-phone",
+    stale: ageMs > mobileDeviceStatusStaleMs,
+    ageMs,
+    staleAfterMs: mobileDeviceStatusStaleMs
+  };
+}
+
+function readMobileDeviceStatus(app) {
+  const filePath = mobileDeviceStatusPath(app?.id || "");
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    return publicMobileDeviceStatus(JSON.parse(fs.readFileSync(filePath, "utf8")));
+  } catch (error) {
+    writeEvent("mobile_device_status_read_failed", {
+      appId: app?.id || "",
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
+
+function writeMobileDeviceStatus(app, body = {}) {
+  const status = normalizeMobileDeviceStatus(body);
+  const filePath = mobileDeviceStatusPath(app?.id || "");
+  if (!filePath) {
+    const error = new Error("RabiLink app id is missing.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const stored = { schemaVersion: 1, appId: app.id, ...status };
+  const tmpPath = `${filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  try {
+    fs.writeFileSync(tmpPath, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
+    try {
+      fs.renameSync(tmpPath, filePath);
+    } catch (error) {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      fs.renameSync(tmpPath, filePath);
+    }
+  } finally {
+    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+  }
+  const result = publicMobileDeviceStatus(stored);
+  writeEvent("mobile_device_status_updated", {
+    appId: app.id,
+    batteryLevel: result.batteryLevel,
+    charging: result.charging,
+    source: result.source
+  });
+  return result;
+}
+
 function mobileStatePayload(app) {
   const workers = mobileWorkersForApp(app);
   return {
@@ -2949,8 +3328,109 @@ function mobileStatePayload(app) {
     app: publicApp(app),
     selectedTargetDeviceId: app.targetDeviceId || "",
     selectedWorker: selectedMobileWorker(app, workers),
+    deviceStatus: readMobileDeviceStatus(app),
     workers
   };
+}
+
+function mobileProofPath(appId) {
+  const id = sanitizeRabiLinkId(appId, "");
+  if (!id) return "";
+  return path.join(mobileProofDir, `${id}.jsonl`);
+}
+
+function normalizeMobileProofType(value) {
+  const type = stringValue(value).toLowerCase().replace(/[^a-z0-9_.:-]+/g, "-").replace(/^-+|-+$/g, "");
+  return type.slice(0, 80) || "runtime";
+}
+
+function normalizeMobileProofDetail(value, maxLength = 220) {
+  return textPreview(stringValue(value), maxLength);
+}
+
+function normalizeMobileProofBody(body = {}) {
+  const device = body?.device && typeof body.device === "object" && !Array.isArray(body.device) ? body.device : {};
+  const runtime = body?.runtime && typeof body.runtime === "object" && !Array.isArray(body.runtime) ? body.runtime : {};
+  return {
+    event: normalizeMobileProofType(body?.event || body?.type),
+    detail: normalizeMobileProofDetail(body?.detail || body?.summary || ""),
+    routeId: normalizeMobileProofDetail(body?.routeId || runtime.routeId || "", 120),
+    panelId: normalizeMobileProofDetail(body?.panelId || runtime.panelId || "", 120),
+    action: normalizeMobileProofDetail(body?.action || runtime.action || "", 120),
+    status: normalizeMobileProofDetail(body?.status || runtime.status || "", 80),
+    device: {
+      serialNumber: normalizeMobileProofDetail(device.serialNumber || body?.serialNumber || "", 120),
+      userAgent: normalizeMobileProofDetail(device.userAgent || body?.userAgent || "", 220),
+      model: normalizeMobileProofDetail(device.model || "", 120),
+      platform: normalizeMobileProofDetail(device.platform || "", 120)
+    },
+    runtime: {
+      appName: normalizeMobileProofDetail(runtime.appName || body?.appName || "RabiLink AIUI", 120),
+      appVersion: normalizeMobileProofDetail(runtime.appVersion || body?.appVersion || "", 80),
+      aiuiVersion: normalizeMobileProofDetail(runtime.aiuiVersion || body?.aiuiVersion || "", 80)
+    }
+  };
+}
+
+function writeMobileProof(app, req, body = {}) {
+  const workers = mobileWorkersForApp(app);
+  const selected = selectedMobileWorker(app, workers);
+  const normalized = normalizeMobileProofBody(body);
+  const row = {
+    id: randomId("proof"),
+    time: nowIso(),
+    appId: app.id,
+    appName: app.name || "",
+    event: normalized.event,
+    detail: normalized.detail,
+    routeId: normalized.routeId,
+    panelId: normalized.panelId,
+    action: normalized.action,
+    status: normalized.status,
+    selectedTargetDeviceId: app.targetDeviceId || "",
+    selectedWorker: selected ? {
+      id: selected.id || "",
+      guid: selected.guid || "",
+      name: selected.name || "",
+      online: !!selected.online
+    } : null,
+    device: {
+      ...normalized.device,
+      userAgent: normalized.device.userAgent || textPreview(req.headers["user-agent"] || "", 220)
+    },
+    runtime: normalized.runtime
+  };
+  const filePath = mobileProofPath(app.id);
+  if (filePath) fs.appendFile(filePath, `${JSON.stringify(row)}\n`, () => {});
+  writeEvent("mobile_runtime_proof", row);
+  writeAccountLogForApp(app, "mobile_runtime_proof", {
+    title: "AIUI 运行证明",
+    detail: row.detail || row.event,
+    workerId: row.selectedWorker?.id || row.selectedTargetDeviceId || "",
+    workerName: row.selectedWorker?.name || "",
+    status: row.status || row.event,
+    textPreview: `${row.runtime.appName || "RabiLink AIUI"} ${row.event}`
+  });
+  return row;
+}
+
+function readMobileProofs(app, limit = 20) {
+  const filePath = mobileProofPath(app?.id || "");
+  if (!filePath || !fs.existsSync(filePath)) return [];
+  const max = clamp(Number(limit || 20), 1, 100);
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(-max)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .reverse();
 }
 
 function patchMobileAppTarget(app, targetDeviceId) {
@@ -3020,6 +3500,75 @@ async function mobileProxyJson(app, worker, method, localPath, body = null) {
   return { statusCode: finalRequest.response.statusCode || 200, body: parsed };
 }
 
+function normalizeMobileWebguiPath(value) {
+  const raw = stringValue(value);
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\") || /^https?:\/\//i.test(raw)) {
+    const error = new Error("Invalid PC WebGUI path.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return raw;
+}
+
+function mobileWebguiPathAllowed(method, rawPath) {
+  const upperMethod = String(method || "GET").toUpperCase();
+  const pathname = rawPath.split("?")[0] || "/";
+  if (upperMethod === "GET") {
+    return pathname === "/gateways"
+      || pathname === "/manager-config"
+      || pathname === "/meta"
+      || pathname === "/network-options"
+      || pathname === "/api/gateways"
+      || pathname === "/api/scan/agents"
+      || pathname === "/api/scan/message-adapters"
+      || pathname === "/api/agent/copilot-status"
+      || pathname === "/api/remote-agent/devices";
+  }
+  if (upperMethod === "POST") {
+    return pathname === "/gateways"
+      || pathname === "/manager-config"
+      || pathname === "/manager/start"
+      || pathname === "/manager/shutdown"
+      || pathname === "/reload"
+      || pathname === "/open-config-file"
+      || /^\/gateways\/[^/]+\/(?:start|stop|restart|delete|manual-trigger)$/.test(pathname)
+      || pathname === "/api/message/napcat-health"
+      || pathname === "/api/message/napcat-configure-onebot"
+      || pathname === "/api/message/napcat-repair-all"
+      || pathname === "/api/message/napcat-add"
+      || pathname === "/api/message/napcat-launch"
+      || pathname === "/api/message/napcat-restart"
+      || pathname === "/api/message/napcat-remove"
+      || pathname === "/api/agent/copilot-install"
+      || pathname === "/api/agent/copilot-login"
+      || pathname === "/api/agent/marvis-open"
+      || pathname === "/api/agent/astrbot-login-test"
+      || pathname === "/api/deploy-astrbot-adapter"
+      || pathname === "/api/remote-agent/scan"
+      || pathname === "/api/remote-agent/connect"
+      || pathname === "/api/remote-agent/disconnect";
+  }
+  if (upperMethod === "PATCH") {
+    return pathname === "/api/rabi/identity";
+  }
+  return false;
+}
+
+async function handleMobileWebguiApi(req, url, res, body, app) {
+  const method = req.method === "GET" ? "GET" : stringValue(body?.method || req.method || "POST").toUpperCase();
+  const localPath = normalizeMobileWebguiPath(req.method === "GET" ? url.searchParams.get("path") : body?.path);
+  if (!mobileWebguiPathAllowed(method, localPath)) {
+    return sendJson(res, 403, {
+      code: -1,
+      ok: false,
+      message: `PC WebGUI path is not allowed for mobile AIUI: ${method} ${localPath}`
+    });
+  }
+  const worker = mobileWorkerTarget(app, url, body);
+  const result = await mobileProxyJson(app, worker, method, localPath, method === "GET" ? null : body?.body ?? {});
+  return sendJson(res, result.statusCode, result.body);
+}
+
 async function handleMobileApi(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
@@ -3028,9 +3577,27 @@ async function handleMobileApi(req, url, res, body) {
   if (req.method === "GET" && url.pathname === "/api/rabilink/mobile/state") {
     return sendJson(res, 200, mobileStatePayload(app));
   }
+  if (req.method === "POST" && url.pathname === "/api/rabilink/mobile/device-status") {
+    const deviceStatus = writeMobileDeviceStatus(app, body || {});
+    return sendJson(res, 200, { code: 0, ok: true, deviceStatus });
+  }
+  if (req.method === "GET" && url.pathname === "/api/rabilink/mobile/proofs") {
+    return sendJson(res, 200, {
+      code: 0,
+      ok: true,
+      proofs: readMobileProofs(app, url.searchParams.get("limit") || 20)
+    });
+  }
+  if (req.method === "POST" && url.pathname === "/api/rabilink/mobile/proof") {
+    const proof = writeMobileProof(app, req, body || {});
+    return sendJson(res, 200, { code: 0, ok: true, proof });
+  }
   if ((req.method === "PATCH" || req.method === "POST") && url.pathname === "/api/rabilink/mobile/target") {
     const updated = patchMobileAppTarget(app, body?.targetDeviceId || body?.rabiGuid || "");
     return sendJson(res, 200, mobileStatePayload(updated));
+  }
+  if (url.pathname === "/api/rabilink/mobile/webgui") {
+    return await handleMobileWebguiApi(req, url, res, body, app);
   }
 
   const routeMatch = url.pathname.match(/^\/api\/rabilink\/mobile\/routes(?:\/([^/]+)(?:\/(agent-options|agent-binding))?)?$/);
@@ -3112,6 +3679,9 @@ async function handleAdminApi(req, url, res) {
   }
   const auth = authorizeAdmin(req, url, body);
   if (!auth.ok) return sendJson(res, 401, { code: -1, ok: false, message: "Unauthorized" });
+  if (req.method === "GET" && apiPath === "/logs/stream") {
+    return handleAccountLogStream(req, res, auth.account);
+  }
   if (req.method === "POST" && apiPath === "/apps") {
     const app = createAppForAccount(auth.account, body);
     return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken: true }) });
@@ -3185,7 +3755,11 @@ const server = http.createServer(async (req, res) => {
     }
     const body = req.method === "GET" ? {} : await readBody(req);
     if (url.pathname === "/api/rabilink/mobile/state"
+      || url.pathname === "/api/rabilink/mobile/device-status"
+      || url.pathname === "/api/rabilink/mobile/proof"
+      || url.pathname === "/api/rabilink/mobile/proofs"
       || url.pathname === "/api/rabilink/mobile/target"
+      || url.pathname === "/api/rabilink/mobile/webgui"
       || url.pathname.startsWith("/api/rabilink/mobile/routes")) {
       return await handleMobileApi(req, url, res, body);
     }
@@ -3194,6 +3768,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && (url.pathname === "/rokid/rabilink/tasks" || url.pathname === "/api/rokid/rabilink/tasks")) {
       return handleRokidCreateTask(req, url, res, body);
+    }
+    if (req.method === "POST" && (url.pathname === "/rokid/rabilink/input" || url.pathname === "/api/rokid/rabilink/input")) {
+      return handleRokidInput(req, url, res, body);
     }
     if (req.method === "GET" && /^\/rokid\/rabilink\/tasks\/[^/]+$/.test(url.pathname)) {
       return handleRokidTaskRead(req, url, res, body);
@@ -3206,6 +3783,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/worker/tasks") {
       return await handleWorkerTasks(req, url, res, body);
+    }
+    if (req.method === "POST" && url.pathname === "/worker/messages") {
+      return handleWorkerMessageAppend(req, url, res, body);
     }
     if (req.method === "GET" && url.pathname === "/worker/webgui-requests") {
       return await handleWorkerWebguiRequests(req, url, res, body);

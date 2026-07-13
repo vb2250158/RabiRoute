@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import DocsFlowDiagram from "../components/docs/DocsFlowDiagram.vue";
+import RabiLinkQuickStartGuide from "../components/docs/RabiLinkQuickStartGuide.vue";
+import {
+  rabiLinkAiuiDocPages,
+  type DocFlowDiagram,
+  type RabiLinkQuickStartGuide as RabiLinkQuickStartGuideData
+} from "../docs/rabilinkAiuiDocs";
 
 type DocFeature = {
   name: string;
@@ -31,10 +38,23 @@ type DocPage = {
   bullets: string[];
   featureNames?: string[];
   table?: "boundaries" | "runtimeData" | "editEntrypoints";
+  diagram?: DocFlowDiagram;
+  quickStart?: RabiLinkQuickStartGuideData;
 };
 
 const query = ref("");
 const activePageId = ref("overview");
+const DOC_SECTION_STATE_KEY = "rabiroute:webgui:docs-section-state";
+
+function readSectionState(): Record<string, boolean> {
+  try {
+    return JSON.parse(window.localStorage.getItem(DOC_SECTION_STATE_KEY) || "{}") as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+const expandedSections = ref<Record<string, boolean>>(readSectionState());
 
 const boundaryRules = [
   "没有智能命中人格。route 通过 agentRoleId 固定绑定人格；createRouteDecision 只在当前 route profile 的 notificationRules 内匹配规则。",
@@ -340,6 +360,7 @@ const docPages: DocPage[] = [
     bullets: [],
     table: "boundaries"
   },
+  ...rabiLinkAiuiDocPages,
   {
     id: "route-config",
     title: "Route 配置",
@@ -458,8 +479,28 @@ const docSections = computed(() => {
     if (!result.has(page.section)) result.set(page.section, []);
     result.get(page.section)?.push(page);
   }
-  return [...result.entries()].map(([title, pages]) => ({ title, pages }));
+  return [...result.entries()].map(([title, pages]) => ({ title, pages, landingPage: pages[0] }));
 });
+
+function isSectionExpanded(sectionTitle: string): boolean {
+  return expandedSections.value[sectionTitle] ?? true;
+}
+
+function setSectionExpanded(sectionTitle: string, expanded: boolean): void {
+  expandedSections.value = {
+    ...expandedSections.value,
+    [sectionTitle]: expanded
+  };
+  try {
+    window.localStorage.setItem(DOC_SECTION_STATE_KEY, JSON.stringify(expandedSections.value));
+  } catch {
+    // 本地存储不可用时仍保留当前会话状态。
+  }
+}
+
+function toggleSection(sectionTitle: string): void {
+  setSectionExpanded(sectionTitle, !isSectionExpanded(sectionTitle));
+}
 
 function featureMatches(item: DocFeature, tokens: string[]): boolean {
   if (tokens.length === 0) return true;
@@ -491,6 +532,19 @@ function pageMatches(page: DocPage, tokens: string[]): boolean {
     page.subtitle,
     page.summary,
     page.bullets.join(" "),
+    page.diagram?.title ?? "",
+    page.diagram?.caption ?? "",
+    page.diagram?.lanes.flatMap((lane) => [
+      lane.label,
+      ...lane.steps.flatMap((step) => [step.title, step.detail])
+    ]).join(" ") ?? "",
+    page.quickStart?.phases.flatMap((phase) => [
+      phase.title,
+      phase.note,
+      ...phase.steps.flatMap((step) => [step.title, step.instruction, step.completeWhen])
+    ]).join(" ") ?? "",
+    page.quickStart?.voiceCommands.join(" ") ?? "",
+    page.quickStart?.securityNotes.join(" ") ?? "",
     pageFeatureText
   ].join(" ").toLowerCase();
   return tokens.every((token) => haystack.includes(token));
@@ -520,60 +574,61 @@ const selectedPageFeatures = computed(() => {
 
 const matchingPageCount = computed(() => visibleDocSections.value.reduce((sum, section) => sum + section.pages.length, 0));
 
+const pageOutline = computed(() => {
+  const items = [{ id: "doc-introduction", label: "概述" }];
+  if (selectedPage.value.quickStart) items.push({ id: "doc-quick-start", label: "你要做什么" });
+  if (selectedPage.value.diagram) items.push({ id: "doc-flow-diagram", label: "流程图" });
+  if (selectedPage.value.bullets.length) items.push({ id: "doc-key-points", label: "关键说明" });
+  if (selectedPage.value.table === "boundaries") items.push({ id: "doc-boundaries", label: "项目边界" });
+  if (selectedPage.value.featureNames?.length) items.push({ id: "doc-features", label: "相关功能" });
+  if (selectedPage.value.id === "overview" || selectedPage.value.table === "runtimeData") {
+    items.push({ id: "doc-runtime-data", label: "运行数据" });
+  }
+  if (selectedPage.value.id === "overview" || selectedPage.value.table === "editEntrypoints") {
+    items.push({ id: "doc-editing", label: "修改入口" });
+  }
+  return items;
+});
+
 function selectPage(pageId: string): void {
   activePageId.value = pageId;
+}
+
+function selectSection(sectionTitle: string, landingPageId: string): void {
+  setSectionExpanded(sectionTitle, true);
+  selectPage(landingPageId);
 }
 </script>
 
 <template>
   <div class="page-shell docs-page">
-    <v-card class="app-card glass-card docs-hero">
+    <header class="docs-header">
       <div>
         <div class="eyebrow">RabiRoute Project Manual</div>
-        <h1 class="docs-hero-title">项目功能文档</h1>
-        <div class="docs-hero-copy">
-          面向产品设计、GUI 改造、代码维护和排障的通用功能手册。这个页面随 RibiWebGUI 一起部署，RabiLink 远程 WebGUI 也能访问。
-        </div>
+        <h1 class="docs-hero-title">项目文档</h1>
       </div>
-      <div class="docs-hero-tools">
-        <v-text-field
-          v-model="query"
-          density="comfortable"
-          prepend-inner-icon="mdi-magnify"
-          label="搜索功能、代码路径、API 或关键词"
-          placeholder="例如：agentRoleId、RabiLink、Outbox、viewedAt、manual-trigger"
-          hide-details
-          clearable
-        />
-        <div class="docs-count">{{ matchingPageCount }} / {{ docPages.length }} 页</div>
+      <div class="docs-flow" aria-label="RabiRoute 主链路">
+        <span>消息入口</span><v-icon size="16">mdi-chevron-right</v-icon>
+        <span>路由判断</span><v-icon size="16">mdi-chevron-right</v-icon>
+        <span>AgentPacket</span><v-icon size="16">mdi-chevron-right</v-icon>
+        <span>安全回传</span>
       </div>
-    </v-card>
-
-    <v-card class="app-card glass-card section-card">
-      <div class="docs-flow">
-        <span>Message Adapter</span>
-        <v-icon size="18">mdi-chevron-right</v-icon>
-        <span>Event Store</span>
-        <v-icon size="18">mdi-chevron-right</v-icon>
-        <span>RouteDecision</span>
-        <v-icon size="18">mdi-chevron-right</v-icon>
-        <span>AgentPacket</span>
-        <v-icon size="18">mdi-chevron-right</v-icon>
-        <span>Agent Adapter</span>
-        <v-icon size="18">mdi-chevron-right</v-icon>
-        <span>Outbox / Reply</span>
-      </div>
-    </v-card>
+    </header>
 
     <div class="docs-layout">
-      <aside class="docs-rail">
-        <v-card class="app-card glass-card section-card">
-          <div class="section-title-row compact-row">
-            <div>
-              <div class="section-title">目录</div>
-              <div class="section-note">点击切换文档页</div>
-            </div>
-          </div>
+      <aside class="docs-rail" aria-label="文档目录">
+        <div class="docs-rail-inner">
+          <v-text-field
+            v-model="query"
+            class="docs-search"
+            density="compact"
+            prepend-inner-icon="mdi-magnify"
+            placeholder="搜索文档"
+            aria-label="搜索功能、代码路径、API 或关键词"
+            hide-details
+            clearable
+          />
+          <div class="docs-count">{{ matchingPageCount }} / {{ docPages.length }} 页</div>
           <div v-if="visibleDocSections.length === 0" class="empty-state compact-empty">
             <div>
               <strong>没有匹配页面</strong>
@@ -582,63 +637,88 @@ function selectPage(pageId: string): void {
           </div>
           <div v-else class="docs-tree">
             <section v-for="section in visibleDocSections" :key="section.title" class="docs-tree-section">
-              <div class="docs-tree-title">{{ section.title }}</div>
-              <button
-                v-for="page in section.pages"
-                :key="page.id"
-                class="docs-page-button"
-                :class="{ active: selectedPage.id === page.id }"
-                type="button"
-                @click="selectPage(page.id)"
-              >
-                <span>{{ page.title }}</span>
-                <small>{{ page.subtitle }}</small>
-              </button>
+              <div class="docs-tree-group" :class="{ active: section.pages.some(page => page.id === selectedPage.id) }">
+                <button
+                  class="docs-tree-group-link"
+                  type="button"
+                  @click="selectSection(section.title, section.landingPage.id)"
+                >
+                  {{ section.title }}
+                </button>
+                <button
+                  class="docs-tree-group-toggle"
+                  type="button"
+                  :aria-label="`${isSectionExpanded(section.title) ? '折叠' : '展开'}${section.title}`"
+                  :aria-expanded="isSectionExpanded(section.title)"
+                  @click="toggleSection(section.title)"
+                >
+                  <v-icon size="17">{{ isSectionExpanded(section.title) ? "mdi-chevron-down" : "mdi-chevron-right" }}</v-icon>
+                </button>
+              </div>
+              <div v-show="isSectionExpanded(section.title) || searchTokens.length > 0" class="docs-tree-children">
+                <button
+                  v-for="page in section.pages"
+                  :key="page.id"
+                  class="docs-page-button"
+                  :class="{ active: selectedPage.id === page.id }"
+                  type="button"
+                  @click="selectPage(page.id)"
+                >
+                  <span>{{ page.title }}</span>
+                </button>
+              </div>
             </section>
           </div>
-        </v-card>
+        </div>
       </aside>
 
-      <div class="docs-main">
-        <v-card class="app-card glass-card section-card">
-          <div class="section-title-row">
-            <div>
-              <div class="section-title">{{ selectedPage.title }}</div>
-              <div class="section-note">{{ selectedPage.subtitle }}</div>
-            </div>
-            <v-chip color="secondary" variant="tonal">{{ selectedPage.section }}</v-chip>
-          </div>
-          <div class="docs-page-copy">{{ selectedPage.summary }}</div>
-          <div v-if="selectedPage.bullets.length" class="docs-rule-grid mt-4">
+      <main class="docs-main">
+        <article class="docs-article">
+          <nav class="docs-breadcrumb" aria-label="面包屑">
+            <span>项目文档</span><v-icon size="15">mdi-chevron-right</v-icon><span>{{ selectedPage.section }}</span>
+          </nav>
+
+          <section id="doc-introduction" class="docs-article-section docs-introduction">
+            <v-chip size="small" color="secondary" variant="tonal">{{ selectedPage.section }}</v-chip>
+            <h2>{{ selectedPage.title }}</h2>
+            <p class="docs-lead">{{ selectedPage.subtitle }}</p>
+            <p>{{ selectedPage.summary }}</p>
+          </section>
+
+          <section v-if="selectedPage.quickStart" id="doc-quick-start" class="docs-article-section">
+            <h3>你要做什么</h3>
+            <RabiLinkQuickStartGuide :guide="selectedPage.quickStart" />
+          </section>
+
+          <section v-if="selectedPage.diagram" id="doc-flow-diagram" class="docs-article-section">
+            <h3>流程图</h3>
+            <DocsFlowDiagram :diagram="selectedPage.diagram" />
+          </section>
+
+          <section v-if="selectedPage.bullets.length" id="doc-key-points" class="docs-article-section">
+            <h3>关键说明</h3>
+            <div class="docs-rule-grid">
             <div v-for="rule in selectedPage.bullets" :key="rule" class="docs-rule-card">
               <v-icon color="secondary" size="18">mdi-bookmark-check-outline</v-icon>
               <span>{{ rule }}</span>
             </div>
           </div>
-        </v-card>
+          </section>
 
-        <v-card v-if="selectedPage.table === 'boundaries'" class="app-card glass-card section-card">
-          <div class="section-title-row compact-row">
-            <div>
-              <div class="section-title">项目边界</div>
-              <div class="section-note">这些规则是功能设计和实现的红线。</div>
-            </div>
-          </div>
+          <section v-if="selectedPage.table === 'boundaries'" id="doc-boundaries" class="docs-article-section">
+          <h3>项目边界</h3>
+          <p>这些规则是功能设计和实现的红线。</p>
           <div class="docs-rule-grid">
             <div v-for="rule in boundaryRules" :key="rule" class="docs-rule-card">
               <v-icon color="secondary" size="18">mdi-check-decagram-outline</v-icon>
               <span>{{ rule }}</span>
             </div>
           </div>
-        </v-card>
+          </section>
 
-        <v-card v-if="selectedPageFeatures.length > 0 || selectedPage.featureNames?.length" class="app-card glass-card section-card">
-          <div class="section-title-row">
-            <div>
-              <div class="section-title">相关功能</div>
-              <div class="section-note">当前页面涉及的真源、消费点、生效时机和副作用。</div>
-            </div>
-          </div>
+          <section v-if="selectedPageFeatures.length > 0 || selectedPage.featureNames?.length" id="doc-features" class="docs-article-section">
+          <h3>相关功能</h3>
+          <p>当前页面涉及的真源、消费点、生效时机和副作用。</p>
 
           <div v-if="selectedPageFeatures.length === 0" class="empty-state compact-empty">
             <div>
@@ -683,19 +763,15 @@ function selectPage(pageId: string): void {
               </div>
             </article>
           </div>
-        </v-card>
+          </section>
 
-        <div
+          <div
           v-if="selectedPage.id === 'overview' || selectedPage.table === 'runtimeData' || selectedPage.table === 'editEntrypoints'"
-          class="docs-two-column"
+          class="docs-reference-sections"
         >
-          <v-card v-if="selectedPage.id === 'overview' || selectedPage.table === 'runtimeData'" class="app-card glass-card section-card">
-            <div class="section-title-row compact-row">
-              <div>
-                <div class="section-title">运行数据</div>
-                <div class="section-note">查日志和副作用时先看。</div>
-              </div>
-            </div>
+          <section v-if="selectedPage.id === 'overview' || selectedPage.table === 'runtimeData'" id="doc-runtime-data" class="docs-article-section">
+            <h3>运行数据</h3>
+            <p>查日志和副作用时先看。</p>
             <div class="docs-table-list">
               <div v-for="row in runtimeData" :key="row.name" class="docs-table-card">
                 <strong>{{ row.name }}</strong>
@@ -703,15 +779,11 @@ function selectPage(pageId: string): void {
                 <span>{{ row.writer }} · {{ row.usage }}</span>
               </div>
             </div>
-          </v-card>
+          </section>
 
-          <v-card v-if="selectedPage.id === 'overview' || selectedPage.table === 'editEntrypoints'" class="app-card glass-card section-card">
-            <div class="section-title-row compact-row">
-              <div>
-                <div class="section-title">常见修改入口</div>
-                <div class="section-note">改代码前先定位模块。</div>
-              </div>
-            </div>
+          <section v-if="selectedPage.id === 'overview' || selectedPage.table === 'editEntrypoints'" id="doc-editing" class="docs-article-section">
+            <h3>常见修改入口</h3>
+            <p>改代码前先定位模块。</p>
             <div class="docs-table-list">
               <div v-for="row in editEntrypoints" :key="row.need" class="docs-table-card">
                 <strong>{{ row.need }}</strong>
@@ -719,9 +791,17 @@ function selectPage(pageId: string): void {
                 <span>{{ row.note }}</span>
               </div>
             </div>
-          </v-card>
+          </section>
+          </div>
+        </article>
+      </main>
+
+      <aside class="docs-outline" aria-label="本页目录">
+        <div class="docs-outline-inner">
+          <div class="docs-outline-title">本页目录</div>
+          <a v-for="item in pageOutline" :key="item.id" :href="`#${item.id}`">{{ item.label }}</a>
         </div>
-      </div>
+      </aside>
     </div>
   </div>
 </template>

@@ -12,6 +12,7 @@
 - `data/route/voice-chat/adapterConfig.json`：FenneNote/Webhook 输入到 FenneNote 播放请求转发的 `voice_chat` pipeline preset 示例。
 - `data/roles/Rabi/`：默认路由配置配套的唯一 RabiRoute 兔娘看板娘与陪伴型成长人格，包含 `growth.md`、`skills.md`、`prompts/` 和备份用 `old/`。
 - `data/roles/Rabi/personaConfig.json`：默认人格消息模板规则，包含 Rabi 使用的 route kind、规则、模板和投递时附带的最近消息数量。
+- `rabilink-aiui/`：Rokid AIUI 眼镜端消息端，提供“连接对话”和“配置助手”两种模式；通过 Relay 持续接收普通回复与主动消息，并调用已绑定 PC Rabi 的配置接口。
 - `.env.example`：可选的环境变量样板，只用于不走 manager、直接用 env 启动单个 gateway 的场景。
 - `send-webhook-demo.mjs` / `send-webhook-demo.py`：向通用 Webhook 入口发送一条测试消息的 Node.js / Python 标准库示例。
 

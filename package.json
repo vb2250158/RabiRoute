@@ -20,6 +20,7 @@
     "relay:rabilink:openapi:check": "node scripts/check-rabilink-openapi.mjs",
     "relay:rabilink:test:public": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RabiLinkRelayPublic.ps1 -SkipQueueSmoke",
     "relay:rabilink:test:public:custom": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RabiLinkRelayPublic.ps1",
+    "relay:rabilink:test:shared-state": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RabiLinkRelaySharedState.ps1",
     "relay:rabilink:worker:check": "node --check scripts/rabilink-relay-cloudflare-worker.mjs",
     "relay:rabilink:worker:deploy": "npx wrangler deploy --config wrangler.rabilink-relay.toml",
     "send:onebot": "node scripts/send-onebot-message.mjs"

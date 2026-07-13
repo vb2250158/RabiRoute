@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "pages/home/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "RabiLink AIUI",
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#000000",
+    "navigationBarTextStyle": "white"
+  },
+  "rabiLink": {
+    "relayBaseUrl": "https://your-relay.example.com",
+    "token": ""
+  }
+}

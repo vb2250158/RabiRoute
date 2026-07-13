@@ -1,10 +1,11 @@
 {
   "id": "plan-rabiroute-adapter-expansion",
   "title": "保持消息端和处理端适配器解耦扩展",
+  "focus": "消息端与处理端适配器解耦",
   "status": "进行中",
   "priority": "medium",
   "kind": "architecture",
-  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端；WeCom 作为独立企业微信智能机器人 WebSocket 消息端，使用 wecom_message route kind、wecom_chat pipeline preset、wecom-messages.jsonl 和统一 outbox 回传，不复用 webhook 或 NapCat。RabiLink 作为 Rokid/灵珠桥接消息端，使用 rabilink route kind、电脑端 worker 直连公网 Relay、RabiLink 专用回复队列和全局 getRabiLinkMessages(after) 下行消息流，不再复用 voice_transcript 语义；Relay server 的 /manage 管理账号和 RabiLink 应用 token，task/worker/messages 按 app 隔离，旧公共 token 不再参与 RabiLink 任务鉴权，任务必须发送到该应用当前选择的 Rabi PC；公开/模板插件使用 AGENT_TOKEN OpenAPI，把 token 作为智能体工具参数绑定，避免共享发布者插件级 token。remoteAgent 作为下游远端设备入口，结果仍回到本机人格线程。remoteAgent 任务已支持随消息传文件和回传产物文件，主控端保存回传文件到 data/remote-agent-files/<taskId>/。",
+  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端。WeCom 使用独立 route kind 和统一 outbox。RabiLink 眼镜端向输入事件接口发布原生 ASR 文本，不依赖内部 taskId；普通回复与主动消息共用应用级持续下行流，主动生产者仍经过 RabiRoute 输出门。Relay 的账号、应用 token、worker 和消息按 app 隔离。remoteAgent 仍是下游远端设备入口，结果回到本机人格线程，文件产物保存在运行期目录。",
   "nextAction": "新增聊天平台时优先扩展 src/adapters/、src/routing/ 和 src/outbox.ts 的统一边界，新增处理端时优先扩展 src/agentAdapters/；继续区分远端 Agent 设备入口、平台消息端和真正的处理端，避免让某个协议反向定义项目边界",
   "waitingFor": "",
   "project": {
@@ -19,6 +20,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-08T16:40:00+08:00",
-  "keywords": ["message adapter", "agent adapter", "wecom", "企业微信", "wecom_message", "rabilink", "RabiLink", "taskId", "getRabiLinkMessages", "应用 token", "AGENT_TOKEN", "outbox", "remoteAgent", "远端 Agent", "文件传输", "NapCat", "Codex", "解耦", "扩展"]
+  "updatedAt": "2026-07-13T00:00:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "wecom", "rabilink", "RabiLink", "输入事件", "持续消息流", "主动投递", "应用 token", "outbox", "remoteAgent", "远端 Agent", "文件传输", "NapCat", "解耦", "扩展"]
 }

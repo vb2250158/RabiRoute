@@ -24,6 +24,7 @@ import com.rabiroute.sdk.RabiInstance
 import com.rabiroute.sdk.RabiLinkPc
 import com.rabiroute.sdk.RabiRouteInfo
 import com.rabiroute.sdk.RabiRouteSdk
+import com.rabi.link.modules.rokid.RokidDeviceStatusSyncService
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -69,6 +70,9 @@ class MainActivity : Activity() {
         buildUi()
         refreshStatus("等待扫描")
         appendLog("RabiLink 已启动。主链路已迁移为电脑端 RabiLink worker 直连 Relay。")
+        if (RabiLinkRelaySettings.load(this).let { it.configured && it.statusSyncEnabled }) {
+            RokidDeviceStatusSyncService.start(this)
+        }
     }
 
     override fun onResume() {
@@ -125,8 +129,13 @@ class MainActivity : Activity() {
         card.addView(cardTitle("1. 连接 RabiLink 服务器"))
         card.addView(cardText("手机只保存服务器地址和应用 token。服务器根据 token 找到已连接的 PC Rabi，再通过 worker 修改对应 PC 的本机 Manager 配置。"))
 
-        relayUrlInput = input("https://rabi.example.com")
-        relayTokenInput = input("粘贴 RabiLink 应用 token")
+        val savedRelay = RabiLinkRelaySettings.load(this)
+        relayUrlInput = input("https://rabi.example.com").apply {
+            if (savedRelay.baseUrl.isNotBlank()) setText(savedRelay.baseUrl)
+        }
+        relayTokenInput = input("粘贴 RabiLink 应用 token").apply {
+            if (savedRelay.token.isNotBlank()) setText(savedRelay.token)
+        }
         card.addView(label("服务器 URL"))
         card.addView(relayUrlInput, fullWidth(0, 0, 0, 8))
         card.addView(label("应用 token"))
@@ -255,6 +264,8 @@ class MainActivity : Activity() {
         runAsync(
             work = { sdk.getMobileState(relayBaseUrl(), token) },
             success = { state ->
+                RabiLinkRelaySettings.save(this, relayBaseUrl(), token)
+                RokidDeviceStatusSyncService.start(this)
                 updateServerState(state)
                 appendLog("服务器已连接：${state.appName.ifBlank { state.appId }}，${state.workers.size} 台 PC Rabi。")
                 refreshStatus("服务器已连接")
