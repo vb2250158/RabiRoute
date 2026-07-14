@@ -1,5 +1,21 @@
 # 排障
 
+## QQ 合并转发只显示转发 ID 或 `[object Object]`
+
+新版 RabiRoute 收到 NapCat 的 `forward` 消息段或 `[CQ:forward,...]` 后，会使用当前 NapCat 实例的 OneBot HTTP Server 调用 `get_forward_msg`。查询成功后：
+
+- 外层原始消息保存在 `originalRawMessage`。
+- 展开的聊天内容写入 `rawMessage`，因此历史搜索、最近消息和 AgentPacket 都能直接看到。
+- 结构化节点写入 `forwardedMessages`，包含转发 ID、发送者、时间、消息 ID和规范化文本/媒体标记。
+- 图片、视频、语音和文件会保留类型、文件名、摘要或 URL；能否进一步下载仍取决于 NapCat 返回字段和 URL 有效期。
+
+查询失败时，外层消息仍会正常落盘，并在 `napcat-adapter.log.jsonl` 写入 `forward_message_resolve_error`。排查顺序：
+
+1. 确认当前路由的 NapCat HTTP Server 在线且端口正确。
+2. 确认 OneBot `get_forward_msg` 对该转发 ID 返回成功。
+3. 检查转发记录是否已过期，或是否来自当前 QQ 无权读取的会话。
+4. 查看 `forward_message_resolved` 日志中的转发 ID和节点数量。
+
 ## NapCat 已连接，但处理端没有收到消息
 
 先看 `data/route/<配置名>/`：
@@ -67,6 +83,18 @@ npm run check:config
 健康巡检会把这类状态标成错误，并显示待补投数量、下一次重试时间和 `lastCodexAppVisibility*` 可见性诊断。自动唤醒可用 `CODEX_DESKTOP_IPC_WAKE_ON_NO_CLIENT=0` 关闭；no-client app-server 兜底可用 `CODEX_DESKTOP_IPC_FALLBACK_ON_NO_CLIENT=0` 关闭。Codex App 可见性保障默认启用，可用 `CODEX_APP_VISIBILITY_NOTIFY=0` 关闭；如 WindowsApps 路径不可读，可用 `CODEX_APP_EXE_PATH` 指向 `C:\Program Files\WindowsApps\OpenAI.Codex_*\app\Codex.exe`。Windows 可能拒绝后台进程抢前台，这种情况下仍可以在 Codex Desktop 手动打开目标线程，让 Desktop IPC 客户端重新注册。
 
 RabiRoute 进程本身不能直接调用 `codex_app.send_message_to_thread` 这类 Codex 连接器工具；这些工具属于当前 Codex 会话环境，不是 RabiRoute Node 运行时的稳定 API。这里使用的是 Codex app-server 的 `turn/start` 方法，不依赖目标线程已经有已加载的 Desktop 前端客户端。
+
+## Agent 回合里没有 `codex_app__*` 线程工具
+
+先确认当前投递状态。如果 `agentStates.codex.lastDeliveryChannel=app-server-fallback` 且 `lastDeliveryVisibility=desktop-client-not-loaded`，说明该回合由 app-server 启动，没有经过 Desktop 宿主的连接器能力注入。此时反复修改提示词或搜索 `ALL_TOOLS` 不会让工具出现。
+
+后台 Agent 应调用本机线程桥：
+
+```http
+POST http://127.0.0.1:8790/api/agent/threads
+```
+
+支持 `list`、`read`、`create`、`send`。详细请求见 `docs/rabi-agent-interfaces.md`。该接口只允许使用当前 Route 已配置的 Codex 工作区；不要用 multi-agent 子 Agent 冒充正式线程，也不要继续把已就绪事项永久标成 `pending_thread_tool`。
 
 ## macOS 上 `connect ENOENT /tmp/codex-ipc/...`
 

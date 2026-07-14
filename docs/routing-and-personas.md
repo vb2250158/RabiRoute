@@ -17,6 +17,7 @@ RabiRoute 现在把路由配置和路由人格分开：
 ├── personaConfig.json
 ├── growth.md
 ├── skills.md
+├── skills/
 └── prompts/
 ```
 
@@ -27,7 +28,7 @@ RabiRoute 现在把路由配置和路由人格分开：
 - `examples/data/roles/Rabi/`
 - `examples/data/route/main/adapterConfig.json`
 
-Rabi 示例是 RabiRoute 默认的兔娘看板娘与陪伴型成长人格样例，主要演示 `persona.md`、`personaConfig.json`、`growth.md`、`skills.md`、`prompts/` 和独立路由配置如何配合。
+Rabi 示例是 RabiRoute 默认的兔娘看板娘与陪伴型成长人格样例，主要演示 `persona.md`、`personaConfig.json`、`growth.md`、`skills.md`、`skills/`、`prompts/` 和独立路由配置如何配合。其中 `skills/one-plan-one-task-tracking.md` 是不绑定消息平台或具体项目的通用范例：一旦建立任何计划，无论是旅游、调研、设计、实施还是排障，都为它绑定一个正式会话任务并持续追踪到终态。
 
 一个项目可以同时拥有多个路由配置。每个 `data/route/<配置名>/adapterConfig.json` 会被 manager 组装成一个运行入口；多个路由配置可以通过 `agentRoleId` 使用同一个 `data/roles/<RoleId>/` 人格配置。
 

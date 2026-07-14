@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
+import { isCodexMonitorThreadActive } from "./codexDesktopIpc.js";
 import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
 import {
   appendCodexNotificationToDir,
@@ -39,7 +40,7 @@ export type {
 } from "./routing/types.js";
 
 export type ForwardDeliveryStatus = "delivered" | "routed" | "missed" | "failed" | "skipped";
-export type ForwardDeliveryReason = "no_active_route_profile" | "no_matching_rule" | "low_signal_voice_transcript" | "no_agent_adapter";
+export type ForwardDeliveryReason = "no_active_route_profile" | "no_matching_rule" | "low_signal_voice_transcript" | "no_agent_adapter" | "agent_busy";
 
 export type ForwardAdapterOutcome = {
   routeId: string;
@@ -103,6 +104,27 @@ function configuredAgentAdapters(): AgentAdapterType[] {
     return ["astrbot"];
   }
   return [];
+}
+
+export function shouldSkipHeartbeatDelivery(
+  routeKind: ForwardRouteKind,
+  skipWhenAgentBusy: boolean,
+  agentAdapters: AgentAdapterType[],
+  codexThreadActive: boolean
+): boolean {
+  return routeKind === "heartbeat"
+    && skipWhenAgentBusy
+    && agentAdapters.includes("codex")
+    && codexThreadActive;
+}
+
+function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind): boolean {
+  return shouldSkipHeartbeatDelivery(
+    routeKind,
+    config.heartbeatSkipWhenAgentBusy,
+    configuredAgentAdapters(),
+    isCodexMonitorThreadActive()
+  );
 }
 
 function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
@@ -299,6 +321,22 @@ async function forwardMessageToRoute(
   if (!decision) {
     logRouteMiss(routeKind, record, "no_matching_rule", route);
     return routeResult(route, "missed", { reason: "no_matching_rule" });
+  }
+
+  if (heartbeatShouldSkipForBusyAgent(routeKind)) {
+    appendAdapterLogToDir("router", {
+      event: "heartbeat_skipped_agent_busy",
+      level: "info",
+      message: `Heartbeat skipped because the Codex thread is active route=${route.id} messageId=${recordId(record)}`,
+      data: {
+        routeKind,
+        routeId: route.id,
+        routeName: route.name,
+        messageId: recordId(record),
+        reason: "agent_busy"
+      }
+    }, config.dataDir);
+    return routeResult(route, "skipped", { reason: "agent_busy" });
   }
 
   const roleContext = rolePathsForRoute(route);

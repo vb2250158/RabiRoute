@@ -100,6 +100,11 @@ test("default gateway agent adapter uses codex", () => {
   assert.deepEqual(normalizeGatewayDefinition(gateway()).agentAdapters, ["codex"]);
 });
 
+test("heartbeat busy guard defaults off and preserves an explicit opt-in", () => {
+  assert.equal(normalizeGatewayDefinition(gateway()).heartbeatSkipWhenAgentBusy, false);
+  assert.equal(normalizeGatewayDefinition(gateway({ heartbeatSkipWhenAgentBusy: true })).heartbeatSkipWhenAgentBusy, true);
+});
+
 test("recent message limit defaults to 10 and can be set per persona", () => {
   const defaulted = normalizeGatewayDefinition(gateway());
   assert.equal(defaulted.recentMessageLimit, 10);

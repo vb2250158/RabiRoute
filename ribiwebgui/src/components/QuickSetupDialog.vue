@@ -36,6 +36,7 @@ const form = reactive({
   napcatWebuiUrl: "http://127.0.0.1:6099/webui",
   heartbeatIntervalSeconds: 900,
   heartbeatMessage: defaultHeartbeatMessage(),
+  heartbeatSkipWhenAgentBusy: false,
   webhookPort: 8790,
   webhookPath: "/webhook",
   fenneNoteWebhookPort: 8790,
@@ -704,6 +705,7 @@ function syncFromGateway() {
   form.napcatWebuiUrl = gateway?.napcatWebuiUrl || "http://127.0.0.1:6099/webui";
   form.heartbeatIntervalSeconds = Number(gateway?.heartbeatIntervalSeconds || 900);
   form.heartbeatMessage = gateway?.heartbeatMessage || defaultHeartbeatMessage();
+  form.heartbeatSkipWhenAgentBusy = gateway?.heartbeatSkipWhenAgentBusy === true;
   form.webhookPort = Number(gateway?.webhookPort || gateway?.gatewayPort || 8790);
   form.webhookPath = gateway?.webhookPath || "/webhook";
   form.fenneNoteWebhookPort = Number(gateway?.fenneNoteWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);
@@ -957,6 +959,14 @@ async function apply() {
                     <v-alert type="info" variant="tonal" density="compact" class="full-span">
                       定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。
                     </v-alert>
+                    <v-switch
+                      v-model="form.heartbeatSkipWhenAgentBusy"
+                      class="full-span"
+                      color="primary"
+                      label="会话工作中时跳过心跳"
+                      hint="Codex 会话仍在处理上一轮任务时，不投递新的 heartbeat；普通群聊和私聊不受影响。"
+                      persistent-hint
+                    />
                     <div class="quick-agent-status full-span">
                       <div class="agent-action-bar">
                         <div class="agent-action-status">

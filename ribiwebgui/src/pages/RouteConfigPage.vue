@@ -3832,6 +3832,14 @@ watch(
                   </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
                     <div class="section-note">定时触发参数在“人格配置 / 消息模板规则”的 heartbeat 规则里维护；这里仅启用内部定时来源。</div>
+                    <v-switch
+                      v-model="gateway.heartbeatSkipWhenAgentBusy"
+                      color="primary"
+                      label="会话工作中时跳过心跳"
+                      hint="勾选后，Codex 会话仍在处理任务时，本次 heartbeat 记为 skipped，不再向会话投递。普通消息不受影响。"
+                      persistent-hint
+                      @update:model-value="touch"
+                    />
                   </div>
                   <template v-if="choice.type === 'heartbeat' && runtime.running !== undefined">
                     <v-alert v-if="adapterErrors('heartbeat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">

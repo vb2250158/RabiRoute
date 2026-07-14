@@ -64,6 +64,7 @@ RabiRoute 决定自动执行、生成草稿、等待确认或拒绝。
 ## 当前能力
 
 - NapCat / OneBot WebSocket 接入 QQ 群聊和私聊。
+- QQ 合并转发消息会通过 NapCat `get_forward_msg` 展开，内部聊天按时间、发送者和文本/媒体证据写入消息日志并进入 Agent 上下文。
 - 独立 RibiWebGUI 管理多个 Gateway：`http://127.0.0.1:8790/`。
 - NapCat 只是一个消息端适配器；NapCat 插件是可选入口，用于从 NapCat 插件页跳转到 RibiWebGUI。
 - 同一 Gateway 可启用多个消息适配端：NapCat / OneBot、定时触发、Webhook、语音转写入口。

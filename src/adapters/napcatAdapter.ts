@@ -6,6 +6,7 @@ import { config, setBotProfile, type NapCatInstanceConfig } from "../config.js";
 import { forwardMessage, type ForwardRouteKind } from "../forwarding.js";
 import { appendAdapterLog, appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "../history.js";
 import { getLoginInfo, getStatus, sendGroupMessage, sendPrivateMessage, type NapCatEndpoint } from "../napcat.js";
+import { enrichNapCatMessage } from "../napcatForwardMessages.js";
 import type { MessageAdapter } from "./messageAdapter.js";
 
 type OneBotEvent = {
@@ -351,11 +352,36 @@ async function handleGroupMessage(event: OneBotEvent, instance: NapCatInstanceCo
     return;
   }
 
+  const enriched = await enrichNapCatMessage(event.message, textFromEvent(event), endpointFor(instance));
+  for (const error of enriched.errors) {
+    appendAdapterLog("napcat", {
+      level: "warning",
+      event: "forward_message_resolve_error",
+      instanceId: instance.id,
+      message: error.message,
+      data: { forwardId: error.forwardId, messageId: event.message_id }
+    });
+  }
+  if (enriched.forwardedMessages?.length) {
+    appendAdapterLog("napcat", {
+      event: "forward_message_resolved",
+      instanceId: instance.id,
+      message: `Resolved ${enriched.forwardedMessages.length} forwarded message bundle(s)`,
+      data: {
+        messageId: event.message_id,
+        forwardIds: enriched.forwardedMessages.map((item) => item.forwardId),
+        nodeCount: enriched.forwardedMessages.reduce((sum, item) => sum + item.nodes.length, 0)
+      }
+    });
+  }
+
   const record: GroupMessageRecord = {
     time: event.time ?? Math.floor(Date.now() / 1000),
     groupId: event.group_id,
     userId: event.user_id,
-    rawMessage: textFromEvent(event),
+    rawMessage: enriched.rawMessage,
+    originalRawMessage: enriched.originalRawMessage,
+    forwardedMessages: enriched.forwardedMessages,
     messageId: event.message_id,
     senderName: event.sender?.card || event.sender?.nickname,
     repliedMessageId: replyMessageId(event) ?? undefined,
@@ -402,10 +428,35 @@ async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstance
     return;
   }
 
+  const enriched = await enrichNapCatMessage(event.message, textFromEvent(event), endpointFor(instance));
+  for (const error of enriched.errors) {
+    appendAdapterLog("napcat", {
+      level: "warning",
+      event: "forward_message_resolve_error",
+      instanceId: instance.id,
+      message: error.message,
+      data: { forwardId: error.forwardId, messageId: event.message_id }
+    });
+  }
+  if (enriched.forwardedMessages?.length) {
+    appendAdapterLog("napcat", {
+      event: "forward_message_resolved",
+      instanceId: instance.id,
+      message: `Resolved ${enriched.forwardedMessages.length} forwarded message bundle(s)`,
+      data: {
+        messageId: event.message_id,
+        forwardIds: enriched.forwardedMessages.map((item) => item.forwardId),
+        nodeCount: enriched.forwardedMessages.reduce((sum, item) => sum + item.nodes.length, 0)
+      }
+    });
+  }
+
   const record: PrivateMessageRecord = {
     time: event.time ?? Math.floor(Date.now() / 1000),
     userId: event.user_id,
-    rawMessage: textFromEvent(event),
+    rawMessage: enriched.rawMessage,
+    originalRawMessage: enriched.originalRawMessage,
+    forwardedMessages: enriched.forwardedMessages,
     messageId: event.message_id,
     senderName: event.sender?.nickname,
     instanceId: instance.id,

@@ -1,10 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  codexSessionTranscriptShowsActiveForTest,
   codexStateStillPointsToTargetThreadForTest,
   formatCodexDesktopDeliveryError,
   shouldUseAppServerFallbackFor
 } from "./codexDesktopIpc.js";
+
+test("Codex Desktop IPC detects an unfinished latest turn from the session transcript", () => {
+  assert.equal(
+    codexSessionTranscriptShowsActiveForTest([
+      JSON.stringify({ type: "turn_context", payload: { turn_id: "turn-1" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1" } }),
+      JSON.stringify({ type: "turn_context", payload: { turn_id: "turn-2" } })
+    ].join("\n")),
+    true
+  );
+});
+
+test("Codex Desktop IPC treats the latest completed turn as idle", () => {
+  assert.equal(
+    codexSessionTranscriptShowsActiveForTest([
+      JSON.stringify({ type: "turn_context", payload: { turn_id: "turn-1" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1" } })
+    ].join("\n")),
+    false
+  );
+});
 
 test("Codex Desktop IPC falls back through app-server when a bound thread is unloaded by default", () => {
   const previous = process.env.CODEX_DESKTOP_IPC_APP_SERVER_FALLBACK;

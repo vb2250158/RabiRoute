@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, type RouteProfile } from "./config.js";
-import { forwardMessageAndWait } from "./forwarding.js";
+import { forwardMessageAndWait, shouldSkipHeartbeatDelivery } from "./forwarding.js";
 import type { GroupMessageRecord } from "./history.js";
 import { resolvePipeline } from "./pipelines.js";
 import { readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
@@ -55,6 +55,14 @@ function routeProfile(root: string, patch: Partial<RouteProfile> = {}): RoutePro
     ...patch
   };
 }
+
+test("heartbeat busy guard only skips active Codex heartbeat delivery", () => {
+  assert.equal(shouldSkipHeartbeatDelivery("heartbeat", true, ["codex"], true), true);
+  assert.equal(shouldSkipHeartbeatDelivery("heartbeat", false, ["codex"], true), false);
+  assert.equal(shouldSkipHeartbeatDelivery("private", true, ["codex"], true), false);
+  assert.equal(shouldSkipHeartbeatDelivery("heartbeat", true, ["copilotCli"], true), false);
+  assert.equal(shouldSkipHeartbeatDelivery("heartbeat", true, ["codex"], false), false);
+});
 
 async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => Promise<T> | T): Promise<T> {
   const previous: Required<ForwardingConfigPatch> = {

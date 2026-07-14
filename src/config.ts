@@ -395,6 +395,7 @@ export const config = {
   messageAdapterTypes: parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE),
   heartbeatIntervalSeconds: parsePositiveNumber(process.env.HEARTBEAT_INTERVAL_SECONDS, 900),
   heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请检查最近消息和角色相关上下文。",
+  heartbeatSkipWhenAgentBusy: parseBoolean(process.env.HEARTBEAT_SKIP_WHEN_AGENT_BUSY, false),
   remoteAgentDefaultDeviceId: process.env.REMOTE_AGENT_DEFAULT_DEVICE_ID?.trim() || "",
   remoteAgentDefaultCwd: process.env.REMOTE_AGENT_DEFAULT_CWD?.trim() || "",
   remoteAgentDefaultThreadName: process.env.REMOTE_AGENT_DEFAULT_THREAD_NAME?.trim() || "",

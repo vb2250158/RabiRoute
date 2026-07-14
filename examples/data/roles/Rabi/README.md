@@ -10,6 +10,7 @@ Rabi 是 RabiRoute 的兔娘看板娘，也是 RabiRoute 的灵魂。
 - `personaConfig.json`：Rabi 的示例消息模板规则。
 - `growth.md`：Rabi 如何复盘、学习和更新自己。
 - `skills.md`：Rabi 目前会优先维护的能力。
+- `skills/one-plan-one-task-tracking.md`：不绑定群聊平台和具体项目、适用于所有计划的一计划一会话任务追踪范例。
 - `prompts/`：细分场景提示词。
 - `plans/`：Agent 主动维护的计划示例。
 - `memory/`：Agent 主动维护的近期记忆和沉淀记忆示例结构。

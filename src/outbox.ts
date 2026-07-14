@@ -489,6 +489,27 @@ function replyPipeline(route: ResolvedRoute, request: AgentReplyRequest): Resolv
   };
 }
 
+function hasNapCatReplySegment(message: OneBotMessage): boolean {
+  if (typeof message === "string") {
+    return /\[CQ:reply\b[^\]]*\]/i.test(message);
+  }
+  return message.some((segment) => segment.type.toLowerCase() === "reply");
+}
+
+export function napcatGroupReplyMessage(
+  message: OneBotMessage,
+  sourceMessageId: string | undefined,
+  replyToSource: boolean
+): OneBotMessage {
+  if (!replyToSource || !sourceMessageId || hasNapCatReplySegment(message)) {
+    return message;
+  }
+  if (typeof message === "string") {
+    return `[CQ:reply,id=${sourceMessageId}]${message}`;
+  }
+  return [{ type: "reply", data: { id: sourceMessageId } }, ...message];
+}
+
 function napcatPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
@@ -1025,7 +1046,10 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
 
   try {
     if (target.targetType === "group" && target.groupId) {
-      const sent = await sendGroupMessage({ groupId: target.groupId, message: content.message }, endpoint);
+      const sent = await sendGroupMessage({
+        groupId: target.groupId,
+        message: napcatGroupReplyMessage(content.message, target.messageId ?? messageId, pipeline.replyToSource)
+      }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: target.groupId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
       appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), result);
       return result;

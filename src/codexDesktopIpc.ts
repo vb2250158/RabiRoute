@@ -125,6 +125,28 @@ const defaultIpcRequestTimeoutMs = 30 * 60 * 1000;
 const defaultRetryDelayMs = 60 * 1000;
 const defaultMaxRetryMessages = 20;
 
+export function isCodexMonitorThreadActive(): boolean {
+  if (monitorThreadActive) {
+    return true;
+  }
+
+  const state = resolveConfiguredMonitorThread(readState(), false);
+  if (!state.monitorThreadId) {
+    return false;
+  }
+
+  const transcriptPath = findCodexSessionTranscript(state.monitorThreadId, state.monitorThreadUpdatedAt);
+  if (!transcriptPath) {
+    return false;
+  }
+
+  try {
+    return codexSessionTranscriptShowsActiveForTest(fs.readFileSync(transcriptPath, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 function positiveIntegerFromEnv(name: string, fallback: number): number {
   const value = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -149,7 +171,7 @@ function explicitCodexModel(): string | undefined {
 }
 
 function codexModelField(): string {
-  return config.agentModel || explicitCodexModel() || "gpt-5.5";
+  return config.agentModel || explicitCodexModel() || "gpt-5.6-sol";
 }
 
 function readState(): CodexState {
@@ -177,6 +199,74 @@ function writeStateWithRetryMetadata(state: CodexState): void {
 
 function sessionIndexPath(): string {
   return path.join(os.homedir(), ".codex", "session_index.jsonl");
+}
+
+function codexSessionsRoot(): string {
+  return path.join(os.homedir(), ".codex", "sessions");
+}
+
+function sessionDateDirectories(updatedAt?: string): string[] {
+  const parsed = updatedAt ? new Date(updatedAt) : new Date();
+  const center = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  return [-1, 0, 1].map((offset) => {
+    const candidate = new Date(center.getTime() + offset * 24 * 60 * 60 * 1000);
+    return path.join(
+      codexSessionsRoot(),
+      String(candidate.getUTCFullYear()),
+      String(candidate.getUTCMonth() + 1).padStart(2, "0"),
+      String(candidate.getUTCDate()).padStart(2, "0")
+    );
+  });
+}
+
+function findCodexSessionTranscript(threadId: string, updatedAt?: string): string | null {
+  for (const directory of sessionDateDirectories(updatedAt)) {
+    if (!fs.existsSync(directory)) {
+      continue;
+    }
+
+    const match = fs.readdirSync(directory)
+      .find((fileName) => fileName.endsWith(`-${threadId}.jsonl`));
+    if (match) {
+      return path.join(directory, match);
+    }
+  }
+  return null;
+}
+
+export function codexSessionTranscriptShowsActiveForTest(content: string): boolean {
+  let latestTurnId = "";
+  const terminalTurnIds = new Set<string>();
+
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    try {
+      const record = JSON.parse(line) as {
+        type?: unknown;
+        payload?: { type?: unknown; turn_id?: unknown };
+      };
+      if (record.type === "turn_context" && typeof record.payload?.turn_id === "string") {
+        latestTurnId = record.payload.turn_id;
+        continue;
+      }
+
+      const eventType = record.type === "event_msg" ? record.payload?.type : record.type;
+      const turnId = record.payload?.turn_id;
+      if (
+        typeof turnId === "string"
+        && (eventType === "task_complete" || eventType === "turn_aborted" || eventType === "task_failed")
+      ) {
+        terminalTurnIds.add(turnId);
+      }
+    } catch {
+      // Ignore incomplete or malformed transcript lines.
+    }
+  }
+
+  return Boolean(latestTurnId) && !terminalTurnIds.has(latestTurnId);
 }
 
 function readLatestSessionThreads(): DiscoveredMonitorThread[] {
@@ -520,7 +610,7 @@ async function startNotificationTurn(threadId: string, message: string): Promise
   const modelOverride = codexModelField();
   const collaborationSettings: Record<string, unknown> = {
     model: modelOverride,
-    reasoning_effort: "high",
+    reasoning_effort: "medium",
     developer_instructions: ""
   };
   const turnStartParams: Record<string, unknown> = {
@@ -536,7 +626,7 @@ async function startNotificationTurn(threadId: string, message: string): Promise
     sandboxPolicy: {
       type: "dangerFullAccess"
     },
-    effort: "high",
+    effort: "medium",
     model: modelOverride,
     serviceTier: "",
     attachments: [],

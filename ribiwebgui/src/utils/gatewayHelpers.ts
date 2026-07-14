@@ -77,6 +77,7 @@ export const templateVars = [
   { name: "manualTriggerLogPath", description: "手动触发事件 JSONL 记录路径。" },
   { name: "rolePanelLogPath", description: "角色面板聊天记录 JSONL 路径。" },
   { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" },
+  { name: "heartbeatSkipWhenAgentBusy", description: "为 true 时，Codex 会话仍在工作就跳过本次 heartbeat 投递。" },
   { name: "scheduleId", description: "当前定时计划 ID；仅定时触发时填充。" },
   { name: "scheduleName", description: "当前定时计划显示名称；仅定时触发时填充。" },
   { name: "triggerId", description: "手动触发 ID。" },
@@ -264,6 +265,7 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   if (adapters.includes("heartbeat")) {
     gateway.heartbeatIntervalSeconds = Number(gateway.heartbeatIntervalSeconds || 900);
     gateway.heartbeatMessage = gateway.heartbeatMessage || defaultHeartbeatMessage();
+    gateway.heartbeatSkipWhenAgentBusy = gateway.heartbeatSkipWhenAgentBusy === true;
     migrateLegacyHeartbeatSchedules(gateway);
   }
   if (adapters.includes("webhook")) {
@@ -588,6 +590,7 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     napcatHttpUrl: "http://127.0.0.1:3000",
     heartbeatIntervalSeconds: 900,
     heartbeatMessage: defaultHeartbeatMessage(),
+    heartbeatSkipWhenAgentBusy: false,
     routeVariables: {},
     agentModel: "",
     codexThreadName: `路由配置 ${next}`,

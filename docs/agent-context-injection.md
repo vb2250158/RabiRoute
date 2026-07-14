@@ -202,6 +202,9 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 命中召回：
 - <itemId>：<itemTitle>
 
+[处理前上下文确认]
+- <高相关必读项及 GET 路径>
+
 [日志]
 群聊日志：<groupLogPath>
 私聊日志：<privateLogPath>

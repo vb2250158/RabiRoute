@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentReply, type AgentReplyOptions } from "./outbox.js";
+import { handleAgentReply, napcatGroupReplyMessage, type AgentReplyOptions } from "./outbox.js";
 import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
 
 function optionsWithRuntime(runtime: AgentReplyOptions["runtimes"][number]): AgentReplyOptions {
@@ -82,6 +82,70 @@ test("QQ output does not require original source context when target is explicit
   assert.equal(result.ok, false);
   assert.equal(result.status, "blocked");
   assert.equal(result.reason, "No NapCat HTTP endpoint is configured for this route.");
+});
+
+test("NapCat group reply helper binds text and segment messages to the source message", () => {
+  assert.equal(
+    napcatGroupReplyMessage("【问题】已接手。", "source-1", true),
+    "[CQ:reply,id=source-1]【问题】已接手。"
+  );
+  assert.deepEqual(
+    napcatGroupReplyMessage([{ type: "text", data: { text: "已接手。" } }], "source-2", true),
+    [
+      { type: "reply", data: { id: "source-2" } },
+      { type: "text", data: { text: "已接手。" } }
+    ]
+  );
+});
+
+test("NapCat group reply helper respects opt-out and does not duplicate an existing reply", () => {
+  assert.equal(napcatGroupReplyMessage("主动进度提醒", "source-1", false), "主动进度提醒");
+  assert.equal(
+    napcatGroupReplyMessage("[CQ:reply,id=source-1]【问题】继续跟进。", "source-1", true),
+    "[CQ:reply,id=source-1]【问题】继续跟进。"
+  );
+  assert.deepEqual(
+    napcatGroupReplyMessage([{ type: "reply", data: { id: "source-1" } }, { type: "text", data: { text: "继续跟进。" } }], "source-1", true),
+    [{ type: "reply", data: { id: "source-1" } }, { type: "text", data: { text: "继续跟进。" } }]
+  );
+});
+
+test("QQ group source reply sends a real NapCat reply segment", async () => {
+  let sentBody: Record<string, unknown> | undefined;
+  await withJsonServer((body) => {
+    sentBody = body;
+    return { status: "ok", retcode: 0, data: { message_id: "sent-1" } };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      text: "【工会入口】我先接手调查。",
+      replyContext: {
+        routeProfileId: "main",
+        targetType: "group",
+        groupId: "20002",
+        messageId: "source-22",
+        instanceId: "main-qq",
+        adapterType: "napcat",
+        outputAdapter: "qq",
+        outputPipeline: "qq",
+        replyToSource: true
+      }
+    }, optionsWithRuntime({
+      id: "main",
+      pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
+      messageAdapterPolicies: {
+        napcat: { outputEnabled: true, supportedOutputs: ["text"] }
+      },
+      napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+    }));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "sent");
+    assert.equal(result.sentMessageId, "sent-1");
+  });
+
+  assert.ok(sentBody);
+  assert.equal(sentBody.group_id, 20002);
+  assert.equal(sentBody.message, "[CQ:reply,id=source-22]【工会入口】我先接手调查。");
 });
 
 test("explicit group target can proactively use NapCat even when pipeline is codex", async () => {

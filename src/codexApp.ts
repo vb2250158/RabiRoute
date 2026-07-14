@@ -52,7 +52,7 @@ function explicitCodexModel(): string | undefined {
 }
 
 function codexModelField(): string {
-  return config.agentModel || explicitCodexModel() || "gpt-5.5";
+  return config.agentModel || explicitCodexModel() || "gpt-5.6-sol";
 }
 
 type CodexState = {
@@ -91,6 +91,25 @@ export type CodexAppMonitorThread = {
   updatedAt: string;
   source: string;
 };
+
+export type CodexAppThreadCreateParams = {
+  title: string;
+  prompt: string;
+  cwd: string;
+  developerInstructions: string;
+  sandbox: CodexAppTurnSandbox;
+};
+
+export type CodexAppThreadCreateResult = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  source: "codex app-server";
+  initialTurnStatus: "started" | "failed";
+  initialTurnError?: string;
+};
+
+export type CodexAppTurnSandbox = "read-only" | "workspace-write" | "danger-full-access";
 
 function readState(): CodexState {
   return memoryState;
@@ -373,6 +392,36 @@ function duplicateThreadRefusalError(thread: DiscoveredMonitorThread): Error {
   ].join(" "));
 }
 
+async function createNamedCodexAppThread(
+  threadName: string,
+  cwd: string,
+  developerInstructions: string
+): Promise<string> {
+  await connect();
+  const threadStartParams: Record<string, unknown> = {
+    cwd,
+    approvalPolicy: "never",
+    sandbox: "workspace-write",
+    threadSource: "user",
+    sessionStartSource: "startup",
+    ephemeral: false,
+    developerInstructions
+  };
+  threadStartParams.model = codexModelField();
+
+  const result = await request("thread/start", threadStartParams) as { thread?: { id?: string } };
+  const threadId = result.thread?.id;
+  if (!threadId) {
+    throw new Error(`thread/start did not return thread id: ${JSON.stringify(result)}`);
+  }
+
+  await request("thread/name/set", {
+    threadId,
+    name: threadName
+  });
+  return threadId;
+}
+
 async function ensureMonitorThread(forceCreate = false): Promise<string> {
   const state = readState();
   const threadName = config.codexThreadName;
@@ -394,28 +443,11 @@ async function ensureMonitorThread(forceCreate = false): Promise<string> {
     return state.monitorThreadId;
   }
 
-  const threadStartParams: Record<string, unknown> = {
-    cwd: config.codexCwd,
-    approvalPolicy: "never",
-    sandbox: "workspace-write",
-    threadSource: "user",
-    sessionStartSource: "startup",
-    ephemeral: false,
-    developerInstructions: `这是 QQ/NapCat 消息监听线程。收到提醒后，请读取 ${config.memoryDataDir} 下的 JSONL 消息记录，理解最新 QQ 私聊或群 @ 的上下文，并在 Codex 会话里开始处理。`,
-  };
-  threadStartParams.model = codexModelField();
-
-  const result = await request("thread/start", threadStartParams) as { thread?: { id?: string } };
-
-  const threadId = result.thread?.id;
-  if (!threadId) {
-    throw new Error(`thread/start did not return thread id: ${JSON.stringify(result)}`);
-  }
-
-  await request("thread/name/set", {
-    threadId,
-    name: threadName
-  });
+  const threadId = await createNamedCodexAppThread(
+    threadName,
+    config.codexCwd,
+    `这是 QQ/NapCat 消息监听线程。收到提醒后，请读取 ${config.memoryDataDir} 下的 JSONL 消息记录，理解最新 QQ 私聊或群 @ 的上下文，并在 Codex 会话里开始处理。`
+  );
 
   const visibility = await ensureCodexAppVisible("app-server-create-thread", { force: true });
   writeState({
@@ -439,6 +471,39 @@ export async function createCodexAppMonitorThread(forceCreate = false): Promise<
     updatedAt: state.monitorThreadUpdatedAt ?? new Date().toISOString(),
     source: state.monitorThreadSource ?? "codex app-server"
   };
+}
+
+export async function readCodexAppThread(threadId: string): Promise<unknown> {
+  await connect();
+  return request("thread/read", { threadId });
+}
+
+export async function createCodexAppThread(params: CodexAppThreadCreateParams): Promise<CodexAppThreadCreateResult> {
+  const threadId = await createNamedCodexAppThread(params.title, params.cwd, params.developerInstructions);
+  await ensureCodexAppVisible("app-server-create-thread", { force: true });
+  const result: CodexAppThreadCreateResult = {
+    id: threadId,
+    title: params.title,
+    updatedAt: new Date().toISOString(),
+    source: "codex app-server",
+    initialTurnStatus: "started"
+  };
+  try {
+    await startCodexAppTurn(threadId, params.prompt, params.cwd, params.sandbox);
+  } catch (error) {
+    result.initialTurnStatus = "failed";
+    result.initialTurnError = error instanceof Error ? error.message : String(error);
+  }
+  return result;
+}
+
+export async function sendCodexAppThreadMessage(params: {
+  threadId: string;
+  prompt: string;
+  cwd: string;
+  sandbox: CodexAppTurnSandbox;
+}): Promise<void> {
+  await startCodexAppTurn(params.threadId, params.prompt, params.cwd, params.sandbox);
 }
 
 export async function resumeCodexAppThread(threadId: string): Promise<void> {
@@ -498,6 +563,41 @@ async function notifyCodexInternal(message: string): Promise<void> {
   });
 }
 
+async function startCodexAppTurn(
+  threadId: string,
+  message: string,
+  cwd: string,
+  sandbox: CodexAppTurnSandbox
+): Promise<void> {
+  const sandboxPolicy = sandbox === "danger-full-access"
+    ? { type: "dangerFullAccess" }
+    : sandbox === "read-only"
+      ? { type: "readOnly" }
+      : {
+          type: "workspaceWrite",
+          writableRoots: [cwd],
+          networkAccess: false,
+          excludeTmpdirEnvVar: false,
+          excludeSlashTmp: false
+        };
+  const turnStartParams: Record<string, unknown> = {
+    threadId,
+    input: [
+      {
+        type: "text",
+        text: message
+      }
+    ],
+    cwd,
+    approvalPolicy: "never",
+    sandboxPolicy,
+    effort: "medium",
+    personality: "friendly"
+  };
+  turnStartParams.model = codexModelField();
+  await request("turn/start", turnStartParams);
+}
+
 async function startNotificationTurn(threadId: string, threadName: string, message: string): Promise<void> {
   await request("thread/name/set", {
     threadId,
@@ -516,29 +616,11 @@ async function startNotificationTurn(threadId: string, threadName: string, messa
     ? waitForThreadIdle(threadId)
     : undefined;
   try {
-    const turnStartParams: Record<string, unknown> = {
-      threadId,
-      input: [
-        {
-          type: "text",
-          text: [
-            message,
-            "",
-            `这是来自 QQ/NapCat 网关的消息更新提醒。请读取 ${config.memoryDataDir} 下相关 JSONL 的最新记录，理解上下文，并在这个 Codex 会话里开始处理该消息。`
-          ].join("\n")
-        }
-      ],
-      cwd: config.codexCwd,
-      approvalPolicy: "never",
-      sandboxPolicy: {
-        type: "dangerFullAccess"
-      },
-      effort: "high",
-      personality: "friendly"
-    };
-    turnStartParams.model = codexModelField();
-
-    await request("turn/start", turnStartParams);
+    await startCodexAppTurn(threadId, [
+      message,
+      "",
+      `这是来自 QQ/NapCat 网关的消息更新提醒。请读取 ${config.memoryDataDir} 下相关 JSONL 的最新记录，理解上下文，并在这个 Codex 会话里开始处理该消息。`
+    ].join("\n"), config.codexCwd, "danger-full-access");
   } catch (error) {
     idle?.catch(() => undefined);
     throw error;

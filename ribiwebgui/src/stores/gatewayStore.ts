@@ -623,6 +623,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     agentAdapters?: AgentAdapterType[];
     heartbeatIntervalSeconds?: number;
     heartbeatMessage?: string;
+    heartbeatSkipWhenAgentBusy?: boolean;
     webhookPort?: number;
     webhookPath?: string;
     fenneNoteWebhookPort?: number;
@@ -689,6 +690,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     }
     gateway.heartbeatIntervalSeconds = values.heartbeatIntervalSeconds || gateway.heartbeatIntervalSeconds;
     gateway.heartbeatMessage = values.heartbeatMessage || gateway.heartbeatMessage;
+    gateway.heartbeatSkipWhenAgentBusy = values.heartbeatSkipWhenAgentBusy === true;
     gateway.webhookPort = values.webhookPort || gateway.webhookPort;
     gateway.webhookPath = values.webhookPath || gateway.webhookPath;
     gateway.fenneNoteWebhookPort = values.fenneNoteWebhookPort || gateway.fenneNoteWebhookPort;

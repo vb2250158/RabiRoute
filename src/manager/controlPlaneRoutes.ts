@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
+import { handleAgentThreadRequest, type AgentThreadRequest } from "../agentThreads.js";
 import {
   deployAstrbotAdapter,
   getCopilotStatus,
@@ -117,6 +118,7 @@ type GatewayDefinition = {
   wecomWsUrl?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
+  heartbeatSkipWhenAgentBusy?: boolean;
   remoteAgentDefaultDeviceId?: string;
   remoteAgentDefaultCwd?: string;
   remoteAgentDefaultThreadName?: string;
@@ -620,6 +622,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
     heartbeatIntervalSeconds: definition.heartbeatIntervalSeconds,
     heartbeatMessage: definition.heartbeatMessage,
+    heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy,
     remoteAgentDefaultDeviceId: definition.remoteAgentDefaultDeviceId,
     remoteAgentDefaultCwd: definition.remoteAgentDefaultCwd,
     remoteAgentDefaultThreadName: definition.remoteAgentDefaultThreadName,
@@ -1170,6 +1173,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
     HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
+    HEARTBEAT_SKIP_WHEN_AGENT_BUSY: definition.heartbeatSkipWhenAgentBusy ? "1" : "0",
     REMOTE_AGENT_DEFAULT_DEVICE_ID: definition.remoteAgentDefaultDeviceId?.trim() || "",
     REMOTE_AGENT_DEFAULT_CWD: definition.remoteAgentDefaultCwd?.trim() || "",
     REMOTE_AGENT_DEFAULT_THREAD_NAME: definition.remoteAgentDefaultThreadName?.trim() || "",
@@ -2905,7 +2909,7 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
     }
   }
 
-  const match = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/(plans|skills|memory|memory\/recent|memory\/consolidated|memory\/consolidation-requests|memory\/consolidation-runs)(?:\/([^/]+))?$/);
+  const match = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/(plans|skills|memory\/recent|memory\/consolidated|memory\/consolidation-requests|memory\/consolidation-runs|memory)(?:\/([^/]+))?$/);
   if (!match) {
     return false;
   }
@@ -3462,6 +3466,34 @@ export function startManager(): void {
           })
           .catch((error) => {
             jsonResponse(response, 502, { ok: false, error: error instanceof Error ? error.message : String(error), target: fenneNoteReplyUrl });
+          });
+        return;
+      }
+      if (requestUrl.pathname === "/api/agent/threads" && (request.method === "GET" || request.method === "POST")) {
+        const allowedWorkspaces = [...new Set([
+          rootDir,
+          ...[...runtimes.values()]
+            .map((runtime) => runtime.definition.codexCwd?.trim())
+            .filter((value): value is string => Boolean(value))
+            .map((value) => path.resolve(rootDir, value))
+        ])];
+        const requestBody = request.method === "GET"
+          ? Promise.resolve<AgentThreadRequest>({
+              action: "list",
+              query: requestUrl.searchParams.get("query") ?? "",
+              limit: Number(requestUrl.searchParams.get("limit") ?? "20")
+            })
+          : readJsonBody<AgentThreadRequest>(request);
+        void requestBody
+          .then((body) => handleAgentThreadRequest(body, {
+            allowedWorkspaces,
+            defaultWorkspace: rootDir
+          }))
+          .then((result) => {
+            jsonResponse(response, result.statusCode, { code: 0, ...result.data });
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
           });
         return;
       }

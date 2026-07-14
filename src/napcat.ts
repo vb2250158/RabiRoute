@@ -1,7 +1,7 @@
 import { config, type NapCatInstanceConfig } from "./config.js";
 
 export type OneBotMessageSegment = {
-  type: "text" | "image" | "record" | "file";
+  type: string;
   data: Record<string, unknown>;
 };
 
@@ -39,6 +39,24 @@ export type LoginInfo = {
 export type BotStatus = {
   online?: boolean;
   good?: boolean;
+};
+
+export type ForwardMessageNode = {
+  self_id?: number | string;
+  user_id?: number | string;
+  time?: number;
+  message_id?: number | string;
+  sender?: {
+    user_id?: number | string;
+    nickname?: string;
+    card?: string;
+  };
+  raw_message?: string;
+  message?: OneBotMessage;
+};
+
+export type ForwardMessageResult = {
+  messages: ForwardMessageNode[];
 };
 
 function endpointConfig(endpoint?: NapCatEndpoint): NapCatEndpoint {
@@ -98,6 +116,16 @@ export async function getStatus(endpoint?: NapCatEndpoint): Promise<BotStatus> {
   return {
     online: data.online,
     good: data.good
+  };
+}
+
+export async function getForwardMessage(messageId: number | string, endpoint?: NapCatEndpoint): Promise<ForwardMessageResult> {
+  const response = await callNapCat<OneBotResponse<ForwardMessageResult> | ForwardMessageResult>("get_forward_msg", {
+    message_id: messageId
+  }, endpoint);
+  const data = "data" in response && response.data ? response.data : response as ForwardMessageResult;
+  return {
+    messages: Array.isArray(data.messages) ? data.messages : []
   };
 }
 

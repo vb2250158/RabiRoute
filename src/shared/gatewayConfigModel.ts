@@ -154,6 +154,7 @@ export type GatewayDefinition = {
   wecomWsUrl?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
+  heartbeatSkipWhenAgentBusy?: boolean;
   remoteAgentDefaultDeviceId?: string;
   remoteAgentDefaultCwd?: string;
   remoteAgentDefaultThreadName?: string;
@@ -673,6 +674,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     routeName,
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
+    heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy === true,
     gatewayPort: primaryNapcat?.gatewayPort ?? definition.gatewayPort,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
     rabiLinkRelayEnabled: definition.rabiLinkRelayEnabled ?? Boolean(definition.rabiLinkRelayUrl?.trim()),

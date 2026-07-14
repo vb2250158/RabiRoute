@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import type { ResolvedForwardMessage } from "./napcatForwardMessages.js";
 
 export type GroupMessageRecord = {
   time: number;
   groupId: number;
   userId: number;
   rawMessage: string;
+  originalRawMessage?: string;
+  forwardedMessages?: ResolvedForwardMessage[];
   messageId?: number | string;
   senderName?: string;
   routeKind?: string;
@@ -21,6 +24,8 @@ export type PrivateMessageRecord = {
   time: number;
   userId: number;
   rawMessage: string;
+  originalRawMessage?: string;
+  forwardedMessages?: ResolvedForwardMessage[];
   messageId?: number | string;
   senderName?: string;
   instanceId?: string;
