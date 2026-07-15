@@ -87,6 +87,27 @@ NapCat 群聊需要真实引用原消息时，在 `replyContext` 中同时提供
 
 Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息段数组前插入 `reply` 段。正文已经包含 CQ reply 或结构化 reply 段时不会重复添加。`replyToSource=false`、没有 `messageId`、私聊和主动无源群消息都不会自动添加引用。
 
+发送本地 QQ 群文件时使用同一个回复接口：
+
+```json
+{
+  "text": "【构建包】版本、渠道和签名已确认，文件已上传。",
+  "payloadType": "file",
+  "filePath": "C:/Path/To/Allowed/ReleasePkg/build.apk",
+  "fileName": "build.apk",
+  "replyContext": {
+    "routeProfileId": "main",
+    "targetType": "group",
+    "groupId": 456,
+    "messageId": 123,
+    "instanceId": "default",
+    "replyToSource": true
+  }
+}
+```
+
+对应 NapCat 策略必须允许 `file`，并配置 `messageAdapterPolicies.napcat.allowedFileRoots`。RabiRoute 会校验文件存在、类型和真实路径，再调用 `upload_group_file`；成功结果包含 `sentFileName`，NapCat 返回稳定标识时还包含 `sentFileId`。如果文件上传成功但跟随的说明文本失败，返回仍为 `status=sent` 并在 `reason` 中说明文本失败，调用方只能补发文本，不能重复上传文件。
+
 Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发送推进消息，不需要 `messageId`、`replyToSource=true` 或固定某个 output adapter。RabiRoute 不再按群号、私聊账号或具体 pipeline ID 做细粒度过滤；是否能发由消息端发送开关、消息端可用性和明确目标决定。
 
 主动投递到 RabiLink 眼镜也使用同一个动作安全门，不要直接绕过到 Relay：

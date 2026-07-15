@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { sendGroupMessage, sendPrivateMessage, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
+import { sendGroupMessage, sendPrivateMessage, uploadGroupFile, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
 import {
@@ -129,6 +129,8 @@ export type AgentReplyResult = {
   userId?: string;
   instanceId?: string;
   sentMessageId?: string;
+  sentFileId?: string;
+  sentFileName?: string;
   draft?: {
     text: string;
     targetType?: string;
@@ -166,6 +168,9 @@ type ReplyContent = {
   text: string;
   kind: MessagePayloadKind;
   message: OneBotMessage;
+  explicitText?: string;
+  file?: string;
+  fileName?: string;
 };
 
 function valueString(value: unknown): string | undefined {
@@ -241,7 +246,14 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
     const file = payloadValue(request, payload, "fileUrl", "filePath", "url", "file", "path");
     if (!file) throw new Error("Missing file url/path.");
     const name = payloadValue(request, payload, "fileName", "name");
-    return { text: text || name || "[file]", kind: "file", message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "file" as const, data: { file, name } }] };
+    return {
+      text: text || name || "[file]",
+      kind: "file",
+      message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "file" as const, data: { file, name } }],
+      explicitText: text || undefined,
+      file,
+      fileName: name
+    };
   }
   if (!text) {
     throw new Error("Missing reply text.");
@@ -276,6 +288,42 @@ function routeConfigName(runtimeId: string): string {
 function resolvePath(rootDir: string, filePath: string | undefined): string | undefined {
   if (!filePath) return undefined;
   return path.resolve(rootDir, filePath);
+}
+
+function isRemoteFileReference(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function validatedOutboundFilePath(rootDir: string, filePath: string, allowedFileRoots: string[]): string {
+  if (isRemoteFileReference(filePath)) {
+    throw new Error("Remote URLs are not uploaded through the local QQ group-file API.");
+  }
+  const candidate = path.resolve(rootDir, filePath);
+  if (!fs.existsSync(candidate)) {
+    throw new Error(`Outbound file does not exist: ${candidate}`);
+  }
+  const stat = fs.statSync(candidate);
+  if (!stat.isFile()) {
+    throw new Error(`Outbound file is not a regular file: ${candidate}`);
+  }
+  if (allowedFileRoots.length === 0) {
+    throw new Error("No allowedFileRoots are configured for NapCat file output.");
+  }
+  const realCandidate = fs.realpathSync(candidate);
+  const allowed = allowedFileRoots.some((configuredRoot) => {
+    const resolvedRoot = path.resolve(rootDir, configuredRoot);
+    if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) return false;
+    return isPathWithin(fs.realpathSync(resolvedRoot), realCandidate);
+  });
+  if (!allowed) {
+    throw new Error(`Outbound file is outside the configured allowedFileRoots: ${realCandidate}`);
+  }
+  return realCandidate;
 }
 
 function roleDirFor(rootDir: string, rolesRoot: string, item: { rolesDir?: string; agentRoleId?: string }): string | undefined {
@@ -1129,6 +1177,46 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
 
   try {
     if (target.targetType === "group" && target.groupId) {
+      if (content.kind === "file" && content.file && !isRemoteFileReference(content.file)) {
+        const filePath = validatedOutboundFilePath(options.rootDir, content.file, policy.allowedFileRoots);
+        const fileName = content.fileName || path.basename(filePath);
+        const uploaded = await uploadGroupFile({
+          groupId: target.groupId,
+          filePath,
+          fileName
+        }, endpoint);
+        const result: AgentReplyResult = {
+          ok: true,
+          status: "sent",
+          routeProfileId: route.profile?.id ?? route.runtime.id,
+          messageId,
+          targetType: "group",
+          groupId: target.groupId,
+          instanceId: endpoint.id,
+          sentFileId: valueString(uploaded.fileId),
+          sentFileName: uploaded.fileName || fileName
+        };
+        appendOutboxLog(options, route, "info", "group_file_uploaded", fileName, {
+          ...result,
+          filePath,
+          fileSize: fs.statSync(filePath).size
+        });
+
+        if (content.explicitText) {
+          try {
+            const caption = await sendGroupMessage({
+              groupId: target.groupId,
+              message: napcatGroupReplyMessage(content.explicitText, target.messageId ?? messageId, pipeline.replyToSource)
+            }, endpoint);
+            result.sentMessageId = valueString(caption.messageId);
+            appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), result);
+          } catch (captionError) {
+            result.reason = `File uploaded, but the follow-up text failed: ${captionError instanceof Error ? captionError.message : String(captionError)}`;
+            appendOutboxLog(options, route, "warning", "group_file_caption_failed", result.reason, result);
+          }
+        }
+        return result;
+      }
       const sent = await sendGroupMessage({
         groupId: target.groupId,
         message: napcatGroupReplyMessage(content.message, target.messageId ?? messageId, pipeline.replyToSource)

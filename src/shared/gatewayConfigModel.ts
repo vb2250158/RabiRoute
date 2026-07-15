@@ -39,6 +39,7 @@ export type MessageAdapterPolicy = {
   inputEnabled?: boolean;
   outputEnabled?: boolean;
   supportedOutputs?: MessagePayloadKind[];
+  allowedFileRoots?: string[];
 };
 
 export type MessageAdapterPolicies = Partial<Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterPolicy>>;
@@ -380,6 +381,13 @@ function normalizePayloadKinds(value: unknown): MessagePayloadKind[] {
   return kinds.length > 0 ? kinds : defaultSupportedOutputs;
 }
 
+function normalizePathList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean))];
+}
+
 export function normalizeMessageAdapterPolicy(
   value: unknown,
   adapterType: Exclude<MessageAdapterType, "disabled">,
@@ -389,7 +397,8 @@ export function normalizeMessageAdapterPolicy(
   return {
     inputEnabled: raw.inputEnabled ?? !options.legacyInputDisabled,
     outputEnabled: raw.outputEnabled ?? true,
-    supportedOutputs: normalizePayloadKinds(raw.supportedOutputs)
+    supportedOutputs: normalizePayloadKinds(raw.supportedOutputs),
+    allowedFileRoots: normalizePathList(raw.allowedFileRoots)
   };
 }
 

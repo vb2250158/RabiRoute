@@ -1,11 +1,11 @@
 {
   "id": "plan-rabiroute-action-gate",
   "title": "把外发回复沉淀成通用 Action Gate",
-  "status": "未开始",
+  "status": "进行中",
   "priority": "high",
   "kind": "feature",
-  "currentStep": "QQ reply 已通过 RabiRoute outbox 回传，失败时保留 draft",
-  "nextAction": "把 QQ 外发经验抽象为 draft、approval、send adapter、audit log 的通用外部动作安全门",
+  "currentStep": "QQ、WeCom、RabiLink 回复已进入统一 Outbox；NapCat 本地群文件会校验 allowedFileRoots 后上传，并分别审计文件与说明文本结果",
+  "nextAction": "继续把文件、审批和其他外部动作收敛为 draft、approval、send adapter、audit log 的通用 Action Gate",
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-07-15T00:00:00+08:00",
   "keywords": ["Action Gate", "outbox", "draft", "approval", "外发", "审计"]
 }

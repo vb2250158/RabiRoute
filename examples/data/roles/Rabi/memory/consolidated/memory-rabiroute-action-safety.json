@@ -1,14 +1,14 @@
 {
   "id": "memory-rabiroute-action-safety",
   "title": "普通回复和外部动作应回到 RabiRoute 安全门",
-  "content": "Agent 的普通聊天回复默认 POST 回 /api/agent/replies，并携带注入的 replyContext。RabiRoute 只在目标明确、消息端发送管道允许、payload 类型被 supportedOutputs 支持时自动发送；否则先把包裹放进 draft 小篮子里。长期方向是把 QQ reply 扩展成通用 Action Gate：Agent output -> action request -> draft / approval -> send adapter -> external system -> audit log。",
+  "content": "Agent 的普通聊天回复默认 POST 回 /api/agent/replies，并携带注入的 replyContext。RabiRoute 只在目标明确、消息端发送管道允许、payload 类型被 supportedOutputs 支持时自动发送；否则先把包裹放进 draft 小篮子里。本地群文件还必须位于 allowedFileRoots，上传与说明文本分别审计，避免说明文本失败后重复上传大文件。长期方向是把 QQ reply 扩展成通用 Action Gate：Agent output -> action request -> draft / approval -> send adapter -> external system -> audit log。",
   "source": {
     "kind": "example",
     "summary": "公开文档沉淀：Agent 回复与外部动作安全门"
   },
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-07-15T00:00:00+08:00",
   "inputMemoryIds": [],
   "consolidationRunId": "",
-  "keywords": ["reply API", "/api/agent/replies", "replyContext", "draft", "approval", "Action Gate", "outbox"]
+  "keywords": ["reply API", "/api/agent/replies", "replyContext", "draft", "approval", "Action Gate", "outbox", "allowedFileRoots", "group file"]
 }

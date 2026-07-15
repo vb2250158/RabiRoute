@@ -13,6 +13,9 @@
         "image",
         "voice",
         "file"
+      ],
+      "allowedFileRoots": [
+        "C:/Path/To/Your/Project/ReleasePkg"
       ]
     },
     "heartbeat": {

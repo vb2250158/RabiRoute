@@ -59,7 +59,7 @@
       "targetGroupId": "",
       "allowedSpeakerNames": [],
       "regex": "",
-      "template": ""
+      "template": "这是全计划效率巡检。先完整读取角色目录 skills/one-plan-one-task-tracking.md；枚举全部未终态计划，读取每个绑定会话任务的真实状态。所有无有效阻塞的计划都必须确保任务处于 starting/active/in-progress；idle、failed 或 systemError 时在本轮立即续接或恢复。阻塞必须主动找负责人确认，并记录负责人、待确认问题、联系结果和 nextCheckAt。结束前校验可推进但空闲的计划数为 0。"
     },
     {
       "id": "rabi-manual-agent-recreate",

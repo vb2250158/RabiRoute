@@ -24,4 +24,4 @@ Rabi 优先学习和维护这些能力：
 - `skills/companionship-response.md`：陪伴回应。
 - `skills/rabiroute-guide.md`：RabiRoute 定位和路由解释。
 - `skills/configuration-triage.md`：配置和链路排查。
-- `skills/one-plan-one-task-tracking.md`：适用于旅游、调研、设计、实施、排障等所有计划的一计划一会话任务绑定、续接和闭环追踪。
+- `skills/one-plan-one-task-tracking.md`：适用于所有计划的任务绑定、全计划并行推进、阻塞负责人确认和闭环追踪。

@@ -17,6 +17,13 @@ type SendPrivateMessageParams = {
   message: OneBotMessage;
 };
 
+type UploadGroupFileParams = {
+  groupId: number | string;
+  filePath: string;
+  fileName: string;
+  folderId?: string;
+};
+
 type OneBotResponse<T> = {
   status?: string;
   retcode?: number;
@@ -27,6 +34,11 @@ type OneBotResponse<T> = {
 
 type SendMessageResult = {
   messageId?: number | string;
+};
+
+export type UploadGroupFileResult = {
+  fileId?: string;
+  fileName?: string;
 };
 
 export type NapCatEndpoint = Pick<NapCatInstanceConfig, "httpUrl" | "accessToken">;
@@ -151,4 +163,19 @@ export async function sendPrivateMessage(params: SendPrivateMessageParams, endpo
     message: params.message
   }, endpoint);
   return normalizeSendMessageResult(response);
+}
+
+export async function uploadGroupFile(params: UploadGroupFileParams, endpoint?: NapCatEndpoint): Promise<UploadGroupFileResult> {
+  const response = await callNapCat<OneBotResponse<Record<string, unknown>> | Record<string, unknown>>("upload_group_file", {
+    group_id: Number(params.groupId),
+    file: params.filePath,
+    name: params.fileName,
+    ...(params.folderId ? { folder: params.folderId } : {})
+  }, endpoint);
+  const wrapped = response as OneBotResponse<Record<string, unknown>>;
+  const data = wrapped.data ?? response as Record<string, unknown>;
+  return {
+    fileId: data && typeof data === "object" ? String(data.file_id ?? data.id ?? "").trim() || undefined : undefined,
+    fileName: data && typeof data === "object" ? String(data.file_name ?? data.name ?? params.fileName).trim() || params.fileName : params.fileName
+  };
 }

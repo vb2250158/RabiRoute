@@ -236,6 +236,7 @@ Codex runtime approval 与 `src/outbox.ts` 的 Action Gate 是两道不同边界
 - 找原始 source message。
 - 检查 pipeline 是否允许自动回复。
 - NapCat 群聊在 `replyToSource=true` 且存在源 `messageId` 时，由 Outbox 统一补 OneBot reply 段；人格和处理端不需要手写 CQ reply，并会避免重复添加。
+- NapCat 本地群文件必须位于 `messageAdapterPolicies.napcat.allowedFileRoots`，Outbox 校验真实路径和普通文件类型后调用 `src/napcat.ts` 的 `upload_group_file` 封装；可选说明文本在上传成功后单独发送，避免文本失败导致重复上传大文件。
 - 允许时调用对应消息端发送封装，例如 NapCat HTTP 或企业微信智能机器人 SDK。
 - 不允许或失败时保留 draft。
 

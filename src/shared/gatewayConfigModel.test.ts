@@ -64,6 +64,19 @@ test("message adapter policies control input while keeping output defaults enabl
   assert.equal(messageAdapterPolicyFor(normalized, "napcat").outputEnabled, true);
   assert.equal(messageAdapterPolicyFor(normalized, "heartbeat").outputEnabled, false);
   assert.deepEqual(messageAdapterPolicyFor(normalized, "heartbeat").supportedOutputs, ["text", "image", "voice", "file"]);
+  assert.deepEqual(messageAdapterPolicyFor(normalized, "heartbeat").allowedFileRoots, []);
+});
+
+test("message adapter policies normalize allowed outbound file roots", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapterPolicies: {
+      napcat: {
+        supportedOutputs: ["text", "file"],
+        allowedFileRoots: [" C:/Builds ", "C:/Builds", "D:/Artifacts"]
+      }
+    }
+  }));
+  assert.deepEqual(messageAdapterPolicyFor(normalized, "napcat").allowedFileRoots, ["C:/Builds", "D:/Artifacts"]);
 });
 
 test("WeCom is a message/output adapter and does not claim a local ingress port", () => {
@@ -172,6 +185,7 @@ test("legacy message adapter target restrictions are ignored", () => {
   }));
 
   assert.deepEqual(Object.keys(messageAdapterPolicyFor(normalized, "napcat")).sort(), [
+    "allowedFileRoots",
     "inputEnabled",
     "outputEnabled",
     "supportedOutputs"

@@ -170,6 +170,95 @@ test("QQ group source reply sends a real NapCat reply segment", async () => {
   assert.equal(sentBody.message, "[CQ:reply,id=source-22]【工会入口】我先接手调查。");
 });
 
+test("QQ group local files use upload_group_file and only read configured roots", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-file-"));
+  const releaseDir = path.join(rootDir, "ReleasePkg");
+  fs.mkdirSync(releaseDir, { recursive: true });
+  const apkPath = path.join(releaseDir, "build.apk");
+  fs.writeFileSync(apkPath, "test-apk", "utf8");
+  const calls: Array<{ url?: string; body: Record<string, unknown> }> = [];
+
+  await withJsonServer((body, request) => {
+    calls.push({ url: request.url, body });
+    if (request.url?.endsWith("/upload_group_file")) {
+      return { status: "ok", retcode: 0, data: { file_id: "file-1", file_name: "build.apk" } };
+    }
+    return { status: "ok", retcode: 0, data: { message_id: "caption-1" } };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      payloadType: "file",
+      filePath: apkPath,
+      fileName: "build.apk",
+      text: "【测试包】已上传。",
+      replyContext: {
+        routeProfileId: "main",
+        targetType: "group",
+        groupId: "20002",
+        messageId: "source-22",
+        instanceId: "main-qq",
+        adapterType: "napcat",
+        replyToSource: true
+      }
+    }, {
+      rootDir,
+      routeRoot: "data/route",
+      rolesRoot: "data/roles",
+      runtimes: [{
+        id: "main",
+        pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: true },
+        messageAdapterPolicies: {
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "file"], allowedFileRoots: [releaseDir] }
+        },
+        napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+      }]
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "sent");
+    assert.equal(result.sentFileId, "file-1");
+    assert.equal(result.sentFileName, "build.apk");
+    assert.equal(result.sentMessageId, "caption-1");
+  });
+
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].url?.endsWith("/upload_group_file"));
+  assert.deepEqual(calls[0].body, { group_id: 20002, file: apkPath, name: "build.apk" });
+  assert.ok(calls[1].url?.endsWith("/send_group_msg"));
+  assert.equal(calls[1].body.message, "[CQ:reply,id=source-22]【测试包】已上传。");
+});
+
+test("QQ group local file upload is blocked outside allowedFileRoots", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-file-blocked-"));
+  const allowedDir = path.join(rootDir, "allowed");
+  fs.mkdirSync(allowedDir, { recursive: true });
+  const secretPath = path.join(rootDir, "secret.txt");
+  fs.writeFileSync(secretPath, "do-not-send", "utf8");
+
+  const result = await handleAgentReply({
+    payloadType: "file",
+    filePath: secretPath,
+    targetType: "group",
+    groupId: "20002",
+    routeProfileId: "main"
+  }, {
+    rootDir,
+    routeRoot: "data/route",
+    rolesRoot: "data/roles",
+    runtimes: [{
+      id: "main",
+      pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
+      messageAdapterPolicies: {
+        napcat: { outputEnabled: true, supportedOutputs: ["file"], allowedFileRoots: [allowedDir] }
+      },
+      napcatInstances: [{ id: "main-qq", httpUrl: "http://127.0.0.1:1", accessToken: "", enabled: true }]
+    }]
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "failed");
+  assert.match(result.reason ?? "", /outside the configured allowedFileRoots/);
+});
+
 test("explicit group target can proactively use NapCat even when pipeline stays in the Agent session", async () => {
   const result = await handleAgentReply({
     text: "项目进度提醒：请同步当前阻塞。",
