@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { handleAgentReply, napcatGroupReplyMessage, type AgentReplyOptions } from "./outbox.js";
+import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
 
 function optionsWithRuntime(runtime: AgentReplyOptions["runtimes"][number]): AgentReplyOptions {
@@ -41,21 +42,42 @@ async function withJsonServer<T>(
   }
 }
 
-test("Codex output adapter accepts replies without turning them into drafts", async () => {
+test("Agent output keeps replies in the local Agent session without creating drafts", async () => {
   const result = await handleAgentReply({
     routeProfileId: "main",
-    text: "accepted by codex"
+    text: "keep this in the Agent session"
   }, optionsWithRuntime({
     id: "main",
     pipeline: {
-      outputAdapter: "codex",
-      outputPipeline: "codex"
+      outputAdapter: "agent",
+      outputPipeline: "agent"
     }
   }));
 
   assert.equal(result.ok, true);
   assert.equal(result.status, "sent");
-  assert.equal(result.reason, "Accepted by Codex output adapter.");
+  assert.equal(result.reason, "Reply kept in the local Agent session.");
+});
+
+test("legacy Codex reply context normalizes to the local Agent output", async () => {
+  const result = await handleAgentReply({
+    routeProfileId: "main",
+    text: "legacy local result",
+    replyContext: {
+      outputAdapter: "codex",
+      outputPipeline: "codex"
+    }
+  }, optionsWithRuntime({
+    id: "main",
+    pipeline: {
+      outputAdapter: "agent",
+      outputPipeline: "agent"
+    }
+  }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "sent");
+  assert.equal(result.reason, "Reply kept in the local Agent session.");
 });
 
 test("QQ output does not require original source context when target is explicit", async () => {
@@ -148,7 +170,7 @@ test("QQ group source reply sends a real NapCat reply segment", async () => {
   assert.equal(sentBody.message, "[CQ:reply,id=source-22]【工会入口】我先接手调查。");
 });
 
-test("explicit group target can proactively use NapCat even when pipeline is codex", async () => {
+test("explicit group target can proactively use NapCat even when pipeline stays in the Agent session", async () => {
   const result = await handleAgentReply({
     text: "项目进度提醒：请同步当前阻塞。",
     routeProfileId: "其他路由",
@@ -163,8 +185,8 @@ test("explicit group target can proactively use NapCat even when pipeline is cod
         id: "AIPM群",
         targetGroupId: "20002",
         pipeline: {
-          outputAdapter: "codex",
-          outputPipeline: "codex",
+          outputAdapter: "agent",
+          outputPipeline: "agent",
           replyToSource: false
         },
         messageAdapterPolicies: {
@@ -173,7 +195,7 @@ test("explicit group target can proactively use NapCat even when pipeline is cod
             outputMode: "draft",
             supportedOutputs: ["text"],
             allowedGroups: ["10001"],
-            disabledPipelines: ["codex"]
+            disabledPipelines: ["agent"]
           } as any)
         },
         napcatInstances: []
@@ -194,7 +216,7 @@ test("explicit group target can proactively use NapCat even when pipeline is cod
   assert.equal(result.groupId, "20002");
 });
 
-test("source reply resolves runtime route from message log and bypasses codex output pipeline", async () => {
+test("source reply resolves runtime route from message log and bypasses local Agent output", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-"));
   const routeDir = path.join(rootDir, "data", "route", "宇宙程序");
   fs.mkdirSync(routeDir, { recursive: true });
@@ -217,8 +239,8 @@ test("source reply resolves runtime route from message log and bypasses codex ou
       messageId: "private-1",
       userId: "10001",
       instanceId: "main-qq",
-      outputAdapter: "codex",
-      outputPipeline: "codex",
+      outputAdapter: "agent",
+      outputPipeline: "agent",
       replyToSource: false
     }
   }, {
@@ -230,8 +252,8 @@ test("source reply resolves runtime route from message log and bypasses codex ou
         id: "宇宙程序",
         dataDir: path.join("data", "route", "宇宙程序"),
         pipeline: {
-          outputAdapter: "codex",
-          outputPipeline: "codex",
+          outputAdapter: "agent",
+          outputPipeline: "agent",
           replyToSource: false
         },
         messageAdapterPolicies: {
@@ -299,8 +321,8 @@ test("FenneNote voice output forwards agent reply to playback with original voic
           id: "Rabi",
           name: "Rabi route",
           pipeline: {
-            outputAdapter: "codex",
-            outputPipeline: "codex"
+            outputAdapter: "agent",
+            outputPipeline: "agent"
           }
         }],
         messageAdapterPolicies: {
@@ -425,8 +447,8 @@ test("explicit WeCom group target sends through the WeCom SDK wrapper", async ()
     }, optionsWithRuntime({
       id: "wecom-route",
       pipeline: {
-        outputAdapter: "codex",
-        outputPipeline: "codex"
+        outputAdapter: "agent",
+        outputPipeline: "agent"
       },
       wecomBotId: "bot-id",
       wecomBotSecret: "bot-secret",
@@ -496,8 +518,8 @@ test("WeCom source reply resolves chat id from wecom message log", async () => {
         id: "wecom-route",
         dataDir: path.join("data", "route", "wecom-route"),
         pipeline: {
-          outputAdapter: "codex",
-          outputPipeline: "codex"
+          outputAdapter: "agent",
+          outputPipeline: "agent"
         },
         wecomBotId: "bot-id",
         wecomBotSecret: "bot-secret",
@@ -550,44 +572,75 @@ test("WeCom output policy blocks disabled sending", async () => {
 
 test("RabiLink source reply is gated by route policy and queued for the Relay worker", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-rabilink-"));
-  const result = await handleAgentReply({
-    text: "RabiLink 回传测试。",
-    replyContext: {
-      runtimeRouteId: "RabiLink",
-      gatewayId: "RabiLink",
-      routeProfileId: "RabiLink",
-      routeKind: "voice_transcript",
-      targetType: "voice_transcript",
-      messageId: "rabilink-source-1",
-      adapterType: "rabilink",
-      outputAdapter: "codex",
-      outputPipeline: "codex",
-      replyToSource: false
-    }
-  }, {
-    rootDir,
-    routeRoot: path.join(rootDir, "data", "route"),
-    rolesRoot: path.join(rootDir, "data", "roles"),
-    runtimes: [{
-      id: "RabiLink",
-      messageAdapterPolicies: {
-        rabilink: {
-          outputEnabled: true,
-          supportedOutputs: ["text"]
-        }
+  let deliveredBody: Record<string, unknown> = {};
+  let deliveredToken = "";
+  await withJsonServer((body, request) => {
+    deliveredBody = body;
+    deliveredToken = String(request.headers["x-rabilink-token"] || "");
+    return { ok: true, status: "queued", messages: [{ id: "out-reply-1", proactive: false }] };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      text: "RabiLink 回传测试。",
+      replyContext: {
+        runtimeRouteId: "RabiLink",
+        gatewayId: "RabiLink",
+        routeProfileId: "RabiLink",
+        routeKind: "voice_transcript",
+        targetType: "voice_transcript",
+        messageId: "rabilink-source-1",
+        adapterType: "rabilink",
+        outputAdapter: "agent",
+        outputPipeline: "agent",
+        replyToSource: false
       }
-    }]
-  });
+    }, {
+      rootDir,
+      routeRoot: path.join(rootDir, "data", "route"),
+      rolesRoot: path.join(rootDir, "data", "roles"),
+      runtimes: [{
+        id: "RabiLink",
+        rabiLinkRelay: {
+          enabled: true,
+          url: new URL(url).origin,
+          token: "test-relay-token",
+          deviceId: "pc-test"
+        },
+        messageAdapterPolicies: {
+          rabilink: {
+            outputEnabled: true,
+            supportedOutputs: ["text"]
+          }
+        }
+      }]
+    });
 
-  assert.equal(result.ok, true);
-  assert.equal(result.status, "sent");
-  assert.equal(result.reason, "Queued for rabilink output.");
-  assert.equal(result.targetType, "rabilink");
-  const replyLog = path.join(rootDir, "data", "route", "RabiLink", "rabilink-replies.jsonl");
-  const rows = fs.readFileSync(replyLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].text, "RabiLink 回传测试。");
-  assert.equal(rows[0].adapterType, "rabilink");
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "sent");
+    assert.equal(result.reason, "Queued in the RabiLink outbound message stream.");
+    assert.equal(result.targetType, "rabilink");
+    assert.equal(deliveredBody.text, "RabiLink 回传测试。");
+    assert.equal(deliveredBody.taskId, "rabilink-source-1");
+    assert.equal(typeof deliveredBody.deliveryId, "string");
+    assert.ok(String(deliveredBody.deliveryId).length > 0);
+    assert.equal(deliveredBody.proactive, false);
+    assert.equal(deliveredBody.final, true);
+    assert.equal(deliveredBody.deviceId, "pc-test");
+    assert.equal(deliveredToken, "test-relay-token");
+    const replyLog = path.join(rootDir, "data", "route", "RabiLink", "rabilink-replies.jsonl");
+    const rows = fs.readFileSync(replyLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].text, "RabiLink 回传测试。");
+    assert.equal(rows[0].adapterType, "rabilink");
+    assert.equal(rows[0].final, true);
+    const conversationRows = fs.readFileSync(path.join(rootDir, "data", "route", "RabiLink", "rabilink-conversation.jsonl"), "utf8")
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(conversationRows.length, 1);
+    assert.equal(conversationRows[0].direction, "agent_to_user");
+    assert.equal(conversationRows[0].taskId, "rabilink-source-1");
+    assert.equal(conversationRows[0].messageId, "out-reply-1");
+  });
 });
 
 test("proactive RabiLink output enters the continuous Relay stream without a source task", async () => {
@@ -604,6 +657,9 @@ test("proactive RabiLink output enters the continuous Relay stream without a sou
         targetType: "rabilink",
         proactive: true,
         source: "scheduler-test",
+        targetDeviceKinds: ["glasses"],
+        presentation: ["text", "tts"],
+        priority: "urgent",
         text: "该休息一下了。"
       }, {
         rootDir,
@@ -632,9 +688,67 @@ test("proactive RabiLink output enters the continuous Relay stream without a sou
       assert.equal(deliveredBody.text, "该休息一下了。");
       assert.equal(deliveredBody.source, "scheduler-test");
       assert.equal(deliveredBody.deviceId, "pc-test");
+      assert.equal(deliveredBody.taskId, "");
+      assert.equal(typeof deliveredBody.deliveryId, "string");
+      assert.ok(String(deliveredBody.deliveryId).length > 0);
+      assert.equal(deliveredBody.proactive, true);
+      assert.equal(deliveredBody.final, true);
+      assert.deepEqual(deliveredBody.targetDeviceKinds, ["glasses"]);
+      assert.deepEqual(deliveredBody.presentation, ["text", "tts"]);
+      assert.equal(deliveredBody.priority, "urgent");
       assert.equal(deliveredToken, "test-relay-token");
       assert.equal(result.messageId, undefined);
+      const conversationRows = fs.readFileSync(path.join(rootDir, "data", "route", "RabiLink", "rabilink-conversation.jsonl"), "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      assert.equal(conversationRows.length, 1);
+      assert.equal(conversationRows[0].direction, "agent_to_user");
+      assert.equal(conversationRows[0].proactive, true);
+      assert.equal(conversationRows[0].text, "该休息一下了。");
+      assert.deepEqual(conversationRows[0].targetDeviceKinds, ["glasses"]);
+      assert.deepEqual(conversationRows[0].presentation, ["text", "tts"]);
+      assert.equal(conversationRows[0].priority, "urgent");
   });
+});
+
+test("RabiLink outbound publisher retries with one stable delivery id", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      if (bodies.length === 1) {
+        request.socket.destroy();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, status: "queued", deduplicated: true }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  try {
+    const result = await publishRabiLinkRelayMessage("主动消息可靠投递测试。", {
+      proactive: true,
+      relay: {
+        enabled: true,
+        url: `http://127.0.0.1:${address.port}`,
+        token: "test-token",
+        deviceId: "pc-test",
+        deviceGuid: "guid-test"
+      }
+    });
+    assert.equal(result.ok, true);
+    assert.equal(bodies.length, 2);
+    assert.equal(typeof bodies[0].deliveryId, "string");
+    assert.ok(String(bodies[0].deliveryId).length > 0);
+    assert.equal(bodies[1].deliveryId, bodies[0].deliveryId);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test("RabiLink source reply respects disabled route output policy", async () => {

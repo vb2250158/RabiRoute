@@ -1,10 +1,10 @@
 import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
-import { isCodexMonitorThreadActive } from "./codexDesktopIpc.js";
+import { isCodexMonitorThreadActive } from "./codexRuntime.js";
 import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
 import {
-  appendCodexNotificationToDir,
+  appendAgentPacketToDir,
   appendAdapterLogToDir,
   appendGroupMessageToDir,
   appendHeartbeatEventToDir,
@@ -91,19 +91,7 @@ function logDeliveryResult(result: ForwardDeliveryResult): void {
 }
 
 function configuredAgentAdapters(): AgentAdapterType[] {
-  if (config.agentAdapters.length > 0) {
-    return config.agentAdapters;
-  }
-  if (config.codexDesktopIpcNotify) {
-    return ["codex"];
-  }
-  if (config.codexDirectNotify) {
-    return ["codex"];
-  }
-  if (process.env.ASTRBOT_URL) {
-    return ["astrbot"];
-  }
-  return [];
+  return config.agentAdapters;
 }
 
 export function shouldSkipHeartbeatDelivery(
@@ -118,13 +106,22 @@ export function shouldSkipHeartbeatDelivery(
     && codexThreadActive;
 }
 
-function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind): boolean {
-  return shouldSkipHeartbeatDelivery(
-    routeKind,
-    config.heartbeatSkipWhenAgentBusy,
-    configuredAgentAdapters(),
-    isCodexMonitorThreadActive()
-  );
+async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind): Promise<boolean> {
+  const adapters = configuredAgentAdapters();
+  if (!shouldSkipHeartbeatDelivery(routeKind, config.heartbeatSkipWhenAgentBusy, adapters, true)) {
+    return false;
+  }
+  try {
+    return await isCodexMonitorThreadActive();
+  } catch (error) {
+    appendAdapterLogToDir("router", {
+      event: "heartbeat_agent_busy_check_failed",
+      level: "warning",
+      message: `Heartbeat busy check failed; delivery will continue: ${error instanceof Error ? error.message : String(error)}`,
+      data: { routeKind }
+    }, config.dataDir);
+    return false;
+  }
 }
 
 function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
@@ -323,7 +320,7 @@ async function forwardMessageToRoute(
     return routeResult(route, "missed", { reason: "no_matching_rule" });
   }
 
-  if (heartbeatShouldSkipForBusyAgent(routeKind)) {
+  if (await heartbeatShouldSkipForBusyAgent(routeKind)) {
     appendAdapterLogToDir("router", {
       event: "heartbeat_skipped_agent_busy",
       level: "info",
@@ -354,7 +351,7 @@ async function forwardMessageToRoute(
       message: packet.message
     });
 
-    appendCodexNotificationToDir({
+    appendAgentPacketToDir({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       time: Math.floor(Date.now() / 1000),
       kind: logKindForRoute(routeKind),

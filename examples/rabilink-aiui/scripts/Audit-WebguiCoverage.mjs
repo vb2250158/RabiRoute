@@ -8,6 +8,13 @@ const webguiSrcDir = path.join(repoRoot, "ribiwebgui", "src");
 const aiuiPagePath = path.join(projectRoot, "pages", "home", "index.ink");
 const relayPath = path.join(repoRoot, "scripts", "rabilink-relay-server.mjs");
 
+const intentionallyBlockedEndpoints = new Map([
+  [
+    "/api/message/napcat-ensure-ready",
+    "Starts or repairs a local NapCat login and must remain an explicit local WebGUI action."
+  ]
+]);
+
 function read(file) {
   return fs.readFileSync(file, "utf8");
 }
@@ -65,10 +72,20 @@ const aiuiSource = read(aiuiPagePath);
 const relaySource = read(relayPath);
 const endpoints = extractFetchEndpoints();
 const misses = [];
+const blocked = [];
 
 for (const [endpoint, files] of [...endpoints.entries()].sort(([a], [b]) => a.localeCompare(b))) {
   const coveredByAiui = endpointCoveredByAiui(endpoint, aiuiSource);
   const allowedByRelay = endpointAllowedByRelay(endpoint, relaySource);
+  const blockedReason = intentionallyBlockedEndpoints.get(endpoint);
+  if (blockedReason) {
+    if (coveredByAiui || allowedByRelay) {
+      misses.push({ endpoint, coveredByAiui, allowedByRelay, files: [...files], blockedReason });
+    } else {
+      blocked.push({ endpoint, files: [...files], reason: blockedReason });
+    }
+    continue;
+  }
   if (!coveredByAiui || !allowedByRelay) {
     misses.push({
       endpoint,
@@ -88,4 +105,6 @@ if (misses.length) {
   throw new Error(`RabiLink AIUI misses ${misses.length} RibiWebGUI fetch endpoint(s).`);
 }
 
-console.log(`RabiLink AIUI WebGUI coverage passed (${endpoints.size} endpoint patterns).`);
+console.log(
+  `RabiLink AIUI WebGUI coverage passed (${endpoints.size} endpoint patterns, ${blocked.length} explicitly blocked).`
+);

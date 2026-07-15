@@ -1,14 +1,26 @@
 # NapCat 无值守与登录稳定性
 
-RabiRoute 只负责接收 NapCat / OneBot 事件、记录消息、路由和投递处理端；QQ 登录态属于 NapCat / QQNT。不要把 QQ 账号、密码、Cookie、token 写进 `data/route`、`data/roles`、示例文件或仓库。
+RabiRoute 负责接收 NapCat / OneBot 事件、记录消息、路由和投递处理端，也可以在用户点击“打开 NapCat”时编排本机 NapCat 的启动、快捷登录和 OneBot 连接修复；QQ 登录凭据和安全校验仍属于 NapCat / QQNT。不要把 QQ 密码、Cookie、token 写进 `data/route`、`data/roles`、示例文件或仓库。
 
 ## 推荐职责划分
 
 - NapCat：启动 QQNT、维护 QQ 登录态、提供 WebUI、WebSocket Client 和 HTTP Server。
-- RabiRoute：监听 WebSocket、调用 OneBot HTTP、展示连接状态、记录消息和路由事件。
+- RabiRoute：监听 WebSocket、调用 OneBot HTTP、展示连接状态、记录消息和路由事件；用户明确点击“打开 NapCat”后，按绑定实例自动启动、选择已有 quick login 账号，并补齐 OneBot HTTP / WebSocket 配置。
 - Windows：负责进程守护，例如开机自启 NapCat 和 RabiRoute manager。
 
-RabiRoute 可以监控 NapCat WebSocket 与 HTTP 登录资料读取状态，但不自动输入 QQ 密码，也不绕过验证码、新设备验证或风控确认。
+RabiRoute 不自动输入 QQ 密码，也不绕过验证码、新设备验证或风控确认。遇到这些情况时，一键流程只打开正确实例的已鉴权 WebUI，并给出一句需要用户完成的动作；确认完成后页面会继续复查连接。
+
+## WebGUI 一键打开
+
+路由页每个 QQ 实例的“打开 NapCat”按钮按下面顺序工作：
+
+1. 已经在线且账号匹配：直接打开对应 WebUI，不重启现有会话。
+2. NapCat 未启动：按该实例的 `launchCommand` 和 `workingDir` 启动，并等待 WebUI。
+3. WebUI 有绑定账号的 quick login：自动选择该账号并等待 QQ / OneBot 就绪。
+4. QQ 已登录但 OneBot 未连通：自动写入并应用该实例的 HTTP / WebSocket 配置。
+5. 只有验证码、新设备确认、扫码或同账号被其他窗口占用时，才把正确页面交给用户处理。
+
+健康检查接口保持只读；登录、启动和配置修复只发生在用户明确点击按钮后，由 manager 的 `napcat-ensure-ready` 动作接口编排。
 
 ## 无值守登录思路
 
@@ -46,7 +58,7 @@ setx NAPCAT_QUICK_PASSWORD "<qq-password>"
 
 ## 进程守护
 
-RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/adapterConfig.json` 或 `data/roles/*/personaConfig.json` 改动后自动重载受影响路由。它不会启动或重启 NapCat 本体。
+RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/adapterConfig.json` 或 `data/roles/*/personaConfig.json` 改动后自动重载受影响路由。它不会在后台无条件重启 NapCat；只有用户点击实例的“打开 NapCat”或明确执行启动/重启动作时，才控制该实例。
 
 NapCat 本体建议用以下方式之一守护：
 
@@ -54,7 +66,7 @@ NapCat 本体建议用以下方式之一守护：
 - NSSM / WinSW：把 NapCat Shell 包装成 Windows 服务。
 - 手工启动 NapCat Shell，并保持 QQNT / NapCat 窗口运行。
 
-如果 NapCat 自动退出、QQ 被挤下线或 quick login 失败，先看 NapCat 日志和 WebUI；RabiRoute WebGUI 只能显示 WebSocket 是否连接、HTTP `get_login_info` 是否可用、最近断开时间和错误信息。
+如果 NapCat 自动退出、QQ 被挤下线或 quick login 失败，先在 RabiRoute 路由页点击对应实例的“打开 NapCat”。自动恢复失败时，再展开详情查看 NapCat 日志、WebSocket 状态、HTTP `get_login_info` 和最近错误。
 
 ## RabiRoute 侧健康检查
 

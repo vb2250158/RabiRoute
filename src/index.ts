@@ -166,11 +166,7 @@ if (rolePanelMessageArg) {
 const directAgentMessageArg = process.argv.find((arg) => arg.startsWith("--direct-agent-message="));
 if (directAgentMessageArg) {
   const message = decodeURIComponent(directAgentMessageArg.slice("--direct-agent-message=".length));
-  const adapters = config.agentAdapters.length > 0
-    ? config.agentAdapters
-    : config.codexDesktopIpcNotify || config.codexDirectNotify
-      ? ["codex" as const]
-      : [];
+  const adapters = config.agentAdapters;
   if (adapters.length === 0) {
     console.error("RabiRoute direct agent message failed: no agent adapters configured");
     process.exit(1);

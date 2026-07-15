@@ -970,7 +970,7 @@ Invoke-RestMethod `
 
 1. HTTP 204。
 2. `data/route/xiaoai/voice-transcripts.jsonl` 追加记录。
-3. `data/route/xiaoai/codex-notifications.jsonl` 追加投递记录。
+3. `data/route/xiaoai/agent-packets.jsonl` 追加 AgentPacket 审计记录。
 4. Codex 固定线程 `RabiRoute XiaoAI` 收到一条语音入口提醒。
 
 如果这四个点都成立，说明小爱入口已经按 RabiRoute 的设计理念接入成功。

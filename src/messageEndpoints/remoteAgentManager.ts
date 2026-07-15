@@ -3,15 +3,15 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocket } from "ws";
 
 export const REMOTE_AGENT_CONTROL_PORT_START = 8797;
 export const REMOTE_AGENT_DISCOVERY_PORT_START = 8798;
 export const REMOTE_AGENT_DISCOVERY_PORT_END = 8818;
-export const REMOTE_AGENT_PROTOCOL_VERSION = 2;
-export const REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 0);
-export const REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 0);
+export const REMOTE_AGENT_PROTOCOL_VERSION = 3;
+export const REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 10 * 1024 * 1024);
+export const REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 25 * 1024 * 1024);
 
 export type RemoteAgentDeviceInfo = {
   deviceId: string;
@@ -133,6 +133,7 @@ type RemoteAgentHubOptions = {
   discoveryPort?: number;
   passwordStorePath?: string;
   fileStoreDir?: string;
+  connectionTimeoutMs?: number;
   getDefaultGatewayId: () => string | undefined;
   onTaskEvent?: (task: RemoteAgentTask, event: RemoteAgentTaskEvent) => void | Promise<void>;
 };
@@ -142,13 +143,26 @@ type PasswordStore = {
 };
 
 type RemoteAgentSocketMessage =
-  | { type: "registered"; device?: RemoteAgentDeviceInfo; deviceId?: string; observedIp?: string }
+  | { type: "challenge"; protocolVersion?: number; algorithm?: string; nonce?: string }
+  | { type: "registered"; protocolVersion?: number; serverProof?: string; device?: RemoteAgentDeviceInfo; deviceId?: string; observedIp?: string }
   | { type: "heartbeat"; device?: Partial<RemoteAgentDeviceInfo> }
   | ({ type: "taskEvent" } & RemoteAgentTaskEvent)
   | { type: "error"; error?: string };
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function remoteAgentAuthProof(password: string, role: "manager" | "server", nonce: string): string {
+  return createHmac("sha256", password)
+    .update(`rabiroute.remote-agent.v3:${role}:${nonce}`)
+    .digest("base64url");
+}
+
+function authProofMatches(candidate: unknown, expected: string): boolean {
+  const actualBuffer = Buffer.from(String(candidate || ""), "utf8");
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
 function localDeviceInfo(): RemoteAgentDeviceInfo {
@@ -214,18 +228,26 @@ function discoveryPorts(): number[] {
   return ports;
 }
 
-export function controlUrlFromObservedAddress(rawControlUrl: unknown, observedAddress: string, port: number): string {
+export function controlUrlFromObservedAddress(rawControlUrl: unknown, observedAddress: string, port: number, preserveAdvertised = false): string {
+  if (preserveAdvertised) {
+    const parsed = new URL(String(rawControlUrl || ""));
+    if (
+      (parsed.protocol !== "ws:" && parsed.protocol !== "wss:")
+      || !parsed.hostname
+      || parsed.pathname !== "/api/remote-agent/control"
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+    ) {
+      throw new Error("Remote Agent advertised an invalid public control URL.");
+    }
+    return parsed.toString();
+  }
   const host = observedAddress.includes(":") && !observedAddress.startsWith("[")
     ? `[${observedAddress}]`
     : observedAddress;
-  try {
-    const parsed = new URL(String(rawControlUrl || ""));
-    parsed.hostname = host;
-    parsed.port = String(port);
-    return parsed.toString();
-  } catch {
-    return `ws://${host}:${port}/api/remote-agent/control`;
-  }
+  return `ws://${host}:${port}/api/remote-agent/control`;
 }
 
 function defaultPasswordStorePath(): string {
@@ -267,12 +289,12 @@ export class RemoteAgentHub {
   }
 
   attach(_server: http.Server): void {
-    // Remote Agent v2 uses Rabi as the outbound controller. This method is kept
+    // Remote Agent v3 uses Rabi as the outbound controller. This method is kept
     // so older manager wiring can call it without exposing an inbound token API.
   }
 
   startDiscoveryResponder(): void {
-    console.log("Remote Agent manager discovery responder is not used in v2; RabiGUI scans remote clients instead.");
+    console.log("Remote Agent manager discovery responder is not used in v3; RabiGUI scans remote clients instead.");
   }
 
   localScanResult(): {
@@ -307,7 +329,7 @@ export class RemoteAgentHub {
           label: "连接密码",
           required: true,
           ok: true,
-          detail: "远端 bridge 默认密码为 123456；连接成功后 Rabi 会在本机运行期数据中记住密码。"
+          detail: "远端 bridge 不提供公知默认密码；请输入远端终端显示的临时密码或预先配置的高熵密码。连接成功后 Rabi 会在本机运行期数据中记住密码。"
         },
         {
           id: "discovery",
@@ -338,6 +360,9 @@ export class RemoteAgentHub {
     if (!deviceId) throw new Error("Missing remote Agent device id.");
     const discovered = this.discovered.get(deviceId);
     if (!discovered) throw new Error(`Remote Agent device has not been scanned: ${deviceId}`);
+    if (discovered.protocolVersion !== REMOTE_AGENT_PROTOCOL_VERSION) {
+      throw new Error(`Remote Agent bridge protocol ${String(discovered.protocolVersion ?? "missing")} is incompatible; protocol ${REMOTE_AGENT_PROTOCOL_VERSION} is required.`);
+    }
     const password = String(request.password ?? this.savedPassword(deviceId) ?? "").trim();
     if (!password) throw new Error("Missing remote Agent password.");
     const existing = this.devices.get(deviceId);
@@ -361,34 +386,75 @@ export class RemoteAgentHub {
     this.devices.set(deviceId, record);
 
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error("Remote Agent connection timed out."));
-      }, 6000);
-      const fail = (error: Error): void => {
+      let settled = false;
+      let challengeAnswered = false;
+      let authNonce = "";
+      const cleanup = (): void => {
         clearTimeout(timer);
+        socket.off("message", onMessage);
+        socket.off("error", onError);
+      };
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         record.connectionError = error.message;
         try { socket.close(); } catch { /* ignore */ }
         reject(error);
       };
-      socket.once("open", () => {
-        socket.send(JSON.stringify({
-          type: "hello",
-          password,
-          manager: localDeviceInfo(),
-          protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION
-        }));
-      });
-      socket.once("error", (error) => fail(error instanceof Error ? error : new Error(String(error))));
-      socket.on("message", (data) => {
+      const succeed = (): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onError = (error: Error): void => fail(error instanceof Error ? error : new Error(String(error)));
+      const onMessage = (data: WebSocket.RawData): void => {
+        if (settled) return;
         try {
           const message = safeJsonParse(data) as RemoteAgentSocketMessage;
+          if (message.type === "challenge") {
+            const nonce = String(message.nonce || "");
+            if (
+              challengeAnswered
+              || message.protocolVersion !== REMOTE_AGENT_PROTOCOL_VERSION
+              || message.algorithm !== "hmac-sha256"
+              || nonce.length < 32
+            ) {
+              fail(new Error("Remote Agent sent an invalid authentication challenge."));
+              return;
+            }
+            challengeAnswered = true;
+            authNonce = nonce;
+            const proof = remoteAgentAuthProof(password, "manager", nonce);
+            socket.send(JSON.stringify({
+              type: "hello",
+              proof,
+              manager: localDeviceInfo(),
+              protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION
+            }));
+            return;
+          }
           if (message.type === "registered") {
-            clearTimeout(timer);
+            const expectedServerProof = authNonce ? remoteAgentAuthProof(password, "server", authNonce) : "";
+            if (
+              !challengeAnswered
+              || message.protocolVersion !== REMOTE_AGENT_PROTOCOL_VERSION
+              || !expectedServerProof
+              || !authProofMatches(message.serverProof, expectedServerProof)
+            ) {
+              fail(new Error("Remote Agent server authentication failed."));
+              return;
+            }
             const info = normalizeDeviceInfo(message.device || { deviceId: message.deviceId }, deviceId);
+            if (info.deviceId !== deviceId) {
+              fail(new Error(`Remote Agent registered as unexpected device ${info.deviceId}; expected ${deviceId}.`));
+              return;
+            }
             record.info = info;
             record.lastSeenAt = nowIso();
             this.savePassword(deviceId, password);
-            resolve();
+            succeed();
             return;
           }
           if (message.type === "error") {
@@ -397,7 +463,13 @@ export class RemoteAgentHub {
         } catch (error) {
           fail(error instanceof Error ? error : new Error(String(error)));
         }
-      });
+      };
+      const timer = setTimeout(
+        () => fail(new Error("Remote Agent connection timed out.")),
+        this.options.connectionTimeoutMs ?? 6000
+      );
+      socket.once("error", onError);
+      socket.on("message", onMessage);
     });
 
     socket.on("message", (data) => {
@@ -419,6 +491,9 @@ export class RemoteAgentHub {
       if (latest?.socket === socket) {
         latest.connectionError = latest.connectionError || "Disconnected.";
       }
+    });
+    socket.on("error", (error) => {
+      record.connectionError = error instanceof Error ? error.message : String(error);
     });
     return this.deviceStatus(deviceId, record);
   }
@@ -526,6 +601,9 @@ export class RemoteAgentHub {
     if (normalizedSourceDeviceId !== existing.deviceId) {
       throw new Error(`Remote Agent device ${normalizedSourceDeviceId} does not own task ${event.taskId}.`);
     }
+    if (existing.status === "completed" || existing.status === "failed") {
+      return existing;
+    }
     const storedEvent = event.files?.length
       ? { ...event, files: event.files.map(stripTransferContent), savedFiles: this.saveReturnedFiles(existing, event.files) }
       : event;
@@ -565,7 +643,7 @@ export class RemoteAgentHub {
           const key = deviceId;
           if (seen.has(key)) return;
           seen.add(key);
-          const controlUrl = controlUrlFromObservedAddress(item.controlUrl, remote.address, port);
+          const controlUrl = controlUrlFromObservedAddress(item.controlUrl, remote.address, port, item.publicControlUrl === true);
           found.push({
             ...normalizeDeviceInfo(device, deviceId),
             host: remote.address,

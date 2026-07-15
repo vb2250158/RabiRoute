@@ -76,7 +76,7 @@ examples/ 和 skills/
 
 - `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别。
 - `wecomAdapter.ts`：计划接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。企业微信群聊字段应尽量对齐 NapCat 群聊字段，专用字段只作为补充。
-- `webhookAdapter.ts`：接通用 Webhook、FenneNote、小爱等 HTTP 回调，并转成语音转写事件。
+- `webhookAdapter.ts`：接通用 Webhook、FenneNote、小爱等 HTTP 回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。
 - `heartbeatAdapter.ts`：定时触发心跳消息。
 - `messageAdapter.ts`：消息端 Adapter 的最小 Interface。
 
@@ -94,7 +94,7 @@ Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转
 - 手动触发：`manual-trigger-events.jsonl`
 - 语音转写：`voice-transcripts.jsonl`
 - 企业微信：`wecom-messages.jsonl`
-- Agent 投递记录：`codex-notifications.jsonl`
+- Agent 投递记录：`agent-packets.jsonl`
 - Adapter 日志：`*-adapter.log.jsonl`
 
 这里是当前的轻量 Event Store。未来如果要做 replay，应该优先补 `route-decisions.jsonl`，而不是从 Agent prompt 反推。
@@ -109,7 +109,7 @@ Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转
 - 调用 RouteDecision 判断是否命中规则。
 - 按角色数据目录补写事件记录。
 - 调用 AgentPacket 构造处理端消息。
-- 写 `codex-notifications.jsonl`。
+- 写 `agent-packets.jsonl`。
 - 调用 Agent Adapter 投递。
 
 它不再负责：
@@ -199,12 +199,32 @@ Agent 端 Adapter 在 `src/agentAdapters/`：
 
 其他处理端在根目录还有：
 
-- `codexDesktopIpc.ts`
-- `codexApp.ts`
+- `codexRuntime.ts`：Codex 业务适配层，负责固定线程身份、thread/turn 选择、运行中 steer 和运行状态上报。
+- `codexAppServerClient.ts`：`codex app-server` stdio 驱动，负责子进程生命周期、`initialize` / `initialized` 握手、JSONL 请求响应、通知分发和 server request 回应。
 - `copilotCli.ts`
 - `marvis.ts`
 
 Agent Adapter 的职责是“把 AgentPacket 的消息投给处理端”。不要让它反向定义 RabiRoute 的路由语义。
+
+### Codex adapter 的内部边界
+
+```text
+AgentPacket
+  -> codexRuntime.ts             agent/session policy
+  -> codexAppServerClient.ts     transport/lifecycle
+  -> codex app-server (stdio)    Codex runtime
+  -> thread + turn
+```
+
+- Provider 是 OpenAI；adapter 不复制 provider 的账号、鉴权或模型目录。
+- Agent/runtime 是 Codex；稳定 adapter id 仍是 `codex`。
+- Transport 是 app-server stdio JSONL；不要在业务适配层重新实现 Desktop IPC，也不要把实验性 WebSocket 设为正式通道。
+- Host 是可选的 ChatGPT desktop；宿主发现、启动或可见性不能成为消息投递前置条件。
+- Model 是 thread/turn 参数。`agentModel` 为空时先从 `model/list` 读取 runtime 当前默认值，再用于恢复与投递；不能在代码里增加兜底模型常量。
+
+`codexAppServerClient.ts` 必须保持 transport-only：它不读取 route rule、不拼 AgentPacket、不决定业务外发。它收到 command、file、network、permission、MCP 或未知 server request 时，只有被显式策略允许才返回允许；超时、断连、未知方法和无法判断均 fail closed。默认 turn 使用 `workspaceWrite` 沙箱，更高权限不能从 host 状态推断。
+
+Codex runtime approval 与 `src/outbox.ts` 的 Action Gate 是两道不同边界：前者控制 Agent 执行权限，后者控制 QQ、文档、设备和外部 API 等业务动作。任何代码都不能把一次 runtime approval 传播成业务外发授权。
 
 ## Outbox / Action Gate
 
@@ -491,6 +511,9 @@ src/messageEndpoints/
 - 不让外部写入绕过 Outbox / Action Gate。
 - 不把 NapCat、FenneNote、小爱等外部工具自身能力纳入 RabiRoute 控制面；RabiRoute 只管自己是否接收消息，以及自己是否允许 Agent 通过 RabiRoute 回传/代发。
 - 不把运行期 `data/`、日志、token、真实账号写进仓库。
+- 不混淆 OpenAI provider、Codex agent/runtime、app-server stdio transport、ChatGPT desktop host 和具体 model。
+- 不依赖桌面窗口、私有 IPC 或实验性 WebSocket 完成 Codex 正式投递。
+- 不在 RabiRoute 中硬编码默认模型；空值由 runtime 决定。
 
 ## 当前优先演进
 

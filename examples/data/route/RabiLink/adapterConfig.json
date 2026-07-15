@@ -1,0 +1,50 @@
+{
+  "enabled": false,
+  "messageAdapters": [
+    "rolePanel",
+    "rabilink"
+  ],
+  "messageAdapterPolicies": {
+    "rolePanel": {
+      "inputEnabled": true,
+      "outputEnabled": true,
+      "supportedOutputs": [
+        "text",
+        "image",
+        "voice",
+        "file"
+      ]
+    },
+    "rabilink": {
+      "inputEnabled": true,
+      "outputEnabled": true,
+      "supportedOutputs": [
+        "text"
+      ]
+    }
+  },
+  "gatewayPort": 8794,
+  "webhookPort": 8794,
+  "webhookPath": "/webhook",
+  "rabiLinkWebhookPort": 8794,
+  "rabiLinkWebhookPath": "/rabilink",
+  "codexThreadName": "RabiLink Active Intelligence",
+  "codexCwd": ".",
+  "agentRoleFile": "persona.md",
+  "agentAdapters": [
+    "codex"
+  ],
+  "dataDir": "./data/route/RabiLink",
+  "configName": "RabiLink",
+  "agentRoleId": "RabiActive",
+  "rolesDir": "./data/roles",
+  "routeVariables": {
+    "rabilinkAutoReview": "true",
+    "rabilinkContinuousReflection": "true",
+    "rabilinkReviewIntervalMs": "5000",
+    "rabilinkReviewSettleMs": "4000",
+    "rabilinkReflectionIntervalMinutes": "30",
+    "rabilinkConversationSplitAfterHours": "6",
+    "rabilinkRecordFirstSources": ""
+  }
+}

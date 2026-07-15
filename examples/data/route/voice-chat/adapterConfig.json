@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "pipelinePreset": "voice_chat",
   "pipeline": {
     "id": "voice_chat",
@@ -29,13 +29,13 @@
       ]
     }
   },
-  "gatewayPort": 8791,
-  "webhookPort": 8791,
+  "gatewayPort": 8792,
+  "webhookPort": 8792,
   "webhookPath": "/webhook",
-  "fenneNoteWebhookPort": 8791,
+  "fenneNoteWebhookPort": 8792,
   "fenneNoteWebhookPath": "/fennenote",
   "codexThreadName": "RabiRoute Voice Chat",
-  "codexCwd": "C:/Path/To/Your/Project",
+  "codexCwd": ".",
   "agentRoleFile": "persona.md",
   "agentAdapters": [
     "codex"

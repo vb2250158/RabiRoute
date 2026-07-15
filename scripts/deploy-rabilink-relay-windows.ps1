@@ -1,7 +1,7 @@
 param(
     [string]$ServerIp = "",
     [string]$Username = "Administrator",
-    [string]$KeyPath = "$HOME\.ssh\id_ed25519",
+    [string]$KeyPath = "",
     [string]$Domain = "",
     [string]$RemoteRoot = "C:\opt\rabilink-relay",
     [string]$CaddyVersion = "2.8.4",
@@ -35,6 +35,12 @@ function Get-ConfigString {
 
 if ([string]::IsNullOrWhiteSpace($ServerIp)) {
     $ServerIp = Get-ConfigString -Config $relayConfig -Name "serverIp"
+}
+if ([string]::IsNullOrWhiteSpace($KeyPath)) {
+    $KeyPath = Get-ConfigString -Config $relayConfig -Name "sshKeyPath"
+}
+if ([string]::IsNullOrWhiteSpace($KeyPath)) {
+    $KeyPath = "$HOME\.ssh\id_ed25519"
 }
 if ([string]::IsNullOrWhiteSpace($Domain)) {
     $Domain = Get-ConfigString -Config $relayConfig -Name "publicHost"
@@ -165,6 +171,10 @@ http://:$PublicHttpPort {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /worker/messages {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /worker/tasks* {
         reverse_proxy 127.0.0.1:8788
     }
@@ -209,6 +219,10 @@ http://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /worker/messages {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /worker/tasks* {
         reverse_proxy 127.0.0.1:8788
     }
@@ -246,6 +260,10 @@ http://:80 {
         reverse_proxy 127.0.0.1:8788
     }
 
+    handle /worker/messages {
+        reverse_proxy 127.0.0.1:8788
+    }
+
     handle /worker/tasks* {
         reverse_proxy 127.0.0.1:8788
     }
@@ -280,6 +298,10 @@ https://$Domain {
     }
 
     handle /openapi* {
+        reverse_proxy 127.0.0.1:8788
+    }
+
+    handle /worker/messages {
         reverse_proxy 127.0.0.1:8788
     }
 

@@ -213,7 +213,103 @@ test("repository upgrades legacy Codex agent adapters on read and write", () => 
   assert.deepEqual(saved.agentAdapters, ["codex", "copilotCli"]);
 });
 
-test("repository falls back invalid agent adapters to codex", () => {
+test("repository migrates a Copilot-only legacy thread name and saves only the new field", () => {
+  const rootDir = makeTempRoot();
+  const configPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
+  writeJson(configPath, {
+    enabled: true,
+    messageAdapters: ["heartbeat"],
+    gatewayPort: 8789,
+    agentAdapters: ["copilotCli"],
+    codexThreadName: "Legacy Copilot Session"
+  });
+
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  const config = repo.readConfig();
+
+  assert.equal(config.gateways[0].copilotThreadName, "Legacy Copilot Session");
+  assert.equal(config.gateways[0].codexThreadName, undefined);
+
+  repo.writeConfig(config);
+  const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as GatewayDefinition;
+  assert.equal(saved.copilotThreadName, "Legacy Copilot Session");
+  assert.equal(saved.codexThreadName, undefined);
+});
+
+test("repository does not reinterpret a Codex thread name for mixed agent routes", () => {
+  const rootDir = makeTempRoot();
+  const configPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
+  writeJson(configPath, {
+    enabled: true,
+    messageAdapters: ["heartbeat"],
+    gatewayPort: 8789,
+    agentAdapters: ["codex", "copilotCli"],
+    codexThreadName: "Codex Session"
+  });
+
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  const config = repo.readConfig();
+
+  assert.equal(config.gateways[0].codexThreadName, "Codex Session");
+  assert.equal(config.gateways[0].copilotThreadName, undefined);
+});
+
+test("repository writes local cwd-like config paths as project relative paths", () => {
+  const rootDir = makeTempRoot();
+  const configPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  repo.writeConfig({
+    gateways: [{
+      id: "main",
+      configName: "main",
+      enabled: true,
+      messageAdapters: ["napcat"],
+      gatewayPort: 8789,
+      remoteAgentDefaultCwd: path.join(rootDir, "remote-agent"),
+      codexCwd: rootDir,
+      copilotCwd: path.join(rootDir, "copilot-project"),
+      rolesDir: path.join(rootDir, "data", "roles"),
+      napcatInstances: [{
+        id: "default",
+        enabled: true,
+        gatewayPort: 8789,
+        httpUrl: "http://127.0.0.1:3000",
+        workingDir: path.join(rootDir, "tools", "NapCat")
+      }],
+      notificationRules: []
+    }]
+  });
+
+  const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as GatewayDefinition;
+  assert.equal(saved.remoteAgentDefaultCwd, "remote-agent");
+  assert.equal(saved.codexCwd, ".");
+  assert.equal(saved.copilotCwd, "copilot-project");
+  assert.equal(saved.rolesDir, "data/roles");
+  assert.equal(saved.napcatInstances?.[0]?.workingDir, "tools/NapCat");
+});
+
+test("repository rebases stale same-workspace drive cwd when saving", () => {
+  const tempRoot = makeTempRoot();
+  const configPath = path.join(tempRoot, "data", "route", "main", "adapterConfig.json");
+  const repo = new ManagerConfigRepository({ rootDir: tempRoot, managerPort: 8790 });
+  const staleSameWorkspace = tempRoot.replace(/^[A-Za-z]:/, "X:");
+  repo.writeConfig({
+    gateways: [{
+      id: "main",
+      configName: "main",
+      enabled: true,
+      messageAdapters: ["heartbeat"],
+      gatewayPort: 8789,
+      codexCwd: staleSameWorkspace,
+      notificationRules: []
+    }]
+  });
+
+  const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as GatewayDefinition;
+  assert.equal(saved.codexCwd, ".");
+});
+
+test("repository fails closed for explicitly invalid agent adapters", () => {
   const rootDir = makeTempRoot();
   writeJson(path.join(rootDir, "data", "route", "main", "adapterConfig.json"), {
     enabled: true,
@@ -225,7 +321,7 @@ test("repository falls back invalid agent adapters to codex", () => {
   const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
   const config = repo.readConfig();
 
-  assert.deepEqual(config.gateways[0].agentAdapters, ["codex"]);
+  assert.deepEqual(config.gateways[0].agentAdapters, []);
 });
 
 test("repository removes deleted route config files but preserves route history", () => {

@@ -1,6 +1,12 @@
 import { hostname } from "node:os";
+import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
 import { appendAdapterLog } from "../history.js";
+import {
+  appendRabiLinkConversationEntry,
+  DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS
+} from "../rabilinkConversationLedger.js";
+import { startDefaultRabiLinkConversationReviewer } from "../rabilinkConversationReviewer.js";
 import {
   acceptWebhookPayload,
   nestedTextFromData,
@@ -9,25 +15,15 @@ import {
   type WebhookAdapterProfile,
   type WebhookPayload
 } from "./webhookAdapter.js";
-import {
-  rabiLinkReplyLogFilePath,
-  readJsonlTail,
-  replyIsFinal,
-  replyKey,
-  replyMatchesTask,
-  replyText
-} from "./rabilinkReplies.js";
 
 type RelayTask = Record<string, unknown>;
-type RelayWebguiRequest = {
-  id?: string;
-  method?: string;
-  path?: string;
-  headers?: Record<string, string>;
-  bodyBase64?: string;
-};
+export type RabiLinkRelayTaskDisposition = "review_request" | "record_only" | "direct";
 
 const runningRelayWorkers = new Set<string>();
+const acceptedRelayTasks = new Map<string, number>();
+const MAX_ACCEPTED_RELAY_TASKS = 2048;
+const RELAY_WRITE_ATTEMPTS = 4;
+const RELAY_WRITE_TIMEOUT_MS = 5000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -59,12 +55,32 @@ async function fetchRelayJson(
   pathname: string,
   init: RequestInit = {},
   fallbackPathname?: string,
-  relayBaseUrl = ""
+  relayBaseUrl = "",
+  timeoutMs = 0
 ): Promise<Record<string, unknown>> {
   const baseUrl = relayBaseUrl.trim().replace(/\/+$/, "") || normalizedRelayBaseUrl();
-  const response = await fetch(`${baseUrl}${pathname}`, init);
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const upstreamSignal = init.signal;
+  const abortFromUpstream = () => controller?.abort(upstreamSignal?.reason);
+  if (controller && upstreamSignal) {
+    if (upstreamSignal.aborted) abortFromUpstream();
+    else upstreamSignal.addEventListener("abort", abortFromUpstream, { once: true });
+  }
+  const timer = controller
+    ? setTimeout(() => controller.abort(new Error(`RabiLink Relay request timed out after ${timeoutMs} ms.`)), timeoutMs)
+    : null;
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${pathname}`, {
+      ...init,
+      signal: controller?.signal || upstreamSignal
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+    upstreamSignal?.removeEventListener("abort", abortFromUpstream);
+  }
   if (response.status === 404 && fallbackPathname) {
-    return fetchRelayJson(fallbackPathname, init, undefined, baseUrl);
+    return fetchRelayJson(fallbackPathname, init, undefined, baseUrl, timeoutMs);
   }
   const text = await response.text();
   const body = text.trim() ? JSON.parse(text) as Record<string, unknown> : {};
@@ -72,6 +88,33 @@ async function fetchRelayJson(
     throw new Error(String(body.message || body.error || `${response.status} ${response.statusText}`));
   }
   return body;
+}
+
+async function fetchRelayJsonReliably(
+  pathname: string,
+  init: RequestInit,
+  relayBaseUrl = ""
+): Promise<Record<string, unknown>> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= RELAY_WRITE_ATTEMPTS; attempt += 1) {
+    try {
+      return await fetchRelayJson(pathname, init, undefined, relayBaseUrl, RELAY_WRITE_TIMEOUT_MS);
+    } catch (error) {
+      lastError = error;
+      if (attempt < RELAY_WRITE_ATTEMPTS) await sleep(150 * attempt);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || "RabiLink Relay request failed."));
+}
+
+function rememberAcceptedRelayTask(taskId: string): void {
+  acceptedRelayTasks.delete(taskId);
+  acceptedRelayTasks.set(taskId, Date.now());
+  while (acceptedRelayTasks.size > MAX_ACCEPTED_RELAY_TASKS) {
+    const oldest = acceptedRelayTasks.keys().next().value;
+    if (typeof oldest !== "string") break;
+    acceptedRelayTasks.delete(oldest);
+  }
 }
 
 function taskFromClaimResponse(body: Record<string, unknown>): RelayTask | null {
@@ -93,11 +136,6 @@ function taskFromClaimResponse(body: Record<string, unknown>): RelayTask | null 
   return null;
 }
 
-function webguiRequestsFromClaimResponse(body: Record<string, unknown>): RelayWebguiRequest[] {
-  const requests = Array.isArray(body.requests) ? body.requests : [];
-  return requests.filter((item): item is RelayWebguiRequest => Boolean(item && typeof item === "object" && !Array.isArray(item)));
-}
-
 function relayTaskId(task: RelayTask): string {
   return stringPayloadField(task.id) || stringPayloadField(task.taskId);
 }
@@ -113,7 +151,7 @@ function relayTaskText(task: RelayTask): string {
 }
 
 function payloadFromRelayTask(task: RelayTask, taskId: string): WebhookPayload {
-  const sender = stringPayloadField(task.sender) || stringPayloadField(task.source) || "Rokid Glass";
+  const sender = stringPayloadField(task.sender) || relayTaskSender(task) || "RabiLink device";
   return {
     type: "rabilink",
     id: taskId,
@@ -124,33 +162,84 @@ function payloadFromRelayTask(task: RelayTask, taskId: string): WebhookPayload {
     sessionId: stringPayloadField(task.conversationId) || stringPayloadField(task.sessionId),
     text: relayTaskText(task),
     data: task,
-    sourceDeviceId: stringPayloadField(task.deviceId),
-    sourceDeviceName: stringPayloadField(task.deviceName) || "Rokid Relay"
+    sourceDeviceId: stringPayloadField(task.sourceDeviceId) || stringPayloadField(task.deviceId),
+    sourceDeviceName: stringPayloadField(task.sourceDeviceName) || stringPayloadField(task.deviceName) || "RabiLink device",
+    sourceDeviceKind: stringPayloadField(task.sourceDeviceKind),
+    transport: stringPayloadField(task.transport)
   };
 }
 
-async function appendRelayMessage(taskId: string, text: string, raw: Record<string, unknown>): Promise<void> {
-  const body = JSON.stringify({ text, raw, ...relayWorkerIdentityPayload() });
-  await fetchRelayJson(`/worker/tasks/${encodeURIComponent(taskId)}/messages`, {
-    method: "POST",
-    headers: relayHeaders(true),
-    body
-  });
-}
-
 async function finishRelayTask(taskId: string, body: Record<string, unknown>): Promise<void> {
-  await fetchRelayJson(`/worker/tasks/${encodeURIComponent(taskId)}/finish`, {
+  await fetchRelayJsonReliably(`/worker/tasks/${encodeURIComponent(taskId)}/finish`, {
     method: "POST",
     headers: relayHeaders(true),
     body: JSON.stringify({ ...body, ...relayWorkerIdentityPayload() })
   });
 }
 
+function relayTaskField(task: RelayTask, key: string): string {
+  return stringPayloadField(task[key]);
+}
+
+function relayTaskBoolean(task: RelayTask, key: string): boolean {
+  return task[key] === true || String(task[key] || "").trim().toLowerCase() === "true";
+}
+
+function relayTaskNumber(task: RelayTask, key: string): number | undefined {
+  const value = Number(task[key]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function relayTaskRecordedAt(task: RelayTask): string {
+  const capturedAt = relayTaskNumber(task, "capturedAt");
+  if (!capturedAt) return new Date().toISOString();
+  const milliseconds = capturedAt < 10_000_000_000 ? capturedAt * 1000 : capturedAt;
+  const date = new Date(milliseconds);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+}
+
+function relayTaskSender(task: RelayTask): string {
+  const source = task.source;
+  if (source && typeof source === "object" && !Array.isArray(source)) {
+    return stringPayloadField((source as Record<string, unknown>).sender);
+  }
+  return "";
+}
+
+function isConversationReviewRequest(task: RelayTask): boolean {
+  return relayTaskBoolean(task, "reviewRequested") || relayTaskField(task, "type") === "rabilink.review_request";
+}
+
+function isRecordOnlyObservation(task: RelayTask): boolean {
+  return relayTaskField(task, "deliveryMode") === "observe" || relayTaskField(task, "type") === "rabilink.observation";
+}
+
+export function rabiLinkRelayTaskDisposition(task: RelayTask): RabiLinkRelayTaskDisposition {
+  if (isConversationReviewRequest(task)) return "review_request";
+  if (isRecordOnlyObservation(task)) return "record_only";
+  return "direct";
+}
+
+function conversationSplitAfterMs(): number {
+  const hours = Number(config.routeVariables.rabilinkConversationSplitAfterHours);
+  return Number.isFinite(hours) && hours > 0
+    ? Math.max(60 * 1000, hours * 60 * 60 * 1000)
+    : DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS;
+}
+
 export async function publishRabiLinkRelayMessage(
   text: string,
   options: {
     source?: string;
+    taskId?: string;
+    deliveryId?: string;
+    proactive?: boolean;
+    final?: boolean;
     metadata?: Record<string, unknown>;
+    targetDeviceIds?: string[];
+    targetDeviceKinds?: string[];
+    presentation?: Array<"text" | "tts" | "notification" | "haptic">;
+    priority?: "quiet" | "normal" | "urgent";
     relay?: {
       enabled?: boolean;
       url?: string;
@@ -161,16 +250,17 @@ export async function publishRabiLinkRelayMessage(
   } = {}
 ): Promise<Record<string, unknown>> {
   const value = text.trim();
-  if (!value) throw new Error("RabiLink proactive message text is empty.");
+  if (!value) throw new Error("RabiLink outbound message text is empty.");
   const relayUrl = options.relay?.url?.trim().replace(/\/+$/, "") || normalizedRelayBaseUrl();
   const relayToken = options.relay?.token?.trim() || config.rabiLinkRelayAppToken.trim();
   const relayEnabled = options.relay
     ? options.relay.enabled !== false && Boolean(relayUrl && relayToken)
     : config.rabiLinkRelayEnabled && Boolean(relayUrl && relayToken);
   if (!relayEnabled) {
-    throw new Error("RabiLink Relay is not configured for proactive delivery.");
+    throw new Error("RabiLink Relay is not configured for outbound delivery.");
   }
-  return fetchRelayJson("/worker/messages", {
+  const deliveryId = options.deliveryId?.trim() || randomUUID();
+  return fetchRelayJsonReliably("/worker/messages", {
     method: "POST",
     headers: {
       "X-RabiLink-Token": relayToken,
@@ -180,115 +270,19 @@ export async function publishRabiLinkRelayMessage(
     body: JSON.stringify({
       text: value,
       source: options.source?.trim() || "RabiRoute active intelligence",
+      taskId: options.taskId?.trim() || "",
+      deliveryId,
+      proactive: options.proactive !== false,
+      final: options.final !== false,
       metadata: options.metadata || {},
+      targetDeviceIds: options.targetDeviceIds || [],
+      targetDeviceKinds: options.targetDeviceKinds || [],
+      presentation: options.presentation || [],
+      priority: options.priority || "normal",
       deviceId: options.relay?.deviceId?.trim() || config.rabiLinkRelayDeviceId,
       deviceGuid: options.relay?.deviceGuid?.trim() || config.rabiLinkRelayDeviceGuid
     })
-  }, undefined, relayUrl);
-}
-
-async function finishRelayWebguiRequest(requestId: string, body: Record<string, unknown>): Promise<void> {
-  await fetchRelayJson(`/worker/webgui-requests/${encodeURIComponent(requestId)}/response`, {
-    method: "POST",
-    headers: relayHeaders(true),
-    body: JSON.stringify({ ...body, ...relayWorkerIdentityPayload() })
-  });
-}
-
-function normalizedRelayWebguiBaseUrl(): string {
-  return config.rabiLinkRelayWebguiUrl.trim().replace(/\/+$/, "") || "http://127.0.0.1:8790";
-}
-
-function safeWebguiLocalUrl(pathname: string): string {
-  const base = normalizedRelayWebguiBaseUrl();
-  const localUrl = new URL(pathname && pathname.startsWith("/") ? pathname : `/${pathname || ""}`, base);
-  const baseUrl = new URL(base);
-  localUrl.protocol = baseUrl.protocol;
-  localUrl.host = baseUrl.host;
-  return localUrl.toString();
-}
-
-function relayWebguiRequestId(request: RelayWebguiRequest): string {
-  return stringPayloadField(request.id);
-}
-
-function compactRelayWebguiResponse(method: string, localPath: string, statusCode: number, body: Buffer): Buffer {
-  const upperMethod = method.toUpperCase();
-  if (!["POST", "PATCH", "PUT", "DELETE"].includes(upperMethod)) return body;
-  if (!localPath.startsWith("/gateways") && !localPath.startsWith("/manager-config")) return body;
-  if (statusCode < 200 || statusCode >= 300) return body;
-  return Buffer.from(JSON.stringify({ code: 0, ok: true }), "utf8");
-}
-
-async function handleRelayWebguiRequest(request: RelayWebguiRequest): Promise<void> {
-  const requestId = relayWebguiRequestId(request);
-  if (!requestId) return;
-  try {
-    const method = stringPayloadField(request.method).toUpperCase() || "GET";
-    const localPath = stringPayloadField(request.path) || "/";
-    const localUrl = safeWebguiLocalUrl(localPath);
-    const headers: Record<string, string> = {};
-    for (const [key, value] of Object.entries(request.headers || {})) {
-      const lower = key.toLowerCase();
-      if (!["accept", "content-type", "user-agent"].includes(lower)) continue;
-      headers[lower] = String(value || "");
-    }
-    const body = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
-    const response = await fetch(localUrl, {
-      method,
-      headers,
-      body: method === "GET" || method === "HEAD" ? undefined : body
-    });
-    const rawResponseBuffer = Buffer.from(await response.arrayBuffer());
-    const responseBuffer = compactRelayWebguiResponse(method, localPath, response.status, rawResponseBuffer);
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
-    });
-    await finishRelayWebguiRequest(requestId, {
-      ok: true,
-      statusCode: response.status,
-      headers: responseHeaders,
-      bodyBase64: responseBuffer.toString("base64")
-    });
-  } catch (error) {
-    await finishRelayWebguiRequest(requestId, {
-      ok: false,
-      statusCode: 502,
-      headers: { "content-type": "text/plain; charset=utf-8" },
-      bodyBase64: Buffer.from(error instanceof Error ? error.message : String(error), "utf8").toString("base64"),
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-}
-
-async function streamRepliesToRelay(taskId: string): Promise<{ deliveredCount: number; sawFinal: boolean }> {
-  const delivered = new Set<string>();
-  let lastActivityAt = Date.now();
-  let sawFinal = false;
-  let deliveredCount = 0;
-  const idleTimeoutMs = config.rabiLinkRelayReplyIdleTimeoutMs;
-  while (Date.now() - lastActivityAt <= idleTimeoutMs) {
-    const rows = readJsonlTail(rabiLinkReplyLogFilePath(), 500, "").filter((row) => replyMatchesTask(row, taskId));
-    for (const [index, row] of rows.entries()) {
-      const key = replyKey(row, index);
-      const text = replyText(row);
-      if (text && !delivered.has(key)) {
-        await appendRelayMessage(taskId, text, row);
-        delivered.add(key);
-        deliveredCount += 1;
-        lastActivityAt = Date.now();
-      }
-      if (replyIsFinal(row)) {
-        sawFinal = true;
-      }
-    }
-    if (sawFinal) {
-      return { deliveredCount, sawFinal: true };
-    }
-    await sleep(config.rabiLinkRelayReplyPollMs);
-  }
-  return { deliveredCount, sawFinal: false };
+  }, relayUrl);
 }
 
 async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: string, task: RelayTask): Promise<void> {
@@ -296,17 +290,68 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
   if (!taskId) {
     throw new Error("Relay task has no id.");
   }
-  const payload = payloadFromRelayTask(task, taskId);
-  const record = acceptWebhookPayload(profile, webhookPath, payload, Buffer.byteLength(JSON.stringify(payload)));
-  appendAdapterLog(profile.type, {
-    event: "relay_task_claimed",
-    message: record.rawMessage.slice(0, 500),
-    data: { taskId, relayUrl: normalizedRelayBaseUrl() }
+  if (!acceptedRelayTasks.has(taskId)) {
+    const text = relayTaskText(task);
+    const clientMessageId = relayTaskField(task, "clientMessageId");
+    const disposition = rabiLinkRelayTaskDisposition(task);
+    const reviewRequested = disposition === "review_request";
+    const recordOnly = disposition === "record_only";
+    const entryId = reviewRequested
+      ? `rabilink-control:${clientMessageId || taskId}`
+      : `rabilink-user:${clientMessageId || taskId}`;
+    appendRabiLinkConversationEntry(config.memoryDataDir, {
+      entryId,
+      recordedAt: relayTaskRecordedAt(task),
+      direction: reviewRequested ? "control" : "user_to_agent",
+      kind: reviewRequested ? "review_request" : "voice_transcript",
+      text,
+      source: relayTaskField(task, "type") || "rabilink",
+      sender: relayTaskSender(task) || "Rokid Glass",
+      messageId: clientMessageId || taskId,
+      taskId,
+      sessionId: relayTaskField(task, "sessionId"),
+      sourceDeviceId: relayTaskField(task, "sourceDeviceId"),
+      sourceDeviceName: relayTaskField(task, "sourceDeviceName") || "RabiLink device",
+      sourceDeviceKind: relayTaskField(task, "sourceDeviceKind"),
+      transport: relayTaskField(task, "transport"),
+      sequence: relayTaskNumber(task, "sequence"),
+      capturedAt: relayTaskNumber(task, "capturedAt"),
+      requiresReview: !reviewRequested && recordOnly,
+      reviewRequested
+    }, { splitAfterMs: conversationSplitAfterMs() });
+    if (!reviewRequested) {
+      const payload = payloadFromRelayTask(task, taskId);
+      acceptWebhookPayload(
+        profile,
+        webhookPath,
+        payload,
+        Buffer.byteLength(JSON.stringify(payload)),
+        { forward: !recordOnly }
+      );
+    }
+    rememberAcceptedRelayTask(taskId);
+    startDefaultRabiLinkConversationReviewer()?.wake();
+    appendAdapterLog(profile.type, {
+      event: "relay_task_claimed",
+      message: text.slice(0, 500),
+      data: {
+        taskId,
+        relayUrl: normalizedRelayBaseUrl(),
+        deliveryMode: disposition
+      }
+    });
+  } else {
+    appendAdapterLog(profile.type, {
+      event: "relay_task_finish_retried",
+      message: "Relay task was already accepted locally; retrying only its remote completion acknowledgement.",
+      data: { taskId, relayUrl: normalizedRelayBaseUrl() }
+    });
+  }
+  await finishRelayTask(taskId, {
+    ok: true,
+    status: "done",
+    accepted: true
   });
-  const result = await streamRepliesToRelay(taskId);
-  await finishRelayTask(taskId, result.deliveredCount > 0
-    ? { ok: true, status: "done", idleTimeout: !result.sawFinal }
-    : { ok: false, status: "failed", error: "RabiLink PC worker timed out waiting for a final reply." });
 }
 
 async function claimRelayTask(): Promise<RelayTask | null> {
@@ -325,52 +370,6 @@ async function claimRelayTask(): Promise<RelayTask | null> {
   return taskFromClaimResponse(body);
 }
 
-async function claimRelayWebguiRequests(): Promise<RelayWebguiRequest[]> {
-  const waitMs = config.rabiLinkRelayClaimWaitMs;
-  const params = new URLSearchParams({
-    limit: "1",
-    deviceId: config.rabiLinkRelayDeviceId,
-    deviceGuid: config.rabiLinkRelayDeviceGuid,
-    deviceName: hostname(),
-    waitMs: String(waitMs)
-  });
-  const body = await fetchRelayJson(`/worker/webgui-requests?${params}`, {
-    method: "GET",
-    headers: relayHeaders()
-  });
-  return webguiRequestsFromClaimResponse(body);
-}
-
-export function startRabiLinkRelayWebguiWorker(profile: WebhookAdapterProfile): void {
-  if (!config.rabiLinkRelayEnabled || !normalizedRelayBaseUrl()) return;
-  const workerKey = `${profile.type}:webgui:${normalizedRelayBaseUrl()}:${config.rabiLinkRelayDeviceGuid || config.rabiLinkRelayDeviceId}`;
-  if (runningRelayWorkers.has(workerKey)) return;
-  runningRelayWorkers.add(workerKey);
-  void (async () => {
-    while (true) {
-      try {
-        const requests = await claimRelayWebguiRequests();
-        for (const request of requests) {
-          await handleRelayWebguiRequest(request);
-        }
-      } catch (error) {
-        appendAdapterLog(profile.type, {
-          level: "error",
-          event: "relay_webgui_worker_error",
-          message: error instanceof Error ? error.message : String(error),
-          data: {
-            relayUrl: normalizedRelayBaseUrl(),
-            relayDeviceId: config.rabiLinkRelayDeviceId,
-            relayDeviceGuid: config.rabiLinkRelayDeviceGuid,
-            localWebguiUrl: normalizedRelayWebguiBaseUrl()
-          }
-        });
-        await sleep(3000);
-      }
-    }
-  })();
-}
-
 export function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhookPath: string): void {
   if (!config.rabiLinkRelayEnabled || !normalizedRelayBaseUrl()) {
     patchRelayStatus(profile, { relayWorker: "disabled", message: "RabiLink Relay worker is disabled." });
@@ -379,6 +378,7 @@ export function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhook
   const workerKey = `${profile.type}:${normalizedRelayBaseUrl()}:${config.rabiLinkRelayDeviceId}`;
   if (runningRelayWorkers.has(workerKey)) return;
   runningRelayWorkers.add(workerKey);
+  startDefaultRabiLinkConversationReviewer();
   void (async () => {
     patchRelayStatus(profile, {
       relayWorker: "running",

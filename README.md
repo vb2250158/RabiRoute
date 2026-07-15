@@ -73,7 +73,10 @@ RabiRoute 决定自动执行、生成草稿、等待确认或拒绝。
 - JSONL 消息记录、心跳记录、投递记录。
 - 可编辑 Prompt 模板、路由规则和路由人格包。
 - Pipeline preset：为 QQ、语音、Webhook 任务声明输入输出意图。
-- Agent 端适配器：当前支持 `codex`、命令式 `copilotCli` 和 Marvis handoff；Codex 管道优先通过 Codex Desktop IPC 投递，旧 app-server 只作为内部 fallback / 调试通道。
+- Agent 端适配器：当前支持 `codex`、命令式 `copilotCli` 和 Marvis handoff；`codex` 通过官方 `codex app-server` 的 stdio JSONL 协议投递，ChatGPT desktop 只作为可选桌面宿主，不参与 RabiRoute 的传输寻址。
+- Codex 默认通过 `model/list` 跟随 runtime 当前默认模型，`agentModel` 只有显式填写时才固定覆盖；默认使用 `workspaceWrite` 沙箱，审批无法得到明确结论时按拒绝处理。
+
+这里的名词不能混用：OpenAI 是 provider，Codex 是 agent/runtime，`codex app-server` stdio 是 transport，ChatGPT desktop 是 host，具体的 GPT 版本是 model。桌面产品改名或合并不改变 RabiRoute 的 `codex` adapter id，也不要求把模型写死为某个带 `codex` 后缀的历史名称。
 
 ## 文档索引
 
@@ -87,7 +90,7 @@ RabiRoute 决定自动执行、生成草稿、等待确认或拒绝。
 - 理解计划、记忆和 Agent 上下文注入：[计划和记忆机制](docs/plan-and-memory-model.md)
 - 给处理端 Agent 对接内置计划、记忆和回复接口：[Agent 需要关注的 Rabi 接口](docs/rabi-agent-interfaces.md)
 - 接 FenneNote 转录、角色对话和 OumuQ TTS：[语音交互工作站](docs/voice-interaction-workstation.md)
-- 外发失败、Codex IPC、普通群消息不转发：[排障](docs/troubleshooting.md)
+- 外发失败、Codex app-server、普通群消息不转发：[排障](docs/troubleshooting.md)
 - 想理解边界和演进路线：[架构说明](docs/architecture.md)
 - 找后端、manager、WebGUI 和托盘窗口改动入口：[代码架构](docs/code-architecture.md)
 - 看版本变更和迁移说明：[版本更新日志](版本更新日志.md)
@@ -199,7 +202,7 @@ src/                                RabiRoute manager、gateway、adapter、forw
 ribiwebgui/                          独立 RibiWebGUI 控制台
 plugin-adapters/                     插件侧适配入口，后续新增插件都放这里
 plugin-adapters/napcat-rabiroute/    可选 NapCat 插件入口
-examples/data/                       可复制到根目录 data/ 的完整示例包，含唯一 Rabi 示例人格
+examples/data/                       可复制到根目录 data/ 的完整示例包，含默认 Rabi 与 RabiLink 主动智能模板
 skills/create-rabiroute-persona/     项目内 skill：指导创建 RabiRoute 人格
 skills/rabi-github-pull/              项目内 skill：指导 RabiRoute 拉取后配置升级
 skills/rabi-github-submit/            项目内 skill：指导 RabiRoute GitHub 提交前检查

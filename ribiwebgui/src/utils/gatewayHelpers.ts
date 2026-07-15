@@ -59,7 +59,7 @@ export const templateVars = [
   { name: "pipelinePreset", description: "当前 pipeline preset / channel preset ID，例如 qq_chat、voice_chat、webhook_task。" },
   { name: "channelPreset", description: "pipelinePreset 的别名，供使用 channel 命名的模板使用。" },
   { name: "inputAdapter", description: "pipeline 默认输入适配端。" },
-  { name: "outputAdapter", description: "pipeline 默认输出适配端，例如 qq、tts、file、codex。" },
+  { name: "outputAdapter", description: "pipeline 默认输出适配端，例如 qq、tts、file、agent。" },
   { name: "outputPipeline", description: "输出管道 ID，例如 qq、oumuq、file。" },
   { name: "promptOutputMode", description: "提示词输出模式，例如 qq_text、voice_short、markdown、json。" },
   { name: "ttsProvider", description: "TTS provider，语音模式通常为 oumuq。" },
@@ -455,8 +455,8 @@ export function ruleTemplateSnippet(rule: NotificationRule): string {
 export function explainAgentError(error: unknown): string {
   const text = String(error || "");
   if (!text) return "";
-  if (text.includes("no-client-found")) {
-    return "Codex Desktop IPC 没有找到可用客户端。请确认 Codex Desktop 正在运行，并且目标线程可被当前 Desktop 会话接收。";
+  if (text.includes("Codex app-server")) {
+    return `Codex Agent 的 app-server stdio 连接失败：${text}。请检查项目锁定的 @openai/codex runtime 与其登录状态；ChatGPT 桌面版只是可选宿主，不是投递通道。`;
   }
   if (text.includes("thread not found")) {
     return "Codex 线程 ID 已失效。请在 RibiWebGUI 中重新绑定或让 manager 重新发现目标线程。";
@@ -546,28 +546,33 @@ export function adapterErrorsFor(type: MessageAdapterType, gateway: GatewayDefin
 }
 
 export function agentConnectionReasons(gateway: GatewayDefinition, runtime: RuntimeStatus): string[] {
-  const agentState = runtime.codexState || {};
-  const agentError = agentState.lastNotificationError || "";
-  const adapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codex"];
-  const hasCodexAdapter = adapters.includes("codex");
+  const adapters = Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : [];
+  const states = runtime.agentStates ?? {};
   const reasons: string[] = [];
-  if (!agentState.monitorThreadId) {
-    if (agentState.message) {
-      reasons.push(String(agentState.message));
-    } else if (adapters.includes("marvis") && !hasCodexAdapter) {
-      reasons.push("Marvis 当前是人工接力适配，不能验证会话绑定。");
-    } else if (adapters.includes("astrbot") && !hasCodexAdapter) {
-      reasons.push(gateway.astrbotSessionId
-        ? "AstrBot 已选择 ChatUI 会话，但尚未完成真实投递验证。"
-        : "AstrBot 未选择 ChatUI 会话；会回退到 rabiroute_agent 插件默认管线。");
-    } else if (adapters.includes("copilotCli") && !hasCodexAdapter) {
-      reasons.push("Copilot CLI 尚未成功投递到目标 session；请完成同一会话连续两次注入烟测后再视为可用。");
-    } else {
-      reasons.push(`尚未绑定 Agent 会话。请确认 Codex 中存在名为“${gateway.codexThreadName || gateway.name || gateway.id}”的线程。`);
-    }
+  if (gateway.enabled === false || runtime.enabled === false) return reasons;
+  if (!adapters.length) {
+    return ["尚未配置 Agent 处理端；请选择 Codex、Copilot CLI、AstrBot 或 Marvis。"];
   }
-  if (agentError) reasons.push(explainAgentError(agentError));
-  return reasons;
+  for (const adapter of adapters) {
+    const state = states[adapter] ?? {};
+    if (!state.monitorThreadId) {
+      if (state.message) {
+        reasons.push(String(state.message));
+      } else if (adapter === "marvis") {
+        reasons.push("Marvis 当前是人工接力适配，不能验证会话绑定。");
+      } else if (adapter === "astrbot") {
+        reasons.push(gateway.astrbotSessionId
+          ? "AstrBot 已选择 ChatUI 会话，但尚未完成真实投递验证。"
+          : "AstrBot 未选择 ChatUI 会话；会回退到 rabiroute_agent 插件默认管线。");
+      } else if (adapter === "copilotCli") {
+        reasons.push("Copilot CLI 尚未成功投递到目标 session；请完成同一会话连续两次注入烟测后再视为可用。");
+      } else if (adapter === "codex") {
+        reasons.push(`尚未绑定 Codex Agent 线程。请确认 app-server 可访问“${gateway.codexThreadName || gateway.name || gateway.id}”。`);
+      }
+    }
+    if (state.lastNotificationError) reasons.push(explainAgentError(state.lastNotificationError));
+  }
+  return [...new Set(reasons)];
 }
 
 export function createDefaultGateway(next: number): GatewayDefinition {
@@ -594,6 +599,7 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     routeVariables: {},
     agentModel: "",
     codexThreadName: `路由配置 ${next}`,
+    copilotThreadName: `路由配置 ${next}`,
     codexCwd: "",
     agentRoleId: "",
     agentRoleFile: "persona.md",
@@ -606,10 +612,10 @@ export function isQuickSetupNeeded(gateways: GatewayDefinition[]): boolean {
   if (gateways.length === 0) return true;
   return gateways.some((gateway) => {
     const adapters = gatewayAdapterTypes(gateway);
-    const agentAdapters = Array.isArray(gateway.agentAdapters) && gateway.agentAdapters.length ? gateway.agentAdapters : ["codex"];
+    const agentAdapters = Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : [];
     const missingCopilotBinding = agentAdapters.includes("copilotCli")
-      && (!gateway.codexThreadName || !gateway.copilotCwd);
+      && (!gateway.copilotThreadName || !gateway.copilotCwd);
     const missingMessageConfig = adapters.includes("napcat") && (!gateway.gatewayPort || !gateway.napcatHttpUrl);
-    return missingCopilotBinding || missingMessageConfig;
+    return agentAdapters.length === 0 || missingCopilotBinding || missingMessageConfig;
   });
 }

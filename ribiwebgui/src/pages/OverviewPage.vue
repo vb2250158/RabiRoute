@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { adapterLabel, adaptersNeedGatewayRuntime, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
@@ -16,6 +16,7 @@ const rabiName = ref("");
 const rabiSaving = ref(false);
 const rabiSaved = ref(false);
 const rabiError = ref("");
+const rabiLinkRelayEnabled = ref(false);
 const rabiLinkRelayUrl = ref("");
 const rabiLinkRelayAppToken = ref("");
 const rabiLinkRelayDeviceId = ref("");
@@ -38,6 +39,7 @@ async function loadDirConfig() {
 
 function loadRabiLinkRelayForm(): void {
   const relay = store.meta.rabiLinkRelay || {};
+  rabiLinkRelayEnabled.value = relay.enabled === true;
   rabiLinkRelayUrl.value = relay.url || "";
   rabiLinkRelayAppToken.value = relay.token || "";
   rabiLinkRelayDeviceId.value = relay.deviceId || store.meta.computerName || "";
@@ -67,7 +69,7 @@ async function saveDirConfig() {
   }
 }
 
-async function saveRabiIdentity() {
+async function saveRabiIdentity(): Promise<boolean> {
   rabiSaving.value = true;
   rabiSaved.value = false;
   rabiError.value = "";
@@ -78,6 +80,7 @@ async function saveRabiIdentity() {
       body: JSON.stringify({
         rabiName: rabiName.value,
         rabiLinkRelay: {
+          enabled: rabiLinkRelayEnabled.value,
           url: rabiLinkRelayUrl.value,
           token: rabiLinkRelayAppToken.value,
           deviceId: rabiLinkRelayDeviceId.value,
@@ -92,14 +95,59 @@ async function saveRabiIdentity() {
     rabiName.value = store.meta.rabiName || "";
     loadRabiLinkRelayForm();
     rabiSaved.value = true;
+    return true;
   } catch (e) {
     rabiError.value = e instanceof Error ? e.message : String(e);
+    return false;
   } finally {
     rabiSaving.value = false;
   }
 }
 
-onMounted(loadDirConfig);
+async function toggleRabiLinkRelay(enabled: boolean | null): Promise<void> {
+  if (typeof enabled !== "boolean" || rabiSaving.value) return;
+  const previous = rabiLinkRelayEnabled.value;
+  rabiLinkRelayEnabled.value = enabled;
+  if (!await saveRabiIdentity()) {
+    rabiLinkRelayEnabled.value = previous;
+  }
+}
+
+const relayRuntimeState = computed(() => store.meta.rabiLinkRelayRuntime?.state || "disabled");
+const relayRuntimeMessage = computed(() => store.meta.rabiLinkRelayRuntime?.message || "RabiLink Relay 全局连接已关闭。");
+const relayRuntimeLabel = computed(() => ({
+  disabled: "已关闭",
+  incomplete: "配置不完整",
+  connecting: "连接中",
+  online: "已连接",
+  error: "连接失败"
+}[relayRuntimeState.value] || "未知"));
+const relayRuntimeColor = computed(() => ({
+  disabled: "grey",
+  incomplete: "warning",
+  connecting: "info",
+  online: "success",
+  error: "error"
+}[relayRuntimeState.value] || "grey"));
+
+async function refreshRelayRuntime(): Promise<void> {
+  try {
+    const response = await fetch("/meta");
+    if (!response.ok) return;
+    const meta = await response.json();
+    store.meta.rabiLinkRelayRuntime = meta.rabiLinkRelayRuntime;
+  } catch {
+    // Keep the most recent status while Manager is restarting.
+  }
+}
+
+let relayStatusTimer = 0;
+onMounted(async () => {
+  await loadDirConfig();
+  await refreshRelayRuntime();
+  relayStatusTimer = window.setInterval(refreshRelayRuntime, 3000);
+});
+onBeforeUnmount(() => window.clearInterval(relayStatusTimer));
 
 function goToRoute(id: string): void {
   store.selectGateway(id);
@@ -202,6 +250,33 @@ const selectedRuntimeLabel = computed(() => {
   if (!gatewayNeedsRuntime(store.selectedGateway)) return "启用中";
   return selectedRuntime.value.running ? "运行中" : "已停止";
 });
+const selectedAgentType = computed(() => store.selectedGateway?.agentAdapters?.[0]);
+const selectedConfiguredThreadName = computed(() => {
+  if (selectedAgentType.value === "codex") return store.selectedGateway?.codexThreadName || "";
+  if (selectedAgentType.value === "copilotCli") return store.selectedGateway?.copilotThreadName || "";
+  return "";
+});
+const selectedAgentState = computed(() => {
+  const type = selectedAgentType.value;
+  return type ? selectedRuntime.value.agentStates?.[type] ?? {} : {};
+});
+const selectedAgentTitle = computed(() => {
+  if (selectedAgentType.value === "codex") return "Codex Agent";
+  if (selectedAgentType.value === "copilotCli") return "Copilot CLI";
+  if (selectedAgentType.value === "astrbot") return "AstrBot";
+  if (selectedAgentType.value === "marvis") return "Marvis";
+  return "Agent";
+});
+const selectedAgentStatus = computed(() => {
+  if (!selectedAgentType.value) return "未配置";
+  return selectedAgentState.value.monitorThreadId || selectedAgentState.value.lastNotificationAt ? "已连接" : "未绑定";
+});
+const selectedAgentNote = computed(() => {
+  if (!selectedAgentType.value) return "等待选择处理端";
+  const thread = selectedAgentState.value.monitorThreadName || selectedConfiguredThreadName.value;
+  if (selectedAgentType.value === "codex") return `${thread || "等待会话线程"} · app-server stdio`;
+  return thread || selectedAgentTitle.value;
+});
 </script>
 
 <template>
@@ -254,9 +329,9 @@ const selectedRuntimeLabel = computed(() => {
         <div class="stat-note">{{ selectedAdapters }}</div>
       </v-card>
       <v-card class="app-card glass-card stat-card">
-        <div class="stat-label">Agent</div>
-        <div class="stat-value">{{ selectedRuntime.codexState?.monitorThreadId ? "已绑定" : "未绑定" }}</div>
-        <div class="stat-note">{{ selectedRuntime.codexState?.monitorThreadName || store.selectedGateway?.codexThreadName || "等待会话线程" }}</div>
+        <div class="stat-label">{{ selectedAgentTitle }}</div>
+        <div class="stat-value">{{ selectedAgentStatus }}</div>
+        <div class="stat-note">{{ selectedAgentNote }}</div>
       </v-card>
     </div>
 
@@ -343,7 +418,7 @@ const selectedRuntimeLabel = computed(() => {
         <div class="status-row"><span>Manager</span><b>{{ store.managerError || "已连接" }}</b></div>
         <div class="status-row"><span>路由</span><b>{{ store.selectedGateway ? store.configNameFor(store.selectedGateway) : "-" }}</b></div>
         <div class="status-row"><span>人格</span><b>{{ store.selectedGateway?.agentRoleId || "-" }}</b></div>
-        <div class="status-row"><span>Agent 线程</span><b>{{ store.selectedGateway?.codexThreadName || "-" }}</b></div>
+        <div class="status-row"><span>Agent 线程</span><b>{{ selectedConfiguredThreadName || "-" }}</b></div>
         <div class="status-row"><span>配置目录</span><b>{{ store.configFiles.routeDir || "data/route" }}</b></div>
       </v-card>
     </div>
@@ -358,7 +433,9 @@ const selectedRuntimeLabel = computed(() => {
           <v-btn color="primary" size="small" :loading="rabiSaving" @click="saveRabiIdentity">保存</v-btn>
         </div>
         <v-alert v-if="rabiError" type="error" variant="tonal" density="compact" class="mb-3">{{ rabiError }}</v-alert>
-        <v-alert v-if="rabiSaved" type="success" variant="tonal" density="compact" class="mb-3">已保存 Rabi 实例配置。</v-alert>
+        <v-alert v-if="rabiSaved" type="success" variant="tonal" density="compact" class="mb-3">
+          {{ rabiLinkRelayEnabled ? "已保存，Manager 正在维护全局 Relay 连接。" : "已保存，RabiLink Relay 已全局关闭。" }}
+        </v-alert>
         <div class="form-grid">
           <v-text-field v-model="rabiName" label="RabiRoute 实例名" :placeholder="store.meta.computerName || 'RabiRoute'" density="compact" hide-details />
           <v-text-field :model-value="store.meta.rabiGuid || '-'" label="RabiRoute GUID" density="compact" readonly hide-details />
@@ -367,9 +444,30 @@ const selectedRuntimeLabel = computed(() => {
         <div class="section-title-row compact-row mb-2">
           <div>
             <div class="section-title small-title">RabiLink Relay</div>
-            <div class="section-note">全局上游服务器配置。启用状态由服务器应用管理。</div>
+            <div class="section-note">全局连接设置。开启后由 Manager 常驻登记本机，不依赖某条路由启动。</div>
+          </div>
+          <div class="relay-global-controls">
+            <v-chip :color="relayRuntimeColor" size="small" variant="tonal">{{ relayRuntimeLabel }}</v-chip>
+            <v-switch
+              :model-value="rabiLinkRelayEnabled"
+              label="连接服务器"
+              color="success"
+              density="compact"
+              inset
+              hide-details
+              :disabled="rabiSaving"
+              @update:model-value="toggleRabiLinkRelay"
+            />
           </div>
         </div>
+        <v-alert
+          :type="relayRuntimeState === 'error' ? 'error' : relayRuntimeState === 'incomplete' ? 'warning' : 'info'"
+          variant="tonal"
+          density="compact"
+          class="mb-3"
+        >
+          {{ relayRuntimeMessage }}
+        </v-alert>
         <div class="form-grid">
           <v-text-field v-model="rabiLinkRelayDeviceId" label="本机 Rabi PC 标识" :placeholder="store.meta.computerName || 'rabilink-pc'" density="compact" hide-details />
           <v-text-field v-model="rabiLinkRelayUrl" label="Relay 服务器地址" placeholder="https://rabiroute.example.com" density="compact" hide-details />

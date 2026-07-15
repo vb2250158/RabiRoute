@@ -1,3 +1,4 @@
+// Archived on 2026-07-10. The live Codex adapter uses app-server stdio.
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -45,6 +46,7 @@ type IpcPending = {
 type CodexState = {
   monitorThreadId?: string;
   monitorThreadName?: string;
+  monitorThreadCwd?: string;
   monitorThreadUpdatedAt?: string;
   monitorThreadSource?: string;
   lastAutoDiscoveryAt?: string;
@@ -363,7 +365,7 @@ function resolveMonitorThread(state: CodexState, forceRefresh: boolean): CodexSt
         monitorThreadUpdatedAt: undefined,
         monitorThreadSource: sessionIndexPath(),
         lastAutoDiscoveryAt: new Date().toISOString(),
-        lastNotificationError: `No Codex thread named "${config.codexThreadName}" was found in ${sessionIndexPath()}. Previous binding "${String(state.monitorThreadName ?? state.monitorThreadId)}" was cleared.`,
+        lastNotificationError: `未在 ${sessionIndexPath()} 中找到名为“${config.codexThreadName}”的 Codex 线程；已清除之前的绑定“${String(state.monitorThreadName ?? state.monitorThreadId)}”。`,
         lastNotificationErrorAt: new Date().toISOString()
       };
       writeState(nextState);
@@ -404,7 +406,7 @@ function resolveConfiguredMonitorThread(state: CodexState, forceRefresh: boolean
     monitorThreadUpdatedAt: undefined,
     monitorThreadSource: sessionIndexPath(),
     lastAutoDiscoveryAt: new Date().toISOString(),
-    lastNotificationError: `No Codex thread named "${config.codexThreadName}" was found in ${sessionIndexPath()}. Previous binding "${refreshedState.monitorThreadName}" was cleared.`,
+    lastNotificationError: `未在 ${sessionIndexPath()} 中找到名为“${config.codexThreadName}”的 Codex 线程；已清除之前的绑定“${refreshedState.monitorThreadName}”。`,
     lastNotificationErrorAt: new Date().toISOString()
   };
   writeState(nextState);
@@ -848,6 +850,7 @@ async function createMonitorThreadForDesktopDelivery(state: CodexState, forceCre
     ...codexAppVisibilityStatePatch(visibility),
     monitorThreadId: created.id,
     monitorThreadName: created.threadName,
+    monitorThreadCwd: created.cwd,
     monitorThreadUpdatedAt: created.updatedAt,
     monitorThreadSource: `${created.source}; delivery=desktop-ipc`,
     lastAutoDiscoveryAt: new Date().toISOString(),
@@ -922,7 +925,7 @@ async function deliverCodexDesktopNotification(message: string, options: Deliver
     .then(async () => {
       const retryAttemptAt = options.fromRetry ? new Date().toISOString() : undefined;
       let state = resolveConfiguredMonitorThread(readState(), false);
-      if (!state.monitorThreadId && shouldAutoCreateMonitorThread()) {
+      if (shouldAutoCreateMonitorThread()) {
         state = await createMonitorThreadForDesktopDelivery(state);
       }
 
@@ -965,13 +968,18 @@ async function deliverCodexDesktopNotification(message: string, options: Deliver
         const deliveryErrorMessage = formatCodexDesktopDeliveryError(error, state);
         if (shouldUseAppServerFallbackFor(error, state)) {
           try {
-            await notifyCodex(message);
+            const fallbackThread = await notifyCodex(message);
             const visibility = await ensureCodexAppVisible("app-server-fallback", { force: true });
             const fallbackState = readState();
             const now = new Date().toISOString();
             writeState({
               ...fallbackState,
               ...codexAppVisibilityStatePatch(visibility),
+              monitorThreadId: fallbackThread.id,
+              monitorThreadName: fallbackThread.threadName,
+              monitorThreadCwd: fallbackThread.cwd,
+              monitorThreadUpdatedAt: fallbackThread.updatedAt,
+              monitorThreadSource: `${fallbackThread.source}; delivery=app-server-fallback`,
               lastNotificationAt: now,
               lastNotificationError: "",
               lastNotificationErrorAt: "",

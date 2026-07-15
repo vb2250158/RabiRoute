@@ -26,7 +26,7 @@ public final class RokidGlassModule implements DeviceModule {
             new Capability(CAP_AUDIO, "音频流", "audio", true, true, "短时接收 PCM 音频并保存 WAV 证据。"),
             new Capability(CAP_PHOTO, "拍照", "camera", true, true, "调用拍照接口并保存 JPEG 证据。"),
             new Capability(CAP_DEVICE_CONTROL, "设备信息与控制", "device", true, true, "读取设备信息并测试亮度、音量设置。"),
-            new Capability(CAP_GLASS_TEST, "眼镜端测试 APK", "glass-app", true, true, "安装并启动 Rabi Glass Test，验证眼镜端测试 APK、CXR CustomCmd 和基础回包。")
+            new Capability(CAP_GLASS_TEST, "眼镜端测试 APK", "glass-app", true, true, "安装并启动 Rabi Glass，验证眼镜端测试 APK、CXR CustomCmd 和基础回包。")
     );
 
     @Override

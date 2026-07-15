@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "messageAdapters": [
     "wecom",
     "heartbeat"
@@ -40,8 +40,9 @@
   "wecomWsUrl": "",
   "heartbeatIntervalSeconds": 900,
   "heartbeatMessage": "Scheduled heartbeat: check recent WeCom messages and route context.",
+  "gatewayPort": 8796,
   "codexThreadName": "WeCom message monitor",
-  "codexCwd": "C:/Path/To/Your/Project",
+  "codexCwd": ".",
   "agentModel": "",
   "agentRoleFile": "persona.md",
   "agentAdapters": [
@@ -50,18 +51,5 @@
   "dataDir": "./data/route/wecom",
   "configName": "wecom",
   "agentRoleId": "Rabi",
-  "rolesDir": "./data/roles",
-  "notificationRules": [
-    {
-      "id": "wecom-group-message",
-      "name": "WeCom group message",
-      "enabled": true,
-      "routeKinds": [
-        "wecom_message"
-      ],
-      "targetGroupId": "",
-      "regex": "",
-      "template": "WeCom group message\nTarget: {messageTarget}\nGroup: {groupId}\nSender: {sender} ({userId})\nMessageId: {messageId}\nReqId: {wecomReqId}\nChatId: {wecomChatId}\n\n{message}\n\nReply through {replyApiUrl} with replyContextJson when a WeCom response is allowed."
-    }
-  ]
+  "rolesDir": "./data/roles"
 }

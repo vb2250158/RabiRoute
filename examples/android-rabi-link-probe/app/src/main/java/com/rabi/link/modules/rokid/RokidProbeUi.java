@@ -9,6 +9,7 @@ import android.text.method.PasswordTransformationMethod;
 import android.text.method.ScrollingMovementMethod;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewParent;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -19,6 +20,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 final class RokidProbeUi {
+    private static final String TAG_ACTION_GROUP = "rokid-action-group";
+    private static final String TAG_ACTION_GROUP_BUTTONS = "rokid-action-group-buttons";
+    private static final String TAG_ACTION_GROUP_TOGGLE = "rokid-action-group-toggle";
+
     static final String ACTION_CONNECT = "connect";
     static final String ACTION_OPEN_CUSTOM_VIEW = "open_custom_view";
     static final String ACTION_UPDATE_CUSTOM_VIEW = "update_custom_view";
@@ -309,6 +314,7 @@ final class RokidProbeUi {
             Button button = actionButtonViews.get(actionId);
             if (button != null) {
                 button.setVisibility(visible ? View.VISIBLE : View.GONE);
+                refreshActionGroupFor(button);
             }
         }
 
@@ -511,39 +517,53 @@ final class RokidProbeUi {
                 new ActionButton(ACTION_GET_DEVICE_INFO, "读取设备信息", v -> actions.getGlassDeviceInfo()),
                 new ActionButton(ACTION_SET_DEVICE_CONTROL, RokidProbeDefaults.brightnessAndVolumeLabel(), v -> actions.setBrightnessAndVolume())
         );
-        addCapabilityBlockWithExtra(
+        addGlassAppCapabilityBlock(
                 activity,
                 content,
                 statusViews,
                 blockViews,
                 actionViews,
                 RokidGlassModule.CAP_GLASS_ASR,
-                "07 Rabi Glass Test / CustomApp",
+                "07 Rabi Glass / CustomApp",
                 "安装并启动内置眼镜 APK，验证 CustomApp 会话、CXR CustomCmd 和基础回包。",
                 "用途：保留眼镜端测试负载，用来验证安装、启动、消息桥和后续非 ASR 方向的实验。",
                 "前置：已有 token；需要切换到 CustomApp 会话；眼镜允许安装和启动测试 APK。",
                 "证据：CustomApp 会话状态、安装/查询/启动回调、Ping/状态/诊断回包。",
-                null,
-                new ActionButton(ACTION_CONNECT_GLASS_APP_SESSION, "连接应用会话", v -> actions.connectGlassAppSession()),
-                new ActionButton(ACTION_QUERY_GLASS_ASR, "查询安装", v -> actions.queryGlassAsrApp()),
-                new ActionButton(ACTION_INSTALL_GLASS_ASR, "安装眼镜 APK", v -> actions.installGlassAsrApp()),
-                new ActionButton(ACTION_START_GLASS_ASR, "启动眼镜 APK", v -> actions.startGlassAsrApp()),
-                new ActionButton(ACTION_PING_NATIVE_VOICE, "Ping 眼镜", v -> actions.pingNativeVoiceBridge()),
-                new ActionButton(ACTION_QUERY_NATIVE_STATUS, "查询原生状态", v -> actions.queryNativeVoiceStatus()),
-                new ActionButton(ACTION_QUERY_NATIVE_DIAGNOSTICS, "原生诊断", v -> actions.queryNativeVoiceDiagnostics()),
-                new ActionButton(ACTION_ARM_OFFLINE_VOICE_CMD, "注册离线指令", v -> actions.armOfflineVoiceCommands()),
-                new ActionButton(ACTION_CLEAR_OFFLINE_VOICE_CMD, "清除离线指令", v -> actions.clearOfflineVoiceCommands()),
-                new ActionButton(ACTION_SCAN_PHONE_BT, "扫描手机 BT", v -> actions.scanPhoneBt()),
-                new ActionButton(ACTION_PROBE_PHONE_DEVICE_LINK, "官方连接探针", v -> actions.probePhoneDeviceLink()),
-                new ActionButton(ACTION_ASSOCIATE_PHONE_COMPANION, "系统关联眼镜", v -> actions.associatePhoneCompanionDevice()),
-                new ActionButton(ACTION_CONNECT_PHONE_BT, "连接已配对眼镜 BT", v -> actions.connectPhoneBt()),
-                new ActionButton(ACTION_PROBE_PHONE_BT_AUTH, "检查手机 BT/Auth", v -> actions.probePhoneBtAuth()),
-                new ActionButton(ACTION_PROBE_PHONE_P2P, "P2P 探针", v -> actions.probePhoneP2p()),
-                new ActionButton(ACTION_REQUEST_PHONE_SYSTEM_INFO, "官方系统信息", v -> actions.requestPhoneSystemInfo()),
-                new ActionButton(ACTION_REQUEST_PHONE_DEVICE_AUDIO_HANDSHAKE, "触发手机设备握手", v -> actions.requestPhoneDeviceAudioHandshake()),
-                new ActionButton(ACTION_REQUEST_PHONE_DEVICE_VIDEO_AUDIO_HANDSHAKE, "视频+音频握手", v -> actions.requestPhoneDeviceVideoAudioHandshake()),
-                new ActionButton(ACTION_PROBE_PHONE_GLASS_DEVICE, "检查手机设备信息", v -> actions.probePhoneGlassDeviceInfo()),
-                new ActionButton(ACTION_STOP_GLASS_ASR, "停止应用", v -> actions.stopGlassAsrApp())
+                new ActionGroup(
+                        "核心流程",
+                        "按顺序完成会话、安装和启动；平时主要用这一组。",
+                        false,
+                        new ActionButton(ACTION_CONNECT_GLASS_APP_SESSION, "连接应用会话", v -> actions.connectGlassAppSession()),
+                        new ActionButton(ACTION_QUERY_GLASS_ASR, "查询安装", v -> actions.queryGlassAsrApp()),
+                        new ActionButton(ACTION_INSTALL_GLASS_ASR, "安装眼镜 APK", v -> actions.installGlassAsrApp()),
+                        new ActionButton(ACTION_START_GLASS_ASR, "启动眼镜 APK", v -> actions.startGlassAsrApp()),
+                        new ActionButton(ACTION_STOP_GLASS_ASR, "停止应用", v -> actions.stopGlassAsrApp())
+                ),
+                new ActionGroup(
+                        "常用回包",
+                        "确认眼镜端 CustomCmd 是否能收发消息。",
+                        false,
+                        new ActionButton(ACTION_PING_NATIVE_VOICE, "Ping 眼镜", v -> actions.pingNativeVoiceBridge()),
+                        new ActionButton(ACTION_QUERY_NATIVE_STATUS, "查询原生状态", v -> actions.queryNativeVoiceStatus()),
+                        new ActionButton(ACTION_QUERY_NATIVE_DIAGNOSTICS, "原生诊断", v -> actions.queryNativeVoiceDiagnostics()),
+                        new ActionButton(ACTION_PROBE_PHONE_GLASS_DEVICE, "检查手机设备信息", v -> actions.probePhoneGlassDeviceInfo())
+                ),
+                new ActionGroup(
+                        "高级探针",
+                        "低频排障动作，默认收起，避免 07 卡片被按钮挤满。",
+                        true,
+                        new ActionButton(ACTION_ARM_OFFLINE_VOICE_CMD, "注册离线指令", v -> actions.armOfflineVoiceCommands()),
+                        new ActionButton(ACTION_CLEAR_OFFLINE_VOICE_CMD, "清除离线指令", v -> actions.clearOfflineVoiceCommands()),
+                        new ActionButton(ACTION_SCAN_PHONE_BT, "扫描手机 BT", v -> actions.scanPhoneBt()),
+                        new ActionButton(ACTION_PROBE_PHONE_DEVICE_LINK, "官方连接探针", v -> actions.probePhoneDeviceLink()),
+                        new ActionButton(ACTION_ASSOCIATE_PHONE_COMPANION, "系统关联眼镜", v -> actions.associatePhoneCompanionDevice()),
+                        new ActionButton(ACTION_CONNECT_PHONE_BT, "连接已配对眼镜 BT", v -> actions.connectPhoneBt()),
+                        new ActionButton(ACTION_PROBE_PHONE_BT_AUTH, "检查手机 BT/Auth", v -> actions.probePhoneBtAuth()),
+                        new ActionButton(ACTION_PROBE_PHONE_P2P, "P2P 探针", v -> actions.probePhoneP2p()),
+                        new ActionButton(ACTION_REQUEST_PHONE_SYSTEM_INFO, "官方系统信息", v -> actions.requestPhoneSystemInfo()),
+                        new ActionButton(ACTION_REQUEST_PHONE_DEVICE_AUDIO_HANDSHAKE, "触发手机设备握手", v -> actions.requestPhoneDeviceAudioHandshake()),
+                        new ActionButton(ACTION_REQUEST_PHONE_DEVICE_VIDEO_AUDIO_HANDSHAKE, "视频+音频握手", v -> actions.requestPhoneDeviceVideoAudioHandshake())
+                )
         );
 
         ScrollView page = new ScrollView(activity);
@@ -737,6 +757,143 @@ final class RokidProbeUi {
         content.addView(block, fullWidthWithMargins(activity, 0, 0, 0, 12));
     }
 
+    private static void addGlassAppCapabilityBlock(
+            Activity activity,
+            LinearLayout content,
+            Map<String, TextView> statusViews,
+            Map<String, View> blockViews,
+            Map<String, Button> actionViews,
+            String capabilityId,
+            String title,
+            String summary,
+            String useCase,
+            String prerequisite,
+            String evidence,
+            ActionGroup... groups
+    ) {
+        LinearLayout block = new LinearLayout(activity);
+        blockViews.put(capabilityId, block);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 12));
+        block.setBackground(panelBackground(Color.WHITE, Color.rgb(218, 222, 228)));
+
+        TextView titleView = new TextView(activity);
+        titleView.setText(title);
+        titleView.setTextSize(16);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        titleView.setTextColor(Color.rgb(22, 28, 36));
+        block.addView(titleView, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView summaryView = text(activity, summary, 13, Color.rgb(70, 77, 88));
+        summaryView.setPadding(0, dp(activity, 4), 0, dp(activity, 6));
+        block.addView(summaryView, new LinearLayout.LayoutParams(-1, -2));
+
+        block.addView(text(activity, useCase, 12, Color.rgb(58, 76, 102)), new LinearLayout.LayoutParams(-1, -2));
+        block.addView(text(activity, prerequisite, 12, Color.rgb(92, 98, 108)), new LinearLayout.LayoutParams(-1, -2));
+        block.addView(text(activity, evidence, 12, Color.rgb(92, 98, 108)), new LinearLayout.LayoutParams(-1, -2));
+
+        TextView status = text(activity, "状态：待测", 12, Color.rgb(111, 118, 128));
+        status.setPadding(0, dp(activity, 8), 0, dp(activity, 8));
+        statusViews.put(capabilityId, status);
+        block.addView(status, new LinearLayout.LayoutParams(-1, -2));
+
+        for (ActionGroup group : groups) {
+            addActionGroup(activity, block, actionViews, group);
+        }
+
+        content.addView(block, fullWidthWithMargins(activity, 0, 0, 0, 12));
+    }
+
+    private static void addActionGroup(
+            Activity activity,
+            LinearLayout block,
+            Map<String, Button> actionViews,
+            ActionGroup group
+    ) {
+        LinearLayout groupContainer = new LinearLayout(activity);
+        groupContainer.setOrientation(LinearLayout.VERTICAL);
+        groupContainer.setTag(TAG_ACTION_GROUP);
+        groupContainer.setPadding(dp(activity, 10), dp(activity, 8), dp(activity, 10), dp(activity, 8));
+        groupContainer.setBackground(panelBackground(Color.rgb(247, 249, 252), Color.rgb(226, 231, 238)));
+
+        TextView title = text(activity, group.title, 13, Color.rgb(36, 44, 56));
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        groupContainer.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        groupContainer.addView(text(activity, group.summary, 11, Color.rgb(100, 108, 120)), fullWidthWithMargins(activity, 0, 2, 0, 8));
+
+        LinearLayout buttonColumn = new LinearLayout(activity);
+        buttonColumn.setOrientation(LinearLayout.VERTICAL);
+        buttonColumn.setTag(TAG_ACTION_GROUP_BUTTONS);
+        for (ActionButton action : group.actions) {
+            Button button = button(activity, action.label, action.listener);
+            actionViews.put(action.id, button);
+            buttonColumn.addView(button, fullWidthWithMargins(activity, 0, 0, 0, 6));
+        }
+
+        if (!group.collapsible) {
+            groupContainer.addView(buttonColumn, new LinearLayout.LayoutParams(-1, -2));
+            block.addView(groupContainer, fullWidthWithMargins(activity, 0, 0, 0, 8));
+            refreshActionGroup(groupContainer);
+            return;
+        }
+
+        buttonColumn.setVisibility(View.GONE);
+        Button toggle = button(activity, "展开" + group.title, null);
+        toggle.setTag(TAG_ACTION_GROUP_TOGGLE);
+        toggle.setOnClickListener(v -> {
+            boolean expand = buttonColumn.getVisibility() != View.VISIBLE;
+            buttonColumn.setVisibility(expand ? View.VISIBLE : View.GONE);
+            refreshActionGroup(groupContainer);
+        });
+        groupContainer.addView(toggle, fullWidthWithMargins(activity, 0, 0, 0, 6));
+        groupContainer.addView(buttonColumn, new LinearLayout.LayoutParams(-1, -2));
+        block.addView(groupContainer, fullWidthWithMargins(activity, 0, 0, 0, 8));
+        refreshActionGroup(groupContainer);
+    }
+
+    private static void refreshActionGroupFor(View child) {
+        ViewParent parent = child.getParent();
+        while (parent instanceof View) {
+            View view = (View) parent;
+            if (TAG_ACTION_GROUP.equals(view.getTag())) {
+                refreshActionGroup(view);
+                return;
+            }
+            parent = parent.getParent();
+        }
+    }
+
+    private static void refreshActionGroup(View groupView) {
+        if (!(groupView instanceof LinearLayout)) {
+            return;
+        }
+        LinearLayout group = (LinearLayout) groupView;
+        LinearLayout buttonColumn = null;
+        Button toggle = null;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (TAG_ACTION_GROUP_BUTTONS.equals(child.getTag()) && child instanceof LinearLayout) {
+                buttonColumn = (LinearLayout) child;
+            } else if (TAG_ACTION_GROUP_TOGGLE.equals(child.getTag()) && child instanceof Button) {
+                toggle = (Button) child;
+            }
+        }
+        if (buttonColumn == null) {
+            return;
+        }
+        int visibleActions = 0;
+        for (int i = 0; i < buttonColumn.getChildCount(); i++) {
+            if (buttonColumn.getChildAt(i).getVisibility() == View.VISIBLE) {
+                visibleActions++;
+            }
+        }
+        group.setVisibility(visibleActions > 0 ? View.VISIBLE : View.GONE);
+        if (toggle != null) {
+            String label = buttonColumn.getVisibility() == View.VISIBLE ? "收起高级探针" : "展开高级探针";
+            toggle.setText(label + "（" + visibleActions + "）");
+        }
+    }
+
     private static EditText nativeTtsInput(Activity activity) {
         EditText input = new EditText(activity);
         input.setSingleLine(false);
@@ -880,6 +1037,20 @@ final class RokidProbeUi {
             this.id = id;
             this.label = label;
             this.listener = listener;
+        }
+    }
+
+    private static final class ActionGroup {
+        final String title;
+        final String summary;
+        final boolean collapsible;
+        final ActionButton[] actions;
+
+        ActionGroup(String title, String summary, boolean collapsible, ActionButton... actions) {
+            this.title = title;
+            this.summary = summary;
+            this.collapsible = collapsible;
+            this.actions = actions;
         }
     }
 }

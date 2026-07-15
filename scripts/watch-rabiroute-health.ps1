@@ -430,49 +430,16 @@ function Check-Gateways {
       }
     }
 
-    $codexState = Get-Prop $gateway "codexState"
     $agentStates = Get-Prop $gateway "agentStates"
-    $reportedCodexState = $null
+    $codexAgentState = $null
     if ($agentStates) {
-      $reportedCodexState = Get-Prop $agentStates "codex"
+      $codexAgentState = Get-Prop $agentStates "codex"
     }
-    $codexBound = ((Get-Prop $codexState "bound") -eq $true) -or [bool](Get-Prop $codexState "monitorThreadId")
     $agentAdapters = @((Get-Prop $gateway "agentAdapters"))
-    $codexError = [string](Get-Prop $codexState "lastNotificationError")
-    if (-not $codexError -and $reportedCodexState) {
-      $codexError = [string](Get-Prop $reportedCodexState "lastNotificationError")
-    }
+    $codexError = [string](Get-Prop $codexAgentState "lastNotificationError")
     if ($enabled -and ($agentAdapters -contains "codex") -and $codexError) {
-      $retryPending = Get-Prop $codexState "retryPendingCount"
-      if ($null -eq $retryPending -and $reportedCodexState) {
-        $retryPending = Get-Prop $reportedCodexState "retryPendingCount"
-      }
-      $nextRetryAt = [string](Get-Prop $codexState "nextRetryAt")
-      if (-not $nextRetryAt -and $reportedCodexState) {
-        $nextRetryAt = [string](Get-Prop $reportedCodexState "nextRetryAt")
-      }
-      $retryPendingCount = 0
-      if ($null -ne $retryPending -and [string]$retryPending -match "^\d+$") {
-        $retryPendingCount = [int]$retryPending
-      }
-      $action = if ($codexError.Contains("no-client-found")) {
-        if ($retryPendingCount -gt 0) {
-          "Auto-retry is queued for $retryPendingCount message(s). Next retry: $nextRetryAt. Open or wake the configured Codex Desktop thread if retries keep failing."
-        } else {
-          "Open or wake the configured Codex Desktop thread, or migrate this route to a persistent worker."
-        }
-      } else {
-        "Check the Codex adapter state and notification logs."
-      }
+      $action = "Check codex-app-server.stderr.log, Codex authentication, codexCwd, and the app-server stdio adapter state. ChatGPT desktop is not part of delivery health."
       Add-Issue $Issues $gatewayId "error" "Codex delivery failed: $codexError" $action $false $true
-      continue
-    }
-    if ($enabled -and ($agentAdapters -contains "codex") -and -not $codexBound) {
-      $msg = [string](Get-Prop $codexState "message")
-      if (-not $msg -and $reportedCodexState) {
-        $msg = [string](Get-Prop $reportedCodexState "message")
-      }
-      Add-Issue $Issues $gatewayId "warning" "Codex agent is not bound. $msg" "A matching Codex thread is required; patrol records only and sends no external message." $false $true
     }
   }
 }

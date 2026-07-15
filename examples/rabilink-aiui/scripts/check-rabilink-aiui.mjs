@@ -19,6 +19,10 @@ const files = {
   craftEmbeddedLauncher: path.join(projectRoot, "scripts", "Open-RabiLinkAiuiCraftEmbeddedUploadHelper.ps1"),
   configSurface: path.join(projectRoot, "utils", "config-surface.js"),
   rabilinkApi: path.join(projectRoot, "utils", "rabilink-api.js"),
+  voiceRuntime: path.join(projectRoot, "utils", "voice-runtime.js"),
+  quickStartDocs: path.resolve(projectRoot, "..", "..", "ribiwebgui", "src", "docs", "rabilinkAiuiDocs.ts"),
+  quickStartGuide: path.resolve(projectRoot, "..", "..", "ribiwebgui", "src", "components", "docs", "RabiLinkQuickStartGuide.vue"),
+  exampleRoute: path.resolve(projectRoot, "..", "..", "examples", "data", "route", "RabiLink", "adapterConfig.json"),
   relayServer: path.resolve(projectRoot, "..", "..", "scripts", "rabilink-relay-server.mjs"),
   gatewayModel: path.resolve(projectRoot, "..", "..", "src", "shared", "gatewayConfigModel.ts")
 };
@@ -76,7 +80,18 @@ assert(appJson.pages.includes("pages/home/index"), "app.json must include pages/
 assert(appJson.pages[0] === "pages/home/index", "pages/home/index must remain the safe default entry page.");
 assert(appJson.pages.length === 1, "AIUI must keep both modes on one page so entering Interactive InkView cannot trigger page reconciliation.");
 
+const quickStartDocs = read(files.quickStartDocs);
+const quickStartGuide = read(files.quickStartGuide);
+const exampleRoute = parseJsonFile(files.exampleRoute);
+assert(quickStartDocs.includes('title: "启用 PC 的 RabiLink Route"'), "Quick start must include the PC RabiLink Route activation step.");
+assert(quickStartDocs.includes("Codex + RabiActive"), "Quick start flow must name the Codex and RabiActive binding.");
+assert(quickStartDocs.includes('href: "/routes"'), "Quick start must use an internal router path for Route configuration.");
+assert(quickStartGuide.includes(':to="step.action.external ? undefined : step.action.href"'), "Quick start internal actions must preserve the current WebGUI base path.");
+assert(exampleRoute.enabled === false, "The portable RabiLink Route template must remain opt-in until credentials and ports are checked.");
+assert(exampleRoute.agentRoleId === "RabiActive", "The portable RabiLink Route template must bind RabiActive.");
+
 const pageInk = read(files.pageInk);
+assert(pageInk.includes('const RABILINK_RELEASE_VERSION = "__RABILINK_RELEASE_VERSION__"'), "pages/home/index.ink must retain the build-time release version marker.");
 const defSource = extractBlock(pageInk, "script", "def");
 assert(defSource, "pages/home/index.ink must include <script def>.");
 const pageDefinition = JSON.parse(defSource);
@@ -93,7 +108,7 @@ assert(
   JSON.stringify(toolSchema.properties.mode.enum) === JSON.stringify(["transcription", "configuration"]),
   "AIUI page mode schema must expose exactly the transcription and configuration modes."
 );
-assert(toolSchema.required?.includes("token"), "AIUI page schema must require token for variable binding.");
+assert(Array.isArray(toolSchema.required) && !toolSchema.required.includes("token"), "AIUI page schema must allow the first frame to render before token binding.");
 assert(toolSchema.additionalProperties === false, "AIUI page schema must reject undeclared tool inputs.");
 
 const expectedCraftTools = [{
@@ -152,17 +167,22 @@ assert(
   (pageInk.match(/<scroll-view\b/g) || []).length === 0,
   "AIUI home page must not mount scroll-view nodes; Ink 0.13 corrupts their layout parent during Craft card-to-immersive resize."
 );
-assert(pageInk.includes('class="unifiedModeHud {{modeFrameRelayout'), "AIUI home page must mount one stable immersive HUD for both product modes.");
-assert((pageInk.match(/class="compactCard \{\{modeFrameRelayout/g) || []).length === 1, "AIUI home page must mount one stable compact card for both product modes.");
+assert((pageInk.match(/class="unifiedModeHud \{\{modeFrameRelayout/g) || []).length === 1, "AIUI home page must mount exactly one shared HUD for both product modes and both host sizes.");
+assert(!pageInk.includes('class="compactCard {{modeFrameRelayout'), "AIUI home page must not swap to a second compact tree during Craft card-to-immersive resize.");
 assert(!pageInk.includes("transcriptionHud") && !pageInk.includes("configurationAssistantHud"), "The two legacy mode-specific HUD trees must be removed.");
 assert(!pageInk.includes('class="configurationModeHost {{isConfigurationMode'), "The old manual configuration dashboard must not remain selectable.");
 assert(!pageInk.includes('class="legacyConfigurationModeHost'), "The old manual configuration markup must be removed from the AIX page.");
 assert(!pageInk.includes('Token {{maskedToken}}'), "The assistant page must not expose the old token editor or credential row.");
 assert(!pageInk.includes("modeHidden"), "Mode switching must update one stable HUD instead of hiding parallel mode trees.");
 assert(pageInk.includes("commitModeFrame") && pageInk.includes(".modeFrameRelayout"), "Mode switching must force a complete single-tree Ink relayout.");
-assert(pageInk.includes("hudVisibleSnapshot") && pageInk.includes("...this.hudVisibleSnapshot()"), "Every masked Ink update must restore all visible HUD bindings in one snapshot.");
-assert(pageInk.includes("TRANSCRIPTION_CLOCK_REFRESH_MS") && pageInk.includes("opacity: 0"), "The Ink relayout guard must mask its bounded repaint frame and throttle duration updates.");
+assert(pageInk.includes("hudVisibleSnapshot") && pageInk.includes("...this.hudVisibleSnapshot()"), "Every bounded Ink relayout must restore all visible HUD bindings in one snapshot.");
+assert(pageInk.includes("TRANSCRIPTION_CLOCK_REFRESH_MS"), "The Ink runtime must throttle duration updates.");
 assert(pageInk.includes("toggleModePrimaryAction") && pageInk.includes("retryModeAction"), "Stable mode utilities must delegate through mode-aware actions.");
+const voiceRuntimeSource = read(files.voiceRuntime);
+assert(pageInk.includes('from "../../utils/voice-runtime.js"'), "AIUI home page must import the native voice adapter boundary.");
+assert(pageInk.includes("createAiuiAsrInputAdapter") && pageInk.includes("createAiuiTtsOutputAdapter"), "AIUI home page must construct native ASR and TTS adapters.");
+assert(!pageInk.includes("new SpeechSynthesisUtterance") && !pageInk.includes("speechSynthesis.speak("), "AIUI home page must not bypass the TTS adapter.");
+assert(voiceRuntimeSource.includes("requiresApiKey: false") && voiceRuntimeSource.includes("networkFallback: false"), "AIUI native voice capabilities must explicitly reject API-key and network fallback requirements.");
 for (const behavior of [
   "startTranscription()",
   "scheduleTranscriptionRestart(",
@@ -184,7 +204,7 @@ const agentsMd = read(files.agentsMd);
 assert(agentsMd.includes("mode=transcription") && agentsMd.includes("mode=configuration"), "Agent instructions must route both product modes through the same page tool.");
 assert(agentsMd.includes("不需要额外导入 RabiLinkMessage"), "Agent instructions must explicitly remove the separate RabiLinkMessage plugin requirement.");
 assert(agentsMd.includes("同一个 AIUI 页面内切换") && !agentsMd.includes("this.finish()"), "Agent instructions must preserve in-page bidirectional mode switching without finish().");
-assert(agentsMd.includes("连接对话") && agentsMd.includes("原生 Agent"), "Agent instructions must document the agreed mode name and native-Agent configuration ownership.");
+assert(agentsMd.includes("连接对话") && agentsMd.includes("LanguageModel") && agentsMd.includes("SpeechRecognition"), "Agent instructions must document AIUI ASR plus native LanguageModel configuration understanding.");
 
 const setupSource = extractBlock(pageInk, "script", "setup");
 assert(setupSource, "pages/home/index.ink must include <script setup>.");
@@ -258,6 +278,9 @@ try {
   const compiledPageScript = read(path.join(stagingCheckRoot, "pages", "home", "index.js"));
   const compiledPageMarkup = read(path.join(stagingCheckRoot, "pages", "home", "index.wxml"));
   checkSyntax(compiledPageScript, "compiled pages/home/index.js");
+  assert(!compiledPageScript.includes("__RABILINK_RELEASE_VERSION__"), "Compiled Craft page must not expose an unresolved release version marker.");
+  assert(compiledPageScript.includes(JSON.stringify(craftRelease.version)), "Compiled Craft page must embed the current craft-release.json version.");
+  assert((compiledPageMarkup.match(/class="releaseVersion"/g) || []).length === 1, "Compiled Craft page must show version beside battery in the one shared HUD tree.");
   assert(
     (compiledPageMarkup.match(/<scroll-view\b/g) || []).length === 0,
     "Compiled Craft page must not contain scroll-view nodes."

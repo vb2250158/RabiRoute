@@ -4,6 +4,7 @@ import path from "node:path";
 
 const craftUrl = "https://js.rokid.com/craft?region=cn&lang=zh-CN";
 const expectedUploadPath = "/api/craft/project/upload-agent";
+const uploadMethodMarker = "submitProjectUploadDraft:async";
 
 function fail(message) {
   throw new Error(message);
@@ -46,17 +47,22 @@ const bundle = await fetchText(scriptUrl);
 
 includesAll(bundle, [
   expectedUploadPath,
-  "submitProjectUploadDraft",
-  "new FormData",
-  "new File([M]",
-  'j.append("file",he)',
-  'j.append("metadata",JSON.stringify(Ce))',
+  uploadMethodMarker,
   '"X-Account-Token"',
   '"X-Account-ID"',
   '"X-Craft-Region"'
 ]);
 
-const snippet = extractSnippet(bundle, "submitProjectUploadDraft");
+const snippet = extractSnippet(bundle, uploadMethodMarker, 4000);
+includesAll(snippet, [
+  "new FormData",
+  "new File([",
+  'type:"application/octet-stream"',
+  '.append("file",',
+  '.append("metadata",JSON.stringify(',
+  'method:"POST"',
+  ".body.getReader()"
+]);
 const outDir = path.join(os.tmpdir(), "rokid-craft-inspect");
 fs.mkdirSync(outDir, { recursive: true });
 const snippetPath = path.join(outDir, "upload-agent-snippet.txt");

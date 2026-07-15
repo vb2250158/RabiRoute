@@ -1,12 +1,14 @@
 {
   "name": "remote-agent-rabiroute-bridge",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node index.mjs",
+    "check": "node --check index.mjs && node --check codex-app-server-client.mjs && node --check cwd-policy.mjs && node --check keyed-task-queue.mjs && node --check public-control-url.mjs && node --check task-lifecycle.mjs && node --check thread-coordinator.mjs && node --test codex-app-server-client.test.mjs cwd-policy.test.mjs keyed-task-queue.test.mjs public-control-url.test.mjs task-lifecycle.test.mjs thread-coordinator.test.mjs"
   },
   "dependencies": {
+    "@openai/codex": "0.144.1",
     "ws": "^8.18.0"
   }
 }

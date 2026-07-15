@@ -21,6 +21,32 @@ test("Agent thread list deduplicates session index entries and filters by title"
   }]);
 });
 
+test("Agent thread list delegates to the app-server driver within configured workspaces", async () => {
+  const calls: unknown[] = [];
+  const driver: AgentThreadDriver = {
+    list: async (params) => {
+      calls.push(params);
+      return [{ id: "thread-1", title: "调查任务", updatedAt: "2026-07-15T00:00:00Z" }];
+    },
+    read: async () => ({}),
+    create: async () => { throw new Error("not used"); },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "list",
+    query: "调查",
+    limit: 5
+  }, {
+    allowedWorkspaces: [process.cwd()]
+  }, driver);
+
+  assert.deepEqual(calls, [{ query: "调查", limit: 5, allowedWorkspaces: [process.cwd()] }]);
+  assert.deepEqual(result.data.threads, [
+    { id: "thread-1", title: "调查任务", updatedAt: "2026-07-15T00:00:00Z" }
+  ]);
+});
+
 test("Agent thread create uses a configured workspace and fixed investigation instructions", async () => {
   const calls: unknown[] = [];
   const driver: AgentThreadDriver = {
@@ -31,7 +57,7 @@ test("Agent thread create uses a configured workspace and fixed investigation in
         id: "019f0000-0000-7000-8000-000000000001",
         title: params.title,
         updatedAt: "2026-07-13T00:00:00Z",
-        source: "codex app-server",
+        source: "codex app-server stdio",
         initialTurnStatus: "started"
       };
     },

@@ -9,6 +9,7 @@ import {
   type GatewayDefinition,
   type NotificationRuleDefinition
 } from "../shared/gatewayConfigModel.js";
+import { toProjectRelativePath } from "../shared/projectPaths.js";
 import {
   routeRuntimeParts,
   sanitizeConfigName,
@@ -40,6 +41,23 @@ export type ManagerConfigRepositoryOptions = {
   routeRoot?: string;
   rolesRoot?: string;
 };
+
+export function migrateLegacyCopilotThreadName(
+  definition: Partial<GatewayDefinition>
+): Partial<GatewayDefinition> {
+  const adapters = normalizeAgentAdapters(definition.agentAdapters);
+  const legacyThreadName = definition.codexThreadName?.trim();
+  if (adapters.length !== 1 || adapters[0] !== "copilotCli" || definition.copilotThreadName?.trim() || !legacyThreadName) {
+    return definition;
+  }
+
+  const migrated = {
+    ...definition,
+    copilotThreadName: legacyThreadName
+  };
+  delete migrated.codexThreadName;
+  return migrated;
+}
 
 export class ManagerConfigRepository {
   readonly rootDir: string;
@@ -120,6 +138,10 @@ export class ManagerConfigRepository {
     }, null, 2), "utf8");
   }
 
+  private configPathValue(value: unknown): string | undefined {
+    return toProjectRelativePath(value, this.rootDir);
+  }
+
   migrateLegacyConfigs(): void {
     migrateLegacyConfigs({ routeRoot: this.routeRoot, rolesRoot: this.rolesRoot });
   }
@@ -129,7 +151,7 @@ export class ManagerConfigRepository {
       managerPort: this.managerPort,
       routeDataDir: (configName) => path.relative(this.rootDir, routeFolderPath(this.routeRoot, configName)).replace(/\\/g, "/"),
       rolesDir: path.relative(this.rootDir, this.rolesRoot).replace(/\\/g, "/"),
-      normalizeAgentAdapters: (adapters) => normalizeAgentAdapters(adapters ?? []),
+      normalizeAgentAdapters,
       normalizePipeline: (pipeline) => normalizePipelineDefinition(pipeline) as GatewayDefinition["pipeline"]
     });
   }
@@ -142,7 +164,9 @@ export class ManagerConfigRepository {
       const configName = sanitizeConfigName(routeEntry.name);
       const configPath = this.adapterConfigPath(configName);
       if (!fs.existsSync(configPath)) continue;
-      const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
+      const raw = migrateLegacyCopilotThreadName(
+        JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>
+      );
       const personaConfig = this.readRoleMessageConfig(raw.agentRoleId);
       gateways.push(this.normalize({
         ...raw,
@@ -224,6 +248,19 @@ export class ManagerConfigRepository {
       rabiLinkRelayReplyIdleTimeoutMs: _rabiLinkRelayReplyIdleTimeoutMs,
       ...adapterOnly
     } = definition;
-    return adapterOnly;
+    return {
+      ...adapterOnly,
+      remoteAgentDefaultCwd: this.configPathValue(adapterOnly.remoteAgentDefaultCwd),
+      codexCwd: this.configPathValue(adapterOnly.codexCwd),
+      copilotCwd: this.configPathValue(adapterOnly.copilotCwd),
+      rolesDir: this.configPathValue(adapterOnly.rolesDir),
+      routesDir: this.configPathValue(adapterOnly.routesDir),
+      napcatInstances: Array.isArray(adapterOnly.napcatInstances)
+        ? adapterOnly.napcatInstances.map((instance) => ({
+            ...instance,
+            workingDir: this.configPathValue(instance.workingDir)
+          }))
+        : adapterOnly.napcatInstances
+    };
   }
 }

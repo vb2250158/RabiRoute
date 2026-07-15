@@ -1,6 +1,7 @@
 param(
   [string] $OutputDir = "",
-  [string] $RelayBaseUrl = ""
+  [string] $RelayBaseUrl = "",
+  [string] $VersionId = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,7 +18,11 @@ try {
     $env:RABILINK_AIUI_RELAY_URL = $RelayBaseUrl
   }
 
-  node (Join-Path $PSScriptRoot "Build-RabiLinkAiuiPackage.mjs") --staging $resolvedOutputDir
+  $buildArgs = @((Join-Path $PSScriptRoot "Build-RabiLinkAiuiPackage.mjs"), "--staging", $resolvedOutputDir)
+  if ($VersionId) {
+    $buildArgs += @("--version-id", $VersionId)
+  }
+  & node @buildArgs
   if ($LASTEXITCODE -ne 0) {
     throw "Build-RabiLinkAiuiPackage.mjs failed."
   }

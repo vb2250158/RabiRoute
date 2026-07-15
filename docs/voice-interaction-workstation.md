@@ -135,6 +135,8 @@ FenneNote 或其他转录端应向 RabiRoute 提交结构化 webhook，而不是
 6. OumuQ 只接收已经确认可朗读的 `ttsText`。
 7. QQ/NapCat 外发必须经过 action safety gate；语音指令已经明确授权且信息完整时可以发送，信息不足时先 draft，获得确认后再 commit。
 
+上面是“每段转写直接成为 Agent 输入”的普通语音工作站。如果 FenneNote 只作为 RabiLink 主动智能的常驻观察源，应把它与 `rabilink` 放在承载 `RabiActive` 的同一条 Route，并将 `routeVariables.rabilinkRecordFirstSources` 设为 `fennenote`。此时转写仍会留普通日志，但只追加到统一会话账本，等待空闲/周期/触摸板审阅，不执行第 4 步的逐段直接投递。两种模式不要同时配置在不同 Route 上消费同一个 webhook。
+
 ## 三个分项目的交接边界
 
 如果把这套工作站拆给多个高推理 agent 整理，建议按仓库边界分工：

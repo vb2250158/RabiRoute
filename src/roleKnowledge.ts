@@ -14,6 +14,7 @@ export type KnowledgeSource = {
 export type PlanItem = {
   id: string;
   title: string;
+  focus: string;
   status: PlanStatus;
   priority?: string;
   kind?: string;
@@ -36,6 +37,7 @@ export type PlanItem = {
 export type RecentMemoryItem = {
   id: string;
   title: string;
+  focus: string;
   content: string;
   source?: KnowledgeSource;
   createdAt: string;
@@ -49,6 +51,7 @@ export type RecentMemoryItem = {
 export type ConsolidatedMemoryItem = {
   id: string;
   title: string;
+  focus: string;
   content: string;
   source?: KnowledgeSource;
   createdAt: string;
@@ -142,6 +145,68 @@ export const DEFAULT_PLAN_ARCHIVE_AFTER_HOURS = 72;
 export const DEFAULT_RECENT_EDITABLE_HOURS = 24;
 export const DEFAULT_RECENT_CONSOLIDATION_HOURS = 72;
 
+export type PlanWriteLimits = {
+  titleChars: number;
+  focusChars: number;
+  currentStepChars: number;
+  nextActionChars: number;
+  waitingForChars: number;
+  sourceSummaryChars: number;
+  keywordChars: number;
+  maxKeywords: number;
+  totalChars: number;
+};
+
+export type MemoryWriteLimits = {
+  titleChars: number;
+  focusChars: number;
+  contentChars: number;
+  sourceSummaryChars: number;
+  keywordChars: number;
+  maxKeywords: number;
+  totalChars: number;
+};
+
+export type RoleKnowledgeWriteLimits = {
+  plan: PlanWriteLimits;
+  memory: MemoryWriteLimits;
+};
+
+export const DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS: RoleKnowledgeWriteLimits = {
+  plan: {
+    titleChars: 80,
+    focusChars: 80,
+    currentStepChars: 1200,
+    nextActionChars: 600,
+    waitingForChars: 300,
+    sourceSummaryChars: 240,
+    keywordChars: 32,
+    maxKeywords: 24,
+    totalChars: 2800
+  },
+  memory: {
+    titleChars: 80,
+    focusChars: 80,
+    contentChars: 4000,
+    sourceSummaryChars: 240,
+    keywordChars: 32,
+    maxKeywords: 24,
+    totalChars: 4600
+  }
+};
+
+export type RoleKnowledgeValidationIssue = {
+  type: "plan" | "recent_memory" | "consolidated_memory";
+  id: string;
+  message: string;
+};
+
+export type RoleKnowledgeValidationResult = {
+  ok: boolean;
+  limits: RoleKnowledgeWriteLimits;
+  issues: RoleKnowledgeValidationIssue[];
+};
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -218,7 +283,7 @@ function memoryActivityAt(memory: { updatedAt: string; viewedAt?: string }): str
 
 function normalizeKeywords(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 24);
+  return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
 }
 
 function parseKeywordValue(value: unknown): string[] {
@@ -235,6 +300,114 @@ function requireKeywords(keywords: string[], label: string): void {
   }
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function positiveLimit(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(100_000, Math.floor(parsed));
+}
+
+function mergeLimits<T extends Record<string, number>>(defaults: T, raw: unknown): T {
+  const source = recordValue(raw);
+  const output = { ...defaults };
+  for (const key of Object.keys(defaults) as Array<keyof T>) {
+    output[key] = positiveLimit(source[String(key)], defaults[key]) as T[keyof T];
+  }
+  return output;
+}
+
+export function roleKnowledgeWriteLimits(roleDir: string): RoleKnowledgeWriteLimits {
+  const config = readJson<Record<string, unknown>>(path.join(roleDir, "personaConfig.json")) ?? {};
+  const knowledgeLimits = recordValue(config.knowledgeLimits);
+  return {
+    plan: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.plan, knowledgeLimits.plan),
+    memory: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.memory, knowledgeLimits.memory)
+  };
+}
+
+function textChars(value: unknown): number {
+  return Array.from(String(value || "")).length;
+}
+
+function assertTextLimit(label: string, value: unknown, maximum: number): void {
+  const actual = textChars(value);
+  if (actual > maximum) {
+    throw new Error(`${label} exceeds ${maximum} characters (received ${actual}). Split it into focused items.`);
+  }
+}
+
+function assertSingleFocus(label: string, focus: string, maximum: number): void {
+  if (!focus.trim()) throw new Error(`${label} focus is required.`);
+  if (/\r|\n/.test(focus)) throw new Error(`${label} focus must be a single line and describe one subject.`);
+  assertTextLimit(`${label} focus`, focus, maximum);
+}
+
+function assertKeywordLimits(label: string, keywords: string[], maximumItems: number, maximumChars: number): void {
+  if (keywords.length > maximumItems) {
+    throw new Error(`${label} has ${keywords.length} keywords; maximum is ${maximumItems}. Keep one focused subject.`);
+  }
+  for (const keyword of keywords) {
+    assertTextLimit(`${label} keyword`, keyword, maximumChars);
+  }
+}
+
+function planTextTotal(plan: PlanItem): number {
+  return [
+    plan.title,
+    plan.focus,
+    plan.currentStep,
+    plan.nextAction,
+    plan.waitingFor,
+    plan.project?.name,
+    plan.project?.path,
+    plan.source?.kind,
+    plan.source?.summary,
+    ...plan.keywords
+  ].reduce((total, value) => total + textChars(value), 0);
+}
+
+function memoryTextTotal(memory: RecentMemoryItem | ConsolidatedMemoryItem): number {
+  return [
+    memory.title,
+    memory.focus,
+    memory.content,
+    memory.source?.kind,
+    memory.source?.summary,
+    ...memory.keywords
+  ].reduce((total, value) => total + textChars(value), 0);
+}
+
+function validatePlanWrite(roleDir: string, plan: PlanItem): void {
+  const limits = roleKnowledgeWriteLimits(roleDir).plan;
+  assertTextLimit("Plan title", plan.title, limits.titleChars);
+  assertSingleFocus("Plan", plan.focus, limits.focusChars);
+  assertTextLimit("Plan currentStep", plan.currentStep, limits.currentStepChars);
+  assertTextLimit("Plan nextAction", plan.nextAction, limits.nextActionChars);
+  assertTextLimit("Plan waitingFor", plan.waitingFor, limits.waitingForChars);
+  assertTextLimit("Plan source.summary", plan.source?.summary, limits.sourceSummaryChars);
+  assertKeywordLimits("Plan", plan.keywords, limits.maxKeywords, limits.keywordChars);
+  const total = planTextTotal(plan);
+  if (total > limits.totalChars) {
+    throw new Error(`Plan text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one plan per subject.`);
+  }
+}
+
+function validateMemoryWrite(roleDir: string, memory: RecentMemoryItem | ConsolidatedMemoryItem, label = "Memory"): void {
+  const limits = roleKnowledgeWriteLimits(roleDir).memory;
+  assertTextLimit(`${label} title`, memory.title, limits.titleChars);
+  assertSingleFocus(label, memory.focus, limits.focusChars);
+  assertTextLimit(`${label} content`, memory.content, limits.contentChars);
+  assertTextLimit(`${label} source.summary`, memory.source?.summary, limits.sourceSummaryChars);
+  assertKeywordLimits(label, memory.keywords, limits.maxKeywords, limits.keywordChars);
+  const total = memoryTextTotal(memory);
+  if (total > limits.totalChars) {
+    throw new Error(`${label} text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one memory per subject.`);
+  }
+}
+
 function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbackId?: string): PlanItem | null {
   const title = String(raw.title || "").trim();
   if (!title) return null;
@@ -245,6 +418,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
   return {
     id: String(raw.id || fallbackId || generatedId("plan", title)),
     title,
+    focus: String(raw.focus || title).trim(),
     status,
     priority: typeof raw.priority === "string" ? raw.priority : undefined,
     kind: typeof raw.kind === "string" ? raw.kind : undefined,
@@ -270,6 +444,7 @@ function normalizeRecentMemory(raw: Partial<RecentMemoryItem> & Record<string, u
   return {
     id: String(raw.id || fallbackId || generatedId("memory", title)),
     title,
+    focus: String(raw.focus || title).trim(),
     content,
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
@@ -289,6 +464,7 @@ function normalizeConsolidatedMemory(raw: Partial<ConsolidatedMemoryItem> & Reco
   return {
     id: String(raw.id || fallbackId || generatedId("consolidated-memory", title)),
     title,
+    focus: String(raw.focus || title).trim(),
     content,
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
@@ -458,10 +634,12 @@ export function listConsolidationRuns(roleDir: string): MemoryConsolidationRun[]
 }
 
 export function createPlan(roleDir: string, input: Record<string, unknown>): PlanItem {
+  if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("plan", String(input.title || ""));
   const plan = normalizePlan({ ...input, id, createdAt: nowIso(), updatedAt: nowIso() });
   if (!plan) throw new Error("Plan title is required.");
   requireKeywords(plan.keywords, "Plan");
+  validatePlanWrite(roleDir, plan);
   writeJson(planFile(roleDir, plan), plan);
   return plan;
 }
@@ -472,6 +650,7 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
   const next = normalizePlan({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: nowIso() });
   if (!next) throw new Error("Plan title is required.");
   requireKeywords(next.keywords, "Plan");
+  validatePlanWrite(roleDir, next);
   if (next.status === "已完成" && existing.status !== "已完成" && !next.completedAt) {
     next.completedAt = next.updatedAt;
   }
@@ -486,10 +665,12 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
 }
 
 export function createRecentMemory(roleDir: string, input: Record<string, unknown>): RecentMemoryItem {
+  if (!String(input.focus || "").trim()) throw new Error("Memory focus is required and must describe one subject.");
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("memory", String(input.title || ""));
   const memory = normalizeRecentMemory({ ...input, id, createdAt: nowIso(), updatedAt: nowIso() });
   if (!memory) throw new Error("Memory title and content are required.");
   requireKeywords(memory.keywords, "Memory");
+  validateMemoryWrite(roleDir, memory);
   writeJson(recentMemoryFile(roleDir, memory), memory);
   return memory;
 }
@@ -501,6 +682,7 @@ export function updateRecentMemory(roleDir: string, memoryId: string, patch: Rec
   const next = normalizeRecentMemory({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: touchedAt, viewedAt: touchedAt });
   if (!next) throw new Error("Memory title and content are required.");
   requireKeywords(next.keywords, "Memory");
+  validateMemoryWrite(roleDir, next);
   writeJson(recentMemoryFile(roleDir, next), next);
   return next;
 }
@@ -589,6 +771,9 @@ export function completeMemoryConsolidation(roleDir: string, runId: string, rawI
   const output = items.flatMap((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const source = item as Record<string, unknown>;
+    if (!String(source.focus || "").trim()) {
+      throw new Error("Consolidated memory focus is required and must describe one subject.");
+    }
     const memory = normalizeConsolidatedMemory({
       ...source,
       id: typeof source.id === "string" && source.id ? source.id : generatedId("consolidated-memory", String(source.title || `memory-${index + 1}`)),
@@ -603,6 +788,11 @@ export function completeMemoryConsolidation(roleDir: string, runId: string, rawI
 
   if (output.length === 0) {
     throw new Error("At least one consolidated memory is required.");
+  }
+
+  for (const memory of output) {
+    requireKeywords(memory.keywords, "Consolidated memory");
+    validateMemoryWrite(roleDir, memory, "Consolidated memory");
   }
 
   for (const memory of output) {
@@ -627,6 +817,35 @@ export function completeMemoryConsolidation(roleDir: string, runId: string, rawI
   writeJson(consolidationRunFile(roleDir, run.id), completedRun);
 
   return { run: completedRun, memories: output };
+}
+
+export function validateRoleKnowledge(roleDir: string): RoleKnowledgeValidationResult {
+  const issues: RoleKnowledgeValidationIssue[] = [];
+  for (const plan of listPlans(roleDir)) {
+    try {
+      requireKeywords(plan.keywords, "Plan");
+      validatePlanWrite(roleDir, plan);
+    } catch (error) {
+      issues.push({ type: "plan", id: plan.id, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  for (const memory of listRecentMemories(roleDir)) {
+    try {
+      requireKeywords(memory.keywords, "Memory");
+      validateMemoryWrite(roleDir, memory);
+    } catch (error) {
+      issues.push({ type: "recent_memory", id: memory.id, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  for (const memory of listConsolidatedMemories(roleDir)) {
+    try {
+      requireKeywords(memory.keywords, "Consolidated memory");
+      validateMemoryWrite(roleDir, memory, "Consolidated memory");
+    } catch (error) {
+      issues.push({ type: "consolidated_memory", id: memory.id, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { ok: issues.length === 0, limits: roleKnowledgeWriteLimits(roleDir), issues };
 }
 
 export function applyMemoryConsolidationResult(roleDir: string, runId: string, body: Record<string, unknown>): {

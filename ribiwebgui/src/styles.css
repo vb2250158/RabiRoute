@@ -870,6 +870,18 @@ body::before {
   flex: 1 1 360px;
 }
 
+.relay-global-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  flex-wrap: wrap;
+}
+
+.relay-global-controls .v-switch {
+  flex: 0 0 auto;
+}
+
 .section-title {
   color: #0c2a4a;
   font-size: 16px;

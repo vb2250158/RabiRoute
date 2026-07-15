@@ -111,6 +111,8 @@ type NapcatLaunchRequest = {
   visible?: boolean;
 };
 
+type NapcatEnsureReadyRequest = NapcatLaunchRequest;
+
 type NapcatLaunchPlan = {
   command: string;
   cwd: string;
@@ -176,6 +178,18 @@ type NapcatLoginInfo = {
   source?: "onebot-http" | "webui";
   status?: "logged-in" | "login-conflict" | "quick-login-available";
   message?: string;
+};
+
+type NapcatEnsureHealth = Record<string, unknown> & {
+  ok?: boolean;
+  message?: string;
+  http?: { ok?: boolean; userId?: string | number; nickname?: string };
+  loginInfo?: NapcatLoginInfo;
+  webui?: NapcatWebuiTokenInfo & {
+    url?: string;
+    reachable?: boolean;
+    loginInfo?: NapcatLoginInfo | null;
+  };
 };
 
 type NapcatOneBotNetworkConfig = {
@@ -928,7 +942,7 @@ async function readNapcatWebuiLoginInfo(webuiUrl: string, tokenInfo: NapcatWebui
   });
   const quickBody = await quickResp.json().catch(() => ({})) as NapcatWebuiResponse<Array<{ uin?: string | number; nickName?: string; isUserLogin?: boolean; isQuickLogin?: boolean }>>;
   const loggedInQuick = Array.isArray(quickBody.data)
-    ? quickBody.data.find((item) => item?.isUserLogin === true && item.uin)
+    ? quickBody.data.find((item) => item?.uin && (item.isUserLogin === true || item.isQuickLogin === true))
     : null;
   if (quickResp.ok && quickBody.code === 0 && loggedInQuick?.uin) {
     return {
@@ -940,6 +954,30 @@ async function readNapcatWebuiLoginInfo(webuiUrl: string, tokenInfo: NapcatWebui
     };
   }
   return null;
+}
+
+async function requestNapcatQuickLogin(
+  webuiUrl: string,
+  tokenInfo: NapcatWebuiTokenInfo,
+  userId: string
+): Promise<{ ok: boolean; message?: string }> {
+  const session = await loginNapcatWebui(webuiUrl, tokenInfo);
+  if (!session) return { ok: false, message: "NapCat 管理页暂时无法自动登录。" };
+  try {
+    const response = await fetch(`${session.baseUrl}/api/QQLogin/SetQuickLogin`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        authorization: `Bearer ${session.credential}`
+      },
+      body: JSON.stringify({ uin: userId })
+    });
+    const body = await response.json().catch(() => ({})) as NapcatWebuiResponse<unknown>;
+    if (response.ok && body.code === 0) return { ok: true };
+    return { ok: false, message: String(body.message || response.statusText || "快捷登录未完成。") };
+  } catch {
+    return { ok: false, message: "快捷登录请求暂时失败。" };
+  }
 }
 
 function normalizeOneBotNetworkConfig(config: NapcatOneBotNetworkConfig): NormalizedNapcatOneBotNetworkConfig {
@@ -1703,6 +1741,213 @@ export async function launchNapcatInstance(ctx: NapcatManagerContext, request: N
       httpUrl: instance.httpUrl,
       webuiUrl: instance.webuiUrl
     }
+  };
+}
+
+function napcatEnsureOpenUrl(instance: NapCatInstanceDefinition, health: NapcatEnsureHealth): string {
+  const webuiUrl = String(health.webui?.url || instance.webuiUrl || "").trim();
+  if (!webuiUrl) return "";
+  const loginUrl = String(health.webui?.loginUrl || "").trim();
+  if (loginUrl) return loginUrl;
+  const token = String(health.webui?.token || instance.webuiToken || "").trim();
+  return token ? napcatWebuiLoginUrl(webuiUrl, token) : webuiUrl;
+}
+
+function napcatHealthUserId(health: NapcatEnsureHealth): string {
+  return String(
+    health.http?.userId
+    || health.loginInfo?.userId
+    || health.webui?.loginInfo?.userId
+    || ""
+  ).trim();
+}
+
+function napcatHealthMatchesInstance(instance: NapCatInstanceDefinition, health: NapcatEnsureHealth): boolean {
+  if (health.ok !== true) return false;
+  const expected = String(instance.botUserId || "").trim();
+  const actual = napcatHealthUserId(health);
+  return !expected || !actual || expected === actual;
+}
+
+async function recheckNapcatUntilReady(
+  ctx: NapcatManagerContext,
+  gatewayId: string,
+  instance: NapCatInstanceDefinition,
+  timeoutMs = 30000
+): Promise<NapcatEnsureHealth> {
+  const deadline = Date.now() + timeoutMs;
+  let health = await testNapcatHealth(ctx, {
+    gatewayId,
+    instanceId: instance.id,
+    httpUrl: instance.httpUrl,
+    webuiUrl: instance.webuiUrl,
+    accessToken: instance.accessToken,
+    webuiToken: instance.webuiToken,
+    gatewayPort: instance.gatewayPort,
+    readWebuiLoginInfo: true,
+    botUserId: instance.botUserId
+  }) as NapcatEnsureHealth;
+  while (!napcatHealthMatchesInstance(instance, health) && Date.now() < deadline) {
+    await wait(1500);
+    health = await testNapcatHealth(ctx, {
+      gatewayId,
+      instanceId: instance.id,
+      httpUrl: instance.httpUrl,
+      webuiUrl: instance.webuiUrl,
+      accessToken: instance.accessToken,
+      webuiToken: instance.webuiToken,
+      gatewayPort: instance.gatewayPort,
+      readWebuiLoginInfo: true,
+      botUserId: instance.botUserId
+    }) as NapcatEnsureHealth;
+  }
+  return health;
+}
+
+export async function ensureNapcatInstanceReady(
+  ctx: NapcatManagerContext,
+  request: NapcatEnsureReadyRequest
+): Promise<Record<string, unknown>> {
+  const gatewayId = request.gatewayId?.trim();
+  const instanceId = request.instanceId?.trim();
+  if (!gatewayId || !instanceId) throw new Error("缺少路由或 QQ 实例信息。");
+  const runtime = [...ctx.getRuntimes()].find((item) => item.definition.id === gatewayId);
+  if (!runtime) throw new Error("当前路由未加载，请刷新页面后重试。");
+  const instance = napcatInstancesFor(ctx, runtime).find((item) => item.id === instanceId);
+  if (!instance) throw new Error("没有找到这个 QQ 实例，请刷新页面后重试。");
+
+  const healthRequest: NapcatHealthRequest = {
+    gatewayId,
+    instanceId,
+    httpUrl: instance.httpUrl,
+    webuiUrl: instance.webuiUrl,
+    accessToken: instance.accessToken,
+    webuiToken: instance.webuiToken,
+    gatewayPort: instance.gatewayPort,
+    readWebuiLoginInfo: true,
+    botUserId: instance.botUserId
+  };
+  const steps: string[] = [];
+  let health = await testNapcatHealth(ctx, healthRequest) as NapcatEnsureHealth;
+  if (napcatHealthMatchesInstance(instance, health)) {
+    return {
+      ok: true,
+      state: "ready",
+      message: "NapCat 已就绪。",
+      openUrl: napcatEnsureOpenUrl(instance, health),
+      health,
+      steps
+    };
+  }
+
+  if (health.webui?.reachable !== true) {
+    const launch = await launchNapcatInstance(ctx, {
+      gatewayId,
+      instanceId,
+      forceRestart: false,
+      visible: false
+    });
+    steps.push("已自动启动 NapCat。", ...((launch.steps as string[] | undefined) ?? []));
+    health = await recheckNapcatUntilReady(ctx, gatewayId, instance, 12000);
+    if (napcatHealthMatchesInstance(instance, health)) {
+      return {
+        ok: true,
+        state: "ready",
+        message: "NapCat 已启动并就绪。",
+        openUrl: napcatEnsureOpenUrl(instance, health),
+        health,
+        steps
+      };
+    }
+  }
+
+  if (health.webui?.reachable !== true) {
+    return {
+      ok: false,
+      state: "start-failed",
+      needsUserAction: false,
+      message: "NapCat 暂时没有启动成功，请再点一次；仍失败时再查看详情。",
+      health,
+      steps
+    };
+  }
+
+  const expectedUserId = String(instance.botUserId || "").trim();
+  let webuiLoginInfo = health.webui?.loginInfo;
+  const webuiUserId = String(webuiLoginInfo?.userId || "").trim();
+  if (webuiLoginInfo?.online === true && expectedUserId && webuiUserId && expectedUserId !== webuiUserId) {
+    return {
+      ok: false,
+      state: "account-mismatch",
+      needsUserAction: true,
+      message: "这个 NapCat 当前登录了另一个 QQ，请在打开的页面切换到正确账号。",
+      openUrl: napcatEnsureOpenUrl(instance, health),
+      health,
+      steps
+    };
+  }
+
+  if (webuiLoginInfo?.online !== true
+    && webuiLoginInfo?.status === "quick-login-available"
+    && expectedUserId
+    && webuiUserId === expectedUserId
+    && health.webui?.reachable === true) {
+    const webuiUrl = String(health.webui.url || instance.webuiUrl || "").trim();
+    const tokenInfo = readNapcatWebuiToken(ctx, webuiUrl, instance.webuiToken, [instance]);
+    const quickLogin = await requestNapcatQuickLogin(webuiUrl, tokenInfo, expectedUserId);
+    if (quickLogin.ok) {
+      steps.push("已自动选择并登录绑定的 QQ。");
+      health = await recheckNapcatUntilReady(ctx, gatewayId, instance, 30000);
+      webuiLoginInfo = health.webui?.loginInfo;
+      if (napcatHealthMatchesInstance(instance, health)) {
+        return {
+          ok: true,
+          state: "ready",
+          message: "QQ 已登录，NapCat 已就绪。",
+          openUrl: napcatEnsureOpenUrl(instance, health),
+          health,
+          steps
+        };
+      }
+    } else if (quickLogin.message) {
+      steps.push(quickLogin.message);
+    }
+  }
+
+  const loggedInUserId = String(webuiLoginInfo?.userId || "").trim();
+  const correctAccountLoggedIn = webuiLoginInfo?.online === true
+    && (!expectedUserId || !loggedInUserId || loggedInUserId === expectedUserId);
+  if (correctAccountLoggedIn && health.ok !== true) {
+    try {
+      const configured = await configureNapcatOneBot(ctx, healthRequest);
+      steps.push(...((configured.steps as string[] | undefined) ?? []));
+      health = await recheckNapcatUntilReady(ctx, gatewayId, instance, 18000);
+      if (napcatHealthMatchesInstance(instance, health)) {
+        return {
+          ok: true,
+          state: "ready",
+          message: "NapCat 已自动修复并就绪。",
+          openUrl: napcatEnsureOpenUrl(instance, health),
+          health,
+          steps
+        };
+      }
+    } catch (error) {
+      steps.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const conflict = webuiLoginInfo?.status === "login-conflict";
+  return {
+    ok: false,
+    state: conflict ? "login-conflict" : "manual-login",
+    needsUserAction: true,
+    message: conflict
+      ? "这个 QQ 已在其他窗口登录。请先退出那个账号，再点一次。"
+      : "请在打开的页面完成一次 QQ 登录或安全确认，完成后会自动接通。",
+    openUrl: napcatEnsureOpenUrl(instance, health),
+    health,
+    steps
   };
 }
 

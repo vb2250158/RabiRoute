@@ -119,7 +119,7 @@ function normalizeRabiLinkRelayConfig(raw: unknown): RabiLinkRelayGlobalConfig {
   const url = typeof source.url === "string" ? source.url.trim() : "";
   const token = typeof source.token === "string" ? source.token.trim() : "";
   return {
-    enabled: Boolean(url && token),
+    enabled: typeof source.enabled === "boolean" ? source.enabled : Boolean(url && token),
     url,
     token,
     deviceId: typeof source.deviceId === "string" && source.deviceId.trim() ? source.deviceId.trim() : defaults.deviceId,

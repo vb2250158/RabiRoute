@@ -62,6 +62,25 @@ function Get-Sha256Hex {
   }
 }
 
+function Read-AixVersion {
+  param([string] $PathValue)
+
+  Add-Type -AssemblyName System.IO.Compression
+  $stream = [System.IO.File]::OpenRead($PathValue)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Read)
+    try {
+      $entry = $archive.GetEntry("VERSION")
+      if ($null -eq $entry) { throw "AIX package is missing VERSION: $PathValue" }
+      $reader = [System.IO.StreamReader]::new($entry.Open())
+      try { return $reader.ReadToEnd().Trim() }
+      finally { $reader.Dispose() }
+    }
+    finally { $archive.Dispose() }
+  }
+  finally { $stream.Dispose() }
+}
+
 function Copy-DirectoryContents {
   param(
     [string] $SourceRoot,
@@ -120,13 +139,16 @@ $resolvedAsciiMirrorDir = Resolve-OptionalPath $AsciiMirrorDir
 $resolvedDistRoot = Resolve-Path -LiteralPath $distRoot
 $allowedDeliveryRoots = @([string]$resolvedDistRoot)
 $allowedMirrorRoots = @($tempRoot)
+$packageVersionId = [System.Guid]::NewGuid().ToString().ToLowerInvariant()
 
 $packageArgs = @(
   "-NoProfile",
   "-ExecutionPolicy",
   "Bypass",
   "-File",
-  (Join-Path $PSScriptRoot "Package-RabiLinkAiui.ps1")
+  (Join-Path $PSScriptRoot "Package-RabiLinkAiui.ps1"),
+  "-VersionId",
+  $packageVersionId
 )
 if ($RelayBaseUrl) {
   $packageArgs += @("-RelayBaseUrl", $RelayBaseUrl)
@@ -141,7 +163,9 @@ $craftArgs = @(
   "-ExecutionPolicy",
   "Bypass",
   "-File",
-  (Join-Path $PSScriptRoot "Prepare-RabiLinkAiuiCraftUpload.ps1")
+  (Join-Path $PSScriptRoot "Prepare-RabiLinkAiuiCraftUpload.ps1"),
+  "-VersionId",
+  $packageVersionId
 )
 if ($RelayBaseUrl) {
   $craftArgs += @("-RelayBaseUrl", $RelayBaseUrl)
@@ -158,6 +182,11 @@ if (-not (Test-Path -LiteralPath $aixPath)) {
 }
 if (-not (Test-Path -LiteralPath $craftUploadPath)) {
   throw "Missing Craft upload folder: $craftUploadPath"
+}
+$aixVersion = Read-AixVersion -PathValue $aixPath
+$craftUploadVersion = (Get-Content -LiteralPath (Join-Path $craftUploadPath "VERSION") -Raw -Encoding UTF8).Trim()
+if ($aixVersion -ne $packageVersionId -or $craftUploadVersion -ne $packageVersionId) {
+  throw "Delivery VERSION mismatch: expected=$packageVersionId aix=$aixVersion craft-upload=$craftUploadVersion"
 }
 
 Reset-Directory -PathValue $resolvedDeliveryDir -AllowedRoots $allowedDeliveryRoots
@@ -207,11 +236,13 @@ $manifest = [pscustomobject]@{
   craft_release = Get-Content -LiteralPath (Join-Path $projectRoot "craft-release.json") -Raw -Encoding UTF8 | ConvertFrom-Json
   aix = [pscustomobject]@{
     file = "rabilink-aiui.aix"
+    version = $aixVersion
     size = $aixInfo.Length
     sha256 = $aixHash
   }
   craft_upload = [pscustomobject]@{
     folder = "craft-upload"
+    version = $craftUploadVersion
     file_count = @($craftFiles).Count
     files = $craftFiles
   }
@@ -273,6 +304,9 @@ Files
 
 AIX SHA256
 $aixHash
+
+Shared package VERSION
+$aixVersion
 
 Recommended install path
 1. Open https://js.rokid.com/craft?region=cn&lang=zh-CN in Chrome.
@@ -341,6 +375,9 @@ If Codex Chrome upload fails with "Not allowed" or a file chooser timeout:
 
 The AIX package does not embed a Relay token. Bind the pages/home/index tool token parameter to the agent memory variable rabilinkToken; the platform injects it only when invoking the UI. The agent fills mode as transcription or configuration. Do not import the separate RabiLinkMessage submit/poll tools for this AIX flow.
 
+PC prerequisite
+The global "Connect server" switch only registers the PC. Enable a RabiLink Route with rabilink input/output, Codex, the RabiActive persona, an explicit Agent working directory, and a fixed thread. The sanitized templates live in examples/data/route/RabiLink and examples/data/roles/RabiActive; they are disabled by default and contain no Relay credentials.
+
 Runtime proof after glasses launch
 1. In the RabiLink agent, bind pages/home/index token to rabilinkToken and publish the agent.
 2. Ask the agent to open recording transcription with mode=transcription, or open the conversational configuration assistant with mode=configuration and a complete intent. In the assistant, verify that replies arrive, then swipe forward to return to transcription.
@@ -365,6 +402,7 @@ if (-not $SkipAsciiMirror) {
 Write-Output ("Prepared delivery folder: {0}" -f $resolvedDeliveryDir)
 Write-Output ("AIX size: {0}" -f $aixInfo.Length)
 Write-Output ("AIX sha256: {0}" -f $aixHash)
+Write-Output ("Shared VERSION: {0}" -f $aixVersion)
 Write-Output ("Craft files: {0}" -f @($craftFiles).Count)
 if (-not $SkipAsciiMirror) {
   Write-Output ("ASCII mirror: {0}" -f $resolvedAsciiMirrorDir)

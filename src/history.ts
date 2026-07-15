@@ -78,6 +78,8 @@ export type VoiceTranscriptEventRecord = {
   speakerDecision?: string;
   sourceDeviceId?: string;
   sourceDeviceName?: string;
+  sourceDeviceKind?: string;
+  transport?: string;
   sourceArea?: string;
   sessionId?: string;
   startedAt?: string;
@@ -105,7 +107,7 @@ export type WeComMessageRecord = {
   raw?: unknown;
 };
 
-export type CodexNotificationRecord = {
+export type AgentPacketRecord = {
   id: string;
   time: number;
   kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wecom_message";
@@ -243,17 +245,17 @@ export function appendWeComMessageToDir(record: WeComMessageRecord, dataDir: str
   fs.appendFileSync(wecomLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-function codexNotificationPath(dataDir = config.memoryDataDir): string {
+function agentPacketPath(dataDir = config.memoryDataDir): string {
   fs.mkdirSync(dataDir, { recursive: true });
-  return path.join(dataDir, "codex-notifications.jsonl");
+  return path.join(dataDir, "agent-packets.jsonl");
 }
 
-export function appendCodexNotification(record: CodexNotificationRecord): void {
-  fs.appendFileSync(codexNotificationPath(), `${JSON.stringify(record)}\n`, "utf8");
+export function appendAgentPacket(record: AgentPacketRecord): void {
+  fs.appendFileSync(agentPacketPath(), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-export function appendCodexNotificationToDir(record: CodexNotificationRecord, dataDir: string): void {
-  fs.appendFileSync(codexNotificationPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+export function appendAgentPacketToDir(record: AgentPacketRecord, dataDir: string): void {
+  fs.appendFileSync(agentPacketPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 export function readGroupMessages(): GroupMessageRecord[] {

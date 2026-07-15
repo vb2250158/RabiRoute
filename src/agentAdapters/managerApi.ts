@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AgentAdapterType } from "./types.js";
+import { resolveProjectPath } from "../shared/projectPaths.js";
 
 type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -22,7 +23,7 @@ type AgentScanProject = {
   exists: boolean;
 };
 
-type AgentScanResult = {
+export type AgentScanResult = {
   type: AgentAdapterType;
   label: string;
   maturity: AgentMaturity;
@@ -34,11 +35,19 @@ type AgentScanResult = {
   sessions?: AgentScanSession[];
   plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
   warnings?: string[];
+  transport?: { protocol: string; mode: string };
+  host?: { name: string; required: boolean };
 };
 
 type GatewayDefinitionLike = {
+  id?: string;
+  name?: string;
+  routeName?: string;
+  configName?: string;
+  agentAdapters?: AgentAdapterType[];
   codexThreadName?: string;
   codexCwd?: string;
+  copilotThreadName?: string;
   copilotCwd?: string;
   astrbotUrl?: string;
   astrbotUsername?: string;
@@ -55,12 +64,6 @@ type CopilotSessionEntry = {
   cwd?: string;
   userNamed?: boolean;
   updatedAt?: string;
-};
-
-type SessionThreadRecord = {
-  id: string;
-  threadName: string;
-  updatedAt: string;
 };
 
 type AstrbotSessionScan = {
@@ -88,12 +91,12 @@ export type AgentManagerApiContext = {
   getRuntimes?: () => Iterable<RuntimeLike>;
   projects?: AgentScanProject[];
   codexSessions?: AgentScanSession[];
+  codexBins?: string[];
   threadNames?: string[];
   cwdOptions?: string[];
   copilotSessions?: CopilotSessionEntry[];
   copilotBins?: string[];
   marvisAppIds?: string[];
-  sessionIndexPath: string | (() => string);
   checkHttpEndpoint?: (url: string, timeoutMs?: number) => Promise<boolean>;
   resolveWingetCopilot?: () => string | null;
 };
@@ -105,30 +108,24 @@ export type ManagerApiResponse<T extends Record<string, unknown> = Record<string
 
 export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Record<string, unknown>> {
   const runtimes = getRuntimeList(ctx);
-  const sessionIndex = resolveSessionIndexPath(ctx);
   const copilotSessions = ctx.copilotSessions ?? readCopilotSessions();
   const copilotSessionNames = [...new Set(copilotSessions.map((s) => s.name))];
-
-  const legacySessionThreads = ctx.codexSessions
-    ? ctx.codexSessions.map((session) => ({
-        id: session.id ?? session.name,
-        threadName: session.name,
-        updatedAt: session.updatedAt ?? ""
-      }))
-    : readLatestSessionThreads(sessionIndex);
-  const legacyThreadNames = [...new Set(legacySessionThreads.map((r) => r.threadName))];
-  const configThreadNames = runtimes.map((r) => r.definition.codexThreadName).filter(Boolean) as string[];
-  const threadNames = ctx.threadNames ?? [...new Set([...copilotSessionNames, ...legacyThreadNames, ...configThreadNames])];
+  const codexSessions = ctx.codexSessions ?? configuredCodexSessions(ctx.rootDir, runtimes);
+  const codexSessionNames = [...new Set(codexSessions.map((session) => session.name))];
+  const configThreadNames = runtimes.flatMap((runtime) => {
+    const adapters = runtime.definition.agentAdapters ?? ["codex"];
+    return [
+      adapters.includes("codex") ? runtime.definition.codexThreadName : undefined,
+      adapters.includes("copilotCli") ? runtime.definition.copilotThreadName : undefined
+    ].filter(Boolean) as string[];
+  });
+  const threadNames = ctx.threadNames ?? [...new Set([...copilotSessionNames, ...codexSessionNames, ...configThreadNames])];
 
   const cwdOptions = ctx.cwdOptions ?? collectCwdOptions(ctx.rootDir, runtimes, copilotSessions);
+  const codexBins = ctx.codexBins ?? await detectCodexBins(ctx.rootDir);
   const copilotBins = ctx.copilotBins ?? await detectCopilotBins(ctx.resolveWingetCopilot);
   const marvisAppIds = ctx.marvisAppIds ?? detectMarvisAppIds();
   const projects = ctx.projects ?? projectOptionsFromPaths(cwdOptions);
-  const codexSessions: AgentScanSession[] = ctx.codexSessions ?? legacySessionThreads.map((record) => ({
-    id: record.id,
-    name: record.threadName,
-    updatedAt: record.updatedAt
-  }));
   const copilotScanSessions: AgentScanSession[] = copilotSessions.map((session) => ({
     id: session.id,
     name: session.name,
@@ -190,18 +187,7 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
   }
 
   const agents: Record<AgentAdapterType, AgentScanResult> = {
-    codex: {
-      type: "codex",
-      label: "Codex",
-      maturity: "verified",
-      installed: fs.existsSync(sessionIndex),
-      projects,
-      sessions: codexSessions,
-      warnings: [
-        ...(codexSessions.length === 0 ? [`未在 ${sessionIndex} 发现 Codex 会话索引。`] : []),
-        "通过 Codex Desktop 会话投递；Desktop IPC 不可用时可按 fallback 配置尝试旧 app-server 通道。"
-      ]
-    },
+    codex: buildCodexAgentScan({ codexBins, projects, sessions: codexSessions }),
     copilotCli: {
       type: "copilotCli",
       label: "Copilot CLI",
@@ -275,6 +261,34 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
     copilotSessions: copilotSessions.map((s) => ({ name: s.name, cwd: s.cwd, userNamed: s.userNamed })),
     copilotBins: [...new Set(copilotBins)],
     marvisAppIds: [...new Set(marvisAppIds)]
+  };
+}
+
+export function buildCodexAgentScan(input: {
+  codexBins: string[];
+  projects: AgentScanProject[];
+  sessions: AgentScanSession[];
+}): AgentScanResult {
+  const codexBins = [...new Set(input.codexBins.filter(Boolean))];
+  return {
+    type: "codex",
+    label: "Codex（ChatGPT 中的编码 Agent）",
+    maturity: "verified",
+    installed: codexBins.length > 0,
+    installCandidates: codexBins.map((binPath) => ({
+      label: binPath.endsWith("codex.js") ? "@openai/codex" : path.basename(binPath),
+      path: binPath
+    })),
+    transport: { protocol: "codex app-server", mode: "stdio" },
+    host: { name: "ChatGPT desktop", required: false },
+    projects: input.projects,
+    // Configuration suggestions only. Runtime delivery resolves the authoritative
+    // thread through app-server thread/list and confirms it with thread/read/resume.
+    sessions: input.sessions,
+    warnings: [
+      ...(codexBins.length === 0 ? ["未发现项目锁定的 @openai/codex 运行时；无法启动 app-server stdio。"] : []),
+      "RabiRoute 通过 codex app-server stdio 投递；ChatGPT 桌面仅为可选宿主，不参与投递健康判定。"
+    ]
   };
 }
 
@@ -407,10 +421,6 @@ function getRuntimeList(ctx: AgentManagerApiContext): RuntimeLike[] {
   return source ? [...source] : [];
 }
 
-function resolveSessionIndexPath(ctx: AgentManagerApiContext): string {
-  return typeof ctx.sessionIndexPath === "function" ? ctx.sessionIndexPath() : ctx.sessionIndexPath;
-}
-
 function readCopilotSessions(): CopilotSessionEntry[] {
   const copilotSessionStateDir = path.join(os.homedir(), ".copilot", "session-state");
   const sessions: CopilotSessionEntry[] = [];
@@ -450,8 +460,8 @@ function collectCwdOptions(rootDir: string, runtimes: RuntimeLike[], copilotSess
   const cwdSet = new Set<string>(copilotCwds);
   if (fs.existsSync(rootDir)) cwdSet.add(rootDir);
   for (const rt of runtimes) {
-    const codexCwd = rt.definition.codexCwd ? path.resolve(rootDir, rt.definition.codexCwd) : "";
-    const copilotCwd = rt.definition.copilotCwd ? path.resolve(rootDir, rt.definition.copilotCwd) : "";
+    const codexCwd = resolveProjectPath(rt.definition.codexCwd, rootDir) ?? "";
+    const copilotCwd = resolveProjectPath(rt.definition.copilotCwd, rootDir) ?? "";
     if (codexCwd && fs.existsSync(codexCwd)) cwdSet.add(codexCwd);
     if (copilotCwd && fs.existsSync(copilotCwd)) cwdSet.add(copilotCwd);
   }
@@ -464,6 +474,11 @@ function collectCwdOptions(rootDir: string, runtimes: RuntimeLike[], copilotSess
     // skip
   }
   return [...cwdSet];
+}
+
+async function detectCodexBins(rootDir: string): Promise<string[]> {
+  const localRuntime = path.join(rootDir, "node_modules", "@openai", "codex", "bin", "codex.js");
+  return fs.existsSync(localRuntime) ? [localRuntime] : [];
 }
 
 async function detectCopilotBins(resolveWingetCopilot?: () => string | null): Promise<string[]> {
@@ -575,42 +590,37 @@ function readCopilotLoggedIn(copilotHome: string): boolean {
   return false;
 }
 
-function readLatestSessionThreads(indexPath: string): SessionThreadRecord[] {
-  if (!fs.existsSync(indexPath)) {
-    return [];
-  }
-
-  const latestById = new Map<string, SessionThreadRecord>();
-  for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line) as { id?: unknown; thread_name?: unknown; updated_at?: unknown };
-      if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
-        continue;
-      }
-      const record = {
-        id: parsed.id,
-        threadName: parsed.thread_name,
-        updatedAt: parsed.updated_at
-      };
-      const existing = latestById.get(record.id);
-      if (!existing || Date.parse(record.updatedAt) > Date.parse(existing.updatedAt)) {
-        latestById.set(record.id, record);
-      }
-    } catch {
-      // Ignore malformed JSONL lines.
-    }
-  }
-
-  return [...latestById.values()];
-}
-
 function normalizeComparablePath(value: string | undefined): string {
   if (!value) return "";
   const normalized = path.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function configuredCodexSessions(rootDir: string, runtimes: RuntimeLike[]): AgentScanSession[] {
+  const sessions = new Map<string, AgentScanSession>();
+  for (const runtime of runtimes) {
+    const definition = runtime.definition;
+    const adapters = definition.agentAdapters ?? ["codex"];
+    if (!adapters.includes("codex")) continue;
+
+    const name = definition.codexThreadName?.trim()
+      || definition.routeName?.trim()
+      || definition.name?.trim()
+      || definition.configName?.trim()
+      || definition.id?.trim();
+    if (!name) continue;
+
+    const projectPath = resolveProjectPath(definition.codexCwd, rootDir);
+    const key = `${name}\u0000${normalizeComparablePath(projectPath)}`;
+    if (!sessions.has(key)) {
+      sessions.set(key, {
+        id: definition.id,
+        name,
+        projectPath
+      });
+    }
+  }
+  return [...sessions.values()];
 }
 
 function projectOptionsFromPaths(paths: string[]): AgentScanProject[] {

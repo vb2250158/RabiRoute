@@ -3,8 +3,8 @@ const DEFAULT_UPSTREAM = "https://rabi.example.com";
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,X-RabiLink-Token,User-Agent",
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-RabiLink-Token,User-Agent",
     "Access-Control-Max-Age": "86400",
   };
 }

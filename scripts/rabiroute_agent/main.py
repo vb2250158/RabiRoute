@@ -1,7 +1,7 @@
 """
 RabiRoute Agent Adapter for AstrBot.
 Exposes a simple HTTP chat endpoint so RabiRoute can use AstrBot's LLM as an AI agent backend,
-analogous to how RabiRoute adapts Codex (codexApp.ts / codexDesktopIpc.ts).
+analogous to how RabiRoute adapts Codex (codexRuntime.ts / codexAppServerClient.ts).
 """
 
 import traceback

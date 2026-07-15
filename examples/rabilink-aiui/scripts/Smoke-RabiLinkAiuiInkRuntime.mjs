@@ -16,6 +16,7 @@ const aixInputPath = aixArgumentIndex >= 0
 const runtimeToken = String(process.env.RABILINK_AIUI_INK_TOKEN || "").trim();
 const testBatteryLevelText = String(process.env.RABILINK_AIUI_INK_BATTERY_LEVEL || "").trim();
 const testBatteryChargingText = String(process.env.RABILINK_AIUI_INK_BATTERY_CHARGING || "").trim().toLowerCase();
+const testFontScale = Number(String(process.env.RABILINK_AIUI_INK_FONT_SCALE || "1").trim());
 const testBatteryFixture = testBatteryLevelText
   ? {
       batteryLevel: Number(testBatteryLevelText),
@@ -30,7 +31,13 @@ if (testBatteryFixture && (!Number.isFinite(testBatteryFixture.batteryLevel)
 if (aixInputPath && testBatteryFixture) {
   throw new Error("The Ink battery fixture is source-build-only and cannot alter a delivery AIX.");
 }
-const screenshotVariant = testBatteryFixture ? "-charging" : "";
+if (!Number.isFinite(testFontScale) || testFontScale < 1 || testFontScale > 1.4) {
+  throw new Error("RABILINK_AIUI_INK_FONT_SCALE must be between 1 and 1.4.");
+}
+if (aixInputPath && testFontScale !== 1) {
+  throw new Error("The Ink font-scale fixture is source-build-only and cannot alter a delivery AIX.");
+}
+const screenshotVariant = `${testBatteryFixture ? "-charging" : ""}${testFontScale === 1 ? "" : `-font-${Math.round(testFontScale * 100)}`}`;
 const screenshotPath = path.join(projectRoot, "dist", `ink-runtime${screenshotVariant}-smoke.png`);
 const configurationScreenshotPath = path.join(projectRoot, "dist", `ink-runtime-swipe${screenshotVariant}-smoke.png`);
 const compactScreenshotPath = path.join(projectRoot, "dist", `ink-runtime-compact${screenshotVariant}-smoke.png`);
@@ -84,6 +91,18 @@ function applyTestBatteryFixture(stagingRoot) {
   fs.writeFileSync(pageScriptPath, injected, "utf8");
 }
 
+function applyTestFontScaleFixture(stagingRoot) {
+  if (testFontScale === 1) return;
+  const stylePath = path.join(stagingRoot, "pages", "home", "index.wxss");
+  const source = fs.readFileSync(stylePath, "utf8");
+  const scaled = source.replace(/font-size:\s*([0-9.]+)px;/g, (_, value) => {
+    const size = Math.round(Number(value) * testFontScale * 100) / 100;
+    return `font-size: ${size}px;`;
+  });
+  if (scaled === source) fail("Font-scale fixture did not find any font-size declarations.");
+  fs.writeFileSync(stylePath, scaled, "utf8");
+}
+
 function contentType(file) {
   if (file.endsWith(".js")) return "text/javascript; charset=utf-8";
   if (file.endsWith(".wasm")) return "application/wasm";
@@ -99,6 +118,7 @@ function harnessHtml(encoded) {
 import { configNavigatorHost, createInkView } from "/__ink__/index.js";
 const encoded = ${JSON.stringify(encoded)};
 const runtimeToken = ${JSON.stringify(runtimeToken)};
+const withRuntimeToken = (query) => runtimeToken ? { ...query, token: runtimeToken } : query;
 const files = Object.fromEntries(Object.entries(encoded).map(([file, base64]) => [file, Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))]));
 try {
   const canvas = document.querySelector("#ink");
@@ -137,7 +157,8 @@ try {
   };
   configNavigatorHost("ROKID-SMOKE-DEVICE", "YodaOS Sprite", "aarch64", ["zh-CN"], "CN");
   view = await createInkView({ width: 480, height: 352, scaleFactor: 1, canvas, hostCapabilities });
-  view.openBundle({ appId: "rabilink-aiui", files, query: { mode: "transcription", token: runtimeToken } });
+  const transcriptionQuery = withRuntimeToken({ mode: "transcription" });
+  view.openBundle({ appId: "rabilink-aiui", files, query: transcriptionQuery });
   view.startRendering();
   const compactAsrStarts = [];
   const compactHostCapabilities = {
@@ -168,7 +189,7 @@ try {
   };
   configNavigatorHost();
   compactView = await createInkView({ width: 448, height: 150, scaleFactor: 1, canvas: compactCanvas, hostCapabilities: compactHostCapabilities });
-  compactView.openBundle({ appId: "rabilink-aiui-compact", files, query: { mode: "transcription", token: runtimeToken } });
+  compactView.openBundle({ appId: "rabilink-aiui-compact", files, query: withRuntimeToken({ mode: "transcription" }) });
   compactView.startRendering();
   toolsView = await createInkView({
     width: 480,
@@ -187,7 +208,7 @@ try {
   toolsView.openBundle({
     appId: "rabilink-aiui-tools",
     files,
-    query: { mode: "configuration", surface: "config", panel: "tools", token: runtimeToken }
+    query: withRuntimeToken({ mode: "configuration", surface: "config", panel: "tools" })
   });
   toolsView.startRendering();
   await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -229,6 +250,7 @@ try {
   }
   globalThis.__smoke = {
     ok: view.isRunning(),
+    invocationHasToken: Object.prototype.hasOwnProperty.call(transcriptionQuery, "token"),
     pngLength: canvas.toDataURL("image/png").length,
     asrStarts: asrStarts.length,
     firstAsrRequest: asrStarts[0] || null,
@@ -265,6 +287,36 @@ try {
       litPixels: litPixelsAfter,
       pngLength: toolsCanvas.toDataURL("image/png").length,
       asrStarts: toolsAsrStarts.length
+    };
+  };
+  globalThis.__probeToolsFrameStability = async (durationMs = 1200) => {
+    const startedAt = performance.now();
+    const fullThreshold = Math.max(500, Math.floor(toolsPageOneLitPixels * 0.7));
+    let samples = 0;
+    let blackFrames = 0;
+    let partialFrames = 0;
+    let minLitPixels = Number.POSITIVE_INFINITY;
+    let maxLitPixels = 0;
+    while (performance.now() - startedAt < durationMs) {
+      const pixels = toolsContext.getImageData(0, 0, toolsCanvas.width, toolsCanvas.height).data;
+      let litPixels = 0;
+      for (let offset = 0; offset < pixels.length; offset += 4) {
+        if (pixels[offset] > 8 || pixels[offset + 1] > 8 || pixels[offset + 2] > 8) litPixels += 1;
+      }
+      samples += 1;
+      minLitPixels = Math.min(minLitPixels, litPixels);
+      maxLitPixels = Math.max(maxLitPixels, litPixels);
+      if (litPixels < 20) blackFrames += 1;
+      else if (litPixels < fullThreshold) partialFrames += 1;
+      await new Promise((resolve) => setTimeout(resolve, 4));
+    }
+    return {
+      samples,
+      blackFrames,
+      partialFrames,
+      minLitPixels: Number.isFinite(minLitPixels) ? minLitPixels : 0,
+      maxLitPixels,
+      fullThreshold
     };
   };
   globalThis.__dispatchToolsSwitchToTranscription = async () => {
@@ -326,6 +378,7 @@ try {
     return {
       closeRequested: view.isCloseRequested(),
       running: view.isRunning(),
+      asrStarts: asrStarts.length,
       firstLitX: firstLitXAfter,
       lastLitX: lastLitXAfter,
       firstLitY: firstLitYAfter,
@@ -364,19 +417,45 @@ try {
     };
   };
   globalThis.__dispatchModeStress = async (cycles = 20) => {
+    const litPixelCount = () => {
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let offset = 0; offset < pixels.length; offset += 4) {
+        if (pixels[offset] > 8 || pixels[offset + 1] > 8 || pixels[offset + 2] > 8) count += 1;
+      }
+      return count;
+    };
+    const baselineLitPixels = litPixelCount();
+    let minimumTransitionLitPixels = baselineLitPixels;
     for (let index = 0; index < cycles; index += 1) {
       let timestamp = Date.now();
       view.dispatchInput("keydown", "ArrowDown", timestamp);
       view.dispatchInput("keyup", "ArrowDown", timestamp + 1);
-      await new Promise((resolve) => setTimeout(resolve, 35));
+      await new Promise((resolve) => setTimeout(resolve, 8));
+      minimumTransitionLitPixels = Math.min(minimumTransitionLitPixels, litPixelCount());
+      await new Promise((resolve) => setTimeout(resolve, 27));
       timestamp = Date.now();
       view.dispatchInput("keydown", "ArrowUp", timestamp);
       view.dispatchInput("keyup", "ArrowUp", timestamp + 1);
-      await new Promise((resolve) => setTimeout(resolve, 35));
-      if (!view.isRunning() || view.isCloseRequested()) return { running: view.isRunning(), closeRequested: view.isCloseRequested(), completed: index };
+      await new Promise((resolve) => setTimeout(resolve, 8));
+      minimumTransitionLitPixels = Math.min(minimumTransitionLitPixels, litPixelCount());
+      await new Promise((resolve) => setTimeout(resolve, 27));
+      if (!view.isRunning() || view.isCloseRequested()) return {
+        running: view.isRunning(),
+        closeRequested: view.isCloseRequested(),
+        completed: index,
+        baselineLitPixels,
+        minimumTransitionLitPixels
+      };
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
-    return { running: view.isRunning(), closeRequested: view.isCloseRequested(), completed: cycles };
+    return {
+      running: view.isRunning(),
+      closeRequested: view.isCloseRequested(),
+      completed: cycles,
+      baselineLitPixels,
+      minimumTransitionLitPixels
+    };
   };
   globalThis.__dispatchCompactSwipeDown = async () => {
     const timestamp = Date.now();
@@ -488,6 +567,21 @@ function chromeExecutable() {
   return candidates.find((candidate) => fs.existsSync(candidate)) || "";
 }
 
+async function writeFrozenCanvasPng(page, selector, outputPath) {
+  const dataUrl = await page.locator(selector).evaluate((canvas) => {
+    const source = canvas.getContext("2d");
+    const frame = source.getImageData(0, 0, canvas.width, canvas.height);
+    const frozen = document.createElement("canvas");
+    frozen.width = canvas.width;
+    frozen.height = canvas.height;
+    frozen.getContext("2d").putImageData(frame, 0, 0);
+    return frozen.toDataURL("image/png");
+  });
+  const encoded = String(dataUrl || "").replace(/^data:image\/png;base64,/, "");
+  if (!encoded) fail(`Could not freeze Ink canvas ${selector}.`);
+  fs.writeFileSync(outputPath, Buffer.from(encoded, "base64"));
+}
+
 let server;
 let browser;
 try {
@@ -496,6 +590,7 @@ try {
   else {
     await buildPackageStaging(stagingRoot);
     applyTestBatteryFixture(stagingRoot);
+    applyTestFontScaleFixture(stagingRoot);
     encoded = collectBundleFiles(stagingRoot);
   }
   server = await startServer(harnessHtml(encoded));
@@ -508,7 +603,14 @@ try {
   browser = await chromium.launch({
     executablePath,
     headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader"]
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      `--explicitly-allowed-ports=${address.port}`
+    ]
   });
   const page = await browser.newPage({ viewport: { width: 480, height: 520 }, deviceScaleFactor: 1 });
   page.on("console", (message) => logs.push(`${message.type()}: ${message.text()}`));
@@ -517,20 +619,21 @@ try {
   await page.waitForFunction(() => globalThis.__smoke, null, { timeout: 15000 });
   const result = await page.evaluate(() => globalThis.__smoke);
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
-  await page.locator("#ink").screenshot({ path: screenshotPath });
-  await page.locator("#compact").screenshot({ path: compactScreenshotPath });
-  await page.locator("#tools").screenshot({ path: toolsPageOneScreenshotPath });
+  await writeFrozenCanvasPng(page, "#ink", screenshotPath);
+  await writeFrozenCanvasPng(page, "#compact", compactScreenshotPath);
+  await writeFrozenCanvasPng(page, "#tools", toolsPageOneScreenshotPath);
   const toolsPageDownResult = await page.evaluate(() => globalThis.__dispatchToolsPageDown());
-  await page.locator("#tools").screenshot({ path: toolsPageTwoScreenshotPath });
+  const toolsFrameStability = await page.evaluate(() => globalThis.__probeToolsFrameStability());
+  await writeFrozenCanvasPng(page, "#tools", toolsPageTwoScreenshotPath);
   const toolsTranscriptionResult = await page.evaluate(() => globalThis.__dispatchToolsSwitchToTranscription());
   const compactWakeupResult = await page.evaluate(() => globalThis.__dispatchCompactVoiceWakeup());
   const swipeResult = await page.evaluate(() => globalThis.__dispatchSwipeDown());
   if (swipeResult?.running) {
-    await page.locator("#ink").screenshot({ path: configurationScreenshotPath });
+    await writeFrozenCanvasPng(page, "#ink", configurationScreenshotPath);
   }
   const compactSwipeResult = await page.evaluate(() => globalThis.__dispatchCompactSwipeDown());
   if (compactSwipeResult?.running) {
-    await page.locator("#compact").screenshot({ path: compactConfigurationScreenshotPath });
+    await writeFrozenCanvasPng(page, "#compact", compactConfigurationScreenshotPath);
   }
   const swipeReturnResult = await page.evaluate(() => globalThis.__dispatchSwipeUp());
   const compactSwipeReturnResult = await page.evaluate(() => globalThis.__dispatchCompactSwipeUp());
@@ -546,8 +649,9 @@ try {
   const asrContractOk = result?.asrStarts >= 2
     && result?.firstAsrRequest?.continuous === false
     && result?.firstAsrRequest?.interimResults === false;
-  const hudLayoutOk = result?.firstLitY >= 120
-    && result?.lastLitY >= 300
+  const tokenInvocationOk = result?.invocationHasToken === Boolean(runtimeToken);
+  const hudLayoutOk = result?.firstLitY >= 240
+    && result?.lastLitY >= 330
     && result?.litPixels > 500;
   const compactLayoutOk = result?.compactRunning === true
     && result?.compactAsrStarts === 0
@@ -560,27 +664,31 @@ try {
   const assistantGestureOk = result?.toolsRunning === true
     && result?.toolsPageOneLitPixels > 500
     && toolsPageDownResult?.running === true
-    && toolsPageDownResult?.changedPixels === 0
+    && toolsPageDownResult?.changedPixels > 300
+    && toolsPageDownResult?.changedPixels < 3000
     && toolsPageDownResult?.litPixels > 500
     && toolsPageDownResult?.pngLength > 1000
     && toolsPageDownResult?.asrStarts === 0
+    && toolsFrameStability?.blackFrames === 0
+    && toolsFrameStability?.partialFrames === 0
     && toolsTranscriptionResult?.running === true
     && toolsTranscriptionResult?.closeRequested === false
     && toolsTranscriptionResult?.litPixels > 500
     && toolsTranscriptionResult?.asrStarts === 0;
   const switchedToConfigurationUi = swipeResult?.running === true
     && swipeResult?.closeRequested === false
+    && swipeResult?.asrStarts > result?.asrStarts
     && swipeResult?.firstLitX >= 12
     && swipeResult?.lastLitX <= 467
-    && swipeResult?.firstLitY >= 80
+    && swipeResult?.firstLitY >= 240
     && swipeResult?.changedPixels > 300
     && swipeResult?.litPixels > 500
     && swipeResult?.modeProductLitPixels > 250
     && swipeResult?.unsafeEdgeLitPixels === 0;
   const returnedToTranscription = swipeReturnResult?.running === true
     && swipeReturnResult?.closeRequested === false
-    && swipeReturnResult?.firstLitY >= 120
-    && swipeReturnResult?.lastLitY >= 300
+    && swipeReturnResult?.firstLitY >= 240
+    && swipeReturnResult?.lastLitY >= 330
     && swipeReturnResult?.litPixels > 500;
   const compactConfigurationOk = compactSwipeResult?.running === true
     && compactSwipeResult?.closeRequested === false
@@ -594,9 +702,10 @@ try {
     && compactSwipeReturnResult?.litPixels > 300;
   const stressOk = modeStressResult?.running === true
     && modeStressResult?.closeRequested === false
-    && modeStressResult?.completed === 20;
-  if (!result?.ok || !asrContractOk || !hudLayoutOk || !compactLayoutOk || !compactInteractiveAsrOk || !assistantGestureOk || !switchedToConfigurationUi || !returnedToTranscription || !compactConfigurationOk || !compactReturnedOk || !stressOk || required.some((line) => !joined.includes(line)) || forbidden.test(joined)) {
-    fail(`Real Ink runtime smoke failed.\nresult=${JSON.stringify(result)}\nassistantGesture=${JSON.stringify(toolsPageDownResult)}\ntoolsTranscription=${JSON.stringify(toolsTranscriptionResult)}\ncompactWakeup=${JSON.stringify(compactWakeupResult)}\nswipe=${JSON.stringify(swipeResult)}\nswipeReturn=${JSON.stringify(swipeReturnResult)}\ncompactSwipe=${JSON.stringify(compactSwipeResult)}\ncompactReturn=${JSON.stringify(compactSwipeReturnResult)}\nstress=${JSON.stringify(modeStressResult)}\n${joined.slice(-12000)}`);
+    && modeStressResult?.completed === 20
+    && modeStressResult?.minimumTransitionLitPixels > 300;
+  if (!result?.ok || !tokenInvocationOk || !asrContractOk || !hudLayoutOk || !compactLayoutOk || !compactInteractiveAsrOk || !assistantGestureOk || !switchedToConfigurationUi || !returnedToTranscription || !compactConfigurationOk || !compactReturnedOk || !stressOk || required.some((line) => !joined.includes(line)) || forbidden.test(joined)) {
+    fail(`Real Ink runtime smoke failed.\nresult=${JSON.stringify(result)}\nassistantGesture=${JSON.stringify(toolsPageDownResult)}\ntoolsFrameStability=${JSON.stringify(toolsFrameStability)}\ntoolsTranscription=${JSON.stringify(toolsTranscriptionResult)}\ncompactWakeup=${JSON.stringify(compactWakeupResult)}\nswipe=${JSON.stringify(swipeResult)}\nswipeReturn=${JSON.stringify(swipeReturnResult)}\ncompactSwipe=${JSON.stringify(compactSwipeResult)}\ncompactReturn=${JSON.stringify(compactSwipeReturnResult)}\nstress=${JSON.stringify(modeStressResult)}\n${joined.slice(-12000)}`);
   }
   const templateWarningLimits = new Map([
     ["item.active ? 'segmentOn' : ''", 84],
@@ -618,6 +727,7 @@ try {
     }
   }
   console.log(`RabiLink AIUI ${aixInputPath ? "delivery AIX" : "source build"} real Ink runtime smoke passed (${result.pngLength} HUD PNG chars, compact ${result.compactPngLength}, 20 same-page mode round trips).`);
+  console.log(`Configuration frame stability passed (${toolsFrameStability.samples} samples, ${toolsFrameStability.blackFrames} black, ${toolsFrameStability.partialFrames} partial).`);
   if (testBatteryFixture) {
     console.log(`Ink battery render fixture: ${testBatteryFixture.batteryLevel}%, charging=${testBatteryFixture.charging}.`);
   }

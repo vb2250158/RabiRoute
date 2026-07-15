@@ -5,56 +5,61 @@
       "id": "rabi-group-keywords",
       "name": "Rabi 看板娘呼唤",
       "enabled": true,
-      "targetGroupId": "",
-      "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒|怎么配|路由|人格|Agent|连接|状态",
-      "template": "",
       "routeKinds": [
         "group_message"
-      ]
+      ],
+      "targetGroupId": "",
+      "allowedSpeakerNames": [],
+      "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒|怎么配|路由|人格|Agent|连接|状态",
+      "template": ""
     },
     {
       "id": "rabi-direct-reply",
       "name": "Rabi 直接回复陪伴",
       "enabled": true,
-      "targetGroupId": "",
-      "regex": "",
-      "template": "",
       "routeKinds": [
         "direct_reply"
-      ]
+      ],
+      "targetGroupId": "",
+      "allowedSpeakerNames": [],
+      "regex": "",
+      "template": ""
     },
     {
       "id": "rabi-indirect-reply",
       "name": "Rabi 回复链陪伴",
       "enabled": true,
-      "targetGroupId": "",
-      "regex": "",
-      "template": "",
       "routeKinds": [
         "indirect_reply"
-      ]
+      ],
+      "targetGroupId": "",
+      "allowedSpeakerNames": [],
+      "regex": "",
+      "template": ""
     },
     {
       "id": "rabi-private",
       "name": "Rabi 私聊陪伴",
       "enabled": true,
-      "targetGroupId": "",
-      "regex": "",
-      "template": "",
       "routeKinds": [
         "private"
-      ]
+      ],
+      "targetGroupId": "",
+      "allowedSpeakerNames": [],
+      "regex": "",
+      "template": ""
     },
     {
       "id": "rabi-heartbeat",
       "name": "Rabi 看板娘成长自检",
       "enabled": true,
-      "targetGroupId": "",
-      "regex": "",
-      "template": "",
       "routeKinds": [
         "heartbeat"
-      ]
+      ],
+      "targetGroupId": "",
+      "allowedSpeakerNames": [],
+      "regex": "",
+      "template": ""
     },
     {
       "id": "rabi-manual-agent-recreate",
@@ -64,7 +69,31 @@
         "manual_trigger"
       ],
       "targetGroupId": "",
+      "allowedSpeakerNames": [],
       "regex": "重新创建Agent|重新创建 Agent|重建Agent|重建 Agent|会话归档转接|archive-handoff|recreate-agent",
+      "template": ""
+    },
+    {
+      "id": "wecom-group-message",
+      "name": "WeCom group message",
+      "enabled": true,
+      "routeKinds": [
+        "wecom_message"
+      ],
+      "targetGroupId": "",
+      "allowedSpeakerNames": [],
+      "regex": "",
+      "template": "WeCom group message\nTarget: {messageTarget}\nGroup: {groupId}\nSender: {sender} ({userId})\nMessageId: {messageId}\nReqId: {wecomReqId}\nChatId: {wecomChatId}\n\n{message}\n\nReply through {replyApiUrl} with replyContextJson when a WeCom response is allowed."
+    },
+    {
+      "id": "role-panel-message",
+      "name": "角色面板消息",
+      "enabled": true,
+      "routeKinds": [
+        "role_panel_message"
+      ],
+      "targetGroupId": "",
+      "regex": "",
       "template": ""
     }
   ]

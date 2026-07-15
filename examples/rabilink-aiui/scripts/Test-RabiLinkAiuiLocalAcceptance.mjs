@@ -8,6 +8,14 @@ const reportPath = path.join(projectRoot, "dist", "local-acceptance.json");
 const aixPath = path.join(projectRoot, "dist", "rabilink-aiui.aix");
 const realDeviceStatusEvidencePath = path.join(projectRoot, "dist", "real-glasses-device-status.json");
 const aiuiDeviceStatusE2ePath = path.join(projectRoot, "dist", "device-status-e2e.json");
+const deviceEvidenceMaxAgeMs = Math.max(1, Number(process.env.RABILINK_DEVICE_EVIDENCE_MAX_AGE_MINUTES || 10)) * 60 * 1000;
+
+function freshEvidenceTimestamp(value, now = Date.now()) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp)
+    && timestamp >= now - deviceEvidenceMaxAgeMs
+    && timestamp <= now + (5 * 60 * 1000);
+}
 
 const checks = [
   {
@@ -56,6 +64,41 @@ const checks = [
     cwd: projectRoot
   },
   {
+    id: "active-intelligence-core",
+    requirement: "Record-first observations never become direct Agent input, taskless output remains proactive, one crash-recoverable JSONL timeline spans user and Agent events, idle review reflects continuously, and touchpad requests steer the current Codex turn.",
+    command: process.execPath,
+    args: [
+      "--import",
+      "tsx",
+      "--test",
+      path.join(repoRoot, "src", "adapters", "rabilinkRelayWorker.test.ts"),
+      path.join(repoRoot, "src", "outbox.test.ts"),
+      path.join(repoRoot, "src", "rabilinkConversationLedger.test.ts"),
+      path.join(repoRoot, "src", "rabilinkConversationReviewer.test.ts")
+    ],
+    cwd: repoRoot
+  },
+  {
+    id: "resident-record-first-ingress",
+    requirement: "Explicitly selected FenneNote or named webhook transcripts enter the same deduplicated observation ledger without creating one Agent turn per segment.",
+    command: process.execPath,
+    args: [
+      "--import",
+      "tsx",
+      "--test",
+      path.join(repoRoot, "src", "rabilinkObservationRecorder.test.ts"),
+      path.join(repoRoot, "src", "adapters", "webhookRecordFirst.test.ts")
+    ],
+    cwd: repoRoot
+  },
+  {
+    id: "native-voice-runtime",
+    requirement: "AIUI native ASR/TTS use one explicit adapter contract without API keys, paid providers, hidden network fallback, or fabricated playback receipts.",
+    command: process.execPath,
+    args: [path.join(projectRoot, "scripts", "Smoke-RabiLinkVoiceRuntime.mjs")],
+    cwd: projectRoot
+  },
+  {
     id: "relay-mobile-proxy",
     requirement: "Relay authenticates, binds a PC worker, wakes a waiting stream with taskless proactive delivery, and proxies WebGUI requests.",
     command: process.execPath,
@@ -71,7 +114,7 @@ const checks = [
   },
   {
     id: "page-runtime",
-    requirement: "Touchpad rail switching, native-Agent configuration, ASR/TTS handoff, clock, battery adapters, 85 commands/283 phrases and 20 mode round trips work.",
+    requirement: "Touchpad rail switching, native LanguageModel/outer bound-Agent configuration, lifecycle-free TTS watchdog/ASR handoff, poison-message retry isolation, clock, truthful CXR battery, 85 actions/284 phrases and 20 mode round trips work.",
     command: process.execPath,
     args: [path.join(projectRoot, "scripts", "Smoke-RabiLinkAiuiRuntime.mjs")],
     cwd: projectRoot
@@ -185,17 +228,24 @@ const realDeviceEvidence = fs.existsSync(realDeviceStatusEvidencePath)
 const aiuiDeviceE2e = fs.existsSync(aiuiDeviceStatusE2ePath)
   ? JSON.parse(fs.readFileSync(aiuiDeviceStatusE2ePath, "utf8"))
   : null;
+const evidenceNow = Date.now();
+const realDeviceEvidenceAt = realDeviceEvidence?.observedAt || realDeviceEvidence?.checkedAt;
 const realDeviceStatusComplete = realDeviceEvidence?.ok === true
   && realDeviceEvidence?.source === "rokid-cxr-phone"
   && aiuiDeviceE2e?.ok === true
-  && aiuiDeviceE2e?.source === "relay-cxr";
+  && aiuiDeviceE2e?.source === "relay-cxr"
+  && freshEvidenceTimestamp(realDeviceEvidenceAt, evidenceNow)
+  && freshEvidenceTimestamp(aiuiDeviceE2e?.checkedAt, evidenceNow);
 const report = {
   generated_at: new Date().toISOString(),
-  objective: "RabiLink AIUI provides Connection Conversation and Native-Agent Configuration modes, a continuous normal/proactive message stream, native TTS/ASR handoff, and truthful AR HUD status with all local functions tested.",
+  objective: "RabiLink AIUI keeps observations record-first, reviews one user/Agent timeline from an idle or touchpad-guided Codex thread, consumes an independent normal/proactive downlink, exposes native LanguageModel configuration, and optionally merges an explicitly selected resident transcript source without claiming AIUI background recording.",
   local_acceptance_complete: localComplete,
   glasses_acceptance_complete: false,
   glasses_device_status_acceptance_complete: realDeviceStatusComplete,
-  glasses_gap: "Real glasses battery/charging reached Relay and the compiled AIUI page, but the newly built AIX still needs a post-upload launch on the glasses.",
+  glasses_device_status_evidence_max_age_minutes: deviceEvidenceMaxAgeMs / (60 * 1000),
+  glasses_gap: realDeviceStatusComplete
+    ? "Fresh glasses battery/charging reached Relay and the compiled AIUI page, but the current AIX still needs a post-upload launch on the glasses."
+    : "No fresh real-glasses device-status evidence is available; the current AIX still needs Craft, phone, and glasses runtime validation.",
   aix_path: aixPath,
   real_device_status_evidence_path: realDeviceStatusEvidencePath,
   aiui_device_status_e2e_path: aiuiDeviceStatusE2ePath,

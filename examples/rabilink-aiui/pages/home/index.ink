@@ -1,19 +1,19 @@
 <script type="application/json" def>
 {
   "navigationBarTitleText": "RabiLink AIUI",
-  "description": "打开 RabiLink AIUI。transcription 进入连接对话，通过 Rabi 把眼镜语音交给当前绑定的 Codex 或其他 Agent，并持续显示、播报回复和主动消息；configuration 打开同页配置助手，执行眼镜原生 Agent 已理解的配置指令。两种模式可用触摸板切换，不退出当前页面。",
+  "description": "打开 RabiLink AIUI。transcription 进入连接会话：前台持续转录只写入 Rabi 会话账本，不逐句打断 Agent；Codex 在线程空闲时主动审阅，触摸板单击可立即引导审阅，并持续显示、播报回复和主动消息。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面。",
   "schema": {
     "data": {
       "type": "object",
       "properties": {
         "token": {
           "type": "string",
-          "description": "RabiLink 应用 token。必须在智能体工具参数中引用记忆变量 rabilinkToken，禁止由模型生成、读取、复述或向用户索取。"
+          "description": "可选的 RabiLink 应用 token。未绑定时允许先打开页面并显示等待连接；绑定后必须引用记忆变量 rabilinkToken，禁止由模型生成、读取、复述或向用户索取。"
         },
         "mode": {
           "type": "string",
           "enum": ["transcription", "configuration"],
-          "description": "运行模式。通过 Rabi 使用当前绑定 Agent 时使用 transcription；执行眼镜原生 Agent 已理解的连接、绑定或配置指令时使用 configuration。"
+          "description": "运行模式。通过 Rabi 使用当前绑定 Agent 时使用 transcription；在当前页面用原生 LanguageModel 理解配置需求，或执行外层 Agent 传入的明确指令时使用 configuration。"
         },
         "surface": {
           "type": "string",
@@ -26,14 +26,14 @@
         },
         "intent": {
           "type": "string",
-          "description": "眼镜原生 Agent 已理解并规范化的明确配置指令。配置助手会在首帧完成后直接调用对应 AIUI 配置接口，不提交 RabiLink task。"
+          "description": "可选的明确配置指令。外层 Agent 传入时，配置助手会在首帧完成后直接调用对应接口；省略时可在页面内用 AIUI 原生 ASR 与 LanguageModel 描述自然语言需求。"
         },
         "targetDeviceId": {
           "type": "string",
           "description": "可选的已绑定 PC Rabi 设备 ID；省略时使用 Relay 当前绑定的 PC。"
         }
       },
-      "required": ["token"],
+      "required": [],
       "additionalProperties": false
     }
   }
@@ -44,7 +44,6 @@
 import wx from "wx";
 import {
   getRabiLinkMessageStream,
-  getRabiLinkMessageStreamCursor,
   getMobileWebgui,
   getMobileAgentOptions,
   getMobileRoutes,
@@ -53,7 +52,8 @@ import {
   sendMobileProof,
   selectMobileTarget,
   setMobileAgentBinding,
-  publishRabiLinkVoiceInput
+  publishRabiLinkVoiceInput,
+  requestRabiLinkConversationReview
 } from "../../utils/rabilink-api.js";
 import {
   CONFIG_PANELS,
@@ -125,13 +125,28 @@ import {
 } from "../../utils/config-surface.js";
 import { rabiLinkDefaults } from "../../utils/rabilink-defaults.js";
 import {
+  loadAgentMessageQueue,
   loadSettings,
   loadTranscriptQueue,
   maskToken,
+  saveAgentMessageQueue,
   saveSettings,
-  saveTranscriptQueue
+  saveTranscriptQueue,
+  tokenStorageKey
 } from "../../utils/rabilink-store.js";
-import { VOICE_COMMANDS, parseConfigurationIntent, parseVoiceCommand } from "../../utils/voice-command.js";
+import { createTranscriptPolicy } from "../../utils/transcript-policy.js";
+import {
+  AIUI_NATIVE_VOICE_MODE,
+  createAiuiAsrInputAdapter,
+  createAiuiTtsOutputAdapter
+} from "../../utils/voice-runtime.js";
+import {
+  VOICE_COMMANDS,
+  configurationCommandFromToolCall,
+  configurationLanguageModelOptions,
+  parseConfigurationIntent,
+  parseVoiceCommand
+} from "../../utils/voice-command.js";
 import { buildDerivedState, selectedItem } from "../../utils/view-model.js";
 
 const APP_SURFACES = Object.freeze([
@@ -162,6 +177,7 @@ const APP_MODES = Object.freeze({
   TRANSCRIPTION: "transcription",
   CONFIGURATION: "configuration"
 });
+const RABILINK_RELEASE_VERSION = "__RABILINK_RELEASE_VERSION__";
 
 const TRANSCRIPTION_RESTART_DELAY_MS = 220;
 const TRANSCRIPTION_ERROR_RETRY_MS = 1200;
@@ -169,9 +185,14 @@ const TRANSCRIPTION_MAX_RETRY_DELAY_MS = 10000;
 const TRANSCRIPTION_RAPID_END_THRESHOLD_MS = 800;
 const TRANSCRIPTION_MAX_CONSECUTIVE_FAILURES = 5;
 const AGENT_POLL_RETRY_DELAY_MS = 250;
+const AGENT_TTS_RETRY_DELAY_MS = 600;
+const AGENT_TTS_MAX_ATTEMPTS = 3;
+const TTS_PLAYBACK_MIN_MS = 1800;
+const TTS_PLAYBACK_MAX_MS = 90000;
 const STARTUP_ACTIVATION_DELAY_MS = 160;
 const STARTUP_NETWORK_DELAY_MS = 120;
 const STARTUP_ASR_DELAY_MS = 480;
+const CONFIGURATION_MODEL_TIMEOUT_MS = 15000;
 const TRANSCRIPTION_CLOCK_REFRESH_MS = 5000;
 const DEVICE_CLOCK_REFRESH_MS = 30000;
 const DEVICE_BATTERY_REFRESH_MS = 60000;
@@ -195,6 +216,15 @@ function resolveAsrHostPolicy() {
   return {
     requiresInteractiveWakeup: !deviceSerialNumber
   };
+}
+
+function estimatedSpeechPlaybackMs(text) {
+  const value = String(text || "").trim();
+  const hanCount = (value.match(/[\u3400-\u9fff]/g) || []).length;
+  const wordCount = (value.replace(/[\u3400-\u9fff]/g, " ").match(/[0-9A-Za-z]+/g) || []).length;
+  const punctuationCount = (value.match(/[，。！？；：,.!?;:]/g) || []).length;
+  const estimate = 1200 + (hanCount * 280) + (wordCount * 420) + (punctuationCount * 180);
+  return Math.max(TTS_PLAYBACK_MIN_MS, Math.min(TTS_PLAYBACK_MAX_MS, estimate));
 }
 
 function resolveToolInvocation(query = {}) {
@@ -576,6 +606,7 @@ export default {
     selectedCwdLabel: "未读取工作区",
     selectedThreadLabel: "未读取会话",
     bindingPreview: "未选择 Route",
+    copilotThreadName: "",
     copilotCwd: "",
     copilotCliBin: "",
     marvisAppId: "",
@@ -600,11 +631,15 @@ export default {
     remoteAgentPassword: "",
     remoteAgentSummary: "未扫描远端 Agent",
 
-    assistantStatus: "等待原生 Agent",
-    assistantUserText: "请向眼镜助手提出配置需求",
-    assistantReplyText: "原生 Agent 会理解需求，再调用这里的配置接口。",
+    assistantStatus: "准备聆听",
+    assistantUserText: "直接说出配置需求",
+    assistantReplyText: "原生 AI 会理解需求，再调用当前页面的配置能力。",
     assistantLastRequest: "",
     assistantCanRetry: false,
+    assistantListeningDesired: false,
+    assistantListening: false,
+    assistantModelBusy: false,
+    assistantModelState: "原生 AI 待命",
     agentStatus: "等待语音",
     agentReplyText: "Agent 的回复会显示在这里",
     agentCursor: "",
@@ -622,6 +657,7 @@ export default {
     transcriptionPendingCount: 0,
     transcriptionSyncLabel: "等待连接",
     currentTime: "--:--",
+    releaseVersion: RABILINK_RELEASE_VERSION,
     batteryAvailable: false,
     batteryLevel: 0,
     batteryText: "--",
@@ -629,6 +665,10 @@ export default {
     batteryFillClass: "batteryFillLevel0",
     batteryStatusLabel: "电量不可用",
     batterySource: "",
+    voiceRuntimeMode: AIUI_NATIVE_VOICE_MODE,
+    voiceRuntimeLabel: "AIUI 原生",
+    asrCapabilityAvailable: false,
+    ttsCapabilityAvailable: false,
     invocationIntent: "",
     logs: []
   },
@@ -648,36 +688,25 @@ export default {
       assistantStatus: state.assistantStatus,
       assistantUserText: state.assistantUserText,
       assistantReplyText: state.assistantReplyText,
+      assistantListeningDesired: state.assistantListeningDesired,
+      assistantListening: state.assistantListening,
+      assistantModelBusy: state.assistantModelBusy,
+      assistantModelState: state.assistantModelState,
       connected: state.connected,
       currentTime: state.currentTime,
+      releaseVersion: state.releaseVersion,
       batteryFillClass: state.batteryFillClass,
       batteryCharging: state.batteryCharging,
-      batteryText: state.batteryText
+      batteryText: state.batteryText,
+      voiceRuntimeMode: state.voiceRuntimeMode,
+      asrCapabilityAvailable: state.asrCapabilityAvailable,
+      ttsCapabilityAvailable: state.ttsCapabilityAvailable
     };
   },
 
   installHudRelayoutGuard() {
     if (this.hudSetData) return;
     this.hudSetData = this.setData.bind(this);
-    this.setData = (nextData) => {
-      if (!nextData || typeof nextData !== "object") {
-        this.hudSetData(nextData);
-        return;
-      }
-      this.hudSetData({
-        ...nextData,
-        modeFrameRelayout: true
-      });
-      if (this.hudRelayoutTimer) clearTimeout(this.hudRelayoutTimer);
-      this.hudRelayoutTimer = setTimeout(() => {
-        this.hudRelayoutTimer = null;
-        if (this.destroyed) return;
-        this.hudSetData({
-          ...this.hudVisibleSnapshot(),
-          modeFrameRelayout: false
-        });
-      }, 32);
-    };
   },
 
   onLoad(query = {}) {
@@ -688,13 +717,35 @@ export default {
     const agentRequestedTranscription = invocation.mode === APP_MODES.TRANSCRIPTION && invocation.invokedByAgent;
     const shouldAutoStartTranscription = agentRequestedTranscription && !asrHostPolicy.requiresInteractiveWakeup;
     const waitsForInteractiveWakeup = agentRequestedTranscription && asrHostPolicy.requiresInteractiveWakeup;
+    const shouldAutoStartConfiguration = invocation.mode === APP_MODES.CONFIGURATION && !asrHostPolicy.requiresInteractiveWakeup;
+    const configurationWaitsForInteractiveWakeup = invocation.mode === APP_MODES.CONFIGURATION && asrHostPolicy.requiresInteractiveWakeup;
     const firstFrameSurface = APP_SURFACES[invocation.surfaceIndex] || APP_SURFACES[0];
     const firstFramePanel = CONFIG_PANELS[invocation.panelIndex] || CONFIG_PANELS[0];
     this.asrHostPolicy = asrHostPolicy;
+    this.asrAdapter = createAiuiAsrInputAdapter({
+      SpeechRecognitionCtor: typeof SpeechRecognition === "function" ? SpeechRecognition : null,
+      language: "zh-CN"
+    });
+    this.ttsAdapter = createAiuiTtsOutputAdapter({
+      speechSynthesisApi: typeof speechSynthesis !== "undefined" ? speechSynthesis : null,
+      SpeechSynthesisUtteranceCtor: typeof SpeechSynthesisUtterance === "function"
+        ? SpeechSynthesisUtterance
+        : null,
+      language: "zh-CN"
+    });
+    const asrCapability = this.asrAdapter.getCapability();
+    const ttsCapability = this.ttsAdapter.getCapability();
     this.startupInvocation = invocation;
     this.startupActivated = false;
     this.recognition = null;
     this.recognitionPurpose = "";
+    this.configurationModel = null;
+    this.configurationModelPromise = null;
+    this.configurationModelToolListener = null;
+    this.configurationPendingToolCall = null;
+    this.configurationModelGeneration = 0;
+    this.configurationPromptGeneration = 0;
+    this.configurationPromptTimer = null;
     this.pageReady = false;
     this.pageVisible = true;
     this.destroyed = false;
@@ -712,15 +763,19 @@ export default {
     this.agentPollGeneration = 0;
     this.agentShouldPoll = false;
     this.agentSeenMessageIds = new Set();
+    this.agentMessageQueue = [];
+    this.agentSpeechQueuedId = "";
     this.speechQueue = [];
     this.speechActive = false;
     this.speechGeneration = 0;
     this.currentUtterance = null;
+    this.currentTtsAttempt = null;
+    this.currentSpeechTimer = null;
     this.deviceClockTimer = null;
     this.batteryRefreshPromise = null;
     this.batteryLastRefreshAt = 0;
-    this.batteryManager = null;
-    this.batteryChangeHandler = null;
+    this.lastReviewRequestAt = 0;
+    this.transcriptPolicy = createTranscriptPolicy();
     this.setData({
       relayBaseUrl: rabiLinkDefaults.relayBaseUrl,
       token,
@@ -730,26 +785,36 @@ export default {
       isTranscriptionMode: invocation.mode === APP_MODES.TRANSCRIPTION,
       isConfigurationMode: invocation.mode === APP_MODES.CONFIGURATION,
       transcriptionDesired: shouldAutoStartTranscription,
+      assistantListeningDesired: shouldAutoStartConfiguration,
+      assistantListening: false,
+      assistantModelBusy: false,
+      assistantModelState: "原生 AI 待命",
       transcriptionState: invocation.mode === APP_MODES.TRANSCRIPTION
         ? (shouldAutoStartTranscription
           ? "准备中"
           : (waitsForInteractiveWakeup ? "浏览器调试：进入后点麦克风" : "待运行智能体"))
         : "准备中",
       transcriptionSessionId: `rabilink-aiui-${Date.now()}`,
-      assistantStatus: invocation.intent ? "执行原生 Agent 指令" : "等待原生 Agent",
-      assistantUserText: invocation.intent || "请向眼镜助手提出配置需求",
-      assistantReplyText: invocation.intent ? "正在调用对应配置接口。" : "原生 Agent 会理解需求，再调用这里的配置接口。",
+      assistantStatus: invocation.intent
+        ? "执行外层灵珠指令"
+        : (configurationWaitsForInteractiveWakeup ? "浏览器调试：点麦克风开始" : "准备聆听"),
+      assistantUserText: invocation.intent || "直接说出配置需求",
+      assistantReplyText: invocation.intent ? "正在调用对应配置接口。" : "请直接描述你想读取、修改或运行的配置。",
       assistantLastRequest: invocation.intent,
       transcriptionStartedAt: Date.now(),
       transcriptionElapsed: "00:00",
       transcriptionPendingCount: 0,
       transcriptionSyncLabel: token ? "等待后台连接" : "等待智能体连接",
       agentStatus: token ? "准备连接 Agent" : "等待智能体连接",
-      agentReplyText: "说话后，我会通过 Rabi 把 Agent 回复带回来。",
+      agentReplyText: "转录会持续写入会话账本；单击触摸板可请 Agent 现在审阅。",
       agentCursor: "",
       agentPolling: false,
       agentSpeaking: false,
       currentTime: clockLabel(),
+      voiceRuntimeMode: AIUI_NATIVE_VOICE_MODE,
+      voiceRuntimeLabel: "AIUI 原生",
+      asrCapabilityAvailable: asrCapability.available,
+      ttsCapabilityAvailable: ttsCapability.available,
       surfaceIndex: invocation.surfaceIndex,
       surfaceId: firstFrameSurface.id,
       surfaceLabel: firstFrameSurface.label,
@@ -776,6 +841,9 @@ export default {
       }
       void this.flushTranscriptQueue();
       if (this.agentShouldPoll) this.scheduleAgentPoll(0);
+      this.drainAgentMessageQueue();
+    } else if (this.startupActivated && this.pageReady && this.data.isConfigurationMode && this.data.assistantListeningDesired) {
+      this.scheduleTranscriptionRestart(0);
     }
   },
 
@@ -804,10 +872,19 @@ export default {
     const invocation = this.startupInvocation || resolveToolInvocation();
     const settings = initialSettings();
     const token = this.data.token || settings.token;
-    const transcriptQueue = loadTranscriptQueue();
-    const tokenKey = maskToken(token);
-    const agentCursor = settings.agentCursorTokenKey === tokenKey ? settings.agentCursor : "";
+    const tokenKey = tokenStorageKey(token);
+    const legacyTokenKey = token ? maskToken(token) : "";
+    const transcriptQueue = loadTranscriptQueue(tokenKey);
+    const cursorMatchesToken = settings.agentCursorTokenKey === tokenKey
+      || Boolean(legacyTokenKey && settings.agentCursorTokenKey === legacyTokenKey);
+    const agentCursor = cursorMatchesToken ? settings.agentCursor : "";
+    const agentMessageQueue = loadAgentMessageQueue(tokenKey, legacyTokenKey);
     this.transcriptQueue = transcriptQueue;
+    this.agentMessageQueue = agentMessageQueue;
+    this.transcriptPolicy?.seedAccepted(transcriptQueue);
+    if (legacyTokenKey && settings.agentCursorTokenKey === legacyTokenKey) {
+      saveSettings({ agentCursor, agentCursorTokenKey: tokenKey });
+    }
     this.setData({
       relayBaseUrl: settings.relayBaseUrl || this.data.relayBaseUrl,
       token,
@@ -835,6 +912,12 @@ export default {
     if (this.pageVisible && this.data.isTranscriptionMode && this.data.transcriptionDesired) {
       this.startTranscriptionClock();
       this.scheduleTranscriptionRestart(STARTUP_ASR_DELAY_MS);
+    } else if (this.pageVisible && this.data.isConfigurationMode && this.data.assistantListeningDesired) {
+      this.scheduleTranscriptionRestart(STARTUP_ASR_DELAY_MS);
+    }
+    if (this.pageVisible && this.data.isTranscriptionMode) {
+      void this.flushTranscriptQueue();
+      this.drainAgentMessageQueue();
     }
   },
 
@@ -843,11 +926,14 @@ export default {
     this.stopDeviceStatus();
     this.suspendAgentPolling();
     this.cancelSpeech();
+    this.destroyConfigurationModel();
     this.clearTranscriptionRestart();
     this.stopTranscriptionClock();
     this.stopRecognition(false);
     if (this.data.isTranscriptionMode) {
       this.setData({ transcriptionListening: false, transcriptionState: "已暂停" });
+    } else if (this.data.isConfigurationMode) {
+      this.setData({ assistantListening: false, assistantStatus: "已暂停" });
     }
   },
 
@@ -857,6 +943,7 @@ export default {
     this.stopDeviceStatus();
     this.stopAgentPolling();
     this.cancelSpeech();
+    this.destroyConfigurationModel();
     if (this.transcriptionStartupTimer) {
       clearTimeout(this.transcriptionStartupTimer);
       this.transcriptionStartupTimer = null;
@@ -901,7 +988,6 @@ export default {
       clearInterval(this.deviceClockTimer);
       this.deviceClockTimer = null;
     }
-    this.unbindBatteryManager();
   },
 
   applyBatterySnapshot(snapshot, source = "host") {
@@ -938,95 +1024,14 @@ export default {
     });
   },
 
-  bindBatteryManager(manager) {
-    if (this.destroyed || !this.pageVisible || !manager || typeof manager !== "object") return false;
-    if (this.batteryManager !== manager) {
-      this.unbindBatteryManager();
-      this.batteryManager = manager;
-      this.batteryChangeHandler = () => {
-        if (!this.destroyed) this.applyBatterySnapshot(manager, "web-battery");
-      };
-      if (typeof manager.addEventListener === "function") {
-        manager.addEventListener("levelchange", this.batteryChangeHandler);
-        manager.addEventListener("chargingchange", this.batteryChangeHandler);
-      }
-    }
-    return this.applyBatterySnapshot(manager, "web-battery");
-  },
-
-  unbindBatteryManager() {
-    if (this.batteryManager && this.batteryChangeHandler && typeof this.batteryManager.removeEventListener === "function") {
-      this.batteryManager.removeEventListener("levelchange", this.batteryChangeHandler);
-      this.batteryManager.removeEventListener("chargingchange", this.batteryChangeHandler);
-    }
-    this.batteryManager = null;
-    this.batteryChangeHandler = null;
-  },
-
-  callWxDeviceInfo(methodName) {
-    if (!wx || typeof wx[methodName] !== "function") return Promise.resolve(null);
-    return new Promise((resolve) => {
-      let settled = false;
-      let timeout = null;
-      const finish = (value) => {
-        if (settled) return;
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        resolve(value && typeof value === "object" ? value : null);
-      };
-      timeout = setTimeout(() => finish(null), 300);
-      try {
-        const result = wx[methodName]({ success: finish, fail: () => finish(null) });
-        if (result && typeof result.then === "function") result.then(finish, () => finish(null));
-        else if (result && typeof result === "object") finish(result);
-      } catch {
-        finish(null);
-      }
-    });
-  },
-
   async resolveBatterySnapshot() {
-    if (typeof navigator !== "undefined") {
-      try {
-        if (navigator.battery && this.bindBatteryManager(navigator.battery)) return true;
-        if (typeof navigator.getBattery === "function") {
-          const manager = await navigator.getBattery();
-          if (this.destroyed || !this.pageVisible) return false;
-          if (this.bindBatteryManager(manager)) return true;
-        }
-        if (typeof navigator.getBatteryInfo === "function") {
-          const info = await navigator.getBatteryInfo();
-          if (this.destroyed || !this.pageVisible) return false;
-          if (this.applyBatterySnapshot(info, "navigator")) return true;
-        }
-      } catch {
-        // Continue through compatible host fallbacks.
-      }
-    }
-
-    for (const methodName of ["getBatteryInfoSync", "getSystemInfoSync"]) {
-      if (!wx || typeof wx[methodName] !== "function") continue;
-      try {
-        if (this.applyBatterySnapshot(wx[methodName](), `wx.${methodName}`)) return true;
-      } catch {
-        // Continue through asynchronous host fallbacks.
-      }
-    }
-
-    for (const methodName of ["getBatteryInfo", "getSystemInfo"]) {
-      const info = await this.callWxDeviceInfo(methodName);
+    if (!this.data.token) return false;
+    try {
+      const state = await getMobileState(this.config(), 4000);
       if (this.destroyed || !this.pageVisible) return false;
-      if (this.applyBatterySnapshot(info, `wx.${methodName}`)) return true;
-    }
-
-    if (this.data.token) {
-      try {
-        const state = await getMobileState(this.config(), 4000);
-        if (this.destroyed || !this.pageVisible) return false;
-        if (this.applyRelayBatteryState(state)) return true;
-      } catch {
-        // A missing or offline phone bridge is represented as unknown battery state.
-      }
+      if (this.applyRelayBatteryState(state)) return true;
+    } catch {
+      // Only a fresh phone-side CXR report is accepted as real glasses battery data.
     }
     return false;
   },
@@ -1053,10 +1058,7 @@ export default {
       if (!this.data.transcriptionDesired || !this.data.transcriptionListening) this.resumeTranscription("wakeup");
       return;
     }
-    this.setData({
-      assistantStatus: "等待原生 Agent",
-      assistantReplyText: "请直接向眼镜助手说出配置需求；它会带着明确指令重新调用配置助手。"
-    });
+    if (this.data.isConfigurationMode && !this.speechActive) this.resumeConfigurationListening("wakeup");
   },
 
   onKeyUp(event) {
@@ -1066,7 +1068,8 @@ export default {
       if (code === "arrowdown" || code === "arrowright" || code === "backspace") {
         this.requestConfigurationAssistant("gesture");
       } else if (code === "enter" || code === "globalhook") {
-        this.toggleTranscription();
+        if (this.hasBlockedAgentMessages()) this.retryModeAction();
+        else void this.requestConversationReview("touchpad");
       } else {
         handled = false;
       }
@@ -1085,6 +1088,45 @@ export default {
       relayBaseUrl: this.data.relayBaseUrl,
       token: this.data.token
     };
+  },
+
+  async requestConversationReview(reason = "touchpad") {
+    const now = Date.now();
+    if (now - Number(this.lastReviewRequestAt || 0) < 800) return false;
+    this.lastReviewRequestAt = now;
+    if (!this.data.token) {
+      this.setData({
+        agentStatus: "尚未连接，无法提醒 Agent",
+        transcriptionSyncLabel: "等待智能体连接"
+      });
+      return false;
+    }
+    this.setData({
+      agentStatus: "正在提醒 Agent 审阅记录",
+      transcriptionSyncLabel: "发送审阅提醒"
+    });
+    try {
+      await requestRabiLinkConversationReview(this.config(), {
+        id: `review-${now}`,
+        requestedAt: now,
+        sessionId: this.data.transcriptionSessionId
+      });
+      this.setData({
+        connected: true,
+        agentStatus: "已提醒 Agent 审阅会话记录",
+        transcriptionSyncLabel: "记录已同步"
+      });
+      this.appendLog(`已通过${reason === "touchpad" ? "触摸板" : "页面"}提醒 Agent 审阅统一会话账本。`);
+      return true;
+    } catch (error) {
+      this.setData({
+        connected: false,
+        agentStatus: "审阅提醒发送失败",
+        transcriptionSyncLabel: "待重试"
+      });
+      this.appendLog(`审阅提醒发送失败：${error?.message || error}`);
+      return false;
+    }
   },
 
   async connectTranscriptionRelay() {
@@ -1110,15 +1152,9 @@ export default {
         workers,
         workerIndex,
         targetDeviceId: selectedId,
-        transcriptionSyncLabel: this.transcriptQueue.length ? "发送中" : "队列在线",
-        agentStatus: "可以直接说话"
+        transcriptionSyncLabel: this.transcriptQueue.length ? "同步记录" : "记录已同步",
+        agentStatus: "持续记录中，单击请 Agent 审阅"
       });
-      if (!this.data.agentCursor) {
-        const cursorState = await getRabiLinkMessageStreamCursor(this.config());
-        const cursor = String(cursorState.nextCursor || cursorState.cursor || "").trim();
-        this.setData({ agentCursor: cursor });
-        saveSettings({ agentCursor: cursor, agentCursorTokenKey: maskToken(this.data.token) });
-      }
       this.agentShouldPoll = true;
       if (this.data.isTranscriptionMode) this.scheduleAgentPoll(0);
       if (selectedId) saveSettings({ targetDeviceId: selectedId });
@@ -1148,6 +1184,7 @@ export default {
     return {
       event,
       detail,
+      sessionId: this.data.transcriptionSessionId,
       routeId: selectedRoute.id || selectedRoute.configName || "",
       panelId: selectedPanel.id || this.data.panelId || "",
       action: extra.action || "",
@@ -1155,7 +1192,7 @@ export default {
       device,
       runtime: {
         appName: "RabiLink AIUI",
-        appVersion: "0.1.2",
+        appVersion: this.data.releaseVersion,
         selectedWorkerId: selectedWorker.id || selectedWorker.guid || this.data.targetDeviceId || "",
         selectedWorkerName: selectedWorker.name || ""
       }
@@ -1241,12 +1278,16 @@ export default {
   onTokenInput(event) {
     const token = event.detail.value;
     this.setData({ token, maskedToken: maskToken(token) });
-    saveSettings({ token });
   },
 
   onCopilotCwdInput(event) {
     this.setData({ copilotCwd: event.detail.value });
     this.patchGateway({ copilotCwd: event.detail.value });
+  },
+
+  onCopilotThreadInput(event) {
+    this.setData({ copilotThreadName: event.detail.value });
+    this.patchGateway({ copilotThreadName: event.detail.value });
   },
 
   onCopilotBinInput(event) {
@@ -1863,13 +1904,16 @@ export default {
       const agentAdapter = agentAdapters[0] || "codex";
       const cwdOptions = data.cwdOptions || [];
       const threadOptions = data.threadNames || [];
-      const selectedThreadName = routeInfo.codexThreadName || route.codexThreadName || "";
+      const selectedThreadName = agentAdapter === "copilotCli"
+        ? routeInfo.copilotThreadName || route.copilotThreadName || ""
+        : routeInfo.codexThreadName || route.codexThreadName || "";
       this.setData({
         agentAdapter,
         cwdOptions,
         threadOptions,
         cwdIndex: Math.max(0, cwdOptions.indexOf(routeInfo.codexCwd || route.codexCwd || "")),
         threadIndex: Math.max(0, threadOptions.indexOf(selectedThreadName)),
+        copilotThreadName: routeInfo.copilotThreadName || route.copilotThreadName || "",
         copilotCwd: routeInfo.copilotCwd || "",
         copilotCliBin: routeInfo.copilotCliBin || "",
         marvisAppId: routeInfo.marvisAppId || "",
@@ -1912,6 +1956,7 @@ export default {
     if (this.data.agentAdapter === "copilotCli") {
       return {
         agentAdapter: "copilotCli",
+        copilotThreadName: this.data.copilotThreadName,
         copilotCwd: this.data.copilotCwd,
         copilotCliBin: this.data.copilotCliBin
       };
@@ -1948,6 +1993,7 @@ export default {
     const agentAdapter = adapters[0] || this.data.agentAdapter || "codex";
     this.setData({
       agentAdapter,
+      copilotThreadName: gateway.copilotThreadName || this.data.copilotThreadName,
       copilotCwd: gateway.copilotCwd || this.data.copilotCwd,
       copilotCliBin: gateway.copilotCliBin || this.data.copilotCliBin,
       marvisAppId: gateway.marvisAppId || this.data.marvisAppId,
@@ -3507,6 +3553,7 @@ export default {
 
   retryModeAction() {
     if (this.data.isTranscriptionMode) {
+      this.retryFailedAgentMessages();
       this.agentShouldPoll = true;
       this.setData({ agentStatus: "重新连接队列", transcriptionSyncLabel: "连接中" });
       void this.connectTranscriptionRelay();
@@ -3520,12 +3567,19 @@ export default {
     this.modeFrameGeneration = Number(this.modeFrameGeneration || 0) + 1;
     const generation = this.modeFrameGeneration;
     if (this.modeFrameTimer) clearTimeout(this.modeFrameTimer);
-    this.setData(nextData);
+    this.setData({
+      ...nextData,
+      modeFrameRelayout: true
+    });
     this.modeFrameTimer = setTimeout(() => {
       this.modeFrameTimer = null;
       if (this.destroyed || generation !== this.modeFrameGeneration) return;
+      this.setData({
+        ...this.hudVisibleSnapshot(),
+        modeFrameRelayout: false
+      });
       if (typeof afterCommit === "function") afterCommit();
-    }, 48);
+    }, 32);
   },
 
   toggleTranscription() {
@@ -3582,6 +3636,7 @@ export default {
     const source = typeof reason === "string" ? reason : "ui";
     const waitsForInteractiveWakeup = this.asrHostPolicy?.requiresInteractiveWakeup === true;
     this.cancelSpeech();
+    this.destroyConfigurationModel();
     this.stopRecognition(false);
     this.transcriptionFailureCount = 0;
     const startedAt = Date.now();
@@ -3589,12 +3644,16 @@ export default {
       mode: APP_MODES.TRANSCRIPTION,
       isTranscriptionMode: true,
       isConfigurationMode: false,
+      assistantListeningDesired: false,
+      assistantListening: false,
+      assistantModelBusy: false,
+      assistantModelState: "原生 AI 待命",
       transcriptionDesired: !waitsForInteractiveWakeup,
       transcriptionListening: false,
       transcriptionStartedAt: startedAt,
       transcriptionElapsed: "00:00",
       transcriptionState: waitsForInteractiveWakeup ? "浏览器调试：点麦克风开始" : "准备聆听",
-      agentStatus: "可以直接说话"
+      agentStatus: "持续记录中，单击请 Agent 审阅"
     }, () => {
       this.appendLog(`已切到连接对话：${source}。`);
       if (waitsForInteractiveWakeup) {
@@ -3604,6 +3663,7 @@ export default {
         this.scheduleTranscriptionRestart(0);
       }
       void this.connectTranscriptionRelay();
+      this.drainAgentMessageQueue();
     });
   },
 
@@ -3618,6 +3678,7 @@ export default {
   requestConfigurationAssistant(reason = "ui") {
     const source = typeof reason === "string" ? reason : "ui";
     if (this.data.isConfigurationMode) return;
+    const waitsForInteractiveWakeup = this.asrHostPolicy?.requiresInteractiveWakeup === true;
     this.clearTranscriptionRestart();
     this.stopTranscriptionClock();
     this.suspendAgentPolling();
@@ -3629,13 +3690,42 @@ export default {
       isConfigurationMode: true,
       transcriptionDesired: false,
       transcriptionListening: false,
+      assistantListeningDesired: !waitsForInteractiveWakeup,
+      assistantListening: false,
+      assistantModelBusy: false,
+      assistantModelState: "原生 AI 待命",
       transcriptionState: "配置助手",
-      assistantStatus: "等待原生 Agent",
-      assistantUserText: "请向眼镜助手提出配置需求",
-      assistantReplyText: "原生 Agent 会理解需求，再调用这里的配置接口。"
+      assistantStatus: waitsForInteractiveWakeup ? "浏览器调试：点麦克风开始" : "准备聆听",
+      assistantUserText: "直接说出配置需求",
+      assistantReplyText: "原生 AI 会理解需求，再调用当前页面的配置能力。"
     }, () => {
       this.appendLog(`已切到配置助手：${source}。`);
+      if (!waitsForInteractiveWakeup) this.scheduleTranscriptionRestart(0);
     });
+  },
+
+  resumeConfigurationListening(reason = "ui") {
+    if (!this.data.isConfigurationMode) {
+      this.requestConfigurationAssistant(reason);
+      return;
+    }
+    const source = typeof reason === "string" ? reason : "ui";
+    if (this.asrHostPolicy?.requiresInteractiveWakeup && source !== "wakeup") {
+      this.setData({
+        assistantListeningDesired: false,
+        assistantListening: false,
+        assistantStatus: "浏览器调试：点麦克风开始"
+      });
+      return;
+    }
+    this.transcriptionFailureCount = 0;
+    this.setData({
+      assistantListeningDesired: true,
+      assistantListening: false,
+      assistantStatus: "准备聆听",
+      assistantReplyText: "请直接描述配置需求。"
+    });
+    this.scheduleTranscriptionRestart(0);
   },
 
   suspendAgentPolling() {
@@ -3664,6 +3754,92 @@ export default {
     }, Math.max(0, Number(delayMs || 0)));
   },
 
+  persistAgentMessages(messages = []) {
+    const next = Array.isArray(this.agentMessageQueue) ? [...this.agentMessageQueue] : [];
+    const knownIds = new Set(next.map((item) => String(item?.id || "")).filter(Boolean));
+    let added = 0;
+    for (const message of Array.isArray(messages) ? messages : []) {
+      const id = String(message?.id || message?.taskMessageId || "").trim();
+      const text = String(message?.text || "").trim();
+      if (!id || !text || knownIds.has(id) || this.agentSeenMessageIds.has(id)) continue;
+      knownIds.add(id);
+      next.push({
+        id,
+        text,
+        createdAt: Number(message?.createdAt || Date.now()),
+        proactive: message?.proactive === true,
+        source: String(message?.source || "").trim(),
+        attempts: 0
+      });
+      added += 1;
+    }
+    this.agentMessageQueue = saveAgentMessageQueue(next, tokenStorageKey(this.data.token));
+    return added;
+  },
+
+  finishPersistedAgentMessage(messageId, error = null) {
+    const id = String(messageId || "").trim();
+    if (!id) return;
+    const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
+    const index = queue.findIndex((item) => item?.id === id);
+    this.agentSpeechQueuedId = "";
+    if (index < 0) return 0;
+    if (error) {
+      const attempts = Math.min(AGENT_TTS_MAX_ATTEMPTS, Number(queue[index]?.attempts || 0) + 1);
+      const failed = { ...queue[index], attempts };
+      const next = [...queue.slice(0, index), ...queue.slice(index + 1), failed];
+      this.agentMessageQueue = saveAgentMessageQueue(next, tokenStorageKey(this.data.token));
+      return attempts;
+    }
+    this.agentMessageQueue = saveAgentMessageQueue(
+      queue.filter((item) => item?.id !== id),
+      tokenStorageKey(this.data.token)
+    );
+    this.agentSeenMessageIds.add(id);
+    return 0;
+  },
+
+  retryFailedAgentMessages() {
+    const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
+    if (!queue.some((item) => Number(item?.attempts || 0) >= AGENT_TTS_MAX_ATTEMPTS)) return false;
+    this.agentMessageQueue = saveAgentMessageQueue(
+      queue.map((item) => ({ ...item, attempts: 0 })),
+      tokenStorageKey(this.data.token)
+    );
+    this.drainAgentMessageQueue();
+    return true;
+  },
+
+  hasBlockedAgentMessages() {
+    const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
+    return queue.length > 0
+      && queue.every((item) => Number(item?.attempts || 0) >= AGENT_TTS_MAX_ATTEMPTS);
+  },
+
+  drainAgentMessageQueue() {
+    if (this.destroyed || !this.pageVisible || !this.data.isTranscriptionMode) return;
+    if (this.speechActive || this.agentSpeechQueuedId) return;
+    const queue = Array.isArray(this.agentMessageQueue) ? this.agentMessageQueue : [];
+    const item = queue.find((candidate) => Number(candidate?.attempts || 0) < AGENT_TTS_MAX_ATTEMPTS);
+    if (!item?.id || !item?.text) {
+      if (this.hasBlockedAgentMessages()) this.setData({ agentStatus: "TTS 失败，单击重试" });
+      return;
+    }
+    this.setData({
+      agentReplyText: item.text,
+      agentStatus: item.proactive ? "主动消息" : "Agent 消息"
+    });
+    this.agentSpeechQueuedId = item.id;
+    const queued = this.enqueueSpeech(item.text, {
+      agentSpeech: true,
+      agentMessageId: item.id
+    });
+    if (!queued) {
+      this.agentSpeechQueuedId = "";
+      this.setData({ agentStatus: "消息已保存，等待 TTS" });
+    }
+  },
+
   async pollAgentMessages(generation = this.agentPollGeneration) {
     if (!this.agentShouldPoll || generation !== this.agentPollGeneration) return;
     if (this.destroyed || !this.pageVisible || !this.data.isTranscriptionMode) return;
@@ -3678,33 +3854,29 @@ export default {
       if (generation !== this.agentPollGeneration || !this.agentShouldPoll) return;
       const nextCursor = String(batch.nextCursor || this.data.agentCursor || "").trim();
       const messages = Array.isArray(batch.messages) ? batch.messages : [];
+      this.persistAgentMessages(messages);
       this.setData({ agentCursor: nextCursor, connected: true });
-      saveSettings({ agentCursor: nextCursor, agentCursorTokenKey: maskToken(this.data.token) });
-      messages.forEach((message) => {
-        const messageId = String(message?.id || message?.taskMessageId || "").trim();
-        if (messageId && this.agentSeenMessageIds.has(messageId)) return;
-        if (messageId) this.agentSeenMessageIds.add(messageId);
-        const reply = String(message?.text || "").trim();
-        if (reply) {
-          this.say(reply, {
-            allowInTranscription: true,
-            agentStatus: message?.proactive === true ? "主动消息" : "Agent 消息"
-          });
-        }
-      });
+      saveSettings({ agentCursor: nextCursor, agentCursorTokenKey: tokenStorageKey(this.data.token) });
+      this.drainAgentMessageQueue();
       if (this.agentSeenMessageIds.size > 500) this.agentSeenMessageIds.clear();
       this.setData({
         agentPolling: false,
         agentStatus: this.speechActive || this.speechQueue.length
           ? "正在播报"
-          : (this.data.transcriptionListening ? "正在聆听" : "消息队列在线"),
-        transcriptionSyncLabel: "主动队列在线"
+          : (this.hasBlockedAgentMessages()
+            ? "TTS 失败，单击重试"
+            : (this.data.transcriptionListening ? "持续记录中" : "下行队列在线")),
+        transcriptionSyncLabel: this.transcriptQueue.length ? "待同步" : "记录已同步"
       });
       this.scheduleAgentPoll(80);
     } catch (error) {
       if (generation !== this.agentPollGeneration || !this.agentShouldPoll) return;
       if (isRabiLinkPollTimeout(error)) {
-        this.setData({ agentPolling: false, agentStatus: "消息队列在线", transcriptionSyncLabel: "主动队列在线" });
+        this.setData({
+          agentPolling: false,
+          agentStatus: this.data.transcriptionListening ? "持续记录中" : "下行队列在线",
+          transcriptionSyncLabel: this.transcriptQueue.length ? "待同步" : "记录已同步"
+        });
         this.scheduleAgentPoll(AGENT_POLL_RETRY_DELAY_MS);
         return;
       }
@@ -3754,7 +3926,12 @@ export default {
   scheduleTranscriptionRestart(delayMs = TRANSCRIPTION_RESTART_DELAY_MS) {
     this.clearTranscriptionRestart();
     if (!this.pageReady || !this.pageVisible || this.destroyed) return;
-    if (!this.data.isTranscriptionMode || !this.data.transcriptionDesired || this.recognition || this.speechActive) return;
+    const wantsTranscription = this.data.isTranscriptionMode && this.data.transcriptionDesired;
+    const wantsConfiguration = this.data.isConfigurationMode
+      && this.data.assistantListeningDesired
+      && !this.data.busy
+      && !this.data.assistantModelBusy;
+    if ((!wantsTranscription && !wantsConfiguration) || this.recognition || this.speechActive) return;
     this.transcriptionRestartTimer = setTimeout(() => {
       this.transcriptionRestartTimer = null;
       this.startTranscription();
@@ -3763,31 +3940,51 @@ export default {
 
   startTranscription() {
     if (!this.pageReady || !this.pageVisible || this.destroyed) return;
-    if (!this.data.isTranscriptionMode || !this.data.transcriptionDesired || this.recognition || this.speechActive) return;
-    if (typeof SpeechRecognition === "undefined") {
-      this.setData({
-        transcriptionDesired: false,
-        transcriptionListening: false,
-        transcriptionState: "当前运行环境不支持 ASR"
-      });
-      this.appendLog("当前 AIUI 运行环境没有 SpeechRecognition。");
+    const purpose = this.data.isConfigurationMode ? "configuration" : "transcription";
+    const wantsRecognition = purpose === "configuration"
+      ? this.data.assistantListeningDesired && !this.data.busy && !this.data.assistantModelBusy
+      : this.data.isTranscriptionMode && this.data.transcriptionDesired;
+    if (!wantsRecognition || this.recognition || this.speechActive) return;
+    const asrCapability = this.asrAdapter?.getCapability();
+    if (!asrCapability?.available) {
+      if (purpose === "configuration") {
+        this.setData({
+          assistantListeningDesired: false,
+          assistantListening: false,
+          assistantStatus: "当前运行环境不支持 ASR",
+          assistantReplyText: "请让已绑定灵珠智能体带着明确 intent 调用配置助手。"
+        });
+      } else {
+        this.setData({
+          transcriptionDesired: false,
+          transcriptionListening: false,
+          transcriptionState: "当前运行环境不支持 ASR"
+        });
+      }
+      this.appendLog(asrCapability?.reason || "当前 AIUI 运行环境没有原生 ASR。");
       return;
     }
-    const recognition = new SpeechRecognition();
+    let recognition = null;
     const roundStartedAt = Date.now();
     let roundHadResult = false;
     let roundFinished = false;
     const finishRound = (outcome) => {
       if (roundFinished) return;
       roundFinished = true;
+      if (purpose === "configuration") console.log(`[RabiLink AIUI] configuration-asr:${outcome}`);
       const ownedRecognition = this.recognition === recognition;
       if (ownedRecognition) {
         this.recognition = null;
         this.recognitionPurpose = "";
       }
-      this.setData({ transcriptionListening: false });
+      this.setData(purpose === "configuration"
+        ? { assistantListening: false }
+        : { transcriptionListening: false });
       if (!ownedRecognition || this.destroyed || !this.pageVisible) return;
-      if (!this.data.isTranscriptionMode || !this.data.transcriptionDesired || outcome === "fatal") return;
+      const stillWanted = purpose === "configuration"
+        ? this.data.isConfigurationMode && this.data.assistantListeningDesired && !this.data.assistantModelBusy
+        : this.data.isTranscriptionMode && this.data.transcriptionDesired;
+      if (!stillWanted || outcome === "fatal") return;
 
       const elapsedMs = Date.now() - roundStartedAt;
       const rapidEmptyRound = outcome === "end"
@@ -3797,59 +3994,113 @@ export default {
       if (failedRound) {
         this.transcriptionFailureCount = Number(this.transcriptionFailureCount || 0) + 1;
         if (this.transcriptionFailureCount >= TRANSCRIPTION_MAX_CONSECUTIVE_FAILURES) {
-          this.setData({
-            transcriptionDesired: false,
-            transcriptionState: "ASR 暂不可用，点击继续"
-          });
+          this.setData(purpose === "configuration"
+            ? {
+                assistantListeningDesired: false,
+                assistantStatus: "ASR 暂不可用",
+                assistantReplyText: "请重新唤醒后继续说配置命令。"
+              }
+            : {
+                transcriptionDesired: false,
+                transcriptionState: "ASR 暂不可用，点击继续"
+              });
           this.appendLog("ASR 连续快速失败，已暂停自动重试。");
           return;
         }
         const retryDelay = this.transcriptionRetryDelay();
-        this.setData({ transcriptionState: `ASR 暂不可用，${Math.ceil(retryDelay / 1000)} 秒后重试` });
+        this.setData(purpose === "configuration"
+          ? { assistantStatus: `ASR 暂不可用，${Math.ceil(retryDelay / 1000)} 秒后重试` }
+          : { transcriptionState: `ASR 暂不可用，${Math.ceil(retryDelay / 1000)} 秒后重试` });
         this.scheduleTranscriptionRestart(retryDelay);
         return;
       }
 
       this.transcriptionFailureCount = 0;
-      this.setData({ transcriptionState: "准备继续聆听" });
+      this.setData(purpose === "configuration"
+        ? { assistantStatus: "准备继续聆听" }
+        : { transcriptionState: "准备继续聆听" });
       this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
     };
-    recognition.lang = "zh-CN";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.onresult = (event) => {
-      roundHadResult = true;
-      this.transcriptionFailureCount = 0;
-      const text = extractSpeechText(event);
-      if (text) this.handleTranscriptionResult(text);
-    };
-    recognition.onerror = (event) => {
-      const errorCode = String(event?.error || "unknown");
-      const fatal = ["not-allowed", "service-not-allowed", "audio-capture"].includes(errorCode);
-      this.setData({
-        transcriptionListening: false,
-        transcriptionDesired: fatal ? false : this.data.transcriptionDesired,
-        transcriptionState: fatal ? "麦克风不可用" : "识别中断，准备重试"
-      });
-      this.appendLog(`转写识别失败：${errorCode}`);
-      finishRound(fatal ? "fatal" : "error");
-    };
-    recognition.onend = () => {
-      finishRound("end");
-    };
-    this.recognition = recognition;
-    this.recognitionPurpose = "transcription";
-    this.setData({
-      transcriptionListening: true,
-      transcriptionState: "正在聆听",
-      agentStatus: "正在聆听"
-    });
     try {
-      recognition.start();
+      recognition = this.asrAdapter.createRound({
+        onFinal: (result) => {
+          roundHadResult = true;
+          this.transcriptionFailureCount = 0;
+          if (purpose === "configuration") this.handleConfigurationSpeechResult(result.text);
+          else this.handleTranscriptionResult(result.text);
+        },
+        onError: (error) => {
+          const errorCode = String(error?.nativeCode || error?.code || "unknown");
+          const fatal = ["not-allowed", "service-not-allowed", "audio-capture"].includes(errorCode);
+          this.setData(purpose === "configuration"
+            ? {
+                assistantListening: false,
+                assistantListeningDesired: fatal ? false : this.data.assistantListeningDesired,
+                assistantStatus: fatal ? "麦克风不可用" : "识别中断，准备重试"
+              }
+            : {
+                transcriptionListening: false,
+                transcriptionDesired: fatal ? false : this.data.transcriptionDesired,
+                transcriptionState: fatal ? "麦克风不可用" : "识别中断，准备重试"
+              });
+          this.appendLog(`${purpose === "configuration" ? "配置" : "转写"}识别失败：${errorCode}`);
+          finishRound(fatal ? "fatal" : "error");
+        },
+        onEnd: () => finishRound("end")
+      });
     } catch (error) {
-      this.appendLog(`转写启动失败：${error?.message || error}`);
+      this.appendLog(`创建 AIUI 原生 ASR 失败：${error?.message || error}`);
+      finishRound("fatal");
+      return;
+    }
+    this.recognition = recognition;
+    this.recognitionPurpose = purpose;
+    if (purpose === "configuration") console.log("[RabiLink AIUI] configuration-asr:start");
+    this.setData(purpose === "configuration"
+      ? {
+          assistantListening: true,
+          assistantStatus: "正在聆听"
+        }
+      : {
+          transcriptionListening: true,
+          transcriptionState: "正在聆听",
+          agentStatus: this.hasBlockedAgentMessages() ? "TTS 失败，单击重试" : "正在聆听"
+        });
+    try {
+      this.asrAdapter.start(recognition);
+    } catch (error) {
+      this.appendLog(`${purpose === "configuration" ? "配置" : "转写"}识别启动失败：${error?.message || error}`);
       finishRound("start-error");
     }
+  },
+
+  handleConfigurationSpeechResult(text) {
+    const value = String(text || "").trim();
+    if (!value) return false;
+    const control = parseConfigurationIntent(value);
+    if (control.command === VOICE_COMMANDS.SWITCH_TO_TRANSCRIPTION) {
+      this.setData({
+        assistantUserText: value,
+        assistantLastRequest: value,
+        assistantListening: false,
+        assistantModelBusy: false
+      });
+      this.switchToTranscription("voice");
+      return true;
+    }
+    console.log("[RabiLink AIUI] configuration-asr:result");
+    this.setData({
+      assistantUserText: value,
+      assistantLastRequest: value,
+      assistantListening: false,
+      assistantModelBusy: true,
+      assistantModelState: "原生 AI 理解中",
+      assistantStatus: "正在理解",
+      assistantReplyText: "正在理解你的配置需求。",
+      assistantCanRetry: false
+    });
+    void this.interpretConfigurationSpeech(value);
+    return true;
   },
 
   handleTranscriptionResult(text) {
@@ -3871,23 +4122,37 @@ export default {
       void this.flushTranscriptQueue();
       return;
     }
+    const policyResult = this.transcriptPolicy?.evaluate(value, Date.now())
+      || { accepted: true, text: value, reason: "accepted" };
+    if (!policyResult.accepted) {
+      this.setData({
+        transcriptionText: value,
+        transcriptionState: "正在聆听"
+      });
+      this.appendLog(`ASR 已过滤（${policyResult.reason}）：${value}`);
+      return;
+    }
     const sequence = this.data.transcriptionSequence + 1;
     const segment = {
       id: transcriptSegmentId(sequence),
-      text: value,
+      text: policyResult.text,
       sessionId: this.data.transcriptionSessionId,
       sequence,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      transcriptPolicy: this.transcriptPolicy?.version || ""
     };
-    this.transcriptQueue = saveTranscriptQueue([...this.transcriptQueue, segment]);
+    this.transcriptQueue = saveTranscriptQueue(
+      [...this.transcriptQueue, segment],
+      tokenStorageKey(this.data.token)
+    );
     this.setData({
-      transcriptionText: value,
+      transcriptionText: policyResult.text,
       transcriptionSequence: sequence,
       transcriptionPendingCount: this.transcriptQueue.length,
-      transcriptionSyncLabel: this.data.token ? "发送给 Agent" : "等待智能体连接",
-      agentStatus: this.data.token ? "正在发送" : "等待智能体连接"
+      transcriptionSyncLabel: this.data.token ? "保存会话记录" : "等待智能体连接",
+      agentStatus: this.data.token ? "正在同步记录" : "等待智能体连接"
     });
-    this.appendLog(`ASR ${sequence}：${value}`);
+    this.appendLog(`ASR ${sequence}：${policyResult.text}`);
     void this.flushTranscriptQueue();
   },
 
@@ -3896,7 +4161,7 @@ export default {
       if (!this.transcriptQueue.length) {
         this.setData({
           transcriptionPendingCount: 0,
-          transcriptionSyncLabel: this.data.token ? "主动队列在线" : "等待智能体连接"
+          transcriptionSyncLabel: this.data.token ? "记录已同步" : "等待智能体连接"
         });
       }
       return;
@@ -3914,27 +4179,24 @@ export default {
         const segment = this.transcriptQueue[0];
         this.setData({
           transcriptionPendingCount: this.transcriptQueue.length,
-          transcriptionSyncLabel: "发送给 Agent",
-          agentStatus: "正在发送"
+          transcriptionSyncLabel: "保存会话记录",
+          agentStatus: "正在同步记录"
         });
-        const response = await publishRabiLinkVoiceInput(this.config(), segment);
-        if (!this.data.agentCursor) {
-          const cursor = String(response.nextCursor || response.cursor || "").trim();
-          if (cursor) {
-            this.setData({ agentCursor: cursor });
-            saveSettings({ agentCursor: cursor, agentCursorTokenKey: maskToken(this.data.token) });
-          }
-        }
+        await publishRabiLinkVoiceInput(this.config(), segment);
         this.agentShouldPoll = true;
         if (this.data.isTranscriptionMode) this.scheduleAgentPoll(0);
         if (this.transcriptQueue[0]?.id === segment.id) {
-          this.transcriptQueue = saveTranscriptQueue(this.transcriptQueue.slice(1));
+          this.transcriptQueue = saveTranscriptQueue(
+            this.transcriptQueue.slice(1),
+            tokenStorageKey(this.data.token)
+          );
         }
         this.setData({
           connected: true,
           transcriptionSyncedCount: this.data.transcriptionSyncedCount + 1,
           transcriptionPendingCount: this.transcriptQueue.length,
-          transcriptionSyncLabel: this.transcriptQueue.length ? "继续发送" : "主动队列在线"
+          transcriptionSyncLabel: this.transcriptQueue.length ? "继续同步" : "记录已同步",
+          agentStatus: this.transcriptQueue.length ? "正在同步记录" : "持续记录中，单击请 Agent 审阅"
         });
       }
     } catch (error) {
@@ -3943,7 +4205,7 @@ export default {
         transcriptionPendingCount: this.transcriptQueue.length,
         transcriptionSyncLabel: "待重试"
       });
-      this.appendLog(`Agent 请求发送失败：${error?.message || error}`);
+      this.appendLog(`会话记录同步失败：${error?.message || error}`);
     } finally {
       this.flushingTranscripts = false;
     }
@@ -3955,38 +4217,182 @@ export default {
     this.recognitionPurpose = "";
     if (recognition) {
       try {
-        if (graceful && typeof recognition.stop === "function") recognition.stop();
-        else if (typeof recognition.abort === "function") recognition.abort();
+        this.asrAdapter?.stop(recognition, { graceful });
       } catch (error) {
-        console.warn("Speech recognition stop failed:", error);
+        console.warn("AIUI native ASR stop failed:", error);
       }
     }
-    this.setData({ transcriptionListening: false });
+    this.setData({ transcriptionListening: false, assistantListening: false });
+  },
+
+  destroyConfigurationModel() {
+    this.configurationModelGeneration = Number(this.configurationModelGeneration || 0) + 1;
+    this.configurationPromptGeneration = Number(this.configurationPromptGeneration || 0) + 1;
+    if (this.configurationPromptTimer) {
+      clearTimeout(this.configurationPromptTimer);
+      this.configurationPromptTimer = null;
+    }
+    const session = this.configurationModel;
+    const listener = this.configurationModelToolListener;
+    this.configurationModel = null;
+    this.configurationModelPromise = null;
+    this.configurationModelToolListener = null;
+    this.configurationPendingToolCall = null;
+    if (session && listener && typeof session.removeEventListener === "function") {
+      try {
+        session.removeEventListener("toolcall", listener);
+      } catch (error) {
+        console.warn("LanguageModel tool listener cleanup failed:", error);
+      }
+    }
+    if (session && typeof session.destroy === "function") {
+      try {
+        session.destroy();
+      } catch (error) {
+        console.warn("LanguageModel cleanup failed:", error);
+      }
+    }
+    if (!this.destroyed) {
+      this.setData({ assistantModelBusy: false, assistantModelState: "原生 AI 待命" });
+    }
+  },
+
+  async ensureConfigurationModel() {
+    if (this.configurationModel) return this.configurationModel;
+    if (this.configurationModelPromise) return this.configurationModelPromise;
+    if (typeof LanguageModel === "undefined") return null;
+    const generation = Number(this.configurationModelGeneration || 0);
+    const creation = (async () => {
+      const availability = typeof LanguageModel.availability === "function"
+        ? await LanguageModel.availability()
+        : "available";
+      if (availability !== "available") return null;
+      const session = await LanguageModel.create(configurationLanguageModelOptions());
+      if (generation !== this.configurationModelGeneration || this.destroyed) {
+        if (session && typeof session.destroy === "function") session.destroy();
+        return null;
+      }
+      const listener = (event) => {
+        const command = configurationCommandFromToolCall(event);
+        const pending = this.configurationPendingToolCall;
+        if (!command || !pending || pending.requestId !== this.configurationPromptGeneration || pending.command) return;
+        pending.command = command;
+      };
+      if (typeof session.addEventListener === "function") {
+        session.addEventListener("toolcall", listener);
+      }
+      this.configurationModel = session;
+      this.configurationModelToolListener = listener;
+      if (!this.destroyed) this.setData({ assistantModelState: "原生 AI 已连接" });
+      return session;
+    })();
+    this.configurationModelPromise = creation;
+    try {
+      return await creation;
+    } finally {
+      if (this.configurationModelPromise === creation) this.configurationModelPromise = null;
+    }
+  },
+
+  async promptConfigurationModel(session, text) {
+    let timeoutId = null;
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("原生 AI 理解超时")), CONFIGURATION_MODEL_TIMEOUT_MS);
+      this.configurationPromptTimer = timeoutId;
+    });
+    try {
+      return await Promise.race([session.prompt(text), timeout]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (this.configurationPromptTimer === timeoutId) this.configurationPromptTimer = null;
+    }
+  },
+
+  async interpretConfigurationSpeech(text) {
+    const value = String(text || "").trim();
+    if (!value) return false;
+    const requestId = Number(this.configurationPromptGeneration || 0) + 1;
+    this.configurationPromptGeneration = requestId;
+    try {
+      const session = await this.ensureConfigurationModel();
+      if (requestId !== this.configurationPromptGeneration || this.destroyed || !this.data.isConfigurationMode) return false;
+      if (!session) {
+        const fallback = parseConfigurationIntent(value);
+        this.setData({ assistantModelBusy: false, assistantModelState: "原生 AI 不可用" });
+        if (fallback.command !== VOICE_COMMANDS.UNKNOWN) {
+          const result = await Promise.resolve(this.executeConfigurationIntent(fallback.command, "model-fallback", value));
+          if (this.data.isConfigurationMode && this.data.assistantListeningDesired && !this.data.busy && !this.speechActive) {
+            this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
+          }
+          return result;
+        }
+        const unavailableMessage = "当前环境没有原生 AI。请重试，或直接说一条明确配置命令。";
+        this.say(unavailableMessage, { assistantStatus: "原生 AI 不可用", assistantCanRetry: true });
+        return false;
+      }
+
+      const pending = { requestId, command: "" };
+      this.configurationPendingToolCall = pending;
+      const reply = await this.promptConfigurationModel(session, value);
+      if (requestId !== this.configurationPromptGeneration || this.destroyed || !this.data.isConfigurationMode) return false;
+      this.configurationPendingToolCall = null;
+      if (pending.command) {
+        this.setData({
+          assistantModelBusy: false,
+          assistantModelState: "原生 AI 已理解",
+          assistantStatus: "正在执行"
+        });
+        const result = await Promise.resolve(this.executeConfigurationIntent(pending.command, "language-model", value));
+        if (this.data.isConfigurationMode && this.data.assistantListeningDesired && !this.data.busy && !this.speechActive) {
+          this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
+        }
+        return result;
+      }
+
+      const clarification = String(reply || "").trim().slice(0, 160)
+        || "我还不能确定要修改哪一项，请再具体一点。";
+      this.setData({ assistantModelBusy: false, assistantModelState: "原生 AI 已连接" });
+      this.say(clarification, { assistantStatus: "需要确认", assistantCanRetry: true });
+      return false;
+    } catch (error) {
+      if (requestId !== this.configurationPromptGeneration || this.destroyed) return false;
+      this.appendLog(`原生 AI 理解失败：${error?.message || error}`);
+      this.destroyConfigurationModel();
+      const failureMessage = "原生 AI 暂时没有完成理解，请重试。";
+      this.setData({ assistantModelBusy: false, assistantModelState: "原生 AI 暂不可用" });
+      this.say(failureMessage, { assistantStatus: "原生 AI 暂不可用", assistantCanRetry: true });
+      return false;
+    } finally {
+      if (this.configurationPendingToolCall?.requestId === requestId) this.configurationPendingToolCall = null;
+    }
   },
 
   retryConfigurationIntent() {
     const value = String(this.data.assistantLastRequest || "").trim();
     if (!value) {
       this.setData({
-        assistantStatus: "等待原生 Agent",
-        assistantReplyText: "请向眼镜助手提出配置需求；它会带着明确指令重新调用配置助手。"
+        assistantStatus: "准备聆听",
+        assistantReplyText: "请直接描述要读取、修改或运行的配置。"
       });
+      this.resumeConfigurationListening("retry");
       return false;
     }
-    return this.executeConfigurationIntent(value, "retry");
+    return this.handleConfigurationSpeechResult(value);
   },
 
-  executeConfigurationIntent(text, source = "native-agent") {
+  executeConfigurationIntent(text, source = "native-agent", displayText = "") {
     const value = String(text || "").trim();
     if (!value) return false;
+    const visibleValue = String(displayText || value).trim();
     this.appendLog(`配置指令（${source}）：${value}`);
     this.setData({
-      assistantUserText: value,
-      assistantLastRequest: value,
+      assistantUserText: visibleValue,
+      assistantLastRequest: visibleValue,
       assistantStatus: "正在处理",
       assistantCanRetry: false
     });
     const parsed = parseConfigurationIntent(value);
+    if (source === "language-model") console.log(`[RabiLink AIUI] configuration-ai:dispatch:${parsed.command}`);
     if (parsed.command === VOICE_COMMANDS.SWITCH_TO_CONFIGURATION) return this.requestConfigurationAssistant("voice");
     if (parsed.command === VOICE_COMMANDS.SWITCH_TO_TRANSCRIPTION) return this.switchToTranscription("voice");
     if (parsed.command === VOICE_COMMANDS.PAUSE_TRANSCRIPTION) return this.pauseTranscription();
@@ -4096,12 +4502,16 @@ export default {
       this.say("已切到上一台 PC。");
       return;
     }
+    const unsupportedMessage = "我还不能执行这句话。请说读取配置、连接服务器或切回连接对话。";
     this.setData({
       assistantStatus: "需要明确指令",
-      assistantReplyText: "原生 Agent 尚未把需求转换成可执行的配置指令，请让它明确要读取或修改的项目。",
+      assistantReplyText: unsupportedMessage,
       assistantCanRetry: true
     });
     this.appendLog(`未识别配置指令：${value}`);
+    if (source === "language-model" || source === "model-fallback") {
+      this.say(unsupportedMessage, { assistantStatus: "需要明确指令", assistantCanRetry: true });
+    }
     return false;
   },
 
@@ -4123,18 +4533,30 @@ export default {
       });
     }
     if (this.data.isTranscriptionMode && options.allowInTranscription !== true) return;
-    this.enqueueSpeech(value, { agentSpeech });
+    return this.enqueueSpeech(value, {
+      agentSpeech,
+      agentMessageId: String(options.agentMessageId || "").trim()
+    });
   },
 
   enqueueSpeech(text, options = {}) {
-    if (typeof speechSynthesis === "undefined" || typeof SpeechSynthesisUtterance === "undefined") {
-      return;
+    const ttsCapability = this.ttsAdapter?.getCapability();
+    if (!ttsCapability?.available) {
+      this.appendLog(ttsCapability?.reason || "当前 AIUI 运行环境没有原生 TTS。");
+      return false;
     }
     this.speechQueue.push({
       text: String(text || ""),
-      agentSpeech: options.agentSpeech === true
+      agentSpeech: options.agentSpeech === true,
+      agentMessageId: String(options.agentMessageId || "").trim(),
+      configurationSpeech: options.agentSpeech !== true && this.data.isConfigurationMode
     });
     this.startNextSpeech();
+    return true;
+  },
+
+  speechPlaybackWatchdogMs(text) {
+    return estimatedSpeechPlaybackMs(text);
   },
 
   startNextSpeech() {
@@ -4148,25 +4570,45 @@ export default {
       this.startNextSpeech();
       return;
     }
+    if (item.configurationSpeech && !this.data.isConfigurationMode) {
+      this.startNextSpeech();
+      return;
+    }
     const generation = Number(this.speechGeneration || 0);
     this.speechActive = true;
-    if (item.agentSpeech) {
+    if (item.agentSpeech || item.configurationSpeech) {
       this.clearTranscriptionRestart();
       this.stopRecognition(false);
+    }
+    if (item.agentSpeech) {
       this.setData({
         agentSpeaking: true,
         agentStatus: "正在播报",
         transcriptionState: "Agent 正在播报"
+      });
+    } else if (item.configurationSpeech) {
+      this.setData({
+        assistantListening: false,
+        assistantStatus: "正在播报"
       });
     }
     let finished = false;
     const finishSpeech = (error) => {
       if (finished) return;
       finished = true;
+      if (this.currentSpeechTimer) {
+        clearTimeout(this.currentSpeechTimer);
+        this.currentSpeechTimer = null;
+      }
       if (generation !== this.speechGeneration) return;
       this.speechActive = false;
       this.currentUtterance = null;
+      this.currentTtsAttempt = null;
       if (error) this.appendLog(`TTS 失败：${error?.message || error}`);
+      else this.transcriptPolicy?.rememberPlayback(item.text, Date.now());
+      const failedAttempts = item.agentSpeech && item.agentMessageId
+        ? this.finishPersistedAgentMessage(item.agentMessageId, error || null)
+        : 0;
       if (this.speechQueue.length) {
         this.startNextSpeech();
         return;
@@ -4174,21 +4616,40 @@ export default {
       if (item.agentSpeech) {
         this.setData({
           agentSpeaking: false,
-          agentStatus: "可以继续说话",
+          agentStatus: error
+            ? (failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? "TTS 失败，单击重试" : "TTS 失败，正在重试")
+            : "可以继续说话",
           transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停"
         });
         if (this.data.transcriptionDesired && this.data.isTranscriptionMode && this.pageVisible && !this.destroyed) {
           this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
         }
+        if (!error) this.drainAgentMessageQueue();
+        else setTimeout(
+          () => this.drainAgentMessageQueue(),
+          failedAttempts >= AGENT_TTS_MAX_ATTEMPTS ? 0 : AGENT_TTS_RETRY_DELAY_MS * Math.max(1, failedAttempts)
+        );
+      } else if (item.configurationSpeech && this.data.isConfigurationMode) {
+        this.setData({ assistantStatus: "可以继续说" });
+        if (this.data.assistantListeningDesired && this.pageVisible && !this.destroyed) {
+          this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
+        }
       }
     };
     try {
-      const utterance = new SpeechSynthesisUtterance(item.text);
-      utterance.lang = "zh-CN";
-      utterance.onend = () => finishSpeech();
-      utterance.onerror = (event) => finishSpeech(event?.error || "speech synthesis error");
-      this.currentUtterance = utterance;
-      speechSynthesis.speak(utterance);
+      this.currentSpeechTimer = setTimeout(
+        () => finishSpeech(),
+        this.speechPlaybackWatchdogMs(item.text)
+      );
+      const playback = this.ttsAdapter.speak(item.text, {
+        messageId: item.agentMessageId,
+        mode: "enqueue",
+        onEnd: () => finishSpeech(),
+        onError: (error) => finishSpeech(error)
+      });
+      if (finished) return;
+      this.currentUtterance = playback.utterance;
+      this.currentTtsAttempt = playback.attempt;
     } catch (error) {
       finishSpeech(error);
     }
@@ -4198,13 +4659,17 @@ export default {
     this.speechGeneration = Number(this.speechGeneration || 0) + 1;
     this.speechQueue = [];
     this.speechActive = false;
+    this.agentSpeechQueuedId = "";
     this.currentUtterance = null;
-    if (typeof speechSynthesis !== "undefined" && typeof speechSynthesis.cancel === "function") {
-      try {
-        speechSynthesis.cancel();
-      } catch (error) {
-        this.appendLog(`停止 TTS 失败：${error?.message || error}`);
-      }
+    this.currentTtsAttempt = null;
+    if (this.currentSpeechTimer) {
+      clearTimeout(this.currentSpeechTimer);
+      this.currentSpeechTimer = null;
+    }
+    try {
+      this.ttsAdapter?.cancel();
+    } catch (error) {
+      this.appendLog(`停止 TTS 失败：${error?.message || error}`);
     }
     if (this.data.agentSpeaking) this.setData({ agentSpeaking: false });
   },
@@ -4236,6 +4701,9 @@ export default {
     } finally {
       this.setData({ busy: false });
       this.updateDerivedState();
+      if (this.data.isConfigurationMode && this.data.assistantListeningDesired && !this.speechActive) {
+        this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
+      }
     }
   },
 
@@ -4412,32 +4880,35 @@ export default {
 <page>
   <view class="pageScroll">
     <view class="page">
-    <view class="compactCard {{modeFrameRelayout ? 'modeFrameRelayout' : ''}}">
-      <view class="compactHeader">
+    <view class="unifiedModeHud {{modeFrameRelayout ? 'modeFrameRelayout' : ''}}">
+      <view class="compactHeader modeHeader">
         <text class="compactBrand">RabiLink</text>
-        <view class="modeSwitch compactModeSwitch">
-          <view class="modeSwitchThumb {{isConfigurationMode ? 'modeSwitchThumbRight' : ''}}"></view>
-          <view class="modeSwitchOption {{isTranscriptionMode ? 'modeSwitchOptionActive' : ''}}" bindtap="selectTranscriptionMode">
-            <text>连接对话</text>
-          </view>
-          <view class="modeSwitchOption {{isConfigurationMode ? 'modeSwitchOptionActive' : ''}}" bindtap="selectConfigurationMode">
-            <text>配置助手</text>
-          </view>
+        <text class="compactLive {{transcriptionListening || assistantListening || assistantModelBusy || agentPolling || agentSpeaking || busy ? 'compactLiveOn' : ''}}">{{isTranscriptionMode ? (agentSpeaking ? 'TTS' : (transcriptionListening ? 'LIVE' : (agentPolling ? 'LINK' : 'PAUSE'))) : (assistantModelBusy ? 'AI' : (busy ? 'WORK' : (assistantListening ? 'LIVE' : 'READY')))}}</text>
+      </view>
+      <view class="modeSwitch compactModeSwitch">
+        <view class="modeSwitchThumb {{isConfigurationMode ? 'modeSwitchThumbRight' : ''}}"></view>
+        <view class="modeSwitchOption {{isTranscriptionMode ? 'modeSwitchOptionActive' : ''}}" bindtap="selectTranscriptionMode">
+          <text>连接对话</text>
         </view>
-        <text class="compactLive {{transcriptionListening || agentPolling || agentSpeaking || busy ? 'compactLiveOn' : ''}}">{{isTranscriptionMode ? (agentSpeaking ? 'TTS' : (transcriptionListening ? 'LIVE' : (agentPolling ? 'LINK' : 'PAUSE'))) : (busy ? 'WORK' : 'READY')}}</text>
+        <view class="modeSwitchOption {{isConfigurationMode ? 'modeSwitchOptionActive' : ''}}" bindtap="selectConfigurationMode">
+          <text>配置助手</text>
+        </view>
       </view>
-      <view class="compactStatusRow">
-        <text class="compactStatusPrimary">{{isTranscriptionMode ? agentStatus : assistantStatus}}</text>
-        <text class="compactStatusSecondary">{{isTranscriptionMode ? transcriptionSyncLabel : (connected ? 'Relay 在线' : '等待连接')}}</text>
+      <view class="compactStatusRow assistantStatusRow">
+        <text class="compactStatusPrimary">{{isTranscriptionMode ? transcriptionText : assistantUserText}}</text>
+        <text class="compactStatusSecondary">{{isTranscriptionMode ? agentStatus : assistantStatus}}</text>
       </view>
-      <text class="compactMainText">{{isTranscriptionMode ? agentReplyText : assistantReplyText}}</text>
-      <view class="deviceFooter compactDeviceFooter">
+      <view class="assistantConversation compactConversation">
+        <text class="compactMainText assistantLineText">{{isTranscriptionMode ? agentReplyText : assistantReplyText}}</text>
+      </view>
+      <view class="deviceFooter compactDeviceFooter hudInfoRow">
         <view class="deviceReadout">
           <view class="clockIcon"><view class="clockHourHand"></view><view class="clockMinuteHand"></view></view>
           <text class="deviceReadoutText">{{currentTime}}</text>
         </view>
         <text class="compactMeta">{{isTranscriptionMode ? transcriptionElapsed : '滑动切换'}}</text>
         <view class="deviceReadout deviceReadoutRight">
+          <text class="releaseVersion">v{{releaseVersion}}</text>
           <view class="batteryIcon">
             <view class="batteryBody">
               <view class="batteryFill {{batteryFillClass}}"></view>
@@ -4449,75 +4920,6 @@ export default {
         </view>
       </view>
     </view>
-
-    <view class="unifiedModeHud {{modeFrameRelayout ? 'modeFrameRelayout' : ''}}">
-      <view class="assistantClearZone"></view>
-
-      <view class="modeHeader">
-        <text class="modeProduct">RabiLink</text>
-        <view class="modeSwitch">
-          <view class="modeSwitchThumb {{isConfigurationMode ? 'modeSwitchThumbRight' : ''}}"></view>
-          <view class="modeSwitchOption {{isTranscriptionMode ? 'modeSwitchOptionActive' : ''}}" bindtap="selectTranscriptionMode">
-            <text>连接对话</text>
-          </view>
-          <view class="modeSwitchOption {{isConfigurationMode ? 'modeSwitchOptionActive' : ''}}" bindtap="selectConfigurationMode">
-            <text>配置助手</text>
-          </view>
-        </view>
-        <text class="modeGestureHint">滑动切换</text>
-        <text class="pill {{transcriptionListening || agentPolling || agentSpeaking || busy ? 'pillOk' : ''}}">{{isTranscriptionMode ? (agentSpeaking ? 'TTS' : (transcriptionListening ? 'LIVE' : (agentPolling ? 'LINK' : 'PAUSE'))) : (busy ? 'WORK' : 'READY')}}</text>
-      </view>
-
-      <view class="assistantStatusRow">
-        <text class="assistantState">{{isTranscriptionMode ? agentStatus : assistantStatus}}</text>
-        <text class="muted">{{isTranscriptionMode ? transcriptionState : '原生 Agent 配置'}}</text>
-      </view>
-
-      <view class="assistantConversation">
-        <view class="assistantLine">
-          <text class="assistantSpeaker">你</text>
-          <text class="assistantLineText {{isTranscriptionMode ? 'transcriptionLineText' : ''}}">{{isTranscriptionMode ? transcriptionText : assistantUserText}}</text>
-        </view>
-        <view class="assistantLine assistantReplyLine">
-          <text class="assistantSpeaker">{{isTranscriptionMode ? 'Agent' : '助手'}}</text>
-          <text class="assistantLineText assistantReplyText">{{isTranscriptionMode ? agentReplyText : assistantReplyText}}</text>
-        </view>
-      </view>
-
-      <view class="hudInfoRow assistantInfoRow">
-        <text class="assistantModeMeta">{{isTranscriptionMode ? transcriptionElapsed : '原生 Agent 调用'}}</text>
-        <view class="utilityActions">
-          <view class="utilityAction {{isConfigurationMode ? 'statusHidden' : ''}}" bindtap="toggleModePrimaryAction">
-            <text class="utilityIcon">{{transcriptionDesired ? 'Ⅱ' : '▶'}}</text>
-            <text>{{transcriptionDesired ? '暂停' : '继续'}}</text>
-          </view>
-          <view class="utilityAction {{isConfigurationMode && !assistantCanRetry ? 'statusHidden' : ''}}" bindtap="retryModeAction">
-            <text class="utilityIcon">↻</text>
-            <text>重试</text>
-          </view>
-        </view>
-      </view>
-
-      <view class="deviceFooter">
-        <view class="deviceReadout">
-          <view class="clockIcon"><view class="clockHourHand"></view><view class="clockMinuteHand"></view></view>
-          <text class="deviceReadoutText">{{currentTime}}</text>
-        </view>
-        <text class="footerModeHint">滑动切换</text>
-        <view class="deviceReadout deviceReadoutRight">
-          <view class="batteryIcon">
-            <view class="batteryBody">
-              <view class="batteryFill {{batteryFillClass}}"></view>
-              <text class="chargingMark {{batteryCharging ? '' : 'statusHidden'}}">⚡</text>
-            </view>
-            <view class="batteryCap"></view>
-          </view>
-          <text class="deviceReadoutText">{{batteryText}}</text>
-        </view>
-      </view>
-    </view>
-
-
   </view>
 </page>
 
@@ -4531,6 +4933,7 @@ export default {
 }
 
 .page {
+  position: relative;
   width: var(--app-width, 480px);
   height: 100%;
   min-height: 100%;
@@ -4545,7 +4948,10 @@ export default {
 .compactCard {
   display: none;
   flex-direction: column;
-  gap: 3px;
+  width: 424px;
+  height: 87px;
+  max-height: 87px;
+  gap: 2px;
   min-width: 0;
   overflow: hidden;
 }
@@ -4572,22 +4978,44 @@ export default {
   width: 424px;
   justify-content: space-between;
   gap: 6px;
+  overflow: hidden;
+}
+
+.compactHeader {
+  flex: 0 0 16px;
+  height: 16px;
+  max-height: 16px;
+}
+
+.compactStatusRow {
+  flex: 0 0 14px;
+  height: 14px;
+  max-height: 14px;
 }
 
 .compactBrand {
+  display: block;
+  height: 14px;
+  max-height: 14px;
+  overflow: hidden;
   color: var(--color-text-primary, #40ff5e);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 18px;
+  line-height: 14px;
 }
 
 .compactLive {
-  padding: 1px 5px;
+  height: 14px;
+  max-height: 14px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  overflow: hidden;
   border: 1px solid rgba(64, 255, 94, 0.4);
   border-radius: 6px;
   color: rgba(64, 255, 94, 0.6);
   font-size: 9px;
-  line-height: 12px;
+  line-height: 10px;
+  white-space: nowrap;
 }
 
 .compactLiveOn {
@@ -4607,47 +5035,59 @@ export default {
 }
 
 .compactStatusPrimary {
+  flex: 1;
+  min-width: 0;
   color: var(--color-text-primary, #40ff5e);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 15px;
+  line-height: 12px;
 }
 
 .compactStatusSecondary {
-  min-width: 0;
+  flex: 0 0 90px;
+  width: 90px;
+  min-width: 90px;
   color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
-  font-size: 11px;
-  line-height: 15px;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: right;
 }
 
 .compactMainText {
+  flex: 0 0 16px;
   width: 424px;
-  min-height: 20px;
+  height: 16px;
+  min-height: 16px;
+  max-height: 16px;
   color: var(--color-text-primary, #40ff5e);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 14px;
 }
 
 .compactMeta {
   color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
   font-size: 10px;
-  line-height: 13px;
+  line-height: 10px;
 }
 
 .unifiedModeHud {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  width: 100%;
+  width: 424px;
+  height: 87px;
+  max-height: 87px;
   min-width: 0;
-  gap: 4px;
-  min-height: 320px;
+  gap: 2px;
+  min-height: 87px;
   overflow: hidden;
 }
 
 .modeFrameRelayout {
   box-sizing: border-box;
-  opacity: 0;
   padding-right: 1px;
 }
 
@@ -4664,36 +5104,63 @@ export default {
 }
 
 .assistantStatusRow {
+  flex: 0 0 14px;
+  width: 424px;
+  height: 14px;
+  max-height: 14px;
   justify-content: space-between;
-  gap: 10px;
-  min-height: 22px;
+  gap: 6px;
+  min-height: 14px;
+  overflow: hidden;
 }
 
 .assistantState {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   color: var(--color-text-primary, #40ff5e);
   font-size: 16px;
   font-weight: 700;
   line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistantStatusRow .muted {
+  display: block;
+  flex: 0 0 124px;
+  width: 124px;
+  min-width: 124px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .assistantConversation {
   display: flex;
+  flex: 0 0 16px;
   flex-direction: column;
   justify-content: center;
-  gap: 5px;
-  min-height: 70px;
-  max-height: 70px;
-  padding: 5px 10px;
+  width: 424px;
+  min-height: 16px;
+  height: 16px;
+  max-height: 16px;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
-  border-left: 2px solid var(--color-primary, #40ff5e);
+  border-left: 0 solid var(--color-primary, #40ff5e);
   background-color: #000000;
 }
 
 .assistantLine {
+  flex: 0 0 28px;
+  height: 28px;
+  max-height: 28px;
   align-items: flex-start;
   gap: 8px;
-  min-height: 27px;
+  min-height: 28px;
   overflow: hidden;
 }
 
@@ -4708,7 +5175,8 @@ export default {
 .assistantLineText {
   flex: 1;
   min-width: 0;
-  max-height: 32px;
+  height: 28px;
+  max-height: 28px;
   overflow: hidden;
   color: var(--color-text-primary, #40ff5e);
   font-size: 14px;
@@ -4728,20 +5196,25 @@ export default {
 }
 
 .modeHeader {
+  flex: 0 0 16px;
   width: 100%;
+  height: 16px;
+  max-height: 16px;
   min-width: 0;
   box-sizing: border-box;
   justify-content: space-between;
-  gap: 6px;
-  min-height: 28px;
+  gap: 8px;
+  min-height: 16px;
+  overflow: hidden;
 }
 
 .modeProduct {
-  flex: 0 0 54px;
+  flex: 1;
+  min-width: 0;
   color: var(--color-text-primary, #40ff5e);
   font-size: 13px;
   font-weight: 700;
-  line-height: 18px;
+  line-height: 16px;
 }
 
 .modeSwitch {
@@ -4789,6 +5262,29 @@ export default {
   font-weight: 700;
 }
 
+.immersiveModeSwitch {
+  flex: 0 0 30px;
+  width: 448px;
+  height: 30px;
+  max-height: 30px;
+  overflow: hidden;
+}
+
+.immersiveModeSwitch .modeSwitchThumb {
+  width: 221px;
+  height: 26px;
+}
+
+.immersiveModeSwitch .modeSwitchThumbRight {
+  left: 224px;
+}
+
+.immersiveModeSwitch .modeSwitchOption {
+  width: 223px;
+  height: 28px;
+  line-height: 18px;
+}
+
 .modeGestureHint {
   flex: 0 0 54px;
   color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
@@ -4798,9 +5294,13 @@ export default {
 }
 
 .hudInfoRow {
+  flex: 0 0 20px;
+  height: 20px;
+  max-height: 20px;
   justify-content: space-between;
   gap: 8px;
   min-height: 20px;
+  overflow: hidden;
 }
 
 .utilityActions {
@@ -4846,13 +5346,17 @@ export default {
 }
 
 .deviceFooter {
+  flex: 0 0 18px;
   width: 100%;
+  height: 18px;
+  max-height: 18px;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
   min-height: 18px;
   justify-content: space-between;
   gap: 8px;
+  overflow: hidden;
 }
 
 .deviceReadout {
@@ -4861,15 +5365,29 @@ export default {
 }
 
 .deviceReadoutRight {
+  flex: 0 0 100px;
+  width: 100px;
+  min-width: 100px;
   justify-content: flex-end;
+  overflow: hidden;
 }
 
 .deviceReadoutText,
-.footerModeHint {
+.footerModeHint,
+.releaseVersion {
+  display: block;
+  overflow: hidden;
   color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
   font-size: 10px;
   line-height: 14px;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.releaseVersion {
+  flex: 0 0 38px;
+  width: 38px;
+  text-align: right;
 }
 
 .footerModeHint {
@@ -4962,31 +5480,82 @@ export default {
 }
 
 .compactModeSwitch {
-  flex-basis: 192px;
-  width: 192px;
+  flex: 0 0 20px;
+  flex-basis: 20px;
+  width: 424px;
   height: 20px;
+  max-height: 20px;
+  overflow: hidden;
   border-radius: 6px;
 }
 
 .compactModeSwitch .modeSwitchThumb {
-  width: 93px;
+  width: 209px;
   height: 16px;
 }
 
 .compactModeSwitch .modeSwitchThumbRight {
-  left: 96px;
+  left: 212px;
 }
 
 .compactModeSwitch .modeSwitchOption {
-  width: 95px;
+  width: 211px;
   height: 18px;
-  font-size: 9px;
+  font-size: 10px;
   line-height: 18px;
 }
 
 .compactDeviceFooter {
+  flex: 0 0 13px;
   width: 424px;
+  height: 13px;
   min-height: 13px;
+  max-height: 13px;
+  overflow: hidden;
+}
+
+.compactDeviceFooter .deviceReadout,
+.compactDeviceFooter .deviceReadoutRight {
+  height: 12px;
+  max-height: 12px;
+  overflow: hidden;
+}
+
+.compactDeviceFooter .deviceReadoutText,
+.compactDeviceFooter .releaseVersion,
+.compactDeviceFooter .compactMeta {
+  height: 10px;
+  max-height: 10px;
+  font-size: 8px;
+  line-height: 10px;
+}
+
+.compactDeviceFooter .clockIcon {
+  width: 10px;
+  height: 10px;
+}
+
+.compactDeviceFooter .batteryIcon {
+  height: 10px;
+}
+
+.compactDeviceFooter .batteryBody {
+  height: 10px;
+}
+
+.compactConversation .assistantLineText {
+  display: block;
+  width: 424px;
+  height: 16px;
+  min-height: 16px;
+  max-height: 16px;
+  overflow: hidden;
+  color: var(--color-text-primary, #40ff5e);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .topbar {
@@ -5384,11 +5953,14 @@ export default {
   }
 
   .compactCard {
-    display: flex;
+    display: none;
   }
 
   .unifiedModeHud {
-    display: none;
+    left: 12px;
+    bottom: 54px;
+    display: flex;
+    width: 424px;
   }
 }
 </style>

@@ -56,6 +56,20 @@ QQ / 微信 / 飞书 / Discord / Slack / Email / Webhook / Scheduler
   Chat Platform / External System
 ```
 
+## Codex 集成的五层边界
+
+桌面宿主的名称会变化，协议和领域概念不能跟着混成一个字符串：
+
+| 层 | RabiRoute 中的含义 | 当前选择 |
+| --- | --- | --- |
+| Provider | 提供账号、服务和模型能力 | OpenAI |
+| Agent / Runtime | 维护线程、turn、工具调用和执行 | Codex，adapter id 为 `codex` |
+| Transport | RabiRoute 与 runtime 的机器接口 | `codex app-server` stdio JSONL 请求、响应与通知 |
+| Host | 用户查看、聊天和进入 Codex 模式的桌面界面 | ChatGPT desktop，可选 |
+| Model | runtime 为 turn 选择的具体模型 | 默认跟随 runtime，允许 `agentModel` 显式覆盖 |
+
+ChatGPT desktop 是宿主，不是 transport；Codex 是 agent/runtime，不是 model；OpenAI 是 provider，不是 adapter。RabiRoute 的主链路不依赖 Desktop IPC，也不启用实验性 app-server WebSocket。
+
 ## 核心分层
 
 ### 1. Platform Adapter
@@ -80,7 +94,7 @@ QQ / 微信 / 飞书 / Discord / Slack / Email / Webhook / Scheduler
 
 - `data/group-messages.jsonl`
 - `data/private-messages.jsonl`
-- `data/codex-notifications.jsonl`
+- `data/agent-packets.jsonl`
 
 未来应补齐：
 
@@ -159,7 +173,7 @@ routes:
 
 当前内置：
 
-- `codex`：通过 Codex Desktop IPC 投递到固定线程，支持 `start` 和运行中 `steer`；旧 app-server 通道只作为内部 fallback / 调试能力保留。
+- `codex`：通过官方 `codex app-server` 的 stdio 协议投递到固定线程，支持空闲时 `turn/start` 和运行中 `turn/steer`。ChatGPT desktop 只负责可选的桌面呈现，不参与线程寻址或消息投递。
 
 未来 Agent 端适配器类型：
 
@@ -178,16 +192,21 @@ routes:
 当前 Codex 规则：
 
 - 固定线程名，例如 `QQ 消息监听`。
-- 空闲时 `start` 新 turn。
-- 运行中用 `steer` 追加引导。
+- adapter 启动 app-server 后先完成 `initialize` / `initialized` 握手，再发现、恢复或创建线程。
+- 空闲时用 `turn/start` 创建 turn。
+- 运行中用 `turn/steer` 追加引导。
 - 短时间多条消息先合并，再投递。
-- 如果 `steer` 失败且 active turn 已结束，自动回退到 `start`。
+- 如果 `turn/steer` 失败且 active turn 已结束，重新读取线程状态后回退到 `turn/start`。
+- `agentModel` 为空时通过 `model/list` 使用 runtime 当前标记的默认模型；RabiRoute 不保存一份会过期的模型默认值。
+- 默认沙箱为 `workspaceWrite`。app-server 发起的 command、file、network、permission 或 MCP 审批必须获得明确结论；未知请求、超时或连接中断都拒绝继续。
 
 这是 RabiRoute 很重要的边界：它控制“投递时机和会话形态”，但不替 Agent 决定具体答案。
 
 ### 7. Action Queue / Approval
 
 负责外部写入和回复发送的安全门。
+
+这里有两道不同的门：app-server approval 管 Codex runtime 内的命令、文件、网络和工具权限；RabiRoute Action Gate 管 QQ、文档、设备和外部 API 等业务外发。两者都默认 fail closed，不能用其中一道门的允许结果替代另一道。
 
 当前只保留基础发送 API 和 `/ping` 类简单命令。
 
@@ -251,9 +270,13 @@ NapCat WebSocket Client
   -> editable templates
   -> agent adapter
        codex
+  -> codex app-server (stdio)
   -> Codex fixed thread
-       start / steer
+       turn/start / turn/steer
+       workspaceWrite / fail-closed approvals
 ```
+
+ChatGPT desktop 可以展示同一个 Codex 线程，但不在上述运行主链路中。
 
 NapCat 插件不是业务核心，它只是控制面入口：
 
@@ -284,3 +307,6 @@ NapCat plugin page
 - 不让处理端直接群发或写外部系统，除非显式授权。
 - 不把 WebUI 做成项目事实源；项目事实应进入文档、Issue、工单或数据库。
 - 不为了某个处理端的需求破坏统一事件模型。
+- 不把 provider、agent、transport、host 和 model 合并成一个品牌字段。
+- 不依赖桌面窗口、私有 IPC 或实验性 WebSocket 维持正式 Agent 投递。
+- 不硬编码随版本下线的模型名；空配置跟随 runtime 默认，显式覆盖才进入 turn。

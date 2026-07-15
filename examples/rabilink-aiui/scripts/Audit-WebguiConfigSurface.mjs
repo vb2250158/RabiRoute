@@ -89,6 +89,7 @@ const gatewayFields = [
   { key: "agentRoleId" },
   { key: "agentModel" },
   { key: "codexThreadName" },
+  { key: "copilotThreadName" },
   { key: "codexCwd" },
   { key: "copilotCliBin" },
   { key: "copilotCwd" },

@@ -106,7 +106,8 @@ export default wx;
   assert(transcriptPost.url === "https://relay.example.com/rokid/rabilink/input", "Voice input must use the message input endpoint, not a task endpoint.");
   assert(transcriptPost.method === "POST", "Voice input must use POST.");
   assert(transcriptPost.data.text === "把这一句同步到电脑", "Voice input must preserve recognized text.");
-  assert(transcriptPost.data.type === "voice_transcript", "Voice input must identify the ASR payload.");
+  assert(transcriptPost.data.type === "rabilink.observation", "Voice input must identify the record-first observation payload.");
+  assert(transcriptPost.data.deliveryMode === "observe", "Voice input must not request direct Agent delivery.");
   assert(transcriptPost.data.sessionId === "session-a" && transcriptPost.data.sequence === 7, "Voice input must preserve session ordering metadata.");
   assert(inputResponse.status === "accepted" && !Object.hasOwn(inputResponse, "taskId"), "Voice input acknowledgement must not expose a task lifecycle.");
 
@@ -118,9 +119,12 @@ export default wx;
   assert(messagesGet.url === "https://relay.example.com/rokid/rabilink/messages?after=out-10&stream=1&waitMs=1200", "Downlink stream must carry cursor, stream flag, and bounded wait time.");
   assert(messagesGet.timeout >= 6200, "Downlink stream timeout must outlive the Relay wait window.");
 
-  await api.getRabiLinkMessageStreamCursor(config);
-  const cursorGet = mock.requests.at(-1);
-  assert(cursorGet.url === "https://relay.example.com/rokid/rabilink/messages?stream=1&tail=1&waitMs=0", "First connection must bootstrap at the current stream tail.");
+  await api.getRabiLinkMessageStream(config, "", 0);
+  const backlogGet = mock.requests.at(-1);
+  assert(
+    backlogGet.url === "https://relay.example.com/rokid/rabilink/messages?after=&stream=1&waitMs=0",
+    "A first connection must request the retained app backlog instead of skipping offline messages at the current tail."
+  );
 
   await assertRejects(() => api.getMobileState({ relayBaseUrl: "", token: "test-token" }), "Relay URL is empty.");
   await assertRejects(() => api.getMobileState({ relayBaseUrl: "https://relay.example.com", token: "" }), "RabiLink token is empty.");

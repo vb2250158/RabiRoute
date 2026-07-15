@@ -44,7 +44,7 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
     private static final int REQUEST_ANDROID_RECOGNIZER_INTENT = 7103;
     private static final int REQUEST_PHONE_COMPANION_ASSOCIATION = 7104;
     private static final long NATIVE_VOICE_TIMEOUT_MS = 7000L;
-    private static final String GLASS_ASR_ASSET = "rabi-glass-test-debug.apk";
+    private static final String GLASS_ASR_ASSET = "rabi-glass-debug.apk";
     private static final String PREFS_NAME = "rokid_probe";
     private static final String PREF_ROKID_TOKEN = "rokid_token";
     private static final String PREF_NATIVE_VOICE_ACCESS_KEY = "native_voice_access_key";
@@ -594,7 +594,7 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
             return;
         }
         cxrController.queryGlassAsrApp();
-        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求查询 Rabi Glass Test 安装状态", "", "");
+        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求查询 Rabi Glass 安装状态", "", "");
         updateDashboard();
     }
 
@@ -617,22 +617,22 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
     @Override
     public void startGlassAsrApp() {
         if (!isGlassAppLinkReady()) {
-            recordResult(RokidGlassModule.CAP_GLASS_ASR, "failed", "眼镜应用会话未就绪，不能启动 Rabi Glass Test", "", "custom app session is not ready");
+            recordResult(RokidGlassModule.CAP_GLASS_ASR, "failed", "眼镜应用会话未就绪，不能启动 Rabi Glass", "", "custom app session is not ready");
             return;
         }
         cxrController.startGlassAsrApp();
-        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求启动 Rabi Glass Test", RokidCxrController.GLASS_ASR_ENTRY, "");
+        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求启动 Rabi Glass", RokidCxrController.GLASS_ASR_ENTRY, "");
         updateDashboard();
     }
 
     @Override
     public void stopGlassAsrApp() {
         if (!isGlassAppLinkReady()) {
-            recordResult(RokidGlassModule.CAP_GLASS_ASR, "failed", "眼镜应用会话未就绪，不能停止 Rabi Glass Test", "", "custom app session is not ready");
+            recordResult(RokidGlassModule.CAP_GLASS_ASR, "failed", "眼镜应用会话未就绪，不能停止 Rabi Glass", "", "custom app session is not ready");
             return;
         }
         cxrController.stopGlassAsrApp();
-        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求停止 Rabi Glass Test", "", "");
+        recordResult(RokidGlassModule.CAP_GLASS_ASR, "requested", "已请求停止 Rabi Glass", "", "");
         updateDashboard();
     }
 
@@ -2801,8 +2801,10 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
         uiViews.setActionVisible(RokidProbeUi.ACTION_ASSOCIATE_PHONE_COMPANION, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_CONNECT_PHONE_BT, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_PHONE_BT_AUTH, tokenReady);
+        uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_PHONE_P2P, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_REQUEST_PHONE_SYSTEM_INFO, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_REQUEST_PHONE_DEVICE_AUDIO_HANDSHAKE, tokenReady);
+        uiViews.setActionVisible(RokidProbeUi.ACTION_REQUEST_PHONE_DEVICE_VIDEO_AUDIO_HANDSHAKE, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_PROBE_PHONE_GLASS_DEVICE, tokenReady);
         uiViews.setActionVisible(RokidProbeUi.ACTION_STOP_GLASS_ASR, glassNativeAppReady);
     }

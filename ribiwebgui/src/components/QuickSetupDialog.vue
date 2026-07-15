@@ -22,6 +22,7 @@ const form = reactive({
   agentRoleId: "",
   agentModel: "",
   codexThreadName: "",
+  copilotThreadName: "",
   codexCwd: "",
   copilotCliBin: "",
   copilotCwd: "",
@@ -63,7 +64,7 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
 ];
 
 const quickAgentChoices: Array<{ type: AgentAdapterType; title: string; note: string; icon: string }> = [
-  { type: "codex", title: "Codex", note: "投递到当前 Codex 聊天线程", icon: "mdi-monitor-dashboard" },
+  { type: "codex", title: "Codex Agent", note: "通过 app-server stdio 投递；ChatGPT 桌面版是可选宿主", icon: "mdi-monitor-dashboard" },
   { type: "copilotCli", title: "Copilot CLI", note: "实验支持，需要本机登录状态", icon: "mdi-robot-outline" },
   { type: "marvis", title: "Marvis", note: "占位支持，人工接力模式", icon: "mdi-message-processing-outline" },
   { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" }
@@ -128,6 +129,11 @@ async function runAgentScan(): Promise<void> {
 
 const runtime = computed(() => store.selectedRuntime);
 const selectedAgent = computed<AgentAdapterType>(() => form.agentAdapters[0] ?? "codex");
+const selectedSessionName = computed(() => {
+  if (selectedAgent.value === "codex") return form.codexThreadName;
+  if (selectedAgent.value === "copilotCli") return form.copilotThreadName;
+  return "";
+});
 const roleOptions = computed(() => [
   { title: "不配置人格", value: "" },
   ...((runtime.value.roleInfo?.options || []).map(role => ({ title: role.label || role.value, value: role.value })))
@@ -146,9 +152,8 @@ function selectAgent(type: AgentAdapterType): void {
 
 function normalizeAgentAdapterValue(value: unknown): AgentAdapterType | null {
   const text = String(value || "");
-  const normalized = text === "codexDesktop" || text === "codexApp" ? "codex" : text;
-  if (normalized === "codex" || normalized === "copilotCli" || normalized === "marvis" || normalized === "astrbot") {
-    return normalized;
+  if (text === "codex" || text === "copilotCli" || text === "marvis" || text === "astrbot") {
+    return text;
   }
   return null;
 }
@@ -259,7 +264,8 @@ function agentSessionSummary(): string {
   }
   if (agentNeedsMarvisApp.value) return "不绑定会话";
   if (selectedAgent.value === "codex") return form.codexThreadName || `自动：${fallbackCodexThreadName()}`;
-  return form.codexThreadName || "未填写";
+  if (selectedAgent.value === "copilotCli") return form.copilotThreadName || "未填写";
+  return "未填写";
 }
 
 function projectItems(): string[] {
@@ -422,7 +428,7 @@ function webhookSetupHint(type: MessageAdapterType): string {
     return "需要小爱桥接层：PC 侧 xiaoai-rabiroute 服务 + 音箱侧 open-xiaoai/xiaogpt/自定义桥，把语音文本转发到这个地址。";
   }
   if (type === "rabilink") {
-    return "RabiLink 电脑端直连 Relay：在全局 RabiLink 配置里填写公网 Relay 地址和应用 token 后，可把 Rokid/灵珠文本转给 Codex，并把回复写回眼镜侧。";
+    return "RabiLink 电脑端直连 Relay：在全局 RabiLink 配置里填写公网 Relay 地址和应用 token 后，可把 Rokid/灵珠文本转给所选 Agent，并把回复写回眼镜侧。";
   }
   return "通用 Webhook 只适合未命名外部系统；如果来源是具体工具，建议添加对应的专用消息端。";
 }
@@ -597,8 +603,10 @@ function sessionNames(): string[] {
 }
 
 function selectSession(value: unknown): void {
-  form.codexThreadName = String(value || "");
-  const selected = agentSessions().find(session => session.name === form.codexThreadName);
+  const threadName = String(value || "");
+  if (selectedAgent.value === "copilotCli") form.copilotThreadName = threadName;
+  else if (selectedAgent.value === "codex") form.codexThreadName = threadName;
+  const selected = agentSessions().find(session => session.name === threadName);
   if (selected?.projectPath) {
     if (selectedAgent.value === "copilotCli" && !form.copilotCwd) form.copilotCwd = selected.projectPath;
     if (selectedAgent.value !== "copilotCli" && !form.codexCwd) form.codexCwd = selected.projectPath;
@@ -641,7 +649,7 @@ const agentReady = computed(() => {
   if (!form.agentAdapters.length) return false;
   if (agentNeedsAstrbotEndpoint.value) return Boolean(form.astrbotUrl.trim());
   if (agentNeedsMarvisApp.value) return true;
-  if (agentNeedsCopilotProject.value) return Boolean(form.codexThreadName.trim() && form.copilotCwd.trim());
+  if (agentNeedsCopilotProject.value) return Boolean(form.copilotThreadName.trim() && form.copilotCwd.trim());
   if (agentNeedsCodexProject.value) return true;
   return true;
 });
@@ -665,7 +673,9 @@ const steps = computed(() => [
   {
     value: 2,
     title: "Agent 绑定",
-    note: selectedAgent.value === "codex" ? codexBindingSummary() : (currentProject() || form.codexThreadName || "选择项目目录和会话线程"),
+    note: selectedAgent.value === "codex"
+      ? codexBindingSummary()
+      : (currentProject() || form.copilotThreadName || "选择项目目录和会话线程"),
     done: agentReady.value,
     icon: "mdi-numeric-2"
   },
@@ -691,6 +701,7 @@ function syncFromGateway() {
   form.agentRoleId = gateway?.agentRoleId || "";
   form.agentModel = gateway?.agentModel || "";
   form.codexThreadName = gateway?.codexThreadName || "";
+  form.copilotThreadName = gateway?.copilotThreadName || "";
   form.codexCwd = gateway?.codexCwd || "";
   form.copilotCliBin = gateway?.copilotCliBin || "";
   form.copilotCwd = gateway?.copilotCwd || gateway?.codexCwd || "";
@@ -1062,6 +1073,9 @@ async function apply() {
                     </v-select>
                   </div>
 
+                  <v-alert v-if="selectedAgent === 'codex'" type="info" variant="tonal" density="compact" class="mb-3">
+                    Codex 是 Agent/runtime，RabiRoute 通过官方 app-server stdio 投递。ChatGPT 桌面版只是可选宿主，不参与投递成功判定。
+                  </v-alert>
                   <v-alert v-if="selectedAgent === 'copilotCli'" type="warning" variant="tonal" density="compact" class="mb-3">
                     Copilot CLI 仍是实验适配；同一会话重复注入还需要单独烟测确认。
                   </v-alert>
@@ -1274,7 +1288,7 @@ async function apply() {
                     class="full-span"
                     label="项目目录"
                     placeholder="留空，使用 RabiRoute 根目录"
-                    hint="可不绑定项目；留空时 Codex 在 RabiRoute 根目录创建或投递"
+                    hint="可不绑定项目；留空时 Codex runtime 在 RabiRoute 根目录创建或投递"
                     persistent-hint
                   >
                     <template #append-inner>
@@ -1285,7 +1299,7 @@ async function apply() {
 
                   <v-combobox
                     v-if="selectedAgent !== 'astrbot' && selectedAgent !== 'marvis'"
-                    v-model="form.codexThreadName"
+                    :model-value="selectedSessionName"
                     :items="sessionNames()"
                     label="会话线程名"
                     placeholder="留空，按路由名自动创建"
@@ -1303,7 +1317,7 @@ async function apply() {
                     v-model="form.agentModel"
                     class="full-span"
                     label="模型覆盖"
-                    placeholder="留空，沿用原会话模型"
+                    placeholder="留空，使用 Codex runtime 默认模型"
                     hint="只在需要强制指定 Agent 模型时填写"
                     persistent-hint
                   />

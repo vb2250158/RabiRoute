@@ -10,6 +10,8 @@ param(
   [string] $RealGlassesStatusPath = "",
   [string] $DeviceStatusE2ePath = "",
   [string] $ExpectedRelayBaseUrl = "",
+  [int] $DeviceEvidenceMaxAgeMinutes = 10,
+  [int] $RuntimeProofMaxAgeMinutes = 20,
   [switch] $RequireCraftStaging,
   [switch] $RequireDelivery,
   [switch] $RequirePhoneInstallSurface,
@@ -59,6 +61,25 @@ function Get-Sha256Hex {
   }
 }
 
+function Read-AixVersion {
+  param([string] $PathValue)
+
+  Add-Type -AssemblyName System.IO.Compression
+  $stream = [System.IO.File]::OpenRead($PathValue)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Read)
+    try {
+      $entry = $archive.GetEntry("VERSION")
+      if ($null -eq $entry) { return "" }
+      $reader = [System.IO.StreamReader]::new($entry.Open())
+      try { return $reader.ReadToEnd().Trim() }
+      finally { $reader.Dispose() }
+    }
+    finally { $archive.Dispose() }
+  }
+  finally { $stream.Dispose() }
+}
+
 function Read-TextTree {
   param([string] $Root)
 
@@ -71,6 +92,21 @@ function Normalize-RelayUrl {
   param([string] $Value)
   if (-not $Value) { return "" }
   return $Value.Trim().TrimEnd("/")
+}
+
+function Convert-ToEvidenceTimestamp {
+  param([object] $Value)
+  if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
+  try {
+    return [System.DateTimeOffset]::Parse(
+      [string]$Value,
+      [System.Globalization.CultureInfo]::InvariantCulture,
+      [System.Globalization.DateTimeStyles]::AssumeUniversal
+    )
+  }
+  catch {
+    return $null
+  }
 }
 
 function Read-RelayDefaults {
@@ -179,6 +215,11 @@ Write-Check "Craft release metadata" $craftReleaseExists $craftReleasePath
 if (-not $craftReleaseExists) {
   $failures.Add("Craft release metadata is missing.")
 }
+$currentCraftReleaseVersion = if ($craftReleaseExists) {
+  [string](Get-Content -LiteralPath $craftReleasePath -Raw -Encoding UTF8 | ConvertFrom-Json).version
+} else {
+  ""
+}
 $craftBrowserUploadHelperPath = Join-Path $projectRoot "scripts\craft-browser-upload-helper.js"
 $craftBrowserUploadHelperExists = Test-Path -LiteralPath $craftBrowserUploadHelperPath
 Write-Check "Craft browser upload helper script" $craftBrowserUploadHelperExists $craftBrowserUploadHelperPath
@@ -248,6 +289,8 @@ if (-not (Test-Path -LiteralPath $resolvedAixPath)) {
   Write-Check "AIX package" $true ("{0} bytes at {1}" -f $aixInfo.Length, $aixInfo.FullName)
 }
 
+$aixPackageVersion = ""
+$craftPackageVersion = ""
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rabilink-aiui-readiness-" + [System.Guid]::NewGuid().ToString("N"))
 try {
   if (Test-Path -LiteralPath $resolvedAixPath) {
@@ -278,6 +321,14 @@ try {
       $exists = Test-Path -LiteralPath (Join-Path $tempRoot $relative)
       Write-Check ("package file " + $relative) $exists
       if (-not $exists) { $failures.Add("Package is missing $relative.") }
+    }
+
+    $aixVersionPath = Join-Path $tempRoot "VERSION"
+    if (Test-Path -LiteralPath $aixVersionPath) {
+      $aixPackageVersion = (Get-Content -LiteralPath $aixVersionPath -Raw -Encoding UTF8).Trim()
+      $aixVersionValid = $aixPackageVersion -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      Write-Check "AIX VERSION UUIDv4" $aixVersionValid $aixPackageVersion
+      if (-not $aixVersionValid) { $failures.Add("AIX VERSION is not UUIDv4.") }
     }
 
     $sourceOnlyFiles = @(
@@ -339,6 +390,19 @@ if (Test-Path -LiteralPath $resolvedCraftStagingPath) {
     $exists = Test-Path -LiteralPath (Join-Path $resolvedCraftStagingPath $relative)
     Write-Check ("Craft file " + $relative) $exists
     if (-not $exists) { $failures.Add("Craft upload folder is missing $relative.") }
+  }
+
+  $craftVersionPath = Join-Path $resolvedCraftStagingPath "VERSION"
+  if (Test-Path -LiteralPath $craftVersionPath) {
+    $craftPackageVersion = (Get-Content -LiteralPath $craftVersionPath -Raw -Encoding UTF8).Trim()
+    $craftVersionValid = $craftPackageVersion -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    Write-Check "Craft VERSION UUIDv4" $craftVersionValid $craftPackageVersion
+    if (-not $craftVersionValid) { $failures.Add("Craft upload VERSION is not UUIDv4.") }
+    if ($aixPackageVersion) {
+      $packageVersionsMatch = $aixPackageVersion -eq $craftPackageVersion
+      Write-Check "AIX and Craft VERSION match" $packageVersionsMatch $craftPackageVersion
+      if (-not $packageVersionsMatch) { $failures.Add("AIX and Craft upload folder VERSION values do not match.") }
+    }
   }
 
   $forbiddenCraftPaths = @(
@@ -414,6 +478,11 @@ if (Test-Path -LiteralPath $resolvedDeliveryPath) {
   if ((Test-Path -LiteralPath $deliveryAixPath) -and (Test-Path -LiteralPath $deliveryManifestPath)) {
     $deliveryAixInfo = Get-Item -LiteralPath $deliveryAixPath
     $deliveryHash = Get-Sha256Hex $deliveryAixPath
+    $deliveryAixVersion = Read-AixVersion -PathValue $deliveryAixPath
+    $deliveryCraftVersionPath = Join-Path $deliveryCraftPath "VERSION"
+    $deliveryCraftVersion = if (Test-Path -LiteralPath $deliveryCraftVersionPath) {
+      (Get-Content -LiteralPath $deliveryCraftVersionPath -Raw -Encoding UTF8).Trim()
+    } else { "" }
     $manifest = Get-Content -LiteralPath $deliveryManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $manifestSizeMatch = [int64]$manifest.aix.size -eq [int64]$deliveryAixInfo.Length
     $manifestHashMatch = [string]$manifest.aix.sha256 -eq $deliveryHash
@@ -421,6 +490,18 @@ if (Test-Path -LiteralPath $resolvedDeliveryPath) {
     Write-Check "delivery manifest AIX sha256" $manifestHashMatch ([string]$manifest.aix.sha256)
     if (-not $manifestSizeMatch) { $failures.Add("Delivery manifest AIX size does not match the file.") }
     if (-not $manifestHashMatch) { $failures.Add("Delivery manifest AIX sha256 does not match the file.") }
+
+    $deliveryVersionsMatch = [bool]$deliveryAixVersion `
+      -and $deliveryAixVersion -eq $deliveryCraftVersion `
+      -and $deliveryAixVersion -eq [string]$manifest.aix.version `
+      -and $deliveryAixVersion -eq [string]$manifest.craft_upload.version
+    Write-Check "delivery AIX/Craft/manifest VERSION" $deliveryVersionsMatch $deliveryAixVersion
+    if (-not $deliveryVersionsMatch) { $failures.Add("Delivery AIX, Craft folder and manifest VERSION values do not match.") }
+    if ($aixPackageVersion) {
+      $deliveryMatchesPrimary = $deliveryAixVersion -eq $aixPackageVersion -and $deliveryHash -eq (Get-Sha256Hex $resolvedAixPath)
+      Write-Check "delivery AIX matches primary package" $deliveryMatchesPrimary $deliveryAixVersion
+      if (-not $deliveryMatchesPrimary) { $failures.Add("Delivery AIX does not match the primary package.") }
+    }
 
     if ($normalizedExpectedRelayBaseUrl) {
       $manifestRelay = Normalize-RelayUrl ([string]$manifest.relay_base_url)
@@ -524,11 +605,23 @@ if (Test-Path -LiteralPath $resolvedCraftUploadStatusPath) {
 if (Test-Path -LiteralPath $resolvedRuntimeProofStatusPath) {
   Write-Check "runtime proof status report" $true $resolvedRuntimeProofStatusPath
   $runtimeProofStatus = Get-Content -LiteralPath $resolvedRuntimeProofStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
-  $runtimeProofFound = [bool]$runtimeProofStatus.proved
+  $runtimeProofAt = if ($runtimeProofStatus.latest_proof) { Convert-ToEvidenceTimestamp $runtimeProofStatus.latest_proof.time } else { $null }
+  $runtimeProofNow = [System.DateTimeOffset]::UtcNow
+  $runtimeProofCutoff = $runtimeProofNow.AddMinutes(-[Math]::Max(1, $RuntimeProofMaxAgeMinutes))
+  $runtimeProofFutureLimit = $runtimeProofNow.AddMinutes(5)
+  $runtimeProofFreshNow = $null -ne $runtimeProofAt `
+    -and $runtimeProofAt -ge $runtimeProofCutoff `
+    -and $runtimeProofAt -le $runtimeProofFutureLimit
+  $runtimeProofFound = [bool]$runtimeProofStatus.proved `
+    -and [bool]$runtimeProofStatus.fresh `
+    -and [bool]$runtimeProofStatus.required_events_met `
+    -and [string]$runtimeProofStatus.expected_app_version -eq $currentCraftReleaseVersion `
+    -and -not [string]::IsNullOrWhiteSpace([string]$runtimeProofStatus.proof_session_id) `
+    -and $runtimeProofFreshNow
   $latestProofEvent = if ($runtimeProofStatus.latest_proof) { [string]$runtimeProofStatus.latest_proof.event } else { "" }
-  Write-Check "runtime proof found RabiLink AIUI event" $runtimeProofFound $latestProofEvent
+  Write-Check "runtime proof found current same-session RabiLink AIUI activity" $runtimeProofFound ("event={0}; version={1}; session={2}; fresh now={3} (max {4}m)" -f $latestProofEvent, [string]$runtimeProofStatus.expected_app_version, [string]$runtimeProofStatus.proof_session_id, $runtimeProofFreshNow, [Math]::Max(1, $RuntimeProofMaxAgeMinutes))
   if ($RequireRuntimeProof -and -not $runtimeProofFound) {
-    $failures.Add("Runtime proof status report does not show a RabiLink AIUI runtime event.")
+    $failures.Add("Runtime proof status report does not show recent current-version startup plus Relay/configuration activity from one AIUI page session.")
   }
 } else {
   Write-Check "runtime proof status report" $false $resolvedRuntimeProofStatusPath
@@ -592,6 +685,17 @@ $hasCxrGlass = $false
 if ((Test-Path -LiteralPath $resolvedRealGlassesStatusPath) -and (Test-Path -LiteralPath $resolvedDeviceStatusE2ePath)) {
   $realGlassesStatus = Get-Content -LiteralPath $resolvedRealGlassesStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
   $deviceStatusE2e = Get-Content -LiteralPath $resolvedDeviceStatusE2EPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $realEvidenceAt = Convert-ToEvidenceTimestamp $realGlassesStatus.observedAt
+  if ($null -eq $realEvidenceAt) { $realEvidenceAt = Convert-ToEvidenceTimestamp $realGlassesStatus.checkedAt }
+  $compiledEvidenceAt = Convert-ToEvidenceTimestamp $deviceStatusE2e.checkedAt
+  $evidenceCutoff = [System.DateTimeOffset]::UtcNow.AddMinutes(-[Math]::Max(1, $DeviceEvidenceMaxAgeMinutes))
+  $futureLimit = [System.DateTimeOffset]::UtcNow.AddMinutes(5)
+  $evidenceFresh = $null -ne $realEvidenceAt `
+    -and $null -ne $compiledEvidenceAt `
+    -and $realEvidenceAt -ge $evidenceCutoff `
+    -and $compiledEvidenceAt -ge $evidenceCutoff `
+    -and $realEvidenceAt -le $futureLimit `
+    -and $compiledEvidenceAt -le $futureLimit
   $hasCxrGlass = [bool]$realGlassesStatus.ok `
     -and [bool]$realGlassesStatus.statusOnlyConnection `
     -and -not [bool]$realGlassesStatus.customViewOpened `
@@ -600,8 +704,10 @@ if ((Test-Path -LiteralPath $resolvedRealGlassesStatusPath) -and (Test-Path -Lit
     -and [string]$realGlassesStatus.source -eq "rokid-cxr-phone" `
     -and [bool]$deviceStatusE2e.ok `
     -and [string]$deviceStatusE2e.source -eq "relay-cxr" `
-    -and [bool]$deviceStatusE2e.compiledInkPage
-  Write-Check "Rokid/glasses phone CXR evidence" $hasCxrGlass ("callbacks={0}; battery={1}%; charging={2}; AIUI source={3}" -f [int]$realGlassesStatus.glassInfoCallbacks, [int]$realGlassesStatus.batteryLevel, [bool]$realGlassesStatus.charging, [string]$deviceStatusE2e.source)
+    -and [bool]$deviceStatusE2e.compiledInkPage `
+    -and $evidenceFresh
+  $evidenceFreshness = if ($evidenceFresh) { "fresh" } else { "stale or missing timestamp" }
+  Write-Check "Rokid/glasses phone CXR evidence" $hasCxrGlass ("callbacks={0}; battery={1}%; charging={2}; AIUI source={3}; {4} (max {5}m)" -f [int]$realGlassesStatus.glassInfoCallbacks, [int]$realGlassesStatus.batteryLevel, [bool]$realGlassesStatus.charging, [string]$deviceStatusE2e.source, $evidenceFreshness, [Math]::Max(1, $DeviceEvidenceMaxAgeMinutes))
 } else {
   Write-Check "Rokid/glasses phone CXR evidence" $false "real device-status evidence is missing"
 }

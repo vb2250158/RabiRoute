@@ -3,6 +3,7 @@ param(
   [string] $Token = "",
   [string] $ReportPath = "",
   [int] $Limit = 20,
+  [int] $MaxAgeMinutes = 20,
   [switch] $IncludeSmoke
 )
 
@@ -41,6 +42,21 @@ function Normalize-RelayBaseUrl {
   return $uri.AbsoluteUri.TrimEnd("/")
 }
 
+function Convert-ToProofTimestamp {
+  param([object] $Value)
+  if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
+  try {
+    return [System.DateTimeOffset]::Parse(
+      [string]$Value,
+      [System.Globalization.CultureInfo]::InvariantCulture,
+      [System.Globalization.DateTimeStyles]::AssumeUniversal
+    )
+  }
+  catch {
+    return $null
+  }
+}
+
 $projectRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
 if (-not $ReportPath) {
   $ReportPath = Join-Path $projectRoot "dist\runtime-proof-status.json"
@@ -54,6 +70,15 @@ if (-not (Test-Path -LiteralPath $reportDir)) {
 $RelayBaseUrl = Get-EnvOrValue -Value $RelayBaseUrl -EnvName "RABILINK_AIUI_RELAY_URL"
 $Token = Get-EnvOrValue -Value $Token -EnvName "RABILINK_AIUI_TOKEN"
 $normalizedRelayBaseUrl = Normalize-RelayBaseUrl $RelayBaseUrl
+$craftReleasePath = Join-Path $projectRoot "craft-release.json"
+$craftRelease = if (Test-Path -LiteralPath $craftReleasePath) {
+  Get-Content -LiteralPath $craftReleasePath -Raw -Encoding UTF8 | ConvertFrom-Json
+} else {
+  $null
+}
+$expectedAppVersion = if ($craftRelease -and $craftRelease.version) { [string]$craftRelease.version } else { "" }
+$requiredEvents = @("app-start")
+$operationalEvents = @("relay-connected", "pc-bound", "webgui-config-loaded", "webgui-config-saved")
 
 $report = [ordered]@{
   generated_at = (Get-Date).ToUniversalTime().ToString("o")
@@ -62,7 +87,14 @@ $report = [ordered]@{
   endpoint = if ($normalizedRelayBaseUrl) { "$normalizedRelayBaseUrl/api/rabilink/mobile/proofs" } else { "" }
   http_status = 0
   accepted_events = @("app-start", "relay-connected", "pc-bound", "webgui-config-loaded", "webgui-config-saved")
+  required_events = $requiredEvents
+  operational_events = $operationalEvents
+  expected_app_version = $expectedAppVersion
+  max_age_minutes = [Math]::Max(1, $MaxAgeMinutes)
   proved = $false
+  fresh = $false
+  required_events_met = $false
+  proof_session_id = ""
   proof_count = 0
   matched_proofs = @()
   latest_proof = $null
@@ -105,17 +137,47 @@ try {
     $report.error = "Runtime proof response did not include proofs."
   } else {
     $proofs = @($json.proofs)
-    $matches = @($proofs | Where-Object {
+    $now = [System.DateTimeOffset]::UtcNow
+    $cutoff = $now.AddMinutes(-[Math]::Max(1, $MaxAgeMinutes))
+    $futureLimit = $now.AddMinutes(5)
+    $eligible = @($proofs | Where-Object {
       $runtimeName = [string]$_.runtime.appName
+      $runtimeVersion = [string]$_.runtime.appVersion
       $event = [string]$_.event
-      $runtimeName -eq "RabiLink AIUI" -and $event -in $acceptedEvents
+      $sessionId = [string]$_.sessionId
+      $proofAt = Convert-ToProofTimestamp $_.time
+      $runtimeName -eq "RabiLink AIUI" `
+        -and $runtimeVersion -eq $expectedAppVersion `
+        -and -not [string]::IsNullOrWhiteSpace($sessionId) `
+        -and $event -in $acceptedEvents `
+        -and $null -ne $proofAt `
+        -and $proofAt -ge $cutoff `
+        -and $proofAt -le $futureLimit
     })
+    $selectedSession = @($eligible | Group-Object -Property sessionId | ForEach-Object {
+      $group = @($_.Group)
+      $sessionId = [string]$_.Name
+      $events = @($group | ForEach-Object { [string]$_.event })
+      $hasRequired = @($requiredEvents | Where-Object { $_ -notin $events }).Count -eq 0
+      $hasOperational = @($events | Where-Object { $_ -in $operationalEvents }).Count -gt 0
+      if ($hasRequired -and $hasOperational) {
+        [pscustomobject]@{
+          sessionId = $sessionId
+          proofs = @($group | Sort-Object { Convert-ToProofTimestamp $_.time } -Descending)
+          latestAt = (@($group | ForEach-Object { Convert-ToProofTimestamp $_.time }) | Sort-Object -Descending | Select-Object -First 1)
+        }
+      }
+    } | Sort-Object latestAt -Descending | Select-Object -First 1)
+    $matches = if ($selectedSession.Count -gt 0) { @($selectedSession[0].proofs) } else { @() }
     $report.proof_count = $proofs.Count
     $report.matched_proofs = $matches
     $report.latest_proof = if ($matches.Count -gt 0) { $matches[0] } else { $null }
+    $report.proof_session_id = if ($selectedSession.Count -gt 0) { [string]$selectedSession[0].sessionId } else { "" }
+    $report.fresh = $matches.Count -gt 0
+    $report.required_events_met = $matches.Count -gt 0
     $report.proved = $matches.Count -gt 0
     if (-not $report.proved) {
-      $report.error = "No RabiLink AIUI runtime proof was found."
+      $report.error = "No recent same-session RabiLink AIUI proof matched the current release and both startup plus Relay/configuration activity."
     }
   }
 }

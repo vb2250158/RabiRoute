@@ -32,7 +32,9 @@
 
     <application
         android:allowBackup="false"
-        android:label="Rabi Glass Test"
+        android:icon="@drawable/rabiroute_icon"
+        android:label="Rabi Glass"
+        android:roundIcon="@drawable/rabiroute_icon"
         android:supportsRtl="true"
         android:theme="@style/RabiGlassTheme"
         android:usesCleartextTraffic="true"

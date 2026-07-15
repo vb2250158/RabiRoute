@@ -5,9 +5,9 @@
   "status": "进行中",
   "priority": "high",
   "kind": "product",
-  "currentStep": "RabiLink AIUI 已完成首个本地闭环：连接对话用眼镜原生 ASR 发布输入事件，并持续按 cursor 消费普通回复和主动消息共用的应用级下行队列；原生 TTS 播报前释放 ASR，结束后恢复。配置助手由 Rokid 原生 Agent 理解自然语言，页面只执行明确 intent。Relay 已支持无 taskId 的主动追加，RabiRoute `/api/agent/replies` 继续负责输出策略和审计。源码、真实 HTTP 集成、Ink 运行、AIX 验包与本地验收均通过。",
-  "nextAction": "完成外部真机闭环：上传并审核当前 AIX，在手机和眼镜同步后验证触摸板切换、真实 ASR、普通回复、无前置语音的主动播报、TTS/ASR 交接和原生 Agent 配置 intent；手机后台常驻感知作为独立后续路线评估。",
-  "waitingFor": "可用的 Rokid 手机、眼镜和 Craft 发布流程",
+  "currentStep": "RabiLink AIUI 已完成 record-first 本地闭环：眼镜与显式配置的补充转写源先写统一会话账本，固定 Codex 线程在空闲、触摸板触发或周期反思时审阅，不再逐句启动 turn；普通回复和无 taskId 主动消息按独立 cursor 进入持久 TTS 队列。配置助手的 ASR/TTS 状态机、凭据无关存储指纹、运行证据时效、AIX/Craft UUID 一致性和 20 项本地验收均已收紧。",
+  "nextAction": "在用户明确授权发布并且 Rokid 手机、眼镜可用后完成外部真机闭环：上传并审核当前 AIX，验证前台连续 ASR、触摸板启动/steer、普通回复、无前置语音的主动播报、失败 TTS 恢复、配置助手状态机和跨重启 cursor；24 小时后台感知继续作为 FenneNote 或 Android foreground service 的独立路线。",
+  "waitingFor": "Craft 上传/审核授权，以及可用的 Rokid 手机和眼镜",
   "project": {
     "name": "RabiRoute",
     "path": "./"
@@ -20,6 +20,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-13T00:00:00+08:00",
-  "keywords": ["RabiLink", "AIUI", "主动智能", "持续消息流", "主动投递", "原生 ASR", "原生 TTS", "配置助手", "原生 Agent", "Relay", "Action Gate", "真机验收"]
+  "updatedAt": "2026-07-15T00:00:00+08:00",
+  "keywords": ["RabiLink", "AIUI", "record-first", "观察账本", "空闲审阅", "周期反思", "持续消息流", "主动投递", "原生 ASR", "原生 TTS", "配置助手", "Relay", "Action Gate", "真机验收"]
 }

@@ -8,18 +8,18 @@
       layout: { width: 448, height: 150 },
       function: {
         name: "index",
-        description: "打开 RabiLink AIUI。transcription 进入连接对话，通过 Rabi 把眼镜语音交给当前绑定的 Codex 或其他 Agent，并持续显示、播报回复和主动消息；configuration 打开同页配置助手，执行眼镜原生 Agent 已理解的配置指令。两种模式可用触摸板切换，不退出当前页面。",
+        description: "打开 RabiLink AIUI。transcription 进入连接会话：前台持续转录只写入 Rabi 会话账本，不逐句打断 Agent；Codex 在线程空闲时主动审阅，触摸板单击可立即引导审阅，并持续显示、播报回复和主动消息。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面。",
         parameters: {
           type: "object",
           properties: {
             token: {
               type: "string",
-              description: "RabiLink 应用 token。必须在智能体工具参数中引用记忆变量 rabilinkToken，禁止由模型生成、读取、复述或向用户索取。",
+              description: "可选的 RabiLink 应用 token。未绑定时允许先打开页面并显示等待连接；绑定后必须引用记忆变量 rabilinkToken，禁止由模型生成、读取、复述或向用户索取。",
             },
             mode: {
               type: "string",
               enum: ["transcription", "configuration"],
-              description: "运行模式。通过 Rabi 使用当前绑定 Agent 时使用 transcription；执行眼镜原生 Agent 已理解的连接、绑定或配置指令时使用 configuration。",
+              description: "运行模式。通过 Rabi 使用当前绑定 Agent 时使用 transcription；在当前页面用原生 LanguageModel 理解配置需求，或执行外层 Agent 传入的明确指令时使用 configuration。",
             },
             surface: {
               type: "string",
@@ -32,14 +32,14 @@
             },
             intent: {
               type: "string",
-              description: "眼镜原生 Agent 已理解并规范化的明确配置指令。配置助手会在首帧完成后直接调用对应 AIUI 配置接口，不提交 RabiLink task。",
+              description: "可选的明确配置指令。外层 Agent 传入时，配置助手会在首帧完成后直接调用对应接口；省略时可在页面内用 AIUI 原生 ASR 与 LanguageModel 描述自然语言需求。",
             },
             targetDeviceId: {
               type: "string",
               description: "可选的已绑定 PC Rabi 设备 ID；省略时使用 Relay 当前绑定的 PC。",
             },
           },
-          required: ["token"],
+          required: [],
           additionalProperties: false,
         },
       },
@@ -48,8 +48,8 @@
 
   const DEFAULTS = {
     agentName: "RabiLink",
-    version: "1.0.5",
-    description: "AI glasses continuous Agent message stream and native-Agent configuration surface through RabiLink Relay.",
+    version: "1.0.16",
+    description: "AI glasses continuous Agent stream and native AIUI LanguageModel configuration surface through RabiLink Relay.",
     iconUrl: "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
     permissions: "RECORD_AUDIO,SPEECH_RECOGNITION,INTERNET",
     category: "tool",

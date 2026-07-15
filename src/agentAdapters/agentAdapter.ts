@@ -1,4 +1,4 @@
-import { notifyCodexDesktop } from "../codexDesktopIpc.js";
+import { notifyCodex } from "../codexRuntime.js";
 import { notifyCopilotCli } from "../copilotCli.js";
 import { notifyMarvis } from "../marvis.js";
 import { notifyAstrbot } from "./astrbotAdapter.js";
@@ -13,7 +13,7 @@ export function createAgentAdapter(type: AgentAdapterType): AgentAdapter {
   if (type === "codex") {
     return {
       type,
-      deliver: notifyCodexDesktop
+      deliver: async (message) => { await notifyCodex(message); }
     };
   }
 

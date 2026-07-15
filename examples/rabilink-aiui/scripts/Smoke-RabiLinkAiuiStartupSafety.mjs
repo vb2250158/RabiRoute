@@ -198,7 +198,14 @@ try {
   browser = await chromium.launch({
     executablePath,
     headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader"]
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      `--explicitly-allowed-ports=${address.port}`
+    ]
   });
   const page = await browser.newPage({ viewport: { width: 480, height: 502 }, deviceScaleFactor: 1 });
   page.on("console", (message) => logs.push(`${message.type()}: ${message.text()}`));

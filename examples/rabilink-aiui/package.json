@@ -1,13 +1,13 @@
 {
   "name": "rabilink-aiui",
   "version": "0.1.2",
-  "description": "RabiLink AIUI glasses-side continuous Agent message stream and native-Agent configuration surface.",
+  "description": "RabiLink AIUI glasses-side continuous Agent stream and native LanguageModel configuration surface.",
   "main": "app.js",
   "type": "module",
   "private": true,
   "scripts": {
     "package:aix": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Package-RabiLinkAiui.ps1",
-    "check": "node --check .\\scripts\\craft-browser-upload-helper.js && node --check .\\scripts\\craft-browser-embedded-aix-upload-helper.template.js && node .\\scripts\\check-rabilink-aiui.mjs && node .\\scripts\\Audit-WebguiCoverage.mjs && node .\\scripts\\Audit-WebguiConfigSurface.mjs && node .\\scripts\\Audit-AiuiDesign.mjs && node .\\scripts\\Audit-RokidDeviceStatusBridge.mjs && node .\\scripts\\Smoke-RabiLinkApiContract.mjs && node .\\scripts\\Smoke-RabiLinkRelayMobileWebgui.mjs && node .\\scripts\\Smoke-RabiLinkRelayDeviceStatus.mjs && node .\\scripts\\Smoke-RabiLinkAiuiRuntime.mjs && node .\\scripts\\Smoke-RabiLinkAiuiInkRuntime.mjs && node .\\scripts\\Smoke-RabiLinkAiuiInteractiveResize.mjs --mode transcription && node .\\scripts\\Smoke-RabiLinkAiuiInteractiveResize.mjs --mode configuration && node .\\scripts\\Smoke-RabiLinkAiuiStartupSafety.mjs && node .\\scripts\\Audit-RabiLinkAiuiAix.mjs && node .\\scripts\\Audit-RokidCraftUploadApi.mjs",
+    "check": "node --check .\\scripts\\craft-browser-upload-helper.js && node --check .\\scripts\\craft-browser-embedded-aix-upload-helper.template.js && node --check .\\scripts\\Test-RabiLinkAiuiActiveIntelligenceE2E.mjs && node .\\scripts\\check-rabilink-aiui.mjs && node .\\scripts\\Audit-WebguiCoverage.mjs && node .\\scripts\\Audit-WebguiConfigSurface.mjs && node .\\scripts\\Audit-AiuiDesign.mjs && node .\\scripts\\Audit-RokidDeviceStatusBridge.mjs && node .\\scripts\\Smoke-RabiLinkApiContract.mjs && node .\\scripts\\Smoke-RabiLinkRelayMobileWebgui.mjs && node .\\scripts\\Smoke-RabiLinkRelayDeviceStatus.mjs && node .\\scripts\\Smoke-RabiLinkTranscriptPolicy.mjs && node .\\scripts\\Smoke-RabiLinkVoiceRuntime.mjs && node .\\scripts\\Smoke-RabiLinkAiuiRuntime.mjs && node .\\scripts\\Smoke-RabiLinkAiuiInkRuntime.mjs && node .\\scripts\\Smoke-RabiLinkAiuiInteractiveResize.mjs --mode transcription && node .\\scripts\\Smoke-RabiLinkAiuiInteractiveResize.mjs --mode configuration && node .\\scripts\\Smoke-RabiLinkAiuiStartupSafety.mjs && node .\\scripts\\Audit-RabiLinkAiuiAix.mjs && node .\\scripts\\Audit-RokidCraftUploadApi.mjs",
     "startup:safety": "node .\\scripts\\Smoke-RabiLinkAiuiStartupSafety.mjs",
     "startup:soak": "node .\\scripts\\Smoke-RabiLinkAiuiStartupSafety.mjs --soak",
     "interactive:resize": "node .\\scripts\\Smoke-RabiLinkAiuiInteractiveResize.mjs --mode transcription && node .\\scripts\\Smoke-RabiLinkAiuiInteractiveResize.mjs --mode configuration",
@@ -32,6 +32,8 @@
     "craft:watch-browser-report": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Wait-RabiLinkAiuiBrowserCraftReport.ps1",
     "craft:status": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Test-RabiLinkAiuiCraftStatus.ps1",
     "runtime:proof": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Test-RabiLinkAiuiRuntimeProof.ps1",
+    "active-intelligence:e2e": "node .\\scripts\\Test-RabiLinkAiuiActiveIntelligenceE2E.mjs",
+    "config-rollback:e2e": "node .\\scripts\\Test-RabiLinkAiuiActiveIntelligenceE2E.mjs --config-only",
     "device-status:e2e": "node .\\scripts\\Test-RabiLinkAiuiDeviceStatusE2E.mjs",
     "device-status:evidence": "node .\\scripts\\Collect-RabiLinkGlassesBatteryEvidence.mjs",
     "goal:evidence": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Test-RabiLinkAiuiGoalEvidence.ps1"

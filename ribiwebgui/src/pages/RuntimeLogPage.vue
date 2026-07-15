@@ -22,7 +22,13 @@ const adapterReasons = computed(() => gateway.value ? adapterConnectionReasons(g
 const agentReasons = computed(() => gateway.value ? agentConnectionReasons(gateway.value, runtime.value) : []);
 const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {});
 const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || {});
-const agentState = computed(() => runtime.value.codexState || {});
+const hasCodexAgent = computed(() => gateway.value?.agentAdapters?.includes("codex") ?? false);
+const codexAgentState = computed(() => runtime.value.agentStates?.codex ?? {});
+const primaryAgentType = computed(() => gateway.value?.agentAdapters?.[0]);
+const primaryAgentState = computed(() => {
+  const type = primaryAgentType.value;
+  return type ? runtime.value.agentStates?.[type] ?? {} : {};
+});
 const logs = computed(() => (runtime.value.log || []).slice(-30).join("\n") || "暂无日志");
 const triggeringRuleId = ref("");
 const triggerResult = ref<{ ok: boolean; message: string } | null>(null);
@@ -47,16 +53,22 @@ const diagnosisItems = computed(() => [
 ]);
 
 function codexDeliveryChannelLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryChannel === "desktop-ipc") return "Codex Desktop IPC";
-  if (state.lastDeliveryChannel === "app-server-fallback") return "app-server fallback";
+  if (state.lastDeliveryChannel === "app-server-stdio") return "Codex app-server · stdio";
   return "-";
 }
 
-function codexDeliveryVisibilityLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryVisibility === "desktop-client-confirmed") return "当前 Desktop 客户端已确认";
-  if (state.lastDeliveryVisibility === "desktop-client-not-loaded") return "Desktop 会话未确认加载";
-  if (state.lastDeliveryVisibility === "unknown") return "可见性未知";
-  return "-";
+function agentAdapterLabel(type: string | undefined): string {
+  if (type === "codex") return "Codex Agent";
+  if (type === "copilotCli") return "Copilot CLI";
+  if (type === "astrbot") return "AstrBot";
+  if (type === "marvis") return "Marvis";
+  return "Agent";
+}
+
+function configuredAgentThreadName(type: string | undefined): string {
+  if (type === "codex") return gateway.value?.codexThreadName || "";
+  if (type === "copilotCli") return gateway.value?.copilotThreadName || "";
+  return "";
 }
 
 const adapterText = computed(() => {
@@ -206,14 +218,14 @@ async function deleteCurrentGateway(): Promise<void> {
           <div class="stat-note">{{ adapters.map(adapterLabel).join(" + ") }}</div>
         </v-card>
         <v-card class="app-card glass-card stat-card">
-          <div class="stat-label">Agent</div>
-          <div class="stat-value">{{ agentState.monitorThreadId ? "已连接" : "未绑定" }}</div>
-          <div class="stat-note">{{ agentState.monitorThreadName || gateway.codexThreadName || "-" }}</div>
+          <div class="stat-label">{{ agentAdapterLabel(primaryAgentType) }}</div>
+          <div class="stat-value">{{ primaryAgentType ? (primaryAgentState.monitorThreadId || primaryAgentState.lastNotificationAt ? "已连接" : "未绑定") : "未配置" }}</div>
+          <div class="stat-note">{{ primaryAgentState.monitorThreadName || configuredAgentThreadName(primaryAgentType) || agentAdapterLabel(primaryAgentType) }}</div>
         </v-card>
         <v-card class="app-card glass-card stat-card">
           <div class="stat-label">通知数</div>
-          <div class="stat-value">{{ agentState.notificationCount || 0 }}</div>
-          <div class="stat-note">最后成功 {{ agentState.lastNotificationAt || "-" }}</div>
+          <div class="stat-value">{{ primaryAgentState.notificationCount || 0 }}</div>
+          <div class="stat-note">最后成功 {{ primaryAgentState.lastNotificationAt || "-" }}</div>
         </v-card>
       </div>
 
@@ -250,25 +262,23 @@ async function deleteCurrentGateway(): Promise<void> {
           </template>
         </v-card>
 
-        <v-card class="app-card glass-card section-card">
+        <v-card v-if="hasCodexAgent" class="app-card glass-card section-card">
           <div class="section-title-row">
             <div>
-              <div class="section-title">Agent 连接</div>
+              <div class="section-title">Codex Agent / runtime</div>
+              <div class="section-note">RabiRoute 通过 app-server stdio 投递；ChatGPT 桌面版只是可选宿主。</div>
             </div>
-            <v-chip :color="agentReasons.length ? 'warning' : 'success'" variant="tonal">{{ agentState.monitorThreadId ? "已连接" : "未绑定" }}</v-chip>
+            <v-chip :color="agentReasons.length ? 'warning' : 'success'" variant="tonal">{{ codexAgentState.monitorThreadId ? "已连接" : "未绑定" }}</v-chip>
           </div>
           <v-alert v-if="agentReasons.length" type="warning" variant="tonal" class="mb-3">
             <div v-for="reason in agentReasons" :key="reason">原因：{{ reason }}</div>
           </v-alert>
-          <div class="status-row"><span>会话 ID</span><b>{{ agentState.monitorThreadId || "-" }}</b></div>
-          <div class="status-row"><span>线程名</span><b>{{ agentState.monitorThreadName || gateway.codexThreadName || "-" }}</b></div>
-          <div class="status-row"><span>自动发现</span><b>{{ agentState.lastAutoDiscoveryAt || "-" }}</b></div>
-          <div class="status-row"><span>最后成功</span><b>{{ agentState.lastNotificationAt || "-" }}</b></div>
-          <div class="status-row"><span>最近通道</span><b>{{ codexDeliveryChannelLabel(agentState) }}</b></div>
-          <div class="status-row"><span>可见性</span><b>{{ codexDeliveryVisibilityLabel(agentState) }}</b></div>
-          <div class="status-row"><span>来源</span><b>{{ agentState.monitorThreadSource || "-" }}</b></div>
-          <div class="status-row"><span>状态文件</span><b>{{ agentState.statePath || "-" }}</b></div>
-          <div v-if="agentState.lastNotificationError" class="status-row"><span>最后错误</span><b>{{ agentState.lastNotificationError }}</b></div>
+          <div class="status-row"><span>会话 ID</span><b>{{ codexAgentState.monitorThreadId || "-" }}</b></div>
+          <div class="status-row"><span>线程名</span><b>{{ codexAgentState.monitorThreadName || gateway.codexThreadName || "-" }}</b></div>
+          <div class="status-row"><span>最后成功</span><b>{{ codexAgentState.lastNotificationAt || "-" }}</b></div>
+          <div class="status-row"><span>投递协议</span><b>{{ codexDeliveryChannelLabel(codexAgentState) }}</b></div>
+          <div class="status-row"><span>桌面宿主</span><b>ChatGPT（可选，不作为投递判据）</b></div>
+          <div v-if="codexAgentState.lastNotificationError" class="status-row"><span>最后错误</span><b>{{ codexAgentState.lastNotificationError }}</b></div>
         </v-card>
       </div>
 

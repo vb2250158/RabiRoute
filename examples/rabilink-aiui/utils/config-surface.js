@@ -123,6 +123,7 @@ export const GATEWAY_SCALAR_FIELDS = [
   { key: "wecomWsUrl", label: "企微 WebSocket", type: "string" },
   { key: "heartbeatIntervalSeconds", label: "心跳间隔秒", type: "number" },
   { key: "heartbeatMessage", label: "心跳消息", type: "string" },
+  { key: "heartbeatSkipWhenAgentBusy", label: "Agent 忙碌时跳过心跳", type: "boolean" },
   { key: "remoteAgentDefaultDeviceId", label: "远端 Agent 设备", type: "string" },
   { key: "remoteAgentDefaultCwd", label: "远端 Agent 目录", type: "string" },
   { key: "remoteAgentDefaultThreadName", label: "远端 Agent 会话", type: "string" },
@@ -135,6 +136,7 @@ export const GATEWAY_SCALAR_FIELDS = [
   { key: "agentModel", label: "Agent 模型", type: "string" },
   { key: "codexThreadName", label: "Codex 会话", type: "string" },
   { key: "codexCwd", label: "Codex 目录", type: "string" },
+  { key: "copilotThreadName", label: "Copilot 会话", type: "string" },
   { key: "copilotCwd", label: "Copilot 目录", type: "string" },
   { key: "copilotCliBin", label: "Copilot CLI", type: "string" },
   { key: "marvisAppId", label: "Marvis App ID", type: "string" },
@@ -231,10 +233,12 @@ export function createDefaultGateway(next) {
     napcatHttpUrl: "http://127.0.0.1:3000",
     heartbeatIntervalSeconds: 900,
     heartbeatMessage: defaultHeartbeatMessage(),
+    heartbeatSkipWhenAgentBusy: false,
     routeVariables: {},
     agentModel: "",
     codexThreadName: `路由配置 ${next}`,
     codexCwd: "",
+    copilotThreadName: `路由配置 ${next}`,
     agentRoleId: "",
     agentRoleFile: "persona.md",
     agentAdapters: ["codex"],
@@ -268,6 +272,7 @@ export function duplicateSelectedGateway(gateways, index) {
     xiaoaiWebhookPort: undefined,
     rabiLinkWebhookPort: undefined,
     codexThreadName: current.codexThreadName ? `${current.codexThreadName} 副本` : `路由配置 ${number}`,
+    copilotThreadName: current.copilotThreadName ? `${current.copilotThreadName} 副本` : `路由配置 ${number}`
   };
   next.splice(Math.min(Math.max(index + 1, 0), next.length), 0, gateway);
   return { gateways: next, index: next.indexOf(gateway), gateway };

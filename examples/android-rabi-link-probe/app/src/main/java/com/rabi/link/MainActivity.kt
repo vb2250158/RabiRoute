@@ -69,7 +69,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         buildUi()
         refreshStatus("等待扫描")
-        appendLog("RabiLink 已启动。主链路已迁移为电脑端 RabiLink worker 直连 Relay。")
+        appendLog("RabiLink 手机伴侣已启动。AIUI 网络由官方手机链路代理，Agent 与上下文仍由 PC RabiRoute 管理。")
         if (RabiLinkRelaySettings.load(this).let { it.configured && it.statusSyncEnabled }) {
             RokidDeviceStatusSyncService.start(this)
         }
@@ -111,13 +111,13 @@ class MainActivity : Activity() {
 
     private fun addHeader(content: LinearLayout) {
         content.addView(TextView(this).apply {
-            text = "RabiLink"
+            text = "RabiLink 手机伴侣"
             textSize = 26f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.rgb(20, 25, 32))
         }, LinearLayout.LayoutParams(-1, -2))
         content.addView(TextView(this).apply {
-            text = "连接 Rokid 眼镜、RabiRoute、Relay 和 Codex"
+            text = "连接便携设备、RabiRoute、Relay 和 Agent"
             textSize = 13f
             setTextColor(Color.rgb(88, 94, 104))
             setPadding(0, dp(4), 0, dp(12))
@@ -127,7 +127,7 @@ class MainActivity : Activity() {
     private fun addServerCard(content: LinearLayout) {
         val card = card()
         card.addView(cardTitle("1. 连接 RabiLink 服务器"))
-        card.addView(cardText("手机只保存服务器地址和应用 token。服务器根据 token 找到已连接的 PC Rabi，再通过 worker 修改对应 PC 的本机 Manager 配置。"))
+        card.addView(cardText("手机保存服务器地址和应用 token，负责网络、眼镜状态和便携设备接入；Agent、会话账本、配置真源与动作安全门仍在 PC RabiRoute。"))
 
         val savedRelay = RabiLinkRelaySettings.load(this)
         relayUrlInput = input("https://rabi.example.com").apply {

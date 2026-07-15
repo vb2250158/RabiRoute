@@ -1747,6 +1747,10 @@ async function startNapcatAndOpen(instance: NapCatInstance): Promise<void> {
   if (!gateway.value) return;
   let target = resolveConfiguredNapcatInstance(instance);
   openingNapcatWebui.value = { ...openingNapcatWebui.value, [instance.id]: true };
+  napcatLaunchResult.value = {
+    ...napcatLaunchResult.value,
+    [instance.id]: { ok: true, message: "正在准备 QQ，请稍候..." }
+  };
   try {
     await autofillNapcatInstance(target);
     autoAssignNapcatPortsForAllGateways();
@@ -1754,63 +1758,30 @@ async function startNapcatAndOpen(instance: NapCatInstance): Promise<void> {
       await store.save();
       target = resolveConfiguredNapcatInstance(target);
     }
-    const currentHealth = await runNapcatInstanceHealth(target);
-    napcatInstanceHealthResult.value = {
-      ...napcatInstanceHealthResult.value,
-      [target.id]: currentHealth
-    };
-    if (napcatHealthShowsExpectedLogin(target, currentHealth)) {
-      const loggedInUrl = napcatAuthenticatedWebuiUrl(currentHealth, target) || target.webuiUrl;
-      if (loggedInUrl) openExternalUrl(loggedInUrl);
-      napcatLaunchResult.value = {
-        ...napcatLaunchResult.value,
-        [target.id]: {
-          ok: true,
-          message: "当前 QQ 实例已经登录，已直接打开对应 NapCat WebUI。"
-        }
-      };
-      return;
-    }
-    const loginUrl = napcatAuthenticatedWebuiUrl(currentHealth, target);
-    if (loginUrl) {
-      openExternalUrl(loginUrl);
-      scheduleNapcatLoginRecheck(target);
-      napcatLaunchResult.value = {
-        ...napcatLaunchResult.value,
-        [target.id]: {
-          ok: true,
-          message: "当前 NapCat WebUI 已可打开，已进入 QQ 登录页；请直接输入账号密码或扫码登录。"
-        }
-      };
-      return;
-    }
-    const launched = await launchNapcatInstanceAndRecheck(
-      target,
-      "正在按这个 QQ 实例打开/自动启动 NapCat；如需账号确认会弹出可交互窗口...",
-      {},
-      { forceRestart: true, visible: true }
-    );
-    if (launched.health) {
+    const response = await fetch("/api/message/napcat-ensure-ready", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ gatewayId: gateway.value.id, instanceId: target.id })
+    });
+    const body = await response.json().catch(() => ({}));
+    if (body.health) {
       napcatInstanceHealthResult.value = {
         ...napcatInstanceHealthResult.value,
-        [launched.target.id]: launched.health
+        [target.id]: { ok: Boolean(body.health.ok), ...body.health }
       };
+      if (applyNapcatHealthToInstance(target, body.health) && store.dirty) {
+        await store.save();
+        target = resolveConfiguredNapcatInstance(target);
+      }
     }
-    const targetUrl = launched.launch?.webui?.loginUrl
-      || launched.launch?.webui?.url
-      || napcatAuthenticatedWebuiUrl(launched.health, launched.target)
-      || launched.target.webuiUrl;
-    if (targetUrl) {
-      openExternalUrl(targetUrl);
-      scheduleNapcatLoginRecheck(launched.target);
-    }
+    const targetUrl = String(body.openUrl || napcatAuthenticatedWebuiUrl(body.health, target) || "").trim();
+    if (targetUrl) openExternalUrl(targetUrl);
+    if (body.needsUserAction === true) scheduleNapcatLoginRecheck(target);
     napcatLaunchResult.value = {
       ...napcatLaunchResult.value,
-      [launched.target.id]: {
-        ok: launched.ok,
-        message: launched.ok
-          ? "已按当前 QQ 实例打开/自动启动 NapCat，并打开带登录密钥的 WebUI；如果 QQ 未登录，请在弹出的窗口或 WebUI 中完成账号登录。"
-          : launched.message
+      [target.id]: {
+        ok: response.ok && body.ok !== false,
+        message: body.message || (response.ok ? "NapCat 已打开。" : "NapCat 暂时无法打开，请再试一次。")
       }
     };
   } catch (e: unknown) {
@@ -2796,7 +2767,7 @@ function renameCurrentConfig(value: unknown): void {
 }
 
 const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; icon: string; hasCwd: boolean; hasThread: boolean }> = [
-  { type: "codex",       title: "Codex",          note: "投递到当前 Codex 聊天线程",       icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
+  { type: "codex",       title: "Codex Agent",    note: "通过 app-server stdio 投递；ChatGPT 桌面版是可选宿主", icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
   { type: "copilotCli",  title: "Copilot CLI",   note: "通过 GitHub Copilot CLI 投递消息",  icon: "mdi-robot-outline", hasCwd: true, hasThread: true },
   { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
@@ -2813,25 +2784,11 @@ const visibleAgentItems = computed(() => agentDefs.filter(a => agentTypes.value.
 const availableAgentsToAdd = computed(() => agentDefs.filter(a => !agentTypes.value.includes(a.type)));
 
 function agentStateFor(type: AgentAdapterType): Record<string, any> {
-  const states = runtime.value.agentStates;
-  if (states) return states[type] ?? {};
-  const runtimeAgents = runtime.value.agentAdapters ?? [];
-  const canUseLegacyCodexState = type === "codex"
-    && (runtimeAgents.length === 0 || runtimeAgents.includes(type))
-    && (!runtime.value.codexState?.agentAdapterType || runtime.value.codexState.agentAdapterType === type);
-  return canUseLegacyCodexState ? runtime.value.codexState ?? {} : {};
+  return runtime.value.agentStates?.[type] ?? {};
 }
 
 function codexDeliveryChannelLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryChannel === "desktop-ipc") return "Codex Desktop IPC";
-  if (state.lastDeliveryChannel === "app-server-fallback") return "app-server fallback";
-  return "-";
-}
-
-function codexDeliveryVisibilityLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryVisibility === "desktop-client-confirmed") return "当前 Desktop 客户端已确认";
-  if (state.lastDeliveryVisibility === "desktop-client-not-loaded") return "Desktop 会话未确认加载";
-  if (state.lastDeliveryVisibility === "unknown") return "可见性未知";
+  if (state.lastDeliveryChannel === "app-server-stdio") return "Codex app-server · stdio";
   return "-";
 }
 
@@ -2997,8 +2954,9 @@ function sessionNamesFor(type: AgentAdapterType): string[] {
 
 function selectCopilotSession(value: unknown): void {
   if (!gateway.value) return;
+  gateway.value.copilotThreadName = String(value || "");
   touch();
-  const selected = agentSessions("copilotCli").find(session => session.name === String(value || ""));
+  const selected = agentSessions("copilotCli").find(session => session.name === gateway.value?.copilotThreadName);
   if (selected?.projectPath && !gateway.value.copilotCwd) {
     gateway.value.copilotCwd = selected.projectPath;
   }
@@ -3018,8 +2976,8 @@ function agentWarnings(type: AgentAdapterType): string[] {
       return true;
     }))];
   }
-  if (type === "copilotCli" && gateway.value?.copilotCwd && gateway.value.codexThreadName) {
-    const selected = agentSessions(type).find(session => session.name === gateway.value?.codexThreadName);
+  if (type === "copilotCli" && gateway.value?.copilotCwd && gateway.value.copilotThreadName) {
+    const selected = agentSessions(type).find(session => session.name === gateway.value?.copilotThreadName);
     if (selected?.projectPath && !samePath(selected.projectPath, gateway.value.copilotCwd)) {
       warnings.push(`当前会话属于 ${selected.projectPath}，和工作目录不一致。`);
     }
@@ -3452,7 +3410,7 @@ watch(
                           </div>
                           <div class="agent-action-bar mt-2">
                             <div class="agent-action-status">
-                              <span class="section-note">{{ instance.enabled === false ? "已停用；打开开关后此 QQ 才参与路由" : "启动会按这个 QQ 实例拉起 NapCat，并自动打开带登录密钥的 WebUI" }}</span>
+                              <span class="section-note">{{ instance.enabled === false ? "已停用；打开开关后此 QQ 才参与路由" : "一键启动、登录并检查连接；只有 QQ 安全验证需要你确认" }}</span>
                             </div>
                             <div class="d-flex ga-2 flex-wrap">
                               <v-btn
@@ -3464,7 +3422,7 @@ watch(
                                 :disabled="openingNapcatWebui[instance.id]"
                                 @click="startNapcatAndOpen(instance)"
                               >
-                                {{ openingNapcatWebui[instance.id] ? "正在启动..." : "打开/自动启动" }}
+                                {{ openingNapcatWebui[instance.id] ? "正在准备..." : "打开 NapCat" }}
                               </v-btn>
                               <v-btn
                                 v-if="isConfiguredNapcatInstance(instance) || isDiscoveredNapcatAccount(instance)"
@@ -3781,7 +3739,7 @@ watch(
                       class="full-span"
                       type="password"
                       label="连接密码"
-                      :placeholder="selectedRemoteAgentDevice?.passwordSaved ? '已记住密码，留空可直接连接' : '默认密码 123456'"
+                      :placeholder="selectedRemoteAgentDevice?.passwordSaved ? '已记住密码，留空可直接连接' : '输入远端 bridge 启动时显示的密码'"
                       autocomplete="current-password"
                     />
                     <v-alert v-if="remoteAgentConnectResult" class="full-span" :type="remoteAgentConnectResult.ok ? 'success' : 'warning'" variant="tonal" density="compact">
@@ -3809,7 +3767,7 @@ watch(
                     </div>
                     <div class="agent-action-bar full-span mt-2">
                       <div class="agent-action-status">
-                        <span class="section-note">开启后，Agent prompt 会注入远端 Agent 设备 API。默认密码是 123456，连接成功后会记住密码。</span>
+                        <span class="section-note">开启后，Agent prompt 会注入远端 Agent 设备 API。bridge 没有公知默认密码；请使用远端终端显示的临时密码或预先配置的高熵密码。</span>
                       </div>
                       <div class="d-flex ga-2 flex-wrap">
                         <v-btn size="small" variant="tonal" color="secondary" prepend-icon="mdi-lan-pending" :loading="remoteAgentDevicesLoading" @click="scanRemoteAgentDevices">
@@ -4263,8 +4221,11 @@ watch(
                 </v-alert>
                 <!-- Codex -->
                 <template v-if="agent.type === 'codex'">
+                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                    Codex 是 Agent/runtime，RabiRoute 通过官方 app-server stdio 投递。ChatGPT 桌面版只是可选宿主，不参与投递成功判定。
+                  </v-alert>
                   <div class="catalog-param-grid">
-                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="可不绑定项目；留空时 Codex 在 RabiRoute 根目录创建或投递" persistent-hint @update:model-value="touch">
+                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="可不绑定项目；留空时 Codex runtime 在 RabiRoute 根目录创建或投递" persistent-hint @update:model-value="touch">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
                         <v-icon v-else-if="agentProjectItems('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
@@ -4276,7 +4237,7 @@ watch(
                         <v-icon v-else-if="sessionNamesFor('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-text-field v-model="gateway.agentModel" class="full-span" label="模型覆盖" placeholder="留空，沿用原会话模型" hint="只在需要强制指定 Agent 模型时填写" persistent-hint @update:model-value="touch" />
+                    <v-text-field v-model="gateway.agentModel" class="full-span" label="模型覆盖" placeholder="留空，使用 Codex runtime 默认模型" hint="只在需要强制指定 Agent 模型时填写" persistent-hint @update:model-value="touch" />
                   </div>
                   <template v-if="runtime.running !== undefined">
                     <v-alert v-if="agentStateFor('codex').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
@@ -4288,8 +4249,8 @@ watch(
                     <div class="status-row mt-1"><span>连接状态</span><b :class="agentStateFor('codex').monitorThreadId ? 'text-success' : 'text-warning'">{{ agentStateFor('codex').monitorThreadId ? '已绑定' : '未绑定' }}</b></div>
                     <div class="status-row"><span>线程名</span><b>{{ agentStateFor('codex').monitorThreadName || "-" }}</b></div>
                     <div class="status-row"><span>最后成功</span><b>{{ agentStateFor('codex').lastNotificationAt || "-" }}</b></div>
-                    <div class="status-row"><span>最近通道</span><b>{{ codexDeliveryChannelLabel(agentStateFor('codex')) }}</b></div>
-                    <div class="status-row"><span>可见性</span><b>{{ codexDeliveryVisibilityLabel(agentStateFor('codex')) }}</b></div>
+                    <div class="status-row"><span>投递协议</span><b>{{ codexDeliveryChannelLabel(agentStateFor('codex')) }}</b></div>
+                    <div class="status-row"><span>桌面宿主</span><b>ChatGPT（可选，不作为投递判据）</b></div>
                   </template>
                 </template>
                 <!-- Copilot CLI -->
@@ -4307,7 +4268,7 @@ watch(
                         <v-icon v-else-if="agentProjectItems('copilotCli').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-combobox v-model="gateway.codexThreadName" :items="sessionNamesFor('copilotCli')" label="会话线程名" placeholder="Rabi" hint="Copilot CLI session 名称（--name 参数）" persistent-hint @update:model-value="selectCopilotSession">
+                    <v-combobox v-model="gateway.copilotThreadName" :items="sessionNamesFor('copilotCli')" label="会话线程名" placeholder="Rabi" hint="Copilot CLI session 名称（--name 参数）" persistent-hint @update:model-value="selectCopilotSession">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
                         <v-icon v-else-if="sessionNamesFor('copilotCli').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />

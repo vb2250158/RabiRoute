@@ -7,6 +7,7 @@ export type GatewayRuntime = {
   needsRestart: boolean;
   startedAt: string | null;
   stoppedAt: string | null;
+  agentStateGeneration?: string;
   lastExit: {
     code: number | null;
     signal: NodeJS.Signals | null;
@@ -50,6 +51,7 @@ export class RuntimeRegistry {
       needsRestart: existing?.needsRestart ?? false,
       startedAt: existing?.startedAt ?? null,
       stoppedAt: existing?.stoppedAt ?? null,
+      agentStateGeneration: existing?.agentStateGeneration,
       lastExit: existing?.lastExit ?? null,
       log: existing?.log ?? []
     };

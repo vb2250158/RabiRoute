@@ -1,6 +1,7 @@
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 
-export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
+export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
+export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 
 export type PipelinePresetId = "qq_chat" | "wecom_chat" | "voice_chat" | "webhook_task";
@@ -9,7 +10,8 @@ export type PipelineDefinition = {
   id?: string;
   name?: string;
   inputAdapter?: MessageAdapterType;
-  outputAdapter?: OutputAdapterType;
+  /** `codex` is accepted only as a legacy input and normalizes to `agent`. */
+  outputAdapter?: PipelineOutputAdapterInput;
   outputPipeline?: string;
   promptOutputMode?: PromptOutputMode;
   ttsProvider?: string;
@@ -20,11 +22,20 @@ export type PipelineDefinition = {
   replyToSource?: boolean;
 };
 
-export type ResolvedPipeline = Required<Pick<PipelineDefinition,
-  "id" | "name" | "outputAdapter" | "outputPipeline" | "promptOutputMode" | "ttsProvider" |
-  "ttsVoice" | "ttsWorkerUrl"
->> & {
+export type NormalizedPipelineDefinition = Omit<PipelineDefinition, "outputAdapter"> & {
+  outputAdapter?: OutputAdapterType;
+};
+
+export type ResolvedPipeline = {
+  id: string;
+  name: string;
   inputAdapter?: MessageAdapterType;
+  outputAdapter: OutputAdapterType;
+  outputPipeline: string;
+  promptOutputMode: PromptOutputMode;
+  ttsProvider: string;
+  ttsVoice: string;
+  ttsWorkerUrl: string;
   ttsPlay: boolean;
   preventFeedbackLoop: boolean;
   replyToSource: boolean;
@@ -93,8 +104,8 @@ const fallbackPipeline: ResolvedPipeline = {
   id: "legacy",
   name: "Legacy route",
   inputAdapter: undefined,
-  outputAdapter: "codex",
-  outputPipeline: "codex",
+  outputAdapter: "agent",
+  outputPipeline: "agent",
   promptOutputMode: "plain_text",
   ttsProvider: "",
   ttsVoice: "",
@@ -109,7 +120,7 @@ function isMessageAdapterType(value: string): value is MessageAdapterType {
 }
 
 function isOutputAdapterType(value: string): value is OutputAdapterType {
-  return value === "qq" || value === "codex" || value === "file" || value === "console" || value === "tts" || value === "webhook" || value === "fennenote" || value === "wecom" || value === "none";
+  return value === "qq" || value === "agent" || value === "file" || value === "console" || value === "tts" || value === "webhook" || value === "fennenote" || value === "wecom" || value === "none";
 }
 
 function isPromptOutputMode(value: string): value is PromptOutputMode {
@@ -124,22 +135,32 @@ function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-export function normalizePipelineDefinition(raw: unknown): PipelineDefinition | undefined {
+function normalizeOutputAdapter(value: unknown): OutputAdapterType | undefined {
+  const text = optionalString(value);
+  if (text === "codex") return "agent";
+  return text && isOutputAdapterType(text) ? text : undefined;
+}
+
+function normalizeOutputPipeline(value: unknown): string | undefined {
+  const text = optionalString(value);
+  return text === "codex" ? "agent" : text;
+}
+
+export function normalizePipelineDefinition(raw: unknown): NormalizedPipelineDefinition | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return undefined;
   }
 
   const item = raw as Record<string, unknown>;
   const inputAdapter = optionalString(item.inputAdapter);
-  const outputAdapter = optionalString(item.outputAdapter);
   const promptOutputMode = optionalString(item.promptOutputMode);
 
   return {
     id: optionalString(item.id),
     name: optionalString(item.name),
     inputAdapter: inputAdapter && isMessageAdapterType(inputAdapter) ? inputAdapter : undefined,
-    outputAdapter: outputAdapter && isOutputAdapterType(outputAdapter) ? outputAdapter : undefined,
-    outputPipeline: optionalString(item.outputPipeline),
+    outputAdapter: normalizeOutputAdapter(item.outputAdapter),
+    outputPipeline: normalizeOutputPipeline(item.outputPipeline),
     promptOutputMode: promptOutputMode && isPromptOutputMode(promptOutputMode) ? promptOutputMode : undefined,
     ttsProvider: optionalString(item.ttsProvider),
     ttsVoice: optionalString(item.ttsVoice),
@@ -154,22 +175,23 @@ export function resolvePipeline(presetId?: string, overrides?: PipelineDefinitio
   const preset = presetId && presetId in pipelinePresets
     ? pipelinePresets[presetId as PipelinePresetId]
     : fallbackPipeline;
-  const id = overrides?.id ?? preset.id;
+  const normalizedOverrides = normalizePipelineDefinition(overrides);
+  const id = normalizedOverrides?.id ?? preset.id;
 
   return {
     ...preset,
-    ...overrides,
+    ...normalizedOverrides,
     id,
-    name: overrides?.name ?? preset.name,
-    inputAdapter: overrides?.inputAdapter ?? preset.inputAdapter,
-    outputAdapter: overrides?.outputAdapter ?? preset.outputAdapter,
-    outputPipeline: overrides?.outputPipeline ?? preset.outputPipeline,
-    promptOutputMode: overrides?.promptOutputMode ?? preset.promptOutputMode,
-    ttsProvider: overrides?.ttsProvider ?? preset.ttsProvider,
-    ttsVoice: overrides?.ttsVoice ?? preset.ttsVoice,
-    ttsWorkerUrl: overrides?.ttsWorkerUrl ?? preset.ttsWorkerUrl,
-    ttsPlay: overrides?.ttsPlay ?? preset.ttsPlay,
-    preventFeedbackLoop: overrides?.preventFeedbackLoop ?? preset.preventFeedbackLoop,
-    replyToSource: overrides?.replyToSource ?? preset.replyToSource
+    name: normalizedOverrides?.name ?? preset.name,
+    inputAdapter: normalizedOverrides?.inputAdapter ?? preset.inputAdapter,
+    outputAdapter: normalizedOverrides?.outputAdapter ?? preset.outputAdapter,
+    outputPipeline: normalizedOverrides?.outputPipeline ?? preset.outputPipeline,
+    promptOutputMode: normalizedOverrides?.promptOutputMode ?? preset.promptOutputMode,
+    ttsProvider: normalizedOverrides?.ttsProvider ?? preset.ttsProvider,
+    ttsVoice: normalizedOverrides?.ttsVoice ?? preset.ttsVoice,
+    ttsWorkerUrl: normalizedOverrides?.ttsWorkerUrl ?? preset.ttsWorkerUrl,
+    ttsPlay: normalizedOverrides?.ttsPlay ?? preset.ttsPlay,
+    preventFeedbackLoop: normalizedOverrides?.preventFeedbackLoop ?? preset.preventFeedbackLoop,
+    replyToSource: normalizedOverrides?.replyToSource ?? preset.replyToSource
   };
 }

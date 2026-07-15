@@ -3,6 +3,7 @@ import path from "node:path";
 import { config, type NotificationRule } from "../config.js";
 import { resolvePipeline, type ResolvedPipeline } from "../pipelines.js";
 import { indexLines, roleKnowledgeSnapshot } from "../roleKnowledge.js";
+import { toProjectRelativePath } from "../shared/projectPaths.js";
 import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
 import {
@@ -42,6 +43,10 @@ function formatTime(epochSeconds: number): string {
 
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
+}
+
+function relativeWorkspacePath(filePath: string | undefined): string | undefined {
+  return toProjectRelativePath(filePath, process.cwd());
 }
 
 function currentTimeValues(now = new Date()): ForwardTemplateValues {
@@ -274,7 +279,7 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
         optionalLine("  当前步骤", parsed.currentStep),
         optionalLine("  下一步", parsed.nextAction),
         optionalLine("  等待", parsed.waitingFor),
-        `  路径：${planPath}`
+        `  路径：${relativeWorkspacePath(planPath)}`
       ].filter(Boolean).join("\n"));
     } catch (error) {
       summaries.push(`- ${planId}：读取失败：${error instanceof Error ? error.message : String(error)}`);
@@ -411,6 +416,15 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const pipeline = outputPipelineForDecision(decision);
   const replyApiPath = "/api/agent/replies";
   const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
+  const dataDirPath = relativeWorkspacePath(roleContext.dataDir);
+  const roleDirPath = relativeWorkspacePath(roleContext.roleDir);
+  const rolePath = relativeWorkspacePath(roleContext.rolePath);
+  const groupLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : "group-messages.jsonl"));
+  const privateLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "private-messages.jsonl"));
+  const heartbeatLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "heartbeat-events.jsonl"));
+  const manualTriggerLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "manual-trigger-events.jsonl"));
+  const rolePanelLogPath = relativeWorkspacePath(path.join(roleContext.roleDir || roleContext.dataDir, "role-panel", "messages.jsonl"));
+  const voiceTranscriptLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "voice-transcripts.jsonl"));
   const replyContext = {
     runtimeRouteId: process.env.GATEWAY_ID,
     gatewayId: process.env.GATEWAY_ID,
@@ -436,9 +450,9 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     wecomChatId: isWeCom ? record.chatId : undefined,
     wecomSenderId: isWeCom ? record.senderId ?? record.userId : undefined,
     wecomMessageType: isWeCom ? record.messageType : undefined,
-    dataDir: roleContext.dataDir,
-    groupLogPath: path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : "group-messages.jsonl"),
-    privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
+    dataDir: dataDirPath,
+    groupLogPath,
+    privateLogPath,
     replyApiUrl,
     outputAdapter: pipeline.outputAdapter,
     outputPipeline: pipeline.outputPipeline,
@@ -469,18 +483,18 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     runtimeRouteId: process.env.GATEWAY_ID,
     gatewayId: process.env.GATEWAY_ID,
     targetGroupId: config.targetGroupId,
-    agentRolePath: roleContext.rolePath,
+    agentRolePath: rolePath,
     remoteAgentDefaultDeviceId: config.remoteAgentDefaultDeviceId,
     remoteAgentDefaultCwd: config.remoteAgentDefaultCwd,
     remoteAgentDefaultThreadName: config.remoteAgentDefaultThreadName,
-    agentRoleDir: roleContext.roleDir,
-    plansDir: roleContext.roleDir ? path.join(roleContext.roleDir, "plans") : undefined,
-    memoryDir: roleContext.roleDir ? path.join(roleContext.roleDir, "memory") : undefined,
-    agentInterfaceDocPath: path.join(process.cwd(), "docs", "rabi-agent-interfaces.md"),
+    agentRoleDir: roleDirPath,
+    plansDir: relativeWorkspacePath(roleContext.roleDir ? path.join(roleContext.roleDir, "plans") : undefined),
+    memoryDir: relativeWorkspacePath(roleContext.roleDir ? path.join(roleContext.roleDir, "memory") : undefined),
+    agentInterfaceDocPath: relativeWorkspacePath(path.join(process.cwd(), "docs", "rabi-agent-interfaces.md")),
     replyApiPath,
     replyApiUrl,
     replyContextJson: JSON.stringify(replyContext),
-    dataDir: roleContext.dataDir,
+    dataDir: dataDirPath,
     pipelinePreset: pipeline.id,
     channelPreset: pipeline.id,
     inputAdapter: pipeline.inputAdapter,
@@ -493,12 +507,12 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     ttsPlay: String(pipeline.ttsPlay),
     preventFeedbackLoop: String(pipeline.preventFeedbackLoop),
     replyToSource: String(pipeline.replyToSource),
-    groupLogPath: path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : "group-messages.jsonl"),
-    privateLogPath: path.join(roleContext.dataDir, "private-messages.jsonl"),
-    heartbeatLogPath: path.join(roleContext.dataDir, "heartbeat-events.jsonl"),
-    manualTriggerLogPath: path.join(roleContext.dataDir, "manual-trigger-events.jsonl"),
-    rolePanelLogPath: path.join(roleContext.roleDir || roleContext.dataDir, "role-panel", "messages.jsonl"),
-    voiceTranscriptLogPath: path.join(roleContext.dataDir, "voice-transcripts.jsonl"),
+    groupLogPath,
+    privateLogPath,
+    heartbeatLogPath,
+    manualTriggerLogPath,
+    rolePanelLogPath,
+    voiceTranscriptLogPath,
     heartbeatIntervalSeconds: "intervalSeconds" in record ? record.intervalSeconds : undefined,
     triggerId: isManualTrigger ? record.triggerId : undefined,
     triggerName: isManualTrigger ? record.triggerName : undefined,
@@ -553,6 +567,9 @@ function buildAgentMessage(
   const matchedSkillIndex = knowledge ? skillIndexLines(values.agentRoleId, knowledge.matchedSkills) : "- 暂无";
   const requiredReadIndex = knowledge ? requiredReadLines(knowledge.requiredReadItems) : [];
   const pendingConsolidation = knowledge?.pendingConsolidation;
+  const knowledgePlansDir = relativeWorkspacePath(knowledge?.plansDir);
+  const knowledgeMemoryDir = relativeWorkspacePath(knowledge?.memoryDir);
+  const knowledgeAgentInterfaceDocPath = relativeWorkspacePath(knowledge?.agentInterfaceDocPath);
   const recentMessageLimit = Number(values.recentMessageLimit ?? 0);
   const pendingConsolidationLines = pendingConsolidation
     ? [
@@ -588,11 +605,11 @@ function buildAgentMessage(
       optionalLine("角色文件", values.agentRolePath || rolePath),
       optionalLine("角色目录", values.agentRoleDir || roleDir),
       optionalLine("运行数据目录", values.dataDir),
-      optionalLine("计划目录", knowledge?.plansDir ?? values.plansDir),
-      optionalLine("记忆目录", knowledge?.memoryDir ?? values.memoryDir)
+      optionalLine("计划目录", knowledgePlansDir ?? values.plansDir),
+      optionalLine("记忆目录", knowledgeMemoryDir ?? values.memoryDir)
     ]) : section("无人格直通模式", directMessageModeLines(values)),
     hasPersona ? section("记忆与计划", [
-      optionalLine("更新记忆与计划的说明文档", knowledge?.agentInterfaceDocPath ?? values.agentInterfaceDocPath),
+      optionalLine("更新记忆与计划的说明文档", knowledgeAgentInterfaceDocPath ?? values.agentInterfaceDocPath),
       ...planMemoryApiHint(values.agentRoleId),
       "",
       "可用技能：",
@@ -650,10 +667,12 @@ export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule
     routeKind: decision.routeKind
   };
   const userTemplateText = renderTemplate(rule.template, templateValues);
+  const rolePath = relativeWorkspacePath(roleContext.rolePath) || "";
+  const roleDir = relativeWorkspacePath(roleContext.roleDir) || "";
 
   return {
     rule,
     templateValues,
-    message: buildAgentMessage(decision, templateValues, userTemplateText, roleContext.rolePath, roleContext.roleDir)
+    message: buildAgentMessage(decision, templateValues, userTemplateText, rolePath, roleDir)
   };
 }

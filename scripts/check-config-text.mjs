@@ -9,7 +9,13 @@ const defaultFiles = [
   "data/roles/Route/personaConfig.json",
   "data/roles/AIPM/personaConfig.json",
   "examples/data/route/main/adapterConfig.json",
-  "examples/data/roles/Rabi/personaConfig.json"
+  "examples/data/route/RabiLink/adapterConfig.json",
+  "examples/data/route/rokid-native-voice/adapterConfig.json",
+  "examples/data/route/voice-chat/adapterConfig.json",
+  "examples/data/route/wecom/adapterConfig.json",
+  "examples/data/route/xiaoai/adapterConfig.json",
+  "examples/data/roles/Rabi/personaConfig.json",
+  "examples/data/roles/RabiActive/personaConfig.json"
 ];
 
 const files = process.argv.slice(2);

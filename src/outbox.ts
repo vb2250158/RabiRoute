@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { sendGroupMessage, sendPrivateMessage, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
-import { resolvePipeline, type OutputAdapterType, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
+import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
 import {
   appendRolePanelTimelineMessage,
@@ -17,6 +18,10 @@ import {
   type MessagePayloadKind
 } from "./shared/gatewayConfigModel.js";
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
+import {
+  appendRabiLinkConversationEntry,
+  DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS
+} from "./rabilinkConversationLedger.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -50,6 +55,11 @@ export type AgentReplyRequest = {
   wecomMessageType?: unknown;
   proactive?: unknown;
   source?: unknown;
+  deliveryId?: unknown;
+  targetDeviceIds?: unknown;
+  targetDeviceKinds?: unknown;
+  presentation?: unknown;
+  priority?: unknown;
 };
 
 export type AgentReplyNapCatInstance = NapCatEndpoint & {
@@ -67,6 +77,7 @@ export type AgentReplyRouteProfile = {
   dataDir?: string;
   agentRoleId?: string;
   rolesDir?: string;
+  routeVariables?: Record<string, string>;
 };
 
 export type AgentReplyRuntime = {
@@ -80,6 +91,7 @@ export type AgentReplyRuntime = {
   dataDir?: string;
   agentRoleId?: string;
   rolesDir?: string;
+  routeVariables?: Record<string, string>;
   napcatInstances?: AgentReplyNapCatInstance[];
   wecomBotId?: string;
   wecomBotSecret?: string;
@@ -160,18 +172,6 @@ function valueString(value: unknown): string | undefined {
   if (value == null) return undefined;
   const text = String(value).trim();
   return text ? text : undefined;
-}
-
-function isOutputAdapterType(value: string | undefined): value is OutputAdapterType {
-  return value === "qq"
-    || value === "codex"
-    || value === "file"
-    || value === "console"
-    || value === "tts"
-    || value === "webhook"
-    || value === "fennenote"
-    || value === "wecom"
-    || value === "none";
 }
 
 function contextObject(request: AgentReplyRequest): Record<string, unknown> {
@@ -261,6 +261,13 @@ function requestFlag(request: AgentReplyRequest, key: keyof AgentReplyRequest): 
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
+function requestStringList(request: AgentReplyRequest, key: keyof AgentReplyRequest): string[] {
+  const ctx = contextObject(request);
+  const raw = request[key] ?? ctx[key];
+  const values = Array.isArray(raw) ? raw : raw == null || raw === "" ? [] : [raw];
+  return [...new Set(values.map(valueString).filter((item): item is string => Boolean(item)))];
+}
+
 function routeConfigName(runtimeId: string): string {
   const parts = runtimeId.split("__");
   return parts[1] || runtimeId;
@@ -295,6 +302,32 @@ function dataDirsForRoute(options: AgentReplyOptions, route: ResolvedRoute): str
     if (profileRoleDir) dirs.add(profileRoleDir);
   }
   return [...dirs];
+}
+
+function rabiLinkConversationDataDir(options: AgentReplyOptions, route: ResolvedRoute): string {
+  if (route.profile) {
+    const profileRoleDir = roleDirFor(options.rootDir, options.rolesRoot, {
+      rolesDir: route.profile.rolesDir ?? route.runtime.rolesDir,
+      agentRoleId: route.profile.agentRoleId ?? route.runtime.agentRoleId
+    });
+    if (profileRoleDir) return profileRoleDir;
+    const profileDataDir = resolvePath(options.rootDir, route.profile.dataDir);
+    if (profileDataDir) return profileDataDir;
+  }
+  const runtimeRoleDir = roleDirFor(options.rootDir, options.rolesRoot, route.runtime);
+  if (runtimeRoleDir) return runtimeRoleDir;
+  const runtimeDataDir = resolvePath(options.rootDir, route.runtime.dataDir);
+  if (runtimeDataDir) return runtimeDataDir;
+  return path.resolve(options.routeRoot, routeConfigName(route.runtime.id));
+}
+
+function rabiLinkConversationSplitAfterMs(route: ResolvedRoute): number {
+  const value = route.profile?.routeVariables?.rabilinkConversationSplitAfterHours
+    ?? route.runtime.routeVariables?.rabilinkConversationSplitAfterHours;
+  const hours = Number(value);
+  return Number.isFinite(hours) && hours > 0
+    ? Math.max(60 * 1000, hours * 60 * 60 * 1000)
+    : DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS;
 }
 
 function idMatches(value: unknown, expected?: string): boolean {
@@ -480,11 +513,14 @@ function routePipeline(route: ResolvedRoute): ResolvedPipeline {
 function replyPipeline(route: ResolvedRoute, request: AgentReplyRequest): ResolvedPipeline {
   const pipeline = routePipeline(route);
   const context = contextObject(request);
-  const outputAdapter = valueString(context.outputAdapter);
+  const contextPipeline = normalizePipelineDefinition({
+    outputAdapter: valueString(context.outputAdapter),
+    outputPipeline: valueString(context.outputPipeline)
+  });
   return {
     ...pipeline,
-    outputAdapter: isOutputAdapterType(outputAdapter) ? outputAdapter : pipeline.outputAdapter,
-    outputPipeline: valueString(context.outputPipeline) ?? pipeline.outputPipeline,
+    outputAdapter: contextPipeline?.outputAdapter ?? pipeline.outputAdapter,
+    outputPipeline: contextPipeline?.outputPipeline ?? pipeline.outputPipeline,
     replyToSource: typeof context.replyToSource === "boolean" ? context.replyToSource : pipeline.replyToSource
   };
 }
@@ -575,6 +611,7 @@ function appendAdapterReply(
     adapterType,
     text: content.text,
     payloadType: content.kind,
+    ...(adapterType === "rabilink" ? { final: true } : {}),
     replyContext: contextObject(request),
     payload: payloadObject(request)
   })}\n`, "utf8");
@@ -831,36 +868,82 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       return result;
     }
     const proactive = requestFlag(request, "proactive") || (!messageId && contextTarget.targetType === "rabilink");
-    if (proactive) {
-      try {
-        const relayResult = await publishRabiLinkRelayMessage(content.text, {
-          source: requestField(request, "source") || "RabiRoute active intelligence",
-          relay: route.runtime.rabiLinkRelay,
-          metadata: {
-            routeProfileId: route.profile?.id ?? route.runtime.id,
-            payloadType: content.kind
-          }
-        });
-        const result = appendAdapterReply(options, route, "rabilink", target, content, request);
-        result.reason = "Queued in the RabiLink continuous message stream.";
-        appendOutboxLog(options, route, "info", "rabilink_proactive_queued", text.slice(0, 500), { ...result, relayResult });
-        return result;
-      } catch (error) {
-        const result: AgentReplyResult = {
-          ok: false,
-          status: "failed",
-          reason: error instanceof Error ? error.message : String(error),
+    const deliveryId = requestField(request, "deliveryId") || randomUUID();
+    const targetDeviceIds = requestStringList(request, "targetDeviceIds");
+    const targetDeviceKinds = requestStringList(request, "targetDeviceKinds").map((value) => value.toLowerCase());
+    const presentation = requestStringList(request, "presentation")
+      .map((value) => value.toLowerCase())
+      .filter((value): value is "text" | "tts" | "notification" | "haptic" => value === "text" || value === "tts" || value === "notification" || value === "haptic");
+    const requestedPriority = requestField(request, "priority")?.toLowerCase();
+    const priority = requestedPriority === "quiet" || requestedPriority === "urgent" ? requestedPriority : "normal";
+    try {
+      const relayResult = await publishRabiLinkRelayMessage(content.text, {
+        source: requestField(request, "source") || (proactive ? "RabiRoute active intelligence" : "RabiRoute Agent reply"),
+        taskId: proactive ? undefined : target.messageId || messageId,
+        deliveryId,
+        proactive,
+        final: true,
+        targetDeviceIds,
+        targetDeviceKinds,
+        presentation,
+        priority,
+        relay: route.runtime.rabiLinkRelay,
+        metadata: {
           routeProfileId: route.profile?.id ?? route.runtime.id,
-          messageId: target.messageId,
-          targetType: "rabilink"
-        };
-        appendOutboxLog(options, route, "error", "rabilink_proactive_failed", text.slice(0, 500), result);
-        return result;
-      }
+          payloadType: content.kind,
+          deliveryKind: proactive ? "proactive" : "reply"
+        }
+      });
+      appendRabiLinkConversationEntry(rabiLinkConversationDataDir(options, route), {
+        entryId: `rabilink-agent:${deliveryId}`,
+        direction: "agent_to_user",
+        kind: "agent_message",
+        text: content.text,
+        source: requestField(request, "source") || (proactive ? "RabiRoute active intelligence" : "RabiRoute Agent reply"),
+        sender: "Agent",
+        messageId: valueString((relayResult.messages as Array<Record<string, unknown>> | undefined)?.[0]?.id),
+        taskId: proactive ? undefined : target.messageId || messageId,
+        deliveryId,
+        targetDeviceIds,
+        targetDeviceKinds,
+        presentation,
+        priority,
+        proactive,
+        final: true,
+        requiresReview: false
+      }, { splitAfterMs: rabiLinkConversationSplitAfterMs(route) });
+      const result = appendAdapterReply(options, route, "rabilink", target, content, request);
+      result.reason = proactive
+        ? "Queued in the RabiLink continuous message stream."
+        : "Queued in the RabiLink outbound message stream.";
+      appendOutboxLog(
+        options,
+        route,
+        "info",
+        proactive ? "rabilink_proactive_queued" : "rabilink_reply_queued",
+        text.slice(0, 500),
+        { ...result, relayResult }
+      );
+      return result;
+    } catch (error) {
+      const result: AgentReplyResult = {
+        ok: false,
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId: target.messageId,
+        targetType: "rabilink"
+      };
+      appendOutboxLog(
+        options,
+        route,
+        "error",
+        proactive ? "rabilink_proactive_failed" : "rabilink_reply_failed",
+        text.slice(0, 500),
+        result
+      );
+      return result;
     }
-    const result = appendAdapterReply(options, route, "rabilink", target, content, request);
-    appendOutboxLog(options, route, "info", "rabilink_reply_queued", text.slice(0, 500), result);
-    return result;
   }
   const pipeline = replyPipeline(route, request);
   const policy = napcatPolicy(route);
@@ -871,11 +954,11 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     hasExplicitQqTarget
   );
 
-  if (pipeline.outputAdapter === "codex" && !isSourceReply) {
+  if (pipeline.outputAdapter === "agent" && !isSourceReply) {
     const result: AgentReplyResult = {
       ok: true,
       status: "sent",
-      reason: "Accepted by Codex output adapter.",
+      reason: "Reply kept in the local Agent session.",
       routeProfileId: route.profile?.id ?? route.runtime.id,
       messageId,
       targetType: target.targetType,
@@ -883,7 +966,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       userId: target.userId,
       instanceId: target.instanceId
     };
-    appendOutboxLog(options, route, "info", "codex_reply_accepted", text.slice(0, 500), {
+    appendOutboxLog(options, route, "info", "agent_reply_retained", text.slice(0, 500), {
       ...result,
       text
     });

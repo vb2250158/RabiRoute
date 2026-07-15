@@ -115,8 +115,27 @@ try {
         clearInterval(heartbeat);
         const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
         let litPixels = 0;
+        let firstLitY = canvas.height;
+        let lastLitY = -1;
+        const rowBands = {
+          header: 0,
+          mode: 0,
+          status: 0,
+          message: 0,
+          footer: 0
+        };
         for (let offset = 0; offset < pixels.length; offset += 4) {
-          if (pixels[offset] > 8 || pixels[offset + 1] > 8 || pixels[offset + 2] > 8) litPixels += 1;
+          if (pixels[offset] <= 8 && pixels[offset + 1] <= 8 && pixels[offset + 2] <= 8) continue;
+          litPixels += 1;
+          const pixelIndex = offset / 4;
+          const y = Math.floor(pixelIndex / canvas.width);
+          firstLitY = Math.min(firstLitY, y);
+          lastLitY = Math.max(lastLitY, y);
+          if (y >= 248 && y <= 265) rowBands.header += 1;
+          else if (y >= 266 && y <= 289) rowBands.mode += 1;
+          else if (y >= 290 && y <= 306) rowBands.status += 1;
+          else if (y >= 307 && y <= 323) rowBands.message += 1;
+          else if (y >= 324 && y <= 341) rowBands.footer += 1;
         }
         globalThis.__interactiveResize = {
           ok: view.isRunning(),
@@ -127,7 +146,10 @@ try {
           maxHeartbeatGapMs: Math.round(Math.max(0, ...heartbeatGaps)),
           heartbeatCount: heartbeatGaps.length,
           modeRoundTrips,
-          litPixels
+          litPixels,
+          firstLitY,
+          lastLitY,
+          rowBands
         };
         console.info("[resize-probe] completed");
       });
@@ -187,7 +209,18 @@ try {
   await buildPackageStaging(stagingRoot);
   server = await startServer(harnessHtml(collectBundleFiles(stagingRoot), resizeMode));
   const address = server.address();
-  browser = await chromium.launch({ executablePath, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage", "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader"] });
+  browser = await chromium.launch({
+    executablePath,
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      `--explicitly-allowed-ports=${address.port}`
+    ]
+  });
   const page = await browser.newPage({ viewport: { width: 480, height: 352 }, deviceScaleFactor: 1 });
   page.on("console", (message) => {
     const line = `${message.type()}: ${message.text()}`;
@@ -203,7 +236,14 @@ try {
   result = await page.evaluate(() => globalThis.__interactiveResize);
   await page.locator("#ink").screenshot({ path: screenshotPath });
   const runtimeDiagnostics = logs.filter((line) => /apply_ops is still spinning|child_sync_parents|Attempted to add node as its own child|LayoutEngine::set_children/i.test(line));
-  if (!result?.ok || result.closeRequested || result.modeRoundTrips !== 20 || result.width !== 480 || result.height !== 352 || result.resizeReturnMs > 1000 || result.maxHeartbeatGapMs > 1500 || result.litPixels < 500 || runtimeDiagnostics.length || errors.length) {
+  const sharedHudComplete = result?.firstLitY >= 240
+    && result?.lastLitY >= 330
+    && result?.rowBands?.header > 150
+    && result?.rowBands?.mode > 1000
+    && result?.rowBands?.status > 250
+    && result?.rowBands?.message > 350
+    && result?.rowBands?.footer > 150;
+  if (!result?.ok || result.closeRequested || result.modeRoundTrips !== 20 || result.width !== 480 || result.height !== 352 || result.resizeReturnMs > 1000 || result.maxHeartbeatGapMs > 1500 || result.litPixels < 500 || !sharedHudComplete || runtimeDiagnostics.length || errors.length) {
     throw new Error(`Interactive resize failed: ${JSON.stringify({ resizeMode, result, runtimeDiagnostics, errors })}`);
   }
   console.log(`RabiLink AIUI ${resizeMode} interactive resize passed on Ink ${inkVersion} (${result.resizeReturnMs}ms resize, ${result.maxHeartbeatGapMs}ms max heartbeat gap, ${result.modeRoundTrips} mode round trips).`);

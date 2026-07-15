@@ -84,6 +84,35 @@ data class RabiLinkDeviceStatus(
     val rawJson: JSONObject
 )
 
+data class RabiLinkPortableObservationReceipt(
+    val eventId: String,
+    val status: String,
+    val cursor: String,
+    val acceptedAt: Long,
+    val rawJson: JSONObject
+)
+
+data class RabiLinkPortableMessage(
+    val id: String,
+    val text: String,
+    val createdAt: Long,
+    val proactive: Boolean,
+    val final: Boolean,
+    val targetDeviceIds: List<String>,
+    val targetDeviceKinds: List<String>,
+    val presentation: List<String>,
+    val priority: String,
+    val rawJson: JSONObject
+)
+
+data class RabiLinkPortableMessagePage(
+    val messages: List<RabiLinkPortableMessage>,
+    val nextCursor: String,
+    val shouldContinue: Boolean,
+    val status: String,
+    val rawJson: JSONObject
+)
+
 data class RabiRouteInfo(
     val id: String,
     val name: String,
@@ -368,6 +397,84 @@ class RabiRouteSdk @JvmOverloads constructor(
         return mobileStateFromJson(json)
     }
 
+    @JvmOverloads
+    fun publishPortableObservation(
+        relayBaseUrl: String,
+        token: String,
+        text: String,
+        sourceDeviceId: String,
+        sourceDeviceKind: String,
+        sourceDeviceName: String = "",
+        transport: String = "phone-companion",
+        clientMessageId: String = "portable-${System.currentTimeMillis()}",
+        capturedAt: Long = System.currentTimeMillis(),
+        sessionId: String = ""
+    ): RabiLinkPortableObservationReceipt {
+        val payload = JSONObject()
+            .put("text", text)
+            .put("type", "rabilink.observation")
+            .put("deliveryMode", "observe")
+            .put("source", "rabilink-portable-device")
+            .put("sourceDeviceId", sourceDeviceId)
+            .put("sourceDeviceKind", sourceDeviceKind)
+            .put("transport", transport)
+            .put("clientMessageId", clientMessageId)
+            .put("capturedAt", capturedAt)
+        if (sourceDeviceName.isNotBlank()) payload.put("sourceDeviceName", sourceDeviceName)
+        if (sessionId.isNotBlank()) payload.put("sessionId", sessionId)
+        val json = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/devices/input",
+            "POST",
+            payload.toString(),
+            mapOf("X-RabiLink-Token" to token),
+            readTimeoutMs = 10000
+        )
+        return RabiLinkPortableObservationReceipt(
+            eventId = json.optString("eventId"),
+            status = json.optString("status"),
+            cursor = json.optString("nextCursor", json.optString("cursor")),
+            acceptedAt = json.optLong("acceptedAt"),
+            rawJson = json
+        )
+    }
+
+    @JvmOverloads
+    fun getPortableMessages(
+        relayBaseUrl: String,
+        token: String,
+        deviceId: String,
+        deviceKind: String,
+        after: String = "",
+        waitMs: Int = 0,
+        continuous: Boolean = true
+    ): RabiLinkPortableMessagePage {
+        val query = listOf(
+            "deviceId=${encodeQuery(deviceId)}",
+            "deviceKind=${encodeQuery(deviceKind)}",
+            "after=${encodeQuery(after)}",
+            "waitMs=${waitMs.coerceIn(0, 60000)}",
+            "stream=${if (continuous) 1 else 0}"
+        ).joinToString("&")
+        val json = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/devices/messages?$query",
+            "GET",
+            null,
+            mapOf("X-RabiLink-Token" to token),
+            readTimeoutMs = waitMs.coerceAtLeast(1000) + 8000
+        )
+        val items = json.optJSONArray("messages")
+        val messages = (0 until (items?.length() ?: 0)).mapNotNull { index ->
+            items?.optJSONObject(index)?.let { portableMessageFromJson(it) }
+        }
+        return RabiLinkPortableMessagePage(
+            messages = messages,
+            nextCursor = json.optString("nextCursor", json.optString("cursor")),
+            shouldContinue = json.optBoolean("shouldContinue"),
+            status = json.optString("status"),
+            rawJson = json
+        )
+    }
+
     fun publishMobileDeviceStatus(
         relayBaseUrl: String,
         token: String,
@@ -588,6 +695,20 @@ class RabiRouteSdk @JvmOverloads constructor(
             rawJson = json
         )
     }
+
+    private fun portableMessageFromJson(item: JSONObject): RabiLinkPortableMessage =
+        RabiLinkPortableMessage(
+            id = item.optString("id"),
+            text = item.optString("text"),
+            createdAt = item.optLong("createdAt"),
+            proactive = item.optBoolean("proactive"),
+            final = item.optBoolean("final"),
+            targetDeviceIds = item.optJSONArray("targetDeviceIds").toStringList(),
+            targetDeviceKinds = item.optJSONArray("targetDeviceKinds").toStringList(),
+            presentation = item.optJSONArray("presentation").toStringList(),
+            priority = item.optString("priority", "normal"),
+            rawJson = item
+        )
 
     private fun JSONArray?.toStringList(): List<String> {
         if (this == null) return emptyList()

@@ -1,13 +1,13 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
-  createCodexAppThread,
-  readCodexAppThread,
-  sendCodexAppThreadMessage,
-  type CodexAppThreadCreateResult,
-  type CodexAppTurnSandbox
-} from "./codexApp.js";
+  createCodexThread,
+  listCodexThreads,
+  readCodexThread,
+  sendCodexThreadMessage,
+  type CodexThreadCreateResult,
+  type CodexTurnSandbox
+} from "./codexRuntime.js";
 
 const maxQueryLength = 240;
 const maxTitleLength = 240;
@@ -23,7 +23,7 @@ export type AgentThreadRequest = {
   title?: string;
   prompt?: string;
   cwd?: string;
-  sandbox?: CodexAppTurnSandbox;
+  sandbox?: CodexTurnSandbox;
 };
 
 export type AgentThreadSummary = {
@@ -33,15 +33,16 @@ export type AgentThreadSummary = {
 };
 
 export type AgentThreadDriver = {
+  list?: (params: { query: string; limit: number; allowedWorkspaces: string[] }) => Promise<AgentThreadSummary[]>;
   read: (threadId: string) => Promise<unknown>;
   create: (params: {
     title: string;
     prompt: string;
     cwd: string;
     developerInstructions: string;
-    sandbox: CodexAppTurnSandbox;
-  }) => Promise<CodexAppThreadCreateResult>;
-  send: (params: { threadId: string; prompt: string; cwd: string; sandbox: CodexAppTurnSandbox }) => Promise<void>;
+    sandbox: CodexTurnSandbox;
+  }) => Promise<CodexThreadCreateResult>;
+  send: (params: { threadId: string; prompt: string; cwd: string; sandbox: CodexTurnSandbox }) => Promise<void>;
 };
 
 export type AgentThreadRequestOptions = {
@@ -56,12 +57,13 @@ export type AgentThreadRequestResult = {
 };
 
 const defaultDriver: AgentThreadDriver = {
-  read: readCodexAppThread,
-  create: createCodexAppThread,
-  send: sendCodexAppThreadMessage
+  list: listCodexThreads,
+  read: readCodexThread,
+  create: createCodexThread,
+  send: sendCodexThreadMessage
 };
 
-function normalizeSandbox(value: unknown, fallback: CodexAppTurnSandbox = "workspace-write"): CodexAppTurnSandbox {
+function normalizeSandbox(value: unknown, fallback: CodexTurnSandbox = "workspace-write"): CodexTurnSandbox {
   if (value === "read-only" || value === "workspace-write" || value === "danger-full-access") {
     return value;
   }
@@ -188,10 +190,14 @@ export async function handleAgentThreadRequest(
     const limit = Number.isFinite(requestedLimit)
       ? Math.max(1, Math.min(maxListLimit, Math.floor(requestedLimit)))
       : defaultListLimit;
-    const indexPath = options.sessionIndexPath ?? path.join(os.homedir(), ".codex", "session_index.jsonl");
+    const threads = driver.list
+      ? await driver.list({ query, limit, allowedWorkspaces: options.allowedWorkspaces })
+      : options.sessionIndexPath
+        ? listAgentThreads(query, limit, options.sessionIndexPath)
+        : [];
     return {
       statusCode: 200,
-      data: { action, query, threads: listAgentThreads(query, limit, indexPath) }
+      data: { action, query, threads }
     };
   }
 

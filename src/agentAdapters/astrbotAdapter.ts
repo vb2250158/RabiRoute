@@ -2,7 +2,7 @@
  * RabiRoute → AstrBot Agent Adapter
  *
  * Bridges RabiRoute notifications into AstrBot's LLM pipeline,
- * analogous to how codexApp.ts bridges to Codex.
+ * analogous to how codexRuntime.ts bridges to Codex.
  *
  * Requires the `rabiroute_agent` AstrBot plugin to be installed
  * (places it in %USERPROFILE%\.astrbot\data\plugins\rabiroute_agent\ on Windows).

@@ -42,14 +42,14 @@ http://127.0.0.1:8790/
 
 ## 配置第一条路由
 
-首次启动时，如果没有 `data/route` 和 `data/roles`，manager 会优先复制整包 `examples/data`，这样默认 QQ 路由配置和 Rabi 示例人格会一起落地。即使发布包里没有 examples，manager 也能自己建立最小 QQ / NapCat 到 Codex 配置。
+首次启动时，如果没有 `data/route` 和 `data/roles`，manager 会优先复制整包 `examples/data`，这样默认 QQ 路由、Rabi 示例人格与脱敏的 RabiLink 主动智能模板会一起落地。只有 `main` 默认启用；其他接入先保持禁用，配置完成后再逐条开启。RabiLink 模板不会自动获得 Relay 地址或 token；即使发布包里没有 examples，manager 也能自己建立最小 QQ / NapCat 到 Codex 配置。
 
 在 RibiWebGUI 里重点检查：
 
 - `消息适配端`：默认启用 `NapCat / OneBot` 和 `定时触发`。
 - `Agent 端`：选择处理端配置，填写 Codex 监听线程名，并在 `Agent 工作目录` 下拉里选择对应项目目录；没有候选时在右侧手动填写一次。
 - `路由配置`：确认 NapCat WS 端口、NapCat HTTP 地址、Webhook 端口、Agent 工作目录和指向人格。
-- `人格配置`：选择或创建角色。想用完整示例 Rabi 时，可以先把 `examples/data` 复制到项目根目录的 `data`。
+- `人格配置`：选择或创建角色。普通陪伴示例使用 `Rabi`；眼镜 record-first 与主动下行示例使用配套的 `RabiLink` Route 和 `RabiActive` 人格。
 - `消息模板规则`：确认哪些 route kind 会转发给处理端。
 
 需要手动写 `personaConfig.json`、关键词规则或消息模板时，看 [路由配置](routing-configuration.md)。
@@ -71,8 +71,8 @@ cp -R examples/data/. data/
 RabiRoute 当前已验证的处理端是 Codex。WebUI 的 `Agent 端` 里需要确认三项：
 
 - `Agent 配置`：选择 `Codex`。
-- `Agent 会话线程名`：填 Codex 里用于接收转发消息的固定线程名，例如 `QQ 消息监听`。RabiRoute 会按这个名字绑定或复用会话。
-- `Agent 工作目录`：选择或填写 Codex 处理消息时应进入的项目目录。这个值会作为 Codex 的工作目录，并在 Codex Desktop IPC 投递时作为 `workspaceRoots` 传入。
+- `Agent 会话线程名`：填 Codex 里用于接收转发消息的固定线程名，例如 `QQ 消息监听`。RabiRoute 通过 app-server 按“线程名 + 工作目录”查找并恢复会话，避免误复用其它项目的同名线程。
+- `Agent 工作目录`：选择或填写 Codex 处理消息时应进入的项目目录。这个目录会成为 `workspaceWrite` 沙箱边界；ChatGPT desktop 只是可选查看宿主，不参与投递寻址。
 
 如果下拉里没有目标项目，先在右侧输入框填入绝对路径并保存；之后同一个 RibiWebGUI 里配置其他 gateway 时，就可以从下拉里复用这个目录。
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { config } from "../config.js";
 import { forwardMessage } from "../forwarding.js";
 import { appendAdapterLog, appendVoiceTranscriptEventForAdapter, type VoiceTranscriptEventRecord } from "../history.js";
+import { isRabiLinkRecordFirstSource, recordRabiLinkVoiceObservation } from "../rabilinkObservationRecorder.js";
 import type { ForwardRouteKind } from "../routing/types.js";
 import type { MessageAdapter, MessageAdapterType } from "./messageAdapter.js";
 
@@ -14,6 +15,8 @@ export type WebhookPayload = {
   context?: string;
   sourceDeviceId?: string;
   sourceDeviceName?: string;
+  sourceDeviceKind?: string;
+  transport?: string;
   sourceArea?: string;
   deviceId?: string;
   deviceName?: string;
@@ -301,7 +304,7 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
   return {
     time: payload.time ?? Math.floor(Date.now() / 1000),
     rawMessage,
-    messageId: payload.messageId ?? payload.id ?? `${profile.type}-${Date.now()}`,
+    messageId: payload.messageId ?? payload.id,
     senderName: payload.sender ?? payload.source ?? profile.label,
     adapterType: profile.type,
     source: payload.source ?? payload.sender ?? profile.source,
@@ -312,6 +315,8 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
     speakerDecision: payload.speakerDecision ?? payload.speaker_decision,
     sourceDeviceId: payload.sourceDeviceId ?? payload.deviceId,
     sourceDeviceName: payload.sourceDeviceName ?? payload.deviceName,
+    sourceDeviceKind: payload.sourceDeviceKind,
+    transport: payload.transport,
     sourceArea: payload.sourceArea ?? payload.area,
     sessionId: payload.sessionId ?? payload.context,
     startedAt: payload.startedAt,
@@ -321,7 +326,13 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
   };
 }
 
-export function acceptWebhookPayload(profile: WebhookAdapterProfile, webhookPath: string, payload: WebhookPayload, bodyBytes: number): VoiceTranscriptEventRecord {
+export function acceptWebhookPayload(
+  profile: WebhookAdapterProfile,
+  webhookPath: string,
+  payload: WebhookPayload,
+  bodyBytes: number,
+  options: { forward?: boolean; recordFirst?: boolean } = {}
+): VoiceTranscriptEventRecord {
   const eventType = payload.type ?? "voice_transcript";
   appendAdapterLog(profile.type, {
     event: "inbound_request",
@@ -356,6 +367,11 @@ export function acceptWebhookPayload(profile: WebhookAdapterProfile, webhookPath
     throw new Error("Missing text");
   }
 
+  const recordFirst = options.recordFirst ?? isRabiLinkRecordFirstSource(profile.type, record.source);
+  if (recordFirst) {
+    recordRabiLinkVoiceObservation(record);
+  }
+
   appendVoiceTranscriptEventForAdapter(profile.type, record);
   const status = readGatewayStatus().messageAdapters?.[profile.type];
   patchWebhookStatus(profile, {
@@ -364,11 +380,13 @@ export function acceptWebhookPayload(profile: WebhookAdapterProfile, webhookPath
     lastEventAt: new Date().toISOString(),
     eventCount: (status?.eventCount ?? 0) + 1
   });
-  forwardMessage(profile.routeKind, record, {
-    webhookPath,
-    inputAdapter: profile.type,
-    voiceSource: record.source
-  });
+  if (options.forward !== false && !recordFirst) {
+    forwardMessage(profile.routeKind, record, {
+      webhookPath,
+      inputAdapter: profile.type,
+      voiceSource: record.source
+    });
+  }
   appendAdapterLog(profile.type, {
     event: "accepted",
     message: record.rawMessage.slice(0, 500),
@@ -378,7 +396,8 @@ export function acceptWebhookPayload(profile: WebhookAdapterProfile, webhookPath
       path: webhookPath,
       messageId: record.messageId,
       source: record.source,
-      sessionId: record.sessionId
+      sessionId: record.sessionId,
+      forwarding: recordFirst || options.forward === false ? "record_only" : "direct"
     }
   });
   return record;

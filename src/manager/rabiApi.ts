@@ -23,6 +23,7 @@ export type RabiApiContext = {
   writeConfig: (config: GatewayConfigFile) => GatewayConfigFile;
   loadRuntimes: () => void;
   syncRunningGateways: () => void;
+  syncRabiLinkRelay: () => void;
   agentManagerApiCtx: () => AgentManagerApiContext;
 };
 
@@ -43,6 +44,7 @@ type AgentBindingPatch = {
   agentAdapter?: string;
   codexCwd?: string;
   codexThreadName?: string;
+  copilotThreadName?: string;
   copilotCwd?: string;
   copilotCliBin?: string;
   marvisAppId?: string;
@@ -132,6 +134,7 @@ function routeSummary(runtime: GatewayRuntime, runtimeStatus: Record<string, unk
     agentAdapters: definition.agentAdapters ?? ["codex"],
     codexCwd: definition.codexCwd ?? "",
     codexThreadName: definition.codexThreadName ?? "",
+    copilotThreadName: definition.copilotThreadName ?? "",
     copilotCwd: definition.copilotCwd ?? "",
     copilotCliBin: definition.copilotCliBin ?? "",
     marvisAppId: definition.marvisAppId ?? "",
@@ -155,7 +158,7 @@ function findGateway(config: GatewayConfigFile, routeId: string): GatewayDefinit
 
 function routeOptionsFromAgentScan(route: GatewayDefinition, scan: Record<string, any>): Record<string, unknown> {
   const agents = scan.agents ?? {};
-  const activeAdapters = Array.isArray(route.agentAdapters) && route.agentAdapters.length ? route.agentAdapters : ["codex"];
+  const activeAdapters = Array.isArray(route.agentAdapters) ? route.agentAdapters : ["codex"];
   return {
     route: {
       id: route.id,
@@ -165,6 +168,7 @@ function routeOptionsFromAgentScan(route: GatewayDefinition, scan: Record<string
       agentAdapters: activeAdapters,
       codexCwd: route.codexCwd ?? "",
       codexThreadName: route.codexThreadName ?? "",
+      copilotThreadName: route.copilotThreadName ?? "",
       copilotCwd: route.copilotCwd ?? "",
       astrbotProjectId: route.astrbotProjectId ?? "",
       astrbotSessionId: route.astrbotSessionId ?? ""
@@ -241,6 +245,7 @@ function setLocalAgentBinding(ctx: RabiApiContext, routeId: string, patch: Agent
   }
   if (patch.codexCwd !== undefined) route.codexCwd = String(patch.codexCwd || "");
   if (patch.codexThreadName !== undefined) route.codexThreadName = String(patch.codexThreadName || "");
+  if (patch.copilotThreadName !== undefined) route.copilotThreadName = String(patch.copilotThreadName || "");
   if (patch.copilotCwd !== undefined) route.copilotCwd = String(patch.copilotCwd || "");
   if (patch.copilotCliBin !== undefined) route.copilotCliBin = String(patch.copilotCliBin || "");
   if (patch.marvisAppId !== undefined) route.marvisAppId = String(patch.marvisAppId || "");
@@ -356,9 +361,18 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
   if (request.method === "PATCH" && pathname === "/api/rabi/identity") {
     void readJsonBody<Partial<{ rabiName: string; rabiLinkRelay: unknown }>>(request)
       .then((body) => {
-        const beforeRelay = JSON.stringify(ctx.globalConfig.read().rabiLinkRelay);
+        const current = ctx.globalConfig.read();
+        const relayPatch = body.rabiLinkRelay && typeof body.rabiLinkRelay === "object" && !Array.isArray(body.rabiLinkRelay)
+          ? body.rabiLinkRelay as Record<string, unknown>
+          : undefined;
+        const nextRelay = relayPatch ? { ...current.rabiLinkRelay, ...relayPatch } : current.rabiLinkRelay;
+        if (nextRelay.enabled === true && (!String(nextRelay.url || "").trim() || !String(nextRelay.token || "").trim())) {
+          throw new Error("开启 RabiLink Relay 前，请先填写服务器地址和应用 token。");
+        }
+        const beforeRelay = JSON.stringify(current.rabiLinkRelay);
         const config = ctx.globalConfig.patch({ rabiName: body.rabiName, rabiLinkRelay: body.rabiLinkRelay as any });
         const relayChanged = beforeRelay !== JSON.stringify(config.rabiLinkRelay);
+        ctx.syncRabiLinkRelay();
         if (relayChanged) {
           for (const runtime of ctx.runtimes()) {
             if (gatewayAdapterTypes(runtime.definition).includes("rabilink")) {

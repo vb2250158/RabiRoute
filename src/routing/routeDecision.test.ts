@@ -141,6 +141,43 @@ test("AgentPacket renders rule template and reply context from a decision", () =
   assert.equal(replyContext.replyToSource, true);
 });
 
+test("AgentPacket exposes workspace paths as relative paths", () => {
+  const route = routeProfile({
+    notificationRules: [{
+      id: "direct",
+      name: "direct",
+      enabled: true,
+      routeKinds: ["direct_at"],
+      template: "role={agentRolePath} data={dataDir}"
+    }]
+  });
+  const decision = createRouteDecision(route, "direct_at", groupMessage(), {});
+  assert.ok(decision);
+
+  const dataDir = path.join(process.cwd(), "data", "route", "main");
+  const roleDir = path.join(process.cwd(), "data", "roles", "Rabi");
+  const rolePath = path.join(roleDir, "persona.md");
+  const packet = buildAgentPacket(decision, decision.matchedRules[0], {
+    roleId: "Rabi",
+    roleDir,
+    rolePath,
+    dataDir
+  });
+
+  assert.equal(packet.templateValues.dataDir, "data/route/main");
+  assert.equal(packet.templateValues.agentRoleDir, "data/roles/Rabi");
+  assert.equal(packet.templateValues.agentRolePath, "data/roles/Rabi/persona.md");
+  assert.equal(packet.templateValues.groupLogPath, "data/route/main/group-messages.jsonl");
+  assert.equal(packet.templateValues.agentInterfaceDocPath, "docs/rabi-agent-interfaces.md");
+  assert.match(packet.message, /角色文件：data\/roles\/Rabi\/persona\.md/);
+  assert.doesNotMatch(packet.message, new RegExp(process.cwd().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+  assert.equal(replyContext.dataDir, "data/route/main");
+  assert.equal(replyContext.groupLogPath, "data/route/main/group-messages.jsonl");
+  assert.equal(replyContext.privateLogPath, "data/route/main/private-messages.jsonl");
+});
+
 test("AgentPacket routes FenneNote voice transcript replies through FenneNote output", () => {
   const route = routeProfile({
     resolvedPipeline: resolvePipeline(undefined, {

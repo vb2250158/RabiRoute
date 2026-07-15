@@ -19,6 +19,9 @@
 - [Pipeline presets](pipeline-presets.md)：把默认输入端、输出端、TTS 和提示词输出模式打成一组。
 - [RabiLink Relay 公网中继](rabilink-relay-server.md)：当前 Rokid/灵珠和手机端 RabiLink 主链路，使用服务器应用 token、PC worker 直连、账号隔离和远程 PC WebGUI。
 - [RabiLink 原生主动智能应用设计](rabilink-glasses-app-design.md)：原生手机常驻录音桥、随身本地 Agent、`Rabi Glass` HUD、手机配置主控台和 `RabiLink Lab` 测试入口收纳方案。
+- [RabiLink AIUI 常驻与主动智能边界](rabilink-aiui-residency-plan.md)：说明当前 record-first 双向队列、前台 ASR/TTS、配置助手、运行证据，以及为何系统级 24 小时录音仍需 FenneNote 或 Android foreground service。
+- [RabiLink 手机边缘通讯枢纽](rabilink-phone-edge-hub.md)：说明官方 AIUI 手机网络代理、手机/PC/Relay 职责、设备目标信封、独立 cursor、Wear OS 与 Android 常驻边界。
+- [RabiLink 主动智能可用版需求与实施方案](rabilink-active-intelligence-requirements.md)：眼镜 AIUI 通过 HTTPS 直连 Relay，不依赖 AIUI 与 CXR-L 通讯；首版使用低成本 AIUI 原生 ASR/TTS，并预留后续 API Provider。
 - [手机 App 远程接入历史方案](mobile-app-webhook-integration.md)：早期 Webhook / WebSocket 双向接入设计稿，仅作历史参考；当前 RabiLink 主链路以上一篇为准。
 - [小米手环心率列表探针交接](xiaomi-band-heart-rate-probe-handoff.md)：Android APK / Vela 快应用探针、云端心率列表拉取、ZIP 证据包解析和下一台电脑继续开发说明。
 - [语音交互工作站](voice-interaction-workstation.md)：FenneNote 转录、RabiRoute 路由、角色对话和 OumuQ TTS 的公开安全接线方式。
@@ -26,7 +29,7 @@
 
 ## 维护
 
-- [排障](troubleshooting.md)：NapCat 登录/外发失败、Windows 中文消息乱码、Codex IPC、普通群消息不转发。
+- [排障](troubleshooting.md)：NapCat 登录/外发失败、Windows 中文消息乱码、Codex app-server、普通群消息不转发。
 - [架构说明](architecture.md)：项目边界、分层、演进路线和红线。
 - [代码架构](code-architecture.md)：后端 Module、消息主链路、manager 控制面、WebGUI 和常见修改入口。
 - [项目功能手册](project-function-map.md)：通用项目功能地图，按功能索引数据真源、消费点、生效时机、副作用、代码入口和设计边界。

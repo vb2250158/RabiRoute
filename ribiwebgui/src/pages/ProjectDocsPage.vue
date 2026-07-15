@@ -218,7 +218,7 @@ const features: DocFeature[] = [
     truth: "active routeProfiles、record、extra values",
     consumes: "Agent adapter、history、delivery replay",
     effect: "每次真实消息进入时",
-    sideEffects: "写 router log、role record、codex notification、replay ledger，可能投递 Agent",
+    sideEffects: "写 router log、role record、AgentPacket 审计、replay ledger，可能投递 Agent",
     entry: "forwardMessage / forwardMessageAndWait",
     code: ["src/forwarding.ts"],
     docs: ["docs/code-architecture.md"],
@@ -246,7 +246,7 @@ const features: DocFeature[] = [
     effect: "AgentPacket 投递时",
     sideEffects: "向处理端发送消息",
     entry: "route Agent 端",
-    code: ["src/agentAdapters/agentAdapter.ts", "src/codexDesktopIpc.ts", "src/copilotCli.ts", "src/marvis.ts", "src/agentAdapters/astrbotAdapter.ts"],
+    code: ["src/agentAdapters/agentAdapter.ts", "src/codexRuntime.ts", "src/codexAppServerClient.ts", "src/copilotCli.ts", "src/marvis.ts", "src/agentAdapters/astrbotAdapter.ts"],
     docs: ["docs/code-architecture.md"],
     keywords: "codex copilot astrbot marvis"
   },
@@ -322,7 +322,7 @@ const runtimeData: DocTableRow[] = [
   { name: "人格配置", path: "data/roles/<RoleId>/personaConfig.json", writer: "manager / WebGUI", usage: "notification rules、recent message limit" },
   { name: "群消息 / 私聊", path: "group-messages.jsonl、private-messages.jsonl", writer: "NapCat adapter、forwarding role dir copy", usage: "最近消息、审计、AgentPacket" },
   { name: "RabiLink 回复", path: "rabilink-replies.jsonl", writer: "Outbox / RabiLink reply path", usage: "RabiLink 下行查询和 relay worker" },
-  { name: "投递通知", path: "codex-notifications.jsonl", writer: "forwarding", usage: "AgentPacket 投递审计" },
+  { name: "AgentPacket 审计", path: "agent-packets.jsonl", writer: "forwarding", usage: "处理端无关的 AgentPacket 投递审计" },
   { name: "replay ledger", path: "delivery-replay-ledger.jsonl", writer: "forwarding", usage: "失败回放、投递复盘" },
   { name: "role panel timeline", path: "data/roles/<RoleId>/role-panel/messages.jsonl", writer: "role panel API / outbox", usage: "WebGUI 角色面板会话" }
 ];
@@ -408,7 +408,7 @@ const docPages: DocPage[] = [
     summary: "生产链路会遍历 gateway 子进程里的 active routeProfiles。单 route 预览不能宣称等同于真实投递。",
     bullets: [
       "createRouteDecision 的输入是单个 route profile、route kind、record 和 extra values。",
-      "forwardMessageAndWait 会写 router log、role record、codex notification 和 replay ledger。",
+      "forwardMessageAndWait 会写 router log、role record、AgentPacket 审计和 replay ledger。",
       "预览功能必须是 dry-run，不能直接调用 forwardMessageAndWait。"
     ],
     featureNames: ["RouteDecision", "Forwarding", "AgentPacket", "人格路由工作台预览"]
@@ -418,7 +418,7 @@ const docPages: DocPage[] = [
     title: "处理端",
     section: "主链路",
     subtitle: "Agent adapter 只接收 AgentPacket，不反向定义路由语义。",
-    summary: "Codex、Copilot、AstrBot 和 Marvis 都是处理端适配器。它们负责把 packet 送到对应处理端。",
+    summary: "Codex、Copilot、AstrBot 和 Marvis 都是处理端适配器。Codex 通过 app-server stdio 投递；ChatGPT 桌面版只是可选宿主。",
     bullets: [
       "新增处理端优先改 src/agentAdapters/types.ts、agentAdapter.ts 和 managerApi.ts。",
       "处理端失败应通过 delivery result 和日志暴露，不应修改 route decision 语义。",

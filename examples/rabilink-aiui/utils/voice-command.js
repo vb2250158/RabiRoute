@@ -89,7 +89,7 @@ export const VOICE_COMMANDS = {
 
 const commandPatterns = [
   { command: VOICE_COMMANDS.SWITCH_TO_CONFIGURATION, patterns: ["切到配置助手", "进入配置助手", "打开配置助手", "配置助手模式"] },
-  { command: VOICE_COMMANDS.SWITCH_TO_TRANSCRIPTION, patterns: ["切到连接对话", "回到连接对话", "进入连接对话", "连接对话模式", "切到Agent对话", "回到Agent对话", "进入Agent对话", "Agent对话模式", "切到Rabi对话", "回到Rabi对话", "切到实时转写", "回到实时转写", "进入实时转写", "实时转写模式", "切到录音转写", "回到录音转写", "进入录音转写", "转写模式", "应用运行模式"] },
+  { command: VOICE_COMMANDS.SWITCH_TO_TRANSCRIPTION, patterns: ["切到连接对话", "回到连接对话", "返回连接对话", "进入连接对话", "连接对话模式", "切到Agent对话", "回到Agent对话", "进入Agent对话", "Agent对话模式", "切到Rabi对话", "回到Rabi对话", "切到实时转写", "回到实时转写", "进入实时转写", "实时转写模式", "切到录音转写", "回到录音转写", "进入录音转写", "转写模式", "应用运行模式"] },
   { command: VOICE_COMMANDS.PAUSE_TRANSCRIPTION, patterns: ["暂停对话", "停止聆听", "暂停转写", "停止转写", "暂停录音"] },
   { command: VOICE_COMMANDS.RESUME_TRANSCRIPTION, patterns: ["继续对话", "继续聆听", "继续转写", "恢复转写", "继续录音"] },
   { command: VOICE_COMMANDS.RETRY_TRANSCRIPTS, patterns: ["重试回复", "继续等待Agent", "重试同步", "重新同步", "补传转写"] },
@@ -174,6 +174,65 @@ const commandPatterns = [
   { command: VOICE_COMMANDS.NEXT_WORKER, patterns: ["下一台", "下一个电脑", "下一个 pc"] },
   { command: VOICE_COMMANDS.PREV_WORKER, patterns: ["上一台", "上一个电脑", "上一个 pc"] }
 ];
+
+export const CONFIGURATION_ACTION_TOOL = "execute_configuration_action";
+
+export function configurationLanguageModelOptions() {
+  const samples = voiceCommandSamples();
+  const commandIds = samples.map((item) => item.command);
+  const commandCatalog = samples
+    .map((item) => `${item.command}=${item.text}`)
+    .join("；");
+  return {
+    initialPrompts: [{
+      role: "system",
+      content: [
+        "你是 RabiLink 配置助手的意图路由器。",
+        `用户明确要求以下动作之一时，必须且只能调用一次 ${CONFIGURATION_ACTION_TOOL}。`,
+        "不要声称动作已经完成；页面会在工具调用后执行并显示真实结果。",
+        "不要生成、索取、复述或猜测 token、URL、密码和其他凭据。",
+        "删除、清空、停止、覆盖等高风险动作，只有用户明确说出该动作时才允许选择。",
+        "如果需求含糊、超出列表或只是一般问答，请直接用一句简短中文追问，不要调用工具。",
+        `命令表：${commandCatalog}`
+      ].join("\n")
+    }],
+    tools: [{
+      type: "function",
+      function: {
+        name: CONFIGURATION_ACTION_TOOL,
+        description: "把已确认的 RabiLink 配置意图交给当前 AIUI 页面执行。",
+        parameters: {
+          type: "object",
+          properties: {
+            command: {
+              type: "string",
+              enum: commandIds,
+              description: "必须从允许的配置命令 ID 中选择一项。"
+            }
+          },
+          required: ["command"],
+          additionalProperties: false
+        }
+      }
+    }]
+  };
+}
+
+export function configurationCommandFromToolCall(event = {}) {
+  if (!event || event.isComplete === false || event.functionName !== CONFIGURATION_ACTION_TOOL) return "";
+  let args = event.arguments;
+  if (typeof args === "string") {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      return "";
+    }
+  }
+  const command = String(args?.command || "").trim();
+  return Object.values(VOICE_COMMANDS).includes(command) && command !== VOICE_COMMANDS.UNKNOWN
+    ? command
+    : "";
+}
 
 export function voiceCommandSamples() {
   return commandPatterns.map((item) => ({

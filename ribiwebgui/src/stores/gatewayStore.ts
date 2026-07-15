@@ -187,7 +187,6 @@ function isAgentAdapterType(value: unknown): value is AgentAdapterType {
 }
 
 function normalizeAgentAdapterType(value: unknown): AgentAdapterType | null {
-  if (value === "codex" || value === "codexDesktop" || value === "codexApp") return "codex";
   return isAgentAdapterType(value) ? value : null;
 }
 
@@ -232,6 +231,10 @@ export const useGatewayStore = defineStore("gateway", () => {
       claimWaitMs: 60000,
       replyIdleTimeoutMs: 60000
     },
+    rabiLinkRelayRuntime: {
+      state: "disabled",
+      message: "RabiLink Relay 全局连接已关闭。"
+    },
     computerName: ""
   });
 
@@ -275,10 +278,10 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   function normalizeGateways(): void {
     gateways.value.forEach(gateway => {
-      const agentAdapters = (Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : ["codex"])
+      const agentAdapters = (Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : [])
         .map(normalizeAgentAdapterType)
         .filter((item): item is AgentAdapterType => Boolean(item));
-      gateway.agentAdapters = [...new Set(agentAdapters)].length ? [...new Set(agentAdapters)] : ["codex"];
+      gateway.agentAdapters = [...new Set(agentAdapters)];
       if (Array.isArray(gateway.notificationRules)) {
         gateway.notificationRules = gateway.notificationRules.map((rule, index) => normalizeRule(rule, index));
       }
@@ -606,6 +609,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     agentRoleId: string;
     agentModel?: string;
     codexThreadName: string;
+    copilotThreadName: string;
     codexCwd: string;
     copilotCliBin?: string;
     copilotCwd?: string;
@@ -647,10 +651,13 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway.agentRoleId = values.agentRoleId;
     if (!gateway.agentRoleId) gateway.notificationRules = [];
     gateway.agentModel = values.agentModel?.trim() || "";
-    gateway.codexThreadName = values.codexThreadName;
     gateway.codexCwd = values.codexCwd;
     gateway.agentAdapters = values.agentAdapters?.length ? values.agentAdapters : gateway.agentAdapters;
+    if (gateway.agentAdapters?.includes("codex")) {
+      gateway.codexThreadName = values.codexThreadName;
+    }
     if (gateway.agentAdapters?.includes("copilotCli")) {
+      gateway.copilotThreadName = values.copilotThreadName;
       gateway.copilotCliBin = values.copilotCliBin || gateway.copilotCliBin;
       gateway.copilotCwd = values.copilotCwd || values.codexCwd;
     }

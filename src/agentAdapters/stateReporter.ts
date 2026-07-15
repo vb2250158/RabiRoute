@@ -1,8 +1,12 @@
 import type { AgentAdapterType } from "./types.js";
+import { randomUUID } from "node:crypto";
 
 export type AgentRuntimeState = Record<string, unknown> & {
   agentAdapterType: AgentAdapterType;
 };
+
+const reportGeneration = process.env.AGENT_STATE_GENERATION?.trim() || randomUUID();
+let reportSequence = 0;
 
 export function reportAgentState(adapterType: AgentAdapterType, state: Record<string, unknown>): void {
   const managerUrl = process.env.GATEWAY_MANAGER_URL?.trim();
@@ -15,6 +19,8 @@ export function reportAgentState(adapterType: AgentAdapterType, state: Record<st
   const payload = JSON.stringify({
     gatewayId,
     adapterType,
+    generation: reportGeneration,
+    sequence: ++reportSequence,
     state: {
       ...state,
       agentAdapterType: adapterType

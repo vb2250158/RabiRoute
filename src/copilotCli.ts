@@ -144,8 +144,15 @@ function splitArgs(value: string): string[] {
   return args;
 }
 
+export function resolveCopilotSessionName(
+  envValue: string | undefined,
+  configuredValue: string | undefined
+): string {
+  return envValue?.trim() || configuredValue?.trim() || "";
+}
+
 function copilotSessionName(): string {
-  return process.env.CODEX_THREAD_NAME?.trim() || "";
+  return resolveCopilotSessionName(process.env.COPILOT_THREAD_NAME, config.copilotThreadName);
 }
 
 function argsForPrompt(message: string): { args: string[]; writePromptToStdin: boolean } {

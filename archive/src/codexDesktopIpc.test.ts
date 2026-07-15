@@ -1,3 +1,4 @@
+// Archived with the private Desktop IPC implementation on 2026-07-10.
 import assert from "node:assert/strict";
 import test from "node:test";
 import {

@@ -7,6 +7,7 @@ import { buildPackageStaging } from "./Build-RabiLinkAiuiPackage.mjs";
 import { writeDeterministicZip } from "./Write-DeterministicZip.mjs";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
+const releaseVersion = String(JSON.parse(fs.readFileSync(path.join(projectRoot, "craft-release.json"), "utf8")).version || "").trim();
 const tempRoot = path.join(os.tmpdir(), `rabilink-aiui-aix-audit-${process.pid}-${Date.now()}`);
 const stagingRoot = path.join(tempRoot, "staging");
 const freshAixPath = path.join(tempRoot, "rabilink-aiui.aix");
@@ -49,11 +50,21 @@ function validateReader(reader, label) {
   );
   assert(homeTool.function.parameters?.properties?.surface?.type === "string", `${label} UI tool is missing the surface parameter.`);
   assert(homeTool.function.parameters?.properties?.panel?.type === "string", `${label} UI tool is missing the panel parameter.`);
-  assert(homeTool.function.parameters?.required?.includes("token"), `${label} UI tool must require the platform-bound token.`);
+  assert(
+    Array.isArray(homeTool.function.parameters?.required)
+      && !homeTool.function.parameters.required.includes("token"),
+    `${label} UI tool must allow rendering before the platform token is bound.`
+  );
   assert(tools.length === 1, `${label} must expose exactly one dual-mode UI tool.`);
 
   const markup = Buffer.from(reader.read_file("pages/home/index.wxml")).toString("utf8");
+  const pageScript = Buffer.from(reader.read_file("pages/home/index.js")).toString("utf8");
+  const appJson = JSON.parse(Buffer.from(reader.read_file("app.json")).toString("utf8"));
   assert(markup.includes("unifiedModeHud"), `${label} is missing the shared transcription/configuration HUD.`);
+  assert((markup.match(/class="releaseVersion"/g) || []).length === 1, `${label} must show its release version beside battery in the shared card/immersive HUD.`);
+  assert(pageScript.includes(JSON.stringify(releaseVersion)), `${label} does not contain visible release version ${releaseVersion}.`);
+  assert(/appVersion\s*:\s*this\.data\.releaseVersion/.test(pageScript), `${label} runtime proof must use the injected Craft release version.`);
+  assert(!pageScript.includes("__RABILINK_RELEASE_VERSION__"), `${label} contains an unresolved release version marker.`);
   assert(
     !markup.includes("legacyConfigurationModeHost")
       && !markup.includes("configurationViewport")
@@ -61,30 +72,43 @@ function validateReader(reader, label) {
     `${label} still contains the old manual configuration dashboard.`
   );
 
-  return { names, version };
+  return {
+    names,
+    version,
+    relayBaseUrl: String(appJson?.rabiLink?.relayBaseUrl || "").trim()
+  };
 }
 
 let freshReader;
 let deliveryReader;
 try {
-  await buildPackageStaging(stagingRoot);
-  writeDeterministicZip(stagingRoot, freshAixPath);
+  assert(fs.existsSync(deliveryAixPath), `Delivery AIX was not found: ${deliveryAixPath}`);
   const wasmPath = path.join(projectRoot, "node_modules", "@yodaos-pkg", "aix", "pkg", "aix_web_bg.wasm");
   await initAix({ module_or_path: fs.readFileSync(wasmPath) });
 
-  freshReader = new AixReaderWasm(fs.readFileSync(freshAixPath));
-  const fresh = validateReader(freshReader, "fresh AIX build");
-
-  assert(fs.existsSync(deliveryAixPath), `Delivery AIX was not found: ${deliveryAixPath}`);
   const deliveryBytes = fs.readFileSync(deliveryAixPath);
   deliveryReader = new AixReaderWasm(deliveryBytes);
   const delivery = validateReader(deliveryReader, "delivery AIX");
 
+  await buildPackageStaging(stagingRoot, {
+    versionId: delivery.version,
+    relayBaseUrl: delivery.relayBaseUrl
+  });
+  writeDeterministicZip(stagingRoot, freshAixPath);
+  freshReader = new AixReaderWasm(fs.readFileSync(freshAixPath));
+  const fresh = validateReader(freshReader, "fresh AIX build");
+
   assert(JSON.stringify(delivery.names) === JSON.stringify(fresh.names), "Delivery AIX file list does not match the current source build.");
-  for (const name of fresh.names.filter((entry) => entry !== "VERSION")) {
+  for (const name of fresh.names) {
     const freshHash = sha256(Buffer.from(freshReader.read_file(name)));
     const deliveryHash = sha256(Buffer.from(deliveryReader.read_file(name)));
     assert(deliveryHash === freshHash, `Delivery AIX contains stale content: ${name}.`);
+  }
+
+  const craftVersionPath = path.join(path.dirname(deliveryAixPath), "craft-upload", "VERSION");
+  if (fs.existsSync(craftVersionPath)) {
+    const craftVersion = fs.readFileSync(craftVersionPath, "utf8").trim();
+    assert(craftVersion === delivery.version, "Delivery AIX and sibling craft-upload folder must share the same VERSION.");
   }
 
   console.log(`RabiLink AIUI delivery AIX audit passed (${delivery.names.length} files, VERSION ${delivery.version}, SHA256 ${sha256(deliveryBytes)}).`);

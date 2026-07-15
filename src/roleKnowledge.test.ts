@@ -4,12 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  createPlan,
+  createRecentMemory,
   getRecentMemory,
   getRoleSkill,
   listRoleSkills,
   pendingMemoryConsolidation,
   roleKnowledgeSnapshot,
-  updateRecentMemory
+  updateRecentMemory,
+  validateRoleKnowledge
 } from "./roleKnowledge.js";
 
 function makeRoleDir(): string {
@@ -32,6 +35,10 @@ function writeSkill(roleDir: string, fileName: string, text: string): void {
   const filePath = path.join(roleDir, "skills", fileName);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, text, "utf8");
+}
+
+function writePersonaConfig(roleDir: string, config: Record<string, unknown>): void {
+  fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify(config, null, 2), "utf8");
 }
 
 function readRecentMemory(roleDir: string, id: string): Record<string, unknown> {
@@ -153,6 +160,106 @@ test("memory content alone does not create a required read match", () => {
   const snapshot = roleKnowledgeSnapshot(roleDir, "隐藏短语");
   assert.deepEqual(snapshot.requiredReadItems, []);
   assert.deepEqual(snapshot.matchedItems, []);
+});
+
+test("role knowledge writes enforce configured limits and a single-line focus", () => {
+  const roleDir = makeRoleDir();
+  writePersonaConfig(roleDir, {
+    knowledgeLimits: {
+      plan: {
+        titleChars: 30,
+        focusChars: 20,
+        currentStepChars: 20,
+        nextActionChars: 20,
+        waitingForChars: 20,
+        sourceSummaryChars: 20,
+        keywordChars: 10,
+        maxKeywords: 2,
+        totalChars: 100
+      },
+      memory: {
+        titleChars: 30,
+        focusChars: 20,
+        contentChars: 20,
+        sourceSummaryChars: 20,
+        keywordChars: 10,
+        maxKeywords: 2,
+        totalChars: 80
+      }
+    }
+  });
+
+  const plan = createPlan(roleDir, {
+    title: "每日证据检查",
+    focus: "每日证据检查",
+    currentStep: "读取权威状态",
+    keywords: ["每日", "证据"]
+  });
+  assert.equal(plan.focus, "每日证据检查");
+
+  const memory = createRecentMemory(roleDir, {
+    title: "模拟器偏好",
+    focus: "模拟器偏好",
+    content: "安卓游戏统一使用雷电模拟器。",
+    keywords: ["雷电"]
+  });
+  assert.equal(memory.focus, "模拟器偏好");
+
+  assert.throws(() => createPlan(roleDir, {
+    title: "缺少焦点",
+    keywords: ["焦点"]
+  }), /Plan focus is required/);
+  assert.throws(() => createRecentMemory(roleDir, {
+    title: "缺少焦点",
+    content: "内容",
+    keywords: ["焦点"]
+  }), /Memory focus is required/);
+
+  assert.throws(() => createPlan(roleDir, {
+    title: "混合计划",
+    focus: "每日\n周常",
+    keywords: ["混合"]
+  }), /focus must be a single line/);
+  assert.throws(() => createPlan(roleDir, {
+    title: "过长步骤",
+    focus: "过长步骤",
+    currentStep: "这是一段故意超过二十个字符限制的当前步骤内容",
+    keywords: ["长度"]
+  }), /currentStep exceeds 20 characters/);
+  assert.throws(() => createRecentMemory(roleDir, {
+    title: "过长记忆",
+    focus: "过长记忆",
+    content: "这是一段故意超过二十个字符限制的近期记忆内容",
+    keywords: ["长度"]
+  }), /content exceeds 20 characters/);
+  assert.throws(() => createRecentMemory(roleDir, {
+    title: "关键词过多",
+    focus: "关键词过多",
+    content: "内容",
+    keywords: ["一", "二", "三"]
+  }), /maximum is 2/);
+});
+
+test("role knowledge validation reports legacy items that exceed current limits", () => {
+  const roleDir = makeRoleDir();
+  writePersonaConfig(roleDir, {
+    knowledgeLimits: {
+      memory: { contentChars: 5, totalChars: 100 }
+    }
+  });
+  writeRecentMemory(roleDir, {
+    id: "memory-legacy-long",
+    title: "旧记忆",
+    content: "这条旧记忆已经超过新限制",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    keywords: ["旧记忆"]
+  });
+
+  const result = validateRoleKnowledge(roleDir);
+  assert.equal(result.ok, false);
+  assert.equal(result.issues[0]?.id, "memory-legacy-long");
+  assert.match(result.issues[0]?.message ?? "", /content exceeds 5 characters/);
 });
 
 test("role skills are listed from markdown metadata without content", () => {

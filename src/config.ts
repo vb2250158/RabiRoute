@@ -5,6 +5,7 @@ import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/t
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeScheduleDefinitions, type NotificationScheduleDefinition } from "./shared/gatewayConfigModel.js";
+import { resolveProjectPath } from "./shared/projectPaths.js";
 import { resolveRouteIdentity, sanitizeRoleId } from "./shared/routeIdentity.js";
 import { resolveRolePaths, roleFilePath, roleFolderPath } from "./shared/routePaths.js";
 
@@ -354,13 +355,7 @@ function normalizeTemplateText(value: string): string {
 }
 
 function normalizeCodexCwd(value: string | undefined): string | undefined {
-  const trimmed = value?.trim() ?? "";
-  const compact = trimmed.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
-  if (!trimmed || compact === "c:/path/to/your/project") {
-    return undefined;
-  }
-
-  return path.isAbsolute(trimmed) ? trimmed : path.resolve(rootDir, trimmed);
+  return resolveProjectPath(value, rootDir);
 }
 
 const botNickname = process.env.BOT_NICKNAME ?? "QQ小助手";
@@ -426,22 +421,17 @@ export const config = {
   rabiLinkRelayDeviceGuid: normalizeOptionalString(process.env.RABILINK_RELAY_DEVICE_GUID)
     ?? normalizeOptionalString(process.env.RABI_GUID)
     ?? "",
-  rabiLinkRelayWebguiUrl: normalizeOptionalString(process.env.RABILINK_RELAY_WEBGUI_URL)
-    ?? normalizeOptionalString(process.env.GATEWAY_MANAGER_URL)
-    ?? "http://127.0.0.1:8790",
   rabiLinkRelayClaimWaitMs: parseClampedNumber(process.env.RABILINK_RELAY_CLAIM_WAIT_MS, 60000, 0, 60000),
   rabiLinkRelayReplyPollMs: parseClampedNumber(process.env.RABILINK_RELAY_REPLY_POLL_MS, 500, 100, 5000),
   rabiLinkRelayReplyIdleTimeoutMs: parseClampedNumber(process.env.RABILINK_RELAY_REPLY_IDLE_TIMEOUT_MS, 60000, 1000, 120000),
   wecomBotId: process.env.WECOM_BOT_ID?.trim() || "",
   wecomBotSecret: process.env.WECOM_BOT_SECRET?.trim() || "",
   wecomWsUrl: process.env.WECOM_WS_URL?.trim() || "",
-  codexAppServerUrl: process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500",
-  codexDirectNotify: process.env.CODEX_DIRECT_NOTIFY === "1",
-  codexDesktopIpcNotify: process.env.CODEX_DESKTOP_IPC_NOTIFY !== "0",
   agentAdapters: parseAgentAdapters(process.env.AGENT_ADAPTERS),
   agentModel,
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",
   codexCwd: normalizeCodexCwd(process.env.CODEX_CWD) ?? process.cwd(),
+  copilotThreadName: process.env.COPILOT_THREAD_NAME?.trim() || "Copilot CLI",
   targetGroupId: process.env.TARGET_GROUP_ID ?? "",
   botNickname,
   botUserId: "",

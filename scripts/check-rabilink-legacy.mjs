@@ -63,6 +63,7 @@ const checks = [
     ],
     required: [
       [/Remove-Item Env:RABILINK_RELAY_TOKEN/, "deploy script should clear stale legacy token env from the remote session."],
+      [/handle \/worker\/messages/, "deployed Caddyfile should expose the authenticated outbound queue publisher."],
     ],
   },
   {
@@ -72,6 +73,8 @@ const checks = [
     ],
     required: [
       [/\$env:RABILINK_RELAY_APP_TOKEN/, "public smoke test should use the app token env var."],
+      [/Join-Url \$BaseUrl "\/worker\/messages"/, "public smoke test should cover taskless proactive downlink."],
+      [/proactiveRetry\.deduplicated/, "public smoke test should verify proactive delivery idempotency."],
     ],
   },
   {
@@ -81,12 +84,16 @@ const checks = [
     ],
     required: [
       [/\$env:RABILINK_RELAY_APP_TOKEN/, "worker smoke test should use the app token env var."],
+      [/Join-Url \$base "\/worker\/messages"/, "worker smoke test should cover taskless proactive downlink."],
+      [/proactiveRetry\.deduplicated/, "worker smoke test should verify proactive delivery idempotency."],
     ],
   },
   {
     file: "docs/rabilink-relay-server.md",
     required: [
-      [/服务器会按应用隔离 task、worker 领取、WebGUI 请求和下行消息队列/, "Relay docs should state that runtime queues are isolated by app token."],
+      [/服务器会按应用隔离输入项、兼容 task、worker 领取、WebGUI 请求和下行消息队列/, "Relay docs should state that current inputs, compatibility tasks and downlink queues are isolated by app token."],
+      [/AIUI 的连接对话采用 record-first/, "Relay docs should identify record-first as the current AIUI input contract."],
+      [/POST \/worker\/messages[\s\S]*?主动生产者可以直接追加一条没有前置任务的消息|主动生产者可以直接追加一条没有前置任务的消息[\s\S]*?POST \/worker\/messages/, "Relay docs should preserve taskless proactive downlink as a first-class contract."],
       [/日志按账号分离，落在：[\s\S]*data\/rabilink-relay\/account-logs\/<accountId>\.jsonl/, "Relay docs should document per-account control-console logs."],
       [/控制台只读取当前登录账号自己的日志，不混看其他账号/, "Relay docs should explicitly state that console logs are account-isolated."],
       [/账号拥有应用，应用拥有应用 token，PC Rabi worker、任务队列、远程 WebGUI 请求和控制台日志都只能通过所属应用归到这个账号/, "Relay docs should define the account -> app -> token/worker/task/log ownership boundary."],

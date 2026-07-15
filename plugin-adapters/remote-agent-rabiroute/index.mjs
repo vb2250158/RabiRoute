@@ -3,37 +3,59 @@ import http from "node:http";
 import dgram from "node:dgram";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
+import { CodexAppServerClient } from "./codex-app-server-client.mjs";
+import { parseAllowedCwdRoots, resolveRealDirectory, resolveRealFileWithinRoots, resolveTaskCwd as enforceTaskCwd } from "./cwd-policy.mjs";
+import { KeyedTaskQueue } from "./keyed-task-queue.mjs";
+import { normalizePublicControlUrl } from "./public-control-url.mjs";
+import { RemoteTaskLifecycle } from "./task-lifecycle.mjs";
+import { CodexThreadCoordinator } from "./thread-coordinator.mjs";
 
-const PROTOCOL_VERSION = 2;
-const DEFAULT_PASSWORD = "123456";
+const PROTOCOL_VERSION = 3;
+const bridgeVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 const controlHost = process.env.REMOTE_AGENT_CONTROL_HOST || "0.0.0.0";
 const controlPortStart = Number(process.env.REMOTE_AGENT_CONTROL_PORT || "8797");
 const discoveryPortStart = Number(process.env.REMOTE_AGENT_DISCOVERY_PORT_START || process.env.REMOTE_AGENT_DISCOVERY_PORT || "8798");
 const discoveryPortEnd = Number(process.env.REMOTE_AGENT_DISCOVERY_PORT_END || "8818");
-const password = process.env.REMOTE_AGENT_PASSWORD || DEFAULT_PASSWORD;
+const configuredPassword = process.env.REMOTE_AGENT_PASSWORD?.trim() || "";
+if (configuredPassword && Buffer.byteLength(configuredPassword, "utf8") < 16) {
+  throw new Error("REMOTE_AGENT_PASSWORD must be at least 16 UTF-8 bytes.");
+}
+const password = configuredPassword || randomBytes(24).toString("base64url");
 const deviceId = process.env.REMOTE_AGENT_DEVICE_ID || os.hostname();
 const deviceName = process.env.REMOTE_AGENT_DEVICE_NAME || os.hostname();
 const agentType = process.env.REMOTE_AGENT_TYPE || "codex";
-const defaultCwd = process.env.REMOTE_AGENT_DEFAULT_CWD || process.cwd();
+const defaultCwd = resolveRealDirectory(process.env.REMOTE_AGENT_DEFAULT_CWD || process.cwd(), "REMOTE_AGENT_DEFAULT_CWD");
 const defaultThreadName = process.env.REMOTE_AGENT_DEFAULT_THREAD || "Remote Agent";
-const codexAppServerUrl = process.env.REMOTE_AGENT_CODEX_APP_SERVER_URL || "ws://127.0.0.1:4510";
-const codexBin = process.env.REMOTE_AGENT_CODEX_BIN || "codex";
 const publicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || "";
+const publicControlUrl = normalizePublicControlUrl(process.env.REMOTE_AGENT_PUBLIC_CONTROL_URL);
 const fileStoreDir = process.env.REMOTE_AGENT_FILE_DIR || path.join(os.tmpdir(), "rabiroute-remote-agent-files", deviceId);
-const singleFileLimitBytes = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 0);
-const totalFileLimitBytes = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 0);
+const singleFileLimitBytes = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 10 * 1024 * 1024);
+const totalFileLimitBytes = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 25 * 1024 * 1024);
+const allowNetwork = process.env.REMOTE_AGENT_ALLOW_NETWORK === "1";
+const allowedCwdRoots = parseAllowedCwdRoots(process.env.REMOTE_AGENT_ALLOWED_CWDS, defaultCwd);
+const taskTerminalTimeoutMs = positiveDuration("REMOTE_AGENT_TASK_TIMEOUT_MS", 30 * 60 * 1000);
+const resumedTurnWaitMs = positiveDuration("REMOTE_AGENT_RESUMED_TURN_WAIT_MS", 30 * 1000);
 
 let actualControlPort = 0;
 let discoveryPort = 0;
 let discoveryWarning = "";
 let managerSocket = null;
 let managerInfo = null;
-let appSocket = null;
-let appNextId = 1;
-const appPending = new Map();
+let codexClient = null;
+let cachedDefaultModel = "";
+let threadCoordinator = null;
+const pendingTaskEvents = [];
+const MAX_PENDING_TASK_EVENTS = 1000;
+const threadTaskQueue = new KeyedTaskQueue();
+const taskCwdById = new Map();
+
+function positiveDuration(name, fallback) {
+  const value = Number(process.env[name] || fallback);
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive finite number.`);
+  return value;
+}
 
 function firstLocalIp() {
   const scored = [];
@@ -70,6 +92,28 @@ function deviceInfo() {
 function localRemoteAddress(value) {
   const address = String(value || "").replace(/^::ffff:/, "");
   return address === "::1" || address === "localhost" || address === "127.0.0.1" || address.startsWith("127.");
+}
+
+function resolveTaskCwd(value) {
+  return enforceTaskCwd(value, { defaultCwd, allowedCwdRoots });
+}
+
+function managerAuthProof(nonce) {
+  return createHmac("sha256", password)
+    .update(`rabiroute.remote-agent.v3:manager:${nonce}`)
+    .digest("base64url");
+}
+
+function serverAuthProof(nonce) {
+  return createHmac("sha256", password)
+    .update(`rabiroute.remote-agent.v3:server:${nonce}`)
+    .digest("base64url");
+}
+
+function managerAuthProofMatches(candidate, nonce) {
+  const expected = Buffer.from(managerAuthProof(nonce), "utf8");
+  const actual = Buffer.from(String(candidate || ""), "utf8");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 function readJson(request) {
@@ -114,7 +158,7 @@ function htmlResponse(response) {
       <h1>RabiRoute Remote Agent</h1>
       <div class="status">设备：${deviceName} (${deviceId}) · agentType=${agentType} · ${process.platform}/${process.arch}</div>
       <p>远端 Agent 已无人值守启动。请回到 RabiGUI 扫描局域网远端 Agent，并输入密码连接。</p>
-      <p>默认密码：<code>${password === DEFAULT_PASSWORD ? DEFAULT_PASSWORD : "已通过 REMOTE_AGENT_PASSWORD 覆盖"}</code></p>
+      <p>认证密码：<code>${configuredPassword ? "已通过 REMOTE_AGENT_PASSWORD 配置" : "本次启动已生成高熵临时密码，请查看本机终端"}</code></p>
       <p>控制端口：<code>${actualControlPort || "-"}</code></p>
       <p>发现端口：<code>${discoveryPort || discoveryWarning || "-"}</code></p>
     </main>
@@ -122,15 +166,50 @@ function htmlResponse(response) {
   </html>`);
 }
 
-function sendToManager(payload) {
-  if (!managerSocket || managerSocket.readyState !== WebSocket.OPEN) {
-    throw new Error("Remote Agent bridge is not connected to RabiRoute manager.");
+function queueTaskEvent(payload) {
+  if (pendingTaskEvents.length >= MAX_PENDING_TASK_EVENTS) {
+    const droppableIndex = pendingTaskEvents.findIndex((event) => event.status !== "completed" && event.status !== "failed");
+    if (droppableIndex >= 0) {
+      pendingTaskEvents.splice(droppableIndex, 1);
+      console.error("Remote Agent pending task-event queue reached its limit; the oldest non-terminal event was dropped.");
+    } else if (payload.status !== "completed" && payload.status !== "failed") {
+      console.error("Remote Agent pending task-event queue contains only terminal events; a new non-terminal event was dropped.");
+      return;
+    }
   }
-  managerSocket.send(JSON.stringify(payload));
+  pendingTaskEvents.push(payload);
 }
 
+function dispatchTaskEvent(event) {
+  const payload = { type: "taskEvent", ...event, device: deviceInfo() };
+  if (managerSocket?.readyState === WebSocket.OPEN) {
+    try {
+      managerSocket.send(JSON.stringify(payload));
+      return;
+    } catch (error) {
+      console.error(`Remote Agent could not send a task event immediately; it was queued: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  queueTaskEvent(payload);
+}
+
+function flushPendingTaskEvents() {
+  if (managerSocket?.readyState !== WebSocket.OPEN) return;
+  while (pendingTaskEvents.length) {
+    try {
+      managerSocket.send(JSON.stringify(pendingTaskEvents[0]));
+      pendingTaskEvents.shift();
+    } catch (error) {
+      console.error(`Remote Agent could not flush pending task events: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+  }
+}
+
+const taskLifecycle = new RemoteTaskLifecycle({ emit: dispatchTaskEvent });
+
 function sendTaskEvent(event) {
-  sendToManager({ type: "taskEvent", ...event, device: deviceInfo() });
+  return taskLifecycle.send(event);
 }
 
 function safeFileName(value, fallback) {
@@ -140,6 +219,14 @@ function safeFileName(value, fallback) {
 
 function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
+}
+
+function stableClientMessageId(taskId) {
+  const hex = createHash("sha256").update(String(taskId || "remote-agent-task")).digest("hex").slice(0, 32).split("");
+  hex[12] = "5";
+  hex[16] = ((Number.parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  const value = hex.join("");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
 }
 
 function assertFileTransferSize(size, total, label) {
@@ -183,11 +270,9 @@ function materializeTaskFiles(task) {
   });
 }
 
-function readTransferFile(filePath, fallbackName) {
-  const resolved = path.resolve(String(filePath || ""));
-  if (!fs.existsSync(resolved)) throw new Error(`Remote Agent result file does not exist: ${resolved}`);
+function readTransferFile(filePath, fallbackName, allowedRoots) {
+  const resolved = resolveRealFileWithinRoots(filePath, allowedRoots);
   const stat = fs.statSync(resolved);
-  if (!stat.isFile()) throw new Error(`Remote Agent result path is not a regular file: ${resolved}`);
   assertFileTransferSize(stat.size, stat.size, resolved);
   const buffer = fs.readFileSync(resolved);
   return {
@@ -199,7 +284,7 @@ function readTransferFile(filePath, fallbackName) {
   };
 }
 
-function filesFromCallback(body) {
+function filesFromCallback(body, allowedRoots) {
   const files = [];
   let total = 0;
   const candidates = [];
@@ -228,7 +313,7 @@ function filesFromCallback(body) {
       const resolvedPath = path.resolve(String(item.path));
       if (seenPaths.has(resolvedPath)) continue;
       seenPaths.add(resolvedPath);
-      const file = readTransferFile(item.path, item.name);
+      const file = readTransferFile(item.path, item.name, allowedRoots);
       total += file.size;
       assertFileTransferSize(file.size, total, item.path);
       files.push(file);
@@ -336,118 +421,64 @@ async function bindDiscoverySocket() {
   throw new Error(`Remote Agent discovery port range ${discoveryPortStart}-${end} is occupied.`);
 }
 
-async function ensureCodexAppServer(cwd) {
-  const url = new URL(codexAppServerUrl);
-  if (url.hostname === "127.0.0.1" || url.hostname === "localhost") {
-    try {
-      const health = await fetch(`http://${url.hostname}:${url.port}/healthz`);
-      if (health.ok) return;
-    } catch {
-      // start below
-    }
-    const out = path.join(os.tmpdir(), "rabiroute-remote-agent-codex-app-server.out.log");
-    const err = path.join(os.tmpdir(), "rabiroute-remote-agent-codex-app-server.err.log");
-    const child = spawn(codexBin, ["app-server", "--listen", codexAppServerUrl], {
-      cwd,
-      detached: true,
-      shell: process.platform === "win32",
-      stdio: ["ignore", fs.openSync(out, "a"), fs.openSync(err, "a")]
+async function connectCodexAppServer() {
+  if (!codexClient) {
+    codexClient = new CodexAppServerClient({
+      cwd: defaultCwd,
+      logDir: path.join(fileStoreDir, "logs"),
+      version: bridgeVersion,
+      onNotification: (message) => {
+        const closedTasks = taskLifecycle.handleNotification(message);
+        if (message.method === "error" && message.params?.willRetry !== true && closedTasks === 0) {
+          console.error(`Codex terminal error without a registered remote turn: ${JSON.stringify(message.params?.error || message.params)}`);
+        }
+      },
+      onExit: (error) => {
+        cachedDefaultModel = "";
+        const failedTasks = taskLifecycle.handleAppServerExit(error);
+        console.error(`Codex app-server exited; ${failedTasks} active remote task(s) were failed: ${error.message}`);
+      }
     });
-    child.unref();
-    await new Promise((resolve) => setTimeout(resolve, 2500));
   }
+  await codexClient.start();
+  return codexClient;
 }
 
-async function connectCodexAppServer(cwd) {
-  if (appSocket?.readyState === WebSocket.OPEN) return appSocket;
-  await ensureCodexAppServer(cwd);
-  appSocket = new WebSocket(codexAppServerUrl);
-  appSocket.on("message", (data) => {
-    const msg = JSON.parse(data.toString());
-    if (typeof msg.id !== "number") return;
-    const pending = appPending.get(msg.id);
-    if (!pending) return;
-    appPending.delete(msg.id);
-    if (msg.error) pending.reject(new Error(JSON.stringify(msg.error)));
-    else pending.resolve(msg.result);
-  });
-  appSocket.on("close", () => { appSocket = null; });
-  await new Promise((resolve, reject) => {
-    appSocket.once("open", resolve);
-    appSocket.once("error", reject);
-  });
-  await codexRequest("initialize", {
-    clientInfo: { name: "rabiroute-remote-agent", title: "RabiRoute Remote Agent", version: "0.1.0" },
-    capabilities: { experimentalApi: true }
-  });
-  return appSocket;
+async function codexRequest(method, params) {
+  return (await connectCodexAppServer()).request(method, params);
 }
 
-function codexRequest(method, params) {
-  if (!appSocket || appSocket.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("Codex app-server is not connected."));
-  }
-  const id = appNextId++;
-  appSocket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (appPending.delete(id)) reject(new Error(`Codex app-server request timed out: ${method}`));
-    }, 30000);
-    appPending.set(id, {
-      resolve: (value) => { clearTimeout(timer); resolve(value); },
-      reject: (error) => { clearTimeout(timer); reject(error); }
-    });
-  });
-}
-
-function sessionIndexPath() {
-  return path.join(os.homedir(), ".codex", "session_index.jsonl");
-}
-
-function findThreadByName(threadName) {
-  const indexPath = sessionIndexPath();
-  if (!fs.existsSync(indexPath)) return null;
-  const latest = new Map();
-  for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const item = JSON.parse(line);
-      if (typeof item.id !== "string" || typeof item.thread_name !== "string" || typeof item.updated_at !== "string") continue;
-      if (item.thread_name !== threadName) continue;
-      const existing = latest.get(item.id);
-      if (!existing || Date.parse(item.updated_at) > Date.parse(existing.updated_at)) latest.set(item.id, item);
-    } catch {
-      // skip malformed lines
+async function resolveDefaultModel() {
+  if (cachedDefaultModel) return cachedDefaultModel;
+  let cursor = null;
+  for (let page = 0; page < 10; page += 1) {
+    const result = await codexRequest("model/list", { cursor, limit: 100, includeHidden: true });
+    const selected = (result?.data || []).find((item) => item?.isDefault === true);
+    const model = String(selected?.model || selected?.id || "").trim();
+    if (model) {
+      cachedDefaultModel = model;
+      return model;
     }
+    cursor = typeof result?.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
+    if (!cursor) break;
   }
-  return [...latest.values()].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))[0] || null;
-}
-
-async function canReadThread(threadId) {
-  try {
-    await codexRequest("thread/read", { threadId });
-    return true;
-  } catch {
-    return false;
-  }
+  throw new Error("Codex runtime did not report a default model from model/list.");
 }
 
 async function ensureThread(threadName, cwd) {
-  const existing = findThreadByName(threadName);
-  if (existing && await canReadThread(existing.id)) return existing.id;
-  const result = await codexRequest("thread/start", {
-    cwd,
-    approvalPolicy: "never",
-    sandbox: "workspace-write",
-    threadSource: "user",
-    sessionStartSource: "startup",
-    ephemeral: false,
-    developerInstructions: "你是一个由 RabiRoute 远端 Agent bridge 调用的下游 Agent。按任务要求执行，完成后必须调用本地回调 API 回传结果。"
-  });
-  const threadId = result?.thread?.id;
-  if (!threadId) throw new Error(`thread/start did not return thread id: ${JSON.stringify(result)}`);
-  await codexRequest("thread/name/set", { threadId, name: threadName });
-  return threadId;
+  if (!threadCoordinator) {
+    threadCoordinator = new CodexThreadCoordinator({
+      request: codexRequest,
+      resolveModel: resolveDefaultModel,
+      lifecycle: taskLifecycle,
+      resumedTurnWaitMs,
+      developerInstructions: "你是一个由 RabiRoute 远端 Agent bridge 调用的下游 Agent。只在允许的工作目录内执行；bridge 会通过 app-server turn 事件跟踪最终状态，本地回调只用于可选的详细进度和文件。",
+      onBusyThread: ({ threadId, turnId, terminal }) => {
+        console.warn(`Remote Agent will not reuse busy Codex thread ${threadId}; active turn ${turnId} did not reach a reusable terminal state (${terminal.turnStatus || terminal.status}).`);
+      }
+    });
+  }
+  return threadCoordinator.ensureThread(threadName, cwd);
 }
 
 function buildTaskPrompt(task, localFiles = []) {
@@ -465,7 +496,8 @@ function buildTaskPrompt(task, localFiles = []) {
     `任务类型：${task.taskKind || "remote-agent-task"}`,
     `回调 API：${callbackUrl}`,
     "",
-    "请执行以下任务。任务完成、失败或有关键进度时，必须 POST 到回调 API。",
+    "请执行以下任务。最终答案必须直接写在本 turn 的最终 agentMessage 中；bridge 会从 app-server turn/completed 自动提取并回传，不依赖网络回调。",
+    "只有已启用网络且需要额外进度或附件时才选择性 POST 到回调 API；若 sandbox 禁止网络，不要为回调放宽权限。",
     "回调 JSON 示例：",
     JSON.stringify({
       taskId: task.taskId,
@@ -482,34 +514,77 @@ function buildTaskPrompt(task, localFiles = []) {
   ].join("\n");
 }
 
-async function deliverToCodex(task, localFiles = []) {
-  const cwd = task.cwd || defaultCwd;
+async function deliverToCodex(task, localFiles = [], cwd) {
   const threadName = task.threadName || defaultThreadName;
-  await connectCodexAppServer(cwd);
+  await connectCodexAppServer();
+  const model = await resolveDefaultModel();
   const threadId = await ensureThread(threadName, cwd);
-  await codexRequest("turn/start", {
+  const result = await codexRequest("turn/start", {
     threadId,
-    input: [{ type: "text", text: buildTaskPrompt(task, localFiles) }],
+    clientUserMessageId: stableClientMessageId(task.taskId),
+    input: [{ type: "text", text: buildTaskPrompt(task, localFiles), text_elements: [] }],
     cwd,
     approvalPolicy: "never",
-    sandboxPolicy: { type: "dangerFullAccess" },
-    effort: "high",
-    personality: "friendly"
+    sandboxPolicy: {
+      type: "workspaceWrite",
+      writableRoots: [cwd],
+      networkAccess: allowNetwork,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false
+    },
+    model
   });
-  return { threadId, threadName, cwd };
+  const turnId = String(result?.turn?.id || "").trim();
+  if (!turnId) throw new Error(`turn/start did not return turn id: ${JSON.stringify(result)}`);
+  return { threadId, turnId, threadName, cwd };
+}
+
+function threadTargetKey(threadName, cwd) {
+  const comparableCwd = process.platform === "win32" ? cwd.toLowerCase() : cwd;
+  return `${comparableCwd}\0${threadName}`;
+}
+
+async function executeTask(task, taskId, cwd) {
+  try {
+    if (taskLifecycle.isTerminal(taskId)) return;
+    taskCwdById.set(taskId, cwd);
+    const localFiles = materializeTaskFiles(task);
+    const delivered = await deliverToCodex(task, localFiles, cwd);
+    taskLifecycle.registerTurn({ taskId, turnId: delivered.turnId, threadId: delivered.threadId });
+    sendTaskEvent({ taskId, status: "progress", summary: "Task injected into remote Codex thread.", data: { ...delivered, files: localFiles } });
+    const terminal = await taskLifecycle.waitForTaskTerminal(taskId, taskTerminalTimeoutMs);
+    if (terminal.status === "timeout") {
+      sendTaskEvent({
+        taskId,
+        status: "failed",
+        error: terminal.error,
+        summary: "Remote Codex task exceeded its terminal-state timeout; its thread will not be reused while that turn remains active."
+      });
+    }
+  } catch (error) {
+    sendTaskEvent({ taskId, status: "failed", error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    taskCwdById.delete(taskId);
+  }
 }
 
 async function handleTask(task) {
+  const taskId = String(task?.taskId || "").trim();
+  if (!taskId) {
+    console.error("Remote Agent received a task without taskId; the task was rejected.");
+    return;
+  }
   try {
-    sendTaskEvent({ taskId: task.taskId, status: "started", summary: "Remote bridge received task and is injecting it into the local Agent." });
+    sendTaskEvent({ taskId, status: "started", summary: "Remote bridge received task and is waiting for an exclusive Codex thread turn." });
     if (agentType !== "codex") {
       throw new Error(`Unsupported REMOTE_AGENT_TYPE: ${agentType}. This bridge currently implements codex.`);
     }
-    const localFiles = materializeTaskFiles(task);
-    const delivered = await deliverToCodex(task, localFiles);
-    sendTaskEvent({ taskId: task.taskId, status: "progress", summary: "Task injected into remote Codex thread.", data: { ...delivered, files: localFiles } });
+    const cwd = resolveTaskCwd(task.cwd);
+    const threadName = String(task.threadName || defaultThreadName);
+    await threadTaskQueue.run(threadTargetKey(threadName, cwd), () => executeTask(task, taskId, cwd));
   } catch (error) {
-    sendTaskEvent({ taskId: task.taskId, status: "failed", error: error instanceof Error ? error.message : String(error) });
+    taskCwdById.delete(taskId);
+    sendTaskEvent({ taskId, status: "failed", error: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -540,9 +615,23 @@ function createControlServer() {
           return;
         }
         const body = await readJson(request);
-        const files = filesFromCallback(body);
-        sendTaskEvent(files.length ? { ...body, files } : body);
-        jsonResponse(response, 202, { ok: true });
+        const taskId = String(body?.taskId || "").trim();
+        if (!taskId) {
+          jsonResponse(response, 400, { ok: false, error: "Task event callback requires taskId." });
+          return;
+        }
+        if (taskLifecycle.isTerminal(taskId)) {
+          jsonResponse(response, 202, { ok: true, duplicate: true });
+          return;
+        }
+        const taskCwd = taskCwdById.get(taskId);
+        if (!taskCwd) {
+          jsonResponse(response, 404, { ok: false, error: "Remote Agent callback task is not active on this bridge." });
+          return;
+        }
+        const files = filesFromCallback(body, [taskCwd]);
+        const accepted = sendTaskEvent(files.length ? { ...body, taskId, files } : { ...body, taskId });
+        jsonResponse(response, 202, { ok: true, duplicate: !accepted });
         return;
       }
       jsonResponse(response, 404, { ok: false, error: "Not found" });
@@ -551,24 +640,34 @@ function createControlServer() {
     }
   });
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: Math.max(totalFileLimitBytes * 2, 1024 * 1024) });
   server.on("upgrade", (request, socket, head) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (requestUrl.pathname !== "/api/remote-agent/control") return;
+    if (requestUrl.pathname !== "/api/remote-agent/control") {
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(request, socket, head, (ws) => {
       let authenticated = false;
+      const authNonce = randomBytes(32).toString("base64url");
       const authTimer = setTimeout(() => {
         if (!authenticated) {
-          ws.send(JSON.stringify({ type: "error", error: "Password handshake timed out." }));
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "error", error: "Password handshake timed out." }));
           ws.close();
         }
       }, 5000);
+      ws.send(JSON.stringify({
+        type: "challenge",
+        protocolVersion: PROTOCOL_VERSION,
+        algorithm: "hmac-sha256",
+        nonce: authNonce
+      }));
       ws.on("message", (data) => {
         try {
           const msg = JSON.parse(data.toString());
           if (!authenticated) {
-            if (msg.type !== "hello" || String(msg.password || "") !== password) {
-              ws.send(JSON.stringify({ type: "error", error: "Invalid remote Agent password." }));
+            if (msg.type !== "hello" || msg.protocolVersion !== PROTOCOL_VERSION || !managerAuthProofMatches(msg.proof, authNonce)) {
+              ws.send(JSON.stringify({ type: "error", error: "Invalid remote Agent protocol or password." }));
               ws.close();
               return;
             }
@@ -582,23 +681,34 @@ function createControlServer() {
             ws.send(JSON.stringify({
               type: "registered",
               protocolVersion: PROTOCOL_VERSION,
+              serverProof: serverAuthProof(authNonce),
               device: deviceInfo(),
               managerTime: new Date().toISOString()
             }));
+            flushPendingTaskEvents();
             return;
           }
           if (msg.type === "task") {
-            void handleTask(msg.task);
+            void handleTask(msg.task).catch((error) => {
+              console.error(`Remote Agent task handler failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`);
+            });
           }
         } catch (error) {
-          ws.send(JSON.stringify({ type: "error", error: error instanceof Error ? error.message : String(error) }));
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "error", error: error instanceof Error ? error.message : String(error) }));
+          }
         }
       });
       ws.on("close", () => {
+        clearTimeout(authTimer);
         if (managerSocket === ws) {
           managerSocket = null;
           managerInfo = null;
         }
+      });
+      ws.on("error", (error) => {
+        clearTimeout(authTimer);
+        console.error(`Remote Agent control socket error: ${error.message}`);
       });
     });
   });
@@ -624,14 +734,19 @@ async function startDiscoveryResponder() {
       return;
     }
     if (payload.type !== "rabiroute.remoteAgent.client.discover") return;
-    const host = publicHost || firstLocalIp();
+    const publicEndpoint = publicControlUrl ? new URL(publicControlUrl) : null;
+    const host = publicEndpoint?.hostname || publicHost || firstLocalIp();
+    const advertisedPort = publicEndpoint
+      ? Number(publicEndpoint.port || (publicEndpoint.protocol === "wss:" ? 443 : 80))
+      : actualControlPort;
     const response = Buffer.from(JSON.stringify({
       type: "rabiroute.remoteAgent.client",
       protocolVersion: PROTOCOL_VERSION,
       device: deviceInfo(),
       host,
-      port: actualControlPort,
-      controlUrl: `ws://${host}:${actualControlPort}/api/remote-agent/control`,
+      port: advertisedPort,
+      controlUrl: publicControlUrl || `ws://${host}:${actualControlPort}/api/remote-agent/control`,
+      publicControlUrl: Boolean(publicControlUrl),
       discoveryPort,
       passwordRequired: true,
       sentAt: new Date().toISOString()
@@ -644,8 +759,10 @@ async function startDiscoveryResponder() {
 const server = createControlServer();
 actualControlPort = await listenServerFrom(server, controlPortStart, controlHost);
 console.log(`Remote Agent control listening on http://${controlHost}:${actualControlPort}`);
-console.log(`Remote Agent password: ${password === DEFAULT_PASSWORD ? "123456 (default)" : "set by REMOTE_AGENT_PASSWORD"}`);
+console.log(`Remote Agent password: ${configuredPassword ? "set by REMOTE_AGENT_PASSWORD" : `${password} (generated for this process)`}`);
 await startDiscoveryResponder();
+
+process.once("exit", () => codexClient?.close());
 
 setInterval(() => {
   try {

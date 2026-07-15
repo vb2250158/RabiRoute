@@ -30,7 +30,8 @@ export {
 
 export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "rabilink" | "webhook" | "wecom" | "disabled";
 export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
-export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
+export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
+export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
 
@@ -46,7 +47,8 @@ export type PipelineDefinition = {
   id?: string;
   name?: string;
   inputAdapter?: MessageAdapterType;
-  outputAdapter?: OutputAdapterType;
+  /** `codex` is accepted only as a legacy input and normalizes to `agent`. */
+  outputAdapter?: PipelineOutputAdapterInput;
   outputPipeline?: string;
   promptOutputMode?: PromptOutputMode;
   ttsProvider?: string;
@@ -172,6 +174,7 @@ export type GatewayDefinition = {
   agentModel?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  copilotThreadName?: string;
   copilotCwd?: string;
   copilotCliBin?: string;
   marvisAppId?: string;
@@ -564,16 +567,23 @@ export function syncPrimaryNapCatInstanceFields(
 }
 
 function normalizeAgentAdaptersFallback(adapters: AgentAdapterType[] | undefined): AgentAdapterType[] {
-  const rawItems = (adapters ?? ["codex"]) as unknown[];
+  if (adapters === undefined) {
+    return ["codex"];
+  }
+  const rawItems = adapters as unknown[];
   const next = rawItems
-    .map((item) => item === "codexDesktop" || item === "codexApp" ? "codex" : item)
     .filter((item): item is AgentAdapterType => agentAdapterValues.has(item as AgentAdapterType));
   const unique = [...new Set(next)];
-  return unique.length ? unique : ["codex"];
+  return unique;
 }
 
 function normalizePipelineFallback(pipeline: PipelineDefinition | undefined): PipelineDefinition | undefined {
-  return pipeline;
+  if (!pipeline) return undefined;
+  return {
+    ...pipeline,
+    outputAdapter: pipeline.outputAdapter === "codex" ? "agent" : pipeline.outputAdapter,
+    outputPipeline: pipeline.outputPipeline === "codex" ? "agent" : pipeline.outputPipeline
+  };
 }
 
 function normalizeRouteProfile(
@@ -689,7 +699,9 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     napcatWebuiToken: primaryNapcat?.webuiToken ?? definition.napcatWebuiToken,
     napcatInstances: usesNapcat ? napcatInstances : undefined,
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
+    codexThreadName: definition.codexThreadName?.trim() || undefined,
     codexCwd: normalizeCodexCwd(definition.codexCwd),
+    copilotThreadName: definition.copilotThreadName?.trim() || undefined,
     groupNotificationTemplate: normalizeOptionalTemplate(definition.groupNotificationTemplate),
     groupAtNotificationTemplate: normalizeOptionalTemplate(definition.groupAtNotificationTemplate),
     groupDirectReplyNotificationTemplate: normalizeOptionalTemplate(definition.groupDirectReplyNotificationTemplate),

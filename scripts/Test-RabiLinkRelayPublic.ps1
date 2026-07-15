@@ -209,3 +209,30 @@ Assert-True (@($outbox.messages).Count -ge 1) "Outbox did not return smoke messa
 Assert-True (($outbox.messages | ConvertTo-Json -Depth 5) -like "*$taskId*") "Outbox messages did not include the smoke taskId."
 Assert-True (($outbox.text -like "*rabilink public smoke ok*") -or (($outbox.messages | ConvertTo-Json -Depth 5) -like "*rabilink public smoke ok*")) "Outbox did not contain smoke reply."
 Write-Step "queue smoke" ("taskId present, global messages={0}, nextCursor={1}" -f @($outbox.messages).Count, $outbox.nextCursor)
+
+$proactiveAfter = [string]$outbox.nextCursor
+$deliveryId = "public-smoke-" + [guid]::NewGuid().ToString("N")
+$proactiveText = "rabilink public proactive smoke $deliveryId"
+$proactiveBody = @{
+    text = $proactiveText
+    source = "rabilink-relay-smoke"
+    deliveryId = $deliveryId
+    proactive = $true
+    final = $true
+} | ConvertTo-Json -Compress
+$proactive = Invoke-RestMethod -Method Post -Uri (Join-Url $BaseUrl "/worker/messages") -Headers $jsonHeaders -Body $proactiveBody -TimeoutSec 10
+Assert-True ($proactive.ok -eq $true) "Proactive message submit did not return ok=true."
+Assert-True ($proactive.deduplicated -ne $true) "First proactive submit was unexpectedly deduplicated."
+
+$proactiveRetry = Invoke-RestMethod -Method Post -Uri (Join-Url $BaseUrl "/worker/messages") -Headers $jsonHeaders -Body $proactiveBody -TimeoutSec 10
+Assert-True ($proactiveRetry.ok -eq $true) "Proactive message retry did not return ok=true."
+Assert-True ($proactiveRetry.deduplicated -eq $true) "Proactive retry did not reuse the delivery id."
+Assert-True ([string]$proactiveRetry.nextCursor -eq [string]$proactive.nextCursor) "Proactive retry created a different queue item."
+
+$proactiveUrl = Join-Url $BaseUrl ("/rokid/rabilink/messages?stream=1&after={0}&waitMs=0" -f [uri]::EscapeDataString($proactiveAfter))
+$proactiveOutbox = Invoke-RestMethod -Method Get -Uri $proactiveUrl -Headers $authHeaders -TimeoutSec 10
+$matchingProactive = @($proactiveOutbox.messages | Where-Object { $_.text -eq $proactiveText })
+Assert-True ($matchingProactive.Count -eq 1) "Global stream did not return exactly one taskless proactive message."
+Assert-True ($matchingProactive[0].proactive -eq $true) "Taskless message was not marked proactive."
+Assert-True ([string]::IsNullOrWhiteSpace([string]$matchingProactive[0].taskId)) "Proactive message unexpectedly required a taskId."
+Write-Step "proactive queue smoke" "taskless delivery is idempotent and visible in stream=1"

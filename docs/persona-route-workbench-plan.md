@@ -64,7 +64,7 @@ route 配置固定指向 agentRoleId
 - 不做人格智能匹配。当前产品没有这个模型；如果未来要做，应另立“多人格分流”设计。
 - 不在人格页重复编辑消息端、Agent 端、模型、pipeline。这些仍属于 `adapterConfig.json` 和路由配置页。
 - 不把聊天记录自动变成记忆。记忆仍由 Agent 通过现有接口主动创建或更新。
-- 不在预览时投递 Agent、外发 QQ、写 outbox、写 `codex-notifications.jsonl` 或刷新记忆 `viewedAt`。
+- 不在预览时投递 Agent、外发 QQ、写 outbox、写 `agent-packets.jsonl` 或刷新记忆 `viewedAt`。
 - 不增加没有消费点的字段。任何新增 UI 都必须有真源、消费点、生效时机和验收方式。
 
 ## 配置归口
@@ -215,7 +215,7 @@ route 配置固定指向 agentRoleId
 - 不向 QQ / RabiLink / WeCom 外发消息。
 - 不调用 Agent adapter。
 - 不写 `group-messages.jsonl`、`private-messages.jsonl`、`voice-transcripts.jsonl`、`wecom-messages.jsonl`、`heartbeat-events.jsonl` 或 `manual-trigger-events.jsonl`。
-- 不写 `codex-notifications.jsonl`。
+- 不写 `agent-packets.jsonl`。
 - 不写 outbox / delivery replay ledger。
 - 不更新 memory `viewedAt`。
 
@@ -286,7 +286,7 @@ POST /api/gateways/:gatewayId/preview/delivery
 
 禁止：
 
-- 不写 `codex-notifications.jsonl`
+- 不写 `agent-packets.jsonl`
 - 不 append role record
 - 不发 Agent
 - 不写 delivery replay ledger
@@ -401,7 +401,7 @@ roleKnowledgeSnapshot(roleDir, messageText, {
 - 文档和 UI 必须区分“单 route profile 预览”和“真实 gateway 投递会遍历 active routeProfiles”。
 - 命中结果与真实 `createRouteDecision` 一致。
 - AgentPacket 预览与真实投递内容一致。
-- 预览不会新增 `codex-notifications.jsonl`、不会投递 Agent、不会外发 QQ、不会更新 memory `viewedAt`。
+- 预览不会新增 `agent-packets.jsonl`、不会投递 Agent、不会外发 QQ、不会更新 memory `viewedAt`。
 - 人格页能列出所有使用该人格的 route。
 - route 未启用对应消息端时，规则健康检查能提示。
 - 真实测试只有用户明确点击才发生，并返回 delivered / failed / missed。

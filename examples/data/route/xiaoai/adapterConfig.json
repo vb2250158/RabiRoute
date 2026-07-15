@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "pipelinePreset": "voice_chat",
   "pipeline": {
     "id": "xiaoai_voice",
@@ -35,7 +35,7 @@
   "xiaoaiWebhookPort": 8791,
   "xiaoaiWebhookPath": "/xiaoai",
   "codexThreadName": "RabiRoute XiaoAI",
-  "codexCwd": "C:/Path/To/Your/Project",
+  "codexCwd": ".",
   "agentAdapters": [
     "codex"
   ],

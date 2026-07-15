@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 import { handleAgentThreadRequest, type AgentThreadRequest } from "../agentThreads.js";
+import { agentStateReportDecision } from "../agentAdapters/stateReportOrder.js";
 import {
   deployAstrbotAdapter,
   getCopilotStatus,
@@ -21,6 +23,7 @@ import type { ForwardRouteKind } from "../forwarding.js";
 import { listDeliveryReplayAttempts } from "../deliveryReplayLedger.js";
 import {
   configureNapcatOneBot,
+  ensureNapcatInstanceReady,
   launchNapcatInstance as launchNapcatInstanceEndpoint,
   nextFreeLocalPort,
   prepareManagedNapcatInstance,
@@ -54,6 +57,8 @@ import {
   validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
   type MessageAdapterPolicies
 } from "../shared/gatewayConfigModel.js";
+import { resolveProjectPath, toProjectRelativePath } from "../shared/projectPaths.js";
+import { rabiRoutePackageVersion } from "../packageInfo.js";
 import {
   routeRuntimeParts,
   sanitizeConfigName,
@@ -67,8 +72,11 @@ import {
   personaConfigPath as resolvePersonaConfigPath
 } from "../shared/routePaths.js";
 import { ManagerConfigRepository } from "./configRepository.js";
+import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
+import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import { handleRabiApi } from "./rabiApi.js";
+import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import {
@@ -85,7 +93,8 @@ import {
   listRoleSkills,
   pendingMemoryConsolidation,
   updatePlan,
-  updateRecentMemory
+  updateRecentMemory,
+  validateRoleKnowledge
 } from "../roleKnowledge.js";
 
 type GatewayDefinition = {
@@ -136,6 +145,7 @@ type GatewayDefinition = {
   agentModel?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  copilotThreadName?: string;
   copilotCwd?: string;
   copilotCliBin?: string;
   marvisAppId?: string;
@@ -216,6 +226,7 @@ type GatewayRuntime = {
   needsRestart: boolean;
   startedAt: string | null;
   stoppedAt: string | null;
+  agentStateGeneration?: string;
   lastExit: {
     code: number | null;
     signal: NodeJS.Signals | null;
@@ -231,6 +242,8 @@ type AgentRuntimeState = Record<string, unknown> & {
 type AgentStateReportRequest = {
   gatewayId?: string;
   adapterType?: AgentAdapterType;
+  generation?: string;
+  sequence?: number;
   state?: Record<string, unknown>;
 };
 
@@ -314,6 +327,7 @@ const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.en
 const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
 const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
+const rabiLinkRelayRuntime = new RabiLinkRelayRuntime();
 
 type ManagerConfig = { routeDir?: string; rolesDir?: string };
 
@@ -333,7 +347,6 @@ const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0
 const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
 const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
 const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlaybackToken;
-const packageJsonPath = path.join(rootDir, "package.json");
 const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
 const runtimes = new RuntimeRegistry();
 const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
@@ -498,7 +511,7 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
     managerPort,
     routeDataDir: (configName) => path.relative(rootDir, routeFolderPath(routeRoot, configName)).replace(/\\/g, "/"),
     rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/"),
-    normalizeAgentAdapters: (adapters) => normalizeAgentAdapters(adapters ?? []),
+    normalizeAgentAdapters: (adapters) => normalizeAgentAdapters(adapters),
     normalizePipeline: (pipeline) => normalizePipelineDefinition(pipeline) as GatewayDefinition["pipeline"]
   }) as GatewayDefinition;
 }
@@ -546,17 +559,7 @@ function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstance
 }
 
 function normalizeCodexCwd(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  const compact = trimmed.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
-  if (!trimmed || compact === "c:/path/to/your/project") {
-    return undefined;
-  }
-
-  return path.isAbsolute(trimmed) ? trimmed : path.resolve(rootDir, trimmed);
+  return resolveProjectPath(value, rootDir);
 }
 
 function resolveCodexThreadName(definition: GatewayDefinition): string {
@@ -565,6 +568,15 @@ function resolveCodexThreadName(definition: GatewayDefinition): string {
     || definition.name?.trim()
     || routeRuntimeParts(definition.id).configName
     || definition.id;
+}
+
+function resolveCopilotThreadName(definition: GatewayDefinition): string {
+  return definition.copilotThreadName?.trim()
+    || definition.routeName?.trim()
+    || definition.name?.trim()
+    || routeRuntimeParts(definition.id).configName
+    || definition.id
+    || "Copilot CLI";
 }
 
 function normalizeIgnoredNapcatInstanceIds(raw: unknown): string[] {
@@ -589,6 +601,10 @@ function adapterConfigPath(configName: string): string {
 
 function definitionUsesNapcat(definition: GatewayDefinition): boolean {
   return sharedDefinitionUsesNapcat(definition);
+}
+
+function configPathValue(value: unknown): string | undefined {
+  return toProjectRelativePath(value, rootDir);
 }
 
 function adapterConfigItem(definition: GatewayDefinition): Record<string, unknown> {
@@ -618,18 +634,24 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     napcatWebuiUrl: definition.napcatWebuiUrl,
     napcatAccessToken: definition.napcatAccessToken,
     napcatWebuiToken: definition.napcatWebuiToken,
-    napcatInstances: usesNapcat ? definition.napcatInstances : undefined,
+    napcatInstances: usesNapcat && Array.isArray(definition.napcatInstances)
+      ? definition.napcatInstances.map((instance) => ({
+          ...instance,
+          workingDir: configPathValue(instance.workingDir)
+        }))
+      : undefined,
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
     heartbeatIntervalSeconds: definition.heartbeatIntervalSeconds,
     heartbeatMessage: definition.heartbeatMessage,
     heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy,
     remoteAgentDefaultDeviceId: definition.remoteAgentDefaultDeviceId,
-    remoteAgentDefaultCwd: definition.remoteAgentDefaultCwd,
+    remoteAgentDefaultCwd: configPathValue(definition.remoteAgentDefaultCwd),
     remoteAgentDefaultThreadName: definition.remoteAgentDefaultThreadName,
     agentModel: definition.agentModel,
     codexThreadName: definition.codexThreadName,
-    codexCwd: definition.codexCwd,
-    copilotCwd: definition.copilotCwd,
+    codexCwd: configPathValue(definition.codexCwd),
+    copilotThreadName: definition.copilotThreadName,
+    copilotCwd: configPathValue(definition.copilotCwd),
     copilotCliBin: definition.copilotCliBin,
     marvisAppId: definition.marvisAppId,
     astrbotUrl: definition.astrbotUrl,
@@ -637,7 +659,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     astrbotPassword: definition.astrbotPassword,
     astrbotProjectId: definition.astrbotProjectId,
     astrbotSessionId: definition.astrbotSessionId,
-    rolesDir: definition.rolesDir,
+    rolesDir: configPathValue(definition.rolesDir),
     agentRoleId: definition.agentRoleId,
     agentRoleFile: definition.agentRoleFile,
     agentAdapters: definition.agentAdapters,
@@ -689,6 +711,17 @@ function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
   const globalRelay = rabiGlobalConfig.read().rabiLinkRelay;
   if (hasGlobalRabiLinkRelayConfig(globalRelay)) return globalRelay;
   return firstRouteLevelRabiLinkRelayConfig() || globalRelay;
+}
+
+function syncRabiLinkRelayRuntime(): void {
+  const globalConfig = rabiGlobalConfig.read();
+  const relay = rabiLinkRelayConfigForMeta();
+  rabiLinkRelayRuntime.sync({
+    ...relay,
+    deviceGuid: globalConfig.rabiGuid,
+    deviceName: globalConfig.rabiName || os.hostname(),
+    localWebguiUrl: `http://127.0.0.1:${managerPort}`
+  });
 }
 
 function writeAdapterConfigFile(definition: GatewayDefinition): void {
@@ -1175,7 +1208,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
     HEARTBEAT_SKIP_WHEN_AGENT_BUSY: definition.heartbeatSkipWhenAgentBusy ? "1" : "0",
     REMOTE_AGENT_DEFAULT_DEVICE_ID: definition.remoteAgentDefaultDeviceId?.trim() || "",
-    REMOTE_AGENT_DEFAULT_CWD: definition.remoteAgentDefaultCwd?.trim() || "",
+    REMOTE_AGENT_DEFAULT_CWD: configPathValue(definition.remoteAgentDefaultCwd) || "",
     REMOTE_AGENT_DEFAULT_THREAD_NAME: definition.remoteAgentDefaultThreadName?.trim() || "",
     NAPCAT_HTTP_URL: definition.napcatHttpUrl ?? process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
     NAPCAT_WEBUI_URL: definition.napcatWebuiUrl ?? process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
@@ -1199,16 +1232,16 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     RABILINK_RELAY_APP_TOKEN: rabiLinkRelay.token,
     RABILINK_RELAY_DEVICE_ID: rabiLinkRelay.deviceId || definition.id,
     RABILINK_RELAY_DEVICE_GUID: globalConfig.rabiGuid,
-    RABILINK_RELAY_WEBGUI_URL: `http://127.0.0.1:${managerPort}`,
     RABILINK_RELAY_CLAIM_WAIT_MS: String(rabiLinkRelay.claimWaitMs),
     RABILINK_RELAY_REPLY_IDLE_TIMEOUT_MS: String(rabiLinkRelay.replyIdleTimeoutMs),
     WECOM_BOT_ID: definition.wecomBotId?.trim() || process.env.WECOM_BOT_ID || "",
     WECOM_BOT_SECRET: definition.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET || "",
     WECOM_WS_URL: definition.wecomWsUrl?.trim() || process.env.WECOM_WS_URL || "",
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
-    CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? process.env.CODEX_CWD ?? rootDir,
+    CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
+    COPILOT_THREAD_NAME: resolveCopilotThreadName(definition),
     COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
-    COPILOT_CWD: definition.copilotCwd?.trim() || process.env.COPILOT_CWD || rootDir,
+    COPILOT_CWD: resolveProjectPath(definition.copilotCwd, rootDir) ?? resolveProjectPath(process.env.COPILOT_CWD, rootDir) ?? rootDir,
     MARVIS_APP_ID: definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis",
     ASTRBOT_URL: definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185",
     ASTRBOT_USERNAME: definition.astrbotUsername?.trim() || process.env.ASTRBOT_USERNAME || "",
@@ -1248,9 +1281,14 @@ function startGateway(id: string): void {
   }
 
   const command = childCommand();
+  const agentStateGeneration = randomUUID();
+  const childEnv = envFor(runtime.definition);
+  childEnv.AGENT_STATE_GENERATION = agentStateGeneration;
+  runtime.agentStateGeneration = agentStateGeneration;
+  agentStateByGateway.delete(runtime.definition.id);
   const child = spawn(command.command, command.args, {
     cwd: rootDir,
-    env: envFor(runtime.definition),
+    env: childEnv,
     shell: command.shell,
     windowsHide: true
   });
@@ -1276,6 +1314,8 @@ function startGateway(id: string): void {
 
   child.on("exit", (code, signal) => {
     runtime.process = null;
+    runtime.agentStateGeneration = undefined;
+    agentStateByGateway.delete(runtime.definition.id);
     runtime.stoppedAt = new Date().toISOString();
     runtime.lastExit = {
       code,
@@ -1299,6 +1339,8 @@ function stopGateway(id: string): void {
   }
 
   appendLog(runtime, "stopping");
+  runtime.agentStateGeneration = undefined;
+  agentStateByGateway.delete(runtime.definition.id);
   runtime.process.kill();
 }
 
@@ -1307,6 +1349,8 @@ function stopAllGateways(): void {
     runtime.needsRestart = false;
     if (runtime.process) {
       appendLog(runtime, "stopping because manager is shutting down");
+      runtime.agentStateGeneration = undefined;
+      agentStateByGateway.delete(runtime.definition.id);
       runtime.process.kill();
     }
   }
@@ -1377,22 +1421,6 @@ function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
   };
 }
 
-function readCodexState(definition: GatewayDefinition): Record<string, unknown> {
-  const agentAdapters = definition.agentAdapters ?? ["codex"];
-  const hasCodexAdapter = agentAdapters.includes("codex");
-  if (agentAdapters.includes("copilotCli") && !hasCodexAdapter) {
-    return readAgentState(definition, "copilotCli");
-  }
-  if (agentAdapters.includes("marvis") && !hasCodexAdapter) {
-    return readAgentState(definition, "marvis");
-  }
-  if (agentAdapters.includes("astrbot") && !hasCodexAdapter) {
-    return readAgentState(definition, "astrbot");
-  }
-
-  return readAgentState(definition, "codex");
-}
-
 function readAgentStates(definition: GatewayDefinition): Record<string, unknown> {
   const adapters = definition.agentAdapters ?? ["codex"];
   const states: Record<string, unknown> = {};
@@ -1406,38 +1434,7 @@ function readAgentState(definition: GatewayDefinition, adapterType: AgentAdapter
   const reported: Record<string, unknown> = agentStateByGateway.get(definition.id)?.[adapterType] ?? {};
   const base = defaultAgentState(definition, adapterType);
   if (adapterType === "codex") {
-    const merged: Record<string, unknown> = {
-      ...base,
-      ...reported,
-      ...codexBindingState(definition, adapterType)
-    };
-    const lastNotificationError = String(merged.lastNotificationError ?? "").trim();
-    const lastDeliveryVisibility = String(merged.lastDeliveryVisibility ?? "").trim();
-    if (lastDeliveryVisibility === "desktop-client-not-loaded") {
-      const visibilityError = String(merged.lastCodexAppVisibilityError ?? "").trim();
-      return {
-        ...merged,
-        bound: Boolean(merged.monitorThreadId),
-        deliveryHealthy: false,
-        message: visibilityError
-          ? `Codex app-server fallback 已接受最近投递，但 Codex App 可见性保障失败：${visibilityError}`
-          : "Codex app-server fallback 已接受最近投递；RabiRoute 已尝试启动/聚焦 Codex App，但目标 Desktop 会话当前没有确认加载。"
-      };
-    }
-    if (!lastNotificationError) {
-      return merged;
-    }
-
-    return {
-      ...merged,
-      bound: false,
-      deliveryHealthy: false,
-      message: codexDeliveryErrorSummary(
-        lastNotificationError,
-        Number(merged.retryPendingCount ?? 0),
-        String(merged.nextRetryAt ?? "")
-      )
-    };
+    return resolveCodexRuntimeState(base, reported);
   }
   const merged: Record<string, unknown> = {
     ...base,
@@ -1452,27 +1449,12 @@ function readAgentState(definition: GatewayDefinition, adapterType: AgentAdapter
   };
 }
 
-function codexDeliveryErrorSummary(error: string, retryPendingCount = 0, nextRetryAt = ""): string {
-  if (error.includes("no-client-found")) {
-    const lines = [
-      "Codex Desktop 线程已在 session index 中找到，但当前没有加载成可投递客户端。",
-      "需要打开/唤醒目标线程，或迁移到常驻 worker。"
-    ];
-    if (retryPendingCount > 0) {
-      lines.push(`RabiRoute 已暂存 ${retryPendingCount} 条待补投消息${nextRetryAt ? `，下一次重试：${nextRetryAt}` : ""}。`);
-    }
-    return lines.join(" ");
-  }
-
-  return `Codex delivery failed: ${error}`;
-}
-
 function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdapterType): Record<string, unknown> {
   if (adapterType === "copilotCli") {
     return {
       agentAdapterType: adapterType,
       bound: false,
-      monitorThreadName: definition.codexThreadName || "Copilot CLI",
+      monitorThreadName: resolveCopilotThreadName(definition),
       monitorThreadSource: definition.copilotCliBin || process.env.COPILOT_CLI_BIN || "copilot",
       monitorProjectPath: definition.copilotCwd || rootDir,
       message: "Copilot CLI 已配置；等待当前 Manager 进程收到成功投递上报。"
@@ -1501,37 +1483,17 @@ function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdap
     };
   }
 
-  return codexBindingState(definition, adapterType);
-}
-
-function codexBindingState(definition: GatewayDefinition, adapterType: Extract<AgentAdapterType, "codex">): Record<string, unknown> {
-  const targetName = resolveCodexThreadName(definition);
-  const indexPath = sessionIndexPath();
-  const best = readLatestSessionThreads(indexPath)
-    .filter((record) => record.threadName === targetName)
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
-
   return {
     agentAdapterType: adapterType,
-    bound: Boolean(best),
-    monitorThreadId: best?.id,
-    monitorThreadName: best?.threadName ?? targetName,
-    monitorThreadUpdatedAt: best?.updatedAt,
-    monitorThreadSource: indexPath,
-    lastAutoDiscoveryAt: best ? new Date().toISOString() : undefined,
-    message: best ? undefined : `No Codex thread named "${targetName}" was found in ${indexPath}. It will be auto-created on first delivery when Codex auto-create is enabled.`
+    bound: false,
+    monitorThreadName: resolveCodexThreadName(definition),
+    monitorProjectPath: normalizeCodexCwd(definition.codexCwd) ?? rootDir,
+    deliveryTransport: "app-server-stdio",
+    desktopHostName: "ChatGPT",
+    desktopHostRequired: false,
+    message: "等待 Codex app-server stdio 首次投递；ChatGPT 桌面不是运行时绑定条件。"
   };
 }
-
-function sessionIndexPath(): string {
-  return path.join(os.homedir(), ".codex", "session_index.jsonl");
-}
-
-type SessionThreadRecord = {
-  id: string;
-  threadName: string;
-  updatedAt: string;
-};
 
 function normalizeComparablePath(value: string | undefined): string {
   if (!value) return "";
@@ -1645,7 +1607,6 @@ function agentManagerApiCtx(): AgentManagerApiContext {
   return {
     rootDir,
     getRuntimes: () => runtimes.values(),
-    sessionIndexPath,
     checkHttpEndpoint,
     resolveWingetCopilot
   };
@@ -1906,6 +1867,9 @@ type NapcatHealthRequest = {
   accessToken?: string;
   webuiToken?: string;
   gatewayPort?: number;
+  readWebuiLoginInfo?: boolean;
+  botUserId?: string | number;
+  botNickname?: string;
 };
 
 type NapcatAddRequest = {
@@ -1930,39 +1894,9 @@ type NapcatRemoveRequest = {
 type NapcatLaunchRequest = {
   gatewayId?: string;
   instanceId?: string;
+  forceRestart?: boolean;
+  visible?: boolean;
 };
-function readLatestSessionThreads(indexPath: string): SessionThreadRecord[] {
-  if (!fs.existsSync(indexPath)) {
-    return [];
-  }
-
-  const latestById = new Map<string, SessionThreadRecord>();
-  for (const line of fs.readFileSync(indexPath, "utf8").split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line) as { id?: unknown; thread_name?: unknown; updated_at?: unknown };
-      if (typeof parsed.id !== "string" || typeof parsed.thread_name !== "string" || typeof parsed.updated_at !== "string") {
-        continue;
-      }
-      const record = {
-        id: parsed.id,
-        threadName: parsed.thread_name,
-        updatedAt: parsed.updated_at
-      };
-      const existing = latestById.get(record.id);
-      if (!existing || Date.parse(record.updatedAt) > Date.parse(existing.updatedAt)) {
-        latestById.set(record.id, record);
-      }
-    } catch {
-      // Ignore malformed JSONL lines.
-    }
-  }
-
-  return [...latestById.values()];
-}
-
 function readGatewayStatus(definition: GatewayDefinition): Record<string, unknown> {
   const statusPath = path.join(dataDirFor(definition), "gateway-status.json");
   if (!fs.existsSync(statusPath)) {
@@ -2369,6 +2303,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     routeProfiles: runtime.definition.routeProfiles ?? [],
     codexThreadName: resolveCodexThreadName(runtime.definition),
     codexCwd: runtime.definition.codexCwd,
+    copilotThreadName: resolveCopilotThreadName(runtime.definition),
     copilotCwd: runtime.definition.copilotCwd,
     copilotCliBin: runtime.definition.copilotCliBin,
     marvisAppId: runtime.definition.marvisAppId,
@@ -2402,7 +2337,6 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     adapterLogs: readAdapterLogs(runtime.definition),
     messageFiles: readMessageFiles(runtime.definition),
     agentStates: readAgentStates(runtime.definition),
-    codexState: readCodexState(runtime.definition),
     log: runtime.log.slice(-30)
   };
 }
@@ -2888,6 +2822,23 @@ function roleDirForApi(roleId: string): string {
 }
 
 function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+  const validationMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/knowledge-validation$/);
+  if (validationMatch) {
+    const roleId = decodeURIComponent(validationMatch[1]);
+    try {
+      if (request.method !== "GET") {
+        jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+        return true;
+      }
+      const roleDir = roleDirForApi(roleId);
+      jsonResponse(response, 200, { code: 0, data: validateRoleKnowledge(roleDir) });
+      return true;
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      return true;
+    }
+  }
+
   const consolidationResultMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/memory\/consolidation-runs\/([^/]+)\/result$/);
   if (consolidationResultMatch) {
     const roleId = decodeURIComponent(consolidationResultMatch[1]);
@@ -2909,14 +2860,12 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
     }
   }
 
-  const match = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/(plans|skills|memory\/recent|memory\/consolidated|memory\/consolidation-requests|memory\/consolidation-runs|memory)(?:\/([^/]+))?$/);
-  if (!match) {
+  const route = parseRoleKnowledgeResourceRoute(pathname);
+  if (!route) {
     return false;
   }
 
-  const roleId = decodeURIComponent(match[1]);
-  const resource = match[2];
-  const itemId = match[3] ? decodeURIComponent(match[3]) : "";
+  const { roleId, resource, itemId } = route;
 
   try {
     const roleDir = roleDirForApi(roleId);
@@ -3114,7 +3063,7 @@ function networkOptionsPayload(): Record<string, unknown> {
 }
 
 function metaPayload(): Record<string, unknown> {
-  const version = packageVersion();
+  const version = rabiRoutePackageVersion();
   const globalConfig = rabiGlobalConfig.read();
   return {
     version,
@@ -3123,21 +3072,9 @@ function metaPayload(): Record<string, unknown> {
     rabiGuid: globalConfig.rabiGuid,
     rabiName: globalConfig.rabiName,
     rabiLinkRelay: rabiLinkRelayConfigForMeta(),
+    rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
     computerName: os.hostname()
   };
-}
-
-function packageVersion(): string {
-  let version = "0.1.0";
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
-    if (typeof parsed.version === "string" && parsed.version.trim()) {
-      version = parsed.version;
-    }
-  } catch {
-    // Keep the baked fallback when package metadata is not readable.
-  }
-  return version;
 }
 
 function contentTypeFor(filePath: string): string {
@@ -3306,14 +3243,33 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
     .then((body) => {
       const gatewayId = sanitizeRoleId(body.gatewayId);
       const adapterType = parseAgentAdapterType(body.adapterType);
-      if (!gatewayId || !adapterType || !runtimes.get(gatewayId)) {
+      const runtime = gatewayId ? runtimes.get(gatewayId) : undefined;
+      if (!gatewayId || !adapterType || !runtime) {
         throw new Error("Invalid agent state report target.");
       }
+      const generation = typeof body.generation === "string" ? body.generation.trim() : "";
+      const sequence = Number(body.sequence);
       const previous = agentStateByGateway.get(gatewayId) ?? {};
+      const previousSequence = Number(previous[adapterType]?.reportSequence ?? 0);
+      const reportDecision = agentStateReportDecision(
+        runtime.agentStateGeneration,
+        generation,
+        sequence,
+        previousSequence
+      );
+      if (reportDecision === "invalid-generation") {
+        throw new Error("Stale or invalid agent state report generation.");
+      }
+      if (reportDecision === "out-of-order") {
+        jsonResponse(response, 202, { code: 0, ignored: true });
+        return;
+      }
       previous[adapterType] = {
         ...(previous[adapterType] ?? {}),
         ...(body.state ?? {}),
         agentAdapterType: adapterType,
+        reportGeneration: generation,
+        reportSequence: sequence,
         updatedAt: new Date().toISOString()
       };
       agentStateByGateway.set(gatewayId, previous);
@@ -3356,7 +3312,7 @@ export function startManager(): void {
         routeRoot,
         managerPort,
         managerHost,
-        version: packageVersion,
+        version: rabiRoutePackageVersion,
         globalConfig: rabiGlobalConfig,
         runtimes: () => runtimes.values(),
         runtimeStatus,
@@ -3364,6 +3320,7 @@ export function startManager(): void {
         writeConfig,
         loadRuntimes,
         syncRunningGateways,
+        syncRabiLinkRelay: syncRabiLinkRelayRuntime,
         agentManagerApiCtx
       })) {
         return;
@@ -3698,6 +3655,18 @@ export function startManager(): void {
         return;
       }
 
+      if (requestUrl.pathname === "/api/message/napcat-ensure-ready" && request.method === "POST") {
+        void readJsonBody<NapcatLaunchRequest>(request)
+          .then((body) => ensureNapcatInstanceReady(napcatManagerCtx(), body))
+          .then((result) => {
+            jsonResponse(response, 200, result);
+          })
+          .catch((error) => {
+            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
       if (requestUrl.pathname === "/api/message/napcat-health" && request.method === "POST") {
         void (async () => {
           const body = await readJsonBody<NapcatHealthRequest>(request);
@@ -3846,6 +3815,7 @@ export function startManager(): void {
     console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
     console.log(`roles: ${rolesRoot}`);
     console.log(`route: ${routeRoot}`);
+    syncRabiLinkRelayRuntime();
   });
 
   const configWatcher = startConfigWatcher();
@@ -3859,6 +3829,7 @@ export function startManager(): void {
     shuttingDown = true;
     console.log(`gateway-manager shutting down: ${reason}`);
     clearInterval(configWatcher);
+    rabiLinkRelayRuntime.stop();
     stopAllGateways();
     server.close(() => {
       process.exit(0);

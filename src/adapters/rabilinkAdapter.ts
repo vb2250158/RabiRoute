@@ -1,7 +1,7 @@
 import { config } from "../config.js";
 import type { MessageAdapter } from "./messageAdapter.js";
 import { localRabiLinkReplies } from "./rabilinkReplies.js";
-import { startRabiLinkRelayWebguiWorker, startRabiLinkRelayWorker } from "./rabilinkRelayWorker.js";
+import { startRabiLinkRelayWorker } from "./rabilinkRelayWorker.js";
 import { createWebhookAdapter, type WebhookAdapterProfile } from "./webhookAdapter.js";
 
 function rabiLinkProfile(): WebhookAdapterProfile {
@@ -45,7 +45,6 @@ export function createRabiLinkAdapter(): MessageAdapter {
     },
     onListening({ profile, webhookPath }) {
       startRabiLinkRelayWorker(profile, webhookPath);
-      startRabiLinkRelayWebguiWorker(profile);
     }
   });
 }

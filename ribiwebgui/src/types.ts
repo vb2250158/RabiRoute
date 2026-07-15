@@ -24,7 +24,7 @@ export type {
 
 export type NotificationRule = NotificationRuleDefinition;
 export type NapCatInstance = NapCatInstanceDefinition;
-export type OutputAdapterType = "qq" | "codex" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
+export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -130,7 +130,6 @@ export type RuntimeStatus = GatewayDefinition & {
     entries?: Array<Record<string, any>>;
   }>;
   agentStates?: Partial<Record<AgentAdapterType, Record<string, any>>>;
-  codexState?: Record<string, any>;
   log?: string[];
 };
 
@@ -166,6 +165,13 @@ export type MetaPayload = {
     deviceId?: string;
     claimWaitMs?: number;
     replyIdleTimeoutMs?: number;
+  };
+  rabiLinkRelayRuntime?: {
+    state?: "disabled" | "incomplete" | "connecting" | "online" | "error";
+    message?: string;
+    lastConnectedAt?: string;
+    lastSuccessAt?: string;
+    error?: string;
   };
   computerName?: string;
 };

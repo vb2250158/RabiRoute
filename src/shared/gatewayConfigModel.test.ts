@@ -88,12 +88,26 @@ test("WeCom is a message/output adapter and does not claim a local ingress port"
   assert.deepEqual(claims.map((claim) => claim.kind), ["manager"]);
 });
 
-test("legacy Codex agent adapter ids are upgraded to codex", () => {
-  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexDesktop"] as any })).agentAdapters, ["codex"]);
-  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexApp"] as any })).agentAdapters, ["codex"]);
-  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexDesktop", "codexApp"] as any })).agentAdapters, ["codex"]);
-  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexApp", "copilotCli"] as any })).agentAdapters, ["codex", "copilotCli"]);
-  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["unknown"] as any })).agentAdapters, ["codex"]);
+test("legacy Codex pipeline output normalizes to canonical Agent output", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    pipeline: {
+      outputAdapter: "codex",
+      outputPipeline: "codex"
+    }
+  }));
+
+  assert.equal(normalized.pipeline?.outputAdapter, "agent");
+  assert.equal(normalized.pipeline?.outputPipeline, "agent");
+  assert.equal(normalized.routeProfiles?.[0]?.pipeline?.outputAdapter, "agent");
+  assert.equal(normalized.routeProfiles?.[0]?.pipeline?.outputPipeline, "agent");
+});
+
+test("shared config normalization accepts canonical Agent adapter ids only", () => {
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexDesktop"] as any })).agentAdapters, []);
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexApp"] as any })).agentAdapters, []);
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexApp", "copilotCli"] as any })).agentAdapters, ["copilotCli"]);
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["unknown"] as any })).agentAdapters, []);
+  assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: [] })).agentAdapters, []);
 });
 
 test("default gateway agent adapter uses codex", () => {

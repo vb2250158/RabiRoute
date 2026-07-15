@@ -32,7 +32,7 @@
   "heartbeatIntervalSeconds": 900,
   "heartbeatMessage": "定时心跳巡检：请检查最近消息和角色相关上下文。",
   "codexThreadName": "QQ 消息监听",
-  "codexCwd": "C:/Path/To/Your/Project",
+  "codexCwd": ".",
   "agentModel": "",
   "agentRoleFile": "persona.md",
   "agentAdapters": [

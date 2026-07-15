@@ -333,7 +333,7 @@ public class GlassAsrProbeActivity extends Activity {
         super.onCreate(savedInstanceState);
         prepareGlassWindow();
         setContentView(buildUi());
-        append("Rabi Glass Test started.");
+        append("Rabi Glass started.");
         append("用于验证眼镜端测试 APK、CXR CustomCmd 和基础回包。");
         append("按钮可用触摸板逐项切换；选中项会放大并显示 > 光标。");
         initCustomCmdBridge();
@@ -476,7 +476,7 @@ public class GlassAsrProbeActivity extends Activity {
         hud.setBackgroundColor(Color.TRANSPARENT);
 
         TextView title = new TextView(this);
-        title.setText("Rabi Glass Test");
+        title.setText("Rabi Glass");
         title.setTextColor(Color.WHITE);
         title.setTextSize(13);
         title.setPadding(0, 0, 0, dp(2));

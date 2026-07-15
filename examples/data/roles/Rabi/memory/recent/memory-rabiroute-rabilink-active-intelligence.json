@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-rabilink-active-intelligence",
-  "title": "RabiLink 眼镜主链已落为前台主动消息端",
-  "focus": "RabiLink AIUI 主动智能首个可交付闭环",
-  "content": "RabiLink 主链已经落为眼镜 AIUI 的“连接对话”：页面前台使用眼镜原生 ASR 发布输入事件，同时独立常驻消费应用级下行队列，因此普通 Agent 回复和主动提醒都能在用户沉默时到达并由原生 TTS 播报。页面内的“配置助手”不承担自然语言理解，Rokid 原生 Agent 先归一化意图，再调用同一 AIUI 页面执行明确配置命令。这个闭环不需要为每条消息导入额外 MCP 工具，也不要求眼镜维护 taskId。手机常驻录音、锁屏后台感知和跨设备上下文融合仍是后续可选能力，不能拿来替代本次眼镜前台能力，也不能反向宣称 AIUI 已支持后台永久录音。主动感知必须持续显示状态，原始音频和图片默认不长期保存，高风险动作继续经过确认与 Action Gate。",
+  "title": "RabiLink 眼镜主链已落为 record-first 前台主动消息端",
+  "focus": "RabiLink 统一观察账本与主动智能闭环",
+  "content": "RabiLink 连接对话已经采用 record-first：眼镜原生 ASR、显式配置的 FenneNote 或命名 Webhook observation 先写统一会话账本，不逐句创建 Codex turn；固定线程空闲后合并审阅，触摸板单击可以立即启动或 steer 审阅，没有新转写时也可按周期重新检查目标和未完成事项。页面按独立 cursor 持续消费应用级下行队列，普通回复和无 taskId 主动消息都能在用户沉默时到达并由原生 TTS 顺序播报。配置助手使用页面内 AIUI 能力，但只能调用白名单配置操作；ASR/TTS 生命周期用有界 watchdog 和重试恢复。这个闭环仍只承诺 AIUI 页面前台能力，不代表 24 小时后台录音。离线 observation、cursor 和待播 TTS 按不含凭据的稳定指纹隔离，主动外发、高风险动作和外部发布继续经过确认与 Action Gate。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：RabiLink AIUI 前台主动消息闭环和后续常驻感知边界"
   },
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-13T00:00:00+08:00",
-  "keywords": ["RabiLink", "AIUI", "主动智能", "持续下行", "主动消息", "眼镜原生 ASR", "眼镜原生 TTS", "配置助手", "原生 Agent", "前台驻留", "Action Gate", "隐私"]
+  "updatedAt": "2026-07-15T00:00:00+08:00",
+  "keywords": ["RabiLink", "AIUI", "record-first", "观察账本", "空闲审阅", "周期反思", "持续下行", "主动消息", "眼镜原生 ASR", "眼镜原生 TTS", "配置助手", "前台驻留", "Action Gate", "隐私"]
 }

@@ -1,0 +1,38 @@
+{
+  "recentMessageLimit": 12,
+  "notificationRules": [
+    {
+      "id": "rabi-active-rabilink-legacy",
+      "name": "RabiLink 兼容直接消息",
+      "enabled": true,
+      "targetGroupId": "",
+      "regex": "",
+      "template": "",
+      "routeKinds": [
+        "rabilink"
+      ]
+    },
+    {
+      "id": "rabi-active-heartbeat",
+      "name": "主动智能低频巡检",
+      "enabled": true,
+      "targetGroupId": "",
+      "regex": "",
+      "template": "",
+      "routeKinds": [
+        "heartbeat"
+      ]
+    },
+    {
+      "id": "rabi-active-manual",
+      "name": "主动智能手动审阅",
+      "enabled": true,
+      "targetGroupId": "",
+      "regex": "审阅|主动智能|会话记录|RabiLink",
+      "template": "",
+      "routeKinds": [
+        "manual_trigger"
+      ]
+    }
+  ]
+}

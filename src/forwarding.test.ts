@@ -15,8 +15,6 @@ type ForwardingConfigPatch = Partial<Pick<typeof config,
   "agentAdapters"
   | "agentRoleFile"
   | "agentRoleId"
-  | "codexDesktopIpcNotify"
-  | "codexDirectNotify"
   | "dataDir"
   | "memoryDataDir"
   | "routeProfiles"
@@ -69,8 +67,6 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     agentAdapters: config.agentAdapters,
     agentRoleFile: config.agentRoleFile,
     agentRoleId: config.agentRoleId,
-    codexDesktopIpcNotify: config.codexDesktopIpcNotify,
-    codexDirectNotify: config.codexDirectNotify,
     dataDir: config.dataDir,
     memoryDataDir: config.memoryDataDir,
     routeProfiles: config.routeProfiles,
@@ -88,8 +84,6 @@ test("forwardMessageAndWait returns missed when no route profile is active", asy
   const root = tempDir();
   await withForwardingConfig({
     agentAdapters: [],
-    codexDesktopIpcNotify: false,
-    codexDirectNotify: false,
     dataDir: path.join(root, "data"),
     memoryDataDir: path.join(root, "memory"),
     routeProfiles: []
@@ -118,8 +112,6 @@ test("forwardMessageAndWait returns route miss details when no rule matches", as
 
   await withForwardingConfig({
     agentAdapters: [],
-    codexDesktopIpcNotify: false,
-    codexDirectNotify: false,
     dataDir: path.join(root, "data"),
     memoryDataDir: path.join(root, "memory"),
     routeProfiles: [route]
@@ -151,8 +143,6 @@ test("forwardMessageAndWait reports matched packets separately from adapter deli
 
   await withForwardingConfig({
     agentAdapters: [],
-    codexDesktopIpcNotify: false,
-    codexDirectNotify: false,
     dataDir: path.join(root, "data"),
     memoryDataDir: routeDataDir,
     routeProfiles: [route]
@@ -165,8 +155,9 @@ test("forwardMessageAndWait reports matched packets separately from adapter deli
     assert.equal(result.sentPacketCount, 1);
     assert.deepEqual(result.adapterOutcomes, []);
 
-    const notificationLog = fs.readFileSync(path.join(routeDataDir, "codex-notifications.jsonl"), "utf8");
-    assert.match(notificationLog, /matched/);
+    const packetLog = fs.readFileSync(path.join(routeDataDir, "agent-packets.jsonl"), "utf8");
+    assert.match(packetLog, /matched/);
+    assert.equal(fs.existsSync(path.join(routeDataDir, "codex-notifications.jsonl")), false);
   });
 });
 
@@ -185,8 +176,6 @@ test("forwardMessageAndWait surfaces adapter delivery failures", async () => {
 
   await withForwardingConfig({
     agentAdapters: ["unsupported" as AgentAdapterType],
-    codexDesktopIpcNotify: false,
-    codexDirectNotify: false,
     dataDir: path.join(root, "data"),
     memoryDataDir: path.join(root, "route-data"),
     routeProfiles: [route]
@@ -218,8 +207,6 @@ test("forwardMessageAndWait records replayable delivery attempts", async () => {
 
   await withForwardingConfig({
     agentAdapters: [],
-    codexDesktopIpcNotify: false,
-    codexDirectNotify: false,
     dataDir,
     memoryDataDir: path.join(root, "route-data"),
     routeProfiles: [route]
@@ -251,8 +238,6 @@ test("replayDeliveryAttempts can merge failed attempts into one agent packet", a
 
   await withForwardingConfig({
     agentAdapters: ["unsupported" as AgentAdapterType],
-    codexDesktopIpcNotify: false,
-    codexDirectNotify: false,
     dataDir,
     memoryDataDir: path.join(root, "route-data"),
     routeProfiles: [route]
@@ -298,8 +283,6 @@ test("replayDeliveryAttempts can backfill a stored message by route kind and mes
 
   await withForwardingConfig({
     agentAdapters: [],
-    codexDesktopIpcNotify: false,
-    codexDirectNotify: false,
     dataDir,
     memoryDataDir,
     routeProfiles: [route]
