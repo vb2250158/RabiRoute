@@ -418,7 +418,7 @@ const docPages: DocPage[] = [
     title: "处理端",
     section: "主链路",
     subtitle: "Agent adapter 只接收 AgentPacket，不反向定义路由语义。",
-    summary: "Codex、Copilot、AstrBot 和 Marvis 都是处理端适配器。Codex 通过 app-server stdio 投递；ChatGPT 桌面版只是可选宿主。",
+    summary: "Codex、Copilot、AstrBot 和 Marvis 都是处理端适配器。Codex 与桌面端、CLI 共用唯一共享 Runtime。",
     bullets: [
       "新增处理端优先改 src/agentAdapters/types.ts、agentAdapter.ts 和 managerApi.ts。",
       "处理端失败应通过 delivery result 和日志暴露，不应修改 route decision 语义。",

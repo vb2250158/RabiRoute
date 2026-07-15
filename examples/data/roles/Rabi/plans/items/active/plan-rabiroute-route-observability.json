@@ -4,7 +4,7 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "observability",
-  "currentStep": "RouteDecision 与 AgentPacket 已从 forwarding 主链路拆出，项目功能手册和 WebGUI 文档页已补充真源、消费点和副作用索引；Codex 投递健康统一由 app-server stdio 状态判断，ChatGPT 桌面宿主不参与投递判定",
+  "currentStep": "RouteDecision 与 AgentPacket 已从 forwarding 主链路拆出，项目功能手册和 WebGUI 文档页已补充真源、消费点和副作用索引；Codex 投递收敛到单一共享 Runtime，配置内部用 threadId 精确绑定，Desktop、CLI 与 Rabi gateway 共用会话源",
   "nextAction": "增加无副作用 route / AgentPacket preview，再评估是否需要 route-decisions.jsonl、packet log 或更细的 Agent 投递可见性页面",
   "waitingFor": "",
   "project": {
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-10T00:00:00+08:00",
-  "keywords": ["RouteDecision", "AgentPacket", "Codex", "app-server-stdio", "项目文档", "preview", "route-decisions", "packet log", "replay", "排障"]
+  "updatedAt": "2026-07-15T00:00:00+08:00",
+  "keywords": ["RouteDecision", "AgentPacket", "Codex", "共享 Runtime", "threadId", "项目文档", "preview", "route-decisions", "packet log", "replay", "排障"]
 }

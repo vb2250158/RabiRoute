@@ -53,7 +53,7 @@ const diagnosisItems = computed(() => [
 ]);
 
 function codexDeliveryChannelLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryChannel === "app-server-stdio") return "Codex app-server · stdio";
+  if (state.lastDeliveryChannel === "codex-shared-runtime") return "Codex 共享 Runtime";
   return "-";
 }
 
@@ -266,7 +266,7 @@ async function deleteCurrentGateway(): Promise<void> {
           <div class="section-title-row">
             <div>
               <div class="section-title">Codex Agent / runtime</div>
-              <div class="section-note">RabiRoute 通过 app-server stdio 投递；ChatGPT 桌面版只是可选宿主。</div>
+              <div class="section-note">RabiRoute、Codex/ChatGPT 桌面端和 CLI 共用同一个 Runtime。</div>
             </div>
             <v-chip :color="agentReasons.length ? 'warning' : 'success'" variant="tonal">{{ codexAgentState.monitorThreadId ? "已连接" : "未绑定" }}</v-chip>
           </div>

@@ -456,7 +456,7 @@ export function explainAgentError(error: unknown): string {
   const text = String(error || "");
   if (!text) return "";
   if (text.includes("Codex app-server")) {
-    return `Codex Agent 的 app-server stdio 连接失败：${text}。请检查项目锁定的 @openai/codex runtime 与其登录状态；ChatGPT 桌面版只是可选宿主，不是投递通道。`;
+    return `Codex 共享 Runtime 连接失败：${text}。请检查 127.0.0.1:4510、项目锁定的 @openai/codex runtime 与登录状态。`;
   }
   if (text.includes("thread not found")) {
     return "Codex 线程 ID 已失效。请在 RibiWebGUI 中重新绑定或让 manager 重新发现目标线程。";

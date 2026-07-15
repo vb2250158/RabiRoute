@@ -43,6 +43,7 @@ type RabiInstance = {
 type AgentBindingPatch = {
   agentAdapter?: string;
   codexCwd?: string;
+  codexThreadId?: string;
   codexThreadName?: string;
   copilotThreadName?: string;
   copilotCwd?: string;
@@ -133,6 +134,7 @@ function routeSummary(runtime: GatewayRuntime, runtimeStatus: Record<string, unk
     running: Boolean(runtime.process),
     agentAdapters: definition.agentAdapters ?? ["codex"],
     codexCwd: definition.codexCwd ?? "",
+    codexThreadId: definition.codexThreadId ?? "",
     codexThreadName: definition.codexThreadName ?? "",
     copilotThreadName: definition.copilotThreadName ?? "",
     copilotCwd: definition.copilotCwd ?? "",
@@ -167,6 +169,7 @@ function routeOptionsFromAgentScan(route: GatewayDefinition, scan: Record<string
       routeName: route.routeName,
       agentAdapters: activeAdapters,
       codexCwd: route.codexCwd ?? "",
+      codexThreadId: route.codexThreadId ?? "",
       codexThreadName: route.codexThreadName ?? "",
       copilotThreadName: route.copilotThreadName ?? "",
       copilotCwd: route.copilotCwd ?? "",
@@ -244,6 +247,7 @@ function setLocalAgentBinding(ctx: RabiApiContext, routeId: string, patch: Agent
     route.agentAdapters = [patch.agentAdapter];
   }
   if (patch.codexCwd !== undefined) route.codexCwd = String(patch.codexCwd || "");
+  if (patch.codexThreadId !== undefined) route.codexThreadId = String(patch.codexThreadId || "");
   if (patch.codexThreadName !== undefined) route.codexThreadName = String(patch.codexThreadName || "");
   if (patch.copilotThreadName !== undefined) route.copilotThreadName = String(patch.copilotThreadName || "");
   if (patch.copilotCwd !== undefined) route.copilotCwd = String(patch.copilotCwd || "");

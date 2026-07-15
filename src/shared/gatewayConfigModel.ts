@@ -172,6 +172,7 @@ export type GatewayDefinition = {
   routeVariables?: Record<string, string>;
   routeName?: string;
   agentModel?: string;
+  codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
   copilotThreadName?: string;
@@ -699,6 +700,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     napcatWebuiToken: primaryNapcat?.webuiToken ?? definition.napcatWebuiToken,
     napcatInstances: usesNapcat ? napcatInstances : undefined,
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
+    codexThreadId: definition.codexThreadId?.trim() || undefined,
     codexThreadName: definition.codexThreadName?.trim() || undefined,
     codexCwd: normalizeCodexCwd(definition.codexCwd),
     copilotThreadName: definition.copilotThreadName?.trim() || undefined,

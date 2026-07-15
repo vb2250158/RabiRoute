@@ -1,3 +1,6 @@
 import { startManager } from "./manager/controlPlaneRoutes.js";
 
-startManager();
+void startManager().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

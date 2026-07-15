@@ -21,6 +21,7 @@ const form = reactive({
   agentAdapters: ["codex"] as AgentAdapterType[],
   agentRoleId: "",
   agentModel: "",
+  codexThreadId: "",
   codexThreadName: "",
   copilotThreadName: "",
   codexCwd: "",
@@ -64,7 +65,7 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
 ];
 
 const quickAgentChoices: Array<{ type: AgentAdapterType; title: string; note: string; icon: string }> = [
-  { type: "codex", title: "Codex Agent", note: "通过 app-server stdio 投递；ChatGPT 桌面版是可选宿主", icon: "mdi-monitor-dashboard" },
+  { type: "codex", title: "Codex Agent", note: "与 Codex/ChatGPT 桌面端、CLI 共用唯一 Runtime", icon: "mdi-monitor-dashboard" },
   { type: "copilotCli", title: "Copilot CLI", note: "实验支持，需要本机登录状态", icon: "mdi-robot-outline" },
   { type: "marvis", title: "Marvis", note: "占位支持，人工接力模式", icon: "mdi-message-processing-outline" },
   { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" }
@@ -130,7 +131,7 @@ async function runAgentScan(): Promise<void> {
 const runtime = computed(() => store.selectedRuntime);
 const selectedAgent = computed<AgentAdapterType>(() => form.agentAdapters[0] ?? "codex");
 const selectedSessionName = computed(() => {
-  if (selectedAgent.value === "codex") return form.codexThreadName;
+  if (selectedAgent.value === "codex") return form.codexThreadId || form.codexThreadName;
   if (selectedAgent.value === "copilotCli") return form.copilotThreadName;
   return "";
 });
@@ -595,18 +596,32 @@ async function openMarvis(): Promise<void> {
   }
 }
 
-function sessionNames(): string[] {
+function sessionNames(): Array<string | { title: string; value: string }> {
   const project = currentProject();
-  return [...new Set(agentSessions()
-    .filter(session => !project || !session.projectPath || samePath(session.projectPath, project))
-    .map(session => session.name))];
+  const sessions = agentSessions().filter(session => !project || !session.projectPath || samePath(session.projectPath, project));
+  if (selectedAgent.value !== "codex") return [...new Set(sessions.map(session => session.name))];
+  return sessions.filter(session => session.id).map(session => ({
+    title: `${session.name} · ${formatSessionTime(session.updatedAt)}`,
+    value: session.id!
+  }));
+}
+
+function formatSessionTime(value?: string): string {
+  if (!value) return "时间未知";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function selectSession(value: unknown): void {
-  const threadName = String(value || "");
+  const selectedValue = String(value || "");
+  const selectedById = agentSessions().find(session => session.id === selectedValue);
+  const threadName = selectedById?.name || selectedValue;
   if (selectedAgent.value === "copilotCli") form.copilotThreadName = threadName;
-  else if (selectedAgent.value === "codex") form.codexThreadName = threadName;
-  const selected = agentSessions().find(session => session.name === threadName);
+  else if (selectedAgent.value === "codex") {
+    form.codexThreadId = selectedById?.id || "";
+    form.codexThreadName = threadName;
+  }
+  const selected = selectedById || agentSessions().find(session => session.name === threadName);
   if (selected?.projectPath) {
     if (selectedAgent.value === "copilotCli" && !form.copilotCwd) form.copilotCwd = selected.projectPath;
     if (selectedAgent.value !== "copilotCli" && !form.codexCwd) form.codexCwd = selected.projectPath;
@@ -700,6 +715,7 @@ function syncFromGateway() {
     : ["codex"];
   form.agentRoleId = gateway?.agentRoleId || "";
   form.agentModel = gateway?.agentModel || "";
+  form.codexThreadId = gateway?.codexThreadId || "";
   form.codexThreadName = gateway?.codexThreadName || "";
   form.copilotThreadName = gateway?.copilotThreadName || "";
   form.codexCwd = gateway?.codexCwd || "";
@@ -767,6 +783,31 @@ async function apply() {
   applySaving.value = true;
   applyError.value = "";
   try {
+    if (selectedAgent.value === "codex" && !form.codexThreadId) {
+      const title = form.codexThreadName.trim() || fallbackCodexThreadName();
+      const project = currentProject();
+      const matches = agentSessions().filter(session =>
+        session.name === title && (!project || !session.projectPath || samePath(session.projectPath, project))
+      );
+      if (matches.length === 1 && matches[0].id) {
+        form.codexThreadId = matches[0].id;
+        form.codexThreadName = matches[0].name;
+      } else if (matches.length > 1) {
+        throw new Error(`存在 ${matches.length} 个同名会话，请按最后会话时间从下拉列表中选择。`);
+      }
+    }
+    if (selectedAgent.value === "codex" && !form.codexThreadId) {
+      const title = form.codexThreadName.trim() || fallbackCodexThreadName();
+      const response = await fetch("/api/agent/threads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create", title, prompt: "", cwd: form.codexCwd || undefined })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.thread?.id) throw new Error(body.message || "创建 Codex 会话失败。");
+      form.codexThreadId = body.thread.id;
+      form.codexThreadName = body.thread.title || title;
+    }
     store.applyQuickSetup({ ...form, agentRoleId: String(form.agentRoleId || "") });
     await store.save();
     open.value = false;
@@ -1074,7 +1115,7 @@ async function apply() {
                   </div>
 
                   <v-alert v-if="selectedAgent === 'codex'" type="info" variant="tonal" density="compact" class="mb-3">
-                    Codex 是 Agent/runtime，RabiRoute 通过官方 app-server stdio 投递。ChatGPT 桌面版只是可选宿主，不参与投递成功判定。
+                    RabiRoute、Codex/ChatGPT 桌面端和 Codex CLI 共用一个 app-server Runtime；会话会实时同步。
                   </v-alert>
                   <v-alert v-if="selectedAgent === 'copilotCli'" type="warning" variant="tonal" density="compact" class="mb-3">
                     Copilot CLI 仍是实验适配；同一会话重复注入还需要单独烟测确认。
@@ -1301,9 +1342,9 @@ async function apply() {
                     v-if="selectedAgent !== 'astrbot' && selectedAgent !== 'marvis'"
                     :model-value="selectedSessionName"
                     :items="sessionNames()"
-                    label="会话线程名"
-                    placeholder="留空，按路由名自动创建"
-                    :hint="selectedAgent === 'codex' ? `留空使用：${fallbackCodexThreadName()}` : '没有扫到时也可以手动填写'"
+                    :label="selectedAgent === 'codex' ? '会话名 + 最后会话时间' : '会话线程名'"
+                    placeholder="选择已有会话，或输入新会话名"
+                    :hint="selectedAgent === 'codex' ? '选择时按线程 ID 精确绑定；输入不存在的名字会创建新会话' : '没有扫到时也可以手动填写'"
                     persistent-hint
                     @update:model-value="selectSession"
                   >

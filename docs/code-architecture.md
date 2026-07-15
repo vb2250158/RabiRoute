@@ -218,7 +218,7 @@ AgentPacket
 
 - Provider 是 OpenAI；adapter 不复制 provider 的账号、鉴权或模型目录。
 - Agent/runtime 是 Codex；稳定 adapter id 仍是 `codex`。
-- Transport 是 app-server stdio JSONL；不要在业务适配层重新实现 Desktop IPC，也不要把实验性 WebSocket 设为正式通道。
+- Transport 是本机唯一共享 WebSocket app-server；Rabi gateway、Codex/ChatGPT Desktop 与 CLI 都是它的客户端。不要在业务适配层重新实现 Desktop 私有 IPC，也不要再启动独立 stdio app-server。
 - Host 是可选的 ChatGPT desktop；宿主发现、启动或可见性不能成为消息投递前置条件。
 - Model 是 thread/turn 参数。`agentModel` 为空时先从 `model/list` 读取 runtime 当前默认值，再用于恢复与投递；不能在代码里增加兜底模型常量。
 
@@ -511,7 +511,7 @@ src/messageEndpoints/
 - 不让外部写入绕过 Outbox / Action Gate。
 - 不把 NapCat、FenneNote、小爱等外部工具自身能力纳入 RabiRoute 控制面；RabiRoute 只管自己是否接收消息，以及自己是否允许 Agent 通过 RabiRoute 回传/代发。
 - 不把运行期 `data/`、日志、token、真实账号写进仓库。
-- 不混淆 OpenAI provider、Codex agent/runtime、app-server stdio transport、ChatGPT desktop host 和具体 model。
+- 不混淆 OpenAI provider、Codex agent、共享 app-server Runtime、Desktop/CLI 客户端和具体 model。
 - 不依赖桌面窗口、私有 IPC 或实验性 WebSocket 完成 Codex 正式投递。
 - 不在 RabiRoute 中硬编码默认模型；空值由 runtime 决定。
 

@@ -10,9 +10,9 @@ test("Codex scan derives installation from the project-pinned runtime", () => {
   });
 
   assert.equal(scan.installed, false);
-  assert.deepEqual(scan.transport, { protocol: "codex app-server", mode: "stdio" });
-  assert.deepEqual(scan.host, { name: "ChatGPT desktop", required: false });
-  assert.match(scan.warnings?.join(" ") ?? "", /无法启动 app-server stdio/);
+  assert.deepEqual(scan.transport, { protocol: "codex app-server", mode: "shared-websocket" });
+  assert.deepEqual(scan.host, { name: "Codex\/ChatGPT desktop", required: false });
+  assert.match(scan.warnings?.join(" ") ?? "", /无法启动共享 Runtime/);
   assert.doesNotMatch(scan.warnings?.join(" ") ?? "", /Desktop IPC|fallback/);
 });
 

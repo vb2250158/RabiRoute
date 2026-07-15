@@ -68,7 +68,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，`c
 | RouteDecision | 已有 | route profile、event record、extra values | forwarding、未来 preview | 每次投递时 | 本身无写入；调用方可能写日志 | 代码内部 | `src/routing/routeDecision.ts` | `docs/persona-route-workbench-plan.md` |
 | Forwarding | 已有 | active routeProfiles、record、extra values | Agent adapter、history、delivery replay | 每次真实消息进入时 | 写 router log、role record、codex notification、replay ledger，可能投递 Agent | `forwardMessage` / `forwardMessageAndWait` | `src/forwarding.ts` | `docs/code-architecture.md` |
 | AgentPacket | 已有 | RouteDecision、role paths、logs、role knowledge | Agent adapter | 命中规则后 | 会触发 roleKnowledgeSnapshot，可能刷新记忆 viewedAt 或创建待整理记忆 | 代码内部；拟新增 preview | `src/routing/agentPacket.ts`、`src/roleKnowledge.ts` | `docs/agent-context-injection.md` |
-| Codex adapter | 已有，正式主链为 app-server stdio | route agent config、Codex runtime、固定线程名与工作目录 | `codex app-server` | AgentPacket 投递时 | 启动 stdio 子进程，向 Codex 线程 `turn/start` / `turn/steer`；审批无明确允许时拒绝 | route Agent 端 | `src/codexRuntime.ts`、`src/codexAppServerClient.ts` | `docs/code-architecture.md` |
+| Codex adapter | 已有，正式主链为共享 app-server Runtime | route agent config、精确线程 ID 与工作目录 | `codex app-server` | Manager 启动及 AgentPacket 投递时 | Manager 保证唯一 WS Runtime；Rabi、Desktop、CLI 连接同一服务并向精确线程 `turn/start` / `turn/steer` | route Agent 端 | `src/codexSharedRuntime.ts`、`src/manager/codexSharedRuntimeOwner.ts`、`src/codexRuntime.ts` | `docs/code-architecture.md` |
 | Agent Codex 线程桥 | 已有 | app-server `thread/list` / `thread/read`、已配置的 `codexCwd`、Agent 请求 | 后台 Agent、Codex app-server | Agent 调用 `/api/agent/threads` 时 | 查询/读取正式线程，或在受控工作区创建线程、启动后续 turn；默认 workspace-write，Windows 1312 可显式 danger-full-access 恢复 | `POST /api/agent/threads` | `src/agentThreads.ts`、`src/codexRuntime.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
 | Copilot CLI adapter | 已有 | route agent config、Copilot CLI | Copilot CLI | AgentPacket 投递时 | 启动 / 调用 CLI | route Agent 端 | `src/copilotCli.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
 | AstrBot adapter | 已有 | AstrBot dashboard / plugin API | AstrBot | AgentPacket 投递时 | 调用 AstrBot API | route Agent 端 | `src/agentAdapters/astrbotAdapter.ts`、`scripts/rabiroute_agent/` | `docs/code-architecture.md` |
@@ -99,7 +99,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，`c
 - 预览能力目前是拟新增设计，应走后端 dry-run，不能调用 `forwardMessageAndWait`。
 - 真实外发必须经过 Outbox / Action Gate。处理端不要绕过 RabiRoute 直接写 QQ、WeCom、RabiLink 或外部系统。
 - Codex adapter id 保持 `codex`；ChatGPT desktop 只是可选 host，不参与 adapter 选择、线程寻址或 transport 配置。
-- Codex 正式 transport 只有 app-server stdio。Desktop IPC 和实验性 WebSocket 不进入主链，也不作为健康检查成功条件。
+- Codex 正式 transport 只有本机共享 app-server WebSocket。Desktop 私有 IPC、独立 stdio app-server 和 fallback 均已退出主链。
 - `agentModel` 空值跟随 runtime 默认；默认沙箱为 `workspaceWrite`；runtime approval 与业务 Action Gate 都独立 fail closed。
 - 运行期 `data/`、日志、token、真实账号、真实 QQ 群号和 Cookie 不进仓库。
 

@@ -57,7 +57,7 @@ test("Agent thread create uses a configured workspace and fixed investigation in
         id: "019f0000-0000-7000-8000-000000000001",
         title: params.title,
         updatedAt: "2026-07-13T00:00:00Z",
-        source: "codex app-server stdio",
+        source: "codex shared runtime",
         initialTurnStatus: "started"
       };
     },

@@ -3,6 +3,7 @@ import test from "node:test";
 import path from "node:path";
 import {
   activeTurnIdFromResumedThreadForTest,
+  buildChildEnvWithNodeOnPath,
   codexThreadDeliveryTargetIsStaleForTest,
   codexThreadMatchesConfiguredTargetForTest
 } from "./codexRuntime.js";
@@ -19,6 +20,29 @@ test("thread/resume restores the latest in-progress turn for steering", () => {
   );
   assert.equal(activeTurnIdFromResumedThreadForTest({ turns: [{ id: "turn-failed", status: "failed" }] }), undefined);
   assert.equal(activeTurnIdFromResumedThreadForTest({ turns: "invalid" }), undefined);
+});
+
+test("buildChildEnvWithNodeOnPath prepends bundled node directory on POSIX-like env", () => {
+  const env = buildChildEnvWithNodeOnPath(
+    { PATH: "/usr/bin", OTHER: "value" },
+    "/opt/rabiroute/node/bin/node",
+    ":"
+  );
+
+  assert.equal(env.PATH, "/opt/rabiroute/node/bin:/usr/bin");
+  assert.equal(env.OTHER, "value");
+});
+
+test("buildChildEnvWithNodeOnPath preserves Windows Path key and removes duplicate variants", () => {
+  const env = buildChildEnvWithNodeOnPath(
+    { Path: "C:\\Windows\\System32", PATH: "ignored", OTHER: "value" },
+    "C:\\Tools\\node\\node.exe",
+    ";"
+  );
+
+  assert.equal(env.Path, "C:\\Tools\\node;C:\\Windows\\System32");
+  assert.equal(env.PATH, undefined);
+  assert.equal(env.OTHER, "value");
 });
 
 test("Codex app-server treats thread name plus cwd as the delivery target", () => {

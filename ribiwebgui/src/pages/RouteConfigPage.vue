@@ -2767,7 +2767,7 @@ function renameCurrentConfig(value: unknown): void {
 }
 
 const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; icon: string; hasCwd: boolean; hasThread: boolean }> = [
-  { type: "codex",       title: "Codex Agent",    note: "通过 app-server stdio 投递；ChatGPT 桌面版是可选宿主", icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
+  { type: "codex",       title: "Codex Agent",    note: "与桌面端、CLI 共用共享 Runtime", icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
   { type: "copilotCli",  title: "Copilot CLI",   note: "通过 GitHub Copilot CLI 投递消息",  icon: "mdi-robot-outline", hasCwd: true, hasThread: true },
   { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
@@ -2788,7 +2788,7 @@ function agentStateFor(type: AgentAdapterType): Record<string, any> {
 }
 
 function codexDeliveryChannelLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryChannel === "app-server-stdio") return "Codex app-server · stdio";
+  if (state.lastDeliveryChannel === "codex-shared-runtime") return "Codex 共享 Runtime";
   return "-";
 }
 
@@ -2950,6 +2950,56 @@ function sessionNamesFor(type: AgentAdapterType): string[] {
   return [...new Set(agentSessions(type)
     .filter(session => !selectedProject || !session.projectPath || samePath(session.projectPath, selectedProject))
     .map(session => session.name))];
+}
+
+function codexSessionItems(): Array<{ title: string; value: string }> {
+  const selectedProject = currentAgentProject("codex");
+  return agentSessions("codex")
+    .filter(session => session.id && (!selectedProject || !session.projectPath || samePath(session.projectPath, selectedProject)))
+    .map(session => ({ title: `${session.name} · ${formatCodexSessionTime(session.updatedAt)}`, value: session.id! }));
+}
+
+function formatCodexSessionTime(value?: string): string {
+  if (!value) return "时间未知";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function selectCodexSession(value: unknown): void {
+  if (!gateway.value) return;
+  const selectedValue = String(value || "");
+  const selected = agentSessions("codex").find(session => session.id === selectedValue);
+  gateway.value.codexThreadId = selected?.id || "";
+  gateway.value.codexThreadName = selected?.name || selectedValue;
+  if (selected?.projectPath && !gateway.value.codexCwd) gateway.value.codexCwd = selected.projectPath;
+  touch();
+}
+
+async function ensureCodexThreadBinding(): Promise<void> {
+  if (!gateway.value || gateway.value.codexThreadId) return;
+  const title = gateway.value.codexThreadName?.trim() || fallbackCodexThreadName();
+  const project = currentAgentProject("codex");
+  const matches = agentSessions("codex").filter(session =>
+    session.name === title && (!project || !session.projectPath || samePath(session.projectPath, project))
+  );
+  if (matches.length === 1 && matches[0].id) {
+    gateway.value.codexThreadId = matches[0].id;
+    gateway.value.codexThreadName = matches[0].name;
+    touch();
+    return;
+  }
+  if (matches.length > 1) return;
+  const response = await fetch("/api/agent/threads", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "create", title, prompt: "", cwd: gateway.value.codexCwd || undefined })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.thread?.id) return;
+  gateway.value.codexThreadId = body.thread.id;
+  gateway.value.codexThreadName = body.thread.title || title;
+  touch();
+  await runAgentScan();
 }
 
 function selectCopilotSession(value: unknown): void {
@@ -4222,7 +4272,7 @@ watch(
                 <!-- Codex -->
                 <template v-if="agent.type === 'codex'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    Codex 是 Agent/runtime，RabiRoute 通过官方 app-server stdio 投递。ChatGPT 桌面版只是可选宿主，不参与投递成功判定。
+                    RabiRoute、Codex/ChatGPT 桌面端和 Codex CLI 共用同一个 app-server Runtime；桌面端会实时看到这里创建和投递的会话。
                   </v-alert>
                   <div class="catalog-param-grid">
                     <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="可不绑定项目；留空时 Codex runtime 在 RabiRoute 根目录创建或投递" persistent-hint @update:model-value="touch">
@@ -4231,10 +4281,10 @@ watch(
                         <v-icon v-else-if="agentProjectItems('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-combobox v-model="gateway.codexThreadName" :items="sessionNamesFor('codex')" label="会话线程名" placeholder="留空，按路由名自动创建" :hint="`留空使用：${fallbackCodexThreadName()}`" persistent-hint @update:model-value="touch">
+                    <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="界面隐藏 ID，但内部仍按完整线程 ID 精确绑定；输入新名字并离开输入框后创建会话" persistent-hint @update:model-value="selectCodexSession" @blur="ensureCodexThreadBinding">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="sessionNamesFor('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
+                        <v-icon v-else-if="codexSessionItems().length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
                     <v-text-field v-model="gateway.agentModel" class="full-span" label="模型覆盖" placeholder="留空，使用 Codex runtime 默认模型" hint="只在需要强制指定 Agent 模型时填写" persistent-hint @update:model-value="touch" />

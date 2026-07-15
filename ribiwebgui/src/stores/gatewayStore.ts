@@ -608,6 +608,7 @@ export const useGatewayStore = defineStore("gateway", () => {
   function applyQuickSetup(values: {
     agentRoleId: string;
     agentModel?: string;
+    codexThreadId?: string;
     codexThreadName: string;
     copilotThreadName: string;
     codexCwd: string;
@@ -654,6 +655,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway.codexCwd = values.codexCwd;
     gateway.agentAdapters = values.agentAdapters?.length ? values.agentAdapters : gateway.agentAdapters;
     if (gateway.agentAdapters?.includes("codex")) {
+      gateway.codexThreadId = values.codexThreadId;
       gateway.codexThreadName = values.codexThreadName;
     }
     if (gateway.agentAdapters?.includes("copilotCli")) {

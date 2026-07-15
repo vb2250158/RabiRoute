@@ -1,4 +1,4 @@
-export const CODEX_APP_SERVER_CHANNEL = "app-server-stdio";
+export const CODEX_APP_SERVER_CHANNEL = "codex-shared-runtime";
 export const CHATGPT_DESKTOP_HOST_NAME = "ChatGPT";
 
 function nonEmptyString(value: unknown): string {
@@ -17,11 +17,6 @@ const currentCodexReportKeys = [
   "lastNotificationError",
   "lastNotificationErrorAt",
   "lastDeliveryAcceptedAt",
-  "lastChatGptDesktopHostVisibilityAt",
-  "lastChatGptDesktopHostVisibilityReason",
-  "lastChatGptDesktopHostVisibilityMode",
-  "lastChatGptDesktopHostVisibilityTarget",
-  "lastChatGptDesktopHostVisibilityError",
   "reportGeneration",
   "reportSequence",
   "updatedAt"
@@ -58,7 +53,7 @@ export function resolveCodexRuntimeState(
       bound: false,
       deliveryHealthy: false,
       lastDeliveryChannel: CODEX_APP_SERVER_CHANNEL,
-      message: `Codex app-server stdio 投递失败：${lastNotificationError}`
+      message: `Codex 共享 Runtime 投递失败：${lastNotificationError}`
     };
   }
 
@@ -69,8 +64,8 @@ export function resolveCodexRuntimeState(
       deliveryHealthy: true,
       lastDeliveryChannel: CODEX_APP_SERVER_CHANNEL,
       message: monitorThreadId
-        ? "Codex 已通过 app-server stdio 投递；ChatGPT 桌面仅为可选宿主。"
-        : "Codex 已通过 app-server stdio 接受最近投递，但尚未上报线程标识。"
+        ? "Codex 已通过共享 Runtime 投递；桌面端与 CLI 使用同一会话源。"
+        : "Codex 共享 Runtime 已接受最近投递，但尚未上报线程标识。"
     };
   }
 

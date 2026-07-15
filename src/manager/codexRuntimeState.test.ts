@@ -5,7 +5,7 @@ import {
   resolveCodexRuntimeState
 } from "./codexRuntimeState.js";
 
-test("Codex runtime state uses app-server stdio and treats ChatGPT as an optional host", () => {
+test("Codex runtime state uses the shared Runtime", () => {
   const state = resolveCodexRuntimeState(
     { bound: false },
     {
@@ -39,7 +39,7 @@ test("Codex delivery failures are reported through the canonical app-server stat
   assert.equal(state.deliveryHealthy, false);
   assert.equal(state.lastDeliveryChannel, CODEX_APP_SERVER_CHANNEL);
   assert.equal(state.unexpectedRetryField, undefined);
-  assert.equal(state.message, "Codex app-server stdio 投递失败：runtime unavailable");
+  assert.equal(state.message, "Codex 共享 Runtime 投递失败：runtime unavailable");
   assert.doesNotMatch(String(state.message), /Desktop|worker|fallback|补投/);
 });
 

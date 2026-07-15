@@ -211,7 +211,7 @@ export async function handleAgentThreadRequest(
 
   if (action === "create") {
     const title = requiredText(request.title, "title", maxTitleLength);
-    const prompt = requiredText(request.prompt, "prompt", maxPromptLength);
+    const prompt = optionalText(request.prompt, "prompt", maxPromptLength);
     const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const sandbox = normalizeSandbox(request.sandbox);
     const thread = await driver.create({

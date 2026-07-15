@@ -1,6 +1,11 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
+import {
+  chatGptDesktopHostVisibilityStatePatch,
+  ensureChatGptDesktopHostVisible
+} from "./chatgptDesktopHost.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
 import { CodexAppServerClient } from "./codexAppServerClient.js";
 import { rabiRoutePackageVersion } from "./packageInfo.js";
@@ -83,8 +88,8 @@ export type CodexThreadCreateParams = {
 };
 
 export type CodexThreadCreateResult = CodexThreadSummary & {
-  source: "codex shared runtime";
-  initialTurnStatus: "not-requested" | "started" | "failed";
+  source: "codex app-server stdio";
+  initialTurnStatus: "started" | "failed";
   initialTurnError?: string;
 };
 
@@ -109,6 +114,25 @@ function clearMonitorThreadId(): void {
   writeState(rest);
 }
 
+function requestOptionalChatGptHostVisibility(
+  reason: Parameters<typeof ensureChatGptDesktopHostVisible>[0],
+  options: Parameters<typeof ensureChatGptDesktopHostVisible>[1] = {}
+): void {
+  void ensureChatGptDesktopHostVisible(reason, options)
+    .then((result) => {
+      const patch = chatGptDesktopHostVisibilityStatePatch(result);
+      if (Object.keys(patch).length > 0) writeState({ ...readState(), ...patch });
+    })
+    .catch((error) => {
+      writeState({
+        ...readState(),
+        lastChatGptDesktopHostVisibilityAt: new Date().toISOString(),
+        lastChatGptDesktopHostVisibilityReason: reason,
+        lastChatGptDesktopHostVisibilityError: errorMessage(error)
+      });
+    });
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -127,7 +151,7 @@ function turnErrorMessage(value: unknown, fallback: string): string {
 function recordCodexFailure(error: unknown): void {
   writeState({
     ...readState(),
-    lastDeliveryChannel: "codex-shared-runtime",
+    lastDeliveryChannel: "app-server-stdio",
     lastNotificationError: errorMessage(error),
     lastNotificationErrorAt: new Date().toISOString()
   });
@@ -137,6 +161,30 @@ export function codexThreadDeliveryTargetIsStaleForTest(error: unknown): boolean
   const message = errorMessage(error).toLowerCase();
   return message.includes("thread not found")
     || message.includes("no rollout found for thread id");
+}
+
+function codexLaunchCommand(): { command: string; args: string[] } {
+  return {
+    command: process.execPath,
+    args: [fileURLToPath(new URL("../node_modules/@openai/codex/bin/codex.js", import.meta.url))]
+  };
+}
+
+export function buildChildEnvWithNodeOnPath(
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath,
+  delimiter: string = path.delimiter
+): NodeJS.ProcessEnv {
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+  const currentPath = env[pathKey] || "";
+  const nextEnv: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toLowerCase() !== "path") {
+      nextEnv[key] = value;
+    }
+  }
+  nextEnv[pathKey] = [path.dirname(execPath), currentPath].filter(Boolean).join(delimiter);
+  return nextEnv;
 }
 
 function handleNotification(msg: AppServerNotification): void {
@@ -193,7 +241,13 @@ function handleAppServerExit(error: Error): void {
 
 function getAppServerClient(): CodexAppServerClient {
   if (!appServerClient) {
+    const launch = codexLaunchCommand();
     appServerClient = new CodexAppServerClient({
+      command: launch.command,
+      commandArgs: launch.args,
+      cwd: config.codexCwd,
+      dataDir: config.dataDir,
+      env: buildChildEnvWithNodeOnPath(),
       clientVersion: rabiRoutePackageVersion(),
       onNotification: handleNotification,
       onExit: handleAppServerExit
@@ -452,15 +506,16 @@ export async function createCodexThread(params: CodexThreadCreateParams): Promis
   const threadId = result.thread?.id;
   if (!threadId) throw new Error(`thread/start did not return thread id: ${JSON.stringify(result)}`);
   await request("thread/name/set", { threadId, name: params.title });
+  requestOptionalChatGptHostVisibility("app-server-create-thread", { force: true });
+
   const created: CodexThreadCreateResult = {
     id: threadId,
     title: params.title,
     updatedAt: new Date().toISOString(),
-    source: "codex shared runtime",
-    initialTurnStatus: params.prompt.trim() ? "started" : "not-requested"
+    source: "codex app-server stdio",
+    initialTurnStatus: "started"
   };
   try {
-    if (!params.prompt.trim()) return created;
     await startCodexThreadTurn({ ...params, threadId, resumeFirst: false });
   } catch (error) {
     created.initialTurnStatus = "failed";
@@ -476,6 +531,7 @@ export async function sendCodexThreadMessage(params: {
   sandbox: CodexTurnSandbox;
 }): Promise<void> {
   await startCodexThreadTurn({ ...params, resumeFirst: true });
+  requestOptionalChatGptHostVisibility("app-server-turn-start");
 }
 
 async function findThreadsByName(threadName: string): Promise<DiscoveredMonitorThread[]> {
@@ -504,7 +560,7 @@ async function findThreadsByName(threadName: string): Promise<DiscoveredMonitorT
         threadName,
         cwd,
         updatedAt,
-        source: "codex shared runtime thread/list"
+        source: "codex app-server stdio thread/list"
       });
     }
     cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
@@ -517,21 +573,7 @@ export async function isCodexMonitorThreadActive(): Promise<boolean> {
   await connect();
   const state = readState();
   const model = await resolveCodexModel();
-  if (config.codexThreadId) {
-    const info = await readThreadInfo(config.codexThreadId);
-    if (!info || normalizeComparablePath(info.cwd) !== normalizeComparablePath(config.codexCwd)) return false;
-    if (!await resumeThread(info.id, model)) return false;
-    bindThread(state, {
-      id: info.id,
-      threadName: info.name || config.codexThreadName,
-      cwd: info.cwd,
-      updatedAt: info.updatedAt ?? new Date(0).toISOString(),
-      source: "codex shared runtime thread/id"
-    });
-    return activeTurnByThread.has(info.id);
-  }
   const candidates = await findThreadsByName(config.codexThreadName);
-  if (candidates.length > 1) return false;
   if (state.monitorThreadId && !candidates.some((thread) => thread.id === state.monitorThreadId)) {
     const info = await readThreadInfo(state.monitorThreadId);
     if (info && codexThreadMatchesConfiguredTargetForTest(info, config.codexThreadName, config.codexCwd)) {
@@ -540,7 +582,7 @@ export async function isCodexMonitorThreadActive(): Promise<boolean> {
         threadName: config.codexThreadName,
         cwd: info.cwd,
         updatedAt: info.updatedAt ?? new Date(0).toISOString(),
-        source: "codex shared runtime thread/read"
+        source: "codex app-server stdio thread/read"
       });
     }
   }
@@ -571,27 +613,7 @@ async function ensureMonitorThread(): Promise<string> {
   await connect();
   const model = await resolveCodexModel();
 
-  if (config.codexThreadId) {
-    const info = await readThreadInfo(config.codexThreadId);
-    if (!info) throw new Error(`Configured Codex thread was not found: ${config.codexThreadId}`);
-    if (normalizeComparablePath(info.cwd) !== normalizeComparablePath(config.codexCwd)) {
-      throw new Error(`Configured Codex thread belongs to another workspace: ${config.codexThreadId}`);
-    }
-    if (!await resumeThread(info.id, model)) throw new Error(`Configured Codex thread could not be resumed: ${info.id}`);
-    bindThread(state, {
-      id: info.id,
-      threadName: info.name || threadName,
-      cwd: info.cwd,
-      updatedAt: info.updatedAt ?? new Date(0).toISOString(),
-      source: "codex shared runtime thread/id"
-    });
-    return info.id;
-  }
-
   const existingThreads = await findThreadsByName(threadName);
-  if (existingThreads.length > 1) {
-    throw new Error(`Codex thread name is ambiguous; select an exact thread ID in RibiWebGUI: ${threadName}`);
-  }
   if (existingThreads.length > 0) {
     for (const existingThread of existingThreads) {
       const info = await readThreadInfo(existingThread.id);
@@ -645,6 +667,7 @@ async function ensureMonitorThread(): Promise<string> {
     monitorThreadSource: "codex app-server",
     lastAutoDiscoveryAt: new Date().toISOString()
   });
+  requestOptionalChatGptHostVisibility("app-server-create-thread", { force: true });
   return threadId;
 }
 
@@ -707,7 +730,7 @@ function recordAcceptedNotification(
     monitorThreadCwd: config.codexCwd,
     notificationCount,
     lastNotificationAt: now.toISOString(),
-    lastDeliveryChannel: "codex-shared-runtime",
+    lastDeliveryChannel: "app-server-stdio",
     lastDeliveryAcceptedAt: acceptedAt.toISOString(),
     lastNotificationError: terminalFailureDuringDelivery ? currentState.lastNotificationError : "",
     lastNotificationErrorAt: terminalFailureDuringDelivery ? currentState.lastNotificationErrorAt : ""
@@ -786,6 +809,7 @@ async function startNotificationTurn(
     threadId,
     name: threadName
   });
+  requestOptionalChatGptHostVisibility("app-server-turn-start");
 
   const input = [
     {

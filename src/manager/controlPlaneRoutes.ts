@@ -78,6 +78,7 @@ import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalC
 import { handleRabiApi } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { ensureCodexSharedRuntime, stopOwnedCodexSharedRuntime } from "./codexSharedRuntimeOwner.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import {
   applyMemoryConsolidationResult,
@@ -143,6 +144,7 @@ type GatewayDefinition = {
   routeVariables?: Record<string, string>;
   routeName?: string;
   agentModel?: string;
+  codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
   copilotThreadName?: string;
@@ -648,6 +650,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     remoteAgentDefaultCwd: configPathValue(definition.remoteAgentDefaultCwd),
     remoteAgentDefaultThreadName: definition.remoteAgentDefaultThreadName,
     agentModel: definition.agentModel,
+    codexThreadId: definition.codexThreadId,
     codexThreadName: definition.codexThreadName,
     codexCwd: configPathValue(definition.codexCwd),
     copilotThreadName: definition.copilotThreadName,
@@ -1237,6 +1240,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     WECOM_BOT_ID: definition.wecomBotId?.trim() || process.env.WECOM_BOT_ID || "",
     WECOM_BOT_SECRET: definition.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET || "",
     WECOM_WS_URL: definition.wecomWsUrl?.trim() || process.env.WECOM_WS_URL || "",
+    CODEX_THREAD_ID: definition.codexThreadId?.trim() || "",
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
     COPILOT_THREAD_NAME: resolveCopilotThreadName(definition),
@@ -1488,10 +1492,10 @@ function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdap
     bound: false,
     monitorThreadName: resolveCodexThreadName(definition),
     monitorProjectPath: normalizeCodexCwd(definition.codexCwd) ?? rootDir,
-    deliveryTransport: "app-server-stdio",
+    deliveryTransport: "codex-shared-runtime",
     desktopHostName: "ChatGPT",
     desktopHostRequired: false,
-    message: "等待 Codex app-server stdio 首次投递；ChatGPT 桌面不是运行时绑定条件。"
+    message: "等待 Codex 共享 Runtime 首次投递；桌面端和 CLI 连接同一 Runtime。"
   };
 }
 
@@ -2301,6 +2305,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     routeVariables: runtime.definition.routeVariables,
     routeName: runtime.definition.routeName,
     routeProfiles: runtime.definition.routeProfiles ?? [],
+    codexThreadId: runtime.definition.codexThreadId,
     codexThreadName: resolveCodexThreadName(runtime.definition),
     codexCwd: runtime.definition.codexCwd,
     copilotThreadName: resolveCopilotThreadName(runtime.definition),
@@ -3281,7 +3286,8 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
   return true;
 }
 
-export function startManager(): void {
+export async function startManager(): Promise<void> {
+  await ensureCodexSharedRuntime(path.join(rootDir, "data", "runtime"));
   loadRuntimes();
   for (const runtime of runtimes.values()) {
     if (runtime.definition.enabled) {
@@ -3830,6 +3836,7 @@ export function startManager(): void {
     console.log(`gateway-manager shutting down: ${reason}`);
     clearInterval(configWatcher);
     rabiLinkRelayRuntime.stop();
+    stopOwnedCodexSharedRuntime();
     stopAllGateways();
     server.close(() => {
       process.exit(0);

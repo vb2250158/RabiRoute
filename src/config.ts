@@ -429,6 +429,7 @@ export const config = {
   wecomWsUrl: process.env.WECOM_WS_URL?.trim() || "",
   agentAdapters: parseAgentAdapters(process.env.AGENT_ADAPTERS),
   agentModel,
+  codexThreadId: process.env.CODEX_THREAD_ID?.trim() || "",
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",
   codexCwd: normalizeCodexCwd(process.env.CODEX_CWD) ?? process.cwd(),
   copilotThreadName: process.env.COPILOT_THREAD_NAME?.trim() || "Copilot CLI",

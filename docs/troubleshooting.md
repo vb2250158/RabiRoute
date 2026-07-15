@@ -94,7 +94,7 @@ npm run check:config
 
 ## Agent 回合里没有 `codex_app__*` 线程工具
 
-后台 Agent 是否注入桌面连接器工具，与 RabiRoute 的 app-server stdio 投递是否健康是两件事。当前回合没有 `codex_app__*` 时，反复修改提示词或搜索 `ALL_TOOLS` 不会让工具出现。
+后台 Agent 是否注入桌面连接器工具，与共享 Runtime 的投递健康是两件事。当前回合没有 `codex_app__*` 时，反复修改提示词或搜索 `ALL_TOOLS` 不会让工具出现。
 
 后台 Agent 应调用本机线程桥：
 
@@ -102,7 +102,7 @@ npm run check:config
 POST http://127.0.0.1:8790/api/agent/threads
 ```
 
-支持 `list`、`read`、`create`、`send`。详细请求见 `docs/rabi-agent-interfaces.md`。该接口通过同一项目锁定的 app-server stdio runtime 工作，只允许使用当前 Route 已配置的 Codex 工作区；不要用 multi-agent 子 Agent 冒充正式线程，也不要继续把已就绪事项永久标成 `pending_thread_tool`。
+支持 `list`、`read`、`create`、`send`。详细请求见 `docs/rabi-agent-interfaces.md`。该接口通过桌面端与 CLI 共用的共享 Runtime 工作，只允许使用当前 Route 已配置的 Codex 工作区；不要用 multi-agent 子 Agent 冒充正式线程。
 
 不要为了消除报错在 ChatGPT desktop 里反复创建同名线程，这会增加歧义。
 

@@ -279,15 +279,15 @@ export function buildCodexAgentScan(input: {
       label: binPath.endsWith("codex.js") ? "@openai/codex" : path.basename(binPath),
       path: binPath
     })),
-    transport: { protocol: "codex app-server", mode: "stdio" },
-    host: { name: "ChatGPT desktop", required: false },
+    transport: { protocol: "codex app-server", mode: "shared-websocket" },
+    host: { name: "Codex/ChatGPT desktop", required: false },
     projects: input.projects,
     // Configuration suggestions only. Runtime delivery resolves the authoritative
     // thread through app-server thread/list and confirms it with thread/read/resume.
     sessions: input.sessions,
     warnings: [
-      ...(codexBins.length === 0 ? ["未发现项目锁定的 @openai/codex 运行时；无法启动 app-server stdio。"] : []),
-      "RabiRoute 通过 codex app-server stdio 投递；ChatGPT 桌面仅为可选宿主，不参与投递健康判定。"
+      ...(codexBins.length === 0 ? ["未发现项目锁定的 @openai/codex 运行时；无法启动共享 Runtime。"] : []),
+      "RabiRoute、Codex/ChatGPT 桌面端和 Codex CLI 连接同一个共享 Runtime。"
     ]
   };
 }
