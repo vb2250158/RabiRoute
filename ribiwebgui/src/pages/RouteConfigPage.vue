@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
@@ -122,6 +122,9 @@ async function runAgentScan(): Promise<void> {
   } catch { /* ignore */ }
   finally { agentScan.value.loading = false; }
 }
+
+// 会话/项目扫描只在进入设置页时自动执行一次；后续刷新必须由用户点击扫描按钮触发。
+onMounted(() => { void runAgentScan(); });
 
 // Copilot CLI 安装/登录
 const copilotStatus = ref<{ installed?: boolean; binPath?: string; loggedIn?: boolean; copilotHome?: string } | null>(null);
@@ -3007,7 +3010,6 @@ async function lookupCodexThreadBinding(): Promise<void> {
     gateway.value.codexThreadName = body.thread.title || title;
     if (body.thread.cwd) gateway.value.codexCwd = body.thread.cwd;
     touch();
-    if (body.resolution === "created") await runAgentScan();
   } catch (error) {
     codexBinding.value.error = error instanceof Error ? error.message : String(error);
   } finally {
@@ -3052,7 +3054,6 @@ function addAgent(type: AgentAdapterType): void {
   if (!gateway.value) return;
   gateway.value.agentAdapters = [...agentTypes.value, type];
   agentParamOpen.value[type] = true;
-  void runAgentScan();
   if (type === "copilotCli" && copilotStatus.value === null) void fetchCopilotStatus();
   store.touch();
 }
@@ -3072,7 +3073,6 @@ async function deployAstrbotAdapter(): Promise<void> {
     const body = await resp.json();
     if (body.ok) {
       astrbotDeployResult.value = { ok: true, message: body.message || "AstrBot Adapter 部署成功", detail: body.stdout };
-      await runAgentScan();
     } else {
       astrbotDeployResult.value = { ok: false, message: body.error || "部署失败", detail: body.stderr };
     }
@@ -3103,7 +3103,6 @@ async function testAstrbotLogin(): Promise<void> {
       ok: Boolean(body.ok),
       message: body.message || (resp.ok ? "AstrBot 登录验证成功。" : "AstrBot 登录验证失败。")
     };
-    if (body.ok) await runAgentScan();
   } catch (e: unknown) {
     astrbotLoginResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
   } finally {
@@ -3115,7 +3114,6 @@ function toggleAgentParams(type: AgentAdapterType): void {
   const nextOpen = !agentParamOpen.value[type];
   agentParamOpen.value[type] = nextOpen;
   if (nextOpen) {
-    void runAgentScan();
     if (type === "copilotCli" && copilotStatus.value === null) void fetchCopilotStatus();
   }
 }

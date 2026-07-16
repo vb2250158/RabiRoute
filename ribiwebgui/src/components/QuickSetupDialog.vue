@@ -649,7 +649,6 @@ async function testAstrbotLogin(): Promise<void> {
       ok: Boolean(body.ok),
       message: body.message || (resp.ok ? "AstrBot 登录验证成功。" : "AstrBot 登录验证失败。")
     };
-    if (body.ok) await runAgentScan();
   } catch (e: unknown) {
     astrbotLoginResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
   } finally {

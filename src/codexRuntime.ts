@@ -372,14 +372,10 @@ function currentCodexThreadId(): string {
 function codexSessionDependencies(): CodexSessionResolverDependencies<CodexDesktopThread> {
   return {
     scope: desktopBridge,
-    read: async (candidateId) => {
-      try {
-        return requireDesktopThread(candidateId, config.codexCwd);
-      } catch (error) {
-        if (codexThreadDeliveryTargetIsStaleForTest(error)) return null;
-        throw error;
-      }
-    },
+    // Return the Desktop record as-is. The canonical resolver validates the
+    // saved id + visible name + workspace together, then falls back to a name
+    // lookup/create when any part is stale.
+    read: async (candidateId) => readCodexDesktopThread(candidateId),
     list: async ({ title, cwd }) => listCodexDesktopThreads({
       query: title,
       limit: 10_000,
