@@ -194,7 +194,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 
 - `list`：从 Desktop 状态按标题查询本机任务，使用 `offset` / `limit` 分页访问全部结果。
 - `read`：通过完整 `threadId` 只读读取 Desktop 任务元数据。
-- `resolve`：精确 ID 有效时直接绑定；否则按名称和可选 cwd 查找，唯一匹配自动绑定、零匹配按需创建、多个同名返回候选让用户选择。
+- `resolve`：先读取精确 ID，但只有 owner 当前名称与请求中的保存名称一致且 cwd 一致时才直接绑定；ID 无效、失效或名称不一致时按保存名称和可选 cwd 查找，唯一匹配自动绑定、零匹配按需幂等创建、多个同名返回候选让用户选择。
 - `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。
 - `send`：通过 Desktop IPC 向已有任务 owner start/steer。
 
@@ -221,7 +221,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 }
 ```
 
-调用方不要让 AI 或用户手改 UUID。`resolve` 返回的 `resolution` 为 `id`、`name` 或 `created`；重名时返回 HTTP 409 和 `candidates`。
+调用方不要让 AI 或用户手改 UUID。调用方必须把下拉保存的名称和完整 ID 一起传入；`resolve` 返回的 `resolution` 为 `id`、`name` 或 `created`，并在成功后把返回名称 + ID 一起持久化；重名时返回 HTTP 409 和 `candidates`。
 
 读取示例：
 

@@ -55,6 +55,8 @@ assert.equal(packageJson.scripts["configure:codex-desktop"], undefined);
 assert.equal(packageJson.scripts["codex:shared"], undefined);
 assert.match(adapterSkill, /冻结用户可观察合同/);
 assert.match(adapterSkill, /一个 adapter 只能有一条真实消息执行路径/);
+assert.match(adapterSkill, /会话身份是“可见名称 \+ 完整线程 ID”配对/);
+assert.match(adapterSkill, /项目和会话扫描只允许在进入设置界面时自动执行一次/);
 assert.match(ownerFirstGate, /同一 session ID ≠ 同一 live task owner/);
 assert.match(ownerFirstGate, /RabiRoute event -> adapter -> transport -> exact session\/task owner -> turn -> observable result/);
 assert.equal(fs.existsSync(nestedDist), false, "Backend build must not leave a shadow dist/src runtime tree.");
