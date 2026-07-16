@@ -67,9 +67,9 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 
 ### E. 身份与能力
 
-- 用 owner 返回的完整 opaque ID 持久化绑定。
-- 用名称、最后时间和 cwd/project 供人识别与交叉校验，不用它们代替 ID。
-- ID 必须由扫描、创建或受控迁移自动产生，不能让用户或 AI 手填。配置 resolver 的固定顺序是：有效 ID → 精确绑定；非法/失效 ID → 名称 + 规范化 cwd；唯一匹配 → 重绑；零匹配 → 按用户输入创建；多个同名 → 等待选择。
+- 用 owner 返回的完整 opaque ID 与可见名称成对持久化绑定；名称 + ID 必须同时匹配 owner 记录才算精确绑定。
+- 最后时间只供人识别，cwd/project 用于安全边界和消歧；它们都不能代替名称 + ID 配对。
+- ID 必须由扫描、创建或受控迁移自动产生，不能让用户或 AI 手填。配置 resolver 的固定顺序是：读取有效 ID 并校验保存名称 → 名称和 ID 都匹配才精确绑定 → ID 非法/失效/名称不一致则按保存名称 + 规范化 cwd 查询 → 唯一匹配重绑 → 零匹配按用户输入幂等创建 → 多个同名等待选择。
 - 从执行该 turn 的 Runtime 探测工具和权限，不从 session 文本或另一客户端推断。
 - 精确 ID 存在但 cwd 冲突、名称重名未消歧或 owner 未加载时失败关闭；配置恢复不能变成实际消息的 fallback。
 
@@ -85,6 +85,8 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 6. 验证该轮实际拥有预期工具/权限。
 7. 关闭 RabiRoute 冷启动 Agent；关闭 Agent 启动 Manager。
 8. 让 owner 缺席、精确 ID cwd 冲突，确认没有第二执行路径。
+9. 分别在 owner 端和 Rabi 设置端修改会话名称，确认名称 + ID 不匹配时不会投给旧 ID，而是按新名称重绑或只创建一次。
+10. 记录会话扫描请求：只允许进入设置界面自动一次和用户点击扫描时增加；展开、输入、`blur`、保存与空闲等待不得持续扫描。
 
 ### G. 必测负例
 
@@ -93,6 +95,8 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 | owner 未加载/服务离线 | 可行动失败；不 fallback |
 | 旧 endpoint 或环境变量残留 | 不形成隐藏依赖 |
 | 非法、归档、失效 ID | 唯一名称 + cwd 可受控重绑；多匹配不模糊选择；零匹配只按明确名称创建 |
+| 名称 + ID 配对失效 | owner 端或 Rabi 端改名后不续投旧 ID；按保存名称唯一重绑或幂等创建，并持久化新配对 |
+| 设置页长期停留 | 扫描请求次数不随时间、展开、输入、`blur` 或保存增长；仅页面进入和显式刷新触发 |
 | 超过 100 个任务、路径别名 | 全部可访问；UNC、映射盘和 extended path 归一比较 |
 | cwd/project 冲突 | 拒绝并显示差异 |
 | active turn | steer 或显式排队，不并发 start |
