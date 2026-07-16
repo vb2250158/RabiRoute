@@ -167,6 +167,7 @@ connect ECONNREFUSED 127.0.0.1:4510
 3. 配置保存和真实投递调用同一个 resolver 状态机。
 4. 以 `agentProfile + normalizedWorkspace + requestedName` 做 single-flight；索引延迟期间立即重试复用最近创建结果。
 5. 连续保存和连续投递测试都必须断言 create 次数仍为 1。
+6. “自动初始化会话”也是显式提交点，但必须先保存名称 + ID，再复用正式人格 AgentPacket/owner 投递；创建成功而初始化首投失败时，只能复用该 ID 重试。
 
 ### 3A. 改名后仍然投到旧会话
 

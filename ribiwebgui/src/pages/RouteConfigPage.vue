@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled } from "../utils/gatewayHelpers";
+import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
 
 const store = useGatewayStore();
 const route = useRoute();
@@ -12,6 +13,7 @@ const runtime = computed(() => store.selectedRuntime);
 const adapterQuery = ref("");
 const configNameError = ref("");
 const codexBinding = ref({ loading: false, error: "", pending: false });
+const codexInitialization = ref({ loading: false, message: "", error: "" });
 const agentScan = ref({
   threadNames: [] as string[],
   cwdOptions: [] as string[],
@@ -3017,6 +3019,40 @@ async function lookupCodexThreadBinding(): Promise<void> {
   }
 }
 
+async function initializeCodexSession(): Promise<void> {
+  if (!gateway.value || codexInitialization.value.loading) return;
+  codexInitialization.value = { loading: true, message: "", error: "" };
+  try {
+    await initializeCodexSessionForRoute({
+      save: () => store.save(),
+      currentGatewayId: () => gateway.value?.id || "",
+      deliver: async ({ gatewayId, text }) => {
+        const response = await fetch("/api/role-panel/messages", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gatewayId, text, attachments: [] })
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.code !== 0) {
+          throw new Error(body.message || "人格初始化消息投递失败。");
+        }
+      }
+    });
+    codexInitialization.value = {
+      loading: false,
+      message: "已保存名称 + 线程 ID，并通过 Desktop owner 投递人格初始化消息。",
+      error: ""
+    };
+    await store.load();
+  } catch (error) {
+    codexInitialization.value = {
+      loading: false,
+      message: "",
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 function selectCopilotSession(value: unknown): void {
   if (!gateway.value) return;
   gateway.value.copilotThreadName = String(value || "");
@@ -4299,6 +4335,25 @@ watch(
                       </template>
                     </v-combobox>
                   </div>
+                  <div class="d-flex align-center ga-2 flex-wrap mt-2">
+                    <v-btn
+                      color="primary"
+                      variant="tonal"
+                      prepend-icon="mdi-account-sync-outline"
+                      :loading="codexInitialization.loading"
+                      :disabled="codexInitialization.loading"
+                      @click="initializeCodexSession"
+                    >
+                      自动初始化会话
+                    </v-btn>
+                    <span class="section-note">先保存名称 + ID；按配置名称查找，零匹配只创建一次，再把人格资料投到同一个 Desktop 任务。</span>
+                  </div>
+                  <v-alert v-if="codexInitialization.error" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
+                    {{ codexInitialization.error }}
+                  </v-alert>
+                  <v-alert v-else-if="codexInitialization.message" type="success" variant="tonal" density="compact" class="mt-2 mb-1">
+                    {{ codexInitialization.message }}
+                  </v-alert>
                   <v-alert v-if="codexBinding.error" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
                     {{ codexBinding.error }}
                   </v-alert>

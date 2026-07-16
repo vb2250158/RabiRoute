@@ -285,13 +285,26 @@ export async function createCodexThread(params: CodexThreadCreateParams): Promis
   return created;
 }
 
-function requireDesktopThread(threadId: string, cwd: string): CodexDesktopThread {
-  const thread = readCodexDesktopThread(threadId);
-  if (!thread) throw new Error(`Codex Desktop task was not found: ${threadId}`);
-  if (!sameCodexWorkspace(thread.cwd, cwd)) {
-    throw new Error(`Codex Desktop task belongs to another workspace. Task: ${thread.cwd}; configured: ${cwd}`);
+export async function waitForCodexDesktopThreadForTest(
+  params: { threadId: string; cwd: string; attempts?: number; delayMs?: number },
+  dependencies: {
+    read: (threadId: string) => CodexDesktopThread | null;
+    wait: (delayMs: number) => Promise<void>;
+  } = { read: readCodexDesktopThread, wait }
+): Promise<CodexDesktopThread> {
+  const attempts = Math.max(1, params.attempts ?? 20);
+  const delayMs = Math.max(1, params.delayMs ?? 100);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const thread = dependencies.read(params.threadId);
+    if (thread) {
+      if (!sameCodexWorkspace(thread.cwd, params.cwd)) {
+        throw new Error(`Codex Desktop task belongs to another workspace. Task: ${thread.cwd}; configured: ${params.cwd}`);
+      }
+      return thread;
+    }
+    if (attempt + 1 < attempts) await dependencies.wait(delayMs);
   }
-  return thread;
+  throw new Error(`Codex Desktop task was not found after waiting for the Desktop index: ${params.threadId}`);
 }
 
 export async function sendCodexThreadMessage(params: {
@@ -300,7 +313,7 @@ export async function sendCodexThreadMessage(params: {
   cwd: string;
   sandbox: CodexTurnSandbox;
 }): Promise<void> {
-  const thread = requireDesktopThread(params.threadId, params.cwd);
+  const thread = await waitForCodexDesktopThreadForTest({ threadId: params.threadId, cwd: params.cwd });
   await deliverDesktopMessage({ thread, prompt: params.prompt, sandbox: params.sandbox });
 }
 
@@ -389,7 +402,7 @@ function codexSessionDependencies(): CodexSessionResolverDependencies<CodexDeskt
         developerInstructions: "这是由 RabiRoute 创建并交给 Codex Desktop 执行的任务。实际消息仅通过 Desktop IPC 投递。",
         sandbox: "workspace-write"
       });
-      return requireDesktopThread(created.id, config.codexCwd);
+      return waitForCodexDesktopThreadForTest({ threadId: created.id, cwd: config.codexCwd });
     }
   };
 }

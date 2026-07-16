@@ -137,6 +137,7 @@ Codex adapter 的默认安全边界：
 - 目标任务未被 Desktop owner 加载时，RabiRoute 只打开 `codex://threads/<id>` 并短暂重试。
 - ID 无效、失效或 ID 指向任务的当前名称与 Rabi 保存名称不一致时，会按保存名称和规范化工作目录自动查找：唯一匹配自动绑定，零匹配自动创建，多个同名要求用户按最后时间选择。名称 + ID 匹配但目录冲突、Desktop 未就绪或 owner 无法加载时仍 fail closed，不启动备用 Runtime。
 - 项目与会话列表只在进入设置界面时自动扫描一次；之后只有点击“扫描/重新扫描”按钮才向 Manager 刷新。展开面板、输入、失焦、保存和后台计时器不会持续扫描。
+- “自动初始化会话”会先执行一次保存：按 Manager 中的会话名称查找，零匹配时只创建一次并持久化名称 + ID；随后通过角色面板/AgentPacket 正式链路，把角色文件、记忆、计划和必读项作为初始化消息交给同一个 Desktop owner。初始化投递失败不会再创建第二个会话。
 - 模型、工具、文件/网络权限和审批沿用目标 Desktop 任务；RabiRoute 不伪造或覆盖。
 - app-server WebSocket 与 `CODEX_APP_SERVER_WS_URL` 不进入主链，也不得由普通 adapter 配置写入用户环境。
 

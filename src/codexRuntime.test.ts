@@ -4,7 +4,8 @@ import test from "node:test";
 import {
   buildCodexBootstrapEnv,
   codexThreadDeliveryTargetIsStaleForTest,
-  codexThreadMatchesConfiguredTargetForTest
+  codexThreadMatchesConfiguredTargetForTest,
+  waitForCodexDesktopThreadForTest
 } from "./codexRuntime.js";
 
 test("Codex task bootstrap cannot inherit a stale desktop WebSocket override", () => {
@@ -43,4 +44,31 @@ test("Codex Desktop treats archived rollout errors as stale delivery targets", (
   );
   assert.equal(codexThreadDeliveryTargetIsStaleForTest(new Error("thread not found")), true);
   assert.equal(codexThreadDeliveryTargetIsStaleForTest(new Error("model temporarily unavailable")), false);
+});
+
+test("freshly created Desktop tasks wait for the read index before first delivery", async () => {
+  const expected = {
+    id: "019f0000-0000-7000-8000-000000000041",
+    title: "新任务",
+    cwd: process.cwd(),
+    updatedAt: "2026-07-16T00:00:00Z",
+    rolloutPath: "new.jsonl",
+    firstUserMessage: ""
+  };
+  let readCount = 0;
+  let waitCount = 0;
+
+  const actual = await waitForCodexDesktopThreadForTest({
+    threadId: expected.id,
+    cwd: expected.cwd,
+    attempts: 3,
+    delayMs: 1
+  }, {
+    read: () => (++readCount < 3 ? null : expected),
+    wait: async () => { waitCount += 1; }
+  });
+
+  assert.equal(actual.id, expected.id);
+  assert.equal(readCount, 3);
+  assert.equal(waitCount, 2);
 });
