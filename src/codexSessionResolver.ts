@@ -89,10 +89,12 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
   const threadId = params.threadId?.trim() || "";
   if (isCodexTaskId(threadId)) {
     const exact = await dependencies.read(threadId);
-    if (exact) {
-      if (exact.cwd && !sameCodexWorkspace(exact.cwd, params.cwd)) {
-        return { kind: "workspace-mismatch", thread: exact };
-      }
+    // A persisted binding is the pair (Desktop task id, visible task name).
+    // Either side may be renamed independently, so an id alone must never
+    // silently override the name the user saved in RabiRoute.
+    if (exact
+      && exact.title === params.title
+      && (!exact.cwd || sameCodexWorkspace(exact.cwd, params.cwd))) {
       return { kind: "id", thread: exact };
     }
   }

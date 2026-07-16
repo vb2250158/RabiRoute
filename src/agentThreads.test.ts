@@ -67,7 +67,7 @@ test("Agent task list exposes every page instead of hiding tasks after a fixed c
   assert.equal(result.data.nextOffset, 200);
 });
 
-test("Agent task resolver binds an exact Desktop task id before considering its name", async () => {
+test("Agent task resolver binds an exact Desktop task only when its saved id and name both match", async () => {
   const calls: string[] = [];
   const driver: AgentThreadDriver = {
     list: async () => { calls.push("list"); return []; },
@@ -84,7 +84,7 @@ test("Agent task resolver binds an exact Desktop task id before considering its 
   const result = await handleAgentThreadRequest({
     action: "resolve",
     threadId: "019f0000-0000-7000-8000-000000000010",
-    title: "ignored name",
+    title: "RabiLink",
     cwd: process.cwd()
   }, { allowedWorkspaces: [process.cwd()] }, driver);
 
