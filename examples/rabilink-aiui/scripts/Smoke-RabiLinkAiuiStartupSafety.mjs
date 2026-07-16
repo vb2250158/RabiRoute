@@ -104,7 +104,7 @@ try {
   previewOpenBundleMs = performance.now() - previewOpenStartedAt;
   previewView.startRendering();
 
-  configNavigatorHost("ROKID-SOAK-DEVICE", "YodaOS Sprite", "aarch64", ["zh-CN"], "CN");
+  configNavigatorHost();
   runtimeView = await createInkView({
     width: 480,
     height: 352,
@@ -116,10 +116,12 @@ try {
   runtimeView.openBundle({
     appId: "rabilink-aiui-runtime",
     files,
-    query: { mode: "transcription" }
+    query: { mode: "transcription", token: "rbd_smoke_runtime_token" }
   });
   runtimeOpenBundleMs = performance.now() - runtimeOpenStartedAt;
   runtimeView.startRendering();
+  runtimeView.setInteractive(true);
+  runtimeView.dispatchVoiceWakeup("leqi", Date.now());
 
   setTimeout(() => {
     clearInterval(heartbeat);

@@ -1,57 +1,22 @@
+import { fileURLToPath } from "node:url";
+import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
 import { CodexAppServerClient } from "./codexAppServerClient.js";
+import {
+  CodexDesktopBridge,
+  listCodexDesktopThreads,
+  readCodexDesktopThread,
+  type CodexDesktopThread
+} from "./codexDesktopBridge.js";
+import { isCodexTaskId, sameCodexWorkspace } from "./codexTaskIdentity.js";
+import {
+  resolveAndDeliverCodexSession,
+  resolveCodexSession,
+  type CodexSessionResolverDependencies
+} from "./codexSessionResolver.js";
 import { rabiRoutePackageVersion } from "./packageInfo.js";
-
-type AppServerNotification = {
-  method?: string;
-  params?: unknown;
-};
-
-type ThreadStatusChangedParams = {
-  threadId?: string;
-  status?: {
-    type?: string;
-  };
-};
-
-const activeTurnByThread = new Map<string, string>();
-let notificationQueue: Promise<unknown> = Promise.resolve();
-let memoryState: CodexState = {};
-let appServerClient: CodexAppServerClient | null = null;
-let cachedRuntimeDefaultModel: string | undefined;
-
-process.once("exit", () => appServerClient?.close());
-
-type CodexState = {
-  monitorThreadId?: string;
-  monitorThreadName?: string;
-  monitorThreadCwd?: string;
-  monitorThreadUpdatedAt?: string;
-  monitorThreadSource?: string;
-  lastAutoDiscoveryAt?: string;
-  notificationCount?: number;
-  lastNotificationAt?: string;
-  lastNotificationError?: string;
-  lastNotificationErrorAt?: string;
-  lastDeliveryChannel?: string;
-  lastDeliveryAcceptedAt?: string;
-  lastChatGptDesktopHostVisibilityAt?: string;
-  lastChatGptDesktopHostVisibilityReason?: string;
-  lastChatGptDesktopHostVisibilityMode?: string;
-  lastChatGptDesktopHostVisibilityTarget?: string;
-  lastChatGptDesktopHostVisibilityError?: string;
-};
-
-type DiscoveredMonitorThread = {
-  id: string;
-  threadName: string;
-  updatedAt: string;
-  source: string;
-  cwd?: string;
-};
 
 export type CodexMonitorThread = {
   id: string;
@@ -72,6 +37,7 @@ export type CodexThreadSummary = {
   id: string;
   title: string;
   updatedAt: string;
+  cwd?: string;
 };
 
 export type CodexThreadCreateParams = {
@@ -83,10 +49,32 @@ export type CodexThreadCreateParams = {
 };
 
 export type CodexThreadCreateResult = CodexThreadSummary & {
-  source: "codex shared runtime";
+  source: string;
   initialTurnStatus: "not-requested" | "started" | "failed";
   initialTurnError?: string;
 };
+
+type CodexState = {
+  monitorThreadId?: string;
+  monitorThreadName?: string;
+  monitorThreadCwd?: string;
+  monitorThreadUpdatedAt?: string;
+  monitorThreadSource?: string;
+  lastAutoDiscoveryAt?: string;
+  notificationCount?: number;
+  lastNotificationAt?: string;
+  lastNotificationError?: string;
+  lastNotificationErrorAt?: string;
+  lastDeliveryChannel?: string;
+  lastDeliveryAcceptedAt?: string;
+  desktopHostRequired?: boolean;
+};
+
+const desktopBridge = new CodexDesktopBridge();
+let memoryState: CodexState = {};
+let notificationQueue: Promise<unknown> = Promise.resolve();
+
+process.once("exit", () => desktopBridge.close());
 
 function readState(): CodexState {
   return memoryState;
@@ -97,376 +85,213 @@ function writeState(state: CodexState): void {
   reportAgentState("codex", state);
 }
 
-function clearMonitorThreadId(): void {
-  const state = readState();
-  const {
-    monitorThreadId: _monitorThreadId,
-    monitorThreadCwd: _monitorThreadCwd,
-    monitorThreadUpdatedAt: _monitorThreadUpdatedAt,
-    monitorThreadSource: _monitorThreadSource,
-    ...rest
-  } = state;
-  writeState(rest);
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function turnErrorMessage(value: unknown, fallback: string): string {
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    const message = typeof record.message === "string" ? record.message.trim() : "";
-    const detail = typeof record.additionalDetails === "string" ? record.additionalDetails.trim() : "";
-    if (message && detail) return `${message}: ${detail}`;
-    if (message) return message;
-  }
-  return fallback;
 }
 
 function recordCodexFailure(error: unknown): void {
   writeState({
     ...readState(),
-    lastDeliveryChannel: "codex-shared-runtime",
+    lastDeliveryChannel: "desktop-ipc",
+    desktopHostRequired: true,
     lastNotificationError: errorMessage(error),
     lastNotificationErrorAt: new Date().toISOString()
   });
 }
 
-export function codexThreadDeliveryTargetIsStaleForTest(error: unknown): boolean {
-  const message = errorMessage(error).toLowerCase();
-  return message.includes("thread not found")
-    || message.includes("no rollout found for thread id");
-}
-
-function handleNotification(msg: AppServerNotification): void {
-  if (msg.method === "turn/started") {
-    const params = msg.params as { threadId?: string; turn?: { id?: string } };
-    if (params.threadId && params.turn?.id) activeTurnByThread.set(params.threadId, params.turn.id);
-    return;
-  }
-  if (msg.method === "turn/completed") {
-    const params = msg.params as {
-      threadId?: string;
-      turn?: { status?: string; error?: unknown };
-    };
-    if (params.threadId) activeTurnByThread.delete(params.threadId);
-    if (params.threadId && (params.turn?.status === "failed" || params.turn?.status === "interrupted")) {
-      const failure = new Error(turnErrorMessage(
-        params.turn.error,
-        `Codex turn ended with status ${params.turn.status}.`
-      ));
-      recordCodexFailure(failure);
-    }
-    return;
-  }
-  if (msg.method === "error") {
-    const params = msg.params as { threadId?: string; error?: unknown; willRetry?: boolean };
-    if (params.willRetry === true) return;
-    const failure = new Error(turnErrorMessage(params.error, "Codex app-server reported a terminal turn error."));
-    recordCodexFailure(failure);
-    return;
-  }
-  if (msg.method !== "thread/status/changed") {
-    return;
-  }
-
-  const params = msg.params as ThreadStatusChangedParams;
-  const threadId = params.threadId;
-  const status = params.status?.type;
-  if (!threadId || (status !== "idle" && status !== "systemError")) {
-    return;
-  }
-  activeTurnByThread.delete(threadId);
-
-  if (status === "systemError") {
-    const failure = new Error(`Codex thread entered systemError: ${threadId}`);
-    recordCodexFailure(failure);
-  }
-}
-
-function handleAppServerExit(error: Error): void {
-  activeTurnByThread.clear();
-  cachedRuntimeDefaultModel = undefined;
-  recordCodexFailure(error);
-}
-
-function getAppServerClient(): CodexAppServerClient {
-  if (!appServerClient) {
-    appServerClient = new CodexAppServerClient({
-      clientVersion: rabiRoutePackageVersion(),
-      onNotification: handleNotification,
-      onExit: handleAppServerExit
-    });
-  }
-  return appServerClient;
-}
-
-async function connect(): Promise<void> {
-  await getAppServerClient().start();
-}
-
-async function request(method: string, params: unknown): Promise<unknown> {
-  return getAppServerClient().request(method, params);
-}
-
-async function resolveCodexModel(): Promise<string> {
-  const configuredModel = config.agentModel?.trim();
-  if (configuredModel) return configuredModel;
-  if (cachedRuntimeDefaultModel) return cachedRuntimeDefaultModel;
-
-  let cursor: string | null = null;
-  for (let page = 0; page < 10; page += 1) {
-    const result = await request("model/list", {
-      cursor,
-      limit: 100,
-      includeHidden: true
-    }) as { data?: Array<Record<string, unknown>>; nextCursor?: string | null };
-    const defaultModel = (result.data ?? []).find((item) => item.isDefault === true);
-    const model = typeof defaultModel?.model === "string" && defaultModel.model.trim()
-      ? defaultModel.model.trim()
-      : typeof defaultModel?.id === "string" && defaultModel.id.trim()
-        ? defaultModel.id.trim()
-        : "";
-    if (model) {
-      cachedRuntimeDefaultModel = model;
-      return model;
-    }
-    cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
-    if (!cursor) break;
-  }
-
-  throw new Error("Codex runtime did not report a default model from model/list.");
-}
-
-type ReadableThreadInfo = {
-  id: string;
-  name?: string;
-  cwd?: string;
-  updatedAt?: string;
-};
-
-function normalizeComparablePath(value: string | undefined): string {
-  if (!value) return "";
-  const normalized = path.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 export function codexThreadMatchesConfiguredTargetForTest(
-  info: { name?: string; cwd?: string } | null,
+  thread: { name?: string; cwd?: string },
   threadName: string,
   codexCwd: string
 ): boolean {
-  if (!info || info.name !== threadName) return false;
-  const normalized = normalizeComparablePath(info.cwd);
-  return Boolean(normalized) && normalized === normalizeComparablePath(codexCwd);
+  return thread.name === threadName
+    && sameCodexWorkspace(thread.cwd, codexCwd);
 }
 
-async function readThreadInfo(threadId: string): Promise<ReadableThreadInfo | null> {
-  try {
-    const result = await request("thread/read", { threadId }) as { thread?: Record<string, unknown> };
-    const thread = result.thread;
-    if (!thread || typeof thread.id !== "string") {
-      return null;
-    }
-    return {
-      id: thread.id,
-      name: typeof thread.name === "string" ? thread.name : undefined,
-      cwd: typeof thread.cwd === "string" ? thread.cwd : undefined,
-      updatedAt: typeof thread.updatedAt === "number"
-        ? new Date(thread.updatedAt * 1000).toISOString()
-        : typeof thread.updatedAt === "string" ? thread.updatedAt : undefined
-    };
-  } catch (error) {
-    if (codexThreadDeliveryTargetIsStaleForTest(error)) return null;
-    throw error;
-  }
+export function codexThreadDeliveryTargetIsStaleForTest(error: unknown): boolean {
+  const message = errorMessage(error).toLocaleLowerCase();
+  return message.includes("thread not found")
+    || message.includes("task was not found")
+    || message.includes("no rollout found for thread id");
 }
 
-async function resumeThread(threadId: string, model: string): Promise<boolean> {
-  try {
-    const result = await request("thread/resume", {
-      threadId,
-      model,
-      cwd: config.codexCwd,
-      approvalPolicy: "never",
-      sandbox: "workspace-write"
-    }) as { thread?: { turns?: unknown } };
-    const activeTurnId = activeTurnIdFromResumedThreadForTest(result.thread);
-    if (activeTurnId) activeTurnByThread.set(threadId, activeTurnId);
-    else activeTurnByThread.delete(threadId);
-    return true;
-  } catch (error) {
-    if (codexThreadDeliveryTargetIsStaleForTest(error)) return false;
-    throw error;
-  }
-}
-
-export function activeTurnIdFromResumedThreadForTest(thread: { turns?: unknown } | undefined): string | undefined {
-  if (!Array.isArray(thread?.turns)) return undefined;
-  for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
-    const turn = thread.turns[index];
-    if (!turn || typeof turn !== "object") continue;
-    const candidate = turn as { id?: unknown; status?: unknown };
-    if (candidate.status === "inProgress" && typeof candidate.id === "string" && candidate.id) {
-      return candidate.id;
-    }
-  }
-  return undefined;
-}
-
-function sandboxPolicyFor(cwd: string, sandbox: CodexTurnSandbox): Record<string, unknown> {
-  if (sandbox === "danger-full-access") return { type: "dangerFullAccess" };
-  if (sandbox === "read-only") return { type: "readOnly" };
+function codexLaunchCommand(): { command: string; args: string[] } {
   return {
-    type: "workspaceWrite",
-    writableRoots: [cwd],
-    networkAccess: false,
-    excludeTmpdirEnvVar: false,
-    excludeSlashTmp: false
+    command: process.execPath,
+    args: [fileURLToPath(new URL("../node_modules/@openai/codex/bin/codex.js", import.meta.url))]
   };
 }
 
-function threadUpdatedAt(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) return new Date(value * 1000).toISOString();
-  if (typeof value === "string" && value.trim()) return value;
-  return new Date(0).toISOString();
+function createCodexMetadataClient(cwd: string): CodexAppServerClient {
+  const launch = codexLaunchCommand();
+  return new CodexAppServerClient({
+    command: launch.command,
+    commandArgs: launch.args,
+    cwd,
+    dataDir: config.dataDir,
+    env: buildCodexBootstrapEnv(),
+    clientVersion: rabiRoutePackageVersion()
+  });
+}
+
+type CodexTaskBootstrap = {
+  client: CodexAppServerClient;
+  threadId: string;
+};
+
+/**
+ * The bootstrap process is only used to create an empty persistent task when a
+ * user typed a new title. It never executes the user's prompt. Actual turns are
+ * always started by the Desktop owner over Desktop IPC.
+ */
+export function buildCodexBootstrapEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath,
+  delimiter: string = path.delimiter
+): NodeJS.ProcessEnv {
+  const pathKey = Object.keys(env).find((key) => key.toLocaleLowerCase() === "path") ?? "PATH";
+  const nextEnv: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    const normalizedKey = key.toLocaleLowerCase();
+    if (normalizedKey !== "path" && normalizedKey !== "codex_app_server_ws_url") nextEnv[key] = value;
+  }
+  nextEnv[pathKey] = [path.dirname(execPath), env[pathKey] || ""].filter(Boolean).join(delimiter);
+  return nextEnv;
+}
+
+async function bootstrapEmptyDesktopThread(params: CodexThreadCreateParams): Promise<CodexTaskBootstrap> {
+  const client = createCodexMetadataClient(params.cwd);
+  try {
+    const result = await client.request("thread/start", {
+      cwd: params.cwd,
+      sandbox: params.sandbox,
+      ephemeral: false,
+      serviceName: "rabiroute-desktop-bootstrap",
+      developerInstructions: params.developerInstructions
+    }) as { thread?: { id?: string } };
+    const threadId = result.thread?.id;
+    if (!threadId) throw new Error(`thread/start did not return thread id: ${JSON.stringify(result)}`);
+    await client.request("thread/name/set", { threadId, name: params.title });
+    return { client, threadId };
+  } catch (error) {
+    client.close();
+    throw error;
+  }
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function waitForDesktopFirstMessage(threadId: string): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (readCodexDesktopThread(threadId)?.firstUserMessage) return;
+    await wait(100);
+  }
+}
+
+async function setCodexTaskName(
+  threadId: string,
+  title: string,
+  cwd: string,
+  existingClient?: CodexAppServerClient
+): Promise<void> {
+  const client = existingClient ?? createCodexMetadataClient(cwd);
+  try {
+    await client.request("thread/name/set", { threadId, name: title });
+  } finally {
+    if (!existingClient) client.close();
+  }
+}
+
+async function deliverDesktopMessage(params: {
+  thread: CodexDesktopThread;
+  prompt: string;
+  sandbox: CodexTurnSandbox;
+}): Promise<string | null> {
+  const preserveEmptyTaskTitle = !params.thread.firstUserMessage;
+  await desktopBridge.deliver({
+    threadId: params.thread.id,
+    prompt: params.prompt,
+    cwd: params.thread.cwd,
+    sandbox: params.sandbox
+  });
+  if (preserveEmptyTaskTitle) {
+    try {
+      await waitForDesktopFirstMessage(params.thread.id);
+      await setCodexTaskName(params.thread.id, params.thread.title, params.thread.cwd);
+    } catch (error) {
+      return `Desktop 已接收消息，但任务名恢复失败：${errorMessage(error)}`;
+    }
+  }
+  return null;
+}
+
+function asSummary(thread: CodexDesktopThread): CodexThreadSummary {
+  return { id: thread.id, title: thread.title, updatedAt: thread.updatedAt, cwd: thread.cwd };
 }
 
 export async function listCodexThreads(options: {
   query?: string;
   limit?: number;
+  offset?: number;
   allowedWorkspaces: string[];
 }): Promise<CodexThreadSummary[]> {
-  await connect();
-  const query = options.query?.trim() ?? "";
-  const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 20) || 20));
-  const workspaces = [...new Map(
-    options.allowedWorkspaces
-      .map((cwd) => path.resolve(cwd))
-      .map((cwd) => [normalizeComparablePath(cwd), cwd] as const)
-  ).values()];
-  const threads = new Map<string, CodexThreadSummary>();
-
-  for (const cwd of workspaces) {
-    let cursor: string | null = null;
-    for (let page = 0; page < 10 && threads.size < limit; page += 1) {
-      const result = await request("thread/list", {
-        cursor,
-        limit: Math.min(100, limit),
-        sortKey: "updated_at",
-        sortDirection: "desc",
-        sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
-        archived: false,
-        cwd,
-        searchTerm: query || undefined
-      }) as { data?: Array<Record<string, unknown>>; nextCursor?: string | null };
-      for (const thread of result.data ?? []) {
-        if (typeof thread.id !== "string" || !thread.id) continue;
-        const threadCwd = typeof thread.cwd === "string" ? thread.cwd : "";
-        if (normalizeComparablePath(threadCwd) !== normalizeComparablePath(cwd)) continue;
-        const title = typeof thread.name === "string" && thread.name.trim() ? thread.name.trim() : thread.id;
-        if (query && !title.toLocaleLowerCase().includes(query.toLocaleLowerCase())) continue;
-        const candidate = { id: thread.id, title, updatedAt: threadUpdatedAt(thread.updatedAt) };
-        const current = threads.get(candidate.id);
-        if (!current || Date.parse(candidate.updatedAt) > Date.parse(current.updatedAt)) {
-          threads.set(candidate.id, candidate);
-        }
-      }
-      cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
-      if (!cursor) break;
-    }
-  }
-
-  return [...threads.values()]
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
-    .slice(0, limit);
+  return listCodexDesktopThreads(options).map(asSummary);
 }
 
 export async function readCodexThread(threadId: string): Promise<unknown> {
-  await connect();
-  return request("thread/read", { threadId });
-}
-
-async function startCodexThreadTurn(params: {
-  threadId: string;
-  prompt: string;
-  cwd: string;
-  sandbox: CodexTurnSandbox;
-  resumeFirst: boolean;
-}): Promise<void> {
-  await connect();
-  const model = await resolveCodexModel();
-  if (params.resumeFirst) {
-    const resumed = await request("thread/resume", {
-      threadId: params.threadId,
-      model,
-      cwd: params.cwd,
-      approvalPolicy: "never",
-      sandbox: params.sandbox
-    }) as { thread?: { turns?: unknown } };
-    const activeTurnId = activeTurnIdFromResumedThreadForTest(resumed.thread);
-    if (activeTurnId) activeTurnByThread.set(params.threadId, activeTurnId);
-    else activeTurnByThread.delete(params.threadId);
-  }
-
-  const clientUserMessageId = randomUUID();
-  const input = [{ type: "text", text: params.prompt, text_elements: [] }];
-  const activeTurnId = activeTurnByThread.get(params.threadId);
-  if (activeTurnId) {
-    await request("turn/steer", {
-      threadId: params.threadId,
-      clientUserMessageId,
-      input,
-      expectedTurnId: activeTurnId
-    });
-    return;
-  }
-
-  const result = await request("turn/start", {
-    threadId: params.threadId,
-    clientUserMessageId,
-    input,
-    cwd: params.cwd,
-    approvalPolicy: "never",
-    sandboxPolicy: sandboxPolicyFor(params.cwd, params.sandbox),
-    model,
-    effort: "medium",
-    personality: "friendly"
-  }) as { turn?: { id?: string } };
-  if (result.turn?.id) activeTurnByThread.set(params.threadId, result.turn.id);
+  const thread = readCodexDesktopThread(threadId);
+  if (!thread) throw new Error(`Codex Desktop task was not found: ${threadId}`);
+  return {
+    id: thread.id,
+    title: thread.title,
+    cwd: thread.cwd,
+    updatedAt: thread.updatedAt,
+    source: "Codex Desktop state",
+    rolloutPath: thread.rolloutPath
+  };
 }
 
 export async function createCodexThread(params: CodexThreadCreateParams): Promise<CodexThreadCreateResult> {
-  await connect();
-  const model = await resolveCodexModel();
-  const result = await request("thread/start", {
-    cwd: params.cwd,
-    approvalPolicy: "never",
-    sandbox: params.sandbox,
-    ephemeral: false,
-    serviceName: "rabiroute",
-    developerInstructions: params.developerInstructions,
-    model
-  }) as { thread?: { id?: string } };
-  const threadId = result.thread?.id;
-  if (!threadId) throw new Error(`thread/start did not return thread id: ${JSON.stringify(result)}`);
-  await request("thread/name/set", { threadId, name: params.title });
+  const bootstrap = await bootstrapEmptyDesktopThread(params);
   const created: CodexThreadCreateResult = {
-    id: threadId,
+    id: bootstrap.threadId,
     title: params.title,
     updatedAt: new Date().toISOString(),
-    source: "codex shared runtime",
+    source: "Codex Desktop task bootstrap",
     initialTurnStatus: params.prompt.trim() ? "started" : "not-requested"
   };
   try {
     if (!params.prompt.trim()) return created;
-    await startCodexThreadTurn({ ...params, threadId, resumeFirst: false });
+    await desktopBridge.deliver({
+      threadId: bootstrap.threadId,
+      prompt: params.prompt,
+      cwd: params.cwd,
+      sandbox: params.sandbox
+    });
+    try {
+      await waitForDesktopFirstMessage(bootstrap.threadId);
+      await setCodexTaskName(bootstrap.threadId, params.title, params.cwd, bootstrap.client);
+    } catch (error) {
+      created.initialTurnError = `Desktop 已接收消息，但任务名恢复失败：${errorMessage(error)}`;
+    }
   } catch (error) {
     created.initialTurnStatus = "failed";
     created.initialTurnError = errorMessage(error);
+  } finally {
+    bootstrap.client.close();
   }
   return created;
+}
+
+function requireDesktopThread(threadId: string, cwd: string): CodexDesktopThread {
+  const thread = readCodexDesktopThread(threadId);
+  if (!thread) throw new Error(`Codex Desktop task was not found: ${threadId}`);
+  if (!sameCodexWorkspace(thread.cwd, cwd)) {
+    throw new Error(`Codex Desktop task belongs to another workspace. Task: ${thread.cwd}; configured: ${cwd}`);
+  }
+  return thread;
 }
 
 export async function sendCodexThreadMessage(params: {
@@ -475,184 +300,172 @@ export async function sendCodexThreadMessage(params: {
   cwd: string;
   sandbox: CodexTurnSandbox;
 }): Promise<void> {
-  await startCodexThreadTurn({ ...params, resumeFirst: true });
+  const thread = requireDesktopThread(params.threadId, params.cwd);
+  await deliverDesktopMessage({ thread, prompt: params.prompt, sandbox: params.sandbox });
 }
 
-async function findThreadsByName(threadName: string): Promise<DiscoveredMonitorThread[]> {
-  const found: DiscoveredMonitorThread[] = [];
-  let cursor: string | null = null;
-  for (let page = 0; page < 10; page += 1) {
-    const result = await request("thread/list", {
-      cursor,
-      limit: 100,
-      sortKey: "updated_at",
-      sortDirection: "desc",
-      sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
-      archived: false,
-      cwd: config.codexCwd,
-      searchTerm: threadName
-    }) as { data?: Array<Record<string, unknown>>; nextCursor?: string | null };
-    for (const thread of result.data ?? []) {
-      if (typeof thread.id !== "string" || thread.name !== threadName) continue;
-      const cwd = typeof thread.cwd === "string" ? thread.cwd : undefined;
-      if (!codexThreadMatchesConfiguredTargetForTest({ name: threadName, cwd }, threadName, config.codexCwd)) continue;
-      const updatedAt = typeof thread.updatedAt === "number"
-        ? new Date(thread.updatedAt * 1000).toISOString()
-        : typeof thread.updatedAt === "string" ? thread.updatedAt : new Date(0).toISOString();
-      found.push({
-        id: thread.id,
-        threadName,
-        cwd,
-        updatedAt,
-        source: "codex shared runtime thread/list"
-      });
+function monitorThreadFromDesktop(thread: CodexDesktopThread): CodexMonitorThread {
+  return {
+    id: thread.id,
+    threadName: thread.title,
+    updatedAt: thread.updatedAt,
+    source: "Codex Desktop state + Desktop IPC",
+    cwd: thread.cwd
+  };
+}
+
+function rolloutShowsActive(rolloutPath: string): boolean {
+  if (!rolloutPath || !fs.existsSync(rolloutPath)) return false;
+  let latestTurnId = "";
+  const terminalTurnIds = new Set<string>();
+  try {
+    for (const line of fs.readFileSync(rolloutPath, "utf8").split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as {
+          type?: unknown;
+          payload?: { type?: unknown; turn_id?: unknown };
+        };
+        if (record.type === "turn_context" && typeof record.payload?.turn_id === "string") {
+          latestTurnId = record.payload.turn_id;
+          continue;
+        }
+        const eventType = record.type === "event_msg" ? record.payload?.type : record.type;
+        const turnId = record.payload?.turn_id;
+        if (typeof turnId === "string" && (
+          eventType === "task_complete"
+          || eventType === "turn_aborted"
+          || eventType === "task_failed"
+        )) terminalTurnIds.add(turnId);
+      } catch {
+        // Ignore an incomplete last JSONL record while Desktop is writing it.
+      }
     }
-    cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
-    if (!cursor) break;
+  } catch {
+    return false;
   }
-  return found.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  return Boolean(latestTurnId) && !terminalTurnIds.has(latestTurnId);
+}
+
+function bindDesktopThread(thread: CodexDesktopThread): CodexMonitorThread {
+  const now = new Date().toISOString();
+  writeState({
+    ...readState(),
+    monitorThreadId: thread.id,
+    monitorThreadName: thread.title,
+    monitorThreadCwd: thread.cwd,
+    monitorThreadUpdatedAt: thread.updatedAt,
+    monitorThreadSource: "Codex Desktop state + Desktop IPC",
+    lastAutoDiscoveryAt: now,
+    desktopHostRequired: true
+  });
+  return monitorThreadFromDesktop(thread);
+}
+
+function currentCodexThreadId(): string {
+  const rememberedThreadId = readState().monitorThreadId;
+  return isCodexTaskId(config.codexThreadId)
+    ? config.codexThreadId
+    : (isCodexTaskId(rememberedThreadId) ? rememberedThreadId : "");
+}
+
+function codexSessionDependencies(): CodexSessionResolverDependencies<CodexDesktopThread> {
+  return {
+    scope: desktopBridge,
+    read: async (candidateId) => {
+      try {
+        return requireDesktopThread(candidateId, config.codexCwd);
+      } catch (error) {
+        if (codexThreadDeliveryTargetIsStaleForTest(error)) return null;
+        throw error;
+      }
+    },
+    list: async ({ title, cwd }) => listCodexDesktopThreads({
+      query: title,
+      limit: 10_000,
+      allowedWorkspaces: [cwd]
+    }),
+    create: async () => {
+      const created = await createCodexThread({
+        title: config.codexThreadName,
+        prompt: "",
+        cwd: config.codexCwd,
+        developerInstructions: "这是由 RabiRoute 创建并交给 Codex Desktop 执行的任务。实际消息仅通过 Desktop IPC 投递。",
+        sandbox: "workspace-write"
+      });
+      return requireDesktopThread(created.id, config.codexCwd);
+    }
+  };
+}
+
+async function resolveMonitorThread(createIfMissing: boolean): Promise<CodexDesktopThread | null> {
+  const resolution = await resolveCodexSession({
+    threadId: currentCodexThreadId(),
+    title: config.codexThreadName,
+    cwd: config.codexCwd,
+    createIfMissing
+  }, codexSessionDependencies());
+
+  if (resolution.kind === "ambiguous") {
+    throw new Error(`Codex Desktop task name is ambiguous; select the exact task in RibiWebGUI: ${config.codexThreadName}`);
+  }
+  if (resolution.kind === "workspace-mismatch") {
+    throw new Error(`Codex Desktop task belongs to another workspace. Task: ${resolution.thread.cwd}; configured: ${config.codexCwd}`);
+  }
+  if (resolution.kind === "missing") return null;
+  return resolution.thread;
 }
 
 export async function isCodexMonitorThreadActive(): Promise<boolean> {
-  await connect();
-  const state = readState();
-  const model = await resolveCodexModel();
-  if (config.codexThreadId) {
-    const info = await readThreadInfo(config.codexThreadId);
-    if (!info || normalizeComparablePath(info.cwd) !== normalizeComparablePath(config.codexCwd)) return false;
-    if (!await resumeThread(info.id, model)) return false;
-    bindThread(state, {
-      id: info.id,
-      threadName: info.name || config.codexThreadName,
-      cwd: info.cwd,
-      updatedAt: info.updatedAt ?? new Date(0).toISOString(),
-      source: "codex shared runtime thread/id"
-    });
-    return activeTurnByThread.has(info.id);
-  }
-  const candidates = await findThreadsByName(config.codexThreadName);
-  if (candidates.length > 1) return false;
-  if (state.monitorThreadId && !candidates.some((thread) => thread.id === state.monitorThreadId)) {
-    const info = await readThreadInfo(state.monitorThreadId);
-    if (info && codexThreadMatchesConfiguredTargetForTest(info, config.codexThreadName, config.codexCwd)) {
-      candidates.unshift({
-        id: info.id,
-        threadName: config.codexThreadName,
-        cwd: info.cwd,
-        updatedAt: info.updatedAt ?? new Date(0).toISOString(),
-        source: "codex shared runtime thread/read"
-      });
-    }
-  }
-
-  for (const candidate of candidates) {
-    if (!await resumeThread(candidate.id, model)) continue;
-    bindThread(state, candidate);
-    return activeTurnByThread.has(candidate.id);
-  }
-  return false;
+  const thread = await resolveMonitorThread(false);
+  if (!thread) return false;
+  bindDesktopThread(thread);
+  return desktopBridge.isThreadActive(thread.id) || rolloutShowsActive(thread.rolloutPath);
 }
 
-function bindThread(state: CodexState, thread: DiscoveredMonitorThread): void {
-  writeState({
-    ...state,
+function recordAcceptedNotification(thread: CodexDesktopThread, now: Date): CodexMonitorThread {
+  const nextState: CodexState = {
+    ...readState(),
     monitorThreadId: thread.id,
-    monitorThreadName: thread.threadName,
+    monitorThreadName: thread.title,
     monitorThreadCwd: thread.cwd,
-    monitorThreadUpdatedAt: thread.updatedAt,
-    monitorThreadSource: thread.source,
-    lastAutoDiscoveryAt: new Date().toISOString()
-  });
+    monitorThreadUpdatedAt: now.toISOString(),
+    monitorThreadSource: "Codex Desktop state + Desktop IPC",
+    notificationCount: (readState().notificationCount ?? 0) + 1,
+    lastNotificationAt: now.toISOString(),
+    lastDeliveryChannel: "desktop-ipc",
+    lastDeliveryAcceptedAt: new Date().toISOString(),
+    lastNotificationError: "",
+    lastNotificationErrorAt: "",
+    desktopHostRequired: true
+  };
+  writeState(nextState);
+  return {
+    id: thread.id,
+    threadName: thread.title,
+    updatedAt: nextState.monitorThreadUpdatedAt ?? now.toISOString(),
+    source: nextState.monitorThreadSource ?? "Codex Desktop IPC",
+    cwd: thread.cwd
+  };
 }
 
-async function ensureMonitorThread(): Promise<string> {
-  const state = readState();
-  const threadName = config.codexThreadName;
-  await connect();
-  const model = await resolveCodexModel();
-
-  if (config.codexThreadId) {
-    const info = await readThreadInfo(config.codexThreadId);
-    if (!info) throw new Error(`Configured Codex thread was not found: ${config.codexThreadId}`);
-    if (normalizeComparablePath(info.cwd) !== normalizeComparablePath(config.codexCwd)) {
-      throw new Error(`Configured Codex thread belongs to another workspace: ${config.codexThreadId}`);
-    }
-    if (!await resumeThread(info.id, model)) throw new Error(`Configured Codex thread could not be resumed: ${info.id}`);
-    bindThread(state, {
-      id: info.id,
-      threadName: info.name || threadName,
-      cwd: info.cwd,
-      updatedAt: info.updatedAt ?? new Date(0).toISOString(),
-      source: "codex shared runtime thread/id"
-    });
-    return info.id;
-  }
-
-  const existingThreads = await findThreadsByName(threadName);
-  if (existingThreads.length > 1) {
-    throw new Error(`Codex thread name is ambiguous; select an exact thread ID in RibiWebGUI: ${threadName}`);
-  }
-  if (existingThreads.length > 0) {
-    for (const existingThread of existingThreads) {
-      const info = await readThreadInfo(existingThread.id);
-      if (info && codexThreadMatchesConfiguredTargetForTest(info, threadName, config.codexCwd)) {
-        if (!await resumeThread(existingThread.id, model)) continue;
-        bindThread(state, {
-          ...existingThread,
-          updatedAt: info.updatedAt ?? existingThread.updatedAt,
-          cwd: info.cwd
-        });
-        return existingThread.id;
-      }
-    }
-  }
-
-  if (state.monitorThreadId && (!state.monitorThreadName || state.monitorThreadName === threadName)) {
-    const info = await readThreadInfo(state.monitorThreadId);
-    if (info && codexThreadMatchesConfiguredTargetForTest(info, threadName, config.codexCwd)) {
-      if (await resumeThread(state.monitorThreadId, model)) return state.monitorThreadId;
-    }
-    clearMonitorThreadId();
-  }
-
-  const threadStartParams: Record<string, unknown> = {
+async function deliverNotification(message: string): Promise<CodexMonitorThread> {
+  const resolution = await resolveAndDeliverCodexSession({
+    threadId: currentCodexThreadId(),
+    title: config.codexThreadName,
     cwd: config.codexCwd,
-    approvalPolicy: "never",
-    sandbox: "workspace-write",
-    ephemeral: false,
-    serviceName: "rabiroute"
-  };
-  threadStartParams.model = model;
-
-  const result = await request("thread/start", threadStartParams) as { thread?: { id?: string } };
-
-  const threadId = result.thread?.id;
-  if (!threadId) {
-    throw new Error(`thread/start did not return thread id: ${JSON.stringify(result)}`);
-  }
-
-  await request("thread/name/set", {
-    threadId,
-    name: threadName
+    prompt: message
+  }, {
+    ...codexSessionDependencies(),
+    deliver: ({ thread, prompt }) => deliverDesktopMessage({ thread, prompt, sandbox: "workspace-write" }).then(() => undefined)
+  }, ({ thread }) => {
+    bindDesktopThread(thread);
   });
-
-  writeState({
-    ...state,
-    monitorThreadId: threadId,
-    monitorThreadName: threadName,
-    monitorThreadCwd: config.codexCwd,
-    monitorThreadUpdatedAt: new Date().toISOString(),
-    monitorThreadSource: "codex app-server",
-    lastAutoDiscoveryAt: new Date().toISOString()
-  });
-  return threadId;
+  return recordAcceptedNotification(resolution.thread, new Date());
 }
 
 export async function notifyCodex(message: string): Promise<CodexMonitorThread> {
-  const result = notificationQueue
-    .catch(() => undefined)
-    .then(() => notifyCodexInternal(message));
-
+  const result = notificationQueue.catch(() => undefined).then(() => deliverNotification(message));
   notificationQueue = result;
   try {
     return await result;
@@ -663,10 +476,19 @@ export async function notifyCodex(message: string): Promise<CodexMonitorThread> 
 }
 
 export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNotificationResult> {
-  const result = notificationQueue
-    .catch(() => undefined)
-    .then(() => notifyCodexWhenIdleInternal(message));
-
+  const result = notificationQueue.catch(() => undefined).then(async () => {
+    const thread = await resolveMonitorThread(true);
+    if (!thread) throw new Error("Codex Desktop task could not be resolved.");
+    bindDesktopThread(thread);
+    if (desktopBridge.isThreadActive(thread.id) || rolloutShowsActive(thread.rolloutPath)) {
+      return { status: "busy", thread: monitorThreadFromDesktop(thread) } satisfies CodexIdleNotificationResult;
+    }
+    await deliverDesktopMessage({ thread, prompt: message, sandbox: "workspace-write" });
+    return {
+      status: "delivered",
+      thread: recordAcceptedNotification(thread, new Date())
+    } satisfies CodexIdleNotificationResult;
+  });
   notificationQueue = result;
   try {
     return await result;
@@ -674,168 +496,4 @@ export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNot
     recordCodexFailure(error);
     throw error;
   }
-}
-
-function currentMonitorThread(threadId: string, threadName: string, fallbackUpdatedAt: string): CodexMonitorThread {
-  const state = readState();
-  return {
-    id: threadId,
-    threadName,
-    updatedAt: state.monitorThreadUpdatedAt ?? fallbackUpdatedAt,
-    source: state.monitorThreadSource ?? "codex app-server",
-    cwd: state.monitorThreadCwd
-  };
-}
-
-function recordAcceptedNotification(
-  threadId: string,
-  threadName: string,
-  now: Date,
-  notificationCount: number
-): CodexMonitorThread {
-  const acceptedAt = new Date();
-  const currentState = readState();
-  const terminalFailureDuringDelivery = Boolean(
-    currentState.lastNotificationError
-      && currentState.lastNotificationErrorAt
-      && Date.parse(currentState.lastNotificationErrorAt) >= now.getTime()
-  );
-  const nextState = {
-    ...currentState,
-    monitorThreadId: threadId,
-    monitorThreadName: threadName,
-    monitorThreadCwd: config.codexCwd,
-    notificationCount,
-    lastNotificationAt: now.toISOString(),
-    lastDeliveryChannel: "codex-shared-runtime",
-    lastDeliveryAcceptedAt: acceptedAt.toISOString(),
-    lastNotificationError: terminalFailureDuringDelivery ? currentState.lastNotificationError : "",
-    lastNotificationErrorAt: terminalFailureDuringDelivery ? currentState.lastNotificationErrorAt : ""
-  };
-  writeState(nextState);
-  return {
-    id: threadId,
-    threadName,
-    updatedAt: nextState.monitorThreadUpdatedAt ?? now.toISOString(),
-    source: nextState.monitorThreadSource ?? "codex app-server",
-    cwd: nextState.monitorThreadCwd
-  };
-}
-
-async function notifyCodexInternal(message: string): Promise<CodexMonitorThread> {
-  const state = readState();
-  const notificationCount = (state.notificationCount ?? 0) + 1;
-  const now = new Date();
-  const threadName = config.codexThreadName;
-  const clientUserMessageId = randomUUID();
-
-  let threadId = await ensureMonitorThread();
-
-  try {
-    await startNotificationTurn(threadId, threadName, message, clientUserMessageId);
-  } catch (error) {
-    if (!codexThreadDeliveryTargetIsStaleForTest(error)) {
-      throw error;
-    }
-
-    clearMonitorThreadId();
-    threadId = await ensureMonitorThread();
-    await startNotificationTurn(threadId, threadName, message, clientUserMessageId);
-  }
-  return recordAcceptedNotification(threadId, threadName, now, notificationCount);
-}
-
-async function notifyCodexWhenIdleInternal(message: string): Promise<CodexIdleNotificationResult> {
-  const state = readState();
-  const notificationCount = (state.notificationCount ?? 0) + 1;
-  const now = new Date();
-  const threadName = config.codexThreadName;
-  const clientUserMessageId = randomUUID();
-
-  let threadId = await ensureMonitorThread();
-  let delivery: "delivered" | "busy";
-  try {
-    delivery = await startNotificationTurn(threadId, threadName, message, clientUserMessageId, { allowSteer: false });
-  } catch (error) {
-    if (!codexThreadDeliveryTargetIsStaleForTest(error)) throw error;
-    clearMonitorThreadId();
-    threadId = await ensureMonitorThread();
-    delivery = await startNotificationTurn(threadId, threadName, message, clientUserMessageId, { allowSteer: false });
-  }
-
-  if (delivery === "busy") {
-    return {
-      status: "busy",
-      thread: currentMonitorThread(threadId, threadName, now.toISOString())
-    };
-  }
-  return {
-    status: "delivered",
-    thread: recordAcceptedNotification(threadId, threadName, now, notificationCount)
-  };
-}
-
-async function startNotificationTurn(
-  threadId: string,
-  threadName: string,
-  message: string,
-  clientUserMessageId: string,
-  options: { allowSteer?: boolean } = {}
-): Promise<"delivered" | "busy"> {
-  await request("thread/name/set", {
-    threadId,
-    name: threadName
-  });
-
-  const input = [
-    {
-      type: "text",
-      text: message,
-      text_elements: []
-    }
-  ];
-  const activeTurnId = activeTurnByThread.get(threadId);
-  if (activeTurnId) {
-    if (options.allowSteer === false) return "busy";
-    try {
-      await request("turn/steer", {
-        threadId,
-        clientUserMessageId,
-        input,
-        expectedTurnId: activeTurnId
-      });
-      return "delivered";
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      if (!/active turn|expectedTurnId|no active|not active/i.test(detail)) throw error;
-      activeTurnByThread.delete(threadId);
-    }
-  }
-
-  const turnStartParams: Record<string, unknown> = {
-    threadId,
-    clientUserMessageId,
-    input,
-    cwd: config.codexCwd,
-    approvalPolicy: "never",
-    sandboxPolicy: {
-      type: "workspaceWrite",
-      writableRoots: [config.codexCwd],
-      networkAccess: false,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false
-    }
-  };
-  turnStartParams.model = await resolveCodexModel();
-
-  let result: { turn?: { id?: string } };
-  try {
-    result = await request("turn/start", turnStartParams) as { turn?: { id?: string } };
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    if (options.allowSteer === false && /active turn|already running|in progress/i.test(detail)) return "busy";
-    throw error;
-  }
-  if (result.turn?.id) activeTurnByThread.set(threadId, result.turn.id);
-  return "delivered";
 }

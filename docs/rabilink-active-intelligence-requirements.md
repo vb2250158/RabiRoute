@@ -44,7 +44,7 @@ Codex / 定时器 / 规划器
 6. 眼镜收到下行消息后使用原生 TTS 顺序播报。
 7. 上行 observation 与下行 Agent 消息是两条独立推进的队列，不是一问一答的同步 RPC。
 8. 用户消息、Agent 已排队消息和触摸板审阅请求进入同一条 JSONL 时间线。
-9. 连接对话中单击触摸板表示“现在审阅最近会话”；Codex 忙时使用 `turn/steer` 引导当前轮次。
+9. 连接对话中单击触摸板表示“现在审阅最近会话”；Codex 忙时通过 Desktop owner steer 当前轮次。
 10. 会话超过时间边界时只机械分卷，不生成摘要、不改写原文。
 11. 提供一个以“持续收集、推测意图、主动准备、低打扰介入”为核心的主动智能人格。
 12. ASR 和 TTS 同时定义 AIUI 原生方案与 API 方案的统一接口；首版只启用 AIUI，API Provider 后续实现和启用。
@@ -70,7 +70,7 @@ Codex / 定时器 / 规划器
 | 用户与 Agent 统一 JSONL | 已有实现和单元测试 | `src/rabilinkConversationLedger.ts` |
 | 日期/空档机械分卷 | 已有实现和单元测试 | `src/rabilinkConversationLedger.ts` |
 | Codex 空闲审阅与周期反思 | 已有实现和单元测试 | `src/rabilinkConversationReviewer.ts` |
-| 触摸板即时审阅与 `turn/steer` | 已有实现和公网链路证明，待真机交互复测 | `src/codexRuntime.ts`、AIUI 页面 |
+| 触摸板即时审阅与 Desktop owner steer | 已有实现和公网链路证明，待真机交互复测 | `src/codexRuntime.ts`、AIUI 页面 |
 | 无前置输入的主动下行 | 已有实现 | `/api/agent/replies` -> RabiLink Relay outbox |
 | AIUI 自然语言配置助手 | 已有实现 | AIUI `LanguageModel` + 白名单配置动作 |
 | RabiActive 主动人格模板 | 已有实现 | `examples/data/roles/RabiActive/` |
@@ -136,7 +136,7 @@ AIUI 可以保存 token 指纹隔离的本地待发、待播和 cursor 缓存；
 | Rabi Route、Agent、人格、变量、端口配置 | PC RabiRoute Manager / 配置文件 | AIUI 只保存草稿、摘要和最后读取版本 |
 | 用户与 Agent 会话内容 | 人格目录的 `rabilink-conversation.jsonl` 与日期分卷 | Relay 和 AIUI 只保存传输队列或展示缓存 |
 | 下行是否已进入公网队列 | Relay outbox | 统一账本记录 `agent_to_user` 代表“已排队”，不代表用户已听到 |
-| Codex 是否空闲和当前 turn | `codex app-server` 运行态 | Reviewer 只保存审阅作业状态 |
+| Codex 是否空闲和当前 turn | Codex Desktop IPC 活跃状态与 Desktop rollout | Reviewer 只保存审阅作业状态 |
 | 眼镜本地待播消息 | AIUI 按 token 指纹隔离的持久队列 | 成功播报后可删除 |
 | AIUI 应用 token | AIUI 私有存储 | 页面和日志只显示 token 指纹或脱敏预览 |
 | 眼镜直连健康状态 | Relay 最近请求与 AIUI 本地状态 | PC 只保存可过期的连接快照，不冒充系统设备状态 |
@@ -295,7 +295,7 @@ data/roles/<RoleId>/
 | 触发 | 行为 |
 | --- | --- |
 | 新 observation | 等待稳定窗口后，在线程空闲时审阅 |
-| 触摸板单击 | 空闲时立即开 turn；忙时 `turn/steer` |
+| 触摸板单击 | 空闲时由 Desktop owner 开 turn；忙时 steer 当前轮次 |
 | 周期反思 | 即使没有新语音，也检查计划、承诺、时间变化和工具结果 |
 | 定时器或计划事件 | 可以直接触发低风险准备或主动下行 |
 

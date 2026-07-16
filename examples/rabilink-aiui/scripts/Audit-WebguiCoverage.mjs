@@ -10,6 +10,10 @@ const relayPath = path.join(repoRoot, "scripts", "rabilink-relay-server.mjs");
 
 const intentionallyBlockedEndpoints = new Map([
   [
+    "/api/agent/threads",
+    "Creates or sends Codex tasks and must remain behind the PC-side Agent and approval boundary."
+  ],
+  [
     "/api/message/napcat-ensure-ready",
     "Starts or repairs a local NapCat login and must remain an explicit local WebGUI action."
   ]

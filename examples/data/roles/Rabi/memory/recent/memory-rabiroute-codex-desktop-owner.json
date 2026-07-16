@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-codex-desktop-owner",
+  "title": "本机 Codex 真实消息只交给 Desktop 任务 owner",
+  "focus": "Desktop IPC 单一执行路径与受控会话解析",
+  "content": "RabiRoute 的本机 codex adapter 只通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 的目标任务 owner；消息、状态和结果应出现在同一桌面任务，并沿用任务自己的模型、工具、沙箱和审批。项目锁定的 app-server 只用于受控创建或命名空任务，不接收真实 prompt、不执行 turn。会话解析优先精确任务 ID，并用规范化工作目录校验；失效 ID 才按名称与目录查找，多个同名要求用户选择，零匹配只在保存或真实投递等明确提交点幂等创建。Desktop 不可用、任务无法加载或目录冲突时明确失败，不改用户级环境，不启动共享端口或备用 Runtime。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：Codex Desktop owner、唯一执行路径和会话解析边界"
+  },
+  "createdAt": "2026-07-16T00:00:00+08:00",
+  "updatedAt": "2026-07-16T00:00:00+08:00",
+  "keywords": ["Codex", "Desktop IPC", "task owner", "threadId", "工作目录", "会话解析", "幂等创建", "no fallback", "Action Gate"]
+}

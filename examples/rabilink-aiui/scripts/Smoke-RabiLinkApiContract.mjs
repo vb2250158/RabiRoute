@@ -63,6 +63,25 @@ export default wx;
   assert(mock.requests.at(-1).method === "GET", "getMobileState must use GET.");
   assert(mock.requests.at(-1).header["X-RabiLink-Token"] === "test-token", "Requests must carry X-RabiLink-Token.");
 
+  mock.nextResponses.push({
+    statusCode: 401,
+    data: { code: "INVALID_TOKEN", ok: false, message: "凭证无效" }
+  });
+  const authError = await assertRejects(() => api.getMobileState(config), "凭证无效");
+  assert(authError.statusCode === 401, "API errors must preserve the HTTP status code for HUD auth handling.");
+  assert(authError.code === "INVALID_TOKEN", "API errors must preserve the server error code.");
+
+  mock.nextResponses.push({
+    statusCode: 200,
+    data: { code: 0, ok: true, token: "rbd_device-token" }
+  });
+  const claim = await api.claimRabiLinkDeviceToken({ relayBaseUrl: "https://relay.example.com", token: "" }, "SN-1234");
+  const claimPost = mock.requests.at(-1);
+  assert(claimPost.url === "https://relay.example.com/api/rabilink/devices/token", "Device claim must use the SN token endpoint.");
+  assert(claimPost.method === "POST" && claimPost.data.serialNumber === "SN-1234", "Device claim must submit the normalized glasses SN.");
+  assert(!Object.hasOwn(claimPost.header, "X-RabiLink-Token"), "First device claim must not require an existing app token.");
+  assert(claim.token === "rbd_device-token", "Device claim must return the server-issued device credential.");
+
   await api.selectMobileTarget(config, "pc-a");
   assert(mock.requests.at(-1).url === "https://relay.example.com/api/rabilink/mobile/target", "selectMobileTarget must call target endpoint.");
   assert(mock.requests.at(-1).method === "PATCH", "selectMobileTarget must use PATCH.");
@@ -139,7 +158,7 @@ async function assertRejects(action, expectedMessage) {
     await action();
   } catch (error) {
     assert(String(error?.message || error).includes(expectedMessage), `Expected rejection to include: ${expectedMessage}`);
-    return;
+    return error;
   }
   fail(`Expected action to reject: ${expectedMessage}`);
 }

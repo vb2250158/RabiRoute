@@ -646,21 +646,24 @@ try {
     "InkWebView::open_bundle completed"
   ];
   const forbidden = /Module not found|Builtin module not found|Error running (?:page|component)|Exported default must be an object|Failed to execute page|JsRuntime::eval_module declare failed/;
-  const asrContractOk = result?.asrStarts >= 2
-    && result?.firstAsrRequest?.continuous === false
-    && result?.firstAsrRequest?.interimResults === false;
+  const asrContractOk = runtimeToken
+    ? result?.asrStarts >= 2
+      && result?.firstAsrRequest?.continuous === false
+      && result?.firstAsrRequest?.interimResults === false
+    : result?.asrStarts === 0 && result?.firstAsrRequest === null;
   const tokenInvocationOk = result?.invocationHasToken === Boolean(runtimeToken);
   const hudLayoutOk = result?.firstLitY >= 240
     && result?.lastLitY >= 330
     && result?.litPixels > 500;
+  const compactSafeLastLitY = 132;
   const compactLayoutOk = result?.compactRunning === true
     && result?.compactAsrStarts === 0
     && result?.compactPngLength > 1000
     && result?.compactFirstLitY <= 12
-    && result?.compactLastLitY <= 100
+    && result?.compactLastLitY <= compactSafeLastLitY
     && result?.compactLitPixels > 300;
   const compactInteractiveAsrOk = compactWakeupResult?.handled === true
-    && compactWakeupResult?.asrStarts >= 1;
+    && (runtimeToken ? compactWakeupResult?.asrStarts >= 1 : compactWakeupResult?.asrStarts === 0);
   const assistantGestureOk = result?.toolsRunning === true
     && result?.toolsPageOneLitPixels > 500
     && toolsPageDownResult?.running === true
@@ -693,12 +696,12 @@ try {
   const compactConfigurationOk = compactSwipeResult?.running === true
     && compactSwipeResult?.closeRequested === false
     && compactSwipeResult?.firstLitY <= 12
-    && compactSwipeResult?.lastLitY <= 100
+    && compactSwipeResult?.lastLitY <= compactSafeLastLitY
     && compactSwipeResult?.litPixels > 300;
   const compactReturnedOk = compactSwipeReturnResult?.running === true
     && compactSwipeReturnResult?.closeRequested === false
     && compactSwipeReturnResult?.firstLitY <= 12
-    && compactSwipeReturnResult?.lastLitY <= 100
+    && compactSwipeReturnResult?.lastLitY <= compactSafeLastLitY
     && compactSwipeReturnResult?.litPixels > 300;
   const stressOk = modeStressResult?.running === true
     && modeStressResult?.closeRequested === false

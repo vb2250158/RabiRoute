@@ -11,6 +11,7 @@ const router = useRouter();
 const runtime = computed(() => store.selectedRuntime);
 const adapterQuery = ref("");
 const configNameError = ref("");
+const codexBinding = ref({ loading: false, error: "", pending: false });
 const agentScan = ref({
   threadNames: [] as string[],
   cwdOptions: [] as string[],
@@ -2767,7 +2768,7 @@ function renameCurrentConfig(value: unknown): void {
 }
 
 const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; icon: string; hasCwd: boolean; hasThread: boolean }> = [
-  { type: "codex",       title: "Codex Agent",    note: "与桌面端、CLI 共用共享 Runtime", icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
+  { type: "codex",       title: "Codex Agent",    note: "消息由桌面任务执行并实时显示", icon: "mdi-monitor-dashboard", hasCwd: true, hasThread: true },
   { type: "copilotCli",  title: "Copilot CLI",   note: "通过 GitHub Copilot CLI 投递消息",  icon: "mdi-robot-outline", hasCwd: true, hasThread: true },
   { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
@@ -2788,7 +2789,7 @@ function agentStateFor(type: AgentAdapterType): Record<string, any> {
 }
 
 function codexDeliveryChannelLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryChannel === "codex-shared-runtime") return "Codex 共享 Runtime";
+  if (state.lastDeliveryChannel === "desktop-ipc") return "Codex Desktop IPC";
   return "-";
 }
 
@@ -2953,9 +2954,8 @@ function sessionNamesFor(type: AgentAdapterType): string[] {
 }
 
 function codexSessionItems(): Array<{ title: string; value: string }> {
-  const selectedProject = currentAgentProject("codex");
   return agentSessions("codex")
-    .filter(session => session.id && (!selectedProject || !session.projectPath || samePath(session.projectPath, selectedProject)))
+    .filter(session => session.id)
     .map(session => ({ title: `${session.name} · ${formatCodexSessionTime(session.updatedAt)}`, value: session.id! }));
 }
 
@@ -2971,35 +2971,48 @@ function selectCodexSession(value: unknown): void {
   const selected = agentSessions("codex").find(session => session.id === selectedValue);
   gateway.value.codexThreadId = selected?.id || "";
   gateway.value.codexThreadName = selected?.name || selectedValue;
-  if (selected?.projectPath && !gateway.value.codexCwd) gateway.value.codexCwd = selected.projectPath;
+  if (selected?.projectPath) gateway.value.codexCwd = selected.projectPath;
+  codexBinding.value.error = "";
+  codexBinding.value.pending = false;
   touch();
 }
 
-async function ensureCodexThreadBinding(): Promise<void> {
-  if (!gateway.value || gateway.value.codexThreadId) return;
+async function lookupCodexThreadBinding(): Promise<void> {
+  if (!gateway.value || codexBinding.value.loading) return;
   const title = gateway.value.codexThreadName?.trim() || fallbackCodexThreadName();
-  const project = currentAgentProject("codex");
-  const matches = agentSessions("codex").filter(session =>
-    session.name === title && (!project || !session.projectPath || samePath(session.projectPath, project))
-  );
-  if (matches.length === 1 && matches[0].id) {
-    gateway.value.codexThreadId = matches[0].id;
-    gateway.value.codexThreadName = matches[0].name;
+  codexBinding.value = { loading: true, error: "", pending: false };
+  try {
+    const response = await fetch("/api/agent/threads", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "resolve",
+        threadId: gateway.value.codexThreadId || undefined,
+        title,
+        cwd: gateway.value.codexCwd || undefined,
+        createIfMissing: false
+      })
+    });
+    const body = await response.json().catch(() => ({}));
+    if (response.status === 404 && body.resolution === "missing") {
+      gateway.value.codexThreadId = "";
+      codexBinding.value.pending = true;
+      touch();
+      return;
+    }
+    if (!response.ok || !body.thread?.id) {
+      throw new Error(body.message || "无法查找 Codex Desktop 会话。");
+    }
+    gateway.value.codexThreadId = body.thread.id;
+    gateway.value.codexThreadName = body.thread.title || title;
+    if (body.thread.cwd) gateway.value.codexCwd = body.thread.cwd;
     touch();
-    return;
+    if (body.resolution === "created") await runAgentScan();
+  } catch (error) {
+    codexBinding.value.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    codexBinding.value.loading = false;
   }
-  if (matches.length > 1) return;
-  const response = await fetch("/api/agent/threads", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action: "create", title, prompt: "", cwd: gateway.value.codexCwd || undefined })
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body.thread?.id) return;
-  gateway.value.codexThreadId = body.thread.id;
-  gateway.value.codexThreadName = body.thread.title || title;
-  touch();
-  await runAgentScan();
 }
 
 function selectCopilotSession(value: unknown): void {
@@ -4272,23 +4285,28 @@ watch(
                 <!-- Codex -->
                 <template v-if="agent.type === 'codex'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    RabiRoute、Codex/ChatGPT 桌面端和 Codex CLI 共用同一个 app-server Runtime；桌面端会实时看到这里创建和投递的会话。
+                    实际消息只交给 Codex/ChatGPT Desktop 当前任务执行，因此桌面端会立即显示消息并沿用该任务的工具、模型与权限。Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime。
                   </v-alert>
                   <div class="catalog-param-grid">
-                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="可不绑定项目；留空时 Codex runtime 在 RabiRoute 根目录创建或投递" persistent-hint @update:model-value="touch">
+                    <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="用于同名任务的自动查找和新建；选择已有任务时会自动采用任务自己的目录" persistent-hint @update:model-value="touch">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
                         <v-icon v-else-if="agentProjectItems('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="界面隐藏 ID，但内部仍按完整线程 ID 精确绑定；输入新名字并离开输入框后创建会话" persistent-hint @update:model-value="selectCodexSession" @blur="ensureCodexThreadBinding">
+                    <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="显示全部 Desktop 会话且不显示 ID；输入名称后只查找，唯一匹配就绑定，没有匹配则在点击保存时创建" persistent-hint @update:model-value="selectCodexSession" @blur="lookupCodexThreadBinding">
                       <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                        <v-progress-circular v-if="agentScan.loading || codexBinding.loading" size="16" width="2" indeterminate />
                         <v-icon v-else-if="codexSessionItems().length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-text-field v-model="gateway.agentModel" class="full-span" label="模型覆盖" placeholder="留空，使用 Codex runtime 默认模型" hint="只在需要强制指定 Agent 模型时填写" persistent-hint @update:model-value="touch" />
                   </div>
+                  <v-alert v-if="codexBinding.error" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
+                    {{ codexBinding.error }}
+                  </v-alert>
+                  <v-alert v-else-if="codexBinding.pending" type="info" variant="tonal" density="compact" class="mt-2 mb-1">
+                    尚无同名 Desktop 会话；点击保存时会创建任务、写入完整 ID 并切换绑定。
+                  </v-alert>
                   <template v-if="runtime.running !== undefined">
                     <v-alert v-if="agentStateFor('codex').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
                       {{ agentStateFor('codex').lastNotificationError }}
@@ -4300,7 +4318,7 @@ watch(
                     <div class="status-row"><span>线程名</span><b>{{ agentStateFor('codex').monitorThreadName || "-" }}</b></div>
                     <div class="status-row"><span>最后成功</span><b>{{ agentStateFor('codex').lastNotificationAt || "-" }}</b></div>
                     <div class="status-row"><span>投递协议</span><b>{{ codexDeliveryChannelLabel(agentStateFor('codex')) }}</b></div>
-                    <div class="status-row"><span>桌面宿主</span><b>ChatGPT（可选，不作为投递判据）</b></div>
+                    <div class="status-row"><span>桌面宿主</span><b>Codex/ChatGPT Desktop（必需）</b></div>
                   </template>
                 </template>
                 <!-- Copilot CLI -->

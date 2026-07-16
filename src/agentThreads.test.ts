@@ -21,7 +21,7 @@ test("Agent thread list deduplicates session index entries and filters by title"
   }]);
 });
 
-test("Agent thread list delegates to the app-server driver within configured workspaces", async () => {
+test("Agent task list delegates to the Desktop-backed driver within configured workspaces", async () => {
   const calls: unknown[] = [];
   const driver: AgentThreadDriver = {
     list: async (params) => {
@@ -41,10 +41,177 @@ test("Agent thread list delegates to the app-server driver within configured wor
     allowedWorkspaces: [process.cwd()]
   }, driver);
 
-  assert.deepEqual(calls, [{ query: "调查", limit: 5, allowedWorkspaces: [process.cwd()] }]);
+  assert.deepEqual(calls, [{ query: "调查", limit: 6, offset: 0, allowedWorkspaces: [process.cwd()] }]);
   assert.deepEqual(result.data.threads, [
     { id: "thread-1", title: "调查任务", updatedAt: "2026-07-15T00:00:00Z" }
   ]);
+});
+
+test("Agent task list exposes every page instead of hiding tasks after a fixed cap", async () => {
+  const driver: AgentThreadDriver = {
+    list: async ({ offset, limit }) => Array.from({ length: limit }, (_, index) => ({
+      id: `thread-${offset + index}`,
+      title: `任务 ${offset + index}`,
+      updatedAt: "2026-07-15T00:00:00Z"
+    })),
+    read: async () => ({}),
+    create: async () => { throw new Error("not used"); },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({ action: "list", limit: 100, offset: 100 }, {
+    allowedWorkspaces: [process.cwd()]
+  }, driver);
+
+  assert.equal((result.data.threads as unknown[]).length, 100);
+  assert.equal(result.data.nextOffset, 200);
+});
+
+test("Agent task resolver binds an exact Desktop task id before considering its name", async () => {
+  const calls: string[] = [];
+  const driver: AgentThreadDriver = {
+    list: async () => { calls.push("list"); return []; },
+    read: async (threadId) => ({
+      id: threadId,
+      title: "RabiLink",
+      cwd: process.cwd(),
+      updatedAt: "2026-07-15T00:00:00Z"
+    }),
+    create: async () => { calls.push("create"); throw new Error("not used"); },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "resolve",
+    threadId: "019f0000-0000-7000-8000-000000000010",
+    title: "ignored name",
+    cwd: process.cwd()
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.data.resolution, "id");
+  assert.deepEqual(calls, []);
+});
+
+test("Agent task resolver migrates a route name stored in the id field and finds by name", async () => {
+  const calls: unknown[] = [];
+  const driver: AgentThreadDriver = {
+    list: async (params) => {
+      calls.push(params);
+      return [{
+        id: "019f0000-0000-7000-8000-000000000011",
+        title: "RabiLink",
+        cwd: process.cwd(),
+        updatedAt: "2026-07-15T00:00:00Z"
+      }];
+    },
+    read: async () => { throw new Error("must not read an invalid id"); },
+    create: async () => { throw new Error("must not create"); },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "resolve",
+    threadId: "RabiLink",
+    cwd: process.cwd()
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.data.resolution, "name");
+  assert.deepEqual(calls, [{
+    query: "RabiLink",
+    limit: 10_000,
+    offset: 0,
+    allowedWorkspaces: [path.resolve(process.cwd())]
+  }]);
+});
+
+test("Agent task resolver creates only when no exact name exists", async () => {
+  const calls: unknown[] = [];
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async () => { throw new Error("not used"); },
+    create: async (params) => {
+      calls.push(params);
+      return {
+        id: "019f0000-0000-7000-8000-000000000012",
+        title: params.title,
+        updatedAt: "2026-07-15T00:00:00Z",
+        source: "test",
+        initialTurnStatus: "not-requested"
+      };
+    },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "resolve",
+    title: "新会话",
+    cwd: process.cwd()
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.statusCode, 201);
+  assert.equal(result.data.resolution, "created");
+  assert.equal(calls.length, 1);
+});
+
+test("Agent task resolver creates one task when repeated requests arrive before Desktop indexing catches up", async () => {
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    // Reproduce the real boundary: thread/start has returned, but the Desktop
+    // read model queried by list has not exposed the new task yet.
+    list: async () => [],
+    read: async () => { throw new Error("not used"); },
+    create: async (params) => {
+      createCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return {
+        id: `019f0000-0000-7000-8000-${String(createCount).padStart(12, "0")}`,
+        title: params.title,
+        updatedAt: "2026-07-16T00:00:00Z",
+        source: "test",
+        initialTurnStatus: "not-requested"
+      };
+    },
+    send: async () => undefined
+  };
+  const request = {
+    action: "resolve" as const,
+    title: "Rabi",
+    cwd: process.cwd(),
+    createIfMissing: true
+  };
+  const options = { allowedWorkspaces: [process.cwd()] };
+
+  const firstPair = await Promise.all([
+    handleAgentThreadRequest(request, options, driver),
+    handleAgentThreadRequest(request, options, driver)
+  ]);
+  const immediateRetry = await handleAgentThreadRequest(request, options, driver);
+
+  assert.equal(createCount, 1);
+  assert.equal((firstPair[0].data.thread as { id: string }).id, (firstPair[1].data.thread as { id: string }).id);
+  assert.equal((firstPair[0].data.thread as { id: string }).id, (immediateRetry.data.thread as { id: string }).id);
+});
+
+test("Agent task resolver reports duplicate names instead of picking one", async () => {
+  const driver: AgentThreadDriver = {
+    list: async () => [
+      { id: "019f0000-0000-7000-8000-000000000013", title: "同名", updatedAt: "2026-07-15T01:00:00Z" },
+      { id: "019f0000-0000-7000-8000-000000000014", title: "同名", updatedAt: "2026-07-15T00:00:00Z" }
+    ],
+    read: async () => ({}),
+    create: async () => { throw new Error("must not create"); },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({ action: "resolve", title: "同名" }, {
+    allowedWorkspaces: [process.cwd()],
+    defaultWorkspace: process.cwd()
+  }, driver);
+
+  assert.equal(result.statusCode, 409);
+  assert.equal(result.data.resolution, "ambiguous");
+  assert.equal((result.data.candidates as unknown[]).length, 2);
 });
 
 test("Agent thread create uses a configured workspace and fixed investigation instructions", async () => {
@@ -57,7 +224,7 @@ test("Agent thread create uses a configured workspace and fixed investigation in
         id: "019f0000-0000-7000-8000-000000000001",
         title: params.title,
         updatedAt: "2026-07-13T00:00:00Z",
-        source: "codex shared runtime",
+        source: "Codex Desktop task owner",
         initialTurnStatus: "started"
       };
     },

@@ -348,7 +348,7 @@ export function startDefaultRabiLinkConversationReviewer(): RabiLinkConversation
     appendAdapterLog("rabilink", {
       level: "warning",
       event: "conversation_reviewer_disabled",
-      message: "RabiLink conversation review currently requires the Codex app-server adapter."
+      message: "RabiLink conversation review currently requires the Codex Desktop adapter."
     });
     return null;
   }

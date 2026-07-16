@@ -134,6 +134,7 @@ export const GATEWAY_SCALAR_FIELDS = [
   { key: "targetGroupId", label: "目标群", type: "string" },
   { key: "pipelinePreset", label: "Pipeline Preset", type: "string" },
   { key: "agentModel", label: "Agent 模型", type: "string" },
+  { key: "codexThreadId", label: "Codex 会话 ID", type: "string" },
   { key: "codexThreadName", label: "Codex 会话", type: "string" },
   { key: "codexCwd", label: "Codex 目录", type: "string" },
   { key: "copilotThreadName", label: "Copilot 会话", type: "string" },

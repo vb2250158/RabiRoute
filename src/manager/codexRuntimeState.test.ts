@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  CODEX_APP_SERVER_CHANNEL,
+  CODEX_DESKTOP_CHANNEL,
   resolveCodexRuntimeState
 } from "./codexRuntimeState.js";
 
-test("Codex runtime state uses the shared Runtime", () => {
+test("Codex runtime state reports Desktop IPC as the only delivery channel", () => {
   const state = resolveCodexRuntimeState(
     { bound: false },
     {
@@ -17,15 +17,15 @@ test("Codex runtime state uses the shared Runtime", () => {
 
   assert.equal(state.bound, true);
   assert.equal(state.deliveryHealthy, true);
-  assert.equal(state.deliveryTransport, CODEX_APP_SERVER_CHANNEL);
-  assert.equal(state.lastDeliveryChannel, CODEX_APP_SERVER_CHANNEL);
-  assert.equal(state.desktopHostName, "ChatGPT");
-  assert.equal(state.desktopHostRequired, false);
+  assert.equal(state.deliveryTransport, CODEX_DESKTOP_CHANNEL);
+  assert.equal(state.lastDeliveryChannel, CODEX_DESKTOP_CHANNEL);
+  assert.equal(state.desktopHostName, "Codex/ChatGPT Desktop");
+  assert.equal(state.desktopHostRequired, true);
   assert.equal(state.unexpectedTransportField, undefined);
-  assert.doesNotMatch(String(state.message), /Desktop IPC|fallback|可见性/);
+  assert.match(String(state.message), /桌面任务中实时显示/);
 });
 
-test("Codex delivery failures are reported through the canonical app-server state", () => {
+test("Codex delivery failures are reported through the canonical Desktop state", () => {
   const state = resolveCodexRuntimeState(
     {},
     {
@@ -37,10 +37,10 @@ test("Codex delivery failures are reported through the canonical app-server stat
 
   assert.equal(state.bound, false);
   assert.equal(state.deliveryHealthy, false);
-  assert.equal(state.lastDeliveryChannel, CODEX_APP_SERVER_CHANNEL);
+  assert.equal(state.lastDeliveryChannel, CODEX_DESKTOP_CHANNEL);
   assert.equal(state.unexpectedRetryField, undefined);
-  assert.equal(state.message, "Codex 共享 Runtime 投递失败：runtime unavailable");
-  assert.doesNotMatch(String(state.message), /Desktop|worker|fallback|补投/);
+  assert.equal(state.message, "Codex Desktop 投递失败：runtime unavailable");
+  assert.doesNotMatch(String(state.message), /worker|fallback|补投/);
 });
 
 test("configured Codex metadata alone is not an active runtime binding", () => {
@@ -54,6 +54,6 @@ test("configured Codex metadata alone is not an active runtime binding", () => {
 
   assert.equal(state.bound, false);
   assert.equal(state.deliveryHealthy, false);
-  assert.equal(state.deliveryTransport, CODEX_APP_SERVER_CHANNEL);
+  assert.equal(state.deliveryTransport, CODEX_DESKTOP_CHANNEL);
   assert.equal(state.lastDeliveryChannel, undefined);
 });

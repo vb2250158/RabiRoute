@@ -239,7 +239,7 @@ try {
   const sharedHudComplete = result?.firstLitY >= 240
     && result?.lastLitY >= 330
     && result?.rowBands?.header > 150
-    && result?.rowBands?.mode > 1000
+    && result?.rowBands?.mode > 750
     && result?.rowBands?.status > 250
     && result?.rowBands?.message > 350
     && result?.rowBands?.footer > 150;

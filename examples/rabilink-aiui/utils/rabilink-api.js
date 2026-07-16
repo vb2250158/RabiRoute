@@ -19,7 +19,13 @@ function requestJson(config, path, options = {}) {
   const baseUrl = trimEndSlash(config.relayBaseUrl);
   const token = String(config.token || "").trim();
   if (!baseUrl) return Promise.reject(new Error("Relay URL is empty."));
-  if (!token) return Promise.reject(new Error("RabiLink token is empty."));
+  if (options.auth !== false && !token) return Promise.reject(new Error("RabiLink token is empty."));
+
+  const header = {
+    "accept": "application/json",
+    "content-type": "application/json; charset=utf-8"
+  };
+  if (options.auth !== false) header["X-RabiLink-Token"] = token;
 
   return new Promise((resolve, reject) => {
     wx.request({
@@ -27,20 +33,22 @@ function requestJson(config, path, options = {}) {
       method: options.method || "GET",
       data: options.body || undefined,
       timeout: options.timeoutMs || DEFAULT_TIMEOUT_MS,
-      header: {
-        "accept": "application/json",
-        "content-type": "application/json; charset=utf-8",
-        "X-RabiLink-Token": token
-      },
+      header,
       success(response) {
         const statusCode = Number(response.statusCode || 0);
         const data = typeof response.data === "string" ? safeParseJson(response.data) : (response.data || {});
         if (statusCode < 200 || statusCode >= 300) {
-          reject(new Error(data.message || `HTTP ${statusCode}`));
+          const error = new Error(data.message || `HTTP ${statusCode}`);
+          error.statusCode = statusCode;
+          error.code = data.code;
+          reject(error);
           return;
         }
         if (data && data.ok === false && data.code !== 0) {
-          reject(new Error(data.message || data.error || "RabiLink request failed."));
+          const error = new Error(data.message || data.error || "RabiLink request failed.");
+          error.statusCode = statusCode;
+          error.code = data.code;
+          reject(error);
           return;
         }
         resolve(data);
@@ -158,6 +166,36 @@ export function requestRabiLinkConversationReview(config, request = {}) {
       sessionId: String(request.sessionId || ""),
       capturedAt: requestedAt
     }
+  });
+}
+
+export function claimRabiLinkDeviceToken(config, serialNumber) {
+  const normalizedSerial = String(serialNumber || "").trim();
+  if (!normalizedSerial) return Promise.reject(new Error("Device serial number is empty."));
+  return requestJson(config, "/api/rabilink/devices/token", {
+    auth: false,
+    method: "POST",
+    body: { serialNumber: normalizedSerial },
+    timeoutMs: 8000
+  });
+}
+
+export function publishRabiLinkDeviceLogs(config, payload = {}) {
+  const logs = Array.isArray(payload.logs) ? payload.logs.slice(0, 20) : [];
+  if (!logs.length) return Promise.resolve({ code: 0, ok: true, accepted: 0 });
+  return requestJson(config, "/api/rabilink/devices/logs", {
+    method: "POST",
+    body: {
+      deviceId: String(payload.deviceId || "unidentified-glasses"),
+      deviceKind: String(payload.deviceKind || "glasses"),
+      deviceName: String(payload.deviceName || "Rokid Glass"),
+      source: String(payload.source || "rabilink-aiui"),
+      appVersion: String(payload.appVersion || ""),
+      sessionId: String(payload.sessionId || ""),
+      mode: String(payload.mode || ""),
+      logs
+    },
+    timeoutMs: 8000
   });
 }
 

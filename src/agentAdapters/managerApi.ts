@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AgentAdapterType } from "./types.js";
 import { resolveProjectPath } from "../shared/projectPaths.js";
+import { CodexDesktopBridge, listCodexDesktopThreads } from "../codexDesktopBridge.js";
 
 type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -110,7 +111,29 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
   const runtimes = getRuntimeList(ctx);
   const copilotSessions = ctx.copilotSessions ?? readCopilotSessions();
   const copilotSessionNames = [...new Set(copilotSessions.map((s) => s.name))];
-  const codexSessions = ctx.codexSessions ?? configuredCodexSessions(ctx.rootDir, runtimes);
+  const cwdOptions = ctx.cwdOptions ?? collectCwdOptions(ctx.rootDir, runtimes, copilotSessions);
+  let codexDesktopReady = false;
+  const desktopBridge = new CodexDesktopBridge({ requestTimeoutMs: 1_200 });
+  try {
+    codexDesktopReady = await desktopBridge.isReady();
+  } finally {
+    desktopBridge.close();
+  }
+  let codexSessionWarning = "";
+  let discoveredCodexSessions: AgentScanSession[] = [];
+  try {
+    discoveredCodexSessions = listCodexDesktopThreads({
+      limit: 10_000
+    }).map((thread) => ({
+      id: thread.id,
+      name: thread.title,
+      projectPath: thread.cwd,
+      updatedAt: thread.updatedAt
+    }));
+  } catch (error) {
+    codexSessionWarning = `读取 Codex Desktop 任务失败：${error instanceof Error ? error.message : String(error)}`;
+  }
+  const codexSessions = ctx.codexSessions ?? discoveredCodexSessions;
   const codexSessionNames = [...new Set(codexSessions.map((session) => session.name))];
   const configThreadNames = runtimes.flatMap((runtime) => {
     const adapters = runtime.definition.agentAdapters ?? ["codex"];
@@ -121,11 +144,13 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
   });
   const threadNames = ctx.threadNames ?? [...new Set([...copilotSessionNames, ...codexSessionNames, ...configThreadNames])];
 
-  const cwdOptions = ctx.cwdOptions ?? collectCwdOptions(ctx.rootDir, runtimes, copilotSessions);
   const codexBins = ctx.codexBins ?? await detectCodexBins(ctx.rootDir);
   const copilotBins = ctx.copilotBins ?? await detectCopilotBins(ctx.resolveWingetCopilot);
   const marvisAppIds = ctx.marvisAppIds ?? detectMarvisAppIds();
-  const projects = ctx.projects ?? projectOptionsFromPaths(cwdOptions);
+  const projects = ctx.projects ?? projectOptionsFromPaths([
+    ...cwdOptions,
+    ...codexSessions.map((session) => session.projectPath).filter((value): value is string => Boolean(value))
+  ]);
   const copilotScanSessions: AgentScanSession[] = copilotSessions.map((session) => ({
     id: session.id,
     name: session.name,
@@ -187,7 +212,13 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
   }
 
   const agents: Record<AgentAdapterType, AgentScanResult> = {
-    codex: buildCodexAgentScan({ codexBins, projects, sessions: codexSessions }),
+    codex: buildCodexAgentScan({
+      codexBins,
+      projects,
+      sessions: codexSessions,
+      desktopReady: codexDesktopReady,
+      sessionWarning: codexSessionWarning
+    }),
     copilotCli: {
       type: "copilotCli",
       label: "Copilot CLI",
@@ -268,26 +299,29 @@ export function buildCodexAgentScan(input: {
   codexBins: string[];
   projects: AgentScanProject[];
   sessions: AgentScanSession[];
+  desktopReady?: boolean;
+  sessionWarning?: string;
 }): AgentScanResult {
   const codexBins = [...new Set(input.codexBins.filter(Boolean))];
   return {
     type: "codex",
     label: "Codex（ChatGPT 中的编码 Agent）",
     maturity: "verified",
-    installed: codexBins.length > 0,
+    installed: input.desktopReady === true || codexBins.length > 0,
     installCandidates: codexBins.map((binPath) => ({
       label: binPath.endsWith("codex.js") ? "@openai/codex" : path.basename(binPath),
       path: binPath
     })),
-    transport: { protocol: "codex app-server", mode: "shared-websocket" },
-    host: { name: "Codex/ChatGPT desktop", required: false },
+    transport: { protocol: "Codex Desktop IPC", mode: "desktop-owner" },
+    host: { name: "Codex/ChatGPT Desktop", required: true },
     projects: input.projects,
-    // Configuration suggestions only. Runtime delivery resolves the authoritative
-    // thread through app-server thread/list and confirms it with thread/read/resume.
+    // Desktop state supplies task identity; delivery is accepted only by the
+    // Desktop owner for the exact opaque task id.
     sessions: input.sessions,
     warnings: [
-      ...(codexBins.length === 0 ? ["未发现项目锁定的 @openai/codex 运行时；无法启动共享 Runtime。"] : []),
-      "RabiRoute、Codex/ChatGPT 桌面端和 Codex CLI 连接同一个共享 Runtime。"
+      ...(input.desktopReady === false ? ["Codex/ChatGPT Desktop 未就绪；RabiRoute 不会启动备用 Runtime，请先打开 Desktop。"] : []),
+      ...(codexBins.length === 0 ? ["未发现项目锁定的 @openai/codex；已有 Desktop 任务仍可投递，但无法从新名称创建空任务。"] : []),
+      ...(input.sessionWarning ? [input.sessionWarning] : [])
     ]
   };
 }
@@ -594,33 +628,6 @@ function normalizeComparablePath(value: string | undefined): string {
   if (!value) return "";
   const normalized = path.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function configuredCodexSessions(rootDir: string, runtimes: RuntimeLike[]): AgentScanSession[] {
-  const sessions = new Map<string, AgentScanSession>();
-  for (const runtime of runtimes) {
-    const definition = runtime.definition;
-    const adapters = definition.agentAdapters ?? ["codex"];
-    if (!adapters.includes("codex")) continue;
-
-    const name = definition.codexThreadName?.trim()
-      || definition.routeName?.trim()
-      || definition.name?.trim()
-      || definition.configName?.trim()
-      || definition.id?.trim();
-    if (!name) continue;
-
-    const projectPath = resolveProjectPath(definition.codexCwd, rootDir);
-    const key = `${name}\u0000${normalizeComparablePath(projectPath)}`;
-    if (!sessions.has(key)) {
-      sessions.set(key, {
-        id: definition.id,
-        name,
-        projectPath
-      });
-    }
-  }
-  return [...sessions.values()];
 }
 
 function projectOptionsFromPaths(paths: string[]): AgentScanProject[] {

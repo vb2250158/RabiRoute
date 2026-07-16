@@ -106,6 +106,25 @@ const wx = {
       });
       return;
     }
+    if (String(options.url || "").endsWith("/api/rabilink/devices/logs")) {
+      if (typeof options.success === "function") options.success({
+        statusCode: 202,
+        data: {
+          code: 0,
+          ok: true,
+          status: "stored",
+          accepted: Array.isArray(options.data?.logs) ? options.data.logs.length : 0
+        }
+      });
+      return;
+    }
+    if (String(options.url || "").endsWith("/api/rabilink/devices/token")) {
+      if (typeof options.success === "function") options.success({
+        statusCode: 201,
+        data: { code: 0, ok: true, token: "rbd_runtime-smoke-device-token" }
+      });
+      return;
+    }
     if (String(options.url || "").endsWith("/rokid/rabilink/input")) {
       if (inputFailuresRemaining > 0) {
         inputFailuresRemaining -= 1;
@@ -176,6 +195,8 @@ function voiceDispatchTargets() {
 
 const stagingRoot = path.join(os.tmpdir(), `rabilink-aiui-runtime-smoke-${process.pid}-${Date.now()}`);
 const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const localStorageValues = new Map();
 
 function setInkNavigator(deviceSerialNumber = "", batteryManager = null) {
   const navigatorValue = {
@@ -216,6 +237,23 @@ function createBatteryManager(level = 0.62, charging = false) {
 }
 
 try {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem(key) {
+        return localStorageValues.has(String(key)) ? localStorageValues.get(String(key)) : null;
+      },
+      setItem(key, value) {
+        localStorageValues.set(String(key), String(value));
+      },
+      removeItem(key) {
+        localStorageValues.delete(String(key));
+      },
+      clear() {
+        localStorageValues.clear();
+      }
+    }
+  });
   setInkNavigator();
   const recognitions = [];
   const speechUtterances = [];
@@ -267,6 +305,7 @@ try {
   const languageModelPrompts = [];
   let nextLanguageModelCommand = VOICE_COMMANDS.LOAD_CONFIG;
   let nextLanguageModelReply = "";
+  let nextLanguageModelError = null;
   globalThis.LanguageModel = {
     async availability() {
       return "available";
@@ -284,6 +323,11 @@ try {
         },
         async prompt(input) {
           languageModelPrompts.push(input);
+          if (nextLanguageModelError) {
+            const error = nextLanguageModelError;
+            nextLanguageModelError = null;
+            throw error;
+          }
           if (nextLanguageModelCommand) {
             listeners.get("toolcall")?.({
               functionName: CONFIGURATION_ACTION_TOOL,
@@ -381,7 +425,12 @@ try {
   page.setData({ currentTime: "12:34" });
   assert(page.data.modeFrameRelayout === false, "Ordinary clock or status updates must not blank and relayout the whole HUD.");
   assert(page.data.mode === "transcription" && page.data.isTranscriptionMode, "Direct startup should default to transcription mode.");
-  assert(page.data.transcriptionDesired === false && page.data.transcriptionState === "待运行智能体", "Craft preview startup should not seize ASR before an Agent invocation.");
+  assert(
+    page.data.transcriptionDesired === false
+      && page.data.transcriptionState === "等待绑定"
+      && page.data.needsDeviceSetup === true,
+    "A tokenless startup must enter Setup without seizing ASR."
+  );
   assert(page.data.panelId === "route", "onLoad should derive the first panel.");
   assert(page.data.surfaceId === "relay-status", "onLoad should start on the Relay status surface.");
   assert(Array.isArray(page.data.logs) && page.data.logs.length === 0, "onLoad should leave logging work until after the first frame.");
@@ -535,7 +584,27 @@ try {
   assert(recognitions.length === browserRecognitionCount + 1 && recognitions.at(-1)?.started, "Craft Interactive InkView wakeup should start simulated ASR.");
   browserPage.onUnload();
 
-  setInkNavigator("ROKID-SMOKE-DEVICE");
+  setInkNavigator("ROKID-SETUP-SMOKE");
+  const setupPage = createPageInstance(pageModule);
+  setupPage.reportRuntimeProof = () => Promise.resolve(false);
+  setupPage.connectTranscriptionRelay = async () => true;
+  setupPage.startTranscriptionClock = () => {};
+  setupPage.scheduleTranscriptionRestart = () => {};
+  setupPage.onLoad({ token: "legacy-app-token-must-not-bypass-setup", mode: "transcription" });
+  assert(setupPage.data.needsDeviceSetup === true, "A physical glasses startup without a token must enter Setup.");
+  assert(setupPage.data.token === "", "A legacy outer app token must not bypass physical-glasses Setup.");
+  assert(setupPage.data.deviceSerialNumber === "ROKID-SETUP-SMOKE", "Setup must show the physical glasses serial number.");
+  assert(setupPage.data.deviceSetupUrl.endsWith("/manage"), "Setup must show the Relay management URL.");
+  const setupClaimed = await setupPage.claimDeviceTokenFromSerial();
+  assert(setupClaimed && setupPage.data.needsDeviceSetup === false, "A successful SN claim must leave Setup automatically.");
+  assert(setupPage.data.token === "rbd_runtime-smoke-device-token", "A successful SN claim must install the device credential.");
+  const storedDeviceCredential = [...localStorageValues.values()].find((value) => value.includes("rbd_runtime-smoke-device-token"));
+  assert(storedDeviceCredential, "The claimed device credential must persist in Agent-isolated localStorage.");
+  const setupClaimRequest = wxModule.wxCalls.requestBodies.find((request) => request.url.endsWith("/api/rabilink/devices/token"));
+  assert(setupClaimRequest?.data?.serialNumber === "ROKID-SETUP-SMOKE", "The claim request must send the current glasses SN.");
+  setupPage.onUnload();
+
+  setInkNavigator("ROKID-SETUP-SMOKE");
   const transcriptPage = createPageInstance(pageModule);
   transcriptPage.reportRuntimeProof = () => Promise.resolve(false);
   transcriptPage.connectTranscriptionRelay = async () => true;
@@ -546,6 +615,18 @@ try {
     transcriptPage.runtimeProofPayload("version-check").runtime.appVersion === craftRelease.version,
     "Runtime proof must expose the injected Craft release version shown in the HUD."
   );
+  transcriptPage.appendLog("ASR 12：这是一段不得上传的私密转写");
+  await transcriptPage.flushCloudLogs();
+  const cloudLogRequest = wxModule.wxCalls.requestBodies.findLast((request) => (
+    request.url.endsWith("/api/rabilink/devices/logs")
+    && JSON.stringify(request.data?.logs || []).includes("[redacted-transcript]")
+  ));
+  assert(cloudLogRequest?.data?.deviceId === "ROKID-SETUP-SMOKE", "Cloud diagnostics must identify the physical glasses when AIUI exposes the serial number.");
+  assert(cloudLogRequest?.data?.appVersion === craftRelease.version, "Cloud diagnostics must include the HUD release version.");
+  const uploadedCloudText = JSON.stringify(cloudLogRequest?.data?.logs || []);
+  assert(uploadedCloudText.includes("[redacted-transcript]"), "Cloud diagnostics must retain the ASR event while redacting the transcript text.");
+  assert(!uploadedCloudText.includes("不得上传的私密转写"), "Cloud diagnostics must never upload raw transcript content.");
+  assert(transcriptPage.cloudLogQueue.length === 0, "A successful cloud diagnostics upload must drain the persisted device queue.");
   transcriptPage.clearTranscriptionRestart();
   transcriptPage.startTranscription();
   const activeRecognition = recognitions.at(-1);
@@ -582,6 +663,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 260));
   assert(recognitions.length > recognitionCountBeforeResume && recognitions.at(-1)?.started, "ASR must resume after Agent TTS finishes.");
 
+  setInkNavigator();
   wxModule.failNextInputs(1);
   const offlineTranscriptPage = createPageInstance(pageModule);
   offlineTranscriptPage.reportRuntimeProof = () => Promise.resolve(false);
@@ -751,6 +833,7 @@ try {
   assert(transcriptPage.recognition === recognitionBeforeManualReview, "A touchpad review click must not pause or replace the continuous ASR session.");
   assert(reviewTap.prevented, "A handled touchpad review click should prevent the host default action.");
 
+  setInkNavigator("ROKID-SETUP-SMOKE");
   const retryPage = createPageInstance(pageModule);
   retryPage.reportRuntimeProof = () => Promise.resolve(false);
   retryPage.connectTranscriptionRelay = async () => true;
@@ -790,6 +873,14 @@ try {
     directConfigurationAsrCalls += 1;
     return true;
   };
+  const modelSessionsBeforeExactCommand = languageModelSessions.length;
+  const modelPromptsBeforeExactCommand = languageModelPrompts.length;
+  transcriptPage.handleConfigurationSpeechResult("读取配置");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert(languageModelSessions.length === modelSessionsBeforeExactCommand, "An exact whitelisted configuration command must not create a LanguageModel session.");
+  assert(languageModelPrompts.length === modelPromptsBeforeExactCommand, "An exact whitelisted configuration command must not wait for native semantic understanding.");
+  assert(directConfigurationAsrCalls === 1, "An exact whitelisted configuration command must dispatch locally.");
+  directConfigurationAsrCalls = 0;
   nextLanguageModelCommand = VOICE_COMMANDS.LOAD_CONFIG;
   nextLanguageModelReply = "";
   const modelSessionsBeforeConfiguration = languageModelSessions.length;
@@ -819,6 +910,15 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 320));
   suppressSpeechEvents = false;
   assert(recognitions.length > recognitionCountBeforeUnknownResume && transcriptPage.recognitionPurpose === "configuration", "Configuration ASR must resume through the fallback watchdog when AIUI exposes no utterance lifecycle events.");
+
+  nextLanguageModelCommand = "";
+  nextLanguageModelReply = "";
+  nextLanguageModelError = new Error("simulated-native-model-failure");
+  transcriptPage.handleConfigurationSpeechResult("帮我检查一个复杂配置");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert(transcriptPage.data.assistantStatus !== "需要明确指令", "A native LanguageModel failure must be described as a service failure, not as user speech being incomprehensible.");
+  assert(transcriptPage.data.assistantReplyText.includes("配置理解服务本轮调用失败"), "A native LanguageModel failure must expose an actionable retry message.");
+  assert(transcriptPage.data.logs.some((entry) => entry.text.includes("simulated-native-model-failure")), "The underlying native LanguageModel error must remain available in the local diagnostic log.");
 
   transcriptPage.data.transcriptionElapsed = "585:00";
   transcriptPage.data.transcriptionStartedAt = 1;
@@ -935,6 +1035,11 @@ try {
     Object.defineProperty(globalThis, "navigator", originalNavigatorDescriptor);
   } else {
     delete globalThis.navigator;
+  }
+  if (originalLocalStorageDescriptor) {
+    Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
+  } else {
+    delete globalThis.localStorage;
   }
   fs.rmSync(stagingRoot, { recursive: true, force: true });
 }

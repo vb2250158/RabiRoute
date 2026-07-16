@@ -53,7 +53,7 @@ const diagnosisItems = computed(() => [
 ]);
 
 function codexDeliveryChannelLabel(state: Record<string, any>): string {
-  if (state.lastDeliveryChannel === "codex-shared-runtime") return "Codex 共享 Runtime";
+  if (state.lastDeliveryChannel === "desktop-ipc") return "Codex Desktop IPC";
   return "-";
 }
 
@@ -265,19 +265,18 @@ async function deleteCurrentGateway(): Promise<void> {
         <v-card v-if="hasCodexAgent" class="app-card glass-card section-card">
           <div class="section-title-row">
             <div>
-              <div class="section-title">Codex Agent / runtime</div>
-              <div class="section-note">RabiRoute、Codex/ChatGPT 桌面端和 CLI 共用同一个 Runtime。</div>
+              <div class="section-title">Codex Desktop 任务</div>
+              <div class="section-note">Desktop 拥有并执行实际轮次；RabiRoute 只向所选任务投递。</div>
             </div>
             <v-chip :color="agentReasons.length ? 'warning' : 'success'" variant="tonal">{{ codexAgentState.monitorThreadId ? "已连接" : "未绑定" }}</v-chip>
           </div>
           <v-alert v-if="agentReasons.length" type="warning" variant="tonal" class="mb-3">
             <div v-for="reason in agentReasons" :key="reason">原因：{{ reason }}</div>
           </v-alert>
-          <div class="status-row"><span>会话 ID</span><b>{{ codexAgentState.monitorThreadId || "-" }}</b></div>
           <div class="status-row"><span>线程名</span><b>{{ codexAgentState.monitorThreadName || gateway.codexThreadName || "-" }}</b></div>
           <div class="status-row"><span>最后成功</span><b>{{ codexAgentState.lastNotificationAt || "-" }}</b></div>
           <div class="status-row"><span>投递协议</span><b>{{ codexDeliveryChannelLabel(codexAgentState) }}</b></div>
-          <div class="status-row"><span>桌面宿主</span><b>ChatGPT（可选，不作为投递判据）</b></div>
+          <div class="status-row"><span>任务所有者</span><b>Codex/ChatGPT Desktop（必需）</b></div>
           <div v-if="codexAgentState.lastNotificationError" class="status-row"><span>最后错误</span><b>{{ codexAgentState.lastNotificationError }}</b></div>
         </v-card>
       </div>

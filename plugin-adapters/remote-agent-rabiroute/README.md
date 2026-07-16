@@ -4,6 +4,8 @@ This folder is the standalone unattended Remote Agent bridge for RabiRoute.
 
 The remote machine does not need the full RabiRoute project. It only needs this folder and Node.js. This bridge pins its own `@openai/codex` runtime and uses `codex app-server` over stdio JSONL.
 
+This runtime is owned only by the unattended bridge on that remote device. It does not share a fixed port with, reconfigure, or act as a fallback for Codex/ChatGPT Desktop on the RabiRoute control machine.
+
 ## Run
 
 ```bash

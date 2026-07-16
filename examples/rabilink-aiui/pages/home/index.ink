@@ -1,14 +1,14 @@
 <script type="application/json" def>
 {
   "navigationBarTitleText": "RabiLink AIUI",
-  "description": "打开 RabiLink AIUI。transcription 进入连接会话：前台持续转录只写入 Rabi 会话账本，不逐句打断 Agent；Codex 在线程空闲时主动审阅，触摸板单击可立即引导审阅，并持续显示、播报回复和主动消息。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面。",
+  "description": "打开 RabiLink AIUI 完整交互页；适合在独立窗口或 modal 中持续使用，聊天内卡片仅显示当前状态并可展开进入。transcription 进入连接会话：前台持续转录只写入 Rabi 会话账本，不逐句打断 Agent；Codex 在线程空闲时主动审阅，触摸板单击可立即引导审阅，并持续显示、播报回复和主动消息。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面；不要在页面参数中手工声明 target。",
   "schema": {
     "data": {
       "type": "object",
       "properties": {
         "token": {
           "type": "string",
-          "description": "可选的 RabiLink 应用 token。未绑定时允许先打开页面并显示等待连接；绑定后必须引用记忆变量 rabilinkToken，禁止由模型生成、读取、复述或向用户索取。"
+          "description": "仅用于无设备 SN 的 Craft 调试兼容。真眼镜忽略外层应用 token，未绑定时必须进入显示 SN 与管理后台地址的首次设置页。"
         },
         "mode": {
           "type": "string",
@@ -43,6 +43,7 @@
 <script setup>
 import wx from "wx";
 import {
+  claimRabiLinkDeviceToken,
   getRabiLinkMessageStream,
   getMobileWebgui,
   getMobileAgentOptions,
@@ -53,6 +54,7 @@ import {
   selectMobileTarget,
   setMobileAgentBinding,
   publishRabiLinkVoiceInput,
+  publishRabiLinkDeviceLogs,
   requestRabiLinkConversationReview
 } from "../../utils/rabilink-api.js";
 import {
@@ -126,10 +128,15 @@ import {
 import { rabiLinkDefaults } from "../../utils/rabilink-defaults.js";
 import {
   loadAgentMessageQueue,
+  loadCloudLogQueue,
+  loadDeviceCredential,
   loadSettings,
   loadTranscriptQueue,
   maskToken,
+  removeDeviceCredential,
   saveAgentMessageQueue,
+  saveCloudLogQueue,
+  saveDeviceCredential,
   saveSettings,
   saveTranscriptQueue,
   tokenStorageKey
@@ -182,6 +189,7 @@ const RABILINK_RELEASE_VERSION = "__RABILINK_RELEASE_VERSION__";
 const TRANSCRIPTION_RESTART_DELAY_MS = 220;
 const TRANSCRIPTION_ERROR_RETRY_MS = 1200;
 const TRANSCRIPTION_MAX_RETRY_DELAY_MS = 10000;
+const TRANSCRIPT_FLUSH_RETRY_MS = 5000;
 const TRANSCRIPTION_RAPID_END_THRESHOLD_MS = 800;
 const TRANSCRIPTION_MAX_CONSECUTIVE_FAILURES = 5;
 const AGENT_POLL_RETRY_DELAY_MS = 250;
@@ -198,12 +206,58 @@ const DEVICE_CLOCK_REFRESH_MS = 30000;
 const DEVICE_BATTERY_REFRESH_MS = 60000;
 const RELAY_BATTERY_DEFAULT_STALE_MS = 3 * 60 * 1000;
 const RELAY_BATTERY_MAX_STALE_MS = 15 * 60 * 1000;
+const CLOUD_LOG_BATCH_SIZE = 20;
+const CLOUD_LOG_FLUSH_DELAY_MS = 1200;
+const CLOUD_LOG_RETRY_DELAY_MS = 10000;
+const DEVICE_TOKEN_CLAIM_RETRY_MS = 5000;
+let cloudConsoleCaptureState = null;
+
+function cloudSafeMessage(value) {
+  let text = String(value || "").replace(/\s+/g, " ").trim();
+  text = text
+    .replace(/\brbl_[0-9A-Za-z_-]{12,}\b/g, "[redacted]")
+    .replace(/\bBearer\s+[0-9A-Za-z._~+\/-]+=*/gi, "Bearer [redacted]")
+    .replace(/(^|[?&\s])((?:token|access_token|api_key)=)[^&#\s]+/gi, "$1$2[redacted]")
+    .replace(/(X-RabiLink-Token\s*[:=]\s*)\S+/gi, "$1[redacted]")
+    .replace(/("(?:text|transcript|assistantReplyText|assistantUserText|token|password|secret|apiKey|api_key)"\s*:\s*")[^"]*/gi, "$1[redacted]");
+  if (/^ASR(?:\s+\d+|\s+已过滤)/.test(text)) {
+    const split = text.indexOf("：");
+    text = `${split >= 0 ? text.slice(0, split) : "ASR"}：[redacted-transcript]`;
+  } else if (/^(智能体请求|未识别配置指令)：/.test(text)) {
+    text = `${text.split("：")[0]}：[redacted-user-input]`;
+  } else if (/^配置指令（/.test(text)) {
+    const split = text.indexOf("）：");
+    text = `${split >= 0 ? text.slice(0, split + 1) : "配置指令"}：[redacted-user-input]`;
+  }
+  return text.length > 1000 ? `${text.slice(0, 999)}…` : text;
+}
+
+function cloudLogLevel(message, explicit = "") {
+  const level = String(explicit || "").toLowerCase();
+  if (["debug", "info", "warn", "error", "fatal"].includes(level)) return level;
+  const text = String(message || "");
+  if (/失败|异常|错误|中断|不可用/.test(text)) return "error";
+  if (/警告|重试|暂停|等待/.test(text)) return "warn";
+  return "info";
+}
+
+function cloudConsoleMessage(args = []) {
+  return args.map((value) => {
+    if (value instanceof Error) return value.message || String(value);
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }).join(" ");
+}
 
 function resolveAsrHostPolicy() {
   const hasInkNavigator = typeof navigator !== "undefined"
     && typeof navigator.getDeviceSerialNumber === "function";
   if (!hasInkNavigator) {
-    return { requiresInteractiveWakeup: false };
+    return { requiresInteractiveWakeup: false, deviceSerialNumber: "" };
   }
 
   let deviceSerialNumber = "";
@@ -214,8 +268,24 @@ function resolveAsrHostPolicy() {
   }
 
   return {
-    requiresInteractiveWakeup: !deviceSerialNumber
+    requiresInteractiveWakeup: !deviceSerialNumber,
+    deviceSerialNumber
   };
+}
+
+function relayManageUrl(relayBaseUrl) {
+  const baseUrl = String(relayBaseUrl || "").trim().replace(/\/+$/, "");
+  return baseUrl ? `${baseUrl}/manage` : "";
+}
+
+function relayManageUrlLabel(relayBaseUrl) {
+  return relayManageUrl(relayBaseUrl).replace(/^https?:\/\//i, "");
+}
+
+function isRabiLinkAuthenticationError(error) {
+  const message = String(error?.message || error || "");
+  return Number(error?.statusCode) === 401
+    || /unauthorized|对应应用的 token|凭证无效|token.*无效/i.test(message);
 }
 
 function estimatedSpeechPlaybackMs(text) {
@@ -656,6 +726,11 @@ export default {
     transcriptionSyncedCount: 0,
     transcriptionPendingCount: 0,
     transcriptionSyncLabel: "等待连接",
+    needsDeviceSetup: false,
+    deviceSerialNumber: "",
+    deviceSetupUrl: "",
+    deviceSetupStatus: "等待绑定",
+    deviceSetupDetail: "在服务器后台绑定本机 SN 后会自动进入。",
     currentTime: "--:--",
     releaseVersion: RABILINK_RELEASE_VERSION,
     batteryAvailable: false,
@@ -713,15 +788,27 @@ export default {
     this.installHudRelayoutGuard();
     const invocation = resolveToolInvocation(query);
     const asrHostPolicy = resolveAsrHostPolicy();
-    const token = invocation.token;
+    const relayBaseUrl = rabiLinkDefaults.relayBaseUrl;
+    const deviceCredential = loadDeviceCredential(relayBaseUrl, asrHostPolicy.deviceSerialNumber);
+    const token = deviceCredential || (asrHostPolicy.deviceSerialNumber ? "" : invocation.token);
+    const needsDeviceSetup = !token;
     const agentRequestedTranscription = invocation.mode === APP_MODES.TRANSCRIPTION && invocation.invokedByAgent;
-    const shouldAutoStartTranscription = agentRequestedTranscription && !asrHostPolicy.requiresInteractiveWakeup;
+    const shouldAutoStartTranscription = Boolean(token) && agentRequestedTranscription && !asrHostPolicy.requiresInteractiveWakeup;
     const waitsForInteractiveWakeup = agentRequestedTranscription && asrHostPolicy.requiresInteractiveWakeup;
     const shouldAutoStartConfiguration = invocation.mode === APP_MODES.CONFIGURATION && !asrHostPolicy.requiresInteractiveWakeup;
     const configurationWaitsForInteractiveWakeup = invocation.mode === APP_MODES.CONFIGURATION && asrHostPolicy.requiresInteractiveWakeup;
     const firstFrameSurface = APP_SURFACES[invocation.surfaceIndex] || APP_SURFACES[0];
     const firstFramePanel = CONFIG_PANELS[invocation.panelIndex] || CONFIG_PANELS[0];
     this.asrHostPolicy = asrHostPolicy;
+    this.cloudLogTokenKey = tokenStorageKey(token);
+    this.cloudLogQueue = [];
+    this.cloudLogFlushTimer = null;
+    this.cloudLogFlushing = false;
+    this.cloudLogConsoleOriginals = null;
+    this.deviceTokenClaimTimer = null;
+    this.deviceTokenClaiming = false;
+    this.installCloudConsoleCapture();
+    console.info("[RabiLink AIUI] page:onLoad");
     this.asrAdapter = createAiuiAsrInputAdapter({
       SpeechRecognitionCtor: typeof SpeechRecognition === "function" ? SpeechRecognition : null,
       language: "zh-CN"
@@ -751,6 +838,7 @@ export default {
     this.destroyed = false;
     this.transcriptQueue = [];
     this.flushingTranscripts = false;
+    this.transcriptFlushRetryTimer = null;
     this.transcriptionRestartTimer = null;
     this.transcriptionStartupTimer = null;
     this.startupNetworkTimer = null;
@@ -777,9 +865,16 @@ export default {
     this.lastReviewRequestAt = 0;
     this.transcriptPolicy = createTranscriptPolicy();
     this.setData({
-      relayBaseUrl: rabiLinkDefaults.relayBaseUrl,
+      relayBaseUrl,
       token,
       maskedToken: maskToken(token),
+      needsDeviceSetup,
+      deviceSerialNumber: asrHostPolicy.deviceSerialNumber || "未获取到设备 SN",
+      deviceSetupUrl: relayManageUrlLabel(relayBaseUrl),
+      deviceSetupStatus: asrHostPolicy.deviceSerialNumber ? "等待服务器绑定" : "无法读取设备 SN",
+      deviceSetupDetail: asrHostPolicy.deviceSerialNumber
+        ? "登录服务器后台绑定本机 SN，成功后将自动进入 RabiLink。"
+        : "请确认当前页面运行在 Rokid 眼镜的 AIUI 环境中。",
       targetDeviceId: invocation.targetDeviceId,
       mode: invocation.mode,
       isTranscriptionMode: invocation.mode === APP_MODES.TRANSCRIPTION,
@@ -789,11 +884,13 @@ export default {
       assistantListening: false,
       assistantModelBusy: false,
       assistantModelState: "原生 AI 待命",
-      transcriptionState: invocation.mode === APP_MODES.TRANSCRIPTION
+      transcriptionState: needsDeviceSetup
+        ? "等待绑定"
+        : (invocation.mode === APP_MODES.TRANSCRIPTION
         ? (shouldAutoStartTranscription
           ? "准备中"
           : (waitsForInteractiveWakeup ? "浏览器调试：进入后点麦克风" : "待运行智能体"))
-        : "准备中",
+        : "准备中"),
       transcriptionSessionId: `rabilink-aiui-${Date.now()}`,
       assistantStatus: invocation.intent
         ? "执行外层灵珠指令"
@@ -804,9 +901,12 @@ export default {
       transcriptionStartedAt: Date.now(),
       transcriptionElapsed: "00:00",
       transcriptionPendingCount: 0,
-      transcriptionSyncLabel: token ? "等待后台连接" : "等待智能体连接",
-      agentStatus: token ? "准备连接 Agent" : "等待智能体连接",
-      agentReplyText: "转录会持续写入会话账本；单击触摸板可请 Agent 现在审阅。",
+      transcriptionText: token ? "等待语音" : "等待设备设置",
+      transcriptionSyncLabel: token ? "等待后台连接" : "等待服务器绑定",
+      agentStatus: token ? "准备连接 Agent" : "尚未绑定",
+      agentReplyText: token
+        ? "转录会持续写入会话账本；单击触摸板可请 Agent 现在审阅。"
+        : "完成首次设置后自动进入 RabiLink。",
       agentCursor: "",
       agentPolling: false,
       agentSpeaking: false,
@@ -828,7 +928,10 @@ export default {
   },
 
   onShow() {
+    console.info("[RabiLink AIUI] page:onShow");
     this.pageVisible = true;
+    this.scheduleCloudLogFlush(0);
+    if (!this.data.token) this.scheduleDeviceTokenClaim(0);
     if (!this.startupActivated) {
       if (this.pageReady) this.scheduleDeferredStartup();
       return;
@@ -848,6 +951,7 @@ export default {
   },
 
   onReady() {
+    console.info("[RabiLink AIUI] page:onReady");
     this.pageReady = true;
     this.scheduleDeferredStartup();
   },
@@ -879,8 +983,15 @@ export default {
       || Boolean(legacyTokenKey && settings.agentCursorTokenKey === legacyTokenKey);
     const agentCursor = cursorMatchesToken ? settings.agentCursor : "";
     const agentMessageQueue = loadAgentMessageQueue(tokenKey, legacyTokenKey);
+    const cloudLogQueue = loadCloudLogQueue(tokenKey, legacyTokenKey);
     this.transcriptQueue = transcriptQueue;
     this.agentMessageQueue = agentMessageQueue;
+    this.cloudLogTokenKey = tokenKey;
+    this.cloudLogQueue = [
+      ...(Array.isArray(this.cloudLogQueue) ? this.cloudLogQueue : []),
+      ...cloudLogQueue
+    ].filter((entry, index, rows) => rows.findIndex((candidate) => candidate.id === entry.id) === index);
+    saveCloudLogQueue(this.cloudLogQueue, tokenKey);
     this.transcriptPolicy?.seedAccepted(transcriptQueue);
     if (legacyTokenKey && settings.agentCursorTokenKey === legacyTokenKey) {
       saveSettings({ agentCursor, agentCursorTokenKey: tokenKey });
@@ -892,9 +1003,13 @@ export default {
       targetDeviceId: this.data.targetDeviceId || settings.targetDeviceId,
       agentCursor,
       transcriptionPendingCount: transcriptQueue.length,
-      transcriptionSyncLabel: token ? (transcriptQueue.length ? "待发送" : "等待连接") : "等待智能体连接"
+      transcriptionSyncLabel: token
+        ? (transcriptQueue.length ? "待发送" : "等待连接")
+        : (this.asrHostPolicy?.deviceSerialNumber ? "等待服务器绑定" : "等待智能体连接")
     });
     this.appendLog("RabiLink AIUI 首屏已就绪，后台能力开始启动。");
+    this.scheduleCloudLogFlush(0);
+    if (!token) this.scheduleDeviceTokenClaim(0);
     if (this.pageVisible) this.startDeviceStatus();
     if (invocation.intent) this.appendLog(`智能体请求：${invocation.intent}`);
     if (invocation.mode === APP_MODES.TRANSCRIPTION && invocation.invokedByAgent && this.asrHostPolicy?.requiresInteractiveWakeup) {
@@ -922,7 +1037,11 @@ export default {
   },
 
   onHide() {
+    console.info("[RabiLink AIUI] page:onHide");
     this.pageVisible = false;
+    void this.flushCloudLogs();
+    this.clearDeviceTokenClaimTimer();
+    this.clearTranscriptFlushRetry();
     this.stopDeviceStatus();
     this.suspendAgentPolling();
     this.cancelSpeech();
@@ -938,12 +1057,19 @@ export default {
   },
 
   onUnload() {
+    console.info("[RabiLink AIUI] page:onUnload");
+    saveCloudLogQueue(this.cloudLogQueue || [], this.cloudLogTokenKey || tokenStorageKey(this.data.token));
+    void this.flushCloudLogs();
+    this.clearCloudLogFlushTimer();
+    this.clearDeviceTokenClaimTimer();
+    this.restoreCloudConsoleCapture();
     this.destroyed = true;
     this.pageVisible = false;
     this.stopDeviceStatus();
     this.stopAgentPolling();
     this.cancelSpeech();
     this.destroyConfigurationModel();
+    this.clearTranscriptFlushRetry();
     if (this.transcriptionStartupTimer) {
       clearTimeout(this.transcriptionStartupTimer);
       this.transcriptionStartupTimer = null;
@@ -1053,6 +1179,10 @@ export default {
   onVoiceWakeup(event) {
     const keyword = String(event?.keyword || "").trim();
     this.appendLog(keyword ? `唤醒词：${keyword}` : "收到语音唤醒。");
+    if (this.data.needsDeviceSetup) {
+      this.scheduleDeviceTokenClaim(0);
+      return;
+    }
     if (this.data.isTranscriptionMode) {
       if (this.speechActive) return;
       if (!this.data.transcriptionDesired || !this.data.transcriptionListening) this.resumeTranscription("wakeup");
@@ -1061,11 +1191,139 @@ export default {
     if (this.data.isConfigurationMode && !this.speechActive) this.resumeConfigurationListening("wakeup");
   },
 
+  clearDeviceTokenClaimTimer() {
+    if (!this.deviceTokenClaimTimer) return;
+    clearTimeout(this.deviceTokenClaimTimer);
+    this.deviceTokenClaimTimer = null;
+  },
+
+  scheduleDeviceTokenClaim(delayMs = DEVICE_TOKEN_CLAIM_RETRY_MS) {
+    this.clearDeviceTokenClaimTimer();
+    if (this.destroyed || !this.pageVisible || this.data.token || !this.asrHostPolicy?.deviceSerialNumber) return;
+    this.deviceTokenClaimTimer = setTimeout(() => {
+      this.deviceTokenClaimTimer = null;
+      void this.claimDeviceTokenFromSerial();
+    }, Math.max(0, Number(delayMs || 0)));
+  },
+
+  handleRelayAuthenticationFailure(error) {
+    if (!isRabiLinkAuthenticationError(error)) return false;
+    const serialNumber = String(this.asrHostPolicy?.deviceSerialNumber || "").trim();
+    const currentToken = String(this.data.token || "").trim();
+    if (currentToken.startsWith("rbd_") && serialNumber) {
+      removeDeviceCredential(this.data.relayBaseUrl, serialNumber);
+    }
+    this.clearTranscriptFlushRetry();
+    this.suspendAgentPolling();
+    this.setData({
+      token: "",
+      maskedToken: "未设置",
+      needsDeviceSetup: true,
+      deviceSerialNumber: serialNumber || "未获取到设备 SN",
+      deviceSetupUrl: relayManageUrlLabel(this.data.relayBaseUrl),
+      deviceSetupStatus: serialNumber ? "凭证无效 · 请重新绑定" : "无法读取设备 SN",
+      deviceSetupDetail: serialNumber
+        ? "在服务器后台对本机 SN 执行“绑定 / 重置”。"
+        : "请确认当前页面运行在 Rokid 眼镜的 AIUI 环境中。",
+      connected: false,
+      transcriptionDesired: false,
+      transcriptionState: "等待绑定",
+      transcriptionText: serialNumber ? `SN ${serialNumber}` : "未获取到眼镜 SN",
+      transcriptionSyncLabel: serialNumber ? "凭证无效 · 请重新绑定" : "凭证无效",
+      agentStatus: "RabiLink 凭证无效",
+      agentReplyText: serialNumber
+        ? `登录 ${relayManageUrlLabel(this.data.relayBaseUrl)}，绑定或重置上方 SN。`
+        : "请在智能体设置中重新绑定 RabiLink token。"
+    });
+    if (serialNumber) this.scheduleDeviceTokenClaim(0);
+    return true;
+  },
+
+  async claimDeviceTokenFromSerial() {
+    if (this.deviceTokenClaiming || this.destroyed || this.data.token) return false;
+    const serialNumber = String(this.asrHostPolicy?.deviceSerialNumber || "").trim();
+    if (!serialNumber) return false;
+    const manageLabel = relayManageUrlLabel(this.data.relayBaseUrl);
+    this.deviceTokenClaiming = true;
+    try {
+      const result = await claimRabiLinkDeviceToken({ relayBaseUrl: this.data.relayBaseUrl, token: "" }, serialNumber);
+      const token = String(result?.token || "").trim();
+      if (!token.startsWith("rbd_")) throw new Error("服务器没有返回有效的眼镜设备凭证。");
+      const persisted = saveDeviceCredential(this.data.relayBaseUrl, serialNumber, token);
+      const tokenKey = tokenStorageKey(token);
+      const transcriptQueue = loadTranscriptQueue(tokenKey);
+      const agentMessageQueue = loadAgentMessageQueue(tokenKey);
+      const cloudLogQueue = loadCloudLogQueue(tokenKey);
+      this.transcriptQueue = transcriptQueue;
+      this.agentMessageQueue = agentMessageQueue;
+      this.cloudLogTokenKey = tokenKey;
+      this.cloudLogQueue = [
+        ...(Array.isArray(this.cloudLogQueue) ? this.cloudLogQueue : []),
+        ...cloudLogQueue
+      ].filter((entry, index, rows) => rows.findIndex((candidate) => candidate.id === entry.id) === index);
+      saveCloudLogQueue(this.cloudLogQueue, tokenKey);
+      this.setData({
+        token,
+        maskedToken: maskToken(token),
+        needsDeviceSetup: false,
+        deviceSetupStatus: "绑定成功",
+        deviceSetupDetail: "正在进入 RabiLink。",
+        connected: false,
+        transcriptionDesired: this.data.isTranscriptionMode && !this.asrHostPolicy.requiresInteractiveWakeup,
+        transcriptionState: "准备连接",
+        transcriptionText: "眼镜已绑定",
+        transcriptionPendingCount: transcriptQueue.length,
+        transcriptionSyncLabel: transcriptQueue.length ? "准备补传" : "准备连接",
+        agentStatus: "设备凭证已领取",
+        agentReplyText: persisted ? "正在连接 RabiLink。" : "已连接；本地存储不可用，重启后需在后台重新绑定。"
+      });
+      this.appendLog("眼镜已通过 SN 领取设备凭证，开始连接 Relay。");
+      this.scheduleCloudLogFlush(0);
+      if (this.pageVisible && this.data.isTranscriptionMode) {
+        if (this.data.transcriptionDesired) {
+          this.startTranscriptionClock();
+          this.scheduleTranscriptionRestart(STARTUP_ASR_DELAY_MS);
+        }
+        await this.connectTranscriptionRelay();
+      }
+      return true;
+    } catch (error) {
+      const alreadyClaimed = error?.code === "DEVICE_ALREADY_CLAIMED" || Number(error?.statusCode) === 409;
+      this.setData({
+        needsDeviceSetup: true,
+        deviceSerialNumber: serialNumber,
+        deviceSetupUrl: manageLabel,
+        deviceSetupStatus: alreadyClaimed ? "本地凭证已丢失" : "等待服务器绑定",
+        deviceSetupDetail: alreadyClaimed
+          ? "请在服务器后台对本机 SN 执行“绑定 / 重置”。"
+          : "登录服务器后台绑定本机 SN，成功后将自动进入 RabiLink。",
+        connected: false,
+        transcriptionDesired: false,
+        transcriptionState: "等待绑定",
+        transcriptionText: `SN ${serialNumber}`,
+        transcriptionSyncLabel: alreadyClaimed ? "请在后台重新绑定" : "等待服务器绑定",
+        agentStatus: alreadyClaimed ? "本地凭证已丢失" : "尚未绑定",
+        agentReplyText: alreadyClaimed
+          ? `登录 ${manageLabel}，对同一 SN 点“绑定 / 重置”。`
+          : `登录 ${manageLabel} 绑定上方 SN。`
+      });
+      this.scheduleDeviceTokenClaim();
+      return false;
+    } finally {
+      this.deviceTokenClaiming = false;
+    }
+  },
+
+  onKeyDown(event) {
+    const code = normalizeInputCode(event);
+    if (code) console.debug("[RabiLink AIUI] input:key-down", { code });
+  },
+
   onKeyUp(event) {
     const code = normalizeInputCode(event);
     let handled = true;
     if (this.data.isTranscriptionMode) {
-      if (code === "arrowdown" || code === "arrowright" || code === "backspace") {
+      if (code === "arrowdown" || code === "arrowright") {
         this.requestConfigurationAssistant("gesture");
       } else if (code === "enter" || code === "globalhook") {
         if (this.hasBlockedAgentMessages()) this.retryModeAction();
@@ -1081,6 +1339,7 @@ export default {
     if (handled && event && typeof event.preventDefault === "function") {
       event.preventDefault();
     }
+    if (handled) console.debug("[RabiLink AIUI] input:key-up:handled", { code });
   },
 
   config() {
@@ -1163,6 +1422,10 @@ export default {
       return true;
     } catch (error) {
       const message = error?.message || String(error);
+      if (this.handleRelayAuthenticationFailure(error)) {
+        this.appendLog(`转写链路鉴权失败：${message}`);
+        return false;
+      }
       this.setData({
         connected: false,
         statusText: "Relay 连接失败",
@@ -4088,6 +4351,22 @@ export default {
       this.switchToTranscription("voice");
       return true;
     }
+    if (control.command !== VOICE_COMMANDS.UNKNOWN) {
+      this.setData({
+        assistantUserText: value,
+        assistantLastRequest: value,
+        assistantListening: false,
+        assistantModelBusy: false,
+        assistantModelState: "明确命令已识别"
+      });
+      void Promise.resolve(this.executeConfigurationIntent(control.command, "exact-command", value))
+        .finally(() => {
+          if (this.data.isConfigurationMode && this.data.assistantListeningDesired && !this.data.busy && !this.speechActive) {
+            this.scheduleTranscriptionRestart(TRANSCRIPTION_RESTART_DELAY_MS);
+          }
+        });
+      return true;
+    }
     console.log("[RabiLink AIUI] configuration-asr:result");
     this.setData({
       assistantUserText: value,
@@ -4156,9 +4435,29 @@ export default {
     void this.flushTranscriptQueue();
   },
 
+  clearTranscriptFlushRetry() {
+    if (!this.transcriptFlushRetryTimer) return;
+    clearTimeout(this.transcriptFlushRetryTimer);
+    this.transcriptFlushRetryTimer = null;
+  },
+
+  scheduleTranscriptFlushRetry(delayMs = TRANSCRIPT_FLUSH_RETRY_MS) {
+    this.clearTranscriptFlushRetry();
+    if (this.destroyed || !this.pageVisible || !this.data.token || !this.transcriptQueue.length) return;
+    this.transcriptFlushRetryTimer = setTimeout(() => {
+      this.transcriptFlushRetryTimer = null;
+      if (this.destroyed || !this.pageVisible) return;
+      console.info("[RabiLink AIUI] transcript-sync:retry", {
+        pending: this.transcriptQueue.length
+      });
+      void this.flushTranscriptQueue();
+    }, Math.max(0, Number(delayMs) || 0));
+  },
+
   async flushTranscriptQueue() {
     if (this.flushingTranscripts || !this.transcriptQueue.length) {
       if (!this.transcriptQueue.length) {
+        this.clearTranscriptFlushRetry();
         this.setData({
           transcriptionPendingCount: 0,
           transcriptionSyncLabel: this.data.token ? "记录已同步" : "等待智能体连接"
@@ -4177,6 +4476,11 @@ export default {
     try {
       while (this.transcriptQueue.length && !this.destroyed) {
         const segment = this.transcriptQueue[0];
+        console.info("[RabiLink AIUI] transcript-sync:start", {
+          id: segment.id,
+          sequence: segment.sequence,
+          pending: this.transcriptQueue.length
+        });
         this.setData({
           transcriptionPendingCount: this.transcriptQueue.length,
           transcriptionSyncLabel: "保存会话记录",
@@ -4191,6 +4495,11 @@ export default {
             tokenStorageKey(this.data.token)
           );
         }
+        console.info("[RabiLink AIUI] transcript-sync:stored", {
+          id: segment.id,
+          sequence: segment.sequence,
+          pending: this.transcriptQueue.length
+        });
         this.setData({
           connected: true,
           transcriptionSyncedCount: this.data.transcriptionSyncedCount + 1,
@@ -4200,12 +4509,33 @@ export default {
         });
       }
     } catch (error) {
+      const message = String(error?.message || error || "连接失败");
+      if (this.handleRelayAuthenticationFailure(error)) {
+        console.warn("[RabiLink AIUI] transcript-sync:failed", {
+          kind: "auth",
+          pending: this.transcriptQueue.length,
+          message
+        });
+        this.appendLog(`会话记录鉴权失败：${message}`);
+        return;
+      }
+      const pcOffline = /selected rabi pc is offline|rabi pc.*offline|pc.*离线/i.test(message);
       this.setData({
         connected: false,
         transcriptionPendingCount: this.transcriptQueue.length,
-        transcriptionSyncLabel: "待重试"
+        transcriptionSyncLabel: pcOffline ? "PC 离线 · 已保存" : "网络中断 · 已保存",
+        agentStatus: pcOffline ? "PC 离线 · 等待重连" : "Relay 连接中断 · 自动重试",
+        agentReplyText: pcOffline
+          ? "语音已保存在眼镜，PC Rabi 上线后会自动补传。"
+          : "语音已保存在眼镜，连接恢复后会自动补传。"
       });
-      this.appendLog(`会话记录同步失败：${error?.message || error}`);
+      console.warn("[RabiLink AIUI] transcript-sync:failed", {
+        kind: pcOffline ? "pc-offline" : "network",
+        pending: this.transcriptQueue.length,
+        message
+      });
+      this.appendLog(`会话记录同步失败：${message}`);
+      this.scheduleTranscriptFlushRetry();
     } finally {
       this.flushingTranscripts = false;
     }
@@ -4356,11 +4686,15 @@ export default {
       return false;
     } catch (error) {
       if (requestId !== this.configurationPromptGeneration || this.destroyed) return false;
-      this.appendLog(`原生 AI 理解失败：${error?.message || error}`);
+      const errorMessage = String(error?.message || error || "unknown error");
+      this.appendLog(`配置理解服务失败：${errorMessage}`);
       this.destroyConfigurationModel();
-      const failureMessage = "原生 AI 暂时没有完成理解，请重试。";
-      this.setData({ assistantModelBusy: false, assistantModelState: "原生 AI 暂不可用" });
-      this.say(failureMessage, { assistantStatus: "原生 AI 暂不可用", assistantCanRetry: true });
+      const timedOut = errorMessage.includes("超时") || errorMessage.toLowerCase().includes("timeout");
+      const failureMessage = timedOut
+        ? "配置理解超时，请重试，或直接说读取配置等明确命令。"
+        : "配置理解服务本轮调用失败，请重试，或直接说读取配置等明确命令。";
+      this.setData({ assistantModelBusy: false, assistantModelState: timedOut ? "配置理解超时" : "配置理解服务异常" });
+      this.say(failureMessage, { assistantStatus: timedOut ? "配置理解超时" : "配置理解失败", assistantCanRetry: true });
       return false;
     } finally {
       if (this.configurationPendingToolCall?.requestId === requestId) this.configurationPendingToolCall = null;
@@ -4720,12 +5054,124 @@ export default {
     wx.showToast({ title: message, icon: "none" });
   },
 
+  installCloudConsoleCapture() {
+    if (this.cloudLogConsoleOriginals || typeof console === "undefined") return;
+    if (!cloudConsoleCaptureState) {
+      const originals = {};
+      const owners = new Set();
+      cloudConsoleCaptureState = { originals, owners };
+      for (const method of ["debug", "log", "warn", "error"]) {
+        if (typeof console[method] !== "function") continue;
+        const original = console[method];
+        originals[method] = original;
+        console[method] = (...args) => {
+          original.apply(console, args);
+          for (const owner of owners) {
+            owner.enqueueCloudLog(cloudConsoleMessage(args), {
+              event: `console.${method}`,
+              level: method === "log" ? "debug" : method
+            });
+          }
+        };
+      }
+    }
+    cloudConsoleCaptureState.owners.add(this);
+    this.cloudLogConsoleOriginals = cloudConsoleCaptureState.originals;
+  },
+
+  restoreCloudConsoleCapture() {
+    if (!this.cloudLogConsoleOriginals || typeof console === "undefined") return;
+    cloudConsoleCaptureState?.owners.delete(this);
+    if (cloudConsoleCaptureState && !cloudConsoleCaptureState.owners.size) {
+      for (const [method, original] of Object.entries(cloudConsoleCaptureState.originals)) {
+        console[method] = original;
+      }
+      cloudConsoleCaptureState = null;
+    }
+    this.cloudLogConsoleOriginals = null;
+  },
+
+  clearCloudLogFlushTimer() {
+    if (!this.cloudLogFlushTimer) return;
+    clearTimeout(this.cloudLogFlushTimer);
+    this.cloudLogFlushTimer = null;
+  },
+
+  scheduleCloudLogFlush(delayMs = CLOUD_LOG_FLUSH_DELAY_MS) {
+    if (!Array.isArray(this.cloudLogQueue) || !this.cloudLogQueue.length || this.cloudLogFlushTimer) return;
+    this.cloudLogFlushTimer = setTimeout(() => {
+      this.cloudLogFlushTimer = null;
+      void this.flushCloudLogs();
+    }, Math.max(0, Number(delayMs || 0)));
+  },
+
+  enqueueCloudLog(message, options = {}) {
+    const safeMessage = cloudSafeMessage(message);
+    if (!safeMessage) return false;
+    const createdAt = Date.now();
+    const context = {
+      mode: String(this.data?.mode || ""),
+      surface: String(this.data?.surfaceId || ""),
+      ...(options.context && typeof options.context === "object" ? options.context : {})
+    };
+    const entry = {
+      id: `aiui-${createdAt}-${Math.random().toString(16).slice(2)}`,
+      createdAt,
+      time: new Date(createdAt).toISOString(),
+      level: cloudLogLevel(safeMessage, options.level),
+      event: String(options.event || "aiui.runtime"),
+      message: safeMessage,
+      context
+    };
+    this.cloudLogQueue = [...(Array.isArray(this.cloudLogQueue) ? this.cloudLogQueue : []), entry].slice(-500);
+    this.cloudLogTokenKey = this.cloudLogTokenKey || tokenStorageKey(this.data?.token);
+    saveCloudLogQueue(this.cloudLogQueue, this.cloudLogTokenKey);
+    this.scheduleCloudLogFlush(this.cloudLogQueue.length >= CLOUD_LOG_BATCH_SIZE ? 0 : CLOUD_LOG_FLUSH_DELAY_MS);
+    return true;
+  },
+
+  async flushCloudLogs() {
+    if (this.cloudLogFlushing || !Array.isArray(this.cloudLogQueue) || !this.cloudLogQueue.length) return false;
+    const config = this.config();
+    if (!String(config.relayBaseUrl || "").trim() || !String(config.token || "").trim()) return false;
+    this.clearCloudLogFlushTimer();
+    const batch = this.cloudLogQueue.slice(0, CLOUD_LOG_BATCH_SIZE);
+    const batchIds = new Set(batch.map((entry) => entry.id));
+    this.cloudLogFlushing = true;
+    try {
+      await publishRabiLinkDeviceLogs(config, {
+        deviceId: this.asrHostPolicy?.deviceSerialNumber || "unidentified-glasses",
+        deviceKind: "glasses",
+        deviceName: "Rokid Glass",
+        source: "rabilink-aiui",
+        appVersion: this.data.releaseVersion,
+        sessionId: this.data.transcriptionSessionId,
+        mode: this.data.mode,
+        logs: batch
+      });
+      this.cloudLogQueue = this.cloudLogQueue.filter((entry) => !batchIds.has(entry.id));
+      saveCloudLogQueue(this.cloudLogQueue, this.cloudLogTokenKey || tokenStorageKey(config.token));
+      if (this.cloudLogQueue.length) this.scheduleCloudLogFlush(0);
+      return true;
+    } catch (error) {
+      const originalWarn = this.cloudLogConsoleOriginals?.warn;
+      if (typeof originalWarn === "function") {
+        originalWarn.call(console, "[RabiLink AIUI] cloud log upload deferred:", error?.message || error);
+      }
+      this.scheduleCloudLogFlush(CLOUD_LOG_RETRY_DELAY_MS);
+      return false;
+    } finally {
+      this.cloudLogFlushing = false;
+    }
+  },
+
   appendLog(text) {
     const logs = [
       { id: `${Date.now()}-${Math.random()}`, text: `${nowLabel()} ${text}` },
       ...this.data.logs
     ].slice(0, 8);
     this.setData({ logs });
+    this.enqueueCloudLog(text, { event: "aiui.runtime" });
   },
 
   updateDerivedState() {
@@ -4880,7 +5326,23 @@ export default {
 <page>
   <view class="pageScroll">
     <view class="page">
-    <view class="unifiedModeHud {{modeFrameRelayout ? 'modeFrameRelayout' : ''}}">
+    <view class="deviceSetupHud {{needsDeviceSetup ? '' : 'statusHidden'}}">
+      <view class="setupHeader">
+        <text class="compactBrand">RabiLink Setup</text>
+        <text class="setupState">{{deviceSetupStatus}}</text>
+      </view>
+      <text class="setupTitle">首次连接</text>
+      <view class="setupValueRow">
+        <text class="setupLabel">设备 SN</text>
+        <text class="setupValue setupSerial">{{deviceSerialNumber}}</text>
+      </view>
+      <view class="setupValueRow">
+        <text class="setupLabel">管理后台</text>
+        <text class="setupValue">{{deviceSetupUrl}}</text>
+      </view>
+      <text class="setupDetail">{{deviceSetupDetail}}</text>
+    </view>
+    <view class="unifiedModeHud {{modeFrameRelayout ? 'modeFrameRelayout' : ''}} {{needsDeviceSetup ? 'statusHidden' : ''}}">
       <view class="compactHeader modeHeader">
         <text class="compactBrand">RabiLink</text>
         <text class="compactLive {{transcriptionListening || assistantListening || assistantModelBusy || agentPolling || agentSpeaking || busy ? 'compactLiveOn' : ''}}">{{isTranscriptionMode ? (agentSpeaking ? 'TTS' : (transcriptionListening ? 'LIVE' : (agentPolling ? 'LINK' : 'PAUSE'))) : (assistantModelBusy ? 'AI' : (busy ? 'WORK' : (assistantListening ? 'LIVE' : 'READY')))}}</text>
@@ -4956,6 +5418,110 @@ export default {
   overflow: hidden;
 }
 
+.deviceSetupHud {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 424px;
+  height: 112px;
+  max-height: 112px;
+  padding-left: 10px;
+  box-sizing: border-box;
+  gap: 3px;
+  overflow: hidden;
+  border-left: var(--border-width-default, 2px) solid var(--color-primary, #40ff5e);
+  background-color: var(--color-background, #000000);
+}
+
+.setupHeader,
+.setupValueRow {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  width: 412px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.setupHeader {
+  flex: 0 0 16px;
+  height: 16px;
+  justify-content: space-between;
+}
+
+.setupState {
+  display: block;
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
+  font-size: 9px;
+  line-height: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setupTitle {
+  display: block;
+  flex: 0 0 18px;
+  height: 18px;
+  overflow: hidden;
+  color: var(--color-text-primary, #40ff5e);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.setupValueRow {
+  flex: 0 0 17px;
+  height: 17px;
+  gap: 8px;
+}
+
+.setupLabel {
+  display: block;
+  flex: 0 0 56px;
+  width: 56px;
+  color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.setupValue {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary, #40ff5e);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setupSerial {
+  letter-spacing: 0;
+}
+
+.setupDetail {
+  display: block;
+  flex: 0 0 14px;
+  width: 412px;
+  height: 14px;
+  overflow: hidden;
+  color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
+  font-size: 9px;
+  line-height: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .compactHeader,
 .compactStatusRow,
 .modeHeader,
@@ -5010,9 +5576,9 @@ export default {
   padding: 0 4px;
   box-sizing: border-box;
   overflow: hidden;
-  border: 1px solid rgba(64, 255, 94, 0.4);
+  border: var(--border-width-thin, 1px) solid var(--color-primary-40, rgba(64, 255, 94, 0.4));
   border-radius: 6px;
-  color: rgba(64, 255, 94, 0.6);
+  color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
   font-size: 9px;
   line-height: 10px;
   white-space: nowrap;
@@ -5151,7 +5717,7 @@ export default {
   box-sizing: border-box;
   overflow: hidden;
   border-left: 0 solid var(--color-primary, #40ff5e);
-  background-color: #000000;
+  background-color: var(--color-surface, #000000);
 }
 
 .assistantLine {
@@ -5224,9 +5790,9 @@ export default {
   height: 28px;
   box-sizing: border-box;
   overflow: hidden;
-  border: 1px solid rgba(64, 255, 94, 0.4);
+  border: var(--border-width-thin, 1px) solid var(--border-color-muted, rgba(64, 255, 94, 0.4));
   border-radius: 7px;
-  background-color: #000000;
+  background-color: var(--color-surface, #000000);
 }
 
 .modeSwitchThumb {
@@ -5236,9 +5802,9 @@ export default {
   width: 115px;
   height: 24px;
   box-sizing: border-box;
-  border: 1px solid var(--color-primary, #40ff5e);
+  border: var(--border-width-thin, 1px) solid var(--border-color-accent, #40ff5e);
   border-radius: 5px;
-  background-color: #000000;
+  background-color: var(--color-surface, #000000);
 }
 
 .modeSwitchThumbRight {
@@ -5251,7 +5817,7 @@ export default {
   justify-content: center;
   width: 117px;
   height: 26px;
-  color: rgba(64, 255, 94, 0.5);
+  color: var(--color-text-secondary, rgba(64, 255, 94, 0.6));
   font-size: 11px;
   line-height: 26px;
   white-space: nowrap;
@@ -5399,7 +5965,7 @@ export default {
   width: 12px;
   height: 12px;
   box-sizing: border-box;
-  border: 1px solid rgba(64, 255, 94, 0.7);
+  border: var(--border-width-thin, 1px) solid var(--border-color-default, rgba(64, 255, 94, 0.6));
   border-radius: 6px;
 }
 
@@ -5437,14 +6003,14 @@ export default {
   padding: 1px;
   box-sizing: border-box;
   overflow: hidden;
-  border: 1px solid rgba(64, 255, 94, 0.7);
+  border: var(--border-width-thin, 1px) solid var(--border-color-default, rgba(64, 255, 94, 0.6));
   border-radius: 2px;
 }
 
 .batteryCap {
   width: 2px;
   height: 5px;
-  background-color: rgba(64, 255, 94, 0.7);
+  background-color: var(--border-color-default, rgba(64, 255, 94, 0.6));
 }
 
 .batteryFill {

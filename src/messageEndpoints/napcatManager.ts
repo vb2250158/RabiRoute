@@ -266,10 +266,6 @@ function localWebuiUrlWithPort(webuiUrl: string, port: number): string {
   }
 }
 
-function psQuote(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
 function commandLineQuote(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
@@ -382,7 +378,6 @@ export function resolveNapcatLaunchPlan(instance: NapCatInstanceDefinition, root
 }
 
 function launchOnWindows(plan: NapcatLaunchPlan, visible = false): void {
-  const windowStyle = visible ? "Normal" : "Hidden";
   const commandExt = path.extname(plan.commandPath).toLowerCase();
   if (commandExt === ".bat" || commandExt === ".cmd") {
     const child = spawn("cmd.exe", ["/d", visible ? "/k" : "/c", plan.commandPath, ...plan.args], {
@@ -394,28 +389,11 @@ function launchOnWindows(plan: NapcatLaunchPlan, visible = false): void {
     child.unref();
     return;
   }
-  const startFile = commandExt === ".bat" || commandExt === ".cmd" ? "cmd.exe" : plan.commandPath;
-  const startArgs = commandExt === ".bat" || commandExt === ".cmd"
-    ? ["/d", visible ? "/k" : "/c", plan.commandPath, ...plan.args]
-    : plan.args;
-  const argumentList = startArgs.length
-    ? `@(${startArgs.map((arg) => psQuote(arg)).join(", ")})`
-    : "@()";
-  const script = `Start-Process -FilePath ${psQuote(startFile)} -ArgumentList ${argumentList} -WorkingDirectory ${psQuote(plan.cwd)} -WindowStyle ${windowStyle}`;
-  const child = spawn("powershell.exe", [
-    "-NoLogo",
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-WindowStyle",
-    "Hidden",
-    "-Command",
-    script
-  ], {
+  const child = spawn(plan.commandPath, plan.args, {
+    cwd: plan.cwd,
     detached: true,
     stdio: "ignore",
-    windowsHide: true
+    windowsHide: !visible
   });
   child.unref();
 }

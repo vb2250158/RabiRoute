@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterType } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
+import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
@@ -65,7 +66,7 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
 ];
 
 const quickAgentChoices: Array<{ type: AgentAdapterType; title: string; note: string; icon: string }> = [
-  { type: "codex", title: "Codex Agent", note: "与 Codex/ChatGPT 桌面端、CLI 共用唯一 Runtime", icon: "mdi-monitor-dashboard" },
+  { type: "codex", title: "Codex Agent", note: "真实消息由 Codex/ChatGPT Desktop 当前任务执行", icon: "mdi-monitor-dashboard" },
   { type: "copilotCli", title: "Copilot CLI", note: "实验支持，需要本机登录状态", icon: "mdi-robot-outline" },
   { type: "marvis", title: "Marvis", note: "占位支持，人工接力模式", icon: "mdi-message-processing-outline" },
   { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" }
@@ -598,7 +599,9 @@ async function openMarvis(): Promise<void> {
 
 function sessionNames(): Array<string | { title: string; value: string }> {
   const project = currentProject();
-  const sessions = agentSessions().filter(session => !project || !session.projectPath || samePath(session.projectPath, project));
+  const sessions = selectedAgent.value === "codex"
+    ? agentSessions()
+    : agentSessions().filter(session => !project || !session.projectPath || samePath(session.projectPath, project));
   if (selectedAgent.value !== "codex") return [...new Set(sessions.map(session => session.name))];
   return sessions.filter(session => session.id).map(session => ({
     title: `${session.name} · ${formatSessionTime(session.updatedAt)}`,
@@ -624,7 +627,7 @@ function selectSession(value: unknown): void {
   const selected = selectedById || agentSessions().find(session => session.name === threadName);
   if (selected?.projectPath) {
     if (selectedAgent.value === "copilotCli" && !form.copilotCwd) form.copilotCwd = selected.projectPath;
-    if (selectedAgent.value !== "copilotCli" && !form.codexCwd) form.codexCwd = selected.projectPath;
+    if (selectedAgent.value !== "copilotCli") form.codexCwd = selected.projectPath;
   }
 }
 
@@ -781,32 +784,21 @@ async function apply() {
     return;
   }
   applySaving.value = true;
-  applyError.value = "";
+    applyError.value = "";
   try {
-    if (selectedAgent.value === "codex" && !form.codexThreadId) {
-      const title = form.codexThreadName.trim() || fallbackCodexThreadName();
-      const project = currentProject();
-      const matches = agentSessions().filter(session =>
-        session.name === title && (!project || !session.projectPath || samePath(session.projectPath, project))
-      );
-      if (matches.length === 1 && matches[0].id) {
-        form.codexThreadId = matches[0].id;
-        form.codexThreadName = matches[0].name;
-      } else if (matches.length > 1) {
-        throw new Error(`存在 ${matches.length} 个同名会话，请按最后会话时间从下拉列表中选择。`);
-      }
-    }
-    if (selectedAgent.value === "codex" && !form.codexThreadId) {
-      const title = form.codexThreadName.trim() || fallbackCodexThreadName();
-      const response = await fetch("/api/agent/threads", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "create", title, prompt: "", cwd: form.codexCwd || undefined })
+    if (selectedAgent.value === "codex") {
+      if (!form.codexThreadName.trim()) form.codexThreadName = fallbackCodexThreadName();
+      await bindCodexSessionForSave(form, async (request) => {
+        const response = await fetch("/api/agent/threads", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request)
+        });
+        return {
+          statusCode: response.status,
+          data: await response.json().catch(() => ({})) as Record<string, unknown>
+        };
       });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || !body.thread?.id) throw new Error(body.message || "创建 Codex 会话失败。");
-      form.codexThreadId = body.thread.id;
-      form.codexThreadName = body.thread.title || title;
     }
     store.applyQuickSetup({ ...form, agentRoleId: String(form.agentRoleId || "") });
     await store.save();
@@ -1329,7 +1321,7 @@ async function apply() {
                     class="full-span"
                     label="项目目录"
                     placeholder="留空，使用 RabiRoute 根目录"
-                    hint="可不绑定项目；留空时 Codex runtime 在 RabiRoute 根目录创建或投递"
+                    hint="用于同名任务的自动查找和新建；选择已有任务时会采用任务自己的目录"
                     persistent-hint
                   >
                     <template #append-inner>
@@ -1344,7 +1336,7 @@ async function apply() {
                     :items="sessionNames()"
                     :label="selectedAgent === 'codex' ? '会话名 + 最后会话时间' : '会话线程名'"
                     placeholder="选择已有会话，或输入新会话名"
-                    :hint="selectedAgent === 'codex' ? '选择时按线程 ID 精确绑定；输入不存在的名字会创建新会话' : '没有扫到时也可以手动填写'"
+                    :hint="selectedAgent === 'codex' ? '显示全部 Desktop 会话；输入名称后先自动查找，只有不存在时才创建' : '没有扫到时也可以手动填写'"
                     persistent-hint
                     @update:model-value="selectSession"
                   >
@@ -1353,15 +1345,6 @@ async function apply() {
                       <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描" @click.stop="runAgentScan" />
                     </template>
                   </v-combobox>
-                  <v-text-field
-                    v-if="selectedAgent === 'codex'"
-                    v-model="form.agentModel"
-                    class="full-span"
-                    label="模型覆盖"
-                    placeholder="留空，使用 Codex runtime 默认模型"
-                    hint="只在需要强制指定 Agent 模型时填写"
-                    persistent-hint
-                  />
                   </div>
                 </div>
               </v-window-item>

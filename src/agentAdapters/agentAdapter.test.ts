@@ -3,7 +3,7 @@ import test from "node:test";
 import { createAgentAdapter } from "./agentAdapter.js";
 import { normalizeAgentAdapters, parseAgentAdapterType } from "./types.js";
 
-test("codex agent adapter exposes the shared Runtime delivery entry", () => {
+test("codex agent adapter exposes the Desktop-owner delivery entry", () => {
   const adapter = createAgentAdapter("codex");
   assert.equal(adapter.type, "codex");
   assert.equal(typeof adapter.deliver, "function");

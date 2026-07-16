@@ -1,5 +1,5 @@
-export const CODEX_APP_SERVER_CHANNEL = "codex-shared-runtime";
-export const CHATGPT_DESKTOP_HOST_NAME = "ChatGPT";
+export const CODEX_DESKTOP_CHANNEL = "desktop-ipc";
+export const CHATGPT_DESKTOP_HOST_NAME = "Codex/ChatGPT Desktop";
 
 function nonEmptyString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -39,9 +39,9 @@ export function resolveCodexRuntimeState(
     ...discoveredState,
     ...currentReportedState,
     agentAdapterType: "codex",
-    deliveryTransport: CODEX_APP_SERVER_CHANNEL,
+    deliveryTransport: CODEX_DESKTOP_CHANNEL,
     desktopHostName: CHATGPT_DESKTOP_HOST_NAME,
-    desktopHostRequired: false
+    desktopHostRequired: true
   };
   const lastNotificationAt = nonEmptyString(merged.lastNotificationAt);
   const lastNotificationError = nonEmptyString(merged.lastNotificationError);
@@ -52,8 +52,8 @@ export function resolveCodexRuntimeState(
       ...merged,
       bound: false,
       deliveryHealthy: false,
-      lastDeliveryChannel: CODEX_APP_SERVER_CHANNEL,
-      message: `Codex 共享 Runtime 投递失败：${lastNotificationError}`
+      lastDeliveryChannel: CODEX_DESKTOP_CHANNEL,
+      message: `Codex Desktop 投递失败：${lastNotificationError}`
     };
   }
 
@@ -62,10 +62,10 @@ export function resolveCodexRuntimeState(
       ...merged,
       bound: Boolean(monitorThreadId),
       deliveryHealthy: true,
-      lastDeliveryChannel: CODEX_APP_SERVER_CHANNEL,
+      lastDeliveryChannel: CODEX_DESKTOP_CHANNEL,
       message: monitorThreadId
-        ? "Codex 已通过共享 Runtime 投递；桌面端与 CLI 使用同一会话源。"
-        : "Codex 共享 Runtime 已接受最近投递，但尚未上报线程标识。"
+        ? "消息已由 Codex Desktop owner 接收，并在桌面任务中实时显示。"
+        : "Codex Desktop 已接受最近投递，但尚未上报任务标识。"
     };
   }
 

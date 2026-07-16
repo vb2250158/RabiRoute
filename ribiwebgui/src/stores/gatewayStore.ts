@@ -20,6 +20,7 @@ import {
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
   validateGatewayPortConflicts
 } from "@shared/gatewayConfigModel";
+import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
 
 const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
 const isPluginShell = window.location.pathname.startsWith("/plugin/");
@@ -369,6 +370,19 @@ export const useGatewayStore = defineStore("gateway", () => {
     saving.value = true;
     error.value = "";
     try {
+      if (selectedGateway.value) {
+        await bindCodexSessionForSave(selectedGateway.value, async (request) => {
+          const response = await fetch("/api/agent/threads", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(request)
+          });
+          return {
+            statusCode: response.status,
+            data: await response.json().catch(() => ({})) as Record<string, unknown>
+          };
+        });
+      }
       sharedAutoAssignGatewayPorts(gateways.value, Number(meta.value.managerPort || 0));
       validateGatewayPortConflicts(gateways.value);
       const savedEditVersion = editVersion.value;

@@ -8,7 +8,7 @@
 
 - **本地验收：通过。** record-first 连接对话、可选常驻转写入口、统一 JSONL、空闲审阅、触摸板引导、周期反思、持续下行流、无任务主动投递、AIUI 原生 ASR/TTS Adapter、TTS/ASR 交接、配置助手原生 `LanguageModel`/外层 Agent 双入口、双模式 UI、CXR 电量链路、Ink resize、启动安全和最终 AIX 均已通过自动化测试。
 - **真实服务链路：历史闭环通过，当前实现待重验。** 公网 Relay、本机 RabiRoute 和真实 Codex 曾完成双向独立队列、无输入主动投递、observation 快速落盘、触摸板审阅、无任务主动回复、统一账本、去重及远程配置回滚。此后 record-first 常驻入口和审阅提示发生变化，旧 E2E 已因版本、AIX、实现摘要或时效不匹配被证据门判为 `stale-live-e2e`，不能证明当前代码。Codex app-server 暂时超时只会延后审阅并保留账本游标，不再使 RabiLink 路由进程退出。
-- **1.0.16 云端与真机验收：待完成。** 1.0.15 真机复现了卡片放大后左上角文字叠画；1.0.16 改为卡片/沉浸界面共用唯一 87px HUD，并将 Ink 0.13 resize 验收从总亮点检查升级为五行完整性检查。当前包保留 `enqueue` + 有界文本时长 watchdog，并把页面对 `SpeechRecognition` / `speechSynthesis` 的直接控制收敛到 `AiuiAsrInputAdapter` 和 `AiuiTtsOutputAdapter`。21/21 本地验收已通过，仍需上传并在真眼镜核验。
+- **1.0.18 云端与真机验收：待完成。** 1.0.17 增加眼镜云日志离线队列和双重隐私过滤；1.0.18 修正发布包 Relay 地址注入，避免包内保留示例域名。当前包仍需上传并在真眼镜核验。
 
 这里的“原生 AI”是 AIUI 页面内的 `LanguageModel`，属于灵珠提供的原生模型能力，但不是递归调用当前绑定灵珠智能体的完整 Agent Loop。它不会自动继承外层智能体的记忆、变量或插件；外层智能体仍可把已确认的严格 `intent` 传给页面。
 
@@ -19,12 +19,12 @@
 | 项目 | 当前值 |
 | --- | --- |
 | 云端智能体 | `RabiLink` |
-| 本地待发布版本 | `1.0.16` |
+| 本地待发布版本 | `1.0.18` |
 | 当前云端版本 | 未重新读取 |
 | AIX | `dist/rabilink-aiui.aix` |
 | AIX / Craft 共享 VERSION | `19429247-309a-467c-bb97-aa2b5e309599` |
 | AIX SHA256 | `1ec077b3e44785b5175d184f8ac39566a4016b8f126d5fb850aa690056e4a023` |
-| 1.0.16 云端状态 | 未上传；不得自动执行外部发布 |
+| 1.0.18 云端状态 | 未上传；不得自动执行外部发布 |
 | 本地验收 | 21/21 通过 |
 
 源码 AIX、`dist/delivery/rabilink-aiui.aix` 和 ASCII 临时镜像必须保持相同 SHA256。
@@ -39,8 +39,9 @@
 | 重试、暂停低于模式切换层级 | 本地通过 | `utilityAction` 位于滑轨下方，无 border/background；配置助手不显示伪“说话”按钮 | 眼镜可读性确认 |
 | 滑动直接切换，不再点击进入 | 本地 Ink/Craft 仿真通过 | Ink 0.13/0.14 从两个入口 resize；触摸事件走同页状态机 | 眼镜真实触摸板方向 |
 | 左下时钟图标和时间 | 本地通过 | `clockIcon` + `HH:mm` 在沉浸式 HUD 和 448×150 卡片均完成像素渲染 | 眼镜本地时间核对 |
-| 电量左侧显示发布版本 | 本地通过 | `craft-release.json` 构建注入 `v1.0.16`；源码、编译页和最终 AIX 三层审计均检查无占位符 | 眼镜核对版本字样 |
-| token 只由智能体临时注入 | 本地通过 | 新包不读取或写入页面设置中的 token；首次启动删除旧明文 token，并把旧 cursor/TTS 队列的 token 首尾片段迁移为不透明指纹；不同 token 的 observation、cursor 和待播 TTS 队列互不继承 | 用无 token 调用确认只显示等待连接 |
+| 电量左侧显示发布版本 | 本地通过 | `craft-release.json` 构建注入 `v1.0.23` | 眼镜核对版本字样 |
+| 无 token 首次设置 | 本地协议与运行时通过 | 无凭证时进入独立 Setup，显示 SN 与 `/manage`；后台绑定后一次性领取 `rbd_` 并写入 Agent 隔离的 `localStorage`，随后自动进入正常 HUD | 真眼镜核对 SN 与自动切页 |
+| token 与队列隔离 | 本地通过 | 不在普通设置中读写主 token；设备凭证按 Relay + SN 隔离；cursor、observation 与待播 TTS 队列按不透明 token 指纹隔离 | 换绑后确认不继承旧队列 |
 | 右下电量图标、百分比和充电标记 | 本地 CXR 链路通过 | 97% + charging fixture 完成 Ink 渲染；Relay 状态覆盖鉴权、持久化、过期清空；不接受浏览器或手机通用电量 | 最终 AIX 读取实时眼镜 CXR 电量 |
 | 默认连接对话、配置助手直接可说 | 本地通过 | 模式控制语句由配置 ASR 直接执行；其他完整原话进入惰性创建的 AIUI 原生 `LanguageModel`，模型只能从 85 条动作中发出白名单 toolcall，澄清/TTS 后自动续轮；外层 Agent `intent` 保持严格匹配 | 眼镜连续说两条自然语言配置需求 |
 | 连接对话不维护回答任务状态 | 真实链路通过 | observation 上行 `/input` 返回 accepted；PC 在 435ms 内写入统一账本并释放，触摸板审阅后绑定 `RabiActive` 的真实 Codex 约 68 秒才独立回复 | 眼镜长时间运行 |
@@ -93,7 +94,7 @@ npm run delivery:verify
 - `dist/local-acceptance.json`：21 项本地验收矩阵。
 - `dist/live-relay-codex.json`：脱敏的公网 Relay + 本机 Rabi + 真实 Codex 双向队列和配置回滚报告；报告绑定发布版本、AIX SHA256、实现摘要与生成时间，过期或不匹配时只作历史记录。
 - `dist/config-rollback-e2e.json`：独立配置写入、读回和精确回滚报告。
-- `dist/craft-render-acceptance.json`：历史 AIX 的 Craft 模式/ASR 像素采样；其 VERSION/SHA256 与 1.0.16 不同，当前包上传后必须重做，不能作为本次云端证据。
+- `dist/craft-render-acceptance.json`：历史 AIX 的 Craft 模式/ASR 像素采样；其 VERSION/SHA256 与 1.0.18 不同，当前包上传后必须重做，不能作为本次云端证据。
 - `dist/craft-upload-status.json`：云端上传、工具 Schema 和版本可见性。
 - `dist/craft-review-status.json`：云端绑定、提审按钮和未提交状态。
 - `dist/goal-evidence.json`：完整目标的已证明项与外部状态缺口。
@@ -104,9 +105,9 @@ npm run delivery:verify
 
 ## 设备回来后的最终验收
 
-1. 手机和眼镜可用后，把本地 `RabiLink 1.0.16` AIX 上传到 Craft；上传和提审都需要账号所有者明确授权。
+1. 手机和眼镜可用后，把本地 `RabiLink 1.0.18` AIX 上传到 Craft；上传和提审都需要账号所有者明确授权。
 2. 审核通过后，在 Rokid AI App 智能体商店添加/更新 RabiLink，并确认智能体管理中可见。
-3. 手机连接眼镜，启动 RabiLink AIUI，并先确认电量左侧显示 `v1.0.16`；不要用 ADB 把 `.aix` 当 APK 安装。
+3. 手机连接眼镜，启动 RabiLink AIUI，并先确认电量左侧显示 `v1.0.18`；不要用 ADB 把 `.aix` 当 APK 安装。
 4. 真实触摸板后滑到配置助手、前滑回连接对话。
 5. 连续说话验证真实 ASR 与普通回复 TTS；断开或隐藏页面后从 PC 主动投递两条无任务提醒，再恢复连接对话，确认两条都按顺序播报且中途再次隐藏仍可续播。
 6. 在配置助手连续说“帮我看看现在用的配置”和“把路由信息读给我”，确认原生模型理解、白名单动作或澄清、TTS watchdog 和下一轮 ASR 顺序完成；故意等待一次完整播报后确认不会停在“正在播报”。再让外层 Agent 以 `intent=读取配置` 调起，核对严格入口仍可用。

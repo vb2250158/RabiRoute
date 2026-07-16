@@ -140,7 +140,10 @@ assert(source.includes('addEventListener("toolcall"') && voiceSource.includes('e
 assert(source.includes("assistantModelBusy") && source.includes("assistantModelState"), "The HUD must expose native-model progress without starting a competing ASR round.");
 assert(source.includes('this.recognitionPurpose = purpose') && source.includes('purpose === "configuration"'), "The shared one-round recognizer must distinguish configuration and transcription ownership.");
 assert(!source.includes("submitAssistantIntent") && !source.includes("pollAssistantMessages") && !source.includes("assistantTaskId"), "Configuration mode must not own a Relay task lifecycle.");
-assert(hasDeclaration(".assistantConversation", "background-color", "#000000"), "The shared conversation surface must not emit a filled panel over the user's view.");
+assert(
+  hasDeclaration(".assistantConversation", "background-color", "(?:#000000|var\\(--color-surface,\\s*#000000\\))"),
+  "The shared conversation surface must use the transparent-display black surface token."
+);
 assert(source.includes("连接对话") && source.includes("配置助手"), "Both product modes must remain visibly labeled with the agreed names.");
 assert(source.includes("publishRabiLinkVoiceInput") && source.includes("pollAgentMessages") && source.includes("getRabiLinkMessageStream"), "Connection conversation must publish input events and consume one continuous downlink stream.");
 assert(!source.includes("trackAgentTask") && !source.includes("agentPendingTaskIds") && !source.includes("agentPendingCount"), "Connection conversation must not expose per-task state.");
@@ -185,13 +188,14 @@ const assistantHudHeight = pxValue(".modeHeader", "height")
   + 8;
 assert(assistantHudHeight === 87, `Shared card/immersive HUD must keep its exact 87px budget: ${assistantHudHeight}px.`);
 
-for (const requiredHandler of ["onShow", "onHide", "onVoiceWakeup", "onKeyUp", "startTranscription", "scheduleTranscriptionRestart", "executeConfigurationIntent"]) {
+for (const requiredHandler of ["onShow", "onHide", "onVoiceWakeup", "onKeyDown", "onKeyUp", "startTranscription", "scheduleTranscriptionRestart", "executeConfigurationIntent"]) {
   assert(source.includes(requiredHandler), `AIUI page must keep ${requiredHandler}.`);
 }
 for (const key of ["arrowright", "arrowleft", "arrowup", "arrowdown", "backspace", "enter", "globalhook"]) {
   assert(source.includes(`"${key}"`), `AIUI key handler must include ${key}.`);
 }
-assert(source.includes('code === "arrowdown" || code === "arrowright" || code === "backspace"'), "Transcription mode must map the physical down/back swipe to the configuration assistant.");
+assert(source.includes('code === "arrowdown" || code === "arrowright"'), "Transcription mode must map physical down/right input to the configuration assistant.");
+assert(!source.includes('code === "arrowdown" || code === "arrowright" || code === "backspace"'), "Transcription mode must leave Backspace to the host return/close behavior.");
 assert(source.includes('code === "arrowup" || code === "arrowleft" || code === "backspace"'), "Configuration UI must map physical up/forward and left/back input to transcription mode.");
 assert(!source.includes("startVoiceCommand") && !source.includes("toggleVoiceCommand"), "Configuration mode must share the bounded AIUI recognizer instead of reviving the removed legacy voice-command controller.");
 assert(!source.includes("finishToConfigurationAssistant") && !source.includes("this.finish()"), "Mode switching must keep the same Interactive InkView alive.");

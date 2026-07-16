@@ -123,6 +123,24 @@ test("shared config normalization accepts canonical Agent adapter ids only", () 
   assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: [] })).agentAdapters, []);
 });
 
+test("route names accidentally stored as Codex task ids migrate back to names", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    codexThreadId: "RabiLink",
+    codexThreadName: undefined
+  }));
+
+  assert.equal(normalized.codexThreadId, undefined);
+  assert.equal(normalized.codexThreadName, "RabiLink");
+});
+
+test("valid Codex task ids remain internal bindings", () => {
+  const codexThreadId = "019f0000-0000-7000-8000-000000000015";
+  const normalized = normalizeGatewayDefinition(gateway({ codexThreadId, codexThreadName: "RabiLink" }));
+
+  assert.equal(normalized.codexThreadId, codexThreadId);
+  assert.equal(normalized.codexThreadName, "RabiLink");
+});
+
 test("default gateway agent adapter uses codex", () => {
   assert.deepEqual(normalizeGatewayDefinition(gateway()).agentAdapters, ["codex"]);
 });

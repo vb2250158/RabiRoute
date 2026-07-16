@@ -73,20 +73,17 @@ RabiRoute 决定自动执行、生成草稿、等待确认或拒绝。
 - JSONL 消息记录、心跳记录、投递记录。
 - 可编辑 Prompt 模板、路由规则和路由人格包。
 - Pipeline preset：为 QQ、语音、Webhook 任务声明输入输出意图。
-- Agent 端适配器：当前支持 `codex`、命令式 `copilotCli` 和 Marvis handoff；`codex` 连接 Manager 拥有的唯一共享 app-server，Codex/ChatGPT Desktop 与 CLI 连接同一 Runtime。
-- Codex 默认通过 `model/list` 跟随 runtime 当前默认模型，`agentModel` 只有显式填写时才固定覆盖；默认使用 `workspaceWrite` 沙箱，审批无法得到明确结论时按拒绝处理。
+- Agent 端适配器：当前支持 `codex`、命令式 `copilotCli` 和 Marvis handoff；`codex` 的实际消息只通过 Desktop IPC 交给 Codex/ChatGPT Desktop 当前任务执行。
+- Codex 消息沿用目标 Desktop 任务自己的模型、工具、沙箱和审批；RabiRoute 不再为实际轮次另启 app-server，也不提供隐藏备用路径。
 
-这里的名词不能混用：OpenAI 是 provider，Codex 是 agent，共享 `codex app-server` 是 Runtime，Desktop/CLI/Rabi 是客户端，具体 GPT 版本是 model。桌面产品改名或合并不改变 RabiRoute 的 `codex` adapter id。
+这里的名词不能混用：OpenAI 是 provider，Codex 是 agent，Codex/ChatGPT Desktop 是用户可见任务的 owner，Desktop IPC 是 RabiRoute 的投递通道，具体 GPT 版本是任务自己的 model。桌面产品改名或合并不改变 RabiRoute 的 `codex` adapter id。
 
 ```text
-                         唯一会话/任务真源
-                  codex app-server :4510
-                 /          |           \
-       RabiRoute gateway  Desktop     Codex CLI
-          精确 threadId    实时刷新     --remote
+RabiRoute gateway -> Desktop IPC -> ChatGPT/Codex Desktop task owner
+                                  -> Desktop-managed Codex runtime + tools
 ```
 
-桌面端首次切换运行 `npm run configure:codex-desktop`，重启桌面端后生效；CLI 使用 `npm run codex:shared -- <args>`。RibiWebGUI 下拉显示“会话名 + 最后会话时间”，内部保存完整线程 ID；直接输入不存在的名称会在共享 Runtime 中创建新会话。
+RabiRoute 不修改 `CODEX_APP_SERVER_WS_URL`，也不要求桌面端监听固定端口。RibiWebGUI 下拉显示“会话名 + 最后会话时间”，内部保存完整线程 ID；直接输入不存在的名称会先创建空的持久化任务，再由 Desktop owner 接收首条真实消息。Desktop 未启动或任务加载失败时，投递明确失败。
 
 ## 文档索引
 

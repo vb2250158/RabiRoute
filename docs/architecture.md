@@ -63,12 +63,12 @@ QQ / 微信 / 飞书 / Discord / Slack / Email / Webhook / Scheduler
 | 层 | RabiRoute 中的含义 | 当前选择 |
 | --- | --- | --- |
 | Provider | 提供账号、服务和模型能力 | OpenAI |
-| Agent / Runtime | 维护线程、turn、工具调用和执行 | Codex，adapter id 为 `codex` |
-| Transport | RabiRoute 与 runtime 的机器接口 | `codex app-server` stdio JSONL 请求、响应与通知 |
-| Host | 用户查看、聊天和进入 Codex 模式的桌面界面 | ChatGPT desktop，可选 |
-| Model | runtime 为 turn 选择的具体模型 | 默认跟随 runtime，允许 `agentModel` 显式覆盖 |
+| Agent / Runtime | 维护线程、turn、工具调用和执行 | Desktop 管理的 Codex，adapter id 为 `codex` |
+| Transport | RabiRoute 与任务 owner 的机器接口 | Codex Desktop IPC |
+| Host / Owner | 用户查看任务，同时拥有实际轮次 | Codex/ChatGPT Desktop，必需 |
+| Model | 目标任务为 turn 选择的具体模型 | 沿用 Desktop 任务设置 |
 
-ChatGPT desktop 是宿主，不是 transport；Codex 是 agent/runtime，不是 model；OpenAI 是 provider，不是 adapter。RabiRoute 的主链路不依赖 Desktop IPC，也不启用实验性 app-server WebSocket。
+Codex/ChatGPT Desktop 同时是用户可见宿主和任务 owner；Codex 是 agent/runtime，不是 model；OpenAI 是 provider，不是 adapter。RabiRoute 只通过 Desktop IPC 投递，不启用 app-server WebSocket，也不为实际消息启动备用 Runtime。
 
 ## 核心分层
 
@@ -173,7 +173,7 @@ routes:
 
 当前内置：
 
-- `codex`：通过官方 `codex app-server` 的 stdio 协议投递到固定线程，支持空闲时 `turn/start` 和运行中 `turn/steer`。ChatGPT desktop 只负责可选的桌面呈现，不参与线程寻址或消息投递。
+- `codex`：通过 Codex Desktop IPC 投递到完整任务 ID；目标任务未加载时用 deeplink 请 Desktop 打开。Desktop owner 决定 start/steer，并执行实际轮次。
 
 未来 Agent 端适配器类型：
 
@@ -191,14 +191,12 @@ routes:
 
 当前 Codex 规则：
 
-- 固定线程名，例如 `QQ 消息监听`。
-- adapter 启动 app-server 后先完成 `initialize` / `initialized` 握手，再发现、恢复或创建线程。
-- 空闲时用 `turn/start` 创建 turn。
-- 运行中用 `turn/steer` 追加引导。
-- 短时间多条消息先合并，再投递。
-- 如果 `turn/steer` 失败且 active turn 已结束，重新读取线程状态后回退到 `turn/start`。
-- `agentModel` 为空时通过 `model/list` 使用 runtime 当前标记的默认模型；RabiRoute 不保存一份会过期的模型默认值。
-- 默认沙箱为 `workspaceWrite`。app-server 发起的 command、file、network、permission 或 MCP 审批必须获得明确结论；未知请求、超时或连接中断都拒绝继续。
+- 下拉显示任务名和最后时间，配置内部保存完整任务 ID，并用 `cwd` 交叉校验。
+- RabiRoute 连接 Desktop IPC；目标任务未加载时用 `codex://threads/<id>` 请 Desktop 打开，再重试投递。
+- 有活动轮次时使用 Desktop follower steer，否则由 Desktop owner start。
+- 用户输入不存在的新名称时，项目固定的 app-server 只负责创建空任务并在首条消息后恢复用户名称；它不接收真实 prompt、不执行 turn，完成元数据操作后退出。
+- 实际 prompt 始终由 Desktop owner 执行，沿用任务自己的模型、工具、沙箱和审批。
+- Desktop 未就绪、任务失效或 `cwd` 不一致时 fail closed，不回退到另一个 Runtime 或同名任务。
 
 这是 RabiRoute 很重要的边界：它控制“投递时机和会话形态”，但不替 Agent 决定具体答案。
 
@@ -206,7 +204,7 @@ routes:
 
 负责外部写入和回复发送的安全门。
 
-这里有两道不同的门：app-server approval 管 Codex runtime 内的命令、文件、网络和工具权限；RabiRoute Action Gate 管 QQ、文档、设备和外部 API 等业务外发。两者都默认 fail closed，不能用其中一道门的允许结果替代另一道。
+这里有两道不同的门：Desktop 任务自己的审批管 Codex runtime 内的命令、文件、网络和工具权限；RabiRoute Action Gate 管 QQ、文档、设备和外部 API 等业务外发。不能用其中一道门的允许结果替代另一道。
 
 当前只保留基础发送 API 和 `/ping` 类简单命令。
 
@@ -270,13 +268,13 @@ NapCat WebSocket Client
   -> editable templates
   -> agent adapter
        codex
-  -> codex app-server (stdio)
-  -> Codex fixed thread
-       turn/start / turn/steer
-       workspaceWrite / fail-closed approvals
+  -> Codex Desktop IPC
+  -> Desktop task owner
+       follower start / steer
+       Desktop task model / tools / approvals
 ```
 
-ChatGPT desktop 可以展示同一个 Codex 线程，但不在上述运行主链路中。
+Codex/ChatGPT Desktop 是上述 Codex 投递主链的必需 owner；没有 Desktop 就不会执行消息。
 
 NapCat 插件不是业务核心，它只是控制面入口：
 

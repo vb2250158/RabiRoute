@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 import { handleAgentThreadRequest, type AgentThreadRequest } from "../agentThreads.js";
+import { listCodexDesktopThreads } from "../codexDesktopBridge.js";
 import { agentStateReportDecision } from "../agentAdapters/stateReportOrder.js";
 import {
   deployAstrbotAdapter,
@@ -78,7 +79,6 @@ import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalC
 import { handleRabiApi } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
-import { ensureCodexSharedRuntime, stopOwnedCodexSharedRuntime } from "./codexSharedRuntimeOwner.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import {
   applyMemoryConsolidationResult,
@@ -1492,10 +1492,10 @@ function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdap
     bound: false,
     monitorThreadName: resolveCodexThreadName(definition),
     monitorProjectPath: normalizeCodexCwd(definition.codexCwd) ?? rootDir,
-    deliveryTransport: "codex-shared-runtime",
-    desktopHostName: "ChatGPT",
-    desktopHostRequired: false,
-    message: "等待 Codex 共享 Runtime 首次投递；桌面端和 CLI 连接同一 Runtime。"
+    deliveryTransport: "desktop-ipc",
+    desktopHostName: "Codex/ChatGPT Desktop",
+    desktopHostRequired: true,
+    message: "等待 Codex Desktop 首次接收投递；Desktop 未就绪时不会启动备用 Runtime。"
   };
 }
 
@@ -3287,7 +3287,6 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
 }
 
 export async function startManager(): Promise<void> {
-  await ensureCodexSharedRuntime(path.join(rootDir, "data", "runtime"));
   loadRuntimes();
   for (const runtime of runtimes.values()) {
     if (runtime.definition.enabled) {
@@ -3433,8 +3432,17 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (requestUrl.pathname === "/api/agent/threads" && (request.method === "GET" || request.method === "POST")) {
+        let desktopWorkspaces: string[] = [];
+        try {
+          desktopWorkspaces = listCodexDesktopThreads({ limit: 10_000 })
+            .map((thread) => thread.cwd?.trim())
+            .filter((value): value is string => Boolean(value));
+        } catch {
+          // Keep the configured workspace allowlist when Desktop state is not readable.
+        }
         const allowedWorkspaces = [...new Set([
           rootDir,
+          ...desktopWorkspaces,
           ...[...runtimes.values()]
             .map((runtime) => runtime.definition.codexCwd?.trim())
             .filter((value): value is string => Boolean(value))
@@ -3444,7 +3452,8 @@ export async function startManager(): Promise<void> {
           ? Promise.resolve<AgentThreadRequest>({
               action: "list",
               query: requestUrl.searchParams.get("query") ?? "",
-              limit: Number(requestUrl.searchParams.get("limit") ?? "20")
+              limit: Number(requestUrl.searchParams.get("limit") ?? "100"),
+              offset: Number(requestUrl.searchParams.get("offset") ?? "0")
             })
           : readJsonBody<AgentThreadRequest>(request);
         void requestBody
@@ -3836,7 +3845,6 @@ export async function startManager(): Promise<void> {
     console.log(`gateway-manager shutting down: ${reason}`);
     clearInterval(configWatcher);
     rabiLinkRelayRuntime.stop();
-    stopOwnedCodexSharedRuntime();
     stopAllGateways();
     server.close(() => {
       process.exit(0);

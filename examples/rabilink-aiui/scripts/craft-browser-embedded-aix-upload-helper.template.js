@@ -10,7 +10,7 @@
   const DEFAULT_TOOLS = JSON.parse(__RABILINK_TOOLS_JSON_STRING__);
   const DEFAULTS = {
     agentName: "RabiLink",
-    version: "1.0.16",
+    version: "1.0.23",
     description: "AI glasses continuous Agent stream and native AIUI LanguageModel configuration surface through RabiLink Relay.",
     iconUrl: "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
     permissions: "RECORD_AUDIO,SPEECH_RECOGNITION,INTERNET",

@@ -7,6 +7,16 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
+if (-not $RelayBaseUrl) {
+  $relayConfigPath = Join-Path $projectRoot "..\..\data\rabilink-relay\config.json"
+  if (Test-Path -LiteralPath $relayConfigPath) {
+    $relayConfig = Get-Content -LiteralPath $relayConfigPath -Raw | ConvertFrom-Json
+    $RelayBaseUrl = [string]$relayConfig.publicBaseUrl
+  }
+}
+if (-not $RelayBaseUrl) {
+  throw "RelayBaseUrl is required. Pass -RelayBaseUrl or configure data\rabilink-relay\config.json publicBaseUrl."
+}
 if (-not $OutputDir) {
   $OutputDir = Join-Path $projectRoot "dist\craft-upload"
 }

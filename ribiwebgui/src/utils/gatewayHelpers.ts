@@ -456,7 +456,7 @@ export function explainAgentError(error: unknown): string {
   const text = String(error || "");
   if (!text) return "";
   if (text.includes("Codex app-server")) {
-    return `Codex 共享 Runtime 连接失败：${text}。请检查 127.0.0.1:4510、项目锁定的 @openai/codex runtime 与登录状态。`;
+    return `Codex app-server 连接失败：${text}。请检查项目锁定的 @openai/codex runtime、工作目录与登录状态。`;
   }
   if (text.includes("thread not found")) {
     return "Codex 线程 ID 已失效。请在 RibiWebGUI 中重新绑定或让 manager 重新发现目标线程。";
@@ -567,7 +567,7 @@ export function agentConnectionReasons(gateway: GatewayDefinition, runtime: Runt
       } else if (adapter === "copilotCli") {
         reasons.push("Copilot CLI 尚未成功投递到目标 session；请完成同一会话连续两次注入烟测后再视为可用。");
       } else if (adapter === "codex") {
-        reasons.push(`尚未绑定 Codex Agent 线程。请确认 app-server 可访问“${gateway.codexThreadName || gateway.name || gateway.id}”。`);
+        reasons.push(`尚未绑定 Codex Desktop 任务。请先打开 Desktop，并确认任务“${gateway.codexThreadName || gateway.name || gateway.id}”属于当前工作目录。`);
       }
     }
     if (state.lastNotificationError) reasons.push(explainAgentError(state.lastNotificationError));

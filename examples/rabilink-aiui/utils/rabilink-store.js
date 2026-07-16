@@ -3,10 +3,14 @@ import wx from "wx";
 const STORAGE_KEY = "rabilink-aiui-settings";
 const TRANSCRIPT_QUEUE_KEY = "rabilink-aiui-transcript-queue";
 const AGENT_MESSAGE_QUEUE_KEY = "rabilink-aiui-agent-message-queue";
+const CLOUD_LOG_QUEUE_KEY = "rabilink-aiui-cloud-log-queue";
+const DEVICE_CREDENTIAL_KEY = "rabilink-aiui-device-credential";
 const MAX_TRANSCRIPT_QUEUE_LENGTH = 2000;
 const MAX_TRANSCRIPT_QUEUE_AGE_MS = 48 * 60 * 60 * 1000;
 const MAX_AGENT_MESSAGE_QUEUE_LENGTH = 2000;
 const MAX_AGENT_MESSAGE_QUEUE_AGE_MS = 48 * 60 * 60 * 1000;
+const MAX_CLOUD_LOG_QUEUE_LENGTH = 500;
+const MAX_CLOUD_LOG_QUEUE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function normalizeTranscriptQueue(value) {
   const source = Array.isArray(value) ? value : value?.messages;
@@ -65,6 +69,39 @@ function normalizeAgentMessageQueue(value, expectedTokenKey = "") {
 
 function agentMessageQueueStorageKey(tokenKey = "") {
   return `${AGENT_MESSAGE_QUEUE_KEY}:${storageScope(tokenKey)}`;
+}
+
+function cloudLogQueueStorageKey(tokenKey = "") {
+  return `${CLOUD_LOG_QUEUE_KEY}:${storageScope(tokenKey)}`;
+}
+
+function normalizeCloudLogQueue(value, expectedTokenKey = "") {
+  const storedTokenKey = value && typeof value === "object" && !Array.isArray(value)
+    ? String(value.tokenKey || "")
+    : "";
+  if (storedTokenKey && expectedTokenKey && storedTokenKey !== expectedTokenKey) return [];
+  const source = Array.isArray(value) ? value : value?.logs;
+  const cutoff = Date.now() - MAX_CLOUD_LOG_QUEUE_AGE_MS;
+  const seen = new Set();
+  const rows = [];
+  for (const item of Array.isArray(source) ? source : []) {
+    if (!item || typeof item !== "object") continue;
+    const id = String(item.id || "").trim();
+    const message = String(item.message || "").trim();
+    const createdAt = Number(item.createdAt || 0);
+    if (!id || !message || (createdAt && createdAt < cutoff) || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({
+      id,
+      createdAt: createdAt || Date.now(),
+      time: String(item.time || ""),
+      level: String(item.level || "info"),
+      event: String(item.event || "aiui.runtime"),
+      message,
+      context: item.context && typeof item.context === "object" && !Array.isArray(item.context) ? item.context : {}
+    });
+  }
+  return rows.slice(-MAX_CLOUD_LOG_QUEUE_LENGTH);
 }
 
 function removeStorage(key) {
@@ -181,6 +218,79 @@ export function saveAgentMessageQueue(queue, tokenKey = "") {
   const normalizedTokenKey = storageScope(tokenKey);
   const next = normalizeAgentMessageQueue({ tokenKey: normalizedTokenKey, messages: queue }, normalizedTokenKey);
   wx.setStorageSync(agentMessageQueueStorageKey(normalizedTokenKey), { tokenKey: normalizedTokenKey, messages: next });
+  return next;
+}
+
+function deviceCredentialStorageKey(relayBaseUrl, serialNumber) {
+  const scope = `${String(relayBaseUrl || "").trim().replace(/\/+$/, "")}\n${String(serialNumber || "").trim().toUpperCase()}`;
+  return `${DEVICE_CREDENTIAL_KEY}:v1-${hashTokenPart(scope, 2166136261)}${hashTokenPart(Array.from(scope).reverse().join(""), 3339675911)}`;
+}
+
+export function loadDeviceCredential(relayBaseUrl, serialNumber) {
+  if (typeof localStorage === "undefined") return "";
+  try {
+    const value = localStorage.getItem(deviceCredentialStorageKey(relayBaseUrl, serialNumber));
+    const parsed = JSON.parse(value || "null");
+    const token = typeof parsed === "string" ? parsed : String(parsed?.token || "");
+    return token.startsWith("rbd_") ? token : "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveDeviceCredential(relayBaseUrl, serialNumber, token) {
+  const value = String(token || "").trim();
+  if (typeof localStorage === "undefined" || !value.startsWith("rbd_")) return false;
+  try {
+    localStorage.setItem(
+      deviceCredentialStorageKey(relayBaseUrl, serialNumber),
+      JSON.stringify({ token: value, savedAt: Date.now() })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function removeDeviceCredential(relayBaseUrl, serialNumber) {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    localStorage.removeItem(deviceCredentialStorageKey(relayBaseUrl, serialNumber));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function loadCloudLogQueue(tokenKey = "", legacyTokenKey = "") {
+  try {
+    const normalizedTokenKey = storageScope(tokenKey);
+    const scopedKey = cloudLogQueueStorageKey(normalizedTokenKey);
+    const scopedValue = wx.getStorageSync(scopedKey);
+    if (scopedValue && (Array.isArray(scopedValue) || Array.isArray(scopedValue.logs))) {
+      return normalizeCloudLogQueue(scopedValue, normalizedTokenKey);
+    }
+    const normalizedLegacyTokenKey = storageScope(legacyTokenKey || "unbound");
+    if (normalizedLegacyTokenKey !== normalizedTokenKey) {
+      const legacyKey = cloudLogQueueStorageKey(normalizedLegacyTokenKey);
+      const legacyValue = wx.getStorageSync(legacyKey);
+      if (legacyValue && (Array.isArray(legacyValue) || Array.isArray(legacyValue.logs))) {
+        const next = normalizeCloudLogQueue(legacyValue, String(legacyValue?.tokenKey || normalizedLegacyTokenKey));
+        wx.setStorageSync(scopedKey, { tokenKey: normalizedTokenKey, logs: next });
+        removeStorage(legacyKey);
+        return next;
+      }
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCloudLogQueue(queue, tokenKey = "") {
+  const normalizedTokenKey = storageScope(tokenKey);
+  const next = normalizeCloudLogQueue({ tokenKey: normalizedTokenKey, logs: queue }, normalizedTokenKey);
+  wx.setStorageSync(cloudLogQueueStorageKey(normalizedTokenKey), { tokenKey: normalizedTokenKey, logs: next });
   return next;
 }
 

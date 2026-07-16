@@ -74,35 +74,36 @@ npm run check:config
 
 ## Codex 没有收到投递
 
-当前正式链路是 RabiRoute 启动 `codex app-server` 子进程，并通过 stdio JSONL 投递。ChatGPT desktop 是否打开、是否显示目标线程都不影响这条链路。按下面顺序检查：
+当前正式链路是 `RabiRoute -> Codex Desktop IPC -> Desktop 任务 owner`。消息成功后应立即出现在 Codex/ChatGPT Desktop 的目标任务里。按下面顺序检查：
 
-1. 在 RabiRoute 根目录运行 `node node_modules/@openai/codex/bin/codex.js --version`，确认项目锁定的 runtime 已安装；全局 PATH 上的另一个 `codex` 不参与运行。
-2. 运行 `node node_modules/@openai/codex/bin/codex.js login status` 检查同一 runtime 的登录状态。不要把 `~/.codex/auth.json`、ChatGPT Cookie 或 token 复制进 RabiRoute 配置。
-3. 检查 route 的 `codexCwd` 是否存在且可访问，`codexThreadName` 是否为预期固定线程名。同名线程还必须匹配工作目录，避免消息进入另一个项目的旧线程。
-4. 查看当前 route 数据目录下的 `codex-app-server.stderr.log` 和 runtime stderr。正常启动会完成 `initialize` / `initialized`；stdout 只用于 JSONL 协议，不能混入普通日志。
-5. 检查 `agent-packets.jsonl`、`codex-app-server.stderr.log` 和 `gateway-status.json`，区分“路由未命中”“app-server 未启动”“线程绑定失败”和“turn 投递失败”。
+1. 先打开 Codex/ChatGPT Desktop，确认它本身能正常进入任务；RabiRoute 不负责启动或停止 Desktop Runtime。
+2. 在 RibiWebGUI 重新扫描 Codex。任务下拉应显示全部未归档任务的“任务名 + 最后会话时间”，不显示内部 ID。
+3. 检查 route 的 `codexCwd`。直接输入名称时，RabiRoute 会自动查找唯一同名任务；没有才创建，多个同名才要求选择。
+4. 检查 `agent-packets.jsonl` 与 `gateway-status.json`，区分“路由未命中”“Desktop IPC 未就绪”“任务 owner 未加载”和“任务 ID/cwd 失效”。
+5. 若错误含 `no-client-found`，RabiRoute 会用 `codex://threads/<id>` 打开目标任务并短暂重试；仍失败时消息不会投递，也不会切换到后台 Runtime。
 
-不要通过启动桌面窗口、寻找 IPC socket 或配置 WebSocket URL 来修复 stdio 连接；这些都不在正式 transport 中。
+不要设置 `CODEX_APP_SERVER_WS_URL` 或固定 4510 端口来修复投递。它会改变 Desktop 的启动依赖，而且不是 RabiRoute 的正式 transport。
 
 ## `Missing monitorThreadId` / 找不到固定线程
 
-这表示当前绑定不存在、已经失效，或同名线程的工作目录与 `codexCwd` 不匹配。Codex adapter 会通过 app-server 读取线程，无法安全复用时在配置的工作目录创建新线程。检查：
+这表示当前绑定不存在、自动解析出现歧义，或目标任务的工作目录与 `codexCwd` 不匹配。检查：
 
-- `codexThreadName` 和 `codexCwd` 是否都正确；线程身份不能只看名字。
+- `codexThreadId` 和 `codexCwd` 是否都正确；任务身份不能只看名字。
 - `codexCwd` 是否使用了已移动、大小写或符号链接含义不同的路径。
-- 旧 `gateway-status.json` 中的 thread id 只是一份运行状态，不是配置真源；重启对应 gateway 后应由 app-server 重新验证。
+- 任务是否已经归档、删除或来自另一个账号/`CODEX_HOME`。
+- 名称唯一或不存在时系统会自动绑定/创建；只有多个同名任务或精确 ID 的目录冲突才需要从下拉按最后时间重新选择。
 
 ## Agent 回合里没有 `codex_app__*` 线程工具
 
-后台 Agent 是否注入桌面连接器工具，与共享 Runtime 的投递健康是两件事。当前回合没有 `codex_app__*` 时，反复修改提示词或搜索 `ALL_TOOLS` 不会让工具出现。
+RabiRoute 的 Codex 消息现在由 Desktop 任务 owner 实际执行，因此会沿用该任务在当前桌面环境里注册的工具。如果某个工具仍不存在，说明它没有注册到该 Desktop 任务；反复修改提示词不会让工具出现。
 
-后台 Agent 应调用本机线程桥：
+需要由其他 Agent 管理 Codex 任务时，可调用本机线程桥：
 
 ```http
 POST http://127.0.0.1:8790/api/agent/threads
 ```
 
-支持 `list`、`read`、`create`、`send`。详细请求见 `docs/rabi-agent-interfaces.md`。该接口通过桌面端与 CLI 共用的共享 Runtime 工作，只允许使用当前 Route 已配置的 Codex 工作区；不要用 multi-agent 子 Agent 冒充正式线程。
+支持 `list`、`read`、`resolve`、`create`、`send`。`list` 可用 `offset` 分页访问全部任务；`resolve` 统一完成精确绑定、名称查找与必要的新建。详细请求见 `docs/rabi-agent-interfaces.md`。实际 `send` 仍通过 Desktop IPC；只允许在已配置的 Codex 工作区创建任务。
 
 不要为了消除报错在 ChatGPT desktop 里反复创建同名线程，这会增加歧义。
 
@@ -112,21 +113,19 @@ POST http://127.0.0.1:8790/api/agent/threads
 
 1. 重新构建并重启 manager 与对应 gateway，确认没有旧 Node 进程仍在运行旧产物。
 2. 区分历史 JSONL / stderr 记录和本次启动的新记录；旧日志可以保留用于审计，不要把它当成本次状态。
-3. 以本次启动生成的 app-server stderr 和 Agent 状态为准；当前 transport 不读取桌面 socket 或独立 WebSocket 地址。
+3. 以本次启动生成的 Agent 状态为准；`lastDeliveryChannel` 应为 `desktop-ipc`。
 
-如果全新启动仍产生这些错误，说明实际运行的仍是旧构建，应先核对启动目录和 `dist/` 生成时间，而不是继续修桌面应用。
+如果全新启动仍显示 `app-server-stdio`、共享 4510 或 Desktop 可选，说明实际运行的仍是旧构建；先核对启动目录和 `dist/` 生成时间。
 
-## Codex 模型不可用
+## Codex 模型或工具与预期不一致
 
-- `agentModel` 留空时，RabiRoute 通过 `model/list` 读取当前 runtime 标记的默认模型，并把该值用于线程恢复和 turn 投递。这是推荐配置。
-- 只有确实需要锁定模型时才填写 `agentModel`；模型列表会随 runtime 更新，不要照抄旧的 `*-codex` 模型名。
-- 显式模型被拒绝时，先用当前 Codex runtime 的模型能力确认名称，再更新 route 配置；不要在代码里增加另一个兜底模型常量。
+- RabiRoute 不覆盖 Desktop 任务的模型、工具、沙箱或审批；`agentModel` 只是旧配置兼容字段。
+- 在目标 Desktop 任务中调整模型或权限，再重新投递。
+- 如果消息出现在另一个任务，重新选择下拉项并检查 `codexCwd`；不要用任务名代替完整 ID。
 
 ## Codex 审批请求被拒绝或 turn 停止
 
-默认沙箱是 `workspaceWrite`。command、file、network、permission 或 MCP 等 app-server server request 必须获得明确允许；RabiRoute 无法识别请求、审批超时、连接中断或策略没有结论时都会 fail closed。
-
-这不是 ChatGPT desktop 的弹窗故障，也不能靠打开桌面宿主绕过。先确认任务是否确实需要超出工作区写入或联网，再通过明确、可审计的策略授权。Codex runtime approval 只管 Agent 执行权限，不等于允许 RabiRoute 向 QQ、文档、设备或其它外部系统写入；这些动作仍需经过 Outbox / Action Gate。
+命令、文件、网络或工具权限由目标 Desktop 任务处理。先确认任务是否确实需要超出工作区写入或联网，再在 Desktop 中明确授权。Desktop 任务审批只管 Agent 执行权限，不等于允许 RabiRoute 向 QQ、文档、设备或其它外部系统写入；这些动作仍需经过 Outbox / Action Gate。
 
 ## 普通群消息没有转发
 

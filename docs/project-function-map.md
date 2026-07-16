@@ -25,7 +25,7 @@ Message Adapter
   -> Outbox / Reply
 ```
 
-Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，`codex app-server` stdio 是 transport，ChatGPT desktop 是可选 host，具体 GPT 版本是 model。功能地图中的 `codex` 始终指 adapter id 和 Codex runtime，不指桌面应用或模型名。
+Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，Desktop IPC 是 transport，Codex/ChatGPT Desktop 是任务 owner，具体 GPT 版本由目标任务决定。功能地图中的 `codex` 始终指 adapter id，不指桌面应用或模型名。
 
 ## 分层地图
 
@@ -59,6 +59,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，`c
 | Webhook / FenneNote / XiaoAi | 已有 | HTTP payload、`voice-transcripts.jsonl` | forwarding、语音工作站、可选 RabiLink record-first 观察 | HTTP callback 到达时 | 写转写日志；普通模式可能投递 Agent，命中 `rabilinkRecordFirstSources` 时只写统一账本并等待审阅 | webhook 端口 / 路径、Route 变量 | `src/adapters/webhookAdapter.ts`、`src/rabilinkObservationRecorder.ts`、`src/messageEndpoints/webhookLikeScans.ts` | `docs/voice-interaction-workstation.md` |
 | RabiLink 本地兼容入口 | 已有 | HTTP payload、`rabilink-voice-transcripts.jsonl`、`rabilink-replies.jsonl` | forwarding、兼容下行回复查询 | 本地调试 POST `/rabilink` 或旧插件消息到达时 | 写兼容消息 / 回复日志，可能直接投递 Agent | `/rabilink`、`/rabilink/replies`；AIUI 公网主链路走 Relay worker | `src/adapters/rabilinkAdapter.ts`、`src/adapters/rabilinkReplies.ts` | `docs/rabilink-relay-server.md` |
 | RabiLink Relay worker | 已有 | 全局开关、Relay URL / 应用 token / device id、Relay 输入与下行队列 | Manager 常驻连接、RabiLink route worker、WebGUI 远程代理 | Manager 启动且全局开关开启后；输入处理还要求存在启用了 `rabilink` 的路由 | Manager 登记 PC 并转发远程 WebGUI；worker 领取 AIUI/手机/手表 observation、保留设备种类与传输来源、写统一账本并完成上行；主动消息由独立下行队列发布 | `data/Config.json` 全局 RabiLink 配置、Relay scripts | `src/manager/rabiLinkRelayRuntime.ts`、`src/adapters/rabilinkRelayWorker.ts`、`scripts/rabilink-relay-server.mjs` | `docs/rabilink-relay-server.md` |
+| RabiLink 眼镜云日志 | 已有 | AIUI/设备诊断批次、应用 token、设备/版本/会话元数据 | Relay 管理账号日志中心 | 眼镜前台运行并产生诊断事件时异步入队；断网恢复后补传 | 客户端与服务端双重脱敏，按账号持久化并按设备/来源/级别查询；不采集 ASR、Agent 正文或无权限的系统全局日志 | `POST /api/rabilink/devices/logs`、`GET /manage/api/device-logs` | `scripts/rabilink-device-log-store.mjs`、`scripts/rabilink-relay-server.mjs`、`examples/rabilink-aiui/pages/home/index.ink` | `docs/rabilink-relay-server.md` |
 | RabiLink 手机边缘通讯枢纽 | 首版契约 | 应用 token、设备身份、设备独立 cursor、目标/展示信封 | Android companion、未来 Wear OS / 耳机适配器 | 用户连接 Relay；设备按自己的生命周期显式读写 | 手机承担网络、状态和外设扇出，不拥有 Agent/账本；Relay 按设备 ID/类别过滤广播并越过不可见消息 | `/api/rabilink/devices/input`、`/api/rabilink/devices/messages`、Android `RabiRouteSdk` | `scripts/rabilink-relay-server.mjs`、`sdk/android/rabiroute-sdk/`、`examples/android-rabi-link-probe/` | `docs/rabilink-phone-edge-hub.md` |
 | RabiLink 统一会话账本与审阅器 | 已有 | `rabilink-conversation.jsonl`、审阅 cursor、route review variables | 固定 Codex 线程、空闲审阅、周期反思、触摸板 turn steer | 新 observation 稳定后、线程空闲时、周期到期或眼镜请求立即审阅时 | 原子推进 cursor；可把显式白名单内的常驻转写源归一为 observation；可能唤醒或 steer Codex；不在 ASR 请求内同步等待 | 角色目录运行数据；`examples/data/route/RabiLink/` 提供脱敏配置模板 | `src/rabilinkConversationLedger.ts`、`src/rabilinkObservationRecorder.ts`、`src/rabilinkConversationReviewer.ts` | `docs/rabilink-relay-server.md` |
 | 企业微信消息端 | 已有 | WeCom SDK frame、route config、`wecom-messages.jsonl` | forwarding、Outbox WeCom 回复 | WebSocket 收到消息时 | 写消息日志，可能投递 Agent | route 消息端 | `src/adapters/wecomAdapter.ts`、`src/wecom.ts`、`src/messageEndpoints/wecomManager.ts` | `docs/wecom-integration.md` |
@@ -68,8 +69,8 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，`c
 | RouteDecision | 已有 | route profile、event record、extra values | forwarding、未来 preview | 每次投递时 | 本身无写入；调用方可能写日志 | 代码内部 | `src/routing/routeDecision.ts` | `docs/persona-route-workbench-plan.md` |
 | Forwarding | 已有 | active routeProfiles、record、extra values | Agent adapter、history、delivery replay | 每次真实消息进入时 | 写 router log、role record、codex notification、replay ledger，可能投递 Agent | `forwardMessage` / `forwardMessageAndWait` | `src/forwarding.ts` | `docs/code-architecture.md` |
 | AgentPacket | 已有 | RouteDecision、role paths、logs、role knowledge | Agent adapter | 命中规则后 | 会触发 roleKnowledgeSnapshot，可能刷新记忆 viewedAt 或创建待整理记忆 | 代码内部；拟新增 preview | `src/routing/agentPacket.ts`、`src/roleKnowledge.ts` | `docs/agent-context-injection.md` |
-| Codex adapter | 已有，正式主链为共享 app-server Runtime | route agent config、精确线程 ID 与工作目录 | `codex app-server` | Manager 启动及 AgentPacket 投递时 | Manager 保证唯一 WS Runtime；Rabi、Desktop、CLI 连接同一服务并向精确线程 `turn/start` / `turn/steer` | route Agent 端 | `src/codexSharedRuntime.ts`、`src/manager/codexSharedRuntimeOwner.ts`、`src/codexRuntime.ts` | `docs/code-architecture.md` |
-| Agent Codex 线程桥 | 已有 | app-server `thread/list` / `thread/read`、已配置的 `codexCwd`、Agent 请求 | 后台 Agent、Codex app-server | Agent 调用 `/api/agent/threads` 时 | 查询/读取正式线程，或在受控工作区创建线程、启动后续 turn；默认 workspace-write，Windows 1312 可显式 danger-full-access 恢复 | `POST /api/agent/threads` | `src/agentThreads.ts`、`src/codexRuntime.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
+| Codex adapter | 已有，正式主链为 Desktop owner | route agent config、Desktop 任务状态、精确任务 ID 与工作目录 | Codex Desktop IPC | 每次 AgentPacket 投递时 | 必要时 deeplink 打开任务，再由 Desktop owner start/steer；Desktop 缺席时失败，不启动备用 Runtime | route Agent 端 | `src/codexDesktopBridge.ts`、`src/codexRuntime.ts` | `docs/code-architecture.md` |
+| Agent Codex 线程桥 | 已有 | Desktop 任务状态、已配置的 `codexCwd`、Agent 请求 | 后台 Agent、Codex Desktop | Agent 调用 `/api/agent/threads` 时 | 查询/读取 Desktop 任务，受控创建空任务，并把实际消息交给 Desktop owner | `POST /api/agent/threads` | `src/agentThreads.ts`、`src/codexRuntime.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
 | Copilot CLI adapter | 已有 | route agent config、Copilot CLI | Copilot CLI | AgentPacket 投递时 | 启动 / 调用 CLI | route Agent 端 | `src/copilotCli.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
 | AstrBot adapter | 已有 | AstrBot dashboard / plugin API | AstrBot | AgentPacket 投递时 | 调用 AstrBot API | route Agent 端 | `src/agentAdapters/astrbotAdapter.ts`、`scripts/rabiroute_agent/` | `docs/code-architecture.md` |
 | Marvis adapter | 已有 | Marvis 本地能力 | Marvis | AgentPacket 投递时 | 打开 / 投递到 Marvis | route Agent 端 | `src/marvis.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
@@ -98,9 +99,9 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，`c
 - WebGUI 不是配置事实源。前端负责表单和展示，配置不变量应落在 `src/shared/gatewayConfigModel.ts` 或 manager 后端。
 - 预览能力目前是拟新增设计，应走后端 dry-run，不能调用 `forwardMessageAndWait`。
 - 真实外发必须经过 Outbox / Action Gate。处理端不要绕过 RabiRoute 直接写 QQ、WeCom、RabiLink 或外部系统。
-- Codex adapter id 保持 `codex`；ChatGPT desktop 只是可选 host，不参与 adapter 选择、线程寻址或 transport 配置。
-- Codex 正式 transport 只有本机共享 app-server WebSocket。Desktop 私有 IPC、独立 stdio app-server 和 fallback 均已退出主链。
-- `agentModel` 空值跟随 runtime 默认；默认沙箱为 `workspaceWrite`；runtime approval 与业务 Action Gate 都独立 fail closed。
+- Codex adapter id 保持 `codex`；Codex/ChatGPT Desktop 是用户可见任务和实际轮次的唯一 owner。
+- Codex 正式 transport 是 Desktop IPC。用户级 app-server WebSocket 环境覆盖不进入 RabiRoute 主链。
+- 模型、工具和执行审批由目标 Desktop 任务拥有；任务审批与业务 Action Gate 仍是两道独立边界。
 - 运行期 `data/`、日志、token、真实账号、真实 QQ 群号和 Cookie 不进仓库。
 
 ## 运行数据与日志
@@ -114,6 +115,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，`c
 | 私聊消息 | `private-messages.jsonl` | NapCat adapter、forwarding role dir copy | 最近消息、审计、AgentPacket |
 | 语音转写 | `voice-transcripts.jsonl`、`rabilink-voice-transcripts.jsonl` | webhook / RabiLink 兼容 adapter | 语音入口事件与旧链路调试记录 |
 | RabiLink 统一会话 | `data/roles/<RoleId>/rabilink-conversation.jsonl` 及审阅 cursor | RabiLink Relay worker、conversation ledger / reviewer、Outbox | AIUI observation、Agent 主动下行、空闲审阅与恢复 |
+| RabiLink 眼镜云日志 | `data/rabilink-relay/device-logs/<accountId>.jsonl` | AIUI / 未来设备桥、Relay | 分账号的眼镜运行诊断、版本与会话排障；不保存对话正文 |
 | 企业微信消息 | `wecom-messages.jsonl` | WeCom adapter | 企业微信入口事件 |
 | 心跳事件 | `heartbeat-events.jsonl` | heartbeat adapter、forwarding role dir copy | 定时触发记录 |
 | 手动触发事件 | `manual-trigger-events.jsonl` | manual trigger | 手动测试 / 触发记录 |
@@ -129,7 +131,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，`c
 | --- | --- | --- |
 | 新增消息入口 | `src/adapters/<name>Adapter.ts`、`src/adapters/messageAdapter.ts`、`src/index.ts`、`src/shared/gatewayConfigModel.ts` | 不要塞进 NapCat adapter；route kind 和配置 normalize 要补齐 |
 | 新增处理端 | `src/agentAdapters/types.ts`、`src/agentAdapters/agentAdapter.ts`、`src/agentAdapters/managerApi.ts` | Agent adapter 只投递 AgentPacket，不定义路由语义 |
-| 改 Codex 投递 | `src/codexRuntime.ts`、`src/codexAppServerClient.ts` | session policy 与 transport 分开；不引入 Desktop IPC/WebSocket 主链，不硬编码默认模型，审批保持 fail closed |
+| 改 Codex 投递 | `src/codexRuntime.ts`、`src/codexDesktopBridge.ts`；空任务元数据才看 `src/codexAppServerClient.ts` | Desktop IPC 是唯一真实消息主链；任务无法加载就失败，不加第二 Runtime、WebSocket 或 fallback；模型、工具和审批由目标 Desktop 任务拥有 |
 | 改规则匹配 | `src/routing/routeDecision.ts`、`src/shared/gatewayConfigModel.ts` | 不要在 adapter 或前端复制匹配逻辑 |
 | 改 Agent 收到的消息 | `src/routing/agentPacket.ts`、`docs/agent-context-injection.md` | 不要在消息端拼 prompt；具体业务闭环应由对应人格或处理端 Skill 定义，不要硬编码到所有 AgentPacket |
 | 改人格规则 GUI | `ribiwebgui/src/pages/PersonaTemplatePage.vue`、`ribiwebgui/src/stores/gatewayStore.ts`、`src/manager/configRepository.ts` | 人格规则写回 `personaConfig.json`，route 字段仍归 `adapterConfig.json` |

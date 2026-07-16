@@ -30,6 +30,8 @@
 ## 维护
 
 - [排障](troubleshooting.md)：NapCat 登录/外发失败、Windows 中文消息乱码、Codex app-server、普通群消息不转发。
+- [Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md)：总结会话找不到、工具缺失、Runtime 所有权倒置和桌面端启动依赖等问题，并给出各 Agent 的正确接入方法。
+- [标准 Agent 端接入需求](agent-adapter-standard-requirements.md)：定义一个 Agent 端应尽可能具备的发现、认证、会话、幂等创建、投递、结果、工具、生命周期、UI、安全和验收能力。
 - [架构说明](architecture.md)：项目边界、分层、演进路线和红线。
 - [代码架构](code-architecture.md)：后端 Module、消息主链路、manager 控制面、WebGUI 和常见修改入口。
 - [项目功能手册](project-function-map.md)：通用项目功能地图，按功能索引数据真源、消费点、生效时机、副作用、代码入口和设计边界。

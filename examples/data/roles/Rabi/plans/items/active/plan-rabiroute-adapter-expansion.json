@@ -5,8 +5,8 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "architecture",
-  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端。WeCom 使用独立 route kind 和统一 outbox。RabiLink 眼镜端向输入事件接口发布原生 ASR 文本，不依赖内部 taskId；普通回复与主动消息共用应用级持续下行流，主动生产者仍经过 RabiRoute 输出门。Relay 的账号、应用 token、worker 和消息按 app 隔离。remoteAgent 仍是下游远端设备入口，结果回到本机人格线程，文件产物保存在运行期目录。",
-  "nextAction": "新增聊天平台时优先扩展 src/adapters/、src/routing/ 和 src/outbox.ts 的统一边界，新增处理端时优先扩展 src/agentAdapters/；继续区分远端 Agent 设备入口、平台消息端和真正的处理端，避免让某个协议反向定义项目边界",
+  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端。Codex 本机入口已收敛为 Desktop IPC 单一执行路径：Desktop 任务 owner 执行真实消息，项目锁定 app-server 只做受控元数据操作，不再拥有第二 Runtime 或隐藏 fallback。RabiLink 眼镜端向输入事件接口发布原生 ASR 文本，普通回复与主动消息共用应用级持续下行流并继续经过 RabiRoute 输出门。",
+  "nextAction": "新增聊天平台时优先扩展 src/adapters/、src/routing/ 和 src/outbox.ts 的统一边界，新增处理端时优先扩展 src/agentAdapters/；每个 Agent adapter 都要先明确 Host、Runtime、Transport、Session 与真实 turn owner，并用真实目标端验收唯一执行路径",
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -20,6 +20,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-13T00:00:00+08:00",
-  "keywords": ["message adapter", "agent adapter", "wecom", "rabilink", "RabiLink", "输入事件", "持续消息流", "主动投递", "应用 token", "outbox", "remoteAgent", "远端 Agent", "文件传输", "NapCat", "解耦", "扩展"]
+  "updatedAt": "2026-07-16T00:00:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "Desktop IPC", "task owner", "single execution path", "RabiLink", "持续消息流", "主动投递", "outbox", "remoteAgent", "NapCat", "解耦", "扩展"]
 }

@@ -8,13 +8,13 @@
       layout: { width: 448, height: 150 },
       function: {
         name: "index",
-        description: "打开 RabiLink AIUI。transcription 进入连接会话：前台持续转录只写入 Rabi 会话账本，不逐句打断 Agent；Codex 在线程空闲时主动审阅，触摸板单击可立即引导审阅，并持续显示、播报回复和主动消息。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面。",
+        description: "打开 RabiLink AIUI 完整交互页；适合在独立窗口或 modal 中持续使用，聊天内卡片仅显示当前状态并可展开进入。transcription 进入连接会话：前台持续转录只写入 Rabi 会话账本，不逐句打断 Agent；Codex 在线程空闲时主动审阅，触摸板单击可立即引导审阅，并持续显示、播报回复和主动消息。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面；不要在页面参数中手工声明 target。",
         parameters: {
           type: "object",
           properties: {
             token: {
               type: "string",
-              description: "可选的 RabiLink 应用 token。未绑定时允许先打开页面并显示等待连接；绑定后必须引用记忆变量 rabilinkToken，禁止由模型生成、读取、复述或向用户索取。",
+              description: "仅用于无设备 SN 的 Craft 调试兼容。真眼镜忽略外层应用 token，未绑定时必须进入显示 SN 与管理后台地址的首次设置页。",
             },
             mode: {
               type: "string",
@@ -48,7 +48,7 @@
 
   const DEFAULTS = {
     agentName: "RabiLink",
-    version: "1.0.16",
+    version: "1.0.23",
     description: "AI glasses continuous Agent stream and native AIUI LanguageModel configuration surface through RabiLink Relay.",
     iconUrl: "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
     permissions: "RECORD_AUDIO,SPEECH_RECOGNITION,INTERNET",

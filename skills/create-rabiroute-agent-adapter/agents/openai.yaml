@@ -1,0 +1,4 @@
+interface:
+  display_name: "RabiRoute Agent 接入"
+  short_description: "安全设计并验证 Agent 会话、工具、运行时和宿主独立性"
+  default_prompt: "使用 $create-rabiroute-agent-adapter 先冻结用户可观察合同和任务 owner，再设计并端到端验证 RabiRoute Agent 端适配器。"

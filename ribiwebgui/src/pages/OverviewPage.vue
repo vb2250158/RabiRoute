@@ -274,7 +274,7 @@ const selectedAgentStatus = computed(() => {
 const selectedAgentNote = computed(() => {
   if (!selectedAgentType.value) return "等待选择处理端";
   const thread = selectedAgentState.value.monitorThreadName || selectedConfiguredThreadName.value;
-  if (selectedAgentType.value === "codex") return `${thread || "等待会话线程"} · 共享 Runtime`;
+  if (selectedAgentType.value === "codex") return `${thread || "等待会话线程"} · Desktop IPC`;
   return thread || selectedAgentTitle.value;
 });
 </script>

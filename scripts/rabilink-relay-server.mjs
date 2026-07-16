@@ -2,7 +2,8 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { appendDeviceLogs, deviceLogFacets, readDeviceLogs } from "./rabilink-device-log-store.mjs";
 
 const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 8788);
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
@@ -18,6 +19,7 @@ const leaseMs = clamp(Number(process.env.RABILINK_RELAY_LEASE_MS || 3 * 60 * 100
 const dataDir = path.resolve(process.env.RABILINK_RELAY_DATA_DIR || path.join(process.cwd(), "data", "rabilink-relay"));
 const eventLogPath = path.join(dataDir, "events.jsonl");
 const accountLogDir = path.join(dataDir, "account-logs");
+const deviceLogDir = path.join(dataDir, "device-logs");
 const mobileProofDir = path.join(dataDir, "mobile-proofs");
 const mobileDeviceStatusDir = path.join(dataDir, "mobile-device-status");
 const mobileDeviceStatusStaleMs = clamp(
@@ -26,6 +28,8 @@ const mobileDeviceStatusStaleMs = clamp(
   15 * 60 * 1000
 );
 const accountLogMaxRows = clamp(Number(process.env.RABILINK_RELAY_ACCOUNT_LOG_MAX_ROWS || 300), 50, 2000);
+const deviceLogMaxRows = clamp(Number(process.env.RABILINK_RELAY_DEVICE_LOG_MAX_ROWS || 5000), 100, 50000);
+const deviceBindingClaimTtlMs = clamp(Number(process.env.RABILINK_RELAY_DEVICE_BINDING_CLAIM_TTL_MS || 10 * 60 * 1000), 60000, 60 * 60 * 1000);
 const appStorePath = path.resolve(process.env.RABILINK_RELAY_APP_STORE_FILE || path.join(dataDir, "apps.json"));
 const runtimeStatePath = path.join(dataDir, "runtime-state.json");
 const webguiDistPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_DIST_DIR || path.join(process.cwd(), "ribiwebgui", "dist"));
@@ -56,6 +60,7 @@ const portablePriorityValues = new Set(["quiet", "normal", "urgent"]);
 
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(accountLogDir, { recursive: true });
+fs.mkdirSync(deviceLogDir, { recursive: true });
 fs.mkdirSync(mobileProofDir, { recursive: true });
 fs.mkdirSync(mobileDeviceStatusDir, { recursive: true });
 if (!hasEnabledRabiLinkApps()) {
@@ -303,6 +308,12 @@ function writeAccountLog(account, event, data = {}) {
     appName: data.appName || "",
     workerId: data.workerId || "",
     workerName: data.workerName || "",
+    deviceId: data.deviceId || "",
+    deviceKind: data.deviceKind || "",
+    deviceName: data.deviceName || "",
+    source: data.source || "",
+    appVersion: data.appVersion || "",
+    sessionId: data.sessionId || "",
     taskId: data.taskId || "",
     status: data.status || "",
     method: data.method || "",
@@ -394,6 +405,51 @@ function rabiLinkTokenPreview(value) {
 
 function generateRabiLinkToken() {
   return `rbl_${randomBytes(24).toString("base64url")}`;
+}
+
+function generateRabiLinkDeviceToken() {
+  return `rbd_${randomBytes(32).toString("base64url")}`;
+}
+
+function sha256(value) {
+  return createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+}
+
+function normalizeDeviceSerialNumber(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function validateDeviceSerialNumber(value) {
+  const serialNumber = normalizeDeviceSerialNumber(value);
+  if (!/^[0-9A-Z._:-]{4,128}$/.test(serialNumber)) {
+    const error = new Error("眼镜 SN 需要 4-128 位，只能包含字母、数字、点、下划线、冒号或短横线。");
+    error.statusCode = 400;
+    throw error;
+  }
+  return serialNumber;
+}
+
+function deviceSerialPreview(value) {
+  const serialNumber = normalizeDeviceSerialNumber(value);
+  if (serialNumber.length <= 8) return serialNumber;
+  return `${serialNumber.slice(0, 4)}...${serialNumber.slice(-4)}`;
+}
+
+function normalizeDeviceBinding(binding) {
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) return null;
+  const serialHash = String(binding.serialHash || "").trim();
+  if (!serialHash) return null;
+  return {
+    id: String(binding.id || randomId("glasses")).trim(),
+    serialHash,
+    serialPreview: String(binding.serialPreview || "已绑定眼镜").trim(),
+    enabled: binding.enabled !== false,
+    credentialHash: String(binding.credentialHash || "").trim(),
+    createdAt: String(binding.createdAt || nowIso()),
+    updatedAt: String(binding.updatedAt || binding.createdAt || nowIso()),
+    claimedAt: String(binding.claimedAt || ""),
+    claimExpiresAt: String(binding.claimExpiresAt || "")
+  };
 }
 
 function randomId(prefix) {
@@ -499,7 +555,10 @@ function readAppStore() {
           ...app,
           enabled: app.enabled !== false,
           tokenPreview: app.tokenPreview || rabiLinkTokenPreview(app.token),
-          targetDeviceId: String(app.targetDeviceId || "").trim()
+          targetDeviceId: String(app.targetDeviceId || "").trim(),
+          deviceBindings: Array.isArray(app.deviceBindings)
+            ? app.deviceBindings.map(normalizeDeviceBinding).filter(Boolean)
+            : []
         }))
         : [],
       workers: Array.isArray(raw.workers) ? raw.workers.map(normalizeStoredWorker).filter(Boolean) : []
@@ -526,7 +585,19 @@ function hasEnabledRabiLinkApps() {
 function findEnabledAppByToken(value) {
   const requestText = String(value || "");
   if (!requestText) return null;
-  return readAppStore().apps.find((app) => app.enabled !== false && app.token === requestText) || null;
+  const store = readAppStore();
+  const appTokenMatch = store.apps.find((app) => app.enabled !== false && app.token === requestText);
+  if (appTokenMatch) return { app: appTokenMatch, deviceBinding: null };
+  if (!requestText.startsWith("rbd_")) return null;
+  const credentialHash = sha256(requestText);
+  for (const app of store.apps) {
+    if (app.enabled === false) continue;
+    const deviceBinding = (app.deviceBindings || []).find((binding) => {
+      return binding.enabled !== false && binding.credentialHash === credentialHash;
+    });
+    if (deviceBinding) return { app, deviceBinding };
+  }
+  return null;
 }
 
 function workerOnline(worker) {
@@ -561,6 +632,16 @@ function publicApp(app, options = {}) {
     token: options.revealToken ? app.token : undefined,
     notes: app.notes || "",
     targetDeviceId: app.targetDeviceId || "",
+    deviceBindings: (app.deviceBindings || []).map((binding) => ({
+      id: binding.id,
+      serialPreview: binding.serialPreview,
+      enabled: binding.enabled !== false,
+      claimed: Boolean(binding.credentialHash),
+      claimedAt: binding.claimedAt || "",
+      claimExpiresAt: binding.claimExpiresAt || "",
+      createdAt: binding.createdAt || "",
+      updatedAt: binding.updatedAt || ""
+    })),
     createdAt: app.createdAt,
     updatedAt: app.updatedAt
   };
@@ -749,6 +830,7 @@ function createAppForAccount(account, body) {
     tokenPreview: rabiLinkTokenPreview(tokenValue),
     notes: String(body.notes || "").trim(),
     targetDeviceId: String(body.targetDeviceId || "").trim(),
+    deviceBindings: [],
     createdAt: time,
     updatedAt: time
   };
@@ -893,11 +975,11 @@ function requestToken(req, url, body) {
 
 function authorizeRabiLinkRequest(req, url, body) {
   const requestTokenValue = requestToken(req, url, body);
-  const app = findEnabledAppByToken(requestTokenValue);
-  if (app) {
-    return { ok: true, app, insecure: false };
+  const match = findEnabledAppByToken(requestTokenValue);
+  if (match?.app) {
+    return { ok: true, app: match.app, deviceBinding: match.deviceBinding || null, insecure: false };
   }
-  return { ok: false, app: null, insecure: false };
+  return { ok: false, app: null, deviceBinding: null, insecure: false };
 }
 
 function sendRabiLinkAuthError(res, auth) {
@@ -2155,6 +2237,161 @@ function handleRokidInput(req, url, res, body) {
   });
 }
 
+function handleDeviceLogs(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.app) return sendRabiLinkError(res, 401, "请使用 RabiLink服务器控制台里对应应用的 token。");
+  const entries = Array.isArray(body?.logs) ? body.logs : (Array.isArray(body?.entries) ? body.entries : []);
+  if (!entries.length) return sendRabiLinkError(res, 400, "logs 至少需要包含一条设备日志。");
+  const result = appendDeviceLogs({
+    directory: deviceLogDir,
+    accountId: auth.app.ownerAccountId,
+    appId: auth.app.id,
+    appName: auth.app.name || "",
+    body,
+    maxRows: deviceLogMaxRows
+  });
+  const first = result.accepted[0] || {};
+  writeAccountLogForApp(auth.app, "device_logs_ingested", {
+    title: "眼镜日志已上传",
+    detail: `${first.deviceName || body.deviceName || body.deviceId || "未识别设备"} · ${first.source || body.source || "unknown"} · ${result.acceptedCount} 条`,
+    level: result.accepted.some((row) => row.level === "error" || row.level === "fatal") ? "error" : "info",
+    status: "stored",
+    deviceId: first.deviceId || body.deviceId || "",
+    deviceKind: first.deviceKind || body.deviceKind || "",
+    deviceName: first.deviceName || body.deviceName || "",
+    source: first.source || body.source || "",
+    appVersion: first.appVersion || body.appVersion || "",
+    sessionId: first.sessionId || body.sessionId || "",
+    messageCount: result.acceptedCount,
+    textPreview: first.message || ""
+  });
+  return sendJson(res, 202, {
+    code: 0,
+    ok: true,
+    status: "stored",
+    accepted: result.acceptedCount,
+    duplicates: result.duplicateCount,
+    lastId: result.accepted.at(-1)?.id || "",
+    serverTime: nowIso()
+  });
+}
+
+function bindDeviceSerialToApp(account, appId, body) {
+  const serialNumber = validateDeviceSerialNumber(body.serialNumber || body.sn);
+  const serialHash = sha256(serialNumber);
+  const store = readAppStore();
+  const app = store.apps.find((item) => item.id === appId && item.ownerAccountId === account.id);
+  if (!app) {
+    const error = new Error(`RabiLink app not found: ${appId}`);
+    error.statusCode = 404;
+    throw error;
+  }
+  const duplicate = store.apps.find((item) => {
+    return item.ownerAccountId === account.id
+      && item.id !== app.id
+      && (item.deviceBindings || []).some((binding) => binding.enabled !== false && binding.serialHash === serialHash);
+  });
+  if (duplicate) {
+    const error = new Error(`这副眼镜已经绑定到应用 ${duplicate.name}。`);
+    error.statusCode = 409;
+    throw error;
+  }
+  const time = nowIso();
+  app.deviceBindings = Array.isArray(app.deviceBindings) ? app.deviceBindings : [];
+  let binding = app.deviceBindings.find((item) => item.serialHash === serialHash);
+  if (binding) {
+    binding.enabled = true;
+    binding.credentialHash = "";
+    binding.claimedAt = "";
+    binding.claimExpiresAt = new Date(Date.now() + deviceBindingClaimTtlMs).toISOString();
+    binding.updatedAt = time;
+  } else {
+    binding = {
+      id: randomId("glasses"),
+      serialHash,
+      serialPreview: deviceSerialPreview(serialNumber),
+      enabled: true,
+      credentialHash: "",
+      createdAt: time,
+      updatedAt: time,
+      claimedAt: "",
+      claimExpiresAt: new Date(Date.now() + deviceBindingClaimTtlMs).toISOString()
+    };
+    app.deviceBindings.push(binding);
+  }
+  app.updatedAt = time;
+  writeAppStore(store);
+  writeAccountLog(account, "glasses_sn_bound", {
+    title: "眼镜 SN 已绑定",
+    detail: `${binding.serialPreview} 已绑定到 ${app.name}，等待眼镜首次领取设备凭证。`,
+    appId: app.id,
+    appName: app.name,
+    deviceId: binding.id,
+    status: "pending"
+  });
+  return { app, binding };
+}
+
+function claimDeviceToken(body) {
+  const serialNumber = validateDeviceSerialNumber(body.serialNumber || body.sn);
+  const serialHash = sha256(serialNumber);
+  const store = readAppStore();
+  let app = null;
+  let binding = null;
+  for (const candidate of store.apps) {
+    if (candidate.enabled === false) continue;
+    const match = (candidate.deviceBindings || []).find((item) => item.enabled !== false && item.serialHash === serialHash);
+    if (!match) continue;
+    app = candidate;
+    binding = match;
+    break;
+  }
+  if (!app || !binding) {
+    const error = new Error("这副眼镜尚未在 RabiLink服务器控制台绑定。请登录 /manage，把页面显示的 SN 绑定到目标应用。");
+    error.statusCode = 404;
+    error.code = "DEVICE_NOT_BOUND";
+    throw error;
+  }
+  if (binding.credentialHash) {
+    const error = new Error("这副眼镜已经领取过设备凭证。如本地凭证已丢失，请在服务器后台重新绑定同一 SN 后再试。");
+    error.statusCode = 409;
+    error.code = "DEVICE_ALREADY_CLAIMED";
+    throw error;
+  }
+  const claimExpiresAt = Date.parse(binding.claimExpiresAt || "");
+  if (!Number.isFinite(claimExpiresAt) || claimExpiresAt <= Date.now()) {
+    const error = new Error("这副眼镜的首次领取窗口已过期。请在服务器后台对同一 SN 再点一次“绑定 / 重置”。");
+    error.statusCode = 410;
+    error.code = "DEVICE_CLAIM_EXPIRED";
+    throw error;
+  }
+  const token = generateRabiLinkDeviceToken();
+  const time = nowIso();
+  binding.credentialHash = sha256(token);
+  binding.claimedAt = time;
+  binding.claimExpiresAt = "";
+  binding.updatedAt = time;
+  app.updatedAt = time;
+  writeAppStore(store);
+  writeAccountLogForApp(app, "glasses_device_token_claimed", {
+    title: "眼镜设备凭证已领取",
+    detail: `${binding.serialPreview} 已完成首次绑定。`,
+    appId: app.id,
+    appName: app.name,
+    deviceId: binding.id,
+    status: "online"
+  });
+  return {
+    token,
+    app: publicApp(app),
+    device: {
+      id: binding.id,
+      serialPreview: binding.serialPreview,
+      claimedAt: binding.claimedAt
+    }
+  };
+}
+
 function handlePortableInput(req, url, res, body) {
   const sourceDeviceKind = portableDeviceKind(body?.sourceDeviceKind || body?.deviceKind, "other");
   const transport = portableTransport(body?.transport || body?.sourceTransport, "direct-network");
@@ -2534,6 +2771,9 @@ function adminPageHtml() {
     .password-field button:hover { background: var(--field-hover); color: var(--title); }
     .password-field svg { width: 20px; height: 20px; stroke: currentColor; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .device-binding-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-top: 12px; }
+    .device-binding-row .rabi-field { margin: 0; }
+    .device-binding-list { color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 8px; overflow-wrap: anywhere; }
     button {
       border: 0;
       border-radius: 8px;
@@ -2590,6 +2830,8 @@ function adminPageHtml() {
     .dot { display: inline-flex; align-items: center; min-height: 26px; border-radius: 999px; padding: 4px 9px; background: var(--soft); color: #0f8b8d; font-size: 12px; font-weight: 760; }
     .dot.idle { background: #eef1f0; color: var(--muted); }
     .log-list { display: grid; gap: 8px; max-height: 360px; overflow: auto; padding-right: 2px; }
+    .device-log-toolbar { display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr)) minmax(180px, 1.5fr) auto; gap: 8px; margin-bottom: 12px; }
+    .device-log-toolbar select, .device-log-toolbar input { width: 100%; min-height: 38px; border: 1px solid rgba(17, 32, 51, .18); border-radius: 6px; background: #fff; color: var(--ink); padding: 0 10px; }
     .log-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: rgba(255, 255, 255, .74); }
     .log-title { color: var(--title); font-weight: 850; overflow-wrap: anywhere; }
     .log-detail { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
@@ -2605,6 +2847,7 @@ function adminPageHtml() {
       .grid { grid-template-columns: 1fr; }
       .meta { grid-template-columns: 1fr; }
       .shell { width: min(100% - 20px, 1160px); padding-top: 18px; }
+      .device-log-toolbar { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -2707,6 +2950,24 @@ function adminPageHtml() {
           <div id="logs" class="log-list"></div>
           <div id="logsEmpty" class="empty">还没有日志。提交消息、连接 PC Rabi 或打开 WebGUI 后会显示在这里。</div>
         </div>
+
+        <div id="deviceLogsCard" class="card hidden">
+          <div class="title-row">
+            <div>
+              <div class="title">眼镜云日志</div>
+              <div class="note">集中查看当前账号下所有眼镜应用上报的脱敏日志；可按设备、来源、级别和关键词筛选。</div>
+            </div>
+          </div>
+          <div class="device-log-toolbar">
+            <select id="deviceLogDevice"><option value="">全部设备</option></select>
+            <select id="deviceLogSource"><option value="">全部来源</option></select>
+            <select id="deviceLogLevel"><option value="">全部级别</option><option value="debug">debug</option><option value="info">info</option><option value="warn">warn</option><option value="error">error</option><option value="fatal">fatal</option></select>
+            <input id="deviceLogQuery" placeholder="搜索事件、消息或设备" />
+            <button id="refreshDeviceLogsButton" type="button">查询日志</button>
+          </div>
+          <div id="deviceLogs" class="log-list"></div>
+          <div id="deviceLogsEmpty" class="empty">还没有眼镜日志。新版本 AIUI 连接 Relay 后会自动批量上报。</div>
+        </div>
       </div>
     </section>
   </main>
@@ -2715,7 +2976,7 @@ function adminPageHtml() {
     const apiBase = "/manage/api";
     const credentialStorageKey = "rabilinkManageCredentials";
     const legacyCredentialStorageKey = "rabilinkAdminCredentials";
-    const state = { account: null, apps: [], workers: [], logs: [], revealed: {}, credentials: loadCredentials(), setupRequired: false };
+    const state = { account: null, apps: [], workers: [], logs: [], deviceLogs: [], deviceLogFacets: {}, revealed: {}, credentials: loadCredentials(), setupRequired: false };
     let logStream = null;
     let logStreamAccountId = "";
     const el = (id) => document.getElementById(id);
@@ -2824,11 +3085,14 @@ function adminPageHtml() {
           setConsolePath(state.account.username);
         }
         connectLogStream();
+        await loadDeviceLogs();
       } catch (error) {
         state.account = null;
         state.apps = [];
         state.workers = [];
         state.logs = [];
+        state.deviceLogs = [];
+        state.deviceLogFacets = {};
         state.setupRequired = !state.credentials;
         closeLogStream();
         if (state.credentials) flash("alert", error.message);
@@ -2910,6 +3174,44 @@ function adminPageHtml() {
       }
     }
 
+    function replaceSelectOptions(id, values, emptyLabel) {
+      const select = el(id);
+      const selected = select.value;
+      select.innerHTML = "";
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = emptyLabel;
+      select.appendChild(empty);
+      for (const value of values || []) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      }
+      select.value = [...select.options].some((option) => option.value === selected) ? selected : "";
+    }
+
+    async function loadDeviceLogs() {
+      if (!state.account) return;
+      const params = new URLSearchParams({ limit: "200", deviceKind: "glasses" });
+      const deviceId = el("deviceLogDevice").value;
+      const source = el("deviceLogSource").value;
+      const level = el("deviceLogLevel").value;
+      const query = el("deviceLogQuery").value.trim();
+      if (deviceId) params.set("deviceId", deviceId);
+      if (source) params.set("source", source);
+      if (level) params.set("level", level);
+      if (query) params.set("query", query);
+      try {
+        const body = await request(apiBase + "/device-logs?" + params.toString());
+        state.deviceLogs = body.logs || [];
+        state.deviceLogFacets = body.facets || {};
+        renderDeviceLogs();
+      } catch (error) {
+        flash("alert", error.message);
+      }
+    }
+
     function closeLogStream() {
       if (!logStream) return;
       logStream.close();
@@ -2953,6 +3255,31 @@ function adminPageHtml() {
         flash("notice", "token 已重新生成，旧 token 已失效。");
       }
       await load();
+    }
+
+    async function bindDeviceSerial(id, node) {
+      const input = node.querySelector(".device-sn");
+      const serialNumber = input.value.trim();
+      if (!serialNumber) {
+        flash("alert", "请填写眼镜页面显示的完整 SN。");
+        input.focus();
+        return;
+      }
+      const button = node.querySelector(".bind-device");
+      setBusy(button, true);
+      try {
+        await request(apiBase + "/apps/" + encodeURIComponent(id) + "/devices", {
+          method: "POST",
+          body: JSON.stringify({ serialNumber })
+        });
+        input.value = "";
+        flash("notice", "眼镜 SN 已绑定，眼镜将在下一次轮询时领取设备凭证。");
+        await load();
+      } catch (error) {
+        flash("alert", error.message);
+      } finally {
+        setBusy(button, false);
+      }
     }
 
     async function deleteApp(id, name) {
@@ -3148,6 +3475,9 @@ function adminPageHtml() {
         if (log.detail) bits.push(log.detail);
         if (log.appName) bits.push("应用：" + log.appName);
         if (log.workerName || log.workerId) bits.push("PC：" + (log.workerName || log.workerId));
+        if (log.deviceName || log.deviceId) bits.push("设备：" + (log.deviceName || log.deviceId));
+        if (log.source) bits.push("来源：" + log.source);
+        if (log.appVersion) bits.push("版本：" + log.appVersion);
         if (log.taskId) bits.push("ID：" + log.taskId);
         if (log.error) bits.push("错误：" + log.error);
         node.querySelector(".log-detail").textContent = bits.join(" · ") || "-";
@@ -3165,11 +3495,45 @@ function adminPageHtml() {
       }
     }
 
+    function renderDeviceLogs() {
+      replaceSelectOptions("deviceLogDevice", state.deviceLogFacets.devices, "全部设备");
+      replaceSelectOptions("deviceLogSource", state.deviceLogFacets.sources, "全部来源");
+      const container = el("deviceLogs");
+      container.innerHTML = "";
+      el("deviceLogsEmpty").classList.toggle("hidden", state.deviceLogs.length > 0);
+      for (const log of state.deviceLogs) {
+        const node = document.createElement("div");
+        node.className = "log-item";
+        node.innerHTML =
+          '<div>' +
+            '<div class="log-title"></div>' +
+            '<div class="log-detail"></div>' +
+            '<div class="log-text"></div>' +
+          '</div>' +
+          '<div class="log-meta"><span class="log-badge time"></span><span class="log-badge status"></span></div>';
+        node.querySelector(".log-title").textContent = log.event || "设备日志";
+        const bits = ["设备：" + (log.deviceName || log.deviceId || "未识别")];
+        if (log.source) bits.push("来源：" + log.source);
+        if (log.appVersion) bits.push("版本：" + log.appVersion);
+        if (log.mode) bits.push("模式：" + log.mode);
+        if (log.sessionId) bits.push("会话：" + log.sessionId);
+        node.querySelector(".log-detail").textContent = bits.join(" · ");
+        node.querySelector(".log-text").textContent = log.message || "-";
+        node.querySelector(".time").textContent = formatLogTime(log.time);
+        const status = node.querySelector(".status");
+        status.textContent = log.level || "info";
+        status.classList.toggle("ok", log.level === "info" || log.level === "debug");
+        status.classList.toggle("failed", log.level === "error" || log.level === "fatal");
+        container.appendChild(node);
+      }
+    }
+
     function render() {
       const loggedIn = Boolean(state.account);
       el("loginCard").classList.toggle("hidden", loggedIn && !state.setupRequired);
       el("appCard").classList.toggle("hidden", !loggedIn);
       el("logsCard").classList.toggle("hidden", !loggedIn);
+      el("deviceLogsCard").classList.toggle("hidden", !loggedIn);
       el("logoutButton").classList.toggle("hidden", !state.credentials);
       el("setupPill").textContent = state.setupRequired ? "首次初始化" : "已初始化";
       el("setupPill").classList.toggle("warn", state.setupRequired);
@@ -3181,6 +3545,7 @@ function adminPageHtml() {
       el("registerButton").textContent = state.setupRequired ? "创建第一个账号" : "新增账号";
       renderWorkers();
       renderLogs();
+      renderDeviceLogs();
 
       const container = el("apps");
       container.innerHTML = "";
@@ -3200,6 +3565,8 @@ function adminPageHtml() {
             '<div class="tile"><div class="rabi-field combo target-worker"><span class="field-label">通讯 Rabi PC</span><button class="combo-trigger" type="button"><span class="combo-value"></span></button><div class="combo-panel hidden"><input class="combo-search" placeholder="搜索 Rabi PC / GUID"><div class="combo-options"></div></div></div></div>' +
             '<div class="tile"><span>更新时间</span><b class="updated"></b></div>' +
           '</div>' +
+          '<div class="device-binding-row"><div class="rabi-field"><span class="field-label">眼镜 SN</span><input class="device-sn" autocomplete="off" placeholder="输入眼镜上显示的完整 SN"></div><button class="bind-device" type="button">绑定 / 重置</button></div>' +
+          '<div class="device-binding-list"></div>' +
           '<div class="actions">' +
             '<button class="copy">复制 token</button>' +
             '<button class="regen">重新生成 token</button>' +
@@ -3211,10 +3578,16 @@ function adminPageHtml() {
         node.querySelector(".token").textContent = token;
         node.querySelector(".notes").textContent = app.notes || "-";
         node.querySelector(".updated").textContent = app.updatedAt || "-";
+        const bindings = Array.isArray(app.deviceBindings) ? app.deviceBindings : [];
+        node.querySelector(".device-binding-list").textContent = bindings.length
+          ? bindings.map((item) => item.serialPreview + " · " + (item.claimed ? "已领取" : "等待眼镜领取")).join("；")
+          : "尚未绑定眼镜 SN。";
         renderTargetCombo(node.querySelector(".target-worker"), app);
         node.querySelector(".enabled").addEventListener("change", (event) => patchApp(app.id, { enabled: event.target.checked }).catch((error) => flash("alert", error.message)));
         node.querySelector(".copy").addEventListener("click", () => copyToken(app.id));
         node.querySelector(".regen").addEventListener("click", () => patchApp(app.id, { regenerateToken: true }).catch((error) => flash("alert", error.message)));
+        node.querySelector(".bind-device").addEventListener("click", () => bindDeviceSerial(app.id, node));
+        node.querySelector(".device-sn").addEventListener("keydown", (event) => { if (event.key === "Enter") bindDeviceSerial(app.id, node); });
         node.querySelector(".delete").addEventListener("click", () => deleteApp(app.id, app.name).catch((error) => flash("alert", error.message)));
         container.appendChild(node);
       }
@@ -3222,6 +3595,11 @@ function adminPageHtml() {
 
     el("refreshButton").addEventListener("click", load);
     el("refreshLogsButton").addEventListener("click", loadLogs);
+    el("refreshDeviceLogsButton").addEventListener("click", loadDeviceLogs);
+    el("deviceLogDevice").addEventListener("change", loadDeviceLogs);
+    el("deviceLogSource").addEventListener("change", loadDeviceLogs);
+    el("deviceLogLevel").addEventListener("change", loadDeviceLogs);
+    el("deviceLogQuery").addEventListener("keydown", (event) => { if (event.key === "Enter") loadDeviceLogs(); });
     el("loginButton").addEventListener("click", login);
     el("registerButton").addEventListener("click", registerAccount);
     el("togglePasswordButton").addEventListener("click", () => {
@@ -3244,6 +3622,8 @@ function adminPageHtml() {
       state.apps = [];
       state.workers = [];
       state.logs = [];
+      state.deviceLogs = [];
+      state.deviceLogFacets = {};
       window.history.replaceState(null, "", "/manage");
       flash("notice", "已退出。");
       render();
@@ -3918,11 +4298,48 @@ async function handleAdminApi(req, url, res) {
     const app = createAppForAccount(auth.account, body);
     return sendJson(res, 200, { code: 0, ok: true, app: publicApp(app, { revealToken: true }) });
   }
+  const deviceBindingMatch = apiPath.match(/^\/apps\/([^/]+)\/devices$/);
+  if (deviceBindingMatch && req.method === "POST") {
+    const { app, binding } = bindDeviceSerialToApp(auth.account, decodeURIComponent(deviceBindingMatch[1]), body);
+    return sendJson(res, 200, {
+      code: 0,
+      ok: true,
+      app: publicApp(app),
+      device: {
+        id: binding.id,
+        serialPreview: binding.serialPreview,
+        claimed: false,
+        updatedAt: binding.updatedAt
+      }
+    });
+  }
   if (req.method === "GET" && apiPath === "/logs") {
     return sendJson(res, 200, {
       code: 0,
       ok: true,
       logs: readAccountLogs(auth.account, url.searchParams.get("limit") || 120)
+    });
+  }
+  if (req.method === "GET" && apiPath === "/device-logs") {
+    const query = {
+      limit: url.searchParams.get("limit") || 160,
+      deviceId: url.searchParams.get("deviceId") || "",
+      deviceKind: url.searchParams.get("deviceKind") || "",
+      source: url.searchParams.get("source") || "",
+      appId: url.searchParams.get("appId") || "",
+      level: url.searchParams.get("level") || "",
+      sessionId: url.searchParams.get("sessionId") || "",
+      query: url.searchParams.get("query") || "",
+      from: url.searchParams.get("from") || "",
+      to: url.searchParams.get("to") || ""
+    };
+    const logs = readDeviceLogs({ directory: deviceLogDir, accountId: auth.account.id, ...query });
+    const facetRows = readDeviceLogs({ directory: deviceLogDir, accountId: auth.account.id, limit: 500 });
+    return sendJson(res, 200, {
+      code: 0,
+      ok: true,
+      logs,
+      facets: deviceLogFacets(facetRows)
     });
   }
   const appMatch = apiPath.match(/^\/apps\/([^/]+)$/);
@@ -3988,6 +4405,16 @@ const server = http.createServer(async (req, res) => {
       return sendOpenApi(res, toolImportPostmanFileCandidates);
     }
     const body = req.method === "GET" ? {} : await readBody(req);
+    if (req.method === "POST" && url.pathname === "/api/rabilink/devices/token") {
+      const claimed = claimDeviceToken(body);
+      return sendJson(res, 200, {
+        code: 0,
+        ok: true,
+        token: claimed.token,
+        app: claimed.app,
+        device: claimed.device
+      });
+    }
     if (url.pathname === "/api/rabilink/mobile/state"
       || url.pathname === "/api/rabilink/mobile/device-status"
       || url.pathname === "/api/rabilink/mobile/proof"
@@ -4008,6 +4435,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/input") {
       return handlePortableInput(req, url, res, body);
+    }
+    if (req.method === "POST" && url.pathname === "/api/rabilink/devices/logs") {
+      return handleDeviceLogs(req, url, res, body);
     }
     if (req.method === "GET" && /^\/rokid\/rabilink\/tasks\/[^/]+$/.test(url.pathname)) {
       return handleRokidTaskRead(req, url, res, body);
@@ -4056,7 +4486,7 @@ const server = http.createServer(async (req, res) => {
       || url.pathname.startsWith("/api/rokid/rabilink/")) {
       return sendRabiLinkError(res, statusCode, message);
     }
-    return sendJson(res, statusCode, { code: -1, ok: false, message });
+    return sendJson(res, statusCode, { code: error?.code || -1, ok: false, message });
   }
 });
 

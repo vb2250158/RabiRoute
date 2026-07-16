@@ -15,6 +15,7 @@ import {
   ensureBuiltinPersonaRules,
   isBuiltinRolePanelRule as sharedIsBuiltinRolePanelRule
 } from "./personaRulePolicy.js";
+import { isCodexTaskId } from "./codexTaskId.js";
 
 export {
   builtinRolePanelRouteKind,
@@ -676,6 +677,10 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const notificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
     ? configuredNotificationRules
     : defaultMessageAdapterNotificationRules(activeMessageAdapters);
+  const rawCodexThreadId = definition.codexThreadId?.trim() || "";
+  const legacyCodexThreadName = rawCodexThreadId && !isCodexTaskId(rawCodexThreadId)
+    ? rawCodexThreadId
+    : "";
   return {
     ...cleanDefinition,
     id: runtimeId,
@@ -709,8 +714,8 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     napcatWebuiToken: primaryNapcat?.webuiToken ?? definition.napcatWebuiToken,
     napcatInstances: usesNapcat ? napcatInstances : undefined,
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
-    codexThreadId: definition.codexThreadId?.trim() || undefined,
-    codexThreadName: definition.codexThreadName?.trim() || undefined,
+    codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
+    codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
     codexCwd: normalizeCodexCwd(definition.codexCwd),
     copilotThreadName: definition.copilotThreadName?.trim() || undefined,
     groupNotificationTemplate: normalizeOptionalTemplate(definition.groupNotificationTemplate),

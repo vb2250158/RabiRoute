@@ -438,7 +438,7 @@ function Check-Gateways {
     $agentAdapters = @((Get-Prop $gateway "agentAdapters"))
     $codexError = [string](Get-Prop $codexAgentState "lastNotificationError")
     if ($enabled -and ($agentAdapters -contains "codex") -and $codexError) {
-      $action = "Check codex-shared-runtime.stderr.log, Codex authentication, codexCwd, and the shared Runtime at 127.0.0.1:4510."
+      $action = "Open Codex/ChatGPT Desktop, rescan the target task, then check Desktop IPC readiness, codexThreadId, and codexCwd. RabiRoute will not start a fallback runtime."
       Add-Issue $Issues $gatewayId "error" "Codex delivery failed: $codexError" $action $false $true
     }
   }

@@ -42,6 +42,18 @@ https://你的域名/manage
 
 旧公共 token 不再参与 RabiLink 鉴权。Rokid/灵珠插件、AIUI、手机端和电脑端 worker 都必须使用对应应用 token；服务器会按应用隔离输入项、兼容 task、worker 领取、WebGUI 请求和下行消息队列，避免输入绕过应用绑定并被多台 PC 广播领取。
 
+### 眼镜 SN 首次绑定
+
+AIUI 不再要求用户先把应用主 token 填进灵珠变量。没有可用 token 时，眼镜进入 `RabiLink Setup`，通过 `navigator.getDeviceSerialNumber()` 显示本机完整 SN 和 Relay `/manage` 地址：
+
+1. 用户登录 `/manage`，在目标应用卡片的“眼镜 SN”输入框填写眼镜显示的完整 SN。
+2. 点击“绑定 / 重置”。服务器只保存 SN 的 SHA-256、脱敏预览和十分钟领取窗口，不保存完整 SN。
+3. AIUI 每五秒调用 `POST /api/rabilink/devices/token`，请求体为 `{ "serialNumber": "..." }`。
+4. 服务器仅在当前账号已有同 SN 的待领取绑定时首次返回一个 `rbd_...` 设备 token，并只保存该 token 的 SHA-256。
+5. AIUI 把设备 token 写入当前 Agent 隔离的 `localStorage`，立即退出 Setup 并连接 Relay；后续所有请求使用设备 token 鉴权。
+
+同一绑定只能领取一次。设备 token 丢失、撤销或返回 `401` 时，用户在同一应用卡片再次点击“绑定 / 重置”，旧设备 token 会失效并重新打开短时领取窗口。SN 只是受控绑定的匹配键，不是登录凭证；不知道管理账号密码的人不能仅凭 SN 创建授权。
+
 同一个应用 token 也用于 AIUI 眼镜状态辅助链路。手机端 RabiLink 可以提交真实 CXR 设备状态：
 
 ```http
@@ -164,7 +176,7 @@ worker 收到后执行三件事：
 }
 ```
 
-它会写入同一账本的 `direction=control`。固定 Codex 线程空闲时开启新 turn；已有 turn 正在执行时使用 `turn/steer` 引导当前轮次。没有手动事件时，新增 observation 在稳定窗口后等待线程空闲审阅；没有新 observation 时，可按 `rabilinkReflectionIntervalMinutes` 做低频连续反思。待审阅范围由 `rabilink-conversations/index.json`、归档分卷和当前 `rabilink-conversation.jsonl` 共同组成，因此 Codex 离线期间发生机械分卷也不会跳过尚未审阅的 observation。
+它会写入同一账本的 `direction=control`。固定 Codex 任务空闲时由 Desktop owner 开启新 turn；已有 turn 正在执行时 steer 当前轮次。没有手动事件时，新增 observation 在稳定窗口后等待任务空闲审阅；没有新 observation 时，可按 `rabilinkReflectionIntervalMinutes` 做低频连续反思。待审阅范围由 `rabilink-conversations/index.json`、归档分卷和当前 `rabilink-conversation.jsonl` 共同组成，因此 Codex 离线期间发生机械分卷也不会跳过尚未审阅的 observation。
 
 Relay 返回 `202 Accepted`。`eventId` 只用于日志追踪；响应不包含供眼镜维护的 `taskId` 或完成态：
 
@@ -628,6 +640,8 @@ Authorization: Bearer <token>
 | `RABILINK_RELAY_LEASE_MS` | `180000` | worker 取到输入后的租约时间；给“本机已接收但远端完成响应丢失”的重试留出余量 |
 | `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志和服务器 WebGUI 账号/应用数据目录 |
 | `RABILINK_RELAY_ACCOUNT_LOG_MAX_ROWS` | `300` | 每个管理账号保留的控制台脱敏日志行数 |
+| `RABILINK_RELAY_DEVICE_LOG_MAX_ROWS` | `5000` | 每个管理账号保留的眼镜/设备诊断日志行数，可设为 100 到 50000。 |
+| `RABILINK_RELAY_DEVICE_BINDING_CLAIM_TTL_MS` | `600000` | 后台绑定或重置 SN 后允许眼镜首次领取设备 token 的窗口；范围 1 分钟到 1 小时。 |
 | `RABILINK_RELAY_APP_STORE_FILE` | `<dataDir>/apps.json` | 账号、密码哈希、应用和 token 存储文件 |
 
 Relay 运行期 task 和全局下行 outbox 会写入 `<dataDir>/runtime-state.json`。这个文件用于多 relay 进程或反代分流时共享任务队列，避免 worker 完成输入时命中另一个进程后出现 `Task not found`，也保证 `getRabiLinkMessages` 能从共享 outbox 取到其他 relay 进程写入的回复。outbox 同时保存 `deliveryId`，让跨请求重试仍能幂等，并按 `RABILINK_RELAY_OUTBOX_TTL_MS` 独立清理；该文件属于运行期数据，不应提交。
@@ -643,6 +657,46 @@ data/rabilink-relay/account-logs/<accountId>.jsonl
 ```
 
 控制台只读取当前登录账号自己的日志，不混看其他账号。每个账号的数据边界是：账号拥有应用，应用拥有应用 token，PC Rabi worker、任务队列、远程 WebGUI 请求和控制台日志都只能通过所属应用归到这个账号；worker 回传消息和 WebGUI 响应时也必须带上自己的 `deviceId` / `deviceGuid`，并且只能完成服务器选中的那台 PC Rabi 对应的任务。日志内容只保存脱敏摘要：事件标题、应用名、PC Rabi 标识、任务 ID、状态、短文本预览和错误摘要；不会保存完整 token 或原始请求体。
+
+### 眼镜云日志
+
+AIUI 和其他眼镜应用可用所属应用 token 批量上传诊断事件：
+
+```http
+POST /api/rabilink/devices/logs
+X-RabiLink-Token: <app-token>
+Content-Type: application/json
+
+{
+  "deviceId": "glasses-device-id",
+  "deviceKind": "glasses",
+  "deviceName": "Rokid Glass",
+  "source": "rabilink-aiui",
+  "appVersion": "1.0.17",
+  "sessionId": "session-id",
+  "mode": "transcription",
+  "logs": [
+    {
+      "id": "client-stable-id",
+      "time": "2026-07-16T00:00:00.000Z",
+      "level": "error",
+      "event": "aiui.runtime",
+      "message": "配置理解服务失败：timeout",
+      "context": { "surface": "status" }
+    }
+  ]
+}
+```
+
+单批最多 50 条；`appId + deviceId + id` 幂等去重。数据按管理账号写入：
+
+```text
+data/rabilink-relay/device-logs/<accountId>.jsonl
+```
+
+登录 `/manage/<账号>` 后可在“眼镜云日志”按设备、来源、级别和关键词筛选。管理接口 `GET /manage/api/device-logs` 还支持 `deviceId`、`kind`、`source`、`appId`、`level`、`sessionId`、`query`、`from`、`to` 和 `limit` 查询参数。
+
+服务端会再次清理 token、Bearer、密码和敏感上下文字段。RabiLink AIUI 客户端也会在入队前删除 ASR 原文、配置口令原文和 Agent 内容，只上传状态、错误、版本、模式、会话和安全事件摘要。普通 AIUI 页面没有读取 Android/YodaOS 全局 `logcat`、其他应用私有日志或内核日志的权限；未来具备系统权限的设备桥可以复用同一接口上报这些来源，但必须先做独立隐私过滤。
 
 ## Rizon 导入文件
 

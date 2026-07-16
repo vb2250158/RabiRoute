@@ -71,8 +71,10 @@ cp -R examples/data/. data/
 RabiRoute 当前已验证的处理端是 Codex。WebUI 的 `Agent 端` 里需要确认三项：
 
 - `Agent 配置`：选择 `Codex`。
-- `Agent 会话线程名`：填 Codex 里用于接收转发消息的固定线程名，例如 `QQ 消息监听`。RabiRoute 通过 app-server 按“线程名 + 工作目录”查找并恢复会话，避免误复用其它项目的同名线程。
-- `Agent 工作目录`：选择或填写 Codex 处理消息时应进入的项目目录。这个目录会成为 `workspaceWrite` 沙箱边界；ChatGPT desktop 只是可选查看宿主，不参与投递寻址。
+- `Agent 会话`：下拉显示“任务名 + 最后会话时间”，选择后内部保存完整任务 ID；直接输入不存在的名称会创建 Desktop 任务。
+- `Agent 工作目录`：选择或填写该 Desktop 任务所属项目。RabiRoute 用它筛选任务并在投递前校验，防止同名任务串线。
+
+投递时 Codex/ChatGPT Desktop 必须已经启动。RabiRoute 会让 Desktop 加载目标任务，再通过 Desktop IPC 交付消息；成功后消息会立即出现在桌面任务中，并沿用该任务自己的工具、模型和权限。
 
 如果下拉里没有目标项目，先在右侧输入框填入绝对路径并保存；之后同一个 RibiWebGUI 里配置其他 gateway 时，就可以从下拉里复用这个目录。
 

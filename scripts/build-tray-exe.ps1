@@ -38,34 +38,64 @@ if (-not $SkipNodeBuild) {
 }
 
 # ── 2. Python 环境 ───────────────────────────────────────────────────────────
-$venvPy = Join-Path $repo "desktop\tray-task-window\.venv\Scripts\python.exe"
-if (-not (Test-Path $venvPy)) {
-    # Try project-level venv
-    $venvPy = Join-Path $repo ".venv-tray\Scripts\python.exe"
+# A repository on a NAS can contain a venv copied from another Windows PC. Its
+# python.exe may exist while still pointing at a base interpreter that is absent
+# on this machine, so probe every candidate instead of trusting file existence.
+$pythonCandidates = @(
+    (Join-Path $repo "desktop\tray-task-window\.venv\Scripts\python.exe"),
+    (Join-Path $repo ".venv-tray\Scripts\python.exe")
+)
+$pyCmd = Get-Command py.exe -ErrorAction SilentlyContinue
+if ($pyCmd) { $pythonCandidates += $pyCmd.Source }
+$pythonCmd = Get-Command python.exe -ErrorAction SilentlyContinue
+if ($pythonCmd) { $pythonCandidates += $pythonCmd.Source }
+
+$venvPy = $null
+foreach ($candidate in $pythonCandidates | Select-Object -Unique) {
+    if (-not (Test-Path -LiteralPath $candidate)) { continue }
+    $probeExitCode = 1
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $candidate -c "import sys" 2>$null
+        $probeExitCode = $LASTEXITCODE
+    } catch {
+        $probeExitCode = 1
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    if ($probeExitCode -eq 0) {
+        $venvPy = $candidate
+        break
+    }
+    Write-Step "Ignoring unusable Python candidate: $candidate"
 }
-if (-not (Test-Path $venvPy)) {
-    $pyCmd = Get-Command py.exe -ErrorAction SilentlyContinue
-    if (-not $pyCmd) { $pyCmd = Get-Command python.exe -ErrorAction SilentlyContinue }
-    if (-not $pyCmd) { throw "Python not found. Install Python 3.11+ or create a venv first." }
-    $venvPy = $pyCmd.Source
-}
+if (-not $venvPy) { throw "No usable Python was found. Install Python 3.10+ or create a local venv." }
 Write-Step "Using Python: $venvPy"
 
 # ── 3. 确保 PyInstaller 已安装 ───────────────────────────────────────────────
-# Prefer the .exe in the same Scripts folder; fall back to -m pyinstaller.
-$piExe = [System.IO.Path]::ChangeExtension($venvPy, $null).TrimEnd('.') `
-    -replace '\\python$', '\pyinstaller'
-$piExe = Join-Path (Split-Path $venvPy) "pyinstaller.exe"
-if (-not (Test-Path $piExe)) {
+# Use the module entry point so the Windows py.exe launcher and ordinary
+# python.exe/venv interpreters all follow the same path.
+$pyInstallerProbe = 1
+$previousErrorAction = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    & $venvPy -c "import PyInstaller" 2>$null
+    $pyInstallerProbe = $LASTEXITCODE
+} catch {
+    $pyInstallerProbe = 1
+} finally {
+    $ErrorActionPreference = $previousErrorAction
+}
+if ($pyInstallerProbe -ne 0) {
     Write-Step "PyInstaller not found. Installing..."
     & $venvPy -m pip install pyinstaller
     if ($LASTEXITCODE -ne 0) { throw "Failed to install PyInstaller." }
 }
-if (-not (Test-Path $piExe)) { throw "pyinstaller.exe still not found after install." }
 
 # ── 4. 打包 ──────────────────────────────────────────────────────────────────
 Write-Step "Running PyInstaller..."
-& $piExe "$repo\RabiRoute-Tray.spec" --noconfirm
+& $venvPy -m PyInstaller "$repo\RabiRoute-Tray.spec" --noconfirm
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
 
 $exeSrc = Join-Path $repo "dist\RabiRoute-Tray.exe"

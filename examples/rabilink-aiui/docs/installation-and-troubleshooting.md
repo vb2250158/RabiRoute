@@ -69,7 +69,7 @@ Relay 地址和 token 只属于本机全局配置及智能体变量 `rabilinkTok
 5. 点击打包，选择目标灵珠智能体 `RabiLink`。
 6. 核对版本和权限后上传。
 
-`rabilinkToken` 尚未绑定时也必须能完成第 4 步；页面先显示“等待智能体连接”，只暂停 Relay 通讯。token 不能由模型生成或询问用户，后续应在智能体设置中把可选 `token` 参数引用到记忆变量 `rabilinkToken`。
+没有本机设备凭证时页面仍必须完成第 4 步。真机会先进入独立的 `RabiLink Setup` 首次设置页，不显示模式滑轨、ASR 或 Agent 会话内容，只显示完整眼镜 SN、Relay `/manage` 地址和绑定状态。外层智能体即使仍传入旧应用 token，真机也会忽略它。用户登录服务器后台，在目标应用卡片的“眼镜 SN”输入框填写该 SN，点击“绑定 / 重置”。眼镜每 5 秒尝试首次领取设备凭证，成功后写入当前 Agent 隔离的 `localStorage`，并自动切换到正常 RabiLink HUD，不需要再次点击进入，也不需要配置灵珠记忆变量。页面工具的 `token` 参数只用于无设备 SN 的 Craft 调试兼容。
 
 #### Craft 浏览器调试的两个入口
 
@@ -89,7 +89,7 @@ Craft 浏览器不会读取电脑麦克风。正确的 ASR 模拟步骤是：
 
 真实眼镜宿主能提供设备序列号，页面才自动启动 AIUI 原生 `SpeechRecognition`；无设备身份的 Craft 浏览器必须等待交互唤醒。
 
-当前本地待发布版本是 `1.0.16`。沉浸式 HUD 和 448 x 150 卡片都会在电量左侧显示 `v1.0.16`，可用它确认眼镜实际运行的包；云端实际版本应在 Craft 项目列表中复核。Craft 成功上传时会明确显示：
+当前本地待发布版本是 `1.0.18`。沉浸式 HUD 和 448 x 150 卡片都会在电量左侧显示 `v1.0.18`，可用它确认眼镜实际运行的包；云端实际版本应在 Craft 项目列表中复核。Craft 成功上传时会明确显示：
 
 云端名称与版本记录在 `craft-release.json`，不要用 `package.json` 的本地开发包版本替代 Craft 发布版本。
 
@@ -120,7 +120,7 @@ Craft 浏览器不会读取电脑麦克风。正确的 ASR 模拟步骤是：
 
 1. 点击左上角当前项目名。
 2. 在工程菜单找到“云端项目”。
-3. 选择 `RabiLink <版本>`；本次上传后应选择 `RabiLink 1.0.16`。
+3. 选择 `RabiLink <版本>`；本次上传后应选择 `RabiLink 1.0.18`。
 4. 确认顶部项目名变为 `RabiLink`。
 5. 确认“提审”按钮变为可用。
 
@@ -271,6 +271,10 @@ Content-Type: application/json
 
 ### 获取眼镜运行日志
 
+`1.0.17` 起，AIUI 会把应用自身的运行状态、ASR/TTS/LanguageModel 错误和安全 console 摘要异步上传到 Relay。登录 Relay 的 `/manage/<账号>`，打开“眼镜云日志”，即可按设备、来源、级别和关键词筛选；每条记录同时显示 AIX 版本、模式和会话。断网日志会在眼镜本地保留最多 500 条、7 天，恢复网络后自动补传。
+
+云日志不会上传 ASR 原文、配置需求原文、Agent 回复、token 或密码。它覆盖的是 RabiLink AIUI 应用层日志，不等于系统全量日志。Android/YodaOS `logcat`、内核和其他应用私有日志仍需要眼镜 ADB 或未来具备系统权限的设备桥：
+
 只有眼镜本身出现在 `adb devices -l` 且已在眼镜端接受 RSA 调试授权时，电脑才能读取实时日志。手机连上 ADB 不等于眼镜已连上。当前配置链会输出不含用户原句的安全标记：`configuration-asr:start/result/end` 和 `configuration-ai:dispatch:<command>`。
 
 ```powershell
@@ -318,7 +322,7 @@ npm run delivery:verify
 
 任何一个命令失败，或日志出现 `apply_ops is still spinning` / `child_sync_parents`，都不能进入真机发布。
 
-Craft 在线重绘验收记录在 `dist/craft-render-acceptance.json`。模式切换和模拟 ASR 回写都连续采样 3 秒，每 10ms 分类一次；1.0.16 不把黑帧当作正常遮罩期，接受条件应同时是 `partial_frames = 0` 和 `black_frames = 0`。当前文件仍是历史 AIX 的报告，包大小、AIX VERSION 和 SHA256 都不等于本页列出的 1.0.16，不能借它宣称当前包已通过 Craft；重新上传后必须生成同包报告。该报告即使更新，也只证明 Craft 浏览器 Interactive InkView，不证明真实眼镜已经运行。
+Craft 在线重绘验收记录在 `dist/craft-render-acceptance.json`。模式切换和模拟 ASR 回写都连续采样 3 秒，每 10ms 分类一次；1.0.16 起不把黑帧当作正常遮罩期，接受条件应同时是 `partial_frames = 0` 和 `black_frames = 0`。当前文件仍是历史 AIX 的报告，包大小、AIX VERSION 和 SHA256 都不等于本页列出的 1.0.18，不能借它宣称当前包已通过 Craft；重新上传后必须生成同包报告。该报告即使更新，也只证明 Craft 浏览器 Interactive InkView，不证明真实眼镜已经运行。
 
 ## 6. 电量与充电链路
 
@@ -381,12 +385,12 @@ npm run device-status:e2e
 
 截至 2026-07-14：
 
-- 本地 1.0.16 的 record-first 连接对话、重启后 observation 自动补传、持续下行流、48 小时离线 backlog、按 token 指纹隔离的持久 observation/cursor/TTS 队列、无任务主动投递、AIUI 原生 ASR/TTS Adapter、配置助手原生 `LanguageModel`/外层 Agent 双入口、无 TTS 生命周期事件时的 watchdog 恢复、坏消息让出队首/触摸板重试、旧 token 缓存与片段键迁移、单树滑轨 HUD、时钟、可见版本、真实 CXR 电量、无黑帧转场、125% 字体压力和 Ink 0.13/0.14 resize 测试已通过。
+- 本地 1.0.18 的 record-first 连接对话、重启后 observation 自动补传、持续下行流、48 小时离线 backlog、按 token 指纹隔离的持久 observation/cursor/TTS 队列、无任务主动投递、AIUI 原生 ASR/TTS Adapter、配置助手原生 `LanguageModel`/外层 Agent 双入口、无 TTS 生命周期事件时的 watchdog 恢复、坏消息让出队首/触摸板重试、旧 token 缓存与片段键迁移、眼镜云日志离线补传和双重脱敏、单树滑轨 HUD、时钟、可见版本、真实 CXR 电量、无黑帧转场、125% 字体压力和 Ink 0.13/0.14 resize 测试已通过。
 - `npm run check`、`npm run acceptance:local` 的 21 项矩阵和 `npm run delivery:verify` 已通过；其中主动智能核心项会单独验证 record-first 分类、无任务主动下行、统一账本分卷恢复、空闲/周期审阅和触摸板引导，原生语音项会验证 capability、统一 DTO、无 API key 和无隐藏网络 fallback，常驻转写项会验证 FenneNote/命名 Webhook 写入同一账本、带稳定 ID/生产端时间的重试去重且不逐段触发 Agent；视觉回归会检查模式标题完整度和左右安全区像素。
-- Craft 顶部“运行智能体”曾成功初始化历史 AIX；现有 `dist/craft-render-acceptance.json` 也只对应历史 AIX，不能作为 1.0.16 证据。当前 1.0.16 已在本地真实 Ink 运行时完成冻结帧截图、五行完整性检查、配置 HUD 稳定采样（黑帧 0、局部帧 0）和模式转场回归；Craft 在线复测等待本包上传。`/debug` 的 Rokid 上游 DNS/fetch 故障与 AIX 初始化已分开记录。
-- 本地 1.0.16 最终 AIX 的 VERSION 和 SHA256 以本次重新打包后的 `dist/delivery/install-manifest.json` 为准；主包嵌入已部署 Relay 入口，并须完成直接 AIX 审计、等价重建、完整回归和交付包 Ink 运行验证。
+- Craft 顶部“运行智能体”曾成功初始化历史 AIX；现有 `dist/craft-render-acceptance.json` 也只对应历史 AIX，不能作为 1.0.18 证据。当前 1.0.18 等待真机体验；`/debug` 的 Rokid 上游 DNS/fetch 故障与 AIX 初始化已分开记录。
+- 本地 1.0.18 最终 AIX 的 VERSION 和 SHA256 以本次重新打包文件为准；主包嵌入已部署 Relay 入口。
 - 历史真实公网 Relay + 本机 Rabi + 绑定 `RabiActive` 人格的 Codex record-first 双向队列曾通过：无输入主动投递 184ms，observation 落盘并释放上行 435ms，触摸板审阅后真实 Codex 约 68 秒以无 `taskId` 主动消息独立回复；用户 observation 与 Agent 下行同处一个 JSONL，重复数为 0；远程配置写入、读回与精确回滚通过。当前实现增加常驻 record-first 入口和可直接执行的审阅回复合同后，旧报告已因发布版本、AIX、实现摘要或时效不匹配被 `goal-evidence` 判为 `stale-live-e2e`；重新授权运行前不能把历史报告当作当前证明。
-- 历史版本的上传记录不代表本次 1.0.16 已上传；云端版本和审核状态需要在 Craft 中重新读取。
+- 历史版本的上传记录不代表本次 1.0.18 已上传；云端版本和审核状态需要在 Craft 中重新读取。
 - 命令行、普通浏览器和内嵌浏览器三个上传入口已统一补齐 `RECORD_AUDIO`、自动/受审计的 `index` tool，并拒绝“HTTP 200 但没有 done”或流内 `error`；Windows PowerShell 5.1 的 JSON 数组序列化也已实际 dry-run 验证。
 - 已确认必须从本地工程切到云端 RabiLink，提审才会启用。
 - Craft 云端版本、提审状态和手机端安装状态当前未重新读取；不能从本地包推断线上状态。
@@ -397,6 +401,7 @@ npm run device-status:e2e
 ## 9. 相关资料
 
 - [RabiLink AIUI 项目 README](../README.md)
+- [AIUI 框架与逻辑开发笔记](aiui-framework-and-logic-development.md)
 - [AIUI 快速开始](https://js.rokid.com/AIUI/guide/quickstart?lang=zh-CN)
 - [第一个沉浸式 AIUI](https://js.rokid.com/AIUI/guide/quickstart-first-immersive?lang=zh-CN)
 - [AIUI ASR 指南](https://js.rokid.com/AIUI/guide/basic-ai-asr?lang=zh-CN)
