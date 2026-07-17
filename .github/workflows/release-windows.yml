@@ -1,0 +1,93 @@
+name: Release Windows package
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish or update a GitHub Release
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.1
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: desktop/tray-task-window/requirements.txt
+
+      - name: Install tray build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -r desktop/tray-task-window/requirements.txt pyinstaller
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+
+      - name: Resolve and validate version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$version") {
+            throw "Tag ${{ github.ref_name }} does not match package.json version $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        shell: pwsh
+        run: |
+          npm ci
+          npm test
+          npm run check:config
+          npm run build
+
+      - name: Build installer and portable package
+        shell: pwsh
+        run: |
+          ./scripts/build-windows-release.ps1 -Version "${{ steps.version.outputs.version }}" -NodeVersion "22.17.1" -SkipBuild
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RabiRoute-${{ steps.version.outputs.version }}-windows-x64
+          if-no-files-found: error
+          path: |
+            output/windows/*.exe
+            output/windows/*.zip
+            output/windows/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' || inputs.publish_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "v${{ steps.version.outputs.version }}" }
+          $files = Get-ChildItem output/windows -File | Where-Object { $_.Extension -in '.exe', '.zip', '.txt' } | ForEach-Object FullName
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --title "RabiRoute $tag" --generate-notes --verify-tag
+          }

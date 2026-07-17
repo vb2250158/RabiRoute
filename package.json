@@ -30,24 +30,24 @@
     "send:onebot": "node scripts/send-onebot-message.mjs"
   },
   "dependencies": {
-    "@mdi/font": "^7.4.47",
     "@openai/codex": "0.144.1",
     "@wecom/aibot-node-sdk": "^1.0.7",
     "dotenv": "^16.4.7",
-    "marked": "^15.0.12",
-    "pinia": "^2.3.1",
-    "vue": "^3.5.35",
-    "vue-router": "^4.6.4",
-    "vuetify": "^3.12.8",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@mdi/font": "^7.4.47",
     "@types/node": "^22.10.7",
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-vue": "^5.2.4",
+    "marked": "^15.0.12",
+    "pinia": "^2.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vite": "^6.4.3",
+    "vue": "^3.5.35",
+    "vue-router": "^4.6.4",
+    "vuetify": "^3.12.8",
     "vue-tsc": "^2.2.12"
   }
 }

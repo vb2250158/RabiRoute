@@ -8,6 +8,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.1.12 - 2026-07-17
 
+### Windows installer and GitHub Releases
+
+- Added a per-user Windows x64 installer and portable ZIP pipeline that embeds a pinned Node.js runtime, Manager, RibiWebGUI, production dependencies, and the tray entry, so a clean PC does not need Node.js preinstalled.
+- Moved Vue, Vuetify, Pinia, frontend Markdown, and icon fonts to development dependencies so the release payload does not duplicate frontend sources already compiled into WebGUI; production dependencies now contain only Manager runtime packages.
+- The installer defaults to `%LOCALAPPDATA%\Programs\RabiRoute` and asks the loopback Manager shutdown API to stop gracefully before upgrades and uninstall. The payload excludes top-level `data/`, and neither an upgrade nor uninstall proactively removes local routes, personas, or logs.
+- A `v*` tag now runs tests, configuration checks, tray packaging, release privacy checks, and a packaged Manager smoke test on a clean Windows runner, then uploads the setup EXE, portable ZIP, and `SHA256SUMS.txt` to GitHub Releases.
+- Windows binaries are not code-signed yet. The README and packaging guide retain the SmartScreen unknown-publisher warning and SHA-256 verification guidance; code signing, stable/nightly channels, and in-app updates remain future decisions based on real release cadence.
+
 ### RabiPC speech endpoint and local models
 
 - Added the standalone local-only `rabi-speech` plugin and RabiPC Speech Service page. TTS and ASR are top-level tabs below Rabi Persona; Route delivery happens only when explicitly enabled, and normal API calls never enter an Agent.

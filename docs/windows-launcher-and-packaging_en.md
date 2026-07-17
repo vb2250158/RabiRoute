@@ -148,3 +148,21 @@ Packaging boundaries:
 - If no Manager is running, it verifies/builds backend and frontend output before starting `node dist/manager.js`.
 
 Before publishing a Windows package, verify that the backend and WebGUI are built, Node and dependencies are available, runtime data remains writable and external, and the binary has passed a separate privacy review for embedded build-machine paths. The desktop entry must never become the only supported startup path.
+
+## Installer and GitHub Release assets
+
+Build the complete Windows release locally with:
+
+```powershell
+.\scripts\build-windows-release.ps1
+```
+
+The command requires Node.js, Python 3.10+, PyInstaller, and Inno Setup 6. It copies only Git-tracked public runtime resources plus generated backend/WebGUI/tray outputs, embeds a pinned Windows x64 Node.js runtime, installs production-only npm dependencies, scans for private files and build-machine paths, smoke-tests the packaged Manager through `/meta`, and produces:
+
+- `RabiRoute-<version>-windows-x64-setup.exe`
+- `RabiRoute-<version>-windows-x64-portable.zip`
+- `SHA256SUMS.txt`
+
+The Inno Setup installer is per-user and defaults to `%LOCALAPPDATA%\Programs\RabiRoute`. Before replacing files, and again before uninstall removes program files, it asks the loopback Manager shutdown API to stop the current runtime gracefully. The payload contains no top-level `data/`; first launch initializes from sanitized `examples/data/`, while upgrades and uninstall do not proactively remove user routes, personas, or logs.
+
+A `v*` tag triggers `.github/workflows/release-windows.yml`, which repeats tests, configuration validation, the clean Windows build, privacy checks, and the packaged Manager smoke test before uploading the three assets to GitHub Releases. Current binaries are unsigned, so release documentation must retain the SmartScreen unknown-publisher warning and checksum guidance. Code signing, stable/nightly channels, and in-app updates remain later decisions based on actual release cadence.

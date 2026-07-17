@@ -6,6 +6,7 @@
 /.codex-tmp/
 /out/
 /output/
+/installer/Output/
 /reports/
 /tmp-app-schema/
 /tmp-thread-*.cjs

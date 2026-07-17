@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-windows-release-package",
+  "title": "Windows 发布包保持程序、运行数据和发布权限分离",
+  "content": "RabiRoute 的 Windows x64 发布资产包含用户级 setup EXE 和便携 ZIP，两者使用同一份脱敏 payload：固定版本 Node.js、Manager 后端、RibiWebGUI、生产 npm 依赖和 PyInstaller 托盘入口。payload 只从 Git 跟踪的公开运行资源与构建产物组成，不包含根目录 data、日志、录音、转写、token、.env 或本机绝对路径。安装器默认写入当前用户的 LocalAppData，升级前通过本机 Manager shutdown API 优雅停止运行态；首次启动由 examples/data 初始化，覆盖安装和卸载不主动删除用户 data。v* tag 才触发 GitHub Release 发布，当前未签名的安装包必须同时提供 SHA-256 并明确提示 SmartScreen 未知发布者。",
+  "createdAt": "2026-07-17T22:30:00+08:00",
+  "updatedAt": "2026-07-17T22:30:00+08:00",
+  "source": {
+    "kind": "project-update",
+    "summary": "脱敏的公开发布知识，不包含真实运行配置、账号、token、日志或个人路径"
+  },
+  "keywords": ["Windows", "安装包", "portable", "GitHub Release", "Node.js", "data", "脱敏", "SHA-256", "SmartScreen"]
+}

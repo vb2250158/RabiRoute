@@ -40,6 +40,14 @@ Handlers solve the task. RabiRoute decides **where it goes, which portable conte
 
 ## Quick start
 
+### Windows installer
+
+Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest). The installer includes the Node.js runtime, Manager, RibiWebGUI, production dependencies, and tray app. It installs per user, creates a Start menu entry, and keeps local `data/` writable and outside the packaged resources.
+
+The release page also provides a portable ZIP and `SHA256SUMS.txt`. Windows packages are currently unsigned, so SmartScreen may show an unknown-publisher warning; verify the checksum before running the installer.
+
+### Source installation
+
 Requires Node.js 20 or newer and npm.
 
 ```bash
