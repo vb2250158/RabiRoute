@@ -8,6 +8,10 @@ English | <a href="./README_zh.md">简体中文</a>
 
 ![RabiRoute mascot presenting an agent-neutral message gateway, policy router, and action gate](assets/rabiroute-hero-oss.webp)
 
+<h2 align="center">Let Agents connect everything around us.</h2>
+
+<p align="center">Bring signals from chat, voice, devices, and time into Agents, so they can build continuous understanding, prepare proactively, and turn help into reality within safe boundaries.</p>
+
 <p align="center">
   <a href="https://github.com/vb2250158/RabiRoute/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/vb2250158/RabiRoute?color=19bfc1"></a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
@@ -17,80 +21,26 @@ English | <a href="./README_zh.md">简体中文</a>
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute is an **agent-neutral message gateway, policy router, and action gate**. It accepts events from chat platforms, webhooks, schedules, voice, and devices; records and classifies them; adds portable context; then hands them to the right agent, workflow, script, or human queue.
+RabiRoute is an **agent-neutral message gateway, policy router, and action gate**. It turns events from chat, webhooks, schedules, voice, and devices into structured work for the right agent, workflow, script, or human queue.
 
-RabiRoute does not own the agent and does not try to become an Agent OS. The handler decides how to solve a task. RabiRoute decides **where the task goes, which context travels with it, whether an external action is allowed, and how the result returns**.
+Handlers solve the task. RabiRoute decides **where it goes, which portable context travels with it, whether an outbound action is allowed, and where the result returns**.
 
-[Quick start](#quick-start) · [Current capabilities](#what-works-today) · [Architecture](#architecture-and-boundaries) · [Documentation](#documentation)
+[Highlights](#highlights) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Current capabilities](#current-capabilities) · [Documentation](#documentation)
 
-## Why RabiRoute
+## Highlights
 
-Most integrations connect one chat platform directly to one bot or agent. That works until the system has several entry points, several handlers, reusable personas, shared context, and actions that must not be sent automatically.
+- 🔌 **Bring many signals into one routing layer.** Verified inputs include NapCat / OneBot, heartbeat, and the built-in role panel; other platforms and devices can use dedicated or experimental adapters.
+- 🧭 **Route by policy, not hard-wired integrations.** Route profiles, personas, notification rules, schedules, keywords, regexes, and reply context decide which handler receives each event.
+- 🧳 **Send context that can travel.** `AgentPacket` carries the event, persona, recent messages, plans, memory references, attachments, interface hints, and reply context.
+- 🖥️ **Operate from a local control plane.** The Node.js Manager and RibiWebGUI manage routes, adapters, personas, runtime status, logs, diagnostics, and process lifecycle.
+- 🛡️ **Keep outbound actions explicit.** Replies pass through route-specific Outbox policy instead of bypassing the gateway, with observable `sent`, `draft`, `blocked`, or `failed` results.
+- 🔍 **Keep evidence you can inspect and replay.** JSONL records cover inbound events, packets, deliveries, heartbeats, adapter activity, replies, and delivery replay.
 
-RabiRoute keeps that coordination layer independent:
-
-- **One event model across channels.** Platform adapters normalize external messages before routing.
-- **One policy boundary across handlers.** Route rules choose a handler without letting that handler define gateway behavior.
-- **Portable context.** Personas, recent messages, plans, memory references, and reply context travel in an `AgentPacket`.
-- **Explicit outbound control.** Replies and external actions pass through an Outbox / Action Gate instead of bypassing the router.
-- **Replayable evidence.** JSONL event, packet, delivery, heartbeat, adapter, and replay-ledger records make failures inspectable.
-
-## Why this matters to open-source maintainers
-
-Maintainer work often starts outside the code host: community chats, support groups, webhook intake, release schedules, voice notes, and local operational alerts. Those events still need a reliable path into coding agents and human review.
-
-RabiRoute provides that path without giving one agent ownership of every channel credential or permission:
-
-```text
-Community event -> route policy -> exact handler thread
-                -> draft or action request -> approval -> source channel
-```
-
-This is useful when Codex or another handler should receive structured context, continue the correct task, and prepare a response while the gateway keeps external actions observable and reviewable.
-
-## How it works
-
-```mermaid
-flowchart LR
-    A["Chat · Webhook · Schedule · Voice · Device"] --> B["Message adapters"]
-    B --> C["Event store"]
-    C --> D["Route decision"]
-    D --> E["AgentPacket<br/>template + portable context"]
-    E --> F["Codex · Agent · Workflow · Script · Human"]
-    F --> G["Outbox / Action Gate"]
-    G --> H["Reply · Draft · Approval · External action"]
-    H -. audit and result .-> C
-```
-
-The core path is intentionally small:
-
-```text
-Message Adapter -> Event Store -> RouteDecision -> AgentPacket -> Handler -> Outbox / Reply
-```
-
-## What works today
-
-| Area | Implemented capability |
-| --- | --- |
-| Message inputs | Verified: NapCat / OneBot, heartbeat schedules, and the built-in role panel. Experimental: Remote Agent, FenneNote, XiaoAI, RabiLink, generic Webhook, and WeCom. Manual trigger is a Manager action, not an adapter. |
-| Routing | Route profiles, persona-bound notification rules, direct `@`, reply-chain routing, private messages, keywords, regex, schedules, and per-route templates |
-| Context | Recent message windows, persona files, role plans and memories, source reply context, attachment evidence, and handler-facing interface hints |
-| Handlers | Verified: Codex. Experimental: Copilot CLI and AstrBot. Stub/manual handoff: Marvis. |
-| Control plane | A Node.js manager plus RibiWebGUI for gateway lifecycle, configuration, status, logs, personas, and diagnostics |
-| Safety | Outbox results are `sent` / `draft` / `blocked` / `failed`, with source-message binding, adapter policies, NapCat file allowlists, and fail-closed Codex runtime approvals. A generic approval center is not implemented yet. |
-| Observability | JSONL message history, adapter logs, handler packets, delivery records, heartbeat records, and replay ledgers |
-
-Platform-specific credentials and login state remain with their platform. Public examples use placeholders and sanitized local paths; runtime `data/`, logs, tokens, recordings, and transcripts are intentionally excluded from Git.
+> RabiRoute is in active `0.1.x` development. Check the [capability and maturity matrix](docs/current-capabilities_en.md) before relying on an external platform or device path.
 
 ## Quick start
 
-### Requirements
-
-- Node.js 20 or newer
-- npm
-- Optional: Codex, NapCat / OneBot, WeCom, or another external integration for an end-to-end route
-
-### Install and run
+Requires Node.js 20 or newer and npm.
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
@@ -100,19 +50,55 @@ npm run build
 npm run start:manager
 ```
 
-Open [http://127.0.0.1:8790/](http://127.0.0.1:8790/) to enter RibiWebGUI.
+Open [http://127.0.0.1:8790/](http://127.0.0.1:8790/) to enter RibiWebGUI. On first run, the Manager initializes a sanitized local configuration from `examples/data/` when no runtime data exists.
 
-On first start, the manager seeds a sanitized configuration from `examples/data/` when no runtime data exists. Only the primary route is enabled by default; external adapters still require their own local setup.
+For the shortest verified path:
 
-In RibiWebGUI:
+1. Open **Quick setup** and choose Heartbeat as the input.
+2. Select Codex, then bind the project directory and a Desktop task.
+3. Save the route, open **Log diagnostics**, and trigger one message.
 
-1. Choose or create a route and persona.
-2. Enable an input adapter such as heartbeat, webhook, NapCat, WeCom, or RabiLink.
-3. Select a handler and verify the route with the status and log views.
+External adapters still require their own accounts and local configuration. Continue with [Getting started](docs/getting-started_en.md) when you are ready to connect NapCat, WeCom, RabiLink, or another source.
 
-Use the `中 / EN` menu in the top bar to switch the interface at runtime. The choice is a browser-local UI preference; it does not modify Route, persona, template, regex, path, log, or task data.
+## How it works
 
-For the verified/experimental boundary, read [Current capabilities and maturity](docs/current-capabilities_en.md). The current setup guide is [Getting started](docs/getting-started_en.md).
+```mermaid
+flowchart TB
+    subgraph ingress ["1 · Ingress"]
+        direction LR
+        A["Chat · Webhook · Schedule<br/>Voice · Device"] --> B["Message adapters"]
+    end
+
+    subgraph routing ["2 · Route and context"]
+        direction LR
+        C["Event store"] --> D["Route decision"] --> E["AgentPacket<br/>template + portable context"]
+    end
+
+    subgraph delivery ["3 · Handle, govern, and return"]
+        direction LR
+        F["Codex · Agent · Workflow<br/>Script · Human"] --> G["Outbox / Action Gate"] --> H["Reply · Draft · Approval<br/>External action"]
+    end
+
+    B --> C
+    E --> F
+    H -. "audit + result" .-> C
+```
+
+Each route keeps ingress, policy, portable context, handler delivery, and outbound control separate. A handler can change without taking ownership of channel credentials or redefining gateway behavior.
+
+## Current capabilities
+
+| Area | Implemented capability |
+| --- | --- |
+| Message inputs | Verified: NapCat / OneBot, Heartbeat, and the built-in role panel. Experimental: Remote Agent, FenneNote, XiaoAI, RabiLink, generic Webhook, and WeCom. Manual trigger is a Manager action, not an adapter. |
+| Routing | Route profiles, persona-owned rules, direct `@`, reply chains, private messages, keywords, regexes, schedules, and per-route templates |
+| Context | Recent messages, persona files, plans, memory references, source reply context, attachment evidence, and handler interface hints |
+| Handlers | Verified: Codex. Experimental: Copilot CLI and AstrBot. Manual handoff: Marvis. |
+| Control plane | Node.js Manager and RibiWebGUI for route lifecycle, configuration, status, logs, personas, and diagnostics |
+| Safety | Outbox policy, source binding, adapter policy, NapCat file allowlists, and fail-closed Codex Runtime approval; a universal approval center is not implemented |
+| Observability | JSONL message history, adapter logs, handler packets, delivery records, heartbeat records, reply records, and delivery replay |
+
+Each platform still owns its credentials and login state. Public examples use placeholders and sanitized paths; runtime `data/`, logs, tokens, recordings, and transcripts stay out of Git.
 
 ## Architecture and boundaries
 
@@ -125,16 +111,20 @@ For the verified/experimental boundary, read [Current capabilities and maturity]
 | Session delivery policy | Domain-specific reasoning |
 | Draft, approval, reply, and audit boundaries | Producing a result or action request |
 
+Put another way: **RabiRoute does not own the Agent. It owns the context and the gates.**
+
 RabiRoute is not a full Agent OS, a replacement chatbot framework, a workflow platform, or a wrapper around one model provider. New platforms belong in `src/adapters/`; handler integrations remain behind agent-adapter interfaces.
 
-The code-backed boundary and maturity map lives in [Current capabilities and maturity](docs/current-capabilities_en.md). [Architecture](docs/architecture_en.md) and [Code architecture](docs/code-architecture_en.md) describe the current Desktop-owner runtime and module boundaries in more detail.
+The code-backed boundary and maturity map lives in [Current capabilities and maturity](docs/current-capabilities_en.md).
+
+[Architecture](docs/architecture_en.md) and [Code architecture](docs/code-architecture_en.md) describe the Desktop-owner runtime and module boundaries in more detail.
 
 ## Codex integration
 
 Codex is RabiRoute's first fully verified handler, but it is not the product boundary.
 
 - Real messages travel only through Desktop IPC to the selected Codex/ChatGPT Desktop task owner. RabiRoute does not run a second execution Runtime or a hidden fallback.
-- The saved opaque task ID is the stable identity. A stale SQLite title, a Desktop rename, or a completed goal does not invalidate the task or create a duplicate; name lookup/creation is used only after the ID is explicitly cleared or no longer exists.
+- The saved task ID is the stable identity. A stale SQLite title, Desktop rename, or completed goal does not invalidate it or create a duplicate. Name lookup/creation happens only when the ID is cleared or missing.
 - If the target task is not loaded, RabiRoute opens `codex://threads/<id>` and retries briefly. Desktop absence, workspace mismatch, or owner load failure fails closed.
 - Model, tools, sandbox, and approvals remain owned by the target Desktop task. The compatibility field `agentModel` does not override them.
 - The project-pinned `codex app-server` is limited to short-lived metadata work such as creating and naming an empty task; it never receives a real routed prompt.
@@ -188,7 +178,9 @@ npm run build            # type-check and build backend + WebGUI
 npm run check:config     # detect malformed public/runtime JSON text
 ```
 
-Before a larger change, read [Current capabilities and maturity](docs/current-capabilities_en.md), then inspect the relevant code and tests. Issues and pull requests are welcome through the [GitHub repository](https://github.com/vb2250158/RabiRoute).
+Before a larger change, read [Current capabilities and maturity](docs/current-capabilities_en.md), then inspect the relevant code and tests.
+
+Issues and pull requests are welcome through the [GitHub repository](https://github.com/vb2250158/RabiRoute).
 
 Please never commit real account identifiers, chat content, tokens, cookies, private paths, or runtime `data/`. The repository is maintained as a public, reproducible project.
 

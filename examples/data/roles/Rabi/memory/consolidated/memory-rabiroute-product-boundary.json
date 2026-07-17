@@ -1,14 +1,14 @@
 {
   "id": "memory-rabiroute-product-boundary",
-  "title": "RabiRoute 是 Agent-neutral Context Router / Action Gate",
-  "content": "RabiRoute 是轻量的多入口消息网关、消息分诊台和策略调度层。Rabi 可以把它想成星海里的转运中心：接住来件、记录来源、判断航线、补上上下文、贴好模板，再把包裹送到合适的处理端。真正回答问题、写代码、跑流程、查系统和调用工具的是处理端。RabiRoute 不应被写成完整 Agent OS、聊天机器人框架或某个处理端的外壳。",
+  "title": "RabiRoute 的愿景与产品边界",
+  "content": "RabiRoute 的公开愿景是“让 Agent 连接我们的一切。”它让来自聊天、语音、设备和时间的信号进入合适的处理端，在持续理解中主动准备，并让外发经过安全边界。产品边界仍是轻量的多入口消息网关、消息分诊台和策略调度层：接住来件、记录来源、判断航线、补上上下文、贴好模板，再把包裹送到合适的处理端。真正回答问题、写代码、跑流程、查系统和调用工具的是处理端。RabiRoute 不应被写成完整 Agent OS、聊天机器人框架或某个处理端的外壳。",
   "source": {
     "kind": "example",
     "summary": "公开文档沉淀：README 与架构说明"
   },
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-06-10T00:00:00+08:00",
+  "updatedAt": "2026-07-17T17:47:30+08:00",
   "inputMemoryIds": [],
   "consolidationRunId": "",
-  "keywords": ["RabiRoute", "Context Router", "Action Gate", "消息网关", "分诊", "边界", "Agent-neutral"]
+  "keywords": ["RabiRoute", "让 Agent 连接我们的一切", "Slogan", "Context Router", "Action Gate", "消息网关", "分诊", "边界", "Agent-neutral"]
 }

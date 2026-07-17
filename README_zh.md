@@ -8,6 +8,10 @@
 
 ![RabiRoute 看板娘展示与具体 Agent 解耦的消息网关、策略路由器和动作安全门](assets/rabiroute-hero-oss.webp)
 
+<h2 align="center">让 Agent 连接我们的一切。</h2>
+
+<p align="center">让来自聊天、语音、设备和时间的信号汇入 Agent，在持续理解中主动准备，在安全边界内把帮助落到现实。</p>
+
 <p align="center">
   <a href="https://github.com/vb2250158/RabiRoute/commits/main"><img alt="最近提交" src="https://img.shields.io/github/last-commit/vb2250158/RabiRoute?color=19bfc1"></a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
@@ -17,80 +21,26 @@
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute 是一个与具体 Agent 解耦的**消息网关、策略路由器和动作安全门**。它接收来自聊天平台、Webhook、定时器、语音和设备的事件，完成记录、分类和上下文包装，再把任务交给合适的 Agent、工作流、脚本或人工队列。
+RabiRoute 是一个与具体 Agent 解耦的**消息网关、策略路由器和动作安全门**。它把来自聊天、Webhook、定时器、语音和设备的事件，变成可交给 Agent、工作流、脚本或人工队列的结构化任务。
 
-RabiRoute 不拥有 Agent，也不试图成为 Agent OS。处理端决定一项任务具体怎么解决；RabiRoute 决定**任务该去哪里、随任务携带哪些上下文、是否允许执行外部动作，以及结果如何返回**。
+处理端解决具体任务。RabiRoute 决定**任务去哪里、携带哪些可迁移上下文、是否允许外发，以及结果回到哪里**。
 
-[快速上手](#快速上手) · [当前能力](#当前能力) · [架构与边界](#架构与边界) · [文档](#文档)
+[核心亮点](#核心亮点) · [快速上手](#快速上手) · [工作方式](#工作方式) · [当前能力](#当前能力) · [文档](#文档)
 
-## 为什么需要 RabiRoute
+## 核心亮点
 
-许多集成一开始只是把一个聊天平台直接连到一个机器人或 Agent。当系统逐渐拥有多个消息入口、多个处理端、可复用人格、共享上下文，以及不能默认自动发送的外部动作时，这种直连方式很快就会失去清晰边界。
+- 🔌 **让多种信号进入同一套路由层。** 已验证入口包括 NapCat / OneBot、Heartbeat 和内置角色面板；其他平台、语音和设备可通过专用或实验适配器接入。
+- 🧭 **按策略路由，而不是把平台和 Agent 写死。** Route profile、人格、通知规则、定时器、关键词、正则和回复上下文共同决定每个事件交给谁。
+- 🧳 **让上下文跟着任务走。** `AgentPacket` 携带事件、人格、最近消息、计划、记忆引用、附件、接口提示和回复上下文。
+- 🖥️ **用本地控制面管理整条链路。** Node.js Manager 与 RibiWebGUI 统一管理 route、适配器、人格、运行状态、日志、诊断和进程生命周期。
+- 🛡️ **让外发动作保持明确。** 回复经过每条 route 的 Outbox policy，不绕过网关直接执行，并留下 `sent`、`draft`、`blocked` 或 `failed` 可观测结果。
+- 🔍 **保留可检查、可回放的证据。** JSONL 记录覆盖进入事件、数据包、投递、心跳、适配器活动、回复和 delivery replay。
 
-RabiRoute 把这层协调能力独立出来：
-
-- **跨渠道使用统一事件模型。** 平台适配器先把外部消息规范化，再交给路由层处理。
-- **跨处理端使用统一策略边界。** 路由规则负责选择处理端，不允许某个处理端反向定义网关行为。
-- **上下文可迁移。** 人格、最近消息、计划、记忆引用和回复上下文通过 `AgentPacket` 一起投递。
-- **外发控制明确。** 回复和外部动作必须经过 Outbox / Action Gate，不绕开路由器直接执行。
-- **证据可以回放。** JSONL 事件、数据包、投递、心跳、适配器和回放账本记录让故障具备可检查的证据链。
-
-## 为什么这对开源维护者有价值
-
-维护工作经常不是从代码托管平台开始，而是来自社区聊天、支持群、Webhook、发布日程、语音笔记或本地运行告警。这些事件仍然需要一条可靠路径进入编码 Agent 和人工复核。
-
-RabiRoute 提供这条路径，同时避免让单个 Agent 掌握所有渠道凭据和外发权限：
-
-```text
-社区事件 -> 路由策略 -> 精确处理线程
-         -> 草稿或动作请求 -> 审批 -> 原始渠道
-```
-
-当 Codex 或其他处理端需要获得结构化上下文、继续正确任务并准备回复时，RabiRoute 可以让外部动作继续保持可观测、可复核。
-
-## 工作方式
-
-```mermaid
-flowchart LR
-    A["聊天 · Webhook · 定时器 · 语音 · 设备"] --> B["消息适配器"]
-    B --> C["事件存储"]
-    C --> D["路由决策"]
-    D --> E["AgentPacket<br/>模板 + 可迁移上下文"]
-    E --> F["Codex · Agent · 工作流 · 脚本 · 人工"]
-    F --> G["Outbox / Action Gate"]
-    G --> H["回复 · 草稿 · 审批 · 外部动作"]
-    H -. 审计与结果 .-> C
-```
-
-核心链路刻意保持精简：
-
-```text
-消息适配器 -> 事件存储 -> RouteDecision -> AgentPacket -> 处理端 -> Outbox / 回复
-```
-
-## 当前能力
-
-| 领域 | 已实现能力 |
-| --- | --- |
-| 消息入口 | 已验证：NapCat / OneBot、Heartbeat、内置角色面板。实验支持：Remote Agent、FenneNote、小爱、RabiLink、通用 Webhook、WeCom。Manual trigger 是 Manager 动作，不是 adapter。 |
-| 路由 | Route profile、人格绑定通知规则、直接 `@`、回复链路、私聊、关键词、正则、定时规则和每路由独立模板 |
-| 上下文 | 最近消息窗口、人格文件、角色计划和记忆、来源消息的回复上下文、附件证据，以及处理端接口提示 |
-| 处理端 | 已验证：Codex。实验支持：Copilot CLI、AstrBot。人工接力：Marvis。 |
-| 控制面 | Node.js manager 与 RibiWebGUI，负责 Gateway 生命周期、配置、状态、日志、人格和诊断 |
-| 安全 | Outbox 返回 `sent` / `draft` / `blocked` / `failed`，并执行来源消息绑定、adapter policy、NapCat 文件白名单和 Codex Runtime fail-closed 审批；通用审批中心尚未实现。 |
-| 可观测性 | JSONL 消息历史、适配器日志、处理端数据包、投递记录、心跳记录和回放账本 |
-
-各平台的账号凭据和登录状态仍由平台自身管理。公开示例只使用占位值和脱敏后的本地路径；运行期 `data/`、日志、token、录音和转录文本不会进入 Git。
+> RabiRoute 正处于活跃的 `0.1.x` 开发阶段。依赖外部平台或设备链路前，请先查看[当前能力与成熟度](docs/current-capabilities.md)。
 
 ## 快速上手
 
-### 环境要求
-
-- Node.js 20 或更高版本
-- npm
-- 可选：如果要验证完整投递链路，需要准备 Codex、NapCat / OneBot、企业微信或其他外部集成
-
-### 安装与运行
+需要 Node.js 20 或更高版本，以及 npm。
 
 ```bash
 git clone https://github.com/vb2250158/RabiRoute.git
@@ -100,19 +50,55 @@ npm run build
 npm run start:manager
 ```
 
-打开 [http://127.0.0.1:8790/](http://127.0.0.1:8790/) 进入 RibiWebGUI。
+打开 [http://127.0.0.1:8790/](http://127.0.0.1:8790/) 进入 RibiWebGUI。首次运行且本地没有运行数据时，Manager 会从 `examples/data/` 初始化一份脱敏配置。
 
-首次启动时，如果本地还没有运行数据，manager 会从 `examples/data/` 初始化一份脱敏配置。默认只启用主路由；外部适配器仍需完成各自的本地配置。
+最短验证路径：
 
-在 RibiWebGUI 中：
+1. 打开**快速配置**，选择 Heartbeat 作为消息入口。
+2. 选择 Codex，并绑定项目目录与一个 Desktop 任务。
+3. 保存 route，打开**日志诊断**，手动触发一条消息。
 
-1. 选择或创建一个 route 和 persona。
-2. 启用 heartbeat、Webhook、NapCat、企业微信或 RabiLink 等消息入口。
-3. 选择处理端，并通过状态页和日志页验证路由链路。
+外部适配器仍需要各自的账号和本地配置。准备接入 NapCat、企业微信、RabiLink 或其他来源时，继续阅读[快速上手指南](docs/getting-started.md)。
 
-顶栏的 `中 / EN` 菜单可以在运行时切换界面语言。这个选择只保存在当前浏览器，属于 UI 偏好，不会修改 route、人格、模板、正则、路径、日志或任务数据。
+## 工作方式
 
-先阅读[当前能力与成熟度](docs/current-capabilities.md)确认已验证、实验和占位边界；包括 NapCat 和 Codex 在内的配置过程见[快速上手](docs/getting-started.md)。
+```mermaid
+flowchart TB
+    subgraph ingress ["1 · 消息进入"]
+        direction LR
+        A["聊天 · Webhook · 定时器<br/>语音 · 设备"] --> B["消息适配器"]
+    end
+
+    subgraph routing ["2 · 路由与上下文"]
+        direction LR
+        C["事件存储"] --> D["路由决策"] --> E["AgentPacket<br/>模板 + 可迁移上下文"]
+    end
+
+    subgraph delivery ["3 · 处理、安全门与回传"]
+        direction LR
+        F["Codex · Agent · 工作流<br/>脚本 · 人工"] --> G["Outbox / Action Gate"] --> H["回复 · 草稿 · 审批<br/>外部动作"]
+    end
+
+    B --> C
+    E --> F
+    H -. "审计 + 结果" .-> C
+```
+
+每条 route 都把消息进入、策略判断、可迁移上下文、处理端投递和外发控制分开。处理端可以替换，但不会因此接管渠道凭据或反向定义网关行为。
+
+## 当前能力
+
+| 领域 | 已实现能力 |
+| --- | --- |
+| 消息入口 | 已验证：NapCat / OneBot、Heartbeat 和内置角色面板。实验支持：Remote Agent、FenneNote、小爱、RabiLink、通用 Webhook 和 WeCom。Manual trigger 是 Manager 动作，不是 adapter。 |
+| 路由 | Route profile、人格规则、直接 `@`、回复链路、私聊、关键词、正则、定时规则和每 route 独立模板 |
+| 上下文 | 最近消息、人格文件、计划、记忆引用、来源回复上下文、附件证据和处理端接口提示 |
+| 处理端 | 已验证：Codex。实验支持：Copilot CLI、AstrBot。人工接力：Marvis。 |
+| 控制面 | Node.js Manager 与 RibiWebGUI，负责 route 生命周期、配置、状态、日志、人格和诊断 |
+| 安全 | Outbox policy、来源绑定、adapter policy、NapCat 文件白名单和 Codex Runtime fail-closed 审批；通用审批中心尚未实现 |
+| 可观测性 | JSONL 消息历史、适配器日志、处理端数据包、投递记录、心跳记录、回复记录和 delivery replay |
+
+各平台仍拥有自己的账号凭据和登录状态。公开示例只使用占位值和脱敏路径；运行期 `data/`、日志、token、录音和转录文本不会进入 Git。
 
 ## 架构与边界
 
@@ -125,9 +111,13 @@ npm run start:manager
 | 会话投递策略 | 领域内推理 |
 | 草稿、审批、回复和审计边界 | 产出结果或动作请求 |
 
+换句话说：**RabiRoute 不拥有 Agent，但拥有上下文和门。**
+
 RabiRoute 不是完整 Agent OS，不是聊天机器人框架的替代品，不是工作流平台，也不是某个模型提供商的外壳。新平台入口应放在 `src/adapters/`；处理端集成继续隐藏在 agent-adapter 接口之后。
 
-当前代码边界和成熟度以[当前能力与成熟度](docs/current-capabilities.md)为准。[架构说明](docs/architecture.md)与[代码架构](docs/code-architecture.md)进一步说明当前 Desktop owner 主链和模块边界。
+当前代码边界和成熟度以[当前能力与成熟度](docs/current-capabilities.md)为准。
+
+[架构说明](docs/architecture.md)与[代码架构](docs/code-architecture.md)进一步说明当前 Desktop owner 主链和模块边界。
 
 ## Codex 集成
 
@@ -188,7 +178,9 @@ npm run build            # 类型检查并构建后端与 WebGUI
 npm run check:config     # 检查公开/运行期 JSON 文本是否损坏
 ```
 
-开始较大改动前，请先阅读[当前能力与成熟度](docs/current-capabilities.md)，再检查对应代码和测试。欢迎通过 [GitHub 仓库](https://github.com/vb2250158/RabiRoute)提交 issue 和 pull request。
+开始较大改动前，请先阅读[当前能力与成熟度](docs/current-capabilities.md)，再检查对应代码和测试。
+
+欢迎通过 [GitHub 仓库](https://github.com/vb2250158/RabiRoute)提交 issue 和 pull request。
 
 请勿提交真实账号标识、聊天内容、token、Cookie、私有路径或运行期 `data/`。本仓库始终按公开、可复现项目维护。
 

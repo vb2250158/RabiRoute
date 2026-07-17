@@ -8,6 +8,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.1.11 - 2026-07-17
 
+### README brand story and onboarding path
+
+- Restored the brand-first hierarchy in both README languages with “Let Agents connect everything around us.” as the core slogan, grounded by signals from chat, voice, devices, and time. “RabiRoute does not own the Agent. It owns the context and the gates.” now summarizes the architecture boundary.
+- Reordered the README as a product landing page: highlights, the shortest Quick Start, message flow, current capabilities, and deeper documentation. The standalone maintainer-grant framing is gone, while maturity, Outbox, Codex Desktop ownership, and no-hidden-fallback facts remain explicit.
+- Updated the public example Rabi and local runtime Rabi product-boundary memory to distinguish the vision slogan from the gateway, routing, and action-gate boundary, so later approval-oriented edits do not erase the project story.
+- This change updates public documentation and Rabi project context only. Runtime code, configuration schemas, startup flows, and local runtime data behavior are unchanged; no migration is required.
+
 ### MIT open-source license
 
 - Added the standard MIT `LICENSE` at the repository root with `Copyright (c) 2026 vb2250158`, explicitly allowing use, copying, modification, merging, publication, distribution, sublicensing, and sale of software copies under the standard warranty disclaimer.
