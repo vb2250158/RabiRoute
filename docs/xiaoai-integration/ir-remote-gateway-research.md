@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./ir-remote-gateway-research_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 电脑/脚本可控红外遥控设备调研
+
+> 状态：调研参考（2026-06-06）。采购、固件、Home Assistant 和本地 API 兼容性会变化，实施前需重新核对具体型号与当前资料。
 
 调研日期：2026-06-06
 目标：为 RabiRoute/Rabi 后续控制家里的空调、电视等红外设备，选择在中国容易购买、并且能被电脑或本地服务稳定调用的红外网关/万能遥控器。

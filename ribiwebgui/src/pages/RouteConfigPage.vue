@@ -5,6 +5,7 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
+import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 
 const store = useGatewayStore();
 const route = useRoute();
@@ -2959,24 +2960,26 @@ function sessionNamesFor(type: AgentAdapterType): string[] {
 }
 
 function codexSessionItems(): Array<{ title: string; value: string }> {
-  return agentSessions("codex")
-    .filter(session => session.id)
-    .map(session => ({ title: `${session.name} · ${formatCodexSessionTime(session.updatedAt)}`, value: session.id! }));
+  return codexThreadItems(codexThreadSummaries());
 }
 
-function formatCodexSessionTime(value?: string): string {
-  if (!value) return "时间未知";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN", { hour12: false });
+function codexThreadSummaries(): CodexThreadSummary[] {
+  return agentSessions("codex")
+    .filter(session => session.id)
+    .map(session => ({
+      id: session.id!,
+      title: session.name,
+      updatedAt: session.updatedAt,
+      cwd: session.projectPath
+    }));
 }
 
 function selectCodexSession(value: unknown): void {
   if (!gateway.value) return;
-  const selectedValue = String(value || "");
-  const selected = agentSessions("codex").find(session => session.id === selectedValue);
-  gateway.value.codexThreadId = selected?.id || "";
-  gateway.value.codexThreadName = selected?.name || selectedValue;
-  if (selected?.projectPath) gateway.value.codexCwd = selected.projectPath;
+  const selection = selectCodexThread(value, codexThreadSummaries());
+  gateway.value.codexThreadId = selection.threadId;
+  gateway.value.codexThreadName = selection.threadName;
+  if (selection.selected?.cwd) gateway.value.codexCwd = selection.selected.cwd;
   codexBinding.value.error = "";
   codexBinding.value.pending = false;
   touch();
@@ -4328,7 +4331,7 @@ watch(
                         <v-icon v-else-if="agentProjectItems('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="显示全部 Desktop 会话且不显示 ID；输入名称后只查找，唯一匹配就绑定，没有匹配则在点击保存时创建" persistent-hint @update:model-value="selectCodexSession" @blur="lookupCodexThreadBinding">
+                    <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" item-title="title" item-value="value" :return-object="false" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="显示全部 Desktop 会话且不显示 ID；输入名称后只查找，唯一匹配就绑定，没有匹配则在点击保存时创建" persistent-hint @update:model-value="selectCodexSession" @blur="lookupCodexThreadBinding">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading || codexBinding.loading" size="16" width="2" indeterminate />
                         <v-icon v-else-if="codexSessionItems().length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />

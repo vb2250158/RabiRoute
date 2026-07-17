@@ -1,5 +1,13 @@
 ﻿# Rokid 模块本轮重构收工文档
 
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rokid-refactor-closeout-plan_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
+> 状态：已完成的重构记录。它描述模块拆分验收，不代表 Rokid 原生 ASR/TTS 已打通。
+
 本文件只覆盖当前 `com.rabi.link` 单 APK 内的 Rokid 手机侧 SDK 探针重构收口，不把小米路线、RabiRoute/Codex/MCP 消息端接入或眼镜端独立应用纳入本轮完成范围。
 
 ## 目标

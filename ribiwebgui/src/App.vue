@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import LocaleSwitcher from "./components/LocaleSwitcher.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
+import { useI18n } from "./i18n";
 import { useGatewayStore } from "./stores/gatewayStore";
 import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "./utils/gatewayHelpers";
 
 const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
+const { t } = useI18n();
 const DRAWER_PREFERENCES_KEY = "rabiroute:webgui:drawer-preferences";
 
 type DrawerPreferences = {
@@ -40,15 +43,15 @@ const drawerPreferences = readDrawerPreferences();
 const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
 
-const navItems = [
+const navItems = computed(() => [
   { title: "控制台", icon: "mdi-view-dashboard-outline", to: "/overview" },
   { title: "消息适配器", icon: "mdi-puzzle-outline", to: "/routes" },
   { title: "Rabi 人格", icon: "mdi-account-heart-outline", to: "/persona" },
   { title: "日志诊断", icon: "mdi-console-line", to: "/runtime" }
-];
+].map(item => ({ ...item, title: t(item.title) })));
 
 const managerConnected = computed(() => !store.managerError);
-const pageTitle = computed(() => String(route.meta.title || "RibiWebGUI"));
+const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
 const selectedGatewayName = computed(() => store.selectedGateway ? store.configNameFor(store.selectedGateway) : "未选择路由");
 const selectedGatewayAdapters = computed(() => {
   if (!store.selectedGateway) return "等待配置";
@@ -106,7 +109,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
 }
 
 function canLeaveDirtyState(): boolean {
-  return !store.dirty || window.confirm("当前配置有未保存修改。确定要切换吗？");
+  return !store.dirty || window.confirm(t("当前配置有未保存修改。确定要切换吗？"));
 }
 
 function selectGateway(id: string) {
@@ -195,6 +198,7 @@ function selectGateway(id: string) {
       <v-spacer />
       <div class="topbar-actions">
         <span v-if="store.dirty" class="dirty-hint">有未保存的修改</span>
+        <LocaleSwitcher />
         <v-chip class="manager-chip" :color="managerConnected ? 'success' : 'error'" variant="tonal" size="small">
           <v-icon start size="14">mdi-circle</v-icon>
           <span class="manager-chip-text">Manager {{ managerConnected ? "已连接" : "未连接" }}</span>

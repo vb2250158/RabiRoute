@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Rabi 计划示例
 
 这个目录是 RabiRoute 角色计划的公开示例。
@@ -13,7 +19,7 @@
 已归档
 ```
 
-已完成计划会在配置的保留窗口后由 RabiRoute 自动归档。
+已完成计划当前会在 72 小时固定保留窗口后由 RabiRoute 自动归档。这个窗口还不是公开 persona 配置项。
 
 公开示例把未归档计划放在 `items/active/` 下。RabiRoute 归档后会把条目移动到 `archive/`。
 

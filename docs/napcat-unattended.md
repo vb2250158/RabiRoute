@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./napcat-unattended_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # NapCat 无值守与登录稳定性
+
+> 状态：现行指南。RabiRoute 可管理、扫描和启动 NapCat 实例，但 QQ 登录验证仍由 NapCat/QQNT 负责。
 
 RabiRoute 负责接收 NapCat / OneBot 事件、记录消息、路由和投递处理端，也可以在用户点击“打开 NapCat”时编排本机 NapCat 的启动、快捷登录和 OneBot 连接修复；QQ 登录凭据和安全校验仍属于 NapCat / QQNT。不要把 QQ 密码、Cookie、token 写进 `data/route`、`data/roles`、示例文件或仓库。
 

@@ -7,6 +7,14 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class PlanStep:
+    title: str
+    status: str = "未开始"
+    detail: str = ""
+    completed_at: str = ""
+
+
+@dataclass(frozen=True)
 class PlanItem:
     title: str
     status: str = "未开始"
@@ -17,7 +25,11 @@ class PlanItem:
     project_name: str = ""
     project_path: str = ""
     source: str = ""
+    waiting_for: str = ""
+    due_at: str = ""
+    created_at: str = ""
     updated_at: str = ""
+    steps: list[PlanStep] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     path: Path | None = None
 
@@ -91,7 +103,11 @@ class PlanRepository:
             project_name=str(project.get("name") or item.get("projectName") or ""),
             project_path=str(project.get("path") or item.get("projectPath") or ""),
             source=str(source.get("summary") or source.get("kind") or ""),
+            waiting_for=str(item.get("waitingFor") or item.get("waiting_for") or ""),
+            due_at=str(item.get("dueAt") or item.get("due_at") or ""),
+            created_at=str(item.get("createdAt") or item.get("created_at") or ""),
             updated_at=str(item.get("updatedAt") or item.get("updated_at") or ""),
+            steps=_normalize_plan_steps(item.get("steps")),
             keywords=_normalize_keywords(item.get("keywords")),
             path=path,
         )
@@ -106,3 +122,37 @@ def _normalize_keywords(value: Any) -> list[str]:
         if text:
             keywords.append(text)
     return keywords
+
+
+def _normalize_plan_steps(value: Any) -> list[PlanStep]:
+    if not isinstance(value, list):
+        return []
+    steps: list[PlanStep] = []
+    for raw_step in value:
+        if isinstance(raw_step, str):
+            title = raw_step.strip()
+            if title:
+                steps.append(PlanStep(title=title))
+            continue
+        if not isinstance(raw_step, dict):
+            continue
+        title = str(raw_step.get("title") or raw_step.get("name") or raw_step.get("label") or "").strip()
+        if not title:
+            continue
+        status = str(raw_step.get("status") or "").strip()
+        if not status:
+            if raw_step.get("completed") is True:
+                status = "已完成"
+            elif raw_step.get("current") is True:
+                status = "进行中"
+            else:
+                status = "未开始"
+        steps.append(
+            PlanStep(
+                title=title,
+                status=status,
+                detail=str(raw_step.get("detail") or raw_step.get("description") or ""),
+                completed_at=str(raw_step.get("completedAt") or raw_step.get("completed_at") or ""),
+            )
+        )
+    return steps

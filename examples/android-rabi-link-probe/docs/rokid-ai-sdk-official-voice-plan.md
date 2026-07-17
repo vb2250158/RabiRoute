@@ -1,4 +1,12 @@
-﻿# RokidAiSdk 正式语音路线
+# RokidAiSdk 正式语音路线
+
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rokid-ai-sdk-official-voice-plan_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
+> 状态：实验实施与取证记录。眼镜端 SDK 资产、32 位 ABI 和安全门已验证；正式凭证与真实 ASR/TTS 服务闭环仍未完成。
 
 本文记录 `com.rabi.link` 继续接入 Rokid 原生 ASR/TTS 时，除 CXR-L CustomApp 之外的正式 SDK 路线。目标是确认“用户说了什么”能否以文本形式返回，以及 TTS 能否由 APK 直接触发播报。
 
@@ -12,7 +20,7 @@
 | 已验证为当前不可用 | 眼镜端 Android 系统 ASR/TTS | 已在眼镜 APK 内直接调用 Android `SpeechRecognizer` / `TextToSpeech`；真机 `RABI_GLASS_ANDROID_STATUS` 为 `speechRecognizer=false;ttsReady=false`，启动 ASR 返回 `asr:speech_recognizer_unavailable`，TTS 返回 `tts:tts_not_ready`。 |
 | 可继续推进 | RokidAiSdk | 官方 demo 说明它是 Android APK 内集成语音服务的正式路线，能回 ASR 文本、NLP/action、语音事件，并能调用 TTS。 |
 | 阻塞中 | RokidAiSdk 真机闭环 | 需要开放平台产品凭证和 SDK 资产准备完成，不能用 CXR 授权 token 替代。 |
-| 阻塞中 | 当前手机 ABI | 官方 RokidAiSdk 1.4.3 文档要求 `armeabi-v7a`，并说明目前没有 64 位 so；当前测试手机 `4b64e6d6` 只上报 `arm64-v8a`，`ro.product.cpu.abilist32` 为空。 |
+| 阻塞中 | 当前手机 ABI | 官方 RokidAiSdk 1.4.3 文档要求 `armeabi-v7a`，并说明目前没有 64 位 so；当前测试手机 `<adb-serial>` 只上报 `arm64-v8a`，`ro.product.cpu.abilist32` 为空。 |
 | 已验证 | 眼镜端 RokidAiSdk ABI / assets | 眼镜端 32 位 APK 已打包官方 1.4.3 AAR 和 `workdir_asr_cn`，真机回 `assets=true;nativeAbi=true;recordAudioPermission=true`，CXR CustomCmd 桥仍可用。 |
 | 阻塞中 | 眼镜端 RokidAiSdk 启动 | 无私有开放平台凭证时，`glass_rokid_ai_start` 正确返回 `RABI_ROKID_AI_ERROR:not_ready`，缺 `key/secret/deviceTypeId/deviceId/seed`。 |
 | 已验证为当前不可用 | Phone SDK ClassicBT 设备消息链路 | 系统 bonded devices 能看到 `Glasses_3268`。`phone.sdk:2.2.0-E` 和 `2.5.1-P` 均实测 `connectToServer` 回调 `success=false`；新增官方式 scan->connect 探针后，Phone SDK 扫描到 5 个非 Glass/Rokid 设备，没有扫到可连接眼镜候选，只能回退 bonded。`GlassDeviceInfo.present=false`，不能作为当前在线 ASR/TTS 的就绪条件。 |
@@ -46,7 +54,7 @@ RABI_ROKID_AI_ERROR:not_ready:assets=true;nativeAbi=true;recordAudioPermission=t
 
 2026-07-05 12:55 已补上本机私有配置入口：`scripts/Set-RokidGlassAiSdkConfig.ps1` 默认读取 `secrets/rokid-ai-sdk.properties`，然后发 `glass_rokid_ai_save_config` 到手机，再由手机通过 CXR CustomCmd 发给眼镜端 `RABI_GLASS_ROKID_AI_CONFIG_B64:<json>`。眼镜端只保存在内存；本项目日志会把配置 payload 显示为 `<redacted>`。这一步只是把“钥匙孔”做好，仍然需要真实开放平台凭证才能继续验证 ASR/TTS。
 
-2026-07-05 13:23 已把同一组 RokidAiSdk 凭证入口补到手机 APK 测试页：第 09 卡片可填写 `Key` / `Secret` / `deviceTypeId` / `deviceId(sn)` / `seed` / `workDir` / `configFile`，点击“保存 AI 配置”写入本机 SharedPreferences；第 07 卡片在眼镜 APK 启动后可点“发送眼镜 AI 配置”，把同一组配置经 CXR CustomCmd 发给眼镜端。新版 `app-debug.apk` 已构建并安装到测试手机 `4b64e6d6`。这仍不等于 ASR/TTS 已成功，只是把拿到官方凭证后的真机验证路径做成了 UI。
+2026-07-05 13:23 已把同一组 RokidAiSdk 凭证入口补到手机 APK 测试页：第 09 卡片可填写 `Key` / `Secret` / `deviceTypeId` / `deviceId(sn)` / `seed` / `workDir` / `configFile`，点击“保存 AI 配置”写入本机 SharedPreferences；第 07 卡片在眼镜 APK 启动后可点“发送眼镜 AI 配置”，把同一组配置经 CXR CustomCmd 发给眼镜端。新版 `app-debug.apk` 已构建并安装到测试手机 `<adb-serial>`。这仍不等于 ASR/TTS 已成功，只是把拿到官方凭证后的真机验证路径做成了 UI。
 
 2026-07-05 13:20 左右，开放平台账号已提交认证/审核。当前外部状态是等待 Rokid 后台审核和语音接入权限；审核通过前，本项目只能继续做无凭证 readiness 和 UI/消息桥验证。
 
@@ -57,25 +65,25 @@ RABI_ROKID_AI_ERROR:not_ready:assets=true;nativeAbi=true;recordAudioPermission=t
 ```powershell
 .\scripts\Set-RokidGlassAiSdkConfig.ps1 -CreateTemplate
 .\scripts\Test-RokidGlassAiSdkReadiness.ps1
-.\scripts\Set-RokidGlassAiSdkConfig.ps1 -Serial 4b64e6d6 -ProbeAfter
-.\scripts\Set-RokidGlassAiSdkConfig.ps1 -Serial 4b64e6d6 -StartAfterConfig
-.\scripts\Set-RokidGlassAiSdkConfig.ps1 -Serial 4b64e6d6 -Clear
+.\scripts\Set-RokidGlassAiSdkConfig.ps1 -Serial <adb-serial> -ProbeAfter
+.\scripts\Set-RokidGlassAiSdkConfig.ps1 -Serial <adb-serial> -StartAfterConfig
+.\scripts\Set-RokidGlassAiSdkConfig.ps1 -Serial <adb-serial> -Clear
 ```
 
 审核通过并拿到五段凭证后，也可以走一键试跑脚本。它会先检查配置完整性；配置缺失时只输出 `waiting_credentials`，不会乱启动 SDK。有完整 `secrets/rokid-ai-sdk.properties` 后，它会发配置、probe、start、tts、收证据并运行完成断言：
 
 ```powershell
-.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial 4b64e6d6 -ProbeOnly
-.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial 4b64e6d6
-.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial 4b64e6d6 -ConfirmHeardTts
+.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial <adb-serial> -ProbeOnly
+.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial <adb-serial>
+.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial <adb-serial> -ConfirmHeardTts
 ```
 
 如果凭证是直接在手机 APK 第 09 卡片里填写并保存的，本机脚本不会读取手机 SharedPreferences。此时先在第 07 卡片点“发送眼镜 AI 配置”，再用脚本跳过本机配置发送，只负责启动、TTS、收证据和断言：
 
 ```powershell
-.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial 4b64e6d6 -SkipConfigSend -ProbeOnly
-.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial 4b64e6d6 -SkipConfigSend
-.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial 4b64e6d6 -SkipConfigSend -ConfirmHeardTts
+.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial <adb-serial> -SkipConfigSend -ProbeOnly
+.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial <adb-serial> -SkipConfigSend
+.\scripts\Run-RokidGlassAiSdkTrial.ps1 -Serial <adb-serial> -SkipConfigSend -ConfirmHeardTts
 ```
 
 `-ProbeOnly` 只做配置发送、状态查询和证据收集，不启动 SDK、不发 TTS；适合审核刚通过、还不确定凭证和眼镜端状态时先探路。
@@ -260,7 +268,7 @@ Android 系统语音路线已提供两个稳定监听口：logcat `RABI_ANDROID_
 运行：
 
 ```powershell
-.\scripts\Test-RokidPhoneVoicePrerequisites.ps1 -Serial 4b64e6d6 -WaitSeconds 8 -IncludeBtConnect
+.\scripts\Test-RokidPhoneVoicePrerequisites.ps1 -Serial <adb-serial> -WaitSeconds 8 -IncludeBtConnect
 ```
 
 首次完整前置检查证据：
@@ -412,7 +420,7 @@ cd <repo>\examples\android-rabi-link-probe
 带当前手机 ABI 检查：
 
 ```powershell
-.\scripts\Test-RokidAiSdkReadiness.ps1 -Serial 4b64e6d6
+.\scripts\Test-RokidAiSdkReadiness.ps1 -Serial <adb-serial>
 ```
 
 指定私有配置：
@@ -437,7 +445,7 @@ out/rokid-ai-sdk/rokid-ai-sdk-readiness-summary-*.json
 
 ## 当前手机 ABI 判定
 
-2026-07-05 在当前 ADB 设备 `4b64e6d6` 上执行：
+2026-07-05 在当前 ADB 设备 `<adb-serial>` 上执行：
 
 ```powershell
 adb shell getprop ro.product.cpu.abilist
@@ -464,7 +472,7 @@ nativeAbi=false;requiredNativeAbi=armeabi-v7a;device32BitAbis=<none>;device64Bit
 也可以用独立脚本复核：
 
 ```powershell
-.\scripts\Test-RokidAiSdkAbi.ps1 -Serial 4b64e6d6
+.\scripts\Test-RokidAiSdkAbi.ps1 -Serial <adb-serial>
 ```
 
 它会列出 `basic-1.4.3.aar` / `turenso-1.4.3.aar` 里的 native ABI，目前只有 `armeabi-v7a`。
@@ -510,7 +518,7 @@ Manifest 侧能看到的外部开放面：
 复查脚本：
 
 ```powershell
-.\scripts\Inspect-RokidAiAppVoiceSurface.ps1 -Serial 4b64e6d6
+.\scripts\Inspect-RokidAiAppVoiceSurface.ps1 -Serial <adb-serial>
 ```
 
 输出：
@@ -547,7 +555,7 @@ out/rokid-aiapp/inspect-20260705-090144/rokid-aiapp-voice-surface-summary.json
 
 ## 2026-07-05 收口验证
 
-当前 debug APK 已重新构建并覆盖安装到手机 `4b64e6d6`：
+当前 debug APK 已重新构建并覆盖安装到手机 `<adb-serial>`：
 
 ```text
 app/build/outputs/apk/debug/app-debug.apk
@@ -560,7 +568,7 @@ app/build/outputs/apk/debug/app-debug.apk
 | PowerShell 解析 | 通过 | `Watch-RokidNativeVoiceEvents.ps1`、webhook、TTS server、stack、ABI、配置和 AI App inspection 脚本均无解析错误。 |
 | Android 构建 | 通过 | `:app:assembleDebug` 成功。 |
 | APK 安装 | 通过 | `adb install -r app-debug.apk` 返回 `Success`。 |
-| RokidAiSdk ABI | 不通过 | `scripts/Test-RokidAiSdkAbi.ps1 -Serial 4b64e6d6` 输出 `aarNativeAbis=["armeabi-v7a"]`，`deviceAbis=["arm64-v8a"]`。 |
+| RokidAiSdk ABI | 不通过 | `scripts/Test-RokidAiSdkAbi.ps1 -Serial <adb-serial>` 输出 `aarNativeAbis=["armeabi-v7a"]`，`deviceAbis=["arm64-v8a"]`。 |
 | RokidAiSdk readiness | 不通过 | `out/rokid-ai-sdk/rokid-ai-sdk-readiness-summary-20260705-085537.json`。 |
 | 手机端 `rokid_ai_probe` | 命令可达，但能力未 ready | `out/rokid-native-voice/rokid-native-command-filtered-20260705-085634.txt`。 |
 | Rokid AI App 静态 IPC 检查 | 未发现公开 ASR/TTS 入口 | `out/rokid-aiapp/inspect-20260705-090144/rokid-aiapp-voice-surface-summary.json`，且 `dexOnlyWrapper=true`。 |
@@ -756,7 +764,7 @@ out/rokid-native-voice/rabi-ui-after-companion.xml
 后续补了只读状态脚本：
 
 ```powershell
-.\scripts\Get-RokidCompanionAssociationState.ps1 -Serial 4b64e6d6
+.\scripts\Get-RokidCompanionAssociationState.ps1 -Serial <adb-serial>
 ```
 
 当前只读结果：
@@ -778,7 +786,7 @@ summaryPath=out/rokid-native-voice/rokid-companion-state-summary-20260705-104229
 同日继续用系统调试入口验证“是否只是缺少 `com.rabi.link` 的系统 association”。手机 `dumpsys companiondevice` 里已有 Rokid AI App 对 `Glasses_3268` 的 association；新增脚本会读取该 association，只把同一眼镜地址注册给 `com.rabi.link`，输出只保留地址后缀：
 
 ```powershell
-.\scripts\Register-RokidCompanionAssociation.ps1 -Serial 4b64e6d6
+.\scripts\Register-RokidCompanionAssociation.ps1 -Serial <adb-serial>
 ```
 
 证据：

@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./aiui-visual-design-system_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # AIUI 视觉设计与主题 Tokens
 
 本文记录 Rokid AIUI 单绿色显示场景的视觉设计基线，并说明 RabiLink 如何在透明 AR 视野、聊天卡片和独立 modal 中应用这些规则。

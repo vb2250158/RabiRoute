@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Rabi Link Vela 探针
+
+> 状态：历史硬件能力探针。可以构建 debug `.rpk`，但不属于当前 RabiLink AIUI 主路径，也没有证明第三方健康历史数据可读。
 
 这是跑在 Xiaomi Vela 穿戴设备上的快应用探针工程，用于验证手环端可用能力。它不是 Android APK；当前只作为 `com.rabi.link` 手机 APK 的 Vela 侧配套探针，用来验证 `interconnect` 等手环侧能力是否能桥接回同一个 Rabi Link 手机端。
 

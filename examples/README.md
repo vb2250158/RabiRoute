@@ -1,22 +1,20 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 示例目录
 
-这里放可以公开提交、可复制使用的 RabiRoute 示例。示例必须使用占位值、localhost、模板变量和脱敏路径；不要放真实 QQ 号、群号、token、Cookie、本机用户名、私聊内容或运行期 `data/` 内容。
+这里放可以公开提交、复制和检查的 RabiRoute 示例。示例只使用占位值、localhost、模板变量和脱敏路径；不要写入真实 QQ 号、群号、token、Cookie、本机用户名、私聊内容或运行期 `data/`。
 
-示例不是运行前置依赖。没有 `data/route` 和 `data/roles` 时，manager 会优先复制整包 `examples/data`；缺少 examples 时才自己创建最小 QQ / NapCat 到 Codex 配置。
+示例不是运行前置依赖。首次启动时，如果 `data/route` 或 `data/roles` 对应目录不存在，Manager 会从 [`examples/data/`](./data/README.md) 分别复制路由和人格示例。现有目录不会被整包覆盖。
 
-如果你想“把示例拖出来就能跑”，优先复制 `examples/data` 到仓库根目录的 `data`。这会得到默认 QQ 路由配置、RabiRoute 兔娘看板娘人格和对应消息模板规则。
+## 从这里开始
 
-## 示例 data 包
+想先运行主项目，优先复制 [`examples/data/`](./data/README.md) 到仓库根目录的 `data/`。这会得到一条默认启用的 QQ / NapCat + heartbeat 路由，以及 Rabi 人格、消息规则、计划和记忆结构示例。
 
-- `data/route/main/adapterConfig.json`：默认 QQ / NapCat 到 Codex 的示例路由配置。
-- `data/route/voice-chat/adapterConfig.json`：FenneNote/Webhook 输入到 FenneNote 播放请求转发的 `voice_chat` pipeline preset 示例。
-- `data/roles/Rabi/`：默认路由配置配套的唯一 RabiRoute 兔娘看板娘与陪伴型成长人格，包含 `growth.md`、`skills.md`、`prompts/` 和备份用 `old/`。
-- `data/roles/Rabi/personaConfig.json`：默认人格消息模板规则，包含 Rabi 使用的 route kind、规则、模板和投递时附带的最近消息数量。
-- `rabilink-aiui/`：Rokid AIUI 眼镜端消息端，提供“连接对话”和“配置助手”两种模式；通过 Relay 持续接收普通回复与主动消息，并调用已绑定 PC Rabi 的配置接口。
-- `.env.example`：可选的环境变量样板，只用于不走 manager、直接用 env 启动单个 gateway 的场景。
-- `send-webhook-demo.mjs` / `send-webhook-demo.py`：向通用 Webhook 入口发送一条测试消息的 Node.js / Python 标准库示例。
-
-使用方式：
+整包中只有 `main` 默认启用。RabiLink、Rokid 原生语音、voice-chat、WeCom 和 XiaoAI 都是需要凭据、设备或外部服务的禁用模板，不会在首次复制后自动连接。
 
 ```powershell
 xcopy examples\data data /E /I
@@ -26,43 +24,40 @@ xcopy examples\data data /E /I
 cp -R examples/data/. data/
 ```
 
-复制后可以直接在 WebUI 里看到默认 QQ 路由配置和 RabiRoute 兔娘看板娘人格。
+## 示例地图
 
-如果需要用环境变量启动单个 gateway，可以再复制：
-
-```powershell
-copy examples\.env.example .env
-```
-
-```bash
-cp examples/.env.example .env
-```
-
-Rabi 只保留这一份示例，避免同一人格出现多份副本。
+| 目录 | 成熟度 | 用途 |
+| --- | --- | --- |
+| [`data/`](./data/README.md) | 当前示例 | 可复制的 Route、Persona、计划和记忆数据包。 |
+| [`rabilink-aiui/`](./rabilink-aiui/README.md) | 实验集成 | Rokid AIUI 眼镜前台应用、Relay 接入、配置助手和验收脚本。 |
+| [`rabilink-relay/`](./rabilink-relay/README.md) | 当前示例 | Relay 工具导入和鉴权配置样板，不包含真实 token。 |
+| [`android-rabi-link-probe/`](./android-rabi-link-probe/README.md) | 硬件调查工具 | Android / Rokid / 小米健康能力探针；不是主项目必需组件。 |
+| [`rabi-link-vela-probe/`](./rabi-link-vela-probe/README.md) | 历史探针 | vela 手环验证应用，保留为设备调查证据。 |
+| `.env.example` | 可选样板 | 不经过 Manager、直接用环境变量启动单 Gateway 时使用。 |
+| `send-webhook-demo.*` | 当前示例 | 向通用 Webhook 入口发送测试文本。 |
 
 ## Webhook 发送示例
 
-先启动一条包含 `webhook` 消息端的路由，并确认它监听类似下面的地址：
+先启动一条包含 `webhook` 消息端的 Route，并确认它监听的地址，例如：
 
 ```text
 http://127.0.0.1:8791/webhook
 ```
 
-Node.js 版本：
+使用零依赖的 Node.js 或 Python 示例：
 
-```bash
+```powershell
 node examples/send-webhook-demo.mjs
-```
-
-Python 版本：
-
-```bash
 python examples/send-webhook-demo.py
 ```
 
-也可以显式传入 endpoint 和消息正文：
+也可以显式传入 endpoint 和正文：
 
 ```bash
 node examples/send-webhook-demo.mjs http://127.0.0.1:8791/webhook "来自外部系统的测试任务"
 python examples/send-webhook-demo.py http://127.0.0.1:8791/webhook "来自外部系统的测试任务"
 ```
+
+## 公开安全边界
+
+示例数据必须保持可公开、可复制。真实设备凭据、用户消息和运行日志只能留在本机配置或运行期目录，不应补进这些模板。

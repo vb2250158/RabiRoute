@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rabilink-aiui-residency-plan_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiLink AIUI 常驻与主动智能边界
+
+> 状态：实验链路的当前边界。前台 AIUI 闭环已有实现依据；系统级 24 小时后台录音仍未实现，也不能由 AIUI 承诺。
 
 更新时间：2026-07-14
 

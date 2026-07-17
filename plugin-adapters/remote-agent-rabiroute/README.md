@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Remote Agent RabiRoute Bridge
 
 This folder is the standalone unattended Remote Agent bridge for RabiRoute.

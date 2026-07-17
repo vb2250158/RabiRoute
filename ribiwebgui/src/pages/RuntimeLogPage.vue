@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "../i18n";
 import { useGatewayStore } from "../stores/gatewayStore";
 import {
   adapterConnectionReasons,
@@ -14,6 +15,7 @@ import {
 } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
+const { t } = useI18n();
 const gateway = computed(() => store.selectedGateway);
 const runtime = computed(() => store.selectedRuntime);
 const adapters = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value) : []);
@@ -129,7 +131,7 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
     });
     triggerResult.value = {
       ok: true,
-      message: `已触发「${rule.displayName}」，请在最近日志和通知数里确认投递结果。`
+      message: t(`已触发「${rule.displayName}」，请在最近日志和通知数里确认投递结果。`)
     };
   } catch (error) {
     triggerResult.value = {
@@ -144,7 +146,7 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
 async function deleteCurrentGateway(): Promise<void> {
   if (!gateway.value || deletingGateway.value) return;
   const name = store.configNameFor(gateway.value);
-  const confirmed = window.confirm(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`);
+  const confirmed = window.confirm(t(`删除路由配置「${name}」？\n\n只会删除 adapterConfig.json 并停止该路由，历史消息和日志会保留在路由目录里。`));
   if (!confirmed) return;
   deletingGateway.value = true;
   deleteError.value = "";
@@ -302,7 +304,7 @@ async function deleteCurrentGateway(): Promise<void> {
           <div v-for="rule in triggerableRules" :key="rule.id" class="rule-card">
             <div class="d-flex justify-space-between ga-3 align-center flex-wrap">
               <div>
-                <div class="font-weight-bold text-primary">{{ rule.displayName }}</div>
+                <div class="font-weight-bold text-primary" data-no-i18n>{{ rule.displayName }}</div>
                 <div class="section-note mt-1">{{ rule.routeKindLabel }} / {{ rule.id }}</div>
               </div>
               <v-btn

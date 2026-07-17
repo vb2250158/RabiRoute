@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./persona-route-workbench-plan_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 人格路由工作台设计计划
+
+> 状态：设计中。单 route profile 的无副作用 RouteDecision / AgentPacket dry-run 预览尚未实现。
 
 本文设计 RibiWebGUI 的人格配置页改造。它不是竞品 Agent 编辑器复刻，也不是“智能选择人格”的产品方案；它是给当前 RabiRoute 模型补一个可解释、可预览、可排障的工作台。
 

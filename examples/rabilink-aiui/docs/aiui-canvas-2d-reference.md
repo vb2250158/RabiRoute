@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./aiui-canvas-2d-reference_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # AIUI Canvas 2D 接口速查
 
 本文记录 AIUI `canvas` 组件提供的 Web 标准风格 Canvas 2D 绘图接口，并补充 Rokid 单色眼镜与 RabiLink 项目的使用边界。基础组件选择说明见 [AIUI 框架与逻辑开发笔记](aiui-framework-and-logic-development.md)。

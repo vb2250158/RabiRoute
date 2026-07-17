@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rabilink-glasses-app-design_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiLink 原生主动智能应用设计
+
+> 状态：历史/演进设计。本文以“手机常驻录音桥”为第一版主线，已被后续 AIUI 直连 Relay、前台原生 ASR/TTS 和手机边缘枢纽边界部分替代；现行事实以相关 RabiLink 新文档为准。
 
 日期：2026-07-09
 

@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./code-architecture_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiRoute 代码架构
+
+> 状态：当前代码地图。模块路径、Codex transport 和适配器成熟度已按仓库现状校准。
 
 这份文档面向需要改代码的人。它不重复解释 RabiRoute 的产品定位；产品边界见 [架构说明](architecture.md)。这里主要说明代码里的 Module 怎么分工、一条消息怎么流动、改某类功能应该先看哪里。
 
@@ -75,10 +83,13 @@ examples/ 和 skills/
 消息端 Adapter 在 `src/adapters/`：
 
 - `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别。
-- `wecomAdapter.ts`：计划接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。企业微信群聊字段应尽量对齐 NapCat 群聊字段，专用字段只作为补充。
+- `wecomAdapter.ts`：接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。当前成熟度仍是 experimental，企业微信群聊字段尽量对齐 NapCat，专用字段只作为补充。
 - `webhookAdapter.ts`：接通用 Webhook、FenneNote、小爱等 HTTP 回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。
+- `rabilinkAdapter.ts` / `rabilinkRelayWorker.ts`：本地兼容入口与 Relay worker；observation 可先写统一会话账本，主动下行走独立消息流。
 - `heartbeatAdapter.ts`：定时触发心跳消息。
 - `messageAdapter.ts`：消息端 Adapter 的最小 Interface。
+
+`rolePanel` 和 `remoteAgent` 出现在 MessageAdapter 类型中，但它们的真实入口由 Manager 提供：角色面板走 Manager/托盘 timeline，Remote Agent v3 由 RabiGUI 主动扫描连接远端 bridge。Gateway 子进程只上报对应状态，不另开网络 listener。
 
 Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转成 RabiRoute 内部 record，然后交给 `forwarding.ts`。Adapter 不应该知道 prompt 怎么拼，也不应该知道处理端怎么投递。
 
@@ -239,9 +250,9 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 - NapCat 群聊在 `replyToSource=true` 且存在源 `messageId` 时，由 Outbox 统一补 OneBot reply 段；人格和处理端不需要手写 CQ reply，并会避免重复添加。
 - NapCat 本地群文件必须位于 `messageAdapterPolicies.napcat.allowedFileRoots`，Outbox 校验真实路径和普通文件类型后调用 `src/napcat.ts` 的 `upload_group_file` 封装；可选说明文本在上传成功后单独发送，避免文本失败导致重复上传大文件。
 - 允许时调用对应消息端发送封装，例如 NapCat HTTP 或企业微信智能机器人 SDK。
-- 不允许或失败时保留 draft。
+- 不允许时返回 `blocked` 并附带 draft 数据；发送失败时返回 `failed` 并保留 draft 数据；未选择外部输出时可以返回 `draft` 或把结果保留在 Agent 会话。
 
-长期方向是把它深化为通用 Action Gate：
+当前 Outbox 已是 QQ、WeCom、FenneNote、RabiLink 和角色面板的真实回传层，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
 
 ```text
 Agent output
@@ -351,7 +362,8 @@ Gateway 配置的事实源 Module。
 
 - `napcatManager.ts`：NapCat Shell 准备、WebUI token、OneBot 配置、健康检查、启动/停止、扫描。
 - `webhookLikeScans.ts`：Webhook / FenneNote / XiaoAi 这类 HTTP callback 端点扫描。
-- 企业微信这类主动 WebSocket 长连接消息端应单独做扫描 read model，检查 SDK、bot id/secret、连接状态和最近消息，不应塞进 webhook-like 扫描。
+- `wecomManager.ts`：企业微信主动 WebSocket 长连接的扫描 read model，检查 SDK、bot id/secret、连接认证状态和最近消息。
+- `remoteAgentManager.ts`：远端 Agent 设备发现、密码挑战、连接、任务、事件和文件回传。
 
 这些 Module 面向 manager 控制面，不参与 Gateway 子进程的实时消息处理。
 
@@ -363,6 +375,7 @@ Gateway 配置的事实源 Module。
 - recent memories
 - consolidated memories
 - memory consolidation runs
+- role skills
 - Agent 上下文快照
 
 `AgentPacket` 会读取它生成“记忆与计划”上下文。`manager/controlPlaneRoutes.ts` 也暴露对应 HTTP 接口。
@@ -381,8 +394,15 @@ Gateway 配置的事实源 Module。
 - `src/pages/RuntimeLogPage.vue`：运行日志。
 - `src/pages/PersonaTemplatePage.vue`：人格和模板相关页面。
 - `src/utils/gatewayHelpers.ts`：前端配置辅助函数。
+- `src/i18n/index.ts`：唯一 locale 状态、浏览器偏好持久化、`<html lang>` 和切换事件。
+- `src/i18n/catalog.ts`：人工校准的英文界面词条和动态文案规则。
+- `src/i18n/domLocalizer.ts`：把已登记界面文案应用到 Vue / Vuetify DOM；跳过 `data-no-i18n`、代码块、输入正文和可编辑内容。
+- `src/components/LocaleSwitcher.vue`：顶栏 `中 / EN` 切换入口。
+- `src/pages/ProjectDocsEnglish.vue`：按需加载并渲染仓库 `docs/**/*_en.md`，避免维护第三份英文文档。
 
 前端可以做 UI 友好的默认值和展示转换，但配置不变量不要只存在前端。需要和后端一致的规则应进入 `src/shared/gatewayConfigModel.ts` 或由 manager 返回。
+
+locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:locale`，不是正式项目存档。route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据属于用户配置或运行事实，必须保持原文；需要保护的动态区域使用 `data-no-i18n` 明确标注。
 
 ## Desktop Tray
 
@@ -519,13 +539,13 @@ src/messageEndpoints/
 
 ## 当前优先演进
 
-建议按这个顺序继续：
+当前已经有 `AgentPacket` 审计和 `delivery-replay-ledger.jsonl`。建议按这个顺序继续：
 
-1. 给 `RouteDecision` 增加 `route-decisions.jsonl`，支持基础 replay。
-2. 给 `AgentPacket` 增加 packet log，便于区分“路由错”和“上下文错”。
-3. 继续把 manager 控制面的大 endpoint 群拆到专门 Module。
-4. 把 `GatewayStatusStore` 抽出来，统一 `gateway-status.json` 和 adapter log read model。
-5. 把 `outbox.ts` 深化成通用 Action Gate。
+1. 实现无副作用 RouteDecision / AgentPacket dry-run 预览。
+2. 继续把 manager 控制面的大 endpoint 群拆到专门 Module。
+3. 抽出统一状态 read model，减少 `gateway-status.json`、adapter log 和 WebGUI 硬编码之间的漂移。
+4. 在 `outbox.ts` 现有发送与 policy 基础上增加持久化 Action Queue / approval 状态机。
+5. 为 experimental adapter 建立真实端到端验收和成熟度升级条件。
 
 ## 暂存设计提醒
 

@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rabilink-phone-edge-hub_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiLink 手机边缘通讯枢纽
+
+> 状态：实验集成契约。手机边缘枢纽、Android SDK 和设备消息模型已有首版实现，仍需按真实手机、眼镜和后台生命周期验收。
 
 ## 结论
 

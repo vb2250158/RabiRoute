@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Archive
 
 这里保存已经退出运行链路、但仍有迁移审计价值的旧实现。`archive/` 不参与 TypeScript 构建，也不能作为新代码的依赖来源。

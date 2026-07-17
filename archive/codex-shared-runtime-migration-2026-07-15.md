@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./codex-shared-runtime-migration-2026-07-15_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Codex 共享 Runtime 失败方案归档
 
 ## 结论

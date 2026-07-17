@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rabilink-relay-server_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiLink Relay 公网中继
+
+> 成熟度：实验。Relay、PC worker、远程 WebGUI、输入/下行队列和统一会话账本已有实现，仍需按真实公网、账号隔离、设备和恢复场景验收。
 
 这个服务用于把 Rokid 云侧插件、便携设备和电脑端 RabiRoute/RabiLink 消息端接起来。输入与输出是两条独立队列。当前 AIUI 在应用层直接调用 Relay；按 Rokid 官方机制，眼镜网络包会通过蓝牙透明代理到手机 App，所以传输层使用了手机网络，但手机不拥有 Agent、账本或配置。AIUI 的连接对话采用 record-first：电脑端 worker 领取观察后先写入统一会话账本并完成上行，不把单句转写直接交给 Codex。Codex 在线程空闲、触摸板引导或周期反思时读取账本，再按需要独立下行。
 

@@ -5,7 +5,11 @@
 /.tmp/
 /.codex-tmp/
 /out/
+/output/
 /reports/
+/tmp-app-schema/
+/tmp-thread-*.cjs
+/tmp-update-*.cjs
 
 # Private runtime state, live relay config, tokens, logs, and current import JSON.
 /data/

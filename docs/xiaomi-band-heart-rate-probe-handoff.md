@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./xiaomi-band-heart-rate-probe-handoff_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 小米手环心率列表探针交接
+
+> 状态：实验调查交接。APK 探针和诊断取证路径存在，但完整、稳定、可授权的后台心率历史 API 尚未验证。
 
 > 当前状态：Android 手机端探针已迁入 Rabi Link 命名体系，正式 APK 包名为 `com.rabi.link`，通用导出脚本为 `Export-RabiLinkProbeApk.ps1`。当前真实目录是 `examples/android-rabi-link-probe/`，本文所有可执行命令均以该目录为准。
 
@@ -39,7 +47,7 @@
 ADB 已在另一台电脑上连通手机：
 
 ```text
-serial: 4b64e6d6
+serial: <adb-serial>
 model: 23116PN5BC
 Android: 16
 com.mi.health: 3.56.0

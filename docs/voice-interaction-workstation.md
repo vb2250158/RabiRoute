@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./voice-interaction-workstation_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 语音交互工作站
+
+> 成熟度：实验。通用 Webhook/FenneNote 入口和 Outbox 接线存在，但端到端语音设备、TTS 与角色体验仍需按环境验收。
 
 这份说明用于把 RabiRoute、FenneNote 转录、角色对话和 OumuQ TTS 连接成一套可复用的语音交互工作站。它只描述公开安全的接口和工作流，不包含私聊日志、真实 QQ 号、token、cookie、个人路径、webhook 密钥或私有角色设定。
 
@@ -20,69 +28,61 @@ FenneNote 负责把语音变成文本；Codex 或下游 Agent 负责理解上下
 
 ## 推荐事件模型
 
-FenneNote 或其他转录端应向 RabiRoute 提交结构化 webhook，而不是只提交一段散文：
+FenneNote 或其他转录端应向 RabiRoute 提交结构化 JSON。当前 adapter 实际读取 `type`、`id/messageId`、`source/sender`、`text/message/content/query/prompt/input/question`，以及可选 speaker、device、session 和时间字段：
 
 ```json
 {
-  "platform": "fenne-note",
-  "eventType": "voice_transcript",
-  "eventId": "<stable-event-id>",
-  "createdAt": "2026-06-05T10:00:00+08:00",
-  "source": {
-    "channel": "codex",
-    "chatType": "local",
-    "chatId": "<placeholder-chat-id>",
-    "senderId": "<placeholder-user-id>",
-    "senderName": "<display-name>"
-  },
-  "transcript": {
-    "text": "<recognized text>",
-    "language": "zh-CN",
-    "confidence": 0.92
-  },
-  "actionInstruction": {
-    "replySurface": "codex",
-    "allowExternalSend": false,
-    "allowTts": true
-  }
+  "type": "voice_transcript",
+  "id": "<stable-event-id>",
+  "source": "fennenote",
+  "text": "<recognized text>",
+  "speakerName": "<display-name>",
+  "speakerConfidence": 0.92,
+  "sourceDeviceId": "<device-id>",
+  "sessionId": "<session-id>",
+  "startedAt": "2026-06-05T10:00:00+08:00",
+  "endedAt": "2026-06-05T10:00:05+08:00"
 }
 ```
 
-`eventId` 用于去重。`source` 只放公开安全的占位或运行期字段，不把真实账号写进示例或文档。`actionInstruction.replySurface` 是关键字段，它决定回复应该回到哪里：
+`id` / `messageId` 会作为消息 ID 写入记录，但通用 FenneNote/Webhook adapter 当前没有持久化的全局 `eventId` 去重表；发送端仍应保证幂等或避免重复提交。`source` 只放公开安全的占位或运行期字段，不把真实账号写进示例或文档。
 
-- `codex`：在当前 Codex/Agent 会话中回复，不走 QQ/NapCat。
-- `qq`：生成待发 QQ/NapCat 回复；默认进入 draft，只有获得授权后才发送。
-- `tts`：生成可朗读文本并交给 OumuQ；是否同时显示文本由调用端决定。
-- `none`：只记录或触发内部整理，不生成对外回复。
+当前 adapter 不解析嵌套 `actionInstruction.replySurface`、`allowExternalSend` 或 `allowTts`。回复去向由 route 的 `pipelinePreset` / `pipeline`、`messageAdapterPolicies` 和 Agent 回传的 `replyContext`/明确目标决定：
 
-如果事件来自 Codex/FenneNote 语音输入，必须先读 `actionInstruction` 和转写文本里的显式指令。不要因为内容像聊天，就自动发到 QQ；也不要因为来源是 `voice_transcript`，就把用户明确说出的“发到群里 / 发 QQ / 你直接发”一律降级成本地回复。语音只是输入方式，不等于禁止外发。
+- `outputAdapter=agent`：结果保留在 Agent 会话。
+- `outputAdapter=fennenote`：Outbox 转发 reply 或 playback 请求。
+- 明确 QQ/WeCom/RabiLink 来源或目标：进入对应 Outbox policy。
+- 缺少明确 route/目标或 policy 禁止时：返回 `blocked`，并保留 draft 数据。
+
+不要因为内容像聊天就自动发到 QQ；也不要因为来源是 `voice_transcript`，就忽略用户明确说出的“发到群里 / 发 QQ / 你直接发”。语音只是输入方式，真正外发仍需要明确目标并通过对应 route policy。
 
 ## RabiRoute 路由规则
 
-语音转录建议使用 `voice_transcript` route kind，并把转录文本、来源、目标回复面和安全授权显式写入模板。模板可以使用真实换行，避免字面量 `\n`：
+语音转录使用 `voice_transcript` route kind。模板可读取转录文本、来源和 pipeline 输出意图；模板使用真实换行，避免字面量 `\n`：
 
 ```text
 [RabiRoute 语音转写]
 事件时间：{time}
 路由类型：{routeKind}
-回复目标面：{replySurface}
-允许外发：{allowExternalSend}
-允许 TTS：{allowTts}
-来源通道：{sourceChannel}
+输入端：{inputAdapter}
+输出端：{outputAdapter}
+输出模式：{promptOutputMode}
+允许播放：{ttsPlay}
+回复来源：{replyToSource}
+语音来源：{voiceSource}
 
 [转写内容]
 {message}
 
 [行动说明]
-行动前先读取回复目标面。
-如果 replySurface 是 codex，请在当前 Codex 对话中回复。
-如果 replySurface 是 qq，除非已有明确授权，否则只准备 QQ/NapCat 回复草稿。
-如果 replySurface 是 tts，请生成符合角色语气、可交给 OumuQ 的可见文本。
-如果转写内容本身明确要求发送到 QQ/NapCat，把它视为外发请求，并遵循现有发送流程或草稿审批流程。
+先读取 pipeline 输出端和当前回复上下文。
+如果 outputAdapter 是 agent，请把结果保留在当前 Agent 会话。
+如果 outputAdapter 是 fennenote，请生成符合角色语气、可交给 FenneNote/OumuQ 的可见文本和播放参数。
+如果转写内容明确要求发送到 QQ/WeCom/RabiLink，请只在目标明确且对应消息端 policy 允许时调用回复 API；否则说明缺少的信息。
 可见文本和朗读文本都要保持角色语气。
 ```
 
-下游 Agent 需要拿到的不是“请回复一句话”，而是完整的决策材料：转录文本、事件来源、目标回复面、是否允许外发、是否允许 TTS、角色包路径和最近上下文日志。
+下游 Agent 需要拿到的不是“请回复一句话”，而是完整的决策材料：转录文本、事件来源、pipeline、`replyContext`、角色包路径和最近上下文日志。
 
 ## 角色对话和 TTS
 
@@ -116,7 +116,7 @@ FenneNote 或其他转录端应向 RabiRoute 提交结构化 webhook，而不是
 - 可以自动投递或引导 Codex/Agent 内部会话。
 - 可以自动生成 Codex 可见回复草稿。
 - 可以自动生成 OumuQ TTS 草稿或本地播放请求，前提是事件允许 TTS。
-- QQ/NapCat 群发、私聊、写外部系统和修改角色私有数据默认都要经过安全门。语音里已经明确给出目标、内容和发送授权时，可以进入现有发送流程；缺少目标、内容或权限时才生成 draft 并等待确认。
+- QQ/NapCat、WeCom、RabiLink 和 FenneNote 外发都经过 Outbox 和消息端 policy。目标与内容明确且 policy 允许时可以发送；缺少目标或被 policy 禁止时返回 `blocked` 并附带 draft 数据。当前没有通用 WebGUI 审批队列。
 
 提交到公开仓库前必须确认：
 
@@ -128,12 +128,12 @@ FenneNote 或其他转录端应向 RabiRoute 提交结构化 webhook，而不是
 ## 最小落地清单
 
 1. FenneNote 配置 webhook，把每条语音转录提交为 `voice_transcript` 事件。
-2. RabiRoute 记录原始事件和规范化事件，并用 `eventId` 去重。
-3. 在角色 `personaConfig.json` 中启用 `voice_transcript` 消息模板规则，模板包含 `replySurface`、`allowExternalSend` 和 `allowTts`。
+2. RabiRoute 记录 adapter 请求和规范化语音事件；发送端负责避免重复提交，RabiRoute 通用 webhook 当前不承诺 `eventId` 全局去重。
+3. 在角色 `personaConfig.json` 中启用 `voice_transcript` 消息模板规则，模板使用实际存在的 pipeline 和 voice 变量。
 4. RabiRoute 把事件投递给固定 Codex/Agent thread；空闲时 start，运行中 steer。
 5. Agent 根据角色包生成 `visibleText` 和可选 `ttsText`，并严格遵守目标回复面。
 6. OumuQ 只接收已经确认可朗读的 `ttsText`。
-7. QQ/NapCat 外发必须经过 action safety gate；语音指令已经明确授权且信息完整时可以发送，信息不足时先 draft，获得确认后再 commit。
+7. 外发必须经过 `/api/agent/replies` 和对应消息端 policy；信息不足时返回 `blocked`/draft 数据，由用户或上层流程补齐后重新提交。
 
 上面是“每段转写直接成为 Agent 输入”的普通语音工作站。如果 FenneNote 只作为 RabiLink 主动智能的常驻观察源，应把它与 `rabilink` 放在承载 `RabiActive` 的同一条 Route，并将 `routeVariables.rabilinkRecordFirstSources` 设为 `fennenote`。此时转写仍会留普通日志，但只追加到统一会话账本，等待空闲/周期/触摸板审阅，不执行第 4 步的逐段直接投递。两种模式不要同时配置在不同 Route 上消费同一个 webhook。
 

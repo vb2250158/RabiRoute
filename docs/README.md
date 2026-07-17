@@ -1,40 +1,78 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiRoute 文档
 
-项目级文档集中放在这里。第一次部署按顺序看前两篇；要写路由或人格时看中间两篇。
+这里同时包含现行使用说明、实验集成、设计方案、调研和历史交接。文件存在不代表功能已经完成；阅读前先看状态。
 
-## 上手与配置
+## 状态说明
 
-- [快速上手](getting-started.md)：安装、启动 manager、接 NapCat、验证链路。
-- [配置与接入](configuration.md)：`data/route`、RibiWebGUI、消息端、Agent 端、可选 NapCat 插件入口。
-- [NapCat 无值守](napcat-unattended.md)：QQ 登录态、NapCat WebUI、Windows 永久环境变量和进程守护边界。
+| 状态 | 含义 |
+| --- | --- |
+| 当前事实 | 已按代码、Schema、WebGUI 和测试核对，可作为当前版本口径。 |
+| 现行指南 | 对应已实现功能，但仍应随代码变化持续复核。 |
+| 实验集成 | 代码入口存在，外部系统或真机链路仍需环境验收。 |
+| 待校准 | 文档包含有效信息，但已经发现过时或互相矛盾的描述；优先参考“当前能力与成熟度”。 |
+| 设计中 | 方案、需求或路线图，不代表当前代码已经实现。 |
+| 历史参考 | 旧路线、研究或交接记录，不是当前主链。 |
 
-## 路由与人格
+## 先看这里
 
-- [路由配置](routing-configuration.md)：`adapterConfig.json`、消息端、Agent 端和路由入口参数。
-- [路由人格](routing-and-personas.md)：`persona.md`、`personaConfig.json`、成长型人格包、Rabi 默认看板娘示例。
-- [人格路由工作台计划](persona-route-workbench-plan.md)：人格配置页改造成 route 绑定、规则预览、AgentPacket 预览和诊断工作台的闭环设计。
-- [计划和记忆机制](plan-and-memory-model.md)：说明计划、近期记忆、沉淀记忆、托盘视图和 Agent 获取上下文的方式。
-- [Agent 需要关注的 Rabi 接口](rabi-agent-interfaces.md)：给 Agent 注入的计划、记忆和内置触发接口说明。
-- [Agent 上下文注入说明](agent-context-injection.md)：说明默认注入项、按需注入项和最终投递给 Agent 的消息格式。
-- [Pipeline presets](pipeline-presets.md)：把默认输入端、输出端、TTS 和提示词输出模式打成一组。
-- [RabiLink Relay 公网中继](rabilink-relay-server.md)：当前 Rokid/灵珠和手机端 RabiLink 主链路，使用服务器应用 token、PC worker 直连、账号隔离和远程 PC WebGUI。
-- [RabiLink 原生主动智能应用设计](rabilink-glasses-app-design.md)：原生手机常驻录音桥、随身本地 Agent、`Rabi Glass` HUD、手机配置主控台和 `RabiLink Lab` 测试入口收纳方案。
-- [RabiLink AIUI 常驻与主动智能边界](rabilink-aiui-residency-plan.md)：说明当前 record-first 双向队列、前台 ASR/TTS、配置助手、运行证据，以及为何系统级 24 小时录音仍需 FenneNote 或 Android foreground service。
-- [RabiLink 手机边缘通讯枢纽](rabilink-phone-edge-hub.md)：说明官方 AIUI 手机网络代理、手机/PC/Relay 职责、设备目标信封、独立 cursor、Wear OS 与 Android 常驻边界。
-- [RabiLink 主动智能可用版需求与实施方案](rabilink-active-intelligence-requirements.md)：眼镜 AIUI 通过 HTTPS 直连 Relay，不依赖 AIUI 与 CXR-L 通讯；首版使用低成本 AIUI 原生 ASR/TTS，并预留后续 API Provider。
-- [手机 App 远程接入历史方案](mobile-app-webhook-integration.md)：早期 Webhook / WebSocket 双向接入设计稿，仅作历史参考；当前 RabiLink 主链路以上一篇为准。
-- [小米手环心率列表探针交接](xiaomi-band-heart-rate-probe-handoff.md)：Android APK / Vela 快应用探针、云端心率列表拉取、ZIP 证据包解析和下一台电脑继续开发说明。
-- [语音交互工作站](voice-interaction-workstation.md)：FenneNote 转录、RabiRoute 路由、角色对话和 OumuQ TTS 的公开安全接线方式。
-- [企业微信接入](wecom-integration.md)：企业微信智能机器人 WebSocket 双向群聊消息端设计、配置、模板变量和回传边界。
+- [当前能力与成熟度](current-capabilities.md) — **当前事实**。按 `verified / experimental / stub / planned / historical` 区分真实能力，是目前最可靠的功能入口。
+- [快速上手](getting-started.md) — **现行指南**。安装、启动 Manager、打开 RibiWebGUI 和验证第一条 route。
+- [配置与接入](configuration.md) — **现行指南**。配置字段、消息端和处理端成熟度已按当前 Schema 与扫描结果校准。
+- [排障](troubleshooting.md) — **现行指南**。覆盖 NapCat、编码、Codex Desktop owner、任务桥、模型与审批边界。
 
-## 维护
+## 路由、人格与处理端
 
-- [排障](troubleshooting.md)：NapCat 登录/外发失败、Windows 中文消息乱码、Codex app-server、普通群消息不转发。
-- [Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md)：总结会话找不到、工具缺失、Runtime 所有权倒置和桌面端启动依赖等问题，并给出各 Agent 的正确接入方法。
-- [标准 Agent 端接入需求](agent-adapter-standard-requirements.md)：定义一个 Agent 端应尽可能具备的发现、认证、会话、幂等创建、投递、结果、工具、生命周期、UI、安全和验收能力。
-- [Codex Desktop Agent 接入与验收合同](codex-desktop-agent-acceptance.md)：固化名称 + ID 重绑、自动初始化、按需扫描、Desktop 唯一 owner 和 4510 独立启动安全门。
-- [架构说明](architecture.md)：项目边界、分层、演进路线和红线。
-- [代码架构](code-architecture.md)：后端 Module、消息主链路、manager 控制面、WebGUI 和常见修改入口。
-- [项目功能手册](project-function-map.md)：通用项目功能地图，按功能索引数据真源、消费点、生效时机、副作用、代码入口和设计边界。
-- 项目功能搜索页：在 RibiWebGUI 左侧栏底部 `GitHub` 按钮下面点击 `项目文档`，或访问 `/#/docs`。
-- [Windows 桌面启动与完整打包](windows-launcher-and-packaging.md)：Windows 托盘入口、WebGUI 前端、Node 后端和完整桌面运行包的唯一真源。
+- [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
+- [路由与人格](routing-and-personas.md) — **现行指南**。route 与 role 的边界、人格包和消息模板判断框架。
+- [Agent 上下文注入](agent-context-injection.md) — **现行指南**。`AgentPacket` 中的事件、最近消息、角色知识、路径和回复上下文。
+- [Rabi Agent 接口](rabi-agent-interfaces.md) — **现行指南**。回复、thread bridge、计划、记忆、Remote Agent 和多实例 API。
+- [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
+- [Pipeline presets](pipeline-presets.md) — **现行指南**。默认 Agent 会话、明确外部目标、Outbox 状态和 FenneNote 接线。
+- [Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md) — **现行指南**。会话重复创建、工具缺失、owner 倒置和桌面启动依赖的复盘与验证方法。
+- [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) — **现行指南**。发现、认证、任务、幂等创建、投递、结果、工具、生命周期、UI、安全和验收要求。
+- [Codex Desktop Agent 接入与验收合同](codex-desktop-agent-acceptance.md) — **当前事实**。稳定 ID、按需扫描、自动初始化、Desktop 唯一 owner 和元数据 bootstrap 安全门。
+
+## 架构与维护
+
+- [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
+- [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
+- [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
+- [Windows 启动与打包](windows-launcher-and-packaging.md) — **现行指南**。Node/WebGUI 基线与 Qt/Windows 便利层。
+- [NapCat 无值守](napcat-unattended.md) — **现行指南**。登录态、quick login、Manager 一键恢复和守护边界。
+
+## 实验集成
+
+- [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
+- [语音交互工作站](voice-interaction-workstation.md) — FenneNote、角色对话和 OumuQ/TTS 接线。
+- [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
+- [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
+- [RabiLink 手机边缘枢纽](rabilink-phone-edge-hub.md) — 手机/穿戴设备契约和 Android SDK。
+- [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。
+- [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 需求与实施追踪，不等同于全部完成。
+- [RabiLink 原生应用设计](rabilink-glasses-app-design.md) — 手机/眼镜体验设计。
+- [小爱接入技术路线](xiaoai-integration/xiaoai-rabiroute-intercept-route.md) — 小爱桥接方案，包含未实现 API 和未来路线。
+- [红外网关调研](xiaoai-integration/ir-remote-gateway-research.md) — 调研资料。
+- [小米手环心率探针交接](xiaomi-band-heart-rate-probe-handoff.md) — 真机探针与交接记录，不是核心路由能力。
+
+## 设计与历史
+
+- [主动智能系统设计总纲](../主动智能设计思路.md) — **设计中**。描述持续感知、意图假设、主动行动、记忆与设备分工的长期愿景；当前实现范围以“当前能力与成熟度”为准。
+- [人格路由工作台计划](persona-route-workbench-plan.md) — **设计中**。Dry-run RouteDecision / AgentPacket 预览尚未实现。
+- [Windows 托盘任务窗口计划](rabiroute-windows-tray-task-window-plan.md) — 设计记录；实际实现以 `desktop/tray-task-window/` 和打包文档为准。
+- [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。
+- [手机 App Webhook 历史方案](mobile-app-webhook-integration.md) — **历史参考**，当前 RabiLink 主链不再以手机桥作为必经中转。
+
+归档材料位于 [`archive/`](../archive/README.md)，示例和子项目文档位于 [`examples/`](../examples/README.md)。
+
+## 文档维护规则
+
+1. 先核对代码、配置 Schema、API、WebGUI 和测试，再更新中文事实页。
+2. 行为准确后再人工维护英文版本；不要把旧文档直接批量翻译。
+3. 设计稿必须明确写“设计中”或“历史参考”，不能混进当前能力表。
+4. 运行语义文件（`AGENTS.md`、`SKILL.md`、persona、prompt、memory、plan）不做机械翻译。

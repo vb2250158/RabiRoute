@@ -1,6 +1,14 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./wecom-integration_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 企业微信接入
 
-企业微信接入优先面向群聊机器人场景。RabiRoute 计划使用企业微信智能机器人 WebSocket 长连接 SDK，把企业微信群聊消息接入为和 NapCat 类似的双向消息端：本地 gateway 主动连接企业微信，收到群消息后写入日志、路由给 Agent，Agent 再通过 RabiRoute outbox 回发到原企业微信群聊或明确指定的企业微信会话。
+> 成熟度：实验。智能机器人 WebSocket、消息规范化、状态扫描和 Outbox 回发代码已存在，但仍需要在真实企业微信租户中完成连续收发验收。
+
+企业微信接入优先面向群聊机器人场景。当前实现使用企业微信智能机器人 WebSocket 长连接 SDK，把企业微信群聊消息接入为和 NapCat 类似的双向消息端：本地 gateway 主动连接企业微信，收到群消息后写入日志、路由给 Agent，Agent 再通过 RabiRoute outbox 回发到原企业微信群聊或明确指定的企业微信会话。
 
 这个接入不使用传统企业微信自建应用 HTTP 回调验签方案。传统回调需要公网 URL、签名校验、XML/密文解包，更适合企业内部应用事件；RabiRoute 这里需要的是类似 NapCat 的本地常驻消息网关，因此使用 `@wecom/aibot-node-sdk` 的 WebSocket 长连接路线。
 

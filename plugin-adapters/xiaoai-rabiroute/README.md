@@ -1,122 +1,79 @@
-# XiaoAI RabiRoute Adapter
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./README_zh.md">简体中文</a>
+</div>
+<!-- /docs-language-switch -->
 
-This folder is the low-latency XiaoAI bridge surface for RabiRoute.
+# XiaoAI RabiRoute adapter
 
-It does not flash the speaker by itself. Flashing must be done against the exact supported XiaoAI speaker model and firmware. This adapter is the PC-side service that a patched XiaoAI client or Open-XiaoAI-style server can call.
+> Status: experimental integration. The PC-side transcript and decision bridge works. Speaker-side interruption, playback, firmware support, and real-device acceptance are not a completed product path.
 
-## Intended Path
+This directory hosts a low-latency XiaoAI bridge for RabiRoute. It does not flash a speaker and does not implement a full Open-XiaoAI server.
 
-```text
-Patched XiaoAI speaker
-  -> Open-XiaoAI-style client/server
-    -> POST /v1/xiaoai/decision
-      -> RabiRoute /webhook
-        -> voice_transcript route
-          -> Agent, only when RabiRoute route rules match
-```
-
-The bridge is designed for pass-through by default. It forwards recognized text to RabiRoute for logging/routing, but returns `ignore` unless the local intercept rule matches. The XiaoAI side should only call `abortXiaoAI()` when the decision response is `intercept`.
-
-For replies:
+A patched client or compatible server can submit recognized text to the bridge. The bridge forwards every transcript to a RabiRoute Webhook, then returns a narrow local `ignore` or `intercept` decision.
 
 ```text
-Agent / RabiRoute output
-  -> POST /v1/xiaoai/speak
-    -> Open-XiaoAI playback hook
-      -> speaker says the reply
+Patched XiaoAI client or compatible server
+  -> POST /v1/xiaoai/decision
+    -> RabiRoute /webhook
+      -> XiaoAI Route policy
+        -> Agent delivery through Desktop IPC when matched
 ```
 
-The `/speak` endpoint is currently a placeholder queue/log. Wire it to the actual Open-XiaoAI playback command once the speaker-side protocol is chosen.
+The included `open-xiaoai-migpt-rabiroute.config.ts` is an integration starting point, not a complete drop-in loop. It currently posts transcripts but does not call the speaker runtime's interruption or playback APIs.
 
-## Run
+## Run the bridge
+
+Build and start the RabiRoute Manager, then enable the disabled `xiaoai` example Route after checking its port:
 
 ```powershell
-cd <repo>\plugin-adapters\xiaoai-rabiroute
+npm run build
+npm run start:manager
+```
+
+In another terminal:
+
+```powershell
+cd plugin-adapters\xiaoai-rabiroute
 $env:RABIROUTE_WEBHOOK_URL = "http://127.0.0.1:8791/webhook"
 $env:XIAOAI_INTERCEPT_REGEX = "^(问\s*Rabi|让\s*Rabi|Rabi|找\s*Rabi|兔兔|问\s*兔兔)"
 npm.cmd start
 ```
 
-## Smoke
+The bridge listens on `127.0.0.1:8798` by default. Override it with `XIAOAI_BRIDGE_HOST` and `XIAOAI_BRIDGE_PORT` only when the network boundary has been reviewed.
 
-Start RabiRoute with the XiaoAI route/webhook enabled, then:
+## Smoke test
 
 ```powershell
-cd <repo>\plugin-adapters\xiaoai-rabiroute
+cd plugin-adapters\xiaoai-rabiroute
 npm.cmd run smoke
 ```
 
-Expected:
-
-1. This adapter returns `200`.
-2. RabiRoute appends a record to `data/route/xiaoai/voice-transcripts.jsonl`.
-3. RabiRoute route rules create a Codex notification for the `RabiRoute XiaoAI` thread.
+The smoke test proves that the bridge can return a decision and forward a transcript. It does not prove speaker interruption, TTS playback, or Codex completion.
 
 ## API
 
-### POST /v1/xiaoai/transcript
+### `GET /health`
 
-```json
-{
-  "deviceId": "bedroom_xiaoai",
-  "deviceName": "卧室小爱",
-  "area": "bedroom",
-  "sessionId": "xiaoai-session-001",
-  "text": "问 Rabi 今天电脑任务跑完了吗",
-  "messageId": "xiaoai-001"
-}
-```
+Returns bridge configuration, counters, and the most recent placeholder speak requests.
 
-The adapter forwards this to RabiRoute as:
+### `POST /v1/xiaoai/transcript`
 
-```json
-{
-  "type": "voice_transcript",
-  "source": "xiaoai",
-  "sourceDeviceId": "bedroom_xiaoai",
-  "sourceDeviceName": "卧室小爱",
-  "sourceArea": "bedroom",
-  "sessionId": "xiaoai-session-001",
-  "text": "问 Rabi 今天电脑任务跑完了吗"
-}
-```
+Forwards a transcript to RabiRoute as a `voice_transcript` event with XiaoAI source metadata.
 
-### POST /v1/xiaoai/decision
+### `POST /v1/xiaoai/decision`
 
-This is the recommended endpoint for Open-XiaoAI / MiGPT integration.
+Forwards the same transcript and evaluates `XIAOAI_INTERCEPT_REGEX` locally. Non-matches return `action: ignore`; matches return `action: intercept` with a short acknowledgement.
 
-It always forwards the transcript to RabiRoute, then returns whether the XiaoAI runtime should interrupt native XiaoAI:
+The speaker integration must decide how to map that response to its own `abortXiaoAI()` or equivalent API. RabiRoute does not invoke that speaker-side function.
 
-```json
-{
-  "ok": true,
-  "action": "ignore",
-  "reason": "No intercept rule matched. Native XiaoAI should continue."
-}
-```
+### `POST /v1/xiaoai/speak`
 
-or:
+Accepts a requested reply but currently stores only an in-memory log entry and returns `202`. It is not connected to actual speaker playback and is lost when the bridge restarts.
 
-```json
-{
-  "ok": true,
-  "action": "intercept",
-  "speakText": "收到，已经转给 Rabi。",
-  "matchedRule": "^(问\\s*Rabi|让\\s*Rabi|Rabi|找\\s*Rabi|兔兔|问\\s*兔兔)"
-}
-```
+## Related documents
 
-Configure the first-stage local rule with `XIAOAI_INTERCEPT_REGEX`. Keep this rule narrow; detailed routing belongs in RabiRoute.
-
-### POST /v1/xiaoai/speak
-
-```json
-{
-  "deviceId": "bedroom_xiaoai",
-  "text": "Rabi 说，任务还在跑。",
-  "interrupt": true,
-  "requestId": "xiaoai-001"
-}
-```
-
-Currently logs/queues the request only.
+- [Operational runbook](./RUNBOOK.md)
+- [LX06 flashing research checklist](./LX06-FLASH-CHECKLIST.md)
+- [XiaoAI integration design](../../docs/xiaoai-integration/xiaoai-rabiroute-intercept-route_en.md)
+- [RabiRoute on GitHub](https://github.com/vb2250158/RabiRoute)

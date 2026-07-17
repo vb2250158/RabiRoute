@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rabilink-active-intelligence-requirements_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiLink 主动智能可用版需求与实施方案
+
+> 状态：实验能力的需求与实施追踪。本文混合当前代码事实、真机限制、待补闭环和验收项；不能把所有章节视为已经完成。
 
 更新时间：2026-07-14
 

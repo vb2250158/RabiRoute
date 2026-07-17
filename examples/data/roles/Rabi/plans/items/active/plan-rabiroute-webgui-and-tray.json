@@ -4,8 +4,8 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "ui",
-  "currentStep": "RibiWebGUI 管理 Gateway、路由、人格式配置，并新增项目文档搜索页；快速配置、手动触发和人格模板规则页已补充保存阻塞、触发结果和规则风险提示；托盘面板读取计划、任务、记忆和运行状态摘要，Windows 启动器会检查前后端构建产物",
-  "nextAction": "继续把人格路由预览、计划/记忆摘要和角色目录读取逻辑做成可扫描、可排障的界面",
+  "currentStep": "RibiWebGUI 已支持中英文运行时切换和英文项目文档；托盘面板已完成六视图、RabiLight 配色、动态关键词摘要和结构化计划展开，并通过 Qt 回归测试与完整打包验证",
+  "nextAction": "继续完善人格路由预览、计划步骤正式数据模型和跨端一致的排障入口",
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-08T00:00:00+08:00",
-  "keywords": ["RibiWebGUI", "项目文档", "托盘", "Gateway", "状态", "计划", "记忆"]
+  "updatedAt": "2026-07-17T13:20:00+08:00",
+  "keywords": ["RibiWebGUI", "中英文", "项目文档", "托盘", "RabiLight", "计划展开", "Gateway", "状态"]
 }

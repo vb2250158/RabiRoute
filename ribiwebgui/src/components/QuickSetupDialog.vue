@@ -5,6 +5,7 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import type { AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterType } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
 import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
+import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
@@ -603,31 +604,35 @@ function sessionNames(): Array<string | { title: string; value: string }> {
     ? agentSessions()
     : agentSessions().filter(session => !project || !session.projectPath || samePath(session.projectPath, project));
   if (selectedAgent.value !== "codex") return [...new Set(sessions.map(session => session.name))];
-  return sessions.filter(session => session.id).map(session => ({
-    title: `${session.name} · ${formatSessionTime(session.updatedAt)}`,
-    value: session.id!
-  }));
+  return codexThreadItems(codexThreadSummaries());
 }
 
-function formatSessionTime(value?: string): string {
-  if (!value) return "时间未知";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN", { hour12: false });
+function codexThreadSummaries(): CodexThreadSummary[] {
+  return agentSessions()
+    .filter(session => session.id)
+    .map(session => ({
+      id: session.id!,
+      title: session.name,
+      updatedAt: session.updatedAt,
+      cwd: session.projectPath
+    }));
 }
 
 function selectSession(value: unknown): void {
+  if (selectedAgent.value === "codex") {
+    const selection = selectCodexThread(value, codexThreadSummaries());
+    form.codexThreadId = selection.threadId;
+    form.codexThreadName = selection.threadName;
+    if (selection.selected?.cwd) form.codexCwd = selection.selected.cwd;
+    return;
+  }
   const selectedValue = String(value || "");
   const selectedById = agentSessions().find(session => session.id === selectedValue);
   const threadName = selectedById?.name || selectedValue;
-  if (selectedAgent.value === "copilotCli") form.copilotThreadName = threadName;
-  else if (selectedAgent.value === "codex") {
-    form.codexThreadId = selectedById?.id || "";
-    form.codexThreadName = threadName;
-  }
+  form.copilotThreadName = threadName;
   const selected = selectedById || agentSessions().find(session => session.name === threadName);
   if (selected?.projectPath) {
     if (selectedAgent.value === "copilotCli" && !form.copilotCwd) form.copilotCwd = selected.projectPath;
-    if (selectedAgent.value !== "copilotCli") form.codexCwd = selected.projectPath;
   }
 }
 
@@ -1333,6 +1338,9 @@ async function apply() {
                     v-if="selectedAgent !== 'astrbot' && selectedAgent !== 'marvis'"
                     :model-value="selectedSessionName"
                     :items="sessionNames()"
+                    item-title="title"
+                    item-value="value"
+                    :return-object="false"
                     :label="selectedAgent === 'codex' ? '会话名 + 最后会话时间' : '会话线程名'"
                     placeholder="选择已有会话，或输入新会话名"
                     :hint="selectedAgent === 'codex' ? '显示全部 Desktop 会话；输入名称后先自动查找，只有不存在时才创建' : '没有扫到时也可以手动填写'"

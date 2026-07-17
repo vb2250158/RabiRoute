@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./xiaoai-rabiroute-intercept-route_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 小爱音箱接入 RabiRoute 的拦截式技术路线
+
+> 状态：实验/设计路线。RabiRoute 已有 XiaoAI/Webhook 类配置入口，但文中的完整拦截桥、Tool Gateway 和设备控制闭环不能视为已验证现行功能。
 
 调研/设计日期：2026-06-06
 目标：把小米音箱/小爱同学作为 RabiRoute 的语音入口之一。用户平时仍然对小爱说话；RabiRoute 按规则拦截部分意图，把它转给 Agent；Agent 可以通过 RabiRoute 暴露的工具接口控制米家、红外、Home Assistant、本地脚本等能力。

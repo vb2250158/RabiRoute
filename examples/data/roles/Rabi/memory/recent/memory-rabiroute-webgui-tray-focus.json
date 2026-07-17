@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-webgui-tray-focus",
   "title": "RibiWebGUI 和托盘面板是控制面与观察面",
-  "content": "RibiWebGUI 负责管理 Gateway、路由配置、人格选择、状态和静态控制面；桌面托盘面板读取计划、任务、记忆和运行摘要，像 Rabi 手边的小看板，方便快速看见航线状态。它们不替代 RabiRoute 的 router，也不替代处理端 Agent runtime。",
+  "content": "RibiWebGUI 负责管理 Gateway、路由配置、人格选择、状态和静态控制面，并以中文事实源加人工英文词库提供运行时中英文切换。桌面托盘面板使用与 WebGUI 一致的 RabiLight 视觉语言，读取计划、记忆和运行摘要；折叠卡片渐进显示关键词，展开计划突出当前步骤与下一步行动，只有源 JSON 提供真实 steps 时才派生进度。两者都不替代 router 或处理端 Agent runtime。",
   "source": {
     "kind": "example",
     "summary": "公开示例近期记忆：控制面定位"
   },
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-06-10T00:00:00+08:00",
-  "keywords": ["RibiWebGUI", "托盘", "控制面", "Gateway", "计划", "记忆", "状态"]
+  "updatedAt": "2026-07-17T13:20:00+08:00",
+  "keywords": ["RibiWebGUI", "中英文", "托盘", "RabiLight", "控制面", "计划展开", "记忆", "状态"]
 }

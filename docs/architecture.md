@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./architecture_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiRoute 架构说明
+
+> 状态：当前架构说明。已按 Codex Desktop owner、消息端成熟度和现有 Outbox 边界校准。
 
 RabiRoute 的定位是 **多入口消息网关 + 消息分诊台 + 策略调度层**。
 
@@ -51,7 +59,8 @@ QQ / 微信 / 飞书 / Discord / Slack / Email / Webhook / Scheduler
         ↓
   Agent / Workflow / Script / Human Queue / External API
         ↓
-  Action Queue / Approval / Reply Route
+  Outbox / Action Gate / Reply Route
+  (persistent Action Queue / approval center is planned, not current)
         ↓
   Chat Platform / External System
 ```
@@ -63,7 +72,7 @@ QQ / 微信 / 飞书 / Discord / Slack / Email / Webhook / Scheduler
 | 层 | RabiRoute 中的含义 | 当前选择 |
 | --- | --- | --- |
 | Provider | 提供账号、服务和模型能力 | OpenAI |
-| Agent / Runtime | 维护线程、turn、工具调用和执行 | Desktop 管理的 Codex，adapter id 为 `codex` |
+| Agent / Runtime | 维护任务、turn、工具调用和执行 | Desktop 管理的 Codex，adapter id 为 `codex` |
 | Transport | RabiRoute 与任务 owner 的机器接口 | Codex Desktop IPC |
 | Host / Owner | 用户查看任务，同时拥有实际轮次 | Codex/ChatGPT Desktop，必需 |
 | Model | 目标任务为 turn 选择的具体模型 | 沿用 Desktop 任务设置 |
@@ -78,9 +87,10 @@ Codex/ChatGPT Desktop 同时是用户可见宿主和任务 owner；Codex 是 age
 
 当前实现：
 
-- NapCat / OneBot WebSocket Client 接收 QQ 事件。
-- NapCat HTTP Server 用于主动调用 OneBot API。
-- NapCat 插件只负责页面入口、配置桥接和启动 manager。
+- 已验证：NapCat / OneBot、Heartbeat、Manager 内置角色面板和 Manual trigger。
+- 实验支持：Remote Agent、FenneNote、小爱、RabiLink、通用 Webhook 和 WeCom。
+- NapCat HTTP Server 用于状态查询和外发；NapCat 插件只负责页面入口、配置桥接和启动 Manager。
+- Remote Agent 与角色面板是 Manager 级入口，不应被误写成 Gateway 子进程 listener。
 
 未来可扩展：
 
@@ -173,7 +183,9 @@ routes:
 
 当前内置：
 
-- `codex`：通过 Codex Desktop IPC 投递到完整任务 ID；目标任务未加载时用 deeplink 请 Desktop 打开。Desktop owner 决定 start/steer，并执行实际轮次。
+- `codex`（已验证）：通过 Codex Desktop IPC 投递到完整任务 ID；目标任务未加载时用 deeplink 请 Desktop 打开。Desktop owner 决定 start/steer，并执行实际轮次。
+- `copilotCli`、`astrbot`（实验支持）：代码和配置入口存在，但真实连续会话投递仍需环境验收。
+- `marvis`（人工接力）：只负责 prompt 文件、剪贴板和打开应用，不是可靠后台注入。
 
 未来 Agent 端适配器类型：
 
@@ -192,6 +204,7 @@ routes:
 当前 Codex 规则：
 
 - 下拉显示任务名和最后时间，配置内部保存完整任务 ID，并用 `cwd` 交叉校验。
+- 有效且同工作目录的已保存 ID 是稳定身份；Desktop 改名、SQLite 标题滞后或 goal 完成都不会触发重复创建。只有 ID 被明确清空或确实不存在时才按名称查找/创建。
 - RabiRoute 连接 Desktop IPC；目标任务未加载时用 `codex://threads/<id>` 请 Desktop 打开，再重试投递。
 - 有活动轮次时使用 Desktop follower steer，否则由 Desktop owner start。
 - 用户输入不存在的新名称时，项目固定的 app-server 只负责创建空任务并在首条消息后恢复用户名称；它不接收真实 prompt、不执行 turn，完成元数据操作后退出。
@@ -200,21 +213,20 @@ routes:
 
 这是 RabiRoute 很重要的边界：它控制“投递时机和会话形态”，但不替 Agent 决定具体答案。
 
-### 7. Action Queue / Approval
+### 7. Outbox / Action Gate（当前）与 Action Queue（未来）
 
 负责外部写入和回复发送的安全门。
 
-这里有两道不同的门：Desktop 任务自己的审批管 Codex runtime 内的命令、文件、网络和工具权限；RabiRoute Action Gate 管 QQ、文档、设备和外部 API 等业务外发。不能用其中一道门的允许结果替代另一道。
+这里有两道不同的门：app-server approval 管 Codex runtime 内的命令、文件、网络和工具权限；RabiRoute Action Gate 管 QQ、文档、设备和外部 API 等业务外发。两者都默认 fail closed，不能用其中一道门的允许结果替代另一道。
 
-当前只保留基础发送 API 和 `/ping` 类简单命令。
+当前 `POST /api/agent/replies` 和 `src/outbox.ts` 已经提供真实回传链路：
 
-未来应明确：
+- 返回状态为 `sent`、`draft`、`blocked` 或 `failed`。
+- 支持 QQ/NapCat、WeCom、FenneNote、RabiLink 和角色面板；默认 legacy pipeline 的 `outputAdapter=agent` 会把结果保留在 Agent 会话。
+- QQ 支持来源回复、明确群/私聊目标、图片/语音/文件，以及 `allowedFileRoots` 文件白名单。
+- 外发失败会保留 draft 数据并写 Outbox 日志。
 
-- 处理端输出默认不能直接发 QQ 群。
-- 群消息、文档写回、Issue 更新、自动化执行都先生成 draft / action。
-- 用户确认后再 commit。
-- 所有 commit 写 audit log。
-- 外发失败时不要只看平台健康状态。像 NapCat `get_status` 仍为 online/good、但 `send_group_msg` 在 QQ 内核 `sendMsg` 阶段返回 `EventChecker Failed` / `1006514` 的情况，应把待发内容保留为 draft，记录失败原因，修复登录态或时间同步后再补发，并记录返回的 `message_id`。
+当前还没有通用、持久化、可由 WebGUI 审批的 Action Queue，也没有统一的自动补发队列。后续若扩展到文档、Issue、设备或其它外部系统，应在现有 Outbox policy 之上增加可审计的 action request / approval / commit 状态机。
 
 ## 与完整个人 Agent OS 的关系
 
@@ -274,7 +286,7 @@ NapCat WebSocket Client
        Desktop task model / tools / approvals
 ```
 
-Codex/ChatGPT Desktop 是上述 Codex 投递主链的必需 owner；没有 Desktop 就不会执行消息。
+ChatGPT desktop 可以展示同一个 Codex 线程，但不在上述运行主链路中。
 
 NapCat 插件不是业务核心，它只是控制面入口：
 
@@ -287,15 +299,13 @@ NapCat plugin page
 
 ## 后续演进顺序
 
-推荐按这个顺序做，不要一口气做成大平台：
+当前 `RouteDecision`、`AgentPacket`、多 Agent adapter、Webhook-like 入口、Outbox 和 delivery replay 都已存在。下一阶段更实际的顺序是：
 
-1. 抽象统一 `InboundMessage`，把 QQ / OneBot 事件从核心路由里解耦。
-2. 抽象 `RouteDecision`，记录 route kind、agent adapter、prompt profile、priority、reason。
-3. 扩展 Agent adapter / handler driver，把当前内置投递方式从默认实现变成可插拔处理端。
-4. 增加 `webhook` Agent adapter，验证非固定 Agent 的处理端。
-5. 增加 route decision 日志和 replay 页面。
-6. 做 Action Queue，所有外部发送和写入先进待审。
-7. 再考虑具体 Agent 平台、执行桥、聊天机器人框架、知识库和工作流系统集成。
+1. 给人格规则和 `AgentPacket` 增加无副作用 dry-run 预览，并明确它不能刷新 `viewedAt` 或写日志。
+2. 把通用 Action Queue / 审批中心建立在现有 Outbox 结果之上，而不是重新实现各平台发送。
+3. 为 Copilot CLI、AstrBot、WeCom、RabiLink、Remote Agent 和小爱补真实端到端验收矩阵。
+4. 继续拆分过大的 Manager endpoint 群，并让 WebGUI 功能地图从共享 Schema/元数据生成，减少硬编码文档漂移。
+5. 在事实稳定后再扩展更多平台和外部系统动作。
 
 ## 架构红线
 
@@ -306,5 +316,5 @@ NapCat plugin page
 - 不把 WebUI 做成项目事实源；项目事实应进入文档、Issue、工单或数据库。
 - 不为了某个处理端的需求破坏统一事件模型。
 - 不把 provider、agent、transport、host 和 model 合并成一个品牌字段。
-- 不依赖桌面窗口、私有 IPC 或实验性 WebSocket 维持正式 Agent 投递。
-- 不硬编码随版本下线的模型名；空配置跟随 runtime 默认，显式覆盖才进入 turn。
+- 不为 Codex 实际消息增加独立 app-server、共享 4510 或其他备用投递路径。
+- 不硬编码或覆盖模型；由目标 Desktop 任务决定。

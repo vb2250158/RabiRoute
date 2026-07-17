@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./aiui-global-runtime-reference_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # AIUI 全局运行时 API 与 RabiLink 使用边界
 
 本文记录 AIUI QuickJS 运行环境公开的全局作用域、窗口尺寸、定时器、Base64、Fetch 和其他全局挂载能力，并说明它们在 RabiLink 中的正确用法。

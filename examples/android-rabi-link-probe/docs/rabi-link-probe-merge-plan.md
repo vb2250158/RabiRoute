@@ -1,5 +1,13 @@
 # Rabi Link 设备探针合并说明
 
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rabi-link-probe-merge-plan_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
+> 状态：已落地的架构与命名记录。它描述单手机 APK 的模块模型，不把各厂商探针成熟度提升为生产能力。
+
 ## 背景与目标
 
 当前 `android-rabi-link-probe` 已从小米手环探针升级为 Rabi Link 设备探针，用来验证 Android 手机能从小米手环 10 Pro / 小米运动健康链路、Rokid 眼镜链路和后续设备链路读取多少信息。

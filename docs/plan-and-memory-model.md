@@ -1,4 +1,12 @@
-﻿# 计划和记忆机制
+﻿<!-- docs-language-switch -->
+<div align="center">
+<a href="./plan-and-memory-model_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
+# 计划和记忆机制
+
+> 状态：现行指南。已按 `src/roleKnowledge.ts`、Manager API 和测试核对；文中明确区分当前实现与后续计划。
 
 本文说明 RabiRoute 中计划和记忆的运行机制：数据放在哪里、如何分层、怎样进入处理端 Agent、何时更新，以及托盘面板如何展示。
 
@@ -76,17 +84,15 @@ plans/archive/
 
 用于放已完成、过期或不再默认展示的计划。
 
-已完成计划不会立即归档。它会先保持 `已完成` 状态，继续在完成列表或总览里保留一段时间，方便用户确认结果。超过配置的保留时间后，RabiRoute 自动将它变为 `已归档`，并移动到 `plans/archive/`。
+已完成计划不会立即归档。它会先保持 `已完成` 状态，继续在完成列表或总览里保留一段时间，方便用户确认结果。距离最后更新时间超过当前固定的 72 小时后，角色知识快照会将它变为 `已归档`，并移动到 `plans/archive/`。
 
 计划归档不需要经过 Agent 处理。它是 RabiRoute 的机械生命周期维护，不触发 Agent 总结，不要求 Agent 判断，只更新状态、`archivedAt` 和存放位置。
 
-计划归档时间由人格配置决定：
+当前归档窗口：
 
 ```json
 {
-  "plans": {
-    "completedArchiveAfterHours": 72
-  }
+  "completedArchiveAfterHours": 72
 }
 ```
 
@@ -96,7 +102,7 @@ plans/archive/
 completedArchiveAfterHours = 72
 ```
 
-归档计时以计划的 `updatedAt` 为准，不以 `createdAt` 为准。计划只要被 Agent 或用户更新过，就重新进入活跃窗口；只有 `已完成` 状态下距离最后更新时间超过 `completedArchiveAfterHours`，RabiRoute 才会自动归档。
+归档计时以计划的 `updatedAt` 为准，不以 `createdAt` 为准。计划只要被 Agent 或用户更新过，就重新进入活跃窗口；只有 `已完成` 状态下距离最后更新时间超过 72 小时，RabiRoute 才会归档。目前 `completedArchiveAfterHours` 还不是 `personaConfig.json` 的公开配置字段。
 
 ## 计划字段
 
@@ -225,14 +231,12 @@ memory/consolidation-runs/*.json
 
 ## 近期记忆和沉淀记忆
 
-近期记忆有两个时间窗口，由人格配置决定：
+近期记忆有两个当前固定时间窗口：
 
 ```json
 {
-  "memory": {
-    "recentEditableHours": 24,
-    "recentConsolidationHours": 72
-  }
+  "recentEditableHours": 24,
+  "recentConsolidationHours": 72
 }
 ```
 
@@ -246,26 +250,26 @@ recentConsolidationHours = 72
 含义：
 
 - `recentEditableHours`：距离最后活跃时间多少小时内的近期记忆允许 Agent 通过记忆 ID 直接修改，默认 24 小时。
-- `recentConsolidationHours`：当存在距离最后活跃时间超过多少小时的近期记忆时，触发一次整理流程，默认 72 小时。
+- `recentConsolidationHours`：显式请求记忆整理时，用于判断是否已经到期，默认 72 小时。
+
+这两个窗口目前不是 `personaConfig.json` 的公开配置字段。创建一次 Manager API request 时可以用请求参数覆盖本轮阈值。
 
 记忆窗口以近期记忆的活跃时间为准，不以 `createdAt` 为准。活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个。近期记忆只要被 Agent 更新、按 ID 查看，或被当前消息通过标题/`keywords` 命中召回，就重新进入活跃窗口。
 
 上下文默认显示的记忆也是按 `recentEditableHours` 判断。默认配置下，`[记忆与计划]` 中默认列出最近 24 小时内活跃过的近期记忆。距离最后活跃时间超过 24 小时、且尚未沉淀的近期记忆，不默认显示；只有用户消息命中标题或 `keywords` 时，才作为命中召回临时列入上下文，并刷新 `viewedAt`。
 
-记忆整理的触发时机由 RabiRoute 处理，不由 Agent 判断。RabiRoute 按人格配置和本地时间窗口检查近期记忆，决定是否启动一次沉淀流程。
+记忆整理的输入范围和到期判断由 RabiRoute 处理，不由 Agent 判断。当前必须先由用户触发 `memory-consolidation` 手动项，或调用 Manager API 创建 request；仅仅经过时间不会自行启动后台整理任务。
 
-默认策略是：当 RabiRoute 发现存在最后活跃时间超过 `recentConsolidationHours` 的近期记忆时，触发一次记忆整理。触发后，RabiRoute 取所有最后活跃时间超过 `recentEditableHours` 且尚未沉淀的近期记忆，组成待整理记忆列表。RabiRoute 再通过现有 Agent adapter 投递链路向 Agent 发送一条记忆整理消息，并把需要整理的记忆一起发过去。
+默认判断策略是：显式请求到来后，若存在最后活跃时间超过 `recentConsolidationHours` 的近期记忆，就创建一次整理 run。输入范围是所有最后活跃时间超过 `recentEditableHours` 且尚未沉淀的近期记忆。`force=true` 可以跳过到期判断，但仍只收集超过可编辑窗口的输入。
 
 这条消息属于一种内置手动触发消息。它不是额外开一条特殊私有通道，而是作为 RabiRoute 内置的 `manual_trigger` 进入同一套模板、投递和 Agent 接收流程。
 
-内置记忆整理触发有两种来源：
+现行记忆整理有两种显式入口：
 
-- RabiRoute 根据人格配置和时间窗口自动触发。
-- 用户主动触发同一个内置手动触发项。
+- 用户主动触发 `triggerId=memory-consolidation` 的内置手动触发项。
+- 调用 `POST /api/roles/:roleId/memory/consolidation-requests`。
 
-用户也可以手动调整这个内置触发项的配置，例如是否启用自动触发、记忆时间窗口、手动触发入口名称或触发说明。它是内置能力，但不应该写死成不可配置行为。
-
-无论来源是自动还是用户主动触发，进入 Agent 端的消息结构应保持一致；区别只体现在触发来源元信息里。
+API 可在单次请求中覆盖 `triggerOlderThanHours`、`includeOlderThanHours` 和 `force`；默认仍为 72/24 小时。后台自动调度属于后续能力，不能写成已经完成。进入 Agent 端的消息结构保持一致，区别只体现在触发来源元信息里。
 
 Agent 在这次交互里只需要返回沉淀后的记忆，不需要解释触发原因，不需要决定哪些记忆进入本轮整理，也不需要修改原始近期记忆。
 
@@ -401,7 +405,7 @@ POST /roles/:roleId/memory/recent
 PATCH /roles/:roleId/memory/recent/:memoryId
 ```
 
-这是后续扩展方向。manager 可以统一读取本地文件并提供计划/记忆接口，Agent adapter 或外部工作台按需查询和更新。
+这些接口已由 Manager 实现。Agent adapter、角色面板或其它本机工作台可以按需查询和更新；`/roles/...` 与 `/api/roles/...` 两种路径前缀均可解析，公开示例优先使用 `/api/roles/...`。
 
 计划接口可以新增计划、更新已有计划、修改状态、更新下一步或归档。记忆接口可以新增近期记忆，也可以通过记忆 ID 修改近期记忆。沉淀记忆不提供直接修改接口。
 
@@ -458,7 +462,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 - 已确认要推进或当前正在关注时设为 `进行中`。
 - 等用户或外部系统时仍保持 `进行中`，并写清楚 `waitingFor` 或 `nextAction`。
 - 完成后设为 `已完成`，写入 `completedAt`。
-- `已完成` 超过 `completedArchiveAfterHours` 后由 RabiRoute 自动设为 `已归档`，写入 `archivedAt`，并移动到 `archive/`。
+- `已完成` 距离最后一次 `updatedAt` 超过当前固定 72 小时后，由角色知识快照设为 `已归档`，写入 `archivedAt`，并移动到 `archive/`。
 - 用户手动要求不再展示时，也可以直接设为 `已归档`。
 
 托盘 MVP 阶段保持只读，不创建、完成、删除或迁移计划。写入机制等计划 JSON 规范稳定后再接入。

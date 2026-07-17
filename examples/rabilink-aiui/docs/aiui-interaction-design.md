@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./aiui-interaction-design_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # AIUI 交互设计与 RabiLink 输入合同
 
 本文记录 Rokid Glasses 上的语音、镜腿触摸、按键和空间交互原则，并定义 RabiLink 两种模式的输入与反馈合同。

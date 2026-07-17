@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./mobile-app-webhook-integration_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 手机 App 远程接入 RabiRoute 历史方案
+
+> 状态：历史参考。早期手机桥 / mobile API 设计已退出当前 RabiLink 主链；现行入口见 [RabiLink Relay 公网中继](rabilink-relay-server.md) 与 [手机边缘通讯枢纽](rabilink-phone-edge-hub.md)。
 
 > 当前真源：Rokid/灵珠公网主链路和手机端 RabiLink 绑定流程见 `docs/rabilink-relay-server.md`。本文是早期“手机 App 直接通过公网 Webhook / WebSocket 接入本机 RabiRoute”的设计稿，只作为历史参考保留；不要把这里的 `rabi.example.com`、`/webhook`、`/api/mobile/*` 或手机桥 outbox 当作当前 RabiLink 主链路。当前主链路是：服务器 `/manage` 创建 RabiLink 应用 token，PC Rabi worker 使用该应用 token 直连 Relay，服务器按账号、应用和选中的 PC Rabi 隔离任务、WebGUI 请求和日志。
 

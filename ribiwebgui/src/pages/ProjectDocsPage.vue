@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, defineAsyncComponent, ref } from "vue";
 import DocsFlowDiagram from "../components/docs/DocsFlowDiagram.vue";
 import RabiLinkQuickStartGuide from "../components/docs/RabiLinkQuickStartGuide.vue";
+import { useI18n } from "../i18n";
 import {
   rabiLinkAiuiDocPages,
   type DocFlowDiagram,
   type RabiLinkQuickStartGuide as RabiLinkQuickStartGuideData
 } from "../docs/rabilinkAiuiDocs";
+
+const { isEnglish } = useI18n();
+const ProjectDocsEnglish = defineAsyncComponent(() => import("./ProjectDocsEnglish.vue"));
 
 type DocFeature = {
   name: string;
@@ -63,7 +67,8 @@ const boundaryRules = [
   "人格正文、模板规则、计划、记忆和技能归 role，真源是 data/roles/<RoleId>/。",
   "WebGUI 不是配置事实源；配置不变量应落在 shared model 或 manager 后端。",
   "预览能力是拟新增设计，应走后端 dry-run，不能调用 forwardMessageAndWait。",
-  "真实外发必须经过 Outbox / Action Gate。",
+  "Codex 正式 transport 是 Desktop IPC；真实消息由目标 Desktop 任务 owner 执行，不启动第二个 Runtime 或 fallback。",
+  "真实外发必须经过 Outbox / Action Gate；当前没有通用持久化审批中心。",
   "运行期 data、日志、token、真实账号、真实 QQ 群号和 Cookie 不进仓库。"
 ];
 
@@ -135,7 +140,7 @@ const features: DocFeature[] = [
   },
   {
     name: "QQ / NapCat 消息端",
-    status: "已有",
+    status: "已验证",
     owner: "消息端",
     truth: "NapCat WS / HTTP、route config、group/private JSONL",
     consumes: "forwarding、Outbox QQ 发送",
@@ -148,7 +153,7 @@ const features: DocFeature[] = [
   },
   {
     name: "RabiLink / Relay",
-    status: "已有",
+    status: "实验支持",
     owner: "消息端",
     truth: "HTTP payload、relay tasks、rabilink-replies.jsonl",
     consumes: "forwarding、RabiLink 下行回复、WebGUI 远程代理",
@@ -161,7 +166,7 @@ const features: DocFeature[] = [
   },
   {
     name: "Webhook / FenneNote / XiaoAi",
-    status: "已有",
+    status: "实验支持",
     owner: "消息端",
     truth: "HTTP payload、voice-transcripts.jsonl",
     consumes: "forwarding、语音工作站",
@@ -174,7 +179,7 @@ const features: DocFeature[] = [
   },
   {
     name: "企业微信消息端",
-    status: "已有",
+    status: "实验支持",
     owner: "消息端",
     truth: "WeCom SDK frame、route config、wecom-messages.jsonl",
     consumes: "forwarding、Outbox WeCom 回复",
@@ -187,7 +192,7 @@ const features: DocFeature[] = [
   },
   {
     name: "Heartbeat / Manual / Role Panel",
-    status: "已有，真实投递",
+    status: "已验证，真实投递",
     owner: "消息端",
     truth: "notificationRules[].schedules、manual-trigger-events.jsonl、role-panel/messages.jsonl",
     consumes: "forwarding、AgentPacket",
@@ -239,12 +244,12 @@ const features: DocFeature[] = [
   },
   {
     name: "Agent adapter",
-    status: "已有",
+    status: "Codex 已验证；Copilot/AstrBot 实验；Marvis 人工接力",
     owner: "处理端",
     truth: "route agent config、handler state",
     consumes: "Codex / Copilot / AstrBot / Marvis",
     effect: "AgentPacket 投递时",
-    sideEffects: "向处理端发送消息",
+    sideEffects: "向处理端发送消息；Marvis 只写 prompt/剪贴板并打开应用",
     entry: "route Agent 端",
     code: ["src/agentAdapters/agentAdapter.ts", "src/codexRuntime.ts", "src/codexAppServerClient.ts", "src/copilotCli.ts", "src/marvis.ts", "src/agentAdapters/astrbotAdapter.ts"],
     docs: ["docs/code-architecture.md"],
@@ -257,7 +262,7 @@ const features: DocFeature[] = [
     truth: "Agent reply request、replyContext、pipeline",
     consumes: "QQ / WeCom / RabiLink / role panel 等回传",
     effect: "Agent 调用 /api/agent/replies 时",
-    sideEffects: "可能写 draft、阻止、外发、写回复日志",
+    sideEffects: "返回 sent/draft/blocked/failed，可能外发并写回复日志；没有通用审批队列",
     entry: "POST /api/agent/replies",
     code: ["src/outbox.ts", "src/pipelines.ts"],
     docs: ["docs/rabi-agent-interfaces.md", "docs/pipeline-presets.md"],
@@ -291,7 +296,7 @@ const features: DocFeature[] = [
   },
   {
     name: "Remote Agent / 多实例 / 托盘",
-    status: "已有",
+    status: "Remote Agent 实验；多实例/托盘已有",
     owner: "运行维护",
     truth: "remote-agent devices / tasks、manager identity、manager HTTP API",
     consumes: "远端设备、多实例控制面、Windows 桌面入口",
@@ -431,7 +436,7 @@ const docPages: DocPage[] = [
     title: "Outbox 与回传",
     section: "主链路",
     subtitle: "所有外部写入都应经过 Action Gate。",
-    summary: "Outbox 接收 Agent 的回传请求，按 pipeline 和 replyContext 决定草稿、阻止、审批或真正外发。",
+    summary: "Outbox 接收 Agent 回传，按 pipeline、replyContext、明确目标和 adapter policy 返回 sent/draft/blocked/failed。当前没有通用持久化审批中心。",
     bullets: [
       "真实外发必须经过 Outbox / Action Gate。",
       "QQ、WeCom、RabiLink、role panel 的回传目标来自 AgentPacket 的 replyContext。",
@@ -601,7 +606,8 @@ function selectSection(sectionTitle: string, landingPageId: string): void {
 </script>
 
 <template>
-  <div class="page-shell docs-page">
+  <ProjectDocsEnglish v-if="isEnglish" />
+  <div v-else class="page-shell docs-page">
     <header class="docs-header">
       <div>
         <div class="eyebrow">RabiRoute Project Manual</div>
@@ -736,7 +742,7 @@ function selectSection(sectionTitle: string, landingPageId: string): void {
                 </div>
                 <div class="docs-feature-tags">
                   <v-chip size="small" color="secondary" variant="tonal">{{ item.owner }}</v-chip>
-                  <v-chip size="small" :color="item.status.includes('拟') ? 'warning' : 'success'" variant="tonal">{{ item.status }}</v-chip>
+                  <v-chip size="small" :color="item.status.includes('拟') || item.status.includes('实验') || item.status.includes('人工') ? 'warning' : 'success'" variant="tonal">{{ item.status }}</v-chip>
                 </div>
               </div>
 

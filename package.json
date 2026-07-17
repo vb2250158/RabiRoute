@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "type": "module",
   "scripts": {
@@ -32,6 +32,7 @@
     "@openai/codex": "0.144.1",
     "@wecom/aibot-node-sdk": "^1.0.7",
     "dotenv": "^16.4.7",
+    "marked": "^15.0.12",
     "pinia": "^2.3.1",
     "vue": "^3.5.35",
     "vue-router": "^4.6.4",

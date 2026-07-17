@@ -67,7 +67,7 @@ test("Agent task list exposes every page instead of hiding tasks after a fixed c
   assert.equal(result.data.nextOffset, 200);
 });
 
-test("Agent task resolver binds an exact Desktop task only when its saved id and name both match", async () => {
+test("Agent task resolver binds an existing Desktop task by saved id and workspace", async () => {
   const calls: string[] = [];
   const driver: AgentThreadDriver = {
     list: async () => { calls.push("list"); return []; },

@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rabiroute-ue-ux-audit-and-refactor_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiRoute 全界面 UE/UX 问题清单与重构方案
+
+> 状态：阶段性设计审计。它记录问题和重构原则，不代表清单中的每项都仍未完成或已经完成；实际界面以当前 WebGUI、Qt 和插件页为准。
 
 ## 目标
 

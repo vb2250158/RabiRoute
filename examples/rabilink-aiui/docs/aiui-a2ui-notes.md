@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./aiui-a2ui-notes_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # AIUI A2UI 组件与 RabiLink 使用边界
 
 本文记录 A2UI 的定位、当前文档接口差异，以及它在 RabiLink 中可以和不可以承担的职责。

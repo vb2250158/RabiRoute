@@ -211,7 +211,7 @@ watch(() => store.selectedGatewayId, (id) => {
       <div class="summary-grid">
         <div class="summary-tile">
           <span>当前人格</span>
-          <b>{{ gateway.agentRoleId || "不注入人格" }}</b>
+          <b data-no-i18n>{{ gateway.agentRoleId || "不注入人格" }}</b>
         </div>
         <div class="summary-tile">
           <span>消息模板</span>
@@ -219,7 +219,7 @@ watch(() => store.selectedGatewayId, (id) => {
         </div>
         <div class="summary-tile">
           <span>{{ hasPersona ? "角色目录" : "运行模式" }}</span>
-          <b>{{ hasPersona ? roleDirLabel : "无人格直通" }}</b>
+          <b :data-no-i18n="hasPersona ? '' : undefined">{{ hasPersona ? roleDirLabel : "无人格直通" }}</b>
         </div>
       </div>
 
@@ -241,8 +241,8 @@ watch(() => store.selectedGatewayId, (id) => {
             <v-text-field v-if="hasPersona" v-model="gateway.agentRoleFile" label="人格文件名" placeholder="persona.md" @update:model-value="store.touch" />
           </div>
           <template v-if="hasPersona">
-            <div class="status-row mt-3"><span>角色目录</span><b>{{ roleDirLabel }}</b></div>
-            <div class="status-row"><span>人格路径</span><b>{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "-" }}</b></div>
+            <div class="status-row mt-3"><span>角色目录</span><b data-no-i18n>{{ roleDirLabel }}</b></div>
+            <div class="status-row"><span>人格路径</span><b data-no-i18n>{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "-" }}</b></div>
           </template>
           <v-alert v-else class="mt-3" type="info" variant="tonal">
             这条路由不会注入人格、计划或记忆；RabiRoute 只把消息来源、原文和回复 API 包装后投递给 Agent。
@@ -253,7 +253,7 @@ watch(() => store.selectedGatewayId, (id) => {
           <div class="section-title-row">
             <div>
               <div class="section-title">persona.md 预览</div>
-              <div class="section-note">{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "未读取到人格文件" }}</div>
+              <div class="section-note" :data-no-i18n="selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath ? '' : undefined">{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "未读取到人格文件" }}</div>
             </div>
           </div>
           <v-alert v-if="selectedRole?.roleError || runtime.roleInfo?.selectedRoleError" type="error" variant="tonal">
@@ -312,7 +312,7 @@ watch(() => store.selectedGatewayId, (id) => {
         </div>
         <div class="rule-list">
           <div v-for="rule in rules" :key="rule.id" class="rule-card">
-            <div class="font-weight-bold text-primary">{{ rule.name }}</div>
+            <div class="font-weight-bold text-primary" data-no-i18n>{{ rule.name }}</div>
             <div class="section-note">{{ routeKindSummary(rule) }}</div>
           </div>
         </div>
@@ -342,9 +342,9 @@ watch(() => store.selectedGatewayId, (id) => {
           <div v-for="(rule, index) in rules" :key="rule.id" class="rule-card">
             <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
               <div class="min-w-0">
-                <div class="font-weight-bold text-primary">{{ rule.name }}</div>
+                <div class="font-weight-bold text-primary" data-no-i18n>{{ rule.name }}</div>
                 <div class="section-note">{{ routeKindSummary(rule) }} · {{ rule.regex ? `匹配：${rule.regex}` : "不限关键词" }}</div>
-                <div class="section-note mt-1">{{ ruleTemplateSnippet(rule) }}</div>
+                <div class="section-note mt-1" :data-no-i18n="rule.template ? '' : undefined">{{ ruleTemplateSnippet(rule) }}</div>
                 <div v-if="ruleDiagnostics(rule).length" class="mt-2 d-flex ga-2 flex-wrap">
                   <v-chip
                     v-for="issue in ruleDiagnostics(rule)"

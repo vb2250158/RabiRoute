@@ -1,4 +1,12 @@
-# RabiLink Relay Examples
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
+# RabiLink Relay 示例
+
+> 状态：当前公开配置样板。Relay 服务本身仍属于需要独立部署和环境验收的集成组件。
 
 这里放可以提交的 RabiLink Relay 示例文件。
 
@@ -19,7 +27,7 @@ Rizon 有两个相似入口：
 - `MANUAL_AUTH`：OpenAPI 不声明 security scheme，导入后在插件级手动配置 `X-RabiLink-Token`，适合私有插件的兼容导入。
 - `AGENT_TOKEN`：公开/模板插件用，插件级不写个人 token；在智能体引用工具时把 `token` 参数绑定为该智能体自己的 RabiLink 应用 token。
 
-插件介绍建议保留 GitHub 链接，方便用户找到安装和 token 绑定说明：
+插件介绍建议保留 [RabiRoute GitHub 仓库](https://github.com/vb2250158/RabiRoute) 链接，方便用户找到安装和 token 绑定说明：
 
 ```text
 RabiLinkMessage 用于把 Rokid 智能体中的语音或图片上下文转发到电脑端 RabiRoute/Codex，并把回复逐条返回眼镜。使用说明和源码：https://github.com/vb2250158/RabiRoute。公开/模板插件不要写发布者 token；请在智能体工具参数里绑定自己的 RabiLink 应用 token。

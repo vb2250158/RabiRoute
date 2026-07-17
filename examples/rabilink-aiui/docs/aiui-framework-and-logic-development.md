@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./aiui-framework-and-logic-development_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # AIUI 框架与逻辑开发笔记
 
 本文记录 RabiLink AIUI 开发时必须遵守的框架认知、生命周期边界、状态更新方式、调试方法和打包流程。它用于约束后续实现，不把 AIUI 简化成普通网页，也不把页面内原生模型误写成完整的外层灵珠智能体。

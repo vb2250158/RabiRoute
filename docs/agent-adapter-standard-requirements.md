@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./agent-adapter-standard-requirements_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 标准 Agent 端接入需求
 
 本文定义 RabiRoute 接入一个 Agent 端时，应尽可能达到的产品、架构、接口、可靠性、UI、安全和验收要求。它既适用于 Codex/ChatGPT Desktop 这类桌面 owner，也适用于 CLI、后台 Runtime、远程 Agent、机器人服务和只能人工跳转的外部应用。

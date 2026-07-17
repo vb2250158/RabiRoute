@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./troubleshooting_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 排障
+
+> 状态：现行指南。Codex 正式链路是 Desktop IPC 与目标任务 owner；真实消息不使用共享 4510、每 route stdio 或备用 Runtime。
 
 ## QQ 合并转发只显示转发 ID 或 `[object Object]`
 
@@ -43,7 +51,7 @@ retcode=1006514
 
 如果目标是无值守登录，不要把 QQ 密码写进 RabiRoute 配置。用 NapCat WebUI 和 NapCat Shell 支持的 Windows 环境变量配置，详见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。
 
-推荐把这条作为外发恢复链路的演示：心跳或健康检查发现外发失败后，不直接丢消息，而是把待发内容先作为草稿/待审 action 缓存；修复登录态后再补发，并把 NapCat 返回的 `message_id` 写入执行记录。当前版本已把 OneBot `retcode` 非 0 视为失败；完整 Action Queue / 补发队列仍属于后续演进。
+当前版本会把 OneBot `retcode` 非 0 视为失败，在 Outbox 结果和日志中保留 draft 数据，但不会自动进入持久化补发队列。修复登录态后需要由用户或上层流程重新提交；通用 Action Queue / 自动补发仍属于后续演进。成功补发后应记录 NapCat 返回的 `message_id`。
 
 ## 中文消息乱码或多行发送异常
 
@@ -74,36 +82,37 @@ npm run check:config
 
 ## Codex 没有收到投递
 
-当前正式链路是 `RabiRoute -> Codex Desktop IPC -> Desktop 任务 owner`。消息成功后应立即出现在 Codex/ChatGPT Desktop 的目标任务里。按下面顺序检查：
+当前正式链路是 `RabiRoute -> Codex Desktop IPC -> Desktop 任务 owner`。消息成功后应出现在目标任务里。按下面顺序检查：
 
-1. 先打开 Codex/ChatGPT Desktop，确认它本身能正常进入任务；RabiRoute 不负责启动或停止 Desktop Runtime。
-2. 在 RibiWebGUI 重新扫描 Codex。任务下拉应显示全部未归档任务的“任务名 + 最后会话时间”，不显示内部 ID。
-3. 检查 route 的 `codexCwd`。直接输入名称时，RabiRoute 会自动查找唯一同名任务；没有才创建，多个同名才要求选择。
-4. 检查 `agent-packets.jsonl` 与 `gateway-status.json`，区分“路由未命中”“Desktop IPC 未就绪”“任务 owner 未加载”和“任务 ID/cwd 失效”。
-5. 若错误含 `no-client-found`，RabiRoute 会用 `codex://threads/<id>` 打开目标任务并短暂重试；仍失败时消息不会投递，也不会切换到后台 Runtime。
+1. 打开 Codex/ChatGPT Desktop，确认它本身能正常进入任务；RabiRoute 不负责启动或停止 Desktop Runtime。
+2. 在 RibiWebGUI 重新扫描 Codex。任务下拉应显示未归档任务的“任务名 + 最后会话时间”，不显示内部 ID。
+3. 检查 route 保存的 `codexThreadId` 和 `codexCwd`。有效 ID 且目录一致时会直接复用；Desktop 改名、SQLite 标题滞后或 goal 完成都不会创建新任务。
+4. 只有 ID 被明确清空或确实不存在时才按 `codexThreadName + codexCwd` 查找/创建；多个同名任务需要用户选择。
+5. 检查 `agent-packets.jsonl`、`gateway-status.json` 和 Manager 日志，区分“路由未命中”“Desktop IPC 未就绪”“任务 owner 未加载”和“任务 ID/cwd 失效”。
+6. 若错误含 `no-client-found`，RabiRoute 会用 `codex://threads/<id>` 打开目标任务并短暂重试；仍失败时不会切换到后台 Runtime。
 
-不要设置 `CODEX_APP_SERVER_WS_URL` 或固定 4510 端口来修复投递。它会改变 Desktop 的启动依赖，而且不是 RabiRoute 的正式 transport。
+不要设置 `CODEX_APP_SERVER_WS_URL` 或固定 4510 端口来修复投递；它们不是 RabiRoute 的真实消息 transport。
 
 ## `Missing monitorThreadId` / 找不到固定线程
 
-这表示当前绑定不存在、保存名称 + ID 已不一致、自动解析出现歧义，或目标任务的工作目录与 `codexCwd` 不匹配。检查：
+这表示当前绑定不存在、ID 已失效，或目标任务的工作目录与 `codexCwd` 不匹配。检查：
 
-- `codexThreadName` 与 `codexThreadId` 是否仍共同指向同一个 owner 任务；任务身份既不能只看名字，也不能在改名后只信旧 ID。
-- `codexCwd` 是否使用了已移动、大小写或符号链接含义不同的路径。
-- 任务是否已经归档、删除或来自另一个账号/`CODEX_HOME`。
-- ID 失效或名称 + ID 不一致时，系统会按保存名称自动绑定/创建；只有多个同名任务或名称 + ID 匹配但目录冲突时才需要从下拉按最后时间重新选择。
+- `codexThreadId` 是否仍存在；有效 ID 是稳定身份，不要求 SQLite 索引标题与 Desktop 显示名同步。
+- `codexCwd` 是否已经移动、指向另一个项目，或含有无法规范化的路径差异。
+- 任务是否已经归档、删除，或来自另一个账号 / `CODEX_HOME`。
+- 需要改绑时应从下拉选择另一任务，或输入新名称让前端明确清空旧 ID；不要手工把名称写入 ID 字段。
 
 ## Agent 回合里没有 `codex_app__*` 线程工具
 
-RabiRoute 的 Codex 消息现在由 Desktop 任务 owner 实际执行，因此会沿用该任务在当前桌面环境里注册的工具。如果某个工具仍不存在，说明它没有注册到该 Desktop 任务；反复修改提示词不会让工具出现。
+RabiRoute 的投递健康与目标 Desktop 任务是否注册 `codex_app__*` 管理工具是两件事。当前回合没有这些工具时，反复修改提示词不会让工具出现。
 
-需要由其他 Agent 管理 Codex 任务时，可调用本机线程桥：
+后台 Agent 应调用本机线程桥：
 
 ```http
 POST http://127.0.0.1:8790/api/agent/threads
 ```
 
-支持 `list`、`read`、`resolve`、`create`、`send`。`list` 可用 `offset` 分页访问全部任务；`resolve` 统一完成精确绑定、名称查找与必要的新建。详细请求见 `docs/rabi-agent-interfaces.md`。实际 `send` 仍通过 Desktop IPC；只允许在已配置的 Codex 工作区创建任务。
+支持 `list`、`read`、`resolve`、`create`、`send`。详细请求见 `docs/rabi-agent-interfaces.md`。该接口读取 Desktop 任务状态，创建时只做空任务 bootstrap，真实消息仍交给 Desktop owner；不要用 multi-agent 子 Agent 冒充正式任务。
 
 不要为了消除报错在 ChatGPT desktop 里反复创建同名线程，这会增加歧义。
 
@@ -115,7 +124,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 2. 区分历史 JSONL / stderr 记录和本次启动的新记录；旧日志可以保留用于审计，不要把它当成本次状态。
 3. 以本次启动生成的 Agent 状态为准；`lastDeliveryChannel` 应为 `desktop-ipc`。
 
-如果全新启动仍显示 `app-server-stdio`、共享 4510 或 Desktop 可选，说明实际运行的仍是旧构建；先核对启动目录和 `dist/` 生成时间。
+如果全新启动仍产生这些错误，说明实际运行的仍是旧构建，应先核对启动目录和 `dist/` 生成时间，而不是继续修桌面应用。
 
 ## Codex 模型或工具与预期不一致
 

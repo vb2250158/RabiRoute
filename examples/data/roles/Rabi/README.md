@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Rabi
 
 Rabi 是 RabiRoute 的兔娘看板娘，也是 RabiRoute 的灵魂。

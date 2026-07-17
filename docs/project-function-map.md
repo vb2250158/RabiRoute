@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./project-function-map_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiRoute 项目功能手册
+
+> 状态：当前事实地图。模块和成熟度已按当前代码复核；涉及外部系统的真实环境验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
 
 本文是 RabiRoute 的通用项目功能手册。它面向产品设计、GUI 改造、代码维护、排障和新 Agent 交接，不只服务某一个页面或某一次需求。
 
@@ -25,7 +33,7 @@ Message Adapter
   -> Outbox / Reply
 ```
 
-Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，Desktop IPC 是 transport，Codex/ChatGPT Desktop 是任务 owner，具体 GPT 版本由目标任务决定。功能地图中的 `codex` 始终指 adapter id，不指桌面应用或模型名。
+Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，Desktop IPC 是 transport，Codex/ChatGPT Desktop 是必需的 task owner，具体 GPT 版本是目标任务的 model。功能地图中的 `codex` 始终指 adapter id 和 Codex runtime，不指桌面应用或模型名。
 
 ## 分层地图
 
@@ -40,7 +48,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | Outbox / Reply | 接收 Agent 回传，按 pipeline 决定草稿、阻止、审批或外发 | 让处理端绕过 RabiRoute 写平台 | `src/outbox.ts` |
 | Manager 控制面 | 管配置、进程、扫描、状态、WebGUI 静态资源和 HTTP API | 具体平台实时消息处理 | `src/manager/*`、`src/manager.ts` |
 | WebGUI | 展示和编辑配置、状态、日志和人格规则 | 成为配置唯一真源 | `ribiwebgui/src/*` |
-| Role Knowledge | 管角色计划、记忆、技能和上下文快照 | 决定消息是否路由命中 | `src/roleKnowledge.ts`、`src/manager/roleKnowledgeRoutes.ts` |
+| Role Knowledge | 管角色计划、记忆、技能和上下文快照 | 决定消息是否路由命中 | `src/roleKnowledge.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/controlPlaneRoutes.ts` |
 
 ## 功能索引
 
@@ -54,36 +62,36 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | 配置归一化 | 已有 | `GatewayDefinition`、`RouteProfileDefinition` | manager 读写配置、WebGUI 保存 | 读写配置时 | 可能自动补默认值、分配端口 | manager API | `src/shared/gatewayConfigModel.ts` | `docs/code-architecture.md` |
 | Manager 控制面 | 已有 | `data/manager.json`、runtime registry | WebGUI、远端 API、子进程管理 | manager 启动和 API 调用时 | 启停子进程、写配置 | `npm run manager`、`src/manager.ts` | `src/manager/controlPlaneRoutes.ts`、`src/manager/runtimeRegistry.ts` | `docs/windows-launcher-and-packaging.md` |
 | WebGUI | 已有 | manager HTTP API | 用户配置和排障 | 页面加载 / 用户操作时 | 调用 manager API，可能写配置或触发动作 | `ribiwebgui` | `ribiwebgui/src/router.ts`、`ribiwebgui/src/stores/gatewayStore.ts` | `docs/code-architecture.md` |
-| QQ / NapCat 消息端 | 已有，含一键恢复 | NapCat WS / HTTP、route config、`group-messages.jsonl`、`private-messages.jsonl` | forwarding、Outbox QQ 发送 | 收到 QQ 事件时；或用户点击“打开 NapCat”时 | 写消息日志，可能投递 Agent；合并转发通过 `get_forward_msg` 展开；Outbox 在 `replyToSource=true` 时生成真实 QQ 引用回复；明确点击后可启动绑定实例、请求已有 quick login、修复 OneBot 配置并打开已鉴权 WebUI；验证码和设备验证仍由用户完成 | route 消息端、路由页“打开 NapCat”、NapCat 管理 API | `src/adapters/napcatAdapter.ts`、`src/napcat.ts`、`src/napcatForwardMessages.ts`、`src/messageEndpoints/napcatManager.ts` | `docs/napcat-unattended.md` |
+| WebGUI 中英切换 | 已有 | 浏览器 `rabiroute:webgui:locale` 偏好、人工词库、仓库 `_en.md` | 导航、表单、状态、诊断和项目文档展示 | 用户切换语言或页面重渲染时 | 只改变界面展示和 `<html lang>`，不写项目配置 | 顶栏 `中 / EN` | `ribiwebgui/src/i18n/*`、`LocaleSwitcher.vue`、`ProjectDocsEnglish.vue` | `docs/code-architecture.md` |
+| QQ / NapCat 消息端 | 已验证，含一键恢复 | NapCat WS / HTTP、route config、`group-messages.jsonl`、`private-messages.jsonl` | forwarding、Outbox QQ 发送 | 收到 QQ 事件时；或用户点击“打开 NapCat”时 | 写消息日志，可能投递 Agent；合并转发通过 `get_forward_msg` 展开；Outbox 在 `replyToSource=true` 时生成真实 QQ 引用回复；明确点击后可启动绑定实例、请求已有 quick login、修复 OneBot 配置并打开已鉴权 WebUI；验证码和设备验证仍由用户完成 | route 消息端、路由页“打开 NapCat”、NapCat 管理 API | `src/adapters/napcatAdapter.ts`、`src/napcat.ts`、`src/napcatForwardMessages.ts`、`src/messageEndpoints/napcatManager.ts` | `docs/napcat-unattended.md` |
 | QQ route kind 判断 | 已有 | OneBot event、回复链日志 | `forwardMessage(routeKind, record)` | 收到群消息时 | 影响规则匹配 | NapCat adapter | `src/adapters/napcatAdapter.ts` | `docs/routing-and-personas.md` |
-| Webhook / FenneNote / XiaoAi | 已有 | HTTP payload、`voice-transcripts.jsonl` | forwarding、语音工作站、可选 RabiLink record-first 观察 | HTTP callback 到达时 | 写转写日志；普通模式可能投递 Agent，命中 `rabilinkRecordFirstSources` 时只写统一账本并等待审阅 | webhook 端口 / 路径、Route 变量 | `src/adapters/webhookAdapter.ts`、`src/rabilinkObservationRecorder.ts`、`src/messageEndpoints/webhookLikeScans.ts` | `docs/voice-interaction-workstation.md` |
-| RabiLink 本地兼容入口 | 已有 | HTTP payload、`rabilink-voice-transcripts.jsonl`、`rabilink-replies.jsonl` | forwarding、兼容下行回复查询 | 本地调试 POST `/rabilink` 或旧插件消息到达时 | 写兼容消息 / 回复日志，可能直接投递 Agent | `/rabilink`、`/rabilink/replies`；AIUI 公网主链路走 Relay worker | `src/adapters/rabilinkAdapter.ts`、`src/adapters/rabilinkReplies.ts` | `docs/rabilink-relay-server.md` |
-| RabiLink Relay worker | 已有 | 全局开关、Relay URL / 应用 token / device id、Relay 输入与下行队列 | Manager 常驻连接、RabiLink route worker、WebGUI 远程代理 | Manager 启动且全局开关开启后；输入处理还要求存在启用了 `rabilink` 的路由 | Manager 登记 PC 并转发远程 WebGUI；worker 领取 AIUI/手机/手表 observation、保留设备种类与传输来源、写统一账本并完成上行；主动消息由独立下行队列发布 | `data/Config.json` 全局 RabiLink 配置、Relay scripts | `src/manager/rabiLinkRelayRuntime.ts`、`src/adapters/rabilinkRelayWorker.ts`、`scripts/rabilink-relay-server.mjs` | `docs/rabilink-relay-server.md` |
-| RabiLink 眼镜云日志 | 已有 | AIUI/设备诊断批次、应用 token、设备/版本/会话元数据 | Relay 管理账号日志中心 | 眼镜前台运行并产生诊断事件时异步入队；断网恢复后补传 | 客户端与服务端双重脱敏，按账号持久化并按设备/来源/级别查询；不采集 ASR、Agent 正文或无权限的系统全局日志 | `POST /api/rabilink/devices/logs`、`GET /manage/api/device-logs` | `scripts/rabilink-device-log-store.mjs`、`scripts/rabilink-relay-server.mjs`、`examples/rabilink-aiui/pages/home/index.ink` | `docs/rabilink-relay-server.md` |
+| Webhook / FenneNote / XiaoAi | 实验支持 | HTTP payload、`voice-transcripts.jsonl` | forwarding、语音工作站、可选 RabiLink record-first 观察 | HTTP callback 到达时 | 写转写日志；普通模式可能投递 Agent，命中 `rabilinkRecordFirstSources` 时只写统一账本并等待审阅 | webhook 端口 / 路径、Route 变量 | `src/adapters/webhookAdapter.ts`、`src/rabilinkObservationRecorder.ts`、`src/messageEndpoints/webhookLikeScans.ts` | `docs/voice-interaction-workstation.md` |
+| RabiLink 本地兼容入口 | 实验支持 | HTTP payload、`rabilink-voice-transcripts.jsonl`、`rabilink-replies.jsonl` | forwarding、兼容下行回复查询 | 本地调试 POST `/rabilink` 或旧插件消息到达时 | 写兼容消息 / 回复日志，可能直接投递 Agent | `/rabilink`、`/rabilink/replies`；AIUI 公网主链路走 Relay worker | `src/adapters/rabilinkAdapter.ts`、`src/adapters/rabilinkReplies.ts` | `docs/rabilink-relay-server.md` |
+| RabiLink Relay worker | 实验支持（内部契约已测试） | 全局开关、Relay URL / 应用 token / device id、Relay 输入与下行队列 | Manager 常驻连接、RabiLink route worker、WebGUI 远程代理 | Manager 启动且全局开关开启后；输入处理还要求存在启用了 `rabilink` 的路由 | Manager 登记 PC 并转发远程 WebGUI；worker 领取 AIUI/手机/手表 observation、保留设备种类与传输来源、写统一账本并完成上行；主动消息由独立下行队列发布 | `data/Config.json` 全局 RabiLink 配置、Relay scripts | `src/manager/rabiLinkRelayRuntime.ts`、`src/adapters/rabilinkRelayWorker.ts`、`scripts/rabilink-relay-server.mjs` | `docs/rabilink-relay-server.md` |
 | RabiLink 手机边缘通讯枢纽 | 首版契约 | 应用 token、设备身份、设备独立 cursor、目标/展示信封 | Android companion、未来 Wear OS / 耳机适配器 | 用户连接 Relay；设备按自己的生命周期显式读写 | 手机承担网络、状态和外设扇出，不拥有 Agent/账本；Relay 按设备 ID/类别过滤广播并越过不可见消息 | `/api/rabilink/devices/input`、`/api/rabilink/devices/messages`、Android `RabiRouteSdk` | `scripts/rabilink-relay-server.mjs`、`sdk/android/rabiroute-sdk/`、`examples/android-rabi-link-probe/` | `docs/rabilink-phone-edge-hub.md` |
 | RabiLink 统一会话账本与审阅器 | 已有 | `rabilink-conversation.jsonl`、审阅 cursor、route review variables | 固定 Codex 线程、空闲审阅、周期反思、触摸板 turn steer | 新 observation 稳定后、线程空闲时、周期到期或眼镜请求立即审阅时 | 原子推进 cursor；可把显式白名单内的常驻转写源归一为 observation；可能唤醒或 steer Codex；不在 ASR 请求内同步等待 | 角色目录运行数据；`examples/data/route/RabiLink/` 提供脱敏配置模板 | `src/rabilinkConversationLedger.ts`、`src/rabilinkObservationRecorder.ts`、`src/rabilinkConversationReviewer.ts` | `docs/rabilink-relay-server.md` |
-| 企业微信消息端 | 已有 | WeCom SDK frame、route config、`wecom-messages.jsonl` | forwarding、Outbox WeCom 回复 | WebSocket 收到消息时 | 写消息日志，可能投递 Agent | route 消息端 | `src/adapters/wecomAdapter.ts`、`src/wecom.ts`、`src/messageEndpoints/wecomManager.ts` | `docs/wecom-integration.md` |
-| Heartbeat | 已有 | `notificationRules[].schedules`、`heartbeatSkipWhenAgentBusy`、heartbeat config | forwarding、AgentPacket、Codex active 状态 | 定时器触发时 | 写 heartbeat 日志；开关启用且 Codex 会话工作中时记为 `skipped/agent_busy`，不投递 Agent | route 启用 heartbeat；路由配置页可勾选忙碌跳过 | `src/adapters/heartbeatAdapter.ts`、`src/scheduling/heartbeatSchedules.ts`、`src/forwarding.ts`、`src/codexRuntime.ts` | `docs/configuration.md` |
-| Manual trigger | 已有，真实投递 | manager request、`manual-trigger-events.jsonl` | `triggerManualRule`、forwarding | 用户点击 / API 调用时 | 写手动触发日志、router 日志、replay ledger，可能投递 Agent | `POST /gateways/:id/manual-trigger` | `src/manualTrigger.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
-| Role panel message | 已有，真实投递 | `data/roles/<RoleId>/role-panel/messages.jsonl` | role panel 子进程、forwarding | 用户在角色面板发送时 | 写 timeline，可能投递 Agent | `POST /api/role-panel/messages` | `src/rolePanelTimeline.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/routing-and-personas.md` |
+| 企业微信消息端 | 实验支持 | WeCom SDK frame、route config、`wecom-messages.jsonl` | forwarding、Outbox WeCom 回复 | WebSocket 收到消息时 | 写消息日志，可能投递 Agent | route 消息端 | `src/adapters/wecomAdapter.ts`、`src/wecom.ts`、`src/messageEndpoints/wecomManager.ts` | `docs/wecom-integration.md` |
+| Heartbeat | 已验证 | `notificationRules[].schedules`、`heartbeatSkipWhenAgentBusy`、heartbeat config | forwarding、AgentPacket、Codex active 状态 | 定时器触发时 | 写 heartbeat 日志；开关启用且 Codex 会话工作中时记为 `skipped/agent_busy`，不投递 Agent | route 启用 heartbeat；路由配置页可勾选忙碌跳过 | `src/adapters/heartbeatAdapter.ts`、`src/scheduling/heartbeatSchedules.ts`、`src/forwarding.ts`、`src/codexRuntime.ts` | `docs/configuration.md` |
+| Manual trigger | 已验证，真实投递 | manager request、`manual-trigger-events.jsonl` | `triggerManualRule`、forwarding | 用户点击 / API 调用时 | 写手动触发日志、router 日志、replay ledger，可能投递 Agent | `POST /gateways/:id/manual-trigger` | `src/manualTrigger.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
+| Role panel message | 已验证，真实投递 | `data/roles/<RoleId>/role-panel/messages.jsonl` | role panel 子进程、forwarding | 用户在角色面板发送时 | 写 timeline，可能投递 Agent | `POST /api/role-panel/messages` | `src/rolePanelTimeline.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/routing-and-personas.md` |
 | RouteDecision | 已有 | route profile、event record、extra values | forwarding、未来 preview | 每次投递时 | 本身无写入；调用方可能写日志 | 代码内部 | `src/routing/routeDecision.ts` | `docs/persona-route-workbench-plan.md` |
 | Forwarding | 已有 | active routeProfiles、record、extra values | Agent adapter、history、delivery replay | 每次真实消息进入时 | 写 router log、role record、codex notification、replay ledger，可能投递 Agent | `forwardMessage` / `forwardMessageAndWait` | `src/forwarding.ts` | `docs/code-architecture.md` |
-| AgentPacket | 已有 | RouteDecision、role paths、logs、role knowledge | Agent adapter | 命中规则后 | 会触发 roleKnowledgeSnapshot，可能刷新记忆 viewedAt 或创建待整理记忆 | 代码内部；拟新增 preview | `src/routing/agentPacket.ts`、`src/roleKnowledge.ts` | `docs/agent-context-injection.md` |
-| Codex adapter | 已有，正式主链为 Desktop owner | route agent config、Desktop 任务状态、精确任务 ID 与工作目录 | Codex Desktop IPC | 每次 AgentPacket 投递时 | 必要时 deeplink 打开任务，再由 Desktop owner start/steer；Desktop 缺席时失败，不启动备用 Runtime | route Agent 端 | `src/codexDesktopBridge.ts`、`src/codexRuntime.ts` | `docs/code-architecture.md` |
-| Agent Codex 线程桥 | 已有 | Desktop 任务状态、已配置的 `codexCwd`、Agent 请求 | 后台 Agent、Codex Desktop | Agent 调用 `/api/agent/threads` 时 | 查询/读取 Desktop 任务，受控创建空任务，并把实际消息交给 Desktop owner | `POST /api/agent/threads` | `src/agentThreads.ts`、`src/codexRuntime.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
-| Copilot CLI adapter | 已有 | route agent config、Copilot CLI | Copilot CLI | AgentPacket 投递时 | 启动 / 调用 CLI | route Agent 端 | `src/copilotCli.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
-| AstrBot adapter | 已有 | AstrBot dashboard / plugin API | AstrBot | AgentPacket 投递时 | 调用 AstrBot API | route Agent 端 | `src/agentAdapters/astrbotAdapter.ts`、`scripts/rabiroute_agent/` | `docs/code-architecture.md` |
-| Marvis adapter | 已有 | Marvis 本地能力 | Marvis | AgentPacket 投递时 | 打开 / 投递到 Marvis | route Agent 端 | `src/marvis.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
+| AgentPacket | 已有 | RouteDecision、role paths、logs、role knowledge | Agent adapter | 命中规则后 | 会触发 roleKnowledgeSnapshot，可能刷新记忆 viewedAt；只有显式 memory-consolidation 触发才评估并创建待整理 run | 代码内部；preview 仍未实现 | `src/routing/agentPacket.ts`、`src/roleKnowledge.ts` | `docs/agent-context-injection.md` |
+| Codex adapter | 已验证，正式主链为 Desktop owner | route agent config、Desktop 任务状态、精确任务 ID 与工作目录 | Codex Desktop IPC | 每次 AgentPacket 投递时 | 必要时 deeplink 打开任务，再由 Desktop owner start/steer；有效 ID 不因改名或 goal 完成而失效；Desktop 缺席时失败，不启动备用 Runtime | route Agent 端 | `src/codexDesktopBridge.ts`、`src/codexRuntime.ts` | `docs/code-architecture.md` |
+| Agent Codex 任务桥 | 已有 | Desktop 任务状态、已配置的 `codexCwd`、Agent 请求 | 后台 Agent、Codex Desktop | Agent 调用 `/api/agent/threads` 时 | 查询/读取 Desktop 任务，受控创建空任务，并把实际消息交给 Desktop owner | `POST /api/agent/threads` | `src/agentThreads.ts`、`src/codexRuntime.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
+| Copilot CLI adapter | 实验支持 | route agent config、Copilot CLI | Copilot CLI | AgentPacket 投递时 | 启动 / 调用 CLI | route Agent 端 | `src/copilotCli.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
+| AstrBot adapter | 实验支持 | AstrBot dashboard / plugin API | AstrBot | AgentPacket 投递时 | 调用 AstrBot API | route Agent 端 | `src/agentAdapters/astrbotAdapter.ts`、`scripts/rabiroute_agent/` | `docs/code-architecture.md` |
+| Marvis adapter | 人工接力 | Marvis 本地能力 | Marvis | AgentPacket 投递时 | 写 prompt、复制剪贴板、打开应用；不能保证后台会话注入 | route Agent 端 | `src/marvis.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
 | Outbox / Reply | 已有 | Agent reply request、replyContext、pipeline、`proactive` | QQ / WeCom / RabiLink / role panel 等回传 | Agent、定时器或规划器调用 `/api/agent/replies` 时 | 可能写 draft、阻止、外发、写回复日志；NapCat 群聊按 `messageId + replyToSource` 自动绑定源消息，本地群文件校验 `allowedFileRoots` 后走 `upload_group_file`；RabiLink 文本可无前置 task 主动入队 | `POST /api/agent/replies` | `src/outbox.ts`、`src/napcat.ts` | `docs/rabi-agent-interfaces.md` |
 | Pipeline presets | 已有 | route `pipelinePreset` / `pipeline` | AgentPacket、Outbox | route 配置生效后 | 影响输出模式和自动回复策略 | route 配置页 | `src/pipelines.ts` | `docs/pipeline-presets.md` |
-| 计划 | 已有 | `data/roles/<RoleId>/plans` | roleKnowledgeSnapshot、Agent 接口 | AgentPacket 构造或 API 调用时 | 可通过 API 创建 / 更新计划 | `/api/roles/:roleId/plans` | `src/roleKnowledge.ts`、`src/manager/roleKnowledgeRoutes.ts` | `docs/plan-and-memory-model.md` |
+| 计划 | 已有 | `data/roles/<RoleId>/plans` | roleKnowledgeSnapshot、Agent 接口 | AgentPacket 构造或 API 调用时 | 可通过 API 创建 / 更新计划 | `/api/roles/:roleId/plans` | `src/roleKnowledge.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/plan-and-memory-model.md` |
 | 近期记忆 | 已有 | `data/roles/<RoleId>/memory/recent` | roleKnowledgeSnapshot、Agent 接口 | AgentPacket 构造或 API 调用时 | 读取命中项会刷新 viewedAt；更新会刷新 updatedAt/viewedAt | `/api/roles/:roleId/memory/recent` | `src/roleKnowledge.ts` | `docs/plan-and-memory-model.md` |
 | 沉淀记忆 | 已有 | `data/roles/<RoleId>/memory/consolidated` | roleKnowledgeSnapshot、Agent 接口 | AgentPacket 构造或 API 调用时 | 命中必读项会刷新 viewedAt | `/api/roles/:roleId/memory/consolidated` | `src/roleKnowledge.ts` | `docs/plan-and-memory-model.md` |
-| 记忆整理 | 已有 | `memory/consolidation-runs` | AgentPacket、Agent 回传 API | manual memory consolidation 或 snapshot 需要时 | 创建 run、归档 recent memory、写 consolidated memory | `/api/roles/:roleId/memory/consolidation-*` | `src/roleKnowledge.ts`、`src/manager/roleKnowledgeRoutes.ts` | `docs/plan-and-memory-model.md` |
+| 记忆整理 | 已有 | `memory/consolidation-runs` | AgentPacket、Agent 回传 API | 显式 `memory-consolidation` 手动触发或 Manager API request | 创建 run；提交 result 后标记 recent memory 并写 consolidated memory | `/api/roles/:roleId/memory/consolidation-*` | `src/roleKnowledge.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/plan-and-memory-model.md` |
 | 角色技能 | 已有 | `data/roles/<RoleId>/skills/*.md` | roleKnowledgeSnapshot、AgentPacket 技能索引 | AgentPacket 构造时 | 一般只读 | `/api/roles/:roleId/skills` | `src/roleKnowledge.ts` | `docs/plan-and-memory-model.md` |
 | Runtime log | 已有 | runtime stdout/stderr、adapter logs | WebGUI 日志页、排障 | 运行时持续产生 | 只读展示 | WebGUI 日志诊断 | `src/manager/runtimeRegistry.ts`、`ribiwebgui/src/pages/RuntimeLogPage.vue` | `docs/troubleshooting.md` |
 | Delivery replay | 已有 | `delivery-replay-ledger.jsonl` | replay API / manager child process | 投递后记录，用户触发 replay 时重放 | replay 会再次进入真实投递链路 | `/gateways/:id/delivery-replay` | `src/deliveryReplay.ts`、`src/deliveryReplayLedger.ts` | `docs/troubleshooting.md` |
-| Remote Agent | 已有 | remote-agent devices / tasks | 远端设备、manager API | 设备连接 / 任务创建 / 事件回报时 | 创建任务、接收任务事件，完成后可投递回本地 Agent | `/api/remote-agent/*` | `src/messageEndpoints/remoteAgentManager.ts` | `docs/rabi-agent-interfaces.md` |
+| Remote Agent | 实验支持 | remote-agent devices / tasks | 远端设备、manager API | 设备连接 / 任务创建 / 事件回报时 | 创建任务、接收任务事件，完成后可投递回本地 Agent | `/api/remote-agent/*` | `src/messageEndpoints/remoteAgentManager.ts` | `docs/rabi-agent-interfaces.md` |
 | Rabi 多实例 API | 已有 | `manager.json`、runtime identity | 远端 / 多实例控制面 | API 调用时 | 代理其它实例的 routes / binding / replies | `/api/rabi/*` | `src/manager/rabiApi.ts` | `docs/rabi-agent-interfaces.md` |
 | Windows 托盘 | 已有 | manager HTTP API、打包资源 | Windows 桌面入口 | 用户启动托盘时 | 启动 / 退出 manager，显示任务窗口 | `Start-RabiRoute-Tray.bat`、托盘 exe | `desktop/tray-task-window/`、`scripts/build-tray-exe.ps1` | `docs/windows-launcher-and-packaging.md` |
 | 示例数据 | 已有 | `examples/data/` | 初次初始化、公开示例 | 首次无 data 目录时可复制 | 只默认启用 `main`；其他接入模板保持禁用；不应包含真实账号和 token | 仓库示例 | `examples/data/roles`、`examples/data/route` | `examples/data/README.md` |
@@ -97,11 +105,12 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 - 消息端和 Agent 端配置归 route：真源是 `adapterConfig.json`。
 - 人格正文、模板规则、计划、记忆和技能归 role：真源是 `data/roles/<RoleId>/`。
 - WebGUI 不是配置事实源。前端负责表单和展示，配置不变量应落在 `src/shared/gatewayConfigModel.ts` 或 manager 后端。
+- WebGUI locale 只是浏览器 UI 偏好。route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据不翻译；英文项目文档复用仓库 `_en.md`。
 - 预览能力目前是拟新增设计，应走后端 dry-run，不能调用 `forwardMessageAndWait`。
 - 真实外发必须经过 Outbox / Action Gate。处理端不要绕过 RabiRoute 直接写 QQ、WeCom、RabiLink 或外部系统。
-- Codex adapter id 保持 `codex`；Codex/ChatGPT Desktop 是用户可见任务和实际轮次的唯一 owner。
-- Codex 正式 transport 是 Desktop IPC。用户级 app-server WebSocket 环境覆盖不进入 RabiRoute 主链。
-- 模型、工具和执行审批由目标 Desktop 任务拥有；任务审批与业务 Action Gate 仍是两道独立边界。
+- Codex adapter id 保持 `codex`；Codex/ChatGPT Desktop 是实际任务 owner，Desktop IPC 是唯一真实消息 transport。
+- 不为真实消息增加共享 4510、独立 stdio app-server 或 fallback。项目锁定的 app-server 只做空任务元数据 bootstrap。
+- 模型、工具、沙箱和 runtime approval 由目标 Desktop 任务拥有；它与业务 Action Gate 仍是两道独立边界。
 - 运行期 `data/`、日志、token、真实账号、真实 QQ 群号和 Cookie 不进仓库。
 
 ## 运行数据与日志
@@ -115,7 +124,6 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | 私聊消息 | `private-messages.jsonl` | NapCat adapter、forwarding role dir copy | 最近消息、审计、AgentPacket |
 | 语音转写 | `voice-transcripts.jsonl`、`rabilink-voice-transcripts.jsonl` | webhook / RabiLink 兼容 adapter | 语音入口事件与旧链路调试记录 |
 | RabiLink 统一会话 | `data/roles/<RoleId>/rabilink-conversation.jsonl` 及审阅 cursor | RabiLink Relay worker、conversation ledger / reviewer、Outbox | AIUI observation、Agent 主动下行、空闲审阅与恢复 |
-| RabiLink 眼镜云日志 | `data/rabilink-relay/device-logs/<accountId>.jsonl` | AIUI / 未来设备桥、Relay | 分账号的眼镜运行诊断、版本与会话排障；不保存对话正文 |
 | 企业微信消息 | `wecom-messages.jsonl` | WeCom adapter | 企业微信入口事件 |
 | 心跳事件 | `heartbeat-events.jsonl` | heartbeat adapter、forwarding role dir copy | 定时触发记录 |
 | 手动触发事件 | `manual-trigger-events.jsonl` | manual trigger | 手动测试 / 触发记录 |
@@ -131,13 +139,13 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | --- | --- | --- |
 | 新增消息入口 | `src/adapters/<name>Adapter.ts`、`src/adapters/messageAdapter.ts`、`src/index.ts`、`src/shared/gatewayConfigModel.ts` | 不要塞进 NapCat adapter；route kind 和配置 normalize 要补齐 |
 | 新增处理端 | `src/agentAdapters/types.ts`、`src/agentAdapters/agentAdapter.ts`、`src/agentAdapters/managerApi.ts` | Agent adapter 只投递 AgentPacket，不定义路由语义 |
-| 改 Codex 投递 | `src/codexRuntime.ts`、`src/codexDesktopBridge.ts`；空任务元数据才看 `src/codexAppServerClient.ts` | Desktop IPC 是唯一真实消息主链；任务无法加载就失败，不加第二 Runtime、WebSocket 或 fallback；模型、工具和审批由目标 Desktop 任务拥有 |
+| 改 Codex 投递 | `src/codexRuntime.ts`、`src/codexDesktopBridge.ts`；空任务元数据才看 `src/codexAppServerClient.ts` | Desktop IPC 是唯一真实消息主链；有效 ID 优先，任务无法加载就失败，不加第二 Runtime、WebSocket 或 fallback；模型、工具和审批由目标 Desktop 任务拥有 |
 | 改规则匹配 | `src/routing/routeDecision.ts`、`src/shared/gatewayConfigModel.ts` | 不要在 adapter 或前端复制匹配逻辑 |
 | 改 Agent 收到的消息 | `src/routing/agentPacket.ts`、`docs/agent-context-injection.md` | 不要在消息端拼 prompt；具体业务闭环应由对应人格或处理端 Skill 定义，不要硬编码到所有 AgentPacket |
 | 改人格规则 GUI | `ribiwebgui/src/pages/PersonaTemplatePage.vue`、`ribiwebgui/src/stores/gatewayStore.ts`、`src/manager/configRepository.ts` | 人格规则写回 `personaConfig.json`，route 字段仍归 `adapterConfig.json` |
 | 改 route GUI | `ribiwebgui/src/pages/RouteConfigPage.vue`、`src/shared/gatewayConfigModel.ts` | 不变量放 shared model |
 | 改 Outbox / 回传 | `src/outbox.ts`、`src/pipelines.ts`、`docs/rabi-agent-interfaces.md` | 外部写入必须保留 action gate |
-| 改计划 / 记忆 / 技能 | `src/roleKnowledge.ts`、`src/manager/roleKnowledgeRoutes.ts` | 注意 viewedAt / consolidation run 的副作用 |
+| 改计划 / 记忆 / 技能 | `src/roleKnowledge.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/controlPlaneRoutes.ts` | 注意 viewedAt / consolidation run 的副作用 |
 | 改 manager API | `src/manager/controlPlaneRoutes.ts`，必要时拆到 `src/manager/*` 或 `src/messageEndpoints/*` | 避免把所有逻辑堆回 controlPlaneRoutes |
 | 改 WebGUI 导航 | `ribiwebgui/src/router.ts`、`ribiwebgui/src/App.vue` | 页面显示不应成为事实源 |
 

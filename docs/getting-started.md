@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./getting-started_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 快速上手
+
+> 状态：现行指南。已按当前 Manager、RibiWebGUI、Codex Desktop owner 和 NapCat 配置流程核对。
 
 ## 准备环境
 
@@ -77,6 +85,8 @@ RabiRoute 当前已验证的处理端是 Codex。WebUI 的 `Agent 端` 里需要
 投递时 Codex/ChatGPT Desktop 必须已经启动。RabiRoute 会让 Desktop 加载目标任务，再通过 Desktop IPC 交付消息；成功后消息会立即出现在桌面任务中，并沿用该任务自己的工具、模型和权限。
 
 如果下拉里没有目标项目，先在右侧输入框填入绝对路径并保存；之后同一个 RibiWebGUI 里配置其他 gateway 时，就可以从下拉里复用这个目录。
+
+真实投递要求 Codex/ChatGPT Desktop 运行。RabiRoute 通过 Desktop IPC 复用已保存任务 ID；任务改名或 goal 完成不会新建副本。项目锁定的 app-server 只在用户明确输入新名称且没有可复用任务时创建、命名空任务，不执行真实消息。
 
 ## 配置 NapCat
 

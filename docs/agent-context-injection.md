@@ -1,4 +1,12 @@
-﻿# Agent 上下文注入说明
+﻿<!-- docs-language-switch -->
+<div align="center">
+<a href="./agent-context-injection_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
+# Agent 上下文注入说明
+
+> 状态：现行指南。已按 `src/routing/agentPacket.ts`、角色知识实现和路由测试核对。
 
 本文面向配置 RabiRoute 的用户，说明 RabiRoute 投递消息给 Agent 时，会自动向消息上下文中注入哪些内容，以及最终建议格式。
 
@@ -13,6 +21,7 @@ Agent 自己需要看的接口说明是 [Agent 需要关注的 Rabi 接口](rabi
 默认注入只放轻量信息：
 
 - 当前事件的必要信息。
+- route 配置允许时的最近消息摘要。
 - 角色和路由路径。
 - Agent 需要关注的接口文档链接。
 - 进行中计划索引。
@@ -81,6 +90,8 @@ route profile
 运行数据目录
 ```
 
+这些文件和目录路径会尽量写成相对当前 RabiRoute 工作区的路径，避免把本机绝对路径和用户名注入消息或公开示例。
+
 日志路径：
 
 ```text
@@ -89,6 +100,7 @@ route profile
 心跳日志路径
 手动触发日志路径
 语音转写日志路径
+角色面板消息路径
 ```
 
 Rabi 内置能力：
@@ -154,9 +166,9 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 ## 自动包装格式
 
-最终投递给 Agent 的消息由 RabiRoute 自动包装生成。每段用稳定标题，方便 Agent 识别，也方便以后不同 Agent adapter 做解析。
+最终投递给 Agent 的消息由 RabiRoute 自动包装生成。每段用稳定标题，方便 Agent 识别，也方便不同 Agent adapter 做解析。下面是现行结构的概览；空字段、未启用能力和没有人格绑定的段落会被省略或替换。
 
-建议结构：
+现行结构：
 
 ```text
 [RabiRoute 事件]
@@ -169,6 +181,10 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 [消息]
 <message>
+
+[最近消息]
+最近 <recentMessageLimit> 条：
+<recentMessages>
 
 [角色和路径]
 角色：<agentRoleId>
@@ -211,6 +227,17 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 心跳日志：<heartbeatLogPath>
 手动触发日志：<manualTriggerLogPath>
 语音转写日志：<voiceTranscriptLogPath>
+角色面板记录：<rolePanelLogPath>
+
+[回传]
+普通回复 API：<replyApiUrl>
+当前回复上下文：<replyContextJson>
+
+[回复回传要求]
+<按 outputAdapter、replyToSource 和来源消息生成的回传说明>
+
+[远端 Agent 设备]
+<仅在 route 启用 remoteAgent 消息端时注入本机 Manager API 提示>
 
 [用户模板补充]
 <用户在 route 模板里写的可选补充要求；为空时省略本段>
@@ -232,14 +259,14 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 
 [角色和路径]
 角色：Rabi
-角色文件：C:/Path/To/RabiRoute/data/roles/Rabi/persona.md
-角色目录：C:/Path/To/RabiRoute/data/roles/Rabi
-运行数据目录：C:/Path/To/RabiRoute/data/roles/Rabi
-计划目录：C:/Path/To/RabiRoute/data/roles/Rabi/plans
-记忆目录：C:/Path/To/RabiRoute/data/roles/Rabi/memory
+角色文件：data/roles/Rabi/persona.md
+角色目录：data/roles/Rabi
+运行数据目录：data/route/default-main
+计划目录：data/roles/Rabi/plans
+记忆目录：data/roles/Rabi/memory
 
 [记忆与计划]
-更新记忆与计划的说明文档：C:/Path/To/RabiRoute/docs/rabi-agent-interfaces.md
+更新记忆与计划的说明文档：docs/rabi-agent-interfaces.md
 可用 API 提示：
 - 查看/更新计划：GET /api/roles/Rabi/plans、GET /api/roles/Rabi/plans/{planId}、POST /api/roles/Rabi/plans、PATCH /api/roles/Rabi/plans/{planId}
 - 查看记忆：GET /api/roles/Rabi/memory、GET /api/roles/Rabi/memory/recent、GET /api/roles/Rabi/memory/recent/{memoryId}、GET /api/roles/Rabi/memory/consolidated、GET /api/roles/Rabi/memory/consolidated/{memoryId}
@@ -258,19 +285,24 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 - memory-003：更新记忆与计划的说明文档路径
 
 [日志]
-群聊日志：C:/Path/To/RabiRoute/data/roles/Rabi/group-messages.jsonl
-私聊日志：C:/Path/To/RabiRoute/data/roles/Rabi/private-messages.jsonl
-心跳日志：C:/Path/To/RabiRoute/data/roles/Rabi/heartbeat-events.jsonl
-手动触发日志：C:/Path/To/RabiRoute/data/roles/Rabi/manual-trigger-events.jsonl
-语音转写日志：C:/Path/To/RabiRoute/data/roles/Rabi/voice-transcripts.jsonl
+群聊日志：data/route/default-main/group-messages.jsonl
+私聊日志：data/route/default-main/private-messages.jsonl
+心跳日志：data/route/default-main/heartbeat-events.jsonl
+手动触发日志：data/route/default-main/manual-trigger-events.jsonl
+角色面板记录：data/roles/Rabi/role-panel/messages.jsonl
+语音转写日志：data/route/default-main/voice-transcripts.jsonl
+
+[回传]
+普通回复 API：http://127.0.0.1:8790/api/agent/replies
+当前回复上下文：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id","outputAdapter":"agent","outputPipeline":"agent","replyToSource":false}
 
 [用户模板补充]
 需要回应时给短而自然的群聊草稿。
 ```
 
-## 示例：内置记忆整理触发
+## 示例：显式记忆整理触发
 
-内置记忆整理触发属于 `manual_trigger` 类消息，投递方式和普通手动触发一致。
+记忆整理入口属于 `manual_trigger` 类消息，投递方式和普通手动触发一致。当前代码会在收到 `triggerId=memory-consolidation` 的显式手动触发时评估时间窗口并创建待整理 run；也可以由 Manager API 显式创建 request。仅仅经过一段时间不会自行启动后台整理任务。
 
 当前实现先创建可查询的 consolidation request 和 pending run；负责 outbox 或回复发送的链路可以随后把 request 投递给 Agent。Agent 返回结果后，RabiRoute 通过 result 接口落盘沉淀记忆并标记输入近期记忆。
 
@@ -288,9 +320,9 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 
 [角色和路径]
 角色：Rabi
-角色目录：C:/Path/To/RabiRoute/data/roles/Rabi
-记忆目录：C:/Path/To/RabiRoute/data/roles/Rabi/memory
-Agent 需要关注的 Rabi 接口：C:/Path/To/RabiRoute/docs/rabi-agent-interfaces.md
+角色目录：data/roles/Rabi
+记忆目录：data/roles/Rabi/memory
+Agent 需要关注的 Rabi 接口：docs/rabi-agent-interfaces.md
 
 [待整理记忆]
 - memory-001：用户希望计划和记忆由 Agent 主动维护
@@ -303,26 +335,21 @@ Agent 需要关注的 Rabi 接口：C:/Path/To/RabiRoute/docs/rabi-agent-interfa
 请将以上近期记忆整理为稳定、简洁、可长期保留的沉淀记忆。只返回沉淀记忆内容，不需要解释触发原因，不需要选择输入范围，不需要修改原始近期记忆。
 ```
 
-## 模板变量建议
+## 模板变量边界
 
-后续实现时仍可提供这些模板变量，供少量高级模板使用；普通 route 规则不需要手写这些变量：
+普通 route 规则不需要手写上下文索引。现行模板值中可直接使用以下路径和回传字段：
 
 ```text
 {agentInterfaceDocPath}
 {plansDir}
 {memoryDir}
-{activePlanIndex}
-{recentMemoryIndex}
-{matchedPlanMemoryIndex}
-{consolidatedMemorySummary}
+{recentMessages}
+{replyApiUrl}
+{replyContextJson}
+{rolePanelLogPath}
 ```
 
-其中：
-
-- `{activePlanIndex}` 只包含进行中计划的 ID 和标题。
-- `{recentMemoryIndex}` 只包含近期记忆的 ID 和标题；默认配置下会直接列出最近 24 小时内更新过的近期记忆。
-- `{matchedPlanMemoryIndex}` 只包含当前消息命中的计划/记忆 ID 和标题。
-- `{consolidatedMemorySummary}` 默认按需注入，不建议每条消息都带。
+进行中计划、近期记忆、技能和命中召回由自动包装器直接生成，目前不是供 route 模板自由拼装的独立模板变量。完整的用户可用变量以 [路由配置](routing-configuration.md) 和 `templateValuesForDecision()` 为准。
 
 ## 边界
 

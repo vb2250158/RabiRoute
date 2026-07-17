@@ -14,6 +14,10 @@ const intentionallyBlockedEndpoints = new Map([
     "Creates or sends Codex tasks and must remain behind the PC-side Agent and approval boundary."
   ],
   [
+    "/api/role-panel/messages",
+    "Sends a real role-panel message and must remain behind the PC-side messaging and approval boundary."
+  ],
+  [
     "/api/message/napcat-ensure-ready",
     "Starts or repairs a local NapCat login and must remain an explicit local WebGUI action."
   ]

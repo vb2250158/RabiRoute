@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./routing-and-personas_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # 路由与人格
+
+> 状态：现行指南。说明 route、role/persona 和处理端的真实边界。
 
 路由入口参数见 [路由配置](routing-configuration.md)。这里专门讲人格包，以及跟随人格的消息模板规则。
 

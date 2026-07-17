@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiLink AIUI
 
 RabiLink AIUI 是 Rokid 眼镜上的 Agent 消息端。首页只有两个可滑动切换的模式：`连接对话`和`配置助手`。
@@ -284,7 +290,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-RabiLinkAiuiR
 
 `npm run goal:evidence` 会按原始目标生成 `dist/goal-evidence.json`：AIUI 设计、WebGUI 配置覆盖、Relay 绑定、AIX/delivery、手机安装面、Craft 上传状态、眼镜设备和眼镜运行测试会分别给出 `status`、证据路径和下一步。眼镜运行测试只接受当前发布版本、20 分钟内、同一页面 session 同时包含 `app-start` 和 Relay/配置操作的 `dist/runtime-proof-status.json`；旧包或孤立历史事件不能冒充本次真机运行。这个脚本用于防止把“包已准备好”误当成“已经装到眼镜并测试完成”；需要严格验收时可加 `-RequireComplete`。
 
-Craft 浏览器中的模式切换和模拟 ASR 重绘证据写在 `dist/craft-render-acceptance.json`。在线采样使用 `canvas.getImageData()` 冻结同一帧，再复制到离屏 Canvas 编码 PNG；不要用 Playwright 元素截图或直接 `canvas.toDataURL()` 判断局部重绘，因为 Craft 持续渲染时这两种二次读回可能产生截屏撕裂。仓库中的现有报告属于历史 AIX，不能证明当前 1.0.18；重新上传后必须核对报告内的 AIX VERSION/SHA256，并同时要求 `partial_frames = 0`、`black_frames = 0`。这仍只代表 Interactive InkView，不代表真实眼镜验收。
+Craft 浏览器中的模式切换和模拟 ASR 重绘证据写在 `dist/craft-render-acceptance.json`。在线采样使用 `canvas.getImageData()` 冻结同一帧，再复制到离屏 Canvas 编码 PNG；不要用 Playwright 元素截图或直接 `canvas.toDataURL()` 判断局部重绘，因为 Craft 持续渲染时这两种二次读回可能产生截屏撕裂。仓库中的现有报告属于历史 AIX，不能证明当前 1.0.23；重新上传后必须核对报告内的 AIX VERSION/SHA256，并同时要求 `partial_frames = 0`、`black_frames = 0`。这仍只代表 Interactive InkView，不代表真实眼镜验收。
 
 如果当前只能连到手机，也可以先确认手机端 Hi Rokid / Rokid companion 前置条件：
 

@@ -1,5 +1,13 @@
 # Rabi Link 设备探针
 
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
+> 状态：实验硬件调查工具。代码包含可构建的 Android 探针和多条真机取证路径，但不等于小米健康历史数据、Rokid 原生 ASR/TTS 或 Wear OS 常驻桥已经形成稳定产品能力。
+
 这是一个 Android / ADB 单 APK 设备桥接探针。当前保留小米手环 10 Pro / 小米运动健康链路能力，并以模块化方式接入 Rokid 眼镜等更多设备能力。
 
 当前手机 APK 包名为：
@@ -8,7 +16,7 @@
 com.rabi.link
 ```
 
-模块化重构说明见 `docs/rabi-link-probe-merge-plan.md`。
+模块化重构说明见 [`docs/rabi-link-probe-merge-plan.md`](./docs/rabi-link-probe-merge-plan.md)。
 
 ## 当前可用性结论
 

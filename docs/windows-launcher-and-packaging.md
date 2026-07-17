@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./windows-launcher-and-packaging_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Windows 桌面启动与完整打包
+
+> 状态：现行指南。已按启动脚本、Manager shutdown API、Qt 托盘代码和打包脚本核对。
 
 本文是 Windows 桌面启动和打包的唯一真源。README、脚本注释和托盘 README 只应指向这里，不再各自维护另一套“exe 是否完整包”的解释。
 

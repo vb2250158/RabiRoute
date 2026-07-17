@@ -1,4 +1,12 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rabilink-relay-cloudflare-worker_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiLink Relay Cloudflare Worker 代理
+
+> 状态：环境相关运维方案。仅在 Relay IP 可用但目标客户端必须填写域名、且未备案域名被云厂商拦截时使用；不是 RabiLink 核心协议依赖。
 
 日期：2026-07-14
 

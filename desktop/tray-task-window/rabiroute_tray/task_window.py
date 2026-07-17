@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 from .manager_client import ManagerSnapshot
 from .display_helpers import route_enabled_label, route_running_label, route_state, route_status_label, route_subtitle, route_title
 from .role_context_repository import ContextEntry, RoleContextSnapshot
-from .task_repository import PlanItem, PlanSnapshot
+from .task_repository import PlanItem, PlanSnapshot, PlanStep
 
 
 VIEW_LABELS = (
@@ -44,8 +45,8 @@ STATUS_TONES = {
     "已归档": "archived",
 }
 
-PRIMARY_VIEW_KEYS = {"chat", "current", "plans"}
-
+PLAN_STEP_DONE_STATUSES = {"已完成", "完成", "done", "completed"}
+PLAN_STEP_CURRENT_STATUSES = {"进行中", "当前", "current", "in_progress", "in-progress"}
 
 class ClickableHeader(QFrame):
     clicked = Signal()
@@ -82,6 +83,310 @@ class ClickableHeader(QFrame):
         super().keyPressEvent(event)
 
 
+class KeywordPanel(QFrame):
+    OVERFLOW_INDICATOR = "……"
+
+    def __init__(self, keywords: list[str]) -> None:
+        super().__init__()
+        self.setObjectName("keywordPanel")
+        self._keywords = [keyword for keyword in keywords if keyword.strip()]
+        self._expanded = False
+        self.visible_keyword_count = 0
+
+        self.summary_line = QFrame()
+        self.summary_line.setObjectName("keywordSummaryLine")
+        summary_layout = QHBoxLayout()
+        summary_layout.setContentsMargins(20, 0, 0, 0)
+        summary_layout.setSpacing(7)
+        summary_label = QLabel("触发关键字")
+        summary_label.setObjectName("keywordLabel")
+        self.summary_label = QLabel()
+        self.summary_label.setObjectName("keywordSummary")
+        self.summary_label.setMinimumWidth(0)
+        self.summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.summary_label.setToolTip("、".join(self._keywords) if self._keywords else "未配置")
+        summary_layout.addWidget(summary_label, 0, Qt.AlignVCenter)
+        summary_layout.addWidget(self.summary_label, 1, Qt.AlignVCenter)
+        self.summary_line.setLayout(summary_layout)
+
+        self.expanded_panel = QFrame()
+        self.expanded_panel.setObjectName("keywordExpandedPanel")
+        expanded_layout = QGridLayout()
+        expanded_layout.setContentsMargins(20, 0, 0, 0)
+        expanded_layout.setHorizontalSpacing(5)
+        expanded_layout.setVerticalSpacing(5)
+        expanded_label = QLabel("触发关键字")
+        expanded_label.setObjectName("keywordLabel")
+        expanded_layout.addWidget(expanded_label, 0, 0, Qt.AlignTop)
+        values = self._keywords if self._keywords else ["未配置"]
+        self.keyword_chips: list[QLabel] = []
+        for index, keyword in enumerate(values):
+            chip = QLabel(keyword)
+            chip.setObjectName("keywordChip")
+            chip.setProperty("empty", not self._keywords)
+            chip.setWordWrap(True)
+            self.keyword_chips.append(chip)
+            row = index // 3
+            column = (index % 3) + 1
+            expanded_layout.addWidget(chip, row, column)
+        expanded_layout.setColumnStretch(4, 1)
+        self.expanded_panel.setLayout(expanded_layout)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.summary_line)
+        layout.addWidget(self.expanded_panel)
+        self.setLayout(layout)
+        self.set_expanded(False)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._expanded = expanded
+        self.summary_line.setVisible(not expanded)
+        self.expanded_panel.setVisible(expanded)
+        if not expanded:
+            QTimer.singleShot(0, self._refresh_summary)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not self._expanded:
+            QTimer.singleShot(0, self._refresh_summary)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._expanded:
+            QTimer.singleShot(0, self._refresh_summary)
+
+    def _refresh_summary(self) -> None:
+        text, visible_count = self._summary_for_width(self.summary_label.width())
+        self.visible_keyword_count = visible_count
+        self.summary_label.setText(text)
+
+    def _summary_for_width(self, width: int) -> tuple[str, int]:
+        if not self._keywords:
+            return "未配置", 0
+        separator = "  ·  "
+        metrics = self.summary_label.fontMetrics()
+        for visible_count in range(len(self._keywords), -1, -1):
+            visible = separator.join(self._keywords[:visible_count])
+            hidden_count = len(self._keywords) - visible_count
+            suffix = self.OVERFLOW_INDICATOR if hidden_count else ""
+            candidate = separator.join(part for part in (visible, suffix) if part)
+            if metrics.horizontalAdvance(candidate) <= max(0, width):
+                return candidate, visible_count
+        return self.OVERFLOW_INDICATOR, 0
+
+
+class PlanDetailPanel(QFrame):
+    STEP_PREVIEW_LIMIT = 6
+
+    def __init__(self, plan: PlanItem, metadata_fields: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self.setObjectName("planDetailPanel")
+        self.plan = plan
+        self._show_all_steps = False
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        summary = QFrame()
+        summary.setObjectName("planActionSummary")
+        summary_layout = QGridLayout()
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+        summary_layout.setHorizontalSpacing(10)
+        summary_layout.setVerticalSpacing(8)
+        summary_layout.addWidget(
+            self._summary_block("●  当前步骤", plan.current_step or "暂未填写当前步骤", "current"), 0, 0
+        )
+        summary_layout.addWidget(
+            self._summary_block("➜  下一步行动", plan.next_action or "暂未填写下一步行动", "next"), 0, 1
+        )
+        summary_layout.setColumnStretch(0, 1)
+        summary_layout.setColumnStretch(1, 1)
+        summary.setLayout(summary_layout)
+        layout.addWidget(summary)
+
+        if plan.steps:
+            layout.addWidget(self._progress_panel())
+
+        if metadata_fields:
+            metadata = QFrame()
+            metadata.setObjectName("planMetadata")
+            metadata_layout = QGridLayout()
+            metadata_layout.setContentsMargins(0, 2, 0, 0)
+            metadata_layout.setHorizontalSpacing(16)
+            metadata_layout.setVerticalSpacing(7)
+            for index, (key, value) in enumerate(metadata_fields):
+                metadata_layout.addWidget(self._metadata_widget(key, value), index // 2, index % 2)
+            metadata_layout.setColumnStretch(0, 1)
+            metadata_layout.setColumnStretch(1, 1)
+            metadata.setLayout(metadata_layout)
+            layout.addWidget(metadata)
+
+        self.setLayout(layout)
+
+    def _summary_block(self, label: str, value: str, tone: str) -> QFrame:
+        block = QFrame()
+        block.setObjectName("planSummaryBlock")
+        block.setProperty("summaryTone", tone)
+        block_layout = QVBoxLayout()
+        block_layout.setContentsMargins(11, 10, 11, 10)
+        block_layout.setSpacing(5)
+        label_widget = QLabel(label)
+        label_widget.setObjectName("planSummaryLabel")
+        label_widget.setProperty("summaryTone", tone)
+        value_widget = QLabel(value)
+        value_widget.setObjectName("planSummaryValue")
+        value_widget.setWordWrap(True)
+        value_widget.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        block_layout.addWidget(label_widget)
+        block_layout.addWidget(value_widget)
+        block.setLayout(block_layout)
+        return block
+
+    def _progress_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("planProgressPanel")
+        panel_layout = QVBoxLayout()
+        panel_layout.setContentsMargins(0, 2, 0, 0)
+        panel_layout.setSpacing(7)
+
+        completed_count = sum(1 for step in self.plan.steps if _plan_step_tone(step) == "done")
+        total_count = len(self.plan.steps)
+        percentage = round(completed_count * 100 / total_count) if total_count else 0
+
+        heading_row = QHBoxLayout()
+        heading_row.setContentsMargins(0, 0, 0, 0)
+        heading = QLabel(f"计划进度（{completed_count} / {total_count} 步骤）")
+        heading.setObjectName("planProgressTitle")
+        percentage_label = QLabel(f"{percentage}%")
+        percentage_label.setObjectName("planProgressPercent")
+        heading_row.addWidget(heading)
+        heading_row.addStretch(1)
+        heading_row.addWidget(percentage_label)
+        panel_layout.addLayout(heading_row)
+
+        progress = QProgressBar()
+        progress.setObjectName("planProgressBar")
+        progress.setRange(0, max(1, total_count))
+        progress.setValue(completed_count)
+        progress.setTextVisible(False)
+        progress.setFixedHeight(8)
+        panel_layout.addWidget(progress)
+
+        self.steps_container = QFrame()
+        self.steps_container.setObjectName("planStepsContainer")
+        self.steps_layout = QVBoxLayout()
+        self.steps_layout.setContentsMargins(0, 2, 0, 0)
+        self.steps_layout.setSpacing(3)
+        self.steps_container.setLayout(self.steps_layout)
+        panel_layout.addWidget(self.steps_container)
+
+        self.more_steps_button = QPushButton()
+        self.more_steps_button.setObjectName("planMoreStepsButton")
+        self.more_steps_button.clicked.connect(self._toggle_all_steps)
+        panel_layout.addWidget(self.more_steps_button, 0, Qt.AlignLeft)
+
+        panel.setLayout(panel_layout)
+        self._render_steps()
+        return panel
+
+    def _toggle_all_steps(self) -> None:
+        self._show_all_steps = not self._show_all_steps
+        self._render_steps()
+
+    def _render_steps(self) -> None:
+        while self.steps_layout.count():
+            item = self.steps_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        visible_steps = self.plan.steps if self._show_all_steps else self.plan.steps[: self.STEP_PREVIEW_LIMIT]
+        for index, step in enumerate(visible_steps, start=1):
+            self.steps_layout.addWidget(self._step_widget(index, step))
+        hidden_count = max(0, len(self.plan.steps) - len(visible_steps))
+        if len(self.plan.steps) <= self.STEP_PREVIEW_LIMIT:
+            self.more_steps_button.setVisible(False)
+        else:
+            self.more_steps_button.setVisible(True)
+            self.more_steps_button.setText(
+                "收起步骤 ︿"
+                if self._show_all_steps
+                else f"查看全部 {len(self.plan.steps)} 个步骤（还有 {hidden_count} 个）﹀"
+            )
+
+    def _step_widget(self, index: int, step: PlanStep) -> QFrame:
+        tone = _plan_step_tone(step)
+        row = QFrame()
+        row.setObjectName("planStepRow")
+        row.setProperty("stepTone", tone)
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(2, 4, 2, 4)
+        row_layout.setSpacing(8)
+
+        marker = QLabel("✓" if tone == "done" else "●" if tone == "current" else "○")
+        marker.setObjectName("planStepMarker")
+        marker.setProperty("stepTone", tone)
+        marker.setFixedWidth(18)
+        marker.setAlignment(Qt.AlignCenter)
+
+        text_block = QFrame()
+        text_block.setObjectName("planStepTextBlock")
+        text_layout = QVBoxLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(2)
+        title = QLabel(f"{index}. {step.title}")
+        title.setObjectName("planStepTitle")
+        title.setWordWrap(True)
+        text_layout.addWidget(title)
+        if step.detail:
+            detail = QLabel(step.detail)
+            detail.setObjectName("planStepDetail")
+            detail.setWordWrap(True)
+            text_layout.addWidget(detail)
+        text_block.setLayout(text_layout)
+
+        state_text = step.completed_at or ("已完成" if tone == "done" else "进行中" if tone == "current" else "待开始")
+        state = QLabel(state_text)
+        state.setObjectName("planStepState")
+        state.setProperty("stepTone", tone)
+        state.setAlignment(Qt.AlignRight | Qt.AlignTop)
+
+        row_layout.addWidget(marker, 0, Qt.AlignTop)
+        row_layout.addWidget(text_block, 1)
+        row_layout.addWidget(state, 0, Qt.AlignTop)
+        row.setLayout(row_layout)
+        return row
+
+    def _metadata_widget(self, key: str, value: str) -> QFrame:
+        row = QFrame()
+        row.setObjectName("planMetadataItem")
+        row_layout = QVBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(2)
+        key_label = QLabel(key)
+        key_label.setObjectName("fieldKey")
+        value_label = QLabel(value)
+        value_label.setObjectName("fieldValue")
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        row_layout.addWidget(key_label)
+        row_layout.addWidget(value_label)
+        row.setLayout(row_layout)
+        return row
+
+
+def _plan_step_tone(step: PlanStep) -> str:
+    normalized = step.status.strip().lower()
+    if normalized in PLAN_STEP_DONE_STATUSES:
+        return "done"
+    if normalized in PLAN_STEP_CURRENT_STATUSES:
+        return "current"
+    return "pending"
+
+
 class ExpandableCard(QFrame):
     expanded_changed = Signal(bool)
 
@@ -94,6 +399,7 @@ class ExpandableCard(QFrame):
         keywords: list[str],
         status: str = "",
         expanded: bool = False,
+        plan: PlanItem | None = None,
     ) -> None:
         super().__init__()
         self._expanded = False
@@ -135,7 +441,8 @@ class ExpandableCard(QFrame):
             status_label.setProperty("statusTone", STATUS_TONES.get(status, "unknown"))
             title_row.addWidget(status_label, 0, Qt.AlignTop)
         header_layout.addLayout(title_row)
-        header_layout.addWidget(self._keywords_widget(keywords))
+        self.keywords_panel = KeywordPanel(keywords)
+        header_layout.addWidget(self.keywords_panel)
         self.header.setLayout(header_layout)
         self.header.clicked.connect(self.toggle)
 
@@ -144,7 +451,9 @@ class ExpandableCard(QFrame):
         details_layout = QVBoxLayout()
         details_layout.setContentsMargins(20, 2, 0, 0)
         details_layout.setSpacing(6)
-        if fields:
+        if plan is not None:
+            details_layout.addWidget(PlanDetailPanel(plan, fields))
+        elif fields:
             for key, value in fields:
                 details_layout.addWidget(self._field_widget(key, value))
         else:
@@ -162,35 +471,11 @@ class ExpandableCard(QFrame):
     def set_expanded(self, expanded: bool, emit: bool = True) -> None:
         self._expanded = expanded
         self.details.setVisible(expanded)
+        self.keywords_panel.set_expanded(expanded)
         self.indicator.setText("v" if expanded else ">")
         self.header.set_action_word("折叠" if expanded else "展开")
         if emit:
             self.expanded_changed.emit(expanded)
-
-    def _keywords_widget(self, keywords: list[str]) -> QWidget:
-        panel = QFrame()
-        panel.setObjectName("keywordPanel")
-        layout = QGridLayout()
-        layout.setContentsMargins(20, 0, 0, 0)
-        layout.setHorizontalSpacing(5)
-        layout.setVerticalSpacing(5)
-
-        label = QLabel("触发关键字")
-        label.setObjectName("keywordLabel")
-        layout.addWidget(label, 0, 0, Qt.AlignTop)
-
-        values = keywords if keywords else ["未配置"]
-        for index, keyword in enumerate(values):
-            chip = QLabel(keyword)
-            chip.setObjectName("keywordChip")
-            chip.setProperty("empty", not keywords)
-            chip.setWordWrap(True)
-            row = index // 3
-            column = (index % 3) + 1
-            layout.addWidget(chip, row, column)
-        layout.setColumnStretch(4, 1)
-        panel.setLayout(layout)
-        return panel
 
     def _field_widget(self, key: str, value: str) -> QWidget:
         row = QFrame()
@@ -256,6 +541,40 @@ class InfoCard(QFrame):
         return row
 
 
+class StatusTable(QFrame):
+    def __init__(self, fields: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self.setObjectName("statusTable")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+
+        layout = QGridLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(0)
+        layout.setVerticalSpacing(0)
+
+        key_header = QLabel("状态")
+        key_header.setObjectName("statusTableHeader")
+        value_header = QLabel("运行状态")
+        value_header.setObjectName("statusTableHeader")
+        layout.addWidget(key_header, 0, 0)
+        layout.addWidget(value_header, 0, 1)
+
+        for row_index, (key, value) in enumerate(fields, start=1):
+            key_label = QLabel(key)
+            key_label.setObjectName("statusTableKey")
+            key_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            value_label = QLabel(value)
+            value_label.setObjectName("statusTableValue")
+            value_label.setWordWrap(True)
+            value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(key_label, row_index, 0)
+            layout.addWidget(value_label, row_index, 1)
+
+        layout.setColumnMinimumWidth(0, 132)
+        layout.setColumnStretch(1, 1)
+        self.setLayout(layout)
+
+
 class TaskWindow(QWidget):
     route_selected = Signal(str)
     send_message_requested = Signal(str, object)
@@ -294,20 +613,22 @@ class TaskWindow(QWidget):
         self.subtitle_label.setObjectName("subtitle")
         self.status_chip = QLabel("加载中")
         self.status_chip.setObjectName("statusChip")
+        self.status_chip.setProperty("statusTone", "warning")
         self.status_detail = QLabel("正在读取 manager、计划和记忆目录...")
         self.status_detail.setObjectName("statusDetail")
         self.status_detail.setWordWrap(True)
 
         title_block = QVBoxLayout()
-        title_block.setSpacing(2)
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(4)
         title_block.addWidget(self.title_label)
         title_block.addWidget(self.subtitle_label)
 
         header_top = QHBoxLayout()
-        header_top.setSpacing(10)
-        header_top.addWidget(self.icon_label, 0, Qt.AlignTop)
+        header_top.setSpacing(12)
+        header_top.addWidget(self.icon_label, 0, Qt.AlignVCenter)
         header_top.addLayout(title_block, 1)
-        header_top.addWidget(self.status_chip, 0, Qt.AlignTop)
+        header_top.addWidget(self.status_chip, 0, Qt.AlignVCenter)
         self.collapse_button = QPushButton("<")
         self.collapse_button.setObjectName("iconButton")
         self.collapse_button.setToolTip("折叠左侧航线列表")
@@ -320,12 +641,12 @@ class TaskWindow(QWidget):
         self.more_menu = QMenu(self)
         self.more_menu.setObjectName("moreMenu")
         self.more_button.setMenu(self.more_menu)
-        header_top.addWidget(self.collapse_button, 0, Qt.AlignTop)
-        header_top.addWidget(self.more_button, 0, Qt.AlignTop)
+        header_top.addWidget(self.collapse_button, 0, Qt.AlignVCenter)
+        header_top.addWidget(self.more_button, 0, Qt.AlignVCenter)
 
         header_layout = QVBoxLayout()
-        header_layout.setContentsMargins(18, 12, 18, 10)
-        header_layout.setSpacing(6)
+        header_layout.setContentsMargins(16, 12, 16, 10)
+        header_layout.setSpacing(7)
         header_layout.addLayout(header_top)
         header_layout.addWidget(self.status_detail)
         self.header.setLayout(header_layout)
@@ -334,7 +655,7 @@ class TaskWindow(QWidget):
         self.route_nav.setObjectName("routeNav")
         route_nav_layout = QVBoxLayout()
         route_nav_layout.setContentsMargins(0, 0, 0, 0)
-        route_nav_layout.setSpacing(10)
+        route_nav_layout.setSpacing(8)
         self.route_brand = QLabel("RabiRoute")
         self.route_brand.setObjectName("routeBrand")
         route_nav_layout.addWidget(self.route_brand)
@@ -356,14 +677,13 @@ class TaskWindow(QWidget):
         self.view_bar.setObjectName("viewBar")
         view_bar_layout = QHBoxLayout()
         view_bar_layout.setContentsMargins(0, 0, 0, 0)
-        view_bar_layout.setSpacing(6)
+        view_bar_layout.setSpacing(4)
         self.view_buttons: dict[str, QPushButton] = {}
         for view_key, label in VIEW_LABELS:
-            if view_key not in PRIMARY_VIEW_KEYS:
-                continue
             button = QPushButton(label)
             button.setObjectName("viewButton")
             button.setCheckable(True)
+            button.setAccessibleName(f"切换到{label}视图")
             button.clicked.connect(lambda _checked=False, key=view_key: self.set_view(key))
             self.view_buttons[view_key] = button
             view_bar_layout.addWidget(button)
@@ -384,8 +704,8 @@ class TaskWindow(QWidget):
         self.content_body = QWidget()
         self.content_body.setObjectName("contentBody")
         self.content_layout = QVBoxLayout()
-        self.content_layout.setContentsMargins(8, 8, 8, 8)
-        self.content_layout.setSpacing(9)
+        self.content_layout.setContentsMargins(12, 10, 12, 10)
+        self.content_layout.setSpacing(8)
         self.content_body.setLayout(self.content_layout)
         self.content.setWidget(self.content_body)
 
@@ -417,9 +737,14 @@ class TaskWindow(QWidget):
         self.refresh_button.setToolTip("刷新")
         self.refresh_button.setAccessibleName("刷新记忆与计划")
 
+        self.footer_frame = QFrame()
+        self.footer_frame.setObjectName("footerBar")
         footer = QHBoxLayout()
+        footer.setContentsMargins(14, 7, 8, 7)
+        footer.setSpacing(8)
         footer.addWidget(self.footer_label, 1)
         footer.addWidget(self.refresh_button)
+        self.footer_frame.setLayout(footer)
 
         self.right_pane = QFrame()
         self.right_pane.setObjectName("rightPane")
@@ -430,7 +755,7 @@ class TaskWindow(QWidget):
         right_layout.addWidget(self.view_bar)
         right_layout.addWidget(self.content, 1)
         right_layout.addWidget(self.chat_input_frame)
-        right_layout.addLayout(footer)
+        right_layout.addWidget(self.footer_frame)
         self.right_pane.setLayout(right_layout)
 
         main = QHBoxLayout()
@@ -458,15 +783,6 @@ class TaskWindow(QWidget):
             self.actions_layout.removeWidget(button)
             button.deleteLater()
         self.more_menu.clear()
-        for view_key, label in VIEW_LABELS:
-            if view_key in PRIMARY_VIEW_KEYS:
-                continue
-            action = self.more_menu.addAction(label)
-            action.setCheckable(True)
-            action.setChecked(self.active_view == view_key)
-            action.triggered.connect(lambda _checked=False, key=view_key: self.set_view(key))
-        if self.more_menu.actions() and actions:
-            self.more_menu.addSeparator()
         for label, callback, enabled in actions:
             action = self.more_menu.addAction(label)
             action.setEnabled(enabled)
@@ -508,13 +824,15 @@ class TaskWindow(QWidget):
 
         self.setWindowTitle(role_id or plans.role_id or "角色面板")
         self.title_label.setText(role_id or plans.role_id)
-        self.subtitle_label.setText(route_subtitle(gateway) if gateway else "角色面板")
-        self.status_chip.setText(self._chip_text(manager.connected, running))
-        self.status_detail.setText(
+        self.subtitle_label.setText(
             f"Manager：{'已连接' if manager.connected else '离线'}  "
-            f"Gateway：{'运行中' if running else '已停止'}\n"
-            f"当前航线：{self._gateway_label(gateway) if gateway else '未选择'}"
+            f"Gateway：{'运行中' if running else '已停止'}"
         )
+        self.status_chip.setText(self._chip_text(manager.connected, running))
+        self.status_chip.setProperty("statusTone", self._status_tone(manager.connected, running))
+        self.status_chip.style().unpolish(self.status_chip)
+        self.status_chip.style().polish(self.status_chip)
+        self.status_detail.setText(f"当前航线：{self._gateway_label(gateway) if gateway else '未选择'}")
         self._render_route_buttons()
         self._render_active_view()
         QTimer.singleShot(0, lambda value=scroll_value: self._restore_scroll(value))
@@ -545,15 +863,28 @@ class TaskWindow(QWidget):
         for gateway in self.manager.gateways:
             gateway_id = str(gateway.get("id") or "")
             label = self._gateway_label(gateway)
-            button = QPushButton(f"{route_title(gateway)}\n{route_subtitle(gateway)}\n{route_enabled_label(gateway)} / {route_running_label(gateway)}")
+            button = QPushButton(self._route_button_text(gateway))
             button.setObjectName("routeButton")
             button.setProperty("routeState", route_state(gateway))
             button.setCheckable(True)
             button.setChecked(gateway_id == selected_id)
             button.setToolTip(label)
+            button.setAccessibleName(label)
             button.clicked.connect(lambda _checked=False, item_id=gateway_id: self.route_selected.emit(item_id))
             self.route_buttons[gateway_id] = button
             self.route_buttons_layout.addWidget(button)
+
+    def _route_button_text(self, gateway: dict) -> str:
+        parts = [part.strip() for part in route_subtitle(gateway).split(" · ") if part.strip()]
+        identity = " · ".join(parts[:-1]) if len(parts) > 1 else ""
+        adapters = parts[-1] if parts else ""
+        lines = [route_title(gateway)]
+        if identity:
+            lines.append(identity)
+        if adapters:
+            lines.append(adapters)
+        lines.append(f"{route_enabled_label(gateway)} / {route_running_label(gateway)}")
+        return "\n".join(lines)
 
     def _gateway_label(self, gateway: dict | None) -> str:
         if not gateway:
@@ -611,8 +942,6 @@ class TaskWindow(QWidget):
         self.content_layout.addStretch(1)
 
     def _render_chat(self) -> None:
-        role_id = self.plans.role_id if self.plans else "Rabi"
-        self._add_section_header(role_id, f"当前航线：{self._gateway_label(self.selected_gateway)}")
         if not self.role_messages:
             self._add_info_card("聊天", "还没有角色面板对话。", [("提示", "在下方输入消息，发送给当前航线绑定的 Agent。")], "empty")
             return
@@ -681,11 +1010,12 @@ class TaskWindow(QWidget):
     def _render_current(self) -> None:
         assert self.plans is not None
         assert self.context is not None
-        self._add_section_header("当前记忆与计划", "进行中计划和近期记忆会作为轻量上下文索引随消息进入 Agent。")
+        self._add_section_header("进行中计划", "当前状态为“进行中”的计划，只读展示。", "plan")
         if self.plans.current:
             self._add_plan_cards(self.plans.current, "进行中计划")
         else:
             self._add_info_card("进行中计划", "暂无 status=进行中 的计划。", [("计划目录", str(self.plans.plans_dir))], "empty")
+        self._add_section_header("近期记忆", "Agent 维护的近期上下文条目，只读展示。", "memory")
         if self.context.recent_memory:
             self._add_context_cards(self.context.recent_memory, "近期记忆")
         else:
@@ -693,7 +1023,7 @@ class TaskWindow(QWidget):
 
     def _render_plans(self) -> None:
         assert self.plans is not None
-        self._add_section_header("计划", "未归档计划的只读概览。")
+        self._add_section_header("计划", "未归档计划的只读概览。", "plan")
         if self.plans.active:
             self._add_plan_cards(self.plans.active, "计划")
         else:
@@ -702,7 +1032,7 @@ class TaskWindow(QWidget):
     def _render_archived(self) -> None:
         assert self.plans is not None
         assert self.context is not None
-        self._add_section_header("已归档", "已归档计划和沉淀记忆的只读概览。")
+        self._add_section_header("已归档", "已归档计划和沉淀记忆的只读概览。", "archived")
         has_content = False
         if self.plans.archived:
             self._add_plan_cards(self.plans.archived, "已归档计划")
@@ -737,12 +1067,12 @@ class TaskWindow(QWidget):
         ])
         for line in self.context.status_lines or ["没有找到可读取的路由状态文件。"]:
             fields.append(("运行状态文件", line))
-        self._add_section_header("诊断 / 路由状态", "manager、gateway 和角色目录的只读状态。")
-        self._add_info_card("状态", "运行状态", fields, "neutral")
+        self._add_section_header("诊断 / 路由状态", "manager、gateway 和角色目录的只读状态。", "status")
+        self.content_layout.addWidget(StatusTable(fields))
 
     def _render_context_group(self, title: str, entries: list[ContextEntry]) -> None:
         assert self.context is not None
-        self._add_section_header(title, "Agent 维护的上下文条目，只读展示。")
+        self._add_section_header(title, "Agent 维护的上下文条目，只读展示。", "memory")
         if entries:
             self._add_context_cards(entries, title)
         else:
@@ -755,14 +1085,16 @@ class TaskWindow(QWidget):
                 fields.append(("优先级", plan.priority))
             if plan.kind:
                 fields.append(("类型", plan.kind))
-            if plan.current_step:
-                fields.append(("当前步骤", plan.current_step))
-            if plan.next_action:
-                fields.append(("下一步", plan.next_action))
             if plan.project_name or plan.project_path:
                 fields.append(("项目", plan.project_name or plan.project_path))
+            if plan.waiting_for:
+                fields.append(("等待事项", plan.waiting_for))
+            if plan.due_at:
+                fields.append(("截止时间", plan.due_at))
             if plan.source:
                 fields.append(("来源", plan.source))
+            if plan.created_at:
+                fields.append(("创建时间", plan.created_at))
             if plan.updated_at:
                 fields.append(("更新时间", plan.updated_at))
             if plan.path:
@@ -775,6 +1107,7 @@ class TaskWindow(QWidget):
                 plan.keywords,
                 status=plan.status,
                 card_key=f"plan:{plan.path or plan.title}",
+                plan=plan,
             )
 
     def _add_context_cards(self, entries: list[ContextEntry], label: str) -> None:
@@ -806,18 +1139,29 @@ class TaskWindow(QWidget):
         keywords: list[str],
         status: str = "",
         card_key: str = "",
+        plan: PlanItem | None = None,
     ) -> None:
         key = card_key or f"{label}:{title}"
-        card = ExpandableCard(label, title, fields, tone, keywords, status=status, expanded=key in self._expanded_cards)
+        card = ExpandableCard(
+            label,
+            title,
+            fields,
+            tone,
+            keywords,
+            status=status,
+            expanded=key in self._expanded_cards,
+            plan=plan,
+        )
         card.expanded_changed.connect(lambda expanded, item_key=key: self._set_card_expanded(item_key, expanded))
         self.content_layout.addWidget(card)
 
-    def _add_section_header(self, title: str, detail: str) -> None:
+    def _add_section_header(self, title: str, detail: str, tone: str = "neutral") -> None:
         section = QFrame()
         section.setObjectName("sectionHeader")
+        section.setProperty("tone", tone)
         layout = QVBoxLayout()
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(3)
         title_label = QLabel(title)
         title_label.setObjectName("sectionTitle")
         detail_label = QLabel(detail)
@@ -877,6 +1221,13 @@ class TaskWindow(QWidget):
             return "待检查"
         return "离线"
 
+    def _status_tone(self, manager_connected: bool, gateway_running: bool) -> str:
+        if manager_connected and gateway_running:
+            return "running"
+        if manager_connected:
+            return "warning"
+        return "offline"
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._drag_start = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -902,72 +1253,92 @@ class TaskWindow(QWidget):
 
 STYLESHEET = """
 QWidget {
-    background: #1f1f1f;
-    color: #e8e8e8;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    background: #f6f8fb;
+    color: #112033;
+    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
     font-size: 13px;
 }
+QLabel {
+    background: transparent;
+}
 QFrame#rightPane {
-    background: #1f1f1f;
-    border-left: 1px solid #303030;
+    background: #f6f8fb;
+    border-left: 1px solid #dbe5ea;
 }
 QFrame#header {
-    background: #1f1f1f;
+    background: #ffffff;
     border: 0;
-    border-bottom: 1px solid #2d2d2d;
+    border-bottom: 1px solid #dbe5ea;
     border-radius: 0;
 }
 QLabel#title {
-    color: #f4f4f4;
-    font-size: 18px;
-    font-weight: 800;
+    color: #0c2a4a;
+    font-size: 19px;
+    font-weight: 900;
 }
 QLabel#subtitle {
-    color: #9c9c9c;
+    color: #667586;
     font-size: 12px;
-    font-weight: 650;
+    font-weight: 700;
 }
 QLabel#statusChip {
-    background: #18c875;
-    border-radius: 9px;
-    color: #ffffff;
+    background: #eaf8ef;
+    border: 1px solid #b9e3c8;
+    border-radius: 11px;
+    color: #15803d;
     font-weight: 800;
-    padding: 3px 9px;
+    padding: 4px 10px;
+}
+QLabel#statusChip[statusTone="warning"] {
+    background: #fff7e6;
+    border-color: #f4d293;
+    color: #a96008;
+}
+QLabel#statusChip[statusTone="offline"] {
+    background: #fff0f0;
+    border-color: #f0bcbc;
+    color: #c62828;
 }
 QLabel#statusDetail {
-    color: #8f8f8f;
+    color: #52677a;
     line-height: 1.4;
-    font-weight: 650;
+    font-size: 12px;
+    font-weight: 600;
 }
 QLabel#brandIcon {
-    background: #2a2a2a;
-    border: 1px solid #3a3a3a;
-    border-radius: 19px;
+    background: #f2fbfc;
+    border: 1px solid #c8e9ea;
+    border-radius: 10px;
 }
 QPushButton#iconButton {
     background: transparent;
-    border: 0;
+    border: 1px solid transparent;
     border-radius: 8px;
-    color: #b9b9b9;
-    min-width: 34px;
-    max-width: 34px;
-    min-height: 34px;
+    color: #52677a;
+    min-width: 36px;
+    max-width: 36px;
+    min-height: 36px;
+    max-height: 36px;
     padding: 0;
     font-size: 18px;
     font-weight: 800;
 }
 QPushButton#iconButton:hover {
-    background: #2d2d2d;
-    color: #ffffff;
+    background: #eaf8f9;
+    border-color: #c8e9ea;
+    color: #0f8b8d;
+}
+QPushButton#iconButton:focus {
+    border: 2px solid #19bfc1;
 }
 QPushButton#iconButton::menu-indicator {
     width: 0;
 }
 QMenu#moreMenu {
-    background: #2b2b2b;
-    border: 1px solid #454545;
+    background: #ffffff;
+    border: 1px solid #d6e2e8;
     border-radius: 8px;
-    color: #eeeeee;
+    color: #112033;
     padding: 6px;
 }
 QMenu#moreMenu::item {
@@ -975,72 +1346,80 @@ QMenu#moreMenu::item {
     padding: 8px 28px 8px 12px;
 }
 QMenu#moreMenu::item:selected {
-    background: #3a3a3a;
+    background: #eaf8f9;
+    color: #0c2a4a;
 }
 QMenu#moreMenu::item:disabled {
-    color: #777777;
+    color: #a9b4be;
 }
 QFrame#routeNav {
-    background: #252525;
-    border-right: 1px solid #333333;
-    min-width: 252px;
-    max-width: 252px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #f6fcfd);
+    border-right: 1px solid #dbe5ea;
+    min-width: 232px;
+    max-width: 232px;
 }
 QLabel#routeBrand {
     background: transparent;
-    color: #f2f2f2;
+    color: #102a43;
     font-size: 16px;
     font-weight: 900;
-    padding: 12px 14px 2px 14px;
+    padding: 16px 14px 5px 14px;
 }
 QLabel#routeSearch {
-    background: #303030;
-    border: 1px solid #303030;
+    background: #ffffff;
+    border: 1px solid #d6e2e8;
     border-radius: 8px;
-    color: #bdbdbd;
-    min-height: 28px;
+    color: #7890a0;
+    min-height: 32px;
     margin: 0 12px;
-    padding: 4px 10px;
+    padding: 4px 12px;
     font-weight: 700;
 }
 QPushButton#routeButton {
-    background: transparent;
-    border: 1px solid transparent;
+    background: #ffffff;
+    border: 1px solid #dbe5ea;
     border-radius: 8px;
-    color: #f1f1f1;
-    min-height: 78px;
-    margin: 0 4px;
-    padding: 8px 12px;
+    color: #102a43;
+    min-height: 88px;
+    margin: 0 8px;
+    padding: 10px 12px;
     text-align: left;
     font-weight: 800;
 }
 QPushButton#routeButton[routeState="running"] {
-    background: rgba(22, 163, 74, 0.13);
-    border-left: 4px solid #16a34a;
+    border-left: 4px solid #19bfc1;
 }
 QPushButton#routeButton[routeState="stopped"] {
-    background: rgba(234, 179, 8, 0.12);
-    border-left: 4px solid #eab308;
+    background: #fffaf0;
+    border-left: 4px solid #f59e0b;
 }
 QPushButton#routeButton[routeState="disabled"] {
-    background: rgba(148, 163, 184, 0.10);
+    background: #f5f7f9;
     border-left: 4px solid #94a3b8;
-    color: #a9a9a9;
+    color: #7b8996;
 }
 QPushButton#routeButton:hover {
-    background: #303030;
+    background: #f2fbfc;
+    border-color: #a9dddf;
 }
 QPushButton#routeButton:checked {
-    background: #3b3b3b;
-    color: #ffffff;
+    background: #e8f7f8;
+    border-top-color: #9edbdd;
+    border-right-color: #9edbdd;
+    border-bottom-color: #9edbdd;
+    color: #0c2a4a;
+}
+QPushButton#routeButton:focus {
+    border: 2px solid #19bfc1;
+    border-left: 4px solid #19bfc1;
 }
 QFrame#viewBar {
-    background: #1f1f1f;
-    border-bottom: 1px solid #2d2d2d;
-    padding: 8px 14px;
+    background: #ffffff;
+    border-bottom: 1px solid #dbe5ea;
+    padding: 6px 12px;
 }
 QLabel#actionsLabel {
-    color: #9c9c9c;
+    color: #7b8996;
     font-size: 11px;
     font-weight: 800;
     padding-top: 4px;
@@ -1050,16 +1429,18 @@ QFrame#panelActions {
 }
 QPushButton#viewButton {
     background: transparent;
-    border: 1px solid #3a3a3a;
-    border-radius: 6px;
-    color: #bbbbbb;
-    min-height: 32px;
-    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    border-radius: 8px;
+    color: #52677a;
+    min-width: 54px;
+    min-height: 34px;
+    padding: 3px 8px;
     font-weight: 800;
 }
 QPushButton#sendButton {
-    background: #0b7de3;
-    border: 0;
+    background: #102a43;
+    border: 1px solid #102a43;
     border-radius: 8px;
     color: #ffffff;
     min-width: 88px;
@@ -1067,67 +1448,82 @@ QPushButton#sendButton {
     padding: 6px 16px;
     font-weight: 800;
 }
+QPushButton#sendButton:hover {
+    background: #194466;
+    border-color: #194466;
+}
+QPushButton#sendButton:focus {
+    border: 2px solid #19bfc1;
+}
 QFrame#chatInput {
-    background: #1f1f1f;
-    border-top: 1px solid #2d2d2d;
+    background: #ffffff;
+    border-top: 1px solid #dbe5ea;
     border-radius: 0;
 }
 QTextEdit#messageInput {
-    background: #1f1f1f;
-    border: 1px solid #3a3a3a;
+    background: #fbfdff;
+    border: 1px solid #cad8e0;
     border-radius: 8px;
-    color: #eeeeee;
+    color: #112033;
     padding: 8px;
-    selection-background-color: #0b7de3;
+    selection-background-color: #bdeced;
+    selection-color: #0c2a4a;
+}
+QTextEdit#messageInput:focus {
+    border: 2px solid #19bfc1;
 }
 QFrame#chatBubble {
     background: transparent;
     border: 0;
 }
 QFrame#chatBubbleBody {
-    background: #3a3a3a;
-    border: 1px solid #3f3f3f;
+    background: #ffffff;
+    border: 1px solid #d6e2e8;
     border-radius: 8px;
     max-width: 560px;
 }
 QFrame#chatBubble[direction="out"] QFrame#chatBubbleBody {
-    background: #5f5f5f;
-    border-color: #656565;
+    background: #e9f8f9;
+    border-color: #bde4e6;
 }
 QFrame#chatBubble[direction="in"] QFrame#chatBubbleBody {
-    background: #3a3a3a;
+    background: #ffffff;
 }
 QLabel#chatSender {
-    color: #aaaaaa;
+    color: #0f8b8d;
     font-size: 11px;
     font-weight: 800;
 }
 QLabel#chatText {
-    color: #f1f1f1;
+    color: #112033;
     font-size: 14px;
     line-height: 1.45;
 }
 QLabel#timeSeparator {
-    color: #777777;
+    color: #8491a0;
     font-size: 11px;
     padding: 4px;
 }
 QPushButton#viewButton:hover {
-    background: #2c2c2c;
-    border-color: #4a4a4a;
-    color: #ffffff;
+    background: #f0f8f9;
+    border-color: #d2e9ea;
+    color: #0c2a4a;
 }
 QPushButton#viewButton:checked {
-    background: #3b3b3b;
-    border-color: #4a4a4a;
-    color: #ffffff;
+    background: #eaf8f9;
+    border-color: #d2eeee;
+    border-bottom-color: #19bfc1;
+    color: #0c2a4a;
     font-weight: 800;
 }
+QPushButton#viewButton:focus {
+    border: 2px solid #19bfc1;
+}
 QPushButton#actionButton {
-    background: #2b2b2b;
-    border: 1px solid #454545;
-    border-radius: 6px;
-    color: #eeeeee;
+    background: #eef4f7;
+    border: 1px solid #d3dfe5;
+    border-radius: 8px;
+    color: #102a43;
     min-height: 34px;
     padding: 5px 10px;
     font-size: 12px;
@@ -1135,83 +1531,97 @@ QPushButton#actionButton {
     text-align: left;
 }
 QPushButton#actionButton:hover {
-    background: #383838;
-    border-color: #5a5a5a;
+    background: #e0f4f5;
+    border-color: #a9dddf;
 }
 QPushButton#actionButton:disabled {
-    background: #292929;
-    color: #777777;
+    background: #f0f2f4;
+    border-color: #e3e8eb;
+    color: #a4afb8;
 }
 QScrollArea#content {
-    background: #1f1f1f;
+    background: #f4f9fb;
     border: 0;
     border-radius: 0;
 }
 QWidget#contentBody {
-    background: #1f1f1f;
+    background: #f4f9fb;
 }
 QFrame#sectionHeader {
-    background: #252525;
-    border: 1px solid #323232;
-    border-radius: 8px;
+    background: transparent;
+    border: 0;
+    border-left: 3px solid #94a3b8;
+    border-radius: 0;
+}
+QFrame#sectionHeader[tone="plan"] {
+    border-left-color: #f59e0b;
+}
+QFrame#sectionHeader[tone="memory"] {
+    border-left-color: #19bfc1;
+}
+QFrame#sectionHeader[tone="archived"] {
+    border-left-color: #94a3b8;
+}
+QFrame#sectionHeader[tone="status"] {
+    border-left-color: #087f91;
 }
 QLabel#sectionTitle {
-    color: #f2f2f2;
-    font-size: 17px;
-    font-weight: 800;
+    color: #0c2a4a;
+    font-size: 16px;
+    font-weight: 900;
 }
 QLabel#sectionDetail {
-    color: #a6a6a6;
+    color: #667586;
     font-size: 12px;
 }
 QFrame#itemCard, QFrame#infoCard {
-    background: #252525;
-    border: 1px solid #343434;
+    background: #ffffff;
+    border: 1px solid #dbe5ea;
     border-radius: 8px;
 }
 QFrame#itemCard[tone="plan"] {
-    background: #29251d;
-    border-left: 4px solid #c8902b;
+    background: #fffdf8;
+    border-left: 4px solid #f59e0b;
 }
 QFrame#itemCard[tone="memory"] {
-    background: #1f2b27;
-    border-left: 4px solid #18c875;
+    background: #f8fefe;
+    border-left: 4px solid #19bfc1;
 }
 QFrame#infoCard[tone="neutral"] {
-    background: #222a35;
-    border-left: 4px solid #0b7de3;
+    background: #f8fbfe;
+    border-left: 4px solid #087f91;
 }
 QFrame#infoCard[tone="empty"] {
-    background: #252525;
-    border-left: 4px solid #5f5f5f;
+    background: #ffffff;
+    border-left: 4px solid #aab5bf;
 }
 QFrame#cardHeader {
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    border-radius: 8px;
 }
 QFrame#cardHeader:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: #f0f8f9;
 }
 QFrame#cardHeader:focus {
-    border: 2px solid #0b7de3;
+    border: 2px solid #19bfc1;
 }
 QLabel#cardIndicator {
-    color: #b8b8b8;
+    color: #0f8b8d;
     font-size: 13px;
     font-weight: 900;
 }
 QLabel#cardBadge {
-    background: #303030;
-    border: 1px solid #444444;
-    border-radius: 8px;
-    color: #bcbcbc;
+    background: #eef6f8;
+    border: 1px solid #d4e4e8;
+    border-radius: 7px;
+    color: #52677a;
     font-size: 11px;
     font-weight: 800;
     padding: 2px 7px;
 }
 QLabel#cardTitle {
-    color: #eeeeee;
+    color: #102a43;
     font-size: 15px;
     font-weight: 850;
 }
@@ -1222,82 +1632,259 @@ QLabel#planStatus {
     padding: 3px 7px;
 }
 QLabel#planStatus[statusTone="running"] {
-    background: #163f2d;
-    color: #65e7a7;
+    background: #eaf8ef;
+    color: #15803d;
 }
 QLabel#planStatus[statusTone="pending"] {
-    background: #3b2d16;
-    color: #f2c266;
+    background: #fff7e6;
+    color: #a96008;
 }
 QLabel#planStatus[statusTone="done"] {
-    background: #1d2f46;
-    color: #8ac3ff;
+    background: #eaf4ff;
+    color: #1d63a9;
 }
 QLabel#planStatus[statusTone="archived"] {
-    background: #333333;
-    color: #b8b8b8;
+    background: #eef1f4;
+    color: #687786;
 }
 QLabel#planStatus[statusTone="unknown"] {
-    background: #303030;
-    color: #b8b8b8;
+    background: #eef1f4;
+    color: #687786;
 }
 QFrame#keywordPanel {
     background: transparent;
     border: 0;
 }
+QFrame#keywordSummaryLine, QFrame#keywordExpandedPanel {
+    background: transparent;
+    border: 0;
+}
 QLabel#keywordLabel {
-    color: #9c9c9c;
+    color: #7b8996;
     font-size: 11px;
     font-weight: 800;
     padding-top: 3px;
 }
+QLabel#keywordSummary {
+    background: #eef8f9;
+    border: 1px solid #d2e9ea;
+    border-radius: 6px;
+    color: #36566b;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 7px;
+}
 QLabel#keywordChip {
-    background: #303030;
-    border: 1px solid #444444;
-    border-radius: 8px;
-    color: #d0d0d0;
+    background: #eef8f9;
+    border: 1px solid #d2e9ea;
+    border-radius: 6px;
+    color: #36566b;
     font-size: 11px;
     font-weight: 700;
     padding: 2px 6px;
 }
 QLabel#keywordChip[empty="true"] {
-    color: #888888;
+    color: #8c99a4;
 }
 QFrame#cardDetails {
     background: transparent;
     border: 0;
+}
+QFrame#planDetailPanel, QFrame#planActionSummary, QFrame#planMetadata,
+QFrame#planProgressPanel, QFrame#planStepsContainer, QFrame#planStepTextBlock {
+    background: transparent;
+    border: 0;
+}
+QFrame#planSummaryBlock {
+    background: #f8fbfd;
+    border: 1px solid #dbe5ea;
+    border-radius: 8px;
+}
+QFrame#planSummaryBlock[summaryTone="current"] {
+    background: #f2fbfc;
+    border-color: #c8e9ea;
+}
+QFrame#planSummaryBlock[summaryTone="next"] {
+    background: #f6f9fd;
+    border-color: #d7e3ef;
+}
+QLabel#planSummaryLabel {
+    color: #0f8b8d;
+    font-size: 12px;
+    font-weight: 900;
+}
+QLabel#planSummaryLabel[summaryTone="next"] {
+    color: #1d63a9;
+}
+QLabel#planSummaryValue {
+    color: #102a43;
+    font-size: 14px;
+    font-weight: 800;
+    line-height: 1.45;
+}
+QLabel#planProgressTitle {
+    color: #0c2a4a;
+    font-size: 13px;
+    font-weight: 900;
+}
+QLabel#planProgressPercent {
+    color: #15803d;
+    font-size: 13px;
+    font-weight: 900;
+}
+QProgressBar#planProgressBar {
+    background: #e5edf1;
+    border: 0;
+    border-radius: 4px;
+}
+QProgressBar#planProgressBar::chunk {
+    background: #19bfc1;
+    border-radius: 4px;
+}
+QFrame#planStepRow {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid #edf1f3;
+}
+QLabel#planStepMarker {
+    color: #94a3b8;
+    font-size: 15px;
+    font-weight: 900;
+}
+QLabel#planStepMarker[stepTone="done"] {
+    color: #16a34a;
+}
+QLabel#planStepMarker[stepTone="current"] {
+    color: #1d7be8;
+}
+QLabel#planStepTitle {
+    color: #334e62;
+    font-size: 12px;
+    font-weight: 750;
+}
+QLabel#planStepDetail {
+    color: #718291;
+    font-size: 11px;
+}
+QLabel#planStepState {
+    color: #7b8996;
+    font-size: 11px;
+    font-weight: 750;
+}
+QLabel#planStepState[stepTone="done"] {
+    color: #4f7d60;
+}
+QLabel#planStepState[stepTone="current"] {
+    color: #1d63a9;
+}
+QPushButton#planMoreStepsButton {
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: #52677a;
+    min-height: 30px;
+    padding: 3px 8px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 800;
+}
+QPushButton#planMoreStepsButton:hover {
+    background: #eaf8f9;
+    color: #0f8b8d;
+}
+QFrame#planMetadataItem {
+    background: #fbfdff;
+    border: 1px solid #e5ebef;
+    border-radius: 7px;
+    padding: 7px;
 }
 QFrame#fieldRow {
     background: transparent;
     border: 0;
 }
 QLabel#fieldKey {
-    color: #9c9c9c;
+    color: #7b8996;
     font-size: 11px;
     font-weight: 800;
 }
 QLabel#fieldValue {
-    color: #dedede;
+    color: #334e62;
     line-height: 1.45;
 }
+QFrame#statusTable {
+    background: #ffffff;
+    border: 1px solid #d6e2e8;
+    border-radius: 8px;
+}
+QLabel#statusTableHeader {
+    background: #eaf4f6;
+    border-right: 1px solid #d3e2e6;
+    border-bottom: 1px solid #d3e2e6;
+    color: #0c2a4a;
+    font-weight: 800;
+    padding: 6px 9px;
+}
+QLabel#statusTableKey {
+    background: #f6fafb;
+    border-right: 1px solid #e1e8ec;
+    border-bottom: 1px solid #e1e8ec;
+    color: #52677a;
+    font-weight: 700;
+    padding: 5px 9px;
+}
+QLabel#statusTableValue {
+    background: #ffffff;
+    border-bottom: 1px solid #e1e8ec;
+    color: #334e62;
+    padding: 5px 9px;
+}
+QFrame#footerBar {
+    background: #ffffff;
+    border-top: 1px solid #dbe5ea;
+}
 QLabel#footer {
-    background: #1f1f1f;
-    border-top: 1px solid #2d2d2d;
-    color: #888888;
+    background: transparent;
+    border: 0;
+    color: #718291;
     font-size: 12px;
-    padding: 8px 14px;
+    padding: 0;
 }
 QPushButton#primaryButton {
-    background: #2f4158;
-    border: 0;
+    background: #e4f5f6;
+    border: 1px solid #b9e2e4;
     border-radius: 8px;
-    color: #ffffff;
-    min-width: 38px;
-    max-width: 38px;
-    min-height: 34px;
+    color: #0f8b8d;
+    min-width: 40px;
+    max-width: 40px;
+    min-height: 36px;
+    max-height: 36px;
     padding: 4px;
 }
 QPushButton#primaryButton:hover {
-    background: #3c5c7f;
+    background: #ccecee;
+    border-color: #8fd3d6;
+}
+QPushButton#primaryButton:focus {
+    border: 2px solid #19bfc1;
+}
+QScrollBar:vertical {
+    background: #f2f7f9;
+    width: 10px;
+    margin: 2px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background: #b9cbd3;
+    min-height: 28px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #87bfc2;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent;
 }
 """

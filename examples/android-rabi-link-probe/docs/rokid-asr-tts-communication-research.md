@@ -1,5 +1,13 @@
 # Rokid ASR/TTS 通讯方式与可行性结论
 
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./rokid-asr-tts-communication-research_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
+> 状态：当前研究结论，证据更新至 2026-07-05。外部平台和 SDK 可能变化，实施前仍需重新核对官方权限与版本。
+
 本文回答当前问题：`com.rabi.link` 想接入 Rokid 眼镜语音时，ASR/TTS 一般怎么通讯，以及哪些“原生”路线真正可行。
 
 结论更新日期：2026-07-05。

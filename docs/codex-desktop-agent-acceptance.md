@@ -1,3 +1,9 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./codex-desktop-agent-acceptance_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Codex Desktop Agent 接入与验收合同
 
 本文是 RabiRoute 接入 Codex/ChatGPT Desktop 的交付门禁。目标不是“后台能跑 Codex”，而是：Rabi 投递的消息进入用户正在使用的 Desktop 任务，由该任务的 owner 执行，并在同一任务中实时可见。

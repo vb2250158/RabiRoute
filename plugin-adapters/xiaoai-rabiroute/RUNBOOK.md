@@ -1,74 +1,63 @@
-# XiaoAI RabiRoute Runbook
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./RUNBOOK_zh.md">简体中文</a>
+</div>
+<!-- /docs-language-switch -->
 
-## Current Architecture
+# XiaoAI RabiRoute runbook
+
+> Status: experimental runbook. It covers the repository-owned PC bridge. Open-XiaoAI checkout, speaker firmware, SSH access, and playback hooks remain environment-owned dependencies.
+
+## Supported boundary
 
 ```text
-LX06 open-xiaoai client
-  -> ws://127.0.0.1:4399 on speaker
-  -> SSH reverse tunnel
-  -> PC open-xiaoai server 127.0.0.1:4399
-  -> PC bridge http://127.0.0.1:8798/v1/xiaoai/decision
-  -> RabiRoute webhook http://127.0.0.1:8791/webhook
+Speaker-side client or compatible server
+  -> optional WebSocket or SSH tunnel
+    -> PC-side Open-XiaoAI-compatible process
+      -> http://127.0.0.1:8798/v1/xiaoai/decision
+        -> http://127.0.0.1:8791/webhook
+          -> RabiRoute XiaoAI Route
 ```
 
-The reverse tunnel is used when Windows firewall blocks direct inbound traffic from the speaker to the PC `:4399` server.
+The repository does not vendor Open-XiaoAI. Obtain and review it separately from the [upstream project](https://github.com/idootop/open-xiaoai).
 
-## Start Order
+## Start order
 
-Start RabiRoute first:
+1. Build and start the Manager from the repository root.
+2. Enable the disabled `xiaoai` Route after checking port `8791`.
+3. Start this bridge on `127.0.0.1:8798`.
+4. Start an external Open-XiaoAI-compatible server or client integration.
+5. Add an SSH reverse tunnel only if direct connectivity is unavailable.
 
 ```powershell
-cd G:\夜雨\RabiRoute
-npm.cmd run start
+npm run build
+npm run start:manager
 ```
 
-Start the XiaoAI bridge:
-
 ```powershell
-cd G:\夜雨\RabiRoute\plugin-adapters\xiaoai-rabiroute
+cd plugin-adapters\xiaoai-rabiroute
+$env:RABIROUTE_WEBHOOK_URL = "http://127.0.0.1:8791/webhook"
 npm.cmd start
 ```
 
-Start the open-xiaoai server:
+If using an external Open-XiaoAI checkout, adapt `open-xiaoai-migpt-rabiroute.config.ts` to that version's API. The checked-in file does not currently perform speaker interruption or reply playback.
+
+## Optional reverse tunnel
+
+Copy `xiaoai-local.config.example.json` to ignored `xiaoai-local.config.json` and fill only local values. Never commit the speaker address or SSH password.
 
 ```powershell
-cd G:\夜雨\RabiRoute\plugin-adapters\xiaoai-rabiroute\vendor\open-xiaoai\examples\migpt
-$env:RABIROUTE_XIAOAI_BRIDGE_URL = "http://127.0.0.1:8798"
-corepack pnpm start
-```
-
-Start the reverse tunnel:
-
-```powershell
-cd G:\夜雨\RabiRoute\plugin-adapters\xiaoai-rabiroute
 py -3 reverse-tunnel.py
 ```
 
-The tunnel reads private local connection settings from:
+The common tunnel layout makes a speaker client connect to `ws://127.0.0.1:4399`, which is forwarded to the PC's Open-XiaoAI-compatible server. Confirm the exact direction in `reverse-tunnel.py` and your local JSON before use.
 
-```text
-G:\夜雨\RabiRoute\plugin-adapters\xiaoai-rabiroute\xiaoai-local.config.json
-```
+## Checks
 
-That file is ignored by git. Keep real LAN IPs and the speaker SSH password there. Commit only:
-
-```text
-G:\夜雨\RabiRoute\plugin-adapters\xiaoai-rabiroute\xiaoai-local.config.example.json
-```
-
-Start the speaker client:
-
-```shell
-echo ws://127.0.0.1:4399 > /data/open-xiaoai/server.txt
-/data/open-xiaoai/client ws://127.0.0.1:4399 >/tmp/open-xiaoai-client.log 2>&1 &
-```
-
-## Check Status
-
-PC ports:
+Manager and bridge ports:
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8791,8798,4399
+Get-NetTCPConnection -LocalPort 8790,8791,8798,4399 -ErrorAction SilentlyContinue
 ```
 
 Bridge health:
@@ -77,48 +66,28 @@ Bridge health:
 Invoke-RestMethod http://127.0.0.1:8798/health
 ```
 
-Speaker:
+Bridge smoke:
 
-```shell
-ps | grep '/data/open-xiaoai/client' | grep -v grep
-netstat -an | grep 4399
-tail -50 /tmp/open-xiaoai-client.log
+```powershell
+cd plugin-adapters\xiaoai-rabiroute
+npm.cmd run smoke
 ```
 
-## Speaker Autostart
+Then inspect the configured Route's transcript log and Manager status. A successful bridge smoke is not proof that the Desktop task received or completed the prompt.
 
-The speaker has `/data/init.sh` installed from the Open-XiaoAI client boot script. On reboot it reads:
+## Intercept behavior
 
-```text
-/data/open-xiaoai/server.txt
-```
+Every decision request is forwarded to RabiRoute. The local regex only decides whether native XiaoAI should continue.
 
-Current value:
+- Non-match: `{"action":"ignore"}`.
+- Match: `{"action":"intercept","speakText":"..."}`.
 
-```text
-ws://127.0.0.1:4399
-```
+Keep the regex narrow. Detailed routing belongs in the persona and Route policy. The speaker integration must explicitly implement the actual interruption call.
 
-This means PC-side startup still needs the reverse tunnel before the speaker client can connect.
+## Failure isolation
 
-## Intercept Behavior
-
-Default first-stage intercept regex:
-
-```text
-^(问\s*Rabi|让\s*Rabi|Rabi|找\s*Rabi|兔兔|问\s*兔兔)
-```
-
-Non-matching speech is forwarded to RabiRoute for logs/rules and returns:
-
-```json
-{ "action": "ignore" }
-```
-
-Matching speech returns:
-
-```json
-{ "action": "intercept", "speakText": "收到，已经转给 Rabi。" }
-```
-
-The open-xiaoai config should only call `abortXiaoAI()` for `intercept`.
+- `/health` unavailable: bridge process or port problem.
+- Decision returns `500`: inspect the configured RabiRoute Webhook and Route state.
+- Transcript logged but no Agent work: inspect Route rules, Desktop availability, and the loaded target task.
+- `intercept` returned but native XiaoAI continues: speaker-side config has not mapped the decision to its abort API.
+- `/speak` returns `202` but nothing is heard: expected; playback is still a placeholder.
