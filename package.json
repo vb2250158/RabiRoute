@@ -1,6 +1,7 @@
 {
   "name": "rabiroute",
   "version": "0.1.11",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {

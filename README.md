@@ -11,6 +11,7 @@ English | <a href="./README_zh.md">简体中文</a>
 <p align="center">
   <a href="https://github.com/vb2250158/RabiRoute/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/vb2250158/RabiRoute?color=19bfc1"></a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
+  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
@@ -190,3 +191,7 @@ npm run check:config     # detect malformed public/runtime JSON text
 Before a larger change, read [Current capabilities and maturity](docs/current-capabilities_en.md), then inspect the relevant code and tests. Issues and pull requests are welcome through the [GitHub repository](https://github.com/vb2250158/RabiRoute).
 
 Please never commit real account identifiers, chat content, tokens, cookies, private paths, or runtime `data/`. The repository is maintained as a public, reproducible project.
+
+## License
+
+RabiRoute is licensed under the [MIT License](LICENSE).

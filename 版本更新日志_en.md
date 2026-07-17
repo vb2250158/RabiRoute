@@ -8,6 +8,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.1.11 - 2026-07-17
 
+### MIT open-source license
+
+- Added the standard MIT `LICENSE` at the repository root with `Copyright (c) 2026 vb2250158`, explicitly allowing use, copying, modification, merging, publication, distribution, sublicensing, and sale of software copies under the standard warranty disclaimer.
+- Added matching MIT badges and license links to both README languages, and declared `license: MIT` in `package.json` and `package-lock.json`; the license text remains the single source of truth.
+- This change affects public licensing and package metadata only. It does not change runtime code, configuration schemas, startup flows, or local `data/`, so no runtime configuration migration is required.
+
 ### Three documented RabiLink glasses routes
 
 - Added “Three glasses routes” to RibiWebGUI Project Docs, comparing the native Lingzhu agent, AIUI, and native Android app at the same level through a capability-ownership architecture and a horizontal table covering host, entry, wake/ASR/TTS/HUD/lifecycle/Agent ownership, overall freedom, release cost, fit, and maturity.
