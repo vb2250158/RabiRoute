@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "title": "RabiSpeech 本机 TTS / ASR 模型性能报告",
+  "subtitle": "先生成 TTS，再把同一批 WAV 送入 ASR；同时比较功能、预热、性能、准确率与硬件需求。",
+  "benchmark_date": "2026-07-17",
+  "scope": "仅本地模型。云端 API 已归档，本轮未调用、未产生费用。",
+  "test_hardware": [
+    ["操作系统", "Windows 11 专业版 64 位，Build 26200"],
+    ["CPU", "Intel Core i9-14900KF，24 核 / 32 线程"],
+    ["内存", "47.8 GiB"],
+    ["GPU", "NVIDIA GeForce RTX 4080 SUPER，16,376 MiB"],
+    ["驱动", "596.21"],
+    ["ASR 运行时", "Python 3.10 / faster-whisper 1.2.1 / CTranslate2 4.8.1 / CUDA / int8_float16"],
+    ["Qwen 运行时", "Qwen3-TTS-12Hz-0.6B-Base / qwen-tts 0.1.1 / PyTorch 2.12.0+cu126"],
+    ["IndexTTS2 运行时", "indextts 2.0.0 / revision 14f0fc0 / PyTorch 2.8.0+cu128"],
+    ["ONNX 运行时", "OumuQ split-graph worker / CPUExecutionProvider"]
+  ],
+  "tts_models": {
+    "onnx-vits": {
+      "name": "ONNX-VITS",
+      "positioning": "即时固定声线",
+      "languages": "中文 / 日文 / 英文",
+      "voice": "147 个本地固定声线",
+      "clone": "不支持",
+      "emotion": "语速、noise scale、seed",
+      "streaming": "当前返回完整 WAV",
+      "device": "CPU",
+      "output": "22.05 kHz WAV"
+    },
+    "qwen3-tts-0.6b": {
+      "name": "Qwen3-TTS 0.6B Base",
+      "positioning": "多语言参考音克隆",
+      "languages": "10 种语言",
+      "voice": "本地参考音克隆",
+      "clone": "支持",
+      "emotion": "参考音、语言与采样参数",
+      "streaming": "底层支持；当前 worker 返回完整 WAV",
+      "device": "CUDA",
+      "output": "24 kHz WAV"
+    },
+    "indextts2": {
+      "name": "IndexTTS2",
+      "positioning": "中文克隆与情绪控制",
+      "languages": "中文优先",
+      "voice": "本地零样本参考音克隆",
+      "clone": "支持",
+      "emotion": "8 维情绪、情绪文本、拼音、采样",
+      "streaming": "分句生成；当前返回完整 WAV",
+      "device": "CUDA",
+      "output": "22.05 kHz WAV"
+    }
+  },
+  "asr_models": {
+    "tiny": {
+      "name": "faster-whisper tiny",
+      "positioning": "健康检查 / 低资源草稿",
+      "languages": "多语言；本轮固定中文",
+      "input": "WAV / MP3 / FLAC / M4A / OGG / OPUS / WebM / MP4",
+      "controls": "语言提示、VAD、beam size",
+      "diarization": "不支持",
+      "device": "CUDA / CPU 回退"
+    },
+    "small": {
+      "name": "faster-whisper small",
+      "positioning": "默认本机 ASR",
+      "languages": "多语言；本轮固定中文",
+      "input": "WAV / MP3 / FLAC / M4A / OGG / OPUS / WebM / MP4",
+      "controls": "语言提示、VAD、beam size",
+      "diarization": "不支持",
+      "device": "CUDA / CPU 回退"
+    }
+  },
+  "hardware_requirements": [
+    ["ASR tiny", "NVIDIA 4 GiB + RAM 8 GiB", "GPU 6 GiB + RAM 16 GiB", "官方规格与本次实测外推"],
+    ["ASR small", "NVIDIA 4 GiB + RAM 8 GiB", "GPU 8 GiB + RAM 16 GiB", "默认常驻并给桌面留余量"],
+    ["ONNX-VITS", "现代 4 核 CPU + RAM 8 GiB", "8 核 CPU + RAM 16 GiB", "本轮 CPU 已快于实时"],
+    ["Qwen3-TTS 0.6B", "GPU 6 GiB + RAM 16 GiB", "GPU 12 GiB + RAM 32 GiB", "参考本轮 2.71 GiB 请求期显存增量"],
+    ["IndexTTS2", "GPU 12 GiB + RAM 32 GiB", "GPU 16 GiB + RAM 48 GiB", "参考本轮 8.13 GiB 请求期显存增量"],
+    ["ASR + Qwen + Index 同驻", "16 GiB 仅可勉强调度", "GPU 24 GiB+ / RAM 64 GiB", "16 GiB 应让 Qwen / Index 按需加载"]
+  ],
+  "historical_models": [
+    ["ASR 本地", "base / medium / large-v1/v2/v3", "FenneNote 支持但本机未缓存，本轮未下载"],
+    ["ASR 云端", "qwen3-asr-flash / qwen-audio-asr / mimo-v2.5-asr / gpt-4o-transcribe / whisper-1 / paraformer-v2", "已归档，未调用"],
+    ["音频理解云端", "qwen-audio-turbo / qwen2.5-omni-7b", "已归档，未调用"],
+    ["TTS 云端", "qwen3-tts-flash / qwen3-tts-vd / qwen3-tts-vc / cosyvoice-v3-plus / v3.5-plus", "已归档，未调用"]
+  ],
+  "methodology": [
+    "按固定顺序先对每个 TTS 生成三条 WAV，再让每个 ASR 模型识别全部九条 WAV。",
+    "TTS 第一条记为首请求；worker 测试前未 ready 时，第一条包含懒加载，后续样本用于热态统计。",
+    "ASR 单列模型加载，并用 ONNX-VITS 的 short-dialogue WAV 做一次不计分预热，再统计九条正式样本。",
+    "RTF = 处理耗时 / 音频时长；小于 1 表示快于实时。",
+    "CER = 字符编辑距离 / 参考字符数；先做 NFKC、大小写折叠并移除空白与标点，越低越好。",
+    "TTS 回译 CER 只代表可懂度代理，不等价于自然度、音色相似度、情绪贴合或 MOS。",
+    "GPU 每 0.2 秒用 nvidia-smi 采样；显存增量包含其它桌面进程噪声，不等于模型独占显存。"
+  ],
+  "limitations": [
+    "语料是干净的合成语音，不代表真实麦克风、噪声、口音、远场、抢话与回声。",
+    "每个 TTS 只有 3 条、每个 ASR 只有 9 条；P95 只显示方向，不能作为生产 SLA。",
+    "ONNX worker 在本轮开始前已经 ready，因此没有与 Qwen / Index 同口径测冷启动。",
+    "当前接口返回完整结果，尚未覆盖流式首包、并发排队、长音频吞吐和 RabiLink 公网中转延迟。",
+    "以上结果仅代表本报告列出的目标测试机与当次环境；其他电脑必须重新运行基准，不能直接套用本报告性能数字。"
+  ]
+}

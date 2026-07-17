@@ -1,0 +1,7 @@
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1
+python-multipart>=0.0.20,<1
+faster-whisper==1.2.1
+numpy>=1.24,<2
+nvidia-cudnn-cu12==9.24.0.43; platform_system == "Windows" and platform_machine == "AMD64"

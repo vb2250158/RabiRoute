@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { appendDeviceLogs, deviceLogFacets, readDeviceLogs } from "./rabilink-device-log-store.mjs";
+import { RelayProxyRequestQueue } from "./rabilink-proxy-request-queue.mjs";
 
 const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 8788);
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
@@ -13,6 +14,10 @@ const outboxWaitMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 6
 const workerTaskWaitMs = clamp(Number(process.env.RABILINK_RELAY_WORKER_TASK_WAIT_MS || 60000), 0, 60000);
 const webguiRequestWaitMs = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS || 30000), 5000, 120000);
 const webguiBodyMaxBytes = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES || 10 * 1024 * 1024), 1024 * 1024, 50 * 1024 * 1024);
+const speechRequestWaitMs = clamp(Number(process.env.RABILINK_RELAY_SPEECH_REQUEST_WAIT_MS || 180000), 5000, 10 * 60 * 1000);
+const speechBodyMaxBytes = clamp(Number(process.env.RABILINK_RELAY_SPEECH_BODY_MAX_BYTES || 25 * 1024 * 1024), 1024 * 1024, 100 * 1024 * 1024);
+const speechWorkerResponseMaxBytes = Math.ceil(speechBodyMaxBytes * 4 / 3) + 1024 * 1024;
+const speechRetentionMs = clamp(Number(process.env.RABILINK_RELAY_SPEECH_RETENTION_MS || 60000), 5000, 10 * 60 * 1000);
 const taskTtlMs = clamp(Number(process.env.RABILINK_RELAY_TASK_TTL_MS || 10 * 60 * 1000), 60000, 24 * 60 * 60 * 1000);
 const outboxTtlMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_TTL_MS || 48 * 60 * 60 * 1000), 60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000);
 const leaseMs = clamp(Number(process.env.RABILINK_RELAY_LEASE_MS || 3 * 60 * 1000), 5000, 10 * 60 * 1000);
@@ -54,9 +59,24 @@ const toolImportPostmanFileCandidates = [
   path.join(dataDir, "rokid-rabilink-tools-import.CURRENT.postman.json"),
   path.join(process.cwd(), "rokid-rabilink-tools-import.CURRENT.postman.json")
 ].filter(Boolean);
+const speechOpenApiFileCandidates = [
+  process.env.RABILINK_RELAY_SPEECH_OPENAPI_FILE ? path.resolve(process.env.RABILINK_RELAY_SPEECH_OPENAPI_FILE) : "",
+  path.join(dataDir, "rabilink-speech-api.openapi.json"),
+  path.join(process.cwd(), "examples", "rabilink-relay", "rabilink-speech-api.openapi.json")
+].filter(Boolean);
 const sensitiveEventKeyPattern = /token|authorization|cookie|password|secret|text|message|content|raw|headers|body|response|reply/i;
 const portablePresentationValues = new Set(["text", "tts", "notification", "haptic"]);
 const portablePriorityValues = new Set(["quiet", "normal", "urgent"]);
+const speechProxyPrefix = "/api/rabilink/speech";
+const speechProxyPaths = new Map([
+  ["GET /health", "/health"],
+  ["GET /v1/models", "/v1/models"],
+  ["GET /v1/capabilities", "/v1/capabilities"],
+  ["POST /v1/audio/speech", "/v1/audio/speech"],
+  ["POST /v1/audio/transcriptions", "/v1/audio/transcriptions"],
+  ["POST /api/v1/services/audio/tts/SpeechSynthesizer", "/api/v1/services/audio/tts/SpeechSynthesizer"],
+  ["POST /api/v1/services/audio/asr/transcription", "/api/v1/services/audio/asr/transcription"]
+]);
 
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(accountLogDir, { recursive: true });
@@ -82,6 +102,13 @@ const outboxWaiters = [];
 const webguiRequests = new Map();
 /** @type {Array<{ resolve: () => void; timer: NodeJS.Timeout }>} */
 const webguiRequestWaiters = [];
+const speechRequests = new RelayProxyRequestQueue({
+  name: "Speech",
+  idPrefix: "rabilink-speech",
+  requestWaitMs: speechRequestWaitMs,
+  leaseMs,
+  retentionMs: speechRetentionMs
+});
 /** @type {Map<string, ManageSession>} */
 const manageSessions = new Map();
 /** @type {Map<string, Set<http.ServerResponse>>} */
@@ -537,6 +564,7 @@ function normalizeStoredWorker(worker) {
     guid: String(worker?.guid || "").trim(),
     name: String(worker?.name || id).trim() || id,
     appId: String(worker?.appId || "").trim(),
+    capabilities: normalizeWorkerCapabilities(worker?.capabilities),
     firstSeenAt: String(worker?.firstSeenAt || time),
     lastSeenAt: String(worker?.lastSeenAt || time)
   };
@@ -656,6 +684,7 @@ function publicWorker(worker, app) {
     appId: worker.appId || "",
     appName: app?.name || "",
     appTokenPreview,
+    capabilities: normalizeWorkerCapabilities(worker.capabilities),
     firstSeenAt: worker.firstSeenAt || "",
     lastSeenAt: worker.lastSeenAt || "",
     online: workerOnline(worker)
@@ -681,7 +710,15 @@ function accountStorePayload(account, options = {}) {
   };
 }
 
-function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "") {
+function normalizeWorkerCapabilities(value) {
+  const items = Array.isArray(value) ? value : String(value || "").split(",");
+  return [...new Set(items
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => /^[a-z][a-z0-9._-]{0,31}$/.test(item)))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabilities = null) {
   const id = sanitizeRabiLinkId(deviceId || deviceName, "rabi-pc");
   if (!id) return null;
   const guid = stringValue(deviceGuid);
@@ -695,6 +732,7 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "") {
     worker.id = worker.id || id;
     worker.guid = guid || worker.guid || "";
     worker.name = name;
+    if (capabilities !== null) worker.capabilities = normalizeWorkerCapabilities(capabilities);
     worker.lastSeenAt = time;
     if (!wasOnline) {
       writeAccountLogForApp(app, "pc_reconnected", {
@@ -711,6 +749,7 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "") {
       guid,
       name,
       appId,
+      capabilities: normalizeWorkerCapabilities(capabilities),
       firstSeenAt: time,
       lastSeenAt: time
     };
@@ -934,15 +973,17 @@ function sendText(res, statusCode, text) {
   res.end(text);
 }
 
-function readRawBody(req) {
+function readRawBody(req, options = {}) {
+  const maxBytes = Number(options.maxBytes || webguiBodyMaxBytes);
+  const label = String(options.label || "WebGUI");
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
     req.on("data", (chunk) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += buffer.byteLength;
-      if (total > webguiBodyMaxBytes) {
-        reject(Object.assign(new Error("WebGUI request body is too large."), { statusCode: 413 }));
+      if (total > maxBytes) {
+        reject(Object.assign(new Error(`${label} request body is too large.`), { statusCode: 413 }));
         req.destroy();
         return;
       }
@@ -1001,7 +1042,7 @@ function sendRabiLinkError(res, statusCode, message) {
   });
 }
 
-function requireRokidAppTarget(auth) {
+function requireRokidAppTarget(auth, requiredCapability = "") {
   if (!auth.app) {
     const error = new Error("请使用 RabiLink服务器控制台里对应应用的 token。");
     error.statusCode = 401;
@@ -1044,6 +1085,11 @@ function requireRokidAppTarget(auth) {
     error.statusCode = 503;
     throw error;
   }
+  if (requiredCapability && !normalizeWorkerCapabilities(worker.capabilities).includes(requiredCapability)) {
+    const error = new Error(`这个应用绑定的 Rabi PC 没有启用 ${requiredCapability} 能力。`);
+    error.statusCode = 503;
+    throw error;
+  }
   return worker;
 }
 
@@ -1076,10 +1122,22 @@ function requireWorkerOwnsTarget(targetDeviceId, body, label, appId = "") {
   throw error;
 }
 
-function readBody(req) {
+function readBody(req, options = {}) {
+  const maxBytes = Number(options.maxBytes || 0);
+  const label = String(options.label || "JSON");
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    let total = 0;
+    req.on("data", (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.byteLength;
+      if (maxBytes > 0 && total > maxBytes) {
+        reject(Object.assign(new Error(`${label} request body is too large.`), { statusCode: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(buffer);
+    });
     req.on("error", reject);
     req.on("end", () => {
       const text = Buffer.concat(chunks).toString("utf8");
@@ -1581,6 +1639,113 @@ function createMobileWebguiRequest(app, worker, method, localPath, body = null) 
   });
   notifyWebguiRequestWaiters();
   return request;
+}
+
+function speechRequestForLog(request) {
+  return {
+    id: request.id,
+    status: request.status,
+    createdAt: request.createdAt,
+    updatedAt: request.updatedAt,
+    expiresAt: request.expiresAt,
+    attempts: request.attempts,
+    appId: request.appId,
+    appName: request.appName,
+    targetDeviceId: request.targetDeviceId,
+    method: request.method,
+    path: request.path,
+    requestBytes: request.bodyBase64 ? Buffer.byteLength(request.bodyBase64, "base64") : 0,
+    responseBytes: request.response?.bodyBase64 ? Buffer.byteLength(request.response.bodyBase64, "base64") : 0,
+    error: request.error || ""
+  };
+}
+
+function canWorkerClaimSpeechRequest(request, appId = "", deviceId = "", deviceGuid = "") {
+  if (appId && request.appId !== appId) return false;
+  return workerIdentityMatchesTarget(request.targetDeviceId, { deviceId, deviceGuid }, request.appId);
+}
+
+function createSpeechRequest(req, auth, worker, localPath, rawBody) {
+  const request = speechRequests.create({
+    appId: auth.app.id,
+    appName: auth.app.name || "",
+    targetDeviceId: worker.id,
+    method: req.method,
+    path: localPath,
+    headers: normalizeProxyRequestHeaders(req.headers),
+    bodyBase64: Buffer.isBuffer(rawBody) && rawBody.length > 0 ? rawBody.toString("base64") : ""
+  });
+  writeEvent("speech_request_created", speechRequestForLog(request));
+  writeAccountLogForApp(auth.app, "speech_request_created", {
+    title: "创建本机语音请求",
+    detail: `${request.method} ${request.path}`,
+    workerId: worker.id,
+    workerName: worker.name || worker.id,
+    taskId: request.id,
+    status: request.status,
+    method: request.method,
+    path: request.path
+  });
+  return request;
+}
+
+function sendSpeechProxyResponse(res, request) {
+  if (request.status !== "done" || !request.response) {
+    const timedOut = String(request.error || "").toLowerCase().includes("timed out");
+    return sendJson(res, timedOut ? 504 : 502, {
+      code: -1,
+      ok: false,
+      request_id: request.id,
+      message: request.error || "Rabi PC speech service failed to return a response."
+    });
+  }
+  const body = request.response.bodyBase64
+    ? Buffer.from(request.response.bodyBase64, "base64")
+    : Buffer.alloc(0);
+  res.writeHead(request.response.statusCode, {
+    ...normalizeProxyResponseHeaders(request.response.headers),
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type,authorization,x-rabilink-token",
+    "cache-control": "no-store",
+    "x-rabilink-speech-request-id": request.id
+  });
+  res.end(body);
+}
+
+async function handleSpeechProxy(req, url, res) {
+  const auth = authorizeRabiLinkRequest(req, url, {});
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  if (auth.deviceBinding) {
+    return sendJson(res, 403, { code: -1, ok: false, message: "Speech API requires the RabiLink application token." });
+  }
+  const worker = requireRokidAppTarget(auth, "speech");
+  const suffix = url.pathname.slice(speechProxyPrefix.length) || "/";
+  const localPathname = speechProxyPaths.get(`${String(req.method || "GET").toUpperCase()} ${suffix}`);
+  if (!localPathname) {
+    return sendJson(res, 404, { code: -1, ok: false, message: "RabiSpeech proxy path is not enabled." });
+  }
+  const search = new URLSearchParams(url.searchParams);
+  search.delete("token");
+  const localPath = `${localPathname}${search.toString() ? `?${search}` : ""}`;
+  const rawBody = ["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase())
+    ? Buffer.alloc(0)
+    : await readRawBody(req, { maxBytes: speechBodyMaxBytes, label: "Speech" });
+  const request = createSpeechRequest(req, auth, worker, localPath, rawBody);
+  const finalRequest = await speechRequests.waitForCompletion(request, speechRequestWaitMs);
+  speechRequests.cleanup();
+  writeEvent(finalRequest.status === "done" ? "speech_request_done" : "speech_request_failed", speechRequestForLog(finalRequest));
+  writeAccountLogForApp(auth.app, finalRequest.status === "done" ? "speech_request_done" : "speech_request_failed", {
+    title: finalRequest.status === "done" ? "本机语音请求已返回" : "本机语音请求失败",
+    detail: `${finalRequest.method} ${finalRequest.path}`,
+    workerId: finalRequest.targetDeviceId,
+    taskId: finalRequest.id,
+    status: finalRequest.status,
+    method: finalRequest.method,
+    path: finalRequest.path,
+    error: finalRequest.error || ""
+  });
+  return sendSpeechProxyResponse(res, finalRequest);
 }
 
 function cleanupTasks() {
@@ -2519,7 +2684,10 @@ async function handleWorkerTasks(req, url, res, body) {
   const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
   const appId = auth.app?.id || "";
   if (deviceId || deviceName) {
-    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid);
+    const declaredCapabilities = url.searchParams.has("capabilities")
+      ? normalizeWorkerCapabilities(url.searchParams.get("capabilities"))
+      : null;
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, declaredCapabilities);
   }
   let claimed = claimTasks(limit, deviceId, appId, deviceGuid);
   if (claimed.length === 0) {
@@ -2562,6 +2730,38 @@ async function handleWorkerWebguiRequests(req, url, res, body) {
   });
 }
 
+async function handleWorkerSpeechRequests(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const limit = clamp(Number(url.searchParams.get("limit") || 1), 1, 5);
+  const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
+  const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || deviceId);
+  const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
+  const appId = auth.app?.id || "";
+  if (deviceId || deviceName) {
+    const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || "speech");
+    if (!capabilities.includes("speech")) capabilities.push("speech");
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities);
+  }
+  const predicate = (request) => canWorkerClaimSpeechRequest(request, appId, deviceId, deviceGuid);
+  let claimed = speechRequests.claim(limit, predicate);
+  if (claimed.length === 0) {
+    const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
+    await speechRequests.waitForClaimable(waitMs, predicate);
+    claimed = speechRequests.claim(limit, predicate);
+  }
+  for (const request of claimed) {
+    writeEvent("speech_request_leased", speechRequestForLog(request));
+  }
+  sendJson(res, 200, {
+    code: 0,
+    ok: true,
+    status: claimed.length > 0 ? "claimed" : "empty",
+    shouldContinue: true,
+    requests: claimed.map((request) => speechRequests.forTransport(request))
+  });
+}
+
 function handleWorkerWebguiResponse(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
@@ -2583,6 +2783,30 @@ function handleWorkerWebguiResponse(req, url, res, body) {
   }
   const finished = finishWebguiRequest(requestId, body);
   sendJson(res, 200, { code: 0, ok: true, request: webguiRequestForResponse(finished) });
+}
+
+function handleWorkerSpeechResponse(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const match = url.pathname.match(/^\/worker\/speech-requests\/([^/]+)\/response$/);
+  const requestId = match ? decodeURIComponent(match[1]) : "";
+  const request = speechRequests.get(requestId);
+  if (!request) return sendJson(res, 404, { code: -1, ok: false, message: `Speech request not found: ${requestId}` });
+  if (auth.app?.id !== request.appId) {
+    return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
+  }
+  requireWorkerOwnsTarget(request.targetDeviceId, body, "Speech request", request.appId);
+  const completed = speechRequests.complete(requestId, {
+    ...body,
+    headers: normalizeProxyResponseHeaders(body?.headers)
+  });
+  if (!completed.request) return sendJson(res, 404, { code: -1, ok: false, message: `Speech request not found: ${requestId}` });
+  sendJson(res, 200, {
+    code: 0,
+    ok: completed.request.status === "done",
+    deduplicated: completed.deduplicated,
+    request: speechRequestForLog(completed.request)
+  });
 }
 
 function handleTaskResult(req, url, res, body) {
@@ -4388,7 +4612,8 @@ const server = http.createServer(async (req, res) => {
           queued: [...tasks.values()].filter((task) => task.status === "queued").length,
           leased: [...tasks.values()].filter((task) => task.status === "leased").length,
           outbox: outboxMessages.length,
-          outboxTtlMs
+          outboxTtlMs,
+          speech: speechRequests.counts()
         }
       });
     }
@@ -4404,7 +4629,24 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && (url.pathname === "/rokid/rabilink/tools.postman.json" || url.pathname === "/openapi/rokid-rabilink-tools.postman.json")) {
       return sendOpenApi(res, toolImportPostmanFileCandidates);
     }
-    const body = req.method === "GET" ? {} : await readBody(req);
+    if (req.method === "GET" && (url.pathname === `${speechProxyPrefix}/openapi.json` || url.pathname === "/openapi/rabilink-speech-api.json")) {
+      return sendOpenApi(res, speechOpenApiFileCandidates);
+    }
+    if (url.pathname === speechProxyPrefix || url.pathname.startsWith(`${speechProxyPrefix}/`)) {
+      res.setHeader("access-control-allow-origin", "*");
+      res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+      res.setHeader("access-control-allow-headers", "content-type,authorization,x-rabilink-token");
+      res.setHeader("access-control-max-age", "86400");
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, { "cache-control": "no-store" });
+        return res.end();
+      }
+      return await handleSpeechProxy(req, url, res);
+    }
+    const speechWorkerResponse = /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname);
+    const body = req.method === "GET"
+      ? {}
+      : await readBody(req, speechWorkerResponse ? { maxBytes: speechWorkerResponseMaxBytes, label: "Speech worker response" } : {});
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/token") {
       const claimed = claimDeviceToken(body);
       return sendJson(res, 200, {
@@ -4460,8 +4702,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/worker/webgui-requests") {
       return await handleWorkerWebguiRequests(req, url, res, body);
     }
+    if (req.method === "GET" && url.pathname === "/worker/speech-requests") {
+      return await handleWorkerSpeechRequests(req, url, res, body);
+    }
     if (req.method === "POST" && /^\/worker\/webgui-requests\/[^/]+\/response$/.test(url.pathname)) {
       return handleWorkerWebguiResponse(req, url, res, body);
+    }
+    if (req.method === "POST" && /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname)) {
+      return handleWorkerSpeechResponse(req, url, res, body);
     }
     if (req.method === "POST" && /^\/worker\/tasks\/[^/]+\/messages$/.test(url.pathname)) {
       return handleTaskMessagesAppend(req, url, res, body);

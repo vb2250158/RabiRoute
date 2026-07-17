@@ -1,0 +1,4 @@
+interface:
+  display_name: "RabiSpeech 模型基准"
+  short_description: "重复测试本机 TTS、ASR、预热、准确率与硬件表现"
+  default_prompt: "使用 $benchmark-rabispeech-models 运行本机语音模型闭环基准并更新 HTML 报告。"

@@ -1,0 +1,20 @@
+[project]
+name = "rabi-speech"
+version = "0.1.0"
+description = "Local-only provider gateway for RabiLink TTS and ASR"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "httpx>=0.27,<1",
+  "python-multipart>=0.0.20,<1",
+  "faster-whisper==1.2.1",
+  "numpy>=1.24,<2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

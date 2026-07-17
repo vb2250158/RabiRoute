@@ -241,7 +241,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
       "token 通常以 rbl_ 开头；PC 配置与智能体变量 rabilinkToken 使用同一枚完整 token。",
       "pages/home/index 可以在 token 尚未配置时先渲染并显示等待连接；配置后，token 参数必须引用 rabilinkToken，不能交给模型生成或向用户追问。",
       "不需要额外导入 RabiLinkMessage MCP/插件；AIX 已包含输入事件、持续下行流和配置接口。",
-      "PC 全局“连接服务器”只负责让这台 Rabi 上线；还必须启用一条含 rabilink 消息端、绑定 Codex 与 RabiActive 人格的 Route，才能记录 observation、审阅账本并主动下行。",
+      "PC 全局“连接服务器”启用系统内置 RabiLink 转接服务；还必须给目标 Route 启用“眼镜端（经 RabiLink）”（内部兼容键 rabilink）、绑定 Codex 与 RabiActive 人格，才能记录 observation、审阅账本并主动下行。",
       "PC worker 在线后，还要在 Relay 应用卡片的“通讯 Rabi PC”里选择这台电脑。",
       "首次接入由智能体创建者完成；眼镜用户打开 RabiLink 后直接进入默认连接对话模式。"
     ],
@@ -280,7 +280,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
             },
             {
               title: "启用 PC 的 RabiLink Route",
-              instruction: "打开“路由配置”中的 RabiLink 模板；已有 data 的升级环境如果看不到它，先把 examples/data/route/RabiLink 与 examples/data/roles/RabiActive 复制到对应 data 目录。确认消息端包含 rabilink、Agent 为 Codex、人格为 RabiActive，并把 Agent 工作目录改为希望 Codex 工作的项目。检查端口后启用并保存；模板默认禁用，也不包含 Relay 凭据。",
+              instruction: "打开“路由配置”中的 RabiLink 模板；已有 data 的升级环境如果看不到它，先把 examples/data/route/RabiLink 与 examples/data/roles/RabiActive 复制到对应 data 目录。确认消息端包含“眼镜端（经 RabiLink）”（旧配置键 rabilink）、Agent 为 Codex、人格为 RabiActive，并把 Agent 工作目录改为希望 Codex 工作的项目。检查端口后启用并保存；模板默认禁用，也不包含 Relay 凭据。",
               completeWhen: "RabiLink Route 显示运行中，rabilink 输入和输出策略均已启用，固定 Codex 线程与工作目录明确。",
               icon: "mdi-routes",
               action: {

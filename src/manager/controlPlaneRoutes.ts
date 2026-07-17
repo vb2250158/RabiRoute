@@ -79,6 +79,7 @@ import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalC
 import { handleRabiApi } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { inspectLocalSpeechService } from "./speechServiceStatus.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import {
   applyMemoryConsolidationResult,
@@ -688,7 +689,9 @@ function rabiLinkRelayConfigFor(definition: GatewayDefinition): RabiLinkRelayGlo
     token,
     deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalRelay.deviceId || globalConfig.rabiName || definition.id,
     claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalRelay.claimWaitMs,
-    replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalRelay.replyIdleTimeoutMs
+    replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalRelay.replyIdleTimeoutMs,
+    speechProxyEnabled: globalRelay.speechProxyEnabled,
+    speechServiceUrl: globalRelay.speechServiceUrl
   };
 }
 
@@ -704,7 +707,9 @@ function firstRouteLevelRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null 
       token,
       deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalConfig.rabiLinkRelay.deviceId || globalConfig.rabiName || definition.id,
       claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalConfig.rabiLinkRelay.claimWaitMs,
-      replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalConfig.rabiLinkRelay.replyIdleTimeoutMs
+      replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalConfig.rabiLinkRelay.replyIdleTimeoutMs,
+      speechProxyEnabled: globalConfig.rabiLinkRelay.speechProxyEnabled,
+      speechServiceUrl: globalConfig.rabiLinkRelay.speechServiceUrl
     };
   }
   return null;
@@ -723,7 +728,9 @@ function syncRabiLinkRelayRuntime(): void {
     ...relay,
     deviceGuid: globalConfig.rabiGuid,
     deviceName: globalConfig.rabiName || os.hostname(),
-    localWebguiUrl: `http://127.0.0.1:${managerPort}`
+    localWebguiUrl: `http://127.0.0.1:${managerPort}`,
+    speechProxyEnabled: relay.speechProxyEnabled,
+    localSpeechUrl: relay.speechServiceUrl
   });
 }
 
@@ -3385,6 +3392,16 @@ export async function startManager(): Promise<void> {
       }
       if (request.method === "GET" && requestUrl.pathname === "/meta") {
         jsonResponse(response, 200, metaPayload());
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/speech/status") {
+        const configuredUrl = rabiGlobalConfig.read().rabiLinkRelay.speechServiceUrl;
+        void inspectLocalSpeechService(configuredUrl)
+          .then((status) => jsonResponse(response, 200, { code: 0, data: status }))
+          .catch((error) => jsonResponse(response, 500, {
+            code: -1,
+            message: error instanceof Error ? error.message : String(error)
+          }));
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/scan/message-adapters") {

@@ -230,7 +230,9 @@ export const useGatewayStore = defineStore("gateway", () => {
       token: "",
       deviceId: "",
       claimWaitMs: 60000,
-      replyIdleTimeoutMs: 60000
+      replyIdleTimeoutMs: 60000,
+      speechProxyEnabled: false,
+      speechServiceUrl: "http://127.0.0.1:8781"
     },
     rabiLinkRelayRuntime: {
       state: "disabled",

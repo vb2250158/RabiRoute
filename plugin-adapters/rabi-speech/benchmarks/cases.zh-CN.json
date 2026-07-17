@@ -1,0 +1,20 @@
+[
+  {
+    "id": "short-dialogue",
+    "category": "短句",
+    "text": "你好，这是本地语音服务的速度测试。",
+    "purpose": "观察短文本首请求、固定中文发音和基础延迟。"
+  },
+  {
+    "id": "technical-mixed",
+    "category": "中英混合",
+    "text": "请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。",
+    "purpose": "观察产品名、英文缩写和中文句子混合时的可懂度。"
+  },
+  {
+    "id": "long-instruction",
+    "category": "长指令",
+    "text": "如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。",
+    "purpose": "观察长句停顿、完整性和持续生成性能。"
+  }
+]

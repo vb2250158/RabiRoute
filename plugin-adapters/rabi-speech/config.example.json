@@ -1,0 +1,40 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8781,
+    "max_upload_bytes": 26214400,
+    "temp_dir": "temp",
+    "ffmpeg": ""
+  },
+  "providers": {
+    "extensions": [],
+    "tts": {
+      "default": "oumuq",
+      "oumuq": {
+        "enabled": true,
+        "base_url": "http://127.0.0.1:8780",
+        "default_worker_url": "http://127.0.0.1:8764",
+        "default_voice": "default",
+        "timeout_seconds": 180,
+        "allowed_output_roots": [
+          "../../../OumuQ"
+        ]
+      }
+    },
+    "asr": {
+      "default": "faster-whisper",
+      "faster_whisper": {
+        "enabled": true,
+        "preload": true,
+        "model": "small",
+        "model_root": "../../../FenneNote/cache/models",
+        "device": "auto",
+        "compute_type": "int8_float16",
+        "cpu_compute_type": "int8",
+        "local_files_only": true,
+        "beam_size": 5,
+        "vad_filter": true
+      }
+    }
+  }
+}

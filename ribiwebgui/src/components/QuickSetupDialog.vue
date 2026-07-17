@@ -62,7 +62,7 @@ const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: str
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
   { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "桌面语音笔记转写入口", icon: "mdi-note-edit-outline" },
   { type: "xiaoai", title: "小米音箱 / 小爱", note: "小爱音箱语音转写入口", icon: "mdi-speaker-wireless" },
-  { type: "rabilink", title: "RabiLink / Relay 直连", note: "电脑端直连 Relay，转发 Rokid/灵珠文本入口", icon: "mdi-access-point-network" },
+  { type: "rabilink", title: "眼镜端（经 RabiLink）", note: "眼镜是消息来源；系统内置 RabiLink 负责转接", icon: "mdi-glasses" },
   { type: "webhook", title: "通用 Webhook", note: "没有专用消息端时的通用 POST 兜底入口", icon: "mdi-webhook" }
 ];
 

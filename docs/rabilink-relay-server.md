@@ -8,7 +8,9 @@
 
 > 成熟度：实验。Relay、PC worker、远程 WebGUI、输入/下行队列和统一会话账本已有实现，仍需按真实公网、账号隔离、设备和恢复场景验收。
 
-这个服务用于把 Rokid 云侧插件、便携设备和电脑端 RabiRoute/RabiLink 消息端接起来。输入与输出是两条独立队列。当前 AIUI 在应用层直接调用 Relay；按 Rokid 官方机制，眼镜网络包会通过蓝牙透明代理到手机 App，所以传输层使用了手机网络，但手机不拥有 Agent、账本或配置。AIUI 的连接对话采用 record-first：电脑端 worker 领取观察后先写入统一会话账本并完成上行，不把单句转写直接交给 Codex。Codex 在线程空闲、触摸板引导或周期反思时读取账本，再按需要独立下行。
+这个系统内置转接服务用于把 Rokid 云侧插件、便携设备和电脑端 RabiRoute 接起来；它本身不是消息端。输入与输出是两条独立队列，眼镜端、手机端等调用方才是消息来源。当前 AIUI 在应用层直接调用 Relay；按 Rokid 官方机制，眼镜网络包会通过蓝牙透明代理到手机 App，所以传输层使用了手机网络，但手机不拥有 Agent、账本或配置。AIUI 的连接对话采用 record-first：电脑端 worker 领取观察后先写入统一会话账本并完成上行，不把单句转写直接交给 Codex。Codex 在线程空闲、触摸板引导或周期反思时读取账本，再按需要独立下行。
+
+同一 Relay 还提供独立的 RabiSpeech 直接 API。它不经过上述 Agent/账本链路：客户端请求 `/api/rabilink/speech/*`，服务器鉴权并等待选定 PC 的 Manager 转给本机 `rabi-speech` 插件，然后在原 HTTP 请求中返回最终音频或转写。详见 [RabiSpeech 本机 TTS / ASR 插件](rabispeech-plugin.md)。
 
 链路：
 
@@ -44,7 +46,7 @@ https://你的域名/manage
 
 首次进入时注册一个服务器账号，然后创建 RabiLink 应用。每个应用会生成独立 `rbl_...` token；控制台卡片默认显示 token 预览，但登录后可以随时复制完整 token。Rokid/灵珠插件和电脑端 RabiLink worker 都使用同一个应用 token，Relay 会按应用隔离 task 和下行消息队列。
 
-电脑端在 RibiWebGUI“Rabi 实例”中填写 Relay 地址、应用 token 和唯一的本机 PC 标识，然后打开全局“连接服务器”开关。该开关由 `data/Config.json` 的 `rabiLinkRelay.enabled` 持久化；开启后 Manager 会立即登记 PC 并常驻代理远程 WebGUI，不需要先启动某条 RabiLink 路由。路由中的 `rabilink` 消息端决定 AIUI observation 写入哪个角色账本、由哪个固定 Agent 线程审阅；旧兼容消息仍按该路由直接转发。关闭全局开关会让整台 PC 停止连接 Relay，但不会删除 token 或路由配置。
+电脑端在 RibiWebGUI“Rabi 实例”中填写 Relay 地址、应用 token 和唯一的本机 PC 标识，然后打开全局“连接服务器”开关。该开关由 `data/Config.json` 的 `rabiLinkRelay.enabled` 持久化；开启后 Manager 会立即登记 PC 并常驻代理远程 WebGUI，不需要先启动某条眼镜路由。路由中的“眼镜端（经 RabiLink）”（内部兼容键 `rabilink`）决定 AIUI observation 写入哪个角色账本、由哪个固定 Agent 线程审阅；旧兼容消息仍按该路由直接转发。关闭全局开关会让整台 PC 停止连接 Relay，但不会删除 token 或路由配置。
 
 同一个应用 token 可以连接多台 PC。每台 PC 必须拥有独立的 `rabiGuid` 和 `deviceId`；不要把一台电脑的 `data/Config.json` 原样复制到另一台。服务器管理页的 PC 列表目前通过“刷新”按钮重新读取，不会因新 PC 上线自动重载整页。
 
@@ -469,7 +471,7 @@ Authorization: Bearer <token>
 }
 ```
 
-电脑端 RabiLink worker 拿到任务后，会在本机内部调用 RabiRoute `rabilink` 消息端。局域网脚本或手工调试仍可直接 POST 到本地 `/rabilink`：
+电脑端 worker 拿到眼镜任务后，会在本机内部调用“眼镜端（经 RabiLink）”；`rabilink` 只是保留的协议与配置兼容键。局域网脚本或手工调试仍可直接 POST 到本地 `/rabilink`：
 
 ```http
 POST http://电脑IP:8794/rabilink

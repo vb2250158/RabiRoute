@@ -1,0 +1,184 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "RabiSpeech Direct API",
+    "version": "0.1.0",
+    "description": "Direct TTS and ASR API backed by the selected user's local RabiSpeech plugin through RabiLink Relay. The caller makes one HTTP request and receives the final audio or transcription response."
+  },
+  "servers": [
+    {
+      "url": "/api/rabilink/speech",
+      "description": "Current RabiLink Relay"
+    }
+  ],
+  "security": [
+    { "bearerAuth": [] },
+    { "rabiLinkToken": [] }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getRabiSpeechHealth",
+        "summary": "Check the selected PC speech plugin",
+        "responses": {
+          "200": { "description": "Plugin health", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoSpeechPc" }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "listRabiSpeechModels",
+        "summary": "List locally configured TTS and ASR models",
+        "responses": {
+          "200": { "description": "Model list", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoSpeechPc" }
+        }
+      }
+    },
+    "/v1/capabilities": {
+      "get": {
+        "operationId": "getRabiSpeechCapabilities",
+        "summary": "Inspect locally enabled providers",
+        "responses": {
+          "200": { "description": "Provider capabilities", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoSpeechPc" }
+        }
+      }
+    },
+    "/v1/audio/speech": {
+      "post": {
+        "operationId": "createRabiSpeech",
+        "summary": "Synthesize speech and return the final audio file",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SpeechRequest" },
+              "example": {
+                "model": "tts-local",
+                "input": "这是通过 RabiLink 调用的本机语音。",
+                "voice": "default",
+                "response_format": "wav",
+                "speed": 1.0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Generated audio", "content": { "audio/wav": { "schema": { "type": "string", "format": "binary" } }, "audio/mpeg": { "schema": { "type": "string", "format": "binary" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoSpeechPc" },
+          "502": { "$ref": "#/components/responses/PluginFailure" },
+          "504": { "$ref": "#/components/responses/PluginFailure" }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "operationId": "createRabiTranscription",
+        "summary": "Upload audio and return the final transcription",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary" },
+                  "model": { "type": "string", "default": "asr-local" },
+                  "language": { "type": "string", "example": "zh" },
+                  "prompt": { "type": "string" },
+                  "response_format": { "type": "string", "enum": ["json", "verbose_json", "text", "srt", "vtt"], "default": "json" },
+                  "provider": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Transcription result", "content": { "application/json": { "schema": { "type": "object" } }, "text/plain": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoSpeechPc" },
+          "502": { "$ref": "#/components/responses/PluginFailure" },
+          "504": { "$ref": "#/components/responses/PluginFailure" }
+        }
+      }
+    },
+    "/api/v1/services/audio/tts/SpeechSynthesizer": {
+      "post": {
+        "operationId": "createDashScopeCompatibleSpeech",
+        "summary": "DashScope-style local TTS compatibility endpoint",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DashScopeRequest" } } } },
+        "responses": {
+          "200": { "description": "Generated audio", "content": { "audio/wav": { "schema": { "type": "string", "format": "binary" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoSpeechPc" }
+        }
+      }
+    },
+    "/api/v1/services/audio/asr/transcription": {
+      "post": {
+        "operationId": "createDashScopeCompatibleTranscription",
+        "summary": "DashScope-style local ASR compatibility endpoint",
+        "description": "For privacy and SSRF safety, audio must be an audio data URI. The local plugin never downloads an arbitrary public URL.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DashScopeRequest" } } } },
+        "responses": {
+          "200": { "description": "Synchronous transcription result", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoSpeechPc" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "RabiLink application token" },
+      "rabiLinkToken": { "type": "apiKey", "in": "header", "name": "X-RabiLink-Token" }
+    },
+    "schemas": {
+      "SpeechRequest": {
+        "type": "object",
+        "required": ["input"],
+        "properties": {
+          "model": { "type": "string", "default": "tts-local" },
+          "input": { "type": "string", "maxLength": 10000 },
+          "voice": { "type": "string", "default": "default" },
+          "response_format": { "type": "string", "enum": ["wav", "mp3", "flac", "ogg", "opus"], "default": "wav" },
+          "speed": { "type": "number", "minimum": 0.25, "maximum": 4.0, "default": 1.0 },
+          "provider": { "type": "string" },
+          "language": { "type": "string" },
+          "instructions": { "type": "string" },
+          "sample_rate": { "type": "integer", "minimum": 8000, "maximum": 48000 }
+        }
+      },
+      "DashScopeRequest": {
+        "type": "object",
+        "required": ["model", "input"],
+        "properties": {
+          "model": { "type": "string" },
+          "input": { "type": "object", "additionalProperties": true },
+          "parameters": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "integer" },
+          "ok": { "type": "boolean" },
+          "message": { "type": "string" },
+          "request_id": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": { "description": "Missing or invalid RabiLink application token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "NoSpeechPc": { "description": "No selected online PC has explicitly enabled the speech capability", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "PluginFailure": { "description": "The local plugin failed or timed out", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+    }
+  }
+}

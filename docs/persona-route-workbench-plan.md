@@ -151,7 +151,7 @@ route 配置固定指向 agentRoleId
 
 - 群消息规则 `group_message` 空 regex 且未限制群号。
 - 规则选择了 `heartbeat`，但关联 route 未启用 heartbeat 消息端。
-- 规则选择了 `rabilink`，但关联 route 未启用 RabiLink 消息端。
+- 规则选择了 `rabilink`，但关联 route 未启用“眼镜端（经 RabiLink）”。
 - 规则选择了 QQ route kind，但关联 route 没有 NapCat / OneBot 消息端。
 - 规则选择了 `wecom_message`，但关联 route 没有 WeCom 消息端。
 - 多条规则 route kind、targetGroupId、allowedSpeakerNames 和 regex 完全相同，可能重复投递。
@@ -368,7 +368,7 @@ roleKnowledgeSnapshot(roleDir, messageText, {
 - `manual_trigger`
 - 或 `role_panel_message`
 
-不伪造 QQ 外发，也不假装有真实 QQ 消息。真实 QQ / RabiLink 的端到端测试仍通过对应消息端触发。
+不伪造 QQ 外发，也不假装有真实 QQ 消息。真实 QQ / 眼镜端的端到端测试仍通过对应消息端触发；RabiLink 只负责中转。
 
 闭环：
 

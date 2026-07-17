@@ -80,16 +80,21 @@ function New-AsciiFile {
 
 $relayScript = Join-Path $repoRoot "scripts\rabilink-relay-server.mjs"
 $deviceLogStoreScript = Join-Path $repoRoot "scripts\rabilink-device-log-store.mjs"
+$proxyRequestQueueScript = Join-Path $repoRoot "scripts\rabilink-proxy-request-queue.mjs"
 $webguiDist = Join-Path $repoRoot "ribiwebgui\dist"
 $webguiAssets = Join-Path $repoRoot "assets"
 $openApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.CURRENT.openapi.json"
 $manualAuthOpenApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.MANUAL_AUTH.openapi.json"
 $agentTokenOpenApiFile = Join-Path $repoRoot "data\rabilink-relay\rokid-rabilink-plugin.AGENT_TOKEN.openapi.json"
+$speechOpenApiFile = Join-Path $repoRoot "examples\rabilink-relay\rabilink-speech-api.openapi.json"
 if (-not (Test-Path -LiteralPath $relayScript)) {
     throw "Relay server script was not found: $relayScript"
 }
 if (-not (Test-Path -LiteralPath $deviceLogStoreScript)) {
     throw "Relay device log store script was not found: $deviceLogStoreScript"
+}
+if (-not (Test-Path -LiteralPath $proxyRequestQueueScript)) {
+    throw "Relay proxy request queue script was not found: $proxyRequestQueueScript"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $webguiDist "index.html"))) {
     throw "RabiRoute WebGUI build was not found: $webguiDist. Run the WebGUI build before deploying."
@@ -106,6 +111,9 @@ if (-not (Test-Path -LiteralPath $manualAuthOpenApiFile)) {
 if (-not (Test-Path -LiteralPath $agentTokenOpenApiFile)) {
     throw "RabiLink agent token OpenAPI document was not found: $agentTokenOpenApiFile"
 }
+if (-not (Test-Path -LiteralPath $speechOpenApiFile)) {
+    throw "RabiSpeech OpenAPI document was not found: $speechOpenApiFile"
+}
 if (-not (Test-Path -LiteralPath $KeyPath)) {
     throw "SSH key was not found: $KeyPath"
 }
@@ -118,12 +126,14 @@ $bundleDataRoot = Join-Path $bundleRoot "data"
 New-Item -ItemType Directory -Path $bundleDataRoot -Force | Out-Null
 Copy-Item -LiteralPath $relayScript -Destination (Join-Path $bundleRoot "rabilink-relay-server.mjs") -Force
 Copy-Item -LiteralPath $deviceLogStoreScript -Destination (Join-Path $bundleRoot "rabilink-device-log-store.mjs") -Force
+Copy-Item -LiteralPath $proxyRequestQueueScript -Destination (Join-Path $bundleRoot "rabilink-proxy-request-queue.mjs") -Force
 New-Item -ItemType Directory -Path (Join-Path $bundleRoot "ribiwebgui") -Force | Out-Null
 Copy-Item -LiteralPath $webguiDist -Destination (Join-Path $bundleRoot "ribiwebgui\dist") -Recurse -Force
 Copy-Item -LiteralPath $webguiAssets -Destination (Join-Path $bundleRoot "assets") -Recurse -Force
 Copy-Item -LiteralPath $openApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.CURRENT.openapi.json") -Force
 Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.MANUAL_AUTH.openapi.json") -Force
 Copy-Item -LiteralPath $agentTokenOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.AGENT_TOKEN.openapi.json") -Force
+Copy-Item -LiteralPath $speechOpenApiFile -Destination (Join-Path $bundleDataRoot "rabilink-speech-api.openapi.json") -Force
 
 New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 {
@@ -168,11 +178,7 @@ http://:$PublicHttpPort {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /api/rabilink/mobile* {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /api/rabilink/devices* {
+    handle /api/rabilink/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -180,15 +186,7 @@ http://:$PublicHttpPort {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /worker/messages {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /worker/tasks* {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /worker/webgui-requests* {
+    handle /worker/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -220,11 +218,7 @@ http://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /api/rabilink/mobile* {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /api/rabilink/devices* {
+    handle /api/rabilink/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -232,15 +226,7 @@ http://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /worker/messages {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /worker/tasks* {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /worker/webgui-requests* {
+    handle /worker/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -265,11 +251,7 @@ http://:80 {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /api/rabilink/mobile* {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /api/rabilink/devices* {
+    handle /api/rabilink/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -277,15 +259,7 @@ http://:80 {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /worker/messages {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /worker/tasks* {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /worker/webgui-requests* {
+    handle /worker/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -310,11 +284,7 @@ https://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /api/rabilink/mobile* {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /api/rabilink/devices* {
+    handle /api/rabilink/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -322,15 +292,7 @@ https://$Domain {
         reverse_proxy 127.0.0.1:8788
     }
 
-    handle /worker/messages {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /worker/tasks* {
-        reverse_proxy 127.0.0.1:8788
-    }
-
-    handle /worker/webgui-requests* {
+    handle /worker/* {
         reverse_proxy 127.0.0.1:8788
     }
 
@@ -400,6 +362,17 @@ $remoteSetup = @"
 `$remoteRoot = "$RemoteRoot"
 `$zipPath = "C:\Windows\Temp\rabilink-relay.zip"
 New-Item -ItemType Directory -Force -Path `$remoteRoot | Out-Null
+`$backupRoot = Join-Path `$remoteRoot ("backups\code-" + [DateTime]::Now.ToString("yyyyMMdd-HHmmss"))
+New-Item -ItemType Directory -Force -Path `$backupRoot | Out-Null
+foreach (`$name in @("rabilink-relay-server.mjs", "rabilink-device-log-store.mjs", "rabilink-proxy-request-queue.mjs", "Caddyfile", "package.json")) {
+    `$source = Join-Path `$remoteRoot `$name
+    if (Test-Path -LiteralPath `$source) {
+        Copy-Item -LiteralPath `$source -Destination `$backupRoot -Force
+    }
+}
+if (Test-Path -LiteralPath (Join-Path `$remoteRoot "ribiwebgui")) {
+    Copy-Item -LiteralPath (Join-Path `$remoteRoot "ribiwebgui") -Destination (Join-Path `$backupRoot "ribiwebgui") -Recurse -Force
+}
 Expand-Archive -Path `$zipPath -DestinationPath `$remoteRoot -Force
 New-Item -ItemType Directory -Force -Path "`$remoteRoot\logs" | Out-Null
 

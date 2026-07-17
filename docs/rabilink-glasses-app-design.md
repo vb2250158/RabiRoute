@@ -82,7 +82,7 @@ RabiLink 能持续听我说、听我所听、看我所看；
 -> 手机 ASR
 -> RabiLink Relay
 -> PC Rabi worker
--> RabiRoute rabilink 消息端
+-> RabiRoute 眼镜端（内部兼容键 rabilink）
 -> 本地 Agent
 -> Relay 下行消息
 -> 手机通知 / Rabi Glass HUD
@@ -645,7 +645,7 @@ Menu：
 
 ## RabiRoute 边界
 
-RabiLink 手机和眼镜都是消息端，不是 Agent runtime。
+RabiLink 是系统转接服务，不是消息端或 Agent runtime；Rabi Glass 眼镜端和手机客户端才是消息来源。
 
 RabiRoute 继续负责：
 

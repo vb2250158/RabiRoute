@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>RabiSpeech 本机 TTS / ASR 模型性能报告</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(15, 28, 46, .88);
+      --panel-strong: #11243c;
+      --line: rgba(148, 181, 218, .2);
+      --text: #eaf2ff;
+      --muted: #9fb2c9;
+      --cyan: #47d7d0;
+      --blue: #65a9ff;
+      --violet: #ad8cff;
+      --amber: #ffc96b;
+      --red: #ff7f91;
+      --green: #7de2a6;
+      --shadow: 0 22px 70px rgba(0, 0, 0, .28);
+      font-family: Inter, "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 5%, rgba(71, 215, 208, .12), transparent 34rem),
+        radial-gradient(circle at 92% 8%, rgba(101, 169, 255, .12), transparent 32rem),
+        var(--bg);
+      line-height: 1.65;
+    }
+    a { color: var(--cyan); }
+    .shell { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 36px 0 72px; }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(28px, 5vw, 58px);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(135deg, rgba(19, 43, 68, .96), rgba(10, 22, 38, .9));
+      box-shadow: var(--shadow);
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 260px;
+      height: 260px;
+      right: -70px;
+      top: -90px;
+      border: 1px solid rgba(71, 215, 208, .3);
+      border-radius: 50%;
+      box-shadow: 0 0 0 34px rgba(71, 215, 208, .04), 0 0 0 74px rgba(101, 169, 255, .025);
+    }
+    .eyebrow { color: var(--cyan); font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+    h1 { max-width: 980px; margin: 12px 0 10px; font-size: clamp(34px, 6vw, 68px); line-height: 1.06; letter-spacing: -.045em; }
+    .hero p { max-width: 920px; margin: 0; color: var(--muted); font-size: clamp(16px, 2vw, 20px); }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+    .pill, .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(8, 18, 31, .5);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 0; }
+    .toc a { padding: 7px 11px; border-radius: 10px; background: rgba(101, 169, 255, .09); text-decoration: none; font-size: 13px; }
+    .section { margin-top: 48px; scroll-margin-top: 20px; }
+    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 17px; }
+    h2 { margin: 0; font-size: clamp(26px, 3.4vw, 39px); letter-spacing: -.03em; }
+    h3 { margin: 0 0 12px; font-size: 18px; }
+    .section-note, .muted { color: var(--muted); }
+    .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 22px; }
+    .metric, .card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .13);
+    }
+    .metric { padding: 19px; }
+    .metric-label { color: var(--muted); font-size: 12px; }
+    .metric-value { margin-top: 5px; font-size: 27px; font-weight: 850; letter-spacing: -.03em; }
+    .metric-detail { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .card { padding: 20px; overflow: hidden; }
+    .pipeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+    .pipeline-step { position: relative; min-height: 122px; padding: 16px; border: 1px solid var(--line); border-radius: 15px; background: rgba(101, 169, 255, .065); }
+    .step-number { color: var(--cyan); font-size: 12px; font-weight: 800; }
+    .pipeline-step strong { display: block; margin: 6px 0; }
+    .pipeline-step span { color: var(--muted); font-size: 13px; }
+    .table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; font-size: 13px; }
+    th, td { padding: 12px 13px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { position: sticky; top: 0; color: #c8ddf6; background: var(--panel-strong); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: rgba(101, 169, 255, .045); }
+    code { padding: 2px 6px; border-radius: 6px; background: rgba(101, 169, 255, .12); color: #d9e9ff; }
+    .yes { color: var(--green); }
+    .no { color: var(--muted); }
+    .warn { color: var(--amber); }
+    .chart { display: grid; gap: 12px; }
+    .bar-row { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(220px, 3fr) 86px; gap: 12px; align-items: center; }
+    .bar-label { overflow-wrap: anywhere; font-size: 13px; }
+    .bar-track { height: 16px; overflow: hidden; border-radius: 999px; background: rgba(148, 181, 218, .1); }
+    .bar-fill { height: 100%; min-width: 2px; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+    .bar-fill.quality { background: linear-gradient(90deg, var(--violet), var(--red)); }
+    .bar-value { color: #d6e6fa; font-variant-numeric: tabular-nums; text-align: right; }
+    .chart-legend { margin-bottom: 12px; color: var(--muted); font-size: 12px; }
+    .case-list { display: grid; gap: 12px; }
+    .case { padding: 16px; border-left: 3px solid var(--cyan); border-radius: 0 13px 13px 0; background: rgba(71, 215, 208, .055); }
+    .case strong { display: block; margin-bottom: 4px; }
+    .case p { margin: 4px 0; }
+    .case small { color: var(--muted); }
+    .callout { padding: 15px 17px; border: 1px solid rgba(255, 201, 107, .28); border-radius: 14px; background: rgba(255, 201, 107, .07); color: #f7dba6; }
+    .list { margin: 0; padding-left: 20px; }
+    .list li + li { margin-top: 8px; }
+    .footer { margin-top: 52px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    @media (max-width: 1000px) {
+      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pipeline { grid-template-columns: 1fr 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 18px, 1440px); padding-top: 12px; }
+      .hero { border-radius: 20px; padding: 24px 20px; }
+      .metric-grid, .pipeline { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 1fr; gap: 5px; }
+      .bar-value { text-align: left; }
+      .section { margin-top: 38px; }
+    }
+    @media print {
+      :root { --bg: #fff; --panel: #fff; --panel-strong: #f3f6fa; --line: #cbd5e1; --text: #142033; --muted: #526070; }
+      body { background: #fff; }
+      .shell { width: 100%; padding: 0; }
+      .hero, .card, .metric { box-shadow: none; }
+      .toc { display: none; }
+      .section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div class="eyebrow">RabiSpeech · Local Model Benchmark</div>
+      <h1 id="report-title">RabiSpeech 本机 TTS / ASR 模型性能报告</h1>
+      <p id="report-subtitle"></p>
+      <div class="hero-meta">
+        <span class="status">本地模型</span>
+        <span class="pill" id="report-date"></span>
+        <span class="pill">TTS → WAV → ASR 闭环</span>
+        <span class="pill">RTX 4080 SUPER 16 GiB</span>
+      </div>
+      <nav class="toc" aria-label="报告目录">
+        <a href="#conclusions">结论</a><a href="#workflow">测试流程</a><a href="#cases">测试用例</a>
+        <a href="#tts">TTS</a><a href="#asr">ASR</a><a href="#accuracy">准确率明细</a>
+        <a href="#hardware">硬件</a><a href="#methodology">口径</a>
+      </nav>
+    </header>
+
+    <div class="callout" style="margin:18px 0 0;border-color:rgba(255,188,86,.42);background:rgba(255,188,86,.09)"><strong>适用范围：</strong>本报告只代表下方“测试硬件”所列目标测试机、当次软件版本、模型、声线与测试语料。不同电脑的显卡、CPU、内存、驱动、并发和角色参考音不同，实际性能与效果请以该电脑重新运行同一基准的结果为准。</div>
+
+    <section id="conclusions" class="section">
+      <div class="section-head"><div><div class="eyebrow">Decision summary</div><h2>结论先行</h2></div></div>
+      <div id="headline-metrics" class="metric-grid"></div>
+      <div class="callout" style="margin-top:16px">推荐部署：ASR small 常驻 CUDA，ONNX-VITS 常驻 CPU；Qwen 与 IndexTTS2 在 16 GiB 显卡上按角色和功能路由、避免同时长期驻留。</div>
+    </section>
+
+    <section id="workflow" class="section">
+      <div class="section-head"><div><div class="eyebrow">Closed-loop method</div><h2>测试流程</h2></div><div class="section-note">先 TTS，后 ASR；同一批音频、同一计分口径</div></div>
+      <div class="pipeline">
+        <div class="pipeline-step"><div class="step-number">01</div><strong>固定文本</strong><span>短句、中英混合、长指令三类公开测试语料。</span></div>
+        <div class="pipeline-step"><div class="step-number">02</div><strong>逐个 TTS</strong><span>每个引擎生成三条 WAV，记录首请求、热态、RTF、显存和波形。</span></div>
+        <div class="pipeline-step"><div class="step-number">03</div><strong>ASR 预热</strong><span>加载模型后，用短句 WAV 做一次不计分预热。</span></div>
+        <div class="pipeline-step"><div class="step-number">04</div><strong>交叉识别</strong><span>每个 ASR 识别全部 TTS 音频，保留逐句结果。</span></div>
+        <div class="pipeline-step"><div class="step-number">05</div><strong>统一统计</strong><span>计算 CER、耗时、RTF、P95，并生成 CSV、JSON 与本 HTML。</span></div>
+      </div>
+    </section>
+
+    <section id="cases" class="section">
+      <div class="section-head"><div><div class="eyebrow">Public corpus</div><h2>测试用例</h2></div><div class="section-note">新增模型必须复用同一份 cases.zh-CN.json</div></div>
+      <div id="test-cases" class="case-list"></div>
+    </section>
+
+    <section id="tts" class="section">
+      <div class="section-head"><div><div class="eyebrow">Text to speech</div><h2>TTS 功能与性能</h2></div><div class="section-note">RTF 小于 1 表示生成速度快于实时播放</div></div>
+      <div class="card"><h3>功能支持矩阵</h3><div class="table-wrap"><table id="tts-feature-table"></table></div></div>
+      <div class="grid-2" style="margin-top:16px">
+        <div class="card"><h3>热态实时因子（RTF）</h3><div class="chart-legend">越低越好；RTF = 1 为实时边界。</div><div id="tts-rtf-chart" class="chart"></div></div>
+        <div class="card"><h3>首请求耗时</h3><div class="chart-legend">Qwen / Index 含懒加载；ONNX 本轮已常驻，不是冷启动。</div><div id="tts-first-chart" class="chart"></div></div>
+      </div>
+      <div class="card" style="margin-top:16px"><h3>精确结果</h3><div class="table-wrap"><table id="tts-result-table"></table></div></div>
+    </section>
+
+    <section id="asr" class="section">
+      <div class="section-head"><div><div class="eyebrow">Automatic speech recognition</div><h2>ASR 功能、预热与性能</h2></div><div class="section-note">每个模型 1 条不计分预热 + 9 条正式识别</div></div>
+      <div class="card"><h3>功能支持矩阵</h3><div class="table-wrap"><table id="asr-feature-table"></table></div></div>
+      <div class="grid-2" style="margin-top:16px">
+        <div class="card"><h3>总体字符错误率（CER）</h3><div class="chart-legend">越低越好；本轮语料为九条 TTS 合成中文音频。</div><div id="asr-cer-chart" class="chart"></div></div>
+        <div class="card"><h3>加载与预热</h3><div class="chart-legend">模型 ready 前的加载 + 不计分音频预热。</div><div id="asr-ready-chart" class="chart"></div></div>
+      </div>
+      <div class="card" style="margin-top:16px"><h3>准确率与性能汇总</h3><div class="table-wrap"><table id="asr-result-table"></table></div></div>
+    </section>
+
+    <section id="accuracy" class="section">
+      <div class="section-head"><div><div class="eyebrow">TTS × ASR</div><h2>交叉准确率</h2></div><div class="section-note">区分是 ASR 模型差异，还是某个 TTS 音频本身难识别</div></div>
+      <div class="grid-2">
+        <div class="card"><h3>按 TTS 来源分组的 CER</h3><div id="source-cer-chart" class="chart"></div></div>
+        <div class="card"><h3>如何读这张图</h3><ul class="list muted"><li>Qwen + small 的 CER 最低，说明本轮技术词和中文最容易回译。</li><li>ONNX 在 tiny 与 small 上都较高，主要问题更可能来自本轮固定声线的发音，而非单一 ASR。</li><li>回译 CER 不能代替真人盲听；自然度和音色相似度需要单独验收。</li></ul></div>
+      </div>
+      <div class="card" style="margin-top:16px"><h3>逐句 ASR 准确率明细</h3><div class="table-wrap"><table id="asr-detail-table"></table></div></div>
+    </section>
+
+    <section id="hardware" class="section">
+      <div class="section-head"><div><div class="eyebrow">Capacity planning</div><h2>测试硬件与建议配置</h2></div><div class="section-note">最低 / 建议为工程估算，不是逐档显卡实测</div></div>
+      <div class="grid-2">
+        <div class="card"><h3>本次测试机</h3><div class="table-wrap"><table id="test-hardware-table"></table></div></div>
+        <div class="card"><h3>模型硬件建议</h3><div class="table-wrap"><table id="hardware-requirements-table"></table></div></div>
+      </div>
+      <div class="card" style="margin-top:16px"><h3>历史模型边界</h3><div class="table-wrap"><table id="historical-table"></table></div></div>
+    </section>
+
+    <section id="methodology" class="section">
+      <div class="section-head"><div><div class="eyebrow">Reproducibility</div><h2>指标口径与限制</h2></div></div>
+      <div class="grid-2">
+        <div class="card"><h3>方法</h3><ul id="methodology-list" class="list"></ul></div>
+        <div class="card"><h3>限制</h3><ul id="limitations-list" class="list"></ul></div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div id="scope-note"></div>
+      <div>生成器：plugin-adapters/rabi-speech/scripts/benchmark_models.py · 原始结果保留为 JSON / CSV，HTML 不包含 token、私有参考音路径或运行期绝对路径。</div>
+    </footer>
+  </main>
+
+  <script id="benchmark-data" type="application/json">__RABISPEECH_REPORT_PAYLOAD__</script>
+  <script>
+    const payload = JSON.parse(document.getElementById("benchmark-data").textContent);
+    const { summary, texts, metadata, ttsRecords, asrRecords } = payload;
+    const fmt = (value, digits = 2) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
+    const pct = (value) => Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(1)}%` : "—";
+    const mibToGib = (value) => Number.isFinite(Number(value)) ? Number(value) / 1024 : null;
+    const byId = (id) => document.getElementById(id);
+    const text = (tag, value, className) => { const node = document.createElement(tag); node.textContent = value ?? "—"; if (className) node.className = className; return node; };
+
+    function renderTable(id, columns, rows) {
+      const table = byId(id);
+      const head = document.createElement("thead");
+      const header = document.createElement("tr");
+      columns.forEach((column) => header.append(text("th", column.label)));
+      head.append(header);
+      const body = document.createElement("tbody");
+      rows.forEach((row) => {
+        const tr = document.createElement("tr");
+        columns.forEach((column) => {
+          const td = document.createElement("td");
+          const rendered = column.render ? column.render(row) : row[column.key];
+          td.textContent = rendered ?? "—";
+          if (column.className) td.className = column.className(row);
+          tr.append(td);
+        });
+        body.append(tr);
+      });
+      table.replaceChildren(head, body);
+    }
+
+    function renderBars(id, rows, value, options = {}) {
+      const root = byId(id);
+      const values = rows.map(value).filter(Number.isFinite);
+      const max = options.max ?? Math.max(...values, 1);
+      rows.forEach((row) => {
+        const amount = Number(value(row));
+        const line = document.createElement("div");
+        line.className = "bar-row";
+        line.append(text("div", options.label(row), "bar-label"));
+        const track = document.createElement("div");
+        track.className = "bar-track";
+        const fill = document.createElement("div");
+        fill.className = `bar-fill ${options.kind || ""}`;
+        fill.style.width = `${Math.max(0, Math.min(100, amount / max * 100))}%`;
+        track.append(fill);
+        line.append(track);
+        line.append(text("div", options.format(amount), "bar-value"));
+        root.append(line);
+      });
+    }
+
+    function displayTts(engine) { return metadata.tts_models[engine]?.name || engine; }
+    function displayAsr(model) { return metadata.asr_models[model]?.name || model; }
+
+    document.title = metadata.title;
+    byId("report-title").textContent = metadata.title;
+    byId("report-subtitle").textContent = metadata.subtitle;
+    byId("report-date").textContent = `测试日期 ${metadata.benchmark_date}`;
+    byId("scope-note").textContent = metadata.scope;
+
+    const fastestTts = [...summary.tts].sort((a, b) => a.warm_mean_rtf - b.warm_mean_rtf)[0];
+    const bestAsr = [...summary.asr].sort((a, b) => a.micro_cer - b.micro_cer)[0];
+    const bestSource = summary.asr_by_tts_source.filter((row) => row.model === bestAsr.model).sort((a, b) => a.micro_cer - b.micro_cer)[0];
+    const metrics = [
+      ["默认 ASR", displayAsr(bestAsr.model), `CER ${pct(bestAsr.micro_cer)} · 热态 ${fmt(bestAsr.mean_seconds)} 秒/条`],
+      ["最快 TTS", displayTts(fastestTts.engine), `热态 RTF ${fmt(fastestTts.warm_mean_rtf)} · ${fastestTts.worker_ready_before ? "已常驻" : "含懒加载"}`],
+      ["最佳回译组合", `${displayTts(bestSource.tts_engine)} + ${displayAsr(bestSource.model)}`, `CER ${pct(bestSource.micro_cer)}`],
+      ["并发常驻建议", "24 GiB+ GPU", "16 GiB 让 Qwen / Index 按需加载"]
+    ];
+    metrics.forEach(([label, value, detail]) => {
+      const card = document.createElement("article"); card.className = "metric";
+      card.append(text("div", label, "metric-label"), text("div", value, "metric-value"), text("div", detail, "metric-detail"));
+      byId("headline-metrics").append(card);
+    });
+
+    texts.forEach((item, index) => {
+      const card = document.createElement("article"); card.className = "case";
+      card.append(text("strong", `${index + 1}. ${item.category || item.id}`), text("p", item.text), text("small", `${item.id} · ${item.purpose || "固定回归语料"}`));
+      byId("test-cases").append(card);
+    });
+
+    const ttsRows = summary.tts.map((row) => ({ ...row, ...metadata.tts_models[row.engine], id: row.engine }));
+    renderTable("tts-feature-table", [
+      { label: "模型", render: (r) => r.name || r.id }, { label: "定位", key: "positioning" }, { label: "语言", key: "languages" },
+      { label: "声线", key: "voice" }, { label: "克隆", key: "clone", className: (r) => r.clone === "支持" ? "yes" : "no" },
+      { label: "情绪 / 控制", key: "emotion" }, { label: "流式状态", key: "streaming" }, { label: "设备", key: "device" }, { label: "输出", key: "output" }
+    ], ttsRows);
+    renderBars("tts-rtf-chart", ttsRows, (r) => r.warm_mean_rtf, { label: (r) => r.name, format: (v) => fmt(v, 3), max: Math.max(1.6, ...ttsRows.map(r => r.warm_mean_rtf)) });
+    renderBars("tts-first-chart", ttsRows, (r) => r.first_request_seconds, { label: (r) => r.name, format: (v) => `${fmt(v)} 秒`, max: Math.max(...ttsRows.map(r => r.first_request_seconds)) });
+    renderTable("tts-result-table", [
+      { label: "模型", render: (r) => r.name }, { label: "首请求口径", render: (r) => r.worker_ready_before ? "已常驻首条" : "冷首条 / 懒加载" },
+      { label: "首请求秒", render: (r) => fmt(r.first_request_seconds) }, { label: "热态均值秒", render: (r) => fmt(r.warm_mean_seconds) },
+      { label: "热态 P95 秒", render: (r) => fmt(r.warm_p95_seconds) }, { label: "热态 RTF", render: (r) => fmt(r.warm_mean_rtf, 3) },
+      { label: "显存增量 GiB", render: (r) => fmt(mibToGib(r.gpu_incremental_peak_mib)) }, { label: "采样率", render: (r) => `${r.sample_rate_hz} Hz` },
+      { label: "削波", render: (r) => pct(r.max_clipped_fraction) }
+    ], ttsRows);
+
+    const asrRows = summary.asr.map((row) => ({ ...row, ...metadata.asr_models[row.model], id: row.model }));
+    renderTable("asr-feature-table", [
+      { label: "模型", render: (r) => r.name || r.id }, { label: "定位", key: "positioning" }, { label: "语言", key: "languages" },
+      { label: "输入", key: "input" }, { label: "控制", key: "controls" }, { label: "说话人分离", key: "diarization", className: () => "no" }, { label: "设备", key: "device" }
+    ], asrRows);
+    renderBars("asr-cer-chart", asrRows, (r) => r.micro_cer, { label: (r) => r.name, format: pct, kind: "quality", max: Math.max(.45, ...asrRows.map(r => r.micro_cer)) });
+    renderBars("asr-ready-chart", asrRows, (r) => r.ready_after_seconds, { label: (r) => r.name, format: (v) => `${fmt(v)} 秒`, max: Math.max(...asrRows.map(r => r.ready_after_seconds)) });
+    renderTable("asr-result-table", [
+      { label: "模型", render: (r) => r.name }, { label: "加载秒", render: (r) => fmt(r.model_load_seconds) }, { label: "预热秒", render: (r) => fmt(r.warmup_seconds) },
+      { label: "Ready 总秒", render: (r) => fmt(r.ready_after_seconds) }, { label: "热态均值秒", render: (r) => fmt(r.mean_seconds) },
+      { label: "P95 秒", render: (r) => fmt(r.p95_seconds) }, { label: "热态 RTF", render: (r) => fmt(r.mean_rtf, 3) },
+      { label: "micro CER", render: (r) => pct(r.micro_cer) }, { label: "加载显存增量 GiB", render: (r) => fmt(mibToGib(r.load_gpu_incremental_peak_mib)) }
+    ], asrRows);
+
+    const sourceRows = summary.asr_by_tts_source.map((row) => ({ ...row, label: `${displayAsr(row.model)} · ${displayTts(row.tts_engine)}` }));
+    renderBars("source-cer-chart", sourceRows, (r) => r.micro_cer, { label: (r) => r.label, format: pct, kind: "quality", max: Math.max(.55, ...sourceRows.map(r => r.micro_cer)) });
+    renderTable("asr-detail-table", [
+      { label: "ASR", render: (r) => displayAsr(r.model) }, { label: "TTS 来源", render: (r) => displayTts(r.tts_engine) }, { label: "用例", key: "sample_id" },
+      { label: "参考文本", key: "reference_text" }, { label: "识别文本", key: "transcript" }, { label: "CER", render: (r) => pct(r.cer) },
+      { label: "耗时秒", render: (r) => fmt(r.elapsed_seconds, 3) }, { label: "RTF", render: (r) => fmt(r.transcription_rtf, 3) }
+    ], asrRecords);
+
+    renderTable("test-hardware-table", [{ label: "项目", render: (r) => r[0] }, { label: "配置", render: (r) => r[1] }], metadata.test_hardware);
+    renderTable("hardware-requirements-table", [
+      { label: "负载", render: (r) => r[0] }, { label: "最低", render: (r) => r[1] }, { label: "建议", render: (r) => r[2] }, { label: "依据", render: (r) => r[3] }
+    ], metadata.hardware_requirements);
+    renderTable("historical-table", [
+      { label: "类型", render: (r) => r[0] }, { label: "模型", render: (r) => r[1] }, { label: "当前状态", render: (r) => r[2] }
+    ], metadata.historical_models);
+    metadata.methodology.forEach((item) => byId("methodology-list").append(text("li", item)));
+    metadata.limitations.forEach((item) => byId("limitations-list").append(text("li", item)));
+  </script>
+</body>
+</html>

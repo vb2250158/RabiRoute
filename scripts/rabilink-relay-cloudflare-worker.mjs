@@ -28,7 +28,9 @@ function isOpenApiPath(pathname) {
     pathname === "/rokid/rabilink/openapi.agent-token.json" ||
     pathname === "/openapi/rokid-rabilink-plugin.json" ||
     pathname === "/openapi/rokid-rabilink-plugin.manual-auth.json" ||
-    pathname === "/openapi/rokid-rabilink-plugin.agent-token.json"
+    pathname === "/openapi/rokid-rabilink-plugin.agent-token.json" ||
+    pathname === "/api/rabilink/speech/openapi.json" ||
+    pathname === "/openapi/rabilink-speech-api.json"
   );
 }
 
@@ -65,9 +67,11 @@ async function proxyOpenApi(request, env, upstreamBase) {
   }
 
   const document = await upstreamResponse.json();
+  const configuredServer = String(document?.servers?.[0]?.url || "");
+  const pathSuffix = configuredServer.startsWith("/") ? configuredServer : "";
   document.servers = [
     {
-      url: new URL(request.url).origin,
+      url: `${new URL(request.url).origin}${pathSuffix}`,
       description: "RabiLink Relay via Cloudflare Worker",
     },
   ];
@@ -96,6 +100,7 @@ async function proxyRequest(request, env) {
       openapi: `${requestUrl.origin}/rokid/rabilink/openapi.json`,
       manualAuthOpenapi: `${requestUrl.origin}/rokid/rabilink/openapi.manual-auth.json`,
       agentTokenOpenapi: `${requestUrl.origin}/rokid/rabilink/openapi.agent-token.json`,
+      speechOpenapi: `${requestUrl.origin}/api/rabilink/speech/openapi.json`,
     });
   }
 

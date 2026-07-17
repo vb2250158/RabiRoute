@@ -1,0 +1,7 @@
+config.json
+.deps/
+.pytest_cache/
+__pycache__/
+*.pyc
+output/
+temp/

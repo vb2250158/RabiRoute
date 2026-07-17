@@ -165,6 +165,8 @@ export type MetaPayload = {
     deviceId?: string;
     claimWaitMs?: number;
     replyIdleTimeoutMs?: number;
+    speechProxyEnabled?: boolean;
+    speechServiceUrl?: string;
   };
   rabiLinkRelayRuntime?: {
     state?: "disabled" | "incomplete" | "connecting" | "online" | "error";

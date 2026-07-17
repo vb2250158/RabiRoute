@@ -22,6 +22,8 @@ const rabiLinkRelayAppToken = ref("");
 const rabiLinkRelayDeviceId = ref("");
 const rabiLinkRelayClaimWaitMs = ref(60000);
 const rabiLinkRelayReplyIdleTimeoutMs = ref(60000);
+const rabiLinkSpeechProxyEnabled = ref(false);
+const rabiLinkSpeechServiceUrl = ref("http://127.0.0.1:8781");
 const gatewayActionId = ref("");
 const gatewayActionError = ref("");
 const deletingGatewayId = ref("");
@@ -45,6 +47,8 @@ function loadRabiLinkRelayForm(): void {
   rabiLinkRelayDeviceId.value = relay.deviceId || store.meta.computerName || "";
   rabiLinkRelayClaimWaitMs.value = Number(relay.claimWaitMs || 60000);
   rabiLinkRelayReplyIdleTimeoutMs.value = Number(relay.replyIdleTimeoutMs || 60000);
+  rabiLinkSpeechProxyEnabled.value = relay.speechProxyEnabled === true;
+  rabiLinkSpeechServiceUrl.value = relay.speechServiceUrl || "http://127.0.0.1:8781";
 }
 
 async function saveDirConfig() {
@@ -85,7 +89,9 @@ async function saveRabiIdentity(): Promise<boolean> {
           token: rabiLinkRelayAppToken.value,
           deviceId: rabiLinkRelayDeviceId.value,
           claimWaitMs: Number(rabiLinkRelayClaimWaitMs.value || 60000),
-          replyIdleTimeoutMs: Number(rabiLinkRelayReplyIdleTimeoutMs.value || 60000)
+          replyIdleTimeoutMs: Number(rabiLinkRelayReplyIdleTimeoutMs.value || 60000),
+          speechProxyEnabled: rabiLinkSpeechProxyEnabled.value,
+          speechServiceUrl: rabiLinkSpeechServiceUrl.value
         }
       })
     });
@@ -443,8 +449,8 @@ const selectedAgentNote = computed(() => {
         <v-divider class="my-4" />
         <div class="section-title-row compact-row mb-2">
           <div>
-            <div class="section-title small-title">RabiLink Relay</div>
-            <div class="section-note">全局连接设置。开启后由 Manager 常驻登记本机，不依赖某条路由启动。</div>
+            <div class="section-title small-title">RabiLink 系统转接服务</div>
+            <div class="section-note">全局内置服务，不是消息端。开启后由 Manager 常驻登记本机，可被 WebGUI、语音服务和眼镜端共同使用。</div>
           </div>
           <div class="relay-global-controls">
             <v-chip :color="relayRuntimeColor" size="small" variant="tonal">{{ relayRuntimeLabel }}</v-chip>
@@ -474,6 +480,24 @@ const selectedAgentNote = computed(() => {
           <v-text-field v-model="rabiLinkRelayAppToken" label="Relay 应用 token" placeholder="X-RabiLink-Token" type="password" density="compact" hide-details />
           <v-text-field v-model.number="rabiLinkRelayClaimWaitMs" label="领取任务等待毫秒" type="number" min="0" max="60000" step="1000" density="compact" hide-details />
           <v-text-field v-model.number="rabiLinkRelayReplyIdleTimeoutMs" label="回复空闲超时毫秒" type="number" min="1000" max="120000" step="1000" density="compact" hide-details />
+        </div>
+        <v-divider class="my-4" />
+        <div class="section-title-row compact-row mb-2">
+          <div>
+            <div class="section-title small-title">转接本机 TTS / ASR API</div>
+            <div class="section-note">启用后，外部可用 Relay 应用 token 直接调用本机语音服务；本机仍只监听回环地址。</div>
+          </div>
+          <v-switch
+            v-model="rabiLinkSpeechProxyEnabled"
+            label="允许语音中转"
+            color="success"
+            density="compact"
+            inset
+            hide-details
+          />
+        </div>
+        <div class="form-grid">
+          <v-text-field v-model="rabiLinkSpeechServiceUrl" label="本机语音服务地址" placeholder="http://127.0.0.1:8781" density="compact" hide-details />
         </div>
       </v-card>
 

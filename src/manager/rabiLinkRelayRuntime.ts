@@ -1,4 +1,4 @@
-type RelayWebguiRequest = {
+type RelayProxyRequest = {
   id?: string;
   method?: string;
   path?: string;
@@ -15,6 +15,8 @@ export type RabiLinkRelayRuntimeConfig = {
   deviceName: string;
   claimWaitMs: number;
   localWebguiUrl: string;
+  speechProxyEnabled: boolean;
+  localSpeechUrl: string;
 };
 
 export type RabiLinkRelayRuntimeStatus = {
@@ -28,6 +30,7 @@ export type RabiLinkRelayRuntimeStatus = {
 export type RabiLinkRelayRuntimeOptions = {
   localRequestTimeoutMs?: number;
   localRequestAttempts?: number;
+  localSpeechRequestTimeoutMs?: number;
   relayWriteTimeoutMs?: number;
   relayWriteAttempts?: number;
 };
@@ -35,6 +38,7 @@ export type RabiLinkRelayRuntimeOptions = {
 const RETRY_DELAY_MS = 3000;
 const DEFAULT_LOCAL_REQUEST_TIMEOUT_MS = 5000;
 const DEFAULT_LOCAL_REQUEST_ATTEMPTS = 3;
+const DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS = 180000;
 const DEFAULT_RELAY_WRITE_TIMEOUT_MS = 5000;
 const DEFAULT_RELAY_WRITE_ATTEMPTS = 4;
 
@@ -64,9 +68,9 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function webguiRequests(body: Record<string, unknown>): RelayWebguiRequest[] {
+function proxyRequests(body: Record<string, unknown>): RelayProxyRequest[] {
   const requests = Array.isArray(body.requests) ? body.requests : [];
-  return requests.filter((item): item is RelayWebguiRequest => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  return requests.filter((item): item is RelayProxyRequest => Boolean(item && typeof item === "object" && !Array.isArray(item)));
 }
 
 async function relayJson(
@@ -129,9 +133,9 @@ async function relayJsonReliably(
   throw lastError instanceof Error ? lastError : new Error(String(lastError || "RabiLink Relay request failed."));
 }
 
-async function localFetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+async function localFetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, label: string): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error(`Local Rabi WebGUI request timed out after ${timeoutMs} ms.`)), timeoutMs);
+  const timer = setTimeout(() => controller.abort(new Error(`Local ${label} request timed out after ${timeoutMs} ms.`)), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
@@ -163,6 +167,24 @@ function safeLocalUrl(config: RabiLinkRelayRuntimeConfig, pathname: string): str
   return localUrl.toString();
 }
 
+function safeSpeechUrl(config: RabiLinkRelayRuntimeConfig, pathname: string): string {
+  const base = new URL(config.localSpeechUrl);
+  const localUrl = new URL(pathname.startsWith("/") ? pathname : `/${pathname}`, base);
+  localUrl.protocol = base.protocol;
+  localUrl.host = base.host;
+  return localUrl.toString();
+}
+
+function isLoopbackUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return ["http:", "https:"].includes(parsed.protocol)
+      && ["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function compactResponse(method: string, localPath: string, statusCode: number, body: Buffer): Buffer {
   if (!["POST", "PATCH", "PUT", "DELETE"].includes(method.toUpperCase())) return body;
   if (!localPath.startsWith("/gateways") && !localPath.startsWith("/manager-config")) return body;
@@ -185,7 +207,7 @@ async function finishWebguiRequest(
 
 async function proxyWebguiRequest(
   config: RabiLinkRelayRuntimeConfig,
-  request: RelayWebguiRequest,
+  request: RelayProxyRequest,
   options: Required<RabiLinkRelayRuntimeOptions>
 ): Promise<void> {
   const requestId = stringValue(request.id);
@@ -208,7 +230,7 @@ async function proxyWebguiRequest(
           method,
           headers,
           body: method === "GET" || method === "HEAD" ? undefined : requestBody
-        }, options.localRequestTimeoutMs);
+        }, options.localRequestTimeoutMs, "Rabi WebGUI");
         break;
       } catch (error) {
         lastError = error;
@@ -245,20 +267,98 @@ async function claimWebguiRequests(
   config: RabiLinkRelayRuntimeConfig,
   waitMs: number,
   signal: AbortSignal
-): Promise<RelayWebguiRequest[]> {
+): Promise<RelayProxyRequest[]> {
   const params = new URLSearchParams({
     limit: "1",
     deviceId: config.deviceId,
     deviceGuid: config.deviceGuid,
     deviceName: config.deviceName,
-    waitMs: String(waitMs)
+    waitMs: String(waitMs),
+    capabilities: config.speechProxyEnabled ? "webgui,speech" : "webgui"
   });
   const body = await relayJson(config, `/worker/webgui-requests?${params}`, {
     method: "GET",
     headers: relayHeaders(config),
     signal
   });
-  return webguiRequests(body);
+  return proxyRequests(body);
+}
+
+async function finishSpeechRequest(
+  config: RabiLinkRelayRuntimeConfig,
+  requestId: string,
+  body: Record<string, unknown>,
+  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>
+): Promise<void> {
+  await relayJsonReliably(config, `/worker/speech-requests/${encodeURIComponent(requestId)}/response`, {
+    method: "POST",
+    headers: relayHeaders(config, true),
+    body: JSON.stringify({ ...body, ...workerIdentity(config) })
+  }, options.relayWriteAttempts, options.relayWriteTimeoutMs);
+}
+
+async function proxySpeechRequest(
+  config: RabiLinkRelayRuntimeConfig,
+  request: RelayProxyRequest,
+  options: Required<RabiLinkRelayRuntimeOptions>
+): Promise<void> {
+  const requestId = stringValue(request.id);
+  if (!requestId) return;
+  try {
+    const method = stringValue(request.method).toUpperCase() || "GET";
+    const localPath = stringValue(request.path) || "/";
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(request.headers || {})) {
+      const lower = key.toLowerCase();
+      if (["accept", "content-type", "user-agent"].includes(lower)) headers[lower] = String(value || "");
+    }
+    const requestBody = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
+    const response = await localFetchWithTimeout(safeSpeechUrl(config, localPath), {
+      method,
+      headers,
+      body: method === "GET" || method === "HEAD" ? undefined : requestBody
+    }, options.localSpeechRequestTimeoutMs, "RabiSpeech");
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+    await finishSpeechRequest(config, requestId, {
+      ok: true,
+      statusCode: response.status,
+      headers: responseHeaders,
+      bodyBase64: Buffer.from(await response.arrayBuffer()).toString("base64")
+    }, options);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await finishSpeechRequest(config, requestId, {
+      ok: false,
+      statusCode: 502,
+      headers: { "content-type": "application/json; charset=utf-8" },
+      bodyBase64: Buffer.from(JSON.stringify({ error: { message, type: "local_speech_proxy_error" } }), "utf8").toString("base64"),
+      error: message
+    }, options);
+  }
+}
+
+async function claimSpeechRequests(
+  config: RabiLinkRelayRuntimeConfig,
+  waitMs: number,
+  signal: AbortSignal
+): Promise<RelayProxyRequest[]> {
+  const params = new URLSearchParams({
+    limit: "1",
+    deviceId: config.deviceId,
+    deviceGuid: config.deviceGuid,
+    deviceName: config.deviceName,
+    waitMs: String(waitMs),
+    capabilities: "webgui,speech"
+  });
+  const body = await relayJson(config, `/worker/speech-requests?${params}`, {
+    method: "GET",
+    headers: relayHeaders(config),
+    signal
+  });
+  return proxyRequests(body);
 }
 
 function normalizeConfig(config: RabiLinkRelayRuntimeConfig): RabiLinkRelayRuntimeConfig {
@@ -270,7 +370,9 @@ function normalizeConfig(config: RabiLinkRelayRuntimeConfig): RabiLinkRelayRunti
     deviceGuid: config.deviceGuid.trim(),
     deviceName: config.deviceName.trim(),
     claimWaitMs: Math.max(0, Math.min(60000, Number(config.claimWaitMs) || 0)),
-    localWebguiUrl: normalizeBaseUrl(config.localWebguiUrl)
+    localWebguiUrl: normalizeBaseUrl(config.localWebguiUrl),
+    speechProxyEnabled: Boolean(config.speechProxyEnabled),
+    localSpeechUrl: normalizeBaseUrl(config.localSpeechUrl)
   };
 }
 
@@ -288,6 +390,7 @@ export class RabiLinkRelayRuntime {
     this.options = {
       localRequestTimeoutMs: Math.max(100, Number(options.localRequestTimeoutMs) || DEFAULT_LOCAL_REQUEST_TIMEOUT_MS),
       localRequestAttempts: Math.max(1, Math.min(5, Number(options.localRequestAttempts) || DEFAULT_LOCAL_REQUEST_ATTEMPTS)),
+      localSpeechRequestTimeoutMs: Math.max(1000, Number(options.localSpeechRequestTimeoutMs) || DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS),
       relayWriteTimeoutMs: Math.max(100, Number(options.relayWriteTimeoutMs) || DEFAULT_RELAY_WRITE_TIMEOUT_MS),
       relayWriteAttempts: Math.max(1, Math.min(5, Number(options.relayWriteAttempts) || DEFAULT_RELAY_WRITE_ATTEMPTS))
     };
@@ -310,6 +413,14 @@ export class RabiLinkRelayRuntime {
     }
     if (!config.url || !config.token) {
       this.runtimeStatus = { state: "incomplete", message: "开启 Relay 前需要填写服务器地址和应用 token。" };
+      return;
+    }
+    if (!isLoopbackUrl(config.localWebguiUrl)) {
+      this.runtimeStatus = { state: "incomplete", message: "本机 Rabi WebGUI 地址必须使用 127.0.0.1、localhost 或 ::1。" };
+      return;
+    }
+    if (config.speechProxyEnabled && !isLoopbackUrl(config.localSpeechUrl)) {
+      this.runtimeStatus = { state: "incomplete", message: "本机语音服务地址必须使用 127.0.0.1、localhost 或 ::1。" };
       return;
     }
 
@@ -336,22 +447,34 @@ export class RabiLinkRelayRuntime {
     return generation === this.generation && !signal.aborted;
   }
 
-  private async run(config: RabiLinkRelayRuntimeConfig, generation: number, signal: AbortSignal): Promise<void> {
+  private markOnline(speechEnabled: boolean): void {
+    const now = new Date().toISOString();
+    this.runtimeStatus = {
+      state: "online",
+      message: speechEnabled
+        ? "RabiLink Relay 已连接，本机 WebGUI 与语音能力已在服务器上线。"
+        : "RabiLink Relay 已连接，本机已在服务器上线。",
+      lastConnectedAt: this.runtimeStatus.lastConnectedAt || now,
+      lastSuccessAt: now
+    };
+  }
+
+  private async runChannel(
+    config: RabiLinkRelayRuntimeConfig,
+    generation: number,
+    signal: AbortSignal,
+    claim: (waitMs: number, signal: AbortSignal) => Promise<RelayProxyRequest[]>,
+    proxy: (request: RelayProxyRequest) => Promise<void>
+  ): Promise<void> {
     let firstClaim = true;
     while (this.active(generation, signal)) {
       try {
-        const requests = await claimWebguiRequests(config, firstClaim ? 0 : config.claimWaitMs, signal);
+        const requests = await claim(firstClaim ? 0 : config.claimWaitMs, signal);
         firstClaim = false;
         if (!this.active(generation, signal)) return;
-        const now = new Date().toISOString();
-        this.runtimeStatus = {
-          state: "online",
-          message: "RabiLink Relay 已连接，本机已在服务器上线。",
-          lastConnectedAt: this.runtimeStatus.lastConnectedAt || now,
-          lastSuccessAt: now
-        };
+        this.markOnline(config.speechProxyEnabled);
         for (const request of requests) {
-          await proxyWebguiRequest(config, request, this.options);
+          await proxy(request);
         }
       } catch (error) {
         if (signal.aborted || abortError(error) || !this.active(generation, signal)) return;
@@ -366,5 +489,25 @@ export class RabiLinkRelayRuntime {
         await delay(RETRY_DELAY_MS, signal);
       }
     }
+  }
+
+  private async run(config: RabiLinkRelayRuntimeConfig, generation: number, signal: AbortSignal): Promise<void> {
+    const channels = [this.runChannel(
+      config,
+      generation,
+      signal,
+      (waitMs, channelSignal) => claimWebguiRequests(config, waitMs, channelSignal),
+      (request) => proxyWebguiRequest(config, request, this.options)
+    )];
+    if (config.speechProxyEnabled) {
+      channels.push(this.runChannel(
+        config,
+        generation,
+        signal,
+        (waitMs, channelSignal) => claimSpeechRequests(config, waitMs, channelSignal),
+        (request) => proxySpeechRequest(config, request, this.options)
+      ));
+    }
+    await Promise.all(channels);
   }
 }

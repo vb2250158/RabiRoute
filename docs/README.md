@@ -51,6 +51,7 @@
 
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
 - [语音交互工作站](voice-interaction-workstation.md) — FenneNote、角色对话和 OumuQ/TTS 接线。
+- [RabiSpeech 本机 TTS / ASR 插件](rabispeech-plugin.md) — 本机直接 API、左侧实时能力页、RabiLink 系统中转、CUDA 排障，以及仅代表目标测试机的闭环 HTML 基准报告。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
 - [RabiLink 眼镜端三条路线对比](rabilink-glasses-route-comparison.md) — 原生灵珠智能体、AIUI 与原生 App 的宿主、生命周期、设备能力、发布成本和当前建议。

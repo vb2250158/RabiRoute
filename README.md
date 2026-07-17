@@ -52,6 +52,8 @@ npm run start:manager
 
 Open [http://127.0.0.1:8790/](http://127.0.0.1:8790/) to enter RibiWebGUI. On first run, the Manager initializes a sanitized local configuration from `examples/data/` when no runtime data exists.
 
+The live speech page is [http://127.0.0.1:8790/#/speech](http://127.0.0.1:8790/#/speech). Its provider, model, and device status comes from the current PC. The bundled [benchmark report](http://127.0.0.1:8790/reports/rabispeech-model-benchmark.html) applies only to the test hardware identified in that report.
+
 For the shortest verified path:
 
 1. Open **Quick setup** and choose Heartbeat as the input.
@@ -95,6 +97,7 @@ Each route keeps ingress, policy, portable context, handler delivery, and outbou
 | Context | Recent messages, persona files, plans, memory references, source reply context, attachment evidence, and handler interface hints |
 | Handlers | Verified: Codex. Experimental: Copilot CLI and AstrBot. Manual handoff: Marvis. |
 | Control plane | Node.js Manager and RibiWebGUI for route lifecycle, configuration, status, logs, personas, and diagnostics |
+| Local speech | Experimental local-only RabiSpeech TTS/ASR API, live per-PC capability view, RabiLink transport proxy, and reproducible model benchmark report |
 | Safety | Outbox policy, source binding, adapter policy, NapCat file allowlists, and fail-closed Codex Runtime approval; a universal approval center is not implemented |
 | Observability | JSONL message history, adapter logs, handler packets, delivery records, heartbeat records, reply records, and delivery replay |
 
@@ -168,6 +171,7 @@ The status-aware documentation index is in [docs/README_en.md](docs/README_en.md
 | Copy a Route/persona pack or inspect hardware integrations | [Examples and subprojects](examples/README_en.md) |
 | Install and verify the first route | [Getting started](docs/getting-started_en.md) |
 | Inspect the code ownership map | [Project function map](docs/project-function-map_en.md) |
+| Run or extend local TTS / ASR | [RabiSpeech local TTS / ASR service](docs/rabispeech-plugin_en.md) |
 
 ## Development and contribution
 

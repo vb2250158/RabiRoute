@@ -18,6 +18,8 @@ export type RabiLinkRelayGlobalConfig = {
   deviceId: string;
   claimWaitMs: number;
   replyIdleTimeoutMs: number;
+  speechProxyEnabled: boolean;
+  speechServiceUrl: string;
 };
 
 export class RabiGlobalConfigStore {
@@ -107,7 +109,9 @@ function defaultRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig {
     token: "",
     deviceId: os.hostname() || "rabilink-pc",
     claimWaitMs: 60000,
-    replyIdleTimeoutMs: 60000
+    replyIdleTimeoutMs: 60000,
+    speechProxyEnabled: false,
+    speechServiceUrl: "http://127.0.0.1:8781"
   };
 }
 
@@ -124,6 +128,10 @@ function normalizeRabiLinkRelayConfig(raw: unknown): RabiLinkRelayGlobalConfig {
     token,
     deviceId: typeof source.deviceId === "string" && source.deviceId.trim() ? source.deviceId.trim() : defaults.deviceId,
     claimWaitMs: normalizeNumber(source.claimWaitMs, defaults.claimWaitMs, 0, 60000),
-    replyIdleTimeoutMs: normalizeNumber(source.replyIdleTimeoutMs, defaults.replyIdleTimeoutMs, 1000, 120000)
+    replyIdleTimeoutMs: normalizeNumber(source.replyIdleTimeoutMs, defaults.replyIdleTimeoutMs, 1000, 120000),
+    speechProxyEnabled: source.speechProxyEnabled === true,
+    speechServiceUrl: typeof source.speechServiceUrl === "string" && source.speechServiceUrl.trim()
+      ? source.speechServiceUrl.trim()
+      : defaults.speechServiceUrl
   };
 }

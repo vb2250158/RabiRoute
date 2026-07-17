@@ -80,7 +80,7 @@ examples/ 和 skills/
 
 ### Platform Adapter
 
-消息端 Adapter 在 `src/adapters/`：
+消息端 Adapter 在 `src/adapters/`。RabiLink Relay 例外：它是由 Manager 持有的系统级转接服务，不是消息端；眼镜端经它收发，当前内部仍保留 `rabilink` 兼容键：
 
 - `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别。
 - `wecomAdapter.ts`：接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。当前成熟度仍是 experimental，企业微信群聊字段尽量对齐 NapCat，专用字段只作为补充。
@@ -423,6 +423,11 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 - `napcat-rabiroute`
 - `xiaoai-rabiroute`
+- `rabi-speech`：独立本机 TTS / ASR 服务插件；不属于消息端或 Agent 端，Manager 只代理其回环 HTTP API。
+
+RabiSpeech 的模型基准仍归插件自身：`scripts/benchmark_models.py` 按 TTS → WAV → ASR 顺序采集原始数据，`benchmarks/` 保存公开语料、功能元数据和无外部依赖的 HTML 模板，`skills/benchmark-rabispeech-models/` 固定操作与验收顺序。生成后的公开报告进入 `ribiwebgui/public/reports/`，由 Vite 复制到 WebGUI 静态产物；运行期 WAV、JSON、CSV 和日志不进入前端或仓库。
+
+实时能力页归控制面：`src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`GET /api/speech/status` 把规范化结果交给 `ribiwebgui/src/pages/SpeechServicePage.vue`。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
 
 这些目录可以有自己的运行脚本和 README，但不要把真实 token、QQ 号、Cookie、本机路径写进公开示例。
 

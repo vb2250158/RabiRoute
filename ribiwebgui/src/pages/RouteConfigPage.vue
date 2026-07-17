@@ -241,7 +241,7 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     choices: [
       { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "接收 FenneNote 桌面语音转写", icon: "mdi-note-edit-outline" },
       { type: "xiaoai", title: "小米音箱 / 小爱", note: "接收小爱音箱语音转写", icon: "mdi-speaker-wireless" },
-      { type: "rabilink", title: "RabiLink / Relay 直连", note: "电脑端直连 Relay，转发 Rokid/灵珠文本到 Codex", icon: "mdi-access-point-network" }
+      { type: "rabilink", title: "眼镜端（经 RabiLink）", note: "眼镜是消息来源；RabiLink 只是系统内置的转接服务", icon: "mdi-glasses" }
     ]
   },
   {

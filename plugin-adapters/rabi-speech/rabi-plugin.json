@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "rabi-speech",
+  "name": "RabiSpeech",
+  "version": "0.1.0",
+  "kind": "local-service",
+  "description": "Independent local TTS/ASR provider gateway for direct use through RabiLink Relay.",
+  "runtime": {
+    "language": "python",
+    "entrypoint": "python -m rabispeech",
+    "defaultUrl": "http://127.0.0.1:8781",
+    "healthPath": "/health"
+  },
+  "capabilities": ["tts", "asr", "provider-registry", "rabilink-direct-api"],
+  "boundaries": {
+    "agentAdapter": false,
+    "messageAdapter": false,
+    "localOnly": true
+  }
+}

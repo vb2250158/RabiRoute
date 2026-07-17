@@ -12,6 +12,8 @@ function tempRoot(): string {
 test("RabiLink Relay uses an explicit global enabled switch", () => {
   const store = new RabiGlobalConfigStore(tempRoot());
   assert.equal(store.read().rabiLinkRelay.enabled, false);
+  assert.equal(store.read().rabiLinkRelay.speechProxyEnabled, false);
+  assert.equal(store.read().rabiLinkRelay.speechServiceUrl, "http://127.0.0.1:8781");
 
   const configuredButOff = store.patch({
     rabiLinkRelay: {

@@ -82,7 +82,9 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     deviceGuid: "guid-a",
     deviceName: "Test PC",
     claimWaitMs: 60000,
-    localWebguiUrl: `http://127.0.0.1:${localPort}`
+    localWebguiUrl: `http://127.0.0.1:${localPort}`,
+    speechProxyEnabled: false,
+    localSpeechUrl: "http://127.0.0.1:8781"
   });
 
   await waitFor(() => relayState.finishedBody !== undefined);
@@ -165,7 +167,9 @@ test("global Relay runtime bounds a stuck local GET and retries an uncertain Rel
     deviceGuid: "guid-a",
     deviceName: "Test PC",
     claimWaitMs: 60000,
-    localWebguiUrl: `http://127.0.0.1:${localPort}`
+    localWebguiUrl: `http://127.0.0.1:${localPort}`,
+    speechProxyEnabled: false,
+    localSpeechUrl: "http://127.0.0.1:8781"
   });
 
   await waitFor(() => finishCount >= 2, 3000);
@@ -178,6 +182,96 @@ test("global Relay runtime bounds a stuck local GET and retries an uncertain Rel
   );
 });
 
+test("global Relay runtime proxies the independent speech plugin without exposing Relay credentials", async (t) => {
+  const requestPayload = Buffer.from("fake-multipart-audio", "utf8");
+  const wavPayload = Buffer.from("RIFF-test-wave", "utf8");
+  const localState: Record<string, unknown> = {};
+  const localSpeech = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      localState.method = request.method;
+      localState.url = request.url;
+      localState.authorization = request.headers.authorization;
+      localState.contentType = request.headers["content-type"];
+      localState.body = Buffer.concat(chunks);
+      response.writeHead(200, { "content-type": "audio/wav", "x-rabi-provider": "fake-tts" });
+      response.end(wavPayload);
+    });
+  });
+  const localSpeechPort = await listen(localSpeech);
+  t.after(() => close(localSpeech));
+
+  let speechClaimCount = 0;
+  let declaredCapabilities = "";
+  const relayState: { finishedBody?: Record<string, unknown> } = {};
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (request.method === "GET" && url.pathname === "/worker/webgui-requests") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, requests: [] }));
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/worker/speech-requests") {
+      speechClaimCount += 1;
+      declaredCapabilities = url.searchParams.get("capabilities") || "";
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: true,
+        requests: speechClaimCount === 1 ? [{
+          id: "speech-1",
+          method: "POST",
+          path: "/v1/audio/transcriptions?language=zh",
+          headers: {
+            authorization: "Bearer must-not-reach-local-service",
+            "content-type": "multipart/form-data; boundary=test-boundary"
+          },
+          bodyBase64: requestPayload.toString("base64")
+        }] : []
+      }));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/worker/speech-requests/speech-1/response") {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        relayState.finishedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const relayPort = await listen(relay);
+  t.after(() => close(relay));
+
+  const runtime = new RabiLinkRelayRuntime({ localSpeechRequestTimeoutMs: 1000 });
+  t.after(() => runtime.stop());
+  runtime.sync({
+    enabled: true,
+    url: `http://127.0.0.1:${relayPort}`,
+    token: "relay-app-token",
+    deviceId: "pc-a",
+    deviceGuid: "guid-a",
+    deviceName: "Test PC",
+    claimWaitMs: 60000,
+    localWebguiUrl: "http://127.0.0.1:8790",
+    speechProxyEnabled: true,
+    localSpeechUrl: `http://127.0.0.1:${localSpeechPort}`
+  });
+
+  await waitFor(() => relayState.finishedBody !== undefined);
+  assert.equal(declaredCapabilities, "webgui,speech");
+  assert.equal(localState.method, "POST");
+  assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
+  assert.equal(localState.authorization, undefined);
+  assert.equal(localState.contentType, "multipart/form-data; boundary=test-boundary");
+  assert.deepEqual(localState.body, requestPayload);
+  assert.equal(relayState.finishedBody?.statusCode, 200);
+  assert.deepEqual(Buffer.from(String(relayState.finishedBody?.bodyBase64), "base64"), wavPayload);
+});
+
 test("global Relay runtime reports incomplete configuration without making a request", () => {
   const runtime = new RabiLinkRelayRuntime();
   runtime.sync({
@@ -188,7 +282,9 @@ test("global Relay runtime reports incomplete configuration without making a req
     deviceGuid: "guid-a",
     deviceName: "Test PC",
     claimWaitMs: 60000,
-    localWebguiUrl: "http://127.0.0.1:8790"
+    localWebguiUrl: "http://127.0.0.1:8790",
+    speechProxyEnabled: false,
+    localSpeechUrl: "http://127.0.0.1:8781"
   });
   assert.equal(runtime.status().state, "incomplete");
 });
