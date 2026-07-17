@@ -4,8 +4,8 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "ui",
-  "currentStep": "RibiWebGUI 已支持中英文运行时切换和英文项目文档；托盘面板已完成六视图、RabiLight 配色、动态关键词摘要和结构化计划展开，并通过 Qt 回归测试与完整打包验证",
-  "nextAction": "继续完善人格路由预览、计划步骤正式数据模型和跨端一致的排障入口",
+  "currentStep": "RibiWebGUI 已支持中英文运行时切换；使用手册现以 9 个任务主题、全文搜索、本页目录和章节深链直接服务软件使用者。托盘面板已完成六视图、RabiLight 配色、动态关键词摘要和结构化计划展开，并通过 Qt 回归测试与完整打包验证",
+  "nextAction": "为使用手册补齐真实脱敏界面截图，并继续完善人格路由预览、计划步骤正式数据模型和跨端一致的排障入口",
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-17T13:20:00+08:00",
-  "keywords": ["RibiWebGUI", "中英文", "项目文档", "托盘", "RabiLight", "计划展开", "Gateway", "状态"]
+  "updatedAt": "2026-07-17T18:37:22+08:00",
+  "keywords": ["RibiWebGUI", "中英文", "使用手册", "用户指南", "排障", "托盘", "RabiLight", "计划展开", "Gateway", "状态"]
 }

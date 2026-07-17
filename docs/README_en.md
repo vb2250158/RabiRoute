@@ -21,6 +21,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Start here
 
+- [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Task-based product instructions for first delivery, status, adapters, handlers, persona rules, troubleshooting, and safety, with screenshot placeholders at key actions.
 - [Current Capabilities and Maturity](current-capabilities_en.md) — **Current fact**. The most reliable feature entry, separating `verified`, `experimental`, `stub`, `planned`, and `historical` capabilities.
 - [Getting Started](getting-started_en.md) — **Current guide**. Install, start the Manager, open RibiWebGUI, and verify the first route.
 - [Configuration](configuration_en.md) — **Current guide**. Current fields, endpoint maturity, Codex Desktop IPC delivery, and handler configuration.

@@ -12,7 +12,7 @@ export const router = createRouter({
     { path: "/overview", component: OverviewPage, meta: { title: "控制台" } },
     { path: "/routes/:id?", component: RouteConfigPage, meta: { title: "消息适配器" } },
     { path: "/persona/:id?", component: PersonaTemplatePage, meta: { title: "Rabi 人格" } },
-    { path: "/docs", component: ProjectDocsPage, meta: { title: "项目文档" } },
+    { path: "/docs", component: ProjectDocsPage, meta: { title: "使用手册" } },
     { path: "/runtime", component: RuntimeLogPage, meta: { title: "日志诊断" } }
   ]
 });

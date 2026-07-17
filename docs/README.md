@@ -21,6 +21,7 @@
 
 ## 先看这里
 
+- [RibiWebGUI 使用手册](user-guide/README.md) — **现行指南**。面向软件使用者，按首次投递、界面状态、消息端、处理端、人格规则、排障和安全组织，并在关键操作点保留截图位。
 - [当前能力与成熟度](current-capabilities.md) — **当前事实**。按 `verified / experimental / stub / planned / historical` 区分真实能力，是目前最可靠的功能入口。
 - [快速上手](getting-started.md) — **现行指南**。安装、启动 Manager、打开 RibiWebGUI 和验证第一条 route。
 - [配置与接入](configuration.md) — **现行指南**。配置字段、消息端和处理端成熟度已按当前 Schema 与扫描结果校准。

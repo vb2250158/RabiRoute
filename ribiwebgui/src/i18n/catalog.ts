@@ -4,6 +4,7 @@ export const englishCatalog: Record<string, string> = {
   "Rabi 人格": "Rabi persona",
   "日志诊断": "Logs & diagnostics",
   "项目文档": "Project docs",
+  "使用手册": "User guide",
   "快速配置": "Quick setup",
   "打开配置目录": "Open config directory",
   "当前航线": "Current route",

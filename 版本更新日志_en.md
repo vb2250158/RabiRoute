@@ -8,6 +8,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.1.11 - 2026-07-17
 
+### RibiWebGUI product user guide
+
+- Renamed the WebGUI footer entry from Project Docs to User Guide. `/#/docs` no longer treats the developer function map as default product help and now renders the manually maintained Chinese and English Markdown under `docs/user-guide/`.
+- Organized the guide around first delivery, interface state, message adapters, handlers, persona rules, operations, safety, and support: nine topics and 18 Markdown files including the landing page. Fifteen placeholders specify the exact future screenshot and callouts.
+- Added multi-token full-text search, an on-page outline, locale-aware page selection, Markdown internal links, and shareable `?page=` deep links. Architecture, schemas, APIs, and the function map remain deeper developer material.
+- Corrected the public capability boundary against the current UI: Log Diagnostics has manual triggers but no Delivery replay control. Replay remains available through the Manager API and ledger. Updated both READMEs, documentation indexes, capability pages, function maps, and code architecture.
+- Updated the public Rabi example's WebGUI plan and recent memory with the new user-guide boundary, and recorded sanitized real screenshots as follow-up work.
+- The full build, all 197 automated tests, and configuration validation pass. Browser acceptance covers full-text search, internal links, invalid deep-link fallback, locale switching, and overflow-free layouts at 1600px and 390px widths.
+- This changes the WebGUI documentation entry and public guidance only. Route schemas, routing, handler delivery, and Outbox behavior are unchanged, with no runtime migration required.
+
 ### README brand story and onboarding path
 
 - Restored the brand-first hierarchy in both README languages with “Let Agents connect everything around us.” as the core slogan, grounded by signals from chat, voice, devices, and time. “RabiRoute does not own the Agent. It owns the context and the gates.” now summarizes the architecture boundary.
@@ -42,13 +52,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Added a top-bar `中 / EN` menu. `ribiwebgui/src/i18n/index.ts` is the single locale owner, stores the browser preference under `rabiroute:webgui:locale`, and keeps `<html lang>` synchronized. Locale is a UI preference and is never written to Route, role, or Manager configuration.
 - Added manually reviewed English copy, dynamic-status rules, and a DOM localizer for navigation, Console, Message Adapters, Persona, Logs & Diagnostics, Quick Setup, and related dialogs. `data-no-i18n`, code blocks, input bodies, and editable content are skipped; Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime data stay verbatim.
-- Chinese mode keeps the interactive Project Manual. English mode lazily loads `docs/**/*_en.md` and renders it with `marked`, avoiding a third English documentation source of truth.
-- Added five pure translation tests. The WebGUI production build passes with 652 transformed modules. Browser acceptance covered locale switching, Chinese restoration, Quick Setup, rule editing, public message-adapter settings, and a 700px narrow layout against isolated example data.
+- User Guide selects the Chinese or English Markdown under `docs/user-guide/` for the active locale and renders it with `marked`, avoiding a third page-content source.
+- Added five pure translation tests. The WebGUI production build passes with 626 transformed modules. Browser acceptance covered locale switching, Chinese restoration, Quick Setup, rule editing, public message-adapter settings, and a 700px narrow layout against isolated example data.
 
 ### Bilingual open-source docs and examples
 
 - Added manually maintained Chinese/English counterparts and top-level language links across README, architecture, configuration, getting started, troubleshooting, message adapters, RabiLink, AIUI, Android SDK, example personas, and archive guides.
-- English Project Docs in WebGUI render the repository `_en.md` pages directly instead of creating a third documentation source. Agent runtime semantics, personas, and skills are not mechanically translated.
+- The English User Guide renders `docs/user-guide/*_en.md` directly instead of creating a third documentation source. Agent runtime semantics, personas, and skills are not mechanically translated.
 - The public Rabi example plan and recent memory now record WebGUI locale switching, the tray `RabiLight` theme, and structured expanded plans without including runtime `data/`, real accounts, tokens, logs, or machine-private paths.
 
 ## 0.1.10 - 2026-07-16

@@ -180,7 +180,7 @@ function selectGateway(id: string) {
             GitHub
           </v-btn>
           <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-book-open-page-variant-outline" to="/docs">
-            项目文档
+            使用手册
           </v-btn>
           <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-folder-cog-outline" @click="store.openConfigFile('manager')">
             打开配置目录

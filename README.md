@@ -162,6 +162,7 @@ The status-aware documentation index is in [docs/README_en.md](docs/README_en.md
 
 | Goal | Guide |
 | --- | --- |
+| Use RibiWebGUI and complete the first delivery | [RibiWebGUI User Guide](docs/user-guide/README_en.md) |
 | See what is actually implemented | [Current capabilities and maturity](docs/current-capabilities_en.md) |
 | Browse current, experimental, planned, and historical docs | [Documentation index](docs/README_en.md) |
 | Copy a Route/persona pack or inspect hardware integrations | [Examples and subprojects](examples/README_en.md) |

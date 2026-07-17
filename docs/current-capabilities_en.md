@@ -89,13 +89,13 @@ There is no generic persistent Action Queue with a WebGUI approval center today.
 ## Manager and WebGUI
 
 - The Manager serves RibiWebGUI and HTTP APIs at `http://127.0.0.1:8790/` by default and owns route configuration, child-process lifecycle, scans, logs, and global settings.
-- Current WebGUI areas are Console, Message Adapters, Rabi Persona, Log Diagnostics, and Project Documentation. Quick Setup selects inputs, handlers, and a persona.
+- Current WebGUI areas are Console, Message Adapters, Rabi Persona, Log Diagnostics, and User Guide. Quick Setup selects inputs, handlers, and a persona.
 - Console manages the Rabi instance name/GUID, global RabiLink Relay connection, route/role directories, and route lifecycle.
 - Message Adapters includes NapCat multi-instance management, Remote Agent discovery/connection, external-adapter diagnostics, Agent scans, pipelines, and working-directory configuration.
 - Persona manages persona content, route variables, rules, route kinds, regex, schedules, and templates. The proposed dry-run preview is not implemented.
-- Log Diagnostics displays connection state, the Codex delivery channel, recent logs, manual triggers, and delivery replay.
+- Log Diagnostics displays connection state, the Codex delivery channel, recent logs, and manual triggers. Delivery replay has a Manager API and ledger, but the current page has no replay control.
 - The top bar supports runtime switching between Simplified Chinese and English. Locale state has one owner and is stored in browser `localStorage` under `rabiroute:webgui:locale`, with `<html lang>` kept in sync. It is a UI preference and is not written to Route, role, or Manager configuration.
-- English mode translates only registered interface copy and dynamic status text. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime data remain unchanged. The English Project Docs view loads the repository's `docs/**/*_en.md` files on demand instead of creating a third documentation source of truth.
+- English mode translates only registered interface copy and dynamic status text. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime data remain unchanged. User Guide renders the manually maintained Chinese and English Markdown under `docs/user-guide/` instead of creating a third page-content source.
 - Manager also exposes Agent thread bridge, Role Knowledge, Remote Agent, multi-Rabi, NapCat management, and RabiLink remote-WebGUI proxy APIs.
 
 ## Role knowledge and runtime data

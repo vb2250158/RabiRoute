@@ -10,7 +10,7 @@
 
 本文是 RabiRoute 的通用项目功能手册。它面向产品设计、GUI 改造、代码维护、排障和新 Agent 交接，不只服务某一个页面或某一次需求。
 
-配套搜索页在 RibiWebGUI 内：左侧栏底部 `GitHub` 按钮下面点击 `项目文档`，或访问 `/#/docs`。该页面随 WebGUI 一起构建和部署，RabiLink 远程 WebGUI 访问时也能使用。
+RibiWebGUI 的 `/#/docs` 现在是面向软件使用者的“使用手册”，直接展示 `docs/user-guide/` 的双语 Markdown。本文属于开发者事实地图，通过使用手册的深入资料链接或仓库文档索引进入。
 
 ## 使用方式
 
@@ -18,7 +18,7 @@
 - 想设计新 UI：先看“边界规则”和对应功能的“真源 / 消费点 / 生效时机 / 副作用”。
 - 想改代码：先看“分层地图”和“常见修改入口”。
 - 想排障：先看“运行数据与日志”。
-- 想确认功能是不是已有：打开 WebGUI 的 `项目文档` 页面搜索，优先查“当前状态”和“入口”。
+- 想确认功能是不是已有：先查[当前能力与成熟度](current-capabilities.md)，再用本文定位入口和代码 owner。
 
 ## 一句话定位
 
@@ -62,7 +62,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | 配置归一化 | 已有 | `GatewayDefinition`、`RouteProfileDefinition` | manager 读写配置、WebGUI 保存 | 读写配置时 | 可能自动补默认值、分配端口 | manager API | `src/shared/gatewayConfigModel.ts` | `docs/code-architecture.md` |
 | Manager 控制面 | 已有 | `data/manager.json`、runtime registry | WebGUI、远端 API、子进程管理 | manager 启动和 API 调用时 | 启停子进程、写配置 | `npm run manager`、`src/manager.ts` | `src/manager/controlPlaneRoutes.ts`、`src/manager/runtimeRegistry.ts` | `docs/windows-launcher-and-packaging.md` |
 | WebGUI | 已有 | manager HTTP API | 用户配置和排障 | 页面加载 / 用户操作时 | 调用 manager API，可能写配置或触发动作 | `ribiwebgui` | `ribiwebgui/src/router.ts`、`ribiwebgui/src/stores/gatewayStore.ts` | `docs/code-architecture.md` |
-| WebGUI 中英切换 | 已有 | 浏览器 `rabiroute:webgui:locale` 偏好、人工词库、仓库 `_en.md` | 导航、表单、状态、诊断和项目文档展示 | 用户切换语言或页面重渲染时 | 只改变界面展示和 `<html lang>`，不写项目配置 | 顶栏 `中 / EN` | `ribiwebgui/src/i18n/*`、`LocaleSwitcher.vue`、`ProjectDocsEnglish.vue` | `docs/code-architecture.md` |
+| WebGUI 中英切换与使用手册 | 已有 | 浏览器 `rabiroute:webgui:locale`、人工词库、`docs/user-guide/*.md` | 导航、表单、状态、诊断和用户手册 | 用户切换语言或页面重渲染时 | 只改变界面展示和 `<html lang>`，不写项目配置 | 顶栏 `中 / EN`、`/#/docs` | `ribiwebgui/src/i18n/*`、`LocaleSwitcher.vue`、`ProjectDocsPage.vue` | `docs/user-guide/README.md` |
 | QQ / NapCat 消息端 | 已验证，含一键恢复 | NapCat WS / HTTP、route config、`group-messages.jsonl`、`private-messages.jsonl` | forwarding、Outbox QQ 发送 | 收到 QQ 事件时；或用户点击“打开 NapCat”时 | 写消息日志，可能投递 Agent；合并转发通过 `get_forward_msg` 展开；Outbox 在 `replyToSource=true` 时生成真实 QQ 引用回复；明确点击后可启动绑定实例、请求已有 quick login、修复 OneBot 配置并打开已鉴权 WebUI；验证码和设备验证仍由用户完成 | route 消息端、路由页“打开 NapCat”、NapCat 管理 API | `src/adapters/napcatAdapter.ts`、`src/napcat.ts`、`src/napcatForwardMessages.ts`、`src/messageEndpoints/napcatManager.ts` | `docs/napcat-unattended.md` |
 | QQ route kind 判断 | 已有 | OneBot event、回复链日志 | `forwardMessage(routeKind, record)` | 收到群消息时 | 影响规则匹配 | NapCat adapter | `src/adapters/napcatAdapter.ts` | `docs/routing-and-personas.md` |
 | Webhook / FenneNote / XiaoAi | 实验支持 | HTTP payload、`voice-transcripts.jsonl` | forwarding、语音工作站、可选 RabiLink record-first 观察 | HTTP callback 到达时 | 写转写日志；普通模式可能投递 Agent，命中 `rabilinkRecordFirstSources` 时只写统一账本并等待审阅 | webhook 端口 / 路径、Route 变量 | `src/adapters/webhookAdapter.ts`、`src/rabilinkObservationRecorder.ts`、`src/messageEndpoints/webhookLikeScans.ts` | `docs/voice-interaction-workstation.md` |
@@ -105,7 +105,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 - 消息端和 Agent 端配置归 route：真源是 `adapterConfig.json`。
 - 人格正文、模板规则、计划、记忆和技能归 role：真源是 `data/roles/<RoleId>/`。
 - WebGUI 不是配置事实源。前端负责表单和展示，配置不变量应落在 `src/shared/gatewayConfigModel.ts` 或 manager 后端。
-- WebGUI locale 只是浏览器 UI 偏好。route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据不翻译；英文项目文档复用仓库 `_en.md`。
+- WebGUI locale 只是浏览器 UI 偏好。route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据不翻译；使用手册按语言读取 `docs/user-guide/` 对应文件。
 - 预览能力目前是拟新增设计，应走后端 dry-run，不能调用 `forwardMessageAndWait`。
 - 真实外发必须经过 Outbox / Action Gate。处理端不要绕过 RabiRoute 直接写 QQ、WeCom、RabiLink 或外部系统。
 - Codex adapter id 保持 `codex`；Codex/ChatGPT Desktop 是实际任务 owner，Desktop IPC 是唯一真实消息 transport。

@@ -184,7 +184,7 @@ WebGUI localization is split by responsibility:
 - `src/i18n/catalog.ts` contains manually reviewed English UI copy and dynamic-text rules.
 - `src/i18n/domLocalizer.ts` applies registered copy to Vue/Vuetify DOM while skipping `data-no-i18n`, code, editable content, and input bodies.
 - `src/components/LocaleSwitcher.vue` exposes the top-bar `中 / EN` control.
-- `src/pages/ProjectDocsEnglish.vue` lazily loads and renders `docs/**/*_en.md`, so the repository Markdown remains the English documentation source of truth.
+- `src/pages/ProjectDocsPage.vue` renders `docs/user-guide/*.md` with bilingual task navigation, full-text search, an on-page outline, and shareable `?page=` links. Deeper developer Markdown remains a separate repository source reached through links.
 
 The `rabiroute:webgui:locale` local-storage value is only a browser-side UI preference, never a project save. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values must stay verbatim; dynamic user-data regions are marked with `data-no-i18n`.
 

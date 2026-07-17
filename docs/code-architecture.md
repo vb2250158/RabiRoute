@@ -398,7 +398,7 @@ Gateway 配置的事实源 Module。
 - `src/i18n/catalog.ts`：人工校准的英文界面词条和动态文案规则。
 - `src/i18n/domLocalizer.ts`：把已登记界面文案应用到 Vue / Vuetify DOM；跳过 `data-no-i18n`、代码块、输入正文和可编辑内容。
 - `src/components/LocaleSwitcher.vue`：顶栏 `中 / EN` 切换入口。
-- `src/pages/ProjectDocsEnglish.vue`：按需加载并渲染仓库 `docs/**/*_en.md`，避免维护第三份英文文档。
+- `src/pages/ProjectDocsPage.vue`：加载并渲染 `docs/user-guide/*.md`，提供双语任务导航、全文搜索、本页目录和可分享的 `?page=` 深链接；开发者 Markdown 通过仓库链接继续保持独立事实源。
 
 前端可以做 UI 友好的默认值和展示转换，但配置不变量不要只存在前端。需要和后端一致的规则应进入 `src/shared/gatewayConfigModel.ts` 或由 manager 返回。
 

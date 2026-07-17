@@ -10,6 +10,8 @@ English | <a href="./project-function-map.md">简体中文</a>
 
 Use this page to locate the owner of a behavior before editing code. RabiRoute is the triage/dispatch layer: endpoints bring messages in, routing chooses what should happen, handlers do the work, and Outbox controls how results return.
 
+RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide/`. This developer fact map remains available through deeper-reading links and the repository documentation index.
+
 ## Layer map
 
 | Layer | Owns | Must not own | Main code |
@@ -46,7 +48,7 @@ Use this page to locate the owner of a behavior before editing code. RabiRoute i
 | Consolidated memory | current | consolidation result/read/recall | stable files and `viewedAt` | `/api/roles/:roleId/memory/consolidated` | `src/roleKnowledge.ts` |
 | Memory consolidation | current explicit flow | manual `memory-consolidation` trigger or API request | create run; result marks inputs and writes output | `/api/roles/:roleId/memory/consolidation-*` | `src/roleKnowledge.ts`, Manager role API |
 | Role skills | current | Markdown metadata and item reads | skill index/required-read context | `/api/roles/:roleId/skills` | `src/roleKnowledge.ts` |
-| WebGUI locale switching | current | browser `rabiroute:webgui:locale`, reviewed UI catalog, repository `_en.md` files | changes interface copy and `<html lang>` only | top-bar `中 / EN` | `ribiwebgui/src/i18n/*`, `LocaleSwitcher.vue`, `ProjectDocsEnglish.vue` |
+| WebGUI locale and User Guide | current | browser `rabiroute:webgui:locale`, reviewed UI catalog, `docs/user-guide/*.md` | changes interface copy and `<html lang>` only | top-bar `中 / EN`, `/#/docs` | `ribiwebgui/src/i18n/*`, `LocaleSwitcher.vue`, `ProjectDocsPage.vue` |
 | Route/packet preview | planned | future side-effect-free simulation | must not write logs, deliver, or refresh memory | future persona workbench | design document only |
 
 ## Boundary rules
@@ -59,7 +61,7 @@ Use this page to locate the owner of a behavior before editing code. RabiRoute i
 - Outbox is the only normal external-reply path.
 - `sent`, `draft`, `blocked`, and `failed` are results, not a persistent approval queue.
 - Packet construction may refresh memory `viewedAt`; explicit memory consolidation can create a run. A future preview must avoid these side effects.
-- WebGUI locale is only a browser UI preference. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values are not translated; English Project Docs reuse the repository `_en.md` files.
+- WebGUI locale is only a browser UI preference. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values are not translated; User Guide selects the matching file under `docs/user-guide/`.
 
 ## Runtime data
 
