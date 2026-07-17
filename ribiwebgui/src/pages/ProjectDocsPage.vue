@@ -5,6 +5,7 @@ import RabiLinkQuickStartGuide from "../components/docs/RabiLinkQuickStartGuide.
 import { useI18n } from "../i18n";
 import {
   rabiLinkAiuiDocPages,
+  type DocComparisonTable,
   type DocFlowDiagram,
   type RabiLinkQuickStartGuide as RabiLinkQuickStartGuideData
 } from "../docs/rabilinkAiuiDocs";
@@ -43,6 +44,8 @@ type DocPage = {
   featureNames?: string[];
   table?: "boundaries" | "runtimeData" | "editEntrypoints";
   diagram?: DocFlowDiagram;
+  diagramLabel?: string;
+  comparison?: DocComparisonTable;
   quickStart?: RabiLinkQuickStartGuideData;
 };
 
@@ -537,12 +540,17 @@ function pageMatches(page: DocPage, tokens: string[]): boolean {
     page.subtitle,
     page.summary,
     page.bullets.join(" "),
+    page.diagramLabel ?? "",
     page.diagram?.title ?? "",
     page.diagram?.caption ?? "",
     page.diagram?.lanes.flatMap((lane) => [
       lane.label,
       ...lane.steps.flatMap((step) => [step.title, step.detail])
     ]).join(" ") ?? "",
+    page.comparison?.title ?? "",
+    page.comparison?.caption ?? "",
+    page.comparison?.columns.flatMap((column) => [column.title, column.subtitle]).join(" ") ?? "",
+    page.comparison?.rows.flatMap((row) => [row.label, ...row.values]).join(" ") ?? "",
     page.quickStart?.phases.flatMap((phase) => [
       phase.title,
       phase.note,
@@ -582,7 +590,8 @@ const matchingPageCount = computed(() => visibleDocSections.value.reduce((sum, s
 const pageOutline = computed(() => {
   const items = [{ id: "doc-introduction", label: "概述" }];
   if (selectedPage.value.quickStart) items.push({ id: "doc-quick-start", label: "你要做什么" });
-  if (selectedPage.value.diagram) items.push({ id: "doc-flow-diagram", label: "流程图" });
+  if (selectedPage.value.diagram) items.push({ id: "doc-flow-diagram", label: selectedPage.value.diagramLabel ?? "流程图" });
+  if (selectedPage.value.comparison) items.push({ id: "doc-comparison", label: "对比表" });
   if (selectedPage.value.bullets.length) items.push({ id: "doc-key-points", label: "关键说明" });
   if (selectedPage.value.table === "boundaries") items.push({ id: "doc-boundaries", label: "项目边界" });
   if (selectedPage.value.featureNames?.length) items.push({ id: "doc-features", label: "相关功能" });
@@ -697,8 +706,32 @@ function selectSection(sectionTitle: string, landingPageId: string): void {
           </section>
 
           <section v-if="selectedPage.diagram" id="doc-flow-diagram" class="docs-article-section">
-            <h3>流程图</h3>
+            <h3>{{ selectedPage.diagramLabel ?? "流程图" }}</h3>
             <DocsFlowDiagram :diagram="selectedPage.diagram" />
+          </section>
+
+          <section v-if="selectedPage.comparison" id="doc-comparison" class="docs-article-section">
+            <h3>{{ selectedPage.comparison.title }}</h3>
+            <p>{{ selectedPage.comparison.caption }}</p>
+            <div class="docs-comparison-scroll">
+              <table class="docs-comparison-table">
+                <thead>
+                  <tr>
+                    <th scope="col">对比项</th>
+                    <th v-for="column in selectedPage.comparison.columns" :key="column.title" scope="col">
+                      <strong>{{ column.title }}</strong>
+                      <span>{{ column.subtitle }}</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in selectedPage.comparison.rows" :key="row.label">
+                    <th scope="row">{{ row.label }}</th>
+                    <td v-for="(value, index) in row.values" :key="`${row.label}-${index}`">{{ value }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <section v-if="selectedPage.bullets.length" id="doc-key-points" class="docs-article-section">

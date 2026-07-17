@@ -52,6 +52,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Voice interaction workstation](voice-interaction-workstation_en.md)
 - [RabiLink Relay](rabilink-relay-server_en.md)
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker_en.md)
+- [RabiLink glasses three-route comparison](rabilink-glasses-route-comparison_en.md) — host, lifecycle, device capability, release cost, and current guidance for native Lingzhu agent, AIUI, and native app routes.
 - [RabiLink phone edge hub](rabilink-phone-edge-hub_en.md)
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)
 - [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md)

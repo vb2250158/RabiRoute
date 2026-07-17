@@ -18,6 +18,23 @@ export type DocFlowDiagram = {
   lanes: DocFlowLane[];
 };
 
+export type DocComparisonColumn = {
+  title: string;
+  subtitle: string;
+};
+
+export type DocComparisonRow = {
+  label: string;
+  values: string[];
+};
+
+export type DocComparisonTable = {
+  title: string;
+  caption: string;
+  columns: DocComparisonColumn[];
+  rows: DocComparisonRow[];
+};
+
 export type RabiLinkQuickStartStep = {
   title: string;
   instruction: string;
@@ -45,15 +62,173 @@ export type RabiLinkQuickStartGuide = {
 export type RabiLinkAiuiDocPage = {
   id: string;
   title: string;
-  section: "RabiLink AIUI";
+  section: "RabiLink 眼镜端" | "RabiLink AIUI";
   subtitle: string;
   summary: string;
   bullets: string[];
   diagram: DocFlowDiagram;
+  diagramLabel?: string;
+  comparison?: DocComparisonTable;
   quickStart?: RabiLinkQuickStartGuide;
 };
 
 export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
+  {
+    id: "rabilink-glasses-routes",
+    title: "眼镜端三条路线",
+    section: "RabiLink 眼镜端",
+    diagramLabel: "能力归属架构图",
+    subtitle: "原生灵珠智能体、AIUI 页面和原生 App 是三种客户端宿主路线，不是三套互不兼容的 RabiRoute 后端。",
+    summary: "三条路线都可以把消息交给同一个 RabiLink Relay、RabiRoute Route、统一会话账本和 PC Agent。真正不同的是眼镜上由谁承载交互：原生灵珠智能体路线复用平台托管对话与 OpenAPI 工具；AIUI 路线在灵珠智能体下挂载 AIX 页面，获得自定义 HUD、前台原生 ASR/TTS 和受控页面逻辑；App 路线安装原生 Android 应用，以最高工程成本换取更完整的生命周期、设备 SDK 和系统集成空间。",
+    bullets: [
+      "原生灵珠智能体路线适合最快验证对话、工具调用和 Relay 连通性；它复用官方入口，但 UI、会话节奏和设备能力主要由平台决定。",
+      "AIUI 路线是当前自定义眼镜体验的主线：同一个灵珠智能体挂载 AIX 页面，页面前台可持续续接 ASR、消费主动下行并用原生 TTS 播报。",
+      "App 路线适合深度设备能力、原生生命周期和长期常驻采集研究；它需要 APK、签名、权限、SDK 兼容和真机安装维护，不能因为是原生 App 就自动承诺 24 小时后台录音。",
+      "自由度从原生灵珠智能体、AIUI 到原生 App 逐级提高，但平台代管能力逐级减少，发布、权限、生命周期和真机维护责任也逐级转移到项目自身。",
+      "三条路线可以并存：原生灵珠作为轻量入口和兼容路径，AIUI 承担当前产品化 HUD，App 作为需要系统权限或更强设备控制时的深化路线。",
+      "无论选择哪条路线，PC RabiRoute 仍拥有配置真源、统一账本、路由策略和动作安全门；眼镜客户端不应复制另一套 Agent、记忆或外发权限。"
+    ],
+    comparison: {
+      title: "三条路线差异对比",
+      caption: "选择路线时先看交互宿主和生命周期要求；Relay、RabiRoute、PC Agent 与 Outbox 可以保持同一套。",
+      columns: [
+        { title: "原生灵珠智能体", subtitle: "官方托管对话 + OpenAPI 工具" },
+        { title: "AIUI", subtitle: "灵珠智能体 + AIX 自定义页面" },
+        { title: "原生 App", subtitle: "眼镜 Android APK，可配手机伴侣" }
+      ],
+      rows: [
+        {
+          label: "眼镜端宿主",
+          values: [
+            "灵珠/Rizon 原生智能体会话，由平台负责对话壳和工具编排。",
+            "挂在同一灵珠智能体下的 AIUI/AIX 页面，由 QuickJS/Ink 页面承载 HUD 和状态机。",
+            "独立 Android 应用，直接使用眼镜 SDK、Android 组件和自有页面。"
+          ]
+        },
+        {
+          label: "典型入口",
+          values: [
+            "从官方助手、智能体列表或语音入口唤起智能体后对话。",
+            "由智能体调起页面，进入沉浸式连接对话或配置助手。",
+            "从设备应用入口启动 APK，也可由手机伴侣或设备命令协同。"
+          ]
+        },
+        {
+          label: "语音与推理归属",
+          values: [
+            "平台智能体负责一轮对话理解和工具调用；RabiRoute 通过 OpenAPI/Relay 接收请求。",
+            "页面用 AIUI 原生 ASR/TTS；配置助手的 LanguageModel 只选择白名单动作，主要推理仍由 PC Agent 完成。",
+            "App 自己选择 RokidAiSdk、系统能力、本地或云 ASR/TTS；业务推理仍可统一交给 PC Agent。"
+          ]
+        },
+        {
+          label: "能力归属边界",
+          values: [
+            "灵珠平台拥有唤醒、ASR/TTS、对话 UI 和工具调度；项目主要拥有 OpenAPI 工具与后端处理。",
+            "灵珠平台拥有智能体身份、入口和页面调起；AIUI 页面拥有 HUD、ASR/TTS 与前台状态机；PC 拥有主要 Agent 能力。",
+            "App 拥有 UI、语音接线、设备 SDK 和 Android 生命周期；PC 继续拥有 Agent、人格、记忆、配置与动作门。"
+          ]
+        },
+        {
+          label: "UI 自由度",
+          values: [
+            "最低。主要使用平台原生对话展示，适合标准问答和工具结果。",
+            "中高。可做定制 HUD、模式切换、触摸板交互和状态可视化，但受 AIUI 页面能力限制。",
+            "最高。可自定义完整页面、导航、通知和设备交互。"
+          ]
+        },
+        {
+          label: "连续交互与生命周期",
+          values: [
+            "更适合按需唤起的一轮或多轮会话，不作为持续前台 HUD 或后台采集保证。",
+            "页面前台可自动续接 ASR、持续消费下行；页面隐藏、退出或被回收后不能继续承诺录音。",
+            "可使用 Activity、Service 和 Android 生命周期深化常驻能力；仍受权限、系统和厂商限制，必须显式显示采集状态。"
+          ]
+        },
+        {
+          label: "设备能力",
+          values: [
+            "只使用灵珠平台向智能体和工具开放的能力。",
+            "使用 AIUI 提供的 ASR、TTS、LanguageModel、触摸和页面网络能力，不能任意取得 Android 系统权限。",
+            "最广，可接设备状态、相机、传感器、CustomCmd 和厂商 SDK，但兼容与授权成本也最高。"
+          ]
+        },
+        {
+          label: "总体自由度",
+          values: [
+            "低：平台代管最多，接入最快，但宿主行为和设备能力最难自定义。",
+            "中高：页面体验和前台语音可控，仍受 AIUI API、页面生命周期和发布平台约束。",
+            "最高：系统集成空间最大，同时自行承担权限、安全、兼容、发布和生命周期责任。"
+          ]
+        },
+        {
+          label: "发布与安装",
+          values: [
+            "配置并发布灵珠智能体，导入/绑定 OpenAPI 工具和应用凭据。",
+            "构建 AIX，在 Craft 上传并绑定灵珠智能体，提审后经手机添加并同步到眼镜。",
+            "构建、签名和安装 APK，处理权限、升级、设备兼容和可能的手机伴侣分发。"
+          ]
+        },
+        {
+          label: "工程成本",
+          values: [
+            "最低，适合先验证产品需求和端到端连通。",
+            "中等偏高，需要维护页面状态机、AIX 发布链和真机 AIUI 差异。",
+            "最高，需要原生 Android、设备 SDK、生命周期、安装和真机回归能力。"
+          ]
+        },
+        {
+          label: "最适合",
+          values: [
+            "快速问答、工具调用、兼容入口和低成本试验。",
+            "当前 RabiLink 的定制眼镜主体验：HUD、前台连续对话、主动消息和配置助手。",
+            "深度设备控制、系统级集成、复杂传感器能力和真正需要独立生命周期的场景。"
+          ]
+        },
+        {
+          label: "当前成熟度",
+          values: [
+            "已有 OpenAPI/插件兼容链，属于实验兼容路线。",
+            "已有实现与本地验收依据，仍需以当前发布版本完成外部审核和真眼镜证据。",
+            "已有 Android probe、SDK 和实验契约，尚未收敛为正式产品路线。"
+          ]
+        }
+      ]
+    },
+    diagram: {
+      title: "三条眼镜路线，共用一套后端",
+      caption: "上半段选择眼镜客户端宿主；进入 Relay 后，三条路线汇入相同的 RabiRoute、统一账本、PC Agent 和安全回传链。",
+      lanes: [
+        {
+          label: "原生灵珠智能体路线",
+          steps: [
+            { title: "灵珠平台拥有", detail: "唤醒 / ASR / TTS / 对话 UI / 工具调度", icon: "mdi-account-voice", kind: "agent" },
+            { title: "项目拥有 OpenAPI 工具", detail: "协议参数与 Relay 接线", icon: "mdi-api", kind: "service" },
+            { title: "RabiLink Relay", detail: "应用隔离的双向邮箱", icon: "mdi-cloud-sync-outline", kind: "service" },
+            { title: "PC 端拥有", detail: "Agent / 人格 / 记忆 / 配置 / 账本 / 动作门", icon: "mdi-desktop-tower-monitor", kind: "result" }
+          ]
+        },
+        {
+          label: "AIUI 路线",
+          steps: [
+            { title: "灵珠平台拥有", detail: "智能体身份 / 入口 / 页面调起", icon: "mdi-account-voice", kind: "agent" },
+            { title: "AIUI 页面拥有", detail: "HUD / ASR / TTS / 触摸 / 前台状态机", icon: "mdi-glasses", kind: "mode" },
+            { title: "RabiLink Relay", detail: "观察与主动消息独立推进", icon: "mdi-cloud-sync-outline", kind: "service" },
+            { title: "PC 端拥有", detail: "Agent / 人格 / 记忆 / 配置 / 账本 / 动作门", icon: "mdi-desktop-tower-monitor", kind: "result" }
+          ]
+        },
+        {
+          label: "原生 App 路线",
+          steps: [
+            { title: "Android App 拥有", detail: "UI / 语音接线 / 本地状态", icon: "mdi-android", kind: "input" },
+            { title: "App 生命周期拥有", detail: "设备 SDK / 权限 / Activity / Service", icon: "mdi-devices", kind: "mode" },
+            { title: "RabiLink Relay", detail: "复用同一设备消息契约", icon: "mdi-cloud-sync-outline", kind: "service" },
+            { title: "PC 端拥有", detail: "Agent / 人格 / 记忆 / 配置 / 账本 / 动作门", icon: "mdi-desktop-tower-monitor", kind: "result" }
+          ]
+        }
+      ]
+    }
+  },
   {
     id: "rabilink-quick-start",
     title: "快速开始",

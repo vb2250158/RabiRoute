@@ -52,6 +52,7 @@
 - [语音交互工作站](voice-interaction-workstation.md) — FenneNote、角色对话和 OumuQ/TTS 接线。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
+- [RabiLink 眼镜端三条路线对比](rabilink-glasses-route-comparison.md) — 原生灵珠智能体、AIUI 与原生 App 的宿主、生命周期、设备能力、发布成本和当前建议。
 - [RabiLink 手机边缘枢纽](rabilink-phone-edge-hub.md) — 手机/穿戴设备契约和 Android SDK。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。
 - [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 需求与实施追踪，不等同于全部完成。

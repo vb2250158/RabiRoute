@@ -8,6 +8,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.1.11 - 2026-07-17
 
+### Three documented RabiLink glasses routes
+
+- Added “Three glasses routes” to RibiWebGUI Project Docs, comparing the native Lingzhu agent, AIUI, and native Android app at the same level through a capability-ownership architecture and a horizontal table covering host, entry, wake/ASR/TTS/HUD/lifecycle/Agent ownership, overall freedom, release cost, fit, and maturity.
+- Clarified that all three routes share RabiLink Relay, RabiRoute, the unified conversation ledger, the PC Agent, and the Outbox safety gate. Current guidance uses AIUI as the primary custom experience, the native Lingzhu agent as a lightweight compatibility entry, and the app as the deep-device and independent-lifecycle branch.
+- Added reviewed Chinese and English route-selection guides to the documentation index. This change affects documentation and presentation only; Relay, Route, Agent, and device protocols are unchanged.
+- Updated the public example Rabi active plan and recent memory with the three routes, capability ownership, the freedom gradient, and the shared-backend boundary so later Agents do not mistake the historical phone-app design for the only main path.
+
 ### Six-view tray role-panel layout
 
 - The PySide6 floating panel now exposes Chat, Current, Plans, Recent Memory, Archived, and Diagnostics as first-level navigation destinations instead of hiding the last three in the overflow menu.

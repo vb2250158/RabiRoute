@@ -2132,6 +2132,74 @@ body::before {
   overflow-wrap: anywhere;
 }
 
+.docs-comparison-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid rgba(17, 32, 51, .12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .78);
+}
+
+.docs-comparison-table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+  color: #31515d;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.docs-comparison-table th,
+.docs-comparison-table td {
+  min-width: 190px;
+  border-right: 1px solid rgba(17, 32, 51, .08);
+  border-bottom: 1px solid rgba(17, 32, 51, .08);
+  padding: 12px 13px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.docs-comparison-table tr > :last-child {
+  border-right: 0;
+}
+
+.docs-comparison-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.docs-comparison-table thead th {
+  background: rgba(25, 191, 193, .09);
+  color: #0c2a4a;
+}
+
+.docs-comparison-table thead th:first-child,
+.docs-comparison-table tbody th {
+  min-width: 125px;
+  width: 125px;
+}
+
+.docs-comparison-table thead strong,
+.docs-comparison-table thead span {
+  display: block;
+}
+
+.docs-comparison-table thead strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.docs-comparison-table thead span {
+  margin-top: 3px;
+  color: #5d7182;
+  font-weight: 700;
+}
+
+.docs-comparison-table tbody th {
+  background: rgba(246, 248, 251, .78);
+  color: #0c2a4a;
+  font-weight: 900;
+}
+
 @media (max-width: 1280px) {
   .overview-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

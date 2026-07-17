@@ -5,8 +5,8 @@
   "status": "进行中",
   "priority": "high",
   "kind": "product",
-  "currentStep": "RabiLink AIUI 已完成 record-first 本地闭环：眼镜与显式配置的补充转写源先写统一会话账本，固定 Codex 线程在空闲、触摸板触发或周期反思时审阅，不再逐句启动 turn；普通回复和无 taskId 主动消息按独立 cursor 进入持久 TTS 队列。配置助手的 ASR/TTS 状态机、凭据无关存储指纹、运行证据时效、AIX/Craft UUID 一致性和 20 项本地验收均已收紧。",
-  "nextAction": "在用户明确授权发布并且 Rokid 手机、眼镜可用后完成外部真机闭环：上传并审核当前 AIX，验证前台连续 ASR、触摸板启动/steer、普通回复、无前置语音的主动播报、失败 TTS 恢复、配置助手状态机和跨重启 cursor；24 小时后台感知继续作为 FenneNote 或 Android foreground service 的独立路线。",
+  "currentStep": "RabiLink 眼镜客户端已明确为三条共用后端的路线：原生灵珠智能体承担低成本官方会话与 OpenAPI 兼容入口；AIUI 是当前定制主体验，已完成 record-first 账本、空闲/触摸板/周期审阅、主动下行、前台原生 ASR/TTS 和配置助手的本地闭环；原生 Android App 只在需要设备 SDK、系统权限或独立生命周期时深化。三条路线统一复用 Relay、RabiRoute、PC Agent 和 Outbox 安全门。",
+  "nextAction": "在用户明确授权发布并且 Rokid 手机、眼镜可用后完成 AIUI 外部真机闭环：上传并审核当前 AIX，验证前台连续 ASR、触摸板启动/steer、普通回复、无前置语音的主动播报、失败 TTS 恢复、配置助手状态机和跨重启 cursor；只有 AIUI 页面权限或生命周期被真机证明确实不足时，才把对应能力下沉到原生 App。",
   "waitingFor": "Craft 上传/审核授权，以及可用的 Rokid 手机和眼镜",
   "project": {
     "name": "RabiRoute",
@@ -20,6 +20,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-15T00:00:00+08:00",
-  "keywords": ["RabiLink", "AIUI", "record-first", "观察账本", "空闲审阅", "周期反思", "持续消息流", "主动投递", "原生 ASR", "原生 TTS", "配置助手", "Relay", "Action Gate", "真机验收"]
+  "updatedAt": "2026-07-17T00:00:00+08:00",
+  "keywords": ["RabiLink", "原生灵珠智能体", "AIUI", "原生 App", "三路线", "record-first", "观察账本", "空闲审阅", "周期反思", "持续消息流", "主动投递", "原生 ASR", "原生 TTS", "配置助手", "Relay", "Action Gate", "真机验收"]
 }

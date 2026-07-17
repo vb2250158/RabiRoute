@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-rabilink-active-intelligence",
-  "title": "RabiLink 眼镜主链已落为 record-first 前台主动消息端",
-  "focus": "RabiLink 统一观察账本与主动智能闭环",
-  "content": "RabiLink 连接对话已经采用 record-first：眼镜原生 ASR、显式配置的 FenneNote 或命名 Webhook observation 先写统一会话账本，不逐句创建 Codex turn；固定线程空闲后合并审阅，触摸板单击可以立即启动或 steer 审阅，没有新转写时也可按周期重新检查目标和未完成事项。页面按独立 cursor 持续消费应用级下行队列，普通回复和无 taskId 主动消息都能在用户沉默时到达并由原生 TTS 顺序播报。配置助手使用页面内 AIUI 能力，但只能调用白名单配置操作；ASR/TTS 生命周期用有界 watchdog 和重试恢复。这个闭环仍只承诺 AIUI 页面前台能力，不代表 24 小时后台录音。离线 observation、cursor 和待播 TTS 按不含凭据的稳定指纹隔离，主动外发、高风险动作和外部发布继续经过确认与 Action Gate。",
+  "title": "RabiLink 眼镜端按三条宿主路线演进",
+  "focus": "RabiLink 三路线能力归属与共享后端边界",
+  "content": "RabiLink 眼镜客户端分为三条可并存路线：原生灵珠智能体路线由平台拥有唤醒、ASR/TTS、对话 UI 和工具调度，适合低成本问答与 OpenAPI 兼容入口；AIUI 路线由灵珠平台拥有智能体身份和页面调起，AIX 页面拥有 HUD、前台 ASR/TTS、触摸和页面状态机，是当前定制主体验；原生 Android App 路线拥有 UI、语音接线、设备 SDK、权限和 Activity/Service 生命周期，只在需要深度设备能力或独立生命周期时深化。三条路线进入 Relay 后统一由 PC RabiRoute 和 Agent 拥有人格、计划、记忆、推理、配置真源、统一会话账本和 Outbox 安全门。AIUI 当前连接对话继续采用 record-first、空闲/触摸板/周期审阅和无 taskId 主动下行，只承诺页面前台能力；自由度从灵珠、AIUI 到 App 逐级提高，项目承担的权限、安全、兼容、发布和真机维护责任也同步提高。",
   "source": {
     "kind": "example",
-    "summary": "公开示例记忆：RabiLink AIUI 前台主动消息闭环和后续常驻感知边界"
+    "summary": "公开示例记忆：RabiLink 眼镜端三路线、能力归属和共享后端边界"
   },
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-15T00:00:00+08:00",
-  "keywords": ["RabiLink", "AIUI", "record-first", "观察账本", "空闲审阅", "周期反思", "持续下行", "主动消息", "眼镜原生 ASR", "眼镜原生 TTS", "配置助手", "前台驻留", "Action Gate", "隐私"]
+  "updatedAt": "2026-07-17T00:00:00+08:00",
+  "keywords": ["RabiLink", "原生灵珠智能体", "AIUI", "原生 App", "三路线", "能力归属", "自由度", "record-first", "观察账本", "空闲审阅", "周期反思", "持续下行", "主动消息", "眼镜原生 ASR", "眼镜原生 TTS", "配置助手", "前台驻留", "Action Gate", "隐私"]
 }
