@@ -178,7 +178,7 @@ test("AgentPacket exposes workspace paths as relative paths", () => {
   assert.equal(replyContext.privateLogPath, "data/route/main/private-messages.jsonl");
 });
 
-test("AgentPacket routes FenneNote voice transcript replies through FenneNote output", () => {
+test("AgentPacket migrates legacy FenneNote transcripts to RabiSpeech TTS output", () => {
   const route = routeProfile({
     resolvedPipeline: resolvePipeline(undefined, {
       outputAdapter: "codex",
@@ -206,8 +206,8 @@ test("AgentPacket routes FenneNote voice transcript replies through FenneNote ou
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
   assert.equal(replyContext.routeKind, "voice_transcript");
   assert.equal(replyContext.adapterType, "fennenote");
-  assert.equal(replyContext.outputAdapter, "fennenote");
-  assert.equal(replyContext.outputPipeline, "fennenote");
+  assert.equal(replyContext.outputAdapter, "tts");
+  assert.equal(replyContext.outputPipeline, "rabispeech");
   assert.equal(replyContext.replyToSource, false);
   assert.equal(packet.templateValues.promptOutputMode, "voice_short");
   assert.match(packet.message, /回复回传要求/);

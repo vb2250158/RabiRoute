@@ -34,7 +34,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Agent context injection](agent-context-injection_en.md) — **Current guide** for events, recent messages, role knowledge, paths, and reply context inside `AgentPacket`.
 - [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current guide** for replies, thread bridge, plans, memory, Remote Agent, and role skills.
 - [Plans and memory](plan-and-memory-model_en.md) — **Current guide** for Role Knowledge sources, recall, explicit consolidation, and side effects.
-- [Pipeline presets](pipeline-presets_en.md) — **Current guide** for Agent-session defaults, explicit external targets, Outbox statuses, and FenneNote wiring.
+- [Pipeline presets](pipeline-presets_en.md) — Agent-session defaults, explicit external targets, and Outbox statuses; FenneNote output is archival compatibility only.
 - [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) — **Current guide** for duplicate sessions, missing tools, inverted ownership, desktop startup dependencies, and verification.
 - [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) — **Current guide** for discovery, authentication, tasks, idempotent creation, delivery, results, tools, lifecycle, UI, security, and acceptance.
 - [Codex Desktop Agent Integration and Acceptance Contract](codex-desktop-agent-acceptance_en.md) — **Current fact** for stable IDs, side-effect-free scanning, automatic initialization, the Desktop owner boundary, and metadata bootstrap gates.
@@ -50,7 +50,10 @@ This directory contains current guides, experimental integrations, designs, rese
 ## Experimental integrations
 
 - [WeCom integration](wecom-integration_en.md)
-- [Voice interaction workstation](voice-interaction-workstation_en.md)
+- [Voice interaction workstation](voice-interaction-workstation_en.md) — historical wiring; FenneNote/OumuQ are retired in favor of RabiPC + RabiSpeech.
+- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, model/parameter discovery, persona voices, RabiPC, and RabiLink relay.
+- [Local speech model downloads](local-speech-model-downloads_en.md) — per-model sources, downloads, isolated environments, and validation.
+- [RabiSpeech performance report](rabispeech-performance-report_en.md) — six TTS and five main ASR models, cold/warm timing, quality indicators, hardware, and CUDA issues.
 - [RabiLink Relay](rabilink-relay-server_en.md)
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker_en.md)
 - [RabiLink glasses three-route comparison](rabilink-glasses-route-comparison_en.md) — host, lifecycle, device capability, release cost, and current guidance for native Lingzhu agent, AIUI, and native app routes.

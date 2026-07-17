@@ -92,7 +92,7 @@ Each route keeps ingress, policy, portable context, handler delivery, and outbou
 
 | Area | Implemented capability |
 | --- | --- |
-| Message inputs | Verified: NapCat / OneBot, Heartbeat, and the built-in role panel. Experimental: Remote Agent, FenneNote, XiaoAI, RabiLink, generic Webhook, and WeCom. Manual trigger is a Manager action, not an adapter. |
+| Message inputs | Verified: NapCat / OneBot, Heartbeat, and the built-in role panel. Experimental: Remote Agent, the RabiSpeech message endpoint, XiaoAI, RabiLink, generic Webhook, and WeCom. FenneNote is retired and remains readable only for legacy configuration compatibility. Manual trigger is a Manager action, not an adapter. |
 | Routing | Route profiles, persona-owned rules, direct `@`, reply chains, private messages, keywords, regexes, schedules, and per-route templates |
 | Context | Recent messages, persona files, plans, memory references, source reply context, attachment evidence, and handler interface hints |
 | Handlers | Verified: Codex. Experimental: Copilot CLI and AstrBot. Manual handoff: Marvis. |

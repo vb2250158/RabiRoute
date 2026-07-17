@@ -4,21 +4,28 @@
     "port": 8781,
     "max_upload_bytes": 26214400,
     "temp_dir": "temp",
-    "ffmpeg": ""
+    "ffmpeg": "",
+    "playback_dir": "output/playback-queue"
   },
   "providers": {
     "extensions": [],
     "tts": {
-      "default": "oumuq",
-      "oumuq": {
+      "default": "local-tts",
+      "local_tts": {
         "enabled": true,
-        "base_url": "http://127.0.0.1:8780",
         "default_worker_url": "http://127.0.0.1:8764",
+        "model": "onnx-vits",
+        "models": [
+          {"id": "onnx-vits", "name": "ONNX-VITS", "family": "VITS", "worker_url": "http://127.0.0.1:8764", "installed": false, "languages": ["zh", "ja", "en"], "features": ["fixed_speakers", "low_latency"]},
+          {"id": "indextts2", "name": "IndexTTS2", "family": "IndexTTS", "worker_url": "http://127.0.0.1:8765", "installed": false, "languages": ["zh", "en"], "features": ["voice_clone", "emotion_control", "duration_control"]},
+          {"id": "qwen3-tts-0.6b-base", "name": "Qwen3-TTS 0.6B Base", "family": "Qwen3-TTS", "worker_url": "http://127.0.0.1:8766", "installed": false, "languages": ["zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"], "features": ["voice_clone", "multilingual", "instructions"]},
+          {"id": "qwen3-tts-1.7b-base", "name": "Qwen3-TTS 1.7B Base", "family": "Qwen3-TTS", "worker_url": "http://127.0.0.1:8767", "installed": false, "languages": ["zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"], "features": ["voice_clone", "multilingual", "instructions"]},
+          {"id": "cosyvoice3-0.5b", "name": "Fun-CosyVoice3 0.5B", "family": "CosyVoice", "worker_url": "http://127.0.0.1:8768", "installed": false, "languages": ["zh", "en", "ja", "ko", "de", "fr", "es", "it", "ru"], "features": ["voice_clone", "multilingual", "streaming", "instructions"]},
+          {"id": "gpt-sovits", "name": "GPT-SoVITS", "family": "GPT-SoVITS", "worker_url": "http://127.0.0.1:8769", "installed": false, "languages": ["zh", "yue", "en", "ja", "ko"], "features": ["zero_shot", "few_shot", "voice_clone"]}
+        ],
         "default_voice": "default",
         "timeout_seconds": 180,
-        "allowed_output_roots": [
-          "../../../OumuQ"
-        ]
+        "allowed_output_roots": ["./output"]
       }
     },
     "asr": {
@@ -27,14 +34,49 @@
         "enabled": true,
         "preload": true,
         "model": "small",
-        "model_root": "../../../FenneNote/cache/models",
+        "model_root": "../../../models/rabispeech/asr/faster-whisper-cache",
+        "models": [
+          {"id": "tiny", "name": "faster-whisper tiny", "source": "Systran/faster-whisper-tiny"},
+          {"id": "small", "name": "faster-whisper small", "source": "Systran/faster-whisper-small"},
+          {"id": "large-v3-turbo", "name": "faster-whisper large-v3-turbo", "source": "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "path": "../../../models/rabispeech/asr/faster-whisper-large-v3-turbo"}
+        ],
         "device": "auto",
         "compute_type": "int8_float16",
         "cpu_compute_type": "int8",
         "local_files_only": true,
         "beam_size": 5,
         "vad_filter": true
-      }
+      },
+      "http_providers": [
+        {
+          "id": "qwen3-asr",
+          "enabled": true,
+          "default_model": "qwen3-asr-0.6b",
+          "timeout_seconds": 180,
+          "models": [
+            {"id": "qwen3-asr-0.6b", "name": "Qwen3-ASR 0.6B", "family": "Qwen3-ASR", "base_url": "http://127.0.0.1:8770", "source": "Qwen/Qwen3-ASR-0.6B", "installed": false, "languages": ["multilingual", "zh-dialects"], "features": ["language_detection", "streaming", "long_audio"]},
+            {"id": "qwen3-asr-1.7b", "name": "Qwen3-ASR 1.7B", "family": "Qwen3-ASR", "base_url": "http://127.0.0.1:8771", "source": "Qwen/Qwen3-ASR-1.7B", "installed": false, "languages": ["multilingual", "zh-dialects"], "features": ["language_detection", "streaming", "long_audio"]}
+          ]
+        },
+        {
+          "id": "sensevoice",
+          "enabled": true,
+          "default_model": "sensevoice-small",
+          "timeout_seconds": 180,
+          "models": [
+            {"id": "sensevoice-small", "name": "SenseVoiceSmall", "family": "SenseVoice", "base_url": "http://127.0.0.1:8772", "source": "FunAudioLLM/SenseVoiceSmall", "installed": false, "languages": ["zh", "yue", "en", "ja", "ko"], "features": ["language_detection", "emotion", "audio_events", "low_latency"]}
+          ]
+        },
+        {
+          "id": "fireredasr2",
+          "enabled": true,
+          "default_model": "fireredasr2-aed",
+          "timeout_seconds": 180,
+          "models": [
+            {"id": "fireredasr2-aed", "name": "FireRedASR2-AED", "family": "FireRedASR2", "base_url": "http://127.0.0.1:8773", "source": "FireRedTeam/FireRedASR2-AED", "installed": false, "languages": ["zh", "zh-dialects", "en"], "features": ["word_timestamps", "confidence", "speech", "singing"]}
+          ]
+        }
+      ]
     }
   }
 }

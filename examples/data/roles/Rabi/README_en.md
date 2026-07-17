@@ -12,6 +12,8 @@ This directory is a copyable persona example for `data/roles/Rabi/`. It shows ho
 
 Webhook and voice-transcript input are optional extensions. They require a matching message adapter and Route configuration; they are not enabled merely by copying this persona.
 
+Rabi's recent route also keeps live local speech capability separate from a static target-machine report. RabiSpeech is TTS/ASR infrastructure that does not enter an Agent, RabiLink is the system transport, and glasses, phones, or other clients remain the actual callers.
+
 ## Directory contents
 
 - `persona.md` defines identity, voice, boundaries, and routing behavior.

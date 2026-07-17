@@ -2,375 +2,186 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
-  <title>RabiSpeech 本机 TTS / ASR 模型性能报告</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RabiSpeech 本地 TTS / ASR 性能报告</title>
   <style>
-    :root {
-      --bg: #07111f;
-      --panel: rgba(15, 28, 46, .88);
-      --panel-strong: #11243c;
-      --line: rgba(148, 181, 218, .2);
-      --text: #eaf2ff;
-      --muted: #9fb2c9;
-      --cyan: #47d7d0;
-      --blue: #65a9ff;
-      --violet: #ad8cff;
-      --amber: #ffc96b;
-      --red: #ff7f91;
-      --green: #7de2a6;
-      --shadow: 0 22px 70px rgba(0, 0, 0, .28);
-      font-family: Inter, "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
-    }
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
-    body {
-      margin: 0;
-      color: var(--text);
-      background:
-        radial-gradient(circle at 12% 5%, rgba(71, 215, 208, .12), transparent 34rem),
-        radial-gradient(circle at 92% 8%, rgba(101, 169, 255, .12), transparent 32rem),
-        var(--bg);
-      line-height: 1.65;
-    }
-    a { color: var(--cyan); }
-    .shell { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 36px 0 72px; }
-    .hero {
-      position: relative;
-      overflow: hidden;
-      padding: clamp(28px, 5vw, 58px);
-      border: 1px solid var(--line);
-      border-radius: 28px;
-      background: linear-gradient(135deg, rgba(19, 43, 68, .96), rgba(10, 22, 38, .9));
-      box-shadow: var(--shadow);
-    }
-    .hero::after {
-      content: "";
-      position: absolute;
-      width: 260px;
-      height: 260px;
-      right: -70px;
-      top: -90px;
-      border: 1px solid rgba(71, 215, 208, .3);
-      border-radius: 50%;
-      box-shadow: 0 0 0 34px rgba(71, 215, 208, .04), 0 0 0 74px rgba(101, 169, 255, .025);
-    }
-    .eyebrow { color: var(--cyan); font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
-    h1 { max-width: 980px; margin: 12px 0 10px; font-size: clamp(34px, 6vw, 68px); line-height: 1.06; letter-spacing: -.045em; }
-    .hero p { max-width: 920px; margin: 0; color: var(--muted); font-size: clamp(16px, 2vw, 20px); }
-    .hero-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
-    .pill, .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      padding: 6px 11px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: rgba(8, 18, 31, .5);
-      color: var(--muted);
-      font-size: 12px;
-      white-space: nowrap;
-    }
-    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
-    .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 0; }
-    .toc a { padding: 7px 11px; border-radius: 10px; background: rgba(101, 169, 255, .09); text-decoration: none; font-size: 13px; }
-    .section { margin-top: 48px; scroll-margin-top: 20px; }
-    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 17px; }
-    h2 { margin: 0; font-size: clamp(26px, 3.4vw, 39px); letter-spacing: -.03em; }
-    h3 { margin: 0 0 12px; font-size: 18px; }
-    .section-note, .muted { color: var(--muted); }
-    .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 22px; }
-    .metric, .card {
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background: var(--panel);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, .13);
-    }
-    .metric { padding: 19px; }
-    .metric-label { color: var(--muted); font-size: 12px; }
-    .metric-value { margin-top: 5px; font-size: 27px; font-weight: 850; letter-spacing: -.03em; }
-    .metric-detail { margin-top: 4px; color: var(--muted); font-size: 12px; }
-    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-    .card { padding: 20px; overflow: hidden; }
-    .pipeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
-    .pipeline-step { position: relative; min-height: 122px; padding: 16px; border: 1px solid var(--line); border-radius: 15px; background: rgba(101, 169, 255, .065); }
-    .step-number { color: var(--cyan); font-size: 12px; font-weight: 800; }
-    .pipeline-step strong { display: block; margin: 6px 0; }
-    .pipeline-step span { color: var(--muted); font-size: 13px; }
-    .table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
-    table { width: 100%; border-collapse: collapse; min-width: 760px; font-size: 13px; }
-    th, td { padding: 12px 13px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-    th { position: sticky; top: 0; color: #c8ddf6; background: var(--panel-strong); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
-    tr:last-child td { border-bottom: 0; }
-    tbody tr:hover { background: rgba(101, 169, 255, .045); }
-    code { padding: 2px 6px; border-radius: 6px; background: rgba(101, 169, 255, .12); color: #d9e9ff; }
-    .yes { color: var(--green); }
-    .no { color: var(--muted); }
-    .warn { color: var(--amber); }
-    .chart { display: grid; gap: 12px; }
-    .bar-row { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(220px, 3fr) 86px; gap: 12px; align-items: center; }
-    .bar-label { overflow-wrap: anywhere; font-size: 13px; }
-    .bar-track { height: 16px; overflow: hidden; border-radius: 999px; background: rgba(148, 181, 218, .1); }
-    .bar-fill { height: 100%; min-width: 2px; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--cyan)); }
-    .bar-fill.quality { background: linear-gradient(90deg, var(--violet), var(--red)); }
-    .bar-value { color: #d6e6fa; font-variant-numeric: tabular-nums; text-align: right; }
-    .chart-legend { margin-bottom: 12px; color: var(--muted); font-size: 12px; }
-    .case-list { display: grid; gap: 12px; }
-    .case { padding: 16px; border-left: 3px solid var(--cyan); border-radius: 0 13px 13px 0; background: rgba(71, 215, 208, .055); }
-    .case strong { display: block; margin-bottom: 4px; }
-    .case p { margin: 4px 0; }
-    .case small { color: var(--muted); }
-    .callout { padding: 15px 17px; border: 1px solid rgba(255, 201, 107, .28); border-radius: 14px; background: rgba(255, 201, 107, .07); color: #f7dba6; }
-    .list { margin: 0; padding-left: 20px; }
-    .list li + li { margin-top: 8px; }
-    .footer { margin-top: 52px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-    @media (max-width: 1000px) {
-      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .pipeline { grid-template-columns: 1fr 1fr; }
-      .grid-2 { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 620px) {
-      .shell { width: min(100% - 18px, 1440px); padding-top: 12px; }
-      .hero { border-radius: 20px; padding: 24px 20px; }
-      .metric-grid, .pipeline { grid-template-columns: 1fr; }
-      .bar-row { grid-template-columns: 1fr; gap: 5px; }
-      .bar-value { text-align: left; }
-      .section { margin-top: 38px; }
-    }
-    @media print {
-      :root { --bg: #fff; --panel: #fff; --panel-strong: #f3f6fa; --line: #cbd5e1; --text: #142033; --muted: #526070; }
-      body { background: #fff; }
-      .shell { width: 100%; padding: 0; }
-      .hero, .card, .metric { box-shadow: none; }
-      .toc { display: none; }
-      .section { break-inside: avoid; }
-    }
+    :root { color-scheme: dark; --bg:#080b13; --panel:#111827; --line:#283348; --text:#e7edf7; --muted:#98a5b8; --cyan:#48d6ca; --violet:#a78bfa; --orange:#fb923c; --green:#6ee7b7; }
+    * { box-sizing:border-box }
+    body { margin:0; background:radial-gradient(circle at 12% 0,#132436 0,transparent 34%),var(--bg); color:var(--text); font:15px/1.65 Inter,"Segoe UI",sans-serif }
+    main { width:min(1180px,calc(100% - 32px)); margin:0 auto; padding:48px 0 72px }
+    h1 { margin:0; font-size:clamp(30px,5vw,56px); letter-spacing:-.04em }
+    h2 { margin:44px 0 14px; font-size:24px }
+    h3 { margin:28px 0 10px; font-size:18px }
+    p { color:var(--muted) }
+    .eyebrow { color:var(--cyan); text-transform:uppercase; letter-spacing:.16em; font-size:12px; font-weight:700 }
+    .lead { max-width:860px; font-size:17px }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:28px 0 }
+    .card { background:linear-gradient(155deg,rgba(24,34,52,.94),rgba(12,18,30,.94)); border:1px solid var(--line); border-radius:16px; padding:18px }
+    .card strong { display:block; font-size:25px; margin-top:3px }
+    .card span { color:var(--muted); font-size:13px }
+    .callout { border-left:3px solid var(--cyan); background:rgba(72,214,202,.07); padding:14px 18px; border-radius:0 12px 12px 0 }
+    .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:16px; background:rgba(12,18,30,.86) }
+    table { width:100%; border-collapse:collapse; min-width:820px }
+    th,td { padding:12px 14px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top }
+    th { position:sticky; top:0; background:#162033; color:#cbd5e1; font-size:12px; text-transform:uppercase; letter-spacing:.06em }
+    tr:last-child td { border-bottom:0 }
+    code { color:var(--cyan); background:#101827; border:1px solid #27334a; border-radius:6px; padding:2px 6px }
+    .good { color:var(--green); font-weight:700 }
+    .warn { color:var(--orange) }
+    .bars { display:grid; gap:12px; margin-top:16px }
+    .bar-row { display:grid; grid-template-columns:220px 1fr 76px; gap:12px; align-items:center }
+    .bar-track { height:12px; background:#1b2436; border-radius:99px; overflow:hidden }
+    .bar { height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--cyan),var(--violet)) }
+    ul { color:var(--muted) }
+    a { color:var(--cyan) }
+    footer { margin-top:48px; color:var(--muted); border-top:1px solid var(--line); padding-top:20px }
+    @media (max-width:800px) { .grid{grid-template-columns:1fr 1fr}.bar-row{grid-template-columns:125px 1fr 62px} }
   </style>
 </head>
 <body>
-  <main class="shell">
-    <header class="hero">
-      <div class="eyebrow">RabiSpeech · Local Model Benchmark</div>
-      <h1 id="report-title">RabiSpeech 本机 TTS / ASR 模型性能报告</h1>
-      <p id="report-subtitle"></p>
-      <div class="hero-meta">
-        <span class="status">本地模型</span>
-        <span class="pill" id="report-date"></span>
-        <span class="pill">TTS → WAV → ASR 闭环</span>
-        <span class="pill">RTX 4080 SUPER 16 GiB</span>
-      </div>
-      <nav class="toc" aria-label="报告目录">
-        <a href="#conclusions">结论</a><a href="#workflow">测试流程</a><a href="#cases">测试用例</a>
-        <a href="#tts">TTS</a><a href="#asr">ASR</a><a href="#accuracy">准确率明细</a>
-        <a href="#hardware">硬件</a><a href="#methodology">口径</a>
-      </nav>
-    </header>
+<main>
+  <div class="eyebrow">Local-only · 2026-07-17</div>
+  <h1>RabiSpeech 性能与功能报告</h1>
+  <p class="lead">六个本地 TTS、五个主要本地 ASR 的安装与实机冒烟结果。冷请求包含 worker 启动、模型加载/预热和首次推理；热请求表示模型已加载后的下一次推理。未调用任何付费云端语音 API。</p>
 
-    <div class="callout" style="margin:18px 0 0;border-color:rgba(255,188,86,.42);background:rgba(255,188,86,.09)"><strong>适用范围：</strong>本报告只代表下方“测试硬件”所列目标测试机、当次软件版本、模型、声线与测试语料。不同电脑的显卡、CPU、内存、驱动、并发和角色参考音不同，实际性能与效果请以该电脑重新运行同一基准的结果为准。</div>
+  <div class="grid">
+    <div class="card"><span>TTS 模型</span><strong>6</strong><span>含 GPT-SoVITS</span></div>
+    <div class="card"><span>主要 ASR</span><strong>5</strong><span>另保留 tiny / small</span></div>
+    <div class="card"><span>测试 GPU</span><strong>16 GiB</strong><span>RTX 4080 SUPER</span></div>
+    <div class="card"><span>最快 ASR 热态</span><strong>0.52 s</strong><span>large-v3-turbo</span></div>
+  </div>
 
-    <section id="conclusions" class="section">
-      <div class="section-head"><div><div class="eyebrow">Decision summary</div><h2>结论先行</h2></div></div>
-      <div id="headline-metrics" class="metric-grid"></div>
-      <div class="callout" style="margin-top:16px">推荐部署：ASR small 常驻 CUDA，ONNX-VITS 常驻 CPU；Qwen 与 IndexTTS2 在 16 GiB 显卡上按角色和功能路由、避免同时长期驻留。</div>
-    </section>
+  <div class="callout"><strong>GPT 的说明：</strong>这里的 <code>GPT-SoVITS</code> 是本地开源声线克隆方案，不是 OpenAI 的云端 GPT TTS。它已安装、接入统一 API，并完成冷/热态测试。</div>
 
-    <section id="workflow" class="section">
-      <div class="section-head"><div><div class="eyebrow">Closed-loop method</div><h2>测试流程</h2></div><div class="section-note">先 TTS，后 ASR；同一批音频、同一计分口径</div></div>
-      <div class="pipeline">
-        <div class="pipeline-step"><div class="step-number">01</div><strong>固定文本</strong><span>短句、中英混合、长指令三类公开测试语料。</span></div>
-        <div class="pipeline-step"><div class="step-number">02</div><strong>逐个 TTS</strong><span>每个引擎生成三条 WAV，记录首请求、热态、RTF、显存和波形。</span></div>
-        <div class="pipeline-step"><div class="step-number">03</div><strong>ASR 预热</strong><span>加载模型后，用短句 WAV 做一次不计分预热。</span></div>
-        <div class="pipeline-step"><div class="step-number">04</div><strong>交叉识别</strong><span>每个 ASR 识别全部 TTS 音频，保留逐句结果。</span></div>
-        <div class="pipeline-step"><div class="step-number">05</div><strong>统一统计</strong><span>计算 CER、耗时、RTF、P95，并生成 CSV、JSON 与本 HTML。</span></div>
-      </div>
-    </section>
+  <h2>测试硬件</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>项目</th><th>环境</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td>OS</td><td>Windows 11 Pro 64-bit</td><td>本机服务</td></tr>
+      <tr><td>CPU / RAM</td><td>Intel i9-14900KF，24C/32T / 47.8 GiB</td><td>ONNX-VITS 使用 CPU</td></tr>
+      <tr><td>GPU</td><td>RTX 4080 SUPER 16 GiB</td><td>大模型按需独占加载</td></tr>
+      <tr><td>驱动</td><td>596.21，报告 CUDA 13.2</td><td>驱动数字不等于 Python 所需 DLL 已安装</td></tr>
+    </tbody>
+  </table></div>
 
-    <section id="cases" class="section">
-      <div class="section-head"><div><div class="eyebrow">Public corpus</div><h2>测试用例</h2></div><div class="section-note">新增模型必须复用同一份 cases.zh-CN.json</div></div>
-      <div id="test-cases" class="case-list"></div>
-    </section>
+  <h2>对话文字样本</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>样本 ID</th><th>类型</th><th>逐字文本</th><th>观察目标</th></tr></thead>
+    <tbody>
+      <tr><td><code>short-dialogue</code></td><td>短句</td><td>你好，这是本地语音服务的速度测试。</td><td>首请求、固定中文发音和基础延迟</td></tr>
+      <tr><td><code>technical-mixed</code></td><td>中英混合</td><td>请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。</td><td>产品名、英文缩写和中文混读</td></tr>
+      <tr><td><code>long-instruction</code></td><td>长指令</td><td>如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。</td><td>长句停顿、完整性和持续生成</td></tr>
+      <tr><td><code>asr-smoke-reference</code></td><td>ASR 同源短句</td><td>热启动测试完成。声音已经由 Rabi 人格目录管理。</td><td>五个主要 ASR 的同音频 CER/字符准确率</td></tr>
+    </tbody>
+  </table></div>
+  <p>前三条是仓库固定的后续同文本盲听语料。下方六模型冷/热数据来自接入阶段的可用性冒烟，文本长度未完全统一，因此只能比较部署等待，不是严格的每秒生成吞吐排名。</p>
 
-    <section id="tts" class="section">
-      <div class="section-head"><div><div class="eyebrow">Text to speech</div><h2>TTS 功能与性能</h2></div><div class="section-note">RTF 小于 1 表示生成速度快于实时播放</div></div>
-      <div class="card"><h3>功能支持矩阵</h3><div class="table-wrap"><table id="tts-feature-table"></table></div></div>
-      <div class="grid-2" style="margin-top:16px">
-        <div class="card"><h3>热态实时因子（RTF）</h3><div class="chart-legend">越低越好；RTF = 1 为实时边界。</div><div id="tts-rtf-chart" class="chart"></div></div>
-        <div class="card"><h3>首请求耗时</h3><div class="chart-legend">Qwen / Index 含懒加载；ONNX 本轮已常驻，不是冷启动。</div><div id="tts-first-chart" class="chart"></div></div>
-      </div>
-      <div class="card" style="margin-top:16px"><h3>精确结果</h3><div class="table-wrap"><table id="tts-result-table"></table></div></div>
-    </section>
+  <h2>语音消息端实机功能</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>项目</th><th>本机条件</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td>设备发现</td><td>Windows PortAudio / sounddevice</td><td>47 个输入端点；默认物理设备 Maono Wireless Mic RX</td></tr>
+      <tr><td>真实采集流</td><td>设备索引 1，请求 16 kHz 单声道</td><td>启动成功，状态与实时 RMS 电平可读</td></tr>
+      <tr><td>常驻恢复</td><td>监听中重启 RabiSpeech</td><td>自动恢复同一设备、模型和会话</td></tr>
+      <tr><td>RabiPC 代理</td><td>Manager 8790 回环接口</td><td>设备、启动、状态、停止全部通过</td></tr>
+      <tr><td>公网边界</td><td>RabiLink 通用 token</td><td>普通 TTS/ASR 可用；麦克风控制返回 404</td></tr>
+    </tbody>
+  </table></div>
 
-    <section id="asr" class="section">
-      <div class="section-head"><div><div class="eyebrow">Automatic speech recognition</div><h2>ASR 功能、预热与性能</h2></div><div class="section-note">每个模型 1 条不计分预热 + 9 条正式识别</div></div>
-      <div class="card"><h3>功能支持矩阵</h3><div class="table-wrap"><table id="asr-feature-table"></table></div></div>
-      <div class="grid-2" style="margin-top:16px">
-        <div class="card"><h3>总体字符错误率（CER）</h3><div class="chart-legend">越低越好；本轮语料为九条 TTS 合成中文音频。</div><div id="asr-cer-chart" class="chart"></div></div>
-        <div class="card"><h3>加载与预热</h3><div class="chart-legend">模型 ready 前的加载 + 不计分音频预热。</div><div id="asr-ready-chart" class="chart"></div></div>
-      </div>
-      <div class="card" style="margin-top:16px"><h3>准确率与性能汇总</h3><div class="table-wrap"><table id="asr-result-table"></table></div></div>
-    </section>
+  <h2>RabiLink 公网闭环与启动预热</h2>
+  <p>路径：同一测试 PC → 公网域名 → RabiLink Relay → 目标 Rabi PC 上的 RabiSpeech → 公网响应。它证明公网链路，但不等同于另一台电脑、另一条网络的验收。</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>项目</th><th>耗时 / 结果</th><th>解释</th></tr></thead>
+    <tbody>
+      <tr><td>公网 TTS 热态</td><td>3.97 s；150,060 字节 RIFF/WAV</td><td>ONNX-VITS，<code>play=false</code></td></tr>
+      <tr><td>未启动预热时的首个公网 ASR</td><td>114.28 s</td><td>首次模型加载与真实推理等待，不是 Relay 纯开销</td></tr>
+      <tr><td>本机 ASR 热态</td><td>0.53 s</td><td>同一 WAV、faster-whisper small</td></tr>
+      <tr><td>启用启动预热</td><td>在进程启动后 123.1 s 内观察到就绪</td><td>上界观测值；把冷等待前移到服务启动</td></tr>
+      <tr><td>预热后的首个 / 第二个公网 ASR</td><td>2.87 s / 0.58 s</td><td>均返回非空文本；第二次接近本机热态</td></tr>
+      <tr><td>Relay 重启重连后的公网 ASR</td><td>2.46 s</td><td>13 个模型恢复在线后的首个验证请求</td></tr>
+    </tbody>
+  </table></div>
+  <p>当前部署默认预热 faster-whisper small。首次真实音频仍会触发少量内核/路径热身，但已从 114.28 秒降到 2.87 秒；连续热态公网请求为 0.58 秒，Relay 重启重连后的首个请求为 2.46 秒。</p>
 
-    <section id="accuracy" class="section">
-      <div class="section-head"><div><div class="eyebrow">TTS × ASR</div><h2>交叉准确率</h2></div><div class="section-note">区分是 ASR 模型差异，还是某个 TTS 音频本身难识别</div></div>
-      <div class="grid-2">
-        <div class="card"><h3>按 TTS 来源分组的 CER</h3><div id="source-cer-chart" class="chart"></div></div>
-        <div class="card"><h3>如何读这张图</h3><ul class="list muted"><li>Qwen + small 的 CER 最低，说明本轮技术词和中文最容易回译。</li><li>ONNX 在 tiny 与 small 上都较高，主要问题更可能来自本轮固定声线的发音，而非单一 ASR。</li><li>回译 CER 不能代替真人盲听；自然度和音色相似度需要单独验收。</li></ul></div>
-      </div>
-      <div class="card" style="margin-top:16px"><h3>逐句 ASR 准确率明细</h3><div class="table-wrap"><table id="asr-detail-table"></table></div></div>
-    </section>
+  <h2>TTS：功能、模型体积与预热</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>模型</th><th>能力定位</th><th>体积</th><th>冷请求</th><th>热请求</th><th>输出时长</th></tr></thead>
+    <tbody>
+      <tr><td><code>onnx-vits</code></td><td>固定声线、中/日/英、CPU</td><td>0.12 GiB</td><td>27.15 s</td><td class="good">4.27 s</td><td>7.37 / 6.64 s</td></tr>
+      <tr><td><code>gpt-sovits</code></td><td>零/少样本克隆，中/粤/英/日/韩</td><td>5.13 GiB</td><td class="good">50.35 s</td><td>9.20 s</td><td>9.78 / 5.04 s</td></tr>
+      <tr><td><code>qwen3-tts-0.6b-base</code></td><td>10 语种、克隆、指令</td><td>2.34 GiB</td><td>131.41 s</td><td>17.98 s</td><td>7.12 / 3.12 s</td></tr>
+      <tr><td><code>qwen3-tts-1.7b-base</code></td><td>更大多语言模型、指令</td><td>4.23 GiB</td><td>154.89 s</td><td>36.85 s</td><td>6.96 / 7.52 s</td></tr>
+      <tr><td><code>indextts2</code></td><td>中文克隆、情绪/时长/拼音</td><td>8.29 GiB</td><td>114.51 s</td><td>18.13 s</td><td>6.14 / 2.79 s</td></tr>
+      <tr><td><code>cosyvoice3-0.5b</code></td><td>多语言、零样本、底层流式</td><td>9.08 GiB</td><td>129.85 s</td><td>14.95 s</td><td>6.16 / 2.96 s</td></tr>
+    </tbody>
+  </table></div>
+  <h3>TTS 热态请求延迟（秒，越短越好）</h3>
+  <div class="bars" aria-label="TTS warmed request latency comparison">
+    <div class="bar-row"><span>ONNX-VITS</span><div class="bar-track"><div class="bar" style="width:12%"></div></div><b>4.27 s</b></div>
+    <div class="bar-row"><span>GPT-SoVITS</span><div class="bar-track"><div class="bar" style="width:25%"></div></div><b>9.20 s</b></div>
+    <div class="bar-row"><span>Qwen3-TTS 0.6B</span><div class="bar-track"><div class="bar" style="width:49%"></div></div><b>17.98 s</b></div>
+    <div class="bar-row"><span>Qwen3-TTS 1.7B</span><div class="bar-track"><div class="bar" style="width:100%"></div></div><b>36.85 s</b></div>
+    <div class="bar-row"><span>IndexTTS2</span><div class="bar-track"><div class="bar" style="width:49%"></div></div><b>18.13 s</b></div>
+    <div class="bar-row"><span>CosyVoice3</span><div class="bar-track"><div class="bar" style="width:41%"></div></div><b>14.95 s</b></div>
+  </div>
+  <p class="warn">TTS 冒烟文本未全部统一，不能把这张表当成严格吞吐排名。六个模型都已用获授权的本地测试人格参考音生成有效 WAV；自然度、音色相似度和情绪需要同文本盲听。</p>
 
-    <section id="hardware" class="section">
-      <div class="section-head"><div><div class="eyebrow">Capacity planning</div><h2>测试硬件与建议配置</h2></div><div class="section-note">最低 / 建议为工程估算，不是逐档显卡实测</div></div>
-      <div class="grid-2">
-        <div class="card"><h3>本次测试机</h3><div class="table-wrap"><table id="test-hardware-table"></table></div></div>
-        <div class="card"><h3>模型硬件建议</h3><div class="table-wrap"><table id="hardware-requirements-table"></table></div></div>
-      </div>
-      <div class="card" style="margin-top:16px"><h3>历史模型边界</h3><div class="table-wrap"><table id="historical-table"></table></div></div>
-    </section>
+  <h2>ASR：同一条 5.04 秒中文音频</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>模型</th><th>能力</th><th>体积</th><th>冷请求/预热</th><th>热请求</th><th>CER</th></tr></thead>
+    <tbody>
+      <tr><td><code>faster-whisper large-v3-turbo</code></td><td>多语言、成熟生态</td><td>1.51 GiB</td><td>269.91 s</td><td class="good">0.52 s</td><td>22.73%</td></tr>
+      <tr><td><code>qwen3-asr-0.6b</code></td><td>多语言、中文方言</td><td>1.75 GiB</td><td class="good">52.63 s</td><td>1.90 s</td><td>9.09%</td></tr>
+      <tr><td><code>qwen3-asr-1.7b</code></td><td>较大参数量</td><td>4.38 GiB</td><td>85.82 s</td><td>1.53 s</td><td>9.09%</td></tr>
+      <tr><td><code>sensevoice-small</code></td><td>情绪、事件、多语言</td><td>0.88 GiB</td><td>112.38 s</td><td>0.74 s</td><td>18.18%</td></tr>
+      <tr><td><code>fireredasr2-aed</code></td><td>中英/方言、置信度、歌声</td><td>4.41 GiB</td><td>82.40 s</td><td>1.65 s</td><td class="good">4.55%</td></tr>
+    </tbody>
+  </table></div>
 
-    <section id="methodology" class="section">
-      <div class="section-head"><div><div class="eyebrow">Reproducibility</div><h2>指标口径与限制</h2></div></div>
-      <div class="grid-2">
-        <div class="card"><h3>方法</h3><ul id="methodology-list" class="list"></ul></div>
-        <div class="card"><h3>限制</h3><ul id="limitations-list" class="list"></ul></div>
-      </div>
-    </section>
+  <h3>ASR 热态请求延迟（秒，越短越好）</h3>
+  <div class="bars" aria-label="ASR warmed request latency comparison">
+    <div class="bar-row"><span>large-v3-turbo</span><div class="bar-track"><div class="bar" style="width:28%"></div></div><b>0.52 s</b></div>
+    <div class="bar-row"><span>Qwen3-ASR 0.6B</span><div class="bar-track"><div class="bar" style="width:100%"></div></div><b>1.90 s</b></div>
+    <div class="bar-row"><span>Qwen3-ASR 1.7B</span><div class="bar-track"><div class="bar" style="width:80%"></div></div><b>1.53 s</b></div>
+    <div class="bar-row"><span>SenseVoiceSmall</span><div class="bar-track"><div class="bar" style="width:39%"></div></div><b>0.74 s</b></div>
+    <div class="bar-row"><span>FireRedASR2</span><div class="bar-track"><div class="bar" style="width:87%"></div></div><b>1.65 s</b></div>
+  </div>
 
-    <footer class="footer">
-      <div id="scope-note"></div>
-      <div>生成器：plugin-adapters/rabi-speech/scripts/benchmark_models.py · 原始结果保留为 JSON / CSV，HTML 不包含 token、私有参考音路径或运行期绝对路径。</div>
-    </footer>
-  </main>
+  <h3>ASR 字符准确率（100% − CER，越长越好）</h3>
+  <div class="bars" aria-label="ASR character accuracy comparison">
+    <div class="bar-row"><span>FireRedASR2</span><div class="bar-track"><div class="bar" style="width:95.45%"></div></div><b>95.45%</b></div>
+    <div class="bar-row"><span>Qwen3-ASR 0.6B</span><div class="bar-track"><div class="bar" style="width:90.91%"></div></div><b>90.91%</b></div>
+    <div class="bar-row"><span>Qwen3-ASR 1.7B</span><div class="bar-track"><div class="bar" style="width:90.91%"></div></div><b>90.91%</b></div>
+    <div class="bar-row"><span>SenseVoiceSmall</span><div class="bar-track"><div class="bar" style="width:81.82%"></div></div><b>81.82%</b></div>
+    <div class="bar-row"><span>large-v3-turbo</span><div class="bar-track"><div class="bar" style="width:77.27%"></div></div><b>77.27%</b></div>
+  </div>
+  <p>逐字标准答案：“热启动测试完成。声音已经由 Rabi 人格目录管理。”准确率按 <code>100% − CER</code> 展示；它仅来自一条干净合成短句，是安装冒烟指标，不是生产准确率结论。</p>
 
-  <script id="benchmark-data" type="application/json">{"schema_version":1,"generated_at":"2026-07-17T06:01:25Z","summary":{"schema_version":1,"kind":"model-benchmark-summary","generated_at":"2026-07-17T05:25:24Z","tts":[{"engine":"onnx-vits","worker_ready_before":true,"first_request_class":"already-warm","first_request_seconds":1.4047040000150446,"first_request_audio_seconds":2.890884,"first_request_rtf":0.4859081166920031,"warm_samples":3,"warm_mean_seconds":1.6114656333326518,"warm_median_seconds":1.5129942999919876,"warm_p95_seconds":1.8763281699910295,"warm_mean_rtf":0.3670461360336208,"warm_median_rtf":0.35606132561495235,"warm_p95_rtf":0.472923437584298,"gpu_baseline_mib":3817.0,"gpu_peak_mib":3817.0,"gpu_incremental_peak_mib":0.0,"sample_rate_hz":22050,"max_clipped_fraction":0.0,"mean_rms_dbfs":-20.546333333333333},{"engine":"qwen3-tts-0.6b","worker_ready_before":false,"first_request_class":"cold-lazy-load","first_request_seconds":10.38953469999251,"first_request_audio_seconds":2.68,"first_request_rtf":3.876692052236011,"warm_samples":2,"warm_mean_seconds":10.328781199990772,"warm_median_seconds":10.328781199990772,"warm_p95_seconds":10.878308419985116,"warm_mean_rtf":1.4687634918999395,"warm_median_rtf":1.4687634918999395,"warm_p95_rtf":1.4883450393736368,"gpu_baseline_mib":3819.0,"gpu_peak_mib":6589.0,"gpu_incremental_peak_mib":2770.0,"sample_rate_hz":24000,"max_clipped_fraction":0.0,"mean_rms_dbfs":-24.804999999999996},{"engine":"indextts2","worker_ready_before":false,"first_request_class":"cold-lazy-load","first_request_seconds":46.04441780000343,"first_request_audio_seconds":3.314014,"first_request_rtf":13.893851323501782,"warm_samples":2,"warm_mean_seconds":6.94208960000833,"warm_median_seconds":6.94208960000833,"warm_p95_seconds":7.520365970001149,"warm_mean_rtf":1.0627312692081357,"warm_median_rtf":1.0627312692081357,"warm_p95_rtf":1.0939232022913834,"gpu_baseline_mib":3821.0,"gpu_peak_mib":12149.0,"gpu_incremental_peak_mib":8328.0,"sample_rate_hz":22050,"max_clipped_fraction":0.0,"mean_rms_dbfs":-19.297}],"asr":[{"model":"tiny","device":"cuda","compute_type":"int8_float16","model_load_seconds":4.406500000011874,"warmup_seconds":1.5216962000122294,"ready_after_seconds":5.928196200024104,"samples":9,"mean_seconds":0.19130006667304164,"median_seconds":0.14604000002145767,"p95_seconds":0.4177060200076083,"mean_rtf":0.03887283183565278,"median_rtf":0.028024383728461385,"p95_rtf":0.09247610686094578,"micro_cer":0.3888888888888889,"load_gpu_incremental_peak_mib":284.0,"warmup_gpu_peak_mib":4153.0},{"model":"small","device":"cuda","compute_type":"int8_float16","model_load_seconds":8.11674190001213,"warmup_seconds":1.63544329997967,"ready_after_seconds":9.7521851999918,"samples":9,"mean_seconds":0.23153376667242911,"median_seconds":0.234396400017431,"p95_seconds":0.33146056000259705,"mean_rtf":0.044959499477140376,"median_rtf":0.045455899470696406,"p95_rtf":0.05355502727902662,"micro_cer":0.2222222222222222,"load_gpu_incremental_peak_mib":519.0,"warmup_gpu_peak_mib":4489.0}],"asr_by_tts_source":[{"model":"tiny","tts_engine":"indextts2","samples":3,"micro_cer":0.3333333333333333,"mean_seconds":0.15016636668588035,"mean_rtf":0.02738151635373437},{"model":"tiny","tts_engine":"onnx-vits","samples":3,"micro_cer":0.5119047619047619,"mean_seconds":0.27548036667091463,"mean_rtf":0.06097065907735233},{"model":"tiny","tts_engine":"qwen3-tts-0.6b","samples":3,"micro_cer":0.32142857142857145,"mean_seconds":0.14825346666232994,"mean_rtf":0.028266320075871636},{"model":"small","tts_engine":"indextts2","samples":3,"micro_cer":0.15476190476190477,"mean_seconds":0.23211430001538247,"mean_rtf":0.042856749778745366},{"model":"small","tts_engine":"onnx-vits","samples":3,"micro_cer":0.4880952380952381,"mean_seconds":0.21560950000033094,"mean_rtf":0.045212785474459526},{"model":"small","tts_engine":"qwen3-tts-0.6b","samples":3,"micro_cer":0.023809523809523808,"mean_seconds":0.24687750000157394,"mean_rtf":0.046808963178216256}]},"texts":[{"id":"short-dialogue","category":"短句","text":"你好，这是本地语音服务的速度测试。","purpose":"观察短文本首请求、固定中文发音和基础延迟。"},{"id":"technical-mixed","category":"中英混合","text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","purpose":"观察产品名、英文缩写和中文句子混合时的可懂度。"},{"id":"long-instruction","category":"长指令","text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","purpose":"观察长句停顿、完整性和持续生成性能。"}],"metadata":{"schema_version":1,"title":"RabiSpeech 本机 TTS / ASR 模型性能报告","subtitle":"先生成 TTS，再把同一批 WAV 送入 ASR；同时比较功能、预热、性能、准确率与硬件需求。","benchmark_date":"2026-07-17","scope":"仅本地模型。云端 API 已归档，本轮未调用、未产生费用。","test_hardware":[["操作系统","Windows 11 专业版 64 位，Build 26200"],["CPU","Intel Core i9-14900KF，24 核 / 32 线程"],["内存","47.8 GiB"],["GPU","NVIDIA GeForce RTX 4080 SUPER，16,376 MiB"],["驱动","596.21"],["ASR 运行时","Python 3.10 / faster-whisper 1.2.1 / CTranslate2 4.8.1 / CUDA / int8_float16"],["Qwen 运行时","Qwen3-TTS-12Hz-0.6B-Base / qwen-tts 0.1.1 / PyTorch 2.12.0+cu126"],["IndexTTS2 运行时","indextts 2.0.0 / revision 14f0fc0 / PyTorch 2.8.0+cu128"],["ONNX 运行时","OumuQ split-graph worker / CPUExecutionProvider"]],"tts_models":{"onnx-vits":{"name":"ONNX-VITS","positioning":"即时固定声线","languages":"中文 / 日文 / 英文","voice":"147 个本地固定声线","clone":"不支持","emotion":"语速、noise scale、seed","streaming":"当前返回完整 WAV","device":"CPU","output":"22.05 kHz WAV"},"qwen3-tts-0.6b":{"name":"Qwen3-TTS 0.6B Base","positioning":"多语言参考音克隆","languages":"10 种语言","voice":"本地参考音克隆","clone":"支持","emotion":"参考音、语言与采样参数","streaming":"底层支持；当前 worker 返回完整 WAV","device":"CUDA","output":"24 kHz WAV"},"indextts2":{"name":"IndexTTS2","positioning":"中文克隆与情绪控制","languages":"中文优先","voice":"本地零样本参考音克隆","clone":"支持","emotion":"8 维情绪、情绪文本、拼音、采样","streaming":"分句生成；当前返回完整 WAV","device":"CUDA","output":"22.05 kHz WAV"}},"asr_models":{"tiny":{"name":"faster-whisper tiny","positioning":"健康检查 / 低资源草稿","languages":"多语言；本轮固定中文","input":"WAV / MP3 / FLAC / M4A / OGG / OPUS / WebM / MP4","controls":"语言提示、VAD、beam size","diarization":"不支持","device":"CUDA / CPU 回退"},"small":{"name":"faster-whisper small","positioning":"默认本机 ASR","languages":"多语言；本轮固定中文","input":"WAV / MP3 / FLAC / M4A / OGG / OPUS / WebM / MP4","controls":"语言提示、VAD、beam size","diarization":"不支持","device":"CUDA / CPU 回退"}},"hardware_requirements":[["ASR tiny","NVIDIA 4 GiB + RAM 8 GiB","GPU 6 GiB + RAM 16 GiB","官方规格与本次实测外推"],["ASR small","NVIDIA 4 GiB + RAM 8 GiB","GPU 8 GiB + RAM 16 GiB","默认常驻并给桌面留余量"],["ONNX-VITS","现代 4 核 CPU + RAM 8 GiB","8 核 CPU + RAM 16 GiB","本轮 CPU 已快于实时"],["Qwen3-TTS 0.6B","GPU 6 GiB + RAM 16 GiB","GPU 12 GiB + RAM 32 GiB","参考本轮 2.71 GiB 请求期显存增量"],["IndexTTS2","GPU 12 GiB + RAM 32 GiB","GPU 16 GiB + RAM 48 GiB","参考本轮 8.13 GiB 请求期显存增量"],["ASR + Qwen + Index 同驻","16 GiB 仅可勉强调度","GPU 24 GiB+ / RAM 64 GiB","16 GiB 应让 Qwen / Index 按需加载"]],"historical_models":[["ASR 本地","base / medium / large-v1/v2/v3","FenneNote 支持但本机未缓存，本轮未下载"],["ASR 云端","qwen3-asr-flash / qwen-audio-asr / mimo-v2.5-asr / gpt-4o-transcribe / whisper-1 / paraformer-v2","已归档，未调用"],["音频理解云端","qwen-audio-turbo / qwen2.5-omni-7b","已归档，未调用"],["TTS 云端","qwen3-tts-flash / qwen3-tts-vd / qwen3-tts-vc / cosyvoice-v3-plus / v3.5-plus","已归档，未调用"]],"methodology":["按固定顺序先对每个 TTS 生成三条 WAV，再让每个 ASR 模型识别全部九条 WAV。","TTS 第一条记为首请求；worker 测试前未 ready 时，第一条包含懒加载，后续样本用于热态统计。","ASR 单列模型加载，并用 ONNX-VITS 的 short-dialogue WAV 做一次不计分预热，再统计九条正式样本。","RTF = 处理耗时 / 音频时长；小于 1 表示快于实时。","CER = 字符编辑距离 / 参考字符数；先做 NFKC、大小写折叠并移除空白与标点，越低越好。","TTS 回译 CER 只代表可懂度代理，不等价于自然度、音色相似度、情绪贴合或 MOS。","GPU 每 0.2 秒用 nvidia-smi 采样；显存增量包含其它桌面进程噪声，不等于模型独占显存。"],"limitations":["语料是干净的合成语音，不代表真实麦克风、噪声、口音、远场、抢话与回声。","每个 TTS 只有 3 条、每个 ASR 只有 9 条；P95 只显示方向，不能作为生产 SLA。","ONNX worker 在本轮开始前已经 ready，因此没有与 Qwen / Index 同口径测冷启动。","当前接口返回完整结果，尚未覆盖流式首包、并发排队、长音频吞吐和 RabiLink 公网中转延迟。","以上结果仅代表本报告列出的目标测试机与当次环境；其他电脑必须重新运行基准，不能直接套用本报告性能数字。"]},"ttsRecords":[{"engine":"onnx-vits","run_order":1,"run_class":"first-request","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","completion_seconds":1.4047040000150446,"generation_rtf":0.4859081166920031,"audio_duration_seconds":2.890884,"sample_rate_hz":22050,"rms_dbfs":-18.976,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":0.0},{"engine":"onnx-vits","run_order":2,"run_class":"warm","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","completion_seconds":1.5129942999919876,"generation_rtf":0.35606132561495235,"audio_duration_seconds":4.249252,"sample_rate_hz":22050,"rms_dbfs":-23.852,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":0.0},{"engine":"onnx-vits","run_order":3,"run_class":"warm","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","completion_seconds":1.916698599990923,"generation_rtf":0.2591689657939069,"audio_duration_seconds":7.395556,"sample_rate_hz":22050,"rms_dbfs":-18.811,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":0.0},{"engine":"qwen3-tts-0.6b","run_order":1,"run_class":"first-request","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","completion_seconds":10.38953469999251,"generation_rtf":3.876692052236011,"audio_duration_seconds":2.68,"sample_rate_hz":24000,"rms_dbfs":-23.723,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":2675.0},{"engine":"qwen3-tts-0.6b","run_order":2,"run_class":"warm","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","completion_seconds":9.718195399997057,"generation_rtf":1.4905207668707143,"audio_duration_seconds":6.52,"sample_rate_hz":24000,"rms_dbfs":-23.013,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":90.0},{"engine":"qwen3-tts-0.6b","run_order":3,"run_class":"warm","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","completion_seconds":10.939366999984486,"generation_rtf":1.4470062169291649,"audio_duration_seconds":7.56,"sample_rate_hz":24000,"rms_dbfs":-27.679,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":5.0},{"engine":"indextts2","run_order":1,"run_class":"first-request","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","completion_seconds":46.04441780000343,"generation_rtf":13.893851323501782,"audio_duration_seconds":3.314014,"sample_rate_hz":22050,"rms_dbfs":-19.873,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":8207.0},{"engine":"indextts2","run_order":2,"run_class":"warm","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","completion_seconds":6.29956030001631,"generation_rtf":1.0973889726339663,"audio_duration_seconds":5.740499,"sample_rate_hz":22050,"rms_dbfs":-19.159,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":120.0},{"engine":"indextts2","run_order":3,"run_class":"warm","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","completion_seconds":7.5846189000003505,"generation_rtf":1.028073565782305,"audio_duration_seconds":7.377506,"sample_rate_hz":22050,"rms_dbfs":-18.859,"clipped_fraction":0.0,"gpu_memory_delta_peak_mib":14.0}],"asrRecords":[{"model":"tiny","tts_engine":"onnx-vits","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","transcript":"你好 这是本地银服的速度测试","cer":0.2,"character_errors":3,"reference_characters":15,"elapsed_seconds":0.07477609999477863,"transcription_rtf":0.025866171037917343},{"model":"tiny","tts_engine":"onnx-vits","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","transcript":"请提醒了点赞服务机令人见得更逃","cer":0.8387096774193549,"character_errors":26,"reference_characters":31,"elapsed_seconds":0.5534245000162628,"transcription_rtf":0.1302404517350966},{"model":"tiny","tts_engine":"onnx-vits","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","transcript":"如果网络在时段开请保留本地任务等待迎接恢复以后再重视一马时拜林义习惊整单报告","cer":0.3684210526315789,"character_errors":14,"reference_characters":38,"elapsed_seconds":0.19824050000170246,"transcription_rtf":0.026805354459043033},{"model":"tiny","tts_engine":"qwen3-tts-0.6b","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","transcript":"你好 这是本地云服务的速度测试","cer":0.13333333333333333,"character_errors":2,"reference_characters":15,"elapsed_seconds":0.09602329999324866,"transcription_rtf":0.03582958954971965},{"model":"tiny","tts_engine":"qwen3-tts-0.6b","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","transcript":"請提醒我檢查 原本類型服務器並確認 AS2與TTS接口正常","cer":0.5161290322580645,"character_errors":16,"reference_characters":31,"elapsed_seconds":0.13460879999911413,"transcription_rtf":0.02064552147225677},{"model":"tiny","tts_engine":"qwen3-tts-0.6b","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","transcript":"书国网络再是断开请保留本地任务等待联机恢复以后再重视并把失败原因写进整段报告","cer":0.23684210526315788,"character_errors":9,"reference_characters":38,"elapsed_seconds":0.214128299994627,"transcription_rtf":0.028323849205638494},{"model":"tiny","tts_engine":"indextts2","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","transcript":"这是本地云夫的速度测试","cer":0.4,"character_errors":6,"reference_characters":15,"elapsed_seconds":0.09287320001749322,"transcription_rtf":0.028024383728461385},{"model":"tiny","tts_engine":"indextts2","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","transcript":"請提醒我檢查瑞冕令可服務器並確認ASR與TTS接口正常","cer":0.4838709677419355,"character_errors":15,"reference_characters":31,"elapsed_seconds":0.14604000002145767,"transcription_rtf":0.025440297092893437},{"model":"tiny","tts_engine":"indextts2","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","transcript":"如果网络再是断开请保留本地任我等待连接恢复以后再冲事并把失败原因写进整个报告","cer":0.18421052631578946,"character_errors":7,"reference_characters":38,"elapsed_seconds":0.21158590001869015,"transcription_rtf":0.028679868239848284},{"model":"small","tts_engine":"onnx-vits","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","transcript":"以後,這是本地應付的速度測試","cer":0.6,"character_errors":9,"reference_characters":15,"elapsed_seconds":0.13358819999848492,"transcription_rtf":0.04621015578573368},{"model":"small","tts_engine":"onnx-vits","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","transcript":"请提醒王天禅 服务急 别惧人 紧 更疼","cer":0.8387096774193549,"character_errors":26,"reference_characters":31,"elapsed_seconds":0.20005879999371246,"transcription_rtf":0.04708094506838202},{"model":"small","tts_engine":"onnx-vits","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","transcript":"如果网络暂时断开,请保留本地援务等待严阶恢复以后再重视,一把失败原因写进诊单报告","cer":0.15789473684210525,"character_errors":6,"reference_characters":38,"elapsed_seconds":0.3131815000087954,"transcription_rtf":0.042347255569262866},{"model":"small","tts_engine":"qwen3-tts-0.6b","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","transcript":"你好 这是本地语音服务的速度测试","cer":0.0,"character_errors":0,"reference_characters":15,"elapsed_seconds":0.1550944999908097,"transcription_rtf":0.05787108208612302},{"model":"small","tts_engine":"qwen3-tts-0.6b","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","transcript":"请提醒我检查RabbiLink服务器并确认ASR与TTS接口正常","cer":0.03225806451612903,"character_errors":1,"reference_characters":31,"elapsed_seconds":0.2418914000154473,"transcription_rtf":0.03709990797782934},{"model":"small","tts_engine":"qwen3-tts-0.6b","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","transcript":"如果网络暂时断开,请保留本地任务,等待连接恢复以后再重视,并把失败原因写进诊断报告。","cer":0.02631578947368421,"character_errors":1,"reference_characters":38,"elapsed_seconds":0.3436465999984648,"transcription_rtf":0.045455899470696406},{"model":"small","tts_engine":"indextts2","sample_id":"short-dialogue","reference_text":"你好，这是本地语音服务的速度测试。","transcript":"这是本地云鹰服务的速度测试","cer":0.26666666666666666,"character_errors":4,"reference_characters":15,"elapsed_seconds":0.15115760001935996,"transcription_rtf":0.045611635925303866},{"model":"small","tts_engine":"indextts2","sample_id":"technical-mixed","reference_text":"请提醒我检查 RabiLink 服务器，并确认 ASR 与 TTS 接口正常。","transcript":"请提醒我检查瑞比林克服务器并确认ASR与TTS接口正常","cer":0.25806451612903225,"character_errors":8,"reference_characters":31,"elapsed_seconds":0.234396400017431,"transcription_rtf":0.04083206007307571},{"model":"small","tts_engine":"indextts2","sample_id":"long-instruction","reference_text":"如果网络暂时断开，请保留本地任务，等待连接恢复以后再重试，并把失败原因写进诊断报告。","transcript":"如果网络暂时断开,请保留本地任务,等待连接恢复以后再重视,并把失败原因写进诊断报告。","cer":0.02631578947368421,"character_errors":1,"reference_characters":38,"elapsed_seconds":0.31078890000935644,"transcription_rtf":0.04212655333785651}]}</script>
-  <script>
-    const payload = JSON.parse(document.getElementById("benchmark-data").textContent);
-    const { summary, texts, metadata, ttsRecords, asrRecords } = payload;
-    const fmt = (value, digits = 2) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
-    const pct = (value) => Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(1)}%` : "—";
-    const mibToGib = (value) => Number.isFinite(Number(value)) ? Number(value) / 1024 : null;
-    const byId = (id) => document.getElementById(id);
-    const text = (tag, value, className) => { const node = document.createElement(tag); node.textContent = value ?? "—"; if (className) node.className = className; return node; };
+  <h2>建议配置</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>场景</th><th>最低可用</th><th>推荐</th></tr></thead>
+    <tbody>
+      <tr><td>ONNX-VITS</td><td>4 核 CPU / 8 GiB RAM</td><td>8 核 CPU / 16 GiB RAM</td></tr>
+      <tr><td>GPT-SoVITS / Qwen 0.6B</td><td>NVIDIA 8 GiB / RAM 16 GiB</td><td>NVIDIA 12 GiB / RAM 32 GiB</td></tr>
+      <tr><td>Qwen 1.7B / FireRedASR2</td><td>NVIDIA 12 GiB / RAM 32 GiB</td><td>NVIDIA 16 GiB / RAM 48 GiB</td></tr>
+      <tr><td>IndexTTS2 / CosyVoice3</td><td>NVIDIA 12 GiB / RAM 32 GiB</td><td>NVIDIA 16–24 GiB / RAM 48–64 GiB</td></tr>
+      <tr><td>多个大模型常驻</td><td>16 GiB 不建议</td><td>NVIDIA 24 GiB+ / RAM 64 GiB</td></tr>
+    </tbody>
+  </table></div>
 
-    function renderTable(id, columns, rows) {
-      const table = byId(id);
-      const head = document.createElement("thead");
-      const header = document.createElement("tr");
-      columns.forEach((column) => header.append(text("th", column.label)));
-      head.append(header);
-      const body = document.createElement("tbody");
-      rows.forEach((row) => {
-        const tr = document.createElement("tr");
-        columns.forEach((column) => {
-          const td = document.createElement("td");
-          const rendered = column.render ? column.render(row) : row[column.key];
-          td.textContent = rendered ?? "—";
-          if (column.className) td.className = column.className(row);
-          tr.append(td);
-        });
-        body.append(tr);
-      });
-      table.replaceChildren(head, body);
-    }
+  <h2>接口与工程结论</h2>
+  <ul>
+    <li><code>GET /v1/models</code> 返回模型列表、安装状态、请求 schema、必填/可选参数与示例。</li>
+    <li>普通 TTS/ASR 是直接 API，不接入 Agent；只有显式“提交 Route”才进入消息路由。</li>
+    <li>角色声线由 <code>data/roles/&lt;RoleId&gt;/voice/</code> 管理；播放跨会话、人格、模型使用全局 FIFO。</li>
+    <li>RTX 4080 SUPER 16 GiB 使用单 GPU worker 按需加载更稳妥。</li>
+    <li>真实声卡流和服务重启恢复已通过；连续说话、噪声、回声、盲听和另一台电脑经 RabiLink 的公网往返延迟仍需用户验收。</li>
+  </ul>
 
-    function renderBars(id, rows, value, options = {}) {
-      const root = byId(id);
-      const values = rows.map(value).filter(Number.isFinite);
-      const max = options.max ?? Math.max(...values, 1);
-      rows.forEach((row) => {
-        const amount = Number(value(row));
-        const line = document.createElement("div");
-        line.className = "bar-row";
-        line.append(text("div", options.label(row), "bar-label"));
-        const track = document.createElement("div");
-        track.className = "bar-track";
-        const fill = document.createElement("div");
-        fill.className = `bar-fill ${options.kind || ""}`;
-        fill.style.width = `${Math.max(0, Math.min(100, amount / max * 100))}%`;
-        track.append(fill);
-        line.append(track);
-        line.append(text("div", options.format(amount), "bar-value"));
-        root.append(line);
-      });
-    }
+  <h2>Windows CUDA / DLL 记录</h2>
+  <p>NVIDIA 驱动不等于 Python 推理所需的 cuBLAS/cuDNN DLL 已安装。RabiSpeech 使用 NVIDIA 官方 wheel 安装到插件私有目录，并只为服务进程追加 DLL 路径。FireRedASR2 使用 Windows 兼容的 Python 3.10、PyTorch 2.1.0+cu118、Transformers 4.51.3、NumPy 1.26.1、kaldi_native_fbank 1.22.3 与 setuptools&lt;81。</p>
 
-    function displayTts(engine) { return metadata.tts_models[engine]?.name || engine; }
-    function displayAsr(model) { return metadata.asr_models[model]?.name || model; }
-
-    document.title = metadata.title;
-    byId("report-title").textContent = metadata.title;
-    byId("report-subtitle").textContent = metadata.subtitle;
-    byId("report-date").textContent = `测试日期 ${metadata.benchmark_date}`;
-    byId("scope-note").textContent = metadata.scope;
-
-    const fastestTts = [...summary.tts].sort((a, b) => a.warm_mean_rtf - b.warm_mean_rtf)[0];
-    const bestAsr = [...summary.asr].sort((a, b) => a.micro_cer - b.micro_cer)[0];
-    const bestSource = summary.asr_by_tts_source.filter((row) => row.model === bestAsr.model).sort((a, b) => a.micro_cer - b.micro_cer)[0];
-    const metrics = [
-      ["默认 ASR", displayAsr(bestAsr.model), `CER ${pct(bestAsr.micro_cer)} · 热态 ${fmt(bestAsr.mean_seconds)} 秒/条`],
-      ["最快 TTS", displayTts(fastestTts.engine), `热态 RTF ${fmt(fastestTts.warm_mean_rtf)} · ${fastestTts.worker_ready_before ? "已常驻" : "含懒加载"}`],
-      ["最佳回译组合", `${displayTts(bestSource.tts_engine)} + ${displayAsr(bestSource.model)}`, `CER ${pct(bestSource.micro_cer)}`],
-      ["并发常驻建议", "24 GiB+ GPU", "16 GiB 让 Qwen / Index 按需加载"]
-    ];
-    metrics.forEach(([label, value, detail]) => {
-      const card = document.createElement("article"); card.className = "metric";
-      card.append(text("div", label, "metric-label"), text("div", value, "metric-value"), text("div", detail, "metric-detail"));
-      byId("headline-metrics").append(card);
-    });
-
-    texts.forEach((item, index) => {
-      const card = document.createElement("article"); card.className = "case";
-      card.append(text("strong", `${index + 1}. ${item.category || item.id}`), text("p", item.text), text("small", `${item.id} · ${item.purpose || "固定回归语料"}`));
-      byId("test-cases").append(card);
-    });
-
-    const ttsRows = summary.tts.map((row) => ({ ...row, ...metadata.tts_models[row.engine], id: row.engine }));
-    renderTable("tts-feature-table", [
-      { label: "模型", render: (r) => r.name || r.id }, { label: "定位", key: "positioning" }, { label: "语言", key: "languages" },
-      { label: "声线", key: "voice" }, { label: "克隆", key: "clone", className: (r) => r.clone === "支持" ? "yes" : "no" },
-      { label: "情绪 / 控制", key: "emotion" }, { label: "流式状态", key: "streaming" }, { label: "设备", key: "device" }, { label: "输出", key: "output" }
-    ], ttsRows);
-    renderBars("tts-rtf-chart", ttsRows, (r) => r.warm_mean_rtf, { label: (r) => r.name, format: (v) => fmt(v, 3), max: Math.max(1.6, ...ttsRows.map(r => r.warm_mean_rtf)) });
-    renderBars("tts-first-chart", ttsRows, (r) => r.first_request_seconds, { label: (r) => r.name, format: (v) => `${fmt(v)} 秒`, max: Math.max(...ttsRows.map(r => r.first_request_seconds)) });
-    renderTable("tts-result-table", [
-      { label: "模型", render: (r) => r.name }, { label: "首请求口径", render: (r) => r.worker_ready_before ? "已常驻首条" : "冷首条 / 懒加载" },
-      { label: "首请求秒", render: (r) => fmt(r.first_request_seconds) }, { label: "热态均值秒", render: (r) => fmt(r.warm_mean_seconds) },
-      { label: "热态 P95 秒", render: (r) => fmt(r.warm_p95_seconds) }, { label: "热态 RTF", render: (r) => fmt(r.warm_mean_rtf, 3) },
-      { label: "显存增量 GiB", render: (r) => fmt(mibToGib(r.gpu_incremental_peak_mib)) }, { label: "采样率", render: (r) => `${r.sample_rate_hz} Hz` },
-      { label: "削波", render: (r) => pct(r.max_clipped_fraction) }
-    ], ttsRows);
-
-    const asrRows = summary.asr.map((row) => ({ ...row, ...metadata.asr_models[row.model], id: row.model }));
-    renderTable("asr-feature-table", [
-      { label: "模型", render: (r) => r.name || r.id }, { label: "定位", key: "positioning" }, { label: "语言", key: "languages" },
-      { label: "输入", key: "input" }, { label: "控制", key: "controls" }, { label: "说话人分离", key: "diarization", className: () => "no" }, { label: "设备", key: "device" }
-    ], asrRows);
-    renderBars("asr-cer-chart", asrRows, (r) => r.micro_cer, { label: (r) => r.name, format: pct, kind: "quality", max: Math.max(.45, ...asrRows.map(r => r.micro_cer)) });
-    renderBars("asr-ready-chart", asrRows, (r) => r.ready_after_seconds, { label: (r) => r.name, format: (v) => `${fmt(v)} 秒`, max: Math.max(...asrRows.map(r => r.ready_after_seconds)) });
-    renderTable("asr-result-table", [
-      { label: "模型", render: (r) => r.name }, { label: "加载秒", render: (r) => fmt(r.model_load_seconds) }, { label: "预热秒", render: (r) => fmt(r.warmup_seconds) },
-      { label: "Ready 总秒", render: (r) => fmt(r.ready_after_seconds) }, { label: "热态均值秒", render: (r) => fmt(r.mean_seconds) },
-      { label: "P95 秒", render: (r) => fmt(r.p95_seconds) }, { label: "热态 RTF", render: (r) => fmt(r.mean_rtf, 3) },
-      { label: "micro CER", render: (r) => pct(r.micro_cer) }, { label: "加载显存增量 GiB", render: (r) => fmt(mibToGib(r.load_gpu_incremental_peak_mib)) }
-    ], asrRows);
-
-    const sourceRows = summary.asr_by_tts_source.map((row) => ({ ...row, label: `${displayAsr(row.model)} · ${displayTts(row.tts_engine)}` }));
-    renderBars("source-cer-chart", sourceRows, (r) => r.micro_cer, { label: (r) => r.label, format: pct, kind: "quality", max: Math.max(.55, ...sourceRows.map(r => r.micro_cer)) });
-    renderTable("asr-detail-table", [
-      { label: "ASR", render: (r) => displayAsr(r.model) }, { label: "TTS 来源", render: (r) => displayTts(r.tts_engine) }, { label: "用例", key: "sample_id" },
-      { label: "参考文本", key: "reference_text" }, { label: "识别文本", key: "transcript" }, { label: "CER", render: (r) => pct(r.cer) },
-      { label: "耗时秒", render: (r) => fmt(r.elapsed_seconds, 3) }, { label: "RTF", render: (r) => fmt(r.transcription_rtf, 3) }
-    ], asrRecords);
-
-    renderTable("test-hardware-table", [{ label: "项目", render: (r) => r[0] }, { label: "配置", render: (r) => r[1] }], metadata.test_hardware);
-    renderTable("hardware-requirements-table", [
-      { label: "负载", render: (r) => r[0] }, { label: "最低", render: (r) => r[1] }, { label: "建议", render: (r) => r[2] }, { label: "依据", render: (r) => r[3] }
-    ], metadata.hardware_requirements);
-    renderTable("historical-table", [
-      { label: "类型", render: (r) => r[0] }, { label: "模型", render: (r) => r[1] }, { label: "当前状态", render: (r) => r[2] }
-    ], metadata.historical_models);
-    metadata.methodology.forEach((item) => byId("methodology-list").append(text("li", item)));
-    metadata.limitations.forEach((item) => byId("limitations-list").append(text("li", item)));
-  </script>
+  <footer>完整方法、逐模型说明和限制见仓库 <code>docs/rabispeech-performance-report.md</code>。本报告只代表上方测试机与当次环境。</footer>
+</main>
 </body>
 </html>

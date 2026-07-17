@@ -53,7 +53,7 @@ Codex/ChatGPT Desktop is both the visible host and the required task owner. Rabi
 
 ### 1. Platform/message adapter
 
-Protocol-specific code converts a NapCat, WeCom, webhook, FenneNote, XiaoAI, RabiLink, role-panel, heartbeat, or Remote Agent input into the common event vocabulary.
+Protocol-specific code converts a NapCat, WeCom, webhook, RabiSpeech, XiaoAI, RabiLink, role-panel, heartbeat, or Remote Agent input into the common event vocabulary. FenneNote parsing remains legacy-only.
 
 Verified inputs: NapCat/OneBot, heartbeat, role panel, and manual trigger. Other external endpoints are experimental until their real environment has passed acceptance.
 
@@ -97,7 +97,7 @@ The local `/api/agent/threads` bridge exposes controlled list/read/resolve/creat
 sent | draft | blocked | failed
 ```
 
-Supported current outputs include NapCat, WeCom, FenneNote, RabiLink, and role panel. Legacy/default `outputAdapter=agent` retains a response in the Agent session when no external target is requested.
+Supported current outputs include NapCat, WeCom, RabiLink, and role panel. FenneNote remains only for old Route compatibility. Legacy/default `outputAdapter=agent` retains a response in the Agent session when no external target is requested.
 
 There is no generic persistent approval queue or automatic retry queue. A future Action Queue should extend this policy/audit layer rather than reimplement platform sending.
 

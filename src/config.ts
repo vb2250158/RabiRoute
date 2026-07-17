@@ -118,7 +118,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "rabilink" || raw === "wecom" || raw === "remoteAgent" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "rabilink" || raw === "wecom" || raw === "remoteAgent" || raw === "speech" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -138,7 +138,7 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   if (adapters.includes("disabled")) {
     return ["disabled"];
   }

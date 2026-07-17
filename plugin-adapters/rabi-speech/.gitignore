@@ -1,4 +1,5 @@
 config.json
+microphone.json
 .deps/
 .pytest_cache/
 __pycache__/

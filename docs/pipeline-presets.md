@@ -6,7 +6,7 @@
 
 # Pipeline 预设说明
 
-> 状态：现行指南。默认 `agent_session` 会把无明确外部目标的结果保留在 Agent 会话；通用审批队列尚未实现。
+> 状态：Agent/Outbox 章节为现行指南。FenneNote/OumuQ 已于 2026-07-17 停止维护；下方 FenneNote 端点只记录旧配置兼容，新的语音链路使用 RabiSpeech 与 `speech` 消息端。
 
 Pipeline preset 是一层很薄的配置，用来把默认输入端和预期输出面配成一组。它不替代路由规则，也不替代 Agent adapter。路由仍然通过 `messageAdapters` 接收消息，把消息规范化为 RabiRoute 记录，渲染通知模板，再投递给配置好的 Agent adapter。
 

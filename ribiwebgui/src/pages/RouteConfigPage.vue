@@ -194,6 +194,7 @@ watch(
 
 const adapterParamOpen = ref<Record<string, boolean>>({
   rolePanel: false,
+  speech: false,
   napcat: false,
   wecom: false,
   remoteAgent: false,
@@ -210,7 +211,8 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     title: "本地桌面",
     note: "RabiRoute 内置的角色面板入口。",
     choices: [
-      { type: "rolePanel", title: "角色面板", note: "托盘打开的本地聊天和计划记忆面板", icon: "mdi-view-dashboard-outline" }
+      { type: "rolePanel", title: "角色面板", note: "托盘打开的本地聊天和计划记忆面板", icon: "mdi-view-dashboard-outline" },
+      { type: "speech", title: "语音消息端", note: "常驻麦克风、ASR、人格 TTS 与全局排队播放", icon: "mdi-microphone-message" }
     ]
   },
   {
@@ -237,9 +239,8 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
   },
   {
     title: "语音转写",
-    note: "来自具体设备或笔记工具的语音输入。",
+    note: "来自本机 RabiSpeech 或具体设备的语音输入。",
     choices: [
-      { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "接收 FenneNote 桌面语音转写", icon: "mdi-note-edit-outline" },
       { type: "xiaoai", title: "小米音箱 / 小爱", note: "接收小爱音箱语音转写", icon: "mdi-speaker-wireless" },
       { type: "rabilink", title: "眼镜端（经 RabiLink）", note: "眼镜是消息来源；RabiLink 只是系统内置的转接服务", icon: "mdi-glasses" }
     ]
@@ -398,7 +399,29 @@ function toggleAdapter(type: MessageAdapterType): void {
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "rolePanel" || type === "napcat" || type === "wecom" || type === "remoteAgent" || type === "heartbeat" || isWebhookLikeAdapter(type);
+  return type === "rolePanel" || type === "speech" || type === "napcat" || type === "wecom" || type === "remoteAgent" || type === "heartbeat" || isWebhookLikeAdapter(type);
+}
+
+function speechVariable(name: string, fallback = ""): string {
+  return String(gateway.value?.routeVariables?.[name] ?? fallback);
+}
+
+function setSpeechVariable(name: string, value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.routeVariables = gateway.value.routeVariables ?? {};
+  gateway.value.routeVariables[name] = String(value ?? "");
+  if (name === "speechVoice") {
+    gateway.value.pipeline = { ...gateway.value.pipeline, ttsVoice: gateway.value.routeVariables[name] };
+  }
+  store.touch();
+}
+
+function setSpeechAutoPlay(value: unknown): void {
+  if (!gateway.value) return;
+  const enabled = value === true;
+  setSpeechVariable("speechAutoPlay", String(enabled));
+  gateway.value.pipeline = { ...gateway.value.pipeline, ttsPlay: enabled };
+  store.touch();
 }
 
 function adapterLogEntries(type: MessageAdapterType): Array<Record<string, any>> {
@@ -467,7 +490,7 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "heartbeat", "fennenote", "xiaoai", "rabilink", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "speech", "heartbeat", "xiaoai", "rabilink", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
 
@@ -3795,6 +3818,121 @@ watch(
                         </div>
                       </div>
                     </div>
+                  </div>
+                  <div v-else-if="choice.type === 'speech'" class="catalog-param-grid">
+                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
+                      语音消息端由 RabiPC 配置、RabiSpeech 本机服务常驻执行；关闭浏览器后麦克风仍可继续转录。ASR 文本可进入当前 Route；Agent 回复按当前人格声线合成，并进入整台电脑唯一的 FIFO。没有语音 Route 时仍可独立使用 TTS 角色扮演。
+                    </v-alert>
+                    <v-text-field
+                      label="ASR 模型 ID"
+                      :model-value="speechVariable('speechAsrModel', 'faster-whisper/small')"
+                      hint="使用 GET /v1/models 返回的完整 ID"
+                      persistent-hint
+                      @update:model-value="setSpeechVariable('speechAsrModel', $event)"
+                    />
+                    <v-text-field
+                      label="TTS 模型 ID"
+                      :model-value="speechVariable('speechTtsModel', 'local-tts/gpt-sovits')"
+                      hint="例如 local-tts/gpt-sovits"
+                      persistent-hint
+                      @update:model-value="setSpeechVariable('speechTtsModel', $event)"
+                    />
+                    <v-text-field
+                      label="人格 / 声线"
+                      :model-value="speechVariable('speechVoice', gateway.agentRoleId || 'Rabi')"
+                      hint="优先使用 data/roles/<人格>/voice"
+                      persistent-hint
+                      @update:model-value="setSpeechVariable('speechVoice', $event)"
+                    />
+                    <v-text-field
+                      label="语言"
+                      :model-value="speechVariable('speechLanguage', 'zh')"
+                      @update:model-value="setSpeechVariable('speechLanguage', $event)"
+                    />
+                    <v-text-field
+                      label="开始录音阈值（RMS）"
+                      type="number"
+                      min="0.001"
+                      max="1"
+                      step="0.001"
+                      :model-value="speechVariable('speechThreshold', '0.02')"
+                      @update:model-value="setSpeechVariable('speechThreshold', $event)"
+                    />
+                    <v-text-field
+                      label="值得转写阈值（RMS）"
+                      type="number"
+                      min="0.001"
+                      max="1"
+                      step="0.001"
+                      :model-value="speechVariable('speechTranscribeThreshold', '0.025')"
+                      @update:model-value="setSpeechVariable('speechTranscribeThreshold', $event)"
+                    />
+                    <v-text-field
+                      label="静音收尾（毫秒）"
+                      type="number"
+                      min="200"
+                      max="5000"
+                      step="50"
+                      :model-value="speechVariable('speechSilenceMs', '900')"
+                      @update:model-value="setSpeechVariable('speechSilenceMs', $event)"
+                    />
+                    <v-text-field
+                      label="最短语音（毫秒）"
+                      type="number"
+                      min="100"
+                      max="5000"
+                      step="50"
+                      :model-value="speechVariable('speechMinUtteranceMs', '350')"
+                      @update:model-value="setSpeechVariable('speechMinUtteranceMs', $event)"
+                    />
+                    <v-text-field
+                      label="最长语音（毫秒）"
+                      type="number"
+                      min="1000"
+                      max="120000"
+                      step="1000"
+                      :model-value="speechVariable('speechMaxUtteranceMs', '30000')"
+                      @update:model-value="setSpeechVariable('speechMaxUtteranceMs', $event)"
+                    />
+                    <v-text-field
+                      label="前置缓存（毫秒）"
+                      type="number"
+                      min="0"
+                      max="5000"
+                      step="50"
+                      :model-value="speechVariable('speechPreRollMs', '500')"
+                      @update:model-value="setSpeechVariable('speechPreRollMs', $event)"
+                    />
+                    <v-text-field
+                      label="麦克风输入增益"
+                      type="number"
+                      min="0.1"
+                      max="10"
+                      step="0.1"
+                      :model-value="speechVariable('speechInputGain', '1')"
+                      @update:model-value="setSpeechVariable('speechInputGain', $event)"
+                    />
+                    <v-switch
+                      color="primary"
+                      label="按底噪动态抬高阈值"
+                      :model-value="speechVariable('speechAdaptiveThreshold', 'true') !== 'false'"
+                      @update:model-value="setSpeechVariable('speechAdaptiveThreshold', String($event === true))"
+                    />
+                    <v-switch
+                      color="primary"
+                      label="识别后自动送入当前 Route"
+                      :model-value="speechVariable('speechAutoSubmit', 'true') !== 'false'"
+                      @update:model-value="setSpeechVariable('speechAutoSubmit', String($event === true))"
+                    />
+                    <v-switch
+                      color="primary"
+                      label="Agent 回复自动排队播放"
+                      :model-value="speechVariable('speechAutoPlay', 'true') !== 'false'"
+                      @update:model-value="setSpeechAutoPlay"
+                    />
+                    <v-alert class="full-span" type="warning" variant="tonal" density="compact">
+                      麦克风不要选择会混入本机扬声器的虚拟设备，否则 TTS 可能被 ASR 再次识别。语音消息端在播放期间会暂停触发检测，作为第二层回声防护。
+                    </v-alert>
                   </div>
                   <div v-else-if="choice.type === 'remoteAgent'" class="catalog-param-grid">
                     <v-alert class="full-span" type="info" variant="tonal" density="compact">

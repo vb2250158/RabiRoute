@@ -73,13 +73,13 @@ export const pipelinePresets: Record<PipelinePresetId, ResolvedPipeline> = {
   voice_chat: {
     id: "voice_chat",
     name: "Voice chat",
-    inputAdapter: "webhook",
-    outputAdapter: "fennenote",
-    outputPipeline: "fennenote",
+    inputAdapter: "speech",
+    outputAdapter: "tts",
+    outputPipeline: "rabispeech",
     promptOutputMode: "voice_short",
-    ttsProvider: "oumuq",
+    ttsProvider: "local-tts",
     ttsVoice: "",
-    ttsWorkerUrl: "http://127.0.0.1:8793/api/fennenote/playback",
+    ttsWorkerUrl: "http://127.0.0.1:8781/v1/audio/speech",
     ttsPlay: true,
     preventFeedbackLoop: true,
     replyToSource: false
@@ -116,7 +116,7 @@ const fallbackPipeline: ResolvedPipeline = {
 };
 
 function isMessageAdapterType(value: string): value is MessageAdapterType {
-  return value === "napcat" || value === "fennenote" || value === "xiaoai" || value === "webhook" || value === "wecom" || value === "heartbeat" || value === "rolePanel" || value === "disabled";
+  return value === "napcat" || value === "remoteAgent" || value === "speech" || value === "fennenote" || value === "xiaoai" || value === "rabilink" || value === "webhook" || value === "wecom" || value === "heartbeat" || value === "rolePanel" || value === "disabled";
 }
 
 function isOutputAdapterType(value: string): value is OutputAdapterType {

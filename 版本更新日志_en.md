@@ -6,6 +6,27 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.12 - 2026-07-17
+
+### RabiPC speech endpoint and local models
+
+- Added the standalone local-only `rabi-speech` plugin and RabiPC Speech Service page. TTS and ASR are top-level tabs below Rabi Persona; Route delivery happens only when explicitly enabled, and normal API calls never enter an Agent.
+- TTS now covers ONNX-VITS, GPT-SoVITS, Qwen3-TTS 0.6B/1.7B, IndexTTS2, and CosyVoice3. ASR covers faster-whisper tiny/small/large-v3-turbo, Qwen3-ASR 0.6B/1.7B, SenseVoiceSmall, and FireRedASR2-AED. Active providers use installed local models or loopback workers only; cloud speech APIs are absent from the active runtime.
+- `GET /v1/models` returns installation/availability state, a request schema, required/optional parameters, and examples for all 13 models. The provider contract remains extensible, while remote requests cannot download models, load code, or change the allowlist.
+- TTS supports direct Rabi persona-name calls, persona-owned voice/cache data, multiple voices, and one host-wide FIFO across Routes, sessions, Agents, personas, and models. Resident ASR supports a real audio device, pre-roll, separate record/transcribe thresholds, adaptive noise, silence segmentation, restart restore, and optional Route delivery.
+
+### RabiLink, public boundary, and legacy migration
+
+- RabiLink is the Manager-owned system transport. One generic application token proxies model discovery, TTS, and ASR while RabiSpeech remains loopback-only; public microphone start/stop paths are not allowlisted.
+- OumuQ and FenneNote are end-of-maintenance archives. Their TTS routing, persona voices, resident transcription, and threshold controls move to RabiSpeech and the RabiPC speech endpoint; active providers no longer depend on either legacy project or paid cloud APIs.
+- Rabi speech Skills now target RabiSpeech and `data/roles/<RoleId>/voice/`. Wiki evidence extraction is limited to voice, emotion, delivery, dialogue examples, and indexes, while `persona.md` remains read-only.
+
+### Downloads, performance report, and Windows runtimes
+
+- Added per-model download guidance and isolated-runtime installers. CUDA/cuDNN DLLs live in plugin-private dependencies and affect only the service process search path rather than the system PATH.
+- The performance report covers tested/recommended hardware, model size, cold start/warm-up, warm requests, capability limits, three bar charts for TTS latency, ASR latency, and ASR character accuracy, plus exact dialogue samples. Public cold/warm and Relay-reconnect timings are reported separately.
+- WebGUI build, configuration checks, 203 RabiRoute tests, and 16 RabiSpeech tests passed. Runtime WAV files, models, logs, tokens, real reference audio, private paths, and machine configuration remain ignored.
+
 ## 0.1.11 - 2026-07-17
 
 ### RibiWebGUI product user guide

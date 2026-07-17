@@ -6,7 +6,7 @@ English | <a href="./pipeline-presets.md">简体中文</a>
 
 # Pipeline Presets
 
-> Status: current guide. The default `agent_session` preset retains output in the Agent session when there is no explicit external target. A generic approval queue does not exist yet.
+> Status: Agent/Outbox sections are current. FenneNote/OumuQ were retired on 2026-07-17; FenneNote endpoints below document legacy configuration compatibility only. New speech flows use RabiSpeech and the `speech` message endpoint.
 
 A pipeline describes where an event enters, where handler output is allowed to leave, and how reply instructions are rendered. A preset supplies a coherent default while an inline `pipeline` object can override individual fields.
 

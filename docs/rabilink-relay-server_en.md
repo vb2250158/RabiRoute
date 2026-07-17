@@ -8,7 +8,9 @@ English | <a href="./rabilink-relay-server.md">简体中文</a>
 
 > Maturity: experimental. Relay, PC worker, remote WebGUI, input/downlink mailboxes, device logs, and the unified ledger have implementations. Real public-network, account-isolation, device, and recovery acceptance is still required.
 
-The Relay connects Rokid/AIUI clients, portable devices, and the PC RabiRoute worker. Input and output are independent persistent flows.
+The Relay is a built-in system transport owned by Manager, not a message adapter. It connects Rokid/AIUI clients, portable devices, ordinary API clients, and the PC RabiRoute worker. Glasses and phones are endpoints using the transport; the Route-facing glasses entry keeps the legacy internal key `rabilink`. Input and output are independent persistent flows.
+
+The same Relay also exposes a separate synchronous RabiSpeech API. It authenticates an application token, selects an online PC with speech enabled, and waits while Manager forwards the byte-preserving request to the loopback service. This path does not enter an Agent, persona, message Route, or conversation ledger. See [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md).
 
 ```text
 Uplink

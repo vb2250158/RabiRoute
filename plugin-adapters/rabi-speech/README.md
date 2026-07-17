@@ -1,9 +1,11 @@
 # RabiSpeech 插件
 
-RabiSpeech 是 Rabi 的独立本机服务插件，也是只绑定回环地址的 TTS / ASR provider 网关。它不接入 Agent、不经过消息路由，也不拥有角色资料和模型权重：
+RabiSpeech 是 Rabi 的独立本机服务插件，也是只绑定回环地址的本地 TTS / ASR provider 网关。普通语音 API 不接入 Agent、不经过消息路由；RabiPC 只有在用户显式选择 Route 后才把 ASR 文本提交为消息事件：
 
-- TTS 交给 OumuQ，RabiSpeech 等待 worker 完成后返回音频文件。
-- ASR 由常驻的本地 faster-whisper provider 完成，默认复用 FenneNote 的模型缓存。
+- TTS 由 RabiSpeech 直接管理本地 ONNX-VITS、GPT-SoVITS、IndexTTS2、Qwen3-TTS 和 CosyVoice3 worker。
+- ASR 支持本地 faster-whisper、Qwen3-ASR、SenseVoiceSmall 和 FireRedASR2。
+- Rabi 人格拥有 `data/roles/<RoleId>/voice/` 参考音频、voice index 和缓存；直接把人格目录名作为 `voice` 即可，无需 Route 或 Agent。
+- 所有模型、人格、Route、会话和 Agent 的播放统一进入一个主机级 FIFO。
 - RabiLink Relay 只代理原始 HTTP 请求和响应，不解析角色、声线或转写正文。
 
 ## 安装与启动
@@ -42,10 +44,19 @@ https://<relay>/api/rabilink/speech/v1/audio/transcriptions
 ```text
 GET  /health
 GET  /v1/models
+GET  /v1/models/{provider}/{model}
 GET  /v1/capabilities
+GET  /v1/microphone/status
+GET  /v1/microphone/devices
 POST /v1/audio/speech
 POST /v1/audio/transcriptions
+POST /v1/microphone/start
+POST /v1/microphone/stop
+GET  /v1/playback/status
+POST /v1/playback/stop
 ```
+
+`/v1/microphone/*` 是主机设备控制面，只供回环 RabiPC/Manager 使用，不在 RabiLink 公网语音 allowlist 中。启动后录音流由 RabiSpeech 进程持有；关闭浏览器不会停止，`microphone.json` 会持久保存启用状态、设备、阈值、ASR 模型、会话和可选 Route。显式调用 stop 才会把 `enabled=false` 写回。
 
 DashScope 风格兼容面：
 
@@ -58,11 +69,12 @@ TTS 示例：
 
 ```powershell
 $body = @{
-  model = "tts-local"
+  model = "local-tts/gpt-sovits"
   input = "这是本机语音服务。"
-  voice = "default"
+  voice = "Rabi"
   response_format = "wav"
   speed = 1.0
+  play = $false
 } | ConvertTo-Json
 Invoke-WebRequest -Method Post -Uri http://127.0.0.1:8781/v1/audio/speech `
   -ContentType "application/json" -Body $body -OutFile .\output.wav

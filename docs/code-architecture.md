@@ -84,7 +84,7 @@ examples/ 和 skills/
 
 - `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别。
 - `wecomAdapter.ts`：接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。当前成熟度仍是 experimental，企业微信群聊字段尽量对齐 NapCat，专用字段只作为补充。
-- `webhookAdapter.ts`：接通用 Webhook、FenneNote、小爱等 HTTP 回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。
+- `webhookAdapter.ts`：接通用 Webhook、小爱及旧 FenneNote 兼容回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。新本机语音入口使用 RabiSpeech。
 - `rabilinkAdapter.ts` / `rabilinkRelayWorker.ts`：本地兼容入口与 Relay worker；observation 可先写统一会话账本，主动下行走独立消息流。
 - `heartbeatAdapter.ts`：定时触发心跳消息。
 - `messageAdapter.ts`：消息端 Adapter 的最小 Interface。
@@ -252,7 +252,7 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 - 允许时调用对应消息端发送封装，例如 NapCat HTTP 或企业微信智能机器人 SDK。
 - 不允许时返回 `blocked` 并附带 draft 数据；发送失败时返回 `failed` 并保留 draft 数据；未选择外部输出时可以返回 `draft` 或把结果保留在 Agent 会话。
 
-当前 Outbox 已是 QQ、WeCom、FenneNote、RabiLink 和角色面板的真实回传层，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
+当前 Outbox 已是 QQ、WeCom、RabiLink 和角色面板的真实回传层，并为旧 FenneNote Route 保留兼容，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
 
 ```text
 Agent output
@@ -361,7 +361,7 @@ Gateway 配置的事实源 Module。
 `src/messageEndpoints/` 放消息端的管理和扫描能力。
 
 - `napcatManager.ts`：NapCat Shell 准备、WebUI token、OneBot 配置、健康检查、启动/停止、扫描。
-- `webhookLikeScans.ts`：Webhook / FenneNote / XiaoAi 这类 HTTP callback 端点扫描。
+- `webhookLikeScans.ts`：Webhook / XiaoAi 与旧 FenneNote 兼容 HTTP callback 端点扫描。
 - `wecomManager.ts`：企业微信主动 WebSocket 长连接的扫描 read model，检查 SDK、bot id/secret、连接认证状态和最近消息。
 - `remoteAgentManager.ts`：远端 Agent 设备发现、密码挑战、连接、任务、事件和文件回传。
 

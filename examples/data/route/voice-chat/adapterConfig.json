@@ -3,22 +3,22 @@
   "pipelinePreset": "voice_chat",
   "pipeline": {
     "id": "voice_chat",
-    "inputAdapter": "fennenote",
-    "outputAdapter": "fennenote",
-    "outputPipeline": "fennenote",
+    "inputAdapter": "speech",
+    "outputAdapter": "tts",
+    "outputPipeline": "rabispeech",
     "promptOutputMode": "voice_short",
-    "ttsProvider": "oumuq",
-    "ttsVoice": "cloud_zh_voice",
-    "ttsWorkerUrl": "http://127.0.0.1:8793/api/fennenote/playback",
+    "ttsProvider": "local-tts",
+    "ttsVoice": "Rabi",
+    "ttsWorkerUrl": "http://127.0.0.1:8781/v1/audio/speech",
     "ttsPlay": true,
     "preventFeedbackLoop": true,
     "replyToSource": false
   },
   "messageAdapters": [
-    "fennenote"
+    "speech"
   ],
   "messageAdapterPolicies": {
-    "fennenote": {
+    "speech": {
       "inputEnabled": true,
       "outputEnabled": true,
       "supportedOutputs": [
@@ -32,8 +32,23 @@
   "gatewayPort": 8792,
   "webhookPort": 8792,
   "webhookPath": "/webhook",
-  "fenneNoteWebhookPort": 8792,
-  "fenneNoteWebhookPath": "/fennenote",
+  "routeVariables": {
+    "speechAsrModel": "faster-whisper/small",
+    "speechTtsModel": "local-tts/gpt-sovits",
+    "speechVoice": "Rabi",
+    "speechLanguage": "zh",
+    "speechSpeed": "1",
+    "speechThreshold": "0.02",
+    "speechTranscribeThreshold": "0.025",
+    "speechAdaptiveThreshold": "true",
+    "speechSilenceMs": "900",
+    "speechMinUtteranceMs": "350",
+    "speechMaxUtteranceMs": "30000",
+    "speechPreRollMs": "500",
+    "speechInputGain": "1",
+    "speechAutoSubmit": "true",
+    "speechAutoPlay": "true"
+  },
   "codexThreadName": "RabiRoute Voice Chat",
   "codexCwd": ".",
   "agentRoleFile": "persona.md",

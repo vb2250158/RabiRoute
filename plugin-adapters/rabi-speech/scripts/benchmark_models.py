@@ -16,6 +16,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,43 @@ def request_json(method: str, url: str, payload: dict[str, Any] | None = None, t
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with local_opener().open(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def request_multipart_json(
+    url: str,
+    audio_path: Path,
+    fields: dict[str, str],
+    timeout: float,
+) -> Any:
+    boundary = "----RabiSpeechBenchmark" + uuid.uuid4().hex
+    chunks: list[bytes] = []
+    for key, value in fields.items():
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode("ascii"),
+                f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("ascii"),
+                value.encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+    chunks.extend(
+        [
+            f"--{boundary}\r\n".encode("ascii"),
+            f'Content-Disposition: form-data; name="file"; filename="{audio_path.name}"\r\n'.encode("utf-8"),
+            b"Content-Type: audio/wav\r\n\r\n",
+            audio_path.read_bytes(),
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("ascii"),
+        ]
+    )
+    request = urllib.request.Request(
+        url,
+        data=b"".join(chunks),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
     with local_opener().open(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -404,6 +442,99 @@ def benchmark_asr(args: argparse.Namespace) -> None:
     print(json.dumps({"ok": True, "output": str(Path(args.output).resolve()), **payload["summary"]}, ensure_ascii=False))
 
 
+def benchmark_asr_http(args: argparse.Namespace) -> None:
+    tts_payloads = [read_json(Path(path)) for path in args.tts_results]
+    audio_rows = [record for payload in tts_payloads for record in payload.get("records", [])]
+    if not audio_rows:
+        raise ValueError("No TTS records were found")
+
+    worker_before = None
+    if args.worker_url:
+        try:
+            worker_before = request_json("GET", f"{args.worker_url.rstrip('/')}/health", timeout=3)
+        except (OSError, urllib.error.URLError):
+            worker_before = {"ok": False, "loaded": False}
+    records: list[dict[str, Any]] = []
+    endpoint = f"{args.service_url.rstrip('/')}/v1/audio/transcriptions"
+    for index, source in enumerate(audio_rows):
+        audio_path = Path(str(source["benchmark_audio"])).resolve()
+        probe = GpuProbe(interval=args.gpu_sample_interval)
+        probe.start()
+        started = time.perf_counter()
+        result = request_multipart_json(
+            endpoint,
+            audio_path,
+            {
+                "model": f"{args.provider}/{args.model}",
+                "provider": args.provider,
+                "language": args.language,
+                "response_format": "verbose_json",
+                "timestamp_granularities": "segment",
+            },
+            timeout=args.timeout,
+        )
+        elapsed = time.perf_counter() - started
+        gpu = probe.stop()
+        transcript = str(result.get("text") or "").strip()
+        audio = wav_stats(audio_path)
+        score = cer(str(source["reference_text"]), transcript)
+        records.append(
+            {
+                "model": args.model,
+                "provider": args.provider,
+                "device": "cuda",
+                "compute_type": "provider-default",
+                "run_order": index + 1,
+                "run_class": "first-transcription" if index == 0 else "warm",
+                "tts_engine": source["engine"],
+                "sample_id": source["sample_id"],
+                "audio_path": str(audio_path),
+                "audio_duration_seconds": audio["duration_seconds"],
+                "elapsed_seconds": elapsed,
+                "transcription_rtf": elapsed / audio["duration_seconds"] if audio["duration_seconds"] else None,
+                "reference_text": source["reference_text"],
+                "transcript": transcript,
+                "detected_language": result.get("language"),
+                **score,
+                "gpu": gpu,
+            }
+        )
+
+    worker_after = None
+    if args.worker_url:
+        try:
+            worker_after = request_json("GET", f"{args.worker_url.rstrip('/')}/health", timeout=5)
+        except (OSError, urllib.error.URLError):
+            worker_after = None
+    total_errors = sum(record["character_errors"] for record in records)
+    total_characters = sum(record["reference_characters"] for record in records)
+    payload = {
+        "schema_version": 1,
+        "kind": "asr-benchmark",
+        "transport": "rabispeech-http",
+        "generated_at": utc_timestamp(),
+        "model": args.model,
+        "provider": args.provider,
+        "device": "cuda",
+        "compute_type": "provider-default",
+        "model_load_seconds": float((worker_after or {}).get("load_seconds") or 0),
+        "model_load_gpu": {},
+        "unscored_warmup": None,
+        "worker_before": worker_before,
+        "worker_after": worker_after,
+        "environment": {"platform": platform.platform(), "python": platform.python_version()},
+        "summary": {
+            "samples": len(records),
+            "micro_cer": total_errors / total_characters if total_characters else None,
+            "mean_elapsed_seconds": statistics.fmean(record["elapsed_seconds"] for record in records),
+            "mean_rtf": statistics.fmean(record["transcription_rtf"] for record in records),
+        },
+        "records": records,
+    }
+    write_json(Path(args.output).resolve(), payload)
+    print(json.dumps({"ok": True, "output": str(Path(args.output).resolve()), **payload["summary"]}, ensure_ascii=False))
+
+
 def export_csv(args: argparse.Namespace) -> None:
     payloads = [read_json(Path(path)) for path in args.inputs]
     rows: list[dict[str, Any]] = []
@@ -676,6 +807,18 @@ def build_parser() -> argparse.ArgumentParser:
     asr.add_argument("--warmup-audio")
     asr.add_argument("--gpu-sample-interval", type=float, default=0.2)
     asr.set_defaults(func=benchmark_asr)
+
+    asr_http = subparsers.add_parser("asr-http", help="Benchmark an ASR model through the deployed RabiSpeech API")
+    asr_http.add_argument("--service-url", default="http://127.0.0.1:8781")
+    asr_http.add_argument("--worker-url")
+    asr_http.add_argument("--provider", required=True)
+    asr_http.add_argument("--model", required=True)
+    asr_http.add_argument("--tts-results", action="append", required=True)
+    asr_http.add_argument("--output", required=True)
+    asr_http.add_argument("--language", default="zh")
+    asr_http.add_argument("--timeout", type=float, default=900)
+    asr_http.add_argument("--gpu-sample-interval", type=float, default=0.2)
+    asr_http.set_defaults(func=benchmark_asr_http)
 
     export = subparsers.add_parser("export-csv", help="Flatten benchmark JSON records to CSV")
     export.add_argument("--inputs", action="append", required=True)

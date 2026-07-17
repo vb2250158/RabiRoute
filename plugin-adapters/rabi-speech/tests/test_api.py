@@ -84,6 +84,18 @@ def auth() -> dict[str, str]:
     return {}
 
 
+def test_loopback_microphone_status_and_contract_are_discoverable(tmp_path: Path) -> None:
+    client, _tts, _asr = fixture(tmp_path)
+    status = client.get("/v1/microphone/status")
+    assert status.status_code == 200
+    assert status.json()["mode"] == "host_resident"
+    assert status.json()["running"] is False
+    models = client.get("/v1/models").json()
+    assert models["api"]["microphone_start"]["scope"] == "loopback-only"
+    invalid = client.post("/v1/microphone/start", json={"auto_submit": True, "route_id": ""})
+    assert invalid.status_code == 422
+
+
 def test_openai_style_tts(tmp_path: Path) -> None:
     client, tts, _asr = fixture(tmp_path)
     response = client.post(
@@ -144,3 +156,20 @@ def test_models_are_generated_from_provider_registry(tmp_path: Path) -> None:
         ("tts", "fake-tts"),
         ("asr", "fake-asr"),
     }
+    tts = next(row for row in rows if row["capability"] == "tts")
+    assert tts["request"]["required"] == ["model", "input"]
+    assert tts["request"]["content_type"] == "application/json"
+    detail = client.get(f"/v1/models/{tts['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["request"]["endpoint"] == "/v1/audio/speech"
+
+
+def test_public_discovery_redacts_private_paths_and_urls(tmp_path: Path) -> None:
+    client, _tts, _asr = fixture(tmp_path)
+    health = client.get("/health").json()
+    assert "config" not in health
+    capabilities = client.get("/v1/capabilities").json()
+    encoded = json.dumps(capabilities)
+    assert "model_root" not in encoded
+    assert "base_url" not in encoded
+    assert capabilities["api"]["models"]["endpoint"] == "/v1/models"

@@ -443,6 +443,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     speakerKind: isVoiceTranscript ? record.speakerKind : undefined,
     speakerConfidence: isVoiceTranscript ? record.speakerConfidence : undefined,
     speakerDecision: isVoiceTranscript ? record.speakerDecision : undefined,
+    sessionId: isVoiceTranscript ? record.sessionId : undefined,
     roleId: isRolePanel ? record.roleId : undefined,
     botUserId: "botUserId" in record ? record.botUserId : undefined,
     wecomReqId: isWeCom ? record.reqId : undefined,

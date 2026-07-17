@@ -4,6 +4,9 @@ import { translateText } from "../src/i18n/index";
 
 test("translates exact interface copy and preserves surrounding whitespace", () => {
   assert.equal(translateText("人格配置", "en"), "Persona configuration");
+  assert.equal(translateText("语音服务", "en"), "Speech service");
+  assert.equal(translateText("目标测试机报告", "en"), "Target-machine report");
+  assert.equal(translateText("启动时预热", "en"), "Warm up at startup");
   assert.equal(translateText("  保存配置  ", "en"), "  Save configuration  ");
 });
 

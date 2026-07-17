@@ -1,103 +1,58 @@
 {
-  "schema_version": 1,
-  "title": "RabiSpeech 本机 TTS / ASR 模型性能报告",
-  "subtitle": "先生成 TTS，再把同一批 WAV 送入 ASR；同时比较功能、预热、性能、准确率与硬件需求。",
+  "schema_version": 2,
+  "title": "RabiSpeech 本地 TTS / ASR 性能与功能报告",
   "benchmark_date": "2026-07-17",
-  "scope": "仅本地模型。云端 API 已归档，本轮未调用、未产生费用。",
-  "test_hardware": [
-    ["操作系统", "Windows 11 专业版 64 位，Build 26200"],
-    ["CPU", "Intel Core i9-14900KF，24 核 / 32 线程"],
-    ["内存", "47.8 GiB"],
-    ["GPU", "NVIDIA GeForce RTX 4080 SUPER，16,376 MiB"],
-    ["驱动", "596.21"],
-    ["ASR 运行时", "Python 3.10 / faster-whisper 1.2.1 / CTranslate2 4.8.1 / CUDA / int8_float16"],
-    ["Qwen 运行时", "Qwen3-TTS-12Hz-0.6B-Base / qwen-tts 0.1.1 / PyTorch 2.12.0+cu126"],
-    ["IndexTTS2 运行时", "indextts 2.0.0 / revision 14f0fc0 / PyTorch 2.8.0+cu128"],
-    ["ONNX 运行时", "OumuQ split-graph worker / CPUExecutionProvider"]
-  ],
-  "tts_models": {
-    "onnx-vits": {
-      "name": "ONNX-VITS",
-      "positioning": "即时固定声线",
-      "languages": "中文 / 日文 / 英文",
-      "voice": "147 个本地固定声线",
-      "clone": "不支持",
-      "emotion": "语速、noise scale、seed",
-      "streaming": "当前返回完整 WAV",
-      "device": "CPU",
-      "output": "22.05 kHz WAV"
-    },
-    "qwen3-tts-0.6b": {
-      "name": "Qwen3-TTS 0.6B Base",
-      "positioning": "多语言参考音克隆",
-      "languages": "10 种语言",
-      "voice": "本地参考音克隆",
-      "clone": "支持",
-      "emotion": "参考音、语言与采样参数",
-      "streaming": "底层支持；当前 worker 返回完整 WAV",
-      "device": "CUDA",
-      "output": "24 kHz WAV"
-    },
-    "indextts2": {
-      "name": "IndexTTS2",
-      "positioning": "中文克隆与情绪控制",
-      "languages": "中文优先",
-      "voice": "本地零样本参考音克隆",
-      "clone": "支持",
-      "emotion": "8 维情绪、情绪文本、拼音、采样",
-      "streaming": "分句生成；当前返回完整 WAV",
-      "device": "CUDA",
-      "output": "22.05 kHz WAV"
-    }
+  "scope": "只测试本地模型；付费云端语音 API 未调用。",
+  "hardware": {
+    "os": "Windows 11 Pro 64-bit",
+    "cpu": "Intel Core i9-14900KF, 24C/32T",
+    "ram_gib": 47.8,
+    "gpu": "NVIDIA GeForce RTX 4080 SUPER",
+    "vram_gib": 16,
+    "driver": "596.21",
+    "driver_cuda": "13.2"
   },
-  "asr_models": {
-    "tiny": {
-      "name": "faster-whisper tiny",
-      "positioning": "健康检查 / 低资源草稿",
-      "languages": "多语言；本轮固定中文",
-      "input": "WAV / MP3 / FLAC / M4A / OGG / OPUS / WebM / MP4",
-      "controls": "语言提示、VAD、beam size",
-      "diarization": "不支持",
-      "device": "CUDA / CPU 回退"
-    },
-    "small": {
-      "name": "faster-whisper small",
-      "positioning": "默认本机 ASR",
-      "languages": "多语言；本轮固定中文",
-      "input": "WAV / MP3 / FLAC / M4A / OGG / OPUS / WebM / MP4",
-      "controls": "语言提示、VAD、beam size",
-      "diarization": "不支持",
-      "device": "CUDA / CPU 回退"
-    }
+  "tts_smoke_results": [
+    {"model":"onnx-vits","size_gib":0.12,"cold_seconds":27.153,"warm_seconds":4.269,"audio_seconds":[7.372,6.641]},
+    {"model":"gpt-sovits","size_gib":5.13,"cold_seconds":50.354,"warm_seconds":9.202,"audio_seconds":[9.780,5.040]},
+    {"model":"qwen3-tts-0.6b-base","size_gib":2.34,"cold_seconds":131.405,"warm_seconds":17.975,"audio_seconds":[7.120,3.120]},
+    {"model":"qwen3-tts-1.7b-base","size_gib":4.23,"cold_seconds":154.893,"warm_seconds":36.846,"audio_seconds":[6.960,7.520]},
+    {"model":"indextts2","size_gib":8.29,"cold_seconds":114.506,"warm_seconds":18.126,"audio_seconds":[6.142,2.786]},
+    {"model":"cosyvoice3-0.5b","size_gib":9.08,"cold_seconds":129.845,"warm_seconds":14.952,"audio_seconds":[6.160,2.960]}
+  ],
+  "asr_smoke_results": [
+    {"model":"faster-whisper-large-v3-turbo","size_gib":1.51,"cold_seconds":269.909,"warm_seconds":0.523,"cer":0.2273},
+    {"model":"qwen3-asr-0.6b","size_gib":1.75,"cold_seconds":52.628,"warm_seconds":1.902,"cer":0.0909},
+    {"model":"qwen3-asr-1.7b","size_gib":4.38,"cold_seconds":85.820,"warm_seconds":1.528,"cer":0.0909},
+    {"model":"sensevoice-small","size_gib":0.88,"cold_seconds":112.375,"warm_seconds":0.738,"cer":0.1818},
+    {"model":"fireredasr2-aed","size_gib":4.41,"cold_seconds":82.398,"warm_seconds":1.650,"cer":0.0455}
+  ],
+  "microphone_smoke_results": {
+    "input_endpoint_count": 47,
+    "physical_device": "Maono Wireless Mic RX",
+    "requested_sample_rate": 16000,
+    "real_stream_started": true,
+    "service_restart_restored": true,
+    "manager_proxy_passed": true,
+    "public_control_status": 404
   },
-  "hardware_requirements": [
-    ["ASR tiny", "NVIDIA 4 GiB + RAM 8 GiB", "GPU 6 GiB + RAM 16 GiB", "官方规格与本次实测外推"],
-    ["ASR small", "NVIDIA 4 GiB + RAM 8 GiB", "GPU 8 GiB + RAM 16 GiB", "默认常驻并给桌面留余量"],
-    ["ONNX-VITS", "现代 4 核 CPU + RAM 8 GiB", "8 核 CPU + RAM 16 GiB", "本轮 CPU 已快于实时"],
-    ["Qwen3-TTS 0.6B", "GPU 6 GiB + RAM 16 GiB", "GPU 12 GiB + RAM 32 GiB", "参考本轮 2.71 GiB 请求期显存增量"],
-    ["IndexTTS2", "GPU 12 GiB + RAM 32 GiB", "GPU 16 GiB + RAM 48 GiB", "参考本轮 8.13 GiB 请求期显存增量"],
-    ["ASR + Qwen + Index 同驻", "16 GiB 仅可勉强调度", "GPU 24 GiB+ / RAM 64 GiB", "16 GiB 应让 Qwen / Index 按需加载"]
-  ],
-  "historical_models": [
-    ["ASR 本地", "base / medium / large-v1/v2/v3", "FenneNote 支持但本机未缓存，本轮未下载"],
-    ["ASR 云端", "qwen3-asr-flash / qwen-audio-asr / mimo-v2.5-asr / gpt-4o-transcribe / whisper-1 / paraformer-v2", "已归档，未调用"],
-    ["音频理解云端", "qwen-audio-turbo / qwen2.5-omni-7b", "已归档，未调用"],
-    ["TTS 云端", "qwen3-tts-flash / qwen3-tts-vd / qwen3-tts-vc / cosyvoice-v3-plus / v3.5-plus", "已归档，未调用"]
-  ],
-  "methodology": [
-    "按固定顺序先对每个 TTS 生成三条 WAV，再让每个 ASR 模型识别全部九条 WAV。",
-    "TTS 第一条记为首请求；worker 测试前未 ready 时，第一条包含懒加载，后续样本用于热态统计。",
-    "ASR 单列模型加载，并用 ONNX-VITS 的 short-dialogue WAV 做一次不计分预热，再统计九条正式样本。",
-    "RTF = 处理耗时 / 音频时长；小于 1 表示快于实时。",
-    "CER = 字符编辑距离 / 参考字符数；先做 NFKC、大小写折叠并移除空白与标点，越低越好。",
-    "TTS 回译 CER 只代表可懂度代理，不等价于自然度、音色相似度、情绪贴合或 MOS。",
-    "GPU 每 0.2 秒用 nvidia-smi 采样；显存增量包含其它桌面进程噪声，不等于模型独占显存。"
-  ],
-  "limitations": [
-    "语料是干净的合成语音，不代表真实麦克风、噪声、口音、远场、抢话与回声。",
-    "每个 TTS 只有 3 条、每个 ASR 只有 9 条；P95 只显示方向，不能作为生产 SLA。",
-    "ONNX worker 在本轮开始前已经 ready，因此没有与 Qwen / Index 同口径测冷启动。",
-    "当前接口返回完整结果，尚未覆盖流式首包、并发排队、长音频吞吐和 RabiLink 公网中转延迟。",
-    "以上结果仅代表本报告列出的目标测试机与当次环境；其他电脑必须重新运行基准，不能直接套用本报告性能数字。"
+  "rabilink_smoke_results": {
+    "path": "test PC -> public domain -> RabiLink Relay -> target Rabi PC -> response",
+    "public_tts_hot_seconds": 3.97,
+    "public_tts_wav_bytes": 150060,
+    "public_asr_first_before_startup_preload_seconds": 114.28,
+    "local_asr_hot_seconds": 0.53,
+    "startup_preload_enabled": true,
+    "startup_ready_observed_within_seconds": 123.1,
+    "public_asr_first_after_startup_preload_seconds": 2.87,
+    "public_asr_hot_after_startup_preload_seconds": 0.58,
+    "public_asr_after_relay_restart_seconds": 2.46
+  },
+  "methodology_notes": [
+    "TTS uses an authorized local test-persona reference and records the first request after worker stop plus a second warmed request.",
+    "TTS smoke texts are not identical across all models; timing is not a strict throughput ranking.",
+    "ASR models transcribe the same 5.04-second clean Chinese WAV.",
+    "CER is a single-sample smoke indicator, not a production accuracy claim.",
+    "Cold request includes worker start, model load/warm-up, and first inference."
   ]
 }

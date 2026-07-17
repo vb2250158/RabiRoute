@@ -27,33 +27,10 @@ export type SpeechServiceStatus = {
   error?: string;
 };
 
+import { normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";
+export { normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";
+
 type FetchLike = typeof fetch;
-
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (normalized === "localhost" || normalized === "::1") return true;
-  const parts = normalized.split(".").map(Number);
-  return parts.length === 4
-    && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255)
-    && parts[0] === 127;
-}
-
-export function normalizeLocalSpeechServiceUrl(value: string): string {
-  const parsed = new URL(String(value || "").trim());
-  if (!(["http:", "https:"] as string[]).includes(parsed.protocol)) {
-    throw new Error("语音服务地址只支持 HTTP 或 HTTPS。");
-  }
-  if (!isLoopbackHostname(parsed.hostname)) {
-    throw new Error("语音服务状态检查只允许访问本机回环地址。");
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error("语音服务地址不能包含用户名或密码。");
-  }
-  parsed.search = "";
-  parsed.hash = "";
-  parsed.pathname = parsed.pathname.replace(/\/+$/, "");
-  return parsed.toString().replace(/\/$/, "");
-}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)

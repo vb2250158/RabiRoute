@@ -45,9 +45,9 @@ const snackbar = ref("");
 
 const navItems = computed(() => [
   { title: "控制台", icon: "mdi-view-dashboard-outline", to: "/overview" },
-  { title: "语音服务", icon: "mdi-waveform", to: "/speech" },
   { title: "消息适配器", icon: "mdi-puzzle-outline", to: "/routes" },
   { title: "Rabi 人格", icon: "mdi-account-heart-outline", to: "/persona" },
+  { title: "语音服务", icon: "mdi-waveform", to: "/speech" },
   { title: "日志诊断", icon: "mdi-console-line", to: "/runtime" }
 ].map(item => ({ ...item, title: t(item.title) })));
 

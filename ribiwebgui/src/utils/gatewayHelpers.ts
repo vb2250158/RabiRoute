@@ -60,9 +60,9 @@ export const templateVars = [
   { name: "channelPreset", description: "pipelinePreset 的别名，供使用 channel 命名的模板使用。" },
   { name: "inputAdapter", description: "pipeline 默认输入适配端。" },
   { name: "outputAdapter", description: "pipeline 默认输出适配端，例如 qq、tts、file、agent。" },
-  { name: "outputPipeline", description: "输出管道 ID，例如 qq、oumuq、file。" },
+  { name: "outputPipeline", description: "输出管道 ID，例如 qq、rabispeech、file。" },
   { name: "promptOutputMode", description: "提示词输出模式，例如 qq_text、voice_short、markdown、json。" },
-  { name: "ttsProvider", description: "TTS provider，语音模式通常为 oumuq。" },
+  { name: "ttsProvider", description: "TTS provider，现行本地语音模式使用 rabispeech。" },
   { name: "ttsVoice", description: "TTS 声线 / character_id。" },
   { name: "ttsWorkerUrl", description: "TTS worker 地址，只作为路由决策上下文。" },
   { name: "ttsPlay", description: "是否建议 worker 播放，true / false。" },
@@ -198,6 +198,7 @@ export function adapterLabel(type: string): string {
   if (type === "remoteAgent") return "远端 Agent";
   if (type === "heartbeat") return "定时触发";
   if (type === "rolePanel") return "角色面板";
+  if (type === "speech") return "语音消息端";
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
   if (type === "xiaoai") return "小米音箱 / 小爱";
   if (type === "rabilink") return "眼镜端（经 RabiLink）";
@@ -225,6 +226,7 @@ export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean
 
 export function adapterSourceAliases(type: string): string[] {
   if (type === "fennenote") return ["fennenote", "fenne_note", "fenne-note", "fenne", "芬妮笔记", "芬妮"];
+  if (type === "speech") return ["speech", "rabispeech", "rabipc", "语音消息端"];
   if (type === "xiaoai") return ["xiaoai", "xiao_ai", "xiao-ai", "mi_speaker", "mi-speaker", "xiaomi", "小爱", "小米音箱"];
   if (type === "rabilink") return ["rabilink", "rabi_link", "rabi-link", "rokid", "rokid_glass", "rizon", "lingzhu", "relay", "服务器", "直连", "乐奇", "乐棋"];
   if (type === "wecom") return ["wecom", "wechat-work", "企业微信", "企微"];
@@ -267,6 +269,34 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     gateway.heartbeatMessage = gateway.heartbeatMessage || defaultHeartbeatMessage();
     gateway.heartbeatSkipWhenAgentBusy = gateway.heartbeatSkipWhenAgentBusy === true;
     migrateLegacyHeartbeatSchedules(gateway);
+  }
+  if (adapters.includes("speech")) {
+    gateway.routeVariables = gateway.routeVariables ?? {};
+    gateway.routeVariables.speechAsrModel = gateway.routeVariables.speechAsrModel || "faster-whisper/small";
+    gateway.routeVariables.speechTtsModel = gateway.routeVariables.speechTtsModel || "local-tts/gpt-sovits";
+    gateway.routeVariables.speechVoice = gateway.routeVariables.speechVoice || gateway.agentRoleId || "Rabi";
+    gateway.routeVariables.speechLanguage = gateway.routeVariables.speechLanguage || "zh";
+    gateway.routeVariables.speechSpeed = gateway.routeVariables.speechSpeed || "1";
+    gateway.routeVariables.speechThreshold = gateway.routeVariables.speechThreshold || "0.02";
+    gateway.routeVariables.speechSilenceMs = gateway.routeVariables.speechSilenceMs || "900";
+    gateway.routeVariables.speechMinUtteranceMs = gateway.routeVariables.speechMinUtteranceMs || "350";
+    gateway.routeVariables.speechMaxUtteranceMs = gateway.routeVariables.speechMaxUtteranceMs || "30000";
+    gateway.routeVariables.speechAutoSubmit = gateway.routeVariables.speechAutoSubmit || "true";
+    gateway.routeVariables.speechAutoPlay = gateway.routeVariables.speechAutoPlay || "true";
+    gateway.pipelinePreset = gateway.pipelinePreset || "voice_chat";
+    gateway.pipeline = {
+      ...gateway.pipeline,
+      inputAdapter: "speech",
+      outputAdapter: "tts",
+      outputPipeline: "rabispeech",
+      promptOutputMode: gateway.pipeline?.promptOutputMode || "voice_short",
+      ttsProvider: gateway.pipeline?.ttsProvider || "local-tts",
+      ttsVoice: gateway.pipeline?.ttsVoice || gateway.routeVariables.speechVoice,
+      ttsWorkerUrl: "http://127.0.0.1:8781/v1/audio/speech",
+      ttsPlay: gateway.routeVariables.speechAutoPlay !== "false",
+      preventFeedbackLoop: true,
+      replyToSource: false
+    };
   }
   if (adapters.includes("webhook")) {
     gateway.webhookPort = Number(gateway.webhookPort || Number(gateway.gatewayPort || 8790) + 1);
@@ -401,12 +431,6 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       title: "远端 Agent",
       note: "远端 Agent 设备入口；本机人格可通过 Rabi API 把任务投递到远端设备。",
       groups: [{ title: "远端任务结果", routeKinds: ["manual_trigger"] }]
-    },
-    {
-      adapter: "fennenote",
-      title: "FenneNote / 芬妮笔记",
-      note: "桌面语音笔记和转写输入；底层是 HTTP 回调，但日志和配置按 FenneNote 独立显示。",
-      groups: [{ title: "FenneNote 语音事件", routeKinds: ["voice_transcript"] }]
     },
     {
       adapter: "xiaoai",

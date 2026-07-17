@@ -46,7 +46,7 @@ Protocol translation for live gateway inputs:
 
 - NapCat/OneBot.
 - WeCom smart-bot WebSocket.
-- Webhook-like inputs such as FenneNote and XiaoAI.
+- Webhook-like inputs such as XiaoAI, plus legacy-only FenneNote parsing. New PC speech uses RabiSpeech.
 - RabiLink compatibility/input paths.
 - heartbeat/manual and other internal adapters.
 
@@ -115,7 +115,7 @@ Desktop IPC is the only real-message transport. The target Desktop task owns mod
 - endpoint credentials/configuration;
 - platform sender implementation.
 
-It supports current NapCat, WeCom, FenneNote, RabiLink, and role-panel return paths and records `sent`, `draft`, `blocked`, or `failed`.
+It supports current NapCat, WeCom, RabiLink, and role-panel return paths, retains legacy FenneNote compatibility, and records `sent`, `draft`, `blocked`, or `failed`.
 
 There is no persistent generic Action Queue. Future approval/retry work should be layered on top of this audited result model.
 
@@ -154,7 +154,7 @@ Builds the Manager status read model consumed by WebGUI and diagnostics.
 `src/messageEndpoints/` supports control-plane scans and lifecycle actions:
 
 - `napcatManager.ts`: NapCat Shell/WebUI/token/OneBot setup, launch, health, and instance operations.
-- `webhookLikeScans.ts`: generic webhook, FenneNote, and XiaoAI-style HTTP callback scans.
+- `webhookLikeScans.ts`: generic webhook, XiaoAI, and legacy FenneNote HTTP callback scans.
 - `wecomManager.ts`: WeCom SDK, credential, connection/authentication, and recent-message scan.
 - `remoteAgentManager.ts`: discovery, challenge authentication, connections, tasks, events, and returned files.
 
@@ -193,6 +193,10 @@ The `rabiroute:webgui:locale` local-storage value is only a browser-side UI pref
 ## Plugin adapters
 
 External/companion adapters live under `plugin-adapters/` or `scripts/` when they are independently deployable. They communicate through documented Manager/Relay protocols and must not import private runtime data into public examples.
+
+`plugin-adapters/rabi-speech/` is an independent local TTS/ASR service, not a message or handler adapter. Its registry selects only locally configured providers. The benchmark pipeline records TTS generation, WAV output, ASR transcription, cold/load/warm timings, RTF, memory, error rates, and machine metadata; raw runtime artifacts remain ignored while the sanitized HTML report is copied through `ribiwebgui/public/reports/`.
+
+The live speech view belongs to the control plane. `src/manager/speechServiceStatus.ts` probes only a loopback RabiSpeech URL, normalizes provider state, and removes private paths before `GET /api/speech/status` serves `ribiwebgui/src/pages/SpeechServicePage.vue`. That page describes the current PC. The static benchmark describes only its named target machine, so the two must remain separate data sources.
 
 ## Tests
 

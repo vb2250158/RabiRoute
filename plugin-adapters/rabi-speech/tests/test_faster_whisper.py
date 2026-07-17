@@ -15,12 +15,15 @@ def test_cuda_inference_failure_retries_once_on_cpu(tmp_path: Path) -> None:
     cpu_model = object()
     provider._model = cuda_model
     provider._loaded_device = "cuda"
-    provider._ensure_model = lambda: cuda_model  # type: ignore[method-assign]
+    provider._loaded_model_id = settings.model
+    provider._ensure_model = lambda _model_id: cuda_model  # type: ignore[method-assign]
 
-    def load_model(device: str) -> object:
+    def load_model(device: str, model_id: str) -> object:
         assert device == "cpu"
+        assert model_id == settings.model
         provider._model = cpu_model
         provider._loaded_device = "cpu"
+        provider._loaded_model_id = model_id
         return cpu_model
 
     def run_model(model: object, _request: TranscriptionRequest, _vad_filter: bool | None = None):
@@ -36,3 +39,15 @@ def test_cuda_inference_failure_retries_once_on_cpu(tmp_path: Path) -> None:
 
     assert provider._loaded_device == "cpu"
     assert result.text == "fallback ok"
+
+
+def test_model_catalog_rejects_uninstalled_or_unknown_models() -> None:
+    settings = load_settings(Path(__file__).parents[1] / "config.example.json").faster_whisper
+    provider = FasterWhisperProvider(settings)
+    assert {item["id"] for item in provider.capabilities()["models"]} == {"tiny", "small", "large-v3-turbo"}
+    try:
+        provider._resolve_model("made-up")
+    except ValueError as exc:
+        assert "Allowed" in str(exc)
+    else:
+        raise AssertionError("Unknown model should be rejected")

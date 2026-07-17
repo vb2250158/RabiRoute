@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-local-speech-boundary",
+  "title": "RabiSpeech 是本地语音基础设施，语音消息端负责控制与可选投递",
+  "content": "RabiSpeech 只运行已安装的本地 TTS/ASR 模型或回环 worker，普通 API 不进入 Agent。RabiPC 语音服务页以 TTS/ASR 标签管理人格声线、全局 FIFO、常驻麦克风、双阈值、静音切句和可选 Route 投递；角色参考音与缓存归属 data/roles/<RoleId>/voice/。RabiLink 可以用一个应用 token 转接模型查询、TTS 与 ASR，但不能远程启停主机麦克风。OumuQ 与 FenneNote 只保留为停止维护的历史项目。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：本地语音能力、投递和公网控制边界"
+  },
+  "createdAt": "2026-07-17T00:00:00+08:00",
+  "updatedAt": "2026-07-17T00:00:00+08:00",
+  "keywords": ["RabiSpeech", "本地模型", "TTS", "ASR", "语音消息端", "人格声线", "全局 FIFO", "RabiLink", "隐私边界"]
+}

@@ -88,7 +88,7 @@ Codex/ChatGPT Desktop 同时是用户可见宿主和任务 owner；Codex 是 age
 当前实现：
 
 - 已验证：NapCat / OneBot、Heartbeat、Manager 内置角色面板和 Manual trigger。
-- 实验支持：Remote Agent、FenneNote、小爱、RabiLink、通用 Webhook 和 WeCom。
+- 实验支持：Remote Agent、RabiSpeech 语音消息端、小爱、RabiLink、通用 Webhook 和 WeCom。FenneNote 已退役，只保留旧配置兼容。
 - NapCat HTTP Server 用于状态查询和外发；NapCat 插件只负责页面入口、配置桥接和启动 Manager。
 - Remote Agent 与角色面板是 Manager 级入口，不应被误写成 Gateway 子进程 listener。
 
@@ -222,7 +222,7 @@ routes:
 当前 `POST /api/agent/replies` 和 `src/outbox.ts` 已经提供真实回传链路：
 
 - 返回状态为 `sent`、`draft`、`blocked` 或 `failed`。
-- 支持 QQ/NapCat、WeCom、FenneNote、RabiLink 和角色面板；默认 legacy pipeline 的 `outputAdapter=agent` 会把结果保留在 Agent 会话。
+- 当前输出支持 QQ/NapCat、WeCom、RabiLink 和角色面板；FenneNote 仅保留旧 Route 兼容。默认 legacy pipeline 的 `outputAdapter=agent` 会把结果保留在 Agent 会话。
 - QQ 支持来源回复、明确群/私聊目标、图片/语音/文件，以及 `allowedFileRoots` 文件白名单。
 - 外发失败会保留 draft 数据并写 Outbox 日志。
 

@@ -29,7 +29,7 @@ export {
   type BuiltinPersonaRulePolicy
 } from "./personaRulePolicy.js";
 
-export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "fennenote" | "xiaoai" | "rabilink" | "webhook" | "wecom" | "disabled";
+export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "webhook" | "wecom" | "disabled";
 export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
 export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
@@ -239,7 +239,7 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "fennenote", "xiaoai", "rabilink", "webhook", "wecom", "disabled"]);
+const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "webhook", "wecom", "disabled"]);
 const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
@@ -285,6 +285,7 @@ function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string
   if (adapter === "napcat") return ["private", "direct_at", "direct_reply", "indirect_reply"];
   if (adapter === "heartbeat") return ["heartbeat"];
   if (adapter === "rolePanel") return ["role_panel_message", "manual_trigger"];
+  if (adapter === "speech") return ["voice_transcript"];
   if (adapter === "fennenote" || adapter === "xiaoai" || adapter === "webhook") return ["voice_transcript"];
   if (adapter === "rabilink") return ["rabilink"];
   if (adapter === "wecom") return ["wecom_message"];
@@ -295,6 +296,7 @@ function defaultRuleNameForMessageAdapter(adapter: MessageAdapterType): string {
   if (adapter === "napcat") return "QQ 默认消息";
   if (adapter === "heartbeat") return "定时默认消息";
   if (adapter === "rolePanel") return "面板默认消息";
+  if (adapter === "speech") return "语音消息端默认消息";
   if (adapter === "fennenote") return "FenneNote 默认语音";
   if (adapter === "xiaoai") return "小爱默认语音";
   if (adapter === "rabilink") return "RabiLink 默认消息";

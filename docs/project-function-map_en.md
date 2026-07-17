@@ -35,9 +35,11 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 | Role panel | verified | Qt/Manager local message | role timeline and handler turn/reply | Manager/Qt | role-panel modules and Outbox |
 | Remote Agent | experimental | discovered bridge and explicit task | connection/task/event/file runtime data | `/api/remote-agent/*` | `src/messageEndpoints/remoteAgentManager.ts` |
 | Generic webhook | experimental | HTTP POST | adapter/event logs and handler turn | configured port/path | webhook adapter/scans |
-| FenneNote | experimental | transcript webhook and output bridge | transcript logs and optional output | route/pipeline | webhook-like adapter, Outbox |
+| FenneNote compatibility | retired/hidden | legacy transcript webhook and output bridge | compatibility logs only when an old route still references it | no longer offered by the add-adapter UI | webhook-like adapter, Outbox |
 | WeCom | experimental | smart-bot WebSocket | message/status logs and group send | scan and route config | `src/adapters/wecomAdapter.ts`, `src/wecom.ts`, `src/messageEndpoints/wecomManager.ts` |
-| RabiLink | experimental | Relay/worker observation and downlink | conversation ledger, queues, device output | global Relay config and route adapter | RabiLink runtime/scripts/Outbox |
+| Glasses endpoint through RabiLink | experimental; legacy internal key `rabilink` | glasses observations and downlink | conversation ledger, compatibility logs, device output | route message-adapter entry | RabiLink adapter/worker/Outbox |
+| RabiLink system transport | experimental; internal contracts tested | global Relay configuration, remote WebGUI, speech, and observation queues | Manager registration and transport queues; does not select a Route or own an Agent | Rabi instance on Console | `src/manager/rabiLinkRelayRuntime.ts`, Relay scripts |
+| RabiSpeech local TTS / ASR | experimental | local registry, persona voice directories, private model cache and workers | local audio/transcription, global FIFO playback; enters an Agent only through explicit Route submit | `/#/speech`, `/v1/models`, direct APIs, static report | `plugin-adapters/rabi-speech/`, `src/manager/speechServiceStatus.ts` |
 | Codex handler | verified | AgentPacket | thread create/resume, turn start/steer | route handler config | `src/codexRuntime.ts`, `src/codexAppServerClient.ts` |
 | Copilot CLI | experimental | AgentPacket | local CLI process/output state | handler scan/config | `src/copilotCli.ts` |
 | AstrBot | experimental | AgentPacket | Dashboard/ChatUI API calls | handler scan/config | `src/agentAdapters/astrbotAdapter.ts`, `src/agentAdapters/managerApi.ts` |
@@ -55,6 +57,7 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 
 - `adapterConfig.json` owns route runtime settings; `personaConfig.json` owns role notification rules and recent-message count.
 - `agentRoleId` binds one route to one reusable role. A rule does not choose another role.
+- RabiLink is a Manager-owned system transport. The glasses entry is an endpoint using that transport; RabiSpeech uses the same transport without entering message routing or an Agent.
 - Codex adapter ID stays `codex`; Codex/ChatGPT Desktop is the required task owner.
 - Desktop IPC is the only real-message Codex transport. App-server is limited to empty-task metadata bootstrap.
 - A valid saved task ID plus workspace is stable; Desktop renames, stale index titles, and completed goals do not create duplicates.

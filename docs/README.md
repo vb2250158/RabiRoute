@@ -34,7 +34,7 @@
 - [Agent 上下文注入](agent-context-injection.md) — **现行指南**。`AgentPacket` 中的事件、最近消息、角色知识、路径和回复上下文。
 - [Rabi Agent 接口](rabi-agent-interfaces.md) — **现行指南**。回复、thread bridge、计划、记忆、Remote Agent 和多实例 API。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
-- [Pipeline presets](pipeline-presets.md) — **现行指南**。默认 Agent 会话、明确外部目标、Outbox 状态和 FenneNote 接线。
+- [Pipeline presets](pipeline-presets.md) — Agent 会话、明确外部目标和 Outbox 状态；其中 FenneNote 输出章节仅为归档兼容说明。
 - [Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md) — **现行指南**。会话重复创建、工具缺失、owner 倒置和桌面启动依赖的复盘与验证方法。
 - [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) — **现行指南**。发现、认证、任务、幂等创建、投递、结果、工具、生命周期、UI、安全和验收要求。
 - [Codex Desktop Agent 接入与验收合同](codex-desktop-agent-acceptance.md) — **当前事实**。稳定 ID、按需扫描、自动初始化、Desktop 唯一 owner 和元数据 bootstrap 安全门。
@@ -50,8 +50,10 @@
 ## 实验集成
 
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
-- [语音交互工作站](voice-interaction-workstation.md) — FenneNote、角色对话和 OumuQ/TTS 接线。
-- [RabiSpeech 本机 TTS / ASR 插件](rabispeech-plugin.md) — 本机直接 API、左侧实时能力页、RabiLink 系统中转、CUDA 排障，以及仅代表目标测试机的闭环 HTML 基准报告。
+- [语音交互工作站](voice-interaction-workstation.md) — 历史工作站接线记录；FenneNote/OumuQ 已停止维护，现行入口是 RabiPC + RabiSpeech。
+- [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、模型/参数发现、人格声线、RabiPC 和 RabiLink 中转。
+- [本地语音模型下载说明](local-speech-model-downloads.md) — 每个 TTS/ASR 模型的来源、下载、隔离环境与验证。
+- [RabiSpeech 性能与功能报告](rabispeech-performance-report.md) — 六个 TTS、五个主要 ASR 的冷/热态、效果、硬件与 CUDA 问题。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
 - [RabiLink 眼镜端三条路线对比](rabilink-glasses-route-comparison.md) — 原生灵珠智能体、AIUI 与原生 App 的宿主、生命周期、设备能力、发布成本和当前建议。

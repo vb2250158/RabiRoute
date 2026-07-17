@@ -1,4 +1,5 @@
 from .faster_whisper import FasterWhisperProvider
-from .oumuq import OumuqTtsProvider
+from .http_asr import LocalHttpAsrProvider
+from .local_tts import LocalTtsProvider
 
-__all__ = ["FasterWhisperProvider", "OumuqTtsProvider"]
+__all__ = ["FasterWhisperProvider", "LocalHttpAsrProvider", "LocalTtsProvider"]

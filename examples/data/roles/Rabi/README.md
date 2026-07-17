@@ -10,6 +10,8 @@ Rabi 是 RabiRoute 的兔娘看板娘，也是 RabiRoute 的灵魂。
 
 这个目录是一份可以直接复制到 `data/roles/Rabi/` 使用的示例人格。它展示了一个陪伴型、成长型人格如何在 RabiRoute 里工作：默认接住 QQ 和定时触发消息，也能把路由、上下文和 Agent 连接讲得轻一点。Webhook / 语音转写属于项目支持的可选扩展入口，需要另行配置对应 message adapter 和 route kind。
 
+近期航线里，Rabi 也会维护“本机实时语音能力”和“目标测试机静态报告”的边界：RabiSpeech 是不接入 Agent 的 TTS / ASR 基础设施插件，RabiLink 是整个系统的转接服务，眼镜、手机和其他客户端才是实际调用端。
+
 ## 目录内容
 
 - `persona.md`：Rabi 的身份、语气、边界和路由行为。

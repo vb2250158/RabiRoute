@@ -42,7 +42,8 @@ RabiRoute owns ingress, rule matching, context packaging, handler delivery, repl
 | Role panel | `verified` | A built-in local Manager/tray input rather than a standalone network listener. It uses the fixed `role_panel_message` rule and writes a role-scoped timeline. |
 | Manual trigger | `verified` | Manager APIs and the log page can execute `manual_trigger` or heartbeat rules through the real delivery path. It is not a message adapter. |
 | Remote Agent | `experimental` | The Manager acts as a v3 outbound controller that discovers and connects to remote bridges with a password challenge. Tasks, events, and bidirectional files are supported. The Gateway child process exposes placeholder status and does not open another listener. |
-| FenneNote | `experimental` | A named webhook-like speech-transcript input. It can write only to the RabiLink ledger under record-first rules or route directly. Outbox can forward to FenneNote reply/playback endpoints. |
+| RabiSpeech message endpoint | `experimental` | Resident PC microphone, local ASR, optional Route delivery, persona TTS, and one host FIFO, managed through top-level RabiPC TTS/ASR tabs. |
+| FenneNote | `retired compatibility` | No longer offered by add-endpoint or new-rule UI; old Routes remain readable and keep historical webhook/Outbox migration compatibility. |
 | XiaoAI | `experimental` | RabiRoute provides a named callback and a PC bridge directory, but open-xiaoai, xiaogpt, or another bridge must carry speaker events to the PC. The speaker does not connect directly to the core. |
 | RabiLink | `experimental` | Includes a local compatibility endpoint, a global Relay Runtime, and a route worker. AIUI observations can be recorded first in one ledger; the reviewer processes them when Codex is idle, periodically, or on a touchpad wake. Proactive messages use an independent Relay downlink stream. External AIUI, phone, and wearable paths still require real-device acceptance. |
 | Generic Webhook | `experimental` | Accepts POST events from sources without a dedicated adapter. Named platforms should use their own adapters to preserve logs and reply semantics. |
@@ -80,7 +81,7 @@ Command, file, network, permission, and tool approval in the target Desktop task
 | Local Agent session | The legacy default uses `outputAdapter=agent`. Without an explicit external target, the result remains in the Agent session and does not create a draft. |
 | QQ / NapCat | Supports source replies and explicit group/private targets, with text/image/voice/file payloads. Local group files must pass `allowedFileRoots` and use `upload_group_file`. Real quoted-reply segments are supported. |
 | WeCom | Supports source-group replies and explicit chat/group targets through the SDK, gated by adapter policy. |
-| FenneNote | Forwards a reply or playback request according to the pipeline/request while preserving voice parameters. |
+| FenneNote | Retired; reply/playback forwarding remains only for legacy Routes, not as a new output design. |
 | RabiLink | Route policy gates reply or proactive text entering the continuous Relay stream. Proactive downlink does not require a fabricated source task. |
 | Role panel | Appends directly to the role timeline and may include attachment descriptors. |
 

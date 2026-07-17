@@ -18,6 +18,7 @@ import {
   type MessagePayloadKind
 } from "./shared/gatewayConfigModel.js";
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
+import { requestLocalSpeech } from "./speech/localSpeechClient.js";
 import {
   appendRabiLinkConversationEntry,
   DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS
@@ -60,6 +61,7 @@ export type AgentReplyRequest = {
   targetDeviceKinds?: unknown;
   presentation?: unknown;
   priority?: unknown;
+  sessionId?: unknown;
 };
 
 export type AgentReplyNapCatInstance = NapCatEndpoint & {
@@ -116,6 +118,7 @@ export type AgentReplyOptions = {
   fenneNotePlaybackToken?: string;
   fenneNoteReplyUrl?: string;
   fenneNoteReplyToken?: string;
+  speechServiceUrl?: string;
 };
 
 export type AgentReplyResult = {
@@ -612,6 +615,15 @@ function fenneNotePolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "fennenote");
 }
 
+function speechPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+  return messageAdapterPolicyFor({
+    id: route.runtime.id,
+    gatewayPort: 0,
+    messageAdapters: ["speech"],
+    messageAdapterPolicies: route.runtime.messageAdapterPolicies
+  }, "speech");
+}
+
 function wecomPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
@@ -849,6 +861,47 @@ async function postFenneNoteOutput(
   };
 }
 
+function routeVariable(route: ResolvedRoute, key: string): string {
+  return String(route.profile?.routeVariables?.[key] ?? route.runtime.routeVariables?.[key] ?? "").trim();
+}
+
+async function postRabiSpeechOutput(
+  options: AgentReplyOptions,
+  request: AgentReplyRequest,
+  route: ResolvedRoute,
+  pipeline: ResolvedPipeline,
+  text: string
+): Promise<{ playbackJob?: string; provider?: string; model?: string }> {
+  const context = contextObject(request);
+  const roleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId) || "default";
+  const speed = Number(routeVariable(route, "speechSpeed") || "1");
+  const serviceUrl = options.speechServiceUrl ?? process.env.RABISPEECH_URL ?? "http://127.0.0.1:8781";
+  const result = await requestLocalSpeech(serviceUrl, "/v1/audio/speech", {
+    method: "POST",
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      model: routeVariable(route, "speechTtsModel") || "tts-local",
+      input: text,
+      voice: pipeline.ttsVoice || routeVariable(route, "speechVoice") || roleId,
+      response_format: "wav",
+      speed: Number.isFinite(speed) && speed >= 0.25 && speed <= 4 ? speed : 1,
+      language: routeVariable(route, "speechLanguage") || null,
+      instructions: routeVariable(route, "speechInstructions") || null,
+      play: pipeline.ttsPlay,
+      session_id: valueString(context.sessionId) || valueString(request.sessionId) || null,
+      route_id: route.profile?.id ?? route.runtime.id
+    })
+  });
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(`RabiSpeech returned HTTP ${result.status}: ${result.body.toString("utf8").slice(0, 500)}`);
+  }
+  return {
+    playbackJob: result.headers["x-rabispeech-playback-job"],
+    provider: result.headers["x-rabispeech-provider"],
+    model: result.headers["x-rabispeech-model"]
+  };
+}
+
 export async function handleAgentReply(request: AgentReplyRequest, options: AgentReplyOptions): Promise<AgentReplyResult> {
   const content = requestContent(request);
   const text = content.text;
@@ -1001,6 +1054,46 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     (messageId && loggedTarget) ||
     hasExplicitQqTarget
   );
+
+  if (pipeline.outputAdapter === "tts") {
+    const policy = speechPolicy(route);
+    if (!policy.outputEnabled) {
+      const result: AgentReplyResult = { ...draft("Speech output is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    if (content.kind !== "text") {
+      const result: AgentReplyResult = { ...draft("RabiSpeech TTS accepts text replies only.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    try {
+      const speech = await postRabiSpeechOutput(options, request, route, pipeline, text);
+      const result: AgentReplyResult = {
+        ok: true,
+        status: "sent",
+        reason: pipeline.ttsPlay ? "Queued in the RabiSpeech host-wide playback queue." : "Synthesized by RabiSpeech.",
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId,
+        targetType: "voice_transcript",
+        sentMessageId: speech.playbackJob
+      };
+      appendOutboxLog(options, route, "info", "rabispeech_tts_sent", text.slice(0, 500), { ...result, speech });
+      return result;
+    } catch (error) {
+      const result: AgentReplyResult = {
+        ok: false,
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId,
+        targetType: "voice_transcript",
+        draft: { text, targetType: "voice_transcript" }
+      };
+      appendOutboxLog(options, route, "error", "rabispeech_tts_failed", result.reason ?? "failed", result);
+      return result;
+    }
+  }
 
   if (pipeline.outputAdapter === "agent" && !isSourceReply) {
     const result: AgentReplyResult = {

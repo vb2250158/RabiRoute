@@ -1,3 +1,5 @@
+"""Archived OumuQ HTTP hop retained for migration history only."""
+
 from __future__ import annotations
 
 import asyncio
@@ -8,6 +10,7 @@ import httpx
 
 from ..config import OumuqSettings
 from ..contracts import SpeechAudioArtifact, SpeechSynthesisRequest
+from ..worker_supervisor import worker_supervisor
 
 
 class OumuqTtsProvider:
@@ -24,11 +27,28 @@ class OumuqTtsProvider:
             "base_url": self.settings.base_url,
             "formats": ["wav", "mp3", "flac", "opus", "aac", "pcm"],
             "voice_binding": "OumuQ character_id or fixed worker speaker",
+            "model": self.settings.model,
+            "models": [
+                {
+                    "id": model.id,
+                    "name": model.name,
+                    "family": model.family,
+                    "installed": model.installed,
+                    "loaded": False,
+                    "languages": list(model.languages),
+                    "features": list(model.features),
+                    "parameters": self._model_parameters(model.id),
+                }
+                for model in self.settings.models
+            ],
         }
 
     async def synthesize(self, request: SpeechSynthesisRequest) -> SpeechAudioArtifact:
         if not self.settings.enabled:
             raise RuntimeError("OumuQ TTS provider is disabled.")
+        model = self._resolve_model(request.model)
+        if not model.installed:
+            raise ValueError(f"Local TTS model is not installed: {model.id}")
         payload: dict[str, object] = {
             "text": request.text,
             "play": False,
@@ -40,14 +60,15 @@ class OumuqTtsProvider:
                 payload["speaker"] = voice.split(":", 1)[1].strip()
             else:
                 payload["character_id"] = voice
-        if self.settings.default_worker_url:
-            payload["worker_url"] = self.settings.default_worker_url
+        worker_url = model.worker_url or self.settings.default_worker_url
+        if worker_url:
+            await worker_supervisor.ensure(f"tts:{model.id}", worker_url, model.launch)
+            payload["worker_url"] = worker_url
         if request.language:
             payload["language"] = request.language
         if request.instructions:
             payload["instructions"] = request.instructions
-        if request.model not in {"", "default", "tts-local", "tts-1"}:
-            payload["model"] = request.model
+        payload["model"] = model.id
 
         timeout = httpx.Timeout(self.settings.timeout_seconds, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -81,8 +102,27 @@ class OumuqTtsProvider:
             path=output,
             media_type="audio/wav" if output.suffix.lower() == ".wav" else "application/octet-stream",
             provider=self.provider_id,
-            model=request.model,
+            model=model.id,
         )
+
+    def _resolve_model(self, requested: str):
+        normalized = requested.strip().lower()
+        if normalized in {"", "default", "tts-local", "tts-1"}:
+            normalized = self.settings.model.lower()
+        for model in self.settings.models:
+            if model.id.lower() == normalized:
+                return model
+        allowed = ", ".join(model.id for model in self.settings.models)
+        raise ValueError(f"Unknown or disallowed local TTS model {requested!r}. Allowed: {allowed}")
+
+    @staticmethod
+    def _model_parameters(model_id: str) -> dict[str, object]:
+        if model_id == "onnx-vits":
+            return {"voice": {"type": "string", "description": "Use speaker:<numeric-id> or an OumuQ character id."}}
+        return {
+            "voice": {"type": "string", "description": "OumuQ character id backed by local reference audio."},
+            "instructions": {"type": ["string", "null"], "description": "Optional style/emotion instruction when supported."},
+        }
 
     def _safe_output_path(self, value: object) -> Path:
         output = Path(str(value or "")).expanduser().resolve()

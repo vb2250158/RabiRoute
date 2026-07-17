@@ -10,7 +10,7 @@ import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
 import { forwardMessageAndWait, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
-import type { RolePanelMessageRecord } from "./history.js";
+import { appendVoiceTranscriptEventForAdapter, type RolePanelMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
 
 type GatewayStatus = {
@@ -163,6 +163,47 @@ if (rolePanelMessageArg) {
   }
 }
 
+const speechMessageArg = process.argv.find((arg) => arg.startsWith("--speech-message="));
+if (speechMessageArg) {
+  const messageId = decodeURIComponent(speechMessageArg.slice("--speech-message=".length)).trim() || `speech-${Date.now()}`;
+  const textArg = process.argv.find((arg) => arg.startsWith("--speech-text="));
+  const sessionArg = process.argv.find((arg) => arg.startsWith("--speech-session="));
+  const text = textArg ? decodeURIComponent(textArg.slice("--speech-text=".length)).trim() : "";
+  const sessionId = sessionArg ? decodeURIComponent(sessionArg.slice("--speech-session=".length)).trim() : "";
+  if (!text) {
+    console.error("RabiRoute speech message failed: missing transcript text");
+    process.exit(1);
+  }
+  const record: VoiceTranscriptEventRecord = {
+    time: Math.floor(Date.now() / 1000),
+    rawMessage: text,
+    messageId,
+    senderName: "RabiPC 语音消息端",
+    adapterType: "speech",
+    source: "rabispeech",
+    transport: "rabipc",
+    sessionId
+  };
+  try {
+    appendVoiceTranscriptEventForAdapter("speech", record);
+    const result = await forwardMessageAndWait("voice_transcript", record);
+    const summary = deliverySummary(result);
+    if (result.status === "failed") {
+      console.error(`RabiRoute speech message failed: ${messageId} ${summary}`);
+      process.exit(1);
+    }
+    if (result.status === "missed" || result.status === "routed" || result.status === "skipped") {
+      console.warn(`RabiRoute speech message not delivered: ${messageId} ${summary}`);
+    } else {
+      console.log(`RabiRoute speech message delivered: ${messageId} ${summary}`);
+    }
+    process.exit(0);
+  } catch (error) {
+    console.error(`RabiRoute speech message failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
 const directAgentMessageArg = process.argv.find((arg) => arg.startsWith("--direct-agent-message="));
 if (directAgentMessageArg) {
   const message = decodeURIComponent(directAgentMessageArg.slice("--direct-agent-message=".length));
@@ -219,11 +260,13 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
   return {
     type,
     start() {
-      const status = type === "disabled" ? "disabled" : type === "rolePanel" ? "running" : "placeholder";
+      const status = type === "disabled" ? "disabled" : type === "rolePanel" || type === "speech" ? "running" : "placeholder";
       const message = type === "disabled"
         ? "消息适配端已禁用。"
         : type === "rolePanel"
           ? "角色面板是 RabiRoute 内置本地消息端，由 manager/托盘窗口提供入口。"
+        : type === "speech"
+          ? "语音消息端是 RabiRoute 内置本地消息端，由 RabiPC 与 RabiSpeech 提供麦克风、ASR、TTS 和排队播放。"
         : type === "remoteAgent"
           ? "远端 Agent 消息端由 manager 的 /api/remote-agent 与 WebSocket bridge 提供入口；gateway 子进程不单独监听。"
         : `${type} 消息适配端尚未实现，当前仅作为框架占位。`;

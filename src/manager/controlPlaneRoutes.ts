@@ -80,6 +80,7 @@ import { handleRabiApi } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { inspectLocalSpeechService } from "./speechServiceStatus.js";
+import { requestLocalSpeech, requestLocalSpeechJson } from "../speech/localSpeechClient.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import {
   applyMemoryConsolidationResult,
@@ -522,7 +523,7 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
 function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
   return unique.length > 0 ? unique : ["napcat"];
 }
@@ -1729,7 +1730,7 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     checkHttpEndpoint,
     fenneNotePlaybackUrl
   };
-  const [napcat, fennenote, xiaoai, rabilink, webhook, wecom] = await Promise.all([
+  const [napcat, fennenote, xiaoai, rabilink, webhook, wecom, speechStatus] = await Promise.all([
     scanNapcatEndpoint(napcatManagerCtx()),
     scanFenneNoteEndpoint(webhookLikeScanCtx),
     scanXiaoAiEndpoint(webhookLikeScanCtx),
@@ -1739,7 +1740,8 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
       rootDir,
       adapterRuntimes,
       routeHasRecentMessages
-    })
+    }),
+    inspectLocalSpeechService(speechServiceUrl())
   ]);
 
   return {
@@ -1766,6 +1768,19 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
         { id: "timeline", label: "角色聊天记录", required: true, ok: true, detail: "按角色写入 data/roles/<RoleId>/role-panel/messages.jsonl。" }
       ],
       warnings: ["角色面板是固定内置消息端，不能删除或禁用；自由聊天使用 role_panel_message 路由类型。"]
+    },
+    speech: {
+      type: "speech",
+      label: "语音消息端",
+      maturity: "verified",
+      installed: speechStatus.state === "online",
+      endpoints: [{ label: "RabiSpeech 本机服务", url: speechStatus.configuredUrl, healthy: speechStatus.state === "online" }],
+      requirements: [
+        { id: "builtin", label: "RabiPC 内置语音消息端", required: true, ok: true, detail: "麦克风、阈值、常驻转录和 Route 投递由 RabiPC 提供。" },
+        { id: "runtime", label: "RabiSpeech 本地模型服务", required: true, ok: speechStatus.state === "online", detail: speechStatus.error || `${speechStatus.providers.tts.length} 个 TTS provider，${speechStatus.providers.asr.length} 个 ASR provider。` },
+        { id: "local-only", label: "仅本地模型", required: true, ok: speechStatus.localOnly === true, detail: "不调用云端 TTS/ASR 服务商 API。" }
+      ],
+      warnings: speechStatus.state === "online" ? [] : ["先启动 RabiSpeech，再做麦克风实机 ASR 和 TTS 排队播放测试。"]
     },
     fennenote,
     xiaoai,
@@ -2144,6 +2159,10 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     const filePath = path.join(dir, "role-panel", "messages.jsonl");
     return readJsonlTail(filePath, 8).map((record) => messageFileEntry("角色面板", filePath, record));
   }));
+  const speechEntries = sortTail([
+    ...readEntries("语音消息端", "speech-voice-transcripts.jsonl"),
+    ...readEntries("语音消息端", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "speech")
+  ]);
   const fenneNoteEntries = sortTail([
     ...readEntries("FenneNote / 芬妮笔记", "fennenote-voice-transcripts.jsonl"),
     ...readEntries("FenneNote / 芬妮笔记", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "fennenote")
@@ -2178,6 +2197,13 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     rolePanel: {
       paths: dirs.map((dir) => path.join(dir, "role-panel", "messages.jsonl")),
       entries: rolePanelEntries
+    },
+    speech: {
+      paths: dirs.flatMap((dir) => [
+        path.join(dir, "speech-voice-transcripts.jsonl"),
+        path.join(dir, "voice-transcripts.jsonl")
+      ]),
+      entries: speechEntries
     },
     fennenote: {
       paths: dirs.flatMap((dir) => [
@@ -2233,6 +2259,10 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
     rolePanel: {
       paths: [path.join(dir, "rolePanel-adapter.log.jsonl")],
       entries: readEntries("rolePanel")
+    },
+    speech: {
+      paths: [path.join(dir, "speech-adapter.log.jsonl")],
+      entries: readEntries("speech")
     },
     fennenote: {
       paths: [path.join(dir, "fennenote-adapter.log.jsonl")],
@@ -2374,6 +2404,25 @@ function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
   });
 }
 
+function readBodyBuffer(request: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    request.on("data", (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.byteLength;
+      if (total > maxBytes) {
+        reject(new Error(`Request body exceeds ${maxBytes} bytes.`));
+        request.destroy();
+        return;
+      }
+      chunks.push(buffer);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
 type ManualTriggerRequest = {
   triggerId?: string;
   triggerName?: string;
@@ -2394,6 +2443,12 @@ type RolePanelMessageRequest = {
   gatewayId?: string;
   text?: string;
   attachments?: RolePanelAttachment[];
+};
+
+type SpeechMessageRequest = {
+  gatewayId?: string;
+  text?: string;
+  sessionId?: string;
 };
 
 function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): Promise<void> {
@@ -2602,6 +2657,43 @@ function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: stri
         return;
       }
       reject(new Error(`role panel message failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
+    });
+  });
+}
+
+function triggerGatewaySpeechMessage(runtime: GatewayRuntime, messageId: string, text: string, sessionId: string): Promise<void> {
+  const roleId = roleIdForDefinition(runtime.definition);
+  const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
+  const command = childCommand([
+    `--speech-message=${encodeURIComponent(messageId)}`,
+    `--speech-text=${encodeURIComponent(text)}`,
+    `--speech-session=${encodeURIComponent(sessionId)}`,
+    `--speech-role=${encodeURIComponent(roleId)}`,
+    `--speech-gateway=${encodeURIComponent(runtime.definition.id)}`,
+    `--speech-route-profile=${encodeURIComponent(routeProfileId)}`
+  ]);
+  appendLog(runtime, `speech message requested: ${messageId}`);
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+    child.stdout.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) appendLog(runtime, `speech: ${line}`);
+    });
+    child.stderr.on("data", (data) => {
+      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) appendLog(runtime, `speech error: ${line}`);
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        appendLog(runtime, `speech message completed: ${messageId}`);
+        resolve();
+        return;
+      }
+      reject(new Error(`speech message failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
     });
   });
 }
@@ -2822,6 +2914,166 @@ function handleRolePanelApi(request: http.IncomingMessage, requestUrl: URL, resp
     return true;
   }
 
+  return false;
+}
+
+function speechServiceUrl(): string {
+  return rabiGlobalConfig.read().rabiLinkRelay.speechServiceUrl;
+}
+
+function writeSpeechProxyResponse(response: http.ServerResponse, result: Awaited<ReturnType<typeof requestLocalSpeech>>): void {
+  response.writeHead(result.status, {
+    "content-type": result.contentType,
+    "content-length": String(result.body.byteLength),
+    ...result.headers
+  });
+  response.end(result.body);
+}
+
+function speechPersonaRows(): Array<{ id: string; voiceReady: boolean }> {
+  if (!fs.existsSync(rolesRoot)) return [];
+  return fs.readdirSync(rolesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && Boolean(sanitizeRoleId(entry.name)))
+    .map((entry) => ({
+      id: entry.name,
+      voiceReady: fs.existsSync(path.join(roleFolderPath(rolesRoot, entry.name), "voice", "voice-profile.json"))
+        || fs.existsSync(path.join(roleFolderPath(rolesRoot, entry.name), "voice", "voice-index.json"))
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/status") {
+    void inspectLocalSpeechService(speechServiceUrl())
+      .then((status) => jsonResponse(response, 200, { code: 0, data: status }))
+      .catch((error) => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/models") {
+    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/models", {}, { timeoutMs: 10_000 })
+      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
+      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/personas") {
+    jsonResponse(response, 200, { code: 0, data: speechPersonaRows() });
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/playback/status") {
+    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/playback/status", {}, { timeoutMs: 10_000 })
+      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
+      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/status") {
+    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/microphone/status", {}, { timeoutMs: 10_000 })
+      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
+      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/devices") {
+    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/microphone/devices", {}, { timeoutMs: 15_000 })
+      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
+      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/microphone/start") {
+    void readJsonBody<Record<string, unknown>>(request)
+      .then((body) => {
+        const routeId = sanitizeRoleId(body.route_id);
+        const autoSubmit = body.auto_submit === true;
+        if (autoSubmit) {
+          const runtime = routeId ? runtimes.get(routeId) : undefined;
+          if (!runtime) throw new Error("Select a configured speech Route before enabling automatic submission.");
+          if (!sharedGatewayAdapterTypes(runtime.definition).includes("speech")) throw new Error("The selected Route has no speech message endpoint.");
+        } else if (routeId && !runtimes.get(routeId)) {
+          throw new Error("The selected speech Route does not exist.");
+        }
+        return requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/microphone/start", {
+          method: "POST",
+          headers: { "content-type": "application/json; charset=utf-8" },
+          body: JSON.stringify({ ...body, route_id: routeId || null, auto_submit: autoSubmit })
+        }, { timeoutMs: 30_000 });
+      })
+      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/microphone/stop") {
+    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/microphone/stop", { method: "POST" }, { timeoutMs: 15_000 })
+      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
+      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/playback/stop") {
+    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/playback/stop", { method: "POST" }, { timeoutMs: 10_000 })
+      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
+      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/tts") {
+    void readJsonBody<Record<string, unknown>>(request)
+      .then((body) => {
+        const input = String(body.input || "").trim();
+        if (!input) throw new Error("Missing TTS input.");
+        if (input.length > 10_000) throw new Error("TTS input exceeds 10000 characters.");
+        const payload = {
+          model: String(body.model || "tts-local"),
+          input,
+          voice: String(body.voice || "default"),
+          response_format: String(body.response_format || "wav"),
+          speed: Number(body.speed || 1),
+          language: body.language == null ? null : String(body.language),
+          instructions: body.instructions == null ? null : String(body.instructions).slice(0, 2000),
+          sample_rate: body.sample_rate == null ? null : Number(body.sample_rate),
+          play: body.play === true,
+          session_id: body.session_id == null ? null : String(body.session_id).slice(0, 200),
+          route_id: body.route_id == null ? null : String(body.route_id).slice(0, 200)
+        };
+        return requestLocalSpeech(speechServiceUrl(), "/v1/audio/speech", {
+          method: "POST",
+          headers: { "content-type": "application/json; charset=utf-8" },
+          body: JSON.stringify(payload)
+        });
+      })
+      .then((result) => writeSpeechProxyResponse(response, result))
+      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/asr") {
+    const contentType = headerValue(request.headers["content-type"]);
+    if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
+      jsonResponse(response, 415, { code: -1, message: "ASR requires multipart/form-data." });
+      return true;
+    }
+    void readBodyBuffer(request, 27 * 1024 * 1024)
+      .then((body) => requestLocalSpeech(speechServiceUrl(), "/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { "content-type": contentType },
+        body: new Uint8Array(body)
+      }))
+      .then((result) => writeSpeechProxyResponse(response, result))
+      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/messages") {
+    void readJsonBody<SpeechMessageRequest>(request)
+      .then(async (body) => {
+        const gatewayId = sanitizeRoleId(body.gatewayId);
+        const runtime = gatewayId ? runtimes.get(gatewayId) : undefined;
+        if (!runtime) throw new Error("Select a configured speech Route first.");
+        if (!sharedGatewayAdapterTypes(runtime.definition).includes("speech")) throw new Error("The selected Route has no speech message endpoint.");
+        const text = String(body.text || "").trim();
+        if (!text) throw new Error("Missing speech transcript text.");
+        const sessionId = String(body.sessionId || `speech-${Date.now()}`).trim().slice(0, 200);
+        const messageId = `speech-user-${randomUUID()}`;
+        await triggerGatewaySpeechMessage(runtime, messageId, text, sessionId);
+        return { gatewayId: runtime.definition.id, messageId, sessionId };
+      })
+      .then((payload) => jsonResponse(response, 202, { code: 0, ...payload }))
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
   return false;
 }
 
@@ -3343,6 +3595,9 @@ export async function startManager(): Promise<void> {
       if (handleRolePanelApi(request, requestUrl, response)) {
         return;
       }
+      if (handleSpeechApi(request, requestUrl, response)) {
+        return;
+      }
       if ((request.method === "GET" || request.method === "POST" || request.method === "PATCH") && handleRoleKnowledgeApi(request, requestUrl.pathname, response)) {
         return;
       }
@@ -3392,16 +3647,6 @@ export async function startManager(): Promise<void> {
       }
       if (request.method === "GET" && requestUrl.pathname === "/meta") {
         jsonResponse(response, 200, metaPayload());
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/api/speech/status") {
-        const configuredUrl = rabiGlobalConfig.read().rabiLinkRelay.speechServiceUrl;
-        void inspectLocalSpeechService(configuredUrl)
-          .then((status) => jsonResponse(response, 200, { code: 0, data: status }))
-          .catch((error) => jsonResponse(response, 500, {
-            code: -1,
-            message: error instanceof Error ? error.message : String(error)
-          }));
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/scan/message-adapters") {
@@ -3492,6 +3737,7 @@ export async function startManager(): Promise<void> {
             rootDir,
             routeRoot,
             rolesRoot,
+            speechServiceUrl: speechServiceUrl(),
             runtimes: [...runtimes.values()].map((runtime) => {
               const relay = rabiLinkRelayConfigFor(runtime.definition);
               return {

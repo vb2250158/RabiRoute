@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
+import os
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.background import BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
@@ -18,7 +22,10 @@ from .audio import AudioTranscoder, subtitle_text
 from .config import Settings, load_settings
 from .contracts import SpeechSynthesisRequest, TranscriptionRequest, TranscriptionResult
 from .extensions import load_provider_extensions
-from .providers import FasterWhisperProvider, OumuqTtsProvider
+from .model_discovery import api_index, model_rows, public_capabilities
+from .microphone import MicrophoneConfig, MicrophoneService
+from .playback import PlaybackCoordinator
+from .providers import FasterWhisperProvider, LocalHttpAsrProvider, LocalTtsProvider
 from .registry import ProviderRegistry
 
 
@@ -32,6 +39,9 @@ class SpeechBody(BaseModel):
     language: str | None = None
     instructions: str | None = Field(default=None, max_length=2000)
     sample_rate: int | None = Field(default=None, ge=8000, le=48000)
+    play: bool = False
+    session_id: str | None = Field(default=None, max_length=200)
+    route_id: str | None = Field(default=None, max_length=200)
 
 
 class DashScopeBody(BaseModel):
@@ -42,23 +52,64 @@ class DashScopeBody(BaseModel):
 
 def default_registry(settings: Settings) -> ProviderRegistry:
     registry = ProviderRegistry(settings.default_tts_provider, settings.default_asr_provider)
-    if settings.oumuq.enabled:
-        registry.register_tts(OumuqTtsProvider(settings.oumuq))
+    if settings.local_tts.enabled:
+        registry.register_tts(LocalTtsProvider(settings.local_tts))
     if settings.faster_whisper.enabled:
         registry.register_asr(FasterWhisperProvider(settings.faster_whisper))
+    for http_asr in settings.http_asr:
+        if http_asr.enabled:
+            registry.register_asr(LocalHttpAsrProvider(http_asr))
     load_provider_extensions(registry, settings)
     return registry
 
 
-def create_app(settings: Settings | None = None, registry: ProviderRegistry | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    registry: ProviderRegistry | None = None,
+    playback: PlaybackCoordinator | None = None,
+) -> FastAPI:
     current = settings or load_settings()
     providers = registry or default_registry(current)
     transcoder = AudioTranscoder(current.server.temp_dir, current.server.ffmpeg)
+    playback_queue = playback or PlaybackCoordinator(current.server.playback_dir)
+    logger = logging.getLogger("rabispeech")
+
+    async def microphone_transcriber(audio_path: Path, config: MicrophoneConfig) -> TranscriptionResult:
+        return await _transcribe(
+            providers,
+            audio_path,
+            model=config.asr_model,
+            provider=None,
+            language=config.language,
+            prompt=config.prompt,
+            word_timestamps=False,
+        )
+
+    async def microphone_submitter(route_id: str, text: str, session_id: str) -> None:
+        base = _manager_loopback_url()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            result = await client.post(
+                f"{base}/api/speech/messages",
+                json={"gatewayId": route_id, "text": text, "sessionId": session_id},
+            )
+            result.raise_for_status()
+
+    microphone = MicrophoneService(
+        state_path=current.server.temp_dir.parent / "microphone.json",
+        temp_dir=current.server.temp_dir,
+        transcriber=microphone_transcriber,
+        submitter=microphone_submitter,
+        playback_active=lambda: bool(playback_queue.snapshot().get("current")),
+    )
 
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
         await providers.warmup()
-        yield
+        await microphone.restore()
+        try:
+            yield
+        finally:
+            await microphone.stop(persist=False)
 
     api = FastAPI(
         title="RabiSpeech Local API",
@@ -73,35 +124,65 @@ def create_app(settings: Settings | None = None, registry: ProviderRegistry | No
             "ok": True,
             "service": "RabiSpeech",
             "local_only": current.server.host in {"127.0.0.1", "localhost", "::1"},
-            "config": str(current.config_path),
-            "providers": providers.capabilities(),
+            "providers": public_capabilities(providers.capabilities()),
+            "microphone": {"running": microphone.snapshot()["running"], "state": microphone.snapshot()["state"]},
         }
 
     @api.get("/v1/capabilities")
     async def capabilities() -> dict[str, object]:
         return {
             "object": "rabispeech.capabilities",
-            "providers": providers.capabilities(),
+            "providers": public_capabilities(providers.capabilities()),
+            "api": api_index(),
             "relay_safe": True,
             "streaming": False,
+            "microphone": {"running": microphone.snapshot()["running"], "state": microphone.snapshot()["state"], "scope": "loopback-only"},
         }
 
     @api.get("/v1/models")
     async def models() -> dict[str, object]:
-        capabilities = providers.capabilities()
-        rows = []
-        for kind in ("tts", "asr"):
-            for provider_id, detail in dict(capabilities.get(kind, {})).items():
-                rows.append(
-                    {
-                        "id": f"{provider_id}/{detail.get('model', kind + '-local')}",
-                        "object": "model",
-                        "owned_by": "local",
-                        "capability": kind,
-                        "provider": provider_id,
-                    }
-                )
-        return {"object": "list", "data": rows}
+        rows = model_rows(providers.capabilities())
+        return {"object": "list", "data": rows, "api": api_index()}
+
+    @api.get("/v1/models/{model_id:path}")
+    async def model_detail(model_id: str) -> dict[str, object]:
+        normalized = model_id.strip().strip("/").lower()
+        for row in model_rows(providers.capabilities()):
+            if str(row.get("id") or "").lower() == normalized:
+                return row
+        raise HTTPException(status_code=404, detail=f"Unknown local model: {model_id}")
+
+    @api.get("/v1/playback/status")
+    async def playback_status() -> dict[str, object]:
+        return playback_queue.snapshot()
+
+    @api.post("/v1/playback/stop")
+    async def playback_stop() -> dict[str, object]:
+        return playback_queue.stop(clear_pending=True)
+
+    @api.get("/v1/microphone/status")
+    async def microphone_status() -> dict[str, object]:
+        return microphone.snapshot()
+
+    @api.get("/v1/microphone/devices")
+    async def microphone_devices() -> dict[str, object]:
+        try:
+            return {"object": "list", "data": microphone.devices()}
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Microphone device scan failed: {exc}") from exc
+
+    @api.post("/v1/microphone/start")
+    async def microphone_start(body: dict[str, Any] | None = None) -> dict[str, object]:
+        try:
+            return await microphone.start(body or {})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @api.post("/v1/microphone/stop")
+    async def microphone_stop() -> dict[str, object]:
+        return await microphone.stop()
 
     async def synthesize(body: SpeechBody, background_tasks: BackgroundTasks) -> FileResponse:
         try:
@@ -124,7 +205,22 @@ def create_app(settings: Settings | None = None, registry: ProviderRegistry | No
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Local TTS failed: {exc}") from exc
+            logger.exception("Local TTS request failed")
+            raise HTTPException(status_code=502, detail=f"Local TTS failed ({type(exc).__name__}). Check local RabiSpeech logs.") from exc
+        playback_job: dict[str, object] | None = None
+        if body.play:
+            try:
+                playback_job = playback_queue.enqueue(
+                    artifact.path,
+                    provider=artifact.provider,
+                    model=artifact.model,
+                    voice=body.voice,
+                    session_id=body.session_id,
+                    route_id=body.route_id,
+                )
+            except Exception as exc:
+                logger.exception("Local playback enqueue failed")
+                raise HTTPException(status_code=502, detail=f"Local playback failed ({type(exc).__name__}). Check local RabiSpeech logs.") from exc
         if artifact.cleanup:
             background_tasks.add_task(artifact.path.unlink, missing_ok=True)
         if prepared.cleanup and prepared.path != artifact.path:
@@ -136,6 +232,7 @@ def create_app(settings: Settings | None = None, registry: ProviderRegistry | No
             headers={
                 "X-RabiSpeech-Provider": prepared.provider,
                 "X-RabiSpeech-Model": prepared.model,
+                **({"X-RabiSpeech-Playback-Job": str(playback_job["id"])} if playback_job else {}),
             },
         )
 
@@ -160,6 +257,9 @@ def create_app(settings: Settings | None = None, registry: ProviderRegistry | No
             language=str(input_data.get("language") or parameters.get("language") or "") or None,
             instructions=str(input_data.get("instructions") or parameters.get("instructions") or "") or None,
             sample_rate=int(input_data.get("sample_rate") or parameters.get("sample_rate") or 0) or None,
+            play=bool(input_data.get("play") or parameters.get("play")),
+            session_id=str(input_data.get("session_id") or parameters.get("session_id") or "") or None,
+            route_id=str(input_data.get("route_id") or parameters.get("route_id") or "") or None,
         )
         return await synthesize(request, background_tasks)
 
@@ -344,3 +444,11 @@ def _transcription_response(result: TranscriptionResult, response_format: str) -
             "segments": [asdict(segment) for segment in result.segments],
         }
     )
+
+
+def _manager_loopback_url() -> str:
+    raw = os.environ.get("RABIROUTE_MANAGER_URL", "http://127.0.0.1:8790").strip().rstrip("/")
+    parsed = urlparse(raw)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise RuntimeError("RABIROUTE_MANAGER_URL must be an HTTP loopback URL.")
+    return raw
