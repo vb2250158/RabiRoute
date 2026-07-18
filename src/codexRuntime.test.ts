@@ -5,6 +5,7 @@ import {
   buildCodexBootstrapEnv,
   codexThreadDeliveryTargetIsStaleForTest,
   codexThreadMatchesConfiguredTargetForTest,
+  mergeCodexDesktopThreadsWithMetadataForTest,
   waitForCodexDesktopThreadForTest
 } from "./codexRuntime.js";
 
@@ -44,6 +45,32 @@ test("Codex Desktop treats archived rollout errors as stale delivery targets", (
   );
   assert.equal(codexThreadDeliveryTargetIsStaleForTest(new Error("thread not found")), true);
   assert.equal(codexThreadDeliveryTargetIsStaleForTest(new Error("model temporarily unavailable")), false);
+});
+
+test("Codex task discovery uses the app-server user-facing name instead of mutable SQLite title", () => {
+  const result = mergeCodexDesktopThreadsWithMetadataForTest([{
+    id: "019f0000-0000-7000-8000-000000000049",
+    title: "[RabiRoute 事件] 首条超长消息",
+    cwd: "D:/MonsterGirl",
+    updatedAt: "2026-07-18T03:00:00.000Z",
+    rolloutPath: "session.jsonl",
+    firstUserMessage: "[RabiRoute 事件] 首条超长消息"
+  }], [{
+    id: "019f0000-0000-7000-8000-000000000049",
+    name: "MonsterGirl / 伊莉娅 策划美术",
+    cwd: "D:\\MonsterGirl",
+    updatedAt: 1_784_359_692
+  }], {
+    query: "MonsterGirl / 伊莉娅 策划美术",
+    allowedWorkspaces: ["//?/D:/MonsterGirl"],
+    limit: 20,
+    offset: 0
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.title, "MonsterGirl / 伊莉娅 策划美术");
+  assert.equal(result[0]?.id, "019f0000-0000-7000-8000-000000000049");
+  assert.equal(result[0]?.updatedAt, "2026-07-18T07:28:12.000Z");
 });
 
 test("freshly created Desktop tasks wait for the read index before first delivery", async () => {

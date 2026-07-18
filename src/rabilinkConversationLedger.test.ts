@@ -22,7 +22,15 @@ test("RabiLink user observations and Agent deliveries share one ordered JSONL le
     direction: "user_to_agent",
     kind: "voice_transcript",
     text: "用户的一段观察记录",
-    requiresReview: true
+    requiresReview: true,
+    attachments: [{
+      id: "rbm_photo_1",
+      kind: "image",
+      fileName: "photo.jpg",
+      contentType: "image/jpeg",
+      size: 2048,
+      localPath: "C:/private/rabilink-media/photo.jpg"
+    }]
   });
   const agent = appendRabiLinkConversationEntry(dataDir, {
     entryId: "rabilink-agent:delivery-1",
@@ -57,6 +65,8 @@ test("RabiLink user observations and Agent deliveries share one ordered JSONL le
     ]
   );
   assert.equal(fs.existsSync(rabiLinkConversationLedgerPath(dataDir)), true);
+  assert.equal(user.entry.attachments?.[0]?.kind, "image");
+  assert.equal(user.entry.attachments?.[0]?.localPath, "C:/private/rabilink-media/photo.jpg");
   assert.deepEqual(agent.entry.targetDeviceKinds, ["glasses"]);
   assert.deepEqual(agent.entry.presentation, ["text", "tts"]);
   assert.equal(agent.entry.priority, "urgent");

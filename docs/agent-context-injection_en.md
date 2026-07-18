@@ -100,6 +100,8 @@ Current reply context: <replyContextJson>
 <optional route template>
 ```
 
+When a `voice_transcript` explicitly comes from the RabiPC `speech` message endpoint or RabiSpeech, `AgentPacket` resolves that turn to `voice_chat` and writes `characterTtsDialogue=true` into `replyContext`. `[Reply delivery requirements]` tells the handler to enter character-TTS dialogue mode and POST a short spoken line, semantically identical to the visible reply, to the normal reply API. Outbox then freezes the current Route persona, voice, model, `sessionId`, and autoplay choice before entering the host-wide RabiSpeech FIFO. QQ, the role panel, ordinary text inputs, and other `voice_transcript` sources do not inherit this switch.
+
 When no role is bound, RabiRoute uses a direct-message section instead of role knowledge. It still injects the event, logs, reply context, and delivery requirements.
 
 ## Workspace-relative paths

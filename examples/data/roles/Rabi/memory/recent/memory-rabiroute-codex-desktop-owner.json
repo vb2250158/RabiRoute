@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-codex-desktop-owner",
   "title": "本机 Codex 真实消息只交给 Desktop 任务 owner",
-  "focus": "Desktop IPC 单一 owner、稳定会话绑定与独立启动",
-  "content": "RabiRoute 的本机 codex adapter 只通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 的目标任务 owner；消息、状态和结果应出现在同一桌面任务，并沿用任务自己的模型、工具、沙箱和审批。项目锁定的 app-server 只用于受控创建或命名空任务，不接收真实 prompt、不执行 turn。会话身份是可见名称、完整任务 ID 与规范化 workspace 的配对：三者匹配才续投，失效或改名后按保存名称查找，唯一匹配重绑、零匹配只在明确提交点幂等创建、多个同名要求用户选择。新任务创建后要等待 Desktop 索引出现同一个 ID，再投递首条消息；等待或首投失败不得重复创建。“自动初始化会话”先保存绑定，再经角色面板和 AgentPacket 向同一 owner 投递人格资料。项目和会话扫描只在进入设置页一次或用户显式刷新时执行。Desktop 不可用或目录冲突时明确失败；RabiRoute 不写 `CODEX_APP_SERVER_WS_URL`、不监听 4510、不启动备用 Runtime，也不让 Desktop 依赖自己启动。",
+  "focus": "Desktop IPC 单一 owner、稳定任务 ID 与用户可见名称元数据",
+  "content": "RabiRoute 的本机 codex adapter 只通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 的目标任务 owner；消息、状态和结果应出现在同一桌面任务，并沿用任务自己的模型、工具、沙箱和审批。完整任务 ID 加规范化 workspace 是稳定投递身份，Desktop SQLite title 可被首条 prompt 改写，不能用来否定有效绑定。项目锁定的短生命周期 app-server 只读取用户可见名称或创建/命名空任务，再与 Desktop 本地任务 ID、workspace 和归档状态交叉校验；它不接收真实 prompt、不执行 turn。已保存任务归档后，可以重绑同 workspace 最新且唯一的未归档同名任务；没有候选时失败关闭，绝不创建替代任务。新任务创建后要等待 Desktop 索引出现同一个 ID，再投递首条消息；等待或首投失败不得重复创建。Desktop 不可用或目录冲突时明确失败；RabiRoute 不写 `CODEX_APP_SERVER_WS_URL`、不监听 4510、不启动备用 Runtime。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：Codex Desktop 唯一 owner、稳定会话绑定、自动初始化与 4510 独立生命周期"
   },
   "createdAt": "2026-07-16T00:00:00+08:00",
-  "updatedAt": "2026-07-16T16:15:00+08:00",
-  "keywords": ["Codex", "Desktop IPC", "task owner", "名称和任务 ID", "workspace", "自动初始化", "索引延迟", "幂等创建", "4510", "no fallback"]
+  "updatedAt": "2026-07-18T00:00:00+08:00",
+  "keywords": ["Codex", "Desktop IPC", "task owner", "稳定任务 ID", "用户可见名称", "workspace", "归档重绑", "app-server metadata", "幂等创建", "4510", "no fallback"]
 }

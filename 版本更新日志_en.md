@@ -8,10 +8,36 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.1.15 - 2026-07-18
 
+### Character-TTS closure for the speech message endpoint
+
+- Fixed RabiSpeech transcripts reaching Codex while `AgentPacket` omitted mandatory reply-delivery instructions, which left the answer visible in the task without entering TTS.
+- A `voice_transcript` from `speech` / RabiSpeech now enters `character-tts-dialogue` state and is forced to `voice_chat`; QQ, the role panel, and ordinary text inputs keep their existing behavior.
+- After the handler returns semantically identical visible/spoken text through the normal reply API, Outbox revalidates the source and speech-output policy, freezes the Route persona, voice, model, language, instructions, `sessionId`, and autoplay choice, and enters the host-wide RabiSpeech FIFO. Added AgentPacket and Outbox regression coverage.
+
+### Consolidated RabiPC speech control plane
+
+- Manager now has a dedicated `speechControl` interface and shared camelCase contract for models, personas, audio inputs, microphone, playback, TTS, ASR, and accepted speech messages. Python snake_case, loopback URLs, and model-runtime details no longer leak into Vue pages.
+- RibiWebGUI now uses a shared speech client/store, input-level waveform, Route monitor, and event/queue status. The speech page and Route configuration no longer poll independently or duplicate defaults; the backend fills `voice_chat` and speech-variable defaults for speech-enabled Routes.
+- RabiSpeech microphone and persona-voice handling gained clearer runtime and failure boundaries, with regression coverage for Manager mapping, the frontend contract, microphone behavior, and persona voices.
+
+### Rabi Glass phone backend and media observations
+
+- The Android example adds a phone-side `RabiGlassPcBackend` and a thin glasses client. Glasses only capture/play PCM, send device media, and render the HUD; they store no Relay configuration. The phone owns Relay, selected PC, cursor, and glasses settings, while the selected Rabi PC owns ASR, TTS, Agent context, and the Action Gate.
+- The phone home screen is now a focused glasses companion: duplicate Route/Agent/workspace/thread configuration is removed in favor of remote WebGUI, and cross-transport start/stop controls are idempotent so one recording cannot be submitted twice.
+- Relay now exposes allowlisted device-media upload/download paths, stores image, video, and audio attachments per application with a default seven-day expiry, and lets the PC worker materialize only controlled paths before recording public-safe metadata in the unified ledger.
+- The speech proxy remains limited to TTS and ASR. It cannot reach remote WebGUI proxying, worker APIs, host microphone control, or arbitrary local paths. The bilingual glasses-route, AIUI residency, and active-intelligence docs were updated accordingly.
+
+### Recent-memory overwrite guard
+
+- `updateRecentMemory` no longer lets a handler overwrite a recent memory that has been inactive for more than 24 hours from stale context. The handler must first read it by ID to refresh the view window, or record a new correction.
+- This gate applies only to recent-memory edits; it does not change plans, consolidated memories, raw chat logs, or speech transcripts as their respective sources of truth. Added coverage for rejection before reading and successful update after reading.
+
 ### Codex Desktop stable-ID continuation
 
 - Fixed the first routed message reaching the correct task but rewriting Desktop SQLite `title` to the first prompt, which made the second message treat the name-ID pair as stale and create a same-name task.
 - A persisted binding now uses full task ID plus normalized workspace as stable identity. An existing unarchived ID in the same workspace is reused without comparing mutable title metadata; name lookup/creation runs only when the ID is empty, invalid, or genuinely missing.
+- Settings scans and name resolution now read the short-lived app-server's user-facing task name and cross-check it against Desktop's local task ID and archive state. The app-server still reads metadata only and never receives a real prompt or executes a turn.
+- If a saved task is archived, RabiRoute may bind the newest unique active same-name task in the same workspace; with no candidate it fails closed and never creates a replacement.
 - Explicitly typing a new Rabi name still clears the old ID before name lookup or idempotent creation. Added repeated-delivery coverage after title mutation and synchronized the integration standard, acceptance contract, troubleshooting guide, and Agent-creation Skill.
 
 ## 0.1.14 - 2026-07-18

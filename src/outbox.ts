@@ -17,6 +17,7 @@ import {
   type MessageAdapterPolicy,
   type MessagePayloadKind
 } from "./shared/gatewayConfigModel.js";
+import { resolveSpeechRouteProfile } from "./shared/speechControlContract.js";
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 import { requestLocalSpeech } from "./speech/localSpeechClient.js";
 import {
@@ -561,9 +562,27 @@ function routePipeline(route: ResolvedRoute): ResolvedPipeline {
   );
 }
 
-function replyPipeline(route: ResolvedRoute, request: AgentReplyRequest): ResolvedPipeline {
+function replyPipeline(route: ResolvedRoute, request: AgentReplyRequest, target: SourceRecord): ResolvedPipeline {
   const pipeline = routePipeline(route);
   const context = contextObject(request);
+  const characterTtsDialogue = context.characterTtsDialogue === true
+    && target.targetType === "voice_transcript"
+    && (target.adapterType === "speech" || valueString(context.adapterType) === "speech");
+  if (characterTtsDialogue) {
+    const roleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId) || "default";
+    const speechProfile = resolveSpeechRouteProfile(
+      route.profile?.routeVariables ?? route.runtime.routeVariables,
+      roleId
+    );
+    return resolvePipeline("voice_chat", {
+      inputAdapter: "speech",
+      ttsProvider: pipeline.ttsProvider || undefined,
+      ttsVoice: speechProfile.voice,
+      ttsPlay: speechProfile.autoPlay,
+      preventFeedbackLoop: true,
+      replyToSource: false
+    });
+  }
   const contextPipeline = normalizePipelineDefinition({
     outputAdapter: valueString(context.outputAdapter),
     outputPipeline: valueString(context.outputPipeline)
@@ -1046,7 +1065,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       return result;
     }
   }
-  const pipeline = replyPipeline(route, request);
+  const pipeline = replyPipeline(route, request, target);
   const policy = napcatPolicy(route);
   const hasExplicitQqTarget = Boolean(target.targetType && (target.groupId || target.userId));
   const isSourceReply = Boolean(

@@ -107,6 +107,7 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
   dependencies: CodexSessionResolverDependencies<TThread>
 ): Promise<CodexSessionResolution<TThread>> {
   const threadId = params.threadId?.trim() || "";
+  let archivedBinding: TThread | null = null;
   if (isCodexTaskId(threadId)) {
     const exact = await dependencies.read(threadId);
     // Desktop's SQLite title is mutable metadata: after a routed turn it can
@@ -117,11 +118,12 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
       if (exact.cwd && !sameCodexWorkspace(exact.cwd, params.cwd)) {
         return { kind: "workspace-mismatch", thread: exact };
       }
-      // An archived persisted binding still exists. Treating it as absent and
-      // creating a replacement silently forks the user's visible task history.
-      // Keep the binding stable and require an explicit restore or selection.
-      if (exact.archived) return { kind: "archived", thread: exact };
-      return { kind: "id", thread: exact };
+      // An archived persisted binding must never cause a replacement task to
+      // be created. It may, however, be an obsolete duplicate that the user
+      // archived after an earlier bad binding. In that case continue with the
+      // normal same-name lookup and reuse an existing active task.
+      if (exact.archived) archivedBinding = exact;
+      else return { kind: "id", thread: exact };
     }
   }
 
@@ -134,6 +136,7 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
     return { kind: "ambiguous", candidates: matches };
   }
   if (matches[0]) return { kind: "name", thread: matches[0] };
+  if (archivedBinding) return { kind: "archived", thread: archivedBinding };
   if (!params.createIfMissing) return { kind: "missing" };
 
   return {

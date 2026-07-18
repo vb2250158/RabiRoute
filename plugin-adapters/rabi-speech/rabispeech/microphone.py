@@ -22,15 +22,15 @@ class MicrophoneConfig:
     device: int | str | None = None
     sample_rate: int = 16_000
     chunk_ms: int = 100
-    pre_roll_ms: int = 500
-    record_threshold: float = 0.02
-    transcribe_threshold: float = 0.025
+    pre_roll_ms: int = 1_500
+    record_threshold: float = 0.01
+    transcribe_threshold: float = 0.015
     adaptive_threshold: bool = True
     adaptive_multiplier: float = 2.5
     adaptive_margin: float = 0.004
-    silence_ms: int = 900
-    min_utterance_ms: int = 350
-    max_utterance_ms: int = 30_000
+    silence_ms: int = 500
+    min_utterance_ms: int = 1_000
+    max_utterance_ms: int = 60_000
     input_gain: float = 1.0
     asr_model: str = "faster-whisper/small"
     language: str | None = "zh"
@@ -125,6 +125,8 @@ class MicrophoneService:
         self._error = ""
         self._last_submit_error = ""
         self._level = 0.0
+        self._display_level = 0.0
+        self._level_history: deque[float] = deque(maxlen=120)
         self._noise_floor = max(0.0005, self.config.record_threshold / 3.0)
         self._dynamic_threshold = self.config.record_threshold
         self._utterance_active = False
@@ -137,6 +139,13 @@ class MicrophoneService:
         self._peak = 0.0
         self._started_at = 0.0
         self._history: deque[dict[str, object]] = deque(maxlen=50)
+        self._events: deque[dict[str, object]] = deque(maxlen=100)
+        self._event_sequence = 0
+        self._captured = 0
+        self._recognized = 0
+        self._empty = 0
+        self._submitted = 0
+        self._submit_failed = 0
         self._dropped = 0
 
     async def restore(self) -> None:
@@ -156,6 +165,8 @@ class MicrophoneService:
                 return self.snapshot()
             self.config = replace(MicrophoneConfig.from_mapping(updates, self.config), enabled=True)
             self._reset_segment()
+            self._display_level = 0.0
+            self._level_history.clear()
             self._noise_floor = max(0.0005, self.config.record_threshold / 3.0)
             self._dynamic_threshold = self.config.record_threshold
             self._loop = asyncio.get_running_loop()
@@ -168,12 +179,22 @@ class MicrophoneService:
                 self._stream = None
                 self._state = "error"
                 self._error = f"{type(exc).__name__}: {exc}"
+                self._emit_event("microphone", "microphone_start_failed", "麦克风启动失败", level="error", error=self._error)
                 raise RuntimeError(f"Microphone start failed: {exc}") from exc
             self._running = True
             self._state = "listening"
             self._consumer = asyncio.create_task(self._consume(), name="rabispeech-microphone-asr")
             if persist:
                 self._write_config()
+            self._emit_event(
+                "microphone",
+                "microphone_started",
+                "麦克风常驻监听已启动",
+                device=self.config.device,
+                asr_model=self.config.asr_model,
+                route_id=self.config.route_id,
+                auto_submit=self.config.auto_submit,
+            )
             return self.snapshot()
 
     async def stop(self, *, persist: bool = True) -> dict[str, object]:
@@ -205,6 +226,7 @@ class MicrophoneService:
             self.config = replace(self.config, enabled=False)
             if persist:
                 self._write_config()
+            self._emit_event("microphone", "microphone_stopped", "麦克风常驻监听已停止")
             return self.snapshot()
 
     def snapshot(self) -> dict[str, object]:
@@ -216,14 +238,38 @@ class MicrophoneService:
             "error": self._error,
             "last_submit_error": self._last_submit_error,
             "level": round(self._level, 6),
+            "level_history": list(self._level_history),
             "noise_floor": round(self._noise_floor, 6),
             "dynamic_threshold": round(self._dynamic_threshold, 6),
             "utterance_active": self._utterance_active,
             "pending": self._phrases.qsize(),
             "dropped": self._dropped,
+            "stats": {
+                "captured": self._captured,
+                "recognized": self._recognized,
+                "empty": self._empty,
+                "submitted": self._submitted,
+                "submit_failed": self._submit_failed,
+                "dropped": self._dropped,
+            },
             "config": self.config.public(),
             "history": list(self._history),
+            "events": list(self._events),
         }
+
+    def _emit_event(self, stage: str, kind: str, message: str, *, level: str = "info", **details: object) -> None:
+        self._event_sequence += 1
+        self._events.appendleft(
+            {
+                "sequence": self._event_sequence,
+                "time": time.time(),
+                "stage": stage,
+                "kind": kind,
+                "level": level,
+                "message": message,
+                "details": {key: value for key, value in details.items() if value is not None},
+            }
+        )
 
     @staticmethod
     def devices() -> list[dict[str, object]]:
@@ -279,12 +325,17 @@ class MicrophoneService:
             chunk = np.clip(chunk * self.config.input_gain, -1.0, 1.0)
         level = _rms(chunk)
         self._level = level
+        self._display_level = self._display_level * 0.75 + level * 0.25
+        self._level_history.append(round(self._display_level, 6))
         if self.config.suppress_during_playback and self._playback_active():
+            if self._state != "playback_suppressed":
+                self._emit_event("microphone", "playback_suppressed", "检测到主机播放，暂时抑制麦克风触发")
             self._reset_segment()
             self._state = "playback_suppressed"
             return
         if self._state == "playback_suppressed":
             self._state = "listening"
+            self._emit_event("microphone", "playback_resumed", "主机播放结束，恢复麦克风监听")
 
         if not self._utterance_active:
             self._append_pre_roll(chunk)
@@ -307,6 +358,13 @@ class MicrophoneService:
             self._voiced_samples = chunk.size
             self._silence_samples = 0
             self._state = "recording"
+            self._emit_event(
+                "vad",
+                "utterance_started",
+                "声音超过触发阈值，开始收音",
+                level_value=round(level, 6),
+                threshold=round(self._dynamic_threshold, 6),
+            )
             return
 
         self._utterance_chunks.append(chunk.copy())
@@ -323,9 +381,9 @@ class MicrophoneService:
         min_samples = round(sample_rate * self.config.min_utterance_ms / 1000)
         silence_samples = round(sample_rate * self.config.silence_ms / 1000)
         max_samples = round(sample_rate * self.config.max_utterance_ms / 1000)
-        phrase_done = self._silence_samples >= silence_samples and self._voiced_samples >= min_samples
+        phrase_done = self._silence_samples >= silence_samples
         if phrase_done or self._utterance_samples >= max_samples:
-            self._finish_segment()
+            self._finish_segment(min_voiced_samples=min_samples)
 
     def _append_pre_roll(self, chunk: np.ndarray) -> None:
         limit = round(self.config.sample_rate * self.config.pre_roll_ms / 1000)
@@ -336,18 +394,40 @@ class MicrophoneService:
         while self._pre_samples > limit and len(self._pre_chunks) > 1:
             self._pre_samples -= self._pre_chunks.popleft().size
 
-    def _finish_segment(self) -> None:
+    def _finish_segment(self, *, min_voiced_samples: int = 0) -> None:
         audio = np.concatenate(self._utterance_chunks).astype(np.float32) if self._utterance_chunks else np.array([], dtype=np.float32)
         peak = self._peak
+        voiced_samples = self._voiced_samples
         started_at = self._started_at or time.time()
+        duration = round(audio.size / self.config.sample_rate, 3) if self.config.sample_rate else 0.0
+        voiced_duration = round(voiced_samples / self.config.sample_rate, 3) if self.config.sample_rate else 0.0
         self._reset_segment()
         self._state = "listening"
-        if audio.size == 0 or peak < self.config.transcribe_threshold:
+        if audio.size == 0 or peak < self.config.transcribe_threshold or voiced_samples < min_voiced_samples:
+            self._emit_event(
+                "vad",
+                "segment_discarded",
+                "片段未达到最短有效语音或转写阈值，已丢弃",
+                level="warning",
+                duration=duration,
+                voiced_duration=voiced_duration,
+                peak=round(peak, 6),
+            )
             return
         try:
             self._phrases.put_nowait((audio, started_at, peak))
+            self._captured += 1
+            self._emit_event(
+                "vad",
+                "segment_queued",
+                "语音片段已进入识别队列",
+                duration=duration,
+                peak=round(peak, 6),
+                pending=self._phrases.qsize(),
+            )
         except asyncio.QueueFull:
             self._dropped += 1
+            self._emit_event("vad", "segment_dropped", "识别队列已满，语音片段被丢弃", level="error", duration=duration)
 
     def _reset_segment(self) -> None:
         self._utterance_active = False
@@ -366,12 +446,32 @@ class MicrophoneService:
             target: Path | None = None
             try:
                 self._state = "transcribing"
+                duration = round(audio.size / self.config.sample_rate, 3)
+                self._emit_event(
+                    "asr",
+                    "transcription_started",
+                    "开始本地语音识别",
+                    duration=duration,
+                    model=self.config.asr_model,
+                )
                 target = _write_wav(self.temp_dir, audio, self.config.sample_rate)
                 result = await self._transcriber(target, self.config)
                 text = result.text.strip()
                 if not text:
+                    self._empty += 1
+                    self._emit_event("asr", "transcription_empty", "识别完成，但没有得到有效文字", level="warning", duration=duration)
                     self._state = "listening"
                     continue
+                self._recognized += 1
+                self._emit_event(
+                    "asr",
+                    "transcription_succeeded",
+                    "本地语音识别完成",
+                    provider=result.provider,
+                    model=result.model,
+                    duration=duration,
+                    text_length=len(text),
+                )
                 item: dict[str, object] = {
                     "time": time.time(),
                     "started_at": started_at,
@@ -383,13 +483,37 @@ class MicrophoneService:
                     "submitted": False,
                 }
                 if self.config.auto_submit and self.config.route_id:
+                    self._emit_event(
+                        "route",
+                        "route_submission_started",
+                        "开始投递到 Route",
+                        route_id=self.config.route_id,
+                        session_id=self.config.session_id,
+                    )
                     try:
                         await self._submitter(self.config.route_id, text, self.config.session_id)
                         item["submitted"] = True
+                        self._submitted += 1
                         self._last_submit_error = ""
+                        self._emit_event(
+                            "route",
+                            "route_submission_succeeded",
+                            "Route 已接收语音消息",
+                            route_id=self.config.route_id,
+                            session_id=self.config.session_id,
+                        )
                     except Exception as exc:
+                        self._submit_failed += 1
                         self._last_submit_error = f"{type(exc).__name__}: {exc}"[:500]
                         item["submit_error"] = self._last_submit_error
+                        self._emit_event(
+                            "route",
+                            "route_submission_failed",
+                            "Route 投递失败",
+                            level="error",
+                            route_id=self.config.route_id,
+                            error=self._last_submit_error,
+                        )
                 self._history.appendleft(item)
                 self._error = ""
                 self._state = "listening"
@@ -398,6 +522,7 @@ class MicrophoneService:
             except Exception as exc:
                 self._state = "error"
                 self._error = f"{type(exc).__name__}: {exc}"[:500]
+                self._emit_event("asr", "transcription_failed", "本地语音识别失败", level="error", error=self._error)
             finally:
                 if target is not None:
                     target.unlink(missing_ok=True)

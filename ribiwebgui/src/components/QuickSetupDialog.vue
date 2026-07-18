@@ -1111,7 +1111,7 @@ async function apply() {
                   </div>
 
                   <v-alert v-if="selectedAgent === 'codex'" type="info" variant="tonal" density="compact" class="mb-3">
-                    RabiRoute、Codex/ChatGPT 桌面端和 Codex CLI 共用一个 app-server Runtime；会话会实时同步。
+                    Codex/ChatGPT Desktop 是真实消息的唯一 owner。RabiRoute 读取 Desktop 可见任务目录并通过 Desktop IPC 投递；Codex CLI 是独立 Runtime，不作为 Desktop 投递的备用路径。
                   </v-alert>
                   <v-alert v-if="selectedAgent === 'copilotCli'" type="warning" variant="tonal" density="compact" class="mb-3">
                     Copilot CLI 仍是实验适配；同一会话重复注入还需要单独烟测确认。

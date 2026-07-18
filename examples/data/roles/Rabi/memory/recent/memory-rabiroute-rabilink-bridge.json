@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-rabilink-bridge",
   "title": "RabiLink 是眼镜与本地 Agent 的持续消息端",
-  "focus": "RabiLink 眼镜端持续消息流与主动投递边界",
-  "content": "RabiLink 使用独立 rabilink message adapter 和 route kind。眼镜 AIUI 的“连接对话”用原生 ASR 向 `/rokid/rabilink/input` 发布输入事件；202 响应只表示已接收，不向眼镜暴露 worker taskId。页面始终按 cursor 消费 `/rokid/rabilink/messages?stream=1`，普通 Agent 回复与无前置任务的主动消息进入同一应用级有序队列，再由眼镜原生 TTS 依次播报；TTS 前释放 ASR，播报完成后才恢复。主动生产者必须经 RabiRoute `/api/agent/replies` 的 route 输出策略与审计门，再由 `/worker/messages` 追加队列。配置助手的自然语言理解归 Rokid 原生 Agent，AIUI 只执行明确 intent，不创建助手 ASR 或任务轮询。AIUI 只承诺页面前台续接 ASR，不等同于后台常驻录音。应用 token 继续按账号和应用隔离，真实 token、域名、设备 ID、私聊内容和本机路径不得进入公开示例或 AIX。",
+  "focus": "RabiLink 眼镜端持续消息流、手机后端与媒体附件边界",
+  "content": "RabiLink 使用独立 rabilink message adapter 和 route kind。AIUI 继续以 record-first 观察、空闲/触摸板/周期审阅和持续下行承担当前定制主体验；Rabi Glass 原生路线把眼镜收窄为 PCM 采集/播放与 HUD 薄客户端，手机后端负责 Relay 传输，选定的 Rabi PC 负责 ASR、TTS、Agent 上下文和 Action Gate。图片、视频和音频先经按应用隔离的设备媒体白名单上传，PC worker 只物化受控下载路径，再把附件元数据写入统一会话账本。普通回复和无前置任务的主动消息继续进入应用级有序下行队列，主动生产者必须经过 `/api/agent/replies` 的 Route 输出策略与审计门。绑定设备只可调用明确白名单中的模型、TTS 与 ASR 路径，不能访问 WebGUI 代理、worker API、主机麦克风控制或任意本地路径。真实 token、域名、设备 ID、私聊内容、媒体和本机路径不得进入公开示例。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：RabiLink AIUI 持续消息流、主动投递和脱敏边界"
   },
   "createdAt": "2026-07-06T00:00:00+08:00",
-  "updatedAt": "2026-07-13T00:00:00+08:00",
-  "keywords": ["RabiLink", "AIUI", "Rokid", "Relay", "持续消息流", "主动投递", "原生 ASR", "原生 TTS", "配置助手", "Action Gate", "应用 token", "账号隔离", "前台驻留", "脱敏"]
+  "updatedAt": "2026-07-18T00:00:00+08:00",
+  "keywords": ["RabiLink", "AIUI", "Rabi Glass", "Rokid", "手机后端", "薄客户端", "媒体附件", "Relay", "持续消息流", "主动投递", "ASR", "TTS", "Action Gate", "应用隔离", "脱敏"]
 }

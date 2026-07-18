@@ -20,7 +20,7 @@ RabiRoute keeps provider, agent/runtime, transport, host, and model separate:
 | Host/owner | Codex/ChatGPT Desktop, which owns the visible task and actual turn. |
 | Model | The model selected by the target Desktop task. |
 
-Do not rename the adapter to `chatgpt`. Desktop IPC is the formal transport. App-server is limited to short-lived empty-task metadata bootstrap and must not execute routed prompts.
+Do not rename the adapter to `chatgpt`. Desktop IPC is the formal transport. A short-lived app-server may list user-visible task metadata and bootstrap an empty named task, but it must not execute routed prompts.
 
 ## Runtime files
 
@@ -73,7 +73,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `napcatHttpUrl`: OneBot HTTP endpoint.
 - `webhookPort` / `webhookPath`: generic webhook endpoint; the port falls back to `gatewayPort`, and the default path is `/webhook`.
 - `agentAdapters`: handler IDs. Codex is verified; Copilot CLI and AstrBot are experimental; Marvis is a manual handoff.
-- `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. An archived saved ID blocks and requires restore/reselection; it never permits replacement creation. Typing a new name explicitly clears the old ID before name lookup. One or more exact same-name/workspace matches bind the unique latest `updatedAt`; only zero matches may create, and a tied or unusable maximum requires selection.
+- `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. An archived saved ID first rebinds to the unique latest active same-name task in the same workspace; if none exists it blocks and requires restore/reselection. It never permits replacement creation. Typing a new name explicitly clears the old ID before name lookup. One or more exact same-name/workspace matches bind the unique latest `updatedAt`; only zero matches for an empty, invalid, or missing ID may create, and a tied or unusable maximum requires selection.
 - `copilotThreadName` / `copilotCwd`: independent Copilot CLI session configuration.
 - `agentModel`: leave empty to use the Runtime's `model/list` default. Only set it when an explicit model lock is required.
 - `heartbeatSkipWhenAgentBusy`: skip a heartbeat while the fixed Codex thread is still active. Other message kinds are unaffected.
@@ -101,7 +101,7 @@ NapCat credentials and Tencent security verification never belong in RabiRoute c
 
 ## Handler adapters
 
-- `codex`: reads Desktop task state, binds by full task ID and workspace, and asks the Desktop owner to start or steer the real turn through Desktop IPC.
+- `codex`: reads user-visible names from short-lived app-server `thread/list`, merges local cwd/archive/time/owner state by full ID, binds by full task ID and workspace, and asks the Desktop owner to start or steer the real turn through Desktop IPC. SQLite `threads.title` is mutable prompt metadata and is never the same-name lookup source.
 - `copilotCli`: calls a local Copilot CLI with a dedicated session name/cwd and records output. It does not inject into an existing VS Code Copilot panel thread.
 - `astrbot`: supports Dashboard login checks, project/session scans, plugin deployment, and ChatUI delivery; continuous real-session acceptance remains pending.
 - `marvis`: writes prompt files, copies text, and opens/focuses the desktop application. It cannot reliably inject into a background session.

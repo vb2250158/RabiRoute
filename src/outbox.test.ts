@@ -42,6 +42,35 @@ async function withJsonServer<T>(
   }
 }
 
+async function withSpeechJsonServer<T>(
+  handler: (body: Record<string, unknown>) => void,
+  run: (url: string) => Promise<T>
+): Promise<T> {
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      handler(raw ? JSON.parse(raw) as Record<string, unknown> : {});
+      response.writeHead(200, {
+        "content-type": "audio/wav",
+        "x-rabispeech-provider": "local-tts",
+        "x-rabispeech-model": "qwen3-tts-0.6b-base",
+        "x-rabispeech-playback-job": "speech-play-1"
+      });
+      response.end(Buffer.from("RIFFtest"));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  try {
+    return await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+}
+
 test("Agent output keeps replies in the local Agent session without creating drafts", async () => {
   const result = await handleAgentReply({
     routeProfileId: "main",
@@ -508,6 +537,72 @@ test("FenneNote source reply resolves runtime by role fallback and voice transcr
   assert.equal(forwarded.routeProfileId, "拉比路由");
   assert.equal(forwarded.messageId, "voice-log-1");
   assert.equal(forwarded.speakerName, "秋雨");
+});
+
+test("RabiSpeech message endpoint character dialogue uses Route voice, model, session and FIFO", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-rabispeech-"));
+  let forwarded: Record<string, unknown> | undefined;
+  const result = await withSpeechJsonServer((body) => {
+    forwarded = body;
+  }, (url) => handleAgentReply({
+    text: "勇者，现在最短时间是十七点四十分。",
+    replyContext: {
+      runtimeRouteId: "speech-route",
+      routeProfileId: "speech-route",
+      routeKind: "voice_transcript",
+      targetType: "voice_transcript",
+      messageId: "speech-message-1",
+      adapterType: "speech",
+      sessionId: "speech-session-1",
+      characterTtsDialogue: true,
+      outputAdapter: "tts",
+      outputPipeline: "rabispeech",
+      replyToSource: false
+    }
+  }, {
+    rootDir,
+    routeRoot: path.join(rootDir, "data", "route"),
+    rolesRoot: path.join(rootDir, "data", "roles"),
+    speechServiceUrl: url,
+    runtimes: [{
+      id: "speech-route",
+      agentRoleId: "Ilias",
+      pipelinePreset: "qq_chat",
+      pipeline: {
+        inputAdapter: "speech",
+        outputAdapter: "agent",
+        outputPipeline: "agent",
+        ttsPlay: false
+      },
+      routeVariables: {
+        speechTtsModel: "local-tts/qwen3-tts-0.6b-base",
+        speechVoice: "Ilias",
+        speechLanguage: "zh",
+        speechSpeed: "1",
+        speechInstructions: "温柔而庄重",
+        speechAutoPlay: "true"
+      },
+      messageAdapterPolicies: {
+        speech: {
+          outputEnabled: true,
+          supportedOutputs: ["text"]
+        }
+      }
+    }]
+  }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "sent");
+  assert.equal(result.reason, "Queued in the RabiSpeech host-wide playback queue.");
+  assert.equal(result.sentMessageId, "speech-play-1");
+  assert.ok(forwarded);
+  assert.equal(forwarded.model, "local-tts/qwen3-tts-0.6b-base");
+  assert.equal(forwarded.voice, "Ilias");
+  assert.equal(forwarded.language, "zh");
+  assert.equal(forwarded.instructions, "温柔而庄重");
+  assert.equal(forwarded.play, true);
+  assert.equal(forwarded.session_id, "speech-session-1");
+  assert.equal(forwarded.route_id, "speech-route");
 });
 
 test("explicit WeCom group target sends through the WeCom SDK wrapper", async () => {

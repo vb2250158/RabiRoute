@@ -13,6 +13,15 @@ const RABILINK_CONVERSATION_LOCK_STALE_MS = 30000;
 export type RabiLinkConversationDirection = "user_to_agent" | "agent_to_user" | "control";
 export type RabiLinkConversationKind = "voice_transcript" | "agent_message" | "review_request";
 
+export type RabiLinkConversationAttachment = {
+  id?: string;
+  kind?: "image" | "video" | "audio" | "file";
+  fileName?: string;
+  contentType?: string;
+  size?: number;
+  localPath?: string;
+};
+
 export type RabiLinkConversationEntry = {
   schemaVersion: 1;
   entryId: string;
@@ -42,6 +51,7 @@ export type RabiLinkConversationEntry = {
   final?: boolean;
   requiresReview?: boolean;
   reviewRequested?: boolean;
+  attachments?: RabiLinkConversationAttachment[];
 };
 
 export type AppendRabiLinkConversationResult = {
@@ -440,7 +450,8 @@ export function appendRabiLinkConversationEntry(
       proactive: typeof input.proactive === "boolean" ? input.proactive : undefined,
       final: typeof input.final === "boolean" ? input.final : undefined,
       requiresReview: typeof input.requiresReview === "boolean" ? input.requiresReview : undefined,
-      reviewRequested: typeof input.reviewRequested === "boolean" ? input.reviewRequested : undefined
+      reviewRequested: typeof input.reviewRequested === "boolean" ? input.reviewRequested : undefined,
+      attachments: Array.isArray(input.attachments) ? input.attachments.slice(0, 8) as RabiLinkConversationAttachment[] : undefined
     };
     const line = `${JSON.stringify(entry)}\n`;
     fs.appendFileSync(filePath, line, "utf8");

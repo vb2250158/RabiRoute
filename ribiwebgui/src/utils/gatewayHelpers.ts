@@ -12,6 +12,7 @@ import {
   sanitizeConfigName as sharedSanitizeConfigName,
   setGatewayAdapters as sharedSetGatewayAdapters
 } from "@shared/gatewayConfigModel";
+import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 
 export const routeKindLabels: Record<string, string> = {
   direct_at: "群聊-直接 @",
@@ -271,18 +272,7 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     migrateLegacyHeartbeatSchedules(gateway);
   }
   if (adapters.includes("speech")) {
-    gateway.routeVariables = gateway.routeVariables ?? {};
-    gateway.routeVariables.speechAsrModel = gateway.routeVariables.speechAsrModel || "faster-whisper/small";
-    gateway.routeVariables.speechTtsModel = gateway.routeVariables.speechTtsModel || "local-tts/gpt-sovits";
-    gateway.routeVariables.speechVoice = gateway.routeVariables.speechVoice || gateway.agentRoleId || "Rabi";
-    gateway.routeVariables.speechLanguage = gateway.routeVariables.speechLanguage || "zh";
-    gateway.routeVariables.speechSpeed = gateway.routeVariables.speechSpeed || "1";
-    gateway.routeVariables.speechThreshold = gateway.routeVariables.speechThreshold || "0.02";
-    gateway.routeVariables.speechSilenceMs = gateway.routeVariables.speechSilenceMs || "900";
-    gateway.routeVariables.speechMinUtteranceMs = gateway.routeVariables.speechMinUtteranceMs || "350";
-    gateway.routeVariables.speechMaxUtteranceMs = gateway.routeVariables.speechMaxUtteranceMs || "30000";
-    gateway.routeVariables.speechAutoSubmit = gateway.routeVariables.speechAutoSubmit || "true";
-    gateway.routeVariables.speechAutoPlay = gateway.routeVariables.speechAutoPlay || "true";
+    gateway.routeVariables = applySpeechRouteVariableDefaults(gateway.routeVariables, gateway.agentRoleId || "Rabi");
     gateway.pipelinePreset = gateway.pipelinePreset || "voice_chat";
     gateway.pipeline = {
       ...gateway.pipeline,

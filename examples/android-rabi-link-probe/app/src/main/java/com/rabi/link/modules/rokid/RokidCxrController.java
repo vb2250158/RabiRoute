@@ -10,9 +10,10 @@ import com.rokid.cxr.link.callbacks.IGlassAppCbk;
 import com.rokid.cxr.link.utils.CxrDefs;
 import com.rokid.cxr.link.utils.GlassInfo;
 
+
 final class RokidCxrController {
     static final String GLASS_ASR_PACKAGE = "com.rabi.link.glass";
-    static final String GLASS_ASR_ENTRY = GLASS_ASR_PACKAGE + ".GlassAsrProbeActivity";
+    static final String GLASS_ASR_ENTRY = GLASS_ASR_PACKAGE + ".GlassAudioClientActivity";
     static final String NATIVE_VOICE_CLIENT_KEY = "rabi_native_voice_client";
     static final String NATIVE_VOICE_REPLY_KEY = "rabi_native_voice_reply";
 

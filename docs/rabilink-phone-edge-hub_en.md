@@ -16,17 +16,17 @@ The phone is an edge communication hub—not a second Agent and not the RabiRout
 | --- | --- |
 | PC RabiRoute / Codex Desktop owner | Reasoning, role context, unified ledger, configuration truth, and action gates |
 | Relay | Application-isolated, retryable bidirectional mailbox with durable retention |
-| Phone | Application token, public networking, notifications, device status, and local peripheral fan-out |
-| Glasses AIUI | Lightweight HUD, touchpad, foreground native ASR/TTS, and playback |
+| Phone | Glasses backend, application token, selected PC, cursor, audio/media queues, notifications, device status, and local peripheral fan-out |
+| Native glasses app | Lightweight HUD, touchpad, PCM capture/playback, and device-media input; no Relay credential |
 | Watch/headset/other portable device | Uses the phone's local link or its own network with the same device envelope |
 
-Rokid AIUI network traffic may already use the phone's Bluetooth-proxied network while AIUI code performs ordinary `fetch()` calls. This saves independent glasses networking but does not move QuickJS, Canvas, page state, or all speech computation to the phone.
+The primary route no longer lets AIUI or glasses call Relay directly. Glasses hand PCM, controls, and device media to the phone over Classic Bluetooth/P2P; the phone calls Relay, and the Rabi PC glasses endpoint runs ASR/TTS. Historical AIUI proxy behavior remains compatibility evidence only.
 
 ## Target topology
 
 ```mermaid
 flowchart LR
-    G["Glasses AIUI\nHUD / ASR / TTS"] <-->|"platform network proxy"| P["Phone companion\nnetwork / token / notification"]
+    G["Native glasses app\nHUD / PCM / device media"] <-->|"Classic BT / P2P"| P["Phone glasses backend\nnetwork / token / cursor / queues"]
     W["Watch / headset / other device"] <-->|"BLE / Data Layer / LAN"| P
     P <-->|"HTTPS"| R["RabiLink Relay\npersistent mailboxes"]
     W -.->|"optional HTTPS"| R

@@ -4,6 +4,7 @@ import { config, type NotificationRule } from "../config.js";
 import { resolvePipeline, type ResolvedPipeline } from "../pipelines.js";
 import { indexLines, roleKnowledgeSnapshot } from "../roleKnowledge.js";
 import { toProjectRelativePath } from "../shared/projectPaths.js";
+import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
 import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
 import {
@@ -99,6 +100,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   const replyApiUrl = String(values.replyApiUrl ?? "");
   const replyContextJson = String(values.replyContextJson ?? "");
   const replyToSource = String(values.replyToSource ?? "").toLowerCase() === "true";
+  const characterTtsDialogue = outputAdapter === "tts" && routeKind === "voice_transcript";
 
   if (!replyApiUrl || !replyContextJson) {
     return [];
@@ -106,6 +108,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
 
   const shouldExplainReplyApi = forceMessagePipeline
     || replyToSource
+    || characterTtsDialogue
     || (outputAdapter === "fennenote" && routeKind === "voice_transcript")
     || routeKind === "rabilink";
   if (!shouldExplainReplyApi) return [];
@@ -119,6 +122,12 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
       ? [
           "本次来自 RabiLink Relay，不能只在 Codex 线程里写最终文本。",
           "如果判断需要回应，请把要写回 Rokid/灵珠侧的短句 POST 到普通回复 API；RabiRoute 会把它放入 RabiLink 下行消息队列。"
+        ]
+      : characterTtsDialogue
+      ? [
+          "本次由语音消息端触发，进入 character-tts-dialogue 回复状态；不能只在 Codex 线程里写最终文本。",
+          "请生成同义的屏幕文本与适合朗读的语音文本，并保持当前 Rabi 人格；普通情况下两者使用同一句短而自然的回复。",
+          "把要播出的语音文本 POST 到普通回复 API；RabiRoute 会冻结当前 Route 的人格、声线、模型和 sessionId，并交给 RabiSpeech 主机级 FIFO 播放队列。不要绕过 Outbox 直连 worker，也不要重复调用 TTS。"
         ]
       : outputAdapter === "fennenote" && routeKind === "voice_transcript"
       ? [
@@ -139,7 +148,9 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
       replyContext: JSON.parse(replyContextJson)
     }, null, 2),
     "```",
-    "API 调用成功后，可见最终回复只需同步已投递的简短结果；如果决定不对消息来源回复，请说明保持安静或不回传的原因。"
+    characterTtsDialogue
+      ? "API 调用成功后，把同一人格回复作为可见最终文本；不能只显示“已投递”之类的状态。如果决定不回应，请说明保持安静的原因且不要调用 API。"
+      : "API 调用成功后，可见最终回复只需同步已投递的简短结果；如果决定不对消息来源回复，请说明保持安静或不回传的原因。"
   ];
 }
 
@@ -387,6 +398,24 @@ function outputPipelineForDecision(decision: RouteDecision): ResolvedPipeline {
   if (
     decision.routeKind === "voice_transcript" &&
     isVoiceTranscriptRecord(record) &&
+    (record.adapterType === "speech" || record.source === "rabispeech")
+  ) {
+    const speechProfile = resolveSpeechRouteProfile(
+      decision.routeVariables,
+      pipeline.ttsVoice || decision.route.agentRoleId || "default"
+    );
+    return resolvePipeline("voice_chat", {
+      inputAdapter: "speech",
+      ttsProvider: pipeline.ttsProvider || undefined,
+      ttsVoice: speechProfile.voice,
+      ttsPlay: speechProfile.autoPlay,
+      preventFeedbackLoop: true,
+      replyToSource: false
+    });
+  }
+  if (
+    decision.routeKind === "voice_transcript" &&
+    isVoiceTranscriptRecord(record) &&
     (record.adapterType === "fennenote" || record.source === "fennenote")
   ) {
     return resolvePipeline("voice_chat", {
@@ -457,6 +486,9 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     replyApiUrl,
     outputAdapter: pipeline.outputAdapter,
     outputPipeline: pipeline.outputPipeline,
+    characterTtsDialogue: isVoiceTranscript
+      && (record.adapterType === "speech" || record.source === "rabispeech")
+      && pipeline.outputAdapter === "tts",
     replyToSource: pipeline.replyToSource
   };
   return {

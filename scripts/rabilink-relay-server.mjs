@@ -27,6 +27,9 @@ const accountLogDir = path.join(dataDir, "account-logs");
 const deviceLogDir = path.join(dataDir, "device-logs");
 const mobileProofDir = path.join(dataDir, "mobile-proofs");
 const mobileDeviceStatusDir = path.join(dataDir, "mobile-device-status");
+const deviceMediaDir = path.join(dataDir, "device-media");
+const deviceMediaMaxBytes = clamp(Number(process.env.RABILINK_RELAY_DEVICE_MEDIA_MAX_BYTES || 64 * 1024 * 1024), 1024 * 1024, 512 * 1024 * 1024);
+const deviceMediaTtlMs = clamp(Number(process.env.RABILINK_RELAY_DEVICE_MEDIA_TTL_MS || 7 * 24 * 60 * 60 * 1000), 60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000);
 const mobileDeviceStatusStaleMs = clamp(
   Number(process.env.RABILINK_RELAY_MOBILE_DEVICE_STATUS_STALE_MS || 3 * 60 * 1000),
   60000,
@@ -83,6 +86,9 @@ fs.mkdirSync(accountLogDir, { recursive: true });
 fs.mkdirSync(deviceLogDir, { recursive: true });
 fs.mkdirSync(mobileProofDir, { recursive: true });
 fs.mkdirSync(mobileDeviceStatusDir, { recursive: true });
+fs.mkdirSync(deviceMediaDir, { recursive: true });
+cleanupExpiredDeviceMedia();
+setInterval(cleanupExpiredDeviceMedia, Math.min(deviceMediaTtlMs, 6 * 60 * 60 * 1000)).unref();
 if (!hasEnabledRabiLinkApps()) {
   console.warn("No enabled RabiLink app tokens exist yet. Open /manage to create the first account and app token.");
 }
@@ -1310,11 +1316,85 @@ function taskForResponse(task) {
     sourceDeviceName: stringValue(input.sourceDeviceName || input.deviceName),
     sourceDeviceKind: stringValue(input.sourceDeviceKind || input.deviceKind).toLowerCase(),
     transport: stringValue(input.transport || input.sourceTransport).toLowerCase(),
+    attachments: Array.isArray(input.attachments) ? input.attachments.slice(0, 8) : [],
     messageCount: task.messages.length,
     nextMessageSeq: task.nextMessageSeq,
     replyText: task.replyText || "",
     error: task.error || ""
   };
+}
+
+function safeMediaName(value) {
+  return path.basename(stringValue(value || "media.bin")).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120) || "media.bin";
+}
+
+function mediaPath(appId, mediaId, fileName) {
+  return path.join(deviceMediaDir, sanitizeRabiLinkId(appId, "app"), `${sanitizeRabiLinkId(mediaId, "media")}-${safeMediaName(fileName)}`);
+}
+
+function cleanupExpiredDeviceMedia() {
+  const cutoff = Date.now() - deviceMediaTtlMs;
+  for (const appEntry of fs.readdirSync(deviceMediaDir, { withFileTypes: true })) {
+    if (!appEntry.isDirectory()) continue;
+    const appDirectory = path.join(deviceMediaDir, appEntry.name);
+    for (const mediaEntry of fs.readdirSync(appDirectory, { withFileTypes: true })) {
+      if (!mediaEntry.isFile()) continue;
+      const target = path.join(appDirectory, mediaEntry.name);
+      try {
+        if (fs.statSync(target).mtimeMs < cutoff) fs.unlinkSync(target);
+      } catch (error) {
+        console.warn(`Unable to expire RabiLink media ${mediaEntry.name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    try {
+      if (fs.readdirSync(appDirectory).length === 0) fs.rmdirSync(appDirectory);
+    } catch {
+      // A concurrent upload may have populated the directory after the empty check.
+    }
+  }
+}
+
+async function handleDeviceMediaUpload(req, url, res) {
+  const auth = authorizeRabiLinkRequest(req, url, {});
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const contentType = stringValue(req.headers["content-type"] || "application/octet-stream").split(";")[0].toLowerCase();
+  const allowed = /^(image\/(jpeg|png|webp)|video\/(mp4|webm)|audio\/(wav|x-wav|mpeg)|application\/octet-stream)$/.test(contentType);
+  if (!allowed) return sendRabiLinkError(res, 415, "Unsupported glasses media type.");
+  const raw = await readRawBody(req, { maxBytes: deviceMediaMaxBytes, label: "Glasses media" });
+  if (!raw.length) return sendRabiLinkError(res, 400, "Media body is empty.");
+  const mediaId = `rbm_${randomUUID()}`;
+  const fileName = safeMediaName(url.searchParams.get("fileName") || `media-${Date.now()}`);
+  const target = mediaPath(auth.app.id, mediaId, fileName);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, raw);
+  return sendJson(res, 201, {
+    code: 0,
+    ok: true,
+    attachment: {
+      id: mediaId,
+      fileName,
+      contentType,
+      size: raw.length,
+      kind: contentType.startsWith("image/") ? "image" : contentType.startsWith("video/") ? "video" : "audio",
+      downloadPath: `/api/rabilink/devices/media/${encodeURIComponent(mediaId)}?fileName=${encodeURIComponent(fileName)}`
+    }
+  });
+}
+
+function handleDeviceMediaDownload(req, url, res) {
+  const auth = authorizeRabiLinkRequest(req, url, {});
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const match = url.pathname.match(/^\/api\/rabilink\/devices\/media\/([^/]+)$/);
+  const mediaId = match ? decodeURIComponent(match[1]) : "";
+  const fileName = safeMediaName(url.searchParams.get("fileName") || "media.bin");
+  const target = mediaPath(auth.app.id, mediaId, fileName);
+  if (!fs.existsSync(target)) return sendRabiLinkError(res, 404, "Media attachment was not found.");
+  res.writeHead(200, {
+    "content-type": "application/octet-stream",
+    "content-length": String(fs.statSync(target).size),
+    "cache-control": "private, no-store"
+  });
+  fs.createReadStream(target).pipe(res);
 }
 
 function createTask(raw, req, auth = { app: null }) {
@@ -4642,6 +4722,12 @@ const server = http.createServer(async (req, res) => {
         return res.end();
       }
       return await handleSpeechProxy(req, url, res);
+    }
+    if (req.method === "POST" && url.pathname === "/api/rabilink/devices/media") {
+      return await handleDeviceMediaUpload(req, url, res);
+    }
+    if (req.method === "GET" && /^\/api\/rabilink\/devices\/media\/[^/]+$/.test(url.pathname)) {
+      return handleDeviceMediaDownload(req, url, res);
     }
     const speechWorkerResponse = /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname);
     const body = req.method === "GET"

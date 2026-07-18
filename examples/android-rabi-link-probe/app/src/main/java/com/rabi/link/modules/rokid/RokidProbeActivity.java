@@ -24,6 +24,8 @@ import android.util.Base64;
 import android.widget.TextView;
 
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult;
+import com.rabi.link.RabiLinkRelayConfig;
+import com.rabi.link.RabiLinkRelaySettings;
 
 import org.json.JSONObject;
 
@@ -123,6 +125,7 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
     private boolean glassAsrAppStarted;
     private boolean nativeVoiceReachable;
     private boolean nativeEchoNextAsr;
+    private RabiGlassPcBackend glassPcBackend;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -165,6 +168,9 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
         if (rokidAiSdkVoiceBridge != null) {
             rokidAiSdkVoiceBridge.stop();
         }
+        if (glassPcBackend != null) {
+            glassPcBackend.stop();
+        }
         pendingNativeVoiceGeneration++;
         releaseAudioPlayer();
         super.onDestroy();
@@ -203,6 +209,9 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
             @Override
             public void onPhoto(byte[] data) {
                 saveJpeg(data);
+                if (glassPcBackend != null) {
+                    glassPcBackend.submitMedia(data, "image/jpeg", "rabi-glass-photo-" + System.currentTimeMillis() + ".jpg", "眼镜拍摄的照片");
+                }
             }
 
             @Override
@@ -255,8 +264,36 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
             public void onNativeVoiceError(String kind, String text, String channel, String clientId) {
                 handleNativeVoiceError(kind, text, channel, clientId, true);
             }
+
+            @Override
+            public void onGlassAudioCaptureComplete(byte[] pcm) {
+                if (glassPcBackend != null) {
+                    glassPcBackend.submitPcm(pcm);
+                }
+            }
         }, nativeVoiceAccessKey, nativeVoiceSecretKey);
         nativeVoiceBridge.start();
+        RabiLinkRelayConfig relayConfig = RabiLinkRelaySettings.load(this);
+        glassPcBackend = new RabiGlassPcBackend(this, new RabiGlassPcBackend.Listener() {
+            @Override
+            public void onStatus(String status) {
+                appendOnUi("眼镜后端：" + status);
+                if (nativeVoiceBridge != null) nativeVoiceBridge.sendGlassAudioStatus(status);
+            }
+
+            @Override
+            public void onReplyPcm(byte[] pcm) {
+                if (nativeVoiceBridge != null) nativeVoiceBridge.sendAudioPcmToGlass(pcm);
+            }
+
+            @Override
+            public void onError(String message) {
+                appendOnUi("眼镜后端错误：" + message);
+                if (nativeVoiceBridge != null) nativeVoiceBridge.sendGlassAudioStatus("错误：" + message);
+            }
+        });
+        glassPcBackend.configure(relayConfig.getBaseUrl(), relayConfig.getToken(), "rabi-glass");
+        glassPcBackend.start();
         androidSystemVoiceBridge = new RokidAndroidSystemVoiceBridge(this, new RokidAndroidSystemVoiceBridge.Listener() {
             @Override
             public void onSystemVoiceLog(String line) {

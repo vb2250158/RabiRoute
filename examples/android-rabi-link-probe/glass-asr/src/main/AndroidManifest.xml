@@ -42,6 +42,11 @@
         <activity
             android:name=".GlassAsrProbeActivity"
             android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask" />
+        <activity
+            android:name=".GlassAudioClientActivity"
+            android:excludeFromRecents="true"
             android:exported="true"
             android:launchMode="singleTask">
             <intent-filter>

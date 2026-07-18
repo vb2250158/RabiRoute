@@ -6,18 +6,22 @@ English | <a href="./pipeline-presets.md">简体中文</a>
 
 # Pipeline Presets
 
-> Status: Agent/Outbox sections are current. FenneNote/OumuQ were retired on 2026-07-17; FenneNote endpoints below document legacy configuration compatibility only. New speech flows use RabiSpeech and the `speech` message endpoint.
+> Status: Agent/Outbox sections are current. FenneNote/OumuQ were retired on 2026-07-17. New speech flows use RabiSpeech and the `speech` message endpoint; old fields remain read-only migration compatibility.
 
 A pipeline describes where an event enters, where handler output is allowed to leave, and how reply instructions are rendered. A preset supplies a coherent default while an inline `pipeline` object can override individual fields.
 
 ```json
 {
-  "pipelinePreset": "agent_session",
+  "pipelinePreset": "voice_chat",
   "pipeline": {
-    "inputAdapter": "napcat",
-    "outputAdapter": "agent",
-    "outputPipeline": "agent",
-    "promptOutputMode": "markdown",
+    "inputAdapter": "speech",
+    "outputAdapter": "tts",
+    "outputPipeline": "rabispeech",
+    "promptOutputMode": "voice_short",
+    "ttsProvider": "local-tts",
+    "ttsVoice": "Rabi",
+    "ttsWorkerUrl": "http://127.0.0.1:8781/v1/audio/speech",
+    "ttsPlay": true,
     "preventFeedbackLoop": true,
     "replyToSource": false
   }
@@ -27,7 +31,7 @@ A pipeline describes where an event enters, where handler output is allowed to l
 Important fields:
 
 - `inputAdapter`: the message source.
-- `outputAdapter`: `agent`, `qq`, `wecom`, `fennenote`, `rabilink`, or another supported endpoint.
+- `outputAdapter`: `agent`, `qq`, `wecom`, `tts`, `file`, `console`, `webhook`, `fennenote`, or `none`.
 - `outputPipeline`: a stable delivery label used in reply context and logs.
 - `promptOutputMode`: how the handler should format its response.
 - `preventFeedbackLoop`: preserve source/self checks.
@@ -36,9 +40,9 @@ Important fields:
 
 ## Built-in presets
 
-Current presets include the Agent-session default and endpoint-oriented presets such as QQ, WeCom, and FenneNote. Use the preset list exposed by the current configuration model/WebGUI rather than copying historical names from old documents.
+The current built-ins are `qq_chat`, `wecom_chat`, `voice_chat`, and `webhook_task`. `voice_chat` means RabiSpeech `speech` ingress, local TTS output, `voice_short` prompting, host playback, and feedback-loop protection.
 
-The compatibility default is `agent_session`: if the handler calls `/api/agent/replies` without a source reply or explicit external target, Outbox returns `sent` and records that the text was retained in the Agent session. It does not silently publish to QQ.
+When no known preset is selected, the compatibility `legacy` fallback uses `outputAdapter=agent`, `outputPipeline=agent`, and `promptOutputMode=plain_text`. It keeps an ordinary reply in the Agent session instead of silently publishing it.
 
 ## Template values
 
@@ -65,12 +69,14 @@ POST /api/agent/replies
 
 with the injected `replyContext`. Outbox resolves the active route and pipeline and returns `sent`, `draft`, `blocked`, or `failed`.
 
-An explicit QQ/WeCom/RabiLink target can select the corresponding endpoint even when the compatibility pipeline is still `agent_session`, but the adapter policy must allow output and the target must be unambiguous.
+An explicit QQ/WeCom/RabiLink target can select the corresponding endpoint even when the compatibility pipeline is still `legacy`, but the adapter policy must allow output and the target must be unambiguous.
 
 There is no generic persistent Action Queue, WebGUI approval center, or automatic retry queue. `draft` is a result/audit state, not a pending item in a finished approval product.
 
-## FenneNote endpoints
+## RabiSpeech speech message endpoint
 
-FenneNote output can use the configured reply/playback bridge. The pipeline decides whether a voice-transcript response remains in the Agent session or is posted to FenneNote. Message-adapter policy and payload support are checked before delivery.
+A `voice_transcript` from the `speech` message endpoint is forced to `voice_chat` in `AgentPacket`, even if the Route's general preset is still QQ or the Agent-session fallback. Its reply context contains `characterTtsDialogue=true`; the handler must POST a short spoken line, semantically identical to its visible reply, to `/api/agent/replies` instead of leaving text only in the Codex task.
 
-See [Voice Interaction Workstation](voice-interaction-workstation_en.md) for the experimental end-to-end boundary.
+Outbox revalidates the source record and `messageAdapterPolicies.speech`, reads `speechTtsModel`, `speechVoice`, `speechLanguage`, `speechInstructions`, `speechSpeed`, `speechAutoPlay`, and the persona ID from the Route, and preserves the original `sessionId` in the local `POST /v1/audio/speech` request. With `speechAutoPlay=true`, the completed audio enters the host-wide FIFO. A successful API result means accepted or queued, not that speaker playback has already completed.
+
+FenneNote/OumuQ output fields and `/api/fennenote/*` remain migration compatibility only. They are not the implementation path for a new speech Route and must not reintroduce cloud TTS.

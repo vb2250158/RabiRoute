@@ -31,6 +31,7 @@ import com.rokid.security.phone.sdk.server.usercenter.UserManager
 import com.rokid.security.sdk.base.common.GlassVideoStreamParam
 import com.rokid.security.sdk.base.common.out.GlassDeviceInfo
 import java.nio.ByteBuffer
+import java.io.ByteArrayOutputStream
 import java.time.Duration
 import java.time.Instant
 import java.util.Date
@@ -54,6 +55,8 @@ final class RokidNativeVoiceBridge(
         fun onNativeStatus(text: String, channel: String, clientId: String)
 
         fun onNativeVoiceError(kind: String, text: String, channel: String, clientId: String)
+
+        fun onGlassAudioCaptureComplete(pcm: ByteArray)
     }
 
     private val appContext = context.applicationContext
@@ -67,6 +70,9 @@ final class RokidNativeVoiceBridge(
     private var phoneAsrLastLoggedBytes = 0
     private var phoneTtsBytes = 0
     private var lastPhoneTtsText = ""
+    private val glassAudioLock = Any()
+    private var glassAudioCapture = ByteArrayOutputStream()
+    @Volatile private var glassAudioCapturing = false
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var phoneDeviceAudioHandshakeGeneration = 0
     @Volatile private var phoneDeviceVideoAudioHandshakeGeneration = 0
@@ -235,6 +241,9 @@ final class RokidNativeVoiceBridge(
         override fun onBTStreamDataReceived(tag: String, data: ByteArray, clientId: String) {
             super.onBTStreamDataReceived(tag, data, clientId)
             log("Phone SDK 收到 BT stream tag=$tag bytes=${data.size} clientId=$clientId")
+            if (tag == GLASS_AUDIO_TAG && glassAudioCapturing) {
+                synchronized(glassAudioLock) { glassAudioCapture.write(data) }
+            }
             if (tag == PHONE_DEVICE_VIDEO_AUDIO_AUDIO_TAG) {
                 handlePhoneDeviceVideoAudioAudio("onBTStreamDataReceived", data.size)
             }
@@ -394,6 +403,24 @@ final class RokidNativeVoiceBridge(
 
     fun stopGlassAsr() {
         sendPayload(ASR_STOP_CMD, "native ASR stop")
+    }
+
+    fun sendAudioPcmToGlass(pcm: ByteArray) {
+        if (pcm.isEmpty()) return
+        Thread {
+            var offset = 0
+            while (offset < pcm.size) {
+                val end = minOf(offset + 4096, pcm.size)
+                val chunk = pcm.copyOfRange(offset, end)
+                runCatching { PSecuritySDK.getMessageService()?.sendAudioStreamDataByClassicBT(chunk) }
+                    .onFailure { log("send Rabi PC audio to glasses failed: ${it.javaClass.simpleName}: ${it.message}") }
+                offset = end
+            }
+        }.start()
+    }
+
+    fun sendGlassAudioStatus(status: String) {
+        sendPayload("$GLASS_AUDIO_STATUS_PREFIX$status", "glasses audio status")
     }
 
     fun handleIncomingProtocol(channel: String, msg: String, clientId: String) {
@@ -1094,6 +1121,31 @@ final class RokidNativeVoiceBridge(
 
     private fun handleTextMessage(channel: String, msg: String, clientId: String) {
         log("Phone SDK text channel=$channel clientId=$clientId msg=$msg")
+        if (msg == GLASS_AUDIO_START_CMD) {
+            val started = synchronized(glassAudioLock) {
+                if (glassAudioCapturing) return@synchronized false
+                glassAudioCapture = ByteArrayOutputStream()
+                glassAudioCapturing = true
+                true
+            }
+            if (started) sendGlassAudioStatus("录音中 · 再按确认发送")
+            return
+        }
+        if (msg == GLASS_AUDIO_STOP_CMD) {
+            val pcm = synchronized(glassAudioLock) {
+                if (!glassAudioCapturing) return@synchronized null
+                glassAudioCapturing = false
+                glassAudioCapture.toByteArray()
+            }
+            if (pcm == null) return
+            sendGlassAudioStatus("手机上传中 · Rabi PC 识别中")
+            listener.onGlassAudioCaptureComplete(pcm)
+            return
+        }
+        if (msg == GLASS_AUDIO_STATUS_REQUEST_CMD) {
+            sendGlassAudioStatus(if (glassAudioCapturing) "录音中" else "手机后端在线")
+            return
+        }
         val officialSystemInfo = parseOfficialSystemInfoResponse(msg)
         if (officialSystemInfo != null) {
             log("Phone SDK official system info response channel=$channel clientId=$clientId ${officialSystemInfo.summary}")
@@ -1413,6 +1465,11 @@ final class RokidNativeVoiceBridge(
         const val OFFICIAL_MAIN_CLIENT_ID = "RokidESecurity"
         const val PHONE_SDK_CHANNEL = "PhoneSDK"
         const val PHONE_SDK_CLIENT_ID = "RabiPhoneVoice"
+        const val GLASS_AUDIO_TAG = "RabiGlassAudioPcm"
+        const val GLASS_AUDIO_START_CMD = "RABI_GLASS_AUDIO_START"
+        const val GLASS_AUDIO_STOP_CMD = "RABI_GLASS_AUDIO_STOP"
+        const val GLASS_AUDIO_STATUS_REQUEST_CMD = "RABI_GLASS_AUDIO_STATUS_REQUEST"
+        const val GLASS_AUDIO_STATUS_PREFIX = "RABI_GLASS_AUDIO_STATUS:"
         const val PHONE_DEVICE_AUDIO_HANDSHAKE_TAG = "RabiPhoneDeviceInfoProbe"
         const val PHONE_DEVICE_VIDEO_AUDIO_VIDEO_TAG = "RabiPhoneDeviceVideoProbe"
         const val PHONE_DEVICE_VIDEO_AUDIO_AUDIO_TAG = "RabiPhoneDeviceAudioAfterVideoProbe"

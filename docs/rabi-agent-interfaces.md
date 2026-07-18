@@ -77,6 +77,12 @@ RabiRoute 只会在满足以下条件时自动发送：
 - 或请求带有原始消息上下文，RabiRoute 能从消息日志中定位来源群聊或私聊。
 - 对应路由的消息端发送管道未关闭，且 payload 类型在 `supportedOutputs` 内。
 
+### 语音消息端人格回复
+
+当注入的 `replyContext` 同时包含 `routeKind=voice_transcript`、`adapterType=speech` 和 `characterTtsDialogue=true` 时，本轮来自 RabiPC 语音消息端。Agent 不能只在 Codex 线程里显示文字：应把适合朗读、与最终可见回复同义的 `text` 连同完整 `replyContext` POST 到 `/api/agent/replies`。Outbox 只接受文本，按来源消息重新绑定 Route，并从 Route 读取人格、声线、TTS 模型、语言、情绪指令、`sessionId` 和 `speechAutoPlay`；成功时返回 `sent`，开启播放时表示音频已进入 RabiSpeech 主机级 FIFO，而不是扬声器已经播放完毕。
+
+这个状态只由 `speech` / RabiSpeech 消息端的转写事件注入。不要把 QQ、角色面板或其它文字入口手工标记成语音状态，也不要绕过 Outbox 直连 worker，否则会丢失来源绑定、策略检查和会话隔离。
+
 NapCat 群聊需要真实引用原消息时，在 `replyContext` 中同时提供源 `messageId` 和 `replyToSource: true`：
 
 ```json

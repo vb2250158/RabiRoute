@@ -18,5 +18,5 @@
       "@shared/*": ["../src/shared/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "../src/shared/gatewayConfigModel.ts"]
+  "include": ["src/**/*.ts", "src/**/*.vue", "../src/shared/gatewayConfigModel.ts", "../src/shared/speechControlContract.ts"]
 }

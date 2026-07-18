@@ -79,8 +79,17 @@ import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalC
 import { handleRabiApi } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
-import { inspectLocalSpeechService } from "./speechServiceStatus.js";
-import { requestLocalSpeech, requestLocalSpeechJson } from "../speech/localSpeechClient.js";
+import {
+  ManagerSpeechControl,
+  speechControlErrorMessage,
+  speechControlErrorStatus
+} from "./speechControl.js";
+import type {
+  SpeechMessageCommand,
+  SpeechMicrophoneStartCommand,
+  SpeechSynthesisCommand
+} from "../shared/speechControlContract.js";
+import type { LocalSpeechResponse } from "../speech/localSpeechClient.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import {
   applyMemoryConsolidationResult,
@@ -353,6 +362,25 @@ const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
 const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlaybackToken;
 const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
 const runtimes = new RuntimeRegistry();
+const speechControl = new ManagerSpeechControl({
+  serviceUrl: () => speechServiceUrl(),
+  rolesRoot: () => rolesRoot,
+  route: (routeId) => {
+    const runtime = runtimes.get(routeId);
+    return runtime
+      ? { id: runtime.definition.id, speechEnabled: sharedGatewayAdapterTypes(runtime.definition).includes("speech") }
+      : undefined;
+  },
+  deliverTranscript: ({ routeId, messageId, text, sessionId }) => {
+    const runtime = runtimes.get(routeId);
+    if (!runtime) return Promise.reject(new Error(`Speech Route disappeared before delivery: ${routeId}`));
+    return triggerGatewaySpeechMessage(runtime, messageId, text, sessionId);
+  },
+  appendRouteLog: (routeId, message) => {
+    const runtime = runtimes.get(routeId);
+    if (runtime) appendLog(runtime, message);
+  }
+});
 const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
 const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
 const remoteAgentHub = new RemoteAgentHub({
@@ -1741,7 +1769,7 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
       adapterRuntimes,
       routeHasRecentMessages
     }),
-    inspectLocalSpeechService(speechServiceUrl())
+    speechControl.status()
   ]);
 
   return {
@@ -2445,12 +2473,6 @@ type RolePanelMessageRequest = {
   attachments?: RolePanelAttachment[];
 };
 
-type SpeechMessageRequest = {
-  gatewayId?: string;
-  text?: string;
-  sessionId?: string;
-};
-
 function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): Promise<void> {
   const runtime = runtimes.get(id);
   if (!runtime) {
@@ -2921,7 +2943,7 @@ function speechServiceUrl(): string {
   return rabiGlobalConfig.read().rabiLinkRelay.speechServiceUrl;
 }
 
-function writeSpeechProxyResponse(response: http.ServerResponse, result: Awaited<ReturnType<typeof requestLocalSpeech>>): void {
+function writeSpeechProxyResponse(response: http.ServerResponse, result: LocalSpeechResponse): void {
   response.writeHead(result.status, {
     "content-type": result.contentType,
     "content-length": String(result.body.byteLength),
@@ -2930,148 +2952,95 @@ function writeSpeechProxyResponse(response: http.ServerResponse, result: Awaited
   response.end(result.body);
 }
 
-function speechPersonaRows(): Array<{ id: string; voiceReady: boolean }> {
-  if (!fs.existsSync(rolesRoot)) return [];
-  return fs.readdirSync(rolesRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && Boolean(sanitizeRoleId(entry.name)))
-    .map((entry) => ({
-      id: entry.name,
-      voiceReady: fs.existsSync(path.join(roleFolderPath(rolesRoot, entry.name), "voice", "voice-profile.json"))
-        || fs.existsSync(path.join(roleFolderPath(rolesRoot, entry.name), "voice", "voice-index.json"))
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id));
+function writeSpeechJson<T>(
+  response: http.ServerResponse,
+  operation: Promise<T>,
+  successStatus = 200,
+  errorStatus = 502
+): void {
+  void operation
+    .then(data => jsonResponse(response, successStatus, { code: 0, data }))
+    .catch(error => jsonResponse(response, speechControlErrorStatus(error, errorStatus), {
+      code: -1,
+      message: speechControlErrorMessage(error)
+    }));
 }
 
 function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/status") {
-    void inspectLocalSpeechService(speechServiceUrl())
-      .then((status) => jsonResponse(response, 200, { code: 0, data: status }))
-      .catch((error) => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    writeSpeechJson(response, speechControl.status(), 200, 500);
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/models") {
-    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/models", {}, { timeoutMs: 10_000 })
-      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    writeSpeechJson(response, speechControl.models().then(models => ({ models })));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/personas") {
-    jsonResponse(response, 200, { code: 0, data: speechPersonaRows() });
+    jsonResponse(response, 200, { code: 0, data: { personas: speechControl.personas() } });
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/playback/status") {
-    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/playback/status", {}, { timeoutMs: 10_000 })
-      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    writeSpeechJson(response, speechControl.playbackStatus());
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/status") {
-    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/microphone/status", {}, { timeoutMs: 10_000 })
-      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    writeSpeechJson(response, speechControl.microphoneStatus());
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/devices") {
-    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/microphone/devices", {}, { timeoutMs: 15_000 })
-      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    writeSpeechJson(response, speechControl.microphoneDevices().then(devices => ({ devices })));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/microphone/start") {
-    void readJsonBody<Record<string, unknown>>(request)
-      .then((body) => {
-        const routeId = sanitizeRoleId(body.route_id);
-        const autoSubmit = body.auto_submit === true;
-        if (autoSubmit) {
-          const runtime = routeId ? runtimes.get(routeId) : undefined;
-          if (!runtime) throw new Error("Select a configured speech Route before enabling automatic submission.");
-          if (!sharedGatewayAdapterTypes(runtime.definition).includes("speech")) throw new Error("The selected Route has no speech message endpoint.");
-        } else if (routeId && !runtimes.get(routeId)) {
-          throw new Error("The selected speech Route does not exist.");
-        }
-        return requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/microphone/start", {
-          method: "POST",
-          headers: { "content-type": "application/json; charset=utf-8" },
-          body: JSON.stringify({ ...body, route_id: routeId || null, auto_submit: autoSubmit })
-        }, { timeoutMs: 30_000 });
-      })
-      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    writeSpeechJson(
+      response,
+      readJsonBody<SpeechMicrophoneStartCommand>(request).then(body => speechControl.startMicrophone(body)),
+      200,
+      400
+    );
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/microphone/stop") {
-    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/microphone/stop", { method: "POST" }, { timeoutMs: 15_000 })
-      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    writeSpeechJson(response, speechControl.stopMicrophone());
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/playback/stop") {
-    void requestLocalSpeechJson<Record<string, unknown>>(speechServiceUrl(), "/v1/playback/stop", { method: "POST" }, { timeoutMs: 10_000 })
-      .then((result) => jsonResponse(response, result.status, { code: result.status >= 200 && result.status < 300 ? 0 : -1, data: result.data }))
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    writeSpeechJson(response, speechControl.stopPlayback());
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/tts") {
-    void readJsonBody<Record<string, unknown>>(request)
-      .then((body) => {
-        const input = String(body.input || "").trim();
-        if (!input) throw new Error("Missing TTS input.");
-        if (input.length > 10_000) throw new Error("TTS input exceeds 10000 characters.");
-        const payload = {
-          model: String(body.model || "tts-local"),
-          input,
-          voice: String(body.voice || "default"),
-          response_format: String(body.response_format || "wav"),
-          speed: Number(body.speed || 1),
-          language: body.language == null ? null : String(body.language),
-          instructions: body.instructions == null ? null : String(body.instructions).slice(0, 2000),
-          sample_rate: body.sample_rate == null ? null : Number(body.sample_rate),
-          play: body.play === true,
-          session_id: body.session_id == null ? null : String(body.session_id).slice(0, 200),
-          route_id: body.route_id == null ? null : String(body.route_id).slice(0, 200)
-        };
-        return requestLocalSpeech(speechServiceUrl(), "/v1/audio/speech", {
-          method: "POST",
-          headers: { "content-type": "application/json; charset=utf-8" },
-          body: JSON.stringify(payload)
-        });
-      })
+    void readJsonBody<SpeechSynthesisCommand>(request)
+      .then(body => speechControl.synthesize(body))
       .then((result) => writeSpeechProxyResponse(response, result))
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      .catch(error => jsonResponse(response, speechControlErrorStatus(error), {
+        code: -1,
+        message: speechControlErrorMessage(error)
+      }));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/asr") {
     const contentType = headerValue(request.headers["content-type"]);
-    if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
-      jsonResponse(response, 415, { code: -1, message: "ASR requires multipart/form-data." });
-      return true;
-    }
     void readBodyBuffer(request, 27 * 1024 * 1024)
-      .then((body) => requestLocalSpeech(speechServiceUrl(), "/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { "content-type": contentType },
-        body: new Uint8Array(body)
-      }))
+      .then(body => speechControl.transcribe(contentType, body))
       .then((result) => writeSpeechProxyResponse(response, result))
-      .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      .catch(error => jsonResponse(response, speechControlErrorStatus(error), {
+        code: -1,
+        message: speechControlErrorMessage(error)
+      }));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/messages") {
-    void readJsonBody<SpeechMessageRequest>(request)
-      .then(async (body) => {
-        const gatewayId = sanitizeRoleId(body.gatewayId);
-        const runtime = gatewayId ? runtimes.get(gatewayId) : undefined;
-        if (!runtime) throw new Error("Select a configured speech Route first.");
-        if (!sharedGatewayAdapterTypes(runtime.definition).includes("speech")) throw new Error("The selected Route has no speech message endpoint.");
-        const text = String(body.text || "").trim();
-        if (!text) throw new Error("Missing speech transcript text.");
-        const sessionId = String(body.sessionId || `speech-${Date.now()}`).trim().slice(0, 200);
-        const messageId = `speech-user-${randomUUID()}`;
-        await triggerGatewaySpeechMessage(runtime, messageId, text, sessionId);
-        return { gatewayId: runtime.definition.id, messageId, sessionId };
-      })
-      .then((payload) => jsonResponse(response, 202, { code: 0, ...payload }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    void readJsonBody<SpeechMessageCommand & { gatewayId?: string }>(request)
+      .then(body => speechControl.acceptMessage({
+        routeId: body.routeId || body.gatewayId || "",
+        text: body.text,
+        sessionId: body.sessionId
+      }))
+      .then(data => jsonResponse(response, 202, { code: 0, data }))
+      .catch(error => jsonResponse(response, speechControlErrorStatus(error, 400), {
+        code: -1,
+        message: speechControlErrorMessage(error)
+      }));
     return true;
   }
   return false;

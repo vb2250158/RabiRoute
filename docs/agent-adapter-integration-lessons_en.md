@@ -86,7 +86,7 @@ Typical causes are name-as-identity, delayed indexing treated as absence, concur
 
 ### The first message works and the second creates a duplicate
 
-Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Reuse a valid unarchived ID in the same workspace regardless of title metadata. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
+Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Building the name index directly from SQLite is equally unsafe: lookup returns zero even though the sidebar still shows the task, then creates a duplicate. Reuse a valid unarchived ID in the same workspace regardless of title metadata. For no-ID lookup and dropdown labels, use Desktop app-server `thread/list` and its `thread.name`; merge local ID/cwd/archive/time/owner state by exact ID. If the saved ID is archived, search active same-name tasks in the same workspace and reuse the unique latest candidate; if none exists, stop without creating a replacement. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
 
 ### The settings page becomes slow or scans continuously
 
@@ -131,13 +131,13 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 
 ### Codex Desktop
 
-- Read Desktop task state without taking ownership.
+- Read the Desktop-visible catalog from short-lived app-server `thread/list`; use `thread.name` for labels and no-ID lookup, then merge local ID/cwd/archive/time/owner state by exact ID without taking ownership.
 - Persist visible name, full task ID, and workspace as one binding.
-- Re-resolve when the owner name and saved name no longer match.
+- Keep a valid ID/workspace binding even when owner or SQLite title metadata changes.
 - For exact same-name tasks in the workspace, bind the unique latest `updatedAt`; create only when none exist and require selection on a latest-time tie.
 - Deeplink an unloaded task, retry for a bounded period, then fail closed.
 - Deliver real prompts only through Desktop IPC.
-- Use app-server only to create/name an empty task when the user requests a new name.
+- Use app-server only for visible task metadata and to create/name an empty task when the user requests a new name; never send a real prompt through it.
 
 ### Copilot CLI
 
@@ -185,7 +185,7 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 ## Release test matrix
 
 - Independent cold start and shutdown.
-- Valid ID reuse after title mutation, archived-binding blocking, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
+- Valid ID reuse after title mutation, archived-duplicate recovery, archived no-match blocking, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
 - Desktop rename continuity and explicit Rabi-side target switching after clearing the old ID.
 - Delayed index and concurrent single-flight creation.
 - Full pagination and bounded scan count.

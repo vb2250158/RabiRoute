@@ -444,3 +444,19 @@ test("legacy role panel persona rules are canonicalized", () => {
     template: "a\nb"
   });
 });
+
+test("backend normalization owns speech Route defaults", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapters: ["speech"],
+    routeVariables: { speechThreshold: "0.025", custom: "kept" }
+  }));
+
+  assert.equal(normalized.pipelinePreset, "voice_chat");
+  assert.equal(normalized.routeVariables?.speechAsrModel, "faster-whisper/small");
+  assert.equal(normalized.routeVariables?.speechTtsModel, "local-tts/gpt-sovits");
+  assert.equal(normalized.routeVariables?.speechVoice, "Rabi");
+  assert.equal(normalized.routeVariables?.speechThreshold, "0.025");
+  assert.equal(normalized.routeVariables?.speechAutoSubmit, "true");
+  assert.equal(normalized.routeVariables?.custom, "kept");
+  assert.deepEqual(normalized.routeProfiles?.[0]?.routeVariables, normalized.routeVariables);
+});

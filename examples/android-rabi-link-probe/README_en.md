@@ -14,6 +14,28 @@ This project packages Android, ADB, Xiaomi, and Rokid investigations into one ph
 com.rabi.link
 ```
 
+## Current product route (2026-07-18)
+
+The project now builds one phone companion and one glasses frontend:
+
+```text
+glasses com.rabi.link.glass
+  <-> audio/media/status only
+phone com.rabi.link
+  <-> Relay, selected PC, cursor, and glasses settings
+RabiLink Relay
+  <-> Rabi PC glasses endpoint owns ASR, TTS, Agent, and action gates
+```
+
+- `GlassAudioClientActivity` is the default glasses entry. `glass-asr` is only a historical module name; no ASR/TTS runs on glasses.
+- The phone home screen is now the RabiLink glasses companion. It no longer duplicates Route, Agent, workspace, or thread settings; it opens remote WebGUI `/manage` instead.
+- The phone sends glasses PCM to Rabi PC ASR, publishes the observation, requests PC TTS for downlink, and streams PCM back to glasses.
+- Photos are wired as message attachments. Relay/worker accept video-file attachments, but the physical glasses video callback is not yet wired and live video is not complete.
+- The backend currently follows the foreground `RokidProbeActivity`; a Foreground Service, disk-backed offline retry, and delivered/played receipts are next.
+- AIUI feature work is paused; old speech probes remain historical diagnostics only.
+
+The embedded glasses APK is installed by the phone CXR workflow, so the user still installs only one phone APK.
+
 An embedded glasses-side test APK, `com.rabi.link.glass`, is bundled for CXR CustomApp experiments. It is a test payload installed by the phone-side workflow, not a second phone application for users.
 
 ## Current conclusions
@@ -22,7 +44,7 @@ The Xiaomi path is an evidence probe. Public BLE/GATT inspection, Health Connect
 
 The Rokid phone module uses CXR-L for authorization, connection, CustomView, audio, photos, controls, and device status. The explicit foreground status service can report real glasses battery and charging state to Relay without creating a CustomView session.
 
-Rokid AIUI traffic already reaches Relay through the paired phone's network proxy. The phone does not become the Agent owner, conversation ledger, or configuration source of truth.
+Historical AIUI traffic reached Relay through the paired phone's network proxy; that product route is now paused. In the native-app route the phone explicitly serves as the glasses backend, while Agent ownership, the conversation ledger, and PC configuration truth remain on Rabi PC.
 
 The shared Android SDK can publish record-first portable observations and read broadcast or targeted downstream messages by independent cursor. The probe does not silently start a microphone or pretend to be an unlimited background service.
 

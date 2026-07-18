@@ -91,6 +91,29 @@ test("reading or updating a recent memory refreshes viewedAt", () => {
   assert.equal(updated.viewedAt, updated.updatedAt);
 });
 
+test("updating a stale recent memory requires an explicit read first", () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-stale-update",
+    title: "过期近期记忆",
+    focus: "近期记忆编辑窗口",
+    content: "旧内容",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    keywords: ["编辑窗口"]
+  });
+
+  assert.throws(
+    () => updateRecentMemory(roleDir, "memory-stale-update", { content: "未经读取直接修改" }),
+    /outside the 24-hour editable window/
+  );
+
+  const read = getRecentMemory(roleDir, "memory-stale-update");
+  assert.equal(typeof read?.viewedAt, "string");
+  const updated = updateRecentMemory(roleDir, "memory-stale-update", { content: "读取确认后修改" });
+  assert.equal(updated.content, "读取确认后修改");
+});
+
 test("consolidated memories can enter required read items and refresh viewedAt", () => {
   const roleDir = makeRoleDir();
   writeConsolidatedMemory(roleDir, {

@@ -678,6 +678,11 @@ export function createRecentMemory(roleDir: string, input: Record<string, unknow
 export function updateRecentMemory(roleDir: string, memoryId: string, patch: Record<string, unknown>): RecentMemoryItem {
   const existing = listRecentMemories(roleDir).find((item) => item.id === memoryId);
   if (!existing) throw new Error(`Memory not found: ${memoryId}`);
+  if (ageHours(memoryActivityAt(existing)) > DEFAULT_RECENT_EDITABLE_HOURS) {
+    throw new Error(
+      `Recent memory is outside the ${DEFAULT_RECENT_EDITABLE_HOURS}-hour editable window. Read it by ID before updating or record a new correction.`
+    );
+  }
   const touchedAt = nowIso();
   const next = normalizeRecentMemory({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: touchedAt, viewedAt: touchedAt });
   if (!next) throw new Error("Memory title and content are required.");

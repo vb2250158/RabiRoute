@@ -243,6 +243,8 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 <用户在 route 模板里写的可选补充要求；为空时省略本段>
 ```
 
+当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，并在 `replyContext` 写入 `characterTtsDialogue=true`。`[回复回传要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到普通回复 API；Outbox 再按当前 Route 的人格、声线、模型、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
+
 ## 示例：QQ 群消息
 
 ```text

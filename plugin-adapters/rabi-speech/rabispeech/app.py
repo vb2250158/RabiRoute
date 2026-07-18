@@ -90,7 +90,7 @@ def create_app(
         async with httpx.AsyncClient(timeout=15.0) as client:
             result = await client.post(
                 f"{base}/api/speech/messages",
-                json={"gatewayId": route_id, "text": text, "sessionId": session_id},
+                json={"routeId": route_id, "text": text, "sessionId": session_id},
             )
             result.raise_for_status()
 

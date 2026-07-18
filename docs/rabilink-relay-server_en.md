@@ -8,23 +8,23 @@ English | <a href="./rabilink-relay-server.md">简体中文</a>
 
 > Maturity: experimental. Relay, PC worker, remote WebGUI, input/downlink mailboxes, device logs, and the unified ledger have implementations. Real public-network, account-isolation, device, and recovery acceptance is still required.
 
-The Relay is a built-in system transport owned by Manager, not a message adapter. It connects Rokid/AIUI clients, portable devices, ordinary API clients, and the PC RabiRoute worker. Glasses and phones are endpoints using the transport; the Route-facing glasses entry keeps the legacy internal key `rabilink`. Input and output are independent persistent flows.
+The Relay is a built-in system transport owned by Manager, not a message adapter. In the primary native-app route, glasses exchange audio/media only with the phone backend; the phone calls Relay, while the PC worker owns the Route-facing `rabilink` path. Input and output remain independent persistent flows. Historical Rokid/AIUI and ordinary API clients remain compatibility entries.
 
 The same Relay also exposes a separate synchronous RabiSpeech API. It authenticates an application token, selects an online PC with speech enabled, and waits while Manager forwards the byte-preserving request to the loopback service. This path does not enter an Agent, persona, message Route, or conversation ledger. See [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md).
 
 ```text
 Uplink
-  AIUI/device -> Relay input mailbox -> PC worker
+  glasses -> phone backend -> Relay input mailbox -> PC worker
   -> unified conversation ledger -> input completed
   -> later idle/periodic/touchpad review
 
 Downlink
   Codex/scheduler/planner -> RabiRoute Outbox policy
-  -> Relay persistent messages -> device cursor consumption
-  -> native TTS or device UI
+  -> Relay persistent messages -> phone cursor consumption
+  -> Rabi PC TTS -> phone -> glasses PCM playback
 ```
 
-AIUI may use the phone-provided network path underneath, but the phone does not own the Agent, ledger, or configuration.
+The phone owns glasses transport state, not the Agent, ledger, Route/Agent configuration, or long-term memory.
 
 ## Start the Relay
 
@@ -125,9 +125,13 @@ Use a stable `deliveryId` for retry idempotency.
 POST /api/rabilink/devices/input
 GET  /api/rabilink/devices/messages?deviceId=<id>&deviceKind=<kind>&after=<cursor>&stream=1
 POST /api/rabilink/devices/logs
+POST /api/rabilink/devices/media?fileName=<safe-name>
+GET  /api/rabilink/devices/media/<media-id>?fileName=<safe-name>
 ```
 
 Generic clients must identify their device ID or kind. The glasses compatibility stream implicitly selects `deviceKind=glasses`. The management console can filter device logs by account/application, device, source, severity, session, time range, and query text.
+
+Media upload uses a raw image/video/audio request body and returns attachment metadata. Publish that metadata in an observation only after upload succeeds. The PC worker accepts only the controlled media path and downloads it with the same application token into private Route data before ledger append. The default object limit is 64 MiB (`RABILINK_RELAY_DEVICE_MEDIA_MAX_BYTES`) and temporary objects expire after seven days (`RABILINK_RELAY_DEVICE_MEDIA_TTL_MS`). This is serialized file-message transfer, not live video or resumable upload.
 
 ## Legacy task API
 

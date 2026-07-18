@@ -18,7 +18,7 @@ Not every handler has projects, persistent sessions, tools, streaming, or cancel
 
 Every adapter must satisfy these rules before advanced features matter:
 
-1. Reuse the bound session when the immutable ID exists in the configured workspace and its owner record is not archived. The owner title or SQLite `title` is mutable display metadata and must not participate in identity. If the saved ID points to an archived task, block creation and require an explicit restore or reselection.
+1. Reuse the bound session when the immutable ID exists in the configured workspace and its owner record is not archived. The owner title or SQLite `title` is mutable display metadata and must not participate in identity. If the saved ID is archived, reuse the unique latest active same-name task in the same workspace; when none exists, block and require restore/reselection. Never create a replacement for an archived binding.
 2. Only when the ID is empty, invalid, or actually missing, search by the Manager-saved name plus normalized workspace. Rebind the unique most recently updated match when one or more candidates exist, create once only when there is no match, and ask the user only when the maximum update time is tied or unusable.
 3. Deliver to the real owner that provides the user-visible task and tool context. Sharing a database, title, or session ID with a second Runtime is not unified ownership.
 4. Saving settings completes the binding transaction and persists visible name, full session ID, and workspace together.
@@ -214,7 +214,7 @@ Mutating APIs must be explicit. Health scans remain read-only.
 At minimum, cover:
 
 - installation/authentication states;
-- valid ID/workspace binding reuse despite title mutation, archived-binding blocking, and workspace mismatch;
+- valid ID/workspace binding reuse despite title mutation, archived-duplicate recovery, archived no-match blocking, and workspace mismatch;
 - unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation;
 - delayed indexing and concurrent single-flight creation;
 - Desktop-side rename continuity and explicit Rabi-side target switching;

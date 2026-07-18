@@ -220,6 +220,20 @@ class PersonaVoiceResolver:
                 transcripts[audio.resolve()] = text
         return " ".join(transcripts[path.resolve()] for path in prompt_files if path.resolve() in transcripts)
 
+    def engine_options(self, persona_voice_dir: Path | None, engine: str) -> dict[str, Any]:
+        """Return private, per-persona options for one local speech engine."""
+        if persona_voice_dir is None:
+            return {}
+        profile_path = persona_voice_dir / "voice-profile.json"
+        if not profile_path.is_file():
+            return {}
+        profile = _json(profile_path)
+        configured = profile.get("engine_options", {}) if isinstance(profile, dict) else {}
+        if not isinstance(configured, dict):
+            return {}
+        options = configured.get(engine, {})
+        return dict(options) if isinstance(options, dict) else {}
+
     def _entries(self, voice_dir: Path) -> list[dict[str, Any]]:
         index = voice_dir / "voice-index.json"
         if not index.is_file():

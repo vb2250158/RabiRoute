@@ -1,31 +1,7 @@
-export type SpeechProviderStatus = {
-  id: string;
-  kind: "tts" | "asr";
-  enabled: boolean;
-  model?: string;
-  transport?: string;
-  formats: string[];
-  voiceBinding?: string;
-  loaded?: boolean;
-  loadedDevice?: string;
-  preload?: boolean;
-  localFilesOnly?: boolean;
-  warmupError?: string;
-};
+import type { SpeechProvider, SpeechRuntimeStatus } from "../shared/speechControlContract.js";
 
-export type SpeechServiceStatus = {
-  state: "online" | "offline" | "invalid";
-  checkedAt: string;
-  configuredUrl: string;
-  latencyMs?: number;
-  service?: string;
-  localOnly?: boolean;
-  relaySafe?: boolean;
-  streaming?: boolean;
-  defaults: { tts?: string; asr?: string };
-  providers: { tts: SpeechProviderStatus[]; asr: SpeechProviderStatus[] };
-  error?: string;
-};
+export type SpeechProviderStatus = SpeechProvider;
+export type SpeechServiceStatus = SpeechRuntimeStatus;
 
 import { normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";
 export { normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";

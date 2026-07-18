@@ -116,7 +116,7 @@ class LocalTtsWorker:
         self.inference_lock = threading.Lock()
         self.job_queue: queue.Queue[str] = queue.Queue()
         self.model: Any = None
-        self.voice_prompt_cache: dict[tuple[str, str], Any] = {}
+        self.voice_prompt_cache: dict[tuple[str, str, bool], Any] = {}
         self.model_load_seconds: float | None = None
         self.started_at = time.time()
         threading.Thread(target=self._generator_loop, name=f"{args.engine}-generator", daemon=True).start()
@@ -138,6 +138,7 @@ class LocalTtsWorker:
             match_patterns=payload.get("match_patterns"),
         )
         prompt_audio, source_files, augmented = self.voice_refs.prepare_prompt_audio(prompt_files, character_folder)
+        engine_options = self.voice_refs.engine_options(character_folder, self.args.engine)
         job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
         output = self.output_dir / f"{job_id}.wav"
         job = {
@@ -158,6 +159,7 @@ class LocalTtsWorker:
             "prompt_audio": str(prompt_audio),
             "prompt_audio_files": [str(path) for path in source_files],
             "prompt_audio_augmented": augmented,
+            "engine_options": engine_options,
             "error": None,
         }
         with self.jobs_lock:
@@ -373,12 +375,18 @@ class LocalTtsWorker:
 
         prompt_audio = str(job["prompt_audio"])
         ref_text = str(job["ref_text"] or "").strip()
-        prompt_key = (prompt_audio, ref_text)
+        options = job.get("engine_options") if isinstance(job.get("engine_options"), dict) else {}
+        clone_mode = str(options.get("clone_mode") or "icl").strip().lower().replace("-", "_")
+        x_vector_only = clone_mode in {"speaker", "speaker_embedding", "x_vector_only"}
+        if clone_mode not in {"icl", "speaker", "speaker_embedding", "x_vector_only"}:
+            raise ValueError(f"Unsupported Qwen3-TTS clone mode: {clone_mode}")
+        prompt_ref_text = "" if x_vector_only else ref_text
+        prompt_key = (prompt_audio, prompt_ref_text, x_vector_only)
         if prompt_key not in self.voice_prompt_cache:
             self.voice_prompt_cache[prompt_key] = self.model.create_voice_clone_prompt(
                 ref_audio=prompt_audio,
-                ref_text=ref_text or None,
-                x_vector_only_mode=not bool(ref_text),
+                ref_text=prompt_ref_text or None,
+                x_vector_only_mode=x_vector_only or not bool(prompt_ref_text),
             )
         language = QWEN_LANGUAGE_NAMES.get(str(job["language"]).strip().lower(), "Auto")
         wavs, sample_rate = self.model.generate_voice_clone(

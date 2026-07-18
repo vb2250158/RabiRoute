@@ -6,7 +6,7 @@ English | <a href="./rabilink-aiui-residency-plan.md">简体中文</a>
 
 # RabiLink AIUI Residency and Active-Intelligence Boundary
 
-> Status: current boundary of an experimental path. The foreground AIUI loop has implementation and local-test evidence. System-level 24-hour background recording is not implemented and cannot be promised by AIUI.
+> Status: paused historical experiment. The foreground loop has implementation and local-test evidence, but since 2026-07-18 it no longer receives new product features. See the [native app design](rabilink-glasses-app-design_en.md) for the current route.
 
 ## Exact conclusion
 

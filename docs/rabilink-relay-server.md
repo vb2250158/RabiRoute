@@ -8,14 +8,14 @@
 
 > 成熟度：实验。Relay、PC worker、远程 WebGUI、输入/下行队列和统一会话账本已有实现，仍需按真实公网、账号隔离、设备和恢复场景验收。
 
-这个系统内置转接服务用于把 Rokid 云侧插件、便携设备和电脑端 RabiRoute 接起来；它本身不是消息端。输入与输出是两条独立队列，眼镜端、手机端等调用方才是消息来源。当前 AIUI 在应用层直接调用 Relay；按 Rokid 官方机制，眼镜网络包会通过蓝牙透明代理到手机 App，所以传输层使用了手机网络，但手机不拥有 Agent、账本或配置。AIUI 的连接对话采用 record-first：电脑端 worker 领取观察后先写入统一会话账本并完成上行，不把单句转写直接交给 Codex。Codex 在线程空闲、触摸板引导或周期反思时读取账本，再按需要独立下行。
+这个系统内置转接服务用于把 Rokid 云侧插件、手机/便携设备和电脑端 RabiRoute 接起来；它本身不是消息端。输入与输出是两条独立队列。当前眼镜 App 只与手机交换音频/媒体，手机作为眼镜后端调用 Relay；手机不拥有 Agent、账本或 PC 配置。手机把 PC ASR 结果按 record-first observation 上行，电脑端 worker 先写入统一会话账本，不把单句转写直接交给 Codex。Codex 在线程空闲、手动引导或周期反思时读取账本，再独立下行；手机请求 PC TTS 后把 PCM 发回眼镜。
 
 同一 Relay 还提供独立的 RabiSpeech 直接 API。它不经过上述 Agent/账本链路：客户端请求 `/api/rabilink/speech/*`，服务器鉴权并等待选定 PC 的 Manager 转给本机 `rabi-speech` 插件，然后在原 HTTP 请求中返回最终音频或转写。详见 [RabiSpeech 本机 TTS / ASR 插件](rabispeech-plugin.md)。
 
 链路：
 
 ```text
-上行：Rokid 眼镜 / 灵珠智能体
+上行：Rokid 眼镜 -> 手机后端 / 灵珠兼容入口
   -> RabiLink Relay 公网 HTTPS 输入队列
   -> 电脑端 RabiLink worker
   -> rabilink-conversation.jsonl 统一会话账本
@@ -26,8 +26,8 @@
   -> RabiRoute 输出安全门
   -> Relay /worker/messages 下行队列
   -> 同一统一会话账本记录 agent_to_user
-  -> 眼镜按 cursor 持续消费
-  -> AIUI 原生 TTS
+  -> 手机按 cursor 持续消费
+  -> Rabi PC TTS -> 手机 -> 眼镜 PCM 播放
 ```
 
 ## 启动
@@ -256,6 +256,18 @@ Content-Type: application/json
 ```
 
 该接口默认补成 `rabilink.observation` + `deliveryMode=observe`。PC worker 领取到的 task 会保留 `sourceDeviceId`、`sourceDeviceName`、`sourceDeviceKind` 和 `transport`，并写入统一会话账本。
+
+照片、短视频或音频文件先作为原始请求体上传，再把返回的 `attachment` 放进 observation 的 `attachments`：
+
+```http
+POST /api/rabilink/devices/media?fileName=photo.jpg
+X-RabiLink-Token: <app-token>
+Content-Type: image/jpeg
+
+<binary body>
+```
+
+PC worker 只接受 `/api/rabilink/devices/media/...` 下载路径，使用同一应用 token 下载到 Route 私有数据目录后再写账本。单文件默认上限 64 MiB（`RABILINK_RELAY_DEVICE_MEDIA_MAX_BYTES`），临时对象默认保留 7 天（`RABILINK_RELAY_DEVICE_MEDIA_TTL_MS`）。这是文件消息慢传，不是实时视频或断点续传协议。
 
 设备读取自己的下行视图：
 

@@ -76,13 +76,37 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
             await asyncio.sleep(0.01)
         snapshot = service.snapshot()
         assert snapshot["running"] is True
+        assert len(snapshot["level_history"]) == 3
+        assert snapshot["level_history"][0] > 0
+        assert snapshot["level_history"][-1] < snapshot["level_history"][0]
         assert snapshot["history"][0]["text"] == "常驻转录成功"
         assert snapshot["history"][0]["submitted"] is True
+        assert snapshot["stats"] == {
+            "captured": 1,
+            "recognized": 1,
+            "empty": 0,
+            "submitted": 1,
+            "submit_failed": 0,
+            "dropped": 0,
+        }
+        event_kinds = [item["kind"] for item in reversed(snapshot["events"])]
+        assert event_kinds == [
+            "microphone_started",
+            "utterance_started",
+            "segment_queued",
+            "transcription_started",
+            "transcription_succeeded",
+            "route_submission_started",
+            "route_submission_succeeded",
+        ]
+        assert all("text" not in item.get("details", {}) for item in snapshot["events"])
         assert submitted == [("voice-route", "常驻转录成功", "session-one")]
         assert (tmp_path / "microphone.json").is_file()
         await service.stop()
         assert stream.stopped and stream.closed
-        assert service.snapshot()["running"] is False
+        stopped = service.snapshot()
+        assert stopped["running"] is False
+        assert stopped["events"][0]["kind"] == "microphone_stopped"
 
     asyncio.run(scenario())
 
@@ -116,6 +140,51 @@ def test_resident_microphone_suppresses_capture_during_host_playback(tmp_path: P
         active = False
         service.feed_for_test(np.zeros(800, dtype=np.float32))
         assert service.snapshot()["state"] == "listening"
+        assert calls == 0
+        await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_short_false_trigger_returns_to_listening_after_silence(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        calls = 0
+
+        async def transcribe(_path: Path, _config) -> TranscriptionResult:
+            nonlocal calls
+            calls += 1
+            return TranscriptionResult(text="不应识别", language="zh", duration=0.1, provider="fake", model="fake")
+
+        service = MicrophoneService(
+            state_path=tmp_path / "microphone.json",
+            temp_dir=tmp_path / "temp",
+            transcriber=transcribe,
+            submitter=lambda _route, _text, _session: None,  # type: ignore[arg-type]
+            playback_active=lambda: False,
+            stream_factory=lambda _config, _callback: FakeStream(),
+        )
+        await service.start(
+            {
+                "sample_rate": 8000,
+                "chunk_ms": 100,
+                "pre_roll_ms": 0,
+                "record_threshold": 0.1,
+                "transcribe_threshold": 0.1,
+                "adaptive_threshold": False,
+                "silence_ms": 200,
+                "min_utterance_ms": 1000,
+                "max_utterance_ms": 60000,
+            }
+        )
+        service.feed_for_test(np.full(800, 0.2, dtype=np.float32))
+        service.feed_for_test(np.zeros(800, dtype=np.float32))
+        service.feed_for_test(np.zeros(800, dtype=np.float32))
+
+        snapshot = service.snapshot()
+        assert snapshot["state"] == "listening"
+        assert snapshot["utterance_active"] is False
+        assert snapshot["pending"] == 0
+        assert snapshot["events"][0]["kind"] == "segment_discarded"
         assert calls == 0
         await service.stop()
 

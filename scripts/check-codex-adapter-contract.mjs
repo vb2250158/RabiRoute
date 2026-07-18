@@ -35,6 +35,8 @@ assert.match(sessionResolver, /dependencies\.deliver/);
 assert.match(sessionResolver, /if \(exact\)/);
 assert.match(sessionResolver, /exact\.cwd[\s\S]*sameCodexWorkspace/);
 assert.match(sessionResolver, /if \(exact\.archived\)/);
+assert.ok(sessionResolver.indexOf("if (archivedBinding)") < sessionResolver.indexOf("createIdempotently(params.title"),
+  "An archived saved binding may rebind an existing active same-name task, but must fail before replacement creation.");
 assert.doesNotMatch(sessionResolver, /exact\.title\s*===\s*params\.title/,
   "Mutable Desktop/SQLite title metadata must not invalidate a stable task ID binding.");
 assert.match(runtime, /bootstrapEmptyDesktopThread/);
@@ -79,4 +81,4 @@ if (fs.existsSync(builtAgentThreadsPath)) {
     "The runnable dist/agentThreads.js must contain the canonical resolver.");
 }
 
-console.log("Codex adapter contract OK: Desktop IPC is the only real-message owner; full task ID plus workspace remains stable across title changes; archived tasks and fallbacks fail closed.");
+console.log("Codex adapter contract OK: Desktop IPC is the only real-message owner; full task ID plus workspace remains stable across title changes; archived duplicates may rebind existing active tasks but never create replacements.");

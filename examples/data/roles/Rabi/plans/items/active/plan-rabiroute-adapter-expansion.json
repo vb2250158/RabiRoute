@@ -5,7 +5,7 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "architecture",
-  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端。Codex 本机入口已收敛为 Desktop IPC 单一执行路径，并固化名称 + 完整任务 ID + workspace 的稳定绑定、索引延迟期间复用同一 ID、自动初始化先保存后投递、设置页按需扫描和 4510 独立启动门禁；项目锁定 app-server 只做受控元数据操作，不拥有第二 Runtime 或隐藏 fallback。RabiLink 眼镜端向输入事件接口发布原生 ASR 文本，普通回复与主动消息共用应用级持续下行流并继续经过 RabiRoute 输出门。",
+  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端。Codex 本机入口已收敛为 Desktop IPC 单一执行路径：完整任务 ID + workspace 是稳定身份，短生命周期 app-server 只提供用户可见名称/空任务元数据，归档绑定只可重绑现有唯一活动同名任务，绝不自动创建替代任务。RabiSpeech 控制面已收敛为 Manager Interface + 共享 contract；RabiLink 眼镜语音和媒体观察继续复用统一账本、持续下行流与 RabiRoute 输出门。",
   "nextAction": "新增聊天平台时优先扩展 src/adapters/、src/routing/ 和 src/outbox.ts 的统一边界，新增处理端时优先扩展 src/agentAdapters/；每个 Agent adapter 都要先明确 Host、Runtime、Transport、Session 与真实 turn owner，并用真实目标端验收唯一执行路径",
   "waitingFor": "",
   "project": {
@@ -20,6 +20,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-16T16:15:00+08:00",
-  "keywords": ["message adapter", "agent adapter", "Desktop IPC", "task owner", "稳定会话绑定", "自动初始化", "4510", "single execution path", "RabiLink", "持续消息流", "主动投递", "outbox", "remoteAgent", "NapCat", "解耦", "扩展"]
+  "updatedAt": "2026-07-18T00:00:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "Desktop IPC", "task owner", "稳定任务 ID", "用户可见名称", "归档重绑", "speechControl", "single execution path", "RabiLink", "媒体附件", "outbox", "remoteAgent", "NapCat", "解耦", "扩展"]
 }

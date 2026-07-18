@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import SpeechRouteMonitor from "../components/SpeechRouteMonitor.vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
+import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 
 const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
 const runtime = computed(() => store.selectedRuntime);
+const speechDefaultVariables = applySpeechRouteVariableDefaults(undefined);
 const adapterQuery = ref("");
 const configNameError = ref("");
 const codexBinding = ref({ loading: false, error: "", pending: false });
@@ -3823,30 +3826,37 @@ watch(
                     <v-alert class="full-span" type="info" variant="tonal" density="compact">
                       语音消息端由 RabiPC 配置、RabiSpeech 本机服务常驻执行；关闭浏览器后麦克风仍可继续转录。ASR 文本可进入当前 Route；Agent 回复按当前人格声线合成，并进入整台电脑唯一的 FIFO。没有语音 Route 时仍可独立使用 TTS 角色扮演。
                     </v-alert>
+                    <SpeechRouteMonitor
+                      class="full-span"
+                      :route-id="gateway.id"
+                      :route-name="gateway.routeName || gateway.name"
+                      :route-running="runtime.running"
+                      :route-variables="gateway.routeVariables"
+                    />
                     <v-text-field
                       label="ASR 模型 ID"
-                      :model-value="speechVariable('speechAsrModel', 'faster-whisper/small')"
+                      :model-value="speechVariable('speechAsrModel', speechDefaultVariables.speechAsrModel)"
                       hint="使用 GET /v1/models 返回的完整 ID"
                       persistent-hint
                       @update:model-value="setSpeechVariable('speechAsrModel', $event)"
                     />
                     <v-text-field
                       label="TTS 模型 ID"
-                      :model-value="speechVariable('speechTtsModel', 'local-tts/gpt-sovits')"
+                      :model-value="speechVariable('speechTtsModel', speechDefaultVariables.speechTtsModel)"
                       hint="例如 local-tts/gpt-sovits"
                       persistent-hint
                       @update:model-value="setSpeechVariable('speechTtsModel', $event)"
                     />
                     <v-text-field
                       label="人格 / 声线"
-                      :model-value="speechVariable('speechVoice', gateway.agentRoleId || 'Rabi')"
+                      :model-value="speechVariable('speechVoice', gateway.agentRoleId || speechDefaultVariables.speechVoice)"
                       hint="优先使用 data/roles/<人格>/voice"
                       persistent-hint
                       @update:model-value="setSpeechVariable('speechVoice', $event)"
                     />
                     <v-text-field
                       label="语言"
-                      :model-value="speechVariable('speechLanguage', 'zh')"
+                      :model-value="speechVariable('speechLanguage', speechDefaultVariables.speechLanguage)"
                       @update:model-value="setSpeechVariable('speechLanguage', $event)"
                     />
                     <v-text-field
@@ -3855,7 +3865,7 @@ watch(
                       min="0.001"
                       max="1"
                       step="0.001"
-                      :model-value="speechVariable('speechThreshold', '0.02')"
+                      :model-value="speechVariable('speechThreshold', speechDefaultVariables.speechThreshold)"
                       @update:model-value="setSpeechVariable('speechThreshold', $event)"
                     />
                     <v-text-field
@@ -3864,7 +3874,7 @@ watch(
                       min="0.001"
                       max="1"
                       step="0.001"
-                      :model-value="speechVariable('speechTranscribeThreshold', '0.025')"
+                      :model-value="speechVariable('speechTranscribeThreshold', speechDefaultVariables.speechTranscribeThreshold)"
                       @update:model-value="setSpeechVariable('speechTranscribeThreshold', $event)"
                     />
                     <v-text-field
@@ -3873,7 +3883,7 @@ watch(
                       min="200"
                       max="5000"
                       step="50"
-                      :model-value="speechVariable('speechSilenceMs', '900')"
+                      :model-value="speechVariable('speechSilenceMs', speechDefaultVariables.speechSilenceMs)"
                       @update:model-value="setSpeechVariable('speechSilenceMs', $event)"
                     />
                     <v-text-field
@@ -3882,7 +3892,7 @@ watch(
                       min="100"
                       max="5000"
                       step="50"
-                      :model-value="speechVariable('speechMinUtteranceMs', '350')"
+                      :model-value="speechVariable('speechMinUtteranceMs', speechDefaultVariables.speechMinUtteranceMs)"
                       @update:model-value="setSpeechVariable('speechMinUtteranceMs', $event)"
                     />
                     <v-text-field
@@ -3891,7 +3901,7 @@ watch(
                       min="1000"
                       max="120000"
                       step="1000"
-                      :model-value="speechVariable('speechMaxUtteranceMs', '30000')"
+                      :model-value="speechVariable('speechMaxUtteranceMs', speechDefaultVariables.speechMaxUtteranceMs)"
                       @update:model-value="setSpeechVariable('speechMaxUtteranceMs', $event)"
                     />
                     <v-text-field
@@ -3900,7 +3910,7 @@ watch(
                       min="0"
                       max="5000"
                       step="50"
-                      :model-value="speechVariable('speechPreRollMs', '500')"
+                      :model-value="speechVariable('speechPreRollMs', speechDefaultVariables.speechPreRollMs)"
                       @update:model-value="setSpeechVariable('speechPreRollMs', $event)"
                     />
                     <v-text-field
@@ -3909,25 +3919,25 @@ watch(
                       min="0.1"
                       max="10"
                       step="0.1"
-                      :model-value="speechVariable('speechInputGain', '1')"
+                      :model-value="speechVariable('speechInputGain', speechDefaultVariables.speechInputGain)"
                       @update:model-value="setSpeechVariable('speechInputGain', $event)"
                     />
                     <v-switch
                       color="primary"
                       label="按底噪动态抬高阈值"
-                      :model-value="speechVariable('speechAdaptiveThreshold', 'true') !== 'false'"
+                      :model-value="speechVariable('speechAdaptiveThreshold', speechDefaultVariables.speechAdaptiveThreshold) !== 'false'"
                       @update:model-value="setSpeechVariable('speechAdaptiveThreshold', String($event === true))"
                     />
                     <v-switch
                       color="primary"
                       label="识别后自动送入当前 Route"
-                      :model-value="speechVariable('speechAutoSubmit', 'true') !== 'false'"
+                      :model-value="speechVariable('speechAutoSubmit', speechDefaultVariables.speechAutoSubmit) !== 'false'"
                       @update:model-value="setSpeechVariable('speechAutoSubmit', String($event === true))"
                     />
                     <v-switch
                       color="primary"
                       label="Agent 回复自动排队播放"
-                      :model-value="speechVariable('speechAutoPlay', 'true') !== 'false'"
+                      :model-value="speechVariable('speechAutoPlay', speechDefaultVariables.speechAutoPlay) !== 'false'"
                       @update:model-value="setSpeechAutoPlay"
                     />
                     <v-alert class="full-span" type="warning" variant="tonal" density="compact">

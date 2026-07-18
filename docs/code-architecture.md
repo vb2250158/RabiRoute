@@ -394,6 +394,8 @@ Gateway 配置的事实源 Module。
 - `src/pages/RuntimeLogPage.vue`：运行日志。
 - `src/pages/PersonaTemplatePage.vue`：人格和模板相关页面。
 - `src/utils/gatewayHelpers.ts`：前端配置辅助函数。
+- `src/speech/speechControlClient.ts`：浏览器语音 HTTP Adapter；唯一知道 `/api/speech/*` 路径和 `{ code, data }` envelope 的前端 Module。
+- `src/stores/speechStore.ts`：语音控制 read model、命令和共享轮询生命周期；语音页与 Route 监视器不再各自请求后端。
 - `src/i18n/index.ts`：唯一 locale 状态、浏览器偏好持久化、`<html lang>` 和切换事件。
 - `src/i18n/catalog.ts`：人工校准的英文界面词条和动态文案规则。
 - `src/i18n/domLocalizer.ts`：把已登记界面文案应用到 Vue / Vuetify DOM；跳过 `data-no-i18n`、代码块、输入正文和可编辑内容。
@@ -401,6 +403,20 @@ Gateway 配置的事实源 Module。
 - `src/pages/ProjectDocsPage.vue`：加载并渲染 `docs/user-guide/*.md`，提供双语任务导航、全文搜索、本页目录和可分享的 `?page=` 深链接；开发者 Markdown 通过仓库链接继续保持独立事实源。
 
 前端可以做 UI 友好的默认值和展示转换，但配置不变量不要只存在前端。需要和后端一致的规则应进入 `src/shared/gatewayConfigModel.ts` 或由 manager 返回。
+
+语音控制链路采用明确的前后端分离：
+
+```text
+SpeechServicePage / SpeechRouteMonitor
+  -> frontend speech store
+  -> frontend speech client Adapter
+  -> Manager speech Interface
+  -> manager/speechControl.ts
+  -> localSpeechClient Adapter
+  -> RabiSpeech Python implementation
+```
+
+`src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/manager/speechControl.ts` 负责 Route policy、消息异步受理、RabiSpeech payload 映射和 read model 正规化。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立本机模型 Runtime，不合并进 Manager。
 
 locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:locale`，不是正式项目存档。route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据属于用户配置或运行事实，必须保持原文；需要保护的动态区域使用 `data-no-i18n` 明确标注。
 
@@ -427,7 +443,7 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 RabiSpeech 的模型基准仍归插件自身：`scripts/benchmark_models.py` 按 TTS → WAV → ASR 顺序采集原始数据，`benchmarks/` 保存公开语料、功能元数据和无外部依赖的 HTML 模板，`skills/benchmark-rabispeech-models/` 固定操作与验收顺序。生成后的公开报告进入 `ribiwebgui/public/reports/`，由 Vite 复制到 WebGUI 静态产物；运行期 WAV、JSON、CSV 和日志不进入前端或仓库。
 
-实时能力页归控制面：`src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`GET /api/speech/status` 把规范化结果交给 `ribiwebgui/src/pages/SpeechServicePage.vue`。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
+实时能力页归控制面：`src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`src/manager/speechControl.ts` 再把模型、麦克风、播放和消息命令统一映射到 `speechControlContract`。`GET /api/speech/status` 把规范化结果交给 frontend speech store。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
 
 这些目录可以有自己的运行脚本和 README，但不要把真实 token、QQ 号、Cookie、本机路径写进公开示例。
 

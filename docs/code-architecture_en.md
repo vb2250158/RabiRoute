@@ -178,6 +178,20 @@ These modules do not replace live gateway adapter code.
 
 `ribiwebgui/` is the Vue/Vuetify control surface for configuration, scans, status, logs, and documentation. It is a client of Manager APIs, not the configuration source of truth.
 
+Speech control has an explicit frontend/backend split:
+
+```text
+SpeechServicePage / SpeechRouteMonitor
+  -> frontend speech store
+  -> frontend speech client adapter
+  -> Manager speech interface
+  -> manager/speechControl.ts
+  -> localSpeechClient adapter
+  -> RabiSpeech Python implementation
+```
+
+`src/shared/speechControlContract.ts` is the stable camelCase interface between Manager and WebGUI and owns Route speech defaults. `ribiwebgui/src/speech/speechControlClient.ts` is the only frontend module that knows `/api/speech/*` paths and the `{ code, data }` envelope. `ribiwebgui/src/stores/speechStore.ts` owns the speech read model, commands, and shared polling lifecycle. `src/manager/speechControl.ts` owns Route policy, asynchronous message acceptance, RabiSpeech payload mapping, and read-model normalization. Python snake_case and model-runtime details must not leak into Vue pages; RabiSpeech remains an independent local model runtime rather than being merged into Manager.
+
 WebGUI localization is split by responsibility:
 
 - `src/i18n/index.ts` owns the single locale state, browser preference, `<html lang>`, and locale-change event.
@@ -196,7 +210,7 @@ External/companion adapters live under `plugin-adapters/` or `scripts/` when the
 
 `plugin-adapters/rabi-speech/` is an independent local TTS/ASR service, not a message or handler adapter. Its registry selects only locally configured providers. The benchmark pipeline records TTS generation, WAV output, ASR transcription, cold/load/warm timings, RTF, memory, error rates, and machine metadata; raw runtime artifacts remain ignored while the sanitized HTML report is copied through `ribiwebgui/public/reports/`.
 
-The live speech view belongs to the control plane. `src/manager/speechServiceStatus.ts` probes only a loopback RabiSpeech URL, normalizes provider state, and removes private paths before `GET /api/speech/status` serves `ribiwebgui/src/pages/SpeechServicePage.vue`. That page describes the current PC. The static benchmark describes only its named target machine, so the two must remain separate data sources.
+The live speech view belongs to the control plane. `src/manager/speechServiceStatus.ts` probes only a loopback RabiSpeech URL and removes private paths. `src/manager/speechControl.ts` then maps models, microphone state, playback, and message commands to `speechControlContract` before `GET /api/speech/status` reaches the frontend speech store. The page describes the current PC. The static benchmark describes only its named target machine, so the two must remain separate data sources.
 
 ## Tests
 

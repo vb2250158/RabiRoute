@@ -6,200 +6,95 @@ English | <a href="./rabilink-active-intelligence-requirements.md">简体中文<
 
 # RabiLink Active-Intelligence Requirements and Delivery Plan
 
-> Status: implementation tracker for an experimental capability. The document combines code facts, device limitations, remaining engineering work, and acceptance criteria. Not every requirement is complete.
-
-This English companion is deliberately organized around the current contract rather than mirroring every historical paragraph.
+> Status: implementation tracker for the phone-backed native-glasses route. AIUI feature development was paused on 2026-07-18; retained AIUI code is historical evidence only.
 
 ## Final architecture decision
 
-Use one application-level path:
-
 ```text
-RabiLink AIUI foreground app
-  -> native ASR produces an observation
-  -> HTTPS directly to the public Relay
-  -> PC worker writes the unified conversation ledger
-  -> Codex Desktop task owner reviews when idle, periodically, or on touchpad request
+native glasses frontend
+  -> captures and sends PCM to phone; stores no Relay credential and runs no ASR
+phone glasses backend
+  -> owns glasses settings, Relay credential, selected PC, cursor, and transfer queues
+  -> calls restricted Relay speech proxy
+Rabi PC glasses message endpoint
+  -> RabiSpeech ASR -> record-first observation -> unified ledger -> Agent review
 
-Codex / scheduler / planner
-  -> RabiRoute Outbox and action gate
-  -> persistent Relay downlink queue
-  -> AIUI consumes by cursor
-  -> native TTS plays messages in order
+Agent / scheduler / planner
+  -> RabiRoute Outbox and action gate -> persistent Relay downlink
+phone
+  -> polls text by cursor -> requests Rabi PC TTS -> sends PCM to glasses
+glasses
+  -> plays audio in order
 ```
 
-“Direct” describes the application protocol. AIUI calls Relay HTTPS itself. It does not exchange messages, audio, configuration, or cursors with CXR-L.
+The phone is not another RabiRoute configuration source. Route, Agent, workspace, and thread configuration remain on the Rabi PC and are edited by opening the remote WebGUI `/manage` from the phone.
 
-Confirmed limitation: AIUI cannot communicate directly with CXR-L. CXR-L may remain an independent native probe or device-management experiment, but it is not part of the AIUI message path and cannot stand in for AIUI acceptance.
+## Required outcomes
 
-## Voice strategy
-
-Two phases share one adapter/DTO contract:
-
-| Phase | ASR | TTS | Default cost behavior |
-| --- | --- | --- | --- |
-| First usable release | AIUI `SpeechRecognition` | AIUI `speechSynthesis` | No paid voice API |
-| Later provider phase | Configurable ASR API | Configurable TTS API plus audio playback transport | Explicit opt-in, credentials, limits, and cost display |
-
-Changing provider must not change the observation record, unified ledger, review workflow, or Relay downlink contract. CXR-L is not an AIUI voice adapter.
-
-## Required user outcomes
-
-1. Foreground AIUI continues recognition across utterances without requiring a wake word every time.
-2. Final ASR text is recorded first; it does not interrupt Codex for every segment.
-3. User observations, queued Agent downlinks, and touchpad review requests share one auditable JSONL timeline.
-4. Codex reviews new context when its bound Desktop task is idle; periodic reflection can run without new input.
-5. A touchpad click means “review recent context now.” The Desktop owner starts a turn when idle or steers the active turn when busy.
-6. Codex, timers, and planners can send proactive messages without an upstream `taskId` and even while the glasses page is closed.
-7. AIUI resumes by cursor, consumes backlog in order, and speaks messages through native TTS.
-8. Configuration remains owned by PC RabiRoute; AIUI may invoke only whitelisted configuration actions.
-9. The system never claims 24-hour background recording from AIUI.
-
-## Current implementation baseline
-
-Implemented or locally covered:
-
-- AIUI foreground ASR loop and conservative retry/backoff.
-- Persistent TTS queue with watchdog recovery when the host does not emit lifecycle callbacks.
-- Record-first observation handling.
-- Unified conversation ledger, date/idle rotation, archive index, and recovery from index damage.
-- Idle review, periodic reflection, and touchpad-guided review.
-- Proactive task-free Relay downlink through `/api/agent/replies` and RabiLink Outbox.
-- Configuration assistant with a whitelist of safe actions.
-- Local automation for queue contracts, ledger recovery, voice adapters, interaction modes, and visual/runtime safety.
-
-Still requiring external or physical-device acceptance:
-
-- Current Craft upload/binding/review flow.
-- Repeated ASR and TTS on physical glasses.
-- Touchpad semantics on the real device.
-- Network interruption, page hide/show, and backlog recovery.
-- Device-status freshness and long-session stability.
-- Future ASR/TTS API providers.
-- Any true system-level background capture service.
+1. Glasses connect to the selected Rabi PC through the phone and Relay; public credentials never live on glasses.
+2. The phone can open remote PC configuration but has no duplicate Route/Agent/Codex binding editor.
+3. Final ASR text is recorded first and does not synchronously interrupt Codex for every segment.
+4. User observations, Agent downlinks, and manual review requests share one auditable JSONL timeline.
+5. Codex reviews new context when idle, periodically, or when explicitly guided.
+6. Codex, timers, and planners can enqueue proactive messages without a source `taskId`.
+7. The phone resumes by cursor, requests PC TTS, and streams PCM to glasses in order.
+8. ASR and TTS run only on the Rabi PC glasses message endpoint; phone and glasses host no speech model.
+9. Photos and short videos are reliable message attachments. The first release does not claim live video or 24-hour capture.
+10. High-risk external actions still pass through the RabiRoute action gate.
 
 ## Sources of truth
 
 | Data | Owner |
 | --- | --- |
-| Route, role, policy, and configuration | PC RabiRoute |
-| Unified conversation context | Role directory JSONL ledger on PC |
-| Public input/downlink mailboxes | Relay application state |
-| Per-device cursor and temporary pending playback | Device client |
-| Model, tools, sandbox, approvals, and turn state | Bound Codex Desktop task owner |
-| Device network and platform lifecycle | AIUI/Android host |
+| Route, role, policy, speech provider, and Agent configuration | PC RabiRoute |
+| Unified conversation context | Role-directory JSONL ledger on PC |
+| Public input/downlink mailbox and temporary attachment objects | Relay |
+| Relay credential, selected PC, glasses settings, cursor, pending transfers | Phone app |
+| Microphone/playback state and minimal HUD state | Glasses app |
+| Model, tools, sandbox, approvals, and active turn | Bound PC Agent runtime |
 
-No phone, glasses page, Relay process, or CXR-L probe becomes a second Agent or configuration source of truth.
+Neither phone nor glasses becomes a second Agent, memory system, or configuration truth.
 
 ## Queue contracts
 
-### Uplink observation
+### Uplink audio
 
-Final ASR text and control events use stable identity and producer time. Record-first input is accepted and completed after the PC ledger write; it does not wait for a Codex answer.
+The glasses send tagged 16 kHz mono 16-bit PCM to the phone. Start/stop controls are idempotent because Classic Bluetooth and P2P may both deliver the same command. The phone wraps PCM as WAV, calls `/api/rabilink/speech/v1/audio/transcriptions`, then publishes a stable record-first observation through `/api/rabilink/devices/input`.
 
-```text
-POST /rokid/rabilink/input
-```
+### Uplink media
 
-### Review work
+The phone first uploads the binary to `/api/rabilink/devices/media`, then publishes an observation containing `attachments`. The PC worker downloads authenticated objects to private Route data before ledger append and Agent delivery. Failed binary upload must not create a dangling observation.
 
-The reviewer reads the ledger and persists review cursor/state. It must not skip unreviewed records when the ledger rotates or Codex was offline.
+Photos are wired to the current physical-device callback. The protocol accepts video files, but the physical glasses video callback and disk-backed offline retry remain acceptance work. Media is a serialized message attachment, not a live stream.
 
-Triggers:
+### Review
 
-- new stable observations after the settle window;
-- periodic reflection;
-- touchpad manual review;
-- optional explicitly trusted urgent events.
+The reviewer reads the unified ledger and advances persistent review state only after safe processing. Triggers include stable new observations, periodic reflection, manual review, and explicitly trusted urgent events.
 
 ### Downlink
 
-User-facing text goes through:
+User-facing text passes through `/api/agent/replies`, output policy, Relay Outbox, and the persistent message endpoint. The phone polls by cursor, calls `/api/rabilink/speech/v1/audio/speech`, extracts PCM from WAV, and streams it to glasses. Delivery and playback receipts are the next reliability layer.
 
-```text
-POST /api/agent/replies
-  -> targetType=rabilink
-  -> proactive=true when no source task exists
-  -> route output policy
-  -> Relay outbox
-  -> GET /rokid/rabilink/messages?stream=1&after=<cursor>
-```
+## Privacy and safety
 
-The Relay keeps downlink independently of an input task. Retries use a stable `deliveryId` for idempotency.
+- Do not log tokens, transcript bodies, audio bodies, or private attachment content.
+- Raw audio is not retained by default.
+- Downloaded attachments stay under private Route data and are excluded from source control.
+- Relay speech access is an explicit ASR/TTS allowlist, not general access to WebGUI, worker APIs, PC microphone control, or local URLs.
+- Capture must be visible and pausable. Background operation requires a visible Android Foreground Service.
+- External send, deletion, purchase, and device-control actions retain their existing approval rules.
 
-## Unified conversation ledger
+## Acceptance sequence
 
-Current role data:
+1. Build both APKs and verify phone-driven install/launch.
+2. Verify physical PTT from glasses through PC ASR to one ledger observation.
+3. Verify proactive PC text through PC TTS and phone streaming to glasses playback.
+4. Verify reconnect/cursor behavior and duplicate cross-transport command suppression.
+5. Verify a photo arrives on PC as a local authenticated attachment.
+6. Move the phone backend from Activity lifetime to a visible Foreground Service.
+7. Add a disk-backed media/audio retry queue, exponential backoff, retention cleanup, and delivered/played receipts.
+8. Wire physical-device video-file capture; assess live video only after reliable file messages.
 
-```text
-rabilink-conversation.jsonl
-rabilink-conversation-review-state.json
-rabilink-conversations/
-  index.json
-  YYYY-MM-DD.jsonl
-  YYYY-MM-DD-02.jsonl
-```
+## Historical AIUI boundary
 
-Directions:
-
-- `user_to_agent`: observations, normally `requiresReview=true`.
-- `agent_to_user`: messages successfully queued for device delivery.
-- `control`: touchpad/manual-review and related control events.
-
-Rotation is mechanical: preserve original records, move by local date or configured idle gap, and rebuild indexes from JSONL when necessary. Do not summarize or rewrite raw timeline records during rotation.
-
-## Active review guardrails
-
-- Review only new/unreviewed context plus the necessary surrounding timeline.
-- Apply cooldowns and deduplication to avoid repetitive proactive speech.
-- Prefer one high-value observation or action over a long monologue.
-- User questions and manual touchpad review may bypass normal cooldowns but remain audited.
-- Emergency intervention is reserved for credible, imminent safety risk.
-- External actions still require the relevant Outbox/action policy.
-
-## Touchpad contract
-
-In connected-conversation mode, a single click means:
-
-> Review what I have said recently and tell me the most useful thing at the current safe point.
-
-It does not pause ASR. If the TTS queue explicitly shows a failed head item, the UI may reuse a click to retry that failure, but the state must be visibly distinct from review mode.
-
-## Configuration assistant boundary
-
-The local AIUI `LanguageModel` may map natural language to a small whitelist of RabiLink/WebGUI actions. It is not a recursive call into the bound full Agent loop. Destructive, external-send, device-control, deletion, or secret-changing actions require explicit confirmation and remain owned by PC RabiRoute policy.
-
-## Reliability requirements
-
-- Stable IDs for observations, deliveries, sessions, devices, and cursors.
-- Persistent queues on both Relay and device sides.
-- Cursor advancement only after local persistence/processing.
-- Idempotent retry by `deliveryId`.
-- Bounded exponential backoff and visible offline state.
-- Atomic ledger/index/review-state replacement and stale-lock recovery.
-- TTS failures cannot block later messages forever.
-- ASR/TTS handoff must avoid capturing the system's own speech.
-- No raw audio retention by default.
-
-## Security and privacy red lines
-
-- Continuous capture must be explicit and visibly indicated.
-- Recording, transcript retention, raw-audio retention, external send, and deletion are separately authorized.
-- Tokens belong to their application/device scope and never appear in public examples.
-- The local Manager is not exposed directly to the Internet; remote WebGUI is proxied through the Relay/PC worker.
-- Device clients do not receive other devices' messages unless the envelope explicitly targets their kind/ID.
-
-## Acceptance gate
-
-The capability is not “usable on glasses” until the current build proves:
-
-1. Craft upload, binding, installation, and launch.
-2. Continuous foreground ASR over multiple utterances.
-3. Record-first PC ledger writes without per-segment Codex turns.
-4. Idle, periodic, and touchpad review through the bound Desktop owner.
-5. Ordinary and task-free proactive downlink with cursor recovery.
-6. Native TTS queue, failure recovery, and ASR resume without echo loops.
-7. Page hide/show and network interruption recovery.
-8. Current-version evidence from the same physical-device session.
-
-Until then, describe the feature as locally implemented and experimentally integrated—not as a verified production wearable loop.
+AIUI cannot directly communicate with CXR-L and is not part of this primary route. Existing AIUI pages, tests, and release notes remain for regression and protocol history, but Craft submission or AIUI ASR/TTS acceptance no longer blocks the phone/glasses app milestone.

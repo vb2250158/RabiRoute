@@ -16,6 +16,7 @@ import {
   isBuiltinRolePanelRule as sharedIsBuiltinRolePanelRule
 } from "./personaRulePolicy.js";
 import { isCodexTaskId } from "./codexTaskId.js";
+import { applySpeechRouteVariableDefaults } from "./speechControlContract.js";
 
 export {
   builtinRolePanelRouteKind,
@@ -672,8 +673,11 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const agentAdapters = normalizeAgentAdapters(definition.agentAdapters);
   const pipelinePreset = typeof definition.pipelinePreset === "string" && definition.pipelinePreset.trim()
     ? definition.pipelinePreset.trim()
-    : undefined;
+    : activeMessageAdapters.includes("speech") ? "voice_chat" : undefined;
   const pipeline = normalizePipeline(definition.pipeline);
+  const routeVariables = activeMessageAdapters.includes("speech")
+    ? applySpeechRouteVariableDefaults(definition.routeVariables, agentRoleId || "Rabi")
+    : definition.routeVariables;
   const configuredNotificationRules = normalizeRuleDefinitions(definition.notificationRules) ?? [];
   const hasPersonaOnlyRules = !agentRoleId && configuredNotificationRules.some(sharedIsBuiltinRolePanelRule);
   const notificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
@@ -698,6 +702,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     agentModel: definition.agentModel?.trim() || "",
     pipelinePreset,
     pipeline,
+    routeVariables,
     routeName,
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
@@ -748,7 +753,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
       recentMessageLimit: definition.recentMessageLimit,
       pipelinePreset,
       pipeline,
-      routeVariables: definition.routeVariables,
+      routeVariables,
       notificationRules
     }, 0, definition, dataDir, rolesDir, options)].filter((profile): profile is RouteProfileDefinition => Boolean(profile))
   };

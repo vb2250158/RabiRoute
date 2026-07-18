@@ -1,90 +1,34 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { storeToRefs } from "pinia";
+import {
+  DEFAULT_SPEECH_ROUTE_PROFILE,
+  resolveSpeechRouteProfile,
+  type SpeechMicrophoneConfig,
+  type SpeechProvider
+} from "@shared/speechControlContract";
 import { useGatewayStore } from "../stores/gatewayStore";
+import { useSpeechStore } from "../stores/speechStore";
 import { gatewayAdapterTypes } from "../utils/gatewayHelpers";
 
-type SpeechProvider = {
-  id: string;
-  kind: "tts" | "asr";
-  enabled: boolean;
-  model?: string;
-  transport?: string;
-  formats: string[];
-  voiceBinding?: string;
-  loaded?: boolean;
-  loadedDevice?: string;
-  preload?: boolean;
-  localFilesOnly?: boolean;
-  warmupError?: string;
-};
-
-type SpeechStatus = {
-  state: "online" | "offline" | "invalid";
-  checkedAt: string;
-  configuredUrl: string;
-  latencyMs?: number;
-  service?: string;
-  localOnly?: boolean;
-  relaySafe?: boolean;
-  streaming?: boolean;
-  defaults: { tts?: string; asr?: string };
-  providers: { tts: SpeechProvider[]; asr: SpeechProvider[] };
-  error?: string;
-};
-
-type SpeechModel = {
-  id: string;
-  capability: "tts" | "asr";
-  provider: string;
-  model: string;
-  name: string;
-  family: string;
-  installed: boolean;
-  enabled: boolean;
-  loaded: boolean;
-  available: boolean;
-  languages: string[];
-  features: string[];
-  request?: Record<string, unknown>;
-};
-
-type SpeechPersona = { id: string; voiceReady: boolean };
 type AudioInput = { title: string; value: number; default?: boolean };
-type MicrophoneHistoryItem = {
-  time: number;
-  text: string;
-  model: string;
-  provider: string;
-  duration: number;
-  submitted: boolean;
-  submit_error?: string;
-};
-type ResidentMicrophoneStatus = {
-  running: boolean;
-  state: string;
-  error?: string;
-  last_submit_error?: string;
-  level: number;
-  noise_floor: number;
-  dynamic_threshold: number;
-  utterance_active: boolean;
-  pending: number;
-  dropped: number;
-  config: Record<string, unknown>;
-  history: MicrophoneHistoryItem[];
-};
 
 const store = useGatewayStore();
+const speech = useSpeechStore();
+const {
+  status,
+  models,
+  personas,
+  microphone: microphoneStatus,
+  playback,
+  loading
+} = storeToRefs(speech);
 const activeKind = ref<"tts" | "asr">("tts");
-const loading = ref(false);
 const requestError = ref("");
-const status = ref<SpeechStatus | null>(null);
-const models = ref<SpeechModel[]>([]);
-const personas = ref<SpeechPersona[]>([]);
 const ttsModel = ref("");
 const asrModel = ref("");
-const voice = ref("Rabi");
-const language = ref("zh");
+const voice = ref(DEFAULT_SPEECH_ROUTE_PROFILE.voice);
+const language = ref(DEFAULT_SPEECH_ROUTE_PROFILE.language);
 const ttsText = ref("你好，我是由 RabiSpeech 本地模型驱动的声音。");
 const instructions = ref("");
 const speed = ref(1);
@@ -97,23 +41,22 @@ const transcriptHistory = ref<Array<{ time: string; text: string; model: string 
 const selectedGatewayId = ref("");
 const autoSubmit = ref(true);
 const sessionId = ref<string>(globalThis.crypto?.randomUUID?.() || `speech-${Date.now()}`);
-const listening = ref(false);
-const utteranceActive = ref(false);
-const micLevel = ref(0);
-const threshold = ref(0.02);
-const silenceMs = ref(900);
-const minUtteranceMs = ref(350);
-const maxUtteranceMs = ref(30_000);
-const transcribeThreshold = ref(0.025);
-const adaptiveThreshold = ref(true);
-const inputGain = ref(1);
-const preRollMs = ref(500);
+const listening = computed(() => microphoneStatus.value?.running === true);
+const utteranceActive = computed(() => microphoneStatus.value?.utteranceActive === true);
+const micLevel = computed(() => Number(microphoneStatus.value?.level || 0));
+const threshold = ref(DEFAULT_SPEECH_ROUTE_PROFILE.recordThreshold);
+const silenceMs = ref(DEFAULT_SPEECH_ROUTE_PROFILE.silenceMs);
+const minUtteranceMs = ref(DEFAULT_SPEECH_ROUTE_PROFILE.minUtteranceMs);
+const maxUtteranceMs = ref(DEFAULT_SPEECH_ROUTE_PROFILE.maxUtteranceMs);
+const transcribeThreshold = ref(DEFAULT_SPEECH_ROUTE_PROFILE.transcribeThreshold);
+const adaptiveThreshold = ref(DEFAULT_SPEECH_ROUTE_PROFILE.adaptiveThreshold);
+const inputGain = ref(DEFAULT_SPEECH_ROUTE_PROFILE.inputGain);
+const preRollMs = ref(DEFAULT_SPEECH_ROUTE_PROFILE.preRollMs);
 const audioInputs = ref<AudioInput[]>([]);
 const selectedAudioInput = ref<number | null>(null);
-const microphoneStatus = ref<ResidentMicrophoneStatus | null>(null);
 const microphoneConfigLoaded = ref(false);
-const playbackBusy = ref(false);
-const playbackQueued = ref(0);
+const playbackBusy = computed(() => Boolean(playback.value?.current));
+const playbackQueued = computed(() => Number(playback.value?.queued || 0));
 
 const providers = computed(() => status.value?.providers[activeKind.value] ?? []);
 const computerName = computed(() => store.meta.rabiName || store.meta.computerName || "当前电脑");
@@ -165,26 +108,16 @@ function checkedAtLabel(value: string | undefined): string {
 }
 
 async function refreshStatus(): Promise<void> {
-  if (loading.value) return;
-  loading.value = true;
   requestError.value = "";
   try {
-    const response = await fetch("/api/speech/status", { headers: { accept: "application/json" } });
-    const body = await response.json();
-    if (!response.ok || body.code !== 0 || !body.data) throw new Error(body.message || `HTTP ${response.status}`);
-    status.value = body.data as SpeechStatus;
+    await speech.refreshStatus();
   } catch (error) {
     requestError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    loading.value = false;
   }
 }
 
 async function refreshModels(): Promise<void> {
-  const response = await fetch("/api/speech/models", { headers: { accept: "application/json" } });
-  const body = await response.json();
-  if (!response.ok || body.code !== 0) throw new Error(body.message || `HTTP ${response.status}`);
-  models.value = Array.isArray(body.data?.data) ? body.data.data as SpeechModel[] : [];
+  await speech.refreshModels();
   if (!ttsModels.value.some(item => item.id === ttsModel.value)) {
     ttsModel.value = ttsModels.value.find(item => item.available && item.id.endsWith("/gpt-sovits"))?.id
       || ttsModels.value.find(item => item.available)?.id
@@ -200,22 +133,15 @@ async function refreshModels(): Promise<void> {
 }
 
 async function refreshPersonas(): Promise<void> {
-  const response = await fetch("/api/speech/personas", { headers: { accept: "application/json" } });
-  const body = await response.json();
-  if (!response.ok || body.code !== 0) throw new Error(body.message || `HTTP ${response.status}`);
-  personas.value = Array.isArray(body.data) ? body.data as SpeechPersona[] : [];
+  await speech.refreshPersonas();
   if (!personas.value.some(item => item.id === voice.value) && personas.value[0]) voice.value = personas.value[0].id;
 }
 
 async function refreshPlayback(): Promise<void> {
   try {
-    const response = await fetch("/api/speech/playback/status", { headers: { accept: "application/json" } });
-    const body = await response.json();
-    if (!response.ok || body.code !== 0) return;
-    playbackBusy.value = Boolean(body.data?.current);
-    playbackQueued.value = Number(body.data?.queued || 0);
+    await speech.refreshPlayback();
   } catch {
-    playbackBusy.value = false;
+    // Polling failures are surfaced by the shared speech store.
   }
 }
 
@@ -225,32 +151,24 @@ async function synthesize(): Promise<void> {
   requestError.value = "";
   actionMessage.value = "首次调用可能需要加载模型，请稍候。";
   try {
-    const response = await fetch("/api/speech/tts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: ttsModel.value,
-        input: ttsText.value,
-        voice: voice.value || "default",
-        response_format: "wav",
-        speed: speed.value,
-        language: language.value || null,
-        instructions: instructions.value || null,
-        play: queuePlayback.value,
-        session_id: sessionId.value,
-        route_id: selectedGatewayId.value || null
-      })
+    const result = await speech.synthesize({
+      model: ttsModel.value,
+      input: ttsText.value,
+      voice: voice.value || "default",
+      responseFormat: "wav",
+      speed: speed.value,
+      language: language.value || null,
+      instructions: instructions.value || null,
+      sampleRate: null,
+      play: queuePlayback.value,
+      sessionId: sessionId.value,
+      routeId: selectedGatewayId.value || null
     });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `HTTP ${response.status}`);
-    }
-    const playbackJob = response.headers.get("x-rabispeech-playback-job");
     if (queuePlayback.value) {
-      actionMessage.value = playbackJob ? `已进入全局播放队列：${playbackJob}` : "已完成合成并提交播放。";
-      await refreshPlayback();
+      actionMessage.value = result.playbackJob ? `已进入全局播放队列：${result.playbackJob}` : "已完成合成并提交播放。";
     } else {
-      const audioUrl = URL.createObjectURL(await response.blob());
+      if (!result.audio) throw new Error("TTS 没有返回可播放音频。");
+      const audioUrl = URL.createObjectURL(result.audio);
       const audio = new Audio(audioUrl);
       audio.addEventListener("ended", () => URL.revokeObjectURL(audioUrl), { once: true });
       await audio.play();
@@ -268,13 +186,11 @@ async function submitTranscript(text = transcript.value): Promise<void> {
   const normalized = text.trim();
   if (!normalized) return;
   if (!selectedGatewayId.value) throw new Error("请先选择配置了语音消息端的 Route。");
-  const response = await fetch("/api/speech/messages", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ gatewayId: selectedGatewayId.value, text: normalized, sessionId: sessionId.value })
+  await speech.submitTranscript({
+    routeId: selectedGatewayId.value,
+    text: normalized,
+    sessionId: sessionId.value
   });
-  const body = await response.json();
-  if (!response.ok || body.code !== 0) throw new Error(body.message || `HTTP ${response.status}`);
   actionMessage.value = `已送入 Route：${selectedGatewayId.value}`;
 }
 
@@ -284,15 +200,8 @@ async function transcribeBlob(blob: Blob, name = "speech.wav"): Promise<void> {
   requestError.value = "";
   actionMessage.value = "正在用本机模型识别……";
   try {
-    const form = new FormData();
-    form.append("file", blob, name);
-    form.append("model", asrModel.value);
-    if (language.value) form.append("language", language.value);
-    form.append("response_format", "verbose_json");
-    const response = await fetch("/api/speech/asr", { method: "POST", body: form });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.detail || body.message || `HTTP ${response.status}`);
-    transcript.value = String(body.text || "").trim();
+    const result = await speech.transcribe(blob, name, asrModel.value, language.value || undefined);
+    transcript.value = String(result.text || "").trim();
     if (!transcript.value) throw new Error("ASR 没有返回可用文本。");
     transcriptHistory.value.unshift({ time: new Date().toLocaleTimeString(), text: transcript.value, model: asrModel.value });
     transcriptHistory.value = transcriptHistory.value.slice(0, 20);
@@ -317,49 +226,41 @@ async function onAudioFile(event: Event): Promise<void> {
 }
 
 async function refreshAudioInputs(): Promise<void> {
-  const response = await fetch("/api/speech/microphone/devices", { headers: { accept: "application/json" } });
-  const body = await response.json();
-  if (!response.ok || body.code !== 0) throw new Error(body.message || body.data?.detail || `HTTP ${response.status}`);
-  const rows = Array.isArray(body.data?.data) ? body.data.data : [];
-  audioInputs.value = rows.map((device: Record<string, unknown>) => ({
-    title: `${String(device.name || `麦克风 ${device.index}`)}${device.default ? " · 系统默认" : ""}`,
-    value: Number(device.index),
-    default: device.default === true
+  await speech.refreshAudioInputs();
+  audioInputs.value = speech.audioInputs.map(device => ({
+    title: `${device.name || `麦克风 ${device.index}`}${device.isDefault ? " · 系统默认" : ""}`,
+    value: device.index,
+    default: device.isDefault
   }));
   if (!audioInputs.value.some(item => item.value === selectedAudioInput.value)) {
     selectedAudioInput.value = audioInputs.value.find(item => item.default)?.value ?? audioInputs.value[0]?.value ?? null;
   }
 }
 
-function applyMicrophoneConfig(config: Record<string, unknown>): void {
+function applyMicrophoneConfig(config: SpeechMicrophoneConfig): void {
   if (typeof config.device === "number") selectedAudioInput.value = config.device;
-  if (typeof config.asr_model === "string" && config.asr_model) asrModel.value = config.asr_model;
+  if (config.asrModel) asrModel.value = config.asrModel;
   if (typeof config.language === "string") language.value = config.language;
-  if (typeof config.route_id === "string") selectedGatewayId.value = config.route_id;
-  if (typeof config.session_id === "string") sessionId.value = config.session_id;
-  threshold.value = Number(config.record_threshold ?? threshold.value);
-  transcribeThreshold.value = Number(config.transcribe_threshold ?? transcribeThreshold.value);
-  adaptiveThreshold.value = config.adaptive_threshold !== false;
-  silenceMs.value = Number(config.silence_ms ?? silenceMs.value);
-  minUtteranceMs.value = Number(config.min_utterance_ms ?? minUtteranceMs.value);
-  maxUtteranceMs.value = Number(config.max_utterance_ms ?? maxUtteranceMs.value);
-  preRollMs.value = Number(config.pre_roll_ms ?? preRollMs.value);
-  inputGain.value = Number(config.input_gain ?? inputGain.value);
-  autoSubmit.value = config.auto_submit === true;
+  if (config.routeId) selectedGatewayId.value = config.routeId;
+  if (config.sessionId) sessionId.value = config.sessionId;
+  threshold.value = config.recordThreshold;
+  transcribeThreshold.value = config.transcribeThreshold;
+  adaptiveThreshold.value = config.adaptiveThreshold;
+  silenceMs.value = config.silenceMs;
+  minUtteranceMs.value = config.minUtteranceMs;
+  maxUtteranceMs.value = config.maxUtteranceMs;
+  preRollMs.value = config.preRollMs;
+  inputGain.value = config.inputGain;
+  autoSubmit.value = config.autoSubmit;
 }
 
 async function refreshMicrophone(): Promise<void> {
   try {
-    const response = await fetch("/api/speech/microphone/status", { headers: { accept: "application/json" } });
-    const body = await response.json();
-    if (!response.ok || body.code !== 0) throw new Error(body.message || `HTTP ${response.status}`);
-    const next = body.data as ResidentMicrophoneStatus;
-    microphoneStatus.value = next;
-    listening.value = next.running;
-    utteranceActive.value = next.utterance_active;
-    micLevel.value = Number(next.level || 0);
+    await speech.refreshMicrophone();
+    const next = microphoneStatus.value;
+    if (!next) return;
     if (!microphoneConfigLoaded.value || next.running) {
-      applyMicrophoneConfig(next.config || {});
+      applyMicrophoneConfig(next.config);
       microphoneConfigLoaded.value = true;
     }
     transcriptHistory.value = (next.history || []).slice(0, 20).map(item => ({
@@ -377,30 +278,29 @@ async function startListening(): Promise<void> {
   if (listening.value) return;
   requestError.value = "";
   try {
-    const response = await fetch("/api/speech/microphone/start", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        device: selectedAudioInput.value,
-        asr_model: asrModel.value,
-        language: language.value || null,
-        record_threshold: threshold.value,
-        transcribe_threshold: Math.max(threshold.value, transcribeThreshold.value),
-        adaptive_threshold: adaptiveThreshold.value,
-        silence_ms: silenceMs.value,
-        min_utterance_ms: minUtteranceMs.value,
-        max_utterance_ms: maxUtteranceMs.value,
-        pre_roll_ms: preRollMs.value,
-        input_gain: inputGain.value,
-        route_id: selectedGatewayId.value || null,
-        session_id: sessionId.value,
-        auto_submit: autoSubmit.value && Boolean(selectedGatewayId.value),
-        suppress_during_playback: true
-      })
+    const previous = microphoneStatus.value?.config;
+    await speech.startMicrophone({
+      device: selectedAudioInput.value,
+      sampleRate: previous?.sampleRate ?? 16_000,
+      chunkMs: previous?.chunkMs ?? 100,
+      preRollMs: preRollMs.value,
+      recordThreshold: threshold.value,
+      transcribeThreshold: Math.max(threshold.value, transcribeThreshold.value),
+      adaptiveThreshold: adaptiveThreshold.value,
+      adaptiveMultiplier: previous?.adaptiveMultiplier ?? 2.5,
+      adaptiveMargin: previous?.adaptiveMargin ?? 0.004,
+      silenceMs: silenceMs.value,
+      minUtteranceMs: minUtteranceMs.value,
+      maxUtteranceMs: maxUtteranceMs.value,
+      inputGain: inputGain.value,
+      asrModel: asrModel.value,
+      language: language.value || null,
+      prompt: previous?.prompt ?? null,
+      routeId: selectedGatewayId.value || null,
+      sessionId: sessionId.value,
+      autoSubmit: autoSubmit.value && Boolean(selectedGatewayId.value),
+      suppressDuringPlayback: true
     });
-    const body = await response.json();
-    if (!response.ok || body.code !== 0) throw new Error(body.message || body.data?.detail || `HTTP ${response.status}`);
-    await refreshMicrophone();
     actionMessage.value = "RabiSpeech 常驻监听已启动；关闭浏览器页面后仍会继续转录。";
   } catch (error) {
     requestError.value = error instanceof Error ? error.message : String(error);
@@ -408,58 +308,46 @@ async function startListening(): Promise<void> {
 }
 
 async function stopListening(): Promise<void> {
-  const response = await fetch("/api/speech/microphone/stop", { method: "POST" });
-  const body = await response.json();
-  if (!response.ok || body.code !== 0) throw new Error(body.message || `HTTP ${response.status}`);
-  await refreshMicrophone();
+  await speech.stopMicrophone();
   actionMessage.value = "RabiSpeech 常驻监听已停止。";
 }
 
 async function stopPlayback(): Promise<void> {
-  await fetch("/api/speech/playback/stop", { method: "POST" });
-  await refreshPlayback();
+  await speech.stopPlayback();
 }
 
 function applySelectedRoute(): void {
   const route = store.gateways.find(item => item.id === selectedGatewayId.value);
   if (!route) return;
-  const variables = route.routeVariables ?? {};
-  if (variables.speechAsrModel) asrModel.value = variables.speechAsrModel;
-  if (variables.speechTtsModel) ttsModel.value = variables.speechTtsModel;
-  if (variables.speechVoice) voice.value = variables.speechVoice;
-  if (variables.speechLanguage) language.value = variables.speechLanguage;
-  threshold.value = Number(variables.speechThreshold || threshold.value);
-  transcribeThreshold.value = Number(variables.speechTranscribeThreshold || Math.max(threshold.value, transcribeThreshold.value));
-  adaptiveThreshold.value = variables.speechAdaptiveThreshold !== "false";
-  silenceMs.value = Number(variables.speechSilenceMs || silenceMs.value);
-  minUtteranceMs.value = Number(variables.speechMinUtteranceMs || minUtteranceMs.value);
-  maxUtteranceMs.value = Number(variables.speechMaxUtteranceMs || maxUtteranceMs.value);
-  preRollMs.value = Number(variables.speechPreRollMs || preRollMs.value);
-  inputGain.value = Number(variables.speechInputGain || inputGain.value);
-  autoSubmit.value = variables.speechAutoSubmit !== "false";
-  queuePlayback.value = variables.speechAutoPlay !== "false";
+  const profile = resolveSpeechRouteProfile(route.routeVariables, route.agentRoleId || DEFAULT_SPEECH_ROUTE_PROFILE.voice);
+  asrModel.value = profile.asrModel;
+  ttsModel.value = profile.ttsModel;
+  voice.value = profile.voice;
+  language.value = profile.language;
+  speed.value = profile.speed;
+  threshold.value = profile.recordThreshold;
+  transcribeThreshold.value = profile.transcribeThreshold;
+  adaptiveThreshold.value = profile.adaptiveThreshold;
+  silenceMs.value = profile.silenceMs;
+  minUtteranceMs.value = profile.minUtteranceMs;
+  maxUtteranceMs.value = profile.maxUtteranceMs;
+  preRollMs.value = profile.preRollMs;
+  inputGain.value = profile.inputGain;
+  autoSubmit.value = profile.autoSubmit;
+  queuePlayback.value = profile.autoPlay;
 }
 
 watch(selectedGatewayId, applySelectedRoute);
 
-let refreshTimer = 0;
-let playbackTimer = 0;
-let microphoneTimer = 0;
+let releaseSpeech: (() => void) | undefined;
 onMounted(async () => {
-  await Promise.all([refreshStatus(), refreshModels(), refreshPersonas(), refreshAudioInputs(), refreshMicrophone()]).catch((error) => {
+  releaseSpeech = await speech.acquire();
+  await Promise.all([refreshModels(), refreshPersonas(), refreshAudioInputs(), refreshMicrophone()]).catch(error => {
     requestError.value = error instanceof Error ? error.message : String(error);
   });
   if (!selectedGatewayId.value && speechRoutes.value[0]) selectedGatewayId.value = speechRoutes.value[0].value;
-  await refreshPlayback();
-  refreshTimer = window.setInterval(refreshStatus, 15000);
-  playbackTimer = window.setInterval(refreshPlayback, 1000);
-  microphoneTimer = window.setInterval(refreshMicrophone, 500);
 });
-onBeforeUnmount(() => {
-  window.clearInterval(refreshTimer);
-  window.clearInterval(playbackTimer);
-  window.clearInterval(microphoneTimer);
-});
+onBeforeUnmount(() => releaseSpeech?.());
 </script>
 
 <template>
@@ -476,7 +364,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <v-alert v-if="requestError" type="error" variant="tonal" class="mb-4">Manager 状态读取失败：{{ requestError }}</v-alert>
+    <v-alert v-if="requestError || speech.error" type="error" variant="tonal" class="mb-4">Manager 状态读取失败：{{ requestError || speech.error }}</v-alert>
 
     <v-card class="app-card glass-card speech-mode-tabs">
       <v-tabs v-model="activeKind" color="primary" grow class="speech-tabs" aria-label="切换 TTS 与 ASR">
@@ -574,7 +462,7 @@ onBeforeUnmount(() => {
           <v-text-field v-model="sessionId" label="会话 ID" :disabled="listening" />
         </div>
         <div class="vad-meter">
-          <div class="vad-meter-head"><span>实时声音 {{ micLevel.toFixed(4) }} · 底噪 {{ Number(microphoneStatus?.noise_floor || 0).toFixed(4) }}</span><b>动态阈值 {{ Number(microphoneStatus?.dynamic_threshold || threshold).toFixed(3) }}</b></div>
+          <div class="vad-meter-head"><span>实时声音 {{ micLevel.toFixed(4) }} · 底噪 {{ Number(microphoneStatus?.noiseFloor || 0).toFixed(4) }}</span><b>动态阈值 {{ Number(microphoneStatus?.dynamicThreshold || threshold).toFixed(3) }}</b></div>
           <v-progress-linear :model-value="micPercent" :color="utteranceActive ? 'warning' : micLevel >= threshold ? 'success' : 'primary'" height="12" rounded />
         </div>
         <div class="speech-slider-grid">
@@ -594,7 +482,7 @@ onBeforeUnmount(() => {
           <v-btn v-if="!listening" color="primary" size="large" prepend-icon="mdi-microphone" :disabled="!asrModel || selectedAudioInput == null" @click="startListening">启动本机常驻转录</v-btn>
           <v-btn v-else color="error" size="large" variant="tonal" prepend-icon="mdi-stop" @click="stopListening().catch(error => requestError = String(error))">停止本机监听</v-btn>
         </div>
-        <div class="section-note mt-3">待识别 {{ microphoneStatus?.pending || 0 }} 段 · 丢弃 {{ microphoneStatus?.dropped || 0 }} 段<span v-if="microphoneStatus?.last_submit_error"> · Route 投递异常：{{ microphoneStatus.last_submit_error }}</span></div>
+        <div class="section-note mt-3">待识别 {{ microphoneStatus?.pending || 0 }} 段 · 丢弃 {{ microphoneStatus?.dropped || 0 }} 段<span v-if="microphoneStatus?.lastSubmitError"> · Route 投递异常：{{ microphoneStatus.lastSubmitError }}</span></div>
         <v-alert v-if="microphoneStatus?.error" class="mt-4" type="error" variant="tonal" density="compact">{{ microphoneStatus.error }}</v-alert>
         <v-alert class="mt-4" type="warning" variant="tonal" density="compact">
           主机正在播放 TTS 时，服务会清空当前片段并暂停触发，避免语音回流；仍请勿选择会混入扬声器的虚拟麦克风。

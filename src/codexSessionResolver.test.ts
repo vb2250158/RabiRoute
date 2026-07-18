@@ -125,10 +125,46 @@ test("explicitly clearing the id before changing the Rabi name rebinds by the ne
   assert.deepEqual(delivered, [renamedTarget.id]);
 });
 
-test("an archived saved binding blocks delivery and never creates a replacement", async () => {
+test("an archived saved binding rebinds to the latest active same-name task without creating", async () => {
   const archived = {
     id: "019f0000-0000-7000-8000-000000000046",
     title: "MonsterGirl / 伊莉娅 策划美术",
+    cwd: process.cwd(),
+    updatedAt: "2026-07-18T04:00:00Z",
+    archived: true
+  };
+  const active = {
+    id: "019f0000-0000-7000-8000-000000000047",
+    title: archived.title,
+    cwd: archived.cwd,
+    updatedAt: "2026-07-18T03:00:00Z"
+  };
+  let createCount = 0;
+  const delivered: string[] = [];
+
+  const result = await resolveAndDeliverCodexSession({
+    threadId: archived.id,
+    title: archived.title,
+    cwd: archived.cwd,
+    prompt: "回到同名有效任务"
+  }, {
+    scope: {},
+    read: async () => archived,
+    list: async () => [active],
+    create: async () => { createCount += 1; return archived; },
+    deliver: async ({ thread }) => { delivered.push(thread.id); }
+  });
+
+  assert.equal(result.kind, "name");
+  assert.equal(result.thread.id, active.id);
+  assert.equal(createCount, 0);
+  assert.deepEqual(delivered, [active.id]);
+});
+
+test("an archived saved binding with no active same-name task fails closed without creating", async () => {
+  const archived = {
+    id: "019f0000-0000-7000-8000-000000000048",
+    title: "已归档且没有替代任务",
     cwd: process.cwd(),
     updatedAt: "2026-07-18T04:00:00Z",
     archived: true

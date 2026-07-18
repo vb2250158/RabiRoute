@@ -1,5 +1,7 @@
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { config } from "../config.js";
 import { appendAdapterLog } from "../history.js";
 import {
@@ -169,6 +171,27 @@ function payloadFromRelayTask(task: RelayTask, taskId: string): WebhookPayload {
   };
 }
 
+type RelayAttachment = Record<string, unknown>;
+
+async function materializeRelayAttachments(task: RelayTask, taskId: string): Promise<RelayAttachment[]> {
+  const input = Array.isArray(task.attachments) ? task.attachments.slice(0, 8) as RelayAttachment[] : [];
+  if (!input.length) return [];
+  const directory = path.join(config.memoryDataDir, "rabilink-media", taskId.replace(/[^a-zA-Z0-9._-]+/g, "_"));
+  fs.mkdirSync(directory, { recursive: true });
+  const output: RelayAttachment[] = [];
+  for (const item of input) {
+    const downloadPath = stringPayloadField(item.downloadPath);
+    const fileName = path.basename(stringPayloadField(item.fileName) || `${stringPayloadField(item.id) || randomUUID()}.bin`).replace(/[^a-zA-Z0-9._-]+/g, "_");
+    if (!downloadPath.startsWith("/api/rabilink/devices/media/")) continue;
+    const response = await fetch(`${normalizedRelayBaseUrl()}${downloadPath}`, { headers: relayHeaders() });
+    if (!response.ok) throw new Error(`RabiLink media download failed: ${response.status} ${response.statusText}`);
+    const localPath = path.join(directory, fileName);
+    fs.writeFileSync(localPath, Buffer.from(await response.arrayBuffer()));
+    output.push({ ...item, fileName, localPath, downloadPath: undefined });
+  }
+  return output;
+}
+
 async function finishRelayTask(taskId: string, body: Record<string, unknown>): Promise<void> {
   await fetchRelayJsonReliably(`/worker/tasks/${encodeURIComponent(taskId)}/finish`, {
     method: "POST",
@@ -291,6 +314,8 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
     throw new Error("Relay task has no id.");
   }
   if (!acceptedRelayTasks.has(taskId)) {
+    const attachments = await materializeRelayAttachments(task, taskId);
+    if (attachments.length) task.attachments = attachments;
     const text = relayTaskText(task);
     const clientMessageId = relayTaskField(task, "clientMessageId");
     const disposition = rabiLinkRelayTaskDisposition(task);
@@ -317,7 +342,8 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
       sequence: relayTaskNumber(task, "sequence"),
       capturedAt: relayTaskNumber(task, "capturedAt"),
       requiresReview: !reviewRequested && recordOnly,
-      reviewRequested
+      reviewRequested,
+      attachments
     }, { splitAfterMs: conversationSplitAfterMs() });
     if (!reviewRequested) {
       const payload = payloadFromRelayTask(task, taskId);

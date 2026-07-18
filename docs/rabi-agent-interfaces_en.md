@@ -47,6 +47,12 @@ POST /api/agent/replies
 
 The safest path is to pass the injected `replyContextJson` back unchanged. RabiRoute resolves the route, source record, output pipeline, adapter policy, and target.
 
+### Character reply for the speech message endpoint
+
+When injected `replyContext` contains `routeKind=voice_transcript`, `adapterType=speech`, and `characterTtsDialogue=true`, the turn came from the RabiPC speech message endpoint. The handler must not leave the answer only in the Codex task. It should POST readable speech text, semantically identical to its visible final reply, together with the unchanged `replyContext` to `/api/agent/replies`. Outbox rebinds the source Route and reads its persona, voice, TTS model, language, instructions, `sessionId`, and `speechAutoPlay`. A successful `sent` result with playback enabled means the audio entered the host-wide RabiSpeech FIFO; it does not claim that speaker playback has already finished.
+
+Only `speech` / RabiSpeech transcript ingress injects this state. Do not mark QQ, role-panel, or ordinary text requests as speech dialogue, and do not bypass Outbox to call a worker directly, because that loses source binding, policy enforcement, and session isolation.
+
 Outbox returns one of:
 
 ```text

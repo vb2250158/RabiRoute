@@ -12,8 +12,8 @@ android {
         applicationId "com.rabi.link.glass"
         minSdk 31
         targetSdk 34
-        versionCode 7
-        versionName "0.1.6"
+        versionCode 8
+        versionName "0.2.0"
         ndk {
             abiFilters "armeabi-v7a"
         }

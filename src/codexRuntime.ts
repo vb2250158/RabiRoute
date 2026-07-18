@@ -10,7 +10,7 @@ import {
   readCodexDesktopThread,
   type CodexDesktopThread
 } from "./codexDesktopBridge.js";
-import { isCodexTaskId, sameCodexWorkspace } from "./codexTaskIdentity.js";
+import { canonicalCodexWorkspacePath, isCodexTaskId, sameCodexWorkspace } from "./codexTaskIdentity.js";
 import {
   resolveAndDeliverCodexSession,
   resolveCodexSession,
@@ -135,6 +135,112 @@ function createCodexMetadataClient(cwd: string): CodexAppServerClient {
   });
 }
 
+type CodexAppServerThreadMetadata = {
+  id?: unknown;
+  name?: unknown;
+  cwd?: unknown;
+  updatedAt?: unknown;
+};
+
+type CodexAppServerThreadListResult = {
+  data?: CodexAppServerThreadMetadata[];
+  nextCursor?: string | null;
+};
+
+const codexThreadSourceKinds = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown"
+];
+
+function appServerThreadUpdatedAt(value: unknown, fallback: string): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return fallback;
+  const timestampMs = value < 1_000_000_000_000 ? value * 1000 : value;
+  const parsed = new Date(timestampMs);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed.toISOString();
+}
+
+export function mergeCodexDesktopThreadsWithMetadataForTest(
+  localThreads: CodexDesktopThread[],
+  metadataThreads: CodexAppServerThreadMetadata[],
+  options: { query?: string; limit?: number; offset?: number; allowedWorkspaces?: string[] } = {}
+): CodexDesktopThread[] {
+  const query = options.query?.trim().toLocaleLowerCase() ?? "";
+  const allowed = new Set((options.allowedWorkspaces ?? []).filter(Boolean).map(canonicalCodexWorkspacePath));
+  const limit = Math.max(1, Math.min(10_000, Math.floor(options.limit ?? 20) || 20));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0) || 0);
+  const localById = new Map(localThreads.map((thread) => [thread.id, thread]));
+
+  return metadataThreads.flatMap((metadata) => {
+    const id = typeof metadata.id === "string" ? metadata.id.trim() : "";
+    const local = localById.get(id);
+    if (!local || local.archived) return [];
+    const title = typeof metadata.name === "string" && metadata.name.trim()
+      ? metadata.name.trim()
+      : local.title;
+    const metadataCwd = typeof metadata.cwd === "string" ? metadata.cwd.trim() : "";
+    const cwd = metadataCwd || local.cwd;
+    if (query && !title.toLocaleLowerCase().includes(query)) return [];
+    if (allowed.size > 0 && (!cwd || !allowed.has(canonicalCodexWorkspacePath(cwd)))) return [];
+    if (metadataCwd && local.cwd && !sameCodexWorkspace(metadataCwd, local.cwd)) return [];
+    return [{
+      ...local,
+      title,
+      cwd,
+      updatedAt: appServerThreadUpdatedAt(metadata.updatedAt, local.updatedAt)
+    }];
+  }).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(offset, offset + limit);
+}
+
+async function listCodexDesktopThreadsWithMetadata(options: {
+  query?: string;
+  limit?: number;
+  offset?: number;
+  allowedWorkspaces?: string[];
+} = {}): Promise<CodexDesktopThread[]> {
+  const client = createCodexMetadataClient(config.codexCwd || process.cwd());
+  const metadataThreads: CodexAppServerThreadMetadata[] = [];
+  const requestedCount = Math.max(1, Math.floor(options.offset ?? 0) + Math.floor(options.limit ?? 20));
+  const query = options.query?.trim().toLocaleLowerCase() ?? "";
+  try {
+    let cursor: string | null = null;
+    for (let page = 0; page < 100; page += 1) {
+      const result = await client.request("thread/list", {
+        cursor,
+        limit: 100,
+        sortKey: "recency_at",
+        sortDirection: "desc",
+        sourceKinds: codexThreadSourceKinds,
+        archived: false,
+        useStateDbOnly: false,
+        cwd: options.allowedWorkspaces?.length ? options.allowedWorkspaces : undefined
+      }) as CodexAppServerThreadListResult;
+      metadataThreads.push(...(Array.isArray(result.data) ? result.data : []));
+      cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
+      const eligibleCount = query
+        ? metadataThreads.filter((thread) => typeof thread.name === "string" && thread.name.toLocaleLowerCase().includes(query)).length
+        : metadataThreads.length;
+      if (!cursor || eligibleCount >= requestedCount) break;
+    }
+  } finally {
+    client.close();
+  }
+
+  const localThreads = listCodexDesktopThreads({
+    limit: 10_000,
+    allowedWorkspaces: options.allowedWorkspaces
+  });
+  return mergeCodexDesktopThreadsWithMetadataForTest(localThreads, metadataThreads, options);
+}
+
 type CodexTaskBootstrap = {
   client: CodexAppServerClient;
   threadId: string;
@@ -238,7 +344,7 @@ export async function listCodexThreads(options: {
   offset?: number;
   allowedWorkspaces: string[];
 }): Promise<CodexThreadSummary[]> {
-  return listCodexDesktopThreads(options).map(asSummary);
+  return (await listCodexDesktopThreadsWithMetadata(options)).map(asSummary);
 }
 
 export async function readCodexThread(threadId: string): Promise<unknown> {
@@ -391,7 +497,7 @@ function codexSessionDependencies(): CodexSessionResolverDependencies<CodexDeskt
     // saved id + visible name + workspace together, then falls back to a name
     // lookup/create when any part is stale.
     read: async (candidateId) => readCodexDesktopThread(candidateId),
-    list: async ({ title, cwd }) => listCodexDesktopThreads({
+    list: async ({ title, cwd }) => listCodexDesktopThreadsWithMetadata({
       query: title,
       limit: 10_000,
       allowedWorkspaces: [cwd]

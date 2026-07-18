@@ -16,13 +16,35 @@
 com.rabi.link
 ```
 
+## 当前产品主线（2026-07-18）
+
+本工程现在同时构建一个手机伴侣和一个眼镜前端：
+
+```text
+眼镜 com.rabi.link.glass
+  <-> 只传音频/媒体和状态
+手机 com.rabi.link
+  <-> 保存 Relay、目标 PC、cursor 与眼镜设置
+RabiLink Relay
+  <-> Rabi PC 眼镜消息端完成 ASR、TTS、Agent 和动作门
+```
+
+- 眼镜默认入口是 `GlassAudioClientActivity`；`glass-asr` 只是历史模块名，眼镜已不运行 ASR/TTS。
+- 手机首页已改为“RabiLink 眼镜伴侣”，不再复制 Route、Agent、工作区或线程配置；这些配置通过手机打开远程 WebGUI `/manage` 修改。
+- 手机后端将眼镜 PCM 送到 Rabi PC ASR，把 observation 写入消息端；下行文本由 Rabi PC TTS 合成后以 PCM 发回眼镜。
+- 照片已接入消息附件上行；Relay/worker 支持视频文件附件，但真眼镜视频回调尚待接线，不代表实时视频已完成。
+- 当前后端随 `RokidProbeActivity` 前台运行。Foreground Service、磁盘级离线重试和投递/播放回执是下一阶段。
+- AIUI 暂停新增功能，旧 ASR/TTS 探针只保留为历史调试入口。
+
+眼镜端构建产物仍由手机 APK 的 CXR 工作流安装，用户只需安装一个手机 APK。
+
 模块化重构说明见 [`docs/rabi-link-probe-merge-plan.md`](./docs/rabi-link-probe-merge-plan.md)。
 
 ## 当前可用性结论
 
 小米链路目前不能按“已完全打通”处理。已能稳定作为证据探针使用的是 BLE/公开 GATT 检测、Health Connect 空结果验证、小米 Provider 权限边界验证，以及小米健康本地 Provider 的最近一次心率读取尝试；历史/全天心率列表仍没有稳定的普通 APK 后台 API。前台滑动图表和 logcat 路线只能作为诊断证据，不是最终产品 API。
 
-Rokid 官方 AIUI 会把眼镜网络包通过蓝牙透明代理到手机 App，因此当前 AIUI 直接请求 Relay 时，传输层已经使用手机网络；PC worker 仍从 Relay 独立领取 observation，手机不接管 Agent、统一账本或配置真源。手机端还使用 CXR-L 设备状态回调读取真实眼镜电量与充电状态，并通过 Relay 提供给 AIUI HUD。该连接不配置 CXR session、不打开 Custom View，也不接管眼镜显示。
+历史 AIUI 会把眼镜网络包通过蓝牙透明代理到手机 App；该路径现已暂停产品开发。当前原生 App 主线由手机明确充当眼镜后端，但手机仍不接管 Agent、统一账本或 PC 配置真源。
 
 Android `RabiRouteSdk` 已提供便携设备首版契约：`publishPortableObservation` 把手机、手表或其他设备的记录优先输入写入 Relay，`getPortableMessages` 按 `deviceId` / `deviceKind` 和独立 cursor 读取广播或定向消息。当前 APK 仍是手机伴侣与接口探针，不会偷偷启动麦克风，也尚未实现 Wear OS Data Layer 常驻转发。完整边界见 `../../docs/rabilink-phone-edge-hub.md`。
 

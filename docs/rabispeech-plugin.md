@@ -110,6 +110,32 @@ RibiWebGUI 的“语音服务”页可：
 - 查看当前模型需要的请求参数；
 - 仅在用户明确选择时，把转写结果提交给 Route。
 
+Route 的“消息适配器 → 语音消息端”展开区还提供一套芬妮笔记风格的实时链路面板，按 `麦克风 → VAD 切句 → 本地 ASR → Route 投递 → 回复与播放` 展示真实状态、计数器、最近事件和转写预览。柱状波形使用 RabiSpeech 采集的最近 120 个 100ms RMS 样本：安静、超过录音线、超过转写线分别使用不同颜色，并叠加录音、转写和自适应动态阈值线。消息端总开关只表示这条 Route 允许使用语音入口，不等于本机麦克风已经开始监听；必须在链路面板或语音服务页点击“开始语音聊天”。这两种状态会分开显示，避免把“配置已启用”误判为“语音已经送达”。
+
+语音消息端投递的 `voice_transcript` 会让该 Agent 回合进入 `character-tts-dialogue` 状态。`AgentPacket` 注入 `characterTtsDialogue=true` 和强制回传说明；Agent 把与屏幕回复同义的短句交回 `/api/agent/replies` 后，Outbox 从当前 Route 冻结人格、声线、TTS 模型、语言、情绪指令与 `sessionId`，再进入 RabiSpeech 主机级 FIFO。这个自动状态只针对 `speech` / RabiSpeech 来源，不会让 QQ、角色面板或普通文字消息自动发声。
+
+当前默认值沿用旧 FenneNote 本机配置：`faster-whisper/small`、中文、系统默认麦克风、16 kHz、自适应 RMS 阈值、录音线 `0.01`、转写线 `0.015`、阈值以下持续 `500 ms` 切句、最短 `1000 ms`、最长 `60000 ms`、前置缓存 `1500 ms`、输入增益 `1.0`。RabiSpeech 保留原有自适应系数 `2.5` 和余量 `0.004`。这些是本机起点，不是所有麦克风的通用最优值。
+
+如果“说了很多但 Route 没有消息”，按链路面板从左到右判断：
+
+1. 麦克风显示“未启动”：点击“开始语音聊天”；消息端总开关不能替代这一步。
+2. 实时电平变化但“捕获片段”不增长：检查输入设备、底噪、录音线与动态阈值。
+3. 已捕获但“识别成功”不增长：查看最近事件中的空片段、ASR 模型或识别错误。
+4. 已识别但“Route 成功”不增长：确认当前监听绑定的 Route、自动投递开关和 Route 运行状态。
+5. Route 成功但没有回复/播放：继续检查 Agent 投递记录、TTS 队列和播放错误。
+
+运行事件只保存于当前 RabiSpeech 进程内，记录阶段、时间、模型、耗时和错误等诊断元数据，不复制转写正文；右侧“最近转写”是本机私有预览，服务重启后不会保留。
+
+`POST /api/speech/messages` 使用真正的 `202 Accepted` 语义：Manager 完成 Route 校验并启动投递子任务后立即返回，Agent/Codex 继续在后台处理。RabiSpeech 的“Route 已受理”因此表示消息端已经接单，不表示 Agent 已完成回复；最终结果继续以 Route 投递记录和回复/播放阶段为准。旧实现会同步等待完整投递，Codex 首次接单超过 RabiSpeech 的 15 秒 HTTP 超时时会出现 `ReadTimeout`，即使消息稍后其实已经成功送达。
+
+### RabiPC 前后端契约
+
+RibiWebGUI 不直接访问 `8781`，只访问 Manager 的 `/api/speech/*`。Manager 对浏览器使用 camelCase 字段，例如 `routeId`、`recordThreshold`、`dynamicThreshold`、`lastSubmitError`；`src/manager/speechControl.ts` 再在本机 Adapter 内映射为 RabiSpeech `/v1/*` 使用的 snake_case。前端请求、轮询、错误 envelope 和共享状态集中在 `ribiwebgui/src/speech/speechControlClient.ts` 与 `ribiwebgui/src/stores/speechStore.ts`，页面不应自行新增 `fetch("/api/speech/...")`。
+
+直接调用 RabiSpeech `/v1/*` 时仍按 OpenAI 兼容格式和本文示例使用 snake_case；调用 RabiPC Manager `/api/speech/*` 时使用 `src/shared/speechControlContract.ts` 定义的 camelCase 契约。两者不要混用。
+
+VAD 在达到静音窗口后始终结束当前候选片段；若有效语音不足最短时长，则立即记录 `segment_discarded` 并回到监听。这样短促碰麦、系统提示音或单个噪声尖峰不会占住整段 `max_utterance_ms` 才释放。
+
 关闭浏览器或离开页面不会停止常驻监听；配置写入被 Git 忽略的 `plugin-adapters/rabi-speech/microphone.json`，RabiSpeech 重启后会恢复 `enabled=true` 的监听。必须在 ASR 标签主动点击“停止本机监听”才会持久关闭。
 
 常驻录音控制接口只允许本机 RabiPC/Manager 回环调用，不加入 RabiLink 通用 token 的公网 allowlist。远端客户端可以通过 RabiLink 调用普通 TTS/ASR API，但不能用同一个通用 token 开关这台电脑的麦克风。直接 TTS/ASR API 与 Agent 无关；“提交 Route”是独立、显式的消息端动作。

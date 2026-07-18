@@ -4,7 +4,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AgentAdapterType } from "./types.js";
 import { resolveProjectPath } from "../shared/projectPaths.js";
-import { CodexDesktopBridge, listCodexDesktopThreads } from "../codexDesktopBridge.js";
+import { CodexDesktopBridge } from "../codexDesktopBridge.js";
+import { listCodexThreads } from "../codexRuntime.js";
 
 type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -100,6 +101,7 @@ export type AgentManagerApiContext = {
   marvisAppIds?: string[];
   checkHttpEndpoint?: (url: string, timeoutMs?: number) => Promise<boolean>;
   resolveWingetCopilot?: () => string | null;
+  listCodexSessions?: () => Promise<AgentScanSession[]>;
 };
 
 export type ManagerApiResponse<T extends Record<string, unknown> = Record<string, unknown>> = {
@@ -121,17 +123,22 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
   }
   let codexSessionWarning = "";
   let discoveredCodexSessions: AgentScanSession[] = [];
-  try {
-    discoveredCodexSessions = listCodexDesktopThreads({
-      limit: 10_000
-    }).map((thread) => ({
-      id: thread.id,
-      name: thread.title,
-      projectPath: thread.cwd,
-      updatedAt: thread.updatedAt
-    }));
-  } catch (error) {
-    codexSessionWarning = `读取 Codex Desktop 任务失败：${error instanceof Error ? error.message : String(error)}`;
+  if (!ctx.codexSessions) {
+    try {
+      const listSessions = ctx.listCodexSessions ?? (async () => (await listCodexThreads({
+        limit: 10_000,
+        offset: 0,
+        allowedWorkspaces: []
+      })).map((thread) => ({
+        id: thread.id,
+        name: thread.title,
+        projectPath: thread.cwd,
+        updatedAt: thread.updatedAt
+      })));
+      discoveredCodexSessions = await listSessions();
+    } catch (error) {
+      codexSessionWarning = `读取 Codex Desktop 任务失败：${error instanceof Error ? error.message : String(error)}`;
+    }
   }
   const codexSessions = ctx.codexSessions ?? discoveredCodexSessions;
   const codexSessionNames = [...new Set(codexSessions.map((session) => session.name))];

@@ -215,6 +215,58 @@ test("AgentPacket migrates legacy FenneNote transcripts to RabiSpeech TTS output
   assert.match(packet.message, /普通回复 API/);
 });
 
+test("AgentPacket enters character TTS dialogue for RabiSpeech message endpoint transcripts", () => {
+  const route = routeProfile({
+    resolvedPipeline: resolvePipeline("qq_chat", {
+      inputAdapter: "speech",
+      outputAdapter: "agent",
+      outputPipeline: "agent",
+      replyToSource: false
+    }),
+    routeVariables: {
+      speechTtsModel: "local-tts/qwen3-tts-0.6b-base",
+      speechVoice: "Ilias",
+      speechLanguage: "zh",
+      speechAutoPlay: "true"
+    },
+    notificationRules: [{
+      id: "speech-message-endpoint",
+      name: "speech message endpoint",
+      enabled: true,
+      routeKinds: ["voice_transcript"],
+      template: "voice={message}"
+    }]
+  });
+  const decision = createRouteDecision(route, "voice_transcript", voiceTranscript({
+    adapterType: "speech",
+    source: "rabispeech",
+    transport: "rabipc",
+    sessionId: "speech-main"
+  }), {});
+  assert.ok(decision);
+
+  const packet = buildAgentPacket(decision, decision.matchedRules[0], {
+    roleId: "Ilias",
+    roleDir: "data/roles/Ilias",
+    rolePath: "data/roles/Ilias/persona.md",
+    dataDir: "data/roles/Ilias"
+  });
+
+  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+  assert.equal(replyContext.routeKind, "voice_transcript");
+  assert.equal(replyContext.adapterType, "speech");
+  assert.equal(replyContext.sessionId, "speech-main");
+  assert.equal(replyContext.outputAdapter, "tts");
+  assert.equal(replyContext.outputPipeline, "rabispeech");
+  assert.equal(packet.templateValues.promptOutputMode, "voice_short");
+  assert.equal(packet.templateValues.ttsVoice, "Ilias");
+  assert.equal(packet.templateValues.ttsPlay, "true");
+  assert.match(packet.message, /character-tts-dialogue/);
+  assert.match(packet.message, /不能只在 Codex 线程里写最终文本/);
+  assert.match(packet.message, /主机级 FIFO/);
+  assert.match(packet.message, /普通回复 API/);
+});
+
 test("AgentPacket injects processing-time context confirmation protocol", () => {
   const roleDir = makeRoleDir();
   writeRecentMemory(roleDir, {
