@@ -202,7 +202,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 
 - `list`：从 Desktop 状态按标题查询本机任务，使用 `offset` / `limit` 分页访问全部结果。
 - `read`：通过完整 `threadId` 只读读取 Desktop 任务元数据。
-- `resolve`：先读取精确 ID。有效 ID 且 cwd 一致时直接绑定，不因 Desktop 改名、索引标题滞后或 goal 完成而新建；只有 ID 为空或确实失效时才按保存名称和可选 cwd 查找，唯一匹配自动绑定、零匹配按需幂等创建、多个同名返回候选让用户选择。
+- `resolve`：先读取精确 ID。有效 ID、保存名称和 cwd 一致时直接绑定；ID 为空、失效或名称配对失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列或都无有效时间时返回候选让用户选择。
 - `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。
 - `send`：通过 Desktop IPC 向已有任务 owner start/steer。
 

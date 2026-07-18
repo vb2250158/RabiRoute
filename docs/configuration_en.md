@@ -73,7 +73,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `napcatHttpUrl`: OneBot HTTP endpoint.
 - `webhookPort` / `webhookPath`: generic webhook endpoint; the port falls back to `gatewayPort`, and the default path is `/webhook`.
 - `agentAdapters`: handler IDs. Codex is verified; Copilot CLI and AstrBot are experimental; Marvis is a manual handoff.
-- `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. Desktop renames, stale index titles, and completed goals do not create duplicates. Typing a new name explicitly clears the old ID before name lookup or creation.
+- `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. Desktop renames, stale index titles, and completed goals do not create duplicates. Typing a new name explicitly clears the old ID before name lookup. One or more exact same-name/workspace matches bind the unique latest `updatedAt`; only zero matches may create, and a tied or unusable maximum requires selection.
 - `copilotThreadName` / `copilotCwd`: independent Copilot CLI session configuration.
 - `agentModel`: leave empty to use the Runtime's `model/list` default. Only set it when an explicit model lock is required.
 - `heartbeatSkipWhenAgentBusy`: skip a heartbeat while the fixed Codex thread is still active. Other message kinds are unaffected.

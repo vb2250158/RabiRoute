@@ -137,3 +137,73 @@ test("changing the Rabi name rebinds by that name instead of delivering to the s
   assert.equal(result.kind, "name");
   assert.deepEqual(delivered, [renamedTarget.id]);
 });
+
+test("multiple same-name Desktop tasks rebind to the most recently updated task without creating", async () => {
+  const older = {
+    id: "019f0000-0000-7000-8000-000000000037",
+    title: "MonsterGirl / 伊莉娅 策划美术",
+    cwd: process.cwd(),
+    updatedAt: "2026-07-18T01:00:00Z"
+  };
+  const latest = {
+    id: "019f0000-0000-7000-8000-000000000038",
+    title: older.title,
+    cwd: older.cwd,
+    updatedAt: "2026-07-18T02:00:00Z"
+  };
+  let createCount = 0;
+  const delivered: string[] = [];
+
+  const result = await resolveAndDeliverCodexSession({
+    title: older.title,
+    cwd: older.cwd,
+    prompt: "续投到最新同名任务"
+  }, {
+    scope: {},
+    read: async () => null,
+    // Deliberately return the older task first: resolver ordering is part of
+    // the public behavior and must not depend on database row order.
+    list: async () => [older, latest],
+    create: async () => { createCount += 1; return older; },
+    deliver: async ({ thread }) => { delivered.push(thread.id); }
+  });
+
+  assert.equal(result.kind, "name");
+  assert.equal(result.thread.id, latest.id);
+  assert.equal(createCount, 0);
+  assert.deepEqual(delivered, [latest.id]);
+});
+
+test("same-name Desktop tasks with the same update time stay ambiguous without creating", async () => {
+  const candidates = [
+    {
+      id: "019f0000-0000-7000-8000-000000000039",
+      title: "同名同时间",
+      cwd: process.cwd(),
+      updatedAt: "2026-07-18T03:00:00Z"
+    },
+    {
+      id: "019f0000-0000-7000-8000-000000000040",
+      title: "同名同时间",
+      cwd: process.cwd(),
+      updatedAt: "2026-07-18T03:00:00Z"
+    }
+  ];
+  let createCount = 0;
+  let deliverCount = 0;
+
+  await assert.rejects(resolveAndDeliverCodexSession({
+    title: candidates[0].title,
+    cwd: candidates[0].cwd,
+    prompt: "不应随机投递"
+  }, {
+    scope: {},
+    read: async () => null,
+    list: async () => candidates,
+    create: async () => { createCount += 1; return candidates[0]; },
+    deliver: async () => { deliverCount += 1; }
+  }), /ambiguous/);
+
+  assert.equal(createCount, 0);
+  assert.equal(deliverCount, 0);
+});

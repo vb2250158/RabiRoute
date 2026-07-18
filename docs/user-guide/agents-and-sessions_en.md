@@ -69,7 +69,7 @@ If the task was deleted, archived, moved, or belongs to another account, select 
 
 Enter a new name in the selector, then save. The project-pinned app-server only creates and names the empty task. Real prompts still go to the Desktop owner.
 
-Do not guess when several tasks share a name. Use last activity and workspace, or organize names in Desktop first.
+When several tasks share the exact name and workspace, RabiRoute automatically binds the one with the unique latest activity time. If the maximum time is tied or unavailable, use the selector's activity time and workspace to choose, or organize names in Desktop first. This ambiguous case never creates another task.
 
 ## Automatic persona initialization
 

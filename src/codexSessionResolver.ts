@@ -43,6 +43,24 @@ function creationKey(title: string, cwd: string): string {
   return JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(cwd), title]);
 }
 
+function uniquelyLatestThread<TThread extends CodexSessionThread>(matches: TThread[]): TThread | null {
+  let latest: TThread | null = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+  let latestCount = 0;
+  for (const thread of matches) {
+    const parsed = Date.parse(thread.updatedAt);
+    const updatedAt = Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+    if (updatedAt > latestTime) {
+      latest = thread;
+      latestTime = updatedAt;
+      latestCount = 1;
+    } else if (updatedAt === latestTime) {
+      latestCount += 1;
+    }
+  }
+  return latestCount === 1 ? latest : null;
+}
+
 async function createIdempotently<TThread extends CodexSessionThread>(
   title: string,
   cwd: string,
@@ -103,7 +121,11 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
   const matches = (await dependencies.list({ title: params.title, cwd: params.cwd }))
     .filter((thread) => thread.title === params.title)
     .filter((thread) => !thread.cwd || sameCodexWorkspace(thread.cwd, params.cwd));
-  if (matches.length > 1) return { kind: "ambiguous", candidates: matches };
+  if (matches.length > 1) {
+    const latest = uniquelyLatestThread(matches);
+    if (latest) return { kind: "name", thread: latest };
+    return { kind: "ambiguous", candidates: matches };
+  }
   if (matches[0]) return { kind: "name", thread: matches[0] };
   if (!params.createIfMissing) return { kind: "missing" };
 

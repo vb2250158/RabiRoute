@@ -193,11 +193,11 @@ test("Agent task resolver creates one task when repeated requests arrive before 
   assert.equal((firstPair[0].data.thread as { id: string }).id, (immediateRetry.data.thread as { id: string }).id);
 });
 
-test("Agent task resolver reports duplicate names instead of picking one", async () => {
+test("Agent task resolver binds the most recently updated same-name task", async () => {
   const driver: AgentThreadDriver = {
     list: async () => [
-      { id: "019f0000-0000-7000-8000-000000000013", title: "同名", updatedAt: "2026-07-15T01:00:00Z" },
-      { id: "019f0000-0000-7000-8000-000000000014", title: "同名", updatedAt: "2026-07-15T00:00:00Z" }
+      { id: "019f0000-0000-7000-8000-000000000014", title: "同名", updatedAt: "2026-07-15T00:00:00Z" },
+      { id: "019f0000-0000-7000-8000-000000000013", title: "同名", updatedAt: "2026-07-15T01:00:00Z" }
     ],
     read: async () => ({}),
     create: async () => { throw new Error("must not create"); },
@@ -209,9 +209,9 @@ test("Agent task resolver reports duplicate names instead of picking one", async
     defaultWorkspace: process.cwd()
   }, driver);
 
-  assert.equal(result.statusCode, 409);
-  assert.equal(result.data.resolution, "ambiguous");
-  assert.equal((result.data.candidates as unknown[]).length, 2);
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.data.resolution, "name");
+  assert.equal((result.data.thread as { id: string }).id, "019f0000-0000-7000-8000-000000000013");
 });
 
 test("Agent thread create uses a configured workspace and fixed investigation instructions", async () => {

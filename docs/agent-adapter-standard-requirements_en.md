@@ -19,10 +19,10 @@ Not every handler has projects, persistent sessions, tools, streaming, or cancel
 Every adapter must satisfy these rules before advanced features matter:
 
 1. Reuse the bound session only when the saved visible name and immutable ID still point to the same owner record in the configured workspace.
-2. When the ID is missing, invalid, or no longer paired with the saved name, search by the Manager-saved name plus normalized workspace. Rebind one match, create once only when there is no match, and ask the user when several match.
+2. When the ID is missing, invalid, or no longer paired with the saved name, search by the Manager-saved name plus normalized workspace. Rebind the unique most recently updated match when one or more candidates exist, create once only when there is no match, and ask the user only when the maximum update time is tied or unusable.
 3. Deliver to the real owner that provides the user-visible task and tool context. Sharing a database, title, or session ID with a second Runtime is not unified ownership.
 4. Saving settings completes the binding transaction and persists visible name, full session ID, and workspace together.
-5. Handle renames as safe rebinding. If either the Agent owner or Rabi changes the visible name, the stale name-ID pair must be resolved again instead of silently delivering to the old ID.
+5. Handle renames as safe rebinding. If either the Agent owner or Rabi changes the visible name, the stale name-ID pair must be resolved again by the same latest-match rule instead of silently delivering to the old ID.
 6. Scan once when the settings surface opens, then only on explicit refresh. Input, blur, save, health polling, and timers must not create an uncontrolled scan loop.
 
 If a handler cannot reach the product's real owner through an official or verified bridge, mark it `experimental` and say that user-visible session delivery is not guaranteed.
@@ -112,12 +112,13 @@ The adapter has real owner-level delivery, configuration/diagnostics, automated 
 - Use full IDs internally, but validate them together with the saved visible name and workspace.
 - Show a human-readable name and last activity in the UI.
 - Support complete listing or reliable pagination.
-- Preserve ambiguity; do not automatically choose among same-name sessions.
+- For same-name sessions in one workspace, sort by parseable `updatedAt` and bind the unique maximum; do not depend on database return order. Preserve ambiguity only when the maximum time is tied or all candidate times are unusable.
 
 ### Session resolution and controlled creation
 
 - Read the saved ID first and verify that the owner record still has the saved visible name.
 - Fall back to name plus workspace when the ID is absent, invalid, or paired with a different name.
+- When one or more exact name/workspace matches exist, bind the unique latest `updatedAt`; create only when the match count is zero. A tied or unusable maximum requires explicit selection.
 - Create idempotently and serialize concurrent first deliveries.
 - Treat delayed indexing as “wait for the same session,” not “create again.”
 - Persist the new ID before sending later messages.
@@ -214,7 +215,7 @@ At minimum, cover:
 
 - installation/authentication states;
 - valid name-ID binding reuse and workspace mismatch;
-- unique name rebind, no-match create, same-name ambiguity;
+- unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation;
 - delayed indexing and concurrent single-flight creation;
 - Agent-side and Rabi-side rename rebinding;
 - complete pagination beyond 100 sessions;

@@ -99,7 +99,7 @@ POST actions:
 
 - `list`: list matching threads, optionally restricted by a configured cwd.
 - `read`: read a thread by `threadId`.
-- `resolve`: reuse a valid saved ID in the same workspace. Desktop renames, stale index titles, and completed goals do not create duplicates. When the ID is empty or missing, resolve by visible name plus cwd, creating one empty task only when no match exists.
+- `resolve`: reuse a valid saved ID only when its saved visible name and workspace still match. When the ID is empty, missing, stale, or paired with a different name, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied or unusable maximum returns candidates for selection.
 - `create`: bootstrap an empty task in a configured workspace, then deliver any initial prompt to that task's Desktop owner through Desktop IPC.
 - `send`: ask the existing Desktop task owner to start or steer the real turn through Desktop IPC.
 

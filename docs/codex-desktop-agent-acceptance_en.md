@@ -11,7 +11,7 @@ This is the release gate for the Codex/ChatGPT Desktop adapter. Success does not
 ## Non-negotiable product contract
 
 1. Deliver to the saved task only when the saved visible name, full task ID, and workspace still identify the same Desktop owner record.
-2. If the ID is empty, invalid, or no longer paired with the saved name, search by the saved visible name plus normalized workspace. Rebind a unique match, create once only when there is no match, and ask the user to choose when several tasks match.
+2. If the ID is empty, invalid, or no longer paired with the saved name, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
 3. A Desktop-side or Rabi-side rename invalidates the old name-ID pair and must trigger the same safe rebinding flow; it must never keep delivering to a stale target.
 4. Real prompts go only to the current Desktop task owner. RabiRoute must not resume the same ID in another Runtime or silently switch execution paths.
 5. Saving settings persists the visible name, complete task ID, and workspace as one binding. Selecting another task or typing a new name resolves and persists a new pair before later delivery.
@@ -44,9 +44,10 @@ flowchart TD
     R --> I{"Saved name + ID + workspace match?"}
     I -->|"Yes"| B["Reuse binding"]
     I -->|"No"| N["Find by visible name + workspace"]
-    N -->|"One"| S["Persist matched ID"]
+    N -->|"One or more"| L{"Unique latest updatedAt?"}
+    L -->|"Yes"| S["Persist latest matched ID"]
+    L -->|"Tied / unusable"| A["Stop and ask the user"]
     N -->|"None"| C["Create one empty task"]
-    N -->|"Several"| A["Stop and ask the user"]
     C --> W["Wait for Desktop index to expose the same ID"]
     W --> S
     B --> D["Desktop IPC / target task owner"]
@@ -62,7 +63,7 @@ Creating a task and delivering its first prompt are separate operations. A short
 - Internally, the binding is visible name plus complete task ID, with workspace as the safety boundary.
 - Last activity is display/sorting data, not identity.
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
-- Several same-name tasks in one workspace are ambiguous; never choose the first or newest automatically.
+- For same-name tasks in one workspace, sort by parseable `updatedAt` and bind the unique maximum; never use database return order. Require selection only when the maximum time is tied or all candidate times are unusable.
 - “Task created, initial delivery failed” is a recoverable delivery state, not a missing task.
 
 ## Automatic initialization transaction
@@ -89,7 +90,8 @@ Do not deliver after a failed save. Do not roll back a successfully created task
 | Two concurrent first deliveries | Single-flight creation; one task only |
 | Desktop renames the bound task | Old pair becomes stale; resolve the saved name and do not use the old target |
 | User types a new name and saves | Resolve/create the new target and stop using the old task |
-| Several same-name tasks | Return candidates and require selection |
+| Several same-name tasks with one latest update | Bind the unique latest task; task count unchanged |
+| Same-name tasks tied for latest or without usable times | Return candidates and require selection; do not create |
 | Initial delivery fails after creation | Keep ID; retry the message only |
 | More than 100 tasks | All tasks remain discoverable through pagination/full scan |
 | Settings page sits idle or receives input/blur/save | Scan request count does not grow |

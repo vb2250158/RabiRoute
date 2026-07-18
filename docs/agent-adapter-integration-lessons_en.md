@@ -82,11 +82,11 @@ The list may come from stale metadata, a partial page, or another workspace. Res
 
 ### Duplicate same-name sessions appear after save or first delivery
 
-Typical causes are name-as-identity, delayed indexing treated as absence, concurrent create calls, or creation from several UI paths. Use one resolver, one idempotency scope, and a bounded wait for the same newly created ID.
+Typical causes are name-as-identity, delayed indexing treated as absence, concurrent create calls, creation from several UI paths, or treating multiple existing matches as permission to create again. Use one resolver and one idempotency scope. For exact name/workspace matches, bind the unique latest `updatedAt`; create only when there are zero matches. After creation, wait for the same new ID for a bounded period.
 
 ### A rename still delivers to the old task
 
-An ID alone is not enough when the saved visible name and the owner record diverge. Treat the old pair as stale, resolve by saved name plus workspace, and rebind one match or create once when none exists. Never continue delivering to an ID whose current name no longer matches the configured target.
+An ID alone is not enough when the saved visible name and the owner record diverge. Treat the old pair as stale and resolve by saved name plus workspace. Bind the unique latest `updatedAt` when one or more candidates exist, or create once when none exists. A tied or unusable maximum requires explicit selection. Never continue delivering to an ID whose current name no longer matches the configured target.
 
 ### The settings page becomes slow or scans continuously
 
@@ -112,9 +112,10 @@ flowchart TD
     S --> I{"Saved name + full ID + workspace match?"}
     I -->|"Yes"| B["Reuse exact binding"]
     I -->|"No"| N["Find by saved name + workspace"]
-    N -->|"One"| P["Persist matched ID"]
+    N -->|"One or more"| L{"Unique latest updatedAt?"}
+    L -->|"Yes"| P["Persist latest matched ID"]
+    L -->|"Tied / unusable"| A["Require user selection"]
     N -->|"None"| C["Create one empty task"]
-    N -->|"Several"| A["Require user selection"]
     C --> W["Wait for owner/index to expose same ID"]
     W --> P
     B --> D["Desktop IPC / real owner"]
@@ -132,6 +133,7 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 - Read Desktop task state without taking ownership.
 - Persist visible name, full task ID, and workspace as one binding.
 - Re-resolve when the owner name and saved name no longer match.
+- For exact same-name tasks in the workspace, bind the unique latest `updatedAt`; create only when none exist and require selection on a latest-time tie.
 - Deeplink an unloaded task, retry for a bounded period, then fail closed.
 - Deliver real prompts only through Desktop IPC.
 - Use app-server only to create/name an empty task when the user requests a new name.
@@ -182,7 +184,7 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 ## Release test matrix
 
 - Independent cold start and shutdown.
-- Valid ID reuse, workspace mismatch, unique rebind, no-match creation, ambiguity.
+- Valid ID reuse, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
 - Agent-side and Rabi-side rename rebinding.
 - Delayed index and concurrent single-flight creation.
 - Full pagination and bounded scan count.

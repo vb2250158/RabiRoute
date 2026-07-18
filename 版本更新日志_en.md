@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.13 - 2026-07-18
+
+### Codex Desktop same-name task continuation
+
+- Fixed rebinding when a saved ID is missing, stale, or no longer paired with its name: one or more exact same-name/workspace candidates now bind the unique latest `updatedAt`, and creation is permitted only when there are zero matches.
+- A tied maximum or entirely unusable timestamps remain ambiguous and require selection. Resolution never depends on database return order and never creates another same-name task in that case.
+- Added resolver and Manager API regression coverage and synchronized the bilingual integration standard, acceptance contract, troubleshooting guide, and Agent-creation Skill. Codex/ChatGPT Desktop remains the only real-message owner; port 4510 lifecycle and the no-fallback-Runtime boundary are unchanged.
+
 ## 0.1.12 - 2026-07-17
 
 ### Windows installer and GitHub Releases
