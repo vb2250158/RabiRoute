@@ -72,47 +72,35 @@ test("a missing Rabi binding creates once and delivers every message to the new 
   ]);
 });
 
-test("a Desktop rename invalidates the saved name-id pair and creates the configured name once", async () => {
-  const stale = {
+test("a saved id remains authoritative when Desktop title metadata changes after delivery", async () => {
+  const existing = {
     id: "019f0000-0000-7000-8000-000000000033",
-    title: "Desktop 已改名",
+    title: "[RabiRoute 事件] 首条消息文本",
     cwd: process.cwd(),
     updatedAt: "2026-07-16T00:00:00Z"
-  };
-  const created = {
-    id: "019f0000-0000-7000-8000-000000000034",
-    title: "Rabi 保存名",
-    cwd: process.cwd(),
-    updatedAt: "2026-07-16T00:01:00Z"
   };
   let createCount = 0;
   const delivered: string[] = [];
 
   const result = await resolveAndDeliverCodexSession({
-    threadId: stale.id,
-    title: created.title,
-    cwd: created.cwd,
-    prompt: "改名后的第一条"
+    threadId: existing.id,
+    title: "MonsterGirl / 伊莉娅 策划美术",
+    cwd: existing.cwd,
+    prompt: "标题元数据变化后的第二条"
   }, {
     scope: {},
-    read: async () => stale,
-    list: async () => [],
-    create: async () => { createCount += 1; return created; },
+    read: async () => existing,
+    list: async () => { throw new Error("must not list when the saved id exists"); },
+    create: async () => { createCount += 1; return existing; },
     deliver: async ({ thread }) => { delivered.push(thread.id); }
   });
 
-  assert.equal(result.kind, "created");
-  assert.equal(createCount, 1);
-  assert.deepEqual(delivered, [created.id]);
+  assert.equal(result.kind, "id");
+  assert.equal(createCount, 0);
+  assert.deepEqual(delivered, [existing.id]);
 });
 
-test("changing the Rabi name rebinds by that name instead of delivering to the stale id", async () => {
-  const stale = {
-    id: "019f0000-0000-7000-8000-000000000035",
-    title: "旧名字",
-    cwd: process.cwd(),
-    updatedAt: "2026-07-16T00:00:00Z"
-  };
+test("explicitly clearing the id before changing the Rabi name rebinds by the new name", async () => {
   const renamedTarget = {
     id: "019f0000-0000-7000-8000-000000000036",
     title: "Rabi 新名字",
@@ -122,13 +110,12 @@ test("changing the Rabi name rebinds by that name instead of delivering to the s
   const delivered: string[] = [];
 
   const result = await resolveAndDeliverCodexSession({
-    threadId: stale.id,
     title: renamedTarget.title,
     cwd: renamedTarget.cwd,
     prompt: "切换到新名字"
   }, {
     scope: {},
-    read: async () => stale,
+    read: async () => { throw new Error("must not read without a saved id"); },
     list: async () => [renamedTarget],
     create: async () => { throw new Error("must not create when the new name already exists"); },
     deliver: async ({ thread }) => { delivered.push(thread.id); }

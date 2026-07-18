@@ -16,7 +16,7 @@ Four rules follow:
 
 1. Desktop applications, CLIs, and services must retain independent startup, shutdown, and upgrade lifecycles unless their product contract explicitly says otherwise.
 2. If the requirement is “visible in this Desktop task with this task's tools,” that Desktop task owner must execute the real turn. RabiRoute must not start a second executor.
-3. Persist the visible name, immutable ID, and workspace together. Validate the name-ID pair before delivery so either side can rename safely without sending to a stale target.
+3. Persist the visible name, immutable ID, and workspace together, but use full ID plus workspace as identity. The owner/SQLite title is mutable display metadata; only an explicit Rabi-side name edit clears the ID and switches targets.
 4. Tools exist only when the actual owner/runtime registers them. Prompt wording cannot create a missing tool.
 
 Codex Desktop IPC is a verified, version-sensitive contract. It must fail closed, wake/load the exact owner, validate full ID plus workspace, and have no alternate execution path.
@@ -84,9 +84,9 @@ The list may come from stale metadata, a partial page, or another workspace. Res
 
 Typical causes are name-as-identity, delayed indexing treated as absence, concurrent create calls, creation from several UI paths, or treating multiple existing matches as permission to create again. Use one resolver and one idempotency scope. For exact name/workspace matches, bind the unique latest `updatedAt`; create only when there are zero matches. After creation, wait for the same new ID for a bounded period.
 
-### A rename still delivers to the old task
+### The first message works and the second creates a duplicate
 
-An ID alone is not enough when the saved visible name and the owner record diverge. Treat the old pair as stale and resolve by saved name plus workspace. Bind the unique latest `updatedAt` when one or more candidates exist, or create once when none exists. A tied or unusable maximum requires explicit selection. Never continue delivering to an ID whose current name no longer matches the configured target.
+Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Reuse a valid unarchived ID in the same workspace regardless of title metadata. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
 
 ### The settings page becomes slow or scans continuously
 
@@ -109,9 +109,10 @@ Installation, authentication, and endpoint checks are prerequisites. Verificatio
 ```mermaid
 flowchart TD
     R["RabiRoute AgentPacket"] --> S["Session resolver"]
-    S --> I{"Saved name + full ID + workspace match?"}
-    I -->|"Yes"| B["Reuse exact binding"]
-    I -->|"No"| N["Find by saved name + workspace"]
+    S --> I{"Read saved ID state"}
+    I -->|"Exists, same workspace, unarchived"| B["Reuse exact binding despite title mutation"]
+    I -->|"Empty / invalid / genuinely missing"| N["Find by saved name + workspace"]
+    I -->|"Archived / workspace mismatch"| F["Stop with actionable error"]
     N -->|"One or more"| L{"Unique latest updatedAt?"}
     L -->|"Yes"| P["Persist latest matched ID"]
     L -->|"Tied / unusable"| A["Require user selection"]
@@ -184,8 +185,8 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 ## Release test matrix
 
 - Independent cold start and shutdown.
-- Valid ID reuse, archived-binding blocking, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
-- Agent-side and Rabi-side rename rebinding.
+- Valid ID reuse after title mutation, archived-binding blocking, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
+- Desktop rename continuity and explicit Rabi-side target switching after clearing the old ID.
 - Delayed index and concurrent single-flight creation.
 - Full pagination and bounded scan count.
 - Start/steer behavior in the real owner.

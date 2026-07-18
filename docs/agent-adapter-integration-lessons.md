@@ -100,7 +100,7 @@ connect ECONNREFUSED 127.0.0.1:4510
 | `1a8d786` | `no-client-found` 后消息仍能被某个 app-server 接收 | 消息必须立即进入原 Desktop 任务，并使用 Desktop 工具 | “可靠投递”变成了第二 Runtime 后台执行 |
 | `d6b56fc` | Desktop 与 RabiRoute 可以独立启动；stdio 协议和审批可控 | Desktop 必须实时显示并拥有实际轮次 | 修复生命周期，却失去实时事件和 Desktop 工具 |
 | `d4dd964` | 两个 WebSocket client 能读同一 thread 和通知 | RabiRoute 缺席时 Desktop 仍必须冷启动 | 用用户级环境变量把 Desktop 永久绑定到 4510，形成所有权倒置 |
-| 当前方案 | Desktop owner 接受真实消息；名称 + ID + cwd 交叉校验；失败关闭 | 同一套用户合同 | 消息、状态、工具和生命周期重新由同一个 owner 对齐 |
+| 当前方案 | Desktop owner 接受真实消息；完整 ID + cwd 稳定绑定；失败关闭 | 同一套用户合同 | 消息、状态、工具和生命周期重新由同一个 owner 对齐 |
 
 共同根因有十一个：
 
@@ -112,7 +112,7 @@ connect ECONNREFUSED 127.0.0.1:4510
 6. **产品形态混淆**：本机交互式 Desktop 和远端无人值守 bridge 对 Runtime owner 的要求不同，却一度被强行统一到同一端口。
 7. **改动面过大**：Runtime、Manager、WebGUI、文档、Remote Agent 和打包同时变化，使大量通过的测试只能证明新实现内部一致，不能证明产品合同正确。
 8. **创建提交点和 resolver 分裂**：配置页在 `blur` 时创建，Manager 与 Gateway 又各写一套 ID/名称解析；Desktop 索引稍有延迟，同一个名称就会被重复创建，保存后的新 ID也可能没有成为下一次投递的真源。
-9. **把 ID 当成不变的完整身份**：Desktop 端改名或 Rabi 端修改保存名称后，旧实现只要 UUID 仍有效就继续投旧任务，忽略用户看到和保存的名称已经不一致。
+9. **把可变标题当成身份**：Desktop 的 SQLite `title` 会在真实投递后变成首条 prompt，而 UI 仍保留人工任务名；把两者强制配对会让第二条消息误判绑定失效并创建同名任务。
 10. **扫描触发点散落在 UI 事件中**：页面进入、展开卡片、添加 Agent、`blur`、保存和状态刷新都可能各自调用全量扫描；任务多时既卡顿，也让一次用户操作产生不可预测的重复请求。
 11. **源码、构建目录和实际启动入口不是同一产物**：测试文件越出 `rootDir` 后，TypeScript 曾把新代码写到 `dist/src`，而安装器仍复制并启动旧的 `dist/manager.js`；源码测试、构建和哈希都可能“通过”，真实运行的却是残留旧入口。
 
@@ -149,8 +149,8 @@ connect ECONNREFUSED 127.0.0.1:4510
 
 1. 下拉项显示“会话名称 + 最后会话时间”，内部 value 保存完整 opaque ID。
 2. 同时保存规范化后的项目目录，用来发现配置错位，但不要把目录或名称拼成伪 ID。
-3. 投递前从 Desktop 状态按精确 ID 读取，并验证 owner 当前名称等于 Rabi 保存名称，再校验 `cwd`。
-4. ID 不是合法任务 ID、已失效或名称与 ID 指向记录不一致时，清除旧绑定并按“保存名称 + 规范化 cwd”自动解析：一个或多个同名候选按 `updatedAt` 绑定唯一最新者，零匹配创建，最大时间并列才要求用户选择。
+3. 投递前从 Desktop 状态按精确 ID 读取，并校验 `cwd` 与归档状态；不要用可变 `title` 否定有效 ID。
+4. 只有 ID 为空、不是合法任务 ID或确实不存在时，才按“保存名称 + 规范化 cwd”自动解析：一个或多个同名候选按 `updatedAt` 绑定唯一最新者，零匹配创建，最大时间并列才要求用户选择。
 5. 精确 ID 仍存在但 cwd 冲突时停止，不能改走同名任务；这是配置错位，不是“找不到”。
 6. 名称和 cwd 匹配出多个结果时按可解析的 `updatedAt` 降序选择唯一最新者，不能取数据库返回的“第一个”；只有最大时间并列或都无有效时间时才让用户选择。
 7. 扫描接口必须能访问全部任务；可以分页或搜索，但不能用固定前 100 条冒充完整列表。Windows 映射盘、UNC 和 `\\?\UNC` 必须先规范化再比较。
@@ -175,19 +175,19 @@ connect ECONNREFUSED 127.0.0.1:4510
 5. 连续保存和连续投递测试都必须断言 create 次数仍为 1。
 6. “自动初始化会话”也是显式提交点，但必须先保存名称 + ID，再复用正式人格 AgentPacket/owner 投递；创建成功而初始化首投失败时，只能复用该 ID 重试。
 
-### 3A. 改名后仍然投到旧会话
+### 3A. 第一条成功、第二条又创建同名会话
 
-症状：用户在 Desktop/Agent 端改了任务名，或在 Rabi 设置中输入了新名称并保存，但消息仍进入旧 ID 指向的任务；另一种表现是每次保存都重新猜测目标。
+症状：第一条 Rabi 消息进入正确的长任务；紧接着第二条却创建同名新任务。Desktop UI 中原任务名没有变化，但 SQLite `threads.title` 已变成首条 Rabi prompt。
 
-根因：配置把 UUID 当成唯一且永远正确的身份，名称只用于显示。这样名称和 ID 发生分叉时，resolver 无法判断用户是想保留旧任务、切换目标还是创建新任务。
+根因：resolver 把“保存名称必须等于 owner 当前 `title`”当成身份条件。该字段并不稳定；真实轮次后自动标题、首条 prompt 或索引延迟都可能改变它。
 
 正确处理：
 
-1. 持久化绑定是“可见名称 + 完整 opaque ID + workspace”，名称和 ID 必须成对校验。
-2. 有效 ID 只能用于读取 owner 当前记录；当前名称与保存名称一致且 cwd 一致时才直接续投。
-3. 名称与 ID 不一致时旧 ID 视为陈旧绑定，按保存名称 + cwd 查询；一个或多个候选按 `updatedAt` 重绑唯一最新者，零匹配幂等创建，最大时间并列要求选择。
-4. 保存和真实投递必须走同一个 resolver，并在成功后同时更新名称和 ID；不能只改显示文本或只换 UUID。
-5. 必测两个方向：owner 端改名、Rabi 端改名。两者都要证明不会继续投旧 ID，且并发/重试只创建一个新任务。
+1. 持久化身份是“完整 opaque ID + workspace”；可见名称用于下拉显示、无 ID 查找和用户显式切换。
+2. 精确 ID 存在、cwd 一致且未归档时直接续投，不比较可变标题。
+3. 用户在 Rabi 端输入新名称时，UI 必须先清空旧 ID；resolver 看到无 ID 后才按名称 + cwd 查找/创建。
+4. 保存和真实投递必须走同一个 resolver；已创建 ID 要先持久化，后续消息只复用它。
+5. 必测连续两次真实投递：第一条使数据库标题变化后，第二条仍进入同一 ID，任务数不变。
 
 ### 3B. 会话越多，设置页越卡或一直扫描
 
@@ -273,7 +273,7 @@ flowchart LR
 ### Codex
 
 - Desktop 状态数据库只读地提供全部未归档任务候选；下拉显示名称和最后时间，内部保存完整 opaque ID。
-- 配置绑定统一走一个 resolver：读取有效 ID 并校验保存名称 → 名称 + ID 与 cwd 都匹配才精确绑定；无效/失效/名称不一致 → 保存名称 + 规范化 cwd；一个或多个同名 → 按 `updatedAt` 自动绑定唯一最新者；零匹配 → 创建空任务；最大时间并列 → 返回候选。
+- 配置绑定统一走一个 resolver：有效 ID + cwd 且未归档 → 精确绑定，不比较可变标题；ID 为空/非法/失效 → 保存名称 + 规范化 cwd；一个或多个同名 → 按 `updatedAt` 自动绑定唯一最新者；零匹配 → 创建空任务；最大时间并列 → 返回候选。
 - 投递前按最终 ID 读取任务并校验规范化 `cwd`；目录冲突、重名未消歧或 owner 无法加载都停止。
 - 通过 Desktop IPC 先 steer；确认没有活动轮次时再 start。
 - `no-client-found` 时只用 deeplink 加载目标任务并重试，绝不转给独立 app-server。
@@ -315,9 +315,9 @@ flowchart LR
 显示：name + updatedAt
 保存：agentType + endpoint/runtimeProfile + savedName + fullSessionId + normalizedProjectPath
 
-有效 fullSessionId -> 精确读取 owner 记录并校验 savedName
-名称 + ID 匹配 -> 再校验 cwd，成功才直接绑定
-无效/失效/名称不一致 -> 按 savedName + normalizedProjectPath 查询
+有效 fullSessionId -> 精确读取 owner 记录
+ID 存在且 cwd 匹配、未归档 -> 直接绑定，不比较 title
+ID 为空/非法/失效 -> 按 savedName + normalizedProjectPath 查询
 一个或多个同名 -> 按 updatedAt 保存唯一最新任务的 ID
 零匹配 -> 创建空任务并保存新 ID
 最大 updatedAt 并列或无有效时间 -> 返回候选，等待用户选择
@@ -363,7 +363,8 @@ Adapter 需要分别报告：
 | 会话重名 | UI 以时间/项目区分，内部按 ID |
 | 会话 ID 不是 UUID、过期或删除 | 按名称 + 规范化 cwd 自动解析；一个或多个匹配绑定唯一最新者，零匹配创建，最大时间并列要求选择 |
 | 保存 ID 指向已归档会话 | 明确阻止并要求恢复/重选；不得把归档当零匹配后创建替代任务 |
-| Desktop/Agent 端或 Rabi 端改名 | 名称 + ID 配对失效；不投旧 ID，按保存名称唯一重绑或只创建一次并持久化新配对 |
+| Desktop 改名或 SQLite 标题变成首条 prompt | 完整 ID + cwd 继续续投；不查名、不创建 |
+| Rabi 端明确输入新名称 | UI 先清空旧 ID，再按新名称唯一重绑或只创建一次 |
 | 会话总数超过 100 | 分页/搜索仍能访问全部任务；WebGUI 不固定截断 |
 | 设置页进入、展开、输入、blur、保存和空闲等待 | 只有页面进入和显式点击扫描增加扫描请求；其余操作请求数不变 |
 | cwd 不一致 | 拒绝投递并显示两边路径 |
@@ -390,7 +391,7 @@ Adapter 需要分别报告：
 
 - [ ] scan 返回 `maturity`、真实 transport 模式、host 是否必需和 warnings。
 - [ ] 会话 value 使用完整 ID，同时保存可见名称；最后时间只用于显示。
-- [ ] 投递前验证名称 + ID 配对、cwd、Desktop owner 和 active turn。
+- [ ] 投递前验证完整 ID、cwd、归档状态、Desktop owner 和 active turn；不把可变 title 当身份。
 - [ ] 项目/会话扫描只在页面进入一次或显式点击扫描时触发，不绑定到展开、输入、`blur`、保存和计时器。
 - [ ] 工具能力来自当前 Runtime 探测，不来自 prompt 假设。
 - [ ] 错误分类为未安装、未登录、未启动、会话失效、目录冲突、工具缺失、权限拒绝。

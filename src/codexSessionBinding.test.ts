@@ -86,8 +86,7 @@ test("saving a new Rabi task creates once, persists its id, and reuses it on the
   assert.equal(gateway.codexCwd, process.cwd());
 });
 
-test("saving a renamed Rabi task replaces a stale id-name pair with the newly created binding", async () => {
-  const staleId = "019f0000-0000-7000-8000-000000000023";
+test("saving an explicitly typed Rabi name with its old id cleared creates the new binding", async () => {
   const createdId = "019f0000-0000-7000-8000-000000000024";
   let createCount = 0;
   const driver: AgentThreadDriver = {
@@ -115,7 +114,7 @@ test("saving a renamed Rabi task replaces a stale id-name pair with the newly cr
     id: "RabiLink",
     name: "RabiLink",
     agentAdapters: ["codex"],
-    codexThreadId: staleId,
+    codexThreadId: "",
     codexThreadName: "Rabi 新名字",
     codexCwd: process.cwd()
   };

@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.15 - 2026-07-18
+
+### Codex Desktop stable-ID continuation
+
+- Fixed the first routed message reaching the correct task but rewriting Desktop SQLite `title` to the first prompt, which made the second message treat the name-ID pair as stale and create a same-name task.
+- A persisted binding now uses full task ID plus normalized workspace as stable identity. An existing unarchived ID in the same workspace is reused without comparing mutable title metadata; name lookup/creation runs only when the ID is empty, invalid, or genuinely missing.
+- Explicitly typing a new Rabi name still clears the old ID before name lookup or idempotent creation. Added repeated-delivery coverage after title mutation and synchronized the integration standard, acceptance contract, troubleshooting guide, and Agent-creation Skill.
+
 ## 0.1.14 - 2026-07-18
 
 ### Codex Desktop archived-binding guard

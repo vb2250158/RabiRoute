@@ -18,11 +18,11 @@ Not every handler has projects, persistent sessions, tools, streaming, or cancel
 
 Every adapter must satisfy these rules before advanced features matter:
 
-1. Reuse the bound session only when the saved visible name and immutable ID still point to the same unarchived owner record in the configured workspace. If the saved ID points to an archived task, block creation and require an explicit restore or reselection instead of treating it as absent.
-2. When the ID is missing, invalid, or no longer paired with the saved name, search by the Manager-saved name plus normalized workspace. Rebind the unique most recently updated match when one or more candidates exist, create once only when there is no match, and ask the user only when the maximum update time is tied or unusable.
+1. Reuse the bound session when the immutable ID exists in the configured workspace and its owner record is not archived. The owner title or SQLite `title` is mutable display metadata and must not participate in identity. If the saved ID points to an archived task, block creation and require an explicit restore or reselection.
+2. Only when the ID is empty, invalid, or actually missing, search by the Manager-saved name plus normalized workspace. Rebind the unique most recently updated match when one or more candidates exist, create once only when there is no match, and ask the user only when the maximum update time is tied or unusable.
 3. Deliver to the real owner that provides the user-visible task and tool context. Sharing a database, title, or session ID with a second Runtime is not unified ownership.
 4. Saving settings completes the binding transaction and persists visible name, full session ID, and workspace together.
-5. Handle renames as safe rebinding. If either the Agent owner or Rabi changes the visible name, the stale name-ID pair must be resolved again by the same latest-match rule instead of silently delivering to the old ID.
+5. A Desktop/owner rename or stale title metadata must not change the target: the full ID plus workspace remains authoritative. When the user explicitly types a new name in Rabi, the UI clears the old ID before the same lookup/create flow persists a new binding.
 6. Scan once when the settings surface opens, then only on explicit refresh. Input, blur, save, health polling, and timers must not create an uncontrolled scan loop.
 
 If a handler cannot reach the product's real owner through an official or verified bridge, mark it `experimental` and say that user-visible session delivery is not guaranteed.
@@ -193,7 +193,7 @@ Unsupported fields should be false or absent—not simulated.
 - `scan`: explicit discovery with maturity, requirements, warnings, and endpoints.
 - `list`: paginated session/project listing.
 - `read`: read exact immutable ID.
-- `resolve`: validate name + ID + workspace first; then name plus workspace; optional idempotent create.
+- `resolve`: validate full ID plus workspace first without comparing mutable title metadata; only then fall back to name plus workspace and optional idempotent creation.
 - `create`: controlled creation with a returned immutable ID.
 - `send`: deliver through the real owner.
 - `status`: owner/binding/turn/result state, not just process existence.
@@ -214,10 +214,10 @@ Mutating APIs must be explicit. Health scans remain read-only.
 At minimum, cover:
 
 - installation/authentication states;
-- valid name-ID binding reuse and workspace mismatch;
+- valid ID/workspace binding reuse despite title mutation, archived-binding blocking, and workspace mismatch;
 - unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation;
 - delayed indexing and concurrent single-flight creation;
-- Agent-side and Rabi-side rename rebinding;
+- Desktop-side rename continuity and explicit Rabi-side target switching;
 - complete pagination beyond 100 sessions;
 - bounded scan count;
 - owner unavailable with no fallback;

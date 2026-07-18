@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(0, 1, 14, 0),
-    prodvers=(0, 1, 14, 0),
+    filevers=(0, 1, 15, 0),
+    prodvers=(0, 1, 15, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,11 +17,11 @@ VSVersionInfo(
         [
           StringStruct("CompanyName", "CottonProject"),
           StringStruct("FileDescription", "RabiRoute"),
-          StringStruct("FileVersion", "0.1.14"),
+          StringStruct("FileVersion", "0.1.15"),
           StringStruct("InternalName", "RabiRoute"),
           StringStruct("OriginalFilename", "RabiRoute-Tray.exe"),
           StringStruct("ProductName", "RabiRoute"),
-          StringStruct("ProductVersion", "0.1.14"),
+          StringStruct("ProductVersion", "0.1.15"),
         ],
       )
     ]),

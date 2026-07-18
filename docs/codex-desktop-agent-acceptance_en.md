@@ -10,9 +10,9 @@ This is the release gate for the Codex/ChatGPT Desktop adapter. Success does not
 
 ## Non-negotiable product contract
 
-1. Deliver to the saved task only when the saved visible name, full task ID, and workspace identify the same unarchived Desktop owner record. An archived saved binding must return an actionable restore/reselect error and must never create a replacement task.
-2. If the ID is empty, invalid, or no longer paired with the saved name, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
-3. A Desktop-side or Rabi-side rename invalidates the old name-ID pair and must trigger the same safe rebinding flow; it must never keep delivering to a stale target.
+1. Deliver to the saved task when the full task ID exists in the configured workspace and the owner record is not archived. A mutable Desktop/SQLite title does not invalidate that identity. An archived saved binding must return an actionable restore/reselect error and never create a replacement.
+2. If the ID is empty, invalid, or actually missing, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
+3. A Desktop-side rename or automatic title-metadata rewrite keeps the same ID target. Explicitly typing a new Rabi name clears the old ID before lookup/create and persists the selected replacement target.
 4. Real prompts go only to the current Desktop task owner. RabiRoute must not resume the same ID in another Runtime or silently switch execution paths.
 5. Saving settings persists the visible name, complete task ID, and workspace as one binding. Selecting another task or typing a new name resolves and persists a new pair before later delivery.
 6. Automatic scanning runs once when the settings page opens. Later scans happen only after the user clicks scan/refresh—not on expand, input, blur, save, health polling, timers, or Manager restart.
@@ -41,7 +41,7 @@ Required cold-start checks:
 ```mermaid
 flowchart TD
     P["RabiRoute AgentPacket"] --> R["Shared session resolver"]
-    R --> I{"Saved name + ID + workspace match?"}
+    R --> I{"Saved ID exists in the configured workspace?"}
     I -->|"Yes"| B["Reuse binding"]
     I -->|"No"| N["Find by visible name + workspace"]
     N -->|"One or more"| L{"Unique latest updatedAt?"}
@@ -60,7 +60,7 @@ Creating a task and delivering its first prompt are separate operations. A short
 ## Identity and state rules
 
 - The UI shows task name and last activity; users do not type UUIDs.
-- Internally, the binding is visible name plus complete task ID, with workspace as the safety boundary.
+- Internally, identity is the complete task ID plus workspace. The visible name is display and no-ID lookup metadata.
 - Last activity is display/sorting data, not identity.
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
 - For same-name tasks in one workspace, sort by parseable `updatedAt` and bind the unique maximum; never use database return order. Require selection only when the maximum time is tied or all candidate times are unusable.
@@ -83,13 +83,13 @@ Do not deliver after a failed save. Do not roll back a successfully created task
 
 | Scenario | Expected result |
 | --- | --- |
-| Valid name + ID + workspace | Direct delivery; task count unchanged |
+| Valid ID + workspace after SQLite title mutation | Direct delivery to the same ID; task count unchanged |
 | Saved ID points to an archived task | Block and require restore/reselection; task count unchanged |
 | Deleted/invalid ID, unique name match | Rebind; task count unchanged |
 | No name match | Create one task, persist ID, deliver to it |
 | Desktop index is briefly delayed | Wait for the same ID; do not create a duplicate |
 | Two concurrent first deliveries | Single-flight creation; one task only |
-| Desktop renames the bound task | Old pair becomes stale; resolve the saved name and do not use the old target |
+| Desktop renames the bound task or rewrites title metadata | Continue the same ID; task count unchanged |
 | User types a new name and saves | Resolve/create the new target and stop using the old task |
 | Several same-name tasks with one latest update | Bind the unique latest task; task count unchanged |
 | Same-name tasks tied for latest or without usable times | Return candidates and require selection; do not create |
@@ -108,7 +108,7 @@ Mocks and unit tests prove resolver and failure behavior only. Release acceptanc
 1. Define the user-visible destination, unique owner, session identity, and forbidden fallbacks.
 2. Test independent lifecycle and port-4510 safety before polishing the session UI.
 3. Reuse one resolver for settings save, normal delivery, and automatic initialization.
-4. Lock name-ID pair validation, rename rebinding, single-flight creation, delayed indexing, full listing, and scan counts with tests.
+4. Lock stable ID/workspace reuse, title-mutation continuity, archived blocking, explicit Rabi-side switching, single-flight creation, delayed indexing, full listing, and scan counts with tests.
 5. Mark Codex `verified` only after a real Desktop task receives and executes the prompt visibly.
 
 See [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) for the general contract and [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) for the failed designs and their root causes.

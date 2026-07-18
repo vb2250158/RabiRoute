@@ -202,7 +202,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 
 - `list`：从 Desktop 状态按标题查询本机任务，使用 `offset` / `limit` 分页访问全部结果。
 - `read`：通过完整 `threadId` 只读读取 Desktop 任务元数据。
-- `resolve`：先读取精确 ID。有效 ID、保存名称和 cwd 一致且未归档时直接绑定；保存 ID 指向已归档任务时返回 `409 archived`，要求恢复或重选且绝不创建替代任务。ID 为空、失效或名称配对失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列或都无有效时间时返回候选让用户选择。
+- `resolve`：先读取精确 ID。有效 ID、cwd 一致且未归档时直接绑定，不比较可变的 Desktop/SQLite 标题；保存 ID 指向已归档任务时返回 `409 archived`。只有 ID 为空、非法或确实失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列时返回候选。
 - `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。
 - `send`：通过 Desktop IPC 向已有任务 owner start/steer。
 
@@ -229,7 +229,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 }
 ```
 
-调用方不要让 AI 或用户手改 UUID。调用方必须把下拉保存的名称和完整 ID 一起传入；用户明确输入新名称时前端应先清空旧 ID。`resolve` 返回的 `resolution` 为 `id`、`name` 或 `created`，并在成功后把返回名称 + ID 一起持久化；重名时返回 HTTP 409 和 `candidates`。
+调用方不要让 AI 或用户手改 UUID。下拉保存名称、完整 ID 和 workspace；用户明确输入新名称时前端先清空旧 ID。有效 ID + workspace 是稳定身份，即使返回标题已变成首条 prompt 也继续该 ID。`resolve` 返回 `id`、`name` 或 `created`；重名最大时间并列时返回 HTTP 409 和 `candidates`。
 
 读取示例：
 

@@ -74,7 +74,7 @@ test("Agent task resolver binds an existing Desktop task by saved id and workspa
     list: async () => { calls.push("list"); return []; },
     read: async (threadId) => ({
       id: threadId,
-      title: "RabiLink",
+      title: "[RabiRoute 事件] Desktop 自动写入的首条消息",
       cwd: process.cwd(),
       updatedAt: "2026-07-15T00:00:00Z"
     }),

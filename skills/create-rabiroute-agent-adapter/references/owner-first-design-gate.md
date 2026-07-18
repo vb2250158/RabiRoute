@@ -67,9 +67,9 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 
 ### E. 身份与能力
 
-- 用 owner 返回的完整 opaque ID 与可见名称成对持久化绑定；名称 + ID 必须同时匹配 owner 记录才算精确绑定。
-- 最后时间只供人识别，cwd/project 用于安全边界和消歧；它们都不能代替名称 + ID 配对。
-- ID 必须由扫描、创建或受控迁移自动产生，不能让用户或 AI 手填。配置 resolver 的固定顺序是：读取有效 ID 并校验保存名称 → 名称和 ID 都匹配才精确绑定 → ID 非法/失效/名称不一致则按保存名称 + 规范化 cwd 查询 → 一个或多个同名候选按 `updatedAt` 选择唯一最新者 → 零匹配按用户输入幂等创建 → 最新时间并列才等待选择。
+- 用 owner 返回的完整 opaque ID、可见名称和 workspace 持久化绑定；身份由完整 ID + workspace 决定，owner/SQLite 标题是可变元数据。
+- 最后时间和名称只供人识别/无 ID 查找，cwd/project 用于安全边界和消歧；标题变化不能否定有效 ID。
+- ID 必须由扫描、创建或受控迁移自动产生，不能让用户或 AI 手填。resolver 固定顺序：读取有效 ID → ID 存在、cwd 匹配且未归档就精确绑定 → ID 为空/非法/失效才按保存名称 + 规范化 cwd 查询 → 一个或多个同名候选按 `updatedAt` 选择唯一最新者 → 零匹配幂等创建 → 最新时间并列等待选择。Rabi 端显式输入新名称必须先清空旧 ID。
 - 从执行该 turn 的 Runtime 探测工具和权限，不从 session 文本或另一客户端推断。
 - 精确 ID 存在但 cwd 冲突、名称重名未消歧或 owner 未加载时失败关闭；配置恢复不能变成实际消息的 fallback。
 
@@ -85,7 +85,7 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 6. 验证该轮实际拥有预期工具/权限。
 7. 关闭 RabiRoute 冷启动 Agent；关闭 Agent 启动 Manager。
 8. 让 owner 缺席、精确 ID cwd 冲突，确认没有第二执行路径。
-9. 分别在 owner 端和 Rabi 设置端修改会话名称，确认名称 + ID 不匹配时不会投给旧 ID，而是按新名称重绑或只创建一次。
+9. 在 owner 端改名并让首投改变 SQLite 标题，确认第二条仍进入同一 ID；在 Rabi 设置端输入新名称时确认旧 ID 先被清空，再按新名称重绑或只创建一次。
 10. 记录会话扫描请求：只允许进入设置界面自动一次和用户点击扫描时增加；展开、输入、`blur`、保存与空闲等待不得持续扫描。
 11. 若提供“自动初始化会话”，验证顺序固定为保存/解析名称 + ID → 唯一 owner 投递人格 AgentPacket；零匹配只创建一次，首投失败只重试同一 ID。
 
@@ -97,7 +97,8 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 | 旧 endpoint 或环境变量残留 | 不形成隐藏依赖 |
 | 非法、失效 ID | 名称 + cwd 匹配时按 `updatedAt` 绑定唯一最新者；最大时间并列不随机选择；零匹配只按明确名称创建 |
 | 保存 ID 指向已归档任务 | 返回可行动的恢复/重选错误；不得自动创建替代任务 |
-| 名称 + ID 配对失效 | owner 端或 Rabi 端改名后不续投旧 ID；按保存名称唯一重绑或幂等创建，并持久化新配对 |
+| owner 改名/SQLite 标题变化 | 完整 ID + cwd 仍续投，不按名称误建替代任务 |
+| Rabi 显式输入新名称 | UI 清空旧 ID 后按新名称重绑或幂等创建，并持久化新 ID |
 | 设置页长期停留 | 扫描请求次数不随时间、展开、输入、`blur` 或保存增长；仅页面进入和显式刷新触发 |
 | 自动初始化首投 | 先持久化绑定，再由目标 owner 显示人格初始化消息；失败时不重复创建任务、不走备用 Runtime |
 | 超过 100 个任务、路径别名 | 全部可访问；UNC、映射盘和 extended path 归一比较 |

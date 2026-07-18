@@ -32,7 +32,11 @@ assert.match(runtime, /desktopBridge\.deliver/);
 assert.match(runtime, /resolveAndDeliverCodexSession/);
 assert.match(sessionResolver, /resolveCodexSession/);
 assert.match(sessionResolver, /dependencies\.deliver/);
-assert.match(sessionResolver, /exact\.title === params\.title/);
+assert.match(sessionResolver, /if \(exact\)/);
+assert.match(sessionResolver, /exact\.cwd[\s\S]*sameCodexWorkspace/);
+assert.match(sessionResolver, /if \(exact\.archived\)/);
+assert.doesNotMatch(sessionResolver, /exact\.title\s*===\s*params\.title/,
+  "Mutable Desktop/SQLite title metadata must not invalidate a stable task ID binding.");
 assert.match(runtime, /bootstrapEmptyDesktopThread/);
 assert.match(runtime, /thread\/start/);
 assert.doesNotMatch(runtime, /turn\/start|turn\/steer/);
@@ -64,7 +68,7 @@ assert.equal(packageJson.scripts["configure:codex-desktop"], undefined);
 assert.equal(packageJson.scripts["codex:shared"], undefined);
 assert.match(adapterSkill, /冻结用户可观察合同/);
 assert.match(adapterSkill, /一个 adapter 只能有一条真实消息执行路径/);
-assert.match(adapterSkill, /会话身份是“可见名称 \+ 完整线程 ID”配对/);
+assert.match(adapterSkill, /会话身份是“完整线程 ID \+ workspace”/);
 assert.match(adapterSkill, /项目和会话扫描只允许在进入设置界面时自动执行一次/);
 assert.match(adapterSkill, /自动初始化会话/);
 assert.match(ownerFirstGate, /同一 session ID ≠ 同一 live task owner/);
@@ -75,4 +79,4 @@ if (fs.existsSync(builtAgentThreadsPath)) {
     "The runnable dist/agentThreads.js must contain the canonical resolver.");
 }
 
-console.log("Codex adapter contract OK: actual messages have one owner (Desktop IPC), with no shared endpoint or fallback runtime; the Agent adapter skill retains its owner-first design gate.");
+console.log("Codex adapter contract OK: Desktop IPC is the only real-message owner; full task ID plus workspace remains stable across title changes; archived tasks and fallbacks fail closed.");

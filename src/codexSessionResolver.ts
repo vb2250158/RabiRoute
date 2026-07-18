@@ -109,10 +109,11 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
   const threadId = params.threadId?.trim() || "";
   if (isCodexTaskId(threadId)) {
     const exact = await dependencies.read(threadId);
-    // A persisted binding is the pair (Desktop task id, visible task name).
-    // Either side may be renamed independently, so an id alone must never
-    // silently override the name the user saved in RabiRoute.
-    if (exact && exact.title === params.title) {
+    // Desktop's SQLite title is mutable metadata: after a routed turn it can
+    // temporarily become the first prompt even while the UI keeps the user's
+    // visible task name. The opaque id plus workspace is the stable identity.
+    // Explicit name edits clear threadId in the UI before this resolver runs.
+    if (exact) {
       if (exact.cwd && !sameCodexWorkspace(exact.cwd, params.cwd)) {
         return { kind: "workspace-mismatch", thread: exact };
       }
