@@ -6,6 +6,7 @@ import {
   listAgentThreadsFromIndexForTest,
   type AgentThreadDriver
 } from "./agentThreads.js";
+import { listCodexDesktopThreadsFromRowsForTest } from "./codexDesktopBridge.js";
 
 test("Agent thread list deduplicates session index entries and filters by title", () => {
   const result = listAgentThreadsFromIndexForTest([
@@ -212,6 +213,53 @@ test("Agent task resolver binds the most recently updated same-name task", async
   assert.equal(result.statusCode, 200);
   assert.equal(result.data.resolution, "name");
   assert.equal((result.data.thread as { id: string }).id, "019f0000-0000-7000-8000-000000000013");
+});
+
+test("Agent task resolver replaces an archived binding with the latest unarchived same-name task", async () => {
+  const title = "MonsterGirl / 伊莉娅 策划美术";
+  const cwd = process.cwd();
+  const archivedId = "019f0000-0000-7000-8000-000000000041";
+  const olderId = "019f0000-0000-7000-8000-000000000042";
+  const latestId = "019f0000-0000-7000-8000-000000000043";
+  const rows = [
+    { id: archivedId, title, cwd, archived: 1, updated_at_ms: 3_000 },
+    { id: olderId, title, cwd, archived: 0, updated_at_ms: 1_000 },
+    { id: latestId, title, cwd, archived: 0, updated_at_ms: 2_000 }
+  ];
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async ({ query, limit, offset, allowedWorkspaces }) => listCodexDesktopThreadsFromRowsForTest(rows, {
+      query,
+      limit,
+      offset,
+      allowedWorkspaces
+    }),
+    read: async (threadId) => listCodexDesktopThreadsFromRowsForTest(
+      rows.filter((row) => row.id === threadId),
+      { limit: 1 }
+    )[0] ?? null,
+    create: async () => {
+      createCount += 1;
+      throw new Error("must not create");
+    },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "resolve",
+    threadId: archivedId,
+    title,
+    cwd,
+    createIfMissing: true
+  }, {
+    allowedWorkspaces: [cwd],
+    defaultWorkspace: cwd
+  }, driver);
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.data.resolution, "name");
+  assert.equal((result.data.thread as { id: string }).id, latestId);
+  assert.equal(createCount, 0);
 });
 
 test("Agent thread create uses a configured workspace and fixed investigation instructions", async () => {
