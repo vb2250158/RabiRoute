@@ -87,7 +87,7 @@ npm run check:config
 1. 打开 Codex/ChatGPT Desktop，确认它本身能正常进入任务；RabiRoute 不负责启动或停止 Desktop Runtime。
 2. 在 RibiWebGUI 重新扫描 Codex。任务下拉应显示未归档任务的“任务名 + 最后会话时间”，不显示内部 ID。
 3. 检查 route 保存的 `codexThreadId` 和 `codexCwd`。有效 ID 且目录一致时会直接复用；Desktop 改名、SQLite 标题滞后或 goal 完成都不会创建新任务。
-4. 只有 ID 被明确清空、确实不存在或名称配对失效时才按 `codexThreadName + codexCwd` 查找/创建；多个同名同目录任务自动绑定最后更新时间唯一最新者，最大时间并列时才需要用户选择。
+4. 只有 ID 被明确清空、确实不存在或名称配对失效时才按 `codexThreadName + codexCwd` 查找/创建；多个同名同目录任务自动绑定最后更新时间唯一最新者。保存 ID 指向已归档任务时必须先恢复或重选，不会自动创建替代任务。
 5. 检查 `agent-packets.jsonl`、`gateway-status.json` 和 Manager 日志，区分“路由未命中”“Desktop IPC 未就绪”“任务 owner 未加载”和“任务 ID/cwd 失效”。
 6. 若错误含 `no-client-found`，RabiRoute 会用 `codex://threads/<id>` 打开目标任务并短暂重试；仍失败时不会切换到后台 Runtime。
 
@@ -99,7 +99,7 @@ npm run check:config
 
 - `codexThreadId` 是否仍存在；有效 ID 是稳定身份，不要求 SQLite 索引标题与 Desktop 显示名同步。
 - `codexCwd` 是否已经移动、指向另一个项目，或含有无法规范化的路径差异。
-- 任务是否已经归档、删除，或来自另一个账号 / `CODEX_HOME`。
+- 任务是否已经归档、删除，或来自另一个账号 / `CODEX_HOME`；已归档固定任务会返回明确错误且阻止新建，应先在 Desktop 恢复它或重新选择。
 - 需要改绑时应从下拉选择另一任务，或输入新名称让前端明确清空旧 ID；不要手工把名称写入 ID 字段。
 
 ## Agent 回合里没有 `codex_app__*` 线程工具

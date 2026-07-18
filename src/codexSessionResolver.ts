@@ -11,12 +11,14 @@ export type CodexSessionThread = {
   title: string;
   updatedAt: string;
   cwd?: string;
+  archived?: boolean;
 };
 
 export type CodexSessionResolution<TThread extends CodexSessionThread> =
   | { kind: "id" | "name" | "created"; thread: TThread }
   | { kind: "missing" }
   | { kind: "ambiguous"; candidates: TThread[] }
+  | { kind: "archived"; thread: TThread }
   | { kind: "workspace-mismatch"; thread: TThread };
 
 export type CodexSessionResolverDependencies<TThread extends CodexSessionThread> = {
@@ -114,6 +116,10 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
       if (exact.cwd && !sameCodexWorkspace(exact.cwd, params.cwd)) {
         return { kind: "workspace-mismatch", thread: exact };
       }
+      // An archived persisted binding still exists. Treating it as absent and
+      // creating a replacement silently forks the user's visible task history.
+      // Keep the binding stable and require an explicit restore or selection.
+      if (exact.archived) return { kind: "archived", thread: exact };
       return { kind: "id", thread: exact };
     }
   }
@@ -158,6 +164,9 @@ export async function resolveAndDeliverCodexSession<TThread extends CodexSession
   }
   if (resolution.kind === "workspace-mismatch") {
     throw new Error(`Codex Desktop task belongs to another workspace: ${resolution.thread.cwd || "unknown"}`);
+  }
+  if (resolution.kind === "archived") {
+    throw new Error(`Codex Desktop task is archived; restore or select it before delivery: ${params.title}`);
   }
   if (resolution.kind === "missing") {
     throw new Error(`Codex Desktop task could not be resolved: ${params.title}`);

@@ -104,6 +104,22 @@ test("Desktop thread discovery uses exact id while displaying title and latest t
   assert.equal(result[1]?.firstUserMessage, "");
 });
 
+test("Desktop exact task metadata preserves archived state without listing archived tasks", () => {
+  const rows = [{
+    id: "019f0000-0000-7000-8000-000000000045",
+    title: "已归档的固定任务",
+    cwd: "C:\\Work\\RabiRoute",
+    rollout_path: "archived.jsonl",
+    updated_at_ms: 3_000,
+    archived: 1
+  }];
+
+  assert.deepEqual(listCodexDesktopThreadsFromRowsForTest(rows, { limit: 10 }), []);
+  const exact = listCodexDesktopThreadsFromRowsForTest(rows, { limit: 1, includeArchived: true })[0];
+  assert.equal(exact.id, rows[0].id);
+  assert.equal(exact.archived, true);
+});
+
 test("Desktop thread discovery supports pages beyond the first 100 tasks", () => {
   const rows = Array.from({ length: 205 }, (_, index) => ({
     id: `thread-${index}`,

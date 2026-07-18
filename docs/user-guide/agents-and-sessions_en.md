@@ -63,7 +63,7 @@ While the ID and workspace remain valid, these changes do not create a task:
 - a completed task goal;
 - a rescan that observes the new title.
 
-If the task was deleted, archived, moved, or belongs to another account, select a valid task and save again.
+If the fixed target is archived, RabiRoute blocks delivery and replacement creation; restore it in Desktop or select another task. If it was deleted, moved, or belongs to another account, select a valid task and save again.
 
 ## Create a task
 

@@ -18,7 +18,7 @@ Not every handler has projects, persistent sessions, tools, streaming, or cancel
 
 Every adapter must satisfy these rules before advanced features matter:
 
-1. Reuse the bound session only when the saved visible name and immutable ID still point to the same owner record in the configured workspace.
+1. Reuse the bound session only when the saved visible name and immutable ID still point to the same unarchived owner record in the configured workspace. If the saved ID points to an archived task, block creation and require an explicit restore or reselection instead of treating it as absent.
 2. When the ID is missing, invalid, or no longer paired with the saved name, search by the Manager-saved name plus normalized workspace. Rebind the unique most recently updated match when one or more candidates exist, create once only when there is no match, and ask the user only when the maximum update time is tied or unusable.
 3. Deliver to the real owner that provides the user-visible task and tool context. Sharing a database, title, or session ID with a second Runtime is not unified ownership.
 4. Saving settings completes the binding transaction and persists visible name, full session ID, and workspace together.

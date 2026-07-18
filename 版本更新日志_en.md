@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.14 - 2026-07-18
+
+### Codex Desktop archived-binding guard
+
+- Fixed a persisted Codex Desktop task being mistaken for “missing” after archival, which previously allowed Rabi to create a same-name replacement. Exact-ID reads now preserve archived state and require restoring the original task or selecting another one.
+- An archived persisted binding returns a conflict and stops delivery before name lookup or creation. Normal pickers and name lookup still show only unarchived tasks, and idempotent creation remains limited to zero matches.
+- Added Manager API and Desktop-state regression coverage and synchronized the bilingual integration standard, acceptance contract, troubleshooting guide, and Agent-creation Skill. Archiving a task can no longer silently change Rabi's delivery target.
+
 ## 0.1.13 - 2026-07-18
 
 ### Codex Desktop same-name task continuation

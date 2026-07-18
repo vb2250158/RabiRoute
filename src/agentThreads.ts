@@ -38,6 +38,7 @@ export type AgentThreadSummary = {
   title: string;
   updatedAt: string;
   cwd?: string;
+  archived?: boolean;
 };
 
 export type AgentThreadDriver = {
@@ -194,7 +195,8 @@ function threadSummary(value: unknown): AgentThreadSummary | null {
     id: item.id,
     title: item.title,
     updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : new Date(0).toISOString(),
-    cwd: typeof item.cwd === "string" ? item.cwd : undefined
+    cwd: typeof item.cwd === "string" ? item.cwd : undefined,
+    archived: item.archived === true
   };
 }
 
@@ -320,6 +322,17 @@ export async function handleAgentThreadRequest(
           resolution: "ambiguous",
           message: `存在 ${resolution.candidates.length} 个同名 Codex Desktop 任务，请按最后会话时间选择。`,
           candidates: resolution.candidates
+        }
+      };
+    }
+    if (resolution.kind === "archived") {
+      return {
+        statusCode: 409,
+        data: {
+          action,
+          resolution: "archived",
+          message: `已绑定的 Codex Desktop 任务已归档，请恢复该任务或重新选择：${title}`,
+          thread: resolution.thread
         }
       };
     }

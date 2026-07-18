@@ -16,6 +16,7 @@ export type CodexDesktopThread = {
   updatedAt: string;
   rolloutPath: string;
   firstUserMessage: string;
+  archived?: boolean;
 };
 
 type CodexDesktopThreadRow = {
@@ -88,7 +89,7 @@ function rowUpdatedAtMs(row: CodexDesktopThreadRow): number {
 
 export function listCodexDesktopThreadsFromRowsForTest(
   rows: CodexDesktopThreadRow[],
-  options: { query?: string; limit?: number; offset?: number; allowedWorkspaces?: string[] } = {}
+  options: { query?: string; limit?: number; offset?: number; allowedWorkspaces?: string[]; includeArchived?: boolean } = {}
 ): CodexDesktopThread[] {
   const query = options.query?.trim().toLocaleLowerCase() ?? "";
   const allowed = new Set((options.allowedWorkspaces ?? []).filter(Boolean).map(canonicalCodexWorkspacePath));
@@ -102,7 +103,8 @@ export function listCodexDesktopThreadsFromRowsForTest(
     const cwd = nonEmptyString(row.cwd);
     const rolloutPath = nonEmptyString(row.rollout_path);
     const updatedAtMs = rowUpdatedAtMs(row);
-    if (!id || Number(row.archived ?? 0) !== 0) continue;
+    const archived = Number(row.archived ?? 0) !== 0;
+    if (!id || (archived && !options.includeArchived)) continue;
     if (query && !title.toLocaleLowerCase().includes(query)) continue;
     if (allowed.size > 0 && (!cwd || !allowed.has(canonicalCodexWorkspacePath(cwd)))) continue;
 
@@ -112,7 +114,8 @@ export function listCodexDesktopThreadsFromRowsForTest(
       cwd,
       rolloutPath,
       firstUserMessage: nonEmptyString(row.first_user_message),
-      updatedAt: new Date(updatedAtMs).toISOString()
+      updatedAt: new Date(updatedAtMs).toISOString(),
+      archived
     };
     const current = byId.get(id);
     if (!current || Date.parse(candidate.updatedAt) > Date.parse(current.updatedAt)) byId.set(id, candidate);
@@ -181,7 +184,7 @@ export function readCodexDesktopThread(threadId: string, databasePath = findCode
              recency_at, recency_at_ms, archived, first_user_message
       FROM threads WHERE id = ? LIMIT 1
     `).get(threadId) as CodexDesktopThreadRow | undefined;
-    return row ? listCodexDesktopThreadsFromRowsForTest([row], { limit: 1 })[0] ?? null : null;
+    return row ? listCodexDesktopThreadsFromRowsForTest([row], { limit: 1, includeArchived: true })[0] ?? null : null;
   } finally {
     database.close();
   }

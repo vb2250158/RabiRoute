@@ -184,7 +184,7 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 ## Release test matrix
 
 - Independent cold start and shutdown.
-- Valid ID reuse, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
+- Valid ID reuse, archived-binding blocking, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
 - Agent-side and Rabi-side rename rebinding.
 - Delayed index and concurrent single-flight creation.
 - Full pagination and bounded scan count.

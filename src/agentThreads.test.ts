@@ -215,7 +215,7 @@ test("Agent task resolver binds the most recently updated same-name task", async
   assert.equal((result.data.thread as { id: string }).id, "019f0000-0000-7000-8000-000000000013");
 });
 
-test("Agent task resolver replaces an archived binding with the latest unarchived same-name task", async () => {
+test("Agent task resolver ignores archived duplicates during name lookup and binds the latest unarchived task", async () => {
   const title = "MonsterGirl / 伊莉娅 策划美术";
   const cwd = process.cwd();
   const archivedId = "019f0000-0000-7000-8000-000000000041";
@@ -247,7 +247,6 @@ test("Agent task resolver replaces an archived binding with the latest unarchive
 
   const result = await handleAgentThreadRequest({
     action: "resolve",
-    threadId: archivedId,
     title,
     cwd,
     createIfMissing: true
@@ -259,6 +258,42 @@ test("Agent task resolver replaces an archived binding with the latest unarchive
   assert.equal(result.statusCode, 200);
   assert.equal(result.data.resolution, "name");
   assert.equal((result.data.thread as { id: string }).id, latestId);
+  assert.equal(createCount, 0);
+});
+
+test("Agent task resolver never creates a replacement for an archived saved binding", async () => {
+  const archived = {
+    id: "019f0000-0000-7000-8000-000000000044",
+    title: "已归档的固定任务",
+    cwd: process.cwd(),
+    updatedAt: "2026-07-18T04:00:00Z",
+    archived: true
+  };
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async () => archived,
+    create: async () => {
+      createCount += 1;
+      throw new Error("must not create");
+    },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "resolve",
+    threadId: archived.id,
+    title: archived.title,
+    cwd: archived.cwd,
+    createIfMissing: true
+  }, {
+    allowedWorkspaces: [archived.cwd],
+    defaultWorkspace: archived.cwd
+  }, driver);
+
+  assert.equal(result.statusCode, 409);
+  assert.equal(result.data.resolution, "archived");
+  assert.equal((result.data.thread as { id: string }).id, archived.id);
   assert.equal(createCount, 0);
 });
 

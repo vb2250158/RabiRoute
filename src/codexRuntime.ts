@@ -38,6 +38,7 @@ export type CodexThreadSummary = {
   title: string;
   updatedAt: string;
   cwd?: string;
+  archived?: boolean;
 };
 
 export type CodexThreadCreateParams = {
@@ -228,7 +229,7 @@ async function deliverDesktopMessage(params: {
 }
 
 function asSummary(thread: CodexDesktopThread): CodexThreadSummary {
-  return { id: thread.id, title: thread.title, updatedAt: thread.updatedAt, cwd: thread.cwd };
+  return { id: thread.id, title: thread.title, updatedAt: thread.updatedAt, cwd: thread.cwd, archived: thread.archived };
 }
 
 export async function listCodexThreads(options: {
@@ -248,6 +249,7 @@ export async function readCodexThread(threadId: string): Promise<unknown> {
     title: thread.title,
     cwd: thread.cwd,
     updatedAt: thread.updatedAt,
+    archived: thread.archived,
     source: "Codex Desktop state",
     rolloutPath: thread.rolloutPath
   };
@@ -420,6 +422,9 @@ async function resolveMonitorThread(createIfMissing: boolean): Promise<CodexDesk
   }
   if (resolution.kind === "workspace-mismatch") {
     throw new Error(`Codex Desktop task belongs to another workspace. Task: ${resolution.thread.cwd}; configured: ${config.codexCwd}`);
+  }
+  if (resolution.kind === "archived") {
+    throw new Error(`Codex Desktop task is archived; restore it or select another task in RibiWebGUI: ${config.codexThreadName}`);
   }
   if (resolution.kind === "missing") return null;
   return resolution.thread;

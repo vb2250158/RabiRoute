@@ -10,7 +10,7 @@ This is the release gate for the Codex/ChatGPT Desktop adapter. Success does not
 
 ## Non-negotiable product contract
 
-1. Deliver to the saved task only when the saved visible name, full task ID, and workspace still identify the same Desktop owner record.
+1. Deliver to the saved task only when the saved visible name, full task ID, and workspace identify the same unarchived Desktop owner record. An archived saved binding must return an actionable restore/reselect error and must never create a replacement task.
 2. If the ID is empty, invalid, or no longer paired with the saved name, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
 3. A Desktop-side or Rabi-side rename invalidates the old name-ID pair and must trigger the same safe rebinding flow; it must never keep delivering to a stale target.
 4. Real prompts go only to the current Desktop task owner. RabiRoute must not resume the same ID in another Runtime or silently switch execution paths.
@@ -84,6 +84,7 @@ Do not deliver after a failed save. Do not roll back a successfully created task
 | Scenario | Expected result |
 | --- | --- |
 | Valid name + ID + workspace | Direct delivery; task count unchanged |
+| Saved ID points to an archived task | Block and require restore/reselection; task count unchanged |
 | Deleted/invalid ID, unique name match | Rebind; task count unchanged |
 | No name match | Create one task, persist ID, deliver to it |
 | Desktop index is briefly delayed | Wait for the same ID; do not create a duplicate |

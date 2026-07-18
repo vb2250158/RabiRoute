@@ -138,6 +138,34 @@ test("changing the Rabi name rebinds by that name instead of delivering to the s
   assert.deepEqual(delivered, [renamedTarget.id]);
 });
 
+test("an archived saved binding blocks delivery and never creates a replacement", async () => {
+  const archived = {
+    id: "019f0000-0000-7000-8000-000000000046",
+    title: "MonsterGirl / 伊莉娅 策划美术",
+    cwd: process.cwd(),
+    updatedAt: "2026-07-18T04:00:00Z",
+    archived: true
+  };
+  let createCount = 0;
+  let deliverCount = 0;
+
+  await assert.rejects(resolveAndDeliverCodexSession({
+    threadId: archived.id,
+    title: archived.title,
+    cwd: archived.cwd,
+    prompt: "不得创建替代任务"
+  }, {
+    scope: {},
+    read: async () => archived,
+    list: async () => [],
+    create: async () => { createCount += 1; return archived; },
+    deliver: async () => { deliverCount += 1; }
+  }), /archived/);
+
+  assert.equal(createCount, 0);
+  assert.equal(deliverCount, 0);
+});
+
 test("multiple same-name Desktop tasks rebind to the most recently updated task without creating", async () => {
   const older = {
     id: "019f0000-0000-7000-8000-000000000037",
