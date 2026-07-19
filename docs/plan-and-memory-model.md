@@ -116,9 +116,16 @@ completedArchiveAfterHours = 72
   "status": "进行中",
   "priority": "medium",
   "kind": "documentation",
+  "currentStepId": "confirm-contract",
   "currentStep": "确认机制说明口径",
   "nextAction": "根据确认结果更新示例和读取层",
   "waitingFor": "",
+  "blockedBy": "",
+  "steps": [
+    { "id": "inspect-current", "title": "检查当前模型与界面", "status": "已完成" },
+    { "id": "confirm-contract", "title": "确认结构化步骤契约", "status": "进行中" },
+    { "id": "update-readers", "title": "更新接口、读取层和文档", "status": "未开始" }
+  ],
   "project": {
     "name": "RabiRoute",
     "path": "C:/Path/To/RabiRoute"
@@ -140,6 +147,8 @@ completedArchiveAfterHours = 72
 
 `focus` 是单条计划的唯一主题声明。新增计划必须显式填写，且只能是一行；一个计划只推进一个主题，遇到无关目标或独立阻塞时应拆成另一条计划，不能继续堆进 `currentStep`。
 
+`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。步骤可带 `detail`、`waitingFor`、`blockedBy` 和 `completedAt`；`waitingFor` 说明正在等谁或什么，`blockedBy` 说明为什么无法继续，并优先写到实际受阻的当前步骤上。`currentStep` 保留为当前进展说明，不再承担步骤列表或步骤身份。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用。
+
 ## 聚焦与长度校验
 
 计划、近期记忆和沉淀记忆的写入都经过后端校验。新增计划、近期记忆或沉淀结果必须显式提供单行 `focus`；`keywords` 至少一个。超出字段长度、关键词数量或总文本长度时，API 返回 `400`，要求 Agent 拆成更聚焦的条目。读取旧文件保持兼容，现有违规条目可通过校验接口发现：
@@ -157,8 +166,14 @@ GET /api/roles/:roleId/knowledge-validation
       "titleChars": 80,
       "focusChars": 80,
       "currentStepChars": 1200,
+      "stepTitleChars": 120,
+      "stepDetailChars": 600,
+      "stepWaitingForChars": 300,
+      "stepBlockedByChars": 300,
+      "maxSteps": 100,
       "nextActionChars": 600,
       "waitingForChars": 300,
+      "blockedByChars": 600,
       "sourceSummaryChars": 240,
       "keywordChars": 32,
       "maxKeywords": 24,
@@ -460,7 +475,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 - 新计划先设为 `未开始`。
 - 已确认要推进或当前正在关注时设为 `进行中`。
-- 等用户或外部系统时仍保持 `进行中`，并写清楚 `waitingFor` 或 `nextAction`。
+- 等用户或外部系统时仍保持 `进行中`，用 `waitingFor` 写清等待对象；如果已无法继续，用当前步骤的 `blockedBy` 写清阻塞原因。
 - 完成后设为 `已完成`，写入 `completedAt`。
 - `已完成` 距离最后一次 `updatedAt` 超过当前固定 72 小时后，由角色知识快照设为 `已归档`，写入 `archivedAt`，并移动到 `archive/`。
 - 用户手动要求不再展示时，也可以直接设为 `已归档`。

@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import { createHeartbeatAdapter } from "./adapters/heartbeatAdapter.js";
 import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
 import { createRabiLinkAdapter } from "./adapters/rabilinkAdapter.js";
+import { createWearableAdapter } from "./adapters/wearableAdapter.js";
 import { createWeComAdapter } from "./adapters/wecomAdapter.js";
 import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
@@ -12,6 +13,13 @@ import { triggerManualRule } from "./manualTrigger.js";
 import { forwardMessageAndWait, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
 import { appendVoiceTranscriptEventForAdapter, type RolePanelMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
+import { rolePanelDeliveryExitCode } from "./rolePanelDelivery.js";
+import {
+  buildWearableHealthAlertRecord,
+  wearableHealthAlertTemplateValues,
+  type WearableHealthAlertDeliveryContext
+} from "./wearableHealthAlertDelivery.js";
+import type { WearableHealthAlert } from "./wearableHealth.js";
 
 type GatewayStatus = {
   messageAdapter?: {
@@ -48,8 +56,50 @@ function parseReplayRouteKind(value: string | undefined): ForwardRouteKind | und
     || value === "role_panel_message"
     || value === "voice_transcript"
     || value === "rabilink"
+    || value === "wearable_health_alert"
     ? value
     : undefined;
+}
+
+async function readStandardInputJson<T>(): Promise<T> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
+}
+
+type WearableHealthAlertCliPayload = {
+  alert: WearableHealthAlert;
+  context: WearableHealthAlertDeliveryContext;
+};
+
+if (process.argv.includes("--wearable-health-alert-stdin")) {
+  try {
+    const payload = await readStandardInputJson<WearableHealthAlertCliPayload>();
+    if (!payload?.alert?.id || !payload?.context?.agentRoleId) {
+      throw new Error("Wearable health alert payload is incomplete.");
+    }
+    const result = await forwardMessageAndWait(
+      "wearable_health_alert",
+      buildWearableHealthAlertRecord(payload.alert, payload.context),
+      wearableHealthAlertTemplateValues(payload.alert)
+    );
+    console.log(`RABIROUTE_WEARABLE_DELIVERY_RESULT:${JSON.stringify({
+      status: result.status,
+      matchedRuleCount: result.matchedRuleCount,
+      sentPacketCount: result.sentPacketCount,
+      reason: result.reason,
+      adapterOutcomes: result.adapterOutcomes.map((outcome) => ({
+        adapter: outcome.adapter,
+        status: outcome.status
+      }))
+    })}`);
+    process.exit(result.status === "failed" ? 1 : 0);
+  } catch (error) {
+    console.error(`RabiRoute wearable alert delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
 
 const deliveryReplayArg = process.argv.find((arg) => arg.startsWith("--delivery-replay="));
@@ -137,7 +187,7 @@ if (rolePanelMessageArg) {
     time: Math.floor(Date.now() / 1000),
     rawMessage: text,
     messageId,
-    senderName: roleId ? `${roleId} 角色面板` : "角色面板",
+    senderName: "本地用户",
     roleId,
     gatewayId,
     routeProfileId,
@@ -147,15 +197,16 @@ if (rolePanelMessageArg) {
   try {
     const result = await forwardMessageAndWait("role_panel_message", record);
     const summary = deliverySummary(result);
-    if (result.status === "failed") {
+    const exitCode = rolePanelDeliveryExitCode(result.status);
+    if (exitCode === 1) {
       console.error(`RabiRoute role panel message failed: ${messageId} ${summary}`);
       process.exit(1);
     }
-    if (result.status === "missed" || result.status === "routed" || result.status === "skipped") {
-      console.warn(`RabiRoute role panel message not delivered: ${messageId} ${summary}`);
-    } else {
-      console.log(`RabiRoute role panel message delivered: ${messageId} ${summary}`);
+    if (exitCode === 2) {
+      console.error(`RabiRoute role panel message not delivered: ${messageId} ${summary}`);
+      process.exit(2);
     }
+    console.log(`RabiRoute role panel message delivered: ${messageId} ${summary}`);
     process.exit(0);
   } catch (error) {
     console.error(`RabiRoute role panel message failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -256,7 +307,7 @@ function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdap
   }, null, 2), "utf8");
 }
 
-function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "rabilink" | "webhook">): MessageAdapter {
+function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook">): MessageAdapter {
   return {
     type,
     start() {
@@ -295,6 +346,9 @@ function createMessageAdapter(): MessageAdapter {
   if (config.messageAdapterType === "rabilink") {
     return createRabiLinkAdapter();
   }
+  if (config.messageAdapterType === "wearable") {
+    return createWearableAdapter();
+  }
   if (config.messageAdapterType === "webhook") {
     return createWebhookAdapter();
   }
@@ -320,6 +374,9 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   }
   if (type === "rabilink") {
     return createRabiLinkAdapter();
+  }
+  if (type === "wearable") {
+    return createWearableAdapter();
   }
   if (type === "webhook") {
     return createWebhookAdapter();

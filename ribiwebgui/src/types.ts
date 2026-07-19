@@ -162,6 +162,7 @@ export type MetaPayload = {
     enabled?: boolean;
     url?: string;
     token?: string;
+    tokenConfigured?: boolean;
     deviceId?: string;
     claimWaitMs?: number;
     replyIdleTimeoutMs?: number;

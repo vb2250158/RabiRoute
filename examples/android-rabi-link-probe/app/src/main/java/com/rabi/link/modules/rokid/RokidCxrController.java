@@ -11,13 +11,13 @@ import com.rokid.cxr.link.utils.CxrDefs;
 import com.rokid.cxr.link.utils.GlassInfo;
 
 
-final class RokidCxrController {
+public final class RokidCxrController {
     static final String GLASS_ASR_PACKAGE = "com.rabi.link.glass";
     static final String GLASS_ASR_ENTRY = GLASS_ASR_PACKAGE + ".GlassAudioClientActivity";
     static final String NATIVE_VOICE_CLIENT_KEY = "rabi_native_voice_client";
     static final String NATIVE_VOICE_REPLY_KEY = "rabi_native_voice_reply";
 
-    interface Listener {
+    public interface Listener {
         void onLog(String line);
 
         void onCxrConnectionChanged(boolean connected);
@@ -41,14 +41,14 @@ final class RokidCxrController {
     private final RokidAudioCapture audioCapture = new RokidAudioCapture();
     private String sessionType = "";
 
-    RokidCxrController(Context context, Listener listener) {
+    public RokidCxrController(Context context, Listener listener) {
         this.cxrLink = new CXRLink(context.getApplicationContext());
         this.listener = listener;
         RokidCxrCallbacks.install(cxrLink, linkState, audioCapture, listener);
         installCustomCmdCallback();
     }
 
-    void disconnect() {
+    public void disconnect() {
         cxrLink.disconnect();
     }
 
@@ -129,7 +129,7 @@ final class RokidCxrController {
         return connected;
     }
 
-    boolean connectGlassAppSession(String token) {
+    public boolean connectGlassAppSession(String token) {
         prepareSessionSwitch();
         boolean configured = cxrLink.configCXRSession(
                 new CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, GLASS_ASR_PACKAGE),
@@ -172,7 +172,7 @@ final class RokidCxrController {
         cxrLink.appUploadAndInstall(apkPath, glassAppCallback());
     }
 
-    void startGlassAsrApp() {
+    public void startGlassAsrApp() {
         closeCustomViewBeforeGlassAppStart();
         log("appStart entry=" + GLASS_ASR_ENTRY);
         cxrLink.appStart(GLASS_ASR_ENTRY, glassAppCallback());
@@ -192,7 +192,7 @@ final class RokidCxrController {
         return result != null && result == 0;
     }
 
-    void getGlassDeviceInfo() {
+    public void getGlassDeviceInfo() {
         cxrLink.getGlassDeviceInfo();
         log("已请求 getGlassDeviceInfo。链路状态 " + linkState.summary());
     }

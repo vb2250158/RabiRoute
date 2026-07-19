@@ -70,6 +70,7 @@ const speechOpenApiFileCandidates = [
 const sensitiveEventKeyPattern = /token|authorization|cookie|password|secret|text|message|content|raw|headers|body|response|reply/i;
 const portablePresentationValues = new Set(["text", "tts", "notification", "haptic"]);
 const portablePriorityValues = new Set(["quiet", "normal", "urgent"]);
+const portableHealthMetricValues = new Set(["heart_rate", "sleep_session", "sleep_stage", "sleep_state"]);
 const speechProxyPrefix = "/api/rabilink/speech";
 const speechProxyPaths = new Map([
   ["GET /health", "/health"],
@@ -1243,14 +1244,95 @@ function portableEnvelopeForResponse(message) {
     targetDeviceIds: persistedPortableStringList(message?.targetDeviceIds),
     targetDeviceKinds: persistedPortableStringList(message?.targetDeviceKinds, { lowercase: true }),
     presentation: persistedPortableStringList(message?.presentation, { lowercase: true, allowed: portablePresentationValues }),
-    priority: portablePriorityValues.has(priority) ? priority : "normal"
+    priority: portablePriorityValues.has(priority) ? priority : "normal",
+    routeProfileId: stringValue(message?.routeProfileId).slice(0, 160),
+    attachments: portableAttachments(message?.attachments)
   };
+}
+
+function portableAttachments(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 8).map((item) => {
+    if (!item || typeof item !== "object") return null;
+    const downloadPath = stringValue(item.downloadPath);
+    if (!/^\/api\/rabilink\/devices\/media\/[^/?]+/.test(downloadPath)) return null;
+    const kind = ["image", "video", "audio", "file"].includes(stringValue(item.kind)) ? stringValue(item.kind) : "file";
+    return {
+      id: stringValue(item.id).slice(0, 160), kind,
+      fileName: safeMediaName(item.fileName || "attachment.bin"),
+      contentType: stringValue(item.contentType || "application/octet-stream").slice(0, 160),
+      size: Math.max(0, Number(item.size || 0)), downloadPath
+    };
+  }).filter(Boolean);
 }
 
 function portableDeviceIdentity(url, fallbackKind = "") {
   return {
     deviceId: stringValue(url.searchParams.get("deviceId")),
     deviceKind: portableDeviceKind(url.searchParams.get("deviceKind"), fallbackKind)
+  };
+}
+
+function portableHealthNumber(value, minimum, maximum) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return undefined;
+  return Math.min(maximum, Math.max(minimum, number));
+}
+
+function portableHealthPolicy(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const policy = {};
+  if (typeof value.enabled === "boolean") policy.enabled = value.enabled;
+  if (value.heartRateHighBpm != null) policy.heartRateHighBpm = portableHealthNumber(value.heartRateHighBpm, 40, 240);
+  if (value.heartRateLowBpm != null) policy.heartRateLowBpm = portableHealthNumber(value.heartRateLowBpm, 0, 150);
+  if (value.heartRateAlertCooldownMinutes != null) policy.heartRateAlertCooldownMinutes = portableHealthNumber(value.heartRateAlertCooldownMinutes, 1, 1440);
+  if (typeof value.sleepStateAlertEnabled === "boolean") policy.sleepStateAlertEnabled = value.sleepStateAlertEnabled;
+  if (value.heartRateStaleAfterMinutes != null) policy.heartRateStaleAfterMinutes = portableHealthNumber(value.heartRateStaleAfterMinutes, 1, 1440);
+  if (value.sleepStateStaleAfterMinutes != null) policy.sleepStateStaleAfterMinutes = portableHealthNumber(value.sleepStateStaleAfterMinutes, 1, 2880);
+  return Object.fromEntries(Object.entries(policy).filter(([, item]) => item !== undefined));
+}
+
+function portableHealthSample(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const metric = stringValue(value.metric || value.type || value.kind).toLowerCase().replace(/[.\s-]+/g, "_");
+  if (!portableHealthMetricValues.has(metric)) return null;
+  const sample = {
+    id: stringValue(value.id || value.sampleId).slice(0, 160),
+    metric,
+    recordedAt: stringValue(value.recordedAt || value.time || value.timestamp).slice(0, 64),
+    startAt: stringValue(value.startAt || value.startTime || value.time || value.timestamp).slice(0, 64),
+    endAt: stringValue(value.endAt || value.endTime).slice(0, 64),
+    source: stringValue(value.source).slice(0, 64)
+  };
+  if (metric === "heart_rate") {
+    const bpm = portableHealthNumber(value.value ?? value.bpm ?? value.heartRateBpm, 1, 300);
+    if (bpm === undefined) return null;
+    sample.value = Math.round(bpm);
+    sample.unit = "bpm";
+  }
+  if (metric === "sleep_state" || metric === "sleep_session") {
+    const state = stringValue(value.sleepState || value.state).toLowerCase();
+    if (["sleeping", "awake", "unknown"].includes(state)) sample.sleepState = state;
+  }
+  if (metric === "sleep_stage") {
+    const stage = stringValue(value.sleepStage || value.stage).toLowerCase();
+    sample.sleepStage = ["awake", "light", "deep", "rem", "unknown"].includes(stage) ? stage : "unknown";
+  }
+  return Object.fromEntries(Object.entries(sample).filter(([, item]) => item !== "" && item !== undefined));
+}
+
+function portableHealthPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const samples = (Array.isArray(value.samples) ? value.samples : [])
+    .slice(0, 1000)
+    .map(portableHealthSample)
+    .filter(Boolean);
+  if (!samples.length) return undefined;
+  const policy = portableHealthPolicy(value.policy);
+  return {
+    schemaVersion: 1,
+    samples,
+    ...(policy && Object.keys(policy).length ? { policy } : {})
   };
 }
 
@@ -1317,6 +1399,7 @@ function taskForResponse(task) {
     sourceDeviceKind: stringValue(input.sourceDeviceKind || input.deviceKind).toLowerCase(),
     transport: stringValue(input.transport || input.sourceTransport).toLowerCase(),
     attachments: Array.isArray(input.attachments) ? input.attachments.slice(0, 8) : [],
+    health: portableHealthPayload(input.health),
     messageCount: task.messages.length,
     nextMessageSeq: task.nextMessageSeq,
     replyText: task.replyText || "",
@@ -1358,9 +1441,12 @@ async function handleDeviceMediaUpload(req, url, res) {
   const auth = authorizeRabiLinkRequest(req, url, {});
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const contentType = stringValue(req.headers["content-type"] || "application/octet-stream").split(";")[0].toLowerCase();
-  const allowed = /^(image\/(jpeg|png|webp)|video\/(mp4|webm)|audio\/(wav|x-wav|mpeg)|application\/octet-stream)$/.test(contentType);
-  if (!allowed) return sendRabiLinkError(res, 415, "Unsupported glasses media type.");
-  const raw = await readRawBody(req, { maxBytes: deviceMediaMaxBytes, label: "Glasses media" });
+  // Attachments are ordinary chat files, not only glasses camera media. Keep the
+  // MIME value syntactically safe while allowing documents, archives and custom
+  // application types; authorization, size, TTL and app isolation remain enforced.
+  const allowed = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(contentType);
+  if (!allowed) return sendRabiLinkError(res, 415, "Unsupported attachment content type.");
+  const raw = await readRawBody(req, { maxBytes: deviceMediaMaxBytes, label: "Mobile attachment" });
   if (!raw.length) return sendRabiLinkError(res, 400, "Media body is empty.");
   const mediaId = `rbm_${randomUUID()}`;
   const fileName = safeMediaName(url.searchParams.get("fileName") || `media-${Date.now()}`);
@@ -1375,7 +1461,9 @@ async function handleDeviceMediaUpload(req, url, res) {
       fileName,
       contentType,
       size: raw.length,
-      kind: contentType.startsWith("image/") ? "image" : contentType.startsWith("video/") ? "video" : "audio",
+      kind: contentType.startsWith("image/") ? "image"
+        : contentType.startsWith("video/") ? "video"
+          : contentType.startsWith("audio/") ? "audio" : "file",
       downloadPath: `/api/rabilink/devices/media/${encodeURIComponent(mediaId)}?fileName=${encodeURIComponent(fileName)}`
     }
   });
@@ -2640,7 +2728,24 @@ function claimDeviceToken(body) {
 function handlePortableInput(req, url, res, body) {
   const sourceDeviceKind = portableDeviceKind(body?.sourceDeviceKind || body?.deviceKind, "other");
   const transport = portableTransport(body?.transport || body?.sourceTransport, "direct-network");
-  return handleRokidInput(req, url, res, {
+  const health = portableHealthPayload(body?.health);
+  if (health) {
+    return handleRokidInput(req, url, res, {
+      text: stringValue(body?.text || "Wearable health observation"),
+      type: "wearable.health",
+      deliveryMode: "observe",
+      source: "rabilink-wearable",
+      sourceDeviceId: stringValue(body?.sourceDeviceId || body?.deviceId),
+      sourceDeviceName: stringValue(body?.sourceDeviceName || body?.deviceName),
+      sourceDeviceKind,
+      transport,
+      clientMessageId: stringValue(body?.clientMessageId),
+      capturedAt: portableHealthNumber(body?.capturedAt, 0, Number.MAX_SAFE_INTEGER),
+      routeProfileId: stringValue(body?.routeProfileId).slice(0, 160),
+      health
+    });
+  }
+  const input = {
     ...body,
     type: stringValue(body?.type || "rabilink.observation"),
     deliveryMode: stringValue(body?.deliveryMode || "observe"),
@@ -2649,7 +2754,8 @@ function handlePortableInput(req, url, res, body) {
     sourceDeviceName: stringValue(body?.sourceDeviceName || body?.deviceName),
     sourceDeviceKind,
     transport
-  });
+  };
+  return handleRokidInput(req, url, res, input);
 }
 
 function handleWorkerMessageAppend(req, url, res, body) {
@@ -2664,8 +2770,9 @@ function handleWorkerMessageAppend(req, url, res, body) {
   let deduplicatedCount = 0;
   for (const [index, candidate] of candidates.slice(0, 50).entries()) {
     const text = extractText(candidate);
-    if (!text) continue;
     const portableEnvelope = portableTargetEnvelope(candidate, body);
+    const attachments = portableAttachments(candidate?.attachments === undefined ? body?.attachments : candidate.attachments);
+    if (!text && attachments.length === 0) continue;
     const proactive = candidate?.proactive === undefined
       ? body?.proactive !== false
       : candidate.proactive !== false;
@@ -2685,7 +2792,7 @@ function handleWorkerMessageAppend(req, url, res, body) {
         && existing.taskId === taskId
         && existing.proactive === proactive
         && existing.final === final
-        && JSON.stringify(existingPortableEnvelope) === JSON.stringify(portableEnvelope);
+        && JSON.stringify(existingPortableEnvelope) === JSON.stringify({ ...portableEnvelope, routeProfileId: stringValue(candidate?.routeProfileId || body?.routeProfileId).slice(0, 160), attachments });
       if (!samePayload) {
         return sendJson(res, 409, {
           code: -1,
@@ -2712,6 +2819,8 @@ function handleWorkerMessageAppend(req, url, res, body) {
       status: proactive ? "proactive" : "reply",
       proactive,
       source: stringValue(candidate?.source || source),
+      routeProfileId: stringValue(candidate?.routeProfileId || body?.routeProfileId).slice(0, 160),
+      attachments,
       ...portableEnvelope
     };
     outboxMessages.push(message);
@@ -2719,7 +2828,7 @@ function handleWorkerMessageAppend(req, url, res, body) {
     accepted.push(message);
   }
   if (!accepted.length) {
-    return sendJson(res, 400, { code: -1, ok: false, message: "RabiLink outbound message text is empty." });
+    return sendJson(res, 400, { code: -1, ok: false, message: "RabiLink outbound message text and attachments are empty." });
   }
   if (created.length) {
     saveRelayRuntimeState();

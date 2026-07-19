@@ -82,6 +82,9 @@ export type VoiceTranscriptEventRecord = {
   transport?: string;
   sourceArea?: string;
   sessionId?: string;
+  /** Explicit mobile message-endpoint target; absent keeps rule-based fan-out. */
+  routeProfileId?: string;
+  configurationRequested?: boolean;
   startedAt?: string;
   endedAt?: string;
   durationSeconds?: number;
@@ -110,7 +113,7 @@ export type WeComMessageRecord = {
 export type AgentPacketRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wecom_message";
+  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message";
   text: string;
 };
 

@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -26,6 +26,7 @@
     "relay:rabilink:worker:check": "node --check scripts/rabilink-relay-cloudflare-worker.mjs && node --import tsx --test src/rabilinkRelayCloudflareWorker.test.ts",
     "relay:rabilink:device-logs:check": "node --test scripts/rabilink-device-log-store.test.mjs scripts/rabilink-relay-device-logs.test.mjs",
     "relay:rabilink:media:check": "node --check scripts/rabilink-relay-server.mjs && node --test scripts/rabilink-relay-device-media.test.mjs",
+    "check:rabilink:mobile": "node scripts/audit-rabi-mobile-endpoint.mjs && npm run relay:rabilink:media:check",
     "relay:rabilink:speech:check": "node --check scripts/rabilink-relay-server.mjs && node --test scripts/rabilink-proxy-request-queue.test.mjs && node --import tsx --test src/manager/rabiLinkRelayRuntime.test.ts",
     "relay:rabilink:worker:deploy": "npx wrangler deploy --config wrangler.rabilink-relay.toml",
     "send:onebot": "node scripts/send-onebot-message.mjs"

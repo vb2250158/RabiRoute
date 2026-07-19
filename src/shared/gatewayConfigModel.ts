@@ -30,7 +30,7 @@ export {
   type BuiltinPersonaRulePolicy
 } from "./personaRulePolicy.js";
 
-export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "webhook" | "wecom" | "disabled";
+export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "disabled";
 export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
 export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
@@ -240,7 +240,7 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "webhook", "wecom", "disabled"]);
+const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "disabled"]);
 const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
@@ -289,6 +289,7 @@ function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string
   if (adapter === "speech") return ["voice_transcript"];
   if (adapter === "fennenote" || adapter === "xiaoai" || adapter === "webhook") return ["voice_transcript"];
   if (adapter === "rabilink") return ["rabilink"];
+  if (adapter === "wearable") return ["wearable_health_alert"];
   if (adapter === "wecom") return ["wecom_message"];
   return [];
 }
@@ -301,6 +302,7 @@ function defaultRuleNameForMessageAdapter(adapter: MessageAdapterType): string {
   if (adapter === "fennenote") return "FenneNote 默认语音";
   if (adapter === "xiaoai") return "小爱默认语音";
   if (adapter === "rabilink") return "RabiLink 默认消息";
+  if (adapter === "wearable") return "智能手表/手环健康告警";
   if (adapter === "wecom") return "企业微信默认消息";
   if (adapter === "webhook") return "Webhook 默认消息";
   return "默认消息";

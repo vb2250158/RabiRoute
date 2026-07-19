@@ -283,13 +283,32 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
 
     try {
       const parsed = JSON.parse(fs.readFileSync(planPath, "utf8")) as Record<string, unknown>;
+      const stepLines = Array.isArray(parsed.steps)
+        ? parsed.steps.flatMap((rawStep, index) => {
+          if (!rawStep || typeof rawStep !== "object" || Array.isArray(rawStep)) return [];
+          const step = rawStep as Record<string, unknown>;
+          const title = String(step.title || step.name || step.label || "").trim();
+          if (!title) return [];
+          const id = String(step.id || step.stepId || `step-${index + 1}`).trim();
+          const status = String(step.status || (step.completed === true ? "已完成" : step.current === true ? "进行中" : "未开始"));
+          const currentMarker = id === String(parsed.currentStepId || "") ? " ← 当前执行" : "";
+          const blockedBy = String(step.blockedBy || "").trim();
+          return [
+            `    ${index + 1}. [${status}] ${title} (${id})${currentMarker}`,
+            blockedBy ? `       阻塞原因：${blockedBy}` : ""
+          ].filter(Boolean);
+        })
+        : [];
       summaries.push([
         `- ${planId}`,
         optionalLine("  标题", parsed.title),
         optionalLine("  状态", parsed.status),
+        optionalLine("  当前步骤 ID", parsed.currentStepId),
         optionalLine("  当前步骤", parsed.currentStep),
         optionalLine("  下一步", parsed.nextAction),
         optionalLine("  等待", parsed.waitingFor),
+        optionalLine("  阻塞原因", parsed.blockedBy),
+        stepLines.length > 0 ? `  全部步骤：\n${stepLines.join("\n")}` : "",
         `  路径：${relativeWorkspacePath(planPath)}`
       ].filter(Boolean).join("\n"));
     } catch (error) {
@@ -388,6 +407,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "role_panel_message") return "角色面板消息";
   if (routeKind === "voice_transcript") return "语音转写提醒";
   if (routeKind === "rabilink") return "RabiLink 消息";
+  if (routeKind === "wearable_health_alert") return "智能手表/手环健康告警";
   if (routeKind === "wecom_message") return "企业微信群聊消息提醒";
   return "RabiRoute 消息提醒";
 }
@@ -563,6 +583,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     voiceEndedAt: isVoiceTranscript ? record.endedAt : undefined,
     voiceDurationSeconds: isVoiceTranscript ? record.durationSeconds : undefined,
     voicePeak: isVoiceTranscript ? record.peak : undefined,
+    configurationRequested: isVoiceTranscript && record.configurationRequested ? "true" : undefined,
     wecomReqId: isWeCom ? record.reqId : undefined,
     wecomConversationId: isWeCom ? record.conversationId : undefined,
     wecomChatId: isWeCom ? record.chatId : undefined,
@@ -629,6 +650,12 @@ function buildAgentMessage(
       optionalLine("触发名称", values.triggerName)
     ]),
     section("消息", [String(values.message || record.rawMessage || "")]),
+    String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [
+      "这是用户从 Rabi 移动设备消息端明确发起的自然语言配置请求。",
+      "先读取当前真实配置；写入、删除、停止、覆盖或外部动作必须经过现有动作安全门和审批。",
+      "只允许调用 Rabi PC 已公开的远程 WebGUI/路由配置接口；不要索取、复述或猜测 token、密码等凭据。",
+      "只有接口返回成功并复核读回结果后才能声称配置完成；不明确时先向用户追问。"
+    ]) : "",
     recentMessageLimit > 0 ? section("最近消息", [
       `最近 ${recentMessageLimit} 条：`,
       String(values.recentMessages || "- 暂无")

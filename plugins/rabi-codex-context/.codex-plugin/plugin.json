@@ -1,0 +1,22 @@
+{
+  "name": "rabi-codex-context",
+  "version": "0.1.0",
+  "description": "Bind an individual Codex session to a Rabi persona context without duplicating role knowledge.",
+  "author": {
+    "name": "RabiRoute contributors",
+    "url": "https://github.com/vb2250158/RabiRoute"
+  },
+  "repository": "https://github.com/vb2250158/RabiRoute",
+  "license": "MIT",
+  "keywords": ["Rabi", "Codex", "persona", "context", "memory", "plans"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Rabi Codex Context",
+    "shortDescription": "Bind one Codex session to one Rabi persona.",
+    "longDescription": "Inject bounded persona, plan, memory, and role-skill context only after an explicit real-session binding.",
+    "developerName": "RabiRoute",
+    "category": "Productivity",
+    "capabilities": ["Interactive"],
+    "defaultPrompt": "Bind this Codex session to my Rabi persona and report the active context."
+  }
+}

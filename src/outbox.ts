@@ -18,7 +18,7 @@ import {
   type MessagePayloadKind
 } from "./shared/gatewayConfigModel.js";
 import { resolveSpeechRouteProfile } from "./shared/speechControlContract.js";
-import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
+import { publishRabiLinkRelayMessage, uploadRabiLinkRelayAttachment } from "./adapters/rabilinkRelayWorker.js";
 import { requestLocalSpeech } from "./speech/localSpeechClient.js";
 import {
   appendRabiLinkConversationEntry,
@@ -239,12 +239,12 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
   if (kind === "image") {
     const file = payloadValue(request, payload, "imageUrl", "imagePath", "url", "file", "path");
     if (!file) throw new Error("Missing image url/path.");
-    return { text, kind: "image", message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "image" as const, data: { file } }] };
+    return { text: text || "[image]", kind: "image", file, fileName: file.split(/[\\/]/).pop(), message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "image" as const, data: { file } }] };
   }
   if (kind === "voice") {
     const file = payloadValue(request, payload, "voiceUrl", "voicePath", "audioUrl", "audioPath", "url", "file", "path");
     if (!file) throw new Error("Missing voice url/path.");
-    return { text: text || "[voice]", kind: "voice", message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "record" as const, data: { file } }] };
+    return { text: text || "[voice]", kind: "voice", file, fileName: file.split(/[\\/]/).pop(), message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "record" as const, data: { file } }] };
   }
   if (kind === "file") {
     const file = payloadValue(request, payload, "fileUrl", "filePath", "url", "file", "path");
@@ -316,7 +316,7 @@ function validatedOutboundFilePath(rootDir: string, filePath: string, allowedFil
     throw new Error(`Outbound file is not a regular file: ${candidate}`);
   }
   if (allowedFileRoots.length === 0) {
-    throw new Error("No allowedFileRoots are configured for NapCat file output.");
+    throw new Error("No allowedFileRoots are configured for local file output.");
   }
   const realCandidate = fs.realpathSync(candidate);
   const allowed = allowedFileRoots.some((configuredRoot) => {
@@ -328,6 +328,18 @@ function validatedOutboundFilePath(rootDir: string, filePath: string, allowedFil
     throw new Error(`Outbound file is outside the configured allowedFileRoots: ${realCandidate}`);
   }
   return realCandidate;
+}
+
+function mobileAttachmentContentType(kind: MessagePayloadKind, filePath: string): string {
+  if (kind === "image") {
+    const ext = path.extname(filePath).toLowerCase();
+    return ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+  }
+  if (kind === "voice") {
+    const ext = path.extname(filePath).toLowerCase();
+    return ext === ".mp3" ? "audio/mpeg" : ext === ".ogg" ? "audio/ogg" : "audio/wav";
+  }
+  return "application/octet-stream";
 }
 
 function roleDirFor(rootDir: string, rolesRoot: string, item: { rolesDir?: string; agentRoleId?: string }): string | undefined {
@@ -997,6 +1009,16 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     const requestedPriority = requestField(request, "priority")?.toLowerCase();
     const priority = requestedPriority === "quiet" || requestedPriority === "urgent" ? requestedPriority : "normal";
     try {
+      const attachments: Array<Record<string, unknown>> = [];
+      if (content.kind !== "text" && content.file) {
+        const filePath = validatedOutboundFilePath(options.rootDir, content.file, policy.allowedFileRoots);
+        attachments.push(await uploadRabiLinkRelayAttachment(
+          filePath,
+          mobileAttachmentContentType(content.kind, filePath),
+          content.fileName || path.basename(filePath),
+          { url: route.runtime.rabiLinkRelay?.url, token: route.runtime.rabiLinkRelay?.token }
+        ));
+      }
       const relayResult = await publishRabiLinkRelayMessage(content.text, {
         source: requestField(request, "source") || (proactive ? "RabiRoute active intelligence" : "RabiRoute Agent reply"),
         taskId: proactive ? undefined : target.messageId || messageId,
@@ -1007,6 +1029,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         targetDeviceKinds,
         presentation,
         priority,
+        attachments,
         relay: route.runtime.rabiLinkRelay,
         metadata: {
           routeProfileId: route.profile?.id ?? route.runtime.id,
@@ -1024,10 +1047,18 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         messageId: valueString((relayResult.messages as Array<Record<string, unknown>> | undefined)?.[0]?.id),
         taskId: proactive ? undefined : target.messageId || messageId,
         deliveryId,
+        routeProfileId: route.profile?.id ?? route.runtime.id,
         targetDeviceIds,
         targetDeviceKinds,
         presentation,
         priority,
+        attachments: attachments.map((item) => ({
+          id: valueString(item.id),
+          kind: valueString(item.kind) === "audio" ? "audio" : valueString(item.kind) === "image" ? "image" : valueString(item.kind) === "video" ? "video" : "file",
+          fileName: valueString(item.fileName),
+          contentType: valueString(item.contentType),
+          size: Number(item.size || 0)
+        })),
         proactive,
         final: true,
         requiresReview: false

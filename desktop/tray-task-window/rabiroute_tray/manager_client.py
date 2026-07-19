@@ -21,6 +21,9 @@ class ManagerSnapshot:
     def selected_gateway(self) -> dict[str, Any] | None:
         if not self.gateways:
             return None
+        enabled_gateways = [gateway for gateway in self.gateways if gateway.get("enabled") is True]
+        if len(enabled_gateways) == 1:
+            return enabled_gateways[0]
         for gateway in self.gateways:
             if gateway.get("agentRoleId") == "Rabi":
                 return gateway

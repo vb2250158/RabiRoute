@@ -228,6 +228,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       enabled: false,
       url: "",
       token: "",
+      tokenConfigured: false,
       deviceId: "",
       claimWaitMs: 60000,
       replyIdleTimeoutMs: 60000,

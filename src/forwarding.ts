@@ -140,6 +140,9 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   if (routeKind === "rabilink") {
     return "rabilink";
   }
+  if (routeKind === "wearable_health_alert") {
+    return "wearable_health_alert";
+  }
   if (routeKind === "wecom_message") {
     return "wecom_message";
   }
@@ -378,7 +381,9 @@ export async function forwardMessageAndWait(
   extraValues: ForwardTemplateValues = {},
   options: ForwardMessageOptions = {}
 ): Promise<ForwardDeliveryResult> {
-  const routes = activeRouteProfiles();
+  const requestedRoute = "routeProfileId" in record ? String(record.routeProfileId || "").trim().toLowerCase() : "";
+  const routes = activeRouteProfiles().filter((route) => !requestedRoute || [route.id, route.name, route.agentRoleId]
+    .some((value) => String(value || "").trim().toLowerCase() === requestedRoute));
   const packets: DeliveryReplayPacket[] = [];
   if (routes.length === 0) {
     logRouteMiss(routeKind, record, "no_active_route_profile");

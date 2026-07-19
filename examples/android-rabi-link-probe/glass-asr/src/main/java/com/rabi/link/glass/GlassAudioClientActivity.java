@@ -9,7 +9,10 @@ import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -28,7 +31,10 @@ import com.rokid.security.system.server.message.callback.IResultCallback;
 import com.rokid.security.system.server.message.listener.IMessageListener;
 
 import java.util.ArrayList;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Thin glasses frontend. It captures and plays PCM only; the phone owns transport/state and
@@ -40,27 +46,60 @@ public final class GlassAudioClientActivity extends Activity {
     private static final String AUDIO_TAG = "RabiGlassAudioPcm";
     private static final String START = "RABI_GLASS_AUDIO_START";
     private static final String STOP = "RABI_GLASS_AUDIO_STOP";
+    private static final String REVIEW = "RABI_GLASS_REVIEW_REQUEST";
     private static final String STATUS = "RABI_GLASS_AUDIO_STATUS";
+    private static final String TRANSCRIPT = "RABI_GLASS_TRANSCRIPT:";
+    private static final String REPLY = "RABI_GLASS_REPLY:";
+    private static final String DEVICE = "RABI_GLASS_DEVICE:";
     private static final long NAV_DEBOUNCE_MS = 260;
 
     private final List<Button> buttons = new ArrayList<>();
     private HorizontalScrollView actionScroll;
     private TextView statusView;
+    private TextView transcriptView;
+    private TextView replyView;
+    private TextView timeView;
+    private TextView deviceView;
     private AudioTrack playback;
     private boolean sdkReady;
     private boolean recording;
+    private boolean userPaused;
+    private boolean playbackActive;
     private int selectedIndex;
     private long lastNavigationAt;
+    private int reconnectAttempt;
+    private boolean destroyed;
     private float touchStartX;
     private float touchStartY;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable reconnectPhone = new Runnable() {
+        @Override public void run() {
+            if (destroyed || sdkReady) return;
+            bindGlassSdk();
+            scheduleReconnect();
+        }
+    };
+    private final Runnable clockTick = new Runnable() {
+        @Override public void run() {
+            if (timeView != null) timeView.setText(new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date()));
+            mainHandler.postDelayed(this, 30000);
+        }
+    };
+    private final Runnable resumeAfterPlayback = () -> {
+        playbackActive = false;
+        if (!userPaused) startCapture(true);
+    };
 
     private final IClientCallback clientCallback = new IClientCallback.Stub() {
         @Override
         public void onReady() {
             sdkReady = true;
+            reconnectAttempt = 0;
+            mainHandler.removeCallbacks(reconnectPhone);
             runOnUiThread(() -> {
                 registerMessageListener();
-                setStatus("手机后端已连接 · 确认键开始录音");
+                setStatus("手机后端已连接 · 正在启动持续聆听");
+                startCapture(true);
             });
         }
     };
@@ -70,11 +109,15 @@ public final class GlassAudioClientActivity extends Activity {
         public void onTextMessage(String message) {
             String text = message == null ? "" : message.trim();
             if (text.startsWith(STATUS + ":")) runOnUiThread(() -> setStatus(text.substring((STATUS + ":").length())));
+            else if (text.startsWith(TRANSCRIPT)) runOnUiThread(() -> transcriptView.setText(text.substring(TRANSCRIPT.length())));
+            else if (text.startsWith(REPLY)) runOnUiThread(() -> replyView.setText(text.substring(REPLY.length())));
+            else if (text.startsWith(DEVICE)) runOnUiThread(() -> updateDeviceState(text.substring(DEVICE.length())));
         }
 
         @Override
         public void onAudioStream(byte[] buffer) {
             if (buffer == null || buffer.length == 0) return;
+            runOnUiThread(() -> pauseCaptureForPlayback());
             AudioTrack target = playback;
             if (target != null) target.write(buffer, 0, buffer.length);
         }
@@ -117,6 +160,8 @@ public final class GlassAudioClientActivity extends Activity {
         setContentView(buildUi());
         preparePlayback();
         bindGlassSdk();
+        scheduleReconnect();
+        mainHandler.post(clockTick);
     }
 
     @Override protected void onResume() { super.onResume(); prepareWindow(); }
@@ -124,7 +169,12 @@ public final class GlassAudioClientActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        stopCapture(false);
+        destroyed = true;
+        userPaused = true;
+        mainHandler.removeCallbacks(reconnectPhone);
+        mainHandler.removeCallbacks(resumeAfterPlayback);
+        mainHandler.removeCallbacks(clockTick);
+        stopCapture(true);
         if (playback != null) {
             try { playback.stop(); } catch (Throwable ignored) { }
             playback.release();
@@ -141,12 +191,20 @@ public final class GlassAudioClientActivity extends Activity {
             }
             GlassSdk.bindSecurityService(getApplicationContext(), new IServiceConnectionCallback() {
                 @Override public void onServiceConnected() { GlassSdk.registerClient(CLIENT_ID, clientCallback); }
-                @Override public void onServiceDisconnected() { sdkReady = false; runOnUiThread(() -> setStatus("手机后端已断开")); }
-                @Override public void onBindingDied() { sdkReady = false; runOnUiThread(() -> setStatus("眼镜消息服务已停止")); }
+                @Override public void onServiceDisconnected() { sdkReady = false; recording = false; runOnUiThread(() -> { setStatus("手机后端已断开 · 自动重连中"); scheduleReconnect(); }); }
+                @Override public void onBindingDied() { sdkReady = false; recording = false; runOnUiThread(() -> { setStatus("眼镜消息服务已停止 · 自动重连中"); scheduleReconnect(); }); }
             });
         } catch (Throwable error) {
-            setStatus("眼镜消息服务不可用");
+            setStatus("眼镜消息服务不可用 · 自动重连中");
+            scheduleReconnect();
         }
+    }
+
+    private void scheduleReconnect() {
+        if (destroyed || sdkReady) return;
+        mainHandler.removeCallbacks(reconnectPhone);
+        long delay = Math.min(30000L, 1500L << Math.min(4, reconnectAttempt++));
+        mainHandler.postDelayed(reconnectPhone, delay);
     }
 
     private void registerMessageListener() {
@@ -158,20 +216,28 @@ public final class GlassAudioClientActivity extends Activity {
     }
 
     private void toggleCapture() {
-        if (recording) {
+        userPaused = !userPaused;
+        if (userPaused) {
             stopCapture(true);
-            return;
+            setStatus("已暂停持续聆听 · 再按继续");
+        } else {
+            startCapture(true);
         }
+    }
+
+    private void startCapture(boolean notifyPhone) {
+        if (recording || userPaused || playbackActive) return;
         if (!sdkReady) { setStatus("等待手机后端连接"); return; }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO);
             return;
         }
         try {
-            sendPhoneText(START);
+            if (GlassSdk.getGlassMediaService() == null) throw new IllegalStateException("media service unavailable");
+            if (notifyPhone) sendPhoneText(START);
             GlassSdk.getGlassMediaService().startAudioRecord(captureCallback);
             recording = true;
-            setStatus("录音中 · 再按确认发送");
+            setStatus("持续聆听中 · 单击可提示 Rabi");
         } catch (Throwable error) {
             setStatus("录音启动失败");
         }
@@ -185,6 +251,14 @@ public final class GlassAudioClientActivity extends Activity {
             sendPhoneText(STOP);
             setStatus("手机上传中 · Rabi PC 识别中");
         }
+    }
+
+    private void pauseCaptureForPlayback() {
+        playbackActive = true;
+        mainHandler.removeCallbacks(resumeAfterPlayback);
+        if (recording) stopCapture(true);
+        setStatus("Rabi 正在说话");
+        mainHandler.postDelayed(resumeAfterPlayback, 1200);
     }
 
     private void sendPhoneText(String text) {
@@ -212,7 +286,7 @@ public final class GlassAudioClientActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
-        if (requestCode == REQUEST_AUDIO && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) toggleCapture();
+        if (requestCode == REQUEST_AUDIO && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) startCapture(true);
         else if (requestCode == REQUEST_AUDIO) setStatus("需要麦克风权限");
     }
 
@@ -228,9 +302,27 @@ public final class GlassAudioClientActivity extends Activity {
         statusView = new TextView(this);
         statusView.setText("连接手机后端中"); statusView.setTextColor(Color.WHITE); statusView.setTextSize(14); statusView.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2); statusParams.setMargins(0, dp(4), 0, dp(12)); root.addView(statusView, statusParams);
+        transcriptView = hudLine("等待语音");
+        replyView = hudLine("Rabi 回复会显示在这里");
+        root.addView(transcriptView, new LinearLayout.LayoutParams(-1, dp(28)));
+        root.addView(replyView, new LinearLayout.LayoutParams(-1, dp(28)));
+        LinearLayout footer = new LinearLayout(this);
+        footer.setOrientation(LinearLayout.HORIZONTAL);
+        footer.setGravity(Gravity.CENTER_VERTICAL);
+        timeView = new TextView(this);
+        timeView.setTextColor(Color.rgb(61, 220, 151)); timeView.setTextSize(12); timeView.setGravity(Gravity.START);
+        deviceView = new TextView(this);
+        deviceView.setText("v" + versionName() + " · --"); deviceView.setTextColor(Color.rgb(150, 160, 166)); deviceView.setTextSize(11); deviceView.setGravity(Gravity.END);
+        footer.addView(timeView, new LinearLayout.LayoutParams(0, dp(24), 1f));
+        footer.addView(deviceView, new LinearLayout.LayoutParams(0, dp(24), 1f));
+        root.addView(footer, new LinearLayout.LayoutParams(-1, dp(24)));
         actionScroll = new HorizontalScrollView(this); actionScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL); actionScroll.addView(row, new HorizontalScrollView.LayoutParams(-2, -2));
-        addButton(row, "录音 / 发送", this::toggleCapture);
+        addButton(row, "立即推送", () -> {
+            sendPhoneText(REVIEW);
+            setStatus("正在提醒 Rabi 审阅最近记录");
+        });
+        addButton(row, "暂停 / 继续", this::toggleCapture);
         addButton(row, "重连手机", this::bindGlassSdk);
         addButton(row, "状态", () -> sendPhoneText("RABI_GLASS_AUDIO_STATUS_REQUEST"));
         root.addView(actionScroll, new LinearLayout.LayoutParams(-1, dp(62)));
@@ -242,6 +334,29 @@ public final class GlassAudioClientActivity extends Activity {
     private void addButton(LinearLayout row, String label, Runnable action) {
         Button button = new Button(this); button.setAllCaps(false); button.setText("  " + label); button.setTextColor(Color.WHITE); button.setTextSize(14); button.setSingleLine(true); button.setBackground(buttonBackground(false)); button.setOnClickListener(v -> action.run());
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(150), dp(48)); params.setMargins(dp(6), dp(6), dp(6), dp(6)); row.addView(button, params); buttons.add(button);
+    }
+
+    private TextView hudLine(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(Color.WHITE);
+        view.setTextSize(13);
+        view.setSingleLine(true);
+        view.setEllipsize(TextUtils.TruncateAt.END);
+        view.setGravity(Gravity.CENTER);
+        return view;
+    }
+
+    private void updateDeviceState(String value) {
+        String[] parts = value.split(":", 2);
+        String battery = parts.length > 0 ? parts[0] : "--";
+        boolean charging = parts.length > 1 && "1".equals(parts[1]);
+        deviceView.setText("v" + versionName() + " · " + battery + "%" + (charging ? " ⚡" : ""));
+    }
+
+    private String versionName() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+        catch (Throwable ignored) { return "0.2"; }
     }
 
     private boolean onTouch(MotionEvent event) {

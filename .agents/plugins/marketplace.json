@@ -1,0 +1,20 @@
+{
+  "name": "rabiroute-local",
+  "interface": {
+    "displayName": "RabiRoute Local"
+  },
+  "plugins": [
+    {
+      "name": "rabi-codex-context",
+      "source": {
+        "source": "local",
+        "path": "./plugins/rabi-codex-context"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

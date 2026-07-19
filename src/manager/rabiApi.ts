@@ -7,7 +7,7 @@ import { scanAgentAdapters } from "../agentAdapters/managerApi.js";
 import { gatewayAdapterTypes, type GatewayDefinition, type GatewayConfigFile } from "../shared/gatewayConfigModel.js";
 import { sanitizeConfigName } from "../shared/routeIdentity.js";
 import { routeFolderPath } from "../shared/routePaths.js";
-import type { RabiGlobalConfigStore } from "./globalConfig.js";
+import type { RabiGlobalConfigStore, RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
 
 export type RabiApiContext = {
@@ -39,6 +39,14 @@ type RabiInstance = {
   addresses?: string[];
   self?: boolean;
 };
+
+export function publicRabiLinkRelayConfig(config: RabiLinkRelayGlobalConfig): Record<string, unknown> {
+  const { token: _token, ...safe } = config;
+  return {
+    ...safe,
+    tokenConfigured: Boolean(config.token)
+  };
+}
 
 type AgentBindingPatch = {
   agentAdapter?: string;
@@ -116,7 +124,7 @@ function identityPayload(ctx: RabiApiContext, request: http.IncomingMessage): { 
       version: ctx.version(),
       addresses: localIpv4Addresses(),
       managerHost: ctx.managerHost,
-      rabiLinkRelay: config.rabiLinkRelay,
+      rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay),
       configPath: ctx.globalConfig.configPath,
       self: true
     }
@@ -387,7 +395,13 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
         }
         return config;
       })
-      .then((config) => jsonResponse(response, 200, { code: 0, data: config }))
+      .then((config) => jsonResponse(response, 200, {
+        code: 0,
+        data: {
+          ...config,
+          rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay)
+        }
+      }))
       .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;
   }

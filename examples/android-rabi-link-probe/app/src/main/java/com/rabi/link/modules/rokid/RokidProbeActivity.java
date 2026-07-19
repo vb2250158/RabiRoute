@@ -203,7 +203,9 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
 
             @Override
             public void onGlassDeviceInfo(com.rokid.cxr.link.utils.GlassInfo info) {
-                // The probe dashboard already receives the formatted device info through onLog.
+                if (info != null && nativeVoiceBridge != null) {
+                    nativeVoiceBridge.sendGlassDeviceState(info.batteryLevel, info.ischarging);
+                }
             }
 
             @Override
@@ -271,8 +273,16 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
                     glassPcBackend.submitPcm(pcm);
                 }
             }
+
+            @Override
+            public void onGlassReviewRequested() {
+                if (glassPcBackend != null) {
+                    glassPcBackend.requestConversationReview();
+                }
+            }
         }, nativeVoiceAccessKey, nativeVoiceSecretKey);
         nativeVoiceBridge.start();
+        if (cxrController != null) cxrController.getGlassDeviceInfo();
         RabiLinkRelayConfig relayConfig = RabiLinkRelaySettings.load(this);
         glassPcBackend = new RabiGlassPcBackend(this, new RabiGlassPcBackend.Listener() {
             @Override
@@ -282,8 +292,15 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
             }
 
             @Override
-            public void onReplyPcm(byte[] pcm) {
-                if (nativeVoiceBridge != null) nativeVoiceBridge.sendAudioPcmToGlass(pcm);
+            public void onTranscript(String text) {
+                if (nativeVoiceBridge != null) nativeVoiceBridge.sendGlassTranscript(text);
+            }
+
+            @Override
+            public boolean onReply(String messageId, String routeProfileId, String text, byte[] pcm, org.json.JSONArray attachments) {
+                if (nativeVoiceBridge == null) return false;
+                nativeVoiceBridge.sendGlassReplyText(text);
+                return nativeVoiceBridge.sendAudioPcmToGlass(pcm);
             }
 
             @Override

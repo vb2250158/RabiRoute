@@ -2,7 +2,8 @@
   "enabled": false,
   "messageAdapters": [
     "rolePanel",
-    "rabilink"
+    "rabilink",
+    "wearable"
   ],
   "messageAdapterPolicies": {
     "rolePanel": {
@@ -18,6 +19,13 @@
     "rabilink": {
       "inputEnabled": true,
       "outputEnabled": true,
+      "supportedOutputs": [
+        "text"
+      ]
+    },
+    "wearable": {
+      "inputEnabled": true,
+      "outputEnabled": false,
       "supportedOutputs": [
         "text"
       ]

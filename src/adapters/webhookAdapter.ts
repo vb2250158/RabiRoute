@@ -22,6 +22,8 @@ export type WebhookPayload = {
   deviceName?: string;
   area?: string;
   sessionId?: string;
+  routeProfileId?: string;
+  configurationRequested?: boolean;
   text?: string;
   message?: string;
   content?: string;
@@ -319,6 +321,8 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
     transport: payload.transport,
     sourceArea: payload.sourceArea ?? payload.area,
     sessionId: payload.sessionId ?? payload.context,
+    routeProfileId: payload.routeProfileId,
+    configurationRequested: payload.configurationRequested === true,
     startedAt: payload.startedAt,
     endedAt: payload.endedAt,
     durationSeconds: payload.durationSeconds,
@@ -384,7 +388,8 @@ export function acceptWebhookPayload(
     forwardMessage(profile.routeKind, record, {
       webhookPath,
       inputAdapter: profile.type,
-      voiceSource: record.source
+      voiceSource: record.source,
+      configurationRequested: record.configurationRequested ? "true" : undefined
     });
   }
   appendAdapterLog(profile.type, {

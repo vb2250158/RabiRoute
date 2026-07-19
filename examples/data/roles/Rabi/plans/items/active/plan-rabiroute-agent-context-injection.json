@@ -1,12 +1,21 @@
 {
   "id": "plan-rabiroute-agent-context-injection",
   "title": "稳定 Agent 上下文注入格式",
+  "focus": "Agent 上下文注入与显式会话人格绑定",
   "status": "进行中",
   "priority": "high",
   "kind": "architecture",
-  "currentStep": "RabiRoute 已能自动注入事件、角色路径、最近消息、计划索引、记忆索引、技能索引、日志路径和接口文档链接",
-  "nextAction": "继续观察不同处理端是否需要结构化 AgentPacket JSON，并为人格路由工作台补无副作用 packet preview",
-  "waitingFor": "",
+  "currentStepId": "validate-codex-plugin",
+  "currentStep": "RabiRoute AgentPacket 已提供路由上下文；独立 Rabi Codex Context 插件也已完成首个可测试版本，按真实 session ID 显式绑定人格并通过 Hook 注入受限工作集。当前验证真实 Codex 安装与会话生命周期。",
+  "nextAction": "在可安装插件的 Codex 环境验证安装、use/status/refresh/off、SessionStart 和 UserPromptSubmit，再为 RabiRoute 人格路由工作台补无副作用 packet preview。",
+  "steps": [
+    { "id": "inject-agent-packet", "title": "注入事件、角色路径、计划、记忆、技能和接口索引", "status": "已完成" },
+    { "id": "add-required-read", "title": "增加处理前高相关必读项和按 ID 读取协议", "status": "已完成" },
+    { "id": "prototype-codex-plugin", "title": "实现真实 session ID 显式绑定的 Codex Hook 插件", "status": "已完成" },
+    { "id": "validate-codex-plugin", "title": "在真实 Codex 安装中验证插件生命周期", "status": "进行中", "blockedBy": "仍缺一次安装后的真实会话 Hook 验收" },
+    { "id": "add-packet-preview", "title": "为人格路由工作台增加无副作用 packet preview", "status": "未开始" }
+  ],
+  "waitingFor": "可安装 Codex 插件的真实会话验收",
   "project": {
     "name": "RabiRoute",
     "path": "./"
@@ -19,6 +28,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-08T00:00:00+08:00",
-  "keywords": ["AgentPacket", "上下文注入", "最近消息", "计划索引", "记忆索引", "技能索引", "接口文档"]
+  "updatedAt": "2026-07-19T00:00:00+08:00",
+  "keywords": ["AgentPacket", "上下文注入", "Codex 插件", "session ID", "Hook", "人格绑定", "计划索引", "记忆召回", "技能索引", "packet preview"]
 }

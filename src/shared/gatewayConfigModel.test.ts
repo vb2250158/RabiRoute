@@ -194,6 +194,22 @@ test("RabiLink is a named webhook-like message adapter", () => {
   assert.equal(claims.find(claim => claim.kind === "rabilink-webhook")?.port, 8794);
 });
 
+test("wearable health is a Relay-backed message adapter without its own listener", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    id: "Rabi__wearable",
+    agentRoleId: "",
+    messageAdapters: ["rabilink", "wearable"],
+    rabiLinkWebhookPort: 8794,
+    notificationRules: []
+  }));
+
+  assert.deepEqual(gatewayAdapterTypes(normalized), ["rabilink", "wearable"]);
+  assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["default-rabilink", "default-wearable"]);
+  assert.deepEqual(normalized.notificationRules?.[1]?.routeKinds, ["wearable_health_alert"]);
+  const claims = collectGatewayPortClaims([normalized], { managerPort: 8790 });
+  assert.equal(claims.filter(claim => claim.port === 8794).length, 1);
+});
+
 test("legacy message adapter target restrictions are ignored", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     messageAdapters: ["napcat"],

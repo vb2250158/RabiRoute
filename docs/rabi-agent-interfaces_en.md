@@ -24,6 +24,32 @@ Current reply context: {...}
 
 It also includes active-plan, recent-memory, and skill indexes plus `[Pre-action context confirmation]`. The handler must fetch every required-read item before replying, modifying role knowledge, publishing a task, or taking an external action.
 
+### Local Manager mode for knowledge APIs only
+
+When a direct Codex task needs the role plan or memory APIs but must not let Manager automatically start enabled gateways, the RabiLink Relay, or LAN discovery, set this before starting Manager:
+
+```powershell
+$env:RABIROUTE_MANAGER_AUTOSTART = "0"
+npm run manager
+```
+
+The Manager still serves `/meta`, plan, memory, and validation APIs; `GET /meta` reports `managerAutostart: false`. This mode disables automatic startup and synchronization only. Explicit runtime-control endpoints still exist, so a caller must not request start, restart, trigger, reply, or outbound actions without the corresponding authorization. Production tray startup and normal message routing remain unchanged when the variable is unset.
+
+### Wearable health queries
+
+With the `wearable` endpoint enabled, structured observations enter a role-scoped health timeline rather than ordinary chat history. Agents query the local Manager API instead of copying complete health records into every prompt:
+
+```text
+GET   /api/roles/:roleId/health/state
+GET   /api/roles/:roleId/health/history?metric=heart_rate&from=<ISO>&to=<ISO>&limit=100&order=desc
+GET   /api/roles/:roleId/health/summary
+GET   /api/roles/:roleId/health/config
+PATCH /api/roles/:roleId/health/config
+POST  /api/roles/:roleId/health/observations
+```
+
+`state` and `summary` include staleness. An Agent must not interpret `unknown` or stale data as a definite sleeping, awake, or medical state. Relay observations that match heart-rate or sleep rules become `wearable_health_alert` Agent events. Wearable authentication keys, Relay tokens, and raw sensitive metadata must never be submitted as observation fields. See [`rabilink-wearable-health_en.md`](./rabilink-wearable-health_en.md) for the full contract and acceptance boundary.
+
 ## Normal reply API
 
 Handlers should return user-facing chat replies through RabiRoute:
@@ -168,8 +194,15 @@ PATCH /api/roles/:roleId/plans/:planId
   "status": "进行中",
   "priority": "medium",
   "kind": "documentation",
+  "currentStepId": "verify-schema",
   "currentStep": "verify the active configuration schema",
   "nextAction": "update the bilingual guide",
+  "blockedBy": "",
+  "steps": [
+    { "id": "inspect-current", "title": "Inspect the existing plan API", "status": "已完成" },
+    { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中" },
+    { "id": "update-guides", "title": "Update both language guides", "status": "未开始" }
+  ],
   "keywords": ["routing", "configuration", "documentation"],
   "source": {
     "kind": "agent",
@@ -177,6 +210,8 @@ PATCH /api/roles/:roleId/plans/:planId
   }
 }
 ```
+
+New plans must provide an ordered `steps` array. An in-progress plan must also provide `currentStepId`, pointing to the only step whose status is `进行中`; clients use this to list every step and mark the current execution point. When blocked, put the reason in the current step's `blockedBy` and the awaited party or condition in `waitingFor`; the UI prioritizes the blocker reason and does not repeat `nextAction` already expressed by the step list. Legacy plans remain readable, but should gain structured steps on their next update. Every step must be `已完成` before the plan can become completed or archived.
 
 Completed plans are archived by a role-knowledge snapshot after their latest `updatedAt` is more than the current fixed 72-hour window old. This window is not yet a public `personaConfig.json` field.
 

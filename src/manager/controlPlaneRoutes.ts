@@ -36,6 +36,7 @@ import {
 import {
   scanFenneNoteEndpoint,
   scanRabiLinkEndpoint,
+  scanWearableEndpoint,
   scanWebhookEndpoint,
   scanXiaoAiEndpoint
 } from "../messageEndpoints/webhookLikeScans.js";
@@ -75,10 +76,12 @@ import {
 import { ManagerConfigRepository } from "./configRepository.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
+import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
-import { handleRabiApi } from "./rabiApi.js";
+import { handleRabiApi, publicRabiLinkRelayConfig } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { managerAutostartEnabled } from "./managerRuntimeMode.js";
 import {
   ManagerSpeechControl,
   speechControlErrorMessage,
@@ -108,6 +111,20 @@ import {
   updateRecentMemory,
   validateRoleKnowledge
 } from "../roleKnowledge.js";
+import {
+  currentWearableHealthState,
+  ingestWearableHealthObservation,
+  queryWearableHealthHistory,
+  readWearableHealthConfig,
+  summarizeWearableHealth,
+  updateWearableHealthConfig,
+  type WearableHealthMetric,
+  type WearableHealthObservationInput
+} from "../wearableHealth.js";
+import {
+  type WearableHealthAlertDeliveryContext
+} from "../wearableHealthAlertDelivery.js";
+import type { WearableHealthAlert } from "../wearableHealth.js";
 
 type GatewayDefinition = {
   id: string;
@@ -336,6 +353,7 @@ type MessageAdapterScanResult = {
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
 const managerHost = process.env.GATEWAY_MANAGER_HOST ?? "127.0.0.1";
+const managerShouldAutostart = managerAutostartEnabled();
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
 const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
@@ -551,7 +569,7 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
 function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "wearable" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
   return unique.length > 0 ? unique : ["napcat"];
 }
@@ -751,6 +769,10 @@ function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
 }
 
 function syncRabiLinkRelayRuntime(): void {
+  if (!managerShouldAutostart) {
+    rabiLinkRelayRuntime.stop();
+    return;
+  }
   const globalConfig = rabiGlobalConfig.read();
   const relay = rabiLinkRelayConfigForMeta();
   rabiLinkRelayRuntime.sync({
@@ -1125,6 +1147,7 @@ function loadRuntimes(): void {
 }
 
 function syncRunningGateways(): void {
+  if (!managerShouldAutostart) return;
   for (const runtime of runtimes.values()) {
     if (runtime.definition.enabled && runtime.process && runtime.needsRestart) {
       appendLog(runtime, "restarting because gateway config changed");
@@ -1758,11 +1781,12 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     checkHttpEndpoint,
     fenneNotePlaybackUrl
   };
-  const [napcat, fennenote, xiaoai, rabilink, webhook, wecom, speechStatus] = await Promise.all([
+  const [napcat, fennenote, xiaoai, rabilink, wearable, webhook, wecom, speechStatus] = await Promise.all([
     scanNapcatEndpoint(napcatManagerCtx()),
     scanFenneNoteEndpoint(webhookLikeScanCtx),
     scanXiaoAiEndpoint(webhookLikeScanCtx),
     scanRabiLinkEndpoint(webhookLikeScanCtx),
+    scanWearableEndpoint(webhookLikeScanCtx),
     scanWebhookEndpoint(webhookLikeScanCtx),
     scanWeComEndpoint({
       rootDir,
@@ -1813,6 +1837,7 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     fennenote,
     xiaoai,
     rabilink,
+    wearable,
     wecom,
     webhook
   };
@@ -2119,7 +2144,7 @@ function recordTimeMs(record: Record<string, unknown>): number {
   if (typeof time === "number") {
     return time < 10_000_000_000 ? time * 1000 : time;
   }
-  for (const key of ["createdAt", "lastEventAt", "startedAt", "endedAt"]) {
+  for (const key of ["recordedAt", "createdAt", "lastEventAt", "startedAt", "endedAt"]) {
     const value = record[key];
     if (typeof value === "string") {
       const parsed = Date.parse(value);
@@ -2144,6 +2169,167 @@ function messageFileEntry(source: string, filePath: string, record: Record<strin
     sender: record.senderName ?? record.sender ?? record.source,
     target: groupId ? `群 ${String(groupId)}` : userId ? `私聊 ${String(userId)}` : record.source ?? source,
     text: typeof text === "string" ? text : JSON.stringify(text),
+    raw: record
+  };
+}
+
+type WearableAlertCliDelivery = {
+  status: "delivered" | "routed" | "missed" | "failed" | "skipped";
+  matchedRuleCount: number;
+  sentPacketCount: number;
+  reason?: string;
+  adapterOutcomes?: Array<{
+    adapter?: string;
+    status?: string;
+    error?: string;
+  }>;
+};
+
+type WearableGatewayDeliveryResult = WearableAlertCliDelivery & {
+  gatewayId?: string;
+};
+
+const wearableDeliveryResultPrefix = "RABIROUTE_WEARABLE_DELIVERY_RESULT:";
+
+function wearableGatewayRuntimes(roleId: string): GatewayRuntime[] {
+  const safeRoleId = sanitizeRoleId(roleId);
+  if (!safeRoleId) return [];
+  return [...runtimes.values()].filter((runtime) => {
+    const definitionRoleId = sanitizeRoleId(runtime.definition.agentRoleId)
+      || routeRuntimeParts(runtime.definition.id).roleId;
+    return runtime.definition.enabled !== false
+      && definitionRoleId === safeRoleId
+      && sharedGatewayAdapterTypes(runtime.definition).includes("wearable");
+  });
+}
+
+function parseWearableAlertCliDelivery(stdout: string): WearableAlertCliDelivery | null {
+  const line = stdout.split(/\r?\n/)
+    .reverse()
+    .find((item) => item.startsWith(wearableDeliveryResultPrefix));
+  if (!line) return null;
+  try {
+    const parsed = JSON.parse(line.slice(wearableDeliveryResultPrefix.length)) as Partial<WearableAlertCliDelivery>;
+    if (!parsed.status || !Number.isFinite(parsed.matchedRuleCount) || !Number.isFinite(parsed.sentPacketCount)) {
+      return null;
+    }
+    return {
+      status: parsed.status,
+      matchedRuleCount: Number(parsed.matchedRuleCount),
+      sentPacketCount: Number(parsed.sentPacketCount),
+      reason: parsed.reason,
+      adapterOutcomes: Array.isArray(parsed.adapterOutcomes) ? parsed.adapterOutcomes : []
+    };
+  } catch {
+    return null;
+  }
+}
+
+function deliverWearableAlertViaGateway(
+  runtime: GatewayRuntime,
+  alert: WearableHealthAlert,
+  context: WearableHealthAlertDeliveryContext
+): Promise<WearableGatewayDeliveryResult> {
+  return new Promise((resolve) => {
+    const command = childCommand(["--wearable-health-alert-stdin"]);
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+    let stdout = "";
+    let settled = false;
+    const finish = (result: WearableGatewayDeliveryResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      appendLog(
+        runtime,
+        `wearable alert delivery status=${result.status} matched=${result.matchedRuleCount} sent=${result.sentPacketCount}`
+      );
+      resolve(result);
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish({
+        gatewayId: runtime.definition.id,
+        status: "failed",
+        matchedRuleCount: 0,
+        sentPacketCount: 0,
+        reason: "delivery_process_timeout"
+      });
+    }, 10 * 60 * 1000);
+    child.stdout.on("data", (data) => {
+      if (stdout.length < 256 * 1024) stdout += data.toString();
+    });
+    child.stderr.resume();
+    child.on("error", () => finish({
+      gatewayId: runtime.definition.id,
+      status: "failed",
+      matchedRuleCount: 0,
+      sentPacketCount: 0,
+      reason: "delivery_process_spawn_failed"
+    }));
+    child.on("exit", () => {
+      const delivery = parseWearableAlertCliDelivery(stdout);
+      finish(delivery
+        ? { gatewayId: runtime.definition.id, ...delivery }
+        : {
+            gatewayId: runtime.definition.id,
+            status: "failed",
+            matchedRuleCount: 0,
+            sentPacketCount: 0,
+            reason: "delivery_process_no_result"
+          });
+    });
+    child.stdin.on("error", () => {
+      // The process exit/error handlers own the final result.
+    });
+    child.stdin.end(JSON.stringify({ alert, context }));
+  });
+}
+
+async function deliverWearableAlert(
+  roleId: string,
+  alert: WearableHealthAlert,
+  context: WearableHealthAlertDeliveryContext
+): Promise<WearableGatewayDeliveryResult[]> {
+  const candidates = wearableGatewayRuntimes(roleId);
+  if (candidates.length === 0) {
+    return [{
+      status: "missed",
+      matchedRuleCount: 0,
+      sentPacketCount: 0,
+      reason: "no_matching_wearable_gateway"
+    }];
+  }
+  return Promise.all(candidates.map((runtime) => deliverWearableAlertViaGateway(runtime, alert, context)));
+}
+
+function wearableHealthMessageFileEntry(filePath: string, record: Record<string, unknown>): Record<string, unknown> {
+  const metric = String(record.metric ?? "");
+  const value = record.value;
+  const sleepState = String(record.sleepState ?? record.stage ?? "");
+  const text = metric === "heart_rate"
+    ? `心率 ${String(value ?? "-")} bpm`
+    : metric === "sleep_state"
+      ? `睡眠状态 ${sleepState || "unknown"}`
+      : metric === "sleep_session"
+        ? `睡眠区间 ${String(record.startAt ?? "-")} ~ ${String(record.endAt ?? "-")}`
+        : metric === "sleep_stage"
+          ? `睡眠阶段 ${sleepState || "unknown"}`
+          : `健康观测 ${metric || "unknown"}`;
+  return {
+    source: "智能手表 / 手环",
+    path: filePath,
+    time: record.recordedAt,
+    timeMs: recordTimeMs(record),
+    messageId: record.id,
+    adapterType: "wearable",
+    sender: record.sourceDeviceName ?? record.sourceDeviceId ?? "wearable",
+    target: "健康时间线",
+    text,
     raw: record
   };
 }
@@ -2203,6 +2389,20 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     ...readEntries("RabiLink / Relay", "rabilink-voice-transcripts.jsonl"),
     ...readEntries("RabiLink / Relay", "voice-transcripts.jsonl").filter((entry) => String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase() === "rabilink")
   ]);
+  const wearableHealthFiles = dirs.flatMap((dir) => {
+    const eventsDir = path.join(dir, "wearable-health", "events");
+    try {
+      return fs.readdirSync(eventsDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /^\d{4}-\d{2}-\d{2}\.jsonl$/i.test(entry.name))
+        .sort((left, right) => right.name.localeCompare(left.name))
+        .slice(0, 7)
+        .map((entry) => path.join(eventsDir, entry.name));
+    } catch {
+      return [];
+    }
+  });
+  const wearableEntries = sortTail(wearableHealthFiles.flatMap((filePath) =>
+    readJsonlTail(filePath, 8).map((record) => wearableHealthMessageFileEntry(filePath, record))));
   const webhookEntries = sortTail(readEntries("通用 Webhook", "voice-transcripts.jsonl")
     .filter((entry) => {
       const adapterType = String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase();
@@ -2254,6 +2454,10 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
       ]),
       entries: rabiLinkEntries
     },
+    wearable: {
+      paths: wearableHealthFiles,
+      entries: wearableEntries
+    },
     wecom: {
       paths: dirs.map((dir) => path.join(dir, "wecom-messages.jsonl")),
       entries: wecomEntries
@@ -2303,6 +2507,10 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
     rabilink: {
       paths: [path.join(dir, "rabilink-adapter.log.jsonl")],
       entries: readEntries("rabilink")
+    },
+    wearable: {
+      paths: [path.join(dir, "wearable-adapter.log.jsonl")],
+      entries: readEntries("wearable")
     },
     wecom: {
       paths: [path.join(dir, "wecom-adapter.log.jsonl")],
@@ -2922,7 +3130,7 @@ function handleRolePanelApi(request: http.IncomingMessage, requestUrl: URL, resp
           gatewayId: runtime.definition.id,
           routeProfileId,
           direction: "user",
-          sender: roleId,
+          sender: "本地用户",
           text,
           attachments,
           status: "sent",
@@ -3054,7 +3262,119 @@ function roleDirForApi(roleId: string): string {
   return roleFolderPath(rolesRoot, safeRoleId);
 }
 
+function wearableHealthMetrics(requestUrl: URL): WearableHealthMetric[] | undefined {
+  const values = requestUrl.searchParams.getAll("metric")
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter((value): value is WearableHealthMetric => (
+      value === "heart_rate"
+      || value === "sleep_session"
+      || value === "sleep_stage"
+      || value === "sleep_state"
+    ));
+  return values.length > 0 ? [...new Set(values)] : undefined;
+}
+
+function handleWearableHealthApi(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+  const route = parseWearableHealthResourceRoute(pathname);
+  if (!route) return false;
+  try {
+    const roleDir = roleDirForApi(route.roleId);
+    const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
+    const sourceDeviceId = requestUrl.searchParams.get("sourceDeviceId")?.trim() || "";
+    if (request.method === "GET" && route.resource === "config") {
+      jsonResponse(response, 200, { code: 0, data: readWearableHealthConfig(roleDir) });
+      return true;
+    }
+    if (request.method === "PATCH" && route.resource === "config") {
+      void readJsonBody<{ defaultPolicy?: unknown; devices?: unknown }>(request)
+        .then((body) => updateWearableHealthConfig(roleDir, body))
+        .then((data) => jsonResponse(response, 200, { code: 0, data }))
+        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    if (request.method === "GET" && route.resource === "state") {
+      jsonResponse(response, 200, { code: 0, data: currentWearableHealthState(roleDir, sourceDeviceId) });
+      return true;
+    }
+    if (request.method === "GET" && route.resource === "history") {
+      const limit = Number(requestUrl.searchParams.get("limit"));
+      jsonResponse(response, 200, {
+        code: 0,
+        data: queryWearableHealthHistory(roleDir, {
+          metrics: wearableHealthMetrics(requestUrl),
+          sourceDeviceId,
+          from: requestUrl.searchParams.get("from") || undefined,
+          to: requestUrl.searchParams.get("to") || undefined,
+          limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+          order: requestUrl.searchParams.get("order") === "asc" ? "asc" : "desc"
+        })
+      });
+      return true;
+    }
+    if (request.method === "GET" && route.resource === "summary") {
+      const limit = Number(requestUrl.searchParams.get("limit"));
+      jsonResponse(response, 200, {
+        code: 0,
+        data: summarizeWearableHealth(roleDir, {
+          sourceDeviceId,
+          from: requestUrl.searchParams.get("from") || undefined,
+          to: requestUrl.searchParams.get("to") || undefined,
+          limit: Number.isFinite(limit) && limit > 0 ? limit : undefined
+        })
+      });
+      return true;
+    }
+    if (request.method === "POST" && route.resource === "observations") {
+      const deliverAlerts = ["1", "true", "yes"].includes(
+        (requestUrl.searchParams.get("deliverAlerts") || "").trim().toLowerCase()
+      );
+      void readJsonBody<Record<string, unknown>>(request)
+        .then(async (body) => {
+          const nested = body.health && typeof body.health === "object" && !Array.isArray(body.health)
+            ? body.health as Record<string, unknown>
+            : {};
+          const observation = {
+            ...body,
+            ...nested,
+            policy: nested.policy ?? body.policy,
+            samples: nested.samples ?? body.samples
+          } as WearableHealthObservationInput;
+          const data = ingestWearableHealthObservation(roleDir, observation);
+          if (!deliverAlerts || data.alerts.length === 0) return data;
+          const managerPort = request.socket.localPort || process.env.GATEWAY_MANAGER_PORT || "8790";
+          const deliveries = [];
+          for (const alert of data.alerts) {
+            const sourceSample = alert.sample;
+            const results = await deliverWearableAlert(route.roleId, alert, {
+              agentRoleId: route.roleId,
+              managerPort,
+              sourceDeviceId: sourceSample?.sourceDeviceId || data.state.sourceDeviceId,
+              sourceDeviceName: sourceSample?.sourceDeviceName,
+              sourceDeviceKind: sourceSample?.sourceDeviceKind,
+              transport: sourceSample?.transport || "manager-local"
+            });
+            deliveries.push({
+              alertId: alert.id,
+              results
+            });
+          }
+          return { ...data, delivery: { requested: true, results: deliveries } };
+        })
+        .then((data) => jsonResponse(response, 202, { code: 0, data }))
+        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+    return true;
+  } catch (error) {
+    jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    return true;
+  }
+}
+
 function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+  if (handleWearableHealthApi(request, pathname, response)) return true;
   const validationMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/knowledge-validation$/);
   if (validationMatch) {
     const roleId = decodeURIComponent(validationMatch[1]);
@@ -3302,9 +3622,10 @@ function metaPayload(): Record<string, unknown> {
     version,
     githubUrl: "https://github.com/vb2250158/RabiRoute",
     managerPort,
+    managerAutostart: managerShouldAutostart,
     rabiGuid: globalConfig.rabiGuid,
     rabiName: globalConfig.rabiName,
-    rabiLinkRelay: rabiLinkRelayConfigForMeta(),
+    rabiLinkRelay: publicRabiLinkRelayConfig(rabiLinkRelayConfigForMeta()),
     rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
     computerName: os.hostname()
   };
@@ -3516,9 +3837,11 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
 
 export async function startManager(): Promise<void> {
   loadRuntimes();
-  for (const runtime of runtimes.values()) {
-    if (runtime.definition.enabled) {
-      startGateway(runtime.definition.id);
+  if (managerShouldAutostart) {
+    for (const runtime of runtimes.values()) {
+      if (runtime.definition.enabled) {
+        startGateway(runtime.definition.id);
+      }
     }
   }
 
@@ -4052,8 +4375,10 @@ export async function startManager(): Promise<void> {
   });
 
   remoteAgentHub.attach(server);
-  if (remoteAgentDiscoverable) {
+  if (managerShouldAutostart && remoteAgentDiscoverable) {
     remoteAgentHub.startDiscoveryResponder();
+  } else if (!managerShouldAutostart) {
+    console.log("Remote Agent LAN discovery responder disabled by RABIROUTE_MANAGER_AUTOSTART=0");
   } else {
     console.log("Remote Agent LAN discovery responder disabled by REMOTE_AGENT_DISCOVERABLE=0");
   }

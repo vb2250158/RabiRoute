@@ -40,6 +40,32 @@ docs/rabi-agent-interfaces.md
 
 RabiRoute 还会注入 `[处理前上下文确认]`。它会从未归档计划、近期记忆和沉淀记忆中按 ID、标题和 `keywords` 做轻量打分，列出默认最多 5 条高相关必读项。Agent 在回复、发布任务、更新计划、写入记忆或执行外部动作之前，必须先按该小节里的 GET 路径读取内容；不能只凭标题行动。若必读项无法读取或内容不足以确认，应说明上下文无法确认，或先向用户追问。
 
+### 只启用知识接口的本机 Manager 模式
+
+直接在 Codex 中维护角色计划或记忆、但不希望 Manager 自动启动已启用网关、RabiLink Relay 或局域网发现时，可以在启动 Manager 前设置：
+
+```powershell
+$env:RABIROUTE_MANAGER_AUTOSTART = "0"
+npm run manager
+```
+
+此模式仍提供 `/meta`、计划、记忆和校验等 Manager HTTP 接口；`GET /meta` 会返回 `managerAutostart: false`。它只关闭自动启动和自动同步，不移除显式运行控制接口，因此调用方仍不得在没有相应授权时请求启动、重启、触发、回传或外发动作。生产托盘和正常消息路由不设置该变量，行为保持不变。
+
+### 智能手表 / 手环健康查询
+
+启用 `wearable` 消息端后，结构化健康观测按角色进入独立时间线，不进入普通聊天记录。Agent 可使用本机 Manager API 查询，而不是依赖提示词里复制全部健康数据：
+
+```text
+GET   /api/roles/:roleId/health/state
+GET   /api/roles/:roleId/health/history?metric=heart_rate&from=<ISO>&to=<ISO>&limit=100&order=desc
+GET   /api/roles/:roleId/health/summary
+GET   /api/roles/:roleId/health/config
+PATCH /api/roles/:roleId/health/config
+POST  /api/roles/:roleId/health/observations
+```
+
+`state` 和 `summary` 都包含时效信息；`unknown` 或 `stale` 不得解释成确定的睡着、醒来或健康状态。经 RabiLink Relay 输入并命中心率/睡眠规则的观测会形成 `wearable_health_alert` Agent 事件。认证秘钥、Relay token 和原始敏感元数据不得作为观测字段传入。完整字段、配置和验收边界见 [`rabilink-wearable-health.md`](./rabilink-wearable-health.md)。
+
 普通回复上下文会一并注入：
 
 ```text
@@ -312,8 +338,15 @@ POST /roles/:roleId/plans
   "status": "进行中",
   "priority": "medium",
   "kind": "documentation",
+  "currentStepId": "confirm-contract",
   "currentStep": "确认接口文档注入方式",
   "nextAction": "补充 Rabi Agent 接口文档",
+  "blockedBy": "",
+  "steps": [
+    { "id": "inspect-existing", "title": "检查现有计划接口", "status": "已完成" },
+    { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中" },
+    { "id": "update-docs", "title": "更新双语接口文档", "status": "未开始" }
+  ],
   "keywords": ["计划", "记忆", "接口", "上下文"],
   "source": {
     "kind": "agent",
@@ -321,6 +354,8 @@ POST /roles/:roleId/plans
   }
 }
 ```
+
+新增计划必须提供有序的 `steps`。`进行中` 计划必须同时提供 `currentStepId`，并让它指向唯一一条状态为 `进行中` 的步骤；界面据此列出全部步骤并标出当前执行位置。阻塞时用当前步骤的 `blockedBy` 记录不能继续的原因，并用 `waitingFor` 记录正在等待的对象；界面优先展示阻塞原因，不重复展示已由步骤列表表达的 `nextAction`。旧计划仍可读取，但下次更新时应补齐结构化步骤。计划进入 `已完成` 或 `已归档` 前，所有步骤都必须为 `已完成`。
 
 更新计划：
 
@@ -331,8 +366,8 @@ PATCH /roles/:roleId/plans/:planId
 常见用途：
 
 - 更新标题。
-- 更新当前步骤。
-- 更新下一步。
+- 更新全部步骤及唯一的当前步骤。
+- 更新下一步、等待对象和阻塞原因。
 - 更新关键词。
 - 将状态改为 `进行中`。
 - 将状态改为 `已完成`。

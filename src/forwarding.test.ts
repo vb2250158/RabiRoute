@@ -6,7 +6,7 @@ import test from "node:test";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, type RouteProfile } from "./config.js";
 import { forwardMessageAndWait, shouldSkipHeartbeatDelivery } from "./forwarding.js";
-import type { GroupMessageRecord } from "./history.js";
+import type { GroupMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
 import { resolvePipeline } from "./pipelines.js";
 import { readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
@@ -125,6 +125,25 @@ test("forwardMessageAndWait returns route miss details when no rule matches", as
     assert.equal(result.routes[0].reason, "no_matching_rule");
     assert.deepEqual(result.routes[0].matchedRuleIds, []);
     assert.equal(result.sentPacketCount, 0);
+  });
+});
+
+test("mobile message endpoint targets one selected route persona instead of broadcasting", async () => {
+  const root = tempDir();
+  const rule = { id: "mobile", name: "mobile", enabled: true, routeKinds: ["rabilink" as const], template: "{message}" };
+  const rabi = routeProfile(root, { id: "Rabi", name: "Rabi", notificationRules: [rule] });
+  const ilias = routeProfile(root, { id: "Ilias", name: "Ilias", agentRoleId: "Ilias", notificationRules: [rule] });
+  const record: VoiceTranscriptEventRecord = {
+    time: 1710000000, rawMessage: "hello Ilias", messageId: "mobile-1",
+    adapterType: "rabilink", source: "rabilink-phone-chat", routeProfileId: "Ilias"
+  };
+  await withForwardingConfig({
+    agentAdapters: [], dataDir: path.join(root, "data"), memoryDataDir: path.join(root, "memory"),
+    routeProfiles: [rabi, ilias]
+  }, async () => {
+    const result = await forwardMessageAndWait("rabilink", record);
+    assert.deepEqual(result.routes.map((route) => route.routeId), ["Ilias"]);
+    assert.equal(result.sentPacketCount, 1);
   });
 });
 

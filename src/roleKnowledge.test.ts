@@ -216,6 +216,7 @@ test("role knowledge writes enforce configured limits and a single-line focus", 
     title: "每日证据检查",
     focus: "每日证据检查",
     currentStep: "读取权威状态",
+    steps: [{ id: "read-status", title: "读取权威状态", status: "未开始" }],
     keywords: ["每日", "证据"]
   });
   assert.equal(plan.focus, "每日证据检查");
@@ -247,6 +248,7 @@ test("role knowledge writes enforce configured limits and a single-line focus", 
     title: "过长步骤",
     focus: "过长步骤",
     currentStep: "这是一段故意超过二十个字符限制的当前步骤内容",
+    steps: [{ id: "long-step", title: "检查步骤", status: "未开始" }],
     keywords: ["长度"]
   }), /currentStep exceeds 20 characters/);
   assert.throws(() => createRecentMemory(roleDir, {
@@ -261,6 +263,48 @@ test("role knowledge writes enforce configured limits and a single-line focus", 
     content: "内容",
     keywords: ["一", "二", "三"]
   }), /maximum is 2/);
+});
+
+test("plans require ordered steps and one explicit current step", () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    title: "结构化计划",
+    focus: "结构化计划",
+    status: "进行中",
+    currentStepId: "implement",
+    currentStep: "正在实现页面",
+    blockedBy: "设计稿尚未确认",
+    steps: [
+      { id: "inspect", title: "检查现状", status: "已完成" },
+      { id: "implement", title: "实现页面", status: "进行中", blockedBy: "缺少最终设计稿" },
+      { id: "verify", title: "验证结果", status: "未开始" }
+    ],
+    keywords: ["步骤"]
+  });
+
+  assert.equal(plan.steps.length, 3);
+  assert.equal(plan.currentStepId, "implement");
+  assert.equal(plan.blockedBy, "设计稿尚未确认");
+  assert.equal(plan.steps[1]?.status, "进行中");
+  assert.equal(plan.steps[1]?.blockedBy, "缺少最终设计稿");
+
+  assert.throws(() => createPlan(roleDir, {
+    title: "没有步骤",
+    focus: "没有步骤",
+    keywords: ["步骤"]
+  }), /Plan steps are required/);
+
+  assert.throws(() => createPlan(roleDir, {
+    title: "两个当前步骤",
+    focus: "两个当前步骤",
+    status: "进行中",
+    currentStepId: "one",
+    steps: [
+      { id: "one", title: "第一步", status: "进行中" },
+      { id: "two", title: "第二步", status: "进行中" }
+    ],
+    keywords: ["步骤"]
+  }), /only one in-progress step/);
 });
 
 test("role knowledge validation reports legacy items that exceed current limits", () => {

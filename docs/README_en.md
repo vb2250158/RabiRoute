@@ -38,6 +38,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) — **Current guide** for duplicate sessions, missing tools, inverted ownership, desktop startup dependencies, and verification.
 - [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) — **Current guide** for discovery, authentication, tasks, idempotent creation, delivery, results, tools, lifecycle, UI, security, and acceptance.
 - [Codex Desktop Agent Integration and Acceptance Contract](codex-desktop-agent-acceptance_en.md) — **Current fact** for stable IDs, side-effect-free scanning, automatic initialization, the Desktop owner boundary, and metadata bootstrap gates.
+- [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **First testable version** for explicit real-session persona binding and bounded hook context.
 
 ## Architecture and maintenance
 
@@ -57,7 +58,10 @@ This directory contains current guides, experimental integrations, designs, rese
 - [RabiLink Relay](rabilink-relay-server_en.md)
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker_en.md)
 - [RabiLink glasses three-route comparison](rabilink-glasses-route-comparison_en.md) — host, lifecycle, device capability, release cost, and current guidance for native Lingzhu agent, AIUI, and native app routes.
+- [Rabi mobile message endpoint](mobile-message-endpoint_en.md) — **Experimental integration** for standalone phone chat, optional glasses, reliable queues, notifications, attachments, configuration assistance, and device acceptance boundaries.
 - [RabiLink phone edge hub](rabilink-phone-edge-hub_en.md)
+- [RabiLink wearable health endpoint](rabilink-wearable-health_en.md) — **Experimental integration** for phone settings, structured health history, Agent queries, alert thresholds, and the Xiaomi ADB fallback.
+- [AIUI-to-phone/native-glasses parity checklist](rabilink-aiui-native-parity_en.md) — migration status separated by code, automation, and real-device evidence.
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)
 - [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md)
 - [RabiLink native app design](rabilink-glasses-app-design_en.md)

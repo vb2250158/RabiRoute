@@ -36,11 +36,13 @@ RabiLink Relay
 
 The embedded glasses APK is installed by the phone CXR workflow, so the user still installs only one phone APK.
 
+The phone home screen also exposes Wearable Health settings with a Health Connect or “Xiaomi Health (PC ADB Companion)” source selector, stable device identity, sync/lookback periods, thresholds, cooldown, and sleep-state alerts. An obtained Xiaomi authentication key is AES-GCM encrypted through Android Keystore and remains phone-local. The current Xiaomi real-device path is a logon-resident PC Companion driven by phone-owned settings; it normalizes Provider heart rate, sleep reports/stages, and current sleep state into Relay or trusted local Manager observations. Structured samples enter the RabiRoute health timeline instead of the conversation ledger. See [`../../docs/rabilink-wearable-health_en.md`](../../docs/rabilink-wearable-health_en.md).
+
 An embedded glasses-side test APK, `com.rabi.link.glass`, is bundled for CXR CustomApp experiments. It is a test payload installed by the phone-side workflow, not a second phone application for users.
 
 ## Current conclusions
 
-The Xiaomi path is an evidence probe. Public BLE/GATT inspection, Health Connect empty-result verification, Provider permission-boundary tests, and attempts to read the latest local heart rate are useful. A stable background API for full-day or historical heart-rate lists has not been established.
+The Xiaomi path is an evidence probe. Public BLE/GATT inspection, Health Connect empty-result verification, and Provider permission-boundary tests are useful. Real-device ADB checks now read the latest local heart rate plus a current sleep report and stages, but a stable background API for full-day or historical heart-rate lists has not been established.
 
 The Rokid phone module uses CXR-L for authorization, connection, CustomView, audio, photos, controls, and device status. The explicit foreground status service can report real glasses battery and charging state to Relay without creating a CustomView session.
 

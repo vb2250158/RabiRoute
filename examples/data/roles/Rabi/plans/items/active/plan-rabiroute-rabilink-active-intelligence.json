@@ -5,9 +5,20 @@
   "status": "进行中",
   "priority": "high",
   "kind": "product",
-  "currentStep": "RabiLink 眼镜客户端已明确为三条共用后端的路线：原生灵珠智能体承担低成本官方会话与 OpenAPI 兼容入口；AIUI 是当前定制主体验，已完成 record-first 账本、空闲/触摸板/周期审阅、主动下行、前台原生 ASR/TTS 和配置助手；原生 Android 分支已新增 Rabi Glass 薄客户端与手机侧 PC backend，支持 PCM 上下行及图片/视频/音频观察经应用隔离媒体白名单进入 PC。三条路线统一复用 Relay、RabiRoute、PC Agent 和 Outbox 安全门。",
-  "nextAction": "在用户明确授权发布并且 Rokid 手机、眼镜可用后分别完成 AIUI 与原生分支真机闭环：验证前台连续 ASR、触摸板启动/steer、普通/主动回复、失败 TTS 恢复、跨重启 cursor，以及手机后端 PCM 往返、媒体附件、断线恢复和眼镜 HUD；根据真机证据再决定哪些能力留在 AIUI、哪些下沉到原生 App。",
-  "waitingFor": "Craft 上传/审核授权，以及可用的 Rokid 手机和眼镜",
+  "currentStepId": "validate-glasses-and-health",
+  "currentStep": "手机已成为可独立使用的完整消息端，持有多路由人格聊天、稳定队列、cursor、附件、通知、ASR/TTS 设置和开机恢复；眼镜只是可选 I/O 外设。wearable 健康时间线与告警路由已闭环，手机侧真机冒烟已通过，当前补眼镜物理操作和健康长时间稳定性证据。",
+  "nextAction": "在可用的 Rokid 眼镜上验证持续收音、触摸板、HUD、真实电量、TTS 播放确认和断线恢复，并持续观察真实心率/睡眠采集、阈值冷却和重启恢复；证据齐全后再决定 AIUI 保留范围与原生迁移口径。",
+  "steps": [
+    { "id": "record-first-ledger", "title": "完成 record-first 账本、审阅器和主动下行", "status": "已完成" },
+    { "id": "phone-first-client", "title": "把手机升级为可独立使用的完整聊天客户端", "status": "已完成" },
+    { "id": "reliable-conversation", "title": "完成稳定队列、cursor、通知、失败恢复和开机恢复", "status": "已完成" },
+    { "id": "bidirectional-media", "title": "完成双向附件和纯附件消息闭环", "status": "已完成" },
+    { "id": "wearable-health", "title": "完成穿戴健康时间线、查询和告警路由", "status": "已完成" },
+    { "id": "phone-smoke", "title": "完成 Android 手机侧真机冒烟", "status": "已完成" },
+    { "id": "validate-glasses-and-health", "title": "完成眼镜物理交互和健康长时间稳定性验收", "status": "进行中", "blockedBy": "仍缺 Rokid 眼镜和更长时间的真实健康样本" },
+    { "id": "decide-aiui-migration", "title": "依据真机证据决定 AIUI 保留与原生迁移范围", "status": "未开始" }
+  ],
+  "waitingFor": "可用的 Rokid 眼镜和更长时间的真实健康样本",
   "project": {
     "name": "RabiRoute",
     "path": "./"
@@ -20,6 +31,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-18T00:00:00+08:00",
-  "keywords": ["RabiLink", "原生灵珠智能体", "AIUI", "原生 App", "Rabi Glass", "手机后端", "媒体附件", "三路线", "record-first", "观察账本", "持续消息流", "主动投递", "Relay", "Action Gate", "真机验收"]
+  "updatedAt": "2026-07-19T00:00:00+08:00",
+  "keywords": ["RabiLink", "AIUI", "原生 App", "Rabi Glass", "移动消息端", "手机后端", "多路由人格", "媒体附件", "wearable", "心率", "睡眠", "record-first", "主动投递", "Action Gate", "真机验收"]
 }

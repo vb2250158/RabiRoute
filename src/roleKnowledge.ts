@@ -5,6 +5,17 @@ import { fileURLToPath } from "node:url";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export type PlanStatus = "未开始" | "进行中" | "已完成" | "已归档";
+export type PlanStepStatus = "未开始" | "进行中" | "已完成";
+
+export type PlanStep = {
+  id: string;
+  title: string;
+  status: PlanStepStatus;
+  detail?: string;
+  waitingFor?: string;
+  blockedBy?: string;
+  completedAt?: string;
+};
 
 export type KnowledgeSource = {
   kind?: string;
@@ -19,8 +30,11 @@ export type PlanItem = {
   priority?: string;
   kind?: string;
   currentStep?: string;
+  currentStepId?: string;
   nextAction?: string;
   waitingFor?: string;
+  blockedBy?: string;
+  steps: PlanStep[];
   project?: {
     name?: string;
     path?: string;
@@ -149,8 +163,14 @@ export type PlanWriteLimits = {
   titleChars: number;
   focusChars: number;
   currentStepChars: number;
+  stepTitleChars: number;
+  stepDetailChars: number;
+  stepWaitingForChars: number;
+  stepBlockedByChars: number;
+  maxSteps: number;
   nextActionChars: number;
   waitingForChars: number;
+  blockedByChars: number;
   sourceSummaryChars: number;
   keywordChars: number;
   maxKeywords: number;
@@ -177,8 +197,14 @@ export const DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS: RoleKnowledgeWriteLimits = {
     titleChars: 80,
     focusChars: 80,
     currentStepChars: 1200,
+    stepTitleChars: 120,
+    stepDetailChars: 600,
+    stepWaitingForChars: 300,
+    stepBlockedByChars: 300,
+    maxSteps: 100,
     nextActionChars: 600,
     waitingForChars: 300,
+    blockedByChars: 600,
     sourceSummaryChars: 240,
     keywordChars: 32,
     maxKeywords: 24,
@@ -359,12 +385,15 @@ function planTextTotal(plan: PlanItem): number {
     plan.title,
     plan.focus,
     plan.currentStep,
+    plan.currentStepId,
     plan.nextAction,
     plan.waitingFor,
+    plan.blockedBy,
     plan.project?.name,
     plan.project?.path,
     plan.source?.kind,
     plan.source?.summary,
+    ...plan.steps.flatMap((step) => [step.id, step.title, step.detail, step.waitingFor, step.blockedBy, step.completedAt]),
     ...plan.keywords
   ].reduce((total, value) => total + textChars(value), 0);
 }
@@ -380,15 +409,61 @@ function memoryTextTotal(memory: RecentMemoryItem | ConsolidatedMemoryItem): num
   ].reduce((total, value) => total + textChars(value), 0);
 }
 
-function validatePlanWrite(roleDir: string, plan: PlanItem): void {
+function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps: boolean): void {
+  if (requireSteps && plan.steps.length === 0) {
+    throw new Error("Plan steps are required. List every ordered step and identify the current step when work is in progress.");
+  }
+  if (plan.steps.length > limits.maxSteps) {
+    throw new Error(`Plan has ${plan.steps.length} steps; maximum is ${limits.maxSteps}. Split the plan into focused plans.`);
+  }
+
+  const ids = new Set<string>();
+  for (const step of plan.steps) {
+    if (!step.id.trim()) throw new Error("Plan step id is required.");
+    if (ids.has(step.id)) throw new Error(`Plan step id must be unique: ${step.id}`);
+    ids.add(step.id);
+    assertTextLimit("Plan step id", step.id, 80);
+    assertTextLimit("Plan step title", step.title, limits.stepTitleChars);
+    assertTextLimit("Plan step detail", step.detail, limits.stepDetailChars);
+    assertTextLimit("Plan step waitingFor", step.waitingFor, limits.stepWaitingForChars);
+    assertTextLimit("Plan step blockedBy", step.blockedBy, limits.stepBlockedByChars);
+  }
+
+  const currentSteps = plan.steps.filter((step) => step.status === "进行中");
+  if (currentSteps.length > 1) throw new Error("Plan can have only one in-progress step.");
+  if (plan.currentStepId && !ids.has(plan.currentStepId)) {
+    throw new Error(`Plan currentStepId does not match a step: ${plan.currentStepId}`);
+  }
+  if (plan.steps.length > 0 && plan.status === "进行中") {
+    if (!plan.currentStepId) throw new Error("An in-progress plan must provide currentStepId.");
+    if (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId) {
+      throw new Error("Plan currentStepId must identify the only step whose status is 进行中.");
+    }
+  }
+  if (plan.status !== "进行中" && plan.currentStepId) {
+    throw new Error("Only an in-progress plan can provide currentStepId.");
+  }
+  if (plan.status === "未开始" && currentSteps.length > 0) {
+    throw new Error("A not-started plan cannot contain an in-progress step.");
+  }
+  if (plan.steps.length > 0 && (plan.status === "已完成" || plan.status === "已归档")) {
+    if (plan.steps.some((step) => step.status !== "已完成")) {
+      throw new Error("Every plan step must be completed before the plan can be completed or archived.");
+    }
+  }
+}
+
+function validatePlanWrite(roleDir: string, plan: PlanItem, requireSteps = false): void {
   const limits = roleKnowledgeWriteLimits(roleDir).plan;
   assertTextLimit("Plan title", plan.title, limits.titleChars);
   assertSingleFocus("Plan", plan.focus, limits.focusChars);
   assertTextLimit("Plan currentStep", plan.currentStep, limits.currentStepChars);
   assertTextLimit("Plan nextAction", plan.nextAction, limits.nextActionChars);
   assertTextLimit("Plan waitingFor", plan.waitingFor, limits.waitingForChars);
+  assertTextLimit("Plan blockedBy", plan.blockedBy, limits.blockedByChars);
   assertTextLimit("Plan source.summary", plan.source?.summary, limits.sourceSummaryChars);
   assertKeywordLimits("Plan", plan.keywords, limits.maxKeywords, limits.keywordChars);
+  validatePlanSteps(plan, limits, requireSteps);
   const total = planTextTotal(plan);
   if (total > limits.totalChars) {
     throw new Error(`Plan text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one plan per subject.`);
@@ -408,6 +483,34 @@ function validateMemoryWrite(roleDir: string, memory: RecentMemoryItem | Consoli
   }
 }
 
+function normalizePlanSteps(value: unknown): PlanStep[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap<PlanStep>((rawStep, index) => {
+    if (typeof rawStep === "string") {
+      const title = rawStep.trim();
+      return title ? [{ id: `step-${index + 1}`, title, status: "未开始" }] : [];
+    }
+    const raw = recordValue(rawStep);
+    const title = String(raw.title || raw.name || raw.label || "").trim();
+    if (!title) return [];
+    const rawStatus = String(raw.status || "").trim();
+    const status: PlanStepStatus = rawStatus === "已完成" || raw.completed === true
+      ? "已完成"
+      : rawStatus === "进行中" || raw.current === true
+        ? "进行中"
+        : "未开始";
+    return [{
+      id: String(raw.id || raw.stepId || `step-${index + 1}`).trim(),
+      title,
+      status,
+      detail: typeof raw.detail === "string" ? raw.detail : typeof raw.description === "string" ? raw.description : undefined,
+      waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
+      blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
+      completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined
+    }];
+  });
+}
+
 function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbackId?: string): PlanItem | null {
   const title = String(raw.title || "").trim();
   if (!title) return null;
@@ -423,8 +526,11 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     priority: typeof raw.priority === "string" ? raw.priority : undefined,
     kind: typeof raw.kind === "string" ? raw.kind : undefined,
     currentStep: typeof raw.currentStep === "string" ? raw.currentStep : undefined,
+    currentStepId: typeof raw.currentStepId === "string" ? raw.currentStepId : undefined,
     nextAction: typeof raw.nextAction === "string" ? raw.nextAction : undefined,
     waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
+    blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
+    steps: normalizePlanSteps(raw.steps),
     project: raw.project && typeof raw.project === "object" && !Array.isArray(raw.project) ? raw.project as PlanItem["project"] : undefined,
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     dueAt: typeof raw.dueAt === "string" ? raw.dueAt : undefined,
@@ -639,7 +745,7 @@ export function createPlan(roleDir: string, input: Record<string, unknown>): Pla
   const plan = normalizePlan({ ...input, id, createdAt: nowIso(), updatedAt: nowIso() });
   if (!plan) throw new Error("Plan title is required.");
   requireKeywords(plan.keywords, "Plan");
-  validatePlanWrite(roleDir, plan);
+  validatePlanWrite(roleDir, plan, true);
   writeJson(planFile(roleDir, plan), plan);
   return plan;
 }

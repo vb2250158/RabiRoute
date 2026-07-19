@@ -31,7 +31,7 @@ async function waitForHealth(baseUrl, child) {
   throw new Error("relay did not become healthy");
 }
 
-test("relay stores glasses media per application and requires authenticated download", async () => {
+test("relay stores mobile chat attachments per application and requires authenticated download", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-relay-device-media-"));
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -93,12 +93,51 @@ test("relay stores glasses media per application and requires authenticated down
     assert.equal(isolated.status, 404);
     assert.equal((await fetch(`${baseUrl}${attachment.downloadPath}`)).status, 401);
 
-    const rejectedType = await fetch(`${baseUrl}/api/rabilink/devices/media?fileName=payload.html`, {
+    const arbitraryFile = await fetch(`${baseUrl}/api/rabilink/devices/media?fileName=payload.html`, {
       method: "POST",
       headers: { "content-type": "text/html", "x-rabilink-token": ownerToken },
-      body: "not allowed"
+      body: "ordinary attachment"
     });
-    assert.equal(rejectedType.status, 415);
+    assert.equal(arbitraryFile.status, 201);
+    const arbitraryAttachment = (await arbitraryFile.json()).attachment;
+    assert.equal(arbitraryAttachment.kind, "file");
+    const arbitraryDownload = await fetch(`${baseUrl}${arbitraryAttachment.downloadPath}`, {
+      headers: { "x-rabilink-token": ownerToken }
+    });
+    assert.equal(arbitraryDownload.status, 200);
+    assert.equal(arbitraryDownload.headers.get("content-type"), "application/octet-stream");
+
+    const worker = await fetch(`${baseUrl}/worker/tasks?deviceId=pc-media&deviceGuid=guid-media&deviceName=Media%20PC&waitMs=0`, {
+      headers: { "x-rabilink-token": ownerToken }
+    });
+    assert.equal(worker.status, 200);
+    const selectTarget = await fetch(`${baseUrl}/api/rabilink/mobile/target`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-rabilink-token": ownerToken },
+      body: JSON.stringify({ targetDeviceId: "pc-media" })
+    });
+    assert.equal(selectTarget.status, 200);
+    const attachmentOnly = await fetch(`${baseUrl}/worker/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-rabilink-token": ownerToken },
+      body: JSON.stringify({
+        text: "",
+        deliveryId: "attachment-only-delivery",
+        proactive: true,
+        targetDeviceKinds: ["phone"],
+        presentation: ["text"],
+        attachments: [arbitraryAttachment]
+      })
+    });
+    assert.equal(attachmentOnly.status, 200);
+    const phoneMessages = await fetch(`${baseUrl}/api/rabilink/devices/messages?deviceId=phone-test&deviceKind=phone&after=&waitMs=0&stream=1`, {
+      headers: { "x-rabilink-token": ownerToken }
+    });
+    assert.equal(phoneMessages.status, 200);
+    const page = await phoneMessages.json();
+    assert.equal(page.messages.length, 1);
+    assert.equal(page.messages[0].text, "");
+    assert.equal(page.messages[0].attachments[0].fileName, "payload.html");
   } finally {
     child.kill();
     await new Promise((resolve) => {

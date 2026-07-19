@@ -5,9 +5,18 @@
   "status": "进行中",
   "priority": "medium",
   "kind": "architecture",
-  "currentStep": "消息端 adapter 已按 napcat、wecom、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，Agent 端 adapter 独立投递处理端。Codex 本机入口已收敛为 Desktop IPC 单一执行路径：完整任务 ID + workspace 是稳定身份，短生命周期 app-server 只提供用户可见名称/空任务元数据，归档绑定只可重绑现有唯一活动同名任务，绝不自动创建替代任务。RabiSpeech 控制面已收敛为 Manager Interface + 共享 contract；RabiLink 眼镜语音和媒体观察继续复用统一账本、持续下行流与 RabiRoute 输出门。",
-  "nextAction": "新增聊天平台时优先扩展 src/adapters/、src/routing/ 和 src/outbox.ts 的统一边界，新增处理端时优先扩展 src/agentAdapters/；每个 Agent adapter 都要先明确 Host、Runtime、Transport、Session 与真实 turn owner，并用真实目标端验收唯一执行路径",
-  "waitingFor": "",
+  "currentStepId": "validate-real-devices",
+  "currentStep": "wearable 已作为独立消息端接入统一配置、Relay worker、健康时间线和告警路由；手机消息端与可选眼镜复用同一 RabiLink 会话、附件、cursor 和 Outbox。当前用真实设备验证这些新入口的长期运行边界。",
+  "nextAction": "完成 Rokid 眼镜物理交互和穿戴健康长时间采样验收，再按统一 adapter / routing / outbox 边界扩展下一种平台；新增处理端时继续先明确 Host、Runtime、Transport、Session 与真实 turn owner。",
+  "steps": [
+    { "id": "split-message-adapters", "title": "拆分消息端 adapter 与处理端 adapter", "status": "已完成" },
+    { "id": "stabilize-codex-owner", "title": "收敛 Codex Desktop 唯一 owner 与稳定任务 ID", "status": "已完成" },
+    { "id": "unify-speech-interface", "title": "统一 RabiSpeech Manager Interface 与共享 contract", "status": "已完成" },
+    { "id": "add-mobile-and-wearable", "title": "接入手机消息端、可选眼镜和 wearable 健康消息端", "status": "已完成" },
+    { "id": "validate-real-devices", "title": "验证眼镜和穿戴健康的真实设备长期运行", "status": "进行中", "blockedBy": "仍缺 Rokid 眼镜物理验收和更长时间的真实健康样本" },
+    { "id": "extend-next-platform", "title": "按统一边界接入下一种消息平台或处理端", "status": "未开始" }
+  ],
+  "waitingFor": "Rokid 眼镜真机和更长时间的健康样本",
   "project": {
     "name": "RabiRoute",
     "path": "./"
@@ -20,6 +29,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-18T00:00:00+08:00",
-  "keywords": ["message adapter", "agent adapter", "Desktop IPC", "task owner", "稳定任务 ID", "用户可见名称", "归档重绑", "speechControl", "single execution path", "RabiLink", "媒体附件", "outbox", "remoteAgent", "NapCat", "解耦", "扩展"]
+  "updatedAt": "2026-07-19T00:00:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "Desktop IPC", "task owner", "speechControl", "RabiLink", "手机消息端", "wearable", "健康告警", "媒体附件", "outbox", "解耦", "扩展", "真机验收"]
 }

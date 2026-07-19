@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-structured-plan-steps",
+  "title": "计划用有序步骤和 currentStepId 表达执行位置",
+  "focus": "结构化计划步骤与唯一当前位置",
+  "content": "新建计划必须提供完整有序的 steps。进行中计划必须用 currentStepId 指向唯一一条进行中步骤；完成或归档前所有步骤都必须完成。blockedBy 说明当前步骤为何不能继续，waitingFor 说明等待对象。旧计划仍可读取，但下次更新时应补齐结构化步骤；AgentPacket 与托盘界面应展示全部步骤和当前执行位置，不能从 currentStep 与 nextAction 两段摘要猜造进度。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：结构化计划步骤、当前位置和阻塞语义"
+  },
+  "createdAt": "2026-07-19T00:00:00+08:00",
+  "updatedAt": "2026-07-19T00:00:00+08:00",
+  "keywords": ["计划步骤", "steps", "currentStepId", "blockedBy", "waitingFor", "AgentPacket", "托盘", "计划迁移"]
+}

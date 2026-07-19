@@ -46,6 +46,7 @@ RabiRoute owns ingress, rule matching, context packaging, handler delivery, repl
 | FenneNote | `retired compatibility` | No longer offered by add-endpoint or new-rule UI; old Routes remain readable and keep historical webhook/Outbox migration compatibility. |
 | XiaoAI | `experimental` | RabiRoute provides a named callback and a PC bridge directory, but open-xiaoai, xiaogpt, or another bridge must carry speaker events to the PC. The speaker does not connect directly to the core. |
 | RabiLink | `experimental` | Includes a local compatibility endpoint, a global Relay Runtime, and a route worker. AIUI observations can be recorded first in one ledger; the reviewer processes them when Codex is idle, periodically, or on a touchpad wake. Proactive messages use an independent Relay downlink stream. External AIUI, phone, and wearable paths still require real-device acceptance. |
+| Wearable health endpoint | `experimental` | Structured `wearable.health` observations enter a daily role-scoped timeline. Manager exposes state/history/summary queries, and threshold/cooldown matches become `wearable_health_alert` Agent deliveries. Android selects Health Connect or a PC ADB Companion; the latter is now mobile-configured and real-device verified for heart rate, sleep session/stages, sleep state, deduplication, queries, and a logon-resident task. ADB-free MiWear SPP is not the default collector. |
 | Generic Webhook | `experimental` | Accepts POST events from sources without a dedicated adapter. Named platforms should use their own adapters to preserve logs and reply semantics. |
 | WeCom | `experimental` | Uses the `@wecom/aibot-node-sdk` intelligent-bot WebSocket for group ingress and Outbox replies. Real Bot ID/Secret validation is required. |
 
@@ -55,7 +56,7 @@ RabiRoute owns ingress, rule matching, context packaging, handler delivery, repl
 
 - One route can define several message adapters, per-adapter input/output policies, several Agent adapters, a pipeline, a working directory, and persona binding.
 - Routing rules live in the persona's `personaConfig.json` and bind to a route by `configName`. Persona-free routes receive default rules, and the role-panel rule is always present.
-- Current route kinds are `private`, `group_message`, `direct_at`, `direct_reply`, `indirect_reply`, `heartbeat`, `manual_trigger`, `role_panel_message`, `voice_transcript`, `rabilink`, and `wecom_message`.
+- Current route kinds are `private`, `group_message`, `direct_at`, `direct_reply`, `indirect_reply`, `heartbeat`, `manual_trigger`, `role_panel_message`, `voice_transcript`, `rabilink`, `wearable_health_alert`, and `wecom_message`.
 - `RouteDecision` only matches rules. `forwarding.ts` iterates active route profiles, writes audit records, and delivers every matched rule.
 - `AgentPacket` includes the event, recent messages, role and relative paths, plan/memory/skill indexes, required-read items, log paths, reply API, and `replyContext`. Skill bodies are not injected into every packet automatically.
 - Delivery replay is implemented. Real delivery writes `delivery-replay-ledger.jsonl`, and attempts or stored messages can re-enter the delivery path.
@@ -103,7 +104,7 @@ There is no generic persistent Action Queue with a WebGUI approval center today.
 
 - Plans, recent memory, consolidated memory, consolidation runs, and skill indexes all have Manager APIs and file sources of truth.
 - Building an AgentPacket takes a role-knowledge snapshot, and memory hits refresh `viewedAt`. Only an explicit `memory-consolidation` manual trigger or Manager API request creates a run; submitting its result marks the inputs and writes consolidated memory. There is no time-only resident background scheduler today.
-- Runtime records are primarily JSONL: messages, adapter logs, AgentPacket, Outbox, heartbeat, manual trigger, role panel, RabiLink conversation, and delivery replay.
+- Runtime records are primarily JSONL: messages, adapter logs, AgentPacket, Outbox, heartbeat, manual trigger, role panel, RabiLink conversation, role-scoped wearable health timelines, and delivery replay.
 - Runtime `data/`, logs, tokens, real account IDs, real group IDs, and Cookies must not enter the repository.
 
 ## Capabilities that must not be advertised as complete

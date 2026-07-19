@@ -12,6 +12,9 @@ class PlanStep:
     status: str = "未开始"
     detail: str = ""
     completed_at: str = ""
+    step_id: str = ""
+    waiting_for: str = ""
+    blocked_by: str = ""
 
 
 @dataclass(frozen=True)
@@ -21,11 +24,13 @@ class PlanItem:
     priority: str = ""
     kind: str = ""
     current_step: str = ""
+    current_step_id: str = ""
     next_action: str = ""
     project_name: str = ""
     project_path: str = ""
     source: str = ""
     waiting_for: str = ""
+    blocked_by: str = ""
     due_at: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -99,11 +104,13 @@ class PlanRepository:
             priority=str(item.get("priority") or ""),
             kind=str(item.get("kind") or ""),
             current_step=str(item.get("currentStep") or item.get("current_step") or ""),
+            current_step_id=str(item.get("currentStepId") or item.get("current_step_id") or ""),
             next_action=str(item.get("nextAction") or item.get("next_action") or item.get("nextStep") or ""),
             project_name=str(project.get("name") or item.get("projectName") or ""),
             project_path=str(project.get("path") or item.get("projectPath") or ""),
             source=str(source.get("summary") or source.get("kind") or ""),
             waiting_for=str(item.get("waitingFor") or item.get("waiting_for") or ""),
+            blocked_by=str(item.get("blockedBy") or item.get("blocked_by") or ""),
             due_at=str(item.get("dueAt") or item.get("due_at") or ""),
             created_at=str(item.get("createdAt") or item.get("created_at") or ""),
             updated_at=str(item.get("updatedAt") or item.get("updated_at") or ""),
@@ -128,11 +135,11 @@ def _normalize_plan_steps(value: Any) -> list[PlanStep]:
     if not isinstance(value, list):
         return []
     steps: list[PlanStep] = []
-    for raw_step in value:
+    for index, raw_step in enumerate(value, start=1):
         if isinstance(raw_step, str):
             title = raw_step.strip()
             if title:
-                steps.append(PlanStep(title=title))
+                steps.append(PlanStep(title=title, step_id=f"step-{index}"))
             continue
         if not isinstance(raw_step, dict):
             continue
@@ -153,6 +160,9 @@ def _normalize_plan_steps(value: Any) -> list[PlanStep]:
                 status=status,
                 detail=str(raw_step.get("detail") or raw_step.get("description") or ""),
                 completed_at=str(raw_step.get("completedAt") or raw_step.get("completed_at") or ""),
+                step_id=str(raw_step.get("id") or raw_step.get("stepId") or f"step-{index}"),
+                waiting_for=str(raw_step.get("waitingFor") or raw_step.get("waiting_for") or ""),
+                blocked_by=str(raw_step.get("blockedBy") or raw_step.get("blocked_by") or ""),
             )
         )
     return steps

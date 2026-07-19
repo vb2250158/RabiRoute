@@ -37,6 +37,7 @@ export type RabiLinkConversationEntry = {
   taskId?: string;
   deliveryId?: string;
   sessionId?: string;
+  routeProfileId?: string;
   sourceDeviceId?: string;
   sourceDeviceName?: string;
   sourceDeviceKind?: string;
@@ -435,6 +436,7 @@ export function appendRabiLinkConversationEntry(
       taskId: optionalText(input.taskId),
       deliveryId: optionalText(input.deliveryId),
       sessionId: optionalText(input.sessionId),
+      routeProfileId: optionalText(input.routeProfileId),
       sourceDeviceId: optionalText(input.sourceDeviceId),
       sourceDeviceName: optionalText(input.sourceDeviceName),
       sourceDeviceKind: optionalText(input.sourceDeviceKind),

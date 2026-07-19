@@ -17,12 +17,14 @@ The Qt layer is kept portable where practical. See the [Windows launcher and pac
 - Uses the system tray when available and falls back to a normal window otherwise.
 - Enforces one panel instance per project root.
 - Reads Routes, runtime status, and role bindings from the Manager.
+- Selects the only enabled Route on first open. It falls back to the `Rabi` persona or the first row only when enabled selection is ambiguous, so a disabled unrelated persona does not become the accidental default.
 - Switches between Routes and six views: Chat, Current, Plans, Recent Memory, Archived, and Diagnostics.
 - Keeps all six views visible in the primary navigation; Current is grouped into in-progress plans and recent memory, while Diagnostics uses a read-only status/path table.
 - Follows RibiWebGUI's `RabiLight` visual language: mist-blue page backgrounds, white surfaces, deep navy text, teal interaction accents, 8px radii, and light borders, while running, warning, and offline states retain distinct semantic colors.
 - Collapsed plan and memory cards keep trigger keywords on one responsive line, reveal more as the window widens, and mark hidden items with `……`; expanding the card reveals every keyword.
-- Expanded plan cards prioritize Current Step and Next Action in a two-column summary before metadata. When the source plan JSON actually contains a `steps` array, the tray also shows completed/total counts, a progress bar, and completed/current/pending step rows, previewing six rows with an option to reveal all. It does not infer progress when step data is absent.
+- Expanded plan cards list the complete `steps` array first, show completed/total progress, and identify the execution point with both a `Current: step N` callout and a highlighted row. Steps are no longer truncated to a six-row preview, and structured plans do not repeat `nextAction`. When the current step or plan provides `blockedBy`, the status, callout, and current row become blocked states and a dedicated blocker-reason panel appears. Only legacy plans without `steps` keep the old current/next compatibility area.
 - Reads role-panel history and sends explicit text or file messages.
+- Labels panel input as `Local user` instead of the selected persona, and reports success only after a matched Route and Agent adapter return `delivered`. Disabled Routes, rule misses, and missing handlers surface as failures.
 - Displays plans and memories without editing their JSON files.
 - Opens role, plan, memory, project, and runtime-status directories.
 - Runs declared `manual_trigger` or `heartbeat` actions from the selected persona rules.

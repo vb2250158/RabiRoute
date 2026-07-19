@@ -20,7 +20,7 @@ test("the complete example data pack is readable and starts only the default rou
 
   const rabiLink = byName.get("RabiLink");
   assert.equal(rabiLink?.agentRoleId, "RabiActive");
-  assert.deepEqual(rabiLink?.messageAdapters, ["rolePanel", "rabilink"]);
+  assert.deepEqual(rabiLink?.messageAdapters, ["rolePanel", "rabilink", "wearable"]);
   assert.equal(rabiLink?.routeVariables?.rabilinkAutoReview, "true");
   assert.equal(rabiLink?.routeVariables?.rabilinkContinuousReflection, "true");
   assert.doesNotThrow(() => validateGatewayPortConflicts(gateways));

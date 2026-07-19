@@ -94,6 +94,7 @@ Windows paths may use either slash style in WebUI. Only hand-written JSON requir
 | `xiaoai` | experimental/design-dependent | Dedicated integration route; verify the actual bridge environment. |
 | `rabilink` | experimental | Relay/worker/device observation and downlink path. |
 | `wecom` | experimental | WeCom smart-bot WebSocket and Outbox group sends. |
+| `wearable` | experimental | Structured wearable health observations through the global RabiLink Relay worker. Samples enter a role-scoped timeline; only threshold or sleep-state alerts reach the Agent as `wearable_health_alert`. |
 
 Named platforms should use their dedicated adapter rather than being folded into the generic webhook.
 

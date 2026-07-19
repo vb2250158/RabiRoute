@@ -205,6 +205,7 @@ const adapterParamOpen = ref<Record<string, boolean>>({
   fennenote: false,
   xiaoai: false,
   rabilink: false,
+  wearable: false,
   webhook: false
 });
 const addAdapterMenu = ref(false);
@@ -246,6 +247,13 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     choices: [
       { type: "xiaoai", title: "小米音箱 / 小爱", note: "接收小爱音箱语音转写", icon: "mdi-speaker-wireless" },
       { type: "rabilink", title: "眼镜端（经 RabiLink）", note: "眼镜是消息来源；RabiLink 只是系统内置的转接服务", icon: "mdi-glasses" }
+    ]
+  },
+  {
+    title: "健康与穿戴",
+    note: "来自手机、智能手表或手环的结构化健康记录与规则告警。",
+    choices: [
+      { type: "wearable", title: "智能手表 / 手环", note: "持续记录心率和睡眠，阈值命中时提示 Agent", icon: "mdi-watch-variant" }
     ]
   },
   {
@@ -402,7 +410,7 @@ function toggleAdapter(type: MessageAdapterType): void {
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "rolePanel" || type === "speech" || type === "napcat" || type === "wecom" || type === "remoteAgent" || type === "heartbeat" || isWebhookLikeAdapter(type);
+  return type === "rolePanel" || type === "speech" || type === "napcat" || type === "wecom" || type === "remoteAgent" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
 }
 
 function speechVariable(name: string, fallback = ""): string {
@@ -493,7 +501,7 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "speech", "heartbeat", "xiaoai", "rabilink", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "speech", "heartbeat", "xiaoai", "rabilink", "wearable", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
 
@@ -4199,6 +4207,14 @@ watch(
                       </div>
                     </div>
                   </template>
+                  <div v-else-if="choice.type === 'wearable'" class="catalog-param-grid">
+                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
+                      此消息端复用控制台里的全局 RabiLink Relay，不另开监听端口。RabiLink 手机端负责配置设备、加密保存小米密钥、读取 Health Connect 并上报；普通样本只记录，阈值或睡眠状态规则命中后才投递 Agent。
+                    </v-alert>
+                    <div class="status-row full-span"><span>角色健康状态 API</span><b>/api/roles/{{ gateway.agentRoleId || "Rabi" }}/health/state</b></div>
+                    <div class="status-row full-span"><span>健康历史 API</span><b>/api/roles/{{ gateway.agentRoleId || "Rabi" }}/health/history</b></div>
+                    <div class="status-row full-span"><span>健康摘要 API</span><b>/api/roles/{{ gateway.agentRoleId || "Rabi" }}/health/summary</b></div>
+                  </div>
                   <div v-else-if="isWebhookLikeAdapter(choice.type)" class="catalog-param-grid">
                     <v-text-field v-if="choice.type === 'rabilink'" :model-value="webhookHostFor(choice.type)" :label="`${sourceTitle(choice.type)} 监听地址`" placeholder="0.0.0.0" @update:model-value="value => setWebhookHost(choice.type, value)" />
                     <v-text-field :model-value="webhookPortFor(choice.type)" type="number" :label="`${sourceTitle(choice.type)} 监听端口`" @update:model-value="value => setWebhookPort(choice.type, value)" />

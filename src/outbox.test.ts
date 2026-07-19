@@ -896,6 +896,42 @@ test("proactive RabiLink output enters the continuous Relay stream without a sou
   });
 });
 
+test("RabiLink mobile endpoint uploads and delivers an Agent file attachment", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-rabilink-file-"));
+  const releaseDir = path.join(rootDir, "release"); fs.mkdirSync(releaseDir, { recursive: true });
+  const filePath = path.join(releaseDir, "report.pdf"); fs.writeFileSync(filePath, "pdf-test");
+  let deliveredBody: Record<string, unknown> = {};
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = []; request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      if (request.url?.startsWith("/api/rabilink/devices/media")) {
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(JSON.stringify({ attachment: { id: "media-1", kind: "file", fileName: "report.pdf", contentType: "application/octet-stream", size: 8, downloadPath: "/api/rabilink/devices/media/media-1?fileName=report.pdf" } }));
+        return;
+      }
+      deliveredBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, messages: [{ id: "out-file-1" }] }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address === "object");
+  try {
+    const result = await handleAgentReply({
+      payloadType: "file", filePath, fileName: "report.pdf", text: "报告在附件里。",
+      routeProfileId: "RabiLink", targetType: "rabilink", proactive: true
+    }, {
+      rootDir, routeRoot: path.join(rootDir, "data", "route"), rolesRoot: path.join(rootDir, "data", "roles"),
+      runtimes: [{ id: "RabiLink", rabiLinkRelay: { enabled: true, url: `http://127.0.0.1:${address.port}`, token: "test-token", deviceId: "pc-test" },
+        messageAdapterPolicies: { rabilink: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"], allowedFileRoots: [releaseDir] } } }]
+    });
+    assert.equal(result.ok, true);
+    const attachments = deliveredBody.attachments as Array<Record<string, unknown>>;
+    assert.equal(attachments.length, 1); assert.equal(attachments[0].fileName, "report.pdf");
+    assert.equal(deliveredBody.routeProfileId, "RabiLink");
+  } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+});
+
 test("RabiLink outbound publisher retries with one stable delivery id", async () => {
   const bodies: Record<string, unknown>[] = [];
   const server = http.createServer((request, response) => {

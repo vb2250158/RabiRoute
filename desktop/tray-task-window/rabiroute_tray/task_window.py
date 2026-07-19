@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QIcon, QKeyEvent, QMouseEvent
+from PySide6.QtGui import QFont, QGuiApplication, QIcon, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -44,6 +44,9 @@ STATUS_TONES = {
     "已完成": "done",
     "已归档": "archived",
 }
+
+PLAN_PRIORITY_LABELS = {"low": "低", "medium": "中", "high": "高"}
+PLAN_KIND_LABELS = {"human-gate": "需人工接管"}
 
 PLAN_STEP_DONE_STATUSES = {"已完成", "完成", "done", "completed"}
 PLAN_STEP_CURRENT_STATUSES = {"进行中", "当前", "current", "in_progress", "in-progress"}
@@ -89,6 +92,7 @@ class KeywordPanel(QFrame):
     def __init__(self, keywords: list[str]) -> None:
         super().__init__()
         self.setObjectName("keywordPanel")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self._keywords = [keyword for keyword in keywords if keyword.strip()]
         self._expanded = False
         self.visible_keyword_count = 0
@@ -111,25 +115,22 @@ class KeywordPanel(QFrame):
 
         self.expanded_panel = QFrame()
         self.expanded_panel.setObjectName("keywordExpandedPanel")
+        self.expanded_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         expanded_layout = QGridLayout()
         expanded_layout.setContentsMargins(20, 0, 0, 0)
-        expanded_layout.setHorizontalSpacing(5)
-        expanded_layout.setVerticalSpacing(5)
+        expanded_layout.setHorizontalSpacing(7)
+        expanded_layout.setVerticalSpacing(0)
         expanded_label = QLabel("触发关键字")
         expanded_label.setObjectName("keywordLabel")
         expanded_layout.addWidget(expanded_label, 0, 0, Qt.AlignTop)
-        values = self._keywords if self._keywords else ["未配置"]
-        self.keyword_chips: list[QLabel] = []
-        for index, keyword in enumerate(values):
-            chip = QLabel(keyword)
-            chip.setObjectName("keywordChip")
-            chip.setProperty("empty", not self._keywords)
-            chip.setWordWrap(True)
-            self.keyword_chips.append(chip)
-            row = index // 3
-            column = (index % 3) + 1
-            expanded_layout.addWidget(chip, row, column)
-        expanded_layout.setColumnStretch(4, 1)
+        self.expanded_values = QLabel("  ·  ".join(self._keywords) if self._keywords else "未配置")
+        self.expanded_values.setObjectName("keywordExpandedValues")
+        self.expanded_values.setProperty("empty", not self._keywords)
+        self.expanded_values.setWordWrap(True)
+        self.expanded_values.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.expanded_values.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        expanded_layout.addWidget(self.expanded_values, 0, 1, Qt.AlignTop)
+        expanded_layout.setColumnStretch(1, 1)
         self.expanded_panel.setLayout(expanded_layout)
 
         layout = QVBoxLayout()
@@ -177,52 +178,125 @@ class KeywordPanel(QFrame):
         return self.OVERFLOW_INDICATOR, 0
 
 
-class PlanDetailPanel(QFrame):
-    STEP_PREVIEW_LIMIT = 6
+class PlanMetadataPanel(QFrame):
+    PRIMARY_KEYS = ("优先级", "类型", "项目", "截止时间", "更新时间")
 
+    def __init__(self, fields: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self.setObjectName("planMetadataPanel")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 1, 0, 0)
+        layout.setSpacing(6)
+
+        primary = [(key, value) for key, value in fields if key in self.PRIMARY_KEYS]
+        secondary = [(key, value) for key, value in fields if key not in self.PRIMARY_KEYS]
+        if primary:
+            summary = QLabel("  ·  ".join(f"{key}：{value}" for key, value in primary))
+            summary.setObjectName("planMetadataSummary")
+            summary.setMinimumWidth(0)
+            summary.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Maximum)
+            summary.setMaximumHeight(44)
+            summary.setWordWrap(True)
+            summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(summary)
+
+        self.details = QFrame()
+        self.details.setObjectName("planMetadataDetails")
+        details_layout = QGridLayout()
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setHorizontalSpacing(12)
+        details_layout.setVerticalSpacing(6)
+        for index, (key, value) in enumerate(secondary):
+            details_layout.addWidget(self._metadata_widget(key, value), index // 2, index % 2)
+        details_layout.setColumnStretch(0, 1)
+        details_layout.setColumnStretch(1, 1)
+        self.details.setLayout(details_layout)
+        self.details.setVisible(False)
+
+        if secondary:
+            self.toggle_button = QPushButton("查看计划资料")
+            self.toggle_button.setObjectName("planMetadataToggle")
+            self.toggle_button.setCheckable(True)
+            self.toggle_button.setAccessibleName("查看或收起计划资料")
+            self.toggle_button.toggled.connect(self._set_details_visible)
+            layout.addWidget(self.toggle_button)
+            layout.addWidget(self.details)
+        else:
+            self.toggle_button = None
+        self.setLayout(layout)
+
+    def _set_details_visible(self, visible: bool) -> None:
+        self.details.setVisible(visible)
+        if self.toggle_button is not None:
+            self.toggle_button.setText("收起计划资料" if visible else "查看计划资料")
+
+    def _metadata_widget(self, key: str, value: str) -> QFrame:
+        row = QFrame()
+        row.setObjectName("planMetadataItem")
+        row_layout = QVBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(2)
+        key_label = QLabel(key)
+        key_label.setObjectName("fieldKey")
+        value_label = QLabel(value)
+        value_label.setObjectName("fieldValue")
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        row_layout.addWidget(key_label)
+        row_layout.addWidget(value_label)
+        row.setLayout(row_layout)
+        return row
+
+
+class PlanDetailPanel(QFrame):
     def __init__(self, plan: PlanItem, metadata_fields: list[tuple[str, str]]) -> None:
         super().__init__()
         self.setObjectName("planDetailPanel")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.plan = plan
-        self._show_all_steps = False
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        summary = QFrame()
-        summary.setObjectName("planActionSummary")
-        summary_layout = QGridLayout()
-        summary_layout.setContentsMargins(0, 0, 0, 0)
-        summary_layout.setHorizontalSpacing(10)
-        summary_layout.setVerticalSpacing(8)
-        summary_layout.addWidget(
-            self._summary_block("●  当前步骤", plan.current_step or "暂未填写当前步骤", "current"), 0, 0
-        )
-        summary_layout.addWidget(
-            self._summary_block("➜  下一步行动", plan.next_action or "暂未填写下一步行动", "next"), 0, 1
-        )
-        summary_layout.setColumnStretch(0, 1)
-        summary_layout.setColumnStretch(1, 1)
-        summary.setLayout(summary_layout)
-        layout.addWidget(summary)
-
         if plan.steps:
             layout.addWidget(self._progress_panel())
+            blocker = _plan_blocker(plan)
+            if blocker:
+                layout.addWidget(self._summary_block("阻塞原因", blocker, "blocked"))
+        else:
+            layout.addWidget(
+                self._summary_block(
+                    "计划尚未拆分步骤",
+                    "这条旧计划没有 steps 数据，无法展示全部步骤和准确执行位置。",
+                    "warning",
+                )
+            )
+            legacy_summary = QFrame()
+            legacy_summary.setObjectName("planActionSummary")
+            legacy_layout = QGridLayout()
+            legacy_layout.setContentsMargins(0, 0, 0, 0)
+            legacy_layout.setHorizontalSpacing(10)
+            legacy_layout.setVerticalSpacing(8)
+            legacy_layout.addWidget(
+                self._summary_block("●  旧版当前进展", plan.current_step or "暂未填写当前进展", "current"), 0, 0
+            )
+            legacy_blocker = _plan_blocker(plan)
+            legacy_layout.addWidget(
+                self._summary_block("阻塞原因", legacy_blocker, "blocked")
+                if legacy_blocker
+                else self._summary_block("➜  下一步行动", plan.next_action or "暂未填写下一步行动", "next"),
+                0,
+                1,
+            )
+            legacy_layout.setColumnStretch(0, 1)
+            legacy_layout.setColumnStretch(1, 1)
+            legacy_summary.setLayout(legacy_layout)
+            layout.addWidget(legacy_summary)
 
         if metadata_fields:
-            metadata = QFrame()
-            metadata.setObjectName("planMetadata")
-            metadata_layout = QGridLayout()
-            metadata_layout.setContentsMargins(0, 2, 0, 0)
-            metadata_layout.setHorizontalSpacing(16)
-            metadata_layout.setVerticalSpacing(7)
-            for index, (key, value) in enumerate(metadata_fields):
-                metadata_layout.addWidget(self._metadata_widget(key, value), index // 2, index % 2)
-            metadata_layout.setColumnStretch(0, 1)
-            metadata_layout.setColumnStretch(1, 1)
-            metadata.setLayout(metadata_layout)
-            layout.addWidget(metadata)
+            layout.addWidget(PlanMetadataPanel(metadata_fields))
 
         self.setLayout(layout)
 
@@ -230,6 +304,7 @@ class PlanDetailPanel(QFrame):
         block = QFrame()
         block.setObjectName("planSummaryBlock")
         block.setProperty("summaryTone", tone)
+        block.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         block_layout = QVBoxLayout()
         block_layout.setContentsMargins(11, 10, 11, 10)
         block_layout.setSpacing(5)
@@ -238,6 +313,8 @@ class PlanDetailPanel(QFrame):
         label_widget.setProperty("summaryTone", tone)
         value_widget = QLabel(value)
         value_widget.setObjectName("planSummaryValue")
+        value_widget.setMinimumWidth(0)
+        value_widget.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Maximum)
         value_widget.setWordWrap(True)
         value_widget.setTextInteractionFlags(Qt.TextSelectableByMouse)
         block_layout.addWidget(label_widget)
@@ -256,9 +333,26 @@ class PlanDetailPanel(QFrame):
         total_count = len(self.plan.steps)
         percentage = round(completed_count * 100 / total_count) if total_count else 0
 
+        current_index, current_step = self._current_step()
+        blocker = _plan_blocker(self.plan)
+        current_text = (
+            f"当前阻塞：第 {current_index} 步 · {current_step.title}"
+            if current_step is not None and blocker
+            else f"当前执行：第 {current_index} 步 · {current_step.title}"
+            if current_step is not None
+            else "当前没有正在执行的步骤"
+        )
+        current_callout = QLabel(current_text)
+        current_callout.setObjectName("planCurrentStepCallout")
+        current_callout.setProperty("hasCurrentStep", current_step is not None)
+        current_callout.setProperty("blocked", bool(blocker))
+        current_callout.setWordWrap(True)
+        current_callout.setAccessibleName(current_text)
+        panel_layout.addWidget(current_callout)
+
         heading_row = QHBoxLayout()
         heading_row.setContentsMargins(0, 0, 0, 0)
-        heading = QLabel(f"计划进度（{completed_count} / {total_count} 步骤）")
+        heading = QLabel(f"全部步骤（已完成 {completed_count} / {total_count}）")
         heading.setObjectName("planProgressTitle")
         percentage_label = QLabel(f"{percentage}%")
         percentage_label.setObjectName("planProgressPercent")
@@ -283,18 +377,15 @@ class PlanDetailPanel(QFrame):
         self.steps_container.setLayout(self.steps_layout)
         panel_layout.addWidget(self.steps_container)
 
-        self.more_steps_button = QPushButton()
-        self.more_steps_button.setObjectName("planMoreStepsButton")
-        self.more_steps_button.clicked.connect(self._toggle_all_steps)
-        panel_layout.addWidget(self.more_steps_button, 0, Qt.AlignLeft)
-
         panel.setLayout(panel_layout)
         self._render_steps()
         return panel
 
-    def _toggle_all_steps(self) -> None:
-        self._show_all_steps = not self._show_all_steps
-        self._render_steps()
+    def _current_step(self) -> tuple[int, PlanStep | None]:
+        for index, step in enumerate(self.plan.steps, start=1):
+            if _plan_step_tone(step, self.plan.current_step_id) == "current":
+                return index, step
+        return 0, None
 
     def _render_steps(self) -> None:
         while self.steps_layout.count():
@@ -303,32 +394,24 @@ class PlanDetailPanel(QFrame):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
-        visible_steps = self.plan.steps if self._show_all_steps else self.plan.steps[: self.STEP_PREVIEW_LIMIT]
-        for index, step in enumerate(visible_steps, start=1):
+        for index, step in enumerate(self.plan.steps, start=1):
             self.steps_layout.addWidget(self._step_widget(index, step))
-        hidden_count = max(0, len(self.plan.steps) - len(visible_steps))
-        if len(self.plan.steps) <= self.STEP_PREVIEW_LIMIT:
-            self.more_steps_button.setVisible(False)
-        else:
-            self.more_steps_button.setVisible(True)
-            self.more_steps_button.setText(
-                "收起步骤 ︿"
-                if self._show_all_steps
-                else f"查看全部 {len(self.plan.steps)} 个步骤（还有 {hidden_count} 个）﹀"
-            )
 
     def _step_widget(self, index: int, step: PlanStep) -> QFrame:
-        tone = _plan_step_tone(step)
+        tone = _plan_step_tone(step, self.plan.current_step_id)
+        step_blocker = step.blocked_by or (self.plan.blocked_by if tone == "current" else "")
+        display_tone = "blocked" if tone == "current" and step_blocker else tone
         row = QFrame()
         row.setObjectName("planStepRow")
-        row.setProperty("stepTone", tone)
+        row.setProperty("stepTone", display_tone)
         row_layout = QHBoxLayout()
         row_layout.setContentsMargins(2, 4, 2, 4)
         row_layout.setSpacing(8)
 
-        marker = QLabel("✓" if tone == "done" else "●" if tone == "current" else "○")
+        marker = QLabel("✓" if tone == "done" else "!" if display_tone == "blocked" else "●" if tone == "current" else "○")
         marker.setObjectName("planStepMarker")
-        marker.setProperty("stepTone", tone)
+        marker.setProperty("stepTone", display_tone)
+        marker.setFont(QFont("Segoe UI Symbol", 11))
         marker.setFixedWidth(18)
         marker.setAlignment(Qt.AlignCenter)
 
@@ -341,50 +424,53 @@ class PlanDetailPanel(QFrame):
         title.setObjectName("planStepTitle")
         title.setWordWrap(True)
         text_layout.addWidget(title)
-        if step.detail:
-            detail = QLabel(step.detail)
+        step_detail = step.detail
+        if tone == "current" and not step_detail and self.plan.current_step and self.plan.current_step != step.title:
+            step_detail = self.plan.current_step
+        if step_detail:
+            detail = QLabel(step_detail)
             detail.setObjectName("planStepDetail")
             detail.setWordWrap(True)
             text_layout.addWidget(detail)
+        if step.waiting_for:
+            waiting = QLabel(f"等待：{step.waiting_for}")
+            waiting.setObjectName("planStepWaiting")
+            waiting.setWordWrap(True)
+            text_layout.addWidget(waiting)
         text_block.setLayout(text_layout)
 
-        state_text = step.completed_at or ("已完成" if tone == "done" else "进行中" if tone == "current" else "待开始")
+        state_text = step.completed_at or (
+            "已完成" if tone == "done" else "已阻塞" if display_tone == "blocked" else "当前执行" if tone == "current" else "待开始"
+        )
         state = QLabel(state_text)
         state.setObjectName("planStepState")
-        state.setProperty("stepTone", tone)
+        state.setProperty("stepTone", display_tone)
         state.setAlignment(Qt.AlignRight | Qt.AlignTop)
 
         row_layout.addWidget(marker, 0, Qt.AlignTop)
         row_layout.addWidget(text_block, 1)
         row_layout.addWidget(state, 0, Qt.AlignTop)
         row.setLayout(row_layout)
+        row.setAccessibleName(f"第 {index} 步，{step.title}，{state_text}")
         return row
 
-    def _metadata_widget(self, key: str, value: str) -> QFrame:
-        row = QFrame()
-        row.setObjectName("planMetadataItem")
-        row_layout = QVBoxLayout()
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(2)
-        key_label = QLabel(key)
-        key_label.setObjectName("fieldKey")
-        value_label = QLabel(value)
-        value_label.setObjectName("fieldValue")
-        value_label.setWordWrap(True)
-        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        row_layout.addWidget(key_label)
-        row_layout.addWidget(value_label)
-        row.setLayout(row_layout)
-        return row
-
-
-def _plan_step_tone(step: PlanStep) -> str:
+def _plan_step_tone(step: PlanStep, current_step_id: str = "") -> str:
+    if current_step_id and step.step_id == current_step_id:
+        return "current"
     normalized = step.status.strip().lower()
     if normalized in PLAN_STEP_DONE_STATUSES:
         return "done"
     if normalized in PLAN_STEP_CURRENT_STATUSES:
         return "current"
     return "pending"
+
+
+def _plan_blocker(plan: PlanItem) -> str:
+    if plan.current_step_id:
+        for step in plan.steps:
+            if step.step_id == plan.current_step_id and step.blocked_by.strip():
+                return step.blocked_by.strip()
+    return plan.blocked_by.strip()
 
 
 class ExpandableCard(QFrame):
@@ -412,6 +498,7 @@ class ExpandableCard(QFrame):
         layout.setSpacing(8)
 
         self.header = ClickableHeader(f"{label}：{title}。点击展开或折叠详情。")
+        self.header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         header_layout = QVBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(7)
@@ -436,10 +523,15 @@ class ExpandableCard(QFrame):
         title_row.addWidget(badge, 0, Qt.AlignTop)
         title_row.addWidget(title_label, 1)
         if status:
-            status_label = QLabel(f"状态：{status}")
-            status_label.setObjectName("planStatus")
-            status_label.setProperty("statusTone", STATUS_TONES.get(status, "unknown"))
-            title_row.addWidget(status_label, 0, Qt.AlignTop)
+            display_status = "阻塞中" if plan is not None and _plan_blocker(plan) else status
+            self.status_label = QLabel(f"状态：{display_status}")
+            self.status_label.setObjectName("planStatus")
+            self.status_label.setProperty(
+                "statusTone", "blocked" if display_status == "阻塞中" else STATUS_TONES.get(status, "unknown")
+            )
+            title_row.addWidget(self.status_label, 0, Qt.AlignTop)
+        else:
+            self.status_label = None
         header_layout.addLayout(title_row)
         self.keywords_panel = KeywordPanel(keywords)
         header_layout.addWidget(self.keywords_panel)
@@ -448,8 +540,9 @@ class ExpandableCard(QFrame):
 
         self.details = QFrame()
         self.details.setObjectName("cardDetails")
+        self.details.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         details_layout = QVBoxLayout()
-        details_layout.setContentsMargins(20, 2, 0, 0)
+        details_layout.setContentsMargins(14, 2, 0, 0)
         details_layout.setSpacing(6)
         if plan is not None:
             details_layout.addWidget(PlanDetailPanel(plan, fields))
@@ -1080,15 +1173,13 @@ class TaskWindow(QWidget):
 
     def _add_plan_cards(self, plans: list[PlanItem], label: str) -> None:
         for plan in plans:
-            fields: list[tuple[str, str]] = [("分类", label)]
+            fields: list[tuple[str, str]] = []
             if plan.priority:
-                fields.append(("优先级", plan.priority))
+                fields.append(("优先级", PLAN_PRIORITY_LABELS.get(plan.priority.lower(), plan.priority)))
             if plan.kind:
-                fields.append(("类型", plan.kind))
+                fields.append(("类型", PLAN_KIND_LABELS.get(plan.kind.lower(), plan.kind)))
             if plan.project_name or plan.project_path:
                 fields.append(("项目", plan.project_name or plan.project_path))
-            if plan.waiting_for:
-                fields.append(("等待事项", plan.waiting_for))
             if plan.due_at:
                 fields.append(("截止时间", plan.due_at))
             if plan.source:
@@ -1635,6 +1726,10 @@ QLabel#planStatus[statusTone="running"] {
     background: #eaf8ef;
     color: #15803d;
 }
+QLabel#planStatus[statusTone="blocked"] {
+    background: #fff1e8;
+    color: #b54708;
+}
 QLabel#planStatus[statusTone="pending"] {
     background: #fff7e6;
     color: #a96008;
@@ -1674,24 +1769,24 @@ QLabel#keywordSummary {
     font-weight: 700;
     padding: 2px 7px;
 }
-QLabel#keywordChip {
+QLabel#keywordExpandedValues {
     background: #eef8f9;
     border: 1px solid #d2e9ea;
     border-radius: 6px;
     color: #36566b;
     font-size: 11px;
     font-weight: 700;
-    padding: 2px 6px;
+    padding: 3px 7px;
 }
-QLabel#keywordChip[empty="true"] {
+QLabel#keywordExpandedValues[empty="true"] {
     color: #8c99a4;
 }
 QFrame#cardDetails {
     background: transparent;
     border: 0;
 }
-QFrame#planDetailPanel, QFrame#planActionSummary, QFrame#planMetadata,
-QFrame#planProgressPanel, QFrame#planStepsContainer, QFrame#planStepTextBlock {
+QFrame#planDetailPanel, QFrame#planActionSummary, QFrame#planMetadataPanel,
+QFrame#planMetadataDetails, QFrame#planProgressPanel, QFrame#planStepsContainer, QFrame#planStepTextBlock {
     background: transparent;
     border: 0;
 }
@@ -1708,6 +1803,10 @@ QFrame#planSummaryBlock[summaryTone="next"] {
     background: #f6f9fd;
     border-color: #d7e3ef;
 }
+QFrame#planSummaryBlock[summaryTone="blocked"] {
+    background: #fff8f1;
+    border-color: #f1b87a;
+}
 QLabel#planSummaryLabel {
     color: #0f8b8d;
     font-size: 12px;
@@ -1715,6 +1814,9 @@ QLabel#planSummaryLabel {
 }
 QLabel#planSummaryLabel[summaryTone="next"] {
     color: #1d63a9;
+}
+QLabel#planSummaryLabel[summaryTone="blocked"] {
+    color: #b54708;
 }
 QLabel#planSummaryValue {
     color: #102a43;
@@ -1732,6 +1834,25 @@ QLabel#planProgressPercent {
     font-size: 13px;
     font-weight: 900;
 }
+QLabel#planCurrentStepCallout {
+    background: #f7fafc;
+    border: 1px solid #dbe5ea;
+    border-radius: 8px;
+    color: #52677a;
+    font-size: 13px;
+    font-weight: 850;
+    padding: 9px 11px;
+}
+QLabel#planCurrentStepCallout[hasCurrentStep="true"] {
+    background: #eef9ff;
+    border-color: #a9d5f7;
+    color: #145da0;
+}
+QLabel#planCurrentStepCallout[blocked="true"] {
+    background: #fff8f1;
+    border-color: #f1b87a;
+    color: #9a4d08;
+}
 QProgressBar#planProgressBar {
     background: #e5edf1;
     border: 0;
@@ -1746,6 +1867,16 @@ QFrame#planStepRow {
     border: 0;
     border-bottom: 1px solid #edf1f3;
 }
+QFrame#planStepRow[stepTone="current"] {
+    background: #eef9ff;
+    border: 1px solid #a9d5f7;
+    border-radius: 8px;
+}
+QFrame#planStepRow[stepTone="blocked"] {
+    background: #fff8f1;
+    border: 1px solid #f1b87a;
+    border-radius: 8px;
+}
 QLabel#planStepMarker {
     color: #94a3b8;
     font-size: 15px;
@@ -1757,6 +1888,9 @@ QLabel#planStepMarker[stepTone="done"] {
 QLabel#planStepMarker[stepTone="current"] {
     color: #1d7be8;
 }
+QLabel#planStepMarker[stepTone="blocked"] {
+    color: #d46b08;
+}
 QLabel#planStepTitle {
     color: #334e62;
     font-size: 12px;
@@ -1765,6 +1899,11 @@ QLabel#planStepTitle {
 QLabel#planStepDetail {
     color: #718291;
     font-size: 11px;
+}
+QLabel#planStepWaiting {
+    color: #9a5b13;
+    font-size: 11px;
+    font-weight: 750;
 }
 QLabel#planStepState {
     color: #7b8996;
@@ -1777,7 +1916,18 @@ QLabel#planStepState[stepTone="done"] {
 QLabel#planStepState[stepTone="current"] {
     color: #1d63a9;
 }
-QPushButton#planMoreStepsButton {
+QLabel#planStepState[stepTone="blocked"] {
+    color: #b54708;
+}
+QLabel#planMetadataSummary {
+    background: #f7fafc;
+    border: 1px solid #e1e8ec;
+    border-radius: 7px;
+    color: #52677a;
+    font-size: 11px;
+    padding: 6px 8px;
+}
+QPushButton#planMetadataToggle {
     background: transparent;
     border: 0;
     border-radius: 6px;
@@ -1788,7 +1938,7 @@ QPushButton#planMoreStepsButton {
     font-size: 11px;
     font-weight: 800;
 }
-QPushButton#planMoreStepsButton:hover {
+QPushButton#planMetadataToggle:hover {
     background: #eaf8f9;
     color: #0f8b8d;
 }

@@ -1,0 +1,28 @@
+{
+  "description": "Inject explicitly bound Rabi persona context into individual Codex sessions.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path = require('node:path'); const { pathToFileURL } = require('node:url'); import(pathToFileURL(path.join(process.env.PLUGIN_ROOT, 'scripts', 'rabi-codex-hook.mjs')).href).catch((error) => { console.error(error); process.exit(1); })\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path = require('node:path'); const { pathToFileURL } = require('node:url'); import(pathToFileURL(path.join(process.env.PLUGIN_ROOT, 'scripts', 'rabi-codex-hook.mjs')).href).catch((error) => { console.error(error); process.exit(1); })\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -135,7 +135,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertGreater(wide_count, narrow_count)
         self.assertNotIn(KeywordPanel.OVERFLOW_INDICATOR, wide_text)
 
-    def test_expanding_card_reveals_all_keyword_chips(self) -> None:
+    def test_expanding_card_reveals_all_keywords_in_one_wrapped_line(self) -> None:
         card = ExpandableCard(
             "计划",
             "关键词展开测试",
@@ -152,7 +152,9 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.app.processEvents()
         self.assertFalse(card.keywords_panel.summary_line.isVisible())
         self.assertTrue(card.keywords_panel.expanded_panel.isVisible())
-        self.assertTrue(all(chip.isVisible() for chip in card.keywords_panel.keyword_chips))
+        self.assertTrue(card.keywords_panel.expanded_values.isVisible())
+        for keyword in ["PangHu", "Bug", "工会", "Guild", "编号1187", "messageId:12345"]:
+            self.assertIn(keyword, card.keywords_panel.expanded_values.text())
         card.close()
 
     def test_expanded_plan_uses_structured_summary_and_real_step_progress(self) -> None:
@@ -169,8 +171,12 @@ class TaskWindowLayoutTest(unittest.TestCase):
             title="计划展开结构测试",
             status="进行中",
             current_step="信息架构",
+            current_step_id="step-3",
             next_action="完成页面实现",
-            steps=steps,
+            steps=[
+                PlanStep(step.title, step.status, step.detail, step.completed_at, f"step-{index}")
+                for index, step in enumerate(steps, start=1)
+            ],
         )
         card = ExpandableCard("计划", plan.title, [("类型", "ui")], "plan", [], status=plan.status, plan=plan)
         card.resize(720, 620)
@@ -179,18 +185,82 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.app.processEvents()
 
         summary_values = [label.text() for label in card.findChildren(QLabel, "planSummaryValue")]
-        self.assertEqual(summary_values, ["信息架构", "完成页面实现"])
+        self.assertEqual(summary_values, [])
+        current_callout = card.findChild(QLabel, "planCurrentStepCallout")
+        self.assertIsNotNone(current_callout)
+        self.assertEqual(current_callout.text(), "当前执行：第 3 步 · 信息架构")
         progress = card.findChild(QProgressBar, "planProgressBar")
         self.assertIsNotNone(progress)
         self.assertEqual(progress.value(), 2)
         self.assertEqual(progress.maximum(), 7)
-        self.assertEqual(len(card.findChildren(QFrame, "planStepRow")), 6)
-
-        more_button = card.findChild(QPushButton, "planMoreStepsButton")
-        self.assertIsNotNone(more_button)
-        more_button.click()
-        self.app.processEvents()
         self.assertEqual(len(card.findChildren(QFrame, "planStepRow")), 7)
+        current_rows = [
+            row for row in card.findChildren(QFrame, "planStepRow") if row.property("stepTone") == "current"
+        ]
+        self.assertEqual(len(current_rows), 1)
+        card.close()
+
+    def test_blocked_plan_prioritizes_blocker_and_marks_current_step(self) -> None:
+        blocker = "私人订阅尚未导入，VPN 未恢复。"
+        plan = PlanItem(
+            title="阻塞计划测试",
+            status="进行中",
+            current_step_id="restore-vpn",
+            next_action="重装应用",
+            blocked_by="无法访问 Google Play",
+            steps=[
+                PlanStep("安装 Clash", "已完成", step_id="install-clash"),
+                PlanStep("恢复 VPN", "进行中", step_id="restore-vpn", blocked_by=blocker),
+                PlanStep("重装应用", step_id="reinstall"),
+            ],
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        card.resize(720, 520)
+        card.show()
+        card.set_expanded(True)
+        self.app.processEvents()
+
+        self.assertEqual(card.status_label.text(), "状态：阻塞中")
+        self.assertEqual(card.status_label.property("statusTone"), "blocked")
+        current_callout = card.findChild(QLabel, "planCurrentStepCallout")
+        self.assertEqual(current_callout.text(), "当前阻塞：第 2 步 · 恢复 VPN")
+        self.assertTrue(current_callout.property("blocked"))
+        summary_labels = [label.text() for label in card.findChildren(QLabel, "planSummaryLabel")]
+        summary_values = [label.text() for label in card.findChildren(QLabel, "planSummaryValue")]
+        self.assertEqual(summary_labels, ["阻塞原因"])
+        self.assertEqual(summary_values, [blocker])
+        blocked_rows = [
+            row for row in card.findChildren(QFrame, "planStepRow") if row.property("stepTone") == "blocked"
+        ]
+        self.assertEqual(len(blocked_rows), 1)
+        self.assertEqual(blocked_rows[0].findChild(QLabel, "planStepState").text(), "已阻塞")
+        self.assertNotIn("重装应用", summary_values)
+        card.close()
+
+    def test_plan_metadata_keeps_primary_fields_compact_and_secondary_fields_collapsed(self) -> None:
+        plan = PlanItem(title="资料折叠测试")
+        card = ExpandableCard(
+            "计划",
+            plan.title,
+            [("优先级", "中"), ("类型", "需人工接管"), ("来源", "每日拆分"), ("文件", "C:/plan.json")],
+            "plan",
+            [],
+            status=plan.status,
+            plan=plan,
+        )
+        card.show()
+        card.set_expanded(True)
+        self.app.processEvents()
+
+        summary = card.findChild(QLabel, "planMetadataSummary")
+        details = card.findChild(QFrame, "planMetadataDetails")
+        toggle = card.findChild(QPushButton, "planMetadataToggle")
+        self.assertIn("优先级：中", summary.text())
+        self.assertFalse(details.isVisible())
+        toggle.click()
+        self.app.processEvents()
+        self.assertTrue(details.isVisible())
+        self.assertEqual(toggle.text(), "收起计划资料")
         card.close()
 
 

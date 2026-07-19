@@ -38,6 +38,8 @@ RabiLink Relay
 
 眼镜端构建产物仍由手机 APK 的 CXR 工作流安装，用户只需安装一个手机 APK。
 
+手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步周期、心率高低阈值、告警冷却和睡眠状态告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。当前小米真机主线由登录后常驻的 PC Companion 按手机配置读取 Provider；结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
+
 模块化重构说明见 [`docs/rabi-link-probe-merge-plan.md`](./docs/rabi-link-probe-merge-plan.md)。
 
 ## 当前可用性结论
@@ -473,11 +475,11 @@ Test-MiHealthProviderCallMethods -Serial <adb-serial> | ConvertTo-Json -Depth 8
 | 睡眠计划 | `Get-MiHealthSleepSchedule` | `available` | Provider 路径是 `sleep/schedule`。 |
 | 睡眠配置 | `Get-MiHealthSleepConfig` | `available` | Provider 路径是 `sleep/config`，当前可见 `trace_enable`。 |
 | 睡眠首页 Intent | `Get-MiHealthSleepHomepage` | `available` | Provider 路径是 `sleep/homepage`，返回小米健康内部路由 Intent。 |
-| 睡眠日报 | `Get-MiHealthSleepReport` | `conditional` | 路径存在，字段包括 `sleep_time`、`wake_time`、`duration`、`stage_list` 等；当前日期实测为空。 |
-| 睡眠阶段 | `Get-MiHealthSleepStages` | `empty` | 路径可查询，正确 selection 是 `date_time >= ? and date_time <= ?`；当前日期实测为空。 |
+| 睡眠日报 | `Get-MiHealthSleepReport` | `available` | 真机已返回 `sleep_time`、`wake_time`、`duration`、`stage_list` 等字段，可归一化为睡眠会话。 |
+| 睡眠阶段 | `Get-MiHealthSleepStages` | `available` | 正确 selection 是 `date_time >= ? and date_time <= ?`；真机当日已返回阶段记录。 |
 | 一天睡眠聚合 | `Get-MiHealthSleepDay` | `composite` | 聚合 schedule、config、homepage、report、stages，保留每项独立状态。 |
-| 最近多天睡眠聚合 | `Get-MiHealthSleepRecentDays` | `composite` | 逐日聚合 `Get-MiHealthSleepDay`；当前最近 3 天 report/stages 都为空。 |
-| 睡眠历史扫描 | `Search-MiHealthSleepData` | `empty` | 当前最近 14 天 `sleep/report` 和 `sleep/record` 都为空。 |
+| 最近多天睡眠聚合 | `Get-MiHealthSleepRecentDays` | `composite` | 逐日聚合 `Get-MiHealthSleepDay`；当日 report/stages 已验证可用，各日仍保留独立状态。 |
+| 睡眠历史扫描 | `Search-MiHealthSleepData` | `conditional` | 会向前逐日扫描 `sleep/report` 和 `sleep/record`；当前真机至少能命中当日睡眠数据。 |
 | Health Connect 睡眠 | `Invoke-HealthConnectProbe` | `empty` | 权限齐全；7 天窗口内心率、睡眠、步数记录仍为 0。 |
 | Provider 分类扫描 | `Test-MiHealthProviderCategories` | `composite` | 当前可枚举 `heartrate`、`sleep`、`hearing`；`step/spo2/stress/energy/...` 等常见分类未注册。 |
 | Provider 一键发现 | `Get-MiHealthProviderDiscovery` | `composite` | 默认聚合分类扫描、心率候选、睡眠候选、HealthProviderService；`-IncludeProviderCall` 才跑慢探测。 |
@@ -490,10 +492,10 @@ Test-MiHealthProviderCallMethods -Serial <adb-serial> | ConvertTo-Json -Depth 8
 - `heartrate/recent` 的字段映射函数只处理 `hrm` 和 `timestamp`，分别来自 `DailyHrReport.latestHrRecord.hr` 与 `DailyHrReport.latestHrRecord.time * 1000`。
 - `DailyHrReport` 内部还能看到 `hrRecords`、`stepHrRecords`、`singleHrRecords`、`abnormalHrRecords`、`abnormalHrHighRecords`、`abnormalHrLowRecords`、`abnormalFibRecords`，但当前 Provider 没有暴露这些列表。
 - `sleep/record` 的默认字段是 `begin_time`、`end_time`、`stage`，并强制要求 selection 含 `date_time` 且 `selectionArgs` 正好 2 个。
-- `sleep/record` 不接受 `date_time between ? and ?`；实测可执行形状是 `date_time >= ? and date_time <= ?`，当前返回空结果。
-- `sleep/report` 字段包括 `sleep_time`、`wake_time`、`duration`、`waking_times`、`stage_list`、`waking_duration`、`evaluation`，当前查询日期返回空。
-- 当前 `sleep/config` 返回 `trace_enable=0`，这可能解释为什么睡眠轨迹/report 为空，但还需要更多设备状态或用户设置证据确认。
-- `Search-MiHealthSleepData -DaysBack 14` 已验证最近 14 天没有 `sleep/report` 或 `sleep/record` 数据。
+- `sleep/record` 不接受 `date_time between ? and ?`；实测可执行形状是 `date_time >= ? and date_time <= ?`，当日已返回阶段记录。
+- `sleep/report` 字段包括 `sleep_time`、`wake_time`、`duration`、`waking_times`、`stage_list`、`waking_duration`、`evaluation`，真机当日已返回完整日报；`stage_list` 还能解析出带起止时间的阶段项。
+- `sleep/config` 的 `trace_enable` 不能单独用来判断 report 是否存在；即使该值为 0，当前真机仍能返回睡眠日报和阶段。
+- `Search-MiHealthSleepData` 会保留逐日状态；历史窗口是否有数据取决于小米健康本机实际留存，不能再用旧设备上的空结果概括所有日期。
 - `Invoke-HealthConnectProbe -HeartRateHours 168 -SleepHours 168 -StepsHours 168` 已验证 7 天窗口内 Health Connect 仍没有小米健康写入记录。
 - `Test-MiHealthProviderCategories` 已验证当前 Provider 可枚举分类是 `heartrate`、`sleep`、`hearing`；其中 `hearing` 属于听力保护/耳机噪声入口，不作为手环心率/睡眠主数据源。
 - `DataContentProvider.call()` 的方法参数不是普通方法名，而是 `content://com.mi.health.provider.main/<path>#<method>`；当前对 `heartrate/recent`、`heartrate`、`sleep/report`、`sleep/record` 的 `get/query/read/recent/report/record/records/history/list/daily/day` 候选方法实测都返回 `Result: null`。
@@ -508,8 +510,8 @@ flowchart TD
     C --> E["sleep/schedule<br/>睡眠计划 available"]
     C --> F["sleep/config<br/>睡眠配置 available"]
     C --> G["sleep/homepage<br/>内部路由 available"]
-    C --> H["sleep/report<br/>日报 conditional / 当前 empty"]
-    C --> I["sleep/record<br/>阶段可查 / 当前 empty"]
+    C --> H["sleep/report<br/>日报 available"]
+    C --> I["sleep/record<br/>阶段 available"]
     B --> J["内部 DailyHrReport / HrRecords<br/>24小时心率暂未暴露"]
     K --> L["HeartRateRecord / SleepSessionRecord<br/>权限齐全但当前 empty"]
     C --> M["Provider call()<br/>候选方法 empty"]

@@ -38,6 +38,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -58,10 +59,21 @@
         android:allowBackup="false"
         android:icon="@drawable/rabiroute_icon"
         android:roundIcon="@drawable/rabiroute_icon"
-        android:label="RabiLink"
+        android:label="Rabi 移动端"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         tools:replace="android:allowBackup">
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true"
+            tools:replace="android:authorities">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/rabi_file_paths"
+                tools:replace="android:resource" />
+        </provider>
         <uses-library
             android:name="org.apache.http.legacy"
             android:required="false" />
@@ -77,6 +89,10 @@
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".modules.wearable.WearableHealthSettingsActivity"
+            android:exported="false" />
 
         <activity
             android:name=".modules.rokid.RokidProbeActivity"
@@ -140,13 +156,41 @@
             android:foregroundServiceType="dataSync" />
 
         <service
+            android:name=".modules.wearable.WearableHealthSyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".modules.wearable.WearableHealthBootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <service
             android:name=".modules.rokid.RokidDeviceStatusSyncService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <service
+            android:name=".RabiConversationService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|dataSync|connectedDevice" />
+
         <receiver
             android:name=".BondedGattProbeReceiver"
             android:exported="true" />
+
+        <receiver
+            android:name=".RabiConversationBootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".TestCenterActivity"

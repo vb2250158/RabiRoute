@@ -291,11 +291,14 @@ export class RabiLinkConversationReviewer {
     const reviewPolicyPath = this.agentRolePath
       ? path.join(path.dirname(this.agentRolePath), "prompts", "rabilink-proactive-review.md")
       : "";
+    const requestedRouteProfileId = [...pendingReviewRequests].reverse()
+      .map((entry) => entry.routeProfileId?.trim())
+      .find((value): value is string => Boolean(value));
     const prompt = buildRabiLinkConversationReviewPrompt({
       ledgerPath: rabiLinkConversationLedgerPath(this.dataDir),
       archiveDir: rabiLinkConversationArchiveDir(this.dataDir),
       archiveIndexPath: rabiLinkConversationArchiveIndexPath(this.dataDir),
-      routeProfileId: this.routeProfileId,
+      routeProfileId: requestedRouteProfileId || this.routeProfileId,
       gatewayManagerUrl: this.gatewayManagerUrl,
       agentRolePath: this.agentRolePath,
       reviewPolicyPath: reviewPolicyPath && fs.existsSync(reviewPolicyPath) ? reviewPolicyPath : undefined,

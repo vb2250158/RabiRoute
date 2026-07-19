@@ -51,9 +51,16 @@ A plan describes one focused objective. Common fields:
   "status": "进行中",
   "priority": "medium",
   "kind": "documentation",
+  "currentStepId": "verify-schema",
   "currentStep": "verify schema and tests",
   "nextAction": "update both language versions",
   "waitingFor": "",
+  "blockedBy": "",
+  "steps": [
+    { "id": "inspect-current", "title": "Inspect the current model and UI", "status": "已完成" },
+    { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中" },
+    { "id": "update-readers", "title": "Update APIs, readers, and docs", "status": "未开始" }
+  ],
   "project": {
     "name": "RabiRoute",
     "path": "C:/Path/To/RabiRoute"
@@ -67,6 +74,8 @@ A plan describes one focused objective. Common fields:
   "updatedAt": "2026-07-16T00:00:00.000Z"
 }
 ```
+
+`steps` is the ordered execution path. Every new plan must list all of its steps, with at most one step in `进行中`. Top-level `currentStepId` must point to that step so both the UI and Agents can answer exactly where execution is. A step may include `detail`, `waitingFor`, `blockedBy`, and `completedAt`: `waitingFor` identifies who or what the plan awaits, while `blockedBy` explains why it cannot proceed and should normally live on the blocked current step. `currentStep` remains a progress note; it no longer acts as the step list or step identity. Because structured steps already express the future path, the UI does not repeat `nextAction`; Agents and legacy plans may still use that field. Legacy plans remain readable and should gain structured steps on their next update.
 
 Completed plans remain visible for confirmation. A role-knowledge snapshot archives them when the latest `updatedAt` is more than the current fixed 72-hour window old. It sets `archivedAt` and moves the file to `plans/archive/`.
 
@@ -82,8 +91,14 @@ Default plan limits:
 titleChars=80
 focusChars=80
 currentStepChars=1200
+stepTitleChars=120
+stepDetailChars=600
+stepWaitingForChars=300
+stepBlockedByChars=300
+maxSteps=100
 nextActionChars=600
 waitingForChars=300
+blockedByChars=600
 sourceSummaryChars=240
 keywordChars=32
 maxKeywords=24

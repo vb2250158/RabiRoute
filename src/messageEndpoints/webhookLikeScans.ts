@@ -145,6 +145,27 @@ export async function scanRabiLinkEndpoint<Runtime>(ctx: WebhookLikeScanContext<
   };
 }
 
+export async function scanWearableEndpoint<Runtime>(ctx: WebhookLikeScanContext<Runtime>): Promise<MessageAdapterScanResult> {
+  const runtimes = ctx.adapterRuntimes("wearable");
+  const relayRuntimes = ctx.adapterRuntimes("rabilink");
+  const recent = runtimes.some((runtime) => ctx.routeHasRecentMessages(runtime, "wearable"));
+  return {
+    type: "wearable",
+    label: "智能手表/手环",
+    maturity: "experimental",
+    installed: runtimes.length > 0,
+    requirements: [
+      { id: "route", label: "智能手表/手环消息端", required: true, ok: runtimes.length > 0, detail: runtimes.length > 0 ? "当前 Route 已添加健康消息端。" : "请先在当前 Route 添加智能手表/手环消息端。" },
+      { id: "relay", label: "RabiLink Relay 转接", required: true, ok: relayRuntimes.length > 0 || runtimes.length > 0, detail: "健康消息端复用全局 RabiLink Relay 与所选 Rabi PC。" },
+      { id: "mobile", label: "RabiLink 手机健康采集", required: true, ok: recent || undefined, detail: recent ? "已收到过穿戴健康事件。" : "请在 RabiLink 手机端配置设备、Health Connect 与同步规则。" }
+    ],
+    warnings: [
+      "小米 auth key 只能保存在手机 Android Keystore；不要填进 Route、Relay 或公开配置。",
+      "Health Connect 是否有数据取决于厂商写入；小米健康当前真机可能仍为空。"
+    ]
+  };
+}
+
 export async function scanWebhookEndpoint<Runtime>(ctx: WebhookLikeScanContext<Runtime>): Promise<MessageAdapterScanResult> {
   const { runtimes: webhookRuntimes, callbacks: webhookCallbacks, callbackReady: webhookCallbackReady } = scanCallbacks(ctx, "webhook");
 

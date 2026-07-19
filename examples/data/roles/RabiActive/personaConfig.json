@@ -2,6 +2,17 @@
   "recentMessageLimit": 12,
   "notificationRules": [
     {
+      "id": "rabi-active-wearable-health-alert",
+      "name": "智能手表/手环健康告警",
+      "enabled": true,
+      "targetGroupId": "",
+      "regex": "",
+      "template": "",
+      "routeKinds": [
+        "wearable_health_alert"
+      ]
+    },
+    {
       "id": "rabi-active-rabilink-legacy",
       "name": "RabiLink 兼容直接消息",
       "enabled": true,

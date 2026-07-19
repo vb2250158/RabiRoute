@@ -6,6 +6,35 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.16 - 2026-07-19
+
+### Structured plan steps and current position
+
+- New plans must now provide a complete ordered `steps` array. An in-progress plan uses `currentStepId` to identify the only in-progress step, and every step must be complete before the plan can be completed or archived.
+- Qt plan cards now lead with every step, completed progress, and a `Current: step N` callout, with the current row highlighted. The old six-row preview is gone. Legacy plans without steps show an explicit migration notice instead of deriving progress from two summaries.
+- Agent plan summaries, public examples, the plan-tracking skill, and bilingual API documentation now share the structured-step contract, backed by backend and Qt regression tests.
+
+### Standalone mobile endpoint and reliable Rabi Glass conversations
+
+- The Android example is now a complete phone-first Rabi message endpoint. After setup it opens multi-route persona chat, stores text, voice, images, video, audio, and arbitrary files in one private conversation ledger, and treats glasses as optional microphone, speaker, HUD, camera, and touchpad peripherals.
+- A phone foreground service owns stable uplink queues, a persistent downlink cursor, ASR/TTS recovery, post-boot message recovery, two persistent notifications, and ordinary Agent message notifications. Every message carries a `routeProfileId` and cannot be broadcast to unselected personas.
+- Configuration-assistant requests carry an explicit marker to the selected Rabi PC. Writes, deletion, stop, overwrite, and external actions remain behind the existing safety gates, and completion may be claimed only after a successful API response and read-back verification.
+- Relay and Outbox now support bidirectional attachments and attachment-only messages, while public RabiLink identity responses no longer expose the application token. Added the mobile audit command, Relay/Outbox/routing regressions, and phone smoke evidence; physical Rokid glasses validation remains a release gate.
+
+### Smartwatch and fitness-band health endpoint
+
+- Added a dedicated `wearable` endpoint, structured role health timeline, and Manager API for heart rate, sleep sessions, sleep stages, current sleep state, history, 24-hour summaries, and per-device threshold policy.
+- Routine observations are recorded without entering chat or waking the Agent. Only high/low heart-rate thresholds or sleep-state transitions produce `wearable_health_alert` events through the existing Route and Agent delivery path.
+- Android supports Health Connect. The Xiaomi path adds a phone-configured, dry-run-by-default PC ADB companion, scheduled-task installer, and dedicated Route configurator. Authentication secrets stay in Android Keystore and never enter Relay, logs, or Agent context.
+- Added coverage for deduplication, cooldowns, sensitive-metadata removal, Relay allowlisting, Manager queries, and alert delivery. Automation proves the protocol and implementation only; long-running heart-rate and sleep stability still requires real-device validation.
+
+### Rabi Codex Context plugin and knowledge-only Manager mode
+
+- Added the first independently installable `rabi-codex-context` Codex plugin prototype. It explicitly binds a real session ID to a Rabi persona and uses `SessionStart` / `UserPromptSubmit` hooks to inject a bounded persona working set, plan/memory indexes, and a small amount of keyword-matched content.
+- Unbound sessions receive no context, and `use`, `status`, `refresh`, and `off` require strict control markers. The plugin neither copies role knowledge nor becomes a second memory source of truth, and it does not require Rabi PC to remain running.
+- Manager now supports `RABIROUTE_MANAGER_AUTOSTART=0` for knowledge-interface-only use without starting gateways, Relay, or LAN discovery. Role-panel delivery reports success only after an Agent packet was actually delivered.
+- Updated the public Rabi plans and recent memories for the mobile endpoint, wearable health, Codex session binding, and structured-plan contract. Local Rabi context was updated through Manager APIs while private runtime `data/` remains uncommitted.
+
 ## 0.1.15 - 2026-07-18
 
 ### Character-TTS closure for the speech message endpoint

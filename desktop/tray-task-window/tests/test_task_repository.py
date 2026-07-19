@@ -23,11 +23,18 @@ class PlanRepositoryTest(unittest.TestCase):
                     {
                         "title": "结构化计划",
                         "status": "进行中",
+                        "currentStepId": "implementation",
                         "createdAt": "2026-07-17T10:00:00+08:00",
                         "waitingFor": "设计确认",
+                        "blockedBy": "设计稿尚未确认",
                         "steps": [
                             {"title": "需求梳理", "completed": True, "completedAt": "10:30"},
-                            {"title": "界面实现", "current": True},
+                            {
+                                "id": "implementation",
+                                "title": "界面实现",
+                                "current": True,
+                                "blockedBy": "缺少最终设计稿",
+                            },
                             "联调验收",
                         ],
                     },
@@ -40,8 +47,12 @@ class PlanRepositoryTest(unittest.TestCase):
             plan = snapshot.current[0]
             self.assertEqual(plan.created_at, "2026-07-17T10:00:00+08:00")
             self.assertEqual(plan.waiting_for, "设计确认")
+            self.assertEqual(plan.blocked_by, "设计稿尚未确认")
+            self.assertEqual(plan.current_step_id, "implementation")
             self.assertEqual([step.status for step in plan.steps], ["已完成", "进行中", "未开始"])
             self.assertEqual(plan.steps[0].completed_at, "10:30")
+            self.assertEqual(plan.steps[1].step_id, "implementation")
+            self.assertEqual(plan.steps[1].blocked_by, "缺少最终设计稿")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-codex-context-plugin",
+  "title": "Codex 人格上下文插件按真实会话显式绑定",
+  "focus": "Codex session 与 Rabi 人格目录的显式绑定",
+  "content": "Rabi Codex Context 是可独立安装的 Codex 插件。它只保存真实 Codex session ID 到 RoleId 和角色根目录的绑定，通过 SessionStart 与 UserPromptSubmit Hook 注入受限的人格工作集、计划/记忆索引和关键词命中的少量正文。未绑定会话不注入；use、status、refresh、off 只接受严格控制标记。插件不复制人格知识、不成为第二个记忆真源，也不要求 Rabi PC 常驻。角色目录仍是唯一事实源，缺失或截断时必须说明不确定性。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：Codex 会话人格显式绑定与单一知识真源"
+  },
+  "createdAt": "2026-07-19T00:00:00+08:00",
+  "updatedAt": "2026-07-19T00:00:00+08:00",
+  "keywords": ["Codex 插件", "session ID", "Rabi 人格", "Hook", "显式绑定", "计划索引", "记忆召回", "单一真源"]
+}

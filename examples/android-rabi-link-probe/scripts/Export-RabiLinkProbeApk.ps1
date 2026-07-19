@@ -19,7 +19,7 @@ if ($Build) {
             $knownGradle = Join-Path $env:USERPROFILE ".gradle\wrapper\dists\gradle-8.6-bin\afr5mpiioh2wthjmwnkmdsd5w\gradle-8.6\bin\gradle.bat"
         }
         if (-not (Test-Path -LiteralPath $knownGradle)) {
-            throw "没有找到 gradlew.bat，也没有找到 Gradle 8.6。当前 APK 需要 AGP 8.4.2 / Gradle 8.6 才能打包 phone.sdk.rfmlite。"
+            throw "Gradle 8.6 was not found. This APK requires AGP 8.4.2 and Gradle 8.6 to package phone.sdk.rfmlite."
         }
         $localJdk = Join-Path $projectRoot "out\tools\jdk-17.0.15+6"
         if (Test-Path -LiteralPath $localJdk) {
@@ -39,7 +39,7 @@ if ($Build) {
         }
     }
     if ($LASTEXITCODE -ne 0) {
-        throw "Gradle 构建失败。"
+        throw "Gradle build failed."
     }
 }
 
@@ -47,7 +47,7 @@ if ([string]::IsNullOrWhiteSpace($ApkPath)) {
     $ApkPath = Join-Path $projectRoot "app\build\outputs\apk\debug\app-debug.apk"
 }
 if (-not (Test-Path -LiteralPath $ApkPath)) {
-    throw "APK 不存在：$ApkPath"
+    throw "APK does not exist: $ApkPath"
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
@@ -66,7 +66,7 @@ if ($buildGradleText -match 'versionCode\s+([0-9]+)') {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$outputName = "RabiLinkProbe-v$versionName+$versionCode-$timestamp-debug.apk"
+$outputName = "RabiMobile-v$versionName+$versionCode-$timestamp-debug.apk"
 $outputApk = Join-Path $OutputDir $outputName
 Copy-Item -LiteralPath $ApkPath -Destination $outputApk -Force
 

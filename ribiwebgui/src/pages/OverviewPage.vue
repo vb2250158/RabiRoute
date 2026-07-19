@@ -19,6 +19,7 @@ const rabiError = ref("");
 const rabiLinkRelayEnabled = ref(false);
 const rabiLinkRelayUrl = ref("");
 const rabiLinkRelayAppToken = ref("");
+const rabiLinkRelayTokenConfigured = ref(false);
 const rabiLinkRelayDeviceId = ref("");
 const rabiLinkRelayClaimWaitMs = ref(60000);
 const rabiLinkRelayReplyIdleTimeoutMs = ref(60000);
@@ -44,6 +45,7 @@ function loadRabiLinkRelayForm(): void {
   rabiLinkRelayEnabled.value = relay.enabled === true;
   rabiLinkRelayUrl.value = relay.url || "";
   rabiLinkRelayAppToken.value = relay.token || "";
+  rabiLinkRelayTokenConfigured.value = relay.tokenConfigured === true || Boolean(relay.token);
   rabiLinkRelayDeviceId.value = relay.deviceId || store.meta.computerName || "";
   rabiLinkRelayClaimWaitMs.value = Number(relay.claimWaitMs || 60000);
   rabiLinkRelayReplyIdleTimeoutMs.value = Number(relay.replyIdleTimeoutMs || 60000);
@@ -78,21 +80,22 @@ async function saveRabiIdentity(): Promise<boolean> {
   rabiSaved.value = false;
   rabiError.value = "";
   try {
+    const relayPatch: Record<string, unknown> = {
+      enabled: rabiLinkRelayEnabled.value,
+      url: rabiLinkRelayUrl.value,
+      deviceId: rabiLinkRelayDeviceId.value,
+      claimWaitMs: Number(rabiLinkRelayClaimWaitMs.value || 60000),
+      replyIdleTimeoutMs: Number(rabiLinkRelayReplyIdleTimeoutMs.value || 60000),
+      speechProxyEnabled: rabiLinkSpeechProxyEnabled.value,
+      speechServiceUrl: rabiLinkSpeechServiceUrl.value
+    };
+    if (rabiLinkRelayAppToken.value.trim()) relayPatch.token = rabiLinkRelayAppToken.value.trim();
     const res = await fetch("/api/rabi/identity", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         rabiName: rabiName.value,
-        rabiLinkRelay: {
-          enabled: rabiLinkRelayEnabled.value,
-          url: rabiLinkRelayUrl.value,
-          token: rabiLinkRelayAppToken.value,
-          deviceId: rabiLinkRelayDeviceId.value,
-          claimWaitMs: Number(rabiLinkRelayClaimWaitMs.value || 60000),
-          replyIdleTimeoutMs: Number(rabiLinkRelayReplyIdleTimeoutMs.value || 60000),
-          speechProxyEnabled: rabiLinkSpeechProxyEnabled.value,
-          speechServiceUrl: rabiLinkSpeechServiceUrl.value
-        }
+        rabiLinkRelay: relayPatch
       })
     });
     const data = await res.json();
@@ -477,7 +480,14 @@ const selectedAgentNote = computed(() => {
         <div class="form-grid">
           <v-text-field v-model="rabiLinkRelayDeviceId" label="本机 Rabi PC 标识" :placeholder="store.meta.computerName || 'rabilink-pc'" density="compact" hide-details />
           <v-text-field v-model="rabiLinkRelayUrl" label="Relay 服务器地址" placeholder="https://rabiroute.example.com" density="compact" hide-details />
-          <v-text-field v-model="rabiLinkRelayAppToken" label="Relay 应用 token" placeholder="X-RabiLink-Token" type="password" density="compact" hide-details />
+          <v-text-field
+            v-model="rabiLinkRelayAppToken"
+            label="Relay 应用 token"
+            :placeholder="rabiLinkRelayTokenConfigured ? '已安全保存；留空保持不变' : 'X-RabiLink-Token'"
+            type="password"
+            density="compact"
+            hide-details
+          />
           <v-text-field v-model.number="rabiLinkRelayClaimWaitMs" label="领取任务等待毫秒" type="number" min="0" max="60000" step="1000" density="compact" hide-details />
           <v-text-field v-model.number="rabiLinkRelayReplyIdleTimeoutMs" label="回复空闲超时毫秒" type="number" min="1000" max="120000" step="1000" density="compact" hide-details />
         </div>

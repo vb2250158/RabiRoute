@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-rabilink-bridge",
-  "title": "RabiLink 是眼镜与本地 Agent 的持续消息端",
-  "focus": "RabiLink 眼镜端持续消息流、手机后端与媒体附件边界",
-  "content": "RabiLink 使用独立 rabilink message adapter 和 route kind。AIUI 继续以 record-first 观察、空闲/触摸板/周期审阅和持续下行承担当前定制主体验；Rabi Glass 原生路线把眼镜收窄为 PCM 采集/播放与 HUD 薄客户端，手机后端负责 Relay 传输，选定的 Rabi PC 负责 ASR、TTS、Agent 上下文和 Action Gate。图片、视频和音频先经按应用隔离的设备媒体白名单上传，PC worker 只物化受控下载路径，再把附件元数据写入统一会话账本。普通回复和无前置任务的主动消息继续进入应用级有序下行队列，主动生产者必须经过 `/api/agent/replies` 的 Route 输出策略与审计门。绑定设备只可调用明确白名单中的模型、TTS 与 ASR 路径，不能访问 WebGUI 代理、worker API、主机麦克风控制或任意本地路径。真实 token、域名、设备 ID、私聊内容、媒体和本机路径不得进入公开示例。",
+  "title": "RabiLink 是移动优先的可靠主动消息端",
+  "focus": "移动聊天、可选眼镜、穿戴健康与统一 Action Gate",
+  "content": "RabiLink 移动设备端以手机作为完整客户端和可靠后端，眼镜只是可选的麦克风、扬声器、HUD、相机和触摸板外设。手机独立持有多路由人格会话、稳定上行队列、持久 cursor、附件、通知、ASR/TTS 设置和重启恢复；所有文本、配置请求、普通回复与主动投递继续经过选定 Rabi PC 的 Agent 上下文和 Outbox / Action Gate。穿戴健康使用独立 wearable 消息端，把心率、睡眠会话、阶段和状态写入角色健康时间线；常规样本不进入聊天账本也不唤醒 Agent，只有阈值或睡眠状态变化告警才路由给 Agent。手表认证秘钥只保存在手机 Keystore。公开示例不得包含真实 token、设备 ID、聊天、媒体或本机路径。手机真机冒烟不等于眼镜物理验收或健康长时间稳定性已经完成。",
   "source": {
     "kind": "example",
-    "summary": "公开示例记忆：RabiLink AIUI 持续消息流、主动投递和脱敏边界"
+    "summary": "公开示例记忆：移动消息端、穿戴健康、主动投递和脱敏边界"
   },
   "createdAt": "2026-07-06T00:00:00+08:00",
-  "updatedAt": "2026-07-18T00:00:00+08:00",
-  "keywords": ["RabiLink", "AIUI", "Rabi Glass", "Rokid", "手机后端", "薄客户端", "媒体附件", "Relay", "持续消息流", "主动投递", "ASR", "TTS", "Action Gate", "应用隔离", "脱敏"]
+  "updatedAt": "2026-07-19T00:00:00+08:00",
+  "keywords": ["RabiLink", "移动消息端", "手机后端", "Rabi Glass", "多路由人格", "可靠队列", "媒体附件", "通知", "wearable", "心率", "睡眠", "健康告警", "Action Gate", "真机验收"]
 }

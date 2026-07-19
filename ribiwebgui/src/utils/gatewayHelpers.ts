@@ -24,6 +24,7 @@ export const routeKindLabels: Record<string, string> = {
   manual_trigger: "手动触发",
   role_panel_message: "角色面板消息",
   voice_transcript: "语音转写",
+  wearable_health_alert: "智能手表/手环健康告警",
   wecom_message: "企业微信消息"
 };
 
@@ -87,6 +88,10 @@ export const templateVars = [
   { name: "voiceSource", description: "语音转写来源，例如 fennenote、xiaoai 或 webhook。" },
   { name: "voiceDurationSeconds", description: "语音片段时长，单位秒。" },
   { name: "voicePeak", description: "语音片段峰值音量。" },
+  { name: "healthAlertType", description: "穿戴健康告警类型，例如 heart_rate_high、heart_rate_low、sleep_state_changed。" },
+  { name: "healthMetric", description: "健康指标类型，例如 heart_rate、sleep_state。" },
+  { name: "heartRateBpm", description: "触发告警的心率值，单位 bpm。" },
+  { name: "sourceDeviceId", description: "产生当前穿戴健康事件的稳定设备 ID。" },
   { name: "wecomReqId", description: "企业微信 WebSocket 请求 ID，用于定位来源消息。" },
   { name: "wecomConversationId", description: "企业微信会话 ID。" },
   { name: "wecomChatId", description: "企业微信群聊 chat id；模板里的 groupId 会优先使用这个值。" },
@@ -203,6 +208,7 @@ export function adapterLabel(type: string): string {
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
   if (type === "xiaoai") return "小米音箱 / 小爱";
   if (type === "rabilink") return "眼镜端（经 RabiLink）";
+  if (type === "wearable") return "智能手表/手环";
   if (type === "wecom") return "企业微信 / WeCom";
   if (type === "webhook") return "通用 Webhook";
   if (type === "disabled") return "已禁用";
@@ -218,7 +224,7 @@ export function isWebhookLikeAdapter(type: string): boolean {
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
-  return type === "napcat" || type === "wecom" || type === "heartbeat" || isWebhookLikeAdapter(type);
+  return type === "napcat" || type === "wecom" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
 }
 
 export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean {
@@ -230,6 +236,7 @@ export function adapterSourceAliases(type: string): string[] {
   if (type === "speech") return ["speech", "rabispeech", "rabipc", "语音消息端"];
   if (type === "xiaoai") return ["xiaoai", "xiao_ai", "xiao-ai", "mi_speaker", "mi-speaker", "xiaomi", "小爱", "小米音箱"];
   if (type === "rabilink") return ["rabilink", "rabi_link", "rabi-link", "rokid", "rokid_glass", "rizon", "lingzhu", "relay", "服务器", "直连", "乐奇", "乐棋"];
+  if (type === "wearable") return ["wearable", "watch", "band", "health", "smartwatch", "手表", "手环", "健康", "心率", "睡眠"];
   if (type === "wecom") return ["wecom", "wechat-work", "企业微信", "企微"];
   if (type === "webhook") return ["webhook", "generic_webhook", "generic-webhook"];
   return [type];
@@ -300,7 +307,7 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     gateway.xiaoaiWebhookPort = Number(gateway.xiaoaiWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     gateway.xiaoaiWebhookPath = gateway.xiaoaiWebhookPath || adapterDefaultWebhookPath("xiaoai");
   }
-  if (adapters.includes("rabilink")) {
+  if (adapters.includes("rabilink") || adapters.includes("wearable")) {
     gateway.rabiLinkWebhookPort = Number(gateway.rabiLinkWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     gateway.rabiLinkWebhookPath = gateway.rabiLinkWebhookPath || adapterDefaultWebhookPath("rabilink");
     gateway.rabiLinkWebhookHost = gateway.rabiLinkWebhookHost || "0.0.0.0";
@@ -433,6 +440,12 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       title: "眼镜端（经 RabiLink）",
       note: "眼镜是消息来源；系统内置 RabiLink 负责转接，再由当前路由决定是否投递 Agent。",
       groups: [{ title: "眼镜文本事件", routeKinds: ["voice_transcript"] }]
+    },
+    {
+      adapter: "wearable",
+      title: "智能手表/手环",
+      note: "结构化心率与睡眠先记录到角色健康时间线，只有规则命中时才投递 Agent。",
+      groups: [{ title: "健康告警", routeKinds: ["wearable_health_alert"] }]
     },
     {
       adapter: "wecom",

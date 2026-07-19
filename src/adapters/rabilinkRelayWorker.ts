@@ -3,12 +3,21 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
+import { forwardMessage } from "../forwarding.js";
 import { appendAdapterLog } from "../history.js";
 import {
   appendRabiLinkConversationEntry,
   DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS
 } from "../rabilinkConversationLedger.js";
 import { startDefaultRabiLinkConversationReviewer } from "../rabilinkConversationReviewer.js";
+import {
+  ingestWearableHealthObservation,
+  type WearableHealthObservationInput
+} from "../wearableHealth.js";
+import {
+  buildWearableHealthAlertRecord,
+  wearableHealthAlertTemplateValues
+} from "../wearableHealthAlertDelivery.js";
 import {
   acceptWebhookPayload,
   nestedTextFromData,
@@ -162,6 +171,8 @@ function payloadFromRelayTask(task: RelayTask, taskId: string): WebhookPayload {
     source: sender,
     context: stringPayloadField(task.context),
     sessionId: stringPayloadField(task.conversationId) || stringPayloadField(task.sessionId),
+    routeProfileId: stringPayloadField(task.routeProfileId),
+    configurationRequested: task.configurationRequested === true,
     text: relayTaskText(task),
     data: task,
     sourceDeviceId: stringPayloadField(task.sourceDeviceId) || stringPayloadField(task.deviceId),
@@ -237,6 +248,82 @@ function isRecordOnlyObservation(task: RelayTask): boolean {
   return relayTaskField(task, "deliveryMode") === "observe" || relayTaskField(task, "type") === "rabilink.observation";
 }
 
+function wearableHealthObservationFromTask(task: RelayTask): WearableHealthObservationInput | null {
+  const health = task.health;
+  if (!health || typeof health !== "object" || Array.isArray(health)) return null;
+  const value = health as Record<string, unknown>;
+  if (!Array.isArray(value.samples) || value.samples.length === 0) return null;
+  return {
+    eventId: relayTaskField(task, "clientMessageId") || relayTaskField(task, "id"),
+    capturedAt: relayTaskNumber(task, "capturedAt"),
+    source: "rabilink-wearable",
+    sourceDeviceId: relayTaskField(task, "sourceDeviceId"),
+    sourceDeviceName: relayTaskField(task, "sourceDeviceName"),
+    sourceDeviceKind: relayTaskField(task, "sourceDeviceKind") || "wearable",
+    transport: relayTaskField(task, "transport") || "rabilink",
+    policy: value.policy,
+    samples: value.samples
+  };
+}
+
+export type WearableHealthRelayTaskOptions = {
+  enabled?: boolean;
+  memoryDataDir?: string;
+  agentRoleId?: string;
+  managerPort?: string | number;
+  forward?: typeof forwardMessage;
+  appendLog?: typeof appendAdapterLog;
+};
+
+export function handleWearableHealthRelayTask(
+  task: RelayTask,
+  taskId: string,
+  options: WearableHealthRelayTaskOptions = {}
+): boolean {
+  const observation = wearableHealthObservationFromTask(task);
+  if (!observation) return false;
+  const enabled = options.enabled ?? config.messageAdapterTypes.includes("wearable");
+  const appendLog = options.appendLog ?? appendAdapterLog;
+  if (!enabled) {
+    appendLog("wearable", {
+      level: "warning",
+      event: "health_observation_ignored",
+      message: "Structured wearable health observation was ignored because the wearable message adapter is disabled.",
+      data: { taskId, sourceDeviceId: relayTaskField(task, "sourceDeviceId") }
+    });
+    return true;
+  }
+  const memoryDataDir = options.memoryDataDir ?? config.memoryDataDir;
+  const agentRoleId = options.agentRoleId ?? config.agentRoleId;
+  const managerPort = options.managerPort ?? process.env.GATEWAY_MANAGER_PORT ?? "8790";
+  const deliver = options.forward ?? forwardMessage;
+  const result = ingestWearableHealthObservation(memoryDataDir, observation);
+  for (const alert of result.alerts) {
+    const record = buildWearableHealthAlertRecord(alert, {
+      agentRoleId,
+      managerPort,
+      sourceDeviceId: relayTaskField(task, "sourceDeviceId"),
+      sourceDeviceName: relayTaskField(task, "sourceDeviceName"),
+      sourceDeviceKind: relayTaskField(task, "sourceDeviceKind") || "wearable",
+      transport: relayTaskField(task, "transport") || "rabilink"
+    });
+    deliver("wearable_health_alert", record, wearableHealthAlertTemplateValues(alert));
+  }
+  appendLog("wearable", {
+    event: "health_observation_recorded",
+    message: `Recorded ${result.accepted.length} wearable health samples; ${result.deduplicated.length} deduplicated; ${result.alerts.length} alerts.`,
+    data: {
+      taskId,
+      eventId: result.eventId,
+      sourceDeviceId: relayTaskField(task, "sourceDeviceId"),
+      acceptedCount: result.accepted.length,
+      deduplicatedCount: result.deduplicated.length,
+      alertCount: result.alerts.length
+    }
+  });
+  return true;
+}
+
 export function rabiLinkRelayTaskDisposition(task: RelayTask): RabiLinkRelayTaskDisposition {
   if (isConversationReviewRequest(task)) return "review_request";
   if (isRecordOnlyObservation(task)) return "record_only";
@@ -259,6 +346,7 @@ export async function publishRabiLinkRelayMessage(
     proactive?: boolean;
     final?: boolean;
     metadata?: Record<string, unknown>;
+    attachments?: Array<Record<string, unknown>>;
     targetDeviceIds?: string[];
     targetDeviceKinds?: string[];
     presentation?: Array<"text" | "tts" | "notification" | "haptic">;
@@ -298,6 +386,8 @@ export async function publishRabiLinkRelayMessage(
       proactive: options.proactive !== false,
       final: options.final !== false,
       metadata: options.metadata || {},
+      routeProfileId: String(options.metadata?.routeProfileId || ""),
+      attachments: options.attachments || [],
       targetDeviceIds: options.targetDeviceIds || [],
       targetDeviceKinds: options.targetDeviceKinds || [],
       presentation: options.presentation || [],
@@ -308,12 +398,41 @@ export async function publishRabiLinkRelayMessage(
   }, relayUrl);
 }
 
+export async function uploadRabiLinkRelayAttachment(
+  filePath: string,
+  contentType: string,
+  fileName: string,
+  relay: { url?: string; token?: string } = {}
+): Promise<Record<string, unknown>> {
+  const relayUrl = relay.url?.trim().replace(/\/+$/, "") || normalizedRelayBaseUrl();
+  const relayToken = relay.token?.trim() || config.rabiLinkRelayAppToken.trim();
+  const data = fs.readFileSync(filePath);
+  if (data.length > 64 * 1024 * 1024) throw new Error("RabiLink attachment exceeds 64 MiB.");
+  const response = await fetch(`${relayUrl}/api/rabilink/devices/media?fileName=${encodeURIComponent(fileName)}`, {
+    method: "POST",
+    headers: { "X-RabiLink-Token": relayToken, "Content-Type": contentType || "application/octet-stream" },
+    body: data
+  });
+  const body = await response.json() as Record<string, unknown>;
+  if (!response.ok) throw new Error(String(body.message || `RabiLink attachment upload failed: ${response.status}`));
+  return body.attachment as Record<string, unknown>;
+}
+
 async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: string, task: RelayTask): Promise<void> {
   const taskId = relayTaskId(task);
   if (!taskId) {
     throw new Error("Relay task has no id.");
   }
   if (!acceptedRelayTasks.has(taskId)) {
+    if (handleWearableHealthRelayTask(task, taskId)) {
+      rememberAcceptedRelayTask(taskId);
+      await finishRelayTask(taskId, {
+        ok: true,
+        status: "done",
+        accepted: true
+      });
+      return;
+    }
     const attachments = await materializeRelayAttachments(task, taskId);
     if (attachments.length) task.attachments = attachments;
     const text = relayTaskText(task);
@@ -339,6 +458,7 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
       sourceDeviceName: relayTaskField(task, "sourceDeviceName") || "RabiLink device",
       sourceDeviceKind: relayTaskField(task, "sourceDeviceKind"),
       transport: relayTaskField(task, "transport"),
+      routeProfileId: relayTaskField(task, "routeProfileId"),
       sequence: relayTaskNumber(task, "sequence"),
       capturedAt: relayTaskNumber(task, "capturedAt"),
       requiresReview: !reviewRequested && recordOnly,
@@ -401,8 +521,16 @@ export function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhook
     patchRelayStatus(profile, { relayWorker: "disabled", message: "RabiLink Relay worker is disabled." });
     return;
   }
-  const workerKey = `${profile.type}:${normalizedRelayBaseUrl()}:${config.rabiLinkRelayDeviceId}`;
-  if (runningRelayWorkers.has(workerKey)) return;
+  const workerKey = `${normalizedRelayBaseUrl()}:${config.rabiLinkRelayDeviceId}`;
+  if (runningRelayWorkers.has(workerKey)) {
+    patchRelayStatus(profile, {
+      relayWorker: "running",
+      relayUrl: normalizedRelayBaseUrl(),
+      relayDeviceId: config.rabiLinkRelayDeviceId,
+      message: "RabiLink Relay worker is shared with another device message adapter."
+    });
+    return;
+  }
   runningRelayWorkers.add(workerKey);
   startDefaultRabiLinkConversationReviewer();
   void (async () => {

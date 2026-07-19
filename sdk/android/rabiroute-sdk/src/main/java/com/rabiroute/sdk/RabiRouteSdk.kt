@@ -102,6 +102,8 @@ data class RabiLinkPortableMessage(
     val targetDeviceKinds: List<String>,
     val presentation: List<String>,
     val priority: String,
+    val routeProfileId: String,
+    val attachments: List<JSONObject>,
     val rawJson: JSONObject
 )
 
@@ -570,7 +572,7 @@ class RabiRouteSdk @JvmOverloads constructor(
         }
     }
 
-    private fun requestJson(
+    internal fun requestJson(
         url: String,
         method: String,
         body: String?,
@@ -707,11 +709,18 @@ class RabiRouteSdk @JvmOverloads constructor(
             targetDeviceKinds = item.optJSONArray("targetDeviceKinds").toStringList(),
             presentation = item.optJSONArray("presentation").toStringList(),
             priority = item.optString("priority", "normal"),
+            routeProfileId = item.optString("routeProfileId"),
+            attachments = item.optJSONArray("attachments").toObjectList(),
             rawJson = item
         )
 
     private fun JSONArray?.toStringList(): List<String> {
         if (this == null) return emptyList()
         return (0 until length()).map { optString(it) }.filter { it.isNotBlank() }
+    }
+
+    private fun JSONArray?.toObjectList(): List<JSONObject> {
+        if (this == null) return emptyList()
+        return (0 until length()).mapNotNull { optJSONObject(it) }
     }
 }
