@@ -38,6 +38,7 @@ Manager 或 UI 预览
 默认注入只放轻量信息：
 
 - 当前事件的必要信息。
+- QQ 消息里的 CQ reply / at 代码解析；引用链会按消息记录递归展开，at 映射集中显示。
 - route 配置允许时的最近消息摘要。
 - 角色和路由路径。
 - Agent 需要关注的接口文档链接。
@@ -199,6 +200,11 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 [消息]
 <message>
 
+[消息代码解析]
+[CQ:reply,id=<messageId>] : <被引用消息摘要>
+  [CQ:reply,id=<messageId>] : <更早的被引用消息摘要>
+[CQ:at,qq=<qq>] : <群名片或昵称>
+
 [最近消息]
 最近 <recentMessageLimit> 条：
 <recentMessages>
@@ -259,6 +265,8 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 [用户模板补充]
 <用户在 route 模板里写的可选补充要求；为空时省略本段>
 ```
+
+`[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`，持续展开到没有引用、查不到引用、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。
 
 当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，并在 `replyContext` 写入 `characterTtsDialogue=true`。`[回复回传要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到普通回复 API；Outbox 再按当前 Route 的人格、声线、模型、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
 

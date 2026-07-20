@@ -10,12 +10,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 TRAY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TRAY_ROOT))
 
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QProgressBar, QPushButton
 
 from rabiroute_tray.manager_client import ManagerSnapshot
 from rabiroute_tray.role_context_repository import ContextEntry, RoleContextSnapshot
 from rabiroute_tray.task_repository import PlanItem, PlanSnapshot, PlanStep
-from rabiroute_tray.task_window import ExpandableCard, KeywordPanel, STYLESHEET, TaskWindow, VIEW_LABELS
+from rabiroute_tray.task_window import ExpandableCard, KeywordPanel, MessageComposer, STYLESHEET, TaskWindow, VIEW_LABELS
 
 
 class TaskWindowLayoutTest(unittest.TestCase):
@@ -99,6 +101,44 @@ class TaskWindowLayoutTest(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(self.window.chat_input_frame.isVisible(), view_key == "chat")
 
+    def test_chat_groups_messages_under_one_separator_per_day(self) -> None:
+        self.window.role_messages = [
+            {"direction": "assistant", "sender": "Agent", "text": "第一条", "time": 1_768_579_200},
+            {"direction": "user", "sender": "本地用户", "text": "第二条", "time": 1_768_579_260},
+        ]
+        self.window.set_view("chat")
+        self.app.processEvents()
+
+        separators = self.window.content_body.findChildren(QLabel, "timeSeparator")
+        times = self.window.content_body.findChildren(QLabel, "chatTime")
+        self.assertEqual(len(separators), 1)
+        self.assertEqual(len(times), 2)
+        self.assertTrue(all(len(label.text()) == 5 for label in times))
+
+    def test_chat_attachment_uses_compact_file_row(self) -> None:
+        attachment = self.window._attachment_widget({"name": "report.zip", "size": 1_572_864})
+        self.assertEqual(attachment.objectName(), "chatAttachment")
+        self.assertEqual(attachment.findChild(QLabel, "chatAttachmentName").text(), "report.zip")
+        self.assertEqual(attachment.findChild(QLabel, "chatAttachmentSize").text(), "1.5 MB")
+        attachment.close()
+
+    def test_message_composer_sends_on_enter_and_keeps_shift_enter_for_newline(self) -> None:
+        composer = MessageComposer()
+        send_count = 0
+
+        def record_send() -> None:
+            nonlocal send_count
+            send_count += 1
+
+        composer.send_requested.connect(record_send)
+        composer.show()
+        QTest.keyClick(composer, Qt.Key_Return)
+        self.assertEqual(send_count, 1)
+        QTest.keyClick(composer, Qt.Key_Return, Qt.ShiftModifier)
+        self.assertEqual(send_count, 1)
+        self.assertIn("\n", composer.toPlainText())
+        composer.close()
+
     def test_current_view_separates_plans_and_recent_memory(self) -> None:
         self.window.set_view("current")
         self.app.processEvents()
@@ -155,6 +195,38 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertTrue(card.keywords_panel.expanded_values.isVisible())
         for keyword in ["PangHu", "Bug", "工会", "Guild", "编号1187", "messageId:12345"]:
             self.assertIn(keyword, card.keywords_panel.expanded_values.text())
+        card.close()
+
+    def test_collapsed_plan_adds_current_step_as_third_summary_row(self) -> None:
+        plan = PlanItem(
+            title="折叠计划摘要测试",
+            status="进行中",
+            current_step_id="implementation",
+            steps=[
+                PlanStep("需求确认", "已完成", step_id="requirements"),
+                PlanStep("实现界面", "进行中", step_id="implementation"),
+            ],
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", ["界面", "计划"], status=plan.status, plan=plan)
+        card.show()
+        self.app.processEvents()
+
+        self.assertTrue(card.current_step_line.isVisible())
+        self.assertEqual(card.current_step_value.text(), "第 2 步 · 实现界面")
+        self.assertTrue(card.keywords_panel.summary_line.isVisible())
+
+        card.set_expanded(True)
+        self.app.processEvents()
+        self.assertFalse(card.current_step_line.isVisible())
+        card.close()
+
+    def test_collapsed_legacy_plan_uses_current_step_text(self) -> None:
+        plan = PlanItem(title="旧计划", status="进行中", current_step="整理历史资料")
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        card.show()
+        self.app.processEvents()
+
+        self.assertEqual(card.current_step_value.text(), "整理历史资料")
         card.close()
 
     def test_expanded_plan_uses_structured_summary_and_real_step_progress(self) -> None:

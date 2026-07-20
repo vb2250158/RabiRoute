@@ -5,8 +5,8 @@
   "priority": "medium",
   "kind": "ui",
   "currentStepId": "add-real-screenshots",
-  "currentStep": "结构化计划步骤模型与托盘完整步骤视图已完成；当前补齐真实脱敏界面截图。",
-  "nextAction": "为使用手册补齐真实脱敏界面截图，并继续完善人格路由预览、计划步骤正式数据模型、跨电脑语音重测与跨端排障入口；在不同声卡和真实长时间会话中复核语音监视器轮询、波形、错误恢复和 FIFO 状态，根据真实发布频率再评估代码签名与更新通道",
+  "currentStep": "结构化计划步骤模型、托盘完整步骤视图和聊天阅读/输入体验已完成；WebGUI 已把 Manager 默认角色面板从可配置消息端列表收敛出去。当前补齐真实脱敏界面截图。",
+  "nextAction": "为使用手册补齐真实脱敏界面截图，并继续完善人格路由预览、跨电脑语音重测与跨端排障入口；在不同声卡和真实长时间会话中复核语音监视器轮询、波形、错误恢复和 FIFO 状态，根据真实发布频率再评估代码签名与更新通道",
   "steps": [
     { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
     { "id": "speech-monitor", "title": "统一语音页与 Route 监视器状态读取", "status": "已完成" },
@@ -29,6 +29,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-19T00:00:00+08:00",
-  "keywords": ["RibiWebGUI", "中英文", "使用手册", "语音服务", "speech store", "输入电平", "Route 监视器", "播放队列", "排障", "托盘", "安装包", "GitHub Release", "RabiLight"]
+  "updatedAt": "2026-07-20T00:00:00+08:00",
+  "keywords": ["RibiWebGUI", "角色面板", "消息端配置", "聊天气泡", "结构化计划", "使用手册", "语音服务", "Route 监视器", "排障", "托盘", "RabiLight"]
 }

@@ -6,6 +6,26 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.18 - 2026-07-20
+
+### QQ reply-chain and mention context
+
+- `AgentPacket` now adds a message-code parsing section that follows CQ reply references by `messageId` through the current Route's group/private records and collects CQ mention names encountered along the chain.
+- Referenced previews are capped at 200 characters. Missing records, cycles, and the maximum depth stop safely; the current message body and ID are not duplicated, and handlers can use the existing interfaces when full content is required.
+- Added AgentPacket regression coverage and synchronized the bilingual context-injection guide.
+
+### Role panel and Route configuration cleanup
+
+- Qt role-panel chat now groups messages by date, keeps sender and time inside each bubble, and renders compact attachment rows. The bounded composer sends with `Enter`, keeps `Shift+Enter` for line breaks, and the window returns to ordinary movable-window behavior.
+- Collapsed plan cards add a current-step summary, preferring the structured `Step N · title` form while expanded cards retain full steps and blocker details.
+- WebGUI no longer presents the Manager-provided role panel as a configurable message adapter. Legacy `rolePanel` configuration remains compatible, and built-in role-panel delivery and persona rules are unchanged.
+
+### Mobile chat and Rabi Glass HUD polish
+
+- On top of the unified `RabiMobileUi` foundation, Android phone chat adds a safety banner, date grouping, sender/time labels, message-kind labels, openable attachments, and a 48dp multiline composer.
+- Rabi Glass adds explicit Connect, Listen, Upload, Speak, Paused, and Error HUD states. Capture pauses during downlink PCM and resumes after an audio-length-based delay to reduce reply audio feeding back into the next uplink.
+- The mobile endpoint audit, Relay media test, backend/frontend build, and Qt suite pass. Physical Rokid glasses interaction still requires device validation.
+
 ## 0.1.17 - 2026-07-20
 
 ### Manager-owned Codex context

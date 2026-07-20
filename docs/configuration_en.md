@@ -65,7 +65,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 
 ## Core fields
 
-- `messageAdapters`: enabled input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `rolePanel`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, and `wecom`. `remoteAgent` and `rolePanel` are Manager-level endpoints rather than gateway listeners.
+- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, and `wecom`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
 - `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
 - `allowedFileRoots`: real-path allowlist for local file output. A local QQ group-file upload is blocked when this is empty or the resolved file leaves the allowlist.
@@ -87,7 +87,7 @@ Windows paths may use either slash style in WebUI. Only hand-written JSON requir
 | --- | --- | --- |
 | `napcat` | verified | Inbound OneBot WebSocket and outbound OneBot HTTP. |
 | `heartbeat` | verified | Internal scheduled events. |
-| `rolePanel` | verified | Manager/Qt local role conversation endpoint; not a network listener. |
+| `rolePanel` | verified | Built-in Manager/Qt role conversation capability. It is available by default, hidden from WebGUI's configurable adapter list, and is not a network listener. |
 | `remoteAgent` | experimental | Manager discovers and connects remote bridges for tasks/events/files. |
 | `webhook` | experimental | Generic POST source for systems without a dedicated adapter. |
 | `fennenote` | experimental | Voice-transcript input and optional output bridge. |

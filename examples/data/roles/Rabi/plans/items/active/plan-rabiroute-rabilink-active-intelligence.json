@@ -6,7 +6,7 @@
   "priority": "high",
   "kind": "product",
   "currentStepId": "validate-glasses-and-health",
-  "currentStep": "手机已成为可独立使用的完整消息端，并补齐局域网 Rabi PC 发现、单 worker 自动选择、字段内联修复说明、高级设置分层、健康启用前校验和 Rokid 六步向导。当前继续补眼镜物理操作和健康长时间稳定性证据。",
+  "currentStep": "手机已成为可独立使用的完整消息端，已补齐局域网 Rabi PC 发现、单 worker 自动选择、字段内联修复说明、高级设置分层、健康启用前校验和 Rokid 六步向导，并完成日期分组、类型标签、可点击附件、配置安全提示和移动输入器打磨；眼镜 HUD 也具备明确状态与按 PCM 长度延迟恢复。当前继续补眼镜物理操作和健康长时间稳定性证据。",
   "nextAction": "在可用的 Rokid 眼镜上验证持续收音、触摸板、HUD、真实电量、TTS 播放确认和断线恢复，并持续观察真实心率/睡眠采集、阈值冷却和重启恢复；证据齐全后再决定 AIUI 保留范围与原生迁移口径。",
   "steps": [
     { "id": "record-first-ledger", "title": "完成 record-first 账本、审阅器和主动下行", "status": "已完成" },
@@ -33,5 +33,5 @@
   "archivedAt": "",
   "createdAt": "2026-07-09T00:00:00+08:00",
   "updatedAt": "2026-07-20T00:00:00+08:00",
-  "keywords": ["RabiLink", "AIUI", "原生 App", "Rabi Glass", "移动消息端", "手机后端", "首次使用", "局域网扫描", "内联错误", "高级设置", "多路由人格", "媒体附件", "wearable", "心率", "睡眠", "record-first", "主动投递", "Action Gate", "真机验收"]
+  "keywords": ["RabiLink", "AIUI", "原生 App", "Rabi Glass", "移动消息端", "手机后端", "首次使用", "局域网扫描", "内联错误", "高级设置", "聊天界面", "HUD 状态", "PCM 播放", "多路由人格", "媒体附件", "wearable", "心率", "睡眠", "record-first", "主动投递", "Action Gate", "真机验收"]
 }

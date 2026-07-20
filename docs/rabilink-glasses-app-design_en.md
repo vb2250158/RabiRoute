@@ -33,6 +33,7 @@ Classic Bluetooth and P2P may both carry control messages. Commands must therefo
 
 - Default glasses entry: `com.rabi.link.glass.GlassAudioClientActivity`. The historical module name `glass-asr` remains only for build compatibility; no ASR/TTS runs on glasses.
 - Confirm starts recording and confirm again stops/sends. The UI uses a pure-black background, one horizontal action strip, and centered explicit focus.
+- The HUD uses fixed Connect, Listen, Upload, Speak, Paused, and Error state chips. Downlink PCM playback pauses capture and resumes after an audio-length-based delay to keep reply audio out of the next uplink.
 - Phone `RabiGlassPcBackend` wraps PCM as WAV, calls PC ASR, publishes an observation, polls downlink, calls PC TTS, and streams PCM back to glasses.
 - The phone home screen now contains only Relay/target PC, backend/install/launch controls, media status, remote configuration, and diagnostics. Route/Agent/Codex binding editors are removed.
 - Photos are uploaded as message attachments. Relay and the PC worker also accept video attachments. The physical-device callback is currently wired for photos; video capture still needs its SDK callback and is not presented as live video.

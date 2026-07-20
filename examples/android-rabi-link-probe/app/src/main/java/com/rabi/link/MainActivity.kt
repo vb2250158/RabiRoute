@@ -8,11 +8,15 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import android.view.Gravity
 import android.view.View
 import android.widget.*
 import androidx.core.content.FileProvider
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.rabiroute.sdk.RabiLinkPc
 import com.rabiroute.sdk.RabiInstance
 import com.rabiroute.sdk.RabiRouteInfo
@@ -68,6 +72,7 @@ class MainActivity : Activity() {
     private var routeLoadFailed = false
     private var configurationMode = false
     private var modeButton: Button? = null
+    private var modeBanner: TextView? = null
     private var lastChatRuntimeAt = 0L
 
     override fun onCreate(state: Bundle?) {
@@ -119,23 +124,63 @@ class MainActivity : Activity() {
 
     private fun showChat() {
         showingSettings = false
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(248, 249, 251)) }
-        val top = row().apply { setPadding(dp(14), dp(8), dp(10), dp(8)); setBackgroundColor(Color.WHITE) }
-        top.addView(TextView(this).apply { text = "Rabi 移动端"; textSize = 21f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.rgb(25, 29, 36)) }, LinearLayout.LayoutParams(0, -2, 1f))
+        configurationMode = false
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(244, 249, 251)) }
+        val top = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(10), dp(10), dp(10)); setBackgroundColor(Color.WHITE) }
+        val appBar = row()
+        appBar.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply { text = "Rabi"; textSize = 22f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.rgb(16, 42, 67)) })
+            addView(TextView(this@MainActivity).apply { text = "Rabi 移动端"; textSize = 11f; setTextColor(Color.rgb(104, 119, 132)) })
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        appBar.addView(secondary("设置") { showSettings() }.apply { contentDescription = "打开设置" })
+        top.addView(appBar)
+        val contextBar = row().apply { setPadding(0, dp(8), 0, 0) }
         routeButton = secondary("人格：加载中") { chooseRoute() }
-        top.addView(routeButton)
+        contextBar.addView(routeButton, LinearLayout.LayoutParams(0, -2, 1f))
+        contextBar.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
         modeButton = secondary("配置助手") { toggleChatMode() }
-        top.addView(modeButton)
-        top.addView(secondary("设置") { showSettings() })
+        contextBar.addView(modeButton)
+        top.addView(contextBar)
         root.addView(top)
-        chatMessages = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(12), dp(12), dp(18)) }
+        modeBanner = TextView(this).apply {
+            text = "配置助手模式 · 修改动作仍由 Rabi PC 安全门确认"
+            textSize = 12f
+            setTextColor(Color.rgb(138, 77, 8))
+            setPadding(dp(14), dp(9), dp(14), dp(9))
+            setBackgroundColor(Color.rgb(255, 248, 235))
+            visibility = View.GONE
+        }
+        root.addView(modeBanner)
+        chatMessages = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(18)) }
         chatScroll = ScrollView(this).apply { addView(chatMessages) }
         root.addView(chatScroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        val bottom = row().apply { setPadding(dp(8), dp(6), dp(8), dp(8)); setBackgroundColor(Color.WHITE) }
-        bottom.addView(secondary("＋") { pickPhoneMedia() })
-        composer = input("给 Rabi 发消息").apply { setSingleLine(false); maxLines = 4 }
+        val bottom = row().apply { setPadding(dp(8), dp(8), dp(8), dp(10)); setBackgroundColor(Color.WHITE); gravity = Gravity.BOTTOM }
+        bottom.addView(secondary("＋") { pickPhoneMedia() }.apply {
+            contentDescription = "添加图片、音频或文件"
+            minWidth = dp(48); minimumWidth = dp(48); minHeight = dp(48); minimumHeight = dp(48)
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        composer = input("给 Rabi 发消息").apply {
+            setSingleLine(false)
+            minLines = 1
+            maxLines = 5
+            gravity = Gravity.TOP or Gravity.START
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            imeOptions = EditorInfo.IME_ACTION_SEND
+            setOnEditorActionListener { _, actionId, event ->
+                val sendAction = actionId == EditorInfo.IME_ACTION_SEND
+                    || (event?.keyCode == android.view.KeyEvent.KEYCODE_ENTER && event.action == android.view.KeyEvent.ACTION_DOWN && !event.isShiftPressed)
+                if (sendAction) sendComposer()
+                sendAction
+            }
+        }
         bottom.addView(composer, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(6), 0, dp(6), 0) })
-        bottom.addView(primary("发送") { sendComposer() })
+        bottom.addView(primary("↑") { sendComposer() }.apply {
+            contentDescription = "发送消息"
+            textSize = 21f
+            minWidth = dp(48); minimumWidth = dp(48); minHeight = dp(48); minimumHeight = dp(48)
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
         root.addView(bottom); setContentView(root); renderChat(); loadRouteTargets()
     }
 
@@ -183,6 +228,7 @@ class MainActivity : Activity() {
     private fun toggleChatMode() {
         configurationMode = !configurationMode
         modeButton?.text = if (configurationMode) "返回对话" else "配置助手"
+        modeBanner?.visibility = if (configurationMode) View.VISIBLE else View.GONE
         composer?.hint = if (configurationMode) "描述要查看或修改的 Rabi PC 配置" else "给 Rabi 发消息"
         toast(if (configurationMode) "配置动作仍由 Rabi PC 安全门确认" else "已返回普通会话")
     }
@@ -191,26 +237,88 @@ class MainActivity : Activity() {
         val host = chatMessages ?: return; host.removeAllViews()
         val selectedRoute = RabiConversationTarget.load(this)
         val messages = RabiChatStore(this).list().filter { it.routeProfileId.isBlank() || selectedRoute.isBlank() || it.routeProfileId == selectedRoute }
-        if (messages.isEmpty()) host.addView(note("会话已经准备好。可以输入文字、持续说话，或发送图片、视频、音频和任意文件。"))
+        if (messages.isEmpty()) host.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(64), dp(24), dp(24))
+            addView(TextView(this@MainActivity).apply { text = "开始和 Rabi 对话"; textSize = 18f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.rgb(16, 42, 67)); gravity = Gravity.CENTER })
+            addView(TextView(this@MainActivity).apply { text = "发送文字、语音或文件，消息会可靠地交给当前人格。"; textSize = 13f; setTextColor(Color.rgb(104, 119, 132)); gravity = Gravity.CENTER; setPadding(0, dp(8), 0, 0) })
+        })
+        var previousDay = ""
         messages.forEach { message ->
             val mine = message.role == "user"
-            val body = when (message.kind) {
-                "voice" -> "🎙 语音转写\n${message.text}"
-                "tts" -> "🔊 ${message.text}"
-                "image" -> "🖼 图片 · ${message.fileName}"
-                "video" -> "🎬 视频 · ${message.fileName}"
-                "audio-file" -> "🎵 音频文件 · ${message.fileName}"
-                "file" -> "📎 文件 · ${message.fileName}"
-                "configuration" -> "⚙ 配置请求\n${message.text}"
-                else -> message.text
+            val day = formatMessageDay(message.createdAt)
+            if (day.isNotBlank() && day != previousDay) {
+                host.addView(TextView(this).apply {
+                    text = day
+                    textSize = 11f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.rgb(113, 130, 145))
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(12), 0, dp(6))
+                })
+                previousDay = day
             }
             val routeName = availableRoutes.firstOrNull { it.id == message.routeProfileId }?.name ?: message.routeProfileId
-            val label = if (!mine && routeName.isNotBlank()) "$routeName\n$body" else body
-            val bubble = TextView(this).apply { text = label; textSize = 15f; setTextColor(if (mine) Color.WHITE else RabiMobileUi.text); setPadding(dp(12), dp(9), dp(12), dp(9)); background = panel(if (mine) RabiMobileUi.primary else Color.WHITE, if (mine) RabiMobileUi.primary else RabiMobileUi.border, 14) }
-            if (message.localPath.isNotBlank()) bubble.setOnClickListener { openAttachment(message) }
-            host.addView(bubble, LinearLayout.LayoutParams(-2, -2).apply { gravity = if (mine) Gravity.END else Gravity.START; setMargins(if (mine) dp(36) else 0, dp(4), if (mine) 0 else dp(36), dp(4)) })
+            val sender = if (mine) "你" else routeName.ifBlank { "Rabi" }
+            val messageTime = formatMessageTime(message.createdAt)
+            val group = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = if (mine) Gravity.END else Gravity.START }
+            group.addView(TextView(this).apply {
+                text = if (messageTime.isBlank()) sender else "$sender · $messageTime"
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (mine) RabiMobileUi.muted else RabiMobileUi.secondary)
+                setPadding(dp(4), 0, dp(4), dp(4))
+            })
+            val bubble = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(13), dp(10), dp(13), dp(10))
+                background = panel(if (mine) RabiMobileUi.primary else Color.WHITE, if (mine) RabiMobileUi.primary else RabiMobileUi.border, 14)
+                minimumWidth = dp(72)
+            }
+            val kindLabel = messageKindLabel(message.kind)
+            if (kindLabel.isNotBlank()) bubble.addView(TextView(this).apply {
+                text = kindLabel
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (mine) Color.rgb(190, 232, 234) else RabiMobileUi.secondary)
+                setPadding(0, 0, 0, if (message.text.isBlank()) 0 else dp(5))
+            })
+            if (message.text.isNotBlank()) bubble.addView(TextView(this).apply {
+                text = message.text
+                textSize = 15f
+                setTextColor(if (mine) Color.WHITE else Color.rgb(31, 45, 58))
+                setLineSpacing(0f, 1.08f)
+            })
+            if (message.fileName.isNotBlank()) bubble.addView(TextView(this).apply {
+                text = message.fileName
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (mine) Color.WHITE else RabiMobileUi.primary)
+                setPadding(0, if (message.text.isBlank()) dp(2) else dp(8), 0, 0)
+            })
+            if (message.localPath.isNotBlank()) {
+                bubble.isClickable = true
+                bubble.contentDescription = "打开附件 ${message.fileName}"
+                bubble.setOnClickListener { openAttachment(message) }
+            }
+            group.addView(bubble, LinearLayout.LayoutParams(-2, -2))
+            host.addView(group, LinearLayout.LayoutParams(-1, -2).apply { setMargins(if (mine) dp(42) else 0, dp(5), if (mine) 0 else dp(42), dp(5)) })
         }
         chatScroll?.post { chatScroll?.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun formatMessageDay(createdAt: Long): String = if (createdAt <= 0) "" else SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(createdAt))
+    private fun formatMessageTime(createdAt: Long): String = if (createdAt <= 0) "" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(createdAt))
+    private fun messageKindLabel(kind: String): String = when (kind) {
+        "voice" -> "语音转写"
+        "tts" -> "语音回复"
+        "image" -> "图片"
+        "video" -> "视频"
+        "audio-file" -> "音频文件"
+        "file" -> "文件"
+        "configuration" -> "配置请求"
+        else -> ""
     }
 
     private fun refreshChatIfChanged() {

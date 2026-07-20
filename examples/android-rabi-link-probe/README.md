@@ -32,6 +32,7 @@ RabiLink Relay
 - 眼镜默认入口是 `GlassAudioClientActivity`；`glass-asr` 只是历史模块名，眼镜已不运行 ASR/TTS。
 - 手机首页已改为“RabiLink 眼镜伴侣”，不再复制 Route、Agent、工作区或线程配置；这些配置通过手机打开远程 WebGUI `/manage` 修改。
 - 手机后端将眼镜 PCM 送到 Rabi PC ASR，把 observation 写入消息端；下行文本由 Rabi PC TTS 合成后以 PCM 发回眼镜。
+- 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标；Rabi 播报期间暂停采集，并按收到的 PCM 长度延迟恢复，避免把下行语音重新录回上行。
 - 照片已接入消息附件上行；Relay/worker 支持视频文件附件，但真眼镜视频回调尚待接线，不代表实时视频已完成。
 - 当前后端随 `RokidProbeActivity` 前台运行。Foreground Service、磁盘级离线重试和投递/播放回执是下一阶段。
 - AIUI 暂停新增功能，旧 ASR/TTS 探针只保留为历史调试入口。

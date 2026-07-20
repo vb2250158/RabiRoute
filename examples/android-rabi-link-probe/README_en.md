@@ -30,6 +30,7 @@ RabiLink Relay
 - `GlassAudioClientActivity` is the default glasses entry. `glass-asr` is only a historical module name; no ASR/TTS runs on glasses.
 - The phone home screen is now the RabiLink glasses companion. It no longer duplicates Route, Agent, workspace, or thread settings; it opens remote WebGUI `/manage` instead.
 - The phone sends glasses PCM to Rabi PC ASR, publishes the observation, requests PC TTS for downlink, and streams PCM back to glasses.
+- The glasses HUD now shows explicit Connect / Listen / Upload / Speak / Paused / Error states. During Rabi playback, capture pauses and resumes after a PCM-length-based delay so downlink speech is not recorded back into uplink audio.
 - Photos are wired as message attachments. Relay/worker accept video-file attachments, but the physical glasses video callback is not yet wired and live video is not complete.
 - The backend currently follows the foreground `RokidProbeActivity`; a Foreground Service, disk-backed offline retry, and delivered/played receipts are next.
 - AIUI feature work is paused; old speech probes remain historical diagnostics only.

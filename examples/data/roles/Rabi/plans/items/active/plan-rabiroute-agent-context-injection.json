@@ -6,7 +6,7 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "validate-codex-plugin",
-  "currentStep": "AgentPacket 与 Codex Hook 已共用 Manager 的 RabiContextManager；0.3 插件只转发 session、prompt 和工具循环事件并注入 Manager 结果。当前验证真实 Codex 安装、重新绑定和完整会话生命周期。",
+  "currentStep": "AgentPacket 与 Codex Hook 已共用 Manager 的 RabiContextManager；消息投递还能从本 Route 记录安全展开 QQ CQ reply 引用链与 at 昵称映射。0.3 插件只转发 session、prompt 和工具循环事件并注入 Manager 结果，当前验证真实 Codex 安装、重新绑定和完整会话生命周期。",
   "nextAction": "在可安装插件的 Codex 环境验证安装、Manager 离线失败开放、use/status/refresh/off、SessionStart、UserPromptSubmit、PreToolUse/PostToolUse 和同 turn 去重，再为 RabiRoute 人格路由工作台补无副作用 packet preview。",
   "steps": [
     { "id": "inject-agent-packet", "title": "注入事件、角色路径、计划、记忆、技能和接口索引", "status": "已完成" },
@@ -30,5 +30,5 @@
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
   "updatedAt": "2026-07-20T00:00:00+08:00",
-  "keywords": ["AgentPacket", "上下文注入", "Codex 插件", "session ID", "Hook", "RabiContextManager", "PreToolUse", "PostToolUse", "人格绑定", "计划索引", "记忆召回", "技能索引", "packet preview"]
+  "keywords": ["AgentPacket", "上下文注入", "CQ reply", "CQ at", "引用链", "Codex 插件", "session ID", "Hook", "RabiContextManager", "PreToolUse", "PostToolUse", "人格绑定", "计划索引", "记忆召回", "技能索引", "packet preview"]
 }

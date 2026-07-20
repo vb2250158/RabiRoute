@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QGuiApplication, QIcon, QKeyEvent, QMouseEvent
+from PySide6.QtGui import QFont, QIcon, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -84,6 +84,31 @@ class ClickableHeader(QFrame):
             event.accept()
             return
         super().keyPressEvent(event)
+
+
+class MessageComposer(QTextEdit):
+    send_requested = Signal()
+    MIN_HEIGHT = 48
+    MAX_HEIGHT = 120
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setAcceptRichText(False)
+        self.document().contentsChanged.connect(self._sync_height)
+        QTimer.singleShot(0, self._sync_height)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
+            self.send_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _sync_height(self) -> None:
+        document_height = int(self.document().documentLayout().documentSize().height())
+        target = min(self.MAX_HEIGHT, max(self.MIN_HEIGHT, document_height + 18))
+        self.setFixedHeight(target)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded if target == self.MAX_HEIGHT else Qt.ScrollBarAlwaysOff)
 
 
 class KeywordPanel(QFrame):
@@ -382,10 +407,7 @@ class PlanDetailPanel(QFrame):
         return panel
 
     def _current_step(self) -> tuple[int, PlanStep | None]:
-        for index, step in enumerate(self.plan.steps, start=1):
-            if _plan_step_tone(step, self.plan.current_step_id) == "current":
-                return index, step
-        return 0, None
+        return _plan_current_step(self.plan)
 
     def _render_steps(self) -> None:
         while self.steps_layout.count():
@@ -473,6 +495,20 @@ def _plan_blocker(plan: PlanItem) -> str:
     return plan.blocked_by.strip()
 
 
+def _plan_current_step(plan: PlanItem) -> tuple[int, PlanStep | None]:
+    for index, step in enumerate(plan.steps, start=1):
+        if _plan_step_tone(step, plan.current_step_id) == "current":
+            return index, step
+    return 0, None
+
+
+def _plan_current_step_summary(plan: PlanItem) -> str:
+    index, step = _plan_current_step(plan)
+    if step is not None:
+        return f"第 {index} 步 · {step.title}"
+    return plan.current_step.strip() or "暂无进行中的步骤"
+
+
 class ExpandableCard(QFrame):
     expanded_changed = Signal(bool)
 
@@ -533,6 +569,27 @@ class ExpandableCard(QFrame):
         else:
             self.status_label = None
         header_layout.addLayout(title_row)
+        if plan is not None:
+            self.current_step_line = QFrame()
+            self.current_step_line.setObjectName("planCurrentStepSummaryLine")
+            current_step_layout = QHBoxLayout()
+            current_step_layout.setContentsMargins(20, 0, 0, 0)
+            current_step_layout.setSpacing(7)
+            current_step_label = QLabel("当前阻塞" if _plan_blocker(plan) else "当前步骤")
+            current_step_label.setObjectName("planCurrentStepSummaryLabel")
+            self.current_step_value = QLabel(_plan_current_step_summary(plan))
+            self.current_step_value.setObjectName("planCurrentStepSummaryValue")
+            self.current_step_value.setMinimumWidth(0)
+            self.current_step_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            self.current_step_value.setToolTip(self.current_step_value.text())
+            self.current_step_value.setProperty("blocked", bool(_plan_blocker(plan)))
+            current_step_layout.addWidget(current_step_label, 0, Qt.AlignVCenter)
+            current_step_layout.addWidget(self.current_step_value, 1, Qt.AlignVCenter)
+            self.current_step_line.setLayout(current_step_layout)
+            header_layout.addWidget(self.current_step_line)
+        else:
+            self.current_step_line = None
+            self.current_step_value = None
         self.keywords_panel = KeywordPanel(keywords)
         header_layout.addWidget(self.keywords_panel)
         self.header.setLayout(header_layout)
@@ -565,6 +622,8 @@ class ExpandableCard(QFrame):
         self._expanded = expanded
         self.details.setVisible(expanded)
         self.keywords_panel.set_expanded(expanded)
+        if self.current_step_line is not None:
+            self.current_step_line.setVisible(not expanded)
         self.indicator.setText("v" if expanded else ">")
         self.header.set_action_word("折叠" if expanded else "展开")
         if emit:
@@ -675,10 +734,9 @@ class TaskWindow(QWidget):
     def __init__(self, app_icon: QIcon | None = None) -> None:
         super().__init__()
         self.setWindowTitle("RabiRoute 角色面板")
-        self.setWindowFlags(Qt.Window | Qt.Tool | Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowCloseButtonHint | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.Window)
         self.setMinimumSize(760, 560)
         self.resize(920, 680)
-        self._positioned = False
         self._drag_start: QPoint | None = None
         self._expanded_cards: set[str] = set()
 
@@ -807,15 +865,23 @@ class TaskWindow(QWidget):
         chat_input_layout = QHBoxLayout()
         chat_input_layout.setContentsMargins(8, 8, 8, 8)
         chat_input_layout.setSpacing(8)
-        self.message_input = QTextEdit()
+        self.message_input = MessageComposer()
         self.message_input.setObjectName("messageInput")
         self.message_input.setPlaceholderText("输入消息，发送给当前航线绑定的 Agent")
-        self.message_input.setFixedHeight(72)
-        self.attach_button = QPushButton("文件")
+        self.message_input.send_requested.connect(self._send_message)
+        self.attach_button = QPushButton("")
         self.attach_button.setObjectName("actionButton")
+        self.attach_button.setFixedSize(44, 44)
+        self.attach_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        self.attach_button.setToolTip("添加文件")
+        self.attach_button.setAccessibleName("添加文件")
         self.attach_button.clicked.connect(self._choose_attachment)
-        self.send_button = QPushButton("发送")
+        self.send_button = QPushButton("")
         self.send_button.setObjectName("sendButton")
+        self.send_button.setFixedSize(44, 44)
+        self.send_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
+        self.send_button.setToolTip("发送消息")
+        self.send_button.setAccessibleName("发送消息")
         self.send_button.clicked.connect(self._send_message)
         chat_input_layout.addWidget(self.message_input, 1)
         chat_input_layout.addWidget(self.attach_button)
@@ -1002,7 +1068,8 @@ class TaskWindow(QWidget):
 
     def _update_attachment_button(self) -> None:
         count = len(self.pending_attachments)
-        self.attach_button.setText(f"文件({count})" if count else "文件")
+        self.attach_button.setText(str(count) if count else "")
+        self.attach_button.setToolTip(f"已添加 {count} 个文件" if count else "添加文件")
 
     def _send_message(self) -> None:
         text = self.message_input.toPlainText().strip()
@@ -1046,13 +1113,23 @@ class TaskWindow(QWidget):
                 last_day = day
             self._add_chat_bubble(message)
 
-    def _message_day(self, message: dict) -> str:
+    def _message_datetime(self, message: dict) -> datetime | None:
         value = message.get("time")
         try:
             seconds = float(value)
-            return datetime.fromtimestamp(seconds).strftime("%Y-%m-%d %H:%M")
+            if seconds > 10_000_000_000:
+                seconds /= 1000
+            return datetime.fromtimestamp(seconds)
         except Exception:
-            return ""
+            return None
+
+    def _message_day(self, message: dict) -> str:
+        timestamp = self._message_datetime(message)
+        return timestamp.strftime("%Y-%m-%d") if timestamp is not None else ""
+
+    def _message_time(self, message: dict) -> str:
+        timestamp = self._message_datetime(message)
+        return timestamp.strftime("%H:%M") if timestamp is not None else ""
 
     def _add_time_separator(self, text: str) -> None:
         label = QLabel(text)
@@ -1071,12 +1148,22 @@ class TaskWindow(QWidget):
             outer.addStretch(1)
         body = QFrame()
         body.setObjectName("chatBubbleBody")
+        body.setMaximumWidth(max(360, int(self.content.viewport().width() * 0.72)))
         body_layout = QVBoxLayout()
-        body_layout.setContentsMargins(10, 8, 10, 8)
-        body_layout.setSpacing(5)
+        body_layout.setContentsMargins(12, 9, 12, 9)
+        body_layout.setSpacing(6)
+        meta_row = QHBoxLayout()
+        meta_row.setContentsMargins(0, 0, 0, 0)
+        meta_row.setSpacing(10)
         sender = QLabel(str(message.get("sender") or ("我" if direction == "user" else "Agent")))
         sender.setObjectName("chatSender")
-        body_layout.addWidget(sender)
+        message_time = QLabel(self._message_time(message))
+        message_time.setObjectName("chatTime")
+        meta_row.addWidget(sender)
+        meta_row.addStretch(1)
+        if message_time.text():
+            meta_row.addWidget(message_time)
+        body_layout.addLayout(meta_row)
         text = str(message.get("text") or "")
         if text:
             text_label = QLabel(text)
@@ -1097,8 +1184,35 @@ class TaskWindow(QWidget):
     def _attachment_widget(self, attachment: dict) -> QWidget:
         name = str(attachment.get("name") or attachment.get("path") or attachment.get("url") or "附件")
         size = attachment.get("size")
-        detail = f"{size} bytes" if isinstance(size, int) and size > 0 else "文件"
-        return InfoCard("文件", name, [("详情", detail)], "neutral")
+        detail = self._format_file_size(size) if isinstance(size, int) and size > 0 else "文件"
+        row = QFrame()
+        row.setObjectName("chatAttachment")
+        layout = QHBoxLayout()
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(8)
+        icon = QLabel()
+        icon.setObjectName("chatAttachmentIcon")
+        icon.setPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon).pixmap(16, 16))
+        title = QLabel(name)
+        title.setObjectName("chatAttachmentName")
+        title.setMinimumWidth(0)
+        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        title.setToolTip(str(attachment.get("path") or attachment.get("url") or name))
+        size_label = QLabel(detail)
+        size_label.setObjectName("chatAttachmentSize")
+        layout.addWidget(icon)
+        layout.addWidget(title, 1)
+        layout.addWidget(size_label)
+        row.setLayout(layout)
+        return row
+
+    def _format_file_size(self, size: int) -> str:
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{size} B"
 
     def _render_current(self) -> None:
         assert self.plans is not None
@@ -1279,28 +1393,6 @@ class TaskWindow(QWidget):
         else:
             self._expanded_cards.discard(key)
 
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        if not self._positioned:
-            self._snap_to_edge()
-            self._positioned = True
-
-    def _snap_to_edge(self) -> None:
-        screen = QGuiApplication.primaryScreen()
-        if not screen:
-            return
-        avail = screen.availableGeometry()
-        w = self.frameGeometry().width()
-        h = self.frameGeometry().height()
-        margin = 16
-        current = self.frameGeometry()
-        center_x = current.center().x()
-        left_x = avail.left() + margin
-        right_x = avail.right() - w - margin
-        x = right_x if abs(center_x - avail.right()) <= abs(center_x - avail.left()) else left_x
-        y = min(max(current.top(), avail.top() + margin), avail.bottom() - h - margin)
-        self.move(x, y)
-
     def _sync_buttons(self) -> None:
         for view_key, button in self.view_buttons.items():
             button.setChecked(view_key == self.active_view)
@@ -1336,7 +1428,6 @@ class TaskWindow(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if self._drag_start is not None:
             self._drag_start = None
-            self._snap_to_edge()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -1534,9 +1625,11 @@ QPushButton#sendButton {
     border: 1px solid #102a43;
     border-radius: 8px;
     color: #ffffff;
-    min-width: 88px;
+    min-width: 44px;
+    max-width: 44px;
     min-height: 44px;
-    padding: 6px 16px;
+    max-height: 44px;
+    padding: 0;
     font-weight: 800;
 }
 QPushButton#sendButton:hover {
@@ -1571,7 +1664,6 @@ QFrame#chatBubbleBody {
     background: #ffffff;
     border: 1px solid #d6e2e8;
     border-radius: 8px;
-    max-width: 560px;
 }
 QFrame#chatBubble[direction="out"] QFrame#chatBubbleBody {
     background: #e9f8f9;
@@ -1585,15 +1677,41 @@ QLabel#chatSender {
     font-size: 11px;
     font-weight: 800;
 }
+QLabel#chatTime {
+    color: #8491a0;
+    font-size: 10px;
+    font-weight: 650;
+}
 QLabel#chatText {
     color: #112033;
     font-size: 14px;
     line-height: 1.45;
 }
 QLabel#timeSeparator {
-    color: #8491a0;
+    color: #718291;
     font-size: 11px;
-    padding: 4px;
+    font-weight: 700;
+    padding: 8px 4px 4px 4px;
+}
+QFrame#chatAttachment {
+    background: #f5f8fa;
+    border: 1px solid #dbe5ea;
+    border-radius: 7px;
+}
+QLabel#chatAttachmentIcon {
+    background: transparent;
+    min-width: 18px;
+    max-width: 18px;
+}
+QLabel#chatAttachmentName {
+    color: #334e62;
+    font-size: 12px;
+    font-weight: 750;
+}
+QLabel#chatAttachmentSize {
+    color: #718291;
+    font-size: 10px;
+    font-weight: 700;
 }
 QPushButton#viewButton:hover {
     background: #f0f8f9;
@@ -1749,6 +1867,29 @@ QLabel#planStatus[statusTone="unknown"] {
 QFrame#keywordPanel {
     background: transparent;
     border: 0;
+}
+QFrame#planCurrentStepSummaryLine {
+    background: transparent;
+    border: 0;
+}
+QLabel#planCurrentStepSummaryLabel {
+    color: #7b8996;
+    font-size: 11px;
+    font-weight: 800;
+}
+QLabel#planCurrentStepSummaryValue {
+    background: #f7fafc;
+    border: 1px solid #dbe5ea;
+    border-radius: 6px;
+    color: #36566b;
+    font-size: 11px;
+    font-weight: 750;
+    padding: 2px 7px;
+}
+QLabel#planCurrentStepSummaryValue[blocked="true"] {
+    background: #fff8f1;
+    border-color: #f1b87a;
+    color: #9a4d08;
 }
 QFrame#keywordSummaryLine, QFrame#keywordExpandedPanel {
     background: transparent;

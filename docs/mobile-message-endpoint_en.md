@@ -13,6 +13,8 @@ The Rabi mobile device message endpoint is a new endpoint, separate from the Rok
 - Before initialization, the app shows global RabiLink login, default Rabi PC, speech-model, and glasses authorization settings.
 - After initialization, a ChatGPT-like chat screen is the default instead of a probe or settings dashboard.
 - The header selects one of the route personas published by the default Rabi PC. Each persona has a separate visible conversation while RabiLink login and the phone service remain global.
+- The chat header separates app/settings controls from persona and Configuration Assistant controls so narrow screens do not crowd actions. Configuration Assistant mode shows a dedicated safety notice. Messages are grouped by date, keep sender and time outside the bubble, use clear labels for speech, configuration, and files, and allow attachment bubbles to open their local content.
+- The composer uses 48dp touch targets, supports multiline text and the keyboard send action, and keeps attachment/send controls compact so message text retains the available width.
 - Text, microphone ASR messages, Agent TTS, images, video, standalone audio files, and arbitrary files share one private phone chat ledger. Attachments work in both directions and can be opened on the phone.
 - Configuration Assistant is a mode of the same chat. Marked configuration requests go to the selected Rabi PC; writes, deletion, stopping, replacement, and external actions remain behind the RabiRoute action gate. Completion may be claimed only after a successful PC response and read-back verification.
 

@@ -196,7 +196,6 @@ watch(
 
 
 const adapterParamOpen = ref<Record<string, boolean>>({
-  rolePanel: false,
   speech: false,
   napcat: false,
   wecom: false,
@@ -213,9 +212,8 @@ const adapterCatalogCache = ref<Record<string, MessageAdapterType[]>>({});
 const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> }> = [
   {
     title: "本地桌面",
-    note: "RabiRoute 内置的角色面板入口。",
+    note: "由本机常驻服务提供的消息入口。",
     choices: [
-      { type: "rolePanel", title: "角色面板", note: "托盘打开的本地聊天和计划记忆面板", icon: "mdi-view-dashboard-outline" },
       { type: "speech", title: "语音消息端", note: "常驻麦克风、ASR、人格 TTS 与全局排队播放", icon: "mdi-microphone-message" }
     ]
   },
@@ -267,16 +265,16 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
 const gateway = computed(() => store.selectedGateway);
 
 function uniqueAdapters(types: MessageAdapterType[]): MessageAdapterType[] {
-  return [...new Set(types.filter((type) => type !== "disabled"))];
+  return [...new Set(types.filter((type) => type !== "disabled" && type !== "rolePanel"))];
 }
 
 function configuredAdapterCatalog(gw: NonNullable<typeof gateway.value>): MessageAdapterType[] {
   if (Array.isArray(gw.messageAdapters) && gw.messageAdapters.length > 0) {
-    return uniqueAdapters(["rolePanel", ...gw.messageAdapters]);
+    return uniqueAdapters(gw.messageAdapters);
   }
   const cached = adapterCatalogCache.value[gw.id];
-  if (cached?.length) return uniqueAdapters(["rolePanel", ...cached]);
-  return uniqueAdapters(["rolePanel", gw.messageAdapterType || "napcat"]);
+  if (cached?.length) return uniqueAdapters(cached);
+  return uniqueAdapters([gw.messageAdapterType || "napcat"]);
 }
 
 // 所有已添加的 adapter（含禁用），用于 UI 列表显示
@@ -293,7 +291,7 @@ const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {} as 
 const wecomState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.wecom || runtime.value.gatewayStatus?.wecom || {} as Record<string, any>);
 const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || {} as Record<string, any>);
 const adapterErrors = (type: MessageAdapterType) => gateway.value ? adapterErrorsFor(type, gateway.value, runtime.value) : [];
-const visibleActiveAdapters = computed<MessageAdapterType[]>(() => [...new Set(["rolePanel" as MessageAdapterType, ...adapters.value])]);
+const visibleActiveAdapters = computed<MessageAdapterType[]>(() => uniqueAdapters(adapters.value));
 const activeAdapterCount = computed(() => visibleActiveAdapters.value.length);
 const selectedRemoteAgentDeviceId = computed({
   get: () => gateway.value?.remoteAgentDefaultDeviceId || "",
@@ -403,14 +401,13 @@ const codexCwdOptions = computed(() => {
 });
 
 function toggleAdapter(type: MessageAdapterType): void {
-  if (type === "rolePanel") return;
   if (!gateway.value) return;
   toggleAdapterDisabled(gateway.value, type);
   store.touch();
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "rolePanel" || type === "speech" || type === "napcat" || type === "wecom" || type === "remoteAgent" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
+  return type === "speech" || type === "napcat" || type === "wecom" || type === "remoteAgent" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
 }
 
 function speechVariable(name: string, fallback = ""): string {
@@ -491,7 +488,6 @@ function toggleAdapterParams(type: MessageAdapterType): void {
 }
 
 function removeAdapter(type: MessageAdapterType): void {
-  if (type === "rolePanel") return;
   if (!gateway.value) return;
   const next = adapters.value.filter(t => t !== type);
   setGatewayAdapters(gateway.value, next as MessageAdapterType[]);
@@ -3338,7 +3334,7 @@ watch(
             >
               <div
                 class="catalog-row"
-                :class="{ active: choice.type === 'rolePanel' || adapters.includes(choice.type) }"
+                :class="{ active: adapters.includes(choice.type) }"
                 @click="toggleAdapterParams(choice.type)"
               >
                 <v-icon class="catalog-row-icon" color="secondary">{{ choice.icon }}</v-icon>
@@ -3361,7 +3357,7 @@ watch(
                     :title="adapterParamOpen[choice.type] ? '收起参数' : '展开参数'"
                     @click.stop="toggleAdapterParams(choice.type)"
                   />
-                  <div v-if="choice.type !== 'rolePanel'" @click.stop>
+                  <div @click.stop>
                     <v-switch
                       class="catalog-row-toggle"
                       color="success"
@@ -3373,7 +3369,6 @@ watch(
                     />
                   </div>
                   <v-btn
-                    v-if="choice.type !== 'rolePanel'"
                     icon="mdi-close"
                     size="small"
                     variant="text"
@@ -3813,23 +3808,6 @@ watch(
                     <div class="status-row"><span>最后断开</span><b>{{ napcatState.lastDisconnectedAt || "-" }}</b></div>
                     <div class="status-row"><span>登录资料</span><b :class="napcatState.loginInfoError ? 'text-error' : ''">{{ napcatState.loginInfoError || napcatState.lastLoginInfoAt || "-" }}</b></div>
                   </template>
-                  <div v-else-if="choice.type === 'rolePanel'" class="catalog-param-grid">
-                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
-                      角色面板是内置本地消息端，不需要端口、外部登录或安装。托盘打开后，聊天视图会把用户输入作为 role_panel_message 投递给 Agent，Agent 默认回到同一个角色面板时间线。
-                    </v-alert>
-                    <div class="full-span adapter-message-file-panel">
-                      <div class="section-title small-title">聊天记录</div>
-                      <div class="section-note">{{ messageFilePaths('rolePanel').join(' / ') || '发送角色面板消息后生成 messages.jsonl。' }}</div>
-                      <div v-if="messageFileEntries('rolePanel').length" class="adapter-message-preview">
-                        <div
-                          v-for="(entry, messageIndex) in messageFileEntries('rolePanel').slice(0, 3)"
-                          :key="`${entry.path}-${entry.messageId || messageIndex}`"
-                        >
-                          {{ formatLogTime(entry) }} · {{ entry.sender || entry.source || '角色面板' }} · {{ logPreview(entry) }}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
                   <div v-else-if="choice.type === 'speech'" class="catalog-param-grid">
                     <v-alert class="full-span" type="info" variant="tonal" density="compact">
                       语音消息端由 RabiPC 配置、RabiSpeech 本机服务常驻执行；关闭浏览器后麦克风仍可继续转录。ASR 文本可进入当前 Route；Agent 回复按当前人格声线合成，并进入整台电脑唯一的 FIFO。没有语音 Route 时仍可独立使用 TTS 角色扮演。

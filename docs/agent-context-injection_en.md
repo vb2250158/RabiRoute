@@ -34,6 +34,7 @@ Adapters provide role, message or tool signal, session/turn/event identity, and 
 Default injection is lightweight:
 
 - Essential event fields.
+- CQ `reply` / `at` explanations for QQ messages. Reply chains are expanded from message records, while at mappings are collected together.
 - Recent-message summaries when `recentMessageLimit` enables them.
 - Role, route, and workspace-relative paths.
 - A link to the Rabi Agent interface guide.
@@ -76,6 +77,11 @@ Sender: <sender>
 [Message]
 <message>
 
+[Message code parsing]
+[CQ:reply,id=<messageId>] : <referenced-message preview>
+  [CQ:reply,id=<messageId>] : <earlier referenced-message preview>
+[CQ:at,qq=<qq>] : <group card or nickname>
+
 [Recent messages]
 Latest <recentMessageLimit> messages:
 <recentMessages>
@@ -116,6 +122,8 @@ Current reply context: <replyContextJson>
 [User template supplement]
 <optional route template>
 ```
+
+`[Message code parsing]` appears only when the current message or its reply chain contains parseable CQ codes. RabiRoute follows `CQ:reply` by `messageId` through the current route's group/private message records until no reply remains, the referenced message cannot be found, a cycle is detected, or the safety depth limit is reached. Each referenced preview is capped at 200 characters and then uses `……(更多信息调用接口查看)`. Any `CQ:at` found during the walk is deduplicated and emitted together as `[CQ:at,qq=xxxx] : group card or nickname`. This section does not add the current message ID and does not repeat the plain text body.
 
 When a `voice_transcript` explicitly comes from the RabiPC `speech` message endpoint or RabiSpeech, `AgentPacket` resolves that turn to `voice_chat` and writes `characterTtsDialogue=true` into `replyContext`. `[Reply delivery requirements]` tells the handler to enter character-TTS dialogue mode and POST a short spoken line, semantically identical to the visible reply, to the normal reply API. Outbox then freezes the current Route persona, voice, model, `sessionId`, and autoplay choice before entering the host-wide RabiSpeech FIFO. QQ, the role panel, ordinary text inputs, and other `voice_transcript` sources do not inherit this switch.
 

@@ -51,6 +51,7 @@ sequenceDiagram
 
 - 眼镜默认入口为 `com.rabi.link.glass.GlassAudioClientActivity`，历史目录名 `glass-asr` 仅为工程兼容，眼镜已不运行 ASR/TTS。
 - 确认键开始录音，再次确认停止并发送；界面使用纯黑背景、单条横向操作带和显式居中焦点。
+- HUD 使用固定的连接、聆听、上传、播报、暂停和异常状态角标；下行 PCM 播报时暂停采集，并按音频长度延迟恢复，避免回声重新进入上行。
 - 手机 `RabiGlassPcBackend` 将 PCM 封装为 WAV，调用 Rabi PC ASR，发布 observation，拉取下行消息，再调用 PC TTS 并把 PCM 发回眼镜。
 - 手机首页只保留 Relay/目标 PC、眼镜后端、安装/启动、媒体状态、远程配置和诊断，不再展示 Route/Agent/Codex 绑定编辑器。
 - 照片按消息附件上传；Relay 和 PC worker 同样接受视频附件。当前真机入口已接照片回调，视频采集回调仍需设备 SDK 真机接线，不承诺实时视频。

@@ -39,6 +39,24 @@ type RecentMessageItem = {
   messageId?: string | number;
 };
 
+type MessageCodeRecord = {
+  time: number;
+  rawMessage: string;
+  messageId?: string | number;
+  userId?: string | number;
+  senderName?: string;
+  botUserId?: string;
+  botNickname?: string;
+};
+
+type MessageCodeParseResult = {
+  lines: string[];
+  atNames: Map<string, string>;
+};
+
+const MESSAGE_CODE_PREVIEW_LIMIT = 200;
+const MESSAGE_CODE_MAX_REPLY_DEPTH = 10;
+
 function formatTime(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString("zh-CN", { hour12: false });
 }
@@ -192,6 +210,175 @@ function parseJsonlFile<T>(filePath: string): T[] {
 
 function messageText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function truncateMessageCodePreview(text: string): string {
+  const normalized = messageText(text);
+  if (normalized.length <= MESSAGE_CODE_PREVIEW_LIMIT) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, MESSAGE_CODE_PREVIEW_LIMIT)}……(更多信息调用接口查看)`;
+}
+
+function stripCqCodes(text: string): string {
+  return messageText(text.replace(/\[CQ:[^\]]+\]/g, " "));
+}
+
+function cqCode(type: string, fields: Record<string, string>): string {
+  const params = Object.entries(fields)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(",");
+  return `[CQ:${type}${params ? `,${params}` : ""}]`;
+}
+
+function cqParam(rawParams: string, key: string): string | undefined {
+  const pattern = new RegExp(`(?:^|,)${key}=([^,\\]]+)`);
+  return rawParams.match(pattern)?.[1];
+}
+
+function parseReplyIds(text: string): string[] {
+  return [...text.matchAll(/\[CQ:reply,([^\]]+)\]/g)]
+    .map((match) => cqParam(match[1], "id"))
+    .filter((value): value is string => Boolean(value));
+}
+
+function parseAtCodes(text: string): Array<{ qq: string; code: string }> {
+  return [...text.matchAll(/\[CQ:at,([^\]]+)\]/g)]
+    .map((match) => {
+      const qq = cqParam(match[1], "qq");
+      return qq ? { qq, code: cqCode("at", { qq }) } : null;
+    })
+    .filter((value): value is { qq: string; code: string } => Boolean(value));
+}
+
+function readMessageCodeRecords(dataDir: string): MessageCodeRecord[] {
+  if (!dataDir) return [];
+
+  const groupMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "group-messages.jsonl"))
+    .map((item) => ({
+      time: Number(item.time) || 0,
+      rawMessage: String(item.rawMessage ?? ""),
+      messageId: item.messageId as string | number | undefined,
+      userId: item.userId as string | number | undefined,
+      senderName: messageText(item.senderName),
+      botUserId: item.botUserId == null ? undefined : String(item.botUserId),
+      botNickname: messageText(item.botNickname)
+    }));
+  const privateMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "private-messages.jsonl"))
+    .map((item) => ({
+      time: Number(item.time) || 0,
+      rawMessage: String(item.rawMessage ?? ""),
+      messageId: item.messageId as string | number | undefined,
+      userId: item.userId as string | number | undefined,
+      senderName: messageText(item.senderName),
+      botUserId: item.botUserId == null ? undefined : String(item.botUserId),
+      botNickname: messageText(item.botNickname)
+    }));
+
+  return [...groupMessages, ...privateMessages]
+    .filter((item) => item.rawMessage || item.messageId != null)
+    .sort((left, right) => left.time - right.time);
+}
+
+function messageRecordForForwardRecord(record: RouteDecision["record"]): MessageCodeRecord {
+  return {
+    time: record.time,
+    rawMessage: record.rawMessage,
+    messageId: record.messageId,
+    userId: "userId" in record ? record.userId : undefined,
+    senderName: record.senderName,
+    botUserId: "botUserId" in record ? record.botUserId : undefined,
+    botNickname: "botNickname" in record ? record.botNickname : undefined
+  };
+}
+
+function messageRecordIndex(records: MessageCodeRecord[]): Map<string, MessageCodeRecord> {
+  const index = new Map<string, MessageCodeRecord>();
+  for (const record of records) {
+    if (record.messageId == null) continue;
+    index.set(String(record.messageId), record);
+  }
+  return index;
+}
+
+function atNameIndex(records: MessageCodeRecord[]): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const record of records) {
+    if (record.userId != null && record.senderName) {
+      index.set(String(record.userId), record.senderName);
+    }
+    if (record.botUserId && record.botNickname) {
+      index.set(record.botUserId, record.botNickname);
+    }
+  }
+  return index;
+}
+
+function collectAtCodes(text: string, atNames: Map<string, string>, knownNames: Map<string, string>): void {
+  for (const item of parseAtCodes(text)) {
+    if (!atNames.has(item.qq)) {
+      atNames.set(item.qq, knownNames.get(item.qq) || item.qq);
+    }
+  }
+}
+
+function appendReplyCodeLines(
+  rawMessage: string,
+  recordsById: Map<string, MessageCodeRecord>,
+  knownAtNames: Map<string, string>,
+  result: MessageCodeParseResult,
+  visited: Set<string>,
+  depth: number
+): void {
+  if (depth >= MESSAGE_CODE_MAX_REPLY_DEPTH) return;
+
+  for (const replyId of parseReplyIds(rawMessage)) {
+    const indent = "  ".repeat(depth);
+    const code = cqCode("reply", { id: replyId });
+    if (visited.has(replyId)) {
+      result.lines.push(`${indent}${code} : 引用消息 ${replyId} 已在上方展开，停止循环引用。`);
+      continue;
+    }
+
+    const replied = recordsById.get(replyId);
+    if (!replied) {
+      result.lines.push(`${indent}${code} : 引用消息 ${replyId} 未在本地消息记录中找到。`);
+      continue;
+    }
+
+    visited.add(replyId);
+    collectAtCodes(replied.rawMessage, result.atNames, knownAtNames);
+    result.lines.push(`${indent}${code} : ${truncateMessageCodePreview(stripCqCodes(replied.rawMessage))}`);
+    appendReplyCodeLines(replied.rawMessage, recordsById, knownAtNames, result, visited, depth + 1);
+  }
+}
+
+function messageCodeParseText(record: RouteDecision["record"], dataDir: string): string {
+  const currentRecord = messageRecordForForwardRecord(record);
+  const records = [...readMessageCodeRecords(dataDir), currentRecord];
+  const recordsById = messageRecordIndex(records);
+  const knownAtNames = atNameIndex(records);
+  const result: MessageCodeParseResult = {
+    lines: [],
+    atNames: new Map()
+  };
+
+  collectAtCodes(record.rawMessage, result.atNames, knownAtNames);
+  appendReplyCodeLines(
+    record.rawMessage,
+    recordsById,
+    knownAtNames,
+    result,
+    new Set(currentRecord.messageId == null ? [] : [String(currentRecord.messageId)]),
+    0
+  );
+
+  for (const [qq, name] of result.atNames) {
+    result.lines.push(`${cqCode("at", { qq })} : ${name}`);
+  }
+
+  return result.lines.join("\n");
 }
 
 function recentMessageItems(dataDir: string, limit: number): RecentMessageItem[] {
@@ -552,7 +739,8 @@ function buildAgentMessage(
   values: ForwardTemplateValues,
   userTemplateText: string,
   rolePath: string,
-  roleDir: string
+  roleDir: string,
+  dataDir: string
 ): string {
   const record = decision.record;
   const routeKind = decision.routeKind;
@@ -611,6 +799,7 @@ function buildAgentMessage(
       optionalLine("触发名称", values.triggerName)
     ]),
     section("消息", [String(values.message || record.rawMessage || "")]),
+    section("消息代码解析", [messageCodeParseText(record, dataDir)]),
     String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [
       "这是用户从 Rabi 移动设备消息端明确发起的自然语言配置请求。",
       "先读取当前真实配置；写入、删除、停止、覆盖或外部动作必须经过现有动作安全门和审批。",
@@ -694,6 +883,6 @@ export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule
   return {
     rule,
     templateValues,
-    message: buildAgentMessage(decision, templateValues, userTemplateText, rolePath, roleDir)
+    message: buildAgentMessage(decision, templateValues, userTemplateText, rolePath, roleDir, roleContext.dataDir)
   };
 }
