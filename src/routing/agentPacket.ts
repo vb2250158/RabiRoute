@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, type NotificationRule } from "../config.js";
 import { resolvePipeline, type ResolvedPipeline } from "../pipelines.js";
-import { indexLines, roleKnowledgeSnapshot } from "../roleKnowledge.js";
+import { rabiContextManager } from "../context/rabiContextManager.js";
+import { buildRoleKnowledgeContextView } from "./roleKnowledgeContext.js";
 import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
 import type { ForwardTemplateValues } from "./types.js";
@@ -318,24 +319,6 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
   return summaries;
 }
 
-function roleApiBase(roleId: unknown): string {
-  const id = String(roleId || ":roleId");
-  return `/api/roles/${id === ":roleId" ? id : encodeURIComponent(id)}`;
-}
-
-function planMemoryApiHint(roleId: unknown): string[] {
-  const base = roleApiBase(roleId);
-  return [
-    "可用 API 提示：",
-    `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
-    `- 查看记忆：GET ${base}/memory、GET ${base}/memory/recent、GET ${base}/memory/recent/{memoryId}、GET ${base}/memory/consolidated、GET ${base}/memory/consolidated/{memoryId}`,
-    `- 查看角色技能：GET ${base}/skills、GET ${base}/skills/{skillId}`,
-    `- 新增近期记忆：POST ${base}/memory/recent`,
-    `- 更新指定近期记忆：PATCH ${base}/memory/recent/{memoryId}`,
-    "- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；相关记忆进入处理前确认队列时会刷新 viewedAt"
-  ];
-}
-
 function remoteAgentApiHint(values: ForwardTemplateValues): string[] {
   const managerPort = process.env.GATEWAY_MANAGER_PORT ?? "8790";
   const baseUrl = `http://127.0.0.1:${managerPort}`;
@@ -365,34 +348,6 @@ function remoteAgentApiHint(values: ForwardTemplateValues): string[] {
     "- 可选文件传输：请求体可传 filePaths、files 或 attachments；manager 会把文件内容随任务发给远端 bridge。",
     "- 远端回传文件：远端回调可以传 artifactPath、logPath 或 files，bridge 会把文件内容带回本机并保存到 data/remote-agent-files/<taskId>/。",
     "远端结果会回传到本机 RabiRoute，并投递回当前本机人格线程；远端 Agent 不应直接回复 QQ。"
-  ];
-}
-
-function requiredReadTypeLabel(type: string): string {
-  if (type === "plan") return "计划";
-  if (type === "recent_memory") return "近期记忆";
-  if (type === "consolidated_memory") return "沉淀记忆";
-  if (type === "role_skill") return "角色技能";
-  return type;
-}
-
-function skillIndexLines(roleId: unknown, items: Array<{ id: string; title: string; summary: string }>): string {
-  if (items.length === 0) return "- 暂无";
-  const base = roleApiBase(roleId);
-  return items.map((item) => `- ${item.id}：${item.title} - ${item.summary}（GET ${base}/skills/${encodeURIComponent(item.id)}）`).join("\n");
-}
-
-function requiredReadLines(items: Array<{ id: string; title: string; type: string; endpoint: string; score: number }>): string[] {
-  if (items.length === 0) {
-    return [
-      "本次没有高相关必读项。仍需先扫一遍上方可见的进行中计划、近期记忆和命中召回索引；如发现与当前处理有关的条目，请先按 ID 查询内容再行动。"
-    ];
-  }
-  return [
-    "以下条目与当前消息高相关。回复、发布任务、更新计划、写入记忆或执行外部动作之前，必须先按 GET 路径读取每一项内容；不要只凭标题行动。",
-    "如果任一必读项无法读取或内容不足以确认，请说明上下文无法确认，或先向用户追问。",
-    "",
-    ...items.map((item) => `- ${item.id}：${item.title}（${requiredReadTypeLabel(item.type)}，score=${item.score}） GET ${item.endpoint}`)
   ];
 }
 
@@ -606,20 +561,26 @@ function buildAgentMessage(
   const referencedPlanSummaries = routeKind === "manual_trigger"
     ? readReferencedPlanSummaries(roleDir, userTemplateText)
     : [];
-  const knowledge = hasPersona
-    ? roleKnowledgeSnapshot(roleDir, String(values.message || ""), {
+  const contextResolution = hasPersona
+    ? rabiContextManager.resolve({
+        kind: "message_delivery",
+        source: "rabi_delivery",
         roleId: String(values.agentRoleId || ""),
+        roleDir,
+        signalText: String(values.message || ""),
         includePendingConsolidation: shouldAttachMemoryConsolidation,
         consolidationTrigger: shouldAttachMemoryConsolidation ? "manual" : undefined,
         forceConsolidation: shouldAttachMemoryConsolidation
       })
     : null;
-  const activePlanIndex = knowledge ? indexLines(knowledge.activePlans) : "- 暂无";
-  const activeSkillIndex = knowledge ? skillIndexLines(values.agentRoleId, knowledge.activeSkills) : "- 暂无";
-  const recentMemoryIndex = knowledge ? indexLines(knowledge.recentMemories) : "- 暂无";
-  const matchedIndex = knowledge ? indexLines(knowledge.matchedItems) : "- 暂无";
-  const matchedSkillIndex = knowledge ? skillIndexLines(values.agentRoleId, knowledge.matchedSkills) : "- 暂无";
-  const requiredReadIndex = knowledge ? requiredReadLines(knowledge.requiredReadItems) : [];
+  const knowledge = contextResolution?.knowledge ?? null;
+  const knowledgeView = knowledge ? buildRoleKnowledgeContextView(values.agentRoleId, knowledge) : null;
+  const activePlanIndex = knowledgeView?.activePlanIndex ?? "- 暂无";
+  const activeSkillIndex = knowledgeView?.activeSkillIndex ?? "- 暂无";
+  const recentMemoryIndex = knowledgeView?.recentMemoryIndex ?? "- 暂无";
+  const matchedIndex = knowledgeView?.matchedIndex ?? "- 暂无";
+  const matchedSkillIndex = knowledgeView?.matchedSkillIndex ?? "- 暂无";
+  const requiredReadIndex = knowledgeView?.requiredReadLines ?? [];
   const pendingConsolidation = knowledge?.pendingConsolidation;
   const knowledgePlansDir = relativeWorkspacePath(knowledge?.plansDir);
   const knowledgeMemoryDir = relativeWorkspacePath(knowledge?.memoryDir);
@@ -670,7 +631,7 @@ function buildAgentMessage(
     ]) : section("无人格直通模式", directMessageModeLines(values)),
     hasPersona ? section("记忆与计划", [
       optionalLine("更新记忆与计划的说明文档", knowledgeAgentInterfaceDocPath ?? values.agentInterfaceDocPath),
-      ...planMemoryApiHint(values.agentRoleId),
+      ...(knowledgeView?.apiHintLines ?? []),
       "",
       "可用技能：",
       activeSkillIndex,

@@ -103,7 +103,9 @@ There is no generic persistent Action Queue with a WebGUI approval center today.
 ## Role knowledge and runtime data
 
 - Plans, recent memory, consolidated memory, consolidation runs, and skill indexes all have Manager APIs and file sources of truth.
-- Building an AgentPacket takes a role-knowledge snapshot, and memory hits refresh `viewedAt`. Only an explicit `memory-consolidation` manual trigger or Manager API request creates a run; submitting its result marks the inputs and writes consolidated memory. There is no time-only resident background scheduler today.
+- AgentPacket `message_delivery` and Codex session, prompt, PreToolUse, and PostToolUse events all enter `RabiContextManager`; it is the only production role-knowledge snapshot call site. Entry events use full context, while reasoning hooks inject only newly matched deltas for the turn.
+- Memory hits refresh `viewedAt` through one policy; the same item revision is not refreshed twice in one turn. Only an explicit `memory-consolidation` manual trigger or Manager API request creates a run; submitting its result marks the inputs and writes consolidated memory. There is no time-only resident background scheduler today.
+- The Codex plugin only forwards lifecycle events and injects Manager output. It owns no binding, trigger policy, or knowledge copy. The internal `preview` policy is side-effect-free, but no WebGUI preview surface exists yet.
 - Runtime records are primarily JSONL: messages, adapter logs, AgentPacket, Outbox, heartbeat, manual trigger, role panel, RabiLink conversation, role-scoped wearable health timelines, and delivery replay.
 - Runtime `data/`, logs, tokens, real account IDs, real group IDs, and Cookies must not enter the repository.
 

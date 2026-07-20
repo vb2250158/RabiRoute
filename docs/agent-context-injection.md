@@ -16,6 +16,23 @@
 
 Agent 自己需要看的接口说明是 [Agent 需要关注的 Rabi 接口](rabi-agent-interfaces.md)。本文件主要帮助用户理解“为什么模板不用写很多”和“最终发给 Agent 的消息大概长什么样”。
 
+## 统一触发管线
+
+上下文不再由各个入口分别调用角色知识。所有入口先转换成标准触发，再进入 `RabiContextManager`：
+
+```text
+Codex SessionStart / UserPromptSubmit / PreToolUse / PostToolUse
+RabiRoute QQ / Webhook / 语音 / 手动触发 / 心跳消息投递
+Manager 或 UI 预览
+  -> 标准 ContextTrigger
+  -> RabiContextManager
+  -> roleKnowledgeSnapshot + 统一生命周期策略
+  -> RoleKnowledgeContextView
+  -> Codex additionalContext 或 AgentPacket
+```
+
+入口适配器只提供角色、消息或工具信号、session/turn/event 身份和来源；它们不决定关键词得分、计划归档、记忆活跃窗口或 `viewedAt`。完整入口触发注入轻量全景，推理期触发只注入本轮新增的相关必读项，预览则禁止产生知识副作用。
+
 ## 注入原则
 
 默认注入只放轻量信息：
@@ -128,7 +145,7 @@ Agent 需要关注的 Rabi 接口文档链接
 
 除此之外，RabiRoute 还会在投递消息给 Agent 之前，根据当前用户消息做轻量相关性打分，把高相关条目列入 `[处理前上下文确认]`。这个确认协议不只服务聊天回复，也适用于发布任务、更新计划、写入记忆或执行外部动作。
 
-相关性打分发生在 Agent 投递前的热路径上，必须保持轻量。它不应该在每条消息到来时全量分词、扫描正文或读取大量文件。
+相关性打分发生在 Agent 投递或推理检查点的热路径上，必须保持轻量。它不应该全量分词、扫描知识正文或读取大量聊天记录。
 
 计划和记忆的可检索关键词由 Agent 在写入或更新时主动提供。RabiRoute 只维护 ID、标题和 `keywords` 索引；消息到来时只对这些元信息做打分。ID 或标题显式命中最高，关键词命中次之；进行中计划和活跃近期记忆只有小幅排序加成，不会让无关条目进入必读队列。
 

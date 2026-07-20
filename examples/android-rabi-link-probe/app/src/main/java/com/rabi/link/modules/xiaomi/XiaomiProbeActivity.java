@@ -24,6 +24,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.rabi.link.BuildConfig;
+import com.rabi.link.RabiGuidanceTone;
+import com.rabi.link.RabiMobileUi;
 import com.rabi.link.bridge.Capability;
 import com.rabi.link.bridge.DeviceModule;
 import com.rabi.link.bridge.ProbeResultLog;
@@ -46,6 +48,7 @@ public class XiaomiProbeActivity extends Activity {
     private XiaomiBleProbeController bleProbeController;
 
     private LinearLayout deviceList;
+    private ScrollView deviceScroll;
     private TextView logView;
     private Button scanButton;
     private Button stopButton;
@@ -90,25 +93,20 @@ public class XiaomiProbeActivity extends Activity {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(18), dp(16), dp(18), dp(18));
-        content.setBackgroundColor(Color.rgb(246, 247, 249));
+        content.setBackgroundColor(RabiMobileUi.backgroundColor());
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(246, 247, 249));
+        root.setBackgroundColor(RabiMobileUi.backgroundColor());
 
-        TextView title = new TextView(this);
-        title.setText("小米手环接口实验台");
-        title.setTextSize(23);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.rgb(24, 28, 34));
-        content.addView(title, new LinearLayout.LayoutParams(-1, -2));
-
-        TextView version = new TextView(this);
-        version.setText("按 BLE、Health Connect、小米云和证据导出逐项验证。构建：" + BuildConfig.BUILD_TIME);
-        version.setTextSize(13);
-        version.setTextColor(Color.rgb(86, 92, 102));
-        version.setPadding(0, dp(4), 0, dp(12));
-        content.addView(version, new LinearLayout.LayoutParams(-1, -2));
+        content.addView(
+                RabiMobileUi.hero(
+                        this,
+                        "小米穿戴诊断",
+                        "自动检查可用的数据来源；系统权限、厂商私有接口或合作方资质无法代办时会说明原因。"
+                ),
+                fullWidthWithMargins(0, 0, 0, 12)
+        );
 
         addSummary(content);
         addSectionTitle(content, "测试矩阵");
@@ -128,7 +126,7 @@ public class XiaomiProbeActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(12), dp(10), dp(12), dp(12));
-        panel.setBackground(panelBackground(Color.WHITE, Color.rgb(198, 204, 214)));
+        panel.setBackground(RabiMobileUi.panel(this, Color.WHITE, RabiMobileUi.borderColor(), 12));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
@@ -141,9 +139,14 @@ public class XiaomiProbeActivity extends Activity {
         title.setTextColor(Color.rgb(32, 38, 46));
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
 
+        Button toggleButton = new Button(this);
+        toggleButton.setText("显示日志");
+        RabiMobileUi.styleSecondaryButton(this, toggleButton);
+        header.addView(toggleButton, new LinearLayout.LayoutParams(dp(120), -2));
+
         copyButton = new Button(this);
         copyButton.setText("复制");
-        copyButton.setAllCaps(false);
+        RabiMobileUi.styleSecondaryButton(this, copyButton);
         copyButton.setOnClickListener(v -> copyReport());
         header.addView(copyButton, new LinearLayout.LayoutParams(dp(96), -2));
         panel.addView(header, new LinearLayout.LayoutParams(-1, -2));
@@ -156,17 +159,29 @@ public class XiaomiProbeActivity extends Activity {
         logView.setBackground(panelBackground(Color.rgb(247, 248, 250), Color.rgb(224, 228, 234)));
         ScrollView logScroll = new ScrollView(this);
         logScroll.addView(logView);
+        logScroll.setVisibility(View.GONE);
         panel.addView(logScroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        root.addView(panel, new LinearLayout.LayoutParams(-1, dp(260)));
+        LinearLayout.LayoutParams panelParams = new LinearLayout.LayoutParams(-1, dp(76));
+        root.addView(panel, panelParams);
+        toggleButton.setOnClickListener(v -> {
+            boolean show = logScroll.getVisibility() != View.VISIBLE;
+            logScroll.setVisibility(show ? View.VISIBLE : View.GONE);
+            panelParams.height = dp(show ? 260 : 76);
+            panel.setLayoutParams(panelParams);
+            toggleButton.setText(show ? "收起日志" : "显示日志");
+        });
     }
 
     private void addSummary(LinearLayout root) {
         TextView summary = new TextView(this);
-        summary.setText("当前结论：小米路线仍是证据探针；完整历史心率还没有稳定普通 APK 后台接口。这里主要收集 BLE、Health Connect、小米云和导出证据。");
-        summary.setTextSize(13);
-        summary.setTextColor(Color.rgb(35, 42, 52));
-        summary.setPadding(dp(14), dp(12), dp(14), dp(12));
-        summary.setBackground(panelBackground(Color.rgb(236, 244, 255), Color.rgb(180, 204, 240)));
+        RabiMobileUi.styleGuidance(
+                this,
+                summary,
+                "这是高级诊断，不是日常健康配置",
+                "小米完整历史心率没有稳定的普通 APK 后台接口；不同按钮是在验证 BLE、Health Connect 或合作方云能力。",
+                "普通用户先使用 Rabi 健康设置；只有需要排查数据来源时才运行下面的单项测试。",
+                RabiGuidanceTone.INFO
+        );
         root.addView(summary, fullWidthWithMargins(0, 0, 0, 14));
     }
 
@@ -175,7 +190,7 @@ public class XiaomiProbeActivity extends Activity {
         heading.setText(text);
         heading.setTextSize(15);
         heading.setTypeface(Typeface.DEFAULT_BOLD);
-        heading.setTextColor(Color.rgb(42, 47, 55));
+        heading.setTextColor(RabiMobileUi.primaryColor());
         heading.setPadding(0, dp(8), 0, dp(8));
         root.addView(heading, new LinearLayout.LayoutParams(-1, -2));
     }
@@ -190,9 +205,10 @@ public class XiaomiProbeActivity extends Activity {
         devicePanel.setOrientation(LinearLayout.VERTICAL);
         devicePanel.setPadding(0, dp(8), 0, dp(2));
         devicePanel.addView(text("附近设备会出现在这里；点设备行会连接并读取公开 GATT 信息。", 12, Color.rgb(92, 98, 108)), new LinearLayout.LayoutParams(-1, -2));
-        ScrollView deviceScroll = new ScrollView(this);
+        deviceScroll = new ScrollView(this);
         deviceScroll.addView(deviceList);
-        devicePanel.addView(deviceScroll, new LinearLayout.LayoutParams(-1, dp(150)));
+        deviceScroll.setVisibility(View.GONE);
+        devicePanel.addView(deviceScroll, new LinearLayout.LayoutParams(-1, dp(96)));
 
         scanButton = capabilityButton(module, findCapability(module, XiaomiDeviceModule.CAP_BLE_SCAN), actions);
         stopButton = capabilityButton(module, findCapability(module, XiaomiDeviceModule.CAP_BLE_STOP), actions);
@@ -259,8 +275,12 @@ public class XiaomiProbeActivity extends Activity {
     private Button capabilityButton(DeviceModule module, Capability capability, Map<String, Runnable> actions) {
         Button button = new Button(this);
         button.setText(capability.displayName());
-        button.setAllCaps(false);
         button.setGravity(Gravity.CENTER);
+        if (XiaomiDeviceModule.CAP_BLE_SCAN.equals(capability.id())) {
+            RabiMobileUi.stylePrimaryButton(this, button);
+        } else {
+            RabiMobileUi.styleSecondaryButton(this, button);
+        }
         Runnable action = actions.get(capability.id());
         button.setOnClickListener(action == null
                 ? missingCapabilityAction(module, capability)
@@ -279,11 +299,9 @@ public class XiaomiProbeActivity extends Activity {
             Button... buttons
     ) {
         LinearLayout block = new LinearLayout(this);
-        block.setOrientation(LinearLayout.VERTICAL);
-        block.setPadding(dp(14), dp(12), dp(14), dp(12));
-        block.setBackground(panelBackground(Color.WHITE, Color.rgb(218, 222, 228)));
+        RabiMobileUi.styleCard(this, block);
 
-        TextView titleView = text(title, 16, Color.rgb(22, 28, 36));
+        TextView titleView = text(title, 16, RabiMobileUi.primaryColor());
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
         block.addView(titleView, new LinearLayout.LayoutParams(-1, -2));
 
@@ -317,15 +335,11 @@ public class XiaomiProbeActivity extends Activity {
     }
 
     private GradientDrawable panelBackground(int color, int stroke) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setStroke(1, stroke);
-        drawable.setCornerRadius(dp(8));
-        return drawable;
+        return RabiMobileUi.panel(this, color, stroke, 16);
     }
 
     private int dp(int value) {
-        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+        return RabiMobileUi.dp(this, value);
     }
 
     private Map<String, Runnable> createCapabilityActions() {
@@ -431,6 +445,7 @@ public class XiaomiProbeActivity extends Activity {
     }
 
     private void startScan() {
+        deviceScroll.setVisibility(View.VISIBLE);
         ensurePermissions();
         bleProbeController.startScan();
     }
@@ -452,9 +467,9 @@ public class XiaomiProbeActivity extends Activity {
         deviceList.removeAllViews();
         for (XiaomiBleProbeController.DeviceEntry device : devices) {
             Button row = new Button(this);
-            row.setAllCaps(false);
             row.setText(device.name + "\n" + device.address + " 信号 " + device.rssi + device.signalLabel);
             row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            RabiMobileUi.styleSecondaryButton(this, row);
             row.setOnClickListener(v -> bleProbeController.connect(device.address));
             deviceList.addView(row, new LinearLayout.LayoutParams(-1, -2));
         }

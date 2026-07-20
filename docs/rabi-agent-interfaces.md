@@ -51,6 +51,38 @@ npm run manager
 
 此模式仍提供 `/meta`、计划、记忆和校验等 Manager HTTP 接口；`GET /meta` 会返回 `managerAutostart: false`。它只关闭自动启动和自动同步，不移除显式运行控制接口，因此调用方仍不得在没有相应授权时请求启动、重启、触发、回传或外发动作。生产托盘和正常消息路由不设置该变量，行为保持不变。
 
+### Codex Hook 上下文接口
+
+Codex 插件必须把 Hook 原始事件提交给 Manager，而不是在插件内复制人格、计划、记忆或召回逻辑：
+
+```http
+POST /api/codex-hook/context
+```
+
+请求体沿用 Codex Hook 字段，至少包含 `hook_event_name` 和真实 `session_id`。当前接受：
+
+- `SessionStart`：提供 `source`；
+- `UserPromptSubmit`：提供 `turn_id` 和 `prompt`；
+- `PreToolUse`：提供 `turn_id`、`tool_name`、`tool_use_id` 和 `tool_input`；
+- `PostToolUse`：在上述字段外提供 `tool_response`。
+
+Manager 负责解释严格的 `[rabi:*]` 控制标记、维护 session 绑定，并把事件标准化为 `session_start`、`user_prompt`、`reasoning_pre_tool` 或 `reasoning_post_tool`。这些事件与 RabiRoute 消息投递的 `message_delivery` 都进入同一个 `RabiContextManager`；只有它调用 `roleKnowledgeSnapshot()`、执行计划归档和 `viewedAt` 策略，并在 `data.additionalContext` 中返回可注入内容。未绑定会话返回空字符串。
+
+推理期触发只返回本轮新增的相关知识。相同 `turn_id` 内，Manager 按条目类型、ID 和修订时间去重；Pre/Post 重复看到同一条目时既不重复注入，也不重复刷新 `viewedAt`。`preview` 策略不归档计划、不刷新 `viewedAt`、不创建 consolidation run。
+
+Rabi PC 可按完整 session ID 主动维护绑定：
+
+```text
+GET    /api/codex-hook/roles
+GET    /api/codex-hook/sessions
+GET    /api/codex-hook/sessions/:sessionId
+PUT    /api/codex-hook/sessions/:sessionId  { "roleId": "YeYu" }
+DELETE /api/codex-hook/sessions/:sessionId
+GET    /api/codex-hook/doctor
+```
+
+绑定状态属于 Manager 私有运行数据。插件不得保存第二份 binding、角色根、关键词索引或记忆正文；Manager 离线时只允许失败开放并说明本轮未注入，不能使用插件本地缓存伪造成功。
+
 ### 智能手表 / 手环健康查询
 
 启用 `wearable` 消息端后，结构化健康观测按角色进入独立时间线，不进入普通聊天记录。Agent 可使用本机 Manager API 查询，而不是依赖提示词里复制全部健康数据：

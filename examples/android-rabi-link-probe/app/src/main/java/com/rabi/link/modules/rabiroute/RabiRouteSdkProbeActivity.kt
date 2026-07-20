@@ -23,6 +23,7 @@ import android.widget.AdapterView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import com.rabi.link.RabiMobileUi
 import com.rabiroute.sdk.RabiAgentBinding
 import com.rabiroute.sdk.RabiInstance
 import com.rabiroute.sdk.RabiRouteInfo
@@ -74,7 +75,7 @@ class RabiRouteSdkProbeActivity : Activity() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(16), dp(18), dp(18))
-            setBackgroundColor(Color.rgb(246, 247, 249))
+            setBackgroundColor(RabiMobileUi.background)
         }
 
         addHeader(content)
@@ -96,7 +97,7 @@ class RabiRouteSdkProbeActivity : Activity() {
             "前置：电脑端 Manager 允许局域网访问；手机和电脑在同一 Wi-Fi；Windows 防火墙放行 8790。",
             "证据：identity、guid、computer、version，以及自动生成的 http://电脑IP:8794/rabilink。",
             managerSelectorPanel,
-            button("扫描并自动配置") { scanRabiRoutes() },
+            primaryButton("扫描并自动配置") { scanRabiRoutes() },
             button("读取当前 Manager") { readIdentityFromBaseUrl() },
             button("读取 Route 列表") { readRoutesAndOptions() },
             button("完整只读探测") { runFullProbeFromBaseUrl() }
@@ -143,7 +144,7 @@ class RabiRouteSdkProbeActivity : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(246, 247, 249))
+            setBackgroundColor(RabiMobileUi.background)
         }
         root.addView(page, LinearLayout.LayoutParams(-1, 0, 1f))
         addFixedLogPanel(root)
@@ -152,26 +153,23 @@ class RabiRouteSdkProbeActivity : Activity() {
     }
 
     private fun addHeader(content: LinearLayout) {
-        content.addView(TextView(this).apply {
-            text = "RabiRoute / RabiLink 测试台"
-            textSize = 23f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(24, 28, 34))
-        }, LinearLayout.LayoutParams(-1, -2))
-        content.addView(TextView(this).apply {
-            text = "按“回调端、管理端、绑定管理”三层验证，常用测试不用先填表。"
-            textSize = 13f
-            setTextColor(Color.rgb(86, 92, 102))
-            setPadding(0, dp(4), 0, dp(12))
-        }, LinearLayout.LayoutParams(-1, -2))
+        content.addView(RabiMobileUi.hero(
+            this,
+            "Rabi 电脑连接诊断",
+            "先自动扫描同一网络的 Rabi PC；只有防火墙、网络隔离或高级绑定需要人工处理。",
+        ), fullWidthWithMargins(0, 0, 0, 12))
     }
 
     private fun addDashboard(content: LinearLayout): TextView {
         val dashboard = TextView(this).apply {
-            textSize = 13f
-            setTextColor(Color.rgb(35, 42, 52))
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = panelBackground(Color.rgb(236, 244, 255), Color.rgb(180, 204, 240))
+            RabiMobileUi.styleGuidance(
+                this@RabiRouteSdkProbeActivity,
+                this,
+                "等待自动发现",
+                "尚未选择 Rabi PC，下面的 Manager、Route 和回调状态因此还不能验证。",
+                "点“扫描并自动配置”；没有发现时确认手机和电脑在同一 Wi-Fi。",
+                com.rabi.link.RabiGuidanceTone.INFO,
+            )
         }
         content.addView(dashboard, fullWidthWithMargins(0, 0, 0, 14))
         return dashboard
@@ -182,7 +180,7 @@ class RabiRouteSdkProbeActivity : Activity() {
             this.text = text
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(42, 47, 55))
+            setTextColor(RabiMobileUi.primary)
             setPadding(0, dp(8), 0, dp(8))
         }, LinearLayout.LayoutParams(-1, -2))
     }
@@ -210,15 +208,13 @@ class RabiRouteSdkProbeActivity : Activity() {
         vararg actions: Button
     ) {
         val block = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = panelBackground(Color.WHITE, Color.rgb(218, 222, 228))
+            RabiMobileUi.styleCard(this@RabiRouteSdkProbeActivity, this)
         }
         block.addView(TextView(this).apply {
             text = title
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(22, 28, 36))
+            setTextColor(RabiMobileUi.primary)
         }, LinearLayout.LayoutParams(-1, -2))
         block.addView(text(summary, 13, Color.rgb(70, 77, 88)).apply {
             setPadding(0, dp(4), 0, dp(6))
@@ -259,6 +255,7 @@ class RabiRouteSdkProbeActivity : Activity() {
                     override fun onNothingSelected(parent: AdapterView<*>?) = Unit
                 }
             }
+            RabiMobileUi.spinner(this@RabiRouteSdkProbeActivity, managerSelector)
             addView(managerSelector, fullWidthWithMargins(0, 0, 0, 4))
             addView(text("选择一个 RabiRoute 后，下面所有测试都使用它的 IP、名称和路由信息。", 12, Color.rgb(92, 98, 108)), fullWidthWithMargins(0, 0, 0, 8))
 
@@ -278,6 +275,7 @@ class RabiRouteSdkProbeActivity : Activity() {
                     override fun onNothingSelected(parent: AdapterView<*>?) = Unit
                 }
             }
+            RabiMobileUi.spinner(this@RabiRouteSdkProbeActivity, routeSelector)
             addView(routeSelector, fullWidthWithMargins(0, 0, 0, 4))
             addView(text("Route 也是全局上下文；后面的 RabiLink、Codex 绑定和测试动作都以这里选中的 Route 为准。", 12, Color.rgb(92, 98, 108)), LinearLayout.LayoutParams(-1, -2))
         }
@@ -295,6 +293,7 @@ class RabiRouteSdkProbeActivity : Activity() {
                 mutableListOf("留空 = RabiRoute 根目录")
             ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
             cwdSelector = Spinner(this@RabiRouteSdkProbeActivity).apply { adapter = cwdAdapter }
+            RabiMobileUi.spinner(this@RabiRouteSdkProbeActivity, cwdSelector)
             addView(text("Codex 工作目录", 12, Color.rgb(72, 78, 88)), fullWidthWithMargins(0, 4, 0, 3))
             addView(cwdSelector, fullWidthWithMargins(0, 0, 0, 6))
 
@@ -304,6 +303,7 @@ class RabiRouteSdkProbeActivity : Activity() {
                 mutableListOf("留空 = 按路由名自动创建")
             ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
             threadSelector = Spinner(this@RabiRouteSdkProbeActivity).apply { adapter = threadAdapter }
+            RabiMobileUi.spinner(this@RabiRouteSdkProbeActivity, threadSelector)
             addView(text("Codex 会话线程", 12, Color.rgb(72, 78, 88)), fullWidthWithMargins(0, 4, 0, 3))
             addView(threadSelector, fullWidthWithMargins(0, 0, 0, 0))
         }
@@ -317,9 +317,7 @@ class RabiRouteSdkProbeActivity : Activity() {
 
     private fun advancedPanel(): View =
         LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = panelBackground(Color.WHITE, Color.rgb(218, 222, 228))
+            RabiMobileUi.styleCard(this@RabiRouteSdkProbeActivity, this)
             addView(text("高级参数", 16, Color.rgb(22, 28, 36)).apply {
                 typeface = Typeface.DEFAULT_BOLD
             }, LinearLayout.LayoutParams(-1, -2))
@@ -337,7 +335,7 @@ class RabiRouteSdkProbeActivity : Activity() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(12))
-            background = panelBackground(Color.WHITE, Color.rgb(198, 204, 214))
+            background = RabiMobileUi.panel(this@RabiRouteSdkProbeActivity, RabiMobileUi.surface, RabiMobileUi.border, 12)
         }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -349,6 +347,8 @@ class RabiRouteSdkProbeActivity : Activity() {
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.rgb(32, 38, 46))
         }, LinearLayout.LayoutParams(0, -2, 1f))
+        val toggle = button("显示日志") { }
+        header.addView(toggle, LinearLayout.LayoutParams(dp(120), -2))
         header.addView(button("复制") { copyReport() }, LinearLayout.LayoutParams(dp(96), -2))
         panel.addView(header, LinearLayout.LayoutParams(-1, -2))
 
@@ -361,8 +361,17 @@ class RabiRouteSdkProbeActivity : Activity() {
         }
         val logScroll = ScrollView(this)
         logScroll.addView(output)
+        logScroll.visibility = View.GONE
         panel.addView(logScroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(panel, LinearLayout.LayoutParams(-1, dp(260)))
+        val panelParams = LinearLayout.LayoutParams(-1, dp(76))
+        root.addView(panel, panelParams)
+        toggle.setOnClickListener {
+            val show = logScroll.visibility != View.VISIBLE
+            logScroll.visibility = if (show) View.VISIBLE else View.GONE
+            panelParams.height = dp(if (show) 260 else 64)
+            panel.layoutParams = panelParams
+            toggle.text = if (show) "收起日志" else "显示日志"
+        }
     }
 
     private fun toggleAdvancedPanel() {
@@ -513,19 +522,23 @@ class RabiRouteSdkProbeActivity : Activity() {
         EditText(this).apply {
             this.hint = hint
             setSingleLine(true)
-            textSize = 13f
-            setTextColor(Color.rgb(32, 38, 46))
-            setHintTextColor(Color.rgb(120, 128, 140))
             inputType = InputType.TYPE_CLASS_TEXT
-            background = panelBackground(Color.rgb(247, 248, 250), Color.rgb(204, 211, 220))
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            RabiMobileUi.styleInput(this@RabiRouteSdkProbeActivity, this)
         }
 
     private fun button(text: String, action: () -> Unit): Button =
         Button(this).apply {
             this.text = text
-            isAllCaps = false
             gravity = Gravity.CENTER
+            RabiMobileUi.styleSecondaryButton(this@RabiRouteSdkProbeActivity, this)
+            setOnClickListener { action() }
+        }
+
+    private fun primaryButton(text: String, action: () -> Unit): Button =
+        Button(this).apply {
+            this.text = text
+            gravity = Gravity.CENTER
+            RabiMobileUi.stylePrimaryButton(this@RabiRouteSdkProbeActivity, this)
             setOnClickListener { action() }
         }
 
@@ -838,12 +851,8 @@ class RabiRouteSdkProbeActivity : Activity() {
         }
 
     private fun panelBackground(color: Int, stroke: Int): GradientDrawable =
-        GradientDrawable().apply {
-            setColor(color)
-            setStroke(1, stroke)
-            cornerRadius = dp(8).toFloat()
-        }
+        RabiMobileUi.panel(this, color, stroke, 10)
 
     private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density + 0.5f).toInt()
+        RabiMobileUi.dp(this, value)
 }

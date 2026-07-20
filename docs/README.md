@@ -38,7 +38,7 @@
 - [Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md) — **现行指南**。会话重复创建、工具缺失、owner 倒置和桌面启动依赖的复盘与验证方法。
 - [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) — **现行指南**。发现、认证、任务、幂等创建、投递、结果、工具、生命周期、UI、安全和验收要求。
 - [Codex Desktop Agent 接入与验收合同](codex-desktop-agent-acceptance.md) — **当前事实**。稳定 ID、按需扫描、自动初始化、Desktop 唯一 owner 和元数据 bootstrap 安全门。
-- [Rabi Codex Context 插件](rabi-codex-context-plugin.md) — **首个可测试版本**。按真实 Codex session ID 显式绑定 Rabi 人格并通过 Hook 注入受限上下文。
+- [Rabi Codex Context 插件](rabi-codex-context-plugin.md) — **统一 Manager 版本**。Hook 只转发真实 Codex session 事件并注入 Rabi PC 返回的统一人格、计划、记忆与技能上下文。
 
 ## 架构与维护
 

@@ -123,6 +123,7 @@ export type RoleKnowledgeIndexItem = {
 export type RequiredReadItem = RoleKnowledgeIndexItem & {
   endpoint: string;
   score: number;
+  revisionAt: string;
 };
 
 export type CreateMemoryConsolidationRequestOptions = {
@@ -153,6 +154,9 @@ export type RoleKnowledgeSnapshotOptions = {
   consolidationTrigger?: "auto" | "manual" | "api";
   forceConsolidation?: boolean;
   requiredReadLimit?: number;
+  archiveCompletedPlans?: boolean;
+  touchViewedAt?: boolean;
+  touchRequiredRead?: (item: RequiredReadItem) => boolean;
 };
 
 export const DEFAULT_PLAN_ARCHIVE_AFTER_HOURS = 72;
@@ -977,6 +981,7 @@ type ScoredKnowledgeCandidate = RoleKnowledgeIndexItem & {
   endpoint: string;
   score: number;
   activityAt: string;
+  revisionAt: string;
   memory?: RecentMemoryItem | ConsolidatedMemoryItem;
   skill?: RoleSkillItem;
 };
@@ -1057,7 +1062,7 @@ export function roleKnowledgeSnapshot(
   messageText: string,
   options: RoleKnowledgeSnapshotOptions = {}
 ): RoleKnowledgeSnapshot {
-  archiveCompletedPlans(roleDir);
+  if (options.archiveCompletedPlans !== false) archiveCompletedPlans(roleDir);
   const plans = listPlans(roleDir);
   const memories = listRecentMemories(roleDir);
   const consolidatedMemories = listConsolidatedMemories(roleDir);
@@ -1076,7 +1081,8 @@ export function roleKnowledgeSnapshot(
         type: "plan" as const,
         endpoint: requiredReadEndpoint(roleId, "plan", item.id),
         score: scoreKnowledgeMatch(messageText, item, item.status === "进行中" ? 5 : 0),
-        activityAt: item.updatedAt
+        activityAt: item.updatedAt,
+        revisionAt: item.updatedAt
       })),
     ...memories
       .filter((item) => !item.consolidatedAt)
@@ -1087,6 +1093,7 @@ export function roleKnowledgeSnapshot(
         endpoint: requiredReadEndpoint(roleId, "recent_memory", item.id),
         score: scoreKnowledgeMatch(messageText, item, recentMemoryIds.has(item.id) ? 5 : 0),
         activityAt: memoryActivityAt(item),
+        revisionAt: item.updatedAt,
         memory: item
       })),
     ...consolidatedMemories.map((item) => ({
@@ -1096,6 +1103,7 @@ export function roleKnowledgeSnapshot(
       endpoint: requiredReadEndpoint(roleId, "consolidated_memory", item.id),
       score: scoreKnowledgeMatch(messageText, item),
       activityAt: memoryActivityAt(item),
+      revisionAt: item.updatedAt,
       memory: item
     })),
     ...skills
@@ -1107,6 +1115,7 @@ export function roleKnowledgeSnapshot(
         endpoint: requiredReadEndpoint(roleId, "role_skill", item.id),
         score: scoreSkillMatch(messageText, item),
         activityAt: item.updatedAt,
+        revisionAt: item.updatedAt,
         skill: item
       }))
   ].filter((item) => item.score > 0).sort(sortScoredCandidates);
@@ -1118,17 +1127,20 @@ export function roleKnowledgeSnapshot(
       title: item.title,
       type: item.type,
       endpoint: item.endpoint,
-      score: item.score
+      score: item.score,
+      revisionAt: item.revisionAt
     }));
 
-  const touchedAt = nowIso();
-  for (const item of requiredReadItems) {
-    const candidate = scoredCandidates.find((candidateItem) => candidateItem.type === item.type && candidateItem.id === item.id);
-    if (candidate?.type === "recent_memory" && candidate.memory) {
-      touchRecentMemoryView(roleDir, candidate.memory as RecentMemoryItem, touchedAt);
-    }
-    if (candidate?.type === "consolidated_memory" && candidate.memory) {
-      touchConsolidatedMemoryView(roleDir, candidate.memory as ConsolidatedMemoryItem, touchedAt);
+  if (options.touchViewedAt !== false) {
+    const touchedAt = nowIso();
+    for (const item of requiredReadItems.filter((item) => options.touchRequiredRead?.(item) !== false)) {
+      const candidate = scoredCandidates.find((candidateItem) => candidateItem.type === item.type && candidateItem.id === item.id);
+      if (candidate?.type === "recent_memory" && candidate.memory) {
+        touchRecentMemoryView(roleDir, candidate.memory as RecentMemoryItem, touchedAt);
+      }
+      if (candidate?.type === "consolidated_memory" && candidate.memory) {
+        touchConsolidatedMemoryView(roleDir, candidate.memory as ConsolidatedMemoryItem, touchedAt);
+      }
     }
   }
 

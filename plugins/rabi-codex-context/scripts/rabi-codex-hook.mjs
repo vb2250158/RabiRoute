@@ -1,4 +1,4 @@
-import { handleHookInput } from "./lib/rabi-context-store.mjs";
+import { handleHookInput } from "./lib/rabi-manager-client.mjs";
 
 async function readStdin() {
   const chunks = [];
@@ -12,6 +12,6 @@ try {
   const output = await handleHookInput(input);
   if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
 } catch (error) {
-  // Hooks are context helpers, not an execution gate. Fail open and keep diagnostics on stderr.
+  // The hook is a thin trigger/injector. Rabi PC owns context and binding state.
   process.stderr.write(`[rabi-codex-context] ${error instanceof Error ? error.message : String(error)}\n`);
 }

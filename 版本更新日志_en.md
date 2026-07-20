@@ -6,6 +6,33 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.17 - 2026-07-20
+
+### Manager-owned Codex context
+
+- Added the normalized `RabiContextManager` trigger layer so AgentPacket `message_delivery` and Codex `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `PostToolUse` share the sole `roleKnowledgeSnapshot()` path, required-read GET protocol, `viewedAt`, plan archival, and memory-consolidation lifecycle. Entry events receive a lightweight full view; reasoning checkpoints inject only newly relevant items for the current turn.
+- Manager now exposes Codex Hook context, role-list, session-binding, and doctor APIs. Bindings use the exact complete `session_id` and stay in private runtime data, while existing plan, memory, and skill APIs remain the knowledge authority. Preview policy does not archive plans, refresh `viewedAt`, or create a consolidation run. Knowledge-only `managerAutostart=false` mode no longer starts Route-config polling, avoiding repeated NAS migration scans that can exhaust Windows SMB handles.
+- Upgraded `rabi-codex-context` to `0.3.0`. The active plugin only forwards Hook events and injects Manager-produced `additionalContext`; plugin-owned role roots, bindings, file scanning, and keyword scoring were removed, and the 0.1 implementation moved to a read-only migration archive.
+
+### Android first-run setup and unified mobile UI
+
+- Added shared `RabiMobileUi` components and `RabiSetupGuide` for consistent color, spacing, fields, actions, guidance cards, and collapsed sections across home, wearable, Rokid, RabiRoute SDK, Xiaomi Provider/OAuth, and advanced diagnostic screens.
+- The phone scans for LAN Rabi PCs and automatically selects a single online worker after login. Failure reasons, expected values, source locations, and fixes now stay beside each field, while device IDs, polling windows, models, and thresholds default to Advanced settings.
+- Wearable “save and enable” validates RabiLink, Health Connect, or the Xiaomi key and saves only a disabled draft when prerequisites are missing. Rokid opens with a six-step guide while SDK matrices and raw logs move under advanced diagnostics. UI and build completion do not replace physical Rokid or long-running wearable validation.
+
+### Migration and versions
+
+- Bumped the project to `0.1.17`, the Android phone example to `0.2.0` (`versionCode 2`), and the Codex Context plugin to `0.3.0`.
+- Version 0.1 role-root registrations and session bindings in the plugin user directory are not migrated automatically. Start Rabi PC Manager and bind each persona again with the exact complete `session_id`; `source add` and plugin-local knowledge fallback have been removed.
+- Manager stores new bindings in runtime-only `data/codex-hook/sessions.json`. Do not commit that file, local personas, the old plugin user directory, logs, or real credentials.
+
+### Validation
+
+- `npm test` passed all 248 backend tests. Knowledge-only mode also stayed healthy on the real NAS workspace for a 35-second window with 7 consecutive knowledge-API checks.
+- `node --test plugins/rabi-codex-context/test/*.test.mjs` passed all 6 plugin tests.
+- Android `:app:assembleDebug` passed from a local isolated output directory with Gradle 8.6, JDK 17, and the project Android SDK; only existing deprecated-API and native-strip warnings remain.
+- `npm run check:config` and `npm run build` passed. The full build completed TypeScript, the Codex contract check, Vue type checking, and a 638-module Vite production build, with only the existing runtime asset-resolution and large-chunk warnings.
+
 ## 0.1.16 - 2026-07-19
 
 ### Structured plan steps and current position

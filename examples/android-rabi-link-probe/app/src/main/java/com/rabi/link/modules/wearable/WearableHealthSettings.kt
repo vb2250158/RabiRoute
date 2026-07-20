@@ -37,9 +37,9 @@ object WearableHealthSettings {
         return WearableHealthConfig(
             enabled = prefs.getBoolean("enabled", false),
             collectorMode = WearableHealthCollectorMode.fromStorage(prefs.getString("collectorMode", null)),
-            sourceDeviceId = prefs.getString("sourceDeviceId", "mi-band-10-pro").orEmpty().trim(),
-            sourceDeviceName = prefs.getString("sourceDeviceName", "Xiaomi Smart Band 10 Pro").orEmpty().trim(),
-            sourceDeviceKind = prefs.getString("sourceDeviceKind", "band").orEmpty().trim().ifBlank { "wearable" },
+            sourceDeviceId = prefs.getString("sourceDeviceId", "").orEmpty().trim(),
+            sourceDeviceName = prefs.getString("sourceDeviceName", "").orEmpty().trim(),
+            sourceDeviceKind = prefs.getString("sourceDeviceKind", "wearable").orEmpty().trim().ifBlank { "wearable" },
             pollIntervalMinutes = prefs.getInt("pollIntervalMinutes", 5).coerceIn(1, 1440),
             lookbackHours = prefs.getInt("lookbackHours", 24).coerceIn(1, 168),
             policy = RabiWearableHealthPolicy(

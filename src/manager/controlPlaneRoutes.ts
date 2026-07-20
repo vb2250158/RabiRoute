@@ -75,13 +75,15 @@ import {
 } from "../shared/routePaths.js";
 import { ManagerConfigRepository } from "./configRepository.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
+import { CodexHookContextService } from "./codexHookContext.js";
+import { handleCodexHookApi } from "./codexHookRoutes.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import { handleRabiApi, publicRabiLinkRelayConfig } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
-import { managerAutostartEnabled } from "./managerRuntimeMode.js";
+import { managerAutostartEnabled, managerConfigWatcherEnabled } from "./managerRuntimeMode.js";
 import {
   ManagerSpeechControl,
   speechControlErrorMessage,
@@ -374,6 +376,10 @@ function writeManagerConfig(cfg: ManagerConfig): void {
 
 let rolesRoot = configRepository.rolesRoot;
 let routeRoot = configRepository.routeRoot;
+const codexHookContextService = new CodexHookContextService({
+  rolesRoot: () => rolesRoot,
+  storePath: path.join(rootDir, "data", "codex-hook", "sessions.json")
+});
 const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback";
 const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
 const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
@@ -1164,7 +1170,9 @@ function syncRunningGateways(): void {
 }
 
 function watchedRouteFiles(): string[] {
-  ensureDataDirs();
+  // Startup and explicit config mutations own initialization and legacy migration.
+  // Polling must stay read-only; repeatedly migrating a NAS-backed tree can exhaust
+  // Windows SMB handles and terminate the Manager with EMFILE.
   const files = new Set<string>();
   for (const entry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
     if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
@@ -3863,6 +3871,9 @@ export async function startManager(): Promise<void> {
       if (request.method === "POST" && handleAgentStateReport(request, requestUrl.pathname, response)) {
         return;
       }
+      if (handleCodexHookApi(request, requestUrl, response, codexHookContextService)) {
+        return;
+      }
       if (handleRabiApi(request, requestUrl, response, {
         rootDir,
         routeRoot,
@@ -4390,7 +4401,10 @@ export async function startManager(): Promise<void> {
     syncRabiLinkRelayRuntime();
   });
 
-  const configWatcher = startConfigWatcher();
+  const configWatcher = managerConfigWatcherEnabled() ? startConfigWatcher() : null;
+  if (!configWatcher) {
+    console.log("Route config polling disabled by RABIROUTE_MANAGER_AUTOSTART=0");
+  }
 
   let shuttingDown = false;
 
@@ -4400,7 +4414,7 @@ export async function startManager(): Promise<void> {
     }
     shuttingDown = true;
     console.log(`gateway-manager shutting down: ${reason}`);
-    clearInterval(configWatcher);
+    if (configWatcher) clearInterval(configWatcher);
     rabiLinkRelayRuntime.stop();
     stopAllGateways();
     server.close(() => {

@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-codex-context-plugin",
-  "title": "Codex 人格上下文插件按真实会话显式绑定",
-  "focus": "Codex session 与 Rabi 人格目录的显式绑定",
-  "content": "Rabi Codex Context 是可独立安装的 Codex 插件。它只保存真实 Codex session ID 到 RoleId 和角色根目录的绑定，通过 SessionStart 与 UserPromptSubmit Hook 注入受限的人格工作集、计划/记忆索引和关键词命中的少量正文。未绑定会话不注入；use、status、refresh、off 只接受严格控制标记。插件不复制人格知识、不成为第二个记忆真源，也不要求 Rabi PC 常驻。角色目录仍是唯一事实源，缺失或截断时必须说明不确定性。",
+  "title": "Codex 人格上下文由 Rabi PC Manager 统一管理",
+  "focus": "Codex Hook 的 Manager 单一真源与统一触发生命周期",
+  "content": "Rabi Codex Context 0.3 把插件收敛为薄触发器和 additionalContext 注入器。插件把 SessionStart、UserPromptSubmit、PreToolUse、PostToolUse 原样交给 Rabi PC Manager，不再保存角色根、会话绑定、计划/记忆副本或离线召回逻辑。Manager 用完整 session ID 保存 RoleId 绑定，并让 Codex Hook 与普通 message_delivery 共用 RabiContextManager、roleKnowledgeSnapshot、必读 GET 路径、viewedAt、归档和整理规则；入口触发给完整轻量上下文，推理期只给本 turn 新命中的增量。Codex-only 使用仍必须运行 managerAutostart=false 的知识服务；0.1 插件本地绑定不会自动迁移，升级后要按真实 session ID 重新绑定。",
   "source": {
     "kind": "example",
-    "summary": "公开示例记忆：Codex 会话人格显式绑定与单一知识真源"
+    "summary": "公开示例记忆：Manager 统一 Codex Hook、会话绑定和知识生命周期"
   },
   "createdAt": "2026-07-19T00:00:00+08:00",
-  "updatedAt": "2026-07-19T00:00:00+08:00",
-  "keywords": ["Codex 插件", "session ID", "Rabi 人格", "Hook", "显式绑定", "计划索引", "记忆召回", "单一真源"]
+  "updatedAt": "2026-07-20T00:00:00+08:00",
+  "keywords": ["Codex 插件", "Rabi PC Manager", "session ID", "RabiContextManager", "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "viewedAt", "单一真源", "重新绑定"]
 }

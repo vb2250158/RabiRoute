@@ -2,10 +2,7 @@ package com.rabi.link;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -25,44 +22,59 @@ public class TestCenterActivity extends Activity {
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(24, 24, 24, 24);
+        root.setPadding(dp(16), dp(16), dp(16), dp(28));
+        root.setBackgroundColor(RabiMobileUi.backgroundColor());
 
-        TextView title = new TextView(this);
-        title.setText("RabiLink 接口测试中心");
-        title.setTextSize(22);
-        title.setGravity(Gravity.CENTER_VERTICAL);
-        root.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(
+                RabiMobileUi.hero(
+                        this,
+                        "高级诊断中心",
+                        "这里只给排障和硬件验证使用。首次连接、健康同步和眼镜日常使用请回到 Rabi 首页。"
+                ),
+                full(0, 0, 0, 12)
+        );
 
-        TextView version = new TextView(this);
-        version.setText("构建：" + BuildConfig.BUILD_TIME);
-        version.setTextSize(12);
-        root.addView(version, new LinearLayout.LayoutParams(-1, -2));
+        TextView guidance = new TextView(this);
+        RabiMobileUi.styleGuidance(
+                this,
+                guidance,
+                "普通使用不需要打开这里",
+                "这些页面会显示接口名、日志和实验能力，属于开发者诊断，不是日常配置步骤。",
+                "如果只是连接 Rabi，请点下方“返回 Rabi 首页”；遇到客服或开发者要求时再打开对应诊断。",
+                RabiGuidanceTone.INFO
+        );
+        root.addView(guidance, full(0, 0, 0, 12));
 
-        TextView summary = new TextView(this);
-        summary.setText("这里保留设备能力探针。正式连接入口请回到 RabiLink 首页。");
-        summary.setTextSize(14);
-        summary.setPadding(0, 16, 0, 12);
-        root.addView(summary, new LinearLayout.LayoutParams(-1, -2));
+        Button home = new Button(this);
+        home.setText("返回 Rabi 首页");
+        RabiMobileUi.stylePrimaryButton(this, home);
+        home.setOnClickListener(v -> finish());
+        root.addView(home, full(0, 0, 0, 12));
+
+        TextView build = new TextView(this);
+        build.setText("诊断包构建：" + BuildConfig.BUILD_TIME);
+        RabiMobileUi.styleNoteText(this, build);
+        root.addView(build, full(0, 0, 0, 10));
 
         addTestCard(
                 root,
                 "RabiRoute API / SDK 测试",
-                "局域网扫描 + Agent 绑定",
-                "扫描局域网 RabiRoute\n读取路由列表与 Agent 可选目录/会话\n设置 Route 的 Codex 工作目录和线程名",
+                "检查电脑发现与连接链路",
+                "自动扫描局域网 RabiRoute，验证 Manager 与 RabiLink，并查看高级 Route / Codex 绑定。",
                 () -> startActivity(new Intent(this, RabiRouteSdkProbeActivity.class))
         );
         addTestCard(
                 root,
                 "小米接口测试",
-                "13 项测试接口",
-                "BLE 广播 / 设备信息 / 电量 / 心率服务\nHealth Connect 心率、睡眠、步数\n小米云授权、心率列表、全类型深扫、证据包\n小米健康 Provider 权限边界",
+                "检查手环数据来源",
+                "验证 BLE、Health Connect、小米合作方云接口和证据导出。普通健康同步优先使用首页里的健康设置。",
                 () -> startActivity(new Intent(this, XiaomiProbeActivity.class))
         );
         addTestCard(
                 root,
                 "Rokid 眼镜接口测试",
-                "6 项测试接口",
-                "Rokid App 检测与授权\nCXRLink 连接与会话状态\nCustomView Hello World\n音频流 WAV、拍照 JPEG、设备信息、亮度和音量",
+                "检查眼镜连接与能力",
+                "验证 Rokid App、手机权限、安全授权、眼镜连接、安装启动和媒体能力。",
                 () -> startActivity(new Intent(this, RokidProbeActivity.class))
         );
 
@@ -73,45 +85,44 @@ public class TestCenterActivity extends Activity {
 
     private void addTestCard(LinearLayout root, String title, String meta, String body, Runnable action) {
         LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(24, 20, 24, 20);
-        card.setBackground(cardBackground());
+        RabiMobileUi.styleCard(this, card);
         card.setOnClickListener(v -> action.run());
 
         TextView cardTitle = new TextView(this);
         cardTitle.setText(title);
-        cardTitle.setTextSize(18);
+        RabiMobileUi.styleTitleText(this, cardTitle, 17f);
         card.addView(cardTitle, new LinearLayout.LayoutParams(-1, -2));
 
         TextView cardMeta = new TextView(this);
         cardMeta.setText(meta);
-        cardMeta.setTextSize(12);
-        cardMeta.setTextColor(Color.rgb(88, 92, 98));
+        RabiMobileUi.styleNoteText(this, cardMeta);
         cardMeta.setPadding(0, 4, 0, 8);
         card.addView(cardMeta, new LinearLayout.LayoutParams(-1, -2));
 
         TextView cardBody = new TextView(this);
         cardBody.setText(body);
-        cardBody.setTextSize(13);
+        RabiMobileUi.styleNoteText(this, cardBody);
         cardBody.setPadding(0, 0, 0, 10);
         card.addView(cardBody, new LinearLayout.LayoutParams(-1, -2));
 
         Button button = new Button(this);
-        button.setText("开始测试");
-        button.setAllCaps(false);
+        button.setText("打开诊断");
+        RabiMobileUi.styleSecondaryButton(this, button);
         button.setOnClickListener(v -> action.run());
         card.addView(button, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.setMargins(0, 0, 0, 18);
+        params.setMargins(0, 0, 0, dp(12));
         root.addView(card, params);
     }
 
-    private GradientDrawable cardBackground() {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(Color.WHITE);
-        drawable.setStroke(2, Color.rgb(218, 222, 228));
-        drawable.setCornerRadius(18);
-        return drawable;
+    private LinearLayout.LayoutParams full(int left, int top, int right, int bottom) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.setMargins(dp(left), dp(top), dp(right), dp(bottom));
+        return params;
+    }
+
+    private int dp(int value) {
+        return RabiMobileUi.dp(this, value);
     }
 }

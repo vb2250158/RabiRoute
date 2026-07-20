@@ -14,7 +14,7 @@ This project packages Android, ADB, Xiaomi, and Rokid investigations into one ph
 com.rabi.link
 ```
 
-## Current product route (2026-07-18)
+## Current product route (2026-07-19)
 
 The project now builds one phone companion and one glasses frontend:
 
@@ -38,6 +38,16 @@ The embedded glasses APK is installed by the phone CXR workflow, so the user sti
 
 The phone home screen also exposes Wearable Health settings with a Health Connect or “Xiaomi Health (PC ADB Companion)” source selector, stable device identity, sync/lookback periods, thresholds, cooldown, and sleep-state alerts. An obtained Xiaomi authentication key is AES-GCM encrypted through Android Keystore and remains phone-local. The current Xiaomi real-device path is a logon-resident PC Companion driven by phone-owned settings; it normalizes Provider heart rate, sleep reports/stages, and current sleep state into Relay or trusted local Manager observations. Structured samples enter the RabiRoute health timeline instead of the conversation ledger. See [`../../docs/rabilink-wearable-health_en.md`](../../docs/rabilink-wearable-health_en.md).
 
+### First-run setup and failure guidance
+
+- The home screen automatically scans the local network for Rabi PCs. After RabiLink login, a single online worker is selected automatically, so a first-time user does not need to understand workers, routes, or cursors.
+- Connection details supplied by an installer, pairing payload, or future QR flow are filled automatically. When the RabiLink URL or mobile login code cannot be obtained safely, the page explains the security boundary and where to copy it from Rabi PC.
+- The page header only summarizes overall state. When a field fails, its reason, expected value, source, and fix stay directly below that field instead of forcing users to map a separate “why” section back to the form or rely on transient toasts.
+- Common fields, selectors, and actions share one Rabi mobile component scale. Device IDs, polling windows, model fields, and thresholds are hidden under Advanced settings by default.
+- Wearable setup prefers Health Connect and can generate a stable device ID and source name. Save and enable validates RabiLink, the system Health Connect provider, or the Xiaomi key first; if a prerequisite is missing, it saves a disabled draft instead of claiming that sync succeeded.
+- The Rokid screen defaults to a six-step connection guide: automatic environment check, phone permissions, Rokid authorization, link, glasses-side installation, and launch. The SDK matrix and logs are collapsed; steps that require system confirmation explain why they cannot be completed silently.
+- The test center, RabiRoute SDK, Xiaomi BLE/cloud, Provider-boundary, and OAuth screens now share the Rabi component system. They are explicitly labeled as advanced diagnostics, and raw logs stay collapsed so first-time setup never depends on developer pages.
+
 An embedded glasses-side test APK, `com.rabi.link.glass`, is bundled for CXR CustomApp experiments. It is a test payload installed by the phone-side workflow, not a second phone application for users.
 
 ## Current conclusions
@@ -53,6 +63,8 @@ The shared Android SDK can publish record-first portable observations and read b
 Native Rokid speech remains unclosed. CXR CustomApp and CustomCmd work, but Glass SDK services were unavailable in the tested environment. The 32-bit glasses-side RokidAiSdk package passed asset, ABI, and permission readiness but still requires legitimate voice-product credentials and real service acceptance.
 
 ## Application structure
+
+The home screen is the normal user entry point for Rabi PC connection, continuous conversation, wearable health, glasses, and remote configuration. Hardware/API probes live in a separate Advanced Diagnostics center.
 
 - `bridge/` defines `DeviceModule`, `Capability`, `ProbeResult`, `BridgeEvent`, storage, and module registration.
 - `modules/xiaomi/` contains BLE, GATT, Health Connect, local Provider, cloud OAuth/SDK, evidence export, and related test screens.

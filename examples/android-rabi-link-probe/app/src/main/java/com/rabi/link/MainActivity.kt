@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -15,6 +14,7 @@ import android.widget.*
 import androidx.core.content.FileProvider
 import java.io.File
 import com.rabiroute.sdk.RabiLinkPc
+import com.rabiroute.sdk.RabiInstance
 import com.rabiroute.sdk.RabiRouteInfo
 import com.rabiroute.sdk.RabiRouteSdk
 import com.rabi.link.modules.rokid.RokidDeviceStatusSyncService
@@ -27,13 +27,20 @@ class MainActivity : Activity() {
     private val requestPhoneMedia = 9032
     private val requestNotifications = 9033
     private val sdk = RabiRouteSdk()
+    private val discoverySdk = RabiRouteSdk(timeoutMs = 160)
     private val pcs = mutableListOf<RabiLinkPc>()
+    private val discoveredManagers = mutableListOf<RabiInstance>()
     private lateinit var relayUrl: EditText
     private lateinit var relayToken: EditText
+    private lateinit var relayUrlHelp: TextView
+    private lateinit var relayTokenHelp: TextView
+    private lateinit var pcHelp: TextView
     private lateinit var pcSpinner: Spinner
     private lateinit var pcAdapter: ArrayAdapter<String>
     private lateinit var status: TextView
     private lateinit var connectButton: Button
+    private lateinit var discoveredPcAction: Button
+    private lateinit var advancedSettings: LinearLayout
     private lateinit var runtimeStatus: TextView
     private lateinit var runtimeTranscript: TextView
     private lateinit var runtimeReply: TextView
@@ -98,9 +105,16 @@ class MainActivity : Activity() {
 
     private fun showSettings(saved: RabiLinkRelayConfig = RabiLinkRelaySettings.load(this)) {
         showingSettings = true; setContentView(buildUi())
-        if (saved.baseUrl.isNotBlank()) relayUrl.setText(saved.baseUrl)
-        if (saved.token.isNotBlank()) relayToken.setText(saved.token)
-        loadConversationSettings(); refreshStatus("等待连接")
+        if (saved.baseUrl.isNotBlank()) {
+            relayUrl.setText(saved.baseUrl)
+            setUrlHelp("已填入上次验证过的服务器地址。App 会自动重新检查它是否可用。", RabiGuidanceTone.SUCCESS)
+        }
+        if (saved.token.isNotBlank()) {
+            relayToken.setText(saved.token)
+            setTokenHelp("已安全保存登录码。这里不会显示明文，也不会把它写入日志。", RabiGuidanceTone.SUCCESS)
+        }
+        loadConversationSettings()
+        autoPrepareSetup(saved)
     }
 
     private fun showChat() {
@@ -192,7 +206,7 @@ class MainActivity : Activity() {
             }
             val routeName = availableRoutes.firstOrNull { it.id == message.routeProfileId }?.name ?: message.routeProfileId
             val label = if (!mine && routeName.isNotBlank()) "$routeName\n$body" else body
-            val bubble = TextView(this).apply { text = label; textSize = 15f; setTextColor(if (mine) Color.WHITE else Color.rgb(31, 36, 44)); setPadding(dp(12), dp(9), dp(12), dp(9)); background = panel(if (mine) Color.rgb(36, 95, 235) else Color.WHITE, if (mine) Color.rgb(36, 95, 235) else Color.rgb(219, 223, 230), 14) }
+            val bubble = TextView(this).apply { text = label; textSize = 15f; setTextColor(if (mine) Color.WHITE else RabiMobileUi.text); setPadding(dp(12), dp(9), dp(12), dp(9)); background = panel(if (mine) RabiMobileUi.primary else Color.WHITE, if (mine) RabiMobileUi.primary else RabiMobileUi.border, 14) }
             if (message.localPath.isNotBlank()) bubble.setOnClickListener { openAttachment(message) }
             host.addView(bubble, LinearLayout.LayoutParams(-2, -2).apply { gravity = if (mine) Gravity.END else Gravity.START; setMargins(if (mine) dp(36) else 0, dp(4), if (mine) 0 else dp(36), dp(4)) })
         }
@@ -217,35 +231,39 @@ class MainActivity : Activity() {
     private fun buildUi(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(18), dp(18), dp(24))
-            setBackgroundColor(Color.rgb(246, 247, 249))
+            setPadding(dp(16), dp(16), dp(16), dp(28))
+            setBackgroundColor(RabiMobileUi.background)
         }
-        content.addView(TextView(this).apply {
-            text = "Rabi 移动设备消息端"
-            textSize = 26f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(20, 25, 32))
-        })
-        content.addView(TextView(this).apply {
-            text = "手机负责眼镜连接、媒体中转与本地设置；Rabi PC 负责 ASR、TTS、Agent 和配置。"
-            textSize = 13f
-            setTextColor(Color.rgb(88, 94, 104))
-            setPadding(0, dp(4), 0, dp(12))
-        })
-        status = TextView(this).apply {
-            textSize = 13f
-            setTextColor(Color.rgb(31, 38, 48))
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = panel(Color.rgb(236, 244, 255), Color.rgb(174, 199, 237), 8)
-        }
-        content.addView(status, full(0, 0, 0, 14))
-        content.addView(conversationRuntimeCard(), full(0, 0, 0, 12))
+        content.addView(RabiMobileUi.hero(
+            this,
+            "连接你的 Rabi",
+            "App 会先自动检查；只有安全凭证、系统权限或外部设备限制无法代办时，才请你操作。",
+        ), full(0, 0, 0, 12))
+        status = RabiMobileUi.guidance(this, RabiSetupGuidance(
+            "正在检查当前环境",
+            "App 正在读取已保存连接并寻找同一网络的 Rabi PC。",
+            "请稍候，不需要先填写所有高级参数。",
+        ))
+        content.addView(status, full(0, 0, 0, 12))
         content.addView(serverCard(), full(0, 0, 0, 12))
-        content.addView(conversationCard(), full(0, 0, 0, 12))
+        content.addView(conversationRuntimeCard(), full(0, 0, 0, 12))
         content.addView(wearableCard(), full(0, 0, 0, 12))
         content.addView(glassesCard(), full(0, 0, 0, 12))
         content.addView(mediaCard(), full(0, 0, 0, 12))
-        content.addView(toolsCard(), full(0, 0, 0, 12))
+        lateinit var advancedToggle: Button
+        advancedToggle = secondary("显示高级设置") {
+            val visible = advancedSettings.visibility != View.VISIBLE
+            advancedSettings.visibility = if (visible) View.VISIBLE else View.GONE
+            advancedToggle.text = if (visible) "收起高级设置" else "显示高级设置"
+        }
+        content.addView(advancedToggle, full(0, 0, 0, 12))
+        advancedSettings = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(conversationCard(), full(0, 0, 0, 12))
+            addView(toolsCard(), full(0, 0, 0, 12))
+        }
+        content.addView(advancedSettings)
         return ScrollView(this).apply { addView(content) }
     }
 
@@ -278,27 +296,34 @@ class MainActivity : Activity() {
     }
 
     private fun serverCard(): View = card().apply {
-        addView(title("1. RabiLink 与 Rabi PC"))
-        addView(note("RabiLink 登录是全局设置。这里选择默认处理消息的 Rabi PC；该 PC 可同时发布多个路由人格，聊天顶部按人格切换会话。"))
-        relayUrl = input("https://relay.example.com")
-        relayToken = input("RabiLink 应用 token").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
-        addView(label("服务器 URL")); addView(relayUrl, full(0, 0, 0, 8))
-        addView(label("应用 token")); addView(relayToken, full(0, 0, 0, 8))
+        addView(title("1. 安全连接"))
+        addView(note("按顺序完成下面三项。App 能识别的会直接填好；需要你确认的内容，就在对应输入框下面告诉你去哪里拿。"))
+        relayUrl = input("例如：http://192.168.1.10:8794/rabilink")
+        relayToken = input("从 Rabi PC 复制的移动端登录码").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        relayUrlHelp = RabiMobileUi.fieldHelp(this@MainActivity, "这里填手机能访问的 RabiLink 地址。通常不用手填，App 找到电脑后会自动写入。")
+        relayTokenHelp = RabiMobileUi.fieldHelp(this@MainActivity, "这里粘贴 Rabi PC“RabiLink / 移动端”页面显示的登录码；它是安全凭证，所以不能静默读取。")
+        addView(label("① RabiLink 服务器地址")); addView(relayUrl); addView(relayUrlHelp)
+        addView(label("② 移动端登录码")); addView(relayToken); addView(relayTokenHelp)
+        discoveredPcAction = secondary("打开 Rabi PC 获取登录码") { openDiscoveredManager() }.apply { visibility = View.GONE }
+        addView(discoveredPcAction, full(0, 0, 0, 8))
         pcAdapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, mutableListOf("尚未连接"))
         pcAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        pcSpinner = Spinner(this@MainActivity).apply {
+        pcSpinner = RabiMobileUi.spinner(this@MainActivity, Spinner(this@MainActivity).apply {
             adapter = pcAdapter
             onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { selectedPc = pcs.getOrNull(position); refreshStatus("已选择目标 PC") }
                 override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
             }
-        }
-        addView(label("处理眼镜消息的 Rabi PC")); addView(pcSpinner, full(0, 0, 0, 10))
-        val row = row()
-        connectButton = primary("连接 / 刷新") { connectRelay() }
-        row.addView(connectButton, LinearLayout.LayoutParams(0, -2, 1f)); row.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
-        row.addView(secondary("设为默认 PC") { bindPc() }, LinearLayout.LayoutParams(0, -2, 1f))
-        addView(row)
+        })
+        pcHelp = RabiMobileUi.fieldHelp(this@MainActivity, "③ 登录成功后，这里会列出在线电脑；只有一台时 App 会自动选择。")
+        addView(label("③ 处理消息的 Rabi PC")); addView(pcSpinner); addView(pcHelp)
+        connectButton = primary("连接 Rabi") { connectRelay() }
+        addView(connectButton, full(0, 0, 0, 8))
+        val actions = row()
+        actions.addView(secondary("自动检测") { scanLocalRabi() }, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
+        actions.addView(secondary("使用所选 PC") { bindPc() }, LinearLayout.LayoutParams(0, -2, 1f))
+        addView(actions)
     }
 
     private fun glassesCard(): View = card().apply {
@@ -341,9 +366,9 @@ class MainActivity : Activity() {
     private fun conversationCard(): View = card().apply {
         addView(title("2. 持续会话与语音模型"))
         addView(note("这些设置同时用于手机独立模式和眼镜模式。ASR/TTS 在所选 Rabi PC 执行，手机负责持续录音、VAD 分段、cursor 和恢复。"))
-        continuousListening = Switch(this@MainActivity).apply { text = "配置完成后自动持续聆听" }
-        glassesEnabled = Switch(this@MainActivity).apply { text = "连接后使用眼镜麦克风、扬声器和触摸板" }
-        autoPlayAgentVoice = Switch(this@MainActivity).apply { text = "收到 Agent TTS 后立即播放" }
+        continuousListening = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "配置完成后自动持续聆听" })
+        glassesEnabled = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "连接后使用眼镜麦克风、扬声器和触摸板" })
+        autoPlayAgentVoice = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "收到 Agent TTS 后立即播放" })
         addView(continuousListening)
         addView(glassesEnabled)
         addView(autoPlayAgentVoice)
@@ -425,7 +450,12 @@ class MainActivity : Activity() {
         if (requestCode == requestPhoneAudio && grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             RabiConversationService.start(this)
         } else if (requestCode == requestPhoneAudio) {
-            toast("需要麦克风权限才能使用手机持续会话")
+            showGuidance(RabiSetupGuidance(
+                "麦克风权限未开启",
+                "手机持续会话需要由 Android 明确授权录音；App 不能绕过系统替你打开。",
+                "在系统权限页允许麦克风，或改用已连接眼镜的麦克风。",
+                RabiGuidanceTone.WARNING,
+            ))
         }
     }
 
@@ -445,42 +475,254 @@ class MainActivity : Activity() {
         if (!showingSettings) runtimeHandler.postDelayed({ renderChat() }, 300)
     }
 
+    private fun autoPrepareSetup(saved: RabiLinkRelayConfig) {
+        if (saved.configured) {
+            showGuidance(RabiSetupGuidance(
+                "已找到上次的连接",
+                "App 正在自动验证登录状态和在线 Rabi PC。",
+                "验证通过后，只有一个在线 PC 时会自动选择。",
+            ))
+            connectRelay()
+        } else {
+            scanLocalRabi()
+        }
+    }
+
+    private fun scanLocalRabi() {
+        if (busy) return
+        setBusy(true)
+        showGuidance(RabiSetupGuidance(
+            "正在自动寻找 Rabi PC",
+            "正在扫描同一 Wi-Fi；找到后会把地址直接填进第一个输入框。",
+            "请稍候。",
+        ))
+        runAsync({ discoverySdk.scanLan(applicationContext) }, { instances ->
+            discoveredManagers.clear()
+            discoveredManagers.addAll(instances)
+            val first = instances.firstOrNull()
+            if (first == null) {
+                discoveredPcAction.visibility = View.GONE
+                if (relayUrl.text.toString().trim().isBlank()) {
+                    setUrlHelp(
+                        "没有自动找到电脑。请确认手机与 Rabi PC 在同一 Wi-Fi；也可手填 http://电脑局域网IP:8794/rabilink。",
+                        RabiGuidanceTone.WARNING,
+                    )
+                }
+                if (relayToken.text.toString().trim().isBlank()) {
+                    setTokenHelp(
+                        "登录码要在 Rabi PC 的“RabiLink / 移动端”页面复制；App 不会猜测或生成安全凭证。",
+                        RabiGuidanceTone.WARNING,
+                    )
+                } else {
+                    setTokenHelp("登录码已经填写，连接时会安全验证。", RabiGuidanceTone.INFO)
+                }
+                showGuidance(RabiSetupGuidance("还差连接信息", "请按输入框下方的提示完成标橙项目。", "" , RabiGuidanceTone.WARNING))
+            } else {
+                discoveredPcAction.visibility = View.VISIBLE
+                val pcName = first.name.ifBlank { first.computerName.ifBlank { "Rabi PC" } }
+                val inferredUrl = "http://${first.host}:8794/rabilink"
+                if (relayUrl.text.toString().trim().isBlank()) {
+                    relayUrl.setText(inferredUrl)
+                    setUrlHelp("已从 $pcName 自动检测并填入：$inferredUrl", RabiGuidanceTone.SUCCESS)
+                } else {
+                    setUrlHelp("已保留你填写的地址；同时检测到 $pcName 可用地址 $inferredUrl。", RabiGuidanceTone.INFO)
+                }
+                if (relayToken.text.toString().trim().isBlank()) {
+                    setTokenHelp(
+                        "还差这一项：点下面“打开 $pcName 获取登录码”，在 RabiLink / 移动端页面复制后粘贴到这里。",
+                        RabiGuidanceTone.WARNING,
+                    )
+                }
+                discoveredPcAction.text = "打开 $pcName 获取登录码"
+                showGuidance(RabiSetupGuidance(
+                    "已找到 ${instances.size} 台 Rabi PC，服务器地址已填好",
+                    if (relayToken.text.toString().isBlank()) "现在只需完成标橙的“移动端登录码”。" else "连接信息已经齐全。",
+                    if (relayToken.text.toString().isBlank()) "按第二个输入框下方的提示获取登录码。" else "点“连接 Rabi”。",
+                    RabiGuidanceTone.SUCCESS,
+                ))
+            }
+        }, complete = { setBusy(false) }, error = { error ->
+            setUrlHelp(
+                "自动检测失败：${error.message ?: "Android 无法完成局域网扫描"}。可手填 http://电脑局域网IP:8794/rabilink。",
+                RabiGuidanceTone.ERROR,
+            )
+            showGuidance(RabiSetupGuidance("自动检测没有完成", "请按服务器地址输入框下方的提示处理。", "", RabiGuidanceTone.WARNING))
+        })
+    }
+
+    private fun openDiscoveredManager() {
+        val instance = discoveredManagers.firstOrNull()
+        if (instance == null) {
+            showGuidance(RabiSetupGuidance(
+                "没有可打开的 Rabi PC",
+                "本轮扫描没有保留可用地址。",
+                "确认手机和电脑在同一 Wi-Fi 后重新检测。",
+                RabiGuidanceTone.WARNING,
+            ))
+            return
+        }
+        startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(instance.baseUrl)))
+    }
+
     private fun connectRelay() {
         val url = relayBaseUrl(); val token = relayToken.text.toString().trim()
-        if (token.isBlank()) return toast("请填写应用 token")
-        setBusy(true); refreshStatus("连接服务器中")
-        runAsync({ sdk.getMobileState(url, token) }, { state ->
+        if (url.isBlank() || token.isBlank()) {
+            if (url.isBlank()) setUrlHelp(
+                "这里必须填服务器地址。先点“自动检测”；仍找不到时填 http://电脑局域网IP:8794/rabilink。",
+                RabiGuidanceTone.ERROR,
+            )
+            if (token.isBlank()) setTokenHelp(
+                "这里必须粘贴移动端登录码。请在 Rabi PC 的“RabiLink / 移动端”页面复制；这是安全凭证，App 不能替你生成。",
+                RabiGuidanceTone.ERROR,
+            )
+            showGuidance(RabiSetupGuidance("连接信息还没填完整", "请完成标红输入框；每项下面都有获取方法。", "", RabiGuidanceTone.WARNING))
+            if (url.isBlank() && discoveredManagers.isEmpty()) scanLocalRabi()
+            return
+        }
+        setUrlHelp("正在验证这个服务器地址是否可由手机访问。", RabiGuidanceTone.INFO)
+        setTokenHelp("正在安全验证登录码；不会把明文写入日志。", RabiGuidanceTone.INFO)
+        setBusy(true)
+        showGuidance(RabiSetupGuidance(
+            "正在验证连接",
+            "App 正在检查服务器、登录码和可用 Rabi PC。",
+            "请稍候，不需要重复点击。",
+        ))
+        runAsync({
+            val initial = sdk.getMobileState(url, token)
+            val onlyOnlinePc = initial.workers.filter { it.online }.singleOrNull()
+            if (initial.selectedWorker == null && onlyOnlinePc != null) {
+                sdk.selectMobileRabiPc(url, token, onlyOnlinePc.id)
+            } else initial
+        }, { state ->
             RabiLinkRelaySettings.save(this, url, token); RokidDeviceStatusSyncService.start(this)
+            setUrlHelp("服务器地址验证通过，已保存到本机。", RabiGuidanceTone.SUCCESS)
+            setTokenHelp("登录码验证通过，已安全保存到本机。", RabiGuidanceTone.SUCCESS)
             pcs.clear(); pcs.addAll(state.workers); pcAdapter.clear()
             if (pcs.isEmpty()) pcAdapter.add("没有在线 Rabi PC") else pcAdapter.addAll(pcs.map { "${it.name} · ${if (it.online) "在线" else "离线"}" })
             pcAdapter.notifyDataSetChanged(); selectedPc = state.selectedWorker ?: pcs.firstOrNull()
             selectedPc?.let { pc -> pcSpinner.setSelection(pcs.indexOfFirst { it.id == pc.id }.coerceAtLeast(0)) }
-            refreshStatus("Relay 已连接")
-        }) { setBusy(false) }
+            if (pcs.isEmpty()) {
+                setPcHelp("登录已经成功，但服务器当前没有在线 Rabi PC。请在电脑启动 RabiRoute 的 RabiLink worker。", RabiGuidanceTone.WARNING)
+                showGuidance(RabiSetupGuidance(
+                    "RabiLink 已登录，但没有在线 PC",
+                    "服务器接受了登录码，当前却没有 Rabi PC worker 在线。",
+                    "在电脑启动 RabiRoute 并启用 RabiLink Relay worker，然后点“连接 Rabi”刷新。",
+                    RabiGuidanceTone.WARNING,
+                ))
+            } else {
+                val pc = selectedPc
+                setPcHelp(
+                    if (state.workers.size == 1) "已自动选择唯一在线电脑：${pc?.name ?: "Rabi PC"}。" else "已选择 ${pc?.name ?: "Rabi PC"}；点下拉框可以切换。",
+                    RabiGuidanceTone.SUCCESS,
+                )
+                showGuidance(RabiSetupGuidance(
+                    "连接完成",
+                    "已登录 RabiLink，${pc?.name ?: "Rabi PC"} ${if (pc?.online == true) "在线" else "当前离线"}。",
+                    if (state.workers.size == 1) "App 已自动选择唯一的 PC，可以开始使用。" else "如需切换电脑，选择后点“使用所选 PC”。",
+                    RabiGuidanceTone.SUCCESS,
+                ))
+            }
+        }, complete = { setBusy(false) }, error = { error -> showConnectionError(error) })
     }
 
     private fun bindPc() {
-        val pc = selectedPc ?: return toast("请先选择 Rabi PC")
-        val token = relayToken.text.toString().trim(); if (token.isBlank()) return toast("请先连接服务器")
+        val pc = selectedPc ?: return run {
+            setPcHelp("这里还没有电脑可选。先完成前两个输入框并点“连接 Rabi”。", RabiGuidanceTone.ERROR)
+            showGuidance(RabiSetupGuidance("还没有可选的 Rabi PC", "请看第三项下方的提示。", "", RabiGuidanceTone.WARNING))
+        }
+        val token = relayToken.text.toString().trim()
+        if (token.isBlank()) {
+            setTokenHelp("先在这里粘贴移动端登录码，再选择电脑。", RabiGuidanceTone.ERROR)
+            return
+        }
         setBusy(true)
-        runAsync({ sdk.selectMobileRabiPc(relayBaseUrl(), token, pc.id) }, { state -> selectedPc = state.selectedWorker ?: pc; refreshStatus("默认 PC：${selectedPc?.name}") }) { setBusy(false) }
+        runAsync({ sdk.selectMobileRabiPc(relayBaseUrl(), token, pc.id) }, { state ->
+            selectedPc = state.selectedWorker ?: pc
+            setPcHelp("后续手机、手表和眼镜消息会交给 ${selectedPc?.name ?: "这台 Rabi PC"}。", RabiGuidanceTone.SUCCESS)
+            showGuidance(RabiSetupGuidance(
+                "已切换到 ${selectedPc?.name}",
+                "后续手机、手表和眼镜消息会默认交给这台 Rabi PC。",
+                "现在可以返回会话或继续配置设备。",
+                RabiGuidanceTone.SUCCESS,
+            ))
+        }, complete = { setBusy(false) }, error = { error -> showConnectionError(error) })
     }
 
     private fun openRokid(command: String) {
         val config = RabiLinkRelaySettings.load(this)
-        if (!config.configured) return toast("请先连接 RabiLink 服务器")
+        if (!config.configured) return showGuidance(RabiSetupGuide.missingConnection(config.baseUrl.isBlank(), config.token.isBlank(), discoveredManagers.size))
         startActivity(Intent(this, RokidProbeActivity::class.java).apply { if (command.isNotBlank()) putExtra("rokid_probe_command", command) })
     }
 
     private fun openRemoteConfig() {
         val url = relayBaseUrl()
-        if (url.isBlank()) return toast("请先填写服务器 URL")
+        if (url.isBlank()) return showGuidance(RabiSetupGuide.missingConnection(true, relayToken.text.toString().trim().isBlank(), discoveredManagers.size))
         startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("$url/manage")))
     }
 
-    private fun refreshStatus(message: String) { if (!::status.isInitialized) return; status.text = "Relay：${if (RabiLinkRelaySettings.load(this).configured) "已配置" else "未配置"}\nRabi PC：${selectedPc?.name ?: "未选择"}\n眼镜后端：${if (busy) "处理中" else message}" }
+    private fun refreshStatus(message: String) {
+        if (!::status.isInitialized || busy) return
+        val saved = RabiLinkRelaySettings.load(this)
+        if (saved.configured && selectedPc != null) {
+            showGuidance(RabiSetupGuidance(
+                "连接已就绪",
+                "RabiLink 已登录，当前使用 ${selectedPc?.name}。",
+                message,
+                RabiGuidanceTone.SUCCESS,
+            ))
+        }
+    }
+    private fun showGuidance(value: RabiSetupGuidance) {
+        if (!::status.isInitialized) return
+        val styled = RabiMobileUi.guidance(this, value)
+        status.text = styled.text
+        status.setTextColor(styled.currentTextColor)
+        status.background = styled.background
+    }
+
+    private fun setUrlHelp(message: String, tone: RabiGuidanceTone) {
+        if (!::relayUrlHelp.isInitialized || !::relayUrl.isInitialized) return
+        RabiMobileUi.styleFieldHelp(this, relayUrlHelp, message, tone)
+        RabiMobileUi.styleInputState(this, relayUrl, tone)
+    }
+
+    private fun setTokenHelp(message: String, tone: RabiGuidanceTone) {
+        if (!::relayTokenHelp.isInitialized || !::relayToken.isInitialized) return
+        RabiMobileUi.styleFieldHelp(this, relayTokenHelp, message, tone)
+        RabiMobileUi.styleInputState(this, relayToken, tone)
+    }
+
+    private fun setPcHelp(message: String, tone: RabiGuidanceTone) {
+        if (!::pcHelp.isInitialized) return
+        RabiMobileUi.styleFieldHelp(this, pcHelp, message, tone)
+    }
+
+    private fun showConnectionError(error: Throwable) {
+        val guidance = RabiSetupGuide.connectionError(error)
+        val raw = error.message.orEmpty().lowercase()
+        val fieldMessage = listOf(guidance.reason, guidance.action).filter { it.isNotBlank() }.joinToString(" ")
+        when {
+            "401" in raw || "403" in raw || "unauthorized" in raw || "forbidden" in raw ->
+                setTokenHelp(fieldMessage, RabiGuidanceTone.ERROR)
+            "unknownhost" in raw || "resolve host" in raw || "timeout" in raw || "timed out" in raw ||
+                "cleartext" in raw || "refused" in raw || "failed to connect" in raw || "unreachable" in raw ->
+                setUrlHelp(fieldMessage, RabiGuidanceTone.ERROR)
+            else -> {
+                setUrlHelp("服务器或网络没有完成验证，请核对地址后重试。", RabiGuidanceTone.WARNING)
+                setTokenHelp("如果地址无误，请重新从 Rabi PC 复制移动端登录码。", RabiGuidanceTone.WARNING)
+            }
+        }
+        showGuidance(RabiSetupGuidance(guidance.title, "请查看对应输入框下方的修复提示。", "", guidance.tone))
+    }
+
     private fun relayBaseUrl() = relayUrl.text.toString().trim().trimEnd('/')
-    private fun setBusy(value: Boolean) { busy = value; connectButton.isEnabled = !value; connectButton.text = if (value) "处理中..." else "连接 / 刷新" }
+    private fun setBusy(value: Boolean) {
+        busy = value
+        if (::connectButton.isInitialized) {
+            connectButton.isEnabled = !value
+            connectButton.text = if (value) "正在检查…" else "连接 Rabi"
+        }
+    }
     private fun <T> runAsync(
         work: () -> T,
         success: (T) -> Unit,
@@ -489,18 +731,18 @@ class MainActivity : Activity() {
     ) { Thread { try { val result = work(); runOnUiThread { success(result); complete() } } catch (cause: Throwable) { runOnUiThread { error(cause); complete() } } }.start() }
     private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
 
-    private fun card() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12)); background = panel(Color.WHITE, Color.rgb(218, 222, 228), 8) }
-    private fun title(text: String) = TextView(this).apply { this.text = text; textSize = 17f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.rgb(24, 30, 38)) }
-    private fun note(text: String) = TextView(this).apply { this.text = text; textSize = 12f; setTextColor(Color.rgb(80, 87, 98)); setPadding(0, dp(6), 0, dp(8)) }
-    private fun runtimeLine(text: String) = TextView(this).apply { this.text = text; textSize = 14f; setTextColor(Color.rgb(31, 38, 48)); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
-    private fun label(text: String) = TextView(this).apply { this.text = text; textSize = 12f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.rgb(62, 70, 82)); setPadding(0, dp(4), 0, dp(3)) }
-    private fun input(hint: String) = EditText(this).apply { this.hint = hint; textSize = 13f; setSingleLine(true); setPadding(dp(10), 0, dp(10), 0); background = panel(Color.WHITE, Color.rgb(205, 211, 220), 6) }
+    private fun card() = RabiMobileUi.card(this)
+    private fun title(text: String) = RabiMobileUi.title(this, text)
+    private fun note(text: String) = RabiMobileUi.note(this, text)
+    private fun runtimeLine(text: String) = TextView(this).apply { this.text = text; textSize = 14f; setTextColor(RabiMobileUi.text); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+    private fun label(text: String) = RabiMobileUi.label(this, text)
+    private fun input(hint: String) = RabiMobileUi.input(this, hint)
     private fun numberInput(hint: String) = input(hint).apply { inputType = InputType.TYPE_CLASS_NUMBER }
-    private fun primary(text: String, action: () -> Unit) = Button(this).apply { this.text = text; isAllCaps = false; setTextColor(Color.WHITE); background = panel(Color.rgb(36, 95, 235), Color.rgb(36, 95, 235), 8); setOnClickListener { action() } }
-    private fun secondary(text: String, action: () -> Unit) = Button(this).apply { this.text = text; isAllCaps = false; setTextColor(Color.rgb(38, 48, 68)); background = panel(Color.rgb(239, 242, 247), Color.rgb(213, 218, 226), 8); setOnClickListener { action() } }
+    private fun primary(text: String, action: () -> Unit) = RabiMobileUi.primary(this, text, action)
+    private fun secondary(text: String, action: () -> Unit) = RabiMobileUi.secondary(this, text, action)
     private fun row() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
     private fun space() = View(this)
     private fun full(l: Int, t: Int, r: Int, b: Int) = LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(l), dp(t), dp(r), dp(b)) }
-    private fun panel(color: Int, stroke: Int, radius: Int) = GradientDrawable().apply { setColor(color); setStroke(dp(1), stroke); cornerRadius = dp(radius).toFloat() }
-    private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
+    private fun panel(color: Int, stroke: Int, radius: Int) = RabiMobileUi.panel(this, color, stroke, radius)
+    private fun dp(value: Int) = RabiMobileUi.dp(this, value)
 }

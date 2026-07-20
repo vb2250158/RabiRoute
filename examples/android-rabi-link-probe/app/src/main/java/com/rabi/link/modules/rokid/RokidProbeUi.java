@@ -16,6 +16,9 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.rabi.link.RabiGuidanceTone;
+import com.rabi.link.RabiMobileUi;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -240,6 +243,7 @@ final class RokidProbeUi {
     }
 
     static final class Views {
+        final TextView guidanceView;
         final TextView dashboardView;
         final TextView logView;
         final EditText nativeTtsInputView;
@@ -257,6 +261,7 @@ final class RokidProbeUi {
         private final Map<String, Button> actionButtonViews;
 
         Views(
+                TextView guidanceView,
                 TextView dashboardView,
                 TextView logView,
                 EditText nativeTtsInputView,
@@ -273,6 +278,7 @@ final class RokidProbeUi {
                 Map<String, View> capabilityBlockViews,
                 Map<String, Button> actionButtonViews
         ) {
+            this.guidanceView = guidanceView;
             this.dashboardView = dashboardView;
             this.logView = logView;
             this.nativeTtsInputView = nativeTtsInputView;
@@ -292,6 +298,60 @@ final class RokidProbeUi {
 
         void setDashboard(String text) {
             dashboardView.setText(text);
+            updateGuidance(text);
+        }
+
+        private void updateGuidance(String text) {
+            String normalized = text == null ? "" : text;
+            if (normalized.contains("failed") || normalized.contains("失败") || normalized.contains("异常")) {
+                RabiMobileUi.styleGuidance(
+                        guidanceView.getContext(), guidanceView,
+                        "自动检查发现问题",
+                        "眼镜环境或连接步骤返回了失败状态，详细原始结果已保留在高级诊断里。",
+                        "先按提示补齐权限或授权，再点“自动检查环境”；仍失败时展开高级诊断复制日志。",
+                        RabiGuidanceTone.ERROR
+                );
+            } else if (normalized.contains("token") && (normalized.contains("未获取") || normalized.contains("missing"))) {
+                RabiMobileUi.styleGuidance(
+                        guidanceView.getContext(), guidanceView,
+                        "还需要一次 Rokid 安全授权",
+                        "手机不能替你确认系统级账号授权，所以这一步无法静默自动完成。",
+                        "点“Rokid 安全授权”，在系统页面确认后返回；App 会继续检查连接状态。",
+                        RabiGuidanceTone.WARNING
+                );
+            } else if (normalized.contains("installed=否") || normalized.contains("installed=no")) {
+                RabiMobileUi.styleGuidance(
+                        guidanceView.getContext(), guidanceView,
+                        "眼镜已可连接，还缺眼镜端 Rabi",
+                        "手机端不能绕过眼镜的安装确认，首次安装需要你保持眼镜在线。",
+                        "点“安装眼镜端”，按设备提示确认；安装完成后再点“启动眼镜端”。",
+                        RabiGuidanceTone.INFO
+                );
+            } else if (normalized.contains("installed=是") && (normalized.contains("started=否") || normalized.contains("started=no"))) {
+                RabiMobileUi.styleGuidance(
+                        guidanceView.getContext(), guidanceView,
+                        "眼镜端已安装",
+                        "Rabi 眼镜端还没有启动，因此暂时不能收发界面和语音指令。",
+                        "点“启动眼镜端”，启动后 App 会继续确认通信状态。",
+                        RabiGuidanceTone.INFO
+                );
+            } else if (normalized.contains("started=是") || normalized.contains("ready")) {
+                RabiMobileUi.styleGuidance(
+                        guidanceView.getContext(), guidanceView,
+                        "Rokid 眼镜已准备好",
+                        "授权、连接和眼镜端运行状态均已通过。",
+                        "返回首页继续使用；只有排障时才需要展开高级诊断。",
+                        RabiGuidanceTone.SUCCESS
+                );
+            } else {
+                RabiMobileUi.styleGuidance(
+                        guidanceView.getContext(), guidanceView,
+                        "正在自动检查眼镜环境",
+                        "App 会自动识别 Rokid 应用、权限、授权和连接状态。",
+                        "先点“自动检查环境”；遇到必须由你确认的系统步骤时，这里会说明原因和下一步。",
+                        RabiGuidanceTone.INFO
+                );
+            }
         }
 
         void setCapabilityStatus(String capabilityId, String status, String summary) {
@@ -397,11 +457,35 @@ final class RokidProbeUi {
         LinearLayout content = new LinearLayout(activity);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(activity, 18), dp(activity, 16), dp(activity, 18), dp(activity, 18));
-        content.setBackgroundColor(Color.rgb(246, 247, 249));
+        content.setBackgroundColor(RabiMobileUi.backgroundColor());
 
         addHeader(activity, content);
 
-        TextView dashboardView = addDashboard(activity, content);
+        TextView guidanceView = new TextView(activity);
+        RabiMobileUi.styleGuidance(
+                activity, guidanceView,
+                "正在自动检查眼镜环境",
+                "App 会自动识别 Rokid 应用、权限、授权和连接状态。",
+                "先点“自动检查环境”；遇到必须由你确认的系统步骤时，这里会说明原因和下一步。",
+                RabiGuidanceTone.INFO
+        );
+        content.addView(guidanceView, fullWidthWithMargins(activity, 0, 12, 0, 12));
+
+        addBeginnerSetup(activity, content, actions);
+
+        LinearLayout diagnostics = new LinearLayout(activity);
+        diagnostics.setOrientation(LinearLayout.VERTICAL);
+        diagnostics.setVisibility(View.GONE);
+
+        Button diagnosticsToggle = button(activity, "显示高级诊断", null);
+        diagnosticsToggle.setOnClickListener(v -> {
+            boolean show = diagnostics.getVisibility() != View.VISIBLE;
+            diagnostics.setVisibility(show ? View.VISIBLE : View.GONE);
+            diagnosticsToggle.setText(show ? "收起高级诊断" : "显示高级诊断");
+        });
+        content.addView(diagnosticsToggle, fullWidthWithMargins(activity, 0, 0, 0, 10));
+
+        TextView dashboardView = addDashboard(activity, diagnostics);
         EditText nativeTtsInput = nativeTtsInput(activity);
         EditText nativeVoiceAccessKeyInput = nativeVoiceCredentialInput(activity, "Rokid 在线语音 AccessKey");
         EditText nativeVoiceSecretKeyInput = nativeVoiceCredentialInput(activity, "Rokid 在线语音 SecretKey");
@@ -424,10 +508,10 @@ final class RokidProbeUi {
                 rokidAiConfigFileInput
         );
 
-        addSectionTitle(activity, content, "测试矩阵");
+        addSectionTitle(activity, diagnostics, "完整测试矩阵");
         addCapabilityBlock(
                 activity,
-                content,
+                diagnostics,
                 statusViews,
                 blockViews,
                 actionViews,
@@ -443,7 +527,7 @@ final class RokidProbeUi {
         );
         addCapabilityBlock(
                 activity,
-                content,
+                diagnostics,
                 statusViews,
                 blockViews,
                 actionViews,
@@ -457,7 +541,7 @@ final class RokidProbeUi {
         );
         addCapabilityBlock(
                 activity,
-                content,
+                diagnostics,
                 statusViews,
                 blockViews,
                 actionViews,
@@ -473,7 +557,7 @@ final class RokidProbeUi {
         );
         addCapabilityBlock(
                 activity,
-                content,
+                diagnostics,
                 statusViews,
                 blockViews,
                 actionViews,
@@ -490,7 +574,7 @@ final class RokidProbeUi {
         );
         addCapabilityBlock(
                 activity,
-                content,
+                diagnostics,
                 statusViews,
                 blockViews,
                 actionViews,
@@ -504,7 +588,7 @@ final class RokidProbeUi {
         );
         addCapabilityBlock(
                 activity,
-                content,
+                diagnostics,
                 statusViews,
                 blockViews,
                 actionViews,
@@ -519,7 +603,7 @@ final class RokidProbeUi {
         );
         addGlassAppCapabilityBlock(
                 activity,
-                content,
+                diagnostics,
                 statusViews,
                 blockViews,
                 actionViews,
@@ -566,18 +650,21 @@ final class RokidProbeUi {
                 )
         );
 
+        content.addView(diagnostics, new LinearLayout.LayoutParams(-1, -2));
+
         ScrollView page = new ScrollView(activity);
         page.addView(content);
 
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(246, 247, 249));
+        root.setBackgroundColor(RabiMobileUi.backgroundColor());
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
 
         TextView logView = addFixedLogPanel(activity, root, actions);
         activity.setContentView(root);
 
         return new Views(
+                guidanceView,
                 dashboardView,
                 logView,
                 nativeTtsInput,
@@ -596,25 +683,56 @@ final class RokidProbeUi {
         );
     }
 
+    private static void addBeginnerSetup(Activity activity, LinearLayout content, Actions actions) {
+        LinearLayout card = new LinearLayout(activity);
+        RabiMobileUi.styleCard(activity, card);
+
+        TextView title = text(activity, "连接向导", 17, RabiMobileUi.primaryColor());
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        card.addView(
+                text(
+                        activity,
+                        "App 会先自动检查；只有 Android 权限、Rokid 账号授权和眼镜安装确认需要你亲自同意。按这里的顺序操作，不必理解下面的 SDK 参数。",
+                        13,
+                        RabiMobileUi.mutedColor()
+                ),
+                fullWidthWithMargins(activity, 0, 5, 0, 10)
+        );
+
+        Button autoCheck = button(activity, "1. 自动检查环境", v -> actions.runEnvironmentProbe());
+        RabiMobileUi.stylePrimaryButton(activity, autoCheck);
+        card.addView(autoCheck, fullWidthWithMargins(activity, 0, 0, 0, 7));
+        card.addView(button(activity, "2. 允许手机权限", v -> actions.requestAndroidPermissions()), fullWidthWithMargins(activity, 0, 0, 0, 7));
+        card.addView(button(activity, "3. Rokid 安全授权", v -> actions.requestRokidAuthorization()), fullWidthWithMargins(activity, 0, 0, 0, 7));
+        card.addView(button(activity, "4. 连接眼镜", v -> actions.connectGlassAppSession()), fullWidthWithMargins(activity, 0, 0, 0, 7));
+        card.addView(button(activity, "5. 安装眼镜端", v -> actions.installGlassAsrApp()), fullWidthWithMargins(activity, 0, 0, 0, 7));
+        card.addView(button(activity, "6. 启动眼镜端", v -> actions.startGlassAsrApp()), fullWidthWithMargins(activity, 0, 0, 0, 0));
+        content.addView(card, fullWidthWithMargins(activity, 0, 0, 0, 12));
+    }
+
     private static TextView addFixedLogPanel(Activity activity, LinearLayout root, Actions actions) {
         LinearLayout panel = new LinearLayout(activity);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(activity, 12), dp(activity, 10), dp(activity, 12), dp(activity, 12));
-        panel.setBackground(panelBackground(Color.rgb(255, 255, 255), Color.rgb(198, 204, 214)));
+        panel.setBackground(panelBackground(Color.WHITE, RabiMobileUi.borderColor()));
 
         LinearLayout header = new LinearLayout(activity);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(activity);
-        title.setText("固定日志");
+        title.setText("运行日志");
         title.setTextSize(14);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(Color.rgb(32, 38, 46));
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
 
+        Button toggleButton = button(activity, "展开日志", null);
+        header.addView(toggleButton, new LinearLayout.LayoutParams(dp(activity, 106), -2));
+
         Button copyButton = button(activity, "复制", v -> actions.copyReport());
-        header.addView(copyButton, new LinearLayout.LayoutParams(dp(activity, 96), -2));
+        header.addView(copyButton, new LinearLayout.LayoutParams(dp(activity, 76), -2));
         panel.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
         TextView logView = new TextView(activity);
@@ -626,34 +744,38 @@ final class RokidProbeUi {
 
         ScrollView logScroll = new ScrollView(activity);
         logScroll.addView(logView);
+        logScroll.setVisibility(View.GONE);
         panel.addView(logScroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        root.addView(panel, new LinearLayout.LayoutParams(-1, dp(activity, 260)));
+        root.addView(panel, new LinearLayout.LayoutParams(-1, dp(activity, 76)));
+        toggleButton.setOnClickListener(v -> {
+            boolean expand = logScroll.getVisibility() != View.VISIBLE;
+            logScroll.setVisibility(expand ? View.VISIBLE : View.GONE);
+            toggleButton.setText(expand ? "收起日志" : "展开日志");
+            LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) panel.getLayoutParams();
+            params.height = dp(activity, expand ? 260 : 76);
+            panel.setLayoutParams(params);
+        });
         return logView;
     }
 
     private static void addHeader(Activity activity, LinearLayout content) {
-        TextView title = new TextView(activity);
-        title.setText("Rokid 眼镜接口实验台");
-        title.setTextSize(23);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.rgb(24, 28, 34));
-        content.addView(title, new LinearLayout.LayoutParams(-1, -2));
-
-        TextView subtitle = new TextView(activity);
-        subtitle.setText("按前置条件、接口调用、回调和证据文件逐项验证。");
-        subtitle.setTextSize(13);
-        subtitle.setTextColor(Color.rgb(86, 92, 102));
-        subtitle.setPadding(0, dp(activity, 4), 0, dp(activity, 12));
-        content.addView(subtitle, new LinearLayout.LayoutParams(-1, -2));
+        content.addView(
+                RabiMobileUi.hero(
+                        activity,
+                        "连接 Rokid 眼镜",
+                        "能自动检查的由 Rabi 完成；必须由你确认的权限、授权和安装会说明原因。"
+                ),
+                new LinearLayout.LayoutParams(-1, -2)
+        );
     }
 
     private static TextView addDashboard(Activity activity, LinearLayout content) {
         TextView dashboard = new TextView(activity);
         dashboard.setTextSize(13);
-        dashboard.setTextColor(Color.rgb(35, 42, 52));
+        dashboard.setTextColor(RabiMobileUi.textColor());
         dashboard.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 12));
-        dashboard.setBackground(panelBackground(Color.rgb(236, 244, 255), Color.rgb(180, 204, 240)));
+        dashboard.setBackground(panelBackground(Color.rgb(239, 253, 255), Color.rgb(165, 227, 229)));
         dashboard.setText("状态面板初始化中...");
         content.addView(dashboard, fullWidthWithMargins(activity, 0, 0, 0, 14));
         return dashboard;
@@ -664,7 +786,7 @@ final class RokidProbeUi {
         title.setText(text);
         title.setTextSize(15);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.rgb(42, 47, 55));
+        title.setTextColor(RabiMobileUi.primaryColor());
         title.setPadding(0, dp(activity, 8), 0, dp(activity, 8));
         content.addView(title, new LinearLayout.LayoutParams(-1, -2));
     }
@@ -717,15 +839,13 @@ final class RokidProbeUi {
     ) {
         LinearLayout block = new LinearLayout(activity);
         blockViews.put(capabilityId, block);
-        block.setOrientation(LinearLayout.VERTICAL);
-        block.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 12));
-        block.setBackground(panelBackground(Color.WHITE, Color.rgb(218, 222, 228)));
+        RabiMobileUi.styleCard(activity, block);
 
         TextView titleView = new TextView(activity);
         titleView.setText(title);
         titleView.setTextSize(16);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
-        titleView.setTextColor(Color.rgb(22, 28, 36));
+        titleView.setTextColor(RabiMobileUi.primaryColor());
         block.addView(titleView, new LinearLayout.LayoutParams(-1, -2));
 
         TextView summaryView = text(activity, summary, 13, Color.rgb(70, 77, 88));
@@ -773,15 +893,13 @@ final class RokidProbeUi {
     ) {
         LinearLayout block = new LinearLayout(activity);
         blockViews.put(capabilityId, block);
-        block.setOrientation(LinearLayout.VERTICAL);
-        block.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 12));
-        block.setBackground(panelBackground(Color.WHITE, Color.rgb(218, 222, 228)));
+        RabiMobileUi.styleCard(activity, block);
 
         TextView titleView = new TextView(activity);
         titleView.setText(title);
         titleView.setTextSize(16);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
-        titleView.setTextColor(Color.rgb(22, 28, 36));
+        titleView.setTextColor(RabiMobileUi.primaryColor());
         block.addView(titleView, new LinearLayout.LayoutParams(-1, -2));
 
         TextView summaryView = text(activity, summary, 13, Color.rgb(70, 77, 88));
@@ -901,12 +1019,8 @@ final class RokidProbeUi {
         input.setMaxLines(4);
         input.setText("Rabi 原生 TTS 测试");
         input.setHint("输入要让眼镜播报的 TTS 文本");
-        input.setTextSize(13);
-        input.setTextColor(Color.rgb(32, 38, 46));
-        input.setHintTextColor(Color.rgb(120, 128, 140));
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        input.setBackground(panelBackground(Color.rgb(247, 248, 250), Color.rgb(204, 211, 220)));
-        input.setPadding(dp(activity, 10), dp(activity, 8), dp(activity, 10), dp(activity, 8));
+        RabiMobileUi.styleInput(activity, input, true);
         return input;
     }
 
@@ -918,13 +1032,9 @@ final class RokidProbeUi {
         EditText input = new EditText(activity);
         input.setSingleLine(true);
         input.setHint(hint);
-        input.setTextSize(13);
-        input.setTextColor(Color.rgb(32, 38, 46));
-        input.setHintTextColor(Color.rgb(120, 128, 140));
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         input.setTransformationMethod(PasswordTransformationMethod.getInstance());
-        input.setBackground(panelBackground(Color.rgb(247, 248, 250), Color.rgb(204, 211, 220)));
-        input.setPadding(dp(activity, 10), dp(activity, 8), dp(activity, 10), dp(activity, 8));
+        RabiMobileUi.styleInput(activity, input);
         return input;
     }
 
@@ -932,12 +1042,8 @@ final class RokidProbeUi {
         EditText input = new EditText(activity);
         input.setSingleLine(true);
         input.setHint(hint);
-        input.setTextSize(13);
-        input.setTextColor(Color.rgb(32, 38, 46));
-        input.setHintTextColor(Color.rgb(120, 128, 140));
         input.setInputType(InputType.TYPE_CLASS_TEXT);
-        input.setBackground(panelBackground(Color.rgb(247, 248, 250), Color.rgb(204, 211, 220)));
-        input.setPadding(dp(activity, 10), dp(activity, 8), dp(activity, 10), dp(activity, 8));
+        RabiMobileUi.styleInput(activity, input);
         return input;
     }
 
@@ -991,9 +1097,9 @@ final class RokidProbeUi {
     private static Button button(Activity activity, String text, View.OnClickListener listener) {
         Button button = new Button(activity);
         button.setText(text);
-        button.setAllCaps(false);
         button.setGravity(Gravity.CENTER);
         button.setOnClickListener(listener);
+        RabiMobileUi.styleSecondaryButton(activity, button);
         return button;
     }
 
@@ -1007,7 +1113,7 @@ final class RokidProbeUi {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color);
         drawable.setStroke(1, stroke);
-        drawable.setCornerRadius(8);
+        drawable.setCornerRadius(12);
         return drawable;
     }
 
@@ -1025,7 +1131,7 @@ final class RokidProbeUi {
     }
 
     private static int dp(Activity activity, int value) {
-        return (int) (value * activity.getResources().getDisplayMetrics().density + 0.5f);
+        return RabiMobileUi.dp(activity, value);
     }
 
     private static final class ActionButton {

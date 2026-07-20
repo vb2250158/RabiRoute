@@ -6,42 +6,65 @@ English | <a href="./rabi-codex-context-plugin.md">简体中文</a>
 
 # Rabi Codex Context plugin
 
-> Status: first testable version. Source lives in `plugins/rabi-codex-context/`.
+> Status: 0.3 unified-trigger and context-management version. Source lives in `plugins/rabi-codex-context/`.
 
-## Product boundary
+## Single ownership boundary
 
-Rabi Codex Context is an independently installable Codex plugin. It lets a user bind one Codex session explicitly to a Rabi persona, then injects compact persona, plan, memory, and role-skill context through Codex lifecycle hooks.
+Rabi PC / RabiRoute Manager is the sole owner of persona configuration, Codex session bindings, plans, recent and consolidated memory, role skills, recall scoring, `viewedAt`, plan archival, memory edit windows, and consolidation.
 
-It does not require Rabi PC to remain running:
-
-- Codex-only users may register any local `roles/` directory that follows the Rabi role layout.
-- Rabi PC / RabiRoute users register their `data/roles/` directory and continue to let Rabi PC manage persona, plan, and memory files.
-- The plugin owns only the `Codex session ID -> RoleId + role root` binding. It does not copy role knowledge or become a second memory source of truth.
-
-## Installation and first acceptance check
-
-The repository contains a non-default project marketplace. Register it from the repository root, then install the plugin:
-
-```bash
-codex plugin marketplace add .
-codex plugin add rabi-codex-context@rabiroute-local
-```
-
-Start a new Codex task after installation so the task loads the plugin and hooks. An unbound task should receive no Rabi context for ordinary prompts. After sending `[rabi:use <RoleId>]` in the target task, the same turn should report a successful binding and inject the persona working set. Codex must still approve the hook command through its trust review.
-
-## Session activation model
-
-Codex loads plugin hooks with the plugin. Hooks cannot be added or removed dynamically before they know the current session, so the plugin uses logical activation:
+The Codex plugin only forwards `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `PostToolUse` events to Manager and injects the returned `additionalContext`. It does not scan role directories, parse plan or memory files, score keywords, store bindings, or keep an offline knowledge cache.
 
 ```text
-Codex SessionStart / UserPromptSubmit
-  -> hook reads the real session_id
-  -> no explicit binding: no context output
-  -> explicit binding exists: read the selected Rabi role directory
-  -> inject persona working set + plan/memory indexes + relevant items
+Codex hook event
+  -> POST /api/codex-hook/context
+  -> Rabi PC Manager session binding
+  -> RabiContextManager trigger policy, recall, and side effects
+  -> sole roleKnowledgeSnapshot() call site
+  -> shared RoleKnowledgeContextView
+  -> additionalContext
+  -> Codex hook injection
+
+RabiRoute message delivery
+  -> normalized message_delivery trigger
+  -> the same RabiContextManager
+  -> AgentPacket
 ```
 
-Ordinary natural language never changes a binding. The user invokes strict control markers inside a session:
+## Unified trigger policy
+
+| Normalized trigger | Source | Context shape | Lifecycle |
+|---|---|---|---|
+| `session_start` | Codex `SessionStart` | full entry context | normal archival; persona resent when needed |
+| `user_prompt` | Codex `UserPromptSubmit` | full entry context | normal recall and matched-memory refresh |
+| `reasoning_pre_tool` | Codex `PreToolUse` | newly relevant turn delta | no repeated archival; new hits refresh `viewedAt` |
+| `reasoning_post_tool` | Codex `PostToolUse` | newly relevant turn delta | same, including knowledge created or changed by a tool |
+| `message_delivery` | normal RabiRoute delivery | full entry context | existing plan, memory, and consolidation rules |
+| `preview` | Manager or UI caller | full preview | no archival, `viewedAt` refresh, or consolidation run |
+
+Reasoning hooks do not copy every tool input or output into the model context. Manager scores bounded text against the same ID, title, and `keywords` metadata and returns nothing when no role knowledge or explicit Rabi knowledge path matches. A `turn_id` ledger deduplicates by item type, ID, and revision time, so Pre/Post do not repeatedly inject or refresh the same item.
+
+## Codex-only mode
+
+A Codex-only user still runs the Rabi Manager context service, but may disable automatic gateway startup:
+
+```powershell
+$env:RABIROUTE_MANAGER_AUTOSTART = "0"
+npm run manager
+```
+
+This mode does not start Route-config polling. Persona, plan, memory, and skill data is still read from Manager's current `rolesDir` for each Hook request, and an explicit Manager-config change takes effect immediately. This keeps the knowledge service stable on NAS workspaces without repeatedly scanning or migrating Route configuration for Gateways that are not running.
+
+Manage `rolesDir` through Rabi PC / Manager configuration. The plugin no longer supports `source add` or a private plugin-owned `roles/` directory.
+
+### Migrating from plugin 0.1
+
+Role-root registrations and session bindings stored in the plugin user directory by version 0.1 are not migrated automatically. After upgrading to 0.3, start Rabi PC Manager and bind each persona again with the exact complete `session_id`; never infer it from a task title, workspace, or recent timestamp. The former implementation remains only as a read-only migration reference under `archive/plugins/rabi-codex-context-v0.1.0-local-context/` and must not return to the active call path.
+
+New bindings live in Manager-private runtime data at `data/codex-hook/sessions.json`. Do not commit that file, the old plugin user directory, or any real persona data.
+
+## Session controls
+
+Use strict markers inside a task:
 
 ```text
 [rabi:use YeYu]
@@ -50,48 +73,39 @@ Ordinary natural language never changes a binding. The user invokes strict contr
 [rabi:off]
 ```
 
-`UserPromptSubmit` carries the real Codex `session_id`, so the plugin never guesses session identity from a title, workspace, or recent timestamp. A future Rabi PC UI must also call the CLI with the complete session ID rather than treating a task title as identity.
-
-## Injection strategy
-
-- `SessionStart` reinjects a bound persona on `startup`, `resume`, `clear`, and `compact`.
-- `UserPromptSubmit` handles control markers, refreshes base context when persona files change, and lightly matches plan/recent-memory IDs, titles, and `keywords` against the current prompt.
-- Base context is not repeated on every turn, and a turn with no relevant match emits no extra context.
-- Model-visible output from one hook is limited to about 9,000 characters. Complete material remains in the role directory.
-- Loading failures let the Codex task continue while explicitly prohibiting invented persona details.
-
-## Local data
-
-The default state directory is `.rabi/codex/` under the user profile and can be overridden with `RABI_CODEX_HOME`. It stores only:
+Manager interprets the markers. Ordinary prose never changes a binding. Rabi PC may also bind proactively with the exact complete session ID:
 
 ```text
-config.json             # registered role roots
-session-bindings.json   # explicit session bindings
-hook-state.json         # injection fingerprints and lightweight state
-roles/                  # optional Codex-only local role root
+PUT    /api/codex-hook/sessions/{sessionId}  { "roleId": "YeYu" }
+GET    /api/codex-hook/sessions/{sessionId}
+DELETE /api/codex-hook/sessions/{sessionId}
 ```
 
-Do not commit this local state. It may contain personal paths, session IDs, and private persona bindings.
+Never infer a session ID from a task title, workspace, or timestamp.
 
-## Rabi PC integration contract
+## Manager API
 
-Rabi PC integrations reuse the plugin CLI:
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/codex-hook/context` | Accept a raw Hook event and build unified context |
+| GET | `/api/codex-hook/roles` | List Manager-owned personas |
+| GET | `/api/codex-hook/sessions` | List Manager-owned Codex bindings |
+| GET/PUT/DELETE | `/api/codex-hook/sessions/{sessionId}` | Inspect, proactively bind, or remove a binding |
+| GET | `/api/codex-hook/doctor` | Inspect rolesRoot, roles, and bindings |
 
-```text
-source add --id rabipc --path <data/roles>
-bind --session <complete Codex session ID> --role <RoleId>
-status --session <complete Codex session ID>
-unbind --session <complete Codex session ID>
+Binding state lives in private RabiRoute runtime data at `data/codex-hook/sessions.json`. It is not plugin data and must not be committed.
+
+## Recall and consolidation
+
+Manager routes every normalized trigger through `RabiContextManager`, the sole caller of the existing `roleKnowledgeSnapshot()`. This preserves the same ID/title/keyword scoring, active-item boosts, required-read protocol, memory `viewedAt` refresh, plan archival, edit windows, validation, and consolidation APIs used by normal RabiRoute Agent packets.
+
+The Hook does not embed full matched items. Codex must read every Manager GET path in `[处理前上下文确认]`, then use the existing plan and memory APIs for changes. It must not edit JSON directly and claim that the Manager lifecycle succeeded.
+
+## Installation and acceptance
+
+```bash
+codex plugin marketplace add .
+codex plugin add rabi-codex-context@rabiroute-local
 ```
 
-The UI may display persona and task names, but persistence and CLI calls must use the complete session ID. Binding, switching, and unbinding are explicit actions; selecting a Route persona must not silently contaminate manual conversation in the same Codex task.
-
-## Acceptance
-
-1. An unbound session emits no Rabi context at startup or for an ordinary prompt.
-2. `[rabi:use <RoleId>]` binds and injects the persona in the same user turn.
-3. A new, resumed, cleared, or compacted session reinjects by the original session ID.
-4. `[rabi:off]` unbinds only the current session and does not delete role knowledge.
-5. Two sessions may bind different personas without context leakage.
-6. Persona, plan, or memory changes refresh by fingerprint or keyword on a later turn.
-7. Hooks run only after Codex trust review; without approval, the plugin must not claim that context was injected.
+After installation or update, start a new Codex task and trust the commands through `/hooks`. Verify Manager outages never trigger plugin-local knowledge fallback, unbound sessions emit no context, marker binding injects in the same turn, keyword matches refresh memory `viewedAt`, sessions remain isolated, Rabi PC can bind exact sessions proactively, `SessionStart` reinjects after startup/resume/clear/compaction, Pre/Post reasoning hooks emit only relevant deltas, same-turn duplicates stay silent, and normal message delivery uses the same context manager.

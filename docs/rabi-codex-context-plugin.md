@@ -6,42 +6,70 @@
 
 # Rabi Codex Context 插件
 
-> 状态：首个可测试版本。源码位于 `plugins/rabi-codex-context/`。
+> 状态：0.3 统一触发与上下文管理版本。源码位于 `plugins/rabi-codex-context/`。
 
-## 产品边界
+## 唯一边界
 
-Rabi Codex Context 是可独立安装的 Codex 插件。它让用户把某一个 Codex 会话显式绑定到 Rabi 人格，并通过 Codex 生命周期 Hook 注入紧凑的人格、计划、记忆和角色技能上下文。
+Rabi PC / RabiRoute Manager 是以下事实的唯一管理者：
 
-它不要求 Rabi PC 常驻：
+- 人格目录与配置；
+- Codex `session_id → RoleId` 绑定；
+- 计划、近期记忆、沉淀记忆和角色技能；
+- 关键词召回、`viewedAt`、计划归档、记忆编辑窗口与整理流程。
 
-- 只使用 Codex 的用户可以注册任意符合 Rabi 角色目录结构的本地 `roles/` 目录。
-- 使用 Rabi PC / RabiRoute 的用户注册其 `data/roles/`，继续由 Rabi PC 管理人格、计划和记忆文件。
-- 插件只拥有“Codex session ID → RoleId + 角色根”的绑定，不复制人格知识，不成为第二个记忆真源。
-
-## 安装与首次验收
-
-仓库内置的是非默认的项目 marketplace。先从仓库根目录注册它，再安装插件：
-
-```bash
-codex plugin marketplace add .
-codex plugin add rabi-codex-context@rabiroute-local
-```
-
-安装后新建一个 Codex 任务，让新任务加载插件与 Hook。未绑定时普通消息不应收到 Rabi 上下文；在目标任务发送 `[rabi:use <RoleId>]` 后，同一轮应看到绑定成功和人格工作集。Hook 命令仍需通过 Codex 信任审阅。
-
-## 会话启用模型
-
-Codex 的插件 Hook 随插件加载。插件无法在 Hook 运行前按未知会话动态增删 Hook 定义，因此采用逻辑启用：
+Codex 插件只做两件事：把 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse` 原样提交给 Manager；把 Manager 返回的 `additionalContext` 原样注入 Codex。插件不扫描角色目录、不解析计划记忆、不评分关键词、不保存绑定，也没有离线知识缓存。
 
 ```text
-Codex SessionStart / UserPromptSubmit
-  -> Hook 读取真实 session_id
-  -> 没有显式绑定：无上下文输出
-  -> 存在显式绑定：读取对应 Rabi 角色目录
-  -> 注入人格工作集 + 计划/记忆索引 + 本轮高相关条目
+Codex Hook 事件
+  -> POST /api/codex-hook/context
+  -> Rabi PC Manager 会话绑定
+  -> RabiContextManager 统一触发策略、召回与副作用
+  -> roleKnowledgeSnapshot() 唯一调用入口
+  -> 共享 RoleKnowledgeContextView
+  -> additionalContext
+  -> Codex Hook 注入
+
+RabiRoute 消息投递
+  -> message_delivery 标准触发
+  -> 同一个 RabiContextManager
+  -> AgentPacket
 ```
 
-普通自然语言不会修改绑定。用户在会话内使用严格控制标记：
+## 统一触发策略
+
+| 标准触发 | 来源 | 上下文形式 | 生命周期 |
+|---|---|---|---|
+| `session_start` | Codex `SessionStart` | 完整入口上下文 | 正常归档；按需重发人格 |
+| `user_prompt` | Codex `UserPromptSubmit` | 完整入口上下文 | 正常召回并刷新命中记忆 |
+| `reasoning_pre_tool` | Codex `PreToolUse` | 本轮新命中的增量 | 不重复归档；新命中才刷新 `viewedAt` |
+| `reasoning_post_tool` | Codex `PostToolUse` | 本轮新命中的增量 | 同上，可发现工具结果产生的新计划或记忆 |
+| `message_delivery` | RabiRoute 正常消息投递 | 完整入口上下文 | 服从现有计划、记忆和整理机制 |
+| `preview` | Manager / UI 预览调用方 | 完整预览 | 不归档、不刷新 `viewedAt`、不创建整理 run |
+
+推理期 Hook 不会把每个工具输入和输出复制进 prompt。Manager 只用有界文本对同一套 ID、标题和 `keywords` 元信息评分；没有知识命中或明确 Rabi 知识路径时返回空上下文。相同 `turn_id` 下按“条目类型 + ID + 修订时间”去重，避免 Pre/Post 重复注入和重复刷新 `viewedAt`。
+
+## Codex-only 模式
+
+只使用 Codex 的用户仍需安装并运行 Rabi 的 Manager 上下文服务，但不需要启动消息网关、Relay 或发现服务：
+
+```powershell
+$env:RABIROUTE_MANAGER_AUTOSTART = "0"
+npm run manager
+```
+
+该模式不启动 Route 配置轮询；人格、计划、记忆和技能仍在每次 Hook 请求时从 Manager 当前 `rolesDir` 读取，显式修改 Manager 配置后也会立即使用新的目录。这样知识服务可以在 NAS 工作区长期运行，而不会为了未启动的 Gateway 反复扫描和迁移 Route 配置。
+
+人格目录通过 Rabi PC / Manager 的 `rolesDir` 配置管理。插件不再提供 `source add`，也不再使用用户目录下的插件私有 `roles/`。
+
+### 从 0.1 插件迁移
+
+0.1 版插件保存在插件用户目录里的角色根注册和 session 绑定不会自动迁移到 Manager。升级到 0.3 后，先启动 Rabi PC Manager，再按准确的完整 `session_id` 重新绑定人格；不要根据任务标题、工作区或最近时间猜测 ID。旧实现只保留在 `archive/plugins/rabi-codex-context-v0.1.0-local-context/` 作为只读迁移参考，不能重新接回活动调用链。
+
+新的绑定写入 Manager 私有运行数据 `data/codex-hook/sessions.json`。该文件、旧插件用户目录和任何真实人格数据都不得提交。
+
+## 会话控制
+
+任务内严格控制标记：
 
 ```text
 [rabi:use YeYu]
@@ -50,48 +78,56 @@ Codex SessionStart / UserPromptSubmit
 [rabi:off]
 ```
 
-`UserPromptSubmit` 输入包含 Codex 提供的真实 `session_id`，所以插件不需要根据标题、工作目录或最近时间猜测会话身份。Rabi PC 后续接 UI 时也应调用 CLI 并传完整 session ID，不能用任务标题冒充身份。
-
-## 注入策略
-
-- `SessionStart`：在 `startup`、`resume`、`clear`、`compact` 时重新注入已绑定人格。
-- `UserPromptSubmit`：处理控制标记；人格文件变化时刷新基础上下文；按当前 prompt 对计划/近期记忆的 ID、标题和 `keywords` 做轻量匹配。
-- 基础上下文不会在每轮重复；本轮没有高相关条目时不输出额外上下文。
-- Hook 单次模型可见输出限制在约 9,000 字符内。完整资料始终保留在角色目录。
-- 加载失败时继续 Codex 会话，并明确要求不得补造缺失设定。
-
-## 本地数据
-
-默认本地状态目录是用户目录下的 `.rabi/codex/`，可用 `RABI_CODEX_HOME` 覆盖。它只保存：
+标记由 Manager 解释。普通自然语言不会修改绑定。Rabi PC 也可以通过准确的完整 session ID 主动管理绑定：
 
 ```text
-config.json             # 已注册角色根
-session-bindings.json   # 显式会话绑定
-hook-state.json         # 注入指纹和轻量运行状态
-roles/                  # 可选的 Codex-only 本地角色根
+PUT    /api/codex-hook/sessions/{sessionId}  { "roleId": "YeYu" }
+GET    /api/codex-hook/sessions/{sessionId}
+DELETE /api/codex-hook/sessions/{sessionId}
 ```
 
-不要提交这些本地状态；其中可能包含个人路径、会话 ID 和私有人格绑定。
+不要用任务标题、工作目录或最近时间猜测 session ID。
 
-## Rabi PC 对接合同
+## Manager API
 
-Rabi PC 对接时复用插件 CLI：
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/api/codex-hook/context` | 接收原始 Hook 事件并生成统一上下文 |
+| GET | `/api/codex-hook/roles` | 列出 Manager 当前人格 |
+| GET | `/api/codex-hook/sessions` | 列出 Manager 持有的 Codex 绑定 |
+| GET/PUT/DELETE | `/api/codex-hook/sessions/{sessionId}` | 查询、主动绑定或解除 |
+| GET | `/api/codex-hook/doctor` | 检查 rolesRoot、角色和绑定状态 |
 
-```text
-source add --id rabipc --path <data/roles>
-bind --session <完整 Codex session ID> --role <RoleId>
-status --session <完整 Codex session ID>
-unbind --session <完整 Codex session ID>
+绑定状态保存于 RabiRoute 私有运行目录 `data/codex-hook/sessions.json`，不属于插件数据，也不得提交。
+
+## 召回与整理
+
+Manager 让所有标准触发通过 `RabiContextManager` 调用现有 `roleKnowledgeSnapshot()`：
+
+- 使用同一套 ID、标题、`keywords` 评分；
+- 使用同一套进行中计划与活跃近期记忆加成；
+- 生成同一套 `[处理前上下文确认]` 和 GET 路径；
+- 命中近期/沉淀记忆时刷新 `viewedAt`；
+- 继续服从现有计划归档、记忆编辑窗口、校验和 consolidation API。
+
+Hook 不直接注入命中条目的全文。Codex 必须按 Manager 返回的 GET 路径阅读全文，再通过既有计划/记忆 API 更新；不能直接改 JSON 冒充生命周期成功。
+
+## 安装与验收
+
+```bash
+codex plugin marketplace add .
+codex plugin add rabi-codex-context@rabiroute-local
 ```
 
-UI 应显示人格名与会话名，但持久化和调用必须使用完整 session ID。绑定、切换和解除都是显式动作；选择 Route 人格不应暗中污染同一 Codex 任务中的手动对话。
+安装或更新后新建 Codex 任务，并在 `/hooks` 审阅信任命令。验收要求：
 
-## 验收
-
-1. 未绑定会话启动与提交普通 prompt 时没有 Rabi 上下文输出。
-2. `[rabi:use <RoleId>]` 在同一用户轮次完成绑定和人格注入。
-3. 新会话、恢复、清空与压缩后按原 session ID 重新注入。
-4. `[rabi:off]` 只解除当前会话，不删除角色知识。
-5. 两个会话可绑定不同人格，互不串线。
-6. 修改 persona / 计划 / 记忆后，下轮按指纹或关键词刷新。
-7. Hook 文件通过 Codex 信任审阅后才能运行；未信任时不得声称已注入。
+1. Manager 离线时插件不使用本地知识回退。
+2. 未绑定会话收到空上下文。
+3. `[rabi:use <RoleId>]` 同一轮由 Manager 完成绑定和注入。
+4. 关键词命中走 `roleKnowledgeSnapshot()` 并刷新对应记忆 `viewedAt`。
+5. 两个 session 可绑定不同人格，互不串线。
+6. Rabi PC 可以按完整 session ID 主动绑定和解除。
+7. `SessionStart` 在启动、恢复、清空和压缩时向 Manager 请求重新注入。
+8. `PreToolUse` / `PostToolUse` 只在命中相关知识或明确 Rabi 知识路径时注入推理期增量。
+9. 同一 turn 的重复命中不会重复注入或重复刷新 `viewedAt`；条目更新后允许重新注入。
+10. 正常 RabiRoute 消息投递与 Codex Hook 共用 `RabiContextManager`，代码中没有第二个 snapshot 调用入口。

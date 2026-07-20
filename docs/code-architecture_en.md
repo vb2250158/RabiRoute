@@ -172,7 +172,9 @@ These modules do not replace live gateway adapter code.
 - write limits/validation;
 - Agent context snapshots.
 
-`src/manager/roleKnowledgeRoute.ts` parses role-knowledge paths, while `controlPlaneRoutes.ts` currently handles the API. Role knowledge is handler context and must not affect whether `RouteDecision` matches.
+`src/context/rabiContextManager.ts` is the sole role-context trigger boundary. It maps `session_start`, `user_prompt`, `reasoning_pre_tool`, `reasoning_post_tool`, `message_delivery`, and side-effect-free `preview` to one recall, archival, `viewedAt`, and presentation policy. It is also the only production caller of `roleKnowledgeSnapshot()`.
+
+`AgentPacket` adapts normal routes as `message_delivery`; `manager/codexHookContext.ts` adapts Codex lifecycle events as session, prompt, and reasoning triggers. Both render through `routing/roleKnowledgeContext.ts`. The Codex service only adds session binding, the base persona working set, and `turn_id` delta deduplication; the plugin contains no knowledge or trigger policy. `src/manager/roleKnowledgeRoute.ts` parses role-knowledge paths while `controlPlaneRoutes.ts` exposes the APIs. Role knowledge is handler context and must not affect whether `RouteDecision` matches.
 
 ## Frontend and desktop
 

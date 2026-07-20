@@ -1,7 +1,7 @@
 {
   "name": "rabi-codex-context",
-  "version": "0.1.0",
-  "description": "Bind an individual Codex session to a Rabi persona context without duplicating role knowledge.",
+  "version": "0.3.0",
+  "description": "Inject Rabi PC-managed entry and reasoning context into an explicitly bound Codex session through thin lifecycle hooks.",
   "author": {
     "name": "RabiRoute contributors",
     "url": "https://github.com/vb2250158/RabiRoute"
@@ -12,11 +12,11 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Rabi Codex Context",
-    "shortDescription": "Bind one Codex session to one Rabi persona.",
-    "longDescription": "Inject bounded persona, plan, memory, and role-skill context only after an explicit real-session binding.",
+    "shortDescription": "Use Rabi PC context in one Codex session.",
+    "longDescription": "Forward Codex session, prompt, and tool-loop lifecycle events to Rabi PC Manager and inject its bounded persona, plan, memory, and role-skill context without duplicating Rabi management logic in the plugin.",
     "developerName": "RabiRoute",
     "category": "Productivity",
-    "capabilities": ["Interactive"],
-    "defaultPrompt": "Bind this Codex session to my Rabi persona and report the active context."
+    "capabilities": ["Context", "Hooks"],
+    "defaultPrompt": "Bind this Codex session to my Rabi PC persona and report the Manager-owned context."
   }
 }

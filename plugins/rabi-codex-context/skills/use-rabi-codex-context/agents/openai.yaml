@@ -1,4 +1,4 @@
 interface:
   display_name: "Use Rabi Codex Context"
-  short_description: "Bind a Codex session to a Rabi persona context"
-  default_prompt: "Use $use-rabi-codex-context to bind this Codex session to a named Rabi persona."
+  short_description: "Use Rabi PC context across one Codex task"
+  default_prompt: "Use $use-rabi-codex-context to bind this Codex task and explain its entry and reasoning context triggers."

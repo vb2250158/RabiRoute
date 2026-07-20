@@ -35,6 +35,38 @@ npm run manager
 
 The Manager still serves `/meta`, plan, memory, and validation APIs; `GET /meta` reports `managerAutostart: false`. This mode disables automatic startup and synchronization only. Explicit runtime-control endpoints still exist, so a caller must not request start, restart, trigger, reply, or outbound actions without the corresponding authorization. Production tray startup and normal message routing remain unchanged when the variable is unset.
 
+### Codex Hook context API
+
+The Codex plugin must send raw Hook events to Manager instead of duplicating persona, plan, memory, or recall logic inside the plugin:
+
+```http
+POST /api/codex-hook/context
+```
+
+The body uses Codex Hook fields and must contain `hook_event_name` plus the real `session_id`. Current events provide:
+
+- `SessionStart`: `source`;
+- `UserPromptSubmit`: `turn_id` and `prompt`;
+- `PreToolUse`: `turn_id`, `tool_name`, `tool_use_id`, and `tool_input`;
+- `PostToolUse`: those fields plus `tool_response`.
+
+Manager interprets strict `[rabi:*]` controls, owns the session binding, and normalizes these events as `session_start`, `user_prompt`, `reasoning_pre_tool`, or `reasoning_post_tool`. They and normal RabiRoute `message_delivery` enter the same `RabiContextManager`; it is the sole caller of `roleKnowledgeSnapshot()` and owns plan archival and `viewedAt` policy. Manager returns model-visible text in `data.additionalContext`; an unbound session returns an empty string.
+
+Reasoning triggers return only newly relevant knowledge for the current turn. Within one `turn_id`, Manager deduplicates by item type, ID, and revision time, so repeated Pre/Post hits neither inject nor refresh `viewedAt` again. The `preview` policy does not archive plans, refresh `viewedAt`, or create a consolidation run.
+
+Rabi PC may manage exact session bindings proactively:
+
+```text
+GET    /api/codex-hook/roles
+GET    /api/codex-hook/sessions
+GET    /api/codex-hook/sessions/:sessionId
+PUT    /api/codex-hook/sessions/:sessionId  { "roleId": "YeYu" }
+DELETE /api/codex-hook/sessions/:sessionId
+GET    /api/codex-hook/doctor
+```
+
+Binding state is private Manager runtime data. The plugin must not keep another binding, role-root registry, keyword index, or memory body cache. If Manager is unavailable, fail open and say that no fresh context was injected; never fabricate success from plugin-local state.
+
 ### Wearable health queries
 
 With the `wearable` endpoint enabled, structured observations enter a role-scoped health timeline rather than ordinary chat history. Agents query the local Manager API instead of copying complete health records into every prompt:

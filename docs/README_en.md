@@ -38,7 +38,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) — **Current guide** for duplicate sessions, missing tools, inverted ownership, desktop startup dependencies, and verification.
 - [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) — **Current guide** for discovery, authentication, tasks, idempotent creation, delivery, results, tools, lifecycle, UI, security, and acceptance.
 - [Codex Desktop Agent Integration and Acceptance Contract](codex-desktop-agent-acceptance_en.md) — **Current fact** for stable IDs, side-effect-free scanning, automatic initialization, the Desktop owner boundary, and metadata bootstrap gates.
-- [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **First testable version** for explicit real-session persona binding and bounded hook context.
+- [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **Unified Manager version** where hooks only forward real Codex session events and inject Rabi PC-owned persona, plan, memory, and skill context.
 
 ## Architecture and maintenance
 

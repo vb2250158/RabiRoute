@@ -1,16 +1,5 @@
 import process from "node:process";
-import {
-  addRoleRoot,
-  bindSession,
-  doctor,
-  getBinding,
-  listBindings,
-  listRoles,
-  renderBaseContext,
-  renderRecallContext,
-  resolveRabiCodexHome,
-  unbindSession
-} from "./lib/rabi-context-store.mjs";
+import { requestManager, resolveManagerUrl } from "./lib/rabi-manager-client.mjs";
 
 function parseArgs(argv) {
   const positional = [];
@@ -37,43 +26,56 @@ function printJson(value) {
 }
 
 function usage() {
-  return `Rabi Codex context CLI
+  return `Rabi Codex context CLI (Rabi PC Manager client)
 
 Commands:
-  source add --id <source-id> --path <roles-directory> [--label <label>]
   roles
-  bind --session <session-id> --role <RoleId> [--root <source-id>]
+  bind --session <session-id> --role <RoleId>
   unbind --session <session-id>
   status [--session <session-id>]
-  render --session <session-id> [--prompt <text>]
+  context --session <session-id> --event <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse> [--turn <turn-id>] [--prompt <text>] [--tool <tool-name>] [--input <text>] [--response <text>]
   doctor
 
-Set RABI_CODEX_HOME to override the default local store.`;
+Set RABI_MANAGER_URL to override ${resolveManagerUrl({})}.`;
 }
 
 const { positional, flags } = parseArgs(process.argv.slice(2));
-const [command, subcommand] = positional;
-const home = resolveRabiCodexHome();
+const [command] = positional;
 
 try {
-  if (command === "source" && subcommand === "add") {
-    printJson(await addRoleRoot({ id: flags.id, rootPath: flags.path, label: flags.label }, home));
-  } else if (command === "roles") {
-    printJson((await listRoles({ home, cwd: process.cwd() })).map((item) => ({ roleId: item.roleId, rootId: item.rootId, rootLabel: item.rootLabel })));
+  if (command === "roles") {
+    printJson(await requestManager("/api/codex-hook/roles"));
   } else if (command === "bind") {
-    printJson(await bindSession({ sessionId: flags.session, roleId: flags.role, rootId: flags.root, cwd: process.cwd() }, home));
+    if (!flags.session || !flags.role) throw new Error("bind requires --session and --role.");
+    printJson(await requestManager(`/api/codex-hook/sessions/${encodeURIComponent(String(flags.session))}`, {
+      method: "PUT",
+      body: JSON.stringify({ roleId: flags.role })
+    }));
   } else if (command === "unbind") {
-    printJson({ removed: await unbindSession(flags.session, home) });
+    if (!flags.session) throw new Error("unbind requires --session.");
+    printJson(await requestManager(`/api/codex-hook/sessions/${encodeURIComponent(String(flags.session))}`, { method: "DELETE" }));
   } else if (command === "status") {
-    printJson(flags.session ? await getBinding(flags.session, home) : await listBindings(home));
-  } else if (command === "render") {
-    const binding = await getBinding(flags.session, home);
-    if (!binding) throw new Error("Session is not bound to a Rabi role.");
-    const base = await renderBaseContext(binding);
-    const recall = flags.prompt ? await renderRecallContext(binding, String(flags.prompt)) : "";
-    process.stdout.write(`${[base, recall].filter(Boolean).join("\n\n")}\n`);
+    const pathname = flags.session
+      ? `/api/codex-hook/sessions/${encodeURIComponent(String(flags.session))}`
+      : "/api/codex-hook/sessions";
+    printJson(await requestManager(pathname));
+  } else if (command === "context") {
+    if (!flags.session || !flags.event) throw new Error("context requires --session and --event.");
+    printJson(await requestManager("/api/codex-hook/context", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: flags.session,
+        hook_event_name: flags.event,
+        turn_id: flags.turn || undefined,
+        prompt: flags.prompt || "",
+        tool_name: flags.tool || undefined,
+        tool_input: flags.input || undefined,
+        tool_response: flags.response || undefined,
+        cwd: process.cwd()
+      })
+    }));
   } else if (command === "doctor") {
-    printJson(await doctor({ home, cwd: process.cwd() }));
+    printJson({ managerUrl: resolveManagerUrl(), ...(await requestManager("/api/codex-hook/doctor")) });
   } else {
     process.stdout.write(`${usage()}\n`);
     process.exitCode = command ? 2 : 0;

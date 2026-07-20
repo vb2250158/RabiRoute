@@ -16,7 +16,7 @@
 com.rabi.link
 ```
 
-## 当前产品主线（2026-07-18）
+## 当前产品主线（2026-07-19）
 
 本工程现在同时构建一个手机伴侣和一个眼镜前端：
 
@@ -40,6 +40,16 @@ RabiLink Relay
 
 手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步周期、心率高低阈值、告警冷却和睡眠状态告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。当前小米真机主线由登录后常驻的 PC Companion 按手机配置读取 Provider；结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
 
+### 首次使用与失败引导
+
+- 首页会自动扫描同一局域网里的 Rabi PC；只发现一台在线 worker 时，完成 RabiLink 登录后会自动选中，不要求用户理解 worker、route 或 cursor。
+- 安装包、配对信息或以后接入的二维码带有连接参数时，App 会直接填入。RabiLink 服务器地址和移动端登录码无法安全自动取得时，页面会说明受限原因以及应从 Rabi PC 的哪个入口复制。
+- 页面顶部只汇总当前状态；某个输入失败时，失败原因、应填内容、获取位置和修复动作会紧贴在对应输入框下方，不再让用户去独立的“为什么”区域对号入座，也不再只依赖短暂 Toast。
+- 常用输入、选择器和按钮使用统一的 Rabi 移动端组件尺寸；设备 ID、轮询窗口、模型与阈值等工程参数默认收进“高级设置”。
+- 健康页优先推荐 Health Connect，设备 ID 和来源名称可自动生成。“保存并启用”会先检查 RabiLink、系统 Health Connect 能力或小米密钥；条件不足时只保存草稿，不会误报同步成功。
+- Rokid 页面默认只显示六步连接向导：自动环境检查、手机权限、Rokid 安全授权、连接、安装眼镜端和启动。SDK 状态矩阵与运行日志默认收起；授权、安装等无法静默代办的步骤会在页面内解释系统限制。
+- 测试中心、RabiRoute SDK、小米 BLE/云、Provider 边界和 OAuth 页面统一使用 Rabi 视觉组件。它们被明确标为高级诊断，原始日志默认收起，普通用户不需要通过这些页面完成首次配置。
+
 模块化重构说明见 [`docs/rabi-link-probe-merge-plan.md`](./docs/rabi-link-probe-merge-plan.md)。
 
 ## 当前可用性结论
@@ -54,7 +64,7 @@ Rokid ASR/TTS 的最新资料结论见 `docs/rokid-asr-tts-communication-researc
 
 ## 单手机 APK 原则
 
-Rabi Link 只让用户安装一个手机 APK，正式手机包名只有 `com.rabi.link`。小米、Rokid 和后续设备都作为 APK 内部模块接入；当前首页是“接口测试中心”，用两张模块卡片进入独立测试页，各模块把结果写成统一 `ProbeResult`。
+Rabi Link 只让用户安装一个手机 APK，正式手机包名只有 `com.rabi.link`。小米、Rokid 和后续设备都作为 APK 内部模块接入；当前首页负责连接 Rabi PC、持续会话、健康消息端、眼镜入口和远程配置，高级接口测试集中在独立诊断中心，各模块把结果写成统一 `ProbeResult`。
 
 `modules/rokid/`、`modules/xiaomi/` 只是源码目录和 Java package 边界，不是第二个手机应用包名。Rokid 的 Glass3 / CustomApp 验证存在一个内置眼镜端测试 APK，包名为 `com.rabi.link.glass`；它是随手机 APK 打包、运行时交给 Rokid SDK 安装到眼镜侧的测试负载，不是用户需要单独安装的第二个手机 APK。
 
@@ -85,7 +95,7 @@ Rokid 模块职责表：
 | `RokidProbeReport` | 页面报告和统一结果日志。 |
 | `RokidReportClipboard` | 日志复制。 |
 
-首页只作为接口测试中心：小米接口测试和 Rokid 眼镜接口测试各一张卡片。具体接口按钮放在各模块测试页，避免不同厂商的测试动作混在同一个页面。
+首页是普通用户入口；设备接口测试集中在“高级诊断中心”。各模块的具体探针保留在独立页面，避免厂商术语和原始日志干扰首次连接、健康配置与眼镜连接主流程。
 
 Rokid SDK 要求 Android 12+，因此当前 APK 的 `minSdk` 已提升到 `31`。
 

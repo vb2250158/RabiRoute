@@ -378,7 +378,9 @@ Gateway 配置的事实源 Module。
 - role skills
 - Agent 上下文快照
 
-`AgentPacket` 会读取它生成“记忆与计划”上下文。`manager/controlPlaneRoutes.ts` 也暴露对应 HTTP 接口。
+`src/context/rabiContextManager.ts` 是角色上下文触发的唯一归口。它把 `session_start`、`user_prompt`、`reasoning_pre_tool`、`reasoning_post_tool`、`message_delivery` 和无副作用 `preview` 映射为统一的召回、归档、`viewedAt` 与呈现策略，也是生产代码中 `roleKnowledgeSnapshot()` 的唯一调用方。
+
+`AgentPacket` 把正常路由事件适配为 `message_delivery`；`manager/codexHookContext.ts` 把 Codex lifecycle Hook 适配为 session、prompt 和推理期触发。两者再通过 `routing/roleKnowledgeContext.ts` 生成同一份“记忆与计划”视图。Codex service 只额外负责人格绑定、基础人格工作集和按 `turn_id` 的增量去重；插件本身不实现角色知识或触发策略。`manager/controlPlaneRoutes.ts` 暴露对应 HTTP 接口。
 
 注意：角色知识属于 Agent 上下文，不属于 RouteDecision。不要让路由是否命中依赖记忆内容。
 

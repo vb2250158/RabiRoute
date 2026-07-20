@@ -6,7 +6,7 @@
   "priority": "high",
   "kind": "product",
   "currentStepId": "validate-glasses-and-health",
-  "currentStep": "手机已成为可独立使用的完整消息端，持有多路由人格聊天、稳定队列、cursor、附件、通知、ASR/TTS 设置和开机恢复；眼镜只是可选 I/O 外设。wearable 健康时间线与告警路由已闭环，手机侧真机冒烟已通过，当前补眼镜物理操作和健康长时间稳定性证据。",
+  "currentStep": "手机已成为可独立使用的完整消息端，并补齐局域网 Rabi PC 发现、单 worker 自动选择、字段内联修复说明、高级设置分层、健康启用前校验和 Rokid 六步向导。当前继续补眼镜物理操作和健康长时间稳定性证据。",
   "nextAction": "在可用的 Rokid 眼镜上验证持续收音、触摸板、HUD、真实电量、TTS 播放确认和断线恢复，并持续观察真实心率/睡眠采集、阈值冷却和重启恢复；证据齐全后再决定 AIUI 保留范围与原生迁移口径。",
   "steps": [
     { "id": "record-first-ledger", "title": "完成 record-first 账本、审阅器和主动下行", "status": "已完成" },
@@ -15,6 +15,7 @@
     { "id": "bidirectional-media", "title": "完成双向附件和纯附件消息闭环", "status": "已完成" },
     { "id": "wearable-health", "title": "完成穿戴健康时间线、查询和告警路由", "status": "已完成" },
     { "id": "phone-smoke", "title": "完成 Android 手机侧真机冒烟", "status": "已完成" },
+    { "id": "improve-first-run-guidance", "title": "统一移动 UI 并补齐首次配置与失败修复引导", "status": "已完成" },
     { "id": "validate-glasses-and-health", "title": "完成眼镜物理交互和健康长时间稳定性验收", "status": "进行中", "blockedBy": "仍缺 Rokid 眼镜和更长时间的真实健康样本" },
     { "id": "decide-aiui-migration", "title": "依据真机证据决定 AIUI 保留与原生迁移范围", "status": "未开始" }
   ],
@@ -31,6 +32,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-19T00:00:00+08:00",
-  "keywords": ["RabiLink", "AIUI", "原生 App", "Rabi Glass", "移动消息端", "手机后端", "多路由人格", "媒体附件", "wearable", "心率", "睡眠", "record-first", "主动投递", "Action Gate", "真机验收"]
+  "updatedAt": "2026-07-20T00:00:00+08:00",
+  "keywords": ["RabiLink", "AIUI", "原生 App", "Rabi Glass", "移动消息端", "手机后端", "首次使用", "局域网扫描", "内联错误", "高级设置", "多路由人格", "媒体附件", "wearable", "心率", "睡眠", "record-first", "主动投递", "Action Gate", "真机验收"]
 }

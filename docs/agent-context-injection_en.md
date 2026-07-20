@@ -12,6 +12,23 @@ RabiRoute wraps a routed event before delivering it to a handler. The wrapper te
 
 The route template should stay thin. Users normally add only rule-specific instructions; RabiRoute generates the stable event and context sections.
 
+## Unified trigger pipeline
+
+Context entry points no longer call role knowledge independently. Each adapter emits a normalized trigger for `RabiContextManager`:
+
+```text
+Codex SessionStart / UserPromptSubmit / PreToolUse / PostToolUse
+RabiRoute QQ / webhook / voice / manual-trigger / heartbeat delivery
+Manager or UI preview
+  -> normalized ContextTrigger
+  -> RabiContextManager
+  -> roleKnowledgeSnapshot plus one lifecycle policy
+  -> RoleKnowledgeContextView
+  -> Codex additionalContext or AgentPacket
+```
+
+Adapters provide role, message or tool signal, session/turn/event identity, and source. They do not own keyword scoring, plan archival, memory activity windows, or `viewedAt`. Entry triggers inject a lightweight full view, reasoning triggers add only newly relevant required reads for the turn, and preview forbids knowledge side effects.
+
 ## Injection principles
 
 Default injection is lightweight:

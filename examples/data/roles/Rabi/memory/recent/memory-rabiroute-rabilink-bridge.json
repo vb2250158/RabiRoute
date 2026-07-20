@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-rabilink-bridge",
-  "title": "RabiLink 是移动优先的可靠主动消息端",
-  "focus": "移动聊天、可选眼镜、穿戴健康与统一 Action Gate",
-  "content": "RabiLink 移动设备端以手机作为完整客户端和可靠后端，眼镜只是可选的麦克风、扬声器、HUD、相机和触摸板外设。手机独立持有多路由人格会话、稳定上行队列、持久 cursor、附件、通知、ASR/TTS 设置和重启恢复；所有文本、配置请求、普通回复与主动投递继续经过选定 Rabi PC 的 Agent 上下文和 Outbox / Action Gate。穿戴健康使用独立 wearable 消息端，把心率、睡眠会话、阶段和状态写入角色健康时间线；常规样本不进入聊天账本也不唤醒 Agent，只有阈值或睡眠状态变化告警才路由给 Agent。手表认证秘钥只保存在手机 Keystore。公开示例不得包含真实 token、设备 ID、聊天、媒体或本机路径。手机真机冒烟不等于眼镜物理验收或健康长时间稳定性已经完成。",
+  "title": "RabiLink 手机入口优先解释并验证首次配置",
+  "focus": "移动消息端首次使用引导与真机验收边界",
+  "content": "RabiLink 手机端仍是完整客户端和可靠后端，眼镜只是可选 I/O 外设；文本、配置、附件和主动投递继续经过选定 Rabi PC 的 Agent 上下文与 Outbox / Action Gate。首次使用时首页扫描局域网 Rabi PC，登录后只发现一个在线 worker 可自动选择；连接字段把失败原因、应填内容、获取位置和修复动作贴在输入框下，工程参数默认收入高级设置。健康页在“保存并启用”前验证 RabiLink、Health Connect 或小米密钥，条件不足只保存禁用草稿；Rokid 页面默认显示六步连接向导，SDK 矩阵和原始日志归入高级诊断。UI 与构建成功仍不等于 Rokid 眼镜物理验收或穿戴健康长期稳定性已经完成。",
   "source": {
     "kind": "example",
-    "summary": "公开示例记忆：移动消息端、穿戴健康、主动投递和脱敏边界"
+    "summary": "公开示例记忆：移动端首次配置引导、健康启用校验和真机边界"
   },
   "createdAt": "2026-07-06T00:00:00+08:00",
-  "updatedAt": "2026-07-19T00:00:00+08:00",
-  "keywords": ["RabiLink", "移动消息端", "手机后端", "Rabi Glass", "多路由人格", "可靠队列", "媒体附件", "通知", "wearable", "心率", "睡眠", "健康告警", "Action Gate", "真机验收"]
+  "updatedAt": "2026-07-20T00:00:00+08:00",
+  "keywords": ["RabiLink", "移动消息端", "首次使用", "局域网扫描", "worker 自动选择", "内联错误", "高级设置", "wearable", "Health Connect", "Rokid", "六步向导", "Action Gate", "真机验收"]
 }
