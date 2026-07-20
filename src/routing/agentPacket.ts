@@ -47,6 +47,7 @@ type MessageCodeRecord = {
   senderName?: string;
   botUserId?: string;
   botNickname?: string;
+  source?: "history" | "outbox" | "current";
 };
 
 type MessageCodeParseResult = {
@@ -255,7 +256,8 @@ function parseAtCodes(text: string): Array<{ qq: string; code: string }> {
 function readMessageCodeRecords(dataDir: string): MessageCodeRecord[] {
   if (!dataDir) return [];
 
-  const groupMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "group-messages.jsonl"))
+  const historyDirs = [...new Set([dataDir, config.memoryDataDir].filter(Boolean).map((item) => path.resolve(item)))];
+  const groupMessages = historyDirs.flatMap((historyDir) => parseJsonlFile<Record<string, unknown>>(path.join(historyDir, "group-messages.jsonl")))
     .map((item) => ({
       time: Number(item.time) || 0,
       rawMessage: String(item.rawMessage ?? ""),
@@ -263,9 +265,10 @@ function readMessageCodeRecords(dataDir: string): MessageCodeRecord[] {
       userId: item.userId as string | number | undefined,
       senderName: messageText(item.senderName),
       botUserId: item.botUserId == null ? undefined : String(item.botUserId),
-      botNickname: messageText(item.botNickname)
+      botNickname: messageText(item.botNickname),
+      source: "history" as const
     }));
-  const privateMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "private-messages.jsonl"))
+  const privateMessages = historyDirs.flatMap((historyDir) => parseJsonlFile<Record<string, unknown>>(path.join(historyDir, "private-messages.jsonl")))
     .map((item) => ({
       time: Number(item.time) || 0,
       rawMessage: String(item.rawMessage ?? ""),
@@ -273,10 +276,26 @@ function readMessageCodeRecords(dataDir: string): MessageCodeRecord[] {
       userId: item.userId as string | number | undefined,
       senderName: messageText(item.senderName),
       botUserId: item.botUserId == null ? undefined : String(item.botUserId),
-      botNickname: messageText(item.botNickname)
+      botNickname: messageText(item.botNickname),
+      source: "history" as const
     }));
+  const outboxMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "outbox-adapter.log.jsonl"))
+    .flatMap((item) => {
+      if (item.event !== "reply_sent" && item.event !== "group_file_caption_sent") return [];
+      const data = item.data && typeof item.data === "object" ? item.data as Record<string, unknown> : {};
+      if (data.targetType !== "group" && data.targetType !== "private") return [];
+      const sentMessageId = data.sentMessageId;
+      const rawMessage = String(item.message ?? "");
+      if (sentMessageId == null || !rawMessage) return [];
+      return [{
+        time: Number(item.time) || 0,
+        rawMessage,
+        messageId: sentMessageId as string | number,
+        source: "outbox" as const
+      }];
+    });
 
-  return [...groupMessages, ...privateMessages]
+  return [...groupMessages, ...privateMessages, ...outboxMessages]
     .filter((item) => item.rawMessage || item.messageId != null)
     .sort((left, right) => left.time - right.time);
 }
@@ -289,15 +308,21 @@ function messageRecordForForwardRecord(record: RouteDecision["record"]): Message
     userId: "userId" in record ? record.userId : undefined,
     senderName: record.senderName,
     botUserId: "botUserId" in record ? record.botUserId : undefined,
-    botNickname: "botNickname" in record ? record.botNickname : undefined
+    botNickname: "botNickname" in record ? record.botNickname : undefined,
+    source: "current"
   };
 }
 
 function messageRecordIndex(records: MessageCodeRecord[]): Map<string, MessageCodeRecord> {
   const index = new Map<string, MessageCodeRecord>();
+  const priority = { outbox: 0, history: 1, current: 2 } as const;
   for (const record of records) {
     if (record.messageId == null) continue;
-    index.set(String(record.messageId), record);
+    const id = String(record.messageId);
+    const existing = index.get(id);
+    if (!existing || priority[record.source ?? "history"] >= priority[existing.source ?? "history"]) {
+      index.set(id, record);
+    }
   }
   return index;
 }
@@ -343,7 +368,7 @@ function appendReplyCodeLines(
 
     const replied = recordsById.get(replyId);
     if (!replied) {
-      result.lines.push(`${indent}${code} : 引用消息 ${replyId} 未在本地消息记录中找到。`);
+      result.lines.push(`${indent}${code} : 引用消息 ${replyId} 暂时无法解析。`);
       continue;
     }
 

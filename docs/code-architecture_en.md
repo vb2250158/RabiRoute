@@ -44,7 +44,7 @@ Runtime configuration types and environment/default resolution used by the gatew
 
 Protocol translation for live gateway inputs:
 
-- NapCat/OneBot.
+- NapCat/OneBot, including non-blocking `get_msg` fallback through `napcatReplyMessages.ts` when a referenced QQ message is missing from local history.
 - WeCom smart-bot WebSocket.
 - Webhook-like inputs such as XiaoAI, plus legacy-only FenneNote parsing. New PC speech uses RabiSpeech.
 - RabiLink compatibility/input paths.

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { NotificationRule, RouteProfile } from "../config.js";
+import { config, type NotificationRule, type RouteProfile } from "../config.js";
 import { resolvePipeline } from "../pipelines.js";
 import type { GroupMessageRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
@@ -12,6 +12,11 @@ import { buildAgentPacket, type AgentRoleContext } from "./agentPacket.js";
 function appendGroupMessage(dataDir: string, record: GroupMessageRecord): void {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.appendFileSync(path.join(dataDir, "group-messages.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function appendOutboxMessage(dataDir: string, record: Record<string, unknown>): void {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.appendFileSync(path.join(dataDir, "outbox-adapter.log.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 test("AgentPacket expands CQ reply chains and centralizes at mappings", () => {
@@ -107,4 +112,134 @@ test("AgentPacket expands CQ reply chains and centralizes at mappings", () => {
   assert.match(packet.message, /\[CQ:at,qq=10002\] : 定位同学/);
   assert.doesNotMatch(packet.message, /当前消息 messageId/);
   assert.doesNotMatch(packet.message, /纯文本/);
+});
+
+test("AgentPacket reads a NapCat get_msg reply cached in the gateway history for a role-bound route", () => {
+  const gatewayDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-gateway-"));
+  const roleDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-role-"));
+  const previousMemoryDataDir = config.memoryDataDir;
+  config.memoryDataDir = gatewayDataDir;
+  try {
+    appendGroupMessage(gatewayDataDir, {
+      time: 1,
+      groupId: 9001,
+      userId: 10001,
+      rawMessage: "通过 OneBot get_msg 补齐的原始问题",
+      messageId: 3000,
+      senderName: "测试用户",
+      lookupSource: "onebot_get_msg"
+    });
+
+    const record: GroupMessageRecord = {
+      time: 2,
+      groupId: 9001,
+      userId: 10002,
+      rawMessage: "[CQ:reply,id=3000]继续追问",
+      messageId: 3001,
+      senderName: "追问用户"
+    };
+    appendGroupMessage(roleDataDir, record);
+
+    const rule: NotificationRule = {
+      id: "rule-1",
+      name: "direct reply",
+      enabled: true,
+      routeKinds: ["direct_reply"],
+      template: ""
+    };
+    const route: RouteProfile = {
+      id: "route-1",
+      name: "main",
+      enabled: true,
+      recentMessageLimit: 0,
+      resolvedPipeline: resolvePipeline("agent"),
+      agentRoleFile: "",
+      rolesDir: roleDataDir,
+      dataDir: gatewayDataDir,
+      routeVariables: {},
+      notificationRules: [rule]
+    };
+    const packet = buildAgentPacket({
+      route,
+      routeKind: "direct_reply",
+      record,
+      extraValues: {},
+      matchedRules: [rule],
+      routeVariables: {},
+      routeText: record.rawMessage
+    }, rule, {
+      roleId: "Rabi",
+      roleDir: roleDataDir,
+      rolePath: "",
+      dataDir: roleDataDir
+    });
+
+    assert.match(packet.message, /\[CQ:reply,id=3000\] : 通过 OneBot get_msg 补齐的原始问题/);
+  } finally {
+    config.memoryDataDir = previousMemoryDataDir;
+  }
+});
+
+test("AgentPacket falls back to sent Outbox messages when QQ history has not cached them", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-outbox-"));
+  appendOutboxMessage(dataDir, {
+    time: 10,
+    adapter: "outbox",
+    event: "reply_sent",
+    message: "刚发出的测试说明",
+    data: {
+      ok: true,
+      status: "sent",
+      targetType: "group",
+      groupId: "9001",
+      sentMessageId: "3000"
+    }
+  });
+
+  const record: GroupMessageRecord = {
+    time: 11,
+    groupId: 9001,
+    userId: 10005,
+    rawMessage: "[CQ:reply,id=3000]刚刚那条消息",
+    messageId: 3001,
+    senderName: "追问同学",
+    repliedMessageId: "3000"
+  };
+  const rule: NotificationRule = {
+    id: "rule-outbox",
+    name: "direct reply",
+    enabled: true,
+    routeKinds: ["direct_reply"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "route-outbox",
+    name: "main",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleFile: "",
+    rolesDir: dataDir,
+    dataDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const decision: RouteDecision = {
+    route,
+    routeKind: "direct_reply",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  };
+  const packet = buildAgentPacket(decision, rule, {
+    roleId: "",
+    roleDir: "",
+    rolePath: "",
+    dataDir
+  });
+
+  assert.match(packet.message, /\[CQ:reply,id=3000\] : 刚发出的测试说明/);
+  assert.doesNotMatch(packet.message, /暂时无法解析/);
 });

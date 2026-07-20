@@ -18,6 +18,8 @@ export type GroupMessageRecord = {
   adapterType?: string;
   botUserId?: string;
   botNickname?: string;
+  isSelf?: boolean;
+  lookupSource?: "onebot_get_msg";
 };
 
 export type PrivateMessageRecord = {
@@ -32,6 +34,8 @@ export type PrivateMessageRecord = {
   adapterType?: string;
   botUserId?: string;
   botNickname?: string;
+  isSelf?: boolean;
+  lookupSource?: "onebot_get_msg";
 };
 
 export type HeartbeatEventRecord = {
@@ -262,16 +266,28 @@ export function appendAgentPacketToDir(record: AgentPacketRecord, dataDir: strin
   fs.appendFileSync(agentPacketPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-export function readGroupMessages(): GroupMessageRecord[] {
-  if (!fs.existsSync(logPath())) {
+export function readGroupMessages(dataDir = config.memoryDataDir): GroupMessageRecord[] {
+  if (!fs.existsSync(logPath(dataDir))) {
     return [];
   }
 
   return fs
-    .readFileSync(logPath(), "utf8")
+    .readFileSync(logPath(dataDir), "utf8")
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line) as GroupMessageRecord);
+}
+
+export function readPrivateMessages(dataDir = config.memoryDataDir): PrivateMessageRecord[] {
+  if (!fs.existsSync(privateLogPath(dataDir))) {
+    return [];
+  }
+
+  return fs
+    .readFileSync(privateLogPath(dataDir), "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as PrivateMessageRecord);
 }
 
 export function searchMessages(keyword: string, limit = 10): GroupMessageRecord[] {

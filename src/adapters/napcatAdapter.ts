@@ -7,6 +7,7 @@ import { forwardMessage, type ForwardRouteKind } from "../forwarding.js";
 import { appendAdapterLog, appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "../history.js";
 import { getLoginInfo, getStatus, sendGroupMessage, sendPrivateMessage, type NapCatEndpoint } from "../napcat.js";
 import { enrichNapCatMessage } from "../napcatForwardMessages.js";
+import { resolveNapCatReplyChain } from "../napcatReplyMessages.js";
 import type { MessageAdapter } from "./messageAdapter.js";
 
 type OneBotEvent = {
@@ -237,6 +238,51 @@ function endpointFor(instance: NapCatInstanceConfig): NapCatEndpoint {
   };
 }
 
+async function resolveReplyChain(
+  event: OneBotEvent,
+  instance: NapCatInstanceConfig,
+  rawMessage: string,
+  sourceMessageType: "group" | "private"
+): Promise<void> {
+  const botNickname = readGatewayStatus().napcatInstances?.[instance.id]?.botNickname;
+  const result = await resolveNapCatReplyChain({
+    rawMessage,
+    message: event.message,
+    currentMessageId: event.message_id,
+    sourceMessageType,
+    sourceGroupId: event.group_id,
+    sourceUserId: event.user_id,
+    selfId: event.self_id,
+    botNickname,
+    instanceId: instance.id,
+    endpoint: endpointFor(instance)
+  });
+
+  if (result.resolvedMessageIds.length > 0) {
+    appendAdapterLog("napcat", {
+      event: "reply_chain_resolved",
+      instanceId: instance.id,
+      message: `Resolved ${result.resolvedMessageIds.length} missing replied message(s) through OneBot get_msg`,
+      data: {
+        currentMessageId: event.message_id,
+        resolvedMessageIds: result.resolvedMessageIds
+      }
+    });
+  }
+  for (const error of result.errors) {
+    appendAdapterLog("napcat", {
+      level: "warning",
+      event: "reply_chain_resolve_error",
+      instanceId: instance.id,
+      message: error.message,
+      data: {
+        currentMessageId: event.message_id,
+        repliedMessageId: error.messageId
+      }
+    });
+  }
+}
+
 function eventSummary(event: OneBotEvent): Record<string, unknown> {
   return {
     postType: event.post_type,
@@ -391,6 +437,7 @@ async function handleGroupMessage(event: OneBotEvent, instance: NapCatInstanceCo
     botNickname: readGatewayStatus().napcatInstances?.[instance.id]?.botNickname
   };
 
+  await resolveReplyChain(event, instance, record.rawMessage, "group");
   const route = getGroupRoute(event);
   if (route) {
     record.routeKind = route.kind;
@@ -465,6 +512,7 @@ async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstance
     botNickname: readGatewayStatus().napcatInstances?.[instance.id]?.botNickname
   };
 
+  await resolveReplyChain(event, instance, record.rawMessage, "private");
   appendPrivateMessage(record);
   forwardMessage("private", record);
 

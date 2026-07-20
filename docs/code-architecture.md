@@ -82,7 +82,7 @@ examples/ 和 skills/
 
 消息端 Adapter 在 `src/adapters/`。RabiLink Relay 例外：它是由 Manager 持有的系统级转接服务，不是消息端；眼镜端经它收发，当前内部仍保留 `rabilink` 兼容键：
 
-- `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别。
+- `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别；引用消息未落盘时，通过 `napcatReplyMessages.ts` 调用 `get_msg` 递归补齐并缓存，查询失败不阻塞当前路由。
 - `wecomAdapter.ts`：接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。当前成熟度仍是 experimental，企业微信群聊字段尽量对齐 NapCat，专用字段只作为补充。
 - `webhookAdapter.ts`：接通用 Webhook、小爱及旧 FenneNote 兼容回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。新本机语音入口使用 RabiSpeech。
 - `rabilinkAdapter.ts` / `rabilinkRelayWorker.ts`：本地兼容入口与 Relay worker；observation 可先写统一会话账本，主动下行走独立消息流。

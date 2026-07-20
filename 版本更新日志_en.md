@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.19 - 2026-07-20
+
+### Live NapCat reply-message hydration
+
+- When a NapCat group or private event contains a CQ reply whose message ID is not in local history, RabiRoute now follows the chain through OneBot `get_msg` before route delivery and caches each result with `lookupSource=onebot_get_msg`. Each lookup has a timeout; failures emit warnings without failing the current delivery.
+- `AgentPacket` still prefers the active persona directory, while also using Gateway message history and successful Outbox records for missing references. Persona-bound Routes can therefore resolve messages just recovered through `get_msg`, with explicit precedence for current, history, and Outbox records.
+- Added regressions for `get_msg` normalization, recursive caching, failure degradation, split persona/Gateway directories, and Outbox fallback. The bilingual context-injection and code-architecture guides are synchronized.
+- `npm test` passes all 255 backend tests, while `npm run build` and `npm run check:config` pass. The frontend build retains only the existing runtime asset-resolution and large-chunk warnings.
+
 ## 0.1.18 - 2026-07-20
 
 ### QQ reply-chain and mention context

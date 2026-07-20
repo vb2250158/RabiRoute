@@ -71,6 +71,22 @@ export type ForwardMessageResult = {
   messages: ForwardMessageNode[];
 };
 
+type CallNapCatOptions = {
+  timeoutMs?: number;
+};
+
+export type MessageInfo = {
+  selfId?: number | string;
+  userId?: number | string;
+  time?: number;
+  messageId?: number | string;
+  messageType?: string;
+  groupId?: number | string;
+  senderName?: string;
+  rawMessage: string;
+  message: OneBotMessage;
+};
+
 function endpointConfig(endpoint?: NapCatEndpoint): NapCatEndpoint {
   return {
     httpUrl: endpoint?.httpUrl || config.napcatHttpUrl,
@@ -78,7 +94,7 @@ function endpointConfig(endpoint?: NapCatEndpoint): NapCatEndpoint {
   };
 }
 
-export async function callNapCat<T>(action: string, payload: unknown, endpoint?: NapCatEndpoint): Promise<T> {
+export async function callNapCat<T>(action: string, payload: unknown, endpoint?: NapCatEndpoint, options?: CallNapCatOptions): Promise<T> {
   const target = endpointConfig(endpoint);
   const headers: Record<string, string> = {
     "content-type": "application/json; charset=utf-8"
@@ -88,11 +104,21 @@ export async function callNapCat<T>(action: string, payload: unknown, endpoint?:
     headers.authorization = `Bearer ${target.accessToken}`;
   }
 
-  const response = await fetch(`${target.httpUrl.replace(/\/$/, "")}/${action}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload)
-  });
+  const controller = options?.timeoutMs ? new AbortController() : undefined;
+  const timeout = controller
+    ? setTimeout(() => controller.abort(), options?.timeoutMs)
+    : undefined;
+  let response: Response;
+  try {
+    response = await fetch(`${target.httpUrl.replace(/\/$/, "")}/${action}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller?.signal
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 
   const text = await response.text();
   if (!response.ok) {
@@ -138,6 +164,56 @@ export async function getForwardMessage(messageId: number | string, endpoint?: N
   const data = "data" in response && response.data ? response.data : response as ForwardMessageResult;
   return {
     messages: Array.isArray(data.messages) ? data.messages : []
+  };
+}
+
+function rawMessageFromSegments(message: OneBotMessage): string {
+  if (typeof message === "string") return message;
+
+  return message.map((segment) => {
+    if (segment.type === "text") {
+      return String(segment.data.text ?? "");
+    }
+
+    const params = Object.entries(segment.data)
+      .map(([key, value]) => `${key}=${String(value ?? "")}`)
+      .join(",");
+    return `[CQ:${segment.type}${params ? `,${params}` : ""}]`;
+  }).join("");
+}
+
+export async function getMessage(messageId: number | string, endpoint?: NapCatEndpoint): Promise<MessageInfo> {
+  type GetMessageData = {
+    self_id?: number | string;
+    user_id?: number | string;
+    time?: number;
+    message_id?: number | string;
+    message_type?: string;
+    group_id?: number | string;
+    sender?: {
+      user_id?: number | string;
+      nickname?: string;
+      card?: string;
+    };
+    raw_message?: string;
+    message?: OneBotMessage;
+  };
+
+  const response = await callNapCat<OneBotResponse<GetMessageData> | GetMessageData>("get_msg", {
+    message_id: messageId
+  }, endpoint, { timeoutMs: 3_000 });
+  const data = "data" in response && response.data ? response.data : response as GetMessageData;
+  const message = data.message ?? data.raw_message ?? "";
+  return {
+    selfId: data.self_id,
+    userId: data.user_id ?? data.sender?.user_id,
+    time: data.time,
+    messageId: data.message_id ?? messageId,
+    messageType: data.message_type,
+    groupId: data.group_id,
+    senderName: data.sender?.card || data.sender?.nickname,
+    rawMessage: data.raw_message ?? rawMessageFromSegments(message),
+    message
   };
 }
 

@@ -266,7 +266,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 <用户在 route 模板里写的可选补充要求；为空时省略本段>
 ```
 
-`[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`，持续展开到没有引用、查不到引用、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。
+`[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`；AgentPacket 也会把成功外发的 Outbox 记录作为本地兜底。NapCat 实时入口发现引用 ID 尚未落盘时，会在路由投递前调用 OneBot `get_msg`，把查到的群聊/私聊消息标记为 `lookupSource=onebot_get_msg` 后缓存，再继续追溯下一层引用。接口失败只记录 warning，不阻塞当前消息。展开持续到没有引用、仍无法解析、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。
 
 当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，并在 `replyContext` 写入 `characterTtsDialogue=true`。`[回复回传要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到普通回复 API；Outbox 再按当前 Route 的人格、声线、模型、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
 
