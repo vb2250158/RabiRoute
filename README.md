@@ -58,9 +58,9 @@ npm run build
 npm run start:manager
 ```
 
-Open [http://127.0.0.1:8790/](http://127.0.0.1:8790/) to enter RibiWebGUI. On first run, the Manager initializes a sanitized local configuration from `examples/data/` when no runtime data exists.
+Open the local address `http://127.0.0.1:8790/` to enter RibiWebGUI. On first run, the Manager initializes a sanitized local configuration from `examples/data/` when no runtime data exists.
 
-The live speech page is [http://127.0.0.1:8790/#/speech](http://127.0.0.1:8790/#/speech). Its provider, model, and device status comes from the current PC. The bundled [benchmark report](http://127.0.0.1:8790/reports/rabispeech-model-benchmark.html) applies only to the test hardware identified in that report.
+The local live speech page is `http://127.0.0.1:8790/#/speech`. Its provider, model, and device status comes from the current PC. The bundled [benchmark report](ribiwebgui/public/reports/rabispeech-model-benchmark.html) applies only to the test hardware identified in that report; see [Remote TTS / ASR](docs/user-guide/speech-api_en.md) when calling from another device.
 
 For the shortest verified path:
 
@@ -157,7 +157,7 @@ data/roles/<RoleId>/personaConfig.json
 - `persona.md` contains the persona or handler-facing role guidance.
 - `personaConfig.json` contains notification rules, message templates, schedules, and recent-message limits.
 
-Copyable public examples live in [examples/data](examples/data/). Reusable project skills, including persona creation and safe update workflows, live in [skills](skills/).
+Buildable clients live in [apps](apps/), while shared client-side contracts live in [packages](packages/). Copyable public examples live in [examples/data](examples/data/). Reusable project skills, including persona creation and safe update workflows, live in [skills](skills/).
 
 ## Project status
 
@@ -176,10 +176,12 @@ The status-aware documentation index is in [docs/README_en.md](docs/README_en.md
 | Use RibiWebGUI and complete the first delivery | [RibiWebGUI User Guide](docs/user-guide/README_en.md) |
 | See what is actually implemented | [Current capabilities and maturity](docs/current-capabilities_en.md) |
 | Browse current, experimental, planned, and historical docs | [Documentation index](docs/README_en.md) |
-| Copy a Route/persona pack or inspect hardware integrations | [Examples and subprojects](examples/README_en.md) |
+| Build the phone or glasses clients | [Client applications](apps/README_en.md) |
+| Copy a Route/persona pack or inspect sample integrations | [Examples](examples/README_en.md) |
 | Install and verify the first route | [Getting started](docs/getting-started_en.md) |
 | Inspect the code ownership map | [Project function map](docs/project-function-map_en.md) |
 | Run or extend local TTS / ASR | [RabiSpeech local TTS / ASR service](docs/rabispeech-plugin_en.md) |
+| Call TTS / ASR on the target PC from another device | [Remote TTS / ASR](docs/user-guide/speech-api_en.md) |
 
 ## Development and contribution
 

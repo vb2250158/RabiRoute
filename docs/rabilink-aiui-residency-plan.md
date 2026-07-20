@@ -238,9 +238,9 @@ RabiLink AIUI 的前台主动智能闭环已完成本地实现和自动化验收
 
 ## 相关资料
 
-- [RabiLink AIUI README](../examples/rabilink-aiui/README.md)
-- [安装与排障](../examples/rabilink-aiui/docs/installation-and-troubleshooting.md)
-- [验收报告](../examples/rabilink-aiui/docs/acceptance-report.md)
+- [RabiLink AIUI README](../apps/rabilink-aiui/README.md)
+- [安装与排障](../apps/rabilink-aiui/docs/installation-and-troubleshooting.md)
+- [验收报告](../apps/rabilink-aiui/docs/acceptance-report.md)
 - [Relay 与双向队列](rabilink-relay-server.md)
 - [主动智能总纲](../主动智能设计思路.md)
 - [AIUI 快速开始](https://js.rokid.com/AIUI/guide/quickstart?lang=zh-CN)

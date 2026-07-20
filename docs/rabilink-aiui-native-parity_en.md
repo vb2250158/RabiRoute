@@ -26,15 +26,15 @@ English | <a href="./rabilink-aiui-native-parity.md">简体中文</a>
 | Pause/continue/retry | Phone controls | One-row glasses controls | Complete | Listening pause/continue and explicit ASR/TTS failed-item retry |
 | Custom ASR/TTS/language/voice | Phone settings | Reuses phone settings | Complete | Phone selects PC speech model/provider and persona voice |
 | Full PC configuration | Remote WebGUI on phone | Not duplicated on glasses | Complete | PC remains configuration truth through `/manage` |
-| Natural-language configuration assistant | Chat configuration mode | Optional glasses voice entry | Complete | Marked requests use the selected PC persona, WebGUI allowlist, action gate, and success/read-back requirement |
+| Natural-language configuration assistant | Separate Settings entry | Optional glasses voice entry | Complete | Configuration no longer shares the chat composer; marked requests retain the allowlist, action gate, and success/read-back requirement |
 | Enrollment and multi-PC selection | App token and PC picker | Inherits phone binding | Partial | SN token claim is replaced; QR/short-code enrollment and rotation remain |
 | Safe cloud diagnostics with offline replay | Phone backend | Glasses errors forwarded by phone | Complete | 500-entry/7-day private queue with no chat text, transcripts, tokens, or request bodies |
 | Text/image/video/audio/arbitrary files | Full bidirectional chat | Glasses photo/audio input | Complete | Arbitrary phone picker, `allowedFileRoots` PC downlink, 64 MiB app-isolated attachments, including attachment-only delivery |
-| Two ongoing and normal Agent notifications | Open app / one-tap prompt | Shared phone notifications | Complete | Foreground status, ongoing prompt shortcut, and clearable normal Agent notifications |
+| Two ongoing and normal Agent notifications | Open app / one-tap prompt | Shared phone notifications | Complete | Foreground status and prompt shortcut remain; normal messages aggregate per conversation, deep-link to detail, and clear when read |
 | Automatic or manual Agent TTS | Setting | Shared setting | Complete | Disabled autoplay preserves a tappable WAV in chat |
-| Multiple PCs and route personas | Global login, default PC, persona chats | Uses current persona | Complete | PC-published routes; route-scoped uplink/downlink without broadcast; Agent notifications deep-link to the matching persona |
+| Multiple PCs and route personas | Conversation list, details, and unread state | Uses current persona | Complete | Only RabiLink Routes become contacts; drafts/read state are scoped per conversation, uplink/downlink freeze `routeProfileId`, and notifications deep-link correctly |
 | Message recovery after reboot | Restores cursor, queues, and notifications | Capture resumes after opening the app | Complete | Boot uses a `dataSync` FGS and avoids Android's ban on launching a microphone FGS directly from a boot broadcast |
-| Phone works without glasses | Complete microphone/speaker/UI | Toggle adds glasses I/O | Complete | Chat, service, attachments, notifications, and configuration assistant do not depend on glasses |
+| Phone works without glasses | Complete microphone/speaker/UI | Toggle adds glasses I/O | Complete | Conversation list/detail, service, attachments, notifications, and the separate configuration assistant do not depend on glasses |
 
 ## Completion rule
 

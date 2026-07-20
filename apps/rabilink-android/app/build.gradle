@@ -1,0 +1,104 @@
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+}
+
+android {
+    namespace "com.rabi.link"
+    compileSdk 34
+
+    def velaDebugKeystore = rootProject.file("signing/vela-debug.p12")
+    def rokidAiSdkAssetsDir = rootProject.file("out/reference/RokidAiSdkDemo/app/src/main/assets")
+
+    signingConfigs {
+        velaDebug {
+            storeFile velaDebugKeystore
+            storeType "pkcs12"
+            storePassword "rabiroute"
+            keyAlias "vela-debug"
+            keyPassword "rabiroute"
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.rabi.link"
+        minSdk 31
+        targetSdk 34
+        versionCode 3
+        versionName "0.3.0"
+        buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""
+    }
+
+    buildTypes {
+        debug {
+            if (velaDebugKeystore.exists()) {
+                signingConfig signingConfigs.velaDebug
+            }
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    sourceSets {
+        main {
+            java.srcDir("$rootDir/../../packages/android-sdk/rabiroute-sdk/src/main/java")
+            if (rokidAiSdkAssetsDir.exists()) {
+                assets.srcDir(rokidAiSdkAssetsDir)
+            }
+        }
+        debug {
+            assets.srcDir("$buildDir/generated/assets/glassApp/debug")
+        }
+    }
+
+    packagingOptions {
+        pickFirst "lib/armeabi-v7a/librlog.so"
+        pickFirst "lib/armeabi-v7a/libcaps.so"
+        pickFirst "lib/armeabi-v7a/libflora-cli.so"
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+}
+
+tasks.register("copyGlassAppDebugApk", Copy) {
+    dependsOn(":glass-app:assembleDebug")
+    from(rootProject.file("glass-app/build/outputs/apk/debug/glass-app-debug.apk"))
+    into("$buildDir/generated/assets/glassApp/debug")
+    rename { "rabi-glass-debug.apk" }
+}
+
+tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
+    dependsOn("copyGlassAppDebugApk")
+}
+
+dependencies {
+    implementation fileTree(dir: "libs", include: ["*.jar"])
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+    implementation "androidx.activity:activity-ktx:1.7.2"
+    implementation "androidx.health.connect:connect-client:1.1.0-alpha07"
+    implementation "com.rokid.cxr:client-l:1.1.0"
+    implementation("com.rokid.security:phone.sdk:2.5.1-P") {
+        exclude group: "org.slf4j"
+    }
+    implementation "org.slf4j:slf4j-api:1.7.36"
+    implementation(name: "basic-1.4.3", ext: "aar")
+    implementation(name: "turenso-1.4.3", ext: "aar")
+    implementation(name: "nlpconsumer-1.4.3", ext: "aar")
+    implementation(name: "audioai-1.4.3", ext: "aar")
+    implementation "com.google.code.gson:gson:2.8.5"
+    implementation "io.reactivex.rxjava2:rxjava:2.1.12"
+    testImplementation "junit:junit:4.13.2"
+}

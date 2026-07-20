@@ -11,18 +11,19 @@ The Rabi mobile device message endpoint is a new endpoint, separate from the Rok
 ## Initialized experience
 
 - Before initialization, the app shows global RabiLink login, default Rabi PC, speech-model, and glasses authorization settings.
-- After initialization, a ChatGPT-like chat screen is the default instead of a probe or settings dashboard.
-- The header selects one of the route personas published by the default Rabi PC. Each persona has a separate visible conversation while RabiLink login and the phone service remain global.
-- The chat header separates app/settings controls from persona and Configuration Assistant controls so narrow screens do not crowd actions. Configuration Assistant mode shows a dedicated safety notice. Messages are grouped by date, keep sender and time outside the bubble, use clear labels for speech, configuration, and files, and allow attachment bubbles to open their local content.
-- The composer uses 48dp touch targets, supports multiline text and the keyboard send action, and keeps attachment/send controls compact so message text retains the available width.
+- After initialization, a QQ-style conversation list is the default. Each row shows an avatar, contact name, latest message, time, and per-conversation unread count. Tapping a contact opens chat; Back returns to the same list so another persona can be selected.
+- Contacts come only from Routes that expose the `rabilink` message adapter. Wearable-health and other non-chat Routes are never treated as personas. A disabled RabiLink Route explains why it cannot chat and links to configuration.
+- The detail header contains only Back, the current identity, and a trustworthy connection state. Messages are grouped by date, keep sender/time outside bubbles, use explicit speech/configuration/file labels, and open local attachments.
+- Attachment, composer, and Send controls use one 52dp component height. Multiline input, keyboard Send, and per-conversation draft restoration are supported.
+- Each conversation owns its read position, so opening A never clears B. Legacy messages without a Route are migrated once to one deterministic conversation instead of appearing under every persona.
 - Text, microphone ASR messages, Agent TTS, images, video, standalone audio files, and arbitrary files share one private phone chat ledger. Attachments work in both directions and can be opened on the phone.
-- Configuration Assistant is a mode of the same chat. Marked configuration requests go to the selected Rabi PC; writes, deletion, stopping, replacement, and external actions remain behind the RabiRoute action gate. Completion may be claimed only after a successful PC response and read-back verification.
+- Configuration no longer shares the normal chat composer. Known fields are edited in Settings or remote WebGUI; unknown fields use a separate Configuration Assistant launched from Settings. Marked requests still use the selected Rabi PC, action gate, and success/read-back requirement.
 
 ## Foreground service and notifications
 
 After connection, `RabiConversationService` owns the downlink cursor, durable queues, and phone/glasses I/O. It exposes two ongoing notifications: one opens chat, and one sends an immediate `rabilink.review_request`, matching a single AIUI touchpad tap. Ordinary and proactive Agent deliveries use separate normal notifications.
 
-Agent notifications carry `routeProfileId`, so tapping one opens the matching persona conversation rather than whichever persona was previously selected. An app setting controls immediate Agent TTS playback. When disabled, the WAV remains in private chat storage and can be played by tapping its bubble.
+Agent notifications are stable per conversation and carry `routeProfileId`. Tapping one uses `singleTop` to open the exact persona; Back returns to the conversation list. A newer message updates the same conversation notification, and opening the detail marks it read and clears it. An app setting controls immediate Agent TTS playback. When disabled, the WAV remains in private chat storage and can be played by tapping its bubble.
 
 ## Phone and glasses modes
 
@@ -33,6 +34,7 @@ Agent notifications carry `routeProfileId`, so tapping one opens the matching pe
 ## Reliability and security
 
 - Speech/control uplink: 48 hours, 2,000 items, stable IDs, automatic offline replay.
+- Text and media freeze both `routeProfileId` and `clientMessageId` before entering a background queue. The UI reports queued, sending, handed to Rabi PC, or a concrete failure; later navigation cannot retarget queued work.
 - Media uplink: 500 items, seven days, 64 MiB each; Relay app isolation and authenticated downloads.
 - Downlink: durable cursor, delivery deduplication, PCM cache; a TTS item yields the head after three failures and remains retryable.
 - Attachment-only downlink needs no fabricated body text: images, video, audio, and arbitrary files are downloaded, recorded in chat, and announced with a normal notification even when text is empty.

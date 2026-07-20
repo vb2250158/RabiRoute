@@ -165,6 +165,17 @@ Authorization: Bearer <RabiLink 应用 token>
 X-RabiLink-Token: <RabiLink 应用 token>
 ```
 
+公网 Base URL 是 `https://<relay>/api/rabilink/speech`，因此常用完整路径为：
+
+```http
+GET  https://<relay>/api/rabilink/speech/health
+GET  https://<relay>/api/rabilink/speech/v1/models
+POST https://<relay>/api/rabilink/speech/v1/audio/speech
+POST https://<relay>/api/rabilink/speech/v1/audio/transcriptions
+```
+
+不要把本机的 `http://127.0.0.1:8781/v1/...` 原样交给远端客户端。可复制的 PowerShell TTS、ASR、成功判据和错误恢复见[从远端调用 TTS 与 ASR](user-guide/speech-api.md)。
+
 Relay 只在短时内存队列中保留请求/响应体；日志不记录正文、音频、请求头或响应正文。公共 OpenAPI 真源在 `examples/rabilink-relay/rabilink-speech-api.openapi.json`。
 
 ## Provider 扩展

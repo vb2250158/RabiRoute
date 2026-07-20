@@ -84,6 +84,17 @@ Closing the browser does not stop capture. The ignored `plugin-adapters/rabi-spe
 
 For remote use, enable the global RabiLink connection and **Allow speech relay**. Keep the local target at `http://127.0.0.1:8781`. Public calls use the common application token at `https://<relay>/api/rabilink/speech/*` through either `Authorization: Bearer <token>` or `X-RabiLink-Token: <token>`.
 
+The public base URL is `https://<relay>/api/rabilink/speech`, so the common complete paths are:
+
+```http
+GET  https://<relay>/api/rabilink/speech/health
+GET  https://<relay>/api/rabilink/speech/v1/models
+POST https://<relay>/api/rabilink/speech/v1/audio/speech
+POST https://<relay>/api/rabilink/speech/v1/audio/transcriptions
+```
+
+Do not give a remote client the local `http://127.0.0.1:8781/v1/...` URL. See [Call TTS and ASR remotely](user-guide/speech-api_en.md) for copyable PowerShell calls, success criteria, and error recovery.
+
 The Relay selects the application's online PC, queues bytes only in short-lived memory, and synchronously returns the local result. It does not enter an Agent, persona, Route, or message ledger.
 
 ## Extension and security boundary

@@ -11,7 +11,7 @@ English | <a href="./xiaomi-band-heart-rate-probe-handoff.md">简体中文</a>
 The Android probe has moved under the Rabi Link name:
 
 ```text
-examples/android-rabi-link-probe/
+apps/rabilink-android/
 package: com.rabi.link
 export script: Export-RabiLinkProbeApk.ps1
 ```
@@ -56,7 +56,7 @@ A route qualifies for an upper-level API only if it:
 
 ## Build and handoff
 
-Use the scripts and commands under `examples/android-rabi-link-probe/` as the executable source of truth. Keep generated APKs, device dumps, decompiled applications, logs, account tokens, serial numbers, and personal health data out of Git.
+Use the scripts and commands under `apps/rabilink-android/` as the executable source of truth. Keep generated APKs, device dumps, decompiled applications, logs, account tokens, serial numbers, and personal health data out of Git.
 
 The next useful investigation is the official/partner cloud route with valid authorization, followed by a comparison of completeness, delay, rate limits, user consent, and revocation. Do not spend product effort wrapping the logcat path unless the explicit goal is diagnostic evidence collection.
 

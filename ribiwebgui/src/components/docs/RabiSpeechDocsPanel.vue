@@ -3,7 +3,7 @@ type SpeechDocsMode = "tts" | "asr" | "benchmark";
 
 defineProps<{ mode: SpeechDocsMode }>();
 
-const reportUrl = "/reports/rabispeech-model-benchmark.html";
+const reportUrl = "reports/rabispeech-model-benchmark.html";
 
 const ttsModels = [
   {

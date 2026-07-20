@@ -12,7 +12,7 @@
 
 ## 总览
 
-RabiRoute 的代码可以按运行角色分成六块：
+RabiRoute 的代码可以按运行角色分成以下主要区域：
 
 ```text
 src/index.ts
@@ -40,9 +40,26 @@ desktop/tray-task-window/
 plugin-adapters/
   -> 外部平台插件/桥接示例
 
-examples/ 和 skills/
-  -> 开源示例数据与 Agent 使用指南
+apps/
+  -> 可独立构建的 RabiLink Android 与 Rokid AIUI 客户端
+
+packages/
+  -> 供端侧应用复用的 Android SDK
+
+examples/
+  -> 可复制的配置、Hook、插件与协议样例
+
+skills/
+  -> Agent 使用指南
 ```
+
+## 客户端应用与共享 SDK
+
+- `apps/rabilink-android/`：同一工程内维护手机控制端和 `glass-app` 眼镜端模块。
+- `apps/rabilink-aiui/`：面向 Rokid AIUI/灵珠生态的独立客户端工程。
+- `packages/android-sdk/`：Android 客户端共享的 RabiRoute 事件、消息与状态契约。
+
+这些目录是 RabiRoute 的端侧消费者，不是 Manager 配置或运行数据的事实源。可直接复制的小样例仍放在 `examples/`；新增完整产品时应进入 `apps/`，跨应用共享且有稳定接口的代码才进入 `packages/`。
 
 ## 后端入口
 
@@ -443,7 +460,7 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 - `xiaoai-rabiroute`
 - `rabi-speech`：独立本机 TTS / ASR 服务插件；不属于消息端或 Agent 端，Manager 只代理其回环 HTTP API。
 
-RabiSpeech 的模型基准仍归插件自身：`scripts/benchmark_models.py` 按 TTS → WAV → ASR 顺序采集原始数据，`benchmarks/` 保存公开语料、功能元数据和无外部依赖的 HTML 模板，`skills/benchmark-rabispeech-models/` 固定操作与验收顺序。生成后的公开报告进入 `ribiwebgui/public/reports/`，由 Vite 复制到 WebGUI 静态产物；运行期 WAV、JSON、CSV 和日志不进入前端或仓库。
+RabiSpeech 的模型基准仍归插件自身：`scripts/benchmark_models.py` 按 TTS → WAV → ASR 顺序采集原始数据，`benchmarks/` 保存公开语料、功能元数据和无外部依赖的 HTML 模板，`skills/benchmark-rabispeech-models/` 固定操作与验收顺序。生成后的公开报告进入 `ribiwebgui/public/reports/`，由 Vite 复制到 WebGUI 静态产物；本机 Manager 和 RabiLink Relay 分别在本机根路径与已认证的远端 PC 前缀下提供 `reports/`。运行期 WAV、JSON、CSV 和日志不进入前端或仓库。
 
 实时能力页归控制面：`src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`src/manager/speechControl.ts` 再把模型、麦克风、播放和消息命令统一映射到 `speechControlContract`。`GET /api/speech/status` 把规范化结果交给 frontend speech store。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
 

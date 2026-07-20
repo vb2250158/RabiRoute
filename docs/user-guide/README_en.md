@@ -50,6 +50,7 @@ See [Run your first Route](first-route_en.md) for the full procedure. When you a
 | Configure and verify the first delivery | [Run your first Route](first-route_en.md) |
 | Understand navigation, states, and save notices | [Interface and status](interface-and-status_en.md) |
 | Connect QQ, schedules, webhooks, or RabiLink | [Routes and message adapters](routes-and-adapters_en.md) |
+| Call TTS / ASR on the target PC from another device | [Call TTS and ASR remotely](speech-api_en.md) |
 | Bind Codex or another handler | [Agents, projects, and tasks](agents-and-sessions_en.md) |
 | Configure personas, matching rules, and schedules | [Personas and message rules](personas-and-rules_en.md) |
 | Diagnose or review missing messages and errors | [Operations, logs, and troubleshooting](operations-and-troubleshooting_en.md) |

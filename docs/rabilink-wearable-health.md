@@ -51,7 +51,7 @@ Agent / 主动智能
 
 ## 手机配置
 
-安装 `examples/android-rabi-link-probe` 构建的单一手机 APK，先在首页配置 RabiLink Relay，再进入“智能手表 / 手环”：
+安装 `apps/rabilink-android` 构建的单一手机 APK，先在首页配置 RabiLink Relay，再进入“智能手表 / 手环”：
 
 1. 设置设备名称、稳定设备 ID 和设备类别。
 2. 选择采集来源：`Health Connect` 或“小米运动健康（PC ADB Companion）”，再设置同步间隔与回看时间。
@@ -67,9 +67,9 @@ Health Connect 没有数据时不会制造样本。当前已验证手机选择 A
 已开启 USB 调试时，Companion 使用小米健康本地 Provider 的最新心率、当日睡眠日报和睡眠阶段。脚本会归一化出心率、睡眠会话、阶段和可证明的当前睡/醒状态；默认只显示 dry-run，真实读取必须显式传入 `-Execute`：
 
 ```powershell
-.\examples\android-rabi-link-probe\scripts\Sync-MiHealthWearableToRabiLink.ps1
+.\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1
 
-.\examples\android-rabi-link-probe\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
+.\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
   -Execute `
   -Continuous `
   -Transport Manager `
@@ -81,9 +81,9 @@ Health Connect 没有数据时不会制造样本。当前已验证手机选择 A
 登录后常驻可安装当前用户计划任务；脚本默认 dry-run，只有 `-Execute` 才修改任务：
 
 ```powershell
-.\examples\android-rabi-link-probe\scripts\Install-RabiLinkWearableCompanionTask.ps1
+.\apps\rabilink-android\scripts\Install-RabiLinkWearableCompanionTask.ps1
 
-.\examples\android-rabi-link-probe\scripts\Install-RabiLinkWearableCompanionTask.ps1 `
+.\apps\rabilink-android\scripts\Install-RabiLinkWearableCompanionTask.ps1 `
   -Execute -StartNow -RoleId YeYu
 ```
 

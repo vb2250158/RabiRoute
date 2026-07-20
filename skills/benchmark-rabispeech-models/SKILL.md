@@ -89,6 +89,8 @@ HTML 必须至少呈现：
 ```powershell
 py -3.10 -m py_compile plugin-adapters\rabi-speech\scripts\benchmark_models.py
 py -3.10 plugin-adapters\rabi-speech\scripts\benchmark_models.py --help
+node skills\audit-rabiroute-public-docs\scripts\audit-public-docs.mjs
+npm run relay:rabilink:webgui:check
 npm run webgui:build
 ```
 
@@ -96,7 +98,17 @@ npm run webgui:build
 
 ```text
 http://127.0.0.1:8790/#/docs
+http://127.0.0.1:8790/#/speech
 http://127.0.0.1:8790/reports/rabispeech-model-benchmark.html
 ```
 
-检查“语音服务”下的 TTS、ASR、性能报告三个栏目，确认表格、柱状图、逐句结果、移动端横向滚动和独立报告链接都可用。
+检查“语音服务”的实时模型与目标测试机报告，以及使用手册中的“从远端调用 TTS 与 ASR”。确认表格、柱状图、逐句结果、移动端横向滚动和独立报告链接都可用。
+
+如果有真实 Relay 验收环境，还要登录并打开：
+
+```text
+https://<relay>/manage/<account>/<RabiGUID>/#/speech
+https://<relay>/manage/<account>/<RabiGUID>/reports/rabispeech-model-benchmark.html
+```
+
+远端报告必须返回 `200` 和 `text/html`。没有公网环境时，只能记录“本地报告与 Relay 静态契约已验证”，不能写成真实公网已通过。

@@ -59,9 +59,9 @@ An obtained Xiaomi authentication key may be saved in the password field. Androi
 With USB debugging enabled, the temporary bridge reads Xiaomi Health's latest local Provider heart rate plus the current sleep report and stages, then normalizes heart-rate, session, stage, and provable current sleep-state samples. It is dry-run by default; actual ADB access and publishing require `-Execute`:
 
 ```powershell
-.\examples\android-rabi-link-probe\scripts\Sync-MiHealthWearableToRabiLink.ps1
+.\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1
 
-.\examples\android-rabi-link-probe\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
+.\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
   -Execute -Continuous -Transport Manager -UseMobileSettings:$true
 ```
 
@@ -70,7 +70,7 @@ With USB debugging enabled, the temporary bridge reads Xiaomi Health's latest lo
 Install the per-user logon task with an explicit mutation flag:
 
 ```powershell
-.\examples\android-rabi-link-probe\scripts\Install-RabiLinkWearableCompanionTask.ps1 `
+.\apps\rabilink-android\scripts\Install-RabiLinkWearableCompanionTask.ps1 `
   -Execute -StartNow -RoleId YeYu
 ```
 

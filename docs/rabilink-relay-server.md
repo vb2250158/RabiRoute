@@ -93,6 +93,50 @@ https://你的域名/manage/<账号>/<RabiGUID>/#/routes
 
 旧路径 `/manage/<账号>/<RabiGUID>/webgui/...` 保留兼容，但推荐使用上面的根路径。
 
+远端 WebGUI 的构建文件与报告由 Relay 在同一个已登录 PC 前缀下提供。前端运行时报告必须使用 `reports/...` 相对地址，不能写成根路径 `/reports/...`；否则浏览器会离开 `/manage/<账号>/<RabiGUID>/`，访问错误的服务器根路径。Relay 只开放构建产物中的 `assets/` 和 `reports/`，不提供任意服务器文件。
+
+### 远端 RabiSpeech API
+
+语音 API 不使用 WebGUI 登录 Cookie，而使用目标应用的通用 token：
+
+```http
+GET  /api/rabilink/speech/health
+GET  /api/rabilink/speech/v1/models
+POST /api/rabilink/speech/v1/audio/speech
+POST /api/rabilink/speech/v1/audio/transcriptions
+```
+
+完整公网 URL 是 `https://你的域名` 加上上面的路径。应用必须已选择一台在线 PC，且该 PC 已打开“允许语音中转”。可复制的 TTS/ASR 命令、验收和错误恢复见[从远端调用 TTS 与 ASR](user-guide/speech-api.md)；机器可读契约位于 `/api/rabilink/speech/openapi.json`。
+
+## 发布 Relay 并核对文档版本
+
+远端 `/manage/<账号>/<RabiGUID>/` 的 HTML、JavaScript 和 `reports/` 来自 **Relay 服务器自己的** `ribiwebgui/dist`，不是被选中 PC 的本机 WebGUI。只更新 RabiPC 不会更新公网文档；只上传前端而不更新 Relay 脚本，也不会补出新的静态资源前缀。
+
+维护者先构建并运行只读检查：
+
+```powershell
+npm run build
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  skills\audit-rabiroute-public-docs\scripts\Test-RabiLinkDocumentationRuntime.ps1
+```
+
+该检查从被 Git 忽略的 `data/rabilink-relay/config.json` 读取服务器地址、公开域名和 SSH key 路径，但不会打印这些值，也不会上传、覆盖或重启。结果中：
+
+- `LocalReady=true`：本机 Relay、WebGUI、报告、双语指南和 OpenAPI 已齐全；
+- `DeploymentNeeded=true`：公网仍在运行旧脚本或旧文档，属于待发布状态；
+- `ReadyToDeploy=true`：公开健康、监督任务、进程和本机构建都满足发布前提。
+
+获得明确发布授权后才运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  scripts\deploy-rabilink-relay-windows.ps1
+```
+
+部署脚本会先把远端脚本、Caddy 配置和整个 WebGUI 复制到 `C:\opt\rabilink-relay\backups\code-<时间戳>`，不覆盖 `data/` 中的账号、应用、token 哈希和队列状态；随后更新文件、重建计划任务并验证健康。发布后重新运行只读检查，预期 `DeploymentNeeded=false`、`RemoteReportsRoute=true`、`RemoteSpeechGuide=true`。
+
+目标 PC 的 Manager、worker 和本地语音进程属于另一份运行包，升级边界见 [Windows 桌面启动与完整打包](windows-launcher-and-packaging.md)。不要把 Relay 发布和 RabiPC 安装混成一次不可回滚的复制。
+
 公网部署时建议放到 HTTPS 反代后面，例如：
 
 ```text
@@ -944,7 +988,7 @@ $env:RABILINK_RELAY_APP_TOKEN = "填入当前 RabiLink 应用 token"
 AIUI 示例还提供两条真实链路测试。它们使用环境中的 Relay 地址和应用 token，不会把凭证写入报告：
 
 ```powershell
-cd examples\rabilink-aiui
+cd apps\rabilink-aiui
 npm run active-intelligence:e2e
 npm run config-rollback:e2e
 ```
@@ -958,7 +1002,7 @@ npm run config-rollback:e2e
 5. 超时重试保持 `deliveryId`，眼镜队列中不出现重复消息。
 6. 临时配置通过同一 Relay 链路读取、写入并精确回滚。
 
-测试仅把时延、布尔结果和配置摘要写入 `examples/rabilink-aiui/dist/`，不记录 Relay URL、token、原始对话或配置正文。
+测试仅把时延、布尔结果和配置摘要写入 `apps/rabilink-aiui/dist/`，不记录 Relay URL、token、原始对话或配置正文。
 
 ## 本地烟测
 

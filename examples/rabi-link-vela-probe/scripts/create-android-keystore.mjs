@@ -19,7 +19,7 @@ const pemDir = path.join(
 
 const certPath = path.join(pemDir, 'certificate.pem')
 const keyPath = path.join(pemDir, 'private.pem')
-const androidDir = path.resolve(root, '..', 'android-rabi-link-probe')
+const androidDir = path.resolve(root, '..', '..', 'apps', 'rabilink-android')
 const outDir = path.join(androidDir, 'signing')
 const outPath = path.join(outDir, 'vela-debug.p12')
 const password = 'rabiroute'

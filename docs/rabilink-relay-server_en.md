@@ -77,7 +77,49 @@ GET  /worker/webgui-requests?limit=1&deviceId=<pc>&deviceGuid=<guid>
 POST /worker/webgui-requests/<requestId>/response
 ```
 
-Response bodies are base64-safe for HTML, JavaScript, CSS, images, and JSON. The proxy rewrites common absolute `/api`, `/manager-config`, and `/assets` paths so the remote page continues addressing the same PC.
+Response bodies are base64-safe for HTML, JavaScript, CSS, images, and JSON. The proxy rewrites common absolute `/api`, `/manager-config`, and `/assets` paths so the remote page continues addressing the same PC. Bundled reports are served under the same authenticated PC prefix. Frontend report links must use relative `reports/...` URLs rather than root-relative `/reports/...`; Relay exposes only the build's `assets/` and `reports/` directories, not arbitrary server files.
+
+## Direct RabiSpeech API
+
+The speech API uses the target application's token rather than the WebGUI login cookie:
+
+```http
+GET  /api/rabilink/speech/health
+GET  /api/rabilink/speech/v1/models
+POST /api/rabilink/speech/v1/audio/speech
+POST /api/rabilink/speech/v1/audio/transcriptions
+```
+
+Prefix these paths with the Relay HTTPS origin. The application must select an online PC whose **Allow speech relay** switch is enabled. See [Call TTS and ASR remotely](user-guide/speech-api_en.md) for copyable calls, acceptance, and error recovery. The machine-readable contract is available at `/api/rabilink/speech/openapi.json`.
+
+## Publish Relay and verify documentation parity
+
+The HTML, JavaScript, and `reports/` below `/manage/<account>/<RabiGUID>/` come from the **Relay server's own** `ribiwebgui/dist`, not from the selected PC's local WebGUI. Updating only RabiPC does not update the public guide. Uploading only the frontend does not add a new static-resource prefix to an old Relay script.
+
+Maintainers should build and run the read-only check first:
+
+```powershell
+npm run build
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  skills\audit-rabiroute-public-docs\scripts\Test-RabiLinkDocumentationRuntime.ps1
+```
+
+The check reads the server address, public host, and SSH key path from the ignored `data/rabilink-relay/config.json`. It does not print those values, upload files, overwrite state, or restart a process. Interpret the result as follows:
+
+- `LocalReady=true`: the local Relay, WebGUI, report, bilingual guide, and OpenAPI are ready;
+- `DeploymentNeeded=true`: the public server still has an older script or guide and needs a release;
+- `ReadyToDeploy=true`: public health, supervisors, processes, and local artifacts satisfy the release preconditions.
+
+Only after explicit release authorization, run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  scripts\deploy-rabilink-relay-windows.ps1
+```
+
+The deployer first copies the remote scripts, Caddy configuration, and complete WebGUI to `C:\opt\rabilink-relay\backups\code-<timestamp>`. It preserves account, application, token-hash, and queue state under `data/`, then updates files, recreates the scheduled tasks, and checks health. Run the read-only check again; expect `DeploymentNeeded=false`, `RemoteReportsRoute=true`, and `RemoteSpeechGuide=true`.
+
+The selected PC's Manager, worker, and local speech process belong to a separate runtime package. See [Windows desktop launch and packaging](windows-launcher-and-packaging_en.md). Do not combine Relay publishing and RabiPC installation into one non-recoverable copy.
 
 ## AIUI input and downlink
 

@@ -4164,7 +4164,7 @@ function remoteWebguiIndexHtml(externalPrefix) {
   return rewriteRemoteWebguiAssetUrls(text, externalPrefix);
 }
 
-function sendRemoteWebguiStatic(res, match, account) {
+function sendRemoteWebguiStatic(req, res, match, account) {
   const externalPrefix = remoteWebguiPrefix(account, match.targetRef);
   if (match.restPath === "/" || !path.extname(match.restPath)) {
     const index = remoteWebguiIndexHtml(externalPrefix);
@@ -4173,7 +4173,24 @@ function sendRemoteWebguiStatic(res, match, account) {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store"
     });
-    res.end(index);
+    res.end(req.method === "HEAD" ? undefined : index);
+    return true;
+  }
+
+  if (match.restPath.startsWith("/reports/")) {
+    const reportRelativePath = match.restPath.slice("/reports/".length);
+    const filePath = safeChildPath(path.join(webguiDistPath, "reports"), reportRelativePath);
+    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return sendText(res, 404, "Remote WebGUI report was not found.");
+    }
+    const body = fs.readFileSync(filePath);
+    res.writeHead(200, {
+      "content-type": contentTypeForFile(filePath),
+      "cache-control": "no-store",
+      "content-length": String(body.byteLength),
+      "x-content-type-options": "nosniff"
+    });
+    res.end(req.method === "HEAD" ? undefined : body);
     return true;
   }
 
@@ -4195,7 +4212,7 @@ function sendRemoteWebguiStatic(res, match, account) {
       "cache-control": contentType.startsWith("font/") || contentType.startsWith("image/") ? "public, max-age=3600" : "no-store",
       "content-length": String(body.byteLength)
     });
-    res.end(body);
+    res.end(req.method === "HEAD" ? undefined : body);
     return true;
   }
 
@@ -4668,7 +4685,7 @@ async function handleManageWebgui(req, url, res) {
   }
   if (!remoteWebguiManagerPath(match.restPath)) {
     if (req.method !== "GET" && req.method !== "HEAD") return sendText(res, 405, "Method Not Allowed");
-    return sendRemoteWebguiStatic(res, match, auth.account);
+    return sendRemoteWebguiStatic(req, res, match, auth.account);
   }
   const proxySearch = new URLSearchParams(url.searchParams);
   proxySearch.delete("appId");

@@ -1,0 +1,30 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url "https://maven.aliyun.com/repository/google/" }
+        maven { url "https://maven.aliyun.com/repository/public/" }
+        maven { url "https://maven.aliyun.com/nexus/content/repositories/releases/" }
+        maven { url "https://maven.rokid.com/repository/maven-public/" }
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        flatDir {
+            dirs("$rootDir/out/reference/RokidAiSdkDemo/app/libs")
+        }
+        maven { url "https://maven.aliyun.com/repository/google/" }
+        maven { url "https://maven.aliyun.com/repository/public/" }
+        maven { url "https://maven.aliyun.com/nexus/content/repositories/releases/" }
+        maven { url "https://maven.rokid.com/repository/maven-public/" }
+    }
+}
+
+rootProject.name = "RabiLinkProbe"
+include ":app"
+include ":glass-app"

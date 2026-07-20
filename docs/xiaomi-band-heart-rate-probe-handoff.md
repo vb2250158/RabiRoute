@@ -8,7 +8,7 @@
 
 > 状态：实验调查交接。APK 探针和诊断取证路径存在，但完整、稳定、可授权的后台心率历史 API 尚未验证。
 
-> 当前状态：Android 手机端探针已迁入 Rabi Link 命名体系，正式 APK 包名为 `com.rabi.link`，通用导出脚本为 `Export-RabiLinkProbeApk.ps1`。当前真实目录是 `examples/android-rabi-link-probe/`，本文所有可执行命令均以该目录为准。
+> 当前状态：Android 手机端探针已迁入 Rabi Link 命名体系，正式 APK 包名为 `com.rabi.link`，通用导出脚本为 `Export-RabiLinkProbeApk.ps1`。当前真实目录是 `apps/rabilink-android/`，本文所有可执行命令均以该目录为准。
 
 本文用于把“小米手环心率列表能否通过 APK 拉到更多数据”的当前状态交接给另一台电脑上的 Codex。
 
@@ -66,9 +66,9 @@ DailyHrReport.hrRecords: List<TimesDataRecordInt>
 已成功从日志中解析出当天心率图表列表，并落成 JSON/CSV：
 
 ```text
-examples/android-rabi-link-probe/out/mi-health-logcat/mihealth-heart-records-20260704-163557.json
-examples/android-rabi-link-probe/out/mi-health-logcat/mihealth-heart-records-20260704-163557.csv
-examples/android-rabi-link-probe/out/mi-health-logcat/mihealth-heart-records-expanded-20260704-163557.csv
+apps/rabilink-android/out/mi-health-logcat/mihealth-heart-records-20260704-163557.json
+apps/rabilink-android/out/mi-health-logcat/mihealth-heart-records-20260704-163557.csv
+apps/rabilink-android/out/mi-health-logcat/mihealth-heart-records-expanded-20260704-163557.csv
 ```
 
 本次样本：
@@ -83,7 +83,7 @@ sampleCount: 21
 已把这条路线固化为脚本：
 
 ```powershell
-cd <repo>\examples\android-rabi-link-probe
+cd <repo>\apps\rabilink-android
 .\scripts\Collect-MiHealthHeartRateFromLogcat.ps1 -Serial <adb-serial>
 ```
 
@@ -118,7 +118,7 @@ hrRecords=[TimesDataRecordInt(...), ...]
 已新增批量抓取脚本：
 
 ```powershell
-cd <repo>\examples\android-rabi-link-probe
+cd <repo>\apps\rabilink-android
 .\scripts\Collect-MiHealthHeartRateBySwipe.ps1 -Serial <adb-serial> -DaysBack 7
 ```
 
@@ -186,7 +186,7 @@ quantityString(common_unit_heart_rate_desc, hrItem.getHr())
 Android 探针工程：
 
 ```text
-examples/android-rabi-link-probe/
+apps/rabilink-android/
 ```
 
 Vela 快应用探针工程：
@@ -236,19 +236,19 @@ points / dataSources / pages / rawHttp / errors
 在仓库根目录：
 
 ```powershell
-cd <repo>\examples\android-rabi-link-probe
+cd <repo>\apps\rabilink-android
 .\scripts\Export-RabiLinkProbeApk.ps1 -Build
 ```
 
 输出位于：
 
 ```text
-examples/android-rabi-link-probe/out/apk/RabiLinkProbe-v<versionName>+<versionCode>-<yyyyMMdd-HHmmss>-debug.apk
+apps/rabilink-android/out/apk/RabiLinkProbe-v<versionName>+<versionCode>-<yyyyMMdd-HHmmss>-debug.apk
 ```
 
 脚本会同时生成 SHA256 文件。
 
-注意：构建需要本机 Android/Gradle 环境，以及 `examples/android-rabi-link-probe/app/libs/android-fit-20150719.jar`。
+注意：构建需要本机 Android/Gradle 环境，以及 `apps/rabilink-android/app/libs/android-fit-20150719.jar`。
 
 ## 手机独立测试流程
 
@@ -273,7 +273,7 @@ adb devices -l
 运行全类型深扫并拉回证据包：
 
 ```powershell
-cd <repo>\examples\android-rabi-link-probe
+cd <repo>\apps\rabilink-android
 .\scripts\Collect-MiHealthCloudHeartRate.ps1 `
   -Serial <adb-serial> `
   -InstallApk `
@@ -299,7 +299,7 @@ am start-foreground-service -n com.rabi.link/.modules.xiaomi.MiHealthCloudProbeS
 解析 APK 分享或 ADB 拉回的 ZIP：
 
 ```powershell
-cd <repo>\examples\android-rabi-link-probe
+cd <repo>\apps\rabilink-android
 .\scripts\Convert-MiHealthCloudJsonToMarkdown.ps1 -InputZip .\out\mi-health-cloud\mi-health-cloud-YYYYMMDD-HHMMSS.zip
 ```
 
@@ -336,13 +336,13 @@ List of devices attached
 
 以下是运行产物或本机数据，不应提交：
 
-- `examples/android-rabi-link-probe/out/`
-- `examples/android-rabi-link-probe/build/`
-- `examples/android-rabi-link-probe/app/build/`
-- `examples/android-rabi-link-probe/.gradle/`
-- `examples/android-rabi-link-probe/signing/`
-- `examples/android-rabi-link-probe/mi-health-*.json`
-- `examples/android-rabi-link-probe/mi-health-*.md`
+- `apps/rabilink-android/out/`
+- `apps/rabilink-android/build/`
+- `apps/rabilink-android/app/build/`
+- `apps/rabilink-android/.gradle/`
+- `apps/rabilink-android/signing/`
+- `apps/rabilink-android/mi-health-*.json`
+- `apps/rabilink-android/mi-health-*.md`
 - `examples/rabi-link-vela-probe/node_modules/`
 - `examples/rabi-link-vela-probe/build/`
 - `examples/rabi-link-vela-probe/dist/`

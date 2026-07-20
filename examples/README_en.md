@@ -29,12 +29,12 @@ cp -R examples/data/. data/
 | Directory | Maturity | Purpose |
 | --- | --- | --- |
 | [`data/`](./data/README_en.md) | Current example | Copyable Routes, personas, plans, and memory structures. |
-| [`rabilink-aiui/`](./rabilink-aiui/README_en.md) | Experimental integration | Rokid AIUI foreground app, Relay integration, configuration assistant, and acceptance scripts. |
 | [`rabilink-relay/`](./rabilink-relay/README_en.md) | Current example | Sanitized Relay tool-import and authentication templates. |
-| [`android-rabi-link-probe/`](./android-rabi-link-probe/README_en.md) | Hardware research tool | Android, Rokid, and Xiaomi Health probes; not required by the main runtime. |
 | [`rabi-link-vela-probe/`](./rabi-link-vela-probe/README_en.md) | Historical probe | Retained evidence from the vela wearable investigation. |
 | `.env.example` | Optional template | Environment-variable startup for a single Gateway without the Manager. |
 | `send-webhook-demo.*` | Current example | Sends test text to the generic Webhook endpoint. |
+
+The phone companion and glasses clients are independently buildable, testable, and releasable products under [`apps/`](../apps/README_en.md), not examples.
 
 ## Webhook demo
 

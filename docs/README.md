@@ -53,6 +53,7 @@
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
 - [语音交互工作站](voice-interaction-workstation.md) — 历史工作站接线记录；FenneNote/OumuQ 已停止维护，现行入口是 RabiPC + RabiSpeech。
 - [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、模型/参数发现、人格声线、RabiPC 和 RabiLink 中转。
+- [远端调用 TTS 与 ASR](user-guide/speech-api.md) — 应用 token、目标 PC、可复制命令、验收与错误恢复。
 - [本地语音模型下载说明](local-speech-model-downloads.md) — 每个 TTS/ASR 模型的来源、下载、隔离环境与验证。
 - [RabiSpeech 性能与功能报告](rabispeech-performance-report.md) — 六个 TTS、五个主要 ASR 的冷/热态、效果、硬件与 CUDA 问题。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
@@ -77,7 +78,7 @@
 - [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。
 - [手机 App Webhook 历史方案](mobile-app-webhook-integration.md) — **历史参考**，当前 RabiLink 主链不再以手机桥作为必经中转。
 
-归档材料位于 [`archive/`](../archive/README.md)，示例和子项目文档位于 [`examples/`](../examples/README.md)。
+归档材料位于 [`archive/`](../archive/README.md)，可构建客户端位于 [`apps/`](../apps/README.md)，共享 SDK 位于 [`packages/`](../packages/README.md)，可复制样板位于 [`examples/`](../examples/README.md)。
 
 ## 文档维护规则
 

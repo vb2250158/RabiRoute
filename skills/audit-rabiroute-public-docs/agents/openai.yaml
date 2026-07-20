@@ -1,0 +1,4 @@
+interface:
+  display_name: "RabiRoute 公共文档审计"
+  short_description: "检查远端可用性、API 示例、链接前缀与中英双语同步"
+  default_prompt: "使用 $audit-rabiroute-public-docs 审计 RabiRoute 公共文档并修复远端不可用的链接与 API 指南。"

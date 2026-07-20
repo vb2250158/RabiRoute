@@ -17,6 +17,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.1.18 - 2026-07-20
 
+### Multi-client directory ownership
+
+- Moved the independently buildable Android phone/glasses client and Rokid AIUI client from `examples/` to `apps/`, leaving `examples/` for small copyable configuration and integration samples.
+- Moved the shared Android SDK from `sdk/android/` to `packages/android-sdk/` and renamed the Android glasses module from the ambiguous `glass-asr` to `glass-app`; application IDs, protocols, and runtime behavior are unchanged.
+- Added bilingual `apps/` and `packages/` guides and synchronized build scripts, architecture documentation, and developer entry paths.
+
 ### QQ reply-chain and mention context
 
 - `AgentPacket` now adds a message-code parsing section that follows CQ reply references by `messageId` through the current Route's group/private records and collects CQ mention names encountered along the chain.
@@ -29,11 +35,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Collapsed plan cards add a current-step summary, preferring the structured `Step N · title` form while expanded cards retain full steps and blocker details.
 - WebGUI no longer presents the Manager-provided role panel as a configurable message adapter. Legacy `rolePanel` configuration remains compatible, and built-in role-panel delivery and persona rules are unchanged.
 
-### Mobile chat and Rabi Glass HUD polish
+### Mobile conversation navigation and Rabi Glass HUD polish
 
-- On top of the unified `RabiMobileUi` foundation, Android phone chat adds a safety banner, date grouping, sender/time labels, message-kind labels, openable attachments, and a 48dp multiline composer.
+- The normal Android entry is now a QQ-style conversation list with RabiLink Route avatars, latest message, time, and per-conversation unread state. Tapping a persona opens detail and Back returns to the list; wearable and other non-chat Routes are no longer treated as personas.
+- Normal chat no longer mixes persona selection or configuration mode. Settings, the separate Configuration Assistant, and chat detail have explicit roles; drafts, read state, notification deep links, legacy migration, and delivery state are scoped by `routeProfileId`.
+- Text, media, and speech freeze the target Route before background queuing, preventing cross-conversation delivery after navigation. Normal notifications aggregate per conversation and clear when that detail is read.
+- Attachment, composer, and Send controls use one 52dp height. The phone app is now `0.3.0` (`versionCode 3`).
 - Rabi Glass adds explicit Connect, Listen, Upload, Speak, Paused, and Error HUD states. Capture pauses during downlink PCM and resumes after an audio-length-based delay to reduce reply audio feeding back into the next uplink.
-- The mobile endpoint audit, Relay media test, backend/frontend build, and Qt suite pass. Physical Rokid glasses interaction still requires device validation.
+- The mobile audit now asserts conversation-list navigation, RabiLink contact eligibility, per-conversation unread state, explicit targets, and `singleTop` notification navigation. Physical Rokid glasses interaction still requires device validation.
 
 ## 0.1.17 - 2026-07-20
 

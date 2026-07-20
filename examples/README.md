@@ -29,12 +29,12 @@ cp -R examples/data/. data/
 | 目录 | 成熟度 | 用途 |
 | --- | --- | --- |
 | [`data/`](./data/README.md) | 当前示例 | 可复制的 Route、Persona、计划和记忆数据包。 |
-| [`rabilink-aiui/`](./rabilink-aiui/README.md) | 实验集成 | Rokid AIUI 眼镜前台应用、Relay 接入、配置助手和验收脚本。 |
 | [`rabilink-relay/`](./rabilink-relay/README.md) | 当前示例 | Relay 工具导入和鉴权配置样板，不包含真实 token。 |
-| [`android-rabi-link-probe/`](./android-rabi-link-probe/README.md) | 硬件调查工具 | Android / Rokid / 小米健康能力探针；不是主项目必需组件。 |
 | [`rabi-link-vela-probe/`](./rabi-link-vela-probe/README.md) | 历史探针 | vela 手环验证应用，保留为设备调查证据。 |
 | `.env.example` | 可选样板 | 不经过 Manager、直接用环境变量启动单 Gateway 时使用。 |
 | `send-webhook-demo.*` | 当前示例 | 向通用 Webhook 入口发送测试文本。 |
+
+手机伴侣和眼镜端已经是可独立构建、验收和发布的产品工程，统一放在 [`apps/`](../apps/README.md)，不再归类为示例。
 
 ## Webhook 发送示例
 

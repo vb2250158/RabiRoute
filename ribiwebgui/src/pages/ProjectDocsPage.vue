@@ -39,6 +39,7 @@ const pageOrder = [
   "first-route",
   "interface-and-status",
   "routes-and-adapters",
+  "speech-api",
   "agents-and-sessions",
   "personas-and-rules",
   "operations-and-troubleshooting",
@@ -89,7 +90,7 @@ function sectionFor(key: string, locale: "zh-CN" | "en"): string {
     ? ["Start here", "Use RabiRoute", "Operate safely", "Help"]
     : ["开始使用", "日常使用", "运行与安全", "获得帮助"];
   if (key === "README" || key === "first-route") return labels[0];
-  if (["interface-and-status", "routes-and-adapters", "agents-and-sessions", "personas-and-rules"].includes(key)) return labels[1];
+  if (["interface-and-status", "routes-and-adapters", "speech-api", "agents-and-sessions", "personas-and-rules"].includes(key)) return labels[1];
   if (["operations-and-troubleshooting", "safety-and-data"].includes(key)) return labels[2];
   return labels[3];
 }

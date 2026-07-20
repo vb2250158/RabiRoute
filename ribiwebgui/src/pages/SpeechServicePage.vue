@@ -359,7 +359,7 @@ onBeforeUnmount(() => releaseSpeech?.());
         <div class="page-subtitle">常驻麦克风、声音阈值、本机 ASR、人格 TTS 与整台电脑唯一的排队播放入口。</div>
       </div>
       <div class="page-actions">
-        <v-btn variant="tonal" prepend-icon="mdi-chart-box-outline" href="/reports/rabispeech-model-benchmark.html" target="_blank">目标测试机报告</v-btn>
+        <v-btn variant="tonal" prepend-icon="mdi-chart-box-outline" href="reports/rabispeech-model-benchmark.html" target="_blank">目标测试机报告</v-btn>
         <v-btn color="primary" prepend-icon="mdi-refresh" :loading="loading" @click="refreshStatus">刷新状态</v-btn>
       </div>
     </div>

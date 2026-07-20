@@ -406,7 +406,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
           steps: [
             {
               title: "运行本地验收",
-              instruction: "在 examples/rabilink-aiui 运行 npm run check、npm run delivery:verify 和 npm run acceptance:local。",
+              instruction: "在 apps/rabilink-aiui 运行 npm run check、npm run delivery:verify 和 npm run acceptance:local。",
               completeWhen: "检查、最终 AIX 比对和本地验收矩阵全部通过。",
               icon: "mdi-test-tube"
             },

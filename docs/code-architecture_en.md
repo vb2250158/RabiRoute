@@ -28,6 +28,14 @@ src/manager.ts
   -> RibiWebGUI static/API service
 ```
 
+## Client applications and shared SDK
+
+- `apps/rabilink-android/`: one Android project containing the phone controller and the `glass-app` module.
+- `apps/rabilink-aiui/`: the independent Rokid AIUI/Lingzhu client project.
+- `packages/android-sdk/`: shared Android event, message, and status contracts consumed by client apps.
+
+These directories are clients of RabiRoute, not sources of truth for Manager configuration or runtime data. Copyable integration samples stay under `examples/`; complete products belong under `apps/`, and only stable cross-app interfaces belong under `packages/`.
+
 ## Backend entries
 
 ### `src/index.ts`
@@ -210,7 +218,7 @@ The `rabiroute:webgui:locale` local-storage value is only a browser-side UI pref
 
 External/companion adapters live under `plugin-adapters/` or `scripts/` when they are independently deployable. They communicate through documented Manager/Relay protocols and must not import private runtime data into public examples.
 
-`plugin-adapters/rabi-speech/` is an independent local TTS/ASR service, not a message or handler adapter. Its registry selects only locally configured providers. The benchmark pipeline records TTS generation, WAV output, ASR transcription, cold/load/warm timings, RTF, memory, error rates, and machine metadata; raw runtime artifacts remain ignored while the sanitized HTML report is copied through `ribiwebgui/public/reports/`.
+`plugin-adapters/rabi-speech/` is an independent local TTS/ASR service, not a message or handler adapter. Its registry selects only locally configured providers. The benchmark pipeline records TTS generation, WAV output, ASR transcription, cold/load/warm timings, RTF, memory, error rates, and machine metadata; raw runtime artifacts remain ignored while the sanitized HTML report is copied through `ribiwebgui/public/reports/`. The local Manager serves `reports/` at its root, while RabiLink Relay serves the same build directory under the authenticated remote-PC prefix.
 
 The live speech view belongs to the control plane. `src/manager/speechServiceStatus.ts` probes only a loopback RabiSpeech URL and removes private paths. `src/manager/speechControl.ts` then maps models, microphone state, playback, and message commands to `speechControlContract` before `GET /api/speech/status` reaches the frontend speech store. The page describes the current PC. The static benchmark describes only its named target machine, so the two must remain separate data sources.
 

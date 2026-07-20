@@ -53,6 +53,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [WeCom integration](wecom-integration_en.md)
 - [Voice interaction workstation](voice-interaction-workstation_en.md) — historical wiring; FenneNote/OumuQ are retired in favor of RabiPC + RabiSpeech.
 - [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, model/parameter discovery, persona voices, RabiPC, and RabiLink relay.
+- [Call TTS and ASR remotely](user-guide/speech-api_en.md) — application token, target PC, copyable commands, acceptance, and error recovery.
 - [Local speech model downloads](local-speech-model-downloads_en.md) — per-model sources, downloads, isolated environments, and validation.
 - [RabiSpeech performance report](rabispeech-performance-report_en.md) — six TTS and five main ASR models, cold/warm timing, quality indicators, hardware, and CUDA issues.
 - [RabiLink Relay](rabilink-relay-server_en.md)
@@ -77,7 +78,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [UE/UX audit and refactor](rabiroute-ue-ux-audit-and-refactor_en.md) — phase audit.
 - [Historical mobile-app Webhook plan](mobile-app-webhook-integration_en.md) — **Historical**. The current RabiLink path no longer requires a phone bridge as the main relay.
 
-Archived material is under [`archive/`](../archive/README_en.md). Examples and subproject documentation are under [`examples/`](../examples/README_en.md).
+Archived material is under [`archive/`](../archive/README_en.md). Buildable clients live under [`apps/`](../apps/README_en.md), reusable SDKs under [`packages/`](../packages/README_en.md), and copyable samples under [`examples/`](../examples/README_en.md).
 
 ## Documentation maintenance
 
