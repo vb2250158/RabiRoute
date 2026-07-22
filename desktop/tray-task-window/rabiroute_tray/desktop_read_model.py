@@ -4,8 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .app_paths import role_dir_from_gateway, runtime_dir_from_gateway
-from .role_context_repository import ContextEntry, RoleContextSnapshot
-from .task_repository import PlanItem, PlanSnapshot, PlanStep
+from .desktop_models import ContextEntry, PlanItem, PlanSnapshot, PlanStep, RoleContextSnapshot
 
 
 def plan_snapshot_from_manager(
@@ -37,6 +36,7 @@ def context_snapshot_from_manager(
     gateway: dict | None,
     role_id: str,
     raw_memory: dict,
+    avatar_data: bytes | None = None,
 ) -> RoleContextSnapshot:
     role_dir = role_dir_from_gateway(project_root, gateway, role_id)
     route_dir = runtime_dir_from_gateway(project_root, gateway)
@@ -61,6 +61,7 @@ def context_snapshot_from_manager(
         consolidated_memory=consolidated,
         status_lines=status_lines,
         message=message,
+        avatar_data=avatar_data,
     )
 
 

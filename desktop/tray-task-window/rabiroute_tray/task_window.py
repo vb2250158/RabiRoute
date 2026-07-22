@@ -24,9 +24,8 @@ from PySide6.QtWidgets import (
 )
 
 from .manager_client import ManagerSnapshot
+from .desktop_models import ContextEntry, PlanItem, PlanSnapshot, PlanStep, RoleContextSnapshot
 from .display_helpers import route_enabled_label, route_running_label, route_state, route_status_label, route_subtitle, route_title
-from .role_context_repository import ContextEntry, RoleContextSnapshot
-from .task_repository import PlanItem, PlanSnapshot, PlanStep
 from .theme import apply_rabi_menu_theme
 
 
@@ -1030,21 +1029,28 @@ class TaskWindow(QWidget):
         QTimer.singleShot(0, lambda value=scroll_value: self._restore_scroll(value))
 
     def _persona_avatar_pixmap(self, size: int) -> QPixmap:
-        avatar_path = self.context.avatar_path if self.context else None
-        if avatar_path:
-            pixmap = QPixmap(str(avatar_path))
-            if not pixmap.isNull():
-                return pixmap.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        pixmap = self._persona_avatar_source_pixmap()
+        if not pixmap.isNull():
+            return pixmap.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         return self._default_icon_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation) if not self._default_icon_pixmap.isNull() else QPixmap()
 
     def _apply_persona_avatar(self, role_id: str) -> None:
-        avatar_path = self.context.avatar_path if self.context else None
-        pixmap = QPixmap(str(avatar_path)) if avatar_path else self._default_icon_pixmap
+        pixmap = self._persona_avatar_source_pixmap()
+        if pixmap.isNull():
+            pixmap = self._default_icon_pixmap
         if not pixmap.isNull():
             self.icon_label.setPixmap(pixmap.scaled(32, 32, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
         else:
             self.icon_label.clear()
             self.icon_label.setText((role_id or "R")[:1].upper())
+
+    def _persona_avatar_source_pixmap(self) -> QPixmap:
+        if self.context and self.context.avatar_data:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(self.context.avatar_data):
+                return pixmap
+        avatar_path = self.context.avatar_path if self.context else None
+        return QPixmap(str(avatar_path)) if avatar_path else QPixmap()
 
     def is_user_interacting(self) -> bool:
         if not self.isVisible():

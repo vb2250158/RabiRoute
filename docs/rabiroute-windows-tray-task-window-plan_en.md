@@ -8,7 +8,7 @@ English | <a href="./rabiroute-windows-tray-task-window-plan.md">简体中文</a
 
 > Status: implemented-boundary record. Use [Windows Launch and Packaging](windows-launcher-and-packaging_en.md) and `desktop/tray-task-window/` for current runtime details.
 
-The Windows tray application is a lightweight desktop entry for viewing the selected role's plans, recent memory, consolidated memory, conversation, and runtime status. It is not a replacement for RibiWebGUI, an Agent OS, an executor, or a full project-management application.
+The Windows tray application is a lightweight frontend for viewing the selected role's plans, recent memory, consolidated memory, conversation, and runtime status. It uses the same Manager backend as RibiWebGUI and is not an Agent OS, executor, or full project-management application.
 
 ## Sources of truth
 
@@ -19,12 +19,12 @@ data/roles/<RoleId>/memory/recent/*.json
 data/roles/<RoleId>/memory/consolidated/*.json
 ```
 
-The tray does not reconstruct plans or memory from chat logs and does not read the retired task-directory layout.
+Manager owns the role files listed above. The tray never opens them directly; it consumes Manager API DTOs, does not reconstruct plans or memory from chat logs, and does not read the retired task-directory layout.
 
 ## Views
 
 - Chat: reads the selected role's role-panel timeline. The message editor, file picker, and send button appear only in this view.
-- Current: shows plans whose wire status is `进行中` first, then recent memory; the two groups keep their separate file sources of truth.
+- Current: shows Manager API plans whose wire status is `进行中` first, then recent memory; Manager retains the underlying file sources of truth.
 - Plans: read-only overview of all non-archived plans.
 - Recent memory: recent items created or updated by the handler through RabiRoute APIs.
 - Archived: read-only overview of archived plans and consolidated memory.

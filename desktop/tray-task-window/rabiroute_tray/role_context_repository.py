@@ -1,30 +1,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
-@dataclass(frozen=True)
-class ContextEntry:
-    title: str
-    detail: str = ""
-    source: str = ""
-    updated_at: str = ""
-    keywords: list[str] = field(default_factory=list)
-    path: Path | None = None
-
-
-@dataclass(frozen=True)
-class RoleContextSnapshot:
-    role_dir: Path
-    route_dir: Path
-    recent_memory: list[ContextEntry]
-    consolidated_memory: list[ContextEntry]
-    status_lines: list[str]
-    message: str = ""
-    avatar_path: Path | None = None
+from .desktop_models import ContextEntry, RoleContextSnapshot
 
 
 class RoleContextRepository:

@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-webgui-tray-focus",
   "title": "RibiWebGUI 和托盘面板是控制面与观察面",
-  "content": "RibiWebGUI 负责管理 Gateway、路由配置、人格选择、状态和静态控制面，并以中文事实源加人工英文词库提供运行时中英文切换。使用手册直接读取 docs/user-guide 下人工维护的中英文 Markdown，按首次投递、日常使用、排障和安全组织，提供全文搜索、本页目录与章节深链。语音页读取当前电脑的 RabiSpeech 实时状态，静态性能报告只代表报告标明的目标测试机；RabiLink 是系统转接服务，不是消息端。桌面托盘面板使用同一套 RabiLight 视觉语言；这些控制面和语音基础设施都不替代 router 或处理端 Agent runtime。",
+  "content": "RibiWebGUI 负责管理 Gateway、路由配置、人格选择、状态和静态控制面，并以中文事实源加人工英文词库提供运行时中英文切换。使用手册直接读取 docs/user-guide 下人工维护的中英文 Markdown，按首次投递、日常使用、排障和安全组织，提供全文搜索、本页目录与章节深链。语音页读取当前电脑的 RabiSpeech 实时状态，静态性能报告只代表报告标明的目标测试机；RabiLink 是系统转接服务，不是消息端。桌面托盘面板使用同一套 RabiLight 视觉语言，并与 RibiWebGUI 共用 Manager 后端：托盘只消费 Route、计划、记忆、聊天和头像 API，不直接读取 data；Manager I/O 在后台完成，隐藏面板不请求聊天或头像。这些控制面和语音基础设施都不替代 router 或处理端 Agent runtime。",
   "source": {
     "kind": "example",
     "summary": "公开示例近期记忆：控制面定位"
   },
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-17T19:30:00+08:00",
-  "keywords": ["RibiWebGUI", "使用手册", "用户指南", "语音服务", "实时状态", "性能报告", "RabiLink", "托盘", "RabiLight", "控制面"]
+  "updatedAt": "2026-07-22T00:00:00+08:00",
+  "keywords": ["RibiWebGUI", "Manager API", "使用手册", "用户指南", "语音服务", "实时状态", "性能报告", "RabiLink", "托盘", "RabiLight", "控制面"]
 }

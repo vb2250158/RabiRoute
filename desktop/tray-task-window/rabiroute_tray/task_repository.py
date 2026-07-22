@@ -1,57 +1,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
-@dataclass(frozen=True)
-class PlanStep:
-    title: str
-    status: str = "未开始"
-    detail: str = ""
-    completed_at: str = ""
-    step_id: str = ""
-    waiting_for: str = ""
-    blocked_by: str = ""
-
-
-@dataclass(frozen=True)
-class PlanItem:
-    title: str
-    status: str = "未开始"
-    priority: str = ""
-    kind: str = ""
-    current_step: str = ""
-    current_step_id: str = ""
-    next_action: str = ""
-    project_name: str = ""
-    project_path: str = ""
-    source: str = ""
-    waiting_for: str = ""
-    blocked_by: str = ""
-    due_at: str = ""
-    created_at: str = ""
-    updated_at: str = ""
-    steps: list[PlanStep] = field(default_factory=list)
-    keywords: list[str] = field(default_factory=list)
-    path: Path | None = None
-
-
-@dataclass(frozen=True)
-class PlanSnapshot:
-    role_id: str
-    role_dir: Path
-    plans_dir: Path
-    current: list[PlanItem]
-    active: list[PlanItem]
-    archived: list[PlanItem]
-    message: str = ""
-
-    @property
-    def all_plans(self) -> list[PlanItem]:
-        return [*self.active, *self.archived]
+from .desktop_models import PlanItem, PlanSnapshot, PlanStep
 
 
 class PlanRepository:

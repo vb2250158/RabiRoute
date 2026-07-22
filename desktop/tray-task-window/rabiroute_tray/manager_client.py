@@ -143,6 +143,15 @@ class ManagerClient:
             raise ValueError("Manager memory response does not contain a data object.")
         return data
 
+    def role_avatar(self, role_id: str) -> bytes | None:
+        encoded_role_id = quote(role_id, safe="")
+        try:
+            return self._get_bytes(f"/api/roles/{encoded_role_id}/avatar")
+        except HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+
     def send_role_panel_message(
         self,
         gateway_id: str,
@@ -181,6 +190,10 @@ class ManagerClient:
     def _get_json(self, path: str) -> dict[str, Any]:
         with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def _get_bytes(self, path: str) -> bytes:
+        with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:
+            return response.read()
 
     def _post_json(self, path: str, payload: dict[str, Any] | None = None, timeout_seconds: float | None = None) -> dict[str, Any]:
         data = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")

@@ -112,7 +112,7 @@ Manager APIs, gateways, WebGUI, storage layout, and shutdown semantics are cross
 
 ## Qt plan and memory panel
 
-The optional panel lives under `desktop/tray-task-window`. It is part of the Windows desktop experience but is not required for the portable Manager/WebGUI path.
+The optional panel lives under `desktop/tray-task-window`. It is part of the Windows desktop experience but is not required for the portable Manager/WebGUI path. It is a frontend of the same Manager backend as RibiWebGUI: `DesktopRefreshService` calls Manager APIs asynchronously and the packaged tray does not load local plan/memory repositories.
 
 Recommended local setup:
 

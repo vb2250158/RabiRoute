@@ -443,7 +443,7 @@ Gateway 配置的事实源 Module。
 
 前端可以做 UI 友好的默认值和展示转换，但配置不变量不要只存在前端。需要和后端一致的规则应进入 `src/shared/gatewayConfigModel.ts` 或由 manager 返回。
 
-人格头像的文件读写、类型校验、内容寻址与原子配置切换集中在 `src/personaAvatar.ts`；`src/manager/personaAvatarRoutes.ts` 负责 `/api/roles/:roleId/avatar` 和表现 DTO，`controlPlaneRoutes.ts` 只注册路由。WebGUI 的 HTTP 细节归 `persona/personaAvatarClient.ts`，Qt 通过已有 `RoleContextRepository` 读取头像路径。头像是人格展示元数据，不进入 AgentPacket，也不改变路由匹配或处理端投递。
+人格头像的文件读写、类型校验、内容寻址与原子配置切换集中在 `src/personaAvatar.ts`；`src/manager/personaAvatarRoutes.ts` 负责 `/api/roles/:roleId/avatar` 和表现 DTO，`controlPlaneRoutes.ts` 只注册路由。WebGUI 和 Qt 都通过 Manager HTTP 读取头像；Qt 不再通过本地 `RoleContextRepository` 读取人格目录。头像是人格展示元数据，不进入 AgentPacket，也不改变路由匹配或处理端投递。
 
 语音控制链路采用明确的前后端分离：
 
@@ -478,7 +478,7 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 它不是 RabiRoute 的事实源。任务、记忆、配置仍应落在 `data/` 和 manager 后端。
 
-托盘的定时状态刷新使用 `GET /gateways?summary=1`，只返回托盘白名单中的 Route 身份、运行态、人格绑定、本地路径和手动触发规则，不扫描 adapter logs、消息文件和 Agent 诊断，也不返回平台 token / secret。Manager HTTP、计划/记忆文件和当前可见面板的聊天记录读取由同一个 Qt 后台任务完成，主线程 QObject slot 只应用完成结果；隐藏面板不读取聊天或重建 QWidget，托盘菜单显示期间延迟应用刷新结果，状态未变化时不重建人格菜单或重复渲染面板，超过首屏 5 项的人格入口延迟到子菜单展开时创建。Windows 保留 `setContextMenu` 系统注册，并在 `activated(Context)` 到达且菜单尚未显示时直接非阻塞调用 `QMenu.popup()` 作为即时快路径；主要延迟控制仍来自主线程无 I/O 和菜单按需构建。托盘保留最后一次成功快照仅用于短暂刷新失败，必须显式标记为旧结果；Manager 真正离线时不得用缓存伪装在线。
+托盘和 RibiWebGUI 使用同一个 Manager 后端。`DesktopRefreshService` 无 Qt 依赖，只通过 `ManagerClient` 调用 `/gateways?summary=1`、`/api/roles/:roleId/plans`、`/memory`、`/role-panel/messages` 和 `/avatar`，再生成只读 DTO；托盘正式运行链路不导入 `PlanRepository` 或 `RoleContextRepository`，不直接读取 `data/`。`qt_async` 是不含业务语义的通用线程池桥，`tray_app` 只负责 UI 组合和缓存应用。隐藏面板不请求聊天/头像或重建 QWidget，菜单显示期间延迟应用刷新结果，未变化时不重建菜单或面板，超过 5 项的人格入口延迟到子菜单展开时创建。Windows 保留 `setContextMenu` 注册，并以 `activated(Context)` → 非阻塞 `QMenu.popup()` 作为快路径；顶层菜单提前预热样式和尺寸。短暂失败可保留并标记旧快照，Manager 真正离线时不得用缓存伪装在线。
 
 ## Plugin Adapters
 

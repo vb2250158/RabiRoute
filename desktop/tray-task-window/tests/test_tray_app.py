@@ -106,6 +106,7 @@ class TrayAppAsyncSendTest(unittest.TestCase):
         manager.role_plans = lambda _role_id: (time.sleep(0.15), [])[1]
         manager.role_memory = lambda _role_id: (time.sleep(0.15), {})[1]
         manager.role_panel_messages_snapshot = lambda _role_id: (time.sleep(0.15), [])[1]
+        manager.role_avatar = lambda _role_id: (time.sleep(0.15), None)[1]
         results = []
         callback_threads: list[QThread] = []
         started_at = time.perf_counter()

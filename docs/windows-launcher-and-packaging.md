@@ -149,7 +149,7 @@ Start-RabiRoute-Tray.bat
 需要保持的代码边界：
 
 ```text
-可移植层：manager HTTP API、shutdown API、ManagerClient、PlanRepository、RoleContextRepository、LifecycleController、app_paths、Qt TaskWindow。
+可移植层：manager HTTP API、shutdown API、ManagerClient、DesktopRefreshService、desktop read-model DTO、通用 `qt_async`、LifecycleController、app_paths、Qt TaskWindow。托盘不直接加载角色文件仓储；它与 RibiWebGUI 共用 Manager 后端。
 平台适配层：启动脚本、打包、开机启动、OS 专属托盘可用性和启动行为。
 ```
 

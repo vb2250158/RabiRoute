@@ -4,10 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .app_paths import role_id_from_gateway
+from .desktop_models import PlanSnapshot, RoleContextSnapshot
 from .desktop_read_model import context_snapshot_from_manager, plan_snapshot_from_manager
 from .manager_client import ManagerClient, ManagerSnapshot
-from .role_context_repository import RoleContextSnapshot
-from .task_repository import PlanSnapshot
 
 
 @dataclass(frozen=True)
@@ -53,6 +52,7 @@ class DesktopRefreshService:
                 role_messages = (
                     self.manager.role_panel_messages_snapshot(role_id) if include_role_messages else None
                 )
+                avatar_data = self.manager.role_avatar(role_id) if include_role_messages else None
             except Exception as error:
                 return DesktopRefreshResult(
                     manager=_with_refresh_error(manager_snapshot, f"Manager desktop data unavailable: {error}"),
@@ -70,6 +70,7 @@ class DesktopRefreshService:
                     selected_gateway,
                     role_id,
                     raw_memory,
+                    avatar_data,
                 ),
                 role_messages=role_messages,
             )
