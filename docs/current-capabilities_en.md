@@ -6,7 +6,7 @@ English | <a href="./current-capabilities.md">简体中文</a>
 
 # Current Capabilities and Maturity
 
-This document describes capabilities that actually exist in the RabiRoute `0.1.10` codebase. Requirements, design proposals, and external-device ideas are not presented as completed features. The conclusions come from the configuration schema, runtime entry points, Manager APIs, WebGUI, adapter implementations, and tests. On 2026-07-17, `npm test` passed all 197 tests in this repository.
+This document describes capabilities that actually exist in the current RabiRoute `0.1.x` working tree. Requirements, design proposals, and external-device ideas are not presented as completed features. The conclusions come from the configuration schema, runtime entry points, Manager APIs, WebGUI, adapter implementations, and current automated tests.
 
 ## Maturity definitions
 
@@ -42,7 +42,7 @@ RabiRoute owns ingress, rule matching, context packaging, handler delivery, repl
 | Role panel | `verified` | A built-in local Manager/tray input rather than a standalone network listener. It uses the fixed `role_panel_message` rule and writes a role-scoped timeline. |
 | Manual trigger | `verified` | Manager APIs and the log page can execute `manual_trigger` or heartbeat rules through the real delivery path. It is not a message adapter. |
 | Remote Agent | `experimental` | The Manager acts as a v3 outbound controller that discovers and connects to remote bridges with a password challenge. Tasks, events, and bidirectional files are supported. The Gateway child process exposes placeholder status and does not open another listener. |
-| RabiSpeech message endpoint | `experimental` | Resident PC microphone, local ASR, optional Route delivery, persona TTS, and one host FIFO, managed through top-level RabiPC TTS/ASR tabs. |
+| RabiSpeech message endpoint | `experimental` | RabiSpeech owns one ASR/VAD pipeline and FIFO. Audio defaults to the host sound card, or an online LAN Rabi Voice Client can act as a remote microphone/speaker without segmenting or running models. Transcripts are still broadcast to all subscribed Routes, and a disconnected remote client never silently falls back to the host microphone. |
 | FenneNote | `retired compatibility` | No longer offered by add-endpoint or new-rule UI; old Routes remain readable and keep historical webhook/Outbox migration compatibility. |
 | XiaoAI | `experimental` | RabiRoute provides a named callback and a PC bridge directory, but open-xiaoai, xiaogpt, or another bridge must carry speaker events to the PC. The speaker does not connect directly to the core. |
 | RabiLink | `experimental` | Includes a local compatibility endpoint, a global Relay Runtime, and a route worker. AIUI observations can be recorded first in one ledger; the reviewer processes them when Codex is idle, periodically, or on a touchpad wake. Proactive messages use an independent Relay downlink stream. External AIUI, phone, and wearable paths still require real-device acceptance. |
@@ -55,10 +55,12 @@ RabiRoute owns ingress, rule matching, context packaging, handler delivery, repl
 ## Routing and context
 
 - One route can define several message adapters, per-adapter input/output policies, several Agent adapters, a pipeline, a working directory, and persona binding.
-- Routing rules live in the persona's `personaConfig.json` and bind to a route by `configName`. Persona-free routes receive default rules, and the role-panel rule is always present.
+- Routing rules live at the root of persona `personaConfig.json`. Several Routes bound to the same persona reuse its rules, speech keywords, and context budgets. Persona-free routes receive default rules, and the role-panel rule is always present.
 - Current route kinds are `private`, `group_message`, `direct_at`, `direct_reply`, `indirect_reply`, `heartbeat`, `manual_trigger`, `role_panel_message`, `voice_transcript`, `rabilink`, `wearable_health_alert`, and `wecom_message`.
 - `RouteDecision` only matches rules. `forwarding.ts` iterates active route profiles, writes audit records, and delivers every matched rule.
-- `AgentPacket` includes the event, recent messages, role and relative paths, plan/memory/skill indexes, required-read items, log paths, reply API, and `replyContext`. Skill bodies are not injected into every packet automatically.
+- `AgentPacket` includes the event, recent bidirectional messages for the current persona/logical endpoint/conversation, role and relative paths, plan/memory/skill indexes, required-read items, log paths, reply API, and `replyContext`.
+- Persona `recentMessageLimits` configures 11 endpoint budgets from `0` to `200`, with a schema default of `100`; zero disables only injection. `conversation/current.jsonl` has no entry-count cap, time-based archives use `archive/<n>~<m>.jsonl`, and automatic context never reads archives.
+- Matched ordinary messages go directly to the Desktop owner through `steer/start`. Heartbeat may separately skip while busy, and speech may separately use hot/keyword delivery.
 - Delivery replay is implemented. Real delivery writes `delivery-replay-ledger.jsonl`, and attempts or stored messages can re-enter the delivery path.
 - Persona-route dry runs and `AgentPacket` previews remain planned; the current WebGUI has no side-effect-free preview API.
 

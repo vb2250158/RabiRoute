@@ -60,7 +60,7 @@ class ManagerClient:
             )
 
         try:
-            gateway_payload = self._get_json("/gateways")
+            gateway_payload = self._get_json("/gateways?summary=1")
             manager_rows = gateway_payload.get("data", {}).get("manager", [])
             gateways = manager_rows if isinstance(manager_rows, list) else []
             return ManagerSnapshot(
@@ -115,11 +115,33 @@ class ManagerClient:
 
     def role_panel_messages(self, role_id: str, limit: int = 120) -> list[dict[str, Any]]:
         try:
-            payload = self._get_json(f"/api/roles/{role_id}/role-panel/messages?limit={limit}")
-            messages = payload.get("messages", [])
-            return [item for item in messages if isinstance(item, dict)] if isinstance(messages, list) else []
-        except (OSError, URLError, TimeoutError, json.JSONDecodeError):
+            return self.role_panel_messages_snapshot(role_id, limit)
+        except (OSError, URLError, TimeoutError, json.JSONDecodeError, ValueError):
             return []
+
+    def role_panel_messages_snapshot(self, role_id: str, limit: int = 120) -> list[dict[str, Any]]:
+        encoded_role_id = quote(role_id, safe="")
+        payload = self._get_json(f"/api/roles/{encoded_role_id}/role-panel/messages?limit={limit}")
+        messages = payload.get("messages", [])
+        if not isinstance(messages, list):
+            raise ValueError("Manager role-panel response does not contain a messages list.")
+        return [item for item in messages if isinstance(item, dict)]
+
+    def role_plans(self, role_id: str) -> list[dict[str, Any]]:
+        encoded_role_id = quote(role_id, safe="")
+        payload = self._get_json(f"/api/roles/{encoded_role_id}/plans")
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise ValueError("Manager plans response does not contain a data list.")
+        return [item for item in data if isinstance(item, dict)]
+
+    def role_memory(self, role_id: str) -> dict[str, Any]:
+        encoded_role_id = quote(role_id, safe="")
+        payload = self._get_json(f"/api/roles/{encoded_role_id}/memory")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("Manager memory response does not contain a data object.")
+        return data
 
     def send_role_panel_message(
         self,

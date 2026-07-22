@@ -107,6 +107,8 @@ def request_contract(
         "prompt": {"type": ["string", "null"], "default": None},
         "response_format": {"type": "string", "enum": ["json", "text", "verbose_json", "srt", "vtt"], "default": "json"},
         "timestamp_granularities": {"type": "array", "items": {"type": "string", "enum": ["segment", "word"]}, "default": ["segment"]},
+        "session_id": {"type": ["string", "null"], "default": None},
+        "route_id": {"type": ["string", "null"], "default": None},
     }
     properties.update(overrides)
     return {
@@ -129,10 +131,53 @@ def api_index() -> dict[str, object]:
         "tts": {"method": "POST", "endpoint": "/v1/audio/speech", "content_type": "application/json"},
         "asr": {"method": "POST", "endpoint": "/v1/audio/transcriptions", "content_type": "multipart/form-data"},
         "playback_status": {"method": "GET", "endpoint": "/v1/playback/status"},
+        "playback_settings": {
+            "method": "PUT",
+            "endpoint": "/v1/playback/settings",
+            "scope": "loopback-only",
+        },
         "playback_stop": {"method": "POST", "endpoint": "/v1/playback/stop"},
+        "records": {"method": "GET", "endpoint": "/v1/records"},
+        "speaker_profiles": {
+            "method": "GET",
+            "endpoint": "/v1/speaker-profiles",
+            "scope": "loopback-only",
+        },
+        "speaker_profile_create": {
+            "method": "POST",
+            "endpoint": "/v1/speaker-profiles",
+            "scope": "loopback-only",
+        },
+        "speaker_profile_update": {
+            "method": "PATCH",
+            "endpoint": "/v1/speaker-profiles/{speaker_id}",
+            "scope": "loopback-only",
+        },
+        "speaker_profile_delete": {
+            "method": "DELETE",
+            "endpoint": "/v1/speaker-profiles/{speaker_id}",
+            "scope": "loopback-only",
+        },
+        "speaker_binding": {
+            "method": "PUT",
+            "endpoint": "/v1/speaker-bindings",
+            "scope": "loopback-only",
+        },
+        "speaker_identity": {
+            "method": "PUT",
+            "endpoint": "/v1/speaker-identities",
+            "scope": "loopback-only",
+            "description": "Idempotently find or create a speaker profile and bind one session diarization label. This is metadata, not biometric matching.",
+        },
+        "speaker_unbind": {
+            "method": "DELETE",
+            "endpoint": "/v1/speaker-bindings",
+            "scope": "loopback-only",
+        },
         "microphone_status": {"method": "GET", "endpoint": "/v1/microphone/status", "scope": "loopback-only"},
         "microphone_devices": {"method": "GET", "endpoint": "/v1/microphone/devices", "scope": "loopback-only"},
         "microphone_start": {"method": "POST", "endpoint": "/v1/microphone/start", "scope": "loopback-only"},
+        "microphone_settings": {"method": "PUT", "endpoint": "/v1/microphone/settings", "scope": "loopback-only"},
         "microphone_stop": {"method": "POST", "endpoint": "/v1/microphone/stop", "scope": "loopback-only"},
     }
 

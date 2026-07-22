@@ -17,7 +17,7 @@ Rabi's recent route also keeps live local speech capability separate from a stat
 ## Directory contents
 
 - `persona.md` defines identity, voice, boundaries, and routing behavior.
-- `personaConfig.json` contains sample message rules and the recent-message limit.
+- `personaConfig.json` contains sample message rules, recent-message limits, and may reference a same-directory persona image through `avatar`.
 - `growth.md` describes how Rabi reflects and evolves.
 - `skills.md` indexes the capabilities Rabi maintains.
 - `skills/one-plan-one-task-tracking.md` is a platform-neutral plan-tracking example.

@@ -34,10 +34,18 @@ RabiLink Relay
 - 手机后端将眼镜 PCM 送到 Rabi PC ASR，把 observation 写入消息端；下行文本由 Rabi PC TTS 合成后以 PCM 发回眼镜。
 - 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标；Rabi 播报期间暂停采集，并按收到的 PCM 长度延迟恢复，避免把下行语音重新录回上行。
 - 照片已接入消息附件上行；Relay/worker 支持视频文件附件，但真眼镜视频回调尚待接线，不代表实时视频已完成。
-- `RabiConversationService` 持有消息 cursor、文字/语音/媒体可靠队列、通知和手机/眼镜 I/O；发送目标在入队时固定，切换会话不会把排队消息改投给别人。
+- `RabiConversationService` 持有消息 cursor、通知和手机/眼镜 I/O；发送目标在入队时固定，切换会话不会把排队消息改投给别人。手机录音由独立 `RabiPhoneAudioCapture` 管理 WakeLock、卡死检测、受控重启和运行指标，文字/语音/控制/媒体均使用磁盘可靠队列。眼镜物理投递/播放回执仍待真机闭环。
 - AIUI 暂停新增功能，旧 ASR/TTS 探针只保留为历史调试入口。
 
 眼镜端构建产物仍由手机 APK 的 CXR 工作流安装，用户只需安装一个手机 APK。
+
+手机侧 24 小时录音验收可运行：
+
+```powershell
+.\scripts\Test-RabiMobileAudioSoak.ps1 -Serial <adb-serial> -DurationHours 24
+```
+
+该测试验证前台服务、最近采集时间、PCM 字节增长和自动恢复次数。当前实现是持续采集、VAD 分段、可靠补传，不直播一条完整的 24 小时原始录音；VAD 语段和 Agent TTS 按 PC RabiSpeech 的统一契约逐文件缓存 24 小时，并写入带安全相对路径和到期时间的按日 JSONL 记录。
 
 手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步周期、心率高低阈值、告警冷却和睡眠状态告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。当前小米真机主线由登录后常驻的 PC Companion 按手机配置读取 Provider；结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
 

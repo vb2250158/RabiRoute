@@ -59,8 +59,8 @@ Check in order:
 
 1. Open Codex/ChatGPT Desktop and verify that it can enter the target task.
 2. Rescan Codex in RibiWebGUI. The selector should show unarchived task names plus last activity time, not internal IDs.
-3. Check the saved `codexThreadId` and `codexCwd`. A valid ID in the same workspace is reused even after a Desktop rename, stale SQLite title, or completed goal.
-4. Only an explicitly cleared, invalid, or genuinely missing ID falls back to `codexThreadName + codexCwd` lookup. A SQLite title changing to the first prompt does not invalidate a good ID. One or more exact matches bind the unique latest `updatedAt`; only zero matches may create. An archived saved binding blocks replacement creation.
+3. Check the saved `codexThreadId` and `codexCwd`. A valid ID in the same workspace is reused even after a Desktop rename, stale SQLite title, display title longer than 240, or completed goal.
+4. Only an explicitly cleared, invalid, or genuinely missing ID falls back to `codexThreadName + codexCwd` lookup. A SQLite title changing to the first prompt does not invalidate a good ID. One or more exact matches bind the unique latest `updatedAt`; only zero matches may create. An archived saved binding blocks replacement creation. A genuinely new task name longer than 240 is safely truncated and the actual name is persisted.
 5. Inspect packet/status and Manager logs for route miss, Desktop IPC readiness, owner loading, and ID/workspace errors.
 6. `no-client-found` causes a `codex://threads/<id>` open and a short retry; failure never switches to a background Runtime.
 

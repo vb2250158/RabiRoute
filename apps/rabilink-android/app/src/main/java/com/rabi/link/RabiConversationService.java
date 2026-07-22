@@ -7,12 +7,9 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
-import android.media.AudioRecord;
 import android.media.AudioTrack;
-import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.IBinder;
 import android.provider.OpenableColumns;
@@ -31,6 +28,9 @@ import com.rabi.link.modules.rokid.RabiGlassPcBackend;
 import com.rabi.link.modules.rokid.RabiPcmSegmenter;
 import com.rabi.link.modules.rokid.RokidCxrController;
 import com.rabi.link.modules.rokid.RokidNativeVoiceBridge;
+import com.rabi.link.modules.conversation.RabiPhoneAudioCapture;
+import com.rabi.link.modules.conversation.RabiBoundedAudioCache;
+import com.rabi.link.modules.conversation.RabiMobileSpeechArchive;
 
 /** Foreground phone client. Glasses are optional; this service works with the phone alone. */
 public final class RabiConversationService extends Service {
@@ -50,15 +50,15 @@ public final class RabiConversationService extends Service {
     private static final String EXTRA_ROUTE_PROFILE_ID = "route_profile_id";
     private static final String EXTRA_CLIENT_MESSAGE_ID = "client_message_id";
 
-    private volatile boolean running;
-    private volatile boolean playing;
-    private Thread captureThread;
-    private AudioRecord recorder;
+    private RabiPhoneAudioCapture phoneAudioCapture;
+    private RabiMobileSpeechArchive speechArchive;
     private RabiGlassPcBackend backend;
     private RabiPcmSegmenter segmenter;
     private RabiChatStore chatStore;
     private RokidCxrController glassController;
     private RokidNativeVoiceBridge glassBridge;
+    private boolean shutdownComplete;
+    private InputMode inputMode = InputMode.PAUSED;
     private final android.os.Handler notificationHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable reviewNotificationRefresh = new Runnable() {
         @Override public void run() {
@@ -66,6 +66,12 @@ public final class RabiConversationService extends Service {
             notificationHandler.postDelayed(this, REVIEW_NOTIFICATION_REFRESH_MS);
         }
     };
+
+    private enum InputMode {
+        PAUSED,
+        PHONE,
+        GLASSES
+    }
 
     public static void start(Context context) {
         Intent intent = new Intent(context, RabiConversationService.class).setAction(ACTION_START);
@@ -131,6 +137,16 @@ public final class RabiConversationService extends Service {
             RabiGlassPcBackend target = backend;
             if (target != null) target.submitPcm(pcm);
         });
+        phoneAudioCapture = new RabiPhoneAudioCapture(this, new RabiPhoneAudioCapture.Listener() {
+            @Override public void onPcm(byte[] pcm) { segmenter.accept(pcm); }
+            @Override public void onPlaybackSuppressed() { segmenter.reset(); }
+            @Override public void onStatus(String status) { updateStatus(status); }
+            @Override public void onDiagnostic(String event, String level, String state) {
+                RabiGlassPcBackend target = backend;
+                if (target != null) target.queueDiagnostic(event, level, state);
+            }
+        });
+        speechArchive = RabiMobileSpeechArchive.tryCreate(this);
         backend = new RabiGlassPcBackend(this, new RabiGlassPcBackend.Listener() {
             @Override public void onStatus(String status) { updateStatus(status); if (glassBridge != null) glassBridge.sendGlassAudioStatus(status); }
             @Override public void onTranscript(String text, String routeProfileId) { chatStore.append(null, "user", "voice", text, "", "audio/pcm", routeProfileId); updateRuntime("transcript", text); if (glassBridge != null) glassBridge.sendGlassTranscript(text); updateStatus("识别 · " + shortText(text)); }
@@ -139,7 +155,7 @@ public final class RabiConversationService extends Service {
                 updateRuntime("delivery", state + (failure == null || failure.trim().isEmpty() ? "" : " · " + friendlyError(failure)));
             }
             @Override public boolean onReply(String messageId, String routeProfileId, String text, byte[] pcm, org.json.JSONArray attachments) {
-                String ttsPath = persistTtsMessage(messageId, pcm);
+                String ttsPath = persistTtsMessage(text, routeProfileId, pcm);
                 if ((text != null && !text.trim().isEmpty()) || (pcm != null && pcm.length > 0)) {
                     chatStore.append(messageId, "assistant", pcm != null && pcm.length > 0 ? "tts" : "text", text,
                             pcm != null && pcm.length > 0 ? "Agent-TTS.wav" : "", pcm != null && pcm.length > 0 ? "audio/wav" : "text/plain", routeProfileId, ttsPath);
@@ -163,14 +179,14 @@ public final class RabiConversationService extends Service {
                 return true;
             }
             @Override public void onError(String message) { updateStatus("错误 · " + friendlyError(message)); if (backend != null) backend.queueDiagnostic("conversation.error", "error", "conversation backend error"); }
-        });
+        }, speechArchive);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_STOP.equals(action)) {
-            shutdown();
+            shutdown(true);
             return START_NOT_STICKY;
         }
         if (ACTION_RESTORE.equals(action)) {
@@ -232,19 +248,39 @@ public final class RabiConversationService extends Service {
             return;
         }
         segmenter.configure(settings.vadThreshold, settings.silenceMs);
-        promote("Rabi 移动端持续服务", true);
-        if (settings.glassesEnabled) {
-            backend.start();
-            startGlassesBackend();
-            return;
-        }
+        promote(settings.continuousListening ? "Rabi 移动端持续服务" : "Rabi 移动端消息连接", settings.continuousListening);
         backend.start();
-        backend.queueDiagnostic("conversation.started", "info", settings.glassesEnabled ? "glasses" : "phone");
+        applyInputMode(settings);
+    }
+
+    private void applyInputMode(RabiConversationSettings settings) {
         if (!settings.continuousListening) {
+            pauseAllCaptureModes();
             updateStatus("持续聆听已暂停");
             return;
         }
+        if (settings.glassesEnabled) {
+            phoneAudioCapture.pause();
+            startGlassesBackend();
+            setInputMode(InputMode.GLASSES);
+            return;
+        }
+        stopGlassesBackend();
         startPhoneCapture();
+        setInputMode(InputMode.PHONE);
+    }
+
+    private void pauseAllCaptureModes() {
+        phoneAudioCapture.pause();
+        stopGlassesBackend();
+        segmenter.reset();
+        setInputMode(InputMode.PAUSED);
+    }
+
+    private void setInputMode(InputMode next) {
+        if (inputMode == next) return;
+        inputMode = next;
+        backend.queueDiagnostic("conversation.input_mode", "info", next.name().toLowerCase(java.util.Locale.ROOT));
     }
 
     private void promote(String text, boolean conversation) {
@@ -269,8 +305,8 @@ public final class RabiConversationService extends Service {
             @Override public void onNativeCommandAck(String kind, String text, String channel, String clientId) { }
             @Override public void onNativeStatus(String text, String channel, String clientId) { updateStatus("眼镜 · " + shortText(text)); }
             @Override public void onNativeVoiceError(String kind, String text, String channel, String clientId) { backend.queueDiagnostic("glasses." + kind, "error", "glasses bridge error"); }
-            @Override public void onGlassAudioCaptureComplete(byte[] pcm) { backend.submitPcm(pcm); }
-            @Override public void onGlassReviewRequested() { backend.requestConversationReview(); }
+            @Override public void onGlassAudioCaptureComplete(byte[] pcm) { backend.submitPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_GLASSES); }
+            @Override public void onGlassReviewRequested() { backend.requestConversationReview(RabiGlassPcBackend.SOURCE_GLASSES); }
         }, values.getString("native_voice_access_key", ""), values.getString("native_voice_secret_key", ""));
         glassBridge.start();
         glassController = new RokidCxrController(this, new RokidCxrController.Listener() {
@@ -278,7 +314,7 @@ public final class RabiConversationService extends Service {
             @Override public void onCxrConnectionChanged(boolean connected) { updateStatus(connected ? "眼镜 CXR 已连接" : "等待眼镜 CXR 连接"); }
             @Override public void onGlassBtConnectionChanged(boolean connected) { updateStatus(connected ? "眼镜蓝牙已连接 · 持续聆听" : "等待眼镜蓝牙连接"); }
             @Override public void onGlassDeviceInfo(com.rokid.cxr.link.utils.GlassInfo info) { if (info != null && glassBridge != null) glassBridge.sendGlassDeviceState(info.batteryLevel, info.ischarging); }
-            @Override public void onPhoto(byte[] data) { if (data != null && data.length > 0) backend.submitMedia(data, "image/jpeg", "rabi-glass-photo-" + System.currentTimeMillis() + ".jpg", "眼镜拍摄的照片"); }
+            @Override public void onPhoto(byte[] data) { if (data != null && data.length > 0) backend.submitMediaFromSource(data, "image/jpeg", "rabi-glass-photo-" + System.currentTimeMillis() + ".jpg", "眼镜拍摄的照片", RabiGlassPcBackend.SOURCE_GLASSES); }
             @Override public void onGlassAppResult(String status, String summary, String error) { updateStatus("眼镜 App · " + shortText(status + " " + summary)); }
             @Override public void onNativeVoiceProtocol(String payload, String channel, String clientId) { if (glassBridge != null) glassBridge.handleIncomingProtocol(channel, payload, clientId); }
             @Override public void onAudioPcm(byte[] data, int offset, int length) { if (glassBridge != null) glassBridge.feedPhoneAsrAudio(data, offset, length); }
@@ -288,6 +324,17 @@ public final class RabiConversationService extends Service {
             if (glassController != null) { glassController.startGlassAsrApp(); glassController.getGlassDeviceInfo(); }
         }, 1500);
         updateStatus("眼镜后台正在连接");
+    }
+
+    private void stopGlassesBackend() {
+        if (glassController != null) {
+            glassController.disconnect();
+            glassController = null;
+        }
+        if (glassBridge != null) {
+            glassBridge.stop();
+            glassBridge = null;
+        }
     }
 
     private boolean configureBackend() {
@@ -335,47 +382,12 @@ public final class RabiConversationService extends Service {
     }
 
     private void startPhoneCapture() {
-        if (running) return;
-        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            updateStatus("需要麦克风权限");
-            return;
-        }
-        int minimum = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(minimum * 2, 8192));
-        if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-            updateStatus("手机麦克风初始化失败");
-            recorder.release();
-            recorder = null;
-            return;
-        }
-        running = true;
-        recorder.startRecording();
-        captureThread = new Thread(this::captureLoop, "rabi-phone-continuous-audio");
-        captureThread.start();
-        updateStatus("手机持续聆听中 · 点通知可返回");
-    }
-
-    private void captureLoop() {
-        byte[] buffer = new byte[3200];
-        while (running) {
-            AudioRecord source = recorder;
-            if (source == null) break;
-            int read = source.read(buffer, 0, buffer.length);
-            if (read <= 0) continue;
-            if (playing) {
-                segmenter.reset();
-                continue;
-            }
-            byte[] chunk = new byte[read];
-            System.arraycopy(buffer, 0, chunk, 0, read);
-            segmenter.accept(chunk);
-        }
+        phoneAudioCapture.start();
     }
 
     private void playOnPhone(byte[] pcm) {
         if (pcm == null || pcm.length == 0) return;
-        playing = true;
+        phoneAudioCapture.setPlaybackSuppressed(true);
         segmenter.flush();
         int minimum = AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
         AudioTrack track = new AudioTrack.Builder()
@@ -395,22 +407,18 @@ public final class RabiConversationService extends Service {
         } finally {
             try { track.stop(); } catch (Throwable ignored) { }
             track.release();
-            playing = false;
+            phoneAudioCapture.setPlaybackSuppressed(false);
             segmenter.reset();
         }
     }
 
-    private String persistTtsMessage(String messageId, byte[] pcm) {
-        if (pcm == null || pcm.length == 0) return "";
+    private String persistTtsMessage(String text, String routeProfileId, byte[] pcm) {
+        if (pcm == null || pcm.length == 0 || speechArchive == null) return "";
         try {
-            File directory = new File(getFilesDir(), "rabi-conversation/incoming/tts"); directory.mkdirs();
-            File target = new File(directory, Integer.toHexString((messageId == null ? "tts" : messageId).hashCode()) + ".wav");
-            ByteBuffer header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
-            header.put(new byte[]{'R','I','F','F'}).putInt(36 + pcm.length).put(new byte[]{'W','A','V','E','f','m','t',' '})
-                    .putInt(16).putShort((short)1).putShort((short)1).putInt(16000).putInt(32000)
-                    .putShort((short)2).putShort((short)16).put(new byte[]{'d','a','t','a'}).putInt(pcm.length);
-            try (FileOutputStream output = new FileOutputStream(target)) { output.write(header.array()); output.write(pcm); }
-            return target.getAbsolutePath();
+            RabiConversationSettings settings = RabiConversationSettings.load(this);
+            RabiBoundedAudioCache.Entry retained = speechArchive.retainTts(
+                    pcm, text, "rabi-phone", routeProfileId, settings.ttsModel, settings.ttsVoice);
+            return retained.file.getAbsolutePath();
         } catch (Throwable ignored) { return ""; }
     }
 
@@ -503,25 +511,23 @@ public final class RabiConversationService extends Service {
         }
     }
 
-    private void shutdown() {
-        running = false;
+    private void shutdown(boolean explicitStop) {
+        if (shutdownComplete) return;
+        shutdownComplete = true;
         notificationHandler.removeCallbacks(reviewNotificationRefresh);
         segmenter.flush();
-        AudioRecord source = recorder;
-        recorder = null;
-        if (source != null) {
-            try { source.stop(); } catch (Throwable ignored) { }
-            source.release();
+        if (phoneAudioCapture != null) {
+            phoneAudioCapture.close(explicitStop);
         }
         if (backend != null) backend.stop();
-        if (glassController != null) { glassController.disconnect(); glassController = null; }
-        if (glassBridge != null) { glassBridge.stop(); glassBridge = null; }
+        stopGlassesBackend();
+        inputMode = InputMode.PAUSED;
         stopForeground(STOP_FOREGROUND_REMOVE);
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.cancel(REVIEW_NOTIFICATION_ID);
-        stopSelf();
+        if (explicitStop) stopSelf();
     }
 
-    @Override public void onDestroy() { shutdown(); super.onDestroy(); }
+    @Override public void onDestroy() { shutdown(false); super.onDestroy(); }
     @Override public IBinder onBind(Intent intent) { return null; }
 }

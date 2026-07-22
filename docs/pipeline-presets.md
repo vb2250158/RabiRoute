@@ -94,6 +94,6 @@ POST /api/agent/replies
 
 来自 `speech` 消息端的 `voice_transcript` 会在 `AgentPacket` 中强制解析成 `voice_chat`，即使 Route 的通用 preset 仍是 QQ 或 Agent session。回复上下文包含 `characterTtsDialogue=true`；Agent 必须把与屏幕文本同义的语音短句 POST 到 `/api/agent/replies`，不能只在 Codex 线程里显示文字。
 
-Outbox 会重新验证来源记录与 `messageAdapterPolicies.speech`，从 Route 读取 `speechTtsModel`、`speechVoice`、`speechLanguage`、`speechInstructions`、`speechSpeed`、`speechAutoPlay` 和人格 ID，并把原始 `sessionId` 传给本机 `POST /v1/audio/speech`。`speechAutoPlay=true` 表示生成结果进入主机级 FIFO；接口成功只代表请求或队列已受理，不代表扬声器已经播放完毕。
+Outbox 会重新验证来源记录与 `messageAdapterPolicies.speech`，把 Route 的人格 ID、播放策略与原始 `sessionId` 传给本机 `POST /v1/audio/speech`。RabiSpeech 从 `data/roles/<RoleId>/voice/voice-profile.json` 读取 TTS 模型、声线、语言、语速和表达指令；旧 Route TTS 字段只在缺少人格配置时作为兼容回退。`speechAutoPlay=true` 表示生成结果进入主机级 FIFO；接口成功只代表请求或队列已受理，不代表扬声器已经播放完毕。
 
 FenneNote/OumuQ 输出字段和 `/api/fennenote/*` 仅供旧运行配置迁移，不是新语音 Route 的实现入口，也不得重新引入云端 TTS。

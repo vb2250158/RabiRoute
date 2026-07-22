@@ -31,7 +31,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 - [Routing configuration](routing-configuration_en.md) — **Current guide** for `personaConfig.json`, route kinds, regex, pipelines, and template variables.
 - [Routing and personas](routing-and-personas_en.md) — **Current guide** for route/role boundaries and persona decision templates.
-- [Agent context injection](agent-context-injection_en.md) — **Current guide** for events, recent messages, role knowledge, paths, and reply context inside `AgentPacket`.
+- [Agent context injection](agent-context-injection_en.md) — **Current guide** for the persona-scoped bidirectional ledger, per-endpoint/conversation recent-message budgets, archival boundaries, role knowledge, paths, and reply context inside `AgentPacket`.
 - [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current guide** for replies, thread bridge, plans, memory, Remote Agent, and role skills.
 - [Plans and memory](plan-and-memory-model_en.md) — **Current guide** for Role Knowledge sources, recall, explicit consolidation, and side effects.
 - [Pipeline presets](pipeline-presets_en.md) — Agent-session defaults, explicit external targets, and Outbox statuses; FenneNote output is archival compatibility only.
@@ -52,8 +52,9 @@ This directory contains current guides, experimental integrations, designs, rese
 
 - [WeCom integration](wecom-integration_en.md)
 - [Voice interaction workstation](voice-interaction-workstation_en.md) — historical wiring; FenneNote/OumuQ are retired in favor of RabiPC + RabiSpeech.
-- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, model/parameter discovery, persona voices, RabiPC, and RabiLink relay.
+- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, hot/persona-keyword delivery, persona voice and language, bidirectional ASR/TTS records, the shared speaker registry, RabiPC, and RabiLink relay.
 - [Call TTS and ASR remotely](user-guide/speech-api_en.md) — application token, target PC, copyable commands, acceptance, and error recovery.
+- [Rabi Voice Client](../desktop/rabi-voice-client/README_en.md) — use a meeting-room Windows PC as a LAN microphone and speaker while segmentation and models stay on the RabiSpeech host.
 - [Local speech model downloads](local-speech-model-downloads_en.md) — per-model sources, downloads, isolated environments, and validation.
 - [RabiSpeech performance report](rabispeech-performance-report_en.md) — six TTS and five main ASR models, cold/warm timing, quality indicators, hardware, and CUDA issues.
 - [RabiLink Relay](rabilink-relay-server_en.md)
@@ -73,7 +74,7 @@ This directory contains current guides, experimental integrations, designs, rese
 ## Designs and history
 
 - [Proactive-intelligence system design overview](../%E4%B8%BB%E5%8A%A8%E6%99%BA%E8%83%BD%E8%AE%BE%E8%AE%A1%E6%80%9D%E8%B7%AF_en.md) — **Planned**. Long-term vision for continuous sensing, intent hypotheses, proactive action, memory, and device responsibilities; use Current Capabilities for the implemented scope.
-- [Persona route workbench plan](persona-route-workbench-plan_en.md) — **Planned**. Side-effect-free RouteDecision/AgentPacket preview is not implemented.
+- [Persona route workbench plan](persona-route-workbench-plan_en.md) — **Partially implemented**. Speech-keyword and per-endpoint context controls are live; side-effect-free RouteDecision/AgentPacket preview is not implemented.
 - [Windows tray task-window plan](rabiroute-windows-tray-task-window-plan_en.md) — design record; use `desktop/tray-task-window/` and the packaging guide for the actual implementation.
 - [UE/UX audit and refactor](rabiroute-ue-ux-audit-and-refactor_en.md) — phase audit.
 - [Historical mobile-app Webhook plan](mobile-app-webhook-integration_en.md) — **Historical**. The current RabiLink path no longer requires a phone bridge as the main relay.

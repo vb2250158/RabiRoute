@@ -32,10 +32,18 @@ RabiLink Relay
 - The phone sends glasses PCM to Rabi PC ASR, publishes the observation, requests PC TTS for downlink, and streams PCM back to glasses.
 - The glasses HUD now shows explicit Connect / Listen / Upload / Speak / Paused / Error states. During Rabi playback, capture pauses and resumes after a PCM-length-based delay so downlink speech is not recorded back into uplink audio.
 - Photos are wired as message attachments. Relay/worker accept video-file attachments, but the physical glasses video callback is not yet wired and live video is not complete.
-- `RabiConversationService` owns the message cursor, durable text/speech/media queues, notifications, and phone/glasses I/O. A target is frozen when work is queued, so later navigation cannot retarget it.
+- `RabiConversationService` owns the message cursor, notifications, and phone/glasses I/O. A target is frozen when work is queued, so later navigation cannot retarget it. A dedicated `RabiPhoneAudioCapture` owns the wake lock, stall detection, bounded restart, and health metrics, while text, speech, control, and media use disk-backed durable queues. Physical glasses delivered/played receipts still require real-device closure.
 - AIUI feature work is paused; old speech probes remain historical diagnostics only.
 
 The embedded glasses APK is installed by the phone CXR workflow, so the user still installs only one phone APK.
+
+Run the phone-side 24-hour audio acceptance with:
+
+```powershell
+.\scripts\Test-RabiMobileAudioSoak.ps1 -Serial <adb-serial> -DurationHours 24
+```
+
+The test checks foreground-service residency, latest capture time, PCM-byte growth, and automatic recovery count. The implementation continuously captures, segments with VAD, and replays durable queue items; it does not broadcast one raw 24-hour recording. VAD segments and Agent TTS follow the PC RabiSpeech contract: per-file 24-hour caching plus daily JSONL metadata with safe relative paths and expiration times.
 
 The phone home screen also exposes Wearable Health settings with a Health Connect or “Xiaomi Health (PC ADB Companion)” source selector, stable device identity, sync/lookback periods, thresholds, cooldown, and sleep-state alerts. An obtained Xiaomi authentication key is AES-GCM encrypted through Android Keystore and remains phone-local. The current Xiaomi real-device path is a logon-resident PC Companion driven by phone-owned settings; it normalizes Provider heart rate, sleep reports/stages, and current sleep state into Relay or trusted local Manager observations. Structured samples enter the RabiRoute health timeline instead of the conversation ledger. See [`../../docs/rabilink-wearable-health_en.md`](../../docs/rabilink-wearable-health_en.md).
 

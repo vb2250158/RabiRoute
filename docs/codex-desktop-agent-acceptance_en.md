@@ -67,6 +67,18 @@ Creating a task and delivering its first prompt are separate operations. A short
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
 - For same-name tasks in one workspace, sort by parseable `updatedAt` and bind the unique maximum; never use database return order. Require selection only when the maximum time is tied or all candidate times are unusable.
 - “Task created, initial delivery failed” is a recoverable delivery state, not a missing task.
+- Delivery state is explicit: internal transitional `accepted` means only that RabiRoute entered the Desktop path; `delivered` is set only after the target Desktop owner's `start/steer` succeeds; resolver, owner-loading, or IPC failures are `failed`. Route acceptance must never impersonate Desktop receipt.
+- A matched ordinary endpoint event is delivered directly: first attempt `steer` against the active turn, then `start` only when that turn is inactive or absent. Heartbeat may use its dedicated busy-skip exception, while speech may use its dedicated hot/keyword exception.
+
+### Public HTTP terminal state for speech
+
+`POST /api/speech/messages` does not expose a queue-only `202 accepted` result. Manager waits within the HTTP request for the gateway child process to confirm the Desktop-owner terminal state, while still not waiting for the Agent answer:
+
+- `200 / delivered`: the Desktop owner accepted `start` or `steer`.
+- `200 / recorded`: speech keyword mode did not match; the transcript was recorded without waking the Agent.
+- `4xx/5xx`: Route validation, owner loading, IPC, or delivery-timeout failure.
+
+This contract proves that the target owner received the message. It does not prove that the Agent has answered, Outbox has returned a reply, or TTS has finished playback.
 
 ## Automatic initialization transaction
 

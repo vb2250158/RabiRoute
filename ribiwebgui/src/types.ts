@@ -10,6 +10,7 @@ import type {
   NotificationRuleDefinition,
   PipelineDefinition
 } from "@shared/gatewayConfigModel";
+import type { PersonaAvatarPresentation } from "@shared/personaAvatarContract";
 
 export type {
   AgentAdapterType,
@@ -92,7 +93,7 @@ export type MessageAdapterScanResult = {
   warnings?: string[];
 };
 
-export type RoleOption = {
+export type RoleOption = PersonaAvatarPresentation & {
   label: string;
   value: string;
   rolePath?: string;

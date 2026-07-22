@@ -31,7 +31,7 @@ Handlers solve the task. RabiRoute decides **where it goes, which portable conte
 
 - 🔌 **Bring many signals into one routing layer.** Verified inputs include NapCat / OneBot, heartbeat, and the built-in role panel; other platforms and devices can use dedicated or experimental adapters.
 - 🧭 **Route by policy, not hard-wired integrations.** Route profiles, personas, notification rules, schedules, keywords, regexes, and reply context decide which handler receives each event.
-- 🧳 **Send context that can travel.** `AgentPacket` carries the event, persona, recent messages, plans, memory references, attachments, interface hints, and reply context.
+- 🧳 **Send context that can travel.** A persona-scoped bidirectional conversation ledger records inbound and outbound messages; `AgentPacket` injects only the configured recent slice for the current persona, logical endpoint, and conversation.
 - 🖥️ **Operate from a local control plane.** The Node.js Manager and RibiWebGUI manage routes, adapters, personas, runtime status, logs, diagnostics, and process lifecycle.
 - 🛡️ **Keep outbound actions explicit.** Replies pass through route-specific Outbox policy instead of bypassing the gateway, with observable `sent`, `draft`, `blocked`, or `failed` results.
 - 🔍 **Keep evidence you can inspect and replay.** JSONL records cover inbound events, packets, deliveries, heartbeats, adapter activity, replies, and delivery replay.
@@ -102,10 +102,10 @@ Each route keeps ingress, policy, portable context, handler delivery, and outbou
 | --- | --- |
 | Message inputs | Verified: NapCat / OneBot, Heartbeat, and the built-in role panel. Experimental: Remote Agent, the RabiSpeech message endpoint, XiaoAI, RabiLink, generic Webhook, and WeCom. FenneNote is retired and remains readable only for legacy configuration compatibility. Manual trigger is a Manager action, not an adapter. |
 | Routing | Route profiles, persona-owned rules, direct `@`, reply chains, private messages, keywords, regexes, schedules, and per-route templates |
-| Context | Recent messages, persona files, plans, memory references, source reply context, attachment evidence, and handler interface hints |
+| Context | Persona-scoped bidirectional conversation ledgers, separate `0–200` auto-injection limits for 11 logical endpoints (default `100`), persona files, plans, memory references, reply context, and safe attachment metadata |
 | Handlers | Verified: Codex. Experimental: Copilot CLI and AstrBot. Manual handoff: Marvis. |
 | Control plane | Node.js Manager and RibiWebGUI for route lifecycle, configuration, status, logs, personas, and diagnostics |
-| Local speech | Experimental local-only RabiSpeech TTS/ASR API, live per-PC capability view, RabiLink transport proxy, and reproducible model benchmark report |
+| Local speech | Experimental RabiSpeech TTS/ASR. Audio defaults to the host microphone and speaker, or can use an online standalone Rabi Voice Client on the LAN as a remote network sound card. VAD, segmentation, ASR, Route broadcast, persona TTS, and the host FIFO remain on the RabiSpeech host. |
 | Safety | Outbox policy, source binding, adapter policy, NapCat file allowlists, and fail-closed Codex Runtime approval; a universal approval center is not implemented |
 | Observability | JSONL message history, adapter logs, handler packets, delivery records, heartbeat records, reply records, and delivery replay |
 
@@ -155,7 +155,9 @@ data/roles/<RoleId>/personaConfig.json
 
 - `adapterConfig.json` defines inputs, handler adapters, working directories, pipeline presets, and persona binding.
 - `persona.md` contains the persona or handler-facing role guidance.
-- `personaConfig.json` contains notification rules, message templates, schedules, and recent-message limits.
+- `personaConfig.json` contains the optional persona avatar filename, notification rules, message templates, persona speech-trigger keywords, and separate recent bidirectional-message limits for all 11 logical endpoints. RibiWebGUI can upload a PNG, JPEG, WebP, or GIF avatar (up to 5 MB) into the persona directory.
+
+Complete runtime conversation evidence lives under `data/roles/<RoleId>/conversation/`. `current.jsonl` has no entry-count cap. When an archive check finds a record older than 72 hours, the complete contiguous prefix older than 24 hours moves to `archive/<n>~<m>.jsonl`; automatic context reads only `current.jsonl`.
 
 Buildable clients live in [apps](apps/), while shared client-side contracts live in [packages](packages/). Copyable public examples live in [examples/data](examples/data/). Reusable project skills, including persona creation and safe update workflows, live in [skills](skills/).
 
@@ -182,6 +184,7 @@ The status-aware documentation index is in [docs/README_en.md](docs/README_en.md
 | Inspect the code ownership map | [Project function map](docs/project-function-map_en.md) |
 | Run or extend local TTS / ASR | [RabiSpeech local TTS / ASR service](docs/rabispeech-plugin_en.md) |
 | Call TTS / ASR on the target PC from another device | [Remote TTS / ASR](docs/user-guide/speech-api_en.md) |
+| Install a meeting-room remote microphone / speaker | [Rabi Voice Client](desktop/rabi-voice-client/README_en.md) |
 
 ## Development and contribution
 

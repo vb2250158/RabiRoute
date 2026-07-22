@@ -122,6 +122,31 @@ failed  a real delivery attempt failed
 
 There is no generic persistent approval center or automatic retry queue. Callers must inspect the returned status.
 
+### Agent speaker labeling
+
+When meeting ASR has produced diarization labels such as `Speaker 1` and `Speaker 2`, and the Agent has confirmed a person's identity from the conversation, it can atomically create or reuse a person profile and bind the current recording label. `recordId` must come from that persisted speech record; a temporary provider label must never be bound only by the long-lived `sessionId`:
+
+```http
+PUT /api/speech/speaker-identities
+Content-Type: application/json
+```
+
+```json
+{
+  "sessionId": "meeting-one",
+  "recordId": "speech-0123456789abcdef",
+  "speakerLabel": "Speaker 1",
+  "displayName": "Qiu Yu",
+  "aliases": ["秋雨"]
+}
+```
+
+Supply `speakerId` when a stable profile ID is already known. Otherwise the endpoint performs a case-insensitive display-name and alias lookup, reuses the unique match and merges aliases, creates a profile when there is no match, and returns `409` when several profiles match so the caller can retry with an explicit ID. Lookup or creation, alias merging, and the `recordId + speakerLabel` binding are persisted as one host-local registry transaction; repeated requests are idempotent.
+
+The human entry remains under **Speech Service → ASR → Speaker / voiceprint settings** and shares `output/speaker-profiles.json` with the Agent API. The page separates unknown and known speakers into collapsible cards and previews the latest ten utterances for each diarization cluster to support human confirmation and correction.
+
+This endpoint writes person metadata and an explicit session binding. It is not automatic biometric voiceprint recognition. Capability discovery still reports `voiceprint.supported=false`; an Agent must not treat `Speaker 1` as a stable cross-session identity or claim that a person was recognized biometrically.
+
 ### NapCat source reply
 
 Set `replyToSource: true` with the source `messageId` to add a OneBot reply segment for group messages. RabiRoute avoids adding a duplicate reply segment.
@@ -163,8 +188,8 @@ POST actions:
 
 - `list`: list matching threads, optionally restricted by a configured cwd.
 - `read`: read a thread by `threadId`.
-- `resolve`: reuse a valid saved ID when its workspace matches and the task is unarchived; mutable Desktop/SQLite title metadata is not identity. An archived saved binding returns `409 archived` and never creates a replacement. Only when the ID is empty, invalid, or genuinely missing, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied maximum returns candidates for selection.
-- `create`: bootstrap an empty task in a configured workspace, then deliver any initial prompt to that task's Desktop owner through Desktop IPC.
+- `resolve`: reuse a valid saved ID when its workspace matches and the task is unarchived; mutable Desktop/SQLite title metadata is not identity, and an overlong display title cannot invalidate that binding. An archived saved binding returns `409 archived` and never creates a replacement. Only when the ID is empty, invalid, or genuinely missing, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied maximum returns candidates for selection.
+- `create`: bootstrap an empty task in a configured workspace, then deliver any initial prompt to that task's Desktop owner through Desktop IPC. Codex task names are limited to 240 JavaScript code units; RabiRoute safely truncates longer inputs with an ellipsis and returns the actual created name for persistence.
 - `send`: ask the existing Desktop task owner to start or steer the real turn through Desktop IPC.
 
 ```json
@@ -177,7 +202,7 @@ POST actions:
 }
 ```
 
-Callers must not edit UUIDs manually. Selecting a different task supplies its ID; typing a new name must explicitly clear the previous ID before `resolve` performs name lookup or creation.
+Callers must not edit UUIDs manually. Selecting a different task supplies its ID; typing a new name must explicitly clear the previous ID before `resolve` performs name lookup or creation. A valid ID plus workspace remains authoritative even when display metadata is longer than the creation limit.
 
 ```json
 {

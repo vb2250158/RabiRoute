@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BaseMessage, WsFrame } from "@wecom/aibot-node-sdk";
 import { config } from "../config.js";
-import { forwardMessage } from "../forwarding.js";
+import { forwardMessage, recordMessageContextOnly } from "../forwarding.js";
 import { appendAdapterLog, appendWeComMessage, type WeComMessageRecord } from "../history.js";
+import type { ForwardTemplateValues } from "../routing/types.js";
 import {
   createWeComClient,
   normalizeWeComError,
@@ -115,6 +116,29 @@ function shouldRoute(record: WeComMessageRecord): boolean {
   return ["text", "mixed", "voice", "image", "file"].includes(record.messageType || "");
 }
 
+export type WeComRecordDisposition = "forwarded" | "record_only";
+
+/**
+ * Keeps endpoint recording independent from Agent delivery. Self echoes and
+ * unsupported message kinds remain conversation evidence without waking an
+ * Agent; ordinary user messages continue through the normal forwarding path.
+ */
+export function dispatchWeComRecord(
+  record: WeComMessageRecord,
+  values: ForwardTemplateValues,
+  handlers: {
+    forward?: typeof forwardMessage;
+    recordOnly?: typeof recordMessageContextOnly;
+  } = {}
+): WeComRecordDisposition {
+  if (!shouldRoute(record)) {
+    (handlers.recordOnly ?? recordMessageContextOnly)("wecom_message", record);
+    return "record_only";
+  }
+  (handlers.forward ?? forwardMessage)("wecom_message", record, values);
+  return "forwarded";
+}
+
 export function createWeComAdapter(): MessageAdapter {
   return {
     type: "wecom",
@@ -191,8 +215,7 @@ export function createWeComAdapter(): MessageAdapter {
           messageCount: Number(current?.messageCount ?? 0) + 1,
           connected: client.isConnected
         });
-        if (!shouldRoute(record)) return;
-        forwardMessage("wecom_message", record, {
+        dispatchWeComRecord(record, {
           wecomReqId: record.reqId,
           wecomConversationId: record.conversationId,
           wecomChatId: record.chatId,

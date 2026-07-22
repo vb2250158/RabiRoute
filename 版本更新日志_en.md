@@ -6,6 +6,60 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.20 - 2026-07-21
+
+### Rabi Glass phone-companion reliability closeout
+
+- The Android phone sample is now `0.2.1` (`versionCode 3`). The phone still owns the single durable conversation and `rabi-phone` cursor, while glasses microphone audio, photos, and touchpad review requests now freeze their real `glasses` source into the offline queue. Agents, the unified ledger, and cloud logs no longer misreport glasses actions as phone input.
+- Glasses PCM delivery now has a real channel gate: it is acknowledged only when the phone SDK is initialized, device authentication succeeds, and both the Classic BT message and audio channels are online. Otherwise it uses the existing three-failure and deferred-retry path without advancing the downstream cursor early.
+- Continuous conversation now has one input-mode state, `PAUSED / PHONE / GLASSES`. A mode transition releases the non-target capture path first so the phone and glasses microphones cannot keep uploading concurrently. Phone capture also separates reusable mode-switch pause from service destruction, with a generation guard preventing stale delayed-restart tasks from stopping a newer capture session.
+- The phone and glasses projects now share `RabiGlassAudioProtocol` for client ID, audio stream tag, control commands, and message prefixes. The mobile audit rejects reintroducing duplicated protocol literals on either packaged side.
+- `npm run check:rabilink:mobile`, the Relay media regression, and both `:app:assembleDebug` / `:glass-asr:assembleDebug` APK builds pass. Rokid touchpad, continuous capture, CXR reconnection, speaker output, and long-run stability still require physical-device acceptance.
+
+### Persona avatars across management surfaces
+
+- Persona `personaConfig.json` now accepts an optional `avatar` filename. The RibiWebGUI persona page can upload or remove PNG, JPEG, WebP, and GIF images up to 5 MB. Manager uses content-addressed files and an atomic configuration switch, retains the old avatar when replacement fails, and fails closed on malformed configuration. It serves images through `/api/roles/:roleId/avatar`, accepts only simple filenames inside the persona directory, and rejects path traversal.
+- Avatars now appear in persona binding, Quick Setup, the Route overview, speech persona selection, the local Qt role-panel header, and Agent message bubbles. Missing or failed images consistently fall back to the first character of the persona ID without changing Route, Agent-adapter, or runtime persona semantics.
+
+### Awaiting-QA state for Qt plan cards
+
+- Plan cards now derive a purple `Awaiting QA` badge only when the current step, progress, or waiting target has entered QA testing or acceptance. Future QA steps do not change the badge early, and the source plan status remains unchanged.
+
+### Qt tray right-click latency
+
+- Fixed intermittent long waits before the tray context menu appeared. The ten-second refresh now moves Manager HTTP, plan/memory file reads, and the currently visible panel's conversation read into one background task, while the Qt thread only applies results. Hidden panels no longer read conversations or rebuild widgets, completed refreshes wait while the tray menu is visible, unchanged snapshots no longer rebuild the persona menu or rerender the panel, and entries beyond the first five are created when the submenu opens. Windows retains system context-menu registration, calls non-blocking `QMenu.popup()` as a fast path when `activated(Context)` arrives before the menu is visible, and precomputes the top-level menu's style and geometry. Coverage includes slow I/O, a 100 ms popup-entry regression, and a 50-persona top-level-menu stress check.
+
+### Optional RabiSpeech cloud providers and meeting transcription
+
+- Rabi LAN Voice Client has moved from a `config.json`-only console program to a standalone Windows GUI that shares RabiRoute's visual language. It directly configures discovery or an explicit host, stream token, node identity, input/output devices, and chunk size, while showing connection, host capture request, playback, resolved endpoint, and live microphone level. Existing `--headless` and `--list-devices` modes remain available, and disconnects still never silently fall back to host audio.
+- RabiSpeech keeps local TTS/ASR as the defaults and adds explicit opt-in OpenAI-compatible and native Alibaba Cloud Model Studio (DashScope) providers. Models continue to use dynamic `/v1/models` discovery, with no silent local-to-cloud fallback.
+- DashScope support covers `qwen3-tts-instruct-flash`, `qwen3-tts-vc-2026-01-22` voice cloning, and `paraformer-v2` meeting diarization. Persona configuration stores only the environment-variable name for the provider voice ID. The public example prioritizes meeting accuracy and does not expose an additional real-time ASR model. Meeting results contain `speaker + start/end + text`, with optional `speaker_count` when the participant count is known.
+- API keys come only from named environment variables such as `OPENAI_API_KEY` and `DASHSCOPE_API_KEY`. Remote endpoints require HTTPS, and capabilities update `local_only` / `relay_safe` when an external provider is enabled.
+- FenneNote and OumuQ serve only as references for previously validated request contracts; RabiSpeech does not restore runtime dependencies on either archived project.
+- ASR and TTS text, model, session, Route, voice, and speaker turns share one append-only daily runtime JSONL record. The UI follows FenneNote's recent-transcript preview instead of exposing a separate meeting-record selection/export card; diagnostic records survive service restarts, while raw input audio is not duplicated by default.
+- The speech-endpoint toggle is now the current Route's subscription to host ASR. Enabling any Route makes RabiSpeech capture and transcribe once, then broadcast the same segment to every subscribed Route, each applying its own hot/persona-keyword policy. Disabling one Route removes only that subscription, and the microphone stops only after the final subscription is disabled. The Speech Service page removes delivery-Route and editable-session controls and exclusively owns host microphone, ASR/VAD, silence timing, utterance limits, pre-roll, and gain sliders; Route pages no longer duplicate those settings.
+- Host waveform, five-stage pipeline, counters, runtime logs, and recent transcripts now live only under **Speech Service → ASR**. A Route's **Speech endpoint** keeps only hot/persona-keyword delivery, the persona TTS summary, responsibility guidance, Agent-reply autoplay, and the single-ASR broadcast explanation.
+- The global playback queue now exposes a `0–100` host-volume slider with exact numeric input. RabiSpeech is the sole owner and persists it in runtime-only `output/playback-settings.json`, rather than a Route or persona; each audio item reads the current value when playback starts. Windows playback moved from `winsound` to SoundFile / PortAudio, fixing streamed WAV headers that could produce an error chime. Real Windows 11 testing confirmed that Volume Mixer uses the process image and still shows `Python` when only the Core Audio label changes; installation and Windows release builds now generate and launch `runtime/RabiSpeech.exe` with RabiSpeech product resources.
+- Fixed stale per-executable Core Audio attenuation that could leave the Windows mixer showing an inactive `1%` RabiSpeech row, silently reduce playback, and prevent idle adjustment. RabiSpeech now keeps one persistent silent shared-mode render session for the service lifetime: startup normalizes it to `100%` once, then keeps it alive without rewriting the value, so the system slider remains adjustable. The silent session does not enter the FIFO or trigger microphone feedback suppression.
+- Persona `voice/voice-profile.json` is now the single source of truth for TTS model, voice, language, speed, and speaking instructions. The host owns ASR/VAD, while Routes retain only speech subscription, hot/keyword delivery, and reply-playback policy; legacy Route TTS/ASR/VAD fields are read-only compatibility inputs. Finalized persona TTS audio goes to the matching `voice/cache/tts-audio/`, while non-persona direct calls use a private fallback; both default to a 24-hour per-file timestamp window. The independent text ledger remains, and WebGUI exposes only a safe relative cache reference (or a legacy filename) plus expected expiry. Manager omits absolute and traversal paths.
+- Added local speaker profiles and explicit `sessionId + diarization label` binding APIs. The service generates stable profile IDs, retains each original label, and adds the resolved profile ID, display name, and decision source to transcript segments. New `PUT /v1/speaker-identities` and Manager `PUT /api/speech/speaker-identities` endpoints let Agents and tools atomically find or create a person, idempotently merge aliases, and bind a label; ambiguous matches return `409`. The human entry remains on the Speech Service ASR page with collapsible unknown/known groups and a latest-ten-utterance preview for each diarization cluster. No validated automatic voiceprint matcher is currently available, so capability discovery reports it as unsupported and enrollment audio is not stored by default.
+- Speaker models are now compatibility-probed in an isolated child process before native loading. An incompatible model format or runtime leaves the main RabiSpeech service online and reports the reason through capabilities. Confirmed prototypes and unconfirmed samples have separate capacity limits; low-RMS and materially overlapping multi-speaker segments do not enter the embedding store, and automatic matches never promote themselves into training prototypes. WebGUI now distinguishes clustering-only, explicitly enabled experimental auto-identification, calibrated auto-identification, and an unavailable matcher instead of masking those states with fixed copy.
+
+### ASR hot delivery, persona keywords, and real delivery state
+
+- Routes now use `speechPushMode=hot|keyword`, edited through one **Hot delivery** switch. On sends every completed ASR segment immediately. Off still records every transcript and wakes the Agent only when the current persona's `speechTriggerKeywords` matches. An empty keyword list remains record-only and never silently falls back to hot.
+- `speechTriggerKeywords` belongs to persona `personaConfig.json` and can contain the persona name, common forms of address, and wake phrases. Several Routes bound to the same persona reuse the same list.
+- `POST /api/speech/messages` replaces the old `202 accepted` response with synchronous terminal receipts. When the resident microphone omits `routeId`, Manager broadcasts and returns one `deliveries[]` entry per subscribed Route. `200 delivered` means at least one Desktop accepted start/steer; `200 recorded` means record-only or no current subscribers; only an all-subscriber failure returns 5xx. Explicit `routeId` remains for debugging/compatibility calls. The monitor never treats another Route's success as delivery for the current Route.
+- Matched ordinary endpoint messages continue directly to the Desktop owner: `steer` an active turn and `start` an idle task. Heartbeat's `heartbeatSkipWhenAgentBusy` remains a separate exception and does not suppress ordinary traffic.
+
+### Unified bidirectional ledger and per-endpoint context
+
+- Added the persona-scoped `data/roles/<RoleId>/conversation/current.jsonl` ledger. QQ self replies, ASR/TTS, WeCom, Remote Agent, role panel, RabiLink, and other inbound/outbound messages now share one evidence format; attachments retain only public-safe metadata.
+- Persona `recentMessageLimits` now configures 11 logical endpoints independently from `0` to `200`, with a schema default of `100`. Zero disables auto-injection only. AgentPacket reads only the current persona, logical endpoint, and conversation, with inbound and outbound records sharing the budget; same-session ASR/TTS share the `speech` budget.
+- `current.jsonl` has no entry-count cap. When an archive check finds data older than 72 hours, the complete contiguous prefix older than 24 hours moves to `archive/<firstSequence>~<lastSequence>.jsonl` and updates `index.json`. Automatic context never reads archives, which remain available for explicit Agent queries.
+- The speaker registry is one host-wide `output/speaker-profiles.json`: person profiles are reusable across Routes, personas, and later meetings, while each mapping remains an explicit `sessionId + speakerLabel` binding. No separate meeting-record section was added.
+- Synchronized the repository and local TTS/ASR skills. The voice-workstation guide now covers hot/persona-keyword delivery, bidirectional context, 24-hour cache retention, and speaker contracts; the benchmark guide separates local baselines from explicit API-provider smoke tests; and a repository `character-tts-dialogue` skill now matches the installed local copy.
+
 ## 0.1.19 - 2026-07-20
 
 ### Live NapCat reply-message hydration
@@ -111,7 +165,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ### Consolidated RabiPC speech control plane
 
 - Manager now has a dedicated `speechControl` interface and shared camelCase contract for models, personas, audio inputs, microphone, playback, TTS, ASR, and accepted speech messages. Python snake_case, loopback URLs, and model-runtime details no longer leak into Vue pages.
-- RibiWebGUI now uses a shared speech client/store, input-level waveform, Route monitor, and event/queue status. The speech page and Route configuration no longer poll independently or duplicate defaults; the backend fills `voice_chat` and speech-variable defaults for speech-enabled Routes.
+- RibiWebGUI now uses a shared speech client/store, ASR host input-level waveform, host monitor, and event/queue status. The speech page and Route configuration no longer poll independently or duplicate defaults; the backend fills `voice_chat` and speech-variable defaults for speech-enabled Routes.
 - RabiSpeech microphone and persona-voice handling gained clearer runtime and failure boundaries, with regression coverage for Manager mapping, the frontend contract, microphone behavior, and persona voices.
 
 ### Rabi Glass phone backend and media observations
@@ -128,6 +182,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### Codex Desktop stable-ID continuation
 
+- Fixed `/api/agent/threads` rejecting display titles longer than 240 before reading a valid task ID, which made settings saves return HTTP 400. A valid ID plus workspace now binds first regardless of long title metadata.
+- When an empty task truly must be created, RabiRoute safely truncates an overlong name to Codex's 240-character contract and persists the actual name instead of deferring the same failure to `thread/name/set`.
 - Fixed the first routed message reaching the correct task but rewriting Desktop SQLite `title` to the first prompt, which made the second message treat the name-ID pair as stale and create a same-name task.
 - A persisted binding now uses full task ID plus normalized workspace as stable identity. An existing unarchived ID in the same workspace is reused without comparing mutable title metadata; name lookup/creation runs only when the ID is empty, invalid, or genuinely missing.
 - Settings scans and name resolution now read the short-lived app-server's user-facing task name and cross-check it against Desktop's local task ID and archive state. The app-server still reads metadata only and never receives a real prompt or executes a turn.
@@ -162,10 +218,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### RabiPC speech endpoint and local models
 
-- Added the standalone local-only `rabi-speech` plugin and RabiPC Speech Service page. TTS and ASR are top-level tabs below Rabi Persona; Route delivery happens only when explicitly enabled, and normal API calls never enter an Agent.
+- Added the standalone local-only `rabi-speech` plugin and RabiPC Speech Service page. TTS and ASR are top-level tabs below Rabi Persona; only Routes with an explicitly enabled speech endpoint subscribe to resident ASR, and normal API calls never enter an Agent.
 - TTS now covers ONNX-VITS, GPT-SoVITS, Qwen3-TTS 0.6B/1.7B, IndexTTS2, and CosyVoice3. ASR covers faster-whisper tiny/small/large-v3-turbo, Qwen3-ASR 0.6B/1.7B, SenseVoiceSmall, and FireRedASR2-AED. Active providers use installed local models or loopback workers only; cloud speech APIs are absent from the active runtime.
 - `GET /v1/models` returns installation/availability state, a request schema, required/optional parameters, and examples for all 13 models. The provider contract remains extensible, while remote requests cannot download models, load code, or change the allowlist.
-- TTS supports direct Rabi persona-name calls, persona-owned voice/cache data, multiple voices, and one host-wide FIFO across Routes, sessions, Agents, personas, and models. Resident ASR supports a real audio device, pre-roll, separate record/transcribe thresholds, adaptive noise, silence segmentation, restart restore, and optional Route delivery.
+- TTS supports direct Rabi persona-name calls, persona-owned voice/cache data, multiple voices, and one host-wide FIFO across Routes, sessions, Agents, personas, and models. Resident ASR supports a real audio device, pre-roll, separate record/transcribe thresholds, adaptive noise, silence segmentation, restart restore, and subscription-based broadcast to Route speech endpoints.
 
 ### RabiLink, public boundary, and legacy migration
 

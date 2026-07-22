@@ -24,7 +24,21 @@ if (Test-Path -LiteralPath $nvidiaRoot) {
   }
 }
 $env:RABISPEECH_CONFIG = $config
+$env:RABISPEECH_ROOT = $root
 $pythonArgs = $Python -split "\s+"
 $pythonExe = $pythonArgs[0]
 $prefixArgs = @($pythonArgs | Select-Object -Skip 1)
-& $pythonExe @prefixArgs -m rabispeech
+$pythonHome = (& $pythonExe @prefixArgs -c "import sys; print(sys.base_prefix)").Trim()
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonHome -PathType Container)) {
+  throw "RabiSpeech could not resolve the configured Python home."
+}
+$env:PYTHONHOME = $pythonHome
+$env:PATH = "$pythonHome;$env:PATH"
+$hostScript = Join-Path $PSScriptRoot "windows_host.py"
+$hostExe = Join-Path $root "runtime\RabiSpeech.exe"
+if ($env:OS -eq "Windows_NT" -and (Test-Path -LiteralPath $hostExe -PathType Leaf)) {
+  & $hostExe $hostScript
+  exit $LASTEXITCODE
+}
+
+& $pythonExe @prefixArgs $hostScript

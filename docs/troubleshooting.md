@@ -86,8 +86,8 @@ npm run check:config
 
 1. 打开 Codex/ChatGPT Desktop，确认它本身能正常进入任务；RabiRoute 不负责启动或停止 Desktop Runtime。
 2. 在 RibiWebGUI 重新扫描 Codex。任务下拉应显示未归档任务的“任务名 + 最后会话时间”，不显示内部 ID。
-3. 检查 route 保存的 `codexThreadId` 和 `codexCwd`。有效 ID 且目录一致时会直接复用；Desktop 改名、SQLite 标题滞后或 goal 完成都不会创建新任务。
-4. 只有 ID 被明确清空、非法或确实不存在时才按 `codexThreadName + codexCwd` 查找/创建；不要因 SQLite `title` 变成首条 prompt 就让有效 ID 失效。多个同名同目录任务自动绑定最后更新时间唯一最新者；保存 ID 指向已归档任务时必须先恢复或重选。
+3. 检查 route 保存的 `codexThreadId` 和 `codexCwd`。有效 ID 且目录一致时会直接复用；Desktop 改名、SQLite 标题滞后、展示标题超过 240 或 goal 完成都不会创建新任务。
+4. 只有 ID 被明确清空、非法或确实不存在时才按 `codexThreadName + codexCwd` 查找/创建；不要因 SQLite `title` 变成首条 prompt 就让有效 ID 失效。多个同名同目录任务自动绑定最后更新时间唯一最新者；保存 ID 指向已归档任务时必须先恢复或重选。确实新建时，超过 240 的任务名会安全截断并保存实际名称。
 5. 检查 `agent-packets.jsonl`、`gateway-status.json` 和 Manager 日志，区分“路由未命中”“Desktop IPC 未就绪”“任务 owner 未加载”和“任务 ID/cwd 失效”。
 6. 若错误含 `no-client-found`，RabiRoute 会用 `codex://threads/<id>` 打开目标任务并短暂重试；仍失败时不会切换到后台 Runtime。
 

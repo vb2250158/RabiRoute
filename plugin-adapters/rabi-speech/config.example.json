@@ -5,7 +5,38 @@
     "max_upload_bytes": 26214400,
     "temp_dir": "temp",
     "ffmpeg": "",
-    "playback_dir": "output/playback-queue"
+    "playback_dir": "output/playback-queue",
+    "records_dir": "output/records",
+    "tts_audio_dir": "output/tts-audio",
+    "tts_audio_retention_minutes": 1440
+  },
+  "remote_audio": {
+    "enabled": false,
+    "host": "0.0.0.0",
+    "port": 8782,
+    "discovery_port": 8783,
+    "token_env": "RABISPEECH_AUDIO_STREAM_TOKEN",
+    "token_path": "output/audio-stream-token.txt",
+    "settings_path": "output/audio-stream-settings.json"
+  },
+  "speaker_recognition": {
+    "enabled": true,
+    "validated": false,
+    "experimental_auto_assign": false,
+    "auto_assign": true,
+    "model_id": "3dspeaker-eres2netv2-zh-16k",
+    "model_path": "../../../models/rabispeech/speaker/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+    "provider": "cpu",
+    "num_threads": 2,
+    "min_embedding_seconds": 0.8,
+    "hard_accept_seconds": 1.5,
+    "hard_threshold": 0.72,
+    "tentative_threshold": 0.64,
+    "cluster_threshold": 0.68,
+    "min_margin": 0.06,
+    "max_samples_per_profile": 12,
+    "max_unconfirmed_samples": 500,
+    "min_voiced_rms": 0.006
   },
   "providers": {
     "extensions": [],
@@ -26,7 +57,36 @@
         "default_voice": "default",
         "timeout_seconds": 180,
         "allowed_output_roots": ["./output"]
-      }
+      },
+      "api_providers": [
+        {
+          "id": "openai-api",
+          "enabled": false,
+          "protocol": "openai-compatible",
+          "base_url": "https://api.openai.com/v1",
+          "api_key_env": "OPENAI_API_KEY",
+          "default_model": "gpt-4o-mini-tts",
+          "default_voice": "alloy",
+          "timeout_seconds": 180,
+          "models": [
+            {"id": "gpt-4o-mini-tts", "name": "OpenAI GPT-4o mini TTS", "languages": ["multilingual"], "features": ["instructions", "multiple_voices"]}
+          ]
+        },
+        {
+          "id": "dashscope-qwen",
+          "enabled": false,
+          "protocol": "dashscope",
+          "base_url": "https://dashscope.aliyuncs.com",
+          "api_key_env": "DASHSCOPE_API_KEY",
+          "default_model": "qwen3-tts-instruct-flash",
+          "default_voice": "Cherry",
+          "timeout_seconds": 180,
+          "models": [
+            {"id": "qwen3-tts-instruct-flash", "name": "Qwen3 TTS Instruct Flash API", "languages": ["multilingual"], "features": ["multiple_voices", "instructions"]},
+            {"id": "qwen3-tts-vc-2026-01-22", "name": "Qwen3 TTS Voice Clone API", "languages": ["multilingual"], "features": ["voice_clone", "persona_voice"]}
+          ]
+        }
+      ]
     },
     "asr": {
       "default": "faster-whisper",
@@ -74,6 +134,33 @@
           "timeout_seconds": 180,
           "models": [
             {"id": "fireredasr2-aed", "name": "FireRedASR2-AED", "family": "FireRedASR2", "base_url": "http://127.0.0.1:8773", "source": "FireRedTeam/FireRedASR2-AED", "installed": false, "languages": ["zh", "zh-dialects", "en"], "features": ["word_timestamps", "confidence", "speech", "singing"]}
+          ]
+        }
+      ],
+      "api_providers": [
+        {
+          "id": "openai-api",
+          "enabled": false,
+          "protocol": "openai-compatible",
+          "base_url": "https://api.openai.com/v1",
+          "api_key_env": "OPENAI_API_KEY",
+          "default_model": "gpt-4o-mini-transcribe",
+          "timeout_seconds": 180,
+          "models": [
+            {"id": "gpt-4o-mini-transcribe", "name": "OpenAI GPT-4o mini Transcribe", "languages": ["multilingual"], "features": ["prompt", "timestamps"]},
+            {"id": "whisper-1", "name": "OpenAI Whisper API", "languages": ["multilingual"], "features": ["prompt", "timestamps", "srt", "vtt"]}
+          ]
+        },
+        {
+          "id": "dashscope-qwen",
+          "enabled": false,
+          "protocol": "dashscope",
+          "base_url": "https://dashscope.aliyuncs.com",
+          "api_key_env": "DASHSCOPE_API_KEY",
+          "default_model": "paraformer-v2",
+          "timeout_seconds": 180,
+          "models": [
+            {"id": "paraformer-v2", "name": "DashScope Meeting ASR + Speaker Diarization", "languages": ["zh", "en", "multilingual"], "features": ["speaker_diarization", "timestamps", "meeting"]}
           ]
         }
       ]

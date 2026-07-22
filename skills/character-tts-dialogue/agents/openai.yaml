@@ -1,0 +1,4 @@
+interface:
+  display_name: "角色 TTS 对话"
+  short_description: "用当前 RabiSpeech 契约生成并回传角色化语音回复"
+  default_prompt: "Use $character-tts-dialogue to produce and return a character-faithful RabiSpeech reply."

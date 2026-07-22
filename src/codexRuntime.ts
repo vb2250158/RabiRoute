@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
@@ -11,6 +12,7 @@ import {
   type CodexDesktopThread
 } from "./codexDesktopBridge.js";
 import { canonicalCodexWorkspacePath, isCodexTaskId, sameCodexWorkspace } from "./codexTaskIdentity.js";
+import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import {
   resolveAndDeliverCodexSession,
   resolveCodexSession,
@@ -67,7 +69,11 @@ type CodexState = {
   lastNotificationError?: string;
   lastNotificationErrorAt?: string;
   lastDeliveryChannel?: string;
+  lastDeliveryId?: string;
+  lastDeliveryStatus?: "accepted" | "delivered" | "failed";
   lastDeliveryAcceptedAt?: string;
+  lastDeliveryDeliveredAt?: string;
+  lastDeliveryFailedAt?: string;
   desktopHostRequired?: boolean;
 };
 
@@ -90,13 +96,31 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function recordCodexFailure(error: unknown): void {
+function recordCodexFailure(error: unknown, deliveryId?: string): void {
+  const failedAt = new Date().toISOString();
   writeState({
     ...readState(),
     lastDeliveryChannel: "desktop-ipc",
+    lastDeliveryId: deliveryId ?? readState().lastDeliveryId,
+    lastDeliveryStatus: "failed",
+    lastDeliveryFailedAt: failedAt,
     desktopHostRequired: true,
     lastNotificationError: errorMessage(error),
-    lastNotificationErrorAt: new Date().toISOString()
+    lastNotificationErrorAt: failedAt
+  });
+}
+
+function recordAcceptedDelivery(deliveryId: string): void {
+  const acceptedAt = new Date().toISOString();
+  writeState({
+    ...readState(),
+    lastDeliveryChannel: "desktop-ipc",
+    lastDeliveryId: deliveryId,
+    lastDeliveryStatus: "accepted",
+    lastDeliveryAcceptedAt: acceptedAt,
+    lastNotificationError: "",
+    lastNotificationErrorAt: "",
+    desktopHostRequired: true
   });
 }
 
@@ -362,25 +386,29 @@ export async function readCodexThread(threadId: string): Promise<unknown> {
 }
 
 export async function createCodexThread(params: CodexThreadCreateParams): Promise<CodexThreadCreateResult> {
-  const bootstrap = await bootstrapEmptyDesktopThread(params);
+  const normalizedParams = {
+    ...params,
+    title: normalizeCodexThreadTitle(params.title)
+  };
+  const bootstrap = await bootstrapEmptyDesktopThread(normalizedParams);
   const created: CodexThreadCreateResult = {
     id: bootstrap.threadId,
-    title: params.title,
+    title: normalizedParams.title,
     updatedAt: new Date().toISOString(),
     source: "Codex Desktop task bootstrap",
-    initialTurnStatus: params.prompt.trim() ? "started" : "not-requested"
+    initialTurnStatus: normalizedParams.prompt.trim() ? "started" : "not-requested"
   };
   try {
-    if (!params.prompt.trim()) return created;
+    if (!normalizedParams.prompt.trim()) return created;
     await desktopBridge.deliver({
       threadId: bootstrap.threadId,
-      prompt: params.prompt,
-      cwd: params.cwd,
-      sandbox: params.sandbox
+      prompt: normalizedParams.prompt,
+      cwd: normalizedParams.cwd,
+      sandbox: normalizedParams.sandbox
     });
     try {
       await waitForDesktopFirstMessage(bootstrap.threadId);
-      await setCodexTaskName(bootstrap.threadId, params.title, params.cwd, bootstrap.client);
+      await setCodexTaskName(bootstrap.threadId, normalizedParams.title, normalizedParams.cwd, bootstrap.client);
     } catch (error) {
       created.initialTurnError = `Desktop 已接收消息，但任务名恢复失败：${errorMessage(error)}`;
     }
@@ -543,7 +571,7 @@ export async function isCodexMonitorThreadActive(): Promise<boolean> {
   return desktopBridge.isThreadActive(thread.id) || rolloutShowsActive(thread.rolloutPath);
 }
 
-function recordAcceptedNotification(thread: CodexDesktopThread, now: Date): CodexMonitorThread {
+function recordDeliveredNotification(thread: CodexDesktopThread, now: Date, deliveryId: string): CodexMonitorThread {
   const nextState: CodexState = {
     ...readState(),
     monitorThreadId: thread.id,
@@ -554,7 +582,9 @@ function recordAcceptedNotification(thread: CodexDesktopThread, now: Date): Code
     notificationCount: (readState().notificationCount ?? 0) + 1,
     lastNotificationAt: now.toISOString(),
     lastDeliveryChannel: "desktop-ipc",
-    lastDeliveryAcceptedAt: new Date().toISOString(),
+    lastDeliveryId: deliveryId,
+    lastDeliveryStatus: "delivered",
+    lastDeliveryDeliveredAt: now.toISOString(),
     lastNotificationError: "",
     lastNotificationErrorAt: "",
     desktopHostRequired: true
@@ -569,7 +599,7 @@ function recordAcceptedNotification(thread: CodexDesktopThread, now: Date): Code
   };
 }
 
-async function deliverNotification(message: string): Promise<CodexMonitorThread> {
+async function deliverNotification(message: string, deliveryId: string): Promise<CodexMonitorThread> {
   const resolution = await resolveAndDeliverCodexSession({
     threadId: currentCodexThreadId(),
     title: config.codexThreadName,
@@ -581,18 +611,22 @@ async function deliverNotification(message: string): Promise<CodexMonitorThread>
   }, ({ thread }) => {
     bindDesktopThread(thread);
   });
-  return recordAcceptedNotification(resolution.thread, new Date());
+  return recordDeliveredNotification(resolution.thread, new Date(), deliveryId);
 }
 
 export async function notifyCodex(message: string): Promise<CodexMonitorThread> {
-  const result = notificationQueue.catch(() => undefined).then(() => deliverNotification(message));
+  const result = notificationQueue.catch(() => undefined).then(async () => {
+    const deliveryId = randomUUID();
+    recordAcceptedDelivery(deliveryId);
+    try {
+      return await deliverNotification(message, deliveryId);
+    } catch (error) {
+      recordCodexFailure(error, deliveryId);
+      throw error;
+    }
+  });
   notificationQueue = result;
-  try {
-    return await result;
-  } catch (error) {
-    recordCodexFailure(error);
-    throw error;
-  }
+  return result;
 }
 
 export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNotificationResult> {
@@ -603,17 +637,19 @@ export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNot
     if (desktopBridge.isThreadActive(thread.id) || rolloutShowsActive(thread.rolloutPath)) {
       return { status: "busy", thread: monitorThreadFromDesktop(thread) } satisfies CodexIdleNotificationResult;
     }
-    await deliverDesktopMessage({ thread, prompt: message, sandbox: "workspace-write" });
-    return {
-      status: "delivered",
-      thread: recordAcceptedNotification(thread, new Date())
-    } satisfies CodexIdleNotificationResult;
+    const deliveryId = randomUUID();
+    recordAcceptedDelivery(deliveryId);
+    try {
+      await deliverDesktopMessage({ thread, prompt: message, sandbox: "workspace-write" });
+      return {
+        status: "delivered",
+        thread: recordDeliveredNotification(thread, new Date(), deliveryId)
+      } satisfies CodexIdleNotificationResult;
+    } catch (error) {
+      recordCodexFailure(error, deliveryId);
+      throw error;
+    }
   });
   notificationQueue = result;
-  try {
-    return await result;
-  } catch (error) {
-    recordCodexFailure(error);
-    throw error;
-  }
+  return result;
 }

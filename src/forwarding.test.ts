@@ -128,6 +128,53 @@ test("forwardMessageAndWait returns route miss details when no rule matches", as
   });
 });
 
+test("formal RabiSpeech hot delivery keeps filler transcripts while legacy voice sources stay filtered", async () => {
+  const root = tempDir();
+  const route = routeProfile(root, {
+    notificationRules: [{
+      id: "voice",
+      name: "voice",
+      enabled: true,
+      routeKinds: ["voice_transcript"],
+      template: "voice={message}"
+    }]
+  });
+  const speechRecord: VoiceTranscriptEventRecord = {
+    time: 1710000000,
+    rawMessage: "嗯",
+    messageId: "speech-1",
+    adapterType: "speech",
+    source: "rabispeech",
+    transport: "rabipc"
+  };
+  const legacyRecord: VoiceTranscriptEventRecord = {
+    ...speechRecord,
+    messageId: "legacy-1",
+    adapterType: "fennenote",
+    source: "fennenote",
+    transport: "webhook"
+  };
+
+  await withForwardingConfig({
+    agentAdapters: [],
+    dataDir: path.join(root, "data"),
+    memoryDataDir: path.join(root, "memory"),
+    routeProfiles: [route]
+  }, async () => {
+    const speechResult = await forwardMessageAndWait("voice_transcript", speechRecord);
+    const legacyResult = await forwardMessageAndWait("voice_transcript", legacyRecord);
+
+    assert.equal(speechResult.status, "routed");
+    assert.equal(speechResult.reason, "no_agent_adapter");
+    assert.equal(speechResult.sentPacketCount, 1);
+    assert.deepEqual(speechResult.matchedRuleIds, ["voice"]);
+
+    assert.equal(legacyResult.status, "skipped");
+    assert.equal(legacyResult.reason, "low_signal_voice_transcript");
+    assert.equal(legacyResult.sentPacketCount, 0);
+  });
+});
+
 test("mobile message endpoint targets one selected route persona instead of broadcasting", async () => {
   const root = tempDir();
   const rule = { id: "mobile", name: "mobile", enabled: true, routeKinds: ["rabilink" as const], template: "{message}" };

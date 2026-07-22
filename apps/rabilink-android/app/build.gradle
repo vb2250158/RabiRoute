@@ -53,6 +53,7 @@ android {
     sourceSets {
         main {
             java.srcDir("$rootDir/../../packages/android-sdk/rabiroute-sdk/src/main/java")
+            java.srcDir("$rootDir/shared/src/main/java")
             if (rokidAiSdkAssetsDir.exists()) {
                 assets.srcDir(rokidAiSdkAssetsDir)
             }

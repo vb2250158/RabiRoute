@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { config } from "../config.js";
-import { forwardMessage } from "../forwarding.js";
+import { forwardMessage, recordMessageContextOnly } from "../forwarding.js";
 import { appendAdapterLog, appendVoiceTranscriptEventForAdapter, type VoiceTranscriptEventRecord } from "../history.js";
 import { isRabiLinkRecordFirstSource, recordRabiLinkVoiceObservation } from "../rabilinkObservationRecorder.js";
 import type { ForwardRouteKind } from "../routing/types.js";
@@ -391,6 +391,8 @@ export function acceptWebhookPayload(
       voiceSource: record.source,
       configurationRequested: record.configurationRequested ? "true" : undefined
     });
+  } else {
+    recordMessageContextOnly(profile.routeKind, record);
   }
   appendAdapterLog(profile.type, {
     event: "accepted",

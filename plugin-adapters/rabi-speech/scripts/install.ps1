@@ -37,4 +37,9 @@ if ((Test-Path -LiteralPath $openJTalkPackage) -and -not (Test-Path -LiteralPath
   }
 }
 
+if ($env:OS -eq "Windows_NT") {
+  & (Join-Path $PSScriptRoot "build-windows-host.ps1") -Python $Python
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 Write-Host "RabiSpeech dependencies installed: $deps"

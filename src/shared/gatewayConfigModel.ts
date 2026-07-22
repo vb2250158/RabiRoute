@@ -36,6 +36,24 @@ export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "w
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
+export type SpeechPushMode = "hot" | "keyword";
+export type RecentMessageEndpoint = Exclude<MessageAdapterType, "disabled">;
+export type RecentMessageLimits = Partial<Record<RecentMessageEndpoint, number>>;
+export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
+  "napcat",
+  "remoteAgent",
+  "heartbeat",
+  "rolePanel",
+  "speech",
+  "fennenote",
+  "xiaoai",
+  "rabilink",
+  "wearable",
+  "webhook",
+  "wecom"
+];
+export const DEFAULT_RECENT_MESSAGE_LIMIT = 100;
+export const MAX_RECENT_MESSAGE_LIMIT = 200;
 
 export type MessageAdapterPolicy = {
   inputEnabled?: boolean;
@@ -93,6 +111,9 @@ export type RouteProfileDefinition = {
   name?: string;
   enabled?: boolean;
   recentMessageLimit?: number;
+  recentMessageLimits?: RecentMessageLimits;
+  speechPushMode?: SpeechPushMode;
+  speechTriggerKeywords?: string[];
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   agentRoleId?: string;
@@ -205,6 +226,9 @@ export type GatewayDefinition = {
   heartbeatNotificationTemplate?: string;
   voiceTranscriptNotificationTemplate?: string;
   recentMessageLimit?: number;
+  recentMessageLimits?: RecentMessageLimits;
+  speechPushMode?: SpeechPushMode;
+  speechTriggerKeywords?: string[];
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
   roleRouteNames?: Record<string, string>;
@@ -323,6 +347,14 @@ export function defaultMessageAdapterNotificationRules(adapters: MessageAdapterT
       template: ""
     }];
   });
+}
+
+export function ensureSpeechRouteNotificationRule(rules: NotificationRuleDefinition[]): NotificationRuleDefinition[] {
+  if (rules.some((rule) => rule.enabled !== false && (rule.routeKinds ?? []).includes("voice_transcript"))) {
+    return rules;
+  }
+  const [speechRule] = defaultMessageAdapterNotificationRules(["speech"]);
+  return speechRule ? [...rules, speechRule] : rules;
 }
 
 export function ensureDefaultPersonaRules(rules: NotificationRuleDefinition[] | undefined): NotificationRuleDefinition[] {
@@ -494,10 +526,62 @@ export function normalizePositiveNumber(value: unknown, fallback: number): numbe
   return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
 }
 
-export function normalizeRecentMessageLimit(value: unknown, fallback = 10): number {
+export function normalizeRecentMessageLimit(value: unknown, fallback = DEFAULT_RECENT_MESSAGE_LIMIT): number {
+  if (value == null || (typeof value === "string" && !value.trim())) return fallback;
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return fallback;
-  return Math.min(100, Math.max(0, Math.floor(numberValue)));
+  return Math.min(MAX_RECENT_MESSAGE_LIMIT, Math.max(0, Math.floor(numberValue)));
+}
+
+
+export function normalizeRecentMessageLimits(
+  value: unknown,
+  legacyValue?: unknown
+): RecentMessageLimits {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const legacyFallback = legacyValue == null
+    ? DEFAULT_RECENT_MESSAGE_LIMIT
+    : normalizeRecentMessageLimit(legacyValue);
+  const result: RecentMessageLimits = {};
+  for (const adapter of RECENT_MESSAGE_ENDPOINTS) {
+    result[adapter] = normalizeRecentMessageLimit(raw[adapter], legacyFallback);
+  }
+  return result;
+}
+
+export function recentMessageLimitFor(
+  limits: RecentMessageLimits | null | undefined,
+  endpoint: RecentMessageEndpoint
+): number {
+  return normalizeRecentMessageLimit(limits?.[endpoint]);
+}
+
+export function normalizeSpeechPushMode(value: unknown): SpeechPushMode {
+  return value === "keyword" ? "keyword" : "hot";
+}
+
+export function normalizeSpeechTriggerKeywords(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter((keyword) => {
+      const key = keyword.toLocaleLowerCase();
+      if (!keyword || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+export function matchSpeechTriggerKeyword(
+  text: string,
+  keywords: string[]
+): string | undefined {
+  const normalizedText = text.toLocaleLowerCase();
+  return normalizeSpeechTriggerKeywords(keywords)
+    .find((keyword) => normalizedText.includes(keyword.toLocaleLowerCase()));
 }
 
 export function normalizeCodexCwd(value: unknown): string | undefined {
@@ -612,7 +696,10 @@ function normalizeRouteProfile(
 ): RouteProfileDefinition | null {
   const roleId = sanitizeRoleId(profile.agentRoleId);
   const id = sanitizeRoleId(profile.id) || roleId || `route-${index + 1}`;
-  const rules = normalizeRuleDefinitions(profile.notificationRules) ?? [];
+  const baseRules = normalizeRuleDefinitions(profile.notificationRules) ?? [];
+  const rules = gatewayAdapterTypes(definition).includes("speech")
+    ? ensureSpeechRouteNotificationRule(baseRules)
+    : baseRules;
   if (rules.length === 0) {
     return null;
   }
@@ -622,7 +709,10 @@ function normalizeRouteProfile(
     id,
     name: profile.name?.trim() || id,
     enabled: profile.enabled !== false,
-    recentMessageLimit: normalizeRecentMessageLimit(profile.recentMessageLimit, normalizeRecentMessageLimit(definition.recentMessageLimit)),
+    recentMessageLimit: undefined,
+    recentMessageLimits: normalizeRecentMessageLimits(profile.recentMessageLimits ?? definition.recentMessageLimits, profile.recentMessageLimit ?? definition.recentMessageLimit),
+    speechPushMode: normalizeSpeechPushMode(profile.speechPushMode ?? definition.speechPushMode),
+    speechTriggerKeywords: normalizeSpeechTriggerKeywords(profile.speechTriggerKeywords ?? definition.speechTriggerKeywords),
     pipelinePreset: typeof profile.pipelinePreset === "string" && profile.pipelinePreset.trim()
       ? profile.pipelinePreset.trim()
       : definition.pipelinePreset,
@@ -685,6 +775,9 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const notificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
     ? configuredNotificationRules
     : defaultMessageAdapterNotificationRules(activeMessageAdapters);
+  const recentMessageLimits = normalizeRecentMessageLimits(definition.recentMessageLimits, definition.recentMessageLimit);
+  const speechPushMode = normalizeSpeechPushMode(definition.speechPushMode);
+  const speechTriggerKeywords = normalizeSpeechTriggerKeywords(definition.speechTriggerKeywords);
   const rawCodexThreadId = definition.codexThreadId?.trim() || "";
   const legacyCodexThreadName = rawCodexThreadId && !isCodexTaskId(rawCodexThreadId)
     ? rawCodexThreadId
@@ -736,7 +829,10 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     privateNotificationTemplate: normalizeOptionalTemplate(definition.privateNotificationTemplate),
     heartbeatNotificationTemplate: normalizeOptionalTemplate(definition.heartbeatNotificationTemplate),
     voiceTranscriptNotificationTemplate: normalizeOptionalTemplate(definition.voiceTranscriptNotificationTemplate),
-    recentMessageLimit: normalizeRecentMessageLimit(definition.recentMessageLimit),
+    recentMessageLimit: undefined,
+    recentMessageLimits,
+    speechPushMode,
+    speechTriggerKeywords,
     notificationRules,
     dataDir,
     rolesDir,
@@ -752,7 +848,10 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
       agentRoleFile: definition.agentRoleFile ?? "persona.md",
       rolesDir,
       dataDir,
-      recentMessageLimit: definition.recentMessageLimit,
+      recentMessageLimit: undefined,
+      recentMessageLimits,
+      speechPushMode,
+      speechTriggerKeywords,
       pipelinePreset,
       pipeline,
       routeVariables,

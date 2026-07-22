@@ -10,8 +10,14 @@ import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } fro
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
-import { forwardMessageAndWait, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
+import { forwardMessageAndWait, recordMessageContextOnly, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
 import { appendVoiceTranscriptEventForAdapter, type RolePanelMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
+import { decideSpeechPush } from "./routing/speechPushPolicy.js";
+import {
+  speechForwardProcessOutcome,
+  speechRecordedProcessOutcome,
+  writeSpeechProcessResult
+} from "./speechMessageDelivery.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
 import { rolePanelDeliveryExitCode } from "./rolePanelDelivery.js";
 import {
@@ -219,8 +225,12 @@ if (speechMessageArg) {
   const messageId = decodeURIComponent(speechMessageArg.slice("--speech-message=".length)).trim() || `speech-${Date.now()}`;
   const textArg = process.argv.find((arg) => arg.startsWith("--speech-text="));
   const sessionArg = process.argv.find((arg) => arg.startsWith("--speech-session="));
+  const gatewayArg = process.argv.find((arg) => arg.startsWith("--speech-gateway="));
+  const routeProfileArg = process.argv.find((arg) => arg.startsWith("--speech-route-profile="));
   const text = textArg ? decodeURIComponent(textArg.slice("--speech-text=".length)).trim() : "";
   const sessionId = sessionArg ? decodeURIComponent(sessionArg.slice("--speech-session=".length)).trim() : "";
+  const gatewayId = gatewayArg ? decodeURIComponent(gatewayArg.slice("--speech-gateway=".length)).trim() : process.env.GATEWAY_ID?.trim() || "";
+  const requestedRouteProfileId = routeProfileArg ? decodeURIComponent(routeProfileArg.slice("--speech-route-profile=".length)).trim() : "";
   if (!text) {
     console.error("RabiRoute speech message failed: missing transcript text");
     process.exit(1);
@@ -231,26 +241,44 @@ if (speechMessageArg) {
     messageId,
     senderName: "RabiPC 语音消息端",
     adapterType: "speech",
+    gatewayId,
     source: "rabispeech",
     transport: "rabipc",
-    sessionId
+    sessionId,
+    routeProfileId: requestedRouteProfileId || undefined
   };
   try {
     appendVoiceTranscriptEventForAdapter("speech", record);
-    const result = await forwardMessageAndWait("voice_transcript", record);
+    const route = requestedRouteProfileId
+      ? config.routeProfiles.find((item) => item.id === requestedRouteProfileId)
+      : config.routeProfiles[0];
+    const push = decideSpeechPush(text, route?.speechPushMode, route?.speechTriggerKeywords);
+    if (!push.shouldNotifyAgent) {
+      const recordedRoutes = recordMessageContextOnly("voice_transcript", record);
+      const outcome = speechRecordedProcessOutcome(recordedRoutes, push.reason);
+      console.log(`RabiRoute speech message ${outcome.result.status}: ${messageId} mode=${push.mode} reason=${outcome.result.reason} routes=${recordedRoutes}`);
+      writeSpeechProcessResult(outcome.result);
+      process.exit(outcome.exitCode);
+    }
+    const result = await forwardMessageAndWait("voice_transcript", record, {
+      speechPushMode: push.mode,
+      speechTriggerKeyword: push.matchedKeyword
+    });
     const summary = deliverySummary(result);
-    if (result.status === "failed") {
-      console.error(`RabiRoute speech message failed: ${messageId} ${summary}`);
-      process.exit(1);
-    }
-    if (result.status === "missed" || result.status === "routed" || result.status === "skipped") {
-      console.warn(`RabiRoute speech message not delivered: ${messageId} ${summary}`);
-    } else {
+    const outcome = speechForwardProcessOutcome(result);
+    if (outcome.result.status === "delivered") {
       console.log(`RabiRoute speech message delivered: ${messageId} ${summary}`);
+    } else if (outcome.exitCode === 1) {
+      console.error(`RabiRoute speech message failed: ${messageId} ${summary}`);
+    } else {
+      console.warn(`RabiRoute speech message not delivered: ${messageId} ${summary}`);
     }
-    process.exit(0);
+    writeSpeechProcessResult(outcome.result);
+    process.exit(outcome.exitCode);
   } catch (error) {
-    console.error(`RabiRoute speech message failed: ${error instanceof Error ? error.message : String(error)}`);
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`RabiRoute speech message failed: ${detail}`);
+    writeSpeechProcessResult({ status: "failed", reason: "exception", detail });
     process.exit(1);
   }
 }

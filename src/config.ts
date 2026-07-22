@@ -4,7 +4,16 @@ import dotenv from "dotenv";
 import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
-import { normalizeScheduleDefinitions, type NotificationScheduleDefinition } from "./shared/gatewayConfigModel.js";
+import {
+  normalizeRecentMessageLimits,
+  normalizeRecentMessageLimit,
+  normalizeScheduleDefinitions,
+  normalizeSpeechPushMode,
+  normalizeSpeechTriggerKeywords,
+  type NotificationScheduleDefinition,
+  type RecentMessageLimits,
+  type SpeechPushMode
+} from "./shared/gatewayConfigModel.js";
 import { resolveProjectPath } from "./shared/projectPaths.js";
 import { resolveRouteIdentity, sanitizeRoleId } from "./shared/routeIdentity.js";
 import { resolveRolePaths, roleFilePath, roleFolderPath } from "./shared/routePaths.js";
@@ -39,7 +48,11 @@ export type RouteProfile = {
   id: string;
   name: string;
   enabled: boolean;
+  /** Legacy read-only fallback. New code must use recentMessageLimits. */
   recentMessageLimit: number;
+  recentMessageLimits?: RecentMessageLimits;
+  speechPushMode?: SpeechPushMode;
+  speechTriggerKeywords?: string[];
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   resolvedPipeline: ResolvedPipeline;
@@ -229,7 +242,9 @@ function parseNapCatInstances(raw: string | undefined, fallback: NapCatInstanceC
   return [fallback];
 }
 
-function parseRouteProfiles(raw: string | undefined): RouteProfile[] {
+type RouteProfileDefaults = Pick<RouteProfile, "recentMessageLimits" | "speechPushMode" | "speechTriggerKeywords">;
+
+function parseRouteProfiles(raw: string | undefined, defaults: RouteProfileDefaults): RouteProfile[] {
   if (!raw?.trim()) {
     return [];
   }
@@ -240,7 +255,7 @@ function parseRouteProfiles(raw: string | undefined): RouteProfile[] {
       return [];
     }
     return parsed
-      .map((item, index) => normalizeRouteProfile(item, index))
+      .map((item, index) => normalizeRouteProfile(item, index, defaults))
       .filter((item): item is RouteProfile => Boolean(item));
   } catch (error) {
     console.error("Failed to parse ROUTE_PROFILES", error);
@@ -278,12 +293,14 @@ function parseClampedNumber(raw: string | undefined, fallback: number, min: numb
   return Math.min(max, Math.max(min, value));
 }
 
-function normalizeRecentMessageLimit(value: unknown, fallback = 10): number {
-  const numberValue = Number(value);
-  if (!Number.isFinite(numberValue)) {
-    return fallback;
+function parseJsonEnvironmentValue(raw: string | undefined, label: string): unknown {
+  if (!raw?.trim()) return undefined;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    console.error(`Failed to parse ${label}`, error);
+    return undefined;
   }
-  return Math.min(100, Math.max(0, Math.floor(numberValue)));
 }
 
 function normalizeNotificationRule(item: unknown, index: number): NotificationRule | null {
@@ -310,7 +327,7 @@ function normalizeNotificationRule(item: unknown, index: number): NotificationRu
   };
 }
 
-function normalizeRouteProfile(item: unknown, index: number): RouteProfile | null {
+function normalizeRouteProfile(item: unknown, index: number, defaults: RouteProfileDefaults): RouteProfile | null {
   if (!item || typeof item !== "object") {
     return null;
   }
@@ -335,6 +352,12 @@ function normalizeRouteProfile(item: unknown, index: number): RouteProfile | nul
     name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id,
     enabled: raw.enabled !== false,
     recentMessageLimit: normalizeRecentMessageLimit(raw.recentMessageLimit),
+    recentMessageLimits: normalizeRecentMessageLimits(
+      raw.recentMessageLimits ?? defaults.recentMessageLimits,
+      raw.recentMessageLimit
+    ),
+    speechPushMode: normalizeSpeechPushMode(raw.speechPushMode ?? defaults.speechPushMode),
+    speechTriggerKeywords: normalizeSpeechTriggerKeywords(raw.speechTriggerKeywords ?? defaults.speechTriggerKeywords),
     pipelinePreset,
     pipeline,
     resolvedPipeline: resolvePipeline(pipelinePreset, pipeline),
@@ -367,7 +390,19 @@ const agentRoleFile = process.env.AGENT_ROLE_FILE?.trim() || "persona.md";
 const agentRoleDir = agentRoleId ? roleFolderPath(rolesDir, agentRoleId) : "";
 const agentRolePath = agentRoleId ? roleFilePath(rolesDir, agentRoleId, agentRoleFile) : "";
 const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES) ?? [];
-const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES);
+const recentMessageLimits = normalizeRecentMessageLimits(
+  parseJsonEnvironmentValue(process.env.RECENT_MESSAGE_LIMITS, "RECENT_MESSAGE_LIMITS"),
+  process.env.RECENT_MESSAGE_LIMIT
+);
+const speechPushMode = normalizeSpeechPushMode(process.env.SPEECH_PUSH_MODE);
+const speechTriggerKeywords = normalizeSpeechTriggerKeywords(
+  parseJsonEnvironmentValue(process.env.SPEECH_TRIGGER_KEYWORDS, "SPEECH_TRIGGER_KEYWORDS")
+);
+const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES, {
+  recentMessageLimits,
+  speechPushMode,
+  speechTriggerKeywords
+});
 const pipelinePreset = process.env.PIPELINE_PRESET?.trim() || undefined;
 const pipeline = parsePipelineDefinition(process.env.PIPELINE);
 const agentModel = normalizeOptionalString(process.env.AGENT_MODEL);
@@ -456,6 +491,9 @@ export const config = {
   privateNotificationTemplate: process.env.PRIVATE_NOTIFICATION_TEMPLATE || defaultPrivateNotificationTemplate,
   heartbeatNotificationTemplate: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate,
   voiceTranscriptNotificationTemplate: process.env.VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE || defaultVoiceTranscriptNotificationTemplate,
+  recentMessageLimits,
+  speechPushMode,
+  speechTriggerKeywords,
   notificationRules,
   routeProfiles
 };

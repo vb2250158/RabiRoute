@@ -38,6 +38,8 @@ Plan and memory entries share one expandable read-only row pattern. While collap
 
 Expanded plans use a complete-steps-first hierarchy. When the source plan contains `steps`, the UI first shows completed progress and the `currentStepId` execution point as `Current: step N`, then renders every step and highlights the only in-progress row. Because the complete list already expresses what comes next, structured plans do not repeat `nextAction`. When the current step or plan has `blockedBy`, the status, callout, and row derive blocked presentation states and a dedicated blocker-reason panel follows the list. Priority, kind, project, due date, and update time become one compact summary; source, creation time, and file move behind a plan-details toggle. This presentation remains read-only. Legacy plans without `steps` show an explicit missing-structure notice and retain the old current/next compatibility area.
 
+When the current step, current progress, or current waiting target clearly indicates QA testing or acceptance, the card derives a purple `Awaiting QA` badge. This means the result may still return for rework after QA. A future QA step that has not started does not trigger the badge, and the source plan's wire `status` remains unchanged.
+
 ## Write boundary
 
 Plan and memory views are read-only. The tray does not create, edit, complete, archive, delete, normalize, or migrate role-knowledge files. Writes go through the Manager's Agent/role APIs.

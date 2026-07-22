@@ -7,13 +7,25 @@ export type StatusPayloadContext = {
   rolesDir: string;
 };
 
-export function standaloneGatewayPayload(ctx: StatusPayloadContext): Record<string, unknown> {
+export type StatusPayloadOptions = {
+  includeConfigDefinitions?: boolean;
+};
+
+export function gatewayPayloadIncludesDiagnostics(searchParams: Pick<URLSearchParams, "get">): boolean {
+  return searchParams.get("summary") !== "1";
+}
+
+export function standaloneGatewayPayload(
+  ctx: StatusPayloadContext,
+  options: StatusPayloadOptions = {}
+): Record<string, unknown> {
   const runtimes = [...ctx.runtimes];
+  const includeConfigDefinitions = options.includeConfigDefinitions !== false;
   return {
     code: 0,
     data: {
       config: {
-        gateways: runtimes.map((runtime) => runtime.definition)
+        gateways: includeConfigDefinitions ? runtimes.map((runtime) => runtime.definition) : []
       },
       configFiles: {
         routeDir: ctx.routeDir,

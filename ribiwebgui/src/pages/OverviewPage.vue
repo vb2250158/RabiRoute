@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
+import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { adapterLabel, adaptersNeedGatewayRuntime, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
@@ -28,6 +29,11 @@ const rabiLinkSpeechServiceUrl = ref("http://127.0.0.1:8781");
 const gatewayActionId = ref("");
 const gatewayActionError = ref("");
 const deletingGatewayId = ref("");
+
+function avatarUrlForGateway(gatewayId: string, roleId?: string): string {
+  const options = store.runtimeFor(gatewayId).roleInfo?.options || [];
+  return options.find(option => option.value === roleId)?.avatarUrl || "";
+}
 
 async function loadDirConfig() {
   try {
@@ -362,9 +368,7 @@ const selectedAgentNote = computed(() => {
             @click="store.selectGateway(gw.id)"
           >
             <template #prepend>
-              <v-avatar color="secondary" variant="tonal" size="36">
-                <v-icon>mdi-routes</v-icon>
-              </v-avatar>
+              <PersonaAvatar :role-id="gw.agentRoleId || ''" :avatar-url="avatarUrlForGateway(gw.id, gw.agentRoleId)" :size="36" />
             </template>
             <v-list-item-title class="font-weight-bold">{{ store.configNameFor(gw) }}</v-list-item-title>
             <v-list-item-subtitle>

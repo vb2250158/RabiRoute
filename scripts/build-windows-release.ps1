@@ -67,10 +67,17 @@ if (-not $SkipTrayBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Tray build failed." }
 }
 
+if (-not $SkipBuild) {
+    Write-Step "Building the RabiSpeech Windows process host"
+    & (Join-Path $repo "plugin-adapters\rabi-speech\scripts\build-windows-host.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "RabiSpeech Windows host build failed." }
+}
+
 $required = @(
     "dist\manager.js",
     "ribiwebgui\dist\index.html",
-    "RabiRoute-Tray.exe"
+    "RabiRoute-Tray.exe",
+    "plugin-adapters\rabi-speech\runtime\RabiSpeech.exe"
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $repo $relative))) {
@@ -112,6 +119,11 @@ foreach ($relative in @(
 foreach ($tree in @("assets", "docs", "examples\data", "plugin-adapters", "scripts")) {
     Copy-TrackedTree $tree
 }
+
+$speechHostRelative = "plugin-adapters\rabi-speech\runtime\RabiSpeech.exe"
+$speechHostDestination = Join-Path $payload $speechHostRelative
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $speechHostDestination) | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo $speechHostRelative) -Destination $speechHostDestination -Force
 
 Write-Step "Installing production-only npm dependencies into the payload"
 & npm.cmd ci --omit=dev --ignore-scripts --prefix $payload

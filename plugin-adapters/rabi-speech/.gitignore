@@ -1,8 +1,13 @@
 config.json
 microphone.json
 .deps/
+.builddeps/
+.testdeps/
+.dashscope-inspect/
 .pytest_cache/
 __pycache__/
 *.pyc
 output/
+runtime/
 temp/
+benchmarks/private/

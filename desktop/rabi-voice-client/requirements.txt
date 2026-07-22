@@ -1,0 +1,4 @@
+numpy>=1.24,<3
+sounddevice>=0.5,<1
+websockets>=13,<17
+PySide6>=6.7,<7

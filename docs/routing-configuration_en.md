@@ -22,7 +22,7 @@ Reusable role rules:
 data/roles/<RoleId>/personaConfig.json
 ```
 
-The route points to the role with `agentRoleId`. A role can contain rule profiles for several `configName` values.
+The route points to the role with `agentRoleId`. The current persona file keeps root-level `notificationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Several Routes may reuse the same role-owned policy.
 
 ## `personaConfig.json`
 
@@ -30,12 +30,25 @@ A representative shape:
 
 ```json
 {
+  "recentMessageLimits": {
+    "napcat": 100,
+    "remoteAgent": 100,
+    "heartbeat": 100,
+    "rolePanel": 100,
+    "speech": 100,
+    "fennenote": 100,
+    "xiaoai": 100,
+    "rabilink": 100,
+    "wearable": 100,
+    "webhook": 100,
+    "wecom": 100
+  },
+  "speechTriggerKeywords": ["Rabi", "assistant"],
   "notificationRules": [
     {
       "id": "main-direct",
       "name": "Direct messages",
       "enabled": true,
-      "configName": "main",
       "routeKinds": ["private", "direct_at", "direct_reply"],
       "regex": "",
       "targetGroupId": "",
@@ -63,9 +76,17 @@ role_panel_message
 voice_transcript
 rabilink
 wecom_message
+wearable_health_alert
 ```
 
 Use the narrowest kind that represents the source event. `group_message` is normally combined with `regex`; explicit mentions/replies use their dedicated kinds.
+
+## Ordinary delivery and endpoint-specific exceptions
+
+- Once an ordinary endpoint message matches a rule, it is delivered directly: `steer` the active Desktop turn or `start` an idle task.
+- Heartbeat owns the separate `heartbeatSkipWhenAgentBusy` exception; it does not suppress ordinary messages.
+- Speech owns Route `speechPushMode`: `hot` delivers every completed ASR segment, while `keyword` records all segments and delivers only after a persona `speechTriggerKeywords` match. An empty list never falls back to hot.
+- Persona `recentMessageLimits` independently configures 11 endpoint budgets from `0` to `200`, with a schema default of `100`. Zero disables automatic injection only.
 
 ## Pipelines
 
@@ -114,7 +135,9 @@ Do not use an extremely broad ambient-group regex when a direct mention or dedic
 {dataDir} {groupLogPath} {privateLogPath} {heartbeatLogPath}
 {manualTriggerLogPath} {rolePanelLogPath} {voiceTranscriptLogPath}
 {triggerId} {triggerName} {heartbeatIntervalSeconds}
-{recentMessages} {recentMessageLimit}
+{recentMessages} {recentMessageLimit} {recentMessageEndpoint}
+{recentConversationKey} {conversationCurrentPath}
+{conversationArchiveDir} {conversationArchiveIndexPath}
 {replyApiUrl} {replyContextJson}
 {pipelinePreset} {inputAdapter} {outputAdapter} {outputPipeline}
 {promptOutputMode} {replyToSource}

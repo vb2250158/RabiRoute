@@ -18,6 +18,7 @@ from rabiroute_tray.manager_client import ManagerSnapshot
 from rabiroute_tray.role_context_repository import ContextEntry, RoleContextSnapshot
 from rabiroute_tray.task_repository import PlanItem, PlanSnapshot, PlanStep
 from rabiroute_tray.task_window import ExpandableCard, KeywordPanel, MessageComposer, STYLESHEET, TaskWindow, VIEW_LABELS
+from rabiroute_tray.theme import RABI_MENU_STYLESHEET, apply_rabi_menu_theme
 
 
 class TaskWindowLayoutTest(unittest.TestCase):
@@ -89,6 +90,15 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertIn("#19bfc1", STYLESHEET)
         self.assertNotIn("background: #1b1e1e", STYLESHEET)
 
+    def test_menu_theme_matches_webgui_light_palette(self) -> None:
+        self.assertIn("background: #ffffff", RABI_MENU_STYLESHEET)
+        self.assertIn("background: #eaf8f9", RABI_MENU_STYLESHEET)
+        self.assertIn("color: #0c2a4a", RABI_MENU_STYLESHEET)
+        self.assertIn("background: #e5ebef", RABI_MENU_STYLESHEET)
+
+        apply_rabi_menu_theme(self.window.more_menu)
+        self.assertEqual(self.window.more_menu.styleSheet(), RABI_MENU_STYLESHEET)
+
     def test_six_view_navigation_fits_minimum_window_width(self) -> None:
         self.window.resize(self.window.minimumSize())
         self.app.processEvents()
@@ -138,6 +148,32 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertEqual(send_count, 1)
         self.assertIn("\n", composer.toPlainText())
         composer.close()
+
+    def test_pending_send_keeps_draft_and_prevents_duplicate_submit(self) -> None:
+        sent: list[tuple[str, list[dict]]] = []
+        self.window.send_message_requested.connect(lambda text, attachments: sent.append((text, attachments)))
+        self.window.message_input.setPlainText("耗时投递")
+
+        self.window._send_message()
+        self.window.set_message_send_pending(True)
+        self.window._send_message()
+
+        self.assertEqual(sent, [("耗时投递", [])])
+        self.assertEqual(self.window.message_input.toPlainText(), "耗时投递")
+        self.assertFalse(self.window.send_button.isEnabled())
+        self.assertIn("正在投递", self.window.footer_label.text())
+
+        self.window.complete_message_send(True)
+        self.assertEqual(self.window.message_input.toPlainText(), "")
+        self.assertTrue(self.window.send_button.isEnabled())
+
+    def test_failed_send_restores_composer_without_clearing_draft(self) -> None:
+        self.window.message_input.setPlainText("请保留这条消息")
+        self.window.set_message_send_pending(True)
+        self.window.complete_message_send(False)
+
+        self.assertEqual(self.window.message_input.toPlainText(), "请保留这条消息")
+        self.assertTrue(self.window.send_button.isEnabled())
 
     def test_current_view_separates_plans_and_recent_memory(self) -> None:
         self.window.set_view("current")
@@ -307,6 +343,44 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertEqual(len(blocked_rows), 1)
         self.assertEqual(blocked_rows[0].findChild(QLabel, "planStepState").text(), "已阻塞")
         self.assertNotIn("重装应用", summary_values)
+        card.close()
+
+    def test_waiting_qa_plan_uses_purple_status_badge(self) -> None:
+        plan = PlanItem(
+            title="等待 QA 的计划",
+            status="进行中",
+            current_step="修复已完成，等待 QA 真机结果",
+            current_step_id="verify",
+            steps=[
+                PlanStep("实施修复", "已完成", step_id="implement"),
+                PlanStep("等待QA完成验收", "进行中", step_id="verify"),
+            ],
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        card.show()
+        self.app.processEvents()
+
+        self.assertEqual(card.status_label.text(), "状态：待QA测试")
+        self.assertEqual(card.status_label.property("statusTone"), "qa")
+        card.close()
+
+    def test_future_qa_step_does_not_change_running_status_badge(self) -> None:
+        plan = PlanItem(
+            title="仍在开发的计划",
+            status="进行中",
+            current_step="正在实现已批准方案",
+            current_step_id="implement",
+            steps=[
+                PlanStep("实施修复", "进行中", step_id="implement"),
+                PlanStep("等待QA完成验收", "未开始", step_id="verify"),
+            ],
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        card.show()
+        self.app.processEvents()
+
+        self.assertEqual(card.status_label.text(), "状态：进行中")
+        self.assertEqual(card.status_label.property("statusTone"), "running")
         card.close()
 
     def test_plan_metadata_keeps_primary_fields_compact_and_secondary_fields_collapsed(self) -> None:

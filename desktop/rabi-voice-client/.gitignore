@@ -1,0 +1,11 @@
+build/
+build-fast/
+build-package/
+dist/
+dist-fast/
+dist-package/
+.venv*/
+config.json
+__pycache__/
+.pytest_cache/
+*.pyc

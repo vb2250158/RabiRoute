@@ -1,152 +1,107 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { storeToRefs } from "pinia";
-import { resolveSpeechRouteProfile, type SpeechEvent, type SpeechMicrophoneStats } from "@shared/speechControlContract";
+import {
+  type SpeechEvent,
+  type SpeechHistoryItem,
+  type SpeechMicrophoneStats
+} from "@shared/speechControlContract";
+import { speechHistoryDeliveryPresentation } from "../speech/speechDeliveryPresentation";
 import { useSpeechStore } from "../stores/speechStore";
 import SpeechLevelWaveform from "./SpeechLevelWaveform.vue";
 
-const props = defineProps<{
-  routeId: string;
-  routeName?: string;
-  routeRunning?: boolean;
-  routeVariables?: Record<string, string>;
-}>();
-
+const props = defineProps<{ subscriberCount: number }>();
 const speech = useSpeechStore();
 const { microphone: status, playback } = storeToRefs(speech);
-const playbackJobs = computed(() => playback.value?.jobs ?? []);
 const refreshing = ref(false);
-const actionBusy = ref(false);
 const localError = ref("");
 const error = computed(() => localError.value || speech.error);
 const showLog = ref(true);
-
-const variables = computed(() => props.routeVariables ?? {});
-const profile = computed(() => resolveSpeechRouteProfile(variables.value, props.routeId || "Rabi"));
 const stats = computed<SpeechMicrophoneStats>(() => status.value?.stats ?? {
   captured: 0,
   recognized: 0,
   empty: 0,
+  delivered: 0,
+  recorded: 0,
+  deliveryFailed: 0,
   submitted: 0,
   submitFailed: 0,
   dropped: 0
 });
 const events = computed(() => status.value?.events ?? []);
 const history = computed(() => status.value?.history ?? []);
-const activeRouteId = computed(() => status.value?.config.routeId || "");
-const routeMatches = computed(() => activeRouteId.value === props.routeId);
-const autoSubmitActive = computed(() => status.value?.config.autoSubmit === true && routeMatches.value);
-const latestRouteEvent = computed(() => events.value.find(item => item.stage === "route"));
-const latestPlayback = computed(() => playbackJobs.value
-  .filter(item => item.routeId === props.routeId)
+const latestPlayback = computed(() => [...(playback.value?.jobs ?? [])]
   .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))[0]);
+const latestRouteEvent = computed(() => events.value.find(event => event.stage === "route"));
 type PipelineState = "idle" | "ready" | "active" | "success" | "warning" | "error";
 type PipelineStage = { key: string; label: string; detail: string; state: PipelineState; icon: string };
 
 const pipelineStages = computed<PipelineStage[]>(() => {
   const current = status.value;
+  const playbackJob = latestPlayback.value;
   const routeEvent = latestRouteEvent.value;
-  const playback = latestPlayback.value;
   const microphoneState: PipelineState = current?.state === "error" ? "error" : current?.running ? "success" : "idle";
   const vadState: PipelineState = current?.utteranceActive ? "active" : Number(stats.value.captured || 0) > 0 ? "success" : current?.running ? "ready" : "idle";
   const asrState: PipelineState = current?.state === "transcribing" ? "active" : events.value[0]?.kind === "transcription_failed" ? "error" : Number(stats.value.recognized || 0) > 0 ? "success" : current?.running ? "ready" : "idle";
-  let routeState: PipelineState = props.routeRunning === false ? "warning" : "ready";
-  if (!current?.running || !routeMatches.value || !autoSubmitActive.value) routeState = "warning";
-  if (routeEvent?.kind === "route_submission_failed") routeState = "error";
-  else if (routeEvent?.kind === "route_submission_started") routeState = "active";
-  else if (Number(stats.value.submitted || 0) > 0 && routeMatches.value) routeState = "success";
+  let broadcastState: PipelineState = props.subscriberCount === 0 || !current?.running ? "warning" : "ready";
+  if (routeEvent?.kind === "route_submission_failed") broadcastState = "error";
+  else if (routeEvent?.kind === "route_submission_started") broadcastState = "active";
+  else if (routeEvent?.kind === "route_recorded_only") broadcastState = "warning";
+  else if (routeEvent?.kind === "route_delivery_succeeded" || Number(stats.value.submitted || 0) > 0) broadcastState = "success";
+  const broadcastDetail = props.subscriberCount === 0
+    ? "没有 Route 订阅语音消息"
+    : !current?.running
+      ? "等待常驻监听启动"
+      : routeEvent?.message || `等待广播给 ${props.subscriberCount} 个 Route`;
   let playbackState: PipelineState = "idle";
-  if (playback?.status === "playing" || playback?.status === "queued") playbackState = "active";
-  else if (playback?.status === "done") playbackState = "success";
-  else if (playback?.status === "error") playbackState = "error";
+  if (playbackJob?.status === "playing" || playbackJob?.status === "queued") playbackState = "active";
+  else if (playbackJob?.status === "done") playbackState = "success";
+  else if (playbackJob?.status === "error") playbackState = "error";
 
   return [
-    {
-      key: "microphone",
-      label: "麦克风",
-      detail: current?.running ? current.state === "playback_suppressed" ? "播放防回流" : "常驻监听中" : "未启动",
-      state: microphoneState,
-      icon: "mdi-microphone-outline"
-    },
-    {
-      key: "vad",
-      label: "VAD 切句",
-      detail: current?.utteranceActive ? "正在收音" : `已捕获 ${Number(stats.value.captured || 0)} 段`,
-      state: vadState,
-      icon: "mdi-waveform"
-    },
-    {
-      key: "asr",
-      label: "本地 ASR",
-      detail: current?.state === "transcribing" ? "正在识别" : `已识别 ${Number(stats.value.recognized || 0)} 段`,
-      state: asrState,
-      icon: "mdi-text-box-search-outline"
-    },
-    {
-      key: "route",
-      label: "Route 投递",
-      detail: !routeMatches.value ? "未绑定当前 Route" : !autoSubmitActive.value ? "自动投递未启用" : routeEvent?.message || "等待语音消息",
-      state: routeState,
-      icon: "mdi-transit-connection-variant"
-    },
-    {
-      key: "playback",
-      label: "回复与播放",
-      detail: playback ? playback.status === "playing" ? "正在播放" : playback.status === "queued" ? "等待播放" : playback.status === "done" ? "最近播放完成" : playback.status === "error" ? "播放失败" : playback.status : "尚无回复音频",
-      state: playbackState,
-      icon: "mdi-account-voice"
-    }
+    { key: "microphone", label: "麦克风", detail: current?.running ? current.state === "playback_suppressed" ? "播放防回流" : "常驻监听中" : "未启动", state: microphoneState, icon: "mdi-microphone-outline" },
+    { key: "vad", label: "VAD 切句", detail: current?.utteranceActive ? "正在收音" : `已捕获 ${Number(stats.value.captured || 0)} 段`, state: vadState, icon: "mdi-waveform" },
+    { key: "asr", label: "ASR 转写", detail: current?.state === "transcribing" ? "正在识别" : `已识别 ${Number(stats.value.recognized || 0)} 段`, state: asrState, icon: "mdi-text-box-search-outline" },
+    { key: "route", label: "广播投递", detail: broadcastDetail, state: broadcastState, icon: "mdi-broadcast" },
+    { key: "playback", label: "回复与播放", detail: playbackJob ? playbackJob.status === "playing" ? "正在播放" : playbackJob.status === "queued" ? "等待播放" : playbackJob.status === "done" ? "最近播放完成" : playbackJob.status === "error" ? "播放失败" : playbackJob.status : "尚无回复音频", state: playbackState, icon: "mdi-account-voice" }
   ];
 });
 
-function stageClass(state: PipelineState): string {
-  return `is-${state}`;
-}
-
+function stageClass(state: PipelineState): string { return `is-${state}`; }
 function stageLabel(state: PipelineState): string {
-  return ({
-    idle: "未运行",
-    ready: "等待",
-    active: "处理中",
-    success: "正常",
-    warning: "需检查",
-    error: "异常"
-  } as Record<PipelineState, string>)[state];
+  return ({ idle: "未运行", ready: "等待", active: "处理中", success: "正常", warning: "需检查", error: "异常" } as Record<PipelineState, string>)[state];
 }
-
 function eventIcon(event: SpeechEvent): string {
   if (event.level === "error") return "mdi-alert-circle-outline";
-  if (event.stage === "route") return "mdi-transit-connection-variant";
+  if (event.stage === "route") return "mdi-broadcast";
   if (event.stage === "asr") return "mdi-text-box-search-outline";
   if (event.stage === "vad") return "mdi-waveform";
   return "mdi-microphone-outline";
 }
-
 function formatTime(timestamp: number | undefined): string {
-  if (!timestamp) return "-";
-  return new Date(timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false });
+  return timestamp ? new Date(timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "-";
 }
-
 function eventDetail(event: SpeechEvent): string {
   const details = event.details;
   const parts: string[] = [];
   if (details.duration != null) parts.push(`${Number(details.duration).toFixed(2)} 秒`);
   if (details.model) parts.push(String(details.model));
   if (details.routeId) parts.push(`Route: ${details.routeId}`);
+  if (details.messageId) parts.push(`messageId: ${details.messageId}`);
+  if (details.reason) parts.push(String(details.reason));
   if (details.error) parts.push(String(details.error));
   return parts.join(" · ");
 }
-
+function historySpeakerSummary(item: SpeechHistoryItem): string {
+  return [...new Set((item.segments || []).map(segment => segment.speakerName || segment.speakerLabel || segment.speaker || "").filter(Boolean))].join(" / ");
+}
+function historyDeliveryLabel(item: SpeechHistoryItem): string { return speechHistoryDeliveryPresentation(item).label; }
+function historyDeliveryColor(item: SpeechHistoryItem): string { return speechHistoryDeliveryPresentation(item).color; }
 async function refresh(): Promise<void> {
   if (refreshing.value) return;
   refreshing.value = true;
   try {
-    const [microphoneResponse, playbackResponse] = await Promise.all([
-      speech.refreshMicrophone(),
-      speech.refreshPlayback()
-    ]);
-    void microphoneResponse;
-    void playbackResponse;
+    await Promise.all([speech.refreshMicrophone(), speech.refreshPlayback()]);
     localError.value = "";
   } catch (cause) {
     localError.value = cause instanceof Error ? cause.message : String(cause);
@@ -154,94 +109,30 @@ async function refresh(): Promise<void> {
     refreshing.value = false;
   }
 }
-
-async function stopListening(): Promise<void> {
-  actionBusy.value = true;
-  try {
-    await speech.stopMicrophone();
-  } catch (cause) {
-    localError.value = cause instanceof Error ? cause.message : String(cause);
-  } finally {
-    actionBusy.value = false;
-  }
-}
-
-async function startListening(): Promise<void> {
-  if (!props.routeId) return;
-  actionBusy.value = true;
-  try {
-    if (status.value?.running) {
-      await speech.stopMicrophone();
-    }
-    const previous = status.value?.config;
-    await speech.startMicrophone({
-      device: previous?.device ?? null,
-      sampleRate: previous?.sampleRate ?? 16_000,
-      chunkMs: previous?.chunkMs ?? 100,
-      preRollMs: profile.value.preRollMs,
-      recordThreshold: profile.value.recordThreshold,
-      transcribeThreshold: profile.value.transcribeThreshold,
-      adaptiveThreshold: profile.value.adaptiveThreshold,
-      adaptiveMultiplier: previous?.adaptiveMultiplier ?? 2.5,
-      adaptiveMargin: previous?.adaptiveMargin ?? 0.004,
-      silenceMs: profile.value.silenceMs,
-      minUtteranceMs: profile.value.minUtteranceMs,
-      maxUtteranceMs: profile.value.maxUtteranceMs,
-      inputGain: profile.value.inputGain,
-      asrModel: profile.value.asrModel,
-      language: profile.value.language || null,
-      prompt: previous?.prompt ?? null,
-      routeId: props.routeId,
-      sessionId: routeMatches.value && previous?.sessionId ? previous.sessionId : `speech-${props.routeId}`,
-      autoSubmit: profile.value.autoSubmit,
-      suppressDuringPlayback: true
-    });
-  } catch (cause) {
-    localError.value = cause instanceof Error ? cause.message : String(cause);
-  } finally {
-    actionBusy.value = false;
-  }
-}
-
-let releaseSpeech: (() => void) | undefined;
-onMounted(async () => {
-  releaseSpeech = await speech.acquire();
-});
-onBeforeUnmount(() => releaseSpeech?.());
 </script>
 
 <template>
-  <section class="speech-route-monitor" aria-label="语音 Route 实时监视器">
+  <section class="speech-host-monitor" aria-label="主机语音实时监视器">
     <header class="monitor-toolbar">
       <div>
-        <div class="monitor-kicker">FENNE-STYLE LIVE ROUTE</div>
-        <h4>{{ routeName || routeId }} · 语音链路</h4>
-        <p>消息端总开关只启用配置；麦克风是否真正监听，以这里的运行状态为准。</p>
+        <div class="monitor-kicker">HOST SPEECH PIPELINE</div>
+        <h4>主机语音链路</h4>
+        <p>麦克风、VAD、ASR、广播投递和播放属于整台电脑；同一段转写只识别一次。</p>
       </div>
       <div class="monitor-actions">
-        <v-chip :color="status?.running ? routeMatches ? 'success' : 'warning' : 'grey'" variant="tonal">
-          {{ status?.running ? routeMatches ? "当前 Route 监听中" : `其他 Route 监听中：${activeRouteId || '-'}` : "麦克风未启动" }}
+        <v-chip :color="status?.running ? 'success' : subscriberCount ? 'warning' : 'grey'" variant="tonal">
+          {{ status?.running ? `常驻监听中 · ${subscriberCount} 个 Route 已订阅` : subscriberCount ? "等待常驻监听启动" : "没有 Route 订阅语音消息" }}
         </v-chip>
         <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="refreshing" @click="refresh">刷新</v-btn>
-        <v-btn
-          v-if="!status?.running || !routeMatches"
-          color="primary"
-          prepend-icon="mdi-microphone"
-          :loading="actionBusy"
-          :disabled="!routeId"
-          @click="startListening"
-        >{{ status?.running ? "切换并启动此 Route" : "开始语音聊天" }}</v-btn>
-        <v-btn v-else color="error" variant="tonal" prepend-icon="mdi-stop" :loading="actionBusy" @click="stopListening">停止监听</v-btn>
-        <v-btn variant="tonal" prepend-icon="mdi-tune-variant" href="#/speech">详细控制台</v-btn>
       </div>
     </header>
 
     <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mb-3">{{ error }}</v-alert>
-    <v-alert v-else-if="!status?.running" type="warning" variant="tonal" density="compact" class="mb-3">
-      当前只是“语音消息端配置已启用”，麦克风并未监听。点击“开始语音聊天”后，说话才会进入 VAD、ASR 和 Route。
+    <v-alert v-else-if="subscriberCount === 0" type="info" variant="tonal" density="compact" class="mb-3">
+      当前没有 Route 订阅语音消息。到对应 Route 打开“语音消息端”后，主机才会保持常驻监听。
     </v-alert>
-    <v-alert v-else-if="!routeMatches || !autoSubmitActive" type="warning" variant="tonal" density="compact" class="mb-3">
-      麦克风正在运行，但没有自动投递到当前 Route。点击“切换并启动此 Route”应用本页配置。
+    <v-alert v-else-if="!status?.running" type="warning" variant="tonal" density="compact" class="mb-3">
+      已有 Route 订阅，但常驻监听尚未启动；系统正在恢复主机语音服务，可刷新查看最新状态。
     </v-alert>
 
     <div class="pipeline-strip">
@@ -256,19 +147,19 @@ onBeforeUnmount(() => releaseSpeech?.());
       <div class="meter-head">
         <span>实时电平 <b>{{ Number(status?.level || 0).toFixed(4) }}</b></span>
         <span>底噪 {{ Number(status?.noiseFloor || 0).toFixed(4) }}</span>
-        <span>动态阈值 {{ Number(status?.dynamicThreshold || profile.recordThreshold).toFixed(4) }}</span>
+        <span>动态阈值 {{ Number(status?.dynamicThreshold || status?.config.recordThreshold || 0).toFixed(4) }}</span>
       </div>
       <SpeechLevelWaveform
         :levels="status?.levelHistory || []"
-        :record-threshold="profile.recordThreshold"
-        :transcribe-threshold="profile.transcribeThreshold"
+        :record-threshold="Number(status?.config.recordThreshold || 0)"
+        :transcribe-threshold="Number(status?.config.transcribeThreshold || 0)"
         :dynamic-threshold="Number(status?.dynamicThreshold || 0)"
         :running="status?.running"
         :state="status?.state"
       />
       <div class="meter-thresholds">
-        <span>录音线 {{ profile.recordThreshold.toFixed(3) }}</span>
-        <span>转写线 {{ profile.transcribeThreshold.toFixed(3) }}</span>
+        <span>录音线 {{ Number(status?.config.recordThreshold || 0).toFixed(3) }}</span>
+        <span>转写线 {{ Number(status?.config.transcribeThreshold || 0).toFixed(3) }}</span>
         <span>待识别 {{ status?.pending || 0 }}</span>
       </div>
     </div>
@@ -276,13 +167,14 @@ onBeforeUnmount(() => releaseSpeech?.());
     <div class="monitor-counters">
       <div><span>捕获片段</span><b>{{ Number(stats.captured || 0) }}</b></div>
       <div><span>识别成功</span><b>{{ Number(stats.recognized || 0) }}</b></div>
-      <div><span>Route 已受理</span><b>{{ Number(stats.submitted || 0) }}</b></div>
-      <div :class="Number(stats.submitFailed || 0) ? 'counter-error' : ''"><span>投递失败</span><b>{{ Number(stats.submitFailed || 0) }}</b></div>
+      <div><span>Desktop 已投递</span><b>{{ Number(stats.delivered || 0) }}</b></div>
+      <div :class="Number(stats.recorded || 0) ? 'counter-warning' : ''"><span>仅记录</span><b>{{ Number(stats.recorded || 0) }}</b></div>
+      <div :class="Number(stats.deliveryFailed || stats.submitFailed || 0) ? 'counter-error' : ''"><span>投递失败</span><b>{{ Number(stats.deliveryFailed || stats.submitFailed || 0) }}</b></div>
       <div :class="Number(stats.dropped || 0) ? 'counter-warning' : ''"><span>队列丢弃</span><b>{{ Number(stats.dropped || 0) }}</b></div>
     </div>
 
     <div class="log-toolbar">
-      <div><strong>运行日志与转写预览</strong><span>来自 RabiSpeech 当前进程；不会因为刷新页面丢失。</span></div>
+        <div><strong>运行日志与转写预览</strong><span>诊断事件属于当前主机进程；下方持久化记录保留完整 ASR/TTS 文本。</span></div>
       <v-btn size="small" variant="text" :prepend-icon="showLog ? 'mdi-chevron-up' : 'mdi-chevron-down'" @click="showLog = !showLog">{{ showLog ? "收起日志" : "展开日志" }}</v-btn>
     </div>
     <div v-if="showLog" class="monitor-log-grid">
@@ -295,15 +187,15 @@ onBeforeUnmount(() => releaseSpeech?.());
             <div><strong>{{ event.message }}</strong><span v-if="eventDetail(event)">{{ eventDetail(event) }}</span></div>
           </div>
         </div>
-        <div v-else class="empty-log">暂无事件。点击“开始语音聊天”后，这里会逐步显示收音、识别和 Route 投递。</div>
+        <div v-else class="empty-log">暂无事件。任意 Route 开启语音消息端后，这里会显示收音、识别和广播投递。</div>
       </div>
       <div class="monitor-log-panel">
         <div class="panel-title">最近转写</div>
         <div v-if="history.length" class="transcript-list">
           <div v-for="item in history.slice(0, 8)" :key="`${item.time}-${item.text}`">
-            <div><time>{{ formatTime(item.time) }}</time><v-chip size="x-small" :color="item.submitError ? 'error' : item.submitted ? 'success' : 'grey'" variant="tonal">{{ item.submitError ? "投递失败" : item.submitted ? "已送入 Route" : "仅转写" }}</v-chip></div>
+            <div><time>{{ formatTime(item.time) }}</time><v-chip size="x-small" :color="historyDeliveryColor(item)" variant="tonal">{{ historyDeliveryLabel(item) }}</v-chip></div>
             <p>{{ item.text }}</p>
-            <span>{{ item.provider }}/{{ item.model }} · {{ Number(item.duration || 0).toFixed(2) }} 秒</span>
+            <span>{{ item.provider }}/{{ item.model }} · {{ Number(item.duration || 0).toFixed(2) }} 秒<span v-if="historySpeakerSummary(item)"> · 说话人：{{ historySpeakerSummary(item) }}</span></span>
           </div>
         </div>
         <div v-else class="empty-log">还没有转写结果。</div>
@@ -313,7 +205,7 @@ onBeforeUnmount(() => releaseSpeech?.());
 </template>
 
 <style scoped>
-.speech-route-monitor { grid-column: 1 / -1; padding: 18px; border: 1px solid rgba(15, 139, 141, .24); border-radius: 16px; background: linear-gradient(145deg, rgba(244, 253, 253, .95), rgba(248, 251, 253, .9)); }
+.speech-host-monitor { grid-column: 1 / -1; padding: 18px; border: 1px solid rgba(15, 139, 141, .24); border-radius: 16px; background: linear-gradient(145deg, rgba(244, 253, 253, .95), rgba(248, 251, 253, .9)); }
 .monitor-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
 .monitor-kicker { color: #0f8b8d; font-size: 10px; font-weight: 900; letter-spacing: .13em; }
 .monitor-toolbar h4 { margin: 4px 0; color: #0c2a4a; font-size: 18px; }
@@ -338,7 +230,7 @@ onBeforeUnmount(() => releaseSpeech?.());
 .meter-head, .meter-thresholds { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 18px; color: #607487; font-size: 11px; }
 .meter-head { margin-bottom: 8px; }
 .meter-thresholds { margin-top: 7px; }
-.monitor-counters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.monitor-counters { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
 .monitor-counters > div { display: flex; align-items: baseline; justify-content: space-between; padding: 9px 11px; border-radius: 10px; background: rgba(17, 32, 51, .045); }
 .monitor-counters span { color: #718293; font-size: 10px; }
 .monitor-counters b { color: #24435a; font-size: 16px; }

@@ -25,8 +25,8 @@ import { normalizePipelineDefinition } from "../pipelines.js";
 import {
   mergeNotificationRules,
   migrateLegacyConfigs,
-  readJsonFile,
   readPersonaConfigFragment,
+  writePersonaConfig as writePersonaConfigFile,
   writePersonaRules
 } from "./configMigration.js";
 
@@ -126,16 +126,19 @@ export class ManagerConfigRepository {
     writePersonaRules(this.personaConfigPath(roleId), rules);
   }
 
-  writePersonaConfig(roleId: string, fragment: Pick<GatewayDefinition, "notificationRules" | "recentMessageLimit">): void {
-    const configPath = this.personaConfigPath(roleId);
-    const existing = readJsonFile(configPath);
-    const base = existing && typeof existing === "object" && !Array.isArray(existing) ? existing as Record<string, unknown> : {};
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify({
-      ...base,
-      recentMessageLimit: fragment.recentMessageLimit,
-      notificationRules: ensureDefaultPersonaRules(mergeNotificationRules(fragment.notificationRules))
-    }, null, 2), "utf8");
+  writePersonaConfig(
+    roleId: string,
+    fragment: Pick<
+      GatewayDefinition,
+      "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
+    >
+  ): void {
+    writePersonaConfigFile(this.personaConfigPath(roleId), {
+      ...fragment,
+      notificationRules: fragment.notificationRules === undefined
+        ? undefined
+        : ensureDefaultPersonaRules(mergeNotificationRules(fragment.notificationRules))
+    });
   }
 
   private configPathValue(value: unknown): string | undefined {
@@ -200,7 +203,10 @@ export class ManagerConfigRepository {
     autoAssignGatewayPorts(normalized.gateways, this.managerPort);
     validateGatewayPortConflicts(normalized.gateways);
     const activeConfigNames = new Set<string>();
-    const groupedByRole = new Map<string, Pick<GatewayDefinition, "notificationRules" | "recentMessageLimit">>();
+    const groupedByRole = new Map<string, Pick<
+      GatewayDefinition,
+      "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
+    >>();
     for (let i = 0; i < normalized.gateways.length; i += 1) {
       const definition = normalized.gateways[i];
       const raw = config.gateways[i];
@@ -220,7 +226,9 @@ export class ManagerConfigRepository {
       if (roleId) {
         const previous = groupedByRole.get(roleId);
         groupedByRole.set(roleId, {
-          recentMessageLimit: definition.recentMessageLimit,
+          recentMessageLimit: previous?.recentMessageLimit ?? definition.recentMessageLimit,
+          recentMessageLimits: previous?.recentMessageLimits ?? definition.recentMessageLimits,
+          speechTriggerKeywords: previous?.speechTriggerKeywords ?? definition.speechTriggerKeywords,
           notificationRules: mergeNotificationRules(previous?.notificationRules, definition.notificationRules)
         });
       }
@@ -240,6 +248,8 @@ export class ManagerConfigRepository {
       routeProfiles: _routeProfiles,
       dataDir: _dataDir,
       recentMessageLimit: _recentMessageLimit,
+      recentMessageLimits: _recentMessageLimits,
+      speechTriggerKeywords: _speechTriggerKeywords,
       rabiLinkRelayEnabled: _rabiLinkRelayEnabled,
       rabiLinkRelayUrl: _rabiLinkRelayUrl,
       rabiLinkRelayToken: _rabiLinkRelayToken,

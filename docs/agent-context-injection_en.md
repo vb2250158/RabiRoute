@@ -35,7 +35,7 @@ Default injection is lightweight:
 
 - Essential event fields.
 - CQ `reply` / `at` explanations for QQ messages. Reply chains are expanded from message records, while at mappings are collected together.
-- Recent-message summaries when `recentMessageLimit` enables them.
+- Recent bidirectional messages allowed by the current endpoint's persona-owned `recentMessageLimits` value.
 - Role, route, and workspace-relative paths.
 - A link to the Rabi Agent interface guide.
 - Active-plan, recent-memory, and role-skill indexes.
@@ -44,6 +44,22 @@ Default injection is lightweight:
 - The reply API and serialized `replyContext`.
 
 It does not inject every chat log, complete plan body, complete memory body, consolidated-memory corpus, or full diagnostic report. The handler must fetch a specific item by ID when it needs details.
+
+## Canonical bidirectional conversation ledger
+
+Automatic recent context no longer builds separate one-way summaries from `group-messages.jsonl`, `voice-transcripts.jsonl`, `wecom-messages.jsonl`, and similar protocol files. Those files remain audit and compatibility evidence. The automatic-context source of truth is:
+
+```text
+data/roles/<RoleId>/conversation/current.jsonl
+data/roles/<RoleId>/conversation/archive/<firstSequence>~<lastSequence>.jsonl
+data/roles/<RoleId>/conversation/archive/index.json
+```
+
+The ledger includes both directions: QQ replies sent by the role, ASR/TTS, WeCom, Remote Agent, role panel, RabiLink, and other integrated endpoint traffic. Each record keeps the logical adapter, physical transport, direction, speaker, conversation, status, and safe attachment metadata without persisting private absolute attachment paths.
+
+Automatic injection must match all three scopes: the current persona, the current logical endpoint, and the current conversation (for example a QQ group/private peer, WeCom chat, or speech `sessionId`). Inbound and outbound records share one count budget. `personaConfig.json.recentMessageLimits` independently configures 11 endpoint values from `0` to `200`; the schema default is `100`, and `0` disables only automatic injection, never recording. There is no separate 360-entry or other count cap on `current.jsonl`.
+
+Archival follows record timestamps rather than deleting data at a calendar boundary. When an archive check finds any record older than 72 hours, the complete contiguous prefix older than 24 hours moves to `<firstSequence>~<lastSequence>.jsonl`. Automatic context reads only `current.jsonl`. Archives remain preserved and can be queried explicitly through the injected paths.
 
 ## User template role
 
@@ -83,7 +99,9 @@ Sender: <sender>
 [CQ:at,qq=<qq>] : <group card or nickname>
 
 [Recent messages]
-Latest <recentMessageLimit> messages:
+Current endpoint: <recentMessageEndpoint>
+Current conversation: <recentConversationKey>
+Latest <recentMessageLimit> bidirectional messages for this endpoint and conversation:
 <recentMessages>
 
 [Role and paths]
@@ -108,6 +126,9 @@ Matched knowledge
 
 [Logs]
 Group, private, heartbeat, manual-trigger, role-panel, and voice-transcript paths
+Current bidirectional conversation: <conversationCurrentPath>
+Conversation archive: <conversationArchiveDir>
+Conversation archive index: <conversationArchiveIndexPath>
 
 [Reply]
 Reply API: <replyApiUrl>
@@ -125,7 +146,9 @@ Current reply context: <replyContextJson>
 
 `[Message code parsing]` appears only when the current message or its reply chain contains parseable CQ codes. RabiRoute follows `CQ:reply` by `messageId` through the current route's group/private message records, while AgentPacket also accepts successful Outbox sends as a local fallback. When the live NapCat path sees a referenced ID that has not been stored, the adapter calls OneBot `get_msg` before routing, caches the returned group/private record with `lookupSource=onebot_get_msg`, and continues with the next reply level. API failures are logged as warnings and do not block the current message. Expansion stops when no reply remains, the reference still cannot be resolved, a cycle is detected, or the safety depth limit is reached. Each referenced preview is capped at 200 characters and then uses `……(更多信息调用接口查看)`. Any `CQ:at` found during the walk is deduplicated and emitted together as `[CQ:at,qq=xxxx] : group card or nickname`. This section does not add the current message ID and does not repeat the plain text body.
 
-When a `voice_transcript` explicitly comes from the RabiPC `speech` message endpoint or RabiSpeech, `AgentPacket` resolves that turn to `voice_chat` and writes `characterTtsDialogue=true` into `replyContext`. `[Reply delivery requirements]` tells the handler to enter character-TTS dialogue mode and POST a short spoken line, semantically identical to the visible reply, to the normal reply API. Outbox then freezes the current Route persona, voice, model, `sessionId`, and autoplay choice before entering the host-wide RabiSpeech FIFO. QQ, the role panel, ordinary text inputs, and other `voice_transcript` sources do not inherit this switch.
+When a `voice_transcript` explicitly comes from the RabiPC `speech` message endpoint or RabiSpeech, `AgentPacket` resolves that turn to `voice_chat` and writes `characterTtsDialogue=true` into `replyContext`. `[Reply delivery requirements]` tells the handler to enter character-TTS dialogue mode and POST a short spoken line, semantically identical to the visible reply, to the normal reply API. Outbox resolves model, voice, language, speed, and speaking instructions from the current persona's `voice/voice-profile.json`, preserves the original `sessionId`, and enters the host-wide FIFO. Same-session ASR and TTS then share the persona's `speech` recent-context budget. QQ, the role panel, ordinary text inputs, and other `voice_transcript` sources do not inherit this switch.
+
+Speech also has an explicit record-before-wake policy. Route `speechPushMode=hot` delivers every completed ASR segment immediately. `keyword` records every segment and delivers only when the persona-owned `speechTriggerKeywords` matches; an empty keyword list never falls back to hot. Matched ordinary endpoint messages otherwise enter Desktop `steer/start` directly, while Heartbeat's busy skip remains a separate switch.
 
 When no role is bound, RabiRoute uses a direct-message section instead of role knowledge. It still injects the event, logs, reply context, and delivery requirements.
 
@@ -180,6 +203,12 @@ Advanced route templates can use actual values such as:
 {plansDir}
 {memoryDir}
 {recentMessages}
+{recentMessageLimit}
+{recentMessageEndpoint}
+{recentConversationKey}
+{conversationCurrentPath}
+{conversationArchiveDir}
+{conversationArchiveIndexPath}
 {replyApiUrl}
 {replyContextJson}
 {rolePanelLogPath}

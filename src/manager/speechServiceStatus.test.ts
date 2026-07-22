@@ -25,7 +25,20 @@ test("speech status exposes only normalized runtime capabilities", async () => {
         }
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
-    return new Response(JSON.stringify({ relay_safe: true, streaming: false }), { status: 200 });
+    return new Response(JSON.stringify({
+      relay_safe: true,
+      streaming: false,
+      speaker_identity: {
+        scope: "loopback-only",
+        mode: "manual_record_label_binding",
+        manual_binding: true,
+        binding_scope: "record_speaker_label",
+        aliases_are_metadata_only: true,
+        diarization_labels_are_biometric_identity: false,
+        stores_raw_enrollment_audio: false,
+        voiceprint: { supported: false, experimental: false, reason: "No validated matcher." }
+      }
+    }), { status: 200 });
   }) as typeof fetch;
 
   const result = await inspectLocalSpeechService("http://127.0.0.1:8781", { fetchImpl });
@@ -35,6 +48,9 @@ test("speech status exposes only normalized runtime capabilities", async () => {
   assert.equal(result.providers.asr[0]?.loadedDevice, "cuda");
   assert.equal(JSON.stringify(result).includes("private"), false);
   assert.equal(result.relaySafe, true);
+  assert.equal(result.speakerIdentity?.manualBinding, true);
+  assert.equal(result.speakerIdentity?.voiceprint.supported, false);
+  assert.equal(result.speakerIdentity?.storesRawEnrollmentAudio, false);
 });
 
 test("speech status keeps offline state inspectable", async () => {

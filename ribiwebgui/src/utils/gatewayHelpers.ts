@@ -13,6 +13,7 @@ import {
   setGatewayAdapters as sharedSetGatewayAdapters
 } from "@shared/gatewayConfigModel";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
+import { SPEECH_ROUTE_AUTO_SUBMIT } from "../speech/speechDeliveryMode";
 
 export const routeKindLabels: Record<string, string> = {
   direct_at: "群聊-直接 @",
@@ -79,7 +80,7 @@ export const templateVars = [
   { name: "manualTriggerLogPath", description: "手动触发事件 JSONL 记录路径。" },
   { name: "rolePanelLogPath", description: "角色面板聊天记录 JSONL 路径。" },
   { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" },
-  { name: "heartbeatSkipWhenAgentBusy", description: "为 true 时，Codex 会话仍在工作就跳过本次 heartbeat 投递。" },
+  { name: "heartbeatSkipWhenAgentBusy", description: "为 true 时，仅在 Agent 会话工作中跳过本次 heartbeat；普通消息不受影响。" },
   { name: "scheduleId", description: "当前定时计划 ID；仅定时触发时填充。" },
   { name: "scheduleName", description: "当前定时计划显示名称；仅定时触发时填充。" },
   { name: "triggerId", description: "手动触发 ID。" },
@@ -280,6 +281,9 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   }
   if (adapters.includes("speech")) {
     gateway.routeVariables = applySpeechRouteVariableDefaults(gateway.routeVariables, gateway.agentRoleId || "Rabi");
+    // A speech endpoint always submits completed transcripts to RabiRoute so they can be
+    // recorded. speechPushMode alone decides whether the Agent is notified immediately.
+    gateway.routeVariables.speechAutoSubmit = String(SPEECH_ROUTE_AUTO_SUBMIT);
     gateway.pipelinePreset = gateway.pipelinePreset || "voice_chat";
     gateway.pipeline = {
       ...gateway.pipeline,
@@ -287,8 +291,8 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
       outputAdapter: "tts",
       outputPipeline: "rabispeech",
       promptOutputMode: gateway.pipeline?.promptOutputMode || "voice_short",
-      ttsProvider: gateway.pipeline?.ttsProvider || "local-tts",
-      ttsVoice: gateway.pipeline?.ttsVoice || gateway.routeVariables.speechVoice,
+      ttsProvider: gateway.pipeline?.ttsProvider,
+      ttsVoice: gateway.agentRoleId || gateway.pipeline?.ttsVoice,
       ttsWorkerUrl: "http://127.0.0.1:8781/v1/audio/speech",
       ttsPlay: gateway.routeVariables.speechAutoPlay !== "false",
       preventFeedbackLoop: true,

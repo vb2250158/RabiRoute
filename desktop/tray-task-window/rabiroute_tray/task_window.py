@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QIcon, QKeyEvent, QMouseEvent
+from PySide6.QtGui import QFont, QIcon, QKeyEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -27,6 +27,7 @@ from .manager_client import ManagerSnapshot
 from .display_helpers import route_enabled_label, route_running_label, route_state, route_status_label, route_subtitle, route_title
 from .role_context_repository import ContextEntry, RoleContextSnapshot
 from .task_repository import PlanItem, PlanSnapshot, PlanStep
+from .theme import apply_rabi_menu_theme
 
 
 VIEW_LABELS = (
@@ -50,6 +51,7 @@ PLAN_KIND_LABELS = {"human-gate": "需人工接管"}
 
 PLAN_STEP_DONE_STATUSES = {"已完成", "完成", "done", "completed"}
 PLAN_STEP_CURRENT_STATUSES = {"进行中", "当前", "current", "in_progress", "in-progress"}
+PLAN_QA_WAIT_LABEL = "待QA测试"
 
 class ClickableHeader(QFrame):
     clicked = Signal()
@@ -509,6 +511,30 @@ def _plan_current_step_summary(plan: PlanItem) -> str:
     return plan.current_step.strip() or "暂无进行中的步骤"
 
 
+def _plan_is_waiting_for_qa(plan: PlanItem) -> bool:
+    _, current_step = _plan_current_step(plan)
+    signals = [plan.current_step, plan.waiting_for]
+    if current_step is not None:
+        signals.extend((current_step.title, current_step.detail, current_step.waiting_for))
+    for signal in signals:
+        normalized = "".join(str(signal).lower().split())
+        if not normalized:
+            continue
+        if "qa" in normalized and any(token in normalized for token in ("待", "测试", "验收")):
+            return True
+        if any(token in normalized for token in ("待验收", "等待验收", "待测试", "等待测试")):
+            return True
+    return False
+
+
+def _plan_status_presentation(plan: PlanItem, status: str) -> tuple[str, str]:
+    if _plan_blocker(plan):
+        return "阻塞中", "blocked"
+    if _plan_is_waiting_for_qa(plan):
+        return PLAN_QA_WAIT_LABEL, "qa"
+    return status, STATUS_TONES.get(status, "unknown")
+
+
 class ExpandableCard(QFrame):
     expanded_changed = Signal(bool)
 
@@ -559,12 +585,14 @@ class ExpandableCard(QFrame):
         title_row.addWidget(badge, 0, Qt.AlignTop)
         title_row.addWidget(title_label, 1)
         if status:
-            display_status = "阻塞中" if plan is not None and _plan_blocker(plan) else status
+            display_status, status_tone = (
+                _plan_status_presentation(plan, status)
+                if plan is not None
+                else (status, STATUS_TONES.get(status, "unknown"))
+            )
             self.status_label = QLabel(f"状态：{display_status}")
             self.status_label.setObjectName("planStatus")
-            self.status_label.setProperty(
-                "statusTone", "blocked" if display_status == "阻塞中" else STATUS_TONES.get(status, "unknown")
-            )
+            self.status_label.setProperty("statusTone", status_tone)
             title_row.addWidget(self.status_label, 0, Qt.AlignTop)
         else:
             self.status_label = None
@@ -747,6 +775,7 @@ class TaskWindow(QWidget):
         self.context: RoleContextSnapshot | None = None
         self.role_messages: list[dict] = []
         self.pending_attachments: list[dict] = []
+        self._message_send_pending = False
         self._sidebar_collapsed = False
 
         self.header = QFrame()
@@ -755,9 +784,11 @@ class TaskWindow(QWidget):
         self.icon_label.setObjectName("brandIcon")
         self.icon_label.setFixedSize(38, 38)
         self.icon_label.setAlignment(Qt.AlignCenter)
+        self._default_icon_pixmap = QPixmap()
         if app_icon and not app_icon.isNull():
             self.setWindowIcon(app_icon)
-            self.icon_label.setPixmap(app_icon.pixmap(28, 28))
+            self._default_icon_pixmap = app_icon.pixmap(28, 28)
+            self.icon_label.setPixmap(self._default_icon_pixmap)
         self.title_label = QLabel("Rabi")
         self.title_label.setObjectName("title")
         self.subtitle_label = QLabel("角色面板")
@@ -791,6 +822,7 @@ class TaskWindow(QWidget):
         self.more_button.setAccessibleName("更多操作")
         self.more_menu = QMenu(self)
         self.more_menu.setObjectName("moreMenu")
+        apply_rabi_menu_theme(self.more_menu)
         self.more_button.setMenu(self.more_menu)
         header_top.addWidget(self.collapse_button, 0, Qt.AlignVCenter)
         header_top.addWidget(self.more_button, 0, Qt.AlignVCenter)
@@ -983,6 +1015,7 @@ class TaskWindow(QWidget):
 
         self.setWindowTitle(role_id or plans.role_id or "角色面板")
         self.title_label.setText(role_id or plans.role_id)
+        self._apply_persona_avatar(role_id)
         self.subtitle_label.setText(
             f"Manager：{'已连接' if manager.connected else '离线'}  "
             f"Gateway：{'运行中' if running else '已停止'}"
@@ -995,6 +1028,23 @@ class TaskWindow(QWidget):
         self._render_route_buttons()
         self._render_active_view()
         QTimer.singleShot(0, lambda value=scroll_value: self._restore_scroll(value))
+
+    def _persona_avatar_pixmap(self, size: int) -> QPixmap:
+        avatar_path = self.context.avatar_path if self.context else None
+        if avatar_path:
+            pixmap = QPixmap(str(avatar_path))
+            if not pixmap.isNull():
+                return pixmap.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        return self._default_icon_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation) if not self._default_icon_pixmap.isNull() else QPixmap()
+
+    def _apply_persona_avatar(self, role_id: str) -> None:
+        avatar_path = self.context.avatar_path if self.context else None
+        pixmap = QPixmap(str(avatar_path)) if avatar_path else self._default_icon_pixmap
+        if not pixmap.isNull():
+            self.icon_label.setPixmap(pixmap.scaled(32, 32, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+        else:
+            self.icon_label.clear()
+            self.icon_label.setText((role_id or "R")[:1].upper())
 
     def is_user_interacting(self) -> bool:
         if not self.isVisible():
@@ -1072,14 +1122,32 @@ class TaskWindow(QWidget):
         self.attach_button.setToolTip(f"已添加 {count} 个文件" if count else "添加文件")
 
     def _send_message(self) -> None:
+        if self._message_send_pending:
+            return
         text = self.message_input.toPlainText().strip()
         if not text and not self.pending_attachments:
             return
         attachments = list(self.pending_attachments)
-        self.pending_attachments.clear()
-        self._update_attachment_button()
-        self.message_input.clear()
         self.send_message_requested.emit(text, attachments)
+
+    def set_message_send_pending(self, pending: bool) -> None:
+        self._message_send_pending = pending
+        self.message_input.setEnabled(not pending)
+        self.attach_button.setEnabled(not pending)
+        self.send_button.setEnabled(not pending)
+        self.send_button.setToolTip("正在投递给 Agent" if pending else "发送消息")
+        self.footer_label.setText(
+            "正在投递给 Agent；窗口仍可切换和查看其它内容。"
+            if pending
+            else "聊天记录按角色保存；计划和记忆视图只读展示。"
+        )
+
+    def complete_message_send(self, succeeded: bool) -> None:
+        if succeeded:
+            self.pending_attachments.clear()
+            self._update_attachment_button()
+            self.message_input.clear()
+        self.set_message_send_pending(False)
 
     def _render_active_view(self) -> None:
         self._clear_content()
@@ -1146,6 +1214,17 @@ class TaskWindow(QWidget):
         outer.setContentsMargins(4, 2, 4, 2)
         if direction == "user":
             outer.addStretch(1)
+        elif direction == "assistant":
+            avatar = QLabel()
+            avatar.setObjectName("chatAvatar")
+            avatar.setFixedSize(32, 32)
+            avatar.setAlignment(Qt.AlignCenter)
+            pixmap = self._persona_avatar_pixmap(28)
+            if not pixmap.isNull():
+                avatar.setPixmap(pixmap)
+            else:
+                avatar.setText((str(message.get("sender") or "R")[:1]).upper())
+            outer.addWidget(avatar, 0, Qt.AlignTop)
         body = QFrame()
         body.setObjectName("chatBubbleBody")
         body.setMaximumWidth(max(360, int(self.content.viewport().width() * 0.72)))
@@ -1516,24 +1595,6 @@ QPushButton#iconButton:focus {
 QPushButton#iconButton::menu-indicator {
     width: 0;
 }
-QMenu#moreMenu {
-    background: #ffffff;
-    border: 1px solid #d6e2e8;
-    border-radius: 8px;
-    color: #112033;
-    padding: 6px;
-}
-QMenu#moreMenu::item {
-    border-radius: 6px;
-    padding: 8px 28px 8px 12px;
-}
-QMenu#moreMenu::item:selected {
-    background: #eaf8f9;
-    color: #0c2a4a;
-}
-QMenu#moreMenu::item:disabled {
-    color: #a9b4be;
-}
 QFrame#routeNav {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #f6fcfd);
     border-right: 1px solid #dbe5ea;
@@ -1847,6 +1908,18 @@ QLabel#planStatus[statusTone="running"] {
 QLabel#planStatus[statusTone="blocked"] {
     background: #fff1e8;
     color: #b54708;
+}
+QLabel#chatAvatar {
+    background: #f2fbfc;
+    border: 1px solid #c8e9ea;
+    border-radius: 9px;
+    color: #0f8b8d;
+    font-size: 13px;
+    font-weight: 900;
+}
+QLabel#planStatus[statusTone="qa"] {
+    background: #f3e8ff;
+    color: #7e22ce;
 }
 QLabel#planStatus[statusTone="pending"] {
     background: #fff7e6;

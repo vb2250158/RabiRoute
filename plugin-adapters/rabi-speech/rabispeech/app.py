@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
+import ipaddress
 import logging
 import os
+import socket
 import tempfile
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
@@ -13,7 +16,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.background import BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
@@ -24,9 +27,28 @@ from .contracts import SpeechSynthesisRequest, TranscriptionRequest, Transcripti
 from .extensions import load_provider_extensions
 from .model_discovery import api_index, model_rows, public_capabilities
 from .microphone import MicrophoneConfig, MicrophoneService
+from .persona_voice import (
+    persona_speech_defaults_for_role,
+    persona_tts_cache_dir,
+    resolve_persona_role_dir,
+)
 from .playback import PlaybackCoordinator
-from .providers import FasterWhisperProvider, LocalHttpAsrProvider, LocalTtsProvider
+from .providers import ApiAsrProvider, ApiTtsProvider, DashScopeAsrProvider, DashScopeTtsProvider, FasterWhisperProvider, LocalHttpAsrProvider, LocalTtsProvider
 from .registry import ProviderRegistry
+from .remote_audio import RemoteAudioHub, RemoteAudioServerConfig
+from .speech_records import SpeechRecordStore
+from .speaker_profiles import (
+    SpeakerProfileRegistry,
+    SpeakerRegistryConflictError,
+    SpeakerRegistryNotFoundError,
+    SpeakerRegistryStorageError,
+)
+from .speaker_recognition import SpeakerRecognitionService
+from .tts_audio_store import TtsAudioStoreRegistry
+from .windows_audio_session import WindowsAudioSessionKeepalive
+
+
+_DEFAULT_TTS_CLEANUP_INTERVAL_SECONDS = 60.0
 
 
 class SpeechBody(BaseModel):
@@ -50,15 +72,67 @@ class DashScopeBody(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
-def default_registry(settings: Settings) -> ProviderRegistry:
+class SpeakerProfileCreateBody(BaseModel):
+    display_name: str
+    aliases: list[str] = Field(default_factory=list)
+
+
+class SpeakerProfileUpdateBody(BaseModel):
+    display_name: str | None = None
+    aliases: list[str] | None = None
+
+
+class SpeakerBindingBody(BaseModel):
+    session_id: str
+    record_id: str
+    speaker_label: str
+    speaker_id: str
+
+
+class SpeakerIdentityBody(BaseModel):
+    session_id: str
+    record_id: str
+    speaker_label: str
+    speaker_id: str | None = None
+    display_name: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+
+
+class PlaybackSettingsBody(BaseModel):
+    volume: int = Field(strict=True, ge=0, le=100)
+
+
+class AudioStreamSelectionBody(BaseModel):
+    source: str
+    client_id: str | None = None
+
+
+def default_registry(settings: Settings, roles_root: Path | None = None) -> ProviderRegistry:
+    persona_roles_root = (roles_root or settings.config_path.parents[2] / "data" / "roles").expanduser().resolve()
     registry = ProviderRegistry(settings.default_tts_provider, settings.default_asr_provider)
     if settings.local_tts.enabled:
         registry.register_tts(LocalTtsProvider(settings.local_tts))
+    for api_tts in settings.api_tts:
+        if api_tts.enabled:
+            provider = (
+                DashScopeTtsProvider(
+                    api_tts,
+                    settings.server.temp_dir,
+                    roles_root=persona_roles_root,
+                )
+                if api_tts.protocol == "dashscope"
+                else ApiTtsProvider(api_tts, settings.server.temp_dir)
+            )
+            registry.register_tts(provider)
     if settings.faster_whisper.enabled:
         registry.register_asr(FasterWhisperProvider(settings.faster_whisper))
     for http_asr in settings.http_asr:
         if http_asr.enabled:
             registry.register_asr(LocalHttpAsrProvider(http_asr))
+    for api_asr in settings.api_asr:
+        if api_asr.enabled:
+            provider = DashScopeAsrProvider(api_asr) if api_asr.protocol == "dashscope" else ApiAsrProvider(api_asr)
+            registry.register_asr(provider)
     load_provider_extensions(registry, settings)
     return registry
 
@@ -67,15 +141,55 @@ def create_app(
     settings: Settings | None = None,
     registry: ProviderRegistry | None = None,
     playback: PlaybackCoordinator | None = None,
+    audio_session_keepalive: WindowsAudioSessionKeepalive | None = None,
+    roles_root: Path | None = None,
+    tts_cleanup_interval_seconds: float = _DEFAULT_TTS_CLEANUP_INTERVAL_SECONDS,
+    speaker_recognition: SpeakerRecognitionService | None = None,
 ) -> FastAPI:
     current = settings or load_settings()
-    providers = registry or default_registry(current)
+    persona_roles_root = (roles_root or current.config_path.parents[2] / "data" / "roles").expanduser().resolve()
+    cleanup_interval = float(tts_cleanup_interval_seconds)
+    if cleanup_interval <= 0:
+        raise ValueError("TTS cleanup interval must be greater than zero.")
+    persona_cache_dirs = _persona_tts_cache_dirs(persona_roles_root)
+    _validate_tts_cache_layout(current.server.tts_audio_dir, persona_roles_root, persona_cache_dirs)
+    providers = registry or default_registry(current, persona_roles_root)
     transcoder = AudioTranscoder(current.server.temp_dir, current.server.ffmpeg)
-    playback_queue = playback or PlaybackCoordinator(current.server.playback_dir)
     logger = logging.getLogger("rabispeech")
+    remote_audio = RemoteAudioHub(
+        RemoteAudioServerConfig(
+            enabled=current.remote_audio.enabled,
+            host=current.remote_audio.host,
+            port=current.remote_audio.port,
+            token=current.remote_audio.token,
+            settings_path=current.remote_audio.settings_path,
+            discovery_port=current.remote_audio.discovery_port,
+            service_name=socket.gethostname(),
+        ),
+        local_player=PlaybackCoordinator._default_player,
+        local_stopper=PlaybackCoordinator._default_stopper,
+    )
+    playback_queue = playback or PlaybackCoordinator(
+        current.server.playback_dir,
+        player=remote_audio.play,
+        stopper=remote_audio.stop_playback,
+    )
+    mixer_keepalive = audio_session_keepalive or WindowsAudioSessionKeepalive(logger=logger)
+    speaker_profiles = SpeakerProfileRegistry(current.server.records_dir.parent / "speaker-profiles.json")
+    speaker_recognizer = speaker_recognition or SpeakerRecognitionService(
+        current.speaker_recognition,
+        current.server.records_dir.parent / "speaker-embeddings.json",
+    )
+    records = SpeechRecordStore(current.server.records_dir, speaker_profiles)
+    tts_audio_stores = TtsAudioStoreRegistry(current.server.tts_audio_retention_minutes)
+    fallback_tts_audio = tts_audio_stores.get(current.server.tts_audio_dir)
+    for cache_dir in persona_cache_dirs:
+        if cache_dir.is_dir():
+            tts_audio_stores.get(cache_dir)
 
     async def microphone_transcriber(audio_path: Path, config: MicrophoneConfig) -> TranscriptionResult:
-        return await _transcribe(
+        record_id = f"speech-{uuid4().hex}"
+        result = await _transcribe(
             providers,
             audio_path,
             model=config.asr_model,
@@ -84,15 +198,45 @@ def create_app(
             prompt=config.prompt,
             word_timestamps=False,
         )
+        result = speaker_recognizer.analyze(
+            audio_path,
+            result,
+            record_id=record_id,
+            session_id=config.session_id,
+            profile_names=speaker_profiles.profile_names(),
+        )
+        return speaker_profiles.resolve_transcription(
+            result,
+            session_id=config.session_id,
+            record_id=record_id,
+        )
 
-    async def microphone_submitter(route_id: str, text: str, session_id: str) -> None:
+    async def microphone_submitter(text: str, session_id: str) -> dict[str, object]:
         base = _manager_loopback_url()
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=45.0) as client:
             result = await client.post(
                 f"{base}/api/speech/messages",
-                json={"routeId": route_id, "text": text, "sessionId": session_id},
+                json={"text": text, "sessionId": session_id},
             )
-            result.raise_for_status()
+            try:
+                payload = result.json()
+            except ValueError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            if result.is_error:
+                detail = str(payload.get("message") or f"HTTP {result.status_code}").strip()
+                raise RuntimeError(f"RabiRoute speech delivery failed: {detail}")
+            data = payload.get("data")
+            if not isinstance(data, dict) or data.get("status") not in {"delivered", "recorded"}:
+                raise RuntimeError("RabiRoute speech delivery returned no terminal receipt.")
+            return {
+                "status": data["status"],
+                "message_id": str(data.get("messageId") or "").strip(),
+                "reason": str(data.get("reason") or "").strip(),
+                "detail": str(data.get("detail") or "").strip(),
+                "deliveries": data.get("deliveries") if isinstance(data.get("deliveries"), list) else [],
+            }
 
     microphone = MicrophoneService(
         state_path=current.server.temp_dir.parent / "microphone.json",
@@ -100,21 +244,49 @@ def create_app(
         transcriber=microphone_transcriber,
         submitter=microphone_submitter,
         playback_active=lambda: bool(playback_queue.snapshot().get("current")),
+        record_transcription=lambda result, config, started_at: records.append_asr(
+            result,
+            source="microphone",
+            session_id=config.session_id,
+            route_id=config.route_id,
+            recorded_at=started_at,
+            record_id=result.record_id,
+        ),
+        remote_audio=remote_audio,
     )
+    remote_audio.set_feed(microphone.feed_remote)
+
+    def speaker_capability() -> dict[str, object]:
+        capability = dict(speaker_profiles.capabilities())
+        capability["mode"] = "record_embedding_matching"
+        capability["stores_voice_embeddings"] = True
+        capability["voiceprint"] = speaker_recognizer.capability()
+        return capability
 
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
         await providers.warmup()
+        await remote_audio.start()
+        mixer_keepalive.start()
         await microphone.restore()
+        cleanup_task = asyncio.create_task(
+            _periodic_tts_cleanup(tts_audio_stores, cleanup_interval, logger),
+            name="rabispeech-tts-cache-cleanup",
+        )
         try:
             yield
         finally:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
             await microphone.stop(persist=False)
+            await remote_audio.stop()
+            mixer_keepalive.stop()
 
     api = FastAPI(
         title="RabiSpeech Local API",
         version="0.1.0",
-        description="Local-only provider gateway for TTS and ASR. RabiLink may proxy these endpoints without exposing the PC.",
+        description="TTS and ASR provider gateway. Local providers are the default; explicitly configured API providers are optional.",
         lifespan=lifespan,
     )
 
@@ -123,9 +295,11 @@ def create_app(
         return {
             "ok": True,
             "service": "RabiSpeech",
-            "local_only": current.server.host in {"127.0.0.1", "localhost", "::1"},
+            "local_only": current.server.host in {"127.0.0.1", "localhost", "::1"} and providers.local_only(),
             "providers": public_capabilities(providers.capabilities()),
             "microphone": {"running": microphone.snapshot()["running"], "state": microphone.snapshot()["state"]},
+            "playback": {"mixer_session_active": mixer_keepalive.active},
+            "audio_stream": remote_audio.snapshot(),
         }
 
     @api.get("/v1/capabilities")
@@ -134,9 +308,11 @@ def create_app(
             "object": "rabispeech.capabilities",
             "providers": public_capabilities(providers.capabilities()),
             "api": api_index(),
-            "relay_safe": True,
+            "relay_safe": providers.local_only(),
             "streaming": False,
             "microphone": {"running": microphone.snapshot()["running"], "state": microphone.snapshot()["state"], "scope": "loopback-only"},
+            "audio_stream": remote_audio.snapshot(),
+            "speaker_identity": speaker_capability(),
         }
 
     @api.get("/v1/models")
@@ -156,9 +332,168 @@ def create_app(
     async def playback_status() -> dict[str, object]:
         return playback_queue.snapshot()
 
+    @api.get("/v1/audio-streams")
+    async def audio_streams(request: Request) -> dict[str, object]:
+        _require_loopback(request)
+        return remote_audio.snapshot()
+
+    @api.post("/v1/audio-streams/token")
+    async def audio_stream_token(request: Request) -> dict[str, object]:
+        _require_loopback(request)
+        if not current.remote_audio.enabled or not current.remote_audio.token:
+            raise HTTPException(status_code=409, detail="Remote audio streaming is not enabled.")
+        return {"token": current.remote_audio.token}
+
+    @api.put("/v1/audio-streams/selection")
+    async def audio_stream_selection(request: Request, body: AudioStreamSelectionBody) -> dict[str, object]:
+        _require_loopback(request)
+        was_running = bool(microphone.snapshot().get("running"))
+        if was_running:
+            await microphone.stop(persist=False)
+        try:
+            result = await remote_audio.select(body.source, body.client_id)
+            if was_running:
+                await microphone.start({}, persist=False)
+            return result
+        except ValueError as exc:
+            if was_running and not microphone.snapshot().get("running"):
+                await microphone.start({}, persist=False)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @api.put("/v1/playback/settings")
+    @api.patch("/v1/playback/settings")
+    async def playback_settings(
+        request: Request,
+        body: PlaybackSettingsBody,
+    ) -> dict[str, object]:
+        _require_loopback(request)
+        return playback_queue.set_volume(body.volume)
+
     @api.post("/v1/playback/stop")
     async def playback_stop() -> dict[str, object]:
         return playback_queue.stop(clear_pending=True)
+
+    @api.get("/v1/records")
+    async def speech_records(
+        limit: int = 200,
+        kind: str | None = None,
+        session_id: str | None = None,
+        route_id: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+    ) -> dict[str, object]:
+        return {
+            "object": "list",
+            "data": records.list(
+                limit=limit,
+                kind=kind,
+                session_id=session_id,
+                route_id=route_id,
+                since=since,
+                until=until,
+            ),
+        }
+
+    @api.get("/v1/speaker-profiles")
+    async def speaker_profile_list(request: Request, session_id: str | None = None) -> dict[str, object]:
+        _require_loopback(request)
+        snapshot = speaker_profiles.snapshot(session_id=session_id)
+        return {**snapshot, "capability": speaker_capability(), "clusters": speaker_recognizer.public_clusters()}
+
+    @api.post("/v1/speaker-profiles")
+    async def speaker_profile_create(request: Request, body: SpeakerProfileCreateBody) -> dict[str, object]:
+        _require_loopback(request)
+        try:
+            return speaker_profiles.create_profile(body.display_name, body.aliases)
+        except (ValueError, SpeakerRegistryStorageError) as exc:
+            raise _speaker_http_error(exc) from exc
+
+    @api.patch("/v1/speaker-profiles/{speaker_id}")
+    async def speaker_profile_update(
+        speaker_id: str,
+        request: Request,
+        body: SpeakerProfileUpdateBody,
+    ) -> dict[str, object]:
+        _require_loopback(request)
+        try:
+            return speaker_profiles.update_profile(
+                speaker_id,
+                display_name=body.display_name,
+                aliases=body.aliases,
+                aliases_provided="aliases" in body.model_fields_set,
+            )
+        except (ValueError, SpeakerRegistryNotFoundError, SpeakerRegistryStorageError) as exc:
+            raise _speaker_http_error(exc) from exc
+
+    @api.delete("/v1/speaker-profiles/{speaker_id}")
+    async def speaker_profile_delete(speaker_id: str, request: Request) -> dict[str, object]:
+        _require_loopback(request)
+        try:
+            result = speaker_profiles.delete_profile(speaker_id)
+            result["removed_voice_samples"] = speaker_recognizer.forget_profile(speaker_id)
+            return result
+        except (ValueError, SpeakerRegistryNotFoundError, SpeakerRegistryStorageError) as exc:
+            raise _speaker_http_error(exc) from exc
+
+    @api.put("/v1/speaker-bindings")
+    async def speaker_binding_put(request: Request, body: SpeakerBindingBody) -> dict[str, object]:
+        _require_loopback(request)
+        try:
+            binding = speaker_profiles.bind(
+                body.session_id,
+                body.speaker_label,
+                body.speaker_id,
+                record_id=body.record_id,
+            )
+            binding["voice_sample_confirmed"] = speaker_recognizer.confirm(
+                body.record_id,
+                body.speaker_label,
+                body.speaker_id,
+            )
+            return binding
+        except (ValueError, SpeakerRegistryNotFoundError, SpeakerRegistryStorageError) as exc:
+            raise _speaker_http_error(exc) from exc
+
+    @api.put("/v1/speaker-identities")
+    async def speaker_identity_put(request: Request, body: SpeakerIdentityBody) -> dict[str, object]:
+        _require_loopback(request)
+        try:
+            result = speaker_profiles.identify_and_bind(
+                body.session_id,
+                body.speaker_label,
+                record_id=body.record_id,
+                speaker_id=body.speaker_id,
+                display_name=body.display_name,
+                aliases=body.aliases,
+            )
+            result["voice_sample_confirmed"] = speaker_recognizer.confirm(
+                body.record_id,
+                body.speaker_label,
+                str(result["profile"]["id"]),
+            )
+            return result
+        except (
+            ValueError,
+            SpeakerRegistryConflictError,
+            SpeakerRegistryNotFoundError,
+            SpeakerRegistryStorageError,
+        ) as exc:
+            raise _speaker_http_error(exc) from exc
+
+    @api.delete("/v1/speaker-bindings")
+    async def speaker_binding_delete(
+        request: Request,
+        session_id: str,
+        record_id: str,
+        speaker_label: str,
+    ) -> dict[str, object]:
+        _require_loopback(request)
+        try:
+            binding = speaker_profiles.unbind(session_id, speaker_label, record_id=record_id)
+            binding["voice_sample_unconfirmed"] = speaker_recognizer.unconfirm(record_id, speaker_label)
+            return binding
+        except (ValueError, SpeakerRegistryNotFoundError, SpeakerRegistryStorageError) as exc:
+            raise _speaker_http_error(exc) from exc
 
     @api.get("/v1/microphone/status")
     async def microphone_status() -> dict[str, object]:
@@ -180,12 +515,32 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @api.put("/v1/microphone/settings")
+    async def microphone_settings(request: Request, body: dict[str, Any] | None = None) -> dict[str, object]:
+        _require_loopback(request)
+        try:
+            return await microphone.update_settings(body or {})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @api.post("/v1/microphone/stop")
     async def microphone_stop() -> dict[str, object]:
         return await microphone.stop()
 
     async def synthesize(body: SpeechBody, background_tasks: BackgroundTasks) -> FileResponse:
         try:
+            persona_role_dir = resolve_persona_role_dir(persona_roles_root, body.voice)
+            persona_defaults = persona_speech_defaults_for_role(persona_role_dir)
+            if persona_defaults:
+                body = SpeechBody(**{
+                    **body.model_dump(),
+                    "model": persona_defaults.get("model") or body.model,
+                    "language": persona_defaults.get("language") or body.language,
+                    "instructions": persona_defaults.get("instructions") or body.instructions,
+                    "speed": persona_defaults.get("speed") or body.speed,
+                })
             provider, selection = providers.tts(body.provider, body.model)
             artifact = await provider.synthesize(
                 SpeechSynthesisRequest(
@@ -200,13 +555,16 @@ def create_app(
                 )
             )
             prepared = await transcoder.prepare(artifact, body.response_format, body.sample_rate)
+            cache_dir = persona_tts_cache_dir(persona_role_dir)
+            selected_tts_audio = tts_audio_stores.get(cache_dir) if cache_dir is not None else fallback_tts_audio
+            retained = selected_tts_audio.retain(prepared.path)
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
-            logger.exception("Local TTS request failed")
-            raise HTTPException(status_code=502, detail=f"Local TTS failed ({type(exc).__name__}). Check local RabiSpeech logs.") from exc
+            logger.exception("TTS request failed")
+            raise HTTPException(status_code=502, detail=f"TTS failed ({type(exc).__name__}). Check RabiSpeech logs.") from exc
         playback_job: dict[str, object] | None = None
         if body.play:
             try:
@@ -219,14 +577,32 @@ def create_app(
                     route_id=body.route_id,
                 )
             except Exception as exc:
-                logger.exception("Local playback enqueue failed")
-                raise HTTPException(status_code=502, detail=f"Local playback failed ({type(exc).__name__}). Check local RabiSpeech logs.") from exc
+                logger.exception("Playback enqueue failed")
+                raise HTTPException(status_code=502, detail=f"Playback failed ({type(exc).__name__}). Check RabiSpeech logs.") from exc
+        try:
+            records.append_tts(
+                text=body.input,
+                provider=artifact.provider,
+                model=artifact.model,
+                voice=body.voice,
+                session_id=body.session_id,
+                route_id=body.route_id,
+                playback_job_id=str(playback_job["id"]) if playback_job else None,
+                playback_status=str(playback_job["status"]) if playback_job else None,
+                audio_file=_tts_audio_record_file(
+                    persona_role_dir,
+                    selected_tts_audio.relative_path(retained),
+                ),
+                audio_expires_at=selected_tts_audio.expires_at(retained),
+            )
+        except Exception:
+            logger.exception("TTS record persistence failed")
         if artifact.cleanup:
             background_tasks.add_task(artifact.path.unlink, missing_ok=True)
         if prepared.cleanup and prepared.path != artifact.path:
             background_tasks.add_task(prepared.path.unlink, missing_ok=True)
         return FileResponse(
-            prepared.path,
+            retained,
             media_type=prepared.media_type,
             filename=f"speech.{body.response_format.lower()}",
             headers={
@@ -273,9 +649,13 @@ def create_app(
         response_format: Annotated[str, Form()] = "json",
         provider: Annotated[str | None, Form()] = None,
         timestamp_granularities: Annotated[list[str] | None, Form()] = None,
+        speaker_count: Annotated[int | None, Form()] = None,
+        session_id: Annotated[str | None, Form()] = None,
+        route_id: Annotated[str | None, Form()] = None,
     ) -> Response:
         audio_path = await _store_upload(file, current)
         background_tasks.add_task(audio_path.unlink, missing_ok=True)
+        record_id = f"speech-{uuid4().hex}"
         result = await _transcribe(
             providers,
             audio_path,
@@ -284,7 +664,24 @@ def create_app(
             language=language,
             prompt=prompt,
             word_timestamps="word" in (timestamp_granularities or []),
+            speaker_count=speaker_count,
         )
+        result = speaker_recognizer.analyze(
+            audio_path,
+            result,
+            record_id=record_id,
+            session_id=session_id,
+            profile_names=speaker_profiles.profile_names(),
+        )
+        result = speaker_profiles.resolve_transcription(
+            result,
+            session_id=session_id,
+            record_id=record_id,
+        )
+        try:
+            records.append_asr(result, source="api", session_id=session_id, route_id=route_id, record_id=record_id)
+        except Exception:
+            logger.exception("ASR record persistence failed")
         return _transcription_response(result, response_format)
 
     @api.post("/api/v1/services/audio/asr/transcription")
@@ -296,6 +693,7 @@ def create_app(
         background_tasks.add_task(audio_path.unlink, missing_ok=True)
         language_hints = body.parameters.get("language_hints") or []
         language = str(language_hints[0]) if isinstance(language_hints, list) and language_hints else None
+        record_id = f"speech-{uuid4().hex}"
         result = await _transcribe(
             providers,
             audio_path,
@@ -304,7 +702,31 @@ def create_app(
             language=language,
             prompt=str(body.parameters.get("prompt") or "") or None,
             word_timestamps=bool(body.parameters.get("enable_words")),
+            speaker_count=int(body.parameters.get("speaker_count")) if body.parameters.get("speaker_count") else None,
         )
+        session_id = str(body.parameters.get("session_id") or "") or None
+        result = speaker_recognizer.analyze(
+            audio_path,
+            result,
+            record_id=record_id,
+            session_id=session_id,
+            profile_names=speaker_profiles.profile_names(),
+        )
+        result = speaker_profiles.resolve_transcription(
+            result,
+            session_id=session_id,
+            record_id=record_id,
+        )
+        try:
+            records.append_asr(
+                result,
+                source="dashscope-compatible-api",
+                session_id=session_id,
+                route_id=str(body.parameters.get("route_id") or "") or None,
+                record_id=record_id,
+            )
+        except Exception:
+            logger.exception("ASR record persistence failed")
         request_id = str(uuid4())
         return JSONResponse(
             {
@@ -322,6 +744,88 @@ def create_app(
     return api
 
 
+def _persona_tts_cache_dirs(roles_root: Path) -> list[Path]:
+    root = roles_root.expanduser().resolve()
+    if not root.is_dir():
+        return []
+    cache_dirs: list[Path] = []
+    for item in root.iterdir():
+        if not item.is_dir():
+            continue
+        role_dir = resolve_persona_role_dir(root, item.name)
+        if role_dir is None:
+            continue
+        cache_dir = persona_tts_cache_dir(role_dir)
+        if cache_dir is not None:
+            cache_dirs.append(cache_dir)
+    return cache_dirs
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return (
+        first == second
+        or first.is_relative_to(second)
+        or second.is_relative_to(first)
+    )
+
+
+def _validate_tts_cache_layout(fallback_root: Path, roles_root: Path, persona_cache_dirs: list[Path]) -> None:
+    fallback = fallback_root.expanduser().resolve()
+    roles = roles_root.expanduser().resolve()
+    if _paths_overlap(fallback, roles):
+        raise ValueError("Fallback TTS cache and persona roles root must not overlap.")
+    for cache_dir in persona_cache_dirs:
+        cache = cache_dir.expanduser().resolve()
+        if not cache.is_relative_to(roles):
+            raise ValueError("Persona TTS cache must stay inside the configured roles root.")
+        if _paths_overlap(fallback, cache):
+            raise ValueError("Fallback and persona TTS caches must not overlap.")
+
+
+async def _periodic_tts_cleanup(
+    stores: TtsAudioStoreRegistry,
+    interval_seconds: float,
+    logger: logging.Logger,
+) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            await asyncio.to_thread(stores.cleanup)
+        except Exception:
+            logger.exception("Periodic TTS cache cleanup failed")
+
+
+def _tts_audio_record_file(persona_role_dir: Path | None, cache_relative_path: str) -> str:
+    prefix = (
+        (persona_role_dir.name, "voice", "cache", "tts-audio")
+        if persona_role_dir is not None
+        else ("output", "tts-audio")
+    )
+    return (Path(*prefix) / cache_relative_path).as_posix()
+
+
+def _require_loopback(request: Request) -> None:
+    host = (request.client.host if request.client else "").split("%", 1)[0]
+    if host == "testclient":
+        return
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return
+    except ValueError:
+        pass
+    raise HTTPException(status_code=403, detail="This RabiSpeech control API is loopback-only.")
+
+
+def _speaker_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, SpeakerRegistryNotFoundError):
+        return HTTPException(status_code=404, detail=str(error).strip("'"))
+    if isinstance(error, SpeakerRegistryConflictError):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, SpeakerRegistryStorageError):
+        return HTTPException(status_code=503, detail=str(error))
+    return HTTPException(status_code=422, detail=str(error))
+
+
 async def _transcribe(
     registry: ProviderRegistry,
     audio_path: Path,
@@ -331,6 +835,7 @@ async def _transcribe(
     language: str | None,
     prompt: str | None,
     word_timestamps: bool,
+    speaker_count: int | None = None,
 ) -> TranscriptionResult:
     try:
         selected, selection = registry.asr(provider, model)
@@ -341,6 +846,7 @@ async def _transcribe(
                 language=language,
                 prompt=prompt,
                 word_timestamps=word_timestamps,
+                speaker_count=speaker_count,
             )
         )
     except KeyError as exc:
@@ -348,7 +854,7 @@ async def _transcribe(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Local ASR failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"ASR failed: {exc}") from exc
 
 
 async def _store_upload(upload: UploadFile, settings: Settings) -> Path:

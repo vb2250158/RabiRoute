@@ -3,7 +3,7 @@ import path from "node:path";
 import { WebSocketServer } from "ws";
 import { buildReply } from "../commands.js";
 import { config, setBotProfile, type NapCatInstanceConfig } from "../config.js";
-import { forwardMessage, type ForwardRouteKind } from "../forwarding.js";
+import { forwardMessage, recordMessageContextOnly, type ForwardRouteKind } from "../forwarding.js";
 import { appendAdapterLog, appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "../history.js";
 import { getLoginInfo, getStatus, sendGroupMessage, sendPrivateMessage, type NapCatEndpoint } from "../napcat.js";
 import { enrichNapCatMessage } from "../napcatForwardMessages.js";
@@ -394,9 +394,7 @@ async function handleGroupMessage(event: OneBotEvent, instance: NapCatInstanceCo
   if (!event.group_id || !event.user_id) {
     return;
   }
-  if (isSelfMessage(event)) {
-    return;
-  }
+  const selfMessage = isSelfMessage(event);
 
   const enriched = await enrichNapCatMessage(event.message, textFromEvent(event), endpointFor(instance));
   for (const error of enriched.errors) {
@@ -429,14 +427,22 @@ async function handleGroupMessage(event: OneBotEvent, instance: NapCatInstanceCo
     originalRawMessage: enriched.originalRawMessage,
     forwardedMessages: enriched.forwardedMessages,
     messageId: event.message_id,
-    senderName: event.sender?.card || event.sender?.nickname,
+    senderName: selfMessage
+      ? readGatewayStatus().napcatInstances?.[instance.id]?.botNickname || event.sender?.card || event.sender?.nickname
+      : event.sender?.card || event.sender?.nickname,
     repliedMessageId: replyMessageId(event) ?? undefined,
     instanceId: instance.id,
     adapterType: "napcat",
     botUserId: event.self_id != null ? String(event.self_id) : undefined,
-    botNickname: readGatewayStatus().napcatInstances?.[instance.id]?.botNickname
+    botNickname: readGatewayStatus().napcatInstances?.[instance.id]?.botNickname,
+    isSelf: selfMessage
   };
 
+  if (selfMessage) {
+    appendGroupMessage(record);
+    recordMessageContextOnly("group_message", record);
+    return;
+  }
   await resolveReplyChain(event, instance, record.rawMessage, "group");
   const route = getGroupRoute(event);
   if (route) {
@@ -461,19 +467,30 @@ async function handleGroupMessage(event: OneBotEvent, instance: NapCatInstanceCo
     return;
   }
 
-  await sendGroupMessage({
+  const sent = await sendGroupMessage({
     groupId: record.groupId,
     message: reply
   }, endpointFor(instance));
+  recordMessageContextOnly("group_message", {
+    time: Math.floor(Date.now() / 1000),
+    groupId: record.groupId,
+    userId: event.self_id ?? record.userId,
+    rawMessage: reply,
+    messageId: sent.messageId,
+    senderName: record.botNickname || config.botNickname,
+    instanceId: instance.id,
+    adapterType: "napcat",
+    botUserId: event.self_id != null ? String(event.self_id) : undefined,
+    botNickname: record.botNickname,
+    isSelf: true
+  }, { appendRoleRecord: false });
 }
 
 async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstanceConfig): Promise<void> {
   if (!event.user_id) {
     return;
   }
-  if (isSelfMessage(event)) {
-    return;
-  }
+  const selfMessage = isSelfMessage(event);
 
   const enriched = await enrichNapCatMessage(event.message, textFromEvent(event), endpointFor(instance));
   for (const error of enriched.errors) {
@@ -505,23 +522,44 @@ async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstance
     originalRawMessage: enriched.originalRawMessage,
     forwardedMessages: enriched.forwardedMessages,
     messageId: event.message_id,
-    senderName: event.sender?.nickname,
+    senderName: selfMessage
+      ? readGatewayStatus().napcatInstances?.[instance.id]?.botNickname || event.sender?.nickname
+      : event.sender?.nickname,
     instanceId: instance.id,
     adapterType: "napcat",
     botUserId: event.self_id != null ? String(event.self_id) : undefined,
-    botNickname: readGatewayStatus().napcatInstances?.[instance.id]?.botNickname
+    botNickname: readGatewayStatus().napcatInstances?.[instance.id]?.botNickname,
+    isSelf: selfMessage
   };
 
+  if (selfMessage) {
+    appendPrivateMessage(record);
+    recordMessageContextOnly("private", record);
+    return;
+  }
   await resolveReplyChain(event, instance, record.rawMessage, "private");
   appendPrivateMessage(record);
   forwardMessage("private", record);
 
   const content = record.rawMessage.trim();
   if (content === "/ping" || content === "ping") {
-    await sendPrivateMessage({
+    const reply = `${config.botNickname} 私聊在线`;
+    const sent = await sendPrivateMessage({
       userId: record.userId,
-      message: `${config.botNickname} 私聊在线`
+      message: reply
     }, endpointFor(instance));
+    recordMessageContextOnly("private", {
+      time: Math.floor(Date.now() / 1000),
+      userId: record.userId,
+      rawMessage: reply,
+      messageId: sent.messageId,
+      senderName: record.botNickname || config.botNickname,
+      instanceId: instance.id,
+      adapterType: "napcat",
+      botUserId: event.self_id != null ? String(event.self_id) : undefined,
+      botNickname: record.botNickname,
+      isSelf: true
+    }, { appendRoleRecord: false });
   }
 }
 

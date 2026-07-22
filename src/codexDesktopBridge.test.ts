@@ -136,6 +136,60 @@ test("Desktop thread discovery supports pages beyond the first 100 tasks", () =>
   assert.equal(page[99]?.id, "thread-5");
 });
 
+test("Desktop bridge steers an active task instead of starting a concurrent turn", async () => {
+  const router = await createMockDesktopRouter((request) => request.method === "initialize"
+    ? { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } }
+    : { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} });
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+
+  try {
+    const result = await bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000050",
+      prompt: "active task message",
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    });
+
+    assert.equal(result.action, "steered");
+    assert.deepEqual(router.methods, ["initialize", "thread-follower-steer-turn"]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Desktop bridge starts a new turn when the task is idle", async () => {
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+
+  try {
+    const result = await bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000051",
+      prompt: "idle task message",
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    });
+
+    assert.equal(result.action, "started");
+    assert.deepEqual(router.methods, [
+      "initialize",
+      "thread-follower-steer-turn",
+      "thread-follower-start-turn"
+    ]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
 test("Desktop bridge loads an unowned task and delivers through the Desktop owner", async () => {
   let deliveryAttempt = 0;
   const router = await createMockDesktopRouter((request) => {

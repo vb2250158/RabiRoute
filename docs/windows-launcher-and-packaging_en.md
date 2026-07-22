@@ -157,7 +157,7 @@ Build the complete Windows release locally with:
 .\scripts\build-windows-release.ps1
 ```
 
-The command requires Node.js, Python 3.10+, PyInstaller, and Inno Setup 6. It copies only Git-tracked public runtime resources plus generated backend/WebGUI/tray outputs, embeds a pinned Windows x64 Node.js runtime, installs production-only npm dependencies, scans for private files and build-machine paths, smoke-tests the packaged Manager through `/meta`, and produces:
+The command requires Node.js, Python 3.10+, PyInstaller, and Inno Setup 6. It builds both the tray executable and `plugin-adapters/rabi-speech/runtime/RabiSpeech.exe` with RabiSpeech product, icon, and version resources, then includes that generated host in the payload. Windows 11 Volume Mixer uses the real process image for application identity, so changing only the Core Audio session label would still show `Python`. The script copies only Git-tracked public runtime resources plus generated backend/WebGUI/tray/speech-host outputs, embeds a pinned Windows x64 Node.js runtime, installs production-only npm dependencies, scans for private files and build-machine paths, smoke-tests the packaged Manager through `/meta`, and produces:
 
 - `RabiRoute-<version>-windows-x64-setup.exe`
 - `RabiRoute-<version>-windows-x64-portable.zip`

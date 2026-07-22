@@ -12,9 +12,10 @@ import {
   isCodexTaskId
 } from "./codexTaskIdentity.js";
 import { resolveCodexSession } from "./codexSessionResolver.js";
+import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 
 const maxQueryLength = 240;
-const maxTitleLength = 240;
+const maxTitleInputLength = 200_000;
 const maxPromptLength = 200_000;
 const maxListLimit = 200;
 const defaultListLimit = 100;
@@ -209,8 +210,9 @@ async function createThread(
   request: AgentThreadRequest,
   options: AgentThreadRequestOptions,
   driver: AgentThreadDriver,
-  title = requiredText(request.title, "title", maxTitleLength)
+  requestedTitle = requiredText(request.title, "title", maxTitleInputLength)
 ): Promise<CodexThreadCreateResult> {
+  const title = normalizeCodexThreadTitle(requestedTitle);
   const prompt = optionalText(request.prompt, "prompt", maxPromptLength);
   const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
   const sandbox = normalizeSandbox(request.sandbox);
@@ -275,7 +277,7 @@ export async function handleAgentThreadRequest(
   if (action === "resolve") {
     const rawThreadId = optionalText(request.threadId, "threadId", 80);
     const fallbackTitle = !isCodexTaskId(rawThreadId) ? rawThreadId : "";
-    const title = requiredText(request.title || fallbackTitle, "title", maxTitleLength);
+    const title = requiredText(request.title || fallbackTitle, "title", maxTitleInputLength);
     const requestedWorkspace = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const resolution = await resolveCodexSession({
       threadId: rawThreadId,

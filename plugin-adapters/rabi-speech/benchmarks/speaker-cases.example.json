@@ -1,0 +1,9 @@
+{
+  "samples": [
+    {"speaker": "person-a", "role": "enroll", "path": "private/person-a-01.wav"},
+    {"speaker": "person-a", "role": "test", "path": "private/person-a-02.wav"},
+    {"speaker": "person-b", "role": "enroll", "path": "private/person-b-01.wav"},
+    {"speaker": "person-b", "role": "test", "path": "private/person-b-02.wav"},
+    {"speaker": "unknown-person", "role": "test", "path": "private/unknown-01.wav"}
+  ]
+}

@@ -141,6 +141,31 @@ RabiRoute 只会在满足以下条件时自动发送：
 
 这个状态只由 `speech` / RabiSpeech 消息端的转写事件注入。不要把 QQ、角色面板或其它文字入口手工标记成语音状态，也不要绕过 Outbox 直连 worker，否则会丢失来源绑定、策略检查和会话隔离。
 
+### Agent 标记说话人
+
+当会议 ASR 已给出 `Speaker 1`、`Speaker 2` 等分段标签，而 Agent 从对话中确认了人物身份时，可以原子创建/复用人物资料并绑定当前录音标签。`recordId` 必须来自该条持久化语音记录，不能只按长生命周期 `sessionId` 绑定临时标签：
+
+```http
+PUT /api/speech/speaker-identities
+Content-Type: application/json
+```
+
+```json
+{
+  "sessionId": "meeting-one",
+  "recordId": "speech-0123456789abcdef",
+  "speakerLabel": "Speaker 1",
+  "displayName": "秋雨",
+  "aliases": ["Qiu Yu"]
+}
+```
+
+已知稳定人物 ID 时可传 `speakerId`，此时接口直接复用该资料；未传时按显示名和别名大小写不敏感查找，唯一命中则复用并合并别名，未命中则创建，多个资料同时命中会返回 `409`，要求调用方改用明确 ID。资料查找/创建、别名合并和 `recordId + speakerLabel` 绑定在一次本机注册表写入中完成，重复请求是幂等的。
+
+人工入口仍位于 WebGUI「语音服务 → ASR 语音识别 → 说话人 / 声纹设置」，和 Agent 接口共用 `output/speaker-profiles.json`。界面按未知/已知说话人折叠，并为每个分段人物预览最近 10 句话，帮助人工确认或纠正。
+
+这个接口写的是人物元数据和显式会话绑定，不是自动生物声纹识别。当前能力发现仍返回 `voiceprint.supported=false`；Agent 不得把 `Speaker 1` 当作跨会话稳定身份，也不得宣称已经通过声纹自动认人。
+
 NapCat 群聊需要真实引用原消息时，在 `replyContext` 中同时提供源 `messageId` 和 `replyToSource: true`：
 
 ```json
@@ -266,8 +291,8 @@ POST http://127.0.0.1:8790/api/agent/threads
 
 - `list`：从 Desktop 状态按标题查询本机任务，使用 `offset` / `limit` 分页访问全部结果。
 - `read`：通过完整 `threadId` 只读读取 Desktop 任务元数据。
-- `resolve`：先读取精确 ID。有效 ID、cwd 一致且未归档时直接绑定，不比较可变的 Desktop/SQLite 标题；保存 ID 指向已归档任务时返回 `409 archived`。只有 ID 为空、非法或确实失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列时返回候选。
-- `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。
+- `resolve`：先读取精确 ID。有效 ID、cwd 一致且未归档时直接绑定，不比较可变的 Desktop/SQLite 标题，也不会因展示标题超过新建上限而否定绑定；保存 ID 指向已归档任务时返回 `409 archived`。只有 ID 为空、非法或确实失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列时返回候选。
+- `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。Codex 任务名上限为 240 个 JavaScript 字符单元；更长的输入会由 RabiRoute 安全截断并加省略号，响应和后续配置保存实际创建的名称。
 - `send`：通过 Desktop IPC 向已有任务 owner start/steer。
 
 查询示例：
@@ -293,7 +318,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 }
 ```
 
-调用方不要让 AI 或用户手改 UUID。下拉保存名称、完整 ID 和 workspace；用户明确输入新名称时前端先清空旧 ID。有效 ID + workspace 是稳定身份，即使返回标题已变成首条 prompt 也继续该 ID。`resolve` 返回 `id`、`name` 或 `created`；重名最大时间并列时返回 HTTP 409 和 `candidates`。
+调用方不要让 AI 或用户手改 UUID。下拉保存名称、完整 ID 和 workspace；用户明确输入新名称时前端先清空旧 ID。有效 ID + workspace 是稳定身份，即使返回标题已变成首条 prompt 或长度超过新建限制也继续该 ID。`resolve` 返回 `id`、`name` 或 `created`；重名最大时间并列时返回 HTTP 409 和 `candidates`。
 
 读取示例：
 

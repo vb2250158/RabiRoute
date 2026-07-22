@@ -62,17 +62,29 @@ An adapter should parse, normalize, record, report health, and call forwarding. 
 
 ### `src/history.ts`
 
-Append-only JSONL helpers and record types for messages, packets, Outbox results, adapter logs, and other runtime evidence.
+Append-only JSONL helpers and record types for protocol-specific messages, packets, Outbox results, adapter logs, and other runtime evidence. These files remain audit and compatibility evidence, but they are no longer separate sources of truth for automatic recent context.
+
+### `src/messageContextStore.ts`
+
+The canonical persona-scoped bidirectional conversation store:
+
+```text
+data/roles/<RoleId>/conversation/current.jsonl
+data/roles/<RoleId>/conversation/archive/<firstSequence>~<lastSequence>.jsonl
+data/roles/<RoleId>/conversation/archive/index.json
+```
+
+`current.jsonl` has no entry-count cap. When an archive check finds any record older than 72 hours, it moves the complete contiguous prefix older than 24 hours into a sequence-range archive. Automatic Agent context reads only `current.jsonl`; archives remain explicit-query evidence. Queries match the current persona, logical endpoint, and conversation, with inbound and outbound records sharing one message-count budget. Attachment records keep only safe metadata rather than private absolute paths. `src/messageContext.ts` is a compatibility facade over this implementation.
 
 ### `src/forwarding.ts`
 
 The orchestration center for a matched event:
 
-1. Build a `RouteDecision` for the current route profile.
-2. Build an `AgentPacket` for each matched rule.
-3. Record the packet.
-4. Deliver through the selected handler adapter/runtime.
-5. Report status and errors.
+1. Record the inbound event in each relevant persona's canonical conversation ledger before low-signal or rule filtering.
+2. Build a `RouteDecision` for the current route profile.
+3. Build an `AgentPacket` for each matched rule.
+4. Record the packet.
+5. Deliver through the selected handler adapter/runtime and report status/errors.
 
 Keep handler transport and session policy behind the adapter/runtime boundary.
 
@@ -84,7 +96,7 @@ Pure routing semantics: route kind, route text, regex, target filters, and match
 
 ### `src/routing/agentPacket.ts`
 
-Combines a decision with role context. It creates workspace-relative template values and the generated wrapper containing recent messages, role knowledge, logs, reply API/context, and endpoint-specific delivery instructions.
+Combines a decision with role context. It creates workspace-relative template values and the generated wrapper containing recent bidirectional messages from the current persona/logical endpoint/conversation, role knowledge, logs, reply API/context, and endpoint-specific delivery instructions. Automatic recent context never reads the archive directory.
 
 Packet construction invokes `roleKnowledgeSnapshot`, so matched memory can refresh `viewedAt`. A memory-consolidation run is evaluated only for the explicit `triggerId=memory-consolidation` path.
 
@@ -111,6 +123,8 @@ Copilot CLI and Marvis use their dedicated modules outside this folder where app
 - `src/agentThreads.ts`: controlled local thread bridge.
 
 Desktop IPC is the only real-message transport. The target Desktop task owns model, tools, sandbox, approvals, and turn execution. A valid saved task ID is authoritative within its workspace; a stale index title or completed goal must not create a duplicate. Do not introduce shared-port, per-route stdio, CLI, or app-server execution fallbacks.
+
+Matched ordinary messages are delivered immediately: the Desktop bridge first attempts `steer` against an active turn and falls back to `start` only when no active turn exists. There is no general busy-skip switch for ordinary endpoint traffic. Heartbeat may explicitly skip while busy, and speech may explicitly use keyword wake-up instead of hot delivery.
 
 ## Outbox / Action Gate
 
@@ -188,10 +202,12 @@ These modules do not replace live gateway adapter code.
 
 `ribiwebgui/` is the Vue/Vuetify control surface for configuration, scans, status, logs, and documentation. It is a client of Manager APIs, not the configuration source of truth.
 
+`ribiwebgui/src/components/PersonaAvatar.vue` owns consistent WebGUI avatar presentation and initial fallback. `src/personaAvatar.ts` owns persona-directory path constraints, image validation, content-addressed files, and atomic config switching. `src/manager/personaAvatarRoutes.ts` owns `/api/roles/:roleId/avatar` and the presentation DTO; `controlPlaneRoutes.ts` only registers it. Browser HTTP details stay in `persona/personaAvatarClient.ts`, while Qt resolves the same role-owned configuration through its existing `RoleContextRepository`. Avatar metadata is presentation-only and never enters AgentPacket, route matching, or handler delivery semantics.
+
 Speech control has an explicit frontend/backend split:
 
 ```text
-SpeechServicePage / SpeechRouteMonitor
+SpeechServicePage / SpeechHostMonitor
   -> frontend speech store
   -> frontend speech client adapter
   -> Manager speech interface
@@ -200,7 +216,11 @@ SpeechServicePage / SpeechRouteMonitor
   -> RabiSpeech Python implementation
 ```
 
-`src/shared/speechControlContract.ts` is the stable camelCase interface between Manager and WebGUI and owns Route speech defaults. `ribiwebgui/src/speech/speechControlClient.ts` is the only frontend module that knows `/api/speech/*` paths and the `{ code, data }` envelope. `ribiwebgui/src/stores/speechStore.ts` owns the speech read model, commands, and shared polling lifecycle. `src/manager/speechControl.ts` owns Route policy, asynchronous message acceptance, RabiSpeech payload mapping, and read-model normalization. Python snake_case and model-runtime details must not leak into Vue pages; RabiSpeech remains an independent local model runtime rather than being merged into Manager.
+`src/shared/speechControlContract.ts` is the stable camelCase interface between Manager and WebGUI and owns Route speech defaults. `ribiwebgui/src/speech/speechControlClient.ts` is the only frontend module that knows `/api/speech/*` paths and the `{ code, data }` envelope. `ribiwebgui/src/stores/speechStore.ts` owns the speech read model, commands, and shared polling lifecycle. `src/manager/speechControl.ts` owns Route policy, RabiSpeech payload mapping, and read-model normalization. `POST /api/speech/messages` waits for the gateway child process to report a real terminal outcome: `delivered` only after the Desktop owner's start/steer succeeds, `recorded` for a keyword-policy record-only result, and a 4xx/5xx response on failure. It does not wait for the Agent answer, Outbox, or TTS playback. Python snake_case and model-runtime details must not leak into Vue pages; RabiSpeech remains an independent loopback provider runtime rather than being merged into Manager. Local providers are the defaults. External API providers require explicit machine configuration, environment-variable secrets, and expose their boundary through `local_only` / `relay_safe` capabilities.
+
+Route `speechPushMode` is the delivery source of truth. `hot` enters the ordinary start/steer path after every completed ASR segment. `keyword` still records the segment but wakes the Agent only when the persona-owned `speechTriggerKeywords` matches. An empty keyword list never falls back to hot delivery.
+
+Host-level waveform, five-stage pipeline, counters, runtime events, and recent transcripts live only in `SpeechHostMonitor` under **Speech Service → ASR**. A Route's **Message adapters → Speech endpoint** section displays only that Route's subscription policy: hot/persona-keyword delivery, persona TTS summary, host/persona responsibility guidance, Agent-reply autoplay, and the single-ASR broadcast explanation. It must not embed the host monitor again.
 
 WebGUI localization is split by responsibility:
 
@@ -214,13 +234,19 @@ The `rabiroute:webgui:locale` local-storage value is only a browser-side UI pref
 
 `desktop/tray-task-window/` is the optional PySide6/Qt local panel. It reads plans/memory/status and provides role conversation UI; plan and memory views remain read-only. Desktop lifecycle uses the Manager shutdown endpoint.
 
+Periodic tray status refreshes use `GET /gateways?summary=1`, which returns an explicit allowlist of Route identity, runtime state, persona binding, local paths, and manual-trigger rules. It neither scans adapter logs, message files, or Agent diagnostics nor returns platform tokens and secrets. One Qt background task performs Manager HTTP, plan/memory file reads, and the currently visible panel's conversation read; the main-thread QObject slot only applies the completed result. Hidden panels neither read conversations nor rebuild widgets, completed refreshes wait while the tray menu is visible, unchanged state does not rebuild the persona menu or rerender the panel, and persona entries beyond the first five are created only when the submenu opens. Windows keeps the `setContextMenu` system registration and uses non-blocking `QMenu.popup()` as an immediate fast path when `activated(Context)` arrives before the menu is visible; the main latency controls remain zero main-thread I/O and lazy menu construction. The tray may retain the last successful snapshot across a transient refresh failure only when it labels that state as stale. A real Manager disconnect must still clear live runtime state rather than presenting cached data as online.
+
 ## Plugin adapters
 
 External/companion adapters live under `plugin-adapters/` or `scripts/` when they are independently deployable. They communicate through documented Manager/Relay protocols and must not import private runtime data into public examples.
 
-`plugin-adapters/rabi-speech/` is an independent local TTS/ASR service, not a message or handler adapter. Its registry selects only locally configured providers. The benchmark pipeline records TTS generation, WAV output, ASR transcription, cold/load/warm timings, RTF, memory, error rates, and machine metadata; raw runtime artifacts remain ignored while the sanitized HTML report is copied through `ribiwebgui/public/reports/`. The local Manager serves `reports/` at its root, while RabiLink Relay serves the same build directory under the authenticated remote-PC prefix.
+`plugin-adapters/rabi-speech/` is an independent loopback TTS/ASR provider service, not a message or handler adapter. Its registry can contain local workers, OpenAI-compatible APIs, and native DashScope APIs at the same time, while keeping local defaults and forbidding silent cloud fallback. The benchmark pipeline records TTS generation, WAV output, ASR transcription, cold/load/warm timings, RTF, memory, error rates, and machine metadata; raw runtime artifacts remain ignored while the sanitized HTML report is copied through `ribiwebgui/public/reports/`. The local Manager serves `reports/` at its root, while RabiLink Relay serves the same build directory under the authenticated remote-PC prefix.
 
-The live speech view belongs to the control plane. `src/manager/speechServiceStatus.ts` probes only a loopback RabiSpeech URL and removes private paths. `src/manager/speechControl.ts` then maps models, microphone state, playback, and message commands to `speechControlContract` before `GET /api/speech/status` reaches the frontend speech store. The page describes the current PC. The static benchmark describes only its named target machine, so the two must remain separate data sources.
+The live speech view belongs to the control plane. `src/manager/speechServiceStatus.ts` probes only a loopback RabiSpeech URL and removes private paths. `src/manager/speechControl.ts` then maps models, microphone state, playback, audio-stream selection, persistent speech records, and message commands to `speechControlContract` before the frontend speech store receives them. Audio defaults to the local sound card. When LAN `remote_audio` is enabled, `remote_audio.py` treats an authenticated remote client strictly as a microphone/speaker: the client never owns VAD, segmentation, or models, and disconnect does not trigger silent local fallback. RabiSpeech persists the host playback volume and returns it with playback status; the WebGUI global-queue card updates that `0–100` value only through Manager. Each audio item freezes the value when playback starts, so an adjustment applies from the next item that begins playing; it does not belong to a Route or persona. The host microphone, ASR model, VAD, and segmentation settings also belong only to RabiSpeech and are edited on the Speech Service page through Manager. A Route speech-endpoint toggle is only the subscription source of truth. Manager receives each host transcript once and broadcasts it to every subscribed Route; each Route independently owns hot/persona-keyword delivery and reply-playback policy. Disabling one Route removes only that subscription, and Manager stops the microphone only after the final subscription is disabled. Persona `voice/voice-profile.json` is the single source of truth for TTS model, voice binding, language, speed, and speaking instructions; legacy Route TTS fields are read-only compatibility inputs. The page describes the current PC. The static benchmark describes only its named target machine, so the two must remain separate data sources.
+
+RabiSpeech `speech_records.py` is the single truth source for ASR/TTS text records and follows FenneNote's date-based append pattern. `tts_audio_store.py` separately owns rebuildable finalized-audio caches: resolved persona output goes to `data/roles/<RoleId>/voice/cache/tts-audio/`, while non-persona direct calls use a private RabiSpeech fallback. Both default to a 24-hour per-file mtime window. The Manager read model allows only safe POSIX-style relative references, keeps a bare filename for legacy records, and omits absolute paths, parent traversal, and backslash paths. WebGUI embeds recent persistent bidirectional records in the ASR page and shows the relative cache reference plus expected expiry without turning it into a filesystem link or adding a separate meeting selection/export workflow. Passing the cache window does not change the text record, and raw ASR input audio is still not duplicated by default.
+
+`speaker_profiles.py` owns host-wide person metadata and manual `recordId + speakerLabel` bindings; `speaker_recognition.py` separately owns local neural embeddings, confirmed multi-prototypes, and unknown clusters. Provider `0/1` labels never inherit through a long-lived microphone `sessionId`. The WebGUI dropdown corrects only the selected recording, while also marking that recording's embedding as a confirmed prototype. Later matches require sufficient effective speech, a high best score, and a best-versus-second margin; low-confidence audio remains unknown. Enrollment audio is not copied. Vectors stay in ignored `output/speaker-embeddings.json` and never enter public APIs. A present but unvalidated model can cluster and suggest only; automatic assignment and `voiceprint.supported=true` require `validated=true` after local calibration. Native models are compatibility-probed first by `scripts/speaker_model_probe.py` in an isolated process, so the main service does not directly absorb crashes from untrusted model initialization. The embedding store separately bounds confirmed prototypes and unconfirmed samples and rejects low-RMS or materially cross-speaker-overlapping segments.
 
 ## Tests
 

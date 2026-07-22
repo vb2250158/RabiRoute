@@ -35,7 +35,7 @@ class MicrophoneConfig:
     asr_model: str = "faster-whisper/small"
     language: str | None = "zh"
     prompt: str | None = None
-    auto_submit: bool = False
+    auto_submit: bool = True
     route_id: str | None = None
     session_id: str = "rabispeech-microphone"
     suppress_during_playback: bool = True
@@ -51,6 +51,10 @@ class MicrophoneConfig:
             device = device.strip() or None
             if isinstance(device, str) and device.isdigit():
                 device = int(device)
+        legacy_route_id = _optional_text(data.get("route_id"), 200)
+        session_id = _text(data.get("session_id"), current.session_id, 200) or current.session_id
+        if legacy_route_id and session_id == f"speech-{legacy_route_id}":
+            session_id = cls().session_id
         config = cls(
             enabled=_boolean(data.get("enabled"), current.enabled),
             device=device if isinstance(device, (int, str)) else None,
@@ -69,17 +73,17 @@ class MicrophoneConfig:
             asr_model=_text(data.get("asr_model"), current.asr_model, 200) or current.asr_model,
             language=_optional_text(data.get("language", current.language), 40),
             prompt=_optional_text(data.get("prompt", current.prompt), 2_000),
-            auto_submit=_boolean(data.get("auto_submit"), current.auto_submit),
-            route_id=_optional_text(data.get("route_id", current.route_id), 200),
-            session_id=_text(data.get("session_id"), current.session_id, 200) or current.session_id,
+            # Resident transcripts always enter Manager's broadcast endpoint.
+            # Keep these fields only for backward-compatible status payloads.
+            auto_submit=True,
+            route_id=None,
+            session_id=session_id,
             suppress_during_playback=_boolean(data.get("suppress_during_playback"), current.suppress_during_playback),
         )
         if config.transcribe_threshold < config.record_threshold:
             config = replace(config, transcribe_threshold=config.record_threshold)
         if config.max_utterance_ms <= config.min_utterance_ms:
             config = replace(config, max_utterance_ms=max(1_000, config.min_utterance_ms + 500))
-        if config.auto_submit and not config.route_id:
-            raise ValueError("route_id is required when auto_submit is enabled.")
         return config
 
     def public(self) -> dict[str, object]:
@@ -87,15 +91,24 @@ class MicrophoneConfig:
 
 
 Transcriber = Callable[[Path, MicrophoneConfig], Awaitable[TranscriptionResult]]
-Submitter = Callable[[str, str, str], Awaitable[None]]
+Submitter = Callable[[str, str], Awaitable[dict[str, object]]]
 StreamFactory = Callable[[MicrophoneConfig, Callable[..., None]], Any]
+RecordTranscription = Callable[[TranscriptionResult, MicrophoneConfig, float], None]
+
+
+class RemoteAudioController:
+    selected_client_id: str | None
+
+    async def start_capture(self, sample_rate: int, chunk_ms: int) -> None: ...
+
+    async def stop_capture(self) -> None: ...
 
 
 class MicrophoneService:
     """Host-resident microphone segmentation and ASR owned by RabiSpeech.
 
     PortAudio's callback only copies samples and schedules them on the service event loop.
-    Segmentation, ASR, persistence, and optional Route submission stay serialized there.
+    Segmentation, ASR, persistence, and one Manager broadcast submission stay serialized there.
     """
 
     def __init__(
@@ -106,14 +119,18 @@ class MicrophoneService:
         transcriber: Transcriber,
         submitter: Submitter,
         playback_active: Callable[[], bool],
+        record_transcription: RecordTranscription | None = None,
         stream_factory: StreamFactory | None = None,
+        remote_audio: RemoteAudioController | None = None,
     ) -> None:
         self.state_path = state_path.expanduser().resolve()
         self.temp_dir = temp_dir.expanduser().resolve()
         self._transcriber = transcriber
         self._submitter = submitter
         self._playback_active = playback_active
+        self._record_transcription = record_transcription
         self._stream_factory = stream_factory or _sounddevice_stream
+        self._remote_audio = remote_audio
         self.config = self._read_config()
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -144,6 +161,9 @@ class MicrophoneService:
         self._captured = 0
         self._recognized = 0
         self._empty = 0
+        self._delivered = 0
+        self._recorded = 0
+        self._delivery_failed = 0
         self._submitted = 0
         self._submit_failed = 0
         self._dropped = 0
@@ -173,8 +193,11 @@ class MicrophoneService:
             self._state = "starting"
             self._error = ""
             try:
-                self._stream = self._stream_factory(self.config, self._audio_callback)
-                self._stream.start()
+                if self._remote_audio is not None and self._remote_audio.selected_client_id:
+                    await self._remote_audio.start_capture(self.config.sample_rate, self.config.chunk_ms)
+                else:
+                    self._stream = self._stream_factory(self.config, self._audio_callback)
+                    self._stream.start()
             except Exception as exc:
                 self._stream = None
                 self._state = "error"
@@ -191,11 +214,30 @@ class MicrophoneService:
                 "microphone_started",
                 "麦克风常驻监听已启动",
                 device=self.config.device,
+                audio_source="remote" if self._remote_audio is not None and self._remote_audio.selected_client_id else "local",
+                remote_client_id=self._remote_audio.selected_client_id if self._remote_audio is not None else None,
                 asr_model=self.config.asr_model,
-                route_id=self.config.route_id,
-                auto_submit=self.config.auto_submit,
+                broadcast=True,
             )
             return self.snapshot()
+
+    async def update_settings(self, updates: object = None) -> dict[str, object]:
+        was_running = self._running
+        if was_running:
+            await self.stop(persist=False)
+            await self.start(updates or {}, persist=True)
+        else:
+            async with self._lock:
+                self.config = replace(MicrophoneConfig.from_mapping(updates, self.config), enabled=False)
+                self._write_config()
+        self._emit_event(
+            "microphone",
+            "microphone_settings_updated",
+            "主机语音设置已更新",
+            running=self._running,
+            asr_model=self.config.asr_model,
+        )
+        return self.snapshot()
 
     async def stop(self, *, persist: bool = True) -> dict[str, object]:
         async with self._lock:
@@ -206,6 +248,8 @@ class MicrophoneService:
                     stream.stop()
                 finally:
                     stream.close()
+            if self._remote_audio is not None:
+                await self._remote_audio.stop_capture()
             consumer, self._consumer = self._consumer, None
             if consumer is not None:
                 consumer.cancel()
@@ -233,6 +277,10 @@ class MicrophoneService:
         return {
             "ok": True,
             "mode": "host_resident",
+            "audio_stream": {
+                "source": "remote" if self._remote_audio is not None and self._remote_audio.selected_client_id else "local",
+                "client_id": self._remote_audio.selected_client_id if self._remote_audio is not None else None,
+            },
             "running": self._running,
             "state": self._state,
             "error": self._error,
@@ -248,6 +296,9 @@ class MicrophoneService:
                 "captured": self._captured,
                 "recognized": self._recognized,
                 "empty": self._empty,
+                "delivered": self._delivered,
+                "recorded": self._recorded,
+                "delivery_failed": self._delivery_failed,
                 "submitted": self._submitted,
                 "submit_failed": self._submit_failed,
                 "dropped": self._dropped,
@@ -301,6 +352,11 @@ class MicrophoneService:
 
     def feed_for_test(self, samples: np.ndarray) -> None:
         """Deterministic segmentation hook; production audio enters through PortAudio."""
+        self._ingest(np.asarray(samples, dtype=np.float32).reshape(-1))
+
+    def feed_remote(self, client_id: str, samples: np.ndarray) -> None:
+        if self._remote_audio is None or client_id != self._remote_audio.selected_client_id:
+            return
         self._ingest(np.asarray(samples, dtype=np.float32).reshape(-1))
 
     def _audio_callback(self, indata: Any, _frames: int, _time_info: Any, status: Any) -> None:
@@ -450,7 +506,7 @@ class MicrophoneService:
                 self._emit_event(
                     "asr",
                     "transcription_started",
-                    "开始本地语音识别",
+                    "开始语音识别",
                     duration=duration,
                     model=self.config.asr_model,
                 )
@@ -466,13 +522,14 @@ class MicrophoneService:
                 self._emit_event(
                     "asr",
                     "transcription_succeeded",
-                    "本地语音识别完成",
+                    "语音识别完成",
                     provider=result.provider,
                     model=result.model,
                     duration=duration,
                     text_length=len(text),
                 )
                 item: dict[str, object] = {
+                    "record_id": result.record_id,
                     "time": time.time(),
                     "started_at": started_at,
                     "duration": round(audio.size / self.config.sample_rate, 3),
@@ -480,39 +537,109 @@ class MicrophoneService:
                     "text": text,
                     "provider": result.provider,
                     "model": result.model,
+                    "segments": [asdict(segment) for segment in result.segments],
                     "submitted": False,
                 }
-                if self.config.auto_submit and self.config.route_id:
+                if self.config.auto_submit:
                     self._emit_event(
                         "route",
                         "route_submission_started",
-                        "开始投递到 Route",
-                        route_id=self.config.route_id,
+                        "开始广播到已启用的语音消息端",
                         session_id=self.config.session_id,
                     )
                     try:
-                        await self._submitter(self.config.route_id, text, self.config.session_id)
+                        receipt = await self._submitter(text, self.config.session_id)
+                        if not isinstance(receipt, dict):
+                            raise RuntimeError("Manager returned no terminal broadcast receipt.")
+                        delivery_status = str(receipt.get("status") or "").strip()
+                        if delivery_status not in {"delivered", "recorded"}:
+                            raise RuntimeError("Manager returned no delivered/recorded broadcast receipt.")
+                        message_id = str(receipt.get("message_id") or receipt.get("messageId") or "").strip()
+                        delivery_reason = str(receipt.get("reason") or "").strip()
+                        deliveries = receipt.get("deliveries") if isinstance(receipt.get("deliveries"), list) else []
                         item["submitted"] = True
+                        item["delivery_status"] = delivery_status
+                        item["deliveries"] = deliveries
+                        if message_id:
+                            item["message_id"] = message_id
+                        if delivery_reason:
+                            item["delivery_reason"] = delivery_reason
                         self._submitted += 1
                         self._last_submit_error = ""
-                        self._emit_event(
-                            "route",
-                            "route_submission_succeeded",
-                            "Route 已接收语音消息",
-                            route_id=self.config.route_id,
-                            session_id=self.config.session_id,
-                        )
+                        if deliveries:
+                            for delivery in deliveries:
+                                if not isinstance(delivery, dict):
+                                    continue
+                                route_id = str(delivery.get("routeId") or delivery.get("route_id") or "").strip()
+                                route_status = str(delivery.get("status") or "").strip()
+                                route_message_id = str(delivery.get("messageId") or delivery.get("message_id") or "").strip()
+                                route_reason = str(delivery.get("reason") or "").strip()
+                                route_detail = str(delivery.get("detail") or "").strip()
+                                if route_status == "delivered":
+                                    self._delivered += 1
+                                    self._emit_event(
+                                        "route",
+                                        "route_delivery_succeeded",
+                                        "Desktop 目标任务已接收语音消息",
+                                        route_id=route_id,
+                                        session_id=self.config.session_id,
+                                        message_id=route_message_id,
+                                    )
+                                elif route_status == "recorded":
+                                    self._recorded += 1
+                                    self._emit_event(
+                                        "route",
+                                        "route_recorded_only",
+                                        "语音已记录，未唤醒 Agent",
+                                        route_id=route_id,
+                                        session_id=self.config.session_id,
+                                        message_id=route_message_id,
+                                        reason=route_reason,
+                                    )
+                                elif route_status == "failed":
+                                    self._delivery_failed += 1
+                                    self._emit_event(
+                                        "route",
+                                        "route_submission_failed",
+                                        "Route 投递失败",
+                                        level="error",
+                                        route_id=route_id,
+                                        error=route_detail or route_reason or "Unknown Route delivery failure.",
+                                    )
+                        else:
+                            self._recorded += 1
+                            self._emit_event(
+                                "route",
+                                "route_recorded_only",
+                                "语音已记录，当前没有启用的语音消息端",
+                                session_id=self.config.session_id,
+                                message_id=message_id,
+                                reason=delivery_reason,
+                            )
                     except Exception as exc:
+                        self._delivery_failed += 1
                         self._submit_failed += 1
                         self._last_submit_error = f"{type(exc).__name__}: {exc}"[:500]
+                        item["delivery_status"] = "failed"
                         item["submit_error"] = self._last_submit_error
                         self._emit_event(
                             "route",
                             "route_submission_failed",
-                            "Route 投递失败",
+                            "语音广播失败",
                             level="error",
-                            route_id=self.config.route_id,
                             error=self._last_submit_error,
+                        )
+                if self._record_transcription is not None:
+                    try:
+                        self._record_transcription(result, self.config, started_at)
+                    except Exception as exc:
+                        self._emit_event(
+                            "storage",
+                            "record_persistence_failed",
+                            "语音记录写入失败，已保留本次转写与投递状态",
+                            level="error",
+                            session_id=self.config.session_id,
+                            error=f"{type(exc).__name__}: {exc}"[:500],
                         )
                 self._history.appendleft(item)
                 self._error = ""
@@ -522,7 +649,7 @@ class MicrophoneService:
             except Exception as exc:
                 self._state = "error"
                 self._error = f"{type(exc).__name__}: {exc}"[:500]
-                self._emit_event("asr", "transcription_failed", "本地语音识别失败", level="error", error=self._error)
+                self._emit_event("asr", "transcription_failed", "语音识别失败", level="error", error=self._error)
             finally:
                 if target is not None:
                     target.unlink(missing_ok=True)

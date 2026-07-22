@@ -30,7 +30,7 @@ data/roles/<RoleId>/persona.md
 data/roles/<RoleId>/personaConfig.json
 ```
 
-`adapterConfig.json` owns endpoints, ports, handler selection, cwd, pipeline, and role binding. `personaConfig.json` owns notification rules. A role can be reused by several routes.
+`adapterConfig.json` owns endpoints, ports, handler selection, cwd, pipeline, role binding, and Route-local delivery policy. `personaConfig.json` owns notification rules, speech-trigger keywords, and per-endpoint recent-context budgets. A role can be reused by several routes.
 
 On a clean start, the Manager copies the public `examples/data` package when available. Only the main example is enabled. Missing examples are not a runtime failure; the Manager can create a minimal NapCat-to-Codex setup.
 
@@ -65,7 +65,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 
 ## Core fields
 
-- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, and `wecom`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
+- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, and `wecom`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
 - `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
 - `allowedFileRoots`: real-path allowlist for local file output. A local QQ group-file upload is blocked when this is empty or the resolved file leaves the allowlist.
@@ -75,8 +75,11 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `agentAdapters`: handler IDs. Codex is verified; Copilot CLI and AstrBot are experimental; Marvis is a manual handoff.
 - `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. An archived saved ID first rebinds to the unique latest active same-name task in the same workspace; if none exists it blocks and requires restore/reselection. It never permits replacement creation. Typing a new name explicitly clears the old ID before name lookup. One or more exact same-name/workspace matches bind the unique latest `updatedAt`; only zero matches for an empty, invalid, or missing ID may create, and a tied or unusable maximum requires selection.
 - `copilotThreadName` / `copilotCwd`: independent Copilot CLI session configuration.
-- `agentModel`: leave empty to use the Runtime's `model/list` default. Only set it when an explicit model lock is required.
+- `agentModel`: legacy compatibility only. The Codex Desktop path ignores it; the target Desktop task owns its model.
 - `heartbeatSkipWhenAgentBusy`: skip a heartbeat while the fixed Codex thread is still active. Other message kinds are unaffected.
+- `speechPushMode`: Route-owned speech delivery mode. `hot` delivers every completed ASR segment immediately. `keyword` records every segment but wakes the Agent only after a persona-keyword match. WebGUI's **Hot delivery** switch maps On to `hot` and Off to `keyword`.
+- `speechTriggerKeywords`: persona-owned names, common addresses, and wake phrases in `personaConfig.json`. When the list is empty and Hot delivery is off, ASR remains recorded and never silently falls back to `hot`.
+- `recentMessageLimits`: persona-owned `0–200` auto-injection budgets for `napcat`, `remoteAgent`, `heartbeat`, `rolePanel`, `speech`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `webhook`, and `wecom`. The schema default is `100`; `0` disables only automatic injection. Legacy `recentMessageLimit` is migrated across all endpoints at the read boundary.
 - `dataDir`, `rolesDir`, `configName`, `agentRoleId`, `agentRoleFile`: storage and role binding.
 
 Windows paths may use either slash style in WebUI. Only hand-written JSON requires escaped backslashes.
@@ -87,6 +90,7 @@ Windows paths may use either slash style in WebUI. Only hand-written JSON requir
 | --- | --- | --- |
 | `napcat` | verified | Inbound OneBot WebSocket and outbound OneBot HTTP. |
 | `heartbeat` | verified | Internal scheduled events. |
+| `speech` | experimental | RabiPC/RabiSpeech resident ASR. Hot delivery sends every segment; keyword mode records all segments and sends only persona-keyword matches. Successful same-session TTS joins ASR in the bidirectional persona context. |
 | `rolePanel` | verified | Built-in Manager/Qt role conversation capability. It is available by default, hidden from WebGUI's configurable adapter list, and is not a network listener. |
 | `remoteAgent` | experimental | Manager discovers and connects remote bridges for tasks/events/files. |
 | `webhook` | experimental | Generic POST source for systems without a dedicated adapter. |
@@ -125,7 +129,11 @@ Record-first sources such as FenneNote can be selected through `routeVariables.r
 
 ## Multiple routes and shared roles
 
-Each folder under `data/route` is independently startable and may have its own endpoints and handler workspace. Several routes may bind the same `agentRoleId`; role rules use `configName` to distinguish them.
+Each folder under `data/route` is independently startable and may have its own endpoints and handler workspace. Several Routes may bind the same `agentRoleId`; they reuse that persona's root-level rules, speech keywords, and context budgets while retaining their own endpoint, pipeline, hot-delivery, and handler configuration.
+
+Once an ordinary message matches a rule, delivery is direct: `steer` the active Desktop turn or `start` an idle task. Ordinary endpoints do not need another hot-push toggle. Heartbeat's busy-skip switch and speech's hot/keyword mode are explicit exceptions.
+
+The automatic recent-context source is `data/roles/<RoleId>/conversation/current.jsonl`, scoped to the current persona, logical endpoint, and conversation. Inbound and outbound records count together. Time-based archives live under `conversation/archive/` and are not injected automatically.
 
 When adding a new platform, create a module under `src/adapters/` and normalize it into the common event/forwarding path. Do not put unrelated protocol logic into the NapCat adapter.
 

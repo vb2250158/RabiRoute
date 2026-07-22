@@ -5,6 +5,7 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import type { AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterType } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
 import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
+import PersonaAvatar from "./PersonaAvatar.vue";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 
 const props = defineProps<{ modelValue: boolean }>();
@@ -138,8 +139,8 @@ const selectedSessionName = computed(() => {
   return "";
 });
 const roleOptions = computed(() => [
-  { title: "不配置人格", value: "" },
-  ...((runtime.value.roleInfo?.options || []).map(role => ({ title: role.label || role.value, value: role.value })))
+  { title: "不配置人格", value: "", avatarUrl: "" },
+  ...((runtime.value.roleInfo?.options || []).map(role => ({ title: role.label || role.value, value: role.value, avatarUrl: role.avatarUrl || "" })))
 ]);
 const agentNeedsCodexProject = computed(() => selectedAgent.value === "codex");
 const agentNeedsCopilotProject = computed(() => selectedAgent.value === "copilotCli");
@@ -1005,14 +1006,14 @@ async function apply() {
                   </template>
                   <template v-if="form.adapters.includes('heartbeat')">
                     <v-alert type="info" variant="tonal" density="compact" class="full-span">
-                      定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。
+                      定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
                     </v-alert>
                     <v-switch
                       v-model="form.heartbeatSkipWhenAgentBusy"
                       class="full-span"
                       color="primary"
                       label="会话工作中时跳过心跳"
-                      hint="Codex 会话仍在处理上一轮任务时，不投递新的 heartbeat；普通群聊和私聊不受影响。"
+                      hint="开启后，仅当 Agent 会话仍在工作时把本次 heartbeat 记为 skipped；普通消息不受影响。"
                       persistent-hint
                     />
                     <div class="quick-agent-status full-span">
@@ -1373,7 +1374,19 @@ async function apply() {
                   placeholder="留空，不配置人格"
                   clearable
                   class="mb-4"
-                />
+                >
+                  <template #item="{ props: itemProps, item }">
+                    <v-list-item v-bind="itemProps">
+                      <template #prepend><PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="32" /></template>
+                    </v-list-item>
+                  </template>
+                  <template #selection="{ item }">
+                    <div class="d-flex align-center ga-2">
+                      <PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="26" />
+                      <span>{{ item.raw.title }}</span>
+                    </div>
+                  </template>
+                </v-combobox>
                 <div class="quick-review">
                   <div class="status-row"><span>消息入口</span><b>{{ form.adapters.map(adapterLabel).join(" + ") }}</b></div>
                   <div class="status-row"><span>Agent</span><b>{{ quickAgentChoices.find(agent => agent.type === selectedAgent)?.title || selectedAgent }}</b></div>

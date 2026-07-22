@@ -24,7 +24,106 @@ export type SpeechRuntimeStatus = {
   streaming?: boolean;
   defaults: { tts?: string; asr?: string };
   providers: { tts: SpeechProvider[]; asr: SpeechProvider[] };
+  speakerIdentity?: SpeechSpeakerIdentityCapability;
   error?: string;
+};
+
+export type SpeechVoiceprintCapability = {
+  supported: boolean;
+  available?: boolean;
+  experimental: boolean;
+  reason?: string;
+  model?: string;
+  provider?: string;
+  validated?: boolean;
+  autoAssign?: boolean;
+};
+
+export type SpeechSpeakerIdentityCapability = {
+  scope: "loopback-only" | string;
+  mode: "manual_record_label_binding" | string;
+  manualBinding: boolean;
+  bindingScope: "record_speaker_label" | string;
+  aliasesAreMetadataOnly: boolean;
+  diarizationLabelsAreBiometricIdentity: false;
+  storesRawEnrollmentAudio: false;
+  storesVoiceEmbeddings?: boolean;
+  voiceprint: SpeechVoiceprintCapability;
+  storageError?: string;
+};
+
+export type SpeechSpeakerProfile = {
+  id: string;
+  displayName: string;
+  aliases: string[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type SpeechSpeakerBinding = {
+  sessionId: string;
+  recordId: string;
+  speakerLabel: string;
+  speakerId: string;
+  speakerName?: string;
+  decision: "manual_record_binding" | "manual_session_binding" | string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type SpeechSpeakerCluster = {
+  id: string;
+  sampleCount: number;
+  totalDuration: number;
+  lastSeenAt: number;
+};
+
+export type SpeechSpeakerRegistry = {
+  profiles: SpeechSpeakerProfile[];
+  bindings: SpeechSpeakerBinding[];
+  capability: SpeechSpeakerIdentityCapability;
+  clusters: SpeechSpeakerCluster[];
+};
+
+export type SpeechSpeakerProfileCreateCommand = {
+  displayName: string;
+  aliases?: string[];
+};
+
+export type SpeechSpeakerProfileUpdateCommand = {
+  displayName?: string;
+  aliases?: string[];
+};
+
+export type SpeechSpeakerBindingCommand = {
+  sessionId: string;
+  recordId: string;
+  speakerLabel: string;
+  speakerId: string;
+};
+
+export type SpeechSpeakerIdentityCommand = {
+  sessionId: string;
+  recordId: string;
+  speakerLabel: string;
+  speakerId?: string | null;
+  displayName?: string | null;
+  aliases?: string[];
+};
+
+export type SpeechSpeakerIdentityResult = {
+  created: boolean;
+  reused: boolean;
+  profileUpdated: boolean;
+  bindingChanged: boolean;
+  matchedBy: "created" | "speaker_id" | "display_name_or_alias" | string;
+  profile: SpeechSpeakerProfile;
+  binding: SpeechSpeakerBinding;
+};
+
+export type SpeechSpeakerProfileDeleteResult = {
+  deleted: SpeechSpeakerProfile;
+  removedBindings: number;
 };
 
 export type SpeechModel = {
@@ -49,6 +148,12 @@ export type SpeechModel = {
 export type SpeechPersona = {
   id: string;
   voiceReady: boolean;
+  avatarUrl?: string;
+  defaultModel?: string;
+  language?: string;
+  instructions?: string;
+  speed?: number;
+  voiceStyleSummary?: string;
 };
 
 export type SpeechAudioInput = {
@@ -77,8 +182,11 @@ export type SpeechMicrophoneConfig = {
   asrModel: string;
   language: string | null;
   prompt: string | null;
+  /** Compatibility state. Resident microphone transcripts now broadcast through Manager. */
   autoSubmit: boolean;
+  /** Deprecated single-Route binding; normalized to null by the broadcast runtime. */
   routeId: string | null;
+  /** Host-generated conversation identity; not a user-facing setting. */
   sessionId: string;
   suppressDuringPlayback: boolean;
 };
@@ -87,10 +195,45 @@ export type SpeechMicrophoneStats = {
   captured: number;
   recognized: number;
   empty: number;
+  delivered: number;
+  recorded: number;
+  deliveryFailed: number;
+  /** Compatibility total: delivered + recorded. */
   submitted: number;
+  /** Compatibility alias for deliveryFailed. */
   submitFailed: number;
   dropped: number;
 };
+
+export type SpeechAudioStreamClient = {
+  id: string;
+  name: string;
+  sampleRate: number;
+  chunkMs: number;
+  connectedAt: number;
+  lastAudioAt?: number | null;
+  selected: boolean;
+  online: boolean;
+};
+
+export type SpeechAudioStreamStatus = {
+  enabled: boolean;
+  listening: boolean;
+  port: number;
+  source: "local" | "remote";
+  selectedClientId: string | null;
+  selectedOnline: boolean;
+  captureEnabled: boolean;
+  clients: SpeechAudioStreamClient[];
+  checkedAt: number;
+};
+
+export type SpeechAudioStreamSelectionCommand = {
+  source: "local" | "remote";
+  clientId?: string | null;
+};
+
+export type SpeechMessageStatus = "delivered" | "recorded" | "failed";
 
 export type SpeechHistoryItem = {
   time: number;
@@ -99,7 +242,55 @@ export type SpeechHistoryItem = {
   model: string;
   duration: number;
   submitted: boolean;
+  messageId?: string;
+  deliveryStatus?: SpeechMessageStatus;
+  deliveryReason?: string;
   submitError?: string;
+  segments: SpeechTranscriptSegment[];
+};
+
+export type SpeechTranscriptSegment = {
+  id: number;
+  start: number;
+  end: number;
+  text: string;
+  speaker?: string;
+  speakerLabel?: string;
+  speakerId?: string;
+  speakerName?: string;
+  speakerDecision?: string;
+  speakerClusterId?: string;
+  speakerScore?: number;
+  speakerMargin?: number;
+  speakerSampleDuration?: number;
+  speakerModel?: string;
+  speakerSuggestionId?: string;
+  speakerSuggestionName?: string;
+};
+
+export type SpeechRecord = {
+  id: string;
+  kind: "asr" | "tts";
+  source: string;
+  time: number;
+  sessionId: string | null;
+  routeId: string | null;
+  provider: string;
+  model: string;
+  voice?: string;
+  text: string;
+  language?: string;
+  duration?: number;
+  segments: SpeechTranscriptSegment[];
+  playbackJobId?: string;
+  playbackStatus?: string;
+  /**
+   * Safe POSIX-style cache-relative reference. New records include the persona cache path;
+   * legacy records may contain only the filename. Never contains a host absolute path.
+   */
+  audioFile?: string;
+  /** Expected cache expiry as Unix epoch seconds; this is not proof that cleanup already ran. */
+  audioExpiresAt?: number;
 };
 
 export type SpeechEvent = {
@@ -147,12 +338,22 @@ export type SpeechPlaybackJob = {
 
 export type SpeechPlaybackStatus = {
   mode: string;
+  volume: number;
   current: string | null;
   queued: number;
   jobs: SpeechPlaybackJob[];
 };
 
-export type SpeechMicrophoneStartCommand = Omit<SpeechMicrophoneConfig, "enabled">;
+export type SpeechPlaybackVolumeCommand = {
+  volume: number;
+};
+
+export type SpeechMicrophoneSettingsCommand = Omit<
+  SpeechMicrophoneConfig,
+  "enabled" | "autoSubmit" | "routeId" | "sessionId"
+>;
+
+export type SpeechMicrophoneStartCommand = SpeechMicrophoneSettingsCommand;
 
 export type SpeechSynthesisCommand = {
   model: string;
@@ -169,21 +370,34 @@ export type SpeechSynthesisCommand = {
 };
 
 export type SpeechMessageCommand = {
-  routeId: string;
+  /** Omit to broadcast to every enabled speech message endpoint. */
+  routeId?: string | null;
   text: string;
-  sessionId: string;
+  sessionId?: string | null;
 };
 
-export type SpeechMessageAccepted = {
+export type SpeechRouteDeliveryResult = {
   routeId: string;
   messageId: string;
+  status: SpeechMessageStatus;
+  reason?: string;
+  detail?: string;
+};
+
+export type SpeechMessageResult = {
+  routeId: string | null;
+  messageId: string;
   sessionId: string;
-  status: "accepted";
+  status: SpeechMessageStatus;
+  reason?: string;
+  detail?: string;
+  deliveries?: SpeechRouteDeliveryResult[];
 };
 
 export type SpeechModelsPayload = { models: SpeechModel[] };
 export type SpeechPersonasPayload = { personas: SpeechPersona[] };
 export type SpeechAudioInputsPayload = { devices: SpeechAudioInput[] };
+export type SpeechAudioStreamsPayload = { audioStream: SpeechAudioStreamStatus };
 
 export type SpeechControlEnvelope<T> = {
   code: 0;
@@ -210,6 +424,31 @@ export type SpeechRouteProfile = {
   autoSubmit: boolean;
   autoPlay: boolean;
 };
+
+export const SPEECH_ROUTE_VARIABLE_KEYS = [
+  "speechAsrModel",
+  "speechTtsModel",
+  "speechVoice",
+  "speechLanguage",
+  "speechSpeed",
+  "speechInstructions",
+  "speechThreshold",
+  "speechTranscribeThreshold",
+  "speechAdaptiveThreshold",
+  "speechSilenceMs",
+  "speechMinUtteranceMs",
+  "speechMaxUtteranceMs",
+  "speechPreRollMs",
+  "speechInputGain",
+  "speechAutoSubmit",
+  "speechAutoPlay"
+] as const;
+
+const SPEECH_ROUTE_VARIABLE_KEY_SET: ReadonlySet<string> = new Set(SPEECH_ROUTE_VARIABLE_KEYS);
+
+export function isSpeechRouteVariableKey(value: string): boolean {
+  return SPEECH_ROUTE_VARIABLE_KEY_SET.has(value);
+}
 
 export const DEFAULT_SPEECH_ROUTE_PROFILE: Readonly<SpeechRouteProfile> = Object.freeze({
   asrModel: "faster-whisper/small",
@@ -276,10 +515,6 @@ export function applySpeechRouteVariableDefaults(
   return {
     ...(variables ?? {}),
     speechAsrModel: profile.asrModel,
-    speechTtsModel: profile.ttsModel,
-    speechVoice: profile.voice,
-    speechLanguage: profile.language,
-    speechSpeed: String(profile.speed),
     speechThreshold: String(profile.recordThreshold),
     speechTranscribeThreshold: String(profile.transcribeThreshold),
     speechAdaptiveThreshold: String(profile.adaptiveThreshold),

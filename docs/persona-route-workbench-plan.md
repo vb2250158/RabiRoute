@@ -6,7 +6,7 @@
 
 # 人格路由工作台设计计划
 
-> 状态：设计中。单 route profile 的无副作用 RouteDecision / AgentPacket dry-run 预览尚未实现。
+> 状态：部分实现。人格语音关键词和 11 端最近上下文控件已实现；单 route profile 的无副作用 RouteDecision / AgentPacket dry-run 预览尚未实现。
 
 本文设计 RibiWebGUI 的人格配置页改造。它不是竞品 Agent 编辑器复刻，也不是“智能选择人格”的产品方案；它是给当前 RabiRoute 模型补一个可解释、可预览、可排障的工作台。
 
@@ -37,7 +37,7 @@ route 配置固定指向 agentRoleId
 | 链路 | 当前实现 | 结论 |
 | --- | --- | --- |
 | route 读取 | `src/manager/configRepository.ts` 读取 `adapterConfig.json`，再按 `agentRoleId` 读取对应 `personaConfig.json` | route 固定指向一个人格 |
-| route profile | `src/shared/gatewayConfigModel.ts` 归一化 `agentRoleId`、`notificationRules`、`recentMessageLimit` | 规则跟随已绑定人格进入 route profile |
+| route profile | `src/shared/gatewayConfigModel.ts` 归一化 `agentRoleId`、`notificationRules`、`recentMessageLimits`、`speechTriggerKeywords` | 规则和人格策略跟随已绑定人格进入 route profile |
 | 规则命中 | `src/routing/routeDecision.ts#createRouteDecision` 在给定 route profile 内过滤 rules | 不做跨人格选择 |
 | AgentPacket | `src/routing/agentPacket.ts#buildAgentPacket` 使用 `rolePathsForRoute(route)` 解析已绑定角色路径 | 命中 rule 后才注入人格路径、记忆、计划、技能 |
 | 真实投递 | `src/forwarding.ts#forwardMessageAndWait` 遍历当前进程 active routeProfiles，写事件日志、写投递日志、记录 replay ledger 并投递 Agent | 预览不能直接调用真实投递 |
@@ -85,7 +85,8 @@ route 配置固定指向 agentRoleId
 | route 指向的人格 | `adapterConfig.json.agentRoleId` | 路由配置页为真源，人格页可显示和跳转 | 不是消息内容动态选择 |
 | 人格正文 | `data/roles/<RoleId>/persona.md` | 人格配置页 | 可预览、打开文件 |
 | 消息模板规则 | `data/roles/<RoleId>/personaConfig.json` | 人格配置页 | 编辑 route kind、regex、模板、定时计划 |
-| 最近消息注入数量 | `personaConfig.json.recentMessageLimit` | 人格配置页 | 已有字段，可补 GUI 编辑 |
+| 分消息端最近注入数量 | `personaConfig.json.recentMessageLimits` | 人格配置页 | 已实现 11 端 `0–200` 滑条 + 精确输入，默认 `100`；`0` 只关闭自动注入，不停止记录 |
+| 语音唤醒关键词 | `personaConfig.json.speechTriggerKeywords` | 人格配置页 | 已实现多值编辑；Route 关闭热投递后仅命中时唤醒 |
 | 计划 | `data/roles/<RoleId>/plans/` | 人格工作台 | 展示、召回预览、后续可接读写 |
 | 近期记忆 / 沉淀记忆 | `data/roles/<RoleId>/memory/` | 人格工作台 | 展示、召回预览、后续可接读写 |
 | 角色技能 | `data/roles/<RoleId>/skills/` | 人格工作台 | 展示、召回预览 |
@@ -111,7 +112,7 @@ route 配置固定指向 agentRoleId
 | 当前 route 指向人格 | `adapterConfig.json.agentRoleId` | manager 组装 route profile | 保存路由配置后生效 | 切换后 route 使用新人格的 `personaConfig.json` |
 | 人格文件名 | `adapterConfig.json.agentRoleFile` | `rolePathsForRoute` 和 AgentPacket | 保存路由配置后生效 | AgentPacket 中 `agentRolePath` 指向新文件 |
 | `persona.md` 预览 | 角色目录 markdown | WebGUI 展示 | 加载 manager status 时 | 文件缺失时展示错误，不影响 route 保存 |
-| `recentMessageLimit` | `personaConfig.json` | AgentPacket 最近消息段 | 下一次消息投递时 | 预览和真实 AgentPacket 最近消息条数一致 |
+| `recentMessageLimits` | `personaConfig.json` | AgentPacket 当前消息端/会话双向最近消息段 | 下一次消息投递时 | 预览应使用当前逻辑消息端的真实额度 |
 
 第一版可以继续允许在人格页选择当前 route 指向的人格，但 UI 文案必须说明这是“当前路由指向人格”，不是“系统会按消息智能选择人格”。
 

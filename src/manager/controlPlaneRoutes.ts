@@ -42,6 +42,7 @@ import {
 } from "../messageEndpoints/webhookLikeScans.js";
 import { scanWeComEndpoint } from "../messageEndpoints/wecomManager.js";
 import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../messageEndpoints/remoteAgentManager.js";
+import { appendMessageContextToDir } from "../messageContextStore.js";
 import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
@@ -57,7 +58,9 @@ import {
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
   normalizeGatewayDefinition as sharedNormalizeGatewayDefinition,
   validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
-  type MessageAdapterPolicies
+  type MessageAdapterPolicies,
+  type RecentMessageLimits,
+  type SpeechPushMode
 } from "../shared/gatewayConfigModel.js";
 import { resolveProjectPath, toProjectRelativePath } from "../shared/projectPaths.js";
 import { rabiRoutePackageVersion } from "../packageInfo.js";
@@ -84,18 +87,38 @@ import { handleRabiApi, publicRabiLinkRelayConfig } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { managerAutostartEnabled, managerConfigWatcherEnabled } from "./managerRuntimeMode.js";
+import { resolveGatewayChildCommand } from "./gatewayChildCommand.js";
+import { handlePersonaAvatarApi, personaAvatarPresentation } from "./personaAvatarRoutes.js";
 import {
   ManagerSpeechControl,
+  SpeechControlError,
   speechControlErrorMessage,
-  speechControlErrorStatus
+  speechControlErrorStatus,
+  type ManagerSpeechDeliveryOutcome
 } from "./speechControl.js";
+import {
+  parseSpeechProcessResult,
+  SPEECH_EXIT_DELIVERED,
+  SPEECH_EXIT_RECORDED,
+  SPEECH_PROCESS_RESULT_MARKER
+} from "../speechMessageDelivery.js";
 import type {
+  SpeechAudioStreamSelectionCommand,
   SpeechMessageCommand,
+  SpeechMicrophoneSettingsCommand,
   SpeechMicrophoneStartCommand,
+  SpeechPlaybackVolumeCommand,
+  SpeechSpeakerBindingCommand,
+  SpeechSpeakerIdentityCommand,
+  SpeechSpeakerProfileCreateCommand,
+  SpeechSpeakerProfileUpdateCommand,
   SpeechSynthesisCommand
 } from "../shared/speechControlContract.js";
 import type { LocalSpeechResponse } from "../speech/localSpeechClient.js";
-import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
+import {
+  gatewayPayloadIncludesDiagnostics,
+  standaloneGatewayPayload as buildStandaloneGatewayPayload
+} from "./statusPayload.js";
 import {
   applyMemoryConsolidationResult,
   createPlan,
@@ -204,6 +227,9 @@ type GatewayDefinition = {
   heartbeatNotificationTemplate?: string;
   voiceTranscriptNotificationTemplate?: string;
   recentMessageLimit?: number;
+  recentMessageLimits?: RecentMessageLimits;
+  speechPushMode?: SpeechPushMode;
+  speechTriggerKeywords?: string[];
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
   roleRouteNames?: Record<string, string>;
@@ -214,6 +240,9 @@ type RouteProfileDefinition = {
   name?: string;
   enabled?: boolean;
   recentMessageLimit?: number;
+  recentMessageLimits?: RecentMessageLimits;
+  speechPushMode?: SpeechPushMode;
+  speechTriggerKeywords?: string[];
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   agentRoleId?: string;
@@ -290,6 +319,7 @@ type NapCatInstanceDefinition = {
   webuiToken?: string;
   launchCommand?: string;
   workingDir?: string;
+  botNickname?: string;
 };
 
 type AgentMaturity = "verified" | "experimental" | "stub";
@@ -392,9 +422,16 @@ const speechControl = new ManagerSpeechControl({
   route: (routeId) => {
     const runtime = runtimes.get(routeId);
     return runtime
-      ? { id: runtime.definition.id, speechEnabled: sharedGatewayAdapterTypes(runtime.definition).includes("speech") }
+      ? {
+          id: runtime.definition.id,
+          speechEnabled: runtime.definition.enabled !== false && sharedGatewayAdapterTypes(runtime.definition).includes("speech")
+        }
       : undefined;
   },
+  routes: () => runtimes.values().map(runtime => ({
+    id: runtime.definition.id,
+    speechEnabled: runtime.definition.enabled !== false && sharedGatewayAdapterTypes(runtime.definition).includes("speech")
+  })),
   deliverTranscript: ({ routeId, messageId, text, sessionId }) => {
     const runtime = runtimes.get(routeId);
     if (!runtime) return Promise.reject(new Error(`Speech Route disappeared before delivery: ${routeId}`));
@@ -415,7 +452,19 @@ const remoteAgentHub = new RemoteAgentHub({
   passwordStorePath: path.join(rootDir, "data", "remote-agent-connections.json"),
   fileStoreDir: path.join(rootDir, "data", "remote-agent-files"),
   getDefaultGatewayId: () => [...runtimes.values()][0]?.definition.id,
-  onTaskEvent: handleRemoteAgentTaskEvent
+  onTaskEvent: handleRemoteAgentTaskEvent,
+  onConversationRecord: (record) => {
+    const runtime = record.gatewayId ? runtimes.get(record.gatewayId) : undefined;
+    if (!runtime) {
+      console.warn(`Remote Agent conversation record skipped: Gateway not found (${record.gatewayId || "missing"})`);
+      return;
+    }
+    try {
+      appendMessageContextToDir(roleDirForDefinition(runtime.definition), record);
+    } catch (error) {
+      appendLog(runtime, `remote agent conversation record failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 });
 let watchedConfigSnapshot = "";
 
@@ -720,6 +769,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     agentRoleId: definition.agentRoleId,
     agentRoleFile: definition.agentRoleFile,
     agentAdapters: definition.agentAdapters,
+    speechPushMode: definition.speechPushMode,
     routeVariables: definition.routeVariables
   };
 }
@@ -1019,16 +1069,20 @@ function readRoleMessageConfigItem(roleId: string | undefined, _configName: stri
 }
 
 function writePersonaConfigFile(roleId: string, items: GatewayDefinition[]): void {
-  // All gateways sharing this persona use the same rules; pick the first with rules, or fallback to first item
+  // Persona fields have one owner even when several Routes bind the same persona.
   const source = items.find(item => Array.isArray(item.notificationRules) && item.notificationRules.length > 0) ?? items[0];
-  configRepository.writePersonaRules(roleId, source?.notificationRules);
+  configRepository.writePersonaConfig(roleId, {
+    notificationRules: source?.notificationRules,
+    recentMessageLimits: source?.recentMessageLimits,
+    speechTriggerKeywords: source?.speechTriggerKeywords
+  });
 }
 
 function ensurePersonaConfigFile(roleId: string): string {
   const configPath = personaConfigPath(roleId);
   if (!fs.existsSync(configPath)) {
     const safeRoleId = sanitizeRoleId(roleId);
-    configRepository.writePersonaRules(safeRoleId, []);
+    configRepository.writePersonaConfig(safeRoleId, { notificationRules: [] });
   }
 
   return configPath;
@@ -1208,6 +1262,7 @@ function reloadChangedConfig(reason: string): void {
   try {
     loadRuntimes();
     syncRunningGateways();
+    reconcileSpeechMicrophone(reason);
     console.log(`gateway-manager reloaded ${reason}`);
   } catch (error) {
     console.error(`Failed to reload gateway config ${reason}`, error);
@@ -1231,13 +1286,14 @@ function appendLog(runtime: GatewayRuntime, line: string): void {
   console.log(`[${runtime.definition.id}] ${line}`);
 }
 
-function childCommand(extraArgs: string[] = []): { command: string; args: string[]; shell: boolean } {
-  const distEntry = path.join(rootDir, "dist", "index.js");
-  if (fs.existsSync(distEntry)) {
-    return { command: process.execPath, args: [distEntry, ...extraArgs], shell: false };
-  }
+function childCommand(extraArgs: string[] = []) {
+  return resolveGatewayChildCommand(rootDir, extraArgs);
+}
 
-  return { command: "npm", args: ["run", "dev", "--", ...extraArgs], shell: true };
+function reconcileSpeechMicrophone(reason: string): void {
+  void speechControl.reconcileMicrophone().catch(error => {
+    console.warn(`Speech microphone reconciliation failed after ${reason}:`, error instanceof Error ? error.message : String(error));
+  });
 }
 
 function resolveWingetCopilot(): string | null {
@@ -1334,6 +1390,9 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE: definition.groupIndirectReplyNotificationTemplate ?? definition.groupNicknameNotificationTemplate ?? "",
     PRIVATE_NOTIFICATION_TEMPLATE: definition.privateNotificationTemplate ?? "",
     VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE: definition.voiceTranscriptNotificationTemplate ?? "",
+    RECENT_MESSAGE_LIMITS: definition.recentMessageLimits ? JSON.stringify(definition.recentMessageLimits) : "",
+    SPEECH_PUSH_MODE: definition.speechPushMode ?? "hot",
+    SPEECH_TRIGGER_KEYWORDS: Array.isArray(definition.speechTriggerKeywords) ? JSON.stringify(definition.speechTriggerKeywords) : "[]",
     NOTIFICATION_RULES: Array.isArray(definition.notificationRules) ? JSON.stringify(definition.notificationRules) : "",
   };
 }
@@ -1437,7 +1496,7 @@ function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
   const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
   const roleFileName = definition.agentRoleFile ?? "persona.md";
   const selectedRoleId = sanitizeRoleId(definition.agentRoleId);
-  const options: Array<Record<string, string>> = [];
+  const options: Array<Record<string, unknown>> = [];
 
   if (fs.existsSync(rolesDir)) {
     for (const entry of fs.readdirSync(rolesDir, { withFileTypes: true })) {
@@ -1458,13 +1517,15 @@ function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
       } catch (error) {
         roleError = error instanceof Error ? error.message : String(error);
       }
+      const avatar = personaAvatarPresentation(entry.name, roleDir);
       options.push({
         label: entry.name,
         value: entry.name,
         rolePath,
         roleContent,
         roleError,
-        dataDir: roleDir
+        dataDir: roleDir,
+        ...avatar
       });
     }
   }
@@ -1838,7 +1899,7 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
       requirements: [
         { id: "builtin", label: "RabiPC 内置语音消息端", required: true, ok: true, detail: "麦克风、阈值、常驻转录和 Route 投递由 RabiPC 提供。" },
         { id: "runtime", label: "RabiSpeech 本地模型服务", required: true, ok: speechStatus.state === "online", detail: speechStatus.error || `${speechStatus.providers.tts.length} 个 TTS provider，${speechStatus.providers.asr.length} 个 ASR provider。` },
-        { id: "local-only", label: "仅本地模型", required: true, ok: speechStatus.localOnly === true, detail: "不调用云端 TTS/ASR 服务商 API。" }
+        { id: "provider-mode", label: "语音 Provider 模式", required: true, ok: true, detail: speechStatus.localOnly === true ? "当前仅启用本地 TTS/ASR Provider。" : "已显式启用 API Provider；密钥由 RabiSpeech 进程环境持有。" }
       ],
       warnings: speechStatus.state === "online" ? [] : ["先启动 RabiSpeech，再做麦克风实机 ASR 和 TTS 排队播放测试。"]
     },
@@ -2627,6 +2688,38 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
   };
 }
 
+function runtimeSummaryStatus(runtime: GatewayRuntime): Record<string, unknown> {
+  const definition = runtime.definition;
+  const usesNapcat = definitionUsesNapcat(definition);
+  const napcatInstances = usesNapcat
+    ? (definition.napcatInstances ?? normalizeNapCatInstances(definition)).map((instance) => ({
+      id: instance.id,
+      name: instance.name,
+      enabled: instance.enabled,
+      botNickname: instance.botNickname
+    }))
+    : [];
+  return {
+    id: definition.id,
+    name: definition.name,
+    configName: sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName,
+    routeName: definition.routeName,
+    enabled: definition.enabled,
+    running: Boolean(runtime.process),
+    messageAdapterType: definition.messageAdapterType ?? "napcat",
+    messageAdapters: definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"],
+    agentRoleId: definition.agentRoleId,
+    agentRoleFile: definition.agentRoleFile,
+    rolesDir: definition.rolesDir,
+    roleInfo: roleInfoFor(definition),
+    roleRouteNames: definition.roleRouteNames,
+    napcatInstances,
+    codexCwd: definition.codexCwd,
+    dataDir: definition.dataDir,
+    notificationRules: definition.notificationRules
+  };
+}
+
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body, null, 2));
@@ -2899,7 +2992,7 @@ function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: stri
   });
 }
 
-function triggerGatewaySpeechMessage(runtime: GatewayRuntime, messageId: string, text: string, sessionId: string): Promise<void> {
+function triggerGatewaySpeechMessage(runtime: GatewayRuntime, messageId: string, text: string, sessionId: string): Promise<ManagerSpeechDeliveryOutcome> {
   const roleId = roleIdForDefinition(runtime.definition);
   const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
   const command = childCommand([
@@ -2912,26 +3005,58 @@ function triggerGatewaySpeechMessage(runtime: GatewayRuntime, messageId: string,
   ]);
   appendLog(runtime, `speech message requested: ${messageId}`);
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let stdoutText = "";
     const child = spawn(command.command, command.args, {
       cwd: rootDir,
       env: envFor(runtime.definition),
       shell: command.shell,
       windowsHide: true
     });
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      action();
+    };
+    const deadline = setTimeout(() => {
+      try { child.kill(); } catch { /* best effort */ }
+      finish(() => reject(new SpeechControlError(
+        `Speech delivery timed out before the Desktop owner confirmed receipt: ${messageId}`,
+        504
+      )));
+    }, 40_000);
     child.stdout.on("data", (data) => {
-      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) appendLog(runtime, `speech: ${line}`);
+      const textChunk = data.toString("utf8");
+      stdoutText += textChunk;
+      for (const line of textChunk.split(/\r?\n/).filter(Boolean)) {
+        if (!line.startsWith(SPEECH_PROCESS_RESULT_MARKER)) appendLog(runtime, `speech: ${line}`);
+      }
     });
     child.stderr.on("data", (data) => {
       for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) appendLog(runtime, `speech error: ${line}`);
     });
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      if (code === 0) {
-        appendLog(runtime, `speech message completed: ${messageId}`);
-        resolve();
-        return;
-      }
-      reject(new Error(`speech message failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
+    child.on("error", (error) => finish(() => reject(new SpeechControlError(
+      `Speech delivery process failed to start: ${error instanceof Error ? error.message : String(error)}`,
+      502
+    ))));
+    child.on("close", (code, signal) => {
+      finish(() => {
+        const terminal = parseSpeechProcessResult(stdoutText);
+        if (code === SPEECH_EXIT_DELIVERED && terminal?.status === "delivered") {
+          appendLog(runtime, `speech message delivered to Desktop owner: ${messageId}`);
+          resolve(terminal);
+          return;
+        }
+        if (code === SPEECH_EXIT_RECORDED && terminal?.status === "recorded") {
+          appendLog(runtime, `speech message recorded without Agent delivery: ${messageId}; ${terminal.reason || "keyword policy"}`);
+          resolve(terminal);
+          return;
+        }
+        const detail = terminal?.detail
+          || `speech message failed: code=${code ?? "null"} signal=${signal ?? "null"}`;
+        reject(new SpeechControlError(detail, 502));
+      });
     });
   });
 }
@@ -3195,12 +3320,124 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
     jsonResponse(response, 200, { code: 0, data: { personas: speechControl.personas() } });
     return true;
   }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/speakers") {
+    writeSpeechJson(response, speechControl.speakerRegistry(requestUrl.searchParams.get("sessionId") || undefined));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/speakers") {
+    writeSpeechJson(
+      response,
+      readJsonBody<SpeechSpeakerProfileCreateCommand>(request).then(body => speechControl.createSpeakerProfile(body)),
+      200,
+      400
+    );
+    return true;
+  }
+  if (requestUrl.pathname.startsWith("/api/speech/speakers/")) {
+    const speakerId = requestUrl.pathname.slice("/api/speech/speakers/".length);
+    if (request.method === "PATCH") {
+      writeSpeechJson(
+        response,
+        readJsonBody<SpeechSpeakerProfileUpdateCommand>(request)
+          .then(body => speechControl.updateSpeakerProfile(speakerId, body)),
+        200,
+        400
+      );
+      return true;
+    }
+    if (request.method === "DELETE") {
+      writeSpeechJson(response, speechControl.deleteSpeakerProfile(speakerId), 200, 400);
+      return true;
+    }
+  }
+  if (request.method === "PUT" && requestUrl.pathname === "/api/speech/speaker-bindings") {
+    writeSpeechJson(
+      response,
+      readJsonBody<SpeechSpeakerBindingCommand>(request).then(body => speechControl.bindSpeaker(body)),
+      200,
+      400
+    );
+    return true;
+  }
+  if (request.method === "PUT" && requestUrl.pathname === "/api/speech/speaker-identities") {
+    writeSpeechJson(
+      response,
+      readJsonBody<SpeechSpeakerIdentityCommand>(request).then(body => speechControl.identifySpeaker(body)),
+      200,
+      400
+    );
+    return true;
+  }
+  if (request.method === "DELETE" && requestUrl.pathname === "/api/speech/speaker-bindings") {
+    writeSpeechJson(
+      response,
+      speechControl.unbindSpeaker(
+        requestUrl.searchParams.get("sessionId") || "",
+        requestUrl.searchParams.get("recordId") || "",
+        requestUrl.searchParams.get("speakerLabel") || ""
+      ),
+      200,
+      400
+    );
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/playback/status") {
     writeSpeechJson(response, speechControl.playbackStatus());
     return true;
   }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/audio-streams") {
+    writeSpeechJson(response, speechControl.audioStreams().then(audioStream => ({ audioStream })));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/audio-streams/token") {
+    writeSpeechJson(response, speechControl.audioStreamToken().then(token => ({ token })), 200, 409);
+    return true;
+  }
+  if (request.method === "PUT" && requestUrl.pathname === "/api/speech/audio-streams/selection") {
+    writeSpeechJson(
+      response,
+      readJsonBody<SpeechAudioStreamSelectionCommand>(request)
+        .then(body => speechControl.selectAudioStream(body)),
+      200,
+      400
+    );
+    return true;
+  }
+  if (request.method === "PUT" && requestUrl.pathname === "/api/speech/playback/volume") {
+    writeSpeechJson(
+      response,
+      readJsonBody<SpeechPlaybackVolumeCommand>(request).then(body => speechControl.setPlaybackVolume(body)),
+      200,
+      400
+    );
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/records") {
+    writeSpeechJson(response, speechControl.records({
+      limit: Number(requestUrl.searchParams.get("limit") || 200),
+      kind: requestUrl.searchParams.get("kind") || undefined,
+      sessionId: requestUrl.searchParams.get("sessionId") || undefined,
+      routeId: requestUrl.searchParams.get("routeId") || undefined,
+      since: requestUrl.searchParams.has("since") ? Number(requestUrl.searchParams.get("since")) : undefined,
+      until: requestUrl.searchParams.has("until") ? Number(requestUrl.searchParams.get("until")) : undefined
+    }).then(records => ({ records })));
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/status") {
     writeSpeechJson(response, speechControl.microphoneStatus());
+    return true;
+  }
+  if (request.method === "PUT" && requestUrl.pathname === "/api/speech/microphone/settings") {
+    writeSpeechJson(
+      response,
+      readJsonBody<SpeechMicrophoneSettingsCommand>(request).then(body => speechControl.updateMicrophoneSettings(body)),
+      200,
+      400
+    );
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/microphone/reconcile") {
+    writeSpeechJson(response, speechControl.reconcileMicrophone(), 200, 500);
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/devices") {
@@ -3247,13 +3484,16 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/messages") {
     void readJsonBody<SpeechMessageCommand & { gatewayId?: string }>(request)
-      .then(body => speechControl.acceptMessage({
-        routeId: body.routeId || body.gatewayId || "",
-        text: body.text,
-        sessionId: body.sessionId
-      }))
-      .then(data => jsonResponse(response, 202, { code: 0, data }))
-      .catch(error => jsonResponse(response, speechControlErrorStatus(error, 400), {
+      .then(
+        body => speechControl.acceptMessage({
+          routeId: body.routeId || body.gatewayId || null,
+          text: body.text,
+          sessionId: body.sessionId
+        }),
+        error => Promise.reject(new SpeechControlError(speechControlErrorMessage(error), 400))
+      )
+      .then(data => jsonResponse(response, 200, { code: 0, data }))
+      .catch(error => jsonResponse(response, speechControlErrorStatus(error, 502), {
         code: -1,
         message: speechControlErrorMessage(error)
       }));
@@ -3583,13 +3823,16 @@ async function forwardFenneNoteReply(body: unknown): Promise<Record<string, unkn
   return forwardFenneNoteRequest(body, fenneNoteReplyUrl, fenneNoteReplyToken);
 }
 
-function standaloneGatewayPayload(): Record<string, unknown> {
-  return buildStandaloneGatewayPayload({
-    runtimes: runtimes.values(),
-    runtimeStatus,
-    routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
-    rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
-  });
+function standaloneGatewayPayload(includeDiagnostics = true): Record<string, unknown> {
+  return buildStandaloneGatewayPayload(
+    {
+      runtimes: runtimes.values(),
+      runtimeStatus: includeDiagnostics ? runtimeStatus : runtimeSummaryStatus,
+      routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
+      rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
+    },
+    { includeConfigDefinitions: includeDiagnostics }
+  );
 }
 
 function networkOptionsPayload(): Record<string, unknown> {
@@ -3852,6 +4095,7 @@ export async function startManager(): Promise<void> {
       }
     }
   }
+  reconcileSpeechMicrophone("manager startup");
 
   const server = http.createServer((request, response) => {
     try {
@@ -3895,6 +4139,9 @@ export async function startManager(): Promise<void> {
       if (handleRemoteAgentApi(request, requestUrl, response)) {
         return;
       }
+      if (handlePersonaAvatarApi(request, requestUrl.pathname, response, rolesRoot)) {
+        return;
+      }
       if (handleRolePanelApi(request, requestUrl, response)) {
         return;
       }
@@ -3905,7 +4152,7 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/gateways") {
-        jsonResponse(response, 200, standaloneGatewayPayload());
+        jsonResponse(response, 200, standaloneGatewayPayload(gatewayPayloadIncludesDiagnostics(requestUrl.searchParams)));
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/gateways") {
@@ -3914,6 +4161,7 @@ export async function startManager(): Promise<void> {
             writeConfig(body);
             loadRuntimes();
             syncRunningGateways();
+            reconcileSpeechMicrophone("gateway save");
             jsonResponse(response, 200, standaloneGatewayPayload());
           })
           .catch((error) => {
@@ -4371,6 +4619,7 @@ export async function startManager(): Promise<void> {
       if (requestUrl.pathname === "/reload") {
         loadRuntimes();
         syncRunningGateways();
+        reconcileSpeechMicrophone("manual reload");
         if (request.headers.accept?.includes("application/json")) {
           jsonResponse(response, 200, { ok: true, gateways: [...runtimes.values()].map(runtimeStatus) });
         } else {

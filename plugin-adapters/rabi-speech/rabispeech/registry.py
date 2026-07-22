@@ -40,6 +40,13 @@ class ProviderRegistry:
             "defaults": {"tts": self.default_tts, "asr": self.default_asr},
         }
 
+    def local_only(self) -> bool:
+        for provider in [*self._tts.values(), *self._asr.values()]:
+            detail = provider.capabilities()
+            if detail.get("enabled", True) and detail.get("local_only") is False:
+                return False
+        return True
+
     async def warmup(self) -> None:
         for provider in [*self._tts.values(), *self._asr.values()]:
             warmup = getattr(provider, "warmup", None)

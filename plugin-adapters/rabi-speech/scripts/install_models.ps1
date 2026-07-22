@@ -13,7 +13,9 @@ param(
     "asr-qwen3-0.6b",
     "asr-qwen3-1.7b",
     "asr-sensevoice-small",
-    "asr-fireredasr2-aed"
+    "asr-fireredasr2-aed",
+    "speaker-eres2netv2-zh",
+    "speaker-campplus-zh"
   )]
   [string[]]$Model,
   [string]$ModelRoot = "",

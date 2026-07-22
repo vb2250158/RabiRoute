@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+_ROLE_ID_PATTERN = re.compile(r"^[\w.\-\u3400-\u9fff]+$", re.UNICODE)
+
+
+def _valid_role_id(value: str) -> bool:
+    return value not in {".", ".."} and bool(_ROLE_ID_PATTERN.fullmatch(value))
+
+
 def _json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -45,6 +52,95 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def resolve_persona_role_dir(roles_root: str | Path, persona_id: object) -> Path | None:
+    """Resolve one canonical persona directory without trusting the requested path text."""
+    requested = str(persona_id or "").strip()
+    if not requested or not _valid_role_id(requested):
+        return None
+    root = Path(roles_root).expanduser().resolve()
+    if not root.is_dir():
+        return None
+    matches: list[Path] = []
+    for item in root.iterdir():
+        if item.name.casefold() != requested.casefold() or not item.is_dir():
+            continue
+        resolved = item.resolve()
+        try:
+            relative = resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Persona directory must stay inside the configured roles root.") from exc
+        if len(relative.parts) != 1 or relative.parts[0].casefold() != item.name.casefold():
+            raise ValueError("Persona directory aliases and redirected links are not supported.")
+        matches.append(resolved)
+    if len(matches) > 1:
+        raise ValueError(f"Rabi persona id is ambiguous by case: {requested}")
+    return matches[0] if matches else None
+
+
+def persona_voice_dir(role_dir: str | Path | None, *, require_existing: bool = True) -> Path | None:
+    """Resolve the exact voice directory owned by one already-resolved persona."""
+    if role_dir is None:
+        return None
+    owner = Path(role_dir).expanduser().resolve()
+    voice_dir = (owner / "voice").resolve()
+    try:
+        relative = voice_dir.relative_to(owner)
+    except ValueError as exc:
+        raise ValueError("Persona voice folder must stay inside its persona directory.") from exc
+    if tuple(part.casefold() for part in relative.parts) != ("voice",):
+        raise ValueError("Persona voice folder must resolve to the persona voice directory.")
+    if require_existing and not voice_dir.is_dir():
+        return None
+    return voice_dir
+
+
+def persona_tts_cache_dir(role_dir: str | Path | None) -> Path | None:
+    """Return the rebuildable finalized-TTS cache owned by a persona."""
+    if role_dir is None:
+        return None
+    owner = Path(role_dir).expanduser().resolve()
+    voice_dir = persona_voice_dir(owner, require_existing=False)
+    assert voice_dir is not None
+    cache_dir = (voice_dir / "cache" / "tts-audio").resolve()
+    try:
+        relative = cache_dir.relative_to(owner)
+    except ValueError as exc:
+        raise ValueError("Persona TTS cache must stay inside its persona directory.") from exc
+    if tuple(part.casefold() for part in relative.parts) != ("voice", "cache", "tts-audio"):
+        raise ValueError("Persona TTS cache must resolve to voice/cache/tts-audio.")
+    return cache_dir
+
+
+def persona_speech_defaults_for_role(role_dir: str | Path | None) -> dict[str, object]:
+    voice_dir = persona_voice_dir(role_dir)
+    profile_path = voice_dir / "voice-profile.json" if voice_dir else None
+    if profile_path is None or not profile_path.is_file():
+        return {}
+    try:
+        profile = _json(profile_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(profile, dict):
+        return {}
+    model = str(profile.get("default_model") or "").strip()
+    language = str(profile.get("language") or "").strip()
+    instructions = str(profile.get("instructions") or profile.get("voice_style_summary") or "").strip()
+    try:
+        speed = float(profile.get("speed", 1.0))
+    except (TypeError, ValueError):
+        speed = 1.0
+    return {
+        "model": model,
+        "language": language,
+        "instructions": instructions,
+        "speed": min(4.0, max(0.25, speed)),
+    }
+
+
+def persona_speech_defaults(roles_root: str | Path, persona_id: object) -> dict[str, object]:
+    return persona_speech_defaults_for_role(resolve_persona_role_dir(roles_root, persona_id))
 
 
 def _score(text: str, entry: dict[str, Any], emotion_tags: object, emotion_vector: object, patterns: object) -> float:
@@ -111,22 +207,29 @@ class PersonaVoiceResolver:
             candidate = Path(str(persona_folder)).expanduser().resolve()
             if not candidate.is_relative_to(self.roles_root):
                 raise ValueError("Persona voice folder must stay inside the configured roles root.")
-            voice_dir = candidate if candidate.name.lower() == "voice" else candidate / "voice"
-            if not voice_dir.is_dir():
-                raise FileNotFoundError(f"Persona voice folder not found: {voice_dir}")
-            return voice_dir
+            role_dir = candidate.parent if candidate.name.casefold() == "voice" else candidate
+            try:
+                relative = role_dir.relative_to(self.roles_root)
+            except ValueError as exc:
+                raise ValueError("Persona folder must stay inside the configured roles root.") from exc
+            if len(relative.parts) != 1 or not _valid_role_id(role_dir.name):
+                raise ValueError("Persona folder must be a direct child of the configured roles root.")
+            resolved_role = resolve_persona_role_dir(self.roles_root, role_dir.name)
+            if resolved_role is None or resolved_role != role_dir:
+                raise FileNotFoundError(f"Persona folder not found: {role_dir}")
+            resolved_voice = persona_voice_dir(resolved_role)
+            if resolved_voice is None:
+                raise FileNotFoundError(f"Persona voice folder not found: {resolved_role / 'voice'}")
+            return resolved_voice
         requested = str(persona_id or "").strip()
         if not requested:
             return None
-        if not re.fullmatch(r"[\w.\-\u3400-\u9fff]+", requested, re.UNICODE):
+        if not _valid_role_id(requested):
             raise ValueError("Persona id contains unsupported path characters.")
-        role_dir = next((item for item in self.roles_root.iterdir() if item.is_dir() and item.name.lower() == requested.lower()), None)
+        role_dir = resolve_persona_role_dir(self.roles_root, requested)
         if role_dir is None:
             raise ValueError(f"Rabi persona not found: {requested}")
-        voice_dir = role_dir / "voice"
-        if not voice_dir.is_dir():
-            return None
-        return voice_dir.resolve()
+        return persona_voice_dir(role_dir)
 
     def resolve_prompt_files(
         self,

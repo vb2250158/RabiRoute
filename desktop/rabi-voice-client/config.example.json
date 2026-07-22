@@ -1,0 +1,12 @@
+{
+  "server_url": "auto",
+  "token_env": "RABISPEECH_AUDIO_STREAM_TOKEN",
+  "token": "",
+  "client_id": "meeting-room-a",
+  "name": "会议室 A",
+  "input_device": null,
+  "output_device": null,
+  "sample_rate": 16000,
+  "chunk_ms": 100,
+  "reconnect_seconds": 3
+}

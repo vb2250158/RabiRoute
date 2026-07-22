@@ -43,6 +43,25 @@ test("Codex delivery failures are reported through the canonical Desktop state",
   assert.doesNotMatch(String(state.message), /worker|fallback|补投/);
 });
 
+test("Codex runtime state does not report Route acceptance as Desktop delivery", () => {
+  const state = resolveCodexRuntimeState(
+    {},
+    {
+      monitorThreadId: "thread-current",
+      lastNotificationAt: "2026-07-21T11:59:00.000Z",
+      lastDeliveryId: "delivery-1",
+      lastDeliveryStatus: "accepted",
+      lastDeliveryAcceptedAt: "2026-07-21T12:00:00.000Z"
+    }
+  );
+
+  assert.equal(state.bound, true);
+  assert.equal(state.deliveryHealthy, true);
+  assert.equal(state.lastDeliveryStatus, "accepted");
+  assert.match(String(state.message), /已受理/);
+  assert.doesNotMatch(String(state.message), /owner 接收|实时显示/);
+});
+
 test("configured Codex metadata alone is not an active runtime binding", () => {
   const state = resolveCodexRuntimeState(
     {

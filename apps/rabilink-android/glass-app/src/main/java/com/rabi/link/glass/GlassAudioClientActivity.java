@@ -29,6 +29,7 @@ import com.rokid.security.system.server.IClientCallback;
 import com.rokid.security.system.server.media.callback.AudioCallback;
 import com.rokid.security.system.server.message.callback.IResultCallback;
 import com.rokid.security.system.server.message.listener.IMessageListener;
+import com.rabi.link.protocol.RabiGlassAudioProtocol;
 
 import java.util.ArrayList;
 import java.text.SimpleDateFormat;
@@ -42,15 +43,6 @@ import java.util.Locale;
  */
 public final class GlassAudioClientActivity extends Activity {
     private static final int REQUEST_AUDIO = 9011;
-    private static final String CLIENT_ID = "GlassSample";
-    private static final String AUDIO_TAG = "RabiGlassAudioPcm";
-    private static final String START = "RABI_GLASS_AUDIO_START";
-    private static final String STOP = "RABI_GLASS_AUDIO_STOP";
-    private static final String REVIEW = "RABI_GLASS_REVIEW_REQUEST";
-    private static final String STATUS = "RABI_GLASS_AUDIO_STATUS";
-    private static final String TRANSCRIPT = "RABI_GLASS_TRANSCRIPT:";
-    private static final String REPLY = "RABI_GLASS_REPLY:";
-    private static final String DEVICE = "RABI_GLASS_DEVICE:";
     private static final long NAV_DEBOUNCE_MS = 260;
     private static final long PLAYBACK_RESUME_BASE_MS = 900;
 
@@ -130,10 +122,10 @@ public final class GlassAudioClientActivity extends Activity {
         @Override
         public void onTextMessage(String message) {
             String text = message == null ? "" : message.trim();
-            if (text.startsWith(STATUS + ":")) runOnUiThread(() -> setStatus(text.substring((STATUS + ":").length())));
-            else if (text.startsWith(TRANSCRIPT)) runOnUiThread(() -> transcriptView.setText(text.substring(TRANSCRIPT.length())));
-            else if (text.startsWith(REPLY)) runOnUiThread(() -> replyView.setText(text.substring(REPLY.length())));
-            else if (text.startsWith(DEVICE)) runOnUiThread(() -> updateDeviceState(text.substring(DEVICE.length())));
+            if (text.startsWith(RabiGlassAudioProtocol.PREFIX_STATUS)) runOnUiThread(() -> setStatus(text.substring(RabiGlassAudioProtocol.PREFIX_STATUS.length())));
+            else if (text.startsWith(RabiGlassAudioProtocol.PREFIX_TRANSCRIPT)) runOnUiThread(() -> transcriptView.setText(text.substring(RabiGlassAudioProtocol.PREFIX_TRANSCRIPT.length())));
+            else if (text.startsWith(RabiGlassAudioProtocol.PREFIX_REPLY)) runOnUiThread(() -> replyView.setText(text.substring(RabiGlassAudioProtocol.PREFIX_REPLY.length())));
+            else if (text.startsWith(RabiGlassAudioProtocol.PREFIX_DEVICE)) runOnUiThread(() -> updateDeviceState(text.substring(RabiGlassAudioProtocol.PREFIX_DEVICE.length())));
         }
 
         @Override
@@ -154,7 +146,7 @@ public final class GlassAudioClientActivity extends Activity {
     private final AudioCallback captureCallback = new AudioCallback.Stub() {
         @Override
         public String getCallbackId() {
-            return CLIENT_ID + ":capture";
+            return RabiGlassAudioProtocol.CLIENT_ID + ":capture";
         }
 
         @Override
@@ -164,7 +156,7 @@ public final class GlassAudioClientActivity extends Activity {
             byte[] chunk = length == buffer.length ? buffer : java.util.Arrays.copyOf(buffer, length);
             try {
                 if (GlassSdk.getGlassMessageService() != null) {
-                    GlassSdk.getGlassMessageService().sendStreamData(AUDIO_TAG, chunk, CLIENT_ID, new IResultCallback.Stub() {
+                    GlassSdk.getGlassMessageService().sendStreamData(RabiGlassAudioProtocol.AUDIO_STREAM_TAG, chunk, RabiGlassAudioProtocol.CLIENT_ID, new IResultCallback.Stub() {
                         @Override public void onSuccess(boolean result) { }
                         @Override public void onFailed(int code, String message) {
                             runOnUiThread(() -> setStatus(HudState.ERROR, "音频发往手机失败: " + code));
@@ -210,11 +202,11 @@ public final class GlassAudioClientActivity extends Activity {
     private void bindGlassSdk() {
         try {
             if (GlassSdk.isReady()) {
-                GlassSdk.registerClient(CLIENT_ID, clientCallback);
+                GlassSdk.registerClient(RabiGlassAudioProtocol.CLIENT_ID, clientCallback);
                 return;
             }
             GlassSdk.bindSecurityService(getApplicationContext(), new IServiceConnectionCallback() {
-                @Override public void onServiceConnected() { GlassSdk.registerClient(CLIENT_ID, clientCallback); }
+                @Override public void onServiceConnected() { GlassSdk.registerClient(RabiGlassAudioProtocol.CLIENT_ID, clientCallback); }
                 @Override public void onServiceDisconnected() { sdkReady = false; recording = false; runOnUiThread(() -> { setStatus(HudState.CONNECTING, "手机后端已断开 · 自动重连中"); scheduleReconnect(); }); }
                 @Override public void onBindingDied() { sdkReady = false; recording = false; runOnUiThread(() -> { setStatus(HudState.CONNECTING, "眼镜消息服务已停止 · 自动重连中"); scheduleReconnect(); }); }
             });
@@ -258,7 +250,7 @@ public final class GlassAudioClientActivity extends Activity {
         }
         try {
             if (GlassSdk.getGlassMediaService() == null) throw new IllegalStateException("media service unavailable");
-            if (notifyPhone) sendPhoneText(START);
+            if (notifyPhone) sendPhoneText(RabiGlassAudioProtocol.COMMAND_START);
             GlassSdk.getGlassMediaService().startAudioRecord(captureCallback);
             recording = true;
             setStatus(HudState.LISTENING, "持续聆听中 · 单击可提示 Rabi");
@@ -272,7 +264,7 @@ public final class GlassAudioClientActivity extends Activity {
         recording = false;
         try { if (GlassSdk.getGlassMediaService() != null) GlassSdk.getGlassMediaService().stopAudioRecord(captureCallback); } catch (Throwable ignored) { }
         if (notifyPhone) {
-            sendPhoneText(STOP);
+            sendPhoneText(RabiGlassAudioProtocol.COMMAND_STOP);
             setStatus(HudState.UPLOADING, "手机上传中 · Rabi PC 识别中");
         }
     }
@@ -350,12 +342,12 @@ public final class GlassAudioClientActivity extends Activity {
         actionScroll = new HorizontalScrollView(this); actionScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL); actionScroll.addView(row, new HorizontalScrollView.LayoutParams(-2, -2));
         addButton(row, "立即推送", () -> {
-            sendPhoneText(REVIEW);
+            sendPhoneText(RabiGlassAudioProtocol.COMMAND_REVIEW);
             setStatus(HudState.UPLOADING, "正在提醒 Rabi 审阅最近记录");
         });
         pauseButton = addButton(row, "暂停 / 继续", this::toggleCapture);
         addButton(row, "重连手机", this::bindGlassSdk);
-        addButton(row, "状态", () -> sendPhoneText("RABI_GLASS_AUDIO_STATUS_REQUEST"));
+        addButton(row, "状态", () -> sendPhoneText(RabiGlassAudioProtocol.COMMAND_STATUS_REQUEST));
         root.addView(actionScroll, new LinearLayout.LayoutParams(-1, dp(62)));
         root.setOnTouchListener((view, event) -> onTouch(event));
         root.post(() -> select(0));

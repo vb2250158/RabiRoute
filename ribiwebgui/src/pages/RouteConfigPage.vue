@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import SpeechRouteMonitor from "../components/SpeechRouteMonitor.vue";
 import { useGatewayStore } from "../stores/gatewayStore";
+import { useSpeechStore } from "../stores/speechStore";
+import PersonaAvatar from "../components/PersonaAvatar.vue";
+import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
@@ -10,10 +12,16 @@ import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@s
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 
 const store = useGatewayStore();
+const speech = useSpeechStore();
 const route = useRoute();
 const router = useRouter();
 const runtime = computed(() => store.selectedRuntime);
+const personaAvatarUrl = computed(() => (runtime.value.roleInfo?.options || [])
+  .find(option => option.value === store.selectedGateway?.agentRoleId)?.avatarUrl || "");
 const speechDefaultVariables = applySpeechRouteVariableDefaults(undefined);
+const speechAdapterActionBusy = ref(false);
+const speechAdapterActionError = ref("");
+let speechConfigSaveTimer = 0;
 const adapterQuery = ref("");
 const configNameError = ref("");
 const codexBinding = ref({ loading: false, error: "", pending: false });
@@ -131,6 +139,11 @@ async function runAgentScan(): Promise<void> {
 
 // 会话/项目扫描只在进入设置页时自动执行一次；后续刷新必须由用户点击扫描按钮触发。
 onMounted(() => { void runAgentScan(); });
+onMounted(() => { void speech.refreshPersonas().catch(() => undefined); });
+
+onBeforeUnmount(() => {
+  window.clearTimeout(speechConfigSaveTimer);
+});
 
 // Copilot CLI 安装/登录
 const copilotStatus = ref<{ installed?: boolean; binPath?: string; loggedIn?: boolean; copilotHome?: string } | null>(null);
@@ -214,7 +227,7 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     title: "本地桌面",
     note: "由本机常驻服务提供的消息入口。",
     choices: [
-      { type: "speech", title: "语音消息端", note: "常驻麦克风、ASR、人格 TTS 与全局排队播放", icon: "mdi-microphone-message" }
+      { type: "speech", title: "语音消息端", note: "订阅主机 ASR，并配置投递策略与回复播放", icon: "mdi-microphone-message" }
     ]
   },
   {
@@ -263,6 +276,10 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
   }
 ];
 const gateway = computed(() => store.selectedGateway);
+const speechPersonaConfig = computed(() => speech.personas.find(item => item.id === gateway.value?.agentRoleId));
+const personaConfigRoute = computed(() => gateway.value
+  ? `/persona/${encodeURIComponent(configNameFor(gateway.value))}`
+  : "/persona");
 
 function uniqueAdapters(types: MessageAdapterType[]): MessageAdapterType[] {
   return [...new Set(types.filter((type) => type !== "disabled" && type !== "rolePanel"))];
@@ -400,10 +417,35 @@ const codexCwdOptions = computed(() => {
   return [...values];
 });
 
-function toggleAdapter(type: MessageAdapterType): void {
+async function setAdapterEnabled(type: MessageAdapterType, value: unknown): Promise<void> {
   if (!gateway.value) return;
+  const enabled = value === true;
+  if (enabled === !isAdapterDisabled(gateway.value, type)) return;
   toggleAdapterDisabled(gateway.value, type);
   store.touch();
+  if (type !== "speech") return;
+
+  await persistAndSyncSpeechAdapter();
+}
+
+async function persistAndSyncSpeechAdapter(): Promise<void> {
+  if (!gateway.value) return;
+  speechAdapterActionBusy.value = true;
+  speechAdapterActionError.value = "";
+  try {
+    await store.save();
+    await speech.reconcileMicrophone();
+  } catch (cause) {
+    speechAdapterActionError.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    speechAdapterActionBusy.value = false;
+  }
+}
+
+function scheduleSpeechConfigSave(): void {
+  window.clearTimeout(speechConfigSaveTimer);
+  if (!gateway.value || isAdapterDisabled(gateway.value, "speech")) return;
+  speechConfigSaveTimer = window.setTimeout(() => void persistAndSyncSpeechAdapter(), 700);
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
@@ -418,10 +460,15 @@ function setSpeechVariable(name: string, value: unknown): void {
   if (!gateway.value) return;
   gateway.value.routeVariables = gateway.value.routeVariables ?? {};
   gateway.value.routeVariables[name] = String(value ?? "");
-  if (name === "speechVoice") {
-    gateway.value.pipeline = { ...gateway.value.pipeline, ttsVoice: gateway.value.routeVariables[name] };
-  }
   store.touch();
+  scheduleSpeechConfigSave();
+}
+
+function setSpeechHotDelivery(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.speechPushMode = speechPushModeForHotDelivery(value === true);
+  store.touch();
+  scheduleSpeechConfigSave();
 }
 
 function setSpeechAutoPlay(value: unknown): void {
@@ -3365,7 +3412,9 @@ watch(
                       inset
                       hide-details
                       :model-value="!isAdapterDisabled(gateway, choice.type)"
-                      @update:model-value="() => toggleAdapter(choice.type)"
+                      :loading="choice.type === 'speech' && speechAdapterActionBusy"
+                      :disabled="choice.type === 'speech' && speechAdapterActionBusy"
+                      @update:model-value="value => void setAdapterEnabled(choice.type, value)"
                     />
                   </div>
                   <v-btn
@@ -3809,117 +3858,59 @@ watch(
                     <div class="status-row"><span>登录资料</span><b :class="napcatState.loginInfoError ? 'text-error' : ''">{{ napcatState.loginInfoError || napcatState.lastLoginInfoAt || "-" }}</b></div>
                   </template>
                   <div v-else-if="choice.type === 'speech'" class="catalog-param-grid">
-                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
-                      语音消息端由 RabiPC 配置、RabiSpeech 本机服务常驻执行；关闭浏览器后麦克风仍可继续转录。ASR 文本可进入当前 Route；Agent 回复按当前人格声线合成，并进入整台电脑唯一的 FIFO。没有语音 Route 时仍可独立使用 TTS 角色扮演。
+                    <v-alert v-if="speechAdapterActionError" class="full-span" type="error" variant="tonal" density="compact">
+                      {{ speechAdapterActionError }}
                     </v-alert>
-                    <SpeechRouteMonitor
-                      class="full-span"
-                      :route-id="gateway.id"
-                      :route-name="gateway.routeName || gateway.name"
-                      :route-running="runtime.running"
-                      :route-variables="gateway.routeVariables"
-                    />
-                    <v-text-field
-                      label="ASR 模型 ID"
-                      :model-value="speechVariable('speechAsrModel', speechDefaultVariables.speechAsrModel)"
-                      hint="使用 GET /v1/models 返回的完整 ID"
-                      persistent-hint
-                      @update:model-value="setSpeechVariable('speechAsrModel', $event)"
-                    />
-                    <v-text-field
-                      label="TTS 模型 ID"
-                      :model-value="speechVariable('speechTtsModel', speechDefaultVariables.speechTtsModel)"
-                      hint="例如 local-tts/gpt-sovits"
-                      persistent-hint
-                      @update:model-value="setSpeechVariable('speechTtsModel', $event)"
-                    />
-                    <v-text-field
-                      label="人格 / 声线"
-                      :model-value="speechVariable('speechVoice', gateway.agentRoleId || speechDefaultVariables.speechVoice)"
-                      hint="优先使用 data/roles/<人格>/voice"
-                      persistent-hint
-                      @update:model-value="setSpeechVariable('speechVoice', $event)"
-                    />
-                    <v-text-field
-                      label="语言"
-                      :model-value="speechVariable('speechLanguage', speechDefaultVariables.speechLanguage)"
-                      @update:model-value="setSpeechVariable('speechLanguage', $event)"
-                    />
-                    <v-text-field
-                      label="开始录音阈值（RMS）"
-                      type="number"
-                      min="0.001"
-                      max="1"
-                      step="0.001"
-                      :model-value="speechVariable('speechThreshold', speechDefaultVariables.speechThreshold)"
-                      @update:model-value="setSpeechVariable('speechThreshold', $event)"
-                    />
-                    <v-text-field
-                      label="值得转写阈值（RMS）"
-                      type="number"
-                      min="0.001"
-                      max="1"
-                      step="0.001"
-                      :model-value="speechVariable('speechTranscribeThreshold', speechDefaultVariables.speechTranscribeThreshold)"
-                      @update:model-value="setSpeechVariable('speechTranscribeThreshold', $event)"
-                    />
-                    <v-text-field
-                      label="静音收尾（毫秒）"
-                      type="number"
-                      min="200"
-                      max="5000"
-                      step="50"
-                      :model-value="speechVariable('speechSilenceMs', speechDefaultVariables.speechSilenceMs)"
-                      @update:model-value="setSpeechVariable('speechSilenceMs', $event)"
-                    />
-                    <v-text-field
-                      label="最短语音（毫秒）"
-                      type="number"
-                      min="100"
-                      max="5000"
-                      step="50"
-                      :model-value="speechVariable('speechMinUtteranceMs', speechDefaultVariables.speechMinUtteranceMs)"
-                      @update:model-value="setSpeechVariable('speechMinUtteranceMs', $event)"
-                    />
-                    <v-text-field
-                      label="最长语音（毫秒）"
-                      type="number"
-                      min="1000"
-                      max="120000"
-                      step="1000"
-                      :model-value="speechVariable('speechMaxUtteranceMs', speechDefaultVariables.speechMaxUtteranceMs)"
-                      @update:model-value="setSpeechVariable('speechMaxUtteranceMs', $event)"
-                    />
-                    <v-text-field
-                      label="前置缓存（毫秒）"
-                      type="number"
-                      min="0"
-                      max="5000"
-                      step="50"
-                      :model-value="speechVariable('speechPreRollMs', speechDefaultVariables.speechPreRollMs)"
-                      @update:model-value="setSpeechVariable('speechPreRollMs', $event)"
-                    />
-                    <v-text-field
-                      label="麦克风输入增益"
-                      type="number"
-                      min="0.1"
-                      max="10"
-                      step="0.1"
-                      :model-value="speechVariable('speechInputGain', speechDefaultVariables.speechInputGain)"
-                      @update:model-value="setSpeechVariable('speechInputGain', $event)"
-                    />
-                    <v-switch
-                      color="primary"
-                      label="按底噪动态抬高阈值"
-                      :model-value="speechVariable('speechAdaptiveThreshold', speechDefaultVariables.speechAdaptiveThreshold) !== 'false'"
-                      @update:model-value="setSpeechVariable('speechAdaptiveThreshold', String($event === true))"
-                    />
-                    <v-switch
-                      color="primary"
-                      label="识别后自动送入当前 Route"
-                      :model-value="speechVariable('speechAutoSubmit', speechDefaultVariables.speechAutoSubmit) !== 'false'"
-                      @update:model-value="setSpeechVariable('speechAutoSubmit', String($event === true))"
-                    />
+                    <div class="full-span">
+                      <v-switch
+                        :model-value="hotDeliveryEnabled(gateway.speechPushMode)"
+                        color="primary"
+                        label="热投递"
+                        hint="开启（hot）：每段 ASR 立即投递。关闭（keyword）：未命中关键词时只记录，命中当前人格关键词时才投递。"
+                        persistent-hint
+                        @update:model-value="setSpeechHotDelivery"
+                      />
+                      <v-alert
+                        v-if="!hotDeliveryEnabled(gateway.speechPushMode) && !(gateway.speechTriggerKeywords || []).length"
+                        class="mt-2"
+                        type="warning"
+                        variant="tonal"
+                        density="compact"
+                      >
+                        <div>当前人格没有语音唤醒关键词。关闭热投递后，转写仍会记录，但不会唤醒 Agent。</div>
+                        <v-btn
+                          class="mt-2"
+                          size="small"
+                          variant="tonal"
+                          prepend-icon="mdi-account-cog-outline"
+                          :to="personaConfigRoute"
+                        >
+                          配置人格关键词
+                        </v-btn>
+                      </v-alert>
+                    </div>
+                    <div class="full-span persona-speech-summary">
+                      <div>
+                        <PersonaAvatar :role-id="gateway.agentRoleId || ''" :avatar-url="personaAvatarUrl" :size="42" />
+                        <span>人格</span>
+                        <b>{{ gateway.agentRoleId || "未选择" }}</b>
+                      </div>
+                      <div>
+                        <span>TTS 模型</span>
+                        <b>{{ speechPersonaConfig?.defaultModel || "由人格 voice-profile 配置" }}</b>
+                      </div>
+                      <div>
+                        <span>语言</span>
+                        <b>{{ speechPersonaConfig?.language || "由人格 voice-profile 配置" }}</b>
+                      </div>
+                      <div>
+                        <span>声音风格</span>
+                        <b>{{ speechPersonaConfig?.voiceStyleSummary || speechPersonaConfig?.instructions || "尚未配置" }}</b>
+                      </div>
+                    </div>
+                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
+                      当前 Route 只负责订阅主机 ASR 广播、热投递/人格关键词策略和是否播放回复。ASR 模型、麦克风、VAD 与切句参数属于整台电脑，请到“语音服务”统一设置；TTS 模型、声线、语言、语速和发声说明归当前人格的 <code>voice/voice-profile.json</code> 管理。
+                    </v-alert>
                     <v-switch
                       color="primary"
                       label="Agent 回复自动排队播放"
@@ -3927,7 +3918,7 @@ watch(
                       @update:model-value="setSpeechAutoPlay"
                     />
                     <v-alert class="full-span" type="warning" variant="tonal" density="compact">
-                      麦克风不要选择会混入本机扬声器的虚拟设备，否则 TTS 可能被 ASR 再次识别。语音消息端在播放期间会暂停触发检测，作为第二层回声防护。
+                      主机只做一次 ASR，再把同一份文字广播给订阅 Route；不会为每个人格重复占用麦克风或重复跑识别模型。
                     </v-alert>
                   </div>
                   <div v-else-if="choice.type === 'remoteAgent'" class="catalog-param-grid">
@@ -4023,12 +4014,15 @@ watch(
                     </div>
                   </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
-                    <div class="section-note">定时触发参数在“人格配置 / 消息模板规则”的 heartbeat 规则里维护；这里仅启用内部定时来源。</div>
+                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
+                      定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
+                    </v-alert>
                     <v-switch
                       v-model="gateway.heartbeatSkipWhenAgentBusy"
+                      class="full-span"
                       color="primary"
                       label="会话工作中时跳过心跳"
-                      hint="勾选后，Codex 会话仍在处理任务时，本次 heartbeat 记为 skipped，不再向会话投递。普通消息不受影响。"
+                      hint="开启后，仅当 Agent 会话仍在工作时把本次 heartbeat 记为 skipped；普通消息不受影响。"
                       persistent-hint
                       @update:model-value="touch"
                     />

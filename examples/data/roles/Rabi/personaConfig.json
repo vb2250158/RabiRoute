@@ -1,5 +1,18 @@
 {
-  "recentMessageLimit": 10,
+  "recentMessageLimits": {
+    "napcat": 10,
+    "remoteAgent": 10,
+    "heartbeat": 10,
+    "rolePanel": 10,
+    "speech": 10,
+    "fennenote": 10,
+    "xiaoai": 10,
+    "rabilink": 10,
+    "wearable": 10,
+    "webhook": 10,
+    "wecom": 10
+  },
+  "speechTriggerKeywords": [],
   "notificationRules": [
     {
       "id": "rabi-group-keywords",
@@ -93,6 +106,7 @@
         "role_panel_message"
       ],
       "targetGroupId": "",
+      "allowedSpeakerNames": [],
       "regex": "",
       "template": ""
     }

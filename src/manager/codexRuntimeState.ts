@@ -16,7 +16,11 @@ const currentCodexReportKeys = [
   "lastNotificationAt",
   "lastNotificationError",
   "lastNotificationErrorAt",
+  "lastDeliveryId",
+  "lastDeliveryStatus",
   "lastDeliveryAcceptedAt",
+  "lastDeliveryDeliveredAt",
+  "lastDeliveryFailedAt",
   "reportGeneration",
   "reportSequence",
   "updatedAt"
@@ -45,9 +49,10 @@ export function resolveCodexRuntimeState(
   };
   const lastNotificationAt = nonEmptyString(merged.lastNotificationAt);
   const lastNotificationError = nonEmptyString(merged.lastNotificationError);
+  const lastDeliveryStatus = nonEmptyString(merged.lastDeliveryStatus);
   const monitorThreadId = nonEmptyString(merged.monitorThreadId);
 
-  if (lastNotificationError) {
+  if (lastDeliveryStatus === "failed" || lastNotificationError) {
     return {
       ...merged,
       bound: false,
@@ -57,7 +62,17 @@ export function resolveCodexRuntimeState(
     };
   }
 
-  if (lastNotificationAt) {
+  if (lastDeliveryStatus === "accepted") {
+    return {
+      ...merged,
+      bound: Boolean(monitorThreadId),
+      deliveryHealthy: true,
+      lastDeliveryChannel: CODEX_DESKTOP_CHANNEL,
+      message: "RabiRoute 已受理消息，正在等待 Codex Desktop owner 确认接收。"
+    };
+  }
+
+  if (lastDeliveryStatus === "delivered" || lastNotificationAt) {
     return {
       ...merged,
       bound: Boolean(monitorThreadId),

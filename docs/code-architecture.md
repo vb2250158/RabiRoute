@@ -125,7 +125,23 @@ Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转
 - Agent 投递记录：`agent-packets.jsonl`
 - Adapter 日志：`*-adapter.log.jsonl`
 
-这里是当前的轻量 Event Store。未来如果要做 replay，应该优先补 `route-decisions.jsonl`，而不是从 Agent prompt 反推。
+这些文件保留入口协议和调试证据，但不再各自担任 Agent 最近上下文的唯一来源。QQ 自身回复、ASR/TTS、WeCom、Remote Agent、Role Panel、RabiLink 等入站/出站消息会同时归一到人格级双向账本。
+
+### `src/messageContextStore.ts`
+
+`messageContextStore` 是双向会话上下文的唯一实现，`src/messageContext.ts` 只是兼容 facade：
+
+```text
+data/roles/<RoleId>/conversation/current.jsonl
+data/roles/<RoleId>/conversation/archive/<firstSequence>~<lastSequence>.jsonl
+data/roles/<RoleId>/conversation/archive/index.json
+```
+
+- `current.jsonl` 没有条数上限，只按时间窗口归档。
+- 归档检查发现任意记录超过 72 小时时，把连续前缀中已超过 24 小时的完整记录移入 `n~m.jsonl`；不按自然日删除。
+- Agent 自动上下文只读 `current.jsonl`，归档保留给 Agent 显式查证。
+- 查询必须同时匹配当前人格、逻辑消息端和会话；入站和出站合计占用同一条数额度。
+- 附件只保留类型、文件名、MIME、大小等安全元数据，不存私有绝对路径。
 
 ### `src/forwarding.ts`
 
@@ -133,6 +149,7 @@ Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转
 
 它负责：
 
+- 在低信号过滤和规则判断前，先把入站事件写入所有相关人格的统一账本。
 - 遍历启用的 RouteProfile。
 - 调用 RouteDecision 判断是否命中规则。
 - 按角色数据目录补写事件记录。
@@ -189,6 +206,7 @@ Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转
 - 模板变量如何展开。
 - 角色路径、计划、记忆、日志路径如何注入。
 - `replyContextJson` 如何构造。
+- 当前人格、逻辑消息端和会话最近双向消息如何从 `conversation/current.jsonl` 取得。
 
 它依赖 RouteDecision，但不重新决定路由。
 
@@ -250,6 +268,7 @@ AgentPacket
 - Transport 是 Codex Desktop IPC；Desktop webview 是目标任务实际轮次的 owner。RabiRoute 不为消息执行另启 app-server，也没有备用 transport。
 - Host 是必需的 Codex/ChatGPT Desktop。任务未加载时只允许通过 `codex://threads/<id>` 唤醒 Desktop；加载失败就停止投递。
 - Model、工具、沙箱和审批由目标 Desktop 任务拥有。兼容字段 `agentModel` 不再覆盖 Desktop 任务设置。
+- 已匹配的普通消息不经过另一层忙碌队列：Desktop owner 先尝试 `steer` 活跃 turn，只在没有活跃 turn 时 `start`。Heartbeat 的忙碌跳过和语音的关键词唤醒是各自消息端的显式例外。
 
 `codexDesktopBridge.ts` 必须保持 transport-only：它不读取 route rule、不拼 AgentPacket、不决定业务外发。`codexAppServerClient.ts` 只保留“创建空任务、恢复用户名称”的元数据能力，不得接收真实 prompt 或执行 turn；元数据操作完成后立即退出。
 
@@ -412,9 +431,10 @@ Gateway 配置的事实源 Module。
 - `src/pages/RouteConfigPage.vue`：Route 配置编辑。
 - `src/pages/RuntimeLogPage.vue`：运行日志。
 - `src/pages/PersonaTemplatePage.vue`：人格和模板相关页面。
+- `src/components/PersonaAvatar.vue`：WebGUI 统一头像展示与首字回退；上传和文件安全由 Manager 负责。
 - `src/utils/gatewayHelpers.ts`：前端配置辅助函数。
 - `src/speech/speechControlClient.ts`：浏览器语音 HTTP Adapter；唯一知道 `/api/speech/*` 路径和 `{ code, data }` envelope 的前端 Module。
-- `src/stores/speechStore.ts`：语音控制 read model、命令和共享轮询生命周期；语音页与 Route 监视器不再各自请求后端。
+- `src/stores/speechStore.ts`：语音控制 read model、命令和共享轮询生命周期；ASR 主机监视器与其他语音卡片共用同一份状态，不再各自请求后端。
 - `src/i18n/index.ts`：唯一 locale 状态、浏览器偏好持久化、`<html lang>` 和切换事件。
 - `src/i18n/catalog.ts`：人工校准的英文界面词条和动态文案规则。
 - `src/i18n/domLocalizer.ts`：把已登记界面文案应用到 Vue / Vuetify DOM；跳过 `data-no-i18n`、代码块、输入正文和可编辑内容。
@@ -423,10 +443,12 @@ Gateway 配置的事实源 Module。
 
 前端可以做 UI 友好的默认值和展示转换，但配置不变量不要只存在前端。需要和后端一致的规则应进入 `src/shared/gatewayConfigModel.ts` 或由 manager 返回。
 
+人格头像的文件读写、类型校验、内容寻址与原子配置切换集中在 `src/personaAvatar.ts`；`src/manager/personaAvatarRoutes.ts` 负责 `/api/roles/:roleId/avatar` 和表现 DTO，`controlPlaneRoutes.ts` 只注册路由。WebGUI 的 HTTP 细节归 `persona/personaAvatarClient.ts`，Qt 通过已有 `RoleContextRepository` 读取头像路径。头像是人格展示元数据，不进入 AgentPacket，也不改变路由匹配或处理端投递。
+
 语音控制链路采用明确的前后端分离：
 
 ```text
-SpeechServicePage / SpeechRouteMonitor
+SpeechServicePage / SpeechHostMonitor
   -> frontend speech store
   -> frontend speech client Adapter
   -> Manager speech Interface
@@ -435,7 +457,11 @@ SpeechServicePage / SpeechRouteMonitor
   -> RabiSpeech Python implementation
 ```
 
-`src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/manager/speechControl.ts` 负责 Route policy、消息异步受理、RabiSpeech payload 映射和 read model 正规化。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立本机模型 Runtime，不合并进 Manager。
+`src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/manager/speechControl.ts` 负责 Route policy、RabiSpeech payload 映射和 read model 正规化。`POST /api/speech/messages` 会等待 Gateway 子任务返回真实终态：Desktop owner `start/steer` 成功才是 `delivered`，关键词模式未命中则是 `recorded`，失败为 4xx/5xx；它不等 Agent 回答、Outbox 或 TTS 播放结束。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立的回环 Provider Runtime，不合并进 Manager。本地 Provider 默认启用；外部 API Provider 必须在本机配置显式启用、从环境变量取密钥，并通过 capability 的 `local_only` / `relay_safe` 暴露边界。
+
+Route 的 `speechPushMode` 是语音投递策略真源：`hot` 在每段 ASR 完成后立即进入普通 `start/steer` 链；`keyword` 仍写入 ASR 账本，仅命中人格 `speechTriggerKeywords` 时唤醒。空关键词不会回退热投递。
+
+主机级波形、五段链路、计数器、运行事件和最近转写只放在“语音服务 → ASR”的 `SpeechHostMonitor`。Route 的“消息适配器 → 语音消息端”只显示该 Route 的订阅策略：热投递/人格关键词、人格 TTS 摘要、主机与人格职责说明、Agent 回复自动播放，以及单次 ASR 广播说明；不得再次嵌入主机监视器。
 
 locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:locale`，不是正式项目存档。route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据属于用户配置或运行事实，必须保持原文；需要保护的动态区域使用 `data-no-i18n` 明确标注。
 
@@ -452,17 +478,23 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 它不是 RabiRoute 的事实源。任务、记忆、配置仍应落在 `data/` 和 manager 后端。
 
+托盘的定时状态刷新使用 `GET /gateways?summary=1`，只返回托盘白名单中的 Route 身份、运行态、人格绑定、本地路径和手动触发规则，不扫描 adapter logs、消息文件和 Agent 诊断，也不返回平台 token / secret。Manager HTTP、计划/记忆文件和当前可见面板的聊天记录读取由同一个 Qt 后台任务完成，主线程 QObject slot 只应用完成结果；隐藏面板不读取聊天或重建 QWidget，托盘菜单显示期间延迟应用刷新结果，状态未变化时不重建人格菜单或重复渲染面板，超过首屏 5 项的人格入口延迟到子菜单展开时创建。Windows 保留 `setContextMenu` 系统注册，并在 `activated(Context)` 到达且菜单尚未显示时直接非阻塞调用 `QMenu.popup()` 作为即时快路径；主要延迟控制仍来自主线程无 I/O 和菜单按需构建。托盘保留最后一次成功快照仅用于短暂刷新失败，必须显式标记为旧结果；Manager 真正离线时不得用缓存伪装在线。
+
 ## Plugin Adapters
 
 `plugin-adapters/` 放外部平台桥接示例：
 
 - `napcat-rabiroute`
 - `xiaoai-rabiroute`
-- `rabi-speech`：独立本机 TTS / ASR 服务插件；不属于消息端或 Agent 端，Manager 只代理其回环 HTTP API。
+- `rabi-speech`：独立回环 TTS / ASR Provider 服务插件；不属于消息端或 Agent 端，Manager 只代理其回环 HTTP API。Provider registry 可同时登记本地 worker、OpenAI 兼容 API 和 DashScope 原生 API；本地默认与显式云端选择不能混成自动回退。
 
 RabiSpeech 的模型基准仍归插件自身：`scripts/benchmark_models.py` 按 TTS → WAV → ASR 顺序采集原始数据，`benchmarks/` 保存公开语料、功能元数据和无外部依赖的 HTML 模板，`skills/benchmark-rabispeech-models/` 固定操作与验收顺序。生成后的公开报告进入 `ribiwebgui/public/reports/`，由 Vite 复制到 WebGUI 静态产物；本机 Manager 和 RabiLink Relay 分别在本机根路径与已认证的远端 PC 前缀下提供 `reports/`。运行期 WAV、JSON、CSV 和日志不进入前端或仓库。
 
-实时能力页归控制面：`src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`src/manager/speechControl.ts` 再把模型、麦克风、播放和消息命令统一映射到 `speechControlContract`。`GET /api/speech/status` 把规范化结果交给 frontend speech store。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
+实时能力页归控制面：`src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`src/manager/speechControl.ts` 再把模型、麦克风、播放、音频流选择、持久化语音记录和消息命令统一映射到 `speechControlContract`。`GET /api/speech/status` 把规范化结果交给 frontend speech store。音频流默认使用本机声卡；启用局域网 `remote_audio` 后，`remote_audio.py` 通过独立鉴权 WebSocket 把远端客户端当成纯麦克风/喇叭，客户端不拥有 VAD、切句或模型，断线也不自动回退。主机播放音量由 RabiSpeech 持久化并通过播放状态返回，WebGUI 的全局播放队列卡只经 Manager 更新该 `0–100` 值；每条音频开始播放时冻结当时的音量，因此调整会从下一条开始播放的音频生效，不属于 Route 或人格。主机麦克风、ASR 模型、VAD 和切句参数同样只归 RabiSpeech，语音服务页经 Manager 统一维护；Route 页的语音消息端总开关只是订阅真源。Manager 对每段主机 ASR 只接收一次，然后广播给全部已订阅 Route；各 Route 独立执行热投递/人格关键词与回复播放策略。关闭一个 Route 只删除自身订阅，最后一个订阅关闭后 Manager 才停止麦克风。人格目录下的 `voice/voice-profile.json` 是 TTS 模型、声线、语言、语速和表达指令的唯一真源，旧 Route TTS 字段只作兼容读取。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
+
+RabiSpeech 的 `speech_records.py` 是 ASR/TTS 文本记录唯一真源，参考芬妮笔记按日追加运行文件。`tts_audio_store.py` 单独拥有可重建的 TTS 音频缓存：已解析人格的成品进入 `data/roles/<RoleId>/voice/cache/tts-audio/`，非人格直接调用进入 RabiSpeech 私有 fallback；两者默认按各自 mtime 保留 24 小时。Manager 的 read model 只允许 POSIX 风格安全相对引用，兼容旧记录的单文件名，并省略绝对路径、父级穿越和反斜杠路径。WebGUI 在 ASR 页面内嵌最近持久化双向记录，显示相对缓存位置和预计过期时间；它不把路径做成文件链接，也不提供独立会议记录、选择或导出工作流。缓存超过保留窗口不改变文本记录，ASR 原始录音仍默认不复制。
+
+`speaker_profiles.py` 拥有主机共用的人物资料与 `recordId + speakerLabel` 人工绑定；`speaker_recognition.py` 独立拥有本地神经 embedding、已确认多原型和未知聚类。供应商的 `0/1` 绝不沿常驻麦克风 `sessionId` 继承。WebGUI 下拉只修正当前录音，但会把该录音 embedding 标为已确认原型；后续匹配同时要求有效语音时长、最高相似度和第一/第二名差距，低置信度保持 unknown。原始注册音频不复制，向量只写入 Git 忽略的 `output/speaker-embeddings.json` 且不进入公开 API。模型存在但本机阈值尚未验证时只开放聚类和候选提示；只有 `validated=true` 才允许自动绑定并声明 `voiceprint.supported=true`。native 模型由 `scripts/speaker_model_probe.py` 在独立进程先做兼容探测，主服务不直接承担不可信模型初始化崩溃；embedding 仓库分别限制人工确认原型和未确认样本，并拒绝低 RMS 或明显跨说话人重叠片段。
 
 这些目录可以有自己的运行脚本和 README，但不要把真实 token、QQ 号、Cookie、本机路径写进公开示例。
 

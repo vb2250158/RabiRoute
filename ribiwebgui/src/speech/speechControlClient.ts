@@ -1,16 +1,39 @@
 import type {
   SpeechAudioInputsPayload,
+  SpeechAudioStreamSelectionCommand,
+  SpeechAudioStreamsPayload,
   SpeechControlEnvelope,
-  SpeechMessageAccepted,
   SpeechMessageCommand,
+  SpeechMessageResult,
   SpeechMicrophoneStartCommand,
+  SpeechMicrophoneSettingsCommand,
   SpeechMicrophoneStatus,
   SpeechModelsPayload,
   SpeechPersonasPayload,
   SpeechPlaybackStatus,
+  SpeechPlaybackVolumeCommand,
+  SpeechRecord,
   SpeechRuntimeStatus,
+  SpeechSpeakerBinding,
+  SpeechSpeakerBindingCommand,
+  SpeechSpeakerProfile,
+  SpeechSpeakerProfileCreateCommand,
+  SpeechSpeakerProfileDeleteResult,
+  SpeechSpeakerProfileUpdateCommand,
+  SpeechSpeakerRegistry,
   SpeechSynthesisCommand
 } from "@shared/speechControlContract";
+
+export type SpeechRecordsQuery = {
+  limit?: number;
+  kind?: "asr" | "tts";
+  sessionId?: string;
+  routeId?: string;
+  since?: number;
+  until?: number;
+};
+
+export type SpeechRecordsPayload = { records: SpeechRecord[] };
 
 export type SpeechTranscriptionResult = {
   text: string;
@@ -61,9 +84,82 @@ export const speechControlClient = {
   status: (): Promise<SpeechRuntimeStatus> => managerData("/api/speech/status"),
   models: (): Promise<SpeechModelsPayload> => managerData("/api/speech/models"),
   personas: (): Promise<SpeechPersonasPayload> => managerData("/api/speech/personas"),
+  records: (query: SpeechRecordsQuery = {}): Promise<SpeechRecordsPayload> => {
+    const search = new URLSearchParams();
+    if (query.limit != null) search.set("limit", String(query.limit));
+    if (query.kind) search.set("kind", query.kind);
+    if (query.sessionId) search.set("sessionId", query.sessionId);
+    if (query.routeId) search.set("routeId", query.routeId);
+    if (query.since != null) search.set("since", String(query.since));
+    if (query.until != null) search.set("until", String(query.until));
+    const suffix = search.size ? `?${search.toString()}` : "";
+    return managerData(`/api/speech/records${suffix}`);
+  },
+  speakers: (sessionId?: string): Promise<SpeechSpeakerRegistry> => {
+    const search = new URLSearchParams();
+    if (sessionId) search.set("sessionId", sessionId);
+    const suffix = search.size ? `?${search.toString()}` : "";
+    return managerData(`/api/speech/speakers${suffix}`);
+  },
+  createSpeaker: (command: SpeechSpeakerProfileCreateCommand): Promise<SpeechSpeakerProfile> => managerData(
+    "/api/speech/speakers",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(command)
+    }
+  ),
+  updateSpeaker: (
+    speakerId: string,
+    command: SpeechSpeakerProfileUpdateCommand
+  ): Promise<SpeechSpeakerProfile> => managerData(
+    `/api/speech/speakers/${encodeURIComponent(speakerId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(command)
+    }
+  ),
+  deleteSpeaker: (speakerId: string): Promise<SpeechSpeakerProfileDeleteResult> => managerData(
+    `/api/speech/speakers/${encodeURIComponent(speakerId)}`,
+    { method: "DELETE" }
+  ),
+  bindSpeaker: (command: SpeechSpeakerBindingCommand): Promise<SpeechSpeakerBinding> => managerData(
+    "/api/speech/speaker-bindings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(command)
+    }
+  ),
+  unbindSpeaker: (sessionId: string, recordId: string, speakerLabel: string): Promise<SpeechSpeakerBinding> => {
+    const search = new URLSearchParams({ sessionId, recordId, speakerLabel });
+    return managerData(`/api/speech/speaker-bindings?${search.toString()}`, { method: "DELETE" });
+  },
   playbackStatus: (): Promise<SpeechPlaybackStatus> => managerData("/api/speech/playback/status"),
+  setPlaybackVolume: (command: SpeechPlaybackVolumeCommand): Promise<SpeechPlaybackStatus> => managerData(
+    "/api/speech/playback/volume",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(command)
+    }
+  ),
   microphoneStatus: (): Promise<SpeechMicrophoneStatus> => managerData("/api/speech/microphone/status"),
   microphoneDevices: (): Promise<SpeechAudioInputsPayload> => managerData("/api/speech/microphone/devices"),
+  audioStreams: (): Promise<SpeechAudioStreamsPayload> => managerData("/api/speech/audio-streams"),
+  audioStreamToken: (): Promise<{ token: string }> => managerData(
+    "/api/speech/audio-streams/token",
+    { method: "POST" }
+  ),
+  selectAudioStream: (command: SpeechAudioStreamSelectionCommand): Promise<SpeechAudioStreamsPayload["audioStream"]> => managerData(
+    "/api/speech/audio-streams/selection",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(command)
+    }
+  ),
   startMicrophone: (command: SpeechMicrophoneStartCommand): Promise<SpeechMicrophoneStatus> => managerData(
     "/api/speech/microphone/start",
     {
@@ -72,9 +168,21 @@ export const speechControlClient = {
       body: JSON.stringify(command)
     }
   ),
+  updateMicrophoneSettings: (command: SpeechMicrophoneSettingsCommand): Promise<SpeechMicrophoneStatus> => managerData(
+    "/api/speech/microphone/settings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(command)
+    }
+  ),
+  reconcileMicrophone: (): Promise<SpeechMicrophoneStatus> => managerData(
+    "/api/speech/microphone/reconcile",
+    { method: "POST" }
+  ),
   stopMicrophone: (): Promise<SpeechMicrophoneStatus> => managerData("/api/speech/microphone/stop", { method: "POST" }),
   stopPlayback: (): Promise<SpeechPlaybackStatus> => managerData("/api/speech/playback/stop", { method: "POST" }),
-  submitTranscript: (command: SpeechMessageCommand): Promise<SpeechMessageAccepted> => managerData(
+  submitTranscript: (command: SpeechMessageCommand): Promise<SpeechMessageResult> => managerData(
     "/api/speech/messages",
     {
       method: "POST",
@@ -94,11 +202,20 @@ export const speechControlClient = {
       playbackJob: response.headers.get("x-rabispeech-playback-job") || undefined
     };
   },
-  async transcribe(blob: Blob, name: string, model: string, language?: string): Promise<SpeechTranscriptionResult> {
+  async transcribe(
+    blob: Blob,
+    name: string,
+    model: string,
+    language?: string,
+    sessionId?: string,
+    routeId?: string
+  ): Promise<SpeechTranscriptionResult> {
     const form = new FormData();
     form.append("file", blob, name);
     form.append("model", model);
     if (language) form.append("language", language);
+    if (sessionId) form.append("session_id", sessionId);
+    if (routeId) form.append("route_id", routeId);
     form.append("response_format", "verbose_json");
     const response = await fetch("/api/speech/asr", { method: "POST", body: form });
     if (!response.ok) throw await responseError(response);

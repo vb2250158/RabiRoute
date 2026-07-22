@@ -39,7 +39,7 @@ Manager 或 UI 预览
 
 - 当前事件的必要信息。
 - QQ 消息里的 CQ reply / at 代码解析；引用链会按消息记录递归展开，at 映射集中显示。
-- route 配置允许时的最近消息摘要。
+- 当前人格、逻辑消息端和会话下，由 `recentMessageLimits` 允许的最近双向消息。
 - 角色和路由路径。
 - Agent 需要关注的接口文档链接。
 - 进行中计划索引。
@@ -56,6 +56,28 @@ Manager 或 UI 预览
 - 诊断详情。
 
 Agent 需要更多内容时，应根据上下文里的路径、ID 或接口文档按需查询。
+
+## 统一双向会话账本
+
+最近消息不再从 `group-messages.jsonl`、`voice-transcripts.jsonl`、`wecom-messages.jsonl` 等分散文件各自拼一份单向摘要。它们仍保留为协议审计和兼容证据；Agent 自动上下文的真源是人格目录下的统一账本：
+
+```text
+data/roles/<RoleId>/conversation/current.jsonl
+data/roles/<RoleId>/conversation/archive/<firstSequence>~<lastSequence>.jsonl
+data/roles/<RoleId>/conversation/archive/index.json
+```
+
+账本记录双向消息，包括 QQ 自身回复、ASR/TTS、WeCom、Remote Agent、Role Panel、RabiLink 及其他已接入消息端。每条记录区分逻辑 `adapter`、物理 `transport`、方向、说话人、会话、状态和安全附件元数据；不把私有绝对路径写进附件记录。
+
+自动注入有三个同时必须满足的范围：
+
+1. 当前绑定人格。
+2. 当前逻辑消息端，例如 `napcat`、`speech`、`wecom` 或 `remoteAgent`。
+3. 当前会话，例如 QQ 群/私聊对话、WeCom chat 或语音 `sessionId`。
+
+入站和出站合计占用同一条数额度。`personaConfig.json.recentMessageLimits` 对 11 个消息端分别配置 `0–200`，未设置时默认 `100`；`0` 只关闭该端的自动注入，不停止记录。这里没有另一个“只保留 360 条”之类的 `current` 条数上限。
+
+归档按记录时间戳处理，不是日期一到就删除：归档检查发现任意记录已超过 72 小时时，会把当前文件连续前缀中已超过 24 小时的完整记录收进 `<firstSequence>~<lastSequence>.jsonl`。自动上下文只读 `current.jsonl`；归档不丢失，Agent 可根据注入的路径显式查证。
 
 ## 用户模板定位
 
@@ -206,7 +228,9 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 [CQ:at,qq=<qq>] : <群名片或昵称>
 
 [最近消息]
-最近 <recentMessageLimit> 条：
+当前消息端：<recentMessageEndpoint>
+当前会话：<recentConversationKey>
+当前消息端、当前会话最近 <recentMessageLimit> 条双向消息：
 <recentMessages>
 
 [角色和路径]
@@ -251,6 +275,9 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 手动触发日志：<manualTriggerLogPath>
 语音转写日志：<voiceTranscriptLogPath>
 角色面板记录：<rolePanelLogPath>
+当前双向会话：<conversationCurrentPath>
+历史会话归档：<conversationArchiveDir>
+会话归档索引：<conversationArchiveIndexPath>
 
 [回传]
 普通回复 API：<replyApiUrl>
@@ -268,7 +295,9 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 `[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`；AgentPacket 也会把成功外发的 Outbox 记录作为本地兜底。NapCat 实时入口发现引用 ID 尚未落盘时，会在路由投递前调用 OneBot `get_msg`，把查到的群聊/私聊消息标记为 `lookupSource=onebot_get_msg` 后缓存，再继续追溯下一层引用。接口失败只记录 warning，不阻塞当前消息。展开持续到没有引用、仍无法解析、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。
 
-当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，并在 `replyContext` 写入 `characterTtsDialogue=true`。`[回复回传要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到普通回复 API；Outbox 再按当前 Route 的人格、声线、模型、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
+当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，并在 `replyContext` 写入 `characterTtsDialogue=true`。`[回复回传要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到普通回复 API；Outbox 再按当前人格 `voice/voice-profile.json` 的声线、模型、语言、语速、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。同一 `sessionId` 的 ASR 与 TTS 会作为双向上下文共用 `speech` 额度。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
+
+语音是唯一有这类“先记录、再决定是否唤醒”的专用策略之一：Route `speechPushMode=hot` 时每段 ASR 立即投递；`keyword` 时只在命中人格 `speechTriggerKeywords` 时投递，其他转写仍在账本中。空关键词不回退 `hot`。普通已匹配消息端则直接进入 Desktop `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
 
 ## 示例：QQ 群消息
 
@@ -371,6 +400,12 @@ Agent 需要关注的 Rabi 接口：docs/rabi-agent-interfaces.md
 {plansDir}
 {memoryDir}
 {recentMessages}
+{recentMessageLimit}
+{recentMessageEndpoint}
+{recentConversationKey}
+{conversationCurrentPath}
+{conversationArchiveDir}
+{conversationArchiveIndexPath}
 {replyApiUrl}
 {replyContextJson}
 {rolePanelLogPath}

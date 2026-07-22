@@ -94,6 +94,39 @@ test("Agent task resolver binds an existing Desktop task by saved id and workspa
   assert.deepEqual(calls, []);
 });
 
+test("Agent task resolver keeps a valid saved id even when the display title exceeds the create limit", async () => {
+  const threadId = "019f0000-0000-7000-8000-000000000045";
+  const longDisplayTitle = "很长的 Desktop 展示标题".repeat(30);
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async () => { throw new Error("must not list"); },
+    read: async () => ({
+      id: threadId,
+      title: longDisplayTitle,
+      cwd: process.cwd(),
+      updatedAt: "2026-07-22T00:00:00Z"
+    }),
+    create: async () => {
+      createCount += 1;
+      throw new Error("must not create");
+    },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "resolve",
+    threadId,
+    title: longDisplayTitle,
+    cwd: process.cwd(),
+    createIfMissing: true
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.data.resolution, "id");
+  assert.equal((result.data.thread as { id: string }).id, threadId);
+  assert.equal(createCount, 0);
+});
+
 test("Agent task resolver migrates a route name stored in the id field and finds by name", async () => {
   const calls: unknown[] = [];
   const driver: AgentThreadDriver = {
@@ -153,6 +186,39 @@ test("Agent task resolver creates only when no exact name exists", async () => {
   assert.equal(result.statusCode, 201);
   assert.equal(result.data.resolution, "created");
   assert.equal(calls.length, 1);
+});
+
+test("Agent task resolver truncates an overlong new task title before create", async () => {
+  const requestedTitle = `${"新任务😀".repeat(60)}结尾`;
+  let createdTitle = "";
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async () => { throw new Error("not used"); },
+    create: async (params) => {
+      createdTitle = params.title;
+      return {
+        id: "019f0000-0000-7000-8000-000000000046",
+        title: params.title,
+        updatedAt: "2026-07-22T00:00:00Z",
+        source: "test",
+        initialTurnStatus: "not-requested"
+      };
+    },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "resolve",
+    title: requestedTitle,
+    cwd: process.cwd(),
+    createIfMissing: true
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.statusCode, 201);
+  assert.ok(createdTitle.length <= 240);
+  assert.equal(createdTitle.endsWith("\ud800"), false);
+  assert.equal(createdTitle.endsWith("\udbff"), false);
+  assert.equal((result.data.thread as { title: string }).title, createdTitle);
 });
 
 test("Agent task resolver creates one task when repeated requests arrive before Desktop indexing catches up", async () => {

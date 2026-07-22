@@ -23,6 +23,12 @@ RabiRoute 现在把路由配置和路由人格分开：
 <RoleId>/
 ├── persona.md
 ├── personaConfig.json
+├── avatar.png              # 可选，也可以是 .jpg / .webp / .gif
+├── voice/
+│   └── voice-profile.json
+├── conversation/
+│   ├── current.jsonl
+│   └── archive/
 ├── growth.md
 ├── skills.md
 ├── skills/
@@ -48,7 +54,27 @@ data/route/voice/adapterConfig.json
 data/route/dev-review/adapterConfig.json
 ```
 
-上面三套路由可以分别配置消息端、端口和 Agent 投递方式，也可以指向同一个人格。不要为了多个消息模板复制人格；同一个人格可以通过 `personaConfig.json` 里的多个 `configName` 规则服务多个路由。
+上面三套路由可以分别配置消息端、端口、热投递模式和 Agent 投递方式，也可以指向同一个人格。不要为了多个 Route 复制人格；同一个人格复用根级 `personaConfig.json` 中的消息模板规则、语音唤醒关键词和分消息端上下文额度。
+
+## 语音、声线与消息上下文归属
+
+| 业务事实 | 唯一真源 | 原因 |
+| --- | --- | --- |
+| 人格头像 | 人格 `personaConfig.json.avatar` 指向的角色目录内图片 | 头像跟随人格复用，不应在每条 Route 重复配置。 |
+| 语音热投递或关键词模式 | Route `adapterConfig.json.speechPushMode` | 决定这条语音入口是否每段立即投递。 |
+| 人格名/称呼/唤醒词 | 人格 `personaConfig.json.speechTriggerKeywords` | 同一人格被多条 Route 复用时应共用同一组称呼。 |
+| 11 个消息端的自动上下文条数 | 人格 `personaConfig.json.recentMessageLimits` | 同一人格的不同消息端需要不同上下文长度；`0` 只关闭自动注入，不停止记录。 |
+| TTS 模型、声线、语言、语速和发声说明 | 人格 `voice/voice-profile.json` | 声音是人格的长期属性，不应在 Route 复制。 |
+| 当前双向消息证据 | 人格 `conversation/current.jsonl` | 入站/出站、ASR/TTS、QQ 自身回复和其他端统一记录。 |
+| 说话人资料 | RabiSpeech 主机共用 `output/speaker-profiles.json` | 人物资料设置一次后可为后续人格/Route/会议复用；标签仍按 `sessionId + speakerLabel` 手工绑定。 |
+
+热投递开启时，每段 ASR 完成即投递；关闭时所有 ASR 仍记录，仅命中当前人格关键词才唤醒。关键词为空时不回退热投递。普通消息端一旦命中规则则直接 `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
+
+## 人格头像
+
+在 RibiWebGUI 的“人格配置”页选择人格后，可以上传 PNG、JPEG、WebP 或 GIF，单文件上限 5 MB。Manager 会把图片保存为人格目录内的内容寻址文件，例如 `avatar-a1b2c3d4e5f6.webp`，再原子更新 `personaConfig.json.avatar`。新文件与配置均写入成功后才清理旧的托管头像，因此更换失败时旧头像仍然有效。删除头像不影响 `persona.md`、消息规则、计划、记忆或声线。
+
+头像会显示在 WebGUI 的人格选择、Route 总览、语音人格选择和本地角色面板中。未配置、文件缺失或图片加载失败时，各界面统一回退到人格 ID 首字。Manager 只接受角色目录内的简单文件名，不允许通过 `avatar` 读取目录外路径；`personaConfig.json` 损坏时上传和删除都会失败关闭，不会用空配置覆盖原文件。
 
 ## 人格路由模板设计
 
@@ -135,9 +161,10 @@ xcopy examples\data data /E /I
 
 它说明了如何一起设计 `persona.md` 和 `personaConfig.json`，让角色既有稳定气质，也有对应的消息模板规则。
 
-如果要把语音输入、FenneNote 转录、角色回复和 OumuQ TTS 接成一个工作站，可参考：
+RabiPC 语音输入、人格回复与 RabiSpeech TTS 工作站可参考：
 
 - `skills/rabiroute-voice-workstation/SKILL.md`
-- [语音交互工作站](voice-interaction-workstation.md)
+- `skills/character-tts-dialogue/SKILL.md`
+- [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md)
 
-这套工作流的关键是：语音转录事件使用 `voice_transcript`，并由事件里的行动说明决定回复面。来自 Codex/FenneNote 的语音输入不等于自动 QQ/NapCat 外发，但如果用户在语音里明确要求“发到群里 / 发 QQ / 你直接发”，且目标、内容和授权足够清楚，就应进入现有外发流程，而不是一律拒绝。角色回复的可见文本和 TTS 文本都必须保留角色语气。
+语音转录事件使用 `voice_transcript`，但不等于自动 QQ/NapCat 外发。如果用户在语音里明确要求“发到群里 / 发 QQ / 你直接发”，且目标、内容和授权足够清楚，就应进入现有外发流程。角色回复的可见文本和 TTS 文本都必须保留角色语气。

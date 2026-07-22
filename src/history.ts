@@ -74,6 +74,8 @@ export type VoiceTranscriptEventRecord = {
   messageId?: number | string;
   senderName?: string;
   adapterType?: string;
+  gatewayId?: string;
+  instanceId?: string;
   source?: string;
   speakerId?: string;
   speakerName?: string;

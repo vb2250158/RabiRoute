@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,20 @@ class ServerSettings:
     temp_dir: Path
     ffmpeg: str
     playback_dir: Path
+    records_dir: Path
+    tts_audio_dir: Path
+    tts_audio_retention_minutes: float
+
+
+@dataclass(frozen=True)
+class RemoteAudioSettings:
+    enabled: bool
+    host: str
+    port: int
+    token: str
+    settings_path: Path
+    token_path: Path
+    discovery_port: int
 
 
 @dataclass(frozen=True)
@@ -69,6 +84,27 @@ class FasterWhisperModelSettings:
 
 
 @dataclass(frozen=True)
+class SpeakerRecognitionSettings:
+    enabled: bool
+    validated: bool
+    experimental_auto_assign: bool
+    auto_assign: bool
+    model_id: str
+    model_path: Path
+    provider: str
+    num_threads: int
+    min_embedding_seconds: float
+    hard_accept_seconds: float
+    hard_threshold: float
+    tentative_threshold: float
+    cluster_threshold: float
+    min_margin: float
+    max_samples_per_profile: int
+    max_unconfirmed_samples: int
+    min_voiced_rms: float
+
+
+@dataclass(frozen=True)
 class HttpAsrModelSettings:
     id: str
     name: str
@@ -91,13 +127,38 @@ class HttpAsrProviderSettings:
 
 
 @dataclass(frozen=True)
+class ApiModelSettings:
+    id: str
+    name: str
+    languages: tuple[str, ...]
+    features: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ApiProviderSettings:
+    id: str
+    enabled: bool
+    protocol: str
+    base_url: str
+    api_key_env: str
+    default_model: str
+    default_voice: str
+    timeout_seconds: float
+    models: tuple[ApiModelSettings, ...]
+
+
+@dataclass(frozen=True)
 class Settings:
     server: ServerSettings
+    remote_audio: RemoteAudioSettings
     default_tts_provider: str
     default_asr_provider: str
     local_tts: LocalTtsSettings
     faster_whisper: FasterWhisperSettings
+    speaker_recognition: SpeakerRecognitionSettings
     http_asr: tuple[HttpAsrProviderSettings, ...]
+    api_tts: tuple[ApiProviderSettings, ...]
+    api_asr: tuple[ApiProviderSettings, ...]
     provider_extensions: tuple[str, ...]
     config_path: Path
 
@@ -125,6 +186,26 @@ def _bool(value: object, fallback: bool) -> bool:
     return text in {"1", "true", "yes", "on", "enable", "enabled"}
 
 
+def _remote_audio_token(base: Path, value: dict[str, Any], *, enabled: bool) -> str:
+    token_env = str(value.get("token_env") or "RABISPEECH_AUDIO_STREAM_TOKEN").strip()
+    configured = os.environ.get(token_env, "").strip()
+    if configured or not enabled:
+        return configured
+    token_path = _resolve_path(base, value.get("token_path"), "output/audio-stream-token.txt")
+    try:
+        existing = token_path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(32)
+    temporary = token_path.with_suffix(token_path.suffix + ".tmp")
+    temporary.write_text(token + "\n", encoding="utf-8")
+    temporary.replace(token_path)
+    return token
+
+
 def load_settings(path: str | Path | None = None) -> Settings:
     configured = Path(path or os.environ.get("RABISPEECH_CONFIG") or SERVICE_ROOT / "config.json")
     if not configured.exists():
@@ -133,11 +214,13 @@ def load_settings(path: str | Path | None = None) -> Settings:
     data = json.loads(configured.read_text(encoding="utf-8"))
     base = configured.parent
     server = _mapping(data.get("server"))
+    remote_audio = _mapping(data.get("remote_audio"))
     providers = _mapping(data.get("providers"))
     tts = _mapping(providers.get("tts"))
     asr = _mapping(providers.get("asr"))
     local_tts = _mapping(tts.get("local_tts"))
     whisper = _mapping(asr.get("faster_whisper"))
+    speaker_recognition = _mapping(data.get("speaker_recognition"))
     extensions = providers.get("extensions") or []
     if not isinstance(extensions, list):
         extensions = [extensions]
@@ -154,6 +237,8 @@ def load_settings(path: str | Path | None = None) -> Settings:
     local_tts_model_id = _env("RABISPEECH_TTS_MODEL", local_tts.get("model", "onnx-vits")).strip()
     local_tts_models = _local_tts_models(base, local_tts.get("models"), local_tts_model_id, str(local_tts.get("default_worker_url") or ""))
     http_asr = _http_asr_providers(base, asr.get("http_providers"))
+    api_tts = _api_providers(tts.get("api_providers"), "tts")
+    api_asr = _api_providers(asr.get("api_providers"), "asr")
 
     return Settings(
         server=ServerSettings(
@@ -163,6 +248,29 @@ def load_settings(path: str | Path | None = None) -> Settings:
             temp_dir=_resolve_path(base, os.environ.get("RABISPEECH_TEMP_DIR", server.get("temp_dir")), "temp"),
             ffmpeg=_env("RABISPEECH_FFMPEG", server.get("ffmpeg", "")).strip(),
             playback_dir=_resolve_path(base, os.environ.get("RABISPEECH_PLAYBACK_DIR", server.get("playback_dir")), "output/playback-queue"),
+            records_dir=_resolve_path(base, os.environ.get("RABISPEECH_RECORDS_DIR", server.get("records_dir")), "output/records"),
+            tts_audio_dir=_resolve_path(base, os.environ.get("RABISPEECH_TTS_AUDIO_DIR", server.get("tts_audio_dir")), "output/tts-audio"),
+            tts_audio_retention_minutes=max(
+                1.0,
+                min(1440.0, float(_env("RABISPEECH_TTS_AUDIO_RETENTION_MINUTES", server.get("tts_audio_retention_minutes", 1440)))),
+            ),
+        ),
+        remote_audio=RemoteAudioSettings(
+            enabled=_bool(os.environ.get("RABISPEECH_REMOTE_AUDIO_ENABLED", remote_audio.get("enabled")), False),
+            host=_env("RABISPEECH_REMOTE_AUDIO_HOST", remote_audio.get("host", "0.0.0.0")).strip(),
+            port=int(_env("RABISPEECH_REMOTE_AUDIO_PORT", remote_audio.get("port", 8782))),
+            token=_remote_audio_token(
+                base,
+                remote_audio,
+                enabled=_bool(os.environ.get("RABISPEECH_REMOTE_AUDIO_ENABLED", remote_audio.get("enabled")), False),
+            ),
+            settings_path=_resolve_path(
+                base,
+                os.environ.get("RABISPEECH_REMOTE_AUDIO_SETTINGS", remote_audio.get("settings_path")),
+                "output/audio-stream-settings.json",
+            ),
+            token_path=_resolve_path(base, remote_audio.get("token_path"), "output/audio-stream-token.txt"),
+            discovery_port=int(_env("RABISPEECH_REMOTE_AUDIO_DISCOVERY_PORT", remote_audio.get("discovery_port", 8783))),
         ),
         default_tts_provider=str(tts.get("default", "local-tts")).strip().lower(),
         default_asr_provider=str(asr.get("default", "faster-whisper")).strip().lower(),
@@ -188,7 +296,41 @@ def load_settings(path: str | Path | None = None) -> Settings:
             vad_filter=_bool(whisper.get("vad_filter"), True),
             models=whisper_models,
         ),
+        speaker_recognition=SpeakerRecognitionSettings(
+            enabled=_bool(
+                os.environ.get("RABISPEECH_SPEAKER_RECOGNITION_ENABLED", speaker_recognition.get("enabled")),
+                True,
+            ),
+            validated=_bool(speaker_recognition.get("validated"), False),
+            experimental_auto_assign=_bool(speaker_recognition.get("experimental_auto_assign"), False),
+            auto_assign=_bool(speaker_recognition.get("auto_assign"), True),
+            model_id=_env(
+                "RABISPEECH_SPEAKER_MODEL_ID",
+                speaker_recognition.get("model_id", "3dspeaker-eres2netv2-zh-16k"),
+            ).strip(),
+            model_path=_resolve_path(
+                base,
+                os.environ.get("RABISPEECH_SPEAKER_MODEL_PATH", speaker_recognition.get("model_path")),
+                "../../../models/rabispeech/speaker/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+            ),
+            provider=_env("RABISPEECH_SPEAKER_PROVIDER", speaker_recognition.get("provider", "cpu")).strip().lower(),
+            num_threads=max(1, min(8, int(speaker_recognition.get("num_threads", 2)))),
+            min_embedding_seconds=max(0.5, float(speaker_recognition.get("min_embedding_seconds", 0.8))),
+            hard_accept_seconds=max(1.0, float(speaker_recognition.get("hard_accept_seconds", 1.5))),
+            hard_threshold=min(1.0, max(-1.0, float(speaker_recognition.get("hard_threshold", 0.72)))),
+            tentative_threshold=min(1.0, max(-1.0, float(speaker_recognition.get("tentative_threshold", 0.64)))),
+            cluster_threshold=min(1.0, max(-1.0, float(speaker_recognition.get("cluster_threshold", 0.68)))),
+            min_margin=min(1.0, max(0.0, float(speaker_recognition.get("min_margin", 0.06)))),
+            max_samples_per_profile=max(1, min(50, int(speaker_recognition.get("max_samples_per_profile", 12)))),
+            max_unconfirmed_samples=max(
+                10,
+                min(5000, int(speaker_recognition.get("max_unconfirmed_samples", 500))),
+            ),
+            min_voiced_rms=min(1.0, max(0.0, float(speaker_recognition.get("min_voiced_rms", 0.006)))),
+        ),
         http_asr=http_asr,
+        api_tts=api_tts,
+        api_asr=api_asr,
         provider_extensions=tuple(str(item).strip() for item in extensions if str(item).strip()),
         config_path=configured,
     )
@@ -312,6 +454,56 @@ def _http_asr_providers(base: Path, value: object) -> tuple[HttpAsrProviderSetti
                     models=tuple(models),
                 )
             )
+    return tuple(providers)
+
+
+def _api_providers(value: object, kind: str) -> tuple[ApiProviderSettings, ...]:
+    rows = value if isinstance(value, list) else []
+    providers: list[ApiProviderSettings] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        provider_id = str(row.get("id") or "").strip().lower()
+        base_url = str(row.get("base_url") or "").strip().rstrip("/")
+        raw_models = row.get("models") if isinstance(row.get("models"), list) else []
+        models: list[ApiModelSettings] = []
+        for raw_model in raw_models:
+            if isinstance(raw_model, str):
+                model_id = raw_model.strip()
+                detail: dict[str, Any] = {}
+            elif isinstance(raw_model, dict):
+                detail = raw_model
+                model_id = str(detail.get("id") or "").strip()
+            else:
+                continue
+            if not model_id or any(item.id.lower() == model_id.lower() for item in models):
+                continue
+            languages = detail.get("languages") if isinstance(detail.get("languages"), list) else []
+            features = detail.get("features") if isinstance(detail.get("features"), list) else []
+            models.append(
+                ApiModelSettings(
+                    id=model_id,
+                    name=str(detail.get("name") or model_id),
+                    languages=tuple(str(item) for item in languages),
+                    features=tuple(str(item) for item in features),
+                )
+            )
+        default_model = str(row.get("default_model") or (models[0].id if models else "")).strip()
+        if not provider_id or not base_url or not models or not any(item.id == default_model for item in models):
+            continue
+        providers.append(
+            ApiProviderSettings(
+                id=provider_id,
+                enabled=_bool(row.get("enabled"), False),
+                protocol=str(row.get("protocol") or "openai-compatible").strip().lower(),
+                base_url=base_url,
+                api_key_env=str(row.get("api_key_env") or "").strip(),
+                default_model=default_model,
+                default_voice=str(row.get("default_voice") or ("alloy" if kind == "tts" else "")).strip(),
+                timeout_seconds=float(row.get("timeout_seconds", 180)),
+                models=tuple(models),
+            )
+        )
     return tuple(providers)
 
 

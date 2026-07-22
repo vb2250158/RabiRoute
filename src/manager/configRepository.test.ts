@@ -36,15 +36,16 @@ test("repository reads route config and falls back to personaConfig rules", () =
   assert.equal(config.gateways[0].notificationRules?.[0]?.template, "tick\ntock");
 });
 
-test("repository reads and writes persona recent message limit", () => {
+test("repository migrates the legacy persona limit and writes split Route/persona speech settings", () => {
   const rootDir = makeTempRoot();
   const adapterPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
   const personaPath = path.join(rootDir, "data", "roles", "Rabi", "personaConfig.json");
   writeJson(adapterPath, {
     enabled: true,
-    messageAdapters: ["heartbeat"],
+    messageAdapters: ["speech", "heartbeat"],
     gatewayPort: 8789,
-    agentRoleId: "Rabi"
+    agentRoleId: "Rabi",
+    speechPushMode: "keyword"
   });
   writeJson(personaPath, {
     recentMessageLimit: 3,
@@ -54,15 +55,70 @@ test("repository reads and writes persona recent message limit", () => {
   const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
   const config = repo.readConfig();
 
-  assert.equal(config.gateways[0].recentMessageLimit, 3);
-  assert.equal(config.gateways[0].routeProfiles?.[0]?.recentMessageLimit, 3);
+  assert.equal(config.gateways[0].recentMessageLimit, undefined);
+  assert.equal(config.gateways[0].recentMessageLimits?.speech, 3);
+  assert.equal(config.gateways[0].recentMessageLimits?.heartbeat, 3);
+  assert.equal(config.gateways[0].routeProfiles?.[0]?.recentMessageLimits?.speech, 3);
+  assert.equal(config.gateways[0].speechPushMode, "keyword");
 
-  config.gateways[0].recentMessageLimit = 2;
+  config.gateways[0].recentMessageLimits = {
+    ...config.gateways[0].recentMessageLimits,
+    speech: 180,
+    heartbeat: 2
+  };
+  config.gateways[0].speechTriggerKeywords = [" 星海 ", "星海", "XinghaiBuilder"];
   repo.writeConfig(config);
   const adapter = JSON.parse(fs.readFileSync(adapterPath, "utf8")) as GatewayDefinition;
   const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition;
   assert.equal(adapter.recentMessageLimit, undefined);
-  assert.equal(persona.recentMessageLimit, 2);
+  assert.equal(adapter.recentMessageLimits, undefined);
+  assert.equal(adapter.speechTriggerKeywords, undefined);
+  assert.equal(adapter.speechPushMode, "keyword");
+  assert.equal(persona.recentMessageLimit, undefined);
+  assert.equal(persona.recentMessageLimits?.speech, 180);
+  assert.equal(persona.recentMessageLimits?.heartbeat, 2);
+  assert.deepEqual(persona.speechTriggerKeywords, ["星海", "XinghaiBuilder"]);
+});
+
+test("repository migrates persona-owned fields out of legacy adapter and profile data", () => {
+  const rootDir = makeTempRoot();
+  const adapterPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
+  const personaPath = path.join(rootDir, "data", "roles", "Rabi", "personaConfig.json");
+  writeJson(adapterPath, {
+    enabled: true,
+    messageAdapters: ["speech"],
+    gatewayPort: 8789,
+    agentRoleId: "Rabi",
+    recentMessageLimit: 23,
+    speechTriggerKeywords: [" Rabi ", "rabi", "兔叽"],
+    routeProfiles: [{
+      id: "Rabi__main",
+      agentRoleId: "Rabi",
+      speechPushMode: "keyword",
+      notificationRules: [{ id: "speech", routeKinds: ["voice_transcript"], template: "" }]
+    }]
+  });
+  writeJson(personaPath, {
+    notificationRules: [{ id: "existing", routeKinds: ["private"], template: "keep" }]
+  });
+
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  const config = repo.readConfig();
+  const adapter = JSON.parse(fs.readFileSync(adapterPath, "utf8")) as GatewayDefinition;
+  const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition;
+
+  assert.equal(adapter.recentMessageLimit, undefined);
+  assert.equal(adapter.recentMessageLimits, undefined);
+  assert.equal(adapter.speechTriggerKeywords, undefined);
+  assert.equal(adapter.routeProfiles, undefined);
+  assert.equal(adapter.speechPushMode, "keyword");
+  assert.equal(persona.recentMessageLimit, undefined);
+  assert.equal(persona.recentMessageLimits?.napcat, 23);
+  assert.equal(persona.recentMessageLimits?.speech, 23);
+  assert.deepEqual(persona.speechTriggerKeywords, ["Rabi", "兔叽"]);
+  assert.deepEqual(persona.notificationRules?.map(rule => rule.id), ["existing", "speech", "role-panel-message"]);
+  assert.equal(config.gateways[0].speechPushMode, "keyword");
+  assert.equal(config.gateways[0].recentMessageLimits?.wecom, 23);
 });
 
 test("repository migrates legacy role rules to personaConfig and keeps adapter config clean", () => {
@@ -167,6 +223,21 @@ test("repository migration preserves existing personaConfig fields and rules", (
     ["adapter-new", "persona wins by id"],
     ["role-panel-message", ""]
   ]);
+
+  repo.writePersonaConfig("Rabi", {
+    recentMessageLimits: { speech: 42 },
+    speechTriggerKeywords: ["Rabi"]
+  });
+  const updated = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition & { routeVariables?: Record<string, string> };
+  assert.deepEqual(updated.routeVariables, { tone: "warm" });
+  assert.deepEqual(updated.notificationRules?.map(rule => [rule.id, rule.template]), [
+    ["existing", "keep me"],
+    ["adapter-new", "persona wins by id"],
+    ["role-panel-message", ""]
+  ]);
+  assert.equal(updated.recentMessageLimits?.speech, 42);
+  assert.equal(updated.recentMessageLimits?.napcat, 100);
+  assert.deepEqual(updated.speechTriggerKeywords, ["Rabi"]);
 });
 
 test("repository writes normalized configs and removes renamed route files", () => {

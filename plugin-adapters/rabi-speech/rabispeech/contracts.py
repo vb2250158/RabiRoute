@@ -33,6 +33,7 @@ class TranscriptionRequest:
     language: str | None = None
     prompt: str | None = None
     word_timestamps: bool = False
+    speaker_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,18 @@ class TranscriptSegment:
     end: float
     text: str
     words: list[dict[str, object]] = field(default_factory=list)
+    speaker: str | None = None
+    speaker_label: str | None = None
+    speaker_id: str | None = None
+    speaker_name: str | None = None
+    speaker_decision: str | None = None
+    speaker_cluster_id: str | None = None
+    speaker_score: float | None = None
+    speaker_margin: float | None = None
+    speaker_sample_duration: float | None = None
+    speaker_model: str | None = None
+    speaker_suggestion_id: str | None = None
+    speaker_suggestion_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +65,7 @@ class TranscriptionResult:
     provider: str
     model: str
     segments: list[TranscriptSegment] = field(default_factory=list)
+    record_id: str | None = None
 
 
 class TtsProvider(Protocol):

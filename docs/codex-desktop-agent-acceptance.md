@@ -63,6 +63,18 @@ flowchart TD
 - 列表必须支持全部任务或可靠分页，不能只展示前 20/100 条却声称是全部。
 - 同名且同 workspace 的多个任务必须按可解析的 `updatedAt` 自动取唯一最新者，不能依赖数据库返回顺序；最大时间并列或都无有效时间时才要求选择。
 - 创建成功、首投失败属于“已创建、待重试投递”，不是“不存在会话”。
+- 投递状态必须区分：内部过渡态 `accepted` 只表示 RabiRoute 已开始走 Desktop 主链；只有目标 Desktop owner 的 `start/steer` 返回成功后才能记为 `delivered`；解析、owner 加载或 IPC 失败记为 `failed`。不得用 Route 受理记录冒充 Desktop 已接收。
+- 已匹配的普通消息端事件应直接投递：先尝试 `steer` 当前活跃 turn，只在 turn 已结束/不存在时 `start`。Heartbeat 可由专用忙碌跳过开关例外；语音可由专用热/关键词策略例外。
+
+### 语音消息端的公开 HTTP 终态
+
+`POST /api/speech/messages` 不对外暴露仅表示排队的 `202 accepted`。Manager 在 HTTP 请求内等待 Gateway 子任务确认 Desktop owner 终态，但不等 Agent 回答：
+
+- `200 / delivered`：Desktop owner 已接受 `start` 或 `steer`。
+- `200 / recorded`：语音关键词模式未命中，转写已记录但未唤醒 Agent。
+- `4xx/5xx`：Route 校验、Desktop owner 加载、IPC 或投递超时失败。
+
+这个合同只证明目标 owner 收到了消息，不证明 Agent 已经生成回答、Outbox 已回传或 TTS 已播放。
 
 ## 自动初始化事务
 

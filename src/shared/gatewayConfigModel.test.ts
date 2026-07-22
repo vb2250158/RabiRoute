@@ -3,14 +3,18 @@ import test from "node:test";
 import {
   autoAssignGatewayPorts,
   collectGatewayPortClaims,
+  DEFAULT_RECENT_MESSAGE_LIMIT,
   ensureDefaultPersonaRules,
   gatewayAdapterTypes,
   isBuiltinRolePanelNotificationRule,
+  matchSpeechTriggerKeyword,
   messageAdapterPolicyFor,
   normalizeGatewayDefinition,
   normalizeGatewayNapCatConfig,
   normalizeNapCatInstances,
+  normalizeRecentMessageLimits,
   normalizeRuleDefinitions,
+  RECENT_MESSAGE_ENDPOINTS,
   resolvePrimaryNapCatInstance,
   sanitizeConfigName,
   syncPrimaryNapCatInstanceFields,
@@ -150,14 +154,48 @@ test("heartbeat busy guard defaults off and preserves an explicit opt-in", () =>
   assert.equal(normalizeGatewayDefinition(gateway({ heartbeatSkipWhenAgentBusy: true })).heartbeatSkipWhenAgentBusy, true);
 });
 
-test("recent message limit defaults to 10 and can be set per persona", () => {
+test("persona recent message limits default per endpoint and migrate the legacy scalar", () => {
   const defaulted = normalizeGatewayDefinition(gateway());
-  assert.equal(defaulted.recentMessageLimit, 10);
-  assert.equal(defaulted.routeProfiles?.[0]?.recentMessageLimit, 10);
+  assert.equal(defaulted.recentMessageLimit, undefined);
+  assert.equal(Object.keys(defaulted.recentMessageLimits ?? {}).length, RECENT_MESSAGE_ENDPOINTS.length);
+  for (const endpoint of RECENT_MESSAGE_ENDPOINTS) {
+    assert.equal(defaulted.recentMessageLimits?.[endpoint], DEFAULT_RECENT_MESSAGE_LIMIT);
+    assert.equal(defaulted.routeProfiles?.[0]?.recentMessageLimits?.[endpoint], DEFAULT_RECENT_MESSAGE_LIMIT);
+  }
 
   const customized = normalizeGatewayDefinition(gateway({ recentMessageLimit: 4 }));
-  assert.equal(customized.recentMessageLimit, 4);
-  assert.equal(customized.routeProfiles?.[0]?.recentMessageLimit, 4);
+  assert.equal(customized.recentMessageLimit, undefined);
+  for (const endpoint of RECENT_MESSAGE_ENDPOINTS) {
+    assert.equal(customized.recentMessageLimits?.[endpoint], 4);
+  }
+});
+
+test("persona recent message limits clamp each endpoint independently", () => {
+  const normalized = normalizeRecentMessageLimits({
+    napcat: 31.8,
+    speech: 999,
+    heartbeat: -4
+  });
+
+  assert.equal(normalized.napcat, 31);
+  assert.equal(normalized.speech, 200);
+  assert.equal(normalized.heartbeat, 0);
+  assert.equal(normalized.wecom, 100);
+});
+
+test("speech push mode belongs to the Route while trigger keywords are normalized as persona data", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapters: ["speech"],
+    speechPushMode: "keyword",
+    speechTriggerKeywords: [" 星海 ", "星海", "XinghaiBuilder", "xinghaibuilder", ""]
+  }));
+
+  assert.equal(normalized.speechPushMode, "keyword");
+  assert.equal(normalized.routeProfiles?.[0]?.speechPushMode, "keyword");
+  assert.deepEqual(normalized.speechTriggerKeywords, ["星海", "XinghaiBuilder"]);
+  assert.equal(matchSpeechTriggerKeyword("请让星海看一下上下文", normalized.speechTriggerKeywords ?? []), "星海");
+  assert.equal(matchSpeechTriggerKeyword("xinghaibuilder, wake up", normalized.speechTriggerKeywords ?? []), "XinghaiBuilder");
+  assert.equal(matchSpeechTriggerKeyword("继续记录，不要唤醒", normalized.speechTriggerKeywords ?? []), undefined);
 });
 
 test("persona-free gateways get default message adapter rules", () => {
@@ -469,8 +507,9 @@ test("backend normalization owns speech Route defaults", () => {
 
   assert.equal(normalized.pipelinePreset, "voice_chat");
   assert.equal(normalized.routeVariables?.speechAsrModel, "faster-whisper/small");
-  assert.equal(normalized.routeVariables?.speechTtsModel, "local-tts/gpt-sovits");
-  assert.equal(normalized.routeVariables?.speechVoice, "Rabi");
+  assert.equal(normalized.routeVariables?.speechTtsModel, undefined);
+  assert.equal(normalized.routeVariables?.speechVoice, undefined);
+  assert.equal(normalized.routeVariables?.speechLanguage, undefined);
   assert.equal(normalized.routeVariables?.speechThreshold, "0.025");
   assert.equal(normalized.routeVariables?.speechAutoSubmit, "true");
   assert.equal(normalized.routeVariables?.custom, "kept");

@@ -72,7 +72,7 @@ const stateLabel = computed(() => {
       <line x1="0" :y1="transcribeY" :x2="WIDTH" :y2="transcribeY" class="threshold-line transcribe-line" />
       <line v-if="dynamicThreshold > recordThreshold" x1="0" :y1="dynamicY" :x2="WIDTH" :y2="dynamicY" class="threshold-line dynamic-line" />
     </svg>
-    <div v-if="!levels.length" class="wave-empty">{{ running ? "等待麦克风电平" : "点击“开始语音聊天”后显示实时柱状波形" }}</div>
+    <div v-if="!levels.length" class="wave-empty">{{ running ? "等待麦克风电平" : "任一 Route 订阅语音后显示主机实时柱状波形" }}</div>
     <div class="wave-overlay"><span>{{ stateLabel }}</span><span>峰值 {{ peak.toFixed(4) }}</span></div>
   </div>
 </template>

@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from rabispeech.persona_voice import PersonaVoiceResolver
+from rabispeech.persona_voice import (
+    PersonaVoiceResolver,
+    persona_speech_defaults,
+    persona_tts_cache_dir,
+    resolve_persona_role_dir,
+)
 
 
 def wav(path: Path, seconds: float = 0.4) -> Path:
@@ -46,6 +51,46 @@ def test_persona_folder_cannot_escape_roles_root(tmp_path: Path) -> None:
         resolver.resolve_persona_voice_dir(persona_folder=tmp_path)
 
 
+def test_persona_role_resolution_is_case_insensitive_and_uses_canonical_directory(tmp_path: Path) -> None:
+    role_dir = tmp_path / "roles" / "XinghaiBuilder"
+    role_dir.mkdir(parents=True)
+
+    resolved = resolve_persona_role_dir(tmp_path / "roles", "xinghaibuilder")
+
+    assert resolved == role_dir.resolve()
+    assert persona_tts_cache_dir(resolved) == (role_dir / "voice" / "cache" / "tts-audio").resolve()
+
+
+def test_persona_role_resolution_preserves_legacy_dot_ids(tmp_path: Path) -> None:
+    role_dir = tmp_path / "roles" / "Xinghai.Builder.v2"
+    role_dir.mkdir(parents=True)
+
+    assert resolve_persona_role_dir(tmp_path / "roles", "xinghai.builder.V2") == role_dir.resolve()
+
+
+def test_persona_role_resolution_does_not_treat_paths_as_role_ids(tmp_path: Path) -> None:
+    roles = tmp_path / "roles"
+    roles.mkdir()
+
+    assert resolve_persona_role_dir(roles, "../outside") is None
+    assert resolve_persona_role_dir(roles, r"..\outside") is None
+    assert not (tmp_path / "outside" / "voice" / "cache" / "tts-audio").exists()
+
+
+def test_persona_tts_cache_rejects_redirected_voice_directory(tmp_path: Path) -> None:
+    role_dir = tmp_path / "roles" / "Rabi"
+    outside = tmp_path / "outside"
+    role_dir.mkdir(parents=True)
+    outside.mkdir()
+    try:
+        (role_dir / "voice").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlinks are unavailable on this Windows host.")
+
+    with pytest.raises(ValueError, match="voice folder"):
+        persona_tts_cache_dir(role_dir)
+
+
 def test_persona_without_voice_directory_uses_worker_default(tmp_path: Path) -> None:
     default = wav(tmp_path / "default.wav")
     (tmp_path / "roles" / "Rabi").mkdir(parents=True)
@@ -80,3 +125,21 @@ def test_engine_options_are_scoped_to_persona_and_engine(tmp_path: Path) -> None
     assert resolver.engine_options(voice_dir.resolve(), "qwen3-tts") == {"clone_mode": "x_vector_only"}
     assert resolver.engine_options(voice_dir.resolve(), "unknown") == {}
     assert resolver.engine_options(None, "qwen3-tts") == {}
+
+
+def test_persona_speech_defaults_own_model_language_style_and_speed(tmp_path: Path) -> None:
+    voice_dir = tmp_path / "roles" / "XinghaiBuilder" / "voice"
+    voice_dir.mkdir(parents=True)
+    (voice_dir / "voice-profile.json").write_text(json.dumps({
+        "default_model": "dashscope-qwen/qwen3-tts-vc-2026-01-22",
+        "language": "zh-CN",
+        "instructions": "沉着、可靠、结论明确。",
+        "speed": 0.95,
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert persona_speech_defaults(tmp_path / "roles", "XinghaiBuilder") == {
+        "model": "dashscope-qwen/qwen3-tts-vc-2026-01-22",
+        "language": "zh-CN",
+        "instructions": "沉着、可靠、结论明确。",
+        "speed": 0.95,
+    }

@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
+import android.os.PowerManager
+import android.provider.Settings
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.inputmethod.EditorInfo
@@ -26,6 +28,7 @@ import com.rabiroute.sdk.RabiRouteSdk
 import com.rabi.link.modules.rokid.RokidDeviceStatusSyncService
 import com.rabi.link.modules.rokid.RokidProbeActivity
 import com.rabi.link.modules.wearable.WearableHealthSettingsActivity
+import com.rabi.link.modules.conversation.RabiPhoneAudioCapture
 
 /** Phone companion: glasses backend and Relay transport, not a duplicate Rabi PC configuration UI. */
 class MainActivity : Activity() {
@@ -50,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var runtimeStatus: TextView
     private lateinit var runtimeTranscript: TextView
     private lateinit var runtimeReply: TextView
+    private lateinit var runtimeCaptureHealth: TextView
     private val runtimeHandler = Handler(Looper.getMainLooper())
     private val runtimeTick = object : Runnable {
         override fun run() { refreshConversationRuntime(); refreshChatIfChanged(); runtimeHandler.postDelayed(this, 1000) }
@@ -569,9 +573,11 @@ class MainActivity : Activity() {
         runtimeStatus = note("尚未启动")
         runtimeTranscript = runtimeLine("你：等待语音")
         runtimeReply = runtimeLine("Rabi：等待回复")
+        runtimeCaptureHealth = runtimeLine("采集：尚无长时运行记录")
         addView(runtimeStatus)
         addView(runtimeTranscript, full(0, 2, 0, 2))
         addView(runtimeReply, full(0, 2, 0, 8))
+        addView(runtimeCaptureHealth, full(0, 2, 0, 8))
         val actions = row()
         actions.addView(primary("开始 / 应用") { startConversation() }, LinearLayout.LayoutParams(0, -2, 1f))
         actions.addView(space(), LinearLayout.LayoutParams(dp(6), 1))
@@ -587,6 +593,7 @@ class MainActivity : Activity() {
         runtimeStatus.text = values.getString("status", "尚未启动")
         runtimeTranscript.text = "你：${values.getString("transcript", "等待语音")}"
         runtimeReply.text = "Rabi：${values.getString("reply", "等待回复")}"
+        runtimeCaptureHealth.text = RabiPhoneAudioCapture.runtimeSummary(this)
     }
 
     private fun serverCard(): View = card().apply {
@@ -689,12 +696,14 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(vadRow, full(0, 0, 0, 8))
         addView(primary("保存并开始持续会话") { startConversation() }, full(0, 0, 0, 8))
+        addView(note("长时运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。VAD 语段与 Agent TTS 按 PC 语音缓存的统一语义逐条保留 24 小时，不保存一条整日原始录音。小米等厂商仍可能额外限制后台应用，请在真机上完成 24 小时验收。"))
         val actions = row()
         actions.addView(secondary("立即提示 Agent") { RabiConversationService.requestReview(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
         actions.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
         actions.addView(secondary("停止持续会话") { RabiConversationService.stop(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(actions)
         addView(secondary("重试失败的 ASR / TTS 消息") { RabiConversationService.retryFailed(this@MainActivity) }, full(0, 8, 0, 0))
+        addView(secondary("检查系统后台保活设置") { openBatteryOptimizationSettings() }, full(0, 8, 0, 0))
     }
 
     private fun loadConversationSettings() {
@@ -737,6 +746,20 @@ class MainActivity : Activity() {
         RabiConversationService.start(this)
         if (settings.glassesEnabled && getSharedPreferences("rokid_probe", MODE_PRIVATE).getString("rokid_token", "").isNullOrBlank()) {
             openRokid("connect_glass_app")
+        }
+    }
+
+    private fun openBatteryOptimizationSettings() {
+        val manager = getSystemService(PowerManager::class.java)
+        if (manager?.isIgnoringBatteryOptimizations(packageName) == true) {
+            toast("Rabi 移动端已不受系统电池优化限制")
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        } catch (_: Throwable) {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.parse("package:$packageName")
+            })
         }
     }
 

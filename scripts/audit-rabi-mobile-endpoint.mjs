@@ -13,11 +13,19 @@ const manifest = read("apps/rabilink-android/app/src/main/AndroidManifest.xml");
 const activity = read("apps/rabilink-android/app/src/main/java/com/rabi/link/MainActivity.kt");
 const chatStore = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiChatStore.java");
 const service = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationService.java");
+const phoneCapture = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiPhoneAudioCapture.java");
+const audioCache = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiBoundedAudioCache.java");
+const speechArchive = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiMobileSpeechArchive.java");
+const speechRecords = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiMobileSpeechRecordStore.java");
 const settings = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationSettings.java");
 const backend = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RabiGlassPcBackend.java");
+const glassBridge = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RokidNativeVoiceBridge.kt");
 const conversationRules = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationRules.kt");
 const sdk = read("packages/android-sdk/rabiroute-sdk/src/main/java/com/rabiroute/sdk/RabiRouteSdk.kt");
 const glass = read("apps/rabilink-android/glass-app/src/main/java/com/rabi/link/glass/GlassAudioClientActivity.java");
+const glassProtocol = read("apps/rabilink-android/shared/src/main/java/com/rabi/link/protocol/RabiGlassAudioProtocol.java");
+const phoneGradle = read("apps/rabilink-android/app/build.gradle");
+const glassGradle = read("apps/rabilink-android/glass-app/build.gradle");
 const packet = read("src/routing/agentPacket.ts");
 const relay = read("scripts/rabilink-relay-server.mjs");
 
@@ -85,9 +93,60 @@ includes(service, [
   "conversationNotificationId",
   "Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP",
   "startPhoneCapture()",
+  "RabiPhoneAudioCapture",
+  "pauseAllCaptureModes()",
+  "applyInputMode(settings)",
+  "private enum InputMode",
+  "setInputMode(InputMode.GLASSES)",
+  "setInputMode(InputMode.PHONE)",
+  "conversation.input_mode",
+  "phoneAudioCapture.pause()",
+  "stopGlassesBackend()",
   "startGlassesBackend()",
-  "settings.autoPlayAgentVoice"
+  "settings.autoPlayAgentVoice",
+  "backend.submitPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_GLASSES)",
+  "backend.requestConversationReview(RabiGlassPcBackend.SOURCE_GLASSES)",
+  "RabiGlassPcBackend.SOURCE_GLASSES"
 ], "foreground conversation service");
+assert.match(service, /if \(settings\.glassesEnabled\) \{\s*phoneAudioCapture\.pause\(\);\s*startGlassesBackend\(\);\s*setInputMode\(InputMode\.GLASSES\);/s,
+  "glasses mode must release phone capture before starting the glasses bridge");
+assert.match(service, /stopGlassesBackend\(\);\s*startPhoneCapture\(\);\s*setInputMode\(InputMode\.PHONE\);/s,
+  "phone mode must release the glasses bridge before starting phone capture");
+
+includes(phoneCapture, [
+  "PARTIAL_WAKE_LOCK",
+  "audio_read_stalled",
+  "scheduleRestart",
+  "MAX_RESTART_DELAY_MS",
+  "public void pause()",
+  "public void close(boolean sessionEnded)",
+  "lifecycleGeneration",
+  "scheduledGeneration != lifecycleGeneration.get()",
+  "runtimeSummary",
+  "conversation.audio.restart"
+], "supervised long-running phone capture");
+
+includes(audioCache, [
+  "RETENTION_MILLIS = 24L * 60L * 60L * 1000L",
+  "relativePath",
+  "Audio cache root identity changed",
+  "Files.isSymbolicLink"
+], "bounded mobile audio cache");
+
+includes(speechArchive, [
+  '"audio-cache/asr-audio"',
+  '"audio-cache/tts-audio"',
+  '"speech-records"',
+  '"audio_expires_at"',
+  "completeAsr"
+], "mobile speech archive contract");
+
+includes(speechRecords, [
+  "Append-only ASR/TTS metadata ledger",
+  '"audio_file"',
+  '"yyyy-MM-dd"',
+  "safeRelativePath"
+], "mobile speech record ledger");
 
 includes(backend, [
   "/api/rabilink/devices/input",
@@ -102,8 +161,35 @@ includes(backend, [
   "routeProfileId",
   "onDeliveryState",
   "submitText(String text, String routeProfileId, String clientMessageId)",
-  "submitMedia(byte[] data, String contentType, String fileName, String caption,"
+  "submitMedia(byte[] data, String contentType, String fileName, String caption,",
+  'put("sourceDeviceKind", sourceDeviceKind)',
+  'put("sessionId", deviceId)',
+  "normalizedSourceKind"
 ], "phone-owned backend");
+
+includes(glassBridge, [
+  "RabiGlassAudioProtocol",
+  "readyForAudioPlayback",
+  "if (!channel.readyForAudioPlayback)",
+  "glasses audio channel is not ready"
+], "glasses audio delivery gate");
+
+includes(glassProtocol, [
+  'CLIENT_ID = "GlassSample"',
+  'AUDIO_STREAM_TAG = "RabiGlassAudioPcm"',
+  'COMMAND_START = "RABI_GLASS_AUDIO_START"',
+  'COMMAND_STOP = "RABI_GLASS_AUDIO_STOP"',
+  'COMMAND_REVIEW = "RABI_GLASS_REVIEW_REQUEST"',
+  'COMMAND_STATUS_REQUEST = "RABI_GLASS_AUDIO_STATUS_REQUEST"',
+  'PREFIX_STATUS = "RABI_GLASS_AUDIO_STATUS:"',
+  'PREFIX_TRANSCRIPT = "RABI_GLASS_TRANSCRIPT:"',
+  'PREFIX_REPLY = "RABI_GLASS_REPLY:"',
+  'PREFIX_DEVICE = "RABI_GLASS_DEVICE:"'
+], "shared glasses protocol");
+includes(phoneGradle, ['java.srcDir("$rootDir/shared/src/main/java")'], "phone shared protocol source");
+includes(glassGradle, ['java.srcDir("$rootDir/shared/src/main/java")'], "glasses shared protocol source");
+assert(!glass.includes('private static final String START = "RABI_GLASS_AUDIO_START"'), "glasses protocol literals must not be duplicated in the glasses activity");
+assert(!glassBridge.includes('const val GLASS_AUDIO_START_CMD = "RABI_GLASS_AUDIO_START"'), "glasses protocol literals must not be duplicated in the phone bridge");
 
 includes(glass, [
   "startCapture(true)",

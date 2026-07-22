@@ -14,7 +14,7 @@ A Route decides how messages enter and which handler receives them. A persona su
 | --- | --- |
 | Sources, ports, handler, workspace, pipeline | Route |
 | Selected persona | Route `agentRoleId` |
-| Persona text, rules, plans, memory, skills | Persona directory |
+| Persona avatar, text, rules, plans, memory, skills | Persona directory |
 | Route served by a rule | Rule `configName` |
 
 One persona can serve several Routes. Editing its text or rules affects every bound Route that matches the relevant `configName`.
@@ -23,12 +23,14 @@ One persona can serve several Routes. Editing its text or rules affects every bo
 
 Open **Rabi Persona** and select an existing role under **Persona binding**. The page shows the `persona.md` preview, Route variables, built-in rules, and message-template rules.
 
+After selecting a persona, use the same configuration card to set or replace its avatar. PNG, JPEG, WebP, and GIF images up to 5 MB are supported. The avatar follows the persona into selectors, the Route overview, speech persona selection, and the local role panel; the first character of the persona ID is used as the fallback. Because the image belongs to the persona directory, it does not need to be uploaded again for each Route.
+
 Use **Open persona configuration** to edit the full text. Do not mechanically translate runtime-semantic files; language and wording changes can change Agent behavior.
 
 <div class="screenshot-placeholder">
   <strong>Screenshot placeholder 10 | Persona overview</strong>
   <span>Suggested frame: persona binding, persona preview, Route variables, and rule list together.</span>
-  <span>Callouts: persona ID, preview, rule count, Open config, Add rule.</span>
+  <span>Callouts: persona avatar, persona ID, preview, rule count, Open config, Add rule.</span>
 </div>
 
 ## Rule anatomy

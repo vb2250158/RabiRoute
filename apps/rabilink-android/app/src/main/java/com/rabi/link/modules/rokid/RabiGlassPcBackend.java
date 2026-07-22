@@ -2,6 +2,7 @@ package com.rabi.link.modules.rokid;
 
 import com.rabi.link.RabiConversationSettings;
 import com.rabi.link.RabiConversationTarget;
+import com.rabi.link.modules.conversation.RabiMobileSpeechArchive;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -33,6 +34,9 @@ import java.util.concurrent.TimeUnit;
 
 /** Phone-owned backend for the thin glasses client. No Agent or model runs on Android. */
 public final class RabiGlassPcBackend {
+    public static final String SOURCE_PHONE = "phone";
+    public static final String SOURCE_GLASSES = "glasses";
+
     public interface Listener {
         void onStatus(String status);
         void onTranscript(String text, String routeProfileId);
@@ -51,6 +55,7 @@ public final class RabiGlassPcBackend {
     private final File controlQueueDirectory;
     private final File diagnosticQueueDirectory;
     private final Listener listener;
+    private final RabiMobileSpeechArchive speechArchive;
     private volatile boolean running;
     private String baseUrl = "";
     private String token = "";
@@ -64,9 +69,14 @@ public final class RabiGlassPcBackend {
     private long lastDiagnosticAt;
 
     public RabiGlassPcBackend(android.content.Context context, Listener listener) {
+        this(context, listener, RabiMobileSpeechArchive.tryCreate(context));
+    }
+
+    public RabiGlassPcBackend(android.content.Context context, Listener listener, RabiMobileSpeechArchive speechArchive) {
         this.context = context.getApplicationContext();
         this.preferences = this.context.getSharedPreferences("rabi_glass_phone_backend", android.content.Context.MODE_PRIVATE);
         this.listener = listener;
+        this.speechArchive = speechArchive;
         this.settings = RabiConversationSettings.load(this.context);
         this.audioQueueDirectory = new File(this.context.getFilesDir(), "rabi-conversation/audio-queue");
         this.audioQueueDirectory.mkdirs();
@@ -112,10 +122,18 @@ public final class RabiGlassPcBackend {
     }
 
     public void submitPcm(byte[] pcm, String routeProfileId) {
+        submitPcmFromSource(pcm, routeProfileId, SOURCE_PHONE);
+    }
+
+    public void submitPcmFromSource(byte[] pcm, String sourceDeviceKind) {
+        submitPcmFromSource(pcm, routeProfileId(), sourceDeviceKind);
+    }
+
+    private void submitPcmFromSource(byte[] pcm, String routeProfileId, String sourceDeviceKind) {
         byte[] copy = pcm == null ? new byte[0] : pcm.clone();
         if (copy.length < 3200) { listener.onError("录音太短"); return; }
         try {
-            persistAudio(copy, routeProfileId);
+            persistAudio(copy, routeProfileId, normalizedSourceKind(sourceDeviceKind));
             listener.onStatus("语音已进入手机待传队列");
             uploadExecutor.execute(this::drainQueues);
         } catch (Throwable error) {
@@ -123,13 +141,22 @@ public final class RabiGlassPcBackend {
         }
     }
 
-    private void persistAudio(byte[] pcm, String routeProfileId) throws Exception {
+    private void persistAudio(byte[] pcm, String routeProfileId, String sourceDeviceKind) throws Exception {
         audioQueueDirectory.mkdirs();
         File target = new File(audioQueueDirectory, String.format(java.util.Locale.US, "%013d-%s.pcm",
                 System.currentTimeMillis(), UUID.randomUUID()));
         try (FileOutputStream output = new FileOutputStream(target)) { output.write(pcm); }
+        JSONObject metadata = new JSONObject()
+                .put("routeProfileId", routeProfileId())
+                .put("sourceDeviceKind", sourceDeviceKind);
+        if (speechArchive != null) try {
+            metadata.put("speechArchive", speechArchive.retainAsr(
+                    pcm, sourceDeviceKind, deviceId, routeProfileId(), settings.asrModel, settings.asrLanguage));
+        } catch (Throwable error) {
+            queueDiagnostic("conversation.audio.archive_failed", "error", error.getClass().getSimpleName());
+        }
         try (FileOutputStream output = new FileOutputStream(new File(target.getPath() + ".json"))) {
-            output.write(new JSONObject().put("routeProfileId", clean(routeProfileId)).toString().getBytes(StandardCharsets.UTF_8));
+            output.write(metadata.toString().getBytes(StandardCharsets.UTF_8));
         }
         pruneAudioQueue();
     }
@@ -142,29 +169,37 @@ public final class RabiGlassPcBackend {
         Arrays.sort(pending, Comparator.comparing(File::getName));
         for (File item : pending) {
             try {
+                String queuedRoute = "";
+                String sourceDeviceKind = SOURCE_PHONE;
+                JSONObject archivedSpeech = null;
+                File sidecar = new File(item.getPath() + ".json");
+                if (sidecar.exists()) try (FileInputStream input = new FileInputStream(sidecar)) {
+                    JSONObject metadata = new JSONObject(new String(readAll(input), StandardCharsets.UTF_8));
+                    queuedRoute = metadata.optString("routeProfileId", "");
+                    sourceDeviceKind = normalizedSourceKind(metadata.optString("sourceDeviceKind", SOURCE_PHONE));
+                    archivedSpeech = metadata.optJSONObject("speechArchive");
+                }
                 byte[] pcm;
                 try (FileInputStream input = new FileInputStream(item)) { pcm = readAll(input); }
                 listener.onStatus("Rabi PC 正在识别待传语音 · 剩余 " + pending.length);
                 String text = transcribe(wav(pcm));
                 if (text.isEmpty()) {
+                    completeArchivedAsr(archivedSpeech, "", "empty");
                     item.delete();
-                    new File(item.getPath() + ".json").delete();
+                    sidecar.delete();
                     listener.onStatus("已忽略没有识别文本的音频段");
                     continue;
                 }
                 if (!acceptTranscript(text)) {
+                    completeArchivedAsr(archivedSpeech, text, "suppressed");
                     item.delete();
-                    new File(item.getPath() + ".json").delete();
+                    sidecar.delete();
                     listener.onStatus("已抑制重复或扬声器回声");
                     continue;
                 }
-                String queuedRoute = "";
-                File sidecar = new File(item.getPath() + ".json");
-                if (sidecar.exists()) try (FileInputStream input = new FileInputStream(sidecar)) {
-                    queuedRoute = new JSONObject(new String(readAll(input), StandardCharsets.UTF_8)).optString("routeProfileId", "");
-                }
-                publishObservation(text, "queued-audio-" + item.getName(), queuedAt(item), queuedRoute);
                 listener.onTranscript(text, queuedRoute);
+                publishObservation(text, "queued-audio-" + item.getName(), queuedAt(item), queuedRoute, sourceDeviceKind);
+                completeArchivedAsr(archivedSpeech, text, "transcribed");
                 if (!item.delete()) throw new IllegalStateException("无法确认手机语音队列项");
                 sidecar.delete();
                 listener.onStatus("已写入会话账本 · 等待 Rabi 回复");
@@ -192,6 +227,8 @@ public final class RabiGlassPcBackend {
     }
 
     private void drainQueues() {
+        if (speechArchive != null) try { speechArchive.cleanup(); }
+        catch (Throwable error) { queueDiagnostic("conversation.audio.cleanup_failed", "error", error.getClass().getSimpleName()); }
         drainControlQueue();
         drainAudioQueue();
         drainMediaQueue();
@@ -261,9 +298,19 @@ public final class RabiGlassPcBackend {
     }
 
     public void requestConversationReview() {
+        requestConversationReview(SOURCE_PHONE);
+    }
+
+    private void completeArchivedAsr(JSONObject archivedSpeech, String text, String status) {
+        if (speechArchive == null || archivedSpeech == null) return;
+        try { speechArchive.completeAsr(archivedSpeech, text, status); }
+        catch (Throwable error) { queueDiagnostic("conversation.audio.record_failed", "error", error.getClass().getSimpleName()); }
+    }
+
+    public void requestConversationReview(String sourceDeviceKind) {
         try {
             long now = System.currentTimeMillis();
-            String origin = deviceId.contains("glass") ? "glasses" : "phone";
+            String origin = normalizedSourceKind(sourceDeviceKind);
             JSONObject body = new JSONObject()
                     .put("text", origin.equals("glasses")
                             ? "用户在眼镜连接会话模式单击触摸板，要求现在审阅会话记录。"
@@ -383,7 +430,19 @@ public final class RabiGlassPcBackend {
         byte[] copy = data == null ? new byte[0] : data.clone();
         try {
             if (copy.length == 0) throw new IllegalArgumentException("媒体内容为空");
-            persistMedia(copy, contentType, fileName, caption, routeProfileId, clientMessageId);
+            persistMedia(copy, contentType, fileName, caption, routeProfileId, clientMessageId, SOURCE_PHONE);
+            listener.onStatus("媒体已进入手机可靠待传队列");
+            uploadExecutor.execute(this::drainQueues);
+        } catch (Throwable error) {
+            listener.onError(shortError(error));
+        }
+    }
+
+    public void submitMediaFromSource(byte[] data, String contentType, String fileName, String caption, String sourceDeviceKind) {
+        byte[] copy = data == null ? new byte[0] : data.clone();
+        try {
+            if (copy.length == 0) throw new IllegalArgumentException("媒体内容为空");
+            persistMedia(copy, contentType, fileName, caption, routeProfileId(), "", normalizedSourceKind(sourceDeviceKind));
             listener.onStatus("媒体已进入手机可靠待传队列");
             uploadExecutor.execute(this::drainQueues);
         } catch (Throwable error) {
@@ -392,7 +451,7 @@ public final class RabiGlassPcBackend {
     }
 
     private void persistMedia(byte[] data, String contentType, String fileName, String caption,
-                              String routeProfileId, String clientMessageId) throws Exception {
+                              String routeProfileId, String clientMessageId, String sourceDeviceKind) throws Exception {
         mediaQueueDirectory.mkdirs();
         String id = String.format(java.util.Locale.US, "%013d-%s", System.currentTimeMillis(), UUID.randomUUID());
         File binary = new File(mediaQueueDirectory, id + ".bin");
@@ -401,6 +460,7 @@ public final class RabiGlassPcBackend {
         JSONObject value = new JSONObject().put("contentType", clean(contentType)).put("fileName", clean(fileName))
                 .put("caption", clean(caption)).put("clientMessageId", clean(clientMessageId).isEmpty() ? "queued-media-" + id : clean(clientMessageId))
                 .put("routeProfileId", clean(routeProfileId))
+                .put("sourceDeviceKind", sourceDeviceKind)
                 .put("capturedAt", System.currentTimeMillis());
         try (FileOutputStream output = new FileOutputStream(metadata)) {
             output.write(value.toString().getBytes(StandardCharsets.UTF_8));
@@ -430,7 +490,8 @@ public final class RabiGlassPcBackend {
                         value.optString("contentType", "application/octet-stream"), data, 10 * 60 * 1000), StandardCharsets.UTF_8));
                 publishMediaObservation(value.optString("caption", ""), receipt.getJSONObject("attachment"),
                         value.optString("clientMessageId"), value.optLong("capturedAt", metadata.lastModified()),
-                        value.optString("routeProfileId", ""));
+                        value.optString("routeProfileId", ""),
+                        normalizedSourceKind(value.optString("sourceDeviceKind", SOURCE_PHONE)));
                 if (!binary.delete() || !metadata.delete()) throw new IllegalStateException("无法确认媒体队列项");
                 listener.onDeliveryState(value.optString("clientMessageId", ""), value.optString("routeProfileId", ""), "sent", "");
                 listener.onStatus("媒体已进入 Rabi PC 消息端");
@@ -585,14 +646,16 @@ public final class RabiGlassPcBackend {
         return result.optString("text", result.optString("transcript", "")).trim();
     }
 
-    private void publishObservation(String text, String clientMessageId, long capturedAt, String routeProfileId) throws Exception {
+    private void publishObservation(String text, String clientMessageId, long capturedAt, String routeProfileId,
+                                    String sourceDeviceKind) throws Exception {
         long now = System.currentTimeMillis();
-        boolean glasses = deviceId.contains("glass");
+        boolean glasses = SOURCE_GLASSES.equals(normalizedSourceKind(sourceDeviceKind));
         JSONObject body = new JSONObject().put("text", text).put("type", "rabilink.observation")
                 .put("deliveryMode", "observe").put("source", "rabilink-glasses-phone-backend")
-                .put("sourceDeviceId", deviceId).put("sourceDeviceName", glasses ? "Rabi Glass" : "Rabi 移动端")
+                .put("sourceDeviceId", glasses ? "rabi-glass" : deviceId).put("sourceDeviceName", glasses ? "Rabi Glass" : "Rabi 移动端")
                 .put("sourceDeviceKind", glasses ? "glasses" : "phone").put("transport", "phone-audio-backend")
                 .put("clientMessageId", clientMessageId).put("routeProfileId", routeProfileId)
+                .put("sessionId", deviceId)
                 .put("capturedAt", capturedAt > 0 ? capturedAt : now);
         jsonRequest("POST", "/api/rabilink/devices/input", "application/json; charset=utf-8", body.toString().getBytes(StandardCharsets.UTF_8), 20000);
     }
@@ -682,18 +745,20 @@ public final class RabiGlassPcBackend {
         editor.apply();
     }
 
-    private void publishMediaObservation(String caption, JSONObject attachment, String clientMessageId, long capturedAt, String routeProfileId) throws Exception {
+    private void publishMediaObservation(String caption, JSONObject attachment, String clientMessageId, long capturedAt,
+                                         String routeProfileId, String sourceDeviceKind) throws Exception {
         long now = System.currentTimeMillis();
-        boolean glasses = deviceId.contains("glass");
+        boolean glasses = SOURCE_GLASSES.equals(normalizedSourceKind(sourceDeviceKind));
         String kind = attachment.optString("kind", "file");
         String text = clean(caption);
         if (text.isEmpty()) text = "眼镜发送了一条" + ("image".equals(kind) ? "照片" : "video".equals(kind) ? "视频" : "媒体") + "消息。";
         JSONObject body = new JSONObject().put("text", text).put("type", "rabilink.observation")
                 .put("deliveryMode", "observe").put("source", "rabilink-glasses-phone-backend")
-                .put("sourceDeviceId", deviceId).put("sourceDeviceName", glasses ? "Rabi Glass" : "Rabi 移动端")
+                .put("sourceDeviceId", glasses ? "rabi-glass" : deviceId).put("sourceDeviceName", glasses ? "Rabi Glass" : "Rabi 移动端")
                 .put("sourceDeviceKind", glasses ? "glasses" : "phone").put("transport", "phone-media-backend")
                 .put("clientMessageId", clean(clientMessageId).isEmpty() ? "glass-media-" + now + "-" + UUID.randomUUID() : clientMessageId)
                 .put("routeProfileId", routeProfileId)
+                .put("sessionId", deviceId)
                 .put("capturedAt", capturedAt > 0 ? capturedAt : now)
                 .put("attachments", new JSONArray().put(attachment));
         jsonRequest("POST", "/api/rabilink/devices/input", "application/json; charset=utf-8", body.toString().getBytes(StandardCharsets.UTF_8), 20000);
@@ -721,6 +786,9 @@ public final class RabiGlassPcBackend {
     private static byte[] readAll(InputStream input) throws Exception { if (input == null) return new byte[0]; try (InputStream in = input; ByteArrayOutputStream out = new ByteArrayOutputStream()) { byte[] buffer = new byte[8192]; int read; while ((read = in.read(buffer)) >= 0) out.write(buffer, 0, read); return out.toByteArray(); } }
     private static String encode(String value) throws Exception { return URLEncoder.encode(value == null ? "" : value, "UTF-8"); }
     private static String clean(String value) { return value == null ? "" : value.trim(); }
+    private static String normalizedSourceKind(String value) {
+        return SOURCE_GLASSES.equalsIgnoreCase(clean(value)) ? SOURCE_GLASSES : SOURCE_PHONE;
+    }
     private static String trimSlash(String value) { String result = clean(value); while (result.endsWith("/")) result = result.substring(0, result.length() - 1); return result; }
     private static String shortError(Throwable error) { String text = error.getMessage(); if (text == null || text.trim().isEmpty()) text = error.getClass().getSimpleName(); text = text.replace('\n', ' '); return text.length() > 160 ? text.substring(0, 160) : text; }
     private String routeProfileId() { return RabiConversationTarget.load(context); }

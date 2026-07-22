@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocket } from "ws";
+import type { MessageContextAttachment, MessageContextRecord } from "../messageContextStore.js";
 
 export const REMOTE_AGENT_CONTROL_PORT_START = 8797;
 export const REMOTE_AGENT_DISCOVERY_PORT_START = 8798;
@@ -126,7 +127,7 @@ type RemoteAgentDeviceRecord = {
   connectionError?: string;
 };
 
-type RemoteAgentHubOptions = {
+export type RemoteAgentHubOptions = {
   managerPort: number;
   managerHost?: string;
   publicHost?: string;
@@ -136,6 +137,8 @@ type RemoteAgentHubOptions = {
   connectionTimeoutMs?: number;
   getDefaultGatewayId: () => string | undefined;
   onTaskEvent?: (task: RemoteAgentTask, event: RemoteAgentTaskEvent) => void | Promise<void>;
+  /** Manager-owned persistence hook for the persona conversation ledger. */
+  onConversationRecord?: (record: MessageContextRecord) => void | Promise<void>;
 };
 
 type PasswordStore = {
@@ -151,6 +154,95 @@ type RemoteAgentSocketMessage =
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function contextString(context: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = String(context?.[key] ?? "").trim();
+  return value || undefined;
+}
+
+function epochSeconds(value: string): number {
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? Math.floor(milliseconds / 1000) : Math.floor(Date.now() / 1000);
+}
+
+function remoteAgentConversationKey(task: RemoteAgentTask): string {
+  const thread = String(task.threadName || task.taskId).trim() || task.taskId;
+  return `remoteAgent:gateway:${task.originGatewayId}:instance:${task.deviceId}:thread:${thread}`;
+}
+
+function contextAttachments(files: RemoteAgentFileTransfer[] | undefined): MessageContextAttachment[] | undefined {
+  if (!files?.length) return undefined;
+  const attachments = files.map((file) => ({
+    id: file.sha256,
+    kind: "file",
+    name: file.name,
+    mimeType: file.mimeType,
+    size: file.size
+  }));
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+/** A task is recorded only after the remote bridge has accepted the socket write. */
+export function remoteAgentTaskRequestContextRecord(task: RemoteAgentTask): MessageContextRecord {
+  return {
+    time: epochSeconds(task.createdAt),
+    direction: "outbound",
+    adapter: "remoteAgent",
+    transport: "remoteAgent",
+    gatewayId: task.originGatewayId,
+    instanceId: task.deviceId,
+    channel: "remoteAgent",
+    conversationKey: remoteAgentConversationKey(task),
+    kind: "task_request",
+    status: "sent",
+    sender: "Agent",
+    target: task.deviceId,
+    text: task.message,
+    messageId: `remote-agent-task:${task.taskId}`,
+    sessionId: task.taskId,
+    routeProfileId: contextString(task.originReplyContext, "routeProfileId"),
+    attachments: contextAttachments(task.files)
+  };
+}
+
+/** Progress events stay operational; only a received terminal result becomes conversation context. */
+export function remoteAgentTaskEventContextRecord(
+  task: RemoteAgentTask,
+  event: RemoteAgentTaskEvent
+): MessageContextRecord | undefined {
+  const status = event.status ?? task.status;
+  if (status !== "completed" && status !== "failed") return undefined;
+  const returnedFiles = event.savedFiles?.length ? event.savedFiles : event.files;
+  const lines = [
+    status === "completed" ? "远端 Agent 任务已完成。" : "远端 Agent 任务执行失败。",
+    event.summary ? `摘要：${event.summary}` : "",
+    event.message ? `消息：${event.message}` : "",
+    event.error ? `错误：${event.error}` : "",
+    event.artifactPath ? `产物路径：${event.artifactPath}` : "",
+    event.logPath ? `日志路径：${event.logPath}` : "",
+    returnedFiles?.length ? `返回文件：${returnedFiles.map((file) => file.name).filter(Boolean).join("、")}` : ""
+  ].filter(Boolean);
+  return {
+    time: epochSeconds(task.updatedAt),
+    direction: "inbound",
+    adapter: "remoteAgent",
+    transport: "remoteAgent",
+    gatewayId: task.originGatewayId,
+    instanceId: task.deviceId,
+    channel: "remoteAgent",
+    conversationKey: remoteAgentConversationKey(task),
+    kind: "task_result",
+    status: "received",
+    sender: event.device?.deviceName || task.deviceId,
+    target: "Agent",
+    text: lines.join("\n"),
+    messageId: `remote-agent-result:${task.taskId}:${status}`,
+    replyToMessageId: `remote-agent-task:${task.taskId}`,
+    sessionId: task.taskId,
+    routeProfileId: contextString(task.originReplyContext, "routeProfileId"),
+    attachments: contextAttachments(returnedFiles)
+  };
 }
 
 function remoteAgentAuthProof(password: string, role: "manager" | "server", nonce: string): string {
@@ -583,7 +675,9 @@ export class RemoteAgentHub {
       }
     }));
     this.patchTask(task.taskId, { status: "delivered", message: "Task delivered to remote Agent bridge." });
-    return this.tasks.get(task.taskId) ?? task;
+    const deliveredTask = this.tasks.get(task.taskId) ?? task;
+    this.emitConversationRecord(remoteAgentTaskRequestContextRecord(deliveredTask));
+    return deliveredTask;
   }
 
   receiveTaskEvent(event: RemoteAgentTaskEvent, sourceDeviceId = event.device?.deviceId): RemoteAgentTask {
@@ -608,6 +702,8 @@ export class RemoteAgentHub {
       ? { ...event, files: event.files.map(stripTransferContent), savedFiles: this.saveReturnedFiles(existing, event.files) }
       : event;
     const task = this.patchTask(event.taskId, storedEvent);
+    const contextRecord = remoteAgentTaskEventContextRecord(task, storedEvent);
+    if (contextRecord) this.emitConversationRecord(contextRecord);
     void Promise.resolve(this.options.onTaskEvent?.(task, storedEvent))
       .catch((error) => {
         this.patchTask(task.taskId, {
@@ -616,6 +712,13 @@ export class RemoteAgentHub {
         });
       });
     return task;
+  }
+
+  private emitConversationRecord(record: MessageContextRecord): void {
+    void Promise.resolve(this.options.onConversationRecord?.(record))
+      .catch((error) => {
+        console.warn(`Remote Agent conversation record failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
   }
 
   private async discoverRemoteAgents(timeoutMs: number): Promise<RemoteAgentDiscoveredDevice[]> {

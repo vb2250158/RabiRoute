@@ -33,6 +33,10 @@ import {
   createDeliveryReplayAttemptId,
   type DeliveryReplayPacket
 } from "./deliveryReplayLedger.js";
+import {
+  appendMessageContextToDir,
+} from "./messageContextStore.js";
+import { messageContextScopeForForward } from "./routing/messageContextScope.js";
 
 export type {
   ForwardRouteKind,
@@ -180,6 +184,12 @@ function activeRouteProfiles(): RouteProfile[] {
   return config.routeProfiles.filter((route) => route.enabled !== false);
 }
 
+function routeProfilesForRecord(record: ForwardRecord): RouteProfile[] {
+  const requestedRoute = "routeProfileId" in record ? String(record.routeProfileId || "").trim().toLowerCase() : "";
+  return activeRouteProfiles().filter((route) => !requestedRoute || [route.id, route.name, route.agentRoleId]
+    .some((value) => String(value || "").trim().toLowerCase() === requestedRoute));
+}
+
 function recordId(record: ForwardRecord): string {
   return String(record.messageId ?? record.time ?? "unknown");
 }
@@ -281,8 +291,69 @@ function appendRecordToRoleDataDir(record: ForwardRecord, dataDir: string): void
   }
 }
 
+function appendRecordToPersonaConversation(route: RouteProfile, routeKind: ForwardRouteKind, record: ForwardRecord): boolean {
+  const roleContext = rolePathsForRoute(route);
+  const dataDir = roleContext.dataDir;
+  const scope = messageContextScopeForForward(routeKind, record, { gatewayId: process.env.GATEWAY_ID, routeProfileId: route.id });
+  if (!scope) return false;
+  try {
+    return Boolean(appendMessageContextToDir(dataDir, scope.record));
+  } catch (error) {
+    appendAdapterLogToDir("router", {
+      event: "message_context_append_failed",
+      level: "warning",
+      message: `Failed to append persona conversation context route=${route.id}: ${error instanceof Error ? error.message : String(error)}`,
+      data: { routeKind, routeId: route.id, messageId: record.messageId }
+    }, config.dataDir);
+    return false;
+  }
+}
+
+function recordInboundForRoutes(
+  routes: RouteProfile[],
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  options: ForwardMessageOptions
+): number {
+  const recordedRawDirs = new Set<string>();
+  const recordedConversationDirs = new Set<string>();
+  let conversationRecordCount = 0;
+  for (const route of routes) {
+    const roleContext = rolePathsForRoute(route);
+    const resolvedDataDir = path.resolve(roleContext.dataDir);
+    if (options.appendRoleRecord !== false
+      && resolvedDataDir !== path.resolve(config.memoryDataDir)
+      && !recordedRawDirs.has(resolvedDataDir)) {
+      appendRecordToRoleDataDir(record, roleContext.dataDir);
+      recordedRawDirs.add(resolvedDataDir);
+    }
+    if (!recordedConversationDirs.has(resolvedDataDir)) {
+      if (appendRecordToPersonaConversation(route, routeKind, record)) conversationRecordCount += 1;
+      recordedConversationDirs.add(resolvedDataDir);
+    }
+  }
+  return conversationRecordCount;
+}
+
+/** Record an endpoint message in persona-scoped raw history and the canonical conversation ledger without notifying an Agent. */
+export function recordMessageContextOnly(
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  options: ForwardMessageOptions = {}
+): number {
+  const routes = routeProfilesForRecord(record);
+  return recordInboundForRoutes(routes, routeKind, record, options);
+}
+
 function isLowSignalVoiceTranscript(record: ForwardRecord): boolean {
   if (!isVoiceTranscriptRecord(record)) {
+    return false;
+  }
+
+  // RabiSpeech has already applied its explicit hot/keyword push policy before
+  // entering forwarding. A selected hot transcript must not be silently
+  // discarded by the legacy webhook/FenneNote filler filter here.
+  if (record.adapterType === "speech") {
     return false;
   }
 
@@ -340,9 +411,6 @@ async function forwardMessageToRoute(
   }
 
   const roleContext = rolePathsForRoute(route);
-  if (options.appendRoleRecord !== false && path.resolve(roleContext.dataDir) !== path.resolve(config.memoryDataDir)) {
-    appendRecordToRoleDataDir(record, roleContext.dataDir);
-  }
 
   const adapterOutcomes: ForwardAdapterOutcome[] = [];
   let sentPacketCount = 0;
@@ -381,9 +449,7 @@ export async function forwardMessageAndWait(
   extraValues: ForwardTemplateValues = {},
   options: ForwardMessageOptions = {}
 ): Promise<ForwardDeliveryResult> {
-  const requestedRoute = "routeProfileId" in record ? String(record.routeProfileId || "").trim().toLowerCase() : "";
-  const routes = activeRouteProfiles().filter((route) => !requestedRoute || [route.id, route.name, route.agentRoleId]
-    .some((value) => String(value || "").trim().toLowerCase() === requestedRoute));
+  const routes = routeProfilesForRecord(record);
   const packets: DeliveryReplayPacket[] = [];
   if (routes.length === 0) {
     logRouteMiss(routeKind, record, "no_active_route_profile");
@@ -394,6 +460,7 @@ export async function forwardMessageAndWait(
     }
     return result;
   }
+  recordInboundForRoutes(routes, routeKind, record, options);
   const results: ForwardRouteDeliveryResult[] = [];
   for (const route of routes) {
     results.push(await forwardMessageToRoute(route, routeKind, record, extraValues, options, packets));

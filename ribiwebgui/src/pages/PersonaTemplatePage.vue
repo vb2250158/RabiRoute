@@ -1,9 +1,24 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
+import PersonaAvatar from "../components/PersonaAvatar.vue";
+import { personaAvatarClient } from "../persona/personaAvatarClient";
 import { useGatewayStore } from "../stores/gatewayStore";
+import { useSpeechStore } from "../stores/speechStore";
 import type { NotificationRule, NotificationScheduleDefinition } from "../types";
 import {
+  DEFAULT_RECENT_MESSAGE_LIMIT,
+  MAX_RECENT_MESSAGE_LIMIT,
+  RECENT_MESSAGE_ENDPOINTS,
+  normalizeRecentMessageLimit,
+  normalizeSpeechTriggerKeywords,
+  type RecentMessageEndpoint
+} from "@shared/gatewayConfigModel";
+import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
+import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
+import {
+  adapterLabel,
   configNameFor,
   defaultHeartbeatSchedule,
   isBuiltinRolePanelRule,
@@ -17,6 +32,7 @@ import {
 } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
+const speech = useSpeechStore();
 const route = useRoute();
 const router = useRouter();
 const ruleDialog = ref(false);
@@ -25,22 +41,44 @@ const ruleMatchParamsOpen = ref(true);
 const ruleRouteKindsOpen = ref(true);
 const ruleSchedulesOpen = ref(true);
 const ruleTemplateOpen = ref(true);
+const voiceProfileRefreshing = ref(false);
+const voiceProfileError = ref("");
+const voiceProfileCopyResult = ref("");
+const avatarInput = ref<HTMLInputElement | null>(null);
+const avatarSaving = ref(false);
+const avatarError = ref("");
+
+const recentMessageEndpoints: RecentMessageEndpoint[] = [...RECENT_MESSAGE_ENDPOINTS];
 
 const gateway = computed(() => store.selectedGateway);
 const runtime = computed(() => store.selectedRuntime);
 const roleOptions = computed(() => [
-  { title: "不注入人格", value: "" },
-  ...((runtime.value.roleInfo?.options || []).map(role => ({ title: role.label || role.value, value: role.value })))
+  { title: "不注入人格", value: "", avatarUrl: "" },
+  ...((runtime.value.roleInfo?.options || []).map(role => ({ title: role.label || role.value, value: role.value, avatarUrl: role.avatarUrl || "" })))
 ]);
 const selectedRole = computed(() => {
   const roleId = gateway.value?.agentRoleId || "";
   return (runtime.value.roleInfo?.options || []).find(role => role.value === roleId);
 });
+const voiceProfile = computed(() => {
+  const roleId = gateway.value?.agentRoleId || "";
+  return speech.personas.find(persona => persona.id === roleId);
+});
 const hasPersona = computed(() => Boolean(gateway.value?.agentRoleId));
 const rules = computed(() => gateway.value ? notificationRulesForGateway(gateway.value) : []);
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
-const variableEntries = computed(() => Object.entries(gateway.value?.routeVariables || {}));
+const variableEntries = computed(() => Object.entries(gateway.value?.routeVariables || {})
+  .filter(([key]) => !isSpeechRouteVariableKey(key)));
 const roleDirLabel = computed(() => runtime.value.roleInfo?.rolesDir || "./data/roles");
+const voiceProfilePath = computed(() => {
+  const roleId = gateway.value?.agentRoleId || "";
+  const personaPath = selectedRole.value?.rolePath || runtime.value.roleInfo?.selectedRolePath || "";
+  if (!personaPath) return `${roleDirLabel.value}/${roleId}/voice/voice-profile.json`;
+  const separator = personaPath.includes("\\") ? "\\" : "/";
+  const lastSeparator = Math.max(personaPath.lastIndexOf("/"), personaPath.lastIndexOf("\\"));
+  const roleDir = lastSeparator >= 0 ? personaPath.slice(0, lastSeparator) : personaPath;
+  return `${roleDir}${separator}voice${separator}voice-profile.json`;
+});
 const routeKindQuery = ref("");
 const routeKindDefinitions = computed(() => routeKindDefinitionsForGateway(gateway.value || undefined));
 const selectedRouteKindCount = computed(() => activeRule.value?.routeKinds?.length || 0);
@@ -172,10 +210,93 @@ function setRole(value: string): void {
   store.touch();
 }
 
+function chooseAvatar(): void {
+  avatarInput.value?.click();
+}
+
+async function uploadAvatar(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file || !gateway.value?.agentRoleId) return;
+  avatarSaving.value = true;
+  avatarError.value = "";
+  try {
+    await personaAvatarClient.upload(gateway.value.agentRoleId, file);
+    await Promise.all([store.load({ replaceDirtyConfig: !store.dirty }), speech.refreshPersonas()]);
+  } catch (error) {
+    avatarError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    avatarSaving.value = false;
+  }
+}
+
+async function removeAvatar(): Promise<void> {
+  if (!gateway.value?.agentRoleId) return;
+  avatarSaving.value = true;
+  avatarError.value = "";
+  try {
+    await personaAvatarClient.remove(gateway.value.agentRoleId);
+    await Promise.all([store.load({ replaceDirtyConfig: !store.dirty }), speech.refreshPersonas()]);
+  } catch (error) {
+    avatarError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    avatarSaving.value = false;
+  }
+}
+
+function setSpeechTriggerKeywords(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.speechTriggerKeywords = normalizeSpeechTriggerKeywords(value);
+  store.touch();
+}
+
+function recentMessageLimitFor(endpoint: RecentMessageEndpoint): number {
+  return normalizeRecentMessageLimit(gateway.value?.recentMessageLimits?.[endpoint]);
+}
+
+function setRecentMessageLimit(endpoint: RecentMessageEndpoint, value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.recentMessageLimits = {
+    ...(gateway.value.recentMessageLimits || {}),
+    [endpoint]: normalizeRecentMessageLimit(value)
+  };
+  store.touch();
+}
+
+async function refreshVoiceProfile(): Promise<void> {
+  voiceProfileRefreshing.value = true;
+  voiceProfileError.value = "";
+  try {
+    await speech.refreshPersonas();
+  } catch (error) {
+    voiceProfileError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    voiceProfileRefreshing.value = false;
+  }
+}
+
+async function copyVoiceProfilePath(): Promise<void> {
+  voiceProfileCopyResult.value = "";
+  try {
+    if (!navigator.clipboard) throw new Error("当前浏览器不支持剪贴板写入");
+    await navigator.clipboard.writeText(voiceProfilePath.value);
+    voiceProfileCopyResult.value = "voice-profile.json 路径已复制";
+  } catch (error) {
+    voiceProfileCopyResult.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
 function updateVariableKey(oldKey: string, value: string, event: Event): void {
   const target = event.target as HTMLInputElement | null;
   store.updateRouteVariable(oldKey, target?.value || oldKey, value);
 }
+
+watch(() => gateway.value?.agentRoleId, (roleId) => {
+  voiceProfileCopyResult.value = "";
+  if (roleId) void refreshVoiceProfile();
+  else voiceProfileError.value = "";
+}, { immediate: true });
 
 // URL ↔ gateway 双向同步（放最后避免 TDZ）
 watch([() => route.params.id as string, () => store.gateways], ([id]) => {
@@ -209,9 +330,12 @@ watch(() => store.selectedGatewayId, (id) => {
 
     <template v-if="gateway">
       <div class="summary-grid">
-        <div class="summary-tile">
-          <span>当前人格</span>
-          <b data-no-i18n>{{ gateway.agentRoleId || "不注入人格" }}</b>
+        <div class="summary-tile persona-summary-tile">
+          <PersonaAvatar :role-id="gateway.agentRoleId || ''" :avatar-url="selectedRole?.avatarUrl" :size="42" />
+          <div>
+            <span>当前人格</span>
+            <b data-no-i18n>{{ gateway.agentRoleId || "不注入人格" }}</b>
+          </div>
         </div>
         <div class="summary-tile">
           <span>消息模板</span>
@@ -237,10 +361,37 @@ watch(() => store.selectedGatewayId, (id) => {
               :items="roleOptions"
               label="指向人格"
               @update:model-value="value => setRole(String(value || ''))"
-            />
+            >
+              <template #item="{ props: itemProps, item }">
+                <v-list-item v-bind="itemProps">
+                  <template #prepend><PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="32" /></template>
+                </v-list-item>
+              </template>
+              <template #selection="{ item }">
+                <div class="d-flex align-center ga-2">
+                  <PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="26" />
+                  <span>{{ item.raw.title }}</span>
+                </div>
+              </template>
+            </v-select>
             <v-text-field v-if="hasPersona" v-model="gateway.agentRoleFile" label="人格文件名" placeholder="persona.md" @update:model-value="store.touch" />
           </div>
           <template v-if="hasPersona">
+            <div class="persona-identity-row mt-3">
+              <PersonaAvatar :role-id="gateway.agentRoleId || ''" :avatar-url="selectedRole?.avatarUrl" :size="76" rounded="xl" />
+              <div class="persona-identity-copy">
+                <strong data-no-i18n>{{ gateway.agentRoleId }}</strong>
+                <span>头像会用于人格选择、总览、语音和本地角色面板；未设置时显示人格首字。</span>
+                <div class="d-flex ga-2 flex-wrap mt-2">
+                  <v-btn size="small" color="secondary" variant="tonal" prepend-icon="mdi-image-edit-outline" :loading="avatarSaving" @click="chooseAvatar">
+                    {{ selectedRole?.avatarConfigured ? "更换头像" : "设置头像" }}
+                  </v-btn>
+                  <v-btn v-if="selectedRole?.avatarConfigured" size="small" color="error" variant="text" prepend-icon="mdi-image-remove-outline" :disabled="avatarSaving" @click="removeAvatar">移除</v-btn>
+                </div>
+                <input ref="avatarInput" class="d-none" type="file" :accept="PERSONA_AVATAR_ACCEPT" @change="uploadAvatar" />
+              </div>
+            </div>
+            <v-alert v-if="avatarError" class="mt-3" type="error" variant="tonal" density="compact">{{ avatarError }}</v-alert>
             <div class="status-row mt-3"><span>角色目录</span><b data-no-i18n>{{ roleDirLabel }}</b></div>
             <div class="status-row"><span>人格路径</span><b data-no-i18n>{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "-" }}</b></div>
           </template>
@@ -276,6 +427,161 @@ watch(() => store.selectedGatewayId, (id) => {
           </div>
         </v-card>
       </div>
+
+      <div v-if="hasPersona" class="two-column">
+        <v-card class="app-card glass-card section-card">
+          <div class="section-title-row">
+            <div>
+              <div class="section-title">人格语音</div>
+              <div class="section-note">
+                TTS 模型、声线、语言、语速和发声说明统一由当前人格的 <code>voice/voice-profile.json</code> 管理。
+              </div>
+            </div>
+            <div class="d-flex ga-2 flex-wrap">
+              <v-btn
+                size="small"
+                variant="text"
+                prepend-icon="mdi-refresh"
+                :loading="voiceProfileRefreshing"
+                @click="refreshVoiceProfile"
+              >
+                刷新摘要
+              </v-btn>
+              <v-btn
+                size="small"
+                variant="tonal"
+                prepend-icon="mdi-account-edit-outline"
+                @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')"
+              >
+                打开 persona.md
+              </v-btn>
+              <v-btn
+                size="small"
+                color="secondary"
+                variant="tonal"
+                prepend-icon="mdi-content-copy"
+                @click="copyVoiceProfilePath"
+              >
+                复制 voice-profile 路径
+              </v-btn>
+              <v-btn size="small" variant="text" prepend-icon="mdi-account-voice" to="/speech">
+                测试人格 TTS
+              </v-btn>
+            </div>
+          </div>
+          <v-alert v-if="voiceProfileError" type="warning" variant="tonal" density="compact" class="mb-3">
+            {{ voiceProfileError }}
+          </v-alert>
+          <v-alert v-if="voiceProfileCopyResult" type="info" variant="tonal" density="compact" class="mb-3">
+            {{ voiceProfileCopyResult }}
+          </v-alert>
+          <div class="persona-speech-summary">
+            <div>
+              <span>声线状态</span>
+              <b>{{ voiceProfile ? (voiceProfile.voiceReady ? "已配置人格声线" : "使用模型默认声线") : "尚未读取" }}</b>
+            </div>
+            <div>
+              <span>TTS 模型</span>
+              <b data-no-i18n>{{ voiceProfile?.defaultModel || "未配置" }}</b>
+            </div>
+            <div>
+              <span>语言</span>
+              <b data-no-i18n>{{ voiceProfile?.language || "未配置" }}</b>
+            </div>
+            <div>
+              <span>语速</span>
+              <b>{{ voiceProfile?.speed != null ? `${voiceProfile.speed}×` : "未配置" }}</b>
+            </div>
+          </div>
+          <v-textarea
+            class="mt-3"
+            :model-value="voiceProfile?.instructions || voiceProfile?.voiceStyleSummary || '未配置'"
+            label="发声说明 / 表达方式"
+            rows="3"
+            auto-grow
+            readonly
+            hide-details
+          />
+          <v-text-field
+            class="mt-3"
+            :model-value="voiceProfilePath"
+            label="voice-profile.json 路径"
+            readonly
+            hide-details
+            data-no-i18n
+          />
+          <v-alert class="mt-3" type="info" variant="tonal" density="compact">
+            <code>voice-profile.json</code> 是人格 TTS 的唯一配置入口。WebGUI 只读取安全摘要，不显示真实 voice ID 或 API key；复制路径后可直接编辑模型、声线绑定、语言、语速和发声说明。
+          </v-alert>
+        </v-card>
+
+        <v-card class="app-card glass-card section-card">
+          <div class="section-title-row">
+            <div>
+              <div class="section-title">语音唤醒</div>
+              <div class="section-note">关键词归人格所有，所有绑定该人格的语音 Route 共用。</div>
+            </div>
+            <v-chip
+              :color="gateway.speechPushMode === 'keyword' ? 'success' : 'secondary'"
+              variant="tonal"
+            >
+              {{ gateway.speechPushMode === "keyword" ? "当前 Route：关键词唤醒" : "当前 Route：热投递" }}
+            </v-chip>
+          </div>
+          <v-combobox
+            :model-value="gateway.speechTriggerKeywords || []"
+            label="语音唤醒关键词"
+            multiple
+            chips
+            closable-chips
+            clearable
+            hint="输入关键词后按 Enter。空白、重复项和大小写匹配由配置层统一归一化。"
+            persistent-hint
+            @update:model-value="setSpeechTriggerKeywords"
+          />
+          <v-alert class="mt-3" type="info" variant="tonal" density="compact">
+            关闭 Route 的“热投递”后，只有 ASR 文本命中这里的关键词才提醒 Agent；所有 ASR 仍会持续记录。
+          </v-alert>
+          <v-alert
+            v-if="gateway.speechPushMode === 'keyword' && !(gateway.speechTriggerKeywords || []).length"
+            class="mt-3"
+            type="warning"
+            variant="tonal"
+            density="compact"
+          >
+            当前关键词为空：转写会继续记录，但不会唤醒 Agent。建议至少加入人格名和常用称呼。
+          </v-alert>
+        </v-card>
+      </div>
+
+      <v-card v-if="hasPersona" class="app-card glass-card section-card">
+        <div class="section-title-row">
+          <div>
+            <div class="section-title">最近消息上下文</div>
+            <div class="section-note">分别控制每个消息端自动注入给当前人格的最近消息数量。</div>
+          </div>
+          <v-chip color="secondary" variant="tonal">
+            默认 {{ DEFAULT_RECENT_MESSAGE_LIMIT }} · 上限 {{ MAX_RECENT_MESSAGE_LIMIT }}
+          </v-chip>
+        </div>
+        <v-alert type="info" variant="tonal" density="compact" class="mb-3">
+          设为 0 只停止把该消息端历史自动注入 Agent，不会删除已有消息记录或审计数据。
+        </v-alert>
+        <div class="rule-list">
+          <SpeechParameterSlider
+            v-for="endpoint in recentMessageEndpoints"
+            :key="endpoint"
+            :label="adapterLabel(endpoint)"
+            :min="0"
+            :max="MAX_RECENT_MESSAGE_LIMIT"
+            :step="1"
+            suffix="条"
+            :hint="`0 表示不注入 ${adapterLabel(endpoint)} 历史；未单独设置时使用 ${DEFAULT_RECENT_MESSAGE_LIMIT} 条。`"
+            :model-value="recentMessageLimitFor(endpoint)"
+            @update:model-value="value => setRecentMessageLimit(endpoint, value)"
+          />
+        </div>
+      </v-card>
 
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">

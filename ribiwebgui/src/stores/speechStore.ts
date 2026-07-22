@@ -2,18 +2,30 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import type {
   SpeechAudioInput,
-  SpeechMessageAccepted,
+  SpeechAudioStreamSelectionCommand,
+  SpeechAudioStreamStatus,
   SpeechMessageCommand,
+  SpeechMessageResult,
   SpeechMicrophoneStartCommand,
+  SpeechMicrophoneSettingsCommand,
   SpeechMicrophoneStatus,
   SpeechModel,
   SpeechPersona,
   SpeechPlaybackStatus,
+  SpeechRecord,
   SpeechRuntimeStatus,
+  SpeechSpeakerBinding,
+  SpeechSpeakerBindingCommand,
+  SpeechSpeakerProfile,
+  SpeechSpeakerProfileCreateCommand,
+  SpeechSpeakerProfileDeleteResult,
+  SpeechSpeakerProfileUpdateCommand,
+  SpeechSpeakerRegistry,
   SpeechSynthesisCommand
 } from "@shared/speechControlContract";
 import {
   speechControlClient,
+  type SpeechRecordsQuery,
   type SpeechSynthesisResult,
   type SpeechTranscriptionResult
 } from "../speech/speechControlClient";
@@ -26,10 +38,15 @@ export const useSpeechStore = defineStore("speech-control", () => {
   const status = ref<SpeechRuntimeStatus | null>(null);
   const models = ref<SpeechModel[]>([]);
   const personas = ref<SpeechPersona[]>([]);
+  const records = ref<SpeechRecord[]>([]);
+  const speakerRegistry = ref<SpeechSpeakerRegistry | null>(null);
   const playback = ref<SpeechPlaybackStatus | null>(null);
   const microphone = ref<SpeechMicrophoneStatus | null>(null);
   const audioInputs = ref<SpeechAudioInput[]>([]);
+  const audioStream = ref<SpeechAudioStreamStatus | null>(null);
   const loading = ref(false);
+  const recordsLoading = ref(false);
+  const speakersLoading = ref(false);
   const error = ref("");
   const listening = computed(() => microphone.value?.running === true);
   const playbackBusy = computed(() => Boolean(playback.value?.current));
@@ -38,6 +55,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
   let statusTimer = 0;
   let playbackTimer = 0;
   let microphoneTimer = 0;
+  let audioStreamTimer = 0;
   let microphoneRefreshing = false;
   let playbackRefreshing = false;
 
@@ -61,6 +79,57 @@ export const useSpeechStore = defineStore("speech-control", () => {
 
   async function refreshPersonas(): Promise<void> {
     personas.value = (await speechControlClient.personas()).personas;
+  }
+
+  async function refreshRecords(query: SpeechRecordsQuery = {}): Promise<void> {
+    recordsLoading.value = true;
+    try {
+      records.value = (await speechControlClient.records(query)).records;
+    } finally {
+      recordsLoading.value = false;
+    }
+  }
+
+  async function refreshSpeakers(sessionId?: string): Promise<void> {
+    speakersLoading.value = true;
+    try {
+      speakerRegistry.value = await speechControlClient.speakers(sessionId);
+    } finally {
+      speakersLoading.value = false;
+    }
+  }
+
+  async function createSpeaker(command: SpeechSpeakerProfileCreateCommand): Promise<SpeechSpeakerProfile> {
+    const created = await speechControlClient.createSpeaker(command);
+    await refreshSpeakers();
+    return created;
+  }
+
+  async function updateSpeaker(
+    speakerId: string,
+    command: SpeechSpeakerProfileUpdateCommand
+  ): Promise<SpeechSpeakerProfile> {
+    const updated = await speechControlClient.updateSpeaker(speakerId, command);
+    await refreshSpeakers();
+    return updated;
+  }
+
+  async function deleteSpeaker(speakerId: string): Promise<SpeechSpeakerProfileDeleteResult> {
+    const deleted = await speechControlClient.deleteSpeaker(speakerId);
+    await refreshSpeakers();
+    return deleted;
+  }
+
+  async function bindSpeaker(command: SpeechSpeakerBindingCommand): Promise<SpeechSpeakerBinding> {
+    const binding = await speechControlClient.bindSpeaker(command);
+    await refreshSpeakers();
+    return binding;
+  }
+
+  async function unbindSpeaker(sessionId: string, recordId: string, speakerLabel: string): Promise<SpeechSpeakerBinding> {
+    const binding = await speechControlClient.unbindSpeaker(sessionId, recordId, speakerLabel);
+    await refreshSpeakers();
+    return binding;
   }
 
   async function refreshAudioInputs(): Promise<void> {
@@ -87,12 +156,37 @@ export const useSpeechStore = defineStore("speech-control", () => {
     }
   }
 
+  async function refreshAudioStreams(): Promise<void> {
+    audioStream.value = (await speechControlClient.audioStreams()).audioStream;
+  }
+
+  async function selectAudioStream(command: SpeechAudioStreamSelectionCommand): Promise<SpeechAudioStreamStatus> {
+    audioStream.value = await speechControlClient.selectAudioStream(command);
+    await refreshMicrophone();
+    return audioStream.value;
+  }
+
+  async function audioStreamToken(): Promise<string> {
+    return (await speechControlClient.audioStreamToken()).token;
+  }
+
+  async function updateMicrophoneSettings(command: SpeechMicrophoneSettingsCommand): Promise<SpeechMicrophoneStatus> {
+    microphone.value = await speechControlClient.updateMicrophoneSettings(command);
+    return microphone.value;
+  }
+
+  async function reconcileMicrophone(): Promise<SpeechMicrophoneStatus> {
+    microphone.value = await speechControlClient.reconcileMicrophone();
+    return microphone.value;
+  }
+
   async function refreshAll(): Promise<void> {
     await Promise.all([
       refreshStatus(),
       refreshModels(),
       refreshPersonas(),
       refreshAudioInputs(),
+      refreshAudioStreams(),
       refreshMicrophone(),
       refreshPlayback()
     ]);
@@ -103,15 +197,18 @@ export const useSpeechStore = defineStore("speech-control", () => {
     statusTimer = window.setInterval(() => void refreshStatus().catch(rememberError), 15_000);
     playbackTimer = window.setInterval(() => void refreshPlayback().catch(rememberError), 1_000);
     microphoneTimer = window.setInterval(() => void refreshMicrophone().catch(rememberError), 400);
+    audioStreamTimer = window.setInterval(() => void refreshAudioStreams().catch(rememberError), 3_000);
   }
 
   function stopPolling(): void {
     window.clearInterval(statusTimer);
     window.clearInterval(playbackTimer);
     window.clearInterval(microphoneTimer);
+    window.clearInterval(audioStreamTimer);
     statusTimer = 0;
     playbackTimer = 0;
     microphoneTimer = 0;
+    audioStreamTimer = 0;
   }
 
   async function acquire(): Promise<() => void> {
@@ -146,7 +243,12 @@ export const useSpeechStore = defineStore("speech-control", () => {
     return playback.value;
   }
 
-  function submitTranscript(command: SpeechMessageCommand): Promise<SpeechMessageAccepted> {
+  async function setPlaybackVolume(volume: number): Promise<SpeechPlaybackStatus> {
+    playback.value = await speechControlClient.setPlaybackVolume({ volume });
+    return playback.value;
+  }
+
+  function submitTranscript(command: SpeechMessageCommand): Promise<SpeechMessageResult> {
     return speechControlClient.submitTranscript(command);
   }
 
@@ -156,18 +258,31 @@ export const useSpeechStore = defineStore("speech-control", () => {
     return result;
   }
 
-  function transcribe(blob: Blob, name: string, model: string, language?: string): Promise<SpeechTranscriptionResult> {
-    return speechControlClient.transcribe(blob, name, model, language);
+  async function transcribe(
+    blob: Blob,
+    name: string,
+    model: string,
+    language?: string,
+    sessionId?: string,
+    routeId?: string
+  ): Promise<SpeechTranscriptionResult> {
+    const result = await speechControlClient.transcribe(blob, name, model, language, sessionId, routeId);
+    return result;
   }
 
   return {
     status,
     models,
     personas,
+    records,
+    speakerRegistry,
     playback,
     microphone,
     audioInputs,
+    audioStream,
     loading,
+    recordsLoading,
+    speakersLoading,
     error,
     listening,
     playbackBusy,
@@ -175,13 +290,26 @@ export const useSpeechStore = defineStore("speech-control", () => {
     refreshStatus,
     refreshModels,
     refreshPersonas,
+    refreshRecords,
+    refreshSpeakers,
     refreshAudioInputs,
+    refreshAudioStreams,
+    selectAudioStream,
+    audioStreamToken,
+    updateMicrophoneSettings,
+    reconcileMicrophone,
     refreshMicrophone,
     refreshPlayback,
     startMicrophone,
     stopMicrophone,
     stopPlayback,
+    setPlaybackVolume,
     submitTranscript,
+    createSpeaker,
+    updateSpeaker,
+    deleteSpeaker,
+    bindSpeaker,
+    unbindSpeaker,
     synthesize,
     transcribe
   };

@@ -3,11 +3,14 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
-  resolveSpeechRouteProfile,
   type SpeechMicrophoneConfig,
   type SpeechProvider
 } from "@shared/speechControlContract";
+import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
+import SpeechRecordsAndSpeakers from "../components/SpeechRecordsAndSpeakers.vue";
+import SpeechHostMonitor from "../components/SpeechHostMonitor.vue";
 import { useGatewayStore } from "../stores/gatewayStore";
+import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { useSpeechStore } from "../stores/speechStore";
 import { gatewayAdapterTypes } from "../utils/gatewayHelpers";
 
@@ -21,6 +24,7 @@ const {
   personas,
   microphone: microphoneStatus,
   playback,
+  audioStream,
   loading
 } = storeToRefs(speech);
 const activeKind = ref<"tts" | "asr">("tts");
@@ -28,8 +32,9 @@ const requestError = ref("");
 const ttsModel = ref("");
 const asrModel = ref("");
 const voice = ref(DEFAULT_SPEECH_ROUTE_PROFILE.voice);
-const language = ref(DEFAULT_SPEECH_ROUTE_PROFILE.language);
-const ttsText = ref("你好，我是由 RabiSpeech 本地模型驱动的声音。");
+const ttsLanguage = ref(DEFAULT_SPEECH_ROUTE_PROFILE.language);
+const asrLanguage = ref(DEFAULT_SPEECH_ROUTE_PROFILE.language);
+const ttsText = ref("你好，我是由 RabiSpeech 语音服务驱动的声音。");
 const instructions = ref("");
 const speed = ref(1);
 const queuePlayback = ref(true);
@@ -38,9 +43,6 @@ const asrBusy = ref(false);
 const actionMessage = ref("");
 const transcript = ref("");
 const transcriptHistory = ref<Array<{ time: string; text: string; model: string }>>([]);
-const selectedGatewayId = ref("");
-const autoSubmit = ref(true);
-const sessionId = ref<string>(globalThis.crypto?.randomUUID?.() || `speech-${Date.now()}`);
 const listening = computed(() => microphoneStatus.value?.running === true);
 const utteranceActive = computed(() => microphoneStatus.value?.utteranceActive === true);
 const micLevel = computed(() => Number(microphoneStatus.value?.level || 0));
@@ -55,8 +57,16 @@ const preRollMs = ref(DEFAULT_SPEECH_ROUTE_PROFILE.preRollMs);
 const audioInputs = ref<AudioInput[]>([]);
 const selectedAudioInput = ref<number | null>(null);
 const microphoneConfigLoaded = ref(false);
+const microphoneSettingsSaving = ref(false);
 const playbackBusy = computed(() => Boolean(playback.value?.current));
 const playbackQueued = computed(() => Number(playback.value?.queued || 0));
+const playbackVolume = ref(100);
+const playbackVolumeSaving = ref(false);
+const audioStreamSaving = ref(false);
+let playbackVolumeTimer = 0;
+let pendingPlaybackVolume: number | null = null;
+let microphoneSettingsTimer = 0;
+let microphoneSettingsPending = false;
 
 const providers = computed(() => status.value?.providers[activeKind.value] ?? []);
 const computerName = computed(() => store.meta.rabiName || store.meta.computerName || "当前电脑");
@@ -75,12 +85,25 @@ const ttsModels = computed(() => models.value.filter(item => item.capability ===
 const asrModels = computed(() => models.value.filter(item => item.capability === "asr"));
 const personaOptions = computed(() => personas.value.map(item => ({
   title: item.voiceReady ? `${item.id} · 已配置声线` : `${item.id} · 使用模型默认声线`,
-  value: item.id
+  value: item.id,
+  avatarUrl: item.avatarUrl || ""
 })));
-const speechRoutes = computed(() => store.gateways
-  .filter(gateway => gatewayAdapterTypes(gateway).includes("speech"))
-  .map(gateway => ({ title: gateway.name || gateway.routeName || gateway.id, value: gateway.id })));
+const selectedPersona = computed(() => personas.value.find(item => item.id === voice.value));
+const speechSubscriberRoutes = computed(() => store.gateways
+  .filter(gateway => gateway.enabled !== false && gatewayAdapterTypes(gateway).includes("speech")));
 const micPercent = computed(() => Math.min(100, Math.round((micLevel.value / Math.max(threshold.value, 0.001)) * 50)));
+const selectedAudioStream = computed(() => audioStream.value?.source === "remote" && audioStream.value.selectedClientId
+  ? `remote:${audioStream.value.selectedClientId}`
+  : "local");
+const audioStreamOptions = computed(() => [
+  { title: `本机 · ${computerName.value}`, value: "local", subtitle: "使用当前电脑的麦克风和扬声器" },
+  ...(audioStream.value?.clients || []).map(client => ({
+    title: `${client.name} · 远程 Rabi 语音客户端`,
+    value: `remote:${client.id}`,
+    subtitle: client.online ? `在线 · ${client.sampleRate} Hz` : "离线"
+  }))
+]);
+const selectedAudioStreamLabel = computed(() => audioStreamOptions.value.find(item => item.value === selectedAudioStream.value)?.title || "本机");
 
 function providerName(provider: SpeechProvider): string {
   if (provider.id === "local-tts") return "RabiSpeech 本地 TTS 路由";
@@ -125,7 +148,8 @@ async function refreshModels(): Promise<void> {
       || "tts-local";
   }
   if (!asrModels.value.some(item => item.id === asrModel.value)) {
-    asrModel.value = asrModels.value.find(item => item.available && item.id.includes("faster-whisper/small"))?.id
+    asrModel.value = asrModels.value.find(item => item.available && item.id.endsWith("/paraformer-v2"))?.id
+      || asrModels.value.find(item => item.available && item.id.includes("faster-whisper/small"))?.id
       || asrModels.value.find(item => item.available)?.id
       || asrModels.value[0]?.id
       || "asr-local";
@@ -157,12 +181,12 @@ async function synthesize(): Promise<void> {
       voice: voice.value || "default",
       responseFormat: "wav",
       speed: speed.value,
-      language: language.value || null,
+      language: ttsLanguage.value || null,
       instructions: instructions.value || null,
       sampleRate: null,
       play: queuePlayback.value,
-      sessionId: sessionId.value,
-      routeId: selectedGatewayId.value || null
+      sessionId: null,
+      routeId: null
     });
     if (queuePlayback.value) {
       actionMessage.value = result.playbackJob ? `已进入全局播放队列：${result.playbackJob}` : "已完成合成并提交播放。";
@@ -182,31 +206,25 @@ async function synthesize(): Promise<void> {
   }
 }
 
-async function submitTranscript(text = transcript.value): Promise<void> {
-  const normalized = text.trim();
-  if (!normalized) return;
-  if (!selectedGatewayId.value) throw new Error("请先选择配置了语音消息端的 Route。");
-  await speech.submitTranscript({
-    routeId: selectedGatewayId.value,
-    text: normalized,
-    sessionId: sessionId.value
-  });
-  actionMessage.value = `已送入 Route：${selectedGatewayId.value}`;
-}
-
 async function transcribeBlob(blob: Blob, name = "speech.wav"): Promise<void> {
   if (!asrModel.value) throw new Error("没有可用 ASR 模型。");
   asrBusy.value = true;
   requestError.value = "";
-  actionMessage.value = "正在用本机模型识别……";
+  actionMessage.value = "正在使用所选 ASR 模型识别……";
   try {
-    const result = await speech.transcribe(blob, name, asrModel.value, language.value || undefined);
+    const result = await speech.transcribe(
+      blob,
+      name,
+      asrModel.value,
+      asrLanguage.value || undefined,
+      undefined,
+      undefined
+    );
     transcript.value = String(result.text || "").trim();
     if (!transcript.value) throw new Error("ASR 没有返回可用文本。");
     transcriptHistory.value.unshift({ time: new Date().toLocaleTimeString(), text: transcript.value, model: asrModel.value });
     transcriptHistory.value = transcriptHistory.value.slice(0, 20);
     actionMessage.value = "本机 ASR 识别完成。";
-    if (autoSubmit.value && selectedGatewayId.value) await submitTranscript(transcript.value);
   } finally {
     asrBusy.value = false;
   }
@@ -240,9 +258,7 @@ async function refreshAudioInputs(): Promise<void> {
 function applyMicrophoneConfig(config: SpeechMicrophoneConfig): void {
   if (typeof config.device === "number") selectedAudioInput.value = config.device;
   if (config.asrModel) asrModel.value = config.asrModel;
-  if (typeof config.language === "string") language.value = config.language;
-  if (config.routeId) selectedGatewayId.value = config.routeId;
-  if (config.sessionId) sessionId.value = config.sessionId;
+  if (typeof config.language === "string") asrLanguage.value = config.language;
   threshold.value = config.recordThreshold;
   transcribeThreshold.value = config.transcribeThreshold;
   adaptiveThreshold.value = config.adaptiveThreshold;
@@ -251,7 +267,6 @@ function applyMicrophoneConfig(config: SpeechMicrophoneConfig): void {
   maxUtteranceMs.value = config.maxUtteranceMs;
   preRollMs.value = config.preRollMs;
   inputGain.value = config.inputGain;
-  autoSubmit.value = config.autoSubmit;
 }
 
 async function refreshMicrophone(): Promise<void> {
@@ -274,70 +289,149 @@ async function refreshMicrophone(): Promise<void> {
   }
 }
 
-async function startListening(): Promise<void> {
-  if (listening.value) return;
+function microphoneSettingsCommand() {
+  const previous = microphoneStatus.value?.config;
+  return {
+    device: selectedAudioInput.value,
+    sampleRate: previous?.sampleRate ?? 16_000,
+    chunkMs: previous?.chunkMs ?? 100,
+    preRollMs: preRollMs.value,
+    recordThreshold: threshold.value,
+    transcribeThreshold: Math.max(threshold.value, transcribeThreshold.value),
+    adaptiveThreshold: adaptiveThreshold.value,
+    adaptiveMultiplier: previous?.adaptiveMultiplier ?? 2.5,
+    adaptiveMargin: previous?.adaptiveMargin ?? 0.004,
+    silenceMs: silenceMs.value,
+    minUtteranceMs: minUtteranceMs.value,
+    maxUtteranceMs: maxUtteranceMs.value,
+    inputGain: inputGain.value,
+    asrModel: asrModel.value,
+    language: asrLanguage.value || null,
+    prompt: previous?.prompt ?? null,
+    suppressDuringPlayback: true
+  };
+}
+
+async function flushMicrophoneSettings(): Promise<void> {
+  if (!microphoneConfigLoaded.value || microphoneSettingsSaving.value || !microphoneSettingsPending) return;
+  microphoneSettingsPending = false;
+  microphoneSettingsSaving.value = true;
+  try {
+    await speech.updateMicrophoneSettings(microphoneSettingsCommand());
+    requestError.value = "";
+    actionMessage.value = listening.value
+      ? "主机语音设置已保存，常驻监听已按新参数恢复。"
+      : "主机语音设置已保存；开启任意 Route 的语音消息端后会自动开始监听。";
+  } catch (error) {
+    requestError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    microphoneSettingsSaving.value = false;
+    if (microphoneSettingsPending) void flushMicrophoneSettings();
+  }
+}
+
+async function chooseAudioStream(value: string | null): Promise<void> {
+  if (!value || audioStreamSaving.value || value === selectedAudioStream.value) return;
+  audioStreamSaving.value = true;
   requestError.value = "";
   try {
-    const previous = microphoneStatus.value?.config;
-    await speech.startMicrophone({
-      device: selectedAudioInput.value,
-      sampleRate: previous?.sampleRate ?? 16_000,
-      chunkMs: previous?.chunkMs ?? 100,
-      preRollMs: preRollMs.value,
-      recordThreshold: threshold.value,
-      transcribeThreshold: Math.max(threshold.value, transcribeThreshold.value),
-      adaptiveThreshold: adaptiveThreshold.value,
-      adaptiveMultiplier: previous?.adaptiveMultiplier ?? 2.5,
-      adaptiveMargin: previous?.adaptiveMargin ?? 0.004,
-      silenceMs: silenceMs.value,
-      minUtteranceMs: minUtteranceMs.value,
-      maxUtteranceMs: maxUtteranceMs.value,
-      inputGain: inputGain.value,
-      asrModel: asrModel.value,
-      language: language.value || null,
-      prompt: previous?.prompt ?? null,
-      routeId: selectedGatewayId.value || null,
-      sessionId: sessionId.value,
-      autoSubmit: autoSubmit.value && Boolean(selectedGatewayId.value),
-      suppressDuringPlayback: true
-    });
-    actionMessage.value = "RabiSpeech 常驻监听已启动；关闭浏览器页面后仍会继续转录。";
+    if (value === "local") {
+      await speech.selectAudioStream({ source: "local" });
+    } else {
+      await speech.selectAudioStream({ source: "remote", clientId: value.slice("remote:".length) });
+    }
+    actionMessage.value = value === "local"
+      ? "音频流已切换到本机麦克风和扬声器。"
+      : "音频流已切换到远程 Rabi 语音客户端；VAD、ASR、Route 广播和 TTS 队列仍由本机控制。";
+  } catch (error) {
+    requestError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    audioStreamSaving.value = false;
+  }
+}
+
+async function copyAudioStreamToken(): Promise<void> {
+  requestError.value = "";
+  try {
+    const token = await speech.audioStreamToken();
+    await navigator.clipboard.writeText(token);
+    actionMessage.value = "客户端连接密钥已复制；只粘贴到会议室电脑的私有 config.json。";
   } catch (error) {
     requestError.value = error instanceof Error ? error.message : String(error);
   }
 }
 
-async function stopListening(): Promise<void> {
-  await speech.stopMicrophone();
-  actionMessage.value = "RabiSpeech 常驻监听已停止。";
+function scheduleMicrophoneSettingsSave(): void {
+  if (!microphoneConfigLoaded.value) return;
+  microphoneSettingsPending = true;
+  window.clearTimeout(microphoneSettingsTimer);
+  microphoneSettingsTimer = window.setTimeout(() => {
+    microphoneSettingsTimer = 0;
+    void flushMicrophoneSettings();
+  }, 500);
 }
 
 async function stopPlayback(): Promise<void> {
   await speech.stopPlayback();
 }
 
-function applySelectedRoute(): void {
-  const route = store.gateways.find(item => item.id === selectedGatewayId.value);
-  if (!route) return;
-  const profile = resolveSpeechRouteProfile(route.routeVariables, route.agentRoleId || DEFAULT_SPEECH_ROUTE_PROFILE.voice);
-  asrModel.value = profile.asrModel;
-  ttsModel.value = profile.ttsModel;
-  voice.value = profile.voice;
-  language.value = profile.language;
-  speed.value = profile.speed;
-  threshold.value = profile.recordThreshold;
-  transcribeThreshold.value = profile.transcribeThreshold;
-  adaptiveThreshold.value = profile.adaptiveThreshold;
-  silenceMs.value = profile.silenceMs;
-  minUtteranceMs.value = profile.minUtteranceMs;
-  maxUtteranceMs.value = profile.maxUtteranceMs;
-  preRollMs.value = profile.preRollMs;
-  inputGain.value = profile.inputGain;
-  autoSubmit.value = profile.autoSubmit;
-  queuePlayback.value = profile.autoPlay;
+function normalizePlaybackVolume(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, Math.round(parsed))) : 100;
 }
 
-watch(selectedGatewayId, applySelectedRoute);
+async function flushPlaybackVolume(): Promise<void> {
+  if (playbackVolumeSaving.value || pendingPlaybackVolume == null) return;
+  const nextVolume = pendingPlaybackVolume;
+  pendingPlaybackVolume = null;
+  playbackVolumeSaving.value = true;
+  try {
+    const next = await speech.setPlaybackVolume(nextVolume);
+    if (pendingPlaybackVolume == null) playbackVolume.value = normalizePlaybackVolume(next.volume);
+    requestError.value = "";
+  } catch (error) {
+    requestError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    playbackVolumeSaving.value = false;
+    if (pendingPlaybackVolume != null) void flushPlaybackVolume();
+  }
+}
+
+function schedulePlaybackVolume(value: number): void {
+  const normalized = normalizePlaybackVolume(value);
+  playbackVolume.value = normalized;
+  pendingPlaybackVolume = normalized;
+  window.clearTimeout(playbackVolumeTimer);
+  playbackVolumeTimer = window.setTimeout(() => {
+    playbackVolumeTimer = 0;
+    void flushPlaybackVolume();
+  }, 120);
+}
+
+watch(() => playback.value?.volume, volume => {
+  if (playbackVolumeSaving.value || playbackVolumeTimer || pendingPlaybackVolume != null) return;
+  if (volume != null) playbackVolume.value = normalizePlaybackVolume(volume);
+}, { immediate: true });
+watch(selectedPersona, persona => {
+  if (!persona) return;
+  if (persona.defaultModel) ttsModel.value = persona.defaultModel;
+  if (persona.language) ttsLanguage.value = persona.language;
+  instructions.value = persona.instructions || persona.voiceStyleSummary || "";
+  speed.value = persona.speed ?? 1;
+});
+watch([
+  asrModel,
+  asrLanguage,
+  selectedAudioInput,
+  threshold,
+  transcribeThreshold,
+  adaptiveThreshold,
+  silenceMs,
+  minUtteranceMs,
+  maxUtteranceMs,
+  preRollMs,
+  inputGain
+], scheduleMicrophoneSettingsSave);
 
 let releaseSpeech: (() => void) | undefined;
 onMounted(async () => {
@@ -345,9 +439,12 @@ onMounted(async () => {
   await Promise.all([refreshModels(), refreshPersonas(), refreshAudioInputs(), refreshMicrophone()]).catch(error => {
     requestError.value = error instanceof Error ? error.message : String(error);
   });
-  if (!selectedGatewayId.value && speechRoutes.value[0]) selectedGatewayId.value = speechRoutes.value[0].value;
 });
-onBeforeUnmount(() => releaseSpeech?.());
+onBeforeUnmount(() => {
+  window.clearTimeout(playbackVolumeTimer);
+  window.clearTimeout(microphoneSettingsTimer);
+  releaseSpeech?.();
+});
 </script>
 
 <template>
@@ -371,6 +468,35 @@ onBeforeUnmount(() => releaseSpeech?.());
         <v-tab value="tts" prepend-icon="mdi-account-voice">TTS 语音合成</v-tab>
         <v-tab value="asr" prepend-icon="mdi-waveform">ASR 语音识别</v-tab>
       </v-tabs>
+    </v-card>
+
+    <v-card class="app-card glass-card speech-audio-stream-card">
+      <div class="speech-audio-stream-copy">
+        <div class="speech-audio-stream-icon"><v-icon>mdi-access-point</v-icon></div>
+        <div>
+          <div class="stat-label">音频流</div>
+          <strong>{{ selectedAudioStreamLabel }}</strong>
+          <p>客户端只提供远程麦克风和喇叭；切句、ASR、Route 投递、人格 TTS 与防回流仍在当前 Rabi 主机执行。</p>
+        </div>
+      </div>
+      <div class="speech-audio-stream-controls">
+        <v-select
+          :model-value="selectedAudioStream"
+          :items="audioStreamOptions"
+          item-title="title"
+          item-value="value"
+          label="音频流类型"
+          hide-details
+          :loading="audioStreamSaving"
+          :disabled="audioStreamSaving || status?.state !== 'online'"
+          @update:model-value="chooseAudioStream"
+        >
+          <template #item="{ props, item }">
+            <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
+          </template>
+        </v-select>
+        <v-btn variant="tonal" prepend-icon="mdi-content-copy" :disabled="!audioStream?.enabled" @click="copyAudioStreamToken">复制客户端连接密钥</v-btn>
+      </div>
     </v-card>
 
     <section class="speech-status-grid" aria-label="语音服务摘要">
@@ -417,26 +543,28 @@ onBeforeUnmount(() => releaseSpeech?.());
         </div>
         <v-textarea v-model="ttsText" label="要说的话" rows="4" counter="10000" :disabled="ttsBusy" />
         <div class="speech-form-grid">
-          <v-select
-            v-model="ttsModel"
-            label="TTS 模型"
-            :items="ttsModels"
-            item-title="name"
-            item-value="id"
-            :disabled="ttsBusy"
-          >
-            <template #item="{ props, item }">
-              <v-list-item v-bind="props" :subtitle="`${item.raw.id} · ${item.raw.available ? '可用' : item.raw.installed ? '未启用' : '未安装'}`" />
+          <v-select v-model="voice" label="人格 / 声线" :items="personaOptions" :disabled="ttsBusy">
+            <template #item="{ props: itemProps, item }">
+              <v-list-item v-bind="itemProps">
+                <template #prepend><PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="32" /></template>
+              </v-list-item>
+            </template>
+            <template #selection="{ item }">
+              <div class="d-flex align-center ga-2">
+                <PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="26" />
+                <span>{{ item.raw.title }}</span>
+              </div>
             </template>
           </v-select>
-          <v-select v-model="voice" label="人格 / 声线" :items="personaOptions" :disabled="ttsBusy" />
-          <v-text-field v-model="language" label="语言" placeholder="zh / ja / en" :disabled="ttsBusy" />
-          <v-text-field v-model.number="speed" label="语速" type="number" min="0.25" max="4" step="0.05" :disabled="ttsBusy" />
+          <v-text-field :model-value="ttsModel || '由人格配置'" label="TTS 模型" readonly />
+          <v-text-field :model-value="ttsLanguage || '由人格配置'" label="语言" readonly />
+          <v-text-field :model-value="speed" label="语速" readonly />
         </div>
-        <v-text-field v-model="instructions" label="情绪 / 风格指令（模型支持时生效）" clearable :disabled="ttsBusy" />
+        <v-text-field :model-value="instructions || '由人格 voice-profile 配置'" label="情绪 / 风格指令" readonly />
+        <div class="section-note mb-3">模型、声线、语言、语速和表达方式统一来自所选人格的 <code>voice/voice-profile.json</code>。</div>
         <div class="speech-action-row">
           <v-switch v-model="queuePlayback" color="primary" label="进入主机全局 FIFO 播放队列" hide-details />
-          <v-btn color="primary" size="large" prepend-icon="mdi-account-voice" :loading="ttsBusy" :disabled="!ttsText.trim() || !ttsModel" @click="synthesize">合成并播放</v-btn>
+          <v-btn color="primary" size="large" prepend-icon="mdi-account-voice" :loading="ttsBusy" :disabled="!ttsText.trim() || !voice" @click="synthesize">合成并播放</v-btn>
         </div>
       </v-card>
 
@@ -445,49 +573,51 @@ onBeforeUnmount(() => releaseSpeech?.());
           <div>
             <div class="speech-eyebrow">ALWAYS-ON LOCAL ASR</div>
             <h2>常驻转录与消息投递</h2>
-            <p>RabiSpeech 本机服务持有麦克风，用动态 RMS 阈值和静音时长自动切句；关闭本页面后仍会继续运行。</p>
+            <p>RabiSpeech 本机服务只采集和识别一次，再把文字广播给所有已开启语音消息端的 Route；本页只维护整台电脑共用的麦克风、ASR 与 VAD 参数。</p>
           </div>
           <v-chip :color="microphoneStatus?.state === 'error' ? 'error' : listening ? utteranceActive ? 'warning' : 'success' : 'grey'" variant="tonal">
             {{ microphoneStatus?.state === "transcribing" ? "正在识别" : microphoneStatus?.state === "playback_suppressed" ? "播放防回流" : microphoneStatus?.state === "error" ? "异常" : listening ? utteranceActive ? "正在收音" : "服务监听中" : "已停止" }}
           </v-chip>
         </div>
         <div class="speech-form-grid">
-          <v-select v-model="asrModel" label="ASR 模型" :items="asrModels" item-title="name" item-value="id" :disabled="listening || asrBusy">
+          <v-select v-model="asrModel" label="ASR 模型" :items="asrModels" item-title="name" item-value="id" :disabled="asrBusy || microphoneSettingsSaving">
             <template #item="{ props, item }">
               <v-list-item v-bind="props" :subtitle="`${item.raw.id} · ${item.raw.available ? '可用' : item.raw.installed ? '未启用' : '未安装'}`" />
             </template>
           </v-select>
-          <v-select v-model="selectedGatewayId" label="投递 Route（可不选）" :items="speechRoutes" clearable :disabled="listening" />
-          <v-select v-model="selectedAudioInput" label="本机麦克风设备" :items="audioInputs" :disabled="listening" @click="refreshAudioInputs" />
-          <v-text-field v-model="sessionId" label="会话 ID" :disabled="listening" />
+          <v-select v-model="selectedAudioInput" :label="audioStream?.source === 'remote' ? '远程客户端麦克风' : '本机麦克风设备'" :items="audioInputs" :disabled="microphoneSettingsSaving || audioStream?.source === 'remote'" @click="refreshAudioInputs" />
         </div>
         <div class="vad-meter">
           <div class="vad-meter-head"><span>实时声音 {{ micLevel.toFixed(4) }} · 底噪 {{ Number(microphoneStatus?.noiseFloor || 0).toFixed(4) }}</span><b>动态阈值 {{ Number(microphoneStatus?.dynamicThreshold || threshold).toFixed(3) }}</b></div>
           <v-progress-linear :model-value="micPercent" :color="utteranceActive ? 'warning' : micLevel >= threshold ? 'success' : 'primary'" height="12" rounded />
         </div>
         <div class="speech-slider-grid">
-          <v-slider v-model="threshold" label="开始录音阈值" min="0.001" max="0.2" step="0.001" thumb-label :disabled="listening" />
-          <v-slider v-model="transcribeThreshold" label="值得转写阈值" min="0.001" max="0.3" step="0.001" thumb-label :disabled="listening" />
-          <v-slider v-model="silenceMs" label="静音收尾 ms" min="200" max="3000" step="50" thumb-label :disabled="listening" />
-          <v-slider v-model="minUtteranceMs" label="最短语音 ms" min="100" max="3000" step="50" thumb-label :disabled="listening" />
-          <v-slider v-model="maxUtteranceMs" label="最长语音 ms" min="3000" max="120000" step="1000" thumb-label :disabled="listening" />
-          <v-slider v-model="preRollMs" label="前置缓存 ms" min="0" max="3000" step="50" thumb-label :disabled="listening" />
-          <v-slider v-model="inputGain" label="输入增益" min="0.1" max="5" step="0.1" thumb-label :disabled="listening" />
+          <SpeechParameterSlider v-model="threshold" label="开始录音阈值" :min="0.001" :max="0.2" :step="0.001" :decimals="3" :disabled="microphoneSettingsSaving" hint="超过此 RMS 才开始采集语段" />
+          <SpeechParameterSlider v-model="transcribeThreshold" label="值得转写阈值" :min="0.001" :max="0.3" :step="0.001" :decimals="3" :disabled="microphoneSettingsSaving" hint="语段峰值不足时不送入 ASR" />
+          <SpeechParameterSlider v-model="silenceMs" label="静音收尾" :min="200" :max="3000" :step="50" suffix="ms" :disabled="microphoneSettingsSaving" hint="连续静音多久后切分语段" />
+          <SpeechParameterSlider v-model="minUtteranceMs" label="最短语音" :min="100" :max="3000" :step="50" suffix="ms" :disabled="microphoneSettingsSaving" hint="短于此时长的片段会被丢弃" />
+          <SpeechParameterSlider v-model="maxUtteranceMs" label="最长语音" :min="3000" :max="120000" :step="1000" suffix="ms" :disabled="microphoneSettingsSaving" hint="达到上限时强制切段" />
+          <SpeechParameterSlider v-model="preRollMs" label="前置缓存" :min="0" :max="3000" :step="50" suffix="ms" :disabled="microphoneSettingsSaving" hint="保留触发阈值前的句首音频" />
+          <SpeechParameterSlider v-model="inputGain" label="输入增益" :min="0.1" :max="5" :step="0.1" :decimals="1" suffix="×" :disabled="microphoneSettingsSaving" hint="仅放大送入检测与识别的输入" />
         </div>
         <div class="speech-action-row">
           <div class="speech-inline-switches">
-            <v-switch v-model="adaptiveThreshold" color="primary" label="动态底噪阈值" hide-details :disabled="listening" />
-            <v-switch v-model="autoSubmit" color="primary" label="识别后自动送入所选 Route" hide-details :disabled="!selectedGatewayId || listening" />
+            <v-switch v-model="adaptiveThreshold" color="primary" label="动态底噪阈值" hide-details :disabled="microphoneSettingsSaving" />
           </div>
-          <v-btn v-if="!listening" color="primary" size="large" prepend-icon="mdi-microphone" :disabled="!asrModel || selectedAudioInput == null" @click="startListening">启动本机常驻转录</v-btn>
-          <v-btn v-else color="error" size="large" variant="tonal" prepend-icon="mdi-stop" @click="stopListening().catch(error => requestError = String(error))">停止本机监听</v-btn>
+          <v-chip :color="listening ? 'success' : speechSubscriberRoutes.length ? 'warning' : 'grey'" variant="tonal">
+            {{ microphoneSettingsSaving ? "正在应用主机语音设置" : listening ? `常驻监听中 · ${speechSubscriberRoutes.length} 个 Route 已订阅` : speechSubscriberRoutes.length ? "等待 RabiSpeech 恢复监听" : "没有 Route 订阅语音消息" }}
+          </v-chip>
         </div>
-        <div class="section-note mt-3">待识别 {{ microphoneStatus?.pending || 0 }} 段 · 丢弃 {{ microphoneStatus?.dropped || 0 }} 段<span v-if="microphoneStatus?.lastSubmitError"> · Route 投递异常：{{ microphoneStatus.lastSubmitError }}</span></div>
+        <div class="section-note mt-3">
+          Route 的语音消息端开关是订阅真源；同一段 ASR 会广播给全部 {{ speechSubscriberRoutes.length }} 个已启用 Route，各自再执行热投递或人格关键词判断。
+          待识别 {{ microphoneStatus?.pending || 0 }} 段 · 丢弃 {{ microphoneStatus?.dropped || 0 }} 段<span v-if="microphoneStatus?.lastSubmitError"> · 广播异常：{{ microphoneStatus.lastSubmitError }}</span>
+        </div>
         <v-alert v-if="microphoneStatus?.error" class="mt-4" type="error" variant="tonal" density="compact">{{ microphoneStatus.error }}</v-alert>
         <v-alert class="mt-4" type="warning" variant="tonal" density="compact">
           主机正在播放 TTS 时，服务会清空当前片段并暂停触发，避免语音回流；仍请勿选择会混入扬声器的虚拟麦克风。
         </v-alert>
       </v-card>
+      <SpeechHostMonitor v-if="activeKind === 'asr'" :subscriber-count="speechSubscriberRoutes.length" />
     </section>
 
     <v-card v-if="activeKind === 'asr'" class="app-card glass-card transcript-card">
@@ -504,21 +634,35 @@ onBeforeUnmount(() => releaseSpeech?.());
         </label>
       </div>
       <v-textarea v-model="transcript" label="识别文本" rows="3" :loading="asrBusy" />
-      <div class="speech-action-row transcript-actions">
-        <div class="section-note">会话：<code>{{ sessionId }}</code></div>
-        <v-btn variant="tonal" prepend-icon="mdi-send" :disabled="!transcript.trim() || !selectedGatewayId" @click="submitTranscript().catch(error => requestError = String(error))">送入所选 Route</v-btn>
-      </div>
       <div v-if="transcriptHistory.length" class="transcript-history">
         <div v-for="item in transcriptHistory" :key="`${item.time}-${item.text}`">
           <span>{{ item.time }} · {{ item.model }}</span>
           <p>{{ item.text }}</p>
         </div>
       </div>
+      <div class="section-note mt-3">上方仅保留当前页面运行期的转写预览；下方读取按日期持久化的最近 ASR/TTS 双向记录。</div>
+      <SpeechRecordsAndSpeakers />
     </v-card>
 
-    <v-card v-if="activeKind === 'tts'" class="app-card glass-card playback-card">
-      <div><strong>全局播放队列</strong><span>{{ playbackBusy ? "正在播放" : "空闲" }} · 等待 {{ playbackQueued }} 条</span></div>
-      <v-btn variant="tonal" color="error" prepend-icon="mdi-stop-circle-outline" :disabled="!playbackBusy && playbackQueued === 0" @click="stopPlayback">停止并清空</v-btn>
+    <v-card class="app-card glass-card playback-card">
+      <div class="playback-card-head">
+        <div class="playback-card-summary">
+          <strong>全局播放队列</strong>
+          <span>{{ playbackBusy ? "正在播放" : "空闲" }} · 等待 {{ playbackQueued }} 条 · 输出到 {{ selectedAudioStreamLabel }}</span>
+        </div>
+        <v-btn variant="tonal" color="error" prepend-icon="mdi-stop-circle-outline" :disabled="!playbackBusy && playbackQueued === 0" @click="stopPlayback">停止并清空</v-btn>
+      </div>
+      <SpeechParameterSlider
+        :model-value="playbackVolume"
+        label="主机播放音量"
+        :min="0"
+        :max="100"
+        :step="1"
+        suffix="%"
+        hint="主机级设置；新值从下一条开始播放的音频生效。"
+        :disabled="status?.state !== 'online'"
+        @update:model-value="schedulePlaybackVolume"
+      />
     </v-card>
 
     <v-card class="app-card glass-card speech-workbench">
@@ -601,6 +745,12 @@ onBeforeUnmount(() => releaseSpeech?.());
 .speech-stat-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .speech-boundary { margin-bottom: 18px; }
 .speech-mode-tabs { margin-bottom: 18px; padding: 0 24px; border: 1px solid rgba(15, 139, 141, .16); }
+.speech-audio-stream-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 520px); gap: 24px; align-items: center; margin-bottom: 18px; padding: 18px 22px; }
+.speech-audio-stream-copy { display: flex; gap: 14px; align-items: center; min-width: 0; }
+.speech-audio-stream-copy strong { display: block; margin-top: 3px; color: #0c2a4a; font-size: 17px; }
+.speech-audio-stream-copy p { margin: 4px 0 0; color: #607487; font-size: 12px; line-height: 1.55; }
+.speech-audio-stream-icon { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; border-radius: 13px; color: #0f8b8d; background: rgba(25, 191, 193, .12); }
+.speech-audio-stream-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
 .speech-console-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; margin-bottom: 18px; }
 .speech-console-card { min-width: 0; padding: 26px; }
 .speech-console-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
@@ -621,8 +771,9 @@ onBeforeUnmount(() => releaseSpeech?.());
 .transcript-history > div { padding: 12px 15px; border: 1px solid rgba(17, 32, 51, .08); border-radius: 12px; background: rgba(248, 251, 253, .8); }
 .transcript-history span { color: #7b8c9b; font-size: 11px; }
 .transcript-history p { margin: 5px 0 0; color: #29445a; }
-.playback-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 18px 22px; }
-.playback-card > div { display: flex; gap: 14px; align-items: baseline; }
+.playback-card { display: grid; gap: 14px; margin-bottom: 18px; padding: 18px 22px; }
+.playback-card-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.playback-card-summary { display: flex; gap: 14px; align-items: baseline; }
 .playback-card span { color: #607487; font-size: 13px; }
 .speech-workbench { overflow: hidden; padding: 0; }
 .speech-tabs { max-width: 620px; }
@@ -651,5 +802,5 @@ onBeforeUnmount(() => releaseSpeech?.());
 .speech-api-strip span { color: #8491a0; font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
 .speech-footnote { display: flex; align-items: flex-start; gap: 9px; margin: 18px 4px 0; color: #687b8e; font-size: 12px; line-height: 1.6; }
 @media (max-width: 1100px) { .speech-console-grid { grid-template-columns: 1fr; } .speech-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .speech-api-strip { grid-template-columns: 1fr; } .speech-api-strip > div { border-right: 0; border-bottom: 1px solid rgba(17, 32, 51, .08); } }
-@media (max-width: 700px) { .speech-page-header, .speech-panel-head, .speech-console-head, .speech-action-row { align-items: stretch; flex-direction: column; } .speech-status-grid, .speech-form-grid, .speech-slider-grid { grid-template-columns: 1fr; } .speech-console-card, .transcript-card { padding: 18px; } .playback-card, .playback-card > div { align-items: stretch; flex-direction: column; } .speech-panel-head, .speech-provider-grid { padding-right: 18px; padding-left: 18px; } .speech-mode-tabs { padding: 0 8px; } .speech-tabs :deep(.v-btn__content) { font-size: 12px; } .speech-offline { margin-right: 18px; margin-left: 18px; } .speech-api-strip > div { padding: 17px 18px; } }
+@media (max-width: 700px) { .speech-page-header, .speech-panel-head, .speech-console-head, .speech-action-row { align-items: stretch; flex-direction: column; } .speech-status-grid, .speech-form-grid, .speech-slider-grid, .speech-audio-stream-card, .speech-audio-stream-controls { grid-template-columns: 1fr; } .speech-console-card, .transcript-card { padding: 18px; } .playback-card-head, .playback-card-summary { align-items: stretch; flex-direction: column; } .speech-panel-head, .speech-provider-grid { padding-right: 18px; padding-left: 18px; } .speech-mode-tabs { padding: 0 8px; } .speech-tabs :deep(.v-btn__content) { font-size: 12px; } .speech-offline { margin-right: 18px; margin-left: 18px; } .speech-api-strip > div { padding: 17px 18px; } }
 </style>

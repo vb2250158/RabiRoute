@@ -3,23 +3,41 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
+  type SpeechAudioStreamSelectionCommand,
+  type SpeechAudioStreamStatus,
   type SpeechAudioInput,
   type SpeechHistoryItem,
-  type SpeechMessageAccepted,
   type SpeechMessageCommand,
+  type SpeechMessageResult,
   type SpeechMicrophoneConfig,
   type SpeechMicrophoneStartCommand,
+  type SpeechMicrophoneSettingsCommand,
   type SpeechMicrophoneStats,
   type SpeechMicrophoneStatus,
   type SpeechModel,
   type SpeechPersona,
   type SpeechPlaybackJob,
   type SpeechPlaybackStatus,
+  type SpeechPlaybackVolumeCommand,
+  type SpeechRecord,
   type SpeechRuntimeStatus,
-  type SpeechSynthesisCommand
+  type SpeechSpeakerBinding,
+  type SpeechSpeakerBindingCommand,
+  type SpeechSpeakerIdentityCapability,
+  type SpeechSpeakerIdentityCommand,
+  type SpeechSpeakerIdentityResult,
+  type SpeechSpeakerProfile,
+  type SpeechSpeakerProfileCreateCommand,
+  type SpeechSpeakerProfileDeleteResult,
+  type SpeechSpeakerProfileUpdateCommand,
+  type SpeechSpeakerRegistry,
+  type SpeechSynthesisCommand,
+  type SpeechRouteDeliveryResult,
+  type SpeechTranscriptSegment
 } from "../shared/speechControlContract.js";
 import { roleFolderPath } from "../shared/routePaths.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
+import { personaAvatarPresentation } from "./personaAvatarRoutes.js";
 import {
   requestLocalSpeech,
   requestLocalSpeechJson,
@@ -50,11 +68,21 @@ export type ManagerSpeechRoute = {
   speechEnabled: boolean;
 };
 
+export type ManagerSpeechDeliveryOutcome = Pick<SpeechMessageResult, "status" | "reason" | "detail">;
+
+export type ManagerSpeechDeliveryCommand = {
+  routeId: string;
+  messageId: string;
+  text: string;
+  sessionId: string;
+};
+
 export type ManagerSpeechControlDependencies = {
   serviceUrl(): string;
   rolesRoot(): string;
   route(routeId: string): ManagerSpeechRoute | undefined;
-  deliverTranscript(command: SpeechMessageCommand & { messageId: string }): Promise<void>;
+  routes(): ManagerSpeechRoute[];
+  deliverTranscript(command: ManagerSpeechDeliveryCommand): Promise<ManagerSpeechDeliveryOutcome>;
   appendRouteLog(routeId: string, message: string): void;
   localSpeech?: ManagerSpeechLocalAdapter;
   createMessageId?: () => string;
@@ -83,6 +111,30 @@ function stringValue(value: unknown, fallback = ""): string {
 function optionalString(value: unknown): string | undefined {
   const normalized = stringValue(value).trim();
   return normalized || undefined;
+}
+
+function safeRelativeAudioFile(value: unknown): string | undefined {
+  const normalized = optionalString(value);
+  if (!normalized || normalized.length > 1_024) return undefined;
+  if (normalized.includes("\\") || normalized.includes("%") || normalized.includes(":") || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    return undefined;
+  }
+  if (normalized.startsWith("/") || /^[a-z]:/i.test(normalized)) return undefined;
+  const segments = normalized.split("/");
+  if (segments.some(segment => !segment || segment === "." || segment === "..")) return undefined;
+  return normalized;
+}
+
+function optionalPositiveNumber(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function numberValue(value: unknown, fallback = 0): number {
@@ -207,13 +259,44 @@ function normalizeMicrophoneConfig(value: unknown): SpeechMicrophoneConfig {
 
 function normalizeStats(value: unknown): SpeechMicrophoneStats {
   const stats = asRecord(value);
+  const delivered = numberValue(stats.delivered);
+  const recorded = numberValue(stats.recorded);
+  const deliveryFailed = numberValue(stats.delivery_failed ?? stats.deliveryFailed ?? stats.submit_failed ?? stats.submitFailed);
   return {
     captured: numberValue(stats.captured),
     recognized: numberValue(stats.recognized),
     empty: numberValue(stats.empty),
-    submitted: numberValue(stats.submitted),
-    submitFailed: numberValue(stats.submit_failed ?? stats.submitFailed),
+    delivered,
+    recorded,
+    deliveryFailed,
+    submitted: numberValue(stats.submitted, delivered + recorded),
+    submitFailed: numberValue(stats.submit_failed ?? stats.submitFailed, deliveryFailed),
     dropped: numberValue(stats.dropped)
+  };
+}
+
+function normalizeAudioStreamStatus(value: Record<string, unknown>): SpeechAudioStreamStatus {
+  return {
+    enabled: booleanValue(value.enabled),
+    listening: booleanValue(value.listening),
+    port: numberValue(value.port),
+    source: value.source === "remote" ? "remote" : "local",
+    selectedClientId: value.selected_client_id == null ? null : stringValue(value.selected_client_id),
+    selectedOnline: booleanValue(value.selected_online, true),
+    captureEnabled: booleanValue(value.capture_enabled),
+    checkedAt: numberValue(value.checked_at),
+    clients: rows(value.clients).map(client => ({
+      id: stringValue(client.id),
+      name: stringValue(client.name || client.id),
+      sampleRate: numberValue(client.sample_rate ?? client.sampleRate, 16_000),
+      chunkMs: numberValue(client.chunk_ms ?? client.chunkMs, 100),
+      connectedAt: numberValue(client.connected_at ?? client.connectedAt),
+      lastAudioAt: client.last_audio_at == null && client.lastAudioAt == null
+        ? null
+        : numberValue(client.last_audio_at ?? client.lastAudioAt),
+      selected: booleanValue(client.selected),
+      online: booleanValue(client.online, true)
+    })).filter(client => Boolean(client.id))
   };
 }
 
@@ -225,7 +308,135 @@ function normalizeHistoryItem(value: Record<string, unknown>): SpeechHistoryItem
     model: stringValue(value.model),
     duration: numberValue(value.duration),
     submitted: booleanValue(value.submitted),
-    submitError: optionalString(value.submit_error ?? value.submitError)
+    messageId: optionalString(value.message_id ?? value.messageId),
+    deliveryStatus: value.delivery_status === "delivered" || value.deliveryStatus === "delivered"
+      ? "delivered"
+      : value.delivery_status === "recorded" || value.deliveryStatus === "recorded"
+        ? "recorded"
+        : value.delivery_status === "failed" || value.deliveryStatus === "failed"
+          ? "failed"
+          : undefined,
+    deliveryReason: optionalString(value.delivery_reason ?? value.deliveryReason),
+    submitError: optionalString(value.submit_error ?? value.submitError),
+    segments: rows(value.segments).map(normalizeTranscriptSegment)
+  };
+}
+
+function normalizeTranscriptSegment(value: Record<string, unknown>): SpeechTranscriptSegment {
+  return {
+    id: numberValue(value.id),
+    start: numberValue(value.start),
+    end: numberValue(value.end),
+    text: stringValue(value.text),
+    speaker: optionalString(value.speaker),
+    speakerLabel: optionalString(value.speaker_label ?? value.speakerLabel),
+    speakerId: optionalString(value.speaker_id ?? value.speakerId),
+    speakerName: optionalString(value.speaker_name ?? value.speakerName),
+    speakerDecision: optionalString(value.speaker_decision ?? value.speakerDecision),
+    speakerClusterId: optionalString(value.speaker_cluster_id ?? value.speakerClusterId),
+    speakerScore: optionalFiniteNumber(value.speaker_score ?? value.speakerScore),
+    speakerMargin: optionalFiniteNumber(value.speaker_margin ?? value.speakerMargin),
+    speakerSampleDuration: optionalPositiveNumber(value.speaker_sample_duration ?? value.speakerSampleDuration),
+    speakerModel: optionalString(value.speaker_model ?? value.speakerModel),
+    speakerSuggestionId: optionalString(value.speaker_suggestion_id ?? value.speakerSuggestionId),
+    speakerSuggestionName: optionalString(value.speaker_suggestion_name ?? value.speakerSuggestionName)
+  };
+}
+
+function normalizeSpeakerIdentityCapability(value: unknown): SpeechSpeakerIdentityCapability {
+  const detail = asRecord(value);
+  const voiceprint = asRecord(detail.voiceprint);
+  return {
+    scope: stringValue(detail.scope, "loopback-only"),
+    mode: stringValue(detail.mode, "manual_record_label_binding"),
+    manualBinding: booleanValue(detail.manual_binding ?? detail.manualBinding),
+    bindingScope: stringValue(detail.binding_scope ?? detail.bindingScope, "record_speaker_label"),
+    aliasesAreMetadataOnly: booleanValue(detail.aliases_are_metadata_only ?? detail.aliasesAreMetadataOnly, true),
+    diarizationLabelsAreBiometricIdentity: false,
+    storesRawEnrollmentAudio: false,
+    storesVoiceEmbeddings: booleanValue(detail.stores_voice_embeddings ?? detail.storesVoiceEmbeddings),
+    voiceprint: {
+      supported: booleanValue(voiceprint.supported),
+      available: booleanValue(voiceprint.available),
+      experimental: booleanValue(voiceprint.experimental),
+      reason: optionalString(voiceprint.reason),
+      model: optionalString(voiceprint.model),
+      provider: optionalString(voiceprint.provider),
+      validated: booleanValue(voiceprint.validated),
+      autoAssign: booleanValue(voiceprint.auto_assign ?? voiceprint.autoAssign)
+    },
+    storageError: optionalString(detail.storage_error ?? detail.storageError)
+  };
+}
+
+function normalizeSpeakerProfile(value: Record<string, unknown>): SpeechSpeakerProfile {
+  return {
+    id: stringValue(value.id),
+    displayName: stringValue(value.display_name ?? value.displayName),
+    aliases: stringArray(value.aliases),
+    createdAt: numberValue(value.created_at ?? value.createdAt),
+    updatedAt: numberValue(value.updated_at ?? value.updatedAt)
+  };
+}
+
+function normalizeSpeakerBinding(value: Record<string, unknown>): SpeechSpeakerBinding {
+  return {
+    sessionId: stringValue(value.session_id ?? value.sessionId),
+    recordId: stringValue(value.record_id ?? value.recordId),
+    speakerLabel: stringValue(value.speaker_label ?? value.speakerLabel),
+    speakerId: stringValue(value.speaker_id ?? value.speakerId),
+    speakerName: optionalString(value.speaker_name ?? value.speakerName),
+    decision: stringValue(value.decision, "manual_session_binding"),
+    createdAt: numberValue(value.created_at ?? value.createdAt),
+    updatedAt: numberValue(value.updated_at ?? value.updatedAt)
+  };
+}
+
+function normalizeSpeakerRegistry(value: Record<string, unknown>): SpeechSpeakerRegistry {
+  return {
+    profiles: rows(value.profiles).map(normalizeSpeakerProfile).filter(profile => Boolean(profile.id)),
+    bindings: rows(value.bindings).map(normalizeSpeakerBinding).filter(binding => Boolean(binding.sessionId && binding.speakerLabel)),
+    capability: normalizeSpeakerIdentityCapability(value.capability),
+    clusters: rows(value.clusters).map(cluster => ({
+      id: stringValue(cluster.id),
+      sampleCount: numberValue(cluster.sample_count ?? cluster.sampleCount),
+      totalDuration: numberValue(cluster.total_duration ?? cluster.totalDuration),
+      lastSeenAt: numberValue(cluster.last_seen_at ?? cluster.lastSeenAt)
+    })).filter(cluster => Boolean(cluster.id))
+  };
+}
+
+function normalizeSpeakerIdentityResult(value: Record<string, unknown>): SpeechSpeakerIdentityResult {
+  return {
+    created: booleanValue(value.created),
+    reused: booleanValue(value.reused),
+    profileUpdated: booleanValue(value.profile_updated ?? value.profileUpdated),
+    bindingChanged: booleanValue(value.binding_changed ?? value.bindingChanged),
+    matchedBy: stringValue(value.matched_by ?? value.matchedBy),
+    profile: normalizeSpeakerProfile(asRecord(value.profile)),
+    binding: normalizeSpeakerBinding(asRecord(value.binding))
+  };
+}
+
+function normalizeSpeechRecord(value: Record<string, unknown>): SpeechRecord {
+  return {
+    id: stringValue(value.id),
+    kind: stringValue(value.kind) === "tts" ? "tts" : "asr",
+    source: stringValue(value.source),
+    time: numberValue(value.time),
+    sessionId: value.session_id == null && value.sessionId == null ? null : stringValue(value.session_id ?? value.sessionId),
+    routeId: value.route_id == null && value.routeId == null ? null : stringValue(value.route_id ?? value.routeId),
+    provider: stringValue(value.provider),
+    model: stringValue(value.model),
+    voice: optionalString(value.voice),
+    text: stringValue(value.text),
+    language: optionalString(value.language),
+    duration: value.duration == null ? undefined : numberValue(value.duration),
+    segments: rows(value.segments).map(normalizeTranscriptSegment),
+    playbackJobId: optionalString(value.playback_job_id ?? value.playbackJobId),
+    playbackStatus: optionalString(value.playback_status ?? value.playbackStatus),
+    audioFile: safeRelativeAudioFile(value.audio_file ?? value.audioFile),
+    audioExpiresAt: optionalPositiveNumber(value.audio_expires_at ?? value.audioExpiresAt)
   };
 }
 
@@ -291,6 +502,7 @@ function normalizePlaybackJob(value: Record<string, unknown>): SpeechPlaybackJob
 function normalizePlaybackStatus(value: Record<string, unknown>): SpeechPlaybackStatus {
   return {
     mode: stringValue(value.mode, "host_fifo"),
+    volume: Math.min(100, Math.max(0, numberValue(value.volume, 100))),
     current: value.current == null ? null : stringValue(value.current),
     queued: numberValue(value.queued),
     jobs: rows(value.jobs).map(normalizePlaybackJob)
@@ -315,10 +527,31 @@ function microphoneStartPayload(command: SpeechMicrophoneStartCommand): Record<s
     asr_model: command.asrModel,
     language: command.language,
     prompt: command.prompt,
-    auto_submit: command.autoSubmit,
-    route_id: command.routeId,
-    session_id: command.sessionId,
+    auto_submit: true,
+    route_id: null,
     suppress_during_playback: command.suppressDuringPlayback
+  };
+}
+
+function microphoneSettingsFromConfig(config: SpeechMicrophoneConfig): SpeechMicrophoneSettingsCommand {
+  return {
+    device: config.device,
+    sampleRate: config.sampleRate,
+    chunkMs: config.chunkMs,
+    preRollMs: config.preRollMs,
+    recordThreshold: config.recordThreshold,
+    transcribeThreshold: config.transcribeThreshold,
+    adaptiveThreshold: config.adaptiveThreshold,
+    adaptiveMultiplier: config.adaptiveMultiplier,
+    adaptiveMargin: config.adaptiveMargin,
+    silenceMs: config.silenceMs,
+    minUtteranceMs: config.minUtteranceMs,
+    maxUtteranceMs: config.maxUtteranceMs,
+    inputGain: config.inputGain,
+    asrModel: config.asrModel,
+    language: config.language,
+    prompt: config.prompt,
+    suppressDuringPlayback: config.suppressDuringPlayback
   };
 }
 
@@ -361,17 +594,259 @@ export class ManagerSpeechControl {
     if (!fs.existsSync(rolesRoot)) return [];
     return fs.readdirSync(rolesRoot, { withFileTypes: true })
       .filter(entry => entry.isDirectory() && Boolean(sanitizeRoleId(entry.name)))
-      .map(entry => ({
-        id: entry.name,
-        voiceReady: fs.existsSync(path.join(roleFolderPath(rolesRoot, entry.name), "voice", "voice-profile.json"))
-          || fs.existsSync(path.join(roleFolderPath(rolesRoot, entry.name), "voice", "voice-index.json"))
-      }))
+      .map(entry => {
+        const roleDir = roleFolderPath(rolesRoot, entry.name);
+        const voiceRoot = path.join(roleDir, "voice");
+        const profilePath = path.join(voiceRoot, "voice-profile.json");
+        let profile: Record<string, unknown> = {};
+        if (fs.existsSync(profilePath)) {
+          try {
+            const parsed = JSON.parse(fs.readFileSync(profilePath, "utf8").replace(/^\uFEFF/, ""));
+            profile = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+          } catch { /* malformed private persona profile stays unavailable */ }
+        }
+        const speed = Number(profile.speed);
+        const avatar = personaAvatarPresentation(entry.name, roleDir);
+        return {
+          id: entry.name,
+          voiceReady: fs.existsSync(profilePath) || fs.existsSync(path.join(voiceRoot, "voice-index.json")),
+          avatarUrl: avatar.avatarUrl,
+          defaultModel: optionalString(profile.default_model ?? profile.defaultModel),
+          language: optionalString(profile.language),
+          instructions: optionalString(profile.instructions),
+          speed: Number.isFinite(speed) ? speed : undefined,
+          voiceStyleSummary: optionalString(profile.voice_style_summary ?? profile.voiceStyleSummary)
+        };
+      })
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
   async playbackStatus(): Promise<SpeechPlaybackStatus> {
     const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/playback/status", {}, 10_000));
     return normalizePlaybackStatus(raw);
+  }
+
+  async audioStreams(): Promise<SpeechAudioStreamStatus> {
+    const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/audio-streams", {}, 10_000));
+    return normalizeAudioStreamStatus(raw);
+  }
+
+  async audioStreamToken(): Promise<string> {
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      "/v1/audio-streams/token",
+      { method: "POST" },
+      10_000
+    ));
+    const token = stringValue(raw.token).trim();
+    if (!token) throw new SpeechControlError("RabiSpeech returned no audio stream token.", 502);
+    return token;
+  }
+
+  async selectAudioStream(command: SpeechAudioStreamSelectionCommand): Promise<SpeechAudioStreamStatus> {
+    const source = command?.source === "remote" ? "remote" : "local";
+    const clientId = source === "remote" ? stringValue(command?.clientId).trim() : "";
+    if (source === "remote" && !clientId) {
+      throw new SpeechControlError("A remote audio client id is required.", 400);
+    }
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      "/v1/audio-streams/selection",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ source, client_id: clientId || null })
+      },
+      30_000
+    ));
+    return normalizeAudioStreamStatus(raw);
+  }
+
+  async setPlaybackVolume(command: SpeechPlaybackVolumeCommand): Promise<SpeechPlaybackStatus> {
+    const volume = command?.volume;
+    if (typeof volume !== "number" || !Number.isInteger(volume) || volume < 0 || volume > 100) {
+      throw new SpeechControlError("Playback volume must be an integer between 0 and 100.", 400);
+    }
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      "/v1/playback/settings",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ volume })
+      },
+      10_000
+    ));
+    return normalizePlaybackStatus(raw);
+  }
+
+  async records(query: {
+    limit?: number;
+    kind?: string;
+    sessionId?: string;
+    routeId?: string;
+    since?: number;
+    until?: number;
+  } = {}): Promise<SpeechRecord[]> {
+    const search = new URLSearchParams();
+    search.set("limit", String(Math.min(1000, Math.max(1, query.limit ?? 200))));
+    if (query.kind) search.set("kind", query.kind);
+    if (query.sessionId) search.set("session_id", query.sessionId);
+    if (query.routeId) search.set("route_id", query.routeId);
+    if (query.since != null) search.set("since", String(query.since));
+    if (query.until != null) search.set("until", String(query.until));
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      `/v1/records?${search.toString()}`,
+      {},
+      10_000
+    ));
+    return rows(raw.data).map(normalizeSpeechRecord).filter(item => Boolean(item.id));
+  }
+
+  async speakerRegistry(sessionId?: string): Promise<SpeechSpeakerRegistry> {
+    const search = new URLSearchParams();
+    const normalizedSessionId = stringValue(sessionId).trim().slice(0, 200);
+    if (normalizedSessionId) search.set("session_id", normalizedSessionId);
+    const suffix = search.size > 0 ? `?${search.toString()}` : "";
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      `/v1/speaker-profiles${suffix}`,
+      {},
+      10_000
+    ));
+    return normalizeSpeakerRegistry(raw);
+  }
+
+  async createSpeakerProfile(command: SpeechSpeakerProfileCreateCommand): Promise<SpeechSpeakerProfile> {
+    const displayName = stringValue(command?.displayName).trim();
+    if (!displayName) throw new SpeechControlError("Missing speaker display name.", 400);
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      "/v1/speaker-profiles",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ display_name: displayName, aliases: stringArray(command?.aliases) })
+      },
+      10_000
+    ));
+    return normalizeSpeakerProfile(raw);
+  }
+
+  async updateSpeakerProfile(
+    speakerId: string,
+    command: SpeechSpeakerProfileUpdateCommand
+  ): Promise<SpeechSpeakerProfile> {
+    const normalizedId = this.speakerProfileId(speakerId);
+    const payload: Record<string, unknown> = {};
+    if (command?.displayName != null) payload.display_name = stringValue(command.displayName).trim();
+    if (command?.aliases != null) payload.aliases = stringArray(command.aliases);
+    if (Object.keys(payload).length === 0) throw new SpeechControlError("No speaker profile changes were provided.", 400);
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      `/v1/speaker-profiles/${encodeURIComponent(normalizedId)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify(payload)
+      },
+      10_000
+    ));
+    return normalizeSpeakerProfile(raw);
+  }
+
+  async deleteSpeakerProfile(speakerId: string): Promise<SpeechSpeakerProfileDeleteResult> {
+    const normalizedId = this.speakerProfileId(speakerId);
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      `/v1/speaker-profiles/${encodeURIComponent(normalizedId)}`,
+      { method: "DELETE" },
+      10_000
+    ));
+    return {
+      deleted: normalizeSpeakerProfile(asRecord(raw.deleted)),
+      removedBindings: numberValue(raw.removed_bindings ?? raw.removedBindings)
+    };
+  }
+
+  async bindSpeaker(command: SpeechSpeakerBindingCommand): Promise<SpeechSpeakerBinding> {
+    const sessionId = stringValue(command?.sessionId).trim();
+    const recordId = stringValue(command?.recordId).trim();
+    const speakerLabel = stringValue(command?.speakerLabel).trim();
+    const speakerId = this.speakerProfileId(command?.speakerId);
+    if (!sessionId) throw new SpeechControlError("Missing speaker session id.", 400);
+    if (!recordId) throw new SpeechControlError("Missing speech record id.", 400);
+    if (!speakerLabel) throw new SpeechControlError("Missing diarization speaker label.", 400);
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      "/v1/speaker-bindings",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          record_id: recordId,
+          speaker_label: speakerLabel,
+          speaker_id: speakerId
+        })
+      },
+      10_000
+    ));
+    return normalizeSpeakerBinding(raw);
+  }
+
+  async identifySpeaker(command: SpeechSpeakerIdentityCommand): Promise<SpeechSpeakerIdentityResult> {
+    const sessionId = stringValue(command?.sessionId).trim();
+    const recordId = stringValue(command?.recordId).trim();
+    const speakerLabel = stringValue(command?.speakerLabel).trim();
+    const displayName = optionalString(command?.displayName)?.trim() || null;
+    const speakerId = command?.speakerId == null ? null : this.speakerProfileId(command.speakerId);
+    if (!sessionId) throw new SpeechControlError("Missing speaker session id.", 400);
+    if (!recordId) throw new SpeechControlError("Missing speech record id.", 400);
+    if (!speakerLabel) throw new SpeechControlError("Missing diarization speaker label.", 400);
+    if (!speakerId && !displayName) {
+      throw new SpeechControlError("A display name is required when no speaker profile id is provided.", 400);
+    }
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      "/v1/speaker-identities",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          record_id: recordId,
+          speaker_label: speakerLabel,
+          speaker_id: speakerId,
+          display_name: displayName,
+          aliases: stringArray(command?.aliases)
+        })
+      },
+      10_000
+    ));
+    return normalizeSpeakerIdentityResult(raw);
+  }
+
+  async unbindSpeaker(sessionId: string, recordId: string, speakerLabel: string): Promise<SpeechSpeakerBinding> {
+    const normalizedSessionId = stringValue(sessionId).trim();
+    const normalizedRecordId = stringValue(recordId).trim();
+    const normalizedLabel = stringValue(speakerLabel).trim();
+    if (!normalizedSessionId || !normalizedRecordId || !normalizedLabel) {
+      throw new SpeechControlError("Speaker session id, speech record id, and diarization label are required.", 400);
+    }
+    const search = new URLSearchParams({
+      session_id: normalizedSessionId,
+      record_id: normalizedRecordId,
+      speaker_label: normalizedLabel
+    });
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      `/v1/speaker-bindings?${search.toString()}`,
+      { method: "DELETE" },
+      10_000
+    ));
+    return normalizeSpeakerBinding(raw);
   }
 
   async stopPlayback(): Promise<SpeechPlaybackStatus> {
@@ -395,25 +870,45 @@ export class ManagerSpeechControl {
   }
 
   async startMicrophone(command: SpeechMicrophoneStartCommand): Promise<SpeechMicrophoneStatus> {
-    const routeId = sanitizeRoleId(command?.routeId);
-    const route = routeId ? this.dependencies.route(routeId) : undefined;
-    if (command.autoSubmit) {
-      if (!route) throw new SpeechControlError("Select a configured speech Route before enabling automatic submission.", 400);
-      if (!route.speechEnabled) throw new SpeechControlError("The selected Route has no speech message endpoint.", 400);
-    } else if (routeId && !route) {
-      throw new SpeechControlError("The selected speech Route does not exist.", 400);
-    }
     const raw = assertSuccess(await this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       "/v1/microphone/start",
       {
         method: "POST",
         headers: { "content-type": "application/json; charset=utf-8" },
-        body: JSON.stringify(microphoneStartPayload({ ...command, routeId: routeId || null }))
+        body: JSON.stringify(microphoneStartPayload(command))
       },
       30_000
     ));
     return normalizeMicrophoneStatus(raw);
+  }
+
+  async updateMicrophoneSettings(command: SpeechMicrophoneSettingsCommand): Promise<SpeechMicrophoneStatus> {
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      "/v1/microphone/settings",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify(microphoneStartPayload(command))
+      },
+      30_000
+    ));
+    return normalizeMicrophoneStatus(raw);
+  }
+
+  async reconcileMicrophone(): Promise<SpeechMicrophoneStatus> {
+    const current = await this.microphoneStatus();
+    const enabledRoutes = this.enabledSpeechRoutes();
+    if (enabledRoutes.length === 0) {
+      return current.running ? this.stopMicrophone() : current;
+    }
+    const settings = microphoneSettingsFromConfig(current.config);
+    if (!current.running) return this.startMicrophone(settings);
+    if (current.config.autoSubmit !== true || current.config.routeId) {
+      return this.updateMicrophoneSettings(settings);
+    }
+    return current;
   }
 
   async stopMicrophone(): Promise<SpeechMicrophoneStatus> {
@@ -458,20 +953,95 @@ export class ManagerSpeechControl {
     });
   }
 
-  acceptMessage(command: SpeechMessageCommand): SpeechMessageAccepted {
-    const routeId = sanitizeRoleId(command?.routeId);
-    const route = routeId ? this.dependencies.route(routeId) : undefined;
-    if (!route) throw new SpeechControlError("Select a configured speech Route first.", 400);
-    if (!route.speechEnabled) throw new SpeechControlError("The selected Route has no speech message endpoint.", 400);
+  async acceptMessage(command: SpeechMessageCommand): Promise<SpeechMessageResult> {
     const text = stringValue(command?.text).trim();
     if (!text) throw new SpeechControlError("Missing speech transcript text.", 400);
     const sessionId = (stringValue(command?.sessionId) || `speech-${Date.now()}`).trim().slice(0, 200);
+    const requestedRouteId = command?.routeId == null ? "" : sanitizeRoleId(command.routeId);
+    if (command?.routeId != null && !requestedRouteId) {
+      throw new SpeechControlError("Invalid speech Route id.", 400);
+    }
+    if (requestedRouteId) {
+      const route = this.dependencies.route(requestedRouteId);
+      if (!route) throw new SpeechControlError("The selected speech Route does not exist.", 400);
+      if (!route.speechEnabled) throw new SpeechControlError("The selected Route has no enabled speech message endpoint.", 400);
+      const delivery = await this.deliverToRoute(route.id, text, sessionId);
+      return { ...delivery, sessionId, deliveries: [delivery] };
+    }
+
+    const routes = this.enabledSpeechRoutes();
+    const broadcastMessageId = this.createMessageId();
+    if (routes.length === 0) {
+      return {
+        routeId: null,
+        messageId: broadcastMessageId,
+        sessionId,
+        status: "recorded",
+        reason: "no_enabled_speech_routes",
+        detail: "No enabled speech message endpoint is currently subscribed.",
+        deliveries: []
+      };
+    }
+
+    const deliveries = await Promise.all(routes.map(async route => {
+      try {
+        return await this.deliverToRoute(route.id, text, sessionId);
+      } catch (error) {
+        return {
+          routeId: route.id,
+          messageId: "",
+          status: "failed" as const,
+          detail: error instanceof Error ? error.message : String(error)
+        };
+      }
+    }));
+    const delivered = deliveries.filter(item => item.status === "delivered").length;
+    const recorded = deliveries.filter(item => item.status === "recorded").length;
+    const failed = deliveries.length - delivered - recorded;
+    if (delivered === 0 && recorded === 0) {
+      throw new SpeechControlError(`Speech broadcast failed for all ${failed} subscribed Routes.`, 502);
+    }
+    return {
+      routeId: null,
+      messageId: broadcastMessageId,
+      sessionId,
+      status: delivered > 0 ? "delivered" : "recorded",
+      reason: failed > 0 ? "broadcast_partial_failure" : "broadcast_complete",
+      detail: `Broadcast result: ${delivered} delivered, ${recorded} recorded, ${failed} failed.`,
+      deliveries
+    };
+  }
+
+  private enabledSpeechRoutes(): ManagerSpeechRoute[] {
+    const unique = new Map<string, ManagerSpeechRoute>();
+    for (const route of this.dependencies.routes()) {
+      if (route.speechEnabled && route.id) unique.set(route.id, route);
+    }
+    return [...unique.values()];
+  }
+
+  private async deliverToRoute(routeId: string, text: string, sessionId: string): Promise<SpeechRouteDeliveryResult> {
     const messageId = this.createMessageId();
-    void this.dependencies.deliverTranscript({ routeId, text, sessionId, messageId }).catch(error => {
+    try {
+      const outcome = await this.dependencies.deliverTranscript({ routeId, text, sessionId, messageId });
+      if (outcome.status === "failed") {
+        throw new SpeechControlError(outcome.detail || outcome.reason || "Speech delivery failed.", 502);
+      }
+      this.dependencies.appendRouteLog(routeId, `speech message ${outcome.status}: ${messageId}${outcome.reason ? `; ${outcome.reason}` : ""}`);
+      return { routeId, messageId, ...outcome };
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.dependencies.appendRouteLog(routeId, `speech message failed after acceptance: ${messageId}; ${message}`);
-    });
-    return { routeId, messageId, sessionId, status: "accepted" };
+      this.dependencies.appendRouteLog(routeId, `speech message failed: ${messageId}; ${message}`);
+      throw error;
+    }
+  }
+
+  private speakerProfileId(value: unknown): string {
+    const normalized = stringValue(value).trim();
+    if (!/^speaker-[a-f0-9]{32}$/i.test(normalized)) {
+      throw new SpeechControlError("Invalid speaker profile id.", 400);
+    }
+    return normalized;
   }
 }
 

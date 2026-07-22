@@ -6,7 +6,7 @@ English | <a href="./persona-route-workbench-plan.md">简体中文</a>
 
 # Persona Route Workbench Plan
 
-> Status: planned. A side-effect-free single-route-profile `RouteDecision`/`AgentPacket` dry-run preview is not implemented.
+> Status: partially implemented. Persona speech-keyword editing and the 11 per-endpoint recent-context controls are implemented; the side-effect-free single-route-profile `RouteDecision`/`AgentPacket` dry-run preview is not.
 
 The proposed workbench improves the RibiWebGUI persona page with an explainable preview and diagnostic tool. It is not a dynamic persona selector or a clone of a competing Agent editor.
 
@@ -27,6 +27,8 @@ RabiRoute does not choose a persona by message content. Preview answers:
 2. What packet would the handler receive?
 
 ## Proposed first release
+
+Already implemented persona controls are not part of the remaining preview work: `speechTriggerKeywords` has a multi-value editor, and `recentMessageLimits` has 11 independent `0–200` slider-plus-exact-input controls with a schema default of `100`. Zero disables injection only.
 
 - Select one route profile and one simulated route kind.
 - Enter sanitized message/source/target fields.

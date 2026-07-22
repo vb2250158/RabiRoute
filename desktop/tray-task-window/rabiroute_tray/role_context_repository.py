@@ -24,6 +24,7 @@ class RoleContextSnapshot:
     consolidated_memory: list[ContextEntry]
     status_lines: list[str]
     message: str = ""
+    avatar_path: Path | None = None
 
 
 class RoleContextRepository:
@@ -35,6 +36,7 @@ class RoleContextRepository:
         recent_memory = self._load_memory_dir(role_dir / "memory" / "recent", "近期记忆")
         consolidated_memory = self._load_memory_dir(role_dir / "memory" / "consolidated", "沉淀记忆")
         status_lines = self._load_status_lines(role_dir, resolved_route_dir)
+        avatar_path = self._load_avatar_path(role_dir)
         message = "" if recent_memory or consolidated_memory else f"记忆目录还没有可展示记忆：{role_dir / 'memory'}"
         return RoleContextSnapshot(
             role_dir=role_dir,
@@ -43,7 +45,23 @@ class RoleContextRepository:
             consolidated_memory=consolidated_memory,
             status_lines=status_lines,
             message=message,
+            avatar_path=avatar_path,
         )
+
+    def _load_avatar_path(self, role_dir: Path) -> Path | None:
+        config = self._read_json(role_dir / "personaConfig.json")
+        file_name = str(config.get("avatar") or "").strip() if isinstance(config, dict) else ""
+        if not file_name or Path(file_name).name != file_name:
+            return None
+        if Path(file_name).suffix.lower() not in {".png", ".jpg", ".webp", ".gif"}:
+            return None
+        candidate = role_dir / file_name
+        try:
+            if candidate.resolve().parent != role_dir.resolve() or not candidate.is_file():
+                return None
+        except OSError:
+            return None
+        return candidate
 
     def _resolve_route_dir(self, route_dir: Path) -> Path:
         if (route_dir / "adapterConfig.json").exists() or (route_dir / "gateway-status.json").exists():

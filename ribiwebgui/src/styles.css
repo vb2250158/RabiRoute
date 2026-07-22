@@ -2132,6 +2132,36 @@ body::before {
   overflow-wrap: anywhere;
 }
 
+.persona-speech-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.persona-speech-summary > div {
+  display: grid;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid rgba(17, 32, 51, .08);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .65);
+}
+
+.persona-speech-summary span {
+  color: #7b8c9b;
+  font-size: 10px;
+}
+
+.persona-speech-summary b {
+  overflow-wrap: anywhere;
+  color: #29445a;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .persona-speech-summary { grid-template-columns: 1fr; }
+}
+
 .docs-comparison-scroll {
   max-width: 100%;
   overflow-x: auto;
@@ -2417,4 +2447,40 @@ body::before {
   .variable-value-row {
     align-items: stretch;
   }
+}
+.persona-identity-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid rgba(var(--v-theme-secondary), 0.18);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(var(--v-theme-secondary), 0.08), rgba(var(--v-theme-surface), 0.74));
+}
+
+.persona-summary-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.persona-identity-copy {
+  min-width: 0;
+}
+
+.persona-identity-copy > strong,
+.persona-identity-copy > span {
+  display: block;
+}
+
+.persona-identity-copy > strong {
+  color: rgb(var(--v-theme-primary));
+  font-size: 1.05rem;
+}
+
+.persona-identity-copy > span {
+  margin-top: 3px;
+  color: rgba(var(--v-theme-on-surface), 0.66);
+  font-size: 0.82rem;
+  line-height: 1.45;
 }

@@ -1,4 +1,8 @@
-import type { SpeechProvider, SpeechRuntimeStatus } from "../shared/speechControlContract.js";
+import type {
+  SpeechProvider,
+  SpeechRuntimeStatus,
+  SpeechSpeakerIdentityCapability
+} from "../shared/speechControlContract.js";
 
 export type SpeechProviderStatus = SpeechProvider;
 export type SpeechServiceStatus = SpeechRuntimeStatus;
@@ -43,6 +47,35 @@ function providerRows(value: unknown, kind: "tts" | "asr"): SpeechProviderStatus
   return Object.entries(asRecord(value))
     .map(([id, detail]) => normalizeProvider(id, kind, detail))
     .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function normalizeSpeakerIdentityCapability(value: unknown): SpeechSpeakerIdentityCapability | undefined {
+  const detail = asRecord(value);
+  if (Object.keys(detail).length === 0) return undefined;
+  const voiceprint = asRecord(detail.voiceprint);
+  return {
+    scope: typeof detail.scope === "string" ? detail.scope : "loopback-only",
+    mode: typeof detail.mode === "string" ? detail.mode : "manual_record_label_binding",
+    manualBinding: detail.manual_binding === true,
+    bindingScope: typeof detail.binding_scope === "string" ? detail.binding_scope : "record_speaker_label",
+    aliasesAreMetadataOnly: detail.aliases_are_metadata_only !== false,
+    diarizationLabelsAreBiometricIdentity: false,
+    storesRawEnrollmentAudio: false,
+    storesVoiceEmbeddings: detail.stores_voice_embeddings === true || detail.storesVoiceEmbeddings === true,
+    voiceprint: {
+      supported: voiceprint.supported === true,
+      available: voiceprint.available === true,
+      experimental: voiceprint.experimental === true,
+      reason: typeof voiceprint.reason === "string" && voiceprint.reason.trim() ? voiceprint.reason.trim() : undefined,
+      model: typeof voiceprint.model === "string" && voiceprint.model.trim() ? voiceprint.model.trim() : undefined,
+      provider: typeof voiceprint.provider === "string" && voiceprint.provider.trim() ? voiceprint.provider.trim() : undefined,
+      validated: voiceprint.validated === true,
+      autoAssign: voiceprint.auto_assign === true || voiceprint.autoAssign === true
+    },
+    storageError: typeof detail.storage_error === "string" && detail.storage_error.trim()
+      ? detail.storage_error.trim()
+      : undefined
+  };
 }
 
 async function requestJson(fetchImpl: FetchLike, url: string, timeoutMs: number): Promise<Record<string, unknown>> {
@@ -109,7 +142,8 @@ export async function inspectLocalSpeechService(
       providers: {
         tts: providerRows(providers.tts, "tts"),
         asr: providerRows(providers.asr, "asr")
-      }
+      },
+      speakerIdentity: normalizeSpeakerIdentityCapability(capabilities.speaker_identity)
     };
   } catch (error) {
     return {

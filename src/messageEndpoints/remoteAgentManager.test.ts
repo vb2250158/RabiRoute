@@ -10,7 +10,9 @@ import {
   controlUrlFromObservedAddress,
   REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES,
   REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES,
-  RemoteAgentHub
+  RemoteAgentHub,
+  remoteAgentTaskEventContextRecord,
+  remoteAgentTaskRequestContextRecord
 } from "./remoteAgentManager.js";
 
 test("RemoteAgentHub shares the bridge's default file size limits", () => {
@@ -18,11 +20,61 @@ test("RemoteAgentHub shares the bridge's default file size limits", () => {
   assert.equal(REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES, 25 * 1024 * 1024);
 });
 
+test("Remote Agent task records preserve one scoped bilateral conversation", () => {
+  const task = {
+    taskId: "task-1",
+    deviceId: "builder-device",
+    message: "Run the full remote build.",
+    taskKind: "build",
+    threadName: "release-thread",
+    files: [{ name: "notes.txt", size: 12, sha256: "abc" }],
+    originGatewayId: "Rabi__XinghaiBuilder",
+    originReplyContext: { routeProfileId: "XinghaiBuilder" },
+    status: "delivered" as const,
+    createdAt: "2026-07-21T08:00:00.000Z",
+    updatedAt: "2026-07-21T08:01:00.000Z",
+    events: []
+  };
+  const request = remoteAgentTaskRequestContextRecord(task);
+  assert.equal(request.direction, "outbound");
+  assert.equal(request.adapter, "remoteAgent");
+  assert.equal(request.transport, "remoteAgent");
+  assert.equal(request.gatewayId, "Rabi__XinghaiBuilder");
+  assert.equal(request.instanceId, "builder-device");
+  assert.equal(request.sessionId, "task-1");
+  assert.match(request.conversationKey || "", /release-thread$/);
+  assert.equal(request.text, "Run the full remote build.");
+  assert.deepEqual(request.attachments, [{ id: "abc", kind: "file", name: "notes.txt", mimeType: undefined, size: 12 }]);
+
+  assert.equal(remoteAgentTaskEventContextRecord(task, { taskId: "task-1", status: "progress", message: "50%" }), undefined);
+  const result = remoteAgentTaskEventContextRecord(
+    { ...task, status: "completed", updatedAt: "2026-07-21T08:02:00.000Z" },
+    {
+      taskId: "task-1",
+      status: "completed",
+      summary: "Build passed.",
+      message: "All targets completed.",
+      savedFiles: [{ name: "artifact.zip", size: 42, sha256: "def" }],
+      device: { deviceId: "builder-device", deviceName: "Builder" }
+    }
+  );
+  assert.equal(result?.direction, "inbound");
+  assert.equal(result?.conversationKey, request.conversationKey);
+  assert.equal(result?.replyToMessageId, request.messageId);
+  assert.match(result?.text || "", /Build passed/);
+  assert.match(result?.text || "", /All targets completed/);
+  assert.deepEqual(result?.attachments, [{ id: "def", kind: "file", name: "artifact.zip", mimeType: undefined, size: 42 }]);
+});
+
 test("RemoteAgentHub rejects task events from devices that do not own the task", async () => {
+  const conversationRecords: Array<{ direction: string; text: string }> = [];
   const hub = new RemoteAgentHub({
     managerPort: 8790,
     passwordStorePath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-remote-agent-test-")), "connections.json"),
-    getDefaultGatewayId: () => "main"
+    getDefaultGatewayId: () => "main",
+    onConversationRecord: (record) => {
+      conversationRecords.push({ direction: record.direction, text: record.text });
+    }
   });
   const sentPayloads: string[] = [];
   const deviceRecord = {
@@ -67,6 +119,8 @@ test("RemoteAgentHub rejects task events from devices that do not own the task",
   assert.equal(duplicate.status, "completed");
   assert.equal(duplicate.events.length, terminalEventCount);
   assert.equal(sentPayloads.length, 1);
+  assert.deepEqual(conversationRecords.map((record) => record.direction), ["outbound", "inbound"]);
+  assert.equal(conversationRecords[0].text, "Run the remote build.");
 });
 
 test("RemoteAgentHub sends local files with remote tasks", async () => {

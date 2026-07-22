@@ -7,6 +7,7 @@ import test from "node:test";
 import { handleAgentReply, napcatGroupReplyMessage, type AgentReplyOptions } from "./outbox.js";
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
+import { recentMessageContextItems } from "./messageContextStore.js";
 
 function optionsWithRuntime(runtime: AgentReplyOptions["runtimes"][number]): AgentReplyOptions {
   return {
@@ -539,7 +540,7 @@ test("FenneNote source reply resolves runtime by role fallback and voice transcr
   assert.equal(forwarded.speakerName, "秋雨");
 });
 
-test("RabiSpeech message endpoint character dialogue uses Route voice, model, session and FIFO", async () => {
+test("RabiSpeech message endpoint binds TTS voice to the persona while preserving legacy fallbacks", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-rabispeech-"));
   let forwarded: Record<string, unknown> | undefined;
   const result = await withSpeechJsonServer((body) => {
@@ -576,7 +577,7 @@ test("RabiSpeech message endpoint character dialogue uses Route voice, model, se
       },
       routeVariables: {
         speechTtsModel: "local-tts/qwen3-tts-0.6b-base",
-        speechVoice: "Ilias",
+        speechVoice: "legacy-route-voice",
         speechLanguage: "zh",
         speechSpeed: "1",
         speechInstructions: "温柔而庄重",
@@ -603,6 +604,63 @@ test("RabiSpeech message endpoint character dialogue uses Route voice, model, se
   assert.equal(forwarded.play, true);
   assert.equal(forwarded.session_id, "speech-session-1");
   assert.equal(forwarded.route_id, "speech-route");
+  const ttsContext = recentMessageContextItems([path.join(rootDir, "data", "roles", "Ilias")], {
+    limit: 10,
+    adapter: "speech",
+    conversationKey: "speech:gateway:speech-route:session:speech-session-1"
+  });
+  assert.deepEqual(ttsContext.map(item => [item.direction, item.kind, item.text, item.sessionId]), [[
+    "outbound",
+    "tts",
+    "勇者，现在最短时间是十七点四十分。",
+    "speech-session-1"
+  ]]);
+});
+
+test("successful QQ replies write the full outbound body to persona conversation context", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-context-"));
+  const fullText = `完整回复-${"内容".repeat(300)}`;
+  await withJsonServer(() => ({ status: "ok", retcode: 0, data: { message_id: "qq-out-full-1" } }), async (url) => {
+    const result = await handleAgentReply({
+      text: fullText,
+      replyContext: {
+        runtimeRouteId: "qq-route",
+        routeProfileId: "qq-route",
+        targetType: "group",
+        groupId: "10001",
+        messageId: "qq-in-1",
+        instanceId: "qq-main",
+        adapterType: "napcat",
+        logicalAdapter: "napcat",
+        transport: "napcat",
+        conversationKey: "napcat:gateway:qq-route:instance:qq-main:group:10001",
+        outputAdapter: "qq",
+        replyToSource: true
+      }
+    }, {
+      rootDir,
+      routeRoot: path.join(rootDir, "data", "route"),
+      rolesRoot: path.join(rootDir, "data", "roles"),
+      runtimes: [{
+        id: "qq-route",
+        agentRoleId: "XinghaiBuilder",
+        pipeline: { inputAdapter: "napcat", outputAdapter: "qq", outputPipeline: "qq", replyToSource: true },
+        messageAdapterPolicies: { napcat: { outputEnabled: true, supportedOutputs: ["text"] } },
+        napcatInstances: [{ id: "qq-main", httpUrl: url, accessToken: "", enabled: true }]
+      }]
+    });
+    assert.equal(result.ok, true);
+  });
+
+  const items = recentMessageContextItems([path.join(rootDir, "data", "roles", "XinghaiBuilder")], {
+    limit: 10,
+    adapter: "napcat",
+    conversationKey: "napcat:gateway:qq-route:instance:qq-main:group:10001"
+  });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].direction, "outbound");
+  assert.equal(items[0].text, fullText);
+  assert.equal(items[0].messageId, "qq-out-full-1");
 });
 
 test("explicit WeCom group target sends through the WeCom SDK wrapper", async () => {

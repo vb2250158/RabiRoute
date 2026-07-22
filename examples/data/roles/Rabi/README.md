@@ -15,7 +15,7 @@ Rabi 是 RabiRoute 的兔娘看板娘，也是 RabiRoute 的灵魂。
 ## 目录内容
 
 - `persona.md`：Rabi 的身份、语气、边界和路由行为。
-- `personaConfig.json`：Rabi 的示例消息模板规则。
+- `personaConfig.json`：Rabi 的示例消息模板规则，也可以用 `avatar` 引用同目录的人格头像。
 - `growth.md`：Rabi 如何复盘、学习和更新自己。
 - `skills.md`：Rabi 目前会优先维护的能力。
 - `skills/one-plan-one-task-tracking.md`：不绑定群聊平台和具体项目、适用于所有计划的一计划一会话任务追踪范例。

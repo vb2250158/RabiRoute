@@ -24,6 +24,10 @@ import {
   appendRabiLinkConversationEntry,
   DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS
 } from "./rabilinkConversationLedger.js";
+import {
+  appendMessageContextToDir,
+  messageContextFromOutboxEvent
+} from "./messageContextStore.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -368,7 +372,7 @@ function dataDirsForRoute(options: AgentReplyOptions, route: ResolvedRoute): str
   return [...dirs];
 }
 
-function rabiLinkConversationDataDir(options: AgentReplyOptions, route: ResolvedRoute): string {
+function conversationDataDirForRoute(options: AgentReplyOptions, route: ResolvedRoute): string {
   if (route.profile) {
     const profileRoleDir = roleDirFor(options.rootDir, options.rolesRoot, {
       rolesDir: route.profile.rolesDir ?? route.runtime.rolesDir,
@@ -383,6 +387,10 @@ function rabiLinkConversationDataDir(options: AgentReplyOptions, route: Resolved
   const runtimeDataDir = resolvePath(options.rootDir, route.runtime.dataDir);
   if (runtimeDataDir) return runtimeDataDir;
   return path.resolve(options.routeRoot, routeConfigName(route.runtime.id));
+}
+
+function rabiLinkConversationDataDir(options: AgentReplyOptions, route: ResolvedRoute): string {
+  return conversationDataDirForRoute(options, route);
 }
 
 function rabiLinkConversationSplitAfterMs(route: ResolvedRoute): number {
@@ -557,6 +565,51 @@ function appendOutboxLog(options: AgentReplyOptions, route: ResolvedRoute | unde
     message,
     data
   })}\n`, "utf8");
+  if (!route) return;
+  const contextRecord = messageContextFromOutboxEvent(event, message, data);
+  if (!contextRecord) return;
+  try {
+    appendMessageContextToDir(conversationDataDirForRoute(options, route), contextRecord);
+  } catch (error) {
+    console.warn(`Failed to append outbound conversation context event=${event}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function outboundConversationData(
+  route: ResolvedRoute,
+  target: SourceRecord,
+  context: Record<string, unknown>,
+  text: string,
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  const logicalAdapter = valueString(context.logicalAdapter)
+    || target.adapterType
+    || (target.targetType === "voice_transcript" ? "speech" : target.targetType === "group" || target.targetType === "private" ? "napcat" : undefined);
+  const personaId = route.profile?.agentRoleId ?? route.runtime.agentRoleId;
+  const voiceReply = logicalAdapter === "speech" || logicalAdapter === "fennenote" || logicalAdapter === "xiaoai";
+  return {
+    ...data,
+    text: valueString(data.text) || text,
+    gatewayId: route.runtime.id,
+    routeProfileId: route.profile?.id ?? route.runtime.id,
+    logicalAdapter,
+    adapterType: logicalAdapter,
+    transport: valueString(context.transport) || logicalAdapter,
+    conversationKey: valueString(context.conversationKey),
+    targetType: target.targetType ?? data.targetType,
+    groupId: target.groupId ?? data.groupId,
+    userId: target.userId ?? data.userId,
+    instanceId: target.instanceId ?? data.instanceId,
+    conversationId: target.conversationId ?? data.conversationId,
+    chatId: target.chatId ?? data.chatId,
+    roleId: target.roleId ?? data.roleId,
+    sessionId: valueString(context.sessionId),
+    speakerId: voiceReply ? personaId : undefined,
+    speakerName: voiceReply ? personaId : undefined,
+    speakerKind: voiceReply ? "persona" : undefined,
+    speakerDecision: voiceReply ? "persona" : undefined,
+    speakerVerified: voiceReply ? true : undefined
+  };
 }
 
 function endpointFor(route: ResolvedRoute, instanceId?: string): AgentReplyNapCatInstance | undefined {
@@ -913,7 +966,7 @@ async function postRabiSpeechOutput(
     body: JSON.stringify({
       model: routeVariable(route, "speechTtsModel") || "tts-local",
       input: text,
-      voice: pipeline.ttsVoice || routeVariable(route, "speechVoice") || roleId,
+      voice: roleId,
       response_format: "wav",
       speed: Number.isFinite(speed) && speed >= 0.25 && speed <= 4 ? speed : 1,
       language: routeVariable(route, "speechLanguage") || null,
@@ -969,6 +1022,9 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     messageType: requestField(request, "wecomMessageType")
   };
   const route = resolveRoute(options, routeProfileId, messageId, contextTarget, runtimeRouteId);
+  const withConversation = (data: Record<string, unknown>): Record<string, unknown> => route
+    ? outboundConversationData(route, contextTarget, context, text, data)
+    : data;
   appendOutboxLog(options, route, "info", "reply_requested", text.slice(0, 500), { routeProfileId, messageId, payloadKind: content.kind, request });
 
   if (!route) {
@@ -984,7 +1040,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   }
   if (target.targetType === "role_panel" || target.adapterType === "rolePanel") {
     const result = appendRolePanelReply(options, route, target, text, rolePanelAttachmentsForRequest(request, content), request);
-    appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "role_panel_reply_sent" : "reply_blocked", result.reason ?? "", result);
+    appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "role_panel_reply_sent" : "reply_blocked", result.reason ?? "", withConversation({ ...result }));
     return result;
   }
   if (target.adapterType === "rabilink" || target.targetType === "rabilink") {
@@ -1073,7 +1129,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         "info",
         proactive ? "rabilink_proactive_queued" : "rabilink_reply_queued",
         text.slice(0, 500),
-        { ...result, relayResult }
+        withConversation({ ...result, relayResult, deliveryId })
       );
       return result;
     } catch (error) {
@@ -1128,7 +1184,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         targetType: "voice_transcript",
         sentMessageId: speech.playbackJob
       };
-      appendOutboxLog(options, route, "info", "rabispeech_tts_sent", text.slice(0, 500), { ...result, speech });
+      appendOutboxLog(options, route, "info", "rabispeech_tts_sent", text.slice(0, 500), withConversation({ ...result, speech }));
       return result;
     } catch (error) {
       const result: AgentReplyResult = {
@@ -1157,10 +1213,10 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       userId: target.userId,
       instanceId: target.instanceId
     };
-    appendOutboxLog(options, route, "info", "agent_reply_retained", text.slice(0, 500), {
+    appendOutboxLog(options, route, "info", "agent_reply_retained", text.slice(0, 500), withConversation({
       ...result,
       text
-    });
+    }));
     return result;
   }
 
@@ -1192,7 +1248,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         instanceId: target.instanceId,
         sentMessageId: valueString((forwarded.response as Record<string, unknown>)?.messageId ?? (forwarded.response as Record<string, unknown>)?.id)
       };
-      appendOutboxLog(options, route, "info", outputMode === "playback" ? "fennenote_playback_sent" : "fennenote_reply_sent", text.slice(0, 500), { ...result, forwarded });
+      appendOutboxLog(options, route, "info", outputMode === "playback" ? "fennenote_playback_sent" : "fennenote_reply_sent", text.slice(0, 500), withConversation({ ...result, forwarded }));
       return result;
     } catch (error) {
       const result: AgentReplyResult = {
@@ -1261,7 +1317,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         instanceId: target.instanceId,
         sentMessageId: valueString(sent.messageId ?? sent.reqId)
       };
-      appendOutboxLog(options, route, "info", "wecom_reply_sent", text.slice(0, 500), { ...result, sent });
+      appendOutboxLog(options, route, "info", "wecom_reply_sent", text.slice(0, 500), withConversation({ ...result, sent }));
       return result;
     } catch (error) {
       const result: AgentReplyResult = {
@@ -1339,11 +1395,10 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
           sentFileId: valueString(uploaded.fileId),
           sentFileName: uploaded.fileName || fileName
         };
-        appendOutboxLog(options, route, "info", "group_file_uploaded", fileName, {
+        appendOutboxLog(options, route, "info", "group_file_uploaded", fileName, withConversation({
           ...result,
-          filePath,
-          fileSize: fs.statSync(filePath).size
-        });
+          attachments: [{ kind: "file", name: fileName, size: fs.statSync(filePath).size }]
+        }));
 
         if (content.explicitText) {
           try {
@@ -1352,7 +1407,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
               message: napcatGroupReplyMessage(content.explicitText, target.messageId ?? messageId, pipeline.replyToSource)
             }, endpoint);
             result.sentMessageId = valueString(caption.messageId);
-            appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), result);
+            appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), withConversation({ ...result, text: content.explicitText }));
           } catch (captionError) {
             result.reason = `File uploaded, but the follow-up text failed: ${captionError instanceof Error ? captionError.message : String(captionError)}`;
             appendOutboxLog(options, route, "warning", "group_file_caption_failed", result.reason, result);
@@ -1365,13 +1420,13 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         message: napcatGroupReplyMessage(content.message, target.messageId ?? messageId, pipeline.replyToSource)
       }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: target.groupId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
-      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), result);
+      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation({ ...result }));
       return result;
     }
     if (target.targetType === "private" && target.userId) {
       const sent = await sendPrivateMessage({ userId: target.userId, message: content.message }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "private", userId: target.userId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
-      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), result);
+      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation({ ...result }));
       return result;
     }
     const result: AgentReplyResult = { ...draft("Only current QQ group/private source replies can be sent automatically.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };

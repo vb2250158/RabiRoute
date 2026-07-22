@@ -6,8 +6,16 @@ import { rabiContextManager } from "../context/rabiContextManager.js";
 import { buildRoleKnowledgeContextView } from "./roleKnowledgeContext.js";
 import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
+import { recentMessageLimitFor } from "../shared/gatewayConfigModel.js";
+import {
+  messageContextArchiveIndexPath,
+  messageContextArchiveDir,
+  messageContextCurrentPath,
+  recentMessageContextText
+} from "../messageContextStore.js";
 import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
+import { messageContextScopeForForward } from "./messageContextScope.js";
 import {
   isGroupRecord,
   isHeartbeatRecord,
@@ -28,15 +36,6 @@ export type AgentPacket = {
   rule: NotificationRule;
   templateValues: ForwardTemplateValues;
   message: string;
-};
-
-type RecentMessageItem = {
-  time: number;
-  source: string;
-  sender?: string;
-  target?: string;
-  text: string;
-  messageId?: string | number;
 };
 
 type MessageCodeRecord = {
@@ -406,70 +405,32 @@ function messageCodeParseText(record: RouteDecision["record"], dataDir: string):
   return result.lines.join("\n");
 }
 
-function recentMessageItems(dataDir: string, limit: number): RecentMessageItem[] {
-  if (!dataDir || limit <= 0) {
-    return [];
-  }
-
-  const groupMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "group-messages.jsonl"))
-    .map((item) => ({
-      time: Number(item.time) || 0,
-      source: "群聊",
-      sender: messageText(item.senderName || item.userId),
-      target: item.groupId == null ? undefined : `群 ${item.groupId}`,
-      text: messageText(item.rawMessage),
-      messageId: item.messageId as string | number | undefined
-    }));
-  const privateMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "private-messages.jsonl"))
-    .map((item) => ({
-      time: Number(item.time) || 0,
-      source: "私聊",
-      sender: messageText(item.senderName || item.userId),
-      target: item.userId == null ? undefined : `用户 ${item.userId}`,
-      text: messageText(item.rawMessage),
-      messageId: item.messageId as string | number | undefined
-    }));
-  const wecomMessages = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "wecom-messages.jsonl"))
-    .map((item) => ({
-      time: Number(item.time) || 0,
-      source: "企业微信",
-      sender: messageText(item.senderName || item.senderId || item.userId),
-      target: messageText(item.groupId || item.chatId || item.conversationId),
-      text: messageText(item.rawMessage),
-      messageId: item.messageId as string | number | undefined
-    }));
-  const voiceTranscripts = parseJsonlFile<Record<string, unknown>>(path.join(dataDir, "voice-transcripts.jsonl"))
-    .map((item) => ({
-      time: Number(item.time) || 0,
-      source: "语音转写",
-      sender: messageText(item.speakerName || item.senderName || item.source),
-      target: messageText(item.sourceDeviceName || item.sourceDeviceId || item.source),
-      text: messageText(item.rawMessage),
-      messageId: item.messageId as string | number | undefined
-    }));
-
-  return [...groupMessages, ...privateMessages, ...wecomMessages, ...voiceTranscripts]
-    .filter((item) => item.text)
-    .sort((left, right) => left.time - right.time)
-    .slice(-limit);
-}
-
-function recentMessagesText(dataDir: string, limit: number): string {
-  const items = recentMessageItems(dataDir, limit);
-  if (items.length === 0) {
-    return "- 暂无";
-  }
-
-  return items.map((item) => {
-    const parts = [
-      item.time ? formatTime(item.time) : "",
-      item.source,
-      item.target,
-      item.sender ? `发送者：${item.sender}` : "",
-      item.messageId != null ? `messageId=${item.messageId}` : ""
-    ].filter(Boolean);
-    return `- ${parts.join(" | ")}\n  ${item.text}`;
-  }).join("\n");
+function recentMessageContextForDecision(decision: RouteDecision, roleContext: AgentRoleContext): {
+  endpoint?: string;
+  transport?: string;
+  conversationKey?: string;
+  limit: number;
+  text: string;
+} {
+  const scope = messageContextScopeForForward(decision.routeKind, decision.record, {
+    gatewayId: process.env.GATEWAY_ID,
+    routeProfileId: decision.route.id
+  });
+  if (!scope?.endpoint) return { limit: 0, text: "- 暂无" };
+  const limit = decision.route.recentMessageLimits
+    ? recentMessageLimitFor(decision.route.recentMessageLimits, scope.endpoint)
+    : Math.max(0, Math.min(200, Math.floor(Number(decision.route.recentMessageLimit) || 0)));
+  return {
+    endpoint: scope.endpoint,
+    transport: scope.record.transport,
+    conversationKey: scope.record.conversationKey,
+    limit,
+    text: recentMessageContextText([roleContext.dataDir], {
+      limit,
+      adapter: scope.endpoint,
+      conversationKey: scope.record.conversationKey
+    })
+  };
 }
 
 function extractPlanIds(text: string): string[] {
@@ -641,6 +602,10 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const manualTriggerLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "manual-trigger-events.jsonl"));
   const rolePanelLogPath = relativeWorkspacePath(path.join(roleContext.roleDir || roleContext.dataDir, "role-panel", "messages.jsonl"));
   const voiceTranscriptLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "voice-transcripts.jsonl"));
+  const conversationCurrentPath = relativeWorkspacePath(messageContextCurrentPath(roleContext.dataDir));
+  const conversationArchiveDir = relativeWorkspacePath(messageContextArchiveDir(roleContext.dataDir));
+  const conversationArchiveIndexPath = relativeWorkspacePath(messageContextArchiveIndexPath(roleContext.dataDir));
+  const recentContext = recentMessageContextForDecision(decision, roleContext);
   const replyContext = {
     runtimeRouteId: process.env.GATEWAY_ID,
     gatewayId: process.env.GATEWAY_ID,
@@ -653,6 +618,9 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     userId: "userId" in record ? record.userId : undefined,
     targetGroupId: config.targetGroupId || undefined,
     instanceId: "instanceId" in record ? record.instanceId : undefined,
+    logicalAdapter: recentContext.endpoint,
+    transport: recentContext.transport,
+    conversationKey: recentContext.conversationKey,
     adapterType: isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
     speakerId: isVoiceTranscript ? record.speakerId : undefined,
     speakerName: isVoiceTranscript ? record.speakerName : undefined,
@@ -696,8 +664,10 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     messageId: record.messageId,
     botNickname: config.botNickname,
     agentRoleId: roleContext.roleId,
-    recentMessageLimit: route.recentMessageLimit,
-    recentMessages: recentMessagesText(roleContext.dataDir, route.recentMessageLimit),
+    recentMessageLimit: recentContext.limit,
+    recentMessageEndpoint: recentContext.endpoint,
+    recentConversationKey: recentContext.conversationKey,
+    recentMessages: recentContext.text,
     routeProfileId: route.id,
     routeProfileName: route.name,
     runtimeRouteId: process.env.GATEWAY_ID,
@@ -733,6 +703,9 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     manualTriggerLogPath,
     rolePanelLogPath,
     voiceTranscriptLogPath,
+    conversationCurrentPath,
+    conversationArchiveDir,
+    conversationArchiveIndexPath,
     heartbeatIntervalSeconds: "intervalSeconds" in record ? record.intervalSeconds : undefined,
     triggerId: isManualTrigger ? record.triggerId : undefined,
     triggerName: isManualTrigger ? record.triggerName : undefined,
@@ -742,6 +715,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     voiceSpeakerKind: isVoiceTranscript ? record.speakerKind : undefined,
     voiceSpeakerConfidence: isVoiceTranscript ? record.speakerConfidence : undefined,
     voiceSpeakerDecision: isVoiceTranscript ? record.speakerDecision : undefined,
+    speechPushMode: isVoiceTranscript ? route.speechPushMode : undefined,
     voiceSourceDeviceId: isVoiceTranscript ? record.sourceDeviceId : undefined,
     voiceSourceDeviceName: isVoiceTranscript ? record.sourceDeviceName : undefined,
     voiceSourceArea: isVoiceTranscript ? record.sourceArea : undefined,
@@ -820,6 +794,8 @@ function buildAgentMessage(
       optionalLine("说话人", values.voiceSpeakerName),
       optionalLine("说话人置信度", values.voiceSpeakerConfidence),
       optionalLine("说话人判定", values.voiceSpeakerDecision),
+      optionalLine("语音推送模式", values.speechPushMode),
+      optionalLine("命中人格关键词", values.speechTriggerKeyword),
       optionalLine("触发 ID", values.triggerId),
       optionalLine("触发名称", values.triggerName)
     ]),
@@ -832,7 +808,9 @@ function buildAgentMessage(
       "只有接口返回成功并复核读回结果后才能声称配置完成；不明确时先向用户追问。"
     ]) : "",
     recentMessageLimit > 0 ? section("最近消息", [
-      `最近 ${recentMessageLimit} 条：`,
+      optionalLine("当前消息端", values.recentMessageEndpoint),
+      optionalLine("当前会话", values.recentConversationKey),
+      `当前消息端、当前会话最近 ${recentMessageLimit} 条双向消息：`,
       String(values.recentMessages || "- 暂无")
     ]) : "",
     hasPersona ? section("角色和路径", [
@@ -869,7 +847,10 @@ function buildAgentMessage(
       optionalLine("心跳日志", values.heartbeatLogPath),
       optionalLine("手动触发日志", values.manualTriggerLogPath),
       optionalLine("角色面板记录", values.rolePanelLogPath),
-      optionalLine("语音转写日志", values.voiceTranscriptLogPath)
+      optionalLine("语音转写日志", values.voiceTranscriptLogPath),
+      optionalLine("当前双向会话", values.conversationCurrentPath),
+      optionalLine("历史会话归档", values.conversationArchiveDir),
+      optionalLine("会话归档索引", values.conversationArchiveIndexPath)
     ]),
     section("回传", [
       optionalLine("普通回复 API", values.replyApiUrl),
