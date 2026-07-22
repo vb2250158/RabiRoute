@@ -14,6 +14,12 @@ class _RecordingManagerClient(ManagerClient):
         self.paths.append(path)
         if path == "/meta":
             return {"version": "test"}
+        if path.endswith("/plans"):
+            return {"code": 0, "data": [{"id": "plan-1"}]}
+        if path.endswith("/memory"):
+            return {"code": 0, "data": {"recent": [], "consolidated": []}}
+        if "/role-panel/messages" in path:
+            return {"messages": [{"id": "message-1"}]}
         return {"data": {"manager": [{"id": "route-1"}]}}
 
 
@@ -25,6 +31,25 @@ class ManagerSnapshotTest(unittest.TestCase):
 
         self.assertEqual(client.paths, ["/meta", "/gateways?summary=1"])
         self.assertEqual(snapshot.gateways, [{"id": "route-1"}])
+
+    def test_desktop_read_models_use_manager_role_apis(self) -> None:
+        client = _RecordingManagerClient()
+
+        plans = client.role_plans("Rabi / 测试")
+        memory = client.role_memory("Rabi / 测试")
+        messages = client.role_panel_messages_snapshot("Rabi / 测试")
+
+        self.assertEqual(plans, [{"id": "plan-1"}])
+        self.assertEqual(memory, {"recent": [], "consolidated": []})
+        self.assertEqual(messages, [{"id": "message-1"}])
+        self.assertEqual(
+            client.paths,
+            [
+                "/api/roles/Rabi%20%2F%20%E6%B5%8B%E8%AF%95/plans",
+                "/api/roles/Rabi%20%2F%20%E6%B5%8B%E8%AF%95/memory",
+                "/api/roles/Rabi%20%2F%20%E6%B5%8B%E8%AF%95/role-panel/messages?limit=120",
+            ],
+        )
 
     def test_unique_enabled_gateway_is_the_default_selection(self) -> None:
         snapshot = ManagerSnapshot(
