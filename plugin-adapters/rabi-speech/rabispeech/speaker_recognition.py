@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import importlib.util
 import math
@@ -32,28 +33,73 @@ class SpeakerEmbeddingExtractor(Protocol):
     def compute(self, samples: np.ndarray, sample_rate: int) -> np.ndarray: ...
 
 
-class SherpaOnnxSpeakerEmbeddingExtractor:
-    def __init__(self, settings: SpeakerRecognitionSettings) -> None:
-        import sherpa_onnx
+class OnnxRuntimeSpeakerEmbeddingExtractor:
+    """Portable fallback for official 3D-Speaker ONNX models.
 
-        config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
-            model=str(settings.model_path),
-            num_threads=settings.num_threads,
-            debug=False,
-            provider=settings.provider,
+    ONNX Runtime loads the official speaker models directly, while
+    kaldi-native-fbank supplies their declared 80-bin input features.
+    """
+
+    def __init__(self, settings: SpeakerRecognitionSettings) -> None:
+        import kaldi_native_fbank as knf
+        import onnxruntime as ort
+
+        session_options = ort.SessionOptions()
+        session_options.intra_op_num_threads = max(1, settings.num_threads)
+        requested = settings.provider.strip().casefold()
+        available = set(ort.get_available_providers())
+        preferred = "CUDAExecutionProvider" if requested in {"cuda", "gpu"} else "CPUExecutionProvider"
+        providers = list(dict.fromkeys(name for name in [preferred, "CPUExecutionProvider"] if name in available))
+        if not providers:
+            raise RuntimeError(f"No ONNX Runtime provider is available for speaker embeddings: {settings.provider}")
+        self._session = ort.InferenceSession(
+            str(settings.model_path),
+            sess_options=session_options,
+            providers=providers,
         )
-        if not config.validate():
-            raise RuntimeError("Invalid sherpa-onnx speaker embedding configuration.")
-        self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
-        self.dimension = int(self._extractor.dim)
+        model_input = self._session.get_inputs()[0]
+        model_output = self._session.get_outputs()[0]
+        self._input_name = model_input.name
+        self._output_name = model_output.name
+        input_bins = model_input.shape[-1]
+        if not isinstance(input_bins, int) or input_bins <= 0:
+            raise RuntimeError("Speaker model does not declare a fixed feature dimension.")
+        output_dimension = model_output.shape[-1]
+        if not isinstance(output_dimension, int) or output_dimension <= 0:
+            raise RuntimeError("Speaker model does not declare a fixed embedding dimension.")
+        self.dimension = output_dimension
+        self._sample_rate = 16_000
+        self._fbank_options = knf.FbankOptions()
+        self._fbank_options.frame_opts.samp_freq = self._sample_rate
+        self._fbank_options.frame_opts.dither = 0.0
+        self._fbank_options.frame_opts.snip_edges = True
+        self._fbank_options.mel_opts.num_bins = input_bins
+        self._fbank_type = knf.OnlineFbank
 
     def compute(self, samples: np.ndarray, sample_rate: int) -> np.ndarray:
-        stream = self._extractor.create_stream()
-        stream.accept_waveform(sample_rate=sample_rate, waveform=np.ascontiguousarray(samples, dtype=np.float32))
-        stream.input_finished()
-        if not self._extractor.is_ready(stream):
+        waveform = np.ascontiguousarray(samples, dtype=np.float32).reshape(-1)
+        if sample_rate <= 0 or waveform.size == 0:
+            raise ValueError("Speaker embedding audio is empty.")
+        if sample_rate != self._sample_rate:
+            from scipy.signal import resample_poly
+
+            common = math.gcd(sample_rate, self._sample_rate)
+            waveform = np.ascontiguousarray(
+                resample_poly(waveform, self._sample_rate // common, sample_rate // common),
+                dtype=np.float32,
+            )
+        fbank = self._fbank_type(self._fbank_options)
+        fbank.accept_waveform(self._sample_rate, waveform.tolist())
+        fbank.input_finished()
+        if fbank.num_frames_ready <= 0:
             raise RuntimeError("Speaker embedding extractor did not receive enough audio.")
-        return np.asarray(self._extractor.compute(stream), dtype=np.float32)
+        features = np.stack([fbank.get_frame(index) for index in range(fbank.num_frames_ready)]).astype(np.float32)
+        features -= np.mean(features, axis=0, keepdims=True)
+        embedding = self._session.run(
+            [self._output_name],
+            {self._input_name: features[np.newaxis, :, :]},
+        )[0]
+        return np.asarray(embedding, dtype=np.float32).reshape(-1)
 
 
 class SpeakerRecognitionService:
@@ -78,19 +124,27 @@ class SpeakerRecognitionService:
         self._load_error: str | None = None
         self._runtime_error: str | None = None
         self._extractor = extractor
-        self._model_probe = model_probe or _probe_sherpa_model
+        self._model_probe = model_probe or _probe_speaker_model
         self._load()
         if self._extractor is None:
             self._extractor = self._create_extractor()
+        self._validation_error = self._validate_report()
 
     @property
     def ready(self) -> bool:
         return self._extractor is not None and self._load_error is None
 
+    @property
+    def validated(self) -> bool:
+        return bool(self.settings.validated and self.ready and self._validation_error is None)
+
     def capability(self) -> dict[str, object]:
         model_present = self.settings.model_path.is_file()
-        dependency_present = self._extractor is not None or importlib.util.find_spec("sherpa_onnx") is not None
-        validated = bool(self.settings.validated and self.ready)
+        dependency_present = self._extractor is not None or (
+            importlib.util.find_spec("onnxruntime") is not None
+            and importlib.util.find_spec("kaldi_native_fbank") is not None
+        )
+        validated = self.validated
         experimental_auto_assign = bool(
             self.settings.experimental_auto_assign
             and self.settings.auto_assign
@@ -104,7 +158,9 @@ class SpeakerRecognitionService:
         elif self._load_error:
             reason = f"The local speaker embedding store is unreadable: {self._load_error}"
         elif not self.ready:
-            reason = self._runtime_error or "The sherpa-onnx speaker embedding dependency is unavailable."
+            reason = self._runtime_error or "The ONNX Runtime speaker embedding dependencies are unavailable."
+        elif self.settings.validated and self._validation_error:
+            reason = self._validation_error
         elif experimental_auto_assign:
             reason = "The local matcher is available with conservative experimental auto-assignment; formal benchmark validation is still pending."
         elif not self.settings.validated:
@@ -120,7 +176,9 @@ class SpeakerRecognitionService:
             "provider": self.settings.provider,
             "model_present": model_present,
             "dependency_present": dependency_present,
-            "validated": bool(self.settings.validated),
+            "validated": validated,
+            "validation_requested": bool(self.settings.validated),
+            "validation_report": self.settings.validation_report_path.name if self.settings.validation_report_path else None,
             "experimental_auto_assign": experimental_auto_assign,
             "auto_assign": bool(self.settings.auto_assign and (validated or experimental_auto_assign)),
             "thresholds": {
@@ -172,15 +230,37 @@ class SpeakerRecognitionService:
         mono = np.ascontiguousarray(samples.mean(axis=1), dtype=np.float32)
         labels = [segment.speaker_label or segment.speaker for segment in result.segments]
         synthetic = not any(labels)
-        grouped: dict[str, list[TranscriptSegment]] = {}
-        for segment in result.segments:
+        provider_groups: dict[str, list[int]] = {}
+        for index, segment in enumerate(result.segments):
             label = segment.speaker_label or segment.speaker or SYNTHETIC_SINGLE_SPEAKER_LABEL
-            grouped.setdefault(label, []).append(segment)
+            provider_groups.setdefault(label, []).append(index)
 
+        sample_groups: list[tuple[str, str, list[int]]] = []
+        sample_label_by_index: dict[int, str] = {}
+        if synthetic:
+            sample_groups.append((SYNTHETIC_SINGLE_SPEAKER_LABEL, SYNTHETIC_SINGLE_SPEAKER_LABEL, list(range(len(result.segments)))))
+            sample_label_by_index.update({index: SYNTHETIC_SINGLE_SPEAKER_LABEL for index in range(len(result.segments))})
+        else:
+            for provider_label, indexes in provider_groups.items():
+                if len(indexes) == 1:
+                    sample_label = provider_label
+                    sample_groups.append((sample_label, provider_label, indexes))
+                    sample_label_by_index[indexes[0]] = sample_label
+                    continue
+                for turn_ordinal, index in enumerate(indexes, start=1):
+                    sample_label = f"{provider_label}#turn-{turn_ordinal}"
+                    sample_groups.append((sample_label, provider_label, [index]))
+                    sample_label_by_index[index] = sample_label
+
+        provider_segments = {
+            label: [result.segments[index] for index in indexes]
+            for label, indexes in provider_groups.items()
+        }
         decisions: dict[str, dict[str, object]] = {}
-        for label, segments in grouped.items():
-            if _has_cross_speaker_overlap(label, grouped):
-                decisions[label] = {
+        for sample_label, provider_label, indexes in sample_groups:
+            segments = [result.segments[index] for index in indexes]
+            if _has_cross_speaker_overlap(provider_label, provider_segments):
+                decisions[sample_label] = {
                     "speaker_decision": "voiceprint_overlapping_speech",
                     "speaker_model": self.settings.model_id,
                 }
@@ -188,7 +268,7 @@ class SpeakerRecognitionService:
             clip = _segment_audio(mono, sample_rate, segments)
             clip, duration = _voiced_audio(clip, sample_rate, self.settings.min_voiced_rms)
             if duration < self.settings.min_embedding_seconds:
-                decisions[label] = {
+                decisions[sample_label] = {
                     "speaker_decision": "voiceprint_too_short",
                     "speaker_sample_duration": round(duration, 3),
                     "speaker_model": self.settings.model_id,
@@ -198,33 +278,35 @@ class SpeakerRecognitionService:
                 embedding = _normalize(self._extractor.compute(clip, sample_rate))  # type: ignore[union-attr]
             except Exception as exc:
                 self._runtime_error = f"{type(exc).__name__}: {exc}"[:500]
-                decisions[label] = {
+                decisions[sample_label] = {
                     "speaker_decision": "voiceprint_embedding_failed",
                     "speaker_sample_duration": round(duration, 3),
                     "speaker_model": self.settings.model_id,
                 }
                 continue
-            decisions[label] = self._record_and_match(
+            decisions[sample_label] = self._record_and_match(
                 record_id=record_id,
                 session_id=session_id,
-                speaker_label=label,
+                speaker_label=sample_label,
                 duration=duration,
                 embedding=embedding,
                 profile_names=profile_names,
             )
 
         enriched = []
-        for segment in result.segments:
-            label = segment.speaker_label or segment.speaker or SYNTHETIC_SINGLE_SPEAKER_LABEL
-            decision = decisions.get(label, {})
+        for index, segment in enumerate(result.segments):
+            provider_label = segment.speaker_label or segment.speaker or SYNTHETIC_SINGLE_SPEAKER_LABEL
+            sample_label = sample_label_by_index.get(index, provider_label)
+            decision = decisions.get(sample_label, {})
             enriched.append(replace(
                 segment,
-                speaker=segment.speaker or (None if synthetic else label),
-                speaker_label=label,
+                speaker=segment.speaker or (None if synthetic else provider_label),
+                speaker_label=sample_label,
                 speaker_id=_optional_string(decision.get("speaker_id")),
                 speaker_name=_optional_string(decision.get("speaker_name")),
                 speaker_decision=_optional_string(decision.get("speaker_decision")),
                 speaker_cluster_id=_optional_string(decision.get("speaker_cluster_id")),
+                voiceprint_id=_optional_string(decision.get("speaker_cluster_id")),
                 speaker_score=_optional_float(decision.get("speaker_score")),
                 speaker_margin=_optional_float(decision.get("speaker_margin")),
                 speaker_sample_duration=_optional_float(decision.get("speaker_sample_duration")),
@@ -293,7 +375,7 @@ class SpeakerRecognitionService:
             margin = best_score - second_score if best_id else 0.0
             hard_accept = bool(
                 best_id
-                and (self.settings.validated or self.settings.experimental_auto_assign)
+                and (self.validated or self.settings.experimental_auto_assign)
                 and self.settings.auto_assign
                 and duration >= self.settings.hard_accept_seconds
                 and best_score >= self.settings.hard_threshold
@@ -321,7 +403,7 @@ class SpeakerRecognitionService:
             decision: dict[str, object] = {
                 "speaker_decision": (
                     "voiceprint_auto_match"
-                    if hard_accept and self.settings.validated
+                    if hard_accept and self.validated
                     else "voiceprint_experimental_auto_match"
                     if hard_accept
                     else
@@ -340,6 +422,52 @@ class SpeakerRecognitionService:
                 decision["speaker_id"] = best_id
                 decision["speaker_name"] = profile_names.get(best_id)
             return decision
+
+    def _validate_report(self) -> str | None:
+        if not self.settings.validated:
+            return None
+        report_path = self.settings.validation_report_path
+        if report_path is None:
+            return "Speaker validation was requested, but validation_report_path is not configured."
+        if not report_path.is_file():
+            return "The configured speaker validation report does not exist."
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or int(payload.get("schema_version") or 0) != 1:
+                return "The speaker validation report must use schema_version=1."
+            if str(payload.get("dataset_kind") or "").strip().lower() != "real_person_private":
+                return "The speaker validation report must use a real_person_private dataset."
+            if payload.get("formal_validation_eligible") is not True:
+                return "The speaker validation report is not eligible for formal validation."
+            manifest_hash = str(payload.get("dataset_manifest_sha256") or "").strip().lower()
+            if len(manifest_hash) != 64 or any(character not in "0123456789abcdef" for character in manifest_hash):
+                return "The speaker validation report has no valid dataset manifest hash."
+            overall_validation = payload.get("validation")
+            if not isinstance(overall_validation, dict) or overall_validation.get("passed") is not True:
+                return "The speaker validation report did not pass the complete dataset and engine policy."
+            policy_hash = str(overall_validation.get("policy_sha256") or "").strip().lower()
+            if len(policy_hash) != 64 or any(character not in "0123456789abcdef" for character in policy_hash):
+                return "The speaker validation report has no valid policy hash."
+            results = payload.get("results")
+            if not isinstance(results, list):
+                return "The speaker validation report has no results array."
+            result = next((item for item in results if isinstance(item, dict) and item.get("engine") == self.settings.model_id), None)
+            if not isinstance(result, dict):
+                return "The speaker validation report does not contain the configured model id."
+            validation = result.get("validation")
+            if not isinstance(validation, dict) or validation.get("passed") is not True:
+                return "The configured speaker model did not pass the report policy."
+            if abs(float(result.get("threshold")) - self.settings.hard_threshold) > 1e-9:
+                return "The speaker validation report hard threshold does not match runtime configuration."
+            if abs(float(result.get("margin")) - self.settings.min_margin) > 1e-9:
+                return "The speaker validation report margin does not match runtime configuration."
+            expected_hash = str(result.get("model_sha256") or "").strip().lower()
+            actual_hash = hashlib.sha256(self.settings.model_path.read_bytes()).hexdigest()
+            if not expected_hash or expected_hash != actual_hash:
+                return "The speaker validation report model hash does not match the configured model file."
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            return f"The speaker validation report is invalid: {type(exc).__name__}: {exc}"[:500]
+        return None
 
     def _profile_scores(self, embedding: np.ndarray) -> list[tuple[str, float]]:
         grouped: dict[str, list[float]] = {}
@@ -386,7 +514,7 @@ class SpeakerRecognitionService:
             self._runtime_error = probe_error[:500]
             return None
         try:
-            return SherpaOnnxSpeakerEmbeddingExtractor(self.settings)
+            return OnnxRuntimeSpeakerEmbeddingExtractor(self.settings)
         except Exception as exc:
             self._runtime_error = f"{type(exc).__name__}: {exc}"[:500]
             return None
@@ -405,8 +533,28 @@ class SpeakerRecognitionService:
         for rows in confirmed_by_profile.values():
             rows.sort(key=lambda item: float(item[1].get("updated_at") or 0), reverse=True)
             remove.update(key for key, _sample in rows[self.settings.max_samples_per_profile:])
+
+        # Keep at least one recent prototype for every surviving unknown cluster.
+        # A purely global recency cap lets a talkative recent speaker evict a quiet
+        # speaker completely, causing the same person to receive a new cluster id
+        # later in a day-long recording.
         unconfirmed.sort(key=lambda item: float(item[1].get("updated_at") or 0), reverse=True)
-        remove.update(key for key, _sample in unconfirmed[self.settings.max_unconfirmed_samples:])
+        newest_by_cluster: dict[str, tuple[tuple[str, str], dict[str, object]]] = {}
+        for item in unconfirmed:
+            cluster_id = str(item[1].get("cluster_id") or "").strip()
+            if cluster_id and cluster_id not in newest_by_cluster:
+                newest_by_cluster[cluster_id] = item
+        protected = sorted(
+            newest_by_cluster.values(),
+            key=lambda item: float(item[1].get("updated_at") or 0),
+            reverse=True,
+        )[: self.settings.max_unconfirmed_samples]
+        keep = {key for key, _sample in protected}
+        for key, _sample in unconfirmed:
+            if len(keep) >= self.settings.max_unconfirmed_samples:
+                break
+            keep.add(key)
+        remove.update(key for key, _sample in unconfirmed if key not in keep)
         for key in remove:
             self._samples.pop(key, None)
 
@@ -483,7 +631,7 @@ def _has_cross_speaker_overlap(
     return False
 
 
-def _probe_sherpa_model(settings: SpeakerRecognitionSettings) -> str | None:
+def _probe_speaker_model(settings: SpeakerRecognitionSettings) -> str | None:
     probe = Path(__file__).resolve().parents[1] / "scripts" / "speaker_model_probe.py"
     if not probe.is_file():
         return f"Speaker model compatibility probe is missing: {probe}"
@@ -510,7 +658,7 @@ def _probe_sherpa_model(settings: SpeakerRecognitionSettings) -> str | None:
         return None
     detail = (completed.stderr or completed.stdout or "").strip().splitlines()
     suffix = detail[-1] if detail else f"exit code {completed.returncode}"
-    return f"Speaker model is incompatible with the current sherpa-onnx runtime: {suffix}"
+    return f"Speaker model is incompatible with the current ONNX Runtime feature pipeline: {suffix}"
 
 
 def _normalize(value: np.ndarray) -> np.ndarray:

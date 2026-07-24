@@ -141,9 +141,53 @@ RabiRoute 只会在满足以下条件时自动发送：
 
 这个状态只由 `speech` / RabiSpeech 消息端的转写事件注入。不要把 QQ、角色面板或其它文字入口手工标记成语音状态，也不要绕过 Outbox 直连 worker，否则会丢失来源绑定、策略检查和会话隔离。
 
-### Agent 标记说话人
+手机音频流虽然复用同一套 RabiSpeech ASR，但注入的是 `routeKind=rabilink`、`adapterType=rabilink`，并携带稳定的 `sourceDeviceId/sourceDeviceKind`、临时 `sourceStreamId` 和 `channelType=rabilink.mobile_audio`。Agent 仍把完整 `replyContext` POST 到 `/api/agent/replies`；Outbox 只把稳定 `sourceDeviceId` 转成 `targetDeviceIds`，不会把本次 PCM 流 ID 当设备，因此回复只回到原始手机。它不是 `speech` 消息端，也不触发独立语音端的人格 TTS/FIFO 规则。
 
-当会议 ASR 已给出 `Speaker 1`、`Speaker 2` 等分段标签，而 Agent 从对话中确认了人物身份时，可以原子创建/复用人物资料并绑定当前录音标签。`recordId` 必须来自该条持久化语音记录，不能只按长生命周期 `sessionId` 绑定临时标签：
+### 声纹证据与人格身份解释
+
+RabiRoute 投给人格的语音记录只保留不透明声纹/聚类 ID、`Speaker 1` 等分段标签、分数和判定证据，不携带人名，也不把任何声纹标成“用户”。收到记录的人格应结合自己的关系、记忆和会话上下文解释身份；不同人格可以对同一声纹形成不同关系认知。
+
+每条新语音同时携带 `sourceHostId/sourceHostName`。声纹 ID 只在产生它的处理主机范围内解释，因此人格身份键是“处理主机 + 声纹 ID”，不能把两台 PC 恰好相同的 cluster 字符串当成同一个人。人格自己的结构化解释以追加式文件 `data/roles/<RoleId>/voice/voice-identities.jsonl` 为真源；它会随人格目录同步，而 RabiSpeech、Manager 和 Route 都不会替人格填写 `displayName`、`relationship` 或 `isUser`。
+
+查询或更新当前人格的解释：
+
+```http
+GET /api/roles/:roleId/voice-identities
+GET /api/roles/:roleId/voice-identities?sourceHostId=<host>&voiceprintId=<voiceprint>
+PUT /api/roles/:roleId/voice-identities
+Content-Type: application/json
+```
+
+```json
+{
+  "sourceHostId": "example-host-guid",
+  "sourceHostName": "Studio PC",
+  "voiceprintId": "unknown-cluster-7",
+  "displayName": "老板",
+  "relationship": "我的用户",
+  "isUser": true,
+  "aliases": ["老板"],
+  "notes": "由当前人格结合持续会话确认"
+}
+```
+
+`isUser` 没有系统默认值；未知时应省略，而不是写成 `false`。重复提交相同解释不会新增事件；修正会追加新事件，`deleted=true` 会追加 tombstone，不会原地改写共享历史。每个新事件会自动记录它收敛的上一组事件，调用方不需要也不能手工维护父事件。
+
+两台 PC 从同一共同版本并发修改同一个 `sourceHostId + voiceprintId` 时，JSONL 并集合并会保留两个事件头，不再按文件顺序静默选择最后一条。`GET` 返回 `conflicted=true`、`conflictFields` 和带 `eventId/deleted` 的 `conflictCandidates`。如果 `isUser` 或删除状态发生分歧，`voice-transcripts` 把相关分段归为 `conflict`；只有称呼、关系或备注分歧但所有分支的 `isUser` 一致时，用户/他人分类仍可保留，同时关系资料继续标记待收敛。人格再次 `PUT` 自己确认的最终解释时，Manager 会自动 supersede 当前全部事件头，下一次多电脑同步即可收敛。AgentPacket 会提供 `voiceIdentitiesPath`、处理主机、全部声纹 ID、已知关系和待收敛字段；这些内容明确标记为“人格记录”，不是主机推断。
+
+需要从一天或一段时间的会话中区分“当前人格确认的用户、其他人、未知或冲突声纹”时，使用人格级只读视图，而不是自行修改原始消息：
+
+```http
+GET /api/roles/:roleId/voice-transcripts?from=<ISO>&to=<ISO>&speaker=user&limit=200&includeArchives=true
+```
+
+`speaker` 可为 `user`、`other`、`unknown` 或 `conflict`。返回结果在读取时联结 `conversation/current.jsonl`（可选归档）与当前人格的 `voice/voice-identities.jsonl`，提供整条记录的 `personaClassification`、逐分段 `classification` 和匹配身份。`mixed` 表示同一录音包含多种分段结论。这个视图不把称呼或 `isUser` 回写到主机原始消息和人格会话账本；人格关系修正后再次查询会立即得到新解释。
+
+响应中的 `matchedCount` 和 `summary` 都基于完整筛选结果计算，不受明细 `limit` 截断。`summary` 给出总录音/分段数、录音时长、说话人时长、`user/other/unknown/conflict` 分类统计、已解释时长和 `coverageRate`；`unresolvedVoiceprints` 按 `sourceHostId + voiceprintId` 汇总仍未知或冲突的声纹、分段数、时长和最后出现时间。它们只是读取时派生的覆盖率视图，不是新的账本，也不会写回人格文件。
+
+当前路由消息明确询问声纹、说话人、“哪些是我/用户说的、哪些是别人说的”或全天录音归类时，AgentPacket 会把上述时间范围查询、四类 speaker 过滤、关系 GET/PUT 和追加事件规则注入当前人格任务；普通消息不携带这段说明。Agent 应执行当前请求所需的一次查询，不能周期轮询覆盖率；`unknown` 或 `conflict` 只能根据当前人格自己的会话、记忆和用户确认来收敛，不能直接采用主机候选名称或高分。
+
+下面的本机接口仍作为 RabiSpeech 操作员诊断兼容入口：当人工已确认某条录音标签时，可以创建/复用诊断资料并绑定当前 `recordId + speakerLabel`。这些名字不会进入 RabiRoute 主机通用消息或人格账本，不能作为 Agent 判断用户身份的真源：
 
 ```http
 PUT /api/speech/speaker-identities
@@ -164,7 +208,30 @@ Content-Type: application/json
 
 人工入口仍位于 WebGUI「语音服务 → ASR 语音识别 → 说话人 / 声纹设置」，和 Agent 接口共用 `output/speaker-profiles.json`。界面按未知/已知说话人折叠，并为每个分段人物预览最近 10 句话，帮助人工确认或纠正。
 
-这个接口写的是人物元数据和显式会话绑定，不是自动生物声纹识别。当前能力发现仍返回 `voiceprint.supported=false`；Agent 不得把 `Speaker 1` 当作跨会话稳定身份，也不得宣称已经通过声纹自动认人。
+这个接口写的是 RabiSpeech 本机诊断元数据和显式录音绑定。Manager 在通用消息入口删除人名，只转发不透明声纹/聚类证据；对应人格拥有“是谁、是不是用户”的最终解释权。只有能力发现明确返回已校准支持时，才可以把分数描述成声纹匹配证据，但仍不能把主机匹配直接等同于人格关系。
+
+### Agent 触发多电脑人格同步
+
+使用同一个 RabiLink 应用 token 的 PC 可以由本机 Agent 查询并显式同步：
+
+```http
+GET /api/persona-sync/peers
+POST /api/persona-sync/sync
+Content-Type: application/json
+```
+
+```json
+{
+  "peerId": "office-pc",
+  "roleId": "Rabi"
+}
+```
+
+省略 `roleId` 表示同步全部人格。同步器优先局域网直连，失败后经 Relay 受限中转。Agent 必须检查逐文件结果、`fileConflicts` 和 `semanticConflicts`；后者会在同一次同步响应中列出已成功并集合并、但人格声纹关系仍有并发分支的处理主机、声纹、字段和事件候选，不需要另行轮询覆盖率。`conflicts > 0` 或 HTTP `409` 表示仍有待处理冲突，不能声称同步完成。
+
+普通文件冲突由本机 Agent 使用 `GET /api/persona-sync/conflicts`、`GET /api/persona-sync/conflicts/content` 和 `POST /api/persona-sync/conflicts/resolve` 处理。解决动作支持 `keep_local`、`use_remote`、`use_merged`，并应携带列表返回的 `expectedLocalHash` 防止覆盖刚发生的新修改。三条冲突控制接口仅允许回环调用，不经 LAN listener 或 Relay 暴露。底层 manifest、文件读取、单文件 merge 和完整请求字段见 [多电脑人格数据同步](persona-data-sync.md)。
+
+当当前路由消息明确提到多台电脑、人格/角色同步或 persona sync 时，AgentPacket 会把上述回环地址、当前 `roleId`、一次性执行要求和冲突判定直接注入绑定人格的当前任务；普通聊天不注入这段能力说明。默认只同步当前人格，只有用户明确要求时才允许省略 `roleId` 同步全部人格；peer 不唯一时必须先确认目标，不能猜测，也不能用轮询等待覆盖率。
 
 NapCat 群聊需要真实引用原消息时，在 `replyContext` 中同时提供源 `messageId` 和 `replyToSource: true`：
 
@@ -408,11 +475,49 @@ POST /roles/:roleId/plans
   "source": {
     "kind": "agent",
     "summary": "Agent 根据用户讨论新增计划"
+  },
+  "taskBinding": {
+    "agentType": "codex",
+    "sessionId": "exact-source-session-id",
+    "sessionTitle": "计划执行任务",
+    "workspace": "C:/Path/To/Project",
+    "completionHook": {
+      "enabled": true,
+      "gatewayId": "Role__reminder"
+    }
   }
 }
 ```
 
 新增计划必须提供有序的 `steps`。`进行中` 计划必须同时提供 `currentStepId`，并让它指向唯一一条状态为 `进行中` 的步骤；界面据此列出全部步骤并标出当前执行位置。阻塞时用当前步骤的 `blockedBy` 记录不能继续的原因，并用 `waitingFor` 记录正在等待的对象；界面优先展示阻塞原因，不重复展示已由步骤列表表达的 `nextAction`。旧计划仍可读取，但下次更新时应补齐结构化步骤。计划进入 `已完成` 或 `已归档` 前，所有步骤都必须为 `已完成`。
+
+`taskBinding` 可在 POST 或 PATCH 中写入，用于精确绑定一个 Codex 执行会话。当前只接受 `agentType=codex` 和非空完整 `sessionId`；`completionHook.enabled` 必须是布尔值。启用后，Codex `Stop` Hook 把官方 `last_assistant_message` 交给 Manager，Manager 再经同人格的角色面板 / Forwarding / AgentPacket 链提醒目标处理会话。`gatewayId` 在同人格有多个 Route 时必填。提醒按 `sessionId + turnId` 去重，不会自动 PATCH 计划、推进步骤或写记忆。
+
+完成提醒失败不会阻断源 Codex 最终回答，但会记录失败并返回非阻塞系统警告。workspace、人格、gateway 或源/目标任务冲突均失败关闭；未完成双真实 Desktop 任务验收前，该接口能力为实验状态。
+
+### 计划审批意见接口
+
+```http
+GET  /api/roles/:roleId/plans/:planId/feedback
+POST /api/roles/:roleId/plans/:planId/feedback
+```
+
+WebGUI/托盘会用该接口记录用户对当前审批步骤的建议，并请求 Manager 通过现有角色面板链路通知 Agent。Agent 从 QQ 等其它入口收到用户审批后，也应调用同一接口补齐计划关联记录：
+
+```json
+{
+  "feedbackId": "qq-message-12345",
+  "gatewayId": "route-id",
+  "stepId": "review-plan",
+  "text": "同意方向，但先补充回归范围。",
+  "kind": "approval_suggestion",
+  "author": "user",
+  "source": "qq",
+  "notifyAgent": false
+}
+```
+
+Agent 自己的处理说明使用 `kind=approval_response`、`author=agent`、`source=agent`，并保持 `notifyAgent=false`；Agent 记录自动按 `record_only` 保存，不能自我触发新一轮投递。审批意见只记录事实，不推进计划；处理完成后由 Agent 另行 `PATCH /plans/:planId` 更新步骤、阻塞和状态。
 
 更新计划：
 

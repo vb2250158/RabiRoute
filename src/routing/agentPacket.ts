@@ -4,6 +4,10 @@ import { config, type NotificationRule } from "../config.js";
 import { resolvePipeline, type ResolvedPipeline } from "../pipelines.js";
 import { rabiContextManager } from "../context/rabiContextManager.js";
 import { buildRoleKnowledgeContextView } from "./roleKnowledgeContext.js";
+import {
+  personaSyncCapabilityHint,
+  voiceIdentityReviewCapabilityHint
+} from "./agentCapabilityHints.js";
 import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
 import { recentMessageLimitFor } from "../shared/gatewayConfigModel.js";
@@ -13,6 +17,7 @@ import {
   messageContextCurrentPath,
   recentMessageContextText
 } from "../messageContextStore.js";
+import { resolvePersonaVoiceIdentities, type PersonaVoiceIdentity } from "../personaVoiceIdentities.js";
 import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
 import { messageContextScopeForForward } from "./messageContextScope.js";
@@ -56,6 +61,41 @@ type MessageCodeParseResult = {
 
 const MESSAGE_CODE_PREVIEW_LIMIT = 200;
 const MESSAGE_CODE_MAX_REPLY_DEPTH = 10;
+
+function voiceprintIdsForRecord(record: RouteDecision["record"]): string[] {
+  if (!isVoiceTranscriptRecord(record)) return [];
+  const candidates = [
+    record.voiceprintId,
+    ...(record.segments ?? []).flatMap(segment => [
+      segment.voiceprintId,
+      segment.speakerClusterId
+    ])
+  ];
+  return [...new Set(candidates.map(value => String(value ?? "").trim()).filter(Boolean))];
+}
+
+function formatPersonaVoiceIdentity(voiceprintId: string, identity?: PersonaVoiceIdentity): string {
+  if (!identity) return `- ${voiceprintId}：当前人格尚未确认`;
+  const conflictCandidates = identity.conflictCandidates?.slice(0, 5).map(candidate => {
+    const branch = [
+      candidate.deleted ? "已删除" : "保留",
+      candidate.displayName ? `称呼=${candidate.displayName}` : "",
+      candidate.relationship ? `关系=${candidate.relationship}` : "",
+      candidate.isUser == null ? "isUser=未确认" : `isUser=${candidate.isUser}`
+    ].filter(Boolean).join("/");
+    return `${candidate.eventId}:${branch}`;
+  }).join(" | ");
+  const facts = [
+    identity.displayName ? `称呼=${identity.displayName}` : "",
+    identity.relationship ? `关系=${identity.relationship}` : "",
+    identity.isUser == null ? "" : `isUser=${identity.isUser}`,
+    identity.aliases.length > 0 ? `别名=${identity.aliases.join("、")}` : "",
+    identity.notes ? `说明=${identity.notes}` : "",
+    identity.conflicted ? `并发分支待收敛=${identity.conflictFields?.join("、") || "关系资料"}` : "",
+    conflictCandidates ? `候选分支=${conflictCandidates}` : ""
+  ].filter(Boolean);
+  return `- ${voiceprintId}：${facts.join("；") || "已记录但未填写关系说明"}`;
+}
 
 function formatTime(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString("zh-CN", { hour12: false });
@@ -580,7 +620,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const route = decision.route;
   const isVoiceTranscript = isVoiceTranscriptRecord(record);
   const sender = isVoiceTranscript
-    ? record.speakerName || record.senderName || record.source || "voice_transcript"
+    ? record.senderName || record.source || "voice_transcript"
     : record.senderName || ("userId" in record ? record.userId : "RabiRoute");
   const isGroup = isGroupRecord(record);
   const isHeartbeat = isHeartbeatRecord(record);
@@ -602,10 +642,18 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const manualTriggerLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "manual-trigger-events.jsonl"));
   const rolePanelLogPath = relativeWorkspacePath(path.join(roleContext.roleDir || roleContext.dataDir, "role-panel", "messages.jsonl"));
   const voiceTranscriptLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "voice-transcripts.jsonl"));
+  const voiceIdentitiesPath = relativeWorkspacePath(path.join(roleContext.roleDir || roleContext.dataDir, "voice", "voice-identities.jsonl"));
   const conversationCurrentPath = relativeWorkspacePath(messageContextCurrentPath(roleContext.dataDir));
   const conversationArchiveDir = relativeWorkspacePath(messageContextArchiveDir(roleContext.dataDir));
   const conversationArchiveIndexPath = relativeWorkspacePath(messageContextArchiveIndexPath(roleContext.dataDir));
   const recentContext = recentMessageContextForDecision(decision, roleContext);
+  const voiceprintIds = isVoiceTranscript ? voiceprintIdsForRecord(record) : [];
+  const personaVoiceIdentities = isVoiceTranscript && roleContext.roleDir && record.sourceHostId && voiceprintIds.length > 0
+    ? resolvePersonaVoiceIdentities(roleContext.roleDir, record.sourceHostId, voiceprintIds)
+    : [];
+  const personaVoiceIdentitySummary = personaVoiceIdentities
+    .map(item => formatPersonaVoiceIdentity(item.voiceprintId, item.identity))
+    .join("\n");
   const replyContext = {
     runtimeRouteId: process.env.GATEWAY_ID,
     gatewayId: process.env.GATEWAY_ID,
@@ -622,12 +670,20 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     transport: recentContext.transport,
     conversationKey: recentContext.conversationKey,
     adapterType: isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
-    speakerId: isVoiceTranscript ? record.speakerId : undefined,
-    speakerName: isVoiceTranscript ? record.speakerName : undefined,
-    speakerKind: isVoiceTranscript ? record.speakerKind : undefined,
-    speakerConfidence: isVoiceTranscript ? record.speakerConfidence : undefined,
-    speakerDecision: isVoiceTranscript ? record.speakerDecision : undefined,
+    voiceprintId: isVoiceTranscript ? record.voiceprintId : undefined,
+    voiceprintIds: isVoiceTranscript ? voiceprintIds : undefined,
     sessionId: isVoiceTranscript ? record.sessionId : undefined,
+    sourceDeviceId: isVoiceTranscript ? record.sourceDeviceId : undefined,
+    sourceDeviceName: isVoiceTranscript ? record.sourceDeviceName : undefined,
+    sourceDeviceKind: isVoiceTranscript ? record.sourceDeviceKind : undefined,
+    sourceStreamId: isVoiceTranscript ? record.sourceStreamId : undefined,
+    sourceHostId: isVoiceTranscript ? record.sourceHostId : undefined,
+    sourceHostName: isVoiceTranscript ? record.sourceHostName : undefined,
+    voiceIdentitiesPath: isVoiceTranscript ? voiceIdentitiesPath : undefined,
+    personaVoiceIdentities: isVoiceTranscript ? personaVoiceIdentities : undefined,
+    targetDeviceIds: isVoiceTranscript && decision.routeKind === "rabilink" && record.sourceDeviceId
+      ? [record.sourceDeviceId]
+      : undefined,
     roleId: isRolePanel ? record.roleId : undefined,
     botUserId: "botUserId" in record ? record.botUserId : undefined,
     wecomReqId: isWeCom ? record.reqId : undefined,
@@ -703,6 +759,9 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     manualTriggerLogPath,
     rolePanelLogPath,
     voiceTranscriptLogPath,
+    voiceIdentitiesPath,
+    voiceprintIds: voiceprintIds.join(", ") || undefined,
+    personaVoiceIdentitySummary: personaVoiceIdentitySummary || undefined,
     conversationCurrentPath,
     conversationArchiveDir,
     conversationArchiveIndexPath,
@@ -710,14 +769,13 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     triggerId: isManualTrigger ? record.triggerId : undefined,
     triggerName: isManualTrigger ? record.triggerName : undefined,
     voiceSource: isVoiceTranscript ? record.source : undefined,
-    voiceSpeakerId: isVoiceTranscript ? record.speakerId : undefined,
-    voiceSpeakerName: isVoiceTranscript ? record.speakerName : undefined,
-    voiceSpeakerKind: isVoiceTranscript ? record.speakerKind : undefined,
-    voiceSpeakerConfidence: isVoiceTranscript ? record.speakerConfidence : undefined,
-    voiceSpeakerDecision: isVoiceTranscript ? record.speakerDecision : undefined,
     speechPushMode: isVoiceTranscript ? route.speechPushMode : undefined,
     voiceSourceDeviceId: isVoiceTranscript ? record.sourceDeviceId : undefined,
     voiceSourceDeviceName: isVoiceTranscript ? record.sourceDeviceName : undefined,
+    voiceSourceStreamId: isVoiceTranscript ? record.sourceStreamId : undefined,
+    voiceSourceHostId: isVoiceTranscript ? record.sourceHostId : undefined,
+    voiceSourceHostName: isVoiceTranscript ? record.sourceHostName : undefined,
+    voiceprintId: isVoiceTranscript ? record.voiceprintId : undefined,
     voiceSourceArea: isVoiceTranscript ? record.sourceArea : undefined,
     voiceSessionId: isVoiceTranscript ? record.sessionId : undefined,
     voiceStartedAt: isVoiceTranscript ? record.startedAt : undefined,
@@ -773,6 +831,18 @@ function buildAgentMessage(
   const knowledgeMemoryDir = relativeWorkspacePath(knowledge?.memoryDir);
   const knowledgeAgentInterfaceDocPath = relativeWorkspacePath(knowledge?.agentInterfaceDocPath);
   const recentMessageLimit = Number(values.recentMessageLimit ?? 0);
+  const capabilityIntentText = [
+    String(values.message || record.rawMessage || ""),
+    userTemplateText
+  ].filter(Boolean).join("\n");
+  const capabilityContext = {
+    managerPort: process.env.GATEWAY_MANAGER_PORT ?? "8790",
+    roleId: String(values.agentRoleId || "").trim()
+  };
+  const personaSyncHint = hasPersona ? personaSyncCapabilityHint(capabilityIntentText, capabilityContext) : null;
+  const voiceIdentityReviewHint = hasPersona
+    ? voiceIdentityReviewCapabilityHint(capabilityIntentText, capabilityContext)
+    : null;
   const pendingConsolidationLines = pendingConsolidation
     ? [
         `runId：${pendingConsolidation.run.id}`,
@@ -790,16 +860,23 @@ function buildAgentMessage(
       optionalLine("事件时间", values.time),
       optionalLine("当前时间", values.currentTime),
       optionalLine("来源", values.messageTarget),
+      optionalLine("语音处理主机", values.voiceSourceHostName || values.voiceSourceHostId),
       optionalLine("发送者", values.sender),
-      optionalLine("说话人", values.voiceSpeakerName),
-      optionalLine("说话人置信度", values.voiceSpeakerConfidence),
-      optionalLine("说话人判定", values.voiceSpeakerDecision),
+      optionalLine("声纹 ID", values.voiceprintId),
+      optionalLine("本段声纹", values.voiceprintIds),
+      optionalLine("人格声纹关系文件", values.voiceIdentitiesPath),
       optionalLine("语音推送模式", values.speechPushMode),
       optionalLine("命中人格关键词", values.speechTriggerKeyword),
       optionalLine("触发 ID", values.triggerId),
       optionalLine("触发名称", values.triggerName)
     ]),
     section("消息", [String(values.message || record.rawMessage || "")]),
+    values.voiceprintIds || values.voiceprintId ? section("人格声纹关系", [
+      "RabiSpeech 和主机只提供不透明声纹 ID、处理主机与判定证据，不判断这个人是谁，也不判断谁是用户。",
+      "以下内容只来自当前人格自己已经写入的关系文件，不是主机推断：",
+      String(values.personaVoiceIdentitySummary || "- 当前人格尚未记录这些声纹的身份关系。"),
+      "需要确认或修正时调用 PUT /api/roles/:roleId/voice-identities，追加到当前人格自己的 voice/voice-identities.jsonl。"
+    ]) : "",
     section("消息代码解析", [messageCodeParseText(record, dataDir)]),
     String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [
       "这是用户从 Rabi 移动设备消息端明确发起的自然语言配置请求。",
@@ -841,6 +918,8 @@ function buildAgentMessage(
       matchedIndex
     ]) : "",
     hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",
+    personaSyncHint ? section("多电脑人格同步", personaSyncHint) : "",
+    voiceIdentityReviewHint ? section("全天语音与声纹归类", voiceIdentityReviewHint) : "",
     section("日志", [
       optionalLine("群聊日志", values.groupLogPath),
       optionalLine("私聊日志", values.privateLogPath),

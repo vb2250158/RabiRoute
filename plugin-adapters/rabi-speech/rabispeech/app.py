@@ -8,6 +8,7 @@ import logging
 import os
 import socket
 import tempfile
+import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
@@ -18,15 +19,16 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.background import BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .audio import AudioTranscoder, subtitle_text
 from .config import Settings, load_settings
 from .contracts import SpeechSynthesisRequest, TranscriptionRequest, TranscriptionResult
 from .extensions import load_provider_extensions
+from .events import SpeechEventHub
 from .model_discovery import api_index, model_rows, public_capabilities
-from .microphone import MicrophoneConfig, MicrophoneService
+from .microphone import MicrophoneConfig, MicrophoneService, SpeechInputSource, SpeechUtteranceMetadata
 from .persona_voice import (
     persona_speech_defaults_for_role,
     persona_tts_cache_dir,
@@ -48,7 +50,8 @@ from .tts_audio_store import TtsAudioStoreRegistry
 from .windows_audio_session import WindowsAudioSessionKeepalive
 
 
-_DEFAULT_TTS_CLEANUP_INTERVAL_SECONDS = 60.0
+_RABILINK_AUDIO_STALE_TIMEOUT_SECONDS = 15.0
+_TTS_CLEANUP_RETRY_SECONDS = 60.0
 
 
 class SpeechBody(BaseModel):
@@ -107,6 +110,15 @@ class AudioStreamSelectionBody(BaseModel):
     client_id: str | None = None
 
 
+class RabiLinkAudioStreamBody(BaseModel):
+    stream_id: str
+    name: str = "RabiLink mobile audio"
+    device_kind: str = "mobile"
+    source_device_id: str | None = None
+    route_profile_id: str | None = None
+    session_id: str | None = None
+
+
 def default_registry(settings: Settings, roles_root: Path | None = None) -> ProviderRegistry:
     persona_roles_root = (roles_root or settings.config_path.parents[2] / "data" / "roles").expanduser().resolve()
     registry = ProviderRegistry(settings.default_tts_provider, settings.default_asr_provider)
@@ -143,19 +155,20 @@ def create_app(
     playback: PlaybackCoordinator | None = None,
     audio_session_keepalive: WindowsAudioSessionKeepalive | None = None,
     roles_root: Path | None = None,
-    tts_cleanup_interval_seconds: float = _DEFAULT_TTS_CLEANUP_INTERVAL_SECONDS,
+    rabilink_audio_stale_timeout_seconds: float = _RABILINK_AUDIO_STALE_TIMEOUT_SECONDS,
     speaker_recognition: SpeakerRecognitionService | None = None,
 ) -> FastAPI:
     current = settings or load_settings()
     persona_roles_root = (roles_root or current.config_path.parents[2] / "data" / "roles").expanduser().resolve()
-    cleanup_interval = float(tts_cleanup_interval_seconds)
-    if cleanup_interval <= 0:
-        raise ValueError("TTS cleanup interval must be greater than zero.")
+    rabilink_audio_stale_timeout = float(rabilink_audio_stale_timeout_seconds)
+    if rabilink_audio_stale_timeout <= 0:
+        raise ValueError("RabiLink audio stale timeout must be greater than zero.")
     persona_cache_dirs = _persona_tts_cache_dirs(persona_roles_root)
     _validate_tts_cache_layout(current.server.tts_audio_dir, persona_roles_root, persona_cache_dirs)
     providers = registry or default_registry(current, persona_roles_root)
     transcoder = AudioTranscoder(current.server.temp_dir, current.server.ffmpeg)
     logger = logging.getLogger("rabispeech")
+    event_hub = SpeechEventHub()
     remote_audio = RemoteAudioHub(
         RemoteAudioServerConfig(
             enabled=current.remote_audio.enabled,
@@ -168,11 +181,13 @@ def create_app(
         ),
         local_player=PlaybackCoordinator._default_player,
         local_stopper=PlaybackCoordinator._default_stopper,
+        event_sink=event_hub.publish,
     )
     playback_queue = playback or PlaybackCoordinator(
         current.server.playback_dir,
         player=remote_audio.play,
         stopper=remote_audio.stop_playback,
+        event_sink=event_hub.publish,
     )
     mixer_keepalive = audio_session_keepalive or WindowsAudioSessionKeepalive(logger=logger)
     speaker_profiles = SpeakerProfileRegistry(current.server.records_dir.parent / "speaker-profiles.json")
@@ -180,7 +195,7 @@ def create_app(
         current.speaker_recognition,
         current.server.records_dir.parent / "speaker-embeddings.json",
     )
-    records = SpeechRecordStore(current.server.records_dir, speaker_profiles)
+    records = SpeechRecordStore(current.server.records_dir, speaker_profiles, event_sink=event_hub.publish)
     tts_audio_stores = TtsAudioStoreRegistry(current.server.tts_audio_retention_minutes)
     fallback_tts_audio = tts_audio_stores.get(current.server.tts_audio_dir)
     for cache_dir in persona_cache_dirs:
@@ -211,21 +226,52 @@ def create_app(
             record_id=record_id,
         )
 
-    async def microphone_submitter(text: str, session_id: str) -> dict[str, object]:
+    async def microphone_submitter(
+        result: TranscriptionResult,
+        session_id: str,
+        utterance: SpeechUtteranceMetadata,
+        input_source: SpeechInputSource,
+    ) -> dict[str, object]:
         base = _manager_loopback_url()
         async with httpx.AsyncClient(timeout=45.0) as client:
-            result = await client.post(
+            response = await client.post(
                 f"{base}/api/speech/messages",
-                json={"text": text, "sessionId": session_id},
+                json={
+                    "recordId": result.record_id,
+                    "text": result.text,
+                    "sessionId": session_id,
+                    "source": input_source.source,
+                    "transport": input_source.transport,
+                    "channelType": input_source.channel_type,
+                    "messageAdapterType": input_source.message_adapter_type,
+                    "routeProfileId": input_source.route_profile_id,
+                    "sourceDeviceId": input_source.device_id,
+                    "sourceDeviceName": input_source.device_name,
+                    "sourceDeviceKind": input_source.device_kind,
+                    "sourceStreamId": input_source.stream_id,
+                    "audioFormat": input_source.audio_format,
+                    "channels": input_source.channels,
+                    "sampleRate": input_source.sample_rate,
+                    "recordedAt": utterance.started_at,
+                    "startedAt": utterance.started_at,
+                    "completedAt": utterance.completed_at,
+                    "peak": utterance.peak,
+                    "rms": utterance.rms,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "language": result.language,
+                    "duration": result.duration,
+                    "segments": [asdict(segment) for segment in result.segments],
+                },
             )
             try:
-                payload = result.json()
+                payload = response.json()
             except ValueError:
                 payload = {}
             if not isinstance(payload, dict):
                 payload = {}
-            if result.is_error:
-                detail = str(payload.get("message") or f"HTTP {result.status_code}").strip()
+            if response.is_error:
+                detail = str(payload.get("message") or f"HTTP {response.status_code}").strip()
                 raise RuntimeError(f"RabiRoute speech delivery failed: {detail}")
             data = payload.get("data")
             if not isinstance(data, dict) or data.get("status") not in {"delivered", "recorded"}:
@@ -253,8 +299,101 @@ def create_app(
             record_id=result.record_id,
         ),
         remote_audio=remote_audio,
+        event_sink=event_hub.publish,
     )
     remote_audio.set_feed(microphone.feed_remote)
+    virtual_audio_lock = asyncio.Lock()
+    virtual_audio_expiry: asyncio.TimerHandle | None = None
+    virtual_audio_generation = 0
+    tts_cleanup_deadline: asyncio.TimerHandle | None = None
+    tts_cleanup_task: asyncio.Task[None] | None = None
+    tts_cleanup_closed = False
+
+    def cancel_virtual_audio_expiry() -> None:
+        nonlocal virtual_audio_expiry, virtual_audio_generation
+        virtual_audio_generation += 1
+        if virtual_audio_expiry is not None:
+            virtual_audio_expiry.cancel()
+            virtual_audio_expiry = None
+
+    async def expire_virtual_audio_stream(stream_id: str, generation: int) -> None:
+        nonlocal virtual_audio_expiry
+        async with virtual_audio_lock:
+            if generation != virtual_audio_generation or remote_audio.active_virtual_client_id != stream_id:
+                return
+            virtual_audio_expiry = None
+            if microphone.snapshot().get("running"):
+                await microphone.stop(persist=False)
+            _, resume_running = remote_audio.stop_virtual_client(stream_id)
+            if resume_running:
+                try:
+                    await microphone.start({}, persist=False)
+                except Exception:
+                    logger.exception("Failed to restore the previous RabiSpeech audio input after a stale RabiLink stream")
+            logger.warning(
+                "Stopped stale RabiLink audio stream %s after %.1f seconds without PCM",
+                stream_id,
+                rabilink_audio_stale_timeout,
+            )
+
+    def arm_virtual_audio_expiry(stream_id: str) -> None:
+        nonlocal virtual_audio_expiry
+        cancel_virtual_audio_expiry()
+        generation = virtual_audio_generation
+        virtual_audio_expiry = asyncio.get_running_loop().call_later(
+            rabilink_audio_stale_timeout,
+            lambda: asyncio.create_task(
+                expire_virtual_audio_stream(stream_id, generation),
+                name="rabispeech-rabilink-audio-expiry",
+            ),
+        )
+
+    def cancel_tts_cleanup_deadline() -> None:
+        nonlocal tts_cleanup_deadline
+        if tts_cleanup_deadline is not None:
+            tts_cleanup_deadline.cancel()
+            tts_cleanup_deadline = None
+
+    async def run_tts_cleanup() -> None:
+        nonlocal tts_cleanup_task
+        retry_at: float | None = None
+        try:
+            await asyncio.to_thread(tts_audio_stores.cleanup)
+        except Exception:
+            logger.exception("TTS cache expiry cleanup failed")
+            retry_at = time.time() + _TTS_CLEANUP_RETRY_SECONDS
+        finally:
+            tts_cleanup_task = None
+            if not tts_cleanup_closed:
+                arm_tts_cleanup_deadline(retry_at)
+
+    def arm_tts_cleanup_deadline(expires_at: float | None = None) -> None:
+        nonlocal tts_cleanup_deadline, tts_cleanup_task
+        if tts_cleanup_closed:
+            return
+        try:
+            deadline = tts_audio_stores.next_expiry() if expires_at is None else float(expires_at)
+        except Exception:
+            logger.exception("TTS cache expiry scan failed")
+            deadline = time.time() + _TTS_CLEANUP_RETRY_SECONDS
+        if deadline is None:
+            cancel_tts_cleanup_deadline()
+            return
+        loop = asyncio.get_running_loop()
+        delay = max(0.01, deadline - time.time() + 0.01)
+        scheduled_at = loop.time() + delay
+        if tts_cleanup_deadline is not None and tts_cleanup_deadline.when() <= scheduled_at:
+            return
+        cancel_tts_cleanup_deadline()
+
+        def start_cleanup() -> None:
+            nonlocal tts_cleanup_deadline, tts_cleanup_task
+            tts_cleanup_deadline = None
+            if tts_cleanup_closed or tts_cleanup_task is not None:
+                return
+            tts_cleanup_task = asyncio.create_task(run_tts_cleanup(), name="rabispeech-tts-cache-expiry")
+
+        tts_cleanup_deadline = loop.call_later(delay, start_cleanup)
 
     def speaker_capability() -> dict[str, object]:
         capability = dict(speaker_profiles.capabilities())
@@ -265,20 +404,21 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
+        nonlocal tts_cleanup_closed
         await providers.warmup()
         await remote_audio.start()
         mixer_keepalive.start()
         await microphone.restore()
-        cleanup_task = asyncio.create_task(
-            _periodic_tts_cleanup(tts_audio_stores, cleanup_interval, logger),
-            name="rabispeech-tts-cache-cleanup",
-        )
+        await asyncio.to_thread(tts_audio_stores.cleanup)
+        arm_tts_cleanup_deadline()
         try:
             yield
         finally:
-            cleanup_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await cleanup_task
+            tts_cleanup_closed = True
+            cancel_virtual_audio_expiry()
+            cancel_tts_cleanup_deadline()
+            if tts_cleanup_task is not None:
+                await tts_cleanup_task
             await microphone.stop(persist=False)
             await remote_audio.stop()
             mixer_keepalive.stop()
@@ -301,6 +441,11 @@ def create_app(
             "playback": {"mixer_session_active": mixer_keepalive.active},
             "audio_stream": remote_audio.snapshot(),
         }
+
+    @api.get("/v1/events")
+    async def events(request: Request) -> StreamingResponse:
+        _require_loopback(request)
+        return StreamingResponse(event_hub.stream(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
     @api.get("/v1/capabilities")
     async def capabilities() -> dict[str, object]:
@@ -359,6 +504,85 @@ def create_app(
             if was_running and not microphone.snapshot().get("running"):
                 await microphone.start({}, persist=False)
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @api.post("/v1/audio-streams/rabilink/start")
+    async def rabilink_audio_stream_start(request: Request, body: RabiLinkAudioStreamBody) -> dict[str, object]:
+        _require_loopback(request)
+        async with virtual_audio_lock:
+            was_running = bool(microphone.snapshot().get("running"))
+            if was_running:
+                await microphone.stop(persist=False)
+            try:
+                remote_audio.start_virtual_client(
+                    client_id=body.stream_id,
+                    name=body.name,
+                    kind=body.device_kind,
+                    source_device_id=body.source_device_id or body.session_id or body.stream_id,
+                    message_adapter_type="rabilink",
+                    route_profile_id=body.route_profile_id or "",
+                    session_id=body.session_id or "",
+                    resume_running=was_running,
+                )
+                await microphone.start({}, persist=False)
+                arm_virtual_audio_expiry(body.stream_id)
+                return remote_audio.snapshot()
+            except ValueError as exc:
+                if was_running and not microphone.snapshot().get("running"):
+                    await microphone.start({}, persist=False)
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except Exception:
+                active_id = remote_audio.active_virtual_client_id
+                if active_id:
+                    remote_audio.stop_virtual_client(active_id)
+                if was_running and not microphone.snapshot().get("running"):
+                    with suppress(Exception):
+                        await microphone.start({}, persist=False)
+                raise
+
+    @api.post("/v1/audio-streams/rabilink/chunk")
+    async def rabilink_audio_stream_chunk(request: Request) -> dict[str, object]:
+        _require_loopback(request)
+        stream_id = str(request.query_params.get("streamId") or "").strip()
+        try:
+            sequence = int(str(request.query_params.get("sequence") or ""))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="RabiLink audio chunk sequence must be an integer.") from exc
+        payload = await request.body()
+        chunk_id = str(request.query_params.get("chunkId") or "").strip()
+        async with virtual_audio_lock:
+            try:
+                accepted = remote_audio.feed_virtual_client(
+                    stream_id,
+                    payload,
+                    sequence=sequence,
+                    chunk_id=chunk_id or None,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not accepted:
+            raise HTTPException(status_code=409, detail="RabiLink audio stream is not active or capture is not ready.")
+        arm_virtual_audio_expiry(stream_id)
+        return {"ok": True, "accepted_bytes": len(payload), "sequence": sequence}
+
+    @api.post("/v1/audio-streams/rabilink/stop")
+    async def rabilink_audio_stream_stop(request: Request, body: RabiLinkAudioStreamBody) -> dict[str, object]:
+        _require_loopback(request)
+        async with virtual_audio_lock:
+            if remote_audio.active_virtual_client_id != body.stream_id:
+                raise HTTPException(status_code=409, detail="The requested RabiLink audio stream is not active.")
+            cancel_virtual_audio_expiry()
+            was_running = bool(microphone.snapshot().get("running"))
+            if was_running:
+                await microphone.stop(persist=False)
+            try:
+                _, resume_running = remote_audio.stop_virtual_client(body.stream_id)
+                if resume_running:
+                    await microphone.start({}, persist=False)
+                return remote_audio.snapshot()
+            except ValueError as exc:
+                if was_running and not microphone.snapshot().get("running"):
+                    await microphone.start({}, persist=False)
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @api.put("/v1/playback/settings")
     @api.patch("/v1/playback/settings")
@@ -558,6 +782,7 @@ def create_app(
             cache_dir = persona_tts_cache_dir(persona_role_dir)
             selected_tts_audio = tts_audio_stores.get(cache_dir) if cache_dir is not None else fallback_tts_audio
             retained = selected_tts_audio.retain(prepared.path)
+            arm_tts_cleanup_deadline(selected_tts_audio.expires_at(retained))
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
@@ -780,19 +1005,6 @@ def _validate_tts_cache_layout(fallback_root: Path, roles_root: Path, persona_ca
             raise ValueError("Persona TTS cache must stay inside the configured roles root.")
         if _paths_overlap(fallback, cache):
             raise ValueError("Fallback and persona TTS caches must not overlap.")
-
-
-async def _periodic_tts_cleanup(
-    stores: TtsAudioStoreRegistry,
-    interval_seconds: float,
-    logger: logging.Logger,
-) -> None:
-    while True:
-        await asyncio.sleep(interval_seconds)
-        try:
-            await asyncio.to_thread(stores.cleanup)
-        except Exception:
-            logger.exception("Periodic TTS cache cleanup failed")
 
 
 def _tts_audio_record_file(persona_role_dir: Path | None, cache_relative_path: str) -> str:

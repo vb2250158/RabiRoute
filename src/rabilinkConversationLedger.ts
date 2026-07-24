@@ -11,7 +11,7 @@ const RABILINK_CONVERSATION_LOCK_TIMEOUT_MS = 5000;
 const RABILINK_CONVERSATION_LOCK_STALE_MS = 30000;
 
 export type RabiLinkConversationDirection = "user_to_agent" | "agent_to_user" | "control";
-export type RabiLinkConversationKind = "voice_transcript" | "agent_message" | "review_request";
+export type RabiLinkConversationKind = "voice_transcript" | "agent_message" | "review_request" | "preference";
 
 export type RabiLinkConversationAttachment = {
   id?: string;
@@ -41,7 +41,12 @@ export type RabiLinkConversationEntry = {
   sourceDeviceId?: string;
   sourceDeviceName?: string;
   sourceDeviceKind?: string;
+  channelType?: string;
   transport?: string;
+  proactivityPreference?: "agent_decides" | "quiet" | "balanced" | "proactive";
+  preferenceKind?: string;
+  preferenceValue?: string;
+  explicitPreference?: boolean;
   targetDeviceIds?: string[];
   targetDeviceKinds?: string[];
   presentation?: string[];
@@ -440,7 +445,17 @@ export function appendRabiLinkConversationEntry(
       sourceDeviceId: optionalText(input.sourceDeviceId),
       sourceDeviceName: optionalText(input.sourceDeviceName),
       sourceDeviceKind: optionalText(input.sourceDeviceKind),
+      channelType: optionalText(input.channelType),
       transport: optionalText(input.transport),
+      proactivityPreference: input.proactivityPreference === "quiet"
+        || input.proactivityPreference === "balanced"
+        || input.proactivityPreference === "proactive"
+        || input.proactivityPreference === "agent_decides"
+        ? input.proactivityPreference
+        : undefined,
+      preferenceKind: optionalText(input.preferenceKind),
+      preferenceValue: optionalText(input.preferenceValue),
+      explicitPreference: typeof input.explicitPreference === "boolean" ? input.explicitPreference : undefined,
       targetDeviceIds: optionalTextList(input.targetDeviceIds),
       targetDeviceKinds: optionalTextList(input.targetDeviceKinds),
       presentation: optionalTextList(input.presentation),

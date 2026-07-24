@@ -359,8 +359,8 @@ async function main() {
     assert(glassesFanout.body?.messages?.length === 1 && glassesFanout.body.messages[0]?.text === "所有便携端都可见的广播", "The legacy glasses endpoint must receive broadcasts but skip watch-only messages.");
     assert(watchFanout.body?.messages?.length === 2, "A matching watch endpoint must receive broadcasts and watch-targeted messages.");
     assert(phoneFanout.body?.messages?.length === 1 && phoneFanout.body.messages[0]?.text === "所有便携端都可见的广播", "A phone endpoint must skip watch-only messages.");
-    assert(glassesFanout.body?.nextCursor === watchOnlyResult.body?.messages?.[0]?.id, "A device cursor must advance past messages targeted to other devices.");
-    assert(phoneFanout.body?.nextCursor === watchOnlyResult.body?.messages?.[0]?.id, "Each endpoint cursor must advance independently across filtered messages.");
+    assert(Boolean(glassesFanout.body?.nextCursor) && glassesFanout.body.nextCursor !== fanoutCursor, "A device cursor must advance past messages targeted to other devices.");
+    assert(phoneFanout.body?.nextCursor === glassesFanout.body?.nextCursor, "Each endpoint cursor must advance independently to the same scanned outbox position.");
 
     const missingPortableIdentity = await fetchJson(`${baseUrl}/api/rabilink/devices/messages?after=${encodeURIComponent(fanoutCursor)}&waitMs=0`, { headers });
     assert(missingPortableIdentity.response.status === 400, "The generic portable endpoint must require a device identity or kind.");

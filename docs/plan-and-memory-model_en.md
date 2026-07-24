@@ -23,12 +23,13 @@ data/roles/<RoleId>/
   skills/*.md
   plans/items/active/*.json
   plans/archive/*.json
+  plans/feedback/*.jsonl
   memory/recent/*.json
   memory/consolidated/*.json
   memory/consolidation-runs/*.json
 ```
 
-The filesystem is the source of truth. The Manager API reads and writes these files; the Qt tray panel displays them read-only.
+The filesystem is the source of truth. The Manager API reads and writes these files. Qt and WebGUI keep plan content read-only while allowing approval feedback on Manager-declared approval steps.
 
 ## Plans
 
@@ -69,6 +70,16 @@ A plan describes one focused objective. Common fields:
     "kind": "agent",
     "summary": "Created during a documentation audit"
   },
+  "taskBinding": {
+    "agentType": "codex",
+    "sessionId": "exact-source-session-id",
+    "sessionTitle": "Plan execution task",
+    "workspace": "C:/Path/To/Project",
+    "completionHook": {
+      "enabled": true,
+      "gatewayId": "Role__reminder"
+    }
+  },
   "keywords": ["routing", "documentation", "schema"],
   "createdAt": "2026-07-16T00:00:00.000Z",
   "updatedAt": "2026-07-16T00:00:00.000Z"
@@ -76,6 +87,10 @@ A plan describes one focused objective. Common fields:
 ```
 
 `steps` is the ordered execution path. Every new plan must list all of its steps, with at most one step in `进行中`. Top-level `currentStepId` must point to that step so both the UI and Agents can answer exactly where execution is. A step may include `detail`, `waitingFor`, `blockedBy`, and `completedAt`: `waitingFor` identifies who or what the plan awaits, while `blockedBy` explains why it cannot proceed and should normally live on the blocked current step. `currentStep` remains a progress note; it no longer acts as the step list or step identity. Because structured steps already express the future path, the UI does not repeat `nextAction`; Agents and legacy plans may still use that field. Legacy plans remain readable and should gain structured steps on their next update.
+
+`taskBinding` is the optional exact plan-to-execution-session binding. The current implementation supports only `agentType=codex`. `sessionId` is the required complete execution-task ID; `sessionTitle` is display metadata and `workspace` is a Stop-Hook safety check. With `completionHook.enabled=true`, Manager forwards the official final answer through the existing role-panel path to the same persona's Route after that session finishes a turn. `gatewayId` disambiguates multiple Routes. Delivery is deduplicated by `sessionId + turnId` and records a stage-completion fact only; it does not advance steps, change plan status, or write memory automatically.
+
+The target Codex Route must already have an exact task ID and must differ from the execution session. Multiple plans bound to one execution session, workspace mismatch, execution-context persona mismatch, a missing or wrong-persona gateway, or multiple same-persona gateways without `gatewayId` all fail closed. The capability remains experimental until verified between two real Desktop tasks.
 
 Completed plans remain visible for confirmation. A role-knowledge snapshot archives them when the latest `updatedAt` is more than the current fixed 72-hour window old. It sets `archivedAt` and moves the file to `plans/archive/`.
 
@@ -252,6 +267,8 @@ GET   /api/roles/:roleId/plans
 GET   /api/roles/:roleId/plans/:planId
 POST  /api/roles/:roleId/plans
 PATCH /api/roles/:roleId/plans/:planId
+GET   /api/roles/:roleId/plans/:planId/feedback
+POST  /api/roles/:roleId/plans/:planId/feedback
 
 GET   /api/roles/:roleId/memory
 GET   /api/roles/:roleId/memory/recent
@@ -269,10 +286,24 @@ POST  /api/roles/:roleId/memory/consolidation-runs/:runId/result
 
 Both `/roles/...` and `/api/roles/...` prefixes are accepted. Public documentation prefers `/api/roles/...`.
 
+## Plan approval feedback
+
+Plan approval feedback is an independent JSONL audit record associated with a `planId` and optional `stepId`, stored under `plans/feedback/<planId>.jsonl`. It is neither a second copy of the plan JSON nor the generic Outbox Action Queue.
+
+WebGUI and tray submissions use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Manager records the feedback first, then uses the existing role-panel delivery path to notify the bound Agent. `deliveryStatus` distinguishes `pending`, `delivered`, `failed`, and `record_only`. When recording succeeds but delivery fails, clients keep the draft and retry with the same `feedbackId`; Manager collapses delivery updates for that ID instead of creating another approval record.
+
+After receiving approval through QQ or another channel, an Agent may call the same endpoint with `source=qq` and `notifyAgent=false` to record the user's decision. Agent-authored handling notes use `author=agent` and `kind=approval_response`, which are always `record_only`. No feedback submission advances a plan; only a later explicit plan `PATCH` by the Agent changes steps or status.
+
+## Manager presentation order and plan views
+
+The Manager plan API adds read-only `presentation.status` and `presentation.tone` fields for display-only states such as `Blocked` and `Awaiting QA`; these fields are never written back to plan files. `presentation.approval` centrally decides whether approval input is shown and supplies its target `stepId`, label, and helper copy. Plans are ordered as `Blocked → Awaiting QA → In progress → Not started → Completed → Archived`, then newest `updatedAt` first within each status. Recent and consolidated memory are also returned newest-first by `updatedAt`.
+
+Both the Qt tray and RibiWebGUI's Plans & Memory page consume this Manager DTO and its existing order. Neither reads `data/` directly nor maintains a separate status or sorting implementation.
+
 ## Qt tray view
 
-The Qt panel displays current plans, recent memory, consolidated memory, and diagnostics. These views are read-only: the panel does not create, complete, archive, delete, normalize, or migrate role-knowledge files.
+The Qt panel displays current plans, recent memory, consolidated memory, and diagnostics. It does not create, complete, archive, delete, normalize, or migrate plan/memory content. Approval-enabled plan cards may append feedback through Manager without changing the plan itself.
 
 ## Boundary
 
-RabiRoute does not convert raw chat logs into memory automatically and does not decide what the handler should remember. The handler creates focused plans and recent memories. RabiRoute provides storage, indexing, validation, recall side effects, explicit consolidation runs, and read-only user views.
+RabiRoute does not convert raw chat logs into memory automatically and does not decide what the handler should remember. The handler creates focused plans and recent memories. RabiRoute provides storage, indexing, validation, recall side effects, explicit consolidation runs, plan-content/memory views, and a constrained approval-feedback entry.

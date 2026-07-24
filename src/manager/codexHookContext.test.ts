@@ -3,9 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CodexHookContextService, parseCodexHookControl } from "./codexHookContext.js";
+import {
+  CodexHookContextService,
+  parseCodexHookControl,
+  type CodexHookContextRequest,
+  type PlanTaskCompletionDelivery
+} from "./codexHookContext.js";
 
-function fixture(): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
+function fixture(options: {
+  deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
+  hookEnabled?: (request: CodexHookContextRequest) => boolean;
+} = {}): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-"));
   const rolesRoot = path.join(root, "roles");
   const roleDir = path.join(rolesRoot, "YeYu");
@@ -23,6 +31,13 @@ function fixture(): { root: string; rolesRoot: string; roleDir: string; storePat
     currentStep: "复用 RabiRoute 管理机制",
     nextAction: "验证 Manager API",
     steps: [],
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "session-plan-worker",
+      sessionTitle: "计划执行任务",
+      workspace: root,
+      completionHook: { enabled: true, gatewayId: "YeYu__reminder" }
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
     keywords: ["统一管理"]
@@ -41,7 +56,12 @@ function fixture(): { root: string; rolesRoot: string; roleDir: string; storePat
     rolesRoot,
     roleDir,
     storePath,
-    service: new CodexHookContextService({ rolesRoot: () => rolesRoot, storePath })
+    service: new CodexHookContextService({
+      rolesRoot: () => rolesRoot,
+      storePath,
+      deliverPlanTaskCompletion: options.deliverPlanTaskCompletion,
+      hookEnabled: options.hookEnabled
+    })
   };
 }
 
@@ -163,4 +183,138 @@ test("irrelevant reasoning hooks remain silent", (t) => {
     toolInput: { command: "npm test" }
   });
   assert.equal(result.additionalContext, "");
+});
+
+test("disabled Codex endpoint hooks stay silent and do not deliver completion reminders", async (t) => {
+  let deliveryCount = 0;
+  const { root, service } = fixture({
+    hookEnabled: () => false,
+    deliverPlanTaskCompletion: async () => { deliveryCount += 1; }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-plan-worker", "YeYu");
+
+  const context = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "UserPromptSubmit",
+    prompt: "[rabi:refresh]"
+  });
+  assert.equal(context.additionalContext, "");
+  const completion = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-disabled",
+    cwd: root,
+    lastAssistantMessage: "不应投递。"
+  });
+  assert.equal(completion.planTaskCompletion?.status, "ignored");
+  assert.equal(completion.planTaskCompletion?.reason, "hook_disabled_by_codex_endpoint");
+  assert.equal(deliveryCount, 0);
+});
+
+test("Stop hooks deliver a bound plan task final message once through Manager", async (t) => {
+  const deliveries: PlanTaskCompletionDelivery[] = [];
+  const { root, storePath, service } = fixture({
+    deliverPlanTaskCompletion: async (delivery) => {
+      deliveries.push(delivery);
+    }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const first = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-plan-1",
+    cwd: root,
+    lastAssistantMessage: "实现完成，测试通过。"
+  });
+  assert.equal(first.binding, null);
+  assert.equal(first.additionalContext, "");
+  assert.equal(first.planTaskCompletion?.status, "delivered");
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0]?.plan.id, "plan-hook");
+  assert.equal(deliveries[0]?.gatewayId, "YeYu__reminder");
+  assert.equal(deliveries[0]?.finalMessage, "实现完成，测试通过。");
+
+  const duplicate = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-plan-1",
+    cwd: root,
+    lastAssistantMessage: "实现完成，测试通过。"
+  });
+  assert.equal(duplicate.planTaskCompletion?.status, "duplicate");
+  assert.equal(deliveries.length, 1);
+  const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  assert.equal(Object.values(store.planTaskCompletions).some((state: any) => (
+    state.sessionId === "session-plan-worker"
+    && state.turnId === "turn-plan-1"
+    && state.status === "delivered"
+  )), true);
+});
+
+test("Stop hook deduplication survives later turns in the same session", async (t) => {
+  const deliveries: PlanTaskCompletionDelivery[] = [];
+  const { root, service } = fixture({
+    deliverPlanTaskCompletion: async (delivery) => {
+      deliveries.push(delivery);
+    }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  for (const turnId of ["turn-plan-1", "turn-plan-2", "turn-plan-1"]) {
+    await service.handleHook({
+      sessionId: "session-plan-worker",
+      eventName: "Stop",
+      turnId,
+      cwd: root,
+      lastAssistantMessage: `final ${turnId}`
+    });
+  }
+
+  assert.deepEqual(deliveries.map((item) => item.sourceTurnId), ["turn-plan-1", "turn-plan-2"]);
+});
+
+test("Stop hooks fail closed on a plan task workspace mismatch", async (t) => {
+  let called = false;
+  const { root, service } = fixture({
+    deliverPlanTaskCompletion: async () => {
+      called = true;
+    }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-plan-worker", "YeYu");
+  const result = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-plan-mismatch",
+    cwd: path.join(root, "other-project"),
+    lastAssistantMessage: "不应投递。"
+  });
+  assert.equal(result.planTaskCompletion?.status, "failed");
+  assert.equal(result.planTaskCompletion?.reason, "workspace_mismatch");
+  assert.equal(called, false);
+});
+
+test("Stop hook delivery failures are recorded without blocking the Codex turn", async (t) => {
+  const { root, service } = fixture({
+    deliverPlanTaskCompletion: async () => {
+      throw new Error("reminder gateway offline");
+    }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.bindSession("session-plan-worker", "YeYu");
+  const result = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-plan-failed",
+    cwd: root,
+    lastAssistantMessage: "阶段结果已经生成。"
+  });
+  assert.equal(result.additionalContext, "");
+  assert.equal(result.planTaskCompletion?.status, "failed");
+  assert.match(result.planTaskCompletion?.error || "", /reminder gateway offline/);
+  const binding = service.getBinding("session-plan-worker");
+  assert.equal(binding?.lastPlanCompletionStatus, "failed");
+  assert.match(binding?.lastPlanCompletionError || "", /reminder gateway offline/);
 });

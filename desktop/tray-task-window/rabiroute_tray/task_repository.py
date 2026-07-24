@@ -53,6 +53,7 @@ class PlanRepository:
         source = item.get("source") if isinstance(item.get("source"), dict) else {}
         return PlanItem(
             title=str(item.get("title") or item.get("name") or item.get("id") or "Untitled plan"),
+            plan_id=str(item.get("id") or path.stem),
             status=str(item.get("status") or "未开始"),
             priority=str(item.get("priority") or ""),
             kind=str(item.get("kind") or ""),

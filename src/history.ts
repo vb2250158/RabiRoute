@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import { withFileLockSync } from "./shared/filePersistence.js";
 import type { ResolvedForwardMessage } from "./napcatForwardMessages.js";
+import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
 
 export type GroupMessageRecord = {
   time: number;
@@ -77,14 +79,29 @@ export type VoiceTranscriptEventRecord = {
   gatewayId?: string;
   instanceId?: string;
   source?: string;
+  channelType?: string;
+  messageAdapterType?: "speech" | "rabilink";
   speakerId?: string;
   speakerName?: string;
   speakerKind?: string;
   speakerConfidence?: number;
   speakerDecision?: string;
+  voiceprintId?: string;
+  speakerVerified?: boolean;
+  provider?: string;
+  model?: string;
+  language?: string;
+  sampleRate?: number;
+  audioFormat?: string;
+  channels?: number;
+  ingestedAt?: string;
+  segments?: SpeechTranscriptSegment[];
   sourceDeviceId?: string;
   sourceDeviceName?: string;
   sourceDeviceKind?: string;
+  sourceStreamId?: string;
+  sourceHostId?: string;
+  sourceHostName?: string;
   transport?: string;
   sourceArea?: string;
   sessionId?: string;
@@ -95,6 +112,7 @@ export type VoiceTranscriptEventRecord = {
   endedAt?: string;
   durationSeconds?: number;
   peak?: number;
+  rms?: number;
 };
 
 export type WeComMessageRecord = {
@@ -215,12 +233,38 @@ function voiceTranscriptLogPath(dataDir = config.memoryDataDir, fileName = "voic
   return path.join(dataDir, fileName);
 }
 
+function voiceTranscriptIdentity(record: VoiceTranscriptEventRecord): string {
+  const messageId = String(record.messageId ?? "").trim();
+  if (!messageId) return "";
+  return `${String(record.adapterType ?? "voice").trim().toLowerCase()}|${messageId}`;
+}
+
+function appendVoiceTranscriptOnce(filePath: string, record: VoiceTranscriptEventRecord): boolean {
+  const identity = voiceTranscriptIdentity(record);
+  const lockPath = `${filePath}.lock`;
+  return withFileLockSync(lockPath, () => {
+    if (identity && fs.existsSync(filePath)) {
+      const duplicate = fs.readFileSync(filePath, "utf8").split(/\r?\n/).some(line => {
+        if (!line.trim()) return false;
+        try {
+          return voiceTranscriptIdentity(JSON.parse(line) as VoiceTranscriptEventRecord) === identity;
+        } catch {
+          return false;
+        }
+      });
+      if (duplicate) return false;
+    }
+    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+    return true;
+  });
+}
+
 export function appendVoiceTranscriptEvent(record: VoiceTranscriptEventRecord): void {
-  fs.appendFileSync(voiceTranscriptLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+  appendVoiceTranscriptOnce(voiceTranscriptLogPath(), record);
 }
 
 export function appendVoiceTranscriptEventToDir(record: VoiceTranscriptEventRecord, dataDir: string): void {
-  fs.appendFileSync(voiceTranscriptLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendVoiceTranscriptOnce(voiceTranscriptLogPath(dataDir), record);
 }
 
 function voiceTranscriptFileNameForAdapter(adapter: string): string {
@@ -232,13 +276,21 @@ function voiceTranscriptFileNameForAdapter(adapter: string): string {
 }
 
 export function appendVoiceTranscriptEventForAdapter(adapter: string, record: VoiceTranscriptEventRecord): void {
+  appendVoiceTranscriptEventForAdapterToDir(adapter, record, config.memoryDataDir);
+}
+
+export function appendVoiceTranscriptEventForAdapterToDir(
+  adapter: string,
+  record: VoiceTranscriptEventRecord,
+  dataDir: string
+): void {
   const normalized = {
     ...record,
     adapterType: record.adapterType ?? adapter
   };
-  fs.appendFileSync(voiceTranscriptLogPath(config.memoryDataDir, voiceTranscriptFileNameForAdapter(adapter)), `${JSON.stringify(normalized)}\n`, "utf8");
+  appendVoiceTranscriptOnce(voiceTranscriptLogPath(dataDir, voiceTranscriptFileNameForAdapter(adapter)), normalized);
   if (adapter !== "webhook") {
-    fs.appendFileSync(voiceTranscriptLogPath(config.memoryDataDir), `${JSON.stringify(normalized)}\n`, "utf8");
+    appendVoiceTranscriptOnce(voiceTranscriptLogPath(dataDir), normalized);
   }
 }
 

@@ -43,6 +43,37 @@ def test_speech_records_persist_and_filter_speakers(tmp_path) -> None:
     assert tts["id"]
 
 
+def test_speech_records_emit_change_only_after_append(tmp_path) -> None:
+    events: list[tuple[str, object]] = []
+    store = SpeechRecordStore(
+        tmp_path / "records",
+        event_sink=lambda event_type, data: events.append((event_type, data)),
+    )
+
+    row = store.append_tts(
+        text="事件刷新",
+        provider="local",
+        model="test",
+        voice="default",
+        session_id="session-one",
+        route_id="route-one",
+    )
+
+    assert events == [
+        (
+            "records_changed",
+            {
+                "id": row["id"],
+                "kind": "tts",
+                "time": row["time"],
+                "session_id": "session-one",
+                "route_id": "route-one",
+            },
+        )
+    ]
+    assert "事件刷新" not in str(events)
+
+
 def test_manual_binding_only_changes_the_selected_record_when_labels_repeat(tmp_path) -> None:
     registry = SpeakerProfileRegistry(tmp_path / "speaker-profiles.json")
     profile = registry.create_profile("秋雨")

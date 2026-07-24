@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -39,6 +38,13 @@ class ManualTriggerResult:
 @dataclass(frozen=True)
 class RolePanelSendResult:
     ok: bool
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class PlanFeedbackSubmitResult:
+    ok: bool
+    delivery_status: str = ""
     message: str = ""
 
 
@@ -174,18 +180,43 @@ class ManagerClient:
         except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
             return RolePanelSendResult(ok=False, message=str(error))
 
-    @staticmethod
-    def attachment_from_path(file_path: Path) -> dict[str, Any]:
+    def submit_plan_feedback(
+        self,
+        role_id: str,
+        plan_id: str,
+        gateway_id: str,
+        step_id: str,
+        feedback_id: str,
+        text: str,
+    ) -> PlanFeedbackSubmitResult:
         try:
-            size = file_path.stat().st_size
-        except OSError:
-            size = 0
-        return {
-            "kind": "file",
-            "name": file_path.name,
-            "path": str(file_path),
-            "size": size,
-        }
+            encoded_role_id = quote(role_id, safe="")
+            encoded_plan_id = quote(plan_id, safe="")
+            payload = self._post_json(
+                f"/api/roles/{encoded_role_id}/plans/{encoded_plan_id}/feedback",
+                {
+                    "feedbackId": feedback_id,
+                    "gatewayId": gateway_id,
+                    "stepId": step_id or None,
+                    "text": text,
+                    "source": "tray",
+                    "kind": "approval_suggestion",
+                    "author": "user",
+                    "notifyAgent": True,
+                },
+                timeout_seconds=45,
+            )
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            delivery_status = str(data.get("deliveryStatus") or "")
+            return PlanFeedbackSubmitResult(
+                ok=delivery_status != "failed",
+                delivery_status=delivery_status,
+                message=str(data.get("deliveryMessage") or ""),
+            )
+        except HTTPError as error:
+            return PlanFeedbackSubmitResult(ok=False, message=self._error_message(error))
+        except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
+            return PlanFeedbackSubmitResult(ok=False, message=str(error))
 
     def _get_json(self, path: str) -> dict[str, Any]:
         with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:

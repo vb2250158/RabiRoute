@@ -11,6 +11,7 @@ import {
   messageAdapterPolicyFor,
   normalizeGatewayDefinition,
   normalizeGatewayNapCatConfig,
+  normalizeCodexHookSettings,
   normalizeNapCatInstances,
   normalizeRecentMessageLimits,
   normalizeRuleDefinitions,
@@ -147,6 +148,26 @@ test("valid Codex task ids remain internal bindings", () => {
 
 test("default gateway agent adapter uses codex", () => {
   assert.deepEqual(normalizeGatewayDefinition(gateway()).agentAdapters, ["codex"]);
+});
+
+test("Codex Hook settings default enabled and preserve explicit opt-out", () => {
+  assert.deepEqual(normalizeCodexHookSettings(undefined), {
+    sessionContextEnabled: true,
+    reasoningContextEnabled: true,
+    planTaskCompletionEnabled: true
+  });
+  const normalized = normalizeGatewayDefinition(gateway({
+    codexHooks: {
+      sessionContextEnabled: false,
+      reasoningContextEnabled: true,
+      planTaskCompletionEnabled: false
+    }
+  }));
+  assert.deepEqual(normalized.codexHooks, {
+    sessionContextEnabled: false,
+    reasoningContextEnabled: true,
+    planTaskCompletionEnabled: false
+  });
 });
 
 test("heartbeat busy guard defaults off and preserves an explicit opt-in", () => {

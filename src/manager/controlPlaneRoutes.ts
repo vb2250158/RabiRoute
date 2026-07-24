@@ -43,6 +43,16 @@ import {
 import { scanWeComEndpoint } from "../messageEndpoints/wecomManager.js";
 import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../messageEndpoints/remoteAgentManager.js";
 import { appendMessageContextToDir } from "../messageContextStore.js";
+import { SpeechIngressStore } from "../speechIngressStore.js";
+import { PersonaSyncService } from "../personaSync.js";
+import { PersonaSyncCoordinator } from "../personaSyncCoordinator.js";
+import { PersonaSyncAutoReconciler } from "../personaSyncAutoReconciler.js";
+import {
+  findPersonaVoiceIdentity,
+  listPersonaVoiceIdentities,
+  updatePersonaVoiceIdentity,
+  type PersonaVoiceIdentityPatch
+} from "../personaVoiceIdentities.js";
 import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
@@ -53,11 +63,14 @@ import {
   type RolePanelAttachment
 } from "../rolePanelTimeline.js";
 import {
+  DEFAULT_CODEX_HOOK_SETTINGS,
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
   definitionUsesNapcat as sharedDefinitionUsesNapcat,
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
+  normalizeCodexHookSettings,
   normalizeGatewayDefinition as sharedNormalizeGatewayDefinition,
   validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
+  type CodexHookSettings,
   type MessageAdapterPolicies,
   type RecentMessageLimits,
   type SpeechPushMode
@@ -78,17 +91,28 @@ import {
 } from "../shared/routePaths.js";
 import { ManagerConfigRepository } from "./configRepository.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
-import { CodexHookContextService } from "./codexHookContext.js";
+import { proxySpeechEventStream } from "./speechEventProxy.js";
+import { CodexHookContextService, type CodexHookContextRequest, type PlanTaskCompletionDelivery } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
+import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import { handleRabiApi, publicRabiLinkRelayConfig } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
-import { managerAutostartEnabled, managerConfigWatcherEnabled } from "./managerRuntimeMode.js";
+import {
+  managerAutostartEnabled,
+  managerConfigWatcherEnabled,
+  managerReadOnlyEnabled,
+  managerReadOnlyRequestAllowed
+} from "./managerRuntimeMode.js";
 import { resolveGatewayChildCommand } from "./gatewayChildCommand.js";
 import { handlePersonaAvatarApi, personaAvatarPresentation } from "./personaAvatarRoutes.js";
+import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
+import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
+import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
+import { hostOwnedSpeechMessageCommand } from "./speechMessageIngress.js";
 import {
   ManagerSpeechControl,
   SpeechControlError,
@@ -104,6 +128,7 @@ import {
 } from "../speechMessageDelivery.js";
 import type {
   SpeechAudioStreamSelectionCommand,
+  SpeechIngressRecord,
   SpeechMessageCommand,
   SpeechMicrophoneSettingsCommand,
   SpeechMicrophoneStartCommand,
@@ -136,6 +161,19 @@ import {
   updateRecentMemory,
   validateRoleKnowledge
 } from "../roleKnowledge.js";
+import {
+  presentPlan,
+  presentPlans,
+  sortKnowledgeByUpdatedAt
+} from "../roleKnowledgePresentation.js";
+import {
+  appendPlanFeedback,
+  createPlanFeedbackRecord,
+  listPlanFeedback,
+  planFeedbackSummary,
+  updatePlanFeedbackDelivery,
+  type PlanFeedbackRecord
+} from "../planFeedback.js";
 import {
   currentWearableHealthState,
   ingestWearableHealthObservation,
@@ -200,6 +238,7 @@ type GatewayDefinition = {
   codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  codexHooks?: CodexHookSettings;
   copilotThreadName?: string;
   copilotCwd?: string;
   copilotCliBin?: string;
@@ -385,12 +424,50 @@ type MessageAdapterScanResult = {
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
 const managerHost = process.env.GATEWAY_MANAGER_HOST ?? "127.0.0.1";
-const managerShouldAutostart = managerAutostartEnabled();
+const managerReadOnly = managerReadOnlyEnabled();
+const managerShouldAutostart = !managerReadOnly && managerAutostartEnabled();
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
 const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
 const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
-const rabiLinkRelayRuntime = new RabiLinkRelayRuntime();
+const managerEventStreams = new Set<http.ServerResponse>();
+
+function publishManagerEvent(eventType: string, data: unknown): void {
+  const frame = `event: ${eventType.replace(/[^a-zA-Z0-9_.:-]/g, "_")}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const stream of [...managerEventStreams]) {
+    if (stream.writableEnded || stream.destroyed) managerEventStreams.delete(stream);
+    else stream.write(frame);
+  }
+}
+
+function openManagerEventStream(request: http.IncomingMessage, response: http.ServerResponse): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no"
+  });
+  response.write("retry: 3000\n\nevent: ready\ndata: {}\n\n");
+  managerEventStreams.add(response);
+  // event-driven-allow: SSE protocol keepalive; no business state is queried.
+  const keepAlive = setInterval(() => {
+    if (!response.writableEnded) response.write(`: keepalive ${Date.now()}\n\n`);
+  }, 15000);
+  keepAlive.unref();
+  request.once("close", () => {
+    clearInterval(keepAlive);
+    managerEventStreams.delete(response);
+  });
+}
+
+let personaSyncAutoReconciler: PersonaSyncAutoReconciler | undefined;
+const rabiLinkRelayRuntime = new RabiLinkRelayRuntime({
+  onStatus: status => {
+    publishManagerEvent("rabilink_status", status);
+    personaSyncAutoReconciler?.noteRelayStatus(status.state);
+  },
+  onEvent: eventType => personaSyncAutoReconciler?.noteRelayEvent(eventType)
+});
 
 type ManagerConfig = { routeDir?: string; rolesDir?: string };
 
@@ -408,7 +485,9 @@ let rolesRoot = configRepository.rolesRoot;
 let routeRoot = configRepository.routeRoot;
 const codexHookContextService = new CodexHookContextService({
   rolesRoot: () => rolesRoot,
-  storePath: path.join(rootDir, "data", "codex-hook", "sessions.json")
+  storePath: path.join(rootDir, "data", "codex-hook", "sessions.json"),
+  deliverPlanTaskCompletion,
+  hookEnabled: codexHookEnabled
 });
 const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback";
 const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
@@ -416,6 +495,74 @@ const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
 const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlaybackToken;
 const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
 const runtimes = new RuntimeRegistry();
+const planTaskCompletionDelivery = createPlanTaskCompletionDelivery<GatewayRuntime>({
+  getRuntime: gatewayId => runtimes.get(gatewayId),
+  listRuntimes: () => [...runtimes.values()],
+  roleIdForDefinition,
+  triggerRolePanelMessage: triggerGatewayRolePanelMessage,
+  publishEvent: publishManagerEvent
+});
+const speechIngressStore = new SpeechIngressStore(
+  path.join(rootDir, "data", "speech", "messages"),
+  path.join(rootDir, "data", "speech", "deliveries")
+);
+const personaSyncService = new PersonaSyncService(
+  () => rolesRoot,
+  path.join(rootDir, "data", "persona-sync"),
+  {
+    readOnly: managerReadOnly,
+    watch: managerShouldAutostart,
+    reconcileOnQueryFallback: !managerReadOnly,
+    onEvent: event => {
+      publishManagerEvent("persona_sync_manifest_changed", event);
+      personaSyncAutoReconciler?.noteManifestEvent(event);
+    }
+  }
+);
+const personaSyncCoordinator = new PersonaSyncCoordinator(
+  personaSyncService,
+  path.join(rootDir, "data", "persona-sync"),
+  () => {
+    const config = rabiGlobalConfig.read();
+    const relay = rabiLinkRelayConfigForMeta();
+    return {
+      url: relay.url,
+      token: relay.token,
+      deviceId: relay.deviceId,
+      deviceGuid: config.rabiGuid
+    };
+  }
+);
+personaSyncAutoReconciler = new PersonaSyncAutoReconciler(
+  personaSyncCoordinator,
+  path.join(rootDir, "data", "persona-sync"),
+  {
+    enabled: managerShouldAutostart,
+    onStatus: status => publishManagerEvent("persona_sync_auto_status", status)
+  }
+);
+function personaSyncRouteContext(): PersonaSyncRouteContext {
+  return {
+    service: personaSyncService,
+    coordinator: personaSyncCoordinator,
+    autoReconciler: personaSyncAutoReconciler!,
+    token: () => rabiLinkRelayConfigForMeta().token,
+    relay: () => {
+      const config = rabiGlobalConfig.read();
+      const relay = rabiLinkRelayConfigForMeta();
+      return {
+        url: relay.url,
+        token: relay.token,
+        deviceId: relay.deviceId,
+        deviceGuid: config.rabiGuid
+      };
+    }
+  };
+}
+const personaSyncLanServer = new PersonaSyncLanServer(personaSyncRouteContext(), {
+  port: Number(process.env.RABILINK_PERSONA_SYNC_LAN_PORT ?? 0),
+  onStatus: status => publishManagerEvent("persona_sync_lan_status", status)
+});
 const speechControl = new ManagerSpeechControl({
   serviceUrl: () => speechServiceUrl(),
   rolesRoot: () => rolesRoot,
@@ -424,23 +571,28 @@ const speechControl = new ManagerSpeechControl({
     return runtime
       ? {
           id: runtime.definition.id,
-          speechEnabled: runtime.definition.enabled !== false && sharedGatewayAdapterTypes(runtime.definition).includes("speech")
+          speechEnabled: runtime.definition.enabled !== false && sharedGatewayAdapterTypes(runtime.definition).includes("speech"),
+          rabiLinkEnabled: runtime.definition.enabled !== false && sharedGatewayAdapterTypes(runtime.definition).includes("rabilink"),
+          routeProfileIds: runtime.definition.routeProfiles?.map(profile => profile.id) ?? [runtime.definition.id]
         }
       : undefined;
   },
   routes: () => runtimes.values().map(runtime => ({
     id: runtime.definition.id,
-    speechEnabled: runtime.definition.enabled !== false && sharedGatewayAdapterTypes(runtime.definition).includes("speech")
+    speechEnabled: runtime.definition.enabled !== false && sharedGatewayAdapterTypes(runtime.definition).includes("speech"),
+    rabiLinkEnabled: runtime.definition.enabled !== false && sharedGatewayAdapterTypes(runtime.definition).includes("rabilink"),
+    routeProfileIds: runtime.definition.routeProfiles?.map(profile => profile.id) ?? [runtime.definition.id]
   })),
-  deliverTranscript: ({ routeId, messageId, text, sessionId }) => {
+  deliverTranscript: ({ routeId, record }) => {
     const runtime = runtimes.get(routeId);
     if (!runtime) return Promise.reject(new Error(`Speech Route disappeared before delivery: ${routeId}`));
-    return triggerGatewaySpeechMessage(runtime, messageId, text, sessionId);
+    return triggerGatewaySpeechMessage(runtime, record);
   },
   appendRouteLog: (routeId, message) => {
     const runtime = runtimes.get(routeId);
     if (runtime) appendLog(runtime, message);
-  }
+  },
+  speechIngressStore
 });
 const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
 const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
@@ -501,7 +653,13 @@ function ensureDataDirs(): void {
 }
 
 function readConfig(): GatewayConfigFile {
-  ensureDataDirs();
+  if (managerReadOnly) {
+    routeRoot = configRepository.routeRoot;
+    rolesRoot = configRepository.rolesRoot;
+    if (!fs.existsSync(routeRoot)) return { gateways: [] };
+  } else {
+    ensureDataDirs();
+  }
   const gateways: GatewayDefinition[] = [];
   for (const routeEntry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
     if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) {
@@ -756,6 +914,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     codexThreadId: definition.codexThreadId,
     codexThreadName: definition.codexThreadName,
     codexCwd: configPathValue(definition.codexCwd),
+    codexHooks: definition.codexHooks,
     copilotThreadName: definition.copilotThreadName,
     copilotCwd: configPathValue(definition.copilotCwd),
     copilotCliBin: definition.copilotCliBin,
@@ -826,19 +985,28 @@ function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
 
 function syncRabiLinkRelayRuntime(): void {
   if (!managerShouldAutostart) {
+    personaSyncLanServer.stop();
     rabiLinkRelayRuntime.stop();
     return;
   }
   const globalConfig = rabiGlobalConfig.read();
   const relay = rabiLinkRelayConfigForMeta();
+  const lanEnabled = relay.enabled && Boolean(relay.url.trim()) && Boolean(relay.token.trim());
+  if (!lanEnabled) personaSyncLanServer.stop();
   rabiLinkRelayRuntime.sync({
     ...relay,
     deviceGuid: globalConfig.rabiGuid,
     deviceName: globalConfig.rabiName || os.hostname(),
     localWebguiUrl: `http://127.0.0.1:${managerPort}`,
+    peerUrls: lanEnabled ? personaSyncLanServer.peerUrls() : [],
     speechProxyEnabled: relay.speechProxyEnabled,
     localSpeechUrl: relay.speechServiceUrl
   });
+  if (lanEnabled && personaSyncLanServer.status().state !== "listening") {
+    void personaSyncLanServer.start()
+      .then(() => syncRabiLinkRelayRuntime())
+      .catch(error => console.warn(`Persona sync LAN listener unavailable; Relay fallback remains active: ${error instanceof Error ? error.message : String(error)}`));
+  }
 }
 
 function writeAdapterConfigFile(definition: GatewayDefinition): void {
@@ -1269,16 +1437,57 @@ function reloadChangedConfig(reason: string): void {
   }
 }
 
-function startConfigWatcher(): NodeJS.Timeout {
+type ConfigWatcher = { close(): void };
+
+function startConfigWatcher(): ConfigWatcher {
   watchedConfigSnapshot = configSnapshot();
-  return setInterval(() => {
-    const nextSnapshot = configSnapshot();
-    if (nextSnapshot === watchedConfigSnapshot) {
-      return;
+  const watchers = new Map<string, fs.FSWatcher>();
+  let debounceTimer: NodeJS.Timeout | null = null;
+  let closed = false;
+
+  const armDirectories = (): void => {
+    const directories = new Set([
+      routeRoot,
+      rolesRoot,
+      ...watchedRouteFiles().map(file => path.dirname(file))
+    ].map(directory => path.resolve(directory)));
+    for (const [directory, watcher] of watchers) {
+      if (directories.has(directory)) continue;
+      watcher.close();
+      watchers.delete(directory);
     }
-    watchedConfigSnapshot = nextSnapshot;
-    reloadChangedConfig("after config file change");
-  }, 2000);
+    for (const directory of directories) {
+      if (closed || watchers.has(directory) || !fs.existsSync(directory)) continue;
+      try {
+        const watcher = fs.watch(directory, () => {
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            debounceTimer = null;
+            if (closed) return;
+            const nextSnapshot = configSnapshot();
+            if (nextSnapshot !== watchedConfigSnapshot) {
+              watchedConfigSnapshot = nextSnapshot;
+              reloadChangedConfig("after config file event");
+            }
+            armDirectories();
+          }, 120);
+        });
+        watcher.on("error", error => console.warn(`Config watch failed for ${directory}:`, error));
+        watchers.set(directory, watcher);
+      } catch (error) {
+        console.warn(`Unable to watch config directory ${directory}:`, error);
+      }
+    }
+  };
+  armDirectories();
+  return {
+    close(): void {
+      closed = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      for (const watcher of watchers.values()) watcher.close();
+      watchers.clear();
+    }
+  };
 }
 
 function appendLog(runtime: GatewayRuntime, line: string): void {
@@ -2650,6 +2859,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     codexThreadId: runtime.definition.codexThreadId,
     codexThreadName: resolveCodexThreadName(runtime.definition),
     codexCwd: runtime.definition.codexCwd,
+    codexHooks: normalizeCodexHookSettings(runtime.definition.codexHooks),
     copilotThreadName: resolveCopilotThreadName(runtime.definition),
     copilotCwd: runtime.definition.copilotCwd,
     copilotCliBin: runtime.definition.copilotCliBin,
@@ -2780,6 +2990,17 @@ type RolePanelMessageRequest = {
   gatewayId?: string;
   text?: string;
   attachments?: RolePanelAttachment[];
+};
+
+type PlanFeedbackRequest = {
+  feedbackId?: string;
+  gatewayId?: string;
+  stepId?: string;
+  text?: string;
+  kind?: "approval_suggestion" | "approval_response";
+  author?: "user" | "agent" | "system";
+  source?: "webgui" | "tray" | "qq" | "agent" | "api";
+  notifyAgent?: boolean;
 };
 
 function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): Promise<void> {
@@ -2950,6 +3171,74 @@ function roleIdForDefinition(definition: GatewayDefinition): string {
   return sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId || "Rabi";
 }
 
+function codexHookSettingsForSession(sessionId: string): CodexHookSettings {
+  const exactSessionId = String(sessionId || "").trim();
+  const matches = [...runtimes.values()].filter((runtime) => (
+    normalizeAgentAdapters(runtime.definition.agentAdapters).includes("codex")
+    && String(runtime.definition.codexThreadId || "").trim() === exactSessionId
+  ));
+  if (matches.length === 0) return { ...DEFAULT_CODEX_HOOK_SETTINGS };
+  const settings = matches.map((runtime) => normalizeCodexHookSettings(runtime.definition.codexHooks));
+  return {
+    sessionContextEnabled: settings.every((item) => item.sessionContextEnabled),
+    reasoningContextEnabled: settings.every((item) => item.reasoningContextEnabled),
+    planTaskCompletionEnabled: settings.every((item) => item.planTaskCompletionEnabled)
+  };
+}
+
+function codexHookEnabled(request: CodexHookContextRequest): boolean {
+  const settings = codexHookSettingsForSession(request.sessionId);
+  if (request.eventName === "SessionStart" || request.eventName === "UserPromptSubmit") {
+    return settings.sessionContextEnabled;
+  }
+  if (request.eventName === "PreToolUse" || request.eventName === "PostToolUse") {
+    return settings.reasoningContextEnabled;
+  }
+  return settings.planTaskCompletionEnabled;
+}
+
+function runtimeForRoleDelivery(roleId: string, gatewayId: string): GatewayRuntime {
+  if (gatewayId) {
+    const runtime = runtimes.get(gatewayId);
+    if (!runtime) throw new Error(`Gateway not found: ${gatewayId}`);
+    if (roleIdForDefinition(runtime.definition) !== roleId) {
+      throw new Error(`Gateway ${gatewayId} is not bound to role ${roleId}.`);
+    }
+    return runtime;
+  }
+  const matches = [...runtimes.values()].filter((runtime) => roleIdForDefinition(runtime.definition) === roleId);
+  if (matches.length === 0) throw new Error(`No gateway is bound to role ${roleId}.`);
+  if (matches.length > 1) throw new Error(`Multiple gateways are bound to role ${roleId}; gatewayId is required.`);
+  return matches[0];
+}
+
+function deliverPlanTaskCompletion(delivery: PlanTaskCompletionDelivery): Promise<void> {
+  return planTaskCompletionDelivery(delivery);
+}
+
+function planFeedbackAgentText(record: PlanFeedbackRecord): string {
+  const lines = [
+    "[计划审批建议]",
+    `计划：${record.planTitle}`,
+    `计划 ID：${record.planId}`
+  ];
+  if (record.stepId || record.stepTitle) {
+    lines.push(`对应步骤：${record.stepTitle || record.stepId}${record.stepId ? `（${record.stepId}）` : ""}`);
+  }
+  lines.push(
+    `审批意见：${record.text}`,
+    "请读取 Manager 中的计划与审批记录，判断是否需要补充方案、修改步骤或继续执行。收到意见不等于计划已自动推进。"
+  );
+  return lines.join("\n");
+}
+
+function presentedPlanWithFeedback(roleDir: string, plan: ReturnType<typeof listPlans>[number]) {
+  return {
+    ...presentPlan(plan),
+    approval: planFeedbackSummary(roleDir, plan.id)
+  };
+}
+
 function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: string, text: string, attachments: RolePanelAttachment[]): Promise<void> {
   const roleId = roleIdForDefinition(runtime.definition);
   const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
@@ -2992,13 +3281,12 @@ function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: stri
   });
 }
 
-function triggerGatewaySpeechMessage(runtime: GatewayRuntime, messageId: string, text: string, sessionId: string): Promise<ManagerSpeechDeliveryOutcome> {
+function triggerGatewaySpeechMessage(runtime: GatewayRuntime, record: SpeechIngressRecord): Promise<ManagerSpeechDeliveryOutcome> {
+  const messageId = record.id;
   const roleId = roleIdForDefinition(runtime.definition);
-  const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
+  const routeProfileId = record.routeProfileId || runtime.definition.routeProfiles?.[0]?.id || runtime.definition.id;
   const command = childCommand([
     `--speech-message=${encodeURIComponent(messageId)}`,
-    `--speech-text=${encodeURIComponent(text)}`,
-    `--speech-session=${encodeURIComponent(sessionId)}`,
     `--speech-role=${encodeURIComponent(roleId)}`,
     `--speech-gateway=${encodeURIComponent(runtime.definition.id)}`,
     `--speech-route-profile=${encodeURIComponent(routeProfileId)}`
@@ -3009,7 +3297,10 @@ function triggerGatewaySpeechMessage(runtime: GatewayRuntime, messageId: string,
     let stdoutText = "";
     const child = spawn(command.command, command.args, {
       cwd: rootDir,
-      env: envFor(runtime.definition),
+      env: {
+        ...envFor(runtime.definition),
+        RABIROUTE_SPEECH_MESSAGES_DIR: speechIngressStore.root
+      },
       shell: command.shell,
       windowsHide: true
     });
@@ -3215,7 +3506,12 @@ function handleRemoteAgentApi(request: http.IncomingMessage, requestUrl: URL, re
   return false;
 }
 
-function handleRolePanelApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+function handleRolePanelApi(
+  request: http.IncomingMessage,
+  requestUrl: URL,
+  response: http.ServerResponse,
+  activeRolesRoot = rolesRoot
+): boolean {
   const messageListMatch = requestUrl.pathname.match(/^\/api\/roles\/([^/]+)\/role-panel\/messages$/);
   if (request.method === "GET" && messageListMatch) {
     const roleId = sanitizeRoleId(decodeURIComponent(messageListMatch[1]));
@@ -3224,7 +3520,7 @@ function handleRolePanelApi(request: http.IncomingMessage, requestUrl: URL, resp
       return true;
     }
     const limit = Number(requestUrl.searchParams.get("limit") || "120");
-    const roleDir = roleFolderPath(rolesRoot, roleId);
+    const roleDir = roleFolderPath(activeRolesRoot, roleId);
     jsonResponse(response, 200, {
       code: 0,
       roleId,
@@ -3308,6 +3604,13 @@ function writeSpeechJson<T>(
 }
 
 function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/events") {
+    proxySpeechEventStream(response, {
+      openUpstream: signal => speechControl.eventStream(signal),
+      errorMessage: speechControlErrorMessage
+    });
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/status") {
     writeSpeechJson(response, speechControl.status(), 200, 500);
     return true;
@@ -3482,14 +3785,35 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       }));
     return true;
   }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/messages") {
+    const recordId = String(requestUrl.searchParams.get("recordId") || "").trim();
+    if (recordId) {
+      const record = speechIngressStore.read(recordId);
+      if (!record) {
+        jsonResponse(response, 404, { code: -1, message: `Speech ingress record was not found: ${recordId}` });
+      } else {
+        jsonResponse(response, 200, {
+          code: 0,
+          data: { record, deliveries: speechIngressStore.listDeliveryReceipts(record.id) }
+        });
+      }
+      return true;
+    }
+    const limit = Math.max(1, Math.min(1_000, Math.floor(Number(requestUrl.searchParams.get("limit") || 200) || 200)));
+    jsonResponse(response, 200, { code: 0, data: { records: speechIngressStore.list(limit) } });
+    return true;
+  }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/messages") {
     void readJsonBody<SpeechMessageCommand & { gatewayId?: string }>(request)
       .then(
-        body => speechControl.acceptMessage({
-          routeId: body.routeId || body.gatewayId || null,
-          text: body.text,
-          sessionId: body.sessionId
-        }),
+        body => {
+          const host = rabiGlobalConfig.read();
+          return speechControl.acceptMessage(hostOwnedSpeechMessageCommand(body, {
+            rabiGuid: host.rabiGuid,
+            rabiName: host.rabiName,
+            fallbackHostName: os.hostname()
+          }));
+        },
         error => Promise.reject(new SpeechControlError(speechControlErrorMessage(error), 400))
       )
       .then(data => jsonResponse(response, 200, { code: 0, data }))
@@ -3621,8 +3945,64 @@ function handleWearableHealthApi(request: http.IncomingMessage, pathname: string
   }
 }
 
-function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+function handleRoleKnowledgeApi(
+  request: http.IncomingMessage,
+  pathname: string,
+  response: http.ServerResponse,
+  resolveRoleDir: (roleId: string) => string = roleDirForApi
+): boolean {
   if (handleWearableHealthApi(request, pathname, response)) return true;
+  if (handlePersonaVoiceTranscriptApi(
+    request,
+    new URL(request.url || pathname, "http://127.0.0.1"),
+    response,
+    { roleDir: resolveRoleDir }
+  )) return true;
+  const voiceIdentityMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/voice-identities$/);
+  if (voiceIdentityMatch) {
+    try {
+      const roleDir = resolveRoleDir(decodeURIComponent(voiceIdentityMatch[1]));
+      if (request.method === "GET") {
+        const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
+        const sourceHostId = requestUrl.searchParams.get("sourceHostId")?.trim() || "";
+        const voiceprintId = requestUrl.searchParams.get("voiceprintId")?.trim() || "";
+        if (sourceHostId || voiceprintId) {
+          if (!sourceHostId || !voiceprintId) throw new Error("sourceHostId and voiceprintId must be provided together.");
+          const identity = findPersonaVoiceIdentity(roleDir, sourceHostId, voiceprintId);
+          if (!identity) {
+            jsonResponse(response, 404, { code: -1, message: "Persona voice identity was not found." });
+            return true;
+          }
+          jsonResponse(response, 200, { code: 0, data: { path: "voice/voice-identities.jsonl", identity } });
+          return true;
+        }
+        jsonResponse(response, 200, {
+          code: 0,
+          data: { path: "voice/voice-identities.jsonl", identities: listPersonaVoiceIdentities(roleDir) }
+        });
+        return true;
+      }
+      if (request.method === "PUT") {
+        void readJsonBody<PersonaVoiceIdentityPatch>(request)
+          .then(body => updatePersonaVoiceIdentity(roleDir, body))
+          .then(data => {
+            publishManagerEvent("persona_voice_identity_changed", {
+              roleId: decodeURIComponent(voiceIdentityMatch[1]),
+              appended: data.appended,
+              deleted: data.deleted
+            });
+            jsonResponse(response, data.appended ? 201 : 200, { code: 0, data });
+          })
+          .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return true;
+      }
+      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+      return true;
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      return true;
+    }
+  }
   const validationMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/knowledge-validation$/);
   if (validationMatch) {
     const roleId = decodeURIComponent(validationMatch[1]);
@@ -3631,8 +4011,116 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
         jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
         return true;
       }
-      const roleDir = roleDirForApi(roleId);
+      const roleDir = resolveRoleDir(roleId);
       jsonResponse(response, 200, { code: 0, data: validateRoleKnowledge(roleDir) });
+      return true;
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      return true;
+    }
+  }
+
+  const planFeedbackMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/plans\/([^/]+)\/feedback$/);
+  if (planFeedbackMatch) {
+    const roleId = sanitizeRoleId(decodeURIComponent(planFeedbackMatch[1]));
+    const planId = decodeURIComponent(planFeedbackMatch[2]);
+    try {
+      if (!roleId) throw new Error("Missing role id.");
+      const roleDir = resolveRoleDir(roleId);
+      const plan = listPlans(roleDir).find((item) => item.id === planId);
+      if (!plan) {
+        jsonResponse(response, 404, { code: -1, message: `Plan not found: ${planId}` });
+        return true;
+      }
+      if (request.method === "GET") {
+        const records = listPlanFeedback(roleDir, planId);
+        jsonResponse(response, 200, { code: 0, data: { count: records.length, latest: records[0], records } });
+        return true;
+      }
+      if (request.method === "POST") {
+        void readJsonBody<PlanFeedbackRequest>(request)
+          .then(async (body) => {
+            const requestedStepId = String(body.stepId || "").trim();
+            const step = requestedStepId
+              ? plan.steps.find((item) => item.id === requestedStepId)
+              : plan.steps.find((item) => item.id === plan.currentStepId)
+                || plan.steps.find((item) => item.status === "进行中");
+            if (requestedStepId && !step) throw new Error(`Plan step not found: ${requestedStepId}`);
+            const candidate = createPlanFeedbackRecord({
+              id: body.feedbackId,
+              roleId,
+              planId,
+              planTitle: plan.title,
+              stepId: step?.id,
+              stepTitle: step?.title,
+              gatewayId: body.gatewayId,
+              kind: body.kind,
+              author: body.author,
+              source: body.source,
+              text: body.text,
+              notifyAgent: body.notifyAgent
+            });
+            const existing = listPlanFeedback(roleDir, planId).find((item) => item.id === candidate.id);
+            if (existing && (existing.text !== candidate.text || existing.stepId !== candidate.stepId)) {
+              throw new Error(`Feedback id already exists with different content: ${candidate.id}`);
+            }
+            let record = existing || appendPlanFeedback(roleDir, candidate);
+            if (record.deliveryStatus === "record_only" || record.deliveryStatus === "delivered") {
+              if (!existing) publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
+              return record;
+            }
+
+            const runtime = runtimeForRoleDelivery(roleId, String(body.gatewayId || record.gatewayId || "").trim());
+            const messageId = `plan-feedback-${record.id}`;
+            const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
+            const text = planFeedbackAgentText(record);
+            if (!existing) {
+              appendRolePanelTimelineMessage(roleDir, {
+                id: messageId,
+                time: Math.floor(Date.now() / 1000),
+                roleId,
+                gatewayId: runtime.definition.id,
+                routeProfileId,
+                direction: "user",
+                sender: "本地用户",
+                text,
+                attachments: [],
+                status: "sent",
+                replyContext: {
+                  runtimeRouteId: runtime.definition.id,
+                  gatewayId: runtime.definition.id,
+                  routeProfileId,
+                  routeKind: "role_panel_message",
+                  targetType: "plan_feedback",
+                  adapterType: "rolePanel",
+                  messageId,
+                  roleId,
+                  planId,
+                  planStepId: record.stepId,
+                  planFeedbackId: record.id,
+                  planFeedbackKind: record.kind
+                }
+              });
+            }
+            try {
+              await triggerGatewayRolePanelMessage(runtime, messageId, text, []);
+              record = updatePlanFeedbackDelivery(roleDir, record, "delivered");
+            } catch (error) {
+              record = updatePlanFeedbackDelivery(
+                roleDir,
+                record,
+                "failed",
+                error instanceof Error ? error.message : String(error)
+              );
+            }
+            publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
+            return record;
+          })
+          .then((data) => jsonResponse(response, 202, { code: 0, data }))
+          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return true;
+      }
+      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
       return true;
     } catch (error) {
       jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
@@ -3645,7 +4133,7 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
     const roleId = decodeURIComponent(consolidationResultMatch[1]);
     const runId = decodeURIComponent(consolidationResultMatch[2]);
     try {
-      const roleDir = roleDirForApi(roleId);
+      const roleDir = resolveRoleDir(roleId);
       if (request.method === "POST") {
         void readJsonBody<Record<string, unknown>>(request)
           .then((body) => applyMemoryConsolidationResult(roleDir, runId, body))
@@ -3669,9 +4157,12 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
   const { roleId, resource, itemId } = route;
 
   try {
-    const roleDir = roleDirForApi(roleId);
+    const roleDir = resolveRoleDir(roleId);
     if (request.method === "GET" && resource === "plans") {
-      const plans = listPlans(roleDir);
+      const plans = presentPlans(listPlans(roleDir)).map((plan) => ({
+        ...plan,
+        approval: planFeedbackSummary(roleDir, plan.id)
+      }));
       const data = itemId ? plans.find((item) => item.id === itemId) : plans;
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
@@ -3693,8 +4184,8 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
       jsonResponse(response, 200, {
         code: 0,
         data: {
-          recent: listRecentMemories(roleDir),
-          consolidated: listConsolidatedMemories(roleDir),
+          recent: sortKnowledgeByUpdatedAt(listRecentMemories(roleDir)),
+          consolidated: sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)),
           consolidationRuns: listConsolidationRuns(roleDir)
         }
       });
@@ -3703,19 +4194,19 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
     if (request.method === "POST" && resource === "plans" && !itemId) {
       void readJsonBody<Record<string, unknown>>(request)
         .then((body) => createPlan(roleDir, body))
-        .then((data) => jsonResponse(response, 201, { code: 0, data }))
+        .then((data) => jsonResponse(response, 201, { code: 0, data: presentedPlanWithFeedback(roleDir, data) }))
         .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
     if (request.method === "PATCH" && resource === "plans" && itemId) {
       void readJsonBody<Record<string, unknown>>(request)
         .then((body) => updatePlan(roleDir, itemId, body))
-        .then((data) => jsonResponse(response, 200, { code: 0, data }))
+        .then((data) => jsonResponse(response, 200, { code: 0, data: presentedPlanWithFeedback(roleDir, data) }))
         .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
     if (request.method === "GET" && resource === "memory/recent") {
-      const data = itemId ? getRecentMemory(roleDir, itemId) : listRecentMemories(roleDir);
+      const data = itemId ? getRecentMemory(roleDir, itemId) : sortKnowledgeByUpdatedAt(listRecentMemories(roleDir));
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Memory not found: ${itemId}` });
         return true;
@@ -3724,7 +4215,7 @@ function handleRoleKnowledgeApi(request: http.IncomingMessage, pathname: string,
       return true;
     }
     if (request.method === "GET" && resource === "memory/consolidated") {
-      const data = itemId ? getConsolidatedMemory(roleDir, itemId) : listConsolidatedMemories(roleDir);
+      const data = itemId ? getConsolidatedMemory(roleDir, itemId) : sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir));
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Consolidated memory not found: ${itemId}` });
         return true;
@@ -3878,6 +4369,7 @@ function metaPayload(): Record<string, unknown> {
     rabiName: globalConfig.rabiName,
     rabiLinkRelay: publicRabiLinkRelayConfig(rabiLinkRelayConfigForMeta()),
     rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
+    personaSyncLan: personaSyncLanServer.status(),
     computerName: os.hostname()
   };
 }
@@ -4086,8 +4578,40 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
   return true;
 }
 
+export type ManagerPersonaDomainApiContext = {
+  rolesRoot?: string;
+  roleDir?: (roleId: string) => string;
+};
+
+export function handleManagerEventApi(
+  request: http.IncomingMessage,
+  requestUrl: URL,
+  response: http.ServerResponse
+): boolean {
+  if (request.method !== "GET" || requestUrl.pathname !== "/api/events") return false;
+  openManagerEventStream(request, response);
+  return true;
+}
+
+export function handleManagerPersonaDomainApi(
+  request: http.IncomingMessage,
+  requestUrl: URL,
+  response: http.ServerResponse,
+  context: ManagerPersonaDomainApiContext = {}
+): boolean {
+  const activeRolesRoot = context.rolesRoot ?? rolesRoot;
+  const resolveRoleDir = context.roleDir ?? roleDirForApi;
+  if (handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot)) return true;
+  if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
+  if (handleSpeechApi(request, requestUrl, response)) return true;
+  return handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir);
+}
+
 export async function startManager(): Promise<void> {
   loadRuntimes();
+  personaSyncAutoReconciler?.start();
+  void personaSyncService.startManifestIndex()
+    .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
   if (managerShouldAutostart) {
     for (const runtime of runtimes.values()) {
       if (runtime.definition.enabled) {
@@ -4095,11 +4619,25 @@ export async function startManager(): Promise<void> {
       }
     }
   }
-  reconcileSpeechMicrophone("manager startup");
+  if (managerReadOnly) {
+    console.log("Manager read-only mode enabled: startup reconciliation and mutating HTTP methods are disabled.");
+  } else {
+    reconcileSpeechMicrophone("manager startup");
+  }
 
   const server = http.createServer((request, response) => {
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+      if (managerReadOnly && !managerReadOnlyRequestAllowed(request.method)) {
+        jsonResponse(response, 423, {
+          code: -1,
+          message: "Manager is running in read-only acceptance mode."
+        });
+        return;
+      }
+      if (handleManagerEventApi(request, requestUrl, response)) {
+        return;
+      }
       if (request.method === "GET" && assetResponse(requestUrl.pathname, response)) {
         return;
       }
@@ -4116,6 +4654,9 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (handleCodexHookApi(request, requestUrl, response, codexHookContextService)) {
+        return;
+      }
+      if (handlePersonaSyncApi(request, requestUrl, response, personaSyncRouteContext())) {
         return;
       }
       if (handleRabiApi(request, requestUrl, response, {
@@ -4139,16 +4680,7 @@ export async function startManager(): Promise<void> {
       if (handleRemoteAgentApi(request, requestUrl, response)) {
         return;
       }
-      if (handlePersonaAvatarApi(request, requestUrl.pathname, response, rolesRoot)) {
-        return;
-      }
-      if (handleRolePanelApi(request, requestUrl, response)) {
-        return;
-      }
-      if (handleSpeechApi(request, requestUrl, response)) {
-        return;
-      }
-      if ((request.method === "GET" || request.method === "POST" || request.method === "PATCH") && handleRoleKnowledgeApi(request, requestUrl.pathname, response)) {
+      if (handleManagerPersonaDomainApi(request, requestUrl, response)) {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/gateways") {
@@ -4406,6 +4938,11 @@ export async function startManager(): Promise<void> {
 
             child.on("exit", (exitCode) => {
               clearTimeout(codeTimer);
+              publishManagerEvent("copilot_login_status", {
+                done: exitCode === 0,
+                exitCode,
+                error: exitCode === 0 ? "" : output.trim()
+              });
               if (exitCode === 0 && !code) {
                 jsonResponse(response, 200, { ok: true, done: true });
               } else if (exitCode !== 0 && !code) {
@@ -4650,9 +5187,9 @@ export async function startManager(): Promise<void> {
     syncRabiLinkRelayRuntime();
   });
 
-  const configWatcher = managerConfigWatcherEnabled() ? startConfigWatcher() : null;
+  const configWatcher = managerShouldAutostart && managerConfigWatcherEnabled() ? startConfigWatcher() : null;
   if (!configWatcher) {
-    console.log("Route config polling disabled by RABIROUTE_MANAGER_AUTOSTART=0");
+    console.log("Route config event watcher disabled by RABIROUTE_MANAGER_AUTOSTART=0");
   }
 
   let shuttingDown = false;
@@ -4663,7 +5200,10 @@ export async function startManager(): Promise<void> {
     }
     shuttingDown = true;
     console.log(`gateway-manager shutting down: ${reason}`);
-    if (configWatcher) clearInterval(configWatcher);
+    configWatcher?.close();
+    personaSyncAutoReconciler?.stop();
+    personaSyncService.stopManifestIndex();
+    personaSyncLanServer.stop();
     rabiLinkRelayRuntime.stop();
     stopAllGateways();
     server.close(() => {

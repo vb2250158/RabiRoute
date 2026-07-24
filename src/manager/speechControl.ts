@@ -7,6 +7,7 @@ import {
   type SpeechAudioStreamStatus,
   type SpeechAudioInput,
   type SpeechHistoryItem,
+  type SpeechIngressRecord,
   type SpeechMessageCommand,
   type SpeechMessageResult,
   type SpeechMicrophoneConfig,
@@ -35,10 +36,17 @@ import {
   type SpeechRouteDeliveryResult,
   type SpeechTranscriptSegment
 } from "../shared/speechControlContract.js";
+import { normalizeSpeechTranscriptSegment } from "../shared/speechTranscript.js";
+import {
+  normalizeSpeechIngressRecord,
+  type SpeechIngressAppendResult,
+  type SpeechRouteDeliveryReceipt
+} from "../speechIngressStore.js";
 import { roleFolderPath } from "../shared/routePaths.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { personaAvatarPresentation } from "./personaAvatarRoutes.js";
 import {
+  localSpeechEndpoint,
   requestLocalSpeech,
   requestLocalSpeechJson,
   type LocalSpeechResponse
@@ -66,15 +74,21 @@ export type ManagerSpeechLocalAdapter = {
 export type ManagerSpeechRoute = {
   id: string;
   speechEnabled: boolean;
+  rabiLinkEnabled?: boolean;
+  routeProfileIds?: string[];
 };
 
 export type ManagerSpeechDeliveryOutcome = Pick<SpeechMessageResult, "status" | "reason" | "detail">;
 
 export type ManagerSpeechDeliveryCommand = {
   routeId: string;
-  messageId: string;
-  text: string;
-  sessionId: string;
+  record: SpeechIngressRecord;
+};
+
+export type ManagerSpeechIngressStore = {
+  append(command: SpeechMessageCommand, fallbackId?: string): SpeechIngressAppendResult;
+  readDeliveryReceipt?(recordId: string, routeId: string): SpeechRouteDeliveryReceipt | undefined;
+  appendDeliveryReceipt?(receipt: SpeechRouteDeliveryReceipt): SpeechRouteDeliveryReceipt;
 };
 
 export type ManagerSpeechControlDependencies = {
@@ -84,6 +98,7 @@ export type ManagerSpeechControlDependencies = {
   routes(): ManagerSpeechRoute[];
   deliverTranscript(command: ManagerSpeechDeliveryCommand): Promise<ManagerSpeechDeliveryOutcome>;
   appendRouteLog(routeId: string, message: string): void;
+  speechIngressStore?: ManagerSpeechIngressStore;
   localSpeech?: ManagerSpeechLocalAdapter;
   createMessageId?: () => string;
 };
@@ -285,18 +300,25 @@ function normalizeAudioStreamStatus(value: Record<string, unknown>): SpeechAudio
     selectedOnline: booleanValue(value.selected_online, true),
     captureEnabled: booleanValue(value.capture_enabled),
     checkedAt: numberValue(value.checked_at),
-    clients: rows(value.clients).map(client => ({
-      id: stringValue(client.id),
-      name: stringValue(client.name || client.id),
-      sampleRate: numberValue(client.sample_rate ?? client.sampleRate, 16_000),
-      chunkMs: numberValue(client.chunk_ms ?? client.chunkMs, 100),
-      connectedAt: numberValue(client.connected_at ?? client.connectedAt),
-      lastAudioAt: client.last_audio_at == null && client.lastAudioAt == null
-        ? null
-        : numberValue(client.last_audio_at ?? client.lastAudioAt),
-      selected: booleanValue(client.selected),
-      online: booleanValue(client.online, true)
-    })).filter(client => Boolean(client.id))
+    clients: rows(value.clients).map(client => {
+      const messageAdapterType: "speech" | "rabilink" = client.message_adapter_type === "rabilink" || client.messageAdapterType === "rabilink"
+        ? "rabilink"
+        : "speech";
+      return {
+        id: stringValue(client.id),
+        name: stringValue(client.name || client.id),
+        kind: optionalString(client.kind),
+        messageAdapterType,
+        sampleRate: numberValue(client.sample_rate ?? client.sampleRate, 16_000),
+        chunkMs: numberValue(client.chunk_ms ?? client.chunkMs, 100),
+        connectedAt: numberValue(client.connected_at ?? client.connectedAt),
+        lastAudioAt: client.last_audio_at == null && client.lastAudioAt == null
+          ? null
+          : numberValue(client.last_audio_at ?? client.lastAudioAt),
+        selected: booleanValue(client.selected),
+        online: booleanValue(client.online, true)
+      };
+    }).filter(client => Boolean(client.id))
   };
 }
 
@@ -318,28 +340,28 @@ function normalizeHistoryItem(value: Record<string, unknown>): SpeechHistoryItem
           : undefined,
     deliveryReason: optionalString(value.delivery_reason ?? value.deliveryReason),
     submitError: optionalString(value.submit_error ?? value.submitError),
-    segments: rows(value.segments).map(normalizeTranscriptSegment)
+    segments: rows(value.segments).map(normalizeTranscriptSegment),
+    source: optionalString(value.source),
+    transport: optionalString(value.transport),
+    channelType: optionalString(value.channel_type ?? value.channelType),
+    messageAdapterType: value.message_adapter_type === "rabilink" || value.messageAdapterType === "rabilink"
+      ? "rabilink"
+      : value.message_adapter_type === "speech" || value.messageAdapterType === "speech"
+        ? "speech"
+        : undefined,
+    sourceDeviceId: optionalString(value.source_device_id ?? value.sourceDeviceId),
+    sourceDeviceName: optionalString(value.source_device_name ?? value.sourceDeviceName),
+    sourceDeviceKind: optionalString(value.source_device_kind ?? value.sourceDeviceKind),
+    sampleRate: optionalFiniteNumber(value.sample_rate ?? value.sampleRate)
   };
 }
 
-function normalizeTranscriptSegment(value: Record<string, unknown>): SpeechTranscriptSegment {
-  return {
-    id: numberValue(value.id),
+function normalizeTranscriptSegment(value: Record<string, unknown>, index: number): SpeechTranscriptSegment {
+  return normalizeSpeechTranscriptSegment(value, index, { includeDiagnosticNames: true }) ?? {
+    id: numberValue(value.id ?? index),
     start: numberValue(value.start),
     end: numberValue(value.end),
-    text: stringValue(value.text),
-    speaker: optionalString(value.speaker),
-    speakerLabel: optionalString(value.speaker_label ?? value.speakerLabel),
-    speakerId: optionalString(value.speaker_id ?? value.speakerId),
-    speakerName: optionalString(value.speaker_name ?? value.speakerName),
-    speakerDecision: optionalString(value.speaker_decision ?? value.speakerDecision),
-    speakerClusterId: optionalString(value.speaker_cluster_id ?? value.speakerClusterId),
-    speakerScore: optionalFiniteNumber(value.speaker_score ?? value.speakerScore),
-    speakerMargin: optionalFiniteNumber(value.speaker_margin ?? value.speakerMargin),
-    speakerSampleDuration: optionalPositiveNumber(value.speaker_sample_duration ?? value.speakerSampleDuration),
-    speakerModel: optionalString(value.speaker_model ?? value.speakerModel),
-    speakerSuggestionId: optionalString(value.speaker_suggestion_id ?? value.speakerSuggestionId),
-    speakerSuggestionName: optionalString(value.speaker_suggestion_name ?? value.speakerSuggestionName)
+    text: stringValue(value.text)
   };
 }
 
@@ -363,6 +385,8 @@ function normalizeSpeakerIdentityCapability(value: unknown): SpeechSpeakerIdenti
       model: optionalString(voiceprint.model),
       provider: optionalString(voiceprint.provider),
       validated: booleanValue(voiceprint.validated),
+      validationRequested: booleanValue(voiceprint.validation_requested ?? voiceprint.validationRequested),
+      validationReport: optionalString(voiceprint.validation_report ?? voiceprint.validationReport),
       autoAssign: booleanValue(voiceprint.auto_assign ?? voiceprint.autoAssign)
     },
     storageError: optionalString(detail.storage_error ?? detail.storageError)
@@ -574,6 +598,7 @@ function synthesisPayload(command: SpeechSynthesisCommand): Record<string, unkno
 export class ManagerSpeechControl {
   private readonly localSpeech: ManagerSpeechLocalAdapter;
   private readonly createMessageId: () => string;
+  private readonly deliveryFlights = new Map<string, Promise<SpeechRouteDeliveryResult>>();
 
   constructor(private readonly dependencies: ManagerSpeechControlDependencies) {
     this.localSpeech = dependencies.localSpeech ?? defaultLocalSpeechAdapter;
@@ -582,6 +607,14 @@ export class ManagerSpeechControl {
 
   status(): Promise<SpeechRuntimeStatus> {
     return this.localSpeech.inspect(this.dependencies.serviceUrl());
+  }
+
+  eventStream(signal: AbortSignal): Promise<Response> {
+    return fetch(localSpeechEndpoint(this.dependencies.serviceUrl(), "/v1/events"), {
+      method: "GET",
+      headers: { accept: "text/event-stream" },
+      signal
+    });
   }
 
   async models(): Promise<SpeechModel[]> {
@@ -957,6 +990,14 @@ export class ManagerSpeechControl {
     const text = stringValue(command?.text).trim();
     if (!text) throw new SpeechControlError("Missing speech transcript text.", 400);
     const sessionId = (stringValue(command?.sessionId) || `speech-${Date.now()}`).trim().slice(0, 200);
+    const fallbackId = this.createMessageId();
+    const ingress = this.dependencies.speechIngressStore
+      ? this.dependencies.speechIngressStore.append({ ...command, text, sessionId }, fallbackId)
+      : {
+          record: normalizeSpeechIngressRecord({ ...command, text, sessionId }, fallbackId),
+          appended: true
+        };
+    const record = ingress.record;
     const requestedRouteId = command?.routeId == null ? "" : sanitizeRoleId(command.routeId);
     if (command?.routeId != null && !requestedRouteId) {
       throw new SpeechControlError("Invalid speech Route id.", 400);
@@ -964,28 +1005,29 @@ export class ManagerSpeechControl {
     if (requestedRouteId) {
       const route = this.dependencies.route(requestedRouteId);
       if (!route) throw new SpeechControlError("The selected speech Route does not exist.", 400);
-      if (!route.speechEnabled) throw new SpeechControlError("The selected Route has no enabled speech message endpoint.", 400);
-      const delivery = await this.deliverToRoute(route.id, text, sessionId);
-      return { ...delivery, sessionId, deliveries: [delivery] };
+      if (!this.routeAcceptsRecord(route, record)) {
+        throw new SpeechControlError(`The selected Route has no enabled ${record.messageAdapterType} message endpoint.`, 400);
+      }
+      const delivery = await this.deliverToRoute(route.id, record);
+      return { ...delivery, sessionId: record.sessionId, deliveries: [delivery] };
     }
 
-    const routes = this.enabledSpeechRoutes();
-    const broadcastMessageId = this.createMessageId();
+    const routes = this.enabledRoutesForRecord(record);
     if (routes.length === 0) {
       return {
         routeId: null,
-        messageId: broadcastMessageId,
-        sessionId,
+        messageId: record.id,
+        sessionId: record.sessionId,
         status: "recorded",
-        reason: "no_enabled_speech_routes",
-        detail: "No enabled speech message endpoint is currently subscribed.",
+        reason: record.messageAdapterType === "rabilink" ? "no_enabled_rabilink_routes" : "no_enabled_speech_routes",
+        detail: `The host speech ingress record was stored; no ${record.messageAdapterType} message endpoint is currently subscribed.`,
         deliveries: []
       };
     }
 
     const deliveries = await Promise.all(routes.map(async route => {
       try {
-        return await this.deliverToRoute(route.id, text, sessionId);
+        return await this.deliverToRoute(route.id, record);
       } catch (error) {
         return {
           routeId: route.id,
@@ -1003,8 +1045,8 @@ export class ManagerSpeechControl {
     }
     return {
       routeId: null,
-      messageId: broadcastMessageId,
-      sessionId,
+      messageId: record.id,
+      sessionId: record.sessionId,
       status: delivered > 0 ? "delivered" : "recorded",
       reason: failed > 0 ? "broadcast_partial_failure" : "broadcast_complete",
       detail: `Broadcast result: ${delivered} delivered, ${recorded} recorded, ${failed} failed.`,
@@ -1020,15 +1062,62 @@ export class ManagerSpeechControl {
     return [...unique.values()];
   }
 
-  private async deliverToRoute(routeId: string, text: string, sessionId: string): Promise<SpeechRouteDeliveryResult> {
-    const messageId = this.createMessageId();
+  private routeAcceptsRecord(route: ManagerSpeechRoute, record: SpeechIngressRecord): boolean {
+    const endpointEnabled = record.messageAdapterType === "rabilink" ? route.rabiLinkEnabled === true : route.speechEnabled;
+    if (!endpointEnabled) return false;
+    return !record.routeProfileId || route.routeProfileIds?.includes(record.routeProfileId) === true;
+  }
+
+  private enabledRoutesForRecord(record: SpeechIngressRecord): ManagerSpeechRoute[] {
+    const unique = new Map<string, ManagerSpeechRoute>();
+    for (const route of this.dependencies.routes()) {
+      if (route.id && this.routeAcceptsRecord(route, record)) unique.set(route.id, route);
+    }
+    return [...unique.values()];
+  }
+
+  private async deliverToRoute(routeId: string, record: SpeechIngressRecord): Promise<SpeechRouteDeliveryResult> {
+    const receipt = this.dependencies.speechIngressStore?.readDeliveryReceipt?.(record.id, routeId);
+    if (receipt) return {
+      routeId,
+      messageId: record.id,
+      status: receipt.status,
+      reason: receipt.reason,
+      detail: receipt.detail
+    };
+    const flightKey = `${record.messageAdapterType}:${record.id}:${routeId}`;
+    const existingFlight = this.deliveryFlights.get(flightKey);
+    if (existingFlight) return existingFlight;
+    const flight = this.deliverToRouteOnce(routeId, record).finally(() => {
+      if (this.deliveryFlights.get(flightKey) === flight) this.deliveryFlights.delete(flightKey);
+    });
+    this.deliveryFlights.set(flightKey, flight);
+    return flight;
+  }
+
+  private async deliverToRouteOnce(routeId: string, record: SpeechIngressRecord): Promise<SpeechRouteDeliveryResult> {
+    const messageId = record.id;
     try {
-      const outcome = await this.dependencies.deliverTranscript({ routeId, text, sessionId, messageId });
+      const outcome = await this.dependencies.deliverTranscript({ routeId, record });
       if (outcome.status === "failed") {
         throw new SpeechControlError(outcome.detail || outcome.reason || "Speech delivery failed.", 502);
       }
-      this.dependencies.appendRouteLog(routeId, `speech message ${outcome.status}: ${messageId}${outcome.reason ? `; ${outcome.reason}` : ""}`);
-      return { routeId, messageId, ...outcome };
+      const endpointLabel = record.messageAdapterType === "rabilink" ? "rabilink ASR message" : "speech message";
+      this.dependencies.appendRouteLog(routeId, `${endpointLabel} ${outcome.status}: ${messageId}${outcome.reason ? `; ${outcome.reason}` : ""}`);
+      const result = { routeId, messageId, ...outcome };
+      if (outcome.status === "delivered" || outcome.status === "recorded") {
+        this.dependencies.speechIngressStore?.appendDeliveryReceipt?.({
+          schemaVersion: 1,
+          recordId: record.id,
+          routeId,
+          messageAdapterType: record.messageAdapterType,
+          status: outcome.status,
+          reason: outcome.reason,
+          detail: outcome.detail,
+          completedAt: new Date().toISOString()
+        });
+      }
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.dependencies.appendRouteLog(routeId, `speech message failed: ${messageId}; ${message}`);

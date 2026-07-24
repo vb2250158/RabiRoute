@@ -727,6 +727,7 @@ try {
   assert(speechUtterances.at(-1)?.text === "这是 Rabi 主动投递的提醒。", "Proactive Rabi messages must enter the same ordered TTS queue.");
   speechUtterances.at(-1)?.onend?.();
   holdSpeech = false;
+  transcriptPage.stopAgentPolling();
 
   const durablePage = createPageInstance(pageModule);
   durablePage.reportRuntimeProof = () => Promise.resolve(false);

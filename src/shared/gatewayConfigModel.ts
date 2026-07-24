@@ -37,6 +37,16 @@ export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
 export type SpeechPushMode = "hot" | "keyword";
+export type CodexHookSettings = {
+  sessionContextEnabled: boolean;
+  reasoningContextEnabled: boolean;
+  planTaskCompletionEnabled: boolean;
+};
+export const DEFAULT_CODEX_HOOK_SETTINGS: CodexHookSettings = {
+  sessionContextEnabled: true,
+  reasoningContextEnabled: true,
+  planTaskCompletionEnabled: true
+};
 export type RecentMessageEndpoint = Exclude<MessageAdapterType, "disabled">;
 export type RecentMessageLimits = Partial<Record<RecentMessageEndpoint, number>>;
 export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
@@ -63,6 +73,17 @@ export type MessageAdapterPolicy = {
 };
 
 export type MessageAdapterPolicies = Partial<Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterPolicy>>;
+
+export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Partial<CodexHookSettings>
+    : {};
+  return {
+    sessionContextEnabled: raw.sessionContextEnabled !== false,
+    reasoningContextEnabled: raw.reasoningContextEnabled !== false,
+    planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false
+  };
+}
 
 export type PipelineDefinition = {
   id?: string;
@@ -199,6 +220,7 @@ export type GatewayDefinition = {
   codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  codexHooks?: CodexHookSettings;
   copilotThreadName?: string;
   copilotCwd?: string;
   copilotCliBin?: string;
@@ -819,6 +841,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
     codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
     codexCwd: normalizeCodexCwd(definition.codexCwd),
+    codexHooks: agentAdapters.includes("codex") ? normalizeCodexHookSettings(definition.codexHooks) : undefined,
     copilotThreadName: definition.copilotThreadName?.trim() || undefined,
     groupNotificationTemplate: normalizeOptionalTemplate(definition.groupNotificationTemplate),
     groupAtNotificationTemplate: normalizeOptionalTemplate(definition.groupAtNotificationTemplate),

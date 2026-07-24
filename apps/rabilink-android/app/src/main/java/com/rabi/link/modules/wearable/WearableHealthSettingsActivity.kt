@@ -35,7 +35,6 @@ class WearableHealthSettingsActivity : Activity() {
     private lateinit var deviceName: EditText
     private lateinit var deviceKind: EditText
     private lateinit var authKey: EditText
-    private lateinit var intervalMinutes: EditText
     private lateinit var lookbackHours: EditText
     private lateinit var highBpm: EditText
     private lateinit var lowBpm: EditText
@@ -82,7 +81,7 @@ class WearableHealthSettingsActivity : Activity() {
 
     private fun deviceCard(): View = card().apply {
         addView(title("1. 选择采集方式"))
-        addView(note("App 会使用推荐默认值。设备 ID、轮询窗口和阈值等工程参数已经收进高级设置，小白不需要逐项填写。"))
+        addView(note("App 会使用推荐默认值。设备 ID、事件触发回看窗口和阈值等工程参数已经收进高级设置，小白不需要逐项填写。"))
         enabled = RabiMobileUi.styleSwitch(this@WearableHealthSettingsActivity, Switch(this@WearableHealthSettingsActivity).apply { text = "持续记录心率与睡眠" })
         addView(enabled)
         collectorMode = RabiMobileUi.spinner(this@WearableHealthSettingsActivity, Spinner(this@WearableHealthSettingsActivity).apply {
@@ -112,11 +111,8 @@ class WearableHealthSettingsActivity : Activity() {
             addView(label("小米 auth key（仅 ADB Companion 需要）")); addView(authKey, full(0, 0, 0, 6))
         }
         val timing = row()
-        intervalMinutes = numberInput("5")
         lookbackHours = numberInput("24")
-        timing.addView(fieldColumn("轮询间隔（分钟）", intervalMinutes), LinearLayout.LayoutParams(0, -2, 1f))
-        timing.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
-        timing.addView(fieldColumn("回看窗口（小时）", lookbackHours), LinearLayout.LayoutParams(0, -2, 1f))
+        timing.addView(fieldColumn("事件触发时回看窗口（小时）", lookbackHours), LinearLayout.LayoutParams(0, -2, 1f))
         advancedSettings.addView(timing)
         addView(advancedSettings)
         lateinit var advancedToggle: Button
@@ -178,7 +174,6 @@ class WearableHealthSettingsActivity : Activity() {
         deviceName.setText(value.sourceDeviceName)
         deviceKind.setText(value.sourceDeviceKind)
         authKey.hint = if (value.hasAuthKey) "已安全保存（重新输入可替换）" else "32 位十六进制密钥"
-        intervalMinutes.setText(value.pollIntervalMinutes.toString())
         lookbackHours.setText(value.lookbackHours.toString())
         highBpm.setText(value.policy.heartRateHighBpm.toString())
         lowBpm.setText(value.policy.heartRateLowBpm.toString())
@@ -370,7 +365,6 @@ class WearableHealthSettingsActivity : Activity() {
                 if (mode == WearableHealthCollectorMode.HEALTH_CONNECT) "Android Health Connect" else "小米智能穿戴设备"
             },
             sourceDeviceKind = deviceKind.text.toString().trim().lowercase().ifBlank { "wearable" },
-            pollIntervalMinutes = (intervalMinutes.text.toString().toIntOrNull() ?: 5).coerceIn(1, 1440),
             lookbackHours = (lookbackHours.text.toString().toIntOrNull() ?: 24).coerceIn(1, 168),
             policy = policy,
             hasAuthKey = WearableHealthSettings.load(this).hasAuthKey || authKey.text.toString().trim().isNotBlank(),

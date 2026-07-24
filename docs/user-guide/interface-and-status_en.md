@@ -8,21 +8,24 @@ English | <a href="./interface-and-status.md">简体中文</a>
 
 RibiWebGUI is RabiRoute's local control console. It edits configuration, invokes Manager actions, and shows diagnostics. Local files and runtime state remain the underlying sources of truth.
 
-## The five main areas
+## The six main areas
 
 | Area | Primary purpose | Common actions |
 | --- | --- | --- |
 | Console | Routes, current path, Rabi identity, and directories | Add, quick-configure, start, or stop a Route |
 | Message Adapters | Message sources and Agent handlers | Scan, add, connect, and bind tasks |
 | Rabi Persona | Persona, Route variables, and message rules | Add rules, regexes, and schedules |
+| Plans & Memory | Plans, recent memory, consolidated memory, and approval records for the current persona | Search, expand steps, submit approval feedback, and refresh Manager data |
 | Log Diagnostics | Find path breaks and run real tests | Start, restart, trigger, and inspect logs |
 | User Guide | Task-based product instructions | Search, change page, and open deeper material |
 
 <div class="screenshot-placeholder">
   <strong>Screenshot placeholder 05 | RibiWebGUI layout</strong>
   <span>Suggested frame: the full desktop console with sidebar, top bar, and main content visible.</span>
-  <span>Callouts: current Route, five areas, Manager status, Refresh, Add Route, Save.</span>
+  <span>Callouts: current Route, six areas, Manager status, Refresh, Add Route, Save.</span>
 </div>
+
+The **Plans & Memory** page never reads `data/` directly or reinterprets ordering in the browser. Manager supplies presentation status and orders plans as `Blocked → Awaiting QA → In progress → Not started → Completed → Archived`, then newest `updatedAt` first within each status. Manager also decides whether an approval input is available and returns recent approval records and memory in update order. Submitting feedback appends a plan/step-associated record and notifies the Agent; it never advances or completes the plan directly. A recorded-but-undelivered result keeps the draft for retry.
 
 ## Sidebar: select the current Route first
 

@@ -39,6 +39,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) — **Current guide** for discovery, authentication, tasks, idempotent creation, delivery, results, tools, lifecycle, UI, security, and acceptance.
 - [Codex Desktop Agent Integration and Acceptance Contract](codex-desktop-agent-acceptance_en.md) — **Current fact** for stable IDs, side-effect-free scanning, automatic initialization, the Desktop owner boundary, and metadata bootstrap gates.
 - [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **Unified Manager version** where hooks only forward real Codex session events and inject Rabi PC-owned persona, plan, memory, and skill context.
+- [Multi-PC persona data synchronization](persona-data-sync_en.md) — **Experimental**. PCs in one RabiLink application prefer direct LAN transfer and fall back to restricted Relay transit. Backend file/connection events drive automatic catch-up, while the persona page supports immediate sync, evidence preview, and basic conflict resolution.
 
 ## Architecture and maintenance
 
@@ -52,7 +53,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 - [WeCom integration](wecom-integration_en.md)
 - [Voice interaction workstation](voice-interaction-workstation_en.md) — historical wiring; FenneNote/OumuQ are retired in favor of RabiPC + RabiSpeech.
-- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, hot/persona-keyword delivery, persona voice and language, bidirectional ASR/TTS records, the shared speaker registry, RabiPC, and RabiLink relay.
+- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, hot/persona-keyword delivery, persona voice and language, bidirectional ASR/TTS records, opaque voiceprint/cluster evidence, RabiPC, and RabiLink relay.
 - [Call TTS and ASR remotely](user-guide/speech-api_en.md) — application token, target PC, copyable commands, acceptance, and error recovery.
 - [Rabi Voice Client](../desktop/rabi-voice-client/README_en.md) — use a meeting-room Windows PC as a LAN microphone and speaker while segmentation and models stay on the RabiSpeech host.
 - [Local speech model downloads](local-speech-model-downloads_en.md) — per-model sources, downloads, isolated environments, and validation.
@@ -65,7 +66,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [RabiLink wearable health endpoint](rabilink-wearable-health_en.md) — **Experimental integration** for phone settings, structured health history, Agent queries, alert thresholds, and the Xiaomi ADB fallback.
 - [AIUI-to-phone/native-glasses parity checklist](rabilink-aiui-native-parity_en.md) — migration status separated by code, automation, and real-device evidence.
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)
-- [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md)
+- [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md) — target contract and implementation tracker for user state, scenario recognition, the individual user model, and intervention decisions.
 - [RabiLink native app design](rabilink-glasses-app-design_en.md)
 - [XiaoAI integration route](xiaoai-integration/xiaoai-rabiroute-intercept-route_en.md)
 - [IR gateway research](xiaoai-integration/ir-remote-gateway-research_en.md)
@@ -73,7 +74,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Designs and history
 
-- [Proactive-intelligence system design overview](../%E4%B8%BB%E5%8A%A8%E6%99%BA%E8%83%BD%E8%AE%BE%E8%AE%A1%E6%80%9D%E8%B7%AF_en.md) — **Planned**. Long-term vision for continuous sensing, intent hypotheses, proactive action, memory, and device responsibilities; use Current Capabilities for the implemented scope.
+- [Proactive-intelligence system design overview](../主动智能设计思路_en.md) — **Planned**. Covers user modeling, scenarios, proactive action, memory, and device responsibilities. See Current Capabilities for implementation status.
 - [Persona route workbench plan](persona-route-workbench-plan_en.md) — **Partially implemented**. Speech-keyword and per-endpoint context controls are live; side-effect-free RouteDecision/AgentPacket preview is not implemented.
 - [Windows tray task-window plan](rabiroute-windows-tray-task-window-plan_en.md) — design record; use `desktop/tray-task-window/` and the packaging guide for the actual implementation.
 - [UE/UX audit and refactor](rabiroute-ue-ux-audit-and-refactor_en.md) — phase audit.

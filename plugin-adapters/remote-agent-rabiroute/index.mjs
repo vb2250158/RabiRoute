@@ -764,6 +764,7 @@ await startDiscoveryResponder();
 
 process.once("exit", () => codexClient?.close());
 
+// event-driven-allow: transport heartbeat keepalive; no business queue or file state is queried.
 setInterval(() => {
   try {
     if (managerSocket?.readyState === WebSocket.OPEN) {

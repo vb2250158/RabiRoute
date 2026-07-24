@@ -27,6 +27,32 @@ After selecting a persona, use the same configuration card to set or replace its
 
 Use **Open persona configuration** to edit the full text. Do not mechanically translate runtime-semantic files; language and wording changes can change Agent behavior.
 
+## Synchronize the current persona across PCs
+
+After selecting a persona, **Multi-PC persona sync** lists other PCs using the same RabiLink application token. Automatic synchronization runs in the backend and does not require the page to remain open. A local persona-file change, peer availability change, or Relay reconnection triggers one manifest reconciliation. LAN is preferred, with restricted Relay transit only when direct access is unavailable. Unfinished scope is persisted, so disconnects and Manager restarts do not forget it; an offline target waits for a connection event instead of fixed-interval business queries.
+
+The page shows automatic-reconciliation state, and **Sync current persona** runs it immediately. Results distinguish pull, push, already converged, LAN/Relay transport, and conflict counts. Two-sided ordinary-file edits or concurrent deletion versus editing never use last-writer-wins replacement. They enter **Human confirmation required**:
+
+- **Keep local** retains the current file and tries to publish that decision back to the source PC.
+- **Use remote / Accept remote deletion** explicitly accepts the remote content or deletion intent.
+- **Manual merge** lets the local Agent submit reviewed content through the `use_merged` API.
+
+Concurrent persona voice-relationship branches do not let the file-conflict dialog guess who is the user. Confirm them again under **Persona voiceprint classification** so a new relationship event explicitly converges the branch. Relay performs discovery and transit only; it stores no server-side master persona. Synchronization also does not replace independent backups or Git/SVN.
+
+## Classify voiceprints for the current persona
+
+After a persona is selected, **Persona voiceprint classification** shows the latest 24-hour classification coverage, speech attributed to the user, speech attributed to other people, unknown/conflicting segments, and relationships already stored by this persona. **This is me** is only the current persona's explicit interpretation of a voiceprint on its processing host. Neither RabiSpeech nor the RabiRoute host decides who a person is or assigns any voiceprint to the user by default.
+
+For an unresolved voiceprint, choose:
+
+- **This is me**: mark the current `sourceHostId + voiceprintId` relationship as the user according to this persona.
+- **Another person**: explicitly mark it as not the user.
+- **Clear decision**: retain the relationship event while removing the `isUser` conclusion, returning it to unknown.
+
+The page requests only statistics, abbreviated voiceprints, duration, last-seen time, and relationships; it neither requests nor displays transcript text. New recordings, local relationship corrections, and multi-PC persona synchronization each trigger one event-driven refresh. Reconnecting the event stream performs one catch-up query instead of fixed-interval coverage polling. Relationships are ultimately appended to the persona's own `voice/voice-identities.jsonl` and merge with the persona folder as events. Multi-PC conflicts remain visible until a later explicit confirmation converges the branches.
+
+On first use, an opaque voiceprint ID may be impossible to recognize. Select **Mark the next recording**, then speak one continuous sentence by yourself through the PC, phone, or glasses you want to classify, preferably in a quiet environment. When the next recording event completes, unresolved voiceprints newly observed during that attempt move to the front and receive an **Observed this time** marker. This only narrows the candidates: it starts no second recorder, performs no automatic identification, and never assigns the user merely because one candidate appeared. If other people spoke at the same time, confirm only a voiceprint you can identify confidently or capture again.
+
 <div class="screenshot-placeholder">
   <strong>Screenshot placeholder 10 | Persona overview</strong>
   <span>Suggested frame: persona binding, persona preview, Route variables, and rule list together.</span>

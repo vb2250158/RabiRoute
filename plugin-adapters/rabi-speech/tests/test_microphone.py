@@ -29,7 +29,7 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
     async def scenario() -> None:
         stream = FakeStream()
         transcribed = asyncio.Event()
-        submitted: list[tuple[str, str]] = []
+        submitted: list[tuple[str, str, object, object]] = []
 
         async def transcribe(path: Path, config) -> TranscriptionResult:
             assert path.read_bytes()[:4] == b"RIFF"
@@ -37,8 +37,8 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
             transcribed.set()
             return TranscriptionResult(text="常驻转录成功", language="zh", duration=0.3, provider="fake-asr", model="local")
 
-        async def submit(text: str, session_id: str) -> dict[str, object]:
-            submitted.append((text, session_id))
+        async def submit(result: TranscriptionResult, session_id: str, utterance, input_source) -> dict[str, object]:
+            submitted.append((result.text, session_id, utterance, input_source))
             return {
                 "status": "delivered",
                 "message_id": "speech-one",
@@ -88,6 +88,7 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
         assert snapshot["history"][0]["submitted"] is True
         assert snapshot["history"][0]["delivery_status"] == "delivered"
         assert snapshot["history"][0]["message_id"] == "speech-one"
+        assert snapshot["history"][0]["rms"] > 0
         assert snapshot["stats"] == {
             "captured": 1,
             "recognized": 1,
@@ -110,7 +111,15 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
             "route_delivery_succeeded",
         ]
         assert all("text" not in item.get("details", {}) for item in snapshot["events"])
-        assert submitted == [("常驻转录成功", "session-one")]
+        assert len(submitted) == 1
+        assert submitted[0][:2] == ("常驻转录成功", "session-one")
+        assert submitted[0][2].started_at > 0
+        assert submitted[0][2].completed_at >= submitted[0][2].started_at
+        assert submitted[0][2].duration > 0
+        assert submitted[0][2].peak > 0
+        assert submitted[0][2].rms > 0
+        assert submitted[0][3].message_adapter_type == "speech"
+        assert submitted[0][3].channel_type == "speech.pc_microphone"
         assert snapshot["config"]["route_id"] is None
         assert (tmp_path / "microphone.json").is_file()
         await service.stop()
@@ -122,12 +131,79 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
     asyncio.run(scenario())
 
 
+def test_remote_mobile_audio_uses_rabilink_message_endpoint_metadata(tmp_path: Path) -> None:
+    class RemoteMobile:
+        selected_client_id = "phone-one"
+        selected_client_name = "Phone One"
+        selected_client_kind = "mobile"
+        selected_source_device_id = "phone-stable"
+        selected_message_adapter_type = "rabilink"
+        selected_route_profile_id = "mobile-main"
+        selected_session_id = "phone-one"
+
+        async def start_capture(self, _sample_rate: int, _chunk_ms: int) -> None:
+            return None
+
+        async def stop_capture(self) -> None:
+            return None
+
+    async def scenario() -> None:
+        sources = []
+
+        async def transcribe(_path: Path, _config) -> TranscriptionResult:
+            return TranscriptionResult(text="手机语音", language="zh", duration=0.3, provider="fake-asr", model="local")
+
+        async def submit(_result: TranscriptionResult, _session_id: str, _recorded_at: float, input_source) -> dict[str, object]:
+            sources.append(input_source)
+            return {"status": "recorded", "reason": "no_enabled_rabilink_routes", "deliveries": []}
+
+        service = MicrophoneService(
+            state_path=tmp_path / "microphone.json",
+            temp_dir=tmp_path / "temp",
+            transcriber=transcribe,
+            submitter=submit,
+            playback_active=lambda: False,
+            remote_audio=RemoteMobile(),
+        )
+        await service.start({
+            "sample_rate": 8000,
+            "chunk_ms": 100,
+            "pre_roll_ms": 0,
+            "record_threshold": 0.1,
+            "transcribe_threshold": 0.1,
+            "adaptive_threshold": False,
+            "silence_ms": 200,
+            "min_utterance_ms": 100,
+            "max_utterance_ms": 3000,
+        })
+        service.feed_remote("phone-one", np.full(800, 0.2, dtype=np.float32))
+        service.feed_remote("phone-one", np.zeros(800, dtype=np.float32))
+        service.feed_remote("phone-one", np.zeros(800, dtype=np.float32))
+        for _ in range(100):
+            if sources:
+                break
+            await asyncio.sleep(0.01)
+        await service.stop()
+        assert len(sources) == 1
+        assert sources[0].message_adapter_type == "rabilink"
+        assert sources[0].channel_type == "rabilink.mobile_audio"
+        assert sources[0].device_id == "phone-stable"
+        assert sources[0].stream_id == "phone-one"
+        assert sources[0].device_kind == "mobile"
+        assert sources[0].audio_format == "pcm_s16le"
+        assert sources[0].channels == 1
+        assert sources[0].route_profile_id == "mobile-main"
+        assert sources[0].session_id == "phone-one"
+
+    asyncio.run(scenario())
+
+
 def test_route_receipts_distinguish_recorded_and_failed(tmp_path: Path) -> None:
     async def run_case(name: str, *, fail: bool) -> dict[str, object]:
         async def transcribe(_path: Path, _config) -> TranscriptionResult:
             return TranscriptionResult(text="会议继续", language="zh", duration=0.3, provider="fake-asr", model="local")
 
-        async def submit(_text: str, _session_id: str) -> dict[str, object]:
+        async def submit(_result: TranscriptionResult, _session_id: str, _recorded_at: float, _input_source) -> dict[str, object]:
             if fail:
                 raise RuntimeError("Desktop unavailable")
             return {
@@ -199,7 +275,7 @@ def test_record_persistence_failure_preserves_terminal_route_receipt(tmp_path: P
         async def transcribe(_path: Path, _config) -> TranscriptionResult:
             return TranscriptionResult(text="会议继续", language="zh", duration=0.3, provider="fake-asr", model="local")
 
-        async def submit(_text: str, _session_id: str) -> dict[str, object]:
+        async def submit(_result: TranscriptionResult, _session_id: str, _recorded_at: float, _input_source) -> dict[str, object]:
             return {
                 "status": "recorded",
                 "message_id": "speech-recorded",
@@ -270,7 +346,7 @@ def test_empty_transcription_returns_to_listening_without_route_submission(tmp_p
         async def transcribe(_path: Path, _config) -> TranscriptionResult:
             return TranscriptionResult(text="", language="zh", duration=0.3, provider="fake-asr", model="local")
 
-        async def submit(_text: str, _session_id: str) -> dict[str, object]:
+        async def submit(_result: TranscriptionResult, _session_id: str, _recorded_at: float, _input_source) -> dict[str, object]:
             raise AssertionError("empty transcription must not be submitted")
 
         service = MicrophoneService(
@@ -329,7 +405,7 @@ def test_resident_microphone_suppresses_capture_during_host_playback(tmp_path: P
             calls += 1
             return TranscriptionResult(text="不应出现", language="zh", duration=1, provider="fake", model="fake")
 
-        async def submit(_text: str, _session_id: str) -> None:
+        async def submit(_result: TranscriptionResult, _session_id: str, _recorded_at: float, _input_source) -> None:
             raise AssertionError("must not submit playback audio")
 
         service = MicrophoneService(
@@ -367,7 +443,7 @@ def test_short_false_trigger_returns_to_listening_after_silence(tmp_path: Path) 
             state_path=tmp_path / "microphone.json",
             temp_dir=tmp_path / "temp",
             transcriber=transcribe,
-            submitter=lambda _text, _session: None,  # type: ignore[arg-type]
+            submitter=lambda _result, _session, _recorded_at: None,  # type: ignore[arg-type]
             playback_active=lambda: False,
             stream_factory=lambda _config, _callback: FakeStream(),
         )
@@ -405,7 +481,7 @@ def test_legacy_single_route_config_migrates_to_broadcast_mode(tmp_path: Path) -
             state_path=tmp_path / "microphone.json",
             temp_dir=tmp_path / "temp",
             transcriber=lambda _path, _config: None,  # type: ignore[arg-type]
-            submitter=lambda _text, _session: None,  # type: ignore[arg-type]
+            submitter=lambda _result, _session, _recorded_at: None,  # type: ignore[arg-type]
             playback_active=lambda: False,
             stream_factory=lambda _config, _callback: FakeStream(),
         )

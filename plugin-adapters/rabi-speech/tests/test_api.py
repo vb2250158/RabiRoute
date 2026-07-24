@@ -79,7 +79,8 @@ def fixture(
     *,
     roles_root: Path | None = None,
     tts_audio_dir: Path | None = None,
-    tts_cleanup_interval_seconds: float = 60.0,
+    tts_audio_retention_minutes: float = 1440.0,
+    rabilink_audio_stale_timeout_seconds: float = 15.0,
 ) -> tuple[TestClient, FakeTts, FakeAsr]:
     settings = load_settings(Path(__file__).parents[1] / "config.example.json")
     settings = replace(
@@ -91,7 +92,7 @@ def fixture(
             playback_dir=tmp_path / "playback",
             records_dir=tmp_path / "records",
             tts_audio_dir=tts_audio_dir or tmp_path / "tts-audio",
-            tts_audio_retention_minutes=1440,
+            tts_audio_retention_minutes=tts_audio_retention_minutes,
             ffmpeg="",
         ),
     )
@@ -108,7 +109,7 @@ def fixture(
         registry,
         audio_session_keepalive=WindowsAudioSessionKeepalive(enabled=False),
         roles_root=roles_root,
-        tts_cleanup_interval_seconds=tts_cleanup_interval_seconds,
+        rabilink_audio_stale_timeout_seconds=rabilink_audio_stale_timeout_seconds,
     )), tts, asr
 
 
@@ -130,6 +131,72 @@ def test_loopback_microphone_status_and_contract_are_discoverable(tmp_path: Path
     assert updated.json()["config"]["record_threshold"] == 0.02
     assert updated.json()["config"]["auto_submit"] is True
     assert updated.json()["config"]["route_id"] is None
+
+
+def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_path: Path) -> None:
+    client, _tts, _asr = fixture(tmp_path)
+    started = client.post("/v1/audio-streams/rabilink/start", json={
+        "stream_id": "phone-one-audio",
+        "name": "Phone One",
+        "device_kind": "mobile",
+        "source_device_id": "phone-one-stable",
+        "message_adapter_type": "speech",
+        "route_profile_id": "mobile-main",
+        "session_id": "phone-one",
+    })
+    assert started.status_code == 200
+    assert started.json()["source"] == "remote"
+    selected = started.json()["clients"][0]
+    assert selected["id"] == "phone-one-audio"
+    assert selected["source_device_id"] == "phone-one-stable"
+    assert selected["message_adapter_type"] == "rabilink"
+    chunk = client.post(
+        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1",
+        content=b"\x00\x00" * 1600,
+        headers={"content-type": "application/octet-stream"},
+    )
+    assert chunk.status_code == 200
+    assert chunk.json()["accepted_bytes"] == 3200
+    assert chunk.json()["sequence"] == 1
+    duplicate = client.post(
+        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1",
+        content=b"\x00\x00" * 1600,
+        headers={"content-type": "application/octet-stream"},
+    )
+    assert duplicate.status_code == 200
+    out_of_order = client.post(
+        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=3",
+        content=b"\x00\x00" * 1600,
+        headers={"content-type": "application/octet-stream"},
+    )
+    assert out_of_order.status_code == 409
+    assert "expected 2, received 3" in out_of_order.json()["detail"]
+    stopped = client.post("/v1/audio-streams/rabilink/stop", json={"stream_id": "phone-one-audio"})
+    assert stopped.status_code == 200
+    assert client.get("/v1/microphone/status").json()["running"] is False
+
+
+def test_rabilink_audio_stream_expiry_is_rearmed_by_pcm_events(tmp_path: Path) -> None:
+    client, _tts, _asr = fixture(tmp_path, rabilink_audio_stale_timeout_seconds=0.3)
+    with client:
+        started = client.post("/v1/audio-streams/rabilink/start", json={
+            "stream_id": "phone-event-audio",
+            "source_device_id": "phone-event",
+            "route_profile_id": "mobile-main",
+            "session_id": "phone-event",
+        })
+        assert started.status_code == 200
+        time.sleep(0.1)
+        chunk = client.post(
+            "/v1/audio-streams/rabilink/chunk?streamId=phone-event-audio&sequence=1",
+            content=b"\x00\x00" * 160,
+            headers={"content-type": "application/octet-stream"},
+        )
+        assert chunk.status_code == 200
+        time.sleep(0.15)
+        assert client.get("/v1/microphone/status").json()["running"] is True
+        time.sleep(0.2)
+        assert client.get("/v1/microphone/status").json()["running"] is False
 
 
 def test_host_playback_volume_api_persists_and_supports_put_and_patch(tmp_path: Path) -> None:
@@ -256,33 +323,32 @@ def test_existing_persona_tts_cache_is_cleaned_at_service_start(tmp_path: Path) 
     assert not expired.exists()
 
 
-def test_periodic_tts_cleanup_covers_registered_caches_and_stops_with_lifespan(tmp_path: Path) -> None:
+def test_deadline_tts_cleanup_covers_registered_caches_and_stops_with_lifespan(tmp_path: Path) -> None:
+    fallback_cache = tmp_path / "tts-audio"
+    fallback_cache.mkdir(parents=True)
+    fallback = fallback_cache / "fallback-near-expiry.wav"
+    fallback.write_bytes(b"RIFF-fallback")
+
     def setup(roles_root: Path) -> None:
-        (roles_root / "XinghaiBuilder").mkdir(parents=True)
+        persona_cache = roles_root / "XinghaiBuilder" / "voice" / "cache" / "tts-audio"
+        persona_cache.mkdir(parents=True)
+        (persona_cache / "persona-near-expiry.wav").write_bytes(b"RIFF-persona")
+
+    near_expiry = time.time() - 58.0
+    os.utime(fallback, (near_expiry, near_expiry))
 
     client, _tts, _asr = fixture(
         tmp_path,
         setup,
-        tts_cleanup_interval_seconds=0.01,
+        tts_audio_dir=fallback_cache,
+        tts_audio_retention_minutes=1.0,
     )
+    persona = tmp_path / "roles" / "XinghaiBuilder" / "voice" / "cache" / "tts-audio" / "persona-near-expiry.wav"
+    os.utime(persona, (near_expiry, near_expiry))
     with client:
-        assert client.post(
-            "/v1/audio/speech",
-            json={"model": "fake-tts/voice-model", "input": "人格缓存", "voice": "XinghaiBuilder"},
-        ).status_code == 200
-        assert client.post(
-            "/v1/audio/speech",
-            json={"model": "fake-tts/voice-model", "input": "全局缓存", "voice": "provider-voice"},
-        ).status_code == 200
-        cached = [
-            *list((tmp_path / "roles" / "XinghaiBuilder" / "voice" / "cache" / "tts-audio").glob("*.wav")),
-            *list((tmp_path / "tts-audio").glob("*.wav")),
-        ]
-        assert len(cached) == 2
-        expired = time.time() - (24 * 60 * 60) - 1
-        for path in cached:
-            os.utime(path, (expired, expired))
-        deadline = time.time() + 1
+        cached = [persona, fallback]
+        assert all(path.exists() for path in cached)
+        deadline = time.time() + 4
         while any(path.exists() for path in cached) and time.time() < deadline:
             time.sleep(0.01)
         assert not any(path.exists() for path in cached)

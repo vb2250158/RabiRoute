@@ -9,8 +9,8 @@ public final class RabiConversationBootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         if (intent == null || !Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) return;
-        RabiConversationSettings settings = RabiConversationSettings.load(context);
-        if (!settings.continuousListening || !RabiLinkRelaySettings.load(context).getConfigured()) return;
+        if (!RabiConversationServiceState.shouldRestore(context)
+                || !RabiLinkRelaySettings.load(context).getConfigured()) return;
         try {
             RabiConversationService.restoreAfterBoot(context);
         } catch (RuntimeException ignored) {

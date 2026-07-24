@@ -53,6 +53,28 @@ class TtsAudioStore:
         with self._lock:
             return self._owned_file_locked(path).relative_to(self.canonical_root).as_posix()
 
+    def next_expiry(self) -> float | None:
+        with self._lock:
+            root = self._validated_root()
+            earliest: float | None = None
+            try:
+                paths = list(root.iterdir())
+            except OSError as exc:
+                raise RuntimeError("TTS audio cache root cannot be listed.") from exc
+            for path in paths:
+                if path.is_symlink():
+                    continue
+                try:
+                    candidate = path.resolve(strict=True)
+                    if candidate.parent != root or not candidate.is_file():
+                        continue
+                    expires_at = candidate.stat().st_mtime + self.retention_seconds
+                except OSError:
+                    continue
+                if earliest is None or expires_at < earliest:
+                    earliest = expires_at
+            return earliest
+
     def _initial_canonical_root(self) -> Path:
         try:
             mode = os.lstat(self.root).st_mode
@@ -151,3 +173,20 @@ class TtsAudioStoreRegistry:
         if errors:
             raise RuntimeError(f"TTS cleanup failed for {len(errors)} registered cache root(s).") from errors[0]
         return removed
+
+    def next_expiry(self) -> float | None:
+        with self._lock:
+            stores = tuple(self._stores.values())
+        earliest: float | None = None
+        errors: list[RuntimeError] = []
+        for store in stores:
+            try:
+                expires_at = store.next_expiry()
+            except RuntimeError as exc:
+                errors.append(exc)
+                continue
+            if expires_at is not None and (earliest is None or expires_at < earliest):
+                earliest = expires_at
+        if errors:
+            raise RuntimeError(f"TTS expiry scan failed for {len(errors)} registered cache root(s).") from errors[0]
+        return earliest

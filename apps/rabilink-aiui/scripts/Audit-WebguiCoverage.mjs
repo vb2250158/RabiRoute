@@ -18,8 +18,20 @@ const intentionallyBlockedEndpoints = new Map([
     "Sends a real role-panel message and must remain behind the PC-side messaging and approval boundary."
   ],
   [
+    "/api/roles/:param/plans/:param/feedback",
+    "Records approval feedback and notifies a real Agent, so AIUI must not expose it without a dedicated plan-review surface and explicit user confirmation."
+  ],
+  [
     "/api/message/napcat-ensure-ready",
     "Starts or repairs a local NapCat login and must remain an explicit local WebGUI action."
+  ],
+  [
+    "/api/speech/asr",
+    "Uploads a manual host ASR file; Android uses the ordered PCM stream and AIUI uses native ASR instead."
+  ],
+  [
+    "/api/speech/tts",
+    "Runs the host manual TTS/FIFO action; remote speech clients use the restricted RabiSpeech API and AIUI uses native TTS."
   ]
 ]);
 

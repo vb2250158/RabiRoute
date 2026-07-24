@@ -27,7 +27,41 @@ class _ApiManager:
         self.calls.append(("plans", role_id))
         if self.fail_plans:
             raise OSError("plans unavailable")
-        return [{"id": "plan-1", "title": "API plan", "status": "进行中", "steps": [], "keywords": []}]
+        return [
+            {
+                "id": "plan-1",
+                "title": "API plan",
+                "status": "进行中",
+                "presentation": {"status": "阻塞中", "tone": "blocked"},
+                "steps": [],
+                "keywords": [],
+            },
+            {
+                "id": "plan-2",
+                "title": "API QA plan",
+                "status": "进行中",
+                "presentation": {
+                    "status": "待QA测试",
+                    "tone": "qa",
+                    "approval": {
+                        "enabled": True,
+                        "label": "审批建议",
+                        "helper": "由 Manager 记录",
+                        "stepId": "verify",
+                    },
+                },
+                "approval": {
+                    "count": 1,
+                    "latest": {
+                        "text": "补充回归范围",
+                        "createdAt": "2026-07-24T12:00:00.000Z",
+                        "deliveryStatus": "delivered",
+                    },
+                },
+                "steps": [],
+                "keywords": [],
+            },
+        ]
 
     def role_memory(self, role_id: str) -> dict:
         self.calls.append(("memory", role_id))
@@ -58,6 +92,15 @@ class DesktopRefreshServiceTest(unittest.TestCase):
 
         self.assertTrue(result.manager.connected)
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].title, "API plan")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_status, "阻塞中")
+        self.assertEqual(
+            result.plan_snapshot and [plan.title for plan in result.plan_snapshot.active],
+            ["API plan", "API QA plan"],
+        )
+        qa_plan = result.plan_snapshot and result.plan_snapshot.active[1]
+        self.assertTrue(qa_plan and qa_plan.approval_enabled)
+        self.assertEqual(qa_plan and qa_plan.approval_step_id, "verify")
+        self.assertEqual(qa_plan and qa_plan.latest_approval_text, "补充回归范围")
         self.assertEqual(result.context_snapshot and result.context_snapshot.recent_memory[0].title, "API memory")
         self.assertEqual(result.role_messages, [{"id": "message-1"}])
         self.assertEqual(result.context_snapshot and result.context_snapshot.avatar_data, b"avatar-bytes")

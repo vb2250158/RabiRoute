@@ -49,6 +49,7 @@ class TranscriptSegment:
     speaker_name: str | None = None
     speaker_decision: str | None = None
     speaker_cluster_id: str | None = None
+    voiceprint_id: str | None = None
     speaker_score: float | None = None
     speaker_margin: float | None = None
     speaker_sample_duration: float | None = None

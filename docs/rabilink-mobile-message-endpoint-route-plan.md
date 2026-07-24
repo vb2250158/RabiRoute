@@ -1,6 +1,7 @@
 # RabiLink 手机消息端与 Route 会话方案
 
 > 状态：设计草案，待确认后实施。  
+> 语言说明：本文是会约束后续实现取舍的 plan 类设计文档，不创建机械英文翻译；面向用户的正式能力、配置、Runbook 与版本说明仍在对应中英文文档中同步维护。
 > 核心决定：RabiLink 是一个由 RabiPC 管理的共享手机消息端。手机像 QQ 一样显示 Agent 联系人，每个联系人背后绑定一条现有 Route。持续语音是全局采集能力，手机用一组滑动开关决定哪些 Route 同时收听；RabiPC 只运行一套全局共享 ASR，再把同一份转写分发给已开启的 Route。
 
 ## 1. 最终结论
@@ -46,10 +47,10 @@
 
 全局 Skill 位于：
 
-- C:/Users/GAN/.codex/skills/design-chat-app-experience/SKILL.md
-- C:/Users/GAN/.codex/skills/design-chat-app-experience/references/conversation-architecture.md
-- C:/Users/GAN/.codex/skills/design-chat-app-experience/references/source-map.md
-- C:/Users/GAN/.codex/skills/design-chat-app-experience/agents/openai.yaml
+- `<CODEX_HOME>/skills/design-chat-app-experience/SKILL.md`
+- `<CODEX_HOME>/skills/design-chat-app-experience/references/conversation-architecture.md`
+- `<CODEX_HOME>/skills/design-chat-app-experience/references/source-map.md`
+- `<CODEX_HOME>/skills/design-chat-app-experience/agents/openai.yaml`
 
 它完成的是设计方法沉淀，不是 Rabi App 实现：
 
@@ -364,16 +365,14 @@ Persona prompt 解释不同介入等级的角色化判断；Route 的 interventi
 ### 9.1 持续语音上行
 
     用户开启持续语音
-      -> 在“谁在听”中打开夜雨和 Rabi Active
-      -> 开启持续语音
-      -> 手机 VAD 切句，队列项冻结订阅版本或 enabledRouteIds 快照
-      -> 音频只上传一次
-      -> RabiPC 全局 ASR 只转写一次
-      -> 生成一个 observationId
-      -> 共享 Ingress 校验快照中的每条 Route
-      -> 将同一 observation 分发给夜雨 Route 和 Rabi Active Route
-      -> 分别写入目标上下文账本并记录 source deviceId / routeId / observationId
-      -> 分别按各 Route 主动策略决定安静、准备或回应
+      -> 选择一个已开启 RabiLink 消息端的 Route / 人格会话
+      -> Android 持续传有序 16 kHz mono PCM，不做 VAD 或切句
+      -> RabiPC RabiSpeech 对同一流执行 VAD、切句、ASR 与声纹
+      -> 每个完成语段只写一次主机通用语音消息
+      -> 按 messageAdapterType=rabilink 与冻结的 routeProfileId 命中目标 Route
+      -> Route 按 NapCat 相同关系把消息交给绑定人格
+      -> 写入该人格的 voice-transcripts.jsonl 与 conversation/current.jsonl
+      -> 人格结合自己的关系、记忆、上下文和主动策略决定安静、准备或回应
 
 未知、已禁用或不允许 RabiLink 的订阅 Route 必须对该 Route 明确失败，但不能让一个失效 Route 阻止其它有效监听者收到 observation。禁止：
 

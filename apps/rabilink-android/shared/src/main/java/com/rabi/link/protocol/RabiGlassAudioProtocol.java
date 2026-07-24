@@ -14,6 +14,9 @@ public final class RabiGlassAudioProtocol {
     public static final String PREFIX_TRANSCRIPT = "RABI_GLASS_TRANSCRIPT:";
     public static final String PREFIX_REPLY = "RABI_GLASS_REPLY:";
     public static final String PREFIX_DEVICE = "RABI_GLASS_DEVICE:";
+    public static final String PREFIX_PLAYBACK_BEGIN = "RABI_GLASS_PLAYBACK_BEGIN:";
+    public static final String PREFIX_PLAYBACK_END = "RABI_GLASS_PLAYBACK_END:";
+    public static final String PREFIX_PLAYBACK_RECEIPT = "RABI_GLASS_PLAYBACK_RECEIPT:";
 
     private RabiGlassAudioProtocol() {
     }

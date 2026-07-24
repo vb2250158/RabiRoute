@@ -13,6 +13,7 @@ import android.os.SystemClock;
 import java.util.Locale;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,7 +30,6 @@ public final class RabiPhoneAudioCapture {
     private static final String WAKE_LOCK_TAG = "RabiLink:PhoneAudioCapture";
     private static final int SAMPLE_RATE = 16000;
     private static final int BUFFER_BYTES = 3200;
-    private static final long WATCHDOG_INTERVAL_MS = 15_000L;
     private static final long STALL_TIMEOUT_MS = 45_000L;
     private static final long HEALTHY_RESET_MS = 60_000L;
     private static final long METRIC_PERSIST_INTERVAL_MS = 10_000L;
@@ -51,7 +51,7 @@ public final class RabiPhoneAudioCapture {
 
     private volatile boolean requested;
     private volatile boolean playbackSuppressed;
-    private boolean supervisorStarted;
+    private volatile ScheduledFuture<?> stallDeadline;
     private volatile AudioRecord recorder;
     private volatile long lastReadElapsed;
     private volatile long healthySinceElapsed;
@@ -78,11 +78,6 @@ public final class RabiPhoneAudioCapture {
         requested = true;
         lifecycleGeneration.incrementAndGet();
         acquireWakeLock();
-        if (!supervisorStarted) {
-            supervisorStarted = true;
-            supervisor.scheduleWithFixedDelay(this::watchdog, WATCHDOG_INTERVAL_MS,
-                    WATCHDOG_INTERVAL_MS, TimeUnit.MILLISECONDS);
-        }
         startRecorder("initial_start");
     }
 
@@ -95,6 +90,7 @@ public final class RabiPhoneAudioCapture {
         requested = false;
         lifecycleGeneration.incrementAndGet();
         restartScheduled.set(false);
+        cancelStallDeadline();
         stopRecorder();
         releaseWakeLock();
         persistRuntime(false, "paused");
@@ -107,6 +103,7 @@ public final class RabiPhoneAudioCapture {
         requested = false;
         lifecycleGeneration.incrementAndGet();
         restartScheduled.set(false);
+        cancelStallDeadline();
         stopRecorder();
         supervisor.shutdownNow();
         releaseWakeLock();
@@ -137,6 +134,7 @@ public final class RabiPhoneAudioCapture {
                 long now = SystemClock.elapsedRealtime();
                 lastReadElapsed = now;
                 healthySinceElapsed = now;
+                scheduleStallDeadline(next, lifecycleGeneration.get(), STALL_TIMEOUT_MS);
                 new Thread(() -> captureLoop(next), "rabi-phone-continuous-audio").start();
                 persistRuntime(true, reason);
                 listener.onStatus(restartCount == 0
@@ -181,16 +179,29 @@ public final class RabiPhoneAudioCapture {
         if (requested && recorder == source) scheduleRestart(exitReason);
     }
 
-    private void watchdog() {
-        if (!requested) return;
+    private void scheduleStallDeadline(AudioRecord source, int generation, long delayMs) {
+        cancelStallDeadline();
+        stallDeadline = supervisor.schedule(
+                () -> checkStallDeadline(source, generation),
+                Math.max(1L, delayMs),
+                TimeUnit.MILLISECONDS);
+    }
+
+    private void checkStallDeadline(AudioRecord source, int generation) {
+        if (closed || !requested || generation != lifecycleGeneration.get() || recorder != source) return;
         ensureWakeLock();
-        AudioRecord current = recorder;
-        if (current == null) {
-            scheduleRestart("audio_recorder_missing");
+        long silence = SystemClock.elapsedRealtime() - lastReadElapsed;
+        if (silence >= STALL_TIMEOUT_MS) {
+            scheduleRestart("audio_read_stalled");
             return;
         }
-        long silence = SystemClock.elapsedRealtime() - lastReadElapsed;
-        if (silence >= STALL_TIMEOUT_MS) scheduleRestart("audio_read_stalled");
+        scheduleStallDeadline(source, generation, STALL_TIMEOUT_MS - silence);
+    }
+
+    private void cancelStallDeadline() {
+        ScheduledFuture<?> current = stallDeadline;
+        stallDeadline = null;
+        if (current != null) current.cancel(false);
     }
 
     private void scheduleRestart(String reason) {
@@ -211,6 +222,7 @@ public final class RabiPhoneAudioCapture {
     }
 
     private void stopRecorder() {
+        cancelStallDeadline();
         AudioRecord current;
         synchronized (recorderLock) {
             current = recorder;

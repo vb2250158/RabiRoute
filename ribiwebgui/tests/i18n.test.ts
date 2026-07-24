@@ -38,6 +38,21 @@ test("translates speech delivery and persona configuration copy", () => {
   );
   assert.equal(translateText("语音唤醒关键词", "en"), "Speech wake-up keywords");
   assert.equal(translateText("最近消息上下文", "en"), "Recent message context");
+  assert.equal(translateText("人格声纹归类", "en"), "Persona voiceprint classification");
+  assert.equal(translateText("多电脑人格同步", "en"), "Multi-PC persona sync");
+  assert.equal(translateText("同步当前人格", "en"), "Sync current persona");
+  assert.equal(translateText("确认文件冲突", "en"), "Confirm file conflict");
+  assert.equal(translateText("自动对账已完成", "en"), "Automatic reconciliation complete");
+  assert.equal(translateText("12 个变化 · 2 个冲突", "en"), "12 changes · 2 conflicts");
+  assert.equal(
+    translateText("自动对账保留了待同步标记，将在连接事件或有界重试时继续：temporary failure", "en"),
+    "Automatic reconciliation retained its pending marker and will continue on a connection event or bounded retry: temporary failure"
+  );
+  assert.equal(translateText("这是我", "en"), "This is me");
+  assert.equal(translateText("清除判断", "en"), "Clear decision");
+  assert.equal(translateText("12 个分段", "en"), "12 segments");
+  assert.equal(translateText("标记下一段", "en"), "Mark the next recording");
+  assert.equal(translateText("已找到 2 个本次候选", "en"), "2 candidates found for this attempt");
   assert.equal(
     translateText("当前关键词为空：转写会继续记录，但不会唤醒 Agent。建议至少加入人格名和常用称呼。", "en"),
     "The keyword list is empty: transcripts will still be recorded, but the Agent will not wake. Add at least the persona name and common forms of address."
@@ -69,6 +84,17 @@ test("translates speech delivery and persona configuration copy", () => {
   assert.equal(
     translateText("上方仅保留当前页面运行期的转写预览；下方读取按日期持久化的最近 ASR/TTS 双向记录。", "en"),
     "The preview above is limited to the current page session; the section below reads recent persistent bidirectional ASR/TTS records stored by date."
+  );
+});
+
+test("translates Codex Hook management copy", () => {
+  assert.equal(translateText("Hook 管理", "en"), "Hook management");
+  assert.equal(translateText("会话入口上下文", "en"), "Task-entry context");
+  assert.equal(translateText("推理期上下文刷新", "en"), "Reasoning-time context refresh");
+  assert.equal(translateText("计划任务会话完成通知", "en"), "Plan-task completion notification");
+  assert.equal(
+    translateText("；默认开启。", "en"),
+    "; enabled by default."
   );
 });
 

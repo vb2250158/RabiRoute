@@ -50,7 +50,7 @@ Enable a `wearable_health_alert` persona rule. Runnable examples live in `exampl
 
 ## Phone settings
 
-Open “Wearable health” and select either Health Connect or “Xiaomi Health (PC ADB Companion)”, then set the stable device ID/name/kind, polling and lookback intervals, high/low heart-rate thresholds, cooldown, and sleep-state alerts. Health Connect uses the phone foreground service. ADB Companion uses the phone settings as its source of truth and is run by the paired Rabi PC.
+Open “Wearable health” and select either Health Connect or “Xiaomi Health (PC ADB Companion)”, then set the stable device ID/name/kind, event-triggered lookback window, high/low heart-rate thresholds, cooldown, and sleep-state alerts. Health Connect is read once after an explicit user/startup/platform event; the phone no longer runs a periodic health query. ADB Companion uses the phone settings as its source of truth and is run by the paired Rabi PC.
 
 An obtained Xiaomi authentication key may be saved in the password field. Android Keystore protects it with AES-GCM; it is reserved for a future direct-vendor collector and is not uploaded. Neither source invents records when its upstream is empty, and the PC Companion never reads the Keystore secret.
 

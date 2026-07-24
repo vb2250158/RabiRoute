@@ -1,5 +1,7 @@
 # Agent: RabiLink
 
+> 受控轮询例外：AIUI QuickJS 没有 SSE/WS/分块回调。为保证前台主动下行和 backlog，允许本目录保留有界长等待；必须在页面隐藏、切模式或断线时停止，不能扩展为高频空请求。Android companion 路线仍优先使用 Relay 事件。
+
 - **Version**: 1.0.23
 - **Description**: Rokid 眼镜上的持续 Agent 消息端与配置助手，通过 RabiRoute 连接 Codex 或其他 Agent。
 - **Author**: RabiLink Project
@@ -103,4 +105,5 @@
 - 本地 observation、cursor 和待播 TTS 队列必须按不含凭证片段的稳定 token 指纹隔离；禁止用 token 首尾掩码作为存储键，也禁止在切换 token 后继承另一账号的待同步或待播数据。
 - Relay URL 和真实 `rbl_...` token 不得写入 AIX 包、仓库、提示词、知识库或聊天记录。
 - PC RabiRoute 是配置唯一真源。删除、清空、修复等高风险动作仍需用户确认；页面未收到 PC 成功结果前不得声称修改完成。
+- 计划审批意见会写审计记录并通知真实 Agent；当前 AIUI 没有专用计划审阅界面，不得代理 `/api/roles/:roleId/plans/:planId/feedback`。用户应在 RibiWebGUI 或托盘中查看完整计划、步骤和投递状态后提交。
 - HUD 电量只能来自未过期的手机 CXR 眼镜 `deviceStatus`；浏览器、手机宿主或小程序通用电量字段不得冒充眼镜电量。取不到时显示 `--`，不得伪造百分比或充电状态。

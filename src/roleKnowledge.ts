@@ -22,6 +22,19 @@ export type KnowledgeSource = {
   summary?: string;
 };
 
+export type PlanTaskCompletionHook = {
+  enabled: boolean;
+  gatewayId?: string;
+};
+
+export type PlanTaskBinding = {
+  agentType: "codex";
+  sessionId: string;
+  sessionTitle?: string;
+  workspace?: string;
+  completionHook?: PlanTaskCompletionHook;
+};
+
 export type PlanItem = {
   id: string;
   title: string;
@@ -40,6 +53,7 @@ export type PlanItem = {
     path?: string;
   };
   source?: KnowledgeSource;
+  taskBinding?: PlanTaskBinding;
   dueAt?: string;
   completedAt?: string;
   archivedAt?: string;
@@ -397,6 +411,11 @@ function planTextTotal(plan: PlanItem): number {
     plan.project?.path,
     plan.source?.kind,
     plan.source?.summary,
+    plan.taskBinding?.agentType,
+    plan.taskBinding?.sessionId,
+    plan.taskBinding?.sessionTitle,
+    plan.taskBinding?.workspace,
+    plan.taskBinding?.completionHook?.gatewayId,
     ...plan.steps.flatMap((step) => [step.id, step.title, step.detail, step.waitingFor, step.blockedBy, step.completedAt]),
     ...plan.keywords
   ].reduce((total, value) => total + textChars(value), 0);
@@ -466,6 +485,10 @@ function validatePlanWrite(roleDir: string, plan: PlanItem, requireSteps = false
   assertTextLimit("Plan waitingFor", plan.waitingFor, limits.waitingForChars);
   assertTextLimit("Plan blockedBy", plan.blockedBy, limits.blockedByChars);
   assertTextLimit("Plan source.summary", plan.source?.summary, limits.sourceSummaryChars);
+  assertTextLimit("Plan taskBinding.sessionId", plan.taskBinding?.sessionId, 240);
+  assertTextLimit("Plan taskBinding.sessionTitle", plan.taskBinding?.sessionTitle, 240);
+  assertTextLimit("Plan taskBinding.workspace", plan.taskBinding?.workspace, 1000);
+  assertTextLimit("Plan taskBinding.completionHook.gatewayId", plan.taskBinding?.completionHook?.gatewayId, 120);
   assertKeywordLimits("Plan", plan.keywords, limits.maxKeywords, limits.keywordChars);
   validatePlanSteps(plan, limits, requireSteps);
   const total = planTextTotal(plan);
@@ -515,6 +538,39 @@ function normalizePlanSteps(value: unknown): PlanStep[] {
   });
 }
 
+function validatePlanTaskBindingInput(value: unknown): void {
+  if (value == null) return;
+  const raw = recordValue(value);
+  if (Object.keys(raw).length === 0) throw new Error("Plan taskBinding must be an object with a Codex sessionId.");
+  if (raw.agentType != null && raw.agentType !== "codex") {
+    throw new Error(`Unsupported plan taskBinding agentType: ${String(raw.agentType)}`);
+  }
+  if (!String(raw.sessionId || "").trim()) throw new Error("Plan taskBinding.sessionId is required.");
+  if (raw.completionHook != null) {
+    const hook = recordValue(raw.completionHook);
+    if (Object.keys(hook).length === 0) throw new Error("Plan taskBinding.completionHook must be an object.");
+    if (typeof hook.enabled !== "boolean") throw new Error("Plan taskBinding.completionHook.enabled must be boolean.");
+  }
+}
+
+function normalizePlanTaskBinding(value: unknown): PlanTaskBinding | undefined {
+  if (value == null) return undefined;
+  const raw = recordValue(value);
+  const sessionId = String(raw.sessionId || "").trim();
+  if (!sessionId) return undefined;
+  const hook = recordValue(raw.completionHook);
+  return {
+    agentType: "codex",
+    sessionId,
+    sessionTitle: typeof raw.sessionTitle === "string" ? raw.sessionTitle.trim() || undefined : undefined,
+    workspace: typeof raw.workspace === "string" ? raw.workspace.trim() || undefined : undefined,
+    completionHook: {
+      enabled: hook.enabled !== false,
+      gatewayId: typeof hook.gatewayId === "string" ? hook.gatewayId.trim() || undefined : undefined
+    }
+  };
+}
+
 function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbackId?: string): PlanItem | null {
   const title = String(raw.title || "").trim();
   if (!title) return null;
@@ -537,6 +593,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     steps: normalizePlanSteps(raw.steps),
     project: raw.project && typeof raw.project === "object" && !Array.isArray(raw.project) ? raw.project as PlanItem["project"] : undefined,
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
+    taskBinding: normalizePlanTaskBinding(raw.taskBinding),
     dueAt: typeof raw.dueAt === "string" ? raw.dueAt : undefined,
     completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
     archivedAt: typeof raw.archivedAt === "string" ? raw.archivedAt : undefined,
@@ -745,6 +802,7 @@ export function listConsolidationRuns(roleDir: string): MemoryConsolidationRun[]
 
 export function createPlan(roleDir: string, input: Record<string, unknown>): PlanItem {
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
+  validatePlanTaskBindingInput(input.taskBinding);
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("plan", String(input.title || ""));
   const plan = normalizePlan({ ...input, id, createdAt: nowIso(), updatedAt: nowIso() });
   if (!plan) throw new Error("Plan title is required.");
@@ -757,6 +815,7 @@ export function createPlan(roleDir: string, input: Record<string, unknown>): Pla
 export function updatePlan(roleDir: string, planId: string, patch: Record<string, unknown>): PlanItem {
   const existing = listPlans(roleDir).find((item) => item.id === planId);
   if (!existing) throw new Error(`Plan not found: ${planId}`);
+  if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
   const next = normalizePlan({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: nowIso() });
   if (!next) throw new Error("Plan title is required.");
   requireKeywords(next.keywords, "Plan");

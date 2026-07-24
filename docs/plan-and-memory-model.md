@@ -134,6 +134,16 @@ completedArchiveAfterHours = 72
     "kind": "manual",
     "summary": "用户要求说明计划和记忆机制"
   },
+  "taskBinding": {
+    "agentType": "codex",
+    "sessionId": "exact-source-session-id",
+    "sessionTitle": "计划执行任务",
+    "workspace": "C:/Path/To/Project",
+    "completionHook": {
+      "enabled": true,
+      "gatewayId": "Role__reminder"
+    }
+  },
   "dueAt": "",
   "completedAt": "",
   "archivedAt": "",
@@ -148,6 +158,10 @@ completedArchiveAfterHours = 72
 `focus` 是单条计划的唯一主题声明。新增计划必须显式填写，且只能是一行；一个计划只推进一个主题，遇到无关目标或独立阻塞时应拆成另一条计划，不能继续堆进 `currentStep`。
 
 `steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。步骤可带 `detail`、`waitingFor`、`blockedBy` 和 `completedAt`；`waitingFor` 说明正在等谁或什么，`blockedBy` 说明为什么无法继续，并优先写到实际受阻的当前步骤上。`currentStep` 保留为当前进展说明，不再承担步骤列表或步骤身份。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用。
+
+`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。目前只支持 `agentType=codex`。`sessionId` 是必填的完整执行任务 ID；`sessionTitle` 只用于展示，`workspace` 用于 Stop Hook 的安全校验。`completionHook.enabled=true` 时，Manager 在该会话完成一轮后把官方最终回答经现有角色面板链投给同人格 Route；`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆。
+
+目标 Codex Route 必须已有精确任务 ID，且不得与执行会话相同。一个执行会话绑定多个计划、workspace 不一致、执行会话上下文人格与计划人格不一致、指定 gateway 不存在或未绑定该人格、同人格存在多个 gateway 却未指定 `gatewayId` 时都失败关闭。此能力在双真实 Desktop 任务验收前保持实验状态。
 
 ## 聚焦与长度校验
 
@@ -416,6 +430,8 @@ GET /roles/:roleId/memory/recent/:memoryId
 GET /roles/:roleId/memory/consolidated/:memoryId
 POST /roles/:roleId/plans
 PATCH /roles/:roleId/plans/:planId
+GET /roles/:roleId/plans/:planId/feedback
+POST /roles/:roleId/plans/:planId/feedback
 POST /roles/:roleId/memory/recent
 PATCH /roles/:roleId/memory/recent/:memoryId
 ```
@@ -480,14 +496,33 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 - `已完成` 距离最后一次 `updatedAt` 超过当前固定 72 小时后，由角色知识快照设为 `已归档`，写入 `archivedAt`，并移动到 `archive/`。
 - 用户手动要求不再展示时，也可以直接设为 `已归档`。
 
-托盘 MVP 阶段保持只读，不创建、完成、删除或迁移计划。写入机制等计划 JSON 规范稳定后再接入。
+Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为需要审批的当前步骤，两端可以提交审批建议，但该动作只追加审批记录并可选通知 Agent，不直接修改计划状态或步骤。
+
+## 计划审批意见
+
+计划审批意见是与 `planId`、可选 `stepId` 关联的独立 JSONL 审计记录，保存在 `plans/feedback/<planId>.jsonl`。它不是计划 JSON 的第二份副本，也不是通用 Outbox Action Queue。
+
+```http
+GET  /api/roles/:roleId/plans/:planId/feedback
+POST /api/roles/:roleId/plans/:planId/feedback
+```
+
+WebGUI 或托盘提交时使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。Manager 先记录意见，再经现有角色面板投递链通知绑定 Agent；响应中的 `deliveryStatus` 区分 `pending / delivered / failed / record_only`。记录已成功但投递失败时，客户端保留草稿并使用同一个 `feedbackId` 重试，Manager 会折叠同 ID 的投递状态更新，避免生成第二条审批记录。
+
+Agent 从 QQ 等其它入口获得审批后，也可以调用同一接口，以 `source=qq`、`notifyAgent=false` 记录用户意见；Agent 自己的处理说明使用 `author=agent`、`kind=approval_response`，自动按 `record_only` 写入。无论来源如何，只有 Agent 后续显式 `PATCH` 计划时才会推进步骤或状态。
+
+## Manager 展示顺序与计划视图
+
+Manager 的计划 API 会附加只读 `presentation.status` / `presentation.tone`，用于表达“阻塞中”和“待QA测试”等不回写文件的显示状态；`presentation.approval` 统一判断当前计划是否显示审批输入，并给出目标 `stepId`、标签和帮助文本。列表按“阻塞中 → 待QA测试 → 进行中 → 未开始 → 已完成 → 已归档”排序，同一状态内按 `updatedAt` 从新到旧；近期记忆和沉淀记忆也由 Manager 按 `updatedAt` 从新到旧返回。
+
+Qt 托盘和 RibiWebGUI 的“计划与记忆”页都消费这份 Manager DTO 和既有顺序，不直接读取 `data/`，也不各自维护状态识别或排序规则。
 
 ## 托盘视图
 
 当前：
 
 ```text
-展示 status=进行中 的计划。
+“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划。需要审批的卡片展开后可以追加意见。
 ```
 
 近期记忆：
@@ -514,4 +549,4 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 展示 manager、gateway、NapCat、heartbeat 和状态文件摘要。
 ```
 
-托盘视图主要服务用户观察。是否把其中内容交给 Agent，由路由模板、摘要注入或未来 manager API 决定。
+托盘视图主要服务用户观察。是否把其中内容交给 Agent，由路由模板、摘要注入或 Manager API 决定。

@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "RabiSpeech Direct API",
-    "version": "0.1.0",
-    "description": "Direct TTS and ASR API backed by the selected user's local RabiSpeech plugin through RabiLink Relay. The caller makes one HTTP request and receives the final audio or transcription response."
+    "version": "0.1.1",
+    "description": "Restricted speech API backed by the selected user's Rabi PC through RabiLink Relay. Android phone/glasses clients stream PCM through the RabiLink audio-stream endpoints so VAD, segmentation, ASR, and voiceprint processing remain on RabiSpeech; direct model calls and the completed-message compatibility endpoint remain available."
   },
   "servers": [
     {
@@ -107,6 +107,84 @@
           "502": { "$ref": "#/components/responses/PluginFailure" },
           "504": { "$ref": "#/components/responses/PluginFailure" }
         }
+      }
+    },
+    "/messages": {
+      "post": {
+        "operationId": "submitRabiLinkSpeechMessage",
+        "summary": "Compatibility/debug submission for an already completed phone ASR record",
+        "description": "Not used by the Android main path. Normal phone/glasses audio enters through the ordered PCM stream endpoints and is submitted automatically by target-PC RabiSpeech after recognition.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["text", "messageAdapterType", "channelType"],
+                "properties": {
+                  "recordId": { "type": "string" },
+                  "text": { "type": "string" },
+                  "messageAdapterType": { "type": "string", "enum": ["rabilink"] },
+                  "channelType": { "type": "string", "example": "rabilink.mobile_audio" },
+                  "routeProfileId": { "type": "string" },
+                  "sessionId": { "type": "string" },
+                  "source": { "type": "string" },
+                  "transport": { "type": "string" },
+                  "sourceDeviceId": { "type": "string" },
+                  "sourceDeviceName": { "type": "string" },
+                  "sourceDeviceKind": { "type": "string" },
+                  "recordedAt": { "oneOf": [{ "type": "number" }, { "type": "string" }] },
+                  "provider": { "type": "string" },
+                  "model": { "type": "string" },
+                  "language": { "type": "string" },
+                  "duration": { "type": "number" },
+                  "sampleRate": { "type": "number" },
+                  "segments": { "type": "array", "items": { "type": "object" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Host record and per-Route terminal receipts", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoSpeechPc" },
+          "502": { "$ref": "#/components/responses/PluginFailure" },
+          "504": { "$ref": "#/components/responses/PluginFailure" }
+        }
+      }
+    },
+    "/v1/audio-streams/rabilink/start": {
+      "post": {
+        "operationId": "startRabiLinkAudioStream",
+        "summary": "Attach a phone or glasses PCM stream to the target PC RabiSpeech host",
+        "description": "Android is transport only. Target-PC RabiSpeech owns VAD, segmentation, ASR, voiceprint processing, and automatic Route submission. This endpoint always creates the rabilink logical message type; the client cannot override it. A stream with no PCM for 15 seconds is retired and the previous host input is restored.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["stream_id"], "properties": {
+          "stream_id": { "type": "string", "description": "Transient identity of this PCM connection." }, "name": { "type": "string" }, "device_kind": { "type": "string" },
+          "source_device_id": { "type": "string", "description": "Stable phone or glasses identity used for reply targeting." }, "route_profile_id": { "type": "string" }, "session_id": { "type": "string" }
+        } } } } },
+        "responses": { "200": { "description": "Stream attached" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "409": { "$ref": "#/components/responses/NoSpeechPc" } }
+      }
+    },
+    "/v1/audio-streams/rabilink/chunk": {
+      "post": {
+        "operationId": "appendRabiLinkAudioChunk",
+        "summary": "Append ordered mono PCM s16le bytes to the active stream",
+        "parameters": [
+          { "name": "streamId", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "sequence", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 1 }, "description": "Strictly contiguous sequence beginning at 1." },
+          { "name": "chunkId", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 200 }, "description": "Stable pending-chunk identity retained across a transient stream rebuild. The PC deduplicates it per source device and PCM hash." }
+        ],
+        "requestBody": { "required": true, "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+        "responses": { "200": { "description": "Chunk accepted" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "409": { "$ref": "#/components/responses/NoSpeechPc" } }
+      }
+    },
+    "/v1/audio-streams/rabilink/stop": {
+      "post": {
+        "operationId": "stopRabiLinkAudioStream",
+        "summary": "Detach the mobile stream and restore the previous host audio source",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["stream_id"], "properties": { "stream_id": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Stream detached" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "409": { "$ref": "#/components/responses/NoSpeechPc" } }
       }
     },
     "/api/v1/services/audio/tts/SpeechSynthesizer": {

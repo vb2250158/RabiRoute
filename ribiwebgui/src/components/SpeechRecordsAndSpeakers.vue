@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import type {
   SpeechRecord,
@@ -82,6 +82,7 @@ const experimentalAutoAssign = computed(() => (
   && capability.value?.voiceprint.autoAssign === true
 ));
 const voiceprintStatus = computed(() => voiceprintPresentation(capability.value));
+const voiceprintReason = computed(() => capability.value?.voiceprint.reason?.trim() ?? "");
 const speakerCapabilityDescription = computed(() => {
   if (!capability.value) return "正在读取本机声纹模型与人物资料状态。";
   if (voiceprintSupported.value) return "人物资料、人工确认原型和已校准的自动认人共用本机资料库。";
@@ -334,13 +335,11 @@ async function unbindSelectedSpeaker(): Promise<void> {
 
 watch(profiles, syncSpeakerDrafts, { immediate: true });
 watch(() => [props.sessionId, props.routeId], () => void refreshData());
+watch(() => speech.recordsVersion, () => void refreshVisibleRecords().catch(() => undefined));
 
-let recordsTimer = 0;
 onMounted(() => {
   void refreshData();
-  recordsTimer = window.setInterval(() => void refreshVisibleRecords().catch(() => undefined), 5_000);
 });
-onBeforeUnmount(() => window.clearInterval(recordsTimer));
 </script>
 
 <template>
@@ -395,6 +394,7 @@ onBeforeUnmount(() => window.clearInterval(recordsTimer));
       <span v-else-if="capability">
         自动声纹 matcher 当前不可用，仍可使用当前录音范围内的人工绑定与纠正。
       </span>
+      <small v-if="voiceprintReason" class="speaker-capability-reason">{{ voiceprintReason }}</small>
     </v-alert>
 
     <v-expansion-panels v-model="speakerPreviewPanels" multiple class="speaker-preview-panels">
@@ -675,6 +675,7 @@ onBeforeUnmount(() => window.clearInterval(recordsTimer));
 .speaker-record-actions, .speaker-profile-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .speaker-boundary { line-height: 1.55; }
 .speaker-boundary-title { align-items: center; margin-bottom: 4px; }
+.speaker-capability-reason { display: block; margin-top: 6px; color: #607785; overflow-wrap: anywhere; }
 .speaker-preview-panels { margin: 2px 0; }
 .speaker-preview-panel-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .speaker-preview-panel-title small { color: #7b8c9b; font-weight: 500; }

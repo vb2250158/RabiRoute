@@ -31,10 +31,13 @@ RabiLink Relay
 
 - 眼镜默认入口是 `GlassAudioClientActivity`；`glass-app/` 是眼镜应用模块，眼镜主链只负责音频、媒体、状态与 HUD，不在本地运行 ASR/TTS。
 - 手机日常首页是会话列表，点一个启用了 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
-- 手机后端将眼镜 PCM 送到 Rabi PC ASR，把 observation 写入消息端；下行文本由 Rabi PC TTS 合成后以 PCM 发回眼镜。
-- 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标；Rabi 播报期间暂停采集，并按收到的 PCM 长度延迟恢复，避免把下行语音重新录回上行。
+- 手机后端通过受限 `audio-streams/rabilink/start|chunk|stop` 接口把手机/眼镜的连续 16 kHz mono PCM 送到所选 Rabi PC。Android 不做 VAD、切句、ASR 或声纹；RabiSpeech 在 PC 端切句和识别后自动写主机通用语音库，再按固定的 `routeProfileId` 投给 RabiLink/手机消息端。启动请求分别提交稳定 `source_device_id` 与临时 `stream_id`，普通回复只回稳定设备，不会发给带音频后缀的流 ID。`/api/rabilink/speech/messages` 只保留兼容与调试用途；需要播报时再由 Rabi PC TTS 合成并以 PCM 发回。
+- 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标。手机通过同一条有序 Classic BT 通道发送 `PLAYBACK_BEGIN → PCM → PLAYBACK_END`；眼镜必须先在主线程确认暂停采集，播放线程才接受 PCM，避免 TTS 开头被麦克风回录。它会核对消息 ID/PCM 长度，并且只有 `AudioTrack` 播放头到达 marker 后才回 `played` 并恢复聆听；Activity 销毁会把未完成播放明确回为 `playback_failed`。旧版没有 BEGIN/END 的 PCM 仍可兼容播放，但不会冒充已确认播放。
 - 照片已接入消息附件上行；Relay/worker 支持视频文件附件，但真眼镜视频回调尚待接线，不代表实时视频已完成。
-- `RabiConversationService` 持有消息 cursor、通知和手机/眼镜 I/O；发送目标在入队时固定，切换会话不会把排队消息改投给别人。手机录音由独立 `RabiPhoneAudioCapture` 管理 WakeLock、卡死检测、受控重启和运行指标，文字/语音/控制/媒体均使用磁盘可靠队列。眼镜物理投递/播放回执仍待真机闭环。
+- `RabiConversationService` 持有消息 cursor、通知和手机/眼镜 I/O；发送目标在入队时固定，切换会话不会把排队消息改投给别人。手机录音由独立 `RabiPhoneAudioCapture` 管理 WakeLock、卡死检测、受控重启和运行指标。文字、控制、媒体以及 `delivered/played/playback_failed` 回执都先写磁盘；可靠队列达到上限时拒绝新项目并明确报错，不再静默删除尚未确认的旧项目。连续 PCM 只保留待确认块和有界最新缓冲，不保存隐蔽的离线原始录音。回执代码和自动补传已闭环，但手机与眼镜真实扬声器仍需真机验收。
+- 设置页以一个持久化真源提供 `已暂停 / 手机模式 / 眼镜模式`。切到眼镜模式时先暂停手机麦克风；只有真实眼镜蓝牙连接事件到达后才启动眼镜 PCM，连接前或断线后保持暂停并显示原因，不会静默回退成双路采集。运行卡片由服务广播事件刷新，显示连接、目标 Route/人格、采集、眼镜、可靠队列和最近错误，不运行一秒一次的业务状态轮询。
+- 用户可设置“由 Agent 人格综合决定 / 偏安静 / 均衡 / 偏主动”。该值作为明确偏好 observation 可靠入队，并附在手机文字、控制、媒体和音频流元数据中；App 与 Relay 不把它解释成固定介入规则。最终不打扰、准备、提示、建议、请求确认或行动仍由 PC 状态/情景上下文、Route 安全边界和目标 Agent 人格共同决定。
+- 手机私有可靠队列使用 fsync 后原子替换；启动时清理未完成临时文件，坏 JSON、缺失媒体二进制等毒化项目移入隔离目录并给出可见错误，后续队列项目仍可继续发送。
 - AIUI 暂停新增功能，旧 ASR/TTS 探针只保留为历史调试入口。
 
 眼镜端构建产物仍由手机 APK 的 CXR 工作流安装，用户只需安装一个手机 APK。
@@ -45,16 +48,16 @@ RabiLink Relay
 .\scripts\Test-RabiMobileAudioSoak.ps1 -Serial <adb-serial> -DurationHours 24
 ```
 
-该测试验证前台服务、最近采集时间、PCM 字节增长和自动恢复次数。当前实现是持续采集、VAD 分段、可靠补传，不直播一条完整的 24 小时原始录音；VAD 语段和 Agent TTS 按 PC RabiSpeech 的统一契约逐文件缓存 24 小时，并写入带安全相对路径和到期时间的按日 JSONL 记录。
+该测试验证前台服务、最近采集时间、PCM 字节增长和自动恢复次数。当前实现持续采集并按有序 PCM chunk 传输，不在 Android 侧做 VAD，也不保存一条完整的 24 小时原始录音；手机采集以最后一次成功读取为真源安排一次性 45 秒停滞 deadline，不再每 15 秒跑 watchdog，断流时才进入受控退避重建。每个待确认 chunk 使用稳定 `chunkId`；即使 ACK 丢失后换了临时 `sourceStreamId`，PC 仍按稳定设备、chunk ID 和 PCM 哈希去重，不会再次喂入 ASR。系统联网事件或 RabiLink SSE 恢复会立即唤醒续传；已知断网时，SSE 连接与可靠队列发送会停在系统网络事件门上，不再按秒空转。为覆盖少数 Android 厂商漏发已注册网络回调的情况，前台服务只在已知离线期间每五分钟检查一次系统当前网络，一旦恢复立即停止；该检查不访问 Relay、不读消息、不推进 cursor。联网但服务端暂时不可用时才使用一次性 1–30 秒退避。Relay 每 15 秒发送传输 keepalive；Android 连续 45 秒收不到任何 SSE 字节时判定半开连接已停滞并重建连接，随后仍只执行 `ready → cursor` 一次补漏，不进行业务轮询。SSE 的 `ready/outbox_available` 只负责唤醒，手机随后按持久不透明 cursor 做一次查询补漏；正常 Relay 重启沿用共享代际，运行期状态回滚才显式要求重建 cursor，手机按 `deliveryId` 和本机终态记录去重后重放保留消息，不会让旧 cursor 永久领先服务端。消息连接的恢复意图独立持久化：即使关闭持续聆听，已启动的文字/媒体/下行连接也会在进程或设备重启后先恢复 cursor 与可靠队列；用户明确点击停止则关闭后续自动恢复。PCM 上传执行器和离线缓冲都有界；长期断网会丢弃过旧音频并保留待确认块与最新 PCM，恢复后直接追上实时流，不会无限占用内存或永远落后。可靠文字/媒体/回执则保留到成功确认；PC 超过 15 秒收不到 chunk 会自动回收旧虚拟输入。RabiSpeech 切出的 ASR 语段和 Agent TTS 按统一契约逐文件缓存 24 小时，并写入带安全相对路径和到期时间的按日 JSONL 记录。
 
-手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步周期、心率高低阈值、告警冷却和睡眠状态告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。当前小米真机主线由登录后常驻的 PC Companion 按手机配置读取 Provider；结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
+手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步/回看周期、心率高低阈值、告警冷却和睡眠状态告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。Health Connect 优先使用手动、启动恢复或平台事件；小米 ADB Provider 没有可靠变更通知，因此用户显式启用的 PC Companion 保留低频轮询，默认按手机配置的分钟级周期运行。结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
 
 ### 首次使用与失败引导
 
 - 首页会自动扫描同一局域网里的 Rabi PC；只发现一台在线 worker 时，完成 RabiLink 登录后会自动选中，不要求用户理解 worker、route 或 cursor。
 - 安装包、配对信息或以后接入的二维码带有连接参数时，App 会直接填入。RabiLink 服务器地址和移动端登录码无法安全自动取得时，页面会说明受限原因以及应从 Rabi PC 的哪个入口复制。
 - 页面顶部只汇总当前状态；某个输入失败时，失败原因、应填内容、获取位置和修复动作会紧贴在对应输入框下方，不再让用户去独立的“为什么”区域对号入座，也不再只依赖短暂 Toast。
-- 常用输入、选择器和按钮使用统一的 Rabi 移动端组件尺寸；设备 ID、轮询窗口、模型与阈值等工程参数默认收进“高级设置”。
+- 常用输入、选择器和按钮使用统一的 Rabi 移动端组件尺寸；设备 ID、受控轮询/回看窗口、模型与阈值等工程参数默认收进“高级设置”。
 - 健康页优先推荐 Health Connect，设备 ID 和来源名称可自动生成。“保存并启用”会先检查 RabiLink、系统 Health Connect 能力或小米密钥；条件不足时只保存草稿，不会误报同步成功。
 - Rokid 页面默认只显示六步连接向导：自动环境检查、手机权限、Rokid 安全授权、连接、安装眼镜端和启动。SDK 状态矩阵与运行日志默认收起；授权、安装等无法静默代办的步骤会在页面内解释系统限制。
 - 测试中心、RabiRoute SDK、小米 BLE/云、Provider 边界和 OAuth 页面统一使用 Rabi 视觉组件。它们被明确标为高级诊断，原始日志默认收起，普通用户不需要通过这些页面完成首次配置。
@@ -338,18 +341,18 @@ apps\rabilink-android\out\mi-health-cloud\
 
 ```powershell
 cd <repo>\apps\rabilink-android
-$env:JAVA_HOME = (Resolve-Path .\out\tools\jdk-17.0.15+6).Path
-$env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
-.\out\tools\gradle-8.6\bin\gradle.bat :app:assembleDebug
+$env:JAVA_HOME = "<JDK 17>"
+.\gradlew.bat :app:assembleDebug :glass-app:assembleDebug
 ```
 
 APK 输出：
 
 ```text
 app\build\outputs\apk\debug\app-debug.apk
+glass-app\build\outputs\apk\debug\glass-app-debug.apk
 ```
 
-当前构建工具链为 AGP `8.4.2`、Kotlin `1.9.0`、Gradle `8.6`。这套工具链已经可以把 Rokid `phone.sdk.rfmlite` 及其 `rfmlite/rfmvad` assets、`librfmlite.so` 等 native 资源打进 APK；不要再用旧的 Gradle 7.5.1 构建本 example。
+仓库现在自带标准 Gradle wrapper。当前构建工具链为 AGP `8.4.2`、Kotlin `1.9.0`、Gradle `8.6`；wrapper 使用国内公开镜像并固定官方分发包 SHA-256，首次构建不再依赖本机手工安装的 Gradle 路径。这套工具链已经可以把 Rokid `phone.sdk.rfmlite` 及其 `rfmlite/rfmvad` assets、`librfmlite.so` 等 native 资源打进 APK；不要再用旧的 Gradle 7.5.1 构建本工程。
 
 导出带版本号、时间戳和 SHA256 的测试 APK：
 

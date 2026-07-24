@@ -64,14 +64,27 @@ function shouldExposeManagerFailure(input) {
 
 export async function handleHookInput(input, options = {}) {
   const eventName = String(input?.hook_event_name || "");
-  if (!["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"].includes(eventName)) return null;
+  if (!["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"].includes(eventName)) return null;
   try {
     const data = await requestManager("/api/codex-hook/context", {
       method: "POST",
       body: JSON.stringify(input)
     }, options);
+    if (eventName === "Stop") {
+      const completion = data?.planTaskCompletion;
+      if (completion?.status === "failed") {
+        return {
+          systemMessage: `Rabi plan-task completion reminder failed: ${completion.error || completion.reason || "unknown error"}`
+        };
+      }
+      return null;
+    }
     return hookOutput(eventName, String(data?.additionalContext || ""));
   } catch (error) {
+    if (eventName === "Stop") {
+      const message = error instanceof Error ? error.message : String(error);
+      return { systemMessage: `Rabi plan-task completion reminder was not delivered: ${message}` };
+    }
     if (!shouldExposeManagerFailure(input)) return null;
     const message = error instanceof Error ? error.message : String(error);
     return hookOutput(

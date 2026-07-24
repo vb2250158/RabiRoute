@@ -21,6 +21,7 @@ test("automatic conversation review waits for an idle Codex thread and then adva
     direction: "user_to_agent",
     kind: "voice_transcript",
     text: "这句话只应该先进入账本",
+    routeProfileId: "Ilias",
     requiresReview: true
   });
   appendRabiLinkConversationEntry(dataDir, {
@@ -54,6 +55,8 @@ test("automatic conversation review waits for an idle Codex thread and then adva
   assert.equal(second.pendingUserCount, 1);
   assert.match(prompts.at(-1) || "", /统一会话账本/);
   assert.match(prompts.at(-1) || "", /历史会话索引/);
+  assert.match(prompts.at(-1) || "", /本次涉及 Route：Ilias/);
+  assert.match(prompts.at(-1) || "", /"routeProfileId":"Ilias"/);
   assert.doesNotMatch(prompts.at(-1) || "", /这句话只应该先进入账本/);
   const third = await reviewer.check();
   assert.equal(third.status, "idle");

@@ -7,7 +7,7 @@ import uuid
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from .contracts import TranscriptionResult
 
@@ -18,10 +18,17 @@ if TYPE_CHECKING:
 class SpeechRecordStore:
     """Append-only runtime ledger for ASR and TTS text metadata."""
 
-    def __init__(self, root: str | Path, speaker_registry: "SpeakerProfileRegistry | None" = None) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        speaker_registry: "SpeakerProfileRegistry | None" = None,
+        *,
+        event_sink: Callable[[str, object], None] | None = None,
+    ) -> None:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.speaker_registry = speaker_registry
+        self._event_sink = event_sink
         self._lock = threading.Lock()
 
     def append_asr(
@@ -120,6 +127,17 @@ class SpeechRecordStore:
             with target.open("a", encoding="utf-8", newline="\n") as output:
                 output.write(encoded)
                 output.flush()
+        if self._event_sink is not None:
+            self._event_sink(
+                "records_changed",
+                {
+                    "id": row["id"],
+                    "kind": row.get("kind"),
+                    "time": row["time"],
+                    "session_id": row.get("session_id"),
+                    "route_id": row.get("route_id"),
+                },
+            )
         return row
 
     def list(

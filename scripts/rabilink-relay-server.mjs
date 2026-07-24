@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { appendDeviceLogs, deviceLogFacets, readDeviceLogs } from "./rabilink-device-log-store.mjs";
+import { RabiLinkEventHub } from "./rabilink-event-hub.mjs";
 import { RelayProxyRequestQueue } from "./rabilink-proxy-request-queue.mjs";
 
 const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 8788);
@@ -30,6 +31,8 @@ const mobileDeviceStatusDir = path.join(dataDir, "mobile-device-status");
 const deviceMediaDir = path.join(dataDir, "device-media");
 const deviceMediaMaxBytes = clamp(Number(process.env.RABILINK_RELAY_DEVICE_MEDIA_MAX_BYTES || 64 * 1024 * 1024), 1024 * 1024, 512 * 1024 * 1024);
 const deviceMediaTtlMs = clamp(Number(process.env.RABILINK_RELAY_DEVICE_MEDIA_TTL_MS || 7 * 24 * 60 * 60 * 1000), 60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000);
+let deviceMediaCleanupTimer = null;
+let deviceMediaCleanupDeadline = 0;
 const mobileDeviceStatusStaleMs = clamp(
   Number(process.env.RABILINK_RELAY_MOBILE_DEVICE_STATUS_STALE_MS || 3 * 60 * 1000),
   60000,
@@ -40,6 +43,7 @@ const deviceLogMaxRows = clamp(Number(process.env.RABILINK_RELAY_DEVICE_LOG_MAX_
 const deviceBindingClaimTtlMs = clamp(Number(process.env.RABILINK_RELAY_DEVICE_BINDING_CLAIM_TTL_MS || 10 * 60 * 1000), 60000, 60 * 60 * 1000);
 const appStorePath = path.resolve(process.env.RABILINK_RELAY_APP_STORE_FILE || path.join(dataDir, "apps.json"));
 const runtimeStatePath = path.join(dataDir, "runtime-state.json");
+const outboxCursorStatePath = path.join(dataDir, "outbox-cursor-state.json");
 const webguiDistPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_DIST_DIR || path.join(process.cwd(), "ribiwebgui", "dist"));
 const webguiAssetPath = path.resolve(process.env.RABILINK_RELAY_WEBGUI_ASSET_DIR || path.join(process.cwd(), "assets"));
 const openApiFileCandidates = [
@@ -78,6 +82,10 @@ const speechProxyPaths = new Map([
   ["GET /v1/capabilities", "/v1/capabilities"],
   ["POST /v1/audio/speech", "/v1/audio/speech"],
   ["POST /v1/audio/transcriptions", "/v1/audio/transcriptions"],
+  ["POST /v1/audio-streams/rabilink/start", "/v1/audio-streams/rabilink/start"],
+  ["POST /v1/audio-streams/rabilink/chunk", "/v1/audio-streams/rabilink/chunk"],
+  ["POST /v1/audio-streams/rabilink/stop", "/v1/audio-streams/rabilink/stop"],
+  ["POST /messages", "/api/speech/messages"],
   ["POST /api/v1/services/audio/tts/SpeechSynthesizer", "/api/v1/services/audio/tts/SpeechSynthesizer"],
   ["POST /api/v1/services/audio/asr/transcription", "/api/v1/services/audio/asr/transcription"]
 ]);
@@ -88,8 +96,7 @@ fs.mkdirSync(deviceLogDir, { recursive: true });
 fs.mkdirSync(mobileProofDir, { recursive: true });
 fs.mkdirSync(mobileDeviceStatusDir, { recursive: true });
 fs.mkdirSync(deviceMediaDir, { recursive: true });
-cleanupExpiredDeviceMedia();
-setInterval(cleanupExpiredDeviceMedia, Math.min(deviceMediaTtlMs, 6 * 60 * 60 * 1000)).unref();
+scheduleDeviceMediaCleanup(cleanupExpiredDeviceMedia());
 if (!hasEnabledRabiLinkApps()) {
   console.warn("No enabled RabiLink app tokens exist yet. Open /manage to create the first account and app token.");
 }
@@ -99,16 +106,21 @@ const tasks = new Map();
 /** @type {RelayOutboxMessage[]} */
 const outboxMessages = [];
 let nextOutboxMessageSeq = 1;
+let outboxCursorGeneration = "";
+let outboxCursorHighWater = 0;
+const relayEventHub = new RabiLinkEventHub();
+
+function scheduleLeaseAvailability(eventType, appId, targetDeviceId, leaseUntil, data = {}) {
+  const delayMs = Math.max(0, Number(leaseUntil || 0) - Date.now()) + 10;
+  const timer = setTimeout(() => {
+    relayEventHub.publish(eventType, { appId, targetDeviceId, data: { ...data, leaseExpired: true } });
+  }, Math.min(2_147_000_000, delayMs));
+  timer.unref();
+}
 /** @type {Array<{ resolve: (value: RelayTask) => void; taskId: string; timer: NodeJS.Timeout }>} */
 const waiters = [];
-/** @type {Array<{ resolve: () => void; timer: NodeJS.Timeout }>} */
-const workerTaskWaiters = [];
-/** @type {Array<{ resolve: () => void; timer: NodeJS.Timeout }>} */
-const outboxWaiters = [];
 /** @type {Map<string, RelayWebguiRequest>} */
 const webguiRequests = new Map();
-/** @type {Array<{ resolve: () => void; timer: NodeJS.Timeout }>} */
-const webguiRequestWaiters = [];
 const speechRequests = new RelayProxyRequestQueue({
   name: "Speech",
   idPrefix: "rabilink-speech",
@@ -121,6 +133,7 @@ const manageSessions = new Map();
 /** @type {Map<string, Set<http.ServerResponse>>} */
 const accountLogStreams = new Map();
 loadRelayRuntimeState();
+ensureOutboxCursorState();
 
 function replaceMapFromArray(map, items, idKey = "id") {
   map.clear();
@@ -163,6 +176,7 @@ function saveRelayRuntimeState() {
     fs.mkdirSync(path.dirname(runtimeStatePath), { recursive: true });
     fs.writeFileSync(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
     fs.renameSync(tmpPath, runtimeStatePath);
+    ensureOutboxCursorState();
   } catch (error) {
     try {
       if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
@@ -224,6 +238,14 @@ function saveRelayRuntimeState() {
  * @property {string[]} [targetDeviceKinds]
  * @property {string[]} [presentation]
  * @property {"quiet" | "normal" | "urgent"} [priority]
+ * @property {Array<{
+ *   deviceId: string;
+ *   deviceKind: string;
+ *   deliveredAt?: number;
+ *   playedAt?: number;
+ *   playbackFailedAt?: number;
+ *   playbackFailure?: string;
+ * }>} [receipts]
  */
 
 /**
@@ -234,6 +256,7 @@ function saveRelayRuntimeState() {
  * @property {string} appId
  * @property {string} firstSeenAt
  * @property {string} lastSeenAt
+ * @property {string} [lastDisconnectedAt]
  */
 
 /**
@@ -278,6 +301,55 @@ function clamp(value, min, max) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function writeOutboxCursorState(generation, highWater) {
+  const tmpPath = `${outboxCursorStatePath}.${process.pid}.tmp`;
+  const state = {
+    version: 1,
+    generation,
+    highWater,
+    updatedAt: new Date().toISOString()
+  };
+  try {
+    fs.writeFileSync(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    fs.renameSync(tmpPath, outboxCursorStatePath);
+  } catch (error) {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // Ignore cleanup errors for a best-effort cursor continuity file.
+    }
+    console.warn(`Failed to write RabiLink outbox cursor state: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function ensureOutboxCursorState() {
+  const runtimeHighWater = Math.max(0, nextOutboxMessageSeq - 1);
+  let storedGeneration = "";
+  let storedHighWater = 0;
+  try {
+    if (fs.existsSync(outboxCursorStatePath)) {
+      const parsed = JSON.parse(fs.readFileSync(outboxCursorStatePath, "utf8"));
+      storedGeneration = stringValue(parsed?.generation);
+      storedHighWater = Math.max(0, Number(parsed?.highWater) || 0);
+    }
+  } catch (error) {
+    console.warn(`Failed to read RabiLink outbox cursor state: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const runtimeRolledBack = Boolean(storedGeneration) && runtimeHighWater < storedHighWater;
+  const generation = !storedGeneration || runtimeRolledBack ? randomUUID() : storedGeneration;
+  const highWater = runtimeRolledBack ? runtimeHighWater : Math.max(storedHighWater, runtimeHighWater);
+  const changed = generation !== storedGeneration || highWater !== storedHighWater;
+  outboxCursorGeneration = generation;
+  outboxCursorHighWater = highWater;
+  if (changed) writeOutboxCursorState(generation, highWater);
+}
+
+function nowIsoAfter(value) {
+  const previous = Date.parse(String(value || ""));
+  return new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
 }
 
 function sanitizeSharedEventData(value, depth = 0, key = "") {
@@ -421,6 +493,7 @@ function handleAccountLogStream(req, res, account) {
   }
   streams.add(res);
 
+  // event-driven-allow: SSE protocol keepalive; no business state is queried.
   const keepAlive = setInterval(() => {
     res.write(": ping\n\n");
   }, 25000);
@@ -562,6 +635,34 @@ function sanitizeRabiLinkId(value, fallback) {
   return raw.replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "") || fallback;
 }
 
+function normalizeWorkerPeerUrls(value) {
+  let items = [];
+  if (Array.isArray(value)) items = value;
+  else if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      items = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      items = value.split(",");
+    }
+  }
+  const result = [];
+  for (const item of items) {
+    try {
+      const url = new URL(String(item || "").trim());
+      if (!/^https?:$/.test(url.protocol) || url.username || url.password) continue;
+      url.pathname = "";
+      url.search = "";
+      url.hash = "";
+      const normalized = url.toString().replace(/\/$/, "");
+      if (normalized.length <= 240 && !result.includes(normalized)) result.push(normalized);
+    } catch {
+      // Ignore malformed peer advertisements instead of rejecting worker presence.
+    }
+  }
+  return result.slice(0, 8);
+}
+
 function normalizeStoredWorker(worker) {
   const id = String(worker?.id || "").trim();
   if (!id) return null;
@@ -572,8 +673,10 @@ function normalizeStoredWorker(worker) {
     name: String(worker?.name || id).trim() || id,
     appId: String(worker?.appId || "").trim(),
     capabilities: normalizeWorkerCapabilities(worker?.capabilities),
+    peerUrls: normalizeWorkerPeerUrls(worker?.peerUrls),
     firstSeenAt: String(worker?.firstSeenAt || time),
-    lastSeenAt: String(worker?.lastSeenAt || time)
+    lastSeenAt: String(worker?.lastSeenAt || time),
+    lastDisconnectedAt: String(worker?.lastDisconnectedAt || "")
   };
 }
 
@@ -636,8 +739,16 @@ function findEnabledAppByToken(value) {
 }
 
 function workerOnline(worker) {
+  const identity = {
+    appId: stringValue(worker?.appId),
+    deviceId: stringValue(worker?.id),
+    deviceGuid: stringValue(worker?.guid)
+  };
+  if (relayEventHub.hasSubscriber(identity)) return true;
   const lastSeenMs = Date.parse(worker?.lastSeenAt || "");
   if (!Number.isFinite(lastSeenMs)) return false;
+  const lastDisconnectedMs = Date.parse(worker?.lastDisconnectedAt || "");
+  if (Number.isFinite(lastDisconnectedMs) && lastDisconnectedMs >= lastSeenMs) return false;
   return Date.now() - lastSeenMs <= Math.max(workerTaskWaitMs * 2, 120000);
 }
 
@@ -692,8 +803,10 @@ function publicWorker(worker, app) {
     appName: app?.name || "",
     appTokenPreview,
     capabilities: normalizeWorkerCapabilities(worker.capabilities),
+    peerUrls: normalizeWorkerPeerUrls(worker.peerUrls),
     firstSeenAt: worker.firstSeenAt || "",
     lastSeenAt: worker.lastSeenAt || "",
+    lastDisconnectedAt: worker.lastDisconnectedAt || "",
     online: workerOnline(worker)
   };
 }
@@ -725,23 +838,34 @@ function normalizeWorkerCapabilities(value) {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabilities = null) {
+function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabilities = null, peerUrls = null) {
   const id = sanitizeRabiLinkId(deviceId || deviceName, "rabi-pc");
   if (!id) return null;
   const guid = stringValue(deviceGuid);
   const store = readAppStore();
-  const time = nowIso();
+  let time = nowIso();
   const name = stringValue(deviceName || id) || id;
   let worker = store.workers.find((item) => item.appId === appId && (item.id === id || (guid && item.guid === guid)));
   const app = store.apps.find((item) => item.id === appId);
+  let peerChangeReason = "";
   if (worker) {
     const wasOnline = workerOnline(worker);
+    const previousPeerShape = JSON.stringify({
+      id: worker.id || "",
+      guid: worker.guid || "",
+      name: worker.name || "",
+      capabilities: normalizeWorkerCapabilities(worker.capabilities),
+      peerUrls: normalizeWorkerPeerUrls(worker.peerUrls)
+    });
+    time = nowIsoAfter(worker.lastDisconnectedAt);
     worker.id = worker.id || id;
     worker.guid = guid || worker.guid || "";
     worker.name = name;
     if (capabilities !== null) worker.capabilities = normalizeWorkerCapabilities(capabilities);
+    if (peerUrls !== null) worker.peerUrls = normalizeWorkerPeerUrls(peerUrls);
     worker.lastSeenAt = time;
     if (!wasOnline) {
+      peerChangeReason = "reconnected";
       writeAccountLogForApp(app, "pc_reconnected", {
         title: "PC Rabi 重新连接",
         detail: `${name} 已重新上线。`,
@@ -749,6 +873,14 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
         workerName: worker.name,
         status: "online"
       });
+    } else if (previousPeerShape !== JSON.stringify({
+      id: worker.id || "",
+      guid: worker.guid || "",
+      name: worker.name || "",
+      capabilities: normalizeWorkerCapabilities(worker.capabilities),
+      peerUrls: normalizeWorkerPeerUrls(worker.peerUrls)
+    })) {
+      peerChangeReason = "updated";
     }
   } else {
     worker = {
@@ -757,10 +889,12 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
       name,
       appId,
       capabilities: normalizeWorkerCapabilities(capabilities),
+      peerUrls: normalizeWorkerPeerUrls(peerUrls),
       firstSeenAt: time,
       lastSeenAt: time
     };
     store.workers.push(worker);
+    peerChangeReason = "connected";
     writeAccountLogForApp(app, "pc_connected", {
       title: "PC Rabi 已连接",
       detail: `${name} 第一次使用这个应用 token 连接服务器。`,
@@ -770,7 +904,48 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
     });
   }
   writeAppStore(store);
+  if (peerChangeReason) {
+    relayEventHub.publish("persona_sync_peer_changed", {
+      appId,
+      data: {
+        peerId: worker.id,
+        peerGuid: worker.guid || "",
+        state: "online",
+        reason: peerChangeReason
+      }
+    });
+  }
   return worker;
+}
+
+function recordWorkerDisconnected(appId, deviceId, deviceGuid = "") {
+  const id = sanitizeRabiLinkId(deviceId, "");
+  const guid = stringValue(deviceGuid);
+  if (!appId || (!id && !guid)) return;
+  if (relayEventHub.hasSubscriber({ appId, deviceId: id, deviceGuid: guid })) return;
+  const store = readAppStore();
+  const worker = store.workers.find(item => item.appId === appId
+    && ((id && item.id === id) || (guid && item.guid === guid)));
+  if (!worker) return;
+  worker.lastDisconnectedAt = nowIsoAfter(worker.lastSeenAt);
+  writeAppStore(store);
+  const app = store.apps.find(item => item.id === appId);
+  writeAccountLogForApp(app, "pc_disconnected", {
+    title: "PC Rabi 事件连接已断开",
+    detail: `${worker.name || worker.id} 已离线。`,
+    workerId: worker.id,
+    workerName: worker.name,
+    status: "offline"
+  });
+  relayEventHub.publish("persona_sync_peer_changed", {
+    appId,
+    data: {
+      peerId: worker.id,
+      peerGuid: worker.guid || "",
+      state: "offline",
+      reason: "disconnected"
+    }
+  });
 }
 
 function createAccount(body) {
@@ -1390,8 +1565,16 @@ function taskForResponse(task) {
     type: stringValue(input.type || "rabilink"),
     deliveryMode: stringValue(input.deliveryMode),
     reviewRequested: input.reviewRequested === true,
+    configurationRequested: input.configurationRequested === true,
+    explicitPreference: input.explicitPreference === true,
+    preferenceKind: stringValue(input.preferenceKind),
+    preferenceValue: stringValue(input.preferenceValue),
+    proactivityPreference: stringValue(input.proactivityPreference),
+    channelType: stringValue(input.channelType),
+    sender: stringValue(input.sender),
     clientMessageId: stringValue(input.clientMessageId || input.segmentId),
     sessionId: stringValue(input.sessionId || input.conversationId),
+    routeProfileId: stringValue(input.routeProfileId),
     sequence: Number.isFinite(Number(input.sequence)) ? Number(input.sequence) : 0,
     capturedAt: Number.isFinite(Number(input.capturedAt || input.createdAt)) ? Number(input.capturedAt || input.createdAt) : 0,
     sourceDeviceId: stringValue(input.sourceDeviceId || input.deviceId),
@@ -1416,7 +1599,9 @@ function mediaPath(appId, mediaId, fileName) {
 }
 
 function cleanupExpiredDeviceMedia() {
-  const cutoff = Date.now() - deviceMediaTtlMs;
+  const now = Date.now();
+  const cutoff = now - deviceMediaTtlMs;
+  let nextExpiry = 0;
   for (const appEntry of fs.readdirSync(deviceMediaDir, { withFileTypes: true })) {
     if (!appEntry.isDirectory()) continue;
     const appDirectory = path.join(deviceMediaDir, appEntry.name);
@@ -1424,7 +1609,12 @@ function cleanupExpiredDeviceMedia() {
       if (!mediaEntry.isFile()) continue;
       const target = path.join(appDirectory, mediaEntry.name);
       try {
-        if (fs.statSync(target).mtimeMs < cutoff) fs.unlinkSync(target);
+        const modifiedAt = fs.statSync(target).mtimeMs;
+        if (modifiedAt <= cutoff) fs.unlinkSync(target);
+        else {
+          const expiresAt = modifiedAt + deviceMediaTtlMs;
+          if (!nextExpiry || expiresAt < nextExpiry) nextExpiry = expiresAt;
+        }
       } catch (error) {
         console.warn(`Unable to expire RabiLink media ${mediaEntry.name}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -1435,6 +1625,22 @@ function cleanupExpiredDeviceMedia() {
       // A concurrent upload may have populated the directory after the empty check.
     }
   }
+  return nextExpiry;
+}
+
+function scheduleDeviceMediaCleanup(expiresAt = 0) {
+  const deadline = Number(expiresAt || 0);
+  if (!Number.isFinite(deadline) || deadline <= 0) return;
+  if (deviceMediaCleanupTimer && deviceMediaCleanupDeadline <= deadline) return;
+  if (deviceMediaCleanupTimer) clearTimeout(deviceMediaCleanupTimer);
+  deviceMediaCleanupDeadline = deadline;
+  const delayMs = Math.max(1, Math.min(2_147_000_000, deadline - Date.now() + 10));
+  deviceMediaCleanupTimer = setTimeout(() => {
+    deviceMediaCleanupTimer = null;
+    deviceMediaCleanupDeadline = 0;
+    scheduleDeviceMediaCleanup(cleanupExpiredDeviceMedia());
+  }, delayMs);
+  deviceMediaCleanupTimer.unref();
 }
 
 async function handleDeviceMediaUpload(req, url, res) {
@@ -1453,6 +1659,7 @@ async function handleDeviceMediaUpload(req, url, res) {
   const target = mediaPath(auth.app.id, mediaId, fileName);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, raw);
+  scheduleDeviceMediaCleanup(fs.statSync(target).mtimeMs + deviceMediaTtlMs);
   return sendJson(res, 201, {
     code: 0,
     ok: true,
@@ -1531,7 +1738,11 @@ function createTask(raw, req, auth = { app: null }) {
     status: task.status,
     text: task.text
   });
-  notifyWorkerTaskWaiters();
+  relayEventHub.publish("task_available", {
+    appId: task.appId,
+    targetDeviceId: task.targetDeviceId,
+    data: { taskId: task.id }
+  });
   return task;
 }
 
@@ -1614,6 +1825,7 @@ function claimWebguiRequests(limit, deviceId, appId = "", deviceGuid = "") {
     request.leaseUntil = now + leaseMs;
     request.attempts += 1;
     result.push(webguiRequestForResponse(request));
+    scheduleLeaseAvailability("webgui_available", request.appId, request.targetDeviceId, request.leaseUntil, { requestId: request.id });
     writeEvent("webgui_request_leased", webguiRequestForResponse(request));
     const app = readAppStore().apps.find((item) => item.id === request.appId);
     writeAccountLogForApp(app, "webgui_request_leased", {
@@ -1627,35 +1839,6 @@ function claimWebguiRequests(limit, deviceId, appId = "", deviceGuid = "") {
     });
   }
   return result;
-}
-
-function notifyWebguiRequestWaiters() {
-  for (let index = webguiRequestWaiters.length - 1; index >= 0; index -= 1) {
-    const waiter = webguiRequestWaiters[index];
-    clearTimeout(waiter.timer);
-    webguiRequestWaiters.splice(index, 1);
-    waiter.resolve();
-  }
-}
-
-function waitForClaimableWebguiRequest(timeoutMs, appId = "", deviceId = "", deviceGuid = "") {
-  if (hasClaimableWebguiRequests(appId, deviceId, deviceGuid) || timeoutMs <= 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      const index = webguiRequestWaiters.findIndex((item) => item.resolve === resolve);
-      if (index >= 0) webguiRequestWaiters.splice(index, 1);
-      resolve();
-    }, timeoutMs);
-    webguiRequestWaiters.push({ resolve, timer });
-    // Register first and then re-check so a request created between the initial
-    // check and waiter registration cannot be stranded until the long-poll timeout.
-    if (hasClaimableWebguiRequests(appId, deviceId, deviceGuid)) {
-      const index = webguiRequestWaiters.findIndex((item) => item.resolve === resolve);
-      if (index >= 0) webguiRequestWaiters.splice(index, 1);
-      clearTimeout(timer);
-      resolve();
-    }
-  });
 }
 
 function finishWebguiWaiters(request) {
@@ -1766,7 +1949,11 @@ function createWebguiRequest(req, target, localPath, rawBody) {
     method: request.method,
     path: localPath
   });
-  notifyWebguiRequestWaiters();
+  relayEventHub.publish("webgui_available", {
+    appId: request.appId,
+    targetDeviceId: request.targetDeviceId,
+    data: { requestId: request.id }
+  });
   return request;
 }
 
@@ -1805,7 +1992,11 @@ function createMobileWebguiRequest(app, worker, method, localPath, body = null) 
     method: request.method,
     path: localPath
   });
-  notifyWebguiRequestWaiters();
+  relayEventHub.publish("webgui_available", {
+    appId: request.appId,
+    targetDeviceId: request.targetDeviceId,
+    data: { requestId: request.id }
+  });
   return request;
 }
 
@@ -1853,6 +2044,11 @@ function createSpeechRequest(req, auth, worker, localPath, rawBody) {
     status: request.status,
     method: request.method,
     path: request.path
+  });
+  relayEventHub.publish("speech_available", {
+    appId: request.appId,
+    targetDeviceId: request.targetDeviceId,
+    data: { requestId: request.id }
   });
   return request;
 }
@@ -1950,15 +2146,17 @@ function cleanupTasks() {
 }
 
 function cleanupOutboxMessages(now = Date.now()) {
-  const firstLiveIndex = outboxMessages.findIndex((message) => message.createdAt + outboxTtlMs > now);
-  if (firstLiveIndex > 0) {
-    outboxMessages.splice(0, firstLiveIndex);
-    return true;
-  } else if (firstLiveIndex < 0 && outboxMessages.length > 0) {
-    outboxMessages.splice(0, outboxMessages.length);
-    return true;
-  }
-  return false;
+  const retained = outboxMessages.filter((message) => {
+    if (Number(message?.createdAt || 0) + outboxTtlMs > now) return true;
+    const explicitTargets = persistedPortableStringList(message?.targetDeviceIds);
+    if (explicitTargets.length === 0) return false;
+    const receipts = Array.isArray(message?.receipts) ? message.receipts : [];
+    return explicitTargets.some((deviceId) => !receipts.some((receipt) =>
+      stringValue(receipt?.deviceId) === deviceId && Number(receipt?.deliveredAt) > 0));
+  });
+  if (retained.length === outboxMessages.length) return false;
+  outboxMessages.splice(0, outboxMessages.length, ...retained);
+  return true;
 }
 
 function canWorkerClaimTask(task, appId = "", deviceId = "", deviceGuid = "") {
@@ -1987,6 +2185,7 @@ function claimTasks(limit, deviceId, appId = "", deviceGuid = "") {
     task.attempts += 1;
     task.source = { ...task.source, leasedBy: deviceId || "" };
     result.push(taskForResponse(task));
+    scheduleLeaseAvailability("task_available", task.appId, task.targetDeviceId, task.leaseUntil, { taskId: task.id });
     changed = true;
     writeEvent("task_leased", taskForResponse(task));
     const app = readAppStore().apps.find((item) => item.id === task.appId);
@@ -2012,41 +2211,6 @@ function hasClaimableTasks(appId = "", deviceId = "", deviceGuid = "") {
     if (task.status === "leased" && task.leaseUntil <= now) return true;
   }
   return false;
-}
-
-function notifyWorkerTaskWaiters() {
-  for (let index = workerTaskWaiters.length - 1; index >= 0; index -= 1) {
-    const waiter = workerTaskWaiters[index];
-    clearTimeout(waiter.timer);
-    workerTaskWaiters.splice(index, 1);
-    waiter.resolve();
-  }
-}
-
-function notifyOutboxWaiters() {
-  for (let index = outboxWaiters.length - 1; index >= 0; index -= 1) {
-    const waiter = outboxWaiters[index];
-    clearTimeout(waiter.timer);
-    outboxWaiters.splice(index, 1);
-    waiter.resolve();
-  }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForSharedRuntimeCondition(timeoutMs, predicate) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
-  }
-}
-
-async function waitForClaimableTask(timeoutMs, appId = "", deviceId = "", deviceGuid = "") {
-  if (hasClaimableTasks(appId, deviceId, deviceGuid) || timeoutMs <= 0) return Promise.resolve();
-  await waitForSharedRuntimeCondition(timeoutMs, () => hasClaimableTasks(appId, deviceId, deviceGuid));
 }
 
 function findTaskOrThrow(taskId) {
@@ -2131,12 +2295,50 @@ function appendOutboxMessages(task, messages) {
     });
   }
   saveRelayRuntimeState();
-  notifyOutboxWaiters();
+  relayEventHub.publish("outbox_available", {
+    appId: task.appId || "",
+    data: { cursor: currentOutboxCursor() }
+  });
+}
+
+function outboxCursorToken(sequence = nextOutboxMessageSeq - 1) {
+  ensureOutboxCursorState();
+  const safeSequence = Math.max(0, Number.isFinite(Number(sequence)) ? Math.floor(Number(sequence)) : 0);
+  return `oc1.${outboxCursorGeneration}.${safeSequence}`;
+}
+
+function decodeOutboxCursor(after) {
+  loadRelayRuntimeState();
+  ensureOutboxCursorState();
+  const requested = stringValue(after);
+  if (!requested) return { sequence: 0, reset: false, reason: "" };
+
+  const opaque = requested.match(/^oc1\.([0-9a-f-]{36})\.(\d+)$/i);
+  if (opaque) {
+    if (opaque[1] !== outboxCursorGeneration) {
+      return { sequence: 0, reset: true, reason: "relay_generation_changed" };
+    }
+    const sequence = Number(opaque[2]);
+    return Number.isSafeInteger(sequence)
+      ? { sequence, reset: false, reason: "" }
+      : { sequence: 0, reset: true, reason: "invalid_cursor" };
+  }
+
+  const legacy = requested.match(/^out-(\d+)$/);
+  if (legacy) {
+    const sequence = Number(legacy[1]);
+    const maximumIssued = Math.max(outboxCursorHighWater, nextOutboxMessageSeq - 1);
+    if (!Number.isSafeInteger(sequence)) return { sequence: 0, reset: true, reason: "invalid_cursor" };
+    if (sequence > maximumIssued) return { sequence: 0, reset: true, reason: "cursor_ahead_of_relay_state" };
+    return { sequence, reset: false, reason: "" };
+  }
+
+  return { sequence: 0, reset: true, reason: "invalid_cursor" };
 }
 
 function currentOutboxCursor() {
   loadRelayRuntimeState();
-  return outboxMessages[outboxMessages.length - 1]?.id || "";
+  return outboxCursorToken(nextOutboxMessageSeq - 1);
 }
 
 function messageForResponse(message) {
@@ -2156,12 +2358,23 @@ function outboxMessageForResponse(message) {
     appId: message.appId || "",
     taskId: message.taskId,
     taskMessageId: message.taskMessageId,
+    deliveryId: stringValue(message.deliveryId),
     createdAt: message.createdAt,
     text: message.text,
     final: message.final,
     status: message.status,
     proactive: message.proactive === true,
     source: stringValue(message.source),
+    receipts: Array.isArray(message.receipts)
+      ? message.receipts.map((receipt) => ({
+          deviceId: stringValue(receipt?.deviceId),
+          deviceKind: stringValue(receipt?.deviceKind),
+          ...(Number(receipt?.deliveredAt) > 0 ? { deliveredAt: Number(receipt.deliveredAt) } : {}),
+          ...(Number(receipt?.playedAt) > 0 ? { playedAt: Number(receipt.playedAt) } : {}),
+          ...(Number(receipt?.playbackFailedAt) > 0 ? { playbackFailedAt: Number(receipt.playbackFailedAt) } : {}),
+          ...(stringValue(receipt?.playbackFailure) ? { playbackFailure: stringValue(receipt.playbackFailure).slice(0, 240) } : {})
+        }))
+      : [],
     ...portableEnvelopeForResponse(message)
   };
 }
@@ -2175,47 +2388,29 @@ function hasOpenTasks(appId = "") {
   return false;
 }
 
-function hasOutboxMessagesAfter(after, appId = "") {
-  loadRelayRuntimeState();
-  const afterText = stringValue(after);
-  const afterSeq = Number(afterText.replace(/^out-/, ""));
-  return outboxMessages.some((message) => {
-    if (appId && message.appId !== appId) return false;
-    if (!afterText) return true;
-    if (Number.isFinite(afterSeq) && afterSeq > 0) return message.seq > afterSeq;
-    return message.id > afterText;
-  });
-}
-
 function outboxMessagesAfter(after, appId = "", identity = { deviceId: "", deviceKind: "" }) {
-  loadRelayRuntimeState();
-  const afterText = stringValue(after);
-  const afterSeq = Number(afterText.replace(/^out-/, ""));
+  const cursor = decodeOutboxCursor(after);
   return outboxMessages.filter((message) => {
     if (appId && message.appId !== appId) return false;
-    const isAfter = !afterText
-      || (Number.isFinite(afterSeq) && afterSeq > 0 ? message.seq > afterSeq : message.id > afterText);
-    return isAfter && messageTargetsPortableDevice(message, identity);
+    return Number(message.seq) > cursor.sequence && messageTargetsPortableDevice(message, identity);
   });
 }
 
-function scannedOutboxMessagesAfter(after, appId = "") {
-  loadRelayRuntimeState();
-  const afterText = stringValue(after);
-  const afterSeq = Number(afterText.replace(/^out-/, ""));
+function scannedOutboxMessagesAfter(sequence, appId = "") {
   return outboxMessages.filter((message) => {
     if (appId && message.appId !== appId) return false;
-    if (!afterText) return true;
-    if (Number.isFinite(afterSeq) && afterSeq > 0) return message.seq > afterSeq;
-    return message.id > afterText;
+    return Number(message.seq) > sequence;
   });
 }
 
 function outboxMessagesResponse(after, appId = "", continuous = false, identity = { deviceId: "", deviceKind: "" }) {
   cleanupTasks();
-  const scannedMessages = scannedOutboxMessagesAfter(after, appId);
+  const cursorState = decodeOutboxCursor(after);
+  const scannedMessages = scannedOutboxMessagesAfter(cursorState.sequence, appId);
   const messages = scannedMessages.filter((message) => messageTargetsPortableDevice(message, identity));
   const last = scannedMessages[scannedMessages.length - 1];
+  const nextSequence = last ? Number(last.seq) : cursorState.sequence;
+  const nextCursor = outboxCursorToken(nextSequence);
   const openTasks = hasOpenTasks(appId);
   const text = messages.map((message) => message.text).join("\n");
   const shouldContinue = continuous || openTasks;
@@ -2225,8 +2420,10 @@ function outboxMessagesResponse(after, appId = "", continuous = false, identity 
     status: messages.length > 0 ? "messages" : shouldContinue ? "idle" : "done",
     done: !shouldContinue,
     shouldContinue,
-    cursor: last?.id || stringValue(after),
-    nextCursor: last?.id || stringValue(after),
+    cursor: nextCursor,
+    nextCursor,
+    cursorReset: cursorState.reset,
+    cursorResetReason: cursorState.reason,
     messages: messages.map(outboxMessageForResponse),
     text,
     answer: text,
@@ -2237,23 +2434,8 @@ function outboxMessagesResponse(after, appId = "", continuous = false, identity 
 }
 
 function markOutboxTimeout(response, waitMs, continuous = false) {
-  if (response.messages.length > 0 || !response.shouldContinue || waitMs <= 0) {
+  if (response.messages.length > 0 || !response.shouldContinue || waitMs <= 0 || continuous) {
     return response;
-  }
-  if (continuous) {
-    return {
-      ...response,
-      code: 0,
-      ok: true,
-      status: "idle",
-      done: false,
-      shouldContinue: true,
-      text: "",
-      answer: "",
-      reply: "",
-      content: "",
-      error: ""
-    };
   }
   const text = `RabiLink 下行消息等待超时：${waitMs}ms 内没有收到电脑端 Rabi/Codex 回复。`;
   return {
@@ -2271,9 +2453,87 @@ function markOutboxTimeout(response, waitMs, continuous = false) {
   };
 }
 
-async function waitForOutboxMessagesAfter(after, timeoutMs, appId = "") {
-  if (hasOutboxMessagesAfter(after, appId) || timeoutMs <= 0) return;
-  await waitForSharedRuntimeCondition(timeoutMs, () => hasOutboxMessagesAfter(after, appId));
+async function waitForOutboxResponse(req, after, timeoutMs, appId, continuous, identity) {
+  let cursor = stringValue(after);
+  let response = outboxMessagesResponse(cursor, appId, continuous, identity);
+  if (response.messages.length > 0 || !response.shouldContinue || timeoutMs <= 0) return response;
+
+  const deadline = Date.now() + timeoutMs;
+  let closed = false;
+  let currentWaiter = null;
+  const close = () => {
+    closed = true;
+    currentWaiter?.cancel();
+  };
+  req.once("close", close);
+  req.once("aborted", close);
+  try {
+    while (!closed && response.messages.length === 0 && response.shouldContinue) {
+      const remainingMs = Math.max(0, deadline - Date.now());
+      if (remainingMs <= 0) break;
+      currentWaiter = relayEventHub.waitFor("outbox_available", { appId }, remainingMs);
+
+      // Register first, then read again so an append between the initial read and
+      // event subscription cannot be stranded until the request deadline.
+      const recovery = outboxMessagesResponse(cursor, appId, continuous, identity);
+      if (recovery.messages.length > 0
+        || !recovery.shouldContinue
+        || stringValue(recovery.nextCursor) !== cursor) {
+        currentWaiter.cancel();
+        currentWaiter = null;
+        response = recovery;
+      } else {
+        await currentWaiter.promise;
+        currentWaiter = null;
+        response = outboxMessagesResponse(cursor, appId, continuous, identity);
+      }
+      cursor = stringValue(response.nextCursor || cursor);
+    }
+  } finally {
+    currentWaiter?.cancel();
+    req.off("close", close);
+    req.off("aborted", close);
+  }
+  return markOutboxTimeout(response, timeoutMs, continuous);
+}
+
+async function claimAfterRelayEvent(req, eventType, identity, timeoutMs, claim) {
+  let claimed = claim();
+  if (claimed.length > 0 || timeoutMs <= 0) return claimed;
+
+  const deadline = Date.now() + timeoutMs;
+  let closed = false;
+  let currentWaiter = null;
+  const close = () => {
+    closed = true;
+    currentWaiter?.cancel();
+  };
+  req.once("close", close);
+  req.once("aborted", close);
+  try {
+    while (!closed && claimed.length === 0) {
+      const remainingMs = Math.max(0, deadline - Date.now());
+      if (remainingMs <= 0) break;
+      currentWaiter = relayEventHub.waitFor(eventType, identity, remainingMs);
+
+      // Subscribe before the recovery claim so a request published between the
+      // first empty claim and waiter registration cannot be lost.
+      claimed = claim();
+      if (claimed.length > 0) {
+        currentWaiter.cancel();
+        currentWaiter = null;
+        break;
+      }
+      await currentWaiter.promise;
+      currentWaiter = null;
+      claimed = claim();
+    }
+  } finally {
+    currentWaiter?.cancel();
+    req.off("close", close);
+    req.off("aborted", close);
+  }
+  return claimed;
 }
 
 function taskMessagesResponse(task, after) {
@@ -2305,23 +2565,8 @@ function taskMessagesResponse(task, after) {
   };
 }
 
-function hasMessagesAfter(task, after) {
-  const afterText = stringValue(after);
-  const afterSeq = Number(afterText.replace(/^msg-/, ""));
-  return task.messages.some((message) => {
-    if (!afterText) return true;
-    if (Number.isFinite(afterSeq) && afterSeq > 0) return message.seq > afterSeq;
-    return message.id > afterText;
-  });
-}
-
 function isTerminalTask(task) {
   return task.status === "done" || task.status === "failed" || task.status === "expired";
-}
-
-async function waitForMessagesAfter(task, after, timeoutMs) {
-  if (hasMessagesAfter(task, after) || isTerminalTask(task) || timeoutMs <= 0) return task;
-  return await waitForTask(task, timeoutMs);
 }
 
 function finishTask(taskId, body) {
@@ -2339,7 +2584,6 @@ function finishTask(taskId, body) {
   task.error = ok ? "" : stringValue(body?.error || body?.reason || "RabiLink worker reported failure.");
   saveRelayRuntimeState();
   finishWaiters(task);
-  notifyOutboxWaiters();
   writeEvent(ok ? "task_done" : "task_failed", taskForResponse(task));
   const app = readAppStore().apps.find((item) => item.id === task.appId);
   writeAccountLogForApp(app, ok ? "task_done" : "task_failed", {
@@ -2501,16 +2745,13 @@ async function handleRokidTaskMessages(req, url, res, body) {
   if (!canAccessTask(auth, task)) return sendJson(res, 403, { code: -1, ok: false, message: "Forbidden" });
   cleanupTasks();
   const after = url.searchParams.get("after") || url.searchParams.get("cursor") || "";
-  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || messageWaitMs), 0, 60000);
-  const finalTask = await waitForMessagesAfter(task, after, waitMs);
-  const response = taskMessagesResponse(finalTask, after);
-  writeAccountLogForApp(auth.app, "task_messages_polled", {
-    title: response.messages.length > 0 ? "插件拉取到任务回复" : "插件轮询任务回复",
-    detail: response.messages.length > 0 ? `拉取到 ${response.messages.length} 条任务回复。` : `暂无新任务回复，状态：${response.status}。`,
+  const response = taskMessagesResponse(task, after);
+  writeAccountLogForApp(auth.app, "task_messages_read", {
+    title: response.messages.length > 0 ? "插件读取到任务回复" : "插件读取任务状态",
+    detail: response.messages.length > 0 ? `读取到 ${response.messages.length} 条任务回复。` : `暂无新任务回复，状态：${response.status}。`,
     taskId: task.id,
     status: response.status,
     messageCount: response.messages.length,
-    waitMs,
     text: response.text || ""
   });
   sendJson(res, 200, response);
@@ -2534,19 +2775,138 @@ async function handleRokidOutboxMessages(req, url, res, body, options = {}) {
     ? url.searchParams.get("after") || url.searchParams.get("cursor") || ""
     : currentOutboxCursor();
   const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || outboxWaitMs), 0, 60000);
-  if (!tailOnly) await waitForOutboxMessagesAfter(after, waitMs, appId);
-  const response = markOutboxTimeout(outboxMessagesResponse(after, appId, continuous, identity), waitMs, continuous);
-  writeAccountLogForApp(auth.app, "outbox_messages_polled", {
-    title: response.messages.length > 0 ? "插件拉取到下行消息" : "插件轮询下行消息",
-    detail: response.messages.length > 0 ? `拉取到 ${response.messages.length} 条下行消息。` : `暂无新下行消息，状态：${response.status}。`,
+  const response = await waitForOutboxResponse(req, after, waitMs, appId, continuous, identity);
+  if (res.writableEnded || res.destroyed) return;
+  writeAccountLogForApp(auth.app, "outbox_messages_read", {
+    title: response.messages.length > 0 ? "设备读取到下行消息" : "设备读取下行快照",
+    detail: response.messages.length > 0 ? `读取到 ${response.messages.length} 条下行消息。` : `暂无新下行消息，状态：${response.status}。`,
     status: response.status,
     messageCount: response.messages.length,
-    waitMs,
     deviceId: identity.deviceId,
     deviceKind: identity.deviceKind,
     text: response.text || ""
   });
   sendJson(res, 200, response);
+}
+
+function handlePortableMessageReceipt(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const appId = auth.app?.id || "";
+  const deviceId = stringValue(body?.deviceId).slice(0, 160);
+  const deviceKind = portableDeviceKind(body?.deviceKind, "phone");
+  const messageId = stringValue(body?.messageId).slice(0, 160);
+  const deliveryId = stringValue(body?.deliveryId).slice(0, 200);
+  const state = stringValue(body?.state).toLowerCase();
+  if (!deviceId) throw portableRequestError("Portable message receipts require deviceId.");
+  if (!messageId && !deliveryId) throw portableRequestError("Portable message receipts require messageId or deliveryId.");
+  if (!new Set(["delivered", "played", "playback_failed"]).has(state)) {
+    throw portableRequestError("Portable message receipt state must be delivered, played, or playback_failed.");
+  }
+  loadRelayRuntimeState();
+  const message = outboxMessages.find((candidate) => candidate.appId === appId
+    && ((messageId && candidate.id === messageId) || (deliveryId && candidate.deliveryId === deliveryId)));
+  if (!message) return sendJson(res, 404, { code: -1, ok: false, message: "RabiLink outbound message not found." });
+  if (!messageTargetsPortableDevice(message, { deviceId, deviceKind })) {
+    return sendJson(res, 403, { code: -1, ok: false, message: "Receipt device is not a target of this outbound message." });
+  }
+  const now = Date.now();
+  const receipts = Array.isArray(message.receipts) ? message.receipts : [];
+  let receipt = receipts.find((candidate) => stringValue(candidate?.deviceId) === deviceId
+    && stringValue(candidate?.deviceKind) === deviceKind);
+  if (!receipt) {
+    receipt = { deviceId, deviceKind };
+    receipts.push(receipt);
+  }
+  if (state === "delivered") {
+    if (!(Number(receipt.deliveredAt) > 0)) receipt.deliveredAt = now;
+  } else if (state === "played") {
+    if (!(Number(receipt.deliveredAt) > 0)) receipt.deliveredAt = now;
+    if (!(Number(receipt.playedAt) > 0)) receipt.playedAt = now;
+    delete receipt.playbackFailure;
+    delete receipt.playbackFailedAt;
+  } else {
+    receipt.playbackFailedAt = now;
+    receipt.playbackFailure = stringValue(body?.failure || body?.detail || "playback failed").slice(0, 240);
+  }
+  message.receipts = receipts;
+  saveRelayRuntimeState();
+  const responseReceipt = outboxMessageForResponse(message).receipts.find((candidate) => candidate.deviceId === deviceId
+    && candidate.deviceKind === deviceKind);
+  relayEventHub.publish("outbox_receipt", {
+    appId,
+    data: {
+      messageId: message.id,
+      deliveryId: stringValue(message.deliveryId),
+      deviceId,
+      deviceKind,
+      state,
+      receiptAt: now
+    }
+  });
+  writeEvent("outbox_message_receipt", {
+    appId,
+    messageId: message.id,
+    deliveryId: stringValue(message.deliveryId),
+    deviceId,
+    deviceKind,
+    state
+  });
+  writeAccountLogForApp(auth.app, "outbox_message_receipt", {
+    title: state === "played" ? "设备已完成播放" : state === "delivered" ? "设备已接收下行消息" : "设备播放失败",
+    detail: `设备 ${deviceKind || "device"} 上报 ${state} 回执。`,
+    deviceId,
+    deviceKind,
+    status: state
+  });
+  sendJson(res, 200, {
+    code: 0,
+    ok: true,
+    messageId: message.id,
+    deliveryId: stringValue(message.deliveryId),
+    receipt: responseReceipt
+  });
+}
+
+function handleRelayEventStream(req, url, res, body = {}) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const appId = auth.app?.id || "";
+  const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
+  const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
+  const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || deviceId);
+  const deviceKind = stringValue(url.searchParams.get("deviceKind") || body?.deviceKind);
+  const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || body?.capabilities || "");
+  const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
+  if (deviceId || deviceGuid) {
+    recordWorkerSeen(appId, deviceId || deviceName || deviceGuid, deviceName || deviceId || deviceGuid, deviceGuid, capabilities, peerUrls);
+  }
+  const subscription = relayEventHub.subscribe(res, { appId, deviceId, deviceGuid, deviceKind });
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    subscription.close();
+    recordWorkerDisconnected(appId, deviceId, deviceGuid);
+  };
+  res.once("close", close);
+  req.once("aborted", close);
+
+  if (hasClaimableTasks(appId, deviceId, deviceGuid)) {
+    subscription.emit("task_available", { type: "task_available", recovery: true });
+  }
+  if (capabilities.includes("webgui") && hasClaimableWebguiRequests(appId, deviceId, deviceGuid)) {
+    subscription.emit("webgui_available", { type: "webgui_available", recovery: true });
+  }
+  const speechPredicate = (request) => canWorkerClaimSpeechRequest(request, appId, deviceId, deviceGuid);
+  if (capabilities.includes("speech") && speechRequests.hasClaimable(speechPredicate)) {
+    subscription.emit("speech_available", { type: "speech_available", recovery: true });
+  }
+  const identity = { deviceId, deviceKind };
+  const after = url.searchParams.get("after") || url.searchParams.get("cursor") || "";
+  if (outboxMessagesResponse(after, appId, true, identity).messages.length > 0) {
+    subscription.emit("outbox_available", { type: "outbox_available", recovery: true, cursor: currentOutboxCursor() });
+  }
 }
 
 function handleRokidInput(req, url, res, body) {
@@ -2832,7 +3192,10 @@ function handleWorkerMessageAppend(req, url, res, body) {
   }
   if (created.length) {
     saveRelayRuntimeState();
-    notifyOutboxWaiters();
+    relayEventHub.publish("outbox_available", {
+      appId: auth.app?.id || "",
+      data: { cursor: currentOutboxCursor() }
+    });
   }
   const proactiveCount = created.filter((message) => message.proactive).length;
   const replyCount = created.length - proactiveCount;
@@ -2859,7 +3222,7 @@ function handleWorkerMessageAppend(req, url, res, body) {
     status: "queued",
     deduplicated: deduplicatedCount > 0,
     deduplicatedCount,
-    nextCursor: accepted[accepted.length - 1].id,
+    nextCursor: outboxCursorToken(accepted[accepted.length - 1].seq),
     messages: accepted.map(outboxMessageForResponse)
   });
 }
@@ -2876,14 +3239,18 @@ async function handleWorkerTasks(req, url, res, body) {
     const declaredCapabilities = url.searchParams.has("capabilities")
       ? normalizeWorkerCapabilities(url.searchParams.get("capabilities"))
       : null;
-    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, declaredCapabilities);
+    const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, declaredCapabilities, peerUrls);
   }
-  let claimed = claimTasks(limit, deviceId, appId, deviceGuid);
-  if (claimed.length === 0) {
-    const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
-    await waitForClaimableTask(waitMs, appId, deviceId, deviceGuid);
-    claimed = claimTasks(limit, deviceId, appId, deviceGuid);
-  }
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
+  const claimed = await claimAfterRelayEvent(
+    req,
+    "task_available",
+    { appId, deviceId, deviceGuid },
+    waitMs,
+    () => claimTasks(limit, deviceId, appId, deviceGuid)
+  );
+  if (res.writableEnded || res.destroyed) return;
   sendJson(res, 200, {
     code: 0,
     ok: true,
@@ -2902,14 +3269,21 @@ async function handleWorkerWebguiRequests(req, url, res, body) {
   const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
   const appId = auth.app?.id || "";
   if (deviceId || deviceName) {
-    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid);
+    const capabilities = url.searchParams.has("capabilities")
+      ? normalizeWorkerCapabilities(url.searchParams.get("capabilities"))
+      : null;
+    const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls);
   }
-  let claimed = claimWebguiRequests(limit, deviceId, appId, deviceGuid);
-  if (claimed.length === 0) {
-    const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
-    await waitForClaimableWebguiRequest(waitMs, appId, deviceId, deviceGuid);
-    claimed = claimWebguiRequests(limit, deviceId, appId, deviceGuid);
-  }
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
+  const claimed = await claimAfterRelayEvent(
+    req,
+    "webgui_available",
+    { appId, deviceId, deviceGuid },
+    waitMs,
+    () => claimWebguiRequests(limit, deviceId, appId, deviceGuid)
+  );
+  if (res.writableEnded || res.destroyed) return;
   sendJson(res, 200, {
     code: 0,
     ok: true,
@@ -2930,17 +3304,22 @@ async function handleWorkerSpeechRequests(req, url, res, body) {
   if (deviceId || deviceName) {
     const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || "speech");
     if (!capabilities.includes("speech")) capabilities.push("speech");
-    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities);
+    const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
+    recordWorkerSeen(appId, deviceId || deviceName, deviceName || deviceId, deviceGuid, capabilities, peerUrls);
   }
   const predicate = (request) => canWorkerClaimSpeechRequest(request, appId, deviceId, deviceGuid);
-  let claimed = speechRequests.claim(limit, predicate);
-  if (claimed.length === 0) {
-    const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
-    await speechRequests.waitForClaimable(waitMs, predicate);
-    claimed = speechRequests.claim(limit, predicate);
-  }
+  const waitMs = clamp(Number(url.searchParams.get("waitMs") || url.searchParams.get("timeoutMs") || workerTaskWaitMs), 0, 60000);
+  const claimed = await claimAfterRelayEvent(
+    req,
+    "speech_available",
+    { appId, deviceId, deviceGuid },
+    waitMs,
+    () => speechRequests.claim(limit, predicate)
+  );
+  if (res.writableEnded || res.destroyed) return;
   for (const request of claimed) {
     writeEvent("speech_request_leased", speechRequestForLog(request));
+    scheduleLeaseAvailability("speech_available", request.appId, request.targetDeviceId, request.leaseUntil, { requestId: request.id });
   }
   sendJson(res, 200, {
     code: 0,
@@ -3686,7 +4065,7 @@ function adminPageHtml() {
           body: JSON.stringify({ serialNumber })
         });
         input.value = "";
-        flash("notice", "眼镜 SN 已绑定，眼镜将在下一次轮询时领取设备凭证。");
+        flash("notice", "眼镜 SN 已绑定，眼镜将在下一次连接事件中领取设备凭证。");
         await load();
       } catch (error) {
         flash("alert", error.message);
@@ -4260,6 +4639,91 @@ function mobileWorkersForApp(app) {
   return store.workers
     .filter((worker) => worker.appId === app.id)
     .map((worker) => publicWorker(worker, app));
+}
+
+function handlePeerDiscovery(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
+  const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
+  const peers = readAppStore().workers
+    .filter(worker => worker.appId === auth.app.id)
+    .filter(worker => !(deviceId && worker.id === deviceId) && !(deviceGuid && worker.guid === deviceGuid))
+    .map(worker => publicWorker(worker, auth.app))
+    .sort((left, right) => Number(right.online) - Number(left.online) || left.name.localeCompare(right.name));
+  return sendJson(res, 200, {
+    code: 0,
+    ok: true,
+    appId: auth.app.id,
+    peers
+  });
+}
+
+async function handlePersonaSyncProxy(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const targetDeviceId = stringValue(body?.targetDeviceId);
+  const worker = readAppStore().workers.find(item => item.appId === auth.app.id
+    && (item.id === targetDeviceId || item.guid === targetDeviceId));
+  if (!worker) return sendJson(res, 404, { code: -1, ok: false, message: `Persona sync peer not found: ${targetDeviceId}` });
+  if (!workerOnline(worker)) return sendJson(res, 503, { code: -1, ok: false, message: `Persona sync peer is offline: ${worker.name || worker.id}` });
+  if (!normalizeWorkerCapabilities(worker.capabilities).includes("persona-sync")) {
+    return sendJson(res, 409, { code: -1, ok: false, message: `Peer ${worker.name || worker.id} does not advertise persona-sync.` });
+  }
+  const method = stringValue(body?.method || "GET").toUpperCase();
+  if (!new Set(["GET", "POST"]).has(method)) return sendJson(res, 405, { code: -1, ok: false, message: "Persona sync proxy only supports GET and POST." });
+  const localPath = stringValue(body?.path);
+  if (!/^\/api\/persona-sync\/(?:manifest(?:\?|$)|files\/|merge$)/.test(localPath)) {
+    return sendJson(res, 400, { code: -1, ok: false, message: "Persona sync proxy path is not allowed." });
+  }
+  const bodyBase64 = stringValue(body?.bodyBase64);
+  if (bodyBase64 && Buffer.byteLength(bodyBase64, "base64") > 24 * 1024 * 1024) {
+    return sendJson(res, 413, { code: -1, ok: false, message: "Persona sync proxy body is too large." });
+  }
+  const now = Date.now();
+  const request = {
+    id: `rabilink-persona-sync-${now}-${randomUUID().slice(0, 8)}`,
+    status: "queued",
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: now + webguiRequestWaitMs,
+    leaseUntil: 0,
+    attempts: 0,
+    appId: auth.app.id,
+    appName: auth.app.name || "",
+    targetDeviceId: worker.id,
+    method,
+    path: localPath,
+    headers: {
+      accept: stringValue(body?.accept || "application/json"),
+      ...(method === "POST" ? { "content-type": "application/json; charset=utf-8" } : {})
+    },
+    bodyBase64,
+    response: null
+  };
+  webguiRequests.set(request.id, request);
+  writeEvent("persona_sync_proxy_created", webguiRequestForResponse(request));
+  relayEventHub.publish("webgui_available", {
+    appId: request.appId,
+    targetDeviceId: request.targetDeviceId,
+    data: { requestId: request.id }
+  });
+  const finished = await waitForWebguiRequest(request, webguiRequestWaitMs);
+  if (finished.status !== "done" || !finished.response) {
+    return sendJson(res, finished.status === "failed" ? 502 : 504, {
+      code: -1,
+      ok: false,
+      message: finished.error || "Persona sync peer did not return a response."
+    });
+  }
+  const headers = normalizeProxyResponseHeaders(finished.response.headers);
+  const responseBody = Buffer.from(finished.response.bodyBase64 || "", "base64");
+  res.writeHead(finished.response.statusCode || 200, {
+    ...headers,
+    "content-length": String(responseBody.byteLength),
+    "cache-control": "no-store"
+  });
+  res.end(responseBody);
 }
 
 function selectedMobileWorker(app, workers = mobileWorkersForApp(app)) {
@@ -4855,10 +5319,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && /^\/api\/rabilink\/devices\/media\/[^/]+$/.test(url.pathname)) {
       return handleDeviceMediaDownload(req, url, res);
     }
+    if (req.method === "GET" && url.pathname === "/api/rabilink/events") {
+      return handleRelayEventStream(req, url, res);
+    }
     const speechWorkerResponse = /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname);
+    const personaSyncProxy = url.pathname === "/api/rabilink/persona-sync/proxy";
     const body = req.method === "GET"
       ? {}
-      : await readBody(req, speechWorkerResponse ? { maxBytes: speechWorkerResponseMaxBytes, label: "Speech worker response" } : {});
+      : await readBody(req, speechWorkerResponse
+        ? { maxBytes: speechWorkerResponseMaxBytes, label: "Speech worker response" }
+        : personaSyncProxy
+          ? { maxBytes: 32 * 1024 * 1024, label: "Persona sync proxy" }
+          : {});
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/token") {
       const claimed = claimDeviceToken(body);
       return sendJson(res, 200, {
@@ -4889,6 +5361,15 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/input") {
       return handlePortableInput(req, url, res, body);
+    }
+    if (req.method === "POST" && url.pathname === "/api/rabilink/devices/message-receipts") {
+      return handlePortableMessageReceipt(req, url, res, body);
+    }
+    if (req.method === "GET" && url.pathname === "/api/rabilink/peers") {
+      return handlePeerDiscovery(req, url, res, body);
+    }
+    if (req.method === "POST" && url.pathname === "/api/rabilink/persona-sync/proxy") {
+      return await handlePersonaSyncProxy(req, url, res, body);
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/logs") {
       return handleDeviceLogs(req, url, res, body);

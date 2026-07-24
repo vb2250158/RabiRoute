@@ -68,7 +68,7 @@ For adapter development, routing internals, or APIs, use the [project documentat
 - Paths, task names, rule names, tokens, and logs remain unchanged when the UI language changes.
 - Save configuration writes local configuration; some changes also synchronize or restart the current Route.
 - Manual trigger enters the real delivery path. It is not a side-effect-free preview.
-- Outbound results can be `sent`, `draft`, `blocked`, or `failed`. There is no general WebGUI approval center yet.
+- Outbound results can be `sent`, `draft`, `blocked`, or `failed`. There is no general WebGUI approval center for external actions. The Plans page records approval feedback only; it notifies the Agent without approving outbound delivery or advancing the plan automatically.
 
 ## Next step
 

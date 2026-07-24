@@ -243,7 +243,7 @@ test("message ids are scoped by gateway and archived self echoes still deduplica
   assert.equal(recentMessageContextItems([dir], { limit: 10, includeArchives: true }).length, 3);
 });
 
-test("voice speaker identity and heartbeat endpoint metadata survive normalization", () => {
+test("voice context keeps opaque evidence and endpoint metadata without host identity", () => {
   const dir = temporaryDir("message-context-speaker");
   const voice = messageContextFromHistoryRecord("voice", {
     time: Date.now() / 1_000,
@@ -252,13 +252,47 @@ test("voice speaker identity and heartbeat endpoint metadata survive normalizati
     adapterType: "speech",
     transport: "rabipc",
     sessionId: "meeting-one",
+    source: "remote_audio",
+    channelType: "speech.remote_audio",
+    sourceDeviceId: "meeting-room-pc",
+    sourceDeviceName: "Meeting Room PC",
+    sourceDeviceKind: "windows_audio_client",
+    sourceStreamId: "capture-stream-42",
+    sourceArea: "meeting-room",
+    sourceHostId: "host-guid-one",
+    sourceHostName: "Studio PC",
+    provider: "dashscope",
+    model: "paraformer-v2",
+    language: "zh",
+    sampleRate: 16000,
+    audioFormat: "pcm_s16le",
+    channels: 1,
+    ingestedAt: "2026-07-23T10:00:03.300Z",
+    startedAt: "2026-07-23T10:00:00.000Z",
+    endedAt: "2026-07-23T10:00:03.200Z",
+    durationSeconds: 3.2,
+    peak: 0.42,
+    rms: 0.18,
     speakerId: "person-qiu-yu",
     speakerName: "秋雨",
     speakerKind: "known",
     speakerConfidence: 0.94,
     speakerDecision: "voiceprint",
     voiceprintId: "voiceprint-qiu-yu",
-    speakerVerified: true
+    speakerVerified: true,
+    segments: [
+      {
+        id: 0,
+        start: 0,
+        end: 1.2,
+        text: "明天三点开会",
+        speakerLabel: "Speaker 1",
+        speakerId: "voiceprint-a",
+        speakerDecision: "voiceprint_auto_match",
+        words: [{ id: 0, word: "明天", start: 0, end: 0.4, probability: 0.95 }]
+      },
+      { id: 1, start: 1.3, end: 2.1, text: "好的", speakerLabel: "Speaker 2", speakerClusterId: "cluster-guest", speakerDecision: "voiceprint_unknown_cluster" }
+    ]
   });
   const heartbeat = messageContextFromHistoryRecord("heartbeat", {
     time: Date.now() / 1_000 + 1,
@@ -270,9 +304,35 @@ test("voice speaker identity and heartbeat endpoint metadata survive normalizati
   appendMessageContextToDir(dir, heartbeat, { archiveCheck: false });
 
   const items = recentMessageContextItems([dir], 10);
-  assert.equal(items[0].speakerName, "秋雨");
+  assert.equal(items[0].speakerId, undefined);
+  assert.equal(items[0].speakerName, undefined);
+  assert.equal(items[0].speakerKind, undefined);
+  assert.equal(items[0].source, "remote_audio");
+  assert.equal(items[0].channelType, "speech.remote_audio");
+  assert.equal(items[0].sourceDeviceId, "meeting-room-pc");
+  assert.equal(items[0].sourceDeviceKind, "windows_audio_client");
+  assert.equal(items[0].sourceStreamId, "capture-stream-42");
+  assert.equal(items[0].sourceHostId, "host-guid-one");
+  assert.equal(items[0].sourceHostName, "Studio PC");
+  assert.equal(items[0].provider, "dashscope");
+  assert.equal(items[0].model, "paraformer-v2");
+  assert.equal(items[0].sampleRate, 16000);
+  assert.equal(items[0].audioFormat, "pcm_s16le");
+  assert.equal(items[0].channels, 1);
+  assert.equal(items[0].durationSeconds, 3.2);
+  assert.equal(items[0].peak, 0.42);
+  assert.equal(items[0].rms, 0.18);
   assert.equal(items[0].voiceprintId, "voiceprint-qiu-yu");
-  assert.equal(items[0].speakerVerified, true);
+  assert.equal(items[0].segments?.[0]?.speakerId, undefined);
+  assert.equal(items[0].segments?.[0]?.speakerName, undefined);
+  assert.equal(items[0].segments?.[0]?.words?.[0]?.word, "明天");
+  assert.equal(items[0].segments?.[0]?.words?.[0]?.probability, 0.95);
+  assert.equal(items[0].speakerVerified, undefined);
+  assert.equal(items[0].segments?.[1]?.speakerClusterId, "cluster-guest");
+  assert.match(recentMessageContextText([dir], 10), /Speaker 1：明天三点开会/);
+  assert.match(recentMessageContextText([dir], 10), /cluster-guest：好的/);
+  assert.doesNotMatch(recentMessageContextText([dir], 10), /voiceprint-a：/);
+  assert.doesNotMatch(recentMessageContextText([dir], 10), /秋雨/);
   assert.equal(items[1].adapter, "heartbeat");
 });
 

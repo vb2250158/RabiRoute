@@ -156,13 +156,20 @@ async function refreshRelayRuntime(): Promise<void> {
   }
 }
 
-let relayStatusTimer = 0;
+let managerEvents: EventSource | null = null;
 onMounted(async () => {
   await loadDirConfig();
   await refreshRelayRuntime();
-  relayStatusTimer = window.setInterval(refreshRelayRuntime, 3000);
+  managerEvents = new EventSource("/api/events");
+  managerEvents.addEventListener("rabilink_status", (raw) => {
+    try {
+      store.meta.rabiLinkRelayRuntime = JSON.parse((raw as MessageEvent).data || "{}");
+    } catch {
+      // Keep the latest valid status.
+    }
+  });
 });
-onBeforeUnmount(() => window.clearInterval(relayStatusTimer));
+onBeforeUnmount(() => managerEvents?.close());
 
 function goToRoute(id: string): void {
   store.selectGateway(id);

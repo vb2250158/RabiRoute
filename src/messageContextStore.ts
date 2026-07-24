@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { readRabiLinkConversationTimeline } from "./rabilinkConversationLedger.js";
+import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
+import { normalizeSpeechTranscriptSegment } from "./shared/speechTranscript.js";
 
 export const MESSAGE_CONTEXT_FILE = "message-context.jsonl";
 export const MESSAGE_CONTEXT_DIR = "conversation";
@@ -28,6 +30,8 @@ export type MessageContextAttachment = {
   size?: number;
 };
 
+export type MessageContextSpeechSegment = SpeechTranscriptSegment;
+
 export type MessageContextRecord = {
   schemaVersion?: 1;
   id?: string;
@@ -52,6 +56,28 @@ export type MessageContextRecord = {
   replyToMessageId?: string | number;
   sessionId?: string;
   routeProfileId?: string;
+  source?: string;
+  channelType?: string;
+  sourceDeviceId?: string;
+  sourceDeviceName?: string;
+  sourceDeviceKind?: string;
+  /** Transient capture-stream identity; never use this as a reply-device target. */
+  sourceStreamId?: string;
+  sourceArea?: string;
+  sourceHostId?: string;
+  sourceHostName?: string;
+  provider?: string;
+  model?: string;
+  language?: string;
+  sampleRate?: number;
+  audioFormat?: string;
+  channels?: number;
+  ingestedAt?: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationSeconds?: number;
+  peak?: number;
+  rms?: number;
   speakerId?: string;
   speakerName?: string;
   speakerKind?: string;
@@ -59,6 +85,7 @@ export type MessageContextRecord = {
   speakerDecision?: string;
   voiceprintId?: string;
   speakerVerified?: boolean;
+  segments?: MessageContextSpeechSegment[];
   attachments?: MessageContextAttachment[];
 };
 
@@ -177,6 +204,14 @@ function safeAttachments(value: unknown): MessageContextAttachment[] | undefined
   return result.length > 0 ? result : undefined;
 }
 
+function safeSpeechSegments(value: unknown): MessageContextSpeechSegment[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const result = value.slice(0, 10_000)
+    .map((entry, index) => normalizeSpeechTranscriptSegment(entry, index))
+    .filter((segment): segment is MessageContextSpeechSegment => Boolean(segment));
+  return result.length ? result : undefined;
+}
+
 function attachmentOnlyText(attachments: MessageContextAttachment[] | undefined): string {
   if (!attachments?.length) return "";
   const labels = attachments.slice(0, 4).map((item) => item.name || item.kind || item.mimeType || "附件");
@@ -241,6 +276,10 @@ export function messageContextArchiveIndexPath(dataDir: string): string {
   return path.join(messageContextArchiveDir(dataDir), MESSAGE_CONTEXT_ARCHIVE_INDEX_FILE);
 }
 
+export function messageContextLockPath(dataDir: string): string {
+  return path.join(messageContextDir(dataDir), LOCK_FILE);
+}
+
 function legacyContextPath(dataDir: string): string {
   return path.join(path.resolve(dataDir), MESSAGE_CONTEXT_FILE);
 }
@@ -248,7 +287,7 @@ function legacyContextPath(dataDir: string): string {
 function acquireLock(dataDir: string): () => void {
   const dir = messageContextDir(dataDir);
   fs.mkdirSync(dir, { recursive: true });
-  const lockPath = path.join(dir, LOCK_FILE);
+  const lockPath = messageContextLockPath(dataDir);
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   while (true) {
     try {
@@ -365,6 +404,7 @@ function normalizeRecord(record: MessageContextRecord, sequence?: number): Messa
   if (!text) return undefined;
   const time = timestamp(record.time) || Math.floor(Date.now() / 1_000);
   const adapter = optionalText(record.adapter) || "unknown";
+  const portableVoiceIdentity = adapter === "speech" || adapter === "rabilink";
   const transport = optionalText(record.transport) || adapter;
   const gatewayId = optionalText(record.gatewayId);
   const instanceId = optionalText(record.instanceId);
@@ -391,6 +431,9 @@ function normalizeRecord(record: MessageContextRecord, sequence?: number): Messa
       conversationKey: record.conversationKey,
       routeProfileId,
       sessionId,
+      sourceDeviceId: record.sourceDeviceId,
+      sourceDeviceName: record.sourceDeviceName,
+      source: record.source,
       target
     }),
     kind: optionalText(record.kind),
@@ -402,13 +445,35 @@ function normalizeRecord(record: MessageContextRecord, sequence?: number): Messa
     replyToMessageId: optionalId(record.replyToMessageId),
     sessionId,
     routeProfileId,
-    speakerId: optionalText(record.speakerId),
-    speakerName: optionalText(record.speakerName),
-    speakerKind: optionalText(record.speakerKind),
+    source: optionalText(record.source),
+    channelType: optionalText(record.channelType),
+    sourceDeviceId: optionalText(record.sourceDeviceId),
+    sourceDeviceName: optionalText(record.sourceDeviceName),
+    sourceDeviceKind: optionalText(record.sourceDeviceKind),
+    sourceStreamId: optionalText(record.sourceStreamId),
+    sourceArea: optionalText(record.sourceArea),
+    sourceHostId: optionalText(record.sourceHostId),
+    sourceHostName: optionalText(record.sourceHostName),
+    provider: optionalText(record.provider),
+    model: optionalText(record.model),
+    language: optionalText(record.language),
+    sampleRate: optionalNumber(record.sampleRate),
+    audioFormat: optionalText(record.audioFormat),
+    channels: optionalNumber(record.channels),
+    ingestedAt: optionalText(record.ingestedAt),
+    startedAt: optionalText(record.startedAt),
+    endedAt: optionalText(record.endedAt),
+    durationSeconds: optionalNumber(record.durationSeconds),
+    peak: optionalNumber(record.peak),
+    rms: optionalNumber(record.rms),
+    speakerId: portableVoiceIdentity ? undefined : optionalText(record.speakerId),
+    speakerName: portableVoiceIdentity ? undefined : optionalText(record.speakerName),
+    speakerKind: portableVoiceIdentity ? undefined : optionalText(record.speakerKind),
     speakerConfidence: optionalNumber(record.speakerConfidence),
     speakerDecision: optionalText(record.speakerDecision),
     voiceprintId: optionalText(record.voiceprintId),
-    speakerVerified: optionalBoolean(record.speakerVerified),
+    speakerVerified: portableVoiceIdentity ? undefined : optionalBoolean(record.speakerVerified),
+    segments: safeSpeechSegments(record.segments),
     attachments
   };
   normalized.id = stableRecordId({ ...normalized, id: record.id });
@@ -461,6 +526,27 @@ function storedRecord(item: Record<string, unknown>): MessageContextRecord | und
     replyToMessageId: optionalId(item.replyToMessageId),
     sessionId: optionalText(item.sessionId),
     routeProfileId: optionalText(item.routeProfileId),
+    source: optionalText(item.source),
+    channelType: optionalText(item.channelType),
+    sourceDeviceId: optionalText(item.sourceDeviceId),
+    sourceDeviceName: optionalText(item.sourceDeviceName),
+    sourceDeviceKind: optionalText(item.sourceDeviceKind),
+    sourceStreamId: optionalText(item.sourceStreamId),
+    sourceArea: optionalText(item.sourceArea),
+    sourceHostId: optionalText(item.sourceHostId),
+    sourceHostName: optionalText(item.sourceHostName),
+    provider: optionalText(item.provider),
+    model: optionalText(item.model),
+    language: optionalText(item.language),
+    sampleRate: optionalNumber(item.sampleRate),
+    audioFormat: optionalText(item.audioFormat),
+    channels: optionalNumber(item.channels),
+    ingestedAt: optionalText(item.ingestedAt),
+    startedAt: optionalText(item.startedAt),
+    endedAt: optionalText(item.endedAt),
+    durationSeconds: optionalNumber(item.durationSeconds),
+    peak: optionalNumber(item.peak),
+    rms: optionalNumber(item.rms),
     speakerId: optionalText(item.speakerId),
     speakerName: optionalText(item.speakerName),
     speakerKind: optionalText(item.speakerKind),
@@ -468,6 +554,7 @@ function storedRecord(item: Record<string, unknown>): MessageContextRecord | und
     speakerDecision: optionalText(item.speakerDecision),
     voiceprintId: optionalText(item.voiceprintId ?? item.voiceprintProfileId),
     speakerVerified: optionalBoolean(item.speakerVerified),
+    segments: safeSpeechSegments(item.segments),
     attachments: safeAttachments(item.attachments)
   }, positiveInteger(item.sequence));
 }
@@ -724,11 +811,21 @@ export function messageContextFromHistoryRecord(
       gatewayId, instanceId, channel: adapter,
       conversationKey: resolveMessageConversationKey({ adapter, gatewayId, instanceId, routeProfileId, sessionId, sourceDeviceId: item.sourceDeviceId, sourceDeviceName: item.sourceDeviceName, source: item.source }),
       kind: optionalText(item.kind) || (outbound ? "tts" : "asr"), status: outbound ? "sent" : "accepted",
-      sender: optionalText(item.senderName ?? item.speakerName ?? item.source) || (outbound ? "Agent" : undefined), target, text, messageId,
+      sender: optionalText(item.senderName ?? item.source) || (outbound ? "Agent" : undefined), target, text, messageId,
       replyToMessageId, sessionId, routeProfileId,
+      source: optionalText(item.source), channelType: optionalText(item.channelType),
+      sourceDeviceId: optionalText(item.sourceDeviceId), sourceDeviceName: optionalText(item.sourceDeviceName),
+      sourceDeviceKind: optionalText(item.sourceDeviceKind), sourceStreamId: optionalText(item.sourceStreamId),
+      sourceArea: optionalText(item.sourceArea),
+      sourceHostId: optionalText(item.sourceHostId), sourceHostName: optionalText(item.sourceHostName),
+      provider: optionalText(item.provider), model: optionalText(item.model), language: optionalText(item.language),
+      sampleRate: optionalNumber(item.sampleRate), audioFormat: optionalText(item.audioFormat), channels: optionalNumber(item.channels),
+      ingestedAt: optionalText(item.ingestedAt), startedAt: optionalText(item.startedAt), endedAt: optionalText(item.endedAt),
+      durationSeconds: optionalNumber(item.durationSeconds), peak: optionalNumber(item.peak), rms: optionalNumber(item.rms),
       speakerId: optionalText(item.speakerId), speakerName: optionalText(item.speakerName), speakerKind: optionalText(item.speakerKind),
       speakerConfidence: optionalNumber(item.speakerConfidence), speakerDecision: optionalText(item.speakerDecision),
       voiceprintId: optionalText(item.voiceprintId ?? item.voiceprintProfileId), speakerVerified: optionalBoolean(item.speakerVerified),
+      segments: safeSpeechSegments(item.segments),
       attachments: safeAttachments(item.attachments) });
   }
   const manual = historyKind === "manual_trigger";
@@ -848,7 +945,7 @@ function normalizeQuery(limitOrQuery: number | RecentMessageContextQuery, option
 }
 
 function charCost(item: MessageContextRecord): number {
-  return item.text.length + 160;
+  return item.text.length + (item.segments?.reduce((total, segment) => total + segment.text.length + 40, 0) ?? 0) + 160;
 }
 
 export function recentMessageContextItems(dataDirs: string[], limitOrQuery: number | RecentMessageContextQuery, options: RecentMessageContextOptions = {}): MessageContextRecord[] {
@@ -888,7 +985,19 @@ function formatItem(item: MessageContextRecord): string {
   const direction = item.direction === "outbound" ? "出站" : item.direction === "system" ? "系统" : "入站";
   const participants = [item.sender, item.target ? `→ ${item.target}` : ""].filter(Boolean).join(" ");
   const ids = [item.messageId == null ? "" : `messageId=${item.messageId}`, item.replyToMessageId == null ? "" : `replyTo=${item.replyToMessageId}`].filter(Boolean).join(" | ");
-  return `- ${formatTime(item.time)} | ${direction} | ${item.channel || item.adapter}/${item.kind || "message"} | ${item.status || "accepted"}${participants ? ` | ${participants}` : ""}${ids ? ` | ${ids}` : ""}\n  ${item.text.replace(/\r?\n/g, "\n  ")}`;
+  const speakerTurns = item.segments?.length
+    ? item.segments.map(segment => {
+        const speaker = segment.voiceprintId
+          || segment.speakerClusterId
+          || segment.speakerLabel
+          || segment.speaker
+          || "未知声纹";
+        return `${speaker}：${segment.text}`;
+      }).join("\n  ")
+    : "";
+  const body = speakerTurns || item.text;
+  const host = item.sourceHostName || item.sourceHostId;
+  return `- ${formatTime(item.time)} | ${direction} | ${item.channel || item.adapter}/${item.kind || "message"} | ${item.status || "accepted"}${host ? ` | host=${host}` : ""}${participants ? ` | ${participants}` : ""}${ids ? ` | ${ids}` : ""}\n  ${body.replace(/\r?\n/g, "\n  ")}`;
 }
 
 export function recentMessageContextText(dataDirs: string[], limitOrQuery: number | RecentMessageContextQuery, options: RecentMessageContextOptions = {}): string {

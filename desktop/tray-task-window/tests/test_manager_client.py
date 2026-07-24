@@ -9,6 +9,7 @@ class _RecordingManagerClient(ManagerClient):
     def __init__(self) -> None:
         super().__init__()
         self.paths: list[str] = []
+        self.posts: list[tuple[str, dict]] = []
 
     def _get_json(self, path: str) -> dict:
         self.paths.append(path)
@@ -25,6 +26,10 @@ class _RecordingManagerClient(ManagerClient):
     def _get_bytes(self, path: str) -> bytes:
         self.paths.append(path)
         return b"avatar"
+
+    def _post_json(self, path: str, payload: dict | None = None, timeout_seconds: float | None = None) -> dict:
+        self.posts.append((path, payload or {}))
+        return {"code": 0, "data": {"deliveryStatus": "delivered"}}
 
 
 class ManagerSnapshotTest(unittest.TestCase):
@@ -71,6 +76,24 @@ class ManagerSnapshotTest(unittest.TestCase):
         )
 
         self.assertEqual(snapshot.selected_gateway and snapshot.selected_gateway.get("id"), "night-rain")
+
+    def test_plan_feedback_uses_manager_plan_endpoint(self) -> None:
+        client = _RecordingManagerClient()
+
+        result = client.submit_plan_feedback(
+            "Rabi / 测试",
+            "plan / 1",
+            "route-1",
+            "verify",
+            "feedback-1",
+            "建议补充回归范围。",
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.delivery_status, "delivered")
+        self.assertEqual(client.posts[0][0], "/api/roles/Rabi%20%2F%20%E6%B5%8B%E8%AF%95/plans/plan%20%2F%201/feedback")
+        self.assertEqual(client.posts[0][1]["source"], "tray")
+        self.assertEqual(client.posts[0][1]["stepId"], "verify")
 
     def test_rabi_fallback_remains_when_enabled_selection_is_ambiguous(self) -> None:
         snapshot = ManagerSnapshot(

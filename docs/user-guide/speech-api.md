@@ -6,7 +6,7 @@
 
 # 从远端调用 TTS 与 ASR
 
-这篇指南用于让另一台电脑、手机后端或自动化客户端通过 RabiLink Relay 调用目标 Rabi PC 上的 RabiSpeech。请求直接返回音频或转写，不进入 Agent、人格、Route 或会话账本。
+这篇指南用于让另一台电脑、手机后端或自动化客户端通过 RabiLink Relay 调用目标 Rabi PC 上的 RabiSpeech。普通 TTS 与文件 ASR 请求直接返回音频或转写，不进入 Agent、人格、Route 或会话账本；Android/眼镜连续 PCM 流是明确例外，目标 PC 完成 ASR 后会自动进入主机语音库和 `rabilink` Route。
 
 > 成熟度：实验。先在受控环境验证模型、超时和公网反代，再接入正式客户端。
 
@@ -57,13 +57,13 @@ curl.exe --fail-with-body --silent --show-error `
   -X POST "$SpeechBase/v1/audio/speech" `
   -H "Authorization: Bearer $Token" `
   -H "Content-Type: application/json" `
-  --data-raw '{"input":"你好，这是通过 RabiLink 调用的本机语音。","voice":"default","response_format":"wav","speed":1.0}' `
+  --data-raw '{"input":"你好，这是通过 RabiLink 调用的本机语音。","voice":"default","response_format":"wav","sample_rate":16000,"speed":1.0}' `
   --output speech.wav
 
 Get-Item .\speech.wav | Select-Object Name, Length
 ```
 
-成功判据：HTTP 返回成功，并且 `speech.wav` 的 `Length` 大于 0。若要指定模型，先从 `/v1/models` 复制当前 PC 实际提供的模型 ID，再在 JSON 中加入 `model`。
+成功判据：HTTP 返回成功，并且 `speech.wav` 的 `Length` 大于 0。WAV 输出的 `sample_rate` 由目标 PC 的 RabiSpeech 本地完成，不要求远端客户端安装 ffmpeg；MP3、FLAC、Opus、AAC、PCM 等跨格式输出仍取决于目标 PC 的 ffmpeg 配置。若要指定模型，先从 `/v1/models` 复制当前 PC 实际提供的模型 ID，再在 JSON 中加入 `model`。
 
 ## 3. 把音频交给 ASR
 
@@ -115,6 +115,9 @@ $Token = $null
 - `GET /api/rabilink/speech/v1/capabilities`
 - `POST /api/rabilink/speech/v1/audio/speech`
 - `POST /api/rabilink/speech/v1/audio/transcriptions`
+- `POST /api/rabilink/speech/v1/audio-streams/rabilink/start`
+- `POST /api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId=...&sequence=1`
+- `POST /api/rabilink/speech/v1/audio-streams/rabilink/stop`
 - `GET /api/rabilink/speech/openapi.json`
 
-字段、兼容端点和本机扩展边界见 [RabiSpeech 本机 TTS / ASR 服务](../rabispeech-plugin.md)。
+前三个流式接口供 Android/眼镜连续传 16 kHz mono PCM 使用。`sequence` 从 1 开始严格递增；VAD、切句、ASR 和声纹均由目标 PC RabiSpeech 完成，15 秒无 PCM 会自动回收。普通人工 TTS/文件 ASR 调用仍使用前面的同步端点。字段、兼容端点和本机扩展边界见 [RabiSpeech 本机 TTS / ASR 服务](../rabispeech-plugin.md)。

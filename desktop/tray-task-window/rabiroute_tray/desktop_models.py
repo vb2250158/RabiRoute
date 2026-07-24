@@ -18,7 +18,18 @@ class PlanStep:
 @dataclass(frozen=True)
 class PlanItem:
     title: str
+    plan_id: str = ""
     status: str = "未开始"
+    display_status: str = ""
+    display_tone: str = ""
+    approval_enabled: bool = False
+    approval_label: str = ""
+    approval_helper: str = ""
+    approval_step_id: str = ""
+    approval_count: int = 0
+    latest_approval_text: str = ""
+    latest_approval_at: str = ""
+    latest_approval_delivery_status: str = ""
     priority: str = ""
     kind: str = ""
     current_step: str = ""

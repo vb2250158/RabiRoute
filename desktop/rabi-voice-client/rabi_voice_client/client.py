@@ -98,6 +98,7 @@ class RabiVoiceClient:
                 "type": "hello",
                 "clientId": self.config.client_id,
                 "name": self.config.name,
+                "deviceKind": "windows_pc",
                 "sampleRate": self.config.sample_rate,
                 "chunkMs": self.config.chunk_ms,
                 "format": "pcm_s16le",

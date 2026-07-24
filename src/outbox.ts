@@ -153,6 +153,9 @@ type SourceRecord = {
   groupId?: string;
   userId?: string;
   instanceId?: string;
+  sourceDeviceId?: string;
+  sourceDeviceName?: string;
+  sourceDeviceKind?: string;
   adapterType?: string;
   botUserId?: string;
   roleId?: string;
@@ -438,6 +441,9 @@ function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group
     groupId: valueString(record.groupId ?? record.group_id ?? record.chatId ?? record.chatid ?? record.conversationId),
     userId: valueString(record.userId ?? record.user_id ?? record.senderId),
     instanceId: valueString(record.instanceId),
+    sourceDeviceId: valueString(record.sourceDeviceId),
+    sourceDeviceName: valueString(record.sourceDeviceName),
+    sourceDeviceKind: valueString(record.sourceDeviceKind),
     adapterType: normalizedAdapterType,
     botUserId: valueString(record.botUserId),
     reqId: valueString(record.reqId),
@@ -1013,6 +1019,9 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     groupId: requestField(request, "groupId"),
     userId: requestField(request, "userId"),
     instanceId: requestField(request, "instanceId"),
+    sourceDeviceId: valueString(context.sourceDeviceId),
+    sourceDeviceName: valueString(context.sourceDeviceName),
+    sourceDeviceKind: valueString(context.sourceDeviceKind),
     adapterType: requestField(request, "adapterType"),
     botUserId: requestField(request, "botUserId"),
     roleId: requestField(request, "roleId"),
@@ -1058,6 +1067,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     const proactive = requestFlag(request, "proactive") || (!messageId && contextTarget.targetType === "rabilink");
     const deliveryId = requestField(request, "deliveryId") || randomUUID();
     const targetDeviceIds = requestStringList(request, "targetDeviceIds");
+    if (targetDeviceIds.length === 0 && target.sourceDeviceId) targetDeviceIds.push(target.sourceDeviceId);
     const targetDeviceKinds = requestStringList(request, "targetDeviceKinds").map((value) => value.toLowerCase());
     const presentation = requestStringList(request, "presentation")
       .map((value) => value.toLowerCase())

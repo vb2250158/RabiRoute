@@ -827,10 +827,12 @@ test("RabiLink source reply is gated by route policy and queued for the Relay wo
         runtimeRouteId: "RabiLink",
         gatewayId: "RabiLink",
         routeProfileId: "RabiLink",
-        routeKind: "voice_transcript",
-        targetType: "voice_transcript",
+        routeKind: "rabilink",
+        targetType: "rabilink",
         messageId: "rabilink-source-1",
         adapterType: "rabilink",
+        sourceDeviceId: "phone-one",
+        sourceDeviceKind: "mobile",
         outputAdapter: "agent",
         outputPipeline: "agent",
         replyToSource: false
@@ -867,6 +869,7 @@ test("RabiLink source reply is gated by route policy and queued for the Relay wo
     assert.equal(deliveredBody.proactive, false);
     assert.equal(deliveredBody.final, true);
     assert.equal(deliveredBody.deviceId, "pc-test");
+    assert.deepEqual(deliveredBody.targetDeviceIds, ["phone-one"]);
     assert.equal(deliveredToken, "test-relay-token");
     const replyLog = path.join(rootDir, "data", "route", "RabiLink", "rabilink-replies.jsonl");
     const rows = fs.readFileSync(replyLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);

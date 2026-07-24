@@ -49,6 +49,12 @@ function hookContextRequest(body: Record<string, unknown>, request: http.Incomin
     toolUseId: typeof body.tool_use_id === "string" ? body.tool_use_id : typeof body.toolUseId === "string" ? body.toolUseId : undefined,
     toolInput: body.tool_input ?? body.toolInput,
     toolResponse: body.tool_response ?? body.toolResponse,
+    stopHookActive: body.stop_hook_active === true || body.stopHookActive === true,
+    lastAssistantMessage: typeof body.last_assistant_message === "string"
+      ? body.last_assistant_message
+      : typeof body.lastAssistantMessage === "string"
+        ? body.lastAssistantMessage
+        : undefined,
     managerBaseUrl: managerBaseUrl(request)
   };
 }
@@ -63,7 +69,7 @@ export function handleCodexHookApi(
 
   if (request.method === "POST" && pathname === "/api/codex-hook/context") {
     void readJsonBody(request)
-      .then((body) => service.handleContext(hookContextRequest(body, request)))
+      .then((body) => service.handleHook(hookContextRequest(body, request)))
       .then((data) => jsonResponse(response, 200, { code: 0, data }))
       .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;

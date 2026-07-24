@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { SpeechRuntimeStatus } from "../shared/speechControlContract.js";
 import type { LocalSpeechResponse } from "../speech/localSpeechClient.js";
+import { SpeechIngressStore } from "../speechIngressStore.js";
 import {
   ManagerSpeechControl,
   SpeechControlError,
@@ -398,6 +402,133 @@ test("Manager speech control broadcasts one transcript to every enabled speech R
     ["Rabi", "recorded"]
   ]);
   assert.match(result.detail || "", /1 delivered, 1 recorded, 0 failed/);
+});
+
+test("Manager speech control stores one raw ingress record before Route fan-out", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-speech-ingress-"));
+  const speechIngressStore = new SpeechIngressStore(root);
+  const delivered: Array<{ routeId: string; recordId: string; voiceprintId?: string; speakerId?: string; speakerName?: string }> = [];
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    rolesRoot: () => "Z:/missing-roles",
+    route: routeId => ({ id: routeId, speechEnabled: true }),
+    routes: () => [{ id: "Rabi", speechEnabled: true }, { id: "Work", speechEnabled: true }],
+    deliverTranscript: async ({ routeId, record }) => {
+      delivered.push({
+        routeId,
+        recordId: record.id,
+        voiceprintId: record.segments[0]?.voiceprintId,
+        speakerId: record.segments[0]?.speakerId,
+        speakerName: record.segments[0]?.speakerName
+      });
+      return { status: "recorded" };
+    },
+    appendRouteLog: () => {},
+    createMessageId: () => "fallback-speech-id",
+    speechIngressStore
+  });
+
+  const result = await control.acceptMessage({
+    recordId: "speech-source-one",
+    text: "这是一段语音",
+    sessionId: "day-one",
+    provider: "dashscope",
+    model: "paraformer-v2",
+    segments: [{
+      id: 0,
+      start: 0,
+      end: 1,
+      text: "这是一段语音",
+      speakerClusterId: "voiceprint-a",
+      speakerId: "host-profile-a",
+      speakerSuggestionId: "host-candidate-a",
+      speakerName: "用户",
+      speakerDecision: "voiceprint_auto_match"
+    }]
+  });
+
+  assert.equal(result.messageId, "speech-source-one");
+  assert.deepEqual(delivered, [
+    { routeId: "Rabi", recordId: "speech-source-one", voiceprintId: "voiceprint-a", speakerId: undefined, speakerName: undefined },
+    { routeId: "Work", recordId: "speech-source-one", voiceprintId: "voiceprint-a", speakerId: undefined, speakerName: undefined }
+  ]);
+  assert.equal(speechIngressStore.list().length, 1);
+});
+
+test("Manager speech control reuses terminal Route receipts for retried and concurrent ASR submissions", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-speech-receipts-"));
+  const speechIngressStore = new SpeechIngressStore(path.join(root, "messages"));
+  let deliveries = 0;
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    rolesRoot: () => "Z:/missing-roles",
+    route: routeId => ({ id: routeId, speechEnabled: true }),
+    routes: () => [{ id: "Rabi", speechEnabled: true }],
+    deliverTranscript: async () => {
+      deliveries += 1;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return { status: "delivered", reason: "desktop_owner_accepted" };
+    },
+    appendRouteLog: () => {},
+    speechIngressStore
+  });
+  const command = { recordId: "stable-asr-one", text: "不要重复唤醒", sessionId: "day-one" };
+
+  const concurrent = await Promise.all([control.acceptMessage(command), control.acceptMessage(command)]);
+  const retried = await control.acceptMessage(command);
+
+  assert.equal(deliveries, 1);
+  assert.deepEqual(concurrent.map(item => item.status), ["delivered", "delivered"]);
+  assert.equal(retried.status, "delivered");
+  assert.equal(speechIngressStore.readDeliveryReceipt("stable-asr-one", "Rabi")?.reason, "desktop_owner_accepted");
+});
+
+test("Manager speech control routes PC microphone and mobile audio to different message endpoints", async () => {
+  const delivered: Array<{ routeId: string; adapterType: string; channelType: string; sourceDeviceId?: string; sourceStreamId?: string }> = [];
+  const routes = [
+    { id: "Voice", speechEnabled: true, rabiLinkEnabled: false, routeProfileIds: ["voice-main"] },
+    { id: "Mobile", speechEnabled: false, rabiLinkEnabled: true, routeProfileIds: ["mobile-main"] },
+    { id: "OtherMobile", speechEnabled: false, rabiLinkEnabled: true, routeProfileIds: ["mobile-other"] }
+  ];
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    rolesRoot: () => "Z:/missing-roles",
+    route: routeId => routes.find(route => route.id === routeId),
+    routes: () => routes,
+    deliverTranscript: async ({ routeId, record }) => {
+      delivered.push({
+        routeId,
+        adapterType: record.messageAdapterType,
+        channelType: record.channelType,
+        sourceDeviceId: record.sourceDeviceId,
+        sourceStreamId: record.sourceStreamId
+      });
+      return { status: "delivered" };
+    },
+    appendRouteLog: () => {}
+  });
+
+  await control.acceptMessage({
+    recordId: "pc-one",
+    text: "本机麦克风",
+    messageAdapterType: "speech",
+    channelType: "speech.pc_microphone"
+  });
+  await control.acceptMessage({
+    recordId: "mobile-one",
+    text: "手机音频流",
+    messageAdapterType: "rabilink",
+    channelType: "rabilink.mobile_audio",
+    routeProfileId: "mobile-main",
+    sourceDeviceId: "phone-one",
+    sourceStreamId: "phone-one-audio",
+    sourceDeviceKind: "mobile"
+  });
+
+  assert.deepEqual(delivered, [
+    { routeId: "Voice", adapterType: "speech", channelType: "speech.pc_microphone", sourceDeviceId: undefined, sourceStreamId: undefined },
+    { routeId: "Mobile", adapterType: "rabilink", channelType: "rabilink.mobile_audio", sourceDeviceId: "phone-one", sourceStreamId: "phone-one-audio" }
+  ]);
 });
 
 test("Manager speech broadcast records locally when no Route subscribes", async () => {

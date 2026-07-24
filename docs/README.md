@@ -39,6 +39,7 @@
 - [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) — **现行指南**。发现、认证、任务、幂等创建、投递、结果、工具、生命周期、UI、安全和验收要求。
 - [Codex Desktop Agent 接入与验收合同](codex-desktop-agent-acceptance.md) — **当前事实**。稳定 ID、按需扫描、自动初始化、Desktop 唯一 owner 和元数据 bootstrap 安全门。
 - [Rabi Codex Context 插件](rabi-codex-context-plugin.md) — **统一 Manager 版本**。Hook 只转发真实 Codex session 事件并注入 Rabi PC 返回的统一人格、计划、记忆与技能上下文。
+- [多电脑人格数据同步](persona-data-sync.md) — **实验支持**。同一 RabiLink 应用下的 PC 通过局域网直连优先、Relay 受限中转兜底；后端按文件/连接事件自动补账，人格页可手动同步、预览证据和处理基础冲突。
 
 ## 架构与维护
 
@@ -52,7 +53,7 @@
 
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
 - [语音交互工作站](voice-interaction-workstation.md) — 历史工作站接线记录；FenneNote/OumuQ 已停止维护，现行入口是 RabiPC + RabiSpeech。
-- [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、热投递/人格关键词唤醒、人格声线与语言、双向 ASR/TTS 记录、共用说话人资料库和 RabiLink 中转。
+- [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、热投递/人格关键词唤醒、人格声线与语言、双向 ASR/TTS 记录、不透明声纹/聚类证据和 RabiLink 中转。
 - [远端调用 TTS 与 ASR](user-guide/speech-api.md) — 应用 token、目标 PC、可复制命令、验收与错误恢复。
 - [Rabi 语音客户端](../desktop/rabi-voice-client/README.md) — 把会议室 Windows 电脑作为局域网远程麦克风和喇叭，切句与模型仍留在 RabiSpeech 主机。
 - [本地语音模型下载说明](local-speech-model-downloads.md) — 每个 TTS/ASR 模型的来源、下载、隔离环境与验证。
@@ -65,7 +66,7 @@
 - [RabiLink 智能手表 / 手环健康消息端](rabilink-wearable-health.md) — **实验集成**。手机配置、结构化健康时间线、Agent 查询 API、阈值告警和小米 ADB 过渡桥。
 - [AIUI 到手机 / 原生眼镜方案的功能等价清单](rabilink-aiui-native-parity.md) — 按代码、自动化与真机证据逐项记录迁移完成度。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。
-- [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 需求与实施追踪，不等同于全部完成。
+- [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 用户状态、情景识别、用户个体模型和主动介入的目标合同与实施追踪，不等同于全部完成。
 - [RabiLink 原生应用设计](rabilink-glasses-app-design.md) — 手机/眼镜体验设计。
 - [小爱接入技术路线](xiaoai-integration/xiaoai-rabiroute-intercept-route.md) — 小爱桥接方案，包含未实现 API 和未来路线。
 - [红外网关调研](xiaoai-integration/ir-remote-gateway-research.md) — 调研资料。
@@ -73,7 +74,7 @@
 
 ## 设计与历史
 
-- [主动智能系统设计总纲](../主动智能设计思路.md) — **设计中**。描述持续感知、意图假设、主动行动、记忆与设备分工的长期愿景；当前实现范围以“当前能力与成熟度”为准。
+- [主动智能系统设计总纲](../主动智能设计思路.md) — **设计中**。描述持续感知、用户性格与偏好、心理状态、情景识别、主动行动、记忆和设备分工；当前实现范围以“当前能力与成熟度”为准。
 - [人格路由工作台计划](persona-route-workbench-plan.md) — **部分实现**。语音关键词和分端上下文控件已实现；Dry-run RouteDecision / AgentPacket 预览尚未实现。
 - [Windows 托盘任务窗口计划](rabiroute-windows-tray-task-window-plan.md) — 设计记录；实际实现以 `desktop/tray-task-window/` 和打包文档为准。
 - [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。

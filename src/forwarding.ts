@@ -321,15 +321,18 @@ function recordInboundForRoutes(
   for (const route of routes) {
     const roleContext = rolePathsForRoute(route);
     const resolvedDataDir = path.resolve(roleContext.dataDir);
+    // Initialize/append the canonical conversation ledger before writing the
+    // compatibility raw-history file. Otherwise a first write can be imported
+    // immediately as legacy history and then appended again as the current event.
+    if (!recordedConversationDirs.has(resolvedDataDir)) {
+      if (appendRecordToPersonaConversation(route, routeKind, record)) conversationRecordCount += 1;
+      recordedConversationDirs.add(resolvedDataDir);
+    }
     if (options.appendRoleRecord !== false
       && resolvedDataDir !== path.resolve(config.memoryDataDir)
       && !recordedRawDirs.has(resolvedDataDir)) {
       appendRecordToRoleDataDir(record, roleContext.dataDir);
       recordedRawDirs.add(resolvedDataDir);
-    }
-    if (!recordedConversationDirs.has(resolvedDataDir)) {
-      if (appendRecordToPersonaConversation(route, routeKind, record)) conversationRecordCount += 1;
-      recordedConversationDirs.add(resolvedDataDir);
     }
   }
   return conversationRecordCount;

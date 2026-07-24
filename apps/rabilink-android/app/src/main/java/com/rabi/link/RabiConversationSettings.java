@@ -6,64 +6,96 @@ import android.content.SharedPreferences;
 /** Phone-owned settings shared by standalone-phone and optional-glasses conversation modes. */
 public final class RabiConversationSettings {
     private static final String PREFS = "rabi_conversation_settings";
+    private static final String KEY_INPUT_MODE = "inputMode";
+    private static final String KEY_PROACTIVITY_PREFERENCE = "proactivityPreference";
+
+    public enum InputMode {
+        PAUSED,
+        PHONE,
+        GLASSES;
+
+        public static InputMode fromPersisted(String value, InputMode fallback) {
+            try {
+                return InputMode.valueOf(value == null ? "" : value.trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException error) {
+                return fallback;
+            }
+        }
+    }
+
+    public enum ProactivityPreference {
+        AGENT_DECIDES("agent_decides"),
+        QUIET("quiet"),
+        BALANCED("balanced"),
+        PROACTIVE("proactive");
+
+        public final String wireValue;
+
+        ProactivityPreference(String wireValue) {
+            this.wireValue = wireValue;
+        }
+
+        public static ProactivityPreference fromPersisted(String value) {
+            String normalized = value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
+            for (ProactivityPreference candidate : values()) {
+                if (candidate.wireValue.equals(normalized)) return candidate;
+            }
+            return AGENT_DECIDES;
+        }
+    }
+
+    public final InputMode inputMode;
+    public final ProactivityPreference proactivityPreference;
     public final boolean continuousListening;
     public final boolean glassesEnabled;
     public final boolean autoPlayAgentVoice;
-    public final String asrModel;
-    public final String asrLanguage;
     public final String ttsModel;
     public final String ttsVoice;
-    public final int vadThreshold;
-    public final int silenceMs;
 
     public RabiConversationSettings(
-            boolean continuousListening,
-            boolean glassesEnabled,
+            InputMode inputMode,
+            ProactivityPreference proactivityPreference,
             boolean autoPlayAgentVoice,
-            String asrModel,
-            String asrLanguage,
             String ttsModel,
-            String ttsVoice,
-            int vadThreshold,
-            int silenceMs
+            String ttsVoice
     ) {
-        this.continuousListening = continuousListening;
-        this.glassesEnabled = glassesEnabled;
+        this.inputMode = inputMode == null ? InputMode.PHONE : inputMode;
+        this.proactivityPreference = proactivityPreference == null
+                ? ProactivityPreference.AGENT_DECIDES : proactivityPreference;
+        this.continuousListening = this.inputMode != InputMode.PAUSED;
+        this.glassesEnabled = this.inputMode == InputMode.GLASSES;
         this.autoPlayAgentVoice = autoPlayAgentVoice;
-        this.asrModel = clean(asrModel, "faster-whisper/small");
-        this.asrLanguage = clean(asrLanguage, "zh");
         this.ttsModel = clean(ttsModel, "local-tts/gpt-sovits");
         this.ttsVoice = clean(ttsVoice, "Rabi");
-        this.vadThreshold = Math.max(100, Math.min(12000, vadThreshold));
-        this.silenceMs = Math.max(250, Math.min(4000, silenceMs));
     }
 
     public static RabiConversationSettings load(Context context) {
         SharedPreferences values = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        InputMode legacyMode = !values.getBoolean("continuousListening", true)
+                ? InputMode.PAUSED
+                : values.getBoolean("glassesEnabled", false) ? InputMode.GLASSES : InputMode.PHONE;
         return new RabiConversationSettings(
-                values.getBoolean("continuousListening", true),
-                values.getBoolean("glassesEnabled", false),
+                InputMode.fromPersisted(values.getString(KEY_INPUT_MODE, ""), legacyMode),
+                ProactivityPreference.fromPersisted(values.getString(KEY_PROACTIVITY_PREFERENCE, "agent_decides")),
                 values.getBoolean("autoPlayAgentVoice", true),
-                values.getString("asrModel", "faster-whisper/small"),
-                values.getString("asrLanguage", "zh"),
                 values.getString("ttsModel", "local-tts/gpt-sovits"),
-                values.getString("ttsVoice", "Rabi"),
-                values.getInt("vadThreshold", 650),
-                values.getInt("silenceMs", 900)
+                values.getString("ttsVoice", "Rabi")
         );
     }
 
     public void save(Context context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putBoolean("continuousListening", continuousListening)
-                .putBoolean("glassesEnabled", glassesEnabled)
+                .putString(KEY_INPUT_MODE, inputMode.name())
+                .putString(KEY_PROACTIVITY_PREFERENCE, proactivityPreference.wireValue)
                 .putBoolean("autoPlayAgentVoice", autoPlayAgentVoice)
-                .putString("asrModel", asrModel)
-                .putString("asrLanguage", asrLanguage)
                 .putString("ttsModel", ttsModel)
                 .putString("ttsVoice", ttsVoice)
-                .putInt("vadThreshold", vadThreshold)
-                .putInt("silenceMs", silenceMs)
+                .remove("asrModel")
+                .remove("asrLanguage")
+                .remove("vadThreshold")
+                .remove("silenceMs")
+                .remove("continuousListening")
+                .remove("glassesEnabled")
                 .apply();
     }
 

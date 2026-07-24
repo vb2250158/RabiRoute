@@ -105,6 +105,7 @@ export function recordRabiLinkVoiceObservation(
     sender: record.speakerName || record.senderName,
     messageId: record.messageId == null ? undefined : String(record.messageId),
     sessionId: record.sessionId,
+    routeProfileId: record.routeProfileId,
     sourceDeviceId: record.sourceDeviceId,
     sourceDeviceName: record.sourceDeviceName,
     sourceDeviceKind: record.sourceDeviceKind,

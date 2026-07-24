@@ -6,7 +6,7 @@
 
 # Rabi Codex Context 插件
 
-> 状态：0.3 统一触发与上下文管理版本。源码位于 `plugins/rabi-codex-context/`。
+> 状态：0.4 统一上下文与计划任务完成 Hook 版本。计划完成提醒仍为实验能力；源码位于 `plugins/rabi-codex-context/`。
 
 ## 唯一边界
 
@@ -17,7 +17,7 @@ Rabi PC / RabiRoute Manager 是以下事实的唯一管理者：
 - 计划、近期记忆、沉淀记忆和角色技能；
 - 关键词召回、`viewedAt`、计划归档、记忆编辑窗口与整理流程。
 
-Codex 插件只做两件事：把 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse` 原样提交给 Manager；把 Manager 返回的 `additionalContext` 原样注入 Codex。插件不扫描角色目录、不解析计划记忆、不评分关键词、不保存绑定，也没有离线知识缓存。
+Codex 插件只做薄转发：把 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse` 和 `Stop` 原样提交给 Manager；上下文事件把 Manager 返回的 `additionalContext` 注入 Codex，`Stop` 只上报官方提供的 `session_id`、`turn_id`、`cwd` 和 `last_assistant_message`。插件不扫描角色目录、不解析计划记忆、不评分关键词、不保存绑定，也没有离线知识缓存。
 
 ```text
 Codex Hook 事件
@@ -33,6 +33,12 @@ RabiRoute 消息投递
   -> message_delivery 标准触发
   -> 同一个 RabiContextManager
   -> AgentPacket
+
+Codex Stop
+  -> Manager 按计划 taskBinding 精确匹配执行会话
+  -> 角色面板 timeline
+  -> Forwarding / AgentPacket
+  -> 提醒人格 Route 绑定的精确处理会话
 ```
 
 ## 统一触发策略
@@ -47,6 +53,28 @@ RabiRoute 消息投递
 | `preview` | Manager / UI 预览调用方 | 完整预览 | 不归档、不刷新 `viewedAt`、不创建整理 run |
 
 推理期 Hook 不会把每个工具输入和输出复制进 prompt。Manager 只用有界文本对同一套 ID、标题和 `keywords` 元信息评分；没有知识命中或明确 Rabi 知识路径时返回空上下文。相同 `turn_id` 下按“条目类型 + ID + 修订时间”去重，避免 Pre/Post 重复注入和重复刷新 `viewedAt`。
+
+## WebGUI Hook 管理
+
+Codex 处理端配置面板显示三组 Hook 开关，并直接说明触发时机：
+
+| 开关 | Codex Hook | 何时触发 | 默认值 |
+|---|---|---|---|
+| 会话入口上下文 | `SessionStart` / `UserPromptSubmit` | 打开、恢复、清空或压缩任务，以及用户提交新消息时 | 开启 |
+| 推理期上下文刷新 | `PreToolUse` / `PostToolUse` | Codex 调用工具前后；只注入本轮新命中的计划、记忆或技能上下文 | 开启 |
+| 计划任务会话完成通知 | `Stop` | 绑定计划的执行任务输出本轮最终回答后，经 Rabi 投递到该人格 Route 绑定的会话 | 开启 |
+
+配置分别写入 `codexHooks.sessionContextEnabled`、`codexHooks.reasoningContextEnabled` 和 `codexHooks.planTaskCompletionEnabled`。开关只控制 Manager 是否响应对应 Hook；插件中的 Hook 注册保持不变，因此重新开启不需要重装插件。没有 Route 精确绑定到计划执行任务时，Manager 对该执行任务继续使用默认开启值，让独立计划任务仍可上报 `Stop`；提醒目标 Route 自己关闭完成通知时则失败关闭。
+
+## 计划任务完成 Hook
+
+计划可用 `taskBinding` 精确绑定一个 Codex 执行会话。存在 `taskBinding` 且省略 `completionHook` 时，完成通知默认开启；可用 `completionHook.enabled=false` 对单个计划关闭。当该会话完成一轮并产生最终回答后，`Stop` Hook 把官方 `last_assistant_message` 交给 Manager。Manager 以计划文件为“计划 ↔ 执行会话”真源，以 Route/gateway 为提醒人格目标会话真源；提醒继续走现有角色面板、Forwarding、AgentPacket 和 Agent adapter 链路。
+
+- 同一 `sessionId + turnId` 持久化去重。
+- Hook 不读取 transcript 猜测结果，也不自动修改计划状态、步骤或记忆。
+- 目标 Codex 会话必须已精确绑定，且不得与执行会话相同；workspace、人格或 gateway 冲突时失败关闭。
+- 成功时 `Stop` 不输出任何 Hook JSON；投递失败时只返回非阻塞 `systemMessage` 警告，不阻断 Codex 最终回答。
+- 完成记录写入私有运行文件 `data/codex-hook/sessions.json`，不得提交。
 
 ## Codex-only 模式
 
@@ -63,7 +91,7 @@ npm run manager
 
 ### 从 0.1 插件迁移
 
-0.1 版插件保存在插件用户目录里的角色根注册和 session 绑定不会自动迁移到 Manager。升级到 0.3 后，先启动 Rabi PC Manager，再按准确的完整 `session_id` 重新绑定人格；不要根据任务标题、工作区或最近时间猜测 ID。旧实现只保留在 `archive/plugins/rabi-codex-context-v0.1.0-local-context/` 作为只读迁移参考，不能重新接回活动调用链。
+0.1 版插件保存在插件用户目录里的角色根注册和 session 绑定不会自动迁移到 Manager。升级到 0.4 后，先启动 Rabi PC Manager，再按准确的完整 `session_id` 重新绑定人格；不要根据任务标题、工作区或最近时间猜测 ID。旧实现只保留在 `archive/plugins/rabi-codex-context-v0.1.0-local-context/` 作为只读迁移参考，不能重新接回活动调用链。
 
 新的绑定写入 Manager 私有运行数据 `data/codex-hook/sessions.json`。该文件、旧插件用户目录和任何真实人格数据都不得提交。
 
@@ -131,3 +159,7 @@ codex plugin add rabi-codex-context@rabiroute-local
 8. `PreToolUse` / `PostToolUse` 只在命中相关知识或明确 Rabi 知识路径时注入推理期增量。
 9. 同一 turn 的重复命中不会重复注入或重复刷新 `viewedAt`；条目更新后允许重新注入。
 10. 正常 RabiRoute 消息投递与 Codex Hook 共用 `RabiContextManager`，代码中没有第二个 snapshot 调用入口。
+11. 绑定计划的 `Stop` 只向指定人格 Route 投递一次最终回答提醒；未绑定、重复 turn、workspace/人格/gateway 冲突和源目标同会话均失败关闭或忽略。
+12. 完成提醒成功时 Hook stdout 为空；失败只产生非阻塞系统警告。更新插件后必须在 `/hooks` 重新审阅并信任新增的 `Stop` Hook。
+
+代码和本地 mock 测试不等于 Desktop 实机验收。未在两个真实 Codex Desktop 任务之间观察到提醒前，本能力保持实验状态。

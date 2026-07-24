@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleWearableHealthRelayTask, rabiLinkRelayTaskDisposition } from "./rabilinkRelayWorker.js";
+import {
+  handleWearableHealthRelayTask,
+  rabiLinkRelayTaskDisposition,
+  rabiLinkRelayTaskNeedsReviewWake
+} from "./rabilinkRelayWorker.js";
 
 test("RabiLink observations are record-only while explicit messages remain direct", () => {
   assert.equal(rabiLinkRelayTaskDisposition({
@@ -20,6 +24,12 @@ test("RabiLink observations are record-only while explicit messages remain direc
     type: "rabilink",
     text: "explicit direct input"
   }), "direct");
+});
+
+test("only review-owned RabiLink events wake the conversation reviewer", () => {
+  assert.equal(rabiLinkRelayTaskNeedsReviewWake("record_only"), true);
+  assert.equal(rabiLinkRelayTaskNeedsReviewWake("review_request"), true);
+  assert.equal(rabiLinkRelayTaskNeedsReviewWake("direct"), false);
 });
 
 test("RabiLink touchpad review requests wake the reviewer without becoming direct input", () => {

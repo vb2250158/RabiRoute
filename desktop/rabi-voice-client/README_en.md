@@ -6,7 +6,7 @@ English | <a href="./README.md">简体中文</a>
 
 # Rabi Voice Client
 
-Rabi Voice Client turns a meeting-room PC into a LAN microphone and speaker for RabiSpeech. The client only uploads mono PCM continuously and plays WAV audio sent by the host. VAD, silence segmentation, ASR, Route broadcast, persona TTS, FIFO playback, and feedback suppression remain owned by the RabiSpeech host.
+Rabi Voice Client turns a meeting-room PC into a LAN microphone and speaker for RabiSpeech. The client only uploads mono PCM continuously and plays WAV audio sent by the host. VAD, silence segmentation, ASR, Route broadcast, persona TTS, FIFO playback, and feedback suppression remain owned by the RabiSpeech host. The host forces this network sound-card entry point to `messageAdapterType=speech`; a client hello cannot switch it to `rabilink`, so it cannot be mistaken for phone/RabiLink input.
 
 The current release supports trusted-LAN direct connections only. RabiLink remains independent and is not required configuration; public-network audio-stream relay is not connected yet.
 

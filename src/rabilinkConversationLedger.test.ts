@@ -72,6 +72,32 @@ test("RabiLink user observations and Agent deliveries share one ordered JSONL le
   assert.equal(agent.entry.priority, "urgent");
 });
 
+test("RabiLink explicit proactivity preference stays an observation fact instead of a local decision", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-rabilink-preference-"));
+  const result = appendRabiLinkConversationEntry(dataDir, {
+    entryId: "rabilink-user:preference-1",
+    recordedAt: "2026-07-24T10:00:00.000Z",
+    direction: "user_to_agent",
+    kind: "preference",
+    text: "用户明确更新了主动性偏好：balanced",
+    sourceDeviceId: "phone-owner",
+    sourceDeviceKind: "phone",
+    channelType: "settings",
+    routeProfileId: "route-companion",
+    proactivityPreference: "balanced",
+    preferenceKind: "proactivity",
+    preferenceValue: "balanced",
+    explicitPreference: true,
+    requiresReview: true
+  });
+
+  assert.equal(result.entry.kind, "preference");
+  assert.equal(result.entry.proactivityPreference, "balanced");
+  assert.equal(result.entry.explicitPreference, true);
+  assert.equal(result.entry.channelType, "settings");
+  assert.equal(result.entry.routeProfileId, "route-companion");
+});
+
 test("RabiLink conversation ledger mechanically archives an old session by date without summaries", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-rabilink-ledger-archive-"));
   const splitAfterMs = 2 * 60 * 60 * 1000;

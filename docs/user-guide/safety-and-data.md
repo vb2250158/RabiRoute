@@ -26,7 +26,7 @@ Desktop 允许 Agent 读取文件，不等于允许把文件发到群里。RabiR
 | `blocked` | policy、消息类型或目标不允许执行 |
 | `failed` | 已尝试执行，但平台或连接返回失败 |
 
-当前没有通用、持久化、可在 WebGUI 中逐条审批的 Action Queue。`draft` 是结果和审计状态，不是一个等待处理的完整审批中心。
+当前没有通用、持久化、可在 WebGUI 中逐条审批外部动作的 Action Queue。计划页的“审批建议”只记录 Agent 计划上的用户意见并通知 Agent，不批准 Outbox 外发，也不直接推进计划。`draft` 是结果和审计状态，不是一个等待处理的完整审批中心。
 
 <div class="screenshot-placeholder">
   <strong>截图占位 14｜消息端接收与回传策略</strong>

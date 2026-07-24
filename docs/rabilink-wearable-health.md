@@ -60,7 +60,7 @@ Agent / 主动智能
 5. 如已取得小米认证秘钥，可在密码框保存；它经 Android Keystore AES-GCM 加密，只为后续厂商直连采集器保留，当前不会上传。
 6. 保存并启动，或点“立即同步”。Health Connect 使用手机前台服务；ADB Companion 模式由已配对的 Rabi PC 常驻任务读取同一份手机配置。
 
-Health Connect 没有数据时不会制造样本。当前已验证手机选择 ADB Companion 后，电脑会把手机上的启用开关、稳定设备 ID、名称、类别、轮询间隔和告警规则作为配置真源；电脑不读取 Keystore 密钥。
+Health Connect 没有数据时不会制造样本。手机端不再常驻轮询 Health Connect；只在用户手动同步、启动恢复或后续平台/设备事件到达时读取一次回看窗口。当前已验证手机选择 ADB Companion 后，电脑会把手机上的启用开关、稳定设备 ID、名称、类别、事件触发回看窗口和告警规则作为配置真源；电脑不读取 Keystore 密钥。
 
 ## 小米 ADB Companion
 

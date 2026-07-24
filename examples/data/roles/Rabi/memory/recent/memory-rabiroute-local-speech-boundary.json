@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-local-speech-boundary",
-  "title": "RabiSpeech 是本地语音基础设施，语音消息端负责控制与可选投递",
-  "content": "RabiSpeech 只运行已安装的本地 TTS/ASR 模型或回环 worker，普通 API 不进入 Agent。RabiPC 语音服务通过 Manager speechControl Interface 和共享 camelCase contract 管理人格声线、全局 FIFO、常驻麦克风、双阈值、静音切句与可选 Route 投递；角色参考音与缓存归属 data/roles/<RoleId>/voice/。speech Route 的 voice_transcript 进入 character-tts-dialogue / voice_chat，Agent 经普通回复 API 回传同义可见/朗读短句后，由 Outbox 冻结 Route 语音参数并送入主机级 FIFO。RabiLink 绑定设备只能使用明确白名单中的模型、TTS 与 ASR 路径，不能远程启停主机麦克风、代理 WebGUI 或访问任意本地路径。OumuQ 与 FenneNote 只保留为停止维护的历史项目。",
+  "title": "主机保存语音事实，Route 精确分发，人格解释声纹关系",
+  "content": "PC 麦克风与手机或眼镜 PCM 复用 RabiSpeech 的 VAD、切句、ASR 和声纹基础设施，但保留 speech 与 rabilink 两种消息端身份。完成 ASR 后先写主机级通用事实，再按冻结的 Route 精确投递；人格只保存自己实际消费的会话，并用追加式 voice-identities 事件解释“这个声纹对我是谁”。人格文件同步采用 LAN-first、Relay fallback 和显式冲突收敛，Relay 不保存主人格副本。Android 待确认 PCM、设备回执与 cursor 由边缘可靠队列拥有；合成测试和隔离测试只能证明功能闭环，不能冒充真人声纹、双实体 PC 或真机正式验收。",
   "source": {
     "kind": "example",
     "summary": "公开示例近期记忆：本地语音能力、投递和公网控制边界"
   },
   "createdAt": "2026-07-17T00:00:00+08:00",
-  "updatedAt": "2026-07-18T00:00:00+08:00",
-  "keywords": ["RabiSpeech", "speechControl", "本地模型", "TTS", "ASR", "语音消息端", "character-tts-dialogue", "Outbox", "全局 FIFO", "RabiLink", "隐私边界"]
+  "updatedAt": "2026-07-24T00:00:00+08:00",
+  "keywords": ["RabiSpeech", "speech ingress", "主机语音事实", "speech", "rabilink", "Route 精确分发", "声纹关系", "voice-identities", "人格同步", "LAN-first", "Relay fallback", "设备回执", "实体验收", "隐私边界"]
 }

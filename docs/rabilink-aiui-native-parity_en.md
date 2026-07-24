@@ -12,19 +12,19 @@ English | <a href="./rabilink-aiui-native-parity.md">简体中文</a>
 
 | AIUI capability | Phone alone | With glasses | Status | Equivalent implementation |
 | --- | --- | --- | --- | --- |
-| Continuous listening after setup | Foreground phone microphone | Glasses automatically stream PCM | Partial | Phone VAD segmentation and PC ASR; long-running physical acceptance remains |
+| Continuous listening after setup | Foreground phone microphone | Glasses automatically stream PCM | Partial | Android streams ordered PCM while the Rabi PC owns VAD, segmentation, ASR, and voiceprint processing; long-running physical acceptance remains |
 | One-tap immediate Agent review | Phone review action | Default glasses action | Complete | Durable control queue -> `rabilink.review_request` -> idle start / active-turn steer |
-| Record-first input | Same | Same | Complete | PC ASR result enters the ledger before independent review |
+| Store one host raw record, then apply Route policy | Same | Same | Complete | PC ASR writes one host-wide speech record; enabled `rabilink` Routes then apply `hot/keyword` per persona, while no subscription remains record-only. Ordinary observations can still use independent review. |
 | Reflection and proactive messages | Same | Same | Complete | PC reviewer, RabiActive, and Outbox are client-independent |
-| ASR recovery and utterance segmentation | Phone VAD | Phone VAD over glasses PCM | Complete | Disk queue and five-second replay; pause after five failures with explicit retry |
-| 48-hour / 2000-segment offline uplink | Same | Same | Complete | Private PCM/control queues and stable client IDs |
+| ASR recovery and utterance segmentation | PC RabiSpeech | PC RabiSpeech | Partial | Strict chunk sequences, Android stream recreation, and a chunk-rearmed one-shot 15-second PC expiry exist; public-network and device recovery still need acceptance |
+| 48-hour / 2000-segment offline uplink | Not applicable to live audio | Not applicable to live audio | Missing | Text/control/media remain durable; live PCM during a network outage is not promised to be cached or replayed |
 | Duplicate and TTS-echo suppression | Same | Same | Complete | 2.5-second duplicate and 12-second reply-echo filters; capture yields during playback |
 | Cursor downlink and offline backlog | Phone service | Phone backend | Partial | Cursor, cached PCM, and delivered memory exist; physical glasses playback ACK remains |
 | Failed TTS yields queue head | Phone speaker | Glasses speaker | Complete | Message/PCM persistence; yield after three failures with backoff or explicit retry |
 | Latest transcript/reply/status | Phone conversation card | Glasses HUD | Complete | Shared backend events update both surfaces |
 | Clock/battery/charging/version | Phone OS | Glasses HUD | Partial | Clock/version and real CXR battery protocol are wired; physical refresh acceptance remains |
 | Pause/continue/retry | Phone controls | One-row glasses controls | Complete | Listening pause/continue and explicit ASR/TTS failed-item retry |
-| Custom ASR/TTS/language/voice | Phone settings | Reuses phone settings | Complete | Phone selects PC speech model/provider and persona voice |
+| Custom ASR/TTS/language/voice | PC-owned ASR; phone-selected downlink TTS | Reuses the same settings | Complete | ASR/VAD/language belong to target-PC RabiSpeech; the phone retains only downlink TTS model and persona-voice selection |
 | Full PC configuration | Remote WebGUI on phone | Not duplicated on glasses | Complete | PC remains configuration truth through `/manage` |
 | Natural-language configuration assistant | Separate Settings entry | Optional glasses voice entry | Complete | Configuration no longer shares the chat composer; marked requests retain the allowlist, action gate, and success/read-back requirement |
 | Enrollment and multi-PC selection | App token and PC picker | Inherits phone binding | Partial | SN token claim is replaced; QR/short-code enrollment and rotation remain |

@@ -22,6 +22,7 @@
   "speaker_recognition": {
     "enabled": true,
     "validated": false,
+    "validation_report_path": "",
     "experimental_auto_assign": false,
     "auto_assign": true,
     "model_id": "3dspeaker-eres2netv2-zh-16k",

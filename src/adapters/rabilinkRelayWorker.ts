@@ -30,6 +30,10 @@ import {
 type RelayTask = Record<string, unknown>;
 export type RabiLinkRelayTaskDisposition = "review_request" | "record_only" | "direct";
 
+export function rabiLinkRelayTaskNeedsReviewWake(disposition: RabiLinkRelayTaskDisposition): boolean {
+  return disposition !== "direct";
+}
+
 const runningRelayWorkers = new Set<string>();
 const acceptedRelayTasks = new Map<string, number>();
 const MAX_ACCEPTED_RELAY_TASKS = 2048;
@@ -99,6 +103,43 @@ async function fetchRelayJson(
     throw new Error(String(body.message || body.error || `${response.status} ${response.statusText}`));
   }
   return body;
+}
+
+async function consumeRelayEvents(onEvent: (eventType: string) => void): Promise<void> {
+  const params = new URLSearchParams({
+    deviceId: config.rabiLinkRelayDeviceId,
+    deviceGuid: config.rabiLinkRelayDeviceGuid,
+    deviceName: hostname(),
+    capabilities: "tasks"
+  });
+  const response = await fetch(`${normalizedRelayBaseUrl()}/api/rabilink/events?${params}`, {
+    method: "GET",
+    headers: { ...relayHeaders(), accept: "text/event-stream" }
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`RabiLink Relay event stream failed: ${response.status} ${response.statusText}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let eventType = "message";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+    while (true) {
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline).replace(/\r$/, "");
+      buffer = buffer.slice(newline + 1);
+      if (!line) {
+        onEvent(eventType);
+        eventType = "message";
+      } else if (line.startsWith("event:")) {
+        eventType = line.slice(6).trim() || "message";
+      }
+    }
+  }
 }
 
 async function fetchRelayJsonReliably(
@@ -217,6 +258,13 @@ function relayTaskField(task: RelayTask, key: string): string {
 
 function relayTaskBoolean(task: RelayTask, key: string): boolean {
   return task[key] === true || String(task[key] || "").trim().toLowerCase() === "true";
+}
+
+function relayTaskProactivityPreference(task: RelayTask): "agent_decides" | "quiet" | "balanced" | "proactive" | undefined {
+  const value = relayTaskField(task, "proactivityPreference");
+  return value === "agent_decides" || value === "quiet" || value === "balanced" || value === "proactive"
+    ? value
+    : undefined;
 }
 
 function relayTaskNumber(task: RelayTask, key: string): number | undefined {
@@ -440,6 +488,7 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
     const disposition = rabiLinkRelayTaskDisposition(task);
     const reviewRequested = disposition === "review_request";
     const recordOnly = disposition === "record_only";
+    const preferenceObservation = relayTaskField(task, "type") === "rabilink.preference";
     const entryId = reviewRequested
       ? `rabilink-control:${clientMessageId || taskId}`
       : `rabilink-user:${clientMessageId || taskId}`;
@@ -447,17 +496,22 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
       entryId,
       recordedAt: relayTaskRecordedAt(task),
       direction: reviewRequested ? "control" : "user_to_agent",
-      kind: reviewRequested ? "review_request" : "voice_transcript",
+      kind: reviewRequested ? "review_request" : preferenceObservation ? "preference" : "voice_transcript",
       text,
       source: relayTaskField(task, "type") || "rabilink",
-      sender: relayTaskSender(task) || "Rokid Glass",
+      sender: relayTaskField(task, "sender") || relayTaskSender(task) || "RabiLink device",
       messageId: clientMessageId || taskId,
       taskId,
       sessionId: relayTaskField(task, "sessionId"),
       sourceDeviceId: relayTaskField(task, "sourceDeviceId"),
       sourceDeviceName: relayTaskField(task, "sourceDeviceName") || "RabiLink device",
       sourceDeviceKind: relayTaskField(task, "sourceDeviceKind"),
+      channelType: relayTaskField(task, "channelType"),
       transport: relayTaskField(task, "transport"),
+      proactivityPreference: relayTaskProactivityPreference(task),
+      preferenceKind: relayTaskField(task, "preferenceKind"),
+      preferenceValue: relayTaskField(task, "preferenceValue"),
+      explicitPreference: relayTaskBoolean(task, "explicitPreference"),
       routeProfileId: relayTaskField(task, "routeProfileId"),
       sequence: relayTaskNumber(task, "sequence"),
       capturedAt: relayTaskNumber(task, "capturedAt"),
@@ -476,7 +530,9 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
       );
     }
     rememberAcceptedRelayTask(taskId);
-    startDefaultRabiLinkConversationReviewer()?.wake();
+    if (rabiLinkRelayTaskNeedsReviewWake(disposition)) {
+      startDefaultRabiLinkConversationReviewer()?.wake();
+    }
     appendAdapterLog(profile.type, {
       event: "relay_task_claimed",
       message: text.slice(0, 500),
@@ -501,13 +557,12 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
 }
 
 async function claimRelayTask(): Promise<RelayTask | null> {
-  const waitMs = config.rabiLinkRelayClaimWaitMs;
   const params = new URLSearchParams({
     limit: "1",
     deviceId: config.rabiLinkRelayDeviceId,
     deviceGuid: config.rabiLinkRelayDeviceGuid,
     deviceName: hostname(),
-    waitMs: String(waitMs)
+    waitMs: "0"
   });
   const body = await fetchRelayJson(`/worker/tasks?${params}`, {
     method: "GET",
@@ -533,33 +588,59 @@ export function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhook
   }
   runningRelayWorkers.add(workerKey);
   startDefaultRabiLinkConversationReviewer();
-  void (async () => {
+  let draining: Promise<void> | null = null;
+  const drainAvailableTasks = (): Promise<void> => {
+    if (draining) return draining;
+    draining = (async () => {
+      while (true) {
+        const task = await claimRelayTask();
+        if (!task) return;
+        await handleRelayTask(profile, webhookPath, task);
+      }
+    })().finally(() => {
+      draining = null;
+    });
+    return draining;
+  };
+  const connectEventStream = async (): Promise<void> => {
     patchRelayStatus(profile, {
-      relayWorker: "running",
+      relayWorker: "connecting",
       relayUrl: normalizedRelayBaseUrl(),
       relayDeviceId: config.rabiLinkRelayDeviceId,
-      message: "RabiLink Relay worker 已启动。"
+      message: "RabiLink Relay worker 正在连接事件流。"
     });
-    while (true) {
-      try {
-        const task = await claimRelayTask();
-        if (!task) continue;
-        await handleRelayTask(profile, webhookPath, task);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        patchRelayStatus(profile, { status: "error", relayWorker: "error", message });
-        appendAdapterLog(profile.type, {
-          level: "error",
-          event: "relay_worker_error",
-          message,
-          data: {
-            relayUrl: normalizedRelayBaseUrl(),
-            relayDeviceId: config.rabiLinkRelayDeviceId
-          }
+    try {
+      await consumeRelayEvents((eventType) => {
+        if (eventType !== "ready" && eventType !== "task_available") return;
+        patchRelayStatus(profile, {
+          status: "running",
+          relayWorker: "running",
+          message: "RabiLink Relay 事件流已连接。"
         });
-        await sleep(3000);
-        patchRelayStatus(profile, { status: "running", relayWorker: "running", message: "RabiLink Relay worker 已恢复轮询。" });
-      }
+        void drainAvailableTasks().catch((error) => {
+          appendAdapterLog(profile.type, {
+            level: "error",
+            event: "relay_event_drain_failed",
+            message: error instanceof Error ? error.message : String(error)
+          });
+        });
+      });
+      throw new Error("RabiLink Relay event stream closed.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      patchRelayStatus(profile, { status: "error", relayWorker: "error", message });
+      appendAdapterLog(profile.type, {
+        level: "error",
+        event: "relay_event_stream_error",
+        message,
+        data: {
+          relayUrl: normalizedRelayBaseUrl(),
+          relayDeviceId: config.rabiLinkRelayDeviceId
+        }
+      });
+      await sleep(3000);
+      void connectEventStream();
     }
-  })();
+  };
+  void connectEventStream();
 }

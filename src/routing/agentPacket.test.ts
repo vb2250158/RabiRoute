@@ -4,8 +4,9 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { config, type NotificationRule, type RouteProfile } from "../config.js";
+import { updatePersonaVoiceIdentity } from "../personaVoiceIdentities.js";
 import { resolvePipeline } from "../pipelines.js";
-import type { GroupMessageRecord } from "../history.js";
+import type { GroupMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
 import { buildAgentPacket, type AgentRoleContext } from "./agentPacket.js";
 
@@ -242,4 +243,272 @@ test("AgentPacket falls back to sent Outbox messages when QQ history has not cac
 
   assert.match(packet.message, /\[CQ:reply,id=3000\] : 刚发出的测试说明/);
   assert.doesNotMatch(packet.message, /暂时无法解析/);
+});
+
+test("AgentPacket exposes processing host and persona-owned voice identity file without naming the speaker", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-voice-"));
+  updatePersonaVoiceIdentity(roleDir, {
+    sourceHostId: "host-guid-one",
+    voiceprintId: "unknown-cluster-7",
+    displayName: "老板",
+    relationship: "当前人格的用户",
+    isUser: true,
+    aliases: ["老板"]
+  });
+  const record: VoiceTranscriptEventRecord = {
+    time: Date.now() / 1_000,
+    rawMessage: "今天继续做同步。",
+    messageId: "speech-one",
+    adapterType: "speech",
+    source: "rabispeech",
+    sourceHostId: "host-guid-one",
+    sourceHostName: "Studio PC",
+    voiceprintId: "unknown-cluster-7",
+    speakerId: "host-profile-user",
+    speakerName: "主机资料里的用户",
+    speakerDecision: "voiceprint_unknown_cluster",
+    sessionId: "speech-day-one"
+  };
+  const rule: NotificationRule = {
+    id: "voice-rule",
+    name: "voice",
+    enabled: true,
+    routeKinds: ["voice_transcript"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "voice-route",
+    name: "voice",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Rabi",
+    agentRoleFile: "persona.md",
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "voice_transcript",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  assert.match(packet.message, /语音处理主机：Studio PC/);
+  assert.match(packet.message, /声纹 ID：unknown-cluster-7/);
+  assert.match(packet.message, /voice[\\/]voice-identities\.jsonl/);
+  assert.match(packet.message, /不判断这个人是谁，也不判断谁是用户/);
+  assert.match(packet.message, /unknown-cluster-7：称呼=老板；关系=当前人格的用户；isUser=true/);
+  assert.doesNotMatch(packet.message, /host-profile-user|主机资料里的用户/);
+  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+  assert.equal(replyContext.personaVoiceIdentities[0].identity.displayName, "老板");
+  assert.equal(replyContext.speakerId, undefined);
+  assert.equal(replyContext.speakerName, undefined);
+  assert.equal(replyContext.voiceprintId, "unknown-cluster-7");
+});
+
+test("RabiLink audio keeps the stable reply device separate from the transient PCM stream", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-mobile-audio-"));
+  const record: VoiceTranscriptEventRecord = {
+    time: Date.now() / 1_000,
+    rawMessage: "手机语音。",
+    messageId: "mobile-speech-one",
+    adapterType: "rabilink",
+    source: "mobile_audio_stream",
+    channelType: "rabilink.mobile_audio",
+    messageAdapterType: "rabilink",
+    sourceDeviceId: "phone-one",
+    sourceDeviceKind: "mobile",
+    sourceStreamId: "phone-one-phone-audio",
+    sessionId: "phone-one"
+  };
+  const rule: NotificationRule = {
+    id: "mobile-voice-rule",
+    name: "mobile voice",
+    enabled: true,
+    routeKinds: ["rabilink"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "mobile-route",
+    name: "mobile",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Rabi",
+    agentRoleFile: "persona.md",
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "rabilink",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+  assert.equal(replyContext.targetType, "rabilink");
+  assert.equal(replyContext.adapterType, "rabilink");
+  assert.equal(replyContext.sourceDeviceId, "phone-one");
+  assert.equal(replyContext.sourceStreamId, "phone-one-phone-audio");
+  assert.deepEqual(replyContext.targetDeviceIds, ["phone-one"]);
+  assert.equal(packet.templateValues.voiceSourceStreamId, "phone-one-phone-audio");
+});
+
+test("AgentPacket injects persona-owned identity state for every voiceprint in a multi-speaker turn", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-multi-voice-"));
+  updatePersonaVoiceIdentity(roleDir, {
+    sourceHostId: "meeting-host",
+    voiceprintId: "cluster-known",
+    displayName: "同事甲",
+    relationship: "项目同事",
+    isUser: false,
+    aliases: []
+  });
+  updatePersonaVoiceIdentity(roleDir, {
+    sourceHostId: "meeting-host",
+    voiceprintId: "host-profile-known",
+    displayName: "主机候选资料",
+    relationship: "诊断信息",
+    isUser: true,
+    aliases: []
+  });
+  const record: VoiceTranscriptEventRecord = {
+    time: Date.now() / 1_000,
+    rawMessage: "cluster-known：先做接口。\ncluster-guest：我来测试。",
+    messageId: "speech-multi",
+    adapterType: "speech",
+    source: "rabispeech",
+    sourceHostId: "meeting-host",
+    sourceHostName: "Meeting PC",
+    sessionId: "meeting-one",
+    segments: [
+      {
+        id: 0,
+        start: 0,
+        end: 1,
+        text: "先做接口。",
+        voiceprintId: "cluster-known",
+        speakerClusterId: "cluster-known",
+        speakerId: "host-profile-known",
+        speakerSuggestionId: "host-profile-known"
+      },
+      { id: 1, start: 1, end: 2, text: "我来测试。", speakerClusterId: "cluster-guest" }
+    ]
+  };
+  const rule: NotificationRule = { id: "multi-voice", name: "multi voice", enabled: true, routeKinds: ["voice_transcript"], template: "" };
+  const route: RouteProfile = {
+    id: "multi-voice-route",
+    name: "multi voice",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Rabi",
+    agentRoleFile: "persona.md",
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "voice_transcript",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, { roleId: "Rabi", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir });
+
+  assert.match(packet.message, /本段声纹：cluster-known, cluster-guest/);
+  assert.match(packet.message, /cluster-known：称呼=同事甲；关系=项目同事；isUser=false/);
+  assert.match(packet.message, /cluster-guest：当前人格尚未确认/);
+  assert.doesNotMatch(packet.message, /host-profile-known/);
+  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+  assert.deepEqual(replyContext.personaVoiceIdentities.map((item: { voiceprintId: string }) => item.voiceprintId), ["cluster-known", "cluster-guest"]);
+  assert.equal(replyContext.speakerId, undefined);
+});
+
+test("AgentPacket exposes one-shot persona capabilities only for explicit current intent", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-persona-sync-"));
+  const rule: NotificationRule = {
+    id: "persona-sync-intent",
+    name: "persona sync intent",
+    enabled: true,
+    routeKinds: ["group_message"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "persona-sync-route",
+    name: "persona sync",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Rabi",
+    agentRoleFile: "persona.md",
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const packetFor = (rawMessage: string) => buildAgentPacket({
+    route,
+    routeKind: "group_message",
+    record: {
+      time: Date.now() / 1_000,
+      groupId: 100,
+      userId: 200,
+      messageId: rawMessage,
+      rawMessage
+    },
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: rawMessage
+  }, rule, {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  const syncPacket = packetFor("我有多台电脑，请把当前人格同步到另一台电脑。");
+  assert.match(syncPacket.message, /\[多电脑人格同步\]/);
+  assert.match(syncPacket.message, /GET http:\/\/127\.0\.0\.1:8790\/api\/persona-sync\/peers/);
+  assert.match(syncPacket.message, /POST http:\/\/127\.0\.0\.1:8790\/api\/persona-sync\/sync/);
+  assert.match(syncPacket.message, /"roleId": "Rabi"/);
+  assert.match(syncPacket.message, /只执行一次查询\/同步，不创建后台轮询/);
+  assert.match(syncPacket.message, /存在冲突时不能声称同步完成/);
+
+  const ordinaryPacket = packetFor("请整理一下今天的会议记录。");
+  assert.doesNotMatch(ordinaryPacket.message, /\[多电脑人格同步\]/);
+  assert.doesNotMatch(ordinaryPacket.message, /api\/persona-sync\/peers/);
+
+  const voiceReviewPacket = packetFor("今天的录音里哪些是我说的，哪些是别人说的？");
+  assert.match(voiceReviewPacket.message, /\[全天语音与声纹归类\]/);
+  assert.match(voiceReviewPacket.message, /voice-transcripts\?from=<ISO>&to=<ISO>&speaker=<user\|other\|unknown\|conflict>/);
+  assert.match(voiceReviewPacket.message, /PUT http:\/\/127\.0\.0\.1:8790\/api\/roles\/Rabi\/voice-identities/);
+  assert.match(voiceReviewPacket.message, /证据不足时保持 unknown/);
+  assert.doesNotMatch(ordinaryPacket.message, /\[全天语音与声纹归类\]/);
 });

@@ -4,8 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QLockFile, QTimer, Qt
-from PySide6.QtGui import QAction, QColor, QCursor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QDir, QEventLoop, QLockFile, QTimer, Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .app_paths import project_dir_from_gateway, role_dir_from_gateway, role_id_from_gateway, runtime_dir_from_gateway
@@ -19,10 +19,17 @@ from .desktop_refresh import (
 from .desktop_read_model import empty_desktop_read_model
 from .display_helpers import route_menu_label, route_state, route_status_label
 from .lifecycle_controller import LifecycleController
-from .manager_client import ManagerClient, ManagerSnapshot, RolePanelSendResult
+from .manager_client import (
+    ManagerClient,
+    ManagerSnapshot,
+    ManualTriggerResult,
+    PlanFeedbackSubmitResult,
+    RolePanelSendResult,
+)
 from .qt_async import QtAsyncTask, start_qt_task, wait_for_qt_tasks
 from .task_window import TaskWindow
 from .theme import apply_rabi_menu_theme
+from .tray_menu_controller import TrayMenuController, show_tray_menu_for_activation
 from .windows_app_identity import apply_qt_app_metadata
 
 
@@ -83,6 +90,63 @@ def _start_manager_snapshot(
             gateways=[],
             error=f"unexpected snapshot failure: {error}",
         ),
+        started_callback=started_callback,
+    )
+
+
+def _start_plan_feedback_send(
+    manager: ManagerClient,
+    role_id: str,
+    plan_id: str,
+    gateway_id: str,
+    step_id: str,
+    feedback_id: str,
+    text: str,
+    completed_callback,
+    started_callback=None,
+) -> QtAsyncTask:
+    return start_qt_task(
+        lambda: manager.submit_plan_feedback(role_id, plan_id, gateway_id, step_id, feedback_id, text),
+        completed_callback,
+        on_error=lambda error: PlanFeedbackSubmitResult(ok=False, message=f"unexpected feedback failure: {error}"),
+        started_callback=started_callback,
+    )
+
+
+def _start_manual_trigger(
+    manager: ManagerClient,
+    gateway_id: str,
+    trigger_id: str,
+    trigger_name: str,
+    message: str,
+    route_kind: str,
+    completed_callback,
+    started_callback=None,
+) -> QtAsyncTask:
+    return start_qt_task(
+        lambda: manager.manual_trigger(
+            gateway_id,
+            trigger_id,
+            trigger_name,
+            message,
+            route_kind,
+            trigger_id,
+        ),
+        completed_callback,
+        on_error=lambda error: ManualTriggerResult(ok=False, message=f"unexpected trigger failure: {error}"),
+        started_callback=started_callback,
+    )
+
+
+def _start_manager_shutdown(
+    lifecycle: LifecycleController,
+    completed_callback,
+    started_callback=None,
+) -> QtAsyncTask:
+    return start_qt_task(
+        lifecycle.request_exit,
+        completed_callback,
+        on_error=lambda _error: False,
         started_callback=started_callback,
     )
 
@@ -156,8 +220,7 @@ def run(
     menu.addSeparator()
     menu.addAction(quit_action)
     _warm_menu_layout(menu)
-    tray.setContextMenu(menu)
-    tray.activated.connect(lambda reason: _show_tray_context_menu(menu, reason))
+    tray._rabiroute_menu_controller = TrayMenuController(tray, menu)
 
     initial_manager = ManagerSnapshot(
         connected=False,
@@ -182,57 +245,91 @@ def run(
         "loaded_gateway_id": selected_gateway_id,
     }
     pending_role_panel_sends: set[QtAsyncTask] = set()
+    pending_plan_feedback_sends: set[QtAsyncTask] = set()
     refresh_gate = _SnapshotRefreshGate()
     lifecycle.observe(initial_manager)
 
+    def ensure_panel() -> TaskWindow:
+        nonlocal panel
+        if panel is not None:
+            return panel
+        panel = TaskWindow(app_icon)
+        panel.refresh_button.clicked.connect(refresh)
+        panel.route_selected.connect(lambda item_id: open_panel(_gateway_by_id(state["manager"].gateways, item_id)))
+        panel.send_message_requested.connect(lambda text, attachments: _send_role_panel_message(
+            manager,
+            selected_gateway_id,
+            str(text),
+            attachments if isinstance(attachments, list) else [],
+            panel,
+            tray,
+            tray_available,
+            refresh,
+            pending_role_panel_sends,
+        ))
+        panel.plan_feedback_requested.connect(lambda plan_id, step_id, feedback_id, text: _send_plan_feedback(
+            manager,
+            selected_gateway_id,
+            role_id_from_gateway(_gateway_by_id(state["manager"].gateways, selected_gateway_id), "Rabi"),
+            str(plan_id),
+            str(step_id),
+            str(feedback_id),
+            str(text),
+            panel,
+            tray,
+            tray_available,
+            refresh,
+            pending_plan_feedback_sends,
+        ))
+        return panel
+
     def open_panel(gateway: dict | None = None, view_key: str | None = None) -> None:
-        nonlocal panel, selected_gateway_id
+        nonlocal selected_gateway_id
         if gateway is None:
             gateway = _gateway_by_id(state["manager"].gateways, selected_gateway_id) or state["manager"].selected_gateway
         if gateway is None:
             return
         selected_gateway_id = str(gateway.get("id") or selected_gateway_id)
-        role_id = role_id_from_gateway(gateway, "未指定人格")
-        if panel is None:
-            panel = TaskWindow(app_icon)
-            panel.refresh_button.clicked.connect(refresh)
-            panel.route_selected.connect(lambda item_id: open_panel(_gateway_by_id(state["manager"].gateways, item_id)))
-            panel.send_message_requested.connect(lambda text, attachments: _send_role_panel_message(
-                manager,
-                selected_gateway_id,
-                str(text),
-                attachments if isinstance(attachments, list) else [],
-                panel,
-                tray,
-                tray_available,
-                refresh,
-                pending_role_panel_sends,
-            ))
-        if state["loaded_gateway_id"] != selected_gateway_id:
-            state["plans"], state["context"] = empty_desktop_read_model(project_root, gateway, role_id)
-            state["role_messages"] = []
-            state["loaded_gateway_id"] = selected_gateway_id
-        panel.set_actions(_panel_actions(gateway, project_root, desktop, manager, tray, tray_available, refresh))
-        _render_panel(
-            panel,
-            state["manager"],
-            gateway,
-            state["plans"],
-            state["context"],
-            state["role_messages"],
-        )
+        active_gateway_id = selected_gateway_id
+        active_panel = ensure_panel()
         if view_key is not None:
-            panel.set_view(view_key)
-        panel.showNormal()
-        panel.raise_()
-        panel.activateWindow()
-        _rebuild_persona_chat_menu(
-            menu,
-            persona_actions_end,
-            more_personas_menu,
-            state["manager"],
-            selected_gateway_id,
-            open_chat,
+            active_panel.set_view(view_key)
+
+        def render_selected_gateway() -> None:
+            if selected_gateway_id != active_gateway_id:
+                return
+            role_id = role_id_from_gateway(gateway, "未指定人格")
+            if state["loaded_gateway_id"] != active_gateway_id:
+                state["plans"], state["context"] = empty_desktop_read_model(project_root, gateway, role_id)
+                state["role_messages"] = []
+                state["loaded_gateway_id"] = active_gateway_id
+            active_panel.set_actions(
+                _panel_actions(gateway, project_root, desktop, manager, tray, tray_available, refresh)
+            )
+            _render_panel(
+                active_panel,
+                state["manager"],
+                gateway,
+                state["plans"],
+                state["context"],
+                state["role_messages"],
+            )
+
+        _present_panel_immediately(active_panel, render_selected_gateway)
+        manager_snapshot = state["manager"]
+        QTimer.singleShot(
+            0,
+            lambda: _run_when_menu_idle(
+                menu,
+                lambda: _rebuild_persona_chat_menu(
+                    menu,
+                    persona_actions_end,
+                    more_personas_menu,
+                    manager_snapshot,
+                    active_gateway_id,
+                    open_chat,
+                ),
+            ),
         )
         QTimer.singleShot(0, lambda: refresh(auto=False))
 
@@ -278,7 +375,7 @@ def run(
             state["role_messages"] = result.role_messages
         if panel_active and selected_gateway is not None and not (auto and panel.is_user_interacting()):
             panel_changed = (
-                previous_manager != state["manager"]
+                _panel_manager_signature(previous_manager) != _panel_manager_signature(state["manager"])
                 or previous_plans != state["plans"]
                 or previous_context != state["context"]
                 or previous_role_messages != state["role_messages"]
@@ -349,6 +446,7 @@ def run(
     timer.timeout.connect(lambda: refresh(auto=True))
     timer.start(10_000)
 
+    _prewarm_panel(ensure_panel(), app)
     refresh()
     if tray_available:
         tray.show()
@@ -376,15 +474,39 @@ def _app_lock(project_root: Path) -> QLockFile:
 
 
 def _show_tray_context_menu(menu: QMenu, reason) -> bool:
-    if reason != QSystemTrayIcon.Context:
-        return False
-    if not menu.isVisible():
-        menu.popup(QCursor.pos())
-    return True
+    return show_tray_menu_for_activation(menu, reason)
 
 
 def _panel_is_active(panel: TaskWindow | None) -> bool:
     return panel is not None and panel.isVisible()
+
+
+def _show_panel_for_user_action(panel: TaskWindow) -> None:
+    panel.showNormal()
+    panel.raise_()
+    panel.activateWindow()
+    window_handle = panel.windowHandle()
+    if window_handle is not None:
+        window_handle.requestActivate()
+
+
+def _present_panel_immediately(panel: TaskWindow, render_callback) -> None:
+    _show_panel_for_user_action(panel)
+    QTimer.singleShot(0, render_callback)
+
+
+def _prewarm_panel(panel: TaskWindow, app: QApplication) -> None:
+    """Pay the first native QWidget layout cost before the tray becomes clickable."""
+    previous_opacity = panel.windowOpacity()
+    show_without_activating = panel.testAttribute(Qt.WA_ShowWithoutActivating)
+    panel.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    panel.setWindowOpacity(0.0)
+    panel.showNormal()
+    app.processEvents(QEventLoop.ExcludeUserInputEvents)
+    panel.hide()
+    app.processEvents(QEventLoop.ExcludeUserInputEvents)
+    panel.setWindowOpacity(previous_opacity)
+    panel.setAttribute(Qt.WA_ShowWithoutActivating, show_without_activating)
 
 
 def _run_when_menu_idle(menu: QMenu, callback, retry_ms: int = 25) -> None:
@@ -401,6 +523,9 @@ def _quit(
     lifecycle: LifecycleController,
     manager_proc: "subprocess.Popen[bytes] | None" = None,
 ) -> None:
+    if bool(app.property("rabirouteQuitPending")):
+        return
+    app.setProperty("rabirouteQuitPending", True)
     _show_message(
         tray,
         tray_available,
@@ -409,22 +534,25 @@ def _quit(
         QSystemTrayIcon.Information,
         2500,
     )
-    shutdown_requested = lifecycle.request_exit()
-    if manager_proc is not None and manager_proc.poll() is None:
-        # HTTP shutdown may be slow or fail for the manager started by this process.
-        manager_proc.terminate()
-        shutdown_requested = True
-    if not shutdown_requested:
-        _show_message(
-            tray,
-            tray_available,
-            "RabiRoute / 当前人格",
-            "未能关闭 RabiRoute manager，桌面入口保持运行。请检查 manager 状态后再退出。",
-            QSystemTrayIcon.Warning,
-            5000,
-        )
-        return
-    app.quit()
+    def completed(_task: QtAsyncTask, shutdown_requested: bool) -> None:
+        if manager_proc is not None and manager_proc.poll() is None:
+            # HTTP shutdown may be slow or fail for the manager started by this process.
+            manager_proc.terminate()
+            shutdown_requested = True
+        if not shutdown_requested:
+            app.setProperty("rabirouteQuitPending", False)
+            _show_message(
+                tray,
+                tray_available,
+                "RabiRoute / 当前人格",
+                "未能关闭 RabiRoute manager，桌面入口保持运行。请检查 manager 状态后再退出。",
+                QSystemTrayIcon.Warning,
+                5000,
+            )
+            return
+        app.quit()
+
+    _start_manager_shutdown(lifecycle, completed)
 
 
 def _show_message(tray: QSystemTrayIcon, tray_available: bool, title: str, message: str, icon, timeout: int) -> None:
@@ -470,6 +598,51 @@ def _send_role_panel_message(
         _show_message(tray, tray_available, "角色面板", f"发送失败。{detail}", QSystemTrayIcon.Warning, 5000)
 
     _start_role_panel_send(manager, gateway_id, text, attachments, completed, pending_tasks.add)
+
+
+def _send_plan_feedback(
+    manager: ManagerClient,
+    gateway_id: str,
+    role_id: str,
+    plan_id: str,
+    step_id: str,
+    feedback_id: str,
+    text: str,
+    panel: TaskWindow,
+    tray: QSystemTrayIcon,
+    tray_available: bool,
+    refresh_callback,
+    pending_tasks: set[QtAsyncTask],
+) -> None:
+    if not gateway_id or not role_id or not plan_id:
+        panel.complete_plan_feedback(plan_id, False, "当前计划缺少可用的 Route 或人格绑定。", "error")
+        return
+    panel.set_plan_feedback_pending(plan_id, True)
+
+    def completed(completed_task: QtAsyncTask, result: PlanFeedbackSubmitResult) -> None:
+        pending_tasks.discard(completed_task)
+        if result.ok:
+            panel.complete_plan_feedback(plan_id, True, "审批建议已记录并交给 Agent 处理。", "success")
+            _show_message(tray, tray_available, "计划审批", "审批建议已记录并交给 Agent。", QSystemTrayIcon.Information, 2200)
+            refresh_callback()
+            return
+        if result.delivery_status == "failed":
+            detail = f" {result.message}" if result.message else ""
+            panel.complete_plan_feedback(plan_id, False, f"审批建议已记录，但通知 Agent 失败；可以重试。{detail}", "warning")
+            return
+        panel.complete_plan_feedback(plan_id, False, result.message or "审批建议提交失败。", "error")
+
+    _start_plan_feedback_send(
+        manager,
+        role_id,
+        plan_id,
+        gateway_id,
+        step_id,
+        feedback_id,
+        text,
+        completed,
+        pending_tasks.add,
+    )
 
 
 def _panel_actions(
@@ -569,7 +742,7 @@ def _rebuild_persona_chat_menu(
         action = _action(
             action_text,
             menu,
-            lambda checked=False, item=gateway: _defer_callback(open_chat_callback, item),
+            lambda checked=False, item=gateway: open_chat_callback(item),
         )
         action.setIcon(_route_state_icon(route_state(gateway)))
         action.setToolTip(_route_label(gateway))
@@ -598,6 +771,21 @@ def _persona_menu_signature(manager_snapshot: ManagerSnapshot) -> tuple:
     )
 
 
+def _panel_manager_signature(manager_snapshot: ManagerSnapshot) -> tuple:
+    return (
+        manager_snapshot.connected,
+        manager_snapshot.manager_url,
+        manager_snapshot.error,
+        tuple(
+            (
+                str(gateway.get("id") or ""),
+                route_status_label(gateway),
+            )
+            for gateway in manager_snapshot.gateways
+        ),
+    )
+
+
 def _populate_more_personas_menu(more_personas_menu: QMenu) -> None:
     gateways = getattr(more_personas_menu, "_rabiroute_pending_personas", [])
     if not gateways:
@@ -609,7 +797,7 @@ def _populate_more_personas_menu(more_personas_menu: QMenu) -> None:
         action = _action(
             route_menu_label(gateway),
             more_personas_menu,
-            lambda checked=False, item=gateway: _defer_callback(open_chat_callback, item),
+            lambda checked=False, item=gateway: open_chat_callback(item),
         )
         action.setIcon(_route_state_icon(route_state(gateway)))
         action.setToolTip(_route_label(gateway))
@@ -619,7 +807,9 @@ def _populate_more_personas_menu(more_personas_menu: QMenu) -> None:
 
 def _warm_menu_layout(menu: QMenu):
     menu.ensurePolished()
-    return menu.sizeHint()
+    size = menu.sizeHint()
+    menu.winId()
+    return size
 
 
 def _route_state_icon(state: str) -> QIcon:
@@ -648,10 +838,6 @@ def _action(text: str, parent, callback) -> QAction:
     action = QAction(text, parent)
     action.triggered.connect(callback)
     return action
-
-
-def _defer_callback(callback, *args) -> None:
-    QTimer.singleShot(0, lambda: callback(*args))
 
 
 def _manual_trigger_rules(gateway: dict) -> list[dict]:
@@ -694,13 +880,23 @@ def _manual_trigger(
     if not gateway_id:
         _show_message(tray, tray_available, "RabiRoute", "这条航线没有可触发的 ID。", QSystemTrayIcon.Warning, 2500)
         return
-    result = manager.manual_trigger(gateway_id, trigger_id, trigger_name, message, route_kind, trigger_id)
-    if result.ok:
-        _show_message(tray, tray_available, "RabiRoute", f"已触发 {trigger_name}：{_gateway_label(gateway)}", QSystemTrayIcon.Information, 2500)
-        refresh_callback()
-    else:
+    def completed(_task: QtAsyncTask, result: ManualTriggerResult) -> None:
+        if result.ok:
+            _show_message(tray, tray_available, "RabiRoute", f"已触发 {trigger_name}：{_gateway_label(gateway)}", QSystemTrayIcon.Information, 2500)
+            refresh_callback()
+            return
         detail = f"\n{result.message}" if result.message else ""
         _show_message(tray, tray_available, "RabiRoute", f"{trigger_name} 触发失败：{_gateway_label(gateway)}{detail}", QSystemTrayIcon.Warning, 5000)
+
+    _start_manual_trigger(
+        manager,
+        gateway_id,
+        trigger_id,
+        trigger_name,
+        message,
+        route_kind,
+        completed,
+    )
 
 
 def _gateway_label(gateway: dict, role_id: str | None = None) -> str:

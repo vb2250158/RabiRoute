@@ -110,6 +110,8 @@ data class RabiLinkPortableMessage(
 data class RabiLinkPortableMessagePage(
     val messages: List<RabiLinkPortableMessage>,
     val nextCursor: String,
+    val cursorReset: Boolean,
+    val cursorResetReason: String,
     val shouldContinue: Boolean,
     val status: String,
     val rawJson: JSONObject
@@ -337,7 +339,7 @@ class RabiRouteSdk @JvmOverloads constructor(
         relayBaseUrl: String,
         token: String,
         deviceId: String,
-        waitMs: Int = 60000,
+        waitMs: Int = 0,
         limit: Int = 1
     ): List<RabiLinkRelayTask> {
         val url = "${relayBaseUrl.trimEnd('/')}/worker/tasks" +
@@ -475,6 +477,8 @@ class RabiRouteSdk @JvmOverloads constructor(
         return RabiLinkPortableMessagePage(
             messages = messages,
             nextCursor = json.optString("nextCursor", json.optString("cursor")),
+            cursorReset = json.optBoolean("cursorReset"),
+            cursorResetReason = json.optString("cursorResetReason"),
             shouldContinue = json.optBoolean("shouldContinue"),
             status = json.optString("status"),
             rawJson = json

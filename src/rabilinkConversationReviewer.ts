@@ -107,6 +107,10 @@ function latestEntry(entries: RabiLinkConversationEntry[]): RabiLinkConversation
   return entries.length ? entries[entries.length - 1] : undefined;
 }
 
+function routeProfileIds(entries: RabiLinkConversationEntry[]): string[] {
+  return [...new Set(entries.flatMap(entry => entry.routeProfileId?.trim() ? [entry.routeProfileId.trim()] : []))];
+}
+
 export function buildRabiLinkConversationReviewPrompt(input: {
   ledgerPath: string;
   archiveDir: string;
@@ -116,6 +120,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
   agentRolePath?: string;
   reviewPolicyPath?: string;
   pendingUserEntries: RabiLinkConversationEntry[];
+  pendingRouteProfileIds?: string[];
   manual: boolean;
   reflection?: boolean;
 }): string {
@@ -143,6 +148,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     `历史会话目录：${input.archiveDir}`,
     `本次新增用户记录：${input.pendingUserEntries.length}`,
     `新增范围：${first?.entryId || "无新增用户记录"} -> ${last?.entryId || "无新增用户记录"}`,
+    `本次涉及 Route：${input.pendingRouteProfileIds?.join(", ") || input.routeProfileId}`,
     `当前人格：${input.agentRolePath || "使用当前线程已绑定人格"}`,
     input.reviewPolicyPath ? `主动审阅策略：${input.reviewPolicyPath}` : "主动审阅策略：使用本提示中的默认策略",
     "",
@@ -156,7 +162,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     "5. 想尽可用办法减轻用户负担。可以主动读取相关本地文件、计划和项目状态，做低风险分析、检索、草稿或预备工作；有价值时给出结果或最小下一步，不要只问泛泛的“需要我帮忙吗”。",
     "6. 只有在能带来明确帮助时才主动打断：直接问题、时间敏感提醒、风险、重要遗漏、可立即推进的下一步，或用户明确要求你介入。普通闲聊、重复、背景音和低置信片段保持安静。",
     "7. 任何外发、删除、购买、设备控制或配置高风险动作仍需遵守 RabiRoute 安全门；不要因为旁听到一句话就擅自执行。",
-    `8. 需要对眼镜说话时，以 Content-Type=application/json POST ${replyApiUrl}。请求体示例：${proactiveReplyBody}。下行不依赖上行 taskId，眼镜会按队列调用原生 TTS。`,
+    `8. 需要对眼镜说话时，以 Content-Type=application/json POST ${replyApiUrl}。请求体示例：${proactiveReplyBody}。下行不依赖上行 taskId，眼镜会按队列调用原生 TTS。若本次涉及多个 Route，必须根据对应记录的 routeProfileId 分别投递，不能把一个人格的结论发到另一个 Route。`,
     "9. 只有接口返回 ok=true 且 status=sent 才视为已投递；成功下行会自动写回同一账本。不要复述内部路径、entryId、JSON 字段或审阅过程，也不要重复已经投递过的内容。",
     input.manual
       ? "10. 这是用户手动要求审阅：即使暂时没有要执行的动作，也应给眼镜一句很短的自然确认，说明你已经看过并给出最有用的一点结论。"
@@ -178,7 +184,8 @@ export class RabiLinkConversationReviewer {
   private readonly notifyWhenIdle: (message: string) => Promise<CodexIdleNotificationResult>;
   private readonly notifyNow: (message: string) => Promise<unknown>;
   private readonly onBackgroundError: (error: unknown, trigger: string) => void;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private reflectionTimer: ReturnType<typeof setTimeout> | null = null;
   private running: Promise<RabiLinkConversationReviewResult> | null = null;
   private wakeQueued = false;
 
@@ -214,17 +221,23 @@ export class RabiLinkConversationReviewer {
   }
 
   start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => { this.checkInBackground("interval"); }, this.intervalMs);
+    if (this.retryTimer || this.reflectionTimer) return;
     this.checkInBackground("startup");
+    this.armReflection();
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (this.reflectionTimer) clearTimeout(this.reflectionTimer);
+    this.retryTimer = null;
+    this.reflectionTimer = null;
   }
 
   wake(): void {
+    if (this.reflectionTimer) {
+      clearTimeout(this.reflectionTimer);
+      this.reflectionTimer = null;
+    }
     if (this.running) {
       this.wakeQueued = true;
       return;
@@ -246,15 +259,51 @@ export class RabiLinkConversationReviewer {
   }
 
   private checkInBackground(trigger: string): void {
-    void this.check().catch((error) => {
-      try {
-        this.onBackgroundError(error, trigger);
-      } catch (reportError) {
-        console.error(
-          `RabiLink conversation review error reporting failed: ${reportError instanceof Error ? reportError.message : String(reportError)}`
-        );
-      }
-    });
+    void this.check()
+      .then(result => {
+        if (result.status === "settling" || result.status === "busy") {
+          this.scheduleRetry(result.status);
+        } else {
+          this.armReflection();
+        }
+      })
+      .catch((error) => {
+        this.scheduleRetry("error");
+        try {
+          this.onBackgroundError(error, trigger);
+        } catch (reportError) {
+          console.error(
+            `RabiLink conversation review error reporting failed: ${reportError instanceof Error ? reportError.message : String(reportError)}`
+          );
+        }
+      });
+  }
+
+  private scheduleRetry(reason: string): void {
+    if (this.retryTimer) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.checkInBackground(`retry_${reason}`);
+    }, this.intervalMs);
+    this.retryTimer.unref?.();
+  }
+
+  private armReflection(): void {
+    if (!this.continuousReflectionEnabled || this.reflectionTimer) return;
+    const entries = readRabiLinkConversationTimeline(this.dataDir);
+    if (entries.length === 0) return;
+    const state = readReviewState(this.dataDir);
+    const lastScheduledAt = Date.parse(state.lastScheduledAt || "");
+    const latestLedgerAt = Date.parse(latestEntry(entries)?.recordedAt || "");
+    const baseline = Number.isFinite(lastScheduledAt) ? lastScheduledAt : latestLedgerAt;
+    const delayMs = Number.isFinite(baseline)
+      ? Math.max(0, baseline + this.reflectionIntervalMs - this.now())
+      : this.reflectionIntervalMs;
+    this.reflectionTimer = setTimeout(() => {
+      this.reflectionTimer = null;
+      this.checkInBackground("reflection_timer");
+    }, Math.min(2_147_000_000, delayMs));
+    this.reflectionTimer.unref?.();
   }
 
   private async checkInternal(): Promise<RabiLinkConversationReviewResult> {
@@ -291,9 +340,10 @@ export class RabiLinkConversationReviewer {
     const reviewPolicyPath = this.agentRolePath
       ? path.join(path.dirname(this.agentRolePath), "prompts", "rabilink-proactive-review.md")
       : "";
-    const requestedRouteProfileId = [...pendingReviewRequests].reverse()
+    const requestedRouteProfileId = [...(manual ? pendingReviewRequests : pendingUserEntries)].reverse()
       .map((entry) => entry.routeProfileId?.trim())
       .find((value): value is string => Boolean(value));
+    const pendingRouteProfileIds = routeProfileIds([...pendingUserEntries, ...pendingReviewRequests]);
     const prompt = buildRabiLinkConversationReviewPrompt({
       ledgerPath: rabiLinkConversationLedgerPath(this.dataDir),
       archiveDir: rabiLinkConversationArchiveDir(this.dataDir),
@@ -303,6 +353,7 @@ export class RabiLinkConversationReviewer {
       agentRolePath: this.agentRolePath,
       reviewPolicyPath: reviewPolicyPath && fs.existsSync(reviewPolicyPath) ? reviewPolicyPath : undefined,
       pendingUserEntries,
+      pendingRouteProfileIds,
       manual,
       reflection
     });

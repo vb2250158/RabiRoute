@@ -15,7 +15,7 @@ The phone is an edge communication hub—not a second Agent and not the RabiRout
 | Component | Responsibility |
 | --- | --- |
 | PC RabiRoute / Codex Desktop owner | Reasoning, role context, unified ledger, configuration truth, and action gates |
-| Relay | Application-isolated, retryable bidirectional mailbox with durable retention |
+| Relay | Application-isolated, retryable bidirectional mailbox; broadcasts/kind targets use bounded TTL, explicit targets remain until `delivered`, and per-device receipts are persisted |
 | Phone | Glasses backend, application token, selected PC, cursor, audio/media queues, notifications, device status, and local peripheral fan-out |
 | Native glasses app | Lightweight HUD, touchpad, PCM capture/playback, and device-media input; no Relay credential |
 | Watch/headset/other portable device | Uses the phone's local link or its own network with the same device envelope |
@@ -30,7 +30,7 @@ flowchart LR
     W["Watch / headset / other device"] <-->|"BLE / Data Layer / LAN"| P
     P <-->|"HTTPS"| R["RabiLink Relay\npersistent mailboxes"]
     W -.->|"optional HTTPS"| R
-    R <-->|"worker long poll"| C["PC RabiRoute\ncontext / config / policy"]
+    R <-->|"SSE events + immediate claim"| C["PC RabiRoute\ncontext / config / policy"]
     C <-->|"Desktop IPC"| A["Codex Desktop task owner"]
     C <--> L["Unified JSONL ledger"]
 ```
@@ -100,6 +100,9 @@ For long-lived work, use platform-supported mechanisms:
 - Companion Device pairing/service where appropriate;
 - bounded retries, WorkManager for deferred work, and persistent local cursors;
 - explicit user controls for pause, disconnect, forget device, and clear queued data.
+- system connectivity and restored RabiLink SSE events wake continuous-PCM recovery. While Android knows the device is offline, the SSE connection and reliable sender wait on the connectivity-event gate rather than retrying every few seconds. Only to cover rare vendors that miss an already registered default-network callback, the foreground service checks current OS connectivity every five minutes while known offline and stops immediately after recovery; this safety path never requests Relay, reads messages, or advances the cursor. Only an available network with a temporary service failure uses one-shot 1–30 second backoff;
+- a pending PCM chunk keeps a stable `chunkId` across transient stream rebuilds, while the PC retains only the last accepted chunk ID/hash for each stable device. Offline PCM buffering is bounded and discards obsolete sound so recovery catches the live stream. Complete preservation of every offline utterance would require a separately enabled, privacy-visible offline recording mode.
+- text, media, and `delivered/played/playback_failed` first enter phone-private reliable queues. Reconnection performs one cursor catch-up query and replays pending facts. `delivered` is not `played`; phone and glasses report physical completion only after their own AudioTrack marker. After BEGIN, glasses synchronously confirm capture is paused before accepting PCM, and Activity destruction reports unfinished playback as failed.
 
 Background execution rules vary by Android version and vendor. Real-device acceptance is mandatory.
 

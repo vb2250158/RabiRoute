@@ -38,6 +38,7 @@ test("a continuous transcript source enters the shared ledger once without becom
     sourceDeviceKind: "phone",
     transport: "phone-companion",
     sessionId: "resident-session",
+    routeProfileId: "Ilias",
     startedAt: "2026-07-14T09:30:00.000Z",
     endedAt: "2026-07-14T09:30:04.000Z"
   };
@@ -63,6 +64,7 @@ test("a continuous transcript source enters the shared ledger once without becom
   assert.equal(entries[0].source, "fennenote");
   assert.equal(entries[0].messageId, "fennenote-segment-42");
   assert.equal(entries[0].sessionId, "resident-session");
+  assert.equal(entries[0].routeProfileId, "Ilias");
   assert.equal(entries[0].sourceDeviceKind, "phone");
   assert.equal(entries[0].transport, "phone-companion");
   assert.equal(entries[0].recordedAt, "2026-07-14T09:30:04.000Z");

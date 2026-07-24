@@ -105,7 +105,8 @@ flowchart TB
 | 上下文 | 人格级双向会话账本，按 11 种逻辑消息端分别设置 `0–200` 条自动注入额度（默认 `100`），以及人格文件、计划、记忆引用、回复上下文和安全附件元数据 |
 | 处理端 | 已验证：Codex。实验支持：Copilot CLI、AstrBot。人工接力：Marvis。 |
 | 控制面 | Node.js Manager 与 RibiWebGUI，负责 route 生命周期、配置、状态、日志、人格和诊断 |
-| 本机语音 | 实验支持：RabiSpeech TTS/ASR。音频流默认使用本机麦克风和喇叭，也可选择局域网上线的独立 Rabi 语音客户端作为远程网络声卡；VAD、切句、ASR、Route 广播、人格 TTS 和主机级 FIFO 仍只在 RabiSpeech 主机运行。 |
+| 本机语音 | 实验支持：RabiSpeech TTS/ASR。同一套主机 VAD/ASR 记录完整来源与声纹证据，但逻辑消息端分开：本机/普通远程麦克风只进入 `speech` Route；Android 手机/眼镜持续传 PCM 到同一主机处理链，但只进入 `rabilink` Route。Android 不切句、不跑 ASR 或声纹；移动端以事件唤醒并用 cursor 单次查询补漏，已知离线期间另有五分钟一次、只读系统联网状态的厂商回调漏发兜底，不查询 Relay 或业务数据。可靠文字/媒体/回执保留到确认，有界 PCM 丢旧追实时；`delivered` 与设备 AudioTrack marker 产生的 `played` 明确分开。手机回复默认回原设备，人格 TTS 和主机级 FIFO 仍归 RabiSpeech。路由消息询问一天或某段时间“谁说了什么”时，AgentPacket 会提供当前人格的归类查询和关系修正合同，主机仍不判断身份。 |
+| 人格数据同步 | 实验支持同一 RabiLink 应用下的多电脑发现和人格目录合并。优先使用受 token 保护的专用局域网数据面 listener，失败后经 Relay 受限中转；P2P 不暴露完整 Manager/WebGUI。JSONL 做并集合并，普通文件按共同版本快进；已知共同基线上的单边删除可传播，不安全分歧保留冲突证据。持久化事件补偿器响应本机文件变化、peer 上下线和 Relay 重连，再执行一次 manifest 补漏查询；待同步范围可跨断网和 Manager 重启保留，不运行固定业务轮询。人格页已提供设备状态、手动同步、证据预览和基础冲突解决。只有路由任务明确要求 Agent 处理同步时，AgentPacket 才额外注入回环 API 合同。 |
 | 安全 | Outbox policy、来源绑定、adapter policy、NapCat 文件白名单和 Codex Runtime fail-closed 审批；通用审批中心尚未实现 |
 | 可观测性 | JSONL 消息历史、适配器日志、处理端数据包、投递记录、心跳记录、回复记录和 delivery replay |
 

@@ -11,7 +11,9 @@ import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
 import { forwardMessageAndWait, recordMessageContextOnly, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
-import { appendVoiceTranscriptEventForAdapter, type RolePanelMessageRecord, type VoiceTranscriptEventRecord } from "./history.js";
+import { appendVoiceTranscriptEventForAdapter, type RolePanelMessageRecord } from "./history.js";
+import { SpeechIngressStore } from "./speechIngressStore.js";
+import { createSpeechIngressForwarding } from "./routing/speechIngressForwarding.js";
 import { decideSpeechPush } from "./routing/speechPushPolicy.js";
 import {
   speechForwardProcessOutcome,
@@ -223,44 +225,50 @@ if (rolePanelMessageArg) {
 const speechMessageArg = process.argv.find((arg) => arg.startsWith("--speech-message="));
 if (speechMessageArg) {
   const messageId = decodeURIComponent(speechMessageArg.slice("--speech-message=".length)).trim() || `speech-${Date.now()}`;
-  const textArg = process.argv.find((arg) => arg.startsWith("--speech-text="));
-  const sessionArg = process.argv.find((arg) => arg.startsWith("--speech-session="));
   const gatewayArg = process.argv.find((arg) => arg.startsWith("--speech-gateway="));
   const routeProfileArg = process.argv.find((arg) => arg.startsWith("--speech-route-profile="));
-  const text = textArg ? decodeURIComponent(textArg.slice("--speech-text=".length)).trim() : "";
-  const sessionId = sessionArg ? decodeURIComponent(sessionArg.slice("--speech-session=".length)).trim() : "";
   const gatewayId = gatewayArg ? decodeURIComponent(gatewayArg.slice("--speech-gateway=".length)).trim() : process.env.GATEWAY_ID?.trim() || "";
   const requestedRouteProfileId = routeProfileArg ? decodeURIComponent(routeProfileArg.slice("--speech-route-profile=".length)).trim() : "";
-  if (!text) {
-    console.error("RabiRoute speech message failed: missing transcript text");
+  const speechMessagesDir = process.env.RABIROUTE_SPEECH_MESSAGES_DIR?.trim();
+  const ingress = speechMessagesDir ? new SpeechIngressStore(speechMessagesDir).read(messageId) : undefined;
+  if (!ingress) {
+    console.error(`RabiRoute speech message failed: host speech ingress record not found (${messageId})`);
     process.exit(1);
   }
-  const record: VoiceTranscriptEventRecord = {
-    time: Math.floor(Date.now() / 1000),
-    rawMessage: text,
-    messageId,
-    senderName: "RabiPC 语音消息端",
-    adapterType: "speech",
+  const { routeKind, record } = createSpeechIngressForwarding(ingress, {
     gatewayId,
-    source: "rabispeech",
-    transport: "rabipc",
-    sessionId,
-    routeProfileId: requestedRouteProfileId || undefined
-  };
+    routeProfileId: requestedRouteProfileId
+  });
+  const text = record.rawMessage;
+  const adapterType = record.adapterType || ingress.messageAdapterType;
   try {
-    appendVoiceTranscriptEventForAdapter("speech", record);
+    appendVoiceTranscriptEventForAdapter(adapterType, record);
+    if (routeKind === "rabilink") {
+      const result = await forwardMessageAndWait(routeKind, record);
+      const summary = deliverySummary(result);
+      const outcome = speechForwardProcessOutcome(result);
+      if (outcome.result.status === "delivered") {
+        console.log(`RabiRoute mobile audio message delivered: ${messageId} ${summary}`);
+      } else if (outcome.exitCode === 1) {
+        console.error(`RabiRoute mobile audio message failed: ${messageId} ${summary}`);
+      } else {
+        console.warn(`RabiRoute mobile audio message not delivered: ${messageId} ${summary}`);
+      }
+      writeSpeechProcessResult(outcome.result);
+      process.exit(outcome.exitCode);
+    }
     const route = requestedRouteProfileId
       ? config.routeProfiles.find((item) => item.id === requestedRouteProfileId)
       : config.routeProfiles[0];
     const push = decideSpeechPush(text, route?.speechPushMode, route?.speechTriggerKeywords);
     if (!push.shouldNotifyAgent) {
-      const recordedRoutes = recordMessageContextOnly("voice_transcript", record);
+      const recordedRoutes = recordMessageContextOnly(routeKind, record);
       const outcome = speechRecordedProcessOutcome(recordedRoutes, push.reason);
       console.log(`RabiRoute speech message ${outcome.result.status}: ${messageId} mode=${push.mode} reason=${outcome.result.reason} routes=${recordedRoutes}`);
       writeSpeechProcessResult(outcome.result);
       process.exit(outcome.exitCode);
     }
-    const result = await forwardMessageAndWait("voice_transcript", record, {
+    const result = await forwardMessageAndWait(routeKind, record, {
       speechPushMode: push.mode,
       speechTriggerKeyword: push.matchedKeyword
     });
@@ -351,9 +359,6 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
         : `${type} 消息适配端尚未实现，当前仅作为框架占位。`;
       patchMessageAdapterStatus({ type, status, message });
       console.log(message);
-      setInterval(() => {
-        patchMessageAdapterStatus({ type, status, message });
-      }, 30_000).unref();
     }
   };
 }

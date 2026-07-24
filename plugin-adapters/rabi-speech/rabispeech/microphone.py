@@ -90,14 +90,46 @@ class MicrophoneConfig:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class SpeechInputSource:
+    source: str
+    transport: str
+    channel_type: str
+    message_adapter_type: str
+    route_profile_id: str | None = None
+    session_id: str | None = None
+    device_id: str | None = None
+    device_name: str | None = None
+    device_kind: str | None = None
+    stream_id: str | None = None
+    audio_format: str | None = None
+    channels: int = 1
+    sample_rate: int = 16_000
+
+
+@dataclass(frozen=True)
+class SpeechUtteranceMetadata:
+    started_at: float
+    completed_at: float
+    duration: float
+    peak: float
+    rms: float
+
+
 Transcriber = Callable[[Path, MicrophoneConfig], Awaitable[TranscriptionResult]]
-Submitter = Callable[[str, str], Awaitable[dict[str, object]]]
+Submitter = Callable[[TranscriptionResult, str, SpeechUtteranceMetadata, SpeechInputSource], Awaitable[dict[str, object]]]
 StreamFactory = Callable[[MicrophoneConfig, Callable[..., None]], Any]
 RecordTranscription = Callable[[TranscriptionResult, MicrophoneConfig, float], None]
 
 
 class RemoteAudioController:
     selected_client_id: str | None
+    selected_client_name: str | None
+    selected_client_kind: str | None
+    selected_source_device_id: str | None
+    selected_message_adapter_type: str | None
+    selected_route_profile_id: str | None
+    selected_session_id: str | None
 
     async def start_capture(self, sample_rate: int, chunk_ms: int) -> None: ...
 
@@ -122,6 +154,7 @@ class MicrophoneService:
         record_transcription: RecordTranscription | None = None,
         stream_factory: StreamFactory | None = None,
         remote_audio: RemoteAudioController | None = None,
+        event_sink: Callable[[str, object], None] | None = None,
     ) -> None:
         self.state_path = state_path.expanduser().resolve()
         self.temp_dir = temp_dir.expanduser().resolve()
@@ -131,12 +164,13 @@ class MicrophoneService:
         self._record_transcription = record_transcription
         self._stream_factory = stream_factory or _sounddevice_stream
         self._remote_audio = remote_audio
+        self._event_sink = event_sink
         self.config = self._read_config()
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
         self._consumer: asyncio.Task[None] | None = None
-        self._phrases: asyncio.Queue[tuple[np.ndarray, float, float]] = asyncio.Queue(maxsize=8)
+        self._phrases: asyncio.Queue[tuple[np.ndarray, float, float, SpeechInputSource]] = asyncio.Queue(maxsize=8)
         self._running = False
         self._state = "stopped"
         self._error = ""
@@ -155,9 +189,11 @@ class MicrophoneService:
         self._silence_samples = 0
         self._peak = 0.0
         self._started_at = 0.0
+        self._utterance_source: SpeechInputSource | None = None
         self._history: deque[dict[str, object]] = deque(maxlen=50)
         self._events: deque[dict[str, object]] = deque(maxlen=100)
         self._event_sequence = 0
+        self._last_level_event_at = 0.0
         self._captured = 0
         self._recognized = 0
         self._empty = 0
@@ -310,17 +346,18 @@ class MicrophoneService:
 
     def _emit_event(self, stage: str, kind: str, message: str, *, level: str = "info", **details: object) -> None:
         self._event_sequence += 1
-        self._events.appendleft(
-            {
-                "sequence": self._event_sequence,
-                "time": time.time(),
-                "stage": stage,
-                "kind": kind,
-                "level": level,
-                "message": message,
-                "details": {key: value for key, value in details.items() if value is not None},
-            }
-        )
+        event = {
+            "sequence": self._event_sequence,
+            "time": time.time(),
+            "stage": stage,
+            "kind": kind,
+            "level": level,
+            "message": message,
+            "details": {key: value for key, value in details.items() if value is not None},
+        }
+        self._events.appendleft(event)
+        if self._event_sink is not None:
+            self._event_sink("microphone_event", event)
 
     @staticmethod
     def devices() -> list[dict[str, object]]:
@@ -383,6 +420,16 @@ class MicrophoneService:
         self._level = level
         self._display_level = self._display_level * 0.75 + level * 0.25
         self._level_history.append(round(self._display_level, 6))
+        now = time.monotonic()
+        if self._event_sink is not None and now - self._last_level_event_at >= 0.2:
+            self._last_level_event_at = now
+            self._event_sink("microphone_level", {
+                "level": round(self._display_level, 6),
+                "noise_floor": round(self._noise_floor, 6),
+                "dynamic_threshold": round(self._dynamic_threshold, 6),
+                "state": self._state,
+                "utterance_active": self._utterance_active,
+            })
         if self.config.suppress_during_playback and self._playback_active():
             if self._state != "playback_suppressed":
                 self._emit_event("microphone", "playback_suppressed", "检测到主机播放，暂时抑制麦克风触发")
@@ -407,9 +454,13 @@ class MicrophoneService:
             self._utterance_active = True
             self._utterance_chunks = list(self._pre_chunks)
             self._utterance_samples = self._pre_samples
+            if not self._utterance_chunks:
+                self._utterance_chunks.append(chunk.copy())
+                self._utterance_samples = chunk.size
             self._pre_chunks.clear()
             self._pre_samples = 0
             self._started_at = time.time() - self._utterance_samples / self.config.sample_rate
+            self._utterance_source = self._input_source()
             self._peak = level
             self._voiced_samples = chunk.size
             self._silence_samples = 0
@@ -455,6 +506,7 @@ class MicrophoneService:
         peak = self._peak
         voiced_samples = self._voiced_samples
         started_at = self._started_at or time.time()
+        input_source = self._utterance_source or self._input_source()
         duration = round(audio.size / self.config.sample_rate, 3) if self.config.sample_rate else 0.0
         voiced_duration = round(voiced_samples / self.config.sample_rate, 3) if self.config.sample_rate else 0.0
         self._reset_segment()
@@ -471,7 +523,7 @@ class MicrophoneService:
             )
             return
         try:
-            self._phrases.put_nowait((audio, started_at, peak))
+            self._phrases.put_nowait((audio, started_at, peak, input_source))
             self._captured += 1
             self._emit_event(
                 "vad",
@@ -495,10 +547,44 @@ class MicrophoneService:
         self._silence_samples = 0
         self._peak = 0.0
         self._started_at = 0.0
+        self._utterance_source = None
+
+    def _input_source(self) -> SpeechInputSource:
+        remote_id = self._remote_audio.selected_client_id if self._remote_audio is not None else None
+        if remote_id:
+            adapter_type = self._remote_audio.selected_message_adapter_type or "speech"
+            return SpeechInputSource(
+                source="mobile_audio_stream" if adapter_type == "rabilink" else "remote_audio_stream",
+                transport="rabispeech_remote_audio",
+                channel_type="rabilink.mobile_audio" if adapter_type == "rabilink" else "speech.remote_audio_stream",
+                message_adapter_type=adapter_type,
+                route_profile_id=self._remote_audio.selected_route_profile_id,
+                session_id=self._remote_audio.selected_session_id,
+                device_id=self._remote_audio.selected_source_device_id or remote_id,
+                device_name=self._remote_audio.selected_client_name,
+                device_kind=self._remote_audio.selected_client_kind or "remote_audio_client",
+                stream_id=remote_id,
+                audio_format="pcm_s16le",
+                channels=1,
+                sample_rate=self.config.sample_rate,
+            )
+        device = str(self.config.device).strip() if self.config.device is not None else "system-default"
+        return SpeechInputSource(
+            source="pc_microphone",
+            transport="rabispeech_local_audio",
+            channel_type="speech.pc_microphone",
+            message_adapter_type="speech",
+            device_id=device,
+            device_name=device,
+            device_kind="pc_microphone",
+            audio_format="pcm_f32le",
+            channels=1,
+            sample_rate=self.config.sample_rate,
+        )
 
     async def _consume(self) -> None:
         while True:
-            audio, started_at, peak = await self._phrases.get()
+            audio, started_at, peak, input_source = await self._phrases.get()
             target: Path | None = None
             try:
                 self._state = "transcribing"
@@ -528,16 +614,37 @@ class MicrophoneService:
                     duration=duration,
                     text_length=len(text),
                 )
+                completed_at = time.time()
+                utterance = SpeechUtteranceMetadata(
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration=round(audio.size / self.config.sample_rate, 3),
+                    peak=round(peak, 6),
+                    rms=round(_rms(audio), 6),
+                )
                 item: dict[str, object] = {
                     "record_id": result.record_id,
-                    "time": time.time(),
-                    "started_at": started_at,
-                    "duration": round(audio.size / self.config.sample_rate, 3),
-                    "peak": round(peak, 6),
+                    "time": completed_at,
+                    "started_at": utterance.started_at,
+                    "completed_at": utterance.completed_at,
+                    "duration": utterance.duration,
+                    "peak": utterance.peak,
+                    "rms": utterance.rms,
                     "text": text,
                     "provider": result.provider,
                     "model": result.model,
                     "segments": [asdict(segment) for segment in result.segments],
+                    "source": input_source.source,
+                    "transport": input_source.transport,
+                    "channel_type": input_source.channel_type,
+                    "message_adapter_type": input_source.message_adapter_type,
+                    "source_device_id": input_source.device_id,
+                    "source_device_name": input_source.device_name,
+                    "source_device_kind": input_source.device_kind,
+                    "source_stream_id": input_source.stream_id,
+                    "audio_format": input_source.audio_format,
+                    "channels": input_source.channels,
+                    "sample_rate": input_source.sample_rate,
                     "submitted": False,
                 }
                 if self.config.auto_submit:
@@ -548,7 +655,12 @@ class MicrophoneService:
                         session_id=self.config.session_id,
                     )
                     try:
-                        receipt = await self._submitter(text, self.config.session_id)
+                        receipt = await self._submitter(
+                            result,
+                            input_source.session_id or self.config.session_id,
+                            utterance,
+                            input_source,
+                        )
                         if not isinstance(receipt, dict):
                             raise RuntimeError("Manager returned no terminal broadcast receipt.")
                         delivery_status = str(receipt.get("status") or "").strip()

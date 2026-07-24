@@ -6,6 +6,8 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiLink AIUI
 
+> **Controlled polling exception:** Rokid AIUI QuickJS exposes only whole-response `wx.request`, with no SSE, WebSocket, or chunk callback. To preserve foreground proactive messages and offline backlog, the standalone AIX keeps a 25-second long wait; it stops immediately when hidden, switched out of conversation mode, or disconnected, and does not issue high-frequency empty requests. The host also exposes no verified glasses-battery change event, so fresh phone-side CXR state is read once per 60 seconds only while the page is visible. Time and transcription-duration presentation use cancellable one-shot timers instead of fixed intervals. The Android companion path still prefers Relay events, while the native glasses chain streams audio only.
+
 RabiLink AIUI is the Agent messaging surface for Rokid glasses. Its home screen has two modes on one swipeable HUD: `Connect Conversation` and `Configuration Assistant`.
 
 For publishing, phone enrollment, glasses synchronization, and known failures, see [Installation and Troubleshooting](docs/installation-and-troubleshooting_en.md). For requirement-by-requirement status and evidence, see the [Acceptance Report](docs/acceptance-report_en.md).
@@ -93,6 +95,7 @@ The current allow-listed surface covers common Route, Agent, gateway, NapCat, po
 - TTS/ASR microphone handoff: abort recognition before playback, then resume from host lifecycle callbacks or a bounded text-duration watchdog.
 - Persistent failed-message handling: after three playback failures an item remains retryable but yields the queue head so later messages can continue.
 - Native `LanguageModel` configuration understanding plus a strict outer-agent `intent` entry point.
+- The advanced Gateway editor covers Codex Hook switches together with the remaining `GatewayDefinition` fields; the PC Manager remains the configuration source of truth.
 - Device enrollment with a glasses serial number and an `rbd_` device credential stored in Agent-isolated `localStorage`.
 - Relay-backed glasses cloud logs with offline buffering and privacy filtering; transcripts, configuration text, Agent replies, tokens, and passwords are excluded.
 - One shared HUD for 448×150 card and 480×352 immersive surfaces, with mode rail, status, latest text, time, release version, and glasses battery state.
@@ -104,6 +107,7 @@ The current allow-listed surface covers common Route, Agent, gateway, NapCat, po
 - Craft browser ASR is a simulator. It accepts text entered through Craft after the microphone is activated; it does not read the PC microphone.
 - The glasses reach the bound PC only through RabiLink Relay and never connect directly to a private LAN port.
 - Real application tokens are runtime variables. They must not be stored in the AIX package, prompts, repository, examples, or documentation.
+- Plan approval feedback is not exposed through the AIUI configuration assistant. It writes an audit record and notifies a real Agent, so users must review the full plan and steps in RibiWebGUI or the tray before submitting it explicitly.
 - The page does not trust generic browser or phone battery APIs as glasses state. It displays only fresh Relay state reported by the RabiLink mobile CXR status service; stale state becomes `--` after three minutes.
 - CXR-L is not part of the AIUI message path and must not proxy AIUI messages, audio, configuration, or cursor state.
 

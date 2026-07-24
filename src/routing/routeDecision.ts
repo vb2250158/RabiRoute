@@ -60,7 +60,9 @@ export function isManualTriggerRecord(record: ForwardRecord): record is ManualTr
 }
 
 export function isRolePanelRecord(record: ForwardRecord): record is RolePanelMessageRecord {
-  return ("adapterType" in record && record.adapterType === "rolePanel") || "roleId" in record || "routeProfileId" in record;
+  // routeProfileId is a generic routing selector shared by mobile speech and
+  // other endpoint records. It is not evidence that the source is rolePanel.
+  return ("adapterType" in record && record.adapterType === "rolePanel") || "roleId" in record;
 }
 
 export function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceTranscriptEventRecord {

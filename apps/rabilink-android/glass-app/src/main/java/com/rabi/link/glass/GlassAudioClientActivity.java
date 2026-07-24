@@ -10,6 +10,7 @@ import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.TextUtils;
@@ -30,12 +31,18 @@ import com.rokid.security.system.server.media.callback.AudioCallback;
 import com.rokid.security.system.server.message.callback.IResultCallback;
 import com.rokid.security.system.server.message.listener.IMessageListener;
 import com.rabi.link.protocol.RabiGlassAudioProtocol;
+import com.rabi.link.protocol.RabiGlassPlaybackSession;
+
+import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Thin glasses frontend. It captures and plays PCM only; the phone owns transport/state and
@@ -45,6 +52,7 @@ public final class GlassAudioClientActivity extends Activity {
     private static final int REQUEST_AUDIO = 9011;
     private static final long NAV_DEBOUNCE_MS = 260;
     private static final long PLAYBACK_RESUME_BASE_MS = 900;
+    private static final long PLAYBACK_COMPLETION_GRACE_MS = 15000;
 
     private final List<Button> buttons = new ArrayList<>();
     private HorizontalScrollView actionScroll;
@@ -56,6 +64,7 @@ public final class GlassAudioClientActivity extends Activity {
     private TextView deviceView;
     private Button pauseButton;
     private HudState hudState = HudState.CONNECTING;
+    private final Object playbackTrackLock = new Object();
     private AudioTrack playback;
     private boolean sdkReady;
     private boolean recording;
@@ -64,10 +73,16 @@ public final class GlassAudioClientActivity extends Activity {
     private int selectedIndex;
     private long lastNavigationAt;
     private int reconnectAttempt;
-    private boolean destroyed;
+    private volatile boolean destroyed;
+    private int playbackGeneration;
+    private String lastPlaybackReceiptMessageId = "";
+    private String lastPlaybackReceiptState = "";
     private float touchStartX;
     private float touchStartY;
+    private final RabiGlassPlaybackSession playbackSession = new RabiGlassPlaybackSession();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private HandlerThread playbackThread;
+    private Handler playbackHandler;
     private final Runnable reconnectPhone = new Runnable() {
         @Override public void run() {
             if (destroyed || sdkReady) return;
@@ -77,14 +92,21 @@ public final class GlassAudioClientActivity extends Activity {
     };
     private final Runnable clockTick = new Runnable() {
         @Override public void run() {
+            if (destroyed) return;
             if (timeView != null) timeView.setText(new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date()));
             mainHandler.postDelayed(this, 30000);
         }
     };
     private final Runnable resumeAfterPlayback = () -> {
+        if (destroyed) return;
         playbackActive = false;
         refreshHud();
         if (!userPaused) startCapture(true);
+    };
+    private final Runnable playbackCompletionDeadline = () -> {
+        if (!playbackSession.isActive()) return;
+        playbackSession.fail();
+        finishFramedPlayback("playback_failed", "眼镜扬声器播放完成超时");
     };
 
     private enum HudState {
@@ -122,7 +144,15 @@ public final class GlassAudioClientActivity extends Activity {
         @Override
         public void onTextMessage(String message) {
             String text = message == null ? "" : message.trim();
-            if (text.startsWith(RabiGlassAudioProtocol.PREFIX_STATUS)) runOnUiThread(() -> setStatus(text.substring(RabiGlassAudioProtocol.PREFIX_STATUS.length())));
+            if (text.startsWith(RabiGlassAudioProtocol.PREFIX_PLAYBACK_BEGIN)) {
+                JSONObject payload = parsePlaybackPayload(text, RabiGlassAudioProtocol.PREFIX_PLAYBACK_BEGIN);
+                postPlayback(() -> handlePlaybackBegin(payload));
+            }
+            else if (text.startsWith(RabiGlassAudioProtocol.PREFIX_PLAYBACK_END)) {
+                JSONObject payload = parsePlaybackPayload(text, RabiGlassAudioProtocol.PREFIX_PLAYBACK_END);
+                postPlayback(() -> handlePlaybackEnd(payload));
+            }
+            else if (text.startsWith(RabiGlassAudioProtocol.PREFIX_STATUS)) runOnUiThread(() -> setStatus(text.substring(RabiGlassAudioProtocol.PREFIX_STATUS.length())));
             else if (text.startsWith(RabiGlassAudioProtocol.PREFIX_TRANSCRIPT)) runOnUiThread(() -> transcriptView.setText(text.substring(RabiGlassAudioProtocol.PREFIX_TRANSCRIPT.length())));
             else if (text.startsWith(RabiGlassAudioProtocol.PREFIX_REPLY)) runOnUiThread(() -> replyView.setText(text.substring(RabiGlassAudioProtocol.PREFIX_REPLY.length())));
             else if (text.startsWith(RabiGlassAudioProtocol.PREFIX_DEVICE)) runOnUiThread(() -> updateDeviceState(text.substring(RabiGlassAudioProtocol.PREFIX_DEVICE.length())));
@@ -131,11 +161,8 @@ public final class GlassAudioClientActivity extends Activity {
         @Override
         public void onAudioStream(byte[] buffer) {
             if (buffer == null || buffer.length == 0) return;
-            runOnUiThread(() -> pauseCaptureForPlayback());
-            AudioTrack target = playback;
-            if (target != null) target.write(buffer, 0, buffer.length);
-            mainHandler.removeCallbacks(resumeAfterPlayback);
-            mainHandler.postDelayed(resumeAfterPlayback, playbackResumeDelayMs(buffer.length));
+            byte[] copy = buffer.clone();
+            postPlayback(() -> handlePlaybackPcm(copy));
         }
 
         @Override
@@ -174,6 +201,9 @@ public final class GlassAudioClientActivity extends Activity {
         super.onCreate(state);
         prepareWindow();
         setContentView(buildUi());
+        playbackThread = new HandlerThread("rabi-glass-playback");
+        playbackThread.start();
+        playbackHandler = new Handler(playbackThread.getLooper());
         preparePlayback();
         bindGlassSdk();
         scheduleReconnect();
@@ -185,17 +215,45 @@ public final class GlassAudioClientActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        destroyed = true;
+        String terminalMessageId;
+        String terminalState;
+        String terminalFailure;
+        synchronized (this) {
+            terminalMessageId = playbackSession.messageId();
+            if (playbackSession.state() == RabiGlassPlaybackSession.State.PLAYED) {
+                terminalState = "played";
+                terminalFailure = "";
+            } else if (!terminalMessageId.isEmpty()) {
+                playbackSession.fail();
+                terminalState = "playback_failed";
+                terminalFailure = "眼镜播放界面已关闭";
+            } else {
+                terminalState = "";
+                terminalFailure = "";
+            }
+            destroyed = true;
+        }
+        if (!terminalMessageId.isEmpty() && !terminalState.isEmpty()) {
+            sendPhonePlaybackReceipt(terminalMessageId, terminalState, terminalFailure);
+        }
         userPaused = true;
         mainHandler.removeCallbacks(reconnectPhone);
         mainHandler.removeCallbacks(resumeAfterPlayback);
         mainHandler.removeCallbacks(clockTick);
         stopCapture(true);
-        if (playback != null) {
-            try { playback.stop(); } catch (Throwable ignored) { }
-            playback.release();
-            playback = null;
+        Handler playbackQueue = playbackHandler;
+        if (playbackQueue != null) playbackQueue.removeCallbacksAndMessages(null);
+        playbackGeneration += 1;
+        synchronized (playbackTrackLock) {
+            if (playback != null) {
+                try { playback.stop(); } catch (Throwable ignored) { }
+                playback.release();
+                playback = null;
+            }
         }
+        if (playbackThread != null) playbackThread.quitSafely();
+        playbackHandler = null;
+        playbackThread = null;
         super.onDestroy();
     }
 
@@ -280,6 +338,150 @@ public final class GlassAudioClientActivity extends Activity {
         return PLAYBACK_RESUME_BASE_MS + Math.max(300L, bytes * 1000L / 32000L);
     }
 
+    private JSONObject parsePlaybackPayload(String text, String prefix) {
+        try { return new JSONObject(text.substring(prefix.length())); }
+        catch (Throwable ignored) { return null; }
+    }
+
+    private void postPlayback(Runnable action) {
+        Handler target = playbackHandler;
+        if (destroyed || target == null) return;
+        target.post(action);
+    }
+
+    private void handlePlaybackBegin(JSONObject payload) {
+        String messageId = payload == null ? "" : payload.optString("messageId", "").trim();
+        int bytes = payload == null ? 0 : payload.optInt("bytes", 0);
+        try {
+            boolean started = playbackSession.begin(messageId, bytes);
+            if (!started) {
+                RabiGlassPlaybackSession.State state = playbackSession.state();
+                if (state == RabiGlassPlaybackSession.State.PLAYED) sendPhonePlaybackReceipt(messageId, "played", "");
+                else if (state == RabiGlassPlaybackSession.State.PLAYBACK_FAILED) sendPhonePlaybackReceipt(messageId, "playback_failed", "重复播放请求此前已失败");
+                return;
+            }
+            int markerFrames = bytes / 2;
+            if (markerFrames <= 0) throw new IllegalArgumentException("invalid playback frame count");
+            if (!pauseCaptureForPlaybackAndWait()) {
+                throw new IllegalStateException("unable to pause capture before playback");
+            }
+            replacePlaybackTrack(markerFrames);
+            Handler target = playbackHandler;
+            if (target != null) {
+                target.removeCallbacks(playbackCompletionDeadline);
+                target.postDelayed(playbackCompletionDeadline,
+                        PLAYBACK_COMPLETION_GRACE_MS + Math.max(1000L, bytes * 1000L / 32000L));
+            }
+        } catch (Throwable error) {
+            boolean failedCurrent = !messageId.isEmpty()
+                    && messageId.equals(playbackSession.messageId())
+                    && playbackSession.isActive();
+            if (failedCurrent) {
+                playbackSession.fail();
+                finishFramedPlayback("playback_failed", "播放请求无效");
+            } else if (!messageId.isEmpty()) {
+                sendPhonePlaybackReceipt(messageId, "playback_failed", "播放请求无效");
+            }
+        }
+    }
+
+    private void handlePlaybackPcm(byte[] buffer) {
+        if (!playbackSession.knowsMessage()) {
+            if (!pauseCaptureForPlaybackAndWait()) return;
+            writePlayback(buffer);
+            mainHandler.removeCallbacks(resumeAfterPlayback);
+            mainHandler.postDelayed(resumeAfterPlayback, playbackResumeDelayMs(buffer.length));
+            return;
+        }
+        if (playbackSession.state() != RabiGlassPlaybackSession.State.RECEIVING) return;
+        if (!playbackSession.acceptPcm(buffer.length)) return;
+        if (playbackSession.state() == RabiGlassPlaybackSession.State.PLAYBACK_FAILED) {
+            finishFramedPlayback("playback_failed", "收到的 PCM 超出声明长度");
+            return;
+        }
+        int written = writePlayback(buffer);
+        if (written != buffer.length) {
+            playbackSession.fail();
+            finishFramedPlayback("playback_failed", "眼镜扬声器写入失败");
+        }
+    }
+
+    private void handlePlaybackEnd(JSONObject payload) {
+        String messageId = payload == null ? "" : payload.optString("messageId", "").trim();
+        int bytes = payload == null ? 0 : payload.optInt("bytes", 0);
+        RabiGlassPlaybackSession.State state = playbackSession.end(messageId, bytes);
+        if (state == RabiGlassPlaybackSession.State.PLAYED) finishFramedPlayback("played", "");
+        else if (state == RabiGlassPlaybackSession.State.PLAYBACK_FAILED) {
+            finishFramedPlayback("playback_failed", "播放消息或 PCM 长度不匹配");
+        }
+    }
+
+    private int writePlayback(byte[] buffer) {
+        synchronized (playbackTrackLock) {
+            AudioTrack target = playback;
+            if (destroyed || target == null || target.getState() != AudioTrack.STATE_INITIALIZED) return AudioTrack.ERROR_INVALID_OPERATION;
+            try { return target.write(buffer, 0, buffer.length, AudioTrack.WRITE_BLOCKING); }
+            catch (Throwable ignored) { return AudioTrack.ERROR_INVALID_OPERATION; }
+        }
+    }
+
+    private void replacePlaybackTrack(int markerFrames) {
+        synchronized (playbackTrackLock) {
+            if (destroyed) throw new IllegalStateException("activity destroyed");
+            playbackGeneration += 1;
+            AudioTrack previous = playback;
+            playback = null;
+            if (previous != null) {
+                try { previous.pause(); } catch (Throwable ignored) { }
+                try { previous.flush(); } catch (Throwable ignored) { }
+                try { previous.stop(); } catch (Throwable ignored) { }
+                previous.release();
+            }
+            playback = createPlaybackTrack(playbackGeneration, markerFrames);
+        }
+    }
+
+    private AudioTrack createPlaybackTrack(int generation, int markerFrames) {
+        int minimum = AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        AudioTrack created = new AudioTrack.Builder()
+                .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                .setAudioFormat(new AudioFormat.Builder().setSampleRate(16000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                .setBufferSizeInBytes(Math.max(minimum * 2, 8192))
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build();
+        created.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
+            @Override public void onMarkerReached(AudioTrack track) {
+                synchronized (playbackTrackLock) {
+                    if (destroyed || generation != playbackGeneration || track != playback) return;
+                }
+                RabiGlassPlaybackSession.State state = playbackSession.markerReached();
+                if (state == RabiGlassPlaybackSession.State.PLAYED) finishFramedPlayback("played", "");
+            }
+            @Override public void onPeriodicNotification(AudioTrack track) { }
+        }, playbackHandler);
+        if (markerFrames > 0 && created.setNotificationMarkerPosition(markerFrames) != AudioTrack.SUCCESS) {
+            created.release();
+            throw new IllegalStateException("unable to set playback marker");
+        }
+        created.play();
+        return created;
+    }
+
+    private synchronized void finishFramedPlayback(String state, String failure) {
+        if (destroyed) return;
+        Handler target = playbackHandler;
+        if (target != null) target.removeCallbacks(playbackCompletionDeadline);
+        String messageId = playbackSession.messageId();
+        if (!messageId.isEmpty()) sendPhonePlaybackReceipt(messageId, state, failure);
+        runOnUiThread(() -> {
+            if (!playbackActive) return;
+            playbackActive = false;
+            setStatus(userPaused ? HudState.PAUSED : HudState.LISTENING,
+                    "played".equals(state) ? "Rabi 播报完成" : "Rabi 播报失败 · 已恢复聆听");
+            if (!userPaused) startCapture(true);
+        });
+    }
+
     private void sendPhoneText(String text) {
         try {
             if (GlassSdk.getGlassMessageService() != null) {
@@ -291,15 +493,55 @@ public final class GlassAudioClientActivity extends Activity {
         }
     }
 
+    private synchronized void sendPhonePlaybackReceipt(String messageId, String state, String failure) {
+        String normalizedMessageId = messageId == null ? "" : messageId.trim();
+        String normalizedState = state == null ? "" : state.trim();
+        if (normalizedMessageId.isEmpty() || normalizedState.isEmpty()) return;
+        if (normalizedMessageId.equals(lastPlaybackReceiptMessageId)
+                && normalizedState.equals(lastPlaybackReceiptState)) return;
+        try {
+            JSONObject payload = new JSONObject().put("messageId", normalizedMessageId).put("state", normalizedState);
+            if (failure != null && !failure.trim().isEmpty()) payload.put("failure", failure.trim());
+            if (GlassSdk.getGlassMessageService() == null) throw new IllegalStateException("message service unavailable");
+            GlassSdk.getGlassMessageService().sendTextMessageByClassicBT(
+                    RabiGlassAudioProtocol.PREFIX_PLAYBACK_RECEIPT + payload.toString());
+            lastPlaybackReceiptMessageId = normalizedMessageId;
+            lastPlaybackReceiptState = normalizedState;
+        } catch (Throwable error) {
+            if (!destroyed) runOnUiThread(() -> setStatus(HudState.ERROR, "播放回执发送失败"));
+        }
+    }
+
     private void preparePlayback() {
-        int minimum = AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        playback = new AudioTrack.Builder()
-                .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-                .setAudioFormat(new AudioFormat.Builder().setSampleRate(16000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                .setBufferSizeInBytes(Math.max(minimum * 2, 8192))
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build();
-        playback.play();
+        synchronized (playbackTrackLock) {
+            playback = createPlaybackTrack(playbackGeneration, 0);
+        }
+    }
+
+    private boolean pauseCaptureForPlaybackAndWait() {
+        if (destroyed) return false;
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            pauseCaptureForPlayback();
+            return true;
+        }
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicBoolean paused = new AtomicBoolean();
+        mainHandler.post(() -> {
+            try {
+                if (!destroyed) {
+                    pauseCaptureForPlayback();
+                    paused.set(true);
+                }
+            } finally {
+                completed.countDown();
+            }
+        });
+        try {
+            return completed.await(2, TimeUnit.SECONDS) && paused.get();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     @Override

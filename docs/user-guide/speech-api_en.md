@@ -6,7 +6,7 @@ English | <a href="./speech-api.md">简体中文</a>
 
 # Call TTS and ASR remotely
 
-Use this guide to call RabiSpeech on a selected Rabi PC from another computer, a phone backend, or an automation client through RabiLink Relay. The request returns audio or a transcription directly. It does not enter an Agent, persona, Route, or conversation ledger.
+Use this guide to call RabiSpeech on a selected Rabi PC from another computer, a phone backend, or an automation client through RabiLink Relay. Ordinary TTS and file-ASR requests return audio or a transcription directly and do not enter an Agent, persona, Route, or conversation ledger. Continuous Android/glasses PCM streaming is the explicit exception: after PC ASR, it automatically enters the host-wide speech store and `rabilink` Route.
 
 > Maturity: experimental. Validate models, timeouts, and the public reverse proxy in a controlled environment before integrating a production client.
 
@@ -57,13 +57,13 @@ curl.exe --fail-with-body --silent --show-error `
   -X POST "$SpeechBase/v1/audio/speech" `
   -H "Authorization: Bearer $Token" `
   -H "Content-Type: application/json" `
-  --data-raw '{"input":"Hello from the RabiSpeech API through RabiLink.","voice":"default","response_format":"wav","speed":1.0}' `
+  --data-raw '{"input":"Hello from the RabiSpeech API through RabiLink.","voice":"default","response_format":"wav","sample_rate":16000,"speed":1.0}' `
   --output speech.wav
 
 Get-Item .\speech.wav | Select-Object Name, Length
 ```
 
-Success means the HTTP request completed and `speech.wav` has a `Length` greater than zero. To select a model, copy an actual model ID from `/v1/models` and add `model` to the JSON body.
+Success means the HTTP request completed and `speech.wav` has a `Length` greater than zero. The target PC's RabiSpeech applies WAV `sample_rate` locally, so the remote caller does not need ffmpeg; MP3, FLAC, Opus, AAC, and raw-PCM output still depends on the target PC's ffmpeg configuration. To select a model, copy an actual model ID from `/v1/models` and add `model` to the JSON body.
 
 ## 3. Transcribe the generated audio
 
@@ -115,6 +115,9 @@ Open **Speech service** in the local or remote RibiWebGUI, then select **Target-
 - `GET /api/rabilink/speech/v1/capabilities`
 - `POST /api/rabilink/speech/v1/audio/speech`
 - `POST /api/rabilink/speech/v1/audio/transcriptions`
+- `POST /api/rabilink/speech/v1/audio-streams/rabilink/start`
+- `POST /api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId=...&sequence=1`
+- `POST /api/rabilink/speech/v1/audio-streams/rabilink/stop`
 - `GET /api/rabilink/speech/openapi.json`
 
-See [RabiSpeech local TTS / ASR service](../rabispeech-plugin_en.md) for fields, compatibility endpoints, and local extension boundaries.
+The three streaming endpoints are for continuous Android/glasses 16 kHz mono PCM. `sequence` starts at 1 and must remain contiguous. Target-PC RabiSpeech owns VAD, segmentation, ASR, and voiceprint processing, and retires a stream after 15 seconds without PCM. Manual TTS/file-ASR callers keep using the synchronous endpoints above. See [RabiSpeech local TTS / ASR service](../rabispeech-plugin_en.md) for fields, compatibility endpoints, and local extension boundaries.

@@ -6,13 +6,13 @@ English | <a href="./rabi-codex-context-plugin.md">简体中文</a>
 
 # Rabi Codex Context plugin
 
-> Status: 0.3 unified-trigger and context-management version. Source lives in `plugins/rabi-codex-context/`.
+> Status: 0.4 unified-context and plan-task completion Hook version. Completion reminders remain experimental. Source lives in `plugins/rabi-codex-context/`.
 
 ## Single ownership boundary
 
 Rabi PC / RabiRoute Manager is the sole owner of persona configuration, Codex session bindings, plans, recent and consolidated memory, role skills, recall scoring, `viewedAt`, plan archival, memory edit windows, and consolidation.
 
-The Codex plugin only forwards `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `PostToolUse` events to Manager and injects the returned `additionalContext`. It does not scan role directories, parse plan or memory files, score keywords, store bindings, or keep an offline knowledge cache.
+The Codex plugin is a thin forwarder. It sends `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` to Manager. Context events inject Manager's `additionalContext`; `Stop` forwards only the official `session_id`, `turn_id`, `cwd`, and `last_assistant_message`. The plugin does not scan role directories, parse plans or memories, score keywords, store bindings, or keep an offline knowledge cache.
 
 ```text
 Codex hook event
@@ -28,6 +28,12 @@ RabiRoute message delivery
   -> normalized message_delivery trigger
   -> the same RabiContextManager
   -> AgentPacket
+
+Codex Stop
+  -> Manager matches the exact plan taskBinding
+  -> role-panel timeline
+  -> Forwarding / AgentPacket
+  -> the reminder persona Route's exact handler session
 ```
 
 ## Unified trigger policy
@@ -42,6 +48,28 @@ RabiRoute message delivery
 | `preview` | Manager or UI caller | full preview | no archival, `viewedAt` refresh, or consolidation run |
 
 Reasoning hooks do not copy every tool input or output into the model context. Manager scores bounded text against the same ID, title, and `keywords` metadata and returns nothing when no role knowledge or explicit Rabi knowledge path matches. A `turn_id` ledger deduplicates by item type, ID, and revision time, so Pre/Post do not repeatedly inject or refresh the same item.
+
+## WebGUI Hook management
+
+The Codex handler panel exposes three Hook switches and states exactly when each one fires:
+
+| Switch | Codex Hook | Trigger time | Default |
+|---|---|---|---|
+| Task-entry context | `SessionStart` / `UserPromptSubmit` | When a task starts, resumes, clears, or compacts, and when the user submits a new message | On |
+| Reasoning-time context refresh | `PreToolUse` / `PostToolUse` | Before and after Codex calls a tool; only newly matched plan, memory, or skill context for the turn is injected | On |
+| Plan-task completion notification | `Stop` | After the plan-bound execution task outputs its final answer for the turn; Rabi delivers to the task bound to that persona Route | On |
+
+The fields are `codexHooks.sessionContextEnabled`, `codexHooks.reasoningContextEnabled`, and `codexHooks.planTaskCompletionEnabled`. These switches control only whether Manager responds to each Hook. The plugin registration remains unchanged, so re-enabling a Hook does not require reinstalling the plugin. If no Route is bound exactly to a plan execution task, Manager keeps the default-on value for that source task so standalone plan tasks can still report `Stop`; a reminder target Route that disables completion notifications fails closed.
+
+## Plan-task completion Hook
+
+A plan may use `taskBinding` to bind one exact Codex execution session. When `taskBinding` exists and `completionHook` is omitted, completion notification defaults to enabled; set `completionHook.enabled=false` to disable it for one plan. After that session finishes a turn, the `Stop` Hook sends the official `last_assistant_message` to Manager. The plan file is the source of truth for plan-to-execution-session binding; the Route/gateway is the source of truth for the reminder persona's target session. Delivery reuses the existing role-panel, Forwarding, AgentPacket, and Agent-adapter path.
+
+- A persisted `sessionId + turnId` key deduplicates delivery.
+- The Hook does not inspect transcripts or automatically update plan status, steps, or memory.
+- A Codex target must have an exact task binding and must differ from the execution session. Workspace, persona, or gateway conflicts fail closed.
+- Success emits no Stop Hook output. Delivery failure returns only a non-blocking `systemMessage` warning and does not block the final Codex answer.
+- Completion state is private runtime data under `data/codex-hook/sessions.json` and must not be committed.
 
 ## Codex-only mode
 
@@ -58,7 +86,7 @@ Manage `rolesDir` through Rabi PC / Manager configuration. The plugin no longer 
 
 ### Migrating from plugin 0.1
 
-Role-root registrations and session bindings stored in the plugin user directory by version 0.1 are not migrated automatically. After upgrading to 0.3, start Rabi PC Manager and bind each persona again with the exact complete `session_id`; never infer it from a task title, workspace, or recent timestamp. The former implementation remains only as a read-only migration reference under `archive/plugins/rabi-codex-context-v0.1.0-local-context/` and must not return to the active call path.
+Role-root registrations and session bindings stored in the plugin user directory by version 0.1 are not migrated automatically. After upgrading to 0.4, start Rabi PC Manager and bind each persona again with the exact complete `session_id`; never infer it from a task title, workspace, or recent timestamp. The former implementation remains only as a read-only migration reference under `archive/plugins/rabi-codex-context-v0.1.0-local-context/` and must not return to the active call path.
 
 New bindings live in Manager-private runtime data at `data/codex-hook/sessions.json`. Do not commit that file, the old plugin user directory, or any real persona data.
 
@@ -108,4 +136,6 @@ codex plugin marketplace add .
 codex plugin add rabi-codex-context@rabiroute-local
 ```
 
-After installation or update, start a new Codex task and trust the commands through `/hooks`. Verify Manager outages never trigger plugin-local knowledge fallback, unbound sessions emit no context, marker binding injects in the same turn, keyword matches refresh memory `viewedAt`, sessions remain isolated, Rabi PC can bind exact sessions proactively, `SessionStart` reinjects after startup/resume/clear/compaction, Pre/Post reasoning hooks emit only relevant deltas, same-turn duplicates stay silent, and normal message delivery uses the same context manager.
+After installation or update, start a new Codex task and review/trust the changed commands through `/hooks`, including the new `Stop` Hook. Verify Manager outages never trigger plugin-local knowledge fallback, unbound sessions emit no context, marker binding injects in the same turn, keyword matches refresh memory `viewedAt`, sessions remain isolated, Rabi PC can bind exact sessions proactively, `SessionStart` reinjects after startup/resume/clear/compaction, Pre/Post reasoning hooks emit only relevant deltas, same-turn duplicates stay silent, and normal message delivery uses the same context manager.
+
+For completion reminders, verify one bound Stop turn reaches only the selected persona Route, repeated turns stay deduplicated, and workspace/persona/gateway conflicts plus a source-equals-target Codex task fail closed. Successful Stop handling must emit no stdout; failures may emit only a non-blocking system warning. Until the reminder is observed between two real Codex Desktop tasks, this capability remains experimental even when local tests pass.

@@ -1099,13 +1099,20 @@ export default {
     if (this.destroyed || !this.pageVisible) return;
     this.updateDeviceClock();
     void this.refreshBatteryStatus();
+    this.scheduleDeviceStatusRefresh();
+  },
+
+  scheduleDeviceStatusRefresh() {
+    if (this.destroyed || !this.pageVisible) return;
     if (this.deviceClockTimer) return;
-    this.deviceClockTimer = setInterval(() => {
+    this.deviceClockTimer = setTimeout(() => {
+      this.deviceClockTimer = null;
       if (this.destroyed || !this.pageVisible) return;
       this.updateDeviceClock();
       if (Date.now() - this.batteryLastRefreshAt >= DEVICE_BATTERY_REFRESH_MS) {
         void this.refreshBatteryStatus();
       }
+      this.scheduleDeviceStatusRefresh();
     }, DEVICE_CLOCK_REFRESH_MS);
   },
 
@@ -4022,7 +4029,7 @@ export default {
     const knownIds = new Set(next.map((item) => String(item?.id || "")).filter(Boolean));
     let added = 0;
     for (const message of Array.isArray(messages) ? messages : []) {
-      const id = String(message?.id || message?.taskMessageId || "").trim();
+      const id = String(message?.deliveryId || message?.id || message?.taskMessageId || "").trim();
       const text = String(message?.text || "").trim();
       if (!id || !text || knownIds.has(id) || this.agentSeenMessageIds.has(id)) continue;
       knownIds.add(id);
@@ -4159,11 +4166,23 @@ export default {
   startTranscriptionClock() {
     this.stopTranscriptionClock();
     if (!this.data.isTranscriptionMode || !this.data.transcriptionDesired || !this.pageVisible) return;
-    const update = () => {
-      this.setData({ transcriptionElapsed: durationLabel(this.data.transcriptionStartedAt) });
-    };
-    update();
-    this.transcriptionElapsedTimer = setInterval(update, TRANSCRIPTION_CLOCK_REFRESH_MS);
+    this.updateTranscriptionClock();
+    this.scheduleTranscriptionClock();
+  },
+
+  updateTranscriptionClock() {
+    this.setData({ transcriptionElapsed: durationLabel(this.data.transcriptionStartedAt) });
+  },
+
+  scheduleTranscriptionClock() {
+    if (this.transcriptionElapsedTimer || !this.data.isTranscriptionMode
+      || !this.data.transcriptionDesired || !this.pageVisible) return;
+    this.transcriptionElapsedTimer = setTimeout(() => {
+      this.transcriptionElapsedTimer = null;
+      if (!this.data.isTranscriptionMode || !this.data.transcriptionDesired || !this.pageVisible) return;
+      this.updateTranscriptionClock();
+      this.scheduleTranscriptionClock();
+    }, TRANSCRIPTION_CLOCK_REFRESH_MS);
   },
 
   stopTranscriptionClock() {

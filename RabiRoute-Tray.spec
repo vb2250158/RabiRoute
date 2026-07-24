@@ -27,6 +27,7 @@ a = Analysis(
         "rabiroute_tray.manager_client",
         "rabiroute_tray.qt_async",
         "rabiroute_tray.task_window",
+        "rabiroute_tray.tray_menu_controller",
         "rabiroute_tray.tray_app",
         "rabiroute_tray.windows_app_identity",
     ],

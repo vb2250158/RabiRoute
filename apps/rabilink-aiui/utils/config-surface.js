@@ -160,7 +160,8 @@ export const GATEWAY_SCALAR_FIELDS = [
   { key: "privateNotificationTemplate", label: "私聊模板", type: "string" },
   { key: "heartbeatNotificationTemplate", label: "心跳模板", type: "string" },
   { key: "voiceTranscriptNotificationTemplate", label: "语音转写模板", type: "string" },
-  { key: "recentMessageLimit", label: "最近消息数量", type: "number" }
+  { key: "recentMessageLimit", label: "最近消息数量", type: "number" },
+  { key: "speechPushMode", label: "Route 语音投递模式", type: "string" }
 ];
 
 export const GATEWAY_JSON_FIELDS = [
@@ -172,7 +173,10 @@ export const GATEWAY_JSON_FIELDS = [
   { key: "pipeline", label: "Pipeline 定义" },
   { key: "routeVariables", label: "路由变量" },
   { key: "agentAdapters", label: "Agent 列表" },
+  { key: "codexHooks", label: "Codex Hook 设置" },
   { key: "routeProfiles", label: "Route Profiles" },
+  { key: "recentMessageLimits", label: "人格各消息端上下文额度" },
+  { key: "speechTriggerKeywords", label: "人格语音触发关键词" },
   { key: "notificationRules", label: "通知规则" },
   { key: "roleNotificationRules", label: "角色通知规则" },
   { key: "roleRouteNames", label: "角色 Route 名" }

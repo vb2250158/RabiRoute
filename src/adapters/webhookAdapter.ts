@@ -64,7 +64,7 @@ type GatewayStatus = {
     eventCount?: number;
     relayUrl?: string;
     relayDeviceId?: string;
-    relayWorker?: "running" | "disabled" | "error";
+    relayWorker?: "connecting" | "running" | "disabled" | "error";
   }>;
   webhook?: {
     path?: string;
@@ -206,7 +206,7 @@ function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<G
 export function patchRelayStatus(profile: WebhookAdapterProfile, patch: {
   status?: "running" | "error";
   message?: string;
-  relayWorker?: "running" | "disabled" | "error";
+  relayWorker?: "connecting" | "running" | "disabled" | "error";
   relayUrl?: string;
   relayDeviceId?: string;
 }): void {

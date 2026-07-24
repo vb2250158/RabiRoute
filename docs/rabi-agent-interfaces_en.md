@@ -122,9 +122,53 @@ failed  a real delivery attempt failed
 
 There is no generic persistent approval center or automatic retry queue. Callers must inspect the returned status.
 
-### Agent speaker labeling
+Phone audio may reuse the same RabiSpeech ASR chain, but it enters the Agent as `routeKind=rabilink`, `adapterType=rabilink`, with stable `sourceDeviceId/sourceDeviceKind`, transient `sourceStreamId`, and `channelType=rabilink.mobile_audio`. The Agent still POSTs the complete `replyContext` to `/api/agent/replies`; Outbox converts only the stable originating `sourceDeviceId` into `targetDeviceIds`, never the current PCM stream ID, so the reply returns only to that phone. This is not the standalone `speech` endpoint and does not use its persona-TTS/FIFO reply policy.
 
-When meeting ASR has produced diarization labels such as `Speaker 1` and `Speaker 2`, and the Agent has confirmed a person's identity from the conversation, it can atomically create or reuse a person profile and bind the current recording label. `recordId` must come from that persisted speech record; a temporary provider label must never be bound only by the long-lived `sessionId`:
+### Voiceprint evidence and persona identity interpretation
+
+Speech delivered to a persona contains only opaque voiceprint/cluster IDs, diarization labels such as `Speaker 1`, scores, and decision evidence. It carries no person names and marks no voiceprint as “the user.” The receiving persona interprets identity through its own relationships, memory, and conversation context; different personas may hold different relationship interpretations for the same voiceprint.
+
+Every new voice message also carries `sourceHostId/sourceHostName`. A voiceprint ID is interpreted only within the processing host that produced it, so the persona identity key is **processing host + voiceprint ID**; equal cluster strings from two PCs must not be treated as one person. The persona's append-only source of truth is `data/roles/<RoleId>/voice/voice-identities.jsonl`. It travels with persona synchronization, while RabiSpeech, Manager, and Routes never fill `displayName`, `relationship`, or `isUser` on the persona's behalf.
+
+Read or update the current persona's interpretation:
+
+```http
+GET /api/roles/:roleId/voice-identities
+GET /api/roles/:roleId/voice-identities?sourceHostId=<host>&voiceprintId=<voiceprint>
+PUT /api/roles/:roleId/voice-identities
+Content-Type: application/json
+```
+
+```json
+{
+  "sourceHostId": "example-host-guid",
+  "sourceHostName": "Studio PC",
+  "voiceprintId": "unknown-cluster-7",
+  "displayName": "Boss",
+  "relationship": "my user",
+  "isUser": true,
+  "aliases": ["Boss"],
+  "notes": "Confirmed by this persona from continuing conversation"
+}
+```
+
+`isUser` has no system default. Omit it while unknown instead of writing `false`. Repeating an identical interpretation adds no event; corrections append a new event, and `deleted=true` appends a tombstone rather than rewriting shared history. Every new event automatically records the previous event heads it converges; callers neither need nor control that lineage.
+
+When two PCs modify the same `sourceHostId + voiceprintId` concurrently from one common version, JSONL union keeps both event heads instead of silently selecting the last file row. `GET` returns `conflicted=true`, `conflictFields`, and `conflictCandidates` containing `eventId/deleted`. A disagreement in `isUser` or deletion state classifies matching transcript segments as `conflict`. If only names, relationship text, or notes diverge while every branch agrees on `isUser`, user/other classification remains usable but the relationship metadata stays marked unresolved. A later persona `PUT` automatically supersedes every current head with the persona's explicit final interpretation, allowing the next multi-PC sync to converge. AgentPacket includes the relationship file, processing host, all voiceprints, known mappings, and unresolved fields. Those rows remain persona records, never host inference.
+
+To distinguish the current persona's confirmed user, other speakers, unknown voices, or conflicting mappings across a day or time range, use the persona-scoped read view instead of modifying raw messages:
+
+```http
+GET /api/roles/:roleId/voice-transcripts?from=<ISO>&to=<ISO>&speaker=user&limit=200&includeArchives=true
+```
+
+`speaker` accepts `user`, `other`, `unknown`, or `conflict`. At read time, the result joins `conversation/current.jsonl` (and optionally archives) with the current persona's `voice/voice-identities.jsonl`, returning record-level `personaClassification`, per-segment `classification`, and matching identity evidence. `mixed` means one recording contains several segment conclusions. The view never writes names or `isUser` into host raw messages or the persona conversation ledger; correcting a persona relationship changes the next query immediately.
+
+`matchedCount` and `summary` are computed from the complete filtered result and are not truncated by the detail `limit`. `summary` reports total recordings and segments, recording duration, speaker duration, `user/other/unknown/conflict` statistics, classified duration, and `coverageRate`. `unresolvedVoiceprints` groups still-unknown or conflicting evidence by `sourceHostId + voiceprintId`, including segment count, duration, and last-seen time. These fields are a query-time coverage view, not another ledger, and are never written back into persona files.
+
+When the current routed message explicitly asks about voiceprints, speakers, which recordings came from the user versus other people, or all-day classification, AgentPacket injects the time-range query, four speaker filters, relationship GET/PUT, and append-only event rules into the current persona task. Ordinary messages receive no such prompt. The Agent performs only the query required by the current request and never polls coverage. Unknown or conflicting evidence may converge only from this persona's own conversation, memory, and user confirmation, never directly from a host candidate name or high score.
+
+The following local endpoint remains as a RabiSpeech operator-diagnostic compatibility surface. Once a human has confirmed one recording label, it may create or reuse diagnostic metadata and bind the current `recordId + speakerLabel`. These names never enter RabiRoute's host-wide ingress record or persona ledger and are not an Agent source of truth for user identity:
 
 ```http
 PUT /api/speech/speaker-identities
@@ -145,7 +189,30 @@ Supply `speakerId` when a stable profile ID is already known. Otherwise the endp
 
 The human entry remains under **Speech Service → ASR → Speaker / voiceprint settings** and shares `output/speaker-profiles.json` with the Agent API. The page separates unknown and known speakers into collapsible cards and previews the latest ten utterances for each diarization cluster to support human confirmation and correction.
 
-This endpoint writes person metadata and an explicit session binding. It is not automatic biometric voiceprint recognition. Capability discovery still reports `voiceprint.supported=false`; an Agent must not treat `Speaker 1` as a stable cross-session identity or claim that a person was recognized biometrically.
+This endpoint writes RabiSpeech-local diagnostic metadata and an explicit recording binding. Manager removes names at the host-wide ingress boundary and forwards only opaque voiceprint/cluster evidence. The bound persona owns the final interpretation of who someone is and whether they are the user. Calibrated capability discovery may justify describing a score as voiceprint-match evidence, but a host match still must not be equated with a persona relationship.
+
+### Agent-triggered multi-PC persona synchronization
+
+PCs using the same RabiLink application token can be discovered and explicitly synchronized by a local Agent:
+
+```http
+GET /api/persona-sync/peers
+POST /api/persona-sync/sync
+Content-Type: application/json
+```
+
+```json
+{
+  "peerId": "office-pc",
+  "roleId": "Rabi"
+}
+```
+
+Omit `roleId` to synchronize every persona. The coordinator prefers direct LAN transfer and falls back to restricted Relay transit. The Agent must inspect per-file results, `fileConflicts`, and `semanticConflicts`. The latter is returned by the same sync request when JSONL union succeeds but persona voice relationships still have concurrent branches, including processing host, voiceprint, fields, and candidate events; no follow-up coverage polling is required. `conflicts > 0` or HTTP `409` means unresolved conflict remains and completion must not be claimed.
+
+A local Agent resolves ordinary-file conflicts through `GET /api/persona-sync/conflicts`, `GET /api/persona-sync/conflicts/content`, and `POST /api/persona-sync/conflicts/resolve`. Actions are `keep_local`, `use_remote`, and `use_merged`; resolution should include the listed `expectedLocalHash` to avoid overwriting a newer local edit. These three control endpoints are loopback-only and are not exposed through the LAN listener or Relay. See [Multi-PC persona data synchronization](persona-data-sync_en.md) for complete manifest, file, merge, and resolution contracts.
+
+When the current routed message explicitly mentions multiple PCs, persona/role synchronization, or persona sync, AgentPacket injects these loopback URLs, the current `roleId`, the one-shot execution rule, and terminal-conflict criteria into the bound persona's current task. Ordinary conversation receives no such capability prompt. The default scope is the current persona; omit `roleId` only when the user explicitly requests every persona. If peer discovery is not unique, the Agent must confirm the target instead of guessing or polling for coverage.
 
 ### NapCat source reply
 
@@ -264,11 +331,49 @@ PATCH /api/roles/:roleId/plans/:planId
   "source": {
     "kind": "agent",
     "summary": "Created from the current documentation review"
+  },
+  "taskBinding": {
+    "agentType": "codex",
+    "sessionId": "exact-source-session-id",
+    "sessionTitle": "Plan execution task",
+    "workspace": "C:/Path/To/Project",
+    "completionHook": {
+      "enabled": true,
+      "gatewayId": "Role__reminder"
+    }
   }
 }
 ```
 
 New plans must provide an ordered `steps` array. An in-progress plan must also provide `currentStepId`, pointing to the only step whose status is `进行中`; clients use this to list every step and mark the current execution point. When blocked, put the reason in the current step's `blockedBy` and the awaited party or condition in `waitingFor`; the UI prioritizes the blocker reason and does not repeat `nextAction` already expressed by the step list. Legacy plans remain readable, but should gain structured steps on their next update. Every step must be `已完成` before the plan can become completed or archived.
+
+`taskBinding` may be written through POST or PATCH to bind one exact Codex execution session. The current contract accepts only `agentType=codex` and a non-empty complete `sessionId`; `completionHook.enabled` must be boolean. When enabled, the Codex `Stop` Hook sends the official `last_assistant_message` to Manager, which then reminds the target handler session through the same persona's role-panel, Forwarding, and AgentPacket path. `gatewayId` is required when the persona has multiple Routes. Delivery is deduplicated by `sessionId + turnId` and never automatically patches the plan, advances steps, or writes memory.
+
+A reminder failure does not block the source Codex final answer, but Manager records the failure and the Hook may return a non-blocking system warning. Workspace, persona, gateway, and source-equals-target task conflicts fail closed. This interface remains experimental until verified between two real Desktop tasks.
+
+### Plan approval feedback API
+
+```http
+GET  /api/roles/:roleId/plans/:planId/feedback
+POST /api/roles/:roleId/plans/:planId/feedback
+```
+
+WebGUI and the tray use this endpoint to record user feedback for the current approval step and ask Manager to notify the Agent through the existing role-panel path. After receiving user approval through QQ or another channel, the Agent should call the same endpoint to create the plan-associated record:
+
+```json
+{
+  "feedbackId": "qq-message-12345",
+  "gatewayId": "route-id",
+  "stepId": "review-plan",
+  "text": "Approve the direction, but add the regression scope first.",
+  "kind": "approval_suggestion",
+  "author": "user",
+  "source": "qq",
+  "notifyAgent": false
+}
+```
+
+Agent-authored handling notes use `kind=approval_response`, `author=agent`, `source=agent`, and `notifyAgent=false`. Agent records are stored as `record_only` and cannot trigger another delivery to themselves. Feedback records facts only; the Agent must separately `PATCH /plans/:planId` when it decides to change steps, blockers, or status.
 
 Completed plans are archived by a role-knowledge snapshot after their latest `updatedAt` is more than the current fixed 72-hour window old. This window is not yet a public `personaConfig.json` field.
 

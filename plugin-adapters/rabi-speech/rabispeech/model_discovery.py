@@ -179,6 +179,9 @@ def api_index() -> dict[str, object]:
         "microphone_start": {"method": "POST", "endpoint": "/v1/microphone/start", "scope": "loopback-only"},
         "microphone_settings": {"method": "PUT", "endpoint": "/v1/microphone/settings", "scope": "loopback-only"},
         "microphone_stop": {"method": "POST", "endpoint": "/v1/microphone/stop", "scope": "loopback-only"},
+        "rabilink_audio_stream_start": {"method": "POST", "endpoint": "/v1/audio-streams/rabilink/start", "scope": "loopback-only"},
+        "rabilink_audio_stream_chunk": {"method": "POST", "endpoint": "/v1/audio-streams/rabilink/chunk", "scope": "loopback-only"},
+        "rabilink_audio_stream_stop": {"method": "POST", "endpoint": "/v1/audio-streams/rabilink/stop", "scope": "loopback-only"},
     }
 
 

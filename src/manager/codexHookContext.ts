@@ -2,15 +2,36 @@ import crypto, { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { rabiContextManager, type RabiContextTriggerKind } from "../context/rabiContextManager.js";
+import { listPlans, type PlanItem } from "../roleKnowledge.js";
 import { buildRoleKnowledgeContextView } from "../routing/roleKnowledgeContext.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
 
-const STORE_VERSION = 2;
+const STORE_VERSION = 4;
 const MAX_CONTEXT_CHARS = 6200;
 const CONTROL_PATTERN = /\[rabi:(use|bind)\s+([^\]\r\n]{1,80})\]|\[rabi:(status|refresh|off)\]/i;
 
-export type CodexHookEventName = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse";
+export type CodexHookEventName = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop";
+
+export type PlanTaskCompletionDelivery = {
+  roleId: string;
+  roleDir: string;
+  plan: PlanItem;
+  sourceSessionId: string;
+  sourceTurnId: string;
+  sourceCwd?: string;
+  finalMessage: string;
+  gatewayId?: string;
+};
+
+export type PlanTaskCompletionResult = {
+  status: "ignored" | "duplicate" | "delivered" | "failed";
+  reason: string;
+  planId?: string;
+  turnId?: string;
+  gatewayId?: string;
+  error?: string;
+};
 
 export type CodexHookSessionBinding = {
   sessionId: string;
@@ -23,11 +44,28 @@ export type CodexHookSessionBinding = {
   baseFingerprint?: string;
   lastTurnId?: string;
   turnContextKeys?: string[];
+  lastPlanCompletionPlanId?: string;
+  lastPlanCompletionTurnId?: string;
+  lastPlanCompletionAt?: string;
+  lastPlanCompletionStatus?: PlanTaskCompletionResult["status"];
+  lastPlanCompletionError?: string;
+};
+
+export type PlanTaskCompletionState = {
+  sessionId: string;
+  roleId?: string;
+  planId?: string;
+  turnId?: string;
+  updatedAt: string;
+  status: PlanTaskCompletionResult["status"];
+  gatewayId?: string;
+  error?: string;
 };
 
 type CodexHookSessionStoreFile = {
   version: number;
   sessions: Record<string, CodexHookSessionBinding>;
+  planTaskCompletions: Record<string, PlanTaskCompletionState>;
 };
 
 export type CodexHookContextRequest = {
@@ -42,12 +80,15 @@ export type CodexHookContextRequest = {
   toolUseId?: string;
   toolInput?: unknown;
   toolResponse?: unknown;
+  stopHookActive?: boolean;
+  lastAssistantMessage?: string;
 };
 
 export type CodexHookContextResult = {
   action: "none" | "bind" | "status" | "refresh" | "off";
   binding: CodexHookSessionBinding | null;
   additionalContext: string;
+  planTaskCompletion?: PlanTaskCompletionResult;
 };
 
 export type CodexHookControl =
@@ -57,6 +98,8 @@ export type CodexHookControl =
 export type CodexHookContextServiceOptions = {
   rolesRoot: () => string;
   storePath: string;
+  deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
+  hookEnabled?: (request: CodexHookContextRequest) => boolean;
 };
 
 function nowIso(): string {
@@ -102,8 +145,19 @@ function normalizeManagerBaseUrl(value: string | undefined): string {
   return String(value || "http://127.0.0.1:8790").trim().replace(/\/+$/, "");
 }
 
+function normalizedWorkspace(value: string | undefined): string {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const resolved = path.resolve(text).replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 function fingerprint(values: string[]): string {
   return crypto.createHash("sha256").update(values.join("\0")).digest("hex");
+}
+
+function planTaskCompletionKey(sessionId: string, planId: string | undefined, turnId: string | undefined): string {
+  return fingerprint(["plan_task_completion", sessionId, planId || "", turnId || ""]);
 }
 
 function boundedJson(value: unknown, limit: number): string {
@@ -150,10 +204,14 @@ export function parseCodexHookControl(prompt: string): CodexHookControl | null {
 export class CodexHookContextService {
   private readonly rolesRoot: () => string;
   private readonly storePath: string;
+  private readonly deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
+  private readonly hookEnabled?: (request: CodexHookContextRequest) => boolean;
 
   constructor(options: CodexHookContextServiceOptions) {
     this.rolesRoot = options.rolesRoot;
     this.storePath = path.resolve(options.storePath);
+    this.deliverPlanTaskCompletion = options.deliverPlanTaskCompletion;
+    this.hookEnabled = options.hookEnabled;
   }
 
   listRoles(): string[] {
@@ -202,6 +260,26 @@ export class CodexHookContextService {
       this.writeStore(store);
     }
     return previous;
+  }
+
+  async handleHook(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
+    if (this.hookEnabled && !this.hookEnabled(request)) {
+      const binding = this.getBinding(request.sessionId);
+      return {
+        action: "none",
+        binding,
+        additionalContext: "",
+        planTaskCompletion: request.eventName === "Stop"
+          ? {
+              status: "ignored",
+              reason: "hook_disabled_by_codex_endpoint",
+              turnId: request.turnId
+            }
+          : undefined
+      };
+    }
+    if (request.eventName === "Stop") return this.handleStop(request);
+    return this.handleContext(request);
   }
 
   handleContext(request: CodexHookContextRequest): CodexHookContextResult {
@@ -374,6 +452,183 @@ export class CodexHookContextService {
     };
   }
 
+  private async handleStop(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
+    const sessionId = this.requireSessionId(request.sessionId);
+    const binding = this.getBinding(sessionId);
+    const matches = this.listRoles().flatMap((roleId) => {
+      const role = this.requireRole(roleId);
+      return listPlans(role.roleDir)
+        .filter((plan) => (
+          plan.status !== "已归档"
+          && plan.taskBinding?.agentType === "codex"
+          && plan.taskBinding.sessionId === sessionId
+          && plan.taskBinding.completionHook?.enabled === true
+        ))
+        .map((plan) => ({ ...role, plan }));
+    });
+    if (matches.length === 0) {
+      return {
+        action: "none",
+        binding,
+        additionalContext: "",
+        planTaskCompletion: { status: "ignored", reason: "no_enabled_plan_task_binding", turnId: request.turnId }
+      };
+    }
+    if (matches.length > 1) {
+      return this.recordPlanCompletion(binding, undefined, request, {
+        status: "failed",
+        reason: "multiple_plan_task_bindings",
+        turnId: request.turnId,
+        error: `Codex session ${sessionId} is bound to multiple plans: ${matches.map((match) => `${match.roleId}/${match.plan.id}`).join(", ")}`
+      });
+    }
+
+    const { roleId, roleDir, plan } = matches[0];
+    const turnId = String(request.turnId || "").trim();
+    const finalMessage = String(request.lastAssistantMessage || "").trim();
+    const gatewayId = plan.taskBinding?.completionHook?.gatewayId;
+    if (binding && binding.roleId !== roleId) {
+      return this.recordPlanCompletion(binding, roleId, request, {
+        status: "failed",
+        reason: "role_binding_mismatch",
+        planId: plan.id,
+        turnId,
+        gatewayId,
+        error: `Codex session ${sessionId} is context-bound to role ${binding.roleId}, but its plan task belongs to role ${roleId}.`
+      });
+    }
+    if (!turnId) {
+      return this.recordPlanCompletion(binding, roleId, request, {
+        status: "failed",
+        reason: "missing_turn_id",
+        planId: plan.id,
+        gatewayId,
+        error: "Codex Stop hook did not provide turn_id; completion delivery was not attempted."
+      });
+    }
+    const completionState = Object.values(this.readStore().planTaskCompletions)
+      .find((state) => (
+        state.sessionId === sessionId
+        && state.planId === plan.id
+        && state.turnId === turnId
+        && state.status !== "ignored"
+      ));
+    if (completionState) {
+      return {
+        action: "none",
+        binding,
+        additionalContext: "",
+        planTaskCompletion: {
+          status: "duplicate",
+          reason: "turn_already_processed",
+          planId: plan.id,
+          turnId,
+          gatewayId
+        }
+      };
+    }
+    if (!finalMessage) {
+      return this.recordPlanCompletion(binding, roleId, request, {
+        status: "ignored",
+        reason: "missing_final_message",
+        planId: plan.id,
+        turnId,
+        gatewayId
+      });
+    }
+
+    const expectedWorkspace = normalizedWorkspace(plan.taskBinding?.workspace);
+    const actualWorkspace = normalizedWorkspace(request.cwd);
+    if (expectedWorkspace && actualWorkspace && expectedWorkspace !== actualWorkspace) {
+      return this.recordPlanCompletion(binding, roleId, request, {
+        status: "failed",
+        reason: "workspace_mismatch",
+        planId: plan.id,
+        turnId,
+        gatewayId,
+        error: `Plan task workspace does not match the Stop hook cwd: ${plan.taskBinding?.workspace} != ${request.cwd}`
+      });
+    }
+    if (!this.deliverPlanTaskCompletion) {
+      return this.recordPlanCompletion(binding, roleId, request, {
+        status: "failed",
+        reason: "delivery_unavailable",
+        planId: plan.id,
+        turnId,
+        gatewayId,
+        error: "Rabi plan task completion delivery is not configured."
+      });
+    }
+
+    try {
+      await this.deliverPlanTaskCompletion({
+        roleId,
+        roleDir,
+        plan,
+        sourceSessionId: sessionId,
+        sourceTurnId: turnId,
+        sourceCwd: request.cwd,
+        finalMessage: excerpt(finalMessage, 12_000, 4_000),
+        gatewayId
+      });
+      return this.recordPlanCompletion(binding, roleId, request, {
+        status: "delivered",
+        reason: request.stopHookActive ? "stop_continuation_completed" : "stop_completed",
+        planId: plan.id,
+        turnId,
+        gatewayId
+      });
+    } catch (error) {
+      return this.recordPlanCompletion(binding, roleId, request, {
+        status: "failed",
+        reason: "delivery_failed",
+        planId: plan.id,
+        turnId,
+        gatewayId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  private recordPlanCompletion(
+    binding: CodexHookSessionBinding | null,
+    roleId: string | undefined,
+    request: CodexHookContextRequest,
+    result: PlanTaskCompletionResult
+  ): CodexHookContextResult {
+    const timestamp = nowIso();
+    const sessionId = this.requireSessionId(request.sessionId);
+    const store = this.readStore();
+    const nextBinding: CodexHookSessionBinding | null = binding
+      ? {
+          ...binding,
+          updatedAt: timestamp,
+          lastEventAt: timestamp,
+          lastEventName: "Stop",
+          cwd: request.cwd || binding.cwd,
+          lastPlanCompletionPlanId: result.planId ?? binding.lastPlanCompletionPlanId,
+          lastPlanCompletionTurnId: result.turnId ?? binding.lastPlanCompletionTurnId,
+          lastPlanCompletionAt: timestamp,
+          lastPlanCompletionStatus: result.status,
+          lastPlanCompletionError: result.error
+        }
+      : null;
+    if (nextBinding) store.sessions[nextBinding.sessionId] = nextBinding;
+    const completionKey = planTaskCompletionKey(sessionId, result.planId, result.turnId);
+    store.planTaskCompletions[completionKey] = {
+      sessionId,
+      roleId,
+      planId: result.planId,
+      turnId: result.turnId,
+      updatedAt: timestamp,
+      status: result.status,
+      gatewayId: result.gatewayId,
+      error: result.error
+    };
+    this.writeStore(store);
+    return { action: "none", binding: nextBinding, additionalContext: "", planTaskCompletion: result };
+  }
+
   doctor(): Record<string, unknown> {
     const rolesRoot = path.resolve(this.rolesRoot());
     return {
@@ -382,7 +637,9 @@ export class CodexHookContextService {
       rolesRootAvailable: fs.existsSync(rolesRoot),
       roleIds: fs.existsSync(rolesRoot) ? this.listRoles() : [],
       storePath: this.storePath,
-      bindings: this.listBindings().map(({ sessionId, roleId, updatedAt }) => ({ sessionId, roleId, updatedAt }))
+      bindings: this.listBindings().map(({ sessionId, roleId, updatedAt }) => ({ sessionId, roleId, updatedAt })),
+      planTaskCompletions: Object.values(this.readStore().planTaskCompletions)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     };
   }
 
@@ -404,19 +661,26 @@ export class CodexHookContextService {
 
   private readStore(): CodexHookSessionStoreFile {
     if (!fs.existsSync(this.storePath)) {
-      const empty: CodexHookSessionStoreFile = { version: STORE_VERSION, sessions: {} };
+      const empty: CodexHookSessionStoreFile = { version: STORE_VERSION, sessions: {}, planTaskCompletions: {} };
       this.writeStore(empty);
       return empty;
     }
     const raw = JSON.parse(fs.readFileSync(this.storePath, "utf8")) as Partial<CodexHookSessionStoreFile>;
     return {
       version: STORE_VERSION,
-      sessions: raw.sessions && typeof raw.sessions === "object" ? raw.sessions : {}
+      sessions: raw.sessions && typeof raw.sessions === "object" ? raw.sessions : {},
+      planTaskCompletions: raw.planTaskCompletions && typeof raw.planTaskCompletions === "object"
+        ? raw.planTaskCompletions
+        : {}
     };
   }
 
   private writeStore(store: CodexHookSessionStoreFile): void {
-    writeJsonAtomic(this.storePath, { version: STORE_VERSION, sessions: store.sessions });
+    writeJsonAtomic(this.storePath, {
+      version: STORE_VERSION,
+      sessions: store.sessions,
+      planTaskCompletions: store.planTaskCompletions
+    });
   }
 
   private replaceBinding(binding: CodexHookSessionBinding): void {

@@ -69,7 +69,6 @@ type GatewayStatus = {
 };
 
 const statusPath = path.join(config.dataDir, "gateway-status.json");
-const loginRefreshIntervalSeconds = Number(process.env.NAPCAT_LOGIN_REFRESH_SECONDS ?? "60");
 
 function readGatewayStatus(): GatewayStatus {
   if (!fs.existsSync(statusPath)) {
@@ -608,6 +607,7 @@ export function createNapCatAdapter(): MessageAdapter {
             activeConnections: activeSockets.size
           }
         });
+        void refreshBotProfile(instance);
 
         socket.on("close", () => {
           activeSockets.delete(socket);
@@ -704,11 +704,6 @@ export function createNapCatAdapter(): MessageAdapter {
           loginInfoError: ""
         });
         void refreshBotProfile(instance);
-        if (Number.isFinite(loginRefreshIntervalSeconds) && loginRefreshIntervalSeconds > 0) {
-          setInterval(() => {
-            void refreshBotProfile(instance);
-          }, loginRefreshIntervalSeconds * 1000);
-        }
       });
       }
     }

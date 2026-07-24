@@ -837,7 +837,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
         {
           label: "持续下行",
           steps: [
-            { title: "应用级 cursor", detail: "空闲时仍长轮询", icon: "mdi-timeline-clock-outline", kind: "service" },
+            { title: "应用级 cursor", detail: "事件流断线后只用于补漏", icon: "mdi-timeline-clock-outline", kind: "service" },
             { title: "普通回复", detail: "Codex / 其他 Agent", icon: "mdi-message-reply-text-outline", kind: "agent" },
             { title: "主动消息", detail: "无需前置任务", icon: "mdi-bell-outline", kind: "service" },
             { title: "原生 TTS", detail: "事件或看门狗收尾", icon: "mdi-volume-high", kind: "result" }

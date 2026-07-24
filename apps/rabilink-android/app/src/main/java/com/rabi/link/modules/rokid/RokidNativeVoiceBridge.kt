@@ -10,7 +10,6 @@ import android.os.Handler
 import android.os.Looper
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
-import com.rabi.link.RabiConversationSettings
 import com.rabi.link.protocol.RabiGlassAudioProtocol
 import com.rokid.security.phone.sdk.api.PSecuritySDK
 import com.rokid.security.phone.sdk.api.bluetooth.classic.listener.IClassicBTClientListener
@@ -36,6 +35,8 @@ import java.nio.ByteBuffer
 import java.time.Duration
 import java.time.Instant
 import java.util.Date
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
 final class RokidNativeVoiceBridge(
@@ -57,7 +58,7 @@ final class RokidNativeVoiceBridge(
 
         fun onNativeVoiceError(kind: String, text: String, channel: String, clientId: String)
 
-        fun onGlassAudioCaptureComplete(pcm: ByteArray)
+        fun onGlassAudioPcm(pcm: ByteArray)
 
         fun onGlassReviewRequested()
     }
@@ -74,9 +75,12 @@ final class RokidNativeVoiceBridge(
     private var phoneTtsBytes = 0
     private var lastPhoneTtsText = ""
     private val glassAudioLock = Any()
-    private val glassAudioSegmenter = RabiPcmSegmenter { pcm -> listener.onGlassAudioCaptureComplete(pcm) }
     @Volatile private var glassAudioCapturing = false
     @Volatile private var lastGlassReviewAt = 0L
+    private val glassPlaybackLock = Any()
+    private var pendingGlassPlaybackId = ""
+    private var pendingGlassPlaybackState = ""
+    private var pendingGlassPlaybackLatch: CountDownLatch? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var phoneDeviceAudioHandshakeGeneration = 0
     @Volatile private var phoneDeviceVideoAudioHandshakeGeneration = 0
@@ -91,10 +95,6 @@ final class RokidNativeVoiceBridge(
     private var phoneBtScanListenerRegistered = false
     @Volatile private var phoneP2pProbeGeneration = 0
 
-    init {
-        val settings = RabiConversationSettings.load(appContext)
-        glassAudioSegmenter.configure(settings.vadThreshold, settings.silenceMs)
-    }
     @Volatile private var phoneP2pPeerCount = 0
     @Volatile private var phoneP2pMatchedPeer: WifiP2pDevice? = null
     private var phoneP2pListenerRegistered = false
@@ -255,7 +255,7 @@ final class RokidNativeVoiceBridge(
             super.onBTStreamDataReceived(tag, data, clientId)
             log("Phone SDK 收到 BT stream tag=$tag bytes=${data.size} clientId=$clientId")
             if (tag == RabiGlassAudioProtocol.AUDIO_STREAM_TAG && glassAudioCapturing) {
-                glassAudioSegmenter.accept(data)
+                listener.onGlassAudioPcm(data)
             }
             if (tag == PHONE_DEVICE_VIDEO_AUDIO_AUDIO_TAG) {
                 handlePhoneDeviceVideoAudioAudio("onBTStreamDataReceived", data.size)
@@ -363,6 +363,12 @@ final class RokidNativeVoiceBridge(
     }
 
     fun stop() {
+        synchronized(glassPlaybackLock) {
+            if (pendingGlassPlaybackId.isNotEmpty() && pendingGlassPlaybackState.isEmpty()) {
+                pendingGlassPlaybackState = "playback_failed"
+                pendingGlassPlaybackLatch?.countDown()
+            }
+        }
         destroyPhoneVoiceProbe()
         destroyEngine()
     }
@@ -418,13 +424,33 @@ final class RokidNativeVoiceBridge(
         sendPayload(ASR_STOP_CMD, "native ASR stop")
     }
 
-    fun sendAudioPcmToGlass(pcm: ByteArray): Boolean {
+    fun sendAudioPcmToGlass(messageId: String, pcm: ByteArray): Boolean {
         if (pcm.isEmpty()) return false
+        val stableMessageId = messageId.trim().take(200)
+        if (stableMessageId.isEmpty()) return false
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            log("send Rabi PC audio to glasses rejected on main thread")
+            return false
+        }
         return runCatching {
             val channel = buildPhoneBtAuthProbe()
             if (!channel.readyForAudioPlayback) {
                 throw IllegalStateException("glasses audio channel is not ready: ${channel.summary()}")
             }
+            val completion = CountDownLatch(1)
+            synchronized(glassPlaybackLock) {
+                if (pendingGlassPlaybackId.isNotEmpty()) throw IllegalStateException("another glasses playback is pending")
+                pendingGlassPlaybackId = stableMessageId
+                pendingGlassPlaybackState = ""
+                pendingGlassPlaybackLatch = completion
+            }
+            sendPlaybackPayload(
+                RabiGlassAudioProtocol.PREFIX_PLAYBACK_BEGIN + JSONObject()
+                    .put("messageId", stableMessageId)
+                    .put("bytes", pcm.size)
+                    .toString(),
+                "glasses playback begin"
+            )
             var offset = 0
             while (offset < pcm.size) {
                 val end = minOf(offset + 4096, pcm.size)
@@ -434,10 +460,28 @@ final class RokidNativeVoiceBridge(
                 service.sendAudioStreamDataByClassicBT(chunk)
                 offset = end
             }
-            true
+            sendPlaybackPayload(
+                RabiGlassAudioProtocol.PREFIX_PLAYBACK_END + JSONObject()
+                    .put("messageId", stableMessageId)
+                    .put("bytes", pcm.size)
+                    .toString(),
+                "glasses playback end"
+            )
+            val timeoutMs = maxOf(15_000L, pcm.size * 1000L / 32_000L + 15_000L)
+            val completed = completion.await(timeoutMs, TimeUnit.MILLISECONDS)
+            val state = synchronized(glassPlaybackLock) { pendingGlassPlaybackState }
+            completed && state == "played"
         }.getOrElse {
             log("send Rabi PC audio to glasses failed: ${it.javaClass.simpleName}: ${it.message}")
             false
+        }.also {
+            synchronized(glassPlaybackLock) {
+                if (pendingGlassPlaybackId == stableMessageId) {
+                    pendingGlassPlaybackId = ""
+                    pendingGlassPlaybackState = ""
+                    pendingGlassPlaybackLatch = null
+                }
+            }
         }
     }
 
@@ -1095,6 +1139,14 @@ final class RokidNativeVoiceBridge(
         log("Phone SDK send $description p2p=$p2pRequested bt=$btRequested clientId=${RabiGlassAudioProtocol.CLIENT_ID} payload=$payload")
     }
 
+    private fun sendPlaybackPayload(payload: String, description: String) {
+        registerMessageListener()
+        val service = PSecuritySDK.getMessageService()
+            ?: throw IllegalStateException("phone message service unavailable")
+        service.sendTextMessageByClassicBT(payload, RabiGlassAudioProtocol.CLIENT_ID)
+        log("Phone SDK send $description over ordered ClassicBT clientId=${RabiGlassAudioProtocol.CLIENT_ID}")
+    }
+
     private fun initPhoneSdk() {
         if (sdkInitRequested) {
             return
@@ -1155,10 +1207,23 @@ final class RokidNativeVoiceBridge(
 
     private fun handleTextMessage(channel: String, msg: String, clientId: String) {
         log("Phone SDK text channel=$channel clientId=$clientId msg=$msg")
+        if (msg.startsWith(RabiGlassAudioProtocol.PREFIX_PLAYBACK_RECEIPT)) {
+            val payload = runCatching { JSONObject(msg.removePrefix(RabiGlassAudioProtocol.PREFIX_PLAYBACK_RECEIPT)) }.getOrNull()
+            val messageId = payload?.optString("messageId", "")?.trim().orEmpty()
+            val state = payload?.optString("state", "")?.trim().orEmpty()
+            val validState = state == "played" || state == "playback_failed"
+            synchronized(glassPlaybackLock) {
+                if (messageId == pendingGlassPlaybackId && validState && pendingGlassPlaybackState.isEmpty()) {
+                    pendingGlassPlaybackState = state
+                    pendingGlassPlaybackLatch?.countDown()
+                }
+            }
+            listener.onNativeCommandAck("glass_playback_receipt", "state=$state", channel, clientId)
+            return
+        }
         if (msg == RabiGlassAudioProtocol.COMMAND_START) {
             val started = synchronized(glassAudioLock) {
                 if (glassAudioCapturing) return@synchronized false
-                glassAudioSegmenter.reset()
                 glassAudioCapturing = true
                 true
             }
@@ -1172,7 +1237,6 @@ final class RokidNativeVoiceBridge(
                 true
             }
             if (stopped == null) return
-            glassAudioSegmenter.flush()
             sendGlassAudioStatus("已暂停持续聆听")
             return
         }

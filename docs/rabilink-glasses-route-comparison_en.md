@@ -101,7 +101,7 @@ This route installs a standalone Android APK on the glasses and uses the phone a
 
 ```text
 glasses microphone -> PCM -> phone backend -> Relay speech proxy -> Rabi PC ASR
-  -> record-first observation -> ledger -> PC Agent
+  -> one host-wide speech record -> enabled rabilink Route hot/keyword -> persona context -> PC Agent
 PC Agent -> Outbox text -> phone requests Rabi PC TTS -> PCM -> glasses speaker
 ```
 
@@ -125,7 +125,7 @@ Limits:
 | Deliver a custom HUD, audio conversation, and proactive messages now | Native app |
 | Use camera, sensors, native Services, or stronger device control | Native app |
 | Keep a low-cost compatibility entry | Native Lingzhu agent; AIUI remains historical compatibility only |
-| Research genuinely resident capture | Native app foreground service, reusing the existing record-first backend contract |
+| Research genuinely resident capture | Native app foreground service, reusing the current store-once then Route-policy speech contract |
 
 The current recommendation is to use the **native app as the primary custom glasses experience**, retain the **native Lingzhu agent as a lightweight compatibility entry**, and keep **AIUI paused as historical compatibility**. The app does not duplicate the backend: models, persona, Agent, ledger, configuration, and action gates remain on the Rabi PC.
 

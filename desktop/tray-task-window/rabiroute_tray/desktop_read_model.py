@@ -79,9 +79,24 @@ def empty_desktop_read_model(
 def _plan_item_from_manager(item: dict[str, Any]) -> PlanItem:
     project = item.get("project") if isinstance(item.get("project"), dict) else {}
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    presentation = item.get("presentation") if isinstance(item.get("presentation"), dict) else {}
+    approval_presentation = presentation.get("approval") if isinstance(presentation.get("approval"), dict) else {}
+    approval = item.get("approval") if isinstance(item.get("approval"), dict) else {}
+    latest_approval = approval.get("latest") if isinstance(approval.get("latest"), dict) else {}
     return PlanItem(
+        plan_id=str(item.get("id") or ""),
         title=str(item.get("title") or item.get("id") or "Untitled plan"),
         status=str(item.get("status") or "未开始"),
+        display_status=str(presentation.get("status") or ""),
+        display_tone=str(presentation.get("tone") or ""),
+        approval_enabled=bool(approval_presentation.get("enabled")),
+        approval_label=str(approval_presentation.get("label") or ""),
+        approval_helper=str(approval_presentation.get("helper") or ""),
+        approval_step_id=str(approval_presentation.get("stepId") or ""),
+        approval_count=int(approval.get("count") or 0),
+        latest_approval_text=str(latest_approval.get("text") or ""),
+        latest_approval_at=str(latest_approval.get("createdAt") or ""),
+        latest_approval_delivery_status=str(latest_approval.get("deliveryStatus") or ""),
         priority=str(item.get("priority") or ""),
         kind=str(item.get("kind") or ""),
         current_step=str(item.get("currentStep") or ""),

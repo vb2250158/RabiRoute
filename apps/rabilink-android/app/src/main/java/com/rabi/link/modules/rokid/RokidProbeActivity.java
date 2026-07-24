@@ -268,9 +268,9 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
             }
 
             @Override
-            public void onGlassAudioCaptureComplete(byte[] pcm) {
+            public void onGlassAudioPcm(byte[] pcm) {
                 if (glassPcBackend != null) {
-                    glassPcBackend.submitPcm(pcm);
+                    glassPcBackend.streamPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_GLASSES);
                 }
             }
 
@@ -302,10 +302,16 @@ public class RokidProbeActivity extends Activity implements RokidProbeUi.Actions
             }
 
             @Override
-            public boolean onReply(String messageId, String routeProfileId, String text, byte[] pcm, org.json.JSONArray attachments) {
-                if (nativeVoiceBridge == null) return false;
+            public RabiGlassPcBackend.ReplyDeliveryResult onReply(String messageId, String routeProfileId, String text, byte[] pcm, org.json.JSONArray attachments) {
+                if (nativeVoiceBridge == null) {
+                    return new RabiGlassPcBackend.ReplyDeliveryResult(false, pcm != null && pcm.length > 0,
+                            false, RabiGlassPcBackend.SOURCE_GLASSES, "眼镜原生桥未连接");
+                }
                 nativeVoiceBridge.sendGlassReplyText(text);
-                return nativeVoiceBridge.sendAudioPcmToGlass(pcm);
+                boolean playbackRequested = pcm != null && pcm.length > 0;
+                boolean played = !playbackRequested || nativeVoiceBridge.sendAudioPcmToGlass(messageId, pcm);
+                return new RabiGlassPcBackend.ReplyDeliveryResult(true, playbackRequested, played,
+                        RabiGlassPcBackend.SOURCE_GLASSES, played ? "" : "眼镜未确认播放完成");
             }
 
             @Override

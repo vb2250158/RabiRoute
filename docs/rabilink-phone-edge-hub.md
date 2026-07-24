@@ -13,7 +13,7 @@
 RabiLink 的手机定位是 **边缘通讯枢纽（edge communication hub）**，不是第二个 Agent，也不是 RabiRoute 的配置真源。
 
 - PC RabiRoute / Codex：拥有推理、人格、统一会话账本、配置真源和动作安全门。
-- Relay：拥有按应用隔离、可重试、至少保留 48 小时的双向邮箱。
+- Relay：拥有按应用隔离、可重试的双向邮箱；广播/按类型消息使用有限 TTL，明确目标消息在目标 `delivered` 前不按 TTL 删除，并持久化逐设备回执。
 - 手机：保存应用 token，承担眼镜后端、公网通讯、目标 PC、cursor、音频/媒体队列、通知和本地便携设备扇出。
 - 眼镜原生 App：只承担轻量 HUD、触摸板、PCM 采集/播放和设备媒体输入，不保存 Relay 凭据。
 - 手表等设备：通过手机本地链路或自己的网络读写同一套设备消息契约。
@@ -36,7 +36,7 @@ flowchart LR
     Phone <-->|"HTTPS"| Relay
     Watch <-->|"Wear Data Layer / BLE / 局域网"| Phone
     Watch -.->|"可选直接 HTTPS"| Relay
-    Relay <-->|"worker 长轮询"| PC
+    Relay <-->|"SSE 事件 + 即时领取"| PC
     PC <-->|"固定线程"| Agent
     PC <--> Ledger
 ```
@@ -180,7 +180,7 @@ GET /rokid/rabilink/messages?after=<cursor>&stream=1
 | AIUI 直连 | AIUI 页面调用旧眼镜消息接口；网络由官方手机链路透明代理 | 当前默认，链路最短 |
 | 手机代收 | 手机读取 `deviceKind=glasses`，再通过本地设备通道推给眼镜 | 未来需要统一通知、离线缓存或跨设备编排时 |
 
-不要让 AIUI 和手机同时为同一个眼镜身份轮询并各自播报，否则一条广播可能在眼镜上重复出现。模式切换必须先停旧消费者，再启新消费者；每个消费者使用自己的持久 cursor。
+不要让 AIUI 和手机同时订阅同一个眼镜身份并各自播报，否则一条广播可能在眼镜上重复出现。模式切换必须先停旧事件消费者，再启新消费者；每个消费者使用自己的持久 cursor 做断线补漏。
 
 ## Android 生命周期
 
@@ -190,6 +190,9 @@ GET /rokid/rabilink/messages?after=<cursor>&stream=1
 - CXR 设备状态服务声明为 `connectedDevice` 前台服务，而不是无限期 `dataSync` 服务。
 - 它只读取眼镜电量/充电并上报 Relay，不创建 Custom View，不拥有 Agent。
 - Android SDK 已提供一次性 `publishPortableObservation` 和 `getPortableMessages`；调用方决定何时运行，不偷偷常驻麦克风。
+- 连续 PCM 恢复由系统网络事件和 RabiLink SSE 恢复事件驱动；Android 已知断网时，SSE 连接和可靠队列发送阻塞在网络事件门，不按秒空转。仅为覆盖少数厂商漏发已注册默认网络回调，前台服务在已知离线期间每五分钟检查一次 OS 当前网络，恢复后立即停止；该兜底不请求 Relay、不读取消息、不推进 cursor。只有网络可用但服务暂时失败时才使用一次性 1–30 秒退避。
+- 待确认 PCM 使用跨临时流稳定的 `chunkId`，PC 按稳定设备只保存最后一个已接收块的 ID/哈希去重证据。断网缓冲有界并舍弃过旧声音，因此恢复会追上实时流；若需要完整保留离线期间每句话，必须另行显式设计带隐私提示的离线录音模式。
+- 文字、媒体和 `delivered/played/playback_failed` 回执先落手机私有可靠队列；事件恢复后按 cursor 单次查询补漏并补传。`delivered` 不是 `played`，手机与眼镜只在各自 AudioTrack marker 后报告实际播放完成；眼镜在 BEGIN 后同步确认采集已暂停才接收 PCM，界面销毁会把未完成播放明确回为失败。
 
 ### 后续产品化
 

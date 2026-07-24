@@ -20,7 +20,6 @@ data class WearableHealthConfig(
     val sourceDeviceId: String,
     val sourceDeviceName: String,
     val sourceDeviceKind: String,
-    val pollIntervalMinutes: Int,
     val lookbackHours: Int,
     val policy: RabiWearableHealthPolicy,
     val hasAuthKey: Boolean
@@ -40,7 +39,6 @@ object WearableHealthSettings {
             sourceDeviceId = prefs.getString("sourceDeviceId", "").orEmpty().trim(),
             sourceDeviceName = prefs.getString("sourceDeviceName", "").orEmpty().trim(),
             sourceDeviceKind = prefs.getString("sourceDeviceKind", "wearable").orEmpty().trim().ifBlank { "wearable" },
-            pollIntervalMinutes = prefs.getInt("pollIntervalMinutes", 5).coerceIn(1, 1440),
             lookbackHours = prefs.getInt("lookbackHours", 24).coerceIn(1, 168),
             policy = RabiWearableHealthPolicy(
                 enabled = prefs.getBoolean("policyEnabled", true),
@@ -64,7 +62,6 @@ object WearableHealthSettings {
             .putString("sourceDeviceId", config.sourceDeviceId.trim())
             .putString("sourceDeviceName", config.sourceDeviceName.trim())
             .putString("sourceDeviceKind", config.sourceDeviceKind.trim().lowercase())
-            .putInt("pollIntervalMinutes", config.pollIntervalMinutes.coerceIn(1, 1440))
             .putInt("lookbackHours", config.lookbackHours.coerceIn(1, 168))
             .putBoolean("policyEnabled", config.policy.enabled)
             .putInt("heartRateHighBpm", config.policy.heartRateHighBpm.coerceIn(40, 240))

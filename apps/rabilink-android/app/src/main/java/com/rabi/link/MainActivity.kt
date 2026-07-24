@@ -1,7 +1,10 @@
 package com.rabi.link
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -17,6 +20,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.*
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -54,19 +58,18 @@ class MainActivity : Activity() {
     private lateinit var runtimeTranscript: TextView
     private lateinit var runtimeReply: TextView
     private lateinit var runtimeCaptureHealth: TextView
+    private lateinit var runtimeMode: TextView
+    private lateinit var runtimeConnection: TextView
+    private lateinit var runtimeRoute: TextView
+    private lateinit var runtimeGlasses: TextView
+    private lateinit var runtimeQueue: TextView
+    private lateinit var runtimeError: TextView
     private val runtimeHandler = Handler(Looper.getMainLooper())
-    private val runtimeTick = object : Runnable {
-        override fun run() { refreshConversationRuntime(); refreshChatIfChanged(); runtimeHandler.postDelayed(this, 1000) }
-    }
-    private lateinit var continuousListening: Switch
-    private lateinit var glassesEnabled: Switch
+    private lateinit var inputMode: Spinner
+    private lateinit var proactivityPreference: Spinner
     private lateinit var autoPlayAgentVoice: Switch
-    private lateinit var asrModel: EditText
-    private lateinit var asrLanguage: EditText
     private lateinit var ttsModel: EditText
     private lateinit var ttsVoice: EditText
-    private lateinit var vadThreshold: EditText
-    private lateinit var silenceMs: EditText
     private enum class Screen { SETUP, CONVERSATIONS, CHAT, SETTINGS, CONFIG_ASSISTANT }
     private data class ConversationRow(
         val id: String,
@@ -95,6 +98,13 @@ class MainActivity : Activity() {
     private var routeLoadFailed = false
     private var routeLoadMessage = "正在读取 Rabi PC 上的聊天人格…"
     private var lastChatRuntimeAt = 0L
+    private var runtimeReceiverRegistered = false
+    private val runtimeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshConversationRuntime()
+            refreshChatIfChanged()
+        }
+    }
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -111,9 +121,15 @@ class MainActivity : Activity() {
         }
         if (saved.configured && saved.statusSyncEnabled) RokidDeviceStatusSyncService.start(this)
         val conversation = RabiConversationSettings.load(this)
-        if (saved.configured && conversation.continuousListening
-            && (conversation.glassesEnabled || checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED)) {
-            RabiConversationService.start(this)
+        if (saved.configured && RabiConversationServiceState.shouldRestore(this)) {
+            if (conversation.inputMode != RabiConversationSettings.InputMode.PHONE
+                || checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                RabiConversationService.start(this)
+            } else {
+                // Restore durable queues/downlink even when Android still requires a foreground
+                // microphone permission interaction before continuous capture can resume.
+                RabiConversationService.restoreAfterBoot(this)
+            }
         }
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), requestNotifications)
@@ -561,20 +577,47 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        runtimeHandler.removeCallbacks(runtimeTick)
-        runtimeHandler.post(runtimeTick)
+        if (!runtimeReceiverRegistered) {
+            ContextCompat.registerReceiver(
+                this,
+                runtimeReceiver,
+                IntentFilter("com.rabi.link.conversation.RUNTIME_UPDATED"),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            runtimeReceiverRegistered = true
+        }
+        refreshConversationRuntime()
+        refreshChatIfChanged()
         if (screen == Screen.CHAT) renderChat()
         if (screen == Screen.CONVERSATIONS) renderConversationList()
     }
-    override fun onPause() { runtimeHandler.removeCallbacks(runtimeTick); super.onPause() }
+    override fun onPause() {
+        if (runtimeReceiverRegistered) {
+            unregisterReceiver(runtimeReceiver)
+            runtimeReceiverRegistered = false
+        }
+        super.onPause()
+    }
 
     private fun conversationRuntimeCard(): View = card().apply {
         addView(title("持续会话"))
         runtimeStatus = note("尚未启动")
+        runtimeMode = runtimeLine("模式：尚未启动")
+        runtimeConnection = runtimeLine("连接：尚未启动")
+        runtimeRoute = runtimeLine("Route / 人格：尚未选择")
+        runtimeGlasses = runtimeLine("眼镜：未使用")
+        runtimeQueue = runtimeLine("可靠队列：正在读取")
+        runtimeError = runtimeLine("最近错误：无")
         runtimeTranscript = runtimeLine("你：等待语音")
         runtimeReply = runtimeLine("Rabi：等待回复")
         runtimeCaptureHealth = runtimeLine("采集：尚无长时运行记录")
         addView(runtimeStatus)
+        addView(runtimeMode, full(0, 2, 0, 2))
+        addView(runtimeConnection, full(0, 2, 0, 2))
+        addView(runtimeRoute, full(0, 2, 0, 2))
+        addView(runtimeGlasses, full(0, 2, 0, 2))
+        addView(runtimeQueue, full(0, 2, 0, 2))
+        addView(runtimeError, full(0, 2, 0, 6))
         addView(runtimeTranscript, full(0, 2, 0, 2))
         addView(runtimeReply, full(0, 2, 0, 8))
         addView(runtimeCaptureHealth, full(0, 2, 0, 8))
@@ -590,7 +633,20 @@ class MainActivity : Activity() {
     private fun refreshConversationRuntime() {
         if (!::runtimeStatus.isInitialized) return
         val values = getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE)
+        val settings = RabiConversationSettings.load(this)
+        val desiredMode = settings.inputMode
+        val activeMode = RabiConversationSettings.InputMode.fromPersisted(
+            values.getString("activeMode", "PAUSED"),
+            RabiConversationSettings.InputMode.PAUSED,
+        )
         runtimeStatus.text = values.getString("status", "尚未启动")
+        runtimeMode.text = "模式：${inputModeLabel(desiredMode)} · 当前 ${inputModeLabel(activeMode)} · ${values.getString("capture", "采集状态未知")}"
+        runtimeConnection.text = "连接：${values.getString("connection", "等待服务事件")}"
+        val routeId = RabiConversationTarget.load(this)
+        runtimeRoute.text = "Route / 人格：${if (routeId.isBlank()) "尚未选择" else routeTitle(routeId)} · 主动性 ${proactivityLabel(settings.proactivityPreference)}"
+        runtimeGlasses.text = "眼镜：${values.getString("glasses", if (desiredMode == RabiConversationSettings.InputMode.GLASSES) "等待连接状态" else "未使用眼镜输入")}"
+        runtimeQueue.text = "可靠队列：${values.getString("queue", "等待服务读取")}"
+        runtimeError.text = "最近错误：${values.getString("error", "").orEmpty().ifBlank { "无" }}"
         runtimeTranscript.text = "你：${values.getString("transcript", "等待语音")}"
         runtimeReply.text = "Rabi：${values.getString("reply", "等待回复")}"
         runtimeCaptureHealth.text = RabiPhoneAudioCapture.runtimeSummary(this)
@@ -666,72 +722,86 @@ class MainActivity : Activity() {
     }
 
     private fun conversationCard(): View = card().apply {
-        addView(title("2. 持续会话与语音模型"))
-        addView(note("这些设置同时用于手机独立模式和眼镜模式。ASR/TTS 在所选 Rabi PC 执行，手机负责持续录音、VAD 分段、cursor 和恢复。"))
-        continuousListening = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "配置完成后自动持续聆听" })
-        glassesEnabled = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "连接后使用眼镜麦克风、扬声器和触摸板" })
+        addView(title("2. 持续会话与下行语音"))
+        addView(note("这些设置同时用于手机独立模式和眼镜模式。Android 只持续采集并传输 16 kHz 单声道 PCM；VAD、切句、ASR 和声纹都由所选 Rabi PC 的 RabiSpeech 统一完成。"))
+        inputMode = RabiMobileUi.spinner(this@MainActivity, Spinner(this@MainActivity).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_item,
+                listOf("已暂停（保留消息连接）", "手机模式", "眼镜模式"),
+            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        })
+        proactivityPreference = RabiMobileUi.spinner(this@MainActivity, Spinner(this@MainActivity).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_item,
+                listOf("由 Agent 人格综合决定", "偏安静", "均衡", "偏主动"),
+            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        })
         autoPlayAgentVoice = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "收到 Agent TTS 后立即播放" })
-        addView(continuousListening)
-        addView(glassesEnabled)
+        addView(label("当前交互模式")); addView(inputMode, full(0, 0, 0, 6))
+        addView(note("眼镜模式只有在眼镜真实连接后才开始采集；连接前或断线后保持暂停，不会同时上传手机和眼镜麦克风。"))
+        addView(label("明确主动性偏好")); addView(proactivityPreference, full(0, 0, 0, 6))
+        addView(note("这是交给 PC / Route / Agent 的明确偏好，不是 App 本地决策规则。Agent 仍可根据情景、权限和动作安全门选择不打扰、准备、提示、建议、请求确认或行动。"))
         addView(autoPlayAgentVoice)
-        asrModel = input("faster-whisper/small")
-        asrLanguage = input("zh")
         ttsModel = input("local-tts/gpt-sovits")
         ttsVoice = input("Rabi")
-        vadThreshold = numberInput("650")
-        silenceMs = numberInput("900")
-        addView(label("Rabi PC ASR 模型")); addView(asrModel, full(0, 0, 0, 6))
-        addView(label("识别语言")); addView(asrLanguage, full(0, 0, 0, 6))
         addView(label("Rabi PC TTS 模型")); addView(ttsModel, full(0, 0, 0, 6))
         addView(label("人格 / 声线")); addView(ttsVoice, full(0, 0, 0, 6))
-        val vadRow = row()
-        vadRow.addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(label("VAD 阈值")); addView(vadThreshold)
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        vadRow.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
-        vadRow.addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(label("静音切句 ms")); addView(silenceMs)
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        addView(vadRow, full(0, 0, 0, 8))
         addView(primary("保存并开始持续会话") { startConversation() }, full(0, 0, 0, 8))
-        addView(note("长时运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。VAD 语段与 Agent TTS 按 PC 语音缓存的统一语义逐条保留 24 小时，不保存一条整日原始录音。小米等厂商仍可能额外限制后台应用，请在真机上完成 24 小时验收。"))
+        addView(note("长时运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。Android 不保存整日原始录音；RabiSpeech 在 PC 端切出的 ASR 语段和 Agent TTS 按统一缓存语义逐条保留 24 小时。小米等厂商仍可能额外限制后台应用，请在真机上完成 24 小时验收。"))
         val actions = row()
         actions.addView(secondary("立即提示 Agent") { RabiConversationService.requestReview(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
         actions.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
         actions.addView(secondary("停止持续会话") { RabiConversationService.stop(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(actions)
-        addView(secondary("重试失败的 ASR / TTS 消息") { RabiConversationService.retryFailed(this@MainActivity) }, full(0, 8, 0, 0))
+        addView(secondary("重试失败的离线消息 / TTS") { RabiConversationService.retryFailed(this@MainActivity) }, full(0, 8, 0, 0))
         addView(secondary("检查系统后台保活设置") { openBatteryOptimizationSettings() }, full(0, 8, 0, 0))
     }
 
     private fun loadConversationSettings() {
         val value = RabiConversationSettings.load(this)
-        continuousListening.isChecked = value.continuousListening
-        glassesEnabled.isChecked = value.glassesEnabled
+        inputMode.setSelection(when (value.inputMode) {
+            RabiConversationSettings.InputMode.PAUSED -> 0
+            RabiConversationSettings.InputMode.PHONE -> 1
+            RabiConversationSettings.InputMode.GLASSES -> 2
+            else -> 0
+        })
+        proactivityPreference.setSelection(when (value.proactivityPreference) {
+            RabiConversationSettings.ProactivityPreference.AGENT_DECIDES -> 0
+            RabiConversationSettings.ProactivityPreference.QUIET -> 1
+            RabiConversationSettings.ProactivityPreference.BALANCED -> 2
+            RabiConversationSettings.ProactivityPreference.PROACTIVE -> 3
+            else -> 0
+        })
         autoPlayAgentVoice.isChecked = value.autoPlayAgentVoice
-        asrModel.setText(value.asrModel)
-        asrLanguage.setText(value.asrLanguage)
         ttsModel.setText(value.ttsModel)
         ttsVoice.setText(value.ttsVoice)
-        vadThreshold.setText(value.vadThreshold.toString())
-        silenceMs.setText(value.silenceMs.toString())
     }
 
     private fun saveConversationSettings() {
-        RabiConversationSettings(
-            continuousListening.isChecked,
-            glassesEnabled.isChecked,
+        val previous = RabiConversationSettings.load(this)
+        val next = RabiConversationSettings(
+            when (inputMode.selectedItemPosition) {
+                0 -> RabiConversationSettings.InputMode.PAUSED
+                2 -> RabiConversationSettings.InputMode.GLASSES
+                else -> RabiConversationSettings.InputMode.PHONE
+            },
+            when (proactivityPreference.selectedItemPosition) {
+                1 -> RabiConversationSettings.ProactivityPreference.QUIET
+                2 -> RabiConversationSettings.ProactivityPreference.BALANCED
+                3 -> RabiConversationSettings.ProactivityPreference.PROACTIVE
+                else -> RabiConversationSettings.ProactivityPreference.AGENT_DECIDES
+            },
             autoPlayAgentVoice.isChecked,
-            asrModel.text.toString(),
-            asrLanguage.text.toString(),
             ttsModel.text.toString(),
-            ttsVoice.text.toString(),
-            vadThreshold.text.toString().toIntOrNull() ?: 650,
-            silenceMs.text.toString().toIntOrNull() ?: 900
-        ).save(this)
-        toast("持续会话设置已保存")
+            ttsVoice.text.toString()
+        )
+        next.save(this)
+        if (previous.proactivityPreference != next.proactivityPreference) {
+            RabiConversationService.updateProactivityPreference(this, next.proactivityPreference.wireValue)
+        }
+        toast("模式与持续会话设置已保存")
     }
 
     private fun startConversation() {
@@ -739,14 +809,29 @@ class MainActivity : Activity() {
         val relay = RabiLinkRelaySettings.load(this)
         if (!relay.configured) return toast("请先连接 RabiLink 服务器")
         val settings = RabiConversationSettings.load(this)
-        if (!settings.glassesEnabled && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        if (settings.inputMode == RabiConversationSettings.InputMode.PHONE
+            && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), requestPhoneAudio)
             return
         }
         RabiConversationService.start(this)
-        if (settings.glassesEnabled && getSharedPreferences("rokid_probe", MODE_PRIVATE).getString("rokid_token", "").isNullOrBlank()) {
+        if (settings.inputMode == RabiConversationSettings.InputMode.GLASSES
+            && getSharedPreferences("rokid_probe", MODE_PRIVATE).getString("rokid_token", "").isNullOrBlank()) {
             openRokid("connect_glass_app")
         }
+    }
+
+    private fun inputModeLabel(mode: RabiConversationSettings.InputMode): String = when (mode) {
+        RabiConversationSettings.InputMode.PAUSED -> "已暂停"
+        RabiConversationSettings.InputMode.PHONE -> "手机模式"
+        RabiConversationSettings.InputMode.GLASSES -> "眼镜模式"
+    }
+
+    private fun proactivityLabel(value: RabiConversationSettings.ProactivityPreference): String = when (value) {
+        RabiConversationSettings.ProactivityPreference.AGENT_DECIDES -> "由 Agent 决定"
+        RabiConversationSettings.ProactivityPreference.QUIET -> "偏安静"
+        RabiConversationSettings.ProactivityPreference.BALANCED -> "均衡"
+        RabiConversationSettings.ProactivityPreference.PROACTIVE -> "偏主动"
     }
 
     private fun openBatteryOptimizationSettings() {

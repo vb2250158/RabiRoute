@@ -5,10 +5,11 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
-import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
+import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
+import { DEFAULT_CODEX_HOOK_SETTINGS } from "@shared/gatewayConfigModel";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 
 const store = useGatewayStore();
@@ -182,18 +183,18 @@ async function startCopilotLogin(): Promise<void> {
       await fetchCopilotStatus();
     } else if (data.code) {
       copilotLoginState.value = { loading: false, code: data.code, url: data.url, done: false, error: null };
-      // Poll for login completion (process exits when done)
-      const poll = setInterval(async () => {
-        const r2 = await fetch("/api/agent/copilot-status");
-        const s = await r2.json();
-        if (s.loggedIn) {
-          copilotStatus.value = s;
+      const events = new EventSource("/api/events");
+      events.addEventListener("copilot_login_status", async (raw) => {
+        const event = JSON.parse((raw as MessageEvent).data || "{}");
+        events.close();
+        if (event.done) {
+          await fetchCopilotStatus();
           copilotLoginState.value.done = true;
           copilotLoginState.value.code = null;
-          clearInterval(poll);
+        } else {
+          copilotLoginState.value.error = event.error || "登录失败";
         }
-      }, 3000);
-      setTimeout(() => clearInterval(poll), 120_000);
+      });
     } else {
       copilotLoginState.value = { loading: false, code: null, url: null, done: false, error: data.error || "启动失败" };
     }
@@ -3062,6 +3063,21 @@ function selectCodexSession(value: unknown): void {
   touch();
 }
 
+function codexHookEnabled(key: keyof CodexHookSettings): boolean {
+  return gateway.value?.codexHooks?.[key] !== false;
+}
+
+function setCodexHookSetting(key: keyof CodexHookSettings, enabled: boolean | null): void {
+  if (!gateway.value) return;
+  gateway.value.codexHooks = {
+    sessionContextEnabled: gateway.value.codexHooks?.sessionContextEnabled !== false,
+    reasoningContextEnabled: gateway.value.codexHooks?.reasoningContextEnabled !== false,
+    planTaskCompletionEnabled: gateway.value.codexHooks?.planTaskCompletionEnabled !== false,
+    [key]: enabled === true
+  };
+  touch();
+}
+
 async function lookupCodexThreadBinding(): Promise<void> {
   if (!gateway.value || codexBinding.value.loading) return;
   const title = gateway.value.codexThreadName?.trim() || fallbackCodexThreadName();
@@ -3170,6 +3186,9 @@ function addAgent(type: AgentAdapterType): void {
   if (!gateway.value) return;
   gateway.value.agentAdapters = [...agentTypes.value, type];
   agentParamOpen.value[type] = true;
+  if (type === "codex" && !gateway.value.codexHooks) {
+    gateway.value.codexHooks = { ...DEFAULT_CODEX_HOOK_SETTINGS };
+  }
   if (type === "copilotCli" && copilotStatus.value === null) void fetchCopilotStatus();
   store.touch();
 }
@@ -4499,6 +4518,49 @@ watch(
                   <v-alert v-else-if="codexBinding.pending" type="info" variant="tonal" density="compact" class="mt-2 mb-1">
                     尚无同名 Desktop 会话；点击保存时会创建任务、写入完整 ID 并切换绑定。
                   </v-alert>
+                  <div class="dependency-panel mt-3">
+                    <div class="section-title-row compact-row">
+                      <div>
+                        <div class="section-title small-title">Hook 管理</div>
+                        <div class="section-note">关闭开关只让 Manager 忽略对应 Hook；Codex 插件中的 Hook 注册保持不变。</div>
+                      </div>
+                    </div>
+                    <div class="catalog-param-grid mt-2">
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('sessionContextEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="会话入口上下文"
+                          @update:model-value="value => setCodexHookSetting('sessionContextEnabled', value)"
+                        />
+                        <div class="section-note">打开、恢复、清空或压缩 Codex 任务，以及用户提交新消息时触发。Hook：<code>SessionStart</code> / <code>UserPromptSubmit</code>。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('reasoningContextEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="推理期上下文刷新"
+                          @update:model-value="value => setCodexHookSetting('reasoningContextEnabled', value)"
+                        />
+                        <div class="section-note">Codex 调用工具前后触发，只注入本轮新命中的计划、记忆或技能上下文。Hook：<code>PreToolUse</code> / <code>PostToolUse</code>。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('planTaskCompletionEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="计划任务会话完成通知"
+                          @update:model-value="value => setCodexHookSetting('planTaskCompletionEnabled', value)"
+                        />
+                        <div class="section-note">绑定计划的执行任务输出本轮最终回答后触发，经 Rabi 投递到该人格 Route 绑定的会话。Hook：<code>Stop</code>；默认开启。</div>
+                      </div>
+                    </div>
+                  </div>
                   <template v-if="runtime.running !== undefined">
                     <v-alert v-if="agentStateFor('codex').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
                       {{ agentStateFor('codex').lastNotificationError }}

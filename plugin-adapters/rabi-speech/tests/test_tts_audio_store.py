@@ -59,6 +59,24 @@ def test_tts_audio_store_registry_cleans_every_registered_cache(tmp_path) -> Non
     assert registry.get(first.root) is first
 
 
+def test_tts_audio_store_registry_reports_the_earliest_file_expiry(tmp_path) -> None:
+    registry = TtsAudioStoreRegistry(retention_minutes=60)
+    first = registry.get(tmp_path / "first")
+    second = registry.get(tmp_path / "second")
+    first_file = first.root / "first.wav"
+    second_file = second.root / "second.wav"
+    first_file.write_bytes(b"RIFF-first")
+    second_file.write_bytes(b"RIFF-second")
+    now = time.time()
+    os.utime(first_file, (now - 10, now - 10))
+    os.utime(second_file, (now - 20, now - 20))
+
+    assert registry.next_expiry() == pytest.approx(now - 20 + second.retention_seconds, abs=0.1)
+    registry.cleanup(now - 20 + second.retention_seconds + 0.1)
+    assert not second_file.exists()
+    assert registry.next_expiry() == pytest.approx(now - 10 + first.retention_seconds, abs=0.1)
+
+
 def test_registered_root_identity_mismatch_fails_closed_without_rebinding_registry(tmp_path, monkeypatch) -> None:
     root = tmp_path / "tts-audio"
     outside = tmp_path / "outside"

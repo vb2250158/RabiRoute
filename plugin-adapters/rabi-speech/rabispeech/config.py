@@ -87,6 +87,7 @@ class FasterWhisperModelSettings:
 class SpeakerRecognitionSettings:
     enabled: bool
     validated: bool
+    validation_report_path: Path | None
     experimental_auto_assign: bool
     auto_assign: bool
     model_id: str
@@ -302,6 +303,23 @@ def load_settings(path: str | Path | None = None) -> Settings:
                 True,
             ),
             validated=_bool(speaker_recognition.get("validated"), False),
+            validation_report_path=(
+                _resolve_path(
+                    base,
+                    os.environ.get(
+                        "RABISPEECH_SPEAKER_VALIDATION_REPORT_PATH",
+                        speaker_recognition.get("validation_report_path"),
+                    ),
+                    "output/benchmarks/speaker-validation.json",
+                )
+                if str(
+                    os.environ.get(
+                        "RABISPEECH_SPEAKER_VALIDATION_REPORT_PATH",
+                        speaker_recognition.get("validation_report_path") or "",
+                    )
+                ).strip()
+                else None
+            ),
             experimental_auto_assign=_bool(speaker_recognition.get("experimental_auto_assign"), False),
             auto_assign=_bool(speaker_recognition.get("auto_assign"), True),
             model_id=_env(

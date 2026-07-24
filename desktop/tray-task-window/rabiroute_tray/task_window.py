@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QIcon, QKeyEvent, QMouseEvent, QPixmap
@@ -50,7 +51,6 @@ PLAN_KIND_LABELS = {"human-gate": "需人工接管"}
 
 PLAN_STEP_DONE_STATUSES = {"已完成", "完成", "done", "completed"}
 PLAN_STEP_CURRENT_STATUSES = {"进行中", "当前", "current", "in_progress", "in-progress"}
-PLAN_QA_WAIT_LABEL = "待QA测试"
 
 class ClickableHeader(QFrame):
     clicked = Signal()
@@ -276,6 +276,8 @@ class PlanMetadataPanel(QFrame):
 
 
 class PlanDetailPanel(QFrame):
+    approval_requested = Signal(str, str, str, str)
+
     def __init__(self, plan: PlanItem, metadata_fields: list[tuple[str, str]]) -> None:
         super().__init__()
         self.setObjectName("planDetailPanel")
@@ -323,6 +325,11 @@ class PlanDetailPanel(QFrame):
 
         if metadata_fields:
             layout.addWidget(PlanMetadataPanel(metadata_fields))
+
+        self.approval_panel = PlanApprovalPanel(plan) if plan.approval_enabled else None
+        if self.approval_panel is not None:
+            self.approval_panel.submit_requested.connect(self.approval_requested.emit)
+            layout.addWidget(self.approval_panel)
 
         self.setLayout(layout)
 
@@ -477,6 +484,116 @@ class PlanDetailPanel(QFrame):
         row.setAccessibleName(f"第 {index} 步，{step.title}，{state_text}")
         return row
 
+class PlanApprovalPanel(QFrame):
+    submit_requested = Signal(str, str, str, str)
+
+    def __init__(self, plan: PlanItem) -> None:
+        super().__init__()
+        self.plan = plan
+        self.feedback_id = str(uuid4())
+        self.setObjectName("planApprovalPanel")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        heading_row = QHBoxLayout()
+        heading = QLabel(plan.approval_label or "审批建议")
+        heading.setObjectName("planApprovalTitle")
+        heading_row.addWidget(heading)
+        heading_row.addStretch(1)
+        source = QLabel("Manager 统一记录")
+        source.setObjectName("planApprovalSource")
+        heading_row.addWidget(source)
+        layout.addLayout(heading_row)
+
+        helper = QLabel(plan.approval_helper or "意见会由 Rabi Manager 记录并交给 Agent；提交本身不会直接推进计划。")
+        helper.setObjectName("planApprovalHelper")
+        helper.setWordWrap(True)
+        layout.addWidget(helper)
+
+        if plan.latest_approval_text:
+            latest = QFrame()
+            latest.setObjectName("planApprovalLatest")
+            latest_layout = QVBoxLayout()
+            latest_layout.setContentsMargins(9, 8, 9, 8)
+            latest_layout.setSpacing(3)
+            latest_label = QLabel(f"最近记录 · {plan.latest_approval_at or '未记录时间'}")
+            latest_label.setObjectName("planApprovalLatestLabel")
+            latest_text = QLabel(plan.latest_approval_text)
+            latest_text.setObjectName("planApprovalLatestText")
+            latest_text.setWordWrap(True)
+            latest_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            latest_layout.addWidget(latest_label)
+            latest_layout.addWidget(latest_text)
+            latest.setLayout(latest_layout)
+            layout.addWidget(latest)
+
+        input_label = QLabel("审批建议")
+        input_label.setObjectName("planApprovalInputLabel")
+        layout.addWidget(input_label)
+        self.input = QTextEdit()
+        self.input.setObjectName("planApprovalInput")
+        self.input.setAcceptRichText(False)
+        self.input.setPlaceholderText("例如：建议先补充回归范围，再进入下一步。")
+        self.input.setAccessibleName(f"{plan.title}的审批建议")
+        self.input.setMinimumHeight(76)
+        self.input.setMaximumHeight(126)
+        layout.addWidget(self.input)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        note = QLabel("提交后由 Agent 判断如何处理，不会直接改变计划状态。")
+        note.setObjectName("planApprovalActionNote")
+        note.setWordWrap(True)
+        self.submit_button = QPushButton("提交给 Agent")
+        self.submit_button.setObjectName("planApprovalSubmit")
+        self.submit_button.setMinimumHeight(44)
+        self.submit_button.clicked.connect(self._submit)
+        action_row.addWidget(note, 1)
+        action_row.addWidget(self.submit_button, 0, Qt.AlignBottom)
+        layout.addLayout(action_row)
+
+        self.notice = QLabel("")
+        self.notice.setObjectName("planApprovalNotice")
+        self.notice.setWordWrap(True)
+        self.notice.setVisible(False)
+        layout.addWidget(self.notice)
+        self.setLayout(layout)
+
+    def _submit(self) -> None:
+        text = self.input.toPlainText().strip()
+        if not text:
+            self.complete(False, "请先填写审批建议。", "error")
+            return
+        if len(text) > 2000:
+            self.complete(False, "审批建议不能超过 2000 个字符。", "error")
+            return
+        self.submit_requested.emit(self.plan.plan_id, self.plan.approval_step_id, self.feedback_id, text)
+
+    def set_pending(self, pending: bool) -> None:
+        self.input.setEnabled(not pending)
+        self.submit_button.setEnabled(not pending)
+        self.submit_button.setText("正在提交…" if pending else "提交给 Agent")
+        if pending:
+            self._set_notice("正在由 Rabi Manager 记录并通知 Agent。", "pending")
+
+    def complete(self, succeeded: bool, message: str = "", tone: str = "") -> None:
+        self.set_pending(False)
+        if succeeded:
+            self.input.clear()
+            self.feedback_id = str(uuid4())
+        self._set_notice(message, tone or ("success" if succeeded else "error"))
+
+    def _set_notice(self, message: str, tone: str) -> None:
+        self.notice.setText(message)
+        self.notice.setProperty("noticeTone", tone)
+        self.notice.setVisible(bool(message))
+        self.notice.style().unpolish(self.notice)
+        self.notice.style().polish(self.notice)
+
+
 def _plan_step_tone(step: PlanStep, current_step_id: str = "") -> str:
     if current_step_id and step.step_id == current_step_id:
         return "current"
@@ -510,32 +627,15 @@ def _plan_current_step_summary(plan: PlanItem) -> str:
     return plan.current_step.strip() or "暂无进行中的步骤"
 
 
-def _plan_is_waiting_for_qa(plan: PlanItem) -> bool:
-    _, current_step = _plan_current_step(plan)
-    signals = [plan.current_step, plan.waiting_for]
-    if current_step is not None:
-        signals.extend((current_step.title, current_step.detail, current_step.waiting_for))
-    for signal in signals:
-        normalized = "".join(str(signal).lower().split())
-        if not normalized:
-            continue
-        if "qa" in normalized and any(token in normalized for token in ("待", "测试", "验收")):
-            return True
-        if any(token in normalized for token in ("待验收", "等待验收", "待测试", "等待测试")):
-            return True
-    return False
-
-
 def _plan_status_presentation(plan: PlanItem, status: str) -> tuple[str, str]:
-    if _plan_blocker(plan):
-        return "阻塞中", "blocked"
-    if _plan_is_waiting_for_qa(plan):
-        return PLAN_QA_WAIT_LABEL, "qa"
+    if plan.display_status:
+        return plan.display_status, plan.display_tone or "unknown"
     return status, STATUS_TONES.get(status, "unknown")
 
 
 class ExpandableCard(QFrame):
     expanded_changed = Signal(bool)
+    approval_requested = Signal(str, str, str, str)
 
     def __init__(
         self,
@@ -629,11 +729,15 @@ class ExpandableCard(QFrame):
         details_layout.setContentsMargins(14, 2, 0, 0)
         details_layout.setSpacing(6)
         if plan is not None:
-            details_layout.addWidget(PlanDetailPanel(plan, fields))
+            self.plan_detail_panel = PlanDetailPanel(plan, fields)
+            self.plan_detail_panel.approval_requested.connect(self.approval_requested.emit)
+            details_layout.addWidget(self.plan_detail_panel)
         elif fields:
+            self.plan_detail_panel = None
             for key, value in fields:
                 details_layout.addWidget(self._field_widget(key, value))
         else:
+            self.plan_detail_panel = None
             details_layout.addWidget(self._field_widget("详情", "暂无更多信息"))
         self.details.setLayout(details_layout)
 
@@ -757,6 +861,7 @@ class StatusTable(QFrame):
 class TaskWindow(QWidget):
     route_selected = Signal(str)
     send_message_requested = Signal(str, object)
+    plan_feedback_requested = Signal(str, str, str, str)
 
     def __init__(self, app_icon: QIcon | None = None) -> None:
         super().__init__()
@@ -766,6 +871,7 @@ class TaskWindow(QWidget):
         self.resize(920, 680)
         self._drag_start: QPoint | None = None
         self._expanded_cards: set[str] = set()
+        self._plan_approval_panels: dict[str, PlanApprovalPanel] = {}
 
         self.active_view = "chat"
         self.manager: ManagerSnapshot | None = None
@@ -1110,15 +1216,10 @@ class TaskWindow(QWidget):
         paths, _selected_filter = QFileDialog.getOpenFileNames(self, "选择发送文件")
         for raw_path in paths:
             path_obj = Path(raw_path)
-            try:
-                size = path_obj.stat().st_size
-            except OSError:
-                size = 0
             self.pending_attachments.append({
                 "kind": "file",
                 "name": path_obj.name,
                 "path": str(path_obj),
-                "size": size,
             })
         self._update_attachment_button()
 
@@ -1145,7 +1246,7 @@ class TaskWindow(QWidget):
         self.footer_label.setText(
             "正在投递给 Agent；窗口仍可切换和查看其它内容。"
             if pending
-            else "聊天记录按角色保存；计划和记忆视图只读展示。"
+            else "计划主体和记忆只读；需审批计划可通过 Manager 提交建议。"
         )
 
     def complete_message_send(self, succeeded: bool) -> None:
@@ -1154,6 +1255,16 @@ class TaskWindow(QWidget):
             self._update_attachment_button()
             self.message_input.clear()
         self.set_message_send_pending(False)
+
+    def set_plan_feedback_pending(self, plan_id: str, pending: bool) -> None:
+        panel = self._plan_approval_panels.get(plan_id)
+        if panel is not None:
+            panel.set_pending(pending)
+
+    def complete_plan_feedback(self, plan_id: str, succeeded: bool, message: str, tone: str = "") -> None:
+        panel = self._plan_approval_panels.get(plan_id)
+        if panel is not None:
+            panel.complete(succeeded, message, tone)
 
     def _render_active_view(self) -> None:
         self._clear_content()
@@ -1302,7 +1413,7 @@ class TaskWindow(QWidget):
     def _render_current(self) -> None:
         assert self.plans is not None
         assert self.context is not None
-        self._add_section_header("进行中计划", "当前状态为“进行中”的计划，只读展示。", "plan")
+        self._add_section_header("进行中计划", "计划主体只读；展开需审批计划可填写建议。", "plan")
         if self.plans.current:
             self._add_plan_cards(self.plans.current, "进行中计划")
         else:
@@ -1315,7 +1426,7 @@ class TaskWindow(QWidget):
 
     def _render_plans(self) -> None:
         assert self.plans is not None
-        self._add_section_header("计划", "未归档计划的只读概览。", "plan")
+        self._add_section_header("计划", "未归档计划概览；审批建议由 Manager 统一记录。", "plan")
         if self.plans.active:
             self._add_plan_cards(self.plans.active, "计划")
         else:
@@ -1396,7 +1507,7 @@ class TaskWindow(QWidget):
                 "plan",
                 plan.keywords,
                 status=plan.status,
-                card_key=f"plan:{plan.path or plan.title}",
+                card_key=f"plan:{plan.plan_id or plan.path or plan.title}",
                 plan=plan,
             )
 
@@ -1443,6 +1554,10 @@ class TaskWindow(QWidget):
             plan=plan,
         )
         card.expanded_changed.connect(lambda expanded, item_key=key: self._set_card_expanded(item_key, expanded))
+        if plan is not None:
+            card.approval_requested.connect(self.plan_feedback_requested.emit)
+            if card.plan_detail_panel is not None and card.plan_detail_panel.approval_panel is not None:
+                self._plan_approval_panels[plan.plan_id] = card.plan_detail_panel.approval_panel
         self.content_layout.addWidget(card)
 
     def _add_section_header(self, title: str, detail: str, tone: str = "neutral") -> None:
@@ -1466,6 +1581,7 @@ class TaskWindow(QWidget):
         self.content_layout.addWidget(InfoCard(label, title, fields, tone))
 
     def _clear_content(self) -> None:
+        self._plan_approval_panels.clear()
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             widget = item.widget()
@@ -2137,6 +2253,104 @@ QLabel#planStepState[stepTone="current"] {
     color: #1d63a9;
 }
 QLabel#planStepState[stepTone="blocked"] {
+    color: #b54708;
+}
+QFrame#planApprovalPanel {
+    background: #f1fbfb;
+    border: 1px solid #bfe6e7;
+    border-radius: 8px;
+}
+QLabel#planApprovalTitle {
+    color: #0c2a4a;
+    font-size: 13px;
+    font-weight: 900;
+}
+QLabel#planApprovalSource {
+    background: #e0f4f5;
+    border-radius: 7px;
+    color: #0f7c7e;
+    font-size: 10px;
+    font-weight: 850;
+    padding: 3px 7px;
+}
+QLabel#planApprovalHelper, QLabel#planApprovalActionNote {
+    color: #667586;
+    font-size: 11px;
+}
+QFrame#planApprovalLatest {
+    background: #ffffff;
+    border: 0;
+    border-left: 3px solid #19bfc1;
+    border-radius: 0;
+}
+QLabel#planApprovalLatestLabel {
+    color: #0f8b8d;
+    font-size: 10px;
+    font-weight: 850;
+}
+QLabel#planApprovalLatestText {
+    color: #334e62;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#planApprovalInputLabel {
+    color: #334e62;
+    font-size: 11px;
+    font-weight: 850;
+}
+QTextEdit#planApprovalInput {
+    background: #ffffff;
+    border: 1px solid #b9cdd6;
+    border-radius: 8px;
+    color: #112033;
+    padding: 8px;
+    selection-background-color: #bdeced;
+    selection-color: #0c2a4a;
+}
+QTextEdit#planApprovalInput:focus {
+    border: 2px solid #19bfc1;
+}
+QPushButton#planApprovalSubmit {
+    background: #0f8b8d;
+    border: 1px solid #0f8b8d;
+    border-radius: 8px;
+    color: #ffffff;
+    min-height: 44px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 850;
+}
+QPushButton#planApprovalSubmit:hover {
+    background: #0b7476;
+    border-color: #0b7476;
+}
+QPushButton#planApprovalSubmit:focus {
+    border: 2px solid #0c2a4a;
+}
+QPushButton#planApprovalSubmit:disabled {
+    background: #9fb9ba;
+    border-color: #9fb9ba;
+}
+QLabel#planApprovalNotice {
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 750;
+    padding: 7px 9px;
+}
+QLabel#planApprovalNotice[noticeTone="pending"] {
+    background: #eef6ff;
+    color: #1d63a9;
+}
+QLabel#planApprovalNotice[noticeTone="success"] {
+    background: #eaf8ef;
+    color: #15803d;
+}
+QLabel#planApprovalNotice[noticeTone="warning"] {
+    background: #fff7e6;
+    color: #9a5b13;
+}
+QLabel#planApprovalNotice[noticeTone="error"] {
+    background: #fff1e8;
     color: #b54708;
 }
 QLabel#planMetadataSummary {

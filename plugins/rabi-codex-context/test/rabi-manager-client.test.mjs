@@ -94,6 +94,41 @@ test("PreToolUse injects Manager context without unsupported continue output", a
   assert.equal(output.hookSpecificOutput.additionalContext, "reasoning delta");
 });
 
+test("Stop forwards the final assistant message but emits no hook output", async (t) => {
+  let received;
+  const mock = await server(async (request, response) => {
+    received = await readBody(request);
+    json(response, 200, { code: 0, data: { planTaskCompletion: { status: "delivered" } } });
+  });
+  t.after(() => mock.close());
+  const input = {
+    hook_event_name: "Stop",
+    session_id: "session-plan-worker",
+    turn_id: "turn-plan-1",
+    stop_hook_active: false,
+    last_assistant_message: "实现完成，测试通过。"
+  };
+  const output = await handleHookInput(input, { managerUrl: mock.url });
+  assert.deepEqual(received, input);
+  assert.equal(output, null);
+});
+
+test("Stop surfaces a non-blocking system warning when reminder delivery fails", async (t) => {
+  const mock = await server((_request, response) => json(response, 200, {
+    code: 0,
+    data: { planTaskCompletion: { status: "failed", error: "reminder gateway offline" } }
+  }));
+  t.after(() => mock.close());
+  const output = await handleHookInput({
+    hook_event_name: "Stop",
+    session_id: "session-plan-worker",
+    turn_id: "turn-plan-failed",
+    last_assistant_message: "阶段结果"
+  }, { managerUrl: mock.url });
+  assert.match(output.systemMessage, /reminder gateway offline/);
+  assert.equal(output.continue, undefined);
+});
+
 test("explicit control receives a fail-open diagnostic when Manager is unavailable", async () => {
   const output = await handleHookInput({ hook_event_name: "UserPromptSubmit", session_id: "offline", prompt: "[rabi:use YeYu]" }, {
     managerUrl: "http://127.0.0.1:1",
@@ -118,8 +153,8 @@ test("the plugin hook command imports from PLUGIN_ROOT and reaches Manager", asy
   assert.equal(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, "process integration");
 });
 
-test("the plugin registers entry and reasoning lifecycle hooks", async () => {
+test("the plugin registers entry, reasoning, and turn-completion lifecycle hooks", async () => {
   const pluginRoot = path.resolve(new URL("..", import.meta.url).pathname.replace(/^\/(?:([A-Za-z]:))/, "$1"));
   const hooks = JSON.parse(await fs.readFile(path.join(pluginRoot, "hooks", "hooks.json"), "utf8"));
-  assert.deepEqual(Object.keys(hooks.hooks).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "UserPromptSubmit"]);
+  assert.deepEqual(Object.keys(hooks.hooks).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "Stop", "UserPromptSubmit"]);
 });

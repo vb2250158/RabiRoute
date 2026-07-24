@@ -78,12 +78,14 @@ class PlaybackCoordinator:
         *,
         state_path: str | Path | None = None,
         stopper: Callable[[], None] | None = None,
+        event_sink: Callable[[str, object], None] | None = None,
     ) -> None:
         self.queue_dir = Path(queue_dir).expanduser().resolve()
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         self.settings = PlaybackSettingsStore(state_path or self.queue_dir.parent / "playback-settings.json")
         self._player = player or self._default_player
         self._stopper = stopper or self._default_stopper
+        self._event_sink = event_sink
         self._queue: queue.Queue[str] = queue.Queue()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
@@ -125,7 +127,9 @@ class PlaybackCoordinator:
             }
             self._jobs[job_id] = job
         self._queue.put(job_id)
-        return self._public(job)
+        result = self._public(job)
+        self._emit("playback_changed", self.snapshot())
+        return result
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -142,7 +146,9 @@ class PlaybackCoordinator:
 
     def set_volume(self, volume: object) -> dict[str, Any]:
         self.settings.set_volume(volume)
-        return self.snapshot()
+        result = self.snapshot()
+        self._emit("playback_changed", result)
+        return result
 
     def stop(self, clear_pending: bool = True) -> dict[str, Any]:
         now = time.time()
@@ -167,7 +173,9 @@ class PlaybackCoordinator:
                 self._update(job_id, status="cancelled", completed_at=time.time())
                 self._cleanup(job_id)
                 self._queue.task_done()
-        return self.snapshot()
+        result = self.snapshot()
+        self._emit("playback_changed", result)
+        return result
 
     def _run(self) -> None:
         while True:
@@ -186,9 +194,11 @@ class PlaybackCoordinator:
                     job.update(status="playing", volume=volume, started_at=time.time(), updated_at=time.time())
                     job_snapshot = dict(job)
             if cancelled_before_start:
+                self._emit("playback_changed", self.snapshot())
                 self._cleanup(job_id)
                 self._queue.task_done()
                 continue
+            self._emit("playback_changed", self.snapshot())
             try:
                 self._player(Path(str(job_snapshot["path"])), volume, cancel)
                 if cancel.is_set():
@@ -205,8 +215,9 @@ class PlaybackCoordinator:
                 with self._lock:
                     if self._current == job_id:
                         self._current = None
-                        self._current_cancel = None
+                    self._current_cancel = None
                 self._queue.task_done()
+                self._emit("playback_changed", self.snapshot())
 
     def _update(self, job_id: str, **updates: Any) -> dict[str, Any]:
         with self._lock:
@@ -214,6 +225,10 @@ class PlaybackCoordinator:
             job.update(updates)
             job["updated_at"] = time.time()
             return dict(job)
+
+    def _emit(self, event_type: str, data: object) -> None:
+        if self._event_sink is not None:
+            self._event_sink(event_type, data)
 
     def _cleanup(self, job_id: str) -> None:
         with self._lock:

@@ -1,9 +1,23 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
+import PersonaSyncCard from "../components/PersonaSyncCard.vue";
 import { personaAvatarClient } from "../persona/personaAvatarClient";
+import {
+  personaVoiceIdentityClient,
+  type PersonaVoiceIdentity,
+  type PersonaVoiceTranscriptSummary
+} from "../persona/personaVoiceIdentityClient";
+import {
+  beginPersonaVoiceConfirmation,
+  idlePersonaVoiceConfirmation,
+  isPersonaVoiceConfirmationCandidate,
+  observePersonaVoiceConfirmation,
+  orderPersonaVoiceConfirmationCandidates,
+  personaVoiceprintEvidenceKey
+} from "../persona/personaVoiceConfirmation";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import type { NotificationRule, NotificationScheduleDefinition } from "../types";
@@ -47,6 +61,21 @@ const voiceProfileCopyResult = ref("");
 const avatarInput = ref<HTMLInputElement | null>(null);
 const avatarSaving = ref(false);
 const avatarError = ref("");
+const voiceIdentityLoading = ref(false);
+const voiceIdentityError = ref("");
+const voiceIdentityNotice = ref("");
+const voiceIdentitySummary = ref<PersonaVoiceTranscriptSummary | null>(null);
+const voiceIdentities = ref<PersonaVoiceIdentity[]>([]);
+const voiceIdentityBusyKey = ref("");
+const voiceConfirmation = ref(idlePersonaVoiceConfirmation());
+const personaSyncManifestVersion = ref(0);
+const personaSyncPeerVersion = ref(0);
+let releaseSpeech: (() => void) | null = null;
+let managerEvents: EventSource | null = null;
+let managerEventsReady = false;
+let voiceIdentityRefreshRunning = false;
+let voiceIdentityRefreshQueued = false;
+let voiceIdentityRefreshObserveQueued = false;
 
 const recentMessageEndpoints: RecentMessageEndpoint[] = [...RECENT_MESSAGE_ENDPOINTS];
 
@@ -65,6 +94,16 @@ const voiceProfile = computed(() => {
   return speech.personas.find(persona => persona.id === roleId);
 });
 const hasPersona = computed(() => Boolean(gateway.value?.agentRoleId));
+const unresolvedVoiceprints = computed(() => voiceIdentitySummary.value?.unresolvedVoiceprints || []);
+const orderedUnresolvedVoiceprints = computed(() => orderPersonaVoiceConfirmationCandidates(
+  voiceConfirmation.value,
+  unresolvedVoiceprints.value
+));
+const voiceConfirmationCandidateCount = computed(() => voiceConfirmation.value.candidateKeys.length);
+const sortedVoiceIdentities = computed(() => [...voiceIdentities.value].sort((left, right) => {
+  if (Boolean(left.conflicted) !== Boolean(right.conflicted)) return left.conflicted ? -1 : 1;
+  return right.updatedAt.localeCompare(left.updatedAt);
+}));
 const rules = computed(() => gateway.value ? notificationRulesForGateway(gateway.value) : []);
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
 const variableEntries = computed(() => Object.entries(gateway.value?.routeVariables || {})
@@ -287,6 +326,196 @@ async function copyVoiceProfilePath(): Promise<void> {
   }
 }
 
+function clearVoiceIdentityReview(): void {
+  voiceIdentitySummary.value = null;
+  voiceIdentities.value = [];
+  voiceIdentityError.value = "";
+  voiceIdentityNotice.value = "";
+  voiceConfirmation.value = idlePersonaVoiceConfirmation();
+}
+
+async function refreshVoiceIdentityReview(observeConfirmation = false): Promise<void> {
+  if (observeConfirmation) voiceIdentityRefreshObserveQueued = true;
+  if (voiceIdentityRefreshRunning) {
+    voiceIdentityRefreshQueued = true;
+    return;
+  }
+  voiceIdentityRefreshRunning = true;
+  voiceIdentityLoading.value = true;
+  voiceIdentityError.value = "";
+  try {
+    do {
+      voiceIdentityRefreshQueued = false;
+      const shouldObserveConfirmation = voiceIdentityRefreshObserveQueued;
+      voiceIdentityRefreshObserveQueued = false;
+      const roleId = gateway.value?.agentRoleId || "";
+      if (!roleId) {
+        clearVoiceIdentityReview();
+        break;
+      }
+      const now = Date.now();
+      const from = new Date(now - 24 * 60 * 60 * 1_000).toISOString();
+      const to = new Date(now).toISOString();
+      const [summary, identities] = await Promise.all([
+        personaVoiceIdentityClient.summary(roleId, from, to),
+        personaVoiceIdentityClient.identities(roleId)
+      ]);
+      if (gateway.value?.agentRoleId !== roleId) {
+        voiceIdentityRefreshQueued = true;
+        continue;
+      }
+      voiceIdentitySummary.value = summary.summary;
+      voiceIdentities.value = identities.identities;
+      if (shouldObserveConfirmation) {
+        voiceConfirmation.value = observePersonaVoiceConfirmation(
+          voiceConfirmation.value,
+          summary.summary.unresolvedVoiceprints
+        );
+      }
+    } while (voiceIdentityRefreshQueued);
+  } catch (error) {
+    voiceIdentityError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    voiceIdentityLoading.value = false;
+    voiceIdentityRefreshRunning = false;
+  }
+}
+
+function voiceIdentityKey(sourceHostId: string | undefined, voiceprintId: string): string {
+  return personaVoiceprintEvidenceKey(sourceHostId, voiceprintId);
+}
+
+function startVoiceConfirmation(): void {
+  voiceIdentityNotice.value = "";
+  voiceIdentityError.value = "";
+  voiceConfirmation.value = beginPersonaVoiceConfirmation(unresolvedVoiceprints.value);
+}
+
+function cancelVoiceConfirmation(): void {
+  voiceConfirmation.value = idlePersonaVoiceConfirmation();
+}
+
+function shortVoiceprint(value: string): string {
+  if (value.length <= 14) return value;
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
+function shortHost(value: string | undefined): string {
+  if (!value) return "缺少主机标识";
+  if (value.length <= 16) return value;
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
+function compactTime(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return date.toISOString().replace("T", " ").slice(0, 16);
+}
+
+function compactDuration(value: number): string {
+  const seconds = Math.max(0, Number(value) || 0);
+  return `${seconds >= 10 ? Math.round(seconds) : Math.round(seconds * 10) / 10} s`;
+}
+
+function voiceIdentityLabel(identity: PersonaVoiceIdentity): string {
+  if (identity.conflicted) return "有冲突";
+  if (identity.isUser === true) return "这是我";
+  if (identity.isUser === false) return "其他人";
+  return "未判断";
+}
+
+function voiceIdentityColor(identity: PersonaVoiceIdentity): string | undefined {
+  if (identity.conflicted) return "warning";
+  if (identity.isUser === true) return "success";
+  if (identity.isUser === false) return "secondary";
+  return undefined;
+}
+
+async function setVoiceIdentity(
+  sourceHostId: string | undefined,
+  sourceHostName: string | undefined,
+  voiceprintId: string,
+  isUser: boolean | null
+): Promise<void> {
+  const roleId = gateway.value?.agentRoleId || "";
+  if (!roleId || !sourceHostId) return;
+  const key = voiceIdentityKey(sourceHostId, voiceprintId);
+  voiceIdentityBusyKey.value = key;
+  voiceIdentityError.value = "";
+  voiceIdentityNotice.value = "";
+  try {
+    const result = await personaVoiceIdentityClient.update(roleId, {
+      sourceHostId,
+      sourceHostName,
+      voiceprintId,
+      isUser
+    });
+    voiceIdentityNotice.value = result.appended ? "人格声纹关系已更新。" : "当前人格已经是这个判断。";
+    if (voiceConfirmation.value.candidateKeys.includes(key)) cancelVoiceConfirmation();
+    await refreshVoiceIdentityReview();
+  } catch (error) {
+    voiceIdentityError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    voiceIdentityBusyKey.value = "";
+  }
+}
+
+function personaSyncEventData(raw: Event): { roleId?: string; path?: string } | null {
+  try {
+    return JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string; path?: string };
+  } catch {
+    return null;
+  }
+}
+
+function relevantPersonaSyncEvent(raw: Event): boolean {
+  const data = personaSyncEventData(raw);
+  if (!data) return false;
+  try {
+    const roleId = gateway.value?.agentRoleId || "";
+    if (!roleId || data.roleId !== roleId) return false;
+    const relativePath = String(data.path || "").replace(/\\/g, "/");
+    return !relativePath
+      || relativePath === "voice/voice-identities.jsonl"
+      || relativePath === "voice-transcripts.jsonl"
+      || relativePath.startsWith("conversation/");
+  } catch {
+    return false;
+  }
+}
+
+function startPersonaEvents(): void {
+  if (managerEvents) return;
+  managerEvents = new EventSource("/api/events");
+  managerEvents.addEventListener("ready", () => {
+    if (managerEventsReady) {
+      personaSyncManifestVersion.value += 1;
+      personaSyncPeerVersion.value += 1;
+      void refreshVoiceIdentityReview();
+    }
+    else managerEventsReady = true;
+  });
+  managerEvents.addEventListener("persona_voice_identity_changed", (raw) => {
+    if (relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
+  });
+  managerEvents.addEventListener("persona_sync_manifest_changed", (raw) => {
+    const data = personaSyncEventData(raw);
+    const roleId = gateway.value?.agentRoleId || "";
+    if (roleId && (!data?.roleId || data.roleId === roleId)) personaSyncManifestVersion.value += 1;
+    if (relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
+  });
+  managerEvents.addEventListener("rabilink_status", () => {
+    personaSyncPeerVersion.value += 1;
+  });
+  managerEvents.addEventListener("persona_sync_lan_status", () => {
+    personaSyncPeerVersion.value += 1;
+  });
+  managerEvents.addEventListener("persona_sync_auto_status", () => {
+    personaSyncManifestVersion.value += 1;
+    personaSyncPeerVersion.value += 1;
+  });
+}
+
 function updateVariableKey(oldKey: string, value: string, event: Event): void {
   const target = event.target as HTMLInputElement | null;
   store.updateRouteVariable(oldKey, target?.value || oldKey, value);
@@ -294,9 +523,33 @@ function updateVariableKey(oldKey: string, value: string, event: Event): void {
 
 watch(() => gateway.value?.agentRoleId, (roleId) => {
   voiceProfileCopyResult.value = "";
-  if (roleId) void refreshVoiceProfile();
-  else voiceProfileError.value = "";
+  voiceIdentityNotice.value = "";
+  voiceConfirmation.value = idlePersonaVoiceConfirmation();
+  if (roleId) {
+    void refreshVoiceProfile();
+    void refreshVoiceIdentityReview();
+  } else {
+    voiceProfileError.value = "";
+    clearVoiceIdentityReview();
+  }
 }, { immediate: true });
+
+watch(() => speech.recordsVersion, () => {
+  if (hasPersona.value) void refreshVoiceIdentityReview(true);
+});
+
+onMounted(async () => {
+  releaseSpeech = await speech.acquire();
+  startPersonaEvents();
+});
+
+onBeforeUnmount(() => {
+  releaseSpeech?.();
+  releaseSpeech = null;
+  managerEvents?.close();
+  managerEvents = null;
+  managerEventsReady = false;
+});
 
 // URL ↔ gateway 双向同步（放最后避免 TDZ）
 watch([() => route.params.id as string, () => store.gateways], ([id]) => {
@@ -553,6 +806,224 @@ watch(() => store.selectedGatewayId, (id) => {
           </v-alert>
         </v-card>
       </div>
+
+      <PersonaSyncCard
+        v-if="hasPersona"
+        :role-id="gateway.agentRoleId || ''"
+        :manifest-version="personaSyncManifestVersion"
+        :peer-version="personaSyncPeerVersion"
+      />
+
+      <v-card v-if="hasPersona" class="app-card glass-card section-card">
+        <div class="section-title-row">
+          <div>
+            <div class="section-title">人格声纹归类</div>
+            <div class="section-note">统计最近 24 小时。主机只提供不透明声纹证据，由当前人格明确判断“这是我”或“其他人”。</div>
+          </div>
+          <v-btn
+            size="small"
+            variant="text"
+            prepend-icon="mdi-refresh"
+            :loading="voiceIdentityLoading"
+            @click="refreshVoiceIdentityReview(true)"
+          >
+            刷新归类
+          </v-btn>
+        </div>
+
+        <v-alert type="info" variant="tonal" density="compact" class="mb-3">
+          页面只读取统计、声纹缩写和人格关系，不读取或展示转写正文。新录音、声纹修正和多电脑人格同步会通过事件触发一次刷新。
+        </v-alert>
+        <v-alert v-if="voiceIdentityError" type="error" variant="tonal" density="compact" class="mb-3">
+          {{ voiceIdentityError }}
+        </v-alert>
+        <v-alert v-if="voiceIdentityNotice" type="success" variant="tonal" density="compact" class="mb-3">
+          {{ voiceIdentityNotice }}
+        </v-alert>
+        <v-progress-linear v-if="voiceIdentityLoading" indeterminate color="secondary" class="mb-3" />
+
+        <div class="persona-speech-summary">
+          <div>
+            <span>归类覆盖率</span>
+            <b>{{ Math.round((voiceIdentitySummary?.coverageRate || 0) * 100) }}%</b>
+          </div>
+          <div>
+            <span>我的发言</span>
+            <b>{{ voiceIdentitySummary?.byClassification.user.segments || 0 }} 个分段</b>
+            <small data-no-i18n>{{ compactDuration(voiceIdentitySummary?.byClassification.user.speakerDurationSeconds || 0) }}</small>
+          </div>
+          <div>
+            <span>其他人</span>
+            <b>{{ voiceIdentitySummary?.byClassification.other.segments || 0 }} 个分段</b>
+            <small data-no-i18n>{{ compactDuration(voiceIdentitySummary?.byClassification.other.speakerDurationSeconds || 0) }}</small>
+          </div>
+          <div>
+            <span>未判断 / 冲突</span>
+            <b>{{ (voiceIdentitySummary?.byClassification.unknown.segments || 0) + (voiceIdentitySummary?.byClassification.conflict.segments || 0) }} 个分段</b>
+            <small data-no-i18n>{{ compactDuration((voiceIdentitySummary?.byClassification.unknown.speakerDurationSeconds || 0) + (voiceIdentitySummary?.byClassification.conflict.speakerDurationSeconds || 0)) }}</small>
+          </div>
+        </div>
+
+        <v-alert
+          class="mt-4"
+          :type="voiceConfirmation.status === 'found' ? 'success' : 'info'"
+          variant="tonal"
+          density="compact"
+        >
+          <div class="d-flex justify-space-between ga-3 align-center flex-wrap">
+            <div v-if="voiceConfirmation.status === 'idle'">
+              <strong>不知道哪个声纹是自己？</strong>
+              <div>开始后，用准备归类的电脑、手机或眼镜只让本人连续说一句；下一次录音事件会把本次新出现的未归类声纹标出来。</div>
+            </div>
+            <div v-else-if="voiceConfirmation.status === 'waiting'">
+              <strong>正在等待下一段未归类声纹</strong>
+              <div>请尽量保持环境安静，只让本人说话。系统只标记本次候选，不会自动判断身份。</div>
+            </div>
+            <div v-else>
+              <strong>已找到 {{ voiceConfirmationCandidateCount }} 个本次候选</strong>
+              <div>如果同时出现多个声纹，只确认你能确定由本人说出的项；系统不会因候选唯一就自动设为用户。</div>
+            </div>
+            <div class="d-flex ga-2 flex-wrap">
+              <v-btn
+                v-if="voiceConfirmation.status !== 'waiting'"
+                size="small"
+                color="secondary"
+                variant="tonal"
+                prepend-icon="mdi-account-voice"
+                @click="startVoiceConfirmation"
+              >
+                {{ voiceConfirmation.status === "found" ? "重新捕获" : "标记下一段" }}
+              </v-btn>
+              <v-btn
+                v-if="voiceConfirmation.status !== 'idle'"
+                size="small"
+                variant="text"
+                @click="cancelVoiceConfirmation"
+              >取消</v-btn>
+            </div>
+          </div>
+        </v-alert>
+
+        <div class="section-title-row mt-5">
+          <div>
+            <div class="section-title">未解决声纹</div>
+            <div class="section-note">优先确认出现次数多、持续时间长或存在多电脑冲突的声纹。</div>
+          </div>
+          <v-chip color="warning" variant="tonal">{{ unresolvedVoiceprints.length }}</v-chip>
+        </div>
+        <div v-if="unresolvedVoiceprints.length === 0" class="empty-state compact-empty">
+          <div>
+            <strong>{{ voiceConfirmation.status === "waiting" ? "正在等待下一段未归类声纹" : "最近 24 小时没有待处理声纹" }}</strong>
+            <span>{{ voiceConfirmation.status === "waiting" ? "收到下一段录音事件后会自动刷新；也可以手动点击刷新归类补查一次。" : "没有录音时这里也会保持为空；归类关系仍保存在当前人格目录。" }}</span>
+          </div>
+        </div>
+        <div v-else class="rule-list">
+          <div
+            v-for="item in orderedUnresolvedVoiceprints"
+            :key="voiceIdentityKey(item.sourceHostId, item.voiceprintId)"
+            class="rule-card"
+          >
+            <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
+              <div class="min-w-0">
+                <div class="d-flex ga-2 align-center flex-wrap">
+                  <strong data-no-i18n>{{ shortVoiceprint(item.voiceprintId) }}</strong>
+                  <v-chip size="small" :color="item.classification === 'conflict' ? 'warning' : undefined" variant="tonal">
+                    {{ item.classification === "conflict" ? "有冲突" : "未判断" }}
+                  </v-chip>
+                  <v-chip
+                    v-if="isPersonaVoiceConfirmationCandidate(voiceConfirmation, item)"
+                    size="small"
+                    color="success"
+                    variant="tonal"
+                  >本次出现</v-chip>
+                </div>
+                <div class="section-note mt-1">
+                  {{ item.segments }} 个分段 · <span data-no-i18n>{{ compactDuration(item.speakerDurationSeconds) }}</span> · 最后出现
+                  <span data-no-i18n>{{ compactTime(item.lastSeenAt) }}</span>
+                </div>
+                <div class="section-note" data-no-i18n>{{ item.sourceHostName || shortHost(item.sourceHostId) }}</div>
+                <div v-if="!item.sourceHostId" class="text-warning text-caption mt-1">旧记录缺少处理主机标识，不能建立跨电脑稳定关系。</div>
+              </div>
+              <div class="rule-card-actions">
+                <v-btn
+                  size="small"
+                  color="success"
+                  variant="tonal"
+                  :disabled="!item.sourceHostId"
+                  :loading="voiceIdentityBusyKey === voiceIdentityKey(item.sourceHostId, item.voiceprintId)"
+                  @click="setVoiceIdentity(item.sourceHostId, item.sourceHostName, item.voiceprintId, true)"
+                >这是我</v-btn>
+                <v-btn
+                  size="small"
+                  color="secondary"
+                  variant="tonal"
+                  :disabled="!item.sourceHostId"
+                  :loading="voiceIdentityBusyKey === voiceIdentityKey(item.sourceHostId, item.voiceprintId)"
+                  @click="setVoiceIdentity(item.sourceHostId, item.sourceHostName, item.voiceprintId, false)"
+                >其他人</v-btn>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title-row mt-5">
+          <div>
+            <div class="section-title">已归类关系</div>
+            <div class="section-note">关系事件属于当前人格，并随人格文件夹在多台电脑之间合并。</div>
+          </div>
+          <v-chip color="secondary" variant="tonal">{{ sortedVoiceIdentities.length }}</v-chip>
+        </div>
+        <div v-if="sortedVoiceIdentities.length === 0" class="empty-state compact-empty">
+          <div>
+            <strong>当前人格还没有声纹关系</strong>
+            <span>确认第一条声纹后会写入 <code>voice/voice-identities.jsonl</code>。</span>
+          </div>
+        </div>
+        <div v-else class="rule-list">
+          <div v-for="identity in sortedVoiceIdentities" :key="identity.identityKey" class="rule-card">
+            <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
+              <div class="min-w-0">
+                <div class="d-flex ga-2 align-center flex-wrap">
+                  <strong data-no-i18n>{{ shortVoiceprint(identity.voiceprintId) }}</strong>
+                  <v-chip size="small" :color="voiceIdentityColor(identity)" variant="tonal">{{ voiceIdentityLabel(identity) }}</v-chip>
+                </div>
+                <div class="section-note mt-1">
+                  <span v-if="identity.displayName" data-no-i18n>{{ identity.displayName }}</span>
+                  <span v-else>未设置称呼</span>
+                  <template v-if="identity.relationship"> · <span data-no-i18n>{{ identity.relationship }}</span></template>
+                </div>
+                <div class="section-note">
+                  <span data-no-i18n>{{ identity.sourceHostName || shortHost(identity.sourceHostId) }}</span> · 更新于
+                  <span data-no-i18n>{{ compactTime(identity.updatedAt) }}</span>
+                </div>
+              </div>
+              <div class="rule-card-actions">
+                <v-btn
+                  size="small"
+                  color="success"
+                  variant="text"
+                  :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)"
+                  @click="setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, true)"
+                >这是我</v-btn>
+                <v-btn
+                  size="small"
+                  color="secondary"
+                  variant="text"
+                  :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)"
+                  @click="setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, false)"
+                >其他人</v-btn>
+                <v-btn
+                  size="small"
+                  variant="text"
+                  :disabled="identity.isUser == null && !identity.conflicted"
+                  :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)"
+                  @click="setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, null)"
+                >清除判断</v-btn>
+              </div>
+            </div>
+          </div>
+        </div>
+      </v-card>
 
       <v-card v-if="hasPersona" class="app-card glass-card section-card">
         <div class="section-title-row">

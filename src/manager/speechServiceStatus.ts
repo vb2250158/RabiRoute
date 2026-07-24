@@ -70,6 +70,10 @@ function normalizeSpeakerIdentityCapability(value: unknown): SpeechSpeakerIdenti
       model: typeof voiceprint.model === "string" && voiceprint.model.trim() ? voiceprint.model.trim() : undefined,
       provider: typeof voiceprint.provider === "string" && voiceprint.provider.trim() ? voiceprint.provider.trim() : undefined,
       validated: voiceprint.validated === true,
+      validationRequested: voiceprint.validation_requested === true || voiceprint.validationRequested === true,
+      validationReport: typeof (voiceprint.validation_report ?? voiceprint.validationReport) === "string"
+        ? String(voiceprint.validation_report ?? voiceprint.validationReport).trim() || undefined
+        : undefined,
       autoAssign: voiceprint.auto_assign === true || voiceprint.autoAssign === true
     },
     storageError: typeof detail.storage_error === "string" && detail.storage_error.trim()

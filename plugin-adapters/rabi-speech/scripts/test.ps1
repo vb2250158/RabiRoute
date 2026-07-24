@@ -22,3 +22,4 @@ $pythonArgs = $Python -split "\s+"
 $pythonExe = $pythonArgs[0]
 $prefixArgs = @($pythonArgs | Select-Object -Skip 1)
 & $pythonExe @prefixArgs -m pytest -q (Join-Path $root "tests")
+exit $LASTEXITCODE

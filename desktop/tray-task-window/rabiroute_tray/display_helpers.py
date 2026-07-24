@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-
 def _text(value: object) -> str:
     return str(value).strip() if value is not None else ""
 
@@ -15,32 +12,24 @@ def _first_role_route_name(gateway: dict) -> str:
     role_route_names = gateway.get("roleRouteNames")
     if not isinstance(role_route_names, dict):
         return ""
-    for key in role_route_names:
-        label = _text(key)
+    for value in role_route_names.values():
+        label = _text(value)
         if label:
             return label
     return ""
 
 
 def _persona_title(gateway: dict) -> str:
-    role_id = _text(gateway.get("agentRoleId"))
-    if not role_id:
+    role_info = gateway.get("roleInfo")
+    if not isinstance(role_info, dict):
         return ""
-    roles_dir = Path(_text(gateway.get("rolesDir")) or "data/roles")
-    role_file = _text(gateway.get("agentRoleFile")) or "persona.md"
-    persona_path = roles_dir / role_id / role_file
-    if not persona_path.is_absolute():
-        persona_path = Path.cwd() / persona_path
-    try:
-        with persona_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                title = line.strip()
-                if title.startswith("# "):
-                    return title[2:].strip()
-                if title:
-                    return ""
-    except OSError:
-        return ""
+    persona_content = _text(role_info.get("selectedRoleContent"))
+    for line in persona_content.splitlines():
+        title = line.strip().lstrip("\ufeff")
+        if title.startswith("# "):
+            return title[2:].strip()
+        if title:
+            return ""
     return ""
 
 

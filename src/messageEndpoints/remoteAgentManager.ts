@@ -14,6 +14,23 @@ export const REMOTE_AGENT_PROTOCOL_VERSION = 3;
 export const REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 10 * 1024 * 1024);
 export const REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 25 * 1024 * 1024);
 
+function closeWebSocketSafely(socket: WebSocket): void {
+  if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) return;
+  const absorbCloseError = (): void => undefined;
+  const release = (): void => {
+    socket.off("error", absorbCloseError);
+  };
+  socket.on("error", absorbCloseError);
+  socket.once("close", release);
+  try {
+    if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
+    else socket.close();
+  } catch {
+    socket.off("close", release);
+    release();
+  }
+}
+
 export type RemoteAgentDeviceInfo = {
   deviceId: string;
   deviceName?: string;
@@ -491,7 +508,7 @@ export class RemoteAgentHub {
         settled = true;
         cleanup();
         record.connectionError = error.message;
-        try { socket.close(); } catch { /* ignore */ }
+        closeWebSocketSafely(socket);
         reject(error);
       };
       const succeed = (): void => {
@@ -594,7 +611,7 @@ export class RemoteAgentHub {
     const id = String(deviceId || "").trim();
     const record = this.devices.get(id);
     if (record) {
-      try { record.socket.close(); } catch { /* ignore */ }
+      closeWebSocketSafely(record.socket);
       this.devices.delete(id);
     }
     return this.listDevices().find((device) => device.deviceId === id) ?? {

@@ -12,7 +12,7 @@ sys.path.insert(0, str(TRAY_ROOT))
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QProgressBar, QPushButton
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QProgressBar, QPushButton, QTextEdit
 
 from rabiroute_tray.manager_client import ManagerSnapshot
 from rabiroute_tray.role_context_repository import ContextEntry, RoleContextSnapshot
@@ -313,6 +313,8 @@ class TaskWindowLayoutTest(unittest.TestCase):
         plan = PlanItem(
             title="阻塞计划测试",
             status="进行中",
+            display_status="阻塞中",
+            display_tone="blocked",
             current_step_id="restore-vpn",
             next_action="重装应用",
             blocked_by="无法访问 Google Play",
@@ -349,6 +351,8 @@ class TaskWindowLayoutTest(unittest.TestCase):
         plan = PlanItem(
             title="等待 QA 的计划",
             status="进行中",
+            display_status="待QA测试",
+            display_tone="qa",
             current_step="修复已完成，等待 QA 真机结果",
             current_step_id="verify",
             steps=[
@@ -362,6 +366,46 @@ class TaskWindowLayoutTest(unittest.TestCase):
 
         self.assertEqual(card.status_label.text(), "状态：待QA测试")
         self.assertEqual(card.status_label.property("statusTone"), "qa")
+        card.close()
+
+    def test_approval_plan_emits_feedback_and_preserves_draft_on_failure(self) -> None:
+        plan = PlanItem(
+            title="等待审批的计划",
+            plan_id="plan-approval",
+            status="进行中",
+            approval_enabled=True,
+            approval_label="审批建议",
+            approval_helper="由 Manager 记录并交给 Agent。",
+            approval_step_id="verify",
+            latest_approval_text="先补充验收截图。",
+            latest_approval_at="2026-07-24 12:00",
+            current_step_id="verify",
+            steps=[PlanStep("等待 QA 验收", "进行中", step_id="verify")],
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        emitted: list[tuple[str, str, str, str]] = []
+        card.approval_requested.connect(lambda *args: emitted.append(tuple(str(value) for value in args)))
+        card.show()
+        card.set_expanded(True)
+        self.app.processEvents()
+
+        editor = card.findChild(QTextEdit, "planApprovalInput")
+        submit = card.findChild(QPushButton, "planApprovalSubmit")
+        self.assertIsNotNone(editor)
+        self.assertIsNotNone(submit)
+        editor.setPlainText("建议覆盖旧存档回归。")
+        submit.click()
+        self.app.processEvents()
+        self.assertEqual(emitted[0][0:2], ("plan-approval", "verify"))
+        self.assertEqual(emitted[0][3], "建议覆盖旧存档回归。")
+
+        approval_panel = card.plan_detail_panel.approval_panel
+        approval_panel.set_pending(True)
+        self.assertFalse(editor.isEnabled())
+        approval_panel.complete(False, "通知 Agent 失败，可重试。", "warning")
+        self.assertEqual(editor.toPlainText(), "建议覆盖旧存档回归。")
+        approval_panel.complete(True, "已提交。", "success")
+        self.assertEqual(editor.toPlainText(), "")
         card.close()
 
     def test_future_qa_step_does_not_change_running_status_badge(self) -> None:

@@ -11,6 +11,7 @@ import {
   listRoleSkills,
   pendingMemoryConsolidation,
   roleKnowledgeSnapshot,
+  updatePlan,
   updateRecentMemory,
   validateRoleKnowledge
 } from "./roleKnowledge.js";
@@ -305,6 +306,59 @@ test("plans require ordered steps and one explicit current step", () => {
     ],
     keywords: ["步骤"]
   }), /only one in-progress step/);
+});
+
+test("plans persist an exact Codex task binding and completion hook target", () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    title: "会话任务完成提醒",
+    focus: "会话任务完成提醒",
+    status: "未开始",
+    steps: [{ id: "run", title: "运行绑定任务", status: "未开始" }],
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "session-plan-worker",
+      sessionTitle: "计划执行任务",
+      workspace: "C:\\workspace\\project",
+      completionHook: { enabled: true, gatewayId: "Rabi__main" }
+    },
+    keywords: ["会话任务"]
+  });
+
+  assert.deepEqual(plan.taskBinding, {
+    agentType: "codex",
+    sessionId: "session-plan-worker",
+    sessionTitle: "计划执行任务",
+    workspace: "C:\\workspace\\project",
+    completionHook: { enabled: true, gatewayId: "Rabi__main" }
+  });
+  const defaultEnabled = createPlan(roleDir, {
+    title: "默认开启完成提醒",
+    focus: "默认开启完成提醒",
+    status: "未开始",
+    steps: [{ id: "run", title: "运行绑定任务", status: "未开始" }],
+    taskBinding: { agentType: "codex", sessionId: "session-default-hook" },
+    keywords: ["会话任务"]
+  });
+  assert.deepEqual(defaultEnabled.taskBinding?.completionHook, { enabled: true, gatewayId: undefined });
+  const disabled = updatePlan(roleDir, defaultEnabled.id, {
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "session-default-hook",
+      completionHook: { enabled: false }
+    }
+  });
+  assert.equal(disabled.taskBinding?.completionHook?.enabled, false);
+  assert.throws(() => createPlan(roleDir, {
+    title: "缺少任务 ID",
+    focus: "缺少任务 ID",
+    steps: [{ id: "run", title: "运行绑定任务", status: "未开始" }],
+    taskBinding: { agentType: "codex", completionHook: { enabled: true } },
+    keywords: ["会话任务"]
+  }), /taskBinding\.sessionId is required/);
+  assert.throws(() => updatePlan(roleDir, plan.id, {
+    taskBinding: { agentType: "remote", sessionId: "remote-session" }
+  }), /Unsupported plan taskBinding agentType/);
 });
 
 test("role knowledge validation reports legacy items that exceed current limits", () => {

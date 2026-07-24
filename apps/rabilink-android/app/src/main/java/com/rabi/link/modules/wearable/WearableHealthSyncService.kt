@@ -17,8 +17,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -28,7 +26,6 @@ class WearableHealthSyncService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val client = RabiWearableHealthClient()
     private val syncMutex = Mutex()
-    private var loopJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -41,28 +38,21 @@ class WearableHealthSyncService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        val syncNow = intent?.action == ACTION_SYNC_NOW
-        if (loopJob?.isActive != true) {
-            loopJob = scope.launch {
-                while (isActive) {
-                    val config = WearableHealthSettings.load(this@WearableHealthSyncService)
-                    if (!config.enabled) {
-                        stopSelf()
-                        break
-                    }
-                    if (config.collectorMode == WearableHealthCollectorMode.XIAOMI_ADB_COMPANION) {
-                        updateStatus("已启用小米 ADB Companion；等待已配对的 Rabi PC 自动采集。")
-                        stopSelf()
-                        break
-                    }
-                    syncOnce(config)
-                    delay(config.pollIntervalMinutes.toLong() * 60_000L)
-                }
+        scope.launch {
+            val config = WearableHealthSettings.load(this@WearableHealthSyncService)
+            if (!config.enabled) {
+                stopSelf(startId)
+                return@launch
             }
-        } else if (syncNow) {
-            scope.launch { syncOnce() }
+            if (config.collectorMode == WearableHealthCollectorMode.XIAOMI_ADB_COMPANION) {
+                updateStatus("已启用小米 ADB Companion；等待已配对的 Rabi PC 事件。")
+                stopSelf(startId)
+                return@launch
+            }
+            syncOnce(config)
+            stopSelf(startId)
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {

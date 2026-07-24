@@ -44,6 +44,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
   const microphone = ref<SpeechMicrophoneStatus | null>(null);
   const audioInputs = ref<SpeechAudioInput[]>([]);
   const audioStream = ref<SpeechAudioStreamStatus | null>(null);
+  const recordsVersion = ref(0);
   const loading = ref(false);
   const recordsLoading = ref(false);
   const speakersLoading = ref(false);
@@ -52,10 +53,8 @@ export const useSpeechStore = defineStore("speech-control", () => {
   const playbackBusy = computed(() => Boolean(playback.value?.current));
 
   let subscribers = 0;
-  let statusTimer = 0;
-  let playbackTimer = 0;
-  let microphoneTimer = 0;
-  let audioStreamTimer = 0;
+  let eventSource: EventSource | null = null;
+  let readyReceived = false;
   let microphoneRefreshing = false;
   let playbackRefreshing = false;
 
@@ -192,23 +191,61 @@ export const useSpeechStore = defineStore("speech-control", () => {
     ]);
   }
 
-  function startPolling(): void {
-    if (microphoneTimer) return;
-    statusTimer = window.setInterval(() => void refreshStatus().catch(rememberError), 15_000);
-    playbackTimer = window.setInterval(() => void refreshPlayback().catch(rememberError), 1_000);
-    microphoneTimer = window.setInterval(() => void refreshMicrophone().catch(rememberError), 400);
-    audioStreamTimer = window.setInterval(() => void refreshAudioStreams().catch(rememberError), 3_000);
+  function startEvents(): void {
+    if (eventSource) return;
+    eventSource = new EventSource("/api/speech/events");
+    eventSource.addEventListener("ready", () => {
+      error.value = "";
+      if (!readyReceived) {
+        readyReceived = true;
+        return;
+      }
+      recordsVersion.value += 1;
+      void Promise.all([
+        refreshStatus(),
+        refreshAudioStreams(),
+        refreshMicrophone(),
+        refreshPlayback()
+      ]).catch(rememberError);
+    });
+    eventSource.addEventListener("microphone_level", (raw) => {
+      if (!microphone.value) return;
+      try {
+        const data = JSON.parse((raw as MessageEvent).data || "{}");
+        microphone.value = {
+          ...microphone.value,
+          level: Number(data.level) || 0,
+          noiseFloor: Number(data.noise_floor) || 0,
+          dynamicThreshold: Number(data.dynamic_threshold) || 0,
+          state: String(data.state || microphone.value.state),
+          utteranceActive: data.utterance_active === true,
+          levelHistory: [...microphone.value.levelHistory.slice(-119), Number(data.level) || 0]
+        };
+      } catch {
+        // A malformed telemetry event is ignored; the next state event refreshes the snapshot.
+      }
+    });
+    eventSource.addEventListener("microphone_event", () => {
+      void Promise.all([refreshMicrophone(), refreshStatus()]).catch(rememberError);
+    });
+    eventSource.addEventListener("playback_changed", () => {
+      void refreshPlayback().catch(rememberError);
+    });
+    eventSource.addEventListener("audio_stream_changed", () => {
+      void Promise.all([refreshAudioStreams(), refreshMicrophone()]).catch(rememberError);
+    });
+    eventSource.addEventListener("records_changed", () => {
+      recordsVersion.value += 1;
+    });
+    eventSource.onerror = () => {
+      error.value = "语音事件流暂时断开，浏览器正在重连。";
+    };
   }
 
-  function stopPolling(): void {
-    window.clearInterval(statusTimer);
-    window.clearInterval(playbackTimer);
-    window.clearInterval(microphoneTimer);
-    window.clearInterval(audioStreamTimer);
-    statusTimer = 0;
-    playbackTimer = 0;
-    microphoneTimer = 0;
-    audioStreamTimer = 0;
+  function stopEvents(): void {
+    eventSource?.close();
+    eventSource = null;
+    readyReceived = false;
   }
 
   async function acquire(): Promise<() => void> {
@@ -217,14 +254,14 @@ export const useSpeechStore = defineStore("speech-control", () => {
       await refreshAll().catch(cause => {
         rememberError(cause);
       });
-      startPolling();
+      startEvents();
     }
     let released = false;
     return () => {
       if (released) return;
       released = true;
       subscribers = Math.max(0, subscribers - 1);
-      if (subscribers === 0) stopPolling();
+      if (subscribers === 0) stopEvents();
     };
   }
 
@@ -280,6 +317,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
     microphone,
     audioInputs,
     audioStream,
+    recordsVersion,
     loading,
     recordsLoading,
     speakersLoading,

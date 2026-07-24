@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import io
 import json
@@ -20,6 +21,9 @@ LocalPlayer = Callable[[Path, int, threading.Event], None]
 LocalStopper = Callable[[], None]
 
 
+_VIRTUAL_CHUNK_DEDUP_MAX_SOURCES = 4096
+
+
 @dataclass(frozen=True)
 class RemoteAudioServerConfig:
     enabled: bool
@@ -35,6 +39,10 @@ class RemoteAudioServerConfig:
 class _Client:
     id: str
     name: str
+    kind: str
+    message_adapter_type: str
+    route_profile_id: str
+    session_id: str
     websocket: Any
     sample_rate: int
     chunk_ms: int
@@ -42,6 +50,23 @@ class _Client:
     last_audio_at: float = 0.0
     playback_waiter: asyncio.Future[None] | None = None
     playback_id: str = ""
+
+
+@dataclass
+class _VirtualClient:
+    id: str
+    name: str
+    kind: str
+    source_device_id: str
+    message_adapter_type: str
+    route_profile_id: str
+    session_id: str
+    connected_at: float
+    last_audio_at: float = 0.0
+    last_sequence: int = 0
+    last_chunk_sha256: str = ""
+    resume_client_id: str | None = None
+    resume_running: bool = False
 
 
 class RemoteAudioHub:
@@ -58,12 +83,16 @@ class RemoteAudioHub:
         *,
         local_player: LocalPlayer,
         local_stopper: LocalStopper,
+        event_sink: Callable[[str, object], None] | None = None,
     ) -> None:
         self.config = config
         self._local_player = local_player
         self._local_stopper = local_stopper
+        self._event_sink = event_sink
         self._feed: RemoteFeed | None = None
         self._clients: dict[str, _Client] = {}
+        self._virtual_client: _VirtualClient | None = None
+        self._last_virtual_chunk_by_source: dict[str, tuple[str, str, float]] = {}
         self._server: Any = None
         self._discovery_transport: asyncio.DatagramTransport | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -77,11 +106,61 @@ class RemoteAudioHub:
         return self._selected_client_id
 
     @property
+    def selected_client_name(self) -> str | None:
+        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
+            return self._virtual_client.name
+        client = self._clients.get(self._selected_client_id or "")
+        return client.name if client is not None else None
+
+    @property
+    def selected_client_kind(self) -> str | None:
+        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
+            return self._virtual_client.kind
+        client = self._clients.get(self._selected_client_id or "")
+        return client.kind if client is not None else None
+
+    @property
+    def selected_source_device_id(self) -> str | None:
+        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
+            return self._virtual_client.source_device_id or self._virtual_client.id
+        client = self._clients.get(self._selected_client_id or "")
+        return client.id if client is not None else None
+
+    @property
+    def selected_message_adapter_type(self) -> str | None:
+        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
+            return self._virtual_client.message_adapter_type
+        client = self._clients.get(self._selected_client_id or "")
+        return client.message_adapter_type if client is not None else None
+
+    @property
+    def selected_route_profile_id(self) -> str | None:
+        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
+            return self._virtual_client.route_profile_id or None
+        client = self._clients.get(self._selected_client_id or "")
+        return (client.route_profile_id or None) if client is not None else None
+
+    @property
+    def selected_session_id(self) -> str | None:
+        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
+            return self._virtual_client.session_id or None
+        client = self._clients.get(self._selected_client_id or "")
+        return (client.session_id or None) if client is not None else None
+
+    @property
+    def active_virtual_client_id(self) -> str | None:
+        return self._virtual_client.id if self._virtual_client is not None else None
+
+    @property
     def source(self) -> str:
         return "remote" if self._selected_client_id else "local"
 
     def set_feed(self, callback: RemoteFeed) -> None:
         self._feed = callback
+
+    def _emit_changed(self) -> None:
+        if self._event_sink is not None:
+            self._event_sink("audio_stream_changed", self.snapshot())
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -108,6 +187,7 @@ class RemoteAudioHub:
 
     async def stop(self) -> None:
         self._capture_enabled = False
+        self._virtual_client = None
         clients = list(self._clients.values())
         self._clients.clear()
         for client in clients:
@@ -125,11 +205,15 @@ class RemoteAudioHub:
 
     def snapshot(self) -> dict[str, object]:
         now = time.time()
-        clients = sorted(
-            (
+        rows = [
                 {
                     "id": client.id,
                     "name": client.name,
+                    "kind": client.kind,
+                    "source_device_id": client.id,
+                    "message_adapter_type": client.message_adapter_type,
+                    "route_profile_id": client.route_profile_id or None,
+                    "session_id": client.session_id or None,
                     "sample_rate": client.sample_rate,
                     "chunk_ms": client.chunk_ms,
                     "connected_at": client.connected_at,
@@ -138,10 +222,34 @@ class RemoteAudioHub:
                     "online": True,
                 }
                 for client in self._clients.values()
-            ),
+            ]
+        if self._virtual_client is not None:
+            client = self._virtual_client
+            rows.append({
+                "id": client.id,
+                "name": client.name,
+                "kind": client.kind,
+                "source_device_id": client.source_device_id or client.id,
+                "message_adapter_type": client.message_adapter_type,
+                "route_profile_id": client.route_profile_id or None,
+                "session_id": client.session_id or None,
+                "sample_rate": 16_000,
+                "chunk_ms": 100,
+                "connected_at": client.connected_at,
+                "last_audio_at": client.last_audio_at or None,
+                "last_sequence": client.last_sequence,
+                "selected": client.id == self._selected_client_id,
+                "online": True,
+                "virtual": True,
+            })
+        clients = sorted(
+            rows,
             key=lambda item: (not bool(item["selected"]), str(item["name"]).lower()),
         )
-        selected_online = self._selected_client_id in self._clients if self._selected_client_id else True
+        selected_online = (
+            self._selected_client_id in self._clients
+            or self._virtual_client is not None and self._virtual_client.id == self._selected_client_id
+        ) if self._selected_client_id else True
         return {
             "ok": True,
             "enabled": self.config.enabled,
@@ -172,22 +280,149 @@ class RemoteAudioHub:
             raise ValueError("Audio stream source must be local or remote.")
         self._write_selection()
         await self._sync_capture_commands()
-        return self.snapshot()
+        result = self.snapshot()
+        self._emit_changed()
+        return result
+
+    def start_virtual_client(
+        self,
+        *,
+        client_id: str,
+        name: str,
+        kind: str,
+        message_adapter_type: str,
+        source_device_id: str = "",
+        route_profile_id: str = "",
+        session_id: str = "",
+        resume_running: bool = False,
+    ) -> dict[str, object]:
+        normalized_id = _safe_id(client_id)
+        previous_virtual = self._virtual_client
+        resume_client_id = previous_virtual.resume_client_id if previous_virtual is not None else self._selected_client_id
+        should_resume_running = previous_virtual.resume_running if previous_virtual is not None else resume_running
+        self._virtual_client = _VirtualClient(
+            id=normalized_id,
+            name=str(name or normalized_id).strip()[:100] or normalized_id,
+            kind=_safe_kind(kind),
+            source_device_id=_safe_id(source_device_id or normalized_id),
+            message_adapter_type=_message_adapter_type(message_adapter_type, _safe_kind(kind)),
+            route_profile_id=str(route_profile_id or "").strip()[:200],
+            session_id=str(session_id or "").strip()[:200],
+            connected_at=time.time(),
+            resume_client_id=resume_client_id,
+            resume_running=should_resume_running,
+        )
+        self._selected_client_id = normalized_id
+        result = self.snapshot()
+        self._emit_changed()
+        return result
+
+    def feed_virtual_client(
+        self,
+        client_id: str,
+        payload: bytes,
+        *,
+        sequence: int,
+        chunk_id: str | None = None,
+    ) -> bool:
+        client = self._virtual_client
+        if client is None or client.id != _safe_id(client_id) or self._selected_client_id != client.id:
+            return False
+        if not self._capture_enabled or not payload or len(payload) % 2:
+            return False
+        if self._feed is None:
+            return False
+        if sequence <= 0:
+            raise ValueError("RabiLink audio chunk sequence must be a positive integer.")
+        chunk_sha256 = hashlib.sha256(payload).hexdigest()
+        if sequence == client.last_sequence:
+            if client.last_chunk_sha256 != chunk_sha256:
+                raise ValueError(f"RabiLink audio chunk {sequence} was retried with different PCM bytes.")
+            client.last_audio_at = time.time()
+            return True
+        expected = client.last_sequence + 1
+        if sequence != expected:
+            raise ValueError(f"RabiLink audio chunk sequence mismatch: expected {expected}, received {sequence}.")
+        normalized_chunk_id = str(chunk_id or "").strip()[:200]
+        if normalized_chunk_id:
+            now = time.time()
+            previous = self._last_virtual_chunk_by_source.get(client.source_device_id)
+            if previous is not None and previous[0] == normalized_chunk_id:
+                if previous[1] != chunk_sha256:
+                    raise ValueError(
+                        f"RabiLink audio chunk id {normalized_chunk_id!r} was retried with different PCM bytes."
+                    )
+                self._last_virtual_chunk_by_source[client.source_device_id] = (
+                    normalized_chunk_id,
+                    chunk_sha256,
+                    now,
+                )
+                client.last_audio_at = now
+                client.last_sequence = sequence
+                client.last_chunk_sha256 = chunk_sha256
+                return True
+        client.last_audio_at = time.time()
+        client.last_sequence = sequence
+        client.last_chunk_sha256 = chunk_sha256
+        samples = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
+        self._feed(client.id, samples)
+        if normalized_chunk_id:
+            self._last_virtual_chunk_by_source[client.source_device_id] = (
+                normalized_chunk_id,
+                chunk_sha256,
+                client.last_audio_at,
+            )
+            self._prune_virtual_chunk_sources()
+        return True
+
+    def _prune_virtual_chunk_sources(self) -> None:
+        excess = len(self._last_virtual_chunk_by_source) - _VIRTUAL_CHUNK_DEDUP_MAX_SOURCES
+        if excess <= 0:
+            return
+        oldest = sorted(self._last_virtual_chunk_by_source.items(), key=lambda item: item[1][2])[:excess]
+        for key, _ in oldest:
+            self._last_virtual_chunk_by_source.pop(key, None)
+
+    def stop_virtual_client(self, client_id: str) -> tuple[dict[str, object], bool]:
+        client = self._virtual_client
+        if client is None or client.id != _safe_id(client_id):
+            return self.snapshot(), False
+        resume_client_id = client.resume_client_id
+        resume_running = client.resume_running
+        self._virtual_client = None
+        self._selected_client_id = resume_client_id
+        result = self.snapshot()
+        self._emit_changed()
+        return result, resume_running
+
+    def stale_virtual_client_id(self, timeout_seconds: float, *, now: float | None = None) -> str | None:
+        client = self._virtual_client
+        if client is None:
+            return None
+        deadline_base = client.last_audio_at or client.connected_at
+        checked_at = time.time() if now is None else now
+        return client.id if checked_at - deadline_base >= timeout_seconds else None
 
     async def start_capture(self, sample_rate: int, chunk_ms: int) -> None:
         self._capture_enabled = True
         self._capture_sample_rate = sample_rate
         self._capture_chunk_ms = chunk_ms
-        if self._selected_client_id and self._selected_client_id not in self._clients:
+        selected_virtual = self._virtual_client is not None and self._virtual_client.id == self._selected_client_id
+        if self._selected_client_id and self._selected_client_id not in self._clients and not selected_virtual:
             raise RuntimeError("The selected remote audio client is offline.")
         await self._sync_capture_commands()
+        self._emit_changed()
 
     async def stop_capture(self) -> None:
         self._capture_enabled = False
         await self._sync_capture_commands()
+        self._emit_changed()
 
     def play(self, path: Path, volume: int, cancel: threading.Event) -> None:
         client_id = self._selected_client_id
+        if self._virtual_client is not None and self._virtual_client.id == client_id:
+            self._local_player(path, volume, cancel)
+            return
         if not client_id:
             self._local_player(path, volume, cancel)
             return
@@ -199,6 +434,9 @@ class RemoteAudioHub:
 
     def stop_playback(self) -> None:
         client_id = self._selected_client_id
+        if self._virtual_client is not None and self._virtual_client.id == client_id:
+            self._local_stopper()
+            return
         loop = self._loop
         if not client_id or loop is None or not loop.is_running():
             self._local_stopper()
@@ -219,6 +457,13 @@ class RemoteAudioHub:
                 raise ValueError("Missing audio client hello message.")
             client_id = _safe_id(hello.get("clientId"))
             name = str(hello.get("name") or client_id).strip()[:100] or client_id
+            kind = _safe_kind(hello.get("deviceKind"))
+            # Network sound-card clients always belong to the standalone speech
+            # endpoint. Only the loopback RabiLink virtual-stream API may create
+            # a rabilink source, so an untrusted hello cannot change Route class.
+            message_adapter_type = "speech"
+            route_profile_id = str(hello.get("routeProfileId") or "").strip()[:200]
+            session_id = str(hello.get("sessionId") or "").strip()[:200]
             sample_rate = int(hello.get("sampleRate") or 16_000)
             chunk_ms = int(hello.get("chunkMs") or 100)
             if sample_rate != 16_000 or not 20 <= chunk_ms <= 1_000:
@@ -226,10 +471,11 @@ class RemoteAudioHub:
             previous = self._clients.get(client_id)
             if previous is not None:
                 await previous.websocket.close(code=4009, reason="Replaced by a newer connection")
-            client = _Client(client_id, name, websocket, sample_rate, chunk_ms, time.time())
+            client = _Client(client_id, name, kind, message_adapter_type, route_profile_id, session_id, websocket, sample_rate, chunk_ms, time.time())
             self._clients[client_id] = client
             await websocket.send(json.dumps({"type": "hello-accepted", "clientId": client_id}, ensure_ascii=False))
             await self._sync_capture_commands()
+            self._emit_changed()
             async for message in websocket:
                 if isinstance(message, bytes):
                     self._handle_audio(client, message)
@@ -245,6 +491,7 @@ class RemoteAudioHub:
         finally:
             if client is not None and self._clients.get(client.id) is client:
                 self._clients.pop(client.id, None)
+                self._emit_changed()
                 if client.playback_waiter and not client.playback_waiter.done():
                     client.playback_waiter.set_exception(RuntimeError("Remote audio client disconnected during playback."))
 
@@ -348,6 +595,16 @@ def _safe_id(value: object, *, allow_empty: bool = False) -> str:
     if not text or len(text) > 100 or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in text):
         raise ValueError("Invalid remote audio client id.")
     return text
+
+
+def _safe_kind(value: object) -> str:
+    text = str(value or "remote_audio_client").strip().lower().replace("-", "_")[:50]
+    return text if text and all(character.isalnum() or character == "_" for character in text) else "remote_audio_client"
+
+
+def _message_adapter_type(value: object, _device_kind: str) -> str:
+    requested = str(value or "").strip().lower()
+    return "rabilink" if requested == "rabilink" else "speech"
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):

@@ -35,6 +35,11 @@ test("relay stores mobile chat attachments per application and requires authenti
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-relay-device-media-"));
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
+  const staleMedia = path.join(directory, "device-media", "stale-app", "stale.bin");
+  fs.mkdirSync(path.dirname(staleMedia), { recursive: true });
+  fs.writeFileSync(staleMedia, "expired");
+  const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  fs.utimesSync(staleMedia, staleTime, staleTime);
   const child = spawn(process.execPath, [path.resolve("scripts/rabilink-relay-server.mjs")], {
     cwd: process.cwd(),
     env: {
@@ -42,6 +47,7 @@ test("relay stores mobile chat attachments per application and requires authenti
       HOST: "127.0.0.1",
       PORT: String(port),
       RABILINK_RELAY_DATA_DIR: directory,
+      RABILINK_RELAY_DEVICE_MEDIA_TTL_MS: String(60 * 60 * 1000),
       RABILINK_RELAY_WEBGUI_DIST_DIR: path.join(directory, "missing-webgui")
     },
     stdio: ["ignore", "pipe", "pipe"]
@@ -50,6 +56,7 @@ test("relay stores mobile chat attachments per application and requires authenti
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   try {
     await waitForHealth(baseUrl, child);
+    assert.equal(fs.existsSync(staleMedia), false);
     const account = await fetch(`${baseUrl}/manage/api/accounts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -117,6 +124,37 @@ test("relay stores mobile chat attachments per application and requires authenti
       body: JSON.stringify({ targetDeviceId: "pc-media" })
     });
     assert.equal(selectTarget.status, 200);
+    const preferenceInput = await fetch(`${baseUrl}/api/rabilink/devices/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-rabilink-token": ownerToken },
+      body: JSON.stringify({
+        text: "用户明确更新了主动性偏好：balanced",
+        type: "rabilink.preference",
+        deliveryMode: "observe",
+        sender: "RabiLink Phone",
+        sourceDeviceId: "phone-owner",
+        sourceDeviceKind: "phone",
+        channelType: "settings",
+        routeProfileId: "route-companion",
+        proactivityPreference: "balanced",
+        preferenceKind: "proactivity",
+        preferenceValue: "balanced",
+        explicitPreference: true
+      })
+    });
+    assert.equal(preferenceInput.status, 202);
+    const preferenceClaim = await fetch(`${baseUrl}/worker/tasks?deviceId=pc-media&deviceGuid=guid-media&deviceName=Media%20PC&waitMs=0`, {
+      headers: { "x-rabilink-token": ownerToken }
+    });
+    assert.equal(preferenceClaim.status, 200);
+    const preferenceTask = (await preferenceClaim.json()).tasks[0];
+    assert.equal(preferenceTask.type, "rabilink.preference");
+    assert.equal(preferenceTask.routeProfileId, "route-companion");
+    assert.equal(preferenceTask.channelType, "settings");
+    assert.equal(preferenceTask.proactivityPreference, "balanced");
+    assert.equal(preferenceTask.preferenceKind, "proactivity");
+    assert.equal(preferenceTask.preferenceValue, "balanced");
+    assert.equal(preferenceTask.explicitPreference, true);
     const attachmentOnly = await fetch(`${baseUrl}/worker/messages`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-rabilink-token": ownerToken },

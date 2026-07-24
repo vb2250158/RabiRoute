@@ -1,4 +1,6 @@
 {
+  "schema_version": 1,
+  "note": "Shape example only. This small public manifest cannot satisfy the formal validation policy.",
   "samples": [
     {"speaker": "person-a", "role": "enroll", "path": "private/person-a-01.wav"},
     {"speaker": "person-a", "role": "test", "path": "private/person-a-02.wav"},

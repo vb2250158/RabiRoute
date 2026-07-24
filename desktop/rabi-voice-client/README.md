@@ -6,7 +6,7 @@
 
 # Rabi 语音客户端
 
-Rabi 语音客户端把会议室电脑变成 RabiSpeech 的局域网远程麦克风和喇叭。客户端只持续上传单声道 PCM，并播放主机下发的 WAV；VAD、静音切句、ASR、Route 广播、人格 TTS、FIFO 和防回流仍全部由 RabiSpeech 主机控制。
+Rabi 语音客户端把会议室电脑变成 RabiSpeech 的局域网远程麦克风和喇叭。客户端只持续上传单声道 PCM，并播放主机下发的 WAV；VAD、静音切句、ASR、Route 广播、人格 TTS、FIFO 和防回流仍全部由 RabiSpeech 主机控制。远程声卡入口由主机强制归类为 `messageAdapterType=speech`，客户端握手不能改成 `rabilink`，因此它不会被误当成手机/RabiLink 消息。
 
 当前只支持可信局域网直连。RabiLink 保持独立，不是客户端的配置前置条件；跨公网音频流中转尚未接入。
 

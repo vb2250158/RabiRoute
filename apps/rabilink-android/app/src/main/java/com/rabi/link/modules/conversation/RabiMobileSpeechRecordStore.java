@@ -11,7 +11,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
-/** Append-only ASR/TTS metadata ledger mirroring the RabiSpeech speech-record contract. */
+/** Append-only mobile TTS metadata ledger mirroring the RabiSpeech speech-record contract. */
 public final class RabiMobileSpeechRecordStore {
     private final File root;
 

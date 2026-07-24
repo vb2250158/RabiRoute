@@ -1,5 +1,6 @@
 import type {
   AgentAdapterType,
+  CodexHookSettings,
   GatewayDefinition,
   MessageAdapterPolicies,
   MessageAdapterPolicy,
@@ -14,6 +15,7 @@ import type { PersonaAvatarPresentation } from "@shared/personaAvatarContract";
 
 export type {
   AgentAdapterType,
+  CodexHookSettings,
   GatewayDefinition,
   MessageAdapterPolicies,
   MessageAdapterPolicy,
@@ -178,4 +180,89 @@ export type MetaPayload = {
     error?: string;
   };
   computerName?: string;
+};
+
+export type RolePlanStep = {
+  id: string;
+  title: string;
+  status: "未开始" | "进行中" | "已完成";
+  detail?: string;
+  waitingFor?: string;
+  blockedBy?: string;
+  completedAt?: string;
+};
+
+export type RolePlan = {
+  id: string;
+  title: string;
+  focus: string;
+  status: "未开始" | "进行中" | "已完成" | "已归档";
+  priority?: string;
+  kind?: string;
+  currentStep?: string;
+  currentStepId?: string;
+  nextAction?: string;
+  waitingFor?: string;
+  blockedBy?: string;
+  steps: RolePlanStep[];
+  project?: { name?: string; path?: string };
+  source?: { kind?: string; summary?: string };
+  dueAt?: string;
+  completedAt?: string;
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  keywords: string[];
+  presentation: {
+    status: string;
+    tone: "blocked" | "qa" | "running" | "pending" | "done" | "archived" | "unknown";
+    approval: {
+      enabled: boolean;
+      label: string;
+      helper: string;
+      stepId?: string;
+    };
+  };
+  approval: {
+    count: number;
+    latest?: RolePlanFeedback;
+  };
+};
+
+export type RolePlanFeedback = {
+  id: string;
+  roleId: string;
+  planId: string;
+  planTitle: string;
+  stepId?: string;
+  stepTitle?: string;
+  gatewayId?: string;
+  kind: "approval_suggestion" | "approval_response";
+  author: "user" | "agent" | "system";
+  source: "webgui" | "tray" | "qq" | "agent" | "api";
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+  deliveryStatus: "record_only" | "pending" | "delivered" | "failed";
+  deliveryMessage?: string;
+};
+
+export type RoleMemory = {
+  id: string;
+  title: string;
+  focus: string;
+  content: string;
+  source?: { kind?: string; summary?: string };
+  createdAt: string;
+  updatedAt: string;
+  viewedAt?: string;
+  consolidatedAt?: string;
+  consolidationRunId?: string;
+  inputMemoryIds?: string[];
+  keywords: string[];
+};
+
+export type RoleMemoryPayload = {
+  recent: RoleMemory[];
+  consolidated: RoleMemory[];
 };
