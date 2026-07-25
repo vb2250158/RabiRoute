@@ -103,7 +103,7 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 - 普通消息端事件一旦命中规则，默认直接投递：当前 Desktop turn 活跃时 `steer`，空闲时 `start`。
 - Heartbeat 有独立 `heartbeatSkipWhenAgentBusy`。开启后只在会话工作中跳过 heartbeat，不影响普通消息。
 - 语音有 Route 级 `speechPushMode`：`hot` 每段 ASR 完成即投递；`keyword` 仍记录所有 ASR，仅命中人格 `speechTriggerKeywords` 时投递。空关键词不回退 `hot`。
-- `recentMessageLimits` 也归人格，11 个消息端分别设置 `0–200`，默认 `100`；只控制自动注入，不控制记录。
+- `recentMessageLimits` 也归人格，11 个消息端分别设置 `0–200`，默认 `12`；只控制自动注入，不控制记录。
 
 ## Pipeline 预设 / 通道预设
 

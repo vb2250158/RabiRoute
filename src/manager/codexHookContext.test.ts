@@ -91,9 +91,62 @@ test("binding and base context are owned by Rabi Manager", (t) => {
   assert.equal(result.binding?.roleId, "YeYu");
   assert.match(result.additionalContext, /人格、计划、记忆、技能、召回、viewedAt、归档与整理均由 Rabi PC 管理/);
   assert.match(result.additionalContext, /温柔、清楚/);
-  assert.match(result.additionalContext, /统一 Codex Hook 上下文/);
+  assert.doesNotMatch(result.additionalContext, /plan-hook/);
   assert.ok(fs.existsSync(storePath));
   assert.ok(result.additionalContext.length <= 6200);
+});
+
+test("default Codex hook context keeps unrelated plan and memory indexes on demand", (t) => {
+  const { root, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = service.handleContext({
+    sessionId: "session-focused",
+    eventName: "UserPromptSubmit",
+    prompt: "[rabi:use YeYu]",
+    managerBaseUrl: "http://127.0.0.1:8790"
+  });
+  assert.doesNotMatch(result.additionalContext, /plan-hook/);
+  assert.doesNotMatch(result.additionalContext, /memory-hook/);
+  assert.match(result.additionalContext, /按需查询/);
+  assert.match(result.additionalContext, /处理前上下文确认/);
+});
+
+test("legacy context injection mode restores full indexes", (t) => {
+  const { root, roleDir, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify({
+    contextInjection: { mode: "legacy" }
+  }), "utf8");
+  const result = service.handleContext({
+    sessionId: "session-legacy",
+    eventName: "UserPromptSubmit",
+    prompt: "[rabi:use YeYu]"
+  });
+  assert.match(result.additionalContext, /plan-hook/);
+  assert.match(result.additionalContext, /memory-hook/);
+  assert.match(result.additionalContext, /可用 API 提示/);
+});
+
+test("focused context is materially smaller than legacy context for the same role", (t) => {
+  const { root, roleDir, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(roleDir, "persona.md"), `# 夜雨\n\n${"人格核心与边界。".repeat(700)}`, "utf8");
+
+  const focused = service.handleContext({
+    sessionId: "session-size-focused",
+    eventName: "UserPromptSubmit",
+    prompt: "[rabi:use YeYu]"
+  }).additionalContext;
+  fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify({
+    contextInjection: { mode: "legacy" }
+  }), "utf8");
+  const legacy = service.handleContext({
+    sessionId: "session-size-legacy",
+    eventName: "UserPromptSubmit",
+    prompt: "[rabi:use YeYu]"
+  }).additionalContext;
+
+  assert.ok(focused.length + 1200 < legacy.length, `${focused.length} should be materially below ${legacy.length}`);
 });
 
 test("prompt recall uses roleKnowledgeSnapshot and refreshes memory viewedAt", (t) => {

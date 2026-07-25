@@ -468,7 +468,8 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
     text: recentMessageContextText([roleContext.dataDir], {
       limit,
       adapter: scope.endpoint,
-      conversationKey: scope.record.conversationKey
+      conversationKey: scope.record.conversationKey,
+      excludedMessageIds: decision.record.messageId == null ? [] : [String(decision.record.messageId)]
     })
   };
 }

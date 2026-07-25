@@ -87,7 +87,8 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `heartbeatSkipWhenAgentBusy`: skip a heartbeat while the fixed Codex thread is still active. Other message kinds are unaffected.
 - `speechPushMode`: Route-owned speech delivery mode. `hot` delivers every completed ASR segment immediately. `keyword` records every segment but wakes the Agent only after a persona-keyword match. WebGUI's **Hot delivery** switch maps On to `hot` and Off to `keyword`.
 - `speechTriggerKeywords`: persona-owned names, common addresses, and wake phrases in `personaConfig.json`. When the list is empty and Hot delivery is off, ASR remains recorded and never silently falls back to `hot`.
-- `recentMessageLimits`: persona-owned `0–200` auto-injection budgets for `napcat`, `remoteAgent`, `heartbeat`, `rolePanel`, `speech`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `webhook`, and `wecom`. The schema default is `100`; `0` disables only automatic injection. Legacy `recentMessageLimit` is migrated across all endpoints at the read boundary.
+- `recentMessageLimits`: persona-owned `0–200` auto-injection budgets for `napcat`, `remoteAgent`, `heartbeat`, `rolePanel`, `speech`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `webhook`, and `wecom`. The schema default is `12`; `0` disables only automatic injection. Legacy `recentMessageLimit` and explicit endpoint values remain effective.
+- `contextInjection`: persona-owned focused-context policy. It defaults to `{"mode":"focused","relevantKnowledgeLimit":3,"personaMaxChars":1600}`; `mode=legacy` restores full active indexes. The numeric ranges are `1–12` and `800–6000`.
 - `dataDir`, `rolesDir`, `configName`, `agentRoleId`, `agentRoleFile`: storage and role binding.
 
 Windows paths may use either slash style in WebUI. Only hand-written JSON requires escaped backslashes.

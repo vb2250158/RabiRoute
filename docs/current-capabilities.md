@@ -63,7 +63,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 当前 route kind：`private`、`group_message`、`direct_at`、`direct_reply`、`indirect_reply`、`heartbeat`、`manual_trigger`、`role_panel_message`、`voice_transcript`、`rabilink`、`wearable_health_alert`、`wecom_message`。
 - `RouteDecision` 只负责规则匹配；`forwarding.ts` 遍历 active route profile、写审计并投递每一条命中规则。
 - `AgentPacket` 会注入事件、当前人格/逻辑消息端/会话的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`。
-- 人格 `recentMessageLimits` 对 11 个消息端分别限制 `0–200` 条，默认 `100`；`0` 只关闭注入。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
+- 人格 `recentMessageLimits` 对 11 个消息端分别限制 `0–200` 条，默认 `12`；`0` 只关闭注入。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
 - 已匹配的普通消息直接 `steer/start` Desktop owner；Heartbeat 可专门配置忙碌跳过，语音可专门配置热/关键词投递。
 - Delivery replay 已实现：真实投递会写 `delivery-replay-ledger.jsonl`，可按 attempt 或消息记录重新进入投递链。
 - 人格路由 dry-run / AgentPacket 预览仍是设计中功能，当前 WebGUI 没有无副作用预览 API。

@@ -370,6 +370,7 @@ export class CodexHookContextService {
         }
       : contextResolution.knowledge;
     const view = buildRoleKnowledgeContextView(role.roleId, visibleKnowledge);
+    const focusedContext = view.mode === "focused";
     const blocks: string[] = [];
 
     if (includeBase) {
@@ -379,9 +380,24 @@ export class CodexHookContextService {
         `Rabi Manager：${managerBaseUrl}`,
         "人格、计划、记忆、技能、召回、viewedAt、归档与整理均由 Rabi PC 管理；Codex Hook 只是触发器和注入器。"
       ]));
-      blocks.push(section("人格工作集", excerpt(persona, 3200, 700)));
-      if (growth) blocks.push(section("成长规则摘要", excerpt(growth, 350)));
-      if (skills) blocks.push(section("角色技能摘要", excerpt(skills, 350)));
+      blocks.push(section(focusedContext ? "人格核心指令" : "人格工作集", [
+        focusedContext
+          ? `这是精简人格工作集；完整真源位于 ${path.join(role.roleDir, "persona.md")}，只有当前任务明确涉及更深边界时才按需读取。`
+          : "",
+        excerpt(
+          persona,
+          visibleKnowledge.contextInjection.personaMaxChars,
+          focusedContext ? 500 : 700
+        )
+      ]));
+      if (!focusedContext && growth) blocks.push(section("成长规则摘要", excerpt(growth, 350)));
+      if (!focusedContext && skills) blocks.push(section("角色技能摘要", excerpt(skills, 350)));
+      if (focusedContext && (growth || skills)) {
+        blocks.push(section("人格扩展按需读取", [
+          growth ? `成长规则：${path.join(role.roleDir, "growth.md")}` : "",
+          skills ? `技能索引：${path.join(role.roleDir, "skills.md")}` : ""
+        ]));
+      }
     }
 
     if (shouldRender && (!isReasoningCheckpoint || includeBase)) {

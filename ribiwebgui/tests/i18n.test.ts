@@ -22,7 +22,7 @@ test("translates dynamic counts and adapter summaries", () => {
     translateText("RabiLink · 角色面板 + RabiLink / Relay 直连", "en"),
     "RabiLink · Role panel + RabiLink / Relay"
   );
-  assert.equal(translateText("默认 100 · 上限 200", "en"), "Default 100 · Maximum 200");
+  assert.equal(translateText("默认 12 · 上限 200", "en"), "Default 12 · Maximum 200");
   assert.equal(translateText("常驻监听中 · 2 个 Route 已订阅", "en"), "Persistent listening · 2 Routes subscribed");
   assert.equal(
     translateText("0 表示不注入 语音消息端 历史；未单独设置时使用 100 条。", "en"),

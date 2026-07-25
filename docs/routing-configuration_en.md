@@ -86,7 +86,7 @@ Use the narrowest kind that represents the source event. `group_message` is norm
 - Once an ordinary endpoint message matches a rule, it is delivered directly: `steer` the active Desktop turn or `start` an idle task.
 - Heartbeat owns the separate `heartbeatSkipWhenAgentBusy` exception; it does not suppress ordinary messages.
 - Speech owns Route `speechPushMode`: `hot` delivers every completed ASR segment, while `keyword` records all segments and delivers only after a persona `speechTriggerKeywords` match. An empty list never falls back to hot.
-- Persona `recentMessageLimits` independently configures 11 endpoint budgets from `0` to `200`, with a schema default of `100`. Zero disables automatic injection only.
+- Persona `recentMessageLimits` independently configures 11 endpoint budgets from `0` to `200`, with a schema default of `12`. Zero disables automatic injection only.
 
 ## Pipelines
 

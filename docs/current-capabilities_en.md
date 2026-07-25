@@ -63,7 +63,7 @@ The repository also provides a local voiceprint preflight that composes several 
 - Current route kinds are `private`, `group_message`, `direct_at`, `direct_reply`, `indirect_reply`, `heartbeat`, `manual_trigger`, `role_panel_message`, `voice_transcript`, `rabilink`, `wearable_health_alert`, and `wecom_message`.
 - `RouteDecision` only matches rules. `forwarding.ts` iterates active route profiles, writes audit records, and delivers every matched rule.
 - `AgentPacket` includes the event, recent bidirectional messages for the current persona/logical endpoint/conversation, role and relative paths, plan/memory/skill indexes, required-read items, log paths, reply API, and `replyContext`.
-- Persona `recentMessageLimits` configures 11 endpoint budgets from `0` to `200`, with a schema default of `100`; zero disables only injection. `conversation/current.jsonl` has no entry-count cap, time-based archives use `archive/<n>~<m>.jsonl`, and automatic context never reads archives.
+- Persona `recentMessageLimits` configures 11 endpoint budgets from `0` to `200`, with a schema default of `12`; zero disables only injection. `conversation/current.jsonl` has no entry-count cap, time-based archives use `archive/<n>~<m>.jsonl`, and automatic context never reads archives.
 - Matched ordinary messages go directly to the Desktop owner through `steer/start`. Heartbeat may separately skip while busy, and speech may separately use hot/keyword delivery.
 - Delivery replay is implemented. Real delivery writes `delivery-replay-ledger.jsonl`, and attempts or stored messages can re-enter the delivery path.
 - Persona-route dry runs and `AgentPacket` previews remain planned; the current WebGUI has no side-effect-free preview API.

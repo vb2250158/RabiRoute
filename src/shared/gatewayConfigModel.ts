@@ -62,7 +62,7 @@ export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
   "webhook",
   "wecom"
 ];
-export const DEFAULT_RECENT_MESSAGE_LIMIT = 100;
+export const DEFAULT_RECENT_MESSAGE_LIMIT = 12;
 export const MAX_RECENT_MESSAGE_LIMIT = 200;
 
 export type MessageAdapterPolicy = {

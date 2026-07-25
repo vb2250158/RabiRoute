@@ -92,7 +92,8 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `heartbeatSkipWhenAgentBusy`：可选，默认 `false`。启用后，如果当前 Codex 固定任务仍处于 active / in-progress 状态，本次 `heartbeat` 会记录为 `skipped` 且原因是 `agent_busy`，不会继续投递；群聊、私聊和其他消息类型不受影响。忙碌状态由 Desktop IPC 广播与当前任务状态共同确认。
 - `speechPushMode`：Route 拥有的语音投递模式。`hot` 表示每段 ASR 完成后立即投递；`keyword` 表示转写仍全部记录，只在命中人格关键词时唤醒 Agent。WebGUI 中“热投递”开关的开对应 `hot`，关对应 `keyword`。
 - `speechTriggerKeywords`：归人格 `personaConfig.json`，用于人格名、常用称呼和唤醒词。列表为空且 Route 关闭热投递时，ASR 只记录、永不暗中回退 `hot`。
-- `recentMessageLimits`：归人格 `personaConfig.json`，分别配置 `napcat`、`remoteAgent`、`heartbeat`、`rolePanel`、`speech`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`webhook`、`wecom` 的自动注入条数。每项 `0–200`，未设置时默认 `100`；`0` 不删记录，只关自动注入。旧 `recentMessageLimit` 会在读取边界迁移到全部消息端。
+- `recentMessageLimits`：归人格 `personaConfig.json`，分别配置 `napcat`、`remoteAgent`、`heartbeat`、`rolePanel`、`speech`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`webhook`、`wecom` 的自动注入条数。每项 `0–200`，未设置时默认 `12`；`0` 不删记录，只关自动注入。旧 `recentMessageLimit` 和显式分端值继续生效。
+- `contextInjection`：归人格 `personaConfig.json`。默认 `{"mode":"focused","relevantKnowledgeLimit":3,"personaMaxChars":1600}`，只放高相关知识摘要和精简人格工作集；`mode=legacy` 可回滚到旧的全量活动索引。数值范围分别为 `1–12` 和 `800–6000`。
 - `dataDir`：路由级协议记录、投递记录和心跳记录目录。人格级双向会话真源另位于 `data/roles/<RoleId>/conversation/`。
 - `rolesDir`：人格目录，只放 `persona.md`、成长记录、提示词等角色文件。
 - `configName`：路由配置文件夹名。

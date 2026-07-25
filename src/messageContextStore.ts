@@ -132,6 +132,8 @@ export type RecentMessageContextQuery = {
   adapter?: string;
   channel?: string;
   conversationKey?: string;
+  /** Exclude events already represented elsewhere in the current Agent packet. */
+  excludedMessageIds?: readonly string[];
   maxChars?: number;
   /** Archives are full-fidelity evidence and are opt-in, never automatic Agent context. */
   includeArchives?: boolean;
@@ -964,6 +966,7 @@ export function recentMessageContextItems(dataDirs: string[], limitOrQuery: numb
     (!query.adapter || item.adapter === query.adapter)
     && (!query.channel || item.channel === query.channel)
     && (!query.conversationKey || item.conversationKey === query.conversationKey)
+    && (!query.excludedMessageIds?.length || !query.excludedMessageIds.includes(String(item.messageId ?? "")))
   );
   const selected: MessageContextRecord[] = [];
   let chars = 0;

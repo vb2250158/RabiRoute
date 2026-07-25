@@ -1,6 +1,13 @@
-import { indexLines, type RoleKnowledgeItemType, type RoleKnowledgeSnapshot } from "../roleKnowledge.js";
+import {
+  indexLines,
+  type RoleContextInjectionMode,
+  type RoleKnowledgeIndexItem,
+  type RoleKnowledgeItemType,
+  type RoleKnowledgeSnapshot
+} from "../roleKnowledge.js";
 
 export type RoleKnowledgeContextView = {
+  mode: RoleContextInjectionMode;
   activePlanIndex: string;
   activeSkillIndex: string;
   recentMemoryIndex: string;
@@ -28,6 +35,14 @@ export function planMemoryApiHint(roleId: unknown): string[] {
   ];
 }
 
+function focusedApiHint(roleId: unknown): string[] {
+  const base = roleApiBase(roleId);
+  return [
+    "计划、记忆和技能默认只注入与当前输入高相关的摘要；长历史与完整内容按需查询。",
+    `按需查询/维护：${base}/plans、${base}/memory、${base}/skills；执行写入前仍须遵守对应接口校验与 Action Gate。`
+  ];
+}
+
 function requiredReadTypeLabel(type: RoleKnowledgeItemType): string {
   if (type === "plan") return "计划";
   if (type === "recent_memory") return "近期记忆";
@@ -42,28 +57,69 @@ export function skillIndexLines(roleId: unknown, items: Array<{ id: string; titl
   return items.map((item) => `- ${item.id}：${item.title} - ${item.summary}（GET ${base}/skills/${encodeURIComponent(item.id)}）`).join("\n");
 }
 
-export function requiredReadLines(items: RoleKnowledgeSnapshot["requiredReadItems"]): string[] {
+function summarizedIndexLines(items: RoleKnowledgeIndexItem[], empty = "- 暂无高相关项"): string {
+  if (items.length === 0) return empty;
+  return items.map((item) => {
+    const summary = String(item.summary || "").trim();
+    return `- [${requiredReadTypeLabel(item.type)}] ${item.id}：${item.title}${summary ? ` — ${summary}` : ""}`;
+  }).join("\n");
+}
+
+export function requiredReadLines(
+  items: RoleKnowledgeSnapshot["requiredReadItems"],
+  mode: RoleContextInjectionMode = "legacy"
+): string[] {
   if (items.length === 0) {
-    return [
-      "本次没有高相关必读项。仍需先扫一遍上方可见的进行中计划、近期记忆和命中召回索引；如发现与当前处理有关的条目，请先按 ID 查询内容再行动。"
-    ];
+    return mode === "focused"
+      ? [
+          "本次没有高相关必读项；不要预加载全量历史。出现明确历史指代、既有承诺、计划、偏好或证据需求时，再按 ID 或 API 按需查询。"
+        ]
+      : [
+          "本次没有高相关必读项。仍需先扫一遍上方可见的进行中计划、近期记忆和命中召回索引；如发现与当前处理有关的条目，请先按 ID 查询内容再行动。"
+        ];
   }
   return [
     "以下条目与当前消息高相关。回复、发布任务、更新计划、写入记忆或执行外部动作之前，必须先按 GET 路径读取每一项内容；不要只凭标题行动。",
     "如果任一必读项无法读取或内容不足以确认，请说明上下文无法确认，或先向用户追问。",
     "",
-    ...items.map((item) => `- ${item.id}：${item.title}（${requiredReadTypeLabel(item.type)}，score=${item.score}） GET ${item.endpoint}`)
+    ...items.map((item) => {
+      const summary = String(item.summary || "").trim();
+      return `- ${item.id}：${item.title}${summary ? ` — ${summary}` : ""}（${requiredReadTypeLabel(item.type)}，score=${item.score}） GET ${item.endpoint}`;
+    })
   ];
 }
 
 export function buildRoleKnowledgeContextView(roleId: unknown, knowledge: RoleKnowledgeSnapshot): RoleKnowledgeContextView {
+  const mode = knowledge.contextInjection?.mode ?? "legacy";
+  if (mode === "focused") {
+    const base = roleApiBase(roleId);
+    const requiredSkillIds = new Set(
+      knowledge.requiredReadItems
+        .filter((item) => item.type === "role_skill")
+        .map((item) => item.id)
+    );
+    return {
+      mode,
+      activePlanIndex: `- 默认不注入全量计划索引；按需查询 GET ${base}/plans`,
+      activeSkillIndex: `- 默认不注入全量技能索引；按需查询 GET ${base}/skills`,
+      recentMemoryIndex: `- 默认不注入全量记忆索引；按需查询 GET ${base}/memory`,
+      matchedIndex: summarizedIndexLines(knowledge.requiredReadItems.filter((item) => item.type !== "role_skill")),
+      matchedSkillIndex: skillIndexLines(
+        roleId,
+        knowledge.matchedSkills.filter((item) => requiredSkillIds.has(item.id))
+      ),
+      requiredReadLines: requiredReadLines(knowledge.requiredReadItems, mode),
+      apiHintLines: focusedApiHint(roleId)
+    };
+  }
   return {
+    mode,
     activePlanIndex: indexLines(knowledge.activePlans),
     activeSkillIndex: skillIndexLines(roleId, knowledge.activeSkills),
     recentMemoryIndex: indexLines(knowledge.recentMemories),
     matchedIndex: indexLines(knowledge.matchedItems),
     matchedSkillIndex: skillIndexLines(roleId, knowledge.matchedSkills),
-    requiredReadLines: requiredReadLines(knowledge.requiredReadItems),
+    requiredReadLines: requiredReadLines(knowledge.requiredReadItems, mode),
     apiHintLines: planMemoryApiHint(roleId)
   };
 }

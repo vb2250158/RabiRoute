@@ -9,7 +9,9 @@ import {
   getRecentMemory,
   getRoleSkill,
   listRoleSkills,
+  normalizeRoleContextInjection,
   pendingMemoryConsolidation,
+  roleContextInjectionPolicy,
   roleKnowledgeSnapshot,
   updatePlan,
   updateRecentMemory,
@@ -41,6 +43,31 @@ function writeSkill(roleDir: string, fileName: string, text: string): void {
 function writePersonaConfig(roleDir: string, config: Record<string, unknown>): void {
   fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify(config, null, 2), "utf8");
 }
+
+test("context injection defaults focused and keeps a legacy rollback mode", () => {
+  const roleDir = makeRoleDir();
+  assert.deepEqual(roleContextInjectionPolicy(roleDir), {
+    mode: "focused",
+    requiredReadLimit: 3,
+    matchedItemLimit: 3,
+    personaMaxChars: 1600
+  });
+
+  writePersonaConfig(roleDir, {
+    contextInjection: {
+      mode: "legacy",
+      relevantKnowledgeLimit: 7,
+      personaMaxChars: 99999
+    }
+  });
+  assert.deepEqual(roleContextInjectionPolicy(roleDir), {
+    mode: "legacy",
+    requiredReadLimit: 7,
+    matchedItemLimit: 7,
+    personaMaxChars: 6000
+  });
+  assert.equal(normalizeRoleContextInjection({ mode: "unknown" }).mode, "focused");
+});
 
 function readRecentMemory(roleDir: string, id: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(path.join(roleDir, "memory", "recent", `${id}.json`), "utf8")) as Record<string, unknown>;

@@ -4,7 +4,10 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ManagerConfigRepository } from "./configRepository.js";
-import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import {
+  DEFAULT_RECENT_MESSAGE_LIMIT,
+  type GatewayDefinition
+} from "../shared/gatewayConfigModel.js";
 
 function makeTempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-repo-"));
@@ -236,7 +239,7 @@ test("repository migration preserves existing personaConfig fields and rules", (
     ["role-panel-message", ""]
   ]);
   assert.equal(updated.recentMessageLimits?.speech, 42);
-  assert.equal(updated.recentMessageLimits?.napcat, 100);
+  assert.equal(updated.recentMessageLimits?.napcat, DEFAULT_RECENT_MESSAGE_LIMIT);
   assert.deepEqual(updated.speechTriggerKeywords, ["Rabi"]);
 });
 

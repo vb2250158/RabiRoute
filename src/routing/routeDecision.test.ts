@@ -346,7 +346,8 @@ test("AgentPacket injects route recent messages using the persona limit", () => 
   appendJsonl(path.join(dataDir, "group-messages.jsonl"), [
     { time: 1710000000, groupId: 10001, userId: 1, senderName: "Old", rawMessage: "old message", messageId: "old" },
     { time: 1710000001, groupId: 10001, userId: 12345, botNickname: "Rabi", isSelf: true, rawMessage: "first recent", messageId: "first" },
-    { time: 1710000002, groupId: 10001, userId: 2, senderName: "Bob", rawMessage: "second recent", messageId: "second" }
+    { time: 1710000002, groupId: 10001, userId: 2, senderName: "Bob", rawMessage: "second recent", messageId: "second" },
+    { time: 1710000003, groupId: 10001, userId: 42, senderName: "Alice", rawMessage: "current prompt", messageId: "msg-1" }
   ]);
   const route = routeProfile({
     recentMessageLimit: 2,
@@ -358,7 +359,7 @@ test("AgentPacket injects route recent messages using the persona limit", () => 
       template: "recent={recentMessages}"
     }]
   });
-  const decision = createRouteDecision(route, "direct_at", groupMessage(), {});
+  const decision = createRouteDecision(route, "direct_at", groupMessage({ rawMessage: "current prompt" }), {});
   assert.ok(decision);
 
   const packet = buildAgentPacket(decision, decision.matchedRules[0], {
@@ -374,4 +375,5 @@ test("AgentPacket injects route recent messages using the persona limit", () => 
   assert.match(packet.message, /second recent/);
   assert.match(packet.message, /出站/);
   assert.doesNotMatch(packet.message, /old message/);
+  assert.equal(packet.message.match(/current prompt/g)?.length, 1);
 });

@@ -132,6 +132,7 @@ export type RoleKnowledgeIndexItem = {
   id: string;
   title: string;
   type: RoleKnowledgeItemType;
+  summary?: string;
 };
 
 export type RequiredReadItem = RoleKnowledgeIndexItem & {
@@ -159,7 +160,31 @@ export type RoleKnowledgeSnapshot = {
   matchedItems: RoleKnowledgeIndexItem[];
   matchedSkills: RoleSkillItem[];
   requiredReadItems: RequiredReadItem[];
+  contextInjection: RoleContextInjectionPolicy;
   pendingConsolidation?: MemoryConsolidationRequest;
+};
+
+export type RoleContextInjectionMode = "focused" | "legacy";
+
+export type RoleContextInjectionPolicy = {
+  mode: RoleContextInjectionMode;
+  requiredReadLimit: number;
+  matchedItemLimit: number;
+  personaMaxChars: number;
+};
+
+export const DEFAULT_FOCUSED_CONTEXT_INJECTION: RoleContextInjectionPolicy = {
+  mode: "focused",
+  requiredReadLimit: 3,
+  matchedItemLimit: 3,
+  personaMaxChars: 1600
+};
+
+export const DEFAULT_LEGACY_CONTEXT_INJECTION: RoleContextInjectionPolicy = {
+  mode: "legacy",
+  requiredReadLimit: 5,
+  matchedItemLimit: 12,
+  personaMaxChars: 3200
 };
 
 export type RoleKnowledgeSnapshotOptions = {
@@ -352,6 +377,33 @@ function positiveLimit(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
   return Math.min(100_000, Math.floor(parsed));
+}
+
+function boundedContextLimit(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.floor(parsed)));
+}
+
+export function normalizeRoleContextInjection(value: unknown): RoleContextInjectionPolicy {
+  const raw = recordValue(value);
+  const defaults = raw.mode === "legacy"
+    ? DEFAULT_LEGACY_CONTEXT_INJECTION
+    : DEFAULT_FOCUSED_CONTEXT_INJECTION;
+  const relevantKnowledgeLimit = raw.relevantKnowledgeLimit == null
+    ? undefined
+    : boundedContextLimit(raw.relevantKnowledgeLimit, defaults.requiredReadLimit, 1, 12);
+  return {
+    mode: defaults.mode,
+    requiredReadLimit: relevantKnowledgeLimit ?? defaults.requiredReadLimit,
+    matchedItemLimit: relevantKnowledgeLimit ?? defaults.matchedItemLimit,
+    personaMaxChars: boundedContextLimit(raw.personaMaxChars, defaults.personaMaxChars, 800, 6000)
+  };
+}
+
+export function roleContextInjectionPolicy(roleDir: string): RoleContextInjectionPolicy {
+  const config = readJson<Record<string, unknown>>(path.join(roleDir, "personaConfig.json")) ?? {};
+  return normalizeRoleContextInjection(config.contextInjection);
 }
 
 function mergeLimits<T extends Record<string, number>>(defaults: T, raw: unknown): T {
@@ -1045,9 +1097,6 @@ type ScoredKnowledgeCandidate = RoleKnowledgeIndexItem & {
   skill?: RoleSkillItem;
 };
 
-const DEFAULT_REQUIRED_READ_LIMIT = 5;
-const MATCHED_ITEM_LIMIT = 12;
-
 function normalizedText(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -1130,6 +1179,7 @@ export function roleKnowledgeSnapshot(
   const activeSkills = skills.filter((item) => item.status === "active");
   const recentMemories = memories.filter((item) => !item.consolidatedAt && ageHours(memoryActivityAt(item)) <= DEFAULT_RECENT_EDITABLE_HOURS);
   const roleId = options.roleId || path.basename(roleDir);
+  const contextInjection = roleContextInjectionPolicy(roleDir);
   const recentMemoryIds = new Set(recentMemories.map((item) => item.id));
   const scoredCandidates: ScoredKnowledgeCandidate[] = [
     ...plans
@@ -1137,6 +1187,7 @@ export function roleKnowledgeSnapshot(
       .map((item) => ({
         id: item.id,
         title: item.title,
+        summary: item.focus,
         type: "plan" as const,
         endpoint: requiredReadEndpoint(roleId, "plan", item.id),
         score: scoreKnowledgeMatch(messageText, item, item.status === "进行中" ? 5 : 0),
@@ -1148,6 +1199,7 @@ export function roleKnowledgeSnapshot(
       .map((item) => ({
         id: item.id,
         title: item.title,
+        summary: item.focus,
         type: "recent_memory" as const,
         endpoint: requiredReadEndpoint(roleId, "recent_memory", item.id),
         score: scoreKnowledgeMatch(messageText, item, recentMemoryIds.has(item.id) ? 5 : 0),
@@ -1158,6 +1210,7 @@ export function roleKnowledgeSnapshot(
     ...consolidatedMemories.map((item) => ({
       id: item.id,
       title: item.title,
+      summary: item.focus,
       type: "consolidated_memory" as const,
       endpoint: requiredReadEndpoint(roleId, "consolidated_memory", item.id),
       score: scoreKnowledgeMatch(messageText, item),
@@ -1170,6 +1223,7 @@ export function roleKnowledgeSnapshot(
       .map((item) => ({
         id: item.id,
         title: item.title,
+        summary: item.summary,
         type: "role_skill" as const,
         endpoint: requiredReadEndpoint(roleId, "role_skill", item.id),
         score: scoreSkillMatch(messageText, item),
@@ -1180,10 +1234,11 @@ export function roleKnowledgeSnapshot(
   ].filter((item) => item.score > 0).sort(sortScoredCandidates);
 
   const requiredReadItems = scoredCandidates
-    .slice(0, options.requiredReadLimit ?? DEFAULT_REQUIRED_READ_LIMIT)
+    .slice(0, options.requiredReadLimit ?? contextInjection.requiredReadLimit)
     .map((item) => ({
       id: item.id,
       title: item.title,
+      summary: item.summary,
       type: item.type,
       endpoint: item.endpoint,
       score: item.score,
@@ -1211,9 +1266,17 @@ export function roleKnowledgeSnapshot(
     activePlans,
     activeSkills,
     recentMemories,
-    matchedItems: scoredCandidates.slice(0, MATCHED_ITEM_LIMIT).map((item) => ({ id: item.id, title: item.title, type: item.type })),
-    matchedSkills: scoredCandidates.filter((item) => item.type === "role_skill" && item.skill).slice(0, MATCHED_ITEM_LIMIT).map((item) => item.skill as RoleSkillItem),
+    matchedItems: scoredCandidates.slice(0, contextInjection.matchedItemLimit).map((item) => ({
+      id: item.id,
+      title: item.title,
+      type: item.type
+    })),
+    matchedSkills: scoredCandidates
+      .filter((item) => item.type === "role_skill" && item.skill)
+      .slice(0, contextInjection.matchedItemLimit)
+      .map((item) => item.skill as RoleSkillItem),
     requiredReadItems,
+    contextInjection,
     pendingConsolidation: options.includePendingConsolidation
       ? pendingMemoryConsolidation(
           roleDir,

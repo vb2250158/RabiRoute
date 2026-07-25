@@ -1,4 +1,9 @@
 {
+  "contextInjection": {
+    "mode": "focused",
+    "relevantKnowledgeLimit": 3,
+    "personaMaxChars": 1600
+  },
   "recentMessageLimits": {
     "napcat": 10,
     "remoteAgent": 10,

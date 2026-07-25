@@ -85,7 +85,7 @@ route 配置固定指向 agentRoleId
 | route 指向的人格 | `adapterConfig.json.agentRoleId` | 路由配置页为真源，人格页可显示和跳转 | 不是消息内容动态选择 |
 | 人格正文 | `data/roles/<RoleId>/persona.md` | 人格配置页 | 可预览、打开文件 |
 | 消息模板规则 | `data/roles/<RoleId>/personaConfig.json` | 人格配置页 | 编辑 route kind、regex、模板、定时计划 |
-| 分消息端最近注入数量 | `personaConfig.json.recentMessageLimits` | 人格配置页 | 已实现 11 端 `0–200` 滑条 + 精确输入，默认 `100`；`0` 只关闭自动注入，不停止记录 |
+| 分消息端最近注入数量 | `personaConfig.json.recentMessageLimits` | 人格配置页 | 已实现 11 端 `0–200` 滑条 + 精确输入，默认 `12`；`0` 只关闭自动注入，不停止记录 |
 | 语音唤醒关键词 | `personaConfig.json.speechTriggerKeywords` | 人格配置页 | 已实现多值编辑；Route 关闭热投递后仅命中时唤醒 |
 | 计划 | `data/roles/<RoleId>/plans/` | 人格工作台 | 展示、召回预览、后续可接读写 |
 | 近期记忆 / 沉淀记忆 | `data/roles/<RoleId>/memory/` | 人格工作台 | 展示、召回预览、后续可接读写 |

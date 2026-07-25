@@ -176,6 +176,7 @@ test("heartbeat busy guard defaults off and preserves an explicit opt-in", () =>
 });
 
 test("persona recent message limits default per endpoint and migrate the legacy scalar", () => {
+  assert.equal(DEFAULT_RECENT_MESSAGE_LIMIT, 12);
   const defaulted = normalizeGatewayDefinition(gateway());
   assert.equal(defaulted.recentMessageLimit, undefined);
   assert.equal(Object.keys(defaulted.recentMessageLimits ?? {}).length, RECENT_MESSAGE_ENDPOINTS.length);
@@ -201,7 +202,7 @@ test("persona recent message limits clamp each endpoint independently", () => {
   assert.equal(normalized.napcat, 31);
   assert.equal(normalized.speech, 200);
   assert.equal(normalized.heartbeat, 0);
-  assert.equal(normalized.wecom, 100);
+  assert.equal(normalized.wecom, DEFAULT_RECENT_MESSAGE_LIMIT);
 });
 
 test("speech push mode belongs to the Route while trigger keywords are normalized as persona data", () => {

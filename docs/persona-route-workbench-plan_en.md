@@ -28,7 +28,7 @@ RabiRoute does not choose a persona by message content. Preview answers:
 
 ## Proposed first release
 
-Already implemented persona controls are not part of the remaining preview work: `speechTriggerKeywords` has a multi-value editor, and `recentMessageLimits` has 11 independent `0–200` slider-plus-exact-input controls with a schema default of `100`. Zero disables injection only.
+Already implemented persona controls are not part of the remaining preview work: `speechTriggerKeywords` has a multi-value editor, and `recentMessageLimits` has 11 independent `0–200` slider-plus-exact-input controls with a schema default of `12`. Zero disables injection only.
 
 - Select one route profile and one simulated route kind.
 - Enter sanitized message/source/target fields.

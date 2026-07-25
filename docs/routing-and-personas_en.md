@@ -43,7 +43,7 @@ One role can serve several routes. Those Routes reuse the same role-owned rules,
 | Persona avatar | An image inside the role directory referenced by `personaConfig.json.avatar` |
 | Hot versus keyword speech delivery | Route `adapterConfig.json.speechPushMode` |
 | Persona names, common addresses, and wake phrases | Persona `personaConfig.json.speechTriggerKeywords` |
-| 11 endpoint auto-context budgets (`0–200`, default `100`; `0` disables injection only) | Persona `personaConfig.json.recentMessageLimits` |
+| 11 endpoint auto-context budgets (`0–200`, default `12`; `0` disables injection only) | Persona `personaConfig.json.recentMessageLimits` |
 | TTS model, voice, language, speed, and speaking instructions | Persona `voice/voice-profile.json` |
 | Current bidirectional message evidence | Persona `conversation/current.jsonl` |
 | Reusable person profiles | Host-wide RabiSpeech `output/speaker-profiles.json`; actual mappings remain explicit `sessionId + speakerLabel` bindings |

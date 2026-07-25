@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## Unreleased - 2026-07-25
+
+### Focused context injection by default
+
+- AgentPacket and Codex Hook now default to the current conversation window, up to three highly relevant plan/memory/skill summaries, and a compact persona workset. Full active indexes, long history, and complete bodies are fetched on demand; Action Gate, reply delivery, and required-read checks remain intact.
+- Unconfigured endpoint conversation budgets change from 100 to 12 bidirectional messages. Explicit legacy `recentMessageLimit` and `recentMessageLimits` values still apply, and the current event is no longer duplicated between `[Message]` and `[Recent messages]`.
+- Personas may opt into `contextInjection`; `focused` is the safe default and `legacy` restores the previous injection shape. The public example uses `relevantKnowledgeLimit=3` and `personaMaxChars=1600`. Existing private persona and secret configuration requires no rewrite.
+
 ## 0.1.20 - 2026-07-21
 
 ### Plan-task completion Hook (experimental)

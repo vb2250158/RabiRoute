@@ -33,7 +33,7 @@ test("maps the speech hot-delivery switch to the route push mode", () => {
 });
 
 test("exposes one recent-context limit for every message endpoint", () => {
-  assert.equal(DEFAULT_RECENT_MESSAGE_LIMIT, 100);
+  assert.equal(DEFAULT_RECENT_MESSAGE_LIMIT, 12);
   assert.equal(MAX_RECENT_MESSAGE_LIMIT, 200);
   assert.deepEqual(RECENT_MESSAGE_ENDPOINTS, [
     "napcat",

@@ -27,7 +27,7 @@ Manager or UI preview
   -> Codex additionalContext or AgentPacket
 ```
 
-Adapters provide role, message or tool signal, session/turn/event identity, and source. They do not own keyword scoring, plan archival, memory activity windows, or `viewedAt`. Entry triggers inject a lightweight full view, reasoning triggers add only newly relevant required reads for the turn, and preview forbids knowledge side effects.
+Adapters provide role, message or tool signal, session/turn/event identity, and source. They do not own keyword scoring, plan archival, memory activity windows, or `viewedAt`. Entry triggers use focused context by default, reasoning triggers add only newly relevant required reads for the turn, and preview forbids knowledge side effects.
 
 ## Injection principles
 
@@ -35,15 +35,15 @@ Default injection is lightweight:
 
 - Essential event fields.
 - CQ `reply` / `at` explanations for QQ messages. Reply chains are expanded from message records, while at mappings are collected together.
-- Recent bidirectional messages allowed by the current endpoint's persona-owned `recentMessageLimits` value.
-- Role, route, and workspace-relative paths.
+- Recent bidirectional messages allowed by the current endpoint's persona-owned `recentMessageLimits` value. The current event is excluded from this window because it already has its own section.
+- Role, route, and workspace-relative paths plus a compact persona core.
 - A link to the Rabi Agent interface guide.
-- Active-plan, recent-memory, and role-skill indexes.
-- Matches and required-read items relevant to the current message.
+- Up to three highly relevant plan, memory, and skill summaries by default.
+- On-demand paths for complete plan, memory, and skill indexes.
 - Log paths.
 - The reply API and serialized `replyContext`.
 
-It does not inject every chat log, complete plan body, complete memory body, consolidated-memory corpus, or full diagnostic report. The handler must fetch a specific item by ID when it needs details.
+It does not inject every chat log, unrelated active indexes, complete plan body, complete memory body, consolidated-memory corpus, or full diagnostic report. The handler must fetch a specific item by ID when it needs details.
 
 ## Canonical bidirectional conversation ledger
 
@@ -57,7 +57,21 @@ data/roles/<RoleId>/conversation/archive/index.json
 
 The ledger includes both directions: QQ replies sent by the role, ASR/TTS, WeCom, Remote Agent, role panel, RabiLink, and other integrated endpoint traffic. Each record keeps the logical adapter, physical transport, direction, speaker, conversation, status, and safe attachment metadata without persisting private absolute attachment paths.
 
-Automatic injection must match all three scopes: the current persona, the current logical endpoint, and the current conversation (for example a QQ group/private peer, WeCom chat, or speech `sessionId`). Inbound and outbound records share one count budget. `personaConfig.json.recentMessageLimits` independently configures 11 endpoint values from `0` to `200`; the schema default is `100`, and `0` disables only automatic injection, never recording. There is no separate 360-entry or other count cap on `current.jsonl`.
+Automatic injection must match all three scopes: the current persona, the current logical endpoint, and the current conversation (for example a QQ group/private peer, WeCom chat, or speech `sessionId`). Inbound and outbound records share one count budget. `personaConfig.json.recentMessageLimits` independently configures 11 endpoint values from `0` to `200`; the schema default is `12`, and `0` disables only automatic injection, never recording. Explicit legacy values remain effective. There is no separate 360-entry or other count cap on `current.jsonl`.
+
+Personas may select the injection policy in `personaConfig.json`:
+
+```json
+{
+  "contextInjection": {
+    "mode": "focused",
+    "relevantKnowledgeLimit": 3,
+    "personaMaxChars": 1600
+  }
+}
+```
+
+`focused` is the safe default: it injects the current conversation window, relevant summaries, and a compact persona workset. `relevantKnowledgeLimit` accepts `1–12`; `personaMaxChars` accepts `800–6000` for the Codex Hook excerpt. Set `"mode": "legacy"` to restore full active indexes, the previous 5/12 recall limits, and the 3200-character persona excerpt. Existing files without this field remain readable and require no private-value migration.
 
 Archival follows record timestamps rather than deleting data at a calendar boundary. When an archive check finds any record older than 72 hours, the complete contiguous prefix older than 24 hours moves to `<firstSequence>~<lastSequence>.jsonl`. Automatic context reads only `current.jsonl`. Archives remain preserved and can be queried explicitly through the injected paths.
 
@@ -114,12 +128,10 @@ Memory: <memoryDir>
 
 [Memory and plans]
 Interface guide: <agentInterfaceDocPath>
-API hints
-Available skills
-Active plans
-Recent memories
-Matched skills
-Matched knowledge
+Compact on-demand API hints
+Full active-index query paths
+Matched skill summaries
+Matched plan/memory summaries
 
 [Pre-action context confirmation]
 <required-read items and GET endpoints>
@@ -214,7 +226,7 @@ Advanced route templates can use actual values such as:
 {rolePanelLogPath}
 ```
 
-Active-plan, recent-memory, skill, and match indexes are produced by the wrapper itself. They are not independent free-form route-template variables. See [Routing Configuration](routing-configuration_en.md) for the broader template vocabulary.
+Focused match summaries and full-index query paths are produced by the wrapper itself. Legacy mode expands the active-plan, recent-memory, and skill indexes. None of these are independent free-form route-template variables. See [Routing Configuration](routing-configuration_en.md) for the broader template vocabulary.
 
 ## Boundary
 
