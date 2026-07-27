@@ -70,7 +70,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 
 ## Core fields
 
-- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, and `wecom`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
+- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `wecom`, and `weixin`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
 - `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
 - `allowedFileRoots`: real-path allowlist for local file output. A local QQ group-file upload is blocked when this is empty or the resolved file leaves the allowlist.
@@ -87,7 +87,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `heartbeatSkipWhenAgentBusy`: skip a heartbeat while the fixed Codex thread is still active. Other message kinds are unaffected.
 - `speechPushMode`: Route-owned speech delivery mode. `hot` delivers every completed ASR segment immediately. `keyword` records every segment but wakes the Agent only after a persona-keyword match. WebGUI's **Hot delivery** switch maps On to `hot` and Off to `keyword`.
 - `speechTriggerKeywords`: persona-owned names, common addresses, and wake phrases in `personaConfig.json`. When the list is empty and Hot delivery is off, ASR remains recorded and never silently falls back to `hot`.
-- `recentMessageLimits`: persona-owned `0–200` auto-injection budgets for `napcat`, `remoteAgent`, `heartbeat`, `rolePanel`, `speech`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `webhook`, and `wecom`. The schema default is `12`; `0` disables only automatic injection. Legacy `recentMessageLimit` and explicit endpoint values remain effective.
+- `recentMessageLimits`: persona-owned `0–200` auto-injection budgets for `napcat`, `remoteAgent`, `heartbeat`, `rolePanel`, `speech`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `webhook`, `wecom`, and `weixin`. The schema default is `12`; `0` disables only automatic injection. Legacy `recentMessageLimit` and explicit endpoint values remain effective.
 - `contextInjection`: persona-owned focused-context policy. It defaults to `{"mode":"focused","relevantKnowledgeLimit":3,"personaMaxChars":1600}`; `mode=legacy` restores full active indexes. The numeric ranges are `1–12` and `800–6000`.
 - `dataDir`, `rolesDir`, `configName`, `agentRoleId`, `agentRoleFile`: storage and role binding.
 
@@ -101,12 +101,14 @@ Windows paths may use either slash style in WebUI. Only hand-written JSON requir
 | `heartbeat` | verified | Internal scheduled events. |
 | `speech` | experimental | RabiPC/RabiSpeech resident ASR. Hot delivery sends every segment; keyword mode records all segments and sends only persona-keyword matches. Successful same-session TTS joins ASR in the bidirectional persona context. |
 | `rolePanel` | verified | Built-in Manager/Qt role conversation capability. It is available by default, hidden from WebGUI's configurable adapter list, and is not a network listener. |
+| Plan approval | verified system event | Not a message adapter. Manager emits `plan_feedback` after persisting the feedback audit; it has no configurable recent-message budget and does not enter the role timeline or unified conversation ledger. |
 | `remoteAgent` | experimental | Manager discovers and connects remote bridges for tasks/events/files. |
 | `webhook` | experimental | Generic POST source for systems without a dedicated adapter. |
 | `fennenote` | experimental | Voice-transcript input and optional output bridge. |
 | `xiaoai` | experimental/design-dependent | Dedicated integration route; verify the actual bridge environment. |
 | `rabilink` | experimental | Relay/worker/device observation and downlink path. |
 | `wecom` | experimental | WeCom smart-bot WebSocket and Outbox group sends. |
+| `weixin` | experimental prototype | OpenClaw iLink QR login and long-poll ingress for personal Weixin. Text replies are source-session-only; media is record-only. |
 | `wearable` | experimental | Structured wearable health observations through the global RabiLink Relay worker. Samples enter a role-scoped timeline; only threshold or sleep-state alerts reach the Agent as `wearable_health_alert`. |
 
 Named platforms should use their dedicated adapter rather than being folded into the generic webhook.
@@ -126,7 +128,9 @@ Codex/ChatGPT Desktop must be running for real delivery. RabiRoute may open `cod
 
 ## RabiLink global configuration
 
-The PC identity and Relay connection live in `data/Config.json`, including `rabiGuid` and `rabiLinkRelay` (`enabled`, `url`, `token`, `deviceId`, and timing options). The Manager registers the PC and proxies remote RibiWebGUI independently of one route process. A route still needs the `rabilink` message adapter to consume device observations.
+The PC identity and Relay connection live in `data/Config.json`, including `rabiGuid` and `rabiLinkRelay` (`enabled`, `url`, `token`, `deviceId`, and timing options). Remote WebGUI identifies the PC at `/manage/<account>/<RabiGUID>/`; the legacy `/webgui` child path remains only for compatibility. Manager registers the PC and proxies remote RibiWebGUI independently of one route process. It also subscribes to local Manager `/api/events` and forwards non-`ready` events to the Relay's remote-WebGUI SSE; attachments, downloads, and media ranges use the same constrained WebGUI channel. A route still needs the `rabilink` message adapter to consume device observations.
+
+The same file owns `webguiLan`, the local Manager's LAN WebGUI switch and access key. It defaults to `enabled=false`, keeping Manager on `127.0.0.1`. Enabling it from the local Console creates a random 32-byte access key when needed; after Manager restarts it listens on `0.0.0.0`. Use `http://<Rabi-PC-LAN-IP>:8790/#/overview?webgui_token=<key>`. The browser keeps the captured key only for the current session and removes it from the address bar. Enable, generate, and rotate operations accept only requests originating from the Manager PC itself, through either loopback or one of that PC's own LAN addresses; other devices remain denied, and rotation invalidates old links immediately.
 
 Legacy per-route Relay fields remain readable for compatibility; new configuration belongs in the global file. Public examples never include a Relay URL/token.
 
@@ -135,6 +139,10 @@ Record-first sources such as FenneNote can be selected through `routeVariables.r
 ## WeCom
 
 `wecomBotId`, `wecomBotSecret`, and optional `wecomWsUrl` configure the smart-bot WebSocket. Prefer `WECOM_BOT_ID`, `WECOM_BOT_SECRET`, and `WECOM_WS_URL` for real credentials. See [WeCom Integration](wecom-integration_en.md).
+
+## Personal Weixin prototype
+
+`weixinBaseUrl` and `weixinBotType` configure the OpenClaw/iLink prototype and default to `https://ilinkai.weixin.qq.com` and `3`. `WEIXIN_BASE_URL` and `WEIXIN_BOT_TYPE` may override them. QR-login tokens, sync cursors, and per-session context tokens stay under runtime `data/` and must never enter public examples. WebGUI displays the QR code and login status. The first version forwards text as `weixin_message`, records media without waking the Agent, and can reply only to a source session with a known context token. Full account lifecycle controls such as logout/switching and real-account acceptance are not implemented.
 
 ## Multiple routes and shared roles
 

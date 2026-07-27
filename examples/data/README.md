@@ -18,10 +18,11 @@
 - 给默认人格提供 `roles/Rabi/plans` 和 `roles/Rabi/memory` 的公开示例结构。
 - 给默认人格提供“一计划一任务”跟踪 Skill 范例；它不绑定具体聊天平台、审批人或项目规范。
 - 提供 `route/RabiLink` 与 `roles/RabiActive` 配套模板，演示 AIUI observation 的 record-first 账本、空闲/周期审阅和任务外主动下行；Relay 地址与 token 仍只在本机全局配置中填写。
+- 提供默认禁用的 `route/weixin` 个人微信实验模板；登录 token、同步游标和 context token 只会在启用后写入本机运行期 `data/`，示例不包含真实账号或凭证。
 - 演示本地路由配置的 `rolesDir` 应该指向 `./data/roles`。
 - 让用户复制后可以直接在 WebUI 里选择并预览示例人格。
 
-整包复制后只有 `main` 默认 Route 启用。RabiLink、voice-chat、Rokid 原生语音、XiaoAI 和 WeCom 均为禁用模板。填写凭据、检查工作目录和端口后再逐条启用。
+整包复制后只有 `main` 默认 Route 启用。RabiLink、voice-chat、Rokid 原生语音、XiaoAI、WeCom 和个人微信 Weixin 均为禁用模板。填写凭据或完成扫码、检查工作目录和端口后再逐条启用。
 
 使用方式：
 

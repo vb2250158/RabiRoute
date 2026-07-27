@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planMemoryApiHint } from "./roleKnowledgeContext.js";
+import { buildRoleKnowledgeContextView, planMemoryApiHint } from "./roleKnowledgeContext.js";
 
 test("AgentPacket plan hints explain the shared approval feedback workflow", () => {
   const hints = planMemoryApiHint("Rabi Test").join("\n");
@@ -17,4 +17,23 @@ test("AgentPacket plan hints explain the shared approval feedback workflow", () 
   assert.match(hints, /根据意见补充/);
   assert.match(hints, /status=暂停/);
   assert.match(hints, /currentStepId/);
+  assert.match(hints, /计划 POST\/PATCH 的 attachments/);
+  assert.match(hints, /name\/mimeType\/contentBase64/);
 });
+
+test("focused AgentPacket hints keep plan attachment discovery available", () => {
+  const view = buildRoleKnowledgeContextView("Rabi Test", {
+    contextInjection: { mode: "focused" },
+    requiredReadItems: [],
+    matchedSkills: [],
+    activePlans: [],
+    activeSkills: [],
+    recentMemories: [],
+    matchedItems: []
+  } as unknown as Parameters<typeof buildRoleKnowledgeContextView>[1]);
+  const hints = view.apiHintLines.join("\n");
+
+    assert.match(hints, /待审批计划/);
+    assert.match(hints, /计划 attachments/);
+    assert.match(hints, /图片、视频预览/);
+  });

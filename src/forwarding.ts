@@ -11,7 +11,8 @@ import {
   appendManualTriggerEventToDir,
   appendPrivateMessageToDir,
   appendVoiceTranscriptEventToDir,
-  appendWeComMessageToDir
+  appendWeComMessageToDir,
+  appendWeixinMessageToDir
 } from "./history.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
 import {
@@ -20,6 +21,7 @@ import {
   isHeartbeatRecord,
   isManualTriggerRecord,
   isWeComRecord,
+  isWeixinRecord,
   isVoiceTranscriptRecord
 } from "./routing/routeDecision.js";
 import type {
@@ -138,6 +140,9 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   if (routeKind === "role_panel_message") {
     return "role_panel_message";
   }
+  if (routeKind === "plan_feedback") {
+    return "plan_feedback";
+  }
   if (routeKind === "voice_transcript") {
     return "voice_transcript";
   }
@@ -149,6 +154,9 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   }
   if (routeKind === "wecom_message") {
     return "wecom_message";
+  }
+  if (routeKind === "weixin_message") {
+    return "weixin_message";
   }
   return routeKind === "private" ? "private" : "group_mention";
 }
@@ -278,6 +286,8 @@ function summarizeDeliveryResult(routeKind: ForwardRouteKind, record: ForwardRec
 function appendRecordToRoleDataDir(record: ForwardRecord, dataDir: string): void {
   if (isWeComRecord(record)) {
     appendWeComMessageToDir(record, dataDir);
+  } else if (isWeixinRecord(record)) {
+    appendWeixinMessageToDir(record, dataDir);
   } else if (isGroupRecord(record)) {
     appendGroupMessageToDir(record, dataDir);
   } else if (isHeartbeatRecord(record)) {
@@ -315,6 +325,9 @@ function recordInboundForRoutes(
   record: ForwardRecord,
   options: ForwardMessageOptions
 ): number {
+  // Plan feedback already has a dedicated JSONL audit record. Do not duplicate
+  // it into chat history or the persona conversation ledger.
+  if (routeKind === "plan_feedback") return 0;
   const recordedRawDirs = new Set<string>();
   const recordedConversationDirs = new Set<string>();
   let conversationRecordCount = 0;

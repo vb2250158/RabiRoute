@@ -14,7 +14,7 @@
 
 想先运行主项目，优先复制 [`examples/data/`](./data/README.md) 到仓库根目录的 `data/`。这会得到一条默认启用的 QQ / NapCat + heartbeat 路由，以及 Rabi 人格、消息规则、计划和记忆结构示例。
 
-整包中只有 `main` 默认启用。RabiLink、Rokid 原生语音、voice-chat、WeCom 和 XiaoAI 都是需要凭据、设备或外部服务的禁用模板，不会在首次复制后自动连接。
+整包中只有 `main` 默认启用。RabiLink、Rokid 原生语音、voice-chat、WeCom、个人微信 Weixin 和 XiaoAI 都是需要凭据、设备、扫码或外部服务的禁用模板，不会在首次复制后自动连接。
 
 ```powershell
 xcopy examples\data data /E /I

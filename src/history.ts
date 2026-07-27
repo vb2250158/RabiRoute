@@ -67,7 +67,21 @@ export type RolePanelMessageRecord = {
   gatewayId?: string;
   routeProfileId?: string;
   attachments?: unknown[];
+  replyContext?: Record<string, unknown>;
   adapterType?: "rolePanel";
+};
+
+export type PlanFeedbackMessageRecord = {
+  time: number;
+  rawMessage: string;
+  messageId?: number | string;
+  senderName?: string;
+  roleId?: string;
+  gatewayId?: string;
+  routeProfileId?: string;
+  attachments?: unknown[];
+  replyContext?: Record<string, unknown>;
+  adapterType: "planFeedback";
 };
 
 export type VoiceTranscriptEventRecord = {
@@ -134,10 +148,24 @@ export type WeComMessageRecord = {
   raw?: unknown;
 };
 
+export type WeixinMessageRecord = {
+  time: number;
+  rawMessage: string;
+  messageId: number | string;
+  senderName?: string;
+  adapterType: "weixin";
+  sessionId: string;
+  userId: string;
+  messageType: string;
+  repliedMessageId?: string;
+  quotedText?: string;
+  segments?: unknown[];
+};
+
 export type AgentPacketRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message";
+  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message";
   text: string;
 };
 
@@ -305,6 +333,19 @@ export function appendWeComMessage(record: WeComMessageRecord): void {
 
 export function appendWeComMessageToDir(record: WeComMessageRecord, dataDir: string): void {
   fs.appendFileSync(wecomLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function weixinLogPath(dataDir = config.memoryDataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "weixin-messages.jsonl");
+}
+
+export function appendWeixinMessage(record: WeixinMessageRecord): void {
+  fs.appendFileSync(weixinLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+export function appendWeixinMessageToDir(record: WeixinMessageRecord, dataDir: string): void {
+  fs.appendFileSync(weixinLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 function agentPacketPath(dataDir = config.memoryDataDir): string {

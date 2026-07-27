@@ -27,11 +27,13 @@ export function planMemoryApiHint(roleId: unknown): string[] {
   return [
     "可用 API 提示：",
     `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
+      "- 待审批计划如有实际效果图、演示视频、设计稿、报告或其它相关文件，应通过计划 POST/PATCH 的 attachments 一并提交：本机文件使用 path，内存内容使用 name/mimeType/contentBase64；不要只把文件路径写进标题、focus 或审批说明",
     "- 用户要求暂停计划时，PATCH 顶层 status=暂停，保留当前进行中步骤和 currentStepId 作为恢复位置，并停止继续驱动绑定任务；恢复时把顶层 status 改回进行中",
     "- 请求审批前，应尽量把当前步骤 approvalRequest 写清：request、reason、files/commands/changes、validation、rollback、outOfScope；不得长期只写等待授权或通用安全说明",
     "- 信息不完整时仍要接收用户审批意见，不得用门禁限制用户；文件路径、完整命令和外部目标来自真实调查，并根据意见补充或更新说明",
     `- 记录计划审批：GET ${base}/plans/{planId}/feedback、POST ${base}/plans/{planId}/feedback；QQ 等外部入口用 author=user、source=qq、notifyAgent=false 记录，Agent 处理说明用 author=agent、kind=approval_response、notifyAgent=false`,
-    "- 审批意见只形成计划审计记录，不直接推进步骤；Agent 判断后必须另行 PATCH 对应计划",
+    "- 收到计划审批意见后，先 GET 当前计划和反馈，再 PATCH 更新对应计划/步骤，最后把面向用户的处理说明写成 approval_response；不要只在 Agent 会话里直接回答",
+    "- 审批意见只形成计划审计记录，不直接推进步骤；Agent 判断后必须另行 PATCH 对应计划；计划说明要具体到真实文件、完整命令、变更影响、验证、回退和排除范围",
     `- 查看记忆：GET ${base}/memory、GET ${base}/memory/recent、GET ${base}/memory/recent/{memoryId}、GET ${base}/memory/consolidated、GET ${base}/memory/consolidated/{memoryId}`,
     `- 查看角色技能：GET ${base}/skills、GET ${base}/skills/{skillId}`,
     `- 新增近期记忆：POST ${base}/memory/recent`,
@@ -44,7 +46,8 @@ function focusedApiHint(roleId: unknown): string[] {
   const base = roleApiBase(roleId);
   return [
     "计划、记忆和技能默认只注入与当前输入高相关的摘要；长历史与完整内容按需查询。",
-    `按需查询/维护：${base}/plans、${base}/memory、${base}/skills；执行写入前仍须遵守对应接口校验与 Action Gate。`
+    `按需查询/维护：${base}/plans、${base}/memory、${base}/skills；执行写入前仍须遵守对应接口校验与 Action Gate。`,
+      "待审批计划如果已有实际效果图、演示视频、设计稿、报告或其它文件，应写入计划 attachments；可传本机 path 或 name/mimeType/contentBase64，页面会展示附件并支持图片、视频预览。"
   ];
 }
 

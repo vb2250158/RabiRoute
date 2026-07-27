@@ -30,6 +30,7 @@ function plan(gatewayId?: string): PlanItem {
     title: "计划任务完成提醒",
     focus: "计划任务完成提醒",
     status: "进行中",
+    attachments: [],
     steps: [{ id: "run", title: "执行任务", status: "进行中" }],
     taskBinding: {
       agentType: "codex",

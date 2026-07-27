@@ -44,6 +44,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | NapCat / OneBot | 已验证 | Gateway 子进程通过 WebSocket 接收 QQ 群聊和私聊；Manager 可扫描、添加、启动、重启、移除和修复多个 NapCat 实例；OneBot HTTP 用于状态查询和外发；合并转发消息会展开为文本/媒体证据。 |
 | Heartbeat | 已验证 | Gateway 子进程产生内部定时事件；规则支持间隔、时间窗口、每天指定时间和单次指定时间；可选在固定 Codex 线程忙碌时跳过。 |
 | 角色面板 | 已验证 | Manager/托盘提供的内置本地入口，不是独立网络 listener；使用固定 `role_panel_message` 规则，记录写入角色目录的 timeline。 |
+| 计划审批事件 | 已验证 | 审批意见落盘后由 Manager 生成独立 `plan_feedback` 系统事件；不依赖可编辑消息规则，不写聊天 timeline/会话账本，不注入最近消息。 |
 | Manual trigger | 已验证 | Manager API 和日志诊断页可真实触发 `manual_trigger` 或 heartbeat 规则；它不是消息适配器。 |
 | Remote Agent | 实验支持 | Manager 作为 v3 出站控制端扫描并连接远端 bridge，使用密码挑战握手，支持任务、事件和双向文件；Gateway 子进程只显示占位状态，不另开 listener。 |
 | RabiSpeech 语音消息端 | 实验支持 | RabiSpeech 只维护一份 ASR/VAD、声纹处理和 FIFO。Android 手机/眼镜与独立语音客户端一样只持续传 PCM，不切句、不跑模型；PC 对手机流完成处理后只投 `rabilink` Route，本机/普通远程声卡只投 `speech` Route。每段转写先写一次主机级语音消息库，各绑定人格再分别写自己的原始记录和会话上下文。主机只保存不透明声纹/聚类证据，不判断声纹是谁或谁是“用户”；手机回复默认回原设备。正式自动声纹只接受显式确认的真人私有数据集及完整哈希门禁报告，合成 TTS/旧报告始终只作预检。 |
@@ -53,6 +54,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 智能手表 / 手环健康消息端 | 实验支持 | `wearable.health` 结构化观测进入按角色分日的健康时间线；Manager 可查询当前状态、历史和摘要，阈值/冷却命中后以 `wearable_health_alert` 投递 Agent。Android 可选 Health Connect 或 PC ADB Companion；Health Connect 优先事件触发，小米 ADB Provider 因没有可靠变更通知，在用户显式启用 Companion 后保留分钟级低频轮询。小米真机已闭环心率、睡眠会话、阶段、睡/醒状态、去重和查询；无需 ADB 的 MiWear SPP 直连仍未作为默认采集器。 |
 | 通用 Webhook | 实验支持 | 接收没有专用适配器的外部 POST；已有命名平台应使用自己的适配器，以保留日志和回传语义。 |
 | 企业微信 / WeCom | 实验支持 | 使用 `@wecom/aibot-node-sdk` 的智能机器人 WebSocket 长连接，支持群消息进入和 Outbox 回发；需要真实 Bot ID/Secret 验证。 |
+| 个人微信 / Weixin | 实验原型 | 通过 OpenClaw iLink API 扫码并长轮询个人微信消息；WebGUI 可显示二维码与登录状态，文本可进入 Agent 并按来源会话回发，媒体只记录。账号退出/切换等完整生命周期、长期在线、真实账号风险和稳定性验收仍未完成。 |
 
 `disabled` 只是兼容配置值，不是一个消息入口。
 
@@ -60,10 +62,10 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 
 - 一条 route 可以配置多个消息适配器、每适配器输入/输出 policy、多个 Agent adapter、pipeline、工作目录和人格绑定。
 - 路由规则保存在人格根级 `personaConfig.json` 中；多条 Route 绑定同一人格时复用同一套规则、语音关键词和上下文额度。无人格 route 会生成默认规则；角色面板规则始终存在。
-- 当前 route kind：`private`、`group_message`、`direct_at`、`direct_reply`、`indirect_reply`、`heartbeat`、`manual_trigger`、`role_panel_message`、`voice_transcript`、`rabilink`、`wearable_health_alert`、`wecom_message`。
+- 当前 route kind：`private`、`group_message`、`direct_at`、`direct_reply`、`indirect_reply`、`heartbeat`、`manual_trigger`、`role_panel_message`、`plan_feedback`、`voice_transcript`、`rabilink`、`wearable_health_alert`、`wecom_message`、`weixin_message`。
 - `RouteDecision` 只负责规则匹配；`forwarding.ts` 遍历 active route profile、写审计并投递每一条命中规则。
-- `AgentPacket` 会注入事件、当前人格/逻辑消息端/会话的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`。
-- 人格 `recentMessageLimits` 对 11 个消息端分别限制 `0–200` 条，默认 `12`；`0` 只关闭注入。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
+- `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`；Heartbeat 与 `plan_feedback` 固定省略历史段。
+- 人格 `recentMessageLimits` 对普通消息端分别限制 `0–200` 条，默认 `12`；`0` 只关闭注入。Heartbeat 始终按 `0` 处理。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
 - 已匹配的普通消息直接 `steer/start` Desktop owner；Heartbeat 可专门配置忙碌跳过，语音可专门配置热/关键词投递。
 - Delivery replay 已实现：真实投递会写 `delivery-replay-ledger.jsonl`，可按 attempt 或消息记录重新进入投递链。
 - 人格路由 dry-run / AgentPacket 预览仍是设计中功能，当前 WebGUI 没有无副作用预览 API。
@@ -88,15 +90,18 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | Agent 本地会话 | 默认 legacy pipeline 使用 `outputAdapter=agent`；没有明确外部目标时，回复保留在 Agent 会话，不创建草稿。 |
 | QQ / NapCat | 支持来源回复和明确群/私聊目标；支持 text/image/voice/file；群文件必须通过 `allowedFileRoots`，使用 `upload_group_file`；可生成真实引用回复段。 |
 | WeCom | 支持来源群聊回复和明确 chat/group 目标；使用 SDK 发送，受 adapter policy 限制。 |
+| 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话文本；不能主动向任意联系人发消息，媒体发送未实现。 |
 | FenneNote | 已退役；只为旧 Route 保留 reply/playback 兼容，不作为新输出方案。 |
 | RabiLink | 受 route policy 控制，回复或主动文本进入连续 Relay 消息流；主动下行不需要伪造一个来源任务。 |
 | 角色面板 | 直接追加角色 timeline，可带附件描述。 |
 
-计划页已经支持与 `planId/stepId` 关联的审批意见记录，并可通过现有角色面板链通知 Agent；这只服务于 Agent 维护的计划，不会直接推进计划，也不等于通用、持久化的 Outbox Action Queue。`draft` 仍是 Outbox 的结果和审计状态，不应写成已经完成的统一审批中心。
+计划页已经支持与 `planId/stepId` 关联的审批意见记录，并可通过独立 `plan_feedback` 系统事件通知 Agent；这只服务于 Agent 维护的计划，不会直接推进计划，也不等于通用、持久化的 Outbox Action Queue。`draft` 仍是 Outbox 的结果和审计状态，不应写成已经完成的统一审批中心。
 
 ## Manager 与 WebGUI
 
 - Manager 默认在 `http://127.0.0.1:8790/` 提供 RibiWebGUI 和 HTTP API，管理 route 配置、子进程生命周期、扫描、日志和全局设置。
+- 控制台可显式开启局域网 WebGUI，并在 `data/Config.json.webguiLan` 生成/轮换独立访问密钥。重启后 Manager 从回环监听切换到局域网监听；此时从本机 `localhost/127.0.0.1` 打开的页面会自动重定向到优先局域网 IP，并保留当前 Route 和页面。非本机的 Manager API、SSE 和私有资源请求必须携带 `webgui_token` 或专用请求头，静态登录壳本身不授予读取权限。开关和密钥只能由运行 Manager 的本机通过回环或自己的局域网地址管理，其他设备仍被拒绝；左侧“当前路由”切换会重定向 `#/routes/<Route配置名>/overview` 或 `knowledge`，控制台可复制对应完整链接。
+- 已登录 RabiLink Relay 管理后台后，可从 `https://<Relay>/manage/<账号>/<RabiGUID>/` 访问目标 PC 的完整 WebGUI 控制面。普通 API、图片、附件、音频、文件下载和视频 Range 经应用 token 认证的 PC worker 转发；Manager SSE 经独立事件通道实时推送。管理 Cookie、RabiLink 应用 token 与局域网 `webgui_token` 保持三个独立边界。
 - WebGUI 当前有：控制台、消息适配器、Rabi 人格、计划与记忆、日志诊断、使用手册六类页面；快速配置向导可以选择消息入口、处理端和人格。
 - 控制台管理 Rabi 实例名/GUID、全局 RabiLink Relay 连接、route/role 目录和 route 启停。
 - 消息适配器页包含 NapCat 多实例管理、Remote Agent 扫描连接、外部适配器诊断、Agent 扫描和 pipeline/工作目录配置。
@@ -104,7 +109,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 日志页展示连接状态、Codex 投递通道和最近日志，并能执行手动触发。Delivery replay 已有 Manager API 和 ledger，但当前页面没有回放按钮。
 - 顶栏支持简体中文 / English 运行时切换。语言状态统一保存在浏览器 `localStorage` 的 `rabiroute:webgui:locale`，并同步 `<html lang>`；它只是 UI 偏好，不写入 route、role 或 Manager 配置。
 - 英文界面只翻译登记过的界面文案和动态状态；route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据保留原文。使用手册直接读取 `docs/user-guide/` 中人工维护的中英文 Markdown，不维护第三份页面内容。
-- Manager 还提供 Agent thread bridge、Role Knowledge、Remote Agent、多 Rabi 实例、NapCat 管理和 RabiLink 远程 WebGUI 代理 API。
+- Manager 还提供 Agent thread bridge、Role Knowledge、Remote Agent、多 Rabi 实例、NapCat 管理和 RabiLink 远程 WebGUI HTTP/SSE 代理 API。
 
 ## 角色知识与运行数据
 

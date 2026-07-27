@@ -3,7 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
-import { adapterLabel, adaptersNeedGatewayRuntime, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
+import { managerEventSource } from "../managerApi";
+import { routeScopedKnowledgeUrl, routeScopedOverviewUrl } from "../routeScopedNavigation";
+import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
+import { redirectCurrentWebguiToLan } from "../webguiLanRedirect";
 
 const store = useGatewayStore();
 const router = useRouter();
@@ -29,6 +32,34 @@ const rabiLinkSpeechServiceUrl = ref("http://127.0.0.1:8781");
 const gatewayActionId = ref("");
 const gatewayActionError = ref("");
 const deletingGatewayId = ref("");
+type WebguiLanUrl = { name?: string; address: string; cidr?: string; url: string };
+type WebguiLanAccess = {
+  enabled: boolean;
+  tokenConfigured: boolean;
+  token: string;
+  canManage: boolean;
+  managerHost: string;
+  managerPort: number;
+  listeningOnLan: boolean;
+  restartRequired: boolean;
+  hostManagedByEnvironment: boolean;
+  urls: WebguiLanUrl[];
+};
+const webguiLanAccess = ref<WebguiLanAccess>({
+  enabled: false,
+  tokenConfigured: false,
+  token: "",
+  canManage: true,
+  managerHost: "127.0.0.1",
+  managerPort: 8790,
+  listeningOnLan: false,
+  restartRequired: false,
+  hostManagedByEnvironment: false,
+  urls: []
+});
+const webguiLanSaving = ref(false);
+const webguiLanError = ref("");
+const webguiLanNotice = ref("");
 
 function avatarUrlForGateway(gatewayId: string, roleId?: string): string {
   const options = store.runtimeFor(gatewayId).roleInfo?.options || [];
@@ -44,6 +75,93 @@ async function loadDirConfig() {
   } catch { /* ignore */ }
   rabiName.value = store.meta.rabiName || store.meta.computerName || "";
   loadRabiLinkRelayForm();
+  await loadWebguiLanAccess();
+}
+
+async function loadWebguiLanAccess(): Promise<void> {
+  try {
+    const response = await fetch("/api/webgui-access");
+    const body = await response.json();
+    if (!response.ok || body.code !== 0 || !body.data) throw new Error(body.message || "读取局域网 WebGUI 配置失败");
+    webguiLanAccess.value = body.data as WebguiLanAccess;
+    webguiLanError.value = "";
+  } catch (error) {
+    webguiLanError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function updateWebguiLanAccess(patch: { enabled?: boolean; regenerateToken?: boolean }): Promise<boolean> {
+  if (webguiLanSaving.value || !webguiLanAccess.value.canManage) return false;
+  webguiLanSaving.value = true;
+  webguiLanError.value = "";
+  webguiLanNotice.value = "";
+  try {
+    const response = await fetch("/api/webgui-access", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    const body = await response.json();
+    if (!response.ok || body.code !== 0 || !body.data) throw new Error(body.message || "保存局域网 WebGUI 配置失败");
+    webguiLanAccess.value = body.data as WebguiLanAccess;
+    if (redirectCurrentWebguiToLan(webguiLanAccess.value)) return true;
+    webguiLanNotice.value = webguiLanAccess.value.restartRequired
+      ? "配置已保存；重启 Manager 后监听范围才会改变。"
+      : "局域网 WebGUI 配置已更新。";
+    return true;
+  } catch (error) {
+    webguiLanError.value = error instanceof Error ? error.message : String(error);
+    return false;
+  } finally {
+    webguiLanSaving.value = false;
+  }
+}
+
+async function toggleWebguiLanAccess(enabled: boolean | null): Promise<void> {
+  if (typeof enabled !== "boolean") return;
+  await updateWebguiLanAccess({ enabled });
+}
+
+async function regenerateWebguiLanToken(): Promise<void> {
+  if (webguiLanAccess.value.tokenConfigured && !window.confirm("轮换访问密钥会立即使旧链接失效。确定继续吗？")) return;
+  await updateWebguiLanAccess({ regenerateToken: true });
+}
+
+const primaryWebguiLanUrl = computed(() => webguiLanAccess.value.urls[0]?.url || "");
+const selectedRouteOverviewLanUrl = computed(() => {
+  const gateway = store.selectedGateway;
+  return gateway
+    ? routeScopedOverviewUrl(primaryWebguiLanUrl.value, configNameFor(gateway))
+    : primaryWebguiLanUrl.value;
+});
+const selectedRouteKnowledgeLanUrl = computed(() => {
+  const gateway = store.selectedGateway;
+  return gateway
+    ? routeScopedKnowledgeUrl(primaryWebguiLanUrl.value, configNameFor(gateway))
+    : "";
+});
+const webguiLanStatusText = computed(() => {
+  const access = webguiLanAccess.value;
+  if (access.hostManagedByEnvironment) return `监听地址由 GATEWAY_MANAGER_HOST=${access.managerHost} 管理。`;
+  if (access.restartRequired) return access.enabled
+    ? "已允许局域网访问；重启 Manager 后开始监听局域网。"
+    : "已关闭局域网访问；重启 Manager 后恢复为仅本机监听。";
+  if (access.listeningOnLan) return "Manager 正在监听局域网；非本机请求必须携带访问密钥。";
+  return "Manager 当前只监听本机回环地址，局域网设备无法连接。";
+});
+
+async function copyWebguiLanText(value: string, successMessage: string): Promise<void> {
+  if (!value) {
+    webguiLanError.value = "当前没有可复制的局域网地址。";
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    webguiLanNotice.value = successMessage;
+    webguiLanError.value = "";
+  } catch (error) {
+    webguiLanError.value = `复制失败：${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 function loadRabiLinkRelayForm(): void {
@@ -160,7 +278,7 @@ let managerEvents: EventSource | null = null;
 onMounted(async () => {
   await loadDirConfig();
   await refreshRelayRuntime();
-  managerEvents = new EventSource("/api/events");
+  managerEvents = managerEventSource("/api/events");
   managerEvents.addEventListener("rabilink_status", (raw) => {
     try {
       store.meta.rabiLinkRelayRuntime = JSON.parse((raw as MessageEvent).data || "{}");
@@ -535,6 +653,103 @@ const selectedAgentNote = computed(() => {
         <div class="form-grid">
           <v-text-field v-model="routeDir" label="路由数据目录" placeholder="data/route" density="compact" hide-details />
           <v-text-field v-model="rolesDir" label="角色目录" placeholder="data/roles" density="compact" hide-details />
+        </div>
+        <v-divider class="my-4" />
+        <div class="section-title-row compact-row mb-2">
+          <div>
+            <div class="section-title small-title">局域网访问 WebGUI</div>
+            <div class="section-note">让同一局域网中的手机或电脑直接访问这台 Rabi PC；访问密钥由 Manager 统一校验。</div>
+          </div>
+          <v-switch
+            :model-value="webguiLanAccess.enabled"
+            label="允许局域网访问"
+            color="success"
+            density="compact"
+            inset
+            hide-details
+            :loading="webguiLanSaving"
+            :disabled="webguiLanSaving || !webguiLanAccess.canManage || webguiLanAccess.hostManagedByEnvironment"
+            @update:model-value="toggleWebguiLanAccess"
+          />
+        </div>
+        <v-alert v-if="webguiLanError" type="error" variant="tonal" density="compact" class="mb-3">{{ webguiLanError }}</v-alert>
+        <v-alert v-if="webguiLanNotice" type="success" variant="tonal" density="compact" class="mb-3">{{ webguiLanNotice }}</v-alert>
+        <v-alert
+          :type="webguiLanAccess.restartRequired ? 'warning' : webguiLanAccess.listeningOnLan ? 'success' : 'info'"
+          variant="tonal"
+          density="compact"
+          class="mb-3"
+        >
+          {{ webguiLanStatusText }}
+        </v-alert>
+        <v-alert v-if="!webguiLanAccess.canManage" type="info" variant="tonal" density="compact" class="mb-3">
+          开关和密钥只能在运行 Manager 的 Rabi PC 本机管理。
+        </v-alert>
+        <div class="form-grid">
+          <v-text-field
+            :model-value="webguiLanAccess.token"
+            label="WebGUI 局域网访问密钥"
+            :placeholder="webguiLanAccess.tokenConfigured ? '已配置；仅本机显示明文' : '点击生成访问密钥'"
+            type="password"
+            density="compact"
+            readonly
+            hide-details
+          />
+          <v-text-field
+            :model-value="selectedRouteOverviewLanUrl"
+            :label="store.selectedGateway ? `当前 Route 控制台链接 · ${configNameFor(store.selectedGateway)}` : '局域网访问链接'"
+            placeholder="启用并生成密钥后显示"
+            density="compact"
+            readonly
+            hide-details
+          />
+          <v-text-field
+            :model-value="selectedRouteKnowledgeLanUrl"
+            :label="store.selectedGateway ? `当前 Route 知识库链接 · ${configNameFor(store.selectedGateway)}` : '当前 Route 知识库链接'"
+            placeholder="请先选择 Route"
+            density="compact"
+            readonly
+            hide-details
+          />
+        </div>
+        <div class="hero-actions mt-3">
+          <v-btn
+            prepend-icon="mdi-key-plus"
+            variant="tonal"
+            color="primary"
+            :loading="webguiLanSaving"
+            :disabled="!webguiLanAccess.canManage"
+            @click="regenerateWebguiLanToken"
+          >
+            {{ webguiLanAccess.tokenConfigured ? "轮换访问密钥" : "生成访问密钥" }}
+          </v-btn>
+          <v-btn
+            prepend-icon="mdi-link-variant"
+            variant="tonal"
+            :disabled="!selectedRouteOverviewLanUrl || !webguiLanAccess.token"
+            @click="copyWebguiLanText(selectedRouteOverviewLanUrl, '已复制局域网访问链接')"
+          >
+            复制访问链接
+          </v-btn>
+          <v-btn
+            prepend-icon="mdi-content-copy"
+            variant="text"
+            :disabled="!webguiLanAccess.token"
+            @click="copyWebguiLanText(webguiLanAccess.token, '已复制 WebGUI 访问密钥')"
+          >
+            复制密钥
+          </v-btn>
+          <v-btn
+            prepend-icon="mdi-notebook-check-outline"
+            variant="tonal"
+            :disabled="!selectedRouteKnowledgeLanUrl || !webguiLanAccess.token"
+            @click="copyWebguiLanText(selectedRouteKnowledgeLanUrl, '已复制当前 Route 知识库链接')"
+          >
+            复制 Route 知识库链接
+          </v-btn>
+        </div>
+        <div class="section-note mt-3">
+          其他设备必须使用这台 Rabi PC 的局域网 IP，不能使用 127.0.0.1。若重启后仍无法连接，请检查 Windows 防火墙是否允许 RabiRoute/Node.js 的 8790 端口。
         </div>
       </v-card>
     </div>

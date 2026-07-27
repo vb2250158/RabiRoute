@@ -66,7 +66,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 
 重要字段：
 
-- `messageAdapters`：可配置消息入口列表。支持 `napcat`、`remoteAgent`、`heartbeat`、`speech`、`webhook`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`wecom`；旧配置中的 `rolePanel` 仍兼容，但 WebGUI 不再把它显示为可配置消息端，因为角色面板消息由 Manager 默认提供，Gateway 子进程不另开 listener。
+- `messageAdapters`：可配置消息入口列表。支持 `napcat`、`remoteAgent`、`heartbeat`、`speech`、`webhook`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`wecom`、`weixin`；旧配置中的 `rolePanel` 仍兼容，但 WebGUI 不再把它显示为可配置消息端，因为角色面板消息由 Manager 默认提供，Gateway 子进程不另开 listener。
 - `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。NapCat 默认允许 Agent 通过 RabiRoute 主动发送到明确目标。旧配置里的 `allowedGroups` / `allowedUsers` / `outputMode` / `enabledPipelines` / `disabledPipelines` 不再作为过滤条件生效。
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
 - `allowedFileRoots`：本地文件出站白名单目录，仅在 `payloadType=file` 且使用本地路径时生效。文件必须真实存在、是普通文件，并且解析真实路径后仍位于其中一个目录内；未配置时本地群文件上传会被阻止。公开示例只能使用占位路径，运行期按角色实际构建产物目录配置。
@@ -74,11 +74,13 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `webhookPort`：Webhook 监听端口。未配置时回退到 `gatewayPort`。
 - `webhookPath`：Webhook 入口路径，默认 `/webhook`。
 - `rabiLinkWebhookPort` / `rabiLinkWebhookPath`：RabiLink 本地兼容入口端口和路径，默认路径 `/rabilink`。局域网脚本或手工调试可直接 POST 到这里；正式 AIUI 链路由电脑端 RabiLink worker 直连公网 Relay，接收 observation 输入并消费独立的主动下行队列。
-- `data/Config.json` 里的 `rabiGuid`：这台 Rabi PC 的稳定身份。服务器远程 WebGUI 使用 `/manage/<账号>/<RabiGUID>/webgui` 定位 PC；显示名和 `deviceId` 只用于展示、兼容和任务领取。
-- `data/Config.json` 里的 `rabiLinkRelay`：这台 Rabi PC 的全局 Relay 连接配置，包含全局开关 `enabled`，以及 `url`、`token`、`deviceId`、`replyIdleTimeoutMs`。应用 token 在服务器 Relay WebGUI `/manage` 里创建；开启全局开关后，Manager 会常驻订阅 `/api/rabilink/events`，收到事件后即时领取远程 WebGUI、语音或任务，不依赖任何单条路由启动。旧配置中的 `claimWaitMs` 只为 Schema 兼容保留，不再控制轮询。服务器应用自身仍可禁用，PC 开关与服务器应用必须同时启用才会接收输入和发布下行消息。
+- `data/Config.json` 里的 `rabiGuid`：这台 Rabi PC 的稳定身份。服务器远程 WebGUI 使用 `/manage/<账号>/<RabiGUID>/` 定位 PC；旧 `/webgui` 子路径只作兼容。显示名和 `deviceId` 只用于展示、兼容和任务领取。
+- `data/Config.json` 里的 `rabiLinkRelay`：这台 Rabi PC 的全局 Relay 连接配置，包含全局开关 `enabled`，以及 `url`、`token`、`deviceId`、`replyIdleTimeoutMs`。应用 token 在服务器 Relay WebGUI `/manage` 里创建；开启全局开关后，Manager 会常驻订阅 `/api/rabilink/events`，收到事件后即时领取远程 WebGUI、语音或任务，不依赖任何单条路由启动；同时订阅本机 Manager `/api/events`，把非 `ready` 事件转发到 Relay 的远程 WebGUI SSE。远程附件、下载和媒体 Range 仍走同一个受限 WebGUI 请求通道。旧配置中的 `claimWaitMs` 只为 Schema 兼容保留，不再控制轮询。服务器应用自身仍可禁用，PC 开关与服务器应用必须同时启用才会接收输入和发布下行消息。
+- `data/Config.json` 里的 `webguiLan`：本机 Manager 的局域网 WebGUI 开关与访问密钥。默认 `enabled=false`，Manager 只监听 `127.0.0.1`；在本机控制台启用后会自动生成 32 字节随机访问密钥，重启 Manager 后监听 `0.0.0.0`。局域网 URL 使用 `http://<本机局域网IP>:8790/#/overview?webgui_token=<密钥>`；浏览器读取后只在当前会话保存密钥并从地址栏移除。开关、生成和轮换密钥只允许来自运行 Manager 的本机请求，包括回环地址和本机自己的局域网地址；其他设备仍被拒绝，轮换后旧链接立即失效。
 - 旧版 `adapterConfig.json` 里的 `rabiLinkRelayEnabled` / `rabiLinkRelayUrl` / `rabiLinkRelayToken` / `rabiLinkRelayDeviceId` 仍兼容读取；新配置应放在全局 `data/Config.json`，路由消息端只保存监听端口、路径和是否启用。
 - `routeVariables.rabilinkAutoReview` / `rabilinkContinuousReflection`：分别控制新 observation 的空闲审阅和无新输入时的周期反思。配套的 `rabilinkReviewIntervalMs`、`rabilinkReviewSettleMs`、`rabilinkReflectionIntervalMinutes`、`rabilinkConversationSplitAfterHours` 控制检查频率、输入稳定窗口、反思间隔和会话切分。`rabilinkRecordFirstSources` 是可选的逗号分隔消息源白名单，例如 `fennenote`；把对应消息端放在承载 `RabiActive` 的同一条 Route 后，命中的 FenneNote/Webhook 转写只进入同一 RabiLink 账本和审阅器，不逐句直接投递 Agent。该列表默认留空，持续录音源必须显式启用；不要让另一条直投 Route 同时消费同一个 webhook。可直接参考 `examples/data/route/RabiLink/` 与 `examples/data/roles/RabiActive/`；示例不包含 Relay 地址或 token。
 - `wecomBotId` / `wecomBotSecret` / `wecomWsUrl`：企业微信智能机器人 WebSocket 长连接配置。`wecomWsUrl` 可选；公开示例只能使用占位值，真实 secret 建议走 `WECOM_BOT_ID` / `WECOM_BOT_SECRET` / `WECOM_WS_URL` 环境变量。
+- `weixinBaseUrl` / `weixinBotType`：个人微信 OpenClaw/iLink 实验原型配置；默认分别为 `https://ilinkai.weixin.qq.com` 和 `3`，也可用 `WEIXIN_BASE_URL` / `WEIXIN_BOT_TYPE` 覆盖。扫码得到的 token、同步游标和会话 context token 只保存在运行期 `data/`，不得写入公开配置或示例。
 - `napcatHttpUrl`：OneBot HTTP API 地址。
 - `agentAdapters`：Agent 端适配器列表。当前支持 `codex`、`copilotCli`、`astrbot`、`marvis`。成熟度分别是：Codex 已验证；Copilot CLI、AstrBot 实验支持；Marvis 仅人工接力。
 - `codexThreadId` / `codexThreadName`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID 与可见名称。有效且同工作目录的未归档 ID 是稳定身份；保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录查找；一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
@@ -92,7 +94,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `heartbeatSkipWhenAgentBusy`：可选，默认 `false`。启用后，如果当前 Codex 固定任务仍处于 active / in-progress 状态，本次 `heartbeat` 会记录为 `skipped` 且原因是 `agent_busy`，不会继续投递；群聊、私聊和其他消息类型不受影响。忙碌状态由 Desktop IPC 广播与当前任务状态共同确认。
 - `speechPushMode`：Route 拥有的语音投递模式。`hot` 表示每段 ASR 完成后立即投递；`keyword` 表示转写仍全部记录，只在命中人格关键词时唤醒 Agent。WebGUI 中“热投递”开关的开对应 `hot`，关对应 `keyword`。
 - `speechTriggerKeywords`：归人格 `personaConfig.json`，用于人格名、常用称呼和唤醒词。列表为空且 Route 关闭热投递时，ASR 只记录、永不暗中回退 `hot`。
-- `recentMessageLimits`：归人格 `personaConfig.json`，分别配置 `napcat`、`remoteAgent`、`heartbeat`、`rolePanel`、`speech`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`webhook`、`wecom` 的自动注入条数。每项 `0–200`，未设置时默认 `12`；`0` 不删记录，只关自动注入。旧 `recentMessageLimit` 和显式分端值继续生效。
+- `recentMessageLimits`：归人格 `personaConfig.json`，分别配置 `napcat`、`remoteAgent`、`heartbeat`、`rolePanel`、`speech`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`webhook`、`wecom`、`weixin` 的自动注入条数。每项 `0–200`，未设置时默认 `12`；`0` 不删记录，只关自动注入。旧 `recentMessageLimit` 和显式分端值继续生效。
 - `contextInjection`：归人格 `personaConfig.json`。默认 `{"mode":"focused","relevantKnowledgeLimit":3,"personaMaxChars":1600}`，只放高相关知识摘要和精简人格工作集；`mode=legacy` 可回滚到旧的全量活动索引。数值范围分别为 `1–12` 和 `800–6000`。
 - `dataDir`：路由级协议记录、投递记录和心跳记录目录。人格级双向会话真源另位于 `data/roles/<RoleId>/conversation/`。
 - `rolesDir`：人格目录，只放 `persona.md`、成长记录、提示词等角色文件。
@@ -109,9 +111,11 @@ Windows 路径在 WebUI 里写 `C:\Path\To\Project` 或 `C:/Path/To/Project`；�
 - `napcat`：通过 OneBot WebSocket 接收 QQ 事件，通过 OneBot HTTP 预留主动调用能力。
 - `heartbeat`：按固定间隔生成内部 `heartbeat` 路由事件，适合周期巡检；可用 `heartbeatSkipWhenAgentBusy` 避免固定 Codex 会话尚未完成上一轮任务时继续堆叠心跳。
 - `rolePanel`：Manager/托盘默认提供的内置本地消息能力，使用固定 `role_panel_message` 规则并写角色 timeline；它不显示在 WebGUI 的可配置消息端列表中，不是 Gateway 网络 listener，也不能从人格规则中删除。
+- 计划审批不是另一个消息 adapter。Manager 在 feedback 审计落盘后直接生成 `plan_feedback` 系统事件；该事件没有可配置最近消息额度，也不进入角色 timeline 或统一会话账本。
 - `remoteAgent`：Manager 级实验入口。RabiGUI 扫描并连接远端 bridge，支持密码挑战、任务、事件和文件；Gateway 子进程只显示状态占位。
 - `speech`：RabiPC / RabiSpeech 语音消息端。总开关同时控制当前 Route 的常驻录音；热投递开时每段 ASR 直接投递，关时仅命中人格关键词投递。无论是否唤醒，ASR 都保留；成功 TTS 回传与同 `sessionId` ASR 共用双向上下文。
 - `wecom`：通过企业微信智能机器人 WebSocket 长连接接入企业微信群聊，写入 `wecom-messages.jsonl`，并允许 Agent 通过 RabiRoute outbox 回发到企业微信。它的群聊模板变量尽量对齐 NapCat 的 `groupId`、`userId`、`sender`、`message`、`messageId`，额外补充 `wecomReqId`、`wecomConversationId`、`wecomChatId` 等字段；详见 [企业微信接入](wecom-integration.md)。
+- `weixin`：开发者级实验原型。启动后通过 OpenClaw/iLink 获取二维码并长轮询个人微信消息，WebGUI 可显示二维码和登录状态，消息写入 `weixin-messages.jsonl`；文本进入 `weixin_message`，图片、语音、文件和视频首版只记录。Outbox 只能回复已提供 context token 的来源会话文本；账号退出/切换等完整生命周期和真实账号风险仍未验收，不应视为已验证消息端。
 旧配置仍然兼容：`messageInputsDisabled=true` 或 `messageAdapters=["disabled"]` 会临时关闭整个路由的消息进入；`messageAdaptersDisabled` 会被视为对应 adapter 的 `inputEnabled=false`。新配置建议优先使用 `messageAdapterPolicies` 表达“接收”和“发送”两个管道级开关。
 
 NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。路由页“打开 NapCat”会在用户明确点击后自动启动绑定实例、使用已有 quick login 并修复 OneBot 连接；需要腾讯安全确认时只打开正确页面交给用户。详见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。

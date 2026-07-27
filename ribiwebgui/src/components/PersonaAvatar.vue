@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { managerResourceUrl } from "../managerApi";
 
 const props = withDefaults(defineProps<{
   roleId?: string;
@@ -16,6 +17,7 @@ const props = withDefaults(defineProps<{
 const failed = ref(false);
 const initial = computed(() => Array.from(props.roleId.trim())[0]?.toUpperCase() || "R");
 const showImage = computed(() => Boolean(props.avatarUrl) && !failed.value);
+const authenticatedAvatarUrl = computed(() => managerResourceUrl(props.avatarUrl));
 const fallbackStyle = computed(() => {
   const numericSize = Number(props.size);
   return Number.isFinite(numericSize) ? { fontSize: `${Math.max(12, numericSize * 0.42)}px` } : undefined;
@@ -34,7 +36,7 @@ watch(() => props.avatarUrl, () => {
     color="secondary"
     :aria-label="roleId ? `${roleId} 人格头像` : '人格头像'"
   >
-    <v-img v-if="showImage" :src="avatarUrl" :alt="roleId ? `${roleId} 人格头像` : '人格头像'" cover @error="failed = true" />
+    <v-img v-if="showImage" :src="authenticatedAvatarUrl" :alt="roleId ? `${roleId} 人格头像` : '人格头像'" cover @error="failed = true" />
     <span v-else-if="roleId" class="persona-avatar__fallback" :style="fallbackStyle" aria-hidden="true">{{ initial }}</span>
     <v-icon v-else aria-hidden="true">mdi-account-off-outline</v-icon>
   </v-avatar>

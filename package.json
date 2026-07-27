@@ -12,7 +12,7 @@
     "start:windows": "Start-RabiRoute-Tray.bat",
     "build": "npm run build:backend && npm run webgui:build",
     "build:backend": "node scripts/clean-backend-dist.mjs && tsc -p tsconfig.json && npm run check:codex-contract && npm run check:event-driven",
-    "test": "node --import tsx --test \"src/**/*.test.ts\" && node --test scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabi-persona-sync.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" && node --test scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabi-persona-sync.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs",
     "check:codex-contract": "node scripts/check-codex-adapter-contract.mjs",
     "check:event-driven": "node scripts/check-event-driven-architecture.mjs",
     "check:active-intelligence:physical": "node scripts/check-active-intelligence-physical-acceptance.mjs",
@@ -33,7 +33,7 @@
     "relay:rabilink:worker:check": "node --check scripts/rabilink-relay-cloudflare-worker.mjs && node --import tsx --test src/rabilinkRelayCloudflareWorker.test.ts",
     "relay:rabilink:device-logs:check": "node --test scripts/rabilink-device-log-store.test.mjs scripts/rabilink-relay-device-logs.test.mjs",
     "relay:rabilink:media:check": "node --check scripts/rabilink-relay-server.mjs && node --test scripts/rabilink-relay-device-media.test.mjs scripts/rabilink-relay-message-receipts.test.mjs scripts/rabilink-relay-outbox-retention.test.mjs",
-    "relay:rabilink:webgui:check": "node --check scripts/rabilink-relay-server.mjs && node --test scripts/rabilink-relay-webgui-static.test.mjs",
+    "relay:rabilink:webgui:check": "node --check scripts/rabilink-relay-server.mjs && node --test scripts/rabilink-relay-webgui-static.test.mjs scripts/rabilink-relay-webgui-proxy.test.mjs && node --import tsx --test src/manager/rabiLinkRelayRuntime.test.ts",
     "check:rabilink:mobile": "node scripts/audit-rabi-mobile-endpoint.mjs && npm run relay:rabilink:media:check",
     "relay:rabilink:speech:check": "node --check scripts/rabilink-relay-server.mjs && node --test scripts/rabilink-proxy-request-queue.test.mjs && node --import tsx --test src/manager/rabiLinkRelayRuntime.test.ts",
     "relay:rabilink:worker:deploy": "npx wrangler deploy --config wrangler.rabilink-relay.toml",
@@ -43,11 +43,13 @@
     "@openai/codex": "0.144.1",
     "@wecom/aibot-node-sdk": "^1.0.7",
     "dotenv": "^16.4.7",
+    "qrcode": "^1.5.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@mdi/font": "^7.4.47",
     "@types/node": "^22.10.7",
+    "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-vue": "^5.2.4",
     "marked": "^15.0.12",
@@ -57,7 +59,7 @@
     "vite": "^6.4.3",
     "vue": "^3.5.35",
     "vue-router": "^4.6.4",
-    "vuetify": "^3.12.8",
-    "vue-tsc": "^2.2.12"
+    "vue-tsc": "^2.2.12",
+    "vuetify": "^3.12.8"
   }
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PlanItem, RecentMemoryItem } from "./roleKnowledge.js";
-import { planPresentation, presentPlans, sortKnowledgeByUpdatedAt } from "./roleKnowledgePresentation.js";
+import { planPresentation, presentPlan, presentPlans, sortKnowledgeByUpdatedAt } from "./roleKnowledgePresentation.js";
 
 function approvalRequest() {
   return {
@@ -20,6 +20,7 @@ function plan(patch: Partial<PlanItem> & Pick<PlanItem, "id" | "title">): PlanIt
   return {
     focus: patch.focus || patch.title,
     status: patch.status || "进行中",
+    attachments: patch.attachments || [],
     steps: patch.steps || [],
     createdAt: patch.createdAt || "2026-07-01T00:00:00.000Z",
     updatedAt: patch.updatedAt || "2026-07-01T00:00:00.000Z",
@@ -196,6 +197,25 @@ test("plans awaiting approval sort first, then by Manager presentation status an
     "archived",
     "paused-ready"
   ]);
+});
+
+test("presented plans expose attachment metadata without local filesystem paths", () => {
+  const presented = presentPlan(plan({
+    id: "attachment-plan",
+    title: "Attachment plan",
+    attachments: [{
+      id: "attachment-one",
+      kind: "image",
+      name: "preview.png",
+      path: "C:\\private\\preview.png",
+      size: 8,
+      mimeType: "image/png",
+      sha256: "a".repeat(64)
+    }]
+  }));
+
+  assert.equal(presented.attachments[0]?.name, "preview.png");
+  assert.equal("path" in presented.attachments[0]!, false);
 });
 
 test("memory lists are sorted by updatedAt without mutating the source array", () => {

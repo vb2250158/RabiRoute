@@ -34,6 +34,29 @@ export function planStatusStyle(palette: PlanPresentationPalette): Record<string
   };
 }
 
+export function planDescriptionForDisplay(plan: Pick<RolePlan, "title" | "focus">): string {
+  const description = String(plan.focus || "").trim();
+  const title = String(plan.title || "").trim();
+  return description && description !== title ? description : "";
+}
+
+export function planTitleForDirectory(title: string): string {
+  const normalized = String(title || "").trim();
+  const withoutLeadingTags = normalized.replace(/^(?:\[[^\]\r\n]+\]\s*)+/, "").trim();
+  return withoutLeadingTags || normalized;
+}
+
+export function formatPlanVideoDuration(duration: number | undefined): string {
+  if (!Number.isFinite(duration)) return "--:--";
+  const seconds = Math.max(0, Math.round(duration || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
 export function plansForKnowledgeView(plans: RolePlan[], view: PlanKnowledgeView): RolePlan[] {
   if (view === "recent_memory") return [];
   return plans.filter((plan) => plan.presentation.views.includes(view));

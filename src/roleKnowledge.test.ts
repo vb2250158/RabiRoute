@@ -45,6 +45,95 @@ function writePersonaConfig(roleDir: string, config: Record<string, unknown>): v
   fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify(config, null, 2), "utf8");
 }
 
+test("plans store managed image, video, and file attachments without persisting base64", () => {
+  const roleDir = makeRoleDir();
+  const sourceFile = path.join(roleDir, "source-note.txt");
+  fs.writeFileSync(sourceFile, "attachment note", "utf8");
+  const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZsAAAAASUVORK5CYII=";
+  const mp4Base64 = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]).toString("base64");
+  const plan = createPlan(roleDir, {
+    id: "plan-attachments",
+    title: "带附件的计划",
+    focus: "带附件的计划",
+    steps: [{ id: "inspect", title: "查看附件", status: "未开始" }],
+    keywords: ["附件"],
+    attachments: [
+      { name: "preview.png", mimeType: "image/png", contentBase64: pngBase64 },
+      { name: "demo.mp4", mimeType: "video/mp4", contentBase64: mp4Base64 },
+      { path: sourceFile, mimeType: "text/plain" }
+    ]
+  });
+
+  assert.equal(plan.attachments.length, 3);
+  assert.equal(plan.attachments[0]?.kind, "image");
+  assert.equal(plan.attachments[1]?.kind, "video");
+  assert.equal(plan.attachments[2]?.kind, "file");
+  assert.equal(fs.readFileSync(plan.attachments[2]!.path, "utf8"), "attachment note");
+  assert.equal(path.relative(path.join(roleDir, "plans", "attachments", plan.id), plan.attachments[0]!.path).startsWith(".."), false);
+  const stored = fs.readFileSync(path.join(roleDir, "plans", "items", "active", `${plan.id}.json`), "utf8");
+  assert.doesNotMatch(stored, /contentBase64/);
+  assert.doesNotMatch(stored, new RegExp(pngBase64.slice(0, 24)));
+
+  const preserved = updatePlan(roleDir, plan.id, { priority: "high" });
+  assert.deepEqual(preserved.attachments, plan.attachments);
+  const cleared = updatePlan(roleDir, plan.id, { attachments: [] });
+  assert.deepEqual(cleared.attachments, []);
+});
+
+test("plan attachments reject content that does not match a claimed video type", () => {
+  const roleDir = makeRoleDir();
+  assert.throws(() => createPlan(roleDir, {
+    id: "invalid-video-attachment",
+    title: "无效视频附件",
+    focus: "无效视频附件",
+    steps: [{ id: "inspect", title: "检查视频", status: "未开始" }],
+    keywords: ["视频"],
+    attachments: [{
+      name: "demo.mp4",
+      mimeType: "video/mp4",
+      contentBase64: Buffer.from("not an mp4").toString("base64")
+    }]
+  }), /does not match its video type/);
+});
+
+test("plan attachments enforce count, per-file, and total size limits", () => {
+  const roleDir = makeRoleDir();
+  const base = {
+    title: "附件限制",
+    focus: "附件限制",
+    steps: [{ id: "inspect", title: "检查附件", status: "未开始" }],
+    keywords: ["附件"]
+  };
+  assert.throws(() => createPlan(roleDir, {
+    ...base,
+    id: "too-many-attachments",
+    attachments: Array.from({ length: 9 }, (_, index) => ({
+      name: `note-${index}.txt`,
+      mimeType: "text/plain",
+      contentBase64: Buffer.from("x").toString("base64")
+    }))
+  }), /at most 8 attachments/);
+
+  const oversized = path.join(roleDir, "oversized.bin");
+  fs.writeFileSync(oversized, Buffer.alloc(10 * 1024 * 1024 + 1));
+  assert.throws(() => createPlan(roleDir, {
+    ...base,
+    id: "oversized-attachment",
+    attachments: [{ path: oversized }]
+  }), /exceeds 10485760 bytes/);
+
+  const largeFiles = Array.from({ length: 3 }, (_, index) => {
+    const filePath = path.join(roleDir, `large-${index}.bin`);
+    fs.writeFileSync(filePath, Buffer.alloc(9 * 1024 * 1024, index));
+    return { path: filePath };
+  });
+  assert.throws(() => createPlan(roleDir, {
+    ...base,
+    id: "attachments-total-too-large",
+    attachments: largeFiles
+  }), /exceed 26214400 bytes in total/);
+});
+
 test("context injection defaults focused and keeps a legacy rollback mode", () => {
   const roleDir = makeRoleDir();
   assert.deepEqual(roleContextInjectionPolicy(roleDir), {

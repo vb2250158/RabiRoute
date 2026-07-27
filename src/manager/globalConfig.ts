@@ -2,11 +2,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  defaultWebguiLanAccessConfig,
+  normalizeWebguiLanAccessConfig,
+  type WebguiLanAccessConfig
+} from "./webguiLanAccess.js";
 
 export type RabiGlobalConfig = {
   rabiGuid: string;
   rabiName: string;
   rabiLinkRelay: RabiLinkRelayGlobalConfig;
+  webguiLan: WebguiLanAccessConfig;
   createdAt: string;
   updatedAt: string;
 };
@@ -40,6 +46,7 @@ export class RabiGlobalConfigStore {
       rabiGuid: randomUUID(),
       rabiName: os.hostname() || "RabiRoute",
       rabiLinkRelay: defaultRabiLinkRelayConfig(),
+      webguiLan: defaultWebguiLanAccessConfig(),
       createdAt: now,
       updatedAt: now
     };
@@ -47,7 +54,10 @@ export class RabiGlobalConfigStore {
     return created;
   }
 
-  patch(patch: Partial<Pick<RabiGlobalConfig, "rabiName">> & { rabiLinkRelay?: Partial<RabiLinkRelayGlobalConfig> }): RabiGlobalConfig {
+  patch(patch: Partial<Pick<RabiGlobalConfig, "rabiName">> & {
+    rabiLinkRelay?: Partial<RabiLinkRelayGlobalConfig>;
+    webguiLan?: Partial<WebguiLanAccessConfig>;
+  }): RabiGlobalConfig {
     const current = this.read();
     const next: RabiGlobalConfig = {
       ...current,
@@ -57,6 +67,9 @@ export class RabiGlobalConfigStore {
       rabiLinkRelay: patch.rabiLinkRelay
         ? normalizeRabiLinkRelayConfig({ ...current.rabiLinkRelay, ...patch.rabiLinkRelay })
         : current.rabiLinkRelay,
+      webguiLan: patch.webguiLan
+        ? normalizeWebguiLanAccessConfig({ ...current.webguiLan, ...patch.webguiLan })
+        : current.webguiLan,
       updatedAt: new Date().toISOString()
     };
     this.write(next);
@@ -72,6 +85,7 @@ export class RabiGlobalConfigStore {
         rabiGuid: typeof parsed.rabiGuid === "string" && parsed.rabiGuid.trim() ? parsed.rabiGuid.trim() : randomUUID(),
         rabiName: typeof parsed.rabiName === "string" && parsed.rabiName.trim() ? parsed.rabiName.trim() : os.hostname() || "RabiRoute",
         rabiLinkRelay: normalizeRabiLinkRelayConfig(parsed.rabiLinkRelay),
+        webguiLan: normalizeWebguiLanAccessConfig(parsed.webguiLan),
         createdAt: typeof parsed.createdAt === "string" && parsed.createdAt.trim() ? parsed.createdAt.trim() : now,
         updatedAt: typeof parsed.updatedAt === "string" && parsed.updatedAt.trim() ? parsed.updatedAt.trim() : now
       };
@@ -79,6 +93,7 @@ export class RabiGlobalConfigStore {
         normalized.rabiGuid !== parsed.rabiGuid
         || normalized.rabiName !== parsed.rabiName
         || JSON.stringify(normalized.rabiLinkRelay) !== JSON.stringify(parsed.rabiLinkRelay)
+        || JSON.stringify(normalized.webguiLan) !== JSON.stringify(parsed.webguiLan)
         || normalized.createdAt !== parsed.createdAt
         || normalized.updatedAt !== parsed.updatedAt
       ) {

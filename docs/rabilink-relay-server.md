@@ -92,7 +92,9 @@ https://你的域名/manage/<账号>/<RabiGUID>/#/routes
 = http://127.0.0.1:8790/#/routes
 ```
 
-这里的 `<RabiGUID>` 来自 PC 端 `data/Config.json` 的 `rabiGuid`，不是显示名。浏览器必须先登录 `/manage` 中对应账号；每个浏览器只保留一个当前登录账号。这个入口会把 WebGUI 的 `GET` / `POST` / `PATCH` 等请求排队给对应 PC worker，由 PC worker 在本机访问 `http://127.0.0.1:8790`，因此可以在服务器页面里修改这台 PC 的 Rabi 配置。服务器不会直接连入用户电脑。
+这里的 `<RabiGUID>` 来自 PC 端 `data/Config.json` 的 `rabiGuid`，不是显示名。浏览器必须先登录 `/manage` 中对应账号；每个浏览器只保留一个当前登录账号。这个入口会把 WebGUI 的 `GET` / `POST` / `PATCH` 等普通 HTTP 请求排队给对应 PC worker，由 PC worker 在本机访问 `http://127.0.0.1:8790`，因此可以在服务器页面里修改这台 PC 的 Rabi 配置。附件、图片和文件下载使用同一前缀；视频的 `Range` / `If-Range` 会传到本机 Manager 并保留 `206`、`Content-Range` 与 `Accept-Ranges` 响应。`/api/events` 不进入一次性请求队列，而由 PC worker 把本机 Manager SSE 事件推送到 Relay 的独立远程事件流，所以网关、计划、人格和语音状态仍可实时刷新。服务器不会直接连入用户电脑。
+
+远程 WebGUI 使用 `/manage` 登录 Cookie；PC worker 使用独立的 RabiLink 应用 token。Relay 不会把应用 token、管理 Cookie 或局域网 `webgui_token` 转发给本机 Manager，也不会把三种认证边界合并。
 
 ## 同应用 PC 发现与人格同步中转
 
@@ -562,6 +564,8 @@ Accept: text/event-stream
 
 正式 PC worker 收到事件后才调用领取接口，并固定 `waitMs=0`。旧客户端传入非零 `waitMs` 时，Relay 只阻塞等待对应内部事件并在订阅后复查一次，不恢复扫描轮询：
 
+手机端的“处理消息的 Rabi PC”列表由 Relay 按 worker 能力统一筛选：只有声明 `tasks`、`webgui`、`persona-sync` 或 `speech` 至少一项处理能力的实例才会出现在 `GET /api/rabilink/mobile/state` 的 `workers` 中。声明为 `phone`、`glasses`、`watch` 或 `earbuds` 的终端设备即使保持 `/api/rabilink/events` 在线，也不会成为 PC 候选；`PATCH /api/rabilink/mobile/target` 使用同一判据并拒绝把终端设备设为处理目标。
+
 ```http
 GET /worker/tasks?limit=1&deviceId=rabilink-pc
 Authorization: Bearer <token>
@@ -605,6 +609,9 @@ Content-Type: application/json
 ```http
 GET /worker/webgui-requests?limit=1&deviceId=<RabiPC>&deviceGuid=<RabiGUID>
 Authorization: Bearer <token>
+
+POST /worker/webgui-events
+Authorization: Bearer <token>
 ```
 
 worker 会在本机访问 `RABILINK_RELAY_WEBGUI_URL`，默认是 `GATEWAY_MANAGER_URL`，通常即：
@@ -630,7 +637,7 @@ Authorization: Bearer <token>
 }
 ```
 
-`bodyBase64` 用于保留 HTML、JS、图片和 JSON 等响应体。服务器会对 HTML/JS/CSS 中常见的 `/api`、`/manager-config` 和 `/assets` 路径做前缀改写，让远程 WebGUI 的保存配置、读取状态和静态资源请求仍然回到同一台 PC Rabi。
+`bodyBase64` 用于保留 HTML、JS、图片、音视频和 JSON 等响应体。服务器会对 HTML/JS/CSS 中常见的 `/api`、`/manager-config` 和 `/assets` 路径做前缀改写，让远程 WebGUI 的保存配置、读取状态和静态资源请求仍然回到同一台 PC Rabi。请求头只透传 `Accept`、`Content-Type`、`User-Agent`、`Range` 和 `If-Range`；响应会移除 hop-by-hop 头和 Cookie。Manager `/api/events` 由 worker 解析后按事件逐条 POST 到 `/worker/webgui-events`，Relay 再只向当前账号所选 PC 的已登录远程页面发布，不用业务轮询。
 
 ## 电脑端 worker 完成输入与投递下行
 
@@ -757,7 +764,7 @@ Authorization: Bearer <token>
 | `RABILINK_RELAY_OUTBOX_TTL_MS` | `172800000` | 广播、仅按设备类型投递和已经得到所有明确目标 `delivered` 的下行保留时间，默认 48 小时；尚有明确 `targetDeviceIds` 未确认时不按该 TTL 删除。 |
 | `RABILINK_RELAY_WORKER_TASK_WAIT_MS` | `60000` | 旧 worker 的事件等待 deadline 与最近活动兼容窗口；活跃 SSE 连接直接拥有在线状态 |
 | `RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS` | `30000` | 服务器等待电脑端 worker 回填 WebGUI 响应的时间 |
-| `RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES` | `10485760` | 单次远程 WebGUI 请求体大小上限 |
+| `RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES` | `41943040` | 单次远程 WebGUI 请求体和解码后响应体的默认上限；worker Base64 回填另按编码膨胀设置硬门禁 |
 | `RABILINK_RELAY_TASK_TTL_MS` | `600000` | 任务保留时间 |
 | `RABILINK_RELAY_LEASE_MS` | `180000` | worker 取到输入后的租约时间；给“本机已接收但远端完成响应丢失”的重试留出余量 |
 | `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | 事件日志和服务器 WebGUI 账号/应用数据目录 |

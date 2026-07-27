@@ -8,10 +8,13 @@ import type {
   GroupMessageRecord,
   HeartbeatEventRecord,
   ManualTriggerRecord,
+  PlanFeedbackMessageRecord,
   RolePanelMessageRecord,
   WeComMessageRecord,
+  WeixinMessageRecord,
   VoiceTranscriptEventRecord
 } from "../history.js";
+import { systemEventRuleForRouteKind } from "./systemEventRules.js";
 
 export type RouteDecision = {
   route: RouteProfile;
@@ -51,8 +54,12 @@ export function isWeComRecord(record: ForwardRecord): record is WeComMessageReco
   return "adapterType" in record && record.adapterType === "wecom";
 }
 
+export function isWeixinRecord(record: ForwardRecord): record is WeixinMessageRecord {
+  return "adapterType" in record && record.adapterType === "weixin";
+}
+
 export function isHeartbeatRecord(record: ForwardRecord): record is HeartbeatEventRecord {
-  return ("intervalSeconds" in record || !("userId" in record)) && !("source" in record) && !("triggerId" in record) && !("triggerName" in record) && !isRolePanelRecord(record);
+  return ("intervalSeconds" in record || !("userId" in record)) && !("source" in record) && !("triggerId" in record) && !("triggerName" in record) && !isRolePanelRecord(record) && !isPlanFeedbackRecord(record) && !isWeixinRecord(record);
 }
 
 export function isManualTriggerRecord(record: ForwardRecord): record is ManualTriggerRecord {
@@ -62,7 +69,12 @@ export function isManualTriggerRecord(record: ForwardRecord): record is ManualTr
 export function isRolePanelRecord(record: ForwardRecord): record is RolePanelMessageRecord {
   // routeProfileId is a generic routing selector shared by mobile speech and
   // other endpoint records. It is not evidence that the source is rolePanel.
-  return ("adapterType" in record && record.adapterType === "rolePanel") || "roleId" in record;
+  return ("adapterType" in record && record.adapterType === "rolePanel")
+    || ("roleId" in record && !("adapterType" in record && record.adapterType === "planFeedback"));
+}
+
+export function isPlanFeedbackRecord(record: ForwardRecord): record is PlanFeedbackMessageRecord {
+  return "adapterType" in record && record.adapterType === "planFeedback";
 }
 
 export function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceTranscriptEventRecord {
@@ -162,7 +174,10 @@ export function createRouteDecision(
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
 ): RouteDecision | null {
-  const matchedRules = route.notificationRules.filter((item) => ruleMatches(item, routeKind, record, extraValues, route));
+  const systemRule = systemEventRuleForRouteKind(routeKind);
+  const matchedRules = systemRule
+    ? [systemRule]
+    : route.notificationRules.filter((item) => ruleMatches(item, routeKind, record, extraValues, route));
   if (matchedRules.length === 0) {
     return null;
   }

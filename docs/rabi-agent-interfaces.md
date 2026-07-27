@@ -467,6 +467,10 @@ POST /roles/:roleId/plans
   "currentStep": "确认接口文档注入方式",
   "nextAction": "补充 Rabi Agent 接口文档",
   "blockedBy": "",
+  "attachments": [
+    { "name": "plan-preview.png", "mimeType": "image/png", "contentBase64": "<base64>" },
+    { "name": "acceptance-checklist.pdf", "path": "C:/Path/To/acceptance-checklist.pdf" }
+  ],
   "steps": [
     { "id": "inspect-existing", "title": "检查现有计划接口", "status": "已完成" },
     { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中" },
@@ -492,6 +496,16 @@ POST /roles/:roleId/plans
 
 新增计划必须提供有序的 `steps`。`进行中` 计划必须同时提供 `currentStepId`，并让它指向唯一一条状态为 `进行中` 的步骤；界面据此列出全部步骤并标出当前执行位置。用户明确要求暂停时，PATCH 顶层 `status=暂停`，保留这条步骤和 `currentStepId` 作为恢复位置，并停止继续驱动绑定任务；恢复时把顶层状态改回 `进行中`。阻塞时用当前步骤的 `blockedBy` 记录不能继续的原因，并用 `waitingFor` 记录正在等待的对象；界面优先展示阻塞原因，不重复展示已由步骤列表表达的 `nextAction`。旧计划仍可读取，但下次更新时应补齐结构化步骤。计划进入 `已完成` 或 `已归档` 前，所有步骤都必须为 `已完成`。
 
+`attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
+
+读取附件：
+
+```http
+GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId
+```
+
+图片和视频附件使用 `inline` 响应；WebGUI 以紧凑固定宽度的 16:9 缩略图展示 PNG、JPEG、WebP、GIF 与 MP4/M4V、WebM、Ogg Video、MOV/QuickTime，容器不足时才等比缩小，点击后分别打开页内大图或带控制条的视频预览。视频可使用 HTTP 字节范围读取，实际解码能力由浏览器决定；普通文件使用下载响应。该接口只读取计划元数据中已登记且真实路径仍位于本计划受管目录内的文件。
+
 请求审批前，Agent 应 PATCH 当前步骤的 `approvalRequest`，尽量说明 `request`、`reason`、精确 `files / commands / changes`、`validation`、`rollback` 和 `outOfScope`。Manager 只做轻量完整性判断：缺少说明不会阻止计划保存，也不会限制用户审批；API 返回 `presentation.approval.state=incomplete` 和 `missing[]`，双端把缺项与审批输入一起展示。AgentPacket 的共用提示会提醒 Agent 根据用户意见补充真实路径、完整命令和外部目标，不能把“等待授权”长期当成执行说明。
 
 `taskBinding` 可在 POST 或 PATCH 中写入，用于精确绑定一个 Codex 执行会话。当前只接受 `agentType=codex` 和非空完整 `sessionId`；`completionHook.enabled` 必须是布尔值。启用后，Codex `Stop` Hook 把官方 `last_assistant_message` 交给 Manager，Manager 再经同人格的角色面板 / Forwarding / AgentPacket 链提醒目标处理会话。`gatewayId` 在同人格有多个 Route 时必填。提醒按 `sessionId + turnId` 去重，不会自动 PATCH 计划、推进步骤或写记忆。
@@ -505,7 +519,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-WebGUI/托盘会用该接口记录用户对当前审批步骤的建议，并请求 Manager 通过现有角色面板链路通知 Agent。Agent 从 QQ 等其它入口收到用户审批后，也应调用同一接口补齐计划关联记录：
+WebGUI/托盘会用该接口记录用户对当前审批步骤的建议，并请求 Manager 通过独立 `plan_feedback` 系统事件通知 Agent。Agent 从 QQ 等其它入口收到用户审批后，也应调用同一接口补齐计划关联记录：
 
 ```json
 {
@@ -513,6 +527,9 @@ WebGUI/托盘会用该接口记录用户对当前审批步骤的建议，并请�
   "gatewayId": "route-id",
   "stepId": "review-plan",
   "text": "同意方向，但先补充回归范围。",
+  "attachments": [
+    { "name": "review.png", "mimeType": "image/png", "contentBase64": "<base64>" }
+  ],
   "kind": "approval_suggestion",
   "author": "user",
   "source": "qq",
@@ -520,9 +537,11 @@ WebGUI/托盘会用该接口记录用户对当前审批步骤的建议，并请�
 }
 ```
 
-当 `notifyAgent=true` 时，POST 在意见成功落盘后立即以 HTTP `202` 返回，通常为 `deliveryStatus=pending`；Agent 投递在后台继续。终态通过 `/api/events` 的 `plan_feedback_changed` 通知，客户端再 GET 当前计划的 feedback 摘要。不要让用户请求同步等待 Agent 任务加载、Desktop IPC 或处理端执行完成。
+`attachments` 可选。每项使用 `name`、可选 `mimeType` 和 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 校验后把内容保存到人格私有的 `plans/feedback/attachments/<feedbackId>/`，记录与 Agent 通知只携带安全元数据和本地路径。同一 `feedbackId` 重试必须保持相同文字、步骤和附件内容。
 
-Agent 自己的处理说明使用 `kind=approval_response`、`author=agent`、`source=agent`，并保持 `notifyAgent=false`；Agent 记录自动按 `record_only` 保存，不能自我触发新一轮投递。审批意见只记录事实，不推进计划；处理完成后由 Agent 另行 `PATCH /plans/:planId` 更新步骤、阻塞和状态。
+当 `notifyAgent=true` 时，POST 在意见成功落盘后立即以 HTTP `202` 返回，通常为 `deliveryStatus=pending`；Manager 在后台生成独立 `plan_feedback` 系统事件，经原 Forwarding / AgentPacket / Agent adapter 投递。它不依赖可编辑消息规则，不写角色面板 timeline 或统一会话账本，也不注入最近消息。终态通过 `/api/events` 的 `plan_feedback_changed` 通知，客户端再 GET 当前计划的 feedback 摘要。不要让用户请求同步等待 Agent 任务加载、Desktop IPC 或处理端执行完成。
+
+Agent 自己的处理说明使用 `kind=approval_response`、`author=agent`、`source=agent`，并保持 `notifyAgent=false`；Agent 记录自动按 `record_only` 保存，不能自我触发新一轮投递。Manager 投递计划意见时会把 `targetType=plan_feedback`、`planId`、`planStepId` 和稳定响应 ID 放入当前回复上下文；Agent 应先 `PATCH /plans/:planId` 更新计划或步骤，再把面向用户的正文通过普通回复 API 回写该计划。审批意见本身不推进计划，Codex 最终文本只保留简短处理状态。
 
 AgentPacket 的共用计划 API 提示会直接包含上述审批记录入口与“记录后另行 PATCH 计划”的约束，因此不要求每个人格 Skill 重复维护同一套接口。人格 Skill 只应补充该角色特有的审批口径或决策规则。
 
@@ -535,6 +554,7 @@ PATCH /roles/:roleId/plans/:planId
 常见用途：
 
 - 更新标题。
+- 更新、保留或清空计划附件。
 - 更新全部步骤及唯一的当前步骤。
 - 更新下一步、等待对象和阻塞原因。
 - 更新关键词。

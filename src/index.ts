@@ -6,12 +6,17 @@ import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
 import { createRabiLinkAdapter } from "./adapters/rabilinkAdapter.js";
 import { createWearableAdapter } from "./adapters/wearableAdapter.js";
 import { createWeComAdapter } from "./adapters/wecomAdapter.js";
+import { createWeixinAdapter } from "./adapters/weixinAdapter.js";
 import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
 import { forwardMessageAndWait, recordMessageContextOnly, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
-import { appendVoiceTranscriptEventForAdapter, type RolePanelMessageRecord } from "./history.js";
+import {
+  appendVoiceTranscriptEventForAdapter,
+  type PlanFeedbackMessageRecord,
+  type RolePanelMessageRecord
+} from "./history.js";
 import { SpeechIngressStore } from "./speechIngressStore.js";
 import { createSpeechIngressForwarding } from "./routing/speechIngressForwarding.js";
 import { decideSpeechPush } from "./routing/speechPushPolicy.js";
@@ -62,9 +67,11 @@ function parseReplayRouteKind(value: string | undefined): ForwardRouteKind | und
     || value === "heartbeat"
     || value === "manual_trigger"
     || value === "role_panel_message"
+    || value === "plan_feedback"
     || value === "voice_transcript"
     || value === "rabilink"
     || value === "wearable_health_alert"
+    || value === "weixin_message"
     ? value
     : undefined;
 }
@@ -170,28 +177,59 @@ if (manualTriggerArg) {
   }
 }
 
+const planFeedbackMessageArg = process.argv.find((arg) => arg.startsWith("--plan-feedback-message="));
 const rolePanelMessageArg = process.argv.find((arg) => arg.startsWith("--role-panel-message="));
-if (rolePanelMessageArg) {
-  const messageId = rolePanelMessageArg.slice("--role-panel-message=".length).trim() || `role-panel-${Date.now()}`;
-  const messageArg = process.argv.find((arg) => arg.startsWith("--role-panel-text="));
-  const roleArg = process.argv.find((arg) => arg.startsWith("--role-panel-role="));
-  const gatewayArg = process.argv.find((arg) => arg.startsWith("--role-panel-gateway="));
-  const profileArg = process.argv.find((arg) => arg.startsWith("--role-panel-route-profile="));
-  const attachmentArg = process.argv.find((arg) => arg.startsWith("--role-panel-attachments="));
-  const text = messageArg ? decodeURIComponent(messageArg.slice("--role-panel-text=".length)) : "";
-  const roleId = roleArg ? decodeURIComponent(roleArg.slice("--role-panel-role=".length)) : config.agentRoleId;
-  const gatewayId = gatewayArg ? decodeURIComponent(gatewayArg.slice("--role-panel-gateway=".length)) : process.env.GATEWAY_ID;
-  const routeProfileId = profileArg ? decodeURIComponent(profileArg.slice("--role-panel-route-profile=".length)) : undefined;
+const localMessageSpec = planFeedbackMessageArg
+  ? {
+      argument: planFeedbackMessageArg,
+      prefix: "plan-feedback",
+      routeKind: "plan_feedback" as const,
+      adapterType: "planFeedback" as const,
+      label: "plan feedback"
+    }
+  : rolePanelMessageArg
+    ? {
+        argument: rolePanelMessageArg,
+        prefix: "role-panel",
+        routeKind: "role_panel_message" as const,
+        adapterType: "rolePanel" as const,
+        label: "role panel message"
+      }
+    : undefined;
+if (localMessageSpec) {
+  const argumentPrefix = `--${localMessageSpec.prefix}-`;
+  const messageId = localMessageSpec.argument.slice(`${argumentPrefix}message=`.length).trim() || `${localMessageSpec.prefix}-${Date.now()}`;
+  const messageArg = process.argv.find((arg) => arg.startsWith(`${argumentPrefix}text=`));
+  const roleArg = process.argv.find((arg) => arg.startsWith(`${argumentPrefix}role=`));
+  const gatewayArg = process.argv.find((arg) => arg.startsWith(`${argumentPrefix}gateway=`));
+  const profileArg = process.argv.find((arg) => arg.startsWith(`${argumentPrefix}route-profile=`));
+  const attachmentArg = process.argv.find((arg) => arg.startsWith(`${argumentPrefix}attachments=`));
+  const replyContextArg = process.argv.find((arg) => arg.startsWith(`${argumentPrefix}reply-context=`));
+  const text = messageArg ? decodeURIComponent(messageArg.slice(`${argumentPrefix}text=`.length)) : "";
+  const roleId = roleArg ? decodeURIComponent(roleArg.slice(`${argumentPrefix}role=`.length)) : config.agentRoleId;
+  const gatewayId = gatewayArg ? decodeURIComponent(gatewayArg.slice(`${argumentPrefix}gateway=`.length)) : process.env.GATEWAY_ID;
+  const routeProfileId = profileArg ? decodeURIComponent(profileArg.slice(`${argumentPrefix}route-profile=`.length)) : undefined;
   let attachments: unknown[] = [];
+  let replyContext: Record<string, unknown> | undefined;
   if (attachmentArg) {
     try {
-      const parsed = JSON.parse(decodeURIComponent(attachmentArg.slice("--role-panel-attachments=".length))) as unknown;
+      const parsed = JSON.parse(decodeURIComponent(attachmentArg.slice(`${argumentPrefix}attachments=`.length))) as unknown;
       attachments = Array.isArray(parsed) ? parsed : [];
     } catch {
       attachments = [];
     }
   }
-  const record: RolePanelMessageRecord = {
+  if (replyContextArg) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(replyContextArg.slice(`${argumentPrefix}reply-context=`.length))) as unknown;
+      replyContext = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : undefined;
+    } catch {
+      replyContext = undefined;
+    }
+  }
+  const localRecord = {
     time: Math.floor(Date.now() / 1000),
     rawMessage: text,
     messageId,
@@ -200,24 +238,27 @@ if (rolePanelMessageArg) {
     gatewayId,
     routeProfileId,
     attachments,
-    adapterType: "rolePanel"
+    replyContext
   };
+  const record: RolePanelMessageRecord | PlanFeedbackMessageRecord = localMessageSpec.adapterType === "planFeedback"
+    ? { ...localRecord, adapterType: "planFeedback" }
+    : { ...localRecord, adapterType: "rolePanel" };
   try {
-    const result = await forwardMessageAndWait("role_panel_message", record);
+    const result = await forwardMessageAndWait(localMessageSpec.routeKind, record);
     const summary = deliverySummary(result);
     const exitCode = rolePanelDeliveryExitCode(result.status);
     if (exitCode === 1) {
-      console.error(`RabiRoute role panel message failed: ${messageId} ${summary}`);
+      console.error(`RabiRoute ${localMessageSpec.label} failed: ${messageId} ${summary}`);
       process.exit(1);
     }
     if (exitCode === 2) {
-      console.error(`RabiRoute role panel message not delivered: ${messageId} ${summary}`);
+      console.error(`RabiRoute ${localMessageSpec.label} not delivered: ${messageId} ${summary}`);
       process.exit(2);
     }
-    console.log(`RabiRoute role panel message delivered: ${messageId} ${summary}`);
+    console.log(`RabiRoute ${localMessageSpec.label} delivered: ${messageId} ${summary}`);
     process.exit(0);
   } catch (error) {
-    console.error(`RabiRoute role panel message failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`RabiRoute ${localMessageSpec.label} failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
 }
@@ -343,7 +384,7 @@ function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdap
   }, null, 2), "utf8");
 }
 
-function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook">): MessageAdapter {
+function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "heartbeat">): MessageAdapter {
   return {
     type,
     start() {
@@ -388,6 +429,9 @@ function createMessageAdapter(): MessageAdapter {
   if (config.messageAdapterType === "wecom") {
     return createWeComAdapter();
   }
+  if (config.messageAdapterType === "weixin") {
+    return createWeixinAdapter();
+  }
 
   return createPlaceholderAdapter(config.messageAdapterType);
 }
@@ -416,6 +460,9 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   }
   if (type === "wecom") {
     return createWeComAdapter();
+  }
+  if (type === "weixin") {
+    return createWeixinAdapter();
   }
   return createPlaceholderAdapter(type);
 }

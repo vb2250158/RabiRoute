@@ -67,6 +67,7 @@ data/roles/<RoleId>/plans/
   items/
     active/
   archive/
+  attachments/<planId>/
 ```
 
 活跃计划：
@@ -122,6 +123,17 @@ completedArchiveAfterHours = 72
   "nextAction": "根据确认结果更新示例和读取层",
   "waitingFor": "",
   "blockedBy": "",
+  "attachments": [
+    {
+      "id": "attachment-preview",
+      "kind": "image",
+      "name": "plan-preview.png",
+      "path": "C:/Path/To/data/roles/Role/plans/attachments/plan-id/attachment-preview-plan-preview.png",
+      "size": 2048,
+      "mimeType": "image/png",
+      "sha256": "<sha256>"
+    }
+  ],
   "steps": [
     { "id": "inspect-current", "title": "检查当前模型与界面", "status": "已完成" },
     {
@@ -176,6 +188,10 @@ completedArchiveAfterHours = 72
 `keywords` 由 Agent 在新增或更新计划时主动填写，用于 RabiRoute 在投递前做轻量命中召回。RabiRoute 不在每条消息到来时对计划内容做智能分词。
 
 `focus` 是单条计划的唯一主题声明。新增计划必须显式填写，且只能是一行；一个计划只推进一个主题，遇到无关目标或独立阻塞时应拆成另一条计划，不能继续堆进 `currentStep`。
+
+`attachments` 是计划本体的可选附件列表。Agent 可在 POST/PATCH 中为新附件提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`。Manager 校验后复制到人格私有的 `plans/attachments/<planId>/`，计划 JSON 只保存 `id/kind/name/path/size/mimeType/sha256` 元数据，不保存 Base64。最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。PATCH 省略 `attachments` 时保留原附件；显式传 `attachments: []` 时清空计划记录中的附件列表。
+
+WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` 获取受控文件。PNG、JPEG、WebP 和 GIF 图片，以及 MP4/M4V、WebM、Ogg Video、MOV/QuickTime 视频，统一显示紧凑固定宽度的 16:9 缩略图，仅在容器不足时等比缩小；点击图片打开页内大图，点击视频打开带播放控制的页内预览。视频响应支持字节范围读取，实际可播放编码仍取决于当前浏览器；其它文件显示名称、类型与大小，并通过附件响应打开或下载。读取接口会再次确认真实路径仍在该计划的受管目录内，路径穿越或 symlink 越界均失败关闭。
 
 `steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。顶层状态改为 `暂停` 时，可以保留这条 `进行中` 步骤及其 `currentStepId` 作为恢复位置；恢复时只把顶层状态改回 `进行中`。步骤可带 `detail`、`waitingFor`、`blockedBy` 和 `completedAt`；`waitingFor` 说明正在等谁或什么，`blockedBy` 说明为什么无法继续，并优先写到实际受阻的当前步骤上。`currentStep` 保留为当前进展说明，不再承担步骤列表或步骤身份。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用。
 
@@ -532,14 +548,16 @@ Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计�
 
 计划审批意见是与 `planId`、可选 `stepId` 关联的独立 JSONL 审计记录，保存在 `plans/feedback/<planId>.jsonl`。它不是计划 JSON 的第二份副本，也不是通用 Outbox Action Queue。
 
+读取接口返回折叠同一 `feedbackId` 投递状态后的完整 `records`。RibiWebGUI 在展开审批步骤时按需读取这些记录，并把用户意见、Agent 回复和系统记录按创建时间从旧到新纵向排列；`latest` 只用于轻量摘要与投递状态判断，不再替代完整意见历史。
+
 ```http
 GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-WebGUI 或托盘提交时使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。Manager 先同步落盘并立即返回 `deliveryStatus=pending`，再在后台经现有角色面板投递链通知绑定 Agent；用户界面不再等待 Agent 子进程完成。后台完成或失败时，Manager 追加同 `feedbackId` 的 `delivered / failed` 状态并发布 `plan_feedback_changed` 事件。WebGUI 只按事件读取该计划的审批摘要，不整页重载计划和记忆；记录失败时恢复原意见供重试。
+WebGUI 或托盘提交时使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。RibiWebGUI 还允许选择普通文件，或在审批输入框中按 `Ctrl+V` 粘贴剪贴板图片；最多 8 个附件，单个不超过 10 MiB、总计不超过 25 MiB。浏览器将附件内容交给 Manager，Manager 校验后写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，审批 JSONL 只保存名称、类型、大小、SHA-256 和本地路径，不内嵌二进制。Manager 先同步落盘并立即返回 `deliveryStatus=pending`，再生成独立 `plan_feedback` 系统事件，把审批文字和附件路径经 Forwarding / AgentPacket / 原 Agent adapter 通知绑定 Agent；用户界面不再等待 Agent 子进程完成。该事件不写角色面板 timeline 或统一会话账本，最近消息额度固定为 `0`。后台完成或失败时，Manager 追加同 `feedbackId` 的 `delivered / failed` 状态并发布 `plan_feedback_changed` 事件。WebGUI 只按事件读取该计划的审批摘要，不整页重载计划和记忆；记录失败时恢复原意见和附件供同一 `feedbackId` 重试，不允许用同一 ID 静默替换附件内容。
 
-Agent 从 QQ 等其它入口获得审批后，也可以调用同一接口，以 `source=qq`、`notifyAgent=false` 记录用户意见；Agent 自己的处理说明使用 `author=agent`、`kind=approval_response`，自动按 `record_only` 写入。无论来源如何，只有 Agent 后续显式 `PATCH` 计划时才会推进步骤或状态。
+Agent 从 QQ 等其它入口获得审批后，也可以调用同一接口，以 `source=qq`、`notifyAgent=false` 记录用户意见。绑定 Agent 收到建议后，应先读取当前计划与反馈，按意见显式 `PATCH` 对应计划或步骤，并把说明补充到真实文件、完整命令、变更影响、验证、回退和排除范围；随后通过当前回复上下文把面向用户的处理说明直接写成同一 `planId / stepId` 下的 `author=agent`、`kind=approval_response`。该回复以计划审批记录为交付位置，Codex 任务只保留简短处理状态，不重复承载正文。审批记录本身仍不会自动推进计划。
 
 ## Manager 展示顺序与计划视图
 
@@ -552,7 +570,7 @@ Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、视�
 当前：
 
 ```text
-“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划，其中暂停计划使用灰蓝色状态并绝对排在最后。审批卡片展示已有的批准事项、原因、文件、命令、外部变更、验证、回退和排除范围；说明不完整时同时显示缺失项和审批输入，让用户可以批准、拒绝或明确要求 Agent 补充。长列表中的屏外卡片使用浏览器 `content-visibility` 延迟渲染，详情展开不做高度过渡，审批输入保持固定高度，减少滚动、展开和输入时的布局重算。
+“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划，其中暂停计划使用灰蓝色状态并绝对排在最后。计划标题下显示与标题不同的 `focus` 描述，兼容读取时由标题回填的同值 `focus` 不重复显示。审批合同按照 `presentation.approval.stepId` 直接嵌入对应步骤卡片，展示已有的批准事项、原因、文件、命令、外部变更、验证、回退和排除范围；说明不完整时同时显示缺失项和审批输入，让用户可以批准、拒绝或明确要求 Agent 补充。计划面板外侧的页面级目录粘性悬浮，只展示当前页签与搜索结果中的计划，并在视口高度内自行滚动；计划卡片保持正常页面流，详情展开不做高度过渡，审批输入保持固定高度。
 ```
 
 近期记忆：

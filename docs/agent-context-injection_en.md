@@ -35,7 +35,7 @@ Default injection is lightweight:
 
 - Essential event fields.
 - CQ `reply` / `at` explanations for QQ messages. Reply chains are expanded from message records, while at mappings are collected together.
-- Recent bidirectional messages allowed by the current endpoint's persona-owned `recentMessageLimits` value. The current event is excluded from this window because it already has its own section.
+- Recent bidirectional messages allowed by the current endpoint's persona-owned `recentMessageLimits` value. The current event is excluded from this window because it already has its own section. `heartbeat` and the independent `plan_feedback` event are fixed exceptions and never read or inject message history.
 - Role, route, and workspace-relative paths plus a compact persona core.
 - A link to the Rabi Agent interface guide.
 - Up to three highly relevant plan, memory, and skill summaries by default.
@@ -57,7 +57,7 @@ data/roles/<RoleId>/conversation/archive/index.json
 
 The ledger includes both directions: QQ replies sent by the role, ASR/TTS, WeCom, Remote Agent, role panel, RabiLink, and other integrated endpoint traffic. Each record keeps the logical adapter, physical transport, direction, speaker, conversation, status, and safe attachment metadata without persisting private absolute attachment paths.
 
-Automatic injection must match all three scopes: the current persona, the current logical endpoint, and the current conversation (for example a QQ group/private peer, WeCom chat, or speech `sessionId`). Inbound and outbound records share one count budget. `personaConfig.json.recentMessageLimits` independently configures 11 endpoint values from `0` to `200`; the schema default is `12`, and `0` disables only automatic injection, never recording. Explicit legacy values remain effective. There is no separate 360-entry or other count cap on `current.jsonl`.
+Automatic injection must match all three scopes: the current persona, the current logical endpoint, and the current conversation (for example a QQ group/private peer, WeCom chat, or speech `sessionId`). Inbound and outbound records share one count budget. `personaConfig.json.recentMessageLimits` independently configures ordinary endpoint values from `0` to `200`; the schema default is `12`, and `0` disables only automatic injection, never recording. `heartbeat` is always treated as `0`: even when a legacy config keeps a non-zero value, AgentPacket does not read the ledger or generate a recent-message section. The independent `plan_feedback` event is also fixed at `0` and does not enter the unified conversation ledger because its dedicated feedback JSONL is the audit source of truth. There is no separate 360-entry or other count cap on `current.jsonl`.
 
 Personas may select the injection policy in `personaConfig.json`:
 
@@ -155,6 +155,8 @@ Current reply context: <replyContextJson>
 [User template supplement]
 <optional route template>
 ```
+
+For `heartbeat` and `plan_feedback`, the entire recent-message section is omitted. `{recentMessageLimit}` is `0` and `{recentMessages}` is an empty string, so a custom template cannot reintroduce historical message bodies. Heartbeat audit logs and the unified ledger continue to be recorded for explicit on-demand inspection. Plan feedback keeps only its dedicated feedback audit, AgentPacket, and delivery logs; it is not duplicated into the role-panel timeline or unified conversation ledger.
 
 `[Message code parsing]` appears only when the current message or its reply chain contains parseable CQ codes. RabiRoute follows `CQ:reply` by `messageId` through the current route's group/private message records, while AgentPacket also accepts successful Outbox sends as a local fallback. When the live NapCat path sees a referenced ID that has not been stored, the adapter calls OneBot `get_msg` before routing, caches the returned group/private record with `lookupSource=onebot_get_msg`, and continues with the next reply level. API failures are logged as warnings and do not block the current message. Expansion stops when no reply remains, the reference still cannot be resolved, a cycle is detected, or the safety depth limit is reached. Each referenced preview is capped at 200 characters and then uses `……(更多信息调用接口查看)`. Any `CQ:at` found during the walk is deduplicated and emitted together as `[CQ:at,qq=xxxx] : group card or nickname`. This section does not add the current message ID and does not repeat the plain text body.
 

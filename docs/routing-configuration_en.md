@@ -33,7 +33,7 @@ A representative shape:
   "recentMessageLimits": {
     "napcat": 100,
     "remoteAgent": 100,
-    "heartbeat": 100,
+    "heartbeat": 0,
     "rolePanel": 100,
     "speech": 100,
     "fennenote": 100,
@@ -73,9 +73,11 @@ indirect_reply
 heartbeat
 manual_trigger
 role_panel_message
+plan_feedback
 voice_transcript
 rabilink
 wecom_message
+weixin_message
 wearable_health_alert
 ```
 
@@ -84,9 +86,11 @@ Use the narrowest kind that represents the source event. `group_message` is norm
 ## Ordinary delivery and endpoint-specific exceptions
 
 - Once an ordinary endpoint message matches a rule, it is delivered directly: `steer` the active Desktop turn or `start` an idle task.
-- Heartbeat owns the separate `heartbeatSkipWhenAgentBusy` exception; it does not suppress ordinary messages.
+- Heartbeat owns the separate `heartbeatSkipWhenAgentBusy` exception; it does not suppress ordinary messages. Heartbeat never injects message history; a legacy `recentMessageLimits.heartbeat` value remains readable for compatibility but is treated as `0` at runtime.
+- `plan_feedback` is a Manager system event emitted only after the plan and Route are explicitly bound. It uses a dedicated built-in rule, neither reads nor writes chat history, and always exposes empty recent-message template values.
 - Speech owns Route `speechPushMode`: `hot` delivers every completed ASR segment, while `keyword` records all segments and delivers only after a persona `speechTriggerKeywords` match. An empty list never falls back to hot.
-- Persona `recentMessageLimits` independently configures 11 endpoint budgets from `0` to `200`, with a schema default of `12`. Zero disables automatic injection only.
+- `weixin_message` is the experimental personal-Weixin OpenClaw/iLink source. Text exposes `weixinSessionId`, `weixinUserId`, and `weixinMessageType`; media is record-only, and replies require the source session's context token.
+- Persona `recentMessageLimits` independently configures ordinary endpoint budgets from `0` to `200`, with a schema default of `12`. Zero disables automatic injection only. Heartbeat and `plan_feedback` have no adjustable budget and always omit history.
 
 ## Pipelines
 

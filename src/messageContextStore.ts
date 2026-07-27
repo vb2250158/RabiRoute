@@ -330,6 +330,7 @@ function inferredChannel(adapter: string, kind: string | undefined, item: Record
   if (optionalText(item.channel)) return optionalText(item.channel)!;
   if (adapter === "rolePanel") return "rolePanel";
   if (adapter === "wecom") return "wecom";
+  if (adapter === "weixin") return "weixin";
   if (["speech", "fennenote", "xiaoai"].includes(adapter) || kind === "asr" || kind === "tts") return adapter;
   if (adapter === "rabilink") return "rabilink";
   if (adapter === "heartbeat") return "heartbeat";
@@ -374,6 +375,9 @@ export function resolveMessageConversationKey(input: {
   }
   if (adapter === "wecom") {
     return `${scope}:${optionalText(input.conversationId ?? input.chatId ?? input.groupId ?? input.userId ?? input.target) || "default"}`;
+  }
+  if (adapter === "weixin") {
+    return `${scope}:session:${optionalText(input.sessionId ?? input.userId ?? input.target) || "default"}`;
   }
   if (adapter === "rolePanel") {
     return `${scope}:${optionalText(input.roleId ?? input.routeProfileId ?? input.target) || "default"}`;
@@ -793,7 +797,7 @@ export function messageContextFromHistoryRecord(
     const target = optionalText(group ? item.groupId : item.userId);
     return normalizeRecord({ time, direction: self ? "outbound" : "inbound", adapter, transport: transport || adapter,
       gatewayId, instanceId, channel: adapter,
-      conversationKey: resolveMessageConversationKey({ adapter, gatewayId, instanceId, groupId: group ? item.groupId : undefined, userId: group ? undefined : item.userId }),
+      conversationKey: resolveMessageConversationKey({ adapter, gatewayId, instanceId, groupId: group ? item.groupId : undefined, userId: group ? undefined : item.userId, sessionId: item.sessionId }),
       kind: historyKind, status: self ? "sent" : "accepted", sender: optionalText(self ? item.botNickname ?? item.senderName : item.senderName ?? item.userId),
       target, text, messageId, replyToMessageId, attachments: safeAttachments(item.attachments ?? item.segments) });
   }
@@ -840,13 +844,14 @@ export function messageContextFromHistoryRecord(
 }
 
 const successfulOutboxEvents = new Set([
-  "reply_sent", "group_file_uploaded", "group_file_caption_sent", "wecom_reply_sent", "rabispeech_tts_sent",
+  "reply_sent", "group_file_uploaded", "group_file_caption_sent", "wecom_reply_sent", "weixin_reply_sent", "rabispeech_tts_sent",
   "fennenote_playback_sent", "fennenote_reply_sent", "role_panel_reply_sent", "rabilink_reply_queued",
   "rabilink_proactive_queued", "agent_reply_retained"
 ]);
 
 function outboxAdapter(event: string, data: Record<string, unknown>): string {
   if (event.startsWith("wecom_")) return "wecom";
+  if (event.startsWith("weixin_")) return "weixin";
   if (event.startsWith("rabispeech_")) return "speech";
   if (event.startsWith("fennenote_")) return "fennenote";
   if (event.startsWith("role_panel_")) return "rolePanel";
@@ -889,7 +894,7 @@ function legacyHistoryItems(dataDir: string): MessageContextRecord[] {
     return record ? [record] : [];
   });
   return [
-    ...read("group-messages.jsonl", "group"), ...read("private-messages.jsonl", "private"), ...read("wecom-messages.jsonl", "wecom"),
+    ...read("group-messages.jsonl", "group"), ...read("private-messages.jsonl", "private"), ...read("wecom-messages.jsonl", "wecom"), ...read("weixin-messages.jsonl", "private", "weixin"),
     ...read("voice-transcripts.jsonl", "voice"), ...read("heartbeat-events.jsonl", "heartbeat"), ...read("manual-trigger-events.jsonl", "manual_trigger")
   ];
 }

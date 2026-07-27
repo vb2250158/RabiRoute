@@ -23,6 +23,7 @@ data/roles/<RoleId>/
   skills/*.md
   plans/items/active/*.json
   plans/archive/*.json
+  plans/attachments/<planId>/*
   plans/feedback/*.jsonl
   memory/recent/*.json
   memory/consolidated/*.json
@@ -60,6 +61,17 @@ A plan describes one focused objective. Common fields:
   "nextAction": "update both language versions",
   "waitingFor": "",
   "blockedBy": "",
+  "attachments": [
+    {
+      "id": "attachment-preview",
+      "kind": "image",
+      "name": "plan-preview.png",
+      "path": "C:/Path/To/data/roles/Role/plans/attachments/plan-id/attachment-preview-plan-preview.png",
+      "size": 2048,
+      "mimeType": "image/png",
+      "sha256": "<sha256>"
+    }
+  ],
   "steps": [
     { "id": "inspect-current", "title": "Inspect the current model and UI", "status": "已完成" },
     {
@@ -109,6 +121,10 @@ A plan describes one focused objective. Common fields:
 ```
 
 `steps` is the ordered execution path. Every new plan must list all of its steps, with at most one step in `进行中`. Top-level `currentStepId` must point to that step so both the UI and Agents can answer exactly where execution is. A paused plan may preserve that one in-progress step and `currentStepId` as its resume position; resuming only changes the top-level status back to `进行中`. A step may include `detail`, `waitingFor`, `blockedBy`, and `completedAt`: `waitingFor` identifies who or what the plan awaits, while `blockedBy` explains why it cannot proceed and should normally live on the blocked current step. `currentStep` remains a progress note; it no longer acts as the step list or step identity. Because structured steps already express the future path, the UI does not repeat `nextAction`; Agents and legacy plans may still use that field. Legacy plans remain readable and should gain structured steps on their next update.
+
+`attachments` is the optional plan-level attachment list. For a new attachment, an Agent may provide a local `path`, or `name`, optional `mimeType`, and `contentBase64` in POST/PATCH. Manager validates and copies the content into the persona-private `plans/attachments/<planId>/` directory. Plan JSON stores only `id/kind/name/path/size/mimeType/sha256` metadata and never stores Base64. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Omitting `attachments` from PATCH preserves the current list; sending `attachments: []` clears the list from the plan record.
+
+WebGUI never reads the stored local path directly. It requests files through `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId`. PNG, JPEG, WebP, and GIF images plus MP4/M4V, WebM, Ogg Video, and MOV/QuickTime videos render in compact, fixed-width 16:9 thumbnails that shrink only when their container is narrower. Images open in an in-page large-image preview, while videos open in an in-page player with controls. Video responses support byte ranges; actual playback codecs still depend on the current browser. Other files show name, type, and size and open or download through the attachment response. The read boundary rechecks that the real path remains inside that plan's managed directory, failing closed on traversal or symlink escape.
 
 A current step that requires approval should include a complete `approvalRequest`. `request` and `reason` state the decision and why it is needed. `files` lists exact paths, `create/modify/delete/move`, and the concrete edit; `commands` contains complete commands, purpose, and expected effects; `changes` identifies configuration, database, cloud, or external-system targets. `validation`, `rollback`, and `outOfScope` define acceptance, recovery, and explicit exclusions. At least one of `files / commands / changes` should be concrete. Legacy plans remain readable. Manager returns `presentation.approval.state=incomplete` and missing fields when details are sparse, but users can still submit approval feedback; the warning is for the Agent to improve the plan, not a restriction on the user.
 
@@ -320,9 +336,11 @@ Both `/roles/...` and `/api/roles/...` prefixes are accepted. Public documentati
 
 Plan approval feedback is an independent JSONL audit record associated with a `planId` and optional `stepId`, stored under `plans/feedback/<planId>.jsonl`. It is neither a second copy of the plan JSON nor the generic Outbox Action Queue.
 
-WebGUI and tray submissions use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Manager persists the feedback and immediately returns `deliveryStatus=pending`, then notifies the bound Agent through the existing role-panel path in the background; the UI no longer waits for the Agent child process. Completion or failure appends a `delivered / failed` state for the same `feedbackId` and emits `plan_feedback_changed`. WebGUI reacts by reading only that plan's feedback summary instead of reloading all plans and memory. A failed notification restores the submitted text for retry.
+The read endpoint returns complete `records` after collapsing delivery-state updates for the same `feedbackId`. When an approval step is expanded, RibiWebGUI loads those records on demand and stacks user feedback, Agent replies, and system records from oldest to newest. `latest` remains only a lightweight summary and delivery-state signal; it no longer replaces the visible feedback history.
 
-After receiving approval through QQ or another channel, an Agent may call the same endpoint with `source=qq` and `notifyAgent=false` to record the user's decision. Agent-authored handling notes use `author=agent` and `kind=approval_response`, which are always `record_only`. No feedback submission advances a plan; only a later explicit plan `PATCH` by the Agent changes steps or status.
+WebGUI and tray submissions use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. RibiWebGUI also accepts ordinary files from the picker and clipboard images pasted with `Ctrl+V` inside the feedback field. A submission may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. The browser sends attachment content to Manager; after validation Manager materializes it under the private runtime directory `plans/feedback/attachments/<feedbackId>/`. The feedback JSONL stores only the name, kind, size, SHA-256, and local path rather than embedding binary content. Manager persists the feedback and immediately returns `deliveryStatus=pending`, then emits an independent `plan_feedback` system event that carries the text and attachment paths through Forwarding, AgentPacket, and the existing Agent adapter to the bound Agent; the UI no longer waits for the Agent child process. This event is not written to the role-panel timeline or unified conversation ledger, and its recent-message budget is fixed at `0`. Completion or failure appends a `delivered / failed` state for the same `feedbackId` and emits `plan_feedback_changed`. WebGUI reacts by reading only that plan's feedback summary instead of reloading all plans and memory. A failed notification restores the submitted text and attachments for a same-ID retry; the same `feedbackId` cannot silently replace attachment content.
+
+After receiving approval through QQ or another channel, an Agent may call the same endpoint with `source=qq` and `notifyAgent=false` to record the user's decision. When the bound Agent receives feedback, it first reads the current plan and feedback, explicitly `PATCH`es the affected plan or step, and expands the plan description with real files, complete commands, change impact, validation, rollback, and exclusions. It then uses the current reply context to write the user-facing handling note directly under the same `planId / stepId` as `author=agent` and `kind=approval_response`. The plan approval record is the delivery surface; the Codex task keeps only a short processing status instead of duplicating the response body. Feedback itself still never advances a plan automatically.
 
 ## Manager presentation order and plan views
 
@@ -330,7 +348,7 @@ The Manager plan API adds read-only `presentation.status` and `presentation.tone
 
 The Qt tray and RibiWebGUI both consume this Manager DTO, view membership, palette, and order. Their shared knowledge categories are `Current / Plans / Recent Memory / Archived`: Current combines in-progress plans with recent memory, paused plans remain only under Plans, and Archived combines archived plans with consolidated memory. Neither client reads `data/` directly nor owns a separate state-recognition, category, status-color, or ordering table.
 
-Both the Qt tray and RibiWebGUI's Plans & Memory page consume this Manager DTO and its existing order. Neither reads `data/` directly nor maintains a separate status or sorting implementation.
+Both the Qt tray and RibiWebGUI's Plans & Memory page consume this Manager DTO and its existing order. Neither reads `data/` directly nor maintains a separate status or sorting implementation. RibiWebGUI shows a non-duplicate `focus` below the plan title and nests the approval contract inside the step card identified by `presentation.approval.stepId`. Its page-level directory floats outside the plan panel, stays sticky, and scrolls within the viewport; it contains only the plans visible under the current tab and search query, while plan cards remain in normal page flow.
 
 ## Qt tray view
 

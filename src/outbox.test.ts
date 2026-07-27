@@ -110,6 +110,72 @@ test("legacy Codex reply context normalizes to the local Agent output", async ()
   assert.equal(result.reason, "Reply kept in the local Agent session.");
 });
 
+test("plan feedback replies are written to the plan audit record and published to the plan page", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-plan-feedback-"));
+  const rolesRoot = path.join(rootDir, "data", "roles");
+  const roleDir = path.join(rolesRoot, "Rabi");
+  const planDir = path.join(roleDir, "plans", "items", "active");
+  fs.mkdirSync(planDir, { recursive: true });
+  fs.writeFileSync(path.join(planDir, "plan-1.json"), JSON.stringify({
+    id: "plan-1",
+    title: "说明原问题",
+    focus: "补齐计划背景和修改边界",
+    status: "进行中",
+    currentStepId: "approval",
+    steps: [{ id: "approval", title: "等待审批", status: "进行中" }],
+    createdAt: "2026-07-27T00:00:00.000Z",
+    updatedAt: "2026-07-27T00:00:00.000Z",
+    keywords: ["plan"]
+  }), "utf8");
+  const events: Array<{ eventType: string; data: Record<string, unknown> }> = [];
+
+  const result = await handleAgentReply({
+    text: "已补充原问题、具体修改范围、验证和回退说明。",
+    replyContext: {
+      runtimeRouteId: "main",
+      routeProfileId: "main",
+      targetType: "plan_feedback",
+      adapterType: "rolePanel",
+      messageId: "plan-feedback-feedback-1",
+      roleId: "Rabi",
+      planId: "plan-1",
+      planStepId: "approval",
+      planFeedbackId: "feedback-1",
+      planFeedbackResponseId: "response-feedback-1"
+    }
+  }, {
+    rootDir,
+    routeRoot: path.join(rootDir, "data", "route"),
+    rolesRoot,
+    runtimes: [{
+      id: "main",
+      agentRoleId: "Rabi",
+      pipeline: { outputAdapter: "agent", outputPipeline: "agent" }
+    }],
+    publishEvent: (eventType, data) => events.push({ eventType, data })
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.targetType, "plan_feedback");
+  assert.equal(result.sentMessageId, "response-feedback-1");
+  const feedbackPath = path.join(roleDir, "plans", "feedback", "plan-1.jsonl");
+  const rows = fs.readFileSync(feedbackPath, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "approval_response");
+  assert.equal(rows[0].author, "agent");
+  assert.equal(rows[0].stepId, "approval");
+  assert.equal(rows[0].text, "已补充原问题、具体修改范围、验证和回退说明。");
+  assert.deepEqual(events, [{
+    eventType: "plan_feedback_changed",
+    data: {
+      roleId: "Rabi",
+      planId: "plan-1",
+      feedbackId: "response-feedback-1",
+      replyToFeedbackId: "feedback-1"
+    }
+  }]);
+});
+
 test("QQ output does not require original source context when target is explicit", async () => {
   const result = await handleAgentReply({
     routeProfileId: "main",

@@ -9,6 +9,7 @@ test("translates exact interface copy and preserves surrounding whitespace", () 
   assert.equal(translateText("没有 Route 订阅语音消息", "en"), "No Route subscribes to speech messages");
   assert.equal(translateText("目标测试机报告", "en"), "Target-machine report");
   assert.equal(translateText("启动时预热", "en"), "Warm up at startup");
+  assert.equal(translateText("计划审批", "en"), "Plan approval");
   assert.equal(translateText("  保存配置  ", "en"), "  Save configuration  ");
 });
 
@@ -95,6 +96,35 @@ test("translates Codex Hook management copy", () => {
   assert.equal(
     translateText("；默认开启。", "en"),
     "; enabled by default."
+  );
+});
+
+test("translates plan directory and step-local approval copy", () => {
+  assert.equal(translateText("计划描述", "en"), "Plan description");
+  assert.equal(translateText("计划附件", "en"), "Plan attachments");
+  assert.equal(translateText("审批意见记录", "en"), "Approval feedback history");
+  assert.equal(translateText("点击查看大图", "en"), "Click to enlarge");
+  assert.equal(translateText("点击预览视频", "en"), "Click to preview video");
+  assert.equal(translateText("图片预览", "en"), "Image preview");
+  assert.equal(translateText("视频预览", "en"), "Video preview");
+  assert.equal(translateText("计划目录", "en"), "Plan directory");
+  assert.equal(translateText("点击计划快速跳转", "en"), "Select a plan to jump");
+  assert.equal(translateText("计划项", "en"), "Plan item");
+  assert.equal(translateText("步骤进度", "en"), "Step progress");
+  assert.equal(translateText("执行计划", "en"), "Execution plan");
+  assert.equal(translateText("正在执行", "en"), "In progress");
+  assert.equal(
+    translateText("核对本步骤的执行边界后提交审批意见", "en"),
+    "Review this step's execution boundaries before submitting approval feedback"
+  );
+  assert.equal(
+    translateText("Enter 直接提交，Shift+Enter 换行；提交后由 Agent 判断如何处理，不会直接改变计划状态。", "en"),
+    "Press Enter to submit or Shift+Enter for a new line. The Agent decides how to handle the feedback; submitting it does not directly change plan status."
+  );
+  assert.equal(translateText("添加附件", "en"), "Add attachments");
+  assert.equal(
+    translateText("支持选择文件，也可以在输入框中按 Ctrl+V 粘贴图片。", "en"),
+    "Choose files, or press Ctrl+V in the feedback field to paste an image."
   );
 });
 

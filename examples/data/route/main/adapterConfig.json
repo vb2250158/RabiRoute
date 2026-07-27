@@ -33,7 +33,7 @@
   "napcatHttpUrl": "http://127.0.0.1:3000",
   "napcatAccessToken": "",
   "heartbeatIntervalSeconds": 900,
-  "heartbeatMessage": "定时心跳巡检：请检查最近消息和角色相关上下文。",
+  "heartbeatMessage": "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
   "codexThreadName": "QQ 消息监听",
   "codexCwd": ".",
   "agentModel": "",

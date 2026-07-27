@@ -73,7 +73,9 @@ After signing in, open a PC by stable `rabiGuid`:
 https://<relay-host>/manage/<account>/<RabiGUID>/#/routes
 ```
 
-The server queues WebGUI HTTP requests for that PC worker. The worker calls its local Manager, normally `http://127.0.0.1:8790`, and returns status, body, and headers. The Relay never opens an inbound connection to the user's PC.
+The server queues ordinary WebGUI HTTP requests for that PC worker. The worker calls its local Manager, normally `http://127.0.0.1:8790`, and returns status, body, and headers. Attachments, images, and downloads stay under the same prefix. Video `Range` / `If-Range` reaches the local Manager and preserves `206`, `Content-Range`, and `Accept-Ranges`. `/api/events` bypasses the one-shot request queue: the PC worker forwards local Manager SSE events into a dedicated Relay event stream, so gateway, plan, persona, and speech state can still refresh live. The Relay never opens an inbound connection to the user's PC.
+
+Remote WebGUI uses the `/manage` login cookie, while the PC worker uses a separate RabiLink application token. Relay never forwards that application token, the management cookie, or a LAN `webgui_token` to the local Manager, and these authentication boundaries are not merged.
 
 ## Same-application PC discovery and persona-sync transit
 
@@ -96,9 +98,10 @@ Worker endpoints:
 ```http
 GET  /worker/webgui-requests?limit=1&deviceId=<pc>&deviceGuid=<guid>
 POST /worker/webgui-requests/<requestId>/response
+POST /worker/webgui-events
 ```
 
-Response bodies are base64-safe for HTML, JavaScript, CSS, images, and JSON. The proxy rewrites common absolute `/api`, `/manager-config`, and `/assets` paths so the remote page continues addressing the same PC. Bundled reports are served under the same authenticated PC prefix. Frontend report links must use relative `reports/...` URLs rather than root-relative `/reports/...`; Relay exposes only the build's `assets/` and `reports/` directories, not arbitrary server files.
+Response bodies are base64-safe for HTML, JavaScript, CSS, images, audio/video, and JSON. Request headers are limited to `Accept`, `Content-Type`, `User-Agent`, `Range`, and `If-Range`; hop-by-hop response headers and cookies are removed. The worker parses local Manager `/api/events` and posts each event to `/worker/webgui-events`; Relay publishes it only to an authenticated page for the selected PC without business polling. The proxy rewrites common absolute `/api`, `/manager-config`, and `/assets` paths so the remote page continues addressing the same PC. Bundled reports are served under the same authenticated PC prefix. Frontend report links must use relative `reports/...` URLs rather than root-relative `/reports/...`; Relay exposes only the build's `assets/` and `reports/` directories, not arbitrary server files.
 
 ## Direct RabiSpeech API
 
@@ -237,6 +240,8 @@ GET /worker/tasks?limit=1&deviceId=<pc-device-id>
 
 The PC first subscribes to `/api/rabilink/events` with its stable device ID/GUID and capabilities. `task_available`, `webgui_available`, and `speech_available` each trigger one immediate queue drain with `waitMs=0`; `persona_sync_peer_changed` triggers one persona peer/manifest reconciliation. A legacy nonzero `waitMs` blocks on the same internal event and performs one recovery claim after subscription; it does not restore queue scanning.
 
+Relay is the single filter for the phone's "processing Rabi PC" picker. Only workers advertising at least one processing capability (`tasks`, `webgui`, `persona-sync`, or `speech`) appear in `GET /api/rabilink/mobile/state`. Portable terminals declared as `phone`, `glasses`, `watch`, or `earbuds` remain valid `/api/rabilink/events` subscribers but are never PC candidates. `PATCH /api/rabilink/mobile/target` applies the same rule and rejects terminal devices as processing targets.
+
 For `rabilink.observation`, the worker writes the role ledger, then calls the finish endpoint to confirm local persistence. It does not directly call Codex inside the claim request. Older non-record-only tasks still use the compatibility forwarding path.
 
 Local/LAN debugging can POST directly to the configured local `/rabilink` gateway endpoint, but the production public path uses Relay and the global PC worker.
@@ -254,7 +259,7 @@ Local/LAN debugging can POST directly to the configured local `/rabilink` gatewa
 | `RABILINK_RELAY_OUTBOX_TTL_MS` | `172800000` | Retention for broadcasts, kind-only targets, and messages whose explicit targets all returned `delivered`; pending explicit targets do not expire by this TTL |
 | `RABILINK_RELAY_WORKER_TASK_WAIT_MS` | `60000` | Legacy worker event-wait deadline and recent-activity fallback; an active SSE connection directly owns online presence |
 | `RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS` | `30000` | Remote WebGUI response wait |
-| `RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES` | `10485760` | Remote WebGUI request-body limit |
+| `RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES` | `41943040` | Default remote WebGUI request and decoded-response limit; worker Base64 responses have a separate encoding-expansion gate |
 | `RABILINK_RELAY_TASK_TTL_MS` | `600000` | Legacy task retention |
 | `RABILINK_RELAY_LEASE_MS` | `180000` | Worker lease |
 | `RABILINK_RELAY_DATA_DIR` | `data/rabilink-relay` | Runtime state, logs, accounts, and applications |

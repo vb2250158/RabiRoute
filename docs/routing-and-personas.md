@@ -63,7 +63,7 @@ data/route/dev-review/adapterConfig.json
 | 人格头像 | 人格 `personaConfig.json.avatar` 指向的角色目录内图片 | 头像跟随人格复用，不应在每条 Route 重复配置。 |
 | 语音热投递或关键词模式 | Route `adapterConfig.json.speechPushMode` | 决定这条语音入口是否每段立即投递。 |
 | 人格名/称呼/唤醒词 | 人格 `personaConfig.json.speechTriggerKeywords` | 同一人格被多条 Route 复用时应共用同一组称呼。 |
-| 11 个消息端的自动上下文条数 | 人格 `personaConfig.json.recentMessageLimits` | 同一人格的不同消息端需要不同上下文长度；`0` 只关闭自动注入，不停止记录。 |
+| 普通消息端的自动上下文条数 | 人格 `personaConfig.json.recentMessageLimits` | 同一人格的不同消息端需要不同上下文长度；`0` 只关闭自动注入，不停止记录。Heartbeat 固定无历史输入。 |
 | TTS 模型、声线、语言、语速和发声说明 | 人格 `voice/voice-profile.json` | 声音是人格的长期属性，不应在 Route 复制。 |
 | 当前双向消息证据 | 人格 `conversation/current.jsonl` | 入站/出站、ASR/TTS、QQ 自身回复和其他端统一记录。 |
 | 说话人资料 | RabiSpeech 主机共用 `output/speaker-profiles.json` | 人物资料设置一次后可为后续人格/Route/会议复用；标签仍按 `sessionId + speakerLabel` 手工绑定。 |

@@ -12,6 +12,8 @@ import type {
   PipelineDefinition
 } from "@shared/gatewayConfigModel";
 import type { PersonaAvatarPresentation } from "@shared/personaAvatarContract";
+import type { PlanAttachmentPresentation } from "@shared/planAttachmentContract";
+import type { PlanFeedbackAttachment } from "@shared/planFeedbackContract";
 
 export type {
   AgentAdapterType,
@@ -27,7 +29,7 @@ export type {
 
 export type NotificationRule = NotificationRuleDefinition;
 export type NapCatInstance = NapCatInstanceDefinition;
-export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
+export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -163,6 +165,12 @@ export type MetaPayload = {
   managerPort: number;
   rabiGuid?: string;
   rabiName?: string;
+  webguiLan?: {
+    enabled?: boolean;
+    tokenConfigured?: boolean;
+    listeningOnLan?: boolean;
+    restartRequired?: boolean;
+  };
   rabiLinkRelay?: {
     enabled?: boolean;
     url?: string;
@@ -231,6 +239,7 @@ export type RolePlan = {
   nextAction?: string;
   waitingFor?: string;
   blockedBy?: string;
+  attachments: PlanAttachmentPresentation[];
   steps: RolePlanStep[];
   project?: { name?: string; path?: string };
   source?: { kind?: string; summary?: string };
@@ -262,6 +271,7 @@ export type RolePlan = {
   approval: {
     count: number;
     latest?: RolePlanFeedback;
+    records?: RolePlanFeedback[];
   };
 };
 
@@ -277,6 +287,7 @@ export type RolePlanFeedback = {
   author: "user" | "agent" | "system";
   source: "webgui" | "tray" | "qq" | "agent" | "api";
   text: string;
+  attachments: PlanFeedbackAttachment[];
   createdAt: string;
   updatedAt: string;
   deliveryStatus: "record_only" | "pending" | "delivered" | "failed";

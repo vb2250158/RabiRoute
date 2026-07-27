@@ -60,6 +60,8 @@ npm run start:manager
 
 打开本机地址 `http://127.0.0.1:8790/` 进入 RibiWebGUI。首次运行且本地没有运行数据时，Manager 会从 `examples/data/` 初始化一份脱敏配置。
 
+局域网访问默认关闭。在本机控制台打开“局域网访问 WebGUI”并生成访问密钥，重启 Manager 后，其他设备可通过 `http://<Rabi-PC-局域网IP>:8790/#/routes/<Route配置名>/overview?webgui_token=<密钥>` 访问指定 Route 的控制台，也可把末尾页面改为 `knowledge` 直接打开该 Route 的计划与记忆。Manager 已实际监听局域网时，从本机 `localhost/127.0.0.1` 打开的 WebGUI 会自动重定向到优先局域网 IP，并保留当前 Route 和页面；左侧“当前路由”切换也会立即重定向当前 Route 页面 URL。`127.0.0.1` 永远表示当前打开浏览器的设备，因此不能从另一台手机或电脑使用。访问密钥统一保护 Manager API、SSE 和私有 WebGUI 资源；Windows 防火墙仍可能需要显式允许 `8790` 端口。
+
 本机语音实时页是 `http://127.0.0.1:8790/#/speech`，其中 provider、模型和运行设备来自当前电脑。随仓库提供的[基准报告](ribiwebgui/public/reports/rabispeech-model-benchmark.html)只代表报告内标明的目标测试机；从其他设备调用时见[远端 TTS / ASR 指南](docs/user-guide/speech-api.md)。
 
 最短验证路径：
@@ -100,9 +102,9 @@ flowchart TB
 
 | 领域 | 已实现能力 |
 | --- | --- |
-| 消息入口 | 已验证：NapCat / OneBot、Heartbeat 和内置角色面板。实验支持：Remote Agent、RabiSpeech 语音消息端、小爱、RabiLink、通用 Webhook 和 WeCom。FenneNote 已退役，仅保留旧配置读取兼容；Manual trigger 是 Manager 动作，不是 adapter。 |
+| 消息入口 | 已验证：NapCat / OneBot、Heartbeat 和内置角色面板。实验支持：Remote Agent、RabiSpeech 语音消息端、小爱、RabiLink、通用 Webhook、WeCom，以及仅供开发者试验的个人微信 OpenClaw/iLink 原型。FenneNote 已退役，仅保留旧配置读取兼容；Manual trigger 是 Manager 动作，不是 adapter。 |
 | 路由 | Route profile、人格规则、直接 `@`、回复链路、私聊、关键词、正则、定时规则和每 route 独立模板 |
-| 上下文 | 人格级双向会话账本，按 11 种逻辑消息端分别设置 `0–200` 条自动注入额度（默认 `100`），以及人格文件、计划、记忆引用、回复上下文和安全附件元数据 |
+| 上下文 | 人格级双向会话账本，普通逻辑消息端分别设置 `0–200` 条自动注入额度（默认 `12`），Heartbeat 固定无历史输入，并提供人格文件、计划、记忆引用、回复上下文和安全附件元数据 |
 | 处理端 | 已验证：Codex。实验支持：Copilot CLI、AstrBot。人工接力：Marvis。 |
 | 控制面 | Node.js Manager 与 RibiWebGUI，负责 route 生命周期、配置、状态、日志、人格和诊断 |
 | 本机语音 | 实验支持：RabiSpeech TTS/ASR。同一套主机 VAD/ASR 记录完整来源与声纹证据，但逻辑消息端分开：本机/普通远程麦克风只进入 `speech` Route；Android 手机/眼镜持续传 PCM 到同一主机处理链，但只进入 `rabilink` Route。Android 不切句、不跑 ASR 或声纹；移动端以事件唤醒并用 cursor 单次查询补漏，已知离线期间另有五分钟一次、只读系统联网状态的厂商回调漏发兜底，不查询 Relay 或业务数据。可靠文字/媒体/回执保留到确认，有界 PCM 丢旧追实时；`delivered` 与设备 AudioTrack marker 产生的 `played` 明确分开。手机回复默认回原设备，人格 TTS 和主机级 FIFO 仍归 RabiSpeech。路由消息询问一天或某段时间“谁说了什么”时，AgentPacket 会提供当前人格的归类查询和关系修正合同，主机仍不判断身份。 |
@@ -156,7 +158,7 @@ data/roles/<RoleId>/personaConfig.json
 
 - `adapterConfig.json` 定义消息入口、处理端 adapter、工作目录、pipeline preset 和人格绑定。
 - `persona.md` 保存人格或面向处理端的角色说明。
-- `personaConfig.json` 保存可选的人格头像文件名、通知规则、消息模板、人格语音唤醒关键词，以及 11 种消息端各自的最近双向消息注入数量。RibiWebGUI 可把不超过 5 MB 的 PNG、JPEG、WebP 或 GIF 头像上传到人格目录。
+- `personaConfig.json` 保存可选的人格头像文件名、通知规则、消息模板、人格语音唤醒关键词，以及普通消息端各自的最近双向消息注入数量；Heartbeat 固定不注入历史。RibiWebGUI 可把不超过 5 MB 的 PNG、JPEG、WebP 或 GIF 头像上传到人格目录。
 
 运行时完整会话记录位于 `data/roles/<RoleId>/conversation/` 。`current.jsonl` 没有条数上限；归档检查发现超过 72 小时的记录时，会把连续前缀中已超过 24 小时的完整记录移入 `archive/<n>~<m>.jsonl`；自动上下文只读 `current.jsonl`。
 

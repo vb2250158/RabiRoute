@@ -1,0 +1,30 @@
+{
+  "id": "Rabi__weixin",
+  "name": "Rabi 个人微信（实验）",
+  "enabled": false,
+  "messageAdapters": ["weixin"],
+  "messageAdapterPolicies": {
+    "weixin": {
+      "inputEnabled": true,
+      "outputEnabled": true,
+      "supportedOutputs": ["text"],
+      "allowedFileRoots": []
+    }
+  },
+  "agentAdapters": ["codex"],
+  "pipelinePreset": "weixin_chat",
+  "pipeline": {
+    "inputAdapter": "weixin",
+    "outputAdapter": "weixin",
+    "outputPipeline": "weixin",
+    "promptOutputMode": "plain_text",
+    "replyToSource": true
+  },
+  "weixinBaseUrl": "https://ilinkai.weixin.qq.com",
+  "weixinBotType": "3",
+  "gatewayPort": 8796,
+  "agentRoleId": "Rabi",
+  "rolesDir": "./data/roles",
+  "dataDir": "./data/route/weixin",
+  "configName": "weixin"
+}

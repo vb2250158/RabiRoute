@@ -43,7 +43,7 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
   "recentMessageLimits": {
     "napcat": 100,
     "remoteAgent": 100,
-    "heartbeat": 100,
+    "heartbeat": 0,
     "rolePanel": 100,
     "speech": 100,
     "fennenote": 100,
@@ -90,10 +90,12 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 - `indirect_reply`：当前消息回复了某条曾经 @ 机器人的消息，或继续回复一条已经触发过路由的群聊回复链。路由层只识别回复链结构，不判断内容是否“值得回”；陪伴型角色可以订阅它来持续接住对话，工作型角色可以不订阅或配合 `regex` 降噪。
 - `group_message`：普通群聊消息，通常配合 `regex` 使用。
 - `wecom_message`：企业微信群聊消息。它默认使用和 NapCat 群聊接近的模板变量：`groupId` 表示企业微信群聊或 chat id，`userId` 表示发送者企业微信用户 ID，`sender` / `senderName` 表示发送者展示名，额外提供 `wecomReqId`、`wecomConversationId`、`wecomChatId`、`wecomSenderId` 和 `wecomMessageType`。
+- `weixin_message`：个人微信 OpenClaw/iLink 实验消息。文本事件提供 `weixinSessionId`、`weixinUserId` 和 `weixinMessageType`；媒体首版只记录，不进入 Agent。回复仅允许回到已经拥有 context token 的来源会话。
 - `private`：私聊消息。
 - `heartbeat`：定时触发消息。
 - `manual_trigger`：手动触发事件，例如托盘菜单主动触发某条任务/规则。它不是消息 adapter 类型，也不会伪装成 heartbeat；是否投递仍由规则的 `enabled` 和 `routeKinds` 勾选决定。
 - `role_panel_message`：角色面板的本地消息。Manager/托盘写入角色 timeline 后进入真实 forwarding；内置规则会自动存在，不能当成普通可删除规则。
+- `plan_feedback`：Manager 在计划审批意见落盘后生成的独立系统事件。它由明确的 `roleId / gatewayId / planId` 定位，不依赖可编辑消息规则，不写角色面板 timeline 或统一会话账本，也不注入最近消息。
 - `voice_transcript`：Webhook / 语音转写文本。
 - `rabilink`：RabiLink 显式消息或本地兼容入口事件。AIUI observation 的主链通常先 record-first 写统一账本，不会让每条 observation 都直接成为该 route kind 的 Agent 任务。
 - `wearable_health_alert`：穿戴健康样本命中阈值或睡眠状态变化后的告警；普通样本只记录。
@@ -101,9 +103,10 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 ## 普通投递、心跳与语音的例外
 
 - 普通消息端事件一旦命中规则，默认直接投递：当前 Desktop turn 活跃时 `steer`，空闲时 `start`。
-- Heartbeat 有独立 `heartbeatSkipWhenAgentBusy`。开启后只在会话工作中跳过 heartbeat，不影响普通消息。
+- Heartbeat 有独立 `heartbeatSkipWhenAgentBusy`。开启后只在会话工作中跳过 heartbeat，不影响普通消息。Heartbeat 固定不注入历史消息；旧配置里的 `recentMessageLimits.heartbeat` 会保留兼容读取，但运行时按 `0` 处理。
+- `plan_feedback` 是 Manager 已明确绑定计划和 Route 后产生的系统事件，固定投递专用内置规则；它不读取或写入聊天历史，最近消息模板变量始终为空。
 - 语音有 Route 级 `speechPushMode`：`hot` 每段 ASR 完成即投递；`keyword` 仍记录所有 ASR，仅命中人格 `speechTriggerKeywords` 时投递。空关键词不回退 `hot`。
-- `recentMessageLimits` 也归人格，11 个消息端分别设置 `0–200`，默认 `12`；只控制自动注入，不控制记录。
+- `recentMessageLimits` 也归人格，普通消息端分别设置 `0–200`，默认 `12`；只控制自动注入，不控制记录。Heartbeat 与 `plan_feedback` 不提供可调额度，始终不注入历史。
 
 ## Pipeline 预设 / 通道预设
 
@@ -130,6 +133,7 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 
 - `qq_chat`：QQ 输入和 QQ 输出意图，适合普通聊天文本。
 - `wecom_chat`：企业微信输入和企业微信输出意图，适合企业微信群聊文本/Markdown 回复。
+- `weixin_chat`：个人微信文本输入与来源会话文本回复；不能主动选择任意联系人，也不支持媒体输出。
 - `voice_chat`：RabiSpeech 语音输入和人格 TTS 意图，适合短句口语化回复。模型、声线、语言、语速和发声说明以人格 `voice/voice-profile.json` 为唯一真源。
 - `webhook_task`：Webhook 输入和文件/Markdown 输出意图，适合任务触发。
 

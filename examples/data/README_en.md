@@ -18,9 +18,10 @@ The pack provides:
 - Public plan and memory directory structures.
 - A platform-neutral one-plan/one-task tracking skill example.
 - A disabled RabiLink Route that demonstrates a record-first observation ledger, idle or periodic review, and proactive downstream replies.
+- A disabled personal-Weixin Route prototype. Login tokens, sync cursors, and context tokens are created only under local runtime `data/` after opt-in; the public example contains no real account or credential.
 - Relative `rolesDir` configuration suitable for a copied workspace.
 
-Only `main` is enabled after copying the full pack. RabiLink, voice-chat, native Rokid voice, XiaoAI, and WeCom remain disabled until their credentials, working directories, and ports have been checked.
+Only `main` is enabled after copying the full pack. RabiLink, voice-chat, native Rokid voice, XiaoAI, WeCom, and personal Weixin remain disabled until credentials or QR login, working directories, and ports have been checked.
 
 ```powershell
 xcopy examples\data data /E /I

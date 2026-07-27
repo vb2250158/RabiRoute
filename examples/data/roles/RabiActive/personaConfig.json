@@ -2,7 +2,7 @@
   "recentMessageLimits": {
     "napcat": 12,
     "remoteAgent": 12,
-    "heartbeat": 12,
+    "heartbeat": 0,
     "rolePanel": 12,
     "speech": 12,
     "fennenote": 12,
@@ -10,7 +10,8 @@
     "rabilink": 12,
     "wearable": 12,
     "webhook": 12,
-    "wecom": 12
+    "wecom": 12,
+    "weixin": 12
   },
   "speechTriggerKeywords": [],
   "notificationRules": [

@@ -30,7 +30,7 @@ export const defaultPrivateNotificationTemplate = "";
 export const defaultHeartbeatNotificationTemplate = "";
 export const defaultVoiceTranscriptNotificationTemplate = "";
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message";
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message";
 
 export type NotificationRule = {
   id: string;
@@ -131,7 +131,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 export function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "remoteAgent" || raw === "speech" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "weixin" || raw === "remoteAgent" || raw === "speech" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -143,16 +143,18 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "heartbeat"
     || kind === "manual_trigger"
     || kind === "role_panel_message"
+    || kind === "plan_feedback"
     || kind === "voice_transcript"
     || kind === "rabilink"
     || kind === "wearable_health_alert"
-    || kind === "wecom_message";
+    || kind === "wecom_message"
+    || kind === "weixin_message";
 }
 
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "wearable" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "wearable" || item === "webhook" || item === "wecom" || item === "weixin" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   if (adapters.includes("disabled")) {
     return ["disabled"];
   }
@@ -425,7 +427,7 @@ export const config = {
   messageAdapterType: parseMessageAdapterType(process.env.MESSAGE_ADAPTER_TYPE),
   messageAdapterTypes: parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE),
   heartbeatIntervalSeconds: parsePositiveNumber(process.env.HEARTBEAT_INTERVAL_SECONDS, 900),
-  heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请检查最近消息和角色相关上下文。",
+  heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
   heartbeatSkipWhenAgentBusy: parseBoolean(process.env.HEARTBEAT_SKIP_WHEN_AGENT_BUSY, false),
   remoteAgentDefaultDeviceId: process.env.REMOTE_AGENT_DEFAULT_DEVICE_ID?.trim() || "",
   remoteAgentDefaultCwd: process.env.REMOTE_AGENT_DEFAULT_CWD?.trim() || "",
@@ -445,6 +447,8 @@ export const config = {
   rabiLinkWebhookPath: process.env.RABILINK_WEBHOOK_PATH ?? "/rabilink",
   rabiLinkWebhookPort: Number(process.env.RABILINK_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   rabiLinkWebhookHost: process.env.RABILINK_WEBHOOK_HOST ?? "0.0.0.0",
+  weixinBaseUrl: process.env.WEIXIN_BASE_URL?.trim() || "https://ilinkai.weixin.qq.com",
+  weixinBotType: process.env.WEIXIN_BOT_TYPE?.trim() || "3",
   rabiLinkRelayEnabled: parseBoolean(
     process.env.RABILINK_RELAY_ENABLED,
     Boolean(normalizeOptionalString(process.env.RABILINK_RELAY_URL) && normalizeOptionalString(process.env.RABILINK_RELAY_APP_TOKEN))

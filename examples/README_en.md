@@ -14,7 +14,7 @@ Examples are not runtime dependencies. On first start, if either `data/route` or
 
 To try the main project, copy [`examples/data/`](./data/README_en.md) to the repository's `data/` directory. The pack provides one enabled QQ/NapCat plus heartbeat Route, together with the Rabi persona and sample message rules, plans, and memories.
 
-Only `main` is enabled by default. RabiLink, native Rokid voice, voice-chat, WeCom, and XiaoAI are opt-in templates that require credentials, hardware, or external services.
+Only `main` is enabled by default. RabiLink, native Rokid voice, voice-chat, WeCom, personal Weixin, and XiaoAI are opt-in templates that require credentials, hardware, QR login, or external services.
 
 ```powershell
 xcopy examples\data data /E /I

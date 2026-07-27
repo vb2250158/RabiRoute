@@ -105,6 +105,7 @@ skills/
 
 - `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别；引用消息未落盘时，通过 `napcatReplyMessages.ts` 调用 `get_msg` 递归补齐并缓存，查询失败不阻塞当前路由。
 - `wecomAdapter.ts`：接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。当前成熟度仍是 experimental，企业微信群聊字段尽量对齐 NapCat，专用字段只作为补充。
+- `weixinAdapter.ts` + `weixinOpenClaw.ts`：个人微信实验原型，负责 iLink 二维码登录、长轮询、context token 持久化、文本投递和来源会话文本回复。运行 token 只写 `data/`；媒体首版只记录，尚未完成真实账号长期验收。
 - `webhookAdapter.ts`：接通用 Webhook、小爱及旧 FenneNote 兼容回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。新本机语音入口使用 RabiSpeech。
 - `rabilinkAdapter.ts` / `rabilinkRelayWorker.ts`：本地兼容入口与 Relay worker；observation 可先写统一会话账本，主动下行走独立消息流。
 - `heartbeatAdapter.ts`：定时触发心跳消息。
@@ -126,6 +127,7 @@ Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转
 - 手动触发：`manual-trigger-events.jsonl`
 - 语音转写：`voice-transcripts.jsonl`
 - 企业微信：`wecom-messages.jsonl`
+- 个人微信：`weixin-messages.jsonl`
 - Agent 投递记录：`agent-packets.jsonl`
 - Adapter 日志：`*-adapter.log.jsonl`
 
@@ -296,7 +298,7 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 - 允许时调用对应消息端发送封装，例如 NapCat HTTP 或企业微信智能机器人 SDK。
 - 不允许时返回 `blocked` 并附带 draft 数据；发送失败时返回 `failed` 并保留 draft 数据；未选择外部输出时可以返回 `draft` 或把结果保留在 Agent 会话。
 
-当前 Outbox 已是 QQ、WeCom、RabiLink 和角色面板的真实回传层，并为旧 FenneNote Route 保留兼容，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
+当前 Outbox 已是 QQ、WeCom、个人微信来源会话文本、RabiLink 和角色面板的真实回传层，并为旧 FenneNote Route 保留兼容，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
 
 ```text
 Agent output
@@ -332,6 +334,7 @@ startManager();
 - 提供 `/gateways`、`/api/scan/*`、`/api/message/*`、`/api/agent/*` 等控制面路径。
 - 启停 Gateway 子进程。
 - 服务 WebGUI 静态文件。
+- 根据 `data/Config.json.webguiLan` 选择回环或局域网监听，并在 HTTP 入口统一校验非本机 WebGUI token；静态壳可公开加载，但没有 token 不能读取 Manager 状态或调用动作。
 - 聚合 runtime status。
 
 它已经接入：
@@ -426,7 +429,9 @@ Gateway 配置的事实源 Module。
 
 `src/roleKnowledge.ts` 同时定义五种计划顶层状态和步骤级 `approvalRequest` 执行合同；`暂停` 可保留唯一进行中步骤与 `currentStepId` 作为恢复位置，合同可随计划兼容读取和保存，Manager 不用缺字段阻断整条计划写入。`src/roleKnowledgePresentation.ts` 只生成 Manager 对外的只读展示 DTO：派生“阻塞中 / 待QA测试”等显示状态，统一 `current / plans / archived` 视图分类和计划状态色板，对当前人工门禁轻量判断 `none / incomplete / ready`，返回缺失项和规范化合同，并按“可审批、待补合同、状态、更新时间”统一排序；暂停计划禁用派生审批、只进 `plans` 并在最终排序中绝对置底。它不修改计划文件，也不进入 RouteDecision 或 Agent 上下文判断。WebGUI 和 Qt 必须消费 Manager 返回的 `presentation`、分类、色板、合同与列表顺序，不各自复制这套规则。
 
-`src/planFeedback.ts` 拥有与 `planId/stepId` 关联的审批意见 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 是唯一写入口：UI 提交先落盘并立即返回 `pending`，角色面板通知在后台执行，终态通过 `plan_feedback_changed` 发布；同一 feedback 的后台任务按 ID 去重并有 45 秒终止边界。Agent 记录 QQ 审批或处理结果时使用 `record_only`。该模块不修改计划 JSON；只有后续显式计划 PATCH 才能推进步骤或状态。
+`src/planAttachments.ts` 拥有计划本体附件的数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希和人格私有目录落盘。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制 16:9 图片/视频缩略图、普通文件卡片和页内媒体预览，并统一通过 `managerResourceUrl` 为局域网资源附加当前会话认证；它不拥有计划编辑器或任意路径读取能力。
+
+`src/planFeedback.ts` 拥有与 `planId/stepId` 关联的审批意见 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 是用户/客户端写入口：UI 提交先落盘并立即返回 `pending`，后台生成独立 `plan_feedback` 系统事件，终态通过 `plan_feedback_changed` 发布；同一 feedback 的后台任务按 ID 去重并有 45 秒终止边界。`routing/systemEventRules.ts` 为该系统事件提供不依赖人格消息规则的固定投递规则；Forwarding 不把它写入角色面板 timeline、兼容消息历史或统一会话账本，AgentPacket 也把最近消息额度固定为 `0`。计划意见投递仍携带专用回复上下文；`src/outbox.ts` 校验 Route 人格、计划和步骤后，把 Agent 普通回复保存为 `record_only` 的 `approval_response` 并发布同一事件。该模块不自动修改计划 JSON；Agent 必须先显式 PATCH 计划或步骤。
 
 `src/context/rabiContextManager.ts` 是角色上下文触发的唯一归口。它把 `session_start`、`user_prompt`、`reasoning_pre_tool`、`reasoning_post_tool`、`message_delivery` 和无副作用 `preview` 映射为统一的召回、归档、`viewedAt` 与呈现策略，也是生产代码中 `roleKnowledgeSnapshot()` 的唯一调用方。
 
@@ -443,7 +448,7 @@ Gateway 配置的事实源 Module。
 关键位置：
 
 - `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。
-- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读，审批卡片展示 Manager 返回的说明与缺失提示，`incomplete` 和 `ready` 都可通过 plan feedback API 追加用户意见。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；屏外卡片延迟渲染，详情展开取消高度动画，避免长列表反复布局。
+- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读，标题下显示非重复的 `focus` 描述，多计划列表用独立工作项框架和筛选结果序号区分相邻问题，卡内按概览、当前执行、完整步骤分层。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片，`incomplete` 和 `ready` 都可通过 plan feedback API 追加用户意见。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；计划面板外侧的目录粘性悬浮并独立滚动，浏览器可见性观察负责把当前阅读卡片同步为目录高亮，点击平滑跳转期间锁定目标高亮、滚动 settle 后恢复观察，目录仅在高亮项越界时滚动自身，计划卡片保持正常页面流，详情展开取消高度动画。
 - `src/pages/OverviewPage.vue`：总览和运行状态。
 - `src/pages/RouteConfigPage.vue`：Route 配置编辑。
 - `src/pages/RuntimeLogPage.vue`：运行日志。
@@ -459,6 +464,10 @@ Gateway 配置的事实源 Module。
 - `src/pages/ProjectDocsPage.vue`：加载并渲染 `docs/user-guide/*.md`，提供双语任务导航、全文搜索、本页目录和可分享的 `?page=` 深链接；开发者 Markdown 通过仓库链接继续保持独立事实源。
 
 前端可以做 UI 友好的默认值和展示转换，但配置不变量不要只存在前端。需要和后端一致的规则应进入 `src/shared/gatewayConfigModel.ts` 或由 manager 返回。
+
+局域网访问同样遵守这一边界：`src/manager/globalConfig.ts` 拥有 `webguiLan` 配置真源，`src/manager/webguiLanAccess.ts` 拥有密钥生成、地址分类和鉴权规则，`controlPlaneRoutes.ts` 只接线 HTTP 门禁与 `/api/webgui-access`。`ribiwebgui/src/managerApi.ts` 只捕获 URL token、保存当前会话凭据并适配 fetch/SSE；`webguiLanRedirect.ts` 只在 Manager 已实际监听局域网时把回环页面切换到优先局域网 origin，并保留当前 hash Route/页面和一次性 URL token；`routeScopedNavigation.ts` 只负责把 Route 配置名编码进 `#/routes/<Route>/overview|knowledge` 并保留 hash query；`App.vue` 让左侧当前 Route 与 Route 作用域 URL 保持同步；`OverviewPage.vue` 只展示 Manager DTO、生成当前 Route 快捷链接和提交命令，不保存第二份正式开关或密钥。
+
+RabiLink 远程 WebGUI 也保持前端与本机 Manager 的所有权边界：Relay 的 `/manage/<账号>/<RabiGUID>/` 只拥有账号会话、目标 PC 选择、静态构建和受限代理。普通 HTTP 请求进入 `webguiRequests`，PC 侧 `rabiLinkRelayRuntime.ts` 只把允许的请求头转发到回环 Manager，并回填状态、响应头和 Base64 body；`Range` / `If-Range` 与 `206` 响应用于媒体字节读取。Manager `/api/events` 不进入一次性队列，Runtime 维持一条本机 SSE，解析事件后通过 `/worker/webgui-events` 推给 Relay 的 `webguiEventHub`，再按账号应用和 PC 身份定向发布。Relay 登录 Cookie、PC 应用 token 和局域网 `webgui_token` 不相互转发或复用；请求/响应 Base64 与事件 JSON 都有独立大小门禁。
 
 人格头像的文件读写、类型校验、内容寻址与原子配置切换集中在 `src/personaAvatar.ts`；`src/manager/personaAvatarRoutes.ts` 负责 `/api/roles/:roleId/avatar` 和表现 DTO，`controlPlaneRoutes.ts` 只注册路由。WebGUI 和 Qt 都通过 Manager HTTP 读取头像；Qt 不再通过本地 `RoleContextRepository` 读取人格目录。头像是人格展示元数据，不进入 AgentPacket，也不改变路由匹配或处理端投递。
 

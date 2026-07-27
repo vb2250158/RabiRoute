@@ -60,6 +60,8 @@ npm run start:manager
 
 Open the local address `http://127.0.0.1:8790/` to enter RibiWebGUI. On first run, the Manager initializes a sanitized local configuration from `examples/data/` when no runtime data exists.
 
+LAN access is disabled by default. From the local Console, enable **LAN WebGUI access** and generate an access key; after restarting Manager, another device can open one Route's Console at `http://<Rabi-PC-LAN-IP>:8790/#/routes/<Route-config-name>/overview?webgui_token=<key>`, or replace the final page with `knowledge` to open that Route's Plans & Memory directly. Once Manager is actually listening on the LAN, a WebGUI opened locally through `localhost/127.0.0.1` automatically redirects to the preferred LAN IP while preserving the current Route and page; changing **Current Route** in the sidebar also immediately redirects the current Route-scoped page URL. `127.0.0.1` always means the device opening the browser, so it cannot be used from another phone or PC. The key protects Manager APIs, SSE, and private WebGUI resources; Windows Firewall may still need an explicit rule for port `8790`.
+
 The local live speech page is `http://127.0.0.1:8790/#/speech`. Its provider, model, and device status comes from the current PC. The bundled [benchmark report](ribiwebgui/public/reports/rabispeech-model-benchmark.html) applies only to the test hardware identified in that report; see [Remote TTS / ASR](docs/user-guide/speech-api_en.md) when calling from another device.
 
 For the shortest verified path:
@@ -100,9 +102,9 @@ Each route keeps ingress, policy, portable context, handler delivery, and outbou
 
 | Area | Implemented capability |
 | --- | --- |
-| Message inputs | Verified: NapCat / OneBot, Heartbeat, and the built-in role panel. Experimental: Remote Agent, the RabiSpeech message endpoint, XiaoAI, RabiLink, generic Webhook, and WeCom. FenneNote is retired and remains readable only for legacy configuration compatibility. Manual trigger is a Manager action, not an adapter. |
+| Message inputs | Verified: NapCat / OneBot, Heartbeat, and the built-in role panel. Experimental: Remote Agent, the RabiSpeech message endpoint, XiaoAI, RabiLink, generic Webhook, WeCom, and a developer-only personal-Weixin OpenClaw/iLink prototype. FenneNote is retired and remains readable only for legacy configuration compatibility. Manual trigger is a Manager action, not an adapter. |
 | Routing | Route profiles, persona-owned rules, direct `@`, reply chains, private messages, keywords, regexes, schedules, and per-route templates |
-| Context | Persona-scoped bidirectional conversation ledgers, separate `0–200` auto-injection limits for 11 logical endpoints (default `12`), focused plan/memory/skill summaries, compact persona instructions, reply context, and safe attachment metadata |
+| Context | Persona-scoped bidirectional conversation ledgers, separate `0–200` auto-injection limits for ordinary logical endpoints (default `12`), history-free heartbeat packets, focused plan/memory/skill summaries, compact persona instructions, reply context, and safe attachment metadata |
 | Handlers | Verified: Codex. Experimental: Copilot CLI and AstrBot. Manual handoff: Marvis. |
 | Control plane | Node.js Manager and RibiWebGUI for route lifecycle, configuration, status, logs, personas, and diagnostics |
 | Local speech | Experimental RabiSpeech TTS/ASR. One host VAD/ASR chain records rich source and voiceprint evidence, while logical endpoints stay separate: host/ordinary remote microphones reach `speech` Routes; Android phone/glasses continuously stream PCM into the same host pipeline but reach `rabilink` Routes. Android does not segment utterances or run ASR/voiceprint logic. Mobile recovery is event-first with one cursor catch-up query; while already known offline, a five-minute OS-connectivity safety check covers vendor callback loss without polling Relay or business data. Reliable text/media/receipt facts persist until acknowledged, while bounded PCM drops obsolete audio to catch the live stream. `delivered` is distinct from device-owned AudioTrack-marker `played`. Phone replies default to the originating device; persona TTS and the host FIFO remain on RabiSpeech. When a routed user request asks who spoke across a day or time range, AgentPacket supplies the current persona's classification/query/update contract without letting the host decide identity. |
@@ -156,7 +158,7 @@ data/roles/<RoleId>/personaConfig.json
 
 - `adapterConfig.json` defines inputs, handler adapters, working directories, pipeline presets, and persona binding.
 - `persona.md` contains the persona or handler-facing role guidance.
-- `personaConfig.json` contains the optional persona avatar filename, notification rules, message templates, persona speech-trigger keywords, and separate recent bidirectional-message limits for all 11 logical endpoints. RibiWebGUI can upload a PNG, JPEG, WebP, or GIF avatar (up to 5 MB) into the persona directory.
+- `personaConfig.json` contains the optional persona avatar filename, notification rules, message templates, persona speech-trigger keywords, and separate recent bidirectional-message limits for ordinary logical endpoints. Heartbeat always omits history. RibiWebGUI can upload a PNG, JPEG, WebP, or GIF avatar (up to 5 MB) into the persona directory.
 
 Complete runtime conversation evidence lives under `data/roles/<RoleId>/conversation/`. `current.jsonl` has no entry-count cap. When an archive check finds a record older than 72 hours, the complete contiguous prefix older than 24 hours moves to `archive/<n>~<m>.jsonl`; automatic context reads only `current.jsonl`.
 

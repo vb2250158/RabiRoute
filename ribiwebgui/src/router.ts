@@ -13,6 +13,8 @@ export const router = createRouter({
     { path: "/", redirect: "/overview" },
     { path: "/overview", component: OverviewPage, meta: { title: "控制台" } },
     { path: "/speech", component: SpeechServicePage, meta: { title: "语音服务" } },
+    { path: "/routes/:id/overview", component: OverviewPage, meta: { title: "控制台" } },
+    { path: "/routes/:id/knowledge", component: RoleKnowledgePage, meta: { title: "计划与记忆" } },
     { path: "/routes/:id?", component: RouteConfigPage, meta: { title: "消息适配器" } },
     { path: "/persona/:id?", component: PersonaTemplatePage, meta: { title: "Rabi 人格" } },
     { path: "/knowledge", component: RoleKnowledgePage, meta: { title: "计划与记忆" } },

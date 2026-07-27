@@ -6,7 +6,7 @@ import test from "node:test";
 import { config, type NotificationRule, type RouteProfile } from "../config.js";
 import { updatePersonaVoiceIdentity } from "../personaVoiceIdentities.js";
 import { resolvePipeline } from "../pipelines.js";
-import type { GroupMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
+import type { GroupMessageRecord, PlanFeedbackMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
 import { buildAgentPacket, type AgentRoleContext } from "./agentPacket.js";
 
@@ -294,6 +294,83 @@ test("AgentPacket omits persona voice identity paths from non-audio role panel m
   assert.doesNotMatch(packet.message, /人格声纹关系文件/);
   assert.doesNotMatch(packet.message, /voice[\\/]voice-identities\.jsonl/);
   assert.equal(packet.templateValues.voiceIdentitiesPath, undefined);
+});
+
+test("AgentPacket routes plan approval responses back to the plan instead of leaving them in Codex", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-feedback-"));
+  fs.mkdirSync(path.join(roleDir, "conversation"), { recursive: true });
+  fs.writeFileSync(path.join(roleDir, "conversation", "current.jsonl"), `${JSON.stringify({
+    time: 1,
+    direction: "inbound",
+    adapter: "rolePanel",
+    conversationKey: "role:Rabi",
+    text: "不应注入的历史角色面板消息"
+  })}\n`, "utf8");
+  const record: PlanFeedbackMessageRecord = {
+    time: Date.now() / 1_000,
+    rawMessage: "请把原问题和修改范围写清楚。",
+    messageId: "plan-feedback-request-1",
+    senderName: "本地用户",
+    roleId: "Rabi",
+    adapterType: "planFeedback",
+    replyContext: {
+      targetType: "plan_feedback",
+      planId: "plan-1",
+      planStepId: "approval",
+      planFeedbackId: "feedback-1",
+      planFeedbackResponseId: "response-feedback-1"
+    }
+  };
+  const rule: NotificationRule = {
+    id: "plan-feedback",
+    name: "plan feedback",
+    enabled: true,
+    routeKinds: ["plan_feedback"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "role-panel-route",
+    name: "role panel",
+    enabled: true,
+    recentMessageLimit: 12,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Rabi",
+    agentRoleFile: "persona.md",
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "plan_feedback",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+  assert.equal(packet.templateValues.targetType, "plan_feedback");
+  assert.equal(replyContext.planId, "plan-1");
+  assert.equal(replyContext.planFeedbackResponseId, "response-feedback-1");
+  assert.match(packet.message, /事件：计划审批/);
+  assert.match(packet.message, /路由类型：plan_feedback/);
+  assert.doesNotMatch(packet.message, /\[最近消息\]/);
+  assert.doesNotMatch(packet.message, /\[消息代码解析\]/);
+  assert.doesNotMatch(packet.message, /不应注入的历史角色面板消息/);
+  assert.equal(packet.templateValues.recentMessageLimit, 0);
+  assert.equal(packet.templateValues.recentMessages, "");
+  assert.match(packet.message, /面向用户的回复必须回到当前计划记录/);
+  assert.match(packet.message, /先按审批意见读取并 PATCH 更新对应计划或步骤/);
+  assert.match(packet.message, /不要重复输出计划回复正文/);
 });
 
 test("AgentPacket exposes processing host and persona-owned voice identity file without naming the speaker", () => {

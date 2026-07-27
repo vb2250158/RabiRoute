@@ -2,9 +2,11 @@ import type {
   GroupMessageRecord,
   HeartbeatEventRecord,
   ManualTriggerRecord,
+  PlanFeedbackMessageRecord,
   PrivateMessageRecord,
   RolePanelMessageRecord,
   WeComMessageRecord,
+  WeixinMessageRecord,
   VoiceTranscriptEventRecord
 } from "../history.js";
 
@@ -17,12 +19,14 @@ export type ForwardRouteKind =
   | "heartbeat"
   | "manual_trigger"
   | "role_panel_message"
+  | "plan_feedback"
   | "voice_transcript"
   | "rabilink"
   | "wearable_health_alert"
-  | "wecom_message";
+  | "wecom_message"
+  | "weixin_message";
 
-export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message";
+export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message";
 
 export type ForwardRecord =
   | GroupMessageRecord
@@ -30,7 +34,9 @@ export type ForwardRecord =
   | HeartbeatEventRecord
   | ManualTriggerRecord
   | RolePanelMessageRecord
+  | PlanFeedbackMessageRecord
   | WeComMessageRecord
+  | WeixinMessageRecord
   | VoiceTranscriptEventRecord;
 
 export type ForwardTemplateValues = Record<string, string | number | undefined>;

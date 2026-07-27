@@ -13,6 +13,7 @@ const defaultFiles = [
   "examples/data/route/rokid-native-voice/adapterConfig.json",
   "examples/data/route/voice-chat/adapterConfig.json",
   "examples/data/route/wecom/adapterConfig.json",
+  "examples/data/route/weixin/adapterConfig.json",
   "examples/data/route/xiaoai/adapterConfig.json",
   "examples/data/roles/Rabi/personaConfig.json",
   "examples/data/roles/RabiActive/personaConfig.json"

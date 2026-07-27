@@ -1,5 +1,6 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
+import { managerEventSource } from "../managerApi";
 import type {
   SpeechAudioInput,
   SpeechAudioStreamSelectionCommand,
@@ -193,7 +194,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
 
   function startEvents(): void {
     if (eventSource) return;
-    eventSource = new EventSource("/api/speech/events");
+    eventSource = managerEventSource("/api/speech/events");
     eventSource.addEventListener("ready", () => {
       error.value = "";
       if (!readyReceived) {

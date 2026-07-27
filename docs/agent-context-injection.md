@@ -39,7 +39,7 @@ Manager 或 UI 预览
 
 - 当前事件的必要信息。
 - QQ 消息里的 CQ reply / at 代码解析；引用链会按消息记录递归展开，at 映射集中显示。
-- 当前人格、逻辑消息端和会话下，由 `recentMessageLimits` 允许的最近双向消息；当前事件自身不会再在窗口中重复。
+- 当前人格、逻辑消息端和会话下，由 `recentMessageLimits` 允许的最近双向消息；当前事件自身不会再在窗口中重复。`heartbeat` 与独立 `plan_feedback` 事件是固定例外，不读取或注入历史消息。
 - 角色和路由路径，以及精简人格核心指令。
 - Agent 需要关注的接口文档链接。
 - 当前输入高相关的少量计划、记忆和技能摘要，默认最多 3 项。
@@ -74,7 +74,7 @@ data/roles/<RoleId>/conversation/archive/index.json
 2. 当前逻辑消息端，例如 `napcat`、`speech`、`wecom` 或 `remoteAgent`。
 3. 当前会话，例如 QQ 群/私聊对话、WeCom chat 或语音 `sessionId`。
 
-入站和出站合计占用同一条数额度。`personaConfig.json.recentMessageLimits` 对 11 个消息端分别配置 `0–200`，未设置时默认 `12`；`0` 只关闭该端的自动注入，不停止记录。显式旧值继续生效。这里没有另一个“只保留 360 条”之类的 `current` 条数上限。
+入站和出站合计占用同一条数额度。`personaConfig.json.recentMessageLimits` 对普通消息端分别配置 `0–200`，未设置时默认 `12`；`0` 只关闭该端的自动注入，不停止记录。`heartbeat` 始终按 `0` 处理，即使旧配置保留了非零值也不会读取账本或生成 `[最近消息]` 段。独立的 `plan_feedback` 计划审批事件同样固定为 `0`，并且不写统一会话账本；计划审批 JSONL 本身就是该事件的审计真源。这里没有另一个“只保留 360 条”之类的 `current` 条数上限。
 
 人格可在 `personaConfig.json` 选择注入策略：
 
@@ -304,6 +304,8 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 [用户模板补充]
 <用户在 route 模板里写的可选补充要求；为空时省略本段>
 ```
+
+`heartbeat` 和 `plan_feedback` 包都会省略整个 `[最近消息]` 段，并把模板变量 `{recentMessageLimit}` 设为 `0`、`{recentMessages}` 设为空字符串，避免自定义模板重新携带历史正文。心跳日志和统一会话账本仍照常记录；计划审批则只保留专用 feedback 审计、AgentPacket 和投递日志，不重复写角色面板时间线或统一会话账本。
 
 `[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`；AgentPacket 也会把成功外发的 Outbox 记录作为本地兜底。NapCat 实时入口发现引用 ID 尚未落盘时，会在路由投递前调用 OneBot `get_msg`，把查到的群聊/私聊消息标记为 `lookupSource=onebot_get_msg` 后缓存，再继续追溯下一层引用。接口失败只记录 warning，不阻塞当前消息。展开持续到没有引用、仍无法解析、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。
 

@@ -7,7 +7,7 @@ import test from "node:test";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, type RouteProfile } from "./config.js";
 import { forwardMessageAndWait, shouldSkipHeartbeatDelivery } from "./forwarding.js";
-import type { GroupMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
+import type { GroupMessageRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
 import { ManagerSpeechControl } from "./manager/speechControl.js";
 import { handleAgentReply } from "./outbox.js";
 import { resolvePipeline } from "./pipelines.js";
@@ -130,6 +130,45 @@ test("forwardMessageAndWait returns route miss details when no rule matches", as
     assert.equal(result.routes[0].reason, "no_matching_rule");
     assert.deepEqual(result.routes[0].matchedRuleIds, []);
     assert.equal(result.sentPacketCount, 0);
+  });
+});
+
+test("plan feedback uses its system event route without entering chat history", async () => {
+  const root = tempDir();
+  const roleDataDir = path.join(root, "roles", "Rabi");
+  const route = routeProfile(root, {
+    notificationRules: []
+  });
+  const record: PlanFeedbackMessageRecord = {
+    time: 1710000000,
+    rawMessage: "请按审批意见更新计划。",
+    messageId: "plan-feedback-1",
+    senderName: "本地用户",
+    roleId: "Rabi",
+    routeProfileId: route.id,
+    adapterType: "planFeedback",
+    replyContext: {
+      targetType: "plan_feedback",
+      planId: "plan-1",
+      planFeedbackId: "feedback-1"
+    }
+  };
+
+  await withForwardingConfig({
+    agentAdapters: [],
+    dataDir: path.join(root, "data"),
+    memoryDataDir: roleDataDir,
+    routeProfiles: [route]
+  }, async () => {
+    const result = await forwardMessageAndWait("plan_feedback", record);
+
+    assert.equal(result.status, "routed");
+    assert.deepEqual(result.matchedRuleIds, ["plan-feedback"]);
+    assert.equal(fs.existsSync(path.join(roleDataDir, "private-messages.jsonl")), false);
+    assert.equal(fs.existsSync(path.join(roleDataDir, "conversation", "current.jsonl")), false);
+    const packetLog = fs.readFileSync(path.join(roleDataDir, "agent-packets.jsonl"), "utf8");
+    assert.match(packetLog, /路由类型：plan_feedback/);
+    assert.doesNotMatch(packetLog, /\[最近消息\]/);
   });
 });
 

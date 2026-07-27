@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  normalizeStoredPlanAttachments,
+  storePlanAttachments
+} from "./planAttachments.js";
+import type { PlanAttachment } from "./shared/planAttachmentContract.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -80,6 +85,7 @@ export type PlanItem = {
   nextAction?: string;
   waitingFor?: string;
   blockedBy?: string;
+  attachments: PlanAttachment[];
   steps: PlanStep[];
   project?: {
     name?: string;
@@ -836,6 +842,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     nextAction: typeof raw.nextAction === "string" ? raw.nextAction : undefined,
     waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
     blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
+    attachments: normalizeStoredPlanAttachments(raw.attachments),
     steps: normalizePlanSteps(raw.steps),
     project: raw.project && typeof raw.project === "object" && !Array.isArray(raw.project) ? raw.project as PlanItem["project"] : undefined,
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
@@ -1050,10 +1057,13 @@ export function createPlan(roleDir: string, input: Record<string, unknown>): Pla
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
   validatePlanTaskBindingInput(input.taskBinding);
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("plan", String(input.title || ""));
-  const plan = normalizePlan({ ...input, id, createdAt: nowIso(), updatedAt: nowIso() });
+  const plan = normalizePlan({ ...input, attachments: [], id, createdAt: nowIso(), updatedAt: nowIso() });
   if (!plan) throw new Error("Plan title is required.");
   requireKeywords(plan.keywords, "Plan");
   validatePlanWrite(roleDir, plan, true);
+  if (Object.prototype.hasOwnProperty.call(input, "attachments")) {
+    plan.attachments = storePlanAttachments(roleDir, plan.id, input.attachments);
+  }
   writeJson(planFile(roleDir, plan), plan);
   return plan;
 }
@@ -1062,10 +1072,13 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
   const existing = listPlans(roleDir).find((item) => item.id === planId);
   if (!existing) throw new Error(`Plan not found: ${planId}`);
   if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
-  const next = normalizePlan({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: nowIso() });
+  const next = normalizePlan({ ...existing, ...patch, attachments: existing.attachments, id: existing.id, createdAt: existing.createdAt, updatedAt: nowIso() });
   if (!next) throw new Error("Plan title is required.");
   requireKeywords(next.keywords, "Plan");
   validatePlanWrite(roleDir, next);
+  if (Object.prototype.hasOwnProperty.call(patch, "attachments")) {
+    next.attachments = storePlanAttachments(roleDir, next.id, patch.attachments, existing.attachments);
+  }
   if (next.status === "已完成" && existing.status !== "已完成" && !next.completedAt) {
     next.completedAt = next.updatedAt;
   }

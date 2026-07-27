@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { sendGroupMessage, sendPrivateMessage, uploadGroupFile, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
+import { sendWeixinText } from "./weixinOpenClaw.js";
 import {
   appendRolePanelTimelineMessage,
   createRolePanelMessageId,
@@ -28,6 +29,12 @@ import {
   appendMessageContextToDir,
   messageContextFromOutboxEvent
 } from "./messageContextStore.js";
+import {
+  appendPlanFeedback,
+  createPlanFeedbackRecord,
+  listPlanFeedback
+} from "./planFeedback.js";
+import { listPlans } from "./roleKnowledge.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -59,6 +66,9 @@ export type AgentReplyRequest = {
   wecomChatId?: unknown;
   wecomSenderId?: unknown;
   wecomMessageType?: unknown;
+  weixinSessionId?: unknown;
+  weixinUserId?: unknown;
+  weixinMessageType?: unknown;
   proactive?: unknown;
   source?: unknown;
   deliveryId?: unknown;
@@ -124,6 +134,7 @@ export type AgentReplyOptions = {
   fenneNoteReplyUrl?: string;
   fenneNoteReplyToken?: string;
   speechServiceUrl?: string;
+  publishEvent?: (eventType: string, data: Record<string, unknown>) => void;
 };
 
 export type AgentReplyResult = {
@@ -132,7 +143,7 @@ export type AgentReplyResult = {
   reason?: string;
   routeProfileId?: string;
   messageId?: string;
-  targetType?: "group" | "private" | "role_panel" | "voice_transcript" | "rabilink";
+  targetType?: "group" | "private" | "role_panel" | "plan_feedback" | "voice_transcript" | "rabilink";
   groupId?: string;
   userId?: string;
   instanceId?: string;
@@ -149,7 +160,7 @@ export type AgentReplyResult = {
 
 type SourceRecord = {
   messageId?: string;
-  targetType?: "group" | "private" | "role_panel" | "voice_transcript" | "rabilink";
+  targetType?: "group" | "private" | "role_panel" | "plan_feedback" | "voice_transcript" | "rabilink";
   groupId?: string;
   userId?: string;
   instanceId?: string;
@@ -163,6 +174,7 @@ type SourceRecord = {
   conversationId?: string;
   chatId?: string;
   messageType?: string;
+  sessionId?: string;
   raw?: Record<string, unknown>;
 };
 
@@ -450,6 +462,7 @@ function sourceRecordFromLog(record: Record<string, unknown>, targetType: "group
     conversationId: valueString(record.conversationId),
     chatId: valueString(record.chatId ?? record.chatid),
     messageType: valueString(record.messageType ?? record.msgtype),
+    sessionId: valueString(record.sessionId),
     raw: record
   };
 }
@@ -463,13 +476,14 @@ function findSourceRecord(options: AgentReplyOptions, route: ResolvedRoute, mess
       ["voice-transcripts.jsonl", "voice_transcript"],
       ["fennenote-voice-transcripts.jsonl", "voice_transcript"],
       ["rabilink-voice-transcripts.jsonl", "rabilink"],
-      ["wecom-messages.jsonl", "group"]
+      ["wecom-messages.jsonl", "group"],
+      ["weixin-messages.jsonl", "private"]
     ] as const) {
       const found = readJsonl(path.join(dir, fileName))
         .reverse()
         .find((record) => String(record.messageId ?? record.message_id ?? "") === messageId);
       if (found) {
-        return sourceRecordFromLog(found, targetType, fileName === "wecom-messages.jsonl" ? "wecom" : undefined);
+        return sourceRecordFromLog(found, targetType, fileName === "wecom-messages.jsonl" ? "wecom" : fileName === "weixin-messages.jsonl" ? "weixin" : undefined);
       }
     }
   }
@@ -838,6 +852,122 @@ function appendRolePanelReply(
   };
 }
 
+function weixinPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+  return messageAdapterPolicyFor({
+    id: route.runtime.id,
+    gatewayPort: 0,
+    messageAdapters: ["weixin"],
+    messageAdapterPolicies: route.runtime.messageAdapterPolicies
+  }, "weixin");
+}
+
+function appendPlanFeedbackReply(
+  options: AgentReplyOptions,
+  route: ResolvedRoute,
+  target: SourceRecord,
+  text: string,
+  request: AgentReplyRequest
+): AgentReplyResult {
+  const context = contextObject(request);
+  const routeRoleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId);
+  const roleId = valueString(context.roleId ?? target.roleId ?? routeRoleId);
+  const planId = valueString(context.planId);
+  const stepId = valueString(context.planStepId);
+  if (!roleId || !planId) {
+    return {
+      ok: false,
+      status: "blocked",
+      reason: "Plan feedback reply requires roleId and planId in replyContext.",
+      routeProfileId: route.profile?.id ?? route.runtime.id,
+      messageId: target.messageId,
+      targetType: "plan_feedback"
+    };
+  }
+  if (routeRoleId && routeRoleId !== roleId) {
+    return {
+      ok: false,
+      status: "blocked",
+      reason: `Plan feedback role ${roleId} does not match route role ${routeRoleId}.`,
+      routeProfileId: route.profile?.id ?? route.runtime.id,
+      messageId: target.messageId,
+      targetType: "plan_feedback"
+    };
+  }
+  const roleDir = roleDirFor(options.rootDir, options.rolesRoot, {
+    rolesDir: route.profile?.rolesDir ?? route.runtime.rolesDir,
+    agentRoleId: roleId
+  });
+  const plan = roleDir ? listPlans(roleDir).find((item) => item.id === planId) : undefined;
+  if (!roleDir || !plan) {
+    return {
+      ok: false,
+      status: "blocked",
+      reason: `Plan not found for feedback reply: ${roleId}/${planId}.`,
+      routeProfileId: route.profile?.id ?? route.runtime.id,
+      messageId: target.messageId,
+      targetType: "plan_feedback"
+    };
+  }
+  const step = stepId ? plan.steps.find((item) => item.id === stepId) : undefined;
+  if (stepId && !step) {
+    return {
+      ok: false,
+      status: "blocked",
+      reason: `Plan step not found for feedback reply: ${stepId}.`,
+      routeProfileId: route.profile?.id ?? route.runtime.id,
+      messageId: target.messageId,
+      targetType: "plan_feedback"
+    };
+  }
+  const responseId = valueString(context.planFeedbackResponseId)
+    || valueString(request.deliveryId)
+    || undefined;
+  const candidate = createPlanFeedbackRecord({
+    id: responseId,
+    roleId,
+    planId,
+    planTitle: plan.title,
+    stepId: step?.id,
+    stepTitle: step?.title,
+    gatewayId: route.runtime.id,
+    kind: "approval_response",
+    author: "agent",
+    source: "agent",
+    text,
+    attachments: [],
+    notifyAgent: false
+  });
+  const existing = listPlanFeedback(roleDir, planId).find((item) => item.id === candidate.id);
+  if (existing && (existing.text !== candidate.text || existing.stepId !== candidate.stepId || existing.kind !== "approval_response")) {
+    return {
+      ok: false,
+      status: "blocked",
+      reason: `Plan feedback response id already exists with different content: ${candidate.id}.`,
+      routeProfileId: route.profile?.id ?? route.runtime.id,
+      messageId: target.messageId,
+      targetType: "plan_feedback"
+    };
+  }
+  const record = existing || appendPlanFeedback(roleDir, candidate);
+  if (!existing) {
+    options.publishEvent?.("plan_feedback_changed", {
+      roleId,
+      planId,
+      feedbackId: record.id,
+      replyToFeedbackId: valueString(context.planFeedbackId)
+    });
+  }
+  return {
+    ok: true,
+    status: "sent",
+    reason: "Saved as a plan approval response.",
+    routeProfileId: route.profile?.id ?? route.runtime.id,
+    messageId: target.messageId,
+    targetType: "plan_feedback",
+    sentMessageId: record.id
+  };
+}
+
 function stripRouteSuffix(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const text = value.replace(/\s*路由\s*$/, "").trim();
@@ -1001,7 +1131,9 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   const messageId = requestField(request, "messageId");
   const contextTarget: SourceRecord = {
     messageId,
-    targetType: requestField(request, "targetType") === "group"
+    targetType: requestField(request, "targetType") === "plan_feedback"
+      ? "plan_feedback"
+      : requestField(request, "targetType") === "group"
       ? "group"
       : requestField(request, "targetType") === "private"
         ? "private"
@@ -1029,6 +1161,8 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     conversationId: requestField(request, "wecomConversationId"),
     chatId: requestField(request, "wecomChatId"),
     messageType: requestField(request, "wecomMessageType")
+      || requestField(request, "weixinMessageType"),
+    sessionId: requestField(request, "weixinSessionId") || requestField(request, "sessionId")
   };
   const route = resolveRoute(options, routeProfileId, messageId, contextTarget, runtimeRouteId);
   const withConversation = (data: Record<string, unknown>): Record<string, unknown> => route
@@ -1043,9 +1177,16 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   }
 
   const loggedTarget = route.sourceRecord ?? findSourceRecord(options, route, messageId);
-  const target = { ...contextTarget, ...loggedTarget };
+  const target = contextTarget.targetType === "plan_feedback"
+    ? { ...loggedTarget, ...contextTarget }
+    : { ...contextTarget, ...loggedTarget };
   if (target.targetType === "group" && !target.groupId && route.runtime.targetGroupId) {
     target.groupId = String(route.runtime.targetGroupId);
+  }
+  if (target.targetType === "plan_feedback") {
+    const result = appendPlanFeedbackReply(options, route, target, text, request);
+    appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "plan_feedback_reply_sent" : "reply_blocked", result.reason ?? "", result);
+    return result;
   }
   if (target.targetType === "role_panel" || target.adapterType === "rolePanel") {
     const result = appendRolePanelReply(options, route, target, text, rolePanelAttachmentsForRequest(request, content), request);
@@ -1159,6 +1300,55 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         text.slice(0, 500),
         result
       );
+      return result;
+    }
+  }
+  const shouldUseWeixin = target.adapterType === "weixin" || contextTarget.adapterType === "weixin";
+  if (shouldUseWeixin) {
+    const policy = weixinPolicy(route);
+    if (!policy.outputEnabled) {
+      const result: AgentReplyResult = { ...draft("Personal Weixin message sending is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    if (content.kind !== "text" || !policy.supportedOutputs.includes("text")) {
+      const result: AgentReplyResult = { ...draft("The experimental personal Weixin adapter supports text replies only.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    const sessionId = target.sessionId || target.userId || requestField(request, "weixinSessionId");
+    if (!sessionId) {
+      const result: AgentReplyResult = { ...draft("Only replies to a known personal Weixin source session can be sent automatically.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    const deliveryId = requestField(request, "deliveryId") || randomUUID();
+    try {
+      const sent = await sendWeixinText(dataDirsForRoute(options, route)[0], sessionId, text, deliveryId);
+      const result: AgentReplyResult = {
+        ok: true,
+        status: "sent",
+        reason: "Sent to the personal Weixin source session.",
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId,
+        targetType: "private",
+        userId: sessionId,
+        sentMessageId: deliveryId
+      };
+      appendOutboxLog(options, route, "info", "weixin_reply_sent", "Personal Weixin text reply sent.", withConversation({ ...result, sessionId, deliveryId, sent }));
+      return result;
+    } catch (error) {
+      const result: AgentReplyResult = {
+        ok: false,
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+        routeProfileId: route.profile?.id ?? route.runtime.id,
+        messageId,
+        targetType: "private",
+        userId: sessionId,
+        draft: { text, targetType: "private", userId: sessionId }
+      };
+      appendOutboxLog(options, route, "error", "weixin_reply_failed", result.reason ?? "failed", result);
       return result;
     }
   }

@@ -39,7 +39,7 @@
   "wecomBotSecret": "WECOM_BOT_SECRET_PLACEHOLDER",
   "wecomWsUrl": "",
   "heartbeatIntervalSeconds": 900,
-  "heartbeatMessage": "Scheduled heartbeat: check recent WeCom messages and route context.",
+  "heartbeatMessage": "Scheduled heartbeat: inspect current plans, memory, and available runtime state.",
   "gatewayPort": 8796,
   "codexThreadName": "WeCom message monitor",
   "codexCwd": ".",

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import { useI18n } from "./i18n";
+import { routeScopedKnowledgePath, routeScopedOverviewPath } from "./routeScopedNavigation";
 import { useGatewayStore } from "./stores/gatewayStore";
 import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "./utils/gatewayHelpers";
 
@@ -43,11 +44,12 @@ const drawerPreferences = readDrawerPreferences();
 const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
 
+const selectedRouteKey = computed(() => store.selectedGateway ? configNameFor(store.selectedGateway) : "");
 const navItems = computed(() => [
-  { title: "控制台", icon: "mdi-view-dashboard-outline", to: "/overview" },
+  { title: "控制台", icon: "mdi-view-dashboard-outline", to: routeScopedOverviewPath(selectedRouteKey.value) },
   { title: "消息适配器", icon: "mdi-puzzle-outline", to: "/routes" },
   { title: "Rabi 人格", icon: "mdi-account-heart-outline", to: "/persona" },
-  { title: "计划与记忆", icon: "mdi-notebook-check-outline", to: "/knowledge" },
+  { title: "计划与记忆", icon: "mdi-notebook-check-outline", to: routeScopedKnowledgePath(selectedRouteKey.value) },
   { title: "语音服务", icon: "mdi-waveform", to: "/speech" },
   { title: "日志诊断", icon: "mdi-console-line", to: "/runtime" }
 ].map(item => ({ ...item, title: t(item.title) })));
@@ -70,6 +72,9 @@ const selectedRuntimeLabel = computed(() => {
 onMounted(async () => {
   await store.load();
   if (store.gateways.length === 0) store.openQuickSetup();
+  else if (route.path === "/overview" && selectedRouteKey.value) {
+    await router.replace(routeScopedOverviewPath(selectedRouteKey.value));
+  }
   window.addEventListener("beforeunload", beforeUnload);
 });
 
@@ -117,11 +122,13 @@ function canLeaveDirtyState(): boolean {
 function selectGateway(id: string) {
   if (!canLeaveDirtyState()) return;
   store.selectGateway(id);
-  // 同步 URL：仅在有 id 参数的页面才更新
+  // Route 相关页面始终把左侧当前 Route 同步进 URL。
   const gw = store.gateways.find(g => g.id === id);
   const name = gw ? configNameFor(gw) : id;
   const currentPath = route.path;
-  if (currentPath.startsWith("/routes")) router.replace(`/routes/${name}`);
+  if (currentPath === "/overview" || /^\/routes\/[^/]+\/overview$/.test(currentPath)) router.replace(routeScopedOverviewPath(name));
+  else if (currentPath === "/knowledge" || /^\/routes\/[^/]+\/knowledge$/.test(currentPath)) router.replace(routeScopedKnowledgePath(name));
+  else if (currentPath.startsWith("/routes")) router.replace(`/routes/${name}`);
   else if (currentPath.startsWith("/persona")) router.replace(`/persona/${name}`);
 }
 </script>

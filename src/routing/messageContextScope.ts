@@ -18,6 +18,7 @@ export function messageContextHistoryKindForRouteKind(routeKind: ForwardRouteKin
   if (routeKind === "private") return "private";
   if (["group_message", "direct_at", "direct_reply", "indirect_reply"].includes(routeKind)) return "group";
   if (routeKind === "wecom_message") return "wecom";
+  if (routeKind === "weixin_message") return "private";
   if (routeKind === "heartbeat") return "heartbeat";
   if (routeKind === "manual_trigger") return "manual_trigger";
   if (routeKind === "role_panel_message") return "role_panel";
@@ -29,6 +30,7 @@ export function logicalMessageAdapterForRecord(routeKind: ForwardRouteKind, reco
   if (routeKind === "heartbeat") return "heartbeat";
   if (routeKind === "role_panel_message") return "rolePanel";
   if (routeKind === "wecom_message") return "wecom";
+  if (routeKind === "weixin_message") return "weixin";
   if (["group_message", "direct_at", "direct_reply", "indirect_reply", "private"].includes(routeKind)) return "napcat";
   return undefined;
 }
@@ -38,6 +40,7 @@ export function messageContextScopeForForward(
   record: ForwardRecord,
   values: { gatewayId?: string; routeProfileId?: string } = {}
 ): ForwardMessageContextScope | undefined {
+  if (routeKind === "plan_feedback") return undefined;
   const rawRecord = {
     ...record,
     gatewayId: values.gatewayId,

@@ -12,6 +12,7 @@ function tempRoot(): string {
 test("RabiLink Relay uses an explicit global enabled switch", () => {
   const store = new RabiGlobalConfigStore(tempRoot());
   assert.equal(store.read().rabiLinkRelay.enabled, false);
+  assert.deepEqual(store.read().webguiLan, { enabled: false, accessToken: "" });
   assert.equal(store.read().rabiLinkRelay.speechProxyEnabled, false);
   assert.equal(store.read().rabiLinkRelay.speechServiceUrl, "http://127.0.0.1:8781");
 
@@ -27,6 +28,13 @@ test("RabiLink Relay uses an explicit global enabled switch", () => {
 
   const enabled = store.patch({ rabiLinkRelay: { enabled: true } });
   assert.equal(enabled.rabiLinkRelay.enabled, true);
+});
+
+test("LAN WebGUI access is persisted in the Rabi PC global config", () => {
+  const store = new RabiGlobalConfigStore(tempRoot());
+  const configured = store.patch({ webguiLan: { enabled: true, accessToken: "lan-secret" } });
+  assert.deepEqual(configured.webguiLan, { enabled: true, accessToken: "lan-secret" });
+  assert.deepEqual(new RabiGlobalConfigStore(store.rootDir).read().webguiLan, configured.webguiLan);
 });
 
 test("legacy Relay config without enabled keeps its previous automatic behavior", () => {

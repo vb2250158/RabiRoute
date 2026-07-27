@@ -323,6 +323,10 @@ PATCH /api/roles/:roleId/plans/:planId
   "currentStep": "verify the active configuration schema",
   "nextAction": "update the bilingual guide",
   "blockedBy": "",
+  "attachments": [
+    { "name": "plan-preview.png", "mimeType": "image/png", "contentBase64": "<base64>" },
+    { "name": "acceptance-checklist.pdf", "path": "C:/Path/To/acceptance-checklist.pdf" }
+  ],
   "steps": [
     { "id": "inspect-current", "title": "Inspect the existing plan API", "status": "已完成" },
     { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中" },
@@ -348,6 +352,16 @@ PATCH /api/roles/:roleId/plans/:planId
 
 New plans must provide an ordered `steps` array. An in-progress plan must also provide `currentStepId`, pointing to the only step whose status is `进行中`; clients use this to list every step and mark the current execution point. When a user explicitly pauses the plan, PATCH the top-level `status` to `暂停`, preserve that step and `currentStepId` as the resume position, and stop driving the bound task; resume by changing only the top-level status back to `进行中`. When blocked, put the reason in the current step's `blockedBy` and the awaited party or condition in `waitingFor`; the UI prioritizes the blocker reason and does not repeat `nextAction` already expressed by the step list. Legacy plans remain readable, but should gain structured steps on their next update. Every step must be `已完成` before the plan can become completed or archived.
 
+`attachments` is optional. A new item may provide a Manager-readable local `path`, or `name`, optional `mimeType`, and `contentBase64`. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Manager copies content into the persona-private `plans/attachments/<planId>/` directory; the plan file retains safe metadata only and never Base64. Omitting `attachments` from PATCH preserves the list, while an empty array clears it. To keep selected existing items in a PATCH, send back the corresponding attachment objects returned by GET. The public plan DTO does not expose the local `path`.
+
+Read one attachment through:
+
+```http
+GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId
+```
+
+Image and video attachments use an `inline` response. WebGUI renders PNG, JPEG, WebP, GIF, MP4/M4V, WebM, Ogg Video, and MOV/QuickTime in compact, fixed-width 16:9 thumbnails that shrink only for a narrower container, then opens images in a large-image preview or videos in an in-page player with controls. Video reads support HTTP byte ranges, while actual codec support depends on the browser. Ordinary files use a download response. The endpoint serves only metadata-registered files whose real paths still remain inside that plan's managed directory.
+
 Before requesting approval, the Agent should PATCH the current step with an `approvalRequest` that describes `request`, `reason`, exact `files / commands / changes`, `validation`, `rollback`, and `outOfScope` as concretely as practical. Manager applies a lightweight completeness check: missing details neither reject the plan write nor restrict user approval. The API returns `presentation.approval.state=incomplete` plus `missing[]`, and both clients show that warning beside the feedback input. Shared AgentPacket hints tell the Agent to use the user's feedback to add real paths, complete commands, and external targets instead of leaving “waiting for authorization” as the long-term execution description.
 
 `taskBinding` may be written through POST or PATCH to bind one exact Codex execution session. The current contract accepts only `agentType=codex` and a non-empty complete `sessionId`; `completionHook.enabled` must be boolean. When enabled, the Codex `Stop` Hook sends the official `last_assistant_message` to Manager, which then reminds the target handler session through the same persona's role-panel, Forwarding, and AgentPacket path. `gatewayId` is required when the persona has multiple Routes. Delivery is deduplicated by `sessionId + turnId` and never automatically patches the plan, advances steps, or writes memory.
@@ -361,7 +375,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-WebGUI and the tray use this endpoint to record user feedback for the current approval step and ask Manager to notify the Agent through the existing role-panel path. After receiving user approval through QQ or another channel, the Agent should call the same endpoint to create the plan-associated record:
+WebGUI and the tray use this endpoint to record user feedback for the current approval step and ask Manager to notify the Agent through the independent `plan_feedback` system event. After receiving user approval through QQ or another channel, the Agent should call the same endpoint to create the plan-associated record:
 
 ```json
 {
@@ -369,6 +383,9 @@ WebGUI and the tray use this endpoint to record user feedback for the current ap
   "gatewayId": "route-id",
   "stepId": "review-plan",
   "text": "Approve the direction, but add the regression scope first.",
+  "attachments": [
+    { "name": "review.png", "mimeType": "image/png", "contentBase64": "<base64>" }
+  ],
   "kind": "approval_suggestion",
   "author": "user",
   "source": "qq",
@@ -376,9 +393,11 @@ WebGUI and the tray use this endpoint to record user feedback for the current ap
 }
 ```
 
-With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`; Agent delivery continues in the background. The terminal state is announced through `/api/events` as `plan_feedback_changed`, after which clients GET that plan's feedback summary. A user request must not synchronously wait for Desktop task loading, Desktop IPC, or handler execution.
+`attachments` is optional. Each item uses `name`, optional `mimeType`, and `contentBase64`; a request may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Manager validates and materializes the content under the persona-private `plans/feedback/attachments/<feedbackId>/` directory. The audit record and Agent notification retain only safe metadata and the local path. A retry with the same `feedbackId` must keep the same text, step, and attachment content.
 
-Agent-authored handling notes use `kind=approval_response`, `author=agent`, `source=agent`, and `notifyAgent=false`. Agent records are stored as `record_only` and cannot trigger another delivery to themselves. Feedback records facts only; the Agent must separately `PATCH /plans/:planId` when it decides to change steps, blockers, or status.
+With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`; Manager emits the independent `plan_feedback` event and Agent delivery continues in the background. The terminal state is announced through `/api/events` as `plan_feedback_changed`, after which clients GET that plan's feedback summary. A user request must not synchronously wait for Desktop task loading, Desktop IPC, or handler execution.
+
+Agent-authored handling notes use `kind=approval_response`, `author=agent`, `source=agent`, and `notifyAgent=false`. Agent records are stored as `record_only` and cannot trigger another delivery to themselves. Manager delivers user feedback as an independent `plan_feedback` system event through the existing Forwarding, AgentPacket, and Agent adapter path. The event does not depend on editable message rules, enter the role-panel timeline or unified conversation ledger, or inject recent messages. Its reply context carries `targetType=plan_feedback`, `planId`, `planStepId`, and a stable response ID. The Agent first `PATCH`es `/plans/:planId`, then sends the user-facing body through the normal reply API so it is written back to the plan. Feedback itself does not advance the plan, and the Codex final text keeps only a short processing status.
 
 The shared plan API hints in every AgentPacket include this approval-record endpoint and the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface; they should only add persona-specific approval language or decision policy.
 

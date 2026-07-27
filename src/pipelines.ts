@@ -1,10 +1,10 @@
 import type { MessageAdapterType } from "./adapters/messageAdapter.js";
 
-export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
+export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "none";
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 
-export type PipelinePresetId = "qq_chat" | "wecom_chat" | "voice_chat" | "webhook_task";
+export type PipelinePresetId = "qq_chat" | "wecom_chat" | "weixin_chat" | "voice_chat" | "webhook_task";
 
 export type PipelineDefinition = {
   id?: string;
@@ -70,6 +70,20 @@ export const pipelinePresets: Record<PipelinePresetId, ResolvedPipeline> = {
     preventFeedbackLoop: true,
     replyToSource: true
   },
+  weixin_chat: {
+    id: "weixin_chat",
+    name: "个人微信双向文本",
+    inputAdapter: "weixin",
+    outputAdapter: "weixin",
+    outputPipeline: "weixin",
+    promptOutputMode: "plain_text",
+    ttsProvider: "",
+    ttsVoice: "",
+    ttsWorkerUrl: "",
+    ttsPlay: false,
+    preventFeedbackLoop: true,
+    replyToSource: true
+  },
   voice_chat: {
     id: "voice_chat",
     name: "Voice chat",
@@ -116,11 +130,11 @@ const fallbackPipeline: ResolvedPipeline = {
 };
 
 function isMessageAdapterType(value: string): value is MessageAdapterType {
-  return value === "napcat" || value === "remoteAgent" || value === "speech" || value === "fennenote" || value === "xiaoai" || value === "rabilink" || value === "webhook" || value === "wecom" || value === "heartbeat" || value === "rolePanel" || value === "disabled";
+  return value === "napcat" || value === "remoteAgent" || value === "speech" || value === "fennenote" || value === "xiaoai" || value === "rabilink" || value === "webhook" || value === "wecom" || value === "weixin" || value === "heartbeat" || value === "rolePanel" || value === "disabled";
 }
 
 function isOutputAdapterType(value: string): value is OutputAdapterType {
-  return value === "qq" || value === "agent" || value === "file" || value === "console" || value === "tts" || value === "webhook" || value === "fennenote" || value === "wecom" || value === "none";
+  return value === "qq" || value === "agent" || value === "file" || value === "console" || value === "tts" || value === "webhook" || value === "fennenote" || value === "wecom" || value === "weixin" || value === "none";
 }
 
 function isPromptOutputMode(value: string): value is PromptOutputMode {

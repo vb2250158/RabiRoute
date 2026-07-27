@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { RouteProfile } from "../config.js";
-import type { GroupMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
+import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import { resolvePipeline } from "../pipelines.js";
 import { buildAgentPacket } from "./agentPacket.js";
 import { createRouteDecision } from "./routeDecision.js";
@@ -47,6 +47,40 @@ function voiceTranscript(patch: Partial<VoiceTranscriptEventRecord> = {}): Voice
     ...patch
   };
 }
+
+function planFeedback(patch: Partial<PlanFeedbackMessageRecord> = {}): PlanFeedbackMessageRecord {
+  return {
+    time: 1710000000,
+    rawMessage: "请确认计划改动范围。",
+    messageId: "plan-feedback-1",
+    senderName: "本地用户",
+    roleId: "Rabi",
+    adapterType: "planFeedback",
+    replyContext: {
+      targetType: "plan_feedback",
+      planId: "plan-1"
+    },
+    ...patch
+  };
+}
+
+test("plan feedback is an independent system event that does not depend on message rules", () => {
+  const route = routeProfile({
+    notificationRules: [{
+      id: "role-panel-only",
+      name: "role panel only",
+      enabled: true,
+      routeKinds: ["role_panel_message"],
+      template: ""
+    }]
+  });
+
+  const decision = createRouteDecision(route, "plan_feedback", planFeedback());
+
+  assert.ok(decision);
+  assert.deepEqual(decision.matchedRules.map((rule) => rule.id), ["plan-feedback"]);
+  assert.equal(decision.routeKind, "plan_feedback");
+});
 
 function makeRoleDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-packet-role-"));
@@ -376,4 +410,44 @@ test("AgentPacket injects route recent messages using the persona limit", () => 
   assert.match(packet.message, /出站/);
   assert.doesNotMatch(packet.message, /old message/);
   assert.equal(packet.message.match(/current prompt/g)?.length, 1);
+});
+
+test("AgentPacket never injects conversation history into heartbeat events", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-heartbeat-packet-data-"));
+  appendJsonl(path.join(dataDir, "heartbeat-events.jsonl"), [
+    { time: 1710000000, rawMessage: "older heartbeat history must not be injected", messageId: "heartbeat-old" }
+  ]);
+  const route = routeProfile({
+    recentMessageLimit: 100,
+    recentMessageLimits: { heartbeat: 100 },
+    notificationRules: [{
+      id: "heartbeat",
+      name: "heartbeat",
+      enabled: true,
+      routeKinds: ["heartbeat"],
+      template: "recent={recentMessages};limit={recentMessageLimit}"
+    }]
+  });
+  const record: HeartbeatEventRecord = {
+    time: 1710000001,
+    rawMessage: "current heartbeat task",
+    messageId: "heartbeat-current",
+    senderName: "RabiRoute scheduled trigger"
+  };
+  const decision = createRouteDecision(route, "heartbeat", record, {});
+  assert.ok(decision);
+
+  const packet = buildAgentPacket(decision, decision.matchedRules[0], {
+    roleId: "Rabi",
+    roleDir: "",
+    rolePath: "",
+    dataDir
+  });
+
+  assert.equal(packet.templateValues.recentMessageLimit, 0);
+  assert.equal(packet.templateValues.recentMessages, "");
+  assert.doesNotMatch(packet.message, /\[最近消息\]/);
+  assert.doesNotMatch(packet.message, /older heartbeat history must not be injected/);
+  assert.match(packet.message, /current heartbeat task/);
+  assert.match(packet.message, /recent=;limit=0/);
 });

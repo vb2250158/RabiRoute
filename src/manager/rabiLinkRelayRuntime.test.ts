@@ -128,6 +128,130 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   assert.equal(runtime.status().state, "disabled");
 });
 
+test("global Relay runtime forwards media ranges and Manager SSE events without exposing Relay credentials locally", async (t) => {
+  const mediaBody = Buffer.from("part", "utf8");
+  const localState: {
+    eventHeaders?: http.IncomingHttpHeaders;
+    mediaHeaders?: http.IncomingHttpHeaders;
+  } = {};
+  const localWebgui = http.createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/api/events") {
+      localState.eventHeaders = request.headers;
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "keep-alive"
+      });
+      response.write("event: ready\ndata: {}\n\n");
+      response.write(": keepalive\n\n");
+      response.write("event: gateway_status\ndata: {\"gatewayId\":\"route-a\",\"running\":true}\n\n");
+      return;
+    }
+    if (request.method === "GET" && request.url === "/api/roles/Rabi/plans/plan-a/attachments/video-a") {
+      localState.mediaHeaders = request.headers;
+      response.writeHead(206, {
+        "content-type": "video/mp4",
+        "accept-ranges": "bytes",
+        "content-range": "bytes 0-3/10"
+      });
+      response.end(mediaBody);
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const localPort = await listen(localWebgui);
+  t.after(() => close(localWebgui));
+
+  let claimCount = 0;
+  let eventPostCount = 0;
+  const relayState: {
+    finishedBody?: Record<string, unknown>;
+    eventBody?: Record<string, unknown>;
+  } = {};
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (request.method === "GET" && url.pathname === "/api/rabilink/events") {
+      openRelayEvents(response);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/worker/webgui-requests") {
+      claimCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: true,
+        requests: claimCount === 1 ? [{
+          id: "request-range",
+          method: "GET",
+          path: "/api/roles/Rabi/plans/plan-a/attachments/video-a",
+          headers: {
+            range: "bytes=0-3",
+            "if-range": "media-etag",
+            authorization: "Bearer must-not-reach-manager",
+            "x-rabilink-token": "must-not-reach-manager"
+          }
+        }] : []
+      }));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/worker/webgui-requests/request-range/response") {
+      const chunks: Buffer[] = [];
+      request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        relayState.finishedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/worker/webgui-events") {
+      eventPostCount += 1;
+      const chunks: Buffer[] = [];
+      request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        relayState.eventBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        response.writeHead(202, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const relayPort = await listen(relay);
+  t.after(() => close(relay));
+
+  const runtime = new RabiLinkRelayRuntime();
+  t.after(() => runtime.stop());
+  runtime.sync({
+    enabled: true,
+    url: `http://127.0.0.1:${relayPort}`,
+    token: "relay-app-token",
+    deviceId: "pc-range",
+    deviceGuid: "guid-range",
+    deviceName: "Range PC",
+    claimWaitMs: 60000,
+    localWebguiUrl: `http://127.0.0.1:${localPort}`,
+    speechProxyEnabled: false,
+    localSpeechUrl: "http://127.0.0.1:8781"
+  });
+
+  await waitFor(() => relayState.finishedBody !== undefined && relayState.eventBody !== undefined);
+  assert.equal(localState.mediaHeaders?.range, "bytes=0-3");
+  assert.equal(localState.mediaHeaders?.["if-range"], "media-etag");
+  assert.equal(localState.mediaHeaders?.authorization, undefined);
+  assert.equal(localState.mediaHeaders?.["x-rabilink-token"], undefined);
+  assert.equal(localState.eventHeaders?.authorization, undefined);
+  assert.equal(localState.eventHeaders?.["x-rabilink-token"], undefined);
+  assert.equal(relayState.finishedBody?.statusCode, 206);
+  assert.deepEqual(Buffer.from(String(relayState.finishedBody?.bodyBase64), "base64"), mediaBody);
+  assert.deepEqual(relayState.eventBody, {
+    eventType: "gateway_status",
+    data: { gatewayId: "route-a", running: true },
+    deviceId: "pc-range",
+    deviceGuid: "guid-range"
+  });
+  assert.equal(eventPostCount, 1);
+});
+
 test("global Relay runtime bounds a stuck local GET and retries an uncertain Relay completion", async (t) => {
   let localRequestCount = 0;
   const localWebgui = http.createServer((request, response) => {

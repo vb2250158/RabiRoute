@@ -4,6 +4,7 @@ import type {
   PlanItem,
   RecentMemoryItem
 } from "./roleKnowledge.js";
+import type { PlanAttachmentPresentation } from "./shared/planAttachmentContract.js";
 import {
   approvalRequestMissingFields,
   currentPlanStep,
@@ -35,7 +36,8 @@ export type PlanPresentation = {
   };
 };
 
-export type PresentedPlanItem = PlanItem & {
+export type PresentedPlanItem = Omit<PlanItem, "attachments"> & {
+  attachments: PlanAttachmentPresentation[];
   presentation: PlanPresentation;
 };
 
@@ -154,7 +156,11 @@ function buildPlanPresentation(
 }
 
 export function presentPlan(plan: PlanItem): PresentedPlanItem {
-  return { ...plan, presentation: planPresentation(plan) };
+  return {
+    ...plan,
+    attachments: plan.attachments.map(({ path: _path, ...attachment }) => attachment),
+    presentation: planPresentation(plan)
+  };
 }
 
 export function presentPlans(plans: PlanItem[]): PresentedPlanItem[] {

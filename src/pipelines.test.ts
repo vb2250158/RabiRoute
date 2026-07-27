@@ -36,3 +36,14 @@ test("wecom_chat preset resolves to bidirectional WeCom markdown chat", () => {
   assert.equal(pipeline.replyToSource, true);
   assert.equal(pipeline.preventFeedbackLoop, true);
 });
+
+test("weixin_chat preset resolves to source-bound personal Weixin text", () => {
+  const pipeline = resolvePipeline("weixin_chat");
+
+  assert.equal(pipeline.inputAdapter, "weixin");
+  assert.equal(pipeline.outputAdapter, "weixin");
+  assert.equal(pipeline.outputPipeline, "weixin");
+  assert.equal(pipeline.promptOutputMode, "plain_text");
+  assert.equal(pipeline.replyToSource, true);
+  assert.equal(pipeline.preventFeedbackLoop, true);
+});

@@ -98,6 +98,15 @@ import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.j
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
+import {
+  generateWebguiAccessToken,
+  isLoopbackRemoteAddress,
+  isLocalMachineRemoteAddress,
+  isPublicWebguiStaticRequest,
+  isWebguiLanRequestAuthorized,
+  lanAddressPriority,
+  managerListensOnLan
+} from "./webguiLanAccess.js";
 import { handleRabiApi, publicRabiLinkRelayConfig } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
@@ -109,6 +118,7 @@ import {
 } from "./managerRuntimeMode.js";
 import { resolveGatewayChildCommand } from "./gatewayChildCommand.js";
 import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
+import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
 import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
 import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
@@ -171,10 +181,17 @@ import {
   appendPlanFeedback,
   createPlanFeedbackRecord,
   listPlanFeedback,
+  planFeedbackAttachmentsEqual,
   planFeedbackSummary,
+  storePlanFeedbackAttachments,
   updatePlanFeedbackDelivery,
   type PlanFeedbackRecord
 } from "../planFeedback.js";
+import {
+  PLAN_FEEDBACK_REQUEST_MAX_BYTES,
+  type PlanFeedbackAttachmentUpload
+} from "../shared/planFeedbackContract.js";
+import { PLAN_ATTACHMENT_REQUEST_MAX_BYTES } from "../shared/planAttachmentContract.js";
 import {
   currentWearableHealthState,
   ingestWearableHealthObservation,
@@ -218,6 +235,8 @@ type GatewayDefinition = {
   wecomBotId?: string;
   wecomBotSecret?: string;
   wecomWsUrl?: string;
+  weixinBaseUrl?: string;
+  weixinBotType?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   heartbeatSkipWhenAgentBusy?: boolean;
@@ -424,13 +443,14 @@ type MessageAdapterScanResult = {
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
-const managerHost = process.env.GATEWAY_MANAGER_HOST ?? "127.0.0.1";
+const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
 const managerReadOnly = managerReadOnlyEnabled();
+const managerHostOverride = process.env.GATEWAY_MANAGER_HOST?.trim() || "";
+const managerHost = managerHostOverride || (!managerReadOnly && rabiGlobalConfig.read().webguiLan.enabled ? "0.0.0.0" : "127.0.0.1");
 const managerShouldAutostart = !managerReadOnly && managerAutostartEnabled();
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
 const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
-const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
 const managerEventStreams = new Set<http.ServerResponse>();
 
 function publishManagerEvent(eventType: string, data: unknown): void {
@@ -625,11 +645,6 @@ function headerValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
-function isLoopbackRemoteAddress(value: string | undefined): boolean {
-  const address = (value || "").replace(/^::ffff:/, "");
-  return address === "::1" || address === "localhost" || address === "127.0.0.1" || address.startsWith("127.");
-}
-
 function remoteAgentRequestToken(request: http.IncomingMessage, requestUrl: URL): string {
   const bearer = headerValue(request.headers.authorization).match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || "";
   return requestUrl.searchParams.get("token")?.trim()
@@ -639,8 +654,21 @@ function remoteAgentRequestToken(request: http.IncomingMessage, requestUrl: URL)
 
 function isRemoteAgentRequestAuthorized(request: http.IncomingMessage, requestUrl: URL): boolean {
   if (isLoopbackRemoteAddress(request.socket.remoteAddress)) return true;
+  if (isWebguiLanRequestAuthorized(request, requestUrl, rabiGlobalConfig.read().webguiLan)) return true;
   if (!remoteAgentToken) return false;
   return remoteAgentRequestToken(request, requestUrl) === remoteAgentToken;
+}
+
+function remoteRequestUsesIndependentAuthorization(request: http.IncomingMessage, requestUrl: URL): boolean {
+  return requestUrl.pathname.startsWith("/api/remote-agent/")
+    && isRemoteAgentRequestAuthorized(request, requestUrl);
+}
+
+function webguiLanRequestAllowed(request: http.IncomingMessage, requestUrl: URL): boolean {
+  if (!managerListensOnLan(managerHost) || isLoopbackRemoteAddress(request.socket.remoteAddress)) return true;
+  if (isPublicWebguiStaticRequest(request.method, requestUrl.pathname)) return true;
+  if (remoteRequestUsesIndependentAuthorization(request, requestUrl)) return true;
+  return isWebguiLanRequestAuthorized(request, requestUrl, rabiGlobalConfig.read().webguiLan);
 }
 
 function definitionFingerprint(definition: GatewayDefinition): string {
@@ -1541,7 +1569,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     PIPELINE_PRESET: definition.pipelinePreset ?? "",
     PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
-    HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
+    HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
     HEARTBEAT_SKIP_WHEN_AGENT_BUSY: definition.heartbeatSkipWhenAgentBusy ? "1" : "0",
     REMOTE_AGENT_DEFAULT_DEVICE_ID: definition.remoteAgentDefaultDeviceId?.trim() || "",
     REMOTE_AGENT_DEFAULT_CWD: configPathValue(definition.remoteAgentDefaultCwd) || "",
@@ -1573,6 +1601,8 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     WECOM_BOT_ID: definition.wecomBotId?.trim() || process.env.WECOM_BOT_ID || "",
     WECOM_BOT_SECRET: definition.wecomBotSecret?.trim() || process.env.WECOM_BOT_SECRET || "",
     WECOM_WS_URL: definition.wecomWsUrl?.trim() || process.env.WECOM_WS_URL || "",
+    WEIXIN_BASE_URL: definition.weixinBaseUrl?.trim() || process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com",
+    WEIXIN_BOT_TYPE: definition.weixinBotType?.trim() || process.env.WEIXIN_BOT_TYPE || "3",
     CODEX_THREAD_ID: definition.codexThreadId?.trim() || "",
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
@@ -2021,6 +2051,12 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     }),
     speechControl.status()
   ]);
+  const weixinRuntimes = adapterRuntimes("weixin");
+  const weixinLoggedIn = weixinRuntimes.some((runtime) => {
+    const status = readGatewayStatus(runtime.definition) as Record<string, any>;
+    return status.messageAdapters?.weixin?.loggedIn === true;
+  });
+  const weixinHasRecentMessages = weixinRuntimes.some((runtime) => routeHasRecentMessages(runtime, "weixin"));
 
   return {
     napcat,
@@ -2065,6 +2101,19 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     rabilink,
     wearable,
     wecom,
+    weixin: {
+      type: "weixin",
+      label: "个人微信 / Weixin",
+      maturity: "experimental",
+      installed: true,
+      endpoints: [{ label: "OpenClaw iLink API", url: weixinRuntimes[0]?.definition.weixinBaseUrl || process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com", healthy: weixinLoggedIn }],
+      requirements: [
+        { id: "route", label: "已配置个人微信消息端", required: true, ok: weixinRuntimes.length > 0, detail: weixinRuntimes.length > 0 ? "已存在使用 weixin adapter 的 Route。" : "在 Route 中启用个人微信消息端。" },
+        { id: "login", label: "手机微信扫码登录", required: true, ok: weixinLoggedIn, detail: weixinLoggedIn ? "当前 Route 已保存有效登录状态。" : "启动 Route 后使用状态中的二维码扫码。" },
+        { id: "recent-message", label: "最近收到个人微信消息", required: false, ok: weixinHasRecentMessages, detail: weixinHasRecentMessages ? "已记录过个人微信消息。" : "尚未收到消息；扫码后从另一账号发一条文本验证。" }
+      ],
+      warnings: ["个人微信接入仍是实验能力，依赖 OpenClaw iLink API；尚未完成长期在线与账号风险验收。", "首版仅把文本消息投递给 Agent；媒体消息只记录，自动回复仅支持已建立 context token 的来源会话文本。"]
+    },
     webhook
   };
 }
@@ -2635,6 +2684,7 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
       return !adapterType || adapterType === "webhook";
     }));
   const wecomEntries = sortTail(readEntries("企业微信 / WeCom", "wecom-messages.jsonl"));
+  const weixinEntries = sortTail(readEntries("个人微信 / Weixin", "weixin-messages.jsonl"));
 
   return {
     napcat: {
@@ -2687,6 +2737,10 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     wecom: {
       paths: dirs.map((dir) => path.join(dir, "wecom-messages.jsonl")),
       entries: wecomEntries
+    },
+    weixin: {
+      paths: dirs.map((dir) => path.join(dir, "weixin-messages.jsonl")),
+      entries: weixinEntries
     },
     webhook: {
       paths: dirs.map((dir) => path.join(dir, "voice-transcripts.jsonl")),
@@ -2741,6 +2795,10 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
     wecom: {
       paths: [path.join(dir, "wecom-adapter.log.jsonl")],
       entries: readEntries("wecom")
+    },
+    weixin: {
+      paths: [path.join(dir, "weixin-adapter.log.jsonl")],
+      entries: readEntries("weixin")
     },
     webhook: {
       paths: [path.join(dir, "webhook-adapter.log.jsonl")],
@@ -2797,6 +2855,8 @@ function runtimeStatusWithRoleInfoCache(
     wecomBotId: runtime.definition.wecomBotId,
     wecomBotSecret: runtime.definition.wecomBotSecret,
     wecomWsUrl: runtime.definition.wecomWsUrl,
+    weixinBaseUrl: runtime.definition.weixinBaseUrl,
+    weixinBotType: runtime.definition.weixinBotType,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
     heartbeatMessage: runtime.definition.heartbeatMessage ?? "",
     remoteAgentDefaultDeviceId: runtime.definition.remoteAgentDefaultDeviceId ?? "",
@@ -2897,12 +2957,24 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
   response.end(JSON.stringify(body, null, 2));
 }
 
-function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
+function readJsonBody<T>(request: http.IncomingMessage, maxBytes = 0): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    let total = 0;
+    let tooLarge = false;
+    request.on("data", (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buffer.byteLength;
+      if (maxBytes > 0 && total > maxBytes) {
+        tooLarge = true;
+        chunks.length = 0;
+        return;
+      }
+      if (!tooLarge) chunks.push(buffer);
+    });
     request.on("end", () => {
       try {
+        if (tooLarge) throw new Error(`Request body exceeds ${maxBytes} bytes.`);
         const text = Buffer.concat(chunks).toString("utf8");
         resolve((text ? JSON.parse(text) : {}) as T);
       } catch (error) {
@@ -2962,6 +3034,7 @@ type PlanFeedbackRequest = {
   kind?: "approval_suggestion" | "approval_response";
   author?: "user" | "agent" | "system";
   source?: "webgui" | "tray" | "qq" | "agent" | "api";
+  attachments?: PlanFeedbackAttachmentUpload[];
   notifyAgent?: boolean;
 };
 
@@ -3118,6 +3191,7 @@ function parseReplayRouteKind(value: unknown): ForwardRouteKind | undefined {
     || value === "heartbeat"
     || value === "manual_trigger"
     || value === "role_panel_message"
+    || value === "plan_feedback"
     || value === "voice_transcript"
     ? value
     : undefined;
@@ -3188,8 +3262,17 @@ function planFeedbackAgentText(record: PlanFeedbackRecord): string {
     lines.push(`对应步骤：${record.stepTitle || record.stepId}${record.stepId ? `（${record.stepId}）` : ""}`);
   }
   lines.push(
-    `审批意见：${record.text}`,
-    "请读取 Manager 中的计划与审批记录，判断是否需要补充方案、修改步骤或继续执行。收到意见不等于计划已自动推进。"
+    `审批意见：${record.text}`
+  );
+  if (record.attachments.length) {
+    lines.push(
+      "审批附件：",
+      ...record.attachments.map((attachment) => `- ${attachment.name}（${attachment.path}）`)
+    );
+  }
+  lines.push(
+    "请先读取 Manager 中的当前计划与审批记录，再按意见更新计划或对应步骤。计划说明必须写具体：实际文件与改动、完整命令及影响、配置/数据/外部变更、验证、回退和明确排除范围；不要只写笼统结论。",
+    "处理完成后，必须通过当前回复上下文把面向用户的说明直接回写为本计划的 approval_response；不要只在 Codex 任务里输出正文。Codex 可见最终文本只需简短说明已更新并回写计划。"
   );
   return lines.join("\n");
 }
@@ -3201,8 +3284,7 @@ function schedulePlanFeedbackDelivery(
   roleId: string,
   gatewayId: string,
   plan: ReturnType<typeof listPlans>[number],
-  inputRecord: PlanFeedbackRecord,
-  isNew: boolean
+  inputRecord: PlanFeedbackRecord
 ): PlanFeedbackRecord {
   if (inputRecord.deliveryStatus === "record_only" || inputRecord.deliveryStatus === "delivered") return inputRecord;
   let record = inputRecord.deliveryStatus === "failed"
@@ -3216,37 +3298,24 @@ function schedulePlanFeedbackDelivery(
     const messageId = `plan-feedback-${record.id}`;
     const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
     const text = planFeedbackAgentText(record);
-    if (isNew) {
-      appendRolePanelTimelineMessage(roleDir, {
-        id: messageId,
-        time: Math.floor(Date.now() / 1000),
-        roleId,
-        gatewayId: runtime.definition.id,
-        routeProfileId,
-        direction: "user",
-        sender: "本地用户",
-        text,
-        attachments: [],
-        status: "sent",
-        replyContext: {
-          runtimeRouteId: runtime.definition.id,
-          gatewayId: runtime.definition.id,
-          routeProfileId,
-          routeKind: "role_panel_message",
-          targetType: "plan_feedback",
-          adapterType: "rolePanel",
-          messageId,
-          roleId,
-          planId: plan.id,
-          planStepId: record.stepId,
-          planFeedbackId: record.id,
-          planFeedbackKind: record.kind
-        }
-      });
-    }
+    const replyContext = {
+      runtimeRouteId: runtime.definition.id,
+      gatewayId: runtime.definition.id,
+      routeProfileId,
+      routeKind: "plan_feedback",
+      targetType: "plan_feedback",
+      adapterType: "planFeedback",
+      messageId,
+      roleId,
+      planId: plan.id,
+      planStepId: record.stepId,
+      planFeedbackId: record.id,
+      planFeedbackResponseId: `response-${record.id}`,
+      planFeedbackKind: record.kind
+    };
     activePlanFeedbackDeliveries.add(deliveryKey);
     publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
-    void triggerGatewayRolePanelMessage(runtime, messageId, text, [])
+    void triggerGatewayPlanFeedback(runtime, messageId, text, record.attachments, replyContext)
       .then(() => updatePlanFeedbackDelivery(roleDir, record, "delivered"))
       .catch((error) => updatePlanFeedbackDelivery(
         roleDir,
@@ -3279,18 +3348,47 @@ function presentedPlanWithFeedback(roleDir: string, plan: ReturnType<typeof list
   };
 }
 
-function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: string, text: string, attachments: RolePanelAttachment[]): Promise<void> {
+function triggerGatewayRolePanelMessage(
+  runtime: GatewayRuntime,
+  messageId: string,
+  text: string,
+  attachments: RolePanelAttachment[],
+  replyContext?: Record<string, unknown>
+): Promise<void> {
+  return triggerGatewayLocalAgentMessage(runtime, "role-panel", messageId, text, attachments, replyContext);
+}
+
+function triggerGatewayPlanFeedback(
+  runtime: GatewayRuntime,
+  messageId: string,
+  text: string,
+  attachments: RolePanelAttachment[],
+  replyContext: Record<string, unknown>
+): Promise<void> {
+  return triggerGatewayLocalAgentMessage(runtime, "plan-feedback", messageId, text, attachments, replyContext);
+}
+
+function triggerGatewayLocalAgentMessage(
+  runtime: GatewayRuntime,
+  argumentPrefix: "role-panel" | "plan-feedback",
+  messageId: string,
+  text: string,
+  attachments: RolePanelAttachment[],
+  replyContext?: Record<string, unknown>
+): Promise<void> {
   const roleId = roleIdForDefinition(runtime.definition);
   const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
+  const logLabel = argumentPrefix === "plan-feedback" ? "plan feedback" : "role panel";
   const command = childCommand([
-    `--role-panel-message=${encodeURIComponent(messageId)}`,
-    `--role-panel-text=${encodeURIComponent(text)}`,
-    `--role-panel-role=${encodeURIComponent(roleId)}`,
-    `--role-panel-gateway=${encodeURIComponent(runtime.definition.id)}`,
-    `--role-panel-route-profile=${encodeURIComponent(routeProfileId)}`,
-    `--role-panel-attachments=${encodeURIComponent(JSON.stringify(attachments))}`
+    `--${argumentPrefix}-message=${encodeURIComponent(messageId)}`,
+    `--${argumentPrefix}-text=${encodeURIComponent(text)}`,
+    `--${argumentPrefix}-role=${encodeURIComponent(roleId)}`,
+    `--${argumentPrefix}-gateway=${encodeURIComponent(runtime.definition.id)}`,
+    `--${argumentPrefix}-route-profile=${encodeURIComponent(routeProfileId)}`,
+    `--${argumentPrefix}-attachments=${encodeURIComponent(JSON.stringify(attachments))}`,
+    ...(replyContext ? [`--${argumentPrefix}-reply-context=${encodeURIComponent(JSON.stringify(replyContext))}`] : [])
   ]);
-  appendLog(runtime, `role panel message requested: ${messageId}`);
+  appendLog(runtime, `${logLabel} requested: ${messageId}`);
   return new Promise((resolve, reject) => {
     let settled = false;
     const child = spawn(command.command, command.args, {
@@ -3308,27 +3406,27 @@ function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: stri
     };
     const deadline = setTimeout(() => {
       try { child.kill(); } catch { /* best effort */ }
-      finish(() => reject(new Error(`role panel message timed out: ${messageId}`)));
+      finish(() => reject(new Error(`${logLabel} timed out: ${messageId}`)));
     }, 45_000);
 
     child.stdout.on("data", (data) => {
       for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
-        appendLog(runtime, `role panel: ${line}`);
+        appendLog(runtime, `${logLabel}: ${line}`);
       }
     });
     child.stderr.on("data", (data) => {
       for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
-        appendLog(runtime, `role panel error: ${line}`);
+        appendLog(runtime, `${logLabel} error: ${line}`);
       }
     });
     child.on("error", (error) => finish(() => reject(error)));
     child.on("exit", (code, signal) => {
       if (code === 0) {
-        appendLog(runtime, `role panel message completed: ${messageId}`);
+        appendLog(runtime, `${logLabel} completed: ${messageId}`);
         finish(resolve);
         return;
       }
-      finish(() => reject(new Error(`role panel message failed: code=${code ?? "null"} signal=${signal ?? "null"}`)));
+      finish(() => reject(new Error(`${logLabel} failed: code=${code ?? "null"} signal=${signal ?? "null"}`)));
     });
   });
 }
@@ -3617,7 +3715,7 @@ function handleRolePanelApi(
           status: "sent",
           replyContext
         });
-        await triggerGatewayRolePanelMessage(runtime, messageId, text, attachments);
+        await triggerGatewayRolePanelMessage(runtime, messageId, text, attachments, replyContext);
         return { roleId, message };
       })
       .then((payload) => jsonResponse(response, 202, { code: 0, ...payload }))
@@ -4090,7 +4188,7 @@ function handleRoleKnowledgeApi(
         return true;
       }
       if (request.method === "POST") {
-        void readJsonBody<PlanFeedbackRequest>(request)
+        void readJsonBody<PlanFeedbackRequest>(request, PLAN_FEEDBACK_REQUEST_MAX_BYTES)
           .then(async (body) => {
             const requestedStepId = String(body.stepId || "").trim();
             const step = requestedStepId
@@ -4098,7 +4196,7 @@ function handleRoleKnowledgeApi(
               : plan.steps.find((item) => item.id === plan.currentStepId)
                 || plan.steps.find((item) => item.status === "进行中");
             if (requestedStepId && !step) throw new Error(`Plan step not found: ${requestedStepId}`);
-            const candidate = createPlanFeedbackRecord({
+            const baseCandidate = createPlanFeedbackRecord({
               id: body.feedbackId,
               roleId,
               planId,
@@ -4112,9 +4210,16 @@ function handleRoleKnowledgeApi(
               text: body.text,
               notifyAgent: body.notifyAgent
             });
-            const existing = listPlanFeedback(roleDir, planId).find((item) => item.id === candidate.id);
-            if (existing && (existing.text !== candidate.text || existing.stepId !== candidate.stepId)) {
-              throw new Error(`Feedback id already exists with different content: ${candidate.id}`);
+            const existing = listPlanFeedback(roleDir, planId).find((item) => item.id === baseCandidate.id);
+            if (existing && (existing.text !== baseCandidate.text || existing.stepId !== baseCandidate.stepId)) {
+              throw new Error(`Feedback id already exists with different content: ${baseCandidate.id}`);
+            }
+            const attachments = body.attachments === undefined
+              ? existing?.attachments || []
+              : storePlanFeedbackAttachments(roleDir, baseCandidate.id, body.attachments, existing?.attachments);
+            const candidate = { ...baseCandidate, attachments };
+            if (existing && !planFeedbackAttachmentsEqual(existing.attachments, candidate.attachments)) {
+              throw new Error(`Feedback id already exists with different attachments: ${candidate.id}`);
             }
             const record = existing || appendPlanFeedback(roleDir, candidate);
             if (record.deliveryStatus === "record_only" || record.deliveryStatus === "delivered") {
@@ -4126,8 +4231,7 @@ function handleRoleKnowledgeApi(
               roleId,
               String(body.gatewayId || record.gatewayId || "").trim(),
               plan,
-              record,
-              !existing
+              record
             );
           })
           .then((data) => jsonResponse(response, 202, { code: 0, data }))
@@ -4206,14 +4310,14 @@ function handleRoleKnowledgeApi(
       return true;
     }
     if (request.method === "POST" && resource === "plans" && !itemId) {
-      void readJsonBody<Record<string, unknown>>(request)
+      void readJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
         .then((body) => createPlan(roleDir, body))
         .then((data) => jsonResponse(response, 201, { code: 0, data: presentedPlanWithFeedback(roleDir, data) }))
         .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
     if (request.method === "PATCH" && resource === "plans" && itemId) {
-      void readJsonBody<Record<string, unknown>>(request)
+      void readJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
         .then((body) => updatePlan(roleDir, itemId, body))
         .then((data) => jsonResponse(response, 200, { code: 0, data: presentedPlanWithFeedback(roleDir, data) }))
         .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
@@ -4343,15 +4447,22 @@ function standaloneGatewayPayload(includeDiagnostics = true): Record<string, unk
   );
 }
 
-function networkOptionsPayload(): Record<string, unknown> {
-  const localAddresses = Object.entries(os.networkInterfaces())
+function localIpv4AddressEntries(): Array<{ name: string; address: string; cidr?: string }> {
+  return Object.entries(os.networkInterfaces())
     .flatMap(([name, addresses]) => (addresses ?? [])
       .filter((address) => address.family === "IPv4" && !address.internal)
       .map((address) => ({
         name,
         address: address.address,
-        cidr: address.cidr
-      })));
+        cidr: address.cidr || undefined
+      })))
+    .sort((left, right) => lanAddressPriority(left.name, left.address) - lanAddressPriority(right.name, right.address)
+      || left.name.localeCompare(right.name)
+      || left.address.localeCompare(right.address));
+}
+
+function networkOptionsPayload(): Record<string, unknown> {
+  const localAddresses = localIpv4AddressEntries();
   const adapters = {
     napcat: {
       httpServers: [],
@@ -4374,6 +4485,82 @@ function networkOptionsPayload(): Record<string, unknown> {
   };
 }
 
+type WebguiLanAccessPatch = {
+  enabled?: boolean;
+  regenerateToken?: boolean;
+};
+
+function publicWebguiLanAccessPayload(request: http.IncomingMessage): Record<string, unknown> {
+  const config = rabiGlobalConfig.read().webguiLan;
+  const addresses = localIpv4AddressEntries();
+  const canManage = isLocalMachineRemoteAddress(request.socket.remoteAddress, addresses.map(item => item.address));
+  const listeningOnLan = managerListensOnLan(managerHost);
+  const restartRequired = !managerHostOverride && config.enabled !== listeningOnLan;
+  const token = canManage ? config.accessToken : "";
+  const urls = addresses.map(({ name, address, cidr }) => ({
+    name,
+    address,
+    cidr,
+    url: token
+      ? `http://${address}:${managerPort}/#/overview?webgui_token=${encodeURIComponent(token)}`
+      : `http://${address}:${managerPort}/#/overview`
+  }));
+  return {
+    code: 0,
+    data: {
+      enabled: config.enabled,
+      tokenConfigured: Boolean(config.accessToken),
+      token,
+      canManage,
+      managerHost,
+      managerPort,
+      listeningOnLan,
+      restartRequired,
+      hostManagedByEnvironment: Boolean(managerHostOverride),
+      urls
+    }
+  };
+}
+
+function handleWebguiLanAccessApi(
+  request: http.IncomingMessage,
+  requestUrl: URL,
+  response: http.ServerResponse
+): boolean {
+  if (requestUrl.pathname !== "/api/webgui-access") return false;
+  if (request.method === "GET") {
+    jsonResponse(response, 200, publicWebguiLanAccessPayload(request));
+    return true;
+  }
+  if (request.method !== "PATCH" && request.method !== "POST") {
+    jsonResponse(response, 405, { code: -1, message: "Method not allowed" });
+    return true;
+  }
+  if (!isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address))) {
+    jsonResponse(response, 403, {
+      code: -1,
+      message: "局域网 WebGUI 的开关和访问密钥只能在运行 Manager 的 Rabi PC 本机管理。"
+    });
+    return true;
+  }
+  void readJsonBody<WebguiLanAccessPatch>(request)
+    .then((body) => {
+      const current = rabiGlobalConfig.read().webguiLan;
+      const enabled = typeof body.enabled === "boolean" ? body.enabled : current.enabled;
+      const accessToken = body.regenerateToken === true || (enabled && !current.accessToken)
+        ? generateWebguiAccessToken()
+        : current.accessToken;
+      rabiGlobalConfig.patch({ webguiLan: { enabled, accessToken } });
+      return publicWebguiLanAccessPayload(request);
+    })
+    .then((payload) => jsonResponse(response, 200, payload))
+    .catch((error) => jsonResponse(response, 400, {
+      code: -1,
+      message: error instanceof Error ? error.message : String(error)
+    }));
+  return true;
+}
+
 function metaPayload(): Record<string, unknown> {
   const version = rabiRoutePackageVersion();
   const globalConfig = rabiGlobalConfig.read();
@@ -4384,6 +4571,12 @@ function metaPayload(): Record<string, unknown> {
     managerAutostart: managerShouldAutostart,
     rabiGuid: globalConfig.rabiGuid,
     rabiName: globalConfig.rabiName,
+    webguiLan: {
+      enabled: globalConfig.webguiLan.enabled,
+      tokenConfigured: Boolean(globalConfig.webguiLan.accessToken),
+      listeningOnLan: managerListensOnLan(managerHost),
+      restartRequired: !managerHostOverride && globalConfig.webguiLan.enabled !== managerListensOnLan(managerHost)
+    },
     rabiLinkRelay: publicRabiLinkRelayConfig(rabiLinkRelayConfigForMeta()),
     rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
     personaSyncLan: personaSyncLanServer.status(),
@@ -4619,6 +4812,7 @@ export function handleManagerPersonaDomainApi(
   const activeRolesRoot = context.rolesRoot ?? rolesRoot;
   const resolveRoleDir = context.roleDir ?? roleDirForApi;
   if (handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot)) return true;
+  if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
   if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
   if (handleSpeechApi(request, requestUrl, response)) return true;
   return handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir);
@@ -4645,11 +4839,24 @@ export async function startManager(): Promise<void> {
   const server = http.createServer((request, response) => {
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+      if (!webguiLanRequestAllowed(request, requestUrl)) {
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute WebGUI\"");
+        jsonResponse(response, 401, {
+          code: -1,
+          error: "WEBGUI_TOKEN_REQUIRED",
+          message: "局域网访问需要有效的 RabiRoute WebGUI 访问密钥。请使用控制台生成的完整访问链接。"
+        });
+        return;
+      }
       if (managerReadOnly && !managerReadOnlyRequestAllowed(request.method)) {
         jsonResponse(response, 423, {
           code: -1,
           message: "Manager is running in read-only acceptance mode."
         });
+        return;
+      }
+      if (handleWebguiLanAccessApi(request, requestUrl, response)) {
         return;
       }
       if (handleManagerEventApi(request, requestUrl, response)) {
@@ -4838,6 +5045,7 @@ export async function startManager(): Promise<void> {
             routeRoot,
             rolesRoot,
             speechServiceUrl: speechServiceUrl(),
+            publishEvent: publishManagerEvent,
             runtimes: [...runtimes.values()].map((runtime) => {
               const relay = rabiLinkRelayConfigFor(runtime.definition);
               return {

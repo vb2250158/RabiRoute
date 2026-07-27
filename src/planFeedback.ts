@@ -1,6 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES,
+  PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES,
+  PLAN_FEEDBACK_MAX_ATTACHMENTS,
+  type PlanFeedbackAttachment,
+  type PlanFeedbackAttachmentUpload
+} from "./shared/planFeedbackContract.js";
+
+export type { PlanFeedbackAttachment } from "./shared/planFeedbackContract.js";
 
 export type PlanFeedbackKind = "approval_suggestion" | "approval_response";
 export type PlanFeedbackAuthor = "user" | "agent" | "system";
@@ -19,6 +28,7 @@ export type PlanFeedbackRecord = {
   author: PlanFeedbackAuthor;
   source: PlanFeedbackSource;
   text: string;
+  attachments: PlanFeedbackAttachment[];
   createdAt: string;
   updatedAt: string;
   deliveryStatus: PlanFeedbackDeliveryStatus;
@@ -37,6 +47,7 @@ export type CreatePlanFeedbackInput = {
   author?: unknown;
   source?: unknown;
   text?: unknown;
+  attachments?: PlanFeedbackAttachment[];
   notifyAgent?: unknown;
 };
 
@@ -54,6 +65,127 @@ function safeIdPart(value: string): string {
 function optionalText(value: unknown): string | undefined {
   const text = String(value || "").trim();
   return text || undefined;
+}
+
+function safeFileName(value: unknown, fallback: string): string {
+  const base = path.basename(String(value || "").trim()).replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_");
+  return (base || fallback).slice(0, 180);
+}
+
+function normalizeMimeType(value: unknown): string | undefined {
+  const mimeType = String(value || "").trim().toLowerCase();
+  return mimeType ? mimeType.slice(0, 160) : undefined;
+}
+
+function sha256(content: Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function decodeBase64(value: unknown, name: string): Buffer {
+  if (typeof value !== "string") throw new Error(`Approval attachment content is required: ${name}.`);
+  const encoded = value.replace(/\s+/g, "");
+  if (encoded && (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length % 4 !== 0)) {
+    throw new Error(`Approval attachment is not valid base64: ${name}.`);
+  }
+  const content = Buffer.from(encoded, "base64");
+  if (content.toString("base64").replace(/=+$/g, "") !== encoded.replace(/=+$/g, "")) {
+    throw new Error(`Approval attachment is not valid base64: ${name}.`);
+  }
+  return content;
+}
+
+function normalizeStoredAttachments(value: unknown): PlanFeedbackAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const raw = item as Partial<PlanFeedbackAttachment>;
+    const name = safeFileName(raw.name, "attachment");
+    const filePath = String(raw.path || "").trim();
+    const digest = String(raw.sha256 || "").trim().toLowerCase();
+    const size = Number(raw.size);
+    if (!filePath || !/^[a-f0-9]{64}$/.test(digest) || !Number.isFinite(size) || size < 0) return [];
+    return [{
+      kind: raw.kind === "image" ? "image" : "file",
+      name,
+      path: filePath,
+      size,
+      mimeType: normalizeMimeType(raw.mimeType),
+      sha256: digest
+    }];
+  });
+}
+
+function attachmentSignature(attachments: PlanFeedbackAttachment[]): string {
+  return JSON.stringify(attachments.map(({ kind, name, size, mimeType, sha256: digest }) => ({
+    kind,
+    name,
+    size,
+    mimeType: mimeType || "",
+    sha256: digest
+  })));
+}
+
+export function planFeedbackAttachmentsEqual(
+  left: PlanFeedbackAttachment[] | undefined,
+  right: PlanFeedbackAttachment[] | undefined
+): boolean {
+  return attachmentSignature(normalizeStoredAttachments(left)) === attachmentSignature(normalizeStoredAttachments(right));
+}
+
+export function storePlanFeedbackAttachments(
+  roleDir: string,
+  feedbackId: string,
+  value: unknown,
+  expected?: PlanFeedbackAttachment[]
+): PlanFeedbackAttachment[] {
+  if (!Array.isArray(value)) throw new Error("Approval feedback attachments must be an array.");
+  if (value.length > PLAN_FEEDBACK_MAX_ATTACHMENTS) {
+    throw new Error(`Approval feedback supports at most ${PLAN_FEEDBACK_MAX_ATTACHMENTS} attachments.`);
+  }
+  const attachmentDir = path.join(roleDir, "plans", "feedback", "attachments", safeIdPart(feedbackId) || "feedback");
+  let total = 0;
+  const prepared = value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`Approval attachment ${index + 1} is invalid.`);
+    }
+    const raw = item as Partial<PlanFeedbackAttachmentUpload>;
+    const name = safeFileName(raw.name, `attachment-${index + 1}`);
+    const content = decodeBase64(raw.contentBase64, name);
+    total += content.byteLength;
+    if (content.byteLength > PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES) {
+      throw new Error(`Approval attachment exceeds ${PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES} bytes: ${name}.`);
+    }
+    if (total > PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES) {
+      throw new Error(`Approval feedback attachments exceed ${PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES} bytes in total.`);
+    }
+    const mimeType = normalizeMimeType(raw.mimeType);
+    const target = path.join(attachmentDir, `${String(index + 1).padStart(2, "0")}-${name}`);
+    const metadata: PlanFeedbackAttachment = {
+      kind: raw.kind === "image" || mimeType?.startsWith("image/") ? "image" : "file",
+      name,
+      path: target,
+      size: content.byteLength,
+      mimeType,
+      sha256: sha256(content)
+    };
+    return { content, metadata };
+  });
+  const attachments = prepared.map((item) => item.metadata);
+  if (expected && !planFeedbackAttachmentsEqual(expected, attachments)) {
+    throw new Error(`Feedback id already exists with different attachments: ${feedbackId}`);
+  }
+  if (!prepared.length) return [];
+  fs.mkdirSync(attachmentDir, { recursive: true });
+  for (const item of prepared) {
+    if (fs.existsSync(item.metadata.path)) {
+      if (sha256(fs.readFileSync(item.metadata.path)) !== item.metadata.sha256) {
+        throw new Error(`Approval attachment path already contains different content: ${item.metadata.name}.`);
+      }
+      continue;
+    }
+    fs.writeFileSync(item.metadata.path, item.content, { flag: "wx" });
+  }
+  return attachments;
 }
 
 function feedbackFile(roleDir: string, planId: string): string {
@@ -94,6 +226,7 @@ export function createPlanFeedbackRecord(input: CreatePlanFeedbackInput): PlanFe
     author,
     source: normalizeSource(input.source, author),
     text,
+    attachments: normalizeStoredAttachments(input.attachments),
     createdAt,
     updatedAt: createdAt,
     deliveryStatus: notifyAgent ? "pending" : "record_only"
@@ -129,7 +262,10 @@ export function listPlanFeedback(roleDir: string, planId: string): PlanFeedbackR
     try {
       const value = JSON.parse(line) as Partial<PlanFeedbackRecord>;
       if (!value.id || value.planId !== planId || !value.text || !value.createdAt) continue;
-      latestById.set(value.id, value as PlanFeedbackRecord);
+      latestById.set(value.id, {
+        ...value,
+        attachments: normalizeStoredAttachments(value.attachments)
+      } as PlanFeedbackRecord);
     } catch {
       // Keep other valid audit rows readable when one line is damaged.
     }

@@ -106,6 +106,29 @@ test("WeCom is a message/output adapter and does not claim a local ingress port"
   assert.deepEqual(claims.map((claim) => claim.kind), ["manager"]);
 });
 
+test("personal Weixin is a source-bound message/output adapter without a local port", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapters: ["weixin"],
+    pipeline: {
+      inputAdapter: "weixin",
+      outputAdapter: "weixin",
+      outputPipeline: "weixin"
+    },
+    weixinBaseUrl: "https://example.invalid/ilink",
+    weixinBotType: "3"
+  }));
+
+  assert.deepEqual(gatewayAdapterTypes(normalized), ["weixin"]);
+  assert.equal(normalized.pipeline?.inputAdapter, "weixin");
+  assert.equal(normalized.pipeline?.outputAdapter, "weixin");
+  assert.equal(normalized.weixinBaseUrl, "https://example.invalid/ilink");
+  assert.equal(normalized.weixinBotType, "3");
+  assert.equal(messageAdapterPolicyFor(normalized, "weixin").outputEnabled, true);
+
+  const claims = collectGatewayPortClaims([normalized], { managerPort: 8790 });
+  assert.deepEqual(claims.map((claim) => claim.kind), ["manager"]);
+});
+
 test("legacy Codex pipeline output normalizes to canonical Agent output", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     pipeline: {
@@ -203,6 +226,7 @@ test("persona recent message limits clamp each endpoint independently", () => {
   assert.equal(normalized.speech, 200);
   assert.equal(normalized.heartbeat, 0);
   assert.equal(normalized.wecom, DEFAULT_RECENT_MESSAGE_LIMIT);
+  assert.equal(normalized.weixin, DEFAULT_RECENT_MESSAGE_LIMIT);
 });
 
 test("speech push mode belongs to the Route while trigger keywords are normalized as persona data", () => {

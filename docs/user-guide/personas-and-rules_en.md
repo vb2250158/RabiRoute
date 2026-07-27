@@ -88,6 +88,7 @@ Common fields are:
 | `heartbeat` | Schedules and manual validation |
 | `manual_trigger` | Explicit UI or API triggers only |
 | `role_panel_message` | Built-in role-panel messages |
+| `plan_feedback` | Independent plan-approval system events without recent messages |
 | `voice_transcript` | FenneNote, XiaoAI, and related transcripts |
 | `wecom_message` | WeCom group events |
 | `rabilink` | RabiLink events |
@@ -112,11 +113,11 @@ A `heartbeat` rule supports:
 - a daily time;
 - a one-off date and time.
 
-A heartbeat rule without a schedule can still be triggered from Log Diagnostics. An enabled schedule creates real events and delivery records.
+A heartbeat rule without a schedule can still be triggered from Log Diagnostics. An enabled schedule creates real events and delivery records. Heartbeat carries the current event, persona/plan/memory indexes, and required paths, but it does not automatically include message history.
 
 ## What belongs in the template
 
-Use the template for decision guidance, not to reconstruct the whole event. RabiRoute already injects the event, recent context, persona and log paths, knowledge indexes, and reply context.
+Use the template for decision guidance, not to reconstruct the whole event. RabiRoute already injects the event, persona and log paths, knowledge indexes, and reply context. Ordinary endpoints may also receive their configured recent context; Heartbeat never does.
 
 A concise work template can say:
 

@@ -30,9 +30,9 @@ export {
   type BuiltinPersonaRulePolicy
 } from "./personaRulePolicy.js";
 
-export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "disabled";
+export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "disabled";
 export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
-export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "none";
+export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "none";
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
@@ -60,7 +60,8 @@ export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
   "rabilink",
   "wearable",
   "webhook",
-  "wecom"
+  "wecom",
+  "weixin"
 ];
 export const DEFAULT_RECENT_MESSAGE_LIMIT = 12;
 export const MAX_RECENT_MESSAGE_LIMIT = 200;
@@ -199,6 +200,8 @@ export type GatewayDefinition = {
   wecomBotId?: string;
   wecomBotSecret?: string;
   wecomWsUrl?: string;
+  weixinBaseUrl?: string;
+  weixinBotType?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   heartbeatSkipWhenAgentBusy?: boolean;
@@ -286,7 +289,7 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "disabled"]);
+const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "weixin", "disabled"]);
 const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
@@ -337,6 +340,7 @@ function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string
   if (adapter === "rabilink") return ["rabilink"];
   if (adapter === "wearable") return ["wearable_health_alert"];
   if (adapter === "wecom") return ["wecom_message"];
+  if (adapter === "weixin") return ["weixin_message"];
   return [];
 }
 
@@ -350,6 +354,7 @@ function defaultRuleNameForMessageAdapter(adapter: MessageAdapterType): string {
   if (adapter === "rabilink") return "RabiLink 默认消息";
   if (adapter === "wearable") return "智能手表/手环健康告警";
   if (adapter === "wecom") return "企业微信默认消息";
+  if (adapter === "weixin") return "个人微信默认消息";
   if (adapter === "webhook") return "Webhook 默认消息";
   return "默认消息";
 }
@@ -822,7 +827,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     routeVariables,
     routeName,
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
-    heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请检查最近消息和角色相关上下文。",
+    heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
     heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy === true,
     gatewayPort: primaryNapcat?.gatewayPort ?? definition.gatewayPort,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",

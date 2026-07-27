@@ -24,6 +24,7 @@ export const routeKindLabels: Record<string, string> = {
   heartbeat: "定时触发",
   manual_trigger: "手动触发",
   role_panel_message: "角色面板消息",
+  plan_feedback: "计划审批",
   voice_transcript: "语音转写",
   wearable_health_alert: "智能手表/手环健康告警",
   wecom_message: "企业微信消息"
@@ -126,7 +127,7 @@ export function defaultPrivateTemplate(): string {
 }
 
 export function defaultHeartbeatMessage(): string {
-  return "定时心跳巡检：请检查最近消息和角色相关上下文。";
+  return "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。";
 }
 
 export function defaultHeartbeatTemplate(): string {

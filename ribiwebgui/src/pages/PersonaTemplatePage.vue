@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaSyncCard from "../components/PersonaSyncCard.vue";
+import { managerEventSource } from "../managerApi";
 import { personaAvatarClient } from "../persona/personaAvatarClient";
 import {
   personaVoiceIdentityClient,
@@ -77,7 +78,7 @@ let voiceIdentityRefreshRunning = false;
 let voiceIdentityRefreshQueued = false;
 let voiceIdentityRefreshObserveQueued = false;
 
-const recentMessageEndpoints: RecentMessageEndpoint[] = [...RECENT_MESSAGE_ENDPOINTS];
+const recentMessageEndpoints: RecentMessageEndpoint[] = RECENT_MESSAGE_ENDPOINTS.filter(endpoint => endpoint !== "heartbeat");
 
 const gateway = computed(() => store.selectedGateway);
 const runtime = computed(() => store.selectedRuntime);
@@ -486,7 +487,7 @@ function relevantPersonaSyncEvent(raw: Event): boolean {
 
 function startPersonaEvents(): void {
   if (managerEvents) return;
-  managerEvents = new EventSource("/api/events");
+  managerEvents = managerEventSource("/api/events");
   managerEvents.addEventListener("ready", () => {
     if (managerEventsReady) {
       personaSyncManifestVersion.value += 1;

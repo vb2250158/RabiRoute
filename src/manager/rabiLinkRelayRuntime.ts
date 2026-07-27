@@ -160,6 +160,99 @@ async function consumeRelayEvents(
   }
 }
 
+async function publishWebguiEvent(
+  config: RabiLinkRelayRuntimeConfig,
+  eventType: string,
+  data: Record<string, unknown>,
+  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>
+): Promise<void> {
+  await relayJsonReliably(config, "/worker/webgui-events", {
+    method: "POST",
+    headers: relayHeaders(config, true),
+    body: JSON.stringify({ eventType, data, ...workerIdentity(config) })
+  }, options.relayWriteAttempts, options.relayWriteTimeoutMs);
+}
+
+function parseEventData(value: string): Record<string, unknown> {
+  if (!value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : { value: parsed };
+  } catch {
+    return { value };
+  }
+}
+
+async function consumeLocalWebguiEvents(
+  config: RabiLinkRelayRuntimeConfig,
+  signal: AbortSignal,
+  onEvent: (eventType: string, data: Record<string, unknown>) => Promise<void>
+): Promise<void> {
+  const response = await fetch(safeLocalUrl(config, "/api/events"), {
+    method: "GET",
+    headers: {
+      accept: "text/event-stream",
+      "user-agent": "RabiRoute/1.0"
+    },
+    signal
+  });
+  const contentType = response.headers.get("content-type") || "";
+  if (!response.ok || !response.body || !contentType.startsWith("text/event-stream")) {
+    throw new Error(`Local Manager event stream failed: ${response.status} ${response.statusText}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let eventType = "message";
+  let dataLines: string[] = [];
+  let hasEventFields = false;
+  while (!signal.aborted) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+    while (true) {
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline).replace(/\r$/, "");
+      buffer = buffer.slice(newline + 1);
+      if (!line) {
+        if (hasEventFields && eventType !== "ready") await onEvent(eventType, parseEventData(dataLines.join("\n")));
+        eventType = "message";
+        dataLines = [];
+        hasEventFields = false;
+      } else if (line.startsWith("event:")) {
+        eventType = line.slice(6).trim() || "message";
+        hasEventFields = true;
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).replace(/^ /, ""));
+        hasEventFields = true;
+      }
+    }
+  }
+}
+
+async function forwardLocalWebguiEvents(
+  config: RabiLinkRelayRuntimeConfig,
+  signal: AbortSignal,
+  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>
+): Promise<void> {
+  let failures = 0;
+  while (!signal.aborted) {
+    try {
+      await consumeLocalWebguiEvents(config, signal, (eventType, data) => publishWebguiEvent(config, eventType, data, options));
+      if (!signal.aborted) throw new Error("Local Manager event stream closed.");
+    } catch (error) {
+      if (signal.aborted || abortError(error)) return;
+      failures += 1;
+      await delay(Math.min(RETRY_DELAY_MS * failures, 30_000), signal);
+      continue;
+    }
+    failures = 0;
+  }
+}
+
 async function relayJsonReliably(
   config: RabiLinkRelayRuntimeConfig,
   pathname: string,
@@ -274,7 +367,7 @@ async function proxyWebguiRequest(
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(request.headers || {})) {
       const lower = key.toLowerCase();
-      if (["accept", "content-type", "user-agent"].includes(lower)) headers[lower] = String(value || "");
+      if (["accept", "content-type", "user-agent", "range", "if-range"].includes(lower)) headers[lower] = String(value || "");
     }
     const requestBody = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
     const personaSyncRequest = localPath.startsWith("/api/persona-sync/");
@@ -550,6 +643,11 @@ export class RabiLinkRelayRuntime {
   private async run(config: RabiLinkRelayRuntimeConfig, generation: number, signal: AbortSignal): Promise<void> {
     let webguiDrain: Promise<void> | null = null;
     let speechDrain: Promise<void> | null = null;
+    let webguiEvents: Promise<void> | null = null;
+    const startWebguiEvents = (): void => {
+      if (webguiEvents || signal.aborted) return;
+      webguiEvents = forwardLocalWebguiEvents(config, signal, this.options);
+    };
     const drainWebgui = (): void => {
       if (webguiDrain || signal.aborted) return;
       webguiDrain = this.drainChannel(
@@ -586,37 +684,42 @@ export class RabiLinkRelayRuntime {
         }
       }).finally(() => { speechDrain = null; });
     };
-    while (this.active(generation, signal)) {
-      try {
-        await consumeRelayEvents(config, signal, (eventType) => {
-          try {
-            this.onEvent?.(eventType);
-          } catch {
-            // Relay ownership and proxy delivery do not depend on observers.
-          }
-          if (eventType === "ready") {
-            this.markOnline(config.speechProxyEnabled);
-            drainWebgui();
-            drainSpeech();
-          } else if (eventType === "webgui_available") {
-            drainWebgui();
-          } else if (eventType === "speech_available") {
-            drainSpeech();
-          }
-        });
-        if (this.active(generation, signal)) throw new Error("RabiLink Relay event stream closed.");
-      } catch (error) {
-        if (signal.aborted || abortError(error) || !this.active(generation, signal)) return;
-        const message = error instanceof Error ? error.message : String(error);
-        this.setStatus({
-          state: "error",
-          message: `RabiLink Relay 事件流连接失败：${message}`,
-          lastConnectedAt: this.runtimeStatus.lastConnectedAt,
-          lastSuccessAt: this.runtimeStatus.lastSuccessAt,
-          error: message
-        });
-        await delay(RETRY_DELAY_MS, signal);
+    try {
+      while (this.active(generation, signal)) {
+        try {
+          await consumeRelayEvents(config, signal, (eventType) => {
+            try {
+              this.onEvent?.(eventType);
+            } catch {
+              // Relay ownership and proxy delivery do not depend on observers.
+            }
+            if (eventType === "ready") {
+              this.markOnline(config.speechProxyEnabled);
+              startWebguiEvents();
+              drainWebgui();
+              drainSpeech();
+            } else if (eventType === "webgui_available") {
+              drainWebgui();
+            } else if (eventType === "speech_available") {
+              drainSpeech();
+            }
+          });
+          if (this.active(generation, signal)) throw new Error("RabiLink Relay event stream closed.");
+        } catch (error) {
+          if (signal.aborted || abortError(error) || !this.active(generation, signal)) return;
+          const message = error instanceof Error ? error.message : String(error);
+          this.setStatus({
+            state: "error",
+            message: `RabiLink Relay 事件流连接失败：${message}`,
+            lastConnectedAt: this.runtimeStatus.lastConnectedAt,
+            lastSuccessAt: this.runtimeStatus.lastSuccessAt,
+            error: message
+          });
+          await delay(RETRY_DELAY_MS, signal);
+        }
       }
+    } finally {
+      await webguiEvents;
     }
   }
 }

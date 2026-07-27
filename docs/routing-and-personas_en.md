@@ -28,7 +28,7 @@ RabiRoute is a dispatcher. A route represents one deployable message path; a rol
 
 - `persona.md` and growth material;
 - optional `avatar.png` / `.jpg` / `.webp` / `.gif`, referenced by `personaConfig.json.avatar`;
-- `personaConfig.json` notification rules, `speechTriggerKeywords`, and 11-endpoint `recentMessageLimits`;
+- `personaConfig.json` notification rules, `speechTriggerKeywords`, and ordinary-endpoint `recentMessageLimits`; Heartbeat always omits history;
 - `voice/voice-profile.json` as the only TTS model/voice/language/speed/instructions source;
 - plans, recent memory, consolidated memory, and skills;
 - role-panel timeline data.
@@ -43,7 +43,7 @@ One role can serve several routes. Those Routes reuse the same role-owned rules,
 | Persona avatar | An image inside the role directory referenced by `personaConfig.json.avatar` |
 | Hot versus keyword speech delivery | Route `adapterConfig.json.speechPushMode` |
 | Persona names, common addresses, and wake phrases | Persona `personaConfig.json.speechTriggerKeywords` |
-| 11 endpoint auto-context budgets (`0–200`, default `12`; `0` disables injection only) | Persona `personaConfig.json.recentMessageLimits` |
+| Ordinary endpoint auto-context budgets (`0–200`, default `12`; `0` disables injection only; Heartbeat always omits history) | Persona `personaConfig.json.recentMessageLimits` |
 | TTS model, voice, language, speed, and speaking instructions | Persona `voice/voice-profile.json` |
 | Current bidirectional message evidence | Persona `conversation/current.jsonl` |
 | Reusable person profiles | Host-wide RabiSpeech `output/speaker-profiles.json`; actual mappings remain explicit `sessionId + speakerLabel` bindings |

@@ -1,4 +1,5 @@
 import type { RoleMemoryPayload, RolePlan, RolePlanFeedback } from "./types";
+import type { PlanFeedbackAttachmentUpload } from "@shared/planFeedbackContract";
 import { FALLBACK_PLAN_PRESENTATION_PALETTE, normalizePlanPresentationPalette } from "./planPresentationStyles";
 
 type ManagerEnvelope<T> = {
@@ -83,7 +84,12 @@ export async function loadPlanFeedback(roleId: string, planId: string): Promise<
   const data = await managerData<RolePlan["approval"] & { records?: RolePlanFeedback[] }>(
     `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}/feedback`
   );
-  return { count: Number(data.count || 0), latest: data.latest };
+  const records = Array.isArray(data.records) ? data.records : [];
+  return {
+    count: Number(data.count || records.length),
+    latest: data.latest || records[0],
+    records
+  };
 }
 
 export async function submitPlanFeedback(input: {
@@ -93,6 +99,7 @@ export async function submitPlanFeedback(input: {
   stepId?: string;
   feedbackId: string;
   text: string;
+  attachments: PlanFeedbackAttachmentUpload[];
   source: "webgui" | "tray";
 }): Promise<RolePlanFeedback> {
   const response = await fetch(
@@ -105,6 +112,7 @@ export async function submitPlanFeedback(input: {
         gatewayId: input.gatewayId,
         stepId: input.stepId,
         text: input.text,
+        attachments: input.attachments,
         source: input.source,
         kind: "approval_suggestion",
         author: "user",

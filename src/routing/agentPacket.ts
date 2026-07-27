@@ -25,8 +25,10 @@ import {
   isGroupRecord,
   isHeartbeatRecord,
   isManualTriggerRecord,
+  isPlanFeedbackRecord,
   isRolePanelRecord,
   isWeComRecord,
+  isWeixinRecord,
   isVoiceTranscriptRecord
 } from "./routeDecision.js";
 
@@ -156,6 +158,7 @@ function optionalLine(label: string, value: unknown): string {
 function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline = false): string[] {
   const outputAdapter = String(values.outputAdapter ?? "");
   const routeKind = String(values.routeKind ?? "");
+  const targetType = String(values.targetType ?? "");
   const replyApiUrl = String(values.replyApiUrl ?? "");
   const replyContextJson = String(values.replyContextJson ?? "");
   const replyToSource = String(values.replyToSource ?? "").toLowerCase() === "true";
@@ -165,14 +168,22 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
     return [];
   }
 
-  const shouldExplainReplyApi = forceMessagePipeline
+  const isPlanFeedback = targetType === "plan_feedback";
+  const shouldExplainReplyApi = isPlanFeedback
+    || forceMessagePipeline
     || replyToSource
     || characterTtsDialogue
     || (outputAdapter === "fennenote" && routeKind === "voice_transcript")
     || routeKind === "rabilink";
   if (!shouldExplainReplyApi) return [];
 
-  const intro = forceMessagePipeline
+  const intro = isPlanFeedback
+    ? [
+        "本次是计划审批意见处理，面向用户的回复必须回到当前计划记录，不能只在 Codex 任务里输出正文。",
+        "先按审批意见读取并 PATCH 更新对应计划或步骤；计划说明要具体到实际文件、完整命令、变更影响、验证、回退和排除范围。",
+        "更新完成后，把处理说明 POST 到普通回复 API；RabiRoute 会将其保存为当前 planId / stepId 的 approval_response。"
+      ]
+    : forceMessagePipeline
     ? [
         "当前路由未绑定人格。凡是要对消息来源说出的自然语言回复，都必须先 POST 到普通回复 API，由 RabiRoute 投递到对应消息管道；不能只在 Codex 线程里写最终文本。",
         "不要扮演角色，也不要把当前 Codex 可见最终文本当成已经发回消息端。"
@@ -207,7 +218,9 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
       replyContext: JSON.parse(replyContextJson)
     }, null, 2),
     "```",
-    characterTtsDialogue
+    isPlanFeedback
+      ? "API 调用成功后，Codex 可见最终文本只需简短说明计划已更新且回复已回写；不要重复输出计划回复正文。"
+      : characterTtsDialogue
       ? "API 调用成功后，把同一人格回复作为可见最终文本；不能只显示“已投递”之类的状态。如果决定不回应，请说明保持安静的原因且不要调用 API。"
       : "API 调用成功后，可见最终回复只需同步已投递的简短结果；如果决定不对消息来源回复，请说明保持安静或不回传的原因。"
   ];
@@ -452,11 +465,23 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
   limit: number;
   text: string;
 } {
+  if (decision.routeKind === "plan_feedback") {
+    return { limit: 0, text: "" };
+  }
   const scope = messageContextScopeForForward(decision.routeKind, decision.record, {
     gatewayId: process.env.GATEWAY_ID,
     routeProfileId: decision.route.id
   });
   if (!scope?.endpoint) return { limit: 0, text: "- 暂无" };
+  if (decision.routeKind === "heartbeat") {
+    return {
+      endpoint: scope.endpoint,
+      transport: scope.record.transport,
+      conversationKey: scope.record.conversationKey,
+      limit: 0,
+      text: ""
+    };
+  }
   const limit = decision.route.recentMessageLimits
     ? recentMessageLimitFor(decision.route.recentMessageLimits, scope.endpoint)
     : Math.max(0, Math.min(200, Math.floor(Number(decision.route.recentMessageLimit) || 0)));
@@ -574,10 +599,12 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "heartbeat") return "定时心跳提醒";
   if (routeKind === "manual_trigger") return "手动触发提醒";
   if (routeKind === "role_panel_message") return "角色面板消息";
+  if (routeKind === "plan_feedback") return "计划审批";
   if (routeKind === "voice_transcript") return "语音转写提醒";
   if (routeKind === "rabilink") return "RabiLink 消息";
   if (routeKind === "wearable_health_alert") return "智能手表/手环健康告警";
   if (routeKind === "wecom_message") return "企业微信群聊消息提醒";
+  if (routeKind === "weixin_message") return "个人微信消息提醒";
   return "RabiRoute 消息提醒";
 }
 
@@ -627,10 +654,22 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const isHeartbeat = isHeartbeatRecord(record);
   const isManualTrigger = isManualTriggerRecord(record);
   const isRolePanel = isRolePanelRecord(record);
+  const isPlanFeedback = isPlanFeedbackRecord(record);
   const isWeCom = isWeComRecord(record);
-  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
+  const isWeixin = isWeixinRecord(record);
+  const localReplyContext = (isRolePanel || isPlanFeedback) && record.replyContext && typeof record.replyContext === "object"
+    ? record.replyContext
+    : {};
+  const localTargetType = typeof localReplyContext.targetType === "string" && localReplyContext.targetType.trim()
+    ? localReplyContext.targetType.trim()
+    : isPlanFeedback ? "plan_feedback" : "role_panel";
+  const localRoleId = isPlanFeedback ? record.roleId : isRolePanel ? record.roleId : undefined;
+  const planFeedbackTargetId = typeof localReplyContext.planId === "string" && localReplyContext.planId.trim()
+    ? localReplyContext.planId.trim()
+    : localRoleId ?? "plan_feedback";
+  const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isPlanFeedback ? planFeedbackTargetId : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
   const wecomGroupId = isWeCom ? record.groupId ?? record.chatId ?? record.conversationId : undefined;
-  const targetType = isGroup || isWeCom ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isRolePanel ? "role_panel" : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
+  const targetType = isGroup || isWeCom ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isPlanFeedback || isRolePanel ? localTargetType : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
   const pipeline = outputPipelineForDecision(decision);
   const replyApiPath = "/api/agent/replies";
   const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
@@ -638,7 +677,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const roleDirPath = relativeWorkspacePath(roleContext.roleDir);
   const rolePath = relativeWorkspacePath(roleContext.rolePath);
   const groupLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : "group-messages.jsonl"));
-  const privateLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "private-messages.jsonl"));
+  const privateLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, isWeixin ? "weixin-messages.jsonl" : "private-messages.jsonl"));
   const heartbeatLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "heartbeat-events.jsonl"));
   const manualTriggerLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "manual-trigger-events.jsonl"));
   const rolePanelLogPath = relativeWorkspacePath(path.join(roleContext.roleDir || roleContext.dataDir, "role-panel", "messages.jsonl"));
@@ -656,6 +695,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     .map(item => formatPersonaVoiceIdentity(item.voiceprintId, item.identity))
     .join("\n");
   const replyContext = {
+    ...localReplyContext,
     runtimeRouteId: process.env.GATEWAY_ID,
     gatewayId: process.env.GATEWAY_ID,
     routeProfileId: route.id,
@@ -670,10 +710,10 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     logicalAdapter: recentContext.endpoint,
     transport: recentContext.transport,
     conversationKey: recentContext.conversationKey,
-    adapterType: isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
+    adapterType: isPlanFeedback ? "planFeedback" : isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
     voiceprintId: isVoiceTranscript ? record.voiceprintId : undefined,
     voiceprintIds: isVoiceTranscript ? voiceprintIds : undefined,
-    sessionId: isVoiceTranscript ? record.sessionId : undefined,
+    sessionId: isVoiceTranscript || isWeixin ? record.sessionId : undefined,
     sourceDeviceId: isVoiceTranscript ? record.sourceDeviceId : undefined,
     sourceDeviceName: isVoiceTranscript ? record.sourceDeviceName : undefined,
     sourceDeviceKind: isVoiceTranscript ? record.sourceDeviceKind : undefined,
@@ -685,13 +725,16 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     targetDeviceIds: isVoiceTranscript && decision.routeKind === "rabilink" && record.sourceDeviceId
       ? [record.sourceDeviceId]
       : undefined,
-    roleId: isRolePanel ? record.roleId : undefined,
+    roleId: localRoleId,
     botUserId: "botUserId" in record ? record.botUserId : undefined,
     wecomReqId: isWeCom ? record.reqId : undefined,
     wecomConversationId: isWeCom ? record.conversationId : undefined,
     wecomChatId: isWeCom ? record.chatId : undefined,
     wecomSenderId: isWeCom ? record.senderId ?? record.userId : undefined,
     wecomMessageType: isWeCom ? record.messageType : undefined,
+    weixinSessionId: isWeixin ? record.sessionId : undefined,
+    weixinUserId: isWeixin ? record.userId : undefined,
+    weixinMessageType: isWeixin ? record.messageType : undefined,
     dataDir: dataDirPath,
     groupLogPath,
     privateLogPath,
@@ -713,7 +756,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     groupId: isGroup ? record.groupId : wecomGroupId,
     targetType,
     targetId: isWeCom ? wecomGroupId : targetId,
-    messageTarget: isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
+    messageTarget: isWeixin ? `个人微信会话 ${record.sessionId}` : isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isPlanFeedback ? `计划审批 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText: decision.routeText,
@@ -788,7 +831,10 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     wecomConversationId: isWeCom ? record.conversationId : undefined,
     wecomChatId: isWeCom ? record.chatId : undefined,
     wecomSenderId: isWeCom ? record.senderId ?? record.userId : undefined,
-    wecomMessageType: isWeCom ? record.messageType : undefined
+    wecomMessageType: isWeCom ? record.messageType : undefined,
+    weixinSessionId: isWeixin ? record.sessionId : undefined,
+    weixinUserId: isWeixin ? record.userId : undefined,
+    weixinMessageType: isWeixin ? record.messageType : undefined
   };
 }
 
@@ -878,7 +924,7 @@ function buildAgentMessage(
       String(values.personaVoiceIdentitySummary || "- 当前人格尚未记录这些声纹的身份关系。"),
       "需要确认或修正时调用 PUT /api/roles/:roleId/voice-identities，追加到当前人格自己的 voice/voice-identities.jsonl。"
     ]) : "",
-    section("消息代码解析", [messageCodeParseText(record, dataDir)]),
+    routeKind === "plan_feedback" ? "" : section("消息代码解析", [messageCodeParseText(record, dataDir)]),
     String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [
       "这是用户从 Rabi 移动设备消息端明确发起的自然语言配置请求。",
       "先读取当前真实配置；写入、删除、停止、覆盖或外部动作必须经过现有动作安全门和审批。",

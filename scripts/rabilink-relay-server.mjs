@@ -14,7 +14,9 @@ const messageWaitMs = clamp(Number(process.env.RABILINK_RELAY_MESSAGE_WAIT_MS ||
 const outboxWaitMs = clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 60000), 0, 60000);
 const workerTaskWaitMs = clamp(Number(process.env.RABILINK_RELAY_WORKER_TASK_WAIT_MS || 60000), 0, 60000);
 const webguiRequestWaitMs = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_REQUEST_WAIT_MS || 30000), 5000, 120000);
-const webguiBodyMaxBytes = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES || 10 * 1024 * 1024), 1024 * 1024, 50 * 1024 * 1024);
+const webguiBodyMaxBytes = clamp(Number(process.env.RABILINK_RELAY_WEBGUI_BODY_MAX_BYTES || 40 * 1024 * 1024), 1024 * 1024, 50 * 1024 * 1024);
+const webguiWorkerResponseMaxBytes = Math.ceil(webguiBodyMaxBytes * 4 / 3) + 1024 * 1024;
+const webguiWorkerEventMaxBytes = 1024 * 1024;
 const speechRequestWaitMs = clamp(Number(process.env.RABILINK_RELAY_SPEECH_REQUEST_WAIT_MS || 180000), 5000, 10 * 60 * 1000);
 const speechBodyMaxBytes = clamp(Number(process.env.RABILINK_RELAY_SPEECH_BODY_MAX_BYTES || 25 * 1024 * 1024), 1024 * 1024, 100 * 1024 * 1024);
 const speechWorkerResponseMaxBytes = Math.ceil(speechBodyMaxBytes * 4 / 3) + 1024 * 1024;
@@ -109,6 +111,7 @@ let nextOutboxMessageSeq = 1;
 let outboxCursorGeneration = "";
 let outboxCursorHighWater = 0;
 const relayEventHub = new RabiLinkEventHub();
+const webguiEventHub = new RabiLinkEventHub();
 
 function scheduleLeaseAvailability(eventType, appId, targetDeviceId, leaseUntil, data = {}) {
   const delayMs = Math.max(0, Number(leaseUntil || 0) - Date.now()) + 10;
@@ -672,6 +675,7 @@ function normalizeStoredWorker(worker) {
     guid: String(worker?.guid || "").trim(),
     name: String(worker?.name || id).trim() || id,
     appId: String(worker?.appId || "").trim(),
+    deviceKind: normalizeWorkerDeviceKind(worker?.deviceKind),
     capabilities: normalizeWorkerCapabilities(worker?.capabilities),
     peerUrls: normalizeWorkerPeerUrls(worker?.peerUrls),
     firstSeenAt: String(worker?.firstSeenAt || time),
@@ -802,6 +806,7 @@ function publicWorker(worker, app) {
     appId: worker.appId || "",
     appName: app?.name || "",
     appTokenPreview,
+    deviceKind: normalizeWorkerDeviceKind(worker.deviceKind),
     capabilities: normalizeWorkerCapabilities(worker.capabilities),
     peerUrls: normalizeWorkerPeerUrls(worker.peerUrls),
     firstSeenAt: worker.firstSeenAt || "",
@@ -838,7 +843,19 @@ function normalizeWorkerCapabilities(value) {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabilities = null, peerUrls = null) {
+function normalizeWorkerDeviceKind(value) {
+  const kind = stringValue(value).toLowerCase();
+  return /^[a-z][a-z0-9._-]{0,31}$/.test(kind) ? kind : "";
+}
+
+function workerCanProcessMobileRequests(worker) {
+  const terminalKinds = new Set(["phone", "glasses", "watch", "earbuds"]);
+  if (terminalKinds.has(normalizeWorkerDeviceKind(worker?.deviceKind))) return false;
+  const capabilities = normalizeWorkerCapabilities(worker?.capabilities);
+  return capabilities.some((capability) => ["tasks", "webgui", "persona-sync", "speech"].includes(capability));
+}
+
+function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabilities = null, peerUrls = null, deviceKind = null) {
   const id = sanitizeRabiLinkId(deviceId || deviceName, "rabi-pc");
   if (!id) return null;
   const guid = stringValue(deviceGuid);
@@ -854,6 +871,7 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
       id: worker.id || "",
       guid: worker.guid || "",
       name: worker.name || "",
+      deviceKind: normalizeWorkerDeviceKind(worker.deviceKind),
       capabilities: normalizeWorkerCapabilities(worker.capabilities),
       peerUrls: normalizeWorkerPeerUrls(worker.peerUrls)
     });
@@ -861,6 +879,7 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
     worker.id = worker.id || id;
     worker.guid = guid || worker.guid || "";
     worker.name = name;
+    if (deviceKind !== null) worker.deviceKind = normalizeWorkerDeviceKind(deviceKind);
     if (capabilities !== null) worker.capabilities = normalizeWorkerCapabilities(capabilities);
     if (peerUrls !== null) worker.peerUrls = normalizeWorkerPeerUrls(peerUrls);
     worker.lastSeenAt = time;
@@ -877,6 +896,7 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
       id: worker.id || "",
       guid: worker.guid || "",
       name: worker.name || "",
+      deviceKind: normalizeWorkerDeviceKind(worker.deviceKind),
       capabilities: normalizeWorkerCapabilities(worker.capabilities),
       peerUrls: normalizeWorkerPeerUrls(worker.peerUrls)
     })) {
@@ -888,6 +908,7 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
       guid,
       name,
       appId,
+      deviceKind: normalizeWorkerDeviceKind(deviceKind),
       capabilities: normalizeWorkerCapabilities(capabilities),
       peerUrls: normalizeWorkerPeerUrls(peerUrls),
       firstSeenAt: time,
@@ -1161,18 +1182,23 @@ function readRawBody(req, options = {}) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
+    let exceeded = false;
     req.on("data", (chunk) => {
+      if (exceeded) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += buffer.byteLength;
       if (total > maxBytes) {
+        exceeded = true;
+        chunks.length = 0;
         reject(Object.assign(new Error(`${label} request body is too large.`), { statusCode: 413 }));
-        req.destroy();
         return;
       }
       chunks.push(buffer);
     });
     req.on("error", reject);
-    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("end", () => {
+      if (!exceeded) resolve(Buffer.concat(chunks));
+    });
   });
 }
 
@@ -1310,18 +1336,22 @@ function readBody(req, options = {}) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
+    let exceeded = false;
     req.on("data", (chunk) => {
+      if (exceeded) return;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += buffer.byteLength;
       if (maxBytes > 0 && total > maxBytes) {
+        exceeded = true;
+        chunks.length = 0;
         reject(Object.assign(new Error(`${label} request body is too large.`), { statusCode: 413 }));
-        req.destroy();
         return;
       }
       chunks.push(buffer);
     });
     req.on("error", reject);
     req.on("end", () => {
+      if (exceeded) return;
       const text = Buffer.concat(chunks).toString("utf8");
       if (!text.trim()) return resolve({});
       const type = String(req.headers["content-type"] || "");
@@ -1902,7 +1932,7 @@ function normalizeProxyRequestHeaders(headers) {
   const result = {};
   for (const [key, value] of Object.entries(headers || {})) {
     const lower = key.toLowerCase();
-    if (!["accept", "content-type", "user-agent"].includes(lower)) continue;
+    if (!["accept", "content-type", "user-agent", "range", "if-range"].includes(lower)) continue;
     result[lower] = Array.isArray(value) ? value.join(", ") : String(value || "");
   }
   return result;
@@ -2879,7 +2909,7 @@ function handleRelayEventStream(req, url, res, body = {}) {
   const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || body?.capabilities || "");
   const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
   if (deviceId || deviceGuid) {
-    recordWorkerSeen(appId, deviceId || deviceName || deviceGuid, deviceName || deviceId || deviceGuid, deviceGuid, capabilities, peerUrls);
+    recordWorkerSeen(appId, deviceId || deviceName || deviceGuid, deviceName || deviceId || deviceGuid, deviceGuid, capabilities, peerUrls, deviceKind);
   }
   const subscription = relayEventHub.subscribe(res, { appId, deviceId, deviceGuid, deviceKind });
   let closed = false;
@@ -3351,6 +3381,27 @@ function handleWorkerWebguiResponse(req, url, res, body) {
   }
   const finished = finishWebguiRequest(requestId, body);
   sendJson(res, 200, { code: 0, ok: true, request: webguiRequestForResponse(finished) });
+}
+
+function handleWorkerWebguiEvent(req, url, res, body) {
+  const auth = authorizeRabiLinkRequest(req, url, body);
+  if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  const identity = workerIdentityFromBody(body);
+  const store = readAppStore();
+  const worker = store.workers.find((item) => item.appId === auth.app?.id
+    && ((identity.deviceGuid && item.guid === identity.deviceGuid) || (identity.deviceId && item.id === identity.deviceId)));
+  if (!worker) return sendJson(res, 403, { code: -1, ok: false, message: "WebGUI events can only be published by a registered Rabi PC." });
+  const eventType = stringValue(body?.eventType).replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 96);
+  if (!eventType || eventType === "ready") {
+    return sendJson(res, 400, { code: -1, ok: false, message: "A non-ready WebGUI event type is required." });
+  }
+  const data = body?.data && typeof body.data === "object" && !Array.isArray(body.data) ? body.data : {};
+  webguiEventHub.publish(eventType, {
+    appId: auth.app.id,
+    targetDeviceId: worker.guid || worker.id,
+    data
+  });
+  return sendJson(res, 202, { code: 0, ok: true });
 }
 
 function handleWorkerSpeechResponse(req, url, res, body) {
@@ -4634,10 +4685,23 @@ function sendWebguiProxyResponse(res, request, externalPrefix) {
   res.end(body);
 }
 
+function sendRemoteWebguiEvents(req, res, target) {
+  const subscription = webguiEventHub.subscribe(res, {
+    appId: target.app.id,
+    deviceId: target.worker.id,
+    deviceGuid: target.worker.guid
+  });
+  const close = () => subscription.close();
+  req.once("close", close);
+  res.once("close", close);
+  return true;
+}
+
 function mobileWorkersForApp(app) {
   const store = readAppStore();
   return store.workers
     .filter((worker) => worker.appId === app.id)
+    .filter(workerCanProcessMobileRequests)
     .map((worker) => publicWorker(worker, app));
 }
 
@@ -4949,7 +5013,9 @@ function patchMobileAppTarget(app, targetDeviceId) {
   }
   const normalized = stringValue(targetDeviceId);
   if (normalized) {
-    const worker = store.workers.find((item) => item.appId === app.id && (item.id === normalized || item.guid === normalized));
+    const worker = store.workers.find((item) => item.appId === app.id
+      && workerCanProcessMobileRequests(item)
+      && (item.id === normalized || item.guid === normalized));
     if (!worker) {
       const error = new Error(`Rabi PC not found for this app token: ${normalized}`);
       error.statusCode = 404;
@@ -5151,6 +5217,9 @@ async function handleManageWebgui(req, url, res) {
     if (req.method !== "GET" && req.method !== "HEAD") return sendText(res, 405, "Method Not Allowed");
     return sendRemoteWebguiStatic(req, res, match, auth.account);
   }
+  if (req.method === "GET" && match.restPath === "/api/events") {
+    return sendRemoteWebguiEvents(req, res, target);
+  }
   const proxySearch = new URLSearchParams(url.searchParams);
   proxySearch.delete("appId");
   const localPath = `${match.restPath}${proxySearch.toString() ? `?${proxySearch}` : ""}`;
@@ -5322,15 +5391,21 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/rabilink/events") {
       return handleRelayEventStream(req, url, res);
     }
+    const webguiWorkerResponse = /^\/worker\/webgui-requests\/[^/]+\/response$/.test(url.pathname);
+    const webguiWorkerEvent = url.pathname === "/worker/webgui-events";
     const speechWorkerResponse = /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname);
     const personaSyncProxy = url.pathname === "/api/rabilink/persona-sync/proxy";
     const body = req.method === "GET"
       ? {}
-      : await readBody(req, speechWorkerResponse
-        ? { maxBytes: speechWorkerResponseMaxBytes, label: "Speech worker response" }
-        : personaSyncProxy
-          ? { maxBytes: 32 * 1024 * 1024, label: "Persona sync proxy" }
-          : {});
+      : await readBody(req, webguiWorkerResponse
+        ? { maxBytes: webguiWorkerResponseMaxBytes, label: "WebGUI worker response" }
+        : webguiWorkerEvent
+          ? { maxBytes: webguiWorkerEventMaxBytes, label: "WebGUI worker event" }
+          : speechWorkerResponse
+            ? { maxBytes: speechWorkerResponseMaxBytes, label: "Speech worker response" }
+            : personaSyncProxy
+              ? { maxBytes: 32 * 1024 * 1024, label: "Persona sync proxy" }
+              : {});
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/token") {
       const claimed = claimDeviceToken(body);
       return sendJson(res, 200, {
@@ -5400,6 +5475,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && /^\/worker\/webgui-requests\/[^/]+\/response$/.test(url.pathname)) {
       return handleWorkerWebguiResponse(req, url, res, body);
+    }
+    if (req.method === "POST" && url.pathname === "/worker/webgui-events") {
+      return handleWorkerWebguiEvent(req, url, res, body);
     }
     if (req.method === "POST" && /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname)) {
       return handleWorkerSpeechResponse(req, url, res, body);

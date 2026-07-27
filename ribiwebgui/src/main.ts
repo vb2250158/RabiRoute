@@ -9,13 +9,19 @@ import { installDomLocalizer } from "./i18n/domLocalizer";
 import { installManagerFetchPrefix } from "./managerApi";
 import { router } from "./router";
 import { vuetify } from "./plugins/vuetify";
+import { redirectLoopbackWebguiToLan } from "./webguiLanRedirect";
 
-installManagerFetchPrefix();
+async function bootstrap(): Promise<void> {
+  installManagerFetchPrefix();
+  if (await redirectLoopbackWebguiToLan()) return;
 
-createApp(App)
-  .use(createPinia())
-  .use(router)
-  .use(vuetify)
-  .mount("#app");
+  createApp(App)
+    .use(createPinia())
+    .use(router)
+    .use(vuetify)
+    .mount("#app");
 
-installDomLocalizer();
+  installDomLocalizer();
+}
+
+void bootstrap();

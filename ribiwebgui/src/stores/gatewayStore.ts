@@ -16,6 +16,7 @@ import {
   saveActiveRoleRules,
   setGatewayAdapters
 } from "../utils/gatewayHelpers";
+import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
 import {
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
   validateGatewayPortConflicts
@@ -192,14 +193,10 @@ function normalizeAgentAdapterType(value: unknown): AgentAdapterType | null {
 }
 
 function selectedGatewayIdFromLocation(items: GatewayDefinition[]): string {
-  const match = window.location.hash.match(/^#\/(?:routes|persona)\/([^/?#]+)/);
-  const raw = match?.[1];
+  const raw = routeKeyFromWebguiHash(window.location.hash);
   if (!raw) return "";
-  const decoded = decodeURIComponent(raw);
   return items.find(gateway =>
-    gateway.id === decoded
-    || configNameFor(gateway) === decoded
-    || gateway.id === raw
+    gateway.id === raw
     || configNameFor(gateway) === raw
   )?.id || "";
 }
@@ -224,6 +221,12 @@ export const useGatewayStore = defineStore("gateway", () => {
     managerPort: 8790,
     rabiGuid: "",
     rabiName: "",
+    webguiLan: {
+      enabled: false,
+      tokenConfigured: false,
+      listeningOnLan: false,
+      restartRequired: false
+    },
     rabiLinkRelay: {
       enabled: false,
       url: "",

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
+import { managerEventSource } from "../managerApi";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled } from "../utils/gatewayHelpers";
@@ -183,7 +184,7 @@ async function startCopilotLogin(): Promise<void> {
       await fetchCopilotStatus();
     } else if (data.code) {
       copilotLoginState.value = { loading: false, code: data.code, url: data.url, done: false, error: null };
-      const events = new EventSource("/api/events");
+      const events = managerEventSource("/api/events");
       events.addEventListener("copilot_login_status", async (raw) => {
         const event = JSON.parse((raw as MessageEvent).data || "{}");
         events.close();
@@ -213,6 +214,7 @@ const adapterParamOpen = ref<Record<string, boolean>>({
   speech: false,
   napcat: false,
   wecom: false,
+  weixin: false,
   remoteAgent: false,
   heartbeat: false,
   fennenote: false,
@@ -236,7 +238,8 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     note: "来自聊天软件或即时通信平台的入口。",
     choices: [
       { type: "napcat", title: "NapCat / OneBot", note: "接收 QQ 群聊和私聊实时消息", icon: "mdi-message-badge-outline" },
-      { type: "wecom", title: "企业微信 / WeCom", note: "接收企业微信群聊并支持回发消息", icon: "mdi-domain" }
+      { type: "wecom", title: "企业微信 / WeCom", note: "接收企业微信群聊并支持回发消息", icon: "mdi-domain" },
+      { type: "weixin", title: "个人微信 / Weixin", note: "RabiRoute 原生扫码登录，接收个人微信私聊并回传文本", icon: "mdi-wechat" }
     ]
   },
   {
@@ -307,6 +310,7 @@ const messageInputsDisabled = computed(() => gateway.value ? isMessageInputsDisa
 const messageAdapterInactive = computed(() => Boolean(gateway.value?.enabled === false || runtime.value.enabled === false || messageInputsDisabled.value));
 const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {} as Record<string, any>);
 const wecomState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.wecom || runtime.value.gatewayStatus?.wecom || {} as Record<string, any>);
+const weixinState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.weixin || {} as Record<string, any>);
 const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || {} as Record<string, any>);
 const adapterErrors = (type: MessageAdapterType) => gateway.value ? adapterErrorsFor(type, gateway.value, runtime.value) : [];
 const visibleActiveAdapters = computed<MessageAdapterType[]>(() => uniqueAdapters(adapters.value));
@@ -545,7 +549,7 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "remoteAgent", "speech", "heartbeat", "xiaoai", "rabilink", "wearable", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "remoteAgent", "speech", "heartbeat", "xiaoai", "rabilink", "wearable", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
 
@@ -2474,7 +2478,7 @@ async function triggerHeartbeatNow(): Promise<void> {
       triggerId: "heartbeat-now",
       triggerName: "立即触发心跳",
       routeKind: "heartbeat",
-      message: gateway.value.heartbeatMessage || "定时心跳巡检：请检查最近消息和角色相关上下文。"
+      message: gateway.value.heartbeatMessage || "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。"
     });
     heartbeatTriggerResult.value = { ok: true, message: "已提交一次心跳触发，请到运行日志查看投递结果。" };
   } catch (e: unknown) {
@@ -4195,6 +4199,34 @@ watch(
                             {{ formatLogTime(entry) }} · {{ logPreview(entry) }}
                           </div>
                         </div>
+                      </div>
+                    </div>
+                  </template>
+                  <div v-else-if="choice.type === 'weixin'" class="catalog-param-grid">
+                    <v-text-field v-model="gateway.weixinBaseUrl" class="full-span" label="个人微信 iLink API" placeholder="https://ilinkai.weixin.qq.com" @update:model-value="touch" />
+                    <v-text-field v-model="gateway.weixinBotType" label="Bot Type" placeholder="3" @update:model-value="touch" />
+                    <v-alert type="warning" variant="tonal" density="compact" class="full-span">
+                      实验能力。个人微信是独立消息端，不依赖 AstrBot；RabiRoute 自己持有扫码登录、长轮询、context token 和 Outbox 回传。首版仅自动投递和回复文本，媒体只记录。
+                    </v-alert>
+                  </div>
+                  <template v-if="choice.type === 'weixin' && runtime.running !== undefined">
+                    <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
+                    <div class="status-row"><span>登录</span><b :class="weixinState.loggedIn ? 'text-success' : 'text-warning'">{{ weixinState.loggedIn ? "已登录" : weixinState.message || "等待扫码" }}</b></div>
+                    <div class="status-row"><span>扫码状态</span><b>{{ weixinState.qrStatus || "-" }}</b></div>
+                    <div class="status-row"><span>最近消息</span><b>{{ weixinState.lastMessageAt || "-" }}</b></div>
+                    <div class="status-row"><span>消息数</span><b>{{ weixinState.messageCount ?? 0 }}</b></div>
+                    <div v-if="!weixinState.loggedIn && weixinState.qrCodeDataUrl" class="full-span d-flex flex-column align-center ga-2 mt-2">
+                      <v-img :src="weixinState.qrCodeDataUrl" width="320" max-width="100%" aspect-ratio="1" alt="个人微信登录二维码" />
+                      <span class="section-note">请使用手机微信扫码；二维码约 5 分钟后自动刷新。</span>
+                    </div>
+                    <v-alert v-if="weixinState.lastError" type="error" variant="tonal" density="compact" class="mt-2 full-span">
+                      {{ weixinState.lastError }}
+                    </v-alert>
+                    <div class="agent-action-bar full-span mt-2">
+                      <div class="agent-action-status"><span class="section-note">登录态只保存在当前 Route 的运行期 data 目录，不写进公开配置。</span></div>
+                      <div class="d-flex ga-2 flex-wrap">
+                        <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" @click="store.load">刷新状态</v-btn>
+                        <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">打开日志</v-btn>
                       </div>
                     </div>
                   </template>
