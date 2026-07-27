@@ -70,6 +70,10 @@ POST /v1/playback/stop
 
 `/v1/microphone/*` 是主机设备控制面，只供回环 RabiPC/Manager 使用，不在 RabiLink 公网语音 allowlist 中。启动后录音流由 RabiSpeech 进程持有；关闭浏览器不会停止。`microphone.json` 持久保存主机设备、阈值、ASR 模型和内部会话；旧 `route_id` 会迁移为 `null`。Manager 根据 Route 订阅协调启停：任意订阅存在时保持监听，最后一个订阅关闭后才停止。运行中可通过 `PUT /v1/microphone/settings` 更新并恢复监听。
 
+`barge_in_mode` 默认是 `off`。默认模式继续在主机播放期间抑制 VAD，避免夜雨自己的 TTS 回流。只有当前输入链已经用真实设备验证 AEC，或麦克风与播放输出有可靠物理隔离时，才可显式设置为 `echo_protected`。该模式在输入连续超过 VAD 阈值达到 `barge_in_confirm_ms`（默认 `200 ms`）时同步调用全局播放队列的 `stop(clear_pending=true)`：当前音频立即停止、旧队列全部取消，但触发打断的 PCM 不会被丢弃，仍会在语段结束后完成完整 ASR、声纹分析与 Route 投递。停止播放失败时会发出 `barge_in_failed`，丢弃这个不可信候选片段并恢复防回流抑制。
+
+RabiSpeech 本身目前没有声学回声参考或 AEC。桌面远程语音客户端也会在播放期间暂停上传麦克风，因此它尚不具备自然打断能力。不要为了“能打断”而直接关闭 `suppress_during_playback`；没有回声保护证据时应保持 `barge_in_mode=off`。WebGUI 对 `echo_protected` 的启用带显式确认，但该确认只是操作者声明，不替代真实硬件验收。
+
 局域网远程音频是独立的网络声卡通道。启用 `remote_audio` 后，轻量 Windows 客户端通过 TCP `8782` 持续上传 16 kHz 单声道 PCM，并接收主机 FIFO 下发的 WAV；UDP `8783` 只用于同网段发现。客户端不执行 VAD、切句、ASR、TTS 或 Route 投递。音频流选择由回环接口 `GET /v1/audio-streams` 与 `PUT /v1/audio-streams/selection` 管理，默认是本机，远程端断线时不静默回退。安装见 [`../../desktop/rabi-voice-client/README.md`](../../desktop/rabi-voice-client/README.md)。RabiLink 不是这条局域网链路的配置依赖。
 
 控制面状态通过回环 SSE `GET /v1/events` 推送。Manager 将它转发为 `GET /api/speech/events`；`microphone_event`、`playback_changed`、`audio_stream_changed` 分别刷新对应状态，`records_changed` 只在 ASR/TTS 记录成功落盘后刷新记录面板，麦克风电平使用限频的 `microphone_level` 直接更新。SSE 重连只做一次快照补漏，不运行固定间隔状态或记录轮询。

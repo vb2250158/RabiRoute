@@ -191,6 +191,13 @@ export type SpeechMicrophoneConfig = {
   /** Host-generated conversation identity; not a user-facing setting. */
   sessionId: string;
   suppressDuringPlayback: boolean;
+  /**
+   * `echo_protected` permits VAD-onset interruption only after the operator has
+   * verified upstream AEC or physical input/output isolation.
+   */
+  bargeInMode: "off" | "echo_protected";
+  /** Consecutive above-threshold input required before interruption. */
+  bargeInConfirmMs: number;
 };
 
 export type SpeechMicrophoneStats = {
@@ -375,8 +382,12 @@ export type SpeechPlaybackVolumeCommand = {
 
 export type SpeechMicrophoneSettingsCommand = Omit<
   SpeechMicrophoneConfig,
-  "enabled" | "autoSubmit" | "routeId" | "sessionId"
->;
+  "enabled" | "autoSubmit" | "routeId" | "sessionId" | "bargeInMode" | "bargeInConfirmMs"
+> & {
+  /** Optional for backward compatibility; omission is fail-closed (`off`). */
+  bargeInMode?: "off" | "echo_protected";
+  bargeInConfirmMs?: number;
+};
 
 export type SpeechMicrophoneStartCommand = SpeechMicrophoneSettingsCommand;
 

@@ -94,6 +94,7 @@ function replyContextForRole(roleDir: string): Record<string, unknown> {
 
 test("speech CLI reads the host record once and writes one RabiLink persona event", async () => {
   const fixture = createFixture("Ilias");
+  const completedAt = Date.now();
   fixture.ingressStore.append({
     recordId: "cli-mobile-one",
     text: "从真实子进程进入。",
@@ -116,8 +117,8 @@ test("speech CLI reads the host record once and writes one RabiLink persona even
     channels: 1,
     peak: 0.51,
     rms: 0.19,
-    startedAt: "2026-07-23T12:00:00.000Z",
-    completedAt: "2026-07-23T12:00:02.000Z",
+    startedAt: new Date(completedAt - 2_000).toISOString(),
+    completedAt: new Date(completedAt).toISOString(),
     duration: 2,
     segments: [{
       id: 0,
@@ -172,6 +173,7 @@ test("speech CLI reads the host record once and writes one RabiLink persona even
 
 test("speech CLI keeps the PC microphone on the independent voice endpoint", async () => {
   const fixture = createFixture("Rabi");
+  const completedAt = Date.now();
   fixture.ingressStore.append({
     recordId: "cli-pc-one",
     text: "这是电脑麦克风。",
@@ -191,8 +193,8 @@ test("speech CLI keeps the PC microphone on the independent voice endpoint", asy
     channels: 1,
     peak: 0.47,
     rms: 0.17,
-    startedAt: "2026-07-23T12:10:00.000Z",
-    completedAt: "2026-07-23T12:10:02.000Z",
+    startedAt: new Date(completedAt - 2_000).toISOString(),
+    completedAt: new Date(completedAt).toISOString(),
     duration: 2,
     segments: [{
       id: 0,

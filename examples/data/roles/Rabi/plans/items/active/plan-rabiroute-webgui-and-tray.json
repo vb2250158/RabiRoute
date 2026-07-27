@@ -6,7 +6,7 @@
   "kind": "ui",
   "currentStepId": "add-real-screenshots",
   "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的计划状态、顺序和反馈合同；人格页可查看声纹归类、人格同步与知识展示，托盘继续保持 Manager API 纯前端边界并把菜单、刷新和 I/O 收敛为事件或后台任务。当前补齐真实脱敏界面截图和实体环境证据。",
-  "nextAction": "为使用手册补齐真实脱敏界面截图，在双实体 PC 和长时间语音会话中复核计划反馈、声纹归类、人格同步、菜单响应与错误恢复，再完善跨端排障入口。",
+  "nextAction": "为使用手册补齐真实脱敏界面截图，在双实体 PC 和长时间语音会话中复核计划反馈、声纹归类、人格同步、菜单响应与错误恢复；自然打断需用连续采集和真实 AEC 证据测量误打断率，再完善跨端排障入口。",
   "steps": [
     { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
     { "id": "speech-monitor", "title": "统一语音页与 Route 监视器状态读取", "status": "已完成" },
@@ -17,7 +17,7 @@
     { "id": "event-driven-control-plane", "title": "把控制面刷新、托盘菜单和语音状态收敛到事件驱动边界", "status": "已完成" },
     { "id": "add-real-screenshots", "title": "补齐真实脱敏界面截图", "status": "进行中" },
     { "id": "persona-route-preview", "title": "完善人格路由预览与跨端排障入口", "status": "未开始" },
-    { "id": "cross-pc-speech", "title": "完成跨电脑与不同声卡的语音重测", "status": "未开始" }
+    { "id": "cross-pc-speech", "title": "完成跨电脑、不同声卡与自然打断的真实语音重测", "status": "未开始" }
   ],
   "waitingFor": "",
   "project": {
@@ -32,6 +32,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-24T00:00:00+08:00",
-  "keywords": ["RibiWebGUI", "Manager API", "计划反馈", "人格声纹", "人格同步", "知识展示", "事件驱动", "角色面板", "结构化计划", "使用手册", "语音服务", "排障", "托盘", "RabiLight"]
+  "updatedAt": "2026-07-27T00:00:00+08:00",
+  "keywords": ["RibiWebGUI", "Manager API", "计划反馈", "人格声纹", "人格同步", "知识展示", "事件驱动", "角色面板", "结构化计划", "使用手册", "语音服务", "自然打断", "AEC", "排障", "托盘", "RabiLight"]
 }

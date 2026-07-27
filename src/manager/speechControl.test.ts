@@ -193,14 +193,19 @@ test("Manager speech control maps resident microphone settings to broadcast mode
     asrModel: "faster-whisper/small",
     language: "zh",
     prompt: null,
-    suppressDuringPlayback: true
+    suppressDuringPlayback: true,
+    bargeInMode: "echo_protected",
+    bargeInConfirmMs: 200
   });
 
   assert.equal(upstreamBody.route_id, null);
   assert.equal(upstreamBody.auto_submit, true);
   assert.equal(upstreamBody.record_threshold, 0.01);
+  assert.equal(upstreamBody.barge_in_mode, "echo_protected");
+  assert.equal(upstreamBody.barge_in_confirm_ms, 200);
   assert.equal("routeId" in upstreamBody, false);
   assert.equal(status.config.routeId, null);
+  assert.equal(status.config.bargeInMode, "echo_protected");
 });
 
 test("Manager speech reconciliation keeps capture alive until the last Route unsubscribes", async () => {

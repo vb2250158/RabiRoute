@@ -123,14 +123,26 @@ def test_loopback_microphone_status_and_contract_are_discoverable(tmp_path: Path
     assert status.status_code == 200
     assert status.json()["mode"] == "host_resident"
     assert status.json()["running"] is False
+    assert status.json()["config"]["barge_in_mode"] == "off"
+    assert status.json()["config"]["barge_in_confirm_ms"] == 200
     models = client.get("/v1/models").json()
     assert models["api"]["microphone_start"]["scope"] == "loopback-only"
     assert models["api"]["microphone_settings"]["endpoint"] == "/v1/microphone/settings"
-    updated = client.put("/v1/microphone/settings", json={"record_threshold": 0.02, "route_id": "legacy-route"})
+    updated = client.put("/v1/microphone/settings", json={
+        "record_threshold": 0.02,
+        "route_id": "legacy-route",
+        "barge_in_mode": "echo_protected",
+        "barge_in_confirm_ms": 250,
+    })
     assert updated.status_code == 200
     assert updated.json()["config"]["record_threshold"] == 0.02
     assert updated.json()["config"]["auto_submit"] is True
     assert updated.json()["config"]["route_id"] is None
+    assert updated.json()["config"]["barge_in_mode"] == "echo_protected"
+    assert updated.json()["config"]["barge_in_confirm_ms"] == 250
+    invalid = client.put("/v1/microphone/settings", json={"barge_in_mode": "unsupported"})
+    assert invalid.status_code == 200
+    assert invalid.json()["config"]["barge_in_mode"] == "off"
 
 
 def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_path: Path) -> None:

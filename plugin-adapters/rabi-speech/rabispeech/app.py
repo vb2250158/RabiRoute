@@ -290,6 +290,7 @@ def create_app(
         transcriber=microphone_transcriber,
         submitter=microphone_submitter,
         playback_active=lambda: bool(playback_queue.snapshot().get("current")),
+        stop_playback=lambda: playback_queue.stop(clear_pending=True),
         record_transcription=lambda result, config, started_at: records.append_asr(
             result,
             source="microphone",

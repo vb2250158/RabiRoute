@@ -6,7 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## Unreleased - 2026-07-25
+## Unreleased - 2026-07-27
+
+### Echo-protected natural barge-in, stage one (experimental)
+
+- The resident RabiSpeech microphone adds `barge_in_mode`, defaulting to `off`. `echo_protected` may be selected only after the operator has validated upstream AEC or reliable physical input/output isolation on real hardware. During playback, input must remain above the VAD threshold for `barge_in_confirm_ms` (default `200 ms`) before the host immediately stops current playback and clears the stale FIFO queue.
+- Confirmation counts only consecutive voice observed while host playback is active; audio spoken before playback begins cannot satisfy the interruption window. The triggering utterance still completes normal silence segmentation, ASR, voiceprint analysis, host persistence, and same-source Route delivery. A playback-stop failure emits `barge_in_failed`, discards the untrusted candidate, and restores feedback suppression.
+- RibiWebGUI requires explicit risk confirmation before enabling `echo_protected` and keeps the active protection state visible. Neither RabiSpeech nor the Windows remote voice client currently provides verifiable AEC, and that client still pauses microphone upload during playback. Real natural interruption still requires continuous capture, an AEC capability declaration, false-interruption acceptance, conversation-epoch cancellation propagation, and streaming TTS.
 
 ### Focused context injection by default
 

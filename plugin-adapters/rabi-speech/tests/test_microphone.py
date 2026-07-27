@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from rabispeech.contracts import TranscriptionResult
-from rabispeech.microphone import MicrophoneService
+from rabispeech.microphone import MicrophoneConfig, MicrophoneService
 
 
 class FakeStream:
@@ -425,6 +425,198 @@ def test_resident_microphone_suppresses_capture_during_host_playback(tmp_path: P
         service.feed_for_test(np.zeros(800, dtype=np.float32))
         assert service.snapshot()["state"] == "listening"
         assert calls == 0
+        await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_echo_protected_barge_in_stops_playback_then_keeps_full_asr_path(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        playback_active = True
+        stop_calls = 0
+        transcribed = asyncio.Event()
+        submitted: list[str] = []
+
+        def stop_playback() -> None:
+            nonlocal playback_active, stop_calls
+            stop_calls += 1
+            playback_active = False
+
+        async def transcribe(_path: Path, _config) -> TranscriptionResult:
+            transcribed.set()
+            return TranscriptionResult(text="打断后继续", language="zh", duration=0.3, provider="fake", model="fake")
+
+        async def submit(result: TranscriptionResult, _session_id: str, _utterance, _input_source) -> dict[str, object]:
+            submitted.append(result.text)
+            return {"status": "delivered", "message_id": "speech-barge-in", "deliveries": []}
+
+        service = MicrophoneService(
+            state_path=tmp_path / "microphone.json",
+            temp_dir=tmp_path / "temp",
+            transcriber=transcribe,
+            submitter=submit,
+            playback_active=lambda: playback_active,
+            stop_playback=stop_playback,
+            stream_factory=lambda _config, _callback: FakeStream(),
+        )
+        await service.start(
+            {
+                "sample_rate": 8000,
+                "chunk_ms": 100,
+                "pre_roll_ms": 0,
+                "record_threshold": 0.1,
+                "transcribe_threshold": 0.1,
+                "adaptive_threshold": False,
+                "silence_ms": 200,
+                "min_utterance_ms": 100,
+                "max_utterance_ms": 3000,
+                "barge_in_mode": "echo_protected",
+                "barge_in_confirm_ms": 200,
+            }
+        )
+
+        service.feed_for_test(np.full(800, 0.2, dtype=np.float32))
+        assert stop_calls == 0
+        service.feed_for_test(np.full(800, 0.2, dtype=np.float32))
+        assert stop_calls == 1
+        assert service.snapshot()["state"] == "recording"
+        assert service.snapshot()["utterance_active"] is True
+        assert service.snapshot()["events"][0]["kind"] == "barge_in_triggered"
+
+        service.feed_for_test(np.zeros(800, dtype=np.float32))
+        service.feed_for_test(np.zeros(800, dtype=np.float32))
+        await asyncio.wait_for(transcribed.wait(), timeout=2)
+        for _ in range(50):
+            if submitted:
+                break
+            await asyncio.sleep(0.01)
+
+        snapshot = service.snapshot()
+        assert submitted == ["打断后继续"]
+        assert snapshot["stats"]["captured"] == 1
+        assert snapshot["stats"]["recognized"] == 1
+        await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_barge_in_confirmation_counts_only_voice_during_playback(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        playback_active = False
+        stop_calls = 0
+
+        def stop_playback() -> None:
+            nonlocal playback_active, stop_calls
+            stop_calls += 1
+            playback_active = False
+
+        service = MicrophoneService(
+            state_path=tmp_path / "microphone.json",
+            temp_dir=tmp_path / "temp",
+            transcriber=lambda _path, _config: None,  # type: ignore[arg-type]
+            submitter=lambda _result, _session, _utterance, _source: None,  # type: ignore[arg-type]
+            playback_active=lambda: playback_active,
+            stop_playback=stop_playback,
+            stream_factory=lambda _config, _callback: FakeStream(),
+        )
+        await service.start(
+            {
+                "sample_rate": 8000,
+                "chunk_ms": 100,
+                "pre_roll_ms": 0,
+                "record_threshold": 0.1,
+                "transcribe_threshold": 0.1,
+                "adaptive_threshold": False,
+                "barge_in_mode": "echo_protected",
+                "barge_in_confirm_ms": 200,
+            }
+        )
+
+        service.feed_for_test(np.full(800, 0.2, dtype=np.float32))
+        service.feed_for_test(np.full(800, 0.2, dtype=np.float32))
+        playback_active = True
+        service.feed_for_test(np.full(800, 0.2, dtype=np.float32))
+        assert stop_calls == 0
+        service.feed_for_test(np.full(800, 0.2, dtype=np.float32))
+        assert stop_calls == 1
+        await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_barge_in_remains_fail_closed_without_echo_protection(tmp_path: Path) -> None:
+    assert MicrophoneConfig.from_mapping(
+        {"barge_in_mode": "unsupported"},
+        MicrophoneConfig(barge_in_mode="echo_protected"),
+    ).barge_in_mode == "off"
+
+    async def scenario() -> None:
+        stop_calls = 0
+
+        def stop_playback() -> None:
+            nonlocal stop_calls
+            stop_calls += 1
+
+        service = MicrophoneService(
+            state_path=tmp_path / "microphone.json",
+            temp_dir=tmp_path / "temp",
+            transcriber=lambda _path, _config: None,  # type: ignore[arg-type]
+            submitter=lambda _result, _session, _utterance, _source: None,  # type: ignore[arg-type]
+            playback_active=lambda: True,
+            stop_playback=stop_playback,
+            stream_factory=lambda _config, _callback: FakeStream(),
+        )
+        await service.start(
+            {
+                "sample_rate": 8000,
+                "record_threshold": 0.01,
+                "transcribe_threshold": 0.01,
+                "barge_in_mode": "unsupported",
+            }
+        )
+        service.feed_for_test(np.full(800, 0.5, dtype=np.float32))
+
+        snapshot = service.snapshot()
+        assert snapshot["config"]["barge_in_mode"] == "off"
+        assert snapshot["state"] == "playback_suppressed"
+        assert stop_calls == 0
+        await service.stop()
+
+    asyncio.run(scenario())
+
+
+def test_barge_in_stop_failure_restores_playback_suppression(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        def stop_playback() -> None:
+            raise RuntimeError("fake stop failure")
+
+        service = MicrophoneService(
+            state_path=tmp_path / "microphone.json",
+            temp_dir=tmp_path / "temp",
+            transcriber=lambda _path, _config: None,  # type: ignore[arg-type]
+            submitter=lambda _result, _session, _utterance, _source: None,  # type: ignore[arg-type]
+            playback_active=lambda: True,
+            stop_playback=stop_playback,
+            stream_factory=lambda _config, _callback: FakeStream(),
+        )
+        await service.start(
+            {
+                "sample_rate": 8000,
+                "pre_roll_ms": 0,
+                "record_threshold": 0.1,
+                "transcribe_threshold": 0.1,
+                "adaptive_threshold": False,
+                "barge_in_mode": "echo_protected",
+                "barge_in_confirm_ms": 100,
+            }
+        )
+        service.feed_for_test(np.full(800, 0.2, dtype=np.float32))
+
+        snapshot = service.snapshot()
+        assert snapshot["state"] == "playback_suppressed"
+        assert snapshot["utterance_active"] is False
+        assert snapshot["pending"] == 0
+        assert snapshot["events"][0]["kind"] == "barge_in_failed"
         await service.stop()
 
     asyncio.run(scenario())

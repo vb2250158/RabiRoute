@@ -233,6 +233,7 @@ export async function runSpeechIngressSeparationAcceptance(
     fs.mkdirSync(mobileRoleDir, { recursive: true });
     fs.writeFileSync(path.join(pcRoleDir, "persona.md"), "# PC acceptance persona\n", "utf8");
     fs.writeFileSync(path.join(mobileRoleDir, "persona.md"), "# Mobile acceptance persona\n", "utf8");
+    const fixtureCompletedAt = Date.now();
     const ingress = new SpeechIngressStore(ingressDir);
     ingress.append({
       recordId: "acceptance-pc-record",
@@ -251,8 +252,8 @@ export async function runSpeechIngressSeparationAcceptance(
       sampleRate: 16_000,
       audioFormat: "pcm_s16le",
       channels: 1,
-      startedAt: "2026-07-23T12:00:00.000Z",
-      completedAt: "2026-07-23T12:00:02.000Z",
+      startedAt: new Date(fixtureCompletedAt - 2_000).toISOString(),
+      completedAt: new Date(fixtureCompletedAt).toISOString(),
       duration: 2,
       segments: [{
         id: 0,
@@ -287,8 +288,8 @@ export async function runSpeechIngressSeparationAcceptance(
       sampleRate: 16_000,
       audioFormat: "pcm_s16le",
       channels: 1,
-      startedAt: "2026-07-23T12:10:00.000Z",
-      completedAt: "2026-07-23T12:10:03.000Z",
+      startedAt: new Date(fixtureCompletedAt - 3_000).toISOString(),
+      completedAt: new Date(fixtureCompletedAt).toISOString(),
       duration: 3,
       segments: [{
         id: 0,

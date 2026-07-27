@@ -234,6 +234,19 @@ Manager 的 SSE 代理生命周期归 `src/manager/speechEventProxy.ts`：客户
 
 VAD 在达到静音窗口后始终结束当前候选片段；若有效语音不足最短时长，则立即记录 `segment_discarded` 并回到监听。这样短促碰麦、系统提示音或单个噪声尖峰不会占住整段 `max_utterance_ms` 才释放。
 
+### 自然打断（barge-in）第一阶段
+
+当前 TTS 仍是“完整文本合成 WAV 后进入全局 FIFO”，不是文本 token 或音频帧流式。第一阶段只缩短“用户开口到静音”的路径：当 `bargeInMode=echo_protected`（RabiSpeech 原始字段 `barge_in_mode=echo_protected`）且主机正在播放时，输入连续超过 VAD 阈值达到 `bargeInConfirmMs`（原始字段 `barge_in_confirm_ms`，默认 `200 ms`）便直接停止当前播放并清空旧队列，不等待静音收尾、ASR 或声纹。触发音频继续留在当前语段；静音收尾后照常执行完整 ASR、声纹分析、主机通用消息写入与同源 Route 回复。
+
+该能力默认 `off`，因为当前主机链没有播放音频参考或 AEC。`echo_protected` 是“操作者已经验证上游 AEC 或物理回声隔离”的合同，不是 RabiSpeech 自动推断。WebGUI 在开启前要求显式确认；停止播放抛错时运行时发出 `barge_in_failed`、丢弃候选并恢复防回流。Windows 远程语音客户端当前播放时会停传麦克风，因此还不能通过这条模式获得自然打断；后续必须先让客户端提供连续采集与可验证 AEC 能力声明。
+
+后续演进按以下顺序推进，且首要验收始终是“输入优先”：
+
+1. **真实回声保护**：远端 hello/本机设备状态显式报告已验证的 AEC 能力，播放期间持续上传麦克风；用真实房间、音量和设备测误打断率，不能只信配置开关。
+2. **会话纪元与取消传播**：每次打断递增当前语音会话的 `conversationEpoch`，把 epoch/生成号带到 Agent 回复、TTS 合成和播放任务；旧 epoch 的在途合成或迟到回复不得重新入队。打断只形成同一会话的新转折，不靠反复注入长模板恢复上下文。
+3. **文本与音频流式**：Agent token/delta 先经过可取消的短句切分，再交给支持流式的 TTS 或有序短音频块；播放不必等待完整回答。每层都必须接受同一个取消令牌，并在打断后丢弃旧尾音。
+4. **保持投递边界**：QQ 来源仍默认回 QQ，语音来源仍默认回语音；只有用户显式指定跨入口目标时才走现有 Action Gate 与消息端 policy。
+
 关闭浏览器或离开页面不会停止常驻监听；配置写入被 Git 忽略的 `plugin-adapters/rabi-speech/microphone.json`。Manager 启动、Route 保存和配置重载时都会按订阅重新协调：存在任意订阅就启动或保持监听，没有订阅才停止。旧 `route_id` 会迁移为 `null`，会话 ID 由主机内部生成和持久化，不是用户配置。
 
 常驻录音控制接口只允许本机 RabiPC/Manager 回环调用，不加入 RabiLink 通用 token 的公网 allowlist。远端客户端可以通过 RabiLink 调用普通 TTS/ASR API，但不能用同一个通用 token 开关这台电脑的麦克风。直接手动 TTS/ASR API 与 Agent 无关；常驻 ASR 是否进入某条 Route 只由该 Route 的语音消息端订阅决定。

@@ -54,6 +54,7 @@ const transcribeThreshold = ref(DEFAULT_SPEECH_ROUTE_PROFILE.transcribeThreshold
 const adaptiveThreshold = ref(DEFAULT_SPEECH_ROUTE_PROFILE.adaptiveThreshold);
 const inputGain = ref(DEFAULT_SPEECH_ROUTE_PROFILE.inputGain);
 const preRollMs = ref(DEFAULT_SPEECH_ROUTE_PROFILE.preRollMs);
+const bargeInMode = ref<"off" | "echo_protected">("off");
 const audioInputs = ref<AudioInput[]>([]);
 const selectedAudioInput = ref<number | null>(null);
 const microphoneConfigLoaded = ref(false);
@@ -267,6 +268,7 @@ function applyMicrophoneConfig(config: SpeechMicrophoneConfig): void {
   maxUtteranceMs.value = config.maxUtteranceMs;
   preRollMs.value = config.preRollMs;
   inputGain.value = config.inputGain;
+  bargeInMode.value = config.bargeInMode === "echo_protected" ? "echo_protected" : "off";
 }
 
 async function refreshMicrophone(): Promise<void> {
@@ -308,8 +310,20 @@ function microphoneSettingsCommand() {
     asrModel: asrModel.value,
     language: asrLanguage.value || null,
     prompt: previous?.prompt ?? null,
-    suppressDuringPlayback: true
+    suppressDuringPlayback: true,
+    bargeInMode: bargeInMode.value,
+    bargeInConfirmMs: previous?.bargeInConfirmMs ?? 200
   };
+}
+
+function changeBargeInMode(value: "off" | "echo_protected" | null): void {
+  const next = value === "echo_protected" ? "echo_protected" : "off";
+  if (
+    next === "echo_protected"
+    && !window.confirm("只有当前麦克风链路已验证 AEC 或物理回声隔离时才能启用。否则夜雨自己的 TTS 可能触发误打断。确认继续吗？")
+  ) return;
+  bargeInMode.value = next;
+  scheduleMicrophoneSettingsSave();
 }
 
 async function flushMicrophoneSettings(): Promise<void> {
@@ -603,6 +617,18 @@ onBeforeUnmount(() => {
         <div class="speech-action-row">
           <div class="speech-inline-switches">
             <v-switch v-model="adaptiveThreshold" color="primary" label="动态底噪阈值" hide-details :disabled="microphoneSettingsSaving" />
+            <v-select
+              :model-value="bargeInMode"
+              label="播放中开口打断"
+              :items="[
+                { title: '关闭（默认防回流）', value: 'off' },
+                { title: '已验证 AEC / 回声隔离', value: 'echo_protected' }
+              ]"
+              density="compact"
+              hide-details
+              :disabled="microphoneSettingsSaving"
+              @update:model-value="changeBargeInMode"
+            />
           </div>
           <v-chip :color="listening ? 'success' : speechSubscriberRoutes.length ? 'warning' : 'grey'" variant="tonal">
             {{ microphoneSettingsSaving ? "正在应用主机语音设置" : listening ? `常驻监听中 · ${speechSubscriberRoutes.length} 个 Route 已订阅` : speechSubscriberRoutes.length ? "等待 RabiSpeech 恢复监听" : "没有 Route 订阅语音消息" }}
@@ -613,8 +639,13 @@ onBeforeUnmount(() => {
           待识别 {{ microphoneStatus?.pending || 0 }} 段 · 丢弃 {{ microphoneStatus?.dropped || 0 }} 段<span v-if="microphoneStatus?.lastSubmitError"> · 广播异常：{{ microphoneStatus.lastSubmitError }}</span>
         </div>
         <v-alert v-if="microphoneStatus?.error" class="mt-4" type="error" variant="tonal" density="compact">{{ microphoneStatus.error }}</v-alert>
-        <v-alert class="mt-4" type="warning" variant="tonal" density="compact">
-          主机正在播放 TTS 时，服务会清空当前片段并暂停触发，避免语音回流；仍请勿选择会混入扬声器的虚拟麦克风。
+        <v-alert class="mt-4" :type="bargeInMode === 'echo_protected' ? 'warning' : 'info'" variant="tonal" density="compact">
+          <template v-if="bargeInMode === 'echo_protected'">
+            已允许受回声保护的麦克风在 VAD 起点停止当前播放并清空旧队列；当前音频仍会在语段结束后完成 ASR 与声纹处理。若链路没有可靠 AEC 或物理隔离，请立即关闭。
+          </template>
+          <template v-else>
+            默认防回流已启用：主机播放 TTS 时会暂停语音触发。确认当前输入链具备 AEC 或物理回声隔离后，才可开启自然打断。
+          </template>
         </v-alert>
       </v-card>
       <SpeechHostMonitor v-if="activeKind === 'asr'" :subscriber-count="speechSubscriberRoutes.length" />

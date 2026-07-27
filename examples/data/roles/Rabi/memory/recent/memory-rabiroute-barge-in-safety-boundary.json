@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-barge-in-safety-boundary",
+  "title": "自然打断必须以真实回声保护证据为前提",
+  "focus": "自然打断的回声保护、失败关闭与真机验收边界",
+  "content": "RabiSpeech 第一阶段自然打断默认关闭。只有输入链已经用真实设备验证 AEC 或可靠物理回声隔离时，才可显式启用 echo_protected；播放期间连续语音达到确认窗口后，主机停止当前播放并清空旧 FIFO，但保留触发语段继续完成 ASR、声纹和同源 Route 投递。确认计数只覆盖播放期间，停止失败会丢弃当前候选并恢复防回流。配置确认只是操作者声明，不是 AEC 证据；Windows 远程语音客户端仍会在播放时停传麦克风，后续真机验收必须覆盖连续采集、AEC 能力声明和误打断率。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：RabiSpeech 自然打断第一阶段的安全与验收边界"
+  },
+  "createdAt": "2026-07-27T00:00:00+08:00",
+  "updatedAt": "2026-07-27T00:00:00+08:00",
+  "keywords": ["RabiSpeech", "自然打断", "barge-in", "echo_protected", "AEC", "防回流", "播放 FIFO", "失败关闭", "真机验收", "误打断率"]
+}

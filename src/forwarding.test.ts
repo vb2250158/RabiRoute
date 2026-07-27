@@ -243,6 +243,7 @@ test("mobile PCM speech ingress reaches only its RabiLink persona with a stable 
     routeProfiles: [voiceRoute, mobileRoute],
     rolesDir: path.join(root, "roles")
   }, async () => {
+    const completedAt = Date.now();
     const control = new ManagerSpeechControl({
       serviceUrl: () => "http://127.0.0.1:8781",
       rolesRoot: () => path.join(root, "roles"),
@@ -286,9 +287,9 @@ test("mobile PCM speech ingress reaches only its RabiLink persona with a stable 
       channels: 1,
       peak: 0.42,
       rms: 0.18,
-      startedAt: "2026-07-23T10:00:00.000Z",
-      completedAt: "2026-07-23T10:00:02.000Z",
-      ingestedAt: "2026-07-23T10:00:02.100Z",
+      startedAt: new Date(completedAt - 2_000).toISOString(),
+      completedAt: new Date(completedAt).toISOString(),
+      ingestedAt: new Date(completedAt + 100).toISOString(),
       duration: 2,
       segments: [{
         id: 0,

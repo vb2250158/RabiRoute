@@ -39,6 +39,8 @@ class MicrophoneConfig:
     route_id: str | None = None
     session_id: str = "rabispeech-microphone"
     suppress_during_playback: bool = True
+    barge_in_mode: str = "off"
+    barge_in_confirm_ms: int = 200
 
     @classmethod
     def from_mapping(cls, value: object, fallback: "MicrophoneConfig | None" = None) -> "MicrophoneConfig":
@@ -79,6 +81,8 @@ class MicrophoneConfig:
             route_id=None,
             session_id=session_id,
             suppress_during_playback=_boolean(data.get("suppress_during_playback"), current.suppress_during_playback),
+            barge_in_mode=_barge_in_mode(data.get("barge_in_mode"), current.barge_in_mode),
+            barge_in_confirm_ms=_integer(data.get("barge_in_confirm_ms"), current.barge_in_confirm_ms, 20, 1_000),
         )
         if config.transcribe_threshold < config.record_threshold:
             config = replace(config, transcribe_threshold=config.record_threshold)
@@ -120,6 +124,7 @@ Transcriber = Callable[[Path, MicrophoneConfig], Awaitable[TranscriptionResult]]
 Submitter = Callable[[TranscriptionResult, str, SpeechUtteranceMetadata, SpeechInputSource], Awaitable[dict[str, object]]]
 StreamFactory = Callable[[MicrophoneConfig, Callable[..., None]], Any]
 RecordTranscription = Callable[[TranscriptionResult, MicrophoneConfig, float], None]
+PlaybackStopper = Callable[[], object]
 
 
 class RemoteAudioController:
@@ -151,6 +156,7 @@ class MicrophoneService:
         transcriber: Transcriber,
         submitter: Submitter,
         playback_active: Callable[[], bool],
+        stop_playback: PlaybackStopper | None = None,
         record_transcription: RecordTranscription | None = None,
         stream_factory: StreamFactory | None = None,
         remote_audio: RemoteAudioController | None = None,
@@ -161,6 +167,7 @@ class MicrophoneService:
         self._transcriber = transcriber
         self._submitter = submitter
         self._playback_active = playback_active
+        self._stop_playback = stop_playback
         self._record_transcription = record_transcription
         self._stream_factory = stream_factory or _sounddevice_stream
         self._remote_audio = remote_audio
@@ -190,6 +197,9 @@ class MicrophoneService:
         self._peak = 0.0
         self._started_at = 0.0
         self._utterance_source: SpeechInputSource | None = None
+        self._barge_in_failed = False
+        self._barge_in_triggered = False
+        self._barge_in_voiced_samples = 0
         self._history: deque[dict[str, object]] = deque(maxlen=50)
         self._events: deque[dict[str, object]] = deque(maxlen=100)
         self._event_sequence = 0
@@ -225,6 +235,7 @@ class MicrophoneService:
             self._level_history.clear()
             self._noise_floor = max(0.0005, self.config.record_threshold / 3.0)
             self._dynamic_threshold = self.config.record_threshold
+            self._barge_in_failed = False
             self._loop = asyncio.get_running_loop()
             self._state = "starting"
             self._error = ""
@@ -430,15 +441,28 @@ class MicrophoneService:
                 "state": self._state,
                 "utterance_active": self._utterance_active,
             })
-        if self.config.suppress_during_playback and self._playback_active():
+        playback_active = self._playback_active()
+        barge_in_ready = (
+            self.config.barge_in_mode == "echo_protected"
+            and self._stop_playback is not None
+            and not self._barge_in_failed
+        )
+        if self.config.suppress_during_playback and playback_active and not barge_in_ready:
             if self._state != "playback_suppressed":
                 self._emit_event("microphone", "playback_suppressed", "检测到主机播放，暂时抑制麦克风触发")
             self._reset_segment()
             self._state = "playback_suppressed"
             return
+        if not playback_active:
+            self._barge_in_failed = False
+            if not self._barge_in_triggered:
+                self._barge_in_voiced_samples = 0
         if self._state == "playback_suppressed":
             self._state = "listening"
-            self._emit_event("microphone", "playback_resumed", "主机播放结束，恢复麦克风监听")
+            if playback_active:
+                self._emit_event("barge_in", "barge_in_armed", "主机仍在播放，已切换为受回声保护的打断监听")
+            else:
+                self._emit_event("microphone", "playback_resumed", "主机播放结束，恢复麦克风监听")
 
         if not self._utterance_active:
             self._append_pre_roll(chunk)
@@ -472,6 +496,9 @@ class MicrophoneService:
                 level_value=round(level, 6),
                 threshold=round(self._dynamic_threshold, 6),
             )
+            self._barge_in_voiced_samples = chunk.size if playback_active and barge_in_ready else 0
+            if self._try_barge_in(playback_active, barge_in_ready):
+                return
             return
 
         self._utterance_chunks.append(chunk.copy())
@@ -479,6 +506,14 @@ class MicrophoneService:
         self._peak = max(self._peak, level)
         if level >= self._dynamic_threshold:
             self._voiced_samples += chunk.size
+            if playback_active and barge_in_ready and not self._barge_in_triggered:
+                self._barge_in_voiced_samples += chunk.size
+            elif not self._barge_in_triggered:
+                self._barge_in_voiced_samples = 0
+        elif not self._barge_in_triggered:
+            self._barge_in_voiced_samples = 0
+        if self._try_barge_in(playback_active, barge_in_ready):
+            return
         if level >= self.config.transcribe_threshold:
             self._silence_samples = 0
         else:
@@ -491,6 +526,41 @@ class MicrophoneService:
         phrase_done = self._silence_samples >= silence_samples
         if phrase_done or self._utterance_samples >= max_samples:
             self._finish_segment(min_voiced_samples=min_samples)
+
+    def _try_barge_in(self, playback_active: bool, barge_in_ready: bool) -> bool:
+        confirm_samples = round(self.config.sample_rate * self.config.barge_in_confirm_ms / 1000)
+        if (
+            not playback_active
+            or not barge_in_ready
+            or self._barge_in_triggered
+            or self._barge_in_voiced_samples < confirm_samples
+        ):
+            return False
+        try:
+            assert self._stop_playback is not None
+            self._stop_playback()
+        except Exception as exc:
+            self._barge_in_failed = True
+            self._reset_segment()
+            self._state = "playback_suppressed"
+            self._emit_event(
+                "barge_in",
+                "barge_in_failed",
+                "语音起点已确认，但停止播放失败；已恢复防回流抑制",
+                level="error",
+                error=f"{type(exc).__name__}: {exc}"[:500],
+            )
+            return True
+        self._barge_in_triggered = True
+        self._emit_event(
+            "barge_in",
+            "barge_in_triggered",
+            "检测到受回声保护的语音起点，已停止当前播放并清空旧队列",
+            protection="echo_protected",
+            queue_cleared=True,
+            confirmation_ms=self.config.barge_in_confirm_ms,
+        )
+        return False
 
     def _append_pre_roll(self, chunk: np.ndarray) -> None:
         limit = round(self.config.sample_rate * self.config.pre_roll_ms / 1000)
@@ -548,6 +618,8 @@ class MicrophoneService:
         self._peak = 0.0
         self._started_at = 0.0
         self._utterance_source = None
+        self._barge_in_triggered = False
+        self._barge_in_voiced_samples = 0
 
     def _input_source(self) -> SpeechInputSource:
         remote_id = self._remote_audio.selected_client_id if self._remote_audio is not None else None
@@ -855,3 +927,12 @@ def _text(value: object, fallback: str, limit: int) -> str:
 def _optional_text(value: object, limit: int) -> str | None:
     text = str(value or "").strip()
     return text[:limit] or None
+
+
+def _barge_in_mode(value: object, fallback: str) -> str:
+    if value is None:
+        return fallback if fallback in {"off", "echo_protected"} else "off"
+    normalized = str(value or "").strip().lower()
+    if normalized in {"off", "echo_protected"}:
+        return normalized
+    return "off"

@@ -268,7 +268,11 @@ function normalizeMicrophoneConfig(value: unknown): SpeechMicrophoneConfig {
     autoSubmit: booleanValue(config.auto_submit ?? config.autoSubmit),
     routeId: config.route_id == null && config.routeId == null ? null : stringValue(config.route_id ?? config.routeId),
     sessionId: stringValue(config.session_id ?? config.sessionId, "rabispeech-microphone"),
-    suppressDuringPlayback: booleanValue(config.suppress_during_playback ?? config.suppressDuringPlayback, true)
+    suppressDuringPlayback: booleanValue(config.suppress_during_playback ?? config.suppressDuringPlayback, true),
+    bargeInMode: config.barge_in_mode === "echo_protected" || config.bargeInMode === "echo_protected"
+      ? "echo_protected"
+      : "off",
+    bargeInConfirmMs: numberValue(config.barge_in_confirm_ms ?? config.bargeInConfirmMs, 200)
   };
 }
 
@@ -553,7 +557,9 @@ function microphoneStartPayload(command: SpeechMicrophoneStartCommand): Record<s
     prompt: command.prompt,
     auto_submit: true,
     route_id: null,
-    suppress_during_playback: command.suppressDuringPlayback
+    suppress_during_playback: command.suppressDuringPlayback,
+    barge_in_mode: command.bargeInMode === "echo_protected" ? "echo_protected" : "off",
+    barge_in_confirm_ms: command.bargeInConfirmMs ?? 200
   };
 }
 
@@ -575,7 +581,9 @@ function microphoneSettingsFromConfig(config: SpeechMicrophoneConfig): SpeechMic
     asrModel: config.asrModel,
     language: config.language,
     prompt: config.prompt,
-    suppressDuringPlayback: config.suppressDuringPlayback
+    suppressDuringPlayback: config.suppressDuringPlayback,
+    bargeInMode: config.bargeInMode,
+    bargeInConfirmMs: config.bargeInConfirmMs
   };
 }
 

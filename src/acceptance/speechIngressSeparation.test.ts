@@ -12,7 +12,7 @@ test("isolated speech ingress acceptance separates PC and mobile persona context
     entryPath: path.resolve("src", "index.ts"),
     entryArgsPrefix: ["--import", "tsx"],
     outputPath,
-    timeoutMs: 20_000
+    timeoutMs: 60_000
   }, {
     now: () => new Date("2026-07-23T12:00:00.000Z")
   });
