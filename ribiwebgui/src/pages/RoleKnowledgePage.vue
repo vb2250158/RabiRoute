@@ -268,7 +268,7 @@ watch(
 );
 
 function stepColor(plan: RolePlan, step: RolePlanStep): string {
-  if (plan.presentation.tone !== "paused" && step.blockedBy) return "error";
+  if (stepIsBlocked(plan, step)) return "error";
   if (step.status === "已完成") return "success";
   if (step.status === "进行中") return "primary";
   return "grey";
@@ -280,8 +280,12 @@ function currentStep(plan: RolePlan): RolePlanStep | undefined {
 }
 
 function blocker(plan: RolePlan): string {
-  if (plan.presentation.tone === "paused") return "";
+  if (plan.presentation.tone !== "blocked") return "";
   return currentStep(plan)?.blockedBy || plan.blockedBy || "";
+}
+
+function stepIsBlocked(plan: RolePlan, step: RolePlanStep): boolean {
+  return plan.presentation.tone === "blocked" && step.id === currentStep(plan)?.id;
 }
 
 function completedSteps(plan: RolePlan): number {
@@ -991,7 +995,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                   :class="{
                     current: step.id === plan.currentStepId,
                     completed: step.status === '已完成',
-                    blocked: plan.presentation.tone !== 'paused' && Boolean(step.blockedBy),
+                    blocked: stepIsBlocked(plan, step),
                     'has-approval': isApprovalStep(plan, step)
                   }"
                 >
@@ -1003,9 +1007,17 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                       </div>
                       <p v-if="step.detail" data-no-i18n>{{ step.detail }}</p>
                       <small v-if="step.waitingFor" data-no-i18n>等待：{{ step.waitingFor }}</small>
-                      <small v-if="plan.presentation.tone !== 'paused' && step.blockedBy" data-no-i18n>{{ step.blockedBy }}</small>
+                      <small v-if="stepIsBlocked(plan, step) && step.blockedBy" data-no-i18n>{{ step.blockedBy }}</small>
+                      <small v-if="step.status === '进行中' && step.startedAt" class="knowledge-step-time">
+                        <span>{{ t("开始时间") }}</span>
+                        <b data-no-i18n>{{ formatDate(step.startedAt) }}</b>
+                      </small>
+                      <small v-else-if="step.status === '已完成' && step.completedAt" class="knowledge-step-time">
+                        <span>{{ t("完成时间") }}</span>
+                        <b data-no-i18n>{{ formatDate(step.completedAt) }}</b>
+                      </small>
                     </div>
-                    <v-chip :color="stepColor(plan, step)" size="x-small" variant="tonal">{{ plan.presentation.tone !== "paused" && step.blockedBy ? "已阻塞" : step.status }}</v-chip>
+                    <v-chip :color="stepColor(plan, step)" size="x-small" variant="tonal">{{ stepIsBlocked(plan, step) ? "已阻塞" : step.status }}</v-chip>
                     <section v-if="isApprovalStep(plan, step)" class="knowledge-approval-panel" :data-state="plan.presentation.approval.state">
                   <div class="knowledge-approval-head">
                     <div>

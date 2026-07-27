@@ -56,7 +56,7 @@ data/route/<RouteName>/
 已归档
 ```
 
-`暂停` 表示用户或负责人明确要求暂时停止推进，但仍保留恢复位置。等待用户、等待外部系统和阻塞仍不是额外顶层状态，应写入 `nextAction`、`waitingFor`、`blockedBy` 或备注字段；需要继续追踪的等待计划保持 `进行中`。
+`暂停` 表示用户或负责人明确要求暂时停止推进，但仍保留恢复位置。等待用户或外部系统不是额外顶层状态：用 `waitingFor` 写清对象，每次巡检继续询问或追问，计划保持 `进行中`。只有询问、升级、重试和替代动作全部不可执行时，才写 `isBlocked=true` 与 `blockedBy`；顶层状态仍不新增“阻塞”。
 
 推荐目录：
 
@@ -135,11 +135,18 @@ completedArchiveAfterHours = 72
     }
   ],
   "steps": [
-    { "id": "inspect-current", "title": "检查当前模型与界面", "status": "已完成" },
+    {
+      "id": "inspect-current",
+      "title": "检查当前模型与界面",
+      "status": "已完成",
+      "startedAt": "2026-06-08T00:00:00+08:00",
+      "completedAt": "2026-06-08T00:10:00+08:00"
+    },
     {
       "id": "confirm-contract",
       "title": "确认结构化步骤契约",
       "status": "进行中",
+      "startedAt": "2026-06-08T00:10:00+08:00",
       "approvalRequest": {
         "request": "批准按列出的文件和命令更新计划契约。",
         "reason": "该变更会修改公开 Plan Schema 和双端用户界面。",
@@ -193,11 +200,13 @@ completedArchiveAfterHours = 72
 
 WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` 获取受控文件。PNG、JPEG、WebP 和 GIF 图片，以及 MP4/M4V、WebM、Ogg Video、MOV/QuickTime 视频，统一显示紧凑固定宽度的 16:9 缩略图，仅在容器不足时等比缩小；点击图片打开页内大图，点击视频打开带播放控制的页内预览。视频响应支持字节范围读取，实际可播放编码仍取决于当前浏览器；其它文件显示名称、类型与大小，并通过附件响应打开或下载。读取接口会再次确认真实路径仍在该计划的受管目录内，路径穿越或 symlink 越界均失败关闭。
 
-`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。顶层状态改为 `暂停` 时，可以保留这条 `进行中` 步骤及其 `currentStepId` 作为恢复位置；恢复时只把顶层状态改回 `进行中`。步骤可带 `detail`、`waitingFor`、`blockedBy` 和 `completedAt`；`waitingFor` 说明正在等谁或什么，`blockedBy` 说明为什么无法继续，并优先写到实际受阻的当前步骤上。`currentStep` 保留为当前进展说明，不再承担步骤列表或步骤身份。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用。
+`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。顶层状态改为 `暂停` 时，可以保留这条 `进行中` 步骤及其 `currentStepId` 作为恢复位置；恢复时只把顶层状态改回 `进行中`。步骤可带 `detail`、`waitingFor`、`isBlocked`、`blockedBy`、`startedAt` 和 `completedAt`。`waitingFor` 说明本轮要询问或追问谁/什么；只要仍能沟通、升级、重试或寻找替代路径，就保持 `isBlocked` 为空或 `false`，Agent 每次巡检都继续询问直到取得明确结果。只有完全没有已授权动作时才写 `isBlocked=true`，并用 `blockedBy` 说明原因。Manager 在步骤首次写为 `进行中` 时自动补 `startedAt`，写为 `已完成` 时自动补 `completedAt` 并保留开始时间；重开已完成步骤会清除旧 `completedAt`，退回 `未开始` 会清除两个时间。创建时直接标为已完成、或旧步骤缺少时间字段时，会在下一次计划写入用该次写入时间补齐，不能据此还原更早的真实历史。RibiWebGUI 对进行中步骤只显示开始时间，对已完成步骤只显示完成时间，未开始步骤不显示时间。`currentStep` 保留为当前进展说明，不再承担步骤列表或步骤身份。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用。
 
 需要审批的当前步骤应带完整 `approvalRequest`。`request` 和 `reason` 说明批准事项与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围。`files / commands / changes` 至少一类非空，其余项目建议明确填写。读取旧计划仍兼容；缺合同的审批步骤会由 Manager 标为 `presentation.approval.state=incomplete` 并在双端展示缺失项，但用户仍可提交审批意见。该提示用于让 Agent 根据意见补充计划，不限制用户决策。
 
 `taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。目前只支持 `agentType=codex`。`sessionId` 是必填的完整执行任务 ID；`sessionTitle` 只用于展示，`workspace` 用于 Stop Hook 的安全校验。`completionHook.enabled=true` 时，Manager 在该会话完成一轮后把官方最终回答经现有角色面板链投给同人格 Route；`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划顶层为 `暂停` 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
+
+收到完成提醒后，主人格 Agent 才是计划调度者：同一轮读取计划和任务真实状态，消费阶段结果，PATCH 计划步骤与记忆；若计划仍未终态、未暂停且没有真实阻塞，立即通过 `/api/agent/threads` 的 `action=send` 向该计划自身 `taskBinding.sessionId + workspace` 精确续投，不能按协助槽名称猜测。计划完成或暂停时，以 `taskBinding=null` 解除绑定但不删除 Desktop 任务，并把空闲协助槽分配给下一条可推进计划。每次完成回传、heartbeat 或恢复巡检都应并行占满可用槽位，并在结束前满足 `可推进但空闲的计划数 = 0`；已处于 `active/in-progress` 的任务不重复投递。等待审批或负责人时只执行已有授权范围内的询问、追问和补证据，不越过动作门禁。
 
 目标 Codex Route 必须已有精确任务 ID，且不得与执行会话相同。一个执行会话绑定多个计划、workspace 不一致、执行会话上下文人格与计划人格不一致、指定 gateway 不存在或未绑定该人格、同人格存在多个 gateway 却未指定 `gatewayId` 时都失败关闭。此能力在双真实 Desktop 任务验收前保持实验状态。
 
@@ -536,7 +545,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 - 新计划先设为 `未开始`。
 - 已确认要推进或当前正在关注时设为 `进行中`。
-- 等用户或外部系统时仍保持 `进行中`，用 `waitingFor` 写清等待对象；如果已无法继续，用当前步骤的 `blockedBy` 写清阻塞原因。
+- 等用户或外部系统时仍保持 `进行中`，用 `waitingFor` 写清对象；每次巡检都把当前步骤当成询问/追问动作并持续到得到结果。只有所有已授权动作都不可执行时，才在当前步骤同时写 `isBlocked=true` 与 `blockedBy`。
 - 用户明确要求暂时停止推进时设为 `暂停`，保留当前 `进行中` 步骤与 `currentStepId`，并停止继续驱动绑定任务；恢复时把顶层状态改回 `进行中`。
 - 完成后设为 `已完成`，写入 `completedAt`。
 - `已完成` 距离最后一次 `updatedAt` 超过当前固定 72 小时后，由角色知识快照设为 `已归档`，写入 `archivedAt`，并移动到 `archive/`。
@@ -561,7 +570,7 @@ Agent 从 QQ 等其它入口获得审批后，也可以调用同一接口，以 
 
 ## Manager 展示顺序与计划视图
 
-Manager 的计划 API 会附加只读 `presentation.status` / `presentation.tone`，用于表达“阻塞中”和“待QA测试”等不回写文件的显示状态；其中“阻塞中”只用于当前步骤存在明确人工审批/授权门禁且确有阻塞原因的计划。编译、测试、Unity/MCP、同步、进包等可继续重试或推进的执行问题仍显示“进行中”，QA 等待显示“待QA测试”，不会仅因存在 `blockedBy` 文本就误标为审批阻塞。顶层 `暂停` 使用独立灰蓝色板，只属于 `plans` 视图，不派生阻塞、QA 或审批状态。`presentation.views` 统一给出计划所属的 `current / plans / archived` 视图，`presentation.palette` 为同一状态提供统一的 `accent`、`background` 和 `foreground` 色值。`presentation.approval.state` 分为 `none / incomplete / ready`，并统一返回 `missing` 与规范化 `contract`；`incomplete` 和 `ready` 都允许用户提交审批意见，区别仅在于前者会提醒 Agent 补充执行说明。除暂停外，列表先排 `ready`，再排 `incomplete`，其后按“阻塞中 → 待QA测试 → 进行中 → 未开始 → 已完成 → 已归档”和 `updatedAt` 排序；`暂停` 无论审批合同或更新时间如何都绝对排在最后。近期记忆和沉淀记忆也由 Manager 按 `updatedAt` 从新到旧返回。
+Manager 的计划 API 会附加只读 `presentation.status` / `presentation.tone`，用于表达“阻塞中”和“待QA测试”等不回写文件的显示状态。“阻塞中”只由当前步骤或兼容顶层的 `isBlocked=true` 与非空 `blockedBy` 派生；等待负责人、审批、评审或外部结果仍显示“进行中”，审批能力也不会自动变成阻塞。编译、测试、Unity/MCP、同步、进包等可继续重试或推进的问题同样显示“进行中”，QA 等待显示“待QA测试”。WebGUI 与 Qt 只消费 Manager 的派生结果，不根据原始 `blockedBy` 自行标红。顶层 `暂停` 使用独立灰蓝色板，只属于 `plans` 视图，不派生阻塞、QA 或审批状态。`presentation.views` 统一给出计划所属的 `current / plans / archived` 视图，`presentation.palette` 为同一状态提供统一的 `accent`、`background` 和 `foreground` 色值。`presentation.approval.state` 分为 `none / incomplete / ready`，并统一返回 `missing` 与规范化 `contract`；`incomplete` 和 `ready` 都允许用户提交审批意见，区别仅在于前者会提醒 Agent 补充执行说明。除暂停外，列表先排 `ready`，再排 `incomplete`，其后按“阻塞中 → 待QA测试 → 进行中 → 未开始 → 已完成 → 已归档”和 `updatedAt` 排序；`暂停` 无论审批合同或更新时间如何都绝对排在最后。近期记忆和沉淀记忆也由 Manager 按 `updatedAt` 从新到旧返回。
 
 Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、视图分类、状态色板和既有顺序。两端重叠分类统一为“当前 / 计划 / 近期记忆 / 已归档”：当前包含进行中计划与近期记忆，暂停计划只进入计划分类，已归档包含归档计划与沉淀记忆。两端不直接读取 `data/`，也不各自维护状态识别、分类、状态颜色或排序规则。
 

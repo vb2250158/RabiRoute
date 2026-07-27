@@ -52,6 +52,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
   "napcatHttpUrl": "http://127.0.0.1:3000",
   "codexThreadName": "QQ message listener",
   "codexCwd": "C:/Path/To/Your/Project",
+  "codexPlanAssistantSessions": [],
   "codexHooks": {
     "sessionContextEnabled": true,
     "reasoningContextEnabled": true,
@@ -79,6 +80,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `webhookPort` / `webhookPath`: generic webhook endpoint; the port falls back to `gatewayPort`, and the default path is `/webhook`.
 - `agentAdapters`: handler IDs. Codex is verified; Copilot CLI and AstrBot are experimental; Marvis is a manual handoff.
 - `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. An archived saved ID first rebinds to the unique latest active same-name task in the same workspace; if none exists it blocks and requires restore/reselection. It never permits replacement creation. Typing a new name explicitly clears the old ID before name lookup. One or more exact same-name/workspace matches bind the unique latest `updatedAt`; only zero matches for an empty, invalid, or missing ID may create, and a tied or unusable maximum requires selection.
+- `codexPlanAssistantSessions`: exact persistent Desktop-task bindings used as plan-assistant slots. Each entry keeps the full task ID, visible name, workspace, one-based slot index, and initialization time. One slot is named `<main task name> 协助处理计划`; multiple slots use `<main task name> 协助处理计划1`, `...2`, and so on. Expanding from one slot renames the original task to slot 1; shrinking detaches extra tasks from the Route without deleting Desktop tasks. An assistant task may create temporary child agents for parallel work, but remains the long-lived plan owner responsible for aggregation, plan updates, and reporting back to the main task. Real multi-task Desktop acceptance is still pending, so this feature is presented as experimental.
 - `codexHooks.sessionContextEnabled`: defaults to `true`. Controls `SessionStart` / `UserPromptSubmit`, triggered when a Codex task starts, resumes, clears, or compacts and when the user submits a new message.
 - `codexHooks.reasoningContextEnabled`: defaults to `true`. Controls `PreToolUse` / `PostToolUse`, triggered before and after tool calls and returning only newly matched plan, memory, or skill context for the turn.
 - `codexHooks.planTaskCompletionEnabled`: defaults to `true`. Controls `Stop` completion reminders after a plan-bound execution task outputs its final answer for the turn. Delivery uses role-panel, Forwarding, AgentPacket, and the target persona Route's handler task. Turning it off only makes Manager ignore or reject the Hook; it does not unregister or rewrite the Codex plugin Hook.

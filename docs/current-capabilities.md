@@ -64,7 +64,8 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 路由规则保存在人格根级 `personaConfig.json` 中；多条 Route 绑定同一人格时复用同一套规则、语音关键词和上下文额度。无人格 route 会生成默认规则；角色面板规则始终存在。
 - 当前 route kind：`private`、`group_message`、`direct_at`、`direct_reply`、`indirect_reply`、`heartbeat`、`manual_trigger`、`role_panel_message`、`plan_feedback`、`voice_transcript`、`rabilink`、`wearable_health_alert`、`wecom_message`、`weixin_message`。
 - `RouteDecision` 只负责规则匹配；`forwarding.ts` 遍历 active route profile、写审计并投递每一条命中规则。
-- `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`；Heartbeat 与 `plan_feedback` 固定省略历史段。
+- `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`；配置了持久计划协助任务时，还注入每个槽位的完整 ID、名称、workspace 和分配规则。Heartbeat 与 `plan_feedback` 固定省略历史段。
+- 持久计划协助任务采用两级并发：主任务把一条未完成计划绑定到一个协助槽；协助任务可以再开临时子 Agent，但必须保留长期 owner、汇总结果、更新计划并回传主任务。主人格收到阶段结果后必须同轮消费并按计划自身 `taskBinding` 精确续投；计划完成或暂停后立即释放槽位并分配给下一条可推进计划，多个独立计划应并行占满可用槽位。代码、配置和契约测试已覆盖，真实 Desktop 多任务可见性与工具 owner 尚未纵向验收，因此该能力仍为实验状态。
 - 人格 `recentMessageLimits` 对普通消息端分别限制 `0–200` 条，默认 `12`；`0` 只关闭注入。Heartbeat 始终按 `0` 处理。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
 - 已匹配的普通消息直接 `steer/start` Desktop owner；Heartbeat 可专门配置忙碌跳过，语音可专门配置热/关键词投递。
 - Delivery replay 已实现：真实投递会写 `delivery-replay-ledger.jsonl`，可按 attempt 或消息记录重新进入投递链。
@@ -116,7 +117,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 计划、近期记忆、沉淀记忆、整理 run 和技能索引均有 Manager API 和文件真源。
 - AgentPacket 的 `message_delivery` 与 Codex 的 session、prompt、PreToolUse、PostToolUse 都进入 `RabiContextManager`；生产代码只有这个入口执行角色知识快照。消息入口使用完整上下文，推理期只注入本 turn 新命中的增量。
 - Codex 处理端已有 Hook 管理：会话入口上下文在 `SessionStart` / `UserPromptSubmit` 触发，推理期上下文刷新在 `PreToolUse` / `PostToolUse` 触发，计划任务会话完成通知在计划绑定任务输出最终回答后的 `Stop` 触发；三组默认开启，开关只控制 Manager 响应，不改插件注册。
-- 实验性的计划会话任务完成提醒已实现：计划用 `taskBinding` 精确绑定 Codex 执行会话，省略 `completionHook` 时默认开启，也可用 `completionHook.enabled=false` 单独关闭。`Stop` Hook 把官方最终回答交给 Manager，再经角色面板 / Forwarding / AgentPacket 提醒同人格 Route 的目标会话。它按 session + turn 去重，不自动推进计划，冲突失败关闭；目前只有代码、HTTP、插件和 mock RolePanel 链测试，尚未完成双真实 Desktop 任务验收。
+- 实验性的计划会话任务完成提醒已实现：计划用 `taskBinding` 精确绑定 Codex 执行会话，省略 `completionHook` 时默认开启，也可用 `completionHook.enabled=false` 单独关闭。`Stop` Hook 把官方最终回答交给 Manager，再经角色面板 / Forwarding / AgentPacket 提醒同人格 Route 的主人格会话。路由层按 session + turn 去重且不自行修改计划；提醒合同要求主人格在同一轮读取计划、更新计划和记忆、向原 `taskBinding.sessionId + workspace` 续投，或在完成/暂停时释放并重新分配槽位，结束前校验没有可推进但空闲的计划。冲突失败关闭；目前只有代码、HTTP、插件和 mock RolePanel 链测试，尚未完成双真实 Desktop 任务验收。
 - 命中记忆会按统一策略刷新 `viewedAt`；同一 turn 的相同条目修订不会重复刷新。只有显式 `memory-consolidation` 手动触发或 Manager API request 才会创建整理 run，提交结果后才标记输入并写入沉淀记忆；当前没有仅凭时间流逝自动启动的后台整理调度器。
 - Codex 插件只转发 lifecycle 事件和注入 Manager 返回值，不拥有绑定、触发策略或知识副本。内部 `preview` 策略无副作用，但当前仍没有 WebGUI 预览界面。
 - 运行记录以 JSONL 为主，包括消息、适配器日志、AgentPacket、Outbox、heartbeat、manual trigger、role panel、RabiLink conversation、按角色的 wearable health 时间线和 delivery replay。

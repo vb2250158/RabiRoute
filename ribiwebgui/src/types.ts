@@ -1,5 +1,6 @@
 import type {
   AgentAdapterType,
+  CodexPlanAssistantSession,
   CodexHookSettings,
   GatewayDefinition,
   MessageAdapterPolicies,
@@ -17,6 +18,7 @@ import type { PlanFeedbackAttachment } from "@shared/planFeedbackContract";
 
 export type {
   AgentAdapterType,
+  CodexPlanAssistantSession,
   CodexHookSettings,
   GatewayDefinition,
   MessageAdapterPolicies,
@@ -198,7 +200,9 @@ export type RolePlanStep = {
   status: "未开始" | "进行中" | "已完成";
   detail?: string;
   waitingFor?: string;
+  isBlocked?: boolean;
   blockedBy?: string;
+  startedAt?: string;
   completedAt?: string;
   approvalRequest?: RolePlanApprovalContract;
 };
@@ -238,6 +242,7 @@ export type RolePlan = {
   currentStepId?: string;
   nextAction?: string;
   waitingFor?: string;
+  isBlocked?: boolean;
   blockedBy?: string;
   attachments: PlanAttachmentPresentation[];
   steps: RolePlanStep[];

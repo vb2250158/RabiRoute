@@ -197,10 +197,22 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   assert.match(styles, /\.knowledge-plan-media-preview-stage video\s*\{[\s\S]*?background:\s*#000/);
 });
 
-test("paused plans keep the resume step without rendering legacy blocker text", () => {
+test("step blocker styling follows Manager presentation instead of raw blockedBy text", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
 
-  assert.match(page, /plan\.presentation\.tone !== 'paused' && step\.blockedBy/);
-  assert.match(page, /plan\.presentation\.tone !== "paused" && step\.blockedBy \? "已阻塞" : step\.status/);
+  assert.match(page, /function stepIsBlocked[\s\S]*?plan\.presentation\.tone === "blocked"/);
+  assert.match(page, /blocked: stepIsBlocked\(plan, step\)/);
+  assert.match(page, /stepIsBlocked\(plan, step\) && step\.blockedBy/);
+  assert.match(page, /stepIsBlocked\(plan, step\) \? "已阻塞" : step\.status/);
+  assert.doesNotMatch(page, /plan\.presentation\.tone !== ['"]paused['"] && step\.blockedBy/);
+});
+
+test("plan steps show only the lifecycle time relevant to their current status", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+
+  assert.match(page, /step\.status === '进行中' && step\.startedAt[\s\S]*?开始时间[\s\S]*?formatDate\(step\.startedAt\)/);
+  assert.match(page, /step\.status === '已完成' && step\.completedAt[\s\S]*?完成时间[\s\S]*?formatDate\(step\.completedAt\)/);
+  assert.doesNotMatch(page, /step\.status === '未开始'[\s\S]{0,120}formatDate/);
 });

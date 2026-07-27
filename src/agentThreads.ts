@@ -4,6 +4,7 @@ import {
   createCodexThread,
   listCodexThreads,
   readCodexThread,
+  renameCodexThread,
   sendCodexThreadMessage,
   type CodexThreadCreateResult,
   type CodexTurnSandbox
@@ -22,7 +23,7 @@ const defaultListLimit = 100;
 const maxResolveCandidates = 10_000;
 
 export type AgentThreadRequest = {
-  action?: "list" | "read" | "resolve" | "create" | "send";
+  action?: "list" | "read" | "resolve" | "create" | "rename" | "send";
   query?: string;
   limit?: number;
   offset?: number;
@@ -52,6 +53,7 @@ export type AgentThreadDriver = {
     developerInstructions: string;
     sandbox: CodexTurnSandbox;
   }) => Promise<CodexThreadCreateResult>;
+  rename?: (params: { threadId: string; title: string; cwd: string }) => Promise<AgentThreadSummary>;
   send: (params: { threadId: string; prompt: string; cwd: string; sandbox: CodexTurnSandbox }) => Promise<void>;
 };
 
@@ -70,6 +72,7 @@ const defaultDriver: AgentThreadDriver = {
   list: listCodexThreads,
   read: readCodexThread,
   create: createCodexThread,
+  rename: renameCodexThread,
   send: sendCodexThreadMessage
 };
 
@@ -356,6 +359,15 @@ export async function handleAgentThreadRequest(
     return { statusCode: 201, data: { action, thread, sandbox } };
   }
 
+  if (action === "rename") {
+    const threadId = normalizeThreadId(request.threadId);
+    const title = normalizeCodexThreadTitle(requiredText(request.title, "title", maxTitleInputLength));
+    const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
+    if (!driver.rename) throw new Error("Agent thread rename is not supported by this driver.");
+    const thread = await driver.rename({ threadId, title, cwd });
+    return { statusCode: 200, data: { action, thread } };
+  }
+
   if (action === "send") {
     const threadId = normalizeThreadId(request.threadId);
     const prompt = requiredText(request.prompt, "prompt", maxPromptLength);
@@ -365,5 +377,5 @@ export async function handleAgentThreadRequest(
     return { statusCode: 202, data: { action, threadId, status: "started", sandbox } };
   }
 
-  throw new Error("Unsupported Agent thread action. Expected list, read, resolve, create, or send.");
+  throw new Error("Unsupported Agent thread action. Expected list, read, resolve, create, rename, or send.");
 }

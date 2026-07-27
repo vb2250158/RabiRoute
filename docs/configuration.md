@@ -48,6 +48,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
   "napcatHttpUrl": "http://127.0.0.1:3000",
   "codexThreadName": "QQ 消息监听",
   "codexCwd": "C:/Path/To/Your/Project",
+  "codexPlanAssistantSessions": [],
   "codexHooks": {
     "sessionContextEnabled": true,
     "reasoningContextEnabled": true,
@@ -85,6 +86,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `agentAdapters`：Agent 端适配器列表。当前支持 `codex`、`copilotCli`、`astrbot`、`marvis`。成熟度分别是：Codex 已验证；Copilot CLI、AstrBot 实验支持；Marvis 仅人工接力。
 - `codexThreadId` / `codexThreadName`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID 与可见名称。有效且同工作目录的未归档 ID 是稳定身份；保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录查找；一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
 - `codexCwd`：目标 Desktop 任务的项目目录。它用于校验已保存 ID、同名任务消歧和新建位置；选择已有任务时自动采用任务自己的目录。
+- `codexPlanAssistantSessions`：当前 Route 精确绑定的持久计划协助任务列表，保存完整任务 ID、可见名称、workspace、槽位序号和初始化时间。1 个时命名为“`<主会话名> 协助处理计划`”；多个时命名为“`<主会话名> 协助处理计划1`”“…计划2”。从 1 个扩容时会把原任务改名为“…计划1”；缩容只从 Route 解绑多余任务，不删除 Desktop 任务。协助任务可创建临时子 Agent 并行工作，但仍是计划长期 owner，负责汇总、更新计划和回传主会话。该多任务能力尚未完成真实 Desktop 纵向验收，当前按实验能力展示。
 - `codexHooks.sessionContextEnabled`：默认 `true`。控制 `SessionStart` / `UserPromptSubmit`；打开、恢复、清空或压缩 Codex 任务，以及用户提交新消息时触发。
 - `codexHooks.reasoningContextEnabled`：默认 `true`。控制 `PreToolUse` / `PostToolUse`；Codex 调用工具前后触发，只返回本轮新命中的计划、记忆或技能上下文。
 - `codexHooks.planTaskCompletionEnabled`：默认 `true`。控制 `Stop` 完成提醒；绑定计划的执行任务输出本轮最终回答后触发，经角色面板、Forwarding、AgentPacket 和 Agent adapter 投递到该人格 Route 绑定的会话。关闭只让 Manager 忽略或拒绝对应 Hook，不卸载或改写 Codex 插件 Hook。

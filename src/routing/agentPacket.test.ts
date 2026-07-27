@@ -296,6 +296,138 @@ test("AgentPacket omits persona voice identity paths from non-audio role panel m
   assert.equal(packet.templateValues.voiceIdentitiesPath, undefined);
 });
 
+test("AgentPacket exposes exact persistent plan assistant bindings and child-agent ownership rules", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-assistant-"));
+  const previousSessions = config.codexPlanAssistantSessions;
+  config.codexPlanAssistantSessions = [{
+    threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
+    threadName: "建造师 策划 程序 协助处理计划1",
+    workspace: process.cwd(),
+    index: 1
+  }];
+  try {
+    const rule: NotificationRule = {
+      id: "plan-assistant",
+      name: "plan assistant",
+      enabled: true,
+      routeKinds: ["manual_trigger"],
+      template: ""
+    };
+    const route: RouteProfile = {
+      id: "route-plan-assistant",
+      name: "plan assistant route",
+      enabled: true,
+      recentMessageLimit: 0,
+      resolvedPipeline: resolvePipeline("agent"),
+      agentRoleId: "XinghaiBuilder",
+      agentRoleFile: path.join(dataDir, "AGENTS.md"),
+      rolesDir: dataDir,
+      dataDir,
+      routeVariables: {},
+      notificationRules: [rule]
+    };
+    const decision: RouteDecision = {
+      route,
+      routeKind: "manual_trigger",
+      record: {
+        time: 1,
+        source: "manual",
+        rawMessage: "推进计划"
+      },
+      extraValues: {},
+      matchedRules: [rule],
+      routeVariables: {},
+      routeText: "推进计划"
+    };
+
+    const packet = buildAgentPacket(decision, rule, {
+      roleId: "XinghaiBuilder",
+      roleDir: dataDir,
+      rolePath: path.join(dataDir, "AGENTS.md"),
+      dataDir
+    });
+
+    assert.match(packet.message, /\[计划协助会话\]/);
+    assert.match(packet.message, /threadId=019fa314-2c07-7523-896f-9bb6b638054b/);
+    assert.match(packet.message, /协助会话可以再开临时子 Agent/);
+    assert.match(packet.message, /仍负责汇总、更新计划和回传主会话/);
+    assert.match(packet.message, /每次收到计划协助任务的完成提醒.*同一轮/);
+    assert.match(packet.message, /taskBinding\.sessionId \+ workspace/);
+    assert.match(packet.message, /不得仅按槽位名称/);
+    assert.match(packet.message, /PATCH taskBinding=null/);
+    assert.match(packet.message, /并行占满所有可用槽位/);
+    assert.match(packet.message, /可推进但空闲的计划数 = 0/);
+  } finally {
+    config.codexPlanAssistantSessions = previousSessions;
+  }
+});
+
+test("AgentPacket tells the Agent to inquire on every inspection while a plan is waiting", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-inquiry-"));
+  const planId = "plan-waiting-owner-answer";
+  const planDir = path.join(roleDir, "plans", "items", "active");
+  fs.mkdirSync(planDir, { recursive: true });
+  fs.writeFileSync(path.join(planDir, `${planId}.json`), JSON.stringify({
+    id: planId,
+    title: "等待负责人答复",
+    focus: "取得明确业务口径",
+    status: "进行中",
+    currentStepId: "ask-owner",
+    waitingFor: "负责人回复",
+    blockedBy: "负责人尚未确认",
+    steps: [{
+      id: "ask-owner",
+      title: "询问负责人并取得明确结果",
+      status: "进行中",
+      waitingFor: "负责人回复",
+      blockedBy: "负责人尚未确认"
+    }],
+    createdAt: "2026-07-27T00:00:00.000Z",
+    updatedAt: "2026-07-27T00:00:00.000Z",
+    keywords: ["负责人", "确认"]
+  }), "utf8");
+
+  const rule: NotificationRule = {
+    id: "plan-inquiry",
+    name: "plan inquiry",
+    enabled: true,
+    routeKinds: ["manual_trigger"],
+    template: `巡检 ${planId}`
+  };
+  const route: RouteProfile = {
+    id: "route-plan-inquiry",
+    name: "plan inquiry route",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "XinghaiBuilder",
+    agentRoleFile: path.join(roleDir, "persona.md"),
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "manual_trigger",
+    record: { time: 1, source: "manual", rawMessage: `巡检 ${planId}` },
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: `巡检 ${planId}`
+  }, rule, {
+    roleId: "XinghaiBuilder",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  assert.match(packet.message, /等待对象：负责人回复/);
+  assert.match(packet.message, /巡检动作：主动询问或追问，直到取得明确结果/);
+  assert.match(packet.message, /待确认说明：负责人尚未确认/);
+  assert.doesNotMatch(packet.message, /阻塞原因：负责人尚未确认/);
+});
+
 test("AgentPacket routes plan approval responses back to the plan instead of leaving them in Codex", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-feedback-"));
   fs.mkdirSync(path.join(roleDir, "conversation"), { recursive: true });

@@ -430,8 +430,11 @@ class PlanDetailPanel(QFrame):
 
     def _step_widget(self, index: int, step: PlanStep) -> QFrame:
         tone = _plan_step_tone(step, self.plan.current_step_id)
-        paused = self.plan.display_tone == "paused" or self.plan.status == "暂停"
-        step_blocker = "" if paused else step.blocked_by or (self.plan.blocked_by if tone == "current" else "")
+        step_blocker = (
+            step.blocked_by or self.plan.blocked_by
+            if tone == "current" and self.plan.display_tone == "blocked"
+            else ""
+        )
         display_tone = "blocked" if tone == "current" and step_blocker else tone
         row = QFrame()
         row.setObjectName("planStepRow")
@@ -687,7 +690,7 @@ def _plan_step_tone(step: PlanStep, current_step_id: str = "") -> str:
 
 
 def _plan_blocker(plan: PlanItem) -> str:
-    if plan.display_tone == "paused" or plan.status == "暂停":
+    if plan.display_tone != "blocked":
         return ""
     if plan.current_step_id:
         for step in plan.steps:

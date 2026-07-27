@@ -8,6 +8,22 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased - 2026-07-27
 
+### Persistent plan-assistant tasks
+
+- A Route can create and bind 1–8 persistent Codex Desktop plan-assistant tasks by exact ID plus workspace. One slot uses `<main task name> 协助处理计划`; multiple slots use numbered suffixes. Expanding from one slot renames the original task, while shrinking only detaches extra bindings and never deletes Desktop tasks.
+- An assistant task is the long-lived owner of one unfinished plan. It may create temporary child agents for parallel investigation or execution, but must aggregate their results, update the plan, and report back to the main task. AgentPacket, Stop Hook delivery, and slot release use the exact task binding. Real Desktop multi-task visibility and tool-owner acceptance remain pending, so the UI marks the capability experimental.
+- After an assistant stage result returns, the main persona must update the plan and memory and continue the plan's exact `taskBinding` in the same turn. Completion or pause releases the slot immediately for the next actionable plan. Independent plans should fill all available slots in parallel, and each turn must end with `actionable but idle plan count = 0`.
+
+### Active inquiry for waiting plans and explicit blocked state
+
+- Plans now have an explicit `isBlocked` fact. `waitingFor` names who or what every inspection must ask or follow up with; waiting for an owner, approval, review, QA, or an external artifact no longer automatically renders as blocked. Manager derives `Blocked` only when inquiry, escalation, retry, and alternatives are all unavailable and both `isBlocked=true` and `blockedBy` are present. Approval capability remains independent.
+- RibiWebGUI and the Qt tray no longer recolor raw `blockedBy` text and consume only Manager's shared `presentation`. The public Rabi plan-tracking Skill, example heartbeat, AgentPacket, and plan-task completion reminder now require every inspection to ask or follow up on each `waitingFor` until a clear result arrives; idle waiting tasks remain actionable.
+
+### Plan-step start and completion times
+
+- Manager now writes `startedAt` when a plan step first becomes `进行中`, then writes `completedAt` while preserving the start time when it becomes `已完成`. Reopening clears the stale completion time, and resetting to `未开始` clears both. Legacy steps missing timestamps are backfilled on the next plan write without pretending to reconstruct older history.
+- After a plan is expanded, RibiWebGUI shows only the start time for in-progress steps, only the completion time for completed steps, and no time for not-started steps. Manager-owned plan JSON remains the single source of truth; the browser does not infer lifecycle times.
+
 ### Experimental personal-Weixin OpenClaw/iLink prototype
 
 - Added a dedicated `weixin` message adapter, `weixin_message` route kind, and `weixin_chat` pipeline. A Route can request an OpenClaw/iLink QR code, persist private login/sync state, long-poll personal-Weixin messages, forward text, and record media without waking the Agent.

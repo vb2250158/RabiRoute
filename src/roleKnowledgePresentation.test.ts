@@ -31,7 +31,7 @@ function plan(patch: Partial<PlanItem> & Pick<PlanItem, "id" | "title">): PlanIt
   };
 }
 
-test("plan presentation only marks explicit human gates as blocked", () => {
+test("plan presentation only marks explicitly non-actionable steps as blocked", () => {
   const executableFailure = plan({
     id: "executable-failure",
     title: "Executable failure",
@@ -46,7 +46,23 @@ test("plan presentation only marks explicit human gates as blocked", () => {
       id: "approve",
       title: "等待批准修改生产文件",
       status: "进行中",
+      isBlocked: true,
       blockedBy: "未经批准不得修改",
+      approvalRequest: approvalRequest()
+    }]
+  });
+  const awaitingOwnerAnswer = plan({
+    id: "awaiting-owner-answer",
+    title: "Awaiting owner answer",
+    currentStepId: "ask-owner",
+    waitingFor: "负责人回复",
+    blockedBy: "负责人尚未确认",
+    steps: [{
+      id: "ask-owner",
+      title: "询问负责人并取得明确结果",
+      status: "进行中",
+      waitingFor: "负责人回复",
+      blockedBy: "负责人尚未确认",
       approvalRequest: approvalRequest()
     }]
   });
@@ -89,8 +105,9 @@ test("plan presentation only marks explicit human gates as blocked", () => {
     title: "Paused",
     status: "暂停",
     currentStepId: "hold",
+    isBlocked: true,
     blockedBy: "用户要求暂时跳过",
-    steps: [{ id: "hold", title: "保留恢复位置", status: "进行中", blockedBy: "用户要求暂时跳过" }]
+    steps: [{ id: "hold", title: "保留恢复位置", status: "进行中", isBlocked: true, blockedBy: "用户要求暂时跳过" }]
   });
 
   assert.equal(planPresentation(blocked).status, "阻塞中");
@@ -105,6 +122,9 @@ test("plan presentation only marks explicit human gates as blocked", () => {
   assert.equal(planPresentation(executableFailure).status, "进行中");
   assert.equal(planPresentation(executableFailure).tone, "running");
   assert.equal(planPresentation(executableFailure).approval.enabled, false);
+  assert.equal(planPresentation(awaitingOwnerAnswer).status, "进行中");
+  assert.equal(planPresentation(awaitingOwnerAnswer).tone, "running");
+  assert.equal(planPresentation(awaitingOwnerAnswer).approval.state, "ready");
   assert.equal(planPresentation(qa).status, "待QA测试");
   assert.equal(planPresentation(qa).tone, "qa");
   assert.deepEqual(planPresentation(qa).palette, {
@@ -157,6 +177,8 @@ test("approval capability is Manager-owned and follows the current human gate", 
     missing: [],
     contract: approvalRequest()
   });
+  assert.equal(planPresentation(item).status, "进行中");
+  assert.equal(planPresentation(item).tone, "running");
 });
 
 test("plans awaiting approval sort first, then by Manager presentation status and newest update", () => {
@@ -170,9 +192,9 @@ test("plans awaiting approval sort first, then by Manager presentation status an
       steps: [{ id: "verify", title: "待 QA 测试", status: "进行中", approvalRequest: approvalRequest() }],
       updatedAt: "2026-07-22T03:00:00.000Z"
     }),
-    plan({ id: "blocked-old", title: "Blocked old", blockedBy: "External dependency", updatedAt: "2026-07-20T03:00:00.000Z" }),
+    plan({ id: "blocked-old", title: "Blocked old", isBlocked: true, blockedBy: "External dependency", updatedAt: "2026-07-20T03:00:00.000Z" }),
     plan({ id: "qa-new", title: "QA new", waitingFor: "等待验收", updatedAt: "2026-07-23T03:00:00.000Z" }),
-    plan({ id: "blocked-new", title: "Blocked new", blockedBy: "Missing build", updatedAt: "2026-07-21T03:00:00.000Z" }),
+    plan({ id: "blocked-new", title: "Blocked new", isBlocked: true, blockedBy: "Missing build", updatedAt: "2026-07-21T03:00:00.000Z" }),
     plan({ id: "pending", title: "Pending", status: "未开始", updatedAt: "2026-07-25T03:00:00.000Z" }),
     plan({ id: "completed", title: "Completed", status: "已完成", updatedAt: "2026-07-27T03:00:00.000Z" }),
     plan({ id: "archived", title: "Archived", status: "已归档", updatedAt: "2026-07-27T04:00:00.000Z" }),
@@ -188,10 +210,10 @@ test("plans awaiting approval sort first, then by Manager presentation status an
 
   assert.deepEqual(sorted.map((item) => item.id), [
     "qa-old",
-    "qa-new",
-    "running",
     "blocked-new",
     "blocked-old",
+    "qa-new",
+    "running",
     "pending",
     "completed",
     "archived",

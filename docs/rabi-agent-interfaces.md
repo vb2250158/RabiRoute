@@ -354,12 +354,13 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 POST http://127.0.0.1:8790/api/agent/threads
 ```
 
-线程桥提供五个动作：
+线程桥提供六个动作：
 
 - `list`：从 Desktop 状态按标题查询本机任务，使用 `offset` / `limit` 分页访问全部结果。
 - `read`：通过完整 `threadId` 只读读取 Desktop 任务元数据。
 - `resolve`：先读取精确 ID。有效 ID、cwd 一致且未归档时直接绑定，不比较可变的 Desktop/SQLite 标题，也不会因展示标题超过新建上限而否定绑定；保存 ID 指向已归档任务时返回 `409 archived`。只有 ID 为空、非法或确实失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列时返回候选。
 - `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。Codex 任务名上限为 240 个 JavaScript 字符单元；更长的输入会由 RabiRoute 安全截断并加省略号，响应和后续配置保存实际创建的名称。
+- `rename`：按完整 `threadId` 和已配置 cwd 修改 Desktop 任务名称，不改变任务身份；用于持久计划协助槽从单个扩容为多个时，把原“协助处理计划”任务改名为“协助处理计划1”。
 - `send`：通过 Desktop IPC 向已有任务 owner start/steer。
 
 查询示例：
@@ -472,8 +473,8 @@ POST /roles/:roleId/plans
     { "name": "acceptance-checklist.pdf", "path": "C:/Path/To/acceptance-checklist.pdf" }
   ],
   "steps": [
-    { "id": "inspect-existing", "title": "检查现有计划接口", "status": "已完成" },
-    { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中" },
+    { "id": "inspect-existing", "title": "检查现有计划接口", "status": "已完成", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中", "startedAt": "2026-07-27T08:10:00.000Z" },
     { "id": "update-docs", "title": "更新双语接口文档", "status": "未开始" }
   ],
   "keywords": ["计划", "记忆", "接口", "上下文"],
@@ -494,7 +495,7 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。`进行中` 计划必须同时提供 `currentStepId`，并让它指向唯一一条状态为 `进行中` 的步骤；界面据此列出全部步骤并标出当前执行位置。用户明确要求暂停时，PATCH 顶层 `status=暂停`，保留这条步骤和 `currentStepId` 作为恢复位置，并停止继续驱动绑定任务；恢复时把顶层状态改回 `进行中`。阻塞时用当前步骤的 `blockedBy` 记录不能继续的原因，并用 `waitingFor` 记录正在等待的对象；界面优先展示阻塞原因，不重复展示已由步骤列表表达的 `nextAction`。旧计划仍可读取，但下次更新时应补齐结构化步骤。计划进入 `已完成` 或 `已归档` 前，所有步骤都必须为 `已完成`。
+新增计划必须提供有序的 `steps`。`进行中` 计划必须同时提供 `currentStepId`，并让它指向唯一一条状态为 `进行中` 的步骤；界面据此列出全部步骤并标出当前执行位置。Manager 会在状态写入时维护步骤 `startedAt/completedAt`：进行中记录开始时间，已完成记录完成时间并保留开始时间，重开时清除旧完成时间，退回未开始时清除两个时间。RibiWebGUI 进行中只显示开始时间、已完成只显示完成时间、未开始不显示。用户明确要求暂停时，PATCH 顶层 `status=暂停`，保留这条步骤和 `currentStepId` 作为恢复位置，并停止继续驱动绑定任务；恢复时把顶层状态改回 `进行中`。等待负责人、审批、评审、QA 或外部结果时用 `waitingFor` 记录对象，Agent 每次巡检都应询问或追问直到取得明确结果，这种等待仍显示为“进行中”。只有询问、升级、重试和替代动作全部不可执行时，才在当前步骤同时写 `isBlocked=true` 与 `blockedBy`；界面只按 Manager 的派生结果显示阻塞，不直接解释原始文案。旧计划仍可读取，但下次更新时应补齐结构化步骤；缺少时间的旧步骤会以该次计划写入时间补齐，不能还原此前真实历史。计划进入 `已完成` 或 `已归档` 前，所有步骤都必须为 `已完成`。
 
 `attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
 
@@ -509,6 +510,8 @@ GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId
 请求审批前，Agent 应 PATCH 当前步骤的 `approvalRequest`，尽量说明 `request`、`reason`、精确 `files / commands / changes`、`validation`、`rollback` 和 `outOfScope`。Manager 只做轻量完整性判断：缺少说明不会阻止计划保存，也不会限制用户审批；API 返回 `presentation.approval.state=incomplete` 和 `missing[]`，双端把缺项与审批输入一起展示。AgentPacket 的共用提示会提醒 Agent 根据用户意见补充真实路径、完整命令和外部目标，不能把“等待授权”长期当成执行说明。
 
 `taskBinding` 可在 POST 或 PATCH 中写入，用于精确绑定一个 Codex 执行会话。当前只接受 `agentType=codex` 和非空完整 `sessionId`；`completionHook.enabled` 必须是布尔值。启用后，Codex `Stop` Hook 把官方 `last_assistant_message` 交给 Manager，Manager 再经同人格的角色面板 / Forwarding / AgentPacket 链提醒目标处理会话。`gatewayId` 在同人格有多个 Route 时必填。提醒按 `sessionId + turnId` 去重，不会自动 PATCH 计划、推进步骤或写记忆。
+
+完成提醒正文要求主人格在同一轮消费结果并继续调度：计划仍可推进时，使用 `/api/agent/threads` 的 `send` 动作向计划自身 `taskBinding.sessionId + workspace` 精确续投；计划完成或暂停时，PATCH `taskBinding=null` 释放槽位，再立即绑定下一条可推进计划。主人格必须检查所有未终态计划和协助槽，结束前满足“可推进但空闲的计划数 = 0”；这属于 Agent 的决策与写入职责，不由 Stop Hook 或 Manager 自动执行。
 
 完成提醒失败不会阻断源 Codex 最终回答，但会记录失败并返回非阻塞系统警告。workspace、人格、gateway 或源/目标任务冲突均失败关闭；未完成双真实 Desktop 任务验收前，该接口能力为实验状态。
 

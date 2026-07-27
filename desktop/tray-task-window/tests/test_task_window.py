@@ -372,6 +372,35 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertNotIn("重装应用", summary_values)
         card.close()
 
+    def test_running_plan_does_not_treat_waiting_text_as_a_blocker(self) -> None:
+        plan = PlanItem(
+            title="等待负责人回复",
+            status="进行中",
+            display_status="进行中",
+            display_tone="running",
+            current_step_id="ask-owner",
+            blocked_by="负责人尚未确认",
+            steps=[
+                PlanStep(
+                    "询问负责人并取得明确结果",
+                    "进行中",
+                    step_id="ask-owner",
+                    blocked_by="负责人尚未确认",
+                )
+            ],
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        card.show()
+        card.set_expanded(True)
+        self.app.processEvents()
+
+        current_callout = card.findChild(QLabel, "planCurrentStepCallout")
+        self.assertEqual(current_callout.text(), "当前执行：第 1 步 · 询问负责人并取得明确结果")
+        self.assertFalse(current_callout.property("blocked"))
+        blocked_rows = [row for row in card.findChildren(QFrame, "planStepRow") if row.property("stepTone") == "blocked"]
+        self.assertEqual(blocked_rows, [])
+        card.close()
+
     def test_waiting_qa_plan_uses_purple_status_badge(self) -> None:
         plan = PlanItem(
             title="等待 QA 的计划",

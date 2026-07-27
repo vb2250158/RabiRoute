@@ -385,6 +385,28 @@ export async function readCodexThread(threadId: string): Promise<unknown> {
   };
 }
 
+export async function renameCodexThread(params: {
+  threadId: string;
+  title: string;
+  cwd: string;
+}): Promise<CodexThreadSummary> {
+  const thread = readCodexDesktopThread(params.threadId);
+  if (!thread) throw new Error(`Codex Desktop task was not found: ${params.threadId}`);
+  if (thread.archived) throw new Error(`Codex Desktop task is archived: ${params.threadId}`);
+  if (!sameCodexWorkspace(thread.cwd, params.cwd)) {
+    throw new Error(`Codex Desktop task belongs to another workspace: ${thread.cwd} != ${params.cwd}`);
+  }
+  const title = normalizeCodexThreadTitle(params.title);
+  await setCodexTaskName(thread.id, title, thread.cwd);
+  return {
+    id: thread.id,
+    title,
+    updatedAt: new Date().toISOString(),
+    cwd: thread.cwd,
+    archived: false
+  };
+}
+
 export async function createCodexThread(params: CodexThreadCreateParams): Promise<CodexThreadCreateResult> {
   const normalizedParams = {
     ...params,

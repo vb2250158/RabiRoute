@@ -77,6 +77,8 @@ export const englishCatalog: Record<string, string> = {
   "文件": "File",
   "暂无进行中的步骤": "No in-progress step",
   "更新时间": "Updated",
+  "开始时间": "Started",
+  "完成时间": "Completed",
   "截止时间": "Due",
   "收起全部步骤": "Collapse all steps",
   "收起计划详情": "Collapse plan details",

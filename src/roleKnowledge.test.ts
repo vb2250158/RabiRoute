@@ -96,6 +96,100 @@ test("plan attachments reject content that does not match a claimed video type",
   }), /does not match its video type/);
 });
 
+test("plan step status transitions record and clear lifecycle timestamps", () => {
+  const roleDir = makeRoleDir();
+  const created = createPlan(roleDir, {
+    id: "plan-step-times",
+    title: "记录步骤时间",
+    focus: "步骤生命周期时间",
+    status: "进行中",
+    currentStepId: "implement",
+    steps: [
+      { id: "inspect", title: "检查现状", status: "已完成" },
+      { id: "implement", title: "实现时间记录", status: "进行中" },
+      { id: "verify", title: "验证结果", status: "未开始" }
+    ],
+    keywords: ["计划", "时间"]
+  });
+
+  const inspect = created.steps[0]!;
+  const implement = created.steps[1]!;
+  const verify = created.steps[2]!;
+  assert.equal(inspect.startedAt, inspect.completedAt);
+  assert.equal(Number.isFinite(Date.parse(inspect.completedAt || "")), true);
+  assert.equal(Number.isFinite(Date.parse(implement.startedAt || "")), true);
+  assert.equal(implement.completedAt, undefined);
+  assert.equal(verify.startedAt, undefined);
+  assert.equal(verify.completedAt, undefined);
+
+  const completed = updatePlan(roleDir, created.id, {
+    status: "进行中",
+    currentStepId: "verify",
+    steps: [
+      { id: "inspect", title: "检查现状", status: "已完成" },
+      { id: "implement", title: "实现时间记录", status: "已完成" },
+      { id: "verify", title: "验证结果", status: "进行中" }
+    ]
+  });
+  assert.equal(completed.steps[1]?.startedAt, implement.startedAt);
+  assert.equal(Number.isFinite(Date.parse(completed.steps[1]?.completedAt || "")), true);
+  assert.equal(Number.isFinite(Date.parse(completed.steps[2]?.startedAt || "")), true);
+
+  const reopened = updatePlan(roleDir, created.id, {
+    status: "进行中",
+    currentStepId: "implement",
+    steps: [
+      { id: "inspect", title: "检查现状", status: "已完成" },
+      { id: "implement", title: "实现时间记录", status: "进行中" },
+      { id: "verify", title: "验证结果", status: "未开始" }
+    ]
+  });
+  assert.equal(reopened.steps[1]?.startedAt, implement.startedAt);
+  assert.equal(reopened.steps[1]?.completedAt, undefined);
+  assert.equal(reopened.steps[2]?.startedAt, undefined);
+
+  const reset = updatePlan(roleDir, created.id, {
+    status: "未开始",
+    currentStepId: undefined,
+    steps: reopened.steps.map((step) => ({ ...step, status: "未开始" }))
+  });
+  assert.equal(reset.steps.every((step) => step.startedAt == null && step.completedAt == null), true);
+});
+
+test("plan blocking is explicit and requires a reason", () => {
+  const roleDir = makeRoleDir();
+  const waiting = createPlan(roleDir, {
+    id: "plan-waiting-inquiry",
+    title: "询问负责人",
+    focus: "等待时持续询问直至得到结果",
+    status: "进行中",
+    currentStepId: "ask-owner",
+    waitingFor: "负责人回复",
+    blockedBy: "负责人尚未确认",
+    steps: [{
+      id: "ask-owner",
+      title: "询问负责人并取得明确结果",
+      status: "进行中",
+      waitingFor: "负责人回复",
+      blockedBy: "负责人尚未确认"
+    }],
+    keywords: ["计划", "询问"]
+  });
+
+  assert.equal(waiting.isBlocked, undefined);
+  assert.equal(waiting.steps[0]?.isBlocked, undefined);
+
+  assert.throws(() => createPlan(roleDir, {
+    id: "plan-blocked-without-reason",
+    title: "缺少阻塞原因",
+    focus: "验证显式阻塞合同",
+    status: "进行中",
+    currentStepId: "blocked",
+    steps: [{ id: "blocked", title: "无法继续", status: "进行中", isBlocked: true }],
+    keywords: ["计划", "阻塞"]
+  }), /must provide blockedBy/);
+});
+
 test("plan attachments enforce count, per-file, and total size limits", () => {
   const roleDir = makeRoleDir();
   const base = {

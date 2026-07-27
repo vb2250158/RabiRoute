@@ -71,6 +71,7 @@ import {
   normalizeGatewayDefinition as sharedNormalizeGatewayDefinition,
   validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
   type CodexHookSettings,
+  type CodexPlanAssistantSession,
   type MessageAdapterPolicies,
   type RecentMessageLimits,
   type SpeechPushMode
@@ -258,6 +259,7 @@ type GatewayDefinition = {
   codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  codexPlanAssistantSessions?: CodexPlanAssistantSession[];
   codexHooks?: CodexHookSettings;
   copilotThreadName?: string;
   copilotCwd?: string;
@@ -943,6 +945,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     codexThreadId: definition.codexThreadId,
     codexThreadName: definition.codexThreadName,
     codexCwd: configPathValue(definition.codexCwd),
+    codexPlanAssistantSessions: definition.codexPlanAssistantSessions,
     codexHooks: definition.codexHooks,
     copilotThreadName: definition.copilotThreadName,
     copilotCwd: configPathValue(definition.copilotCwd),
@@ -1606,6 +1609,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     CODEX_THREAD_ID: definition.codexThreadId?.trim() || "",
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
+    CODEX_PLAN_ASSISTANT_SESSIONS: JSON.stringify(definition.codexPlanAssistantSessions ?? []),
     COPILOT_THREAD_NAME: resolveCopilotThreadName(definition),
     COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
     COPILOT_CWD: resolveProjectPath(definition.copilotCwd, rootDir) ?? resolveProjectPath(process.env.COPILOT_CWD, rootDir) ?? rootDir,
@@ -2874,6 +2878,7 @@ function runtimeStatusWithRoleInfoCache(
     codexThreadId: runtime.definition.codexThreadId,
     codexThreadName: resolveCodexThreadName(runtime.definition),
     codexCwd: runtime.definition.codexCwd,
+    codexPlanAssistantSessions: runtime.definition.codexPlanAssistantSessions ?? [],
     codexHooks: normalizeCodexHookSettings(runtime.definition.codexHooks),
     copilotThreadName: resolveCopilotThreadName(runtime.definition),
     copilotCwd: runtime.definition.copilotCwd,

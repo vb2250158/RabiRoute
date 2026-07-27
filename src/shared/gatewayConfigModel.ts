@@ -16,7 +16,13 @@ import {
   isBuiltinRolePanelRule as sharedIsBuiltinRolePanelRule
 } from "./personaRulePolicy.js";
 import { isCodexTaskId } from "./codexTaskId.js";
+import {
+  normalizeCodexPlanAssistantSessions,
+  type CodexPlanAssistantSession
+} from "./codexPlanAssistantSessions.js";
 import { applySpeechRouteVariableDefaults } from "./speechControlContract.js";
+
+export type { CodexPlanAssistantSession } from "./codexPlanAssistantSessions.js";
 
 export {
   builtinRolePanelRouteKind,
@@ -223,6 +229,7 @@ export type GatewayDefinition = {
   codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  codexPlanAssistantSessions?: CodexPlanAssistantSession[];
   codexHooks?: CodexHookSettings;
   copilotThreadName?: string;
   copilotCwd?: string;
@@ -846,6 +853,9 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
     codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
     codexCwd: normalizeCodexCwd(definition.codexCwd),
+    codexPlanAssistantSessions: agentAdapters.includes("codex")
+      ? normalizeCodexPlanAssistantSessions(definition.codexPlanAssistantSessions)
+      : undefined,
     codexHooks: agentAdapters.includes("codex") ? normalizeCodexHookSettings(definition.codexHooks) : undefined,
     copilotThreadName: definition.copilotThreadName?.trim() || undefined,
     groupNotificationTemplate: normalizeOptionalTemplate(definition.groupNotificationTemplate),

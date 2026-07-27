@@ -475,8 +475,7 @@ export class CodexHookContextService {
       const role = this.requireRole(roleId);
       return listPlans(role.roleDir)
         .filter((plan) => (
-          plan.status !== "已归档"
-          && plan.status !== "暂停"
+          (plan.status === "未开始" || plan.status === "进行中")
           && plan.taskBinding?.agentType === "codex"
           && plan.taskBinding.sessionId === sessionId
           && plan.taskBinding.completionHook?.enabled === true

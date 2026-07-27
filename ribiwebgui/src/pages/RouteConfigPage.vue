@@ -11,6 +11,11 @@ import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSour
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { DEFAULT_CODEX_HOOK_SETTINGS } from "@shared/gatewayConfigModel";
+import {
+  codexPlanAssistantInitializationPrompt,
+  codexPlanAssistantSessionTitles,
+  normalizeCodexPlanAssistantCount
+} from "@shared/codexPlanAssistantSessions";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 
 const store = useGatewayStore();
@@ -28,6 +33,7 @@ const adapterQuery = ref("");
 const configNameError = ref("");
 const codexBinding = ref({ loading: false, error: "", pending: false });
 const codexInitialization = ref({ loading: false, message: "", error: "" });
+const codexPlanAssistants = ref({ count: 1, loading: false, message: "", error: "" });
 const agentScan = ref({
   threadNames: [] as string[],
   cwdOptions: [] as string[],
@@ -3197,6 +3203,108 @@ function addAgent(type: AgentAdapterType): void {
   store.touch();
 }
 
+async function postAgentThreadAction(payload: Record<string, unknown>): Promise<Record<string, any>> {
+  const response = await fetch("/api/agent/threads", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.code === -1) throw new Error(body.message || "Codex Desktop 任务操作失败。");
+  return body;
+}
+
+async function initializeCodexPlanAssistants(): Promise<void> {
+  if (!gateway.value || codexPlanAssistants.value.loading) return;
+  codexPlanAssistants.value = {
+    count: normalizeCodexPlanAssistantCount(codexPlanAssistants.value.count),
+    loading: true,
+    message: "",
+    error: ""
+  };
+  try {
+    if (!String(gateway.value.agentRoleId || "").trim()) {
+      throw new Error("请先为当前 Route 绑定人格，再初始化计划协助会话。");
+    }
+    await store.save();
+    const current = gateway.value;
+    if (!current?.codexThreadId || !current.codexCwd) {
+      throw new Error("主 Codex Desktop 会话尚未完成名称 + ID + workspace 绑定。");
+    }
+    const count = normalizeCodexPlanAssistantCount(codexPlanAssistants.value.count);
+    const sourceThreadName = current.codexThreadName?.trim() || fallbackCodexThreadName();
+    const titles = codexPlanAssistantSessionTitles(sourceThreadName, count);
+    const existing = current.codexPlanAssistantSessions ?? [];
+    const resolved = [] as NonNullable<typeof current.codexPlanAssistantSessions>;
+
+    for (let index = 0; index < titles.length; index += 1) {
+      const desiredTitle = titles[index];
+      const previous = existing[index];
+      const result = previous
+        ? await postAgentThreadAction({
+            action: "rename",
+            threadId: previous.threadId,
+            title: desiredTitle,
+            cwd: previous.workspace || current.codexCwd
+          })
+        : await postAgentThreadAction({
+            action: "resolve",
+            title: desiredTitle,
+            cwd: current.codexCwd
+          });
+      const thread = result.thread;
+      if (!thread?.id) throw new Error(`计划协助会话 ${index + 1} 没有返回完整任务 ID。`);
+      resolved.push({
+        threadId: thread.id,
+        threadName: thread.title || desiredTitle,
+        workspace: thread.cwd || previous?.workspace || current.codexCwd,
+        index: index + 1,
+        initializedAt: previous?.threadId === thread.id ? previous.initializedAt : undefined
+      });
+    }
+
+    current.codexPlanAssistantSessions = resolved;
+    touch();
+    await store.save();
+
+    for (const session of resolved) {
+      if (session.initializedAt) continue;
+      await postAgentThreadAction({
+        action: "send",
+        threadId: session.threadId,
+        cwd: session.workspace,
+        sandbox: "workspace-write",
+        prompt: codexPlanAssistantInitializationPrompt({
+          roleId: current.agentRoleId || "",
+          sourceThreadId: current.codexThreadId,
+          sourceThreadName,
+          workspace: current.codexCwd,
+          count,
+          index: session.index
+        })
+      });
+      session.initializedAt = new Date().toISOString();
+      touch();
+      await store.save();
+    }
+    const detached = Math.max(0, existing.length - resolved.length);
+    codexPlanAssistants.value = {
+      count,
+      loading: false,
+      message: `已绑定 ${resolved.length} 个持久计划协助会话${detached ? `；另有 ${detached} 个旧会话已从 Route 解绑但未删除` : ""}。`,
+      error: ""
+    };
+    await store.load();
+  } catch (error) {
+    codexPlanAssistants.value = {
+      ...codexPlanAssistants.value,
+      loading: false,
+      message: "",
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 function removeAgent(type: AgentAdapterType): void {
   if (!gateway.value) return;
   gateway.value.agentAdapters = agentTypes.value.filter(t => t !== type);
@@ -3306,6 +3414,15 @@ watch(() => gateway.value?.configName, (name) => {
   configNameError.value = "";
   if (name && route.params.id !== name) router.replace(`/routes/${name}`);
 });
+
+watch(() => gateway.value?.id, () => {
+  codexPlanAssistants.value = {
+    count: Math.max(1, gateway.value?.codexPlanAssistantSessions?.length || 1),
+    loading: false,
+    message: "",
+    error: ""
+  };
+}, { immediate: true });
 
 watch(
   () => [store.loading, store.dirty, gateway.value?.id, JSON.stringify((gateway.value?.napcatInstances ?? []).map(instance => ({
@@ -4550,6 +4667,59 @@ watch(
                   <v-alert v-else-if="codexBinding.pending" type="info" variant="tonal" density="compact" class="mt-2 mb-1">
                     尚无同名 Desktop 会话；点击保存时会创建任务、写入完整 ID 并切换绑定。
                   </v-alert>
+                  <div class="dependency-panel mt-3">
+                    <div class="section-title-row compact-row">
+                      <div>
+                        <div class="section-title small-title">计划协助会话</div>
+                        <div class="section-note">持久秘书任务负责计划推进和结果汇总；它们可以再开临时子 Agent，但不会随子 Agent 结束而失去 owner。</div>
+                      </div>
+                    </div>
+                    <v-alert type="warning" variant="tonal" density="compact" class="mt-2 mb-2">
+                      实验能力：代码和契约测试已覆盖精确 ID、命名与复用；仍需在真实 Codex Desktop 中确认多任务可见、同 ID 续投和工具 owner。
+                    </v-alert>
+                    <div class="catalog-param-grid mt-2">
+                      <v-text-field
+                        v-model.number="codexPlanAssistants.count"
+                        type="number"
+                        :min="1"
+                        :max="8"
+                        :step="1"
+                        label="协助会话数量"
+                        hint="1 个时命名为“主会话名 协助处理计划”；多个时依次命名为“…计划1、…计划2”"
+                        persistent-hint
+                      />
+                      <div class="d-flex align-center ga-2 flex-wrap">
+                        <v-btn
+                          color="secondary"
+                          variant="tonal"
+                          prepend-icon="mdi-account-multiple-plus-outline"
+                          :loading="codexPlanAssistants.loading"
+                          :disabled="codexPlanAssistants.loading"
+                          @click="initializeCodexPlanAssistants"
+                        >
+                          创建 / 同步协助会话
+                        </v-btn>
+                      </div>
+                    </div>
+                    <div v-if="gateway.codexPlanAssistantSessions?.length" class="d-flex ga-2 flex-wrap mt-2">
+                      <v-chip
+                        v-for="session in gateway.codexPlanAssistantSessions"
+                        :key="session.threadId"
+                        size="small"
+                        variant="tonal"
+                        color="secondary"
+                        data-no-i18n
+                      >
+                        {{ session.threadName }}
+                      </v-chip>
+                    </div>
+                    <v-alert v-if="codexPlanAssistants.error" type="error" variant="tonal" density="compact" class="mt-2 mb-0">
+                      {{ codexPlanAssistants.error }}
+                    </v-alert>
+                    <v-alert v-else-if="codexPlanAssistants.message" type="success" variant="tonal" density="compact" class="mt-2 mb-0">
+                      {{ codexPlanAssistants.message }}
+                    </v-alert>
+                  </div>
                   <div class="dependency-panel mt-3">
                     <div class="section-title-row compact-row">
                       <div>

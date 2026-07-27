@@ -50,7 +50,9 @@ export type PlanStep = {
   status: PlanStepStatus;
   detail?: string;
   waitingFor?: string;
+  isBlocked?: boolean;
   blockedBy?: string;
+  startedAt?: string;
   completedAt?: string;
   approvalRequest?: PlanApprovalRequest;
 };
@@ -84,6 +86,7 @@ export type PlanItem = {
   currentStepId?: string;
   nextAction?: string;
   waitingFor?: string;
+  isBlocked?: boolean;
   blockedBy?: string;
   attachments: PlanAttachment[];
   steps: PlanStep[];
@@ -539,6 +542,7 @@ function planTextTotal(plan: PlanItem): number {
       step.detail,
       step.waitingFor,
       step.blockedBy,
+      step.startedAt,
       step.completedAt,
       ...approvalRequestText(step.approvalRequest)
     ]),
@@ -648,6 +652,12 @@ function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps
     assertTextLimit("Plan step detail", step.detail, limits.stepDetailChars);
     assertTextLimit("Plan step waitingFor", step.waitingFor, limits.stepWaitingForChars);
     assertTextLimit("Plan step blockedBy", step.blockedBy, limits.stepBlockedByChars);
+    if (step.isBlocked === true && !step.blockedBy?.trim()) {
+      throw new Error("A blocked plan step must provide blockedBy.");
+    }
+    if (step.isBlocked === true && step.status !== "进行中") {
+      throw new Error("Only the in-progress plan step can be blocked.");
+    }
     if (step.approvalRequest) validateApprovalRequest(step.approvalRequest, limits);
   }
 
@@ -689,6 +699,12 @@ function validatePlanWrite(roleDir: string, plan: PlanItem, requireSteps = false
   assertTextLimit("Plan nextAction", plan.nextAction, limits.nextActionChars);
   assertTextLimit("Plan waitingFor", plan.waitingFor, limits.waitingForChars);
   assertTextLimit("Plan blockedBy", plan.blockedBy, limits.blockedByChars);
+  if (plan.isBlocked === true && !plan.blockedBy?.trim()) {
+    throw new Error("A blocked plan must provide blockedBy.");
+  }
+  if (plan.isBlocked === true && plan.status !== "进行中") {
+    throw new Error("Only an in-progress plan can be blocked.");
+  }
   assertTextLimit("Plan source.summary", plan.source?.summary, limits.sourceSummaryChars);
   assertTextLimit("Plan taskBinding.sessionId", plan.taskBinding?.sessionId, 240);
   assertTextLimit("Plan taskBinding.sessionTitle", plan.taskBinding?.sessionTitle, 240);
@@ -783,10 +799,42 @@ function normalizePlanSteps(value: unknown): PlanStep[] {
       status,
       detail: typeof raw.detail === "string" ? raw.detail : typeof raw.description === "string" ? raw.description : undefined,
       waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
+      isBlocked: typeof raw.isBlocked === "boolean" ? raw.isBlocked : undefined,
       blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
+      startedAt: typeof raw.startedAt === "string" ? raw.startedAt : undefined,
       completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
       approvalRequest: normalizeApprovalRequest(raw.approvalRequest)
     }];
+  });
+}
+
+export function planIsBlocked(plan: PlanItem): boolean {
+  if (plan.status === "暂停" || plan.status === "已完成" || plan.status === "已归档") return false;
+  const step = currentPlanStep(plan);
+  if (typeof step?.isBlocked === "boolean") return step.isBlocked;
+  return plan.isBlocked === true;
+}
+
+function recordPlanStepTimes(steps: PlanStep[], previousSteps: PlanStep[], recordedAt: string): PlanStep[] {
+  const previousById = new Map(previousSteps.map((step) => [step.id, step]));
+  return steps.map((step) => {
+    const previous = previousById.get(step.id);
+    if (step.status === "未开始") {
+      return { ...step, startedAt: undefined, completedAt: undefined };
+    }
+    if (step.status === "进行中") {
+      return {
+        ...step,
+        startedAt: step.startedAt || previous?.startedAt || recordedAt,
+        completedAt: undefined
+      };
+    }
+    const completedAt = step.completedAt || previous?.completedAt || recordedAt;
+    return {
+      ...step,
+      startedAt: step.startedAt || previous?.startedAt || completedAt,
+      completedAt
+    };
   });
 }
 
@@ -841,6 +889,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     currentStepId: typeof raw.currentStepId === "string" ? raw.currentStepId : undefined,
     nextAction: typeof raw.nextAction === "string" ? raw.nextAction : undefined,
     waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
+    isBlocked: typeof raw.isBlocked === "boolean" ? raw.isBlocked : undefined,
     blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
     attachments: normalizeStoredPlanAttachments(raw.attachments),
     steps: normalizePlanSteps(raw.steps),
@@ -1057,8 +1106,10 @@ export function createPlan(roleDir: string, input: Record<string, unknown>): Pla
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
   validatePlanTaskBindingInput(input.taskBinding);
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("plan", String(input.title || ""));
-  const plan = normalizePlan({ ...input, attachments: [], id, createdAt: nowIso(), updatedAt: nowIso() });
+  const recordedAt = nowIso();
+  const plan = normalizePlan({ ...input, attachments: [], id, createdAt: recordedAt, updatedAt: recordedAt });
   if (!plan) throw new Error("Plan title is required.");
+  plan.steps = recordPlanStepTimes(plan.steps, [], recordedAt);
   requireKeywords(plan.keywords, "Plan");
   validatePlanWrite(roleDir, plan, true);
   if (Object.prototype.hasOwnProperty.call(input, "attachments")) {
@@ -1072,8 +1123,10 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
   const existing = listPlans(roleDir).find((item) => item.id === planId);
   if (!existing) throw new Error(`Plan not found: ${planId}`);
   if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
-  const next = normalizePlan({ ...existing, ...patch, attachments: existing.attachments, id: existing.id, createdAt: existing.createdAt, updatedAt: nowIso() });
+  const recordedAt = nowIso();
+  const next = normalizePlan({ ...existing, ...patch, attachments: existing.attachments, id: existing.id, createdAt: existing.createdAt, updatedAt: recordedAt });
   if (!next) throw new Error("Plan title is required.");
+  next.steps = recordPlanStepTimes(next.steps, existing.steps, recordedAt);
   requireKeywords(next.keywords, "Plan");
   validatePlanWrite(roleDir, next);
   if (Object.prototype.hasOwnProperty.call(patch, "attachments")) {

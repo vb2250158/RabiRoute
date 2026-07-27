@@ -8,6 +8,7 @@ import type { PlanAttachmentPresentation } from "./shared/planAttachmentContract
 import {
   approvalRequestMissingFields,
   currentPlanStep,
+  planIsBlocked,
   planRequiresApproval
 } from "./roleKnowledge.js";
 
@@ -127,7 +128,7 @@ export function planPresentation(plan: PlanItem): PlanPresentation {
       ? ["current", "plans"]
       : ["plans"];
   if (plan.status === "进行中") {
-    if (blocker(plan) && approval.state !== "none") {
+    if (planIsBlocked(plan) && blocker(plan)) {
       return buildPlanPresentation("阻塞中", "blocked", views, approval);
     }
     if (isWaitingForQa(plan)) return buildPlanPresentation("待QA测试", "qa", views, approval);

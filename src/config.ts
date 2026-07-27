@@ -14,6 +14,7 @@ import {
   type RecentMessageLimits,
   type SpeechPushMode
 } from "./shared/gatewayConfigModel.js";
+import { normalizeCodexPlanAssistantSessions } from "./shared/codexPlanAssistantSessions.js";
 import { resolveProjectPath } from "./shared/projectPaths.js";
 import { resolveRouteIdentity, sanitizeRoleId } from "./shared/routeIdentity.js";
 import { resolveRolePaths, roleFilePath, roleFolderPath } from "./shared/routePaths.js";
@@ -472,6 +473,9 @@ export const config = {
   codexThreadId: process.env.CODEX_THREAD_ID?.trim() || "",
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",
   codexCwd: normalizeCodexCwd(process.env.CODEX_CWD) ?? process.cwd(),
+  codexPlanAssistantSessions: normalizeCodexPlanAssistantSessions(
+    parseJsonEnvironmentValue(process.env.CODEX_PLAN_ASSISTANT_SESSIONS, "CODEX_PLAN_ASSISTANT_SESSIONS")
+  ),
   copilotThreadName: process.env.COPILOT_THREAD_NAME?.trim() || "Copilot CLI",
   targetGroupId: process.env.TARGET_GROUP_ID ?? "",
   botNickname,

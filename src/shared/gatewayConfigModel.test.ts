@@ -229,6 +229,25 @@ test("persona recent message limits clamp each endpoint independently", () => {
   assert.equal(normalized.weixin, DEFAULT_RECENT_MESSAGE_LIMIT);
 });
 
+test("Codex plan assistant sessions keep exact Desktop task bindings", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    codexPlanAssistantSessions: [{
+      threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
+      threadName: "主任务 协助处理计划",
+      workspace: "C:\\workspace\\project",
+      index: 4
+    }]
+  }));
+
+  assert.deepEqual(normalized.codexPlanAssistantSessions, [{
+    threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
+    threadName: "主任务 协助处理计划",
+    workspace: "C:\\workspace\\project",
+    index: 1,
+    initializedAt: undefined
+  }]);
+});
+
 test("speech push mode belongs to the Route while trigger keywords are normalized as persona data", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     messageAdapters: ["speech"],

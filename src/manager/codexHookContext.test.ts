@@ -329,6 +329,29 @@ test("paused plans do not deliver bound task completion reminders", async (t) =>
   assert.equal(deliveryCount, 0);
 });
 
+test("completed plans release a persistent assistant session for the next plan", async (t) => {
+  let deliveryCount = 0;
+  const { root, roleDir, service } = fixture({
+    deliverPlanTaskCompletion: async () => { deliveryCount += 1; }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+  fs.writeFileSync(planPath, JSON.stringify({ ...plan, status: "已完成" }, null, 2), "utf8");
+
+  const result = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-after-complete",
+    cwd: root,
+    lastAssistantMessage: "上一条计划已完成，本槽位可以复用。"
+  });
+
+  assert.equal(result.planTaskCompletion?.status, "ignored");
+  assert.equal(result.planTaskCompletion?.reason, "no_enabled_plan_task_binding");
+  assert.equal(deliveryCount, 0);
+});
+
 test("Stop hook deduplication survives later turns in the same session", async (t) => {
   const deliveries: PlanTaskCompletionDelivery[] = [];
   const { root, service } = fixture({

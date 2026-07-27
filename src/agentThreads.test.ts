@@ -459,6 +459,34 @@ test("Agent thread send starts a follow-up turn through the driver", async () =>
   }]);
 });
 
+test("Agent thread rename preserves the exact task id and validates the configured workspace", async () => {
+  const calls: unknown[] = [];
+  const threadId = "019f0000-0000-7000-8000-000000000004";
+  const driver: AgentThreadDriver = {
+    read: async () => ({}),
+    create: async () => { throw new Error("not used"); },
+    rename: async (params) => {
+      calls.push(params);
+      return { id: params.threadId, title: params.title, cwd: params.cwd, updatedAt: "2026-07-27T00:00:00.000Z" };
+    },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "rename",
+    threadId,
+    title: "主任务 协助处理计划1",
+    cwd: process.cwd()
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(calls, [{
+    threadId,
+    title: "主任务 协助处理计划1",
+    cwd: path.resolve(process.cwd())
+  }]);
+});
+
 test("Agent thread send accepts danger-full-access for Windows sandbox recovery", async () => {
   const calls: unknown[] = [];
   const driver: AgentThreadDriver = {

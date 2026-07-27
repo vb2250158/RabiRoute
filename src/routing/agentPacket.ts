@@ -532,10 +532,17 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
           const id = String(step.id || step.stepId || `step-${index + 1}`).trim();
           const status = String(step.status || (step.completed === true ? "已完成" : step.current === true ? "进行中" : "未开始"));
           const currentMarker = id === String(parsed.currentStepId || "") ? " ← 当前执行" : "";
+          const waitingFor = String(step.waitingFor || "").trim();
+          const isBlocked = step.isBlocked === true;
           const blockedBy = String(step.blockedBy || "").trim();
           return [
             `    ${index + 1}. [${status}] ${title} (${id})${currentMarker}`,
-            blockedBy ? `       阻塞原因：${blockedBy}` : ""
+            waitingFor ? `       等待对象：${waitingFor}` : "",
+            isBlocked && blockedBy ? `       阻塞原因：${blockedBy}` : "",
+            !isBlocked && blockedBy ? `       待确认说明：${blockedBy}` : "",
+            status === "进行中" && waitingFor && !isBlocked
+              ? "       巡检动作：主动询问或追问，直到取得明确结果；不得仅记录等待。"
+              : ""
           ].filter(Boolean);
         })
         : [];
@@ -547,7 +554,7 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
         optionalLine("  当前步骤", parsed.currentStep),
         optionalLine("  下一步", parsed.nextAction),
         optionalLine("  等待", parsed.waitingFor),
-        optionalLine("  阻塞原因", parsed.blockedBy),
+        parsed.isBlocked === true ? optionalLine("  阻塞原因", parsed.blockedBy) : optionalLine("  待确认说明", parsed.blockedBy),
         stepLines.length > 0 ? `  全部步骤：\n${stepLines.join("\n")}` : "",
         `  路径：${relativeWorkspacePath(planPath)}`
       ].filter(Boolean).join("\n"));
@@ -899,6 +906,11 @@ function buildAgentMessage(
         ...pendingConsolidation.memories.map((memory) => `- ${memory.id}：${memory.title}\n  ${memory.content}`)
       ]
     : [];
+  const planAssistantLines = config.codexPlanAssistantSessions.flatMap((session) => [
+    `- 槽位 ${session.index}：${session.threadName}`,
+    `  threadId=${session.threadId}`,
+    `  workspace=${session.workspace}`
+  ]);
 
   const blocks = [
     section("RabiRoute 事件", [
@@ -963,6 +975,16 @@ function buildAgentMessage(
       "",
       "命中召回：",
       matchedIndex
+    ]) : "",
+    hasPersona && planAssistantLines.length > 0 ? section("计划协助会话", [
+      "下列 Codex Desktop 任务是当前主会话的持久计划协助槽，不是一次性子 Agent。",
+      "分配计划时使用 /api/agent/threads 的 send 动作向精确 threadId 投递，并把该计划 taskBinding 保存为同一个完整 ID、名称和 workspace。",
+      "每个槽同一时间只绑定一条未完成计划；计划完成、暂停或解除绑定后才能复用。协助会话可以再开临时子 Agent，但仍负责汇总、更新计划和回传主会话。",
+      "主人格是协助槽调度者。每次收到计划协助任务的完成提醒，必须在同一轮读取计划与任务真实状态、消费结果并更新计划和记忆；不允许只回复“已收到”或把续推留给下一次 heartbeat。",
+      "计划仍未终态、未暂停且没有真实阻塞时，立即使用 /api/agent/threads 的 action=send 续投该计划自身 taskBinding.sessionId + workspace 对应的原任务；不得仅按槽位名称或当前列表顺序猜测目标。active/in-progress 任务不要重复投递。",
+      "计划完成或暂停时 PATCH taskBinding=null 释放槽位，再枚举全部未终态计划，将空闲槽立即分配给下一条可推进计划。有多个独立计划时并行占满所有可用槽位，本轮结束前校验：可推进但空闲的计划数 = 0。",
+      "等待负责人、审批或外部结果时，先执行已有授权范围内的询问、追问、补材料或补证据；不得越过审批门禁，只有确实没有任何已授权动作时才记录真实阻塞。",
+      ...planAssistantLines
     ]) : "",
     hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",
     personaSyncHint ? section("多电脑人格同步", personaSyncHint) : "",

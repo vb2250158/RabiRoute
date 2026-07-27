@@ -3246,6 +3246,20 @@ body::before {
   font-weight: 800;
 }
 
+.knowledge-step .knowledge-step-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  color: #6c7e8d;
+  font-weight: 700;
+}
+
+.knowledge-step-time b {
+  color: #29445a;
+  font-variant-numeric: tabular-nums;
+}
+
 .knowledge-approval-panel {
   display: grid;
   gap: 10px;

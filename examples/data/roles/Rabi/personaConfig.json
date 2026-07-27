@@ -78,7 +78,7 @@
       "targetGroupId": "",
       "allowedSpeakerNames": [],
       "regex": "",
-      "template": "这是全计划效率巡检。先完整读取角色目录 skills/one-plan-one-task-tracking.md；枚举全部未终态计划，读取每个绑定会话任务的真实状态。所有无有效阻塞的计划都必须确保任务处于 starting/active/in-progress；idle、failed 或 systemError 时在本轮立即续接或恢复。阻塞必须主动找负责人确认，并记录负责人、待确认问题、联系结果和 nextCheckAt。结束前校验可推进但空闲的计划数为 0。"
+      "template": "这是全计划效率巡检。先完整读取角色目录 skills/one-plan-one-task-tracking.md；枚举全部未终态计划，读取每个绑定会话任务的真实状态。所有未暂停且没有 isBlocked=true 的计划都必须确保任务处于 starting/active/in-progress；idle、failed 或 systemError 时在本轮立即续接或恢复。每个仍有 waitingFor 的当前步骤都必须在本轮询问或追问一次对应对象，记录发送回执，并持续到取得明确结果；等待本身不算阻塞。只有询问、升级、重试和替代动作都不可执行时才设置 isBlocked=true 与 blockedBy。结束前校验可推进但空闲的计划数为 0，且所有等待项都有本轮询问动作或发送失败证据。"
     },
     {
       "id": "rabi-manual-agent-recreate",
