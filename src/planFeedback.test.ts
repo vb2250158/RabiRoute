@@ -25,6 +25,8 @@ test("plan feedback records approval context and collapses delivery updates", ()
     text: "建议补充回归范围后继续。"
   });
   appendPlanFeedback(roleDir, pending);
+  updatePlanFeedbackDelivery(roleDir, pending, "failed", "temporary delivery failure");
+  updatePlanFeedbackDelivery(roleDir, pending, "pending");
   updatePlanFeedbackDelivery(roleDir, pending, "delivered");
 
   const records = listPlanFeedback(roleDir, "plan-1");

@@ -15,7 +15,7 @@ RibiWebGUI is RabiRoute's local control console. It edits configuration, invokes
 | Console | Routes, current path, Rabi identity, and directories | Add, quick-configure, start, or stop a Route |
 | Message Adapters | Message sources and Agent handlers | Scan, add, connect, and bind tasks |
 | Rabi Persona | Persona, Route variables, and message rules | Add rules, regexes, and schedules |
-| Plans & Memory | Plans, recent memory, consolidated memory, and approval records for the current persona | Search, expand steps, submit approval feedback, and refresh Manager data |
+| Plans & Memory | Plans, recent memory, consolidated memory, and approval records for the current persona | Search, expand steps, review execution contracts, submit feedback for approval steps, and refresh Manager data |
 | Log Diagnostics | Find path breaks and run real tests | Start, restart, trigger, and inspect logs |
 | User Guide | Task-based product instructions | Search, change page, and open deeper material |
 
@@ -25,7 +25,9 @@ RibiWebGUI is RabiRoute's local control console. It edits configuration, invokes
   <span>Callouts: current Route, six areas, Manager status, Refresh, Add Route, Save.</span>
 </div>
 
-The **Plans & Memory** page never reads `data/` directly or reinterprets ordering in the browser. Manager supplies presentation status and orders plans as `Blocked → Awaiting QA → In progress → Not started → Completed → Archived`, then newest `updatedAt` first within each status. Manager also decides whether an approval input is available and returns recent approval records and memory in update order. Submitting feedback appends a plan/step-associated record and notifies the Agent; it never advances or completes the plan directly. A recorded-but-undelivered result keeps the draft for retry.
+The **Plans & Memory** page never reads `data/` directly or reinterprets categories, ordering, status colors, or contract completeness in the browser. Manager supplies shared `Current / Plans / Recent Memory / Archived` membership, presentation status, one palette, and approval details used by both RibiWebGUI and the Qt tray. Except for paused plans, approval-ready cards sort first, incomplete contracts next, then display status and update time. Paused plans appear only under Plans with the shared slate palette and always sort last. Approval cards list the available requested decision, reason, files, complete commands, configuration/data/external changes, validation, rollback, and explicit exclusions. Incomplete details show what the Agent should add, while the feedback input remains available. After clicking submit, button loading ends as soon as the feedback is durably recorded; Agent notification continues in the background, terminal state refreshes only that card, and failure restores the submitted text for retry instead of reloading all plans and memory.
+
+Long plan and memory lists defer rendering of offscreen cards. Details expand without a height animation, and the approval textarea keeps a fixed height, reducing full-page layout work during scrolling, expansion, and typing.
 
 ## Sidebar: select the current Route first
 

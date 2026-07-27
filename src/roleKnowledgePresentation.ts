@@ -1,20 +1,37 @@
 import type {
   ConsolidatedMemoryItem,
+  PlanApprovalRequest,
   PlanItem,
-  PlanStep,
   RecentMemoryItem
 } from "./roleKnowledge.js";
+import {
+  approvalRequestMissingFields,
+  currentPlanStep,
+  planRequiresApproval
+} from "./roleKnowledge.js";
 
-export type PlanPresentationTone = "blocked" | "qa" | "running" | "pending" | "done" | "archived" | "unknown";
+export type PlanPresentationTone = "blocked" | "qa" | "running" | "pending" | "done" | "archived" | "paused" | "unknown";
+export type PlanPresentationView = "current" | "plans" | "archived";
+
+export type PlanPresentationPalette = {
+  accent: string;
+  background: string;
+  foreground: string;
+};
 
 export type PlanPresentation = {
   status: string;
   tone: PlanPresentationTone;
+  views: PlanPresentationView[];
+  palette: PlanPresentationPalette;
   approval: {
+    state: "none" | "incomplete" | "ready";
     enabled: boolean;
     label: string;
     helper: string;
     stepId?: string;
+    missing: string[];
+    contract?: PlanApprovalRequest;
   };
 };
 
@@ -31,23 +48,27 @@ const PLAN_STATUS_RANK: Record<PlanPresentationTone, number> = {
   pending: 3,
   done: 4,
   archived: 5,
-  unknown: 6
+  unknown: 6,
+  paused: 7
 };
 
-function currentStep(plan: PlanItem): PlanStep | undefined {
-  if (plan.currentStepId) {
-    const explicit = plan.steps.find((step) => step.id === plan.currentStepId);
-    if (explicit) return explicit;
-  }
-  return plan.steps.find((step) => step.status === "进行中");
-}
+const PLAN_PRESENTATION_PALETTE: Record<PlanPresentationTone, PlanPresentationPalette> = {
+  blocked: { accent: "#ef6c52", background: "#fff1ed", foreground: "#b42318" },
+  qa: { accent: "#8e63c7", background: "#f3e8ff", foreground: "#7e22ce" },
+  running: { accent: "#16a34a", background: "#eaf8ef", foreground: "#15803d" },
+  pending: { accent: "#f59e0b", background: "#fff7e6", foreground: "#a96008" },
+  done: { accent: "#607d8b", background: "#eaf4f7", foreground: "#52677a" },
+  archived: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" },
+  paused: { accent: "#64748b", background: "#f1f5f9", foreground: "#475569" },
+  unknown: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" }
+};
 
 function blocker(plan: PlanItem): string {
-  return currentStep(plan)?.blockedBy?.trim() || plan.blockedBy?.trim() || "";
+  return currentPlanStep(plan)?.blockedBy?.trim() || plan.blockedBy?.trim() || "";
 }
 
 function isWaitingForQa(plan: PlanItem): boolean {
-  const step = currentStep(plan);
+  const step = currentPlanStep(plan);
   const signals = [
     plan.currentStep,
     plan.waitingFor,
@@ -64,25 +85,30 @@ function isWaitingForQa(plan: PlanItem): boolean {
 }
 
 function approvalPresentation(plan: PlanItem): PlanPresentation["approval"] {
-  const step = currentStep(plan);
-  const signals = [
-    plan.kind,
-    plan.currentStep,
-    plan.waitingFor,
-    plan.blockedBy,
-    step?.title,
-    step?.detail,
-    step?.waitingFor,
-    step?.blockedBy
-  ];
-  const requiresApproval = plan.status !== "已完成"
-    && plan.status !== "已归档"
-    && signals.some((signal) => /human-gate|审批|审核|确认|决策|验收|qa|人工|接管/i.test(String(signal || "")));
+  const step = currentPlanStep(plan);
+  const requiresApproval = planRequiresApproval(plan);
+  if (!requiresApproval) {
+    return {
+      state: "none",
+      enabled: false,
+      label: "无需审批",
+      helper: "当前步骤没有声明人工审批门禁。",
+      missing: []
+    };
+  }
+  const contract = step?.approvalRequest;
+  const missing = approvalRequestMissingFields(contract);
+  const ready = missing.length === 0;
   return {
-    enabled: requiresApproval,
-    label: "审批建议",
-    helper: "意见会由 Rabi Manager 记录并交给 Agent；提交本身不会直接推进计划。",
-    stepId: requiresApproval ? step?.id : undefined
+    state: ready ? "ready" : "incomplete",
+    enabled: true,
+    label: ready ? "审批执行合同" : "审批信息待补充",
+    helper: ready
+      ? "请先核对具体文件、命令、变更、验证和回退范围，再决定是否批准。"
+      : "当前执行说明还不够具体；仍可提交审批意见，Manager 会提醒 Agent 根据意见补齐文件、命令和变更范围。",
+    stepId: step?.id,
+    missing,
+    contract
   };
 }
 
@@ -93,15 +119,38 @@ function dateValue(primary: string | undefined, fallback: string | undefined): n
 
 export function planPresentation(plan: PlanItem): PlanPresentation {
   const approval = approvalPresentation(plan);
+  const views: PlanPresentationView[] = plan.status === "已归档"
+    ? ["archived"]
+    : plan.status === "进行中"
+      ? ["current", "plans"]
+      : ["plans"];
   if (plan.status === "进行中") {
-    if (blocker(plan)) return { status: "阻塞中", tone: "blocked", approval };
-    if (isWaitingForQa(plan)) return { status: "待QA测试", tone: "qa", approval };
-    return { status: "进行中", tone: "running", approval };
+    if (blocker(plan) && approval.state !== "none") {
+      return buildPlanPresentation("阻塞中", "blocked", views, approval);
+    }
+    if (isWaitingForQa(plan)) return buildPlanPresentation("待QA测试", "qa", views, approval);
+    return buildPlanPresentation("进行中", "running", views, approval);
   }
-  if (plan.status === "未开始") return { status: plan.status, tone: "pending", approval };
-  if (plan.status === "已完成") return { status: plan.status, tone: "done", approval };
-  if (plan.status === "已归档") return { status: plan.status, tone: "archived", approval };
-  return { status: plan.status, tone: "unknown", approval };
+  if (plan.status === "未开始") return buildPlanPresentation(plan.status, "pending", views, approval);
+  if (plan.status === "暂停") return buildPlanPresentation(plan.status, "paused", views, approval);
+  if (plan.status === "已完成") return buildPlanPresentation(plan.status, "done", views, approval);
+  if (plan.status === "已归档") return buildPlanPresentation(plan.status, "archived", views, approval);
+  return buildPlanPresentation(plan.status, "unknown", views, approval);
+}
+
+function buildPlanPresentation(
+  status: string,
+  tone: PlanPresentationTone,
+  views: PlanPresentationView[],
+  approval: PlanPresentation["approval"]
+): PlanPresentation {
+  return {
+    status,
+    tone,
+    views: [...views],
+    palette: { ...PLAN_PRESENTATION_PALETTE[tone] },
+    approval
+  };
 }
 
 export function presentPlan(plan: PlanItem): PresentedPlanItem {
@@ -112,6 +161,11 @@ export function presentPlans(plans: PlanItem[]): PresentedPlanItem[] {
   return plans
     .map(presentPlan)
     .sort((left, right) => {
+      const pausedDelta = Number(left.presentation.tone === "paused") - Number(right.presentation.tone === "paused");
+      if (pausedDelta !== 0) return pausedDelta;
+      const approvalRank = { ready: 0, incomplete: 1, none: 2 } as const;
+      const approvalDelta = approvalRank[left.presentation.approval.state] - approvalRank[right.presentation.approval.state];
+      if (approvalDelta !== 0) return approvalDelta;
       const statusDelta = PLAN_STATUS_RANK[left.presentation.tone] - PLAN_STATUS_RANK[right.presentation.tone];
       if (statusDelta !== 0) return statusDelta;
       const dateDelta = dateValue(right.updatedAt, right.createdAt) - dateValue(left.updatedAt, left.createdAt);

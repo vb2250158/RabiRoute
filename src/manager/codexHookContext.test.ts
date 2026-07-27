@@ -306,6 +306,29 @@ test("Stop hooks deliver a bound plan task final message once through Manager", 
   )), true);
 });
 
+test("paused plans do not deliver bound task completion reminders", async (t) => {
+  let deliveryCount = 0;
+  const { root, roleDir, service } = fixture({
+    deliverPlanTaskCompletion: async () => { deliveryCount += 1; }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+  fs.writeFileSync(planPath, JSON.stringify({ ...plan, status: "暂停" }, null, 2), "utf8");
+
+  const result = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-paused",
+    cwd: root,
+    lastAssistantMessage: "暂停期间不应唤醒人格任务。"
+  });
+
+  assert.equal(result.planTaskCompletion?.status, "ignored");
+  assert.equal(result.planTaskCompletion?.reason, "no_enabled_plan_task_binding");
+  assert.equal(deliveryCount, 0);
+});
+
 test("Stop hook deduplication survives later turns in the same session", async (t) => {
   const deliveries: PlanTaskCompletionDelivery[] = [];
   const { root, service } = fixture({

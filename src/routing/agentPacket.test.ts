@@ -6,7 +6,7 @@ import test from "node:test";
 import { config, type NotificationRule, type RouteProfile } from "../config.js";
 import { updatePersonaVoiceIdentity } from "../personaVoiceIdentities.js";
 import { resolvePipeline } from "../pipelines.js";
-import type { GroupMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
+import type { GroupMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
 import { buildAgentPacket, type AgentRoleContext } from "./agentPacket.js";
 
@@ -243,6 +243,57 @@ test("AgentPacket falls back to sent Outbox messages when QQ history has not cac
 
   assert.match(packet.message, /\[CQ:reply,id=3000\] : 刚发出的测试说明/);
   assert.doesNotMatch(packet.message, /暂时无法解析/);
+});
+
+test("AgentPacket omits persona voice identity paths from non-audio role panel messages", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-role-panel-"));
+  const record: RolePanelMessageRecord = {
+    time: Date.now() / 1_000,
+    rawMessage: "请整理这份计划。",
+    messageId: "role-panel-one",
+    senderName: "本地用户",
+    roleId: "Rabi",
+    adapterType: "rolePanel"
+  };
+  const rule: NotificationRule = {
+    id: "role-panel-rule",
+    name: "role panel",
+    enabled: true,
+    routeKinds: ["role_panel_message"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "role-panel-route",
+    name: "role panel",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Rabi",
+    agentRoleFile: "persona.md",
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "role_panel_message",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  assert.doesNotMatch(packet.message, /人格声纹关系文件/);
+  assert.doesNotMatch(packet.message, /voice[\\/]voice-identities\.jsonl/);
+  assert.equal(packet.templateValues.voiceIdentitiesPath, undefined);
 });
 
 test("AgentPacket exposes processing host and persona-owned voice identity file without naming the speaker", () => {

@@ -23,6 +23,9 @@ def _persona_title(gateway: dict) -> str:
     role_info = gateway.get("roleInfo")
     if not isinstance(role_info, dict):
         return ""
+    title = _text(role_info.get("selectedRoleTitle"))
+    if title:
+        return title
     persona_content = _text(role_info.get("selectedRoleContent"))
     for line in persona_content.splitlines():
         title = line.strip().lstrip("\ufeff")

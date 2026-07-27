@@ -159,7 +159,7 @@ codex plugin add rabi-codex-context@rabiroute-local
 8. `PreToolUse` / `PostToolUse` 只在命中相关知识或明确 Rabi 知识路径时注入推理期增量。
 9. 同一 turn 的重复命中不会重复注入或重复刷新 `viewedAt`；条目更新后允许重新注入。
 10. 正常 RabiRoute 消息投递与 Codex Hook 共用 `RabiContextManager`，代码中没有第二个 snapshot 调用入口。
-11. 绑定计划的 `Stop` 只向指定人格 Route 投递一次最终回答提醒；未绑定、重复 turn、workspace/人格/gateway 冲突和源目标同会话均失败关闭或忽略。
+11. 绑定计划的 `Stop` 只向指定人格 Route 投递一次最终回答提醒；计划顶层为 `暂停` 时忽略提醒，未绑定、重复 turn、workspace/人格/gateway 冲突和源目标同会话均失败关闭或忽略。
 12. 完成提醒成功时 Hook stdout 为空；失败只产生非阻塞系统警告。更新插件后必须在 `/hooks` 重新审阅并信任新增的 `Stop` Hook。
 
 代码和本地 mock 测试不等于 Desktop 实机验收。未在两个真实 Codex Desktop 任务之间观察到提醒前，本能力保持实验状态。

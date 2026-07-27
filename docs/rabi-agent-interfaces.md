@@ -436,6 +436,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 ```text
 未开始
 进行中
+暂停
 已完成
 已归档
 ```
@@ -489,7 +490,9 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。`进行中` 计划必须同时提供 `currentStepId`，并让它指向唯一一条状态为 `进行中` 的步骤；界面据此列出全部步骤并标出当前执行位置。阻塞时用当前步骤的 `blockedBy` 记录不能继续的原因，并用 `waitingFor` 记录正在等待的对象；界面优先展示阻塞原因，不重复展示已由步骤列表表达的 `nextAction`。旧计划仍可读取，但下次更新时应补齐结构化步骤。计划进入 `已完成` 或 `已归档` 前，所有步骤都必须为 `已完成`。
+新增计划必须提供有序的 `steps`。`进行中` 计划必须同时提供 `currentStepId`，并让它指向唯一一条状态为 `进行中` 的步骤；界面据此列出全部步骤并标出当前执行位置。用户明确要求暂停时，PATCH 顶层 `status=暂停`，保留这条步骤和 `currentStepId` 作为恢复位置，并停止继续驱动绑定任务；恢复时把顶层状态改回 `进行中`。阻塞时用当前步骤的 `blockedBy` 记录不能继续的原因，并用 `waitingFor` 记录正在等待的对象；界面优先展示阻塞原因，不重复展示已由步骤列表表达的 `nextAction`。旧计划仍可读取，但下次更新时应补齐结构化步骤。计划进入 `已完成` 或 `已归档` 前，所有步骤都必须为 `已完成`。
+
+请求审批前，Agent 应 PATCH 当前步骤的 `approvalRequest`，尽量说明 `request`、`reason`、精确 `files / commands / changes`、`validation`、`rollback` 和 `outOfScope`。Manager 只做轻量完整性判断：缺少说明不会阻止计划保存，也不会限制用户审批；API 返回 `presentation.approval.state=incomplete` 和 `missing[]`，双端把缺项与审批输入一起展示。AgentPacket 的共用提示会提醒 Agent 根据用户意见补充真实路径、完整命令和外部目标，不能把“等待授权”长期当成执行说明。
 
 `taskBinding` 可在 POST 或 PATCH 中写入，用于精确绑定一个 Codex 执行会话。当前只接受 `agentType=codex` 和非空完整 `sessionId`；`completionHook.enabled` 必须是布尔值。启用后，Codex `Stop` Hook 把官方 `last_assistant_message` 交给 Manager，Manager 再经同人格的角色面板 / Forwarding / AgentPacket 链提醒目标处理会话。`gatewayId` 在同人格有多个 Route 时必填。提醒按 `sessionId + turnId` 去重，不会自动 PATCH 计划、推进步骤或写记忆。
 
@@ -517,7 +520,11 @@ WebGUI/托盘会用该接口记录用户对当前审批步骤的建议，并请�
 }
 ```
 
+当 `notifyAgent=true` 时，POST 在意见成功落盘后立即以 HTTP `202` 返回，通常为 `deliveryStatus=pending`；Agent 投递在后台继续。终态通过 `/api/events` 的 `plan_feedback_changed` 通知，客户端再 GET 当前计划的 feedback 摘要。不要让用户请求同步等待 Agent 任务加载、Desktop IPC 或处理端执行完成。
+
 Agent 自己的处理说明使用 `kind=approval_response`、`author=agent`、`source=agent`，并保持 `notifyAgent=false`；Agent 记录自动按 `record_only` 保存，不能自我触发新一轮投递。审批意见只记录事实，不推进计划；处理完成后由 Agent 另行 `PATCH /plans/:planId` 更新步骤、阻塞和状态。
+
+AgentPacket 的共用计划 API 提示会直接包含上述审批记录入口与“记录后另行 PATCH 计划”的约束，因此不要求每个人格 Skill 重复维护同一套接口。人格 Skill 只应补充该角色特有的审批口径或决策规则。
 
 更新计划：
 
@@ -532,6 +539,7 @@ PATCH /roles/:roleId/plans/:planId
 - 更新下一步、等待对象和阻塞原因。
 - 更新关键词。
 - 将状态改为 `进行中`。
+- 将状态改为 `暂停` 或从 `暂停` 恢复为 `进行中`。
 - 将状态改为 `已完成`。
 
 计划归档通常不需要 Agent 处理。计划变为 `已完成` 后，角色知识快照会按当前固定的 72 小时窗口把它转为 `已归档`；目前这个归档窗口还不是 `personaConfig.json` 的公开配置字段。

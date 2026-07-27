@@ -622,8 +622,10 @@ def _send_plan_feedback(
     def completed(completed_task: QtAsyncTask, result: PlanFeedbackSubmitResult) -> None:
         pending_tasks.discard(completed_task)
         if result.ok:
-            panel.complete_plan_feedback(plan_id, True, "审批建议已记录并交给 Agent 处理。", "success")
-            _show_message(tray, tray_available, "计划审批", "审批建议已记录并交给 Agent。", QSystemTrayIcon.Information, 2200)
+            pending = result.delivery_status == "pending"
+            message = "审批建议已记录，正在后台通知 Agent。" if pending else "审批建议已记录并交给 Agent 处理。"
+            panel.complete_plan_feedback(plan_id, True, message, "success")
+            _show_message(tray, tray_available, "计划审批", message, QSystemTrayIcon.Information, 2200)
             refresh_callback()
             return
         if result.delivery_status == "failed":

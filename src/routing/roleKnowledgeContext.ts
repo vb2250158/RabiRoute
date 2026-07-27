@@ -27,6 +27,11 @@ export function planMemoryApiHint(roleId: unknown): string[] {
   return [
     "可用 API 提示：",
     `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
+    "- 用户要求暂停计划时，PATCH 顶层 status=暂停，保留当前进行中步骤和 currentStepId 作为恢复位置，并停止继续驱动绑定任务；恢复时把顶层 status 改回进行中",
+    "- 请求审批前，应尽量把当前步骤 approvalRequest 写清：request、reason、files/commands/changes、validation、rollback、outOfScope；不得长期只写等待授权或通用安全说明",
+    "- 信息不完整时仍要接收用户审批意见，不得用门禁限制用户；文件路径、完整命令和外部目标来自真实调查，并根据意见补充或更新说明",
+    `- 记录计划审批：GET ${base}/plans/{planId}/feedback、POST ${base}/plans/{planId}/feedback；QQ 等外部入口用 author=user、source=qq、notifyAgent=false 记录，Agent 处理说明用 author=agent、kind=approval_response、notifyAgent=false`,
+    "- 审批意见只形成计划审计记录，不直接推进步骤；Agent 判断后必须另行 PATCH 对应计划",
     `- 查看记忆：GET ${base}/memory、GET ${base}/memory/recent、GET ${base}/memory/recent/{memoryId}、GET ${base}/memory/consolidated、GET ${base}/memory/consolidated/{memoryId}`,
     `- 查看角色技能：GET ${base}/skills、GET ${base}/skills/{skillId}`,
     `- 新增近期记忆：POST ${base}/memory/recent`,

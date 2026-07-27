@@ -108,7 +108,8 @@ import {
   managerReadOnlyRequestAllowed
 } from "./managerRuntimeMode.js";
 import { resolveGatewayChildCommand } from "./gatewayChildCommand.js";
-import { handlePersonaAvatarApi, personaAvatarPresentation } from "./personaAvatarRoutes.js";
+import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
+import { roleInfoPayload } from "./roleInfoPayload.js";
 import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
 import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
@@ -1701,65 +1702,12 @@ function dataDirFor(definition: GatewayDefinition): string {
   return routeFolderPath(routeRoot, configName);
 }
 
-function roleInfoFor(definition: GatewayDefinition): Record<string, unknown> {
-  const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
-  const roleFileName = definition.agentRoleFile ?? "persona.md";
-  const selectedRoleId = sanitizeRoleId(definition.agentRoleId);
-  const options: Array<Record<string, unknown>> = [];
-
-  if (fs.existsSync(rolesDir)) {
-    for (const entry of fs.readdirSync(rolesDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
-        continue;
-      }
-
-      const roleDir = roleFolderPath(rolesDir, entry.name);
-      const markdownFiles = fs.readdirSync(roleDir)
-        .filter((file) => file.toLowerCase().endsWith(".md"))
-        .sort((left, right) => left.localeCompare(right));
-      const preferredFile = markdownFiles.includes(roleFileName) ? roleFileName : markdownFiles[0] ?? roleFileName;
-      const rolePath = roleFilePath(rolesDir, entry.name, preferredFile);
-      let roleContent = "";
-      let roleError = "";
-      try {
-        roleContent = fs.readFileSync(rolePath, "utf8");
-      } catch (error) {
-        roleError = error instanceof Error ? error.message : String(error);
-      }
-      const avatar = personaAvatarPresentation(entry.name, roleDir);
-      options.push({
-        label: entry.name,
-        value: entry.name,
-        rolePath,
-        roleContent,
-        roleError,
-        dataDir: roleDir,
-        ...avatar
-      });
-    }
-  }
-
-  const selectedDir = selectedRoleId ? roleFolderPath(rolesDir, selectedRoleId) : "";
-  const selectedRolePath = selectedRoleId ? roleFilePath(rolesDir, selectedRoleId, roleFileName) : "";
-  let selectedRoleContent = "";
-  let selectedRoleError = "";
-  if (selectedRolePath) {
-    try {
-      selectedRoleContent = fs.readFileSync(selectedRolePath, "utf8");
-    } catch (error) {
-      selectedRoleError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  return {
-    rolesDir,
-    selectedRoleId,
-    selectedRolePath,
-    selectedRoleContent,
-    selectedRoleError,
-    selectedRoleDataDir: selectedDir,
-    options
-  };
+function roleInfoFor(
+  definition: GatewayDefinition,
+  includeContents = true,
+  catalogCache?: Map<string, Array<Record<string, unknown>>>
+): Record<string, unknown> {
+  return roleInfoPayload(rootDir, definition, { includeContents, catalogCache });
 }
 
 function readAgentStates(definition: GatewayDefinition): Record<string, unknown> {
@@ -2806,6 +2754,13 @@ function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown>
 }
 
 function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
+  return runtimeStatusWithRoleInfoCache(runtime);
+}
+
+function runtimeStatusWithRoleInfoCache(
+  runtime: GatewayRuntime,
+  roleInfoCatalogCache?: Map<string, Array<Record<string, unknown>>>
+): Record<string, unknown> {
   const usesNapcat = definitionUsesNapcat(runtime.definition);
   const gatewayStatus = gatewayStatusForRuntime(runtime);
   const rabiLinkRelay = rabiLinkRelayConfigFor(runtime.definition);
@@ -2873,7 +2828,7 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
     routesDir: runtime.definition.routesDir,
     agentRoleId: runtime.definition.agentRoleId,
     agentRoleFile: runtime.definition.agentRoleFile,
-    roleInfo: roleInfoFor(runtime.definition),
+    roleInfo: roleInfoFor(runtime.definition, true, roleInfoCatalogCache),
     dataDir: runtime.definition.dataDir,
     groupNotificationTemplate: runtime.definition.groupNotificationTemplate,
     groupAtNotificationTemplate: runtime.definition.groupAtNotificationTemplate,
@@ -2899,6 +2854,13 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
 }
 
 function runtimeSummaryStatus(runtime: GatewayRuntime): Record<string, unknown> {
+  return runtimeSummaryStatusWithRoleInfoCache(runtime);
+}
+
+function runtimeSummaryStatusWithRoleInfoCache(
+  runtime: GatewayRuntime,
+  roleInfoCatalogCache?: Map<string, Array<Record<string, unknown>>>
+): Record<string, unknown> {
   const definition = runtime.definition;
   const usesNapcat = definitionUsesNapcat(definition);
   const napcatInstances = usesNapcat
@@ -2921,7 +2883,7 @@ function runtimeSummaryStatus(runtime: GatewayRuntime): Record<string, unknown> 
     agentRoleId: definition.agentRoleId,
     agentRoleFile: definition.agentRoleFile,
     rolesDir: definition.rolesDir,
-    roleInfo: roleInfoFor(definition),
+    roleInfo: roleInfoFor(definition, false, roleInfoCatalogCache),
     roleRouteNames: definition.roleRouteNames,
     napcatInstances,
     codexCwd: definition.codexCwd,
@@ -3232,6 +3194,84 @@ function planFeedbackAgentText(record: PlanFeedbackRecord): string {
   return lines.join("\n");
 }
 
+const activePlanFeedbackDeliveries = new Set<string>();
+
+function schedulePlanFeedbackDelivery(
+  roleDir: string,
+  roleId: string,
+  gatewayId: string,
+  plan: ReturnType<typeof listPlans>[number],
+  inputRecord: PlanFeedbackRecord,
+  isNew: boolean
+): PlanFeedbackRecord {
+  if (inputRecord.deliveryStatus === "record_only" || inputRecord.deliveryStatus === "delivered") return inputRecord;
+  let record = inputRecord.deliveryStatus === "failed"
+    ? updatePlanFeedbackDelivery(roleDir, inputRecord, "pending")
+    : inputRecord;
+  const deliveryKey = `${roleId}:${record.planId}:${record.id}`;
+  if (activePlanFeedbackDeliveries.has(deliveryKey)) return record;
+
+  try {
+    const runtime = runtimeForRoleDelivery(roleId, gatewayId || String(record.gatewayId || "").trim());
+    const messageId = `plan-feedback-${record.id}`;
+    const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
+    const text = planFeedbackAgentText(record);
+    if (isNew) {
+      appendRolePanelTimelineMessage(roleDir, {
+        id: messageId,
+        time: Math.floor(Date.now() / 1000),
+        roleId,
+        gatewayId: runtime.definition.id,
+        routeProfileId,
+        direction: "user",
+        sender: "本地用户",
+        text,
+        attachments: [],
+        status: "sent",
+        replyContext: {
+          runtimeRouteId: runtime.definition.id,
+          gatewayId: runtime.definition.id,
+          routeProfileId,
+          routeKind: "role_panel_message",
+          targetType: "plan_feedback",
+          adapterType: "rolePanel",
+          messageId,
+          roleId,
+          planId: plan.id,
+          planStepId: record.stepId,
+          planFeedbackId: record.id,
+          planFeedbackKind: record.kind
+        }
+      });
+    }
+    activePlanFeedbackDeliveries.add(deliveryKey);
+    publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
+    void triggerGatewayRolePanelMessage(runtime, messageId, text, [])
+      .then(() => updatePlanFeedbackDelivery(roleDir, record, "delivered"))
+      .catch((error) => updatePlanFeedbackDelivery(
+        roleDir,
+        record,
+        "failed",
+        error instanceof Error ? error.message : String(error)
+      ))
+      .then((terminalRecord) => {
+        record = terminalRecord;
+        publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
+      })
+      .finally(() => activePlanFeedbackDeliveries.delete(deliveryKey));
+    return record;
+  } catch (error) {
+    record = updatePlanFeedbackDelivery(
+      roleDir,
+      record,
+      "failed",
+      error instanceof Error ? error.message : String(error)
+    );
+    publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
+    return record;
+  }
+}
+
 function presentedPlanWithFeedback(roleDir: string, plan: ReturnType<typeof listPlans>[number]) {
   return {
     ...presentPlan(plan),
@@ -3252,12 +3292,24 @@ function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: stri
   ]);
   appendLog(runtime, `role panel message requested: ${messageId}`);
   return new Promise((resolve, reject) => {
+    let settled = false;
     const child = spawn(command.command, command.args, {
       cwd: rootDir,
       env: envFor(runtime.definition),
       shell: command.shell,
       windowsHide: true
     });
+
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      action();
+    };
+    const deadline = setTimeout(() => {
+      try { child.kill(); } catch { /* best effort */ }
+      finish(() => reject(new Error(`role panel message timed out: ${messageId}`)));
+    }, 45_000);
 
     child.stdout.on("data", (data) => {
       for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
@@ -3269,14 +3321,14 @@ function triggerGatewayRolePanelMessage(runtime: GatewayRuntime, messageId: stri
         appendLog(runtime, `role panel error: ${line}`);
       }
     });
-    child.on("error", reject);
+    child.on("error", (error) => finish(() => reject(error)));
     child.on("exit", (code, signal) => {
       if (code === 0) {
         appendLog(runtime, `role panel message completed: ${messageId}`);
-        resolve();
+        finish(resolve);
         return;
       }
-      reject(new Error(`role panel message failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
+      finish(() => reject(new Error(`role panel message failed: code=${code ?? "null"} signal=${signal ?? "null"}`)));
     });
   });
 }
@@ -4064,57 +4116,19 @@ function handleRoleKnowledgeApi(
             if (existing && (existing.text !== candidate.text || existing.stepId !== candidate.stepId)) {
               throw new Error(`Feedback id already exists with different content: ${candidate.id}`);
             }
-            let record = existing || appendPlanFeedback(roleDir, candidate);
+            const record = existing || appendPlanFeedback(roleDir, candidate);
             if (record.deliveryStatus === "record_only" || record.deliveryStatus === "delivered") {
               if (!existing) publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
               return record;
             }
-
-            const runtime = runtimeForRoleDelivery(roleId, String(body.gatewayId || record.gatewayId || "").trim());
-            const messageId = `plan-feedback-${record.id}`;
-            const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
-            const text = planFeedbackAgentText(record);
-            if (!existing) {
-              appendRolePanelTimelineMessage(roleDir, {
-                id: messageId,
-                time: Math.floor(Date.now() / 1000),
-                roleId,
-                gatewayId: runtime.definition.id,
-                routeProfileId,
-                direction: "user",
-                sender: "本地用户",
-                text,
-                attachments: [],
-                status: "sent",
-                replyContext: {
-                  runtimeRouteId: runtime.definition.id,
-                  gatewayId: runtime.definition.id,
-                  routeProfileId,
-                  routeKind: "role_panel_message",
-                  targetType: "plan_feedback",
-                  adapterType: "rolePanel",
-                  messageId,
-                  roleId,
-                  planId,
-                  planStepId: record.stepId,
-                  planFeedbackId: record.id,
-                  planFeedbackKind: record.kind
-                }
-              });
-            }
-            try {
-              await triggerGatewayRolePanelMessage(runtime, messageId, text, []);
-              record = updatePlanFeedbackDelivery(roleDir, record, "delivered");
-            } catch (error) {
-              record = updatePlanFeedbackDelivery(
-                roleDir,
-                record,
-                "failed",
-                error instanceof Error ? error.message : String(error)
-              );
-            }
-            publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
-            return record;
+            return schedulePlanFeedbackDelivery(
+              roleDir,
+              roleId,
+              String(body.gatewayId || record.gatewayId || "").trim(),
+              plan,
+              record,
+              !existing
+            );
           })
           .then((data) => jsonResponse(response, 202, { code: 0, data }))
           .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
@@ -4315,10 +4329,13 @@ async function forwardFenneNoteReply(body: unknown): Promise<Record<string, unkn
 }
 
 function standaloneGatewayPayload(includeDiagnostics = true): Record<string, unknown> {
+  const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
   return buildStandaloneGatewayPayload(
     {
       runtimes: runtimes.values(),
-      runtimeStatus: includeDiagnostics ? runtimeStatus : runtimeSummaryStatus,
+      runtimeStatus: includeDiagnostics
+        ? (runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache)
+        : (runtime) => runtimeSummaryStatusWithRoleInfoCache(runtime, roleInfoCatalogCache),
       routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
       rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
     },

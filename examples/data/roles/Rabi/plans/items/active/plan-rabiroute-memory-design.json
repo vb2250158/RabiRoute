@@ -1,11 +1,20 @@
 {
   "id": "plan-rabiroute-memory-design",
   "title": "完善 RabiRoute 计划和记忆机制",
+  "focus": "完善 RabiRoute 计划和记忆机制",
   "status": "进行中",
   "priority": "medium",
   "kind": "documentation",
-  "currentStep": "用 Rabi 示例人格演示计划、近期记忆、沉淀记忆和整理记录如何配合",
-  "nextAction": "保持 docs/plan-and-memory-model.md、docs/rabi-agent-interfaces.md 和示例数据字段一致",
+  "currentStepId": "keep-contracts-aligned",
+  "currentStep": "计划已支持结构化步骤、暂停恢复、审批执行合同、统一展示 DTO 与审批审计记录；当前持续校准双语文档、Agent 提示和公开示例人格。",
+  "nextAction": "用真实脱敏计划验证暂停恢复、审批意见后台投递和 Agent 根据意见补齐 approvalRequest 的完整闭环。",
+  "steps": [
+    { "id": "define-file-model", "title": "定义计划、近期记忆、沉淀记忆和整理记录的文件模型", "status": "已完成" },
+    { "id": "structured-steps", "title": "实现有序 steps 与唯一 currentStepId", "status": "已完成" },
+    { "id": "pause-and-approval", "title": "实现暂停恢复、审批执行合同与计划反馈审计", "status": "已完成" },
+    { "id": "keep-contracts-aligned", "title": "持续校准双语文档、Agent 提示和公开示例", "status": "进行中" },
+    { "id": "live-lifecycle-validation", "title": "用真实脱敏计划验证完整生命周期", "status": "未开始" }
+  ],
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +28,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-08T00:00:00+08:00",
-  "updatedAt": "2026-06-10T00:00:00+08:00",
-  "keywords": ["计划", "记忆", "上下文", "接口", "沉淀"]
+  "updatedAt": "2026-07-27T00:00:00+08:00",
+  "keywords": ["计划", "记忆", "上下文", "接口", "沉淀", "steps", "currentStepId", "暂停", "approvalRequest", "审批反馈"]
 }

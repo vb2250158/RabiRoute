@@ -38,9 +38,12 @@ Plan status is one of:
 ```text
 `未开始`  not started
 `进行中`  in progress
+`暂停`    paused
 `已完成`  completed
 `已归档`  archived
 ```
+
+`暂停` is a real top-level plan state for an explicit temporary stop. It is not a step status. Waiting for a user or external system remains an in-progress plan described by `waitingFor` or `blockedBy` unless the user explicitly asks to pause it. Unarchived storage therefore contains not-started, in-progress, paused, and completed plans.
 
 A plan describes one focused objective. Common fields:
 
@@ -59,7 +62,26 @@ A plan describes one focused objective. Common fields:
   "blockedBy": "",
   "steps": [
     { "id": "inspect-current", "title": "Inspect the current model and UI", "status": "已完成" },
-    { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中" },
+    {
+      "id": "verify-schema",
+      "title": "Verify the structured step contract",
+      "status": "进行中",
+      "approvalRequest": {
+        "request": "Approve updating the plan contract with the listed files and commands.",
+        "reason": "This changes the public Plan schema and both user interfaces.",
+        "files": [
+          { "path": "src/roleKnowledge.ts", "action": "modify", "change": "Add approval-contract schema, normalization, and write validation." },
+          { "path": "ribiwebgui/src/pages/RoleKnowledgePage.vue", "action": "modify", "change": "Render the contract and missing-field guidance while still accepting user approval feedback." }
+        ],
+        "commands": [
+          { "command": "npm run build:backend", "purpose": "Compile and validate the Manager backend.", "expectedEffect": "Produces local dist build output only." }
+        ],
+        "changes": [],
+        "validation": ["Node targeted tests, tray tests, and the WebGUI build all pass."],
+        "rollback": ["If validation fails, revert only the source and documentation listed in this contract."],
+        "outOfScope": ["No commit, push, or runtime data/ changes."]
+      }
+    },
     { "id": "update-readers", "title": "Update APIs, readers, and docs", "status": "未开始" }
   ],
   "project": {
@@ -86,9 +108,11 @@ A plan describes one focused objective. Common fields:
 }
 ```
 
-`steps` is the ordered execution path. Every new plan must list all of its steps, with at most one step in `进行中`. Top-level `currentStepId` must point to that step so both the UI and Agents can answer exactly where execution is. A step may include `detail`, `waitingFor`, `blockedBy`, and `completedAt`: `waitingFor` identifies who or what the plan awaits, while `blockedBy` explains why it cannot proceed and should normally live on the blocked current step. `currentStep` remains a progress note; it no longer acts as the step list or step identity. Because structured steps already express the future path, the UI does not repeat `nextAction`; Agents and legacy plans may still use that field. Legacy plans remain readable and should gain structured steps on their next update.
+`steps` is the ordered execution path. Every new plan must list all of its steps, with at most one step in `进行中`. Top-level `currentStepId` must point to that step so both the UI and Agents can answer exactly where execution is. A paused plan may preserve that one in-progress step and `currentStepId` as its resume position; resuming only changes the top-level status back to `进行中`. A step may include `detail`, `waitingFor`, `blockedBy`, and `completedAt`: `waitingFor` identifies who or what the plan awaits, while `blockedBy` explains why it cannot proceed and should normally live on the blocked current step. `currentStep` remains a progress note; it no longer acts as the step list or step identity. Because structured steps already express the future path, the UI does not repeat `nextAction`; Agents and legacy plans may still use that field. Legacy plans remain readable and should gain structured steps on their next update.
 
-`taskBinding` is the optional exact plan-to-execution-session binding. The current implementation supports only `agentType=codex`. `sessionId` is the required complete execution-task ID; `sessionTitle` is display metadata and `workspace` is a Stop-Hook safety check. With `completionHook.enabled=true`, Manager forwards the official final answer through the existing role-panel path to the same persona's Route after that session finishes a turn. `gatewayId` disambiguates multiple Routes. Delivery is deduplicated by `sessionId + turnId` and records a stage-completion fact only; it does not advance steps, change plan status, or write memory automatically.
+A current step that requires approval should include a complete `approvalRequest`. `request` and `reason` state the decision and why it is needed. `files` lists exact paths, `create/modify/delete/move`, and the concrete edit; `commands` contains complete commands, purpose, and expected effects; `changes` identifies configuration, database, cloud, or external-system targets. `validation`, `rollback`, and `outOfScope` define acceptance, recovery, and explicit exclusions. At least one of `files / commands / changes` should be concrete. Legacy plans remain readable. Manager returns `presentation.approval.state=incomplete` and missing fields when details are sparse, but users can still submit approval feedback; the warning is for the Agent to improve the plan, not a restriction on the user.
+
+`taskBinding` is the optional exact plan-to-execution-session binding. The current implementation supports only `agentType=codex`. `sessionId` is the required complete execution-task ID; `sessionTitle` is display metadata and `workspace` is a Stop-Hook safety check. With `completionHook.enabled=true`, Manager forwards the official final answer through the existing role-panel path to the same persona's Route after that session finishes a turn. `gatewayId` disambiguates multiple Routes. Delivery is deduplicated by `sessionId + turnId` and records a stage-completion fact only; it does not advance steps, change plan status, or write memory automatically. A top-level paused plan receives no completion reminder, so the binding is not re-driven while paused.
 
 The target Codex Route must already have an exact task ID and must differ from the execution session. Multiple plans bound to one execution session, workspace mismatch, execution-context persona mismatch, a missing or wrong-persona gateway, or multiple same-persona gateways without `gatewayId` all fail closed. The capability remains experimental until verified between two real Desktop tasks.
 
@@ -110,6 +134,12 @@ stepTitleChars=120
 stepDetailChars=600
 stepWaitingForChars=300
 stepBlockedByChars=300
+approvalRequestChars=600
+approvalReasonChars=600
+approvalPathChars=1000
+approvalDetailChars=800
+approvalCommandChars=2000
+approvalListItemChars=800
 maxSteps=100
 nextActionChars=600
 waitingForChars=300
@@ -117,7 +147,7 @@ blockedByChars=600
 sourceSummaryChars=240
 keywordChars=32
 maxKeywords=24
-totalChars=2800
+totalChars=12000
 ```
 
 Default memory limits:
@@ -256,7 +286,7 @@ The packet includes lightweight indexes rather than full bodies:
 - matched knowledge and skills;
 - a required-read list, normally up to five items, with GET endpoints.
 
-Candidates include non-archived plans, unconsolidated recent memories, consolidated memories, and non-archived role skills. Active plans and active recent memories receive only a small ranking bonus. A candidate must still match the current message to enter required reads.
+Candidates include non-archived plans (`未开始`, `进行中`, `暂停`, and `已完成`), unconsolidated recent memories, consolidated memories, and non-archived role skills. Only `进行中` plans enter the default active-plan index; paused plans remain searchable but are not treated as active. Active plans and active recent memories receive only a small ranking bonus. A candidate must still match the current message to enter required reads.
 
 The handler must read required items before replying, changing role knowledge, delegating work, or taking an external action.
 
@@ -290,13 +320,15 @@ Both `/roles/...` and `/api/roles/...` prefixes are accepted. Public documentati
 
 Plan approval feedback is an independent JSONL audit record associated with a `planId` and optional `stepId`, stored under `plans/feedback/<planId>.jsonl`. It is neither a second copy of the plan JSON nor the generic Outbox Action Queue.
 
-WebGUI and tray submissions use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Manager records the feedback first, then uses the existing role-panel delivery path to notify the bound Agent. `deliveryStatus` distinguishes `pending`, `delivered`, `failed`, and `record_only`. When recording succeeds but delivery fails, clients keep the draft and retry with the same `feedbackId`; Manager collapses delivery updates for that ID instead of creating another approval record.
+WebGUI and tray submissions use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Manager persists the feedback and immediately returns `deliveryStatus=pending`, then notifies the bound Agent through the existing role-panel path in the background; the UI no longer waits for the Agent child process. Completion or failure appends a `delivered / failed` state for the same `feedbackId` and emits `plan_feedback_changed`. WebGUI reacts by reading only that plan's feedback summary instead of reloading all plans and memory. A failed notification restores the submitted text for retry.
 
 After receiving approval through QQ or another channel, an Agent may call the same endpoint with `source=qq` and `notifyAgent=false` to record the user's decision. Agent-authored handling notes use `author=agent` and `kind=approval_response`, which are always `record_only`. No feedback submission advances a plan; only a later explicit plan `PATCH` by the Agent changes steps or status.
 
 ## Manager presentation order and plan views
 
-The Manager plan API adds read-only `presentation.status` and `presentation.tone` fields for display-only states such as `Blocked` and `Awaiting QA`; these fields are never written back to plan files. `presentation.approval` centrally decides whether approval input is shown and supplies its target `stepId`, label, and helper copy. Plans are ordered as `Blocked → Awaiting QA → In progress → Not started → Completed → Archived`, then newest `updatedAt` first within each status. Recent and consolidated memory are also returned newest-first by `updatedAt`.
+The Manager plan API adds read-only `presentation.status` and `presentation.tone` fields for display-only states such as `Blocked` and `Awaiting QA`; these fields are never written back to plan files. A top-level paused plan uses a dedicated slate palette, belongs only to the `plans` view, and derives neither blocked/QA presentation nor approval capability. `presentation.views` centrally supplies `current / plans / archived` membership, and `presentation.palette` supplies the shared `accent`, `background`, and `foreground` colors. `presentation.approval.state` is `none`, `incomplete`, or `ready`, with shared `missing` and normalized `contract` fields. Both `incomplete` and `ready` accept user feedback; incomplete only adds an Agent-facing clarification warning. Except for paused plans, ready approvals sort first, incomplete contracts next, followed by `Blocked → Awaiting QA → In progress → Not started → Completed → Archived` and newest `updatedAt`. Paused plans always sort last regardless of approval data or update time. Recent and consolidated memory are also returned newest-first by `updatedAt`.
+
+The Qt tray and RibiWebGUI both consume this Manager DTO, view membership, palette, and order. Their shared knowledge categories are `Current / Plans / Recent Memory / Archived`: Current combines in-progress plans with recent memory, paused plans remain only under Plans, and Archived combines archived plans with consolidated memory. Neither client reads `data/` directly nor owns a separate state-recognition, category, status-color, or ordering table.
 
 Both the Qt tray and RibiWebGUI's Plans & Memory page consume this Manager DTO and its existing order. Neither reads `data/` directly nor maintains a separate status or sorting implementation.
 

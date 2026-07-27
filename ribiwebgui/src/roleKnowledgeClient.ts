@@ -1,4 +1,5 @@
 import type { RoleMemoryPayload, RolePlan, RolePlanFeedback } from "./types";
+import { FALLBACK_PLAN_PRESENTATION_PALETTE, normalizePlanPresentationPalette } from "./planPresentationStyles";
 
 type ManagerEnvelope<T> = {
   code: number;
@@ -17,26 +18,52 @@ async function managerData<T>(path: string): Promise<T> {
 
 function withPresentation(plan: RolePlan): RolePlan {
   if (plan.presentation?.status && plan.presentation?.tone && plan.presentation.approval) {
-    return { ...plan, approval: plan.approval || { count: 0 } };
+    const fallbackViews: RolePlan["presentation"]["views"] = plan.status === "已归档"
+      ? ["archived"]
+      : plan.status === "进行中"
+        ? ["current", "plans"]
+        : ["plans"];
+    return {
+      ...plan,
+      presentation: {
+        ...plan.presentation,
+        views: Array.isArray(plan.presentation.views) && plan.presentation.views.length
+          ? plan.presentation.views
+          : fallbackViews,
+        palette: normalizePlanPresentationPalette(plan.presentation.palette),
+        approval: {
+          ...plan.presentation.approval,
+          state: plan.presentation.approval.state || (plan.presentation.approval.enabled ? "ready" : "none"),
+          missing: Array.isArray(plan.presentation.approval.missing) ? plan.presentation.approval.missing : []
+        }
+      },
+      approval: plan.approval || { count: 0 }
+    };
   }
   const tone = plan.status === "进行中"
     ? "running"
-    : plan.status === "未开始"
-      ? "pending"
-      : plan.status === "已完成"
-        ? "done"
-        : plan.status === "已归档"
-          ? "archived"
-          : "unknown";
+    : plan.status === "暂停"
+      ? "paused"
+      : plan.status === "未开始"
+        ? "pending"
+        : plan.status === "已完成"
+          ? "done"
+          : plan.status === "已归档"
+            ? "archived"
+            : "unknown";
   return {
     ...plan,
     presentation: {
       status: plan.status,
       tone,
+      views: plan.status === "已归档" ? ["archived"] : plan.status === "进行中" ? ["current", "plans"] : ["plans"],
+      palette: { ...FALLBACK_PLAN_PRESENTATION_PALETTE },
       approval: {
+        state: "none",
         enabled: false,
-        label: "审批建议",
-        helper: "意见会由 Rabi Manager 记录并交给 Agent；提交本身不会直接推进计划。"
+        label: "无需审批",
+        helper: "当前步骤没有声明人工审批门禁。",
+        missing: []
       }
     },
     approval: plan.approval || { count: 0 }
@@ -50,6 +77,13 @@ export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePl
     managerData<RoleMemoryPayload>(`/api/roles/${encodedRoleId}/memory`)
   ]);
   return { plans: plans.map(withPresentation), memory };
+}
+
+export async function loadPlanFeedback(roleId: string, planId: string): Promise<RolePlan["approval"]> {
+  const data = await managerData<RolePlan["approval"] & { records?: RolePlanFeedback[] }>(
+    `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}/feedback`
+  );
+  return { count: Number(data.count || 0), latest: data.latest };
 }
 
 export async function submitPlanFeedback(input: {

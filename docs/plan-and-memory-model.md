@@ -46,16 +46,17 @@ data/route/<RouteName>/
 
 计划用于保存可推进、可等待、可完成、可归档的关注项。计划数据是角色要盯住的事项，不是普通聊天记录，也不是执行器队列。
 
-计划有生命周期状态。当前机制只定义四个状态：
+计划有生命周期状态。当前机制定义五个顶层状态：
 
 ```text
 未开始
 进行中
+暂停
 已完成
 已归档
 ```
 
-等待用户、等待外部系统、暂停、阻塞等情况不作为顶层状态。它们应写入 `nextAction`、`waitingFor`、`blockedBy` 或备注字段。这样计划列表保持简单，Agent 也更容易判断计划是否还能推进。
+`暂停` 表示用户或负责人明确要求暂时停止推进，但仍保留恢复位置。等待用户、等待外部系统和阻塞仍不是额外顶层状态，应写入 `nextAction`、`waitingFor`、`blockedBy` 或备注字段；需要继续追踪的等待计划保持 `进行中`。
 
 推荐目录：
 
@@ -74,7 +75,7 @@ data/roles/<RoleId>/plans/
 plans/items/active/*.json
 ```
 
-用于放所有未归档计划，包括 `未开始`、`进行中`、`已完成`。计划不再按短期、长期、项目关联拆目录；这些信息应写入 `kind`、`project`、`priority`、`dueAt`、`nextAction` 等字段，由视图筛选。
+用于放所有未归档计划，包括 `未开始`、`进行中`、`暂停`、`已完成`。计划不再按短期、长期、项目关联拆目录；这些信息应写入 `kind`、`project`、`priority`、`dueAt`、`nextAction` 等字段，由视图筛选。
 
 归档计划：
 
@@ -123,7 +124,26 @@ completedArchiveAfterHours = 72
   "blockedBy": "",
   "steps": [
     { "id": "inspect-current", "title": "检查当前模型与界面", "status": "已完成" },
-    { "id": "confirm-contract", "title": "确认结构化步骤契约", "status": "进行中" },
+    {
+      "id": "confirm-contract",
+      "title": "确认结构化步骤契约",
+      "status": "进行中",
+      "approvalRequest": {
+        "request": "批准按列出的文件和命令更新计划契约。",
+        "reason": "该变更会修改公开 Plan Schema 和双端用户界面。",
+        "files": [
+          { "path": "src/roleKnowledge.ts", "action": "modify", "change": "新增审批合同 Schema、规范化和写入校验。" },
+          { "path": "ribiwebgui/src/pages/RoleKnowledgePage.vue", "action": "modify", "change": "展示合同与缺失提示，同时允许用户提交审批意见。" }
+        ],
+        "commands": [
+          { "command": "npm run build:backend", "purpose": "编译并验证 Manager 后端。", "expectedEffect": "只生成本地 dist 构建产物。" }
+        ],
+        "changes": [],
+        "validation": ["Node 定向测试、托盘测试和 WebGUI 构建全部通过。"],
+        "rollback": ["验证失败时只回退本合同列出的源码和文档改动。"],
+        "outOfScope": ["不提交、不推送、不修改运行期 data/。"]
+      }
+    },
     { "id": "update-readers", "title": "更新接口、读取层和文档", "status": "未开始" }
   ],
   "project": {
@@ -157,9 +177,11 @@ completedArchiveAfterHours = 72
 
 `focus` 是单条计划的唯一主题声明。新增计划必须显式填写，且只能是一行；一个计划只推进一个主题，遇到无关目标或独立阻塞时应拆成另一条计划，不能继续堆进 `currentStep`。
 
-`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。步骤可带 `detail`、`waitingFor`、`blockedBy` 和 `completedAt`；`waitingFor` 说明正在等谁或什么，`blockedBy` 说明为什么无法继续，并优先写到实际受阻的当前步骤上。`currentStep` 保留为当前进展说明，不再承担步骤列表或步骤身份。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用。
+`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。顶层状态改为 `暂停` 时，可以保留这条 `进行中` 步骤及其 `currentStepId` 作为恢复位置；恢复时只把顶层状态改回 `进行中`。步骤可带 `detail`、`waitingFor`、`blockedBy` 和 `completedAt`；`waitingFor` 说明正在等谁或什么，`blockedBy` 说明为什么无法继续，并优先写到实际受阻的当前步骤上。`currentStep` 保留为当前进展说明，不再承担步骤列表或步骤身份。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用。
 
-`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。目前只支持 `agentType=codex`。`sessionId` 是必填的完整执行任务 ID；`sessionTitle` 只用于展示，`workspace` 用于 Stop Hook 的安全校验。`completionHook.enabled=true` 时，Manager 在该会话完成一轮后把官方最终回答经现有角色面板链投给同人格 Route；`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆。
+需要审批的当前步骤应带完整 `approvalRequest`。`request` 和 `reason` 说明批准事项与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围。`files / commands / changes` 至少一类非空，其余项目建议明确填写。读取旧计划仍兼容；缺合同的审批步骤会由 Manager 标为 `presentation.approval.state=incomplete` 并在双端展示缺失项，但用户仍可提交审批意见。该提示用于让 Agent 根据意见补充计划，不限制用户决策。
+
+`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。目前只支持 `agentType=codex`。`sessionId` 是必填的完整执行任务 ID；`sessionTitle` 只用于展示，`workspace` 用于 Stop Hook 的安全校验。`completionHook.enabled=true` 时，Manager 在该会话完成一轮后把官方最终回答经现有角色面板链投给同人格 Route；`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划顶层为 `暂停` 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
 
 目标 Codex Route 必须已有精确任务 ID，且不得与执行会话相同。一个执行会话绑定多个计划、workspace 不一致、执行会话上下文人格与计划人格不一致、指定 gateway 不存在或未绑定该人格、同人格存在多个 gateway 却未指定 `gatewayId` 时都失败关闭。此能力在双真实 Desktop 任务验收前保持实验状态。
 
@@ -184,6 +206,12 @@ GET /api/roles/:roleId/knowledge-validation
       "stepDetailChars": 600,
       "stepWaitingForChars": 300,
       "stepBlockedByChars": 300,
+      "approvalRequestChars": 600,
+      "approvalReasonChars": 600,
+      "approvalPathChars": 1000,
+      "approvalDetailChars": 800,
+      "approvalCommandChars": 2000,
+      "approvalListItemChars": 800,
       "maxSteps": 100,
       "nextActionChars": 600,
       "waitingForChars": 300,
@@ -191,7 +219,7 @@ GET /api/roles/:roleId/knowledge-validation
       "sourceSummaryChars": 240,
       "keywordChars": 32,
       "maxKeywords": 24,
-      "totalChars": 2800
+      "totalChars": 12000
     },
     "memory": {
       "titleChars": 80,
@@ -213,6 +241,7 @@ GET /api/roles/:roleId/knowledge-validation
 ```text
 未开始    已记录，但还没有进入推进状态
 进行中    正在推进、正在关注，或当前需要 Agent 留意
+暂停      明确停止继续推进，但保留当前步骤和恢复位置
 已完成    事情已经完成，先保留一段时间供用户确认，再按配置自动归档
 已归档    已从默认计划视图中收起，只作为历史记录保留
 ```
@@ -223,7 +252,7 @@ GET /api/roles/:roleId/knowledge-validation
 
 聊天记录、语音转写和心跳事件属于原始事件日志。Agent 本身可以按路径或工具查询这些日志，所以托盘面板不需要把聊天记录伪装成记忆展示。记忆应该是 Agent 看过上下文之后，认为以后仍有价值而主动写入的内容。
 
-记忆不需要计划状态。记忆不是待办事项，不需要 `未开始`、`进行中`、`已完成` 或 `已归档`。记忆可以有来源、记录时间、更新时间、适用范围或置信度，但这些只是元信息，不表示生命周期。
+记忆不需要计划状态。记忆不是待办事项，不需要 `未开始`、`进行中`、`暂停`、`已完成` 或 `已归档`。记忆可以有来源、记录时间、更新时间、适用范围或置信度，但这些只是元信息，不表示生命周期。
 
 推荐目录：
 
@@ -492,6 +521,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 - 新计划先设为 `未开始`。
 - 已确认要推进或当前正在关注时设为 `进行中`。
 - 等用户或外部系统时仍保持 `进行中`，用 `waitingFor` 写清等待对象；如果已无法继续，用当前步骤的 `blockedBy` 写清阻塞原因。
+- 用户明确要求暂时停止推进时设为 `暂停`，保留当前 `进行中` 步骤与 `currentStepId`，并停止继续驱动绑定任务；恢复时把顶层状态改回 `进行中`。
 - 完成后设为 `已完成`，写入 `completedAt`。
 - `已完成` 距离最后一次 `updatedAt` 超过当前固定 72 小时后，由角色知识快照设为 `已归档`，写入 `archivedAt`，并移动到 `archive/`。
 - 用户手动要求不再展示时，也可以直接设为 `已归档`。
@@ -507,22 +537,22 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-WebGUI 或托盘提交时使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。Manager 先记录意见，再经现有角色面板投递链通知绑定 Agent；响应中的 `deliveryStatus` 区分 `pending / delivered / failed / record_only`。记录已成功但投递失败时，客户端保留草稿并使用同一个 `feedbackId` 重试，Manager 会折叠同 ID 的投递状态更新，避免生成第二条审批记录。
+WebGUI 或托盘提交时使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。Manager 先同步落盘并立即返回 `deliveryStatus=pending`，再在后台经现有角色面板投递链通知绑定 Agent；用户界面不再等待 Agent 子进程完成。后台完成或失败时，Manager 追加同 `feedbackId` 的 `delivered / failed` 状态并发布 `plan_feedback_changed` 事件。WebGUI 只按事件读取该计划的审批摘要，不整页重载计划和记忆；记录失败时恢复原意见供重试。
 
 Agent 从 QQ 等其它入口获得审批后，也可以调用同一接口，以 `source=qq`、`notifyAgent=false` 记录用户意见；Agent 自己的处理说明使用 `author=agent`、`kind=approval_response`，自动按 `record_only` 写入。无论来源如何，只有 Agent 后续显式 `PATCH` 计划时才会推进步骤或状态。
 
 ## Manager 展示顺序与计划视图
 
-Manager 的计划 API 会附加只读 `presentation.status` / `presentation.tone`，用于表达“阻塞中”和“待QA测试”等不回写文件的显示状态；`presentation.approval` 统一判断当前计划是否显示审批输入，并给出目标 `stepId`、标签和帮助文本。列表按“阻塞中 → 待QA测试 → 进行中 → 未开始 → 已完成 → 已归档”排序，同一状态内按 `updatedAt` 从新到旧；近期记忆和沉淀记忆也由 Manager 按 `updatedAt` 从新到旧返回。
+Manager 的计划 API 会附加只读 `presentation.status` / `presentation.tone`，用于表达“阻塞中”和“待QA测试”等不回写文件的显示状态；其中“阻塞中”只用于当前步骤存在明确人工审批/授权门禁且确有阻塞原因的计划。编译、测试、Unity/MCP、同步、进包等可继续重试或推进的执行问题仍显示“进行中”，QA 等待显示“待QA测试”，不会仅因存在 `blockedBy` 文本就误标为审批阻塞。顶层 `暂停` 使用独立灰蓝色板，只属于 `plans` 视图，不派生阻塞、QA 或审批状态。`presentation.views` 统一给出计划所属的 `current / plans / archived` 视图，`presentation.palette` 为同一状态提供统一的 `accent`、`background` 和 `foreground` 色值。`presentation.approval.state` 分为 `none / incomplete / ready`，并统一返回 `missing` 与规范化 `contract`；`incomplete` 和 `ready` 都允许用户提交审批意见，区别仅在于前者会提醒 Agent 补充执行说明。除暂停外，列表先排 `ready`，再排 `incomplete`，其后按“阻塞中 → 待QA测试 → 进行中 → 未开始 → 已完成 → 已归档”和 `updatedAt` 排序；`暂停` 无论审批合同或更新时间如何都绝对排在最后。近期记忆和沉淀记忆也由 Manager 按 `updatedAt` 从新到旧返回。
 
-Qt 托盘和 RibiWebGUI 的“计划与记忆”页都消费这份 Manager DTO 和既有顺序，不直接读取 `data/`，也不各自维护状态识别或排序规则。
+Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、视图分类、状态色板和既有顺序。两端重叠分类统一为“当前 / 计划 / 近期记忆 / 已归档”：当前包含进行中计划与近期记忆，暂停计划只进入计划分类，已归档包含归档计划与沉淀记忆。两端不直接读取 `data/`，也不各自维护状态识别、分类、状态颜色或排序规则。
 
 ## 托盘视图
 
 当前：
 
 ```text
-“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划。需要审批的卡片展开后可以追加意见。
+“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划，其中暂停计划使用灰蓝色状态并绝对排在最后。审批卡片展示已有的批准事项、原因、文件、命令、外部变更、验证、回退和排除范围；说明不完整时同时显示缺失项和审批输入，让用户可以批准、拒绝或明确要求 Agent 补充。长列表中的屏外卡片使用浏览器 `content-visibility` 延迟渲染，详情展开不做高度过渡，审批输入保持固定高度，减少滚动、展开和输入时的布局重算。
 ```
 
 近期记忆：

@@ -2392,8 +2392,24 @@ body::before {
   padding: 14px;
 }
 
+.knowledge-subsection-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #52677a;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.knowledge-memory-heading {
+  grid-column: 1 / -1;
+}
+
 .knowledge-plan-card {
-  --plan-tone: #19bfc1;
+  --plan-tone: #8795a1;
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: auto 260px;
   display: grid;
   grid-template-columns: 5px minmax(0, 1fr);
   min-width: 0;
@@ -2403,12 +2419,6 @@ body::before {
   background: rgba(255, 255, 255, .92);
   box-shadow: 0 5px 18px rgba(14, 46, 70, .045);
 }
-
-.knowledge-plan-card[data-tone="blocked"] { --plan-tone: #ef6c52; }
-.knowledge-plan-card[data-tone="qa"] { --plan-tone: #8e63c7; }
-.knowledge-plan-card[data-tone="pending"] { --plan-tone: #e8a23a; }
-.knowledge-plan-card[data-tone="done"],
-.knowledge-plan-card[data-tone="archived"] { --plan-tone: #8795a1; }
 
 .knowledge-plan-accent {
   background: var(--plan-tone);
@@ -2596,6 +2606,104 @@ body::before {
   background: linear-gradient(135deg, rgba(239, 252, 252, .9), rgba(255, 255, 255, .96));
 }
 
+.knowledge-approval-panel[data-state="incomplete"] {
+  border-color: rgba(245, 158, 11, .34);
+  background: linear-gradient(135deg, rgba(255, 247, 230, .94), rgba(255, 255, 255, .96));
+}
+
+.knowledge-approval-missing .v-alert__content {
+  display: grid;
+  gap: 3px;
+}
+
+.knowledge-approval-contract {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(15, 139, 141, .16);
+  border-radius: 9px;
+  padding: 12px;
+  background: rgba(255, 255, 255, .82);
+}
+
+.knowledge-approval-contract-lead {
+  display: grid;
+  gap: 4px;
+}
+
+.knowledge-approval-contract-lead > span,
+.knowledge-approval-contract-section h4,
+.knowledge-approval-contract-grid h4 {
+  margin: 0;
+  color: #0f8b8d;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .04em;
+}
+
+.knowledge-approval-contract-lead > b {
+  color: #0c2a4a;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.knowledge-approval-contract-lead > small,
+.knowledge-approval-contract-item small {
+  color: #687c8d;
+  line-height: 1.5;
+}
+
+.knowledge-approval-contract-section,
+.knowledge-approval-contract-grid > section {
+  display: grid;
+  gap: 7px;
+}
+
+.knowledge-approval-contract-item {
+  display: grid;
+  gap: 4px;
+  border-left: 3px solid rgba(15, 139, 141, .45);
+  padding: 8px 10px;
+  background: rgba(239, 252, 252, .55);
+}
+
+.knowledge-approval-contract-item > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.knowledge-approval-contract code {
+  color: #17405f;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-approval-contract-item p {
+  margin: 0;
+  color: #29445a;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.knowledge-approval-contract-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.knowledge-approval-contract-grid ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #29445a;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .knowledge-approval-head,
 .knowledge-approval-actions {
   display: flex;
@@ -2622,6 +2730,13 @@ body::before {
   color: #0c2a4a;
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+.knowledge-approval-plan-detail {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  line-height: 1.65;
+  color: var(--text-secondary);
 }
 
 .knowledge-approval-panel > p {
@@ -2671,6 +2786,9 @@ body::before {
 }
 
 .knowledge-memory-card {
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: auto 180px;
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
   gap: 12px;
@@ -2977,6 +3095,10 @@ body::before {
 
   .knowledge-approval-actions .v-btn {
     width: 100%;
+  }
+
+  .knowledge-approval-contract-grid {
+    grid-template-columns: 1fr;
   }
 
   .knowledge-step {

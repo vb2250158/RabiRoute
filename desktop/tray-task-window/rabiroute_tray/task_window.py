@@ -41,6 +41,7 @@ VIEW_LABELS = (
 
 STATUS_TONES = {
     "进行中": "running",
+    "暂停": "paused",
     "未开始": "pending",
     "已完成": "done",
     "已归档": "archived",
@@ -326,7 +327,7 @@ class PlanDetailPanel(QFrame):
         if metadata_fields:
             layout.addWidget(PlanMetadataPanel(metadata_fields))
 
-        self.approval_panel = PlanApprovalPanel(plan) if plan.approval_enabled else None
+        self.approval_panel = PlanApprovalPanel(plan) if plan.approval_state != "none" else None
         if self.approval_panel is not None:
             self.approval_panel.submit_requested.connect(self.approval_requested.emit)
             layout.addWidget(self.approval_panel)
@@ -429,7 +430,8 @@ class PlanDetailPanel(QFrame):
 
     def _step_widget(self, index: int, step: PlanStep) -> QFrame:
         tone = _plan_step_tone(step, self.plan.current_step_id)
-        step_blocker = step.blocked_by or (self.plan.blocked_by if tone == "current" else "")
+        paused = self.plan.display_tone == "paused" or self.plan.status == "暂停"
+        step_blocker = "" if paused else step.blocked_by or (self.plan.blocked_by if tone == "current" else "")
         display_tone = "blocked" if tone == "current" and step_blocker else tone
         row = QFrame()
         row.setObjectName("planStepRow")
@@ -503,8 +505,9 @@ class PlanApprovalPanel(QFrame):
         heading.setObjectName("planApprovalTitle")
         heading_row.addWidget(heading)
         heading_row.addStretch(1)
-        source = QLabel("Manager 统一记录")
+        source = QLabel("可审批" if plan.approval_state == "ready" else "可审批 · 待补充")
         source.setObjectName("planApprovalSource")
+        source.setProperty("approvalState", plan.approval_state)
         heading_row.addWidget(source)
         layout.addLayout(heading_row)
 
@@ -512,6 +515,69 @@ class PlanApprovalPanel(QFrame):
         helper.setObjectName("planApprovalHelper")
         helper.setWordWrap(True)
         layout.addWidget(helper)
+
+        if plan.approval_missing:
+            missing_labels = {
+                "request": "批准事项",
+                "reason": "审批原因",
+                "affectedActions": "文件、命令或外部变更",
+                "validation": "验证方式",
+                "rollback": "回退方案",
+                "outOfScope": "明确不在范围内的内容",
+            }
+            missing = QLabel("建议 Agent 补充：" + "、".join(missing_labels.get(item, item) for item in plan.approval_missing))
+            missing.setObjectName("planApprovalMissing")
+            missing.setWordWrap(True)
+            layout.addWidget(missing)
+
+        contract = plan.approval_contract
+        if contract is not None:
+            contract_frame = QFrame()
+            contract_frame.setObjectName("planApprovalContract")
+            contract_layout = QVBoxLayout()
+            contract_layout.setContentsMargins(10, 10, 10, 10)
+            contract_layout.setSpacing(8)
+            request_label = QLabel("申请批准")
+            request_label.setObjectName("planApprovalContractHeading")
+            request = QLabel(contract.request or "未填写")
+            request.setObjectName("planApprovalContractRequest")
+            request.setWordWrap(True)
+            request.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            reason = QLabel(contract.reason or "未填写审批原因")
+            reason.setObjectName("planApprovalContractReason")
+            reason.setWordWrap(True)
+            reason.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            contract_layout.addWidget(request_label)
+            contract_layout.addWidget(request)
+            contract_layout.addWidget(reason)
+
+            action_labels = {"create": "新建", "modify": "修改", "delete": "删除", "move": "移动"}
+            if contract.files:
+                rows = [
+                    f"{action_labels.get(item.action, item.action)} {item.path}\n{item.change}"
+                    + (f"\n目标：{item.destination}" if item.destination else "")
+                    for item in contract.files
+                ]
+                self._add_contract_section(contract_layout, "文件改动", rows, code=True)
+            if contract.commands:
+                rows = [
+                    f"{item.command}\n用途：{item.purpose}"
+                    + (f"\n预期影响：{item.expected_effect}" if item.expected_effect else "")
+                    for item in contract.commands
+                ]
+                self._add_contract_section(contract_layout, "执行命令", rows, code=True)
+            if contract.changes:
+                rows = [
+                    f"{item.target}\n{item.change}"
+                    + (f"\n影响：{item.impact}" if item.impact else "")
+                    for item in contract.changes
+                ]
+                self._add_contract_section(contract_layout, "配置、数据或外部环境变更", rows)
+            self._add_contract_section(contract_layout, "批准后如何验证", contract.validation)
+            self._add_contract_section(contract_layout, "失败时如何回退", contract.rollback)
+            self._add_contract_section(contract_layout, "明确不在本次范围", contract.out_of_scope)
+            contract_frame.setLayout(contract_layout)
+            layout.addWidget(contract_frame)
 
         if plan.latest_approval_text:
             latest = QFrame()
@@ -562,6 +628,20 @@ class PlanApprovalPanel(QFrame):
         layout.addWidget(self.notice)
         self.setLayout(layout)
 
+    @staticmethod
+    def _add_contract_section(layout: QVBoxLayout, title: str, rows: list[str], code: bool = False) -> None:
+        if not rows:
+            return
+        heading = QLabel(title)
+        heading.setObjectName("planApprovalContractHeading")
+        layout.addWidget(heading)
+        for row_text in rows:
+            row = QLabel(row_text)
+            row.setObjectName("planApprovalContractCode" if code else "planApprovalContractItem")
+            row.setWordWrap(True)
+            row.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(row)
+
     def _submit(self) -> None:
         text = self.input.toPlainText().strip()
         if not text:
@@ -573,8 +653,9 @@ class PlanApprovalPanel(QFrame):
         self.submit_requested.emit(self.plan.plan_id, self.plan.approval_step_id, self.feedback_id, text)
 
     def set_pending(self, pending: bool) -> None:
-        self.input.setEnabled(not pending)
-        self.submit_button.setEnabled(not pending)
+        enabled = self.plan.approval_state != "none" and not pending
+        self.input.setEnabled(enabled)
+        self.submit_button.setEnabled(enabled)
         self.submit_button.setText("正在提交…" if pending else "提交给 Agent")
         if pending:
             self._set_notice("正在由 Rabi Manager 记录并通知 Agent。", "pending")
@@ -606,6 +687,8 @@ def _plan_step_tone(step: PlanStep, current_step_id: str = "") -> str:
 
 
 def _plan_blocker(plan: PlanItem) -> str:
+    if plan.display_tone == "paused" or plan.status == "暂停":
+        return ""
     if plan.current_step_id:
         for step in plan.steps:
             if step.step_id == plan.current_step_id and step.blocked_by.strip():
@@ -633,6 +716,34 @@ def _plan_status_presentation(plan: PlanItem, status: str) -> tuple[str, str]:
     return status, STATUS_TONES.get(status, "unknown")
 
 
+def _plan_card_palette_stylesheet(plan: PlanItem) -> str:
+    if not plan.display_accent:
+        return ""
+    return (
+        "QFrame#itemCard[tone=\"plan\"] {"
+        "background: #ffffff;"
+        "border: 1px solid #dbe5ea;"
+        f"border-left: 4px solid {plan.display_accent};"
+        "border-radius: 8px;"
+        "}"
+    )
+
+
+def _plan_status_palette_stylesheet(plan: PlanItem, status_tone: str) -> str:
+    if not plan.display_background or not plan.display_foreground:
+        return ""
+    return (
+        f"QLabel#planStatus[statusTone=\"{status_tone}\"] {{"
+        f"background: {plan.display_background};"
+        f"color: {plan.display_foreground};"
+        "border-radius: 8px;"
+        "font-size: 11px;"
+        "font-weight: 850;"
+        "padding: 3px 7px;"
+        "}"
+    )
+
+
 class ExpandableCard(QFrame):
     expanded_changed = Signal(bool)
     approval_requested = Signal(str, str, str, str)
@@ -652,6 +763,8 @@ class ExpandableCard(QFrame):
         self._expanded = False
         self.setObjectName("itemCard")
         self.setProperty("tone", tone)
+        if plan is not None:
+            self.setStyleSheet(_plan_card_palette_stylesheet(plan))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
         layout = QVBoxLayout()
@@ -692,6 +805,8 @@ class ExpandableCard(QFrame):
             self.status_label = QLabel(f"状态：{display_status}")
             self.status_label.setObjectName("planStatus")
             self.status_label.setProperty("statusTone", status_tone)
+            if plan is not None:
+                self.status_label.setStyleSheet(_plan_status_palette_stylesheet(plan, status_tone))
             title_row.addWidget(self.status_label, 0, Qt.AlignTop)
         else:
             self.status_label = None
@@ -1972,8 +2087,8 @@ QFrame#itemCard, QFrame#infoCard {
     border-radius: 8px;
 }
 QFrame#itemCard[tone="plan"] {
-    background: #fffdf8;
-    border-left: 4px solid #f59e0b;
+    background: #ffffff;
+    border-left: 4px solid #8795a1;
 }
 QFrame#itemCard[tone="memory"] {
     background: #f8fefe;
@@ -2018,18 +2133,12 @@ QLabel#cardTitle {
     font-weight: 850;
 }
 QLabel#planStatus {
+    background: #eef1f4;
+    color: #687786;
     border-radius: 8px;
     font-size: 11px;
     font-weight: 850;
     padding: 3px 7px;
-}
-QLabel#planStatus[statusTone="running"] {
-    background: #eaf8ef;
-    color: #15803d;
-}
-QLabel#planStatus[statusTone="blocked"] {
-    background: #fff1e8;
-    color: #b54708;
 }
 QLabel#chatAvatar {
     background: #f2fbfc;
@@ -2038,26 +2147,6 @@ QLabel#chatAvatar {
     color: #0f8b8d;
     font-size: 13px;
     font-weight: 900;
-}
-QLabel#planStatus[statusTone="qa"] {
-    background: #f3e8ff;
-    color: #7e22ce;
-}
-QLabel#planStatus[statusTone="pending"] {
-    background: #fff7e6;
-    color: #a96008;
-}
-QLabel#planStatus[statusTone="done"] {
-    background: #eaf4ff;
-    color: #1d63a9;
-}
-QLabel#planStatus[statusTone="archived"] {
-    background: #eef1f4;
-    color: #687786;
-}
-QLabel#planStatus[statusTone="unknown"] {
-    background: #eef1f4;
-    color: #687786;
 }
 QFrame#keywordPanel {
     background: transparent;
@@ -2273,9 +2362,52 @@ QLabel#planApprovalSource {
     font-weight: 850;
     padding: 3px 7px;
 }
+QLabel#planApprovalSource[approvalState="incomplete"] {
+    background: #fff0d5;
+    color: #9a5b13;
+}
 QLabel#planApprovalHelper, QLabel#planApprovalActionNote {
     color: #667586;
     font-size: 11px;
+}
+QLabel#planApprovalMissing {
+    background: #fff7e6;
+    border: 1px solid #f2d399;
+    border-radius: 7px;
+    color: #9a5b13;
+    font-size: 11px;
+    font-weight: 750;
+    padding: 7px 9px;
+}
+QFrame#planApprovalContract {
+    background: #ffffff;
+    border: 1px solid #cfe5e6;
+    border-radius: 7px;
+}
+QLabel#planApprovalContractHeading {
+    color: #0f7c7e;
+    font-size: 10px;
+    font-weight: 900;
+}
+QLabel#planApprovalContractRequest {
+    color: #0c2a4a;
+    font-size: 13px;
+    font-weight: 850;
+}
+QLabel#planApprovalContractReason {
+    color: #667586;
+    font-size: 11px;
+}
+QLabel#planApprovalContractItem, QLabel#planApprovalContractCode {
+    background: #f5fbfb;
+    border: 0;
+    border-left: 3px solid #7ccfd0;
+    color: #29445a;
+    font-size: 11px;
+    padding: 7px 9px;
+}
+QLabel#planApprovalContractCode {
+    font-family: Consolas, "Cascadia Mono", monospace;
 }
 QFrame#planApprovalLatest {
     background: #ffffff;

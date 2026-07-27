@@ -4,8 +4,40 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export type PlanStatus = "未开始" | "进行中" | "已完成" | "已归档";
+export type PlanStatus = "未开始" | "进行中" | "暂停" | "已完成" | "已归档";
 export type PlanStepStatus = "未开始" | "进行中" | "已完成";
+
+export type PlanApprovalFileAction = "create" | "modify" | "delete" | "move";
+
+export type PlanApprovalFileChange = {
+  path: string;
+  action: PlanApprovalFileAction;
+  change: string;
+  destination?: string;
+};
+
+export type PlanApprovalCommand = {
+  command: string;
+  purpose: string;
+  expectedEffect?: string;
+};
+
+export type PlanApprovalExternalChange = {
+  target: string;
+  change: string;
+  impact?: string;
+};
+
+export type PlanApprovalRequest = {
+  request: string;
+  reason: string;
+  files: PlanApprovalFileChange[];
+  commands: PlanApprovalCommand[];
+  changes: PlanApprovalExternalChange[];
+  validation: string[];
+  rollback: string[];
+  outOfScope: string[];
+};
 
 export type PlanStep = {
   id: string;
@@ -15,6 +47,7 @@ export type PlanStep = {
   waitingFor?: string;
   blockedBy?: string;
   completedAt?: string;
+  approvalRequest?: PlanApprovalRequest;
 };
 
 export type KnowledgeSource = {
@@ -210,6 +243,12 @@ export type PlanWriteLimits = {
   stepDetailChars: number;
   stepWaitingForChars: number;
   stepBlockedByChars: number;
+  approvalRequestChars: number;
+  approvalReasonChars: number;
+  approvalPathChars: number;
+  approvalDetailChars: number;
+  approvalCommandChars: number;
+  approvalListItemChars: number;
   maxSteps: number;
   nextActionChars: number;
   waitingForChars: number;
@@ -244,6 +283,12 @@ export const DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS: RoleKnowledgeWriteLimits = {
     stepDetailChars: 600,
     stepWaitingForChars: 300,
     stepBlockedByChars: 300,
+    approvalRequestChars: 600,
+    approvalReasonChars: 600,
+    approvalPathChars: 1000,
+    approvalDetailChars: 800,
+    approvalCommandChars: 2000,
+    approvalListItemChars: 800,
     maxSteps: 100,
     nextActionChars: 600,
     waitingForChars: 300,
@@ -251,7 +296,7 @@ export const DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS: RoleKnowledgeWriteLimits = {
     sourceSummaryChars: 240,
     keywordChars: 32,
     maxKeywords: 24,
-    totalChars: 2800
+    totalChars: 12000
   },
   memory: {
     titleChars: 80,
@@ -450,6 +495,20 @@ function assertKeywordLimits(label: string, keywords: string[], maximumItems: nu
   }
 }
 
+function approvalRequestText(contract: PlanApprovalRequest | undefined): unknown[] {
+  if (!contract) return [];
+  return [
+    contract.request,
+    contract.reason,
+    ...contract.files.flatMap((item) => [item.path, item.action, item.change, item.destination]),
+    ...contract.commands.flatMap((item) => [item.command, item.purpose, item.expectedEffect]),
+    ...contract.changes.flatMap((item) => [item.target, item.change, item.impact]),
+    ...contract.validation,
+    ...contract.rollback,
+    ...contract.outOfScope
+  ];
+}
+
 function planTextTotal(plan: PlanItem): number {
   return [
     plan.title,
@@ -468,9 +527,90 @@ function planTextTotal(plan: PlanItem): number {
     plan.taskBinding?.sessionTitle,
     plan.taskBinding?.workspace,
     plan.taskBinding?.completionHook?.gatewayId,
-    ...plan.steps.flatMap((step) => [step.id, step.title, step.detail, step.waitingFor, step.blockedBy, step.completedAt]),
+    ...plan.steps.flatMap((step) => [
+      step.id,
+      step.title,
+      step.detail,
+      step.waitingFor,
+      step.blockedBy,
+      step.completedAt,
+      ...approvalRequestText(step.approvalRequest)
+    ]),
     ...plan.keywords
-  ].reduce((total, value) => total + textChars(value), 0);
+  ].reduce<number>((total, value) => total + textChars(value), 0);
+}
+
+export function currentPlanStep(plan: PlanItem): PlanStep | undefined {
+  if (plan.currentStepId) {
+    const explicit = plan.steps.find((step) => step.id === plan.currentStepId);
+    if (explicit) return explicit;
+  }
+  return plan.steps.find((step) => step.status === "进行中");
+}
+
+export function planRequiresApproval(plan: PlanItem): boolean {
+  if (plan.status === "暂停" || plan.status === "已完成" || plan.status === "已归档") return false;
+  const step = currentPlanStep(plan);
+  if (step?.approvalRequest) return true;
+  if (/human-gate/i.test(String(plan.kind || ""))) return true;
+  const explicitGate = [
+    step?.id,
+    step?.title,
+    step?.waitingFor,
+    step?.blockedBy,
+    plan.waitingFor,
+    plan.blockedBy
+  ];
+  return explicitGate.some((signal) => {
+    const normalized = String(signal || "").replace(/\s+/g, "");
+    return /(等待|待|需要|未经).*(审批|批准|授权|审核|人工决策)|^(审批|批准|授权|审核|人工决策)/i.test(normalized);
+  });
+}
+
+export function approvalRequestMissingFields(contract: PlanApprovalRequest | undefined): string[] {
+  if (!contract) return ["request", "reason", "affectedActions", "validation", "rollback", "outOfScope"];
+  const missing: string[] = [];
+  if (!contract.request.trim()) missing.push("request");
+  if (!contract.reason.trim()) missing.push("reason");
+  const hasFile = contract.files.some((item) => item.path.trim() && item.change.trim() && (item.action !== "move" || item.destination?.trim()));
+  const hasCommand = contract.commands.some((item) => item.command.trim() && item.purpose.trim());
+  const hasChange = contract.changes.some((item) => item.target.trim() && item.change.trim());
+  if (!hasFile && !hasCommand && !hasChange) missing.push("affectedActions");
+  if (contract.validation.length === 0) missing.push("validation");
+  if (contract.rollback.length === 0) missing.push("rollback");
+  if (contract.outOfScope.length === 0) missing.push("outOfScope");
+  return missing;
+}
+
+function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWriteLimits): void {
+  assertTextLimit("Plan approvalRequest.request", contract.request, limits.approvalRequestChars);
+  assertTextLimit("Plan approvalRequest.reason", contract.reason, limits.approvalReasonChars);
+  if (contract.files.length > 50) throw new Error("Plan approvalRequest.files cannot contain more than 50 items.");
+  if (contract.commands.length > 50) throw new Error("Plan approvalRequest.commands cannot contain more than 50 items.");
+  if (contract.changes.length > 50) throw new Error("Plan approvalRequest.changes cannot contain more than 50 items.");
+  for (const item of contract.files) {
+    assertTextLimit("Plan approvalRequest file path", item.path, limits.approvalPathChars);
+    assertTextLimit("Plan approvalRequest file destination", item.destination, limits.approvalPathChars);
+    assertTextLimit("Plan approvalRequest file change", item.change, limits.approvalDetailChars);
+  }
+  for (const item of contract.commands) {
+    assertTextLimit("Plan approvalRequest command", item.command, limits.approvalCommandChars);
+    assertTextLimit("Plan approvalRequest command purpose", item.purpose, limits.approvalDetailChars);
+    assertTextLimit("Plan approvalRequest command expectedEffect", item.expectedEffect, limits.approvalDetailChars);
+  }
+  for (const item of contract.changes) {
+    assertTextLimit("Plan approvalRequest change target", item.target, limits.approvalPathChars);
+    assertTextLimit("Plan approvalRequest change", item.change, limits.approvalDetailChars);
+    assertTextLimit("Plan approvalRequest impact", item.impact, limits.approvalDetailChars);
+  }
+  for (const [label, items] of [
+    ["validation", contract.validation],
+    ["rollback", contract.rollback],
+    ["outOfScope", contract.outOfScope]
+  ] as const) {
+    if (items.length > 50) throw new Error(`Plan approvalRequest.${label} cannot contain more than 50 items.`);
+    for (const item of items) assertTextLimit(`Plan approvalRequest.${label} item`, item, limits.approvalListItemChars);
+  }
 }
 
 function memoryTextTotal(memory: RecentMemoryItem | ConsolidatedMemoryItem): number {
@@ -502,6 +642,7 @@ function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps
     assertTextLimit("Plan step detail", step.detail, limits.stepDetailChars);
     assertTextLimit("Plan step waitingFor", step.waitingFor, limits.stepWaitingForChars);
     assertTextLimit("Plan step blockedBy", step.blockedBy, limits.stepBlockedByChars);
+    if (step.approvalRequest) validateApprovalRequest(step.approvalRequest, limits);
   }
 
   const currentSteps = plan.steps.filter((step) => step.status === "进行中");
@@ -515,8 +656,14 @@ function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps
       throw new Error("Plan currentStepId must identify the only step whose status is 进行中.");
     }
   }
-  if (plan.status !== "进行中" && plan.currentStepId) {
-    throw new Error("Only an in-progress plan can provide currentStepId.");
+  if (plan.status === "暂停" && currentSteps.length > 0 && !plan.currentStepId) {
+    throw new Error("A paused plan with an in-progress resume step must preserve currentStepId.");
+  }
+  if (plan.status === "暂停" && plan.currentStepId && (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId)) {
+    throw new Error("A paused plan currentStepId must preserve its only in-progress step.");
+  }
+  if (plan.status !== "进行中" && plan.status !== "暂停" && plan.currentStepId) {
+    throw new Error("Only an in-progress or paused plan can provide currentStepId.");
   }
   if (plan.status === "未开始" && currentSteps.length > 0) {
     throw new Error("A not-started plan cannot contain an in-progress step.");
@@ -562,6 +709,52 @@ function validateMemoryWrite(roleDir: string, memory: RecentMemoryItem | Consoli
   }
 }
 
+function normalizedStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function normalizeApprovalRequest(value: unknown): PlanApprovalRequest | undefined {
+  if (value == null) return undefined;
+  const raw = recordValue(value);
+  const files = Array.isArray(raw.files) ? raw.files.flatMap<PlanApprovalFileChange>((value) => {
+    const item = recordValue(value);
+    const action = item.action === "create" || item.action === "delete" || item.action === "move" ? item.action : "modify";
+    return [{
+      path: String(item.path || "").trim(),
+      action,
+      change: String(item.change || item.summary || "").trim(),
+      destination: typeof item.destination === "string" ? item.destination.trim() || undefined : undefined
+    }];
+  }) : [];
+  const commands = Array.isArray(raw.commands) ? raw.commands.flatMap<PlanApprovalCommand>((value) => {
+    const item = recordValue(value);
+    return [{
+      command: String(item.command || "").trim(),
+      purpose: String(item.purpose || "").trim(),
+      expectedEffect: typeof item.expectedEffect === "string" ? item.expectedEffect.trim() || undefined : undefined
+    }];
+  }) : [];
+  const changes = Array.isArray(raw.changes) ? raw.changes.flatMap<PlanApprovalExternalChange>((value) => {
+    const item = recordValue(value);
+    return [{
+      target: String(item.target || "").trim(),
+      change: String(item.change || item.summary || "").trim(),
+      impact: typeof item.impact === "string" ? item.impact.trim() || undefined : undefined
+    }];
+  }) : [];
+  return {
+    request: String(raw.request || "").trim(),
+    reason: String(raw.reason || "").trim(),
+    files,
+    commands,
+    changes,
+    validation: normalizedStringList(raw.validation),
+    rollback: normalizedStringList(raw.rollback),
+    outOfScope: normalizedStringList(raw.outOfScope)
+  };
+}
+
 function normalizePlanSteps(value: unknown): PlanStep[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap<PlanStep>((rawStep, index) => {
@@ -585,7 +778,8 @@ function normalizePlanSteps(value: unknown): PlanStep[] {
       detail: typeof raw.detail === "string" ? raw.detail : typeof raw.description === "string" ? raw.description : undefined,
       waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
       blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
-      completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined
+      completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
+      approvalRequest: normalizeApprovalRequest(raw.approvalRequest)
     }];
   });
 }
@@ -627,7 +821,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
   const title = String(raw.title || "").trim();
   if (!title) return null;
   const updatedAt = typeof raw.updatedAt === "string" && raw.updatedAt ? raw.updatedAt : nowIso();
-  const status: PlanStatus = raw.status === "未开始" || raw.status === "进行中" || raw.status === "已完成" || raw.status === "已归档"
+  const status: PlanStatus = raw.status === "未开始" || raw.status === "进行中" || raw.status === "暂停" || raw.status === "已完成" || raw.status === "已归档"
     ? raw.status
     : "未开始";
   return {

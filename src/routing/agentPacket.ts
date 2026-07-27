@@ -760,7 +760,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     manualTriggerLogPath,
     rolePanelLogPath,
     voiceTranscriptLogPath,
-    voiceIdentitiesPath,
+    voiceIdentitiesPath: isVoiceTranscript ? voiceIdentitiesPath : undefined,
     voiceprintIds: voiceprintIds.join(", ") || undefined,
     personaVoiceIdentitySummary: personaVoiceIdentitySummary || undefined,
     conversationCurrentPath,

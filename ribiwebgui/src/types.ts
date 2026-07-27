@@ -98,6 +98,7 @@ export type MessageAdapterScanResult = {
 export type RoleOption = PersonaAvatarPresentation & {
   label: string;
   value: string;
+  roleTitle?: string;
   rolePath?: string;
   roleContent?: string;
   roleError?: string;
@@ -118,6 +119,7 @@ export type RuntimeStatus = GatewayDefinition & {
     rolesDir?: string;
     selectedRoleId?: string;
     selectedRolePath?: string;
+    selectedRoleTitle?: string;
     selectedRoleContent?: string;
     selectedRoleError?: string;
     selectedRoleDataDir?: string;
@@ -190,13 +192,38 @@ export type RolePlanStep = {
   waitingFor?: string;
   blockedBy?: string;
   completedAt?: string;
+  approvalRequest?: RolePlanApprovalContract;
+};
+
+export type RolePlanApprovalContract = {
+  request: string;
+  reason: string;
+  files: Array<{
+    path: string;
+    action: "create" | "modify" | "delete" | "move";
+    change: string;
+    destination?: string;
+  }>;
+  commands: Array<{
+    command: string;
+    purpose: string;
+    expectedEffect?: string;
+  }>;
+  changes: Array<{
+    target: string;
+    change: string;
+    impact?: string;
+  }>;
+  validation: string[];
+  rollback: string[];
+  outOfScope: string[];
 };
 
 export type RolePlan = {
   id: string;
   title: string;
   focus: string;
-  status: "未开始" | "进行中" | "已完成" | "已归档";
+  status: "未开始" | "进行中" | "暂停" | "已完成" | "已归档";
   priority?: string;
   kind?: string;
   currentStep?: string;
@@ -215,12 +242,21 @@ export type RolePlan = {
   keywords: string[];
   presentation: {
     status: string;
-    tone: "blocked" | "qa" | "running" | "pending" | "done" | "archived" | "unknown";
+    tone: "blocked" | "qa" | "running" | "pending" | "done" | "archived" | "paused" | "unknown";
+    views: Array<"current" | "plans" | "archived">;
+    palette: {
+      accent: string;
+      background: string;
+      foreground: string;
+    };
     approval: {
+      state: "none" | "incomplete" | "ready";
       enabled: boolean;
       label: string;
       helper: string;
       stepId?: string;
+      missing: string[];
+      contract?: RolePlanApprovalContract;
     };
   };
   approval: {

@@ -10,6 +10,7 @@ class _RecordingManagerClient(ManagerClient):
         super().__init__()
         self.paths: list[str] = []
         self.posts: list[tuple[str, dict]] = []
+        self.post_timeouts: list[float | None] = []
 
     def _get_json(self, path: str) -> dict:
         self.paths.append(path)
@@ -29,6 +30,7 @@ class _RecordingManagerClient(ManagerClient):
 
     def _post_json(self, path: str, payload: dict | None = None, timeout_seconds: float | None = None) -> dict:
         self.posts.append((path, payload or {}))
+        self.post_timeouts.append(timeout_seconds)
         return {"code": 0, "data": {"deliveryStatus": "delivered"}}
 
 
@@ -94,6 +96,7 @@ class ManagerSnapshotTest(unittest.TestCase):
         self.assertEqual(client.posts[0][0], "/api/roles/Rabi%20%2F%20%E6%B5%8B%E8%AF%95/plans/plan%20%2F%201/feedback")
         self.assertEqual(client.posts[0][1]["source"], "tray")
         self.assertEqual(client.posts[0][1]["stepId"], "verify")
+        self.assertEqual(client.post_timeouts, [5])
 
     def test_rabi_fallback_remains_when_enabled_selection_is_ambiguous(self) -> None:
         snapshot = ManagerSnapshot(

@@ -189,7 +189,7 @@ Agent 需要关注的 Rabi 接口文档链接
 相关性打分覆盖当前仍有操作价值的内容：
 
 - 近期记忆，包括默认已显示的活跃近期记忆，以及不默认显示但尚未沉淀的近期记忆。
-- 未归档计划，包括 `未开始`、`进行中`、`已完成` 等状态。
+- 未归档计划，包括 `未开始`、`进行中`、`暂停`、`已完成` 等状态；只有 `进行中` 进入默认活跃计划索引，暂停计划仍可按关键词命中查询。
 - 沉淀记忆，只参与标题和 `keywords` 打分，不默认注入全文。
 - 角色技能，只参与 `id`、标题、摘要和 `keywords` 打分，不默认注入正文。
 
@@ -310,6 +310,8 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，并在 `replyContext` 写入 `characterTtsDialogue=true`。`[回复回传要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到普通回复 API；Outbox 再按当前人格 `voice/voice-profile.json` 的声线、模型、语言、语速、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。同一 `sessionId` 的 ASR 与 TTS 会作为双向上下文共用 `speech` 额度。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
 
 语音是唯一有这类“先记录、再决定是否唤醒”的专用策略之一：Route `speechPushMode=hot` 时每段 ASR 立即投递；`keyword` 时只在命中人格 `speechTriggerKeywords` 时投递，其他转写仍在账本中。空关键词不回退 `hot`。普通已匹配消息端则直接进入 Desktop `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
+
+语音处理主机、声纹 ID 和人格声纹关系文件路径只会出现在语音转写记录中。QQ、角色面板及其他非音频事件不会显示这些语音专属字段。
 
 ## 示例：QQ 群消息
 

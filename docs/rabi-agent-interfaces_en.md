@@ -300,6 +300,7 @@ Statuses:
 ```text
 `未开始`  not started
 `进行中`  in progress
+`暂停`    paused
 `已完成`  completed
 `已归档`  archived
 ```
@@ -345,7 +346,9 @@ PATCH /api/roles/:roleId/plans/:planId
 }
 ```
 
-New plans must provide an ordered `steps` array. An in-progress plan must also provide `currentStepId`, pointing to the only step whose status is `进行中`; clients use this to list every step and mark the current execution point. When blocked, put the reason in the current step's `blockedBy` and the awaited party or condition in `waitingFor`; the UI prioritizes the blocker reason and does not repeat `nextAction` already expressed by the step list. Legacy plans remain readable, but should gain structured steps on their next update. Every step must be `已完成` before the plan can become completed or archived.
+New plans must provide an ordered `steps` array. An in-progress plan must also provide `currentStepId`, pointing to the only step whose status is `进行中`; clients use this to list every step and mark the current execution point. When a user explicitly pauses the plan, PATCH the top-level `status` to `暂停`, preserve that step and `currentStepId` as the resume position, and stop driving the bound task; resume by changing only the top-level status back to `进行中`. When blocked, put the reason in the current step's `blockedBy` and the awaited party or condition in `waitingFor`; the UI prioritizes the blocker reason and does not repeat `nextAction` already expressed by the step list. Legacy plans remain readable, but should gain structured steps on their next update. Every step must be `已完成` before the plan can become completed or archived.
+
+Before requesting approval, the Agent should PATCH the current step with an `approvalRequest` that describes `request`, `reason`, exact `files / commands / changes`, `validation`, `rollback`, and `outOfScope` as concretely as practical. Manager applies a lightweight completeness check: missing details neither reject the plan write nor restrict user approval. The API returns `presentation.approval.state=incomplete` plus `missing[]`, and both clients show that warning beside the feedback input. Shared AgentPacket hints tell the Agent to use the user's feedback to add real paths, complete commands, and external targets instead of leaving “waiting for authorization” as the long-term execution description.
 
 `taskBinding` may be written through POST or PATCH to bind one exact Codex execution session. The current contract accepts only `agentType=codex` and a non-empty complete `sessionId`; `completionHook.enabled` must be boolean. When enabled, the Codex `Stop` Hook sends the official `last_assistant_message` to Manager, which then reminds the target handler session through the same persona's role-panel, Forwarding, and AgentPacket path. `gatewayId` is required when the persona has multiple Routes. Delivery is deduplicated by `sessionId + turnId` and never automatically patches the plan, advances steps, or writes memory.
 
@@ -373,7 +376,11 @@ WebGUI and the tray use this endpoint to record user feedback for the current ap
 }
 ```
 
+With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`; Agent delivery continues in the background. The terminal state is announced through `/api/events` as `plan_feedback_changed`, after which clients GET that plan's feedback summary. A user request must not synchronously wait for Desktop task loading, Desktop IPC, or handler execution.
+
 Agent-authored handling notes use `kind=approval_response`, `author=agent`, `source=agent`, and `notifyAgent=false`. Agent records are stored as `record_only` and cannot trigger another delivery to themselves. Feedback records facts only; the Agent must separately `PATCH /plans/:planId` when it decides to change steps, blockers, or status.
+
+The shared plan API hints in every AgentPacket include this approval-record endpoint and the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface; they should only add persona-specific approval language or decision policy.
 
 Completed plans are archived by a role-knowledge snapshot after their latest `updatedAt` is more than the current fixed 72-hour window old. This window is not yet a public `personaConfig.json` field.
 

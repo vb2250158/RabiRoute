@@ -110,7 +110,7 @@ export function appendPlanFeedback(roleDir: string, record: PlanFeedbackRecord):
 export function updatePlanFeedbackDelivery(
   roleDir: string,
   record: PlanFeedbackRecord,
-  deliveryStatus: "delivered" | "failed",
+  deliveryStatus: "pending" | "delivered" | "failed",
   deliveryMessage?: string
 ): PlanFeedbackRecord {
   return appendPlanFeedback(roleDir, {

@@ -24,6 +24,15 @@ class DisplayHelpersTest(unittest.TestCase):
 
         self.assertEqual(role_label(gateway), "Builder")
 
+    def test_role_label_uses_lightweight_manager_persona_title(self) -> None:
+        gateway = {
+            "agentRoleId": "builder",
+            "roleRouteNames": {"builder": "Builder"},
+            "roleInfo": {"selectedRoleTitle": "星海"},
+        }
+
+        self.assertEqual(role_label(gateway), "星海")
+
 
 if __name__ == "__main__":
     unittest.main()

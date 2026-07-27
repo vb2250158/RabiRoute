@@ -424,9 +424,9 @@ Gateway 配置的事实源 Module。
 - role skills
 - Agent 上下文快照
 
-`src/roleKnowledgePresentation.ts` 只生成 Manager 对外的只读展示 DTO：派生“阻塞中 / 待QA测试”等显示状态，并统一计划与记忆排序。它不修改计划文件，也不进入 RouteDecision 或 Agent 上下文判断。WebGUI 和 Qt 必须消费 Manager 返回的 `presentation` 与列表顺序，不各自复制这套规则。
+`src/roleKnowledge.ts` 同时定义五种计划顶层状态和步骤级 `approvalRequest` 执行合同；`暂停` 可保留唯一进行中步骤与 `currentStepId` 作为恢复位置，合同可随计划兼容读取和保存，Manager 不用缺字段阻断整条计划写入。`src/roleKnowledgePresentation.ts` 只生成 Manager 对外的只读展示 DTO：派生“阻塞中 / 待QA测试”等显示状态，统一 `current / plans / archived` 视图分类和计划状态色板，对当前人工门禁轻量判断 `none / incomplete / ready`，返回缺失项和规范化合同，并按“可审批、待补合同、状态、更新时间”统一排序；暂停计划禁用派生审批、只进 `plans` 并在最终排序中绝对置底。它不修改计划文件，也不进入 RouteDecision 或 Agent 上下文判断。WebGUI 和 Qt 必须消费 Manager 返回的 `presentation`、分类、色板、合同与列表顺序，不各自复制这套规则。
 
-`src/planFeedback.ts` 拥有与 `planId/stepId` 关联的审批意见 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 是唯一写入口：UI 提交时可复用角色面板链通知 Agent，Agent 记录 QQ 审批或处理结果时使用 `record_only`。该模块不修改计划 JSON；只有后续显式计划 PATCH 才能推进步骤或状态。
+`src/planFeedback.ts` 拥有与 `planId/stepId` 关联的审批意见 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 是唯一写入口：UI 提交先落盘并立即返回 `pending`，角色面板通知在后台执行，终态通过 `plan_feedback_changed` 发布；同一 feedback 的后台任务按 ID 去重并有 45 秒终止边界。Agent 记录 QQ 审批或处理结果时使用 `record_only`。该模块不修改计划 JSON；只有后续显式计划 PATCH 才能推进步骤或状态。
 
 `src/context/rabiContextManager.ts` 是角色上下文触发的唯一归口。它把 `session_start`、`user_prompt`、`reasoning_pre_tool`、`reasoning_post_tool`、`message_delivery` 和无副作用 `preview` 映射为统一的召回、归档、`viewedAt` 与呈现策略，也是生产代码中 `roleKnowledgeSnapshot()` 的唯一调用方。
 
@@ -443,7 +443,7 @@ Gateway 配置的事实源 Module。
 关键位置：
 
 - `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。
-- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读，Manager 声明的审批步骤可通过 plan feedback API 追加意见。
+- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读，审批卡片展示 Manager 返回的说明与缺失提示，`incomplete` 和 `ready` 都可通过 plan feedback API 追加用户意见。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；屏外卡片延迟渲染，详情展开取消高度动画，避免长列表反复布局。
 - `src/pages/OverviewPage.vue`：总览和运行状态。
 - `src/pages/RouteConfigPage.vue`：Route 配置编辑。
 - `src/pages/RuntimeLogPage.vue`：运行日志。
@@ -497,7 +497,9 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 它不是 RabiRoute 的事实源。任务、记忆、配置仍应落在 `data/` 和 manager 后端。
 
-托盘和 RibiWebGUI 使用同一个 Manager 后端。Manager 先通过 `roleKnowledgePresentation.ts` 生成计划显示状态、审批能力及统一排序；两端只渲染 API DTO 和既有顺序。`DesktopRefreshService` 无 Qt 依赖，只通过 `ManagerClient` 调用 `/gateways?summary=1`、`/api/roles/:roleId/plans`、`/memory`、`/role-panel/messages` 和 `/avatar`，再生成 DTO；审批提交使用同一 `ManagerClient` 的 plan feedback API，并通过 `qt_async` 在后台等待。托盘正式运行链路不导入 `PlanRepository` 或 `RoleContextRepository`，不直接读取 `data/`。`qt_async` 是不含业务语义的通用线程池桥，`tray_app` 只负责 UI 组合、用户事件和缓存应用。隐藏面板不请求聊天/头像或重建 QWidget，菜单显示期间延迟应用刷新结果，未变化时不重建菜单或面板，超过 5 项的人格入口延迟到子菜单展开时创建。Windows 不注册隐式 `setContextMenu`；表现层 `TrayMenuController` 将左键 `Trigger` 和右键 `Context` 统一映射到已预热菜单的非阻塞 `QMenu.popup()`，双击不重复打开。短暂失败可保留并标记旧快照，Manager 真正离线时不得用缓存伪装在线。
+托盘和 RibiWebGUI 使用同一个 Manager 后端。Manager 先通过 `roleKnowledgePresentation.ts` 生成计划视图分类、显示状态、状态色板、审批能力及统一排序；两端只渲染 API DTO、分类、色板和既有顺序。`DesktopRefreshService` 无 Qt 依赖，只通过 `ManagerClient` 调用 `/gateways?summary=1`、`/api/roles/:roleId/plans`、`/memory`、`/role-panel/messages` 和 `/avatar`，再生成 DTO；审批提交使用同一 `ManagerClient` 的 plan feedback API，并通过 `qt_async` 在后台等待。托盘正式运行链路不导入 `PlanRepository` 或 `RoleContextRepository`，不直接读取 `data/`。`qt_async` 是不含业务语义的通用线程池桥，`tray_app` 只负责 UI 组合、用户事件和缓存应用。隐藏面板不请求聊天/头像或重建 QWidget，菜单显示期间延迟应用刷新结果，未变化时不重建菜单或面板，超过 5 项的人格入口延迟到子菜单展开时创建。Windows 不注册隐式 `setContextMenu`；表现层 `TrayMenuController` 将左键 `Trigger` 和右键 `Context` 统一映射到已预热菜单的非阻塞 `QMenu.popup()`，双击不重复打开。短暂失败可保留并标记旧快照，Manager 真正离线时不得用缓存伪装在线。
+
+Gateway summary 只返回人格标识、路径、头像和从文件开头提取的轻量标题等展示元数据，不读取或序列化完整 persona Markdown 正文；完整 `/gateways` 仍保留人格页所需的预览详情。
 
 ## Plugin Adapters
 

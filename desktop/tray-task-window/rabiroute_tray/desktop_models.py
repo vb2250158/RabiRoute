@@ -16,16 +16,57 @@ class PlanStep:
 
 
 @dataclass(frozen=True)
+class PlanApprovalFileChange:
+    path: str
+    action: str = "modify"
+    change: str = ""
+    destination: str = ""
+
+
+@dataclass(frozen=True)
+class PlanApprovalCommand:
+    command: str
+    purpose: str = ""
+    expected_effect: str = ""
+
+
+@dataclass(frozen=True)
+class PlanApprovalExternalChange:
+    target: str
+    change: str = ""
+    impact: str = ""
+
+
+@dataclass(frozen=True)
+class PlanApprovalContract:
+    request: str = ""
+    reason: str = ""
+    files: list[PlanApprovalFileChange] = field(default_factory=list)
+    commands: list[PlanApprovalCommand] = field(default_factory=list)
+    changes: list[PlanApprovalExternalChange] = field(default_factory=list)
+    validation: list[str] = field(default_factory=list)
+    rollback: list[str] = field(default_factory=list)
+    out_of_scope: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class PlanItem:
     title: str
     plan_id: str = ""
     status: str = "未开始"
     display_status: str = ""
     display_tone: str = ""
+    display_views: tuple[str, ...] = field(default_factory=tuple)
+    display_accent: str = ""
+    display_background: str = ""
+    display_foreground: str = ""
+    approval_state: str = "none"
     approval_enabled: bool = False
     approval_label: str = ""
     approval_helper: str = ""
     approval_step_id: str = ""
+    approval_missing: tuple[str, ...] = field(default_factory=tuple)
+    approval_contract: PlanApprovalContract | None = None
     approval_count: int = 0
     latest_approval_text: str = ""
     latest_approval_at: str = ""

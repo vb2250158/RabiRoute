@@ -204,7 +204,7 @@ class ManagerClient:
                     "author": "user",
                     "notifyAgent": True,
                 },
-                timeout_seconds=45,
+                timeout_seconds=5,
             )
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
             delivery_status = str(data.get("deliveryStatus") or "")

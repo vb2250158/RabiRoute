@@ -12,6 +12,7 @@ import {
   normalizeRoleContextInjection,
   pendingMemoryConsolidation,
   roleContextInjectionPolicy,
+  planRequiresApproval,
   roleKnowledgeSnapshot,
   updatePlan,
   updateRecentMemory,
@@ -301,7 +302,7 @@ test("plans require ordered steps and one explicit current step", () => {
     status: "进行中",
     currentStepId: "implement",
     currentStep: "正在实现页面",
-    blockedBy: "设计稿尚未确认",
+    blockedBy: "设计稿缺失",
     steps: [
       { id: "inspect", title: "检查现状", status: "已完成" },
       { id: "implement", title: "实现页面", status: "进行中", blockedBy: "缺少最终设计稿" },
@@ -312,7 +313,7 @@ test("plans require ordered steps and one explicit current step", () => {
 
   assert.equal(plan.steps.length, 3);
   assert.equal(plan.currentStepId, "implement");
-  assert.equal(plan.blockedBy, "设计稿尚未确认");
+  assert.equal(plan.blockedBy, "设计稿缺失");
   assert.equal(plan.steps[1]?.status, "进行中");
   assert.equal(plan.steps[1]?.blockedBy, "缺少最终设计稿");
 
@@ -333,6 +334,93 @@ test("plans require ordered steps and one explicit current step", () => {
     ],
     keywords: ["步骤"]
   }), /only one in-progress step/);
+});
+
+test("paused plans preserve their resume step without remaining approval-active", () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    title: "暂停中的实施计划",
+    focus: "暂停中的实施计划",
+    status: "暂停",
+    currentStepId: "implement",
+    currentStep: "保留当前实现位置，等待恢复",
+    steps: [
+      { id: "inspect", title: "检查现状", status: "已完成" },
+      {
+        id: "implement",
+        title: "继续实现",
+        status: "进行中",
+        blockedBy: "用户要求暂时跳过",
+        approvalRequest: {
+          request: "批准继续实现。",
+          reason: "恢复后才需要审批。",
+          files: [{ path: "src/example.ts", action: "modify", change: "继续实现。" }],
+          commands: [],
+          changes: [],
+          validation: ["运行测试。"],
+          rollback: ["回退改动。"],
+          outOfScope: ["不发布。"]
+        }
+      }
+    ],
+    keywords: ["暂停"]
+  });
+
+  assert.equal(plan.status, "暂停");
+  assert.equal(plan.currentStepId, "implement");
+  assert.equal(planRequiresApproval(plan), false);
+  assert.equal(updatePlan(roleDir, plan.id, { status: "进行中" }).status, "进行中");
+});
+
+test("approval steps remain writable while Manager can distinguish incomplete and concrete contracts", () => {
+  const roleDir = makeRoleDir();
+  const base = {
+    title: "审批具体修改",
+    focus: "审批具体修改",
+    status: "进行中",
+    currentStepId: "approve",
+    currentStep: "等待用户审批执行范围",
+    keywords: ["审批"]
+  };
+
+  const incomplete = createPlan(roleDir, {
+    ...base,
+    steps: [{ id: "approve", title: "等待修改审批", status: "进行中" }]
+  });
+  assert.equal(incomplete.steps[0]?.approvalRequest, undefined);
+
+  const plan = updatePlan(roleDir, incomplete.id, {
+    steps: [{
+      id: "approve",
+      title: "等待修改审批",
+      status: "进行中",
+      approvalRequest: {
+        request: "批准实现结构化审批合同并同步双端展示。",
+        reason: "当前通用安全提示无法说明批准后的真实动作。",
+        files: [{
+          path: "src/roleKnowledge.ts",
+          action: "modify",
+          change: "新增 approvalRequest Schema、规范化和写入校验。"
+        }],
+        commands: [{
+          command: "npm test -- --runInBand",
+          purpose: "运行 Node 定向回归。",
+          expectedEffect: "只读取代码并产生测试输出。"
+        }],
+        changes: [],
+        validation: ["审批卡片展示文件和命令，且不完整合同仍可提交用户意见。"],
+        rollback: ["若验证失败，仅回退本合同列出的代码和文档改动。"],
+        outOfScope: ["不提交、不推送、不修改运行期 data/。"]
+      }
+    }]
+  });
+
+  assert.equal(plan.steps[0]?.approvalRequest?.files[0]?.path, "src/roleKnowledge.ts");
+  const returnedToIncomplete = updatePlan(roleDir, plan.id, {
+    steps: [{ id: "approve", title: "等待修改审批", status: "进行中" }]
+  });
+  assert.equal(returnedToIncomplete.steps[0]?.approvalRequest, undefined);
+  assert.equal(updatePlan(roleDir, plan.id, { priority: "high" }).priority, "high");
 });
 
 test("plans persist an exact Codex task binding and completion hook target", () => {

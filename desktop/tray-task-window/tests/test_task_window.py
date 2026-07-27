@@ -15,9 +15,19 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QProgressBar, QPushButton, QTextEdit
 
 from rabiroute_tray.manager_client import ManagerSnapshot
+from rabiroute_tray.desktop_models import PlanApprovalCommand, PlanApprovalContract, PlanApprovalFileChange
 from rabiroute_tray.role_context_repository import ContextEntry, RoleContextSnapshot
 from rabiroute_tray.task_repository import PlanItem, PlanSnapshot, PlanStep
-from rabiroute_tray.task_window import ExpandableCard, KeywordPanel, MessageComposer, STYLESHEET, TaskWindow, VIEW_LABELS
+from rabiroute_tray.task_window import (
+    ExpandableCard,
+    KeywordPanel,
+    MessageComposer,
+    STYLESHEET,
+    TaskWindow,
+    VIEW_LABELS,
+    _plan_card_palette_stylesheet,
+    _plan_status_palette_stylesheet,
+)
 from rabiroute_tray.theme import RABI_MENU_STYLESHEET, apply_rabi_menu_theme
 
 
@@ -192,6 +202,21 @@ class TaskWindowLayoutTest(unittest.TestCase):
 
     def test_runtime_chip_exposes_semantic_status_tone(self) -> None:
         self.assertEqual(self.window.status_chip.property("statusTone"), "running")
+
+    def test_plan_card_uses_manager_palette_for_accent_and_status_badge(self) -> None:
+        plan = PlanItem(
+            title="统一颜色",
+            status="进行中",
+            display_status="阻塞中",
+            display_tone="blocked",
+            display_accent="#ef6c52",
+            display_background="#fff1ed",
+            display_foreground="#b42318",
+        )
+        self.assertIn("border-left: 4px solid #ef6c52", _plan_card_palette_stylesheet(plan))
+        status_stylesheet = _plan_status_palette_stylesheet(plan, "blocked")
+        self.assertIn("background: #fff1ed", status_stylesheet)
+        self.assertIn("color: #b42318", status_stylesheet)
 
     def test_overflow_menu_contains_actions_not_duplicate_views(self) -> None:
         self.window.set_actions([("人格目录", lambda: None, True)])
@@ -368,15 +393,52 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertEqual(card.status_label.property("statusTone"), "qa")
         card.close()
 
+    def test_paused_plan_keeps_resume_step_without_blocked_presentation(self) -> None:
+        plan = PlanItem(
+            title="暂停计划测试",
+            status="暂停",
+            display_status="暂停",
+            display_tone="paused",
+            display_accent="#64748b",
+            display_background="#f1f5f9",
+            display_foreground="#475569",
+            current_step_id="hold",
+            blocked_by="用户要求暂时跳过",
+            steps=[PlanStep("保留恢复位置", "进行中", step_id="hold", blocked_by="用户要求暂时跳过")],
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        card.show()
+        card.set_expanded(True)
+        self.app.processEvents()
+
+        self.assertEqual(card.status_label.text(), "状态：暂停")
+        self.assertEqual(card.status_label.property("statusTone"), "paused")
+        current_callout = card.findChild(QLabel, "planCurrentStepCallout")
+        self.assertEqual(current_callout.text(), "当前执行：第 1 步 · 保留恢复位置")
+        self.assertFalse(current_callout.property("blocked"))
+        blocked_rows = [row for row in card.findChildren(QFrame, "planStepRow") if row.property("stepTone") == "blocked"]
+        self.assertEqual(blocked_rows, [])
+        card.close()
+
     def test_approval_plan_emits_feedback_and_preserves_draft_on_failure(self) -> None:
         plan = PlanItem(
             title="等待审批的计划",
             plan_id="plan-approval",
             status="进行中",
+            approval_state="ready",
             approval_enabled=True,
-            approval_label="审批建议",
-            approval_helper="由 Manager 记录并交给 Agent。",
+            approval_label="审批执行合同",
+            approval_helper="核对具体范围后审批。",
             approval_step_id="verify",
+            approval_contract=PlanApprovalContract(
+                request="批准更新验收逻辑。",
+                reason="需要人工确认具体影响。",
+                files=[PlanApprovalFileChange("src/example.ts", "modify", "更新验收逻辑。")],
+                commands=[PlanApprovalCommand("npm test", "运行回归测试。", "只产生测试输出。")],
+                validation=["确认测试通过。"],
+                rollback=["失败时回退 src/example.ts。"],
+                out_of_scope=["不提交、不推送。"],
+            ),
             latest_approval_text="先补充验收截图。",
             latest_approval_at="2026-07-24 12:00",
             current_step_id="verify",
@@ -393,6 +455,9 @@ class TaskWindowLayoutTest(unittest.TestCase):
         submit = card.findChild(QPushButton, "planApprovalSubmit")
         self.assertIsNotNone(editor)
         self.assertIsNotNone(submit)
+        contract_text = "\n".join(label.text() for label in card.findChildren(QLabel))
+        self.assertIn("src/example.ts", contract_text)
+        self.assertIn("npm test", contract_text)
         editor.setPlainText("建议覆盖旧存档回归。")
         submit.click()
         self.app.processEvents()
@@ -406,6 +471,40 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertEqual(editor.toPlainText(), "建议覆盖旧存档回归。")
         approval_panel.complete(True, "已提交。", "success")
         self.assertEqual(editor.toPlainText(), "")
+        card.close()
+
+    def test_incomplete_approval_contract_warns_agent_without_blocking_user_feedback(self) -> None:
+        plan = PlanItem(
+            title="审批信息不完整",
+            plan_id="plan-incomplete",
+            status="进行中",
+            approval_state="incomplete",
+            approval_enabled=False,
+            approval_label="审批信息待补充",
+            approval_helper="仍可审批，同时提醒 Agent 补齐计划。",
+            approval_step_id="approve",
+            approval_missing=("request", "affectedActions", "rollback"),
+            current_step_id="approve",
+            steps=[PlanStep("等待审批", "进行中", step_id="approve")],
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        emitted: list[tuple[str, str, str, str]] = []
+        card.approval_requested.connect(lambda *args: emitted.append(tuple(str(value) for value in args)))
+        card.show()
+        card.set_expanded(True)
+        self.app.processEvents()
+
+        missing = card.findChild(QLabel, "planApprovalMissing")
+        editor = card.findChild(QTextEdit, "planApprovalInput")
+        submit = card.findChild(QPushButton, "planApprovalSubmit")
+        self.assertIsNotNone(missing)
+        self.assertIn("批准事项", missing.text())
+        self.assertTrue(submit.isVisible())
+        editor.setPlainText("同意先推进，但请补充具体命令。")
+        submit.click()
+        self.app.processEvents()
+        self.assertEqual(emitted[0][0:2], ("plan-incomplete", "approve"))
+        self.assertEqual(emitted[0][3], "同意先推进，但请补充具体命令。")
         card.close()
 
     def test_future_qa_step_does_not_change_running_status_badge(self) -> None:

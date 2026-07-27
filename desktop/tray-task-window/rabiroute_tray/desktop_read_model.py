@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from .app_paths import role_dir_from_gateway, runtime_dir_from_gateway
-from .desktop_models import ContextEntry, PlanItem, PlanSnapshot, PlanStep, RoleContextSnapshot
+from .desktop_models import (
+    ContextEntry,
+    PlanApprovalCommand,
+    PlanApprovalContract,
+    PlanApprovalExternalChange,
+    PlanApprovalFileChange,
+    PlanItem,
+    PlanSnapshot,
+    PlanStep,
+    RoleContextSnapshot,
+)
+
+
+HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def plan_snapshot_from_manager(
@@ -16,9 +30,9 @@ def plan_snapshot_from_manager(
     role_dir = role_dir_from_gateway(project_root, gateway, role_id)
     plans_dir = role_dir / "plans"
     items = [_plan_item_from_manager(item) for item in raw_plans]
-    active = [item for item in items if item.status != "已归档"]
-    archived = [item for item in items if item.status == "已归档"]
-    current = [item for item in active if item.status == "进行中"]
+    active = [item for item in items if _plan_in_view(item, "plans")]
+    archived = [item for item in items if _plan_in_view(item, "archived")]
+    current = [item for item in items if _plan_in_view(item, "current")]
     message = "" if items else "Manager 暂无可展示计划。"
     return PlanSnapshot(
         role_id=role_id,
@@ -80,7 +94,9 @@ def _plan_item_from_manager(item: dict[str, Any]) -> PlanItem:
     project = item.get("project") if isinstance(item.get("project"), dict) else {}
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
     presentation = item.get("presentation") if isinstance(item.get("presentation"), dict) else {}
+    palette = presentation.get("palette") if isinstance(presentation.get("palette"), dict) else {}
     approval_presentation = presentation.get("approval") if isinstance(presentation.get("approval"), dict) else {}
+    approval_contract = _approval_contract_from_manager(approval_presentation.get("contract"))
     approval = item.get("approval") if isinstance(item.get("approval"), dict) else {}
     latest_approval = approval.get("latest") if isinstance(approval.get("latest"), dict) else {}
     return PlanItem(
@@ -89,10 +105,17 @@ def _plan_item_from_manager(item: dict[str, Any]) -> PlanItem:
         status=str(item.get("status") or "未开始"),
         display_status=str(presentation.get("status") or ""),
         display_tone=str(presentation.get("tone") or ""),
+        display_views=_plan_views(presentation.get("views")),
+        display_accent=_palette_color(palette.get("accent")),
+        display_background=_palette_color(palette.get("background")),
+        display_foreground=_palette_color(palette.get("foreground")),
+        approval_state=str(approval_presentation.get("state") or ("ready" if approval_presentation.get("enabled") else "none")),
         approval_enabled=bool(approval_presentation.get("enabled")),
         approval_label=str(approval_presentation.get("label") or ""),
         approval_helper=str(approval_presentation.get("helper") or ""),
         approval_step_id=str(approval_presentation.get("stepId") or ""),
+        approval_missing=tuple(_keywords(approval_presentation.get("missing"))),
+        approval_contract=approval_contract,
         approval_count=int(approval.get("count") or 0),
         latest_approval_text=str(latest_approval.get("text") or ""),
         latest_approval_at=str(latest_approval.get("createdAt") or ""),
@@ -113,6 +136,49 @@ def _plan_item_from_manager(item: dict[str, Any]) -> PlanItem:
         steps=_plan_steps_from_manager(item.get("steps")),
         keywords=_keywords(item.get("keywords")),
         path=None,
+    )
+
+
+def _approval_contract_from_manager(value: Any) -> PlanApprovalContract | None:
+    if not isinstance(value, dict):
+        return None
+    files: list[PlanApprovalFileChange] = []
+    for item in value.get("files") if isinstance(value.get("files"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        files.append(PlanApprovalFileChange(
+            path=str(item.get("path") or ""),
+            action=str(item.get("action") or "modify"),
+            change=str(item.get("change") or ""),
+            destination=str(item.get("destination") or ""),
+        ))
+    commands: list[PlanApprovalCommand] = []
+    for item in value.get("commands") if isinstance(value.get("commands"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        commands.append(PlanApprovalCommand(
+            command=str(item.get("command") or ""),
+            purpose=str(item.get("purpose") or ""),
+            expected_effect=str(item.get("expectedEffect") or ""),
+        ))
+    changes: list[PlanApprovalExternalChange] = []
+    for item in value.get("changes") if isinstance(value.get("changes"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        changes.append(PlanApprovalExternalChange(
+            target=str(item.get("target") or ""),
+            change=str(item.get("change") or ""),
+            impact=str(item.get("impact") or ""),
+        ))
+    return PlanApprovalContract(
+        request=str(value.get("request") or ""),
+        reason=str(value.get("reason") or ""),
+        files=files,
+        commands=commands,
+        changes=changes,
+        validation=_keywords(value.get("validation")),
+        rollback=_keywords(value.get("rollback")),
+        out_of_scope=_keywords(value.get("outOfScope")),
     )
 
 
@@ -156,3 +222,25 @@ def _keywords(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [text for text in (str(item).strip() for item in value) if text]
+
+
+def _palette_color(value: Any) -> str:
+    color = str(value or "").strip()
+    return color.lower() if HEX_COLOR.fullmatch(color) else ""
+
+
+def _plan_views(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    allowed = {"current", "plans", "archived"}
+    return tuple(view for view in (str(item) for item in value) if view in allowed)
+
+
+def _plan_in_view(plan: PlanItem, view: str) -> bool:
+    if plan.display_views:
+        return view in plan.display_views
+    if view == "archived":
+        return plan.status == "已归档"
+    if view == "current":
+        return plan.status == "进行中"
+    return plan.status != "已归档"

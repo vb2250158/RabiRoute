@@ -32,7 +32,16 @@ class _ApiManager:
                 "id": "plan-1",
                 "title": "API plan",
                 "status": "进行中",
-                "presentation": {"status": "阻塞中", "tone": "blocked"},
+                "presentation": {
+                    "status": "阻塞中",
+                    "tone": "blocked",
+                    "views": ["current", "plans"],
+                    "palette": {
+                        "accent": "#ef6c52",
+                        "background": "#fff1ed",
+                        "foreground": "#b42318",
+                    },
+                },
                 "steps": [],
                 "keywords": [],
             },
@@ -43,11 +52,37 @@ class _ApiManager:
                 "presentation": {
                     "status": "待QA测试",
                     "tone": "qa",
+                    "views": ["current", "plans"],
+                    "palette": {
+                        "accent": "#8e63c7",
+                        "background": "#f3e8ff",
+                        "foreground": "#7e22ce",
+                    },
                     "approval": {
+                        "state": "ready",
                         "enabled": True,
-                        "label": "审批建议",
-                        "helper": "由 Manager 记录",
+                        "label": "审批执行合同",
+                        "helper": "核对具体范围后审批",
                         "stepId": "verify",
+                        "missing": [],
+                        "contract": {
+                            "request": "批准运行验收。",
+                            "reason": "需要人工确认结果。",
+                            "files": [{
+                                "path": "src/example.ts",
+                                "action": "modify",
+                                "change": "更新验收逻辑。",
+                            }],
+                            "commands": [{
+                                "command": "npm test",
+                                "purpose": "运行回归测试。",
+                                "expectedEffect": "只产生测试输出。",
+                            }],
+                            "changes": [],
+                            "validation": ["确认测试通过。"],
+                            "rollback": ["失败时回退文件。"],
+                            "outOfScope": ["不提交、不推送。"],
+                        },
                     },
                 },
                 "approval": {
@@ -93,13 +128,20 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertTrue(result.manager.connected)
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].title, "API plan")
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_status, "阻塞中")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_views, ("current", "plans"))
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_accent, "#ef6c52")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_background, "#fff1ed")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_foreground, "#b42318")
         self.assertEqual(
             result.plan_snapshot and [plan.title for plan in result.plan_snapshot.active],
             ["API plan", "API QA plan"],
         )
         qa_plan = result.plan_snapshot and result.plan_snapshot.active[1]
         self.assertTrue(qa_plan and qa_plan.approval_enabled)
+        self.assertEqual(qa_plan and qa_plan.approval_state, "ready")
         self.assertEqual(qa_plan and qa_plan.approval_step_id, "verify")
+        self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.request, "批准运行验收。")
+        self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.commands[0].command, "npm test")
         self.assertEqual(qa_plan and qa_plan.latest_approval_text, "补充回归范围")
         self.assertEqual(result.context_snapshot and result.context_snapshot.recent_memory[0].title, "API memory")
         self.assertEqual(result.role_messages, [{"id": "message-1"}])

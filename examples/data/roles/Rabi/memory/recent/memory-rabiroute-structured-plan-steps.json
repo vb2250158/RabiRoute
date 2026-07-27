@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-structured-plan-steps",
-  "title": "计划用有序步骤和 currentStepId 表达执行位置",
-  "focus": "结构化计划步骤与唯一当前位置",
-  "content": "新建计划必须提供完整有序的 steps。进行中计划必须用 currentStepId 指向唯一一条进行中步骤；完成或归档前所有步骤都必须完成。blockedBy 说明当前步骤为何不能继续，waitingFor 说明等待对象。旧计划仍可读取，但下次更新时应补齐结构化步骤；AgentPacket 与托盘界面应展示全部步骤和当前执行位置，不能从 currentStep 与 nextAction 两段摘要猜造进度。",
+  "title": "计划用有序步骤、暂停状态和审批合同表达执行边界",
+  "focus": "结构化计划步骤、暂停恢复与审批执行合同",
+  "content": "新建计划必须提供完整有序的 steps。进行中计划用 currentStepId 指向唯一一条进行中步骤；用户明确要求暂停时，顶层 status 改为暂停并保留该步骤和 currentStepId 作为恢复位置，暂停期间不继续驱动绑定任务。需要人工审批的当前步骤应写 approvalRequest，列清批准事项、原因、真实文件或命令或外部变更、验证、回退和排除范围；说明不完整时 Manager 仍允许记录用户意见，并提示 Agent 补齐，审批记录本身不直接推进计划。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：结构化计划步骤、当前位置和阻塞语义"
   },
   "createdAt": "2026-07-19T00:00:00+08:00",
-  "updatedAt": "2026-07-19T00:00:00+08:00",
-  "keywords": ["计划步骤", "steps", "currentStepId", "blockedBy", "waitingFor", "AgentPacket", "托盘", "计划迁移"]
+  "updatedAt": "2026-07-27T00:00:00+08:00",
+  "keywords": ["计划步骤", "steps", "currentStepId", "暂停", "恢复", "approvalRequest", "审批执行合同", "blockedBy", "waitingFor", "AgentPacket", "计划反馈"]
 }

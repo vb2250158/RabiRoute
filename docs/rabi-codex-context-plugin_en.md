@@ -65,7 +65,7 @@ The fields are `codexHooks.sessionContextEnabled`, `codexHooks.reasoningContextE
 
 A plan may use `taskBinding` to bind one exact Codex execution session. When `taskBinding` exists and `completionHook` is omitted, completion notification defaults to enabled; set `completionHook.enabled=false` to disable it for one plan. After that session finishes a turn, the `Stop` Hook sends the official `last_assistant_message` to Manager. The plan file is the source of truth for plan-to-execution-session binding; the Route/gateway is the source of truth for the reminder persona's target session. Delivery reuses the existing role-panel, Forwarding, AgentPacket, and Agent-adapter path.
 
-- A persisted `sessionId + turnId` key deduplicates delivery.
+- A persisted `sessionId + turnId` key deduplicates delivery. Top-level paused plans ignore completion reminders so the bound task is not re-driven while paused.
 - The Hook does not inspect transcripts or automatically update plan status, steps, or memory.
 - A Codex target must have an exact task binding and must differ from the execution session. Workspace, persona, or gateway conflicts fail closed.
 - Success emits no Stop Hook output. Delivery failure returns only a non-blocking `systemMessage` warning and does not block the final Codex answer.

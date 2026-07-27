@@ -162,6 +162,8 @@ When a `voice_transcript` explicitly comes from the RabiPC `speech` message endp
 
 Speech also has an explicit record-before-wake policy. Route `speechPushMode=hot` delivers every completed ASR segment immediately. `keyword` records every segment and delivers only when the persona-owned `speechTriggerKeywords` matches; an empty keyword list never falls back to hot. Matched ordinary endpoint messages otherwise enter Desktop `steer/start` directly, while Heartbeat's busy skip remains a separate switch.
 
+The processing host, voiceprint IDs, and persona voice-identity file path appear only on voice-transcript records. QQ, role-panel, and other non-audio events omit these voice-specific fields.
+
 When no role is bound, RabiRoute uses a direct-message section instead of role knowledge. It still injects the event, logs, reply context, and delivery requirements.
 
 ## Workspace-relative paths
@@ -180,7 +182,7 @@ This avoids leaking usernames or machine-specific absolute paths into prompts an
 
 ## Recall and required reads
 
-`[Memory and plans]` lists active plans and recent memories by ID and title. A recent memory is considered active using the later of `updatedAt` and `viewedAt`; the default direct-display window is 24 hours.
+`[Memory and plans]` lists active plans and recent memories by ID and title. Only top-level `进行中` plans are active; `暂停` plans remain non-archived and searchable but are not injected as active work. A recent memory is considered active using the later of `updatedAt` and `viewedAt`; the default direct-display window is 24 hours.
 
 Before delivery, RabiRoute performs lightweight matching over metadata only:
 
