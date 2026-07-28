@@ -6,15 +6,30 @@ import {
   PLAN_FEEDBACK_MAX_ATTACHMENTS,
   type PlanFeedbackAttachmentUpload
 } from "@shared/planFeedbackContract";
+import {
+  findPlanAttachmentMentionQuery,
+  insertPlanAttachmentMention,
+  planAttachmentMentionCandidates,
+  referencedPlanAttachmentIds,
+  type PlanAttachmentMentionCandidate
+} from "@shared/planAttachmentMentions";
 import { useI18n } from "../i18n";
 import { managerEventSource, managerResourceUrl } from "../managerApi";
+import {
+  isPlanMarkdownAttachment,
+  PLAN_MARKDOWN_PREVIEW_MAX_BYTES,
+  PLAN_MARKDOWN_TEASER_READ_BYTES,
+  planMarkdownPreviewExcerpt,
+  responseTextByByteLimit,
+  renderPlanMarkdownPreview
+} from "../markdownPreview";
 import { activePlanIdAtAnchor, directoryScrollTopForItem } from "../planDirectoryScrollSync";
 import { loadPlanFeedback, loadRoleKnowledge, submitPlanFeedback } from "../roleKnowledgeClient";
 import { formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
 import type { PlanKnowledgeView } from "../planPresentationStyles";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { PlanAttachmentPresentation } from "@shared/planAttachmentContract";
-import type { RoleMemory, RolePlan, RolePlanFeedback, RolePlanStep } from "../types";
+import type { RoleMemory, RolePlan, RolePlanApprovalContract, RolePlanFeedback, RolePlanStep } from "../types";
 
 const store = useGatewayStore();
 const { isEnglish, t } = useI18n();
@@ -47,7 +62,19 @@ const approvalAttachments = reactive<Record<string, ApprovalAttachmentDraft[]>>(
 const submittedApprovalAttachments = new Map<string, ApprovalAttachmentDraft[]>();
 const approvalFileInput = ref<HTMLInputElement | null>(null);
 const attachmentTargetPlanId = ref("");
+type ApprovalMentionMenuState = {
+  open: boolean;
+  query: string;
+  start: number;
+  end: number;
+  activeIndex: number;
+};
+const approvalMentionMenus = reactive<Record<string, ApprovalMentionMenuState>>({});
+const approvalTextareaElements = new Map<string, HTMLTextAreaElement>();
 const planAttachmentPreview = ref<{ name: string; url: string; kind: "image" | "video" } | null>(null);
+const planMarkdownPreview = ref<{ name: string; url: string; html: string; error: string; loading: boolean } | null>(null);
+type PlanMarkdownTeaserState = { text: string; loading: boolean };
+const planMarkdownTeasers = reactive<Record<string, PlanMarkdownTeaserState>>({});
 const knowledgeToolbar = ref<HTMLElement | null>(null);
 const planDirectoryList = ref<HTMLElement | null>(null);
 let requestVersion = 0;
@@ -60,6 +87,8 @@ let planDirectoryMounted = false;
 let usesPlanScrollFallback = false;
 let directoryJumpTargetId = "";
 let directoryJumpSettleTimer = 0;
+let planMarkdownPreviewAbort: AbortController | null = null;
+let planMarkdownTeaserAbort: AbortController | null = null;
 
 const roleId = computed(() => String(store.selectedGateway?.agentRoleId || "").trim());
 const gatewayId = computed(() => String(store.selectedGateway?.id || "").trim());
@@ -230,6 +259,7 @@ watch(activeDirectoryPlanId, () => void nextTick(keepActiveDirectoryLinkVisible)
 async function refreshKnowledge(): Promise<void> {
   const selectedRoleId = roleId.value;
   if (!selectedRoleId) {
+    resetPlanMarkdownTeasers();
     plans.value = [];
     recentMemory.value = [];
     consolidatedMemory.value = [];
@@ -243,6 +273,7 @@ async function refreshKnowledge(): Promise<void> {
     const result = await loadRoleKnowledge(selectedRoleId);
     if (currentRequest !== requestVersion) return;
     plans.value = result.plans;
+    void refreshPlanMarkdownTeasers(result.plans, currentRequest);
     for (const plan of plans.value) applyFeedbackDeliveryState(plan.id, plan.approval.latest);
     recentMemory.value = result.memory.recent;
     consolidatedMemory.value = result.memory.consolidated;
@@ -260,7 +291,11 @@ watch(
     const [nextRoleId, managerLoading] = current;
     const previousRoleId = previous?.[0];
     const previousManagerLoading = previous?.[1];
-    if (previous && nextRoleId !== previousRoleId) resetApprovalAttachmentState();
+    if (previous && nextRoleId !== previousRoleId) {
+      resetApprovalAttachmentState();
+      closePlanMediaPreview();
+      closePlanMarkdownPreview();
+    }
     if (!nextRoleId || managerLoading) return;
     if (!previous || nextRoleId !== previousRoleId || previousManagerLoading === true) void refreshKnowledge();
   },
@@ -332,6 +367,70 @@ function displayedPlanVideoDuration(planId: string, attachmentId: string): strin
   return formatPlanVideoDuration(planVideoDurations[planVideoDurationKey(planId, attachmentId)]);
 }
 
+function planMarkdownTeaserKey(planId: string, attachmentId: string): string {
+  return `${planId}\u001f${attachmentId}`;
+}
+
+function planMarkdownTeaser(planId: string, attachmentId: string): PlanMarkdownTeaserState {
+  return planMarkdownTeasers[planMarkdownTeaserKey(planId, attachmentId)] || { text: "", loading: true };
+}
+
+function resetPlanMarkdownTeasers(): void {
+  planMarkdownTeaserAbort?.abort();
+  planMarkdownTeaserAbort = null;
+  for (const key of Object.keys(planMarkdownTeasers)) delete planMarkdownTeasers[key];
+}
+
+function responseTextPrefix(response: Response, byteLimit: number): Promise<string> {
+  return responseTextByByteLimit(response, byteLimit, true);
+}
+
+function responseTextWithinLimit(response: Response, byteLimit: number, overflowMessage: string): Promise<string> {
+  return responseTextByByteLimit(response, byteLimit, false, overflowMessage);
+}
+
+async function loadPlanMarkdownTeaser(
+  plan: RolePlan,
+  attachment: PlanAttachmentPresentation,
+  request: number,
+  signal: AbortSignal
+): Promise<void> {
+  const key = planMarkdownTeaserKey(plan.id, attachment.id);
+  const state = reactive<PlanMarkdownTeaserState>({ text: "", loading: true });
+  planMarkdownTeasers[key] = state;
+  if (attachment.size > PLAN_MARKDOWN_PREVIEW_MAX_BYTES) {
+    state.text = t("Markdown 文件过大，无法在页面内预览，请下载原文件。");
+    state.loading = false;
+    return;
+  }
+  try {
+    const response = await fetch(planAttachmentUrl(plan.id, attachment.id), {
+      headers: { accept: "text/markdown, text/plain;q=0.9" },
+      signal
+    });
+    if (!response.ok) throw new Error(String(response.status));
+    const source = await responseTextPrefix(response, PLAN_MARKDOWN_TEASER_READ_BYTES);
+    if (signal.aborted || request !== requestVersion || planMarkdownTeasers[key] !== state) return;
+    state.text = planMarkdownPreviewExcerpt(source);
+  } catch {
+    if (signal.aborted || request !== requestVersion || planMarkdownTeasers[key] !== state) return;
+  } finally {
+    if (planMarkdownTeasers[key] === state) state.loading = false;
+  }
+}
+
+async function refreshPlanMarkdownTeasers(nextPlans: RolePlan[], request: number): Promise<void> {
+  resetPlanMarkdownTeasers();
+  const controller = new AbortController();
+  planMarkdownTeaserAbort = controller;
+  const markdownAttachments = nextPlans.flatMap((plan) => plan.attachments
+    .filter((attachment) => attachment.kind === "file" && isPlanMarkdownAttachment(attachment.name, attachment.mimeType))
+    .map((attachment) => ({ plan, attachment })));
+  await Promise.allSettled(markdownAttachments.map(({ plan, attachment }) => (
+    loadPlanMarkdownTeaser(plan, attachment, request, controller.signal)
+  )));
+}
+
 function openPlanMediaPreview(plan: RolePlan, attachment: PlanAttachmentPresentation): void {
   if (attachment.kind !== "image" && attachment.kind !== "video") return;
   planAttachmentPreview.value = {
@@ -343,6 +442,51 @@ function openPlanMediaPreview(plan: RolePlan, attachment: PlanAttachmentPresenta
 
 function closePlanMediaPreview(): void {
   planAttachmentPreview.value = null;
+}
+
+async function openPlanMarkdownPreview(plan: RolePlan, attachment: PlanAttachmentPresentation): Promise<void> {
+  if (attachment.kind !== "file" || !isPlanMarkdownAttachment(attachment.name, attachment.mimeType)) return;
+  planMarkdownPreviewAbort?.abort();
+  const controller = new AbortController();
+  planMarkdownPreviewAbort = controller;
+  const preview = reactive({
+    name: attachment.name,
+    url: planAttachmentUrl(plan.id, attachment.id),
+    html: "",
+    error: "",
+    loading: true
+  });
+  planMarkdownPreview.value = preview;
+  if (attachment.size > PLAN_MARKDOWN_PREVIEW_MAX_BYTES) {
+    preview.error = t("Markdown 文件过大，无法在页面内预览，请下载原文件。");
+    preview.loading = false;
+    return;
+  }
+  try {
+    const response = await fetch(preview.url, {
+      headers: { accept: "text/markdown, text/plain;q=0.9" },
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`${t("Markdown 预览加载失败")} (${response.status})`);
+    const source = await responseTextWithinLimit(
+      response,
+      PLAN_MARKDOWN_PREVIEW_MAX_BYTES,
+      t("Markdown 文件过大，无法在页面内预览，请下载原文件。")
+    );
+    if (controller.signal.aborted || planMarkdownPreview.value !== preview) return;
+    preview.html = renderPlanMarkdownPreview(source);
+  } catch (previewError) {
+    if (controller.signal.aborted || planMarkdownPreview.value !== preview) return;
+    preview.error = previewError instanceof Error ? previewError.message : t("Markdown 预览加载失败");
+  } finally {
+    if (planMarkdownPreview.value === preview) preview.loading = false;
+  }
+}
+
+function closePlanMarkdownPreview(): void {
+  planMarkdownPreviewAbort?.abort();
+  planMarkdownPreviewAbort = null;
+  planMarkdownPreview.value = null;
 }
 
 function feedbackRecordLabel(feedback: RolePlanFeedback): string {
@@ -392,12 +536,18 @@ function isApprovalStep(plan: RolePlan, step: RolePlanStep): boolean {
 
 function approvalMissingLabel(field: string): string {
   const labels: Record<string, string> = {
-    request: "批准事项",
+    approver: "审批人 / 责任人",
+    request: "批准、调整或否决的具体决定",
+    recommendation: "推荐方案",
+    alternatives: "必要备选",
     reason: "审批原因",
     affectedActions: "文件、命令或外部变更",
     validation: "验证方式",
     rollback: "回退方案",
-    outOfScope: "明确不在范围内的内容"
+    outOfScope: "明确不在范围内的内容",
+    requestedAt: "最近审批请求时间",
+    source: "来源消息 ID 或 feedback ID",
+    responseStatus: "当前回执状态"
   };
   return t(labels[field] || field);
 }
@@ -437,7 +587,7 @@ function clipboardImageName(mimeType: string, index: number): string {
 }
 
 function addApprovalFiles(planId: string, files: File[], fromClipboard = false): void {
-  if (!files.length || approvalPending[planId] || approvalDeliveryPending[planId]) return;
+  if (!files.length || approvalPending[planId]) return;
   const current = approvalAttachmentsFor(planId);
   if (current.length + files.length > PLAN_FEEDBACK_MAX_ATTACHMENTS) {
     approvalAttachmentError(
@@ -478,7 +628,7 @@ function addApprovalFiles(planId: string, files: File[], fromClipboard = false):
 }
 
 function openApprovalAttachmentPicker(planId: string): void {
-  if (approvalPending[planId] || approvalDeliveryPending[planId]) return;
+  if (approvalPending[planId]) return;
   attachmentTargetPlanId.value = planId;
   if (approvalFileInput.value) {
     approvalFileInput.value.value = "";
@@ -512,7 +662,7 @@ function releaseAttachmentDrafts(drafts: ApprovalAttachmentDraft[]): void {
 }
 
 function removeApprovalAttachment(planId: string, attachmentId: string): void {
-  if (approvalPending[planId] || approvalDeliveryPending[planId]) return;
+  if (approvalPending[planId]) return;
   const current = approvalAttachmentsFor(planId);
   const removed = current.find((item) => item.id === attachmentId);
   if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
@@ -551,12 +701,173 @@ function resetApprovalAttachmentState(): void {
   submittedApprovalTexts.clear();
   submittedApprovalAttachments.clear();
   attachmentTargetPlanId.value = "";
+  for (const key of Object.keys(approvalMentionMenus)) delete approvalMentionMenus[key];
+  approvalTextareaElements.clear();
 }
 
 function formatAttachmentSize(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 102.4) / 10} KB`;
   return `${Math.round(size / 1024 / 102.4) / 10} MB`;
+}
+
+function approvalMentionState(planId: string): ApprovalMentionMenuState {
+  if (!approvalMentionMenus[planId]) {
+    approvalMentionMenus[planId] = { open: false, query: "", start: 0, end: 0, activeIndex: 0 };
+  }
+  return approvalMentionMenus[planId]!;
+}
+
+function setApprovalTextareaRef(planId: string, value: unknown): void {
+  const root = value && typeof value === "object" && "$el" in value
+    ? (value as { $el?: HTMLElement }).$el
+    : value instanceof HTMLElement
+      ? value
+      : undefined;
+  const textarea = root instanceof HTMLTextAreaElement ? root : root?.querySelector<HTMLTextAreaElement>("textarea");
+  if (textarea) approvalTextareaElements.set(planId, textarea);
+  else approvalTextareaElements.delete(planId);
+}
+
+function allApprovalMentionCandidates(plan: RolePlan): PlanAttachmentMentionCandidate[] {
+  return planAttachmentMentionCandidates(plan.attachments);
+}
+
+function approvalMentionResults(plan: RolePlan): PlanAttachmentMentionCandidate[] {
+  const query = approvalMentionState(plan.id).query.trim().toLocaleLowerCase();
+  if (!query) return allApprovalMentionCandidates(plan);
+  return allApprovalMentionCandidates(plan).filter((candidate) => (
+    candidate.name.toLocaleLowerCase().includes(query)
+    || candidate.id.toLocaleLowerCase().includes(query)
+  ));
+}
+
+function approvalMentionOptionId(planId: string, index: number): string {
+  return `plan-attachment-mention-${planId.replace(/[^\p{L}\p{N}_-]+/gu, "-")}-${index}`;
+}
+
+function approvalMentionListId(planId: string): string {
+  return `${approvalMentionOptionId(planId, 0)}-list`;
+}
+
+function approvalMentioned(plan: RolePlan, candidate: PlanAttachmentMentionCandidate): boolean {
+  return referencedPlanAttachmentIds(String(approvalDrafts[plan.id] || ""), allApprovalMentionCandidates(plan))
+    .includes(candidate.id);
+}
+
+function updateApprovalMentionMenu(plan: RolePlan, textarea: HTMLTextAreaElement): void {
+  approvalTextareaElements.set(plan.id, textarea);
+  const mention = findPlanAttachmentMentionQuery(textarea.value, textarea.selectionStart ?? textarea.value.length);
+  const state = approvalMentionState(plan.id);
+  if (!mention || !canEditApprovalFeedback(plan)) {
+    state.open = false;
+    return;
+  }
+  state.open = true;
+  state.query = mention.query;
+  state.start = mention.start;
+  state.end = mention.end;
+  state.activeIndex = 0;
+}
+
+function handleApprovalInput(event: Event, plan: RolePlan): void {
+  const textarea = event.target instanceof HTMLTextAreaElement
+    ? event.target
+    : approvalTextareaElements.get(plan.id);
+  if (textarea) updateApprovalMentionMenu(plan, textarea);
+}
+
+function handleApprovalCaretChange(event: Event, plan: RolePlan): void {
+  const textarea = event.target instanceof HTMLTextAreaElement
+    ? event.target
+    : approvalTextareaElements.get(plan.id);
+  if (textarea) updateApprovalMentionMenu(plan, textarea);
+}
+
+function closeApprovalMentionMenu(planId: string): void {
+  const state = approvalMentionState(planId);
+  state.open = false;
+  state.query = "";
+  state.activeIndex = 0;
+}
+
+function handleApprovalBlur(planId: string): void {
+  window.setTimeout(() => closeApprovalMentionMenu(planId), 120);
+}
+
+function selectApprovalMention(plan: RolePlan, candidate: PlanAttachmentMentionCandidate): void {
+  const state = approvalMentionState(plan.id);
+  const inserted = insertPlanAttachmentMention(String(approvalDrafts[plan.id] || ""), state, candidate.token);
+  if (Array.from(inserted.text).length > 2_000) {
+    approvalNotices[plan.id] = { tone: "error", text: t("引用附件后会超过 2000 字，请先精简审批建议。") };
+    return;
+  }
+  approvalDrafts[plan.id] = inserted.text;
+  closeApprovalMentionMenu(plan.id);
+  void nextTick(() => {
+    const textarea = approvalTextareaElements.get(plan.id);
+    textarea?.focus();
+    textarea?.setSelectionRange(inserted.caret, inserted.caret);
+  });
+}
+
+function handleApprovalKeydown(event: KeyboardEvent, plan: RolePlan): void {
+  const state = approvalMentionState(plan.id);
+  if (state.open) {
+    const results = approvalMentionResults(plan);
+    if (event.key === "ArrowDown" && results.length) {
+      event.preventDefault();
+      state.activeIndex = (state.activeIndex + 1) % results.length;
+      return;
+    }
+    if (event.key === "ArrowUp" && results.length) {
+      event.preventDefault();
+      state.activeIndex = (state.activeIndex - 1 + results.length) % results.length;
+      return;
+    }
+    if (event.key === "Home" && results.length) {
+      event.preventDefault();
+      state.activeIndex = 0;
+      return;
+    }
+    if (event.key === "End" && results.length) {
+      event.preventDefault();
+      state.activeIndex = results.length - 1;
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeApprovalMentionMenu(plan.id);
+      return;
+    }
+    if (
+      event.key === "Enter"
+      && results.length
+      && !event.isComposing
+      && event.keyCode !== 229
+      && !event.shiftKey
+      && !event.ctrlKey
+      && !event.altKey
+      && !event.metaKey
+    ) {
+      event.preventDefault();
+      selectApprovalMention(plan, results[Math.min(state.activeIndex, results.length - 1)]!);
+      return;
+    }
+    if (
+      event.key === "Enter"
+      && !event.isComposing
+      && event.keyCode !== 229
+      && !event.shiftKey
+      && !event.ctrlKey
+      && !event.altKey
+      && !event.metaKey
+    ) {
+      event.preventDefault();
+      return;
+    }
+  }
+  if (event.key === "Enter") handleApprovalEnter(event, plan);
 }
 
 function attachmentContentBase64(file: File): Promise<string> {
@@ -577,17 +888,100 @@ async function approvalAttachmentUploads(planId: string): Promise<PlanFeedbackAt
   })));
 }
 
-function canSubmitApproval(planId: string): boolean {
-  return !approvalPending[planId]
-    && !approvalDeliveryPending[planId]
+function approvalResponseStatusLabel(status: RolePlanApprovalContract["responseStatus"]): string {
+  return t({
+    pending: "等待审批回执",
+    approved: "已批准",
+    rejected: "已否决",
+    changes_requested: "要求调整方案",
+    cancelled: "已取消"
+  }[String(status)] || "未记录回执状态");
+}
+
+function approvalFeedbackBaseAvailable(plan: RolePlan): boolean {
+  const approval = plan.presentation.approval;
+  return Boolean(approval.stepId) && (approval.state === "incomplete" || approval.enabled);
+}
+
+function canEditApprovalFeedback(plan: RolePlan): boolean {
+  return approvalFeedbackBaseAvailable(plan) && !approvalPending[plan.id];
+}
+
+function canSubmitApproval(plan: RolePlan): boolean {
+  return canEditApprovalFeedback(plan)
+    && !approvalPending[plan.id]
+    && !approvalDeliveryPending[plan.id]
     && Boolean(gatewayId.value)
-    && Boolean(String(approvalDrafts[planId] || "").trim());
+    && Boolean(String(approvalDrafts[plan.id] || "").trim());
+}
+
+type ApprovalComposeStatus = {
+  icon: string;
+  text: string;
+  title: string;
+  tone: "info" | "warning";
+};
+
+function approvalComposeStatus(plan: RolePlan): ApprovalComposeStatus | null {
+  if (!approvalFeedbackBaseAvailable(plan)) {
+    return {
+      icon: "mdi-alert-circle-outline",
+      text: t("当前步骤未关联可用的审批入口；请让 Agent 更新 stepId 或审批状态。"),
+      title: t("当前步骤不能填写审批意见"),
+      tone: "warning"
+    };
+  }
+  if (approvalPending[plan.id]) {
+    return {
+      icon: "mdi-content-save-clock-outline",
+      text: t("正在保存本次意见，请稍候；保存完成后可继续编辑。"),
+      title: t("正在保存审批意见"),
+      tone: "info"
+    };
+  }
+  if (approvalDeliveryPending[plan.id]) {
+    return {
+      icon: "mdi-send-clock-outline",
+      text: t("上一条意见已记录，正在通知 Agent；你可以继续编辑下一条，通知完成后即可提交。"),
+      title: t("上一条意见正在通知 Agent"),
+      tone: "info"
+    };
+  }
+  if (!gatewayId.value) {
+    return {
+      icon: "mdi-routes",
+      text: t("当前没有可投递的 Route；你可以先编辑，选择或绑定 Route 后再提交。"),
+      title: t("当前 Route 不可用"),
+      tone: "warning"
+    };
+  }
+  return null;
+}
+
+function approvalFeedbackLabel(plan: RolePlan): string {
+  return t(plan.presentation.approval.state === "incomplete" ? "补充资料 / 调整建议" : "审批建议");
+}
+
+function approvalFeedbackPlaceholder(plan: RolePlan): string {
+  return t(plan.presentation.approval.state === "incomplete"
+    ? "例如：请先补充真实审批来源，再让我确认。"
+    : "例如：建议先补充回归范围，再进入下一步。");
+}
+
+function approvalFeedbackHint(plan: RolePlan): string {
+  return t(plan.presentation.approval.state === "incomplete"
+    ? "当前不能正式批准；可提交补充资料或调整建议，输入 @ 可引用计划附件。Enter 提交，Shift+Enter 换行。"
+    : "输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。提交后由 Agent 判断如何处理，不会直接改变计划状态。");
+}
+
+function approvalSubmitLabel(plan: RolePlan): string {
+  return t(plan.presentation.approval.state === "incomplete" ? "提交补充意见" : "提交审批意见");
 }
 
 function handleApprovalEnter(event: KeyboardEvent, plan: RolePlan): void {
   if (event.isComposing || event.keyCode === 229 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
   event.preventDefault();
-  if (!canSubmitApproval(plan.id)) return;
+  if (!canSubmitApproval(plan)) return;
   void sendApprovalSuggestion(plan);
 }
 
@@ -663,6 +1057,8 @@ onBeforeUnmount(() => {
   if (planDirectorySyncFrame) window.cancelAnimationFrame(planDirectorySyncFrame);
   if (planObserverRefreshFrame) window.cancelAnimationFrame(planObserverRefreshFrame);
   managerEvents?.close();
+  closePlanMarkdownPreview();
+  resetPlanMarkdownTeasers();
   resetApprovalAttachmentState();
 });
 
@@ -680,6 +1076,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
   delete approvalNotices[plan.id];
   try {
     const attachments = await approvalAttachmentUploads(plan.id);
+    const planAttachmentIds = referencedPlanAttachmentIds(text, allApprovalMentionCandidates(plan));
     const result = await submitPlanFeedback({
       roleId: roleId.value,
       planId: plan.id,
@@ -688,6 +1085,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
       feedbackId: feedbackRequestId(plan.id),
       text,
       attachments,
+      planAttachmentIds,
       source: "webgui"
     });
     const existingRecords = plan.approval.records?.length
@@ -911,8 +1309,39 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                     <small data-no-i18n>{{ formatAttachmentSize(attachment.size) }}</small>
                   </span>
                 </button>
+                <button
+                  v-for="attachment in plan.attachments.filter((item) => item.kind === 'file' && isPlanMarkdownAttachment(item.name, item.mimeType))"
+                  :key="attachment.id"
+                  type="button"
+                  class="knowledge-plan-attachment media markdown"
+                  :aria-label="`${t('预览 Markdown')}：${attachment.name}`"
+                  @click="openPlanMarkdownPreview(plan, attachment)"
+                >
+                  <span class="knowledge-plan-attachment-visual knowledge-plan-markdown-visual">
+                    <span class="knowledge-plan-markdown-paper">
+                      <span class="knowledge-plan-markdown-kicker">
+                        <v-icon size="14">mdi-language-markdown-outline</v-icon>
+                        <span data-no-i18n>MARKDOWN</span>
+                      </span>
+                      <span v-if="planMarkdownTeaser(plan.id, attachment.id).loading" class="knowledge-plan-markdown-teaser loading">
+                        {{ t("正在加载 Markdown…") }}
+                      </span>
+                      <span v-else class="knowledge-plan-markdown-teaser" data-no-i18n>
+                        {{ planMarkdownTeaser(plan.id, attachment.id).text || attachment.name }}
+                      </span>
+                    </span>
+                    <span class="knowledge-plan-attachment-overlay">
+                      <v-icon size="20">mdi-eye-outline</v-icon>
+                      {{ t("预览 Markdown") }}
+                    </span>
+                  </span>
+                  <span class="knowledge-plan-attachment-meta">
+                    <b data-no-i18n>{{ attachment.name }}</b>
+                    <small data-no-i18n>Markdown · {{ formatAttachmentSize(attachment.size) }}</small>
+                  </span>
+                </button>
                 <a
-                  v-for="attachment in plan.attachments.filter((item) => item.kind === 'file')"
+                  v-for="attachment in plan.attachments.filter((item) => item.kind === 'file' && !isPlanMarkdownAttachment(item.name, item.mimeType))"
                   :key="attachment.id"
                   class="knowledge-plan-attachment file"
                   :href="planAttachmentUrl(plan.id, attachment.id)"
@@ -1025,7 +1454,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                       <b>核对本步骤的执行边界后提交审批意见</b>
                     </div>
                     <v-chip :color="plan.presentation.approval.state === 'ready' ? 'primary' : 'warning'" size="x-small" variant="tonal">
-                      {{ plan.presentation.approval.state === "ready" ? "可审批" : "可审批 · 待补充" }}
+                      {{ plan.presentation.approval.state === "ready" ? "可审批" : "审批资料不完整 · 禁止审批" }}
                     </v-chip>
                   </div>
                   <p>{{ plan.presentation.approval.helper }}</p>
@@ -1036,38 +1465,52 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                     density="compact"
                     class="knowledge-approval-missing"
                   >
-                    <b>建议 Agent 补充：</b>
+                    <b>审批资料不完整，禁止审批。缺少：</b>
                     <span>{{ plan.presentation.approval.missing.map(approvalMissingLabel).join("、") }}</span>
+                    <small>你仍可在下方提交补充资料或调整建议；该意见不会被视为批准。</small>
                   </v-alert>
                   <div v-if="plan.presentation.approval.contract" class="knowledge-approval-contract">
                     <div class="knowledge-approval-contract-lead">
-                      <span>申请批准</span>
+                      <span>审批人 / 责任人</span>
+                      <b data-no-i18n>{{ plan.presentation.approval.contract.approver || "未填写" }}</b>
+                      <span>要批准、调整或否决的具体决定</span>
                       <b data-no-i18n>{{ plan.presentation.approval.contract.request || "未填写" }}</b>
+                      <span>推荐方案</span>
+                      <b data-no-i18n>{{ plan.presentation.approval.contract.recommendation || "未填写" }}</b>
+                      <span>必要备选</span>
+                      <ul class="knowledge-approval-alternatives">
+                        <li v-for="(item, index) in (plan.presentation.approval.contract.alternatives || [])" :key="`alternative-${index}`" data-no-i18n>{{ item }}</li>
+                        <li v-if="!(plan.presentation.approval.contract.alternatives || []).length">未填写</li>
+                      </ul>
+                      <span>Reason</span>
                       <small data-no-i18n>{{ plan.presentation.approval.contract.reason || "未填写审批原因" }}</small>
                     </div>
-                    <section v-if="plan.presentation.approval.contract.files.length" class="knowledge-approval-contract-section">
+                    <section class="knowledge-approval-contract-section">
                       <h4>文件改动</h4>
                       <div v-for="(item, index) in plan.presentation.approval.contract.files" :key="`file-${index}`" class="knowledge-approval-contract-item">
                         <div><v-chip size="x-small" variant="tonal">{{ approvalFileAction(item.action) }}</v-chip><code data-no-i18n>{{ item.path }}</code></div>
                         <p data-no-i18n>{{ item.change }}</p>
                         <small v-if="item.destination" data-no-i18n>目标：{{ item.destination }}</small>
                       </div>
+                      <p v-if="!plan.presentation.approval.contract.files.length">无文件改动；如实际涉及文件，必须补充真实路径、动作和具体改法。</p>
                     </section>
-                    <section v-if="plan.presentation.approval.contract.commands.length" class="knowledge-approval-contract-section">
+                    <section class="knowledge-approval-contract-section">
                       <h4>执行命令</h4>
                       <div v-for="(item, index) in plan.presentation.approval.contract.commands" :key="`command-${index}`" class="knowledge-approval-contract-item">
                         <code data-no-i18n>{{ item.command }}</code>
                         <p data-no-i18n>{{ item.purpose }}</p>
                         <small v-if="item.expectedEffect" data-no-i18n>预期影响：{{ item.expectedEffect }}</small>
                       </div>
+                      <p v-if="!plan.presentation.approval.contract.commands.length">无执行命令；如实际需运行命令，必须补充完整命令、用途和影响。</p>
                     </section>
-                    <section v-if="plan.presentation.approval.contract.changes.length" class="knowledge-approval-contract-section">
+                    <section class="knowledge-approval-contract-section">
                       <h4>配置、数据或外部环境变更</h4>
                       <div v-for="(item, index) in plan.presentation.approval.contract.changes" :key="`change-${index}`" class="knowledge-approval-contract-item">
                         <b data-no-i18n>{{ item.target }}</b>
                         <p data-no-i18n>{{ item.change }}</p>
                         <small v-if="item.impact" data-no-i18n>影响：{{ item.impact }}</small>
                       </div>
+                      <p v-if="!plan.presentation.approval.contract.changes.length">无配置、数据或外部系统变更；如实际涉及，必须补充目标、改动和影响。</p>
                     </section>
                     <div class="knowledge-approval-contract-grid">
                       <section>
@@ -1083,6 +1526,26 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                         <ul><li v-for="(item, index) in plan.presentation.approval.contract.outOfScope" :key="`scope-${index}`" data-no-i18n>{{ item }}</li></ul>
                       </section>
                     </div>
+                    <section class="knowledge-approval-contract-section">
+                      <h4>审批附件 / 效果图 / 报告</h4>
+                      <div v-for="attachment in plan.attachments" :key="attachment.id" class="knowledge-approval-contract-item">
+                        <b data-no-i18n>{{ attachment.name }}</b>
+                        <small data-no-i18n>{{ attachment.mimeType || attachment.kind }} · {{ formatAttachmentSize(attachment.size) }}</small>
+                      </div>
+                      <p v-if="!plan.attachments.length">当前计划没有审批附件；已有产物时必须作为计划附件提交，不能只写本机路径。</p>
+                    </section>
+                    <section class="knowledge-approval-contract-section">
+                      <h4>审批请求与回执</h4>
+                      <div class="knowledge-approval-contract-item">
+                        <b>最近请求时间</b>
+                        <p data-no-i18n>{{ plan.presentation.approval.contract.requestedAt ? formatDate(plan.presentation.approval.contract.requestedAt) : "未填写" }}</p>
+                        <b>来源消息 / Feedback</b>
+                        <p data-no-i18n>{{ plan.presentation.approval.contract.sourceMessageId || plan.presentation.approval.contract.feedbackId || "未填写" }}</p>
+                        <b>当前回执状态</b>
+                        <p>{{ approvalResponseStatusLabel(plan.presentation.approval.contract.responseStatus) }}</p>
+                        <small v-if="plan.approval.latest" data-no-i18n>最近记录：{{ plan.approval.latest.id }} · {{ plan.approval.latest.deliveryStatus }} · {{ formatDate(plan.approval.latest.updatedAt) }}</small>
+                      </div>
+                    </section>
                   </div>
                   <div v-if="approvalRecordsForDisplay(plan).length" class="knowledge-approval-history" :aria-label="t('审批意见记录')">
                     <article
@@ -1105,28 +1568,106 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                           {{ attachment.name }} · {{ formatAttachmentSize(attachment.size) }}
                         </v-chip>
                       </div>
+                      <div v-if="(feedback.planAttachments || []).length" class="knowledge-approval-record-attachments">
+                        <v-chip
+                          v-for="attachment in feedback.planAttachments"
+                          :key="`${feedback.id}-plan-${attachment.id}`"
+                          prepend-icon="mdi-at"
+                          size="x-small"
+                          variant="tonal"
+                          color="primary"
+                          data-no-i18n
+                        >
+                          {{ attachment.name }} · {{ formatAttachmentSize(attachment.size) }}
+                        </v-chip>
+                      </div>
                     </article>
                   </div>
-                  <v-textarea
-                    v-model="approvalDrafts[plan.id]"
-                    label="审批建议"
-                    placeholder="例如：建议先补充回归范围，再进入下一步。"
-                    persistent-hint
-                    hint="Enter 直接提交，Shift+Enter 换行；提交后由 Agent 判断如何处理，不会直接改变计划状态。"
-                    variant="outlined"
-                    rows="3"
-                    :counter="2000"
-                    :maxlength="2000"
-                    :disabled="approvalPending[plan.id] || approvalDeliveryPending[plan.id]"
-                    @keydown.enter="handleApprovalEnter($event, plan)"
-                    @paste="handleApprovalPaste(plan.id, $event)"
-                  />
+                  <div
+                    v-if="approvalComposeStatus(plan)"
+                    class="knowledge-approval-compose-status"
+                    :data-tone="approvalComposeStatus(plan)?.tone"
+                    role="status"
+                  >
+                    <span class="knowledge-approval-compose-status-icon">
+                      <v-icon size="18">{{ approvalComposeStatus(plan)?.icon }}</v-icon>
+                    </span>
+                    <span class="knowledge-approval-compose-status-copy">
+                      <b>{{ approvalComposeStatus(plan)?.title }}</b>
+                      <span>{{ approvalComposeStatus(plan)?.text }}</span>
+                    </span>
+                  </div>
+                  <div class="knowledge-approval-composer">
+                    <v-textarea
+                      :ref="(value) => setApprovalTextareaRef(plan.id, value)"
+                      v-model="approvalDrafts[plan.id]"
+                      :label="approvalFeedbackLabel(plan)"
+                      :placeholder="approvalFeedbackPlaceholder(plan)"
+                      persistent-hint
+                      :hint="approvalFeedbackHint(plan)"
+                      variant="outlined"
+                      rows="3"
+                      :counter="2000"
+                      :maxlength="2000"
+                      :disabled="!canEditApprovalFeedback(plan)"
+                      aria-autocomplete="list"
+                      :aria-controls="approvalMentionListId(plan.id)"
+                      :aria-expanded="approvalMentionState(plan.id).open"
+                      :aria-activedescendant="approvalMentionState(plan.id).open && approvalMentionResults(plan).length ? approvalMentionOptionId(plan.id, approvalMentionState(plan.id).activeIndex) : undefined"
+                      @input="handleApprovalInput($event, plan)"
+                      @click="handleApprovalCaretChange($event, plan)"
+                      @keydown="handleApprovalKeydown($event, plan)"
+                      @blur="handleApprovalBlur(plan.id)"
+                      @paste="handleApprovalPaste(plan.id, $event)"
+                    />
+                    <div
+                      v-if="approvalMentionState(plan.id).open"
+                      :id="approvalMentionListId(plan.id)"
+                      class="knowledge-approval-mention-menu"
+                      role="listbox"
+                      :aria-label="t('引用计划附件')"
+                    >
+                      <div class="knowledge-approval-mention-head">
+                        <span><v-icon size="16">mdi-at</v-icon>{{ t("引用计划附件") }}</span>
+                        <small>{{ t("输入文件名筛选，方向键选择，Enter 确认") }}</small>
+                      </div>
+                      <button
+                        v-for="(candidate, candidateIndex) in approvalMentionResults(plan)"
+                        :id="approvalMentionOptionId(plan.id, candidateIndex)"
+                        :key="candidate.id"
+                        class="knowledge-approval-mention-option"
+                        :data-active="candidateIndex === approvalMentionState(plan.id).activeIndex"
+                        :data-selected="approvalMentioned(plan, candidate)"
+                        type="button"
+                        role="option"
+                        :aria-selected="approvalMentioned(plan, candidate)"
+                        @mouseenter="approvalMentionState(plan.id).activeIndex = candidateIndex"
+                        @mousedown.prevent
+                        @click="selectApprovalMention(plan, candidate)"
+                      >
+                        <span class="knowledge-approval-mention-icon">
+                          <v-icon size="20">{{ plan.attachments.find((item) => item.id === candidate.id)?.kind === "image" ? "mdi-image-outline" : plan.attachments.find((item) => item.id === candidate.id)?.kind === "video" ? "mdi-video-outline" : "mdi-file-outline" }}</v-icon>
+                        </span>
+                        <span class="knowledge-approval-mention-copy">
+                          <b data-no-i18n>{{ candidate.name }}</b>
+                          <small data-no-i18n>
+                            {{ candidate.duplicateCount ? `${candidate.duplicateIndex}/${candidate.duplicateCount} · ` : "" }}{{ formatAttachmentSize(plan.attachments.find((item) => item.id === candidate.id)?.size || 0) }}
+                          </small>
+                        </span>
+                        <v-icon v-if="approvalMentioned(plan, candidate)" size="18" color="primary">mdi-check-circle</v-icon>
+                      </button>
+                      <div v-if="!approvalMentionResults(plan).length" class="knowledge-approval-mention-empty" role="status">
+                        <v-icon size="20">mdi-file-search-outline</v-icon>
+                        <span>{{ plan.attachments.length ? t("没有匹配的计划附件") : t("当前计划没有可引用的附件") }}</span>
+                      </div>
+                    </div>
+                  </div>
                   <div class="knowledge-approval-attachment-tools">
                     <v-btn
                       prepend-icon="mdi-paperclip-plus"
                       variant="tonal"
                       size="small"
-                      :disabled="approvalPending[plan.id] || approvalDeliveryPending[plan.id]"
+                      :disabled="!canEditApprovalFeedback(plan)"
                       @click="openApprovalAttachmentPicker(plan.id)"
                     >
                       添加附件
@@ -1154,7 +1695,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                         variant="text"
                         size="x-small"
                         :aria-label="t('删除附件')"
-                        :disabled="approvalPending[plan.id] || approvalDeliveryPending[plan.id]"
+                        :disabled="approvalPending[plan.id]"
                         @click="removeApprovalAttachment(plan.id, attachment.id)"
                       />
                     </article>
@@ -1174,10 +1715,10 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                       color="primary"
                       prepend-icon="mdi-send-check-outline"
                       :loading="approvalPending[plan.id]"
-                      :disabled="!canSubmitApproval(plan.id)"
+                      :disabled="!canSubmitApproval(plan)"
                       @click="sendApprovalSuggestion(plan)"
                     >
-                      提交给 Agent
+                      {{ approvalSubmitLabel(plan) }}
                     </v-btn>
                   </div>
                     </section>
@@ -1265,6 +1806,53 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
             :alt="planAttachmentPreview.name"
             data-no-i18n
           >
+        </div>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog
+      :model-value="Boolean(planMarkdownPreview)"
+      max-width="min(1040px, 94vw)"
+      @update:model-value="(open) => { if (!open) closePlanMarkdownPreview(); }"
+    >
+      <v-card class="knowledge-plan-media-preview knowledge-plan-markdown-preview" variant="flat">
+        <div class="knowledge-plan-media-preview-head">
+          <div>
+            <span>{{ t("Markdown 预览") }}</span>
+            <b v-if="planMarkdownPreview" data-no-i18n>{{ planMarkdownPreview.name }}</b>
+          </div>
+          <div class="knowledge-plan-preview-actions">
+            <v-btn
+              v-if="planMarkdownPreview"
+              :href="planMarkdownPreview.url"
+              :download="planMarkdownPreview.name"
+              target="_blank"
+              rel="noopener noreferrer"
+              prepend-icon="mdi-download-outline"
+              variant="text"
+              size="small"
+            >{{ t("下载原文件") }}</v-btn>
+            <v-btn icon="mdi-close" variant="text" :aria-label="t('关闭预览')" @click="closePlanMarkdownPreview" />
+          </div>
+        </div>
+        <div class="knowledge-plan-markdown-preview-stage">
+          <div v-if="planMarkdownPreview?.loading" class="knowledge-plan-markdown-loading">
+            <v-progress-circular indeterminate color="primary" size="26" width="3" />
+            <span>{{ t("正在加载 Markdown…") }}</span>
+          </div>
+          <v-alert
+            v-else-if="planMarkdownPreview?.error"
+            type="warning"
+            variant="tonal"
+            class="knowledge-plan-markdown-error"
+            data-no-i18n
+          >{{ planMarkdownPreview.error }}</v-alert>
+          <article
+            v-else-if="planMarkdownPreview"
+            class="knowledge-plan-markdown-document"
+            data-no-i18n
+            v-html="planMarkdownPreview.html"
+          ></article>
         </div>
       </v-card>
     </v-dialog>

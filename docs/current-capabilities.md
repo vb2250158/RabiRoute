@@ -65,7 +65,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 当前 route kind：`private`、`group_message`、`direct_at`、`direct_reply`、`indirect_reply`、`heartbeat`、`manual_trigger`、`role_panel_message`、`plan_feedback`、`voice_transcript`、`rabilink`、`wearable_health_alert`、`wecom_message`、`weixin_message`。
 - `RouteDecision` 只负责规则匹配；`forwarding.ts` 遍历 active route profile、写审计并投递每一条命中规则。
 - `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`；配置了持久计划协助任务时，还注入每个槽位的完整 ID、名称、workspace 和分配规则。Heartbeat 与 `plan_feedback` 固定省略历史段。
-- 持久计划协助任务采用两级并发：主任务把一条未完成计划绑定到一个协助槽；协助任务可以再开临时子 Agent，但必须保留长期 owner、汇总结果、更新计划并回传主任务。主人格收到阶段结果后必须同轮消费并按计划自身 `taskBinding` 精确续投；计划完成或暂停后立即释放槽位并分配给下一条可推进计划，多个独立计划应并行占满可用槽位。代码、配置和契约测试已覆盖，真实 Desktop 多任务可见性与工具 owner 尚未纵向验收，因此该能力仍为实验状态。
+- 持久“协助处理计划”任务是计划管理秘书，不是业务执行 owner。秘书维护计划/记忆、查重与绑定业务任务、读取状态、消费结果和续投；计划 `taskBinding` 始终指向独立业务任务。秘书及其临时子 Agent不得修改业务文件，实际调查、实现和验证由业务任务完成。主人格收到阶段结果后必须同轮推动秘书更新控制面并按 `taskBinding` 精确续投业务任务；多个秘书并行管理不同计划分片。代码、配置和契约测试已覆盖，真实 Desktop 多任务纵向验收仍未完成，因此该能力仍为实验状态。
 - 人格 `recentMessageLimits` 对普通消息端分别限制 `0–200` 条，默认 `12`；`0` 只关闭注入。Heartbeat 始终按 `0` 处理。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
 - 已匹配的普通消息直接 `steer/start` Desktop owner；Heartbeat 可专门配置忙碌跳过，语音可专门配置热/关键词投递。
 - Delivery replay 已实现：真实投递会写 `delivery-replay-ledger.jsonl`，可按 attempt 或消息记录重新进入投递链。

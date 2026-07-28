@@ -46,13 +46,15 @@ export function planTaskCompletionAgentText(delivery: PlanTaskCompletionDelivery
     "执行任务已完成本轮最终输出：",
     delivery.finalMessage,
     "",
-    "这不是只需确认收到的通知。主人格必须在同一轮完成以下闭环：",
-    "1. GET 读取该计划、当前步骤、记忆和绑定任务的真实状态，消费阶段结果；不要仅因本轮结束就把整个计划标为完成。",
-    "2. PATCH 更新计划步骤、状态、nextAction、waitingFor、阻塞事实和记忆；等待负责人或审批时，先执行已授权的询问、追问或补证据动作，不得越过审批门禁。",
-    `3. 若计划仍未终态、未暂停且没有真实阻塞，立即 POST /api/agent/threads，action=send，精确续投 plan.taskBinding.sessionId=${delivery.sourceSessionId}${boundWorkspace ? `、workspace=${boundWorkspace}` : ""} 对应的原协助任务；续投正文必须给出一个可验证的下一步。不得仅按槽位名称猜任务，也不得留到下一次 heartbeat。`,
-    "4. 若计划已完成或暂停，PATCH taskBinding=null 释放协助槽；随后枚举其他未终态计划，把空闲槽立即绑定并投递给下一条可推进计划。缩容或释放绑定不删除 Desktop 任务。",
-    "5. 检查全部协助槽和全部未终态计划；存在多个可独立推进的计划时并行占满可用槽位。本轮结束前必须满足：可推进但空闲的计划数 = 0。active/in-progress 任务不要重复投递。",
-    "协助任务可以创建临时子 Agent 加快边界清楚的并行工作，但长期 owner 仍是协助任务；必须由它汇总结果、更新计划并回传主人格。"
+    "这不是只需确认收到的通知。主人格必须在同一轮先把闭环交给计划管理秘书，不得自己展开长时间计划处理：",
+    "1. 立即向负责该计划分片的秘书投递本业务结果；主人格不亲自做全量计划读取、任务查重、绑定迁移、问题账本/记忆写入或批量续投。",
+    "2. 由秘书 GET 读取该计划、当前步骤、记忆和绑定任务的真实状态并消费阶段结果；不要仅因本轮结束就把整个计划标为完成。",
+    "3. 由秘书 PATCH 更新计划步骤、状态、nextAction、waitingFor、阻塞事实和记忆；当前步骤等待审批、方案确认或授权时必须写 isBlocked=true，并在 blockedBy 具体写明谁要批准什么。秘书继续追问并记录回执，但不得越过审批门禁或为运行态指标反复续投实施。",
+    `4. 这是计划的独立业务任务完成提醒。若计划仍未终态、未暂停且没有真实阻塞，由秘书 POST /api/agent/threads，action=send，精确续投 plan.taskBinding.sessionId=${delivery.sourceSessionId}${boundWorkspace ? `、workspace=${boundWorkspace}` : ""} 对应的原业务任务；续投正文必须给出一个可验证的下一步。`,
+    "5. 不得把任何“协助处理计划”秘书会话写入 taskBinding，也不得因秘书轮转或计划暂停清空业务 taskBinding。只有业务任务确实失效并完成受控迁移时才改绑；计划完成后可保留绑定作为历史证据。",
+    "6. 由秘书检查全部计划管理秘书、全部未终态计划和对应业务任务；秘书负责计划/记忆更新、任务查重、结果消费和续投，禁止亲自执行调查、代码/Prefab/配置、Unity/SVN/构建/发布或外部系统操作。",
+    "7. 存在多个可独立推进的计划时并行使用秘书槽管理不同分片，并让所有可推进的业务任务运行。本轮结束前必须满足：可推进但无人管理的计划数 = 0，且可推进但空闲的业务任务数 = 0。active/in-progress 业务任务不要重复投递。",
+    "秘书可以创建临时子 Agent 加快计划盘点、任务查重、状态核对和结果摘要；秘书及其子 Agent 都不是业务 owner，业务执行仍由 plan.taskBinding 指向的独立任务负责。"
   ].filter(Boolean).join("\n");
 }
 

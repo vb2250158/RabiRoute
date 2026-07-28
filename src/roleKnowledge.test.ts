@@ -552,7 +552,13 @@ test("paused plans preserve their resume step without remaining approval-active"
   assert.equal(plan.status, "暂停");
   assert.equal(plan.currentStepId, "implement");
   assert.equal(planRequiresApproval(plan), false);
-  assert.equal(updatePlan(roleDir, plan.id, { status: "进行中" }).status, "进行中");
+  const resumed = updatePlan(roleDir, plan.id, {
+    status: "进行中",
+    isBlocked: true,
+    blockedBy: "用户尚未批准继续实现当前文件改动"
+  });
+  assert.equal(resumed.status, "进行中");
+  assert.equal(resumed.isBlocked, true);
 });
 
 test("approval steps remain writable while Manager can distinguish incomplete and concrete contracts", () => {
@@ -568,7 +574,9 @@ test("approval steps remain writable while Manager can distinguish incomplete an
 
   const incomplete = createPlan(roleDir, {
     ...base,
-    steps: [{ id: "approve", title: "等待修改审批", status: "进行中" }]
+    isBlocked: true,
+    blockedBy: "用户尚未批准是否执行结构化审批改动",
+    steps: [{ id: "approve", title: "等待修改审批", status: "进行中", isBlocked: true, blockedBy: "用户尚未批准是否执行结构化审批改动" }]
   });
   assert.equal(incomplete.steps[0]?.approvalRequest, undefined);
 
@@ -577,8 +585,13 @@ test("approval steps remain writable while Manager can distinguish incomplete an
       id: "approve",
       title: "等待修改审批",
       status: "进行中",
+      isBlocked: true,
+      blockedBy: "秋雨尚未批准结构化审批合同改动",
       approvalRequest: {
+        approver: "秋雨",
         request: "批准实现结构化审批合同并同步双端展示。",
+        recommendation: "批准当前最小代码与文档改动。",
+        alternatives: ["要求缩小范围后重新申请", "否决并保留现状"],
         reason: "当前通用安全提示无法说明批准后的真实动作。",
         files: [{
           path: "src/roleKnowledge.ts",
@@ -591,19 +604,40 @@ test("approval steps remain writable while Manager can distinguish incomplete an
           expectedEffect: "只读取代码并产生测试输出。"
         }],
         changes: [],
-        validation: ["审批卡片展示文件和命令，且不完整合同仍可提交用户意见。"],
+        validation: ["审批卡片展示完整材料，且不完整合同禁止审批。"],
         rollback: ["若验证失败，仅回退本合同列出的代码和文档改动。"],
-        outOfScope: ["不提交、不推送、不修改运行期 data/。"]
+        outOfScope: ["不提交、不推送、不修改运行期 data/。"],
+        requestedAt: "2026-07-28T00:00:00.000Z",
+        feedbackId: "feedback-approval-1",
+        responseStatus: "pending"
       }
     }]
   });
 
   assert.equal(plan.steps[0]?.approvalRequest?.files[0]?.path, "src/roleKnowledge.ts");
   const returnedToIncomplete = updatePlan(roleDir, plan.id, {
-    steps: [{ id: "approve", title: "等待修改审批", status: "进行中" }]
+    steps: [{ id: "approve", title: "等待修改审批", status: "进行中", isBlocked: true, blockedBy: "用户尚未批准是否执行结构化审批改动" }]
   });
   assert.equal(returnedToIncomplete.steps[0]?.approvalRequest, undefined);
   assert.equal(updatePlan(roleDir, plan.id, { priority: "high" }).priority, "high");
+  assert.throws(() => updatePlan(roleDir, plan.id, {
+    isBlocked: false,
+    blockedBy: "",
+    steps: [{ id: "approve", title: "等待修改审批", status: "进行中", isBlocked: false, blockedBy: "", approvalRequest: plan.steps[0]?.approvalRequest }]
+  }), /must set isBlocked=true/);
+
+  const approved = updatePlan(roleDir, plan.id, {
+    isBlocked: false,
+    blockedBy: "",
+    steps: [{
+      ...plan.steps[0],
+      isBlocked: false,
+      blockedBy: "",
+      approvalRequest: { ...plan.steps[0]?.approvalRequest, responseStatus: "approved" }
+    }]
+  });
+  assert.equal(approved.isBlocked, false);
+  assert.equal(approved.steps[0]?.approvalRequest?.responseStatus, "approved");
 });
 
 test("plans persist an exact Codex task binding and completion hook target", () => {

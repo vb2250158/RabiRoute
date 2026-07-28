@@ -45,7 +45,7 @@ async function createApp(baseUrl) {
     body: JSON.stringify({ name: "Mobile worker filtering" })
   });
   assert.equal(appResponse.status, 200);
-  return (await appResponse.json()).app.token;
+  return { token: (await appResponse.json()).app.token, cookie };
 }
 
 async function subscribe(baseUrl, token, identity) {
@@ -76,7 +76,7 @@ test("mobile PC picker exposes only processing workers", async () => {
   const subscriptions = [];
   try {
     await waitForHealth(baseUrl, child);
-    const token = await createApp(baseUrl);
+    const { token, cookie } = await createApp(baseUrl);
     subscriptions.push(await subscribe(baseUrl, token, {
       deviceId: "elysia-pc",
       deviceGuid: "guid-elysia",
@@ -88,6 +88,11 @@ test("mobile PC picker exposes only processing workers", async () => {
       deviceGuid: "guid-company",
       deviceName: "Company PC",
       capabilities: "webgui,persona-sync,speech"
+    }));
+    subscriptions.push(await subscribe(baseUrl, token, {
+      deviceId: "legacy-pc",
+      deviceGuid: "guid-legacy",
+      deviceName: "Legacy PC"
     }));
     subscriptions.push(await subscribe(baseUrl, token, {
       deviceId: "rabi-phone",
@@ -105,7 +110,19 @@ test("mobile PC picker exposes only processing workers", async () => {
     });
     assert.equal(stateResponse.status, 200);
     const state = await stateResponse.json();
-    assert.deepEqual(state.workers.map(worker => worker.id).sort(), ["company-pc", "elysia-pc"]);
+    assert.deepEqual(state.workers.map(worker => worker.id).sort(), ["company-pc", "elysia-pc", "legacy-pc"]);
+
+    const manageStateResponse = await fetch(`${baseUrl}/manage/api/state`, { headers: { cookie } });
+    assert.equal(manageStateResponse.status, 200);
+    const manageState = await manageStateResponse.json();
+    assert.deepEqual(manageState.workers.map(worker => worker.id).sort(), ["company-pc", "elysia-pc", "legacy-pc"]);
+
+    const terminalTarget = await fetch(`${baseUrl}/manage/api/apps/${encodeURIComponent(manageState.apps[0].id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ targetDeviceId: "rabi-phone" })
+    });
+    assert.equal(terminalTarget.status, 400);
 
     const phoneTarget = await fetch(`${baseUrl}/api/rabilink/mobile/target`, {
       method: "PATCH",

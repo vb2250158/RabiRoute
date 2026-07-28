@@ -5,14 +5,20 @@ import { planPresentation, presentPlan, presentPlans, sortKnowledgeByUpdatedAt }
 
 function approvalRequest() {
   return {
+    approver: "秋雨",
     request: "批准执行列出的改动。",
+    recommendation: "批准当前最小改动方案。",
+    alternatives: ["要求缩小范围后重新申请", "否决并回到方案设计"],
     reason: "需要人工确认范围。",
     files: [{ path: "src/example.ts", action: "modify" as const, change: "更新示例逻辑。" }],
     commands: [],
     changes: [],
     validation: ["运行 npm test 并确认通过。"],
     rollback: ["验证失败时回退 src/example.ts。"],
-    outOfScope: ["不提交、不推送。"]
+    outOfScope: ["不提交、不推送。"],
+    requestedAt: "2026-07-28T00:00:00.000Z",
+    sourceMessageId: "qq-message-1",
+    responseStatus: "pending" as const
   };
 }
 
@@ -31,7 +37,7 @@ function plan(patch: Partial<PlanItem> & Pick<PlanItem, "id" | "title">): PlanIt
   };
 }
 
-test("plan presentation only marks explicitly non-actionable steps as blocked", () => {
+test("plan presentation keeps executable failures running while approvals and explicit blockers are blocked", () => {
   const executableFailure = plan({
     id: "executable-failure",
     title: "Executable failure",
@@ -56,13 +62,15 @@ test("plan presentation only marks explicitly non-actionable steps as blocked", 
     title: "Awaiting owner answer",
     currentStepId: "ask-owner",
     waitingFor: "负责人回复",
-    blockedBy: "负责人尚未确认",
+    isBlocked: true,
+    blockedBy: "负责人尚未批准是否采用当前方案",
     steps: [{
       id: "ask-owner",
       title: "询问负责人并取得明确结果",
       status: "进行中",
       waitingFor: "负责人回复",
-      blockedBy: "负责人尚未确认",
+      isBlocked: true,
+      blockedBy: "负责人尚未批准是否采用当前方案",
       approvalRequest: approvalRequest()
     }]
   });
@@ -94,6 +102,28 @@ test("plan presentation only marks explicitly non-actionable steps as blocked", 
     currentStepId: "implement",
     steps: [{ id: "implement", title: "执行编译与测试", status: "进行中" }]
   });
+  const implementationMentioningQa = plan({
+    id: "implementation-mentioning-qa",
+    title: "Implementation mentioning QA",
+    currentStepId: "implement-regression-fix",
+    currentStep: "修复回归；QA 门禁仍未满足，尚未通知 QA。",
+    nextAction: "完成开发验证后再进入 QA。",
+    waitingFor: "实现完成后安排 QA",
+    steps: [{
+      id: "implement-regression-fix",
+      title: "修复包含 QA 门禁说明的回归",
+      status: "进行中",
+      detail: "当前仍是实现与开发验证，尚未通知 QA。",
+      waitingFor: "实现完成后安排 QA"
+    }]
+  });
+  const developmentValidation = plan({
+    id: "development-validation",
+    title: "Development validation",
+    currentStepId: "validation-regression",
+    currentStep: "开发侧回归验证，完成后再通知 QA。",
+    steps: [{ id: "validation-regression", title: "开发验证", status: "进行中", detail: "尚未进入 QA。" }]
+  });
   const completed = plan({
     id: "completed",
     title: "Completed",
@@ -122,8 +152,8 @@ test("plan presentation only marks explicitly non-actionable steps as blocked", 
   assert.equal(planPresentation(executableFailure).status, "进行中");
   assert.equal(planPresentation(executableFailure).tone, "running");
   assert.equal(planPresentation(executableFailure).approval.enabled, false);
-  assert.equal(planPresentation(awaitingOwnerAnswer).status, "进行中");
-  assert.equal(planPresentation(awaitingOwnerAnswer).tone, "running");
+  assert.equal(planPresentation(awaitingOwnerAnswer).status, "阻塞中");
+  assert.equal(planPresentation(awaitingOwnerAnswer).tone, "blocked");
   assert.equal(planPresentation(awaitingOwnerAnswer).approval.state, "ready");
   assert.equal(planPresentation(qa).status, "待QA测试");
   assert.equal(planPresentation(qa).tone, "qa");
@@ -139,6 +169,10 @@ test("plan presentation only marks explicitly non-actionable steps as blocked", 
   assert.equal(planPresentation(qaWithLegacyBlocker).approval.enabled, false);
   assert.equal(planPresentation(approvedImplementation).status, "进行中");
   assert.equal(planPresentation(approvedImplementation).approval.state, "none");
+  assert.equal(planPresentation(implementationMentioningQa).status, "进行中");
+  assert.equal(planPresentation(implementationMentioningQa).tone, "running");
+  assert.equal(planPresentation(developmentValidation).status, "进行中");
+  assert.equal(planPresentation(developmentValidation).tone, "running");
   assert.equal(planPresentation(completed).status, "已完成");
   assert.equal(planPresentation(completed).tone, "done");
   assert.deepEqual(planPresentation(completed).views, ["plans"]);
@@ -164,21 +198,65 @@ test("approval capability is Manager-owned and follows the current human gate", 
     id: "approval",
     title: "Approval",
     kind: "human-gate",
+    isBlocked: true,
+    blockedBy: "秋雨尚未批准当前最小改动方案",
     currentStepId: "decision",
-    steps: [{ id: "decision", title: "等待方案确认", status: "进行中", approvalRequest: approvalRequest() }]
+    steps: [{ id: "decision", title: "等待方案确认", status: "进行中", isBlocked: true, blockedBy: "秋雨尚未批准当前最小改动方案", approvalRequest: approvalRequest() }]
   });
 
   assert.deepEqual(planPresentation(item).approval, {
     state: "ready",
     enabled: true,
     label: "审批执行合同",
-    helper: "请先核对具体文件、命令、变更、验证和回退范围，再决定是否批准。",
+    helper: "请先核对审批人、具体决定、推荐与备选、文件、命令、外部变更、验证、回退、排除范围、附件和回执状态，再决定是否批准。",
     stepId: "decision",
     missing: [],
     contract: approvalRequest()
   });
-  assert.equal(planPresentation(item).status, "进行中");
-  assert.equal(planPresentation(item).tone, "running");
+  assert.equal(planPresentation(item).status, "阻塞中");
+  assert.equal(planPresentation(item).tone, "blocked");
+});
+
+test("incomplete approvals stay blocked and disabled until a recorded decision clears the gate", () => {
+  const incomplete = plan({
+    id: "approval-incomplete",
+    title: "Incomplete approval",
+    isBlocked: true,
+    blockedBy: "秋雨尚未批准是否执行当前改动",
+    currentStepId: "approve",
+    steps: [{
+      id: "approve",
+      title: "等待秋雨审批",
+      status: "进行中",
+      isBlocked: true,
+      blockedBy: "秋雨尚未批准是否执行当前改动",
+      approvalRequest: {
+        request: "批准当前改动。",
+        reason: "需要人工授权。",
+        files: [],
+        commands: [],
+        changes: [],
+        validation: [],
+        rollback: [],
+        outOfScope: []
+      }
+    }]
+  });
+  const incompletePresentation = planPresentation(incomplete);
+  assert.equal(incompletePresentation.status, "阻塞中");
+  assert.equal(incompletePresentation.approval.state, "incomplete");
+  assert.equal(incompletePresentation.approval.enabled, false);
+  assert.ok(incompletePresentation.approval.missing.includes("approver"));
+  assert.ok(incompletePresentation.approval.missing.includes("source"));
+
+  const resolved = plan({
+    id: "approval-resolved",
+    title: "Resolved approval",
+    currentStepId: "implement",
+    steps: [{ id: "implement", title: "执行已批准方案", status: "进行中" }]
+  });
+  assert.equal(planPresentation(resolved).status, "进行中");
+  assert.equal(planPresentation(resolved).approval.state, "none");
 });
 
 test("plans awaiting approval sort first, then by Manager presentation status and newest update", () => {
@@ -193,7 +271,14 @@ test("plans awaiting approval sort first, then by Manager presentation status an
       updatedAt: "2026-07-22T03:00:00.000Z"
     }),
     plan({ id: "blocked-old", title: "Blocked old", isBlocked: true, blockedBy: "External dependency", updatedAt: "2026-07-20T03:00:00.000Z" }),
-    plan({ id: "qa-new", title: "QA new", waitingFor: "等待验收", updatedAt: "2026-07-23T03:00:00.000Z" }),
+    plan({
+      id: "qa-new",
+      title: "QA new",
+      currentStepId: "qa-regression",
+      waitingFor: "等待验收",
+      steps: [{ id: "qa-regression", title: "等待验收", status: "进行中" }],
+      updatedAt: "2026-07-23T03:00:00.000Z"
+    }),
     plan({ id: "blocked-new", title: "Blocked new", isBlocked: true, blockedBy: "Missing build", updatedAt: "2026-07-21T03:00:00.000Z" }),
     plan({ id: "pending", title: "Pending", status: "未开始", updatedAt: "2026-07-25T03:00:00.000Z" }),
     plan({ id: "completed", title: "Completed", status: "已完成", updatedAt: "2026-07-27T03:00:00.000Z" }),

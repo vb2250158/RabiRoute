@@ -158,7 +158,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
   scripts\deploy-rabilink-relay-windows.ps1
 ```
 
-部署脚本会先把远端脚本、Caddy 配置和整个 WebGUI 复制到 `C:\opt\rabilink-relay\backups\code-<时间戳>`，不覆盖 `data/` 中的账号、应用、token 哈希和队列状态；随后更新文件、重建计划任务并验证健康。发布后重新运行只读检查，预期 `DeploymentNeeded=false`、`RemoteReportsRoute=true`、`RemoteSpeechGuide=true`。
+部署脚本会先把远端脚本、Caddy 配置和整个 WebGUI 复制到 `C:\opt\rabilink-relay\backups\code-<时间戳>`，不覆盖 `data/` 中的账号、应用、token 哈希和队列状态；随后清理旧 Relay 看护进程及其子进程、更新文件、重建计划任务，并在健康检查后继续确认同一 Node 进程稳定存活，避免遗留进程占用端口时出现“健康短暂成功但新任务持续重启”。发布后重新运行只读检查，预期 `DeploymentNeeded=false`、`RemoteReportsRoute=true`、`RemoteSpeechGuide=true`。
 
 目标 PC 的 Manager、worker 和本地语音进程属于另一份运行包，升级边界见 [Windows 桌面启动与完整打包](windows-launcher-and-packaging.md)。不要把 Relay 发布和 RabiPC 安装混成一次不可回滚的复制。
 
@@ -565,6 +565,8 @@ Accept: text/event-stream
 正式 PC worker 收到事件后才调用领取接口，并固定 `waitMs=0`。旧客户端传入非零 `waitMs` 时，Relay 只阻塞等待对应内部事件并在订阅后复查一次，不恢复扫描轮询：
 
 手机端的“处理消息的 Rabi PC”列表由 Relay 按 worker 能力统一筛选：只有声明 `tasks`、`webgui`、`persona-sync` 或 `speech` 至少一项处理能力的实例才会出现在 `GET /api/rabilink/mobile/state` 的 `workers` 中。声明为 `phone`、`glasses`、`watch` 或 `earbuds` 的终端设备即使保持 `/api/rabilink/events` 在线，也不会成为 PC 候选；`PATCH /api/rabilink/mobile/target` 使用同一判据并拒绝把终端设备设为处理目标。
+
+Relay 管理后台的“已连接的 PC Rabi”、顶部 PC 数量和应用“通讯 Rabi PC”选择器使用同一判据。手机、眼镜、手表和耳机仍保留自己的在线事件、消息与设备日志，但不会显示“打开 PC WebGUI”。没有 `deviceKind/capabilities` 的旧记录只有在保存了稳定 `rabiGuid` 时才按兼容 PC 展示；没有 GUID 的旧 `rabi-phone` / `rabi-glass` 记录会被排除。
 
 ```http
 GET /worker/tasks?limit=1&deviceId=rabilink-pc

@@ -8,7 +8,9 @@ import {
   createPlanFeedbackRecord,
   listPlanFeedback,
   planFeedbackAttachmentsEqual,
+  planFeedbackPlanAttachmentsEqual,
   planFeedbackSummary,
+  resolvePlanFeedbackPlanAttachments,
   storePlanFeedbackAttachments,
   updatePlanFeedbackDelivery
 } from "./planFeedback.js";
@@ -24,7 +26,16 @@ test("plan feedback records approval context and collapses delivery updates", ()
     stepTitle: "等待审批",
     gatewayId: "route-1",
     source: "webgui",
-    text: "建议补充回归范围后继续。"
+    text: "建议补充回归范围后继续。",
+    planAttachments: [{
+      id: "preview",
+      kind: "image",
+      name: "preview.png",
+      path: path.join(roleDir, "plans", "attachments", "plan-1", "preview.png"),
+      size: 12,
+      mimeType: "image/png",
+      sha256: "a".repeat(64)
+    }]
   });
   appendPlanFeedback(roleDir, pending);
   updatePlanFeedbackDelivery(roleDir, pending, "failed", "temporary delivery failure");
@@ -35,6 +46,7 @@ test("plan feedback records approval context and collapses delivery updates", ()
   assert.equal(records.length, 1);
   assert.equal(records[0]?.deliveryStatus, "delivered");
   assert.equal(records[0]?.stepId, "review");
+  assert.equal(records[0]?.planAttachments[0]?.id, "preview");
   assert.deepEqual(planFeedbackSummary(roleDir, "plan-1"), { count: 1, latest: records[0] });
 });
 
@@ -55,6 +67,24 @@ test("agent feedback is record-only and text length is validated", () => {
     planTitle: "Approval plan",
     text: "a".repeat(2_001)
   }), /exceeds 2000/);
+});
+
+test("plan feedback compares mentioned plan attachments by stable metadata", () => {
+  const reference = [{
+    id: "report",
+    kind: "file" as const,
+    name: "report.md",
+    path: "C:/private/role/plans/attachments/plan/report.md",
+    size: 9,
+    mimeType: "text/markdown",
+    sha256: "b".repeat(64)
+  }];
+  assert.equal(planFeedbackPlanAttachmentsEqual(reference, reference), true);
+  assert.equal(planFeedbackPlanAttachmentsEqual(reference, [{ ...reference[0]!, sha256: "c".repeat(64) }]), false);
+  assert.deepEqual(resolvePlanFeedbackPlanAttachments(reference, ["report"]), reference);
+  assert.deepEqual(resolvePlanFeedbackPlanAttachments([], ["report"], reference), reference);
+  assert.throws(() => resolvePlanFeedbackPlanAttachments(reference, ["missing"]), /not found/);
+  assert.throws(() => resolvePlanFeedbackPlanAttachments(reference, ["report", "report"]), /unique/);
 });
 
 test("plan feedback attachments are private, bounded, and idempotent", () => {

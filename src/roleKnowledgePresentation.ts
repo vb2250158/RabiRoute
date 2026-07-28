@@ -72,19 +72,9 @@ function blocker(plan: PlanItem): string {
 
 function isWaitingForQa(plan: PlanItem): boolean {
   const step = currentPlanStep(plan);
-  const signals = [
-    plan.currentStep,
-    plan.waitingFor,
-    step?.title,
-    step?.detail,
-    step?.waitingFor
-  ];
-  return signals.some((signal) => {
-    const normalized = String(signal || "").toLowerCase().replace(/\s+/g, "");
-    if (!normalized) return false;
-    if (normalized.includes("qa") && ["待", "测试", "验收"].some((token) => normalized.includes(token))) return true;
-    return ["待验收", "等待验收", "待测试", "等待测试"].some((token) => normalized.includes(token));
-  });
+  if (!step || step.status !== "进行中") return false;
+  const structuredStepId = step.id.trim().toLowerCase();
+  return /^(qa|verify)(?:[-_:].*)?$/.test(structuredStepId);
 }
 
 function approvalPresentation(plan: PlanItem): PlanPresentation["approval"] {
@@ -104,11 +94,11 @@ function approvalPresentation(plan: PlanItem): PlanPresentation["approval"] {
   const ready = missing.length === 0;
   return {
     state: ready ? "ready" : "incomplete",
-    enabled: true,
-    label: ready ? "审批执行合同" : "审批信息待补充",
+    enabled: ready,
+    label: ready ? "审批执行合同" : "审批资料不完整 / 禁止审批",
     helper: ready
-      ? "请先核对具体文件、命令、变更、验证和回退范围，再决定是否批准。"
-      : "当前执行说明还不够具体；仍可提交审批意见，Manager 会提醒 Agent 根据意见补齐文件、命令和变更范围。",
+      ? "请先核对审批人、具体决定、推荐与备选、文件、命令、外部变更、验证、回退、排除范围、附件和回执状态，再决定是否批准。"
+      : "当前审批资料缺少必要栏目，计划继续保持阻塞；补齐前禁止提交审批决定。",
     stepId: step?.id,
     missing,
     contract

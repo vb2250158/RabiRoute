@@ -183,11 +183,14 @@ import {
   createPlanFeedbackRecord,
   listPlanFeedback,
   planFeedbackAttachmentsEqual,
+  planFeedbackPlanAttachmentsEqual,
   planFeedbackSummary,
+  resolvePlanFeedbackPlanAttachments,
   storePlanFeedbackAttachments,
   updatePlanFeedbackDelivery,
   type PlanFeedbackRecord
 } from "../planFeedback.js";
+import { resolvePlanAttachmentFile } from "../planAttachments.js";
 import {
   PLAN_FEEDBACK_REQUEST_MAX_BYTES,
   type PlanFeedbackAttachmentUpload
@@ -3040,6 +3043,7 @@ type PlanFeedbackRequest = {
   author?: "user" | "agent" | "system";
   source?: "webgui" | "tray" | "qq" | "agent" | "api";
   attachments?: PlanFeedbackAttachmentUpload[];
+  planAttachmentIds?: string[];
   notifyAgent?: boolean;
 };
 
@@ -3275,6 +3279,12 @@ function planFeedbackAgentText(record: PlanFeedbackRecord): string {
       ...record.attachments.map((attachment) => `- ${attachment.name}（${attachment.path}）`)
     );
   }
+  if (record.planAttachments.length) {
+    lines.push(
+      "本次 @ 的计划附件：",
+      ...record.planAttachments.map((attachment) => `- ${attachment.name}（${attachment.path}）`)
+    );
+  }
   lines.push(
     "请先读取 Manager 中的当前计划与审批记录，再按意见更新计划或对应步骤。计划说明必须写具体：实际文件与改动、完整命令及影响、配置/数据/外部变更、验证、回退和明确排除范围；不要只写笼统结论。",
     "处理完成后，必须通过当前回复上下文把面向用户的说明直接回写为本计划的 approval_response；不要只在 Codex 任务里输出正文。Codex 可见最终文本只需简短说明已更新并回写计划。"
@@ -3303,6 +3313,15 @@ function schedulePlanFeedbackDelivery(
     const messageId = `plan-feedback-${record.id}`;
     const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
     const text = planFeedbackAgentText(record);
+    const deliveryAttachments: RolePanelAttachment[] = [
+      ...record.attachments,
+      ...record.planAttachments.map((attachment) => ({
+        kind: attachment.kind === "image" ? "image" as const : "file" as const,
+        name: attachment.name,
+        path: attachment.path,
+        size: attachment.size
+      }))
+    ];
     const replyContext = {
       runtimeRouteId: runtime.definition.id,
       gatewayId: runtime.definition.id,
@@ -3316,11 +3335,12 @@ function schedulePlanFeedbackDelivery(
       planStepId: record.stepId,
       planFeedbackId: record.id,
       planFeedbackResponseId: `response-${record.id}`,
-      planFeedbackKind: record.kind
+      planFeedbackKind: record.kind,
+      planAttachmentIds: record.planAttachments.map((attachment) => attachment.id)
     };
     activePlanFeedbackDeliveries.add(deliveryKey);
     publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
-    void triggerGatewayPlanFeedback(runtime, messageId, text, record.attachments, replyContext)
+    void triggerGatewayPlanFeedback(runtime, messageId, text, deliveryAttachments, replyContext)
       .then(() => updatePlanFeedbackDelivery(roleDir, record, "delivered"))
       .catch((error) => updatePlanFeedbackDelivery(
         roleDir,
@@ -4222,9 +4242,20 @@ function handleRoleKnowledgeApi(
             const attachments = body.attachments === undefined
               ? existing?.attachments || []
               : storePlanFeedbackAttachments(roleDir, baseCandidate.id, body.attachments, existing?.attachments);
-            const candidate = { ...baseCandidate, attachments };
+            const mentionedPlanAttachments = resolvePlanFeedbackPlanAttachments(
+              plan.attachments,
+              body.planAttachmentIds,
+              existing?.planAttachments
+            ).map((attachment) => ({
+              ...attachment,
+              path: resolvePlanAttachmentFile(roleDir, plan.id, attachment)
+            }));
+            const candidate = { ...baseCandidate, attachments, planAttachments: mentionedPlanAttachments };
             if (existing && !planFeedbackAttachmentsEqual(existing.attachments, candidate.attachments)) {
               throw new Error(`Feedback id already exists with different attachments: ${candidate.id}`);
+            }
+            if (existing && !planFeedbackPlanAttachmentsEqual(existing.planAttachments, candidate.planAttachments)) {
+              throw new Error(`Feedback id already exists with different plan attachment mentions: ${candidate.id}`);
             }
             const record = existing || appendPlanFeedback(roleDir, candidate);
             if (record.deliveryStatus === "record_only" || record.deliveryStatus === "delivered") {

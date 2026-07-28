@@ -180,7 +180,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   const intro = isPlanFeedback
     ? [
         "本次是计划审批意见处理，面向用户的回复必须回到当前计划记录，不能只在 Codex 任务里输出正文。",
-        "先按审批意见读取并 PATCH 更新对应计划或步骤；计划说明要具体到实际文件、完整命令、变更影响、验证、回退和排除范围。",
+        "先按审批意见读取并 PATCH 更新对应计划或步骤；批准、否决或取消后必须同轮清除或更新 isBlocked/blockedBy。计划说明要具体到审批人、决定、推荐与备选、reason、实际文件、完整命令、外部变更、验证、回退、排除范围、附件、请求来源和回执状态。",
         "更新完成后，把处理说明 POST 到普通回复 API；RabiRoute 会将其保存为当前 planId / stepId 的 approval_response。"
       ]
     : forceMessagePipeline
@@ -535,13 +535,17 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
           const waitingFor = String(step.waitingFor || "").trim();
           const isBlocked = step.isBlocked === true;
           const blockedBy = String(step.blockedBy || "").trim();
+          const approvalPending = Boolean(step.approvalRequest)
+            || /(等待|待|需要|未经).*(审批|批准|授权|审核|人工决策)|^(审批|批准|授权|审核|人工决策)/i.test([title, waitingFor, blockedBy].join(" ").replace(/\s+/g, ""));
           return [
             `    ${index + 1}. [${status}] ${title} (${id})${currentMarker}`,
             waitingFor ? `       等待对象：${waitingFor}` : "",
             isBlocked && blockedBy ? `       阻塞原因：${blockedBy}` : "",
             !isBlocked && blockedBy ? `       待确认说明：${blockedBy}` : "",
-            status === "进行中" && waitingFor && !isBlocked
-              ? "       巡检动作：主动询问或追问，直到取得明确结果；不得仅记录等待。"
+            status === "进行中" && waitingFor && (!isBlocked || approvalPending)
+              ? isBlocked && approvalPending
+                ? "       巡检动作：计划保持审批堵塞，继续询问或追问并记录回执；不得续投业务实施。"
+                : "       巡检动作：主动询问或追问，直到取得明确结果；不得仅记录等待。"
               : ""
           ].filter(Boolean);
         })
@@ -977,13 +981,16 @@ function buildAgentMessage(
       matchedIndex
     ]) : "",
     hasPersona && planAssistantLines.length > 0 ? section("计划协助会话", [
-      "下列 Codex Desktop 任务是当前主会话的持久计划协助槽，不是一次性子 Agent。",
-      "分配计划时使用 /api/agent/threads 的 send 动作向精确 threadId 投递，并把该计划 taskBinding 保存为同一个完整 ID、名称和 workspace。",
-      "每个槽同一时间只绑定一条未完成计划；计划完成、暂停或解除绑定后才能复用。协助会话可以再开临时子 Agent，但仍负责汇总、更新计划和回传主会话。",
-      "主人格是协助槽调度者。每次收到计划协助任务的完成提醒，必须在同一轮读取计划与任务真实状态、消费结果并更新计划和记忆；不允许只回复“已收到”或把续推留给下一次 heartbeat。",
-      "计划仍未终态、未暂停且没有真实阻塞时，立即使用 /api/agent/threads 的 action=send 续投该计划自身 taskBinding.sessionId + workspace 对应的原任务；不得仅按槽位名称或当前列表顺序猜测目标。active/in-progress 任务不要重复投递。",
-      "计划完成或暂停时 PATCH taskBinding=null 释放槽位，再枚举全部未终态计划，将空闲槽立即分配给下一条可推进计划。有多个独立计划时并行占满所有可用槽位，本轮结束前校验：可推进但空闲的计划数 = 0。",
-      "等待负责人、审批或外部结果时，先执行已有授权范围内的询问、追问、补材料或补证据；不得越过审批门禁，只有确实没有任何已授权动作时才记录真实阻塞。",
+      "下列 Codex Desktop 任务是当前主会话的持久计划管理秘书槽，属于控制面，不是一次性子 Agent，也不是计划的业务执行任务。",
+      "主人格使用 /api/agent/threads 的 send 动作向秘书的精确 threadId 分配计划管理队列；不得把秘书 ID 写入任何计划的 taskBinding。",
+      "每个计划的 taskBinding.sessionId + workspace 必须指向独立业务任务会话。调查、实现、测试、Unity/SVN/构建/发布和外部系统操作只能在业务任务中执行。",
+      "秘书负责计划/记忆维护、业务任务查重与绑定、真实状态巡检、结果消费、提醒和续投。秘书可以开临时子 Agent 做控制面盘点，但秘书及其子 Agent不得直接修改业务文件。",
+      "主人格是秘书槽调度者，不是计划管理员。新反馈、业务任务完成提醒、heartbeat 巡检或秘书阶段报告到达时，先把控制面工作精确投给秘书；主人格不得亲自展开全量计划读取、任务查重、绑定迁移、状态对账、问题账本/记忆写入或批量续投。",
+      "发出秘书消息不等于委派完成。主人格必须核对精确 threadId + workspace、秘书真实任务状态和阶段回执；秘书开始后等待其结果，不得并行执行同一份日志/截图读取、查重、计划 PATCH、记忆/账本写入或任务续投，也不得先自己做一遍再只把剩余部分交给秘书。",
+      "秘书必须在同一轮消费结果、更新计划和记忆，并按计划自身 taskBinding 精确续投业务任务；主人格随后复核秘书摘要和关键决策。不允许只回复“已收到”、由主人格自己长时间处理，或等下一次 heartbeat。",
+      "计划暂停或秘书轮转不能清空业务 taskBinding；只有业务任务确实失效并完成受控迁移时才改绑。计划完成后仍可保留 taskBinding 作为历史证据。",
+      "有多个计划时并行使用秘书槽管理不同计划分片，并让所有可推进的业务任务运行。本轮结束前校验：可推进但无人管理的计划数 = 0，且可推进但空闲的业务任务数 = 0。active/in-progress 业务任务不要重复投递。",
+      "当前步骤等待审批、方案确认或授权时必须立即写 isBlocked=true，并用 blockedBy 具体写明谁要批准什么；waitingFor 保留负责人和所需答复。秘书继续追问并维护回执，但不得为了运行态指标反复续投业务实施；审批通过、否决或取消后同一闭环清除或更新阻塞。待 QA、资料或外部产物不因本规则自动变成阻塞。",
       ...planAssistantLines
     ]) : "",
     hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",

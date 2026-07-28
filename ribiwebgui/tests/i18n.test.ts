@@ -107,8 +107,15 @@ test("translates plan directory and step-local approval copy", () => {
   assert.equal(translateText("点击预览视频", "en"), "Click to preview video");
   assert.equal(translateText("图片预览", "en"), "Image preview");
   assert.equal(translateText("视频预览", "en"), "Video preview");
+  assert.equal(translateText("预览 Markdown", "en"), "Preview Markdown");
+  assert.equal(translateText("Markdown 预览", "en"), "Markdown preview");
+  assert.equal(translateText("下载原文件", "en"), "Download source");
   assert.equal(translateText("计划目录", "en"), "Plan directory");
   assert.equal(translateText("点击计划快速跳转", "en"), "Select a plan to jump");
+  assert.equal(
+    translateText("复制失败：当前浏览器不允许自动复制，请手动选择文本复制。", "en"),
+    "Copy failed: This browser does not allow automatic copying. Select and copy the text manually."
+  );
   assert.equal(translateText("计划项", "en"), "Plan item");
   assert.equal(translateText("步骤进度", "en"), "Step progress");
   assert.equal(translateText("执行计划", "en"), "Execution plan");
@@ -118,13 +125,25 @@ test("translates plan directory and step-local approval copy", () => {
     "Review this step's execution boundaries before submitting approval feedback"
   );
   assert.equal(
-    translateText("Enter 直接提交，Shift+Enter 换行；提交后由 Agent 判断如何处理，不会直接改变计划状态。", "en"),
-    "Press Enter to submit or Shift+Enter for a new line. The Agent decides how to handle the feedback; submitting it does not directly change plan status."
+    translateText("输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。提交后由 Agent 判断如何处理，不会直接改变计划状态。", "en"),
+    "Type @ to reference a plan attachment. Press Enter to submit or Shift+Enter for a new line. The Agent decides how to handle the feedback; submitting it does not directly change plan status."
+  );
+  assert.equal(
+    translateText("当前不能正式批准；可提交补充资料或调整建议，输入 @ 可引用计划附件。Enter 提交，Shift+Enter 换行。", "en"),
+    "Formal approval is unavailable. Add missing details or request changes, or type @ to reference a plan attachment. Press Enter to submit or Shift+Enter for a new line."
   );
   assert.equal(translateText("添加附件", "en"), "Add attachments");
   assert.equal(
     translateText("支持选择文件，也可以在输入框中按 Ctrl+V 粘贴图片。", "en"),
     "Choose files, or press Ctrl+V in the feedback field to paste an image."
+  );
+  assert.equal(
+    translateText("上一条意见已记录，正在通知 Agent；你可以继续编辑下一条，通知完成后即可提交。", "en"),
+    "The previous feedback was recorded and is being delivered to the Agent. You can edit the next message now and submit it after delivery finishes."
+  );
+  assert.equal(
+    translateText("当前没有可投递的 Route；你可以先编辑，选择或绑定 Route 后再提交。", "en"),
+    "No Route is available for delivery. You can keep editing and submit after selecting or binding a Route."
   );
 });
 

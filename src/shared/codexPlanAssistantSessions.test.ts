@@ -42,7 +42,7 @@ test("plan assistant bindings keep exact ids and normalize indexes", () => {
   ]);
 });
 
-test("plan assistant initialization keeps the secretary as owner while allowing child agents", () => {
+test("plan assistant initialization keeps the secretary control-only and preserves business task ownership", () => {
   const prompt = codexPlanAssistantInitializationPrompt({
     roleId: "XinghaiBuilder",
     sourceThreadId: "019fa314-2c07-7523-896f-9bb6b638054c",
@@ -53,11 +53,12 @@ test("plan assistant initialization keeps the secretary as owner while allowing 
   });
 
   assert.match(prompt, /\[rabi:bind XinghaiBuilder\]/);
-  assert.match(prompt, /持久计划协助任务/);
-  assert.match(prompt, /可以.*临时子 Agent/);
-  assert.match(prompt, /仍是该计划的长期 owner/);
-  assert.match(prompt, /主会话可以直接续投/);
-  assert.match(prompt, /下一个可验证动作/);
-  assert.match(prompt, /回传阶段结果不代表本协助任务永久结束/);
-  assert.match(prompt, /继续向本 taskBinding 续投/);
+  assert.match(prompt, /持久计划管理秘书/);
+  assert.match(prompt, /属于控制面/);
+  assert.match(prompt, /taskBinding 必须始终指向独立业务任务会话/);
+  assert.match(prompt, /绝不能保存本秘书会话/);
+  assert.match(prompt, /禁止在本秘书会话中执行业务调查/);
+  assert.match(prompt, /临时子 Agent/);
+  assert.match(prompt, /同样不得执行业务工作/);
+  assert.match(prompt, /业务 taskBinding 的真实状态/);
 });

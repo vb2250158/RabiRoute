@@ -13,8 +13,12 @@ test("AgentPacket plan hints explain the shared approval feedback workflow", () 
   assert.match(hints, /approvalRequest/);
   assert.match(hints, /files\/commands\/changes/);
   assert.match(hints, /完整命令/);
-  assert.match(hints, /不得用门禁限制用户/);
-  assert.match(hints, /根据意见补充/);
+  assert.match(hints, /isBlocked=true/);
+  assert.match(hints, /blockedBy/);
+  assert.match(hints, /approver/);
+  assert.match(hints, /recommendation/);
+  assert.match(hints, /sourceMessageId/);
+  assert.match(hints, /信息不完整时保持阻塞并禁止审批/);
   assert.match(hints, /status=暂停/);
   assert.match(hints, /currentStepId/);
   assert.match(hints, /计划 POST\/PATCH 的 attachments/);

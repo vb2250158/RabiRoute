@@ -208,7 +208,10 @@ export type RolePlanStep = {
 };
 
 export type RolePlanApprovalContract = {
+  approver?: string;
   request: string;
+  recommendation?: string;
+  alternatives?: string[];
   reason: string;
   files: Array<{
     path: string;
@@ -229,6 +232,10 @@ export type RolePlanApprovalContract = {
   validation: string[];
   rollback: string[];
   outOfScope: string[];
+  requestedAt?: string;
+  sourceMessageId?: string;
+  feedbackId?: string;
+  responseStatus?: "pending" | "approved" | "rejected" | "changes_requested" | "cancelled";
 };
 
 export type RolePlan = {
@@ -293,6 +300,7 @@ export type RolePlanFeedback = {
   source: "webgui" | "tray" | "qq" | "agent" | "api";
   text: string;
   attachments: PlanFeedbackAttachment[];
+  planAttachments: PlanAttachmentPresentation[];
   createdAt: string;
   updatedAt: string;
   deliveryStatus: "record_only" | "pending" | "delivered" | "failed";

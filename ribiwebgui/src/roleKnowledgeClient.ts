@@ -100,6 +100,7 @@ export async function submitPlanFeedback(input: {
   feedbackId: string;
   text: string;
   attachments: PlanFeedbackAttachmentUpload[];
+  planAttachmentIds: string[];
   source: "webgui" | "tray";
 }): Promise<RolePlanFeedback> {
   const response = await fetch(
@@ -113,6 +114,7 @@ export async function submitPlanFeedback(input: {
         stepId: input.stepId,
         text: input.text,
         attachments: input.attachments,
+        planAttachmentIds: input.planAttachmentIds,
         source: input.source,
         kind: "approval_suggestion",
         author: "user",

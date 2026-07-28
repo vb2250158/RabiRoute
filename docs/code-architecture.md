@@ -215,7 +215,7 @@ data/roles/<RoleId>/conversation/archive/index.json
 - 当前人格、逻辑消息端和会话最近双向消息如何从 `conversation/current.jsonl` 取得。
 - 当前消息明确要求 Agent 处理多电脑人格同步时，如何只为本次任务注入同应用 peer 查询、当前人格同步和冲突终态合同；普通消息不携带该提示。Manager 的事件驱动自动对账器独立运行，不由 AgentPacket 创建或拥有。
 - 当前消息询问全天/区间声纹、用户与他人发言或说话人身份时，如何注入当前人格的 `voice-transcripts` 查询和 `voice-identities` 追加修正合同；证据不足必须保持 unknown。
-- 当前 Route 配置持久计划协助任务时，如何把每个槽位的完整任务 ID、名称、workspace 和“一槽一条未完成计划”规则注入主任务；协助任务可开临时子 Agent，但长期 owner、汇总、计划更新和回传责任不转移。
+- 当前 Route 配置持久计划管理秘书时，如何把每个秘书槽的完整任务 ID、名称、workspace 和控制面边界注入主任务；计划的业务 `taskBinding` 仍指向独立业务任务，秘书及其临时子 Agent只做计划盘点、查重、状态核对、结果消费和续投，不修改业务文件。
 
 它依赖 RouteDecision，但不重新决定路由。
 
@@ -281,8 +281,7 @@ AgentPacket
 - Host 是必需的 Codex/ChatGPT Desktop。任务未加载时只允许通过 `codex://threads/<id>` 唤醒 Desktop；加载失败就停止投递。
 - Model、工具、沙箱和审批由目标 Desktop 任务拥有。兼容字段 `agentModel` 不再覆盖 Desktop 任务设置。
 - 已匹配的普通消息不经过另一层忙碌队列：Desktop owner 先尝试 `steer` 活跃 turn，只在没有活跃 turn 时 `start`。Heartbeat 的忙碌跳过和语音的关键词唤醒是各自消息端的显式例外。
-- Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 任务槽。主任务将一条未完成计划精确绑定到一个槽；协助任务可以创建临时子 Agent 并行工作，但必须保留计划长期 owner、汇总结果、更新计划并回传主任务。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
-
+- Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 计划管理秘书槽。秘书槽不写入计划 `taskBinding`；`taskBinding` 始终绑定独立业务任务。秘书负责计划/记忆维护、任务查重与绑定、状态核对、结果消费和续投，禁止执行调查、实现、测试或业务文件修改。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
 `codexDesktopBridge.ts` 必须保持 transport-only：它不读取 route rule、不拼 AgentPacket、不决定业务外发。`codexAppServerClient.ts` 只保留“创建空任务、恢复用户名称”的元数据能力，不得接收真实 prompt 或执行 turn；元数据操作完成后立即退出。
 
 Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：前者控制 Agent 执行权限，后者控制 QQ、文档、设备和外部 API 等业务动作。任何代码都不能把一次任务审批传播成业务外发授权。
@@ -430,9 +429,9 @@ Gateway 配置的事实源 Module。
 - role skills
 - Agent 上下文快照
 
-`src/roleKnowledge.ts` 同时定义五种计划顶层状态、当前步骤显式 `isBlocked` 事实和步骤级 `approvalRequest` 执行合同；等待对象由 `waitingFor` 表达，不自动等于阻塞，审批能力也与阻塞事实分离。`暂停` 可保留唯一进行中步骤与 `currentStepId` 作为恢复位置，合同可随计划兼容读取和保存，Manager 不用缺字段阻断整条计划写入。`src/roleKnowledgePresentation.ts` 只生成 Manager 对外的只读展示 DTO：仅在 `isBlocked=true` 且存在 `blockedBy` 时派生“阻塞中”，另行派生“待QA测试”，统一 `current / plans / archived` 视图分类和计划状态色板，对当前人工门禁轻量判断 `none / incomplete / ready`，返回缺失项和规范化合同，并按“可审批、待补合同、状态、更新时间”统一排序；暂停计划禁用派生审批、只进 `plans` 并在最终排序中绝对置底。它不修改计划文件，也不进入 RouteDecision 或 Agent 上下文判断。WebGUI 和 Qt 必须消费 Manager 返回的 `presentation`、分类、色板、合同与列表顺序，不根据原始 `blockedBy` 复制状态规则。
+`src/roleKnowledge.ts` 同时定义五种计划顶层状态、当前步骤显式 `isBlocked` 事实和步骤级 `approvalRequest` 执行合同；普通等待对象由 `waitingFor` 表达，不自动等于阻塞，但当前审批、方案确认或授权步骤必须同时写 `isBlocked=true` 与具体 `blockedBy`，否则 Manager 拒绝写入。`暂停` 可保留唯一进行中步骤与 `currentStepId` 作为恢复位置，合同可随计划兼容读取和保存，审批合同缺字段不阻断计划保存，但会禁用审批。`src/roleKnowledgePresentation.ts` 只生成 Manager 对外的只读展示 DTO：仅在 `isBlocked=true` 且存在 `blockedBy` 时派生“阻塞中”；“待QA测试”只认 `steps/currentStepId` 指向的进行中 `qa-* / verify-*` 结构化步骤，不扫描 `currentStep`、`nextAction`、标题、详情或 `waitingFor` 自由文本。它统一 `current / plans / archived` 视图分类和计划状态色板，对当前人工门禁判断 `none / incomplete / ready`，返回缺失项和规范化合同，并按“可审批、待补合同、状态、更新时间”统一排序；暂停计划禁用派生审批、只进 `plans` 并在最终排序中绝对置底。它不修改计划文件，也不进入 RouteDecision 或 Agent 上下文判断。WebGUI 和 Qt 必须消费 Manager 返回的 `presentation`、分类、色板、合同与列表顺序，不根据原始 `blockedBy` 或 QA 文案复制状态规则。
 
-`src/planAttachments.ts` 拥有计划本体附件的数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希和人格私有目录落盘。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制 16:9 图片/视频缩略图、普通文件卡片和页内媒体预览，并统一通过 `managerResourceUrl` 为局域网资源附加当前会话认证；它不拥有计划编辑器或任意路径读取能力。
+`src/planAttachments.ts` 拥有计划本体附件的数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希和人格私有目录落盘。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
 
 `src/planFeedback.ts` 拥有与 `planId/stepId` 关联的审批意见 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 是用户/客户端写入口：UI 提交先落盘并立即返回 `pending`，后台生成独立 `plan_feedback` 系统事件，终态通过 `plan_feedback_changed` 发布；同一 feedback 的后台任务按 ID 去重并有 45 秒终止边界。`routing/systemEventRules.ts` 为该系统事件提供不依赖人格消息规则的固定投递规则；Forwarding 不把它写入角色面板 timeline、兼容消息历史或统一会话账本，AgentPacket 也把最近消息额度固定为 `0`。计划意见投递仍携带专用回复上下文；`src/outbox.ts` 校验 Route 人格、计划和步骤后，把 Agent 普通回复保存为 `record_only` 的 `approval_response` 并发布同一事件。该模块不自动修改计划 JSON；Agent 必须先显式 PATCH 计划或步骤。
 
@@ -451,7 +450,7 @@ Gateway 配置的事实源 Module。
 关键位置：
 
 - `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。
-- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读，标题下显示非重复的 `focus` 描述，多计划列表用独立工作项框架和筛选结果序号区分相邻问题，卡内按概览、当前执行、完整步骤分层。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片，`incomplete` 和 `ready` 都可通过 plan feedback API 追加用户意见。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；计划面板外侧的目录粘性悬浮并独立滚动，浏览器可见性观察负责把当前阅读卡片同步为目录高亮，点击平滑跳转期间锁定目标高亮、滚动 settle 后恢复观察，目录仅在高亮项越界时滚动自身，计划卡片保持正常页面流，详情展开取消高度动画。
+- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读，标题下显示非重复的 `focus` 描述，多计划列表用独立工作项框架和筛选结果序号区分相邻问题，卡内按概览、当前执行、完整步骤分层。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片；只有 `ready/enabled=true` 可提交正式审批决定，`incomplete` 保持审批禁用但仍可通过同一 plan feedback API 提交补充资料、调整建议和附件，供 Agent 修正合同。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；计划面板外侧的目录粘性悬浮并独立滚动，浏览器可见性观察负责把当前阅读卡片同步为目录高亮，点击平滑跳转期间锁定目标高亮、滚动 settle 后恢复观察，目录仅在高亮项越界时滚动自身，计划卡片保持正常页面流，详情展开取消高度动画。
 - `src/pages/OverviewPage.vue`：总览和运行状态。
 - `src/pages/RouteConfigPage.vue`：Route 配置编辑。
 - `src/pages/RuntimeLogPage.vue`：运行日志。

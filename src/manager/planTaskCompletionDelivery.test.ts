@@ -87,18 +87,20 @@ test("plan task completion writes the RolePanel timeline and invokes the selecte
   assert.equal(events[0].data.gatewayId, selected.definition.id);
 });
 
-test("plan task completion reminder requires same-turn continuation and slot reuse", () => {
+test("plan task completion reminder keeps assistants control-only and continues the business task", () => {
   const text = planTaskCompletionAgentText(delivery("C:\\role"));
 
   assert.match(text, /不是只需确认收到的通知/);
   assert.match(text, /同一轮/);
   assert.match(text, /action=send/);
   assert.match(text, /plan\.taskBinding\.sessionId=source-session/);
-  assert.match(text, /不得仅按槽位名称猜任务/);
-  assert.match(text, /PATCH taskBinding=null/);
-  assert.match(text, /空闲槽立即绑定并投递给下一条可推进计划/);
-  assert.match(text, /可推进但空闲的计划数 = 0/);
-  assert.match(text, /active\/in-progress 任务不要重复投递/);
+  assert.match(text, /原业务任务/);
+  assert.match(text, /不得把任何“协助处理计划”秘书会话写入 taskBinding/);
+  assert.match(text, /不得因秘书轮转或计划暂停清空业务 taskBinding/);
+  assert.match(text, /禁止亲自执行调查、代码\/Prefab\/配置/);
+  assert.match(text, /可推进但无人管理的计划数 = 0/);
+  assert.match(text, /可推进但空闲的业务任务数 = 0/);
+  assert.match(text, /active\/in-progress 业务任务不要重复投递/);
 });
 
 test("plan task completion fails closed for missing or conflicting route bindings", async (t) => {

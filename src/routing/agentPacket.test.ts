@@ -296,7 +296,7 @@ test("AgentPacket omits persona voice identity paths from non-audio role panel m
   assert.equal(packet.templateValues.voiceIdentitiesPath, undefined);
 });
 
-test("AgentPacket exposes exact persistent plan assistant bindings and child-agent ownership rules", () => {
+test("AgentPacket exposes exact plan secretary sessions without replacing business task ownership", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-assistant-"));
   const previousSessions = config.codexPlanAssistantSessions;
   config.codexPlanAssistantSessions = [{
@@ -349,14 +349,18 @@ test("AgentPacket exposes exact persistent plan assistant bindings and child-age
 
     assert.match(packet.message, /\[计划协助会话\]/);
     assert.match(packet.message, /threadId=019fa314-2c07-7523-896f-9bb6b638054b/);
-    assert.match(packet.message, /协助会话可以再开临时子 Agent/);
-    assert.match(packet.message, /仍负责汇总、更新计划和回传主会话/);
-    assert.match(packet.message, /每次收到计划协助任务的完成提醒.*同一轮/);
-    assert.match(packet.message, /taskBinding\.sessionId \+ workspace/);
-    assert.match(packet.message, /不得仅按槽位名称/);
-    assert.match(packet.message, /PATCH taskBinding=null/);
-    assert.match(packet.message, /并行占满所有可用槽位/);
-    assert.match(packet.message, /可推进但空闲的计划数 = 0/);
+    assert.match(packet.message, /计划管理秘书槽/);
+    assert.match(packet.message, /不得把秘书 ID 写入任何计划的 taskBinding/);
+    assert.match(packet.message, /taskBinding\.sessionId \+ workspace 必须指向独立业务任务会话/);
+    assert.match(packet.message, /秘书及其子 Agent不得直接修改业务文件/);
+    assert.match(packet.message, /新反馈、业务任务完成提醒、heartbeat 巡检或秘书阶段报告到达时.*先把控制面工作精确投给秘书/);
+    assert.match(packet.message, /发出秘书消息不等于委派完成/);
+    assert.match(packet.message, /核对精确 threadId \+ workspace、秘书真实任务状态和阶段回执/);
+    assert.match(packet.message, /秘书开始后等待其结果，不得并行执行同一份日志\/截图读取、查重、计划 PATCH/);
+    assert.match(packet.message, /当前步骤等待审批、方案确认或授权时必须立即写 isBlocked=true/);
+    assert.match(packet.message, /计划暂停或秘书轮转不能清空业务 taskBinding/);
+    assert.match(packet.message, /可推进但无人管理的计划数 = 0/);
+    assert.match(packet.message, /可推进但空闲的业务任务数 = 0/);
   } finally {
     config.codexPlanAssistantSessions = previousSessions;
   }

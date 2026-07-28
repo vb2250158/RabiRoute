@@ -32,6 +32,7 @@ import {
 } from "@shared/gatewayConfigModel";
 import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
 import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
+import { copyTextToClipboard } from "../clipboard";
 import {
   adapterLabel,
   configNameFor,
@@ -319,8 +320,7 @@ async function refreshVoiceProfile(): Promise<void> {
 async function copyVoiceProfilePath(): Promise<void> {
   voiceProfileCopyResult.value = "";
   try {
-    if (!navigator.clipboard) throw new Error("当前浏览器不支持剪贴板写入");
-    await navigator.clipboard.writeText(voiceProfilePath.value);
+    await copyTextToClipboard(voiceProfilePath.value);
     voiceProfileCopyResult.value = "voice-profile.json 路径已复制";
   } catch (error) {
     voiceProfileCopyResult.value = error instanceof Error ? error.message : String(error);

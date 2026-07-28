@@ -396,6 +396,36 @@ if (-not (Test-Path -LiteralPath `$caddyExe)) {
 
 `$taskName = "RabiLinkRelay"
 Stop-ScheduledTask -TaskName `$taskName -ErrorAction SilentlyContinue
+`$processSnapshot = @(Get-CimInstance Win32_Process)
+`$processById = @{}
+foreach (`$process in `$processSnapshot) {
+    `$processById[[int]`$process.ProcessId] = `$process
+}
+`$relayProcesses = @(`$processSnapshot | Where-Object {
+    `$_.Name -eq "node.exe" -and `$_.CommandLine -like "*rabilink-relay-server.mjs*"
+})
+`$relayProcessTreeIds = New-Object 'System.Collections.Generic.HashSet[int]'
+foreach (`$relayProcess in `$relayProcesses) {
+    [void]`$relayProcessTreeIds.Add([int]`$relayProcess.ProcessId)
+    `$ancestor = `$processById[[int]`$relayProcess.ParentProcessId]
+    for (`$depth = 0; `$depth -lt 2 -and `$null -ne `$ancestor; `$depth += 1) {
+        if (`$ancestor.Name -notin @("powershell.exe", "pwsh.exe", "cmd.exe")) {
+            break
+        }
+        [void]`$relayProcessTreeIds.Add([int]`$ancestor.ProcessId)
+        `$ancestor = `$processById[[int]`$ancestor.ParentProcessId]
+    }
+}
+Get-CimInstance Win32_Process |
+    Where-Object {
+        `$_.Name -in @("powershell.exe", "pwsh.exe") -and
+        `$_.CommandLine -like "*start-rabilink-relay.ps1*"
+    } |
+    ForEach-Object { [void]`$relayProcessTreeIds.Add([int]`$_.ProcessId) }
+`$relayProcessTreeIds |
+    Sort-Object -Descending |
+    ForEach-Object { Stop-Process -Id `$_ -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
 Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
     Where-Object { `$_.CommandLine -like "*rabilink-relay-server.mjs*" } |
     ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -419,6 +449,19 @@ for (`$i = 0; `$i -lt 20; `$i += 1) {
 if (-not `$localHealth) {
     throw "RabiLink relay did not pass local health check."
 }
+`$relayProcess = Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
+    Where-Object { `$_.CommandLine -like "*rabilink-relay-server.mjs*" } |
+    Select-Object -First 1
+if (-not `$relayProcess) {
+    throw "RabiLink relay process was not found after health check."
+}
+Start-Sleep -Seconds 5
+`$stableRelayProcess = Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
+    Where-Object { `$_.ProcessId -eq `$relayProcess.ProcessId }
+if (-not `$stableRelayProcess) {
+    throw "RabiLink relay process exited during the stabilization check."
+}
+`$localHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8788/health" -TimeoutSec 5
 
 & `$caddyExe validate --config "`$remoteRoot\Caddyfile"
 Get-Process caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -433,7 +476,7 @@ Register-ScheduledTask -TaskName `$caddyTaskName -Action `$caddyAction -Trigger 
 Start-ScheduledTask -TaskName `$caddyTaskName
 Start-Sleep -Seconds 5
 
-Write-Host "localHealth=`$(`$localHealth.status)"
+Write-Host "localHealthOk=`$(`$localHealth.ok)"
 schtasks /Query /TN `$taskName
 schtasks /Query /TN "RabiLinkCaddy"
 netstat -ano | findstr ":80 "

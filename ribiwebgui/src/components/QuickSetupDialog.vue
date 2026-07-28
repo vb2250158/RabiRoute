@@ -7,6 +7,7 @@ import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultH
 import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
 import PersonaAvatar from "./PersonaAvatar.vue";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
+import { copyTextToClipboard } from "../clipboard";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
@@ -465,22 +466,15 @@ function napcatWebuiUrlWithToken(webuiUrl: string | undefined, token: string | u
 }
 
 async function copyText(text: string, message = "已复制"): Promise<void> {
+  let result = message;
   try {
-    await navigator.clipboard.writeText(text);
-    copyResult.value = message;
-  } catch {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textarea);
-    copyResult.value = message;
+    await copyTextToClipboard(text);
+  } catch (error) {
+    result = `复制失败：${error instanceof Error ? error.message : String(error)}`;
   }
+  copyResult.value = result;
   window.setTimeout(() => {
-    if (copyResult.value === message) copyResult.value = "";
+    if (copyResult.value === result) copyResult.value = "";
   }, 1800);
 }
 

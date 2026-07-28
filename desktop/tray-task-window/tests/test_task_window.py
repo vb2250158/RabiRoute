@@ -502,15 +502,15 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertEqual(editor.toPlainText(), "")
         card.close()
 
-    def test_incomplete_approval_contract_warns_agent_without_blocking_user_feedback(self) -> None:
+    def test_incomplete_approval_contract_disables_approval_until_materials_are_complete(self) -> None:
         plan = PlanItem(
             title="审批信息不完整",
             plan_id="plan-incomplete",
             status="进行中",
             approval_state="incomplete",
             approval_enabled=False,
-            approval_label="审批信息待补充",
-            approval_helper="仍可审批，同时提醒 Agent 补齐计划。",
+            approval_label="审批资料不完整 / 禁止审批",
+            approval_helper="补齐前禁止提交审批决定。",
             approval_step_id="approve",
             approval_missing=("request", "affectedActions", "rollback"),
             current_step_id="approve",
@@ -528,12 +528,11 @@ class TaskWindowLayoutTest(unittest.TestCase):
         submit = card.findChild(QPushButton, "planApprovalSubmit")
         self.assertIsNotNone(missing)
         self.assertIn("批准事项", missing.text())
+        self.assertIn("禁止审批", missing.text())
         self.assertTrue(submit.isVisible())
-        editor.setPlainText("同意先推进，但请补充具体命令。")
-        submit.click()
-        self.app.processEvents()
-        self.assertEqual(emitted[0][0:2], ("plan-incomplete", "approve"))
-        self.assertEqual(emitted[0][3], "同意先推进，但请补充具体命令。")
+        self.assertFalse(editor.isEnabled())
+        self.assertFalse(submit.isEnabled())
+        self.assertEqual(emitted, [])
         card.close()
 
     def test_future_qa_step_does_not_change_running_status_badge(self) -> None:

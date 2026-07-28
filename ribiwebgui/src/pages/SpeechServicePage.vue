@@ -13,6 +13,7 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { useSpeechStore } from "../stores/speechStore";
 import { gatewayAdapterTypes } from "../utils/gatewayHelpers";
+import { copyTextToClipboard } from "../clipboard";
 
 type AudioInput = { title: string; value: number; default?: boolean };
 
@@ -368,7 +369,7 @@ async function copyAudioStreamToken(): Promise<void> {
   requestError.value = "";
   try {
     const token = await speech.audioStreamToken();
-    await navigator.clipboard.writeText(token);
+    await copyTextToClipboard(token);
     actionMessage.value = "客户端连接密钥已复制；只粘贴到会议室电脑的私有 config.json。";
   } catch (error) {
     requestError.value = error instanceof Error ? error.message : String(error);

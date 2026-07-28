@@ -8,6 +8,8 @@ import {
   type PlanFeedbackAttachment,
   type PlanFeedbackAttachmentUpload
 } from "./shared/planFeedbackContract.js";
+import { normalizeStoredPlanAttachments } from "./planAttachments.js";
+import { PLAN_MAX_ATTACHMENTS, type PlanAttachment } from "./shared/planAttachmentContract.js";
 
 export type { PlanFeedbackAttachment } from "./shared/planFeedbackContract.js";
 
@@ -29,6 +31,7 @@ export type PlanFeedbackRecord = {
   source: PlanFeedbackSource;
   text: string;
   attachments: PlanFeedbackAttachment[];
+  planAttachments: PlanAttachment[];
   createdAt: string;
   updatedAt: string;
   deliveryStatus: PlanFeedbackDeliveryStatus;
@@ -48,6 +51,7 @@ export type CreatePlanFeedbackInput = {
   source?: unknown;
   text?: unknown;
   attachments?: PlanFeedbackAttachment[];
+  planAttachments?: PlanAttachment[];
   notifyAgent?: unknown;
 };
 
@@ -130,6 +134,53 @@ export function planFeedbackAttachmentsEqual(
   right: PlanFeedbackAttachment[] | undefined
 ): boolean {
   return attachmentSignature(normalizeStoredAttachments(left)) === attachmentSignature(normalizeStoredAttachments(right));
+}
+
+function planAttachmentSignature(attachments: PlanAttachment[]): string {
+  return JSON.stringify(attachments.map(({ id, kind, name, size, mimeType, sha256: digest }) => ({
+    id,
+    kind,
+    name,
+    size,
+    mimeType: mimeType || "",
+    sha256: digest
+  })));
+}
+
+export function planFeedbackPlanAttachmentsEqual(
+  left: PlanAttachment[] | undefined,
+  right: PlanAttachment[] | undefined
+): boolean {
+  return planAttachmentSignature(normalizeStoredPlanAttachments(left))
+    === planAttachmentSignature(normalizeStoredPlanAttachments(right));
+}
+
+export function resolvePlanFeedbackPlanAttachments(
+  availableValue: unknown,
+  requestedValue: unknown,
+  existingValue?: unknown
+): PlanAttachment[] {
+  const existing = normalizeStoredPlanAttachments(existingValue);
+  if (requestedValue === undefined) return existing;
+  if (!Array.isArray(requestedValue)) throw new Error("Plan attachment mentions must be an array of attachment ids.");
+  if (requestedValue.length > PLAN_MAX_ATTACHMENTS) {
+    throw new Error(`Approval feedback can mention at most ${PLAN_MAX_ATTACHMENTS} plan attachments.`);
+  }
+  const requestedIds = requestedValue.map((value) => String(value || "").trim());
+  if (requestedIds.some((id) => !id)) throw new Error("Plan attachment mention id is required.");
+  if (new Set(requestedIds).size !== requestedIds.length) {
+    throw new Error("Plan attachment mention ids must be unique.");
+  }
+  if (requestedIds.length === existing.length && requestedIds.every((id, index) => existing[index]?.id === id)) {
+    return existing;
+  }
+  const available = normalizeStoredPlanAttachments(availableValue);
+  const byId = new Map(available.map((attachment) => [attachment.id, attachment]));
+  return requestedIds.map((id) => {
+    const attachment = byId.get(id);
+    if (!attachment) throw new Error(`Plan attachment not found: ${id}`);
+    return attachment;
+  });
 }
 
 export function storePlanFeedbackAttachments(
@@ -227,6 +278,7 @@ export function createPlanFeedbackRecord(input: CreatePlanFeedbackInput): PlanFe
     source: normalizeSource(input.source, author),
     text,
     attachments: normalizeStoredAttachments(input.attachments),
+    planAttachments: normalizeStoredPlanAttachments(input.planAttachments),
     createdAt,
     updatedAt: createdAt,
     deliveryStatus: notifyAgent ? "pending" : "record_only"
@@ -264,7 +316,8 @@ export function listPlanFeedback(roleDir: string, planId: string): PlanFeedbackR
       if (!value.id || value.planId !== planId || !value.text || !value.createdAt) continue;
       latestById.set(value.id, {
         ...value,
-        attachments: normalizeStoredAttachments(value.attachments)
+        attachments: normalizeStoredAttachments(value.attachments),
+        planAttachments: normalizeStoredPlanAttachments(value.planAttachments)
       } as PlanFeedbackRecord);
     } catch {
       // Keep other valid audit rows readable when one line is damaged.

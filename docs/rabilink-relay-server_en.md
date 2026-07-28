@@ -145,7 +145,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
   scripts\deploy-rabilink-relay-windows.ps1
 ```
 
-The deployer first copies the remote scripts, Caddy configuration, and complete WebGUI to `C:\opt\rabilink-relay\backups\code-<timestamp>`. It preserves account, application, token-hash, and queue state under `data/`, then updates files, recreates the scheduled tasks, and checks health. Run the read-only check again; expect `DeploymentNeeded=false`, `RemoteReportsRoute=true`, and `RemoteSpeechGuide=true`.
+The deployer first copies the remote scripts, Caddy configuration, and complete WebGUI to `C:\opt\rabilink-relay\backups\code-<timestamp>`. It preserves account, application, token-hash, and queue state under `data/`, cleans up legacy Relay supervisors together with their child processes, updates files, recreates the scheduled tasks, and verifies that the same Node process remains alive after the health check. This prevents a stale listener from producing a brief successful health response while the new task restart-loops. Run the read-only check again; expect `DeploymentNeeded=false`, `RemoteReportsRoute=true`, and `RemoteSpeechGuide=true`.
 
 The selected PC's Manager, worker, and local speech process belong to a separate runtime package. See [Windows desktop launch and packaging](windows-launcher-and-packaging_en.md). Do not combine Relay publishing and RabiPC installation into one non-recoverable copy.
 
@@ -241,6 +241,8 @@ GET /worker/tasks?limit=1&deviceId=<pc-device-id>
 The PC first subscribes to `/api/rabilink/events` with its stable device ID/GUID and capabilities. `task_available`, `webgui_available`, and `speech_available` each trigger one immediate queue drain with `waitMs=0`; `persona_sync_peer_changed` triggers one persona peer/manifest reconciliation. A legacy nonzero `waitMs` blocks on the same internal event and performs one recovery claim after subscription; it does not restore queue scanning.
 
 Relay is the single filter for the phone's "processing Rabi PC" picker. Only workers advertising at least one processing capability (`tasks`, `webgui`, `persona-sync`, or `speech`) appear in `GET /api/rabilink/mobile/state`. Portable terminals declared as `phone`, `glasses`, `watch`, or `earbuds` remain valid `/api/rabilink/events` subscribers but are never PC candidates. `PATCH /api/rabilink/mobile/target` applies the same rule and rejects terminal devices as processing targets.
+
+Relay management uses the same rule for **Connected PC Rabi**, the PC count, and each application's processing-PC selector. Phones, glasses, watches, and earbuds keep their own online events, messages, and device logs, but never receive an **Open PC WebGUI** action. A legacy record without `deviceKind/capabilities` is treated as a compatibility PC only when it has a stable `rabiGuid`; old GUID-less `rabi-phone` / `rabi-glass` records are excluded.
 
 For `rabilink.observation`, the worker writes the role ledger, then calls the finish endpoint to confirm local persistence. It does not directly call Codex inside the claim request. Older non-record-only tasks still use the compatibility forwarding path.
 

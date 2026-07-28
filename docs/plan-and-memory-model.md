@@ -56,7 +56,7 @@ data/route/<RouteName>/
 已归档
 ```
 
-`暂停` 表示用户或负责人明确要求暂时停止推进，但仍保留恢复位置。等待用户或外部系统不是额外顶层状态：用 `waitingFor` 写清对象，每次巡检继续询问或追问，计划保持 `进行中`。只有询问、升级、重试和替代动作全部不可执行时，才写 `isBlocked=true` 与 `blockedBy`；顶层状态仍不新增“阻塞”。
+`暂停` 表示用户或负责人明确要求暂时停止推进，但仍保留恢复位置。等待审批、方案确认或授权的当前步骤必须保持 `进行中` 并同时写 `isBlocked=true`、具体 `blockedBy` 与 `waitingFor`；秘书继续追问，但不得续投业务实施。待 QA、资料或外部产物不自动变成阻塞，仍按是否存在可执行动作判断。顶层状态不新增“阻塞”。
 
 推荐目录：
 
@@ -121,8 +121,9 @@ completedArchiveAfterHours = 72
   "currentStepId": "confirm-contract",
   "currentStep": "确认机制说明口径",
   "nextAction": "根据确认结果更新示例和读取层",
-  "waitingFor": "",
-  "blockedBy": "",
+  "waitingFor": "秋雨批准结构化步骤契约",
+  "isBlocked": true,
+  "blockedBy": "秋雨尚未批准是否按当前文件、命令和界面方案更新计划契约",
   "attachments": [
     {
       "id": "attachment-preview",
@@ -147,12 +148,18 @@ completedArchiveAfterHours = 72
       "title": "确认结构化步骤契约",
       "status": "进行中",
       "startedAt": "2026-06-08T00:10:00+08:00",
+      "waitingFor": "秋雨批准结构化步骤契约",
+      "isBlocked": true,
+      "blockedBy": "秋雨尚未批准是否按当前文件、命令和界面方案更新计划契约",
       "approvalRequest": {
+        "approver": "秋雨",
         "request": "批准按列出的文件和命令更新计划契约。",
+        "recommendation": "批准当前最小 Schema、Manager DTO、双端 UI 和文档同步方案。",
+        "alternatives": ["要求缩小文件范围后重新申请", "否决并保留现状"],
         "reason": "该变更会修改公开 Plan Schema 和双端用户界面。",
         "files": [
           { "path": "src/roleKnowledge.ts", "action": "modify", "change": "新增审批合同 Schema、规范化和写入校验。" },
-          { "path": "ribiwebgui/src/pages/RoleKnowledgePage.vue", "action": "modify", "change": "展示合同与缺失提示，同时允许用户提交审批意见。" }
+          { "path": "ribiwebgui/src/pages/RoleKnowledgePage.vue", "action": "modify", "change": "展示完整合同与缺失提示；资料不完整时禁用审批提交。" }
         ],
         "commands": [
           { "command": "npm run build:backend", "purpose": "编译并验证 Manager 后端。", "expectedEffect": "只生成本地 dist 构建产物。" }
@@ -160,7 +167,10 @@ completedArchiveAfterHours = 72
         "changes": [],
         "validation": ["Node 定向测试、托盘测试和 WebGUI 构建全部通过。"],
         "rollback": ["验证失败时只回退本合同列出的源码和文档改动。"],
-        "outOfScope": ["不提交、不推送、不修改运行期 data/。"]
+        "outOfScope": ["不提交、不推送、不修改运行期 data/。"],
+        "requestedAt": "2026-06-08T00:10:00+08:00",
+        "sourceMessageId": "example-message-id",
+        "responseStatus": "pending"
       }
     },
     { "id": "update-readers", "title": "更新接口、读取层和文档", "status": "未开始" }
@@ -198,15 +208,19 @@ completedArchiveAfterHours = 72
 
 `attachments` 是计划本体的可选附件列表。Agent 可在 POST/PATCH 中为新附件提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`。Manager 校验后复制到人格私有的 `plans/attachments/<planId>/`，计划 JSON 只保存 `id/kind/name/path/size/mimeType/sha256` 元数据，不保存 Base64。最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。PATCH 省略 `attachments` 时保留原附件；显式传 `attachments: []` 时清空计划记录中的附件列表。
 
-WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` 获取受控文件。PNG、JPEG、WebP 和 GIF 图片，以及 MP4/M4V、WebM、Ogg Video、MOV/QuickTime 视频，统一显示紧凑固定宽度的 16:9 缩略图，仅在容器不足时等比缩小；点击图片打开页内大图，点击视频打开带播放控制的页内预览。视频响应支持字节范围读取，实际可播放编码仍取决于当前浏览器；其它文件显示名称、类型与大小，并通过附件响应打开或下载。读取接口会再次确认真实路径仍在该计划的受管目录内，路径穿越或 symlink 越界均失败关闭。
+WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` 获取受控文件。PNG、JPEG、WebP 和 GIF 图片，MP4/M4V、WebM、Ogg Video、MOV/QuickTime 视频，以及 Markdown 文件统一显示紧凑固定宽度的 16:9 预览卡片，仅在容器不足时等比缩小。Markdown 卡片流式读取最多 12 KiB 的正文开头，转成最多 180 字的纯文本摘要并截断显示，不执行 HTML、链接或图片；点击后才打开完整文档弹窗。点击图片打开页内大图，点击视频打开带播放控制的页内预览。视频响应支持字节范围读取，实际可播放编码仍取决于当前浏览器。Markdown 不超过 2 MiB 时可在页内预览 GFM 标题、列表、表格、引用与代码，原始 HTML、危险/相对链接和远程图片加载均被禁用，弹窗保留原文件下载入口。其它文件显示名称、类型与大小，并通过附件响应打开或下载。读取接口会再次确认真实路径仍在该计划的受管目录内，路径穿越或 symlink 越界均失败关闭。
 
-`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。顶层状态改为 `暂停` 时，可以保留这条 `进行中` 步骤及其 `currentStepId` 作为恢复位置；恢复时只把顶层状态改回 `进行中`。步骤可带 `detail`、`waitingFor`、`isBlocked`、`blockedBy`、`startedAt` 和 `completedAt`。`waitingFor` 说明本轮要询问或追问谁/什么；只要仍能沟通、升级、重试或寻找替代路径，就保持 `isBlocked` 为空或 `false`，Agent 每次巡检都继续询问直到取得明确结果。只有完全没有已授权动作时才写 `isBlocked=true`，并用 `blockedBy` 说明原因。Manager 在步骤首次写为 `进行中` 时自动补 `startedAt`，写为 `已完成` 时自动补 `completedAt` 并保留开始时间；重开已完成步骤会清除旧 `completedAt`，退回 `未开始` 会清除两个时间。创建时直接标为已完成、或旧步骤缺少时间字段时，会在下一次计划写入用该次写入时间补齐，不能据此还原更早的真实历史。RibiWebGUI 对进行中步骤只显示开始时间，对已完成步骤只显示完成时间，未开始步骤不显示时间。`currentStep` 保留为当前进展说明，不再承担步骤列表或步骤身份。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用。
+`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。顶层状态改为 `暂停` 时，可以保留这条 `进行中` 步骤及其 `currentStepId` 作为恢复位置；恢复时只把顶层状态改回 `进行中`。步骤可带 `detail`、`waitingFor`、`isBlocked`、`blockedBy`、`startedAt` 和 `completedAt`。`waitingFor` 说明本轮要询问或追问谁/什么；审批、方案确认和授权等待必须强制写 `isBlocked=true`，同时继续由秘书询问；其它等待只要仍能沟通、升级、重试或寻找替代路径，就保持 `isBlocked` 为空或 `false`，Agent 每次巡检都继续询问直到取得明确结果。其它完全没有已授权动作的步骤也写 `isBlocked=true`，并用 `blockedBy` 说明原因。Manager 在步骤首次写为 `进行中` 时自动补 `startedAt`，写为 `已完成` 时自动补 `completedAt` 并保留开始时间；重开已完成步骤会清除旧 `completedAt`，退回 `未开始` 会清除两个时间。创建时直接标为已完成、或旧步骤缺少时间字段时，会在下一次计划写入用该次写入时间补齐，不能据此还原更早的真实历史。RibiWebGUI 对进行中步骤只显示开始时间，对已完成步骤只显示完成时间，未开始步骤不显示时间。`currentStep` 保留为当前进展说明，不再承担步骤列表、步骤身份或阶段分类。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用，也不参与阶段分类。
 
-需要审批的当前步骤应带完整 `approvalRequest`。`request` 和 `reason` 说明批准事项与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围。`files / commands / changes` 至少一类非空，其余项目建议明确填写。读取旧计划仍兼容；缺合同的审批步骤会由 Manager 标为 `presentation.approval.state=incomplete` 并在双端展示缺失项，但用户仍可提交审批意见。该提示用于让 Agent 根据意见补充计划，不限制用户决策。
+需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation`、`alternatives` 和 `reason` 说明审批人、决定、推荐、备选与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。读取旧计划仍兼容；缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`，补齐前禁止提交正式审批决定。RibiWebGUI 仍允许用户提交补充资料或调整建议及附件，交给 Agent 修正合同；这类反馈不自动批准计划。
+
+升级已有运行期人格时，先运行 `node scripts/migrate-plan-approval-blocking.mjs --role-dir=data/roles/<RoleId>` 查看只读报告，确认目标后再追加 `--apply`。应用模式会把每个变更前的计划复制到该人格的 `migration-backups/approval-blocking-<时间戳>/`，再补 `isBlocked`、具体 `blockedBy` 和待审批步骤的兼容合同。脚本不会猜测审批人、来源、推荐方案、备选或请求时间；这些证据缺失时合同继续保持 `incomplete`，必须由 Agent 根据真实消息和调查结果补齐。
 
 `taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。目前只支持 `agentType=codex`。`sessionId` 是必填的完整执行任务 ID；`sessionTitle` 只用于展示，`workspace` 用于 Stop Hook 的安全校验。`completionHook.enabled=true` 时，Manager 在该会话完成一轮后把官方最终回答经现有角色面板链投给同人格 Route；`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划顶层为 `暂停` 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
 
-收到完成提醒后，主人格 Agent 才是计划调度者：同一轮读取计划和任务真实状态，消费阶段结果，PATCH 计划步骤与记忆；若计划仍未终态、未暂停且没有真实阻塞，立即通过 `/api/agent/threads` 的 `action=send` 向该计划自身 `taskBinding.sessionId + workspace` 精确续投，不能按协助槽名称猜测。计划完成或暂停时，以 `taskBinding=null` 解除绑定但不删除 Desktop 任务，并把空闲协助槽分配给下一条可推进计划。每次完成回传、heartbeat 或恢复巡检都应并行占满可用槽位，并在结束前满足 `可推进但空闲的计划数 = 0`；已处于 `active/in-progress` 的任务不重复投递。等待审批或负责人时只执行已有授权范围内的询问、追问和补证据，不越过动作门禁。
+`taskBinding` 只绑定计划的独立业务执行会话，不绑定“协助处理计划”秘书。计划管理秘书属于控制面：维护计划与记忆、查重和绑定业务任务、读取真实状态、消费结果、提醒并续投；调查、实现、测试、Unity/SVN/构建/发布和外部系统操作由业务任务负责。秘书可以开临时子 Agent 做计划盘点、查重、状态核对和结果摘要，但秘书及其子 Agent不得修改业务文件。
+
+收到业务任务完成提醒后，主人格 Agent 负责在同一轮安排计划管理秘书消费结果、PATCH 计划步骤与记忆，并在计划仍可推进时通过 `/api/agent/threads` 的 `action=send` 向该计划自身 `taskBinding.sessionId + workspace` 精确续投业务任务。计划暂停或秘书轮转不能清空业务 `taskBinding`；只有业务任务确实失效并完成受控迁移时才改绑，计划完成后可保留绑定作为历史证据。每次完成回传、heartbeat 或恢复巡检都应并行使用秘书槽管理不同计划分片，并在结束前满足 `可推进但无人管理的计划数 = 0` 与 `可推进但空闲的业务任务数 = 0`；已处于 `active/in-progress` 的业务任务不重复投递。等待审批或负责人时只执行已有授权范围内的询问、追问和补证据，不越过动作门禁。
 
 目标 Codex Route 必须已有精确任务 ID，且不得与执行会话相同。一个执行会话绑定多个计划、workspace 不一致、执行会话上下文人格与计划人格不一致、指定 gateway 不存在或未绑定该人格、同人格存在多个 gateway 却未指定 `gatewayId` 时都失败关闭。此能力在双真实 Desktop 任务验收前保持实验状态。
 
@@ -545,13 +559,13 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 - 新计划先设为 `未开始`。
 - 已确认要推进或当前正在关注时设为 `进行中`。
-- 等用户或外部系统时仍保持 `进行中`，用 `waitingFor` 写清对象；每次巡检都把当前步骤当成询问/追问动作并持续到得到结果。只有所有已授权动作都不可执行时，才在当前步骤同时写 `isBlocked=true` 与 `blockedBy`。
+- 等用户或外部系统时仍保持 `进行中`，用 `waitingFor` 写清对象；审批、方案确认或授权等待强制同时写 `isBlocked=true` 与具体 `blockedBy`，秘书仍持续询问但业务任务停止实施续投；其它等待只有所有已授权动作都不可执行时才阻塞。
 - 用户明确要求暂时停止推进时设为 `暂停`，保留当前 `进行中` 步骤与 `currentStepId`，并停止继续驱动绑定任务；恢复时把顶层状态改回 `进行中`。
 - 完成后设为 `已完成`，写入 `completedAt`。
 - `已完成` 距离最后一次 `updatedAt` 超过当前固定 72 小时后，由角色知识快照设为 `已归档`，写入 `archivedAt`，并移动到 `archive/`。
 - 用户手动要求不再展示时，也可以直接设为 `已归档`。
 
-Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为需要审批的当前步骤，两端可以提交审批建议，但该动作只追加审批记录并可选通知 Agent，不直接修改计划状态或步骤。
+Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。资料不完整时 Qt 托盘禁用提交；RibiWebGUI 仍允许以“补充资料 / 调整建议”发送修正意见，但该意见不算批准。审批动作只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。
 
 ## 计划审批意见
 
@@ -564,13 +578,15 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-WebGUI 或托盘提交时使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。RibiWebGUI 还允许选择普通文件，或在审批输入框中按 `Ctrl+V` 粘贴剪贴板图片；最多 8 个附件，单个不超过 10 MiB、总计不超过 25 MiB。浏览器将附件内容交给 Manager，Manager 校验后写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，审批 JSONL 只保存名称、类型、大小、SHA-256 和本地路径，不内嵌二进制。Manager 先同步落盘并立即返回 `deliveryStatus=pending`，再生成独立 `plan_feedback` 系统事件，把审批文字和附件路径经 Forwarding / AgentPacket / 原 Agent adapter 通知绑定 Agent；用户界面不再等待 Agent 子进程完成。该事件不写角色面板 timeline 或统一会话账本，最近消息额度固定为 `0`。后台完成或失败时，Manager 追加同 `feedbackId` 的 `delivered / failed` 状态并发布 `plan_feedback_changed` 事件。WebGUI 只按事件读取该计划的审批摘要，不整页重载计划和记忆；记录失败时恢复原意见和附件供同一 `feedbackId` 重试，不允许用同一 ID 静默替换附件内容。
+WebGUI 或托盘提交时使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。RibiWebGUI 还允许选择普通文件，或在审批输入框中按 `Ctrl+V` 粘贴剪贴板图片；最多 8 个附件，单个不超过 10 MiB、总计不超过 25 MiB。输入 `@` 会打开当前计划顶层附件候选，支持文件名筛选、方向键切换、Enter 选中和 Escape 关闭；选中后正文插入可读的附件提及标记，浏览器只提交对应附件 ID。Manager 校验这些 ID 必须属于当前计划，并把受管附件元数据与本地路径作为审批审计快照保存。新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，审批 JSONL 不内嵌二进制。Manager 先同步落盘并立即返回 `deliveryStatus=pending`，再生成独立 `plan_feedback` 系统事件，把审批文字、新附件与被提及的计划附件经 Forwarding / AgentPacket / 原 Agent adapter 通知绑定 Agent；用户界面不再等待 Agent 子进程完成。该事件不写角色面板 timeline 或统一会话账本，最近消息额度固定为 `0`。后台完成或失败时，Manager 追加同 `feedbackId` 的 `delivered / failed` 状态并发布 `plan_feedback_changed` 事件。WebGUI 只按事件读取该计划的审批摘要，不整页重载计划和记忆；记录失败时恢复原意见和附件供同一 `feedbackId` 重试，不允许用同一 ID 静默替换附件内容或计划附件引用。
 
 Agent 从 QQ 等其它入口获得审批后，也可以调用同一接口，以 `source=qq`、`notifyAgent=false` 记录用户意见。绑定 Agent 收到建议后，应先读取当前计划与反馈，按意见显式 `PATCH` 对应计划或步骤，并把说明补充到真实文件、完整命令、变更影响、验证、回退和排除范围；随后通过当前回复上下文把面向用户的处理说明直接写成同一 `planId / stepId` 下的 `author=agent`、`kind=approval_response`。该回复以计划审批记录为交付位置，Codex 任务只保留简短处理状态，不重复承载正文。审批记录本身仍不会自动推进计划。
 
+后台通知上一条意见期间，WebGUI 允许继续编辑下一条文字、粘贴图片和附件，但在上一条取得终态前禁止再次提交，并显示原因与恢复条件，避免把“不能重复发送”误表现为“不能表达意见”。当前步骤没有有效审批入口、正在保存或没有可投递 Route 时也使用同一可见状态说明。
+
 ## Manager 展示顺序与计划视图
 
-Manager 的计划 API 会附加只读 `presentation.status` / `presentation.tone`，用于表达“阻塞中”和“待QA测试”等不回写文件的显示状态。“阻塞中”只由当前步骤或兼容顶层的 `isBlocked=true` 与非空 `blockedBy` 派生；等待负责人、审批、评审或外部结果仍显示“进行中”，审批能力也不会自动变成阻塞。编译、测试、Unity/MCP、同步、进包等可继续重试或推进的问题同样显示“进行中”，QA 等待显示“待QA测试”。WebGUI 与 Qt 只消费 Manager 的派生结果，不根据原始 `blockedBy` 自行标红。顶层 `暂停` 使用独立灰蓝色板，只属于 `plans` 视图，不派生阻塞、QA 或审批状态。`presentation.views` 统一给出计划所属的 `current / plans / archived` 视图，`presentation.palette` 为同一状态提供统一的 `accent`、`background` 和 `foreground` 色值。`presentation.approval.state` 分为 `none / incomplete / ready`，并统一返回 `missing` 与规范化 `contract`；`incomplete` 和 `ready` 都允许用户提交审批意见，区别仅在于前者会提醒 Agent 补充执行说明。除暂停外，列表先排 `ready`，再排 `incomplete`，其后按“阻塞中 → 待QA测试 → 进行中 → 未开始 → 已完成 → 已归档”和 `updatedAt` 排序；`暂停` 无论审批合同或更新时间如何都绝对排在最后。近期记忆和沉淀记忆也由 Manager 按 `updatedAt` 从新到旧返回。
+Manager 的计划 API 仍只从当前步骤或兼容顶层的 `isBlocked=true` 与非空 `blockedBy` 派生“阻塞中”；Agent/秘书必须把审批、方案确认或授权等待显式写成该事实，Manager 不从模糊文案猜测。待 QA、资料或外部产物不自动变成阻塞。“待QA测试”同样只由 `steps/currentStepId` 指向的进行中 `qa-* / verify-*` 结构化步骤派生；实施步骤即使正文写到“QA 门禁”或“尚未通知 QA”，仍显示“进行中”。`presentation.approval.state` 分为 `none / incomplete / ready`；`incomplete` 的 `enabled=false`，显示“审批资料不完整/禁止审批”并禁止正式批准，但 WebGUI 仍开放补资料/调整建议反馈；`ready` 才允许提交审批决定。计划卡直接展示审批人、决定、推荐与备选、reason、files、commands、changes、validation、rollback、outOfScope、附件、请求时间、来源和回执状态。
 
 Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、视图分类、状态色板和既有顺序。两端重叠分类统一为“当前 / 计划 / 近期记忆 / 已归档”：当前包含进行中计划与近期记忆，暂停计划只进入计划分类，已归档包含归档计划与沉淀记忆。两端不直接读取 `data/`，也不各自维护状态识别、分类、状态颜色或排序规则。
 
@@ -579,7 +595,7 @@ Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、视�
 当前：
 
 ```text
-“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划，其中暂停计划使用灰蓝色状态并绝对排在最后。计划标题下显示与标题不同的 `focus` 描述，兼容读取时由标题回填的同值 `focus` 不重复显示。审批合同按照 `presentation.approval.stepId` 直接嵌入对应步骤卡片，展示已有的批准事项、原因、文件、命令、外部变更、验证、回退和排除范围；说明不完整时同时显示缺失项和审批输入，让用户可以批准、拒绝或明确要求 Agent 补充。计划面板外侧的页面级目录粘性悬浮，只展示当前页签与搜索结果中的计划，并在视口高度内自行滚动；计划卡片保持正常页面流，详情展开不做高度过渡，审批输入保持固定高度。
+“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划，其中暂停计划使用灰蓝色状态并绝对排在最后。计划标题下显示与标题不同的 `focus` 描述，兼容读取时由标题回填的同值 `focus` 不重复显示。审批合同按照 `presentation.approval.stepId` 直接嵌入对应步骤卡片，展示已有的审批材料；说明不完整时显示缺失项并禁用审批输入与提交，补齐为 `ready/enabled=true` 后才允许批准、拒绝或要求调整。计划面板外侧的页面级目录粘性悬浮，只展示当前页签与搜索结果中的计划，并在视口高度内自行滚动；计划卡片保持正常页面流，详情展开不做高度过渡，审批输入保持固定高度。
 ```
 
 近期记忆：

@@ -7,6 +7,7 @@ import { managerEventSource } from "../managerApi";
 import { routeScopedKnowledgeUrl, routeScopedOverviewUrl } from "../routeScopedNavigation";
 import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
 import { redirectCurrentWebguiToLan } from "../webguiLanRedirect";
+import { copyTextToClipboard } from "../clipboard";
 
 const store = useGatewayStore();
 const router = useRouter();
@@ -156,7 +157,7 @@ async function copyWebguiLanText(value: string, successMessage: string): Promise
     return;
   }
   try {
-    await navigator.clipboard.writeText(value);
+    await copyTextToClipboard(value);
     webguiLanNotice.value = successMessage;
     webguiLanError.value = "";
   } catch (error) {

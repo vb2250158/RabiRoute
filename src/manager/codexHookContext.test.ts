@@ -329,7 +329,7 @@ test("paused plans do not deliver bound task completion reminders", async (t) =>
   assert.equal(deliveryCount, 0);
 });
 
-test("completed plans release a persistent assistant session for the next plan", async (t) => {
+test("completed plans suppress completion reminders while retaining business binding history", async (t) => {
   let deliveryCount = 0;
   const { root, roleDir, service } = fixture({
     deliverPlanTaskCompletion: async () => { deliveryCount += 1; }
@@ -344,7 +344,7 @@ test("completed plans release a persistent assistant session for the next plan",
     eventName: "Stop",
     turnId: "turn-after-complete",
     cwd: root,
-    lastAssistantMessage: "上一条计划已完成，本槽位可以复用。"
+    lastAssistantMessage: "计划已完成，业务绑定保留为历史证据且不再触发提醒。"
   });
 
   assert.equal(result.planTaskCompletion?.status, "ignored");

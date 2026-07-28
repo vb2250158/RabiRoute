@@ -508,7 +508,7 @@ class PlanApprovalPanel(QFrame):
         heading.setObjectName("planApprovalTitle")
         heading_row.addWidget(heading)
         heading_row.addStretch(1)
-        source = QLabel("可审批" if plan.approval_state == "ready" else "可审批 · 待补充")
+        source = QLabel("可审批" if plan.approval_enabled else "审批资料不完整 / 禁止审批")
         source.setObjectName("planApprovalSource")
         source.setProperty("approvalState", plan.approval_state)
         heading_row.addWidget(source)
@@ -521,14 +521,20 @@ class PlanApprovalPanel(QFrame):
 
         if plan.approval_missing:
             missing_labels = {
+                "approver": "审批人 / 责任人",
                 "request": "批准事项",
+                "recommendation": "推荐方案",
+                "alternatives": "必要备选",
                 "reason": "审批原因",
                 "affectedActions": "文件、命令或外部变更",
                 "validation": "验证方式",
                 "rollback": "回退方案",
                 "outOfScope": "明确不在范围内的内容",
+                "requestedAt": "最近审批请求时间",
+                "source": "来源消息或 Feedback ID",
+                "responseStatus": "当前回执状态",
             }
-            missing = QLabel("建议 Agent 补充：" + "、".join(missing_labels.get(item, item) for item in plan.approval_missing))
+            missing = QLabel("审批资料不完整，禁止审批。请 Agent 补充：" + "、".join(missing_labels.get(item, item) for item in plan.approval_missing))
             missing.setObjectName("planApprovalMissing")
             missing.setWordWrap(True)
             layout.addWidget(missing)
@@ -630,6 +636,7 @@ class PlanApprovalPanel(QFrame):
         self.notice.setVisible(False)
         layout.addWidget(self.notice)
         self.setLayout(layout)
+        self.set_pending(False)
 
     @staticmethod
     def _add_contract_section(layout: QVBoxLayout, title: str, rows: list[str], code: bool = False) -> None:
@@ -646,6 +653,9 @@ class PlanApprovalPanel(QFrame):
             layout.addWidget(row)
 
     def _submit(self) -> None:
+        if not self.plan.approval_enabled:
+            self.complete(False, "审批资料不完整，补齐前禁止审批。", "error")
+            return
         text = self.input.toPlainText().strip()
         if not text:
             self.complete(False, "请先填写审批建议。", "error")
@@ -656,7 +666,7 @@ class PlanApprovalPanel(QFrame):
         self.submit_requested.emit(self.plan.plan_id, self.plan.approval_step_id, self.feedback_id, text)
 
     def set_pending(self, pending: bool) -> None:
-        enabled = self.plan.approval_state != "none" and not pending
+        enabled = self.plan.approval_enabled and not pending
         self.input.setEnabled(enabled)
         self.submit_button.setEnabled(enabled)
         self.submit_button.setText("正在提交…" if pending else "提交给 Agent")

@@ -34,7 +34,10 @@ export type PlanApprovalExternalChange = {
 };
 
 export type PlanApprovalRequest = {
+  approver?: string;
   request: string;
+  recommendation?: string;
+  alternatives?: string[];
   reason: string;
   files: PlanApprovalFileChange[];
   commands: PlanApprovalCommand[];
@@ -42,6 +45,10 @@ export type PlanApprovalRequest = {
   validation: string[];
   rollback: string[];
   outOfScope: string[];
+  requestedAt?: string;
+  sourceMessageId?: string;
+  feedbackId?: string;
+  responseStatus?: "pending" | "approved" | "rejected" | "changes_requested" | "cancelled";
 };
 
 export type PlanStep = {
@@ -507,14 +514,21 @@ function assertKeywordLimits(label: string, keywords: string[], maximumItems: nu
 function approvalRequestText(contract: PlanApprovalRequest | undefined): unknown[] {
   if (!contract) return [];
   return [
+    contract.approver,
     contract.request,
+    contract.recommendation,
+    ...(contract.alternatives || []),
     contract.reason,
     ...contract.files.flatMap((item) => [item.path, item.action, item.change, item.destination]),
     ...contract.commands.flatMap((item) => [item.command, item.purpose, item.expectedEffect]),
     ...contract.changes.flatMap((item) => [item.target, item.change, item.impact]),
     ...contract.validation,
     ...contract.rollback,
-    ...contract.outOfScope
+    ...contract.outOfScope,
+    contract.requestedAt,
+    contract.sourceMessageId,
+    contract.feedbackId,
+    contract.responseStatus
   ];
 }
 
@@ -561,7 +575,11 @@ export function currentPlanStep(plan: PlanItem): PlanStep | undefined {
 export function planRequiresApproval(plan: PlanItem): boolean {
   if (plan.status === "暂停" || plan.status === "已完成" || plan.status === "已归档") return false;
   const step = currentPlanStep(plan);
-  if (step?.approvalRequest) return true;
+  if (step?.approvalRequest) {
+    const responseStatus = step.approvalRequest.responseStatus;
+    if (responseStatus === "approved" || responseStatus === "rejected" || responseStatus === "cancelled") return false;
+    return true;
+  }
   if (/human-gate/i.test(String(plan.kind || ""))) return true;
   const explicitGate = [
     step?.id,
@@ -578,9 +596,25 @@ export function planRequiresApproval(plan: PlanItem): boolean {
 }
 
 export function approvalRequestMissingFields(contract: PlanApprovalRequest | undefined): string[] {
-  if (!contract) return ["request", "reason", "affectedActions", "validation", "rollback", "outOfScope"];
+  if (!contract) return [
+    "approver",
+    "request",
+    "recommendation",
+    "alternatives",
+    "reason",
+    "affectedActions",
+    "validation",
+    "rollback",
+    "outOfScope",
+    "requestedAt",
+    "source",
+    "responseStatus"
+  ];
   const missing: string[] = [];
+  if (!contract.approver?.trim()) missing.push("approver");
   if (!contract.request.trim()) missing.push("request");
+  if (!contract.recommendation?.trim()) missing.push("recommendation");
+  if (!contract.alternatives?.some((item) => item.trim())) missing.push("alternatives");
   if (!contract.reason.trim()) missing.push("reason");
   const hasFile = contract.files.some((item) => item.path.trim() && item.change.trim() && (item.action !== "move" || item.destination?.trim()));
   const hasCommand = contract.commands.some((item) => item.command.trim() && item.purpose.trim());
@@ -589,11 +623,16 @@ export function approvalRequestMissingFields(contract: PlanApprovalRequest | und
   if (contract.validation.length === 0) missing.push("validation");
   if (contract.rollback.length === 0) missing.push("rollback");
   if (contract.outOfScope.length === 0) missing.push("outOfScope");
+  if (!contract.requestedAt?.trim()) missing.push("requestedAt");
+  if (!contract.sourceMessageId?.trim() && !contract.feedbackId?.trim()) missing.push("source");
+  if (!contract.responseStatus) missing.push("responseStatus");
   return missing;
 }
 
 function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWriteLimits): void {
+  assertTextLimit("Plan approvalRequest.approver", contract.approver, limits.approvalDetailChars);
   assertTextLimit("Plan approvalRequest.request", contract.request, limits.approvalRequestChars);
+  assertTextLimit("Plan approvalRequest.recommendation", contract.recommendation, limits.approvalRequestChars);
   assertTextLimit("Plan approvalRequest.reason", contract.reason, limits.approvalReasonChars);
   if (contract.files.length > 50) throw new Error("Plan approvalRequest.files cannot contain more than 50 items.");
   if (contract.commands.length > 50) throw new Error("Plan approvalRequest.commands cannot contain more than 50 items.");
@@ -614,6 +653,7 @@ function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWrit
     assertTextLimit("Plan approvalRequest impact", item.impact, limits.approvalDetailChars);
   }
   for (const [label, items] of [
+    ["alternatives", contract.alternatives || []],
     ["validation", contract.validation],
     ["rollback", contract.rollback],
     ["outOfScope", contract.outOfScope]
@@ -621,6 +661,9 @@ function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWrit
     if (items.length > 50) throw new Error(`Plan approvalRequest.${label} cannot contain more than 50 items.`);
     for (const item of items) assertTextLimit(`Plan approvalRequest.${label} item`, item, limits.approvalListItemChars);
   }
+  assertTextLimit("Plan approvalRequest.requestedAt", contract.requestedAt, 80);
+  assertTextLimit("Plan approvalRequest.sourceMessageId", contract.sourceMessageId, 240);
+  assertTextLimit("Plan approvalRequest.feedbackId", contract.feedbackId, 240);
 }
 
 function memoryTextTotal(memory: RecentMemoryItem | ConsolidatedMemoryItem): number {
@@ -712,6 +755,16 @@ function validatePlanWrite(roleDir: string, plan: PlanItem, requireSteps = false
   assertTextLimit("Plan taskBinding.completionHook.gatewayId", plan.taskBinding?.completionHook?.gatewayId, 120);
   assertKeywordLimits("Plan", plan.keywords, limits.maxKeywords, limits.keywordChars);
   validatePlanSteps(plan, limits, requireSteps);
+  if (planRequiresApproval(plan)) {
+    const step = currentPlanStep(plan);
+    const blockedBy = String(step?.blockedBy || plan.blockedBy || "").trim();
+    if (!planIsBlocked(plan)) {
+      throw new Error("A current approval or authorization step must set isBlocked=true until an approval decision is recorded.");
+    }
+    if (!blockedBy || /^(待|等待)?(审批|批准|授权|确认|确认方案|秋雨审批)$/.test(blockedBy.replace(/\s+/g, ""))) {
+      throw new Error("An approval-blocked plan must provide a concrete blockedBy naming who must approve what.");
+    }
+  }
   const total = planTextTotal(plan);
   if (total > limits.totalChars) {
     throw new Error(`Plan text exceeds ${limits.totalChars} characters in total (received ${total}). Split it into one plan per subject.`);
@@ -766,14 +819,28 @@ function normalizeApprovalRequest(value: unknown): PlanApprovalRequest | undefin
     }];
   }) : [];
   return {
+    approver: typeof raw.approver === "string" ? raw.approver.trim() || undefined : undefined,
     request: String(raw.request || "").trim(),
+    recommendation: typeof raw.recommendation === "string" ? raw.recommendation.trim() || undefined : undefined,
+    alternatives: normalizedStringList(raw.alternatives),
     reason: String(raw.reason || "").trim(),
     files,
     commands,
     changes,
     validation: normalizedStringList(raw.validation),
     rollback: normalizedStringList(raw.rollback),
-    outOfScope: normalizedStringList(raw.outOfScope)
+    outOfScope: normalizedStringList(raw.outOfScope),
+    requestedAt: typeof raw.requestedAt === "string" ? raw.requestedAt.trim() || undefined : undefined,
+    sourceMessageId: typeof raw.sourceMessageId === "string" ? raw.sourceMessageId.trim() || undefined : undefined,
+    feedbackId: typeof raw.feedbackId === "string" ? raw.feedbackId.trim() || undefined : undefined,
+    responseStatus: raw.responseStatus === "approved"
+      || raw.responseStatus === "rejected"
+      || raw.responseStatus === "changes_requested"
+      || raw.responseStatus === "cancelled"
+      ? raw.responseStatus
+      : raw.responseStatus === "pending"
+        ? "pending"
+        : undefined
   };
 }
 

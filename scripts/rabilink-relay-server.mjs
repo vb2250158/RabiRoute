@@ -760,6 +760,7 @@ function selectedWorkerForApp(app) {
   const targetDeviceId = stringValue(app?.targetDeviceId);
   if (!app || !targetDeviceId) return null;
   return readAppStore().workers.find((worker) => worker.appId === app.id
+    && workerCanProcessMobileRequests(worker)
     && (worker.id === targetDeviceId || worker.guid === targetDeviceId)) || null;
 }
 
@@ -829,7 +830,9 @@ function accountStorePayload(account, options = {}) {
     setupRequired: store.accounts.length === 0,
     account: account ? publicAccount(account) : null,
     apps: apps.map((app) => publicApp(app, { revealToken: true })),
-    workers: workers.map((worker) => publicWorker(worker, appsById.get(worker.appId))),
+    workers: workers
+      .filter(workerCanProcessMobileRequests)
+      .map((worker) => publicWorker(worker, appsById.get(worker.appId))),
     logs: account ? readAccountLogs(account, options.logLimit || 80) : [],
     dataPath: path.relative(process.cwd(), appStorePath).replace(/\\/g, "/")
   };
@@ -850,9 +853,13 @@ function normalizeWorkerDeviceKind(value) {
 
 function workerCanProcessMobileRequests(worker) {
   const terminalKinds = new Set(["phone", "glasses", "watch", "earbuds"]);
-  if (terminalKinds.has(normalizeWorkerDeviceKind(worker?.deviceKind))) return false;
+  const pcKinds = new Set(["pc", "desktop", "server", "workstation"]);
+  const deviceKind = normalizeWorkerDeviceKind(worker?.deviceKind);
+  if (terminalKinds.has(deviceKind)) return false;
+  if (pcKinds.has(deviceKind)) return true;
   const capabilities = normalizeWorkerCapabilities(worker?.capabilities);
-  return capabilities.some((capability) => ["tasks", "webgui", "persona-sync", "speech"].includes(capability));
+  if (capabilities.some((capability) => ["tasks", "webgui", "persona-sync", "speech"].includes(capability))) return true;
+  return Boolean(stringValue(worker?.guid));
 }
 
 function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabilities = null, peerUrls = null, deviceKind = null) {
@@ -1100,7 +1107,19 @@ function patchOwnedApp(account, appId, body) {
   if (body.name !== undefined) app.name = String(body.name || "").trim() || app.name;
   if (body.notes !== undefined) app.notes = String(body.notes || "").trim();
   if (body.enabled !== undefined) app.enabled = body.enabled !== false;
-  if (body.targetDeviceId !== undefined) app.targetDeviceId = String(body.targetDeviceId || "").trim();
+  if (body.targetDeviceId !== undefined) {
+    const targetDeviceId = String(body.targetDeviceId || "").trim();
+    const targetWorker = targetDeviceId
+      ? store.workers.find((worker) => worker.appId === app.id
+        && (worker.id === targetDeviceId || worker.guid === targetDeviceId))
+      : null;
+    if (targetWorker && !workerCanProcessMobileRequests(targetWorker)) {
+      const error = new Error(`RabiLink terminal cannot be selected as a processing Rabi PC: ${targetDeviceId}`);
+      error.statusCode = 400;
+      throw error;
+    }
+    app.targetDeviceId = targetDeviceId;
+  }
   const revealToken = body.regenerateToken === true;
   if (revealToken) {
     app.token = generateRabiLinkToken();
@@ -3764,7 +3783,7 @@ function adminPageHtml() {
           <div class="title-row">
             <div>
               <div class="title">已连接的 PC Rabi</div>
-              <div class="note">当前账号下所有应用 token 连上的 PC Rabi 都会显示在这里，可直接跳转到对应 WebGUI。</div>
+              <div class="note">这里只显示具备任务、WebGUI、人格同步或语音处理能力的 PC；手机、眼镜、手表和耳机终端不会计入，也不会提供 PC WebGUI 入口。</div>
             </div>
           </div>
           <div id="workers" class="worker-list"></div>
@@ -4133,6 +4152,30 @@ function adminPageHtml() {
       await load();
     }
 
+    async function copyText(text) {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        try {
+          await navigator.clipboard.writeText(text);
+          return;
+        } catch {}
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-1000px";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      try {
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        if (!document.execCommand("copy")) throw new Error("Clipboard copy was rejected");
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+
     async function copyToken(id) {
       const app = state.apps.find((item) => item.id === id);
       const token = app?.token || state.revealed[id];
@@ -4140,8 +4183,12 @@ function adminPageHtml() {
         flash("notice", "未拿到完整 token，请刷新后重试。");
         return;
       }
-      await navigator.clipboard.writeText(token);
-      flash("notice", "token 已复制。");
+      try {
+        await copyText(token);
+        flash("notice", "token 已复制。");
+      } catch {
+        flash("error", "当前浏览器不允许自动复制，请手动选择 token 复制。");
+      }
     }
 
     function workerLabel(worker) {
@@ -4503,7 +4550,9 @@ function resolveOwnedWebguiTarget(account, targetRef, url) {
   const store = readAppStore();
   const ownedApps = store.apps.filter((app) => app.ownerAccountId === account.id && app.enabled !== false);
   const appsById = new Map(ownedApps.map((app) => [app.id, app]));
-  const ownedWorkers = store.workers.filter((worker) => appsById.has(worker.appId));
+  const ownedWorkers = store.workers
+    .filter((worker) => appsById.has(worker.appId))
+    .filter(workerCanProcessMobileRequests);
   const requestedAppId = stringValue(url.searchParams.get("appId"));
   const requestedApp = requestedAppId ? appsById.get(requestedAppId) : null;
   let worker = ownedWorkers.find((item) => item.guid === targetRef)
