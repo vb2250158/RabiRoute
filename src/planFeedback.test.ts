@@ -69,6 +69,31 @@ test("agent feedback is record-only and text length is validated", () => {
   }), /exceeds 2000/);
 });
 
+test("plan guidance remains plan-level and uses a distinct response kind", () => {
+  const guidance = createPlanFeedbackRecord({
+    roleId: "Rabi",
+    planId: "plan-1",
+    planTitle: "Running plan",
+    kind: "guidance",
+    text: "先收窄范围，再调整后续未开始步骤。"
+  });
+  const response = createPlanFeedbackRecord({
+    roleId: "Rabi",
+    planId: "plan-1",
+    planTitle: "Running plan",
+    kind: "guidance_response",
+    author: "agent",
+    source: "agent",
+    text: "已调整计划范围和后续步骤。"
+  });
+
+  assert.equal(guidance.kind, "guidance");
+  assert.equal(guidance.stepId, undefined);
+  assert.equal(guidance.deliveryStatus, "pending");
+  assert.equal(response.kind, "guidance_response");
+  assert.equal(response.deliveryStatus, "record_only");
+});
+
 test("plan feedback compares mentioned plan attachments by stable metadata", () => {
   const reference = [{
     id: "report",

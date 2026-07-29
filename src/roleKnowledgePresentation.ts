@@ -6,13 +6,13 @@ import type {
 } from "./roleKnowledge.js";
 import type { PlanAttachmentPresentation } from "./shared/planAttachmentContract.js";
 import {
-  approvalRequestMissingFields,
   currentPlanStep,
-  planIsBlocked,
-  planRequiresApproval
+  planApprovalGate,
+  planIsBlocked
 } from "./roleKnowledge.js";
+import { planIsWaitingForPackage } from "./planPackageWaiting.js";
 
-export type PlanPresentationTone = "blocked" | "qa" | "running" | "pending" | "done" | "archived" | "paused" | "unknown";
+export type PlanPresentationTone = "blocked" | "qa" | "running" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
 export type PlanPresentationView = "current" | "plans" | "archived";
 
 export type PlanPresentationPalette = {
@@ -24,6 +24,7 @@ export type PlanPresentationPalette = {
 export type PlanPresentation = {
   status: string;
   tone: PlanPresentationTone;
+  sortBucket: number;
   views: PlanPresentationView[];
   palette: PlanPresentationPalette;
   approval: {
@@ -48,27 +49,25 @@ const PLAN_STATUS_RANK: Record<PlanPresentationTone, number> = {
   blocked: 0,
   qa: 1,
   running: 2,
-  pending: 3,
-  done: 4,
-  archived: 5,
-  unknown: 6,
-  paused: 7
+  waiting_package: 3,
+  pending: 4,
+  done: 5,
+  archived: 6,
+  unknown: 7,
+  paused: 8
 };
 
 const PLAN_PRESENTATION_PALETTE: Record<PlanPresentationTone, PlanPresentationPalette> = {
   blocked: { accent: "#ef6c52", background: "#fff1ed", foreground: "#b42318" },
   qa: { accent: "#8e63c7", background: "#f3e8ff", foreground: "#7e22ce" },
   running: { accent: "#16a34a", background: "#eaf8ef", foreground: "#15803d" },
+  waiting_package: { accent: "#2563eb", background: "#eff6ff", foreground: "#1d4ed8" },
   pending: { accent: "#f59e0b", background: "#fff7e6", foreground: "#a96008" },
   done: { accent: "#607d8b", background: "#eaf4f7", foreground: "#52677a" },
   archived: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" },
   paused: { accent: "#64748b", background: "#f1f5f9", foreground: "#475569" },
   unknown: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" }
 };
-
-function blocker(plan: PlanItem): string {
-  return currentPlanStep(plan)?.blockedBy?.trim() || plan.blockedBy?.trim() || "";
-}
 
 function isWaitingForQa(plan: PlanItem): boolean {
   const step = currentPlanStep(plan);
@@ -78,9 +77,8 @@ function isWaitingForQa(plan: PlanItem): boolean {
 }
 
 function approvalPresentation(plan: PlanItem): PlanPresentation["approval"] {
-  const step = currentPlanStep(plan);
-  const requiresApproval = planRequiresApproval(plan);
-  if (!requiresApproval) {
+  const gate = planApprovalGate(plan);
+  if (gate.state === "none") {
     return {
       state: "none",
       enabled: false,
@@ -89,19 +87,17 @@ function approvalPresentation(plan: PlanItem): PlanPresentation["approval"] {
       missing: []
     };
   }
-  const contract = step?.approvalRequest;
-  const missing = approvalRequestMissingFields(contract);
-  const ready = missing.length === 0;
+  const ready = gate.state === "pending";
   return {
     state: ready ? "ready" : "incomplete",
     enabled: ready,
     label: ready ? "审批执行合同" : "审批资料不完整 / 禁止审批",
     helper: ready
       ? "请先核对审批人、具体决定、推荐与备选、文件、命令、外部变更、验证、回退、排除范围、附件和回执状态，再决定是否批准。"
-      : "当前审批资料缺少必要栏目，计划继续保持阻塞；补齐前禁止提交审批决定。",
-    stepId: step?.id,
-    missing,
-    contract
+      : "当前审批资料缺少必要栏目，计划保持进行中并由 Agent 继续调查、补证据和补齐合同；补齐前不会占用阻塞状态，也不能提交审批决定。",
+    stepId: gate.stepId,
+    missing: gate.missing,
+    contract: gate.contract
   };
 }
 
@@ -118,10 +114,11 @@ export function planPresentation(plan: PlanItem): PlanPresentation {
       ? ["current", "plans"]
       : ["plans"];
   if (plan.status === "进行中") {
-    if (planIsBlocked(plan) && blocker(plan)) {
+    if (planIsBlocked(plan)) {
       return buildPlanPresentation("阻塞中", "blocked", views, approval);
     }
     if (isWaitingForQa(plan)) return buildPlanPresentation("待QA测试", "qa", views, approval);
+    if (planIsWaitingForPackage(plan)) return buildPlanPresentation("等待打包", "waiting_package", views, approval);
     return buildPlanPresentation("进行中", "running", views, approval);
   }
   if (plan.status === "未开始") return buildPlanPresentation(plan.status, "pending", views, approval);
@@ -140,6 +137,7 @@ function buildPlanPresentation(
   return {
     status,
     tone,
+    sortBucket: PLAN_STATUS_RANK[tone],
     views: [...views],
     palette: { ...PLAN_PRESENTATION_PALETTE[tone] },
     approval

@@ -91,6 +91,7 @@ const speechProxyPaths = new Map([
   ["POST /api/v1/services/audio/tts/SpeechSynthesizer", "/api/v1/services/audio/tts/SpeechSynthesizer"],
   ["POST /api/v1/services/audio/asr/transcription", "/api/v1/services/audio/asr/transcription"]
 ]);
+const webguiEventStreamPaths = new Set(["/api/events", "/api/speech/events"]);
 
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(accountLogDir, { recursive: true });
@@ -3410,6 +3411,10 @@ function handleWorkerWebguiEvent(req, url, res, body) {
   const worker = store.workers.find((item) => item.appId === auth.app?.id
     && ((identity.deviceGuid && item.guid === identity.deviceGuid) || (identity.deviceId && item.id === identity.deviceId)));
   if (!worker) return sendJson(res, 403, { code: -1, ok: false, message: "WebGUI events can only be published by a registered Rabi PC." });
+  const streamPath = stringValue(body?.streamPath) || "/api/events";
+  if (!webguiEventStreamPaths.has(streamPath)) {
+    return sendJson(res, 400, { code: -1, ok: false, message: `Unsupported WebGUI event stream: ${streamPath}` });
+  }
   const eventType = stringValue(body?.eventType).replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 96);
   if (!eventType || eventType === "ready") {
     return sendJson(res, 400, { code: -1, ok: false, message: "A non-ready WebGUI event type is required." });
@@ -3418,6 +3423,7 @@ function handleWorkerWebguiEvent(req, url, res, body) {
   webguiEventHub.publish(eventType, {
     appId: auth.app.id,
     targetDeviceId: worker.guid || worker.id,
+    channel: streamPath,
     data
   });
   return sendJson(res, 202, { code: 0, ok: true });
@@ -4734,11 +4740,12 @@ function sendWebguiProxyResponse(res, request, externalPrefix) {
   res.end(body);
 }
 
-function sendRemoteWebguiEvents(req, res, target) {
+function sendRemoteWebguiEvents(req, res, target, streamPath) {
   const subscription = webguiEventHub.subscribe(res, {
     appId: target.app.id,
     deviceId: target.worker.id,
-    deviceGuid: target.worker.guid
+    deviceGuid: target.worker.guid,
+    channel: streamPath
   });
   const close = () => subscription.close();
   req.once("close", close);
@@ -5266,8 +5273,8 @@ async function handleManageWebgui(req, url, res) {
     if (req.method !== "GET" && req.method !== "HEAD") return sendText(res, 405, "Method Not Allowed");
     return sendRemoteWebguiStatic(req, res, match, auth.account);
   }
-  if (req.method === "GET" && match.restPath === "/api/events") {
-    return sendRemoteWebguiEvents(req, res, target);
+  if (req.method === "GET" && webguiEventStreamPaths.has(match.restPath)) {
+    return sendRemoteWebguiEvents(req, res, target, match.restPath);
   }
   const proxySearch = new URLSearchParams(url.searchParams);
   proxySearch.delete("appId");

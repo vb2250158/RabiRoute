@@ -6,11 +6,16 @@ import test from "node:test";
 import {
   createPlan,
   createRecentMemory,
+  getPlan,
   getRecentMemory,
   getRoleSkill,
+  listPlans,
   listRoleSkills,
   normalizeRoleContextInjection,
   pendingMemoryConsolidation,
+  planAcceptsGuidance,
+  planApprovalGate,
+  planIsBlocked,
   roleContextInjectionPolicy,
   planRequiresApproval,
   roleKnowledgeSnapshot,
@@ -45,6 +50,108 @@ function writePersonaConfig(roleDir: string, config: Record<string, unknown>): v
   fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify(config, null, 2), "utf8");
 }
 
+test("plan list cache is invalidated by canonical create and update writes", () => {
+  const roleDir = makeRoleDir();
+  const created = createPlan(roleDir, {
+    id: "cache-plan",
+    title: "Cache plan",
+    focus: "Verify plan list cache invalidation",
+    status: "进行中",
+    currentStepId: "cache",
+    steps: [{ id: "cache", title: "Verify cache invalidation", status: "进行中" }],
+    keywords: ["cache"]
+  });
+  assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "Cache plan");
+
+  updatePlan(roleDir, created.id, { title: "Updated cache plan" });
+  assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "Updated cache plan");
+});
+
+test("plan list cache observes direct external plan-file changes", async () => {
+  const roleDir = makeRoleDir();
+  const created = createPlan(roleDir, {
+    id: "external-cache-plan",
+    title: "External cache plan",
+    focus: "Verify direct file changes invalidate the plan cache",
+    status: "进行中",
+    currentStepId: "cache",
+    steps: [{ id: "cache", title: "Verify external invalidation", status: "进行中" }],
+    keywords: ["cache", "external"]
+  });
+  assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "External cache plan");
+
+  const filePath = path.join(roleDir, "plans", "items", "active", `${created.id}.json`);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  fs.writeFileSync(filePath, JSON.stringify({ ...raw, title: "Externally updated cache plan" }, null, 2), "utf8");
+
+  let observedTitle = "";
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    observedTitle = listPlans(roleDir).find((plan) => plan.id === created.id)?.title || "";
+    if (observedTitle === "Externally updated cache plan") break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(observedTitle, "Externally updated cache plan");
+});
+
+test("plan list cache reparses only the externally changed plan file", { concurrency: false }, async () => {
+  const roleDir = makeRoleDir();
+  for (let index = 0; index < 40; index += 1) {
+    createPlan(roleDir, {
+      id: `incremental-cache-${String(index).padStart(2, "0")}`,
+      title: `Incremental cache plan ${index}`,
+      focus: `Verify incremental plan parsing ${index}`,
+      status: "进行中",
+      currentStepId: "cache",
+      steps: [{ id: "cache", title: "Verify incremental parsing", status: "进行中" }],
+      keywords: ["cache", "incremental"]
+    });
+  }
+  assert.equal(listPlans(roleDir).length, 40);
+
+  const changedId = "incremental-cache-17";
+  const changedFile = path.join(roleDir, "plans", "items", "active", `${changedId}.json`);
+  const raw = JSON.parse(fs.readFileSync(changedFile, "utf8")) as Record<string, unknown>;
+  fs.writeFileSync(changedFile, JSON.stringify({ ...raw, title: "Incrementally updated plan" }, null, 2), "utf8");
+
+  const originalReadFile = fs.promises.readFile;
+  const originalStat = fs.promises.stat;
+  const mutablePromises = fs.promises as unknown as {
+    readFile: typeof fs.promises.readFile;
+    stat: typeof fs.promises.stat;
+  };
+  const planFileReads: string[] = [];
+  const planFileStats: string[] = [];
+  mutablePromises.readFile = (async (filePath: fs.PathLike | fs.promises.FileHandle, ...args: unknown[]) => {
+    if (typeof filePath === "string" && filePath.includes(`${path.sep}plans${path.sep}`) && filePath.endsWith(".json")) {
+      planFileReads.push(path.resolve(filePath));
+    }
+    return (originalReadFile as (...callArgs: unknown[]) => Promise<unknown>)(filePath, ...args);
+  }) as typeof fs.promises.readFile;
+  mutablePromises.stat = (async (filePath: fs.PathLike, ...args: unknown[]) => {
+    if (typeof filePath === "string" && filePath.includes(`${path.sep}plans${path.sep}`) && filePath.endsWith(".json")) {
+      planFileStats.push(path.resolve(filePath));
+    }
+    return (originalStat as (...callArgs: unknown[]) => Promise<unknown>)(filePath, ...args);
+  }) as typeof fs.promises.stat;
+  try {
+    let observedTitle = "";
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      observedTitle = listPlans(roleDir).find((plan) => plan.id === changedId)?.title || "";
+      if (observedTitle === "Incrementally updated plan") break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(observedTitle, "Incrementally updated plan");
+  } finally {
+    mutablePromises.readFile = originalReadFile;
+    mutablePromises.stat = originalStat;
+  }
+
+  assert.deepEqual(planFileReads, [path.resolve(changedFile)]);
+  assert.deepEqual(planFileStats, [path.resolve(changedFile), path.resolve(changedFile)]);
+});
+
 test("plans store managed image, video, and file attachments without persisting base64", () => {
   const roleDir = makeRoleDir();
   const sourceFile = path.join(roleDir, "source-note.txt");
@@ -78,6 +185,24 @@ test("plans store managed image, video, and file attachments without persisting 
   assert.deepEqual(preserved.attachments, plan.attachments);
   const cleared = updatePlan(roleDir, plan.id, { attachments: [] });
   assert.deepEqual(cleared.attachments, []);
+});
+
+test("plans can be read and updated directly by id without depending on unrelated plan files", () => {
+  const roleDir = makeRoleDir();
+  for (let index = 0; index < 100; index += 1) {
+    createPlan(roleDir, {
+      id: `plan-${String(index).padStart(3, "0")}`,
+      title: `计划 ${index}`,
+      focus: `计划 ${index}`,
+      steps: [{ id: "run", title: "执行", status: "未开始" }],
+      keywords: ["计划"]
+    });
+  }
+
+  const plan = getPlan(roleDir, "plan-050");
+  assert.equal(plan?.title, "计划 50");
+  assert.equal(updatePlan(roleDir, "plan-050", { priority: "high" }).priority, "high");
+  assert.equal(getPlan(roleDir, "plan-049")?.priority, undefined);
 });
 
 test("plan attachments reject content that does not match a claimed video type", () => {
@@ -156,7 +281,7 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
   assert.equal(reset.steps.every((step) => step.startedAt == null && step.completedAt == null), true);
 });
 
-test("plan blocking is explicit and requires a reason", () => {
+test("non-approval blockers are normalized into actionable running plans", () => {
   const roleDir = makeRoleDir();
   const waiting = createPlan(roleDir, {
     id: "plan-waiting-inquiry",
@@ -179,7 +304,7 @@ test("plan blocking is explicit and requires a reason", () => {
   assert.equal(waiting.isBlocked, undefined);
   assert.equal(waiting.steps[0]?.isBlocked, undefined);
 
-  assert.throws(() => createPlan(roleDir, {
+  const legacyBlocked = createPlan(roleDir, {
     id: "plan-blocked-without-reason",
     title: "缺少阻塞原因",
     focus: "验证显式阻塞合同",
@@ -187,7 +312,49 @@ test("plan blocking is explicit and requires a reason", () => {
     currentStepId: "blocked",
     steps: [{ id: "blocked", title: "无法继续", status: "进行中", isBlocked: true }],
     keywords: ["计划", "阻塞"]
-  }), /must provide blockedBy/);
+  });
+  assert.equal(legacyBlocked.isBlocked, undefined);
+  assert.equal(legacyBlocked.steps[0]?.isBlocked, undefined);
+  assert.equal(planIsBlocked(legacyBlocked), false);
+});
+
+test("only running plans outside approval accept whole-plan guidance", () => {
+  const roleDir = makeRoleDir();
+  const running = createPlan(roleDir, {
+    id: "plan-guidance-running",
+    title: "可引导计划",
+    focus: "允许用户调整整个计划方向",
+    status: "进行中",
+    currentStepId: "implement",
+    steps: [{ id: "implement", title: "继续实施", status: "进行中" }],
+    keywords: ["引导"]
+  });
+  const pending = createPlan(roleDir, {
+    id: "plan-guidance-pending",
+    title: "未开始计划",
+    focus: "尚未开始",
+    status: "未开始",
+    steps: [{ id: "prepare", title: "准备", status: "未开始" }],
+    keywords: ["引导"]
+  });
+  const approval = createPlan(roleDir, {
+    id: "plan-guidance-approval",
+    title: "审批计划",
+    focus: "等待正式审批",
+    status: "进行中",
+    currentStepId: "approve",
+    steps: [{
+      id: "approve",
+      title: "等待审批",
+      status: "进行中",
+      approvalRequest: { request: "批准方案", reason: "涉及外部变更" }
+    }],
+    keywords: ["审批"]
+  });
+
+  assert.equal(planAcceptsGuidance(running), true);
+  assert.equal(planAcceptsGuidance(pending), false);
+  assert.equal(planAcceptsGuidance(approval), false);
 });
 
 test("plan attachments enforce count, per-file, and total size limits", () => {
@@ -558,7 +725,8 @@ test("paused plans preserve their resume step without remaining approval-active"
     blockedBy: "用户尚未批准继续实现当前文件改动"
   });
   assert.equal(resumed.status, "进行中");
-  assert.equal(resumed.isBlocked, true);
+  assert.equal(resumed.isBlocked, undefined);
+  assert.equal(planApprovalGate(resumed).state, "preparing");
 });
 
 test("approval steps remain writable while Manager can distinguish incomplete and concrete contracts", () => {
@@ -579,6 +747,8 @@ test("approval steps remain writable while Manager can distinguish incomplete an
     steps: [{ id: "approve", title: "等待修改审批", status: "进行中", isBlocked: true, blockedBy: "用户尚未批准是否执行结构化审批改动" }]
   });
   assert.equal(incomplete.steps[0]?.approvalRequest, undefined);
+  assert.equal(incomplete.isBlocked, undefined);
+  assert.equal(planApprovalGate(incomplete).state, "preparing");
 
   const plan = updatePlan(roleDir, incomplete.id, {
     steps: [{
@@ -615,16 +785,22 @@ test("approval steps remain writable while Manager can distinguish incomplete an
   });
 
   assert.equal(plan.steps[0]?.approvalRequest?.files[0]?.path, "src/roleKnowledge.ts");
+  assert.equal(plan.isBlocked, true);
+  assert.equal(plan.steps[0]?.isBlocked, true);
+  assert.equal(planApprovalGate(plan).state, "pending");
   const returnedToIncomplete = updatePlan(roleDir, plan.id, {
     steps: [{ id: "approve", title: "等待修改审批", status: "进行中", isBlocked: true, blockedBy: "用户尚未批准是否执行结构化审批改动" }]
   });
   assert.equal(returnedToIncomplete.steps[0]?.approvalRequest, undefined);
+  assert.equal(returnedToIncomplete.isBlocked, undefined);
   assert.equal(updatePlan(roleDir, plan.id, { priority: "high" }).priority, "high");
-  assert.throws(() => updatePlan(roleDir, plan.id, {
+  const rederived = updatePlan(roleDir, plan.id, {
     isBlocked: false,
     blockedBy: "",
     steps: [{ id: "approve", title: "等待修改审批", status: "进行中", isBlocked: false, blockedBy: "", approvalRequest: plan.steps[0]?.approvalRequest }]
-  }), /must set isBlocked=true/);
+  });
+  assert.equal(rederived.isBlocked, true);
+  assert.equal(rederived.steps[0]?.isBlocked, true);
 
   const approved = updatePlan(roleDir, plan.id, {
     isBlocked: false,
@@ -636,7 +812,7 @@ test("approval steps remain writable while Manager can distinguish incomplete an
       approvalRequest: { ...plan.steps[0]?.approvalRequest, responseStatus: "approved" }
     }]
   });
-  assert.equal(approved.isBlocked, false);
+  assert.equal(approved.isBlocked, undefined);
   assert.equal(approved.steps[0]?.approvalRequest?.responseStatus, "approved");
 });
 

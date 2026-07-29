@@ -46,7 +46,8 @@ test("exposes one recent-context limit for every message endpoint", () => {
     "rabilink",
     "wearable",
     "webhook",
-    "wecom"
+    "wecom",
+    "weixin"
   ]);
 });
 

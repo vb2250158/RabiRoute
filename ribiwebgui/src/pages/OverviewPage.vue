@@ -4,7 +4,12 @@ import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { managerEventSource } from "../managerApi";
-import { routeScopedKnowledgeUrl, routeScopedOverviewUrl } from "../routeScopedNavigation";
+import {
+  routeScopedAdaptersPath,
+  routeScopedKnowledgeUrl,
+  routeScopedOverviewPath,
+  routeScopedOverviewUrl
+} from "../routeScopedNavigation";
 import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
 import { redirectCurrentWebguiToLan } from "../webguiLanRedirect";
 import { copyTextToClipboard } from "../clipboard";
@@ -292,7 +297,14 @@ onBeforeUnmount(() => managerEvents?.close());
 
 function goToRoute(id: string): void {
   store.selectGateway(id);
-  router.push("/routes");
+  const gateway = store.gateways.find(item => item.id === id);
+  router.push(routeScopedAdaptersPath(gateway ? configNameFor(gateway) : id));
+}
+
+function selectRouteOverview(id: string): void {
+  store.selectGateway(id);
+  const gateway = store.gateways.find(item => item.id === id);
+  router.replace(routeScopedOverviewPath(gateway ? configNameFor(gateway) : id));
 }
 
 function toggleGatewayEnabled(gateway: any): void {
@@ -491,7 +503,7 @@ const selectedAgentNote = computed(() => {
             :key="gw.id"
             rounded="lg"
             :active="gw.id === store.selectedGatewayId"
-            @click="store.selectGateway(gw.id)"
+            @click="selectRouteOverview(gw.id)"
           >
             <template #prepend>
               <PersonaAvatar :role-id="gw.agentRoleId || ''" :avatar-url="avatarUrlForGateway(gw.id, gw.agentRoleId)" :size="36" />

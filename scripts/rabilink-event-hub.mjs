@@ -15,6 +15,8 @@ function matches(subscriber, event) {
   if (event.targetDeviceId
     && ![subscriber.deviceId, subscriber.deviceGuid].filter(Boolean).includes(event.targetDeviceId)) return false;
   if (event.deviceKind && subscriber.deviceKind && event.deviceKind !== subscriber.deviceKind) return false;
+  const eventChannel = clean(event.channel);
+  if ((eventChannel || subscriber.channel) && eventChannel !== subscriber.channel) return false;
   return true;
 }
 
@@ -33,6 +35,7 @@ export class RabiLinkEventHub {
       deviceId: clean(identity?.deviceId),
       deviceGuid: clean(identity?.deviceGuid),
       deviceKind: clean(identity?.deviceKind),
+      channel: clean(identity?.channel),
       closed: false,
       keepAlive: null
     };
@@ -79,6 +82,7 @@ export class RabiLinkEventHub {
       deviceId: clean(identity?.deviceId),
       deviceGuid: clean(identity?.deviceGuid),
       deviceKind: clean(identity?.deviceKind),
+      channel: clean(identity?.channel),
       finish: (matched) => {
         if (settled) return;
         settled = true;
@@ -104,9 +108,11 @@ export class RabiLinkEventHub {
     const appId = clean(identity?.appId);
     const deviceId = clean(identity?.deviceId);
     const deviceGuid = clean(identity?.deviceGuid);
+    const channel = clean(identity?.channel);
     if (!appId || (!deviceId && !deviceGuid)) return false;
     return [...this.subscribers].some((subscriber) => {
       if (subscriber.closed || subscriber.appId !== appId) return false;
+      if (channel && subscriber.channel !== channel) return false;
       return Boolean(
         (deviceGuid && subscriber.deviceGuid === deviceGuid)
         || (deviceId && subscriber.deviceId === deviceId)

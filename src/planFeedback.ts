@@ -13,10 +13,19 @@ import { PLAN_MAX_ATTACHMENTS, type PlanAttachment } from "./shared/planAttachme
 
 export type { PlanFeedbackAttachment } from "./shared/planFeedbackContract.js";
 
-export type PlanFeedbackKind = "approval_suggestion" | "approval_response";
+export type PlanFeedbackKind = "guidance" | "guidance_response" | "approval_suggestion" | "approval_response";
 export type PlanFeedbackAuthor = "user" | "agent" | "system";
 export type PlanFeedbackSource = "webgui" | "tray" | "qq" | "agent" | "api";
 export type PlanFeedbackDeliveryStatus = "record_only" | "pending" | "delivered" | "failed";
+
+export type PlanQaFeedbackHandling = {
+  outcome: "failed" | "passed";
+  issueType: "generic" | "account" | "version" | "timing" | "visual" | "crash";
+  status: "waiting_for_evidence" | "dispatching" | "dispatched" | "completed" | "dispatch_failed";
+  missingEvidence: string[];
+  consumedAt: string;
+  message?: string;
+};
 
 export type PlanFeedbackRecord = {
   id: string;
@@ -36,6 +45,7 @@ export type PlanFeedbackRecord = {
   updatedAt: string;
   deliveryStatus: PlanFeedbackDeliveryStatus;
   deliveryMessage?: string;
+  qaHandling?: PlanQaFeedbackHandling;
 };
 
 export type CreatePlanFeedbackInput = {
@@ -86,14 +96,14 @@ function sha256(content: Buffer): string {
 }
 
 function decodeBase64(value: unknown, name: string): Buffer {
-  if (typeof value !== "string") throw new Error(`Approval attachment content is required: ${name}.`);
+  if (typeof value !== "string") throw new Error(`Plan feedback attachment content is required: ${name}.`);
   const encoded = value.replace(/\s+/g, "");
   if (encoded && (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length % 4 !== 0)) {
-    throw new Error(`Approval attachment is not valid base64: ${name}.`);
+    throw new Error(`Plan feedback attachment is not valid base64: ${name}.`);
   }
   const content = Buffer.from(encoded, "base64");
   if (content.toString("base64").replace(/=+$/g, "") !== encoded.replace(/=+$/g, "")) {
-    throw new Error(`Approval attachment is not valid base64: ${name}.`);
+    throw new Error(`Plan feedback attachment is not valid base64: ${name}.`);
   }
   return content;
 }
@@ -197,14 +207,14 @@ export function storePlanFeedbackAttachments(
   let total = 0;
   const prepared = value.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new Error(`Approval attachment ${index + 1} is invalid.`);
+      throw new Error(`Plan feedback attachment ${index + 1} is invalid.`);
     }
     const raw = item as Partial<PlanFeedbackAttachmentUpload>;
     const name = safeFileName(raw.name, `attachment-${index + 1}`);
     const content = decodeBase64(raw.contentBase64, name);
     total += content.byteLength;
     if (content.byteLength > PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES) {
-      throw new Error(`Approval attachment exceeds ${PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES} bytes: ${name}.`);
+      throw new Error(`Plan feedback attachment exceeds ${PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES} bytes: ${name}.`);
     }
     if (total > PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES) {
       throw new Error(`Approval feedback attachments exceed ${PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES} bytes in total.`);
@@ -230,7 +240,7 @@ export function storePlanFeedbackAttachments(
   for (const item of prepared) {
     if (fs.existsSync(item.metadata.path)) {
       if (sha256(fs.readFileSync(item.metadata.path)) !== item.metadata.sha256) {
-        throw new Error(`Approval attachment path already contains different content: ${item.metadata.name}.`);
+        throw new Error(`Plan feedback attachment path already contains different content: ${item.metadata.name}.`);
       }
       continue;
     }
@@ -244,7 +254,8 @@ function feedbackFile(roleDir: string, planId: string): string {
 }
 
 function normalizeKind(value: unknown): PlanFeedbackKind {
-  return value === "approval_response" ? "approval_response" : "approval_suggestion";
+  if (value === "guidance" || value === "guidance_response" || value === "approval_response") return value;
+  return "approval_suggestion";
 }
 
 function normalizeAuthor(value: unknown): PlanFeedbackAuthor {
@@ -258,9 +269,9 @@ function normalizeSource(value: unknown, author: PlanFeedbackAuthor): PlanFeedba
 
 export function createPlanFeedbackRecord(input: CreatePlanFeedbackInput): PlanFeedbackRecord {
   const text = String(input.text || "").trim();
-  if (!text) throw new Error("Approval feedback text is required.");
+  if (!text) throw new Error("Plan feedback text is required.");
   if (Array.from(text).length > MAX_FEEDBACK_CHARS) {
-    throw new Error(`Approval feedback exceeds ${MAX_FEEDBACK_CHARS} characters.`);
+    throw new Error(`Plan feedback exceeds ${MAX_FEEDBACK_CHARS} characters.`);
   }
   const author = normalizeAuthor(input.author);
   const notifyAgent = input.notifyAgent !== false && author !== "agent";
@@ -303,6 +314,23 @@ export function updatePlanFeedbackDelivery(
     updatedAt: new Date().toISOString(),
     deliveryStatus,
     deliveryMessage: optionalText(deliveryMessage)
+  });
+}
+
+export function updatePlanFeedbackQaHandling(
+  roleDir: string,
+  record: PlanFeedbackRecord,
+  qaHandling: PlanQaFeedbackHandling
+): PlanFeedbackRecord {
+  return appendPlanFeedback(roleDir, {
+    ...record,
+    updatedAt: new Date().toISOString(),
+    deliveryStatus: qaHandling.status === "dispatch_failed"
+      ? "failed"
+      : qaHandling.status === "dispatching"
+        ? "pending"
+        : "delivered",
+    qaHandling
   });
 }
 

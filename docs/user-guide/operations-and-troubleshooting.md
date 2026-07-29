@@ -62,6 +62,12 @@
 
 升级代码后如果仍看到旧行为，重新构建并重启 Manager 与 Route，再核对启动目录和 `dist/` 时间。历史日志可以保留，但不能代表本次运行状态。
 
+## NapCat 打开后显示 Unauthorized 或 Token 登录页
+
+从 Route 页点击“打开 NapCat”时，RabiRoute 会直接打开带当前 WebUI token 的 `/web_login` 地址。这个入口会重新建立 WebUI 会话，避免 NapCat 重启后旧标签页残留的凭据继续触发 `Unauthorized`。
+
+如果仍停在空 Token 登录页，先关闭旧 NapCat 标签页，再从当前 QQ 实例卡片重新点击“打开 NapCat”。确认实例卡片已保存 WebUI 登录密钥；升级过源码但仍打开旧地址时，需要重新构建并重启 Manager。快速启动只检查 OneBot / WebUI 是否可用，不再同步等待 Windows 全量进程枚举；完整进程列表仍可在显式健康检查和详情中读取。
+
 ## NapCat 已连接但没有 AgentPacket
 
 先确认 `group-messages.jsonl` 或 `private-messages.jsonl` 是否出现新记录。
@@ -87,6 +93,16 @@ Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自�
 5. `no-client-found` 自动唤醒后是否仍失败。
 
 不要用固定 4510、`CODEX_APP_SERVER_WS_URL` 或独立 stdio Runtime 修复真实投递；这些不是当前主链。
+
+## 8790 被旧 Manager 占用
+
+如果启动器提示 `8790` 已监听，但 `/meta` 没有稳定响应，常见原因是同一项目的旧 Manager 仍占着端口。远程页面反复断线重连、Relay 或 SSE 异常不应该成为本地启动依赖；当前实现会让 Manager 先提供本机/局域网 WebGUI，再异步热连 Relay。
+
+重新运行 `Start-RabiRoute-Tray.bat`。启动器会核对端口 owner 的命令行，只对精确指向本项目 `dist/manager.js` 的旧实例执行有界接管：先请求优雅关闭，超时后才终止已核实的进程树。未知进程不会被停止。如果当前 `dist` 比健康运行实例更新，启动器也会重载当前构建。
+
+恢复后分别验证：本机或局域网 `/meta` 可用；Relay 状态可在稍后恢复为在线；远程 `/api/events` 与 `/api/speech/events` 可重连；媒体 `Range` 请求仍返回 `206`。Relay 暂时离线时，本机和局域网仍应可用，不需要反复重启 Manager。
+
+如果计划页提交审批意见时正好遇到 Manager 重启或短暂断网，页面会明确提示无法连接，并保留本次文字、附件和同一条幂等 `feedbackId`。先确认页面右上角恢复为“Manager 已连接”或 `/meta` 已响应，再直接重试；不要因为看到旧版浏览器错误 `Failed to fetch` 而重新输入或重复创建另一条审批意见。
 
 ## 何时重启
 

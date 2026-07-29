@@ -351,7 +351,7 @@ PATCH /api/roles/:roleId/plans/:planId
 }
 ```
 
-New plans must provide an ordered `steps` array. A current step waiting for approval, plan confirmation, or authorization remains in progress but must set `isBlocked=true`, a concrete `blockedBy`, and `waitingFor`; the secretary continues follow-up while the business task is not re-dispatched for implementation. Approval, rejection, or cancellation clears or updates the block in the same closure. QA, missing materials, and external artifacts are not blocked automatically. An approval contract must include the approver, decision, recommendation and alternatives, reason, files, commands, changes, validation, rollback, out-of-scope items, request time, source message or feedback ID, and receipt status; missing fields produce `incomplete/enabled=false` and approval is disabled.
+New plans must provide an ordered `steps` array. A current step waiting for approval, plan confirmation, or authorization remains in progress and carries a structured `approvalRequest` plus `waitingFor`. Only a complete actionable contract with `responseStatus=pending` makes Manager derive the `isBlocked=true` compatibility projection and `Blocked`; Agents must not write `isBlocked` directly. QA waits, missing inputs, execution failures, and external artifacts continue through inquiry, retry, rerouting, decomposition, or evidence gathering. Missing contract fields produce `incomplete/enabled=false`; the plan remains in progress and formal approval stays disabled.
 
 `attachments` is optional. A new item may provide a Manager-readable local `path`, or `name`, optional `mimeType`, and `contentBase64`. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Manager copies content into the persona-private `plans/attachments/<planId>/` directory; the plan file retains safe metadata only and never Base64. Omitting `attachments` from PATCH preserves the list, while an empty array clears it. To keep selected existing items in a PATCH, send back the corresponding attachment objects returned by GET. The public plan DTO does not expose the local `path`.
 
@@ -363,7 +363,7 @@ GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId
 
 Image and video attachments use an `inline` response. WebGUI renders PNG, JPEG, WebP, GIF, MP4/M4V, WebM, Ogg Video, and MOV/QuickTime in compact, fixed-width 16:9 thumbnails that shrink only for a narrower container, then opens images in a large-image preview or videos in an in-page player with controls. Video reads support HTTP byte ranges, while actual codec support depends on the browser. Ordinary files use a download response. The endpoint serves only metadata-registered files whose real paths still remain inside that plan's managed directory.
 
-Before requesting approval, the Agent must PATCH the current step with a complete `approvalRequest`. Manager completeness checks do not reject the plan write, but missing fields return `presentation.approval.state=incomplete`, `enabled=false`, and `missing[]`. Here `enabled=false` disables a formal approval decision, not remediation feedback: RibiWebGUI still lets the user submit missing details or change requests, with attachments, through the same plan-feedback API so the Agent can complete the contract. That feedback is not approval. Formal approval becomes available only after the approver, decision, recommendation and alternatives, reason, real paths, complete commands, external targets, validation, rollback, exclusions, request provenance, and receipt state are complete.
+Before requesting approval, the Agent must PATCH the current step with a complete `approvalRequest`. Manager completeness checks do not reject the plan write, but missing fields return `presentation.approval.state=incomplete`, `enabled=false`, and `missing[]`. The plan card lists those missing fields and disables approval input, attachments, and submission. Formal approval becomes available only after the Agent completes the approver, decision, recommendation and alternatives, reason, real paths, complete commands, external targets, validation, rollback, exclusions, request provenance, and receipt state on the same plan.
 
 `taskBinding` may be written through POST or PATCH to bind one exact Codex execution session. The current contract accepts only `agentType=codex` and a non-empty complete `sessionId`; `completionHook.enabled` must be boolean. When enabled, the Codex `Stop` Hook sends the official `last_assistant_message` to Manager, which then reminds the target handler session through the same persona's role-panel, Forwarding, and AgentPacket path. `gatewayId` is required when the persona has multiple Routes. Delivery is deduplicated by `sessionId + turnId` and never automatically patches the plan, advances steps, or writes memory.
 
@@ -371,14 +371,28 @@ The reminder comes from the plan's independent business task. In the same turn, 
 
 A reminder failure does not block the source Codex final answer, but Manager records the failure and the Hook may return a non-blocking system warning. Workspace, persona, gateway, and source-equals-target task conflicts fail closed. This interface remains experimental until verified between two real Desktop tasks.
 
-### Plan approval feedback API
+### Plan guidance and approval feedback API
 
 ```http
 GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-WebGUI and the tray use this endpoint to record user feedback for the current approval step and ask Manager to notify the Agent through the independent `plan_feedback` system event. After receiving user approval through QQ or another channel, the Agent should call the same endpoint to create the plan-associated record:
+RibiWebGUI uses this endpoint for whole-plan guidance on running plans outside approval, while WebGUI and the tray continue to use it for formal feedback on the current approval step. Both notify the Agent through the independent `plan_feedback` system event. Plan guidance carries only `planId` and must omit `stepId`:
+
+```json
+{
+  "feedbackId": "webgui-guidance-12345",
+  "gatewayId": "route-id",
+  "text": "Narrow the overall scope first, then adjust later not-started steps from the result.",
+  "kind": "guidance",
+  "author": "user",
+  "source": "webgui",
+  "notifyAgent": true
+}
+```
+
+Approval feedback remains associated with its approval step:
 
 ```json
 {
@@ -401,11 +415,11 @@ WebGUI and the tray use this endpoint to record user feedback for the current ap
 
 `planAttachmentIds` is also optional and references managed files already present in the current plan's top-level `attachments`. It accepts up to 8 unique IDs. Typing `@` in RibiWebGUI's approval field opens a list of the current plan attachments; choosing one inserts a readable `@attachment` token and submits its stable ID. Manager verifies that every ID belongs to the current plan, stores the referenced metadata and local path as an audit snapshot for this feedback, and delivers the files through the same `plan_feedback` event. WebGUI never reads or submits an arbitrary local path. A retry with the same `feedbackId` must keep the same plan-attachment references.
 
-With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`; Manager emits the independent `plan_feedback` event and Agent delivery continues in the background. The terminal state is announced through `/api/events` as `plan_feedback_changed`, after which clients GET that plan's feedback summary. A user request must not synchronously wait for Desktop task loading, Desktop IPC, or handler execution.
+With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`. Guidance and approval feedback reuse the same exact `taskBinding` delivery path. A complete binding uses `/api/agent/threads` and Desktop IPC to the original business task; only an incomplete binding sends the full feedback to the persona Agent. An unloaded owner remains `pending` under bounded retries, and only an accepted `start/steer` becomes `delivered`. The event does not enter the role-panel timeline or unified conversation ledger, and terminal state is announced as `plan_feedback_changed`.
 
-Agent-authored handling notes use `kind=approval_response`, `author=agent`, `source=agent`, and `notifyAgent=false`. Agent records are stored as `record_only` and cannot trigger another delivery to themselves. Manager delivers user feedback as an independent `plan_feedback` system event through the existing Forwarding, AgentPacket, and Agent adapter path. The event does not depend on editable message rules, enter the role-panel timeline or unified conversation ledger, or inject recent messages. Its reply context carries `targetType=plan_feedback`, `planId`, `planStepId`, and a stable response ID. The Agent first `PATCH`es `/plans/:planId`, then sends the user-facing body through the normal reply API so it is written back to the plan. Feedback itself does not advance the plan, and the Codex final text keeps only a short processing status.
+Agent handling notes for plan guidance use `kind=guidance_response`, `author=agent`, `source=agent`, and `notifyAgent=false`, associated only with `planId`. The Agent first reads the whole plan, updates its direction and any affected not-started steps, then writes the handling note without `stepId`. Approval handling continues to use `approval_response` under `planId / stepId`. Both are stored as `record_only`; feedback itself does not advance the plan.
 
-The shared plan API hints in every AgentPacket include this approval-record endpoint and the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface; they should only add persona-specific approval language or decision policy.
+The shared plan API hints in every AgentPacket include both guidance and approval feedback contracts plus the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface.
 
 Completed plans are archived by a role-knowledge snapshot after their latest `updatedAt` is more than the current fixed 72-hour window old. This window is not yet a public `personaConfig.json` field.
 

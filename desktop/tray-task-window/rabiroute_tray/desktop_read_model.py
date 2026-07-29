@@ -105,6 +105,7 @@ def _plan_item_from_manager(item: dict[str, Any]) -> PlanItem:
         status=str(item.get("status") or "未开始"),
         display_status=str(presentation.get("status") or ""),
         display_tone=str(presentation.get("tone") or ""),
+        display_sort_bucket=int(presentation.get("sortBucket") if presentation.get("sortBucket") is not None else -1),
         display_views=_plan_views(presentation.get("views")),
         display_accent=_palette_color(palette.get("accent")),
         display_background=_palette_color(palette.get("background")),

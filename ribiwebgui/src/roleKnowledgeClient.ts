@@ -2,6 +2,34 @@ import type { RoleMemoryPayload, RolePlan, RolePlanFeedback } from "./types";
 import type { PlanFeedbackAttachmentUpload } from "@shared/planFeedbackContract";
 import { FALLBACK_PLAN_PRESENTATION_PALETTE, normalizePlanPresentationPalette } from "./planPresentationStyles";
 
+export type RolePlanPageCounts = {
+  total: number;
+  current: number;
+  plans: number;
+  archived: number;
+  blocked: number;
+  qa: number;
+  active: number;
+};
+
+export type RolePlanPage = {
+  items: RolePlan[];
+  total: number;
+  nextCursor: string;
+  counts: RolePlanPageCounts;
+};
+
+export const ROLE_PLAN_PAGE_SIZE = 8;
+export const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 32;
+
+type RolePlanSummary = Pick<
+  RolePlan,
+  "id" | "title" | "status" | "priority" | "kind" | "project" | "createdAt" | "updatedAt" | "keywords" | "presentation"
+> & {
+  attachmentCount: number;
+  stepCount: number;
+};
+
 type ManagerEnvelope<T> = {
   code: number;
   message?: string;
@@ -28,6 +56,7 @@ function withPresentation(plan: RolePlan): RolePlan {
       ...plan,
       presentation: {
         ...plan.presentation,
+        sortBucket: Number.isFinite(plan.presentation.sortBucket) ? plan.presentation.sortBucket : -1,
         views: Array.isArray(plan.presentation.views) && plan.presentation.views.length
           ? plan.presentation.views
           : fallbackViews,
@@ -57,6 +86,7 @@ function withPresentation(plan: RolePlan): RolePlan {
     presentation: {
       status: plan.status,
       tone,
+      sortBucket: -1,
       views: plan.status === "已归档" ? ["archived"] : plan.status === "进行中" ? ["current", "plans"] : ["plans"],
       palette: { ...FALLBACK_PLAN_PRESENTATION_PALETTE },
       approval: {
@@ -92,6 +122,42 @@ export async function loadPlanFeedback(roleId: string, planId: string): Promise<
   };
 }
 
+function summaryAsPlan(summary: RolePlanSummary): RolePlan {
+  return withPresentation({
+    ...summary,
+    focus: "",
+    attachments: [],
+    steps: [],
+    approval: { count: 0 }
+  });
+}
+
+export async function loadRolePlanPage(
+  roleId: string,
+  cursor = "",
+  limit = ROLE_PLAN_PAGE_SIZE
+): Promise<RolePlanPage> {
+  const params = new URLSearchParams({ limit: String(limit), detail: "summary" });
+  if (cursor) params.set("cursor", cursor);
+  const page = await managerData<Omit<RolePlanPage, "items"> & { items: RolePlanSummary[] }>(
+    `/api/roles/${encodeURIComponent(roleId)}/plans?${params.toString()}`
+  );
+  return {
+    ...page,
+    items: page.items.map(summaryAsPlan)
+  };
+}
+
+export async function loadRolePlan(roleId: string, planId: string): Promise<RolePlan> {
+  return withPresentation(await managerData<RolePlan>(
+    `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`
+  ));
+}
+
+export async function loadRoleMemory(roleId: string): Promise<RoleMemoryPayload> {
+  return managerData<RoleMemoryPayload>(`/api/roles/${encodeURIComponent(roleId)}/memory`);
+}
+
 export async function submitPlanFeedback(input: {
   roleId: string;
   planId: string;
@@ -102,6 +168,7 @@ export async function submitPlanFeedback(input: {
   attachments: PlanFeedbackAttachmentUpload[];
   planAttachmentIds: string[];
   source: "webgui" | "tray";
+  kind: "guidance" | "approval_suggestion";
 }): Promise<RolePlanFeedback> {
   const response = await fetch(
     `/api/roles/${encodeURIComponent(input.roleId)}/plans/${encodeURIComponent(input.planId)}/feedback`,
@@ -116,7 +183,7 @@ export async function submitPlanFeedback(input: {
         attachments: input.attachments,
         planAttachmentIds: input.planAttachmentIds,
         source: input.source,
-        kind: "approval_suggestion",
+        kind: input.kind,
         author: "user",
         notifyAgent: true
       })

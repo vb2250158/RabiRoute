@@ -96,6 +96,8 @@ import { proxySpeechEventStream } from "./speechEventProxy.js";
 import { CodexHookContextService, type CodexHookContextRequest, type PlanTaskCompletionDelivery } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
 import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.js";
+import { deliverPlanApprovalFeedback } from "./planApprovalFeedbackDelivery.js";
+import { consumePlanQaFeedback, type PlanQaTaskRequest } from "./planQaFeedback.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
@@ -161,10 +163,12 @@ import {
   createPlan,
   createRecentMemory,
   getConsolidatedMemory,
+  getPlan,
   getRecentMemory,
   getRoleSkill,
   listConsolidatedMemories,
   listConsolidationRuns,
+  planAcceptsGuidance,
   listPlans,
   listRecentMemories,
   listRoleSkills,
@@ -178,6 +182,7 @@ import {
   presentPlans,
   sortKnowledgeByUpdatedAt
 } from "../roleKnowledgePresentation.js";
+import { normalizeRolePlanPageLimit, paginateRolePlans, summarizeRolePlan } from "../roleKnowledgePagination.js";
 import {
   appendPlanFeedback,
   createPlanFeedbackRecord,
@@ -3039,7 +3044,7 @@ type PlanFeedbackRequest = {
   gatewayId?: string;
   stepId?: string;
   text?: string;
-  kind?: "approval_suggestion" | "approval_response";
+  kind?: "guidance" | "guidance_response" | "approval_suggestion" | "approval_response";
   author?: "user" | "agent" | "system";
   source?: "webgui" | "tray" | "qq" | "agent" | "api";
   attachments?: PlanFeedbackAttachmentUpload[];
@@ -3242,6 +3247,41 @@ function codexHookEnabled(request: CodexHookContextRequest): boolean {
   return settings.planTaskCompletionEnabled;
 }
 
+function agentThreadAllowedWorkspaces(): string[] {
+  let desktopWorkspaces: string[] = [];
+  try {
+    desktopWorkspaces = listCodexDesktopThreads({ limit: 10_000 })
+      .map((thread) => thread.cwd?.trim())
+      .filter((value): value is string => Boolean(value));
+  } catch {
+    // Keep configured workspaces available when Desktop state is temporarily unreadable.
+  }
+  return [...new Set([
+    rootDir,
+    ...desktopWorkspaces,
+    ...[...runtimes.values()]
+      .map((runtime) => runtime.definition.codexCwd?.trim())
+      .filter((value): value is string => Boolean(value))
+      .map((value) => path.resolve(rootDir, value))
+  ])];
+}
+
+async function sendPlanQaFeedbackToTask(request: PlanQaTaskRequest): Promise<void> {
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    threadId: request.threadId,
+    cwd: request.cwd,
+    prompt: request.prompt,
+    sandbox: "workspace-write"
+  }, {
+    allowedWorkspaces: agentThreadAllowedWorkspaces(),
+    defaultWorkspace: rootDir
+  });
+  if (result.statusCode < 200 || result.statusCode >= 300) {
+    throw new Error(String(result.data.message || "QA task continuation failed with HTTP " + result.statusCode + "."));
+  }
+}
+
 function runtimeForRoleDelivery(roleId: string, gatewayId: string): GatewayRuntime {
   if (gatewayId) {
     const runtime = runtimes.get(gatewayId);
@@ -3261,37 +3301,6 @@ function deliverPlanTaskCompletion(delivery: PlanTaskCompletionDelivery): Promis
   return planTaskCompletionDelivery(delivery);
 }
 
-function planFeedbackAgentText(record: PlanFeedbackRecord): string {
-  const lines = [
-    "[计划审批建议]",
-    `计划：${record.planTitle}`,
-    `计划 ID：${record.planId}`
-  ];
-  if (record.stepId || record.stepTitle) {
-    lines.push(`对应步骤：${record.stepTitle || record.stepId}${record.stepId ? `（${record.stepId}）` : ""}`);
-  }
-  lines.push(
-    `审批意见：${record.text}`
-  );
-  if (record.attachments.length) {
-    lines.push(
-      "审批附件：",
-      ...record.attachments.map((attachment) => `- ${attachment.name}（${attachment.path}）`)
-    );
-  }
-  if (record.planAttachments.length) {
-    lines.push(
-      "本次 @ 的计划附件：",
-      ...record.planAttachments.map((attachment) => `- ${attachment.name}（${attachment.path}）`)
-    );
-  }
-  lines.push(
-    "请先读取 Manager 中的当前计划与审批记录，再按意见更新计划或对应步骤。计划说明必须写具体：实际文件与改动、完整命令及影响、配置/数据/外部变更、验证、回退和明确排除范围；不要只写笼统结论。",
-    "处理完成后，必须通过当前回复上下文把面向用户的说明直接回写为本计划的 approval_response；不要只在 Codex 任务里输出正文。Codex 可见最终文本只需简短说明已更新并回写计划。"
-  );
-  return lines.join("\n");
-}
-
 const activePlanFeedbackDeliveries = new Set<string>();
 
 function schedulePlanFeedbackDelivery(
@@ -3309,39 +3318,52 @@ function schedulePlanFeedbackDelivery(
   if (activePlanFeedbackDeliveries.has(deliveryKey)) return record;
 
   try {
-    const runtime = runtimeForRoleDelivery(roleId, gatewayId || String(record.gatewayId || "").trim());
-    const messageId = `plan-feedback-${record.id}`;
-    const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
-    const text = planFeedbackAgentText(record);
-    const deliveryAttachments: RolePanelAttachment[] = [
-      ...record.attachments,
-      ...record.planAttachments.map((attachment) => ({
-        kind: attachment.kind === "image" ? "image" as const : "file" as const,
-        name: attachment.name,
-        path: attachment.path,
-        size: attachment.size
-      }))
-    ];
-    const replyContext = {
-      runtimeRouteId: runtime.definition.id,
-      gatewayId: runtime.definition.id,
-      routeProfileId,
-      routeKind: "plan_feedback",
-      targetType: "plan_feedback",
-      adapterType: "planFeedback",
-      messageId,
-      roleId,
-      planId: plan.id,
-      planStepId: record.stepId,
-      planFeedbackId: record.id,
-      planFeedbackResponseId: `response-${record.id}`,
-      planFeedbackKind: record.kind,
-      planAttachmentIds: record.planAttachments.map((attachment) => attachment.id)
-    };
     activePlanFeedbackDeliveries.add(deliveryKey);
     publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
-    void triggerGatewayPlanFeedback(runtime, messageId, text, deliveryAttachments, replyContext)
-      .then(() => updatePlanFeedbackDelivery(roleDir, record, "delivered"))
+    void deliverPlanApprovalFeedback({
+      roleId,
+      managerBaseUrl: `http://127.0.0.1:${managerPort}`,
+      plan,
+      feedback: record,
+      sendToTask: sendPlanQaFeedbackToTask,
+      sendToPersona: async (request) => {
+        const runtime = runtimeForRoleDelivery(roleId, gatewayId || String(record.gatewayId || "").trim());
+        const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
+        const isNotice = request.kind !== "full_feedback";
+        const messageId = isNotice
+          ? `plan-feedback-notice-${request.kind}-${record.id}`
+          : `plan-feedback-${record.id}`;
+        const deliveryAttachments: RolePanelAttachment[] = [
+          ...record.attachments,
+          ...record.planAttachments.map((attachment) => ({
+            kind: attachment.kind === "image" ? "image" as const : "file" as const,
+            name: attachment.name,
+            path: attachment.path,
+            size: attachment.size
+          }))
+        ];
+        const replyContext = {
+          runtimeRouteId: runtime.definition.id,
+          gatewayId: runtime.definition.id,
+          routeProfileId,
+          routeKind: "plan_feedback",
+          targetType: isNotice ? "plan_feedback_notice" : "plan_feedback",
+          adapterType: "planFeedback",
+          messageId,
+          roleId,
+          planId: plan.id,
+          planStepId: record.stepId,
+          planFeedbackId: record.id,
+          planFeedbackResponseId: `response-${record.id}`,
+          planFeedbackKind: record.kind,
+          planFeedbackAutoDelivered: request.kind === "auto_delivered_notice",
+          planFeedbackDeliveryNoticeKind: isNotice ? request.kind : undefined,
+          planAttachmentIds: record.planAttachments.map((attachment) => attachment.id)
+        };
+        await triggerGatewayPlanFeedback(runtime, messageId, request.text, deliveryAttachments, replyContext);
+      }
+    })
+      .then((result) => updatePlanFeedbackDelivery(roleDir, record, "delivered", result.message))
       .catch((error) => updatePlanFeedbackDelivery(
         roleDir,
         record,
@@ -4215,8 +4237,20 @@ function handleRoleKnowledgeApi(
       if (request.method === "POST") {
         void readJsonBody<PlanFeedbackRequest>(request, PLAN_FEEDBACK_REQUEST_MAX_BYTES)
           .then(async (body) => {
+            const feedbackKind = body.kind || "approval_suggestion";
+            const planLevelFeedback = feedbackKind === "guidance" || feedbackKind === "guidance_response";
+            if (feedbackKind === "guidance") {
+              if (!planAcceptsGuidance(plan)) {
+                throw new Error("Plan guidance is available only for running plans outside approval.");
+              }
+            }
             const requestedStepId = String(body.stepId || "").trim();
-            const step = requestedStepId
+            if (planLevelFeedback && requestedStepId) {
+              throw new Error("Plan guidance belongs to the plan and must not include a stepId.");
+            }
+            const step = planLevelFeedback
+              ? undefined
+              : requestedStepId
               ? plan.steps.find((item) => item.id === requestedStepId)
               : plan.steps.find((item) => item.id === plan.currentStepId)
                 || plan.steps.find((item) => item.status === "进行中");
@@ -4258,6 +4292,16 @@ function handleRoleKnowledgeApi(
               throw new Error(`Feedback id already exists with different plan attachment mentions: ${candidate.id}`);
             }
             const record = existing || appendPlanFeedback(roleDir, candidate);
+            const qaResult = await consumePlanQaFeedback({
+              roleDir,
+              feedback: record,
+              sendToTask: sendPlanQaFeedbackToTask
+            });
+            if (qaResult.outcome !== "ignored") {
+              const consumed = listPlanFeedback(roleDir, planId).find((item) => item.id === record.id) || record;
+              publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
+              return consumed;
+            }
             if (record.deliveryStatus === "record_only" || record.deliveryStatus === "delivered") {
               if (!existing) publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
               return record;
@@ -4313,11 +4357,35 @@ function handleRoleKnowledgeApi(
   try {
     const roleDir = resolveRoleDir(roleId);
     if (request.method === "GET" && resource === "plans") {
-      const plans = presentPlans(listPlans(roleDir)).map((plan) => ({
-        ...plan,
-        approval: planFeedbackSummary(roleDir, plan.id)
-      }));
-      const data = itemId ? plans.find((item) => item.id === itemId) : plans;
+      const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
+      const wantsPage = !itemId && requestUrl.searchParams.has("limit");
+      const wantsSummary = wantsPage && requestUrl.searchParams.get("detail") === "summary";
+      const data = itemId
+        ? (() => {
+          const plan = getPlan(roleDir, itemId);
+          return plan ? presentedPlanWithFeedback(roleDir, plan) : undefined;
+        })()
+        : wantsPage
+          ? (() => {
+            const page = paginateRolePlans(
+              presentPlans(listPlans(roleDir)),
+              requestUrl.searchParams.get("cursor")?.trim() || "",
+              normalizeRolePlanPageLimit(requestUrl.searchParams.get("limit"))
+            );
+            return {
+              ...page,
+              items: page.items.map((plan) => wantsSummary
+                ? summarizeRolePlan(plan)
+                : {
+                  ...plan,
+                  approval: planFeedbackSummary(roleDir, plan.id)
+                })
+            };
+          })()
+          : presentPlans(listPlans(roleDir)).map((plan) => ({
+            ...plan,
+            approval: planFeedbackSummary(roleDir, plan.id)
+          }));
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
         return true;
@@ -5037,22 +5105,6 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (requestUrl.pathname === "/api/agent/threads" && (request.method === "GET" || request.method === "POST")) {
-        let desktopWorkspaces: string[] = [];
-        try {
-          desktopWorkspaces = listCodexDesktopThreads({ limit: 10_000 })
-            .map((thread) => thread.cwd?.trim())
-            .filter((value): value is string => Boolean(value));
-        } catch {
-          // Keep the configured workspace allowlist when Desktop state is not readable.
-        }
-        const allowedWorkspaces = [...new Set([
-          rootDir,
-          ...desktopWorkspaces,
-          ...[...runtimes.values()]
-            .map((runtime) => runtime.definition.codexCwd?.trim())
-            .filter((value): value is string => Boolean(value))
-            .map((value) => path.resolve(rootDir, value))
-        ])];
         const requestBody = request.method === "GET"
           ? Promise.resolve<AgentThreadRequest>({
               action: "list",
@@ -5063,7 +5115,7 @@ export async function startManager(): Promise<void> {
           : readJsonBody<AgentThreadRequest>(request);
         void requestBody
           .then((body) => handleAgentThreadRequest(body, {
-            allowedWorkspaces,
+            allowedWorkspaces: agentThreadAllowedWorkspaces(),
             defaultWorkspace: rootDir
           }))
           .then((result) => {

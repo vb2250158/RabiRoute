@@ -14,6 +14,7 @@ import {
   type PlanAttachmentMentionCandidate
 } from "@shared/planAttachmentMentions";
 import { useI18n } from "../i18n";
+import { knowledgeItemMatchesQuery, normalizeKnowledgeQuery } from "../knowledgeSearch";
 import { managerEventSource, managerResourceUrl } from "../managerApi";
 import {
   isPlanMarkdownAttachment,
@@ -24,7 +25,23 @@ import {
   renderPlanMarkdownPreview
 } from "../markdownPreview";
 import { activePlanIdAtAnchor, directoryScrollTopForItem } from "../planDirectoryScrollSync";
-import { loadPlanFeedback, loadRoleKnowledge, submitPlanFeedback } from "../roleKnowledgeClient";
+import {
+  hasMoreKnowledgeAfterWindow,
+  knowledgeRenderWindow,
+  mergeKnowledgePage,
+  nextKnowledgeRenderLimit,
+  shouldAutoLoadNextKnowledgeBatch
+} from "../knowledgePagination";
+import {
+  loadPlanFeedback,
+  loadRoleMemory,
+  loadRolePlan,
+  loadRolePlanPage,
+  ROLE_PLAN_BACKGROUND_PAGE_SIZE,
+  submitPlanFeedback,
+  type RolePlanPageCounts
+} from "../roleKnowledgeClient";
+import { planFeedbackSubmissionErrorMessage } from "../approvalFeedbackUi";
 import { formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
 import type { PlanKnowledgeView } from "../planPresentationStyles";
 import { useGatewayStore } from "../stores/gatewayStore";
@@ -37,9 +54,11 @@ const plans = ref<RolePlan[]>([]);
 const recentMemory = ref<RoleMemory[]>([]);
 const consolidatedMemory = ref<RoleMemory[]>([]);
 const loading = ref(false);
+const loadingMorePlans = ref(false);
+const memoryLoading = ref(false);
 const error = ref("");
 const activeView = ref<PlanKnowledgeView>("current");
-const query = ref("");
+const query = ref<string | null>("");
 const expandedPlans = reactive<Record<string, boolean>>({});
 const planVideoDurations = reactive<Record<string, number>>({});
 const activeDirectoryPlanId = ref("");
@@ -75,12 +94,34 @@ const planAttachmentPreview = ref<{ name: string; url: string; kind: "image" | "
 const planMarkdownPreview = ref<{ name: string; url: string; html: string; error: string; loading: boolean } | null>(null);
 type PlanMarkdownTeaserState = { text: string; loading: boolean };
 const planMarkdownTeasers = reactive<Record<string, PlanMarkdownTeaserState>>({});
+type PlanMediaLoadState = "loading" | "loaded" | "error";
+const planMediaLoadStates = reactive<Record<string, PlanMediaLoadState>>({});
+const planDetailsLoaded = reactive<Record<string, boolean>>({});
+const planDetailsLoading = reactive<Record<string, boolean>>({});
+const planPageCounts = ref<RolePlanPageCounts>({
+  total: 0,
+  current: 0,
+  plans: 0,
+  archived: 0,
+  blocked: 0,
+  qa: 0,
+  active: 0
+});
+const planNextCursor = ref("");
+const planRenderStart = ref(0);
+const planRenderLimit = ref(8);
+const memoryRenderLimit = ref(24);
 const knowledgeToolbar = ref<HTMLElement | null>(null);
 const planDirectoryList = ref<HTMLElement | null>(null);
+const planLoadMoreSentinel = ref<HTMLElement | null>(null);
+const memoryLoadMoreSentinel = ref<HTMLElement | null>(null);
 let requestVersion = 0;
 let managerEvents: EventSource | null = null;
 let planCardObserver: IntersectionObserver | null = null;
 let toolbarResizeObserver: ResizeObserver | null = null;
+let planPageObserver: IntersectionObserver | null = null;
+let memoryPageObserver: IntersectionObserver | null = null;
+let planDetailObserver: IntersectionObserver | null = null;
 let planDirectorySyncFrame = 0;
 let planObserverRefreshFrame = 0;
 let planDirectoryMounted = false;
@@ -89,6 +130,11 @@ let directoryJumpTargetId = "";
 let directoryJumpSettleTimer = 0;
 let planMarkdownPreviewAbort: AbortController | null = null;
 let planMarkdownTeaserAbort: AbortController | null = null;
+let planDetailQueue: Array<{ planId: string; request: number }> = [];
+const queuedPlanDetailIds = new Set<string>();
+let activePlanDetailRequests = 0;
+const MAX_CONCURRENT_PLAN_DETAILS = 2;
+let planPageBackgroundRequest = 0;
 
 const roleId = computed(() => String(store.selectedGateway?.agentRoleId || "").trim());
 const gatewayId = computed(() => String(store.selectedGateway?.id || "").trim());
@@ -100,17 +146,11 @@ const dateFormatter = computed(() => new Intl.DateTimeFormat(isEnglish.value ? "
   minute: "2-digit"
 }));
 
-const planCounts = computed(() => ({
-  blocked: plans.value.filter((plan) => plan.presentation.tone === "blocked").length,
-  qa: plans.value.filter((plan) => plan.presentation.tone === "qa").length,
-  active: plans.value.filter((plan) => !["paused", "done", "archived"].includes(plan.presentation.tone)).length
-}));
+const planCounts = computed(() => planPageCounts.value);
+const normalizedQuery = computed(() => normalizeKnowledgeQuery(query.value));
 
 function matchesQuery(item: RolePlan | RoleMemory): boolean {
-  const normalized = query.value.trim().toLowerCase();
-  if (!normalized) return true;
-  return [item.id, item.title, item.focus, ...item.keywords]
-    .some((value) => String(value || "").toLowerCase().includes(normalized));
+  return knowledgeItemMatchesQuery(item, normalizedQuery.value);
 }
 
 const activePlans = computed(() => plansForKnowledgeView(plans.value, "plans"));
@@ -126,11 +166,32 @@ const visiblePlansForView = computed(() => {
         : [];
   return source.filter(matchesQuery);
 });
+const renderedPlansForView = computed(() => knowledgeRenderWindow(
+  visiblePlansForView.value,
+  planRenderStart.value,
+  planRenderLimit.value
+));
 const visibleRecentMemory = computed(() => recentMemory.value.filter(matchesQuery));
 const visibleConsolidatedMemory = computed(() => consolidatedMemory.value.filter(matchesQuery));
 const visibleMemoryForView = computed(() => activeView.value === "archived"
   ? visibleConsolidatedMemory.value
   : visibleRecentMemory.value);
+const renderedMemoryForView = computed(() => visibleMemoryForView.value.slice(0, memoryRenderLimit.value));
+const hasMorePlans = computed(() => Boolean(planNextCursor.value));
+const hasMoreRenderedPlans = computed(() => hasMoreKnowledgeAfterWindow(
+  visiblePlansForView.value.length,
+  planRenderStart.value,
+  planRenderLimit.value
+));
+const hasPendingPlanDetails = computed(() => Object.values(planDetailsLoading).some(Boolean));
+const hasMoreMemory = computed(() => renderedMemoryForView.value.length < visibleMemoryForView.value.length);
+const totalPlansForView = computed(() => activeView.value === "current"
+  ? planPageCounts.value.current
+  : activeView.value === "plans"
+    ? planPageCounts.value.plans
+    : activeView.value === "archived"
+      ? planPageCounts.value.archived
+      : 0);
 const showsPlanList = computed(() => ["current", "plans", "archived"].includes(activeView.value));
 const showsMemoryList = computed(() => ["current", "recent_memory", "archived"].includes(activeView.value));
 
@@ -144,7 +205,7 @@ function planReadingAnchorTop(): number {
 function syncActiveDirectoryPlan(): void {
   planDirectorySyncFrame = 0;
   if (directoryJumpTargetId) return;
-  const rects = visiblePlansForView.value.flatMap((plan) => {
+  const rects = renderedPlansForView.value.flatMap((plan) => {
     const element = document.getElementById(planCardDomId(plan.id));
     if (!element) return [];
     const rect = element.getBoundingClientRect();
@@ -159,7 +220,7 @@ function scheduleActiveDirectoryPlanSync(): void {
   planDirectorySyncFrame = window.requestAnimationFrame(syncActiveDirectoryPlan);
 }
 
-function releaseDirectoryJumpTarget(syncCurrentPlan = true): void {
+function releaseDirectoryJumpTarget(syncCurrentPlan = true, refreshSentinel = true): void {
   if (typeof window !== "undefined") {
     window.removeEventListener("scroll", waitForDirectoryJumpSettle);
     if (directoryJumpSettleTimer) window.clearTimeout(directoryJumpSettleTimer);
@@ -167,6 +228,7 @@ function releaseDirectoryJumpTarget(syncCurrentPlan = true): void {
   directoryJumpSettleTimer = 0;
   directoryJumpTargetId = "";
   if (syncCurrentPlan) scheduleActiveDirectoryPlanSync();
+  if (refreshSentinel) scheduleProgressiveSentinelRefresh();
 }
 
 function waitForDirectoryJumpSettle(): void {
@@ -176,7 +238,7 @@ function waitForDirectoryJumpSettle(): void {
 }
 
 function holdDirectoryJumpTarget(planId: string, smooth: boolean): void {
-  releaseDirectoryJumpTarget(false);
+  releaseDirectoryJumpTarget(false, false);
   directoryJumpTargetId = planId;
   if (smooth) window.addEventListener("scroll", waitForDirectoryJumpSettle, { passive: true });
   directoryJumpSettleTimer = window.setTimeout(releaseDirectoryJumpTarget, smooth ? 240 : 0);
@@ -250,40 +312,292 @@ watch(
       activeDirectoryPlanId.value = visiblePlansForView.value[0]?.id || "";
     }
     void nextTick(schedulePlanCardObserverRefresh);
+    schedulePlanDetailObserverRefresh();
   },
   { immediate: true }
 );
 
+watch([activeView, query], () => {
+  planRenderStart.value = 0;
+  planRenderLimit.value = 8;
+  schedulePlanDetailObserverRefresh();
+  scheduleProgressiveSentinelRefresh();
+});
+
 watch(activeDirectoryPlanId, () => void nextTick(keepActiveDirectoryLinkVisible), { flush: "post" });
+
+function resetPlanPageCounts(): void {
+  planPageCounts.value = { total: 0, current: 0, plans: 0, archived: 0, blocked: 0, qa: 0, active: 0 };
+}
+
+function resetPlanDetailHydration(): void {
+  planDetailObserver?.disconnect();
+  planDetailObserver = null;
+  planDetailQueue = [];
+  queuedPlanDetailIds.clear();
+  for (const key of Object.keys(planDetailsLoaded)) delete planDetailsLoaded[key];
+  for (const key of Object.keys(planDetailsLoading)) delete planDetailsLoading[key];
+}
+
+function drainPlanDetailQueue(): void {
+  while (activePlanDetailRequests < MAX_CONCURRENT_PLAN_DETAILS && planDetailQueue.length) {
+    const task = planDetailQueue.shift()!;
+    queuedPlanDetailIds.delete(task.planId);
+    if (task.request !== requestVersion || planDetailsLoaded[task.planId] || planDetailsLoading[task.planId]) continue;
+    activePlanDetailRequests += 1;
+    planDetailsLoading[task.planId] = true;
+    void loadRolePlan(roleId.value, task.planId)
+      .then((plan) => {
+        if (task.request !== requestVersion || !plans.value.some((item) => item.id === task.planId)) return;
+        plans.value = mergeKnowledgePage(plans.value, [plan]);
+        planDetailsLoaded[task.planId] = true;
+        applyFeedbackDeliveryState(plan.id, plan.approval.latest);
+        void refreshPlanMarkdownTeasers([plan], task.request);
+      })
+      .catch((loadError) => {
+        if (task.request === requestVersion) {
+          error.value = loadError instanceof Error ? loadError.message : String(loadError);
+        }
+      })
+      .finally(() => {
+        if (task.request === requestVersion) planDetailsLoading[task.planId] = false;
+        activePlanDetailRequests = Math.max(0, activePlanDetailRequests - 1);
+        drainPlanDetailQueue();
+      });
+  }
+}
+
+function queuePlanDetails(nextPlans: RolePlan[], request: number, priority = false): void {
+  const priorityTasks: Array<{ planId: string; request: number }> = [];
+  for (const plan of nextPlans) {
+    if (planDetailsLoaded[plan.id] || planDetailsLoading[plan.id]) continue;
+    const existingIndex = planDetailQueue.findIndex((task) => task.planId === plan.id);
+    if (existingIndex >= 0) {
+      if (priority) priorityTasks.push(...planDetailQueue.splice(existingIndex, 1));
+      continue;
+    }
+    if (queuedPlanDetailIds.has(plan.id)) continue;
+    queuedPlanDetailIds.add(plan.id);
+    const task = { planId: plan.id, request };
+    if (priority) priorityTasks.push(task);
+    else planDetailQueue.push(task);
+  }
+  if (priorityTasks.length) planDetailQueue = [...priorityTasks, ...planDetailQueue];
+  window.setTimeout(drainPlanDetailQueue, 0);
+}
+
+function rebuildPlanDetailObserver(): void {
+  planDetailObserver?.disconnect();
+  planDetailObserver = null;
+  const pendingPlans = renderedPlansForView.value.filter((plan) => !planDetailsLoaded[plan.id]);
+  if (!pendingPlans.length) return;
+  if (typeof IntersectionObserver === "undefined") {
+    queuePlanDetails(pendingPlans.slice(0, 2), requestVersion);
+    return;
+  }
+  planDetailObserver = new IntersectionObserver((entries) => {
+    const visibleIds = new Set(entries.filter((entry) => entry.isIntersecting)
+      .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)
+      .slice(0, 2)
+      .map((entry) => (entry.target as HTMLElement).dataset.planId || "")
+      .filter(Boolean));
+    queuePlanDetails(pendingPlans.filter((plan) => visibleIds.has(plan.id)), requestVersion, true);
+  }, { rootMargin: "160px 0px" });
+  for (const plan of pendingPlans) {
+    const element = document.getElementById(planCardDomId(plan.id));
+    if (element) planDetailObserver.observe(element);
+  }
+}
+
+function schedulePlanDetailObserverRefresh(): void {
+  void nextTick(rebuildPlanDetailObserver);
+}
+
+function applyPlanSnapshots(nextPlans: RolePlan[], replace: boolean, request: number): void {
+  const unresolvedPlans = replace ? nextPlans : nextPlans.filter((plan) => !planDetailsLoaded[plan.id]);
+  plans.value = replace ? unresolvedPlans : mergeKnowledgePage(plans.value, unresolvedPlans);
+  if (replace) resetPlanMarkdownTeasers();
+  for (const plan of unresolvedPlans) planDetailsLoaded[plan.id] = false;
+  if (normalizedQuery.value) queuePlanDetails(unresolvedPlans, request);
+  else schedulePlanDetailObserverRefresh();
+}
+
+function observeProgressiveSentinels(): void {
+  planPageObserver?.disconnect();
+  memoryPageObserver?.disconnect();
+  if (typeof IntersectionObserver === "undefined") return;
+  if (planLoadMoreSentinel.value && (hasMorePlans.value || hasMoreRenderedPlans.value)) {
+    planPageObserver = new IntersectionObserver((entries) => {
+      if (!shouldAutoLoadNextKnowledgeBatch(
+        entries.some((entry) => entry.isIntersecting),
+        Boolean(directoryJumpTargetId)
+      )) return;
+      if (hasMoreRenderedPlans.value) loadMoreRenderedPlans();
+      if (hasMorePlans.value && planPageBackgroundRequest !== requestVersion) void loadMorePlans();
+    }, { rootMargin: "700px 0px" });
+    planPageObserver.observe(planLoadMoreSentinel.value);
+  }
+  if (memoryLoadMoreSentinel.value && hasMoreMemory.value) {
+    memoryPageObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMoreMemory();
+    }, { rootMargin: "700px 0px" });
+    memoryPageObserver.observe(memoryLoadMoreSentinel.value);
+  }
+}
+
+function scheduleProgressiveSentinelRefresh(): void {
+  void nextTick(observeProgressiveSentinels);
+}
+
+function loadMoreMemory(): void {
+  memoryRenderLimit.value = nextKnowledgeRenderLimit(
+    memoryRenderLimit.value,
+    visibleMemoryForView.value.length,
+    24
+  );
+  scheduleProgressiveSentinelRefresh();
+}
+
+function loadMoreRenderedPlans(): void {
+  const remainingPlans = Math.max(0, visiblePlansForView.value.length - planRenderStart.value);
+  planRenderLimit.value = nextKnowledgeRenderLimit(
+    planRenderLimit.value,
+    remainingPlans,
+    8
+  );
+  schedulePlanCardObserverRefresh();
+  schedulePlanDetailObserverRefresh();
+  scheduleProgressiveSentinelRefresh();
+}
+
+async function loadMorePlans(limit = 8): Promise<void> {
+  const selectedRoleId = roleId.value;
+  const cursor = planNextCursor.value;
+  const currentRequest = requestVersion;
+  if (!selectedRoleId || !cursor || loadingMorePlans.value) return;
+  loadingMorePlans.value = true;
+  try {
+    const page = await loadRolePlanPage(selectedRoleId, cursor, limit);
+    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+    applyPlanSnapshots(page.items, false, currentRequest);
+    planPageCounts.value = page.counts;
+    planNextCursor.value = page.nextCursor;
+  } catch (loadError) {
+    if (currentRequest === requestVersion) {
+      error.value = loadError instanceof Error ? loadError.message : String(loadError);
+    }
+  } finally {
+    if (currentRequest === requestVersion) loadingMorePlans.value = false;
+    scheduleProgressiveSentinelRefresh();
+  }
+}
+
+async function loadAllRemainingPlans(): Promise<void> {
+  const backgroundRequest = requestVersion;
+  if (planPageBackgroundRequest === backgroundRequest) return;
+  planPageBackgroundRequest = backgroundRequest;
+  try {
+    while (planNextCursor.value && requestVersion === backgroundRequest) {
+      await yieldToKnowledgePaint();
+      if (loadingMorePlans.value) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 32));
+        continue;
+      }
+      const cursor = planNextCursor.value;
+      await loadMorePlans(ROLE_PLAN_BACKGROUND_PAGE_SIZE);
+      if (planNextCursor.value === cursor) break;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 24));
+    }
+  } finally {
+    if (planPageBackgroundRequest === backgroundRequest) planPageBackgroundRequest = 0;
+  }
+}
+
+async function yieldToKnowledgePaint(): Promise<void> {
+  await nextTick();
+  await new Promise<void>((resolve) => {
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    window.setTimeout(resolve, 0);
+  });
+}
 
 async function refreshKnowledge(): Promise<void> {
   const selectedRoleId = roleId.value;
   if (!selectedRoleId) {
     resetPlanMarkdownTeasers();
+    resetPlanMediaLoadStates();
+    resetPlanDetailHydration();
     plans.value = [];
     recentMemory.value = [];
     consolidatedMemory.value = [];
+    planNextCursor.value = "";
+    planRenderStart.value = 0;
+    resetPlanPageCounts();
     error.value = "";
     return;
   }
   const currentRequest = ++requestVersion;
   loading.value = true;
+  memoryLoading.value = false;
+  loadingMorePlans.value = false;
   error.value = "";
+  planNextCursor.value = "";
+  planRenderStart.value = 0;
+  planRenderLimit.value = 8;
+  memoryRenderLimit.value = 24;
+  resetPlanMediaLoadStates();
+  resetPlanDetailHydration();
   try {
-    const result = await loadRoleKnowledge(selectedRoleId);
+    const result = await loadRolePlanPage(selectedRoleId);
     if (currentRequest !== requestVersion) return;
-    plans.value = result.plans;
-    void refreshPlanMarkdownTeasers(result.plans, currentRequest);
-    for (const plan of plans.value) applyFeedbackDeliveryState(plan.id, plan.approval.latest);
-    recentMemory.value = result.memory.recent;
-    consolidatedMemory.value = result.memory.consolidated;
+    applyPlanSnapshots(result.items, true, currentRequest);
+    planPageCounts.value = result.counts;
+    planNextCursor.value = result.nextCursor;
+    if (planNextCursor.value) void loadAllRemainingPlans();
   } catch (loadError) {
     if (currentRequest !== requestVersion) return;
     error.value = loadError instanceof Error ? loadError.message : String(loadError);
   } finally {
     if (currentRequest === requestVersion) loading.value = false;
+    scheduleProgressiveSentinelRefresh();
+  }
+  if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+  memoryLoading.value = true;
+  try {
+    const memory = await loadRoleMemory(selectedRoleId);
+    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+    recentMemory.value = memory.recent;
+    consolidatedMemory.value = memory.consolidated;
+  } catch (loadError) {
+    if (currentRequest === requestVersion) {
+      error.value = loadError instanceof Error ? loadError.message : String(loadError);
+    }
+  } finally {
+    if (currentRequest === requestVersion) memoryLoading.value = false;
+    scheduleProgressiveSentinelRefresh();
   }
 }
+
+watch([activeView, query], () => {
+  memoryRenderLimit.value = normalizedQuery.value ? Number.MAX_SAFE_INTEGER : 24;
+  if (normalizedQuery.value) {
+    queuePlanDetails(plans.value, requestVersion);
+    if (hasMorePlans.value) void loadAllRemainingPlans();
+  } else {
+    planDetailQueue = [];
+    queuedPlanDetailIds.clear();
+    schedulePlanDetailObserverRefresh();
+  }
+  scheduleProgressiveSentinelRefresh();
+});
+
+watch([planNextCursor, hasMoreMemory], () => {
+  if (normalizedQuery.value && planNextCursor.value) void loadAllRemainingPlans();
+  scheduleProgressiveSentinelRefresh();
+});
 
 watch(
   [roleId, () => store.loading],
@@ -419,16 +733,33 @@ async function loadPlanMarkdownTeaser(
   }
 }
 
-async function refreshPlanMarkdownTeasers(nextPlans: RolePlan[], request: number): Promise<void> {
-  resetPlanMarkdownTeasers();
-  const controller = new AbortController();
+async function refreshPlanMarkdownTeasers(nextPlans: RolePlan[], request: number, reset = false): Promise<void> {
+  if (reset) resetPlanMarkdownTeasers();
+  const controller = planMarkdownTeaserAbort || new AbortController();
   planMarkdownTeaserAbort = controller;
   const markdownAttachments = nextPlans.flatMap((plan) => plan.attachments
     .filter((attachment) => attachment.kind === "file" && isPlanMarkdownAttachment(attachment.name, attachment.mimeType))
+    .filter((attachment) => !planMarkdownTeasers[planMarkdownTeaserKey(plan.id, attachment.id)])
     .map((attachment) => ({ plan, attachment })));
   await Promise.allSettled(markdownAttachments.map(({ plan, attachment }) => (
     loadPlanMarkdownTeaser(plan, attachment, request, controller.signal)
   )));
+}
+
+function planMediaLoadKey(planId: string, attachmentId: string): string {
+  return `${planId}\u001f${attachmentId}`;
+}
+
+function planMediaLoadState(planId: string, attachmentId: string): PlanMediaLoadState {
+  return planMediaLoadStates[planMediaLoadKey(planId, attachmentId)] || "loading";
+}
+
+function setPlanMediaLoadState(planId: string, attachmentId: string, state: PlanMediaLoadState): void {
+  planMediaLoadStates[planMediaLoadKey(planId, attachmentId)] = state;
+}
+
+function resetPlanMediaLoadStates(): void {
+  for (const key of Object.keys(planMediaLoadStates)) delete planMediaLoadStates[key];
 }
 
 function openPlanMediaPreview(plan: RolePlan, attachment: PlanAttachmentPresentation): void {
@@ -492,7 +823,8 @@ function closePlanMarkdownPreview(): void {
 function feedbackRecordLabel(feedback: RolePlanFeedback): string {
   if (feedback.author === "agent") return isEnglish.value ? "Agent reply" : "Agent 回复";
   if (feedback.author === "system") return isEnglish.value ? "System record" : "系统记录";
-  return isEnglish.value ? "Your feedback" : "你的意见";
+  if (feedback.kind === "guidance") return isEnglish.value ? "Your guidance" : "你的引导";
+  return isEnglish.value ? "Your approval feedback" : "你的审批意见";
 }
 
 function approvalRecordsForDisplay(plan: RolePlan): RolePlanFeedback[] {
@@ -501,7 +833,24 @@ function approvalRecordsForDisplay(plan: RolePlan): RolePlanFeedback[] {
     : plan.approval.latest
       ? [plan.approval.latest]
       : [];
-  return [...records].reverse();
+  return records
+    .filter((feedback) => feedback.kind === "approval_suggestion" || feedback.kind === "approval_response")
+    .reverse();
+}
+
+function guidanceRecordsForDisplay(plan: RolePlan): RolePlanFeedback[] {
+  const records = plan.approval.records?.length
+    ? plan.approval.records
+    : plan.approval.latest
+      ? [plan.approval.latest]
+      : [];
+  return records
+    .filter((feedback) => feedback.kind === "guidance" || feedback.kind === "guidance_response")
+    .reverse();
+}
+
+function planAcceptsGuidance(plan: RolePlan): boolean {
+  return plan.status === "进行中" && plan.presentation.approval.state === "none";
 }
 
 function planCardDomId(planId: string): string {
@@ -511,7 +860,9 @@ function planCardDomId(planId: string): string {
 function togglePlan(plan: RolePlan): void {
   const expanded = !expandedPlans[plan.id];
   expandedPlans[plan.id] = expanded;
-  if (expanded && plan.presentation.approval.state !== "none") void refreshPlanApproval(plan.id);
+  if (expanded && (planAcceptsGuidance(plan) || plan.presentation.approval.state !== "none")) {
+    void refreshPlanApproval(plan.id);
+  }
 }
 
 function planDirectoryStyle(plan: RolePlan): Record<string, string> {
@@ -520,13 +871,27 @@ function planDirectoryStyle(plan: RolePlan): Record<string, string> {
 
 function jumpToPlan(event: MouseEvent, plan: RolePlan): void {
   event.preventDefault();
-  const target = document.getElementById(planCardDomId(plan.id));
-  if (!target) return;
+  const targetIndex = visiblePlansForView.value.findIndex((item) => item.id === plan.id);
+  if (targetIndex < 0) return;
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  holdDirectoryJumpTarget(plan.id, !reduceMotion);
   activeDirectoryPlanId.value = plan.id;
-  target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
-  target.focus({ preventScroll: true });
+  planRenderStart.value = Math.max(0, targetIndex);
+  planRenderLimit.value = 8;
+  queuePlanDetails([plan], requestVersion, true);
+  void nextTick(() => {
+    const target = document.getElementById(planCardDomId(plan.id));
+    if (!target) return;
+    holdDirectoryJumpTarget(plan.id, !reduceMotion);
+    target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+    target.focus({ preventScroll: true });
+    schedulePlanCardObserverRefresh();
+    schedulePlanDetailObserverRefresh();
+  });
+}
+
+function planSequence(plan: RolePlan): number {
+  const index = visiblePlansForView.value.findIndex((item) => item.id === plan.id);
+  return index >= 0 ? index + 1 : 0;
 }
 
 function isApprovalStep(plan: RolePlan, step: RolePlanStep): boolean {
@@ -755,6 +1120,22 @@ function approvalMentioned(plan: RolePlan, candidate: PlanAttachmentMentionCandi
     .includes(candidate.id);
 }
 
+function approvalMentionAttachment(
+  plan: RolePlan,
+  candidate: PlanAttachmentMentionCandidate
+): PlanAttachmentPresentation | undefined {
+  return plan.attachments.find((attachment) => attachment.id === candidate.id);
+}
+
+function approvalMentionAttachmentIcon(plan: RolePlan, candidate: PlanAttachmentMentionCandidate): string {
+  const kind = approvalMentionAttachment(plan, candidate)?.kind;
+  return kind === "image" ? "mdi-image-outline" : kind === "video" ? "mdi-video-outline" : "mdi-file-outline";
+}
+
+function handleApprovalMentionPreviewError(event: Event): void {
+  if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.hidden = true;
+}
+
 function updateApprovalMentionMenu(plan: RolePlan, textarea: HTMLTextAreaElement): void {
   approvalTextareaElements.set(plan.id, textarea);
   const mention = findPlanAttachmentMentionQuery(textarea.value, textarea.selectionStart ?? textarea.value.length);
@@ -900,7 +1281,7 @@ function approvalResponseStatusLabel(status: RolePlanApprovalContract["responseS
 
 function approvalFeedbackBaseAvailable(plan: RolePlan): boolean {
   const approval = plan.presentation.approval;
-  return Boolean(approval.stepId) && (approval.state === "incomplete" || approval.enabled);
+  return Boolean(approval.stepId) && approval.enabled;
 }
 
 function canEditApprovalFeedback(plan: RolePlan): boolean {
@@ -915,6 +1296,17 @@ function canSubmitApproval(plan: RolePlan): boolean {
     && Boolean(String(approvalDrafts[plan.id] || "").trim());
 }
 
+function canEditPlanGuidance(plan: RolePlan): boolean {
+  return planAcceptsGuidance(plan) && !approvalPending[plan.id];
+}
+
+function canSubmitPlanGuidance(plan: RolePlan): boolean {
+  return canEditPlanGuidance(plan)
+    && !approvalDeliveryPending[plan.id]
+    && Boolean(gatewayId.value)
+    && Boolean(String(approvalDrafts[plan.id] || "").trim());
+}
+
 type ApprovalComposeStatus = {
   icon: string;
   text: string;
@@ -923,6 +1315,14 @@ type ApprovalComposeStatus = {
 };
 
 function approvalComposeStatus(plan: RolePlan): ApprovalComposeStatus | null {
+  if (plan.presentation.approval.state === "incomplete") {
+    return {
+      icon: "mdi-file-alert-outline",
+      text: t("审批资料不完整，补齐前禁止输入或提交审批意见。"),
+      title: t("审批资料不完整 / 禁止审批"),
+      tone: "warning"
+    };
+  }
   if (!approvalFeedbackBaseAvailable(plan)) {
     return {
       icon: "mdi-alert-circle-outline",
@@ -958,24 +1358,60 @@ function approvalComposeStatus(plan: RolePlan): ApprovalComposeStatus | null {
   return null;
 }
 
+function guidanceComposeStatus(plan: RolePlan): ApprovalComposeStatus | null {
+  if (!planAcceptsGuidance(plan)) {
+    return {
+      icon: "mdi-alert-circle-outline",
+      text: t("当前计划不在可引导的进行中状态。"),
+      title: t("当前计划不能填写引导"),
+      tone: "warning"
+    };
+  }
+  if (approvalPending[plan.id]) {
+    return {
+      icon: "mdi-content-save-clock-outline",
+      text: t("正在保存本次引导，请稍候；保存完成后可继续编辑。"),
+      title: t("正在保存计划引导"),
+      tone: "info"
+    };
+  }
+  if (approvalDeliveryPending[plan.id]) {
+    return {
+      icon: "mdi-send-clock-outline",
+      text: t("上一条引导已记录，正在通知 Agent；通知完成后即可提交下一条。"),
+      title: t("上一条引导正在通知 Agent"),
+      tone: "info"
+    };
+  }
+  if (!gatewayId.value) {
+    return {
+      icon: "mdi-routes",
+      text: t("当前没有可投递的 Route；你可以先编辑，选择或绑定 Route 后再提交。"),
+      title: t("当前 Route 不可用"),
+      tone: "warning"
+    };
+  }
+  return null;
+}
+
 function approvalFeedbackLabel(plan: RolePlan): string {
-  return t(plan.presentation.approval.state === "incomplete" ? "补充资料 / 调整建议" : "审批建议");
+  return t(plan.presentation.approval.state === "incomplete" ? "审批建议（资料不完整）" : "审批建议");
 }
 
 function approvalFeedbackPlaceholder(plan: RolePlan): string {
   return t(plan.presentation.approval.state === "incomplete"
-    ? "例如：请先补充真实审批来源，再让我确认。"
+    ? "请先由 Agent 补齐审批合同。"
     : "例如：建议先补充回归范围，再进入下一步。");
 }
 
 function approvalFeedbackHint(plan: RolePlan): string {
   return t(plan.presentation.approval.state === "incomplete"
-    ? "当前不能正式批准；可提交补充资料或调整建议，输入 @ 可引用计划附件。Enter 提交，Shift+Enter 换行。"
+    ? "审批资料不完整，补齐前禁止输入或提交审批意见。"
     : "输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。提交后由 Agent 判断如何处理，不会直接改变计划状态。");
 }
 
 function approvalSubmitLabel(plan: RolePlan): string {
-  return t(plan.presentation.approval.state === "incomplete" ? "提交补充意见" : "提交审批意见");
+  return t(plan.presentation.approval.state === "incomplete" ? "审批已禁用" : "提交审批意见");
 }
 
 function handleApprovalEnter(event: KeyboardEvent, plan: RolePlan): void {
@@ -985,6 +1421,13 @@ function handleApprovalEnter(event: KeyboardEvent, plan: RolePlan): void {
   void sendApprovalSuggestion(plan);
 }
 
+function handleGuidanceEnter(event: KeyboardEvent, plan: RolePlan): void {
+  if (event.isComposing || event.keyCode === 229 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+  event.preventDefault();
+  if (!canSubmitPlanGuidance(plan)) return;
+  void sendPlanGuidance(plan);
+}
+
 function applyPlanApproval(planId: string, approval: RolePlan["approval"]): void {
   const index = plans.value.findIndex((plan) => plan.id === planId);
   if (index < 0) return;
@@ -992,12 +1435,17 @@ function applyPlanApproval(planId: string, approval: RolePlan["approval"]): void
   plans.value[index] = { ...plan, approval };
 }
 
+function feedbackNoticeName(feedback: RolePlanFeedback): string {
+  return feedback.kind === "guidance" || feedback.kind === "guidance_response" ? "计划引导" : "审批建议";
+}
+
 function applyFeedbackDeliveryState(planId: string, feedback: RolePlanFeedback | undefined): void {
   const requestId = approvalRequestIds[planId];
   if (!feedback || !requestId || feedback.id !== requestId) return;
+  const noticeName = feedbackNoticeName(feedback);
   if (feedback.deliveryStatus === "delivered" || feedback.deliveryStatus === "record_only") {
     approvalDeliveryPending[planId] = false;
-    approvalNotices[planId] = { tone: "success", text: t("审批建议已记录并交给 Agent 处理。") };
+    approvalNotices[planId] = { tone: "success", text: t(`${noticeName}已记录并交给 Agent 处理。`) };
     approvalRequestIds[planId] = "";
     submittedApprovalTexts.delete(planId);
     clearSubmittedApprovalAttachments(planId);
@@ -1010,7 +1458,7 @@ function applyFeedbackDeliveryState(planId: string, feedback: RolePlanFeedback |
     restoreSubmittedApprovalAttachments(planId);
     approvalNotices[planId] = {
       tone: "warning",
-      text: t("审批建议已记录，但通知 Agent 失败；可以保留内容后重试。")
+      text: t(`${noticeName}已记录，但通知 Agent 失败；可以保留内容后重试。`)
     };
   }
 }
@@ -1036,6 +1484,8 @@ onMounted(() => {
     toolbarResizeObserver.observe(knowledgeToolbar.value);
   }
   schedulePlanCardObserverRefresh();
+  schedulePlanDetailObserverRefresh();
+  scheduleProgressiveSentinelRefresh();
   managerEvents = managerEventSource("/api/events");
   managerEvents.addEventListener("plan_feedback_changed", (raw) => {
     try {
@@ -1049,9 +1499,12 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   planDirectoryMounted = false;
-  releaseDirectoryJumpTarget(false);
+  releaseDirectoryJumpTarget(false, false);
   planCardObserver?.disconnect();
   toolbarResizeObserver?.disconnect();
+  planPageObserver?.disconnect();
+  memoryPageObserver?.disconnect();
+  planDetailObserver?.disconnect();
   enablePlanScrollFallback(false);
   window.removeEventListener("resize", schedulePlanCardObserverRefresh);
   if (planDirectorySyncFrame) window.cancelAnimationFrame(planDirectorySyncFrame);
@@ -1063,9 +1516,19 @@ onBeforeUnmount(() => {
 });
 
 async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
+  await sendPlanFeedback(plan, "approval_suggestion");
+}
+
+async function sendPlanGuidance(plan: RolePlan): Promise<void> {
+  await sendPlanFeedback(plan, "guidance");
+}
+
+async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_suggestion"): Promise<void> {
   const text = String(approvalDrafts[plan.id] || "").trim();
+  const guidance = kind === "guidance";
+  const noticeName = guidance ? "计划引导" : "审批建议";
   if (!text) {
-    approvalNotices[plan.id] = { tone: "error", text: t("请先填写审批建议。") };
+    approvalNotices[plan.id] = { tone: "error", text: t(guidance ? "请先填写计划引导。" : "请先填写审批建议。") };
     return;
   }
   if (!gatewayId.value) {
@@ -1075,18 +1538,19 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
   approvalPending[plan.id] = true;
   delete approvalNotices[plan.id];
   try {
-    const attachments = await approvalAttachmentUploads(plan.id);
-    const planAttachmentIds = referencedPlanAttachmentIds(text, allApprovalMentionCandidates(plan));
+    const attachments = guidance ? [] : await approvalAttachmentUploads(plan.id);
+    const planAttachmentIds = guidance ? [] : referencedPlanAttachmentIds(text, allApprovalMentionCandidates(plan));
     const result = await submitPlanFeedback({
       roleId: roleId.value,
       planId: plan.id,
       gatewayId: gatewayId.value,
-      stepId: plan.presentation.approval.stepId,
+      stepId: guidance ? undefined : plan.presentation.approval.stepId,
       feedbackId: feedbackRequestId(plan.id),
       text,
       attachments,
       planAttachmentIds,
-      source: "webgui"
+      source: "webgui",
+      kind
     });
     const existingRecords = plan.approval.records?.length
       ? plan.approval.records
@@ -1102,25 +1566,25 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
     if (result.deliveryStatus === "failed") {
       approvalNotices[plan.id] = {
         tone: "warning",
-        text: t("审批建议已记录，但通知 Agent 失败；可以保留内容后重试。")
+        text: t(`${noticeName}已记录，但通知 Agent 失败；可以保留内容后重试。`)
       };
     } else if (result.deliveryStatus === "pending") {
       submittedApprovalTexts.set(plan.id, text);
-      submittedApprovalAttachments.set(plan.id, takeApprovalAttachments(plan.id));
+      if (!guidance) submittedApprovalAttachments.set(plan.id, takeApprovalAttachments(plan.id));
       approvalDeliveryPending[plan.id] = true;
       approvalDrafts[plan.id] = "";
-      approvalNotices[plan.id] = { tone: "success", text: t("审批建议已记录，正在后台通知 Agent。") };
+      approvalNotices[plan.id] = { tone: "success", text: t(`${noticeName}已记录，正在后台通知 Agent。`) };
     } else {
       approvalDrafts[plan.id] = "";
       approvalRequestIds[plan.id] = "";
       submittedApprovalTexts.delete(plan.id);
       clearApprovalAttachments(plan.id);
-      approvalNotices[plan.id] = { tone: "success", text: t("审批建议已记录并交给 Agent 处理。") };
+      approvalNotices[plan.id] = { tone: "success", text: t(`${noticeName}已记录并交给 Agent 处理。`) };
     }
   } catch (submitError) {
     approvalNotices[plan.id] = {
       tone: "error",
-      text: submitError instanceof Error ? submitError.message : String(submitError)
+      text: t(planFeedbackSubmissionErrorMessage(submitError))
     };
   } finally {
     approvalPending[plan.id] = false;
@@ -1141,7 +1605,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
       <div class="knowledge-hero-copy">
         <div class="eyebrow">ROLE KNOWLEDGE LEDGER</div>
         <h1>计划与记忆</h1>
-        <p>计划主体与记忆由 Agent 维护；数据、显示状态、排序和审批说明均来自 Rabi Manager。说明不完整时会提醒 Agent 补充，但不会限制用户提交审批意见。</p>
+        <p>{{ t("计划主体与记忆由 Agent 维护；数据、显示状态、排序和反馈记录均来自 Rabi Manager。进行中且未进入审批的计划可提交计划级引导，审批计划只在对应步骤处理审批。") }}</p>
       </div>
       <div class="knowledge-identity">
         <span>当前人格</span>
@@ -1171,7 +1635,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
             <v-icon size="18">mdi-format-list-bulleted-square</v-icon>
             <b>计划目录</b>
           </div>
-          <span>{{ visiblePlansForView.length }}</span>
+          <span>{{ visiblePlansForView.length }} / {{ totalPlansForView }}</span>
         </div>
         <p>点击计划快速跳转</p>
         <div ref="planDirectoryList" class="knowledge-plan-directory-list">
@@ -1202,25 +1666,29 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
       <v-card class="app-card knowledge-browser" variant="flat">
       <div ref="knowledgeToolbar" class="knowledge-toolbar">
         <v-btn-toggle v-model="activeView" mandatory color="primary" density="comfortable" class="knowledge-tabs">
-          <v-btn value="current" prepend-icon="mdi-clock-fast"><span>{{ isEnglish ? "Current" : "当前" }}</span><b>{{ currentPlans.length }}</b></v-btn>
-          <v-btn value="plans" prepend-icon="mdi-clipboard-text-clock-outline"><span>{{ isEnglish ? "Plans" : "计划" }}</span><b>{{ activePlans.length }}</b></v-btn>
+          <v-btn value="current" prepend-icon="mdi-clock-fast"><span>{{ isEnglish ? "Current" : "当前" }}</span><b>{{ planPageCounts.current }}</b></v-btn>
+          <v-btn value="plans" prepend-icon="mdi-clipboard-text-clock-outline"><span>{{ isEnglish ? "Plans" : "计划" }}</span><b>{{ planPageCounts.plans }}</b></v-btn>
           <v-btn value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ recentMemory.length }}</b></v-btn>
-          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ archivedPlans.length + consolidatedMemory.length }}</b></v-btn>
+          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ planPageCounts.archived + consolidatedMemory.length }}</b></v-btn>
         </v-btn-toggle>
         <div class="knowledge-tools">
           <v-text-field
             v-model="query"
-            label="搜索标题、主题或关键词"
+            label="搜索计划或记忆的任意内容"
             prepend-inner-icon="mdi-magnify"
             clearable
             hide-details
             density="compact"
           />
-          <v-btn prepend-icon="mdi-refresh" variant="tonal" color="primary" :loading="loading" @click="refreshKnowledge">刷新</v-btn>
+          <v-btn prepend-icon="mdi-refresh" variant="tonal" color="primary" :loading="loading || memoryLoading" @click="refreshKnowledge">刷新</v-btn>
         </div>
       </div>
 
-      <v-progress-linear v-if="loading" indeterminate color="secondary" />
+      <v-progress-linear v-if="loading || loadingMorePlans || memoryLoading || hasMorePlans || hasPendingPlanDetails" indeterminate color="secondary" />
+      <div v-if="hasMorePlans || hasPendingPlanDetails" class="knowledge-progressive-status">
+        <v-progress-circular indeterminate size="16" width="2" color="primary" />
+        <span>{{ t(hasMorePlans ? "正在持续加载更多计划…" : "正在加载计划详情…") }}</span>
+      </div>
       <v-alert v-if="error" type="error" variant="tonal" class="ma-5">{{ error }}</v-alert>
       <v-alert v-else-if="!roleId" type="warning" variant="tonal" class="ma-5">当前 Route 尚未绑定人格。</v-alert>
 
@@ -1229,14 +1697,20 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
           <v-icon size="20">{{ activeView === "current" ? "mdi-clipboard-play-outline" : "mdi-archive-outline" }}</v-icon>
           <b>{{ activeView === "current" ? (isEnglish ? "In-progress plans" : "进行中计划") : (isEnglish ? "Archived plans" : "已归档计划") }}</b>
         </div>
-        <div v-if="visiblePlansForView.length" class="knowledge-plan-cards">
+        <div v-if="loading && !plans.length" class="knowledge-plan-skeletons" aria-live="polite">
+          <div v-for="index in 3" :key="index" class="knowledge-plan-skeleton">
+            <v-skeleton-loader type="heading, paragraph, paragraph, actions" />
+          </div>
+        </div>
+        <div v-if="renderedPlansForView.length" class="knowledge-plan-cards">
             <article
-              v-for="(plan, planIndex) in visiblePlansForView"
+              v-for="plan in renderedPlansForView"
               :id="planCardDomId(plan.id)"
               :key="plan.id"
               class="knowledge-plan-card"
               :class="{ expanded: expandedPlans[plan.id] }"
               :data-tone="plan.presentation.tone"
+              :data-plan-id="plan.id"
               :style="planCardStyle(plan.presentation.palette)"
               tabindex="-1"
             >
@@ -1246,7 +1720,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
               <div class="knowledge-plan-identity-row">
                 <div class="knowledge-plan-sequence" aria-hidden="true">
                   <span>{{ t("计划项") }}</span>
-                  <b>{{ String(planIndex + 1).padStart(2, "0") }}</b>
+                  <b>{{ String(planSequence(plan)).padStart(2, "0") }}</b>
                 </div>
                 <div class="knowledge-plan-title-copy">
                   <div class="knowledge-kicker" data-no-i18n>{{ plan.project?.name || plan.kind || "PLAN" }}</div>
@@ -1256,12 +1730,29 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
               <v-chip :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ plan.presentation.status }}</v-chip>
             </div>
 
-            <div v-if="planDescriptionForDisplay(plan)" class="knowledge-plan-focus">
+            <div v-if="planDetailsLoading[plan.id]" class="knowledge-plan-detail-loading" aria-live="polite">
+              <div>
+                <v-progress-circular indeterminate size="22" width="2" color="primary" />
+                <b>{{ t("正在加载计划详情…") }}</b>
+              </div>
+              <div class="knowledge-plan-detail-loading-lines" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+
+            <div v-else-if="!planDetailsLoaded[plan.id]" class="knowledge-plan-detail-pending">
+              <v-icon size="17">mdi-progress-clock</v-icon>
+              <span>{{ t("计划详情将在进入视口时加载") }}</span>
+            </div>
+
+            <div v-if="planDetailsLoaded[plan.id] && planDescriptionForDisplay(plan)" class="knowledge-plan-focus">
               <span>计划描述</span>
               <p data-no-i18n>{{ planDescriptionForDisplay(plan) }}</p>
             </div>
 
-            <section v-if="plan.attachments.length" class="knowledge-plan-attachments" :aria-label="t('计划附件')">
+            <section v-if="planDetailsLoaded[plan.id] && plan.attachments.length" class="knowledge-plan-attachments" :aria-label="t('计划附件')">
               <div class="knowledge-plan-attachments-head">
                 <span><v-icon size="16">mdi-paperclip</v-icon>{{ t("计划附件") }}</span>
                 <small>{{ plan.attachments.length }}</small>
@@ -1276,7 +1767,20 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                   :aria-label="`${t(attachment.kind === 'video' ? '查看视频预览' : '查看图片预览')}：${attachment.name}`"
                   @click="openPlanMediaPreview(plan, attachment)"
                 >
-                  <span class="knowledge-plan-attachment-visual">
+                  <span
+                    class="knowledge-plan-attachment-visual"
+                    :data-load-state="planMediaLoadState(plan.id, attachment.id)"
+                  >
+                    <span class="knowledge-plan-attachment-loading" aria-live="polite">
+                      <v-progress-circular
+                        v-if="planMediaLoadState(plan.id, attachment.id) === 'loading'"
+                        indeterminate
+                        size="22"
+                        width="2"
+                      />
+                      <v-icon v-else size="22">mdi-image-broken-variant</v-icon>
+                      <small>{{ t(planMediaLoadState(plan.id, attachment.id) === "error" ? "附件加载失败" : "附件加载中") }}</small>
+                    </span>
                     <video
                       v-if="attachment.kind === 'video'"
                       :src="planVideoThumbnailUrl(plan.id, attachment.id)"
@@ -1284,14 +1788,19 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                       muted
                       playsinline
                       aria-hidden="true"
-                      @loadedmetadata="capturePlanVideoDuration(plan.id, attachment.id, $event)"
+                      @loadedmetadata="capturePlanVideoDuration(plan.id, attachment.id, $event); setPlanMediaLoadState(plan.id, attachment.id, 'loaded')"
+                      @error="setPlanMediaLoadState(plan.id, attachment.id, 'error')"
                     ></video>
                     <img
                       v-else
                       :src="planAttachmentUrl(plan.id, attachment.id)"
                       :alt="attachment.name"
                       loading="lazy"
+                      decoding="async"
+                      fetchpriority="low"
                       data-no-i18n
+                      @load="setPlanMediaLoadState(plan.id, attachment.id, 'loaded')"
+                      @error="setPlanMediaLoadState(plan.id, attachment.id, 'error')"
                     >
                     <span class="knowledge-plan-attachment-overlay">
                       <v-icon v-if="attachment.kind === 'image'" size="20">mdi-magnify-plus-outline</v-icon>
@@ -1359,33 +1868,37 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
               </div>
             </section>
 
-            <div class="knowledge-plan-summary">
+            <div v-if="planDetailsLoaded[plan.id]" class="knowledge-plan-summary">
               <div class="knowledge-plan-current" :class="{ blocked: Boolean(blocker(plan)) }">
                 <v-icon size="19">{{ blocker(plan) ? "mdi-alert-circle-outline" : "mdi-progress-wrench" }}</v-icon>
-                <div>
+                <div class="knowledge-plan-current-copy">
                   <span>{{ blocker(plan) ? "当前阻塞" : "当前步骤" }}</span>
-                  <b v-if="currentStep(plan)?.title || plan.currentStep" data-no-i18n>{{ currentStep(plan)?.title || plan.currentStep }}</b>
-                  <b v-else>暂无进行中的步骤</b>
+                  <b
+                    v-if="currentStep(plan)?.title || plan.currentStep"
+                    data-no-i18n
+                    :title="currentStep(plan)?.title || plan.currentStep"
+                  >{{ currentStep(plan)?.title || plan.currentStep }}</b>
+                  <b v-else>{{ t("暂无进行中的步骤") }}</b>
                   <small v-if="plan.steps.length">{{ currentStepPosition(plan) || "—" }}/{{ plan.steps.length }} · {{ t("执行步骤") }}</small>
                 </div>
               </div>
               <div class="knowledge-plan-timing">
-                <div>
+                <div class="knowledge-plan-timing-item">
                   <span>更新时间</span>
                   <b data-no-i18n>{{ formatDate(plan.updatedAt) }}</b>
                 </div>
-                <div v-if="plan.dueAt">
+                <div v-if="plan.dueAt" class="knowledge-plan-timing-item">
                   <span>截止时间</span>
                   <b data-no-i18n>{{ formatDate(plan.dueAt) }}</b>
                 </div>
               </div>
             </div>
 
-            <v-alert v-if="blocker(plan)" data-no-i18n type="error" variant="tonal" density="compact" class="knowledge-blocker">
+            <v-alert v-if="planDetailsLoaded[plan.id] && blocker(plan)" data-no-i18n type="error" variant="tonal" density="compact" class="knowledge-blocker">
               {{ blocker(plan) }}
             </v-alert>
 
-            <div v-if="plan.steps.length" class="knowledge-progress-row">
+            <div v-if="planDetailsLoaded[plan.id] && plan.steps.length" class="knowledge-progress-row">
               <div class="knowledge-progress-copy">
                 <span>{{ t("步骤进度") }}</span>
                 <b>{{ completedSteps(plan) }}/{{ plan.steps.length }}</b>
@@ -1393,22 +1906,93 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
               <v-progress-linear :model-value="progressValue(plan)" color="secondary" height="7" rounded />
             </div>
 
-            <div v-if="plan.keywords.length" class="knowledge-keywords">
+            <div v-if="planDetailsLoaded[plan.id] && plan.keywords.length" class="knowledge-keywords">
               <v-chip v-for="keyword in plan.keywords" :key="keyword" data-no-i18n size="x-small" variant="outlined">{{ keyword }}</v-chip>
             </div>
 
             <button
-              v-if="plan.steps.length || plan.presentation.approval.state !== 'none'"
+              v-if="planDetailsLoaded[plan.id] && (plan.steps.length || plan.presentation.approval.state !== 'none')"
               class="knowledge-expand"
               type="button"
               :aria-expanded="Boolean(expandedPlans[plan.id])"
               @click="togglePlan(plan)"
             >
-              <span>{{ expandedPlans[plan.id] ? "收起计划详情" : plan.presentation.approval.state === "ready" ? "查看执行合同并审批" : plan.presentation.approval.state === "incomplete" ? "查看缺失的审批信息" : `查看全部 ${plan.steps.length} 个步骤` }}</span>
+              <span>{{ expandedPlans[plan.id] ? "收起计划详情" : plan.presentation.approval.state === "ready" ? "查看执行合同并审批" : plan.presentation.approval.state === "incomplete" ? "查看缺失的审批信息" : planAcceptsGuidance(plan) ? "查看计划详情并引导" : `查看全部 ${plan.steps.length} 个步骤` }}</span>
               <v-icon size="18">{{ expandedPlans[plan.id] ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
             </button>
 
-            <div v-if="expandedPlans[plan.id]" class="knowledge-plan-details">
+            <div v-if="planDetailsLoaded[plan.id] && expandedPlans[plan.id]" class="knowledge-plan-details">
+              <section v-if="planAcceptsGuidance(plan)" class="knowledge-approval-panel" data-state="guidance">
+                <div class="knowledge-approval-head">
+                  <div>
+                    <span>{{ t("计划引导") }}</span>
+                    <b>{{ t("给 Agent 补充整个计划的方向、范围或优先级") }}</b>
+                  </div>
+                  <v-chip color="primary" size="x-small" variant="tonal">{{ t("可引导") }}</v-chip>
+                </div>
+                <p>{{ t("引导属于整个计划，不绑定某个步骤。Agent 会据此继续推进，并在需要时调整尚未开始的步骤；引导不会被视为审批，也不会自动改变计划状态。") }}</p>
+                <div v-if="guidanceRecordsForDisplay(plan).length" class="knowledge-approval-history" :aria-label="t('计划引导记录')">
+                  <article
+                    v-for="feedback in guidanceRecordsForDisplay(plan)"
+                    :key="feedback.id"
+                    class="knowledge-approval-record"
+                    :data-author="feedback.author"
+                  >
+                    <span>{{ feedbackRecordLabel(feedback) }} · <time data-no-i18n>{{ formatDate(feedback.createdAt) }}</time></span>
+                    <b data-no-i18n>{{ feedback.text }}</b>
+                  </article>
+                </div>
+                <div
+                  v-if="guidanceComposeStatus(plan)"
+                  class="knowledge-approval-compose-status"
+                  :data-tone="guidanceComposeStatus(plan)?.tone"
+                  role="status"
+                >
+                  <span class="knowledge-approval-compose-status-icon">
+                    <v-icon size="18">{{ guidanceComposeStatus(plan)?.icon }}</v-icon>
+                  </span>
+                  <span class="knowledge-approval-compose-status-copy">
+                    <b>{{ guidanceComposeStatus(plan)?.title }}</b>
+                    <span>{{ guidanceComposeStatus(plan)?.text }}</span>
+                  </span>
+                </div>
+                <div class="knowledge-approval-composer">
+                  <v-textarea
+                    v-model="approvalDrafts[plan.id]"
+                    :label="t('计划引导')"
+                    :placeholder="t('例如：先确认入口关闭后的整体体验，再根据结果调整后续未开始步骤。')"
+                    persistent-hint
+                    :hint="t('Enter 直接提交，Shift+Enter 换行。引导会投递给当前计划绑定的 Agent，不会作为步骤审批。')"
+                    variant="outlined"
+                    rows="3"
+                    :counter="2000"
+                    :maxlength="2000"
+                    :disabled="!canEditPlanGuidance(plan)"
+                    @keydown.enter="handleGuidanceEnter($event, plan)"
+                  />
+                </div>
+                <v-alert
+                  v-if="approvalNotices[plan.id]"
+                  :type="approvalNotices[plan.id].tone"
+                  variant="tonal"
+                  density="compact"
+                  data-no-i18n
+                >
+                  {{ approvalNotices[plan.id].text }}
+                </v-alert>
+                <div class="knowledge-approval-actions">
+                  <span>{{ t("引导只关联当前 planId；Agent 可据此更新计划说明和未开始步骤。") }}</span>
+                  <v-btn
+                    color="primary"
+                    prepend-icon="mdi-send-outline"
+                    :loading="approvalPending[plan.id]"
+                    :disabled="!canSubmitPlanGuidance(plan)"
+                    @click="sendPlanGuidance(plan)"
+                  >
+                    {{ t("提交计划引导") }}
+                  </v-btn>
+                </div>
+              </section>
               <div v-if="plan.steps.length" class="knowledge-steps">
                 <div class="knowledge-steps-head">
                   <div>
@@ -1467,7 +2051,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                   >
                     <b>审批资料不完整，禁止审批。缺少：</b>
                     <span>{{ plan.presentation.approval.missing.map(approvalMissingLabel).join("、") }}</span>
-                    <small>你仍可在下方提交补充资料或调整建议；该意见不会被视为批准。</small>
+                    <small>请先由 Agent 在同一计划补齐审批合同；补齐前输入、附件和提交均不可用。</small>
                   </v-alert>
                   <div v-if="plan.presentation.approval.contract" class="knowledge-approval-contract">
                     <div class="knowledge-approval-contract-lead">
@@ -1645,13 +2229,29 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
                         @mousedown.prevent
                         @click="selectApprovalMention(plan, candidate)"
                       >
-                        <span class="knowledge-approval-mention-icon">
-                          <v-icon size="20">{{ plan.attachments.find((item) => item.id === candidate.id)?.kind === "image" ? "mdi-image-outline" : plan.attachments.find((item) => item.id === candidate.id)?.kind === "video" ? "mdi-video-outline" : "mdi-file-outline" }}</v-icon>
+                        <span
+                          class="knowledge-approval-mention-preview"
+                          :data-kind="approvalMentionAttachment(plan, candidate)?.kind || 'file'"
+                        >
+                          <span class="knowledge-approval-mention-preview-fallback">
+                            <v-icon size="21">{{ approvalMentionAttachmentIcon(plan, candidate) }}</v-icon>
+                          </span>
+                          <img
+                            v-if="approvalMentionAttachment(plan, candidate)?.kind === 'image'"
+                            :src="planAttachmentUrl(plan.id, candidate.id)"
+                            alt=""
+                            width="88"
+                            height="50"
+                            loading="lazy"
+                            decoding="async"
+                            fetchpriority="low"
+                            @error="handleApprovalMentionPreviewError"
+                          >
                         </span>
                         <span class="knowledge-approval-mention-copy">
                           <b data-no-i18n>{{ candidate.name }}</b>
                           <small data-no-i18n>
-                            {{ candidate.duplicateCount ? `${candidate.duplicateIndex}/${candidate.duplicateCount} · ` : "" }}{{ formatAttachmentSize(plan.attachments.find((item) => item.id === candidate.id)?.size || 0) }}
+                            {{ candidate.duplicateCount ? `${candidate.duplicateIndex}/${candidate.duplicateCount} · ` : "" }}{{ formatAttachmentSize(approvalMentionAttachment(plan, candidate)?.size || 0) }}
                           </small>
                         </span>
                         <v-icon v-if="approvalMentioned(plan, candidate)" size="18" color="primary">mdi-check-circle</v-icon>
@@ -1729,7 +2329,18 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
             </article>
         </div>
 
-        <div v-if="!loading && !visiblePlansForView.length" class="knowledge-empty">
+        <div
+          v-if="hasMorePlans || hasMoreRenderedPlans"
+          ref="planLoadMoreSentinel"
+          class="knowledge-load-more"
+          aria-live="polite"
+        >
+          <v-progress-circular v-if="loadingMorePlans" indeterminate size="20" width="2" color="primary" />
+          <span>{{ t(hasMoreRenderedPlans ? "继续向下滚动加载更多计划卡片" : "正在持续加载更多计划…") }}</span>
+          <v-btn v-if="!loadingMorePlans" size="small" variant="text" @click="hasMoreRenderedPlans ? loadMoreRenderedPlans() : loadMorePlans()">{{ t("加载更多") }}</v-btn>
+        </div>
+
+        <div v-if="!loading && !loadingMorePlans && !hasMorePlans && !visiblePlansForView.length" class="knowledge-empty">
           <v-icon size="32">mdi-clipboard-text-off-outline</v-icon>
           <b>没有匹配的计划</b>
           <span>{{ activeView === "current" ? t("当前没有匹配的进行中计划。") : activeView === "archived" ? t("当前没有匹配的已归档计划。") : t("可以清空搜索，或等待 Agent 通过 Manager 写入计划。") }}</span>
@@ -1742,7 +2353,7 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
           <b>{{ activeView === "current" ? t("近期记忆") : t("沉淀记忆") }}</b>
         </div>
         <article
-          v-for="memory in visibleMemoryForView"
+          v-for="memory in renderedMemoryForView"
           :key="memory.id"
           class="knowledge-memory-card"
         >
@@ -1766,7 +2377,17 @@ async function sendApprovalSuggestion(plan: RolePlan): Promise<void> {
         </article>
 
         <div
-          v-if="!loading && !visibleMemoryForView.length"
+          v-if="hasMoreMemory"
+          ref="memoryLoadMoreSentinel"
+          class="knowledge-load-more memory"
+          aria-live="polite"
+        >
+          <span>{{ t("继续向下滚动加载更多记忆") }}</span>
+          <v-btn size="small" variant="text" @click="loadMoreMemory">{{ t("加载更多") }}</v-btn>
+        </div>
+
+        <div
+          v-if="!memoryLoading && !visibleMemoryForView.length"
           class="knowledge-empty"
         >
           <v-icon size="32">mdi-book-open-blank-variant-outline</v-icon>

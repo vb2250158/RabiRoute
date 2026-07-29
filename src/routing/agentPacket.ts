@@ -12,6 +12,13 @@ import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
 import { recentMessageLimitFor } from "../shared/gatewayConfigModel.js";
 import {
+  currentPlanStep,
+  getPlan,
+  planApprovalGate,
+  planBlockingReason,
+  planIsBlocked
+} from "../roleKnowledge.js";
+import {
   messageContextArchiveIndexPath,
   messageContextArchiveDir,
   messageContextCurrentPath,
@@ -163,12 +170,19 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   const replyContextJson = String(values.replyContextJson ?? "");
   const replyToSource = String(values.replyToSource ?? "").toLowerCase() === "true";
   const characterTtsDialogue = outputAdapter === "tts" && routeKind === "voice_transcript";
+  let planFeedbackKind = "";
+  try {
+    planFeedbackKind = String((JSON.parse(replyContextJson) as { planFeedbackKind?: unknown }).planFeedbackKind || "");
+  } catch {
+    // The replyContext JSON is rendered below and will surface the invalid payload to the handler.
+  }
 
   if (!replyApiUrl || !replyContextJson) {
     return [];
   }
 
   const isPlanFeedback = targetType === "plan_feedback";
+  const isPlanGuidance = isPlanFeedback && planFeedbackKind === "guidance";
   const shouldExplainReplyApi = isPlanFeedback
     || forceMessagePipeline
     || replyToSource
@@ -177,10 +191,16 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
     || routeKind === "rabilink";
   if (!shouldExplainReplyApi) return [];
 
-  const intro = isPlanFeedback
+  const intro = isPlanGuidance
+    ? [
+        "本次是计划引导处理，面向用户的回复必须回到当前计划记录，不能只在 Codex 任务里输出正文。",
+        "先读取当前计划与反馈记录，再根据引导继续推进。引导属于整个计划，不绑定某个步骤；如果范围、优先级、执行方式或后续路径变化，必须 PATCH 计划并同步调整尚未开始的步骤。引导本身不代表审批，也不自动改变计划状态。",
+        "更新完成后，把处理说明 POST 到普通回复 API；RabiRoute 会将其保存为当前 planId 下、不带 stepId 的 guidance_response。"
+      ]
+    : isPlanFeedback
     ? [
         "本次是计划审批意见处理，面向用户的回复必须回到当前计划记录，不能只在 Codex 任务里输出正文。",
-        "先按审批意见读取并 PATCH 更新对应计划或步骤；批准、否决或取消后必须同轮清除或更新 isBlocked/blockedBy。计划说明要具体到审批人、决定、推荐与备选、reason、实际文件、完整命令、外部变更、验证、回退、排除范围、附件、请求来源和回执状态。",
+        "先按审批意见读取并 PATCH 更新对应计划或步骤；批准、否决、要求调整或取消后必须同轮更新 approvalRequest.responseStatus。isBlocked 由 Manager 根据完整且待决的审批合同自动派生，不要手写。计划说明要具体到审批人、决定、推荐与备选、reason、实际文件、完整命令、外部变更、验证、回退、排除范围、附件、请求来源和回执状态。",
         "更新完成后，把处理说明 POST 到普通回复 API；RabiRoute 会将其保存为当前 planId / stepId 的 approval_response。"
       ]
     : forceMessagePipeline
@@ -214,7 +234,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
     "示例：",
     "```json",
     JSON.stringify({
-      text: "这里填写夜雨要说的话。",
+      text: isPlanGuidance ? "这里填写计划引导的处理说明。" : "这里填写夜雨要说的话。",
       replyContext: JSON.parse(replyContextJson)
     }, null, 2),
     "```",
@@ -510,46 +530,48 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
 
   const summaries: string[] = [];
   for (const planId of extractPlanIds(text)) {
+    const parsed = getPlan(roleDir, planId);
+    if (!parsed) {
+      summaries.push(`- ${planId}：未找到对应计划文件。`);
+      continue;
+    }
     const candidates = [
       path.join(roleDir, "plans", "items", "active", `${planId}.json`),
+      path.join(roleDir, "plans", "archive", `${planId}.json`),
       path.join(roleDir, "plans", "items", "archived", `${planId}.json`),
       path.join(roleDir, "plans", `${planId}.json`)
     ];
     const planPath = candidates.find((candidate) => fs.existsSync(candidate));
-    if (!planPath) {
-      summaries.push(`- ${planId}：未找到对应计划文件。`);
-      continue;
-    }
 
     try {
-      const parsed = JSON.parse(fs.readFileSync(planPath, "utf8")) as Record<string, unknown>;
-      const stepLines = Array.isArray(parsed.steps)
-        ? parsed.steps.flatMap((rawStep, index) => {
-          if (!rawStep || typeof rawStep !== "object" || Array.isArray(rawStep)) return [];
-          const step = rawStep as Record<string, unknown>;
-          const title = String(step.title || step.name || step.label || "").trim();
-          if (!title) return [];
-          const id = String(step.id || step.stepId || `step-${index + 1}`).trim();
-          const status = String(step.status || (step.completed === true ? "已完成" : step.current === true ? "进行中" : "未开始"));
-          const currentMarker = id === String(parsed.currentStepId || "") ? " ← 当前执行" : "";
+      const currentStep = currentPlanStep(parsed);
+      const approvalGate = planApprovalGate(parsed);
+      const blocked = planIsBlocked(parsed);
+      const stepLines = parsed.steps.flatMap((step, index) => {
+          const title = step.title.trim();
+          const id = step.id.trim();
+          const status = step.status;
+          const isCurrent = id === currentStep?.id;
+          const currentMarker = isCurrent ? " ← 当前执行" : "";
           const waitingFor = String(step.waitingFor || "").trim();
-          const isBlocked = step.isBlocked === true;
+          const isBlocked = blocked && isCurrent;
           const blockedBy = String(step.blockedBy || "").trim();
-          const approvalPending = Boolean(step.approvalRequest)
-            || /(等待|待|需要|未经).*(审批|批准|授权|审核|人工决策)|^(审批|批准|授权|审核|人工决策)/i.test([title, waitingFor, blockedBy].join(" ").replace(/\s+/g, ""));
+          const approvalPreparing = approvalGate.state === "preparing" && id === approvalGate.stepId;
+          const approvalPending = approvalGate.state === "pending" && id === approvalGate.stepId;
           return [
             `    ${index + 1}. [${status}] ${title} (${id})${currentMarker}`,
             waitingFor ? `       等待对象：${waitingFor}` : "",
             isBlocked && blockedBy ? `       阻塞原因：${blockedBy}` : "",
             !isBlocked && blockedBy ? `       待确认说明：${blockedBy}` : "",
-            status === "进行中" && waitingFor && (!isBlocked || approvalPending)
-              ? isBlocked && approvalPending
-                ? "       巡检动作：计划保持审批堵塞，继续询问或追问并记录回执；不得续投业务实施。"
-                : "       巡检动作：主动询问或追问，直到取得明确结果；不得仅记录等待。"
-              : ""
+            approvalPending
+              ? "       巡检动作：当前合同已可审批，计划保持审批阻塞；继续追问审批回执，不得续投合同外实施。"
+              : approvalPreparing
+                ? "       巡检动作：审批合同尚未完整，计划保持进行中；继续调查、补证据并补齐合同，不能把资料缺失标成阻塞。"
+                : status === "进行中" && waitingFor
+                  ? "       巡检动作：主动询问、重试、改道或补证据，直到取得明确结果；不得仅记录等待。"
+                  : ""
           ].filter(Boolean);
-        })
-        : [];
+        });
       summaries.push([
         `- ${planId}`,
         optionalLine("  标题", parsed.title),
@@ -558,9 +580,9 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
         optionalLine("  当前步骤", parsed.currentStep),
         optionalLine("  下一步", parsed.nextAction),
         optionalLine("  等待", parsed.waitingFor),
-        parsed.isBlocked === true ? optionalLine("  阻塞原因", parsed.blockedBy) : optionalLine("  待确认说明", parsed.blockedBy),
+        blocked ? optionalLine("  阻塞原因", planBlockingReason(parsed)) : optionalLine("  待确认说明", parsed.blockedBy),
         stepLines.length > 0 ? `  全部步骤：\n${stepLines.join("\n")}` : "",
-        `  路径：${relativeWorkspacePath(planPath)}`
+        planPath ? `  路径：${relativeWorkspacePath(planPath)}` : ""
       ].filter(Boolean).join("\n"));
     } catch (error) {
       summaries.push(`- ${planId}：读取失败：${error instanceof Error ? error.message : String(error)}`);
@@ -610,7 +632,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "heartbeat") return "定时心跳提醒";
   if (routeKind === "manual_trigger") return "手动触发提醒";
   if (routeKind === "role_panel_message") return "角色面板消息";
-  if (routeKind === "plan_feedback") return "计划审批";
+  if (routeKind === "plan_feedback") return "计划反馈";
   if (routeKind === "voice_transcript") return "语音转写提醒";
   if (routeKind === "rabilink") return "RabiLink 消息";
   if (routeKind === "wearable_health_alert") return "智能手表/手环健康告警";
@@ -767,7 +789,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     groupId: isGroup ? record.groupId : wecomGroupId,
     targetType,
     targetId: isWeCom ? wecomGroupId : targetId,
-    messageTarget: isWeixin ? `个人微信会话 ${record.sessionId}` : isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isPlanFeedback ? `计划审批 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
+    messageTarget: isWeixin ? `个人微信会话 ${record.sessionId}` : isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isPlanFeedback ? `计划反馈 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText: decision.routeText,
@@ -989,8 +1011,8 @@ function buildAgentMessage(
       "发出秘书消息不等于委派完成。主人格必须核对精确 threadId + workspace、秘书真实任务状态和阶段回执；秘书开始后等待其结果，不得并行执行同一份日志/截图读取、查重、计划 PATCH、记忆/账本写入或任务续投，也不得先自己做一遍再只把剩余部分交给秘书。",
       "秘书必须在同一轮消费结果、更新计划和记忆，并按计划自身 taskBinding 精确续投业务任务；主人格随后复核秘书摘要和关键决策。不允许只回复“已收到”、由主人格自己长时间处理，或等下一次 heartbeat。",
       "计划暂停或秘书轮转不能清空业务 taskBinding；只有业务任务确实失效并完成受控迁移时才改绑。计划完成后仍可保留 taskBinding 作为历史证据。",
-      "有多个计划时并行使用秘书槽管理不同计划分片，并让所有可推进的业务任务运行。本轮结束前校验：可推进但无人管理的计划数 = 0，且可推进但空闲的业务任务数 = 0。active/in-progress 业务任务不要重复投递。",
-      "当前步骤等待审批、方案确认或授权时必须立即写 isBlocked=true，并用 blockedBy 具体写明谁要批准什么；waitingFor 保留负责人和所需答复。秘书继续追问并维护回执，但不得为了运行态指标反复续投业务实施；审批通过、否决或取消后同一闭环清除或更新阻塞。待 QA、资料或外部产物不因本规则自动变成阻塞。",
+      "有多个计划时并行使用秘书槽管理不同计划分片；同一 planId 同时只能有一个控制面 writer，不同计划不能被某个 active cycle 全局阻塞。共享账本只合并目标记录并原子写入。本轮结束前校验：可推进但无人管理的计划数 = 0，且可推进但空闲的业务任务数 = 0。active/in-progress 业务任务不要重复投递。",
+      "只有当前步骤具有完整、可提交且 responseStatus=pending 的 approvalRequest 时，Manager 才自动派生审批阻塞；isBlocked 是兼容投影，不得手写。审批合同不完整时计划保持进行中，由秘书继续调查、补证据和补齐合同；待 QA、缺资料、执行失败、工具超时、外部产物或普通负责人等待必须通过询问、重试、改道、拆分、升级或替代路径继续推进，不能占用阻塞。",
       ...planAssistantLines
     ]) : "",
     hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",

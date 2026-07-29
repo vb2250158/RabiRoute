@@ -144,6 +144,62 @@ test("ensure ready automatically quick-logs the bound QQ and waits for OneBot", 
     assert.equal(result.state, "ready");
     assert.equal(quickLoginCount, 1);
     assert.match(String(result.openUrl), /token=secret/);
+    const openUrl = new URL(String(result.openUrl));
+    assert.equal(openUrl.pathname, "/webui/");
+    assert.equal(openUrl.searchParams.get("token"), "secret");
+  } finally {
+    await Promise.all([close(onebot), close(webui)]);
+  }
+});
+
+test("ensure ready returns an already healthy OneBot without probing WebUI login", async () => {
+  let webuiAuthCount = 0;
+  const onebot = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain request body */ }
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.setHeader("connection", "close");
+    if (request.url === "/get_status") {
+      response.end(JSON.stringify({ status: "ok", retcode: 0, data: { online: true, good: true } }));
+      return;
+    }
+    response.end(JSON.stringify({ status: "ok", retcode: 0, data: { user_id: 10000, nickname: "Bot" } }));
+  });
+  const webui = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain request body */ }
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.setHeader("connection", "close");
+    if (request.url === "/api/auth/login") webuiAuthCount += 1;
+    response.end(JSON.stringify({ code: 0, data: { Credential: "credential" } }));
+  });
+  const onebotPort = await listen(onebot);
+  const webuiPort = await listen(webui);
+  const instance = {
+    id: "bot",
+    name: "QQ bot",
+    gatewayPort: 8789,
+    httpUrl: `http://127.0.0.1:${onebotPort}`,
+    webuiUrl: `http://127.0.0.1:${webuiPort}/custom-console?theme=dark`,
+    webuiToken: "secret",
+    launchCommand: "unused.exe",
+    botUserId: "10000"
+  };
+  const runtime = { definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } };
+  try {
+    const result = await ensureNapcatInstanceReady({
+      rootDir: process.cwd(),
+      getRuntimes: () => [runtime],
+      normalizeNapCatInstances: () => [instance],
+      appendLog: () => undefined,
+      checkHttpEndpoint: async (url) => url === instance.webuiUrl
+    }, { gatewayId: "route", instanceId: "bot" });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.state, "ready");
+    assert.equal(webuiAuthCount, 0);
+    const openUrl = new URL(String(result.openUrl));
+    assert.equal(openUrl.pathname, "/custom-console");
+    assert.equal(openUrl.searchParams.get("theme"), "dark");
+    assert.equal(openUrl.searchParams.get("token"), "secret");
   } finally {
     await Promise.all([close(onebot), close(webui)]);
   }

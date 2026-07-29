@@ -357,10 +357,12 @@ test("AgentPacket exposes exact plan secretary sessions without replacing busine
     assert.match(packet.message, /发出秘书消息不等于委派完成/);
     assert.match(packet.message, /核对精确 threadId \+ workspace、秘书真实任务状态和阶段回执/);
     assert.match(packet.message, /秘书开始后等待其结果，不得并行执行同一份日志\/截图读取、查重、计划 PATCH/);
-    assert.match(packet.message, /当前步骤等待审批、方案确认或授权时必须立即写 isBlocked=true/);
+    assert.match(packet.message, /只有当前步骤具有完整、可提交且 responseStatus=pending 的 approvalRequest 时，Manager 才自动派生审批阻塞/);
     assert.match(packet.message, /计划暂停或秘书轮转不能清空业务 taskBinding/);
     assert.match(packet.message, /可推进但无人管理的计划数 = 0/);
     assert.match(packet.message, /可推进但空闲的业务任务数 = 0/);
+    assert.match(packet.message, /同一 planId 同时只能有一个控制面 writer/);
+    assert.match(packet.message, /active cycle 全局阻塞/);
   } finally {
     config.codexPlanAssistantSessions = previousSessions;
   }
@@ -378,12 +380,14 @@ test("AgentPacket tells the Agent to inquire on every inspection while a plan is
     status: "进行中",
     currentStepId: "ask-owner",
     waitingFor: "负责人回复",
+    isBlocked: true,
     blockedBy: "负责人尚未确认",
     steps: [{
       id: "ask-owner",
       title: "询问负责人并取得明确结果",
       status: "进行中",
       waitingFor: "负责人回复",
+      isBlocked: true,
       blockedBy: "负责人尚未确认"
     }],
     createdAt: "2026-07-27T00:00:00.000Z",
@@ -427,9 +431,85 @@ test("AgentPacket tells the Agent to inquire on every inspection while a plan is
   });
 
   assert.match(packet.message, /等待对象：负责人回复/);
-  assert.match(packet.message, /巡检动作：主动询问或追问，直到取得明确结果/);
+  assert.match(packet.message, /巡检动作：主动询问、重试、改道或补证据，直到取得明确结果/);
   assert.match(packet.message, /待确认说明：负责人尚未确认/);
   assert.doesNotMatch(packet.message, /阻塞原因：负责人尚未确认/);
+});
+
+test("AgentPacket keeps incomplete approval preparation actionable instead of blocked", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-approval-preparing-"));
+  const planId = "plan-approval-preparing";
+  const planDir = path.join(roleDir, "plans", "items", "active");
+  fs.mkdirSync(planDir, { recursive: true });
+  fs.writeFileSync(path.join(planDir, `${planId}.json`), JSON.stringify({
+    id: planId,
+    title: "准备审批合同",
+    focus: "补齐真实执行边界后再请求审批",
+    status: "进行中",
+    currentStepId: "approve",
+    isBlocked: true,
+    blockedBy: "缺少正式资源与执行范围",
+    steps: [{
+      id: "approve",
+      title: "准备审批合同",
+      status: "进行中",
+      isBlocked: true,
+      blockedBy: "缺少正式资源与执行范围",
+      approvalRequest: {
+        request: "批准后续实现。",
+        reason: "需要确认范围。",
+        files: [],
+        commands: [],
+        changes: [],
+        validation: [],
+        rollback: [],
+        outOfScope: []
+      }
+    }],
+    createdAt: "2026-07-29T00:00:00.000Z",
+    updatedAt: "2026-07-29T00:00:00.000Z",
+    keywords: ["审批", "合同"]
+  }), "utf8");
+
+  const rule: NotificationRule = {
+    id: "plan-approval-preparing",
+    name: "plan approval preparing",
+    enabled: true,
+    routeKinds: ["manual_trigger"],
+    template: `巡检 ${planId}`
+  };
+  const route: RouteProfile = {
+    id: "route-plan-approval-preparing",
+    name: "plan approval preparing route",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "XinghaiBuilder",
+    agentRoleFile: path.join(roleDir, "persona.md"),
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "manual_trigger",
+    record: { time: 1, source: "manual", rawMessage: `巡检 ${planId}` },
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: `巡检 ${planId}`
+  }, rule, {
+    roleId: "XinghaiBuilder",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  assert.match(packet.message, /审批合同尚未完整，计划保持进行中/);
+  assert.match(packet.message, /不能把资料缺失标成阻塞/);
+  assert.match(packet.message, /待确认说明：缺少正式资源与执行范围/);
+  assert.doesNotMatch(packet.message, /阻塞原因：缺少正式资源与执行范围/);
 });
 
 test("AgentPacket routes plan approval responses back to the plan instead of leaving them in Codex", () => {
@@ -454,7 +534,8 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
       planId: "plan-1",
       planStepId: "approval",
       planFeedbackId: "feedback-1",
-      planFeedbackResponseId: "response-feedback-1"
+      planFeedbackResponseId: "response-feedback-1",
+      planFeedbackKind: "approval_suggestion"
     }
   };
   const rule: NotificationRule = {
@@ -497,7 +578,7 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
   assert.equal(packet.templateValues.targetType, "plan_feedback");
   assert.equal(replyContext.planId, "plan-1");
   assert.equal(replyContext.planFeedbackResponseId, "response-feedback-1");
-  assert.match(packet.message, /事件：计划审批/);
+  assert.match(packet.message, /事件：计划反馈/);
   assert.match(packet.message, /路由类型：plan_feedback/);
   assert.doesNotMatch(packet.message, /\[最近消息\]/);
   assert.doesNotMatch(packet.message, /\[消息代码解析\]/);
@@ -506,7 +587,101 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
   assert.equal(packet.templateValues.recentMessages, "");
   assert.match(packet.message, /面向用户的回复必须回到当前计划记录/);
   assert.match(packet.message, /先按审批意见读取并 PATCH 更新对应计划或步骤/);
+  assert.match(packet.message, /isBlocked 由 Manager 根据完整且待决的审批合同自动派生/);
   assert.match(packet.message, /不要重复输出计划回复正文/);
+
+  const guidancePacket = buildAgentPacket({
+    route,
+    routeKind: "plan_feedback",
+    record: {
+      ...record,
+      rawMessage: "先收窄整体范围，再调整后续未开始步骤。",
+      messageId: "plan-feedback-guidance-1",
+      replyContext: {
+        targetType: "plan_feedback",
+        planId: "plan-1",
+        planFeedbackId: "guidance-1",
+        planFeedbackResponseId: "response-guidance-1",
+        planFeedbackKind: "guidance"
+      }
+    },
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: "先收窄整体范围，再调整后续未开始步骤。"
+  }, rule, {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  assert.match(guidancePacket.message, /本次是计划引导处理/);
+  assert.match(guidancePacket.message, /引导属于整个计划，不绑定某个步骤/);
+  assert.match(guidancePacket.message, /同步调整尚未开始的步骤/);
+  assert.match(guidancePacket.message, /不带 stepId 的 guidance_response/);
+  assert.doesNotMatch(guidancePacket.message, /approvalRequest\.responseStatus/);
+});
+
+test("AgentPacket treats an auto-delivered approval as a persona notice without asking for duplicate handling", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-feedback-notice-"));
+  const record: PlanFeedbackMessageRecord = {
+    time: Date.now() / 1_000,
+    rawMessage: "审批已自动投递到绑定业务会话，无需再次转发。",
+    messageId: "plan-feedback-notice-1",
+    senderName: "RabiRoute Manager",
+    roleId: "Rabi",
+    adapterType: "planFeedback",
+    replyContext: {
+      targetType: "plan_feedback_notice",
+      planId: "plan-1",
+      planStepId: "approval",
+      planFeedbackId: "feedback-1",
+      planFeedbackAutoDelivered: true
+    }
+  };
+  const rule: NotificationRule = {
+    id: "plan-feedback",
+    name: "plan feedback",
+    enabled: true,
+    routeKinds: ["plan_feedback"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "role-panel-route",
+    name: "role panel",
+    enabled: true,
+    recentMessageLimit: 12,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Rabi",
+    agentRoleFile: "persona.md",
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "plan_feedback",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, {
+    roleId: "Rabi",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  assert.equal(packet.templateValues.targetType, "plan_feedback_notice");
+  assert.match(packet.message, /已自动投递到绑定业务会话/);
+  assert.match(packet.message, /无需再次转发/);
+  assert.doesNotMatch(packet.message, /先按审批意见读取并 PATCH 更新对应计划或步骤/);
+  assert.doesNotMatch(packet.message, /把处理说明 POST 到普通回复 API/);
+  assert.equal(packet.templateValues.recentMessageLimit, 0);
 });
 
 test("AgentPacket exposes processing host and persona-owned voice identity file without naming the speaker", () => {

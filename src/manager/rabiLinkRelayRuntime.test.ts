@@ -244,6 +244,7 @@ test("global Relay runtime forwards media ranges and Manager SSE events without 
   assert.equal(relayState.finishedBody?.statusCode, 206);
   assert.deepEqual(Buffer.from(String(relayState.finishedBody?.bodyBase64), "base64"), mediaBody);
   assert.deepEqual(relayState.eventBody, {
+    streamPath: "/api/events",
     eventType: "gateway_status",
     data: { gatewayId: "route-a", running: true },
     deviceId: "pc-range",
@@ -252,13 +253,122 @@ test("global Relay runtime forwards media ranges and Manager SSE events without 
   assert.equal(eventPostCount, 1);
 });
 
+test("global Relay runtime hot-forwards supported SSE channels without finite-response self-proxy leaks", async (t) => {
+  const localConnections = new Map<string, number>();
+  const localWebgui = http.createServer((request, response) => {
+    const pathname = new URL(request.url || "/", "http://127.0.0.1").pathname;
+    localConnections.set(pathname, (localConnections.get(pathname) || 0) + 1);
+    if (request.method === "GET" && ["/api/events", "/api/speech/events"].includes(pathname)) {
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "keep-alive"
+      });
+      response.write("event: ready\ndata: {}\n\n");
+      if (pathname === "/api/events") {
+        response.write("event: gateway_status\ndata: {\"gatewayId\":\"route-hot\",\"running\":true}\n\n");
+      } else {
+        response.write("event: speech_status\ndata: {\"state\":\"ready\"}\n\n");
+      }
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const localPort = await listen(localWebgui);
+  t.after(() => close(localWebgui));
+
+  let claimCount = 0;
+  const relayState: {
+    eventBodies: Record<string, unknown>[];
+    rejectedBody?: Record<string, unknown>;
+  } = { eventBodies: [] };
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (request.method === "GET" && url.pathname === "/api/rabilink/events") {
+      openRelayEvents(response);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/worker/webgui-requests") {
+      claimCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: true,
+        requests: claimCount === 1 ? [{
+          id: "request-invalid-sse-proxy",
+          method: "GET",
+          path: "/api/speech/events",
+          headers: { accept: "text/event-stream" }
+        }] : []
+      }));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/worker/webgui-events") {
+      const chunks: Buffer[] = [];
+      request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        relayState.eventBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+        response.writeHead(202, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/worker/webgui-requests/request-invalid-sse-proxy/response") {
+      const chunks: Buffer[] = [];
+      request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        relayState.rejectedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const relayPort = await listen(relay);
+  t.after(() => close(relay));
+
+  const runtime = new RabiLinkRelayRuntime();
+  t.after(() => runtime.stop());
+  runtime.sync({
+    enabled: true,
+    url: `http://127.0.0.1:${relayPort}`,
+    token: "relay-hot-token",
+    deviceId: "pc-hot",
+    deviceGuid: "guid-hot",
+    deviceName: "Hot PC",
+    claimWaitMs: 60000,
+    localWebguiUrl: `http://127.0.0.1:${localPort}`,
+    speechProxyEnabled: false,
+    localSpeechUrl: "http://127.0.0.1:8781"
+  });
+
+  await waitFor(() => {
+    const paths = new Set(relayState.eventBodies.map(body => String(body.streamPath || "")));
+    return paths.has("/api/events") && paths.has("/api/speech/events") && relayState.rejectedBody !== undefined;
+  }, 3000);
+
+  assert.equal(localConnections.get("/api/events"), 1);
+  assert.equal(localConnections.get("/api/speech/events"), 1);
+  assert.equal(relayState.rejectedBody?.ok, false);
+  assert.equal(relayState.rejectedBody?.statusCode, 502);
+  assert.match(
+    Buffer.from(String(relayState.rejectedBody?.bodyBase64 || ""), "base64").toString("utf8"),
+    /SSE event streams must use the Relay event channel/
+  );
+});
+
 test("global Relay runtime bounds a stuck local GET and retries an uncertain Relay completion", async (t) => {
   let localRequestCount = 0;
   const localWebgui = http.createServer((request, response) => {
+    if (request.url !== "/gateways") {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ recovered: false }));
+      return;
+    }
     localRequestCount += 1;
     if (localRequestCount === 1) return;
-    response.writeHead(request.url === "/gateways" ? 200 : 404, { "content-type": "application/json" });
-    response.end(JSON.stringify({ recovered: request.url === "/gateways" }));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ recovered: true }));
   });
   const localPort = await listen(localWebgui);
   t.after(() => close(localWebgui));

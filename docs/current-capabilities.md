@@ -66,6 +66,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - `RouteDecision` 只负责规则匹配；`forwarding.ts` 遍历 active route profile、写审计并投递每一条命中规则。
 - `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`；配置了持久计划协助任务时，还注入每个槽位的完整 ID、名称、workspace 和分配规则。Heartbeat 与 `plan_feedback` 固定省略历史段。
 - 持久“协助处理计划”任务是计划管理秘书，不是业务执行 owner。秘书维护计划/记忆、查重与绑定业务任务、读取状态、消费结果和续投；计划 `taskBinding` 始终指向独立业务任务。秘书及其临时子 Agent不得修改业务文件，实际调查、实现和验证由业务任务完成。主人格收到阶段结果后必须同轮推动秘书更新控制面并按 `taskBinding` 精确续投业务任务；多个秘书并行管理不同计划分片。代码、配置和契约测试已覆盖，真实 Desktop 多任务纵向验收仍未完成，因此该能力仍为实验状态。
+- Codex Desktop 投递按完整 `threadId + workspace` 分片调度：不同任务可以并发进入 Desktop IPC，同一任务的投递保持顺序，避免两个请求同时尝试启动新 turn。Manager 读取或更新单个计划时按计划 ID 直达标准文件，只在兼容旧的非标准文件名时回退到目录扫描；不同秘书不再因为单计划操作重复读取全部计划和全部审批记录。
 - 人格 `recentMessageLimits` 对普通消息端分别限制 `0–200` 条，默认 `12`；`0` 只关闭注入。Heartbeat 始终按 `0` 处理。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
 - 已匹配的普通消息直接 `steer/start` Desktop owner；Heartbeat 可专门配置忙碌跳过，语音可专门配置热/关键词投递。
 - Delivery replay 已实现：真实投递会写 `delivery-replay-ledger.jsonl`，可按 attempt 或消息记录重新进入投递链。
@@ -104,6 +105,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 控制台可显式开启局域网 WebGUI，并在 `data/Config.json.webguiLan` 生成/轮换独立访问密钥。重启后 Manager 从回环监听切换到局域网监听；此时从本机 `localhost/127.0.0.1` 打开的页面会自动重定向到优先局域网 IP，并保留当前 Route 和页面。非本机的 Manager API、SSE 和私有资源请求必须携带 `webgui_token` 或专用请求头，静态登录壳本身不授予读取权限。开关和密钥只能由运行 Manager 的本机通过回环或自己的局域网地址管理，其他设备仍被拒绝；左侧“当前路由”切换会重定向 `#/routes/<Route配置名>/overview` 或 `knowledge`，控制台可复制对应完整链接。
 - 已登录 RabiLink Relay 管理后台后，可从 `https://<Relay>/manage/<账号>/<RabiGUID>/` 访问目标 PC 的完整 WebGUI 控制面。普通 API、图片、附件、音频、文件下载和视频 Range 经应用 token 认证的 PC worker 转发；Manager SSE 经独立事件通道实时推送。管理 Cookie、RabiLink 应用 token 与局域网 `webgui_token` 保持三个独立边界。
 - WebGUI 当前有：控制台、消息适配器、Rabi 人格、计划与记忆、日志诊断、使用手册六类页面；快速配置向导可以选择消息入口、处理端和人格。
+- “计划与记忆”页先按 Manager 排序分页读取标题、类型、状态等轻量摘要，首屏摘要返回后才启动较大的记忆读取，避免同步磁盘 I/O 抢占首屏；页面无需滚动就会持续用 cursor 补齐后续摘要。正文、步骤、审批和附件元数据只对真正接近视口的卡片补充，每轮提升最近 2 张且最多 2 个并发请求，完整内容搜索时才按需补齐全部详情。记忆卡片分批渲染，图片/视频附件继续使用浅色加载与失败占位及低优先级懒加载，避免大知识库阻塞首屏。
 - 控制台管理 Rabi 实例名/GUID、全局 RabiLink Relay 连接、route/role 目录和 route 启停。
 - 消息适配器页包含 NapCat 多实例管理、Remote Agent 扫描连接、外部适配器诊断、Agent 扫描和 pipeline/工作目录配置。
 - 人格页管理 persona、route variables、规则、route kind、regex、定时计划和模板；没有实现设计稿中的 dry-run 预览。

@@ -48,7 +48,7 @@ async function readUntil(reader, expected, timeoutMs = 2000) {
   assert.match(text, new RegExp(expected));
 }
 
-test("remote WebGUI proxies authenticated media ranges and Manager events", async () => {
+test("remote WebGUI proxies authenticated media ranges and isolated hot SSE channels", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-relay-webgui-proxy-"));
   const dataDirectory = path.join(directory, "data");
   const webguiDirectory = path.join(directory, "webgui");
@@ -143,19 +143,47 @@ test("remote WebGUI proxies authenticated media ranges and Manager events", asyn
     const reader = eventResponse.body.getReader();
     await readUntil(reader, "event: ready");
 
+    const speechEventController = new AbortController();
+    const speechEventTimer = setTimeout(() => speechEventController.abort(), 2000);
+    const speechEventResponse = await fetch(`${remotePrefix}/api/speech/events`, {
+      headers: { cookie },
+      signal: speechEventController.signal
+    });
+    clearTimeout(speechEventTimer);
+    assert.equal(speechEventResponse.status, 200);
+    assert.match(speechEventResponse.headers.get("content-type") || "", /text\/event-stream/);
+    const speechReader = speechEventResponse.body.getReader();
+    await readUntil(speechReader, "event: ready");
+
     const publishResponse = await fetch(`${baseUrl}/worker/webgui-events`, {
       method: "POST",
       headers: { ...workerHeaders, "content-type": "application/json" },
       body: JSON.stringify({
         deviceId: "pc-proxy",
         deviceGuid: "guid-proxy",
+        streamPath: "/api/events",
         eventType: "gateway_status",
         data: { gatewayId: "route-a", running: true }
       })
     });
     assert.equal(publishResponse.status, 202);
     await readUntil(reader, "event: gateway_status");
+
+    const speechPublishResponse = await fetch(`${baseUrl}/worker/webgui-events`, {
+      method: "POST",
+      headers: { ...workerHeaders, "content-type": "application/json" },
+      body: JSON.stringify({
+        deviceId: "pc-proxy",
+        deviceGuid: "guid-proxy",
+        streamPath: "/api/speech/events",
+        eventType: "speech_status",
+        data: { state: "ready" }
+      })
+    });
+    assert.equal(speechPublishResponse.status, 202);
+    await readUntil(speechReader, "event: speech_status");
     await reader.cancel();
+    await speechReader.cancel();
 
     const oversizedResponse = await fetch(`${baseUrl}/worker/webgui-requests/oversized/response`, {
       method: "POST",

@@ -141,7 +141,8 @@ test("plan feedback replies are written to the plan audit record and published t
       planId: "plan-1",
       planStepId: "approval",
       planFeedbackId: "feedback-1",
-      planFeedbackResponseId: "response-feedback-1"
+      planFeedbackResponseId: "response-feedback-1",
+      planFeedbackKind: "approval_suggestion"
     }
   }, {
     rootDir,
@@ -174,6 +175,36 @@ test("plan feedback replies are written to the plan audit record and published t
       replyToFeedbackId: "feedback-1"
     }
   }]);
+
+  const guidanceResult = await handleAgentReply({
+    text: "已按计划引导调整后续未开始步骤。",
+    replyContext: {
+      runtimeRouteId: "main",
+      routeProfileId: "main",
+      targetType: "plan_feedback",
+      adapterType: "rolePanel",
+      messageId: "plan-feedback-guidance-1",
+      roleId: "Rabi",
+      planId: "plan-1",
+      planFeedbackId: "guidance-1",
+      planFeedbackResponseId: "response-guidance-1",
+      planFeedbackKind: "guidance"
+    }
+  }, {
+    rootDir,
+    routeRoot: path.join(rootDir, "data", "route"),
+    rolesRoot,
+    runtimes: [{
+      id: "main",
+      agentRoleId: "Rabi",
+      pipeline: { outputAdapter: "agent", outputPipeline: "agent" }
+    }]
+  });
+
+  assert.equal(guidanceResult.reason, "Saved as a plan guidance response.");
+  const guidanceRows = fs.readFileSync(feedbackPath, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(guidanceRows[1].kind, "guidance_response");
+  assert.equal(guidanceRows[1].stepId, undefined);
 });
 
 test("QQ output does not require original source context when target is explicit", async () => {

@@ -59,6 +59,9 @@ test("plan assistant initialization keeps the secretary control-only and preserv
   assert.match(prompt, /绝不能保存本秘书会话/);
   assert.match(prompt, /禁止在本秘书会话中执行业务调查/);
   assert.match(prompt, /临时子 Agent/);
+  assert.match(prompt, /同一 planId 同时只有一个控制面 writer/);
+  assert.match(prompt, /不同计划可以并行/);
+  assert.match(prompt, /active cycle 不得阻塞其它计划/);
   assert.match(prompt, /同样不得执行业务工作/);
   assert.match(prompt, /业务 taskBinding 的真实状态/);
 });

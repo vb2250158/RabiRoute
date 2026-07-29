@@ -8,6 +8,8 @@ import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
 import PersonaAvatar from "./PersonaAvatar.vue";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { copyTextToClipboard } from "../clipboard";
+import { routeScopedRuntimePath } from "../routeScopedNavigation";
+import { personaOptionDisplayName } from "../personaPresentation";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
@@ -140,8 +142,13 @@ const selectedSessionName = computed(() => {
   return "";
 });
 const roleOptions = computed(() => [
-  { title: "不配置人格", value: "", avatarUrl: "" },
-  ...((runtime.value.roleInfo?.options || []).map(role => ({ title: role.label || role.value, value: role.value, avatarUrl: role.avatarUrl || "" })))
+  { title: "不配置人格", subtitle: "", value: "", avatarUrl: "" },
+  ...((runtime.value.roleInfo?.options || []).map(role => ({
+    title: personaOptionDisplayName(role),
+    subtitle: personaOptionDisplayName(role) !== role.value ? `人格 ID · ${role.value}` : "",
+    value: role.value,
+    avatarUrl: role.avatarUrl || ""
+  })))
 ]);
 const agentNeedsCodexProject = computed(() => selectedAgent.value === "codex");
 const agentNeedsCopilotProject = computed(() => selectedAgent.value === "copilotCli");
@@ -457,11 +464,14 @@ function napcatWebuiUrlWithToken(webuiUrl: string | undefined, token: string | u
   if (!value) return url;
   try {
     const parsed = new URL(url);
+    parsed.pathname = parsed.pathname.replace(/\/webui\/?$/i, "/web_login");
+    if (!/\/web_login\/?$/i.test(parsed.pathname)) parsed.pathname = "/web_login";
     parsed.searchParams.set("token", value);
     return parsed.toString();
   } catch {
-    const separator = url.includes("?") ? "&" : "?";
-    return `${url}${separator}token=${encodeURIComponent(value)}`;
+    const loginUrl = url.replace(/\/webui\/?(?:\?.*)?$/i, "/web_login");
+    const separator = loginUrl.includes("?") ? "&" : "?";
+    return `${loginUrl}${separator}token=${encodeURIComponent(value)}`;
   }
 }
 
@@ -487,7 +497,8 @@ function showCopyResult(message: string): void {
 
 function openRuntimeLog(): void {
   open.value = false;
-  void router.push("/runtime");
+  const name = store.selectedGateway ? store.configNameFor(store.selectedGateway) : "";
+  void router.push(routeScopedRuntimePath(name));
 }
 
 async function testNapcatHealth(): Promise<void> {
@@ -1370,7 +1381,7 @@ async function apply() {
                   class="mb-4"
                 >
                   <template #item="{ props: itemProps, item }">
-                    <v-list-item v-bind="itemProps">
+                    <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle">
                       <template #prepend><PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="32" /></template>
                     </v-list-item>
                   </template>

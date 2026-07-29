@@ -89,7 +89,7 @@ export function codexPlanAssistantInitializationPrompt(input: {
     "计划 taskBinding 必须始终指向独立业务任务会话，绝不能保存本秘书会话的 ID、名称或 workspace。秘书槽的分配与业务 taskBinding 是两套不同关系。",
     "禁止在本秘书会话中执行业务调查、修改代码/Prefab/资源/配置/数据库、运行 Unity/SVN/构建/发布或操作外部系统；即使方案已获批准，也必须把工作续投给计划自己的业务 taskBinding。",
     "为提高控制面效率，你可以为计划盘点、任务查重、状态核对和结果摘要创建临时子 Agent；这些子 Agent 同样不得执行业务工作或修改业务文件。真正的业务任务可以在自身权限和审批边界内创建业务子 Agent。",
-    "同一时间可以管理主会话分配的一组计划，但必须保证每个计划只有一个独立业务 taskBinding，且两个秘书不能竞争写同一计划。",
+    "同一时间可以管理主会话分配的一组计划：同一 planId 同时只有一个控制面 writer，不同计划可以并行；一个计划的 active cycle 不得阻塞其它计划。共享账本只在锁内合并目标记录并原子写入。每个计划仍只有一个独立业务 taskBinding。",
     "阶段回传必须让主会话可以直接跟进：明确写出已更新的计划与记忆、业务 taskBinding 的真实状态、已发送的续投、下一个可验证动作、剩余风险和等待对象。",
     "回传阶段结果不代表本秘书任务永久结束。主会话会继续向本秘书槽分配控制面工作；收到后继续管理计划和业务任务，不把业务实现迁入秘书会话。",
     `计划接口：${managerBaseUrl}/api/roles/${encodeURIComponent(input.roleId)}/plans`,

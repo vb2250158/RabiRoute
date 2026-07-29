@@ -4,7 +4,16 @@ import { useRoute, useRouter } from "vue-router";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import { useI18n } from "./i18n";
-import { routeScopedKnowledgePath, routeScopedOverviewPath } from "./routeScopedNavigation";
+import {
+  routeScopedAdaptersPath,
+  routeScopedKnowledgePath,
+  routeScopedOverviewPath,
+  routeScopedPathForCurrentPage,
+  routeScopedPersonaPath,
+  routeScopedRuntimePath,
+  routeScopedSpeechPath
+} from "./routeScopedNavigation";
+import { gatewayPersonaDisplayName } from "./personaPresentation";
 import { useGatewayStore } from "./stores/gatewayStore";
 import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "./utils/gatewayHelpers";
 
@@ -47,15 +56,27 @@ const snackbar = ref("");
 const selectedRouteKey = computed(() => store.selectedGateway ? configNameFor(store.selectedGateway) : "");
 const navItems = computed(() => [
   { title: "控制台", icon: "mdi-view-dashboard-outline", to: routeScopedOverviewPath(selectedRouteKey.value) },
-  { title: "消息适配器", icon: "mdi-puzzle-outline", to: "/routes" },
-  { title: "Rabi 人格", icon: "mdi-account-heart-outline", to: "/persona" },
+  { title: "消息适配器", icon: "mdi-puzzle-outline", to: routeScopedAdaptersPath(selectedRouteKey.value) },
+  { title: "Rabi 人格", icon: "mdi-account-heart-outline", to: routeScopedPersonaPath(selectedRouteKey.value) },
   { title: "计划与记忆", icon: "mdi-notebook-check-outline", to: routeScopedKnowledgePath(selectedRouteKey.value) },
-  { title: "语音服务", icon: "mdi-waveform", to: "/speech" },
-  { title: "日志诊断", icon: "mdi-console-line", to: "/runtime" }
+  { title: "语音服务", icon: "mdi-waveform", to: routeScopedSpeechPath(selectedRouteKey.value) },
+  { title: "日志诊断", icon: "mdi-console-line", to: routeScopedRuntimePath(selectedRouteKey.value) }
 ].map(item => ({ ...item, title: t(item.title) })));
 
 const managerConnected = computed(() => !store.managerError);
 const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
+const routeOptions = computed(() => store.gateways.map(gateway => {
+  const runtime = store.runtimeFor(gateway.id);
+  const title = gatewayPersonaDisplayName(gateway, runtime.roleInfo);
+  const configName = store.configNameFor(gateway);
+  const adapters = gatewayAdapterTypes(gateway).map(adapterLabel).join(" + ");
+  const subtitle = [
+    title !== configName ? configName : "",
+    isMessageInputsDisabled(gateway) ? "已禁用" : "",
+    adapters
+  ].filter(Boolean).join(" · ");
+  return { title, subtitle, value: gateway.id };
+}));
 const selectedGatewayName = computed(() => store.selectedGateway ? store.configNameFor(store.selectedGateway) : "未选择路由");
 const selectedGatewayAdapters = computed(() => {
   if (!store.selectedGateway) return "等待配置";
@@ -72,8 +93,9 @@ const selectedRuntimeLabel = computed(() => {
 onMounted(async () => {
   await store.load();
   if (store.gateways.length === 0) store.openQuickSetup();
-  else if (route.path === "/overview" && selectedRouteKey.value) {
-    await router.replace(routeScopedOverviewPath(selectedRouteKey.value));
+  else if (selectedRouteKey.value) {
+    const scopedPath = routeScopedPathForCurrentPage(selectedRouteKey.value, route.path);
+    if (scopedPath && scopedPath !== route.path) await router.replace(scopedPath);
   }
   window.addEventListener("beforeunload", beforeUnload);
 });
@@ -125,11 +147,8 @@ function selectGateway(id: string) {
   // Route 相关页面始终把左侧当前 Route 同步进 URL。
   const gw = store.gateways.find(g => g.id === id);
   const name = gw ? configNameFor(gw) : id;
-  const currentPath = route.path;
-  if (currentPath === "/overview" || /^\/routes\/[^/]+\/overview$/.test(currentPath)) router.replace(routeScopedOverviewPath(name));
-  else if (currentPath === "/knowledge" || /^\/routes\/[^/]+\/knowledge$/.test(currentPath)) router.replace(routeScopedKnowledgePath(name));
-  else if (currentPath.startsWith("/routes")) router.replace(`/routes/${name}`);
-  else if (currentPath.startsWith("/persona")) router.replace(`/persona/${name}`);
+  const scopedPath = routeScopedPathForCurrentPage(name, route.path);
+  if (scopedPath && scopedPath !== route.path) router.replace(scopedPath);
 }
 </script>
 
@@ -157,10 +176,17 @@ function selectGateway(id: string) {
             </div>
             <v-select
               :model-value="store.selectedGatewayId"
-              :items="store.gateways.map(g => ({ title: `${store.configNameFor(g)} · ${isMessageInputsDisabled(g) ? '已禁用 · ' : ''}${gatewayAdapterTypes(g).map(adapterLabel).join(' + ')}`, value: g.id }))"
+              :items="routeOptions"
               label="当前路由"
               @update:model-value="value => selectGateway(String(value || ''))"
-            />
+            >
+              <template #item="{ props: itemProps, item }">
+                <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" />
+              </template>
+              <template #selection="{ item }">
+                <span class="text-truncate">{{ item.raw.title }}</span>
+              </template>
+            </v-select>
             <div class="route-picker-status">
               <span>{{ selectedRuntimeLabel }}</span>
               <b>{{ selectedGatewayAdapters }}</b>

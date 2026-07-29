@@ -18,6 +18,7 @@ import {
 } from "@shared/codexPlanAssistantSessions";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 import { copyTextToClipboard } from "../clipboard";
+import { routeScopedAdaptersPath, routeScopedRuntimePath } from "../routeScopedNavigation";
 
 const store = useGatewayStore();
 const speech = useSpeechStore();
@@ -97,7 +98,7 @@ type NapCatScanHealthEntry = Record<string, any> & {
   instanceName?: string;
 };
 
-const napcatWebuiOpenHealthPatch = { readWebuiLoginInfo: false } as const;
+const napcatWebuiOpenHealthPatch = { readWebuiLoginInfo: false, inspectProcesses: false } as const;
 
 async function runMessageAdapterScan(): Promise<void> {
   if (messageAdapterScan.value.loading) return;
@@ -2450,7 +2451,8 @@ function showCopyResult(message: string): void {
 }
 
 function openRuntimeLog(): void {
-  void router.push("/runtime");
+  const name = store.selectedGateway ? configNameFor(store.selectedGateway) : "";
+  void router.push(routeScopedRuntimePath(name));
 }
 
 async function deleteCurrentGateway(): Promise<void> {
@@ -2572,11 +2574,14 @@ function napcatWebuiUrlWithToken(webuiUrl: string | undefined, token: string | u
   if (!value) return url;
   try {
     const parsed = new URL(url);
+    parsed.pathname = parsed.pathname.replace(/\/webui\/?$/i, "/web_login");
+    if (!/\/web_login\/?$/i.test(parsed.pathname)) parsed.pathname = "/web_login";
     parsed.searchParams.set("token", value);
     return parsed.toString();
   } catch {
-    const separator = url.includes("?") ? "&" : "?";
-    return `${url}${separator}token=${encodeURIComponent(value)}`;
+    const loginUrl = url.replace(/\/webui\/?(?:\?.*)?$/i, "/web_login");
+    const separator = loginUrl.includes("?") ? "&" : "?";
+    return `${loginUrl}${separator}token=${encodeURIComponent(value)}`;
   }
 }
 
@@ -3401,12 +3406,12 @@ watch(() => store.selectedGatewayId, (id) => {
   if (routeGateway && routeGateway.id !== id) return;
   const gw = store.gateways.find(g => g.id === id);
   const name = gw ? configNameFor(gw) : id;
-  if (name && route.params.id !== name) router.replace(`/routes/${name}`);
+  if (name && route.params.id !== name) router.replace(routeScopedAdaptersPath(name));
 });
 
 watch(() => gateway.value?.configName, (name) => {
   configNameError.value = "";
-  if (name && route.params.id !== name) router.replace(`/routes/${name}`);
+  if (name && route.params.id !== name) router.replace(routeScopedAdaptersPath(name));
 });
 
 watch(() => gateway.value?.id, () => {

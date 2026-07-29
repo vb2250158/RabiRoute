@@ -37,6 +37,21 @@ function Test-Manager {
   }
 }
 
+function Test-ManagerStable {
+  param(
+    [string]$Url,
+    [int]$Attempts = 2
+  )
+  $last = $null
+  for ($i = 0; $i -lt $Attempts; $i++) {
+    $last = Test-Manager -Url $Url
+    if (-not $last) {
+      return $null
+    }
+  }
+  return $last
+}
+
 function Test-TcpPort {
   param(
     [string]$HostName,
@@ -55,6 +70,82 @@ function Test-TcpPort {
   } finally {
     $client.Close()
   }
+}
+
+function Get-TcpPortOwner {
+  param([int]$Port)
+  try {
+    $connection = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop |
+      Sort-Object OwningProcess |
+      Select-Object -First 1
+    if (-not $connection) {
+      return $null
+    }
+    return Get-CimInstance Win32_Process -Filter "ProcessId=$($connection.OwningProcess)" -ErrorAction Stop
+  } catch {
+    return $null
+  }
+}
+
+function Test-ProjectManagerProcess {
+  param(
+    $Process,
+    [string]$DistManager
+  )
+  if (-not $Process -or -not $Process.CommandLine -or $Process.Name -ine "node.exe") {
+    return $false
+  }
+  $expected = [System.IO.Path]::GetFullPath($DistManager).ToLowerInvariant()
+  $commandLine = $Process.CommandLine.ToLowerInvariant()
+  $relativeDistManagerPattern = '(^|[\s"])(?:\.\\|\./)?dist[\\/]manager\.js(?=$|[\s"])'
+  return $commandLine.Contains('"' + $expected + '"') `
+    -or $commandLine.Contains(" $expected") `
+    -or $commandLine -match $relativeDistManagerPattern
+}
+
+function Stop-StaleProjectManager {
+  param(
+    $Process,
+    [string]$ManagerUrl,
+    [string]$HostName,
+    [int]$Port,
+    [string]$LauncherLog,
+    [string]$Reason = "The existing RabiRoute Manager from this project is unresponsive."
+  )
+  $pidValue = [int]$Process.ProcessId
+  $message = "$Reason Attempting a controlled takeover of pid=$pidValue."
+  Write-Info $message
+  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
+
+  try {
+    Invoke-RestMethod -Uri "$ManagerUrl/manager/shutdown" -Method Post -TimeoutSec 2 | Out-Null
+  } catch {
+    Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Graceful shutdown did not complete: $($_.Exception.Message)"
+  }
+
+  for ($i = 0; $i -lt 12; $i++) {
+    if (-not (Test-TcpPort -HostName $HostName -Port $Port)) {
+      return $true
+    }
+    Start-Sleep -Milliseconds 250
+  }
+
+  Write-Info "Graceful shutdown timed out; terminating only the verified RabiRoute Manager process tree pid=$pidValue."
+  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Graceful shutdown timed out; terminating verified process tree pid=$pidValue."
+  try {
+    & taskkill.exe /PID $pidValue /T /F 2>&1 |
+      ForEach-Object { Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] taskkill: $_" }
+  } catch {
+    Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] taskkill failed: $($_.Exception.Message)"
+  }
+
+  for ($i = 0; $i -lt 20; $i++) {
+    if (-not (Test-TcpPort -HostName $HostName -Port $Port)) {
+      return $true
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  return $false
 }
 
 function Get-ExistingTrayProcesses {
@@ -354,7 +445,29 @@ try {
   Write-Info "Logs: $logsDir"
 
   $distManager = Join-Path $projectRoot "dist\manager.js"
-  $manager = Test-Manager -Url $ManagerUrl
+  $uri = [Uri]$ManagerUrl
+  $managerPort = [int]$uri.Port
+  $manager = Test-ManagerStable -Url $ManagerUrl
+  if ($manager) {
+    $owner = Get-TcpPortOwner -Port $managerPort
+    $runningOldBuild = (Test-ProjectManagerProcess -Process $owner -DistManager $distManager) `
+      -and (Test-Path -LiteralPath $distManager) `
+      -and ((Get-Item -LiteralPath $distManager).LastWriteTime -gt $owner.CreationDate)
+    if ($runningOldBuild) {
+      if (-not (Stop-StaleProjectManager `
+        -Process $owner `
+        -ManagerUrl $ManagerUrl `
+        -HostName $uri.Host `
+        -Port $managerPort `
+        -LauncherLog $launcherLog `
+        -Reason "The existing RabiRoute Manager is healthy but predates the current backend build.")) {
+        throw "The previous RabiRoute Manager pid=$($owner.ProcessId) could not be stopped and still owns port $managerPort."
+      }
+      $manager = $null
+      Write-Info "Previous Manager released port $managerPort; loading the current backend build."
+      Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Previous Manager released port $managerPort for the current backend build."
+    }
+  }
   if ($manager) {
     Write-Info "Manager is already running at $ManagerUrl. Reusing it."
     Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Manager already running."
@@ -382,14 +495,27 @@ try {
     exit 0
   }
 
-  $uri = [Uri]$ManagerUrl
-  $managerPort = [int]$uri.Port
   if (Test-TcpPort -HostName $uri.Host -Port $managerPort) {
-    $message = "Port $managerPort is already occupied, but $ManagerUrl/meta did not respond as RabiRoute manager. Not starting a duplicate process."
-    Write-Info $message
-    Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
-    Wait-ForEnter
-    exit 2
+    $owner = Get-TcpPortOwner -Port $managerPort
+    if (Test-ProjectManagerProcess -Process $owner -DistManager $distManager) {
+      if (-not (Stop-StaleProjectManager `
+        -Process $owner `
+        -ManagerUrl $ManagerUrl `
+        -HostName $uri.Host `
+        -Port $managerPort `
+        -LauncherLog $launcherLog)) {
+        throw "The verified stale RabiRoute Manager pid=$($owner.ProcessId) could not be stopped and still owns port $managerPort."
+      }
+      Write-Info "Stale Manager released port $managerPort; continuing normal startup."
+      Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Stale Manager released port $managerPort."
+    } else {
+      $ownerText = if ($owner) { "$($owner.Name) pid=$($owner.ProcessId)" } else { "an unknown process" }
+      $message = "Port $managerPort is owned by $ownerText, and $ManagerUrl/meta is not a stable RabiRoute Manager. Not stopping an unrelated process."
+      Write-Info $message
+      Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
+      Wait-ForEnter
+      exit 2
+    }
   }
 
   if (Test-NeedsBuild -ProjectRoot $projectRoot -DistManager $distManager) {

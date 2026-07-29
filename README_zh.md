@@ -60,9 +60,9 @@ npm run start:manager
 
 打开本机地址 `http://127.0.0.1:8790/` 进入 RibiWebGUI。首次运行且本地没有运行数据时，Manager 会从 `examples/data/` 初始化一份脱敏配置。
 
-局域网访问默认关闭。在本机控制台打开“局域网访问 WebGUI”并生成访问密钥，重启 Manager 后，其他设备可通过 `http://<Rabi-PC-局域网IP>:8790/#/routes/<Route配置名>/overview?webgui_token=<密钥>` 访问指定 Route 的控制台，也可把末尾页面改为 `knowledge` 直接打开该 Route 的计划与记忆。Manager 已实际监听局域网时，从本机 `localhost/127.0.0.1` 打开的 WebGUI 会自动重定向到优先局域网 IP，并保留当前 Route 和页面；左侧“当前路由”切换也会立即重定向当前 Route 页面 URL。`127.0.0.1` 永远表示当前打开浏览器的设备，因此不能从另一台手机或电脑使用。访问密钥统一保护 Manager API、SSE 和私有 WebGUI 资源；Windows 防火墙仍可能需要显式允许 `8790` 端口。
+局域网访问默认关闭。在本机控制台打开“局域网访问 WebGUI”并生成访问密钥，重启 Manager 后，其他设备可通过 `http://<Rabi-PC-局域网IP>:8790/#/routes/<Route配置名>/overview?webgui_token=<密钥>` 访问指定 Route 的控制台。所有与 Route 相关的侧栏页面都使用同一稳定格式，把末尾页面替换为 `adapters`、`persona`、`knowledge`、`speech` 或 `runtime` 即可。Manager 已实际监听局域网时，从本机 `localhost/127.0.0.1` 打开的 WebGUI 会自动重定向到优先局域网 IP，并保留当前 Route 和页面；左侧“当前路由”切换也会立即重定向当前 Route 页面 URL。`127.0.0.1` 永远表示当前打开浏览器的设备，因此不能从另一台手机或电脑使用。访问密钥统一保护 Manager API、SSE 和私有 WebGUI 资源；Windows 防火墙仍可能需要显式允许 `8790` 端口。
 
-本机语音实时页是 `http://127.0.0.1:8790/#/speech`，其中 provider、模型和运行设备来自当前电脑。随仓库提供的[基准报告](ribiwebgui/public/reports/rabispeech-model-benchmark.html)只代表报告内标明的目标测试机；从其他设备调用时见[远端 TTS / ASR 指南](docs/user-guide/speech-api.md)。
+当前 Route 的语音实时页使用 `http://127.0.0.1:8790/#/routes/<Route配置名>/speech`，其中 provider、模型和运行设备仍来自当前电脑。随仓库提供的[基准报告](ribiwebgui/public/reports/rabispeech-model-benchmark.html)只代表报告内标明的目标测试机；从其他设备调用时见[远端 TTS / ASR 指南](docs/user-guide/speech-api.md)。
 
 最短验证路径：
 

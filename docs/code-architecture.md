@@ -281,7 +281,7 @@ AgentPacket
 - Host 是必需的 Codex/ChatGPT Desktop。任务未加载时只允许通过 `codex://threads/<id>` 唤醒 Desktop；加载失败就停止投递。
 - Model、工具、沙箱和审批由目标 Desktop 任务拥有。兼容字段 `agentModel` 不再覆盖 Desktop 任务设置。
 - 已匹配的普通消息不经过另一层忙碌队列：Desktop owner 先尝试 `steer` 活跃 turn，只在没有活跃 turn 时 `start`。Heartbeat 的忙碌跳过和语音的关键词唤醒是各自消息端的显式例外。
-- Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 计划管理秘书槽。秘书槽不写入计划 `taskBinding`；`taskBinding` 始终绑定独立业务任务。秘书负责计划/记忆维护、任务查重与绑定、状态核对、结果消费和续投，禁止执行调查、实现、测试或业务文件修改。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
+- Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 计划管理秘书槽。秘书槽不写入计划 `taskBinding`；`taskBinding` 始终绑定独立业务任务。秘书负责计划/记忆维护、任务查重与绑定、状态核对、结果消费和续投，禁止执行调查、实现、测试或业务文件修改。控制面写入按 `planId` keyed lease 隔离：同计划单 writer、不同计划并行，共享 JSON 采用锁内最新值合并与原子替换。锁通过完整候选文件和原子 hard-link 发布，stale/损坏锁在热路径失败关闭，只能在 quiescent 维护窗口显式修复；同 key 的认领/澄清 lease 覆盖 reservation、外发、验证和终态回执，结果不明确时禁止自动重发。全局 audit 使用前后 ledger 快照，只把身份稳定的错误判为 invalid；plan-scoped strict audit 才是单计划收口门，reconcile 只跳过 active 计划。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
 `codexDesktopBridge.ts` 必须保持 transport-only：它不读取 route rule、不拼 AgentPacket、不决定业务外发。`codexAppServerClient.ts` 只保留“创建空任务、恢复用户名称”的元数据能力，不得接收真实 prompt 或执行 turn；元数据操作完成后立即退出。
 
 Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：前者控制 Agent 执行权限，后者控制 QQ、文档、设备和外部 API 等业务动作。任何代码都不能把一次任务审批传播成业务外发授权。
@@ -429,11 +429,11 @@ Gateway 配置的事实源 Module。
 - role skills
 - Agent 上下文快照
 
-`src/roleKnowledge.ts` 同时定义五种计划顶层状态、当前步骤显式 `isBlocked` 事实和步骤级 `approvalRequest` 执行合同；普通等待对象由 `waitingFor` 表达，不自动等于阻塞，但当前审批、方案确认或授权步骤必须同时写 `isBlocked=true` 与具体 `blockedBy`，否则 Manager 拒绝写入。`暂停` 可保留唯一进行中步骤与 `currentStepId` 作为恢复位置，合同可随计划兼容读取和保存，审批合同缺字段不阻断计划保存，但会禁用审批。`src/roleKnowledgePresentation.ts` 只生成 Manager 对外的只读展示 DTO：仅在 `isBlocked=true` 且存在 `blockedBy` 时派生“阻塞中”；“待QA测试”只认 `steps/currentStepId` 指向的进行中 `qa-* / verify-*` 结构化步骤，不扫描 `currentStep`、`nextAction`、标题、详情或 `waitingFor` 自由文本。它统一 `current / plans / archived` 视图分类和计划状态色板，对当前人工门禁判断 `none / incomplete / ready`，返回缺失项和规范化合同，并按“可审批、待补合同、状态、更新时间”统一排序；暂停计划禁用派生审批、只进 `plans` 并在最终排序中绝对置底。它不修改计划文件，也不进入 RouteDecision 或 Agent 上下文判断。WebGUI 和 Qt 必须消费 Manager 返回的 `presentation`、分类、色板、合同与列表顺序，不根据原始 `blockedBy` 或 QA 文案复制状态规则。
+`src/roleKnowledge.ts` 同时定义五种计划顶层状态和步骤级 `approvalRequest` 执行合同，并通过 `planApprovalGate()` 统一解释审批准备与待决门禁。只有当前合同完整、可提交且 `responseStatus=pending` 时，`planIsBlocked()` 才返回真；`isBlocked` 由读取/写入归一化生成，只是旧客户端兼容投影，`blockedBy` 仅为说明。旧文件手写的非审批阻塞会在读取时降级为进行中，并在下一次规范写入时清理。审批合同缺字段不阻断计划保存，而是进入 `preparing/incomplete`，要求 Agent 继续调查和补齐。`src/planPackageWaiting.ts` 只根据结构化 package/build 当前步骤、已完成前序步骤和明确包依赖派生等待打包。`src/roleKnowledgePresentation.ts` 只生成 Manager 对外的只读展示 DTO：同一审批门同时决定 `approval.ready/enabled` 与“阻塞中”，确保所有阻塞项都可审批；待 QA、资料、执行失败或外部产物保持可推进。“待QA测试”只认结构化 `qa-* / verify-*` 当前步骤，符合包等待合同的计划派生蓝色 `waiting_package`。WebGUI 和 Qt 必须消费 Manager 返回的 `presentation`、分类、色板、合同与列表顺序，不根据原始文本复制状态规则。
 
 `src/planAttachments.ts` 拥有计划本体附件的数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希和人格私有目录落盘。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
 
-`src/planFeedback.ts` 拥有与 `planId/stepId` 关联的审批意见 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 是用户/客户端写入口：UI 提交先落盘并立即返回 `pending`，后台生成独立 `plan_feedback` 系统事件，终态通过 `plan_feedback_changed` 发布；同一 feedback 的后台任务按 ID 去重并有 45 秒终止边界。`routing/systemEventRules.ts` 为该系统事件提供不依赖人格消息规则的固定投递规则；Forwarding 不把它写入角色面板 timeline、兼容消息历史或统一会话账本，AgentPacket 也把最近消息额度固定为 `0`。计划意见投递仍携带专用回复上下文；`src/outbox.ts` 校验 Route 人格、计划和步骤后，把 Agent 普通回复保存为 `record_only` 的 `approval_response` 并发布同一事件。该模块不自动修改计划 JSON；Agent 必须先显式 PATCH 计划或步骤。
+`src/planFeedback.ts` 拥有计划反馈 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。`guidance` 只关联 `planId`，用于非审批中的进行中计划；`approval_suggestion` 关联审批步骤。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 先持久化，再由 `src/manager/planApprovalFeedbackDelivery.ts` 复用计划的精确 `taskBinding` 投递：绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务，绑定不完整时才交给人格 Agent。终态统一发布 `plan_feedback_changed`，事件不进入角色面板 timeline、兼容消息历史或统一会话账本。绑定业务任务收到引导后必须 PATCH 整个计划，并在需要时调整尚未开始的步骤，再写无 `stepId` 的 `guidance_response`；审批仍写 `approval_response`。反馈记录本身不自动修改计划 JSON。
 
 `src/context/rabiContextManager.ts` 是角色上下文触发的唯一归口。它把 `session_start`、`user_prompt`、`reasoning_pre_tool`、`reasoning_post_tool`、`message_delivery` 和无副作用 `preview` 映射为统一的召回、归档、`viewedAt` 与呈现策略，也是生产代码中 `roleKnowledgeSnapshot()` 的唯一调用方。
 
@@ -450,7 +450,7 @@ Gateway 配置的事实源 Module。
 关键位置：
 
 - `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。
-- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读，标题下显示非重复的 `focus` 描述，多计划列表用独立工作项框架和筛选结果序号区分相邻问题，卡内按概览、当前执行、完整步骤分层。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片；只有 `ready/enabled=true` 可提交正式审批决定，`incomplete` 保持审批禁用但仍可通过同一 plan feedback API 提交补充资料、调整建议和附件，供 Agent 修正合同。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；计划面板外侧的目录粘性悬浮并独立滚动，浏览器可见性观察负责把当前阅读卡片同步为目录高亮，点击平滑跳转期间锁定目标高亮、滚动 settle 后恢复观察，目录仅在高亮项越界时滚动自身，计划卡片保持正常页面流，详情展开取消高度动画。
+- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片，只有 `ready/enabled=true` 可提交正式审批决定；没有审批状态的进行中计划在详情顶部显示计划级引导入口，引导只提交 `planId`，不提交 `stepId`。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；目录、渐进加载和无高度动画的详情展开保持现有边界。
 - `src/pages/OverviewPage.vue`：总览和运行状态。
 - `src/pages/RouteConfigPage.vue`：Route 配置编辑。
 - `src/pages/RuntimeLogPage.vue`：运行日志。
@@ -467,7 +467,7 @@ Gateway 配置的事实源 Module。
 
 前端可以做 UI 友好的默认值和展示转换，但配置不变量不要只存在前端。需要和后端一致的规则应进入 `src/shared/gatewayConfigModel.ts` 或由 manager 返回。
 
-局域网访问同样遵守这一边界：`src/manager/globalConfig.ts` 拥有 `webguiLan` 配置真源，`src/manager/webguiLanAccess.ts` 拥有密钥生成、地址分类和鉴权规则，`controlPlaneRoutes.ts` 只接线 HTTP 门禁与 `/api/webgui-access`。`ribiwebgui/src/managerApi.ts` 只捕获 URL token、保存当前会话凭据并适配 fetch/SSE；`webguiLanRedirect.ts` 只在 Manager 已实际监听局域网时把回环页面切换到优先局域网 origin，并保留当前 hash Route/页面和一次性 URL token；`routeScopedNavigation.ts` 只负责把 Route 配置名编码进 `#/routes/<Route>/overview|knowledge` 并保留 hash query；`App.vue` 让左侧当前 Route 与 Route 作用域 URL 保持同步；`OverviewPage.vue` 只展示 Manager DTO、生成当前 Route 快捷链接和提交命令，不保存第二份正式开关或密钥。
+局域网访问同样遵守这一边界：`src/manager/globalConfig.ts` 拥有 `webguiLan` 配置真源，`src/manager/webguiLanAccess.ts` 拥有密钥生成、地址分类和鉴权规则，`controlPlaneRoutes.ts` 只接线 HTTP 门禁与 `/api/webgui-access`。`ribiwebgui/src/managerApi.ts` 只捕获 URL token、保存当前会话凭据并适配 fetch/SSE；`webguiLanRedirect.ts` 只在 Manager 已实际监听局域网时把回环页面切换到优先局域网 origin，并保留当前 hash Route/页面和一次性 URL token；`routeScopedNavigation.ts` 统一把 Route 配置名编码进 `#/routes/<Route>/overview|adapters|persona|knowledge|speech|runtime`，识别旧短路径并保留 hash query；`App.vue` 让左侧当前 Route 与当前页面类型共同决定 URL；各页面只消费这个稳定导航合同，不各自定义 Route URL 规则。`OverviewPage.vue` 仍只展示 Manager DTO、生成当前 Route 快捷链接和提交命令，不保存第二份正式开关或密钥。
 
 RabiLink 远程 WebGUI 也保持前端与本机 Manager 的所有权边界：Relay 的 `/manage/<账号>/<RabiGUID>/` 只拥有账号会话、目标 PC 选择、静态构建和受限代理。普通 HTTP 请求进入 `webguiRequests`，PC 侧 `rabiLinkRelayRuntime.ts` 只把允许的请求头转发到回环 Manager，并回填状态、响应头和 Base64 body；`Range` / `If-Range` 与 `206` 响应用于媒体字节读取。Manager `/api/events` 不进入一次性队列，Runtime 维持一条本机 SSE，解析事件后通过 `/worker/webgui-events` 推给 Relay 的 `webguiEventHub`，再按账号应用和 PC 身份定向发布。Relay 登录 Cookie、PC 应用 token 和局域网 `webgui_token` 不相互转发或复用；请求/响应 Base64 与事件 JSON 都有独立大小门禁。
 

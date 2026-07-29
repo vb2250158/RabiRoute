@@ -1,8 +1,17 @@
-export type RouteScopedPage = "overview" | "knowledge";
+export type RouteScopedPage = "overview" | "adapters" | "persona" | "knowledge" | "speech" | "runtime";
+
+const unscopedPagePaths: Record<RouteScopedPage, string> = {
+  overview: "/overview",
+  adapters: "/routes",
+  persona: "/persona",
+  knowledge: "/knowledge",
+  speech: "/speech",
+  runtime: "/runtime"
+};
 
 export function routeScopedPagePath(routeKey: string, page: RouteScopedPage): string {
   const normalized = routeKey.trim();
-  return normalized ? `/routes/${encodeURIComponent(normalized)}/${page}` : `/${page}`;
+  return normalized ? `/routes/${encodeURIComponent(normalized)}/${page}` : unscopedPagePaths[page];
 }
 
 export function routeScopedOverviewPath(routeKey: string): string {
@@ -13,8 +22,40 @@ export function routeScopedKnowledgePath(routeKey: string): string {
   return routeScopedPagePath(routeKey, "knowledge");
 }
 
+export function routeScopedAdaptersPath(routeKey: string): string {
+  return routeScopedPagePath(routeKey, "adapters");
+}
+
+export function routeScopedPersonaPath(routeKey: string): string {
+  return routeScopedPagePath(routeKey, "persona");
+}
+
+export function routeScopedSpeechPath(routeKey: string): string {
+  return routeScopedPagePath(routeKey, "speech");
+}
+
+export function routeScopedRuntimePath(routeKey: string): string {
+  return routeScopedPagePath(routeKey, "runtime");
+}
+
+export function routeScopedPageFromPath(path: string): RouteScopedPage | "" {
+  if (path === "/overview" || /^\/routes\/[^/]+\/overview$/.test(path)) return "overview";
+  if (path === "/routes" || /^\/routes\/[^/]+(?:\/adapters)?$/.test(path)) return "adapters";
+  if (path === "/persona" || /^\/persona\/[^/]+$/.test(path) || /^\/routes\/[^/]+\/persona$/.test(path)) return "persona";
+  if (path === "/knowledge" || /^\/routes\/[^/]+\/knowledge$/.test(path)) return "knowledge";
+  if (path === "/speech" || /^\/routes\/[^/]+\/speech$/.test(path)) return "speech";
+  if (path === "/runtime" || /^\/routes\/[^/]+\/runtime$/.test(path)) return "runtime";
+  return "";
+}
+
+export function routeScopedPathForCurrentPage(routeKey: string, currentPath: string): string {
+  const page = routeScopedPageFromPath(currentPath);
+  return page ? routeScopedPagePath(routeKey, page) : "";
+}
+
 export function routeKeyFromWebguiHash(hash: string): string {
-  const match = hash.match(/^#\/(?:routes|persona)\/([^/?#]+)(?:\/(?:overview|knowledge))?(?:[/?#]|$)/);
+  const match = hash.match(/^#\/routes\/([^/?#]+)(?:\/(?:overview|adapters|persona|knowledge|speech|runtime))?(?:[/?#]|$)/)
+    || hash.match(/^#\/persona\/([^/?#]+)(?:[/?#]|$)/);
   if (!match?.[1]) return "";
   try {
     return decodeURIComponent(match[1]);

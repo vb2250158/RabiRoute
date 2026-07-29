@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { resolvePlanAttachmentFile } from "../planAttachments.js";
-import { listPlans } from "../roleKnowledge.js";
+import { getPlan } from "../roleKnowledge.js";
 import type { PlanAttachment } from "../shared/planAttachmentContract.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 
@@ -67,7 +67,7 @@ export function handlePlanAttachmentApi(
 
   try {
     const roleDir = resolveRoleDir(roleId);
-    const plan = listPlans(roleDir).find((item) => item.id === planId);
+    const plan = getPlan(roleDir, planId);
     const attachment = plan?.attachments.find((item) => item.id === attachmentId);
     if (!plan || !attachment) {
       jsonResponse(response, 404, { code: -1, message: "Plan attachment not found." });

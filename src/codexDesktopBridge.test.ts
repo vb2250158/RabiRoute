@@ -13,6 +13,9 @@ type IpcRequest = {
   type?: string;
   requestId?: string;
   method?: string;
+  params?: {
+    conversationId?: string;
+  };
 };
 
 function testPipePath(name: string): string {
@@ -29,7 +32,7 @@ function encodeFrame(value: unknown): Buffer {
 }
 
 async function createMockDesktopRouter(
-  handler: (request: IpcRequest, methods: string[]) => Record<string, unknown>
+  handler: (request: IpcRequest, methods: string[]) => Record<string, unknown> | Promise<Record<string, unknown>>
 ): Promise<{ pipePath: string; methods: string[]; close: () => Promise<void> }> {
   const pipePath = testPipePath("rabiroute-codex-desktop");
   const methods: string[] = [];
@@ -46,7 +49,9 @@ async function createMockDesktopRouter(
         const request = JSON.parse(pending.subarray(4, 4 + length).toString("utf8")) as IpcRequest;
         pending = pending.subarray(4 + length);
         if (request.method) methods.push(request.method);
-        socket.write(encodeFrame(handler(request, methods)));
+        void Promise.resolve(handler(request, methods))
+          .then((response) => socket.write(encodeFrame(response)))
+          .catch(() => socket.destroy());
       }
     });
   });
@@ -62,6 +67,18 @@ async function createMockDesktopRouter(
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   };
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for mock Desktop IPC state.");
+    await wait(5);
+  }
 }
 
 test("Desktop thread discovery uses exact id while displaying title and latest time", () => {
@@ -190,6 +207,108 @@ test("Desktop bridge starts a new turn when the task is idle", async () => {
   }
 });
 
+test("Desktop bridge serializes deliveries to the same task", async () => {
+  const pendingSteers: Array<{
+    requestId?: string;
+    threadId: string;
+    resolve: (response: Record<string, unknown>) => void;
+  }> = [];
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return new Promise<Record<string, unknown>>((resolve) => pendingSteers.push({
+        requestId: request.requestId,
+        threadId: String(request.params?.conversationId || ""),
+        resolve
+      }));
+    }
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+  const threadId = "019f0000-0000-7000-8000-000000000061";
+
+  try {
+    const first = bridge.deliver({ threadId, prompt: "first", cwd: process.cwd(), sandbox: "workspace-write" });
+    const second = bridge.deliver({ threadId, prompt: "second", cwd: process.cwd(), sandbox: "workspace-write" });
+    await waitFor(() => pendingSteers.length >= 1);
+    await wait(20);
+    const pendingBeforeFirstCompletes = pendingSteers.length;
+
+    pendingSteers[0]!.resolve({
+      type: "response",
+      requestId: pendingSteers[0]!.requestId,
+      resultType: "success",
+      method: "thread-follower-steer-turn",
+      result: {}
+    });
+    await first;
+    await waitFor(() => pendingSteers.length >= 2);
+    pendingSteers[1]!.resolve({
+      type: "response",
+      requestId: pendingSteers[1]!.requestId,
+      resultType: "success",
+      method: "thread-follower-steer-turn",
+      result: {}
+    });
+    await second;
+
+    assert.equal(pendingBeforeFirstCompletes, 1);
+    assert.deepEqual(pendingSteers.map((item) => item.threadId), [threadId, threadId]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Desktop bridge delivers to different tasks concurrently", async () => {
+  const pendingSteers: Array<{
+    requestId?: string;
+    threadId: string;
+    resolve: (response: Record<string, unknown>) => void;
+  }> = [];
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return new Promise<Record<string, unknown>>((resolve) => pendingSteers.push({
+        requestId: request.requestId,
+        threadId: String(request.params?.conversationId || ""),
+        resolve
+      }));
+    }
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+  const firstThreadId = "019f0000-0000-7000-8000-000000000062";
+  const secondThreadId = "019f0000-0000-7000-8000-000000000063";
+
+  try {
+    const deliveries = [
+      bridge.deliver({ threadId: firstThreadId, prompt: "first task", cwd: process.cwd(), sandbox: "workspace-write" }),
+      bridge.deliver({ threadId: secondThreadId, prompt: "second task", cwd: process.cwd(), sandbox: "workspace-write" })
+    ];
+    await waitFor(() => pendingSteers.length === 2);
+    for (const pending of pendingSteers) {
+      pending.resolve({
+        type: "response",
+        requestId: pending.requestId,
+        resultType: "success",
+        method: "thread-follower-steer-turn",
+        result: {}
+      });
+    }
+    await Promise.all(deliveries);
+
+    assert.deepEqual(new Set(pendingSteers.map((item) => item.threadId)), new Set([firstThreadId, secondThreadId]));
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
 test("Desktop bridge loads an unowned task and delivers through the Desktop owner", async () => {
   let deliveryAttempt = 0;
   const router = await createMockDesktopRouter((request) => {
@@ -228,6 +347,47 @@ test("Desktop bridge loads an unowned task and delivers through the Desktop owne
       "thread-follower-steer-turn",
       "thread-follower-start-turn"
     ]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Desktop bridge reopens a bound task while waiting for its owner to become available", async () => {
+  let deliveryAttempt = 0;
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      deliveryAttempt += 1;
+      return deliveryAttempt < 6
+        ? { type: "response", requestId: request.requestId, resultType: "error", error: "no-client-found" }
+        : { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const opened: string[] = [];
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath],
+    loadRetryAttempts: 6,
+    loadRetryDelayMs: 1,
+    reopenThreadEveryAttempts: 2,
+    openThread: async (threadId) => { opened.push(threadId); }
+  });
+  const threadId = "019f0000-0000-7000-8000-000000000064";
+
+  try {
+    const result = await bridge.deliver({
+      threadId,
+      prompt: "wait for the original Desktop owner",
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    });
+
+    assert.equal(result.action, "started");
+    assert.deepEqual(opened, [threadId, threadId, threadId]);
+    assert.equal(router.methods.filter((method) => method === "thread-follower-steer-turn").length, 6);
   } finally {
     bridge.close();
     await router.close();

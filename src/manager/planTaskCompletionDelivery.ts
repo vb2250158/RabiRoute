@@ -49,7 +49,7 @@ export function planTaskCompletionAgentText(delivery: PlanTaskCompletionDelivery
     "这不是只需确认收到的通知。主人格必须在同一轮先把闭环交给计划管理秘书，不得自己展开长时间计划处理：",
     "1. 立即向负责该计划分片的秘书投递本业务结果；主人格不亲自做全量计划读取、任务查重、绑定迁移、问题账本/记忆写入或批量续投。",
     "2. 由秘书 GET 读取该计划、当前步骤、记忆和绑定任务的真实状态并消费阶段结果；不要仅因本轮结束就把整个计划标为完成。",
-    "3. 由秘书 PATCH 更新计划步骤、状态、nextAction、waitingFor、阻塞事实和记忆；当前步骤等待审批、方案确认或授权时必须写 isBlocked=true，并在 blockedBy 具体写明谁要批准什么。秘书继续追问并记录回执，但不得越过审批门禁或为运行态指标反复续投实施。",
+    "3. 由秘书 PATCH 更新计划步骤、状态、nextAction、waitingFor、必要的 approvalRequest 和记忆；只有完整、可提交且 responseStatus=pending 的审批合同会由 Manager 自动派生阻塞，isBlocked 不得手写。其它困难继续询问、重试、改道、拆分或补证据。",
     `4. 这是计划的独立业务任务完成提醒。若计划仍未终态、未暂停且没有真实阻塞，由秘书 POST /api/agent/threads，action=send，精确续投 plan.taskBinding.sessionId=${delivery.sourceSessionId}${boundWorkspace ? `、workspace=${boundWorkspace}` : ""} 对应的原业务任务；续投正文必须给出一个可验证的下一步。`,
     "5. 不得把任何“协助处理计划”秘书会话写入 taskBinding，也不得因秘书轮转或计划暂停清空业务 taskBinding。只有业务任务确实失效并完成受控迁移时才改绑；计划完成后可保留绑定作为历史证据。",
     "6. 由秘书检查全部计划管理秘书、全部未终态计划和对应业务任务；秘书负责计划/记忆更新、任务查重、结果消费和续投，禁止亲自执行调查、代码/Prefab/配置、Unity/SVN/构建/发布或外部系统操作。",

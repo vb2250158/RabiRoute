@@ -62,6 +62,12 @@ It does not simulate an external QQ event and is not a side-effect-free preview.
 
 After an upgrade, rebuild and restart the Manager and Route, then verify the startup directory and `dist/` timestamp. Historical logs can remain for audit but do not define current state.
 
+## NapCat opens with Unauthorized or an empty token login
+
+When **Open NapCat** is clicked from a Route, RabiRoute now opens the token-bearing `/web_login` URL directly. This creates a fresh WebUI session instead of letting credentials left in an old tab continue to produce `Unauthorized` after a NapCat restart.
+
+If the token field is still empty, close the old NapCat tab and click **Open NapCat** again from the current QQ instance card. Confirm that the instance has a saved WebUI access token. If source code was upgraded but the old URL still opens, rebuild and restart Manager. The fast startup path checks OneBot and WebUI readiness without synchronously enumerating every Windows process; the full process list remains available through explicit health checks and details.
+
 ## NapCat connected but no AgentPacket
 
 First check for a new `group-messages.jsonl` or `private-messages.jsonl` record.
@@ -87,6 +93,16 @@ Check in order:
 5. A `no-client-found` wake-and-retry still fails.
 
 Do not use fixed port 4510, `CODEX_APP_SERVER_WS_URL`, or a separate stdio Runtime for real delivery. They are not the current transport.
+
+## Port 8790 held by a stale Manager
+
+If the launcher reports a listener on port `8790` but `/meta` is not stably responsive, a stale Manager from the same project may still own the port. Remote-page reconnects, Relay outages, and SSE failures must not become local startup dependencies: Manager serves local/LAN WebGUI first and hot-connects to Relay asynchronously.
+
+Run `Start-RabiRoute-Tray.bat` again. The launcher inspects the port owner's command line and performs bounded takeover only for an old process that precisely references this project's `dist/manager.js`: graceful shutdown first, then the verified process tree only after timeout. Unknown processes remain untouched. The launcher also reloads a healthy Manager when the current `dist` is newer than the running process.
+
+After recovery, verify separately that local or LAN `/meta` responds, Relay can become online later, remote `/api/events` and `/api/speech/events` reconnect, and media Range requests still return `206`. Local and LAN access should remain available while Relay is offline, without repeated Manager restarts.
+
+If plan approval submission coincides with a Manager restart or a temporary network interruption, the page now reports the connection problem explicitly and preserves the feedback text, attachments, and the same idempotent `feedbackId`. Wait until the header shows `Manager connected` or `/meta` responds, then retry directly. Do not retype the feedback or create another approval entry because an older build displayed the raw browser error `Failed to fetch`.
 
 ## When to restart
 

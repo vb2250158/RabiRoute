@@ -96,6 +96,31 @@ class _ApiManager:
                 "steps": [],
                 "keywords": [],
             },
+            {
+                "id": "plan-1784037085080",
+                "title": "API package plan",
+                "status": "进行中",
+                "presentation": {
+                    "status": "等待打包",
+                    "tone": "waiting_package",
+                    "sortBucket": 3,
+                    "views": ["current", "plans"],
+                    "palette": {
+                        "accent": "#2563eb",
+                        "background": "#eff6ff",
+                        "foreground": "#1d4ed8",
+                    },
+                    "approval": {
+                        "state": "none",
+                        "enabled": False,
+                        "label": "无需审批",
+                        "helper": "当前步骤没有声明人工审批门禁。",
+                        "missing": [],
+                    },
+                },
+                "steps": [],
+                "keywords": [],
+            },
         ]
 
     def role_memory(self, role_id: str) -> dict:
@@ -134,7 +159,7 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_foreground, "#b42318")
         self.assertEqual(
             result.plan_snapshot and [plan.title for plan in result.plan_snapshot.active],
-            ["API plan", "API QA plan"],
+            ["API plan", "API QA plan", "API package plan"],
         )
         qa_plan = result.plan_snapshot and result.plan_snapshot.active[1]
         self.assertTrue(qa_plan and qa_plan.approval_enabled)
@@ -143,6 +168,13 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.request, "批准运行验收。")
         self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.commands[0].command, "npm test")
         self.assertEqual(qa_plan and qa_plan.latest_approval_text, "补充回归范围")
+        package_plan = result.plan_snapshot and result.plan_snapshot.active[2]
+        self.assertEqual(package_plan and package_plan.display_status, "等待打包")
+        self.assertEqual(package_plan and package_plan.display_tone, "waiting_package")
+        self.assertEqual(package_plan and package_plan.display_sort_bucket, 3)
+        self.assertEqual(package_plan and package_plan.display_accent, "#2563eb")
+        self.assertEqual(package_plan and package_plan.display_background, "#eff6ff")
+        self.assertEqual(package_plan and package_plan.display_foreground, "#1d4ed8")
         self.assertEqual(result.context_snapshot and result.context_snapshot.recent_memory[0].title, "API memory")
         self.assertEqual(result.role_messages, [{"id": "message-1"}])
         self.assertEqual(result.context_snapshot and result.context_snapshot.avatar_data, b"avatar-bytes")

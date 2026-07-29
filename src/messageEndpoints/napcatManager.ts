@@ -86,6 +86,7 @@ type NapcatHealthRequest = {
   webuiToken?: string;
   gatewayPort?: number;
   readWebuiLoginInfo?: boolean;
+  inspectProcesses?: boolean;
   botUserId?: string | number;
   botNickname?: string;
 };
@@ -454,15 +455,41 @@ function candidateNapcatShellZips(rootDir: string): string[] {
   return zips;
 }
 
+const napcatConfigDirCache = new Map<string, string>();
+
 function findNapcatConfigDir(shellDir: string): string | null {
+  const resolvedShellDir = path.resolve(shellDir);
+  const cached = napcatConfigDirCache.get(resolvedShellDir);
+  if (cached && fs.existsSync(cached)) return cached;
   const direct = [
-    path.join(shellDir, "napcat", "config"),
-    path.join(shellDir, "config")
+    path.join(resolvedShellDir, "napcat", "config"),
+    path.join(resolvedShellDir, "config")
   ];
   for (const item of direct) {
-    if (fs.existsSync(item)) return item;
+    if (fs.existsSync(item)) {
+      napcatConfigDirCache.set(resolvedShellDir, item);
+      return item;
+    }
   }
-  const stack: Array<{ dir: string; depth: number }> = [{ dir: shellDir, depth: 0 }];
+  const versionRoots = [
+    path.join(resolvedShellDir, "versions"),
+    path.join(resolvedShellDir, "NapCat.Shell", "versions")
+  ];
+  for (const versionsDir of versionRoots) {
+    try {
+      for (const entry of fs.readdirSync(versionsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const item = path.join(versionsDir, entry.name, "resources", "app", "napcat", "config");
+        if (fs.existsSync(item)) {
+          napcatConfigDirCache.set(resolvedShellDir, item);
+          return item;
+        }
+      }
+    } catch {
+      // Fall through to the bounded compatibility scan.
+    }
+  }
+  const stack: Array<{ dir: string; depth: number }> = [{ dir: resolvedShellDir, depth: 0 }];
   while (stack.length) {
     const current = stack.pop()!;
     if (current.depth > 8) continue;
@@ -473,10 +500,13 @@ function findNapcatConfigDir(shellDir: string): string | null {
       continue;
     }
     if (current.dir.replace(/\\/g, "/").endsWith("/resources/app/napcat/config")) {
+      napcatConfigDirCache.set(resolvedShellDir, current.dir);
       return current.dir;
     }
     for (const entry of entries) {
-      if (entry.isDirectory()) stack.push({ dir: path.join(current.dir, entry.name), depth: current.depth + 1 });
+      if (!entry.isDirectory()) continue;
+      if (["node_modules", "static", "plugins"].includes(entry.name.toLowerCase())) continue;
+      stack.push({ dir: path.join(current.dir, entry.name), depth: current.depth + 1 });
     }
   }
   return null;
@@ -672,11 +702,16 @@ async function listeningPidsForPorts(ports: number[]): Promise<string[]> {
 function napcatWebuiLoginUrl(webuiUrl: string, token: string): string {
   try {
     const parsed = new URL(webuiUrl);
+    if (/\/webui$/i.test(parsed.pathname)) parsed.pathname += "/";
     parsed.searchParams.set("token", token);
     return parsed.toString();
   } catch {
-    const separator = webuiUrl.includes("?") ? "&" : "?";
-    return `${webuiUrl}${separator}token=${encodeURIComponent(token)}`;
+    const hashIndex = webuiUrl.indexOf("#");
+    const base = hashIndex >= 0 ? webuiUrl.slice(0, hashIndex) : webuiUrl;
+    const fragment = hashIndex >= 0 ? webuiUrl.slice(hashIndex) : "";
+    const normalizedBase = base.replace(/\/webui(?=\?|$)/i, "/webui/");
+    const separator = normalizedBase.includes("?") ? "&" : "?";
+    return `${normalizedBase}${separator}token=${encodeURIComponent(token)}${fragment}`;
   }
 }
 
@@ -1598,7 +1633,8 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
     diagnostics.push(`请确认当前 QQ 的 WebSocket Client 指向 ws://127.0.0.1:${gatewayPort}。`);
   }
   const fixAvailable = Boolean(shouldReadWebuiLoginInfo && !webuiAccountMismatch && !http.ok && webuiLoggedIn && tokenInfo.configPath && onebotPath);
-  const processes = await detectNapcatProcesses();
+  const shouldInspectProcesses = request.inspectProcesses !== false;
+  const processes = shouldInspectProcesses ? await detectNapcatProcesses() : [];
   return {
     ok: Boolean(http.ok && onebotStatus?.online !== false && onebotStatus?.good !== false),
     fixAvailable,
@@ -1629,8 +1665,9 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
     gatewayPort,
     wsUrl,
     process: {
-      found: processes.length > 0,
-      candidates: processes.slice(0, 8)
+      found: shouldInspectProcesses ? processes.length > 0 : Boolean(http.ok || webuiReachable),
+      candidates: processes.slice(0, 8),
+      inspectionSkipped: !shouldInspectProcesses
     }
   };
 }
@@ -1763,6 +1800,7 @@ async function recheckNapcatUntilReady(
     webuiToken: instance.webuiToken,
     gatewayPort: instance.gatewayPort,
     readWebuiLoginInfo: true,
+    inspectProcesses: false,
     botUserId: instance.botUserId
   }) as NapcatEnsureHealth;
   while (!napcatHealthMatchesInstance(instance, health) && Date.now() < deadline) {
@@ -1776,6 +1814,7 @@ async function recheckNapcatUntilReady(
       webuiToken: instance.webuiToken,
       gatewayPort: instance.gatewayPort,
       readWebuiLoginInfo: true,
+      inspectProcesses: false,
       botUserId: instance.botUserId
     }) as NapcatEnsureHealth;
   }
@@ -1802,7 +1841,8 @@ export async function ensureNapcatInstanceReady(
     accessToken: instance.accessToken,
     webuiToken: instance.webuiToken,
     gatewayPort: instance.gatewayPort,
-    readWebuiLoginInfo: true,
+    readWebuiLoginInfo: false,
+    inspectProcesses: false,
     botUserId: instance.botUserId
   };
   const steps: string[] = [];
@@ -1826,7 +1866,7 @@ export async function ensureNapcatInstanceReady(
       visible: false
     });
     steps.push("已自动启动 NapCat。", ...((launch.steps as string[] | undefined) ?? []));
-    health = await recheckNapcatUntilReady(ctx, gatewayId, instance, 12000);
+    health = await testNapcatHealth(ctx, healthRequest) as NapcatEnsureHealth;
     if (napcatHealthMatchesInstance(instance, health)) {
       return {
         ok: true,
@@ -1848,6 +1888,23 @@ export async function ensureNapcatInstanceReady(
       health,
       steps
     };
+  }
+
+  if (health.webui?.loginInfo == null) {
+    health = await testNapcatHealth(ctx, {
+      ...healthRequest,
+      readWebuiLoginInfo: true
+    }) as NapcatEnsureHealth;
+    if (napcatHealthMatchesInstance(instance, health)) {
+      return {
+        ok: true,
+        state: "ready",
+        message: "NapCat 已就绪。",
+        openUrl: napcatEnsureOpenUrl(instance, health),
+        health,
+        steps
+      };
+    }
   }
 
   const expectedUserId = String(instance.botUserId || "").trim();

@@ -68,6 +68,7 @@ export type CodexDesktopBridgeOptions = {
   requestTimeoutMs?: number;
   loadRetryAttempts?: number;
   loadRetryDelayMs?: number;
+  reopenThreadEveryAttempts?: number;
   openThread?: (threadId: string) => Promise<void>;
   onBroadcast?: (message: Extract<IpcMessage, { type: "broadcast" }>) => void;
 };
@@ -238,7 +239,7 @@ function isInactiveTurn(error: unknown): boolean {
 
 export class CodexDesktopBridge {
   private readonly options: Required<Pick<CodexDesktopBridgeOptions,
-    "requestTimeoutMs" | "loadRetryAttempts" | "loadRetryDelayMs" | "openThread">> & CodexDesktopBridgeOptions;
+    "requestTimeoutMs" | "loadRetryAttempts" | "loadRetryDelayMs" | "reopenThreadEveryAttempts" | "openThread">> & CodexDesktopBridgeOptions;
   private socket: net.Socket | null = null;
   private connecting: Promise<void> | null = null;
   private clientId = "initializing-client";
@@ -246,13 +247,15 @@ export class CodexDesktopBridge {
   private nextFrameLength: number | null = null;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly activeThreads = new Set<string>();
+  private readonly deliveryQueues = new Map<string, Promise<CodexDesktopDelivery>>();
 
   constructor(options: CodexDesktopBridgeOptions = {}) {
     this.options = {
       ...options,
       requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
-      loadRetryAttempts: Math.max(1, options.loadRetryAttempts ?? 12),
-      loadRetryDelayMs: Math.max(1, options.loadRetryDelayMs ?? 500),
+      loadRetryAttempts: Math.max(1, options.loadRetryAttempts ?? 24),
+      loadRetryDelayMs: Math.max(1, options.loadRetryDelayMs ?? 1_000),
+      reopenThreadEveryAttempts: Math.max(1, options.reopenThreadEveryAttempts ?? 6),
       openThread: options.openThread ?? openCodexDesktopThread
     };
   }
@@ -471,7 +474,7 @@ export class CodexDesktopBridge {
     return "started";
   }
 
-  async deliver(params: {
+  private async deliverNow(params: {
     threadId: string;
     prompt: string;
     cwd: string;
@@ -487,7 +490,7 @@ export class CodexDesktopBridge {
       } catch (error) {
         lastError = error;
         if (!isDesktopOwnerLoading(error)) throw error;
-        if (!openedThread) {
+        if (!openedThread || attempt % this.options.reopenThreadEveryAttempts === 0) {
           openedThread = true;
           await this.options.openThread(params.threadId);
         }
@@ -495,6 +498,24 @@ export class CodexDesktopBridge {
       }
     }
     throw new Error(`Codex Desktop 已打开任务 ${params.threadId}，但 Desktop owner 没有完成加载；消息未投递，也没有启动备用 Runtime。原始错误：${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  }
+
+  async deliver(params: {
+    threadId: string;
+    prompt: string;
+    cwd: string;
+    sandbox: CodexDesktopSandbox;
+  }): Promise<CodexDesktopDelivery> {
+    const key = `${params.threadId}\n${canonicalCodexWorkspacePath(params.cwd)}`;
+    const previous = this.deliveryQueues.get(key);
+    const scheduled = (previous ? previous.catch(() => undefined) : Promise.resolve())
+      .then(() => this.deliverNow(params));
+    this.deliveryQueues.set(key, scheduled);
+    try {
+      return await scheduled;
+    } finally {
+      if (this.deliveryQueues.get(key) === scheduled) this.deliveryQueues.delete(key);
+    }
   }
 
   close(): void {

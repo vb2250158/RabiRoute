@@ -2,23 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildRoleKnowledgeContextView, planMemoryApiHint } from "./roleKnowledgeContext.js";
 
-test("AgentPacket plan hints explain the shared approval feedback workflow", () => {
+test("AgentPacket plan hints explain shared guidance and approval feedback workflows", () => {
   const hints = planMemoryApiHint("Rabi Test").join("\n");
 
   assert.match(hints, /\/api\/roles\/Rabi%20Test\/plans\/\{planId\}\/feedback/);
   assert.match(hints, /source=qq/);
+  assert.match(hints, /kind=guidance/);
+  assert.match(hints, /guidance_response/);
   assert.match(hints, /kind=approval_response/);
+  assert.match(hints, /调整未开始步骤/);
   assert.match(hints, /不直接推进步骤/);
   assert.match(hints, /另行 PATCH/);
   assert.match(hints, /approvalRequest/);
   assert.match(hints, /files\/commands\/changes/);
   assert.match(hints, /完整命令/);
-  assert.match(hints, /isBlocked=true/);
-  assert.match(hints, /blockedBy/);
+  assert.match(hints, /isBlocked 是兼容投影，不要手写/);
   assert.match(hints, /approver/);
   assert.match(hints, /recommendation/);
   assert.match(hints, /sourceMessageId/);
-  assert.match(hints, /信息不完整时保持阻塞并禁止审批/);
+  assert.match(hints, /信息不完整时计划保持进行中并禁止正式审批/);
   assert.match(hints, /status=暂停/);
   assert.match(hints, /currentStepId/);
   assert.match(hints, /计划 POST\/PATCH 的 attachments/);

@@ -46,9 +46,10 @@ Start-RabiRoute-Tray.bat
 The batch/PowerShell hybrid launcher:
 
 - Uses the repository root as its working directory.
-- Checks `http://127.0.0.1:8790/meta`.
-- Reuses an existing RabiRoute Manager.
-- Refuses to start a duplicate when port 8790 belongs to another process.
+- Checks `http://127.0.0.1:8790/meta` repeatedly and reuses only a stably healthy Manager.
+- If a healthy Manager predates the current `dist/manager.js`, performs a controlled shutdown and loads the current build.
+- If an unresponsive process owns port 8790, takes over only when its command line precisely identifies this project's absolute `dist/manager.js` or the relative `dist/manager.js` form used by packaged and older launchers: graceful `/manager/shutdown` first, then the verified process tree only if shutdown times out. The Node-process, port-owner, and Manager-health gates must still hold together.
+- If port 8790 belongs to another or unverifiable process, leaves it untouched and refuses to start a duplicate Manager.
 - Runs `npm.cmd run build` when the backend or WebGUI build is missing/stale, unless `-NoBuild` is passed.
 - If the Manager already runs, repairs only the WebGUI with `npm.cmd run webgui:build` when needed.
 - Starts `node dist\manager.js` in the background when no Manager is running.
@@ -82,7 +83,7 @@ Useful commands:
 .\Start-RabiRoute-Tray.bat -ManagerUrl http://127.0.0.1:8790
 ```
 
-The launcher does not start or stop QQ, NapCat, or unrelated processes. NapCat lifecycle remains an explicit action in RibiWebGUI.
+The launcher does not start or stop QQ, NapCat, or unrelated processes. An unknown port owner remains untouched. Only a precisely verified stale Manager from the same project may be shut down; forced process-tree termination is a bounded fallback after graceful shutdown times out. NapCat lifecycle remains an explicit action in RibiWebGUI.
 
 ## Manager shutdown endpoint
 

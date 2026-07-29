@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { approvalSubmissionErrorMessage } from "../src/approvalFeedbackUi";
 import {
   FALLBACK_PLAN_PRESENTATION_PALETTE,
   formatPlanVideoDuration,
@@ -73,6 +74,13 @@ test("plan video durations use compact player-style timestamps", () => {
   assert.equal(formatPlanVideoDuration(3723), "1:02:03");
 });
 
+test("approval submission turns browser fetch failures into an actionable retry message", () => {
+  const message = approvalSubmissionErrorMessage(new TypeError("Failed to fetch"));
+  assert.match(message, /无法连接 Manager/);
+  assert.match(message, /计划反馈内容已保留/);
+  assert.equal(approvalSubmissionErrorMessage(new Error("Plan step not found")), "Plan step not found");
+});
+
 test("knowledge page avoids full-list refresh after feedback and keeps details animation-free", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
@@ -91,7 +99,8 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /function handleApprovalKeydown[\s\S]*?if \(event\.key === "Enter"\) handleApprovalEnter\(event, plan\)/);
   assert.match(page, /event\.isComposing[\s\S]*?event\.shiftKey[\s\S]*?event\.preventDefault\(\)/);
   assert.match(page, /:disabled="!canSubmitApproval\(plan\)"/);
-  assert.match(page, /function approvalFeedbackBaseAvailable[\s\S]*?approval\.state === "incomplete" \|\| approval\.enabled/);
+  assert.match(page, /function approvalFeedbackBaseAvailable[\s\S]*?Boolean\(approval\.stepId\) && approval\.enabled/);
+  assert.doesNotMatch(page, /approval\.state === "incomplete" \|\| approval\.enabled/);
   assert.match(page, /function canEditApprovalFeedback[\s\S]*?approvalFeedbackBaseAvailable\(plan\)/);
   assert.match(page, /:disabled="!canEditApprovalFeedback\(plan\)"/);
   assert.match(page, /function canSubmitApproval[\s\S]*?return canEditApprovalFeedback\(plan\)/);
@@ -108,10 +117,11 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /上一条意见已记录，正在通知 Agent；你可以继续编辑下一条，通知完成后即可提交。/);
   assert.match(page, /当前没有可投递的 Route；你可以先编辑，选择或绑定 Route 后再提交。/);
   assert.match(page, /class="knowledge-approval-compose-status"/);
-  assert.match(page, /补充资料 \/ 调整建议/);
-  assert.match(page, /该意见不会被视为批准/);
-  assert.match(page, /提交补充意见/);
+  assert.match(page, /审批资料不完整，补齐前禁止输入或提交审批意见。/);
+  assert.doesNotMatch(page, /该意见不会被视为批准/);
   assert.match(page, /提交审批意见/);
+  assert.match(page, /planFeedbackSubmissionErrorMessage\(submitError\)/);
+  assert.match(page, /feedbackId: feedbackRequestId\(plan\.id\)/);
   assert.match(page, /审批资料不完整 · 禁止审批/);
   assert.match(page, /审批资料不完整，禁止审批。缺少/);
   assert.match(page, /审批人 \/ 责任人/);
@@ -128,10 +138,10 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /来源消息 \/ Feedback/);
   assert.match(page, /当前回执状态/);
   assert.match(page, /@paste="handleApprovalPaste\(plan\.id, \$event\)"/);
-  assert.match(page, /function approvalRecordsForDisplay[\s\S]*?return \[\.\.\.records\]\.reverse\(\)/);
+  assert.match(page, /function approvalRecordsForDisplay[\s\S]*?feedback\.kind === "approval_suggestion"[\s\S]*?\.reverse\(\)/);
   assert.match(page, /v-for="feedback in approvalRecordsForDisplay\(plan\)"/);
   assert.match(page, /class="knowledge-approval-record"/);
-  assert.match(page, /expanded && plan\.presentation\.approval\.state !== "none"[\s\S]*?refreshPlanApproval\(plan\.id\)/);
+  assert.match(page, /expanded && \(planAcceptsGuidance\(plan\) \|\| plan\.presentation\.approval\.state !== "none"\)[\s\S]*?refreshPlanApproval\(plan\.id\)/);
   assert.doesNotMatch(page, /v-if="plan\.approval\.latest" class="knowledge-approval-latest"/);
   assert.match(client, /latest:\s*data\.latest \|\| records\[0\],[\s\S]*?\n\s*records\n/);
   assert.match(styles, /\.knowledge-approval-history\s*\{[\s\S]*?display:\s*grid[\s\S]*?gap:\s*8px/);
@@ -142,6 +152,15 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /function resetApprovalAttachmentState\(\): void\s*\{/);
   assert.match(page, /onBeforeUnmount\(\(\) => \{[\s\S]*?resetApprovalAttachmentState\(\)/);
   assert.match(styles, /\.knowledge-approval-attachment\s*\{[\s\S]*?grid-template-columns:\s*46px minmax\(0, 1fr\) 28px/);
+  assert.match(page, /function planAcceptsGuidance[\s\S]*?plan\.status === "进行中" && plan\.presentation\.approval\.state === "none"/);
+  assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)" class="knowledge-approval-panel" data-state="guidance">/);
+  assert.match(page, /引导属于整个计划，不绑定某个步骤/);
+  assert.match(page, /调整尚未开始的步骤/);
+  assert.match(page, /@keydown\.enter="handleGuidanceEnter\(\$event, plan\)"/);
+  assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance"\)/);
+  assert.match(page, /stepId: guidance \? undefined : plan\.presentation\.approval\.stepId/);
+  assert.match(client, /kind: input\.kind/);
+  assert.match(page, /提交计划引导/);
 });
 
 test("plan views expose a floating directory outside the plan browser", () => {
@@ -189,14 +208,20 @@ test("plan cards use isolated work-item framing and a three-level execution hier
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 
-  assert.match(page, /v-for="\(plan, planIndex\) in visiblePlansForView"/);
+  assert.match(page, /v-for="plan in renderedPlansForView"/);
+  assert.match(page, /String\(planSequence\(plan\)\)\.padStart\(2, "0"\)/);
   assert.match(page, /class="knowledge-plan-sequence"/);
   assert.match(page, /class="knowledge-plan-current"/);
+  assert.match(page, /class="knowledge-plan-current-copy"/);
+  assert.match(page, /class="knowledge-plan-timing-item"/);
   assert.match(page, /class="knowledge-steps-head"/);
   assert.match(page, /currentStepPosition\(plan\)/);
   assert.match(styles, /\.knowledge-plan-cards\s*\{[\s\S]*?gap:\s*18px[\s\S]*?background:\s*#edf2f4/);
   assert.match(styles, /\.knowledge-plan-card\s*\{[\s\S]*?border-radius:\s*14px[\s\S]*?box-shadow:/);
   assert.match(styles, /\.knowledge-plan-summary\s*\{[\s\S]*?grid-template-columns:\s*minmax\(280px, 1fr\) max-content/);
+  assert.match(styles, /\.knowledge-plan-current-copy\s*\{[\s\S]*?display:\s*flex[\s\S]*?align-items:\s*center/);
+  assert.match(styles, /\.knowledge-plan-summary \.knowledge-plan-current-copy > b\s*\{[\s\S]*?text-overflow:\s*ellipsis[\s\S]*?white-space:\s*nowrap/);
+  assert.match(styles, /\.knowledge-plan-timing-item\s*\{[\s\S]*?display:\s*flex[\s\S]*?align-items:\s*center/);
   assert.match(styles, /\.knowledge-steps\s*\{[\s\S]*?border-radius:\s*12px[\s\S]*?background:/);
   assert.match(styles, /@media \(max-width:\s*720px\)[\s\S]*?\.knowledge-plan-head\s*\{[\s\S]*?margin:\s*-12px -12px 0/);
   assert.match(styles, /@media \(max-width:\s*720px\)[\s\S]*?\.knowledge-plan-timing\s*\{[\s\S]*?grid-auto-flow:\s*row/);
@@ -207,7 +232,7 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 
-  assert.match(page, /v-if="plan\.attachments\.length" class="knowledge-plan-attachments"/);
+  assert.match(page, /v-if="planDetailsLoaded\[plan\.id\] && plan\.attachments\.length" class="knowledge-plan-attachments"/);
   assert.match(page, /import \{ managerEventSource, managerResourceUrl \} from "\.\.\/managerApi"/);
   assert.match(page, /function planAttachmentUrl[\s\S]*?return managerResourceUrl\(/);
   assert.match(page, /planAttachmentUrl\(plan\.id, attachment\.id\)/);
@@ -216,7 +241,9 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   assert.match(page, /@click="openPlanMediaPreview\(plan, attachment\)"/);
   assert.match(page, /function planVideoThumbnailUrl[\s\S]*?#t=0\.001/);
   assert.match(page, /v-if="attachment\.kind === 'video'"[\s\S]*?<video/);
-  assert.match(page, /@loadedmetadata="capturePlanVideoDuration\(plan\.id, attachment\.id, \$event\)"/);
+  assert.match(page, /@loadedmetadata="capturePlanVideoDuration\(plan\.id, attachment\.id, \$event\); setPlanMediaLoadState\(plan\.id, attachment\.id, 'loaded'\)"/);
+  assert.match(page, /class="knowledge-plan-attachment-loading"/);
+  assert.match(page, /附件加载中/);
   assert.match(page, /class="knowledge-plan-video-play"/);
   assert.match(page, /class="knowledge-plan-video-duration"/);
   assert.match(page, /displayedPlanVideoDuration\(plan\.id, attachment\.id\)/);
@@ -226,6 +253,7 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   assert.match(styles, /\.knowledge-plan-attachment\.image\s*\{[\s\S]*?cursor:\s*zoom-in/);
   assert.match(styles, /\.knowledge-plan-attachment\.media\s*\{[\s\S]*?flex:\s*0 1 208px[\s\S]*?width:\s*208px[\s\S]*?max-width:\s*100%/);
   assert.match(styles, /\.knowledge-plan-attachment-visual\s*\{[\s\S]*?aspect-ratio:\s*16 \/ 9/);
+  assert.match(styles, /\.knowledge-plan-attachment-loading\s*\{[\s\S]*?animation:\s*knowledge-attachment-loading/);
   assert.match(styles, /\.knowledge-plan-attachment-visual > video\s*\{[\s\S]*?object-fit:\s*contain/);
   assert.match(styles, /\.knowledge-plan-video-play\s*\{[\s\S]*?position:\s*absolute[\s\S]*?z-index:\s*2[\s\S]*?pointer-events:\s*none/);
   assert.match(styles, /\.knowledge-plan-video-duration\s*\{[\s\S]*?position:\s*absolute[\s\S]*?z-index:\s*2[\s\S]*?font-variant-numeric:\s*tabular-nums/);

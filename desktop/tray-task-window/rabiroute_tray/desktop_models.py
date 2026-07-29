@@ -56,6 +56,7 @@ class PlanItem:
     status: str = "未开始"
     display_status: str = ""
     display_tone: str = ""
+    display_sort_bucket: int = -1
     display_views: tuple[str, ...] = field(default_factory=tuple)
     display_accent: str = ""
     display_background: str = ""

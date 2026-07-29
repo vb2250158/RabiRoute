@@ -14,6 +14,7 @@ import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { useSpeechStore } from "../stores/speechStore";
 import { gatewayAdapterTypes } from "../utils/gatewayHelpers";
 import { copyTextToClipboard } from "../clipboard";
+import { personaOptionDisplayName } from "../personaPresentation";
 
 type AudioInput = { title: string; value: number; default?: boolean };
 
@@ -85,8 +86,22 @@ const stateColor = computed(() => ({
 const currentDefault = computed(() => status.value?.defaults[activeKind.value] || "未设置");
 const ttsModels = computed(() => models.value.filter(item => item.capability === "tts"));
 const asrModels = computed(() => models.value.filter(item => item.capability === "asr"));
+const personaNames = computed(() => {
+  const names = new Map<string, string>();
+  for (const runtime of store.managerRows) {
+    for (const role of runtime.roleInfo?.options || []) {
+      const name = personaOptionDisplayName(role);
+      if (role.value && name) names.set(role.value, name);
+    }
+  }
+  return names;
+});
 const personaOptions = computed(() => personas.value.map(item => ({
-  title: item.voiceReady ? `${item.id} · 已配置声线` : `${item.id} · 使用模型默认声线`,
+  title: personaNames.value.get(item.id) || item.id,
+  subtitle: [
+    personaNames.value.get(item.id) && personaNames.value.get(item.id) !== item.id ? `人格 ID · ${item.id}` : "",
+    item.voiceReady ? "已配置声线" : "使用模型默认声线"
+  ].filter(Boolean).join(" · "),
   value: item.id,
   avatarUrl: item.avatarUrl || ""
 })));
@@ -560,7 +575,7 @@ onBeforeUnmount(() => {
         <div class="speech-form-grid">
           <v-select v-model="voice" label="人格 / 声线" :items="personaOptions" :disabled="ttsBusy">
             <template #item="{ props: itemProps, item }">
-              <v-list-item v-bind="itemProps">
+              <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle">
                 <template #prepend><PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="32" /></template>
               </v-list-item>
             </template>

@@ -70,3 +70,39 @@ test("RabiLink event hub resolves one-shot waiters only for matching events", as
   assert.equal(await otherApp.promise, false);
   hub.close();
 });
+
+test("RabiLink event hub keeps independent stream channels isolated", () => {
+  const hub = new RabiLinkEventHub({ keepAliveMs: 60000 });
+  const managerEvents = new FakeResponse();
+  const speechEvents = new FakeResponse();
+  const manager = hub.subscribe(managerEvents, {
+    appId: "app-one",
+    deviceGuid: "guid-one",
+    channel: "/api/events"
+  });
+  const speech = hub.subscribe(speechEvents, {
+    appId: "app-one",
+    deviceGuid: "guid-one",
+    channel: "/api/speech/events"
+  });
+
+  hub.publish("gateway_status", {
+    appId: "app-one",
+    targetDeviceId: "guid-one",
+    channel: "/api/events"
+  });
+  assert.match(managerEvents.text(), /event: gateway_status/);
+  assert.doesNotMatch(speechEvents.text(), /event: gateway_status/);
+
+  hub.publish("speech_status", {
+    appId: "app-one",
+    targetDeviceId: "guid-one",
+    channel: "/api/speech/events"
+  });
+  assert.doesNotMatch(managerEvents.text(), /event: speech_status/);
+  assert.match(speechEvents.text(), /event: speech_status/);
+
+  manager.close();
+  speech.close();
+  hub.close();
+});

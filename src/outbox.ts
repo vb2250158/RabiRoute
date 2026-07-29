@@ -922,6 +922,9 @@ function appendPlanFeedbackReply(
   const responseId = valueString(context.planFeedbackResponseId)
     || valueString(request.deliveryId)
     || undefined;
+  const responseKind = valueString(context.planFeedbackKind) === "guidance"
+    ? "guidance_response"
+    : "approval_response";
   const candidate = createPlanFeedbackRecord({
     id: responseId,
     roleId,
@@ -930,7 +933,7 @@ function appendPlanFeedbackReply(
     stepId: step?.id,
     stepTitle: step?.title,
     gatewayId: route.runtime.id,
-    kind: "approval_response",
+    kind: responseKind,
     author: "agent",
     source: "agent",
     text,
@@ -938,7 +941,7 @@ function appendPlanFeedbackReply(
     notifyAgent: false
   });
   const existing = listPlanFeedback(roleDir, planId).find((item) => item.id === candidate.id);
-  if (existing && (existing.text !== candidate.text || existing.stepId !== candidate.stepId || existing.kind !== "approval_response")) {
+  if (existing && (existing.text !== candidate.text || existing.stepId !== candidate.stepId || existing.kind !== responseKind)) {
     return {
       ok: false,
       status: "blocked",
@@ -960,7 +963,9 @@ function appendPlanFeedbackReply(
   return {
     ok: true,
     status: "sent",
-    reason: "Saved as a plan approval response.",
+    reason: responseKind === "guidance_response"
+      ? "Saved as a plan guidance response."
+      : "Saved as a plan approval response.",
     routeProfileId: route.profile?.id ?? route.runtime.id,
     messageId: target.messageId,
     targetType: "plan_feedback",

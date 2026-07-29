@@ -20,6 +20,8 @@ function close(server: http.Server): Promise<void> {
 
 test("speech SSE proxy treats client disconnect abort as a normal terminal event", async () => {
   let upstreamAborted = false;
+  let resolveUpstreamAbort!: () => void;
+  const upstreamAbort = new Promise<void>(resolve => { resolveUpstreamAbort = resolve; });
   const server = http.createServer((request, response) => {
     if (request.url === "/events") {
       proxySpeechEventStream(response, {
@@ -28,6 +30,7 @@ test("speech SSE proxy treats client disconnect abort as a normal terminal event
             controller.enqueue(new TextEncoder().encode("event: ready\ndata: {}\n\n"));
             signal.addEventListener("abort", () => {
               upstreamAborted = true;
+              resolveUpstreamAbort();
               controller.error(new DOMException("This operation was aborted", "AbortError"));
             }, { once: true });
           }
@@ -48,7 +51,10 @@ test("speech SSE proxy treats client disconnect abort as a normal terminal event
     const first = await reader.read();
     assert.match(new TextDecoder().decode(first.value), /event: ready/);
     controller.abort();
-    await new Promise<void>(resolve => setTimeout(resolve, 20));
+    await Promise.race([
+      upstreamAbort,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("Upstream abort timed out.")), 1_000))
+    ]);
     assert.equal(upstreamAborted, true);
 
     const health = await fetch(`http://127.0.0.1:${port}/health`);

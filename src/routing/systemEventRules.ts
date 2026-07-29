@@ -6,7 +6,7 @@ export const PLAN_FEEDBACK_RULE_ID = "plan-feedback";
 
 const planFeedbackRule: NotificationRule = {
   id: PLAN_FEEDBACK_RULE_ID,
-  name: "计划审批",
+  name: "计划反馈",
   enabled: true,
   routeKinds: [PLAN_FEEDBACK_ROUTE_KIND],
   template: ""

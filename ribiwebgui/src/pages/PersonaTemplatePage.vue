@@ -33,6 +33,7 @@ import {
 import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
 import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
 import { copyTextToClipboard } from "../clipboard";
+import { routeScopedPersonaPath } from "../routeScopedNavigation";
 import {
   adapterLabel,
   configNameFor,
@@ -46,6 +47,7 @@ import {
   ruleTemplateSnippet,
   templateVars
 } from "../utils/gatewayHelpers";
+import { personaOptionDisplayName } from "../personaPresentation";
 
 const store = useGatewayStore();
 const speech = useSpeechStore();
@@ -84,8 +86,13 @@ const recentMessageEndpoints: RecentMessageEndpoint[] = RECENT_MESSAGE_ENDPOINTS
 const gateway = computed(() => store.selectedGateway);
 const runtime = computed(() => store.selectedRuntime);
 const roleOptions = computed(() => [
-  { title: "不注入人格", value: "", avatarUrl: "" },
-  ...((runtime.value.roleInfo?.options || []).map(role => ({ title: role.label || role.value, value: role.value, avatarUrl: role.avatarUrl || "" })))
+  { title: "不注入人格", subtitle: "", value: "", avatarUrl: "" },
+  ...((runtime.value.roleInfo?.options || []).map(role => ({
+    title: personaOptionDisplayName(role),
+    subtitle: personaOptionDisplayName(role) !== role.value ? `人格 ID · ${role.value}` : "",
+    value: role.value,
+    avatarUrl: role.avatarUrl || ""
+  })))
 ]);
 const selectedRole = computed(() => {
   const roleId = gateway.value?.agentRoleId || "";
@@ -562,7 +569,7 @@ watch([() => route.params.id as string, () => store.gateways], ([id]) => {
 watch(() => store.selectedGatewayId, (id) => {
   const gw = store.gateways.find(g => g.id === id);
   const name = gw ? configNameFor(gw) : id;
-  if (name && route.params.id !== name) router.replace(`/persona/${name}`);
+  if (name && route.params.id !== name) router.replace(routeScopedPersonaPath(name));
 });
 </script>
 
@@ -617,7 +624,7 @@ watch(() => store.selectedGatewayId, (id) => {
               @update:model-value="value => setRole(String(value || ''))"
             >
               <template #item="{ props: itemProps, item }">
-                <v-list-item v-bind="itemProps">
+                <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle">
                   <template #prepend><PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="32" /></template>
                 </v-list-item>
               </template>

@@ -263,7 +263,8 @@ export type RolePlan = {
   keywords: string[];
   presentation: {
     status: string;
-    tone: "blocked" | "qa" | "running" | "pending" | "done" | "archived" | "paused" | "unknown";
+    tone: "blocked" | "qa" | "running" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
+    sortBucket: number;
     views: Array<"current" | "plans" | "archived">;
     palette: {
       accent: string;
@@ -295,7 +296,7 @@ export type RolePlanFeedback = {
   stepId?: string;
   stepTitle?: string;
   gatewayId?: string;
-  kind: "approval_suggestion" | "approval_response";
+  kind: "guidance" | "guidance_response" | "approval_suggestion" | "approval_response";
   author: "user" | "agent" | "system";
   source: "webgui" | "tray" | "qq" | "agent" | "api";
   text: string;

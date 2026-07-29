@@ -186,7 +186,15 @@ class KeywordPanel(QFrame):
             QTimer.singleShot(0, self._refresh_summary)
 
     def _refresh_summary(self) -> None:
-        text, visible_count = self._summary_for_width(self.summary_label.width())
+        # A zero-delay refresh can still be queued while its parent card is
+        # closing. PySide may have deleted the wrapped QLabel by then, so treat
+        # that lifecycle edge as a cancelled refresh instead of surfacing an
+        # asynchronous RuntimeError during shutdown or tests.
+        try:
+            width = self.summary_label.width()
+        except RuntimeError:
+            return
+        text, visible_count = self._summary_for_width(width)
         self.visible_keyword_count = visible_count
         self.summary_label.setText(text)
 

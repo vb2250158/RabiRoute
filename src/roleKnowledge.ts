@@ -51,13 +51,24 @@ export type PlanApprovalRequest = {
   responseStatus?: "pending" | "approved" | "rejected" | "changes_requested" | "cancelled";
 };
 
+export type PlanApprovalGateState = "none" | "preparing" | "pending";
+
+export type PlanApprovalGate = {
+  state: PlanApprovalGateState;
+  stepId?: string;
+  missing: string[];
+  contract?: PlanApprovalRequest;
+};
+
 export type PlanStep = {
   id: string;
   title: string;
   status: PlanStepStatus;
   detail?: string;
   waitingFor?: string;
+  /** Compatibility projection. Manager derives this from a complete pending approvalRequest. */
   isBlocked?: boolean;
+  /** Human-readable explanation only; it does not decide blocked state. */
   blockedBy?: string;
   startedAt?: string;
   completedAt?: string;
@@ -93,7 +104,9 @@ export type PlanItem = {
   currentStepId?: string;
   nextAction?: string;
   waitingFor?: string;
+  /** Compatibility projection. Manager derives this from the current approval gate. */
   isBlocked?: boolean;
+  /** Human-readable explanation only; it does not decide blocked state. */
   blockedBy?: string;
   attachments: PlanAttachment[];
   steps: PlanStep[];
@@ -572,12 +585,12 @@ export function currentPlanStep(plan: PlanItem): PlanStep | undefined {
   return plan.steps.find((step) => step.status === "进行中");
 }
 
-export function planRequiresApproval(plan: PlanItem): boolean {
+function planHasApprovalIntent(plan: PlanItem): boolean {
   if (plan.status === "暂停" || plan.status === "已完成" || plan.status === "已归档") return false;
   const step = currentPlanStep(plan);
   if (step?.approvalRequest) {
     const responseStatus = step.approvalRequest.responseStatus;
-    if (responseStatus === "approved" || responseStatus === "rejected" || responseStatus === "cancelled") return false;
+    if (responseStatus === "approved" || responseStatus === "rejected" || responseStatus === "changes_requested" || responseStatus === "cancelled") return false;
     return true;
   }
   if (/human-gate/i.test(String(plan.kind || ""))) return true;
@@ -627,6 +640,27 @@ export function approvalRequestMissingFields(contract: PlanApprovalRequest | und
   if (!contract.sourceMessageId?.trim() && !contract.feedbackId?.trim()) missing.push("source");
   if (!contract.responseStatus) missing.push("responseStatus");
   return missing;
+}
+
+export function planApprovalGate(plan: PlanItem): PlanApprovalGate {
+  if (!planHasApprovalIntent(plan)) return { state: "none", missing: [] };
+  const step = currentPlanStep(plan);
+  const contract = step?.approvalRequest;
+  const missing = approvalRequestMissingFields(contract);
+  return {
+    state: missing.length === 0 ? "pending" : "preparing",
+    stepId: step?.id,
+    missing,
+    contract
+  };
+}
+
+export function planRequiresApproval(plan: PlanItem): boolean {
+  return planApprovalGate(plan).state !== "none";
+}
+
+export function planAcceptsGuidance(plan: PlanItem): boolean {
+  return plan.status === "进行中" && planApprovalGate(plan).state === "none";
 }
 
 function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWriteLimits): void {
@@ -755,15 +789,17 @@ function validatePlanWrite(roleDir: string, plan: PlanItem, requireSteps = false
   assertTextLimit("Plan taskBinding.completionHook.gatewayId", plan.taskBinding?.completionHook?.gatewayId, 120);
   assertKeywordLimits("Plan", plan.keywords, limits.maxKeywords, limits.keywordChars);
   validatePlanSteps(plan, limits, requireSteps);
-  if (planRequiresApproval(plan)) {
+  const approvalGate = planApprovalGate(plan);
+  if (approvalGate.state === "pending") {
     const step = currentPlanStep(plan);
-    const blockedBy = String(step?.blockedBy || plan.blockedBy || "").trim();
-    if (!planIsBlocked(plan)) {
-      throw new Error("A current approval or authorization step must set isBlocked=true until an approval decision is recorded.");
+    if (plan.isBlocked !== true || step?.isBlocked !== true) {
+      throw new Error("Manager must derive isBlocked=true from a complete pending approval contract.");
     }
-    if (!blockedBy || /^(待|等待)?(审批|批准|授权|确认|确认方案|秋雨审批)$/.test(blockedBy.replace(/\s+/g, ""))) {
-      throw new Error("An approval-blocked plan must provide a concrete blockedBy naming who must approve what.");
+    if (!planBlockingReason(plan)) {
+      throw new Error("An approval-blocked plan must identify the approver and requested decision.");
     }
+  } else if (plan.isBlocked === true || plan.steps.some((step) => step.isBlocked === true)) {
+    throw new Error("isBlocked is Manager-derived and is only valid for a complete pending approval contract.");
   }
   const total = planTextTotal(plan);
   if (total > limits.totalChars) {
@@ -876,10 +912,35 @@ function normalizePlanSteps(value: unknown): PlanStep[] {
 }
 
 export function planIsBlocked(plan: PlanItem): boolean {
-  if (plan.status === "暂停" || plan.status === "已完成" || plan.status === "已归档") return false;
+  return planApprovalGate(plan).state === "pending";
+}
+
+export function planBlockingReason(plan: PlanItem): string {
   const step = currentPlanStep(plan);
-  if (typeof step?.isBlocked === "boolean") return step.isBlocked;
-  return plan.isBlocked === true;
+  const explicit = step?.blockedBy?.trim() || plan.blockedBy?.trim();
+  if (explicit) return explicit;
+  const contract = planApprovalGate(plan).contract;
+  if (!contract) return "";
+  const approver = contract.approver?.trim() || "审批人";
+  return `等待${approver}审批：${contract.request.trim()}`;
+}
+
+function withDerivedPlanBlockingState(plan: PlanItem): PlanItem {
+  const blocked = planIsBlocked(plan);
+  const currentStepId = currentPlanStep(plan)?.id;
+  const derivedReason = blocked ? planBlockingReason(plan) : "";
+  return {
+    ...plan,
+    isBlocked: blocked ? true : undefined,
+    blockedBy: blocked && !plan.blockedBy?.trim() ? derivedReason : plan.blockedBy,
+    steps: plan.steps.map((step) => ({
+      ...step,
+      isBlocked: blocked && step.id === currentStepId ? true : undefined,
+      blockedBy: blocked && step.id === currentStepId && !step.blockedBy?.trim()
+        ? derivedReason
+        : step.blockedBy
+    }))
+  };
 }
 
 function recordPlanStepTimes(steps: PlanStep[], previousSteps: PlanStep[], recordedAt: string): PlanStep[] {
@@ -945,7 +1006,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
   const status: PlanStatus = raw.status === "未开始" || raw.status === "进行中" || raw.status === "暂停" || raw.status === "已完成" || raw.status === "已归档"
     ? raw.status
     : "未开始";
-  return {
+  return withDerivedPlanBlockingState({
     id: String(raw.id || fallbackId || generatedId("plan", title)),
     title,
     focus: String(raw.focus || title).trim(),
@@ -969,7 +1030,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
     keywords: normalizeKeywords(raw.keywords)
-  };
+  });
 }
 
 function normalizeRecentMemory(raw: Partial<RecentMemoryItem> & Record<string, unknown>, fallbackId?: string): RecentMemoryItem | null {
@@ -1085,18 +1146,358 @@ function allPlanFiles(roleDir: string): string[] {
   ].flatMap((dir) => jsonFiles(dir));
 }
 
-export function listPlans(roleDir: string): PlanItem[] {
-  const items = allPlanFiles(roleDir).flatMap((file) => {
-    const raw = readJson<Record<string, unknown>>(file);
-    const plan = raw ? normalizePlan(raw, path.basename(file, ".json")) : null;
-    return plan ? [plan] : [];
+type PlanListCacheEntry = {
+  signature: string;
+  validUntil: number;
+  plans: PlanItem[];
+};
+
+type PlanFileCacheEntry = {
+  size: number;
+  mtimeMs: number;
+  plan: PlanItem | null;
+};
+
+const PLAN_LIST_CACHE_TTL_MS = 500;
+const PLAN_LIST_WATCH_DEBOUNCE_MS = 120;
+const planListCache = new Map<string, PlanListCacheEntry>();
+const planFileCache = new Map<string, Map<string, PlanFileCacheEntry>>();
+const planListWatchers = new Map<string, Map<string, fs.FSWatcher>>();
+const planListDirtyAt = new Map<string, number>();
+const planListDirtyFiles = new Map<string, Set<string> | null>();
+const planListRefreshTimers = new Map<string, NodeJS.Timeout>();
+const planListRefreshInFlight = new Set<string>();
+
+function planListCacheKey(roleDir: string): string {
+  return path.resolve(roleDir);
+}
+
+function clearPlanListCache(roleDir: string): void {
+  const cacheKey = planListCacheKey(roleDir);
+  planListCache.delete(cacheKey);
+  planFileCache.delete(cacheKey);
+  planListDirtyAt.delete(cacheKey);
+  planListDirtyFiles.delete(cacheKey);
+  const timer = planListRefreshTimers.get(cacheKey);
+  if (timer) clearTimeout(timer);
+  planListRefreshTimers.delete(cacheKey);
+  const watchers = planListWatchers.get(cacheKey);
+  for (const watcher of watchers?.values() || []) watcher.close();
+  planListWatchers.delete(cacheKey);
+}
+
+function markPlanListCacheDirty(roleDir: string, filePath?: string): void {
+  const cacheKey = planListCacheKey(roleDir);
+  planListDirtyAt.set(cacheKey, Date.now());
+  if (!filePath) {
+    planListDirtyFiles.set(cacheKey, null);
+    return;
+  }
+  const current = planListDirtyFiles.get(cacheKey);
+  if (current === null) return;
+  const dirtyFiles = current || new Set<string>();
+  dirtyFiles.add(path.resolve(filePath));
+  planListDirtyFiles.set(cacheKey, dirtyFiles);
+  schedulePlanListCacheRefresh(roleDir);
+}
+
+function readPlansWithFileCache(roleDir: string, files: string[]): { signature: string; items: PlanItem[] } {
+  const cacheKey = planListCacheKey(roleDir);
+  let cachedFiles = planFileCache.get(cacheKey);
+  if (!cachedFiles) {
+    cachedFiles = new Map<string, PlanFileCacheEntry>();
+    planFileCache.set(cacheKey, cachedFiles);
+  }
+  const resolvedFiles = files.map((filePath) => path.resolve(filePath));
+  const currentFiles = new Set(resolvedFiles);
+  for (const filePath of cachedFiles.keys()) {
+    if (!currentFiles.has(filePath)) cachedFiles.delete(filePath);
+  }
+  const signatureParts: string[] = [];
+  const items: PlanItem[] = [];
+  for (const filePath of resolvedFiles) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      cachedFiles.delete(filePath);
+      signatureParts.push(`${filePath}\u001fmissing`);
+      continue;
+    }
+    signatureParts.push(`${filePath}\u001f${stat.size}\u001f${stat.mtimeMs}`);
+    let cachedFile = cachedFiles.get(filePath);
+    if (!cachedFile || cachedFile.size !== stat.size || cachedFile.mtimeMs !== stat.mtimeMs) {
+      const raw = readJson<Record<string, unknown>>(filePath);
+      cachedFile = {
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        plan: raw ? normalizePlan(raw, path.basename(filePath, ".json")) : null
+      };
+      cachedFiles.set(filePath, cachedFile);
+    }
+    if (cachedFile.plan) items.push(cachedFile.plan);
+  }
+  return { signature: signatureParts.join("\u001e"), items };
+}
+
+function plansFromFileCache(roleDir: string): { signature: string; items: PlanItem[] } | null {
+  const cachedFiles = planFileCache.get(planListCacheKey(roleDir));
+  if (!cachedFiles) return null;
+  const activePrefix = `${path.resolve(path.join(plansDir(roleDir), "items", "active"))}${path.sep}`;
+  const entries = [...cachedFiles.entries()].sort(([left], [right]) => {
+    const priorityDelta = Number(!left.startsWith(activePrefix)) - Number(!right.startsWith(activePrefix));
+    return priorityDelta || left.localeCompare(right);
   });
+  return {
+    signature: entries.map(([filePath, entry]) => `${filePath}\u001f${entry.size}\u001f${entry.mtimeMs}`).join("\u001e"),
+    items: entries.flatMap(([, entry]) => entry.plan ? [entry.plan] : [])
+  };
+}
+
+function uniquePlans(items: PlanItem[]): PlanItem[] {
   const seen = new Set<string>();
   return items.filter((item) => {
     if (seen.has(item.id)) return false;
     seen.add(item.id);
     return true;
   });
+}
+
+type AsyncPlanFileCacheResult = {
+  filePath: string;
+  entry?: PlanFileCacheEntry;
+  missing?: boolean;
+  retry?: boolean;
+};
+
+async function readChangedPlanFile(filePath: string, retryOnTransient = true): Promise<AsyncPlanFileCacheResult> {
+  try {
+    const [stat, text] = await Promise.all([
+      fs.promises.stat(filePath),
+      fs.promises.readFile(filePath, "utf8")
+    ]);
+    const after = await fs.promises.stat(filePath);
+    if (stat.size !== after.size || stat.mtimeMs !== after.mtimeMs) {
+      return { filePath, retry: true };
+    }
+    let raw: Record<string, unknown> | null = null;
+    try {
+      raw = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      if (retryOnTransient) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return readChangedPlanFile(filePath, false);
+      }
+    }
+    return {
+      filePath,
+      entry: {
+        size: after.size,
+        mtimeMs: after.mtimeMs,
+        plan: raw ? normalizePlan(raw, path.basename(filePath, ".json")) : null
+      }
+    };
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    return code === "ENOENT" ? { filePath, missing: true } : { filePath, retry: true };
+  }
+}
+
+function schedulePlanListCacheRefresh(roleDir: string): void {
+  const cacheKey = planListCacheKey(roleDir);
+  const current = planListRefreshTimers.get(cacheKey);
+  if (current) clearTimeout(current);
+  const timer = setTimeout(() => {
+    planListRefreshTimers.delete(cacheKey);
+    void refreshPlanListCacheFromDirtyFiles(roleDir);
+  }, PLAN_LIST_WATCH_DEBOUNCE_MS);
+  timer.unref?.();
+  planListRefreshTimers.set(cacheKey, timer);
+}
+
+async function refreshPlanListCacheFromDirtyFiles(roleDir: string): Promise<void> {
+  const cacheKey = planListCacheKey(roleDir);
+  if (planListRefreshInFlight.has(cacheKey)) return;
+  const dirtyFiles = planListDirtyFiles.get(cacheKey);
+  const cachedFiles = planFileCache.get(cacheKey);
+  if (!(dirtyFiles instanceof Set) || !dirtyFiles.size || !cachedFiles || !planListCache.has(cacheKey)) return;
+  planListDirtyFiles.delete(cacheKey);
+  planListDirtyAt.delete(cacheKey);
+  planListRefreshInFlight.add(cacheKey);
+  try {
+    const results = await Promise.all([...dirtyFiles].map((filePath) => readChangedPlanFile(filePath)));
+    for (const result of results) {
+      if (result.missing) cachedFiles.delete(result.filePath);
+      else if (result.entry) cachedFiles.set(result.filePath, result.entry);
+      else if (result.retry) markPlanListCacheDirty(roleDir, result.filePath);
+    }
+    const refreshed = plansFromFileCache(roleDir);
+    if (refreshed) {
+      planListCache.set(cacheKey, {
+        signature: refreshed.signature,
+        validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
+        plans: uniquePlans(refreshed.items)
+      });
+    }
+  } finally {
+    planListRefreshInFlight.delete(cacheKey);
+    if (planListDirtyFiles.get(cacheKey) instanceof Set && !planListRefreshTimers.has(cacheKey)) {
+      schedulePlanListCacheRefresh(roleDir);
+    }
+  }
+}
+
+function updatePlanListCacheAfterWrite(
+  roleDir: string,
+  destination: string,
+  plan: PlanItem,
+  relatedFiles: string[]
+): void {
+  const cacheKey = planListCacheKey(roleDir);
+  const cachedFiles = planFileCache.get(cacheKey);
+  if (!cachedFiles || !planListCache.has(cacheKey)) {
+    clearPlanListCache(roleDir);
+    return;
+  }
+  const resolvedFiles = [...new Set(relatedFiles.map((filePath) => path.resolve(filePath)))];
+  for (const filePath of resolvedFiles) cachedFiles.delete(filePath);
+  const resolvedDestination = path.resolve(destination);
+  try {
+    const stat = fs.statSync(resolvedDestination);
+    cachedFiles.set(resolvedDestination, { size: stat.size, mtimeMs: stat.mtimeMs, plan });
+  } catch {
+    clearPlanListCache(roleDir);
+    return;
+  }
+  const refreshed = plansFromFileCache(roleDir);
+  if (!refreshed) {
+    clearPlanListCache(roleDir);
+    return;
+  }
+  planListCache.set(cacheKey, {
+    signature: refreshed.signature,
+    validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
+    plans: uniquePlans(refreshed.items)
+  });
+  const dirtyFiles = planListDirtyFiles.get(cacheKey);
+  if (dirtyFiles instanceof Set) {
+    for (const filePath of resolvedFiles) dirtyFiles.delete(filePath);
+    dirtyFiles.delete(resolvedDestination);
+    if (!dirtyFiles.size) {
+      planListDirtyFiles.delete(cacheKey);
+      planListDirtyAt.delete(cacheKey);
+    }
+  }
+}
+
+function ensurePlanListWatchers(roleDir: string): boolean {
+  const cacheKey = planListCacheKey(roleDir);
+  const directories = [
+    path.join(plansDir(roleDir), "items", "active"),
+    path.join(plansDir(roleDir), "archive")
+  ].filter((directory) => fs.existsSync(directory));
+  if (!directories.length) return false;
+  let watchers = planListWatchers.get(cacheKey);
+  if (!watchers) {
+    watchers = new Map<string, fs.FSWatcher>();
+    planListWatchers.set(cacheKey, watchers);
+  }
+  for (const directory of directories) {
+    if (watchers.has(directory)) continue;
+    try {
+      const watcher = fs.watch(directory, { persistent: false }, (_eventType, fileName) => {
+        if (!fs.existsSync(directory)) {
+          watcher.close();
+          watchers?.delete(directory);
+          markPlanListCacheDirty(roleDir);
+          return;
+        }
+        if (!fileName) {
+          markPlanListCacheDirty(roleDir);
+          return;
+        }
+        const relativeName = fileName.toString();
+        if (!relativeName.toLowerCase().endsWith(".json")) return;
+        markPlanListCacheDirty(roleDir, path.join(directory, relativeName));
+      });
+      watcher.on("error", () => {
+        watcher.close();
+        watchers?.delete(directory);
+        markPlanListCacheDirty(roleDir);
+      });
+      watchers.set(directory, watcher);
+    } catch {
+      // Fall back to the short signature TTL when this filesystem cannot be watched.
+    }
+  }
+  return directories.every((directory) => watchers?.has(directory));
+}
+
+type PlanRecord = {
+  filePath: string;
+  plan: PlanItem;
+};
+
+function planCandidateFiles(roleDir: string, planId: string): string[] {
+  const fileName = `${safeIdPart(planId) || "plan"}.json`;
+  return [
+    path.join(plansDir(roleDir), "items", "active", fileName),
+    path.join(plansDir(roleDir), "archive", fileName)
+  ];
+}
+
+function planRecordFromFile(filePath: string, planId: string): PlanRecord | null {
+  const raw = readJson<Record<string, unknown>>(filePath);
+  const plan = raw ? normalizePlan(raw, path.basename(filePath, ".json")) : null;
+  return plan?.id === planId ? { filePath, plan } : null;
+}
+
+function findPlanRecord(roleDir: string, planId: string): PlanRecord | null {
+  const candidates = planCandidateFiles(roleDir, planId);
+  for (const filePath of candidates) {
+    const record = planRecordFromFile(filePath, planId);
+    if (record) return record;
+  }
+  const candidateSet = new Set(candidates.map((filePath) => path.resolve(filePath)));
+  for (const filePath of allPlanFiles(roleDir)) {
+    if (candidateSet.has(path.resolve(filePath))) continue;
+    const record = planRecordFromFile(filePath, planId);
+    if (record) return record;
+  }
+  return null;
+}
+
+export function listPlans(roleDir: string): PlanItem[] {
+  const cacheKey = planListCacheKey(roleDir);
+  const now = Date.now();
+  const cached = planListCache.get(cacheKey);
+  const watchBacked = ensurePlanListWatchers(roleDir);
+  const dirtyAt = planListDirtyAt.get(cacheKey);
+  if (cached && watchBacked && dirtyAt === undefined) return cached.plans;
+  if (cached && watchBacked && dirtyAt !== undefined) {
+    if (planListDirtyFiles.get(cacheKey) instanceof Set) {
+      if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
+      return cached.plans;
+    }
+  }
+  if (cached && !watchBacked && cached.validUntil > now) return cached.plans;
+  const files = allPlanFiles(roleDir);
+  const { signature, items } = readPlansWithFileCache(roleDir, files);
+  if (cached && cached.signature === signature) {
+    cached.validUntil = now + PLAN_LIST_CACHE_TTL_MS;
+    planListDirtyAt.delete(cacheKey);
+    planListDirtyFiles.delete(cacheKey);
+    return cached.plans;
+  }
+  const plans = uniquePlans(items);
+  planListCache.set(cacheKey, { signature, validUntil: now + PLAN_LIST_CACHE_TTL_MS, plans });
+  planListDirtyAt.delete(cacheKey);
+  planListDirtyFiles.delete(cacheKey);
+  return plans;
+}
+
+export function getPlan(roleDir: string, planId: string): PlanItem | null {
+  return findPlanRecord(roleDir, planId)?.plan ?? null;
 }
 
 export function listRecentMemories(roleDir: string): RecentMemoryItem[] {
@@ -1182,13 +1583,16 @@ export function createPlan(roleDir: string, input: Record<string, unknown>): Pla
   if (Object.prototype.hasOwnProperty.call(input, "attachments")) {
     plan.attachments = storePlanAttachments(roleDir, plan.id, input.attachments);
   }
-  writeJson(planFile(roleDir, plan), plan);
+  const destination = planFile(roleDir, plan);
+  writeJson(destination, plan);
+  updatePlanListCacheAfterWrite(roleDir, destination, plan, [destination]);
   return plan;
 }
 
 export function updatePlan(roleDir: string, planId: string, patch: Record<string, unknown>): PlanItem {
-  const existing = listPlans(roleDir).find((item) => item.id === planId);
-  if (!existing) throw new Error(`Plan not found: ${planId}`);
+  const record = findPlanRecord(roleDir, planId);
+  if (!record) throw new Error(`Plan not found: ${planId}`);
+  const existing = record.plan;
   if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
   const recordedAt = nowIso();
   const next = normalizePlan({ ...existing, ...patch, attachments: existing.attachments, id: existing.id, createdAt: existing.createdAt, updatedAt: recordedAt });
@@ -1202,13 +1606,20 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
   if (next.status === "已完成" && existing.status !== "已完成" && !next.completedAt) {
     next.completedAt = next.updatedAt;
   }
-  for (const file of allPlanFiles(roleDir)) {
-    const raw = readJson<Record<string, unknown>>(file);
-    if (raw?.id === planId) {
-      try { fs.unlinkSync(file); } catch { /* ignore stale file */ }
-    }
+  const destination = planFile(roleDir, next);
+  writeJson(destination, next);
+  for (const filePath of new Set([record.filePath, ...planCandidateFiles(roleDir, planId)])) {
+    if (path.resolve(filePath) === path.resolve(destination)) continue;
+    const raw = readJson<Record<string, unknown>>(filePath);
+    if (raw?.id !== planId) continue;
+    try { fs.unlinkSync(filePath); } catch { /* ignore stale file */ }
   }
-  writeJson(planFile(roleDir, next), next);
+  updatePlanListCacheAfterWrite(
+    roleDir,
+    destination,
+    next,
+    [destination, record.filePath, ...planCandidateFiles(roleDir, planId)]
+  );
   return next;
 }
 

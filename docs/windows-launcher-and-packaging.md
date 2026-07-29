@@ -52,9 +52,10 @@ Start-RabiRoute-Tray.bat
 默认行为：
 
 - 使用项目根目录作为工作目录。
-- 检查 `http://127.0.0.1:8790/meta`。
-- 如果 RabiRoute manager 已经运行，复用它并打开 `http://127.0.0.1:8790/`。
-- 如果端口 `8790` 被非 RabiRoute manager 占用，直接退出，不启动重复进程。
+- 连续检查 `http://127.0.0.1:8790/meta`，只有稳定健康的 Manager 才会复用。
+- 如果健康 Manager 正在运行但早于当前 `dist/manager.js` 构建，先受控关闭旧实例，再加载当前构建。
+- 如果 `8790` 被无响应进程占用，只在命令行精确指向本项目绝对 `dist/manager.js`，或发布包/旧启动方式使用的相对 `dist/manager.js` 时接管：先调用 `/manager/shutdown`，超时后才终止这棵已核实的进程树；Node 进程、端口 owner 与 Manager 探活门禁仍须同时成立。
+- 如果端口 `8790` 属于非本项目进程或无法核实的进程，直接退出，不停止它，也不启动重复 Manager。
 - 如果 `dist/manager.js` 缺失，或比后端源码更旧，会运行 `npm.cmd run build`，除非传入 `-NoBuild`。
 - 如果 RibiWebGUI 前端产物 `ribiwebgui/dist/index.html` 或 `ribiwebgui/dist/assets` 缺失，或比前端源码更旧，会自动补构建；manager 已运行时只跑 `npm.cmd run webgui:build`，manager 未运行时跑完整 `npm.cmd run build`。
 - 没有 manager 运行时，在后台启动 `node dist\manager.js`。
@@ -90,7 +91,7 @@ tray-YYYYMMDD-HHMMSS.stderr.log
 
 ## 启动器不负责的事
 
-启动器不会启动或停止 NapCat、QQ 或任何非 RabiRoute 进程。如果存在端口冲突，它只报告冲突并保持现有进程不动。RabiRoute 的退出由 manager 本地 shutdown API 统一处理，不靠启动器直接杀进程。
+启动器不会启动或停止 NapCat、QQ 或任何非 RabiRoute 进程。未知端口占用者只会被报告并保持不动。只有同一项目、同一 `dist/manager.js` 的旧 Manager 已被精确核实时，启动器才会先请求本地 shutdown；若该实例已经无响应且仍占端口，才终止它自己的进程树，避免一个僵死旧实例永久阻止新版本启动。
 
 ## Manager 关闭 API
 

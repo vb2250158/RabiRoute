@@ -2,10 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   routeKeyFromWebguiHash,
+  routeScopedAdaptersPath,
   routeScopedKnowledgePath,
   routeScopedKnowledgeUrl,
   routeScopedOverviewPath,
-  routeScopedOverviewUrl
+  routeScopedOverviewUrl,
+  routeScopedPageFromPath,
+  routeScopedPathForCurrentPage,
+  routeScopedPersonaPath,
+  routeScopedRuntimePath,
+  routeScopedSpeechPath
 } from "../src/routeScopedNavigation";
 import { lanWebguiRedirectUrl } from "../src/webguiLanRedirect";
 
@@ -14,6 +20,21 @@ test("builds Route-scoped overview and knowledge paths from a config name", () =
   assert.equal(routeScopedKnowledgePath("main route"), "/routes/main%20route/knowledge");
   assert.equal(routeScopedOverviewPath(""), "/overview");
   assert.equal(routeScopedKnowledgePath(""), "/knowledge");
+  assert.equal(routeScopedAdaptersPath("main route"), "/routes/main%20route/adapters");
+  assert.equal(routeScopedPersonaPath("main route"), "/routes/main%20route/persona");
+  assert.equal(routeScopedSpeechPath("main route"), "/routes/main%20route/speech");
+  assert.equal(routeScopedRuntimePath("main route"), "/routes/main%20route/runtime");
+  assert.equal(routeScopedAdaptersPath(""), "/routes");
+  assert.equal(routeScopedPersonaPath(""), "/persona");
+});
+
+test("maps every Route-aware sidebar page to a stable scoped URL", () => {
+  assert.equal(routeScopedPageFromPath("/routes/main/adapters"), "adapters");
+  assert.equal(routeScopedPageFromPath("/persona/main"), "persona");
+  assert.equal(routeScopedPageFromPath("/speech"), "speech");
+  assert.equal(routeScopedPageFromPath("/runtime"), "runtime");
+  assert.equal(routeScopedPathForCurrentPage("next route", "/routes/main/persona"), "/routes/next%20route/persona");
+  assert.equal(routeScopedPathForCurrentPage("next route", "/docs"), "");
 });
 
 test("recognizes the selected Route on scoped overview, configuration, persona, and knowledge pages", () => {
@@ -21,6 +42,10 @@ test("recognizes the selected Route on scoped overview, configuration, persona, 
   assert.equal(routeKeyFromWebguiHash("#/routes/main/knowledge?webgui_token=secret"), "main");
   assert.equal(routeKeyFromWebguiHash("#/routes/main"), "main");
   assert.equal(routeKeyFromWebguiHash("#/persona/%E6%98%9F%E6%B5%B7"), "星海");
+  assert.equal(routeKeyFromWebguiHash("#/routes/main/adapters"), "main");
+  assert.equal(routeKeyFromWebguiHash("#/routes/main/persona"), "main");
+  assert.equal(routeKeyFromWebguiHash("#/routes/main/speech"), "main");
+  assert.equal(routeKeyFromWebguiHash("#/routes/main/runtime"), "main");
   assert.equal(routeKeyFromWebguiHash("#/knowledge"), "");
 });
 

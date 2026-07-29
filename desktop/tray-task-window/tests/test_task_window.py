@@ -218,6 +218,26 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertIn("background: #fff1ed", status_stylesheet)
         self.assertIn("color: #b42318", status_stylesheet)
 
+    def test_waiting_package_card_uses_manager_status_and_blue_palette(self) -> None:
+        plan = PlanItem(
+            title="等待目标包",
+            status="进行中",
+            display_status="等待打包",
+            display_tone="waiting_package",
+            display_accent="#2563eb",
+            display_background="#eff6ff",
+            display_foreground="#1d4ed8",
+        )
+        card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
+        card.show()
+        self.app.processEvents()
+
+        self.assertEqual(card.status_label.text(), "状态：等待打包")
+        self.assertEqual(card.status_label.property("statusTone"), "waiting_package")
+        self.assertIn("border-left: 4px solid #2563eb", card.styleSheet())
+        self.assertIn("background: #eff6ff", card.status_label.styleSheet())
+        self.assertIn("color: #1d4ed8", card.status_label.styleSheet())
+
     def test_overflow_menu_contains_actions_not_duplicate_views(self) -> None:
         self.window.set_actions([("人格目录", lambda: None, True)])
         menu_texts = [action.text() for action in self.window.more_menu.actions() if action.text()]
