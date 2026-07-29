@@ -508,7 +508,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 这些接口已由 Manager 实现。Agent adapter、角色面板或其它本机工作台可以按需查询和更新；`/roles/...` 与 `/api/roles/...` 两种路径前缀均可解析，公开示例优先使用 `/api/roles/...`。
 
-长计划列表可使用 `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary` 分页读取轻量摘要，再按 ID 调用 `GET /api/roles/:roleId/plans/:planId` 获取正文、步骤、审批与附件元数据。WebGUI 左侧目录消费全部已返回摘要，右侧正文只挂载首批 8 张卡片并随滚动有界追加；目录跳转可单独挂载目标卡，不要求先创建全部前置正文。WebGUI 让视口附近详情进入并发队列最前，并在继续消费摘要页前让出短渲染时隙；只有真实请求中的卡片显示加载动画，离屏卡片使用紧凑未加载状态和浏览器 `content-visibility`，避免几十个 Vuetify 骨架同时占用主线程。Manager 对计划列表使用两层增量缓存：目录 watcher 合并短时间内连续的文件写入事件，逐文件缓存再按 `size + mtimeMs` 在后台异步读取和归一化发生变化的计划 JSON，摘要 API 在磁盘读取期间继续返回上一份完整快照；规范的 POST/PATCH 写入会直接写穿对应缓存项并立即可见。文件系统不支持 watcher 时回退到短 TTL 校验。缓存只保存派生读取结果，计划文件仍是唯一事实源。
+长计划列表可使用 `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary` 分页读取轻量摘要，再按 ID 调用 `GET /api/roles/:roleId/plans/:planId` 获取正文、步骤、审批与附件元数据。WebGUI 首屏读取 8 条摘要，后续使用更大的后台页减少重复列表查询；左侧目录消费全部已返回摘要，右侧正文只挂载一个有界窗口并随滚动向后追加。目录跳转会把窗口起点移到目标计划，既不要求先创建全部前置正文，也不在后续加载时把旧卡片插回当前阅读位置上方。WebGUI 让视口附近详情进入并发队列最前，并在继续消费摘要页前只让出一个渲染帧，不等待详情请求完成；只有真实请求中的卡片显示加载动画，离屏卡片使用紧凑未加载状态和浏览器 `content-visibility`，避免几十个 Vuetify 骨架同时占用主线程。Manager 对计划列表使用两层增量缓存：目录 watcher 合并短时间内连续的文件写入事件，逐文件缓存再按 `size + mtimeMs` 在后台异步读取和归一化发生变化的计划 JSON，摘要 API 在磁盘读取期间继续返回上一份完整快照；规范的 POST/PATCH 写入会直接写穿对应缓存项并立即可见。文件系统不支持 watcher 时回退到短 TTL 校验。缓存只保存派生读取结果，计划文件仍是唯一事实源。
 
 计划接口可以新增计划、更新已有计划、修改状态、更新下一步或归档。记忆接口可以新增近期记忆，也可以通过记忆 ID 修改近期记忆。沉淀记忆不提供直接修改接口。
 
