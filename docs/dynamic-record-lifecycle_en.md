@@ -35,9 +35,11 @@ An item older than 72 hours triggers an organization pass. That pass selects the
 | Host-wide speech messages | `data/speech/messages/YYYY-MM-DD.jsonl` | Date-sharded audit stream | Calendar files are physical shards, not archival or consolidation |
 | Host-wide speech Markdown export | `data/speech/exports/transcript-*.md` | On-demand rebuilt view | Generated from public speech messages for an inclusive/exclusive time range; never a source of truth |
 | RabiSpeech diagnostic records | `plugin-adapters/rabi-speech/output/records/YYYY-MM-DD.jsonl` | Date-sharded diagnostics | Separate from persona routing records |
+| Audio-stream transport and pipeline events | `plugin-adapters/rabi-speech/output/audio-stream-events/current.jsonl` | Dynamic archival ledger | Stable `id/sequence`; once an event exceeds 72 hours, move the maximal contiguous prefix older than 24 hours into `archive/<first>~<last>.jsonl` and atomically update the index |
 | Persona voice compatibility log | `data/roles/<RoleId>/voice-transcripts.jsonl` | Compatibility/audit | Does not replace the bidirectional ledger |
 | Completed plans | `plans/items/active/*.json` | Delayed archival | Move to `plans/archive/` after 72 hours from `updatedAt` |
 | TTS audio cache | Persona or RabiSpeech audio cache | Expire | Uses an independent retention policy |
+| ASR utterance cache | `plugin-adapters/rabi-speech/output/asr-audio/` | Expire after 24 hours | Retains only VAD utterances that actually entered ASR for loopback replay; never stores continuous all-day PCM |
 
 ## Archival contract
 

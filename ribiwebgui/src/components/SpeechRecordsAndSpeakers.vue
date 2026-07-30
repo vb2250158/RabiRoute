@@ -174,6 +174,14 @@ function cacheReferenceKind(record: SpeechRecord) {
   return speechAudioCacheReferenceKind(record.audioFile);
 }
 
+function sourceAudioAvailable(record: SpeechRecord): boolean {
+  return Boolean(
+    record.kind === "asr"
+    && record.audioFile
+    && (!record.audioExpiresAt || record.audioExpiresAt > Date.now() / 1000)
+  );
+}
+
 function segmentLabel(segment: SpeechTranscriptSegment): string {
   return segment.speakerName || segment.speakerLabel || segment.speaker || "未标注说话人";
 }
@@ -347,7 +355,7 @@ onMounted(() => {
     <div class="speaker-records-head">
       <div>
         <strong>最近 ASR/TTS 双向记录</strong>
-        <span>读取后台按日期保存的双向文本记录；ASR 原始录音默认不复制，TTS 成品只显示安全相对缓存路径。</span>
+        <span>读取后台持久化的双向文本记录；ASR 只缓存实际送入识别的短语音 24 小时，可直接回听，不保存全天连续原始录音。</span>
       </div>
       <div class="speaker-record-actions">
         <v-btn
@@ -512,6 +520,16 @@ onMounted(() => {
           </div>
         </div>
         <p v-else class="speech-record-text">{{ record.text }}</p>
+        <div v-if="record.kind === 'asr' && (record.audioFile || record.audioExpiresAt)" class="speech-record-source-audio">
+          <audio
+            v-if="sourceAudioAvailable(record)"
+            controls
+            preload="none"
+            :src="`/api/speech/records/${encodeURIComponent(record.id)}/audio`"
+          />
+          <span v-else>原声缓存已过期或不可用。</span>
+          <time v-if="record.audioExpiresAt">保留至 {{ formatTime(record.audioExpiresAt) }}</time>
+        </div>
       </article>
     </div>
     <div v-else class="speaker-record-empty">
@@ -703,6 +721,9 @@ onMounted(() => {
 .speech-segment-row { padding: 10px 12px; border-left: 3px solid rgba(15, 139, 141, .28); border-radius: 8px; background: rgba(255, 255, 255, .68); }
 .speech-segment-speaker { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
 .speech-segment-speaker small { color: #7b8c9b; }
+.speech-record-source-audio { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-top: 10px; color: #718496; font-size: 11px; }
+.speech-record-source-audio audio { width: min(100%, 520px); height: 34px; }
+.speech-record-source-audio time { color: #506a7e; }
 .speaker-record-empty { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 88px; color: #7b8c9b; border: 1px dashed rgba(17, 32, 51, .14); border-radius: 12px; }
 .compact-speaker-empty { min-height: 64px; margin-top: 12px; padding: 12px; text-align: center; }
 .speaker-dialog-card { overflow: hidden; }

@@ -6,6 +6,52 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.1.23 - 2026-07-30
+
+### Speaker-model cold-start resilience
+
+- The isolated speaker-model compatibility probe window is corrected from 30 to 120 seconds, matching real dependency cold starts that can approach one minute on Windows network workspaces.
+- The probe still fails closed in a child process, changes no matching thresholds, and does not enable automatic named-speaker assignment before a formal real-person benchmark passes.
+- A regression test prevents future timeout reductions from misclassifying an installed ERes2NetV2 model as unavailable.
+
+## 0.1.22 - 2026-07-30
+
+### RabiSpeech logs, source audio, and startup resilience
+
+- The shared audio-stream card now sits above the TTS / ASR tabs and shows PCM, VAD, ASR, Route delivery, and public transcript history per stable device. Events use a durable JSONL ledger with older-page loading.
+- Only utterance clips actually sent to ASR are retained in a constrained 24-hour cache and can be replayed by record ID. Public ASR, persona conversations, and diagnostic records remain separate.
+- RabiSpeech now applies bounded retries to transient Windows network error 59 on NAS storage. Local ASR model warmup runs in the background so health, ingestion, and log APIs are not blocked by model loading.
+
+### Safe development hot reload
+
+- Added a safe WebGUI hot-reload entry on development port `8793`; RabiSpeech reload is explicit.
+- The safe launcher rejects Manager hot reload. Manager owns long-lived Route children such as NapCat, RabiLink, and personal Weixin, so file changes must not repeatedly restart those message endpoints.
+- Android is updated to `0.3.1` and includes the remote device model in its display name. Native Android changes still require a rebuilt APK, and formal acceptance still requires a complete build, package, and installed-runtime update.
+
+## 0.1.22 - 2026-07-30
+
+### Speech-device observability and controlled replay
+
+- Android reports its device model when opening an audio stream. Speech Service labels sources with the model plus stable-id suffix and correlates host PCM reception, VAD/ASR/Route events, host-wide transcripts, and per-Route receipts by device. Audio-stream events use monotonic sequences in a durable JSONL ledger with lossless 24-hour-hot/72-hour-trigger archival.
+- VAD utterances that actually enter ASR are retained in a private host cache for 24 hours and can be replayed only through a bounded record-id endpoint; continuous all-day PCM and arbitrary paths are not accepted. A shared TTS-store registry cleans caches at their real deadlines and stops its background cleanup with the service lifecycle.
+- The isolated speaker-model compatibility probe now has a bounded 120-second startup window, covering private dependency loads from Windows network workspaces that can approach one minute. Failures still fail closed without loading an incompatible model inside the service process.
+- Android chat bubbles persist queued, playing, played, and failed Agent-TTS states and allow replay from the controlled cache. Playback is serialized, while expired, out-of-root, oversized, or unsupported files fail closed.
+
+### Mobile persona list and identity labels
+
+- The mobile Route endpoint can explicitly include installed persona profiles that do not yet have a RabiLink binding. Android shows every persona: configured profiles remain chat-capable, while unconfigured profiles stay visible with the existing setup guidance.
+- Conversation rows and titles prefer persona identity over historical gateway labels, with a stable Chinese label for YeYu. The Android app version is now `0.3.1`.
+
+### Personal-Weixin image and file boundaries
+
+- The personal-Weixin adapter can decrypt inbound images into private runtime storage and forward them; media that cannot be read safely remains record-only. Besides text, Outbox may send a local image or file back to a source session that supplied a context token, after adapter-policy and `allowedFileRoots` real-path checks.
+- Outbound media is encrypted under the iLink protocol, uploaded to the Weixin CDN, and delivered as a native image or file item. Arbitrary proactive contacts, out-of-root paths, and unsupported media remain denied.
+
+### Safe development hot reload
+
+- Added `dev:hot`, `dev:hot:speech`, `speech:dev`, and the isolated-only `manager:dev:isolated`. The safe default starts only WebGUI Vite HMR; RabiSpeech Uvicorn reload is opt-in, and startup rejects occupied service ports.
+- Manager stays outside the safe reload loop so its owned NapCat, RabiLink, personal-Weixin, and persona sessions are not bounced. RabiSpeech uses bounded retries for transient Windows network-filesystem error 59. Development feedback still does not replace a complete build, package, and installed-runtime acceptance pass.
+
 ## 0.1.21 - 2026-07-30
 
 ### Read-only Bilibili history bridge

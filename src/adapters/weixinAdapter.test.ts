@@ -17,7 +17,7 @@ function record(patch: Partial<WeixinMessageRecord> = {}): WeixinMessageRecord {
   };
 }
 
-test("personal Weixin forwards text but records media without waking the Agent", () => {
+test("personal Weixin forwards text and downloaded images, but records unreadable media", () => {
   const calls: string[] = [];
   const handlers = {
     forward: () => calls.push("forward"),
@@ -29,5 +29,10 @@ test("personal Weixin forwards text but records media without waking the Agent",
 
   assert.equal(dispatchWeixinRecord(record(), {}, handlers), "forwarded");
   assert.equal(dispatchWeixinRecord(record({ messageType: "image", rawMessage: "[图片]" }), {}, handlers), "record_only");
-  assert.deepEqual(calls, ["forward", "record"]);
+  assert.equal(dispatchWeixinRecord(record({
+    messageType: "image",
+    rawMessage: "[图片附件：C:\\private\\image-0.png]",
+    attachments: [{ path: "C:\\private\\image-0.png", name: "image-0.png", mimeType: "image/png", size: 42 }]
+  }), {}, handlers), "forwarded");
+  assert.deepEqual(calls, ["forward", "record", "forward"]);
 });

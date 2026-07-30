@@ -17,8 +17,15 @@ import android.os.IBinder;
 import android.provider.OpenableColumns;
 
 import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.File;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -44,6 +51,7 @@ public final class RabiConversationService extends Service {
     public static final String ACTION_CONFIG = "com.rabi.link.conversation.CONFIG";
     public static final String ACTION_RESTORE = "com.rabi.link.conversation.RESTORE";
     public static final String ACTION_PREFERENCE = "com.rabi.link.conversation.PREFERENCE";
+    public static final String ACTION_REPLAY_TTS = "com.rabi.link.conversation.REPLAY_TTS";
     private static final String CHANNEL = "rabi_conversation";
     private static final String MESSAGE_CHANNEL = "rabi_messages";
     private static final int NOTIFICATION_ID = 7421;
@@ -53,6 +61,9 @@ public final class RabiConversationService extends Service {
     private static final String EXTRA_ROUTE_PROFILE_ID = "route_profile_id";
     private static final String EXTRA_CLIENT_MESSAGE_ID = "client_message_id";
     private static final String EXTRA_PROACTIVITY_PREFERENCE = "proactivity_preference";
+    private static final String EXTRA_TTS_MESSAGE_ID = "tts_message_id";
+    private static final String EXTRA_TTS_LOCAL_PATH = "tts_local_path";
+    private static final long MAX_REPLAY_WAV_BYTES = 32L * 1024L * 1024L;
 
     private RabiPhoneAudioCapture phoneAudioCapture;
     private RabiMobileSpeechArchive speechArchive;
@@ -65,6 +76,8 @@ public final class RabiConversationService extends Service {
     private boolean shutdownComplete;
     private boolean networkKnownOffline;
     private boolean networkFallbackCheckScheduled;
+    private final Object phonePlaybackLock = new Object();
+    private final Set<String> pendingTtsReplayIds = Collections.synchronizedSet(new HashSet<>());
     private RabiConversationSettings.InputMode inputMode = RabiConversationSettings.InputMode.PAUSED;
     private final android.os.Handler notificationHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable reviewNotificationRefresh = new Runnable() {
@@ -148,6 +161,14 @@ public final class RabiConversationService extends Service {
         context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_RETRY));
     }
 
+    /** Replays only the locally retained WAV belonging to an Agent TTS chat message. */
+    public static void replayTts(Context context, String messageId, String localPath) {
+        Intent intent = new Intent(context, RabiConversationService.class).setAction(ACTION_REPLAY_TTS)
+                .putExtra(EXTRA_TTS_MESSAGE_ID, messageId == null ? "" : messageId)
+                .putExtra(EXTRA_TTS_LOCAL_PATH, localPath == null ? "" : localPath);
+        context.startForegroundService(intent);
+    }
+
     public static void restoreAfterBoot(Context context) {
         context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_RESTORE));
     }
@@ -181,6 +202,7 @@ public final class RabiConversationService extends Service {
                 if ((text != null && !text.trim().isEmpty()) || (pcm != null && pcm.length > 0)) {
                     chatStore.append(messageId, "assistant", pcm != null && pcm.length > 0 ? "tts" : "text", text,
                             pcm != null && pcm.length > 0 ? "Agent-TTS.wav" : "", pcm != null && pcm.length > 0 ? "audio/wav" : "text/plain", routeProfileId, ttsPath);
+                    if (pcm != null && pcm.length > 0 && !ttsPath.isEmpty()) chatStore.updatePlayback(messageId, "ready", "");
                 }
                 for (int index = 0; attachments != null && index < attachments.length(); index++) {
                     org.json.JSONObject item = attachments.optJSONObject(index); if (item == null) continue;
@@ -202,6 +224,7 @@ public final class RabiConversationService extends Service {
                 String outputDeviceKind = glassesOutput ? RabiGlassPcBackend.SOURCE_GLASSES : RabiGlassPcBackend.SOURCE_PHONE;
                 String playbackFailure = "";
                 if (playbackRequested) {
+                    chatStore.updatePlayback(messageId, "playing", "");
                     if (glassesOutput) {
                         played = glassBridge != null && glassBridge.sendAudioPcmToGlass(messageId, pcm);
                         if (!played) playbackFailure = glassBridge == null ? "眼镜播放通道未连接" : "眼镜未确认播放完成";
@@ -209,6 +232,8 @@ public final class RabiConversationService extends Service {
                         played = playOnPhone(pcm);
                         if (!played) playbackFailure = "手机未确认播放完成";
                     }
+                    chatStore.updatePlayback(messageId, played ? "played" : "failed", playbackFailure);
+                    updateRuntime("ttsPlayback", played ? "语音播放完成" : "语音播放失败 · " + playbackFailure);
                 }
                 return new RabiGlassPcBackend.ReplyDeliveryResult(true, playbackRequested, played,
                         outputDeviceKind, playbackFailure);
@@ -328,6 +353,13 @@ public final class RabiConversationService extends Service {
             promote("正在提示 Rabi 审阅", false);
             if (configureBackend()) backend.start();
             if (backend != null) backend.requestConversationReview();
+            return START_STICKY;
+        }
+        if (ACTION_REPLAY_TTS.equals(action)) {
+            promote("正在重播夜雨语音", false);
+            String messageId = intent.getStringExtra(EXTRA_TTS_MESSAGE_ID);
+            String localPath = intent.getStringExtra(EXTRA_TTS_LOCAL_PATH);
+            queueTtsReplay(messageId, localPath);
             return START_STICKY;
         }
         if (ACTION_MEDIA.equals(action)) {
@@ -560,48 +592,120 @@ public final class RabiConversationService extends Service {
     }
 
     private boolean playOnPhone(byte[] pcm) {
-        if (pcm == null || pcm.length < 4) return false;
-        phoneAudioCapture.setPlaybackSuppressed(true);
-        int minimum = AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        AudioTrack track = new AudioTrack.Builder()
-                .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-                .setAudioFormat(new AudioFormat.Builder().setSampleRate(16000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                .setBufferSizeInBytes(Math.max(minimum, pcm.length))
-                .setTransferMode(AudioTrack.MODE_STATIC)
-                .build();
-        CountDownLatch completed = new CountDownLatch(1);
-        AtomicBoolean markerReached = new AtomicBoolean(false);
-        try {
-            int markerFrames = phonePlaybackMarkerFrames(pcm.length);
-            int trackState = track.getState();
-            if (!phonePlaybackStateReadyForWrite(trackState)) return false;
-            track.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
-                @Override public void onMarkerReached(AudioTrack ignored) {
-                    markerReached.set(true);
-                    completed.countDown();
-                }
-                @Override public void onPeriodicNotification(AudioTrack ignored) { }
-            }, new android.os.Handler(getMainLooper()));
-            int written = track.write(pcm, 0, pcm.length);
-            if (written != pcm.length) return false;
-            int markerResult = track.setNotificationMarkerPosition(markerFrames);
-            if (markerResult != AudioTrack.SUCCESS) return false;
-            track.play();
-            long timeoutMs = Math.max(5000, (pcm.length * 1000L) / 32000L + 5000L);
-            if (!completed.await(timeoutMs, TimeUnit.MILLISECONDS)) return false;
-            return markerReached.get();
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            return false;
-        } catch (Throwable ignored) {
-            return false;
-        } finally {
-            try { track.stop(); } catch (Throwable ignored) { }
-            track.release();
-            phoneAudioCapture.setPlaybackSuppressed(false);
+        synchronized (phonePlaybackLock) {
+            if (pcm == null || pcm.length < 4) return false;
+            phoneAudioCapture.setPlaybackSuppressed(true);
+            int minimum = AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            AudioTrack track = new AudioTrack.Builder()
+                    .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    .setAudioFormat(new AudioFormat.Builder().setSampleRate(16000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                    .setBufferSizeInBytes(Math.max(minimum, pcm.length))
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .build();
+            CountDownLatch completed = new CountDownLatch(1);
+            AtomicBoolean markerReached = new AtomicBoolean(false);
+            try {
+                int markerFrames = phonePlaybackMarkerFrames(pcm.length);
+                int trackState = track.getState();
+                if (!phonePlaybackStateReadyForWrite(trackState)) return false;
+                track.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
+                    @Override public void onMarkerReached(AudioTrack ignored) {
+                        markerReached.set(true);
+                        completed.countDown();
+                    }
+                    @Override public void onPeriodicNotification(AudioTrack ignored) { }
+                }, new android.os.Handler(getMainLooper()));
+                int written = track.write(pcm, 0, pcm.length);
+                if (written != pcm.length) return false;
+                int markerResult = track.setNotificationMarkerPosition(markerFrames);
+                if (markerResult != AudioTrack.SUCCESS) return false;
+                track.play();
+                long timeoutMs = Math.max(5000, (pcm.length * 1000L) / 32000L + 5000L);
+                if (!completed.await(timeoutMs, TimeUnit.MILLISECONDS)) return false;
+                return markerReached.get();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            } catch (Throwable ignored) {
+                return false;
+            } finally {
+                try { track.stop(); } catch (Throwable ignored) { }
+                track.release();
+                phoneAudioCapture.setPlaybackSuppressed(false);
+            }
         }
+    }
+
+    private void queueTtsReplay(String messageId, String localPath) {
+        String safeId = messageId == null ? "" : messageId.trim();
+        String safePath = localPath == null ? "" : localPath.trim();
+        if (safeId.isEmpty() || safePath.isEmpty() || !pendingTtsReplayIds.add(safeId)) return;
+        chatStore.updatePlayback(safeId, "queued", "");
+        updateRuntime("ttsPlayback", "语音等待重播");
+        new Thread(() -> {
+            String failure = "";
+            boolean played = false;
+            try {
+                chatStore.updatePlayback(safeId, "playing", "");
+                updateRuntime("ttsPlayback", "正在重播夜雨语音");
+                played = playOnPhone(readCachedTtsPcm(safePath));
+                if (!played) failure = "手机未确认播放完成";
+            } catch (Throwable error) {
+                failure = replayFailure(error);
+            } finally {
+                pendingTtsReplayIds.remove(safeId);
+                chatStore.updatePlayback(safeId, played ? "played" : "failed", failure);
+                updateRuntime("ttsPlayback", played ? "语音重播完成" : "语音重播失败 · " + failure);
+            }
+        }, "rabi-phone-tts-replay").start();
+    }
+
+    private byte[] readCachedTtsPcm(String localPath) throws IOException {
+        File cacheRoot = new File(getFilesDir(), "rabi-conversation/audio-cache/tts-audio").getCanonicalFile();
+        File file = new File(localPath).getCanonicalFile();
+        if (!file.getParentFile().equals(cacheRoot)) throw new IOException("语音缓存位置无效");
+        if (!file.isFile() || file.length() < 44L) throw new IOException("语音缓存已失效");
+        if (file.length() > MAX_REPLAY_WAV_BYTES) throw new IOException("语音缓存过大");
+        byte[] wav = new byte[(int) file.length()];
+        try (FileInputStream input = new FileInputStream(file)) {
+            int offset = 0;
+            while (offset < wav.length) {
+                int count = input.read(wav, offset, wav.length - offset);
+                if (count < 0) throw new IOException("语音缓存读取不完整");
+                offset += count;
+            }
+        }
+        return pcmFromWav(wav);
+    }
+
+    static byte[] pcmFromWav(byte[] wav) throws IOException {
+        if (wav == null || wav.length < 44 || wav[0] != 'R' || wav[1] != 'I' || wav[2] != 'F' || wav[3] != 'F'
+                || wav[8] != 'W' || wav[9] != 'A' || wav[10] != 'V' || wav[11] != 'E') throw new IOException("不是 WAV 语音缓存");
+        ByteBuffer values = ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);
+        int offset = 12;
+        int channels = 0, sampleRate = 0, bitsPerSample = 0, dataOffset = -1, dataSize = 0;
+        while (offset + 8 <= wav.length) {
+            int chunkSize = values.getInt(offset + 4);
+            if (chunkSize < 0 || offset + 8L + chunkSize > wav.length) throw new IOException("WAV 数据损坏");
+            boolean format = wav[offset] == 'f' && wav[offset + 1] == 'm' && wav[offset + 2] == 't' && wav[offset + 3] == ' ';
+            boolean data = wav[offset] == 'd' && wav[offset + 1] == 'a' && wav[offset + 2] == 't' && wav[offset + 3] == 'a';
+            if (format) {
+                if (chunkSize < 16 || values.getShort(offset + 8) != 1) throw new IOException("WAV 编码不受支持");
+                channels = values.getShort(offset + 10); sampleRate = values.getInt(offset + 12); bitsPerSample = values.getShort(offset + 22);
+            } else if (data) { dataOffset = offset + 8; dataSize = chunkSize; break; }
+            offset += 8 + chunkSize + (chunkSize & 1);
+        }
+        if (channels != 1 || sampleRate != 16000 || bitsPerSample != 16 || dataOffset < 0 || dataSize < 4) throw new IOException("语音格式不受支持");
+        byte[] pcm = new byte[dataSize];
+        System.arraycopy(wav, dataOffset, pcm, 0, dataSize);
+        return pcm;
+    }
+
+    private static String replayFailure(Throwable error) {
+        String message = error == null ? "未知错误" : error.getMessage();
+        return message == null || message.trim().isEmpty() ? "未知错误" : shortText(message);
     }
 
     static int phonePlaybackMarkerFrames(int pcmByteCount) {

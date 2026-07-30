@@ -58,7 +58,7 @@ Protocol translation for live gateway inputs:
 
 - NapCat/OneBot, including non-blocking `get_msg` fallback through `napcatReplyMessages.ts` when a referenced QQ message is missing from local history.
 - WeCom smart-bot WebSocket.
-- Experimental personal-Weixin OpenClaw/iLink QR login, long-poll ingress, and source-session text replies. Runtime tokens stay under `data/`; media is record-only and real-account longevity remains unverified.
+- Experimental personal-Weixin OpenClaw/iLink QR login, long-poll ingress, and source-session text or allowlisted local-file replies. Runtime tokens stay under `data/`; inbound media is record-only and real-account longevity remains unverified.
 - Webhook-like inputs such as XiaoAI, plus legacy-only FenneNote parsing. New PC speech uses RabiSpeech.
 - RabiLink compatibility/input paths.
 - heartbeat/manual and other internal adapters.
@@ -154,7 +154,7 @@ Matched ordinary messages are delivered immediately: the Desktop bridge first at
 - endpoint credentials/configuration;
 - platform sender implementation.
 
-It supports current NapCat, WeCom, source-session personal-Weixin text, RabiLink, and role-panel return paths, retains legacy FenneNote compatibility, and records `sent`, `draft`, `blocked`, or `failed`.
+It supports current NapCat, WeCom, source-session personal-Weixin text/files, RabiLink, and role-panel return paths, retains legacy FenneNote compatibility, and records `sent`, `draft`, `blocked`, or `failed`.
 
 There is no persistent generic Action Queue. Future approval/retry work should be layered on top of this audited result model.
 

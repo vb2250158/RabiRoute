@@ -24,7 +24,9 @@ def test_speaker_model_probe_bootstraps_runtime_outside_plugin_directory(tmp_pat
         env=env,
         capture_output=True,
         text=True,
-        timeout=20,
+        # Importing the private dependency tree from a mapped NAS workspace can
+        # take close to a minute even though the probe itself is non-blocking.
+        timeout=120,
         check=False,
     )
 

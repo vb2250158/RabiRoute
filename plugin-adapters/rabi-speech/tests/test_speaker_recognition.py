@@ -12,6 +12,7 @@ import soundfile as sf
 
 from rabispeech.config import SpeakerRecognitionSettings
 from rabispeech.contracts import TranscriptSegment, TranscriptionResult
+import rabispeech.speaker_recognition as speaker_recognition
 from rabispeech.speaker_recognition import OnnxRuntimeSpeakerEmbeddingExtractor, SpeakerRecognitionService
 
 
@@ -478,6 +479,20 @@ def test_incompatible_native_model_is_reported_without_loading_it_in_process(tmp
     assert service.ready is False
     assert capability["available"] is False
     assert "access violation" in str(capability["reason"])
+
+
+def test_model_probe_allows_slow_windows_dependency_startup(tmp_path, monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run(*args, **kwargs):
+        observed["timeout"] = kwargs["timeout"]
+        return speaker_recognition.subprocess.CompletedProcess(args[0], 0, "", "")
+
+    monkeypatch.setattr(speaker_recognition.subprocess, "run", fake_run)
+
+    assert speaker_recognition._probe_speaker_model(settings(tmp_path)) is None
+    assert observed["timeout"] == speaker_recognition.SPEAKER_MODEL_PROBE_TIMEOUT_SECONDS
+    assert observed["timeout"] >= 120
 
 
 def test_validated_mode_fails_closed_when_report_does_not_match_runtime(tmp_path) -> None:

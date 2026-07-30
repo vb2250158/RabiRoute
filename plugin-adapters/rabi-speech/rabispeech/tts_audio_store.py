@@ -53,6 +53,10 @@ class TtsAudioStore:
         with self._lock:
             return self._owned_file_locked(path).relative_to(self.canonical_root).as_posix()
 
+    def resolve(self, path: str | Path) -> Path:
+        with self._lock:
+            return self._owned_file_locked(path)
+
     def next_expiry(self) -> float | None:
         with self._lock:
             root = self._validated_root()

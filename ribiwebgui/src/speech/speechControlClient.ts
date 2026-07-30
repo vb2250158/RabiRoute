@@ -1,8 +1,10 @@
 import type {
   SpeechAudioInputsPayload,
   SpeechAudioStreamSelectionCommand,
+  SpeechAudioStreamEventsPayload,
   SpeechAudioStreamsPayload,
   SpeechControlEnvelope,
+  SpeechIngressHistoryPayload,
   SpeechMessageCommand,
   SpeechMessageResult,
   SpeechMicrophoneStartCommand,
@@ -31,6 +33,22 @@ export type SpeechRecordsQuery = {
   routeId?: string;
   since?: number;
   until?: number;
+  sourceDeviceId?: string;
+  before?: number;
+};
+
+export type SpeechAudioStreamEventsQuery = {
+  limit?: number;
+  clientId?: string;
+  sourceDeviceId?: string;
+  beforeSequence?: number;
+};
+
+export type SpeechIngressHistoryQuery = {
+  limit?: number;
+  sourceDeviceId?: string;
+  messageAdapterType?: "speech" | "rabilink";
+  before?: number;
 };
 
 export type SpeechRecordsPayload = { records: SpeechRecord[] };
@@ -92,6 +110,8 @@ export const speechControlClient = {
     if (query.routeId) search.set("routeId", query.routeId);
     if (query.since != null) search.set("since", String(query.since));
     if (query.until != null) search.set("until", String(query.until));
+    if (query.sourceDeviceId) search.set("sourceDeviceId", query.sourceDeviceId);
+    if (query.before != null) search.set("before", String(query.before));
     const suffix = search.size ? `?${search.toString()}` : "";
     return managerData(`/api/speech/records${suffix}`);
   },
@@ -148,6 +168,24 @@ export const speechControlClient = {
   microphoneStatus: (): Promise<SpeechMicrophoneStatus> => managerData("/api/speech/microphone/status"),
   microphoneDevices: (): Promise<SpeechAudioInputsPayload> => managerData("/api/speech/microphone/devices"),
   audioStreams: (): Promise<SpeechAudioStreamsPayload> => managerData("/api/speech/audio-streams"),
+  audioStreamEvents: (query: SpeechAudioStreamEventsQuery = {}): Promise<SpeechAudioStreamEventsPayload> => {
+    const search = new URLSearchParams();
+    if (query.limit != null) search.set("limit", String(query.limit));
+    if (query.clientId) search.set("clientId", query.clientId);
+    if (query.sourceDeviceId) search.set("sourceDeviceId", query.sourceDeviceId);
+    if (query.beforeSequence != null) search.set("beforeSequence", String(query.beforeSequence));
+    const suffix = search.size ? `?${search.toString()}` : "";
+    return managerData(`/api/speech/audio-streams/events${suffix}`);
+  },
+  speechMessages: (query: SpeechIngressHistoryQuery = {}): Promise<SpeechIngressHistoryPayload> => {
+    const search = new URLSearchParams();
+    if (query.limit != null) search.set("limit", String(query.limit));
+    if (query.sourceDeviceId) search.set("sourceDeviceId", query.sourceDeviceId);
+    if (query.messageAdapterType) search.set("messageAdapterType", query.messageAdapterType);
+    if (query.before != null) search.set("before", String(query.before));
+    const suffix = search.size ? `?${search.toString()}` : "";
+    return managerData(`/api/speech/messages${suffix}`);
+  },
   audioStreamToken: (): Promise<{ token: string }> => managerData(
     "/api/speech/audio-streams/token",
     { method: "POST" }

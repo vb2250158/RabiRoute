@@ -3893,6 +3893,17 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
     writeSpeechJson(response, speechControl.audioStreams().then(audioStream => ({ audioStream })));
     return true;
   }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/audio-streams/events") {
+    writeSpeechJson(response, speechControl.audioStreamEvents({
+      limit: Number(requestUrl.searchParams.get("limit") || 200),
+      clientId: requestUrl.searchParams.get("clientId") || undefined,
+      sourceDeviceId: requestUrl.searchParams.get("sourceDeviceId") || undefined,
+      beforeSequence: requestUrl.searchParams.has("beforeSequence")
+        ? Number(requestUrl.searchParams.get("beforeSequence"))
+        : undefined
+    }).then(events => ({ events })));
+    return true;
+  }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/audio-streams/token") {
     writeSpeechJson(response, speechControl.audioStreamToken().then(token => ({ token })), 200, 409);
     return true;
@@ -3923,8 +3934,20 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       sessionId: requestUrl.searchParams.get("sessionId") || undefined,
       routeId: requestUrl.searchParams.get("routeId") || undefined,
       since: requestUrl.searchParams.has("since") ? Number(requestUrl.searchParams.get("since")) : undefined,
-      until: requestUrl.searchParams.has("until") ? Number(requestUrl.searchParams.get("until")) : undefined
+      until: requestUrl.searchParams.has("until") ? Number(requestUrl.searchParams.get("until")) : undefined,
+      sourceDeviceId: requestUrl.searchParams.get("sourceDeviceId") || undefined,
+      before: requestUrl.searchParams.has("before") ? Number(requestUrl.searchParams.get("before")) : undefined
     }).then(records => ({ records })));
+    return true;
+  }
+  const speechRecordAudioMatch = requestUrl.pathname.match(/^\/api\/speech\/records\/([^/]+)\/audio$/);
+  if (request.method === "GET" && speechRecordAudioMatch) {
+    void speechControl.recordAudio(decodeURIComponent(speechRecordAudioMatch[1]))
+      .then(result => writeSpeechProxyResponse(response, result))
+      .catch(error => jsonResponse(response, speechControlErrorStatus(error, 502), {
+        code: -1,
+        message: speechControlErrorMessage(error)
+      }));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/microphone/status") {
@@ -4001,7 +4024,30 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       return true;
     }
     const limit = Math.max(1, Math.min(1_000, Math.floor(Number(requestUrl.searchParams.get("limit") || 200) || 200)));
-    jsonResponse(response, 200, { code: 0, data: { records: speechIngressStore.list(limit) } });
+    const sourceDeviceId = String(requestUrl.searchParams.get("sourceDeviceId") || "").trim();
+    const messageAdapterType = requestUrl.searchParams.get("messageAdapterType") === "rabilink"
+      ? "rabilink"
+      : requestUrl.searchParams.get("messageAdapterType") === "speech"
+        ? "speech"
+        : undefined;
+    const before = requestUrl.searchParams.has("before")
+      ? Number(requestUrl.searchParams.get("before"))
+      : undefined;
+    const records = speechIngressStore.query({
+      limit,
+      sourceDeviceId: sourceDeviceId || undefined,
+      messageAdapterType,
+      before
+    });
+    jsonResponse(response, 200, {
+      code: 0,
+      data: {
+        records,
+        deliveriesByRecordId: Object.fromEntries(
+          records.map(record => [record.id, speechIngressStore.listDeliveryReceipts(record.id)])
+        )
+      }
+    });
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/messages") {

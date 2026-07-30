@@ -5236,7 +5236,7 @@ async function handleMobileApi(req, url, res, body) {
   const routeId = routeMatch[1] ? decodeURIComponent(routeMatch[1]) : "";
   const action = routeMatch[2] || "";
   if (req.method === "GET" && !routeId && !action) {
-    const result = await mobileProxyJson(app, worker, "GET", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes`);
+    const result = await mobileProxyJson(app, worker, "GET", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes?includeProfiles=true`);
     return sendJson(res, result.statusCode, result.body);
   }
   if (req.method === "GET" && routeId && action === "agent-options") {

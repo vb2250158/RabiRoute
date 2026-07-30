@@ -100,6 +100,7 @@ def test_rabilink_virtual_audio_client_reuses_the_host_pcm_feed(tmp_path: Path) 
         client_id="phone-one-audio",
         name="Phone One",
         kind="mobile",
+        device_model="HBP-AL00",
         message_adapter_type="rabilink",
         source_device_id="phone-one",
         route_profile_id="mobile-main",
@@ -129,9 +130,14 @@ def test_rabilink_virtual_audio_client_reuses_the_host_pcm_feed(tmp_path: Path) 
     assert hub.selected_route_profile_id == "mobile-main"
     assert hub.selected_session_id == "phone-one"
     row = hub.snapshot()["clients"][0]
+    assert row["device_model"] == "HBP-AL00"
     assert row["last_sequence"] == 1
     assert row["received_bytes"] == len(np.array([0, 16_384, -16_384], dtype="<i2").tobytes())
     assert row["accepted_chunks"] == 1
+    events = hub.snapshot()["events"]
+    assert events[0]["kind"] == "pcm_received"
+    assert events[0]["direction"] == "inbound"
+    assert events[0]["client_id"] == "phone-one-audio"
     assert hub.stale_virtual_client_id(15, client_id="phone-one-audio", now=float(row["last_audio_at"]) + 14.9) is None
     assert hub.stale_virtual_client_id(15, client_id="phone-one-audio", now=float(row["last_audio_at"]) + 15) == "phone-one-audio"
     with pytest.raises(ValueError, match="expected 2, received 3"):

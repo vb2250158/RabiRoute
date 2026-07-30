@@ -15,4 +15,17 @@ object RabiConversationRules {
 
     fun unreadCount(incomingCreatedAt: List<Long>, readAt: Long): Int =
         incomingCreatedAt.count { it > readAt }
+
+    /** A chat is addressed to a persona, not to its historical gateway label. */
+    fun personaDisplayName(agentRoleId: String?, routeName: String?, configName: String?, routeId: String?): String {
+        val role = agentRoleId.orEmpty().trim()
+        if (role.isNotBlank()) return when (role.lowercase()) {
+            "yeyu", "night-rain", "night_rain" -> "夜雨"
+            else -> role
+        }
+        return routeName.orEmpty().trim()
+            .ifBlank { configName.orEmpty().trim() }
+            .ifBlank { routeId.orEmpty().trim() }
+            .ifBlank { "Rabi" }
+    }
 }

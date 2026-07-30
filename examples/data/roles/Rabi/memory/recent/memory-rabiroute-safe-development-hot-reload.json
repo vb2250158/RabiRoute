@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-safe-development-hot-reload",
+  "title": "开发热重载不得重启拥有消息端子进程的 Manager",
+  "focus": "开发热重载与正式运行验收的安全边界",
+  "content": "RabiRoute 的安全开发热重载默认只包含 WebGUI Vite HMR，可在明确停止正式 8781 实例后加入 RabiSpeech Uvicorn reload。Manager 拥有 NapCat、RabiLink、个人微信和人格会话子进程，不进入文件监视重启循环；Android 原生代码也必须重新构建。热重载只缩短开发反馈，功能定稿仍需完整构建、打包、更新已安装运行时后再做正式验收。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：安全开发热重载边界"
+  },
+  "createdAt": "2026-07-30T00:00:00+08:00",
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["热重载", "Vite HMR", "Uvicorn reload", "Manager", "消息端子进程", "正式验收", "完整构建", "安装包"]
+}

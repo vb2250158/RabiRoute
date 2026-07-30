@@ -4,11 +4,14 @@ import importlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import MutableMapping, MutableSequence, Sequence
 
 
 _RUNTIME_DIRECTORY = "runtime"
+_TRANSIENT_NETWORK_RETRY_COUNT = 5
+_TRANSIENT_NETWORK_RETRY_SECONDS = 2.0
 
 
 def resolve_service_root(
@@ -78,11 +81,36 @@ def configure_runtime(
     }
 
 
-def run_server() -> None:
+def is_transient_network_filesystem_error(error: BaseException) -> bool:
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, OSError) and getattr(current, "winerror", None) == 59:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def run_server(*, reload: bool = False) -> None:
     uvicorn = importlib.import_module("uvicorn")
-    app_module = importlib.import_module("rabispeech.app")
     config_module = importlib.import_module("rabispeech.config")
     settings = config_module.load_settings()
+    if reload:
+        service_root = resolve_service_root()
+        uvicorn.run(
+            "rabispeech.app:create_app",
+            factory=True,
+            host=settings.server.host,
+            port=settings.server.port,
+            log_level="info",
+            ws="auto",
+            reload=True,
+            reload_dirs=[str(service_root / "rabispeech")],
+        )
+        return
+
+    app_module = importlib.import_module("rabispeech.app")
     uvicorn.run(
         app_module.create_app(settings),
         host=settings.server.host,
@@ -109,7 +137,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             flush=True,
         )
         return 0
-    run_server()
+    reload_enabled = "--reload" in arguments
+    for attempt in range(1, _TRANSIENT_NETWORK_RETRY_COUNT + 1):
+        try:
+            run_server(reload=reload_enabled)
+            break
+        except BaseException as error:
+            if (
+                reload_enabled
+                or attempt >= _TRANSIENT_NETWORK_RETRY_COUNT
+                or not is_transient_network_filesystem_error(error)
+            ):
+                raise
+            print(
+                "RabiSpeech startup hit transient Windows network error 59; "
+                f"retrying ({attempt}/{_TRANSIENT_NETWORK_RETRY_COUNT}).",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(_TRANSIENT_NETWORK_RETRY_SECONDS)
     return 0
 
 

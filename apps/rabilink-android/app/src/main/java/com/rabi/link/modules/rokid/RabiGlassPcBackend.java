@@ -6,6 +6,7 @@ import com.rabi.link.RabiConversationTarget;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import android.os.Build;
 import android.util.Base64;
 
 import java.io.ByteArrayOutputStream;
@@ -355,11 +356,14 @@ public final class RabiGlassPcBackend {
         }
         String suffix = SOURCE_GLASSES.equals(sourceDeviceKind) ? "glasses" : "phone";
         String streamId = safeStreamId(deviceId + "-" + suffix + "-audio");
-        String deviceLabel = deviceLabel(deviceId, SOURCE_GLASSES.equals(sourceDeviceKind));
+        boolean glasses = SOURCE_GLASSES.equals(sourceDeviceKind);
+        String deviceModel = glasses ? "" : clean(Build.MODEL);
+        String deviceLabel = deviceLabel(deviceId, glasses, deviceModel);
         JSONObject body = new JSONObject()
                 .put("stream_id", streamId)
                 .put("name", deviceLabel)
-                .put("device_kind", SOURCE_GLASSES.equals(sourceDeviceKind) ? "glasses" : "mobile")
+                .put("device_kind", glasses ? "glasses" : "mobile")
+                .put("device_model", deviceModel)
                 .put("source_device_id", deviceId)
                 .put("source_device_kind", sourceDeviceKind)
                 .put("channel_type", "audio_stream")
@@ -379,12 +383,14 @@ public final class RabiGlassPcBackend {
         listener.onStatus("手机音频流已接入 Rabi PC");
     }
 
-    private static String deviceLabel(String stableDeviceId, boolean glasses) {
+    static String deviceLabel(String stableDeviceId, boolean glasses, String deviceModel) {
         String value = clean(stableDeviceId);
         int split = value.lastIndexOf('-');
         String suffix = split >= 0 && split + 1 < value.length() ? value.substring(split + 1) : value;
         if (suffix.length() > 6) suffix = suffix.substring(suffix.length() - 6);
         String base = glasses ? "Rabi Glass" : "Rabi Android";
+        String model = clean(deviceModel);
+        if (!model.isEmpty()) base += " · " + model;
         return suffix.isEmpty() ? base : base + " · " + suffix;
     }
 

@@ -40,6 +40,13 @@ class SpeechRecordStore:
         route_id: str | None = None,
         recorded_at: float | None = None,
         record_id: str | None = None,
+        audio_file: str | None = None,
+        audio_expires_at: float | None = None,
+        source_device_id: str | None = None,
+        source_device_name: str | None = None,
+        source_device_kind: str | None = None,
+        source_stream_id: str | None = None,
+        message_adapter_type: str | None = None,
     ) -> dict[str, object]:
         record_id = str(record_id or result.record_id or f"speech-{uuid.uuid4().hex}")
         resolved = (
@@ -77,6 +84,13 @@ class SpeechRecordStore:
                 "language": resolved.language or None,
                 "duration": resolved.duration,
                 "segments": [asdict(segment) for segment in resolved.segments],
+                "audio_file": _relative_audio_file(audio_file),
+                "audio_expires_at": audio_expires_at,
+                "source_device_id": source_device_id or None,
+                "source_device_name": source_device_name or None,
+                "source_device_kind": source_device_kind or None,
+                "source_stream_id": source_stream_id or None,
+                "message_adapter_type": message_adapter_type or None,
             }
         )
 
@@ -149,6 +163,8 @@ class SpeechRecordStore:
         route_id: str | None = None,
         since: float | None = None,
         until: float | None = None,
+        source_device_id: str | None = None,
+        before: float | None = None,
     ) -> list[dict[str, object]]:
         maximum = min(1000, max(1, int(limit)))
         records: list[dict[str, object]] = []
@@ -164,7 +180,16 @@ class SpeechRecordStore:
                         row = json.loads(line)
                     except (TypeError, ValueError, json.JSONDecodeError):
                         continue
-                    if not isinstance(row, dict) or not self._matches(row, kind, session_id, route_id, since, until):
+                    if not isinstance(row, dict) or not self._matches(
+                        row,
+                        kind,
+                        session_id,
+                        route_id,
+                        since,
+                        until,
+                        source_device_id,
+                        before,
+                    ):
                         continue
                     row = self._safe_record(row)
                     row = self._resolve_speakers(row)
@@ -172,6 +197,26 @@ class SpeechRecordStore:
                     if len(records) >= maximum:
                         return records
         return records
+
+    def read(self, record_id: str) -> dict[str, object] | None:
+        normalized = str(record_id or "").strip()
+        if not normalized:
+            return None
+        with self._lock:
+            files = sorted(self.root.glob("*.jsonl"), reverse=True)
+            for path in files:
+                try:
+                    lines = path.read_text(encoding="utf-8").splitlines()
+                except OSError:
+                    continue
+                for line in reversed(lines):
+                    try:
+                        row = json.loads(line)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if isinstance(row, dict) and str(row.get("id") or "") == normalized:
+                        return self._resolve_speakers(self._safe_record(row))
+        return None
 
     @staticmethod
     def _safe_record(row: dict[str, object]) -> dict[str, object]:
@@ -222,14 +267,18 @@ class SpeechRecordStore:
         route_id: str | None,
         since: float | None,
         until: float | None,
+        source_device_id: str | None,
+        before: float | None,
     ) -> bool:
         timestamp = float(row.get("time") or 0)
         return not (
             (kind and str(row.get("kind") or "") != kind)
             or (session_id and str(row.get("session_id") or "") != session_id)
             or (route_id and str(row.get("route_id") or "") != route_id)
+            or (source_device_id and str(row.get("source_device_id") or "") != source_device_id)
             or (since is not None and timestamp < since)
             or (until is not None and timestamp > until)
+            or (before is not None and timestamp >= before)
         )
 
 

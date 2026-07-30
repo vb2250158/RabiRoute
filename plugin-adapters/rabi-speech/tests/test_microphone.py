@@ -288,7 +288,13 @@ def test_record_persistence_failure_preserves_terminal_route_receipt(tmp_path: P
                 }],
             }
 
-        def persist(_result: TranscriptionResult, _config, _started_at: float) -> None:
+        def persist(
+            _result: TranscriptionResult,
+            _config,
+            _started_at: float,
+            _audio_path: Path,
+            _input_source,
+        ) -> None:
             raise OSError("disk full")
 
         service = MicrophoneService(

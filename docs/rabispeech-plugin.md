@@ -63,7 +63,9 @@ cd plugin-adapters\rabi-speech
 
 会议室远程声卡不改变这个控制面边界。在私有 `config.json` 启用 `remote_audio` 后，RabiSpeech 只额外开放带独立 Bearer 密钥的 TCP `8782` 音频 WebSocket 和 UDP `8783` 局域网发现。客户端只持续传 PCM、接收 WAV；VAD、切句、ASR、Route 广播、人格 TTS、FIFO 与防回流仍全部留在主机。安装见 [Rabi 语音客户端](../desktop/rabi-voice-client/README.md)。局域网直连不要求配置 RabiLink。
 
-RabiLink 手机不依赖 ADB 进入音频流列表。每台安装持有独立、稳定的 `sourceDeviceId` 和稳定流 ID，经 Relay 自动连接后会作为单独客户端显示在 **语音服务 → 音频流类型**。多台可同时在线；首台在没有既有选择时可自动成为默认输入，后来者不抢占。`PUT /v1/audio-streams/selection`（经 Manager 时为 `/api/speech/audio-streams/selection`）只选择一路进入 VAD/ASR并持久化；所选设备离线时不回退到别的麦克风，原设备重连后自动恢复。
+RabiLink 手机不依赖 ADB 进入音频流列表。每台安装持有独立、稳定的 `sourceDeviceId` 和稳定流 ID，并在建流时上报 Android 设备型号；经 Relay 自动连接后会作为单独客户端显示在 **语音服务** 顶部的共享音频流卡片，以“设备型号 + 稳定 ID 后缀”区分。该卡片位于 TTS/ASR 标签上方，因为远端设备同时承担 PCM 上行和人格语音下行。卡片把 PCM 收发、VAD、ASR 与 Route 投递分层显示，并按稳定设备 ID 关联解析公共转写及逐 Route 回执；收到 PCM 字节不再被误报为已经产生转写。多台可同时在线；首台在没有既有选择时可自动成为默认输入，后来者不抢占。`PUT /v1/audio-streams/selection`（经 Manager 时为 `/api/speech/audio-streams/selection`）只选择一路进入 VAD/ASR并持久化；所选设备离线时不回退到别的麦克风，原设备重连后自动恢复。
+
+音频流收发、断连/恢复和 VAD/ASR/Route 阶段事件写入 `output/audio-stream-events/current.jsonl`，使用稳定事件 ID 与递增序号。事件触发检查发现超过 72 小时的记录时，只把连续前缀中超过 24 小时的完整记录无损移入 `archive/<first>~<last>.jsonl`，并原子更新 `archive/index.json`；WebGUI 通过分页读取当前文件与归档，不依赖进程内存。公共转写仍以 `data/speech/messages` 为事实真源，角色双向消息仍落各自人格目录，三者不会混写。
 
 Android 手机/眼镜遵循同一“远端只传 PCM、主机拥有语音处理”的边界，但通过 Relay 受限 HTTP 流进入：`start` 建立虚拟远程麦克风，`chunk` 按从 1 开始的连续序号提交 16 kHz mono PCM s16le，`stop` 恢复之前的输入源。`rabilink` 消息端类型由这个专用入口强制决定，客户端不能把手机流伪装成 `speech`。RabiSpeech 在流上运行与本机相同的 VAD、切句、ASR 和声纹，然后自动提交 `messageAdapterType=rabilink` 的主机通用消息。Android 只有在 PC 确认后才提交 chunk 序号；同流重试继续按序号和 PCM 哈希幂等，ACK 丢失后即使重建临时流，稳定 `chunkId` 仍会按 `sourceDeviceId + chunkId + PCM SHA-256` 跨流去重，不重复喂给 ASR。相同 chunk ID 携带不同 PCM 会被拒绝。主机按稳定来源设备只保留最后一个已接收 chunk 的 ID 与哈希，不保存另一份原始录音。`start` 和每个成功 `chunk` 都会重置一次性 15 秒到期事件；只有到期事件触发时才停止失活流，不再固定间隔扫描。Android 不需要也不应暴露 VAD/切句/ASR 设置。
 
@@ -169,6 +171,8 @@ data/roles/<RoleId>/conversation/current.jsonl
 ```
 
 常驻 ASR 完成后会先把一份主机级通用消息写到 `data/speech/messages/YYYY-MM-DD.jsonl`。这份记录保留稳定 `recordId`、采集开始/完成/接收时间、Provider、模型、语言、时长、峰值、采样率、声道、音频格式、通道类型、物理传输、稳定来源设备、临时 `sourceStreamId`、`sourceHostId/sourceHostName`、完整说话人分段，以及 Provider 可用时的逐词起止时间、概率/置信度和逐词说话人标签，一段录音无论被多少 Route 消费都只落一次。稳定 `sourceDeviceId` 用于回复目标，`sourceStreamId` 只标识本次 PCM 连接，两者不得混用。随后按 `messageAdapterType` 分发：本机麦克风和普通 Rabi 语音客户端是 `speech` 消息端，手机音频流是 `rabilink` 手机消息端；Route 只消费自己已启用的消息端。每个绑定人格分别写入自己的 `voice-transcripts.jsonl` 和 `conversation/current.jsonl`，两份人格文件都保留上述来源、流、音频格式、模型、分段和逐词时间证据，同一人格被多条 Route 命中时避免重复记录。主机诊断人物名称仍在通用入口被删除，不会借逐词字段重新进入人格身份判断。
+
+每条真正送入 ASR 的 VAD 短语音会在 RabiSpeech 私有 `output/asr-audio/` 中缓存 24 小时，诊断记录只保存安全相对引用与预计过期时间。WebGUI 通过受限的 `GET /api/speech/records/:recordId/audio` 回听，接口不接受任意文件路径；到期或文件不存在返回明确的过期状态。这个缓存不保存阈值以下的连续 PCM，也不改变公共转写、人格式会话或记忆的保留规则。
 
 主机声纹层只提供不透明的稳定声纹 ID、未知簇、分段标签、分数和判定证据，不写入人名，也不判断声纹对应谁或谁是“用户”。当前人格应结合自己的关系、记忆和会话上下文解释某个声纹是谁、是否需要响应，并可通过 `/api/roles/:roleId/voice-identities` 写入自己追加式的 `voice/voice-identities.jsonl`。同一声纹字符串按 `sourceHostId` 分域，避免多台电脑的本地聚类碰撞。多人分段在进入人格上下文时保持原结构，Agent 不再只看到丢失说话人信息的平铺文本。
 

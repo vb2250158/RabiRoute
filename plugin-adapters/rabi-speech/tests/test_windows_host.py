@@ -68,5 +68,27 @@ def test_start_script_prefers_built_windows_host() -> None:
     source = (SCRIPT.parent / "start.ps1").read_text(encoding="utf-8")
 
     assert 'runtime\\RabiSpeech.exe' in source
+    assert "-not $Reload" in source
     assert '& $hostExe' in source
-    assert '& $pythonExe @prefixArgs $hostScript' in source
+    assert '& $pythonExe @prefixArgs @hostArgs' in source
+
+
+def test_reload_uses_uvicorn_factory_and_limits_watch_directory() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert '"rabispeech.app:create_app"' in source
+    assert "factory=True" in source
+    assert "reload=True" in source
+    assert 'service_root / "rabispeech"' in source
+
+
+def test_only_windows_network_error_59_is_treated_as_transient() -> None:
+    network_error = OSError("network problem")
+    network_error.winerror = 59
+    wrapped = RuntimeError("cache root cannot be listed")
+    wrapped.__cause__ = network_error
+
+    assert WINDOWS_HOST.is_transient_network_filesystem_error(network_error)
+    assert WINDOWS_HOST.is_transient_network_filesystem_error(wrapped)
+    assert not WINDOWS_HOST.is_transient_network_filesystem_error(OSError("other problem"))
+    assert not WINDOWS_HOST.is_transient_network_filesystem_error(RuntimeError("ordinary failure"))

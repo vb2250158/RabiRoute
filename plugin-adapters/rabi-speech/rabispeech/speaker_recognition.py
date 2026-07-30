@@ -23,6 +23,7 @@ from .contracts import TranscriptSegment, TranscriptionResult
 
 STORE_VERSION = 1
 SYNTHETIC_SINGLE_SPEAKER_LABEL = "voice"
+SPEAKER_MODEL_PROBE_TIMEOUT_SECONDS = 120
 MAX_CROSS_SPEAKER_OVERLAP_SECONDS = 0.12
 MATCH_PROTOTYPE_COUNT = 3
 
@@ -700,7 +701,7 @@ def _probe_speaker_model(settings: SpeakerRecognitionSettings) -> str | None:
             check=False,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=SPEAKER_MODEL_PROBE_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return f"Speaker model compatibility probe failed: {type(exc).__name__}: {exc}"

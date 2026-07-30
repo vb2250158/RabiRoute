@@ -3,8 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
+  type SpeechAudioStreamClient,
+  type SpeechAudioStreamEvent,
+  type SpeechIngressRecord,
   type SpeechMicrophoneConfig,
-  type SpeechProvider
+  type SpeechProvider,
+  type SpeechRecord,
+  type SpeechRouteDeliveryHistory
 } from "@shared/speechControlContract";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import SpeechRecordsAndSpeakers from "../components/SpeechRecordsAndSpeakers.vue";
@@ -15,6 +20,7 @@ import { useSpeechStore } from "../stores/speechStore";
 import { gatewayAdapterTypes } from "../utils/gatewayHelpers";
 import { copyTextToClipboard } from "../clipboard";
 import { personaOptionDisplayName } from "../personaPresentation";
+import { speechControlClient } from "../speech/speechControlClient";
 
 type AudioInput = { title: string; value: number; default?: boolean };
 
@@ -27,6 +33,7 @@ const {
   microphone: microphoneStatus,
   playback,
   audioStream,
+  recordsVersion,
   loading
 } = storeToRefs(speech);
 const activeKind = ref<"tts" | "asr">("tts");
@@ -66,6 +73,13 @@ const playbackQueued = computed(() => Number(playback.value?.queued || 0));
 const playbackVolume = ref(100);
 const playbackVolumeSaving = ref(false);
 const audioStreamSaving = ref(false);
+const audioHistoryLoading = ref(false);
+const durableAudioEvents = ref<SpeechAudioStreamEvent[]>([]);
+const publicAudioTranscripts = ref<SpeechIngressRecord[]>([]);
+const publicTranscriptDeliveries = ref<Record<string, SpeechRouteDeliveryHistory[]>>({});
+const retainedAsrRecords = ref<Record<string, SpeechRecord>>({});
+const audioEventsHaveMore = ref(false);
+const audioTranscriptsHaveMore = ref(false);
 let playbackVolumeTimer = 0;
 let pendingPlaybackVolume: number | null = null;
 let microphoneSettingsTimer = 0;
@@ -112,15 +126,177 @@ const micPercent = computed(() => Math.min(100, Math.round((micLevel.value / Mat
 const selectedAudioStream = computed(() => audioStream.value?.source === "remote" && audioStream.value.selectedClientId
   ? `remote:${audioStream.value.selectedClientId}`
   : "local");
+function remoteAudioClientName(client: SpeechAudioStreamClient): string {
+  const model = client.deviceModel?.trim();
+  if (!model || client.name.toLocaleLowerCase().includes(model.toLocaleLowerCase())) return client.name;
+  return `${client.name} · ${model}`;
+}
 const audioStreamOptions = computed(() => [
   { title: `本机 · ${computerName.value}`, value: "local", subtitle: "使用当前电脑的麦克风和扬声器" },
   ...(audioStream.value?.clients || []).map(client => ({
-    title: `${client.name} · 远程 Rabi 语音客户端`,
+    title: `${remoteAudioClientName(client)} · 远程 Rabi 语音客户端`,
     value: `remote:${client.id}`,
-    subtitle: client.online ? `在线 · ${client.sampleRate} Hz` : "离线"
+    subtitle: client.online
+      ? [`在线 · ${client.sampleRate} Hz`, client.deviceModel ? `设备型号 ${client.deviceModel}` : ""].filter(Boolean).join(" · ")
+      : [client.deviceModel ? `设备型号 ${client.deviceModel}` : "", "离线"].filter(Boolean).join(" · ")
   }))
 ]);
 const selectedAudioStreamLabel = computed(() => audioStreamOptions.value.find(item => item.value === selectedAudioStream.value)?.title || "本机");
+const selectedAudioStreamClient = computed(() => audioStream.value?.clients.find(client => client.id === audioStream.value?.selectedClientId));
+const selectedAudioStreamEvents = computed(() => {
+  const merged = new Map<string, SpeechAudioStreamEvent>();
+  for (const event of [...durableAudioEvents.value, ...(audioStream.value?.events || [])]) {
+    const key = event.id || `sequence:${event.sequence}`;
+    merged.set(key, event);
+  }
+  const sourceDeviceId = selectedAudioStreamClient.value?.sourceDeviceId;
+  return [...merged.values()]
+    .filter(event => (
+      !selectedAudioStreamClient.value
+      || event.sourceDeviceId === sourceDeviceId
+      || (!event.sourceDeviceId && event.clientId === selectedAudioStreamClient.value.id)
+    ))
+    .sort((left, right) => right.sequence - left.sequence);
+});
+const selectedDeviceTranscripts = computed(() => {
+  const sourceDeviceId = selectedAudioStreamClient.value?.sourceDeviceId;
+  return publicAudioTranscripts.value.filter(record => !sourceDeviceId || record.sourceDeviceId === sourceDeviceId);
+});
+const unlinkedRabiTranscripts = computed(() => {
+  const sourceDeviceId = selectedAudioStreamClient.value?.sourceDeviceId;
+  return publicAudioTranscripts.value.filter(record => sourceDeviceId && record.sourceDeviceId !== sourceDeviceId);
+});
+const currentPipelineSummary = computed(() => {
+  const stats = microphoneStatus.value?.stats;
+  return {
+    captured: Number(stats?.captured || 0),
+    recognized: Number(stats?.recognized || 0),
+    empty: Number(stats?.empty || 0),
+    delivered: Number(stats?.delivered || 0),
+    recorded: Number(stats?.recorded || 0),
+    failed: Number(stats?.deliveryFailed || 0) + Number(stats?.submitFailed || 0)
+  };
+});
+
+function audioBytesLabel(value: number | undefined): string {
+  const bytes = Math.max(0, Number(value || 0));
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${Math.round(bytes)} B`;
+}
+
+function audioEventTime(value: number): string {
+  if (!value) return "-";
+  return new Date(value * 1000).toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function audioEventDirection(event: SpeechAudioStreamEvent): { label: string; color: string; icon: string } {
+  if (event.direction === "inbound") return { label: "接收", color: "success", icon: "mdi-arrow-down-bold" };
+  if (event.direction === "outbound") return { label: "发送", color: "primary", icon: "mdi-arrow-up-bold" };
+  if (event.direction === "receipt") return { label: "回执", color: "secondary", icon: "mdi-check-circle-outline" };
+  if (event.direction === "pipeline") return {
+    label: event.stage === "vad" ? "切句" : event.stage === "asr" ? "识别" : event.stage === "route" ? "投递" : "处理",
+    color: event.level === "error" ? "error" : event.level === "warning" ? "warning" : "info",
+    icon: event.stage === "asr" ? "mdi-waveform" : event.stage === "route" ? "mdi-transit-connection-variant" : "mdi-tune-vertical"
+  };
+  return { label: "状态", color: "grey", icon: "mdi-swap-horizontal" };
+}
+
+function mergeAudioEvents(events: SpeechAudioStreamEvent[], append = false): void {
+  const merged = new Map<string, SpeechAudioStreamEvent>();
+  for (const event of append ? [...durableAudioEvents.value, ...events] : events) {
+    merged.set(event.id || `sequence:${event.sequence}`, event);
+  }
+  durableAudioEvents.value = [...merged.values()].sort((left, right) => right.sequence - left.sequence);
+}
+
+async function loadAudioHistory(options: { earlierEvents?: boolean; earlierTranscripts?: boolean } = {}): Promise<void> {
+  const client = selectedAudioStreamClient.value;
+  if (!client) {
+    durableAudioEvents.value = [];
+    publicAudioTranscripts.value = [];
+    publicTranscriptDeliveries.value = {};
+    retainedAsrRecords.value = {};
+    return;
+  }
+  audioHistoryLoading.value = true;
+  try {
+    const eventBefore = options.earlierEvents
+      ? Math.min(...durableAudioEvents.value.map(event => event.sequence))
+      : undefined;
+    const transcriptBefore = options.earlierTranscripts
+      ? Math.min(...publicAudioTranscripts.value.map(record => record.time))
+      : undefined;
+    const [eventsPayload, transcriptPayload, retainedPayload] = await Promise.all([
+      speechControlClient.audioStreamEvents({
+        limit: 200,
+        sourceDeviceId: client.sourceDeviceId,
+        beforeSequence: Number.isFinite(eventBefore) ? eventBefore : undefined
+      }),
+      speechControlClient.speechMessages({
+        limit: 200,
+        messageAdapterType: "rabilink",
+        before: Number.isFinite(transcriptBefore) ? transcriptBefore : undefined
+      }),
+      speechControlClient.records({
+        limit: 1000,
+        kind: "asr",
+        sourceDeviceId: client.sourceDeviceId
+      })
+    ]);
+    mergeAudioEvents(eventsPayload.events, options.earlierEvents === true);
+    audioEventsHaveMore.value = eventsPayload.events.length === 200;
+    const transcriptMap = new Map<string, SpeechIngressRecord>();
+    for (const record of options.earlierTranscripts
+      ? [...publicAudioTranscripts.value, ...transcriptPayload.records]
+      : transcriptPayload.records) {
+      transcriptMap.set(record.id, record);
+    }
+    publicAudioTranscripts.value = [...transcriptMap.values()].sort((left, right) => right.time - left.time);
+    publicTranscriptDeliveries.value = {
+      ...(options.earlierTranscripts ? publicTranscriptDeliveries.value : {}),
+      ...transcriptPayload.deliveriesByRecordId
+    };
+    audioTranscriptsHaveMore.value = transcriptPayload.records.length === 200;
+    retainedAsrRecords.value = Object.fromEntries(retainedPayload.records.map(record => [record.id, record]));
+  } catch (error) {
+    requestError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    audioHistoryLoading.value = false;
+  }
+}
+
+function transcriptTime(record: SpeechIngressRecord): string {
+  return new Date(record.time * 1000).toLocaleString("zh-CN", { hour12: false });
+}
+
+function transcriptSpeaker(record: SpeechIngressRecord): string {
+  const names = [...new Set(record.segments.map(segment => (
+    segment.speakerName || segment.speakerLabel || segment.speaker || segment.voiceprintId || segment.speakerClusterId || ""
+  )).filter(Boolean))];
+  return names.length ? names.join(" / ") : "未标注说话人";
+}
+
+function deliverySummary(recordId: string): string {
+  const deliveries = publicTranscriptDeliveries.value[recordId] || [];
+  if (!deliveries.length) return "尚无 Route 回执";
+  const delivered = deliveries.filter(item => item.status === "delivered").length;
+  const recorded = deliveries.filter(item => item.status === "recorded").length;
+  return [
+    delivered ? `${delivered} 个 Route 已投递` : "",
+    recorded ? `${recorded} 个 Route 仅记录` : ""
+  ].filter(Boolean).join(" · ") || "已有回执";
+}
+
+function retainedAudio(recordId: string): SpeechRecord | undefined {
+  return retainedAsrRecords.value[recordId];
+}
+
+function retainedAudioAvailable(recordId: string): boolean {
+  const record = retainedAudio(recordId);
+  return Boolean(record?.audioFile && (!record.audioExpiresAt || record.audioExpiresAt > Date.now() / 1000));
+}
 
 function providerName(provider: SpeechProvider): string {
   if (provider.id === "local-tts") return "RabiSpeech 本地 TTS 路由";
@@ -449,6 +625,18 @@ watch(selectedPersona, persona => {
   instructions.value = persona.instructions || persona.voiceStyleSummary || "";
   speed.value = persona.speed ?? 1;
 });
+watch(
+  () => selectedAudioStreamClient.value?.sourceDeviceId || "",
+  () => { void loadAudioHistory(); },
+  { immediate: true }
+);
+watch(
+  () => audioStream.value?.events?.[0]?.sequence,
+  () => {
+    if (audioStream.value?.events?.length) mergeAudioEvents(audioStream.value.events, true);
+  }
+);
+watch(recordsVersion, () => { void loadAudioHistory(); });
 watch([
   asrModel,
   asrLanguage,
@@ -493,13 +681,6 @@ onBeforeUnmount(() => {
 
     <v-alert v-if="requestError || speech.error" type="error" variant="tonal" class="mb-4">Manager 状态读取失败：{{ requestError || speech.error }}</v-alert>
 
-    <v-card class="app-card glass-card speech-mode-tabs">
-      <v-tabs v-model="activeKind" color="primary" grow class="speech-tabs" aria-label="切换 TTS 与 ASR">
-        <v-tab value="tts" prepend-icon="mdi-account-voice">TTS 语音合成</v-tab>
-        <v-tab value="asr" prepend-icon="mdi-waveform">ASR 语音识别</v-tab>
-      </v-tabs>
-    </v-card>
-
     <v-card class="app-card glass-card speech-audio-stream-card">
       <div class="speech-audio-stream-copy">
         <div class="speech-audio-stream-icon"><v-icon>mdi-access-point</v-icon></div>
@@ -527,6 +708,136 @@ onBeforeUnmount(() => {
         </v-select>
         <v-btn variant="tonal" prepend-icon="mdi-content-copy" :disabled="!audioStream?.enabled" @click="copyAudioStreamToken">复制客户端连接密钥</v-btn>
       </div>
+      <div class="speech-audio-stream-log">
+        <div class="speech-audio-log-head">
+          <div>
+            <strong>当前设备收发日志</strong>
+            <span v-if="selectedAudioStreamClient">
+              {{ selectedAudioStreamClient.deviceModel ? `设备型号 ${selectedAudioStreamClient.deviceModel} · ` : "" }}
+              PCM 已接收 {{ audioBytesLabel(selectedAudioStreamClient.receivedBytes) }} ·
+              {{ selectedAudioStreamClient.acceptedChunks }} 块
+              <template v-if="selectedAudioStreamClient.lastSequence != null"> · 序号 {{ selectedAudioStreamClient.lastSequence }}</template>
+            </span>
+            <span v-else>本机音频不经过远端客户端传输。</span>
+          </div>
+          <v-chip size="small" :color="audioStream?.selectedOnline ? 'success' : 'warning'" variant="tonal">
+            {{ audioStream?.selectedOnline ? "通道在线" : "所选设备离线" }}
+          </v-chip>
+        </div>
+        <div v-if="selectedAudioStreamClient" class="speech-pipeline-summary">
+          <span><b>{{ currentPipelineSummary.captured }}</b> 段进入切句</span>
+          <span><b>{{ currentPipelineSummary.recognized }}</b> 段识别成功</span>
+          <span><b>{{ currentPipelineSummary.empty }}</b> 段无有效文字</span>
+          <span><b>{{ currentPipelineSummary.delivered }}</b> 次投递 Agent</span>
+          <span><b>{{ currentPipelineSummary.recorded }}</b> 次仅记录</span>
+          <span v-if="currentPipelineSummary.failed"><b>{{ currentPipelineSummary.failed }}</b> 次失败</span>
+        </div>
+        <div class="section-note">
+          PCM 字节/块数只证明声音数据到达电脑；只有经过 VAD 切句、ASR 得到有效文本后，才会出现在下方公共转写记录里。
+        </div>
+        <div v-if="selectedAudioStreamEvents.length" class="speech-audio-log-rows">
+          <div v-for="event in selectedAudioStreamEvents" :key="event.sequence" class="speech-audio-log-row">
+            <time>{{ audioEventTime(event.time) }}</time>
+            <v-chip
+              size="x-small"
+              :color="audioEventDirection(event).color"
+              variant="tonal"
+              :prepend-icon="audioEventDirection(event).icon"
+            >
+              {{ audioEventDirection(event).label }}
+            </v-chip>
+            <span>{{ event.message }}</span>
+            <code>
+              <template v-if="event.bytes">{{ audioBytesLabel(event.bytes) }}</template>
+              <template v-if="event.streamSequence != null"> · seq {{ event.streamSequence }}</template>
+              <template v-if="event.totalBytes"> · 累计 {{ audioBytesLabel(event.totalBytes) }}</template>
+            </code>
+          </div>
+          <v-btn
+            v-if="audioEventsHaveMore"
+            size="small"
+            variant="text"
+            prepend-icon="mdi-history"
+            :loading="audioHistoryLoading"
+            @click="loadAudioHistory({ earlierEvents: true })"
+          >
+            加载更早的收发与处理日志
+          </v-btn>
+        </div>
+        <div v-else class="speech-audio-log-empty">
+          <v-icon>mdi-text-box-search-outline</v-icon>
+          <span>{{ selectedAudioStreamClient ? "等待这台设备产生新的连接、PCM 接收、音频发送或播放回执。" : "选择远端设备后显示该设备的收发事件。" }}</span>
+        </div>
+        <div v-if="selectedAudioStreamClient?.messageAdapterType === 'rabilink'" class="section-note">
+          RabiLink 手机的麦克风 PCM 在这里记录为“接收”；Agent 人格 TTS 使用独立 Relay 下行与终端播放回执，不会把本机播放误记成远端“发送成功”。
+        </div>
+        <div class="speech-device-transcripts">
+          <div class="speech-device-transcript-head">
+            <div>
+              <strong>公共 ASR 转写与 Route 回执</strong>
+              <span>从主机通用转写账本按稳定 record ID 解析；它与夜雨人格会话记录分开保存。</span>
+            </div>
+            <v-btn
+              size="small"
+              variant="text"
+              prepend-icon="mdi-refresh"
+              :loading="audioHistoryLoading"
+              @click="loadAudioHistory()"
+            >
+              刷新历史
+            </v-btn>
+          </div>
+          <div v-if="selectedDeviceTranscripts.length" class="speech-device-transcript-list">
+            <article v-for="record in selectedDeviceTranscripts" :key="record.id">
+              <div class="speech-device-transcript-meta">
+                <time>{{ transcriptTime(record) }}</time>
+                <v-chip size="x-small" color="primary" variant="tonal">{{ transcriptSpeaker(record) }}</v-chip>
+                <span>{{ record.provider || "ASR" }}/{{ record.model || "默认模型" }}</span>
+                <span>{{ deliverySummary(record.id) }}</span>
+              </div>
+              <p>{{ record.text }}</p>
+              <audio
+                v-if="retainedAudioAvailable(record.id)"
+                controls
+                preload="none"
+                :src="`/api/speech/records/${encodeURIComponent(record.id)}/audio`"
+              />
+              <small v-else>
+                {{ retainedAudio(record.id)?.audioExpiresAt ? "这条原声缓存已过期或不可用。" : "旧记录没有短期原声缓存；新转写会保留 24 小时。" }}
+              </small>
+            </article>
+            <v-btn
+              v-if="audioTranscriptsHaveMore"
+              size="small"
+              variant="text"
+              prepend-icon="mdi-history"
+              :loading="audioHistoryLoading"
+              @click="loadAudioHistory({ earlierTranscripts: true })"
+            >
+              加载更早的公共转写
+            </v-btn>
+          </div>
+          <div v-else class="speech-audio-log-empty">
+            <v-icon>mdi-waveform</v-icon>
+            <span>当前稳定设备还没有有效公共转写；收到 PCM 不代表已经越过 VAD/ASR 阈值。</span>
+          </div>
+          <details v-if="unlinkedRabiTranscripts.length" class="speech-unlinked-transcripts">
+            <summary>另有 {{ unlinkedRabiTranscripts.length }} 条旧设备或其他 RabiLink 设备转写</summary>
+            <div v-for="record in unlinkedRabiTranscripts" :key="record.id">
+              <time>{{ transcriptTime(record) }}</time>
+              <span>{{ record.sourceDeviceName || record.sourceDeviceId || "旧 RabiLink 设备" }}</span>
+              <p>{{ record.text }}</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </v-card>
+
+    <v-card class="app-card glass-card speech-mode-tabs">
+      <v-tabs v-model="activeKind" color="primary" grow class="speech-tabs" aria-label="切换 TTS 与 ASR">
+        <v-tab value="tts" prepend-icon="mdi-account-voice">TTS 语音合成</v-tab>
+        <v-tab value="asr" prepend-icon="mdi-waveform">ASR 语音识别</v-tab>
+      </v-tabs>
     </v-card>
 
     <section class="speech-status-grid" aria-label="语音服务摘要">
@@ -798,6 +1109,36 @@ onBeforeUnmount(() => {
 .speech-audio-stream-copy p { margin: 4px 0 0; color: #607487; font-size: 12px; line-height: 1.55; }
 .speech-audio-stream-icon { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; border-radius: 13px; color: #0f8b8d; background: rgba(25, 191, 193, .12); }
 .speech-audio-stream-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.speech-audio-stream-log { display: grid; grid-column: 1 / -1; gap: 10px; padding-top: 14px; border-top: 1px solid rgba(17, 32, 51, .08); }
+.speech-audio-log-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.speech-audio-log-head > div { display: grid; gap: 3px; min-width: 0; }
+.speech-audio-log-head strong { color: #193b57; font-size: 13px; }
+.speech-audio-log-head span { color: #6b7f91; font-size: 12px; overflow-wrap: anywhere; }
+.speech-audio-log-rows { display: grid; overflow: auto; max-height: 520px; border: 1px solid rgba(17, 32, 51, .08); border-radius: 12px; background: rgba(248, 251, 253, .72); }
+.speech-audio-log-row { display: grid; grid-template-columns: 72px 76px minmax(180px, 1fr) minmax(140px, auto); gap: 10px; align-items: center; min-height: 38px; padding: 7px 11px; border-bottom: 1px solid rgba(17, 32, 51, .06); }
+.speech-audio-log-row:last-child { border-bottom: 0; }
+.speech-audio-log-row time { color: #789; font-variant-numeric: tabular-nums; font-size: 11px; }
+.speech-audio-log-row > span { min-width: 0; color: #29445a; font-size: 12px; overflow-wrap: anywhere; }
+.speech-audio-log-row code { color: #527084; font-size: 11px; text-align: right; white-space: normal; }
+.speech-audio-log-empty { display: flex; align-items: center; gap: 9px; min-height: 46px; padding: 10px 12px; border: 1px dashed rgba(17, 32, 51, .14); border-radius: 12px; color: #718496; font-size: 12px; }
+.speech-pipeline-summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.speech-pipeline-summary span { padding: 6px 9px; border-radius: 999px; color: #49657a; background: rgba(15, 139, 141, .08); font-size: 11px; }
+.speech-pipeline-summary b { color: #0c5f68; font-size: 13px; }
+.speech-device-transcripts { display: grid; gap: 10px; margin-top: 8px; padding-top: 16px; border-top: 1px solid rgba(17, 32, 51, .08); }
+.speech-device-transcript-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.speech-device-transcript-head > div { display: grid; gap: 3px; }
+.speech-device-transcript-head strong { color: #193b57; font-size: 13px; }
+.speech-device-transcript-head span { color: #6b7f91; font-size: 12px; }
+.speech-device-transcript-list { display: grid; gap: 9px; }
+.speech-device-transcript-list article { display: grid; gap: 7px; padding: 12px 14px; border: 1px solid rgba(17, 32, 51, .08); border-radius: 12px; background: rgba(248, 251, 253, .78); }
+.speech-device-transcript-list p { margin: 0; color: #29445a; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
+.speech-device-transcript-list audio { width: min(100%, 520px); height: 34px; }
+.speech-device-transcript-list small { color: #81909e; }
+.speech-device-transcript-meta { display: flex; flex-wrap: wrap; gap: 7px 10px; align-items: center; color: #708395; font-size: 11px; }
+.speech-unlinked-transcripts { color: #607487; font-size: 12px; }
+.speech-unlinked-transcripts summary { cursor: pointer; font-weight: 800; }
+.speech-unlinked-transcripts > div { display: grid; grid-template-columns: auto minmax(120px, 220px) minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(17, 32, 51, .06); }
+.speech-unlinked-transcripts p { margin: 0; color: #29445a; }
 .speech-console-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; margin-bottom: 18px; }
 .speech-console-card { min-width: 0; padding: 26px; }
 .speech-console-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
@@ -849,5 +1190,5 @@ onBeforeUnmount(() => {
 .speech-api-strip span { color: #8491a0; font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
 .speech-footnote { display: flex; align-items: flex-start; gap: 9px; margin: 18px 4px 0; color: #687b8e; font-size: 12px; line-height: 1.6; }
 @media (max-width: 1100px) { .speech-console-grid { grid-template-columns: 1fr; } .speech-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .speech-api-strip { grid-template-columns: 1fr; } .speech-api-strip > div { border-right: 0; border-bottom: 1px solid rgba(17, 32, 51, .08); } }
-@media (max-width: 700px) { .speech-page-header, .speech-panel-head, .speech-console-head, .speech-action-row { align-items: stretch; flex-direction: column; } .speech-status-grid, .speech-form-grid, .speech-slider-grid, .speech-audio-stream-card, .speech-audio-stream-controls { grid-template-columns: 1fr; } .speech-console-card, .transcript-card { padding: 18px; } .playback-card-head, .playback-card-summary { align-items: stretch; flex-direction: column; } .speech-panel-head, .speech-provider-grid { padding-right: 18px; padding-left: 18px; } .speech-mode-tabs { padding: 0 8px; } .speech-tabs :deep(.v-btn__content) { font-size: 12px; } .speech-offline { margin-right: 18px; margin-left: 18px; } .speech-api-strip > div { padding: 17px 18px; } }
+@media (max-width: 700px) { .speech-page-header, .speech-panel-head, .speech-console-head, .speech-action-row, .speech-audio-log-head, .speech-device-transcript-head { align-items: stretch; flex-direction: column; } .speech-status-grid, .speech-form-grid, .speech-slider-grid, .speech-audio-stream-card, .speech-audio-stream-controls, .speech-audio-log-row, .speech-unlinked-transcripts > div { grid-template-columns: 1fr; } .speech-audio-log-row code { text-align: left; } .speech-console-card, .transcript-card { padding: 18px; } .playback-card-head, .playback-card-summary { align-items: stretch; flex-direction: column; } .speech-panel-head, .speech-provider-grid { padding-right: 18px; padding-left: 18px; } .speech-mode-tabs { padding: 0 8px; } .speech-tabs :deep(.v-btn__content) { font-size: 12px; } .speech-offline { margin-right: 18px; margin-left: 18px; } .speech-api-strip > div { padding: 17px 18px; } }
 </style>

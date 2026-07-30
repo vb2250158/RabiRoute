@@ -159,6 +159,7 @@ export type WeixinMessageRecord = {
   messageType: string;
   repliedMessageId?: string;
   quotedText?: string;
+  attachments?: Array<{ path: string; name: string; mimeType: string; size: number }>;
   segments?: unknown[];
 };
 

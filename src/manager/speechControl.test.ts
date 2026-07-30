@@ -153,6 +153,87 @@ test("Manager speech control normalizes and updates the host playback volume", a
   );
 });
 
+test("Manager speech control preserves remote device models, counters, and transport logs", async () => {
+  const requestedPaths: string[] = [];
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname) => {
+      requestedPaths.push(pathname);
+      return ({
+      status: 200,
+      data: {
+        enabled: true,
+        listening: true,
+        source: "remote",
+        selected_client_id: "phone-one-audio",
+        selected_online: true,
+        capture_enabled: true,
+        checked_at: 10,
+        clients: [{
+          id: "phone-one-audio",
+          name: "Rabi Android · HBP-AL00 · abc123",
+          kind: "mobile",
+          device_model: "HBP-AL00",
+          source_device_id: "phone-one-stable",
+          message_adapter_type: "rabilink",
+          sample_rate: 16_000,
+          chunk_ms: 100,
+          connected_at: 1,
+          last_audio_at: 9,
+          last_sequence: 42,
+          received_bytes: 320_000,
+          accepted_chunks: 100,
+          selected: true,
+          online: true
+        }],
+        events: [{
+          id: "audio-stream-event-7",
+          sequence: 7,
+          time: 9,
+          direction: "pipeline",
+          stage: "asr",
+          level: "warning",
+          kind: "transcription_empty",
+          message: "识别完成，但没有得到有效文字",
+          client_id: "phone-one-audio",
+          source_device_id: "phone-one-stable",
+          device_model: "HBP-AL00",
+          bytes: 3_200,
+          total_bytes: 320_000,
+          stream_sequence: 42,
+          details: { duration: 1.5 }
+        }]
+      }
+    });
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    rolesRoot: () => "Z:/missing-roles",
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const audio = await control.audioStreams();
+  assert.equal(audio.clients[0]?.deviceModel, "HBP-AL00");
+  assert.equal(audio.clients[0]?.sourceDeviceId, "phone-one-stable");
+  assert.equal(audio.clients[0]?.lastSequence, 42);
+  assert.equal(audio.clients[0]?.receivedBytes, 320_000);
+  assert.equal(audio.events[0]?.direction, "pipeline");
+  assert.equal(audio.events[0]?.stage, "asr");
+  assert.equal(audio.events[0]?.sourceDeviceId, "phone-one-stable");
+  assert.equal(audio.events[0]?.streamSequence, 42);
+  const history = await control.audioStreamEvents({ sourceDeviceId: "phone-one-stable", beforeSequence: 7 });
+  assert.equal(history[0]?.kind, "transcription_empty");
+  assert.match(requestedPaths[1] || "", /source_device_id=phone-one-stable/);
+  assert.match(requestedPaths[1] || "", /before_sequence=7/);
+  assert.equal(JSON.stringify(audio).includes("device_model"), false);
+});
+
 test("Manager speech control maps resident microphone settings to broadcast mode", async () => {
   let upstreamBody: Record<string, unknown> = {};
   const localSpeech: ManagerSpeechLocalAdapter = {
@@ -555,9 +636,13 @@ test("Manager speech broadcast records locally when no Route subscribes", async 
 
 test("Manager speech control normalizes persistent speech records and redacts unsafe audio paths", async () => {
   let requestedPath = "";
+  let requestedBinaryPath = "";
   const localSpeech: ManagerSpeechLocalAdapter = {
     inspect: async () => onlineStatus,
-    requestBinary: async () => binaryResponse(),
+    requestBinary: async (_serviceUrl, pathname) => {
+      requestedBinaryPath = pathname;
+      return binaryResponse();
+    },
     requestJson: async (_serviceUrl, pathname) => {
       requestedPath = pathname;
       return {
@@ -574,6 +659,13 @@ test("Manager speech control normalizes persistent speech records and redacts un
               provider: "dashscope-qwen",
               model: "paraformer-v2",
               text: "会议内容",
+              source_device_id: "phone-one",
+              source_device_name: "HBP-AL00",
+              source_device_kind: "mobile",
+              source_stream_id: "phone-one-audio",
+              message_adapter_type: "rabilink",
+              audio_file: "output/asr-audio/source.wav",
+              audio_expires_at: 86_410,
               segments: [{ id: 0, start: 0, end: 1, text: "会议内容", speaker: "Speaker 1" }]
             },
             {
@@ -687,6 +779,10 @@ test("Manager speech control normalizes persistent speech records and redacts un
   assert.match(requestedPath, /route_id=XinghaiBuilder-main/);
   assert.equal(records[0]?.routeId, "XinghaiBuilder-main");
   assert.equal(records[0]?.segments[0]?.speaker, "Speaker 1");
+  assert.equal(records[0]?.sourceDeviceId, "phone-one");
+  assert.equal(records[0]?.sourceStreamId, "phone-one-audio");
+  assert.equal(records[0]?.messageAdapterType, "rabilink");
+  assert.equal(records[0]?.audioFile, "output/asr-audio/source.wav");
   assert.equal(records[1]?.audioFile, "XinghaiBuilder/voice/cache/tts-audio/speech.wav");
   assert.equal(records[1]?.audioExpiresAt, 86_411);
   assert.equal(records[2]?.audioFile, "legacy.wav");
@@ -698,6 +794,8 @@ test("Manager speech control normalizes persistent speech records and redacts un
   assert.equal(records[8]?.audioFile, undefined);
   assert.equal(JSON.stringify(records).includes("route_id"), false);
   assert.doesNotMatch(JSON.stringify(records), /C:\\\\Users|\.\.\/|file:C:|C%3A|voice\\\\cache/);
+  await control.recordAudio("speech-one");
+  assert.equal(requestedBinaryPath, "/v1/records/speech-one/audio");
 });
 
 test("Manager speech control exposes manual speaker profiles without claiming voiceprint support", async () => {

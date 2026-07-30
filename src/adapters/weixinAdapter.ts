@@ -9,6 +9,7 @@ import type { ForwardTemplateValues } from "../routing/types.js";
 import {
   pollWeixinQrSession,
   pollWeixinUpdates,
+  downloadWeixinImages,
   readWeixinState,
   requestWeixinQrSession,
   textFromWeixinItems,
@@ -73,7 +74,7 @@ export function dispatchWeixinRecord(
   values: ForwardTemplateValues,
   handlers: { forward?: typeof forwardMessage; recordOnly?: typeof recordMessageContextOnly } = {}
 ): WeixinRecordDisposition {
-  if (record.messageType !== "text") {
+  if (record.messageType !== "text" && !record.attachments?.length) {
     (handlers.recordOnly ?? recordMessageContextOnly)("weixin_message", record);
     return "record_only";
   }
@@ -81,13 +82,17 @@ export function dispatchWeixinRecord(
   return "forwarded";
 }
 
-function recordFromInbound(message: WeixinInboundMessage): WeixinMessageRecord | null {
+async function recordFromInbound(message: WeixinInboundMessage): Promise<WeixinMessageRecord | null> {
   const sessionId = String(message.from_user_id || "").trim();
   if (!sessionId) return null;
   const parsed = textFromWeixinItems(message.item_list);
   const messageId = String(message.message_id || message.msg_id || randomUUID()).trim();
   const rawTime = Number(message.create_time_ms || message.create_time || 0);
   const time = rawTime > 1_000_000_000_000 ? Math.floor(rawTime / 1000) : rawTime > 0 ? Math.floor(rawTime) : Math.floor(Date.now() / 1000);
+  const attachments = await downloadWeixinImages(message.item_list, config.memoryDataDir, messageId);
+  const attachmentHint = attachments.length
+    ? `\n[图片附件：${attachments.map((attachment) => attachment.path).join(", ")}]`
+    : "";
   return {
     time,
     adapterType: "weixin",
@@ -96,9 +101,10 @@ function recordFromInbound(message: WeixinInboundMessage): WeixinMessageRecord |
     senderName: sessionId,
     messageId,
     messageType: parsed.messageType,
-    rawMessage: parsed.text || `[${parsed.messageType}]`,
+    rawMessage: `${parsed.text || `[${parsed.messageType}]`}${attachmentHint}`,
     quotedText: parsed.quotedText,
     repliedMessageId: parsed.repliedMessageId,
+    attachments: attachments.length ? attachments : undefined,
     segments: Array.isArray(message.item_list) ? message.item_list.slice(0, 50) : undefined
   };
 }
@@ -112,7 +118,7 @@ async function processInbound(state: WeixinOpenClawState, message: WeixinInbound
   if (!sessionId) return false;
   const contextToken = String(message.context_token || "").trim();
   if (contextToken) state.contextTokens[sessionId] = contextToken;
-  const record = recordFromInbound(message);
+  const record = await recordFromInbound(message);
   if (!record || recentMessageIds.has(String(record.messageId))) return Boolean(contextToken);
   rememberMessageId(String(record.messageId));
   appendWeixinMessage(record);
@@ -130,7 +136,7 @@ async function processInbound(state: WeixinOpenClawState, message: WeixinInbound
     lastError: "",
     lastMessageAt: new Date().toISOString(),
     messageCount: Number(current?.messageCount || 0) + 1,
-    message: disposition === "forwarded" ? "个人微信文本已交给 RabiRoute。" : "个人微信媒体消息已记录；首版不唤醒 Agent。"
+    message: disposition === "forwarded" ? "个人微信消息已交给 RabiRoute。" : "个人微信媒体消息已记录；无可读取附件。"
   });
   appendAdapterLog("weixin", {
     event: "inbound_message",

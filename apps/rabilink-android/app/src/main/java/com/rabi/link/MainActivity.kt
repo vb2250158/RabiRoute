@@ -319,7 +319,10 @@ class MainActivity : Activity() {
         routeLoadMessage = "正在读取 Rabi PC 上的聊天人格…"
         runAsync({ sdk.getMobileRoutes(relay.baseUrl, relay.token, "") }, { routes ->
             routesLoaded = true; routeLoadFailed = false
-            availableRoutes = routes.filter { route -> route.messageAdapters.any { it.equals("rabilink", true) } }
+            // The mobile endpoint includes every installed persona. Routes with a
+            // RabiLink adapter remain chat-capable; persona-only rows stay visible
+            // with the existing configuration guidance instead of disappearing.
+            availableRoutes = routes
             val enabled = availableRoutes.filter { RabiConversationRules.isChatCapable(it.enabled, it.messageAdapters) }
             val savedTarget = RabiConversationTarget.load(this)
             val migrationTarget = enabled.firstOrNull { it.id == savedTarget }?.id ?: enabled.singleOrNull()?.id.orEmpty()
@@ -345,7 +348,7 @@ class MainActivity : Activity() {
         val store = RabiChatStore(this)
         val routeIds = availableRoutes.map { it.id }.toMutableSet()
         val rows = availableRoutes.map { route ->
-            ConversationRow(route.id, route.name.ifBlank { route.agentRoleId.ifBlank { "Rabi" } },
+            ConversationRow(route.id, personaTitle(route),
                 RabiConversationRules.isChatCapable(route.enabled, route.messageAdapters), route.running,
                 store.latest(route.id), store.unreadCount(route.id))
         }.toMutableList()
@@ -467,7 +470,15 @@ class MainActivity : Activity() {
                 text = message.fileName; textSize = 13f; typeface = Typeface.DEFAULT_BOLD
                 setTextColor(if (mine) Color.WHITE else RabiMobileUi.primary); setPadding(0, if (message.text.isBlank()) dp(2) else dp(8), 0, 0)
             })
-            if (message.localPath.isNotBlank()) {
+            if (message.kind == "tts" && message.localPath.isNotBlank()) {
+                bubble.addView(TextView(this).apply {
+                    text = ttsPlaybackLabel(message); textSize = 12f
+                    setTextColor(if (mine) Color.rgb(190, 232, 234) else RabiMobileUi.secondary)
+                    setPadding(0, dp(7), 0, 0)
+                })
+                bubble.isClickable = true; bubble.contentDescription = "重播夜雨语音"
+                bubble.setOnClickListener { RabiConversationService.replayTts(this, message.id, message.localPath) }
+            } else if (message.localPath.isNotBlank()) {
                 bubble.isClickable = true; bubble.contentDescription = "打开附件 ${message.fileName}"
                 bubble.setOnClickListener { openAttachment(message) }
             }
@@ -484,9 +495,11 @@ class MainActivity : Activity() {
         chatScroll?.post { chatScroll?.fullScroll(View.FOCUS_DOWN) }
     }
 
-    private fun routeTitle(routeId: String): String = availableRoutes.firstOrNull { it.id == routeId }?.let {
-        it.name.ifBlank { it.agentRoleId.ifBlank { "Rabi" } }
-    } ?: if (routeId == RabiConversationRules.LEGACY_CONVERSATION_ID) "Rabi（旧会话）" else "Rabi"
+    private fun personaTitle(route: RabiRouteInfo): String =
+        RabiConversationRules.personaDisplayName(route.agentRoleId, route.name, route.configName, route.id)
+
+    private fun routeTitle(routeId: String): String = availableRoutes.firstOrNull { it.id == routeId }?.let(::personaTitle)
+        ?: if (routeId == RabiConversationRules.LEGACY_CONVERSATION_ID) "Rabi（旧会话）" else "Rabi"
 
     private fun routeStatus(route: RabiRouteInfo?): String = when {
         route == null && !routesLoaded -> "正在确认聊天状态…"
@@ -517,6 +530,14 @@ class MainActivity : Activity() {
     private fun messageKindLabel(kind: String): String = when (kind) {
         "voice" -> "语音转写"; "tts" -> "语音回复"; "image" -> "图片"; "video" -> "视频"
         "audio-file" -> "音频文件"; "file" -> "文件"; "configuration" -> "配置请求"; else -> ""
+    }
+
+    private fun ttsPlaybackLabel(message: RabiChatStore.Message): String = when (message.playbackState) {
+        "queued" -> "等待播放…"
+        "playing" -> "正在播放…"
+        "played" -> "已播放 · 点按重播"
+        "failed" -> "播放失败${message.playbackFailure.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""} · 点按重试"
+        else -> "点按播放"
     }
 
     private fun refreshChatIfChanged() {

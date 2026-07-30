@@ -94,6 +94,8 @@ test("speech ingress stores one host record with complete speaker turns", () => 
   assert.equal(duplicate.appended, false);
   assert.equal(duplicate.record.text, "明天三点开会 我知道了");
   assert.equal(store.list()[0]?.id, "speech-record-one");
+  assert.deepEqual(store.query({ sourceDeviceId: "phone-one" }).map(item => item.id), ["speech-record-one"]);
+  assert.deepEqual(store.query({ sourceDeviceId: "another-phone" }), []);
   store.appendDeliveryReceipt({
     schemaVersion: 1,
     recordId: "speech-record-one",

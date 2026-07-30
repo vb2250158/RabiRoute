@@ -17,7 +17,7 @@ export default defineConfig({
     emptyOutDir: true
   },
   server: {
-    port: 8791,
+    port: 8793,
     proxy: {
       "/gateways": "http://127.0.0.1:8790",
       "/network-options": "http://127.0.0.1:8790",

@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-speech-device-observability",
+  "title": "语音设备健康、处理事件和转写证据必须分层展示",
+  "focus": "按稳定语音设备关联传输、处理、转写和短期原声",
+  "content": "RabiSpeech 以稳定 sourceDeviceId 关联设备型号、PCM 字节/块、音频流收发事件、VAD/ASR/Route 阶段事件、公共转写和逐 Route 回执。收到 PCM 只证明声音到达主机，不能冒充已产生转写或已投递 Agent。真正进入 ASR 的 VAD 短语音可在本机私有缓存保留 24 小时并按 record ID 回听；事件账本、公共转写、人格式会话和短期音频缓存保持独立真源与生命周期。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：语音设备可观测性与短期原声边界"
+  },
+  "createdAt": "2026-07-30T00:00:00+08:00",
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["RabiSpeech", "sourceDeviceId", "设备型号", "PCM", "音频流事件", "VAD", "ASR", "Route 回执", "公共转写", "24 小时原声", "可观测性"]
+}

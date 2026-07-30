@@ -34,7 +34,10 @@ function runSpeechCli(args: string[], env: NodeJS.ProcessEnv): Promise<ChildResu
     const deadline = setTimeout(() => {
       child.kill();
       reject(new Error(`Speech CLI integration timed out. stdout=${stdout} stderr=${stderr}`));
-    }, 15_000);
+    // Full-suite execution starts several source-mode TSX children in
+    // parallel. A mapped NAS workspace can make their cold start approach two
+    // minutes even though the CLI exits promptly once loaded.
+    }, 120_000);
     child.stdout.on("data", chunk => { stdout += chunk.toString("utf8"); });
     child.stderr.on("data", chunk => { stderr += chunk.toString("utf8"); });
     child.on("error", error => {

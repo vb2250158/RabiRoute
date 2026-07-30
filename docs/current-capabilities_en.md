@@ -54,7 +54,7 @@ The repository also provides a local voiceprint preflight that composes several 
 | Wearable health endpoint | `experimental` | Structured `wearable.health` observations enter a daily role-scoped timeline. Manager exposes state/history/summary queries, and threshold/cooldown matches become `wearable_health_alert` Agent deliveries. Android selects Health Connect or a PC ADB Companion. Health Connect prefers event triggers; Xiaomi's ADB Provider has no reliable change notification, so an explicitly enabled Companion retains minute-scale low-frequency polling. Xiaomi real-device checks covered heart rate, sleep sessions/stages, sleep state, deduplication, and queries. ADB-free MiWear SPP is not the default collector. |
 | Generic Webhook | `experimental` | Accepts POST events from sources without a dedicated adapter. Named platforms should use their own adapters to preserve logs and reply semantics. |
 | WeCom | `experimental` | Uses the `@wecom/aibot-node-sdk` intelligent-bot WebSocket for group ingress and Outbox replies. Real Bot ID/Secret validation is required. |
-| Personal Weixin | `experimental prototype` | Uses the OpenClaw iLink API for QR login and long-poll ingress. WebGUI displays the QR code and login status; text can reach the Agent and reply to the source session, while media is record-only. Full account lifecycle controls such as logout/switching, long-running stability, real-account risk, and production acceptance remain unverified. |
+| Personal Weixin | `experimental prototype` | Uses the OpenClaw iLink API for QR login and long-poll ingress. WebGUI displays the QR code and login status; text can reach the Agent, and Outbox can reply to the source session with text or an allowlisted local file. Inbound media is record-only. Full account lifecycle controls such as logout/switching, long-running stability, real-account risk, and production acceptance remain unverified. |
 
 `disabled` is a compatibility configuration value, not an input adapter.
 
@@ -92,7 +92,7 @@ Command, file, network, permission, and tool approval in the target Desktop task
 | Local Agent session | The legacy default uses `outputAdapter=agent`. Without an explicit external target, the result remains in the Agent session and does not create a draft. |
 | QQ / NapCat | Supports source replies and explicit group/private targets, with text/image/voice/file payloads. Local group files must pass `allowedFileRoots` and use `upload_group_file`. Real quoted-reply segments are supported. |
 | WeCom | Supports source-group replies and explicit chat/group targets through the SDK, gated by adapter policy. |
-| Personal Weixin | Supports text replies only to a source session that has already supplied a context token. Arbitrary proactive contacts and media sends are not implemented. |
+| Personal Weixin | Supports text or allowlisted local-file replies only to a source session that has already supplied a context token. Arbitrary proactive contacts and dedicated image, voice, and video output types are not implemented. |
 | FenneNote | Retired; reply/playback forwarding remains only for legacy Routes, not as a new output design. |
 | RabiLink | Route policy gates reply or proactive text entering the continuous Relay stream. Proactive downlink does not require a fabricated source task. |
 | Role panel | Appends directly to the role timeline and may include attachment descriptors. |

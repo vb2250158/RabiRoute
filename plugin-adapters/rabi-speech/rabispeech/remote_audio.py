@@ -15,6 +15,8 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .audio_stream_events import AudioStreamEventStore
+
 
 RemoteFeed = Callable[[str, np.ndarray], None]
 LocalPlayer = Callable[[Path, int, threading.Event], None]
@@ -40,6 +42,7 @@ class _Client:
     id: str
     name: str
     kind: str
+    device_model: str
     message_adapter_type: str
     route_profile_id: str
     session_id: str
@@ -59,6 +62,7 @@ class _VirtualClient:
     id: str
     name: str
     kind: str
+    device_model: str
     source_device_id: str
     message_adapter_type: str
     route_profile_id: str
@@ -88,11 +92,13 @@ class RemoteAudioHub:
         local_player: LocalPlayer,
         local_stopper: LocalStopper,
         event_sink: Callable[[str, object], None] | None = None,
+        event_store: AudioStreamEventStore | None = None,
     ) -> None:
         self.config = config
         self._local_player = local_player
         self._local_stopper = local_stopper
         self._event_sink = event_sink
+        self._event_store = event_store
         self._feed: RemoteFeed | None = None
         self._clients: dict[str, _Client] = {}
         self._virtual_clients: dict[str, _VirtualClient] = {}
@@ -105,6 +111,9 @@ class RemoteAudioHub:
         self._capture_sample_rate = 16_000
         self._capture_chunk_ms = 100
         self._selected_client_id = self._read_selection()
+        self._events: list[dict[str, object]] = []
+        self._event_sequence = 0
+        self._last_event_at: dict[tuple[str, str], float] = {}
 
     @property
     def selected_client_id(self) -> str | None:
@@ -125,6 +134,14 @@ class RemoteAudioHub:
             return virtual_client.kind
         client = self._clients.get(self._selected_client_id or "")
         return client.kind if client is not None else None
+
+    @property
+    def selected_device_model(self) -> str | None:
+        virtual_client = self._selected_virtual_client()
+        if virtual_client is not None:
+            return virtual_client.device_model or None
+        client = self._clients.get(self._selected_client_id or "")
+        return (client.device_model or None) if client is not None else None
 
     @property
     def selected_source_device_id(self) -> str | None:
@@ -179,6 +196,89 @@ class RemoteAudioHub:
         if self._event_sink is not None:
             self._event_sink("audio_stream_changed", self.snapshot())
 
+    def _append_event(
+        self,
+        *,
+        direction: str,
+        kind: str,
+        message: str,
+        client_id: str = "",
+        byte_count: int = 0,
+        total_bytes: int = 0,
+        stream_sequence: int | None = None,
+        min_interval_seconds: float = 0.0,
+        stage: str = "transport",
+        level: str = "info",
+        source_device_id: str = "",
+        device_model: str = "",
+        record_id: str = "",
+        route_id: str = "",
+        details: dict[str, object] | None = None,
+    ) -> bool:
+        now = time.time()
+        throttle_key = (client_id, kind)
+        if min_interval_seconds > 0 and now - self._last_event_at.get(throttle_key, 0.0) < min_interval_seconds:
+            return False
+        self._last_event_at[throttle_key] = now
+        client = self._virtual_clients.get(client_id) or self._clients.get(client_id)
+        resolved_source_device_id = source_device_id or (
+            client.source_device_id if isinstance(client, _VirtualClient) else client.id if client is not None else ""
+        )
+        resolved_device_model = device_model or (client.device_model if client is not None else "")
+        self._event_sequence += 1
+        event: dict[str, object] = {
+            "sequence": self._event_sequence,
+            "time": now,
+            "direction": direction,
+            "stage": stage,
+            "kind": kind,
+            "level": level,
+            "message": message[:200],
+            "client_id": client_id or None,
+            "source_device_id": resolved_source_device_id or None,
+            "device_model": resolved_device_model or None,
+            "bytes": max(0, int(byte_count)),
+            "total_bytes": max(0, int(total_bytes)),
+            "record_id": record_id or None,
+            "route_id": route_id or None,
+            "details": details or {},
+        }
+        if stream_sequence is not None:
+            event["stream_sequence"] = max(0, int(stream_sequence))
+        if self._event_store is not None:
+            event = self._event_store.append(event)
+            self._event_sequence = max(self._event_sequence, int(event["sequence"]))
+        self._events.append(event)
+        if len(self._events) > 200:
+            del self._events[:-200]
+        return True
+
+    def list_events(
+        self,
+        *,
+        limit: int = 200,
+        client_id: str | None = None,
+        source_device_id: str | None = None,
+        before_sequence: int | None = None,
+    ) -> list[dict[str, object]]:
+        if self._event_store is not None:
+            return self._event_store.list(
+                limit=limit,
+                client_id=client_id,
+                source_device_id=source_device_id,
+                before_sequence=before_sequence,
+            )
+        rows = [
+            row
+            for row in reversed(self._events)
+            if (
+                (not client_id or str(row.get("client_id") or "") == client_id)
+                and (not source_device_id or str(row.get("source_device_id") or "") == source_device_id)
+                and (before_sequence is None or int(row.get("sequence") or 0) < before_sequence)
+            )
+        ]
+        return rows[: min(1_000, max(1, int(limit)))]
+
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         if not self.config.enabled:
@@ -227,7 +327,8 @@ class RemoteAudioHub:
                     "id": client.id,
                     "name": client.name,
                     "kind": client.kind,
-                    "source_device_id": client.id,
+                    "device_model": client.device_model or None,
+                "source_device_id": client.id,
                     "message_adapter_type": client.message_adapter_type,
                     "route_profile_id": client.route_profile_id or None,
                     "session_id": client.session_id or None,
@@ -247,6 +348,7 @@ class RemoteAudioHub:
                 "id": client.id,
                 "name": client.name,
                 "kind": client.kind,
+                "device_model": client.device_model or None,
                 "source_device_id": client.source_device_id or client.id,
                 "message_adapter_type": client.message_adapter_type,
                 "route_profile_id": client.route_profile_id or None,
@@ -282,6 +384,7 @@ class RemoteAudioHub:
             "selected_online": selected_online,
             "capture_enabled": self._capture_enabled,
             "clients": clients,
+            "events": self.list_events(limit=100),
             "checked_at": now,
         }
 
@@ -300,6 +403,12 @@ class RemoteAudioHub:
             raise ValueError("Audio stream source must be local or remote.")
         self._write_selection()
         await self._sync_capture_commands()
+        self._append_event(
+            direction="system",
+            kind="selection_changed",
+            message="已切换到本机音频" if self._selected_client_id is None else "已选择远端音频设备",
+            client_id=self._selected_client_id or "",
+        )
         result = self.snapshot()
         self._emit_changed()
         return result
@@ -311,6 +420,7 @@ class RemoteAudioHub:
         name: str,
         kind: str,
         message_adapter_type: str,
+        device_model: str = "",
         source_device_id: str = "",
         route_profile_id: str = "",
         session_id: str = "",
@@ -327,6 +437,7 @@ class RemoteAudioHub:
             id=normalized_id,
             name=str(name or normalized_id).strip()[:100] or normalized_id,
             kind=_safe_kind(kind),
+            device_model=str(device_model or "").strip()[:100],
             source_device_id=normalized_source_device_id,
             message_adapter_type=_message_adapter_type(message_adapter_type, _safe_kind(kind)),
             route_profile_id=str(route_profile_id or "").strip()[:200],
@@ -352,6 +463,12 @@ class RemoteAudioHub:
             # stable stream id without allowing an unrelated phone to steal it.
             self._selected_client_id = normalized_id
             self._write_selection()
+        self._append_event(
+            direction="system",
+            kind="client_connected",
+            message="RabiLink 远端音频设备已连接",
+            client_id=normalized_id,
+        )
         result = self.snapshot()
         self._emit_changed()
         return result
@@ -410,6 +527,17 @@ class RemoteAudioHub:
                 client.received_bytes,
                 client.accepted_chunks,
             )
+            if self._append_event(
+                direction="inbound",
+                kind="pcm_received",
+                message="已从远端设备接收 PCM",
+                client_id=client.id,
+                byte_count=len(payload),
+                total_bytes=client.received_bytes,
+                stream_sequence=sequence,
+                min_interval_seconds=1.0,
+            ):
+                self._emit_changed()
         if normalized_chunk_id:
             self._last_virtual_chunk_by_source[client.source_device_id] = (
                 normalized_chunk_id,
@@ -432,6 +560,16 @@ class RemoteAudioHub:
         if client is None:
             return self.snapshot(), False
         resume_running = client.resume_running
+        self._append_event(
+            direction="system",
+            kind="client_disconnected",
+            message="RabiLink 远端音频设备已断开",
+            client_id=client.id,
+            total_bytes=client.received_bytes,
+            stream_sequence=client.last_sequence,
+            source_device_id=client.source_device_id,
+            device_model=client.device_model,
+        )
         result = self.snapshot()
         self._emit_changed()
         return result, resume_running
@@ -505,6 +643,7 @@ class RemoteAudioHub:
             client_id = _safe_id(hello.get("clientId"))
             name = str(hello.get("name") or client_id).strip()[:100] or client_id
             kind = _safe_kind(hello.get("deviceKind"))
+            device_model = str(hello.get("deviceModel") or "").strip()[:100]
             # Network sound-card clients always belong to the standalone speech
             # endpoint. Only the loopback RabiLink virtual-stream API may create
             # a rabilink source, so an untrusted hello cannot change Route class.
@@ -518,10 +657,28 @@ class RemoteAudioHub:
             previous = self._clients.get(client_id)
             if previous is not None:
                 await previous.websocket.close(code=4009, reason="Replaced by a newer connection")
-            client = _Client(client_id, name, kind, message_adapter_type, route_profile_id, session_id, websocket, sample_rate, chunk_ms, time.time())
+            client = _Client(
+                id=client_id,
+                name=name,
+                kind=kind,
+                device_model=device_model,
+                message_adapter_type=message_adapter_type,
+                route_profile_id=route_profile_id,
+                session_id=session_id,
+                websocket=websocket,
+                sample_rate=sample_rate,
+                chunk_ms=chunk_ms,
+                connected_at=time.time(),
+            )
             self._clients[client_id] = client
             await websocket.send(json.dumps({"type": "hello-accepted", "clientId": client_id}, ensure_ascii=False))
             await self._sync_capture_commands()
+            self._append_event(
+                direction="system",
+                kind="client_connected",
+                message="远端语音客户端已连接",
+                client_id=client.id,
+            )
             self._emit_changed()
             async for message in websocket:
                 if isinstance(message, bytes):
@@ -538,6 +695,15 @@ class RemoteAudioHub:
         finally:
             if client is not None and self._clients.get(client.id) is client:
                 self._clients.pop(client.id, None)
+                self._append_event(
+                    direction="system",
+                    kind="client_disconnected",
+                    message="远端语音客户端已断开",
+                    client_id=client.id,
+                    total_bytes=client.received_bytes,
+                    source_device_id=client.id,
+                    device_model=client.device_model,
+                )
                 self._emit_changed()
                 if client.playback_waiter and not client.playback_waiter.done():
                     client.playback_waiter.set_exception(RuntimeError("Remote audio client disconnected during playback."))
@@ -559,6 +725,16 @@ class RemoteAudioHub:
         self._feed(client.id, samples)
         client.received_bytes += len(payload)
         client.accepted_chunks += 1
+        if self._append_event(
+            direction="inbound",
+            kind="pcm_received",
+            message="已从远端设备接收 PCM",
+            client_id=client.id,
+            byte_count=len(payload),
+            total_bytes=client.received_bytes,
+            min_interval_seconds=1.0,
+        ):
+            self._emit_changed()
 
     def _handle_control(self, client: _Client, raw: str) -> None:
         try:
@@ -570,6 +746,13 @@ class RemoteAudioHub:
         if message.get("type") == "playback-complete" and str(message.get("id") or "") == client.playback_id:
             if client.playback_waiter and not client.playback_waiter.done():
                 client.playback_waiter.set_result(None)
+                self._append_event(
+                    direction="receipt",
+                    kind="playback_completed",
+                    message="远端设备确认播放完成",
+                    client_id=client.id,
+                )
+                self._emit_changed()
 
     async def _sync_capture_commands(self) -> None:
         for client in list(self._clients.values()):
@@ -600,6 +783,14 @@ class RemoteAudioHub:
             "volume": int(volume),
         }))
         await client.websocket.send(payload)
+        self._append_event(
+            direction="outbound",
+            kind="audio_sent",
+            message="已向远端设备发送 WAV",
+            client_id=client.id,
+            byte_count=len(payload),
+        )
+        self._emit_changed()
         while not cancel.is_set():
             try:
                 await asyncio.wait_for(asyncio.shield(client.playback_waiter), timeout=0.2)

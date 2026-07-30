@@ -12,7 +12,9 @@ test("isolated speech ingress acceptance separates PC and mobile persona context
     entryPath: path.resolve("src", "index.ts"),
     entryArgsPrefix: ["--import", "tsx"],
     outputPath,
-    timeoutMs: 60_000
+    // Two isolated source-mode TSX children start concurrently. A mapped NAS
+    // workspace can push their cold start beyond one minute.
+    timeoutMs: 120_000
   }, {
     now: () => new Date("2026-07-23T12:00:00.000Z")
   });

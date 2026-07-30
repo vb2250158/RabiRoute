@@ -2,12 +2,12 @@
   "id": "memory-rabiroute-weixin-adapter-boundary",
   "title": "个人微信原型保持独立消息端和来源会话回传边界",
   "focus": "个人微信 OpenClaw/iLink 消息端边界",
-  "content": "个人微信实验接入走独立 weixin message adapter：OpenClaw/iLink 二维码登录和长轮询产生 weixin_message，文本可投递 Agent，媒体首版只记录；Outbox 只能回复已经提供 context token 的来源会话文本，不能主动选择任意联系人。登录 token、同步游标和会话 context token 只保存在私有运行期 data，公开示例不得包含真实账号或凭证。WebGUI 可显示二维码与登录状态，但真实账号长期在线、退出/切换、账号风险和稳定性仍需验收。",
+  "content": "个人微信实验接入走独立 weixin message adapter：OpenClaw/iLink 二维码登录和长轮询产生 weixin_message，文本和成功解密到私有运行目录的图片可投递 Agent，无法安全读取的媒体只记录；Outbox 只能回复已经提供 context token 的来源会话，可发送文本或通过消息端策略与 allowedFileRoots 真实路径校验的本地图片/文件，不能主动选择任意联系人。登录 token、同步游标和会话 context token 只保存在私有运行期 data；真实账号长期在线、退出/切换、账号风险和稳定性仍需验收。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：个人微信实验消息端的安全与成熟度边界"
   },
   "createdAt": "2026-07-27T00:00:00+08:00",
-  "updatedAt": "2026-07-27T00:00:00+08:00",
-  "keywords": ["weixin", "个人微信", "OpenClaw", "iLink", "message adapter", "weixin_message", "weixin_chat", "context token", "outbox", "data", "实验能力"]
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["weixin", "个人微信", "OpenClaw", "iLink", "message adapter", "weixin_message", "weixin_chat", "context token", "入站图片", "allowedFileRoots", "outbox", "data", "实验能力"]
 }

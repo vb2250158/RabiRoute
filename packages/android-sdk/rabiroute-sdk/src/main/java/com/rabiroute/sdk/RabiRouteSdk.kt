@@ -528,8 +528,9 @@ class RabiRouteSdk @JvmOverloads constructor(
 
     fun getMobileRoutes(relayBaseUrl: String, token: String, targetDeviceId: String = ""): List<RabiRouteInfo> {
         val target = targetQuery(targetDeviceId)
+        val profiles = if (target.isBlank()) "?includeProfiles=true" else "$target&includeProfiles=true"
         val json = requestJson(
-            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes$target",
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes$profiles",
             "GET",
             null,
             mapOf("X-RabiLink-Token" to token),

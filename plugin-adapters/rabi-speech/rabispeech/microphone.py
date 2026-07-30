@@ -123,7 +123,7 @@ class SpeechUtteranceMetadata:
 Transcriber = Callable[[Path, MicrophoneConfig], Awaitable[TranscriptionResult]]
 Submitter = Callable[[TranscriptionResult, str, SpeechUtteranceMetadata, SpeechInputSource], Awaitable[dict[str, object]]]
 StreamFactory = Callable[[MicrophoneConfig, Callable[..., None]], Any]
-RecordTranscription = Callable[[TranscriptionResult, MicrophoneConfig, float], None]
+RecordTranscription = Callable[[TranscriptionResult, MicrophoneConfig, float, Path, SpeechInputSource], None]
 PlaybackStopper = Callable[[], object]
 
 
@@ -815,7 +815,9 @@ class MicrophoneService:
                         )
                 if self._record_transcription is not None:
                     try:
-                        self._record_transcription(result, self.config, started_at)
+                        if target is None:
+                            raise RuntimeError("ASR source audio was not available for record persistence.")
+                        self._record_transcription(result, self.config, started_at, target, input_source)
                     except Exception as exc:
                         self._emit_event(
                             "storage",

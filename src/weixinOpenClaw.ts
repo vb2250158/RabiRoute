@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 export const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com";
+export const DEFAULT_WEIXIN_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 export const WEIXIN_SESSION_TIMEOUT_ERRCODE = -14;
 
 export type WeixinOpenClawState = {
@@ -31,6 +32,90 @@ export type WeixinInboundMessage = {
   create_time_ms?: unknown;
   create_time?: unknown;
 };
+
+export type WeixinDownloadedImage = {
+  path: string;
+  name: string;
+  mimeType: string;
+  size: number;
+};
+
+const MAX_WEIXIN_IMAGE_BYTES = 15 * 1024 * 1024;
+
+function imageFormat(bytes: Buffer): { extension: string; mimeType: string } {
+  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { extension: "png", mimeType: "image/png" };
+  if (bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return { extension: "jpg", mimeType: "image/jpeg" };
+  if (bytes.subarray(0, 6).toString("ascii") === "GIF87a" || bytes.subarray(0, 6).toString("ascii") === "GIF89a") return { extension: "gif", mimeType: "image/gif" };
+  if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return { extension: "webp", mimeType: "image/webp" };
+  return { extension: "bin", mimeType: "application/octet-stream" };
+}
+
+function imageKey(item: Record<string, unknown>): Buffer | undefined {
+  const direct = String(item.aeskey || "").trim();
+  if (/^[0-9a-f]{32}$/i.test(direct)) return Buffer.from(direct, "hex");
+  const media = item.media && typeof item.media === "object" && !Array.isArray(item.media) ? item.media as Record<string, unknown> : {};
+  const encoded = String(media.aes_key || "").trim();
+  if (!encoded) return undefined;
+  const decoded = Buffer.from(encoded, "base64").toString("utf8").trim();
+  return /^[0-9a-f]{32}$/i.test(decoded) ? Buffer.from(decoded, "hex") : undefined;
+}
+
+/** Download an inbound personal-Weixin image into private runtime storage.
+ * The CDN payload is AES-128-ECB encrypted; no remote URL or encryption key is
+ * propagated to the agent prompt. */
+export async function downloadWeixinImages(
+  items: unknown,
+  dataDir: string,
+  messageId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<WeixinDownloadedImage[]> {
+  if (!Array.isArray(items)) return [];
+  const output: WeixinDownloadedImage[] = [];
+  for (const [index, raw] of items.entries()) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    if (Number(item.type || 0) !== 2) continue;
+    const image = item.image_item && typeof item.image_item === "object" && !Array.isArray(item.image_item)
+      ? item.image_item as Record<string, unknown>
+      : {};
+    const media = image.media && typeof image.media === "object" && !Array.isArray(image.media)
+      ? image.media as Record<string, unknown>
+      : {};
+    const urlText = String(media.full_url || "").trim();
+    const key = imageKey(image);
+    if (!urlText || !key) continue;
+    let url: URL;
+    try { url = new URL(urlText); } catch { continue; }
+    if (url.protocol !== "https:" || !url.hostname.endsWith(".weixin.qq.com")) continue;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await fetchImpl(url, { signal: controller.signal });
+      if (!response.ok) continue;
+      const encrypted = Buffer.from(await response.arrayBuffer());
+      if (!encrypted.length || encrypted.length > MAX_WEIXIN_IMAGE_BYTES + 32) continue;
+      let bytes: Buffer;
+      try {
+        const decipher = createDecipheriv("aes-128-ecb", key, null);
+        bytes = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+      } catch {
+        continue;
+      }
+      if (!bytes.length || bytes.length > MAX_WEIXIN_IMAGE_BYTES) continue;
+      const format = imageFormat(bytes);
+      if (!format.mimeType.startsWith("image/")) continue;
+      const dir = path.join(dataDir, "weixin-media", String(messageId).replace(/[^a-zA-Z0-9_-]/g, "_"));
+      fs.mkdirSync(dir, { recursive: true });
+      const name = `image-${index}.${format.extension}`;
+      const filePath = path.join(dir, name);
+      fs.writeFileSync(filePath, bytes);
+      output.push({ path: filePath, name, mimeType: format.mimeType, size: bytes.length });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  return output;
+}
 
 export function weixinStatePath(dataDir: string): string {
   return path.join(dataDir, "weixin-openclaw-state.json");
@@ -155,6 +240,15 @@ function deliveryClientId(deliveryId: string): string {
   return createHash("sha256").update(deliveryId).digest("hex").slice(0, 32);
 }
 
+function aesEcbPaddedSize(plaintextSize: number): number {
+  return Math.ceil((plaintextSize + 1) / 16) * 16;
+}
+
+function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
+  const cipher = createCipheriv("aes-128-ecb", key, null);
+  return Buffer.concat([cipher.update(plaintext), cipher.final()]);
+}
+
 export async function sendWeixinText(
   dataDir: string,
   sessionId: string,
@@ -182,6 +276,134 @@ export async function sendWeixinText(
   });
   if (!weixinApiSucceeded(payload)) throw new Error(`微信发送失败：${weixinApiError(payload)}`);
   return payload;
+}
+
+export async function sendWeixinFile(
+  dataDir: string,
+  sessionId: string,
+  filePath: string,
+  fileName: string,
+  deliveryId: string
+): Promise<Record<string, unknown>> {
+  return sendWeixinMedia(dataDir, sessionId, filePath, fileName, deliveryId, "file");
+}
+
+export async function sendWeixinImage(
+  dataDir: string,
+  sessionId: string,
+  filePath: string,
+  deliveryId: string
+): Promise<Record<string, unknown>> {
+  return sendWeixinMedia(dataDir, sessionId, filePath, path.basename(filePath), deliveryId, "image");
+}
+
+async function sendWeixinMedia(
+  dataDir: string,
+  sessionId: string,
+  filePath: string,
+  fileName: string,
+  deliveryId: string,
+  kind: "file" | "image"
+): Promise<Record<string, unknown>> {
+  const state = readWeixinState(dataDir);
+  if (!state.token) throw new Error("个人微信未登录，请先在 RabiRoute 扫码。 ");
+  const contextToken = state.contextTokens[sessionId];
+  if (!contextToken) throw new Error("该微信会话没有可用 context token；需要用户先发一条新消息。 ");
+  const stat = await fs.promises.stat(filePath);
+  if (!stat.isFile()) throw new Error("个人微信待发送路径不是普通文件。 ");
+
+  const plaintext = await fs.promises.readFile(filePath);
+  const aesKey = randomBytes(16);
+  const fileKey = randomBytes(16).toString("hex");
+  const rawMd5 = createHash("md5").update(plaintext).digest("hex");
+  const ciphertext = encryptAesEcb(plaintext, aesKey);
+  const upload = await requestJson(state, "POST", "ilink/bot/getuploadurl", {
+    tokenRequired: true,
+    timeoutMs: 15000,
+    payload: {
+      filekey: fileKey,
+      media_type: kind === "image" ? 1 : 3,
+      to_user_id: sessionId,
+      rawsize: plaintext.length,
+      rawfilemd5: rawMd5,
+      filesize: aesEcbPaddedSize(plaintext.length),
+      no_need_thumb: true,
+      aeskey: aesKey.toString("hex"),
+      base_info: { channel_version: "rabiroute" }
+    }
+  });
+  if (!weixinApiSucceeded(upload)) throw new Error(`微信文件上传授权失败：${weixinApiError(upload)}`);
+  const uploadFullUrl = String(upload.upload_full_url || "").trim();
+  const uploadParam = String(upload.upload_param || "").trim();
+  if (!uploadFullUrl && !uploadParam) throw new Error("微信文件上传授权没有返回上传地址。 ");
+  const uploadUrl = uploadFullUrl || `${DEFAULT_WEIXIN_CDN_BASE_URL}/upload?encrypted_query_param=${encodeURIComponent(uploadParam)}&filekey=${encodeURIComponent(fileKey)}`;
+
+  let encryptedQueryParam = "";
+  let lastUploadError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: new Uint8Array(ciphertext)
+      });
+      if (!response.ok) {
+        const detail = response.headers.get("x-error-message") || await response.text();
+        throw new Error(`微信 CDN 上传失败：HTTP ${response.status}${detail ? ` ${detail}` : ""}`);
+      }
+      encryptedQueryParam = String(response.headers.get("x-encrypted-param") || "").trim();
+      if (!encryptedQueryParam) throw new Error("微信 CDN 上传响应缺少文件引用。 ");
+      break;
+    } catch (error) {
+      lastUploadError = error;
+      if (attempt === 3) throw error;
+    }
+  }
+  if (!encryptedQueryParam) {
+    throw lastUploadError instanceof Error ? lastUploadError : new Error("微信 CDN 文件上传失败。 ");
+  }
+
+  const payload = await requestJson(state, "POST", "ilink/bot/sendmessage", {
+    tokenRequired: true,
+    timeoutMs: 15000,
+    payload: {
+      base_info: { channel_version: "rabiroute" },
+      msg: {
+        from_user_id: "",
+        to_user_id: sessionId,
+        client_id: deliveryClientId(deliveryId),
+        message_type: 2,
+        message_state: 2,
+        context_token: contextToken,
+        item_list: [kind === "image"
+          ? {
+              type: 2,
+              image_item: {
+                media: {
+                  encrypt_query_param: encryptedQueryParam,
+                  aes_key: aesKey.toString("base64"),
+                  encrypt_type: 1
+                }
+              }
+            }
+          : {
+              type: 4,
+              file_item: {
+                media: {
+                  encrypt_query_param: encryptedQueryParam,
+                  aes_key: Buffer.from(aesKey.toString("hex")).toString("base64"),
+                  encrypt_type: 1
+                },
+                file_name: fileName,
+                len: String(plaintext.length)
+              }
+            }
+        ]
+      }
+    }
+  });
+  if (!weixinApiSucceeded(payload)) throw new Error(`微信文件发送失败：${weixinApiError(payload)}`);
+  return { ok: true, fileName, size: plaintext.length, kind };
 }
 
 export function textFromWeixinItems(items: unknown): { text: string; messageType: string; quotedText?: string; repliedMessageId?: string } {

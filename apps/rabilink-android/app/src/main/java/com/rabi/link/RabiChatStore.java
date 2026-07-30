@@ -20,7 +20,7 @@ public final class RabiChatStore {
 
     public static final class Message {
         public final String id, role, kind, text, fileName, contentType, routeProfileId, localPath;
-        public final String clientMessageId, deliveryState, failure;
+        public final String clientMessageId, deliveryState, failure, playbackState, playbackFailure;
         public final long createdAt;
         Message(JSONObject value) {
             id = value.optString("id"); role = value.optString("role");
@@ -29,6 +29,7 @@ public final class RabiChatStore {
             routeProfileId = value.optString("routeProfileId"); localPath = value.optString("localPath");
             clientMessageId = value.optString("clientMessageId", id);
             deliveryState = value.optString("deliveryState"); failure = value.optString("failure");
+            playbackState = value.optString("playbackState"); playbackFailure = value.optString("playbackFailure");
             createdAt = value.optLong("createdAt");
         }
     }
@@ -73,6 +74,7 @@ public final class RabiChatStore {
                         .put("routeProfileId", safe(routeProfileId)).put("localPath", safe(localPath))
                         .put("clientMessageId", clean(clientMessageId).isEmpty() ? stableId : clean(clientMessageId))
                         .put("deliveryState", safe(deliveryState)).put("failure", safe(failure))
+                        .put("playbackState", "").put("playbackFailure", "")
                         .put("createdAt", System.currentTimeMillis());
                 values.put(value);
                 while (values.length() > 1000) values.remove(0);
@@ -92,6 +94,26 @@ public final class RabiChatStore {
                     JSONObject value = values.getJSONObject(i);
                     if (target.equals(value.optString("clientMessageId", value.optString("id")))) {
                         value.put("deliveryState", safe(deliveryState)).put("failure", safe(failure));
+                        changed = true;
+                    }
+                }
+                if (changed) write(chatFile, values.toString());
+            } catch (Exception error) { throw new IllegalStateException(error); }
+        }
+    }
+
+    /** Keeps local-only TTS replay feedback with the message that owns the cached audio. */
+    public void updatePlayback(String messageId, String playbackState, String playbackFailure) {
+        String target = clean(messageId);
+        if (target.isEmpty()) return;
+        synchronized (LOCK) {
+            try {
+                JSONArray values = readArray(chatFile);
+                boolean changed = false;
+                for (int i = 0; i < values.length(); i++) {
+                    JSONObject value = values.getJSONObject(i);
+                    if (target.equals(value.optString("id"))) {
+                        value.put("playbackState", safe(playbackState)).put("playbackFailure", safe(playbackFailure));
                         changed = true;
                     }
                 }

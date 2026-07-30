@@ -5,6 +5,7 @@ import base64
 import binascii
 import ipaddress
 import logging
+import mimetypes
 import os
 import socket
 import tempfile
@@ -23,6 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from pydantic import BaseModel, Field
 
 from .audio import AudioTranscoder, subtitle_text
+from .audio_stream_events import AudioStreamEventStore
 from .config import Settings, load_settings
 from .contracts import SpeechSynthesisRequest, TranscriptionRequest, TranscriptionResult
 from .extensions import load_provider_extensions
@@ -114,6 +116,7 @@ class RabiLinkAudioStreamBody(BaseModel):
     stream_id: str
     name: str = "RabiLink mobile audio"
     device_kind: str = "mobile"
+    device_model: str | None = None
     source_device_id: str | None = None
     route_profile_id: str | None = None
     session_id: str | None = None
@@ -169,6 +172,7 @@ def create_app(
     transcoder = AudioTranscoder(current.server.temp_dir, current.server.ffmpeg)
     logger = logging.getLogger("rabispeech")
     event_hub = SpeechEventHub()
+    audio_stream_events = AudioStreamEventStore(current.remote_audio.settings_path.parent / "audio-stream-events")
     remote_audio = RemoteAudioHub(
         RemoteAudioServerConfig(
             enabled=current.remote_audio.enabled,
@@ -182,6 +186,7 @@ def create_app(
         local_player=PlaybackCoordinator._default_player,
         local_stopper=PlaybackCoordinator._default_stopper,
         event_sink=event_hub.publish,
+        event_store=audio_stream_events,
     )
     playback_queue = playback or PlaybackCoordinator(
         current.server.playback_dir,
@@ -198,6 +203,7 @@ def create_app(
     records = SpeechRecordStore(current.server.records_dir, speaker_profiles, event_sink=event_hub.publish)
     tts_audio_stores = TtsAudioStoreRegistry(current.server.tts_audio_retention_minutes)
     fallback_tts_audio = tts_audio_stores.get(current.server.tts_audio_dir)
+    asr_audio_store = tts_audio_stores.get(current.server.records_dir.parent / "asr-audio")
     for cache_dir in persona_cache_dirs:
         if cache_dir.is_dir():
             tts_audio_stores.get(cache_dir)
@@ -284,6 +290,55 @@ def create_app(
                 "deliveries": data.get("deliveries") if isinstance(data.get("deliveries"), list) else [],
             }
 
+    def publish_microphone_event(event_type: str, payload: object) -> None:
+        event_hub.publish(event_type, payload)
+        if event_type != "microphone_event" or not isinstance(payload, dict):
+            return
+        details = payload.get("details")
+        safe_details = details if isinstance(details, dict) else {}
+        audio_stream_events.append({
+            "time": payload.get("time"),
+            "direction": "pipeline",
+            "stage": payload.get("stage"),
+            "kind": payload.get("kind"),
+            "level": payload.get("level"),
+            "message": payload.get("message"),
+            "client_id": remote_audio.selected_client_id,
+            "source_device_id": remote_audio.selected_source_device_id,
+            "device_model": remote_audio.selected_device_model,
+            "record_id": safe_details.get("message_id"),
+            "route_id": safe_details.get("route_id"),
+            "details": safe_details,
+        })
+
+    def persist_asr_record(
+        result: TranscriptionResult,
+        *,
+        source: str,
+        audio_path: Path,
+        session_id: str | None = None,
+        route_id: str | None = None,
+        recorded_at: float | None = None,
+        record_id: str | None = None,
+        input_source: SpeechInputSource | None = None,
+    ) -> dict[str, object]:
+        retained = asr_audio_store.retain(audio_path)
+        return records.append_asr(
+            result,
+            source=source,
+            session_id=session_id,
+            route_id=route_id,
+            recorded_at=recorded_at,
+            record_id=record_id,
+            audio_file=_asr_audio_record_file(asr_audio_store.relative_path(retained)),
+            audio_expires_at=asr_audio_store.expires_at(retained),
+            source_device_id=input_source.device_id if input_source else None,
+            source_device_name=input_source.device_name if input_source else None,
+            source_device_kind=input_source.device_kind if input_source else None,
+            source_stream_id=input_source.stream_id if input_source else None,
+            message_adapter_type=input_source.message_adapter_type if input_source else None,
+        )
+
     microphone = MicrophoneService(
         state_path=current.server.temp_dir.parent / "microphone.json",
         temp_dir=current.server.temp_dir,
@@ -291,16 +346,18 @@ def create_app(
         submitter=microphone_submitter,
         playback_active=lambda: bool(playback_queue.snapshot().get("current")),
         stop_playback=lambda: playback_queue.stop(clear_pending=True),
-        record_transcription=lambda result, config, started_at: records.append_asr(
+        record_transcription=lambda result, config, started_at, audio_path, input_source: persist_asr_record(
             result,
             source="microphone",
+            audio_path=audio_path,
             session_id=config.session_id,
             route_id=config.route_id,
             recorded_at=started_at,
             record_id=result.record_id,
+            input_source=input_source,
         ),
         remote_audio=remote_audio,
-        event_sink=event_hub.publish,
+        event_sink=publish_microphone_event,
     )
     remote_audio.set_feed(microphone.feed_remote)
     virtual_audio_lock = asyncio.Lock()
@@ -398,7 +455,16 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
         nonlocal tts_cleanup_closed
-        await providers.warmup()
+        async def warmup_providers() -> None:
+            try:
+                await providers.warmup()
+            except Exception:
+                logger.exception("RabiSpeech provider warmup failed; providers remain available for a later request.")
+
+        provider_warmup_task = asyncio.create_task(
+            warmup_providers(),
+            name="rabispeech-provider-warmup",
+        )
         await remote_audio.start()
         mixer_keepalive.start()
         await microphone.restore()
@@ -412,6 +478,10 @@ def create_app(
             cancel_tts_cleanup_deadline()
             if tts_cleanup_task is not None:
                 await tts_cleanup_task
+            if not provider_warmup_task.done():
+                provider_warmup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await provider_warmup_task
             await microphone.stop(persist=False)
             await remote_audio.stop()
             mixer_keepalive.stop()
@@ -475,6 +545,25 @@ def create_app(
         _require_loopback(request)
         return remote_audio.snapshot()
 
+    @api.get("/v1/audio-streams/events")
+    async def audio_stream_event_history(
+        request: Request,
+        limit: int = 200,
+        client_id: str | None = None,
+        source_device_id: str | None = None,
+        before_sequence: int | None = None,
+    ) -> dict[str, object]:
+        _require_loopback(request)
+        return {
+            "ok": True,
+            "events": remote_audio.list_events(
+                limit=limit,
+                client_id=client_id,
+                source_device_id=source_device_id,
+                before_sequence=before_sequence,
+            ),
+        }
+
     @api.post("/v1/audio-streams/token")
     async def audio_stream_token(request: Request) -> dict[str, object]:
         _require_loopback(request)
@@ -508,6 +597,7 @@ def create_app(
                     client_id=body.stream_id,
                     name=body.name,
                     kind=body.device_kind,
+                    device_model=body.device_model or "",
                     source_device_id=body.source_device_id or body.session_id or body.stream_id,
                     message_adapter_type="rabilink",
                     route_profile_id=body.route_profile_id or "",
@@ -584,6 +674,8 @@ def create_app(
         route_id: str | None = None,
         since: float | None = None,
         until: float | None = None,
+        source_device_id: str | None = None,
+        before: float | None = None,
     ) -> dict[str, object]:
         return {
             "object": "list",
@@ -594,8 +686,33 @@ def create_app(
                 route_id=route_id,
                 since=since,
                 until=until,
+                source_device_id=source_device_id,
+                before=before,
             ),
         }
+
+    @api.get("/v1/records/{record_id}/audio")
+    async def speech_record_audio(record_id: str, request: Request) -> FileResponse:
+        _require_loopback(request)
+        record = records.read(record_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Speech record was not found.")
+        if record.get("kind") != "asr" or not record.get("audio_file"):
+            raise HTTPException(status_code=404, detail="This speech record has no retained source audio.")
+        expires_at = float(record.get("audio_expires_at") or 0)
+        if expires_at and time.time() >= expires_at:
+            raise HTTPException(status_code=410, detail="The retained source audio has expired.")
+        filename = Path(str(record["audio_file"])).name
+        try:
+            source_audio = asr_audio_store.resolve(asr_audio_store.root / filename)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=410, detail="The retained source audio is no longer available.")
+        return FileResponse(
+            source_audio,
+            media_type=_audio_media_type(source_audio),
+            filename=source_audio.name,
+            headers={"Cache-Control": "private, no-store"},
+        )
 
     @api.get("/v1/speaker-profiles")
     async def speaker_profile_list(request: Request, session_id: str | None = None) -> dict[str, object]:
@@ -883,7 +1000,14 @@ def create_app(
             record_id=record_id,
         )
         try:
-            records.append_asr(result, source="api", session_id=session_id, route_id=route_id, record_id=record_id)
+            persist_asr_record(
+                result,
+                source="api",
+                audio_path=audio_path,
+                session_id=session_id,
+                route_id=route_id,
+                record_id=record_id,
+            )
         except Exception:
             logger.exception("ASR record persistence failed")
         return _transcription_response(result, response_format)
@@ -922,9 +1046,10 @@ def create_app(
             record_id=record_id,
         )
         try:
-            records.append_asr(
+            persist_asr_record(
                 result,
                 source="dashscope-compatible-api",
+                audio_path=audio_path,
                 session_id=session_id,
                 route_id=str(body.parameters.get("route_id") or "") or None,
                 record_id=record_id,
@@ -993,6 +1118,14 @@ def _tts_audio_record_file(persona_role_dir: Path | None, cache_relative_path: s
         else ("output", "tts-audio")
     )
     return (Path(*prefix) / cache_relative_path).as_posix()
+
+def _asr_audio_record_file(cache_relative_path: str) -> str:
+    return (Path("output") / "asr-audio" / cache_relative_path).as_posix()
+
+
+def _audio_media_type(path: Path) -> str:
+    guessed, _encoding = mimetypes.guess_type(path.name)
+    return guessed if guessed and guessed.startswith("audio/") else "application/octet-stream"
 
 
 def _require_loopback(request: Request) -> None:

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { sendGroupMessage, sendPrivateMessage, uploadGroupFile, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
-import { sendWeixinText } from "./weixinOpenClaw.js";
+import { sendWeixinFile, sendWeixinImage, sendWeixinText } from "./weixinOpenClaw.js";
 import {
   appendRolePanelTimelineMessage,
   createRolePanelMessageId,
@@ -1316,8 +1316,8 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
       return result;
     }
-    if (content.kind !== "text" || !policy.supportedOutputs.includes("text")) {
-      const result: AgentReplyResult = { ...draft("The experimental personal Weixin adapter supports text replies only.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+    if (!policy.supportedOutputs.includes(content.kind) || (content.kind !== "text" && content.kind !== "file" && content.kind !== "image")) {
+      const result: AgentReplyResult = { ...draft("The personal Weixin route policy does not allow this payload type.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
       appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
       return result;
     }
@@ -1329,7 +1329,25 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     }
     const deliveryId = requestField(request, "deliveryId") || randomUUID();
     try {
-      const sent = await sendWeixinText(dataDirsForRoute(options, route)[0], sessionId, text, deliveryId);
+      const filePath = content.file
+        ? validatedOutboundFilePath(options.rootDir, content.file, policy.allowedFileRoots)
+        : undefined;
+      const sent = content.kind === "image" && filePath
+        ? await sendWeixinImage(
+            dataDirsForRoute(options, route)[0],
+            sessionId,
+            filePath,
+            deliveryId
+          )
+        : content.kind === "file" && filePath
+          ? await sendWeixinFile(
+            dataDirsForRoute(options, route)[0],
+            sessionId,
+            filePath,
+            content.fileName || path.basename(filePath),
+            deliveryId
+          )
+          : await sendWeixinText(dataDirsForRoute(options, route)[0], sessionId, text, deliveryId);
       const result: AgentReplyResult = {
         ok: true,
         status: "sent",
@@ -1340,7 +1358,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         userId: sessionId,
         sentMessageId: deliveryId
       };
-      appendOutboxLog(options, route, "info", "weixin_reply_sent", "Personal Weixin text reply sent.", withConversation({ ...result, sessionId, deliveryId, sent }));
+      appendOutboxLog(options, route, "info", "weixin_reply_sent", `Personal Weixin ${content.kind} reply sent.`, withConversation({ ...result, sessionId, deliveryId, sent }));
       return result;
     } catch (error) {
       const result: AgentReplyResult = {

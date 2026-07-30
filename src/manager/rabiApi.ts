@@ -157,8 +157,51 @@ function routeSummary(runtime: GatewayRuntime, runtimeStatus: Record<string, unk
   };
 }
 
-function localRoutes(ctx: RabiApiContext): Record<string, unknown> {
+function personaDisplayName(rolesRoot: string, roleId: string): string {
+  if (roleId === "YeYu") return "夜雨";
+  const personaPath = path.join(rolesRoot, roleId, "persona.md");
+  try {
+    const heading = fs.readFileSync(personaPath, "utf8").match(/^#\s+(.+)$/m)?.[1]?.trim();
+    if (heading) return heading;
+  } catch { /* A role without a persona document still has a useful stable id. */ }
+  return roleId;
+}
+
+function localRoutes(ctx: RabiApiContext, includeProfiles = false): Record<string, unknown> {
   const routes = [...ctx.runtimes()].map((runtime) => routeSummary(runtime, ctx.runtimeStatus(runtime)));
+  if (includeProfiles) {
+    const boundRoleIds = new Set(routes.map((route) => String(route.agentRoleId || "").trim()).filter(Boolean));
+    const rolesRoots = new Set<string>([path.join(ctx.rootDir, "data", "roles")]);
+    for (const gateway of ctx.readConfig().gateways) {
+      const configuredRoot = String(gateway.rolesDir || "").trim();
+      if (configuredRoot) rolesRoots.add(configuredRoot);
+    }
+    for (const rolesRoot of rolesRoots) {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(rolesRoot, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const item of entries) {
+        if (!item.isDirectory() || boundRoleIds.has(item.name)) continue;
+        boundRoleIds.add(item.name);
+        routes.push({
+          id: `role:${item.name}`,
+          name: personaDisplayName(rolesRoot, item.name),
+          configName: "",
+          routeName: "",
+          enabled: false,
+          running: false,
+          agentAdapters: [],
+          messageAdapters: [],
+          agentRoleId: item.name,
+          isPersonaOnly: true,
+          runtimeStatus: {}
+        });
+      }
+    }
+  }
   return { code: 0, data: { routes } };
 }
 
@@ -421,13 +464,13 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
 
   if (request.method === "GET" && !routeId && !action) {
     if (isSelfGuid(ctx, guid)) {
-      jsonResponse(response, 200, localRoutes(ctx));
+      jsonResponse(response, 200, localRoutes(ctx, requestUrl.searchParams.get("includeProfiles") === "true"));
       return true;
     }
     void findInstance(ctx, request, requestUrl, guid)
       .then((instance) => {
         if (!instance) return jsonResponse(response, 404, { code: -1, message: `RabiRoute instance not found: ${guid}` });
-        return proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes`, { method: "GET" })
+        return proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes${requestUrl.search}`, { method: "GET" })
           .then((result) => jsonResponse(response, result.status, result.body));
       })
       .catch((error) => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));

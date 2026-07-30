@@ -54,7 +54,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 智能手表 / 手环健康消息端 | 实验支持 | `wearable.health` 结构化观测进入按角色分日的健康时间线；Manager 可查询当前状态、历史和摘要，阈值/冷却命中后以 `wearable_health_alert` 投递 Agent。Android 可选 Health Connect 或 PC ADB Companion；Health Connect 优先事件触发，小米 ADB Provider 因没有可靠变更通知，在用户显式启用 Companion 后保留分钟级低频轮询。小米真机已闭环心率、睡眠会话、阶段、睡/醒状态、去重和查询；无需 ADB 的 MiWear SPP 直连仍未作为默认采集器。 |
 | 通用 Webhook | 实验支持 | 接收没有专用适配器的外部 POST；已有命名平台应使用自己的适配器，以保留日志和回传语义。 |
 | 企业微信 / WeCom | 实验支持 | 使用 `@wecom/aibot-node-sdk` 的智能机器人 WebSocket 长连接，支持群消息进入和 Outbox 回发；需要真实 Bot ID/Secret 验证。 |
-| 个人微信 / Weixin | 实验原型 | 通过 OpenClaw iLink API 扫码并长轮询个人微信消息；WebGUI 可显示二维码与登录状态，文本可进入 Agent 并按来源会话回发，媒体只记录。账号退出/切换等完整生命周期、长期在线、真实账号风险和稳定性验收仍未完成。 |
+| 个人微信 / Weixin | 实验原型 | 通过 OpenClaw iLink API 扫码并长轮询个人微信消息；WebGUI 可显示二维码与登录状态，文本可进入 Agent，并可按来源会话回发文本或受控本地文件；入站媒体只记录。账号退出/切换等完整生命周期、长期在线、真实账号风险和稳定性验收仍未完成。 |
 
 `disabled` 只是兼容配置值，不是一个消息入口。
 
@@ -92,7 +92,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | Agent 本地会话 | 默认 legacy pipeline 使用 `outputAdapter=agent`；没有明确外部目标时，回复保留在 Agent 会话，不创建草稿。 |
 | QQ / NapCat | 支持来源回复和明确群/私聊目标；支持 text/image/voice/file；群文件必须通过 `allowedFileRoots`，使用 `upload_group_file`；可生成真实引用回复段。 |
 | WeCom | 支持来源群聊回复和明确 chat/group 目标；使用 SDK 发送，受 adapter policy 限制。 |
-| 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话文本；不能主动向任意联系人发消息，媒体发送未实现。 |
+| 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话；可发送文本，或发送消息端策略允许且位于 `allowedFileRoots` 内的本地文件。不能主动向任意联系人发消息；图片、语音和视频的专用发送类型未实现。 |
 | FenneNote | 已退役；只为旧 Route 保留 reply/playback 兼容，不作为新输出方案。 |
 | RabiLink | 受 route policy 控制，回复或主动文本进入连续 Relay 消息流；主动下行不需要伪造一个来源任务。 |
 | 角色面板 | 直接追加角色 timeline，可带附件描述。 |

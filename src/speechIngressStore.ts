@@ -165,13 +165,29 @@ export class SpeechIngressStore {
   }
 
   list(limit = 200): SpeechIngressRecord[] {
+    return this.query({ limit });
+  }
+
+  query(options: {
+    limit?: number;
+    sourceDeviceId?: string;
+    messageAdapterType?: "speech" | "rabilink";
+    before?: number;
+  } = {}): SpeechIngressRecord[] {
     if (!fs.existsSync(this.root)) return [];
-    const maximum = Math.max(1, Math.min(1_000, Math.floor(limit)));
+    const maximum = Math.max(1, Math.min(1_000, Math.floor(options.limit ?? 200)));
+    const sourceDeviceId = oneLine(options.sourceDeviceId, 200);
+    const before = optionalTimestamp(options.before);
     return fs.readdirSync(this.root, { withFileTypes: true })
       .filter(item => item.isFile() && /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(item.name))
       .map(item => path.join(this.root, item.name))
       .sort((left, right) => right.localeCompare(left))
       .flatMap(filePath => parseJsonl(filePath).reverse())
+      .filter(record => (
+        (!sourceDeviceId || record.sourceDeviceId === sourceDeviceId)
+        && (!options.messageAdapterType || record.messageAdapterType === options.messageAdapterType)
+        && (before == null || record.time < before)
+      ))
       .slice(0, maximum);
   }
 

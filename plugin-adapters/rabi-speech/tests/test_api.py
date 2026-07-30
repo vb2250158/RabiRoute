@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import os
 import time
@@ -62,6 +63,16 @@ class FakeAsr:
 
     def capabilities(self) -> dict[str, object]:
         return {"kind": "asr", "enabled": True, "model": "test"}
+
+
+class SlowWarmupAsr(FakeAsr):
+    def __init__(self) -> None:
+        super().__init__()
+        self.warmup_started = False
+
+    async def warmup(self) -> None:
+        self.warmup_started = True
+        await asyncio.Event().wait()
 
 
 def wav_file(path: Path) -> Path:
@@ -149,12 +160,48 @@ def test_loopback_microphone_status_and_contract_are_discoverable(tmp_path: Path
     assert invalid.json()["config"]["barge_in_mode"] == "off"
 
 
+def test_health_is_available_while_provider_warmup_continues(tmp_path: Path) -> None:
+    settings = load_settings(Path(__file__).parents[1] / "config.example.json")
+    settings = replace(
+        settings,
+        speaker_recognition=replace(settings.speaker_recognition, enabled=False),
+        server=replace(
+            settings.server,
+            temp_dir=tmp_path / "temp",
+            playback_dir=tmp_path / "playback",
+            records_dir=tmp_path / "records",
+            tts_audio_dir=tmp_path / "tts-audio",
+            ffmpeg="",
+        ),
+        remote_audio=replace(settings.remote_audio, settings_path=tmp_path / "audio-stream-settings.json"),
+    )
+    tts = FakeTts(wav_file(tmp_path / "speech.wav"))
+    asr = SlowWarmupAsr()
+    registry = ProviderRegistry(tts.provider_id, asr.provider_id)
+    registry.register_tts(tts)
+    registry.register_asr(asr)
+    client = TestClient(create_app(
+        settings,
+        registry,
+        audio_session_keepalive=WindowsAudioSessionKeepalive(enabled=False),
+        roles_root=tmp_path / "roles",
+    ))
+
+    with client:
+        assert client.get("/health").status_code == 200
+        deadline = time.time() + 1
+        while not asr.warmup_started and time.time() < deadline:
+            time.sleep(0.01)
+        assert asr.warmup_started
+
+
 def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_path: Path) -> None:
     client, _tts, _asr = fixture(tmp_path)
     started = client.post("/v1/audio-streams/rabilink/start", json={
         "stream_id": "phone-one-audio",
-        "name": "Phone One",
+        "name": "Rabi Android · HBP-AL00 · abc123",
         "device_kind": "mobile",
+        "device_model": "HBP-AL00",
         "source_device_id": "phone-one-stable",
         "message_adapter_type": "speech",
         "route_profile_id": "mobile-main",
@@ -164,8 +211,12 @@ def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_pa
     assert started.json()["source"] == "remote"
     selected = started.json()["clients"][0]
     assert selected["id"] == "phone-one-audio"
+    assert selected["name"] == "Rabi Android · HBP-AL00 · abc123"
+    assert selected["device_model"] == "HBP-AL00"
     assert selected["source_device_id"] == "phone-one-stable"
     assert selected["message_adapter_type"] == "rabilink"
+    assert selected["received_bytes"] == 0
+    assert any(event["kind"] == "client_connected" for event in started.json()["events"])
     chunk = client.post(
         "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1",
         content=b"\x00\x00" * 1600,
@@ -174,6 +225,10 @@ def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_pa
     assert chunk.status_code == 200
     assert chunk.json()["accepted_bytes"] == 3200
     assert chunk.json()["sequence"] == 1
+    stream_after_chunk = client.get("/v1/audio-streams").json()
+    assert stream_after_chunk["events"][0]["kind"] == "pcm_received"
+    assert stream_after_chunk["events"][0]["direction"] == "inbound"
+    assert stream_after_chunk["events"][0]["total_bytes"] == 3200
     duplicate = client.post(
         "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1",
         content=b"\x00\x00" * 1600,
@@ -193,6 +248,21 @@ def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_pa
     stopped_state = client.get("/v1/audio-streams").json()
     assert stopped_state["selected_client_id"] == "phone-one-audio"
     assert stopped_state["selected_online"] is False
+    history = client.get(
+        "/v1/audio-streams/events",
+        params={"source_device_id": "phone-one-stable", "limit": 20},
+    )
+    assert history.status_code == 200
+    history_kinds = [event["kind"] for event in history.json()["events"]]
+    assert "client_disconnected" in history_kinds
+    assert "pcm_received" in history_kinds
+    reopened, _tts_again, _asr_again = fixture(tmp_path)
+    persisted = reopened.get(
+        "/v1/audio-streams/events",
+        params={"source_device_id": "phone-one-stable", "limit": 20},
+    ).json()["events"]
+    assert any(event["kind"] == "client_connected" for event in persisted)
+    assert any(event["kind"] == "pcm_received" for event in persisted)
 
 
 def test_rabilink_audio_stream_expiry_is_rearmed_by_pcm_events(tmp_path: Path) -> None:
@@ -318,11 +388,18 @@ def test_tts_and_asr_records_are_written_by_date_and_queryable(tmp_path: Path) -
     records = client.get("/v1/records", params={"session_id": "meeting-one"}).json()["data"]
     assert {item["kind"] for item in records} == {"tts", "asr"}
     tts_record = next(item for item in records if item["kind"] == "tts")
+    asr_record = next(item for item in records if item["kind"] == "asr")
     assert tts_record["audio_file"].endswith(".wav")
     assert tts_record["audio_file"].startswith("output/tts-audio/")
     assert tts_record["audio_expires_at"] > tts_record["time"]
     assert not Path(tts_record["audio_file"]).is_absolute()
     assert (tmp_path / "tts-audio" / Path(tts_record["audio_file"]).name).is_file()
+    assert asr_record["audio_file"].startswith("output/asr-audio/")
+    assert asr_record["audio_expires_at"] > asr_record["time"]
+    original = client.get(f"/v1/records/{asr_record['id']}/audio")
+    assert original.status_code == 200
+    assert original.headers["content-type"].startswith("audio/")
+    assert original.content.startswith(b"RIFF")
     assert (tmp_path / "records" / f"{datetime.now():%Y-%m-%d}.jsonl").is_file()
 
 
@@ -356,9 +433,6 @@ def test_deadline_tts_cleanup_covers_registered_caches_and_stops_with_lifespan(t
         persona_cache.mkdir(parents=True)
         (persona_cache / "persona-near-expiry.wav").write_bytes(b"RIFF-persona")
 
-    near_expiry = time.time() - 58.0
-    os.utime(fallback, (near_expiry, near_expiry))
-
     client, _tts, _asr = fixture(
         tmp_path,
         setup,
@@ -366,6 +440,11 @@ def test_deadline_tts_cleanup_covers_registered_caches_and_stops_with_lifespan(t
         tts_audio_retention_minutes=1.0,
     )
     persona = tmp_path / "roles" / "XinghaiBuilder" / "voice" / "cache" / "tts-audio" / "persona-near-expiry.wav"
+    # Arm both registered stores only after create_app's eager cleanup has
+    # completed. Source trees on a NAS can make app construction exceed the
+    # two-second expiry margin used by this deadline-focused test.
+    near_expiry = time.time() - 58.0
+    os.utime(fallback, (near_expiry, near_expiry))
     os.utime(persona, (near_expiry, near_expiry))
     with client:
         cached = [persona, fallback]

@@ -117,7 +117,7 @@ Windows 路径在 WebUI 里写 `C:\Path\To\Project` 或 `C:/Path/To/Project`；�
 - `remoteAgent`：Manager 级实验入口。RabiGUI 扫描并连接远端 bridge，支持密码挑战、任务、事件和文件；Gateway 子进程只显示状态占位。
 - `speech`：RabiPC / RabiSpeech 语音消息端。总开关同时控制当前 Route 的常驻录音；热投递开时每段 ASR 直接投递，关时仅命中人格关键词投递。无论是否唤醒，ASR 都保留；成功 TTS 回传与同 `sessionId` ASR 共用双向上下文。
 - `wecom`：通过企业微信智能机器人 WebSocket 长连接接入企业微信群聊，写入 `wecom-messages.jsonl`，并允许 Agent 通过 RabiRoute outbox 回发到企业微信。它的群聊模板变量尽量对齐 NapCat 的 `groupId`、`userId`、`sender`、`message`、`messageId`，额外补充 `wecomReqId`、`wecomConversationId`、`wecomChatId` 等字段；详见 [企业微信接入](wecom-integration.md)。
-- `weixin`：开发者级实验原型。启动后通过 OpenClaw/iLink 获取二维码并长轮询个人微信消息，WebGUI 可显示二维码和登录状态，消息写入 `weixin-messages.jsonl`；文本进入 `weixin_message`，图片、语音、文件和视频首版只记录。Outbox 只能回复已提供 context token 的来源会话文本；账号退出/切换等完整生命周期和真实账号风险仍未验收，不应视为已验证消息端。
+- `weixin`：开发者级实验原型。启动后通过 OpenClaw/iLink 获取二维码并长轮询个人微信消息，WebGUI 可显示二维码和登录状态，消息写入 `weixin-messages.jsonl`；文本进入 `weixin_message`，入站图片、语音、文件和视频目前只记录。Outbox 可向已提供 context token 的来源会话回复文本，或发送 `allowedFileRoots` 内经过真实路径校验的本地文件；文件按 iLink 协议经 AES-128-ECB 加密后上传微信 CDN，再以文件项投递。不能主动选择任意联系人，账号退出/切换等完整生命周期和真实账号风险仍未验收，不应视为已验证消息端。
 旧配置仍然兼容：`messageInputsDisabled=true` 或 `messageAdapters=["disabled"]` 会临时关闭整个路由的消息进入；`messageAdaptersDisabled` 会被视为对应 adapter 的 `inputEnabled=false`。新配置建议优先使用 `messageAdapterPolicies` 表达“接收”和“发送”两个管道级开关。
 
 NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。路由页“打开 NapCat”会在用户明确点击后自动启动绑定实例、使用已有 quick login 并修复 OneBot 连接；需要腾讯安全确认时只打开正确页面交给用户。详见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。

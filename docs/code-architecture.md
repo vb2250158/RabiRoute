@@ -105,7 +105,7 @@ skills/
 
 - `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别；引用消息未落盘时，通过 `napcatReplyMessages.ts` 调用 `get_msg` 递归补齐并缓存，查询失败不阻塞当前路由。
 - `wecomAdapter.ts`：接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。当前成熟度仍是 experimental，企业微信群聊字段尽量对齐 NapCat，专用字段只作为补充。
-- `weixinAdapter.ts` + `weixinOpenClaw.ts`：个人微信实验原型，负责 iLink 二维码登录、长轮询、context token 持久化、文本投递和来源会话文本回复。运行 token 只写 `data/`；媒体首版只记录，尚未完成真实账号长期验收。
+- `weixinAdapter.ts` + `weixinOpenClaw.ts`：个人微信实验原型，负责 iLink 二维码登录、长轮询、context token 持久化、文本投递，以及来源会话的文本或受控本地文件回复。文件先经过 Outbox 的 `allowedFileRoots` 真实路径校验，再按 iLink 协议加密上传微信 CDN。运行 token 只写 `data/`；入站媒体仍只记录，尚未完成真实账号长期验收。
 - `webhookAdapter.ts`：接通用 Webhook、小爱及旧 FenneNote 兼容回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。新本机语音入口使用 RabiSpeech。
 - `rabilinkAdapter.ts` / `rabilinkRelayWorker.ts`：本地兼容入口与 Relay worker；observation 可先写统一会话账本，主动下行走独立消息流。
 - `heartbeatAdapter.ts`：定时触发心跳消息。
@@ -300,7 +300,7 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 - 允许时调用对应消息端发送封装，例如 NapCat HTTP 或企业微信智能机器人 SDK。
 - 不允许时返回 `blocked` 并附带 draft 数据；发送失败时返回 `failed` 并保留 draft 数据；未选择外部输出时可以返回 `draft` 或把结果保留在 Agent 会话。
 
-当前 Outbox 已是 QQ、WeCom、个人微信来源会话文本、RabiLink 和角色面板的真实回传层，并为旧 FenneNote Route 保留兼容，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
+当前 Outbox 已是 QQ、WeCom、个人微信来源会话文本/受控文件、RabiLink 和角色面板的真实回传层，并为旧 FenneNote Route 保留兼容，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
 
 ```text
 Agent output

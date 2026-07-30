@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
+  type SpeechAudioStreamEvent,
   type SpeechAudioStreamSelectionCommand,
   type SpeechAudioStreamStatus,
   type SpeechAudioInput,
@@ -312,6 +313,8 @@ function normalizeAudioStreamStatus(value: Record<string, unknown>): SpeechAudio
         id: stringValue(client.id),
         name: stringValue(client.name || client.id),
         kind: optionalString(client.kind),
+        deviceModel: optionalString(client.device_model ?? client.deviceModel),
+        sourceDeviceId: optionalString(client.source_device_id ?? client.sourceDeviceId),
         messageAdapterType,
         sampleRate: numberValue(client.sample_rate ?? client.sampleRate, 16_000),
         chunkMs: numberValue(client.chunk_ms ?? client.chunkMs, 100),
@@ -319,10 +322,40 @@ function normalizeAudioStreamStatus(value: Record<string, unknown>): SpeechAudio
         lastAudioAt: client.last_audio_at == null && client.lastAudioAt == null
           ? null
           : numberValue(client.last_audio_at ?? client.lastAudioAt),
+        lastSequence: optionalFiniteNumber(client.last_sequence ?? client.lastSequence),
+        receivedBytes: numberValue(client.received_bytes ?? client.receivedBytes),
+        acceptedChunks: numberValue(client.accepted_chunks ?? client.acceptedChunks),
         selected: booleanValue(client.selected),
         online: booleanValue(client.online, true)
       };
-    }).filter(client => Boolean(client.id))
+    }).filter(client => Boolean(client.id)),
+    events: rows(value.events).map(event => ({
+      id: optionalString(event.id),
+      sequence: numberValue(event.sequence),
+      time: numberValue(event.time),
+      direction: (event.direction === "inbound"
+        ? "inbound"
+        : event.direction === "outbound"
+          ? "outbound"
+          : event.direction === "receipt"
+            ? "receipt"
+            : event.direction === "pipeline"
+              ? "pipeline"
+            : "system") as SpeechAudioStreamEvent["direction"],
+      stage: optionalString(event.stage),
+      kind: stringValue(event.kind, "unknown"),
+      level: optionalString(event.level),
+      message: stringValue(event.message),
+      clientId: optionalString(event.client_id ?? event.clientId),
+      sourceDeviceId: optionalString(event.source_device_id ?? event.sourceDeviceId),
+      deviceModel: optionalString(event.device_model ?? event.deviceModel),
+      bytes: numberValue(event.bytes),
+      totalBytes: numberValue(event.total_bytes ?? event.totalBytes),
+      streamSequence: optionalFiniteNumber(event.stream_sequence ?? event.streamSequence),
+      recordId: optionalString(event.record_id ?? event.recordId),
+      routeId: optionalString(event.route_id ?? event.routeId),
+      details: normalizeEventDetails(event.details)
+    })).filter(event => event.sequence > 0)
   };
 }
 
@@ -460,6 +493,15 @@ function normalizeSpeechRecord(value: Record<string, unknown>): SpeechRecord {
     text: stringValue(value.text),
     language: optionalString(value.language),
     duration: value.duration == null ? undefined : numberValue(value.duration),
+    sourceDeviceId: optionalString(value.source_device_id ?? value.sourceDeviceId),
+    sourceDeviceName: optionalString(value.source_device_name ?? value.sourceDeviceName),
+    sourceDeviceKind: optionalString(value.source_device_kind ?? value.sourceDeviceKind),
+    sourceStreamId: optionalString(value.source_stream_id ?? value.sourceStreamId),
+    messageAdapterType: value.message_adapter_type === "rabilink" || value.messageAdapterType === "rabilink"
+      ? "rabilink"
+      : value.message_adapter_type === "speech" || value.messageAdapterType === "speech"
+        ? "speech"
+        : undefined,
     segments: rows(value.segments).map(normalizeTranscriptSegment),
     playbackJobId: optionalString(value.playback_job_id ?? value.playbackJobId),
     playbackStatus: optionalString(value.playback_status ?? value.playbackStatus),
@@ -672,6 +714,26 @@ export class ManagerSpeechControl {
     return normalizeAudioStreamStatus(raw);
   }
 
+  async audioStreamEvents(query: {
+    limit?: number;
+    clientId?: string;
+    sourceDeviceId?: string;
+    beforeSequence?: number;
+  } = {}): Promise<SpeechAudioStreamEvent[]> {
+    const search = new URLSearchParams();
+    search.set("limit", String(Math.min(1_000, Math.max(1, query.limit ?? 200))));
+    if (query.clientId) search.set("client_id", query.clientId);
+    if (query.sourceDeviceId) search.set("source_device_id", query.sourceDeviceId);
+    if (query.beforeSequence != null) search.set("before_sequence", String(query.beforeSequence));
+    const raw = assertSuccess(await this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      `/v1/audio-streams/events?${search.toString()}`,
+      {},
+      10_000
+    ));
+    return normalizeAudioStreamStatus({ events: raw.events }).events;
+  }
+
   async audioStreamToken(): Promise<string> {
     const raw = assertSuccess(await this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
@@ -728,6 +790,8 @@ export class ManagerSpeechControl {
     routeId?: string;
     since?: number;
     until?: number;
+    sourceDeviceId?: string;
+    before?: number;
   } = {}): Promise<SpeechRecord[]> {
     const search = new URLSearchParams();
     search.set("limit", String(Math.min(1000, Math.max(1, query.limit ?? 200))));
@@ -736,6 +800,8 @@ export class ManagerSpeechControl {
     if (query.routeId) search.set("route_id", query.routeId);
     if (query.since != null) search.set("since", String(query.since));
     if (query.until != null) search.set("until", String(query.until));
+    if (query.sourceDeviceId) search.set("source_device_id", query.sourceDeviceId);
+    if (query.before != null) search.set("before", String(query.before));
     const raw = assertSuccess(await this.localSpeech.requestJson(
       this.dependencies.serviceUrl(),
       `/v1/records?${search.toString()}`,
@@ -743,6 +809,19 @@ export class ManagerSpeechControl {
       10_000
     ));
     return rows(raw.data).map(normalizeSpeechRecord).filter(item => Boolean(item.id));
+  }
+
+  recordAudio(recordId: string): Promise<LocalSpeechResponse> {
+    const normalized = stringValue(recordId).trim();
+    if (!normalized || normalized.length > 200) {
+      throw new SpeechControlError("A valid speech record id is required.", 400);
+    }
+    return this.localSpeech.requestBinary(
+      this.dependencies.serviceUrl(),
+      `/v1/records/${encodeURIComponent(normalized)}/audio`,
+      {},
+      30_000
+    );
   }
 
   async speakerRegistry(sessionId?: string): Promise<SpeechSpeakerRegistry> {

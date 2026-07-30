@@ -218,13 +218,38 @@ export type SpeechAudioStreamClient = {
   id: string;
   name: string;
   kind?: string;
+  deviceModel?: string;
+  sourceDeviceId?: string;
   messageAdapterType?: "speech" | "rabilink";
   sampleRate: number;
   chunkMs: number;
   connectedAt: number;
   lastAudioAt?: number | null;
+  lastSequence?: number;
+  receivedBytes: number;
+  acceptedChunks: number;
   selected: boolean;
   online: boolean;
+};
+
+export type SpeechAudioStreamEvent = {
+  id?: string;
+  sequence: number;
+  time: number;
+  direction: "inbound" | "outbound" | "receipt" | "system" | "pipeline";
+  stage?: string;
+  kind: string;
+  level?: "info" | "warning" | "error" | string;
+  message: string;
+  clientId?: string;
+  sourceDeviceId?: string;
+  deviceModel?: string;
+  bytes: number;
+  totalBytes: number;
+  streamSequence?: number;
+  recordId?: string;
+  routeId?: string;
+  details?: Record<string, unknown>;
 };
 
 export type SpeechAudioStreamStatus = {
@@ -236,6 +261,7 @@ export type SpeechAudioStreamStatus = {
   selectedOnline: boolean;
   captureEnabled: boolean;
   clients: SpeechAudioStreamClient[];
+  events: SpeechAudioStreamEvent[];
   checkedAt: number;
 };
 
@@ -313,6 +339,11 @@ export type SpeechRecord = {
   text: string;
   language?: string;
   duration?: number;
+  sourceDeviceId?: string;
+  sourceDeviceName?: string;
+  sourceDeviceKind?: string;
+  sourceStreamId?: string;
+  messageAdapterType?: "speech" | "rabilink";
   segments: SpeechTranscriptSegment[];
   playbackJobId?: string;
   playbackStatus?: string;
@@ -484,6 +515,22 @@ export type SpeechRouteDeliveryResult = {
   detail?: string;
 };
 
+export type SpeechRouteDeliveryHistory = {
+  schemaVersion: 1;
+  recordId: string;
+  routeId: string;
+  messageAdapterType: "speech" | "rabilink";
+  status: Extract<SpeechMessageStatus, "delivered" | "recorded">;
+  reason?: string;
+  detail?: string;
+  completedAt: string;
+};
+
+export type SpeechIngressHistoryPayload = {
+  records: SpeechIngressRecord[];
+  deliveriesByRecordId: Record<string, SpeechRouteDeliveryHistory[]>;
+};
+
 export type SpeechMessageResult = {
   routeId: string | null;
   messageId: string;
@@ -498,6 +545,7 @@ export type SpeechModelsPayload = { models: SpeechModel[] };
 export type SpeechPersonasPayload = { personas: SpeechPersona[] };
 export type SpeechAudioInputsPayload = { devices: SpeechAudioInput[] };
 export type SpeechAudioStreamsPayload = { audioStream: SpeechAudioStreamStatus };
+export type SpeechAudioStreamEventsPayload = { events: SpeechAudioStreamEvent[] };
 
 export type SpeechControlEnvelope<T> = {
   code: 0;
