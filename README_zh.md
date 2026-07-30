@@ -46,6 +46,12 @@ RabiRoute 是一个与具体 Agent 解耦的**消息网关、策略路由器和�
 
 发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。当前 Windows 包尚未做代码签名，SmartScreen 可能显示“未知发布者”；运行前请先核对 SHA-256。
 
+### Windows 远端 Agent 开箱即用包
+
+如果要把另一台 Windows x64 电脑作为无人值守远端 Agent，从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases) 下载 `RabiRoute-Remote-Agent-<版本>-windows-x64-setup.exe` 或对应便携 ZIP。发布包提供独立的 `RabiRoute-Remote-Agent.exe`，并内置 Node.js、固定版本 Codex Runtime 和全部依赖。
+
+首次启动只需选择远端项目目录，按提示完成 Codex 登录，再把自动生成的设备密码填入主控电脑 RabiGUI。bridge 仍属于实验能力，每台真实设备都需要单独完成双向任务验收。详见[远端 Agent 发布包指南](plugin-adapters/remote-agent-rabiroute/README.md)。
+
 ### 源码安装
 
 需要 Node.js 20 或更高版本，以及 npm。
@@ -188,6 +194,7 @@ Node.js manager 和 WebGUI 是跨平台基线。Qt 托盘与 Windows 启动器�
 | 运行或扩展本机 TTS / ASR | [RabiSpeech 本机 TTS / ASR 服务](docs/rabispeech-plugin.md) |
 | 从其他设备调用目标 PC 的 TTS / ASR | [远端 TTS / ASR 指南](docs/user-guide/speech-api.md) |
 | 安装会议室远程麦克风 / 喇叭 | [Rabi 语音客户端](desktop/rabi-voice-client/README.md) |
+| 安装 Windows 远端 Agent 开箱即用包 | [远端 Agent Windows 发布包](plugin-adapters/remote-agent-rabiroute/README.md) |
 
 ## 开发与贡献
 

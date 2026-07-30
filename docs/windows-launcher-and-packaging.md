@@ -233,3 +233,21 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 - 覆盖安装只更新程序文件，不覆盖本机 route、人格、日志或其他 `data/` 内容。
 - 卸载器不主动删除运行期 `data/`，避免误删用户配置；需要彻底清理时由用户确认后手工删除残留目录。
 - 当前二进制尚未代码签名，Release 说明必须提示 SmartScreen 的未知发布者警告和 SHA-256 校验方式。
+
+## Remote Agent 独立 Windows 发布包
+
+Remote Agent 是目标设备自己拥有的无人值守 Runtime，不属于完整 RabiRoute 桌面安装包，也不与主控电脑的 Codex/ChatGPT Desktop 共用 owner。独立构建入口：
+
+```powershell
+.\scripts\build-remote-agent-windows-release.ps1
+```
+
+脚本只复制 bridge 的公开运行源文件，在干净 payload 中安装生产依赖，校验并嵌入固定 Windows x64 Node.js，编译原生 `RabiRoute-Remote-Agent.exe` 启动器，再用实际 EXE 检查内置 Codex 版本并启动 bridge listener 烟测。最终生成：
+
+- `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe`
+- `RabiRoute-Remote-Agent-<version>-windows-x64-portable.zip`
+- `SHA256SUMS.txt`
+
+EXE 首次运行要求选择一个已存在的项目目录，自动生成高熵设备密码，并检查内置 Codex 登录态。私有配置只写到 `%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json`；payload、安装目录和 GitHub Release 都不包含密码、登录态、项目路径或 `.codex` 数据。默认只允许所选项目根写入，网络保持关闭。
+
+`remote-agent-v*` tag 触发 `.github/workflows/release-remote-agent-windows.yml`。工作流在干净 Windows runner 上安装 Rust 与 Inno Setup，重复 bridge 测试、Node 下载校验、脱敏检查、EXE/Codex/listener 烟测，并发布安装版、便携 ZIP 和校验清单。二进制当前同样未签名，必须保留 SmartScreen 与 SHA-256 提示。

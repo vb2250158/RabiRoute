@@ -16,6 +16,13 @@ function resolvePinnedCodexEntrypoint() {
   }
 }
 
+export function codexChildEnvironment(parentEnv = process.env) {
+  const childEnv = { ...parentEnv };
+  delete childEnv.REMOTE_AGENT_PASSWORD;
+  delete childEnv.RABIROUTE_REMOTE_AGENT_CONFIG;
+  return childEnv;
+}
+
 class CodexAppServerRpcError extends Error {
   constructor(error) {
     super(typeof error?.message === "string" ? error.message : JSON.stringify(error));
@@ -89,7 +96,7 @@ export class CodexAppServerClient {
     this.stderrLog = fs.createWriteStream(path.join(this.logDir, "codex-app-server.stderr.log"), { flags: "a" });
     const child = spawn(process.execPath, [codexEntrypoint, "app-server", "--listen", "stdio://"], {
       cwd: this.cwd,
-      env: process.env,
+      env: codexChildEnvironment(),
       shell: false,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]

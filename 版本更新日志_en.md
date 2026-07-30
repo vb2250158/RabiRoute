@@ -81,6 +81,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - The shared configuration model now backfills uncovered default whiteboard Route rules for every enabled message adapter while preserving explicit disabled rules. WebGUI adapter grouping now covers speech, RabiLink, the legacy FenneNote entry, and personal Weixin.
 - The packaged Windows tray now prefers the project-bundled portable Node runtime before environment or PATH fallbacks, preventing an older machine-wide Node installation from taking ownership.
 
+### Ready-to-run Remote Agent Windows package
+
+- Added a dedicated `RabiRoute-Remote-Agent.exe` launcher, per-user installer, and portable ZIP. The package includes verified Windows x64 Node.js, the pinned Codex Runtime, and production dependencies, so the remote PC no longer needs a Node installation, `npm install`, or manual listener ports.
+- First launch requires a real project directory, generates and persists a dedicated high-entropy device password, and checks the Codex login before starting the official login flow when needed. Private configuration is written only to `%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json`; the bridge password and private config path are removed from the child environment before Codex app-server starts, writable scope remains limited to the selected project root, and network access remains off by default.
+- Added a dedicated build script, Inno Setup spec, and `remote-agent-v*` GitHub Actions release path. A clean Windows runner repeats bridge tests, Node SHA-256 verification, payload privacy checks, and native-EXE/bundled-Codex/listener smoke tests before publishing the setup EXE, portable ZIP, and `SHA256SUMS.txt`. Maturity remains `experimental`; a green package build does not replace two-way acceptance on each real remote device.
+
 ### Faster one-click NapCat startup and fresh WebUI authentication
 
 - Route startup no longer places a full Windows process enumeration on the synchronous readiness path. An already healthy OneBot returns immediately, and a reachable WebUI no longer triggers another full QQ/OneBot timeout before it can open. In the Manager regression tests, the ready path dropped from about 4.9 seconds to 0.13 seconds, while quick login through OneBot readiness dropped from about 9.4 seconds to 1.0 second.

@@ -4,116 +4,136 @@
 </div>
 <!-- /docs-language-switch -->
 
-# Remote Agent RabiRoute Bridge
+# RabiRoute Remote Agent Bridge
 
-This folder is the standalone unattended Remote Agent bridge for RabiRoute.
+这是 RabiRoute 的独立无人值守远端 Agent bridge。远端机器不需要安装完整 RabiRoute；Windows 发布包已经内置 Node.js、固定版本的 `@openai/codex` Runtime 和全部生产依赖。
 
-The remote machine does not need the full RabiRoute project. It only needs this folder and Node.js. This bridge pins its own `@openai/codex` runtime and uses `codex app-server` over stdio JSONL.
+当前成熟度仍是 `experimental`：协议、认证、任务串行、超时、文件传输和打包烟测已有自动化覆盖，但每台真实远端设备仍需完成 Codex 登录、项目权限和双向任务验收后，才能视为该设备可用。
 
-This runtime is owned only by the unattended bridge on that remote device. It does not share a fixed port with, reconfigure, or act as a fallback for Codex/ChatGPT Desktop on the RabiRoute control machine.
+## Windows 开箱即用包
 
-## Run
+从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases) 下载：
 
-```bash
-cd remote-agent-rabiroute
-npm install
-npm start
+- `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe`：当前用户安装版，创建开始菜单入口。
+- `RabiRoute-Remote-Agent-<version>-windows-x64-portable.zip`：解压后双击 `RabiRoute-Remote-Agent.exe`。
+- `SHA256SUMS.txt`：发布资产校验值。
+
+首次启动：
+
+1. 双击 `RabiRoute-Remote-Agent.exe`。
+2. 输入远端 Agent 允许工作的项目目录。该目录会成为默认且唯一的可写根。
+3. 启动器自动生成高熵设备密码，并检查内置 Codex 的登录态；未登录时会引导执行官方登录。
+4. 保持窗口运行。在主控电脑打开 RabiGUI，启用 Remote Agent 消息端，扫描设备并输入窗口显示的密码。
+
+本机私有配置写到：
+
+```text
+%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json
 ```
 
-Then open RabiGUI on the control machine, enable the Remote Agent message adapter, scan the LAN, select the device, and enter the password.
+发布包不包含这份文件。安装升级不会覆盖它，便携包也不会把密码写回解压目录。
 
-If `REMOTE_AGENT_PASSWORD` is absent, each process start generates a new high-entropy temporary password and prints it only in the remote machine's terminal. There is no public default password.
+常用命令：
 
-For a persistent deployment, configure a password of at least 16 UTF-8 bytes:
-
-```bash
-REMOTE_AGENT_PASSWORD="replace-with-a-long-random-secret" npm start
+```powershell
+RabiRoute-Remote-Agent.exe --configure
+RabiRoute-Remote-Agent.exe --show-config
+RabiRoute-Remote-Agent.exe --print-password
+RabiRoute-Remote-Agent.exe --check
 ```
 
-The control service still listens on the LAN by default, so treat this password as a device credential. Do not reuse an account password. Protocol v3 uses a per-connection, mutually verified HMAC-SHA256 challenge: the manager proves it knows the password, then the bridge returns a role-separated server proof. The password itself is not sent over the WebSocket, and both peers reject missing or non-v3 protocol fields. HMAC authenticates the peers but does not encrypt plain `ws://` traffic; use a trusted LAN/VPN or the `wss://` option below across untrusted networks.
+当前二进制尚未代码签名，Windows SmartScreen 可能显示“未知发布者”。运行前请用 `SHA256SUMS.txt` 核对下载文件。
 
-## Ports
+## 所有权和可观察合同
 
-The bridge is zero-config for normal use.
+| 对象 | Owner | 启停与真源 | RabiRoute 能做什么 | 禁止替代 |
+| --- | --- | --- | --- | --- |
+| 远端 Host | 远端 Windows 用户 | 用户启动/关闭 EXE，终端显示状态 | 打包启动器检查配置与登录 | 主控机代替远端 Runtime |
+| Runtime | 远端 bridge 固定版本 Codex | bridge 按需启动自己的 stdio app-server | 发送精确任务、读取真实终态 | 接管主控机 Desktop |
+| Transport | bridge 与 Manager | v3 WebSocket 密码挑战 | 发现、认证、任务与事件 | 离线时换到另一台同名设备 |
+| Session | 远端 Codex Runtime | `deviceId + canonical cwd + threadName` | 同 key 串行与幂等回传 | 跨设备或跨 cwd 串会话 |
+| Tool/approval | 远端 Codex Runtime | `workspaceWrite`，审批失败关闭 | 使用远端 Runtime 实际能力 | 用 prompt 扩大权限 |
 
-- Control service starts from port `8797`.
-- LAN discovery starts from UDP port `8798`.
-- If a port is occupied, the bridge automatically tries the next available port.
-- RabiGUI scans the discovery range and uses the real advertised control port, so users do not need to type a port.
-- If the whole discovery range is occupied, the bridge still starts the control service and prints a clear warning. Free the occupied UDP ports, then scan again from RabiGUI.
+唯一真实消息路径：
 
-Useful advanced overrides:
-
-```bash
-REMOTE_AGENT_PASSWORD="replace-with-a-long-random-secret"
-REMOTE_AGENT_DEVICE_NAME="Builder Device"
-REMOTE_AGENT_DEFAULT_CWD="/path/to/project"
-REMOTE_AGENT_DEFAULT_THREAD="Remote Agent"
-REMOTE_AGENT_CONTROL_PORT=8797
-REMOTE_AGENT_DISCOVERY_PORT_START=8798
-REMOTE_AGENT_DISCOVERY_PORT_END=8818
-REMOTE_AGENT_PUBLIC_HOST=192.168.0.57
-REMOTE_AGENT_PUBLIC_CONTROL_URL="wss://agent.example.com/api/remote-agent/control"
-REMOTE_AGENT_ALLOWED_CWDS='["/path/to/project","/path/to/another-project"]'
-REMOTE_AGENT_ALLOW_NETWORK=0
-REMOTE_AGENT_RESUMED_TURN_WAIT_MS=30000
-REMOTE_AGENT_TASK_TIMEOUT_MS=1800000
+```text
+RabiRoute event -> Remote Agent Manager -> authenticated WebSocket
+  -> exact remote device bridge -> pinned Codex app-server
+  -> canonical project/session -> terminal event -> originating local persona
 ```
 
-`REMOTE_AGENT_PUBLIC_CONTROL_URL` is optional and is intended for a TLS terminator or trusted reverse proxy that forwards to the local control service. It must be an absolute `ws://` or `wss://` URL whose path is exactly `/api/remote-agent/control`; credentials, query strings, and fragments are rejected. When set, LAN discovery advertises this URL unchanged. Without it, discovery advertises the bridge's observed LAN endpoint.
+这是远端无人值守 Runtime，不是本机 Codex/ChatGPT Desktop adapter。它不共享固定端口、不修改 Desktop 环境变量，也不在 Desktop 缺席时充当 fallback。
 
-Only `REMOTE_AGENT_DEFAULT_CWD` and descendants are writable by default. Add other roots explicitly through `REMOTE_AGENT_ALLOWED_CWDS`. At startup, every root is required to exist and be a directory. Before each task, the bridge resolves the real filesystem path and checks it against those canonical roots, so a junction or symlink below an allowed directory cannot escape the boundary. Codex uses `workspaceWrite`; full-disk execution is not available.
+## 安全默认值
 
-Network access is off unless `REMOTE_AGENT_ALLOW_NETWORK=1` is explicitly set. Final task completion and failure are derived directly from Codex app-server turn events, and the bridge extracts the final `agentMessage` text from `turn/completed` as the returned summary and `data.replyText` (bounded to 12,000 characters). Normal task results therefore do not need callback network access. Enable network only when the Agent must POST richer progress or artifact paths to the optional local callback and the deployment accepts that broader capability.
+- 没有公开默认密码。Windows 启动器首次配置时生成并持久化独立设备密码；源码启动未设置密码时，每次进程启动生成临时密码。
+- v3 协议使用角色分离的 HMAC-SHA256 双向挑战。密码不经 WebSocket 发送。
+- HMAC 只认证、不加密 `ws://` 流量；不可信网络必须走受信 VPN，或使用反向代理提供 `wss://`。
+- 只有默认项目目录及显式 `REMOTE_AGENT_ALLOWED_CWDS` 根可写；每个任务重新解析真实路径，junction/symlink 不能逃逸。
+- Codex 使用 `workspaceWrite`，不提供全盘执行模式。
+- 网络默认关闭。只有显式设置 `REMOTE_AGENT_ALLOW_NETWORK=1` 才允许 Agent 网络访问。
+- 启动 Codex app-server 前会从子进程环境移除 bridge 设备密码和启动器私有配置路径。
+- 单文件默认上限 10 MiB，单任务默认总上限 25 MiB。
 
-Tasks targeting the same canonical `threadName + cwd` are serialized until the prior task reaches a terminal state. After a restart, if `thread/resume` reports an existing `inProgress` turn, the bridge waits up to `REMOTE_AGENT_RESUMED_TURN_WAIT_MS`; if it is still busy, the bridge starts a fresh thread instead of steering or starting a competing turn. Every delivered task has a finite `REMOTE_AGENT_TASK_TIMEOUT_MS`; timeout, interruption, terminal error, and app-server exit all fail the task and release its queue safely.
+## 端口与发现
 
-## Local Callback
+- 控制服务从 TCP `8797` 开始。
+- LAN discovery 从 UDP `8798` 开始。
+- 端口被占用时自动尝试后续端口；RabiGUI 使用 discovery 公告的真实控制地址。
+- discovery 范围全部被占用时，控制服务仍启动并显示明确告警。
 
-The bridge exposes a local-only callback endpoint on its actual control port:
+高级环境变量：
+
+```powershell
+$env:REMOTE_AGENT_PASSWORD="replace-with-a-long-random-secret"
+$env:REMOTE_AGENT_DEVICE_NAME="Builder Device"
+$env:REMOTE_AGENT_DEFAULT_CWD="C:\path\to\project"
+$env:REMOTE_AGENT_DEFAULT_THREAD="Remote Agent"
+$env:REMOTE_AGENT_CONTROL_PORT="8797"
+$env:REMOTE_AGENT_DISCOVERY_PORT_START="8798"
+$env:REMOTE_AGENT_DISCOVERY_PORT_END="8818"
+$env:REMOTE_AGENT_PUBLIC_HOST="192.168.0.57"
+$env:REMOTE_AGENT_PUBLIC_CONTROL_URL="wss://agent.example.com/api/remote-agent/control"
+$env:REMOTE_AGENT_ALLOWED_CWDS='["C:\\path\\to\\project"]'
+$env:REMOTE_AGENT_ALLOW_NETWORK="0"
+$env:REMOTE_AGENT_RESUMED_TURN_WAIT_MS="30000"
+$env:REMOTE_AGENT_TASK_TIMEOUT_MS="1800000"
+```
+
+`REMOTE_AGENT_PUBLIC_CONTROL_URL` 只接受 path 精确为 `/api/remote-agent/control` 的绝对 `ws://`/`wss://` URL；禁止凭据、query 和 fragment。
+
+## 任务和文件
+
+相同 canonical `threadName + cwd` 的任务保持串行。恢复已有 `inProgress` turn 时有界等待；仍繁忙则新建远端线程，不并发 start/steer。任务超时、中断、终态错误和 app-server 退出都会明确失败并释放队列。
+
+Manager 可在 `POST /api/remote-agent/tasks` 中使用 `filePaths`、`files` 或 `attachments` 传入文件。bridge 将其写入：
+
+```text
+<临时目录>\rabiroute-remote-agent-files\<deviceId>\inbox\<taskId>\
+```
+
+bridge 的本机回调只监听回环：
 
 ```text
 POST http://127.0.0.1:<actual-control-port>/v1/remote-agent/task-events
 ```
 
-Remote Codex receives this URL in its prompt as an optional channel for richer progress, summaries, and returned files. The bridge already reports terminal completion, interruption, failure, and app-server exit without this callback. When network access is enabled and extra callback data is useful, Codex may POST:
+返回 `artifactPath`、`logPath` 或 `files[].path` 时，路径必须仍位于当前任务 canonical cwd 内。Manager 保存接受的文件后，再把结果投递回发起任务的本机人格；远端 Agent 不直接回复 QQ 或其他外部系统。
 
-```json
-{
-  "taskId": "task-id-from-prompt",
-  "status": "completed",
-  "summary": "Build completed.",
-  "artifactPath": "/path/to/artifact",
-  "logPath": "/path/to/log",
-  "files": [
-    { "path": "/path/to/extra-result.zip" }
-  ]
-}
+## 源码运行与构建
+
+源码运行仍受支持：
+
+```powershell
+cd plugin-adapters\remote-agent-rabiroute
+npm ci
+npm start
 ```
 
-The bridge reads `artifactPath`, `logPath`, and any `files[].path` from the remote machine only after resolving the real file path and confirming it remains inside that task's canonical cwd. A symlink or junction cannot be used to return arbitrary files outside the task workspace. Inline `contentBase64` remains subject to the same size limits. The manager stores accepted returned files under `data/remote-agent-files/<taskId>/` before delivering the result back to the originating local persona thread.
+构建 Windows 安装包、便携 ZIP 和校验清单：
 
-Terminal events are idempotent. If a callback completes or fails a task before the app-server terminal notification arrives, the later notification is ignored; if app-server closes the task first, a late callback receives `duplicate: true` and is not delivered twice.
-
-## File Transfer
-
-Tasks may include files from the Rabi manager side. The manager accepts `filePaths`, `files`, or `attachments` in `POST /api/remote-agent/tasks`, reads local file content, and sends it with the task.
-
-The bridge writes incoming task files to:
-
-```text
-<tmp>/rabiroute-remote-agent-files/<deviceId>/inbox/<taskId>/
+```powershell
+.\scripts\build-remote-agent-windows-release.ps1
 ```
 
-Override the directory with:
-
-```bash
-REMOTE_AGENT_FILE_DIR="/path/to/remote-agent-files" npm start
-```
-
-File transfer defaults to 10 MiB per file and 25 MiB per task. Override the limits explicitly when needed:
-
-```bash
-REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES=10485760
-REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES=26214400
-```
+构建需要 Windows x64、Node.js、稳定版 Rust MSVC 工具链和 Inno Setup 6。`remote-agent-v*` tag 会由 GitHub Actions 在干净的 Windows runner 上重复测试、构建、烟测并发布资产。

@@ -46,6 +46,12 @@ Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](http
 
 The release page also provides a portable ZIP and `SHA256SUMS.txt`. Windows packages are currently unsigned, so SmartScreen may show an unknown-publisher warning; verify the checksum before running the installer.
 
+### Ready-to-run Remote Agent for Windows
+
+To turn another Windows x64 machine into an unattended Remote Agent device, download `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe` or the matching portable ZIP from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases). The package has its own `RabiRoute-Remote-Agent.exe` and includes Node.js, the pinned Codex Runtime, and all dependencies.
+
+On first launch, select the remote project directory, complete Codex login if requested, and copy the generated device password into RabiGUI on the control PC. The bridge remains experimental and must be acceptance-tested on each real device. See the [Remote Agent package guide](plugin-adapters/remote-agent-rabiroute/README_en.md).
+
 ### Source installation
 
 Requires Node.js 20 or newer and npm.
@@ -188,6 +194,7 @@ The status-aware documentation index is in [docs/README_en.md](docs/README_en.md
 | Run or extend local TTS / ASR | [RabiSpeech local TTS / ASR service](docs/rabispeech-plugin_en.md) |
 | Call TTS / ASR on the target PC from another device | [Remote TTS / ASR](docs/user-guide/speech-api_en.md) |
 | Install a meeting-room remote microphone / speaker | [Rabi Voice Client](desktop/rabi-voice-client/README_en.md) |
+| Install a ready-to-run Windows Remote Agent | [Remote Agent Windows package](plugin-adapters/remote-agent-rabiroute/README_en.md) |
 
 ## Development and contribution
 

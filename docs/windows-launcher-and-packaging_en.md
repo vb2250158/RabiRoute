@@ -167,3 +167,21 @@ The command requires Node.js, Python 3.10+, PyInstaller, and Inno Setup 6. It bu
 The Inno Setup installer is per-user and defaults to `%LOCALAPPDATA%\Programs\RabiRoute`. Before replacing files, and again before uninstall removes program files, it asks the loopback Manager shutdown API to stop the current runtime gracefully. The payload contains no top-level `data/`; first launch initializes from sanitized `examples/data/`, while upgrades and uninstall do not proactively remove user routes, personas, or logs.
 
 A `v*` tag triggers `.github/workflows/release-windows.yml`, which repeats tests, configuration validation, the clean Windows build, privacy checks, and the packaged Manager smoke test before uploading the three assets to GitHub Releases. Current binaries are unsigned, so release documentation must retain the SmartScreen unknown-publisher warning and checksum guidance. Code signing, stable/nightly channels, and in-app updates remain later decisions based on actual release cadence.
+
+## Standalone Remote Agent Windows package
+
+Remote Agent is an unattended Runtime owned by the target device. It is not part of the complete RabiRoute desktop installer and does not share an owner with Codex/ChatGPT Desktop on the control PC. Its dedicated build entry is:
+
+```powershell
+.\scripts\build-remote-agent-windows-release.ps1
+```
+
+The script copies only public bridge runtime sources, installs production dependencies in a clean payload, verifies and embeds pinned Windows x64 Node.js, compiles the native `RabiRoute-Remote-Agent.exe` launcher, then uses that actual EXE to verify the bundled Codex version and smoke-test the bridge listeners. It produces:
+
+- `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe`
+- `RabiRoute-Remote-Agent-<version>-windows-x64-portable.zip`
+- `SHA256SUMS.txt`
+
+On first run, the EXE requires an existing project directory, generates a high-entropy device password, and checks the bundled Codex login. Private configuration is written only to `%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json`. The payload, install directory, and GitHub Release contain no password, login state, project path, or `.codex` data. Only the selected project root is writable by default, and network access remains off.
+
+A `remote-agent-v*` tag triggers `.github/workflows/release-remote-agent-windows.yml`. On a clean Windows runner, the workflow installs Rust and Inno Setup, repeats bridge tests, verifies the Node download, runs privacy checks and packaged EXE/Codex/listener smoke tests, then publishes the installer, portable ZIP, and checksum manifest. These binaries are also currently unsigned, so release notes must retain the SmartScreen and SHA-256 guidance.

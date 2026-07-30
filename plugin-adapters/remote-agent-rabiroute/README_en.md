@@ -4,116 +4,136 @@ English | <a href="./README.md">简体中文</a>
 </div>
 <!-- /docs-language-switch -->
 
-# Remote Agent RabiRoute Bridge
+# RabiRoute Remote Agent Bridge
 
-This folder is the standalone unattended Remote Agent bridge for RabiRoute.
+This is RabiRoute's standalone unattended Remote Agent bridge. The remote machine does not need the full RabiRoute project. The Windows release package includes Node.js, the pinned `@openai/codex` runtime, and all production dependencies.
 
-The remote machine does not need the full RabiRoute project. It only needs this folder and Node.js. This bridge pins its own `@openai/codex` runtime and uses `codex app-server` over stdio JSONL.
+Its maturity remains `experimental`. Protocol, authentication, task serialization, timeout handling, file transfer, and packaging smoke tests are automated, but every real remote device still needs Codex login, project-permission, and two-way task acceptance before that device can be treated as ready.
 
-This runtime is owned only by the unattended bridge on that remote device. It does not share a fixed port with, reconfigure, or act as a fallback for Codex/ChatGPT Desktop on the RabiRoute control machine.
+## Ready-to-run Windows package
 
-## Run
+Download these assets from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases):
 
-```bash
-cd remote-agent-rabiroute
-npm install
-npm start
+- `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe`: per-user installer with Start menu entries.
+- `RabiRoute-Remote-Agent-<version>-windows-x64-portable.zip`: extract it, then double-click `RabiRoute-Remote-Agent.exe`.
+- `SHA256SUMS.txt`: checksums for the release assets.
+
+First launch:
+
+1. Double-click `RabiRoute-Remote-Agent.exe`.
+2. Enter the project directory where the remote Agent may work. It becomes the default and only writable root.
+3. The launcher generates a high-entropy device password and checks the bundled Codex login. If needed, it starts the official login flow.
+4. Keep the window open. On the control PC, open RabiGUI, enable the Remote Agent message endpoint, scan for the device, and enter the displayed password.
+
+Private local configuration is stored at:
+
+```text
+%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json
 ```
 
-Then open RabiGUI on the control machine, enable the Remote Agent message adapter, scan the LAN, select the device, and enter the password.
+That file is never part of the release payload. Installer upgrades preserve it, and the portable package does not write the password into its extracted directory.
 
-If `REMOTE_AGENT_PASSWORD` is absent, each process start generates a new high-entropy temporary password and prints it only in the remote machine's terminal. There is no public default password.
+Useful commands:
 
-For a persistent deployment, configure a password of at least 16 UTF-8 bytes:
-
-```bash
-REMOTE_AGENT_PASSWORD="replace-with-a-long-random-secret" npm start
+```powershell
+RabiRoute-Remote-Agent.exe --configure
+RabiRoute-Remote-Agent.exe --show-config
+RabiRoute-Remote-Agent.exe --print-password
+RabiRoute-Remote-Agent.exe --check
 ```
 
-The control service still listens on the LAN by default, so treat this password as a device credential. Do not reuse an account password. Protocol v3 uses a per-connection, mutually verified HMAC-SHA256 challenge: the manager proves it knows the password, then the bridge returns a role-separated server proof. The password itself is not sent over the WebSocket, and both peers reject missing or non-v3 protocol fields. HMAC authenticates the peers but does not encrypt plain `ws://` traffic; use a trusted LAN/VPN or the `wss://` option below across untrusted networks.
+The binaries are currently unsigned, so Windows SmartScreen may report an unknown publisher. Verify the downloaded asset against `SHA256SUMS.txt` before running it.
 
-## Ports
+## Ownership and observable contract
 
-The bridge is zero-config for normal use.
+| Object | Owner | Lifecycle and source of truth | What RabiRoute may do | Forbidden substitute |
+| --- | --- | --- | --- | --- |
+| Remote host | Remote Windows user | User starts/stops the EXE; terminal shows status | Packaged launcher validates setup and login | Control PC replacing the remote Runtime |
+| Runtime | Remote bridge's pinned Codex | Bridge starts its own stdio app-server on demand | Send an exact task and read its terminal state | Taking over the control PC Desktop |
+| Transport | Bridge and Manager | Protocol-v3 password challenge over WebSocket | Discovery, authentication, tasks, and events | Falling back to another same-name device |
+| Session | Remote Codex Runtime | `deviceId + canonical cwd + threadName` | Same-key serialization and idempotent return | Crossing devices or workspaces |
+| Tools/approval | Remote Codex Runtime | `workspaceWrite`, approvals fail closed | Use only capabilities registered by that Runtime | Expanding permission through a prompt |
 
-- Control service starts from port `8797`.
-- LAN discovery starts from UDP port `8798`.
-- If a port is occupied, the bridge automatically tries the next available port.
-- RabiGUI scans the discovery range and uses the real advertised control port, so users do not need to type a port.
-- If the whole discovery range is occupied, the bridge still starts the control service and prints a clear warning. Free the occupied UDP ports, then scan again from RabiGUI.
+The only real-message path is:
 
-Useful advanced overrides:
-
-```bash
-REMOTE_AGENT_PASSWORD="replace-with-a-long-random-secret"
-REMOTE_AGENT_DEVICE_NAME="Builder Device"
-REMOTE_AGENT_DEFAULT_CWD="/path/to/project"
-REMOTE_AGENT_DEFAULT_THREAD="Remote Agent"
-REMOTE_AGENT_CONTROL_PORT=8797
-REMOTE_AGENT_DISCOVERY_PORT_START=8798
-REMOTE_AGENT_DISCOVERY_PORT_END=8818
-REMOTE_AGENT_PUBLIC_HOST=192.168.0.57
-REMOTE_AGENT_PUBLIC_CONTROL_URL="wss://agent.example.com/api/remote-agent/control"
-REMOTE_AGENT_ALLOWED_CWDS='["/path/to/project","/path/to/another-project"]'
-REMOTE_AGENT_ALLOW_NETWORK=0
-REMOTE_AGENT_RESUMED_TURN_WAIT_MS=30000
-REMOTE_AGENT_TASK_TIMEOUT_MS=1800000
+```text
+RabiRoute event -> Remote Agent Manager -> authenticated WebSocket
+  -> exact remote device bridge -> pinned Codex app-server
+  -> canonical project/session -> terminal event -> originating local persona
 ```
 
-`REMOTE_AGENT_PUBLIC_CONTROL_URL` is optional and is intended for a TLS terminator or trusted reverse proxy that forwards to the local control service. It must be an absolute `ws://` or `wss://` URL whose path is exactly `/api/remote-agent/control`; credentials, query strings, and fragments are rejected. When set, LAN discovery advertises this URL unchanged. Without it, discovery advertises the bridge's observed LAN endpoint.
+This is an unattended remote Runtime, not the local Codex/ChatGPT Desktop adapter. It does not share a fixed port, modify Desktop environment variables, or act as a fallback when Desktop is absent.
 
-Only `REMOTE_AGENT_DEFAULT_CWD` and descendants are writable by default. Add other roots explicitly through `REMOTE_AGENT_ALLOWED_CWDS`. At startup, every root is required to exist and be a directory. Before each task, the bridge resolves the real filesystem path and checks it against those canonical roots, so a junction or symlink below an allowed directory cannot escape the boundary. Codex uses `workspaceWrite`; full-disk execution is not available.
+## Secure defaults
 
-Network access is off unless `REMOTE_AGENT_ALLOW_NETWORK=1` is explicitly set. Final task completion and failure are derived directly from Codex app-server turn events, and the bridge extracts the final `agentMessage` text from `turn/completed` as the returned summary and `data.replyText` (bounded to 12,000 characters). Normal task results therefore do not need callback network access. Enable network only when the Agent must POST richer progress or artifact paths to the optional local callback and the deployment accepts that broader capability.
+- There is no public default password. The Windows launcher generates and persists a dedicated device password during initial setup. A source launch without an explicit password generates a process-local temporary password.
+- Protocol v3 uses a role-separated mutual HMAC-SHA256 challenge. The password is not sent over the WebSocket.
+- HMAC authenticates but does not encrypt `ws://` traffic. Use a trusted LAN/VPN, or terminate `wss://` at a trusted reverse proxy on untrusted networks.
+- Only the default project and explicit `REMOTE_AGENT_ALLOWED_CWDS` roots are writable. Every task re-resolves real paths so a junction or symlink cannot escape.
+- Codex uses `workspaceWrite`; full-disk execution is unavailable.
+- Network access is off by default and requires explicit `REMOTE_AGENT_ALLOW_NETWORK=1`.
+- The bridge device password and private launcher-config path are removed from the child environment before Codex app-server starts.
+- Limits default to 10 MiB per file and 25 MiB per task.
 
-Tasks targeting the same canonical `threadName + cwd` are serialized until the prior task reaches a terminal state. After a restart, if `thread/resume` reports an existing `inProgress` turn, the bridge waits up to `REMOTE_AGENT_RESUMED_TURN_WAIT_MS`; if it is still busy, the bridge starts a fresh thread instead of steering or starting a competing turn. Every delivered task has a finite `REMOTE_AGENT_TASK_TIMEOUT_MS`; timeout, interruption, terminal error, and app-server exit all fail the task and release its queue safely.
+## Ports and discovery
 
-## Local Callback
+- The control service starts at TCP `8797`.
+- LAN discovery starts at UDP `8798`.
+- Occupied ports cause bounded automatic incrementing. RabiGUI uses the actual control URL advertised by discovery.
+- If the entire discovery range is occupied, the control service still starts and prints an actionable warning.
 
-The bridge exposes a local-only callback endpoint on its actual control port:
+Advanced environment overrides:
+
+```powershell
+$env:REMOTE_AGENT_PASSWORD="replace-with-a-long-random-secret"
+$env:REMOTE_AGENT_DEVICE_NAME="Builder Device"
+$env:REMOTE_AGENT_DEFAULT_CWD="C:\path\to\project"
+$env:REMOTE_AGENT_DEFAULT_THREAD="Remote Agent"
+$env:REMOTE_AGENT_CONTROL_PORT="8797"
+$env:REMOTE_AGENT_DISCOVERY_PORT_START="8798"
+$env:REMOTE_AGENT_DISCOVERY_PORT_END="8818"
+$env:REMOTE_AGENT_PUBLIC_HOST="192.168.0.57"
+$env:REMOTE_AGENT_PUBLIC_CONTROL_URL="wss://agent.example.com/api/remote-agent/control"
+$env:REMOTE_AGENT_ALLOWED_CWDS='["C:\\path\\to\\project"]'
+$env:REMOTE_AGENT_ALLOW_NETWORK="0"
+$env:REMOTE_AGENT_RESUMED_TURN_WAIT_MS="30000"
+$env:REMOTE_AGENT_TASK_TIMEOUT_MS="1800000"
+```
+
+`REMOTE_AGENT_PUBLIC_CONTROL_URL` must be an absolute `ws://` or `wss://` URL whose path is exactly `/api/remote-agent/control`. Credentials, query strings, and fragments are rejected.
+
+## Tasks and files
+
+Tasks with the same canonical `threadName + cwd` are serialized. A resumed `inProgress` turn gets a bounded wait; if it remains busy, the bridge creates a fresh remote thread instead of starting or steering concurrently. Timeout, interruption, terminal errors, and app-server exit explicitly fail the task and release its queue.
+
+The Manager may attach `filePaths`, `files`, or `attachments` to `POST /api/remote-agent/tasks`. The bridge writes accepted input files under:
+
+```text
+<temp>\rabiroute-remote-agent-files\<deviceId>\inbox\<taskId>\
+```
+
+The bridge's optional callback is loopback-only:
 
 ```text
 POST http://127.0.0.1:<actual-control-port>/v1/remote-agent/task-events
 ```
 
-Remote Codex receives this URL in its prompt as an optional channel for richer progress, summaries, and returned files. The bridge already reports terminal completion, interruption, failure, and app-server exit without this callback. When network access is enabled and extra callback data is useful, Codex may POST:
+Returned `artifactPath`, `logPath`, and `files[].path` values must remain inside the task's canonical cwd. The Manager stores accepted files before returning the result to the originating local persona. A remote Agent never replies directly to QQ or another external system.
 
-```json
-{
-  "taskId": "task-id-from-prompt",
-  "status": "completed",
-  "summary": "Build completed.",
-  "artifactPath": "/path/to/artifact",
-  "logPath": "/path/to/log",
-  "files": [
-    { "path": "/path/to/extra-result.zip" }
-  ]
-}
+## Source launch and release build
+
+The source path remains supported:
+
+```powershell
+cd plugin-adapters\remote-agent-rabiroute
+npm ci
+npm start
 ```
 
-The bridge reads `artifactPath`, `logPath`, and any `files[].path` from the remote machine only after resolving the real file path and confirming it remains inside that task's canonical cwd. A symlink or junction cannot be used to return arbitrary files outside the task workspace. Inline `contentBase64` remains subject to the same size limits. The manager stores accepted returned files under `data/remote-agent-files/<taskId>/` before delivering the result back to the originating local persona thread.
+Build the installer, portable ZIP, and checksum manifest with:
 
-Terminal events are idempotent. If a callback completes or fails a task before the app-server terminal notification arrives, the later notification is ignored; if app-server closes the task first, a late callback receives `duplicate: true` and is not delivered twice.
-
-## File Transfer
-
-Tasks may include files from the Rabi manager side. The manager accepts `filePaths`, `files`, or `attachments` in `POST /api/remote-agent/tasks`, reads local file content, and sends it with the task.
-
-The bridge writes incoming task files to:
-
-```text
-<tmp>/rabiroute-remote-agent-files/<deviceId>/inbox/<taskId>/
+```powershell
+.\scripts\build-remote-agent-windows-release.ps1
 ```
 
-Override the directory with:
-
-```bash
-REMOTE_AGENT_FILE_DIR="/path/to/remote-agent-files" npm start
-```
-
-File transfer defaults to 10 MiB per file and 25 MiB per task. Override the limits explicitly when needed:
-
-```bash
-REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES=10485760
-REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES=26214400
-```
+The build requires Windows x64, Node.js, the stable Rust MSVC toolchain, and Inno Setup 6. A `remote-agent-v*` tag makes GitHub Actions repeat the tests, clean build, packaging smoke test, and GitHub Release publication on a clean Windows runner.

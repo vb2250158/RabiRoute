@@ -3,7 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CodexAppServerClient } from "./codex-app-server-client.mjs";
+import { CodexAppServerClient, codexChildEnvironment } from "./codex-app-server-client.mjs";
+
+test("Codex app-server does not inherit bridge credentials", () => {
+  const childEnv = codexChildEnvironment({
+    PATH: "example",
+    REMOTE_AGENT_PASSWORD: "device-secret",
+    RABIROUTE_REMOTE_AGENT_CONFIG: "private-config.json"
+  });
+  assert.equal(childEnv.PATH, "example");
+  assert.equal(childEnv.REMOTE_AGENT_PASSWORD, undefined);
+  assert.equal(childEnv.RABIROUTE_REMOTE_AGENT_CONFIG, undefined);
+});
 
 function mockAppServer(tempDir, responseSource) {
   const entrypoint = path.join(tempDir, "mock-app-server.cjs");

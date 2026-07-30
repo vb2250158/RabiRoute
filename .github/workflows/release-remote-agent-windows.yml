@@ -1,0 +1,85 @@
+name: Release Remote Agent Windows package
+
+on:
+  push:
+    tags:
+      - "remote-agent-v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish or update a GitHub Release
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.1
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+
+      - name: Resolve and validate version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content plugin-adapters/remote-agent-rabiroute/package.json -Raw | ConvertFrom-Json).version
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "remote-agent-v$version") {
+            throw "Tag ${{ github.ref_name }} does not match Remote Agent package version $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Test and build release assets
+        shell: pwsh
+        run: |
+          ./scripts/build-remote-agent-windows-release.ps1 -Version "${{ steps.version.outputs.version }}" -NodeVersion "22.17.1"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RabiRoute-Remote-Agent-${{ steps.version.outputs.version }}-windows-x64
+          if-no-files-found: error
+          path: |
+            output/remote-agent/*.exe
+            output/remote-agent/*.zip
+            output/remote-agent/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' || inputs.publish_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "remote-agent-v${{ steps.version.outputs.version }}" }
+          $files = Get-ChildItem output/remote-agent -File | Where-Object { $_.Extension -in '.exe', '.zip', '.txt' } | ForEach-Object FullName
+          $title = "RabiRoute Remote Agent v${{ steps.version.outputs.version }}"
+          $notes = @"
+          Windows x64 开箱即用发布包。安装版和便携 ZIP 均内置 Node.js、固定版本 Codex Runtime 与全部依赖。
+
+          Windows x64 ready-to-run package. Both the installer and portable ZIP include Node.js, the pinned Codex Runtime, and all dependencies.
+
+          首次启动会要求选择项目目录、生成独立设备密码并检查 Codex 登录态。当前二进制未签名；如 SmartScreen 提示未知发布者，请先核对 SHA256SUMS.txt。
+          "@
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --clobber
+          } else {
+            gh release create $tag @files --title $title --notes $notes --verify-tag
+          }
