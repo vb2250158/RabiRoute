@@ -120,6 +120,7 @@ import {
   managerReadOnlyRequestAllowed
 } from "./managerRuntimeMode.js";
 import { resolveGatewayChildCommand } from "./gatewayChildCommand.js";
+import { BilibiliHistoryBridge } from "./bilibiliHistoryBridge.js";
 import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
 import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
@@ -461,6 +462,9 @@ const managerShouldAutostart = !managerReadOnly && managerAutostartEnabled();
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
 const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
+const bilibiliHistoryBridge = new BilibiliHistoryBridge(
+  path.join(rootDir, "data", "runtime", "bilibili-history-bridge.json")
+);
 const managerEventStreams = new Set<http.ServerResponse>();
 
 function publishManagerEvent(eventType: string, data: unknown): void {
@@ -4958,6 +4962,9 @@ export async function startManager(): Promise<void> {
           code: -1,
           message: "Manager is running in read-only acceptance mode."
         });
+        return;
+      }
+      if (bilibiliHistoryBridge.handle(request, requestUrl, response)) {
         return;
       }
       if (handleWebguiLanAccessApi(request, requestUrl, response)) {

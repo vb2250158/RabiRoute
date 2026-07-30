@@ -6,8 +6,8 @@
   "priority": "medium",
   "kind": "ui",
   "currentStepId": "add-real-screenshots",
-  "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的计划分类、状态色板、审批门、等待打包状态和异步反馈终态；计划与记忆页支持摘要分页、近视口详情加载、完整内容搜索和媒体占位，人格与 Route 选择优先显示可读人格标题，Route 作用域 URL 覆盖全部侧栏页。托盘继续保持 Manager API 纯前端边界。当前补齐真实脱敏界面截图和实体环境证据。",
-  "nextAction": "为使用手册补齐真实脱敏界面截图，在双实体 PC 和长时间语音会话中复核计划反馈、声纹归类、人格同步、菜单响应与错误恢复；自然打断需用连续采集和真实 AEC 证据测量误打断率，再完善跨端排障入口。",
+  "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的计划分类、状态色板、审批门、等待打包状态和异步反馈终态；Route 页现在能区分 NapCat 账号归属、扫码/快速登录冲突并采用已有在线实例，消息端默认规则由共享模型补齐；打包托盘优先使用项目便携 Node。当前补齐真实脱敏截图和实体环境证据。",
+  "nextAction": "为 NapCat 采用流程、消息端默认规则和语音多设备状态补齐真实脱敏截图，在双实体 PC 与长时间语音会话中复核菜单响应、错误恢复和跨端排障；自然打断继续等待真实 AEC 证据。",
   "steps": [
     { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
     { "id": "speech-monitor", "title": "统一语音页与 Route 监视器状态读取", "status": "已完成" },
@@ -18,6 +18,7 @@
     { "id": "event-driven-control-plane", "title": "把控制面刷新、托盘菜单和语音状态收敛到事件驱动边界", "status": "已完成" },
     { "id": "plan-approval-contract", "title": "统一计划分类、暂停状态、审批执行合同、状态色板和异步反馈", "status": "已完成" },
     { "id": "knowledge-progressive-loading", "title": "实现计划摘要分页、按需详情、完整内容搜索、人格优先标签和 Route 作用域导航", "status": "已完成" },
+    { "id": "napcat-owner-and-portable-node", "title": "展示 NapCat 登录归属并让托盘优先使用便携 Node", "status": "已完成" },
     { "id": "add-real-screenshots", "title": "补齐真实脱敏界面截图", "status": "进行中" },
     { "id": "persona-route-preview", "title": "完善人格路由预览与跨端排障入口", "status": "未开始" },
     { "id": "cross-pc-speech", "title": "完成跨电脑、不同声卡与自然打断的真实语音重测", "status": "未开始" }
@@ -35,6 +36,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-29T00:00:00+08:00",
-  "keywords": ["RibiWebGUI", "Manager API", "计划反馈", "审批执行合同", "等待打包", "摘要分页", "按需详情", "完整内容搜索", "人格名称", "Route 作用域导航", "暂停", "状态色板", "人格声纹", "人格同步", "知识展示", "事件驱动", "角色面板", "结构化计划", "使用手册", "语音服务", "自然打断", "AEC", "排障", "托盘", "RabiLight"]
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["RibiWebGUI", "Manager API", "NapCat 账号归属", "快速登录", "默认 Route", "便携 Node", "计划反馈", "审批执行合同", "等待打包", "摘要分页", "完整内容搜索", "人格名称", "Route 作用域导航", "暂停", "状态色板", "人格声纹", "人格同步", "事件驱动", "结构化计划", "使用手册", "语音服务", "自然打断", "AEC", "托盘"]
 }

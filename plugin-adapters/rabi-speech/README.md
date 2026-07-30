@@ -74,7 +74,7 @@ POST /v1/playback/stop
 
 RabiSpeech 本身目前没有声学回声参考或 AEC。桌面远程语音客户端也会在播放期间暂停上传麦克风，因此它尚不具备自然打断能力。不要为了“能打断”而直接关闭 `suppress_during_playback`；没有回声保护证据时应保持 `barge_in_mode=off`。WebGUI 对 `echo_protected` 的启用带显式确认，但该确认只是操作者声明，不替代真实硬件验收。
 
-局域网远程音频是独立的网络声卡通道。启用 `remote_audio` 后，轻量 Windows 客户端通过 TCP `8782` 持续上传 16 kHz 单声道 PCM，并接收主机 FIFO 下发的 WAV；UDP `8783` 只用于同网段发现。客户端不执行 VAD、切句、ASR、TTS 或 Route 投递。音频流选择由回环接口 `GET /v1/audio-streams` 与 `PUT /v1/audio-streams/selection` 管理，默认是本机，远程端断线时不静默回退。安装见 [`../../desktop/rabi-voice-client/README.md`](../../desktop/rabi-voice-client/README.md)。RabiLink 不是这条局域网链路的配置依赖。
+局域网远程音频是独立的网络声卡通道。启用 `remote_audio` 后，轻量 Windows 客户端通过 TCP `8782` 持续上传 16 kHz 单声道 PCM，并接收主机 FIFO 下发的 WAV；UDP `8783` 只用于同网段发现。客户端不执行 VAD、切句、ASR、TTS 或 Route 投递。音频流选择由回环接口 `GET /v1/audio-streams` 与 `PUT /v1/audio-streams/selection` 管理，默认是本机，远程端断线时不静默回退。RabiLink 手机使用每台安装独立的稳定设备 ID 和稳定流 ID 自动登记；第一台可作为零配置默认输入，后来连接的手机只加入列表，不抢占已保存选择。多台手机可以同时在线，但只有语音服务页面中选中的一路进入 VAD/ASR；选择会持久化，所选手机断线重连后自动恢复。每个客户端状态同时暴露 `received_bytes` 与 `accepted_chunks`，只统计真正进入主机 PCM feed 的新数据；重复 chunk 不增加计数，可用于无需 ADB 的常驻流健康诊断。ADB 只用于安装和调试，不是发现、连接、选择、推流或恢复链路的运行依赖。安装见 [`../../desktop/rabi-voice-client/README.md`](../../desktop/rabi-voice-client/README.md)。RabiLink 不是这条局域网链路的配置依赖。
 
 控制面状态通过回环 SSE `GET /v1/events` 推送。Manager 将它转发为 `GET /api/speech/events`；`microphone_event`、`playback_changed`、`audio_stream_changed` 分别刷新对应状态，`records_changed` 只在 ASR/TTS 记录成功落盘后刷新记录面板，麦克风电平使用限频的 `microphone_level` 直接更新。SSE 重连只做一次快照补漏，不运行固定间隔状态或记录轮询。
 
@@ -136,9 +136,9 @@ Agent 可调用 `PUT /api/speech/speaker-identities`，本机调用方也可使�
 
 可用配置真源直接运行隔离推理探针，避免手工解析相对模型路径：`py -3.10 scripts\speaker_model_probe.py --config config.json`。脚本会从自身位置加载 RabiSpeech 与私有依赖，不依赖调用者当前工作目录。探针成功只证明模型、特征管线和 ONNX Runtime 能输出 embedding，不等于通过真实多人校准。
 
-启动时会先在独立子进程中用 ONNX Runtime + kaldi-native-fbank 对官方 3D-Speaker 模型完成一次真实 embedding 推理。模型格式或 runtime 不兼容时，探测进程可以失败，但 RabiSpeech 主服务必须继续在线并通过 capability 返回具体原因；不得让实验性声纹模型拖垮 TTS、ASR、麦克风或人工绑定。`max_samples_per_profile` 限制每个人工确认人物保留的原型数，`max_unconfirmed_samples` 限制尚未人工确认的聚类/匹配样本总量；过低 RMS 的帧和明显跨说话人重叠的片段不会进入声纹样本。
+启动时会先在独立子进程中用 ONNX Runtime + kaldi-native-fbank 对官方 3D-Speaker 模型完成一次真实 embedding 推理。模型格式或 runtime 不兼容时，探测进程可以失败，但 RabiSpeech 主服务必须继续在线并通过 capability 返回具体原因；不得让实验性声纹模型拖垮 TTS、ASR、麦克风或人工绑定。`max_samples_per_profile` 限制每个人工确认人物保留的原型数，`max_unconfirmed_samples` 限制尚未人工确认的聚类/匹配样本总量；过低 RMS 的帧和明显跨说话人重叠的片段不会进入声纹样本。未知簇采用保守的 complete-link 接纳：新 embedding 必须达到对该簇每个现存样本的 `cluster_threshold`，避免一个位于两人之间的混合样本把不同声音桥接进同一簇；宁可暂时多分一个未知簇，也不以质心相似冒充同一人。
 
-声纹匹配不等于说话人分离。ASR 至少要返回可靠的 `start/end` turn 边界，RabiSpeech 才能分别提取多人 embedding；Provider 的 `speaker` 标签可以不可靠，同一标签出现在多个不连续 turn 时，声纹层会保留原始 `speaker`，同时生成逐 turn 的 `speaker_label` 并独立聚类，从而允许声纹纠正 Provider 合并。普通 ASR 没有时间分段时，一次 VAD 切片仍按单个临时 `voice` 处理，不能识别同一切片中的轮流或重叠说话。
+声纹匹配不等于说话人分离。ASR 至少要返回可靠的 `start/end` turn 边界，RabiSpeech 才能分别提取多人 embedding；Provider 的 `speaker` 标签可以不可靠，同一标签出现在多个不连续 turn 时，声纹层会保留原始 `speaker`，同时生成逐 turn 的 `speaker_label` 并独立聚类，从而允许声纹纠正 Provider 合并。对于 faster-whisper 这类只有时间段、没有 speaker 标签的本地 ASR，RabiSpeech 会按 `unlabeled_turn_gap_seconds`（默认 `0.5` 秒）把被静音隔开的连续时间段组成临时 `voice#turn-N`，逐轮提取声纹，再由聚类把同一声音合回同一 `voiceprint_id`。没有时间段、段间没有足够静音，或多人重叠说话时仍不能可靠分离。
 
 `scripts/benchmark_speaker_models.py` 使用同一批私有 WAV 评估选定的本地声纹模型，并可选加入旧 68 维频谱基线作历史比较，输出 EER、FAR、FRR、已知人物识别率、未知保留率与 p50/p95 延迟。语料清单格式见 `benchmarks/speaker-cases.example.json`；真实录音必须留在 Git 忽略目录，不进入公开报告。脚本和模型探针一样会从自身位置加载 RabiSpeech 与 `.deps`，因此可直接从仓库根目录或任意工作目录运行，不需要人工设置 `PYTHONPATH`。
 

@@ -6,7 +6,34 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## Unreleased - 2026-07-29
+## 0.1.21 - 2026-07-30
+
+### Read-only Bilibili history bridge
+
+- Added a one-time-installed Chrome Manifest V3 extension and local Manager job API. The extension uses the browser's existing Bilibili session only for paginated history reads; it does not use the Cookie API, Local Storage, passwords, or browser-profile access. Login expiry and risk-control responses pause the job instead of triggering tight retries.
+- The Manager keeps only the pairing token, cursor checkpoint, status, and aggregate counts in private runtime data; it does not persist per-item titles, BVIDs, URLs, or cookies. Jobs checkpoint each page, deduplicate by cursor, resume after Manager restarts, and can be created or awaited with `scripts/request-bilibili-history.mjs`.
+
+### Multi-phone speech and playback reliability
+
+- Each RabiLink Android installation now creates a stable `rabi-phone-*` device id and reuses a stable audio-stream identity across reconnects. RabiSpeech can register several phones without letting a later connection steal the selected input; only the chosen stream enters VAD/ASR, and the selection survives a temporary disconnect.
+- RabiSpeech audio-stream status now reports bytes actually accepted by the host. Android soak diagnostics use PC-received network PCM as the source of truth, while ADB is optional evidence for the foreground service, wake lock, and phone-side counters rather than a production dependency.
+- Fixed initial writes and playback-marker bounds for Android static `AudioTrack`, preventing valid PCM from being rejected or a marker from landing past the buffer. Added Android unit coverage and an optional emulator disconnect/recovery probe.
+- Unknown voiceprint clusters now use conservative complete-link admission, with bounded confirmed and unconfirmed samples plus cross-turn tests, so a mixed sample between two speakers cannot bridge them into one cluster.
+
+### NapCat login ownership and recovery
+
+- NapCat readiness now checks whether the target QQ is already online in another instance. When an owner exists, RabiRoute preserves that session and returns adoptable instance details instead of launching a duplicate that competes for the account.
+- RibiWebGUI distinguishes account-owned-elsewhere, expired quick login, QR required, login conflict, and account mismatch states, and can adopt an online instance. Quick login runs only when the saved identity matches the requested QQ; failures provide an explicit QR recovery path.
+
+### Dynamic record lifecycle and speech export
+
+- Added bilingual dynamic-record lifecycle guidance that distinguishes archival, memory consolidation, physical sharding, expiration, and rebuildable views, with shared 24-hour hot and 72-hour trigger windows plus atomicity, indexing, idempotency, and recovery acceptance criteria.
+- Added `npm run export:speech-transcript` to generate a Markdown conversation transcript for a time range from host speech messages. The export is rebuildable, never mutates the date-sharded JSONL source of truth, and preserves stable ordering, speaker labels, and source record ids.
+
+### Configuration and Windows launcher details
+
+- The shared configuration model now backfills uncovered default whiteboard Route rules for every enabled message adapter while preserving explicit disabled rules. WebGUI adapter grouping now covers speech, RabiLink, the legacy FenneNote entry, and personal Weixin.
+- The packaged Windows tray now prefers the project-bundled portable Node runtime before environment or PATH fallbacks, preventing an older machine-wide Node installation from taking ownership.
 
 ### Faster one-click NapCat startup and fresh WebUI authentication
 

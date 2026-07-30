@@ -48,6 +48,8 @@ class _Client:
     chunk_ms: int
     connected_at: float
     last_audio_at: float = 0.0
+    received_bytes: int = 0
+    accepted_chunks: int = 0
     playback_waiter: asyncio.Future[None] | None = None
     playback_id: str = ""
 
@@ -65,6 +67,8 @@ class _VirtualClient:
     last_audio_at: float = 0.0
     last_sequence: int = 0
     last_chunk_sha256: str = ""
+    received_bytes: int = 0
+    accepted_chunks: int = 0
     resume_client_id: str | None = None
     resume_running: bool = False
 
@@ -91,8 +95,9 @@ class RemoteAudioHub:
         self._event_sink = event_sink
         self._feed: RemoteFeed | None = None
         self._clients: dict[str, _Client] = {}
-        self._virtual_client: _VirtualClient | None = None
+        self._virtual_clients: dict[str, _VirtualClient] = {}
         self._last_virtual_chunk_by_source: dict[str, tuple[str, str, float]] = {}
+        self._virtual_pcm_totals_by_source: dict[str, tuple[int, int]] = {}
         self._server: Any = None
         self._discovery_transport: asyncio.DatagramTransport | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -107,49 +112,61 @@ class RemoteAudioHub:
 
     @property
     def selected_client_name(self) -> str | None:
-        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
-            return self._virtual_client.name
+        virtual_client = self._selected_virtual_client()
+        if virtual_client is not None:
+            return virtual_client.name
         client = self._clients.get(self._selected_client_id or "")
         return client.name if client is not None else None
 
     @property
     def selected_client_kind(self) -> str | None:
-        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
-            return self._virtual_client.kind
+        virtual_client = self._selected_virtual_client()
+        if virtual_client is not None:
+            return virtual_client.kind
         client = self._clients.get(self._selected_client_id or "")
         return client.kind if client is not None else None
 
     @property
     def selected_source_device_id(self) -> str | None:
-        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
-            return self._virtual_client.source_device_id or self._virtual_client.id
+        virtual_client = self._selected_virtual_client()
+        if virtual_client is not None:
+            return virtual_client.source_device_id or virtual_client.id
         client = self._clients.get(self._selected_client_id or "")
         return client.id if client is not None else None
 
     @property
     def selected_message_adapter_type(self) -> str | None:
-        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
-            return self._virtual_client.message_adapter_type
+        virtual_client = self._selected_virtual_client()
+        if virtual_client is not None:
+            return virtual_client.message_adapter_type
         client = self._clients.get(self._selected_client_id or "")
         return client.message_adapter_type if client is not None else None
 
     @property
     def selected_route_profile_id(self) -> str | None:
-        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
-            return self._virtual_client.route_profile_id or None
+        virtual_client = self._selected_virtual_client()
+        if virtual_client is not None:
+            return virtual_client.route_profile_id or None
         client = self._clients.get(self._selected_client_id or "")
         return (client.route_profile_id or None) if client is not None else None
 
     @property
     def selected_session_id(self) -> str | None:
-        if self._virtual_client is not None and self._virtual_client.id == self._selected_client_id:
-            return self._virtual_client.session_id or None
+        virtual_client = self._selected_virtual_client()
+        if virtual_client is not None:
+            return virtual_client.session_id or None
         client = self._clients.get(self._selected_client_id or "")
         return (client.session_id or None) if client is not None else None
 
     @property
     def active_virtual_client_id(self) -> str | None:
-        return self._virtual_client.id if self._virtual_client is not None else None
+        return self._selected_client_id if self._selected_client_id in self._virtual_clients else None
+
+    def has_virtual_client(self, client_id: str) -> bool:
+        return _safe_id(client_id) in self._virtual_clients
+
+    def _selected_virtual_client(self) -> _VirtualClient | None:
+        return self._virtual_clients.get(self._selected_client_id or "")
 
     @property
     def source(self) -> str:
@@ -187,7 +204,7 @@ class RemoteAudioHub:
 
     async def stop(self) -> None:
         self._capture_enabled = False
-        self._virtual_client = None
+        self._virtual_clients.clear()
         clients = list(self._clients.values())
         self._clients.clear()
         for client in clients:
@@ -218,13 +235,14 @@ class RemoteAudioHub:
                     "chunk_ms": client.chunk_ms,
                     "connected_at": client.connected_at,
                     "last_audio_at": client.last_audio_at or None,
+                    "received_bytes": client.received_bytes,
+                    "accepted_chunks": client.accepted_chunks,
                     "selected": client.id == self._selected_client_id,
                     "online": True,
                 }
                 for client in self._clients.values()
             ]
-        if self._virtual_client is not None:
-            client = self._virtual_client
+        for client in self._virtual_clients.values():
             rows.append({
                 "id": client.id,
                 "name": client.name,
@@ -238,6 +256,8 @@ class RemoteAudioHub:
                 "connected_at": client.connected_at,
                 "last_audio_at": client.last_audio_at or None,
                 "last_sequence": client.last_sequence,
+                "received_bytes": client.received_bytes,
+                "accepted_chunks": client.accepted_chunks,
                 "selected": client.id == self._selected_client_id,
                 "online": True,
                 "virtual": True,
@@ -248,7 +268,7 @@ class RemoteAudioHub:
         )
         selected_online = (
             self._selected_client_id in self._clients
-            or self._virtual_client is not None and self._virtual_client.id == self._selected_client_id
+            or self._selected_client_id in self._virtual_clients
         ) if self._selected_client_id else True
         return {
             "ok": True,
@@ -273,7 +293,7 @@ class RemoteAudioHub:
             selected = str(client_id or "").strip()
             if not selected:
                 raise ValueError("A remote audio client id is required.")
-            if selected not in self._clients:
+            if selected not in self._clients and selected not in self._virtual_clients:
                 raise ValueError("The selected remote audio client is not online.")
             self._selected_client_id = selected
         else:
@@ -297,22 +317,41 @@ class RemoteAudioHub:
         resume_running: bool = False,
     ) -> dict[str, object]:
         normalized_id = _safe_id(client_id)
-        previous_virtual = self._virtual_client
-        resume_client_id = previous_virtual.resume_client_id if previous_virtual is not None else self._selected_client_id
-        should_resume_running = previous_virtual.resume_running if previous_virtual is not None else resume_running
-        self._virtual_client = _VirtualClient(
+        normalized_source_device_id = _safe_id(source_device_id or normalized_id)
+        received_bytes, accepted_chunks = self._virtual_pcm_totals_by_source.get(
+            normalized_source_device_id,
+            (0, 0),
+        )
+        previous_virtual = self._virtual_clients.get(normalized_id)
+        self._virtual_clients[normalized_id] = _VirtualClient(
             id=normalized_id,
             name=str(name or normalized_id).strip()[:100] or normalized_id,
             kind=_safe_kind(kind),
-            source_device_id=_safe_id(source_device_id or normalized_id),
+            source_device_id=normalized_source_device_id,
             message_adapter_type=_message_adapter_type(message_adapter_type, _safe_kind(kind)),
             route_profile_id=str(route_profile_id or "").strip()[:200],
             session_id=str(session_id or "").strip()[:200],
             connected_at=time.time(),
-            resume_client_id=resume_client_id,
-            resume_running=should_resume_running,
+            received_bytes=received_bytes,
+            accepted_chunks=accepted_chunks,
+            resume_client_id=previous_virtual.resume_client_id if previous_virtual is not None else None,
+            resume_running=previous_virtual.resume_running if previous_virtual is not None else resume_running,
         )
-        self._selected_client_id = normalized_id
+        if self._selected_client_id is None:
+            # Preserve the single-phone zero-configuration experience. Later
+            # phones register without stealing the explicit/persisted choice.
+            self._selected_client_id = normalized_id
+            self._write_selection()
+        elif (
+            self._selected_client_id
+            and self._selected_client_id not in self._clients
+            and self._selected_client_id not in self._virtual_clients
+            and self._selected_client_id.startswith(f"{normalized_source_device_id}-")
+        ):
+            # Migrate the old per-session RabiLink stream selection to the new
+            # stable stream id without allowing an unrelated phone to steal it.
+            self._selected_client_id = normalized_id
+            self._write_selection()
         result = self.snapshot()
         self._emit_changed()
         return result
@@ -325,12 +364,10 @@ class RemoteAudioHub:
         sequence: int,
         chunk_id: str | None = None,
     ) -> bool:
-        client = self._virtual_client
-        if client is None or client.id != _safe_id(client_id) or self._selected_client_id != client.id:
+        client = self._virtual_clients.get(_safe_id(client_id))
+        if client is None:
             return False
-        if not self._capture_enabled or not payload or len(payload) % 2:
-            return False
-        if self._feed is None:
+        if not payload or len(payload) % 2:
             return False
         if sequence <= 0:
             raise ValueError("RabiLink audio chunk sequence must be a positive integer.")
@@ -364,8 +401,15 @@ class RemoteAudioHub:
         client.last_audio_at = time.time()
         client.last_sequence = sequence
         client.last_chunk_sha256 = chunk_sha256
-        samples = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
-        self._feed(client.id, samples)
+        if self._capture_enabled and self._selected_client_id == client.id and self._feed is not None:
+            samples = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
+            self._feed(client.id, samples)
+            client.received_bytes += len(payload)
+            client.accepted_chunks += 1
+            self._virtual_pcm_totals_by_source[client.source_device_id] = (
+                client.received_bytes,
+                client.accepted_chunks,
+            )
         if normalized_chunk_id:
             self._last_virtual_chunk_by_source[client.source_device_id] = (
                 normalized_chunk_id,
@@ -384,19 +428,22 @@ class RemoteAudioHub:
             self._last_virtual_chunk_by_source.pop(key, None)
 
     def stop_virtual_client(self, client_id: str) -> tuple[dict[str, object], bool]:
-        client = self._virtual_client
-        if client is None or client.id != _safe_id(client_id):
+        client = self._virtual_clients.pop(_safe_id(client_id), None)
+        if client is None:
             return self.snapshot(), False
-        resume_client_id = client.resume_client_id
         resume_running = client.resume_running
-        self._virtual_client = None
-        self._selected_client_id = resume_client_id
         result = self.snapshot()
         self._emit_changed()
         return result, resume_running
 
-    def stale_virtual_client_id(self, timeout_seconds: float, *, now: float | None = None) -> str | None:
-        client = self._virtual_client
+    def stale_virtual_client_id(
+        self,
+        timeout_seconds: float,
+        *,
+        client_id: str | None = None,
+        now: float | None = None,
+    ) -> str | None:
+        client = self._virtual_clients.get(_safe_id(client_id)) if client_id else self._selected_virtual_client()
         if client is None:
             return None
         deadline_base = client.last_audio_at or client.connected_at
@@ -407,7 +454,7 @@ class RemoteAudioHub:
         self._capture_enabled = True
         self._capture_sample_rate = sample_rate
         self._capture_chunk_ms = chunk_ms
-        selected_virtual = self._virtual_client is not None and self._virtual_client.id == self._selected_client_id
+        selected_virtual = self._selected_client_id in self._virtual_clients
         if self._selected_client_id and self._selected_client_id not in self._clients and not selected_virtual:
             raise RuntimeError("The selected remote audio client is offline.")
         await self._sync_capture_commands()
@@ -420,7 +467,7 @@ class RemoteAudioHub:
 
     def play(self, path: Path, volume: int, cancel: threading.Event) -> None:
         client_id = self._selected_client_id
-        if self._virtual_client is not None and self._virtual_client.id == client_id:
+        if client_id in self._virtual_clients:
             self._local_player(path, volume, cancel)
             return
         if not client_id:
@@ -434,7 +481,7 @@ class RemoteAudioHub:
 
     def stop_playback(self) -> None:
         client_id = self._selected_client_id
-        if self._virtual_client is not None and self._virtual_client.id == client_id:
+        if client_id in self._virtual_clients:
             self._local_stopper()
             return
         loop = self._loop
@@ -510,6 +557,8 @@ class RemoteAudioHub:
             return
         samples = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
         self._feed(client.id, samples)
+        client.received_bytes += len(payload)
+        client.accepted_chunks += 1
 
     def _handle_control(self, client: _Client, raw: str) -> None:
         try:

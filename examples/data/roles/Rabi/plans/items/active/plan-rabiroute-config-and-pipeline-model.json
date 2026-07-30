@@ -1,11 +1,19 @@
 {
   "id": "plan-rabiroute-config-and-pipeline-model",
   "title": "巩固 adapterConfig、personaConfig 和 pipeline preset 的配置边界",
+  "focus": "配置事实源与消息端默认路由规则",
   "status": "进行中",
   "priority": "medium",
   "kind": "configuration",
-  "currentStep": "路由入口配置与人格模板规则已拆到 adapterConfig.json 和 personaConfig.json",
-  "nextAction": "继续让共享配置模型承载 normalize、校验、端口分配和 message adapter policy 语义",
+  "currentStepId": "validate-legacy-configs",
+  "currentStep": "路由入口与人格规则已拆到 adapterConfig.json 和 personaConfig.json；共享配置模型现在会为每个已启用消息端补齐未覆盖的默认白板 Route，同时保留显式禁用规则。当前继续验证旧配置迁移和多消息端组合。",
+  "nextAction": "用旧版脱敏配置验证 normalize、显式禁用、默认规则补齐和 WebGUI 保存往返，确认不会重复规则或扩大原有投递范围。",
+  "steps": [
+    { "id": "split-config-sources", "title": "拆分 adapterConfig 与 personaConfig 事实源", "status": "已完成" },
+    { "id": "centralize-normalization", "title": "把 normalize、校验、端口和消息端策略收敛到共享模型", "status": "已完成" },
+    { "id": "backfill-default-routes", "title": "为已启用消息端补齐未覆盖的默认白板 Route", "status": "已完成" },
+    { "id": "validate-legacy-configs", "title": "验证旧配置迁移与多消息端保存往返", "status": "进行中" }
+  ],
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +27,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-06-10T00:00:00+08:00",
-  "keywords": ["adapterConfig", "personaConfig", "pipeline preset", "messageAdapterPolicies", "配置迁移"]
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["adapterConfig", "personaConfig", "pipeline preset", "messageAdapterPolicies", "默认白板 Route", "显式禁用", "配置迁移"]
 }

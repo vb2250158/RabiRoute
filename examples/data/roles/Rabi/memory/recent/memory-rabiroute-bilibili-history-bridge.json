@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-bilibili-history-bridge",
+  "title": "Bilibili 历史桥只保存断点与聚合结果",
+  "focus": "Bilibili 历史桥的只读与隐私边界",
+  "content": "Bilibili 历史读取使用一次安装的 Chrome 扩展和浏览器现有登录态执行只读分页。扩展不读取 Cookie API、Local Storage、密码或浏览器 Profile；Manager 只在私有运行目录保存配对 token、任务游标、状态和聚合计数，不持久化逐条标题、BVID、URL 或 Cookie。登录失效和风控会暂停任务，下一页游标按页保存并支持 Manager 重启后续接。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：Bilibili 历史桥的只读、断点和隐私边界"
+  },
+  "createdAt": "2026-07-30T00:00:00+08:00",
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["Bilibili", "历史记录", "Chrome 扩展", "只读", "断点续传", "聚合计数", "隐私", "Cookie", "风控"]
+}

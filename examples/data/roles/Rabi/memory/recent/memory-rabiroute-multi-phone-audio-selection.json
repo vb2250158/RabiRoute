@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-multi-phone-audio-selection",
+  "title": "多台 RabiLink 手机共享语音服务但不争抢输入",
+  "focus": "多手机语音身份、选择和健康证据",
+  "content": "每个 RabiLink Android 安装生成稳定的 rabi-phone 设备 ID，并在重连时沿用稳定音频流身份。RabiSpeech 可以同时登记多台手机，但只有用户选择的一路进入 VAD/ASR；后来连接的设备不能抢占选择，所选设备短暂离线后恢复原选择。长时收音健康以 PC 端 accepted chunk 和 received_bytes 为真源，ADB 只提供可选的前台服务、WakeLock 与手机侧计数证据，不是正式运行依赖。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：多手机语音选择与无 ADB 健康证据"
+  },
+  "createdAt": "2026-07-30T00:00:00+08:00",
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["RabiLink", "RabiSpeech", "多手机", "稳定设备 ID", "音频流选择", "received_bytes", "accepted_chunks", "ADB", "长时收音"]
+}

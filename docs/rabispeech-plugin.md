@@ -63,6 +63,8 @@ cd plugin-adapters\rabi-speech
 
 会议室远程声卡不改变这个控制面边界。在私有 `config.json` 启用 `remote_audio` 后，RabiSpeech 只额外开放带独立 Bearer 密钥的 TCP `8782` 音频 WebSocket 和 UDP `8783` 局域网发现。客户端只持续传 PCM、接收 WAV；VAD、切句、ASR、Route 广播、人格 TTS、FIFO 与防回流仍全部留在主机。安装见 [Rabi 语音客户端](../desktop/rabi-voice-client/README.md)。局域网直连不要求配置 RabiLink。
 
+RabiLink 手机不依赖 ADB 进入音频流列表。每台安装持有独立、稳定的 `sourceDeviceId` 和稳定流 ID，经 Relay 自动连接后会作为单独客户端显示在 **语音服务 → 音频流类型**。多台可同时在线；首台在没有既有选择时可自动成为默认输入，后来者不抢占。`PUT /v1/audio-streams/selection`（经 Manager 时为 `/api/speech/audio-streams/selection`）只选择一路进入 VAD/ASR并持久化；所选设备离线时不回退到别的麦克风，原设备重连后自动恢复。
+
 Android 手机/眼镜遵循同一“远端只传 PCM、主机拥有语音处理”的边界，但通过 Relay 受限 HTTP 流进入：`start` 建立虚拟远程麦克风，`chunk` 按从 1 开始的连续序号提交 16 kHz mono PCM s16le，`stop` 恢复之前的输入源。`rabilink` 消息端类型由这个专用入口强制决定，客户端不能把手机流伪装成 `speech`。RabiSpeech 在流上运行与本机相同的 VAD、切句、ASR 和声纹，然后自动提交 `messageAdapterType=rabilink` 的主机通用消息。Android 只有在 PC 确认后才提交 chunk 序号；同流重试继续按序号和 PCM 哈希幂等，ACK 丢失后即使重建临时流，稳定 `chunkId` 仍会按 `sourceDeviceId + chunkId + PCM SHA-256` 跨流去重，不重复喂给 ASR。相同 chunk ID 携带不同 PCM 会被拒绝。主机按稳定来源设备只保留最后一个已接收 chunk 的 ID 与哈希，不保存另一份原始录音。`start` 和每个成功 `chunk` 都会重置一次性 15 秒到期事件；只有到期事件触发时才停止失活流，不再固定间隔扫描。Android 不需要也不应暴露 VAD/切句/ASR 设置。
 
 各模型下载、隔离环境和验证命令见 [本地语音模型下载说明](local-speech-model-downloads.md)。
@@ -190,13 +192,21 @@ RibiWebGUI 的“人格配置 → 人格声纹归类”使用上述汇总模式�
 
 运行事件仍只保存于当前 RabiSpeech 进程内，用于阶段、耗时和错误诊断。与芬妮笔记按日期写转写文件的方式一致，ASR/TTS 文本元数据统一追加到被 Git 忽略的 `plugin-adapters/rabi-speech/output/records/YYYY-MM-DD.jsonl`，并在服务重启后保留；WebGUI 在 ASR 页面内嵌展示最近的持久化双向记录，不再提供独立的会议记录选择、说话人摘录或导出卡片。默认不复制 ASR 原始录音。人格 TTS 的完成音频保存到对应的 `data/roles/<RoleId>/voice/cache/tts-audio/`；不属于已解析人格的直接 TTS 才使用 RabiSpeech 私有 fallback 缓存。两者都默认保留 `1440` 分钟（24 小时），按每个文件自己的 mtime 计算。服务启动时扫描一次，之后只维护最早到期的一次性 cleanup deadline；新成品只有更早到期时才重排，不做固定周期目录扫描。记录 API 与 WebGUI 只暴露 POSIX 风格的安全逻辑相对路径：人格记录为 `<RoleId>/voice/cache/tts-audio/<file>`，fallback 为 `output/tts-audio/<file>`；旧记录可继续显示单个文件名，绝不返回本机绝对路径或包含 `..`、反斜杠越界的引用。界面显示的是“预计过期时间”，进程停机或系统调度仍可能让实际删除更晚。文本记录与音频缓存互相独立，音频超过保留窗口不会删除文本记录；`GET /api/speech/records` 仅保留为诊断查询接口。
 
+主机通用 ASR 真源 `data/speech/messages/YYYY-MM-DD.jsonl` 可按指定时间段导出为私有 Markdown 阅读视图：
+
+```powershell
+npm run export:speech-transcript -- --from "2026-07-30T08:00:00+08:00" --to "2026-07-30T10:00:00+08:00"
+```
+
+默认输出到 `data/speech/exports/`，每行格式为 `[时间] 说话人：说话内容`。工具按稳定 record ID 去重、按语音分段时间排序；公共层没有确认身份时只使用说话人标签或不透明声纹 ID，不把声纹擅自解释成某个人。时间范围为左闭右开，建议传带 UTC offset 的 ISO 时间；已有输出默认拒绝覆盖，只有显式 `--force` 才替换。Markdown 是可原子重建的派生视图，不替代公共 JSONL、人格 `voice-transcripts.jsonl` 或统一双向账本，也不触发归档、记忆沉淀或删除。
+
 RabiSpeech 仍可在本机诊断界面保存操作员标注和声纹原型，但这些人名只是诊断兼容数据，不是 Route 或人格的身份真源。`output/speaker-embeddings.json` 保存神经 embedding、人工确认原型和未知聚类；每个可提取分段显式输出稳定、不透明的 `voiceprint_id`，其值来自该主机的 cluster。同一未知声音在服务重启后会继续从该文件匹配原 cluster；全天有界裁剪会为每个仍活跃的未知簇保留至少一个原型，避免安静说话人被更高频声音完全挤出。进入 RabiRoute 主机通用消息前会删除 `speakerName/speakerSuggestionName`；主机 profile `speaker_id` 和候选 `speaker_suggestion_id` 可保留为诊断字段，但人格的 `user/other` 分类与 AgentPacket 身份注入只使用 `sourceHostId + voiceprintId`，绝不使用主机人物资料代替人格判断。系统不把 diarization 的 `Speaker 1`、`0` 冒充身份，也不按长生命周期 `sessionId` 继承。原始注册音频不复制，embedding 不通过 API 返回；某个声纹到底是谁、是不是用户，必须由收到它的各个人格分别解释。
 
-声纹模型在进入主进程前先由独立子进程做兼容探测。RabiSpeech 的唯一正式声纹提取后端是 ONNX Runtime + kaldi-native-fbank：16 kHz、80-bin FBank、全局均值归一化，再输出 192 维 embedding；它会在子进程中先完成一次真实推理。旧的 Windows sherpa-onnx native 特征管线因无法加载当前官方 3D-Speaker 模型而不再进入正式运行链。当前后端不可用时，主服务继续提供其他语音能力，并在 `voiceprint.reason` 暴露失败原因，不会隐式切换到另一套 runtime。人物确认原型按 `max_samples_per_profile` 保持有界，未人工确认的聚类和自动匹配样本按 `max_unconfirmed_samples` 保持有界；低于 `min_voiced_rms` 的帧和明显跨说话人重叠片段不进入 embedding 仓库。自动匹配结果不会反向成为训练原型，只有人工确认样本拥有原型解释权。
+声纹模型在进入主进程前先由独立子进程做兼容探测。RabiSpeech 的唯一正式声纹提取后端是 ONNX Runtime + kaldi-native-fbank：16 kHz、80-bin FBank、全局均值归一化，再输出 192 维 embedding；它会在子进程中先完成一次真实推理。旧的 Windows sherpa-onnx native 特征管线因无法加载当前官方 3D-Speaker 模型而不再进入正式运行链。当前后端不可用时，主服务继续提供其他语音能力，并在 `voiceprint.reason` 暴露失败原因，不会隐式切换到另一套 runtime。人物确认原型按 `max_samples_per_profile` 保持有界，未人工确认的聚类和自动匹配样本按 `max_unconfirmed_samples` 保持有界；低于 `min_voiced_rms` 的帧和明显跨说话人重叠片段不进入 embedding 仓库。未知簇使用 complete-link 门禁：新 embedding 必须对簇内每个现存样本都达到 `cluster_threshold`，避免混合/桥接样本通过质心把不同声音误并；保守拆簇优先于错误合人。自动匹配结果不会反向成为训练原型，只有人工确认样本拥有原型解释权。
 
 运维或 Agent 可运行 `py -3.10 scripts\speaker_model_probe.py --config config.json`，让探针按服务相同规则解析配置和相对模型路径。脚本按自身位置加载 RabiSpeech 与私有依赖，因此不要求调用者先切换工作目录。返回 192 维 embedding 只证明本机提取链可运行，不替代真实同人/异人阈值报告。
 
-声纹匹配和多人分离是两层能力：前者回答“这段声音像谁”，后者回答“谁在什么时间说话”。只有 ASR 已返回可靠的 `speaker + start/end` 时才能分别提取多人 embedding；没有 diarization 标签的普通 ASR 会把一次 VAD 切片作为单个临时 `voice`，不能解决同一切片内轮流或重叠说话。
+声纹匹配和多人分离是两层能力：前者回答“这段声音像谁”，后者回答“谁在什么时间说话”。Provider 已返回可靠的 `speaker + start/end` 时可以直接逐 turn 提取多人 embedding。对于 faster-whisper 这类只有 `start/end`、没有 diarization 标签的本地 ASR，RabiSpeech 还会按 `speaker_recognition.unlabeled_turn_gap_seconds`（默认 `0.5` 秒）把被静音隔开的连续时间段组成临时 `voice#turn-N`，逐轮提取 embedding，再由声纹聚类合并同一说话人。没有时间段、段间没有足够静音，或多人重叠说话时仍不能可靠分离；这项本地静音分轮不能冒充重叠语音 diarization。
 
 本机 RabiSpeech 控制面与 Manager 镜像接口保持不变。ASR 页按已知人物或跨录音未知声纹簇展示最近话语，并保留逐录音下拉纠正。默认 ERes2NetV2 模型需显式安装；模型缺失时回退纯人工模式。模型存在但 `validated=false` 时默认只做聚类和候选提示；本机只有显式设置 `experimental_auto_assign=true` 才允许带实验标记的自动认人，而且 capability 仍不会声明正式支持。正式模式必须同时设置 `validated=true` 与 `validation_report_path`；运行时会核对报告 schema、`dataset_kind=real_person_private`、`formal_validation_eligible=true`、dataset manifest SHA-256、policy SHA-256、完整门禁结果、目标模型 ID/模型 SHA-256、hard threshold 和 min margin，任何一项不一致都会关闭正式自动认人并通过 `voiceprint.reason` 说明原因。
 

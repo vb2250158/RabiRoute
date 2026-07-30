@@ -514,7 +514,7 @@ public final class RabiConversationService extends Service {
     private boolean configureBackend() {
         RabiLinkRelayConfig relay = RabiLinkRelaySettings.load(this);
         if (!relay.getConfigured()) return false;
-        backend.configure(relay.getBaseUrl(), relay.getToken(), "rabi-phone");
+        backend.configure(relay.getBaseUrl(), relay.getToken(), RabiMobileDeviceIdentity.load(this));
         backend.reloadSettings();
         return true;
     }
@@ -560,7 +560,7 @@ public final class RabiConversationService extends Service {
     }
 
     private boolean playOnPhone(byte[] pcm) {
-        if (pcm == null || pcm.length == 0) return false;
+        if (pcm == null || pcm.length < 4) return false;
         phoneAudioCapture.setPlaybackSuppressed(true);
         int minimum = AudioTrack.getMinBufferSize(16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
         AudioTrack track = new AudioTrack.Builder()
@@ -574,8 +574,9 @@ public final class RabiConversationService extends Service {
         CountDownLatch completed = new CountDownLatch(1);
         AtomicBoolean markerReached = new AtomicBoolean(false);
         try {
-            if (track.getState() != AudioTrack.STATE_INITIALIZED) return false;
-            int frames = Math.max(1, pcm.length / 2);
+            int markerFrames = phonePlaybackMarkerFrames(pcm.length);
+            int trackState = track.getState();
+            if (!phonePlaybackStateReadyForWrite(trackState)) return false;
             track.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
                 @Override public void onMarkerReached(AudioTrack ignored) {
                     markerReached.set(true);
@@ -583,8 +584,10 @@ public final class RabiConversationService extends Service {
                 }
                 @Override public void onPeriodicNotification(AudioTrack ignored) { }
             }, new android.os.Handler(getMainLooper()));
-            if (track.setNotificationMarkerPosition(frames) != AudioTrack.SUCCESS) return false;
-            if (track.write(pcm, 0, pcm.length) != pcm.length) return false;
+            int written = track.write(pcm, 0, pcm.length);
+            if (written != pcm.length) return false;
+            int markerResult = track.setNotificationMarkerPosition(markerFrames);
+            if (markerResult != AudioTrack.SUCCESS) return false;
             track.play();
             long timeoutMs = Math.max(5000, (pcm.length * 1000L) / 32000L + 5000L);
             if (!completed.await(timeoutMs, TimeUnit.MILLISECONDS)) return false;
@@ -599,6 +602,14 @@ public final class RabiConversationService extends Service {
             track.release();
             phoneAudioCapture.setPlaybackSuppressed(false);
         }
+    }
+
+    static int phonePlaybackMarkerFrames(int pcmByteCount) {
+        return Math.max(1, (pcmByteCount / 2) - 1);
+    }
+
+    static boolean phonePlaybackStateReadyForWrite(int state) {
+        return state == AudioTrack.STATE_INITIALIZED || state == AudioTrack.STATE_NO_STATIC_DATA;
     }
 
     private String persistTtsMessage(String text, String routeProfileId, byte[] pcm) {

@@ -3,6 +3,7 @@ import {
   defaultRolePanelNotificationRule,
   defaultMessageAdapterNotificationRules,
   ensureDefaultPersonaRules,
+  ensureMessageAdapterNotificationRules,
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
   isBuiltinRolePanelNotificationRule,
   messageAdapterPolicyFor as sharedMessageAdapterPolicyFor,
@@ -27,7 +28,8 @@ export const routeKindLabels: Record<string, string> = {
   plan_feedback: "计划审批",
   voice_transcript: "语音转写",
   wearable_health_alert: "智能手表/手环健康告警",
-  wecom_message: "企业微信消息"
+  wecom_message: "企业微信消息",
+  weixin_message: "个人微信消息"
 };
 
 export const templateVars = [
@@ -98,7 +100,10 @@ export const templateVars = [
   { name: "wecomConversationId", description: "企业微信会话 ID。" },
   { name: "wecomChatId", description: "企业微信群聊 chat id；模板里的 groupId 会优先使用这个值。" },
   { name: "wecomSenderId", description: "企业微信发送者 userid；模板里的 userId 会优先使用这个值。" },
-  { name: "wecomMessageType", description: "企业微信消息类型，例如 text、mixed、image、voice、file。" }
+  { name: "wecomMessageType", description: "企业微信消息类型，例如 text、mixed、image、voice、file。" },
+  { name: "weixinSessionId", description: "个人微信来源会话 ID；回复只能返回这条来源会话。" },
+  { name: "weixinUserId", description: "个人微信发送者 ID。" },
+  { name: "weixinMessageType", description: "个人微信消息类型，例如 text、mixed、image、voice、file。" }
 ];
 
 export function normalizeTemplateText(value: unknown): string {
@@ -180,6 +185,7 @@ export function isMessageInputsDisabled(gateway: GatewayDefinition): boolean {
 
 export function setGatewayAdapters(gateway: GatewayDefinition, adapters: MessageAdapterType[]): void {
   sharedSetGatewayAdapters(gateway, adapters);
+  gateway.notificationRules = ensureMessageAdapterNotificationRules(gateway.notificationRules, gatewayAdapterTypes(gateway));
 }
 
 export function messageAdapterPolicyFor(gateway: GatewayDefinition, type: MessageAdapterType): Required<MessageAdapterPolicy> {
@@ -212,6 +218,7 @@ export function adapterLabel(type: string): string {
   if (type === "rabilink") return "眼镜端（经 RabiLink）";
   if (type === "wearable") return "智能手表/手环";
   if (type === "wecom") return "企业微信 / WeCom";
+  if (type === "weixin") return "个人微信 / Weixin";
   if (type === "webhook") return "通用 Webhook";
   if (type === "disabled") return "已禁用";
   return type;
@@ -226,7 +233,7 @@ export function isWebhookLikeAdapter(type: string): boolean {
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
-  return type === "napcat" || type === "wecom" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
+  return type === "napcat" || type === "wecom" || type === "weixin" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
 }
 
 export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean {
@@ -391,6 +398,10 @@ export function notificationRulesForGateway(gateway: GatewayDefinition): Notific
     gateway.notificationRules = defaultMessageAdapterNotificationRules(gatewayAdapterTypes(gateway))
       .map((rule, index) => normalizeRule(rule, index));
   }
+  gateway.notificationRules = ensureMessageAdapterNotificationRules(
+    gateway.notificationRules,
+    gatewayAdapterTypes(gateway)
+  ).map((rule, index) => normalizeRule(rule, index));
   return gateway.notificationRules;
 }
 
@@ -435,6 +446,18 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       groups: [{ title: "远端任务结果", routeKinds: ["manual_trigger"] }]
     },
     {
+      adapter: "speech",
+      title: "语音消息端",
+      note: "本机语音转写入口；语音热投递或关键词模式仍由 Route 单独控制。",
+      groups: [{ title: "语音转写", routeKinds: ["voice_transcript"] }]
+    },
+    {
+      adapter: "fennenote",
+      title: "FenneNote / 芬妮笔记",
+      note: "FenneNote 转写回调入口；默认作为语音转写事件投递。",
+      groups: [{ title: "语音转写", routeKinds: ["voice_transcript"] }]
+    },
+    {
       adapter: "xiaoai",
       title: "小米音箱 / 小爱",
       note: "来自小爱音箱的语音转写输入；底层是 HTTP 回调，但日志和配置按小米音箱独立显示。",
@@ -444,7 +467,7 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       adapter: "rabilink",
       title: "眼镜端（经 RabiLink）",
       note: "眼镜是消息来源；系统内置 RabiLink 负责转接，再由当前路由决定是否投递 Agent。",
-      groups: [{ title: "眼镜文本事件", routeKinds: ["voice_transcript"] }]
+      groups: [{ title: "眼镜文本事件", routeKinds: ["rabilink"] }]
     },
     {
       adapter: "wearable",
@@ -457,6 +480,12 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       title: "企业微信 / WeCom",
       note: "企业微信群聊消息；变量尽量对齐 NapCat 群聊，并额外提供 wecomReqId / wecomChatId。",
       groups: [{ title: "企业微信群聊", routeKinds: ["wecom_message"] }]
+    },
+    {
+      adapter: "weixin",
+      title: "个人微信 / Weixin",
+      note: "个人微信私聊消息；文本进入 Agent，回复只回到原会话。",
+      groups: [{ title: "个人微信私聊", routeKinds: ["weixin_message"] }]
     },
     {
       adapter: "webhook",

@@ -12,5 +12,6 @@
 | --- | --- | --- |
 | [`rabilink-android/`](./rabilink-android/README.md) | Android 手机 + Rokid 眼镜 | 会话列表与单聊、持续消息、远程配置、可穿戴健康入口，以及随手机构建的眼镜前端。 |
 | [`rabilink-aiui/`](./rabilink-aiui/README.md) | Rokid AIUI | 眼镜前台 Agent 消息端、配置助手、AIX 打包和验收。宿主没有 SSE/WS/分块回调，因此为保证主动下行保留受控长等待；新原生主链优先使用 Android companion 事件流。 |
+| [`bilibili-history-bridge/`](./bilibili-history-bridge/README.md) | Chrome | 一次安装后以浏览器登录态执行 Bilibili 历史只读长分页，并把断点与聚合兴趣信号交给本机 Manager。 |
 
 共享 Android 通讯契约位于 [`packages/android-sdk/`](../packages/android-sdk/README.md)。可复制 Route/Persona 与 Relay 样板仍位于 [`examples/`](../examples/README.md)。

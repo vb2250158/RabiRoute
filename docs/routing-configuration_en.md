@@ -22,7 +22,7 @@ Reusable role rules:
 data/roles/<RoleId>/personaConfig.json
 ```
 
-The route points to the role with `agentRoleId`. The current persona file keeps root-level `notificationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Several Routes may reuse the same role-owned policy.
+The route points to the role with `agentRoleId`. The current persona file keeps root-level `notificationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Several Routes may reuse the same role-owned policy. When an endpoint is added and enabled, Manager adds an empty fallback template for any of that endpoint's route kinds not already covered by a rule. Existing custom rules are preserved, and an explicitly disabled matching rule is not re-enabled. This prevents a working ingress from silently dropping messages merely because its rule list was empty.
 
 ## `personaConfig.json`
 

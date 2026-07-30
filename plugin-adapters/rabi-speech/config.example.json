@@ -37,7 +37,8 @@
     "min_margin": 0.06,
     "max_samples_per_profile": 12,
     "max_unconfirmed_samples": 500,
-    "min_voiced_rms": 0.006
+    "min_voiced_rms": 0.006,
+    "unlabeled_turn_gap_seconds": 0.5
   },
   "providers": {
     "extensions": [],

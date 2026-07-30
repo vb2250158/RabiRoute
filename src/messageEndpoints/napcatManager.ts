@@ -177,13 +177,48 @@ type NapcatLoginInfo = {
   nickname?: string;
   online?: boolean;
   source?: "onebot-http" | "webui";
-  status?: "logged-in" | "login-conflict" | "quick-login-available";
+  status?: "logged-in" | "login-conflict" | "quick-login-available" | "quick-login-invalid" | "qr-login-required" | "manual-login";
   message?: string;
+};
+
+type NapcatLoginState =
+  | "ready"
+  | "account-online-elsewhere"
+  | "account-mismatch"
+  | "quick-login-available"
+  | "quick-login-invalid"
+  | "qr-login-required"
+  | "login-conflict"
+  | "manual-login"
+  | "start-failed";
+
+type NapcatAccountOwner = {
+  userId: string;
+  nickname?: string;
+  httpUrl: string;
+  webuiUrl?: string;
+  openUrl?: string;
+  workingDir?: string;
+  configPath?: string;
+  gatewayId?: string;
+  instanceId?: string;
+  instanceName?: string;
+  source: "configured" | "discovered";
+  online?: boolean;
+  good?: boolean;
+  websocketUrls: string[];
+  routesToGateway: boolean;
+};
+
+type NapcatAccountProbeCandidate = Omit<NapcatAccountOwner, "userId" | "nickname" | "online" | "good" | "routesToGateway"> & {
+  accessToken?: string;
 };
 
 type NapcatEnsureHealth = Record<string, unknown> & {
   ok?: boolean;
   message?: string;
+  loginState?: NapcatLoginState;
+  accountOwner?: NapcatAccountOwner;
   http?: { ok?: boolean; userId?: string | number; nickname?: string };
   loginInfo?: NapcatLoginInfo;
   webui?: NapcatWebuiTokenInfo & {
@@ -809,6 +844,215 @@ function napcatWebuiConfigCandidates(ctx: NapcatManagerContext, preferredInstanc
   return [...candidates].filter((candidate) => fs.existsSync(candidate));
 }
 
+function normalizeLocalEndpoint(url: string | undefined): string {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    const hostname = ["localhost", "::1", "[::1]"].includes(parsed.hostname.toLowerCase())
+      ? "127.0.0.1"
+      : parsed.hostname;
+    return `${parsed.protocol}//${hostname}${parsed.port ? `:${parsed.port}` : ""}${parsed.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return value.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+function readWebuiConfigSummary(configPath: string): { webuiUrl?: string; token?: string; workingDir?: string } {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")) as {
+      port?: unknown;
+      token?: unknown;
+      disableWebUI?: unknown;
+    };
+    const port = Number(parsed.port || 0);
+    const token = String(parsed.token || "").trim();
+    const configDir = path.dirname(configPath);
+    const napcatDir = path.dirname(configDir);
+    const workingDir = path.dirname(napcatDir);
+    return {
+      ...(port > 0 && parsed.disableWebUI !== true ? { webuiUrl: localUrl(port, "/webui") } : {}),
+      ...(token ? { token } : {}),
+      workingDir
+    };
+  } catch {
+    return {};
+  }
+}
+
+function addNapcatAccountProbeCandidate(
+  candidates: Map<string, NapcatAccountProbeCandidate>,
+  candidate: NapcatAccountProbeCandidate
+): void {
+  const key = normalizeLocalEndpoint(candidate.httpUrl);
+  if (!key) return;
+  const current = candidates.get(key);
+  if (!current) {
+    candidates.set(key, candidate);
+    return;
+  }
+  candidates.set(key, {
+    ...candidate,
+    ...current,
+    websocketUrls: [...new Set([...(current.websocketUrls || []), ...(candidate.websocketUrls || [])])],
+    source: current.source === "configured" || candidate.source === "configured" ? "configured" : "discovered"
+  });
+}
+
+function napcatNetworkEndpoints(config: NormalizedNapcatOneBotNetworkConfig | null): {
+  httpServers: Array<{ port: number; token?: string }>;
+  websocketUrls: string[];
+} {
+  if (!config) return { httpServers: [], websocketUrls: [] };
+  const httpServers = config.network.httpServers
+    .filter(isEnabledConfigItem)
+    .map((item) => ({
+      port: Number(item.port || 0),
+      token: String(item.token || "").trim() || undefined
+    }))
+    .filter((item) => Number.isInteger(item.port) && item.port > 0 && item.port <= 65535);
+  const websocketUrls = config.network.websocketClients
+    .filter(isEnabledConfigItem)
+    .map((item) => String(item.url || "").trim())
+    .filter(Boolean);
+  return { httpServers, websocketUrls };
+}
+
+function napcatAccountProbeCandidates(
+  ctx: NapcatManagerContext,
+  userId: string
+): NapcatAccountProbeCandidate[] {
+  const candidates = new Map<string, NapcatAccountProbeCandidate>();
+  for (const runtime of napcatRuntimes(ctx)) {
+    for (const instance of napcatInstancesFor(ctx, runtime)) {
+      const configuredUserId = String(instance.botUserId || "").trim();
+      if (configuredUserId && configuredUserId !== userId) continue;
+      const configPath = instance.webuiUrl
+        ? readNapcatWebuiToken(ctx, instance.webuiUrl, instance.webuiToken, [instance]).configPath
+        : undefined;
+      const onebotPath = onebotConfigPathForWebuiConfig(configPath, userId);
+      const endpoints = napcatNetworkEndpoints(readOneBotNetworkConfig(onebotPath));
+      addNapcatAccountProbeCandidate(candidates, {
+        httpUrl: instance.httpUrl,
+        webuiUrl: instance.webuiUrl,
+        openUrl: instance.webuiUrl && instance.webuiToken
+          ? napcatWebuiLoginUrl(instance.webuiUrl, instance.webuiToken)
+          : instance.webuiUrl,
+        workingDir: instance.workingDir,
+        configPath: onebotPath || undefined,
+        gatewayId: runtime.definition.id,
+        instanceId: instance.id,
+        instanceName: instance.name,
+        source: "configured",
+        accessToken: instance.accessToken,
+        websocketUrls: endpoints.websocketUrls
+      });
+    }
+  }
+
+  for (const webuiConfigPath of napcatWebuiConfigCandidates(ctx)) {
+    const webui = readWebuiConfigSummary(webuiConfigPath);
+    const configDir = path.dirname(webuiConfigPath);
+    for (const filename of [`onebot11_${userId}.json`, `napcat_protocol_${userId}.json`]) {
+      const configPath = path.join(configDir, filename);
+      if (!fs.existsSync(configPath)) continue;
+      const endpoints = napcatNetworkEndpoints(readOneBotNetworkConfig(configPath));
+      for (const server of endpoints.httpServers) {
+        addNapcatAccountProbeCandidate(candidates, {
+          httpUrl: localUrl(server.port),
+          webuiUrl: webui.webuiUrl,
+          openUrl: webui.webuiUrl && webui.token
+            ? napcatWebuiLoginUrl(webui.webuiUrl, webui.token)
+            : webui.webuiUrl,
+          workingDir: webui.workingDir,
+          configPath,
+          source: "discovered",
+          accessToken: server.token,
+          websocketUrls: endpoints.websocketUrls
+        });
+      }
+    }
+  }
+  return [...candidates.values()];
+}
+
+async function fetchNapcatOneBotAction<T>(
+  httpUrl: string,
+  action: string,
+  accessToken?: string,
+  timeoutMs = 1500
+): Promise<NapcatOneBotResponse<T> | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8" };
+  if (accessToken?.trim()) headers.authorization = `Bearer ${accessToken.trim()}`;
+  try {
+    const response = await fetch(`${httpUrl.replace(/\/+$/, "")}/${action}`, {
+      method: "POST",
+      headers,
+      body: "{}",
+      signal: controller.signal
+    });
+    const body = await response.json().catch(() => ({})) as NapcatOneBotResponse<T>;
+    if (!response.ok || (body.retcode != null && body.retcode !== 0) || body.status === "failed") return null;
+    return body;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function findNapcatAccountOwner(
+  ctx: NapcatManagerContext,
+  userId: string,
+  target: NapCatInstanceDefinition
+): Promise<NapcatAccountOwner | null> {
+  if (!userId) return null;
+  const targetHttp = normalizeLocalEndpoint(target.httpUrl);
+  const targetWebui = normalizeLocalEndpoint(target.webuiUrl);
+  const gatewayUrl = `ws://127.0.0.1:${target.gatewayPort}`;
+  const probes = napcatAccountProbeCandidates(ctx, userId)
+    .filter((candidate) => {
+      const sameHttp = normalizeLocalEndpoint(candidate.httpUrl) === targetHttp;
+      const sameWebui = candidate.webuiUrl && normalizeLocalEndpoint(candidate.webuiUrl) === targetWebui;
+      return !sameHttp && !sameWebui;
+    })
+    .slice(0, 24);
+  const results = await Promise.all(probes.map(async (candidate): Promise<NapcatAccountOwner | null> => {
+    const [status, login] = await Promise.all([
+      fetchNapcatOneBotAction<{ online?: boolean; good?: boolean }>(candidate.httpUrl, "get_status", candidate.accessToken),
+      fetchNapcatOneBotAction<{ user_id?: string | number; nickname?: string }>(candidate.httpUrl, "get_login_info", candidate.accessToken)
+    ]);
+    const actualUserId = String(login?.data?.user_id || "").trim();
+    if (!actualUserId || actualUserId !== userId) return null;
+    if (status?.data?.online === false || status?.data?.good === false) return null;
+    return {
+      userId: actualUserId,
+      nickname: login?.data?.nickname,
+      httpUrl: candidate.httpUrl,
+      webuiUrl: candidate.webuiUrl,
+      openUrl: candidate.openUrl,
+      workingDir: candidate.workingDir,
+      configPath: candidate.configPath,
+      gatewayId: candidate.gatewayId,
+      instanceId: candidate.instanceId,
+      instanceName: candidate.instanceName,
+      source: candidate.source,
+      online: status?.data?.online,
+      good: status?.data?.good,
+      websocketUrls: candidate.websocketUrls,
+      routesToGateway: candidate.websocketUrls.includes(gatewayUrl)
+    };
+  }));
+  return results
+    .filter((owner): owner is NapcatAccountOwner => Boolean(owner))
+    .sort((left, right) =>
+      Number(right.routesToGateway) - Number(left.routesToGateway)
+      || Number(right.source === "configured") - Number(left.source === "configured")
+    )[0] ?? null;
+}
+
 function preferredNapcatInstancesForHealth(ctx: NapcatManagerContext, request: NapcatHealthRequest): NapCatInstanceDefinition[] {
   const result: NapCatInstanceDefinition[] = [];
   for (const runtime of ctx.getRuntimes()) {
@@ -906,7 +1150,11 @@ async function loginNapcatWebui(webuiUrl: string, tokenInfo: NapcatWebuiTokenInf
   return { baseUrl, credential };
 }
 
-async function readNapcatWebuiLoginInfo(webuiUrl: string, tokenInfo: NapcatWebuiTokenInfo): Promise<NapcatLoginInfo | null> {
+async function readNapcatWebuiLoginInfo(
+  webuiUrl: string,
+  tokenInfo: NapcatWebuiTokenInfo,
+  expectedUserId = ""
+): Promise<NapcatLoginInfo | null> {
   const session = await loginNapcatWebui(webuiUrl, tokenInfo);
   if (!session) return null;
   const headers = {
@@ -954,9 +1202,14 @@ async function readNapcatWebuiLoginInfo(webuiUrl: string, tokenInfo: NapcatWebui
     body: "{}"
   });
   const quickBody = await quickResp.json().catch(() => ({})) as NapcatWebuiResponse<Array<{ uin?: string | number; nickName?: string; isUserLogin?: boolean; isQuickLogin?: boolean }>>;
-  const loggedInQuick = Array.isArray(quickBody.data)
-    ? quickBody.data.find((item) => item?.uin && (item.isUserLogin === true || item.isQuickLogin === true))
-    : null;
+  const quickAccounts = Array.isArray(quickBody.data) ? quickBody.data : [];
+  const loggedInQuick = expectedUserId
+    ? quickAccounts.find((item) =>
+        String(item?.uin || "").trim() === expectedUserId
+        && (item.isUserLogin === true || item.isQuickLogin === true)
+      )
+    : quickAccounts.find((item) => item?.uin && item.isUserLogin === true)
+      || quickAccounts.find((item) => item?.uin && item.isQuickLogin === true);
   if (quickResp.ok && quickBody.code === 0 && loggedInQuick?.uin) {
     return {
       userId: loggedInQuick.uin,
@@ -966,6 +1219,30 @@ async function readNapcatWebuiLoginInfo(webuiUrl: string, tokenInfo: NapcatWebui
       status: "quick-login-available"
     };
   }
+  if (/二维码.*过期|扫码|重新登录|登录态.*失效/i.test(loginError)) {
+    return {
+      online: false,
+      source: "webui",
+      status: "qr-login-required",
+      message: loginError
+    };
+  }
+  if (expectedUserId && quickResp.ok && quickBody.code === 0) {
+    return {
+      online: false,
+      source: "webui",
+      status: "qr-login-required",
+      message: `绑定 QQ ${expectedUserId} 没有可用的快速登录身份。`
+    };
+  }
+  if (loginError) {
+    return {
+      online: false,
+      source: "webui",
+      status: "manual-login",
+      message: loginError
+    };
+  }
   return null;
 }
 
@@ -973,9 +1250,15 @@ async function requestNapcatQuickLogin(
   webuiUrl: string,
   tokenInfo: NapcatWebuiTokenInfo,
   userId: string
-): Promise<{ ok: boolean; message?: string }> {
+): Promise<{ ok: boolean; state?: "quick-login-invalid" | "login-conflict" | "manual-login"; message?: string }> {
   const session = await loginNapcatWebui(webuiUrl, tokenInfo);
-  if (!session) return { ok: false, message: "NapCat 管理页暂时无法自动登录。" };
+  if (!session) {
+    return {
+      ok: false,
+      state: "manual-login",
+      message: "NapCat 管理页暂时无法自动登录。"
+    };
+  }
   try {
     const response = await fetch(`${session.baseUrl}/api/QQLogin/SetQuickLogin`, {
       method: "POST",
@@ -987,9 +1270,20 @@ async function requestNapcatQuickLogin(
     });
     const body = await response.json().catch(() => ({})) as NapcatWebuiResponse<unknown>;
     if (response.ok && body.code === 0) return { ok: true };
-    return { ok: false, message: String(body.message || response.statusText || "快捷登录未完成。") };
+    const message = String(body.message || response.statusText || "快捷登录未完成。");
+    if (/登录态.*失效|身份.*失效|重新登录|扫码/i.test(message)) {
+      return { ok: false, state: "quick-login-invalid", message };
+    }
+    if (/已登录|重复登录|占用/i.test(message)) {
+      return { ok: false, state: "login-conflict", message };
+    }
+    return { ok: false, state: "manual-login", message };
   } catch {
-    return { ok: false, message: "快捷登录请求暂时失败。" };
+    return {
+      ok: false,
+      state: "manual-login",
+      message: "快捷登录请求暂时失败。"
+    };
   }
 }
 
@@ -1420,10 +1714,10 @@ export async function configureNapcatOneBot(ctx: NapcatManagerContext, request: 
     throw new Error(`RabiRoute WS 端口无效：${request.gatewayPort || ""}`);
   }
 
-  const tokenInfo = readNapcatWebuiToken(ctx, webuiUrl, request.webuiToken);
-  const webuiLoginInfo = await readNapcatWebuiLoginInfo(webuiUrl, tokenInfo);
   const preferredInstances = preferredNapcatInstancesForHealth(ctx, request);
   const expectedBotUserId = expectedBotUserIdForHealth(preferredInstances, request);
+  const tokenInfo = readNapcatWebuiToken(ctx, webuiUrl, request.webuiToken);
+  const webuiLoginInfo = await readNapcatWebuiLoginInfo(webuiUrl, tokenInfo, expectedBotUserId);
   const webuiLoginUserId = String(webuiLoginInfo?.userId || "").trim();
   if (webuiLoginInfo?.userId && webuiLoginInfo.online !== true) {
     throw new Error(webuiLoginInfo.status === "login-conflict"
@@ -1568,16 +1862,16 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
     }
   }
   const shouldReadWebuiLoginInfo = request.readWebuiLoginInfo !== false;
+  const expectedBotUserId = expectedBotUserIdForHealth(preferredInstances, request);
   let webuiLoginInfo: NapcatLoginInfo | null = null;
   if (shouldReadWebuiLoginInfo) {
     try {
-      webuiLoginInfo = await readNapcatWebuiLoginInfo(effectiveWebuiUrl, tokenInfo);
+      webuiLoginInfo = await readNapcatWebuiLoginInfo(effectiveWebuiUrl, tokenInfo, expectedBotUserId);
       if (!loginInfo && webuiLoginInfo?.online === true) loginInfo = webuiLoginInfo;
     } catch {
       webuiLoginInfo = null;
     }
   }
-  const expectedBotUserId = expectedBotUserIdForHealth(preferredInstances, request);
   const webuiLoginUserId = String(webuiLoginInfo?.userId || "").trim();
   const webuiLoggedIn = Boolean(webuiLoginInfo?.userId && webuiLoginInfo.online === true);
   const webuiAccountMismatch = Boolean(expectedBotUserId && webuiLoginUserId && expectedBotUserId !== webuiLoginUserId);
@@ -1650,6 +1944,8 @@ export async function testNapcatHealth(ctx: NapcatManagerContext, request: Napca
           ? `账号 ${webuiLoginInfo.userId} 已被其他 QQ/NapCat 会话占用；当前呆猫实例尚未登录。`
           : webuiLoginInfo?.status === "quick-login-available"
           ? `NapCat 已发现可快速登录账号 ${webuiLoginInfo.userId}，但当前实例尚未完成登录。`
+          : webuiLoginInfo?.status === "qr-login-required"
+          ? String(webuiLoginInfo.message || `绑定 QQ ${expectedBotUserId} 没有可用的快速登录身份，请刷新二维码并扫码登录。`)
         : webuiReachable
           ? "NapCat WebUI 可打开，但当前 QQ 还未登录；请在 WebUI 完成扫码/前台登录。"
           : undefined
@@ -1686,6 +1982,37 @@ export async function launchNapcatInstance(ctx: NapcatManagerContext, request: N
     .find((item) => item.id === instanceId);
   if (!instance) {
     throw new Error(`未找到 NapCat 实例：${instanceId}`);
+  }
+  const expectedUserId = String(instance.botUserId || "").trim();
+  const accountOwner = await findNapcatAccountOwner(ctx, expectedUserId, instance);
+  if (accountOwner) {
+    const message = `QQ ${expectedUserId} 已在另一 NapCat 实例在线；为保护现有会话，没有启动重复实例。`;
+    ctx.appendLog(runtime, `skip launch NapCat instance ${instance.name || instance.id}: account ${expectedUserId} already online at ${accountOwner.httpUrl}`);
+    return {
+      ok: false,
+      state: "account-online-elsewhere",
+      needsUserAction: true,
+      message,
+      openUrl: accountOwner.openUrl || accountOwner.webuiUrl,
+      accountOwner,
+      health: {
+        ok: false,
+        loginState: "account-online-elsewhere",
+        accountOwner,
+        message
+      },
+      steps: [
+        `已发现在线账号归属：${accountOwner.instanceName || accountOwner.workingDir || accountOwner.httpUrl}。`,
+        "已保留现有登录；如需迁移，请先明确停止旧实例，再启动目标实例。"
+      ],
+      instance: {
+        id: instance.id,
+        name: instance.name,
+        gatewayPort: instance.gatewayPort,
+        httpUrl: instance.httpUrl,
+        webuiUrl: instance.webuiUrl
+      }
+    };
   }
   const plan = resolveNapcatLaunchPlan(instance, ctx.rootDir);
   const tokenInfo = instance.webuiUrl
@@ -1848,11 +2175,41 @@ export async function ensureNapcatInstanceReady(
   const steps: string[] = [];
   let health = await testNapcatHealth(ctx, healthRequest) as NapcatEnsureHealth;
   if (napcatHealthMatchesInstance(instance, health)) {
+    health = { ...health, loginState: "ready" };
     return {
       ok: true,
       state: "ready",
       message: "NapCat 已就绪。",
       openUrl: napcatEnsureOpenUrl(instance, health),
+      health,
+      steps
+    };
+  }
+
+  const expectedUserId = String(instance.botUserId || "").trim();
+  const accountOwner = await findNapcatAccountOwner(ctx, expectedUserId, instance);
+  if (accountOwner) {
+    const message = `QQ ${expectedUserId} 已在另一 NapCat 实例在线；已保留现有登录，不会启动重复实例。`;
+    health = {
+      ...health,
+      loginState: "account-online-elsewhere",
+      accountOwner,
+      message
+    };
+    steps.push(
+      `已发现在线账号归属：${accountOwner.instanceName || accountOwner.workingDir || accountOwner.httpUrl}。`,
+      accountOwner.routesToGateway
+        ? "该实例已指向当前 RabiRoute 网关，可以采用它作为当前 QQ 入口。"
+        : "该实例尚未指向当前 RabiRoute 网关；采用前需要检查 OneBot WebSocket 路由。"
+    );
+    ctx.appendLog(runtime, `preserve NapCat account owner for ${expectedUserId}: ${accountOwner.httpUrl} routesToGateway=${accountOwner.routesToGateway}`);
+    return {
+      ok: false,
+      state: "account-online-elsewhere",
+      needsUserAction: true,
+      message,
+      openUrl: accountOwner.openUrl || accountOwner.webuiUrl,
+      accountOwner,
       health,
       steps
     };
@@ -1868,6 +2225,7 @@ export async function ensureNapcatInstanceReady(
     steps.push("已自动启动 NapCat。", ...((launch.steps as string[] | undefined) ?? []));
     health = await testNapcatHealth(ctx, healthRequest) as NapcatEnsureHealth;
     if (napcatHealthMatchesInstance(instance, health)) {
+      health = { ...health, loginState: "ready" };
       return {
         ok: true,
         state: "ready",
@@ -1885,7 +2243,7 @@ export async function ensureNapcatInstanceReady(
       state: "start-failed",
       needsUserAction: false,
       message: "NapCat 暂时没有启动成功，请再点一次；仍失败时再查看详情。",
-      health,
+      health: { ...health, loginState: "start-failed" },
       steps
     };
   }
@@ -1896,6 +2254,7 @@ export async function ensureNapcatInstanceReady(
       readWebuiLoginInfo: true
     }) as NapcatEnsureHealth;
     if (napcatHealthMatchesInstance(instance, health)) {
+      health = { ...health, loginState: "ready" };
       return {
         ok: true,
         state: "ready",
@@ -1907,8 +2266,19 @@ export async function ensureNapcatInstanceReady(
     }
   }
 
-  const expectedUserId = String(instance.botUserId || "").trim();
   let webuiLoginInfo = health.webui?.loginInfo;
+  if (webuiLoginInfo?.status === "qr-login-required") {
+    health = { ...health, loginState: "qr-login-required" };
+    return {
+      ok: false,
+      state: "qr-login-required",
+      needsUserAction: true,
+      message: "这个 QQ 没有可用的快速登录身份，请在打开的页面刷新二维码并扫码登录。",
+      openUrl: napcatEnsureOpenUrl(instance, health),
+      health,
+      steps: [...steps, ...(webuiLoginInfo.message ? [webuiLoginInfo.message] : [])]
+    };
+  }
   const webuiUserId = String(webuiLoginInfo?.userId || "").trim();
   if (webuiLoginInfo?.online === true && expectedUserId && webuiUserId && expectedUserId !== webuiUserId) {
     return {
@@ -1917,7 +2287,7 @@ export async function ensureNapcatInstanceReady(
       needsUserAction: true,
       message: "这个 NapCat 当前登录了另一个 QQ，请在打开的页面切换到正确账号。",
       openUrl: napcatEnsureOpenUrl(instance, health),
-      health,
+      health: { ...health, loginState: "account-mismatch" },
       steps
     };
   }
@@ -1935,6 +2305,7 @@ export async function ensureNapcatInstanceReady(
       health = await recheckNapcatUntilReady(ctx, gatewayId, instance, 30000);
       webuiLoginInfo = health.webui?.loginInfo;
       if (napcatHealthMatchesInstance(instance, health)) {
+        health = { ...health, loginState: "ready" };
         return {
           ok: true,
           state: "ready",
@@ -1944,8 +2315,27 @@ export async function ensureNapcatInstanceReady(
           steps
         };
       }
-    } else if (quickLogin.message) {
-      steps.push(quickLogin.message);
+    } else {
+      if (quickLogin.message) steps.push(quickLogin.message);
+      if (quickLogin.state === "quick-login-invalid") {
+        health = { ...health, loginState: "quick-login-invalid" };
+        return {
+          ok: false,
+          state: "quick-login-invalid",
+          needsUserAction: true,
+          message: "NapCat 保存的快速登录身份已失效，请在打开的页面选择“扫码登录”完成一次登录。",
+          openUrl: napcatEnsureOpenUrl(instance, health),
+          health,
+          steps
+        };
+      }
+      if (quickLogin.state === "login-conflict") {
+        webuiLoginInfo = {
+          ...webuiLoginInfo,
+          status: "login-conflict",
+          message: quickLogin.message
+        };
+      }
     }
   }
 
@@ -1958,6 +2348,7 @@ export async function ensureNapcatInstanceReady(
       steps.push(...((configured.steps as string[] | undefined) ?? []));
       health = await recheckNapcatUntilReady(ctx, gatewayId, instance, 18000);
       if (napcatHealthMatchesInstance(instance, health)) {
+        health = { ...health, loginState: "ready" };
         return {
           ok: true,
           state: "ready",
@@ -1973,6 +2364,7 @@ export async function ensureNapcatInstanceReady(
   }
 
   const conflict = webuiLoginInfo?.status === "login-conflict";
+  health = { ...health, loginState: conflict ? "login-conflict" : "manual-login" };
   return {
     ok: false,
     state: conflict ? "login-conflict" : "manual-login",

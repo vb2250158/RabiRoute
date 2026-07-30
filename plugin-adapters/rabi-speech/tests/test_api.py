@@ -95,6 +95,10 @@ def fixture(
             tts_audio_retention_minutes=tts_audio_retention_minutes,
             ffmpeg="",
         ),
+        remote_audio=replace(
+            settings.remote_audio,
+            settings_path=tmp_path / "audio-stream-settings.json",
+        ),
     )
     tts = FakeTts(wav_file(tmp_path / "speech.wav"))
     asr = FakeAsr()
@@ -185,7 +189,10 @@ def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_pa
     assert "expected 2, received 3" in out_of_order.json()["detail"]
     stopped = client.post("/v1/audio-streams/rabilink/stop", json={"stream_id": "phone-one-audio"})
     assert stopped.status_code == 200
-    assert client.get("/v1/microphone/status").json()["running"] is False
+    assert client.get("/v1/microphone/status").json()["running"] is True
+    stopped_state = client.get("/v1/audio-streams").json()
+    assert stopped_state["selected_client_id"] == "phone-one-audio"
+    assert stopped_state["selected_online"] is False
 
 
 def test_rabilink_audio_stream_expiry_is_rearmed_by_pcm_events(tmp_path: Path) -> None:
@@ -208,7 +215,10 @@ def test_rabilink_audio_stream_expiry_is_rearmed_by_pcm_events(tmp_path: Path) -
         time.sleep(0.15)
         assert client.get("/v1/microphone/status").json()["running"] is True
         time.sleep(0.2)
-        assert client.get("/v1/microphone/status").json()["running"] is False
+        assert client.get("/v1/microphone/status").json()["running"] is True
+        expired = client.get("/v1/audio-streams").json()
+        assert expired["selected_client_id"] == "phone-event-audio"
+        assert expired["selected_online"] is False
 
 
 def test_host_playback_volume_api_persists_and_supports_put_and_patch(tmp_path: Path) -> None:

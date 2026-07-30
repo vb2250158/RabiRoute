@@ -247,7 +247,7 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     choices: [
       { type: "napcat", title: "NapCat / OneBot", note: "接收 QQ 群聊和私聊实时消息", icon: "mdi-message-badge-outline" },
       { type: "wecom", title: "企业微信 / WeCom", note: "接收企业微信群聊并支持回发消息", icon: "mdi-domain" },
-      { type: "weixin", title: "个人微信 / Weixin", note: "RabiRoute 原生扫码登录，接收个人微信私聊并回传文本", icon: "mdi-wechat" }
+      { type: "weixin", title: "个人微信 / Weixin", note: "RabiRoute 原生扫码登录，接收个人微信私聊，并向来源会话回传文本或受控本地文件", icon: "mdi-wechat" }
     ]
   },
   {
@@ -361,6 +361,7 @@ const testingNapcatInstance = ref<Record<string, boolean>>({});
 const launchingNapcatInstance = ref<Record<string, boolean>>({});
 const restartingNapcatInstance = ref<Record<string, boolean>>({});
 const openingNapcatWebui = ref<Record<string, boolean>>({});
+const adoptingNapcatOwner = ref<Record<string, boolean>>({});
 const copyingNapcatToken = ref(false);
 const copyingNapcatInstanceToken = ref<Record<string, boolean>>({});
 const fixingNapcatPorts = ref(false);
@@ -369,6 +370,17 @@ const configuringNapcatOneBot = ref<Record<string, boolean>>({});
 const napcatOneBotFixResult = ref<Record<string, { ok: boolean; message: string }>>({});
 const napcatHealthResult = ref<{
   ok?: boolean;
+  loginState?: "ready" | "account-online-elsewhere" | "account-mismatch" | "quick-login-available" | "quick-login-invalid" | "qr-login-required" | "login-conflict" | "manual-login" | "start-failed";
+  accountOwner?: {
+    userId?: string;
+    nickname?: string;
+    httpUrl?: string;
+    webuiUrl?: string;
+    openUrl?: string;
+    workingDir?: string;
+    instanceName?: string;
+    routesToGateway?: boolean;
+  };
   fixAvailable?: boolean;
   diagnostics?: string[];
   onebot?: { configPath?: string; currentUserId?: string | number; currentNickname?: string };
@@ -385,6 +397,7 @@ const napcatHealthResult = ref<{
     source?: "provided" | "config";
     loginUrl?: string;
     message?: string;
+    loginInfo?: { userId?: string | number; nickname?: string; online?: boolean; status?: string; message?: string };
   };
   process?: { found?: boolean; candidates?: Array<{ name: string; pid: string }> };
   wsUrl?: string;
@@ -462,7 +475,7 @@ function scheduleSpeechConfigSave(): void {
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "speech" || type === "napcat" || type === "wecom" || type === "remoteAgent" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
+  return type === "speech" || type === "napcat" || type === "wecom" || type === "weixin" || type === "remoteAgent" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
 }
 
 function speechVariable(name: string, fallback = ""): string {
@@ -1564,6 +1577,9 @@ function napcatDisplayEndpointHealthy(instance: NapCatInstance): boolean | undef
 }
 
 function napcatWebuiStatusLabel(instance: NapCatInstance): string {
+  const reachable = napcatHealthFor(instance).webui?.reachable;
+  if (reachable === true) return "可打开";
+  if (reachable === false) return "未响应";
   const healthy = napcatDisplayEndpointHealthy(instance);
   if (healthy === true) return "可用";
   if (healthy === false) return "未响应";
@@ -1571,6 +1587,9 @@ function napcatWebuiStatusLabel(instance: NapCatInstance): string {
 }
 
 function napcatWebuiStatusClass(instance: NapCatInstance): string {
+  const reachable = napcatHealthFor(instance).webui?.reachable;
+  if (reachable === true) return "text-success";
+  if (reachable === false) return "text-warning";
   const healthy = napcatDisplayEndpointHealthy(instance);
   if (healthy === true) return "text-success";
   if (healthy === false) return "text-warning";
@@ -1888,6 +1907,72 @@ async function startNapcatAndOpen(instance: NapCatInstance): Promise<void> {
     };
   } finally {
     openingNapcatWebui.value = { ...openingNapcatWebui.value, [instance.id]: false };
+  }
+}
+
+function napcatLoginState(instance: NapCatInstance): string {
+  return String(napcatHealthFor(instance).loginState || "");
+}
+
+function napcatAccountOwner(instance: NapCatInstance): Record<string, any> | null {
+  const owner = napcatHealthFor(instance).accountOwner;
+  return owner && typeof owner === "object" ? owner : null;
+}
+
+function napcatAccountOwnerLabel(instance: NapCatInstance): string {
+  const owner = napcatAccountOwner(instance);
+  if (!owner) return "";
+  const account = owner.nickname
+    ? `QQ ${owner.userId || napcatExpectedUserId(instance)} / ${owner.nickname}`
+    : `QQ ${owner.userId || napcatExpectedUserId(instance)}`;
+  return `${account} 正在 ${owner.instanceName || owner.workingDir || owner.httpUrl || "另一 NapCat 实例"} 在线`;
+}
+
+async function adoptNapcatAccountOwner(instance: NapCatInstance): Promise<void> {
+  if (!gateway.value) return;
+  const owner = napcatAccountOwner(instance);
+  if (!owner?.httpUrl) return;
+  const expected = napcatExpectedUserId(instance);
+  const actual = String(owner.userId || "");
+  if (expected && actual && expected !== actual) {
+    napcatLaunchResult.value = {
+      ...napcatLaunchResult.value,
+      [instance.id]: { ok: false, message: `在线实例属于 QQ ${actual}，与当前绑定 QQ ${expected} 不一致，未采用。` }
+    };
+    return;
+  }
+  adoptingNapcatOwner.value = { ...adoptingNapcatOwner.value, [instance.id]: true };
+  try {
+    const target = resolveConfiguredNapcatInstance(instance);
+    target.httpUrl = String(owner.httpUrl);
+    if (owner.webuiUrl) target.webuiUrl = String(owner.webuiUrl);
+    if (owner.workingDir) target.workingDir = String(owner.workingDir);
+    syncPrimaryNapcatFromInstances();
+    store.touch();
+    await store.save();
+    const health = await runNapcatInstanceHealth(target);
+    napcatInstanceHealthResult.value = {
+      ...napcatInstanceHealthResult.value,
+      [target.id]: health
+    };
+    napcatLaunchResult.value = {
+      ...napcatLaunchResult.value,
+      [target.id]: {
+        ok: Boolean(health.ok),
+        message: health.ok
+          ? "已采用现有在线 NapCat，会话未被中断。"
+          : owner.routesToGateway
+            ? "已采用在线实例，但健康检查尚未通过，请稍后再检查。"
+            : "已采用在线实例；它尚未连接当前 RabiRoute，请在详情中修复 OneBot 路由。"
+      }
+    };
+  } catch (e: unknown) {
+    napcatLaunchResult.value = {
+      ...napcatLaunchResult.value,
+      [instance.id]: { ok: false, message: e instanceof Error ? e.message : String(e) }
+    };
+  } finally {
+    adoptingNapcatOwner.value = { ...adoptingNapcatOwner.value, [instance.id]: false };
   }
 }
 
@@ -2226,6 +2311,11 @@ function napcatAccountLoginLabel(instance: NapCatInstance): string {
   const runtimeInfo = napcatRuntimeFor(instance);
   const health = napcatHealthFor(instance);
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "正在查询";
+  if (napcatLoginState(instance) === "account-online-elsewhere") return "QQ 在其他实例在线";
+  if (napcatLoginState(instance) === "quick-login-invalid") return "快速登录已过期，需扫码";
+  if (napcatLoginState(instance) === "qr-login-required") return "无快速登录身份，需扫码";
+  if (napcatLoginState(instance) === "login-conflict") return "QQ 登录冲突";
+  if (napcatLoginState(instance) === "account-mismatch") return "WebUI 登录了其他 QQ";
   if (napcatAccountOffline(instance)) return "QQ 已离线";
   if (runtimeInfo.loginInfoError || instance.loginInfoError) return String(runtimeInfo.loginInfoError || instance.loginInfoError);
   if (napcatAccountConnected(instance) || health.http?.ok) return "已登录";
@@ -2235,6 +2325,8 @@ function napcatAccountLoginLabel(instance: NapCatInstance): string {
 }
 
 function napcatAccountLoginClass(instance: NapCatInstance): string {
+  if (napcatLoginState(instance) === "account-online-elsewhere") return "text-warning";
+  if (["quick-login-invalid", "qr-login-required", "login-conflict", "account-mismatch"].includes(napcatLoginState(instance))) return "text-error";
   if (napcatAccountOffline(instance)) return "text-error";
   if (napcatAccountConnected(instance) || napcatHealthFor(instance).http?.ok) return "text-success";
   if (napcatAccountUserId(instance) || napcatWebuiSessionUserId(instance)) return "text-info";
@@ -2257,6 +2349,11 @@ function napcatInstanceStatusLabel(instance: NapCatInstance): string {
   if (restartingNapcatInstance.value[instance.id]) return "正在重启";
   if (instance.enabled === false) return "已停用";
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "查询中";
+  if (napcatLoginState(instance) === "account-online-elsewhere") return "账号在别处在线";
+  if (napcatLoginState(instance) === "quick-login-invalid") return "需要扫码";
+  if (napcatLoginState(instance) === "qr-login-required") return "需要扫码";
+  if (napcatLoginState(instance) === "login-conflict") return "登录冲突";
+  if (napcatLoginState(instance) === "account-mismatch") return "账号不匹配";
   if (napcatAccountOffline(instance)) return "QQ 已离线";
   if (napcatAccountConnected(instance)) return "WS 已连接";
   if (napcatHealthFor(instance).http?.ok) return "OneBot 已登录";
@@ -2271,6 +2368,8 @@ function napcatInstanceStatusColor(instance: NapCatInstance): string {
   if (openingNapcatWebui.value[instance.id] || launchingNapcatInstance.value[instance.id] || restartingNapcatInstance.value[instance.id]) return "info";
   if (instance.enabled === false) return "secondary";
   if (store.loading || testingNapcatInstance.value[instance.id] || autoCheckingNapcat.value) return "info";
+  if (napcatLoginState(instance) === "account-online-elsewhere") return "warning";
+  if (["quick-login-invalid", "qr-login-required", "login-conflict", "account-mismatch"].includes(napcatLoginState(instance))) return "error";
   if (napcatAccountOffline(instance)) return "error";
   if (napcatAccountConnected(instance)) return "success";
   if (napcatAccountUserId(instance)) return "secondary";
@@ -3725,6 +3824,41 @@ watch(
                             <div><span>OneBot</span><b :class="napcatAccountLoginClass(instance)">{{ napcatAccountLoginLabel(instance) }}</b></div>
                             <div v-if="napcatWebuiSessionLabel(instance)"><span>WebUI 会话</span><b :class="napcatWebuiSessionMismatch(instance) ? 'text-warning' : 'text-info'">{{ napcatWebuiSessionLabel(instance) }}</b></div>
                           </div>
+                          <v-alert
+                            v-if="napcatLoginState(instance) === 'account-online-elsewhere' && napcatAccountOwner(instance)"
+                            type="warning"
+                            variant="tonal"
+                            density="compact"
+                            class="mt-2"
+                          >
+                            <div>{{ napcatAccountOwnerLabel(instance) }}。Rabi 已保留这份会话，没有启动重复实例。</div>
+                            <div class="section-note mt-1">
+                              {{ napcatAccountOwner(instance)?.routesToGateway ? "该实例已经指向当前 RabiRoute，可以直接采用。" : "采用后还需要在详情中修复 OneBot 路由。" }}
+                            </div>
+                            <div class="d-flex ga-2 flex-wrap mt-2">
+                              <v-btn
+                                size="small"
+                                color="warning"
+                                variant="tonal"
+                                prepend-icon="mdi-connection"
+                                :loading="adoptingNapcatOwner[instance.id]"
+                                :disabled="adoptingNapcatOwner[instance.id]"
+                                @click="adoptNapcatAccountOwner(instance)"
+                              >
+                                采用在线实例
+                              </v-btn>
+                            </div>
+                          </v-alert>
+                          <v-alert
+                            v-else-if="['quick-login-invalid', 'qr-login-required'].includes(napcatLoginState(instance))"
+                            type="error"
+                            variant="tonal"
+                            density="compact"
+                            class="mt-2"
+                          >
+                            {{ napcatLoginState(instance) === "qr-login-required" ? "这个 QQ 没有可用的快速登录身份，或当前二维码已经过期。" : "NapCat 保存的快速登录身份已经过期。" }}
+                            请点“打开 NapCat”，刷新二维码后扫码登录；扫码完成前 Rabi 不会误用其他 QQ，也不会反复重试旧身份。
+                          </v-alert>
                           <div class="agent-action-bar mt-2">
                             <div class="agent-action-status">
                               <span class="section-note">{{ instance.enabled === false ? "已停用；打开开关后此 QQ 才参与路由" : "一键启动、登录并检查连接；只有 QQ 安全验证需要你确认" }}</span>
@@ -4319,11 +4453,17 @@ watch(
                     </div>
                   </template>
                   <div v-else-if="choice.type === 'weixin'" class="catalog-param-grid">
-                    <v-text-field v-model="gateway.weixinBaseUrl" class="full-span" label="个人微信 iLink API" placeholder="https://ilinkai.weixin.qq.com" @update:model-value="touch" />
-                    <v-text-field v-model="gateway.weixinBotType" label="Bot Type" placeholder="3" @update:model-value="touch" />
-                    <v-alert type="warning" variant="tonal" density="compact" class="full-span">
-                      实验能力。个人微信是独立消息端，不依赖 AstrBot；RabiRoute 自己持有扫码登录、长轮询、context token 和 Outbox 回传。首版仅自动投递和回复文本，媒体只记录。
-                    </v-alert>
+                    <v-expansion-panels class="full-span" variant="accordion">
+                      <v-expansion-panel>
+                        <v-expansion-panel-title>高级设置（通常无需修改）</v-expansion-panel-title>
+                        <v-expansion-panel-text>
+                          <div class="catalog-param-grid">
+                            <v-text-field v-model="gateway.weixinBaseUrl" class="full-span" label="个人微信 iLink API" placeholder="https://ilinkai.weixin.qq.com" @update:model-value="touch" />
+                            <v-text-field v-model="gateway.weixinBotType" label="Bot Type" placeholder="3" @update:model-value="touch" />
+                          </div>
+                        </v-expansion-panel-text>
+                      </v-expansion-panel>
+                    </v-expansion-panels>
                   </div>
                   <template v-if="choice.type === 'weixin' && runtime.running !== undefined">
                     <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>

@@ -238,8 +238,29 @@ class SpeakerRecognitionService:
         sample_groups: list[tuple[str, str, list[int]]] = []
         sample_label_by_index: dict[int, str] = {}
         if synthetic:
-            sample_groups.append((SYNTHETIC_SINGLE_SPEAKER_LABEL, SYNTHETIC_SINGLE_SPEAKER_LABEL, list(range(len(result.segments)))))
-            sample_label_by_index.update({index: SYNTHETIC_SINGLE_SPEAKER_LABEL for index in range(len(result.segments))})
+            unlabeled_turns = _silence_delimited_turns(
+                result.segments,
+                self.settings.unlabeled_turn_gap_seconds,
+            )
+            if len(unlabeled_turns) == 1:
+                sample_groups.append((
+                    SYNTHETIC_SINGLE_SPEAKER_LABEL,
+                    SYNTHETIC_SINGLE_SPEAKER_LABEL,
+                    unlabeled_turns[0],
+                ))
+                sample_label_by_index.update({
+                    index: SYNTHETIC_SINGLE_SPEAKER_LABEL
+                    for index in unlabeled_turns[0]
+                })
+            else:
+                for turn_ordinal, indexes in enumerate(unlabeled_turns, start=1):
+                    sample_label = f"{SYNTHETIC_SINGLE_SPEAKER_LABEL}#turn-{turn_ordinal}"
+                    sample_groups.append((
+                        sample_label,
+                        SYNTHETIC_SINGLE_SPEAKER_LABEL,
+                        indexes,
+                    ))
+                    sample_label_by_index.update({index: sample_label for index in indexes})
         else:
             for provider_label, indexes in provider_groups.items():
                 if len(indexes) == 1:
@@ -500,6 +521,9 @@ class SpeakerRecognitionService:
         best_id = ""
         best_score = -1.0
         for cluster_id, values in grouped.items():
+            similarities = [float(np.dot(value, embedding)) for value in values]
+            if not similarities or min(similarities) < self.settings.cluster_threshold:
+                continue
             centroid = _normalize(np.mean(np.stack(values), axis=0))
             score = float(np.dot(centroid, embedding))
             if score > best_score:
@@ -601,6 +625,32 @@ def _segment_audio(samples: np.ndarray, sample_rate: int, segments: list[Transcr
         if end > start:
             chunks.append(samples[start:end])
     return np.ascontiguousarray(np.concatenate(chunks) if chunks else samples, dtype=np.float32)
+
+
+def _silence_delimited_turns(
+    segments: list[TranscriptSegment],
+    gap_seconds: float,
+) -> list[list[int]]:
+    if not segments:
+        return []
+    ordered = sorted(
+        enumerate(segments),
+        key=lambda item: (item[1].start, item[1].end, item[0]),
+    )
+    turns: list[list[int]] = []
+    current: list[int] = []
+    current_end = 0.0
+    for index, segment in ordered:
+        start = max(0.0, float(segment.start))
+        end = max(start, float(segment.end))
+        if current and start - current_end > gap_seconds:
+            turns.append(current)
+            current = []
+        current.append(index)
+        current_end = max(current_end, end) if len(current) > 1 else end
+    if current:
+        turns.append(current)
+    return turns
 
 
 def _voiced_audio(samples: np.ndarray, sample_rate: int, min_rms: float) -> tuple[np.ndarray, float]:

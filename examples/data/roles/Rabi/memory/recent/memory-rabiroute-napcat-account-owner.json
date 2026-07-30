@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-napcat-account-owner",
+  "title": "NapCat 自动恢复必须先保留已经在线的账号所有者",
+  "focus": "NapCat 账号归属与重复实例边界",
+  "content": "RabiRoute 准备启动或修复 NapCat 前，先检查目标 QQ 是否已经在另一实例在线。找到账号所有者时应保留现有会话、显示实例与 OneBot 路由状态，并让用户采用正确实例；不能再启动一个重复实例争抢登录。快速登录只在保存身份与目标 QQ 一致时尝试，过期、扫码、冲突和账号不匹配必须显示不同恢复动作。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：NapCat 账号归属、采用与登录恢复"
+  },
+  "createdAt": "2026-07-30T00:00:00+08:00",
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["NapCat", "QQ", "账号归属", "重复实例", "采用在线实例", "快速登录", "扫码登录", "账号不匹配", "OneBot"]
+}

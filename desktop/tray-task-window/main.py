@@ -138,9 +138,9 @@ def _node_executable(project_root: Path) -> tuple[str, str]:
     executable_name = "node.exe" if sys.platform == "win32" else "node"
     path_node = shutil.which("node")
     candidates: list[tuple[str, Path | None]] = [
+        ("project portable node", project_root / executable_name),
         ("RABIROUTE_NODE", Path(env_node) if env_node else None),
         ("PATH", Path(path_node) if path_node else None),
-        ("project portable node", project_root / executable_name),
         ("project .node", project_root / ".node" / executable_name),
         ("project tools/node", project_root / "tools" / "node" / executable_name),
         ("project tools/nodejs", project_root / "tools" / "nodejs" / executable_name),

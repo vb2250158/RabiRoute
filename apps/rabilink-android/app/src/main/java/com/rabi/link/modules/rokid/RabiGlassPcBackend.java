@@ -354,11 +354,11 @@ public final class RabiGlassPcBackend {
             desiredAudioStreamRoute = route;
         }
         String suffix = SOURCE_GLASSES.equals(sourceDeviceKind) ? "glasses" : "phone";
-        String streamId = safeStreamId(deviceId + "-" + suffix + "-audio-"
-                + UUID.randomUUID().toString().substring(0, 8));
+        String streamId = safeStreamId(deviceId + "-" + suffix + "-audio");
+        String deviceLabel = deviceLabel(deviceId, SOURCE_GLASSES.equals(sourceDeviceKind));
         JSONObject body = new JSONObject()
                 .put("stream_id", streamId)
-                .put("name", SOURCE_GLASSES.equals(sourceDeviceKind) ? "Rabi Glass" : "Rabi Android")
+                .put("name", deviceLabel)
                 .put("device_kind", SOURCE_GLASSES.equals(sourceDeviceKind) ? "glasses" : "mobile")
                 .put("source_device_id", deviceId)
                 .put("source_device_kind", sourceDeviceKind)
@@ -377,6 +377,15 @@ public final class RabiGlassPcBackend {
         audioStreamRetryWaiting = false;
         audioBufferOverflowReported = false;
         listener.onStatus("手机音频流已接入 Rabi PC");
+    }
+
+    private static String deviceLabel(String stableDeviceId, boolean glasses) {
+        String value = clean(stableDeviceId);
+        int split = value.lastIndexOf('-');
+        String suffix = split >= 0 && split + 1 < value.length() ? value.substring(split + 1) : value;
+        if (suffix.length() > 6) suffix = suffix.substring(suffix.length() - 6);
+        String base = glasses ? "Rabi Glass" : "Rabi Android";
+        return suffix.isEmpty() ? base : base + " · " + suffix;
     }
 
     private void flushAudioStreamChunk() throws Exception {
@@ -891,7 +900,7 @@ public final class RabiGlassPcBackend {
         if (wantsTts && pcm == null) {
             byte[] wav = request("POST", "/api/rabilink/speech/v1/audio/speech", "application/json; charset=utf-8",
                     new JSONObject().put("model", settings.ttsModel).put("input", text).put("voice", settings.ttsVoice)
-                            .put("response_format", "wav").put("play", false).put("session_id", deviceId)
+                            .put("response_format", "wav").put("sample_rate", 16000).put("play", false).put("session_id", deviceId)
                             .toString().getBytes(StandardCharsets.UTF_8), 240000);
             pcm = wavPcm(wav); persistReply(messageId, pcm);
         }

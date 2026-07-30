@@ -710,7 +710,9 @@ export class RabiLinkRelayRuntime {
         signal,
         (waitMs, channelSignal) => claimWebguiRequests(config, waitMs, channelSignal),
         (request) => proxyWebguiRequest(config, request, this.options)
-      ).catch(error => {
+      ).then(() => {
+        if (!signal.aborted) this.markOnline(config.speechProxyEnabled);
+      }).catch(error => {
         if (!signal.aborted && !abortError(error)) {
           this.setStatus({
             state: "error",
@@ -728,7 +730,9 @@ export class RabiLinkRelayRuntime {
         signal,
         (waitMs, channelSignal) => claimSpeechRequests(config, waitMs, channelSignal),
         (request) => proxySpeechRequest(config, request, this.options)
-      ).catch(error => {
+      ).then(() => {
+        if (!signal.aborted) this.markOnline(config.speechProxyEnabled);
+      }).catch(error => {
         if (!signal.aborted && !abortError(error)) {
           this.setStatus({
             state: "error",

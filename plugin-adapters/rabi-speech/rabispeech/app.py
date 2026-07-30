@@ -304,33 +304,26 @@ def create_app(
     )
     remote_audio.set_feed(microphone.feed_remote)
     virtual_audio_lock = asyncio.Lock()
-    virtual_audio_expiry: asyncio.TimerHandle | None = None
-    virtual_audio_generation = 0
+    virtual_audio_expiry: dict[str, asyncio.TimerHandle] = {}
+    virtual_audio_generation: dict[str, int] = {}
     tts_cleanup_deadline: asyncio.TimerHandle | None = None
     tts_cleanup_task: asyncio.Task[None] | None = None
     tts_cleanup_closed = False
 
-    def cancel_virtual_audio_expiry() -> None:
-        nonlocal virtual_audio_expiry, virtual_audio_generation
-        virtual_audio_generation += 1
-        if virtual_audio_expiry is not None:
-            virtual_audio_expiry.cancel()
-            virtual_audio_expiry = None
+    def cancel_virtual_audio_expiry(stream_id: str | None = None) -> None:
+        targets = [stream_id] if stream_id else list(virtual_audio_expiry)
+        for target in targets:
+            virtual_audio_generation[target] = virtual_audio_generation.get(target, 0) + 1
+            handle = virtual_audio_expiry.pop(target, None)
+            if handle is not None:
+                handle.cancel()
 
     async def expire_virtual_audio_stream(stream_id: str, generation: int) -> None:
-        nonlocal virtual_audio_expiry
         async with virtual_audio_lock:
-            if generation != virtual_audio_generation or remote_audio.active_virtual_client_id != stream_id:
+            if generation != virtual_audio_generation.get(stream_id) or not remote_audio.has_virtual_client(stream_id):
                 return
-            virtual_audio_expiry = None
-            if microphone.snapshot().get("running"):
-                await microphone.stop(persist=False)
-            _, resume_running = remote_audio.stop_virtual_client(stream_id)
-            if resume_running:
-                try:
-                    await microphone.start({}, persist=False)
-                except Exception:
-                    logger.exception("Failed to restore the previous RabiSpeech audio input after a stale RabiLink stream")
+            virtual_audio_expiry.pop(stream_id, None)
+            remote_audio.stop_virtual_client(stream_id)
             logger.warning(
                 "Stopped stale RabiLink audio stream %s after %.1f seconds without PCM",
                 stream_id,
@@ -338,10 +331,9 @@ def create_app(
             )
 
     def arm_virtual_audio_expiry(stream_id: str) -> None:
-        nonlocal virtual_audio_expiry
-        cancel_virtual_audio_expiry()
-        generation = virtual_audio_generation
-        virtual_audio_expiry = asyncio.get_running_loop().call_later(
+        cancel_virtual_audio_expiry(stream_id)
+        generation = virtual_audio_generation.get(stream_id, 0)
+        virtual_audio_expiry[stream_id] = asyncio.get_running_loop().call_later(
             rabilink_audio_stale_timeout,
             lambda: asyncio.create_task(
                 expire_virtual_audio_stream(stream_id, generation),
@@ -511,8 +503,6 @@ def create_app(
         _require_loopback(request)
         async with virtual_audio_lock:
             was_running = bool(microphone.snapshot().get("running"))
-            if was_running:
-                await microphone.stop(persist=False)
             try:
                 remote_audio.start_virtual_client(
                     client_id=body.stream_id,
@@ -524,20 +514,15 @@ def create_app(
                     session_id=body.session_id or "",
                     resume_running=was_running,
                 )
-                await microphone.start({}, persist=False)
+                if not was_running:
+                    await microphone.start({}, persist=False)
                 arm_virtual_audio_expiry(body.stream_id)
                 return remote_audio.snapshot()
             except ValueError as exc:
-                if was_running and not microphone.snapshot().get("running"):
-                    await microphone.start({}, persist=False)
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             except Exception:
-                active_id = remote_audio.active_virtual_client_id
-                if active_id:
-                    remote_audio.stop_virtual_client(active_id)
-                if was_running and not microphone.snapshot().get("running"):
-                    with suppress(Exception):
-                        await microphone.start({}, persist=False)
+                if remote_audio.has_virtual_client(body.stream_id):
+                    remote_audio.stop_virtual_client(body.stream_id)
                 raise
 
     @api.post("/v1/audio-streams/rabilink/chunk")
@@ -569,20 +554,13 @@ def create_app(
     async def rabilink_audio_stream_stop(request: Request, body: RabiLinkAudioStreamBody) -> dict[str, object]:
         _require_loopback(request)
         async with virtual_audio_lock:
-            if remote_audio.active_virtual_client_id != body.stream_id:
+            if not remote_audio.has_virtual_client(body.stream_id):
                 raise HTTPException(status_code=409, detail="The requested RabiLink audio stream is not active.")
-            cancel_virtual_audio_expiry()
-            was_running = bool(microphone.snapshot().get("running"))
-            if was_running:
-                await microphone.stop(persist=False)
+            cancel_virtual_audio_expiry(body.stream_id)
             try:
-                _, resume_running = remote_audio.stop_virtual_client(body.stream_id)
-                if resume_running:
-                    await microphone.start({}, persist=False)
+                remote_audio.stop_virtual_client(body.stream_id)
                 return remote_audio.snapshot()
             except ValueError as exc:
-                if was_running and not microphone.snapshot().get("running"):
-                    await microphone.start({}, persist=False)
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @api.put("/v1/playback/settings")

@@ -4,6 +4,7 @@ import {
   autoAssignGatewayPorts,
   collectGatewayPortClaims,
   DEFAULT_RECENT_MESSAGE_LIMIT,
+  defaultMessageAdapterNotificationRules,
   ensureDefaultPersonaRules,
   gatewayAdapterTypes,
   isBuiltinRolePanelNotificationRule,
@@ -279,6 +280,69 @@ test("persona-free gateways get default message adapter rules", () => {
   assert.deepEqual(normalized.roleNotificationRules, {});
   assert.equal(normalized.routeProfiles?.[0]?.agentRoleId, "");
 });
+
+test("every message adapter has a default whiteboard route template", () => {
+  const adapters = [
+    "napcat",
+    "remoteAgent",
+    "heartbeat",
+    "rolePanel",
+    "speech",
+    "fennenote",
+    "xiaoai",
+    "rabilink",
+    "wearable",
+    "webhook",
+    "wecom",
+    "weixin"
+  ] as const;
+
+  for (const adapter of adapters) {
+    const rules = defaultMessageAdapterNotificationRules([adapter]);
+    assert.equal(rules.length, 1, `${adapter} should have one default whiteboard rule`);
+    assert.ok((rules[0]?.routeKinds?.length ?? 0) > 0, `${adapter} should cover at least one route kind`);
+    assert.equal(rules[0]?.template, "");
+  }
+});
+
+test("persona gateways backfill an uncovered message adapter with one whiteboard rule", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapters: ["napcat", "weixin"],
+    notificationRules: [{
+      id: "direct",
+      name: "已有 QQ 规则",
+      enabled: true,
+      routeKinds: ["direct_at"],
+      template: "hello"
+    }]
+  }));
+
+  assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["direct", "default-napcat", "default-weixin"]);
+  assert.deepEqual(
+    normalized.notificationRules?.find(rule => rule.id === "default-napcat")?.routeKinds,
+    ["private", "direct_reply", "indirect_reply"]
+  );
+  assert.deepEqual(normalized.notificationRules?.find(rule => rule.id === "default-weixin")?.routeKinds, ["weixin_message"]);
+  assert.equal(normalized.notificationRules?.find(rule => rule.id === "default-weixin")?.template, "");
+  assert.equal(normalized.routeProfiles?.[0]?.notificationRules?.filter(rule => rule.id === "default-weixin").length, 1);
+});
+
+test("an explicit disabled adapter rule prevents whiteboard backfill", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapters: ["weixin"],
+    notificationRules: [{
+      id: "disabled-weixin",
+      name: "明确关闭个人微信投递",
+      enabled: false,
+      routeKinds: ["weixin_message"],
+      template: ""
+    }]
+  }));
+
+  assert.equal(normalized.notificationRules?.filter(rule => rule.routeKinds?.includes("weixin_message")).length, 1);
+  assert.equal(normalized.notificationRules?.some(rule => rule.id === "default-weixin"), false);
+});
+
 test("RabiLink is a named webhook-like message adapter", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     id: "Rabi__rabilink",

@@ -749,7 +749,7 @@ class MainActivity : Activity() {
         addView(label("Rabi PC TTS 模型")); addView(ttsModel, full(0, 0, 0, 6))
         addView(label("人格 / 声线")); addView(ttsVoice, full(0, 0, 0, 6))
         addView(primary("保存并开始持续会话") { startConversation() }, full(0, 0, 0, 8))
-        addView(note("长时运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。Android 不保存整日原始录音；RabiSpeech 在 PC 端切出的 ASR 语段和 Agent TTS 按统一缓存语义逐条保留 24 小时。小米等厂商仍可能额外限制后台应用，请在真机上完成 24 小时验收。"))
+        addView(note("常驻运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。Android 不保存整日原始录音；RabiSpeech 在 PC 端切出的 ASR 语段和 Agent TTS 按统一缓存语义逐条保留 24 小时。小米等厂商仍可能额外限制后台应用，请在真机上核对电池优化与自启动权限。"))
         val actions = row()
         actions.addView(secondary("立即提示 Agent") { RabiConversationService.requestReview(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
         actions.addView(space(), LinearLayout.LayoutParams(dp(8), 1))

@@ -29,7 +29,7 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 
 | Function | Maturity | Source / trigger | Side effects | API / UI | Main code |
 | --- | --- | --- | --- | --- | --- |
-| NapCat inbound/outbound | verified | OneBot WS/HTTP | message logs and external QQ sends | route config and message scan | `src/adapters/napcatAdapter.ts`, `src/napcat.ts`, `src/outbox.ts` |
+| NapCat inbound/outbound | verified; one-click recovery with single-account ownership guard | OneBot WS/HTTP | message logs and external QQ sends; explicit recovery first probes other local OneBot endpoints, preserves an existing live owner, blocks duplicate startup, and distinguishes expired quick login from QR-required authentication | route config, message scan, and **Open NapCat** | `src/adapters/napcatAdapter.ts`, `src/napcat.ts`, `src/outbox.ts`, `src/messageEndpoints/napcatManager.ts` |
 | Heartbeat | verified | interval | heartbeat log and possible handler turn | route message-adapter config | heartbeat adapter/forwarding |
 | Manual trigger | verified | Manager/WebGUI action | manual-trigger log and handler turn | Manager control plane | `src/manualTrigger.ts`, `src/manager/controlPlaneRoutes.ts` |
 | Role panel | verified | Qt/Manager local message | role timeline and handler turn/reply | Manager/Qt | role-panel modules and Outbox |

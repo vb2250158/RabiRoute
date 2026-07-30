@@ -42,13 +42,17 @@ RabiLink Relay
 
 眼镜端构建产物仍由手机 APK 的 CXR 工作流安装，用户只需安装一个手机 APK。
 
-手机侧 24 小时录音验收可运行：
+需要诊断常驻录音健康度时，可选运行：
 
 ```powershell
 .\scripts\Test-RabiMobileAudioSoak.ps1 -Serial <adb-serial> -DurationHours 24
 ```
 
-该测试验证前台服务、最近采集时间、PCM 字节增长和自动恢复次数。当前实现持续采集并按有序 PCM chunk 传输，不在 Android 侧做 VAD，也不保存一条完整的 24 小时原始录音；手机采集以最后一次成功读取为真源安排一次性 45 秒停滞 deadline，不再每 15 秒跑 watchdog，断流时才进入受控退避重建。每个待确认 chunk 使用稳定 `chunkId`；即使 ACK 丢失后换了临时 `sourceStreamId`，PC 仍按稳定设备、chunk ID 和 PCM 哈希去重，不会再次喂入 ASR。系统联网事件或 RabiLink SSE 恢复会立即唤醒续传；已知断网时，SSE 连接与可靠队列发送会停在系统网络事件门上，不再按秒空转。为覆盖少数 Android 厂商漏发已注册网络回调的情况，前台服务只在已知离线期间每五分钟检查一次系统当前网络，一旦恢复立即停止；该检查不访问 Relay、不读消息、不推进 cursor。联网但服务端暂时不可用时才使用一次性 1–30 秒退避。Relay 每 15 秒发送传输 keepalive；Android 连续 45 秒收不到任何 SSE 字节时判定半开连接已停滞并重建连接，随后仍只执行 `ready → cursor` 一次补漏，不进行业务轮询。SSE 的 `ready/outbox_available` 只负责唤醒，手机随后按持久不透明 cursor 做一次查询补漏；正常 Relay 重启沿用共享代际，运行期状态回滚才显式要求重建 cursor，手机按 `deliveryId` 和本机终态记录去重后重放保留消息，不会让旧 cursor 永久领先服务端。消息连接的恢复意图独立持久化：即使关闭持续聆听，已启动的文字/媒体/下行连接也会在进程或设备重启后先恢复 cursor 与可靠队列；用户明确点击停止则关闭后续自动恢复。PCM 上传执行器和离线缓冲都有界；长期断网会丢弃过旧音频并保留待确认块与最新 PCM，恢复后直接追上实时流，不会无限占用内存或永远落后。可靠文字/媒体/回执则保留到成功确认；PC 超过 15 秒收不到 chunk 会自动回收旧虚拟输入。RabiSpeech 切出的 ASR 语段和 Agent TTS 按统一契约逐文件缓存 24 小时，并写入带安全相对路径和到期时间的按日 JSONL 记录。
+这只是按需诊断工具，不是“常驻录音必须跑满一次 24 小时”的产品要求。正式链路以 Android 前台服务和 RabiLink 网络自动连接为准，不依赖 USB/ADB。监测以 RabiSpeech 实际收到的网络 PCM 为健康真源，检查客户端在线、采集已启用、`last_audio_at` 新鲜和 PC 端 PCM 字节持续增长；ADB 在线时才额外只读核对前台服务、WakeLock、手机侧字节和自动恢复次数。拔掉 USB 后可省略 `-Serial`，监测继续运行，不会把 ADB 离线误报成录音停止。新版 RabiSpeech 直接返回 `received_bytes`；兼容旧版时脚本按 `last_sequence × sample_rate × chunk_ms × 16-bit` 估算，并在摘要的 `pcmByteCounterSources` 中明确标记 `sequence_estimate`。
+
+每台安装首次运行时生成自己的稳定 `rabi-phone-*` 设备 ID，重连沿用稳定音频流 ID；多台手机会自动登记到 RabiSpeech，后来连接的设备不会抢占语音服务页面中已选择的输入。多台可同时在线，但只把用户选中的一路送入 VAD/ASR；所选设备短暂离线时保留选择，网络恢复后自动续接。
+
+当前实现持续采集并按有序 PCM chunk 传输，不在 Android 侧做 VAD，也不保存一条完整的 24 小时原始录音；手机采集以最后一次成功读取为真源安排一次性 45 秒停滞 deadline，不再每 15 秒跑 watchdog，断流时才进入受控退避重建。每个待确认 chunk 使用稳定 `chunkId`；即使 ACK 丢失后换了临时 `sourceStreamId`，PC 仍按稳定设备、chunk ID 和 PCM 哈希去重，不会再次喂入 ASR。系统联网事件或 RabiLink SSE 恢复会立即唤醒续传；已知断网时，SSE 连接与可靠队列发送会停在系统网络事件门上，不再按秒空转。为覆盖少数 Android 厂商漏发已注册网络回调的情况，前台服务只在已知离线期间每五分钟检查一次系统当前网络，一旦恢复立即停止；该检查不访问 Relay、不读消息、不推进 cursor。联网但服务端暂时不可用时才使用一次性 1–30 秒退避。Relay 每 15 秒发送传输 keepalive；Android 连续 45 秒收不到任何 SSE 字节时判定半开连接已停滞并重建连接，随后仍只执行 `ready → cursor` 一次补漏，不进行业务轮询。SSE 的 `ready/outbox_available` 只负责唤醒，手机随后按持久不透明 cursor 做一次查询补漏；正常 Relay 重启沿用共享代际，运行期状态回滚才显式要求重建 cursor，手机按 `deliveryId` 和本机终态记录去重后重放保留消息，不会让旧 cursor 永久领先服务端。消息连接的恢复意图独立持久化：即使关闭持续聆听，已启动的文字/媒体/下行连接也会在进程或设备重启后先恢复 cursor 与可靠队列；用户明确点击停止则关闭后续自动恢复。PCM 上传执行器和离线缓冲都有界；长期断网会丢弃过旧音频并保留待确认块与最新 PCM，恢复后直接追上实时流，不会无限占用内存或永远落后。可靠文字/媒体/回执则保留到成功确认；PC 超过 15 秒收不到 chunk 会自动回收旧虚拟输入。RabiSpeech 切出的 ASR 语段和 Agent TTS 按统一契约逐文件缓存 24 小时，并写入带安全相对路径和到期时间的按日 JSONL 记录。
 
 手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步/回看周期、心率高低阈值、告警冷却和睡眠状态告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。Health Connect 优先使用手动、启动恢复或平台事件；小米 ADB Provider 没有可靠变更通知，因此用户显式启用的 PC Companion 保留低频轮询，默认按手机配置的分钟级周期运行。结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
 

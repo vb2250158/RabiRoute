@@ -223,6 +223,74 @@ def test_repeated_provider_label_turns_can_still_converge_to_one_voiceprint(tmp_
     assert result.segments[1].voiceprint_id != result.segments[0].voiceprint_id
 
 
+def test_unlabeled_asr_segments_are_voiceprinted_by_silence_delimited_turn(tmp_path) -> None:
+    service = SpeakerRecognitionService(
+        settings(tmp_path),
+        tmp_path / "speaker-embeddings.json",
+        extractor=FakeExtractor(
+            [1, 0, 0],
+            [0, 1, 0],
+        ),
+    )
+    result = service.analyze(
+        wav(tmp_path, "unlabeled-turns.wav", duration=7.0),
+        TranscriptionResult(
+            text="两轮声音",
+            language="zh",
+            duration=7.0,
+            provider="faster-whisper",
+            model="small",
+            segments=[
+                TranscriptSegment(id=0, start=0.0, end=1.5, text="第一轮上半段"),
+                TranscriptSegment(id=1, start=1.5, end=3.2, text="第一轮下半段"),
+                TranscriptSegment(id=2, start=4.1, end=5.5, text="第二轮上半段"),
+                TranscriptSegment(id=3, start=5.5, end=7.0, text="第二轮下半段"),
+            ],
+        ),
+        record_id="unlabeled-turns",
+        session_id="local-asr",
+        profile_names={},
+    )
+
+    assert [segment.speaker_label for segment in result.segments] == [
+        "voice#turn-1",
+        "voice#turn-1",
+        "voice#turn-2",
+        "voice#turn-2",
+    ]
+    assert result.segments[0].voiceprint_id == result.segments[1].voiceprint_id
+    assert result.segments[2].voiceprint_id == result.segments[3].voiceprint_id
+    assert result.segments[0].voiceprint_id != result.segments[2].voiceprint_id
+    assert [segment.speaker_sample_duration for segment in result.segments] == [3.2, 3.2, 2.9, 2.9]
+
+
+def test_unknown_cluster_rejects_bridge_that_conflicts_with_existing_sample(tmp_path) -> None:
+    bridge = [0.8, 0.6, 0.0]
+    first_voice = [1.0, 0.0, 0.0]
+    second_voice = [0.6, 0.8, 0.0]
+    service = SpeakerRecognitionService(
+        settings(tmp_path),
+        tmp_path / "speaker-embeddings.json",
+        extractor=FakeExtractor(bridge, bridge, first_voice, second_voice),
+    )
+
+    results = [
+        service.analyze(
+            wav(tmp_path, f"cluster-bridge-{ordinal}.wav"),
+            transcription(),
+            record_id=f"cluster-bridge-{ordinal}",
+            session_id="local-asr",
+            profile_names={},
+        )
+        for ordinal in range(4)
+    ]
+
+    first_cluster = results[0].segments[0].voiceprint_id
+    assert results[1].segments[0].voiceprint_id == first_cluster
+    assert results[2].segments[0].voiceprint_id == first_cluster
+    assert results[3].segments[0].voiceprint_id != first_cluster
+
+
 def test_unknown_voiceprint_cluster_survives_service_restart(tmp_path) -> None:
     store = tmp_path / "speaker-embeddings.json"
     first_service = SpeakerRecognitionService(

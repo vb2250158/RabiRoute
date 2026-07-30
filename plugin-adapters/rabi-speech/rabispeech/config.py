@@ -103,6 +103,7 @@ class SpeakerRecognitionSettings:
     max_samples_per_profile: int
     max_unconfirmed_samples: int
     min_voiced_rms: float
+    unlabeled_turn_gap_seconds: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -345,6 +346,10 @@ def load_settings(path: str | Path | None = None) -> Settings:
                 min(5000, int(speaker_recognition.get("max_unconfirmed_samples", 500))),
             ),
             min_voiced_rms=min(1.0, max(0.0, float(speaker_recognition.get("min_voiced_rms", 0.006)))),
+            unlabeled_turn_gap_seconds=min(
+                5.0,
+                max(0.1, float(speaker_recognition.get("unlabeled_turn_gap_seconds", 0.5))),
+            ),
         ),
         http_asr=http_asr,
         api_tts=api_tts,

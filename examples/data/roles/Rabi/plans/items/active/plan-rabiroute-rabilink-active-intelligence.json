@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "product",
   "currentStepId": "physical-acceptance",
-  "currentStep": "主机级语音事实、speech/rabilink 精确分发、人格声纹关系、人格文件 LAN-first/Relay fallback 同步、Android 断网恢复与设备回执、事件驱动控制面以及失败关闭的实体验收汇总已经形成自动化闭环。当前继续补真人声纹、双实体 PC、Android 长时间运行、Rokid 真机和人工观察证据。",
-  "nextAction": "用公开文档描述的私有证据流程完成真人声纹、双实体 PC、Android soak 与 Rokid 真机验收；只有统一实体环境检查全部通过后，才更新正式成熟度并决定 AIUI 保留与原生迁移范围。",
+  "currentStep": "主机级语音事实、speech/rabilink 精确分发、人格声纹关系、人格同步、Android 断网恢复与设备回执已经形成自动化闭环；多台手机现在使用稳定安装身份并由 RabiSpeech 保留用户选择，PC 端 received_bytes 成为无需 ADB 的收音健康证据，Android 静态播放 marker 边界已有单测。当前继续补真人声纹、双实体 PC、Android 长时间运行、Rokid 真机和人工观察证据。",
+  "nextAction": "在不依赖 USB/ADB 的条件下完成 Android 长时收音、断网恢复和播放回执验收，同时完成真人声纹、双实体 PC 与 Rokid 真机证据；只有统一实体环境检查全部通过后，才更新正式成熟度并决定 AIUI 保留范围。",
   "steps": [
     { "id": "record-first-ledger", "title": "完成 record-first 账本、审阅器和主动下行", "status": "已完成" },
     { "id": "phone-first-client", "title": "把手机升级为可独立使用的完整聊天客户端", "status": "已完成" },
@@ -19,6 +19,7 @@
     { "id": "speech-and-voiceprint-context", "title": "统一主机语音事实、精确 Route 分发和人格声纹关系", "status": "已完成" },
     { "id": "persona-sync-automation", "title": "完成人格 LAN-first 与 Relay fallback 同步自动化闭环", "status": "已完成" },
     { "id": "event-driven-reliability", "title": "完成事件驱动控制面、设备回执和失败关闭验收工具", "status": "已完成" },
+    { "id": "multi-phone-audio-reliability", "title": "完成多手机稳定身份、输入选择、PC 字节计数和播放 marker 修复", "status": "已完成" },
     { "id": "physical-acceptance", "title": "完成真人声纹、双实体 PC、Android soak、眼镜和人工观察验收", "status": "进行中", "blockedBy": "仍缺对应实体环境与真人私有证据" },
     { "id": "decide-aiui-migration", "title": "依据真机证据决定 AIUI 保留与原生迁移范围", "status": "未开始" }
   ],
@@ -35,6 +36,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-07-09T00:00:00+08:00",
-  "updatedAt": "2026-07-24T00:00:00+08:00",
-  "keywords": ["RabiLink", "RabiSpeech", "原生 App", "Rabi Glass", "语音消息入口", "声纹关系", "人格同步", "LAN-first", "Relay fallback", "事件驱动", "设备回执", "Android soak", "record-first", "主动投递", "Action Gate", "实体环境验收"]
+  "updatedAt": "2026-07-30T00:00:00+08:00",
+  "keywords": ["RabiLink", "RabiSpeech", "多手机", "稳定设备 ID", "received_bytes", "AudioTrack marker", "原生 App", "Rabi Glass", "语音消息入口", "声纹关系", "人格同步", "LAN-first", "Relay fallback", "事件驱动", "设备回执", "Android soak", "record-first", "主动投递", "Action Gate", "实体环境验收"]
 }

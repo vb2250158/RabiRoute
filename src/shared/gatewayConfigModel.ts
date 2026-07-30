@@ -340,6 +340,7 @@ export function defaultRolePanelNotificationRule(): NotificationRuleDefinition {
 
 function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string[] {
   if (adapter === "napcat") return ["private", "direct_at", "direct_reply", "indirect_reply"];
+  if (adapter === "remoteAgent") return ["manual_trigger"];
   if (adapter === "heartbeat") return ["heartbeat"];
   if (adapter === "rolePanel") return ["role_panel_message", "manual_trigger"];
   if (adapter === "speech") return ["voice_transcript"];
@@ -381,6 +382,25 @@ export function defaultMessageAdapterNotificationRules(adapters: MessageAdapterT
       template: ""
     }];
   });
+}
+
+export function ensureMessageAdapterNotificationRules(
+  rules: NotificationRuleDefinition[] | undefined,
+  adapters: MessageAdapterType[]
+): NotificationRuleDefinition[] {
+  const next = normalizeRuleDefinitions(rules) ?? [];
+  const coveredRouteKinds = new Set(next.flatMap((rule) => rule.routeKinds ?? []));
+  const existingRuleIds = new Set(next.map((rule) => rule.id));
+
+  for (const fallback of defaultMessageAdapterNotificationRules(adapters)) {
+    if (existingRuleIds.has(fallback.id)) continue;
+    const missingRouteKinds = (fallback.routeKinds ?? []).filter((routeKind) => !coveredRouteKinds.has(routeKind));
+    if (missingRouteKinds.length === 0) continue;
+    next.push({ ...fallback, routeKinds: missingRouteKinds });
+    existingRuleIds.add(fallback.id);
+    for (const routeKind of missingRouteKinds) coveredRouteKinds.add(routeKind);
+  }
+  return next;
 }
 
 export function ensureSpeechRouteNotificationRule(rules: NotificationRuleDefinition[]): NotificationRuleDefinition[] {
@@ -806,9 +826,10 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     : definition.routeVariables;
   const configuredNotificationRules = normalizeRuleDefinitions(definition.notificationRules) ?? [];
   const hasPersonaOnlyRules = !agentRoleId && configuredNotificationRules.some(sharedIsBuiltinRolePanelRule);
-  const notificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
+  const baseNotificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
     ? configuredNotificationRules
     : defaultMessageAdapterNotificationRules(activeMessageAdapters);
+  const notificationRules = ensureMessageAdapterNotificationRules(baseNotificationRules, activeMessageAdapters);
   const recentMessageLimits = normalizeRecentMessageLimits(definition.recentMessageLimits, definition.recentMessageLimit);
   const speechPushMode = normalizeSpeechPushMode(definition.speechPushMode);
   const speechTriggerKeywords = normalizeSpeechTriggerKeywords(definition.speechTriggerKeywords);

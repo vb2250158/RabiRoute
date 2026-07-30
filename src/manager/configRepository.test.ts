@@ -188,8 +188,13 @@ test("repository migrates legacy role rules to personaConfig and keeps adapter c
     "legacy-adapter",
     "legacy-profile",
     "legacy-role-map",
-    "role-panel-message"
+    "role-panel-message",
+    "default-rolePanel"
   ]);
+  assert.deepEqual(
+    config.gateways[0].notificationRules?.find(rule => rule.id === "default-rolePanel")?.routeKinds,
+    ["manual_trigger"]
+  );
   const momoPersona = JSON.parse(fs.readFileSync(path.join(rootDir, "data", "roles", "Momo", "personaConfig.json"), "utf8")) as GatewayDefinition;
   assert.deepEqual(momoPersona.notificationRules?.map(rule => rule.id), [
     "momo-profile",

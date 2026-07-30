@@ -106,6 +106,7 @@ def test_rabilink_virtual_audio_client_reuses_the_host_pcm_feed(tmp_path: Path) 
         session_id="phone-one",
         resume_running=True,
     )
+    asyncio.run(hub.select("remote", "phone-one-audio"))
     asyncio.run(hub.start_capture(16_000, 100))
     accepted = hub.feed_virtual_client(
         "phone-one-audio",
@@ -129,8 +130,10 @@ def test_rabilink_virtual_audio_client_reuses_the_host_pcm_feed(tmp_path: Path) 
     assert hub.selected_session_id == "phone-one"
     row = hub.snapshot()["clients"][0]
     assert row["last_sequence"] == 1
-    assert hub.stale_virtual_client_id(15, now=float(row["last_audio_at"]) + 14.9) is None
-    assert hub.stale_virtual_client_id(15, now=float(row["last_audio_at"]) + 15) == "phone-one-audio"
+    assert row["received_bytes"] == len(np.array([0, 16_384, -16_384], dtype="<i2").tobytes())
+    assert row["accepted_chunks"] == 1
+    assert hub.stale_virtual_client_id(15, client_id="phone-one-audio", now=float(row["last_audio_at"]) + 14.9) is None
+    assert hub.stale_virtual_client_id(15, client_id="phone-one-audio", now=float(row["last_audio_at"]) + 15) == "phone-one-audio"
     with pytest.raises(ValueError, match="expected 2, received 3"):
         hub.feed_virtual_client("phone-one-audio", b"\x00\x00", sequence=3)
     _, resume_running = hub.stop_virtual_client("phone-one-audio")
@@ -163,6 +166,7 @@ def test_rabilink_virtual_audio_chunk_id_deduplicates_after_stream_rebuild(tmp_p
         message_adapter_type="rabilink",
         source_device_id="phone-one",
     )
+    asyncio.run(hub.select("remote", "phone-stream-a"))
     asyncio.run(hub.start_capture(16_000, 100))
     assert hub.feed_virtual_client(
         "phone-stream-a", first_payload, sequence=1, chunk_id="stable-chunk-one"
@@ -170,31 +174,37 @@ def test_rabilink_virtual_audio_chunk_id_deduplicates_after_stream_rebuild(tmp_p
     assert len(received) == 1
 
     hub.start_virtual_client(
-        client_id="phone-stream-b",
+        client_id="phone-stream-a",
         name="Phone One",
         kind="mobile",
         message_adapter_type="rabilink",
         source_device_id="phone-one",
     )
     assert hub.feed_virtual_client(
-        "phone-stream-b", first_payload, sequence=1, chunk_id="stable-chunk-one"
+        "phone-stream-a", first_payload, sequence=1, chunk_id="stable-chunk-one"
     ) is True
     assert len(received) == 1
     assert hub.snapshot()["clients"][0]["last_sequence"] == 1
+    assert hub.snapshot()["clients"][0]["received_bytes"] == len(first_payload)
+    assert hub.snapshot()["clients"][0]["accepted_chunks"] == 1
     assert hub.feed_virtual_client(
-        "phone-stream-b", second_payload, sequence=2, chunk_id="stable-chunk-two"
+        "phone-stream-a", second_payload, sequence=2, chunk_id="stable-chunk-two"
     ) is True
     assert len(received) == 2
-    assert received[1][0] == "phone-stream-b"
+    assert received[1][0] == "phone-stream-a"
     np.testing.assert_allclose(received[1][1], [0.25, -0.25])
     assert hub.snapshot()["clients"][0]["last_sequence"] == 2
+    assert hub.snapshot()["clients"][0]["received_bytes"] == len(first_payload) + len(second_payload)
+    assert hub.snapshot()["clients"][0]["accepted_chunks"] == 2
     assert hub.feed_virtual_client(
-        "phone-stream-b", second_payload, sequence=2, chunk_id="stable-chunk-two"
+        "phone-stream-a", second_payload, sequence=2, chunk_id="stable-chunk-two"
     ) is True
     assert len(received) == 2
+    assert hub.snapshot()["clients"][0]["received_bytes"] == len(first_payload) + len(second_payload)
+    assert hub.snapshot()["clients"][0]["accepted_chunks"] == 2
 
     hub.start_virtual_client(
-        client_id="phone-stream-c",
+        client_id="phone-stream-a",
         name="Phone One",
         kind="mobile",
         message_adapter_type="rabilink",
@@ -202,5 +212,72 @@ def test_rabilink_virtual_audio_chunk_id_deduplicates_after_stream_rebuild(tmp_p
     )
     with pytest.raises(ValueError, match="retried with different PCM bytes"):
         hub.feed_virtual_client(
-            "phone-stream-c", b"\x00\x00", sequence=1, chunk_id="stable-chunk-two"
+            "phone-stream-a", b"\x00\x00", sequence=1, chunk_id="stable-chunk-two"
         )
+
+
+def test_rabilink_virtual_audio_clients_connect_concurrently_but_only_selected_device_feeds_asr(
+    tmp_path: Path,
+) -> None:
+    received: list[tuple[str, np.ndarray]] = []
+    hub = RemoteAudioHub(
+        RemoteAudioServerConfig(
+            enabled=False,
+            host="127.0.0.1",
+            port=8782,
+            token="",
+            settings_path=tmp_path / "selection.json",
+            discovery_port=8783,
+            service_name="test-host",
+        ),
+        local_player=lambda _path, _volume, _cancel: None,
+        local_stopper=lambda: None,
+    )
+    hub.set_feed(lambda client_id, samples: received.append((client_id, samples)))
+    for suffix in ("one", "two"):
+        hub.start_virtual_client(
+            client_id=f"phone-{suffix}-audio",
+            name=f"Phone {suffix.title()}",
+            kind="mobile",
+            message_adapter_type="rabilink",
+            source_device_id=f"phone-{suffix}",
+            route_profile_id=f"route-{suffix}",
+        )
+
+    asyncio.run(hub.select("remote", "phone-one-audio"))
+    asyncio.run(hub.start_capture(16_000, 100))
+    payload = np.array([0, 16_384, -16_384], dtype="<i2").tobytes()
+    assert hub.feed_virtual_client("phone-one-audio", payload, sequence=1, chunk_id="one-1")
+    assert hub.feed_virtual_client("phone-two-audio", payload, sequence=1, chunk_id="two-1")
+    assert [item[0] for item in received] == ["phone-one-audio"]
+
+    rows = {row["id"]: row for row in hub.snapshot()["clients"]}
+    assert set(rows) == {"phone-one-audio", "phone-two-audio"}
+    assert rows["phone-one-audio"]["selected"] is True
+    assert rows["phone-one-audio"]["accepted_chunks"] == 1
+    assert rows["phone-two-audio"]["selected"] is False
+    assert rows["phone-two-audio"]["last_sequence"] == 1
+    assert rows["phone-two-audio"]["accepted_chunks"] == 0
+
+    asyncio.run(hub.select("remote", "phone-two-audio"))
+    assert hub.feed_virtual_client("phone-one-audio", payload, sequence=2, chunk_id="one-2")
+    assert hub.feed_virtual_client("phone-two-audio", payload, sequence=2, chunk_id="two-2")
+    assert [item[0] for item in received] == ["phone-one-audio", "phone-two-audio"]
+    assert hub.selected_source_device_id == "phone-two"
+    assert hub.selected_route_profile_id == "route-two"
+
+    hub.stop_virtual_client("phone-two-audio")
+    snapshot = hub.snapshot()
+    assert snapshot["selected_client_id"] == "phone-two-audio"
+    assert snapshot["selected_online"] is False
+    assert any(row["id"] == "phone-one-audio" and row["online"] for row in snapshot["clients"])
+
+    hub.start_virtual_client(
+        client_id="phone-two-audio",
+        name="Phone Two",
+        kind="mobile",
+        message_adapter_type="rabilink",
+        source_device_id="phone-two",
+        route_profile_id="route-two",
+    )
+    assert hub.snapshot()["selected_online"] is True

@@ -34,6 +34,7 @@
 - [Agent 上下文注入](agent-context-injection.md) — **现行指南**。人格级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的角色知识、路径和回复上下文。
 - [Rabi Agent 接口](rabi-agent-interfaces.md) — **现行指南**。回复、thread bridge、计划、记忆、Remote Agent 和多实例 API。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
+- [动态整理记录统一规范](dynamic-record-lifecycle.md) — **现行指南**。统一归档、记忆沉淀、物理分卷、保留策略和 24/72 小时动态窗口的边界与验收。
 - [Pipeline presets](pipeline-presets.md) — Agent 会话、明确外部目标和 Outbox 状态；其中 FenneNote 输出章节仅为归档兼容说明。
 - [Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md) — **现行指南**。会话重复创建、工具缺失、owner 倒置和桌面启动依赖的复盘与验证方法。
 - [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) — **现行指南**。发现、认证、任务、幂等创建、投递、结果、工具、生命周期、UI、安全和验收要求。

@@ -22,13 +22,19 @@ RabiRoute 不自动输入 QQ 密码，也不绕过验证码、新设备验证或
 
 路由页每个 QQ 实例的“打开 NapCat”按钮按下面顺序工作：
 
-1. 已经在线且账号匹配：直接打开对应 WebUI，不重启现有会话。
-2. NapCat 未启动：按该实例的 `launchCommand` 和 `workingDir` 启动，并等待 WebUI。
-3. WebUI 有绑定账号的 quick login：自动选择该账号并等待 QQ / OneBot 就绪。
-4. QQ 已登录但 OneBot 未连通：自动写入并应用该实例的 HTTP / WebSocket 配置。
-5. 只有验证码、新设备确认、扫码或同账号被其他窗口占用时，才把正确页面交给用户处理。
+1. 目标实例已经在线且账号匹配：直接打开对应 WebUI，不重启现有会话。
+2. 目标实例未就绪：先扫描本机已配置和可发现的 OneBot HTTP 端点，用 `get_status` 与 `get_login_info` 确认这个 QQ 是否已经由另一 NapCat 实例持有。
+3. 账号已在另一实例在线：保留现有会话，拒绝启动或快捷登录第二份实例；页面显示真实在线实例，可由用户明确选择“采用在线实例”。
+4. 没有其他在线持有者且 NapCat 未启动：按该实例的 `launchCommand` 和 `workingDir` 启动，并等待 WebUI。
+5. WebUI 有绑定账号的有效 quick login：自动选择该账号并等待 QQ / OneBot 就绪；若保存身份已过期，停止重复尝试并明确要求扫码登录。
+6. QQ 已登录但 OneBot 未连通：自动写入并应用该实例的 HTTP / WebSocket 配置。
+7. 只有验证码、新设备确认、扫码或无法安全判断的账号冲突，才把正确页面交给用户处理。
 
 健康检查接口保持只读；登录、启动和配置修复只发生在用户明确点击按钮后，由 manager 的 `napcat-ensure-ready` 动作接口编排。
+
+页面把四层状态分开显示：WebUI 是否可打开、QQ 登录身份、OneBot HTTP 是否在线，以及 RabiRoute WebSocket 是否已连接。WebUI 可打开不等于 QQ 已登录，QQ 已登录也不等于消息已经进入 RabiRoute。
+
+“采用在线实例”只把当前 QQ 卡片的 HTTP、WebUI 和工作目录改为已确认在线的实例，不会退出 QQ、停止旧进程或自动迁移登录。若在线实例尚未指向当前网关，页面会继续要求修复 OneBot WebSocket 路由。
 
 ## 无值守登录思路
 
@@ -97,5 +103,7 @@ setx NAPCAT_LOGIN_REFRESH_SECONDS "30"
 1. 打开 NapCat WebUI，确认 QQ 已登录，WebSocket Client 和 HTTP Server 已启用。
 2. 查看 NapCat 日志里是否有 quick login、二维码登录、设备验证或 ServerTime 偏差提示。
 3. 在 RibiWebGUI 看 NapCat 状态：WS 是否连接、HTTP 登录资料是否读取成功。
-4. 如果 QQ 经常掉线，先同步 Windows 时间，再重启 NapCat / QQNT。
-5. 如果需要无值守，配置 Windows 开机启动 NapCat，再配置 NapCat 侧 `ACCOUNT` 和密码/MD5 环境变量。
+4. 若显示“账号在其他实例在线”，优先采用该在线实例；不要重复启动同一 QQ。只有确实需要迁移时，才先明确停止旧实例，再启动目标实例。
+5. 若显示“快速登录已过期”，在对应 WebUI 选择扫码登录；不要持续点击快速登录。
+6. 如果 QQ 经常掉线，先同步 Windows 时间，再重启 NapCat / QQNT。
+7. 如果需要无值守，配置 Windows 开机启动 NapCat，再配置 NapCat 侧 `ACCOUNT` 和密码/MD5 环境变量。

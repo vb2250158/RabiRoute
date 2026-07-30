@@ -32,7 +32,7 @@ data/roles/DevAssistant/personaConfig.json
 
 manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根级的 `notificationRules`、`speechTriggerKeywords` 和 `recentMessageLimits` 为真源，不再要求在人格文件里另建 `configs` 嵌套。
 
-路由入口参数来自 `data/route/<配置名>/adapterConfig.json`。manager 用其中的 `agentRoleId` 找到对应人格；多条 Route 绑定同一人格时，复用同一套人格规则、语音关键词和分消息端上下文额度。绑定人格但没有匹配外部消息规则时，外部消息只记录不投递；内置 `role_panel_message` 规则仍会保留。显式无人格 route 会按已启用消息入口生成默认规则。
+路由入口参数来自 `data/route/<配置名>/adapterConfig.json`。manager 用其中的 `agentRoleId` 找到对应人格；多条 Route 绑定同一人格时，复用同一套人格规则、语音关键词和分消息端上下文额度。新增并启用消息端时，Manager 会为尚未被现有规则覆盖的 route kind 自动补一条空白兜底模板，避免入口已经收到消息却因空规则静默丢失；现有自定义规则不会被覆盖，已明确禁用的对应规则也不会被重新启用。内置 `role_panel_message` 规则仍会保留。
 
 ## personaConfig.json 结构
 

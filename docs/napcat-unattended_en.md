@@ -22,13 +22,19 @@ RabiRoute does not type a QQ password or bypass CAPTCHA, device confirmation, or
 
 The **Open NapCat** button for a QQ instance follows this order:
 
-1. If the expected account is already online, open its WebUI without restarting it.
-2. If NapCat is stopped, use the instance's `launchCommand` and `workingDir`, then wait for the WebUI.
-3. If the WebUI exposes a quick-login entry for the bound account, select it and wait for QQ and OneBot to become ready.
-4. If QQ is logged in but OneBot is not connected, write and apply the instance's HTTP and WebSocket configuration.
-5. Hand control to the user only for CAPTCHA, device confirmation, QR login, or an account already occupied by another session.
+1. If the target instance is online with the expected account, open its WebUI without restarting it.
+2. If the target is not ready, scan configured and discovered local OneBot HTTP endpoints and use `get_status` plus `get_login_info` to determine whether another NapCat instance already owns that QQ account.
+3. If another instance owns the live account, preserve that session and refuse to start or quick-login a duplicate. The UI identifies the live owner and offers an explicit **Use online instance** action.
+4. If no other live owner exists and NapCat is stopped, use the instance's `launchCommand` and `workingDir`, then wait for the WebUI.
+5. If the WebUI exposes a valid quick-login entry for the bound account, select it and wait for QQ and OneBot. If the saved identity has expired, stop retrying it and request a QR login explicitly.
+6. If QQ is logged in but OneBot is not connected, write and apply the instance's HTTP and WebSocket configuration.
+7. Hand control to the user only for CAPTCHA, device confirmation, QR login, or a conflict that cannot be resolved safely.
 
 Health scans remain read-only. Login, startup, and configuration repair run only through an explicit user action handled by `POST /api/message/napcat-ensure-ready`.
+
+The UI reports four separate layers: WebUI reachability, QQ authentication, OneBot HTTP health, and the RabiRoute WebSocket connection. A reachable WebUI does not mean QQ is logged in, and a logged-in QQ does not mean messages are reaching RabiRoute.
+
+**Use online instance** only repoints the current QQ card's HTTP endpoint, WebUI endpoint, and working directory to the confirmed live instance. It does not sign QQ out, stop the old process, or silently migrate the login. If that instance is not yet routed to the current gateway, the UI continues to request OneBot WebSocket repair.
 
 ## Unattended login
 
@@ -91,5 +97,7 @@ Zero or a negative value disables this periodic check. The check only detects an
 1. Open NapCat WebUI and confirm QQ login, WebSocket Client, and HTTP Server.
 2. Check NapCat logs for quick-login, QR login, device verification, or clock-skew messages.
 3. In RibiWebGUI, verify WebSocket connectivity and the HTTP login profile.
-4. If QQ disconnects frequently, synchronize Windows time before restarting NapCat/QQNT.
-5. For unattended operation, configure Windows startup and then the NapCat-side `ACCOUNT` and password/MD5 variables.
+4. If the UI reports that the account is online in another instance, use that live instance instead of starting the same QQ twice. For a real migration, explicitly stop the old instance first.
+5. If the saved quick-login identity has expired, choose QR login in the corresponding WebUI rather than repeatedly retrying quick login.
+6. If QQ disconnects frequently, synchronize Windows time before restarting NapCat/QQNT.
+7. For unattended operation, configure Windows startup and then the NapCat-side `ACCOUNT` and password/MD5 variables.
