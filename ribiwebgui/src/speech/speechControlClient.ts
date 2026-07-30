@@ -15,6 +15,7 @@ import type {
   SpeechPlaybackStatus,
   SpeechPlaybackVolumeCommand,
   SpeechRecord,
+  SpeechRuntimeControlResult,
   SpeechRuntimeStatus,
   SpeechSpeakerBinding,
   SpeechSpeakerBindingCommand,
@@ -100,6 +101,14 @@ async function managerData<T>(pathname: string, init: RequestInit = {}): Promise
 
 export const speechControlClient = {
   status: (): Promise<SpeechRuntimeStatus> => managerData("/api/speech/status"),
+  startRuntime: (): Promise<SpeechRuntimeControlResult> => managerData(
+    "/api/speech/runtime/start",
+    { method: "POST" }
+  ),
+  stopRuntime: (): Promise<SpeechRuntimeControlResult> => managerData(
+    "/api/speech/runtime/stop",
+    { method: "POST" }
+  ),
   models: (): Promise<SpeechModelsPayload> => managerData("/api/speech/models"),
   personas: (): Promise<SpeechPersonasPayload> => managerData("/api/speech/personas"),
   records: (query: SpeechRecordsQuery = {}): Promise<SpeechRecordsPayload> => {

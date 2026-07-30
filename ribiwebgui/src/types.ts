@@ -263,7 +263,7 @@ export type RolePlan = {
   keywords: string[];
   presentation: {
     status: string;
-    tone: "blocked" | "qa" | "running" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
+    tone: "blocked" | "qa" | "running" | "waiting_external" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
     sortBucket: number;
     views: Array<"current" | "plans" | "archived">;
     palette: {

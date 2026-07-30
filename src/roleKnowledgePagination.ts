@@ -6,6 +6,17 @@ export type RolePlanPageCounts = {
   blocked: number;
   qa: number;
   active: number;
+  stages: {
+    executing: number;
+    qa: number;
+    waitingPackage: number;
+    waitingExternal: number;
+    approval: number;
+    pending: number;
+    paused: number;
+    completed: number;
+    archived: number;
+  };
 };
 
 export type RolePlanPage<T> = {
@@ -56,7 +67,18 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
     archived: plans.filter((plan) => plan.presentation.views.includes("archived")).length,
     blocked: plans.filter((plan) => plan.presentation.tone === "blocked").length,
     qa: plans.filter((plan) => plan.presentation.tone === "qa").length,
-    active: plans.filter((plan) => !["paused", "done", "archived"].includes(plan.presentation.tone)).length
+    active: plans.filter((plan) => !["paused", "done", "archived"].includes(plan.presentation.tone)).length,
+    stages: {
+      executing: plans.filter((plan) => plan.presentation.tone === "running").length,
+      qa: plans.filter((plan) => plan.presentation.tone === "qa").length,
+      waitingPackage: plans.filter((plan) => plan.presentation.tone === "waiting_package").length,
+      waitingExternal: plans.filter((plan) => plan.presentation.tone === "waiting_external").length,
+      approval: plans.filter((plan) => plan.presentation.tone === "blocked").length,
+      pending: plans.filter((plan) => plan.presentation.tone === "pending").length,
+      paused: plans.filter((plan) => plan.presentation.tone === "paused").length,
+      completed: plans.filter((plan) => plan.presentation.tone === "done").length,
+      archived: plans.filter((plan) => plan.presentation.tone === "archived").length
+    }
   };
   return {
     items,

@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-manager-side-effect-ownership",
+  "title": "Manager 副作用必须有稳定回执与运行时归属门",
+  "focus": "用幂等回执、真实健康和明确进程归属保护控制面副作用",
+  "content": "Agent 普通回复使用稳定 deliveryId，在真正外发前持久化 reservation；重复请求回读原结果，payload 冲突或发送结果 uncertain 时禁止自动重放，并通过独立 receipt 查询恢复。RabiSpeech 的页面总开关只允许 Manager 启动当前工作区正式运行时，停止前必须确认端口属于当前工作区进程，未知 owner 失败关闭；页面只在真实健康后展开运行时控件。计划阶段、排序与计数同样由 Manager presentation 统一派生，WebGUI 和托盘不得自行重做业务分类。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：Manager 幂等回执、运行时归属与展示真源"
+  },
+  "createdAt": "2026-07-30T19:42:00+08:00",
+  "updatedAt": "2026-07-30T19:42:00+08:00",
+  "keywords": ["Manager", "deliveryId", "幂等回执", "uncertain", "RabiSpeech", "运行时归属", "health", "presentation", "WebGUI", "Qt 托盘", "失败关闭"]
+}

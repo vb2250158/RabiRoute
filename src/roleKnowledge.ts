@@ -749,11 +749,8 @@ function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps
       throw new Error("Plan currentStepId must identify the only step whose status is 进行中.");
     }
   }
-  if (plan.status === "暂停" && currentSteps.length > 0 && !plan.currentStepId) {
-    throw new Error("A paused plan with an in-progress resume step must preserve currentStepId.");
-  }
-  if (plan.status === "暂停" && plan.currentStepId && (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId)) {
-    throw new Error("A paused plan currentStepId must preserve its only in-progress step.");
+  if (plan.status === "暂停" && (!plan.currentStepId || currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId)) {
+    throw new Error("A paused plan must preserve currentStepId for its only in-progress resume step.");
   }
   if (plan.status !== "进行中" && plan.status !== "暂停" && plan.currentStepId) {
     throw new Error("Only an in-progress or paused plan can provide currentStepId.");

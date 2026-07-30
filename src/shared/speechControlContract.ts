@@ -28,6 +28,11 @@ export type SpeechRuntimeStatus = {
   error?: string;
 };
 
+export type SpeechRuntimeControlResult = {
+  action: "started" | "already_online" | "stopped" | "already_offline";
+  status: SpeechRuntimeStatus;
+};
+
 export type SpeechVoiceprintCapability = {
   supported: boolean;
   available?: boolean;

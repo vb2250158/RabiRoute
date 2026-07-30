@@ -729,6 +729,22 @@ test("paused plans preserve their resume step without remaining approval-active"
   assert.equal(planApprovalGate(resumed).state, "preparing");
 });
 
+test("paused plans require exactly one preserved resume step", () => {
+  const roleDir = makeRoleDir();
+
+  assert.throws(() => createPlan(roleDir, {
+    title: "缺少恢复点的暂停计划",
+    focus: "缺少恢复点的暂停计划",
+    status: "暂停",
+    currentStep: "暂停但没有结构化恢复位置",
+    steps: [
+      { id: "inspect", title: "检查现状", status: "已完成" },
+      { id: "implement", title: "继续实现", status: "未开始" }
+    ],
+    keywords: ["暂停"]
+  }), /paused plan must preserve currentStepId/i);
+});
+
 test("approval steps remain writable while Manager can distinguish incomplete and concrete contracts", () => {
   const roleDir = makeRoleDir();
   const base = {

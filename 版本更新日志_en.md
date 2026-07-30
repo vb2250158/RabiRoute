@@ -6,6 +6,25 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## Unreleased - 2026-07-30
+
+### Durable Agent-reply idempotency receipts and controlled ordinary inquiries
+
+- `/api/agent/replies` now accepts an optional stable `deliveryId`. Manager persists a reservation before Outbox delivery. Duplicate clicks, concurrent calls, lost responses, and process restarts for the same ID/payload execute once and read back the original result; changed payloads conflict, and uncertain sends are never auto-replayed.
+- Added `GET /api/agent/replies/receipts/:deliveryId`. After a POST timeout or empty response, callers query the original receipt first. Delivery may be marked only after `status=sent + sentMessageId` and the required NapCat readback verification.
+- XinghaiBuilder's private `work-cycle send` gains a mutually exclusive `inquiryNotification:true` contract: it requires the latest completed single-plan cycle, an explicit target group, and a real CQ `@`; it carries no reply anchor and never falls back to the issue/source message. QA, approval, and explicitly referenced ordinary replies retain their existing contracts. Runtime plans, group/account IDs, receipts, and input JSON remain in ignored `data/`; public tests use placeholders only.
+
+### Page-wide WebGUI Speech Service switch
+
+- The top of **Speech Service** now has a RabiSpeech switch. When off, only the page title, state, error feedback, and switch remain; model, audio-stream, ASR, TTS, voiceprint, and playback controls are not rendered without a meaningful runtime. The full page appears only after the local `/health` check really succeeds.
+- Manager now exposes lifecycle commands for this workspace's local RabiSpeech runtime. Startup directly launches the formal Windows `runtime/RabiSpeech.exe` and serializes competing transitions. Shutdown first targets a process launched by this Manager; for externally launched runtimes it verifies that the listening port belongs to this workspace's `RabiSpeech.exe/windows_host.py` before stopping. Unknown ownership fails closed, and Manager read-only mode continues to reject lifecycle commands. A brief stale SSE disconnect during transition no longer produces a red error or layout shift, and runtime configuration refresh no longer writes settings back or displays a false save notice.
+
+### Manager-owned plan presentation and paused-resume contract
+
+- Manager now derives the shared Awaiting approval, Awaiting QA, Executing, external-wait, and Awaiting shared package stages together with ordering and counts. WebGUI and the Qt tray consume this DTO without reclassifying business state.
+- A paused plan must retain exactly one in-progress resume step addressed by `currentStepId`; plan writes, work-cycle finish preflight, and strict audit consistently fail closed on missing, mismatched, or multiple resume points.
+- Thread reconciliation reuses Manager presentation and real send receipts to classify idle work as `terminal / blocked / actionable / frozen / waiting_result`, avoiding duplicate inquiries after a verified delivery that is waiting only for a result.
+
 ## 0.1.23 - 2026-07-30
 
 ### Speaker-model cold-start resilience

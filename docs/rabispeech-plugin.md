@@ -61,6 +61,8 @@ cd plugin-adapters\rabi-speech
 
 默认只监听 `http://127.0.0.1:8781`。首次启动生成 Git 忽略的 `config.json`；模型、参考音、输出和私有绝对路径均不提交。
 
+RibiWebGUI“语音服务”页顶部提供整页 RabiSpeech 滑轨。开启时，已鉴权的 Manager 只会直接启动当前工作区正式的 `runtime/RabiSpeech.exe`，并等待真实 `/health` 成功后才展开模型、音频流、ASR、TTS、声纹和播放参数；关闭时，Manager 先核验监听端口确实属于当前工作区的 `runtime/RabiSpeech.exe` 或 `windows_host.py`，再停止进程并收起全部参数。端口归属不明时失败关闭，绝不按端口盲杀其他服务。该开关当前只支持 Windows 主机；Manager 只读模式继续禁止启停。服务切换期间旧 SSE 短暂断开属于自动重连过程，不显示成操作失败，也不触发布局抖动；运行时配置刷新不会反向提交一次无意义的设置保存。
+
 会议室远程声卡不改变这个控制面边界。在私有 `config.json` 启用 `remote_audio` 后，RabiSpeech 只额外开放带独立 Bearer 密钥的 TCP `8782` 音频 WebSocket 和 UDP `8783` 局域网发现。客户端只持续传 PCM、接收 WAV；VAD、切句、ASR、Route 广播、人格 TTS、FIFO 与防回流仍全部留在主机。安装见 [Rabi 语音客户端](../desktop/rabi-voice-client/README.md)。局域网直连不要求配置 RabiLink。
 
 RabiLink 手机不依赖 ADB 进入音频流列表。每台安装持有独立、稳定的 `sourceDeviceId` 和稳定流 ID，并在建流时上报 Android 设备型号；经 Relay 自动连接后会作为单独客户端显示在 **语音服务** 顶部的共享音频流卡片，以“设备型号 + 稳定 ID 后缀”区分。该卡片位于 TTS/ASR 标签上方，因为远端设备同时承担 PCM 上行和人格语音下行。卡片把 PCM 收发、VAD、ASR 与 Route 投递分层显示，并按稳定设备 ID 关联解析公共转写及逐 Route 回执；收到 PCM 字节不再被误报为已经产生转写。多台可同时在线；首台在没有既有选择时可自动成为默认输入，后来者不抢占。`PUT /v1/audio-streams/selection`（经 Manager 时为 `/api/speech/audio-streams/selection`）只选择一路进入 VAD/ASR并持久化；所选设备离线时不回退到别的麦克风，原设备重连后自动恢复。
