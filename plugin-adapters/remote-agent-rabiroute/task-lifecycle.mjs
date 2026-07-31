@@ -1,6 +1,7 @@
 const TERMINAL_STATUSES = new Set(["completed", "failed"]);
 const RETAINED_TERMINAL_TASKS = 2000;
 const RETAINED_PENDING_TURNS = 200;
+const RETAINED_AGENT_MESSAGES_PER_TURN = 50;
 const MAX_REPLY_TEXT_CHARS = 12_000;
 
 function errorMessage(value, fallback) {
@@ -33,6 +34,7 @@ export class RemoteTaskLifecycle {
     this.turns = new Map();
     this.turnIdsByThread = new Map();
     this.pendingTurnTerminals = new Map();
+    this.agentMessagesByTurn = new Map();
     this.terminalTasks = new Map();
     this.taskWaiters = new Map();
     this.turnWaiters = new Map();
@@ -102,15 +104,39 @@ export class RemoteTaskLifecycle {
   }
 
   handleNotification(message) {
+    if (message?.method === "item/completed") {
+      const params = message.params || {};
+      const turnId = String(params.turnId || "").trim();
+      const item = params.item;
+      if (turnId && item?.type === "agentMessage" && typeof item.text === "string" && item.text.trim()) {
+        const messages = this.agentMessagesByTurn.get(turnId) || [];
+        const itemId = String(item.id || "").trim();
+        const next = itemId
+          ? [...messages.filter((candidate) => String(candidate.id || "").trim() !== itemId), item]
+          : [...messages, item];
+        retainBounded(
+          this.agentMessagesByTurn,
+          turnId,
+          next.slice(-RETAINED_AGENT_MESSAGES_PER_TURN),
+          RETAINED_PENDING_TURNS
+        );
+      }
+      return 0;
+    }
+
     if (message?.method === "turn/completed") {
       const params = message.params || {};
       const turnId = String(params.turn?.id || "").trim();
       const turnStatus = String(params.turn?.status || "missing");
+      const streamedItems = turnId ? this.agentMessagesByTurn.get(turnId) || [] : [];
+      const completedTurn = Array.isArray(params.turn?.items) && params.turn.items.length
+        ? params.turn
+        : { ...params.turn, items: streamedItems };
       const terminal = {
         status: turnStatus === "completed" ? "completed" : "failed",
         turnStatus,
         error: params.turn?.error,
-        replyText: turnStatus === "completed" ? replyTextFromCompletedTurn(params.turn) : "",
+        replyText: turnStatus === "completed" ? replyTextFromCompletedTurn(completedTurn) : "",
         threadId: String(params.threadId || "").trim()
       };
       if (turnId) this.settleTurnWaiters(turnId, terminal);
@@ -163,6 +189,7 @@ export class RemoteTaskLifecycle {
     this.settleAllTurnWaiters(terminal);
     const failed = this.failAllActive(terminal);
     this.pendingTurnTerminals.clear();
+    this.agentMessagesByTurn.clear();
     return failed;
   }
 
@@ -225,6 +252,7 @@ export class RemoteTaskLifecycle {
 
   removeTurn(turnId) {
     const turn = this.turns.get(turnId);
+    this.agentMessagesByTurn.delete(turnId);
     if (!turn) return;
     this.turns.delete(turnId);
     const threadTurns = this.turnIdsByThread.get(turn.threadId);

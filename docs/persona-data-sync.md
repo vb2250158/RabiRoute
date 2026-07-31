@@ -38,7 +38,7 @@ Relay fallback 是请求中转，不是服务器人格仓库。文件内容只�
 | 普通文件 | 双方相同则不处理；只有一方相对共同版本变化时快进；双方都变化时保留本地并生成冲突文件。共同基线按应用 token 哈希作用域和对方稳定设备 GUID 分域，不会跨 RabiLink 应用复用。 |
 | 仅一侧存在 | 首次同步没有共同基线时视为新增并创建到另一侧；已经共同存在过且内容仍等于基线时，缺失侧视为删除并双向传播。 |
 | 删除与编辑并发 | 不静默删除或复活文件；保留当前本地内容并生成带 `remoteDeleted`、peer 与共同基线哈希的冲突证据。 |
-| 锁、临时文件、符号链接 | 不同步。 |
+| 锁、临时文件、运行态工作循环目录、符号链接 | 不同步。统一路径门会排除任意层级的 `tmp/`、`temp/`、隐藏目录、`*.tmp`、`*.lock`、`*.part`，以及 `state/work-cycle-history/`、`state/work-cycle-history-locks/`、`state/work-cycle-inputs/`、`state/work-cycle-plan-locks/`、`state/work-cycle-receipt-locks/`。 |
 | `voice/cache/tts-audio/` | 可再生语音缓存，不同步。 |
 | 超过 16 MiB 的单文件 | 当前拒绝同步。 |
 
@@ -51,6 +51,8 @@ Relay fallback 是请求中转，不是服务器人格仓库。文件内容只�
 ## 事件维护的 Manifest 索引
 
 人格目录仍是唯一真源；`data/persona-sync/manifest-index.json` 只是可删除、可重建的派生索引。Manager 启动后异步执行一次全目录元数据校准：文件的大小、mtime、ctime 和文件标识与旧索引一致时直接复用 SHA-256，只有新增或变化的文件读取正文重新哈希。校准完成后使用递归文件系统事件维护索引；一个明确文件事件只重新哈希该路径，目录或缺少文件名的模糊事件才进行对应人格或全目录的一次性校准。
+
+扫描、递归监听、手动变更通知、本机文件读取、远端 merge 和 Coordinator 对两端 manifest 的消费复用同一个可移植路径门。这样旧版本 peer 即使仍声明运行态历史，也不会触发下载、上传或删除传播；`persona.md`、`plans/` 与 `memory/` 等人格知识继续正常同步。
 
 `GET /api/persona-sync/manifest` 等待启动校准完成后，先经过一次 50 ms 文件事件交付屏障，把“刚写完就立刻同步”的操作系统事件排入待处理队列，再直接读取内存索引；这个一次性 settle 不读取业务状态，也不重新遍历并哈希整个人格目录。索引变更通过 Manager `/api/events` 发布 `persona_sync_manifest_changed`，同时只把对应人格标记为待对账；短时间内的多个文件事件会合并成一次同步。若当前文件系统、网络盘或宿主无法提供可靠递归事件，功能优先保留：每次 manifest/sync 查询前做一次校准，但不启动固定周期轮询。`GET /api/persona-sync/index-status` 只允许回环访问，用于查看 `ready/fallback`、事件模式、文件数和重算计数；`GET /api/persona-sync/auto-status` 只返回自动对账状态、待处理数量和脱敏结果计数。专用 LAN listener 与 Relay proxy 都不暴露这两个诊断接口。
 

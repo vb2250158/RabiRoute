@@ -9,6 +9,7 @@ import {
   type PersonaSyncMergeResult,
   type PersonaSyncService
 } from "./personaSync.js";
+import { personaSyncFileEligible } from "./personaSyncManifestIndex.js";
 import {
   listPersonaVoiceIdentities,
   type PersonaVoiceIdentityConflictField
@@ -217,8 +218,14 @@ export class PersonaSyncCoordinator {
     const relay = this.relayConfig();
     const connection = await this.connect(peer, relay, roleId);
     const localManifest = await this.service.manifest(roleId);
-    const localFiles = new Map(localManifest.roles.flatMap(role => role.files).map(file => [fileKey(file), file]));
-    const remoteFiles = new Map(connection.manifest.roles.flatMap(role => role.files).map(file => [fileKey(file), file]));
+    const localFiles = new Map(localManifest.roles
+      .flatMap(role => role.files)
+      .filter(file => personaSyncFileEligible(file.path, file.size))
+      .map(file => [fileKey(file), file]));
+    const remoteFiles = new Map(connection.manifest.roles
+      .flatMap(role => role.files)
+      .filter(file => personaSyncFileEligible(file.path, file.size))
+      .map(file => [fileKey(file), file]));
     const statePeerId = peer.guid || peer.id;
     const state = this.readState(statePeerId, relay.token);
     const results: PersonaSyncResult["files"] = [];

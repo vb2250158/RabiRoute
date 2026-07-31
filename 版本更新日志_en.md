@@ -8,9 +8,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased - 2026-07-31
 
+### Persona Sync runtime isolation
+
+- Persona Sync scanning, recursive watching, explicit change notifications, reads, merges, and Coordinator transport now share exclusions for work-cycle history/input/lock directories and temporary files. Even an older peer advertising those paths cannot cause cross-PC transfer or deletion propagation; real persona, plan, and memory content continues to synchronize.
+
 ### Durable Agent-reply idempotency receipts and controlled ordinary inquiries
 
 - `/api/agent/replies` now accepts an optional stable `deliveryId`. Manager persists a reservation before Outbox delivery. Duplicate clicks, concurrent calls, lost responses, and process restarts for the same ID/payload execute once and read back the original result; changed payloads conflict, and uncertain sends are never auto-replayed.
+- When `turn/completed` omits items, the Remote Agent bridge recovers the final Agent message from `item/completed` notifications for the same turn. Remote tasks can therefore retain final-reply evidence without relying on an additional callback network path.
 - Added `GET /api/agent/replies/receipts/:deliveryId`. After a POST timeout or empty response, callers query the original receipt first. Delivery may be marked only after `status=sent + sentMessageId` and the required NapCat readback verification.
 - XinghaiBuilder's private `work-cycle send` gains a mutually exclusive `inquiryNotification:true` contract: it requires the latest completed single-plan cycle, an explicit target group, and a real CQ `@`; it carries no reply anchor and never falls back to the issue/source message. QA, approval, and explicitly referenced ordinary replies retain their existing contracts. Runtime plans, group/account IDs, receipts, and input JSON remain in ignored `data/`; public tests use placeholders only.
 

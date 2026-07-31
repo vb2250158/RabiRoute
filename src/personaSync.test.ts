@@ -71,6 +71,51 @@ test("persona sync manifests text and binary persona assets while safely merging
   assert.deepEqual(fs.readFileSync(path.join(roleRoot, "voice", "cache", "reference-audio", "remote.wav")), remoteReference);
 });
 
+test("persona sync transport rejects runtime paths while accepting portable plan and memory files", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-runtime-filter-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  fs.mkdirSync(path.join(roleRoot, "state", "work-cycle-history"), { recursive: true });
+  const runtimeTarget = path.join(roleRoot, "state", "work-cycle-history", "snapshot.json");
+  fs.writeFileSync(runtimeTarget, "{\"records\":[]}\n", "utf8");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "sync-state"));
+  t.after(() => service.stopManifestIndex());
+
+  assert.throws(
+    () => service.readFile("Rabi", "state/work-cycle-history/snapshot.json"),
+    /excluded/i
+  );
+  assert.throws(
+    () => service.merge({
+      roleId: "Rabi",
+      path: "state/work-cycle-history/snapshot.json",
+      deleted: true,
+      baseHash: hash("{\"records\":[]}\n"),
+      peerId: "pc-b"
+    }),
+    /excluded/i
+  );
+  assert.equal(fs.existsSync(runtimeTarget), true);
+
+  const plan = Buffer.from("{\"id\":\"plan-1\"}\n", "utf8");
+  const memory = Buffer.from("{\"id\":\"memory-1\"}\n", "utf8");
+  assert.equal(service.merge({
+    roleId: "Rabi",
+    path: "plans/items/active/plan-1.json",
+    contentBase64: plan.toString("base64"),
+    remoteHash: hash(plan),
+    peerId: "pc-b"
+  }).status, "created");
+  assert.equal(service.merge({
+    roleId: "Rabi",
+    path: "memory/recent/memory-1.json",
+    contentBase64: memory.toString("base64"),
+    remoteHash: hash(memory),
+    peerId: "pc-b"
+  }).status, "created");
+});
+
 test("persona sync fast-forwards from a known base and preserves divergent files as conflicts", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-conflict-"));
   const rolesRoot = path.join(root, "roles");

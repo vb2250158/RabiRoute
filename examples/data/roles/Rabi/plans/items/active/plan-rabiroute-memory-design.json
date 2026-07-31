@@ -6,7 +6,7 @@
   "priority": "medium",
   "kind": "documentation",
   "currentStepId": "keep-contracts-aligned",
-  "currentStep": "计划与记忆已支持结构化步骤、暂停恢复、Manager 派生审批门、计划引导、QA 回退和反馈审计；记录整理现在有统一双窗口合同，语音 Markdown 导出明确为不修改 JSONL 真源的可重建视图。当前持续校准双语文档、Agent 提示和公开示例人格。",
+  "currentStep": "计划与记忆已支持结构化步骤、暂停恢复、Manager 派生审批门、计划引导、QA 回退和反馈审计；记录整理现在有统一双窗口合同，Persona Sync 只同步可移植的人格、计划和记忆知识，并统一隔离 work-cycle 历史、输入、锁和临时文件。当前持续校准双语文档、Agent 提示和公开示例人格。",
   "nextAction": "用真实脱敏数据验证 24/72 小时归档与沉淀边界、无丢失/无重复恢复，再验证计划引导、审批直达绑定业务任务和 QA 失败续投原任务的完整闭环。",
   "steps": [
     { "id": "define-file-model", "title": "定义计划、近期记忆、沉淀记忆和整理记录的文件模型", "status": "已完成" },
@@ -14,6 +14,7 @@
     { "id": "pause-and-approval", "title": "实现暂停恢复、审批执行合同与计划反馈审计", "status": "已完成" },
     { "id": "guidance-and-qa-recovery", "title": "实现计划级引导、审批直投、QA 失败恢复与等待打包派生状态", "status": "已完成" },
     { "id": "dynamic-record-lifecycle", "title": "统一归档、沉淀、分卷、过期和可重建视图合同", "status": "已完成" },
+    { "id": "persona-sync-runtime-boundary", "title": "让 Persona Sync 统一隔离 work-cycle 运行态与临时文件", "status": "已完成" },
     { "id": "keep-contracts-aligned", "title": "持续校准双语文档、Agent 提示和公开示例", "status": "进行中" },
     { "id": "live-lifecycle-validation", "title": "用真实脱敏计划验证完整生命周期", "status": "未开始" }
   ],
@@ -30,6 +31,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-08T00:00:00+08:00",
-  "updatedAt": "2026-07-30T00:00:00+08:00",
-  "keywords": ["计划", "记忆", "上下文", "接口", "沉淀", "动态归档", "24/72 小时", "语音导出", "steps", "currentStepId", "暂停", "approvalRequest", "审批反馈", "计划引导", "QA 回退", "等待打包"]
+  "updatedAt": "2026-07-31T00:00:00+08:00",
+  "keywords": ["计划", "记忆", "上下文", "接口", "沉淀", "动态归档", "24/72 小时", "语音导出", "Persona Sync", "运行态隔离", "steps", "currentStepId", "暂停", "approvalRequest", "审批反馈", "计划引导", "QA 回退", "等待打包"]
 }

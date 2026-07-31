@@ -41,6 +41,28 @@ test("completed turns return final agent messages without requiring callback net
   assert.equal(events.at(-1)?.data?.replyText, "first final section\n\nsecond final section");
 });
 
+test("completed turns recover the final agent message from item/completed notifications", () => {
+  const { events, lifecycle } = harness();
+  lifecycle.registerTurn({ taskId: "task-1", turnId: "turn-1", threadId: "thread-1" });
+  assert.equal(lifecycle.handleNotification({
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "message-1", type: "agentMessage", text: "remote final evidence" }
+    }
+  }), 0);
+  assert.equal(lifecycle.handleNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed", items: [] }
+    }
+  }), 1);
+  assert.equal(events.at(-1)?.summary, "remote final evidence");
+  assert.equal(events.at(-1)?.data?.replyText, "remote final evidence");
+});
+
 test("completed turn reply extraction falls back to the last agent message and truncates", () => {
   assert.equal(replyTextFromCompletedTurn({ items: [
     { type: "agentMessage", phase: "commentary", text: "older" },

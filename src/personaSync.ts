@@ -287,8 +287,10 @@ export class PersonaSyncService {
           if (typeof command.contentBase64 !== "string") throw new Error("Merged persona content is required.");
           result = Buffer.from(command.contentBase64, "base64");
         }
+        if (action !== "keep_local") {
+          if (!personaSyncFileEligible(entry.path, result?.byteLength ?? 0)) throw new Error("Resolved persona file is excluded or too large.");
+        }
         if (action !== "keep_local" && result) {
-          if (!personaSyncFileEligible(entry.path, result.byteLength)) throw new Error("Resolved persona file is excluded or too large.");
           if (entry.path.toLowerCase().endsWith(".jsonl")) {
             const validated = mergeJsonl(result, Buffer.alloc(0));
             if (validated.conflict || !validated.content) throw new Error("Resolved persona JSONL is invalid or contains conflicting stable ids.");
@@ -333,7 +335,7 @@ export class PersonaSyncService {
       throw new Error("Persona sync JSONL ledgers use union/tombstone semantics and cannot be deleted remotely.");
     }
     const remote = remoteDeleted ? Buffer.alloc(0) : Buffer.from(String(command.contentBase64 || ""), "base64");
-    if (!remoteDeleted && !personaSyncFileEligible(relativePath, remote.byteLength)) throw new Error("Persona sync file is excluded or too large.");
+    if (!personaSyncFileEligible(relativePath, remote.byteLength)) throw new Error("Persona sync file is excluded or too large.");
     const remoteHash = remoteDeleted ? PERSONA_SYNC_DELETED_HASH : sha256(remote);
     if (command.remoteHash && command.remoteHash !== remoteHash) throw new Error("Remote persona file hash does not match its content.");
     const target = path.join(this.rolesRoot(), roleId, relativePath);

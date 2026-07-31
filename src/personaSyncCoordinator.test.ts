@@ -104,6 +104,14 @@ test("persona sync coordinator uses Relay discovery and converges peer JSONL ove
   });
   fs.writeFileSync(path.join(rolesA, "Rabi", "local.md"), "local only\n");
   fs.writeFileSync(path.join(rolesB, "Rabi", "remote.md"), "remote only\n");
+  fs.mkdirSync(path.join(rolesA, "Rabi", "plans", "items", "active"), { recursive: true });
+  fs.mkdirSync(path.join(rolesB, "Rabi", "memory", "recent"), { recursive: true });
+  fs.writeFileSync(path.join(rolesA, "Rabi", "plans", "items", "active", "plan-1.json"), "{\"id\":\"plan-1\"}\n");
+  fs.writeFileSync(path.join(rolesB, "Rabi", "memory", "recent", "memory-1.json"), "{\"id\":\"memory-1\"}\n");
+  fs.mkdirSync(path.join(rolesA, "Rabi", "state", "work-cycle-history"), { recursive: true });
+  fs.mkdirSync(path.join(rolesB, "Rabi", "state", "work-cycle-history"), { recursive: true });
+  fs.writeFileSync(path.join(rolesA, "Rabi", "state", "work-cycle-history", "snapshot.json"), "local runtime\n");
+  fs.writeFileSync(path.join(rolesB, "Rabi", "state", "work-cycle-history", "snapshot.json"), "remote runtime\n");
   fs.writeFileSync(path.join(rolesA, "Rabi", "decision.md"), "base decision\n");
   fs.writeFileSync(path.join(rolesB, "Rabi", "decision.md"), "base decision\n");
   const serviceA = new PersonaSyncService(() => rolesA, path.join(root, "a", "state"));
@@ -171,6 +179,11 @@ test("persona sync coordinator uses Relay discovery and converges peer JSONL ove
   assert.equal(findPersonaVoiceIdentity(path.join(rolesB, "Rabi"), "host-shared", "cluster-conflict")?.conflicted, true);
   assert.equal(fs.readFileSync(path.join(rolesA, "Rabi", "remote.md"), "utf8"), "remote only\n");
   assert.equal(fs.readFileSync(path.join(rolesB, "Rabi", "local.md"), "utf8"), "local only\n");
+  assert.equal(fs.readFileSync(path.join(rolesB, "Rabi", "plans", "items", "active", "plan-1.json"), "utf8"), "{\"id\":\"plan-1\"}\n");
+  assert.equal(fs.readFileSync(path.join(rolesA, "Rabi", "memory", "recent", "memory-1.json"), "utf8"), "{\"id\":\"memory-1\"}\n");
+  assert.equal(fs.readFileSync(path.join(rolesA, "Rabi", "state", "work-cycle-history", "snapshot.json"), "utf8"), "local runtime\n");
+  assert.equal(fs.readFileSync(path.join(rolesB, "Rabi", "state", "work-cycle-history", "snapshot.json"), "utf8"), "remote runtime\n");
+  assert.equal(result.files.some(file => file.path.includes("work-cycle-history")), false);
 
   fs.rmSync(path.join(rolesB, "Rabi", "local.md"));
   const pulledDeletion = await coordinator.sync("pc-b", "Rabi");

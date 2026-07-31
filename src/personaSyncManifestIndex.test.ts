@@ -141,6 +141,41 @@ test("read-only persona manifest uses the persisted snapshot without walking an 
   assert.equal(readOnly.manifestIndexStatus().lastReconcile, undefined);
 });
 
+test("persona manifest excludes work-cycle runtime state while preserving portable persona knowledge", async (t) => {
+  const data = fixture(0);
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  const portableFiles = new Map([
+    ["persona.md", "# Rabi\n"],
+    ["plans/items/active/plan-1.json", "{\"id\":\"plan-1\"}\n"],
+    ["memory/recent/memory-1.json", "{\"id\":\"memory-1\"}\n"]
+  ]);
+  const runtimeFiles = new Map([
+    ["state/work-cycle-history/snapshot.json", "{\"records\":[]}\n"],
+    ["state/work-cycle-history-locks/digest.lock", "{\"pid\":1}\n"],
+    ["state/work-cycle-plan-locks/plan-1/owner.json", "{\"pid\":1}\n"],
+    ["state/work-cycle-receipt-locks/receipt.lock.json", "{\"pid\":1}\n"],
+    ["tmp/persona-sync-upload.json", "{\"temporary\":true}\n"],
+    ["plans/items/active/plan-1.json.tmp", "temporary\n"],
+    ["memory/recent/memory-1.json.lock", "locked\n"],
+    ["memory/recent/memory-1.json.part", "partial\n"]
+  ]);
+  for (const [relativePath, content] of [...portableFiles, ...runtimeFiles]) {
+    const target = path.join(data.roleRoot, relativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content, "utf8");
+  }
+
+  const service = new PersonaSyncService(() => data.rolesRoot, data.stateRoot, {
+    watch: false,
+    reconcileOnQueryFallback: false
+  });
+  t.after(() => service.stopManifestIndex());
+  const files = (await service.manifest("Rabi")).roles[0]?.files.map(file => file.path) ?? [];
+
+  assert.deepEqual(files, [...portableFiles.keys()].sort());
+  for (const relativePath of runtimeFiles.keys()) assert.equal(files.includes(relativePath), false);
+});
+
 test("persona manifest index hashes one changed file from a filesystem event", async (t) => {
   const data = fixture();
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
@@ -173,6 +208,40 @@ test("persona manifest index hashes one changed file from a filesystem event", a
   const afterHash = manifest.roles[0]?.files.find(file => file.path === "memory/1.md")?.sha256;
   assert.notEqual(afterHash, beforeHash);
   assert.equal(service.manifestIndexStatus().totalHashedFiles - beforeCount, 1);
+});
+
+test("persona manifest watcher ignores runtime history events but observes portable knowledge changes", async (t) => {
+  const data = fixture(0);
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(data.roleRoot, "state", "work-cycle-history"), { recursive: true });
+  fs.mkdirSync(path.join(data.roleRoot, "plans", "items", "active"), { recursive: true });
+  const service = new PersonaSyncService(() => data.rolesRoot, data.stateRoot, { watch: true });
+  t.after(() => service.stopManifestIndex());
+  await service.startManifestIndex();
+  if (service.manifestIndexStatus().watchMode !== "recursive") {
+    t.skip("Recursive filesystem events are unavailable on this runtime.");
+    return;
+  }
+  const before = service.manifestIndexStatus();
+  fs.writeFileSync(
+    path.join(data.roleRoot, "state", "work-cycle-history", "runtime.json"),
+    "{\"runtime\":true}\n",
+    "utf8"
+  );
+  const afterRuntime = await service.manifest("Rabi");
+  assert.equal(afterRuntime.roles[0]?.files.some(file => file.path.includes("work-cycle-history")), false);
+  assert.equal(service.manifestIndexStatus().generation, before.generation);
+  assert.equal(service.manifestIndexStatus().totalHashedFiles, before.totalHashedFiles);
+
+  fs.writeFileSync(
+    path.join(data.roleRoot, "plans", "items", "active", "plan-1.json"),
+    "{\"id\":\"plan-1\"}\n",
+    "utf8"
+  );
+  const afterPortable = await service.manifest("Rabi");
+  assert.equal(afterPortable.roles[0]?.files.some(file => file.path === "plans/items/active/plan-1.json"), true);
+  assert.ok(service.manifestIndexStatus().generation > before.generation);
+  assert.equal(service.manifestIndexStatus().totalHashedFiles, before.totalHashedFiles + 1);
 });
 
 test("persona manifest keeps function with one-shot query reconciliation when events are disabled", async (t) => {

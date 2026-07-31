@@ -132,21 +132,34 @@ function validRelativePath(value: string): boolean {
     && normalized.split("/").every(segment => Boolean(segment) && segment !== "." && segment !== "..");
 }
 
-export function personaSyncFileEligible(relativePath: string, size: number): boolean {
+const EXCLUDED_RUNTIME_DIRECTORIES = new Set([
+  "state/work-cycle-history",
+  "state/work-cycle-history-locks",
+  "state/work-cycle-inputs",
+  "state/work-cycle-plan-locks",
+  "state/work-cycle-receipt-locks",
+  "voice/cache/tts-audio"
+]);
+
+export function personaSyncPathEligible(relativePath: string): boolean {
   const normalized = normalizedRelativePath(relativePath).toLowerCase();
-  if (size > MAX_SYNC_FILE_BYTES) return false;
-  if (normalized.includes("/.") || normalized.startsWith(".")) return false;
+  if (!normalized) return true;
+  const segments = normalized.split("/");
+  if (segments.some(segment => !segment || segment.startsWith(".") || segment === "tmp" || segment === "temp")) {
+    return false;
+  }
   if (/\.(?:tmp|lock|part)$/i.test(normalized)) return false;
-  if (normalized.includes("voice/cache/tts-audio/")) return false;
-  return true;
+  return ![...EXCLUDED_RUNTIME_DIRECTORIES]
+    .some(directory => normalized === directory || normalized.startsWith(`${directory}/`));
+}
+
+export function personaSyncFileEligible(relativePath: string, size: number): boolean {
+  if (size > MAX_SYNC_FILE_BYTES) return false;
+  return personaSyncPathEligible(relativePath);
 }
 
 function personaSyncDirectoryEligible(relativePath: string): boolean {
-  const normalized = normalizedRelativePath(relativePath).toLowerCase();
-  if (!normalized) return true;
-  if (normalized.includes("/.") || normalized.startsWith(".")) return false;
-  if (normalized === "voice/cache/tts-audio" || normalized.startsWith("voice/cache/tts-audio/")) return false;
-  return true;
+  return personaSyncPathEligible(relativePath);
 }
 
 function mergeStrategy(relativePath: string): PersonaSyncFile["mergeStrategy"] {
@@ -328,7 +341,7 @@ export class PersonaSyncManifestIndex {
   notePathChanged(roleId: string, relativePath: string): void {
     const safeRoleId = sanitizeRoleId(roleId);
     const safePath = normalizedRelativePath(relativePath);
-    if (!safeRoleId || !validRelativePath(safePath) || this.stopped) return;
+    if (!safeRoleId || !validRelativePath(safePath) || !personaSyncPathEligible(safePath) || this.stopped) return;
     this.pendingPaths.set(cacheKey(safeRoleId, safePath), { roleId: safeRoleId, relativePath: safePath });
     this.armEventTimer();
   }
@@ -407,6 +420,7 @@ export class PersonaSyncManifestIndex {
         const roleId = sanitizeRoleId(segments.shift());
         if (!roleId) return;
         const relativePath = segments.join("/");
+        if (relativePath && !personaSyncPathEligible(relativePath)) return;
         this.pendingPaths.set(relativePath ? cacheKey(roleId, relativePath) : `${roleId}/`, {
           roleId,
           relativePath: relativePath || undefined
