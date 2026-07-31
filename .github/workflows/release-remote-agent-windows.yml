@@ -26,6 +26,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.17.1
+          cache: npm
+
+      - name: Verify release workflow contract
+        shell: pwsh
+        run: node --test scripts/release-remote-agent-workflow.test.mjs
+
+      - name: Install locked dependencies
+        shell: pwsh
+        run: npm ci
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

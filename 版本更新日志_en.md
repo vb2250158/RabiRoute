@@ -14,6 +14,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Host-mode WebGUI renders the same RabiManager Agent card, scans, project/session selectors, and adapter APIs while removing routes, personas, plans, speech, and other message inputs. Local persistence accepts Agent fields through an allowlist only.
 - The Windows EXE now starts without a console, generates a device ID/password on first run, and opens WebGUI without a project questionnaire or Codex-only login flow. The package retains shared Codex, Copilot CLI, Marvis, and AstrBot capabilities plus Node verification, secret/path scanning, installer/portable smoke tests, and SHA-256 generation.
 - Automated coverage now exercises Remote Agent v3 HMAC authentication, task receipt, and configuration storage. The v0.3 Codex-only bridge is archived and is no longer a build entrypoint.
+- The Remote Agent Windows release workflow now installs locked dependencies on a clean GitHub runner before testing and packaging, with a dependency-free contract test that locks the execution order. This fixes the initial v0.4.0 Actions failure caused by a missing `tsc`; runtime behavior and the package version remain v0.4.0.
 
 ### Durable Agent-reply idempotency receipts and controlled ordinary inquiries
 
