@@ -111,7 +111,7 @@ skills/
 - `heartbeatAdapter.ts`：定时触发心跳消息。
 - `messageAdapter.ts`：消息端 Adapter 的最小 Interface。
 
-`rolePanel` 和 `remoteAgent` 出现在 MessageAdapter 类型中，但它们的真实入口由 Manager 提供：角色面板走 Manager/托盘 timeline，Remote Agent v3 由 RabiGUI 主动扫描连接远端 bridge。Gateway 子进程只上报对应状态，不另开网络 listener。
+`rolePanel` 和 `remoteAgent` 出现在 MessageAdapter 类型中。主 RabiManager 拥有角色面板 timeline 和 Remote Agent 控制端；独立 `src/remoteAgentHost.ts` 拥有远端设备的 WebGUI、UDP 发现、HMAC WebSocket 和本机 Agent 投递。Gateway 子进程不重复开启这些 listener。Host 与 Manager 共用 Agent 卡片、扫描 API 和 adapter 实现，但不导入 Manager 控制面。
 
 Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转成 RabiRoute 内部 record，然后交给 `forwarding.ts`。Adapter 不应该知道 prompt 怎么拼，也不应该知道处理端怎么投递。
 

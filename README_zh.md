@@ -48,9 +48,9 @@ RabiRoute 是一个与具体 Agent 解耦的**消息网关、策略路由器和�
 
 ### Windows 远端 Agent 开箱即用包
 
-如果要把另一台 Windows x64 电脑作为无人值守远端 Agent，从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases) 下载 `RabiRoute-Remote-Agent-<版本>-windows-x64-setup.exe` 或对应便携 ZIP。发布包提供独立的 `RabiRoute-Remote-Agent.exe`，并内置 Node.js、固定版本 Codex Runtime 和全部依赖。
+如果要让另一台 Windows x64 电脑上的 Agent 加入 Rabi 网络，从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases) 下载 `RabiRoute-Remote-Agent-<版本>-windows-x64-setup.exe` 或对应便携 ZIP。独立发布包内置 Node.js、共享 Agent adapters 和轻量 WebGUI，不启动、也不暴露 RabiManager 控制面。
 
-首次启动只需选择远端项目目录，按提示完成 Codex 登录，再把自动生成的设备密码填入主控电脑 RabiGUI。bridge 仍属于实验能力，每台真实设备都需要单独完成双向任务验收。详见[远端 Agent 发布包指南](plugin-adapters/remote-agent-rabiroute/README.md)。
+双击后会自动启动 Host、生成设备 ID/密码并打开页面。页面只包含 Remote Agent 连接设置和与 RabiManager 相同的 Agent 卡片；项目和会话来自扫描下拉，不再弹出项目问答控制台，也不再绑定为 Codex 专用 Runtime。详见[远端 Agent 发布包指南](plugin-adapters/remote-agent-rabiroute/README.md)。
 
 ### 源码安装
 

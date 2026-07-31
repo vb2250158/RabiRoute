@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-remote-agent-host"
+  },
+  "files": [
+    "src/remoteAgentHost.ts",
+    "src/remoteAgentHost/agentWorker.ts"
+  ],
+  "include": []
+}

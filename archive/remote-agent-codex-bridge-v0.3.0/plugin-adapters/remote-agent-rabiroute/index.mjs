@@ -1,3 +1,4 @@
+// Archived v0.3.0 Codex-only bridge. The active v0.4.0 Host uses src/remoteAgentHost.ts.
 import fs from "node:fs";
 import http from "node:http";
 import dgram from "node:dgram";

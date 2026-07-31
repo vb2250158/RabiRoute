@@ -39,6 +39,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) — **Current guide** for duplicate sessions, missing tools, inverted ownership, desktop startup dependencies, and verification.
 - [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) — **Current guide** for discovery, authentication, tasks, idempotent creation, delivery, results, tools, lifecycle, UI, security, and acceptance.
 - [Codex Desktop Agent Integration and Acceptance Contract](codex-desktop-agent-acceptance_en.md) — **Current fact** for stable IDs, side-effect-free scanning, automatic initialization, the Desktop owner boundary, and metadata bootstrap gates.
+- [Lightweight Remote Agent Host Design and Acceptance Contract](remote-agent-manager-design_en.md) — **Current fact** for the independent Agent message endpoint, shared Agent UI/logic, password pairing, Manager decoupling, and Windows package boundary.
 - [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **Unified Manager version** where hooks only forward real Codex session events and inject Rabi PC-owned persona, plan, memory, and skill context.
 - [Multi-PC persona data synchronization](persona-data-sync_en.md) — **Experimental**. PCs in one RabiLink application prefer direct LAN transfer and fall back to restricted Relay transit. Backend file/connection events drive automatic catch-up, while the persona page supports immediate sync, evidence preview, and basic conflict resolution.
 

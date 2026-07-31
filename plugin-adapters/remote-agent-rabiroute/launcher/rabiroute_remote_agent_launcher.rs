@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use std::env;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};

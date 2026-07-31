@@ -532,9 +532,11 @@ GET  /api/remote-agent/devices
 POST /api/remote-agent/tasks
 ```
 
-The Manager discovers a remote `plugin-adapters/remote-agent-rabiroute` bridge and connects after the user supplies its password. Protocol v3 uses per-connection role-separated HMAC-SHA256 challenges and does not send the plaintext password over the WebSocket. Plain `ws://` authenticates peers but does not encrypt the link; use a trusted VPN or properly terminated `wss://` across untrusted networks.
+The Manager discovers a lightweight Remote Agent Host and connects after the user supplies its password. Protocol v3 uses per-connection role-separated HMAC-SHA256 challenges and does not send the plaintext password over the WebSocket. Plain `ws://` authenticates peers but does not encrypt the link; use a trusted VPN or properly terminated `wss://` across untrusted networks.
 
-Remote tasks are restricted to `REMOTE_AGENT_ALLOWED_CWDS`, use workspace-write behavior, and do not expose a danger-full-access path. File transfers have default single-file and per-task limits. Results return to the local RabiRoute personality thread; the remote device must not reply to QQ directly.
+The Host's WebGUI and settings APIs are loopback-only. It reuses the RabiManager Agent card and Agent APIs for Codex, Copilot CLI, Marvis, and AstrBot, with scan-backed project/session selectors and single-candidate Codex auto-binding. Real Codex prompts still go only through the exact Codex/ChatGPT Desktop task owner on the target computer.
+
+The standalone Agent worker loads only the Agent-adapter dependency closure; the package neither contains nor starts `manager.js` and exposes no routes, personas, plans, speech, or other message-endpoint settings. File transfers retain single-file and per-task limits. Results return through the Host's local reply API to the primary Manager; the remote device must not reply to QQ directly.
 
 ## Role skills
 

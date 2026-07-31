@@ -6,11 +6,27 @@ import path from "node:path";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocket } from "ws";
 import type { MessageContextAttachment, MessageContextRecord } from "../messageContextStore.js";
+import {
+  REMOTE_AGENT_PROTOCOL_VERSION,
+  type RemoteAgentDeviceInfo,
+  type RemoteAgentFileTransfer,
+  type RemoteAgentTask,
+  type RemoteAgentTaskEvent,
+  type RemoteAgentTaskRequest
+} from "./remoteAgentProtocol.js";
+
+export {
+  REMOTE_AGENT_PROTOCOL_VERSION,
+  type RemoteAgentDeviceInfo,
+  type RemoteAgentFileTransfer,
+  type RemoteAgentTask,
+  type RemoteAgentTaskEvent,
+  type RemoteAgentTaskRequest
+} from "./remoteAgentProtocol.js";
 
 export const REMOTE_AGENT_CONTROL_PORT_START = 8797;
 export const REMOTE_AGENT_DISCOVERY_PORT_START = 8798;
 export const REMOTE_AGENT_DISCOVERY_PORT_END = 8818;
-export const REMOTE_AGENT_PROTOCOL_VERSION = 3;
 export const REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES || 10 * 1024 * 1024);
 export const REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES = Number(process.env.REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES || 25 * 1024 * 1024);
 
@@ -30,73 +46,6 @@ function closeWebSocketSafely(socket: WebSocket): void {
     release();
   }
 }
-
-export type RemoteAgentDeviceInfo = {
-  deviceId: string;
-  deviceName?: string;
-  agentType?: string;
-  os?: string;
-  osVersion?: string;
-  arch?: string;
-  declaredIp?: string;
-  defaultCwd?: string;
-  defaultThreadName?: string;
-};
-
-export type RemoteAgentTaskRequest = {
-  deviceId?: string;
-  message?: string;
-  text?: string;
-  taskKind?: string;
-  cwd?: string;
-  threadName?: string;
-  filePaths?: string[];
-  files?: RemoteAgentFileTransfer[];
-  attachments?: Array<RemoteAgentFileTransfer | { path?: string; name?: string; kind?: string }>;
-  originGatewayId?: string;
-  gatewayId?: string;
-  originReplyContext?: Record<string, unknown>;
-};
-
-export type RemoteAgentFileTransfer = {
-  name: string;
-  relativePath?: string;
-  path?: string;
-  mimeType?: string;
-  size?: number;
-  sha256?: string;
-  contentBase64?: string;
-};
-
-export type RemoteAgentTaskEvent = {
-  taskId?: string;
-  status?: "queued" | "delivered" | "started" | "progress" | "completed" | "failed";
-  summary?: string;
-  message?: string;
-  artifactPath?: string;
-  logPath?: string;
-  files?: RemoteAgentFileTransfer[];
-  savedFiles?: RemoteAgentFileTransfer[];
-  error?: string;
-  data?: unknown;
-  device?: Partial<RemoteAgentDeviceInfo>;
-};
-
-export type RemoteAgentTask = {
-  taskId: string;
-  deviceId: string;
-  message: string;
-  taskKind: string;
-  cwd?: string;
-  threadName?: string;
-  files: RemoteAgentFileTransfer[];
-  originGatewayId: string;
-  originReplyContext?: Record<string, unknown>;
-  status: "queued" | "delivered" | "started" | "progress" | "completed" | "failed";
-  createdAt: string;
-  updatedAt: string;
-  events: RemoteAgentTaskEvent[];
-};
 
 export type RemoteAgentDeviceStatus = RemoteAgentDeviceInfo & {
   connected: boolean;

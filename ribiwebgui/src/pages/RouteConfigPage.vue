@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
+import RemoteAgentHostSettingsCard from "../components/RemoteAgentHostSettingsCard.vue";
 import { managerEventSource } from "../managerApi";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
@@ -24,6 +25,7 @@ const store = useGatewayStore();
 const speech = useSpeechStore();
 const route = useRoute();
 const router = useRouter();
+const remoteAgentHostMode = computed(() => store.meta.runtimeMode === "remote-agent-host");
 const runtime = computed(() => store.selectedRuntime);
 const personaAvatarUrl = computed(() => (runtime.value.roleInfo?.options || [])
   .find(option => option.value === store.selectedGateway?.agentRoleId)?.avatarUrl || "");
@@ -3501,6 +3503,7 @@ watch([() => route.params.id as string, () => store.gateways], ([id]) => {
 }, { immediate: true });
 
 watch(() => store.selectedGatewayId, (id) => {
+  if (remoteAgentHostMode.value) return;
   const routeGateway = gatewayFromRouteParam(route.params.id as string | undefined);
   if (routeGateway && routeGateway.id !== id) return;
   const gw = store.gateways.find(g => g.id === id);
@@ -3510,6 +3513,7 @@ watch(() => store.selectedGatewayId, (id) => {
 
 watch(() => gateway.value?.configName, (name) => {
   configNameError.value = "";
+  if (remoteAgentHostMode.value) return;
   if (name && route.params.id !== name) router.replace(routeScopedAdaptersPath(name));
 });
 
@@ -3545,10 +3549,10 @@ watch(
   <div class="page-shell">
     <div class="page-header">
       <div>
-        <h1 class="page-title">消息适配器</h1>
-        <div class="page-subtitle">配置消息端和 Agent 端。</div>
+        <h1 class="page-title">{{ remoteAgentHostMode ? "Remote Agent" : "消息适配器" }}</h1>
+        <div class="page-subtitle">{{ remoteAgentHostMode ? "轻量化 Agent 消息端：只配置主 Manager 连接和本机 Agent。" : "配置消息端和 Agent 端。" }}</div>
       </div>
-      <div class="page-actions" v-if="gateway">
+      <div class="page-actions" v-if="gateway && !remoteAgentHostMode">
         <v-switch v-model="gateway.enabled" label="是否启用" color="success" inset hide-details @update:model-value="touch" />
         <v-btn prepend-icon="mdi-folder-open-outline" variant="tonal" @click="store.openConfigFile('route-folder', gateway.id, gateway.agentRoleId || '')">
           打开航线配置
@@ -3563,7 +3567,7 @@ watch(
     <v-alert v-if="!gateway" type="info" variant="tonal">暂无路由配置，请先新增或完成快速配置。</v-alert>
 
     <template v-if="gateway">
-      <div class="status-row mb-4" style="gap:8px">
+      <div v-if="!remoteAgentHostMode" class="status-row mb-4" style="gap:8px">
         <span style="color:var(--v-theme-on-surface-variant)">配置名</span>
         <v-text-field
           :model-value="gateway.configName"
@@ -3577,7 +3581,9 @@ watch(
         />
       </div>
 
-      <v-card class="app-card glass-card section-card">
+      <RemoteAgentHostSettingsCard v-if="remoteAgentHostMode" />
+
+      <v-card v-if="!remoteAgentHostMode" class="app-card glass-card section-card">
         <div class="section-title-row">
           <div>
             <div class="section-title">消息端</div>

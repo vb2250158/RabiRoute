@@ -44,7 +44,7 @@ These directories are clients of RabiRoute, not sources of truth for Manager con
 
 ### `src/index.ts`
 
-One gateway subprocess. It loads normalized route configuration, starts gateway-level message adapters, records events, and invokes forwarding. Manager-level endpoints such as role panel and Remote Agent do not start duplicate listeners here.
+One gateway subprocess. It loads normalized route configuration, starts gateway-level message adapters, records events, and invokes forwarding. Manager-level role-panel and Remote Agent controller endpoints do not start duplicate listeners here. The separate `src/remoteAgentHost.ts` entry owns the remote device WebGUI, UDP discovery, HMAC WebSocket, and local Agent delivery while sharing Agent UI/scanning/adapter logic without importing the Manager control plane.
 
 ### `src/config.ts`
 

@@ -52,9 +52,10 @@ function writeDrawerPreferences(preferences: DrawerPreferences): void {
 const drawerPreferences = readDrawerPreferences();
 const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
+const remoteAgentHostMode = computed(() => store.meta.runtimeMode === "remote-agent-host");
 
 const selectedRouteKey = computed(() => store.selectedGateway ? configNameFor(store.selectedGateway) : "");
-const navItems = computed(() => [
+const navItems = computed(() => remoteAgentHostMode.value ? [] : [
   { title: "控制台", icon: "mdi-view-dashboard-outline", to: routeScopedOverviewPath(selectedRouteKey.value) },
   { title: "消息适配器", icon: "mdi-puzzle-outline", to: routeScopedAdaptersPath(selectedRouteKey.value) },
   { title: "Rabi 人格", icon: "mdi-account-heart-outline", to: routeScopedPersonaPath(selectedRouteKey.value) },
@@ -64,7 +65,7 @@ const navItems = computed(() => [
 ].map(item => ({ ...item, title: t(item.title) })));
 
 const managerConnected = computed(() => !store.managerError);
-const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
+const pageTitle = computed(() => remoteAgentHostMode.value ? "Remote Agent" : t(String(route.meta.title || "RibiWebGUI")));
 const routeOptions = computed(() => store.gateways.map(gateway => {
   const runtime = store.runtimeFor(gateway.id);
   const title = gatewayPersonaDisplayName(gateway, runtime.roleInfo);
@@ -92,7 +93,9 @@ const selectedRuntimeLabel = computed(() => {
 
 onMounted(async () => {
   await store.load();
-  if (store.gateways.length === 0) store.openQuickSetup();
+  if (remoteAgentHostMode.value) {
+    if (route.path !== "/remote-agent") await router.replace("/remote-agent");
+  } else if (store.gateways.length === 0) store.openQuickSetup();
   else if (selectedRouteKey.value) {
     const scopedPath = routeScopedPathForCurrentPage(selectedRouteKey.value, route.path);
     if (scopedPath && scopedPath !== route.path) await router.replace(scopedPath);
@@ -154,7 +157,7 @@ function selectGateway(id: string) {
 
 <template>
   <v-app>
-    <v-navigation-drawer v-model="drawer" width="276" class="left-sidebar">
+    <v-navigation-drawer v-if="!remoteAgentHostMode" v-model="drawer" width="276" class="left-sidebar">
       <div class="sidebar-brand">
         <v-avatar rounded="lg" size="46">
           <v-img src="/assets/rabiroute-icon.png" alt="RabiRoute" />
@@ -225,10 +228,10 @@ function selectGateway(id: string) {
     </v-navigation-drawer>
 
     <v-app-bar flat class="top-app-bar px-2">
-      <v-app-bar-nav-icon @click="drawer = !drawer" />
+      <v-app-bar-nav-icon v-if="!remoteAgentHostMode" @click="drawer = !drawer" />
       <v-toolbar-title class="topbar-title">
         <div class="font-weight-bold">{{ pageTitle }}</div>
-        <div class="topbar-subtitle">{{ selectedGatewayName }}</div>
+        <div class="topbar-subtitle">{{ remoteAgentHostMode ? "轻量 Agent 消息端" : selectedGatewayName }}</div>
       </v-toolbar-title>
       <v-spacer />
       <div class="topbar-actions">
@@ -236,11 +239,13 @@ function selectGateway(id: string) {
         <LocaleSwitcher />
         <v-chip class="manager-chip" :color="managerConnected ? 'success' : 'error'" variant="tonal" size="small">
           <v-icon start size="14">mdi-circle</v-icon>
-          <span class="manager-chip-text">Manager {{ managerConnected ? "已连接" : "未连接" }}</span>
+          <span class="manager-chip-text">
+            {{ remoteAgentHostMode ? (managerConnected ? "本机服务已就绪" : "本机服务异常") : `Manager ${managerConnected ? "已连接" : "未连接"}` }}
+          </span>
         </v-chip>
         <v-btn icon="mdi-refresh" :loading="store.loading" aria-label="刷新状态" @click="refresh" />
-        <v-btn class="desktop-action" prepend-icon="mdi-plus" variant="tonal" @click="store.addGatewayAndOpenQuickSetup">新增航线</v-btn>
-        <v-btn class="mobile-action" icon="mdi-plus" variant="tonal" aria-label="新增航线" @click="store.addGatewayAndOpenQuickSetup" />
+        <v-btn v-if="!remoteAgentHostMode" class="desktop-action" prepend-icon="mdi-plus" variant="tonal" @click="store.addGatewayAndOpenQuickSetup">新增航线</v-btn>
+        <v-btn v-if="!remoteAgentHostMode" class="mobile-action" icon="mdi-plus" variant="tonal" aria-label="新增航线" @click="store.addGatewayAndOpenQuickSetup" />
         <v-btn class="desktop-action" color="primary" prepend-icon="mdi-content-save" :loading="store.saving" @click="save">
           保存配置
         </v-btn>
@@ -253,7 +258,7 @@ function selectGateway(id: string) {
       <router-view />
     </v-main>
 
-    <QuickSetupDialog v-model="store.quickSetupDialogOpen" />
+    <QuickSetupDialog v-if="!remoteAgentHostMode" v-model="store.quickSetupDialogOpen" />
     <v-snackbar :model-value="!!snackbar" timeout="1800" @update:model-value="value => { if (!value) snackbar = '' }">
       {{ snackbar }}
     </v-snackbar>

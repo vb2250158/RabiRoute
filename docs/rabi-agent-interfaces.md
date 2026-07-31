@@ -796,13 +796,13 @@ RabiRoute 负责写入沉淀记忆、记录整理轮次和标记近期记忆已�
 
 > 成熟度：实验。协议、安全边界和 Manager API 已实现并有测试，仍需要按真实局域网、VPN/TLS 和目标设备环境做端到端验收。
 
-当路由启用了“远端 Agent”消息端时，本机 Agent 可以把需要特定设备/系统完成的任务投递给远端 Agent 设备。远端机器只需要运行 `plugin-adapters/remote-agent-rabiroute` bridge，不需要安装完整 RabiRoute。
+当路由启用了“远端 Agent”消息端时，本机 Agent 可以把需要特定设备/系统完成的任务投递给远端 Agent 设备。远端机器安装轻量 Remote Agent Host 即可，不需要运行完整 RabiManager。
 
 安全边界：
 
-- 本机 loopback 调用用于 WebGUI 和本机人格线程。
-- RabiGUI/manager 先扫描局域网远端 bridge，再由用户输入设备密码连接。bridge 不再提供公知默认密码：未配置时每次启动生成高熵临时密码并只显示在远端终端；长期部署应设置至少 16 字节的 `REMOTE_AGENT_PASSWORD`。协议 v3 使用逐连接、角色分离的双向 HMAC-SHA256 challenge，不在 WebSocket 中发送密码原文；连接成功后只在本机运行期数据中记住密码。
-- bridge 连接设备本机由远端 Agent 自己拥有的 runtime；不得通过用户级 endpoint 把桌面应用改成依赖 RabiRoute。远端 task 只能在 `REMOTE_AGENT_ALLOWED_CWDS` 内使用 `workspaceWrite`，默认禁止网络，不存在 `dangerFullAccess` 路径。
+- Remote Agent WebGUI/API 只接受本机 loopback 请求；局域网只开放经密码认证的 WebSocket 控制入口和 UDP 发现。
+- RabiGUI/manager 先扫描局域网 Remote Agent Host，再由用户输入设备密码连接。Host 首次运行自动生成高熵设备密码并在本机 WebGUI 显示，也可在页面中更换。协议 v3 使用逐连接、角色分离的双向 HMAC-SHA256 challenge，不在 WebSocket 中发送密码原文；连接成功后只在主 Manager 的本机运行期数据中记住密码。
+- Host 复用 RabiManager Agent 卡片与 Agent API，可配置 Codex、Copilot CLI、Marvis 和 AstrBot。项目和会话由扫描结果下拉选择；只有一个可用 Codex Desktop 任务时自动绑定。Codex 的真实消息仍只由目标设备上的 Codex/ChatGPT Desktop 精确任务 owner 接收。
 - WebSocket 控制通道只传 role-separated HMAC proof，不传密码原文。默认 `ws://` 只提供双方身份确认，不提供链路加密；跨不可信网络时应放在受信 VPN 内，或由 TLS 终结层提供 `wss://` 并通过严格的 `REMOTE_AGENT_PUBLIC_CONTROL_URL` 公布入口。
 - 任务事件必须来自任务所属的 `deviceId`；其他设备不能把别人的任务标记为 completed/failed。
 - 文件传输默认限制为单文件 10 MiB、单任务 25 MiB；可通过 `REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES` 或 `REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES` 调整。
@@ -838,10 +838,9 @@ POST /api/remote-agent/tasks
 
 - `filePaths`：本机 manager 可读取的文件路径数组。manager 会读取文件内容，随任务发送到远端 bridge。
 - `files` / `attachments`：也可以直接传 `{ "name": "input.txt", "contentBase64": "..." }`；带 `path` 时 manager 会读取本机路径。
-- 远端 bridge 会把任务文件保存到远端运行期 inbox 目录，并在远端 Codex 任务提示里列出实际路径。
-- bridge 会从 `turn/completed` 的最终 `agentMessage` 提取答案并回传，因此默认禁止网络时任务也能闭环；callback 只用于可选的详细进度和附件。
-- 远端 Codex 完成后，可在本机 callback 中填写 `artifactPath`、`logPath` 或 `files`；路径会先解析真实路径，而且只能位于当前任务 cwd 内，junction/symlink 越界会被拒绝。
-- 同一“规范 cwd + 线程名”的任务会一直串行到 terminal；恢复到仍有活跃 turn 的线程时先有限等待，无法安全复用就创建独立线程，不把不同任务 steer 进同一个 turn。
+- Remote Agent Host 会把任务文件保存到自己的运行期目录，并在投递给所选 Agent 的提示中列出实际路径。
+- Agent 完成后通过 Host 本机 `/api/agent/replies` 回传最终文本和可选文件；Host 把终态事件送回主 Manager。Host 不自行解释 Agent 的回答，也不直接回复 QQ。
+- Host 的独立 Agent worker 只加载 Agent adapter 依赖闭包；发布包不包含或启动 `manager.js`，也不暴露航线、人格、计划、语音或其他消息端设置。
 - Manager 会把回传文件保存到 `data/remote-agent-files/<taskId>/`，并在任务事件的 `savedFiles` 中记录本机保存路径、大小和 sha256。
 
 远端结果会先回到本机 RabiRoute，再投递回发起任务的本机人格线程。远端 Agent 不应直接回复 QQ；是否回复 QQ 仍由本机人格通过普通回复接口决定。

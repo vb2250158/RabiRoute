@@ -165,6 +165,7 @@ export type MetaPayload = {
   version: string;
   githubUrl: string;
   managerPort: number;
+  runtimeMode?: "manager" | "remote-agent-host";
   rabiGuid?: string;
   rabiName?: string;
   webguiLan?: {

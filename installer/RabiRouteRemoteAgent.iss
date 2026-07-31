@@ -37,11 +37,11 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 
 [Icons]
 Name: "{group}\RabiRoute Remote Agent"; Filename: "{app}\RabiRoute-Remote-Agent.exe"; WorkingDir: "{app}"
-Name: "{group}\重新配置 Remote Agent"; Filename: "{app}\RabiRoute-Remote-Agent.exe"; Parameters: "--configure"; WorkingDir: "{app}"
+Name: "{group}\打开 Remote Agent 设置"; Filename: "{app}\RabiRoute-Remote-Agent.exe"; Parameters: "--configure"; WorkingDir: "{app}"
 Name: "{autodesktop}\RabiRoute Remote Agent"; Filename: "{app}\RabiRoute-Remote-Agent.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "其他选项："
 
 [Run]
-Filename: "{app}\RabiRoute-Remote-Agent.exe"; Description: "启动并配置 RabiRoute Remote Agent"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\RabiRoute-Remote-Agent.exe"; Description: "启动 RabiRoute Remote Agent"; Flags: nowait postinstall skipifsilent

@@ -1,5 +1,6 @@
 /node_modules/
 /dist/
+/dist-remote-agent-host/
 /ribiwebgui/dist/
 /build/
 /.tmp/

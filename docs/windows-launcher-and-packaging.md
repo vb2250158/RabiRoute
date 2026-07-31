@@ -236,18 +236,18 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 
 ## Remote Agent 独立 Windows 发布包
 
-Remote Agent 是目标设备自己拥有的无人值守 Runtime，不属于完整 RabiRoute 桌面安装包，也不与主控电脑的 Codex/ChatGPT Desktop 共用 owner。独立构建入口：
+Remote Agent 是目标设备上的轻量 Agent 消息端，不属于完整 RabiRoute Manager 安装包。它复用与 RabiManager 相同的 Agent 配置能力；若选择 Codex，真实消息由目标设备自己的 Codex/ChatGPT Desktop 任务 owner 接收。独立构建入口：
 
 ```powershell
 .\scripts\build-remote-agent-windows-release.ps1
 ```
 
-脚本只复制 bridge 的公开运行源文件，在干净 payload 中安装生产依赖，校验并嵌入固定 Windows x64 Node.js，编译原生 `RabiRoute-Remote-Agent.exe` 启动器，再用实际 EXE 检查内置 Codex 版本并启动 bridge listener 烟测。最终生成：
+脚本先编译 Remote Agent Host 与 Agent worker 的独立 TypeScript 依赖闭包，拒绝 `manager.js` 进入 payload；随后安装生产依赖，校验并嵌入固定 Windows x64 Node.js，编译无控制台窗口的原生 `RabiRoute-Remote-Agent.exe` 启动器，再用实际 EXE 检查资源并启动 Host/WebGUI 烟测。最终生成：
 
 - `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe`
 - `RabiRoute-Remote-Agent-<version>-windows-x64-portable.zip`
 - `SHA256SUMS.txt`
 
-EXE 首次运行要求选择一个已存在的项目目录，自动生成高熵设备密码，并检查内置 Codex 登录态。私有配置只写到 `%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json`；payload、安装目录和 GitHub Release 都不包含密码、登录态、项目路径或 `.codex` 数据。默认只允许所选项目根写入，网络保持关闭。
+EXE 双击即启动 Host 并打开本机 WebGUI，不弹控制台问答。首次运行自动生成设备 ID 和高熵密码；项目、Agent 和会话通过与 RabiManager 相同的 Agent 卡片扫描、下拉或单候选自动绑定。私有配置只写到 `%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json`；payload、安装目录和 GitHub Release 都不包含密码、登录态、项目路径或 `.codex` 数据。
 
-`remote-agent-v*` tag 触发 `.github/workflows/release-remote-agent-windows.yml`。工作流在干净 Windows runner 上安装 Rust 与 Inno Setup，重复 bridge 测试、Node 下载校验、脱敏检查、EXE/Codex/listener 烟测，并发布安装版、便携 ZIP 和校验清单。二进制当前同样未签名，必须保留 SmartScreen 与 SHA-256 提示。
+`remote-agent-v*` tag 触发 `.github/workflows/release-remote-agent-windows.yml`。工作流在干净 Windows runner 上安装 Rust 与 Inno Setup，重复 Host 测试、Node 下载校验、脱敏检查和 EXE/WebGUI 烟测，并发布安装版、便携 ZIP 和校验清单。二进制当前同样未签名，必须保留 SmartScreen 与 SHA-256 提示。

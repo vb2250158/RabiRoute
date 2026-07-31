@@ -48,9 +48,9 @@ The release page also provides a portable ZIP and `SHA256SUMS.txt`. Windows pack
 
 ### Ready-to-run Remote Agent for Windows
 
-To turn another Windows x64 machine into an unattended Remote Agent device, download `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe` or the matching portable ZIP from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases). The package has its own `RabiRoute-Remote-Agent.exe` and includes Node.js, the pinned Codex Runtime, and all dependencies.
+To let Agents on another Windows x64 machine join the Rabi network, download `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe` or the matching portable ZIP from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases). The standalone package includes Node.js, the shared Agent adapters, and a lightweight WebGUI; it does not start or expose the RabiManager control plane.
 
-On first launch, select the remote project directory, complete Codex login if requested, and copy the generated device password into RabiGUI on the control PC. The bridge remains experimental and must be acceptance-tested on each real device. See the [Remote Agent package guide](plugin-adapters/remote-agent-rabiroute/README_en.md).
+Double-clicking starts the Host, generates a device ID/password, and opens a page containing only Remote Agent connection settings and the same Agent card used by RabiManager. Projects and sessions come from scan-backed selectors—there is no console questionnaire or Codex-only runtime. See the [Remote Agent package guide](plugin-adapters/remote-agent-rabiroute/README_en.md).
 
 ### Source installation
 

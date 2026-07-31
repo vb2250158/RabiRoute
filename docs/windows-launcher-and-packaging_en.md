@@ -170,18 +170,18 @@ A `v*` tag triggers `.github/workflows/release-windows.yml`, which repeats tests
 
 ## Standalone Remote Agent Windows package
 
-Remote Agent is an unattended Runtime owned by the target device. It is not part of the complete RabiRoute desktop installer and does not share an owner with Codex/ChatGPT Desktop on the control PC. Its dedicated build entry is:
+Remote Agent is a lightweight Agent message endpoint on the target computer, not a complete RabiRoute Manager installation. It reuses the same Agent configuration capability as RabiManager; when Codex is selected, real prompts are owned by Codex/ChatGPT Desktop on that target computer. Its dedicated build entry is:
 
 ```powershell
 .\scripts\build-remote-agent-windows-release.ps1
 ```
 
-The script copies only public bridge runtime sources, installs production dependencies in a clean payload, verifies and embeds pinned Windows x64 Node.js, compiles the native `RabiRoute-Remote-Agent.exe` launcher, then uses that actual EXE to verify the bundled Codex version and smoke-test the bridge listeners. It produces:
+The script compiles an isolated TypeScript dependency closure for Remote Agent Host and its Agent worker and rejects `manager.js` from the payload. It then installs production dependencies, verifies and embeds pinned Windows x64 Node.js, compiles the windowless native `RabiRoute-Remote-Agent.exe` launcher, and uses that EXE to smoke-test the Host and WebGUI. It produces:
 
 - `RabiRoute-Remote-Agent-<version>-windows-x64-setup.exe`
 - `RabiRoute-Remote-Agent-<version>-windows-x64-portable.zip`
 - `SHA256SUMS.txt`
 
-On first run, the EXE requires an existing project directory, generates a high-entropy device password, and checks the bundled Codex login. Private configuration is written only to `%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json`. The payload, install directory, and GitHub Release contain no password, login state, project path, or `.codex` data. Only the selected project root is writable by default, and network access remains off.
+Double-clicking the EXE starts the Host and opens the local WebGUI without a console questionnaire. First run generates a stable device ID and high-entropy password. Agents, projects, and sessions use the same scan-backed card and selectors as RabiManager, including single-candidate Codex auto-binding. Private configuration is written only to `%LOCALAPPDATA%\RabiRoute\RemoteAgent\config.json`. The payload, install directory, and GitHub Release contain no password, login state, project path, or `.codex` data.
 
-A `remote-agent-v*` tag triggers `.github/workflows/release-remote-agent-windows.yml`. On a clean Windows runner, the workflow installs Rust and Inno Setup, repeats bridge tests, verifies the Node download, runs privacy checks and packaged EXE/Codex/listener smoke tests, then publishes the installer, portable ZIP, and checksum manifest. These binaries are also currently unsigned, so release notes must retain the SmartScreen and SHA-256 guidance.
+A `remote-agent-v*` tag triggers `.github/workflows/release-remote-agent-windows.yml`. On a clean Windows runner, the workflow installs Rust and Inno Setup, repeats Host tests, verifies the Node download, runs privacy checks and packaged EXE/WebGUI smoke tests, then publishes the installer, portable ZIP, and checksum manifest. These binaries are also currently unsigned, so release notes must retain the SmartScreen and SHA-256 guidance.

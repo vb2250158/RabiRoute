@@ -8,6 +8,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased - 2026-07-30
 
+### Remote Agent v0.4 lightweight Agent message endpoint
+
+- Remote Agent changes from a Codex-only console bridge to the standalone `remoteAgentHost` service. It neither imports nor starts the RabiManager control plane and owns only device pairing, UDP/WebSocket transport, one Agent profile, and task-result return.
+- Host-mode WebGUI renders the same RabiManager Agent card, scans, project/session selectors, and adapter APIs while removing routes, personas, plans, speech, and other message inputs. Local persistence accepts Agent fields through an allowlist only.
+- The Windows EXE now starts without a console, generates a device ID/password on first run, and opens WebGUI without a project questionnaire or Codex-only login flow. The package retains shared Codex, Copilot CLI, Marvis, and AstrBot capabilities plus Node verification, secret/path scanning, installer/portable smoke tests, and SHA-256 generation.
+- Automated coverage now exercises Remote Agent v3 HMAC authentication, task receipt, and configuration storage. The v0.3 Codex-only bridge is archived and is no longer a build entrypoint.
+
 ### Durable Agent-reply idempotency receipts and controlled ordinary inquiries
 
 - `/api/agent/replies` now accepts an optional stable `deliveryId`. Manager persists a reservation before Outbox delivery. Duplicate clicks, concurrent calls, lost responses, and process restarts for the same ID/payload execute once and read back the original result; changed payloads conflict, and uncertain sends are never auto-replayed.
