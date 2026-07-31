@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
@@ -80,10 +80,13 @@ const publicTranscriptDeliveries = ref<Record<string, SpeechRouteDeliveryHistory
 const retainedAsrRecords = ref<Record<string, SpeechRecord>>({});
 const audioEventsHaveMore = ref(false);
 const audioTranscriptsHaveMore = ref(false);
+const runtimeToggling = ref(false);
+const serviceEnabled = computed(() => status.value?.state === "online");
 let playbackVolumeTimer = 0;
 let pendingPlaybackVolume: number | null = null;
 let microphoneSettingsTimer = 0;
 let microphoneSettingsPending = false;
+let applyingMicrophoneConfig = false;
 
 const providers = computed(() => status.value?.providers[activeKind.value] ?? []);
 const computerName = computed(() => store.meta.rabiName || store.meta.computerName || "当前电脑");
@@ -327,8 +330,39 @@ async function refreshStatus(): Promise<void> {
   requestError.value = "";
   try {
     await speech.refreshStatus();
+    if (serviceEnabled.value) await hydrateRuntimeUi();
   } catch (error) {
     requestError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function hydrateRuntimeUi(): Promise<void> {
+  await Promise.all([refreshModels(), refreshPersonas(), refreshAudioInputs(), refreshMicrophone()]);
+}
+
+async function toggleRuntime(enabled: boolean | null): Promise<void> {
+  if (runtimeToggling.value || Boolean(enabled) === serviceEnabled.value) return;
+  runtimeToggling.value = true;
+  requestError.value = "";
+  actionMessage.value = enabled ? "正在启动本机 RabiSpeech，并等待健康检查……" : "正在停止本机 RabiSpeech……";
+  try {
+    if (enabled) {
+      const result = await speech.startRuntime();
+      await hydrateRuntimeUi();
+      actionMessage.value = result.action === "already_online"
+        ? "RabiSpeech 已经在线。"
+        : "RabiSpeech 已启动，语音服务页面已展开。";
+    } else {
+      const result = await speech.stopRuntime();
+      actionMessage.value = result.action === "already_offline"
+        ? "RabiSpeech 已经关闭。"
+        : "RabiSpeech 已关闭，语音服务参数已收起。";
+    }
+  } catch (error) {
+    requestError.value = error instanceof Error ? error.message : String(error);
+    actionMessage.value = "";
+  } finally {
+    runtimeToggling.value = false;
   }
 }
 
@@ -469,7 +503,10 @@ async function refreshMicrophone(): Promise<void> {
     const next = microphoneStatus.value;
     if (!next) return;
     if (!microphoneConfigLoaded.value || next.running) {
+      applyingMicrophoneConfig = true;
       applyMicrophoneConfig(next.config);
+      await nextTick();
+      applyingMicrophoneConfig = false;
       microphoneConfigLoaded.value = true;
     }
     transcriptHistory.value = (next.history || []).slice(0, 20).map(item => ({
@@ -479,6 +516,7 @@ async function refreshMicrophone(): Promise<void> {
     }));
     if (next.history?.[0]?.text && transcript.value !== next.history[0].text) transcript.value = next.history[0].text;
   } catch (error) {
+    applyingMicrophoneConfig = false;
     if (listening.value) requestError.value = error instanceof Error ? error.message : String(error);
   }
 }
@@ -568,7 +606,7 @@ async function copyAudioStreamToken(): Promise<void> {
 }
 
 function scheduleMicrophoneSettingsSave(): void {
-  if (!microphoneConfigLoaded.value) return;
+  if (!microphoneConfigLoaded.value || applyingMicrophoneConfig) return;
   microphoneSettingsPending = true;
   window.clearTimeout(microphoneSettingsTimer);
   microphoneSettingsTimer = window.setTimeout(() => {
@@ -654,9 +692,9 @@ watch([
 let releaseSpeech: (() => void) | undefined;
 onMounted(async () => {
   releaseSpeech = await speech.acquire();
-  await Promise.all([refreshModels(), refreshPersonas(), refreshAudioInputs(), refreshMicrophone()]).catch(error => {
-    requestError.value = error instanceof Error ? error.message : String(error);
-  });
+  if (serviceEnabled.value) await hydrateRuntimeUi().catch(error => {
+      requestError.value = error instanceof Error ? error.message : String(error);
+    });
 });
 onBeforeUnmount(() => {
   window.clearTimeout(playbackVolumeTimer);
@@ -674,12 +712,37 @@ onBeforeUnmount(() => {
         <div class="page-subtitle">常驻麦克风、声音阈值、本机 ASR、人格 TTS 与整台电脑唯一的排队播放入口。</div>
       </div>
       <div class="page-actions">
-        <v-btn variant="tonal" prepend-icon="mdi-chart-box-outline" href="reports/rabispeech-model-benchmark.html" target="_blank">目标测试机报告</v-btn>
-        <v-btn color="primary" prepend-icon="mdi-refresh" :loading="loading" @click="refreshStatus">刷新状态</v-btn>
+        <v-btn v-if="serviceEnabled" variant="tonal" prepend-icon="mdi-chart-box-outline" href="reports/rabispeech-model-benchmark.html" target="_blank">目标测试机报告</v-btn>
+        <v-btn icon="mdi-refresh" variant="text" :loading="loading" aria-label="刷新语音服务状态" @click="refreshStatus" />
+        <div class="speech-runtime-switch">
+          <div>
+            <span>RabiSpeech</span>
+            <strong>{{ runtimeToggling ? "切换中" : serviceEnabled ? "已开启" : "已关闭" }}</strong>
+          </div>
+          <v-switch
+            :model-value="serviceEnabled"
+            color="success"
+            inset
+            hide-details
+            :loading="runtimeToggling"
+            :disabled="runtimeToggling || loading"
+            aria-label="启停 RabiSpeech 语音服务"
+            @update:model-value="toggleRuntime"
+          />
+        </div>
       </div>
     </div>
 
-    <v-alert v-if="requestError || speech.error" type="error" variant="tonal" class="mb-4">Manager 状态读取失败：{{ requestError || speech.error }}</v-alert>
+    <v-alert v-if="requestError || speech.error" type="error" variant="tonal" class="mb-4">语音服务操作失败：{{ requestError || speech.error }}</v-alert>
+    <v-alert v-if="actionMessage" class="mb-4" type="success" variant="tonal" closable @click:close="actionMessage = ''">{{ actionMessage }}</v-alert>
+
+    <template v-if="serviceEnabled">
+    <v-card class="app-card glass-card speech-mode-tabs">
+      <v-tabs v-model="activeKind" color="primary" grow class="speech-tabs" aria-label="切换 TTS 与 ASR">
+        <v-tab value="tts" prepend-icon="mdi-account-voice">TTS 语音合成</v-tab>
+        <v-tab value="asr" prepend-icon="mdi-waveform">ASR 语音识别</v-tab>
+      </v-tabs>
+    </v-card>
 
     <v-card class="app-card glass-card speech-audio-stream-card">
       <div class="speech-audio-stream-copy">
@@ -870,8 +933,6 @@ onBeforeUnmount(() => {
       <strong>边界：</strong>RabiLink 是整个系统内置的转接服务，不是消息端。语音 API 可在本机直接调用，也可由 RabiLink 中转；眼镜、手机或其他客户端才是消息来源/调用端。
     </v-alert>
 
-    <v-alert v-if="actionMessage" class="mb-4" type="success" variant="tonal" closable @click:close="actionMessage = ''">{{ actionMessage }}</v-alert>
-
     <section class="speech-console-grid">
       <v-card v-if="activeKind === 'tts'" class="app-card glass-card speech-console-card">
         <div class="speech-console-head">
@@ -1033,16 +1094,7 @@ onBeforeUnmount(() => {
         <v-chip color="secondary" variant="tonal">默认：{{ currentDefault }}</v-chip>
       </div>
 
-      <div v-if="status?.state !== 'online'" class="speech-offline">
-        <v-icon size="40" color="warning">mdi-server-off</v-icon>
-        <div>
-          <strong>本机语音服务尚未连通</strong>
-          <span>{{ status?.error || "正在检查 RabiSpeech。" }}</span>
-          <code>{{ status?.configuredUrl || "http://127.0.0.1:8781" }}</code>
-        </div>
-      </div>
-
-      <div v-else-if="providers.length === 0" class="speech-offline">
+      <div v-if="providers.length === 0" class="speech-offline">
         <v-icon size="40" color="warning">mdi-puzzle-remove-outline</v-icon>
         <div><strong>没有启用 {{ activeKind.toUpperCase() }} provider</strong><span>页面只展示这台电脑实际注册的本地 provider。</span></div>
       </div>
@@ -1091,11 +1143,17 @@ onBeforeUnmount(() => {
       <v-icon size="18">mdi-information-outline</v-icon>
       <span>性能报告仅代表报告中标明的目标测试机、当次模型与测试条件；你自己的实际性能应以本页所在电脑重新运行同一套基准后的结果为准。最后检查：{{ checkedAtLabel(status?.checkedAt) }}。</span>
     </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .speech-page { max-width: 1540px; }
+.speech-runtime-switch { display: flex; align-items: center; gap: 12px; min-width: 190px; padding: 6px 10px 6px 14px; border: 1px solid rgba(15, 139, 141, .18); border-radius: 14px; background: rgba(255, 255, 255, .72); }
+.speech-runtime-switch > div { display: grid; min-width: 82px; }
+.speech-runtime-switch span { color: #789; font-size: 10px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+.speech-runtime-switch strong { color: #183b55; font-size: 13px; }
+.speech-runtime-switch :deep(.v-input) { flex: 0 0 auto; }
 .speech-eyebrow { color: #0f8b8d; font-size: 11px; font-weight: 900; letter-spacing: .13em; }
 .speech-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
 .speech-stat-card { min-height: 142px; padding: 22px; }

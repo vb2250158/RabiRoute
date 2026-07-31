@@ -156,7 +156,7 @@ test("plan presentation blocks only complete pending approvals and keeps other o
     steps: [{ id: "hold", title: "保留恢复位置", status: "进行中", isBlocked: true, blockedBy: "用户要求暂时跳过" }]
   });
 
-  assert.equal(planPresentation(blocked).status, "阻塞中");
+  assert.equal(planPresentation(blocked).status, "待审批");
   assert.equal(planPresentation(blocked).tone, "blocked");
   assert.deepEqual(planPresentation(blocked).views, ["current", "plans"]);
   assert.deepEqual(planPresentation(blocked).palette, {
@@ -165,13 +165,13 @@ test("plan presentation blocks only complete pending approvals and keeps other o
     foreground: "#b42318"
   });
   assert.equal(planPresentation(blocked).approval.enabled, true);
-  assert.equal(planPresentation(executableFailure).status, "进行中");
+  assert.equal(planPresentation(executableFailure).status, "正在执行");
   assert.equal(planPresentation(executableFailure).tone, "running");
   assert.equal(planPresentation(executableFailure).approval.enabled, false);
-  assert.equal(planPresentation(awaitingOwnerAnswer).status, "阻塞中");
+  assert.equal(planPresentation(awaitingOwnerAnswer).status, "待审批");
   assert.equal(planPresentation(awaitingOwnerAnswer).tone, "blocked");
   assert.equal(planPresentation(awaitingOwnerAnswer).approval.state, "ready");
-  assert.equal(planPresentation(qa).status, "待QA测试");
+  assert.equal(planPresentation(qa).status, "待 QA");
   assert.equal(planPresentation(qa).tone, "qa");
   assert.deepEqual(planPresentation(qa).palette, {
     accent: "#8e63c7",
@@ -180,18 +180,18 @@ test("plan presentation blocks only complete pending approvals and keeps other o
   });
   assert.equal(planPresentation(qa).approval.state, "none");
   assert.equal(planPresentation(qa).approval.enabled, false);
-  assert.equal(planPresentation(qaWithLegacyBlocker).status, "待QA测试");
+  assert.equal(planPresentation(qaWithLegacyBlocker).status, "待 QA");
   assert.equal(planPresentation(qaWithLegacyBlocker).tone, "qa");
   assert.equal(planPresentation(qaWithLegacyBlocker).approval.enabled, false);
-  assert.equal(planPresentation(approvedImplementation).status, "进行中");
+  assert.equal(planPresentation(approvedImplementation).status, "正在执行");
   assert.equal(planPresentation(approvedImplementation).approval.state, "none");
-  assert.equal(planPresentation(implementationMentioningQa).status, "进行中");
+  assert.equal(planPresentation(implementationMentioningQa).status, "正在执行");
   assert.equal(planPresentation(implementationMentioningQa).tone, "running");
-  assert.equal(planPresentation(developmentValidation).status, "进行中");
+  assert.equal(planPresentation(developmentValidation).status, "正在执行");
   assert.equal(planPresentation(developmentValidation).tone, "running");
-  assert.equal(planPresentation(awaitingPackage).status, "等待打包");
+  assert.equal(planPresentation(awaitingPackage).status, "待统一打包");
   assert.equal(planPresentation(awaitingPackage).tone, "waiting_package");
-  assert.equal(planPresentation(awaitingPackage).sortBucket, 3);
+  assert.equal(planPresentation(awaitingPackage).sortBucket, 4);
   assert.deepEqual(planPresentation(awaitingPackage).palette, {
     accent: "#2563eb",
     background: "#eff6ff",
@@ -217,6 +217,85 @@ test("plan presentation blocks only complete pending approvals and keeps other o
   assert.equal(planPresentation(paused).approval.enabled, false);
 });
 
+test("plan presentation derives an environment wait from the authoritative current wait fields", () => {
+  const item = plan({
+    id: "waiting-environment",
+    title: "Waiting environment",
+    currentStepId: "prepare-test-environment",
+    waitingFor: "等待目标测试环境和可用测试账号恢复",
+    steps: [{
+      id: "prepare-test-environment",
+      title: "准备测试环境",
+      status: "进行中",
+      waitingFor: "等待目标测试环境和可用测试账号恢复"
+    }]
+  });
+
+  assert.equal(planPresentation(item).status, "待环境");
+  assert.equal(planPresentation(item).tone, "waiting_external");
+});
+
+test("plan presentation keeps a busy Unity owner in the environment wait stage", () => {
+  const item = plan({
+    id: "waiting-main-unity-owner",
+    title: "Waiting Main Unity owner",
+    currentStepId: "implement",
+    waitingFor: "等待PID49592及后继Main Unity owner自然退出；恢复产物为Main唯一Prefab回写、Main目标16/16持久XML/log",
+    steps: [{
+      id: "implement",
+      title: "回写Main并完成目标测试",
+      status: "进行中",
+      waitingFor: "PID49592及后继Main Unity owner自然退出后完成Main回写、16/16重跑和精确提交"
+    }]
+  });
+
+  assert.equal(planPresentation(item).status, "待环境");
+  assert.equal(planPresentation(item).tone, "waiting_external");
+});
+
+test("plan presentation distinguishes a material wait from active execution", () => {
+  const item = plan({
+    id: "waiting-material",
+    title: "Waiting material",
+    currentStepId: "art-production",
+    steps: [{
+      id: "art-production",
+      title: "接入正式美术资源",
+      status: "进行中",
+      waitingFor: "等待美术负责人交付正式 PSD、图片素材与资源清单"
+    }]
+  });
+
+  assert.equal(planPresentation(item).status, "待素材");
+  assert.equal(planPresentation(item).tone, "waiting_external");
+});
+
+test("plan presentation distinguishes a data wait from active execution", () => {
+  const item = plan({
+    id: "waiting-information",
+    title: "Waiting information",
+    currentStepId: "collect-evidence",
+    waitingFor: "等待反馈方补充原截图、日志、版本和复现步骤",
+    steps: [{ id: "collect-evidence", title: "收集诊断资料", status: "进行中" }]
+  });
+
+  assert.equal(planPresentation(item).status, "待资料");
+  assert.equal(planPresentation(item).tone, "waiting_external");
+});
+
+test("plan presentation uses external receipt as the fallback for an explicit ordinary wait", () => {
+  const item = plan({
+    id: "waiting-external-receipt",
+    title: "Waiting external receipt",
+    currentStepId: "implement-validation",
+    waitingFor: "等待原业务任务回传目标测试结果",
+    steps: [{ id: "implement-validation", title: "实施并验证", status: "进行中" }]
+  });
+
+  assert.equal(planPresentation(item).status, "待外部回执");
+  assert.equal(planPresentation(item).tone, "waiting_external");
+});
+
 test("approval capability is Manager-owned and follows the current human gate", () => {
   const item = plan({
     id: "approval",
@@ -237,7 +316,7 @@ test("approval capability is Manager-owned and follows the current human gate", 
     missing: [],
     contract: approvalRequest()
   });
-  assert.equal(planPresentation(item).status, "阻塞中");
+  assert.equal(planPresentation(item).status, "待审批");
   assert.equal(planPresentation(item).tone, "blocked");
 });
 
@@ -267,7 +346,7 @@ test("incomplete approvals stay running and disabled until the contract becomes 
     }]
   });
   const incompletePresentation = planPresentation(incomplete);
-  assert.equal(incompletePresentation.status, "进行中");
+  assert.equal(incompletePresentation.status, "正在执行");
   assert.equal(incompletePresentation.tone, "running");
   assert.equal(incompletePresentation.approval.state, "incomplete");
   assert.equal(incompletePresentation.approval.enabled, false);
@@ -280,7 +359,7 @@ test("incomplete approvals stay running and disabled until the contract becomes 
     currentStepId: "implement",
     steps: [{ id: "implement", title: "执行已批准方案", status: "进行中" }]
   });
-  assert.equal(planPresentation(resolved).status, "进行中");
+  assert.equal(planPresentation(resolved).status, "正在执行");
   assert.equal(planPresentation(resolved).approval.state, "none");
 });
 
@@ -344,7 +423,7 @@ test("plans awaiting approval sort first, then by Manager presentation status an
   ]);
   assert.deepEqual(
     sorted.map((item) => item.presentation.sortBucket),
-    [0, 1, 2, 2, 2, 3, 4, 5, 6, 8]
+    [0, 1, 2, 2, 2, 4, 5, 6, 7, 9]
   );
 });
 
@@ -389,9 +468,66 @@ test("plan pages preserve Manager ordering and expose stable counts while advanc
     archived: 1,
     blocked: 0,
     qa: 1,
-    active: 2
+    active: 2,
+    stages: {
+      executing: 1,
+      qa: 1,
+      waitingPackage: 0,
+      waitingExternal: 0,
+      approval: 0,
+      pending: 0,
+      paused: 0,
+      completed: 1,
+      archived: 1
+    }
   });
   assert.deepEqual(second.counts, first.counts);
+});
+
+test("plan page counts summarize the Manager-derived presentation stages", () => {
+  const presented = presentPlans([
+    plan({ id: "executing", title: "Executing" }),
+    plan({ id: "qa", title: "QA", currentStepId: "qa", steps: [{ id: "qa", title: "QA", status: "进行中" }] }),
+    plan({
+      id: "package",
+      title: "Package",
+      currentStepId: "package",
+      waitingFor: "等待目标包身份",
+      steps: [
+        { id: "implement", title: "Implement", status: "已完成" },
+        { id: "package", title: "Package", status: "进行中" }
+      ]
+    }),
+    plan({
+      id: "external",
+      title: "External",
+      currentStepId: "collect",
+      waitingFor: "等待外部负责人回传结果",
+      steps: [{ id: "collect", title: "Collect", status: "进行中" }]
+    }),
+    plan({
+      id: "approval",
+      title: "Approval",
+      currentStepId: "approve",
+      steps: [{ id: "approve", title: "Approve", status: "进行中", approvalRequest: approvalRequest() }]
+    }),
+    plan({ id: "pending", title: "Pending", status: "未开始" }),
+    plan({ id: "paused", title: "Paused", status: "暂停" }),
+    plan({ id: "completed", title: "Completed", status: "已完成" }),
+    plan({ id: "archived", title: "Archived", status: "已归档" })
+  ]);
+
+  assert.deepEqual(paginateRolePlans(presented, "", 20).counts.stages, {
+    executing: 1,
+    qa: 1,
+    waitingPackage: 1,
+    waitingExternal: 1,
+    approval: 1,
+    pending: 1,
+    paused: 1,
+    completed: 1,
+    archived: 1
+  });
 });
 
 test("plan page inputs reject invalid cursors and clamp oversized limits", () => {

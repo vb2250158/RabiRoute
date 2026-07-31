@@ -10,6 +10,17 @@ export type RolePlanPageCounts = {
   blocked: number;
   qa: number;
   active: number;
+  stages: {
+    executing: number;
+    qa: number;
+    waitingPackage: number;
+    waitingExternal: number;
+    approval: number;
+    pending: number;
+    paused: number;
+    completed: number;
+    archived: number;
+  };
 };
 
 export type RolePlanPage = {
@@ -45,21 +56,14 @@ async function managerData<T>(path: string): Promise<T> {
   return body.data;
 }
 
-function withPresentation(plan: RolePlan): RolePlan {
+export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
   if (plan.presentation?.status && plan.presentation?.tone && plan.presentation.approval) {
-    const fallbackViews: RolePlan["presentation"]["views"] = plan.status === "已归档"
-      ? ["archived"]
-      : plan.status === "进行中"
-        ? ["current", "plans"]
-        : ["plans"];
     return {
       ...plan,
       presentation: {
         ...plan.presentation,
         sortBucket: Number.isFinite(plan.presentation.sortBucket) ? plan.presentation.sortBucket : -1,
-        views: Array.isArray(plan.presentation.views) && plan.presentation.views.length
-          ? plan.presentation.views
-          : fallbackViews,
+        views: Array.isArray(plan.presentation.views) ? plan.presentation.views : [],
         palette: normalizePlanPresentationPalette(plan.presentation.palette),
         approval: {
           ...plan.presentation.approval,
@@ -70,24 +74,13 @@ function withPresentation(plan: RolePlan): RolePlan {
       approval: plan.approval || { count: 0 }
     };
   }
-  const tone = plan.status === "进行中"
-    ? "running"
-    : plan.status === "暂停"
-      ? "paused"
-      : plan.status === "未开始"
-        ? "pending"
-        : plan.status === "已完成"
-          ? "done"
-          : plan.status === "已归档"
-            ? "archived"
-            : "unknown";
   return {
     ...plan,
     presentation: {
-      status: plan.status,
-      tone,
+      status: "状态未知",
+      tone: "unknown",
       sortBucket: -1,
-      views: plan.status === "已归档" ? ["archived"] : plan.status === "进行中" ? ["current", "plans"] : ["plans"],
+      views: [],
       palette: { ...FALLBACK_PLAN_PRESENTATION_PALETTE },
       approval: {
         state: "none",
@@ -107,7 +100,7 @@ export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePl
     managerData<RolePlan[]>(`/api/roles/${encodedRoleId}/plans`),
     managerData<RoleMemoryPayload>(`/api/roles/${encodedRoleId}/memory`)
   ]);
-  return { plans: plans.map(withPresentation), memory };
+  return { plans: plans.map(normalizeRolePlanFromManager), memory };
 }
 
 export async function loadPlanFeedback(roleId: string, planId: string): Promise<RolePlan["approval"]> {
@@ -123,7 +116,7 @@ export async function loadPlanFeedback(roleId: string, planId: string): Promise<
 }
 
 function summaryAsPlan(summary: RolePlanSummary): RolePlan {
-  return withPresentation({
+  return normalizeRolePlanFromManager({
     ...summary,
     focus: "",
     attachments: [],
@@ -149,7 +142,7 @@ export async function loadRolePlanPage(
 }
 
 export async function loadRolePlan(roleId: string, planId: string): Promise<RolePlan> {
-  return withPresentation(await managerData<RolePlan>(
+  return normalizeRolePlanFromManager(await managerData<RolePlan>(
     `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`
   ));
 }

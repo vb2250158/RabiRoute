@@ -33,7 +33,7 @@ class _ApiManager:
                 "title": "API plan",
                 "status": "进行中",
                 "presentation": {
-                    "status": "阻塞中",
+                    "status": "待审批",
                     "tone": "blocked",
                     "views": ["current", "plans"],
                     "palette": {
@@ -50,7 +50,7 @@ class _ApiManager:
                 "title": "API QA plan",
                 "status": "进行中",
                 "presentation": {
-                    "status": "待QA测试",
+                    "status": "待 QA",
                     "tone": "qa",
                     "views": ["current", "plans"],
                     "palette": {
@@ -97,13 +97,38 @@ class _ApiManager:
                 "keywords": [],
             },
             {
+                "id": "plan-3",
+                "title": "API external wait plan",
+                "status": "进行中",
+                "presentation": {
+                    "status": "待资料",
+                    "tone": "waiting_external",
+                    "sortBucket": 3,
+                    "views": ["current", "plans"],
+                    "palette": {
+                        "accent": "#f59e0b",
+                        "background": "#fff7e6",
+                        "foreground": "#a96008",
+                    },
+                    "approval": {
+                        "state": "none",
+                        "enabled": False,
+                        "label": "无需审批",
+                        "helper": "当前步骤没有声明人工审批门禁。",
+                        "missing": [],
+                    },
+                },
+                "steps": [],
+                "keywords": [],
+            },
+            {
                 "id": "plan-1784037085080",
                 "title": "API package plan",
                 "status": "进行中",
                 "presentation": {
-                    "status": "等待打包",
+                    "status": "待统一打包",
                     "tone": "waiting_package",
-                    "sortBucket": 3,
+                    "sortBucket": 4,
                     "views": ["current", "plans"],
                     "palette": {
                         "accent": "#2563eb",
@@ -152,14 +177,14 @@ class DesktopRefreshServiceTest(unittest.TestCase):
 
         self.assertTrue(result.manager.connected)
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].title, "API plan")
-        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_status, "阻塞中")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_status, "待审批")
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_views, ("current", "plans"))
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_accent, "#ef6c52")
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_background, "#fff1ed")
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_foreground, "#b42318")
         self.assertEqual(
             result.plan_snapshot and [plan.title for plan in result.plan_snapshot.active],
-            ["API plan", "API QA plan", "API package plan"],
+            ["API plan", "API QA plan", "API external wait plan", "API package plan"],
         )
         qa_plan = result.plan_snapshot and result.plan_snapshot.active[1]
         self.assertTrue(qa_plan and qa_plan.approval_enabled)
@@ -168,10 +193,14 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.request, "批准运行验收。")
         self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.commands[0].command, "npm test")
         self.assertEqual(qa_plan and qa_plan.latest_approval_text, "补充回归范围")
-        package_plan = result.plan_snapshot and result.plan_snapshot.active[2]
-        self.assertEqual(package_plan and package_plan.display_status, "等待打包")
+        external_plan = result.plan_snapshot and result.plan_snapshot.active[2]
+        self.assertEqual(external_plan and external_plan.display_status, "待资料")
+        self.assertEqual(external_plan and external_plan.display_tone, "waiting_external")
+        self.assertEqual(external_plan and external_plan.display_sort_bucket, 3)
+        package_plan = result.plan_snapshot and result.plan_snapshot.active[3]
+        self.assertEqual(package_plan and package_plan.display_status, "待统一打包")
         self.assertEqual(package_plan and package_plan.display_tone, "waiting_package")
-        self.assertEqual(package_plan and package_plan.display_sort_bucket, 3)
+        self.assertEqual(package_plan and package_plan.display_sort_bucket, 4)
         self.assertEqual(package_plan and package_plan.display_accent, "#2563eb")
         self.assertEqual(package_plan and package_plan.display_background, "#eff6ff")
         self.assertEqual(package_plan and package_plan.display_foreground, "#1d4ed8")

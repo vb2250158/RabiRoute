@@ -135,6 +135,18 @@ RabiRoute 只会在满足以下条件时自动发送：
 - 或请求带有原始消息上下文，RabiRoute 能从消息日志中定位来源群聊或私聊。
 - 对应路由的消息端发送管道未关闭，且 payload 类型在 `supportedOutputs` 内。
 
+### 受控外发幂等回执
+
+调用方需要抵抗重复点击、请求超时、响应丢失、Manager 重启或并发请求时，可以在请求体中提供稳定 `deliveryId`。Manager 会在进入 Outbox 前把 reservation 持久化到运行期 `data/agent-reply-idempotency/`；同一个 `deliveryId` 和相同 payload 只执行一次，完成后重复 POST 返回原 `sent/draft/blocked/failed` 结果。相同 ID 携带不同 payload 返回 `409 conflict`，`reserved/sending/uncertain` 状态也失败关闭，不会自动重发。
+
+调用方在 POST 超时或收到空回执后，应先查询原 ID：
+
+```http
+GET /api/agent/replies/receipts/:deliveryId
+```
+
+只有回执返回 `status=sent` 且包含目标通道要求的真实标识（QQ 文本为 `sentMessageId`）时，调用方才能继续做平台回读并把业务状态标成已发送。`deliveryId` 只提供 Outbox 请求幂等，不代替 NapCat/外部平台的真实存在验证，也不是自动重试队列。公开示例应使用占位 ID，不把运行期回执文件提交到仓库。
+
 ### 语音消息端人格回复
 
 当注入的 `replyContext` 同时包含 `routeKind=voice_transcript`、`adapterType=speech` 和 `characterTtsDialogue=true` 时，本轮来自 RabiPC 语音消息端。Agent 不能只在 Codex 线程里显示文字：应把适合朗读、与最终可见回复同义的 `text` 连同完整 `replyContext` POST 到 `/api/agent/replies`。Outbox 只接受文本，按来源消息重新绑定 Route，并从 Route 读取人格、声线、TTS 模型、语言、情绪指令、`sessionId` 和 `speechAutoPlay`；成功时返回 `sent`，开启播放时表示音频已进入 RabiSpeech 主机级 FIFO，而不是扬声器已经播放完毕。
@@ -495,7 +507,7 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。等待审批、方案确认或授权的当前步骤保持 `进行中`，并补齐结构化 `approvalRequest` 与 `waitingFor`；只有合同完整、可提交且 `responseStatus=pending` 时，Manager 才自动派生 `isBlocked=true` 兼容投影和“阻塞中”。Agent 不得手写 `isBlocked`。待 QA、缺资料、执行失败或外部产物必须继续询问、重试、改道、拆分或补证据。审批合同缺项时 Manager 返回 `incomplete/enabled=false`，计划保持进行中并禁止正式审批。
+新增计划必须提供有序的 `steps`。写入 API 仍只接受上方五种顶层生命周期状态；`presentation.status / tone / sortBucket / views / palette` 和列表响应的 `counts.stages` 都由 Manager 派生，Agent 与客户端不得手写。等待审批、方案确认或授权的当前步骤保持 `进行中`，并补齐结构化 `approvalRequest` 与 `waitingFor`；只有合同完整、可提交且 `responseStatus=pending` 时，Manager 才自动派生 `isBlocked=true` 兼容投影与“待审批”。结构化 `qa-* / verify-*` 当前步骤显示“待 QA”；权威等待字段可派生“待环境 / 待素材 / 待资料 / 待外部回执”；前序工作完成且明确等待合包、构建、进包或目标包身份的 package/build 当前步骤显示“待统一打包”；其它进行中计划显示“正在执行”。Agent 不得手写 `isBlocked` 或展示阶段。审批合同缺项时 Manager 返回 `incomplete/enabled=false`，计划保持进行中并禁止正式审批。
 
 `attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
 

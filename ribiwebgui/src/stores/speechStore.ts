@@ -14,6 +14,7 @@ import type {
   SpeechPersona,
   SpeechPlaybackStatus,
   SpeechRecord,
+  SpeechRuntimeControlResult,
   SpeechRuntimeStatus,
   SpeechSpeakerBinding,
   SpeechSpeakerBindingCommand,
@@ -63,13 +64,15 @@ export const useSpeechStore = defineStore("speech-control", () => {
     error.value = messageOf(cause);
   }
 
-  async function refreshStatus(): Promise<void> {
-    loading.value = true;
+  async function refreshStatus(silent = false): Promise<void> {
+    if (!silent) loading.value = true;
     try {
       status.value = await speechControlClient.status();
       error.value = "";
+      if (status.value.state === "online" && subscribers > 0) startEvents();
+      if (status.value.state !== "online") stopEvents();
     } finally {
-      loading.value = false;
+      if (!silent) loading.value = false;
     }
   }
 
@@ -181,8 +184,12 @@ export const useSpeechStore = defineStore("speech-control", () => {
   }
 
   async function refreshAll(): Promise<void> {
+    await refreshStatus();
+    if (status.value?.state !== "online") {
+      clearRuntimeDetails();
+      return;
+    }
     await Promise.all([
-      refreshStatus(),
       refreshModels(),
       refreshPersonas(),
       refreshAudioInputs(),
@@ -190,6 +197,38 @@ export const useSpeechStore = defineStore("speech-control", () => {
       refreshMicrophone(),
       refreshPlayback()
     ]);
+  }
+
+  function clearRuntimeDetails(): void {
+    models.value = [];
+    records.value = [];
+    speakerRegistry.value = null;
+    playback.value = null;
+    microphone.value = null;
+    audioInputs.value = [];
+    audioStream.value = null;
+  }
+
+  async function startRuntime(): Promise<SpeechRuntimeControlResult> {
+    const result = await speechControlClient.startRuntime();
+    status.value = result.status;
+    error.value = "";
+    await refreshAll();
+    return result;
+  }
+
+  async function stopRuntime(): Promise<SpeechRuntimeControlResult> {
+    stopEvents();
+    error.value = "";
+    try {
+      const result = await speechControlClient.stopRuntime();
+      status.value = result.status;
+      clearRuntimeDetails();
+      return result;
+    } catch (cause) {
+      if (status.value?.state === "online" && subscribers > 0) startEvents();
+      throw cause;
+    }
   }
 
   function startEvents(): void {
@@ -203,7 +242,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
       }
       recordsVersion.value += 1;
       void Promise.all([
-        refreshStatus(),
+        refreshStatus(true),
         refreshAudioStreams(),
         refreshMicrophone(),
         refreshPlayback()
@@ -227,7 +266,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
       }
     });
     eventSource.addEventListener("microphone_event", () => {
-      void Promise.all([refreshMicrophone(), refreshStatus()]).catch(rememberError);
+      void Promise.all([refreshMicrophone(), refreshStatus(true)]).catch(rememberError);
     });
     eventSource.addEventListener("playback_changed", () => {
       void refreshPlayback().catch(rememberError);
@@ -239,7 +278,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
       recordsVersion.value += 1;
     });
     eventSource.onerror = () => {
-      error.value = "语音事件流暂时断开，浏览器正在重连。";
+      readyReceived = false;
     };
   }
 
@@ -255,7 +294,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
       await refreshAll().catch(cause => {
         rememberError(cause);
       });
-      startEvents();
+      if (status.value?.state === "online") startEvents();
     }
     let released = false;
     return () => {
@@ -327,6 +366,8 @@ export const useSpeechStore = defineStore("speech-control", () => {
     playbackBusy,
     acquire,
     refreshStatus,
+    startRuntime,
+    stopRuntime,
     refreshModels,
     refreshPersonas,
     refreshRecords,

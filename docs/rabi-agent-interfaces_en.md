@@ -105,6 +105,18 @@ POST /api/agent/replies
 
 The safest path is to pass the injected `replyContextJson` back unchanged. RabiRoute resolves the route, source record, output pipeline, adapter policy, and target.
 
+### Controlled outbound idempotency receipts
+
+Callers that must survive duplicate clicks, request timeouts, lost responses, Manager restarts, or concurrent requests may provide a stable `deliveryId`. Before entering Outbox, Manager persists a reservation under runtime `data/agent-reply-idempotency/`. The same `deliveryId` with the same payload executes once, and later POSTs return the original `sent/draft/blocked/failed` result. Reusing the ID with a different payload returns `409 conflict`; `reserved/sending/uncertain` states also fail closed and are never auto-replayed.
+
+After a POST timeout or an empty receipt, query the original ID first:
+
+```http
+GET /api/agent/replies/receipts/:deliveryId
+```
+
+The caller may mark delivery only when the receipt returns `status=sent` with the real identifier required by the target channel (`sentMessageId` for QQ text), followed by any required platform readback. `deliveryId` provides Outbox request idempotency; it does not replace NapCat/external-platform existence verification and is not an automatic retry queue. Public examples use placeholders, and runtime receipt files stay out of Git.
+
 ### Character reply for the speech message endpoint
 
 When injected `replyContext` contains `routeKind=voice_transcript`, `adapterType=speech`, and `characterTtsDialogue=true`, the turn came from the RabiPC speech message endpoint. The handler must not leave the answer only in the Codex task. It should POST readable speech text, semantically identical to its visible final reply, together with the unchanged `replyContext` to `/api/agent/replies`. Outbox rebinds the source Route and reads its persona, voice, TTS model, language, instructions, `sessionId`, and `speechAutoPlay`. A successful `sent` result with playback enabled means the audio entered the host-wide RabiSpeech FIFO; it does not claim that speaker playback has already finished.
@@ -120,7 +132,7 @@ blocked rejected by policy, missing target, or missing configuration
 failed  a real delivery attempt failed
 ```
 
-There is no generic persistent approval center or automatic retry queue. Callers must inspect the returned status.
+There is no generic persistent approval center or automatic retry queue. Callers must inspect the returned status; a supplied `deliveryId` adds fail-closed request deduplication and receipt lookup only.
 
 Phone audio may reuse the same RabiSpeech ASR chain, but it enters the Agent as `routeKind=rabilink`, `adapterType=rabilink`, with stable `sourceDeviceId/sourceDeviceKind`, transient `sourceStreamId`, and `channelType=rabilink.mobile_audio`. The Agent still POSTs the complete `replyContext` to `/api/agent/replies`; Outbox converts only the stable originating `sourceDeviceId` into `targetDeviceIds`, never the current PCM stream ID, so the reply returns only to that phone. This is not the standalone `speech` endpoint and does not use its persona-TTS/FIFO reply policy.
 
@@ -351,7 +363,7 @@ PATCH /api/roles/:roleId/plans/:planId
 }
 ```
 
-New plans must provide an ordered `steps` array. A current step waiting for approval, plan confirmation, or authorization remains in progress and carries a structured `approvalRequest` plus `waitingFor`. Only a complete actionable contract with `responseStatus=pending` makes Manager derive the `isBlocked=true` compatibility projection and `Blocked`; Agents must not write `isBlocked` directly. QA waits, missing inputs, execution failures, and external artifacts continue through inquiry, retry, rerouting, decomposition, or evidence gathering. Missing contract fields produce `incomplete/enabled=false`; the plan remains in progress and formal approval stays disabled.
+New plans must provide an ordered `steps` array. Write APIs still accept only the five top-level lifecycle states above; Manager derives `presentation.status / tone / sortBucket / views / palette` and list-level `counts.stages`, so Agents and clients must not write presentation stages. A current step waiting for approval, plan confirmation, or authorization remains in progress and carries a structured `approvalRequest` plus `waitingFor`. Only a complete actionable contract with `responseStatus=pending` makes Manager derive the `isBlocked=true` compatibility projection and `Awaiting approval`. A structured current `qa-* / verify-*` step becomes `Awaiting QA`; authoritative wait fields may become `Awaiting environment`, `Awaiting assets`, `Awaiting information`, or `Awaiting external response`; a package/build current step with completed prior work and an explicit package wait becomes `Awaiting shared package`; other in-progress plans become `Executing`. Missing contract fields produce `incomplete/enabled=false`; the plan remains in progress and formal approval stays disabled.
 
 `attachments` is optional. A new item may provide a Manager-readable local `path`, or `name`, optional `mimeType`, and `contentBase64`. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Manager copies content into the persona-private `plans/attachments/<planId>/` directory; the plan file retains safe metadata only and never Base64. Omitting `attachments` from PATCH preserves the list, while an empty array clears it. To keep selected existing items in a PATCH, send back the corresponding attachment objects returned by GET. The public plan DTO does not expose the local `path`.
 

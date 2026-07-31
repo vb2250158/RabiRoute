@@ -54,6 +54,10 @@ import {
   type PersonaVoiceIdentityPatch
 } from "../personaVoiceIdentities.js";
 import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
+import {
+  agentReplyReceiptResponse,
+  executeIdempotentAgentReply
+} from "./agentReplyIdempotency.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
   appendRolePanelTimelineMessage,
@@ -135,6 +139,10 @@ import {
   speechControlErrorStatus,
   type ManagerSpeechDeliveryOutcome
 } from "./speechControl.js";
+import {
+  SpeechRuntimeControl,
+  SpeechRuntimeControlError
+} from "./speechRuntimeControl.js";
 import {
   parseSpeechProcessResult,
   SPEECH_EXIT_DELIVERED,
@@ -628,6 +636,10 @@ const speechControl = new ManagerSpeechControl({
     if (runtime) appendLog(runtime, message);
   },
   speechIngressStore
+});
+const speechRuntimeControl = new SpeechRuntimeControl({
+  rootDir,
+  serviceUrl: () => speechServiceUrl()
 });
 const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
 const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
@@ -3804,6 +3816,18 @@ function writeSpeechJson<T>(
     }));
 }
 
+function writeSpeechRuntimeJson(
+  response: http.ServerResponse,
+  operation: Promise<unknown>
+): void {
+  void operation
+    .then(data => jsonResponse(response, 200, { code: 0, data }))
+    .catch(error => jsonResponse(response, error instanceof SpeechRuntimeControlError ? error.status : 502, {
+      code: -1,
+      message: error instanceof Error ? error.message : String(error)
+    }));
+}
+
 function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/events") {
     proxySpeechEventStream(response, {
@@ -3814,6 +3838,14 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/status") {
     writeSpeechJson(response, speechControl.status(), 200, 500);
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/runtime/start") {
+    writeSpeechRuntimeJson(response, speechRuntimeControl.start());
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/runtime/stop") {
+    writeSpeechRuntimeJson(response, speechRuntimeControl.stop());
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/models") {
@@ -5179,29 +5211,44 @@ export async function startManager(): Promise<void> {
           });
         return;
       }
+      const agentReplyReceiptMatch = requestUrl.pathname.match(/^\/api\/agent\/replies\/receipts\/([^/]+)$/);
+      if (request.method === "GET" && agentReplyReceiptMatch) {
+        const receipt = agentReplyReceiptResponse(rootDir, decodeURIComponent(agentReplyReceiptMatch[1]));
+        jsonResponse(response, receipt.statusCode, { code: receipt.statusCode < 400 ? 0 : -1, ...receipt.body });
+        return;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/api/agent/replies") {
         void readJsonBody<AgentReplyRequest>(request)
-          .then((body) => handleAgentReply(body, {
-            rootDir,
-            routeRoot,
-            rolesRoot,
-            speechServiceUrl: speechServiceUrl(),
-            publishEvent: publishManagerEvent,
-            runtimes: [...runtimes.values()].map((runtime) => {
-              const relay = rabiLinkRelayConfigFor(runtime.definition);
+          .then(async (body) => {
+            const deliver = () => handleAgentReply(body, {
+              rootDir,
+              routeRoot,
+              rolesRoot,
+              speechServiceUrl: speechServiceUrl(),
+              publishEvent: publishManagerEvent,
+              runtimes: [...runtimes.values()].map((runtime) => {
+                const relay = rabiLinkRelayConfigFor(runtime.definition);
+                return {
+                  ...runtime.definition,
+                  rabiLinkRelay: relay,
+                  napcatInstances: (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)).map((instance) => ({
+                    ...instance,
+                    accessToken: instance.accessToken ?? ""
+                  }))
+                };
+              })
+            });
+            if (body.deliveryId == null || !String(body.deliveryId).trim()) {
+              const result = await deliver();
               return {
-                ...runtime.definition,
-                rabiLinkRelay: relay,
-                napcatInstances: (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)).map((instance) => ({
-                  ...instance,
-                  accessToken: instance.accessToken ?? ""
-                }))
+                statusCode: result.status === "sent" ? 202 : result.status === "draft" ? 200 : result.status === "failed" ? 502 : 403,
+                body: result
               };
-            })
-          }))
+            }
+            return executeIdempotentAgentReply(body, { rootDir, deliver });
+          })
           .then((result) => {
-            const status = result.status === "sent" ? 202 : result.status === "draft" ? 200 : result.status === "failed" ? 502 : 403;
-            jsonResponse(response, status, { code: result.ok ? 0 : -1, ...result });
+            jsonResponse(response, result.statusCode, { code: result.body.ok ? 0 : -1, ...result.body });
           })
           .catch((error) => {
             jsonResponse(response, 400, { code: -1, ok: false, status: "blocked", message: error instanceof Error ? error.message : String(error) });

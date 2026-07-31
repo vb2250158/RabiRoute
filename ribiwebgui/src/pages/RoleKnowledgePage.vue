@@ -105,7 +105,18 @@ const planPageCounts = ref<RolePlanPageCounts>({
   archived: 0,
   blocked: 0,
   qa: 0,
-  active: 0
+  active: 0,
+  stages: {
+    executing: 0,
+    qa: 0,
+    waitingPackage: 0,
+    waitingExternal: 0,
+    approval: 0,
+    pending: 0,
+    paused: 0,
+    completed: 0,
+    archived: 0
+  }
 });
 const planNextCursor = ref("");
 const planRenderStart = ref(0);
@@ -327,7 +338,26 @@ watch([activeView, query], () => {
 watch(activeDirectoryPlanId, () => void nextTick(keepActiveDirectoryLinkVisible), { flush: "post" });
 
 function resetPlanPageCounts(): void {
-  planPageCounts.value = { total: 0, current: 0, plans: 0, archived: 0, blocked: 0, qa: 0, active: 0 };
+  planPageCounts.value = {
+    total: 0,
+    current: 0,
+    plans: 0,
+    archived: 0,
+    blocked: 0,
+    qa: 0,
+    active: 0,
+    stages: {
+      executing: 0,
+      qa: 0,
+      waitingPackage: 0,
+      waitingExternal: 0,
+      approval: 0,
+      pending: 0,
+      paused: 0,
+      completed: 0,
+      archived: 0
+    }
+  };
 }
 
 function resetPlanDetailHydration(): void {

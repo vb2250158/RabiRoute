@@ -734,7 +734,7 @@ def _plan_current_step_summary(plan: PlanItem) -> str:
 def _plan_status_presentation(plan: PlanItem, status: str) -> tuple[str, str]:
     if plan.display_status:
         return plan.display_status, plan.display_tone or "unknown"
-    return status, STATUS_TONES.get(status, "unknown")
+    return "状态未知", "unknown"
 
 
 def _plan_card_palette_stylesheet(plan: PlanItem) -> str:

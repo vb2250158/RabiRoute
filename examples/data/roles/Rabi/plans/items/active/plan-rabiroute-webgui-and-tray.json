@@ -6,7 +6,7 @@
   "priority": "medium",
   "kind": "ui",
   "currentStepId": "add-real-screenshots",
-  "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的计划分类、状态色板、审批门、等待打包状态和异步反馈终态；语音服务页现在按稳定设备展示型号、PCM 字节/块、持久收发与处理事件、公共 ASR 转写、逐 Route 回执和 24 小时原声回听；Route 页能区分 NapCat 账号归属并采用已有在线实例，打包托盘优先使用项目便携 Node。当前补齐真实脱敏截图和实体环境证据。",
+  "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的待审批、待 QA、正在执行、外部等待和待统一打包阶段、状态色板与计数，不再本地重做分类；语音服务页现在既按稳定设备展示传输、处理、转写与回执证据，也能在确认当前工作区进程归属后启停正式 RabiSpeech，并仅在真实健康后展开参数。Route 页能区分 NapCat 账号归属并采用已有在线实例，打包托盘优先使用项目便携 Node。当前补齐真实脱敏截图和实体环境证据。",
   "nextAction": "为 NapCat 采用流程、消息端默认规则和语音设备事件/转写回听补齐真实脱敏截图，在双实体 PC 与长时间语音会话中复核分页、过期状态、菜单响应、错误恢复和跨端排障；自然打断继续等待真实 AEC 证据。",
   "steps": [
     { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
@@ -20,6 +20,8 @@
     { "id": "knowledge-progressive-loading", "title": "实现计划摘要分页、按需详情、完整内容搜索、人格优先标签和 Route 作用域导航", "status": "已完成" },
     { "id": "napcat-owner-and-portable-node", "title": "展示 NapCat 登录归属并让托盘优先使用便携 Node", "status": "已完成" },
     { "id": "speech-device-observability", "title": "按稳定设备展示语音收发事件、公共转写、Route 回执和短期原声", "status": "已完成" },
+    { "id": "manager-presentation-stages", "title": "统一 Manager 计划展示阶段、排序、计数与暂停恢复合同", "status": "已完成" },
+    { "id": "speech-runtime-toggle", "title": "按当前工作区进程归属与真实健康启停 RabiSpeech", "status": "已完成" },
     { "id": "add-real-screenshots", "title": "补齐真实脱敏界面截图", "status": "进行中" },
     { "id": "persona-route-preview", "title": "完善人格路由预览与跨端排障入口", "status": "未开始" },
     { "id": "cross-pc-speech", "title": "完成跨电脑、不同声卡与自然打断的真实语音重测", "status": "未开始" }
@@ -38,5 +40,5 @@
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
   "updatedAt": "2026-07-30T00:00:00+08:00",
-  "keywords": ["RibiWebGUI", "Manager API", "NapCat 账号归属", "快速登录", "默认 Route", "便携 Node", "计划反馈", "审批执行合同", "等待打包", "摘要分页", "完整内容搜索", "人格名称", "Route 作用域导航", "暂停", "状态色板", "人格声纹", "人格同步", "事件驱动", "音频流事件", "公共转写", "Route 回执", "ASR 原声", "结构化计划", "使用手册", "语音服务", "自然打断", "AEC", "托盘"]
+  "keywords": ["RibiWebGUI", "Manager API", "NapCat 账号归属", "快速登录", "默认 Route", "便携 Node", "计划反馈", "审批执行合同", "待统一打包", "待外部", "摘要分页", "完整内容搜索", "人格名称", "Route 作用域导航", "暂停恢复合同", "状态色板", "阶段计数", "人格声纹", "人格同步", "事件驱动", "音频流事件", "公共转写", "Route 回执", "ASR 原声", "RabiSpeech 运行时归属", "结构化计划", "使用手册", "语音服务", "自然打断", "AEC", "托盘"]
 }
