@@ -10,6 +10,7 @@ import type {
   ManualTriggerRecord,
   PlanFeedbackMessageRecord,
   RolePanelMessageRecord,
+  FeishuMessageRecord,
   WeComMessageRecord,
   WeixinMessageRecord,
   VoiceTranscriptEventRecord
@@ -47,11 +48,15 @@ function expandRouteVariables(pattern: string, variables: Record<string, string>
 }
 
 export function isGroupRecord(record: ForwardRecord): record is GroupMessageRecord {
-  return "groupId" in record && !isWeComRecord(record);
+  return "groupId" in record && !isWeComRecord(record) && !isFeishuRecord(record);
 }
 
 export function isWeComRecord(record: ForwardRecord): record is WeComMessageRecord {
   return "adapterType" in record && record.adapterType === "wecom";
+}
+
+export function isFeishuRecord(record: ForwardRecord): record is FeishuMessageRecord {
+  return "adapterType" in record && record.adapterType === "feishu";
 }
 
 export function isWeixinRecord(record: ForwardRecord): record is WeixinMessageRecord {
@@ -83,7 +88,7 @@ export function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceT
 
 export function routeVariablesFor(record: ForwardRecord, extraValues: ForwardTemplateValues, route?: RouteProfile): Record<string, string> {
   const isGroup = isGroupRecord(record);
-  const groupId = isGroup || isWeComRecord(record) ? record.groupId : undefined;
+  const groupId = isGroup || isWeComRecord(record) || isFeishuRecord(record) ? record.groupId : undefined;
   const variables: Record<string, string> = {
     ...config.routeVariables,
     ...(route?.routeVariables ?? {}),
@@ -139,7 +144,7 @@ function ruleMatches(
   }
 
   if (rule.targetGroupId?.trim()) {
-    const groupId = isGroupRecord(record) || isWeComRecord(record) ? record.groupId : undefined;
+    const groupId = isGroupRecord(record) || isWeComRecord(record) || isFeishuRecord(record) ? record.groupId : undefined;
     if (groupId == null || String(groupId) !== rule.targetGroupId.trim()) {
       return false;
     }

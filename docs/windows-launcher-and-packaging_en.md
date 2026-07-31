@@ -50,6 +50,7 @@ The batch/PowerShell hybrid launcher:
 - If a healthy Manager predates the current `dist/manager.js`, performs a controlled shutdown and loads the current build.
 - If an unresponsive process owns port 8790, takes over only when its command line precisely identifies this project's absolute `dist/manager.js` or the relative `dist/manager.js` form used by packaged and older launchers: graceful `/manager/shutdown` first, then the verified process tree only if shutdown times out. The Node-process, port-owner, and Manager-health gates must still hold together.
 - If port 8790 belongs to another or unverifiable process, leaves it untouched and refuses to start a duplicate Manager.
+- Before loading the control plane, Manager also acquires `data/.runtime/manager-instance.lock`. Concurrent starts of the same workspace through a mapped drive, UNC path, the launcher, or direct `node dist/manager.js` are rejected with exit code `17`; a stale lock is reclaimed only after its recorded PID no longer exists.
 - Runs `npm.cmd run build` when the backend or WebGUI build is missing/stale, unless `-NoBuild` is passed.
 - If the Manager already runs, repairs only the WebGUI with `npm.cmd run webgui:build` when needed.
 - Starts `node dist\manager.js` in the background when no Manager is running.

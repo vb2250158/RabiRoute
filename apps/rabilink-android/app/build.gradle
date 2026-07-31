@@ -3,6 +3,8 @@ plugins {
     id "org.jetbrains.kotlin.android"
 }
 
+def mobileSlim = project.hasProperty("mobileSlim")
+
 android {
     namespace "com.rabi.link"
     compileSdk 34
@@ -17,6 +19,10 @@ android {
             storePassword "rabiroute"
             keyAlias "vela-debug"
             keyPassword "rabiroute"
+            enableV1Signing false
+            enableV2Signing true
+            enableV3Signing true
+            enableV4Signing false
         }
     }
 
@@ -24,8 +30,11 @@ android {
         applicationId "com.rabi.link"
         minSdk 31
         targetSdk 34
-        versionCode 4
-        versionName "0.3.1"
+        // The thin-phone package must always be an installable upgrade over
+        // the prior diagnostic build.  Keep the normal build metadata intact.
+        versionCode mobileSlim ? 11 : 4
+        versionName mobileSlim ? "0.3.8" : "0.3.1"
+        buildConfigField "boolean", "MOBILE_SLIM", mobileSlim ? "true" : "false"
         buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""
     }
 
@@ -50,16 +59,27 @@ android {
         jvmTarget = "1.8"
     }
 
+    // The regular phone build must not accidentally ship the glass test APK,
+    // reference AI models, or desktop/legacy ABIs.  Keep those only in the
+    // explicitly requested diagnostics build.
     sourceSets {
         main {
             java.srcDir("$rootDir/../../packages/android-sdk/rabiroute-sdk/src/main/java")
             java.srcDir("$rootDir/shared/src/main/java")
-            if (rokidAiSdkAssetsDir.exists()) {
+            if (!mobileSlim && rokidAiSdkAssetsDir.exists()) {
                 assets.srcDir(rokidAiSdkAssetsDir)
             }
         }
-        debug {
+        if (!mobileSlim) {
+            debug {
             assets.srcDir("$buildDir/generated/assets/glassApp/debug")
+            }
+        }
+    }
+
+    if (mobileSlim) {
+        defaultConfig {
+            ndk { abiFilters "arm64-v8a" }
         }
     }
 
@@ -81,8 +101,10 @@ tasks.register("copyGlassAppDebugApk", Copy) {
     rename { "rabi-glass-debug.apk" }
 }
 
-tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
-    dependsOn("copyGlassAppDebugApk")
+if (!project.hasProperty("mobileSlim")) {
+    tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
+        dependsOn("copyGlassAppDebugApk")
+    }
 }
 
 dependencies {
@@ -91,15 +113,30 @@ dependencies {
     implementation "androidx.activity:activity-ktx:1.7.2"
     implementation "androidx.health.connect:connect-client:1.1.0-alpha07"
     implementation "com.rokid.cxr:client-l:1.1.0"
-    implementation("com.rokid.security:phone.sdk:2.5.1-P") {
-        exclude group: "org.slf4j"
+    if (mobileSlim) {
+        // Phone releases delegate inference to RabiPC.  Keep these APIs only
+        // at compile time so the optional Rokid diagnostics screen remains
+        // buildable without shipping its model runtimes to every phone.
+        compileOnly("com.rokid.security:phone.sdk:2.5.1-P") {
+            exclude group: "org.slf4j"
+        }
+        compileOnly(name: "basic-1.4.3", ext: "aar")
+        compileOnly(name: "turenso-1.4.3", ext: "aar")
+        compileOnly(name: "nlpconsumer-1.4.3", ext: "aar")
+        compileOnly(name: "audioai-1.4.3", ext: "aar")
+    } else {
+        implementation("com.rokid.security:phone.sdk:2.5.1-P") {
+            exclude group: "org.slf4j"
+        }
+        implementation(name: "basic-1.4.3", ext: "aar")
+        implementation(name: "turenso-1.4.3", ext: "aar")
+        implementation(name: "nlpconsumer-1.4.3", ext: "aar")
+        implementation(name: "audioai-1.4.3", ext: "aar")
     }
     implementation "org.slf4j:slf4j-api:1.7.36"
-    implementation(name: "basic-1.4.3", ext: "aar")
-    implementation(name: "turenso-1.4.3", ext: "aar")
-    implementation(name: "nlpconsumer-1.4.3", ext: "aar")
-    implementation(name: "audioai-1.4.3", ext: "aar")
     implementation "com.google.code.gson:gson:2.8.5"
     implementation "io.reactivex.rxjava2:rxjava:2.1.12"
     testImplementation "junit:junit:4.13.2"
+    // Android provides org.json at runtime; local JVM tests need its implementation explicitly.
+    testImplementation "org.json:json:20231013"
 }

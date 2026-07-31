@@ -388,3 +388,38 @@ test("legacy RabiLink archived segments are imported into the canonical ledger",
   assert.deepEqual(items.map(item => item.text), ["归档眼镜消息", "当前眼镜消息"]);
   assert.equal(items[0].transport, "rabilink");
 });
+
+test("Feishu conversation context is isolated by source chat and shared with replies", () => {
+  const inboundA = messageContextFromHistoryRecord("feishu", {
+    time: 1,
+    rawMessage: "chat A",
+    messageId: "om-a",
+    adapterType: "feishu",
+    chatId: "oc-a",
+    groupId: "oc-a",
+    userId: "ou-user",
+    messageType: "text"
+  });
+  const inboundB = messageContextFromHistoryRecord("feishu", {
+    time: 2,
+    rawMessage: "chat B",
+    messageId: "om-b",
+    adapterType: "feishu",
+    chatId: "oc-b",
+    groupId: "oc-b",
+    userId: "ou-user",
+    messageType: "text"
+  });
+  const outboundA = messageContextFromOutboxEvent("feishu_reply_sent", "reply A", {
+    adapterType: "feishu",
+    targetType: "group",
+    groupId: "oc-a",
+    chatId: "oc-a",
+    text: "reply A"
+  }, 3);
+
+  assert.equal(inboundA?.conversationKey, "feishu:chat:oc-a");
+  assert.equal(inboundB?.conversationKey, "feishu:chat:oc-b");
+  assert.notEqual(inboundA?.conversationKey, inboundB?.conversationKey);
+  assert.equal(outboundA?.conversationKey, inboundA?.conversationKey);
+});

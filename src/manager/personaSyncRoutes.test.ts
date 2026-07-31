@@ -157,3 +157,40 @@ test("persona sync conflict control lets a local Agent inspect and resolve evide
   assert.equal(deleteBody.data.publish.status, "published");
   assert.equal(fs.existsSync(path.join(roleDir, "persona.md")), false);
 });
+
+test("persona manifest endpoint returns a bounded partial snapshot while refresh is slow", async (t) => {
+  const snapshot = {
+    schemaVersion: 1 as const,
+    generatedAt: new Date(0).toISOString(),
+    roles: []
+  };
+  const service = {
+    manifest: () => new Promise(() => undefined),
+    manifestSnapshot: () => snapshot
+  } as unknown as PersonaSyncService;
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!handlePersonaSyncApi(request, requestUrl, response, {
+      service,
+      coordinator: {} as PersonaSyncCoordinator,
+      token: () => "",
+      relay: () => ({ url: "", token: "", deviceId: "", deviceGuid: "" }),
+      manifestTimeoutMs: 20
+    })) response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+
+  const startedAt = Date.now();
+  const response = await request(port, "/api/persona-sync/manifest");
+  assert.ok(Date.now() - startedAt < 250);
+  assert.equal(response.status, 200);
+  const body = JSON.parse(response.text) as { data: typeof snapshot; scan: { state: string; partial: boolean } };
+  assert.deepEqual(body.data, snapshot);
+  assert.deepEqual(body.scan, {
+    state: "timeout",
+    partial: true,
+    deadlineMs: 20,
+    message: "Persona manifest refresh exceeded its deadline; returned the last persisted in-memory snapshot while Manager stayed responsive."
+  });
+});

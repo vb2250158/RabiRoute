@@ -74,10 +74,18 @@ class MainActivity : Activity() {
     private data class ConversationRow(
         val id: String,
         val title: String,
-        val enabled: Boolean,
+        val chatAvailable: Boolean,
         val running: Boolean,
         val latest: RabiChatStore.Message?,
         val unread: Int,
+        val route: RabiRouteInfo? = null,
+    )
+    private data class AvatarTarget(
+        val routeId: String,
+        val roleId: String,
+        val title: String,
+        val image: ImageView,
+        val status: TextView?,
     )
 
     private var selectedPc: RabiLinkPc? = null
@@ -99,16 +107,22 @@ class MainActivity : Activity() {
     private var routeLoadMessage = "正在读取 Rabi PC 上的聊天人格…"
     private var lastChatRuntimeAt = 0L
     private var runtimeReceiverRegistered = false
+    private val avatarTargets = mutableMapOf<String, MutableList<AvatarTarget>>()
     private val runtimeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            refreshConversationRuntime()
-            refreshChatIfChanged()
+            if (intent?.action == RabiPersonaAvatarEvents.ACTION_CHANGED) {
+                refreshPersonaAvatar(intent.getStringExtra(RabiPersonaAvatarEvents.EXTRA_ROLE_ID).orEmpty())
+            } else {
+                refreshConversationRuntime()
+                refreshChatIfChanged()
+            }
         }
     }
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         val saved = RabiLinkRelaySettings.load(this)
+        if (saved.configured) availableRoutes = RabiRouteMetadataCache.load(this, saved)
         activeRouteId = intentRoute(intent).ifBlank { state?.getString("active_route_id").orEmpty() }
         listScrollY = state?.getInt("conversation_list_scroll_y", 0) ?: 0
         val restored = runCatching { Screen.valueOf(state?.getString("screen").orEmpty()) }.getOrNull()
@@ -168,6 +182,7 @@ class MainActivity : Activity() {
         if (!firstRun && screen != Screen.SETTINGS && screen != Screen.SETUP) settingsReturnScreen = screen
         screen = if (firstRun) Screen.SETUP else Screen.SETTINGS
         showingSettings = true
+        avatarTargets.clear()
         chatMessages = null; chatScroll = null; composer = null; conversationListHost = null; conversationListScroll = null
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
         if (!firstRun) root.addView(appBar("设置", "连接、设备与诊断", "返回") { onBackPressed() })
@@ -189,6 +204,7 @@ class MainActivity : Activity() {
         screen = Screen.CONVERSATIONS
         showingSettings = false
         activeRouteId = ""
+        avatarTargets.clear()
         chatMessages = null; chatScroll = null; composer = null
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
         root.addView(appBar("消息", "选择一个人格开始聊天", null, "设置") { showSettings() })
@@ -210,15 +226,16 @@ class MainActivity : Activity() {
         screen = Screen.CHAT
         showingSettings = false
         activeRouteId = routeId
+        avatarTargets.clear()
         RabiConversationTarget.save(this, routeId)
         conversationListHost = null; conversationListScroll = null
         val route = availableRoutes.firstOrNull { it.id == routeId }
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
-        root.addView(appBar(routeTitle(routeId), routeStatus(route), "返回") { showConversationList() })
+        root.addView(appBar(routeTitle(routeId), routeStatus(route), "返回", avatarRoute = route) { showConversationList() })
         chatMessages = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(18)) }
         chatScroll = ScrollView(this).apply { addView(chatMessages) }
         root.addView(chatScroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        val canSend = route?.let { RabiConversationRules.isChatCapable(it.enabled, it.messageAdapters) } ?: !routesLoaded
+        val canSend = route?.let(::isRouteChatCapable) ?: !routesLoaded
         if (canSend) {
             val bottom = row().apply { setPadding(dp(8), dp(8), dp(8), dp(10)); setBackgroundColor(Color.WHITE); gravity = Gravity.BOTTOM }
             bottom.addView(secondary("附件") { pickPhoneMedia() }, LinearLayout.LayoutParams(dp(68), dp(52)))
@@ -261,8 +278,9 @@ class MainActivity : Activity() {
     private fun showConfigurationAssistant() {
         screen = Screen.CONFIG_ASSISTANT
         showingSettings = false
+        avatarTargets.clear()
         val routeId = RabiConversationTarget.load(this).ifBlank {
-            availableRoutes.firstOrNull { RabiConversationRules.isChatCapable(it.enabled, it.messageAdapters) }?.id.orEmpty()
+            availableRoutes.firstOrNull(::isRouteChatCapable)?.id.orEmpty()
         }
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
         root.addView(appBar("配置助手", "独立于普通聊天", "返回") { showSettings() })
@@ -297,18 +315,18 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
-    private fun appBar(title: String, subtitle: String, leading: String? = null, trailing: String? = null, action: () -> Unit): View =
+    private fun appBar(title: String, subtitle: String, leading: String? = null, trailing: String? = null, avatarRoute: RabiRouteInfo? = null, action: () -> Unit): View =
         LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8)); setBackgroundColor(RabiMobileUi.surface)
             if (leading != null) addView(RabiMobileUi.compactAction(this@MainActivity, leading, action), LinearLayout.LayoutParams(-2, dp(48)).apply { setMargins(0, 0, dp(10), 0) })
-            else addView(ImageView(this@MainActivity).apply {
-                setImageResource(R.drawable.rabiroute_icon); contentDescription = "Rabi"; scaleType = ImageView.ScaleType.CENTER_CROP
-            }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { setMargins(0, 0, dp(10), 0) })
+            val avatar = RabiMobileUi.avatar(this@MainActivity, title)
+            avatarRoute?.let { bindPersonaAvatar(it, avatar, null) }
+            addView(avatar, LinearLayout.LayoutParams(dp(44), dp(44)).apply { setMargins(0, 0, dp(10), 0) })
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(TextView(this@MainActivity).apply { text = title; textSize = 20f; typeface = Typeface.DEFAULT_BOLD; setTextColor(RabiMobileUi.primary) })
-                addView(TextView(this@MainActivity).apply { text = subtitle; textSize = 12f; maxLines = 1; setTextColor(RabiMobileUi.muted) })
+                addView(TextView(this@MainActivity).apply { text = subtitle; textSize = 12f; maxLines = 2; setTextColor(RabiMobileUi.muted) })
             }, LinearLayout.LayoutParams(0, -2, 1f))
             if (trailing != null) addView(RabiMobileUi.compactAction(this@MainActivity, trailing, action), LinearLayout.LayoutParams(-2, dp(48)))
         }
@@ -316,6 +334,8 @@ class MainActivity : Activity() {
     private fun loadRouteTargets() {
         val relay = RabiLinkRelaySettings.load(this)
         if (!relay.configured) return
+        routesLoaded = false
+        routeLoadFailed = false
         routeLoadMessage = "正在读取 Rabi PC 上的聊天人格…"
         runAsync({ sdk.getMobileRoutes(relay.baseUrl, relay.token, "") }, { routes ->
             routesLoaded = true; routeLoadFailed = false
@@ -323,7 +343,8 @@ class MainActivity : Activity() {
             // RabiLink adapter remain chat-capable; persona-only rows stay visible
             // with the existing configuration guidance instead of disappearing.
             availableRoutes = routes
-            val enabled = availableRoutes.filter { RabiConversationRules.isChatCapable(it.enabled, it.messageAdapters) }
+            RabiRouteMetadataCache.save(this@MainActivity, relay, routes)
+            val enabled = availableRoutes.filter(::isRouteChatCapable)
             val savedTarget = RabiConversationTarget.load(this)
             val migrationTarget = enabled.firstOrNull { it.id == savedTarget }?.id ?: enabled.singleOrNull()?.id.orEmpty()
             RabiChatStore(this).migrateLegacyMessages(migrationTarget)
@@ -332,7 +353,11 @@ class MainActivity : Activity() {
         }, error = { error ->
             routesLoaded = true; routeLoadFailed = true
             val unauthorized = error.message.orEmpty().contains("unauthorized", ignoreCase = true) || error.message.orEmpty().contains("401")
-            routeLoadMessage = if (unauthorized) "登录已失效，请到设置重新粘贴移动端登录码。" else "无法读取聊天人格：${error.message ?: "连接失败"}"
+            routeLoadMessage = if (unauthorized) {
+                "移动端登录已失效，请到设置重新粘贴登录码。"
+            } else {
+                "暂时无法从 Rabi PC 更新人格与入口状态；这不代表所有入口都已掉线。"
+            }
             if (screen == Screen.CONVERSATIONS) renderConversationList()
             if (screen == Screen.CHAT) renderChat()
         })
@@ -341,16 +366,17 @@ class MainActivity : Activity() {
     private fun renderConversationList() {
         val host = conversationListHost ?: return
         host.removeAllViews()
+        avatarTargets.clear()
         if (!routesLoaded && availableRoutes.isEmpty()) {
             host.addView(conversationEmpty("正在加载会话", routeLoadMessage, "重新加载") { loadRouteTargets() })
             return
         }
         val store = RabiChatStore(this)
         val routeIds = availableRoutes.map { it.id }.toMutableSet()
-        val rows = availableRoutes.map { route ->
+        val rows = availableRoutes.filter { RabiConversationRules.isVisibleInConversationList(it.id) }.map { route ->
             ConversationRow(route.id, personaTitle(route),
-                RabiConversationRules.isChatCapable(route.enabled, route.messageAdapters), route.running,
-                store.latest(route.id), store.unreadCount(route.id))
+                isRouteChatCapable(route), route.running,
+                store.latest(route.id), store.unreadCount(route.id), route)
         }.toMutableList()
         store.conversationIds().filter { it !in routeIds }.forEach { id ->
             rows.add(ConversationRow(id, if (id == RabiConversationRules.LEGACY_CONVERSATION_ID) "Rabi（旧会话）" else "已下线会话",
@@ -365,6 +391,14 @@ class MainActivity : Activity() {
             ) { if (routeLoadFailed) loadRouteTargets() else showSettings() })
             return
         }
+        if (!routesLoaded || routeLoadFailed) {
+            host.addView(RabiMobileUi.guidance(this, RabiSetupGuidance(
+                if (routeLoadFailed) "状态暂未刷新" else "正在刷新入口状态",
+                if (routeLoadFailed) routeLoadMessage else "当前先显示上次安全缓存的人格列表。",
+                if (routeLoadFailed) "检查手机与 Rabi PC 的连接后点按重试。" else "刷新完成后会自动更新每个入口。",
+                if (routeLoadFailed) RabiGuidanceTone.WARNING else RabiGuidanceTone.INFO,
+            )).apply { setOnClickListener { loadRouteTargets() } })
+        }
         rows.forEachIndexed { index, item ->
             host.addView(conversationRow(item))
             if (index < rows.lastIndex) host.addView(View(this).apply { setBackgroundColor(RabiMobileUi.border) }, LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(dp(76), 0, 0, 0) })
@@ -376,29 +410,49 @@ class MainActivity : Activity() {
         orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(14), dp(12), dp(14), dp(12)); setBackgroundColor(RabiMobileUi.surface)
         isClickable = true; isFocusable = true; minimumHeight = dp(76)
-        contentDescription = "会话 ${item.title}${if (item.unread > 0) "，${item.unread} 条未读" else ""}"
-        addView(RabiMobileUi.avatar(this@MainActivity, item.title), LinearLayout.LayoutParams(dp(50), dp(50)).apply { setMargins(0, 0, dp(12), 0) })
+        val adapterStates = item.route?.let(::routeAdapterStates).orEmpty()
+        val currentEndpointSummary = item.route?.let {
+            RabiConversationRules.routeStatus(item.chatAvailable, item.running, adapterStates)
+        }.orEmpty()
+        val endpointSummary = when {
+            currentEndpointSummary.isBlank() -> ""
+            routeLoadFailed -> "上次状态 · 暂未刷新 · $currentEndpointSummary"
+            !routesLoaded -> "上次状态 · 正在刷新 · $currentEndpointSummary"
+            else -> currentEndpointSummary
+        }
+        contentDescription = "会话 ${item.title}${if (endpointSummary.isNotBlank()) "，$endpointSummary" else ""}${if (item.unread > 0) "，${item.unread} 条未读" else ""}"
+        val avatar = RabiMobileUi.avatar(this@MainActivity, item.title)
+        val avatarStatus = TextView(this@MainActivity).apply {
+            textSize = 10f; setTextColor(RabiMobileUi.muted); gravity = Gravity.END
+        }
+        item.route?.let { bindPersonaAvatar(it, avatar, avatarStatus) }
+        addView(avatar, LinearLayout.LayoutParams(dp(50), dp(50)).apply { setMargins(0, 0, dp(12), 0) })
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
             addView(TextView(this@MainActivity).apply {
                 text = item.title; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(RabiMobileUi.text); maxLines = 1
             })
             addView(TextView(this@MainActivity).apply {
-                text = if (!item.enabled) "尚未启用聊天 · 点这里查看配置方法" else preview(item.latest)
-                textSize = 13f; setTextColor(if (item.enabled) RabiMobileUi.muted else Color.rgb(146, 64, 14)); maxLines = 1
+                text = if (!item.chatAvailable) "尚未启用手机聊天 · 点按查看配置方法" else preview(item.latest)
+                textSize = 13f; setTextColor(if (item.chatAvailable) RabiMobileUi.muted else Color.rgb(146, 64, 14)); maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(5), 0, 0)
+            })
+            if (item.route != null) addView(TextView(this@MainActivity).apply {
+                text = endpointSummary
+                textSize = 11f
+                setTextColor(if (RabiConversationRules.adapterStatusNeedsAttention(adapterStates)) Color.rgb(146, 64, 14) else RabiMobileUi.secondary)
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(4), 0, 0)
             })
         }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.END
             addView(TextView(this@MainActivity).apply { text = formatListTime(item.latest?.createdAt ?: 0); textSize = 11f; setTextColor(RabiMobileUi.muted); gravity = Gravity.END })
+            if (item.route != null) addView(avatarStatus, LinearLayout.LayoutParams(-2, -2).apply { setMargins(0, dp(3), 0, 0) })
             if (item.unread > 0) addView(RabiMobileUi.unreadBadge(this@MainActivity, item.unread), LinearLayout.LayoutParams(-2, dp(24)).apply { setMargins(0, dp(7), 0, 0) })
         }, LinearLayout.LayoutParams(-2, -2))
-        setOnClickListener {
-            if (item.enabled) showConversationDetail(item.id)
-            else if (item.latest != null) showConversationDetail(item.id)
-            else { toast("这个人格还没启用 RabiLink 消息端，设置页会告诉你去哪里配置"); showSettings() }
-        }
+        setOnClickListener { showConversationDetail(item.id) }
     }
 
     private fun conversationEmpty(title: String, reason: String, actionText: String, action: () -> Unit): View =
@@ -415,7 +469,7 @@ class MainActivity : Activity() {
         val text = composer?.text?.toString()?.trim().orEmpty()
         if (text.isBlank() || activeRouteId.isBlank()) return
         val route = availableRoutes.firstOrNull { it.id == activeRouteId }
-        if (routesLoaded && (route == null || !RabiConversationRules.isChatCapable(route.enabled, route.messageAdapters))) {
+        if (routesLoaded && (route == null || !isRouteChatCapable(route))) {
             toast("这个会话当前不能发送，请先在设置中启用 RabiLink 消息端")
             return
         }
@@ -496,7 +550,59 @@ class MainActivity : Activity() {
     }
 
     private fun personaTitle(route: RabiRouteInfo): String =
-        RabiConversationRules.personaDisplayName(route.agentRoleId, route.name, route.configName, route.id)
+        RabiConversationRules.personaDisplayName(route.personaDisplayName, route.agentRoleId, route.name, route.configName, route.id)
+
+    private fun personaAvatarVersion(route: RabiRouteInfo): String =
+        getSharedPreferences("rabi_persona_avatars", MODE_PRIVATE).getString("version:${route.agentRoleId}", "").orEmpty()
+            .ifBlank { route.avatarVersion }
+
+    private fun personaAvatarUrl(route: RabiRouteInfo): String {
+        val role = route.agentRoleId.trim()
+        val version = personaAvatarVersion(route)
+        val relay = RabiLinkRelaySettings.load(this)
+        val configured = route.avatarConfigured || getSharedPreferences("rabi_persona_avatars", MODE_PRIVATE).getBoolean("configured:$role", false)
+        if (!configured || role.isBlank() || version.isBlank() || !relay.configured) return ""
+        val encodedRole = java.net.URLEncoder.encode(role, "UTF-8")
+        val encodedVersion = java.net.URLEncoder.encode(version, "UTF-8")
+        return "${relay.baseUrl.trimEnd('/')}/api/rabilink/mobile/personas/$encodedRole/avatar?v=$encodedVersion"
+    }
+
+    private fun bindPersonaAvatar(route: RabiRouteInfo, image: ImageView, avatarStatus: TextView?, register: Boolean = true) {
+        val role = route.agentRoleId.trim()
+        val title = personaTitle(route)
+        if (register && role.isNotBlank()) {
+            avatarTargets.getOrPut(role) { mutableListOf() }
+                .add(AvatarTarget(route.id, role, title, image, avatarStatus))
+        }
+        val version = personaAvatarVersion(route)
+        val url = personaAvatarUrl(route)
+        if (role.isBlank() || version.isBlank() || url.isBlank()) {
+            image.tag = "unavailable\u0000$role\u0000$version"
+            avatarStatus?.text = "头像暂不可用"
+            return
+        }
+        val relay = RabiLinkRelaySettings.load(this)
+        RabiPersonaAvatarCache.load(this, image, url, relay.token, role, version) { state ->
+            avatarStatus?.text = when (state) {
+                RabiAvatarLoadRules.State.LOADING -> "头像加载中"
+                RabiAvatarLoadRules.State.VALIDATING -> "头像校验中"
+                RabiAvatarLoadRules.State.READY -> ""
+                RabiAvatarLoadRules.State.STALE -> "头像暂为旧缓存"
+                RabiAvatarLoadRules.State.UNAVAILABLE -> "头像暂不可用"
+            }
+        }
+    }
+
+    private fun refreshPersonaAvatar(changedRoleId: String) {
+        val targets = avatarTargets.entries
+            .filter { RabiConversationRules.shouldRefreshAvatar(changedRoleId, it.key) }
+            .flatMap { it.value.toList() }
+        targets.forEach { target ->
+            val route = availableRoutes.firstOrNull { it.id == target.routeId } ?: return@forEach
+            target.image.setImageDrawable(RabiMobileUi.avatar(this, target.title).drawable)
+            bindPersonaAvatar(route, target.image, target.status, register = false)
+        }
+    }
 
     private fun routeTitle(routeId: String): String = availableRoutes.firstOrNull { it.id == routeId }?.let(::personaTitle)
         ?: if (routeId == RabiConversationRules.LEGACY_CONVERSATION_ID) "Rabi（旧会话）" else "Rabi"
@@ -504,10 +610,48 @@ class MainActivity : Activity() {
     private fun routeStatus(route: RabiRouteInfo?): String = when {
         route == null && !routesLoaded -> "正在确认聊天状态…"
         route == null -> "历史会话 · 只读"
-        !route.enabled -> "RabiLink 消息端未启用"
-        route.running -> "Rabi PC 在线"
-        else -> "已配置 · 等待 Rabi PC 在线"
+        else -> {
+            val current = RabiConversationRules.routeStatus(
+                isRouteChatCapable(route),
+                route.running,
+                routeAdapterStates(route),
+            )
+            when {
+                routeLoadFailed -> "上次状态 · 暂未刷新 · $current"
+                !routesLoaded -> "上次状态 · 正在刷新 · $current"
+                else -> current
+            }
+        }
     }
+
+    private fun isRouteChatCapable(route: RabiRouteInfo): Boolean {
+        val advertised = route.rawJson.takeIf { it.has("chatAvailable") }?.optBoolean("chatAvailable")
+        return RabiConversationRules.isChatCapable(
+            route.enabled,
+            route.messageAdapters,
+            jsonStringList(route.rawJson.optJSONArray("messageAdaptersDisabled")),
+            advertised,
+        )
+    }
+
+    private fun routeAdapterStates(route: RabiRouteInfo): List<RabiAdapterPresentation> {
+        val values = route.rawJson.optJSONArray("adapterStates") ?: return emptyList()
+        return (0 until values.length()).mapNotNull { index ->
+            values.optJSONObject(index)?.let { item ->
+                val type = item.optString("type").trim()
+                val label = item.optString("label").trim()
+                val state = item.optString("state").trim()
+                val summary = item.optString("summary").trim()
+                if (type.isBlank() || summary.isBlank()) null
+                else RabiAdapterPresentation(type, label, state, summary)
+            }
+        }
+    }
+
+    private fun jsonStringList(values: org.json.JSONArray?): List<String> =
+        (0 until (values?.length() ?: 0)).mapNotNull { index ->
+            values?.optString(index)?.trim()?.takeIf(String::isNotBlank)
+        }
 
     private fun preview(message: RabiChatStore.Message?): String = when {
         message == null -> "还没有消息"
@@ -602,7 +746,10 @@ class MainActivity : Activity() {
             ContextCompat.registerReceiver(
                 this,
                 runtimeReceiver,
-                IntentFilter("com.rabi.link.conversation.RUNTIME_UPDATED"),
+                IntentFilter().apply {
+                    addAction("com.rabi.link.conversation.RUNTIME_UPDATED")
+                    addAction(RabiPersonaAvatarEvents.ACTION_CHANGED)
+                },
                 ContextCompat.RECEIVER_NOT_EXPORTED,
             )
             runtimeReceiverRegistered = true
@@ -611,6 +758,9 @@ class MainActivity : Activity() {
         refreshChatIfChanged()
         if (screen == Screen.CHAT) renderChat()
         if (screen == Screen.CONVERSATIONS) renderConversationList()
+        if (screen == Screen.CHAT) {
+            availableRoutes.firstOrNull { it.id == activeRouteId }?.agentRoleId?.let(::refreshPersonaAvatar)
+        }
     }
     override fun onPause() {
         if (runtimeReceiverRegistered) {

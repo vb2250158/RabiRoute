@@ -32,6 +32,8 @@ The **Open NapCat** button for a QQ instance follows this order:
 
 Health scans remain read-only. Login, startup, and configuration repair run only through an explicit user action handled by `POST /api/message/napcat-ensure-ready`.
 
+Start, restart, and stop actions are serialized by the bound QQ account. A double click, two concurrent callers, or mapped-drive and UNC paths that resolve to the same NapCat installation can therefore enter only one lifecycle operation. Immediately before spawning, RabiRoute rechecks the live OneBot login and reuses a ready instance instead of creating a second QQNT/NapCat process tree. This guard protects process lifecycle only; it does not bypass QR login, CAPTCHA, device confirmation, or any other QQ security check.
+
 The UI reports four separate layers: WebUI reachability, QQ authentication, OneBot HTTP health, and the RabiRoute WebSocket connection. A reachable WebUI does not mean QQ is logged in, and a logged-in QQ does not mean messages are reaching RabiRoute.
 
 **Use online instance** only repoints the current QQ card's HTTP endpoint, WebUI endpoint, and working directory to the confirmed live instance. It does not sign QQ out, stop the old process, or silently migrate the login. If that instance is not yet routed to the current gateway, the UI continues to request OneBot WebSocket repair.

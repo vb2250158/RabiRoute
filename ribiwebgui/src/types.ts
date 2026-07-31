@@ -31,7 +31,7 @@ export type {
 
 export type NotificationRule = NotificationRuleDefinition;
 export type NapCatInstance = NapCatInstanceDefinition;
-export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "none";
+export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "feishu" | "none";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -93,6 +93,17 @@ export type MessageAdapterScanResult = {
   label: string;
   maturity: AgentMaturity;
   installed: boolean;
+  scan?: {
+    state: "ok" | "timeout" | "error";
+    durationMs: number;
+    message?: string;
+  };
+  health?: {
+    state: "healthy" | "degraded" | "offline" | "needs_login" | "unconfigured" | "unknown" | "timeout" | "error";
+    message: string;
+    available?: number;
+    total?: number;
+  };
   installCandidates?: AdapterInstallCandidate[];
   endpoints?: AdapterEndpoint[];
   requirements?: AdapterRequirement[];

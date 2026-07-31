@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-weixin-protected-session",
+  "title": "个人微信恢复会话时保留凭据并保守判定失效",
+  "focus": "个人微信安全会话恢复与显式重新登录边界",
+  "content": "个人微信 token、账号标识、同步游标和 context token 在 Windows 使用当前用户 DPAPI 保护，其他平台使用权限受限的本机密钥与 AES-256-GCM。启动先尝试安全恢复，二维码只在用户明确请求后生成。网络超时、HTTP 5xx 和扫描超时只标记暂时不可达并保留凭据；只有服务端 `-14` 或 HTTP 401/403 明确拒绝才进入重新扫码，历史消息数量不参与当前登录判断。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：个人微信受保护恢复和保守失效判定"
+  },
+  "createdAt": "2026-07-31T14:30:00+08:00",
+  "updatedAt": "2026-07-31T14:30:00+08:00",
+  "keywords": ["weixin", "个人微信", "DPAPI", "AES-256-GCM", "会话恢复", "显式二维码", "凭据保留", "HTTP 401", "HTTP 403", "错误 -14", "登录状态"]
+}

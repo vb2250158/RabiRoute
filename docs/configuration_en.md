@@ -111,6 +111,7 @@ Windows paths may use either slash style in WebUI. Only hand-written JSON requir
 | `rabilink` | experimental | Relay/worker/device observation and downlink path. |
 | `wecom` | experimental | WeCom smart-bot WebSocket and Outbox group sends. |
 | `weixin` | experimental prototype | OpenClaw iLink QR login and long-poll ingress for personal Weixin. Text and allowlisted local-file replies are source-session-only; inbound media is record-only. |
+| `feishu` | implemented locally; real credentials pending | Feishu enterprise-app event callback with signature/encryption checks, durable deduplication, and source-chat text replies. |
 | `wearable` | experimental | Structured wearable health observations through the global RabiLink Relay worker. Samples enter a role-scoped timeline; only threshold or sleep-state alerts reach the Agent as `wearable_health_alert`. |
 
 Named platforms should use their dedicated adapter rather than being folded into the generic webhook.
@@ -144,7 +145,11 @@ Record-first sources such as FenneNote can be selected through `routeVariables.r
 
 ## Personal Weixin prototype
 
-`weixinBaseUrl` and `weixinBotType` configure the OpenClaw/iLink prototype and default to `https://ilinkai.weixin.qq.com` and `3`. `WEIXIN_BASE_URL` and `WEIXIN_BOT_TYPE` may override them. QR-login tokens, sync cursors, and per-session context tokens stay under runtime `data/` and must never enter public examples. WebGUI displays the QR code and login status. The first version forwards text as `weixin_message` and records inbound media without waking the Agent. Outbox can reply to a source session with a known context token using text or a local file that passes `allowedFileRoots` real-path validation; files are encrypted with AES-128-ECB, uploaded to the Weixin CDN, and sent as file items. It cannot proactively select arbitrary contacts. Full account lifecycle controls such as logout/switching and real-account acceptance are not implemented.
+`weixinBaseUrl` and `weixinBotType` configure the OpenClaw/iLink prototype and default to `https://ilinkai.weixin.qq.com` and `3`. `WEIXIN_BASE_URL` and `WEIXIN_BOT_TYPE` may override them. QR-login tokens, account identifiers, sync cursors, and per-session context tokens stay protected under runtime `data/` and must never enter examples or logs. On restart, WebGUI distinguishes restoring, restored, temporarily unreachable with credentials retained, explicitly invalid, and never logged in. A QR is fetched only after the user explicitly clicks **Generate login QR**; temporary network/5xx/scan failures never clear the session, while explicit `-14` or HTTP 401/403 rejection does. Historical message counts do not imply current authentication. Outbox remains source-session-only and real-account longevity is still unverified.
+
+## Feishu enterprise-app endpoint
+
+`feishuAppId`, `feishuAppSecret`, `feishuVerificationToken`, and `feishuEncryptKey` configure one Feishu enterprise application. `feishuWebhookPort` and `feishuWebhookPath` configure the local callback listener. Keep `feishuEventSubscriptionEnabled` false until the platform-side HTTPS callback and `im.message.receive_v1` subscription are confirmed. The adapter handles URL challenges, validates the raw-body signature and Verification Token, decrypts Encrypt Key payloads, persists `event_id` deduplication, isolates context by source `chat_id`, and sends text only back to that source chat under adapter output policy. An incoming-bot webhook cannot replace these application credentials. See [Feishu Endpoint Integration](feishu-integration_en.md).
 
 ## Multiple routes and shared roles
 

@@ -80,6 +80,12 @@ First check for a new `group-messages.jsonl` or `private-messages.jsonl` record.
 
 Reachable OneBot HTTP does not prove that the QQ core can send. Check login, quick login, device verification, Windows time, and NapCat logs.
 
+## Message-endpoint scan times out or reports partial availability
+
+`GET /api/scan/message-adapters` is a strictly read-only diagnostic. It does not start a Route or NapCat, write configuration, trigger QR login, or run automatic repair. Independent probes start concurrently under one shared deadline. `scan.partial=true` means at least one probe timed out or failed; completed results from the other endpoints remain available.
+
+Interpret state per endpoint and per instance. `QQ available` requires OneBot health and cannot be inferred from a reachable WebUI. A logged-out personal-Weixin adapter affects only personal Weixin. The watchdog summarizes a single endpoint error as `degraded`; only system-level Manager, Route, or Agent-delivery errors make the whole patrol `error`.
+
 A failed Outbox attempt retains `failed` and draft data. There is no generic automatic retry queue; repair login, then retry intentionally to avoid duplicates.
 
 ## Codex receives nothing
@@ -100,7 +106,11 @@ If the launcher reports a listener on port `8790` but `/meta` is not stably resp
 
 Run `Start-RabiRoute-Tray.bat` again. The launcher inspects the port owner's command line and performs bounded takeover only for an old process that precisely references this project's `dist/manager.js`: graceful shutdown first, then the verified process tree only after timeout. Unknown processes remain untouched. The launcher also reloads a healthy Manager when the current `dist` is newer than the running process.
 
+Manager also acquires a workspace-level instance lock before loading its control plane. Exit code `17` from a second startup path means a live Manager for that workspace still owns the lock; do not keep relaunching it. Check `/meta` and the port owner first. A later start reclaims the lock only after its recorded PID no longer exists.
+
 After recovery, verify separately that local or LAN `/meta` responds, Relay can become online later, remote `/api/events` and `/api/speech/events` reconnect, and media Range requests still return `206`. Local and LAN access should remain available while Relay is offline, without repeated Manager restarts.
+
+When remote WebGUI cannot reach the selected PC Manager, API callers receive structured `RABI_PC_WEBGUI_UNAVAILABLE`; a response deadline returns `RABI_PC_WEBGUI_TIMEOUT`. Both include `retryable`, `Retry-After`, and a diagnostic request ID. Browser navigation shows the same ID instead of a blank or silent 502. Correlate that ID with Relay logs, then check the PC `/meta` endpoint and Manager logs; do not treat the 502 as success or blindly repeat a write request.
 
 If plan approval submission coincides with a Manager restart or a temporary network interruption, the page now reports the connection problem explicitly and preserves the feedback text, attachments, and the same idempotent `feedbackId`. Wait until the header shows `Manager connected` or `/meta` responds, then retry directly. Do not retype the feedback or create another approval entry because an older build displayed the raw browser error `Failed to fetch`.
 

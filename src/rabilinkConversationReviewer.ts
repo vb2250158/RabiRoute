@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { notifyCodex, notifyCodexWhenIdle, type CodexIdleNotificationResult } from "./codexRuntime.js";
+import {
+  notifyCodex,
+  notifyCodexWhenIdle,
+  type CodexIdleNotificationResult,
+  type CodexMonitorThread
+} from "./codexRuntime.js";
 import { appendAdapterLog } from "./history.js";
 import {
   readRabiLinkConversationTimeline,
@@ -21,6 +26,9 @@ type ReviewState = {
   lastScheduledUserEntryId?: string;
   lastHandledReviewRequestId?: string;
   lastScheduledAt?: string;
+  lastDeliveryThreadId?: string;
+  lastDeliveryThreadName?: string;
+  lastDeliveryKind?: "manual" | "automatic" | "reflection";
 };
 
 export type RabiLinkConversationReviewResult =
@@ -74,6 +82,17 @@ function readReviewState(dataDir: string): ReviewState {
         : undefined,
       lastScheduledAt: typeof value.lastScheduledAt === "string" && Number.isFinite(Date.parse(value.lastScheduledAt))
         ? value.lastScheduledAt
+        : undefined,
+      lastDeliveryThreadId: typeof value.lastDeliveryThreadId === "string"
+        ? value.lastDeliveryThreadId || undefined
+        : undefined,
+      lastDeliveryThreadName: typeof value.lastDeliveryThreadName === "string"
+        ? value.lastDeliveryThreadName || undefined
+        : undefined,
+      lastDeliveryKind: value.lastDeliveryKind === "manual"
+        || value.lastDeliveryKind === "automatic"
+        || value.lastDeliveryKind === "reflection"
+        ? value.lastDeliveryKind
         : undefined
     };
   } catch {
@@ -109,6 +128,14 @@ function latestEntry(entries: RabiLinkConversationEntry[]): RabiLinkConversation
 
 function routeProfileIds(entries: RabiLinkConversationEntry[]): string[] {
   return [...new Set(entries.flatMap(entry => entry.routeProfileId?.trim() ? [entry.routeProfileId.trim()] : []))];
+}
+
+function deliveredThread(value: unknown): CodexMonitorThread | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = value as Partial<CodexMonitorThread>;
+  if (typeof candidate.id !== "string" || !candidate.id.trim()) return undefined;
+  if (typeof candidate.threadName !== "string" || !candidate.threadName.trim()) return undefined;
+  return candidate as CodexMonitorThread;
 }
 
 export function buildRabiLinkConversationReviewPrompt(input: {
@@ -358,20 +385,25 @@ export class RabiLinkConversationReviewer {
       reflection
     });
 
+    let deliveryThread: CodexMonitorThread | undefined;
     if (manual) {
-      await this.notifyNow(prompt);
+      deliveryThread = deliveredThread(await this.notifyNow(prompt));
     } else {
       const delivery = await this.notifyWhenIdle(prompt);
       if (delivery.status === "busy") {
         return { status: "busy", pendingUserCount: pendingUserEntries.length, manual: false, reflection };
       }
+      deliveryThread = delivery.thread;
     }
 
     writeReviewState(this.dataDir, {
       schemaVersion: 1,
       lastScheduledUserEntryId: latestEntry(pendingUserEntries)?.entryId ?? state.lastScheduledUserEntryId,
       lastHandledReviewRequestId: latestEntry(pendingReviewRequests)?.entryId ?? state.lastHandledReviewRequestId,
-      lastScheduledAt: new Date(this.now()).toISOString()
+      lastScheduledAt: new Date(this.now()).toISOString(),
+      lastDeliveryThreadId: deliveryThread?.id,
+      lastDeliveryThreadName: deliveryThread?.threadName,
+      lastDeliveryKind: manual ? "manual" : reflection ? "reflection" : "automatic"
     });
     appendAdapterLog("rabilink", {
       event: manual
@@ -388,7 +420,9 @@ export class RabiLinkConversationReviewer {
         ledgerPath: rabiLinkConversationLedgerPath(this.dataDir),
         pendingUserCount: pendingUserEntries.length,
         manual,
-        reflection
+        reflection,
+        deliveryThreadId: deliveryThread?.id,
+        deliveryThreadName: deliveryThread?.threadName
       }
     });
     return { status: "delivered", pendingUserCount: pendingUserEntries.length, manual, reflection, prompt };

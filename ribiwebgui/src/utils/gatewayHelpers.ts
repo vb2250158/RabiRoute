@@ -219,6 +219,7 @@ export function adapterLabel(type: string): string {
   if (type === "wearable") return "智能手表/手环";
   if (type === "wecom") return "企业微信 / WeCom";
   if (type === "weixin") return "个人微信 / Weixin";
+  if (type === "feishu") return "飞书 / Feishu";
   if (type === "webhook") return "通用 Webhook";
   if (type === "disabled") return "已禁用";
   return type;
@@ -233,7 +234,7 @@ export function isWebhookLikeAdapter(type: string): boolean {
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
-  return type === "napcat" || type === "wecom" || type === "weixin" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
+  return type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
 }
 
 export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean {
@@ -247,6 +248,7 @@ export function adapterSourceAliases(type: string): string[] {
   if (type === "rabilink") return ["rabilink", "rabi_link", "rabi-link", "rokid", "rokid_glass", "rizon", "lingzhu", "relay", "服务器", "直连", "乐奇", "乐棋"];
   if (type === "wearable") return ["wearable", "watch", "band", "health", "smartwatch", "手表", "手环", "健康", "心率", "睡眠"];
   if (type === "wecom") return ["wecom", "wechat-work", "企业微信", "企微"];
+  if (type === "feishu") return ["feishu", "lark", "飞书"];
   if (type === "webhook") return ["webhook", "generic_webhook", "generic-webhook"];
   return [type];
 }
@@ -255,6 +257,7 @@ export function adapterDefaultWebhookPath(type: string): string {
   if (type === "fennenote") return "/fennenote";
   if (type === "xiaoai") return "/xiaoai";
   if (type === "rabilink") return "/rabilink";
+  if (type === "feishu") return "/feishu";
   return "/webhook";
 }
 
@@ -328,6 +331,15 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     gateway.wecomBotId = gateway.wecomBotId || "";
     gateway.wecomBotSecret = gateway.wecomBotSecret || "";
     gateway.wecomWsUrl = gateway.wecomWsUrl || "";
+  }
+  if (adapters.includes("feishu")) {
+    gateway.feishuAppId = gateway.feishuAppId || "";
+    gateway.feishuAppSecret = gateway.feishuAppSecret || "";
+    gateway.feishuVerificationToken = gateway.feishuVerificationToken || "";
+    gateway.feishuEncryptKey = gateway.feishuEncryptKey || "";
+    gateway.feishuEventSubscriptionEnabled = gateway.feishuEventSubscriptionEnabled === true;
+    gateway.feishuWebhookPort = Number(gateway.feishuWebhookPort || Number(gateway.gatewayPort || 8790) + 1);
+    gateway.feishuWebhookPath = gateway.feishuWebhookPath || adapterDefaultWebhookPath("feishu");
   }
 }
 

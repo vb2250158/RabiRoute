@@ -36,7 +36,7 @@ export type RabiLinkRelayRuntimeOptions = {
   relayWriteTimeoutMs?: number;
   relayWriteAttempts?: number;
   onStatus?: (status: RabiLinkRelayRuntimeStatus) => void;
-  onEvent?: (eventType: string) => void;
+  onEvent?: (eventType: string, data: Record<string, unknown>) => void;
 };
 
 const RETRY_DELAY_MS = 3000;
@@ -122,7 +122,7 @@ async function relayJson(
 async function consumeRelayEvents(
   config: RabiLinkRelayRuntimeConfig,
   signal: AbortSignal,
-  onEvent: (eventType: string) => void
+  onEvent: (eventType: string, data: Record<string, unknown>) => void
 ): Promise<void> {
   const params = new URLSearchParams({
     ...workerIdentity(config),
@@ -142,6 +142,8 @@ async function consumeRelayEvents(
   const decoder = new TextDecoder();
   let buffer = "";
   let eventType = "message";
+  let dataLines: string[] = [];
+  let hasEventFields = false;
   try {
     while (!signal.aborted) {
       const { done, value } = await reader.read();
@@ -153,10 +155,16 @@ async function consumeRelayEvents(
         const line = buffer.slice(0, newline).replace(/\r$/, "");
         buffer = buffer.slice(newline + 1);
         if (!line) {
-          onEvent(eventType);
+          if (hasEventFields) onEvent(eventType, parseEventData(dataLines.join("\n")));
           eventType = "message";
+          dataLines = [];
+          hasEventFields = false;
         } else if (line.startsWith("event:")) {
           eventType = line.slice(6).trim() || "message";
+          hasEventFields = true;
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).replace(/^ /, ""));
+          hasEventFields = true;
         }
       }
     }
@@ -595,7 +603,7 @@ export class RabiLinkRelayRuntime {
   };
   private readonly options: Required<RabiLinkRelayRuntimeOptions>;
   private readonly onStatus?: (status: RabiLinkRelayRuntimeStatus) => void;
-  private readonly onEvent?: (eventType: string) => void;
+  private readonly onEvent?: (eventType: string, data: Record<string, unknown>) => void;
 
   constructor(options: RabiLinkRelayRuntimeOptions = {}) {
     this.onStatus = options.onStatus;
@@ -747,9 +755,9 @@ export class RabiLinkRelayRuntime {
     try {
       while (this.active(generation, signal)) {
         try {
-          await consumeRelayEvents(config, signal, (eventType) => {
+          await consumeRelayEvents(config, signal, (eventType, data) => {
             try {
-              this.onEvent?.(eventType);
+              this.onEvent?.(eventType, data);
             } catch {
               // Relay ownership and proxy delivery do not depend on observers.
             }

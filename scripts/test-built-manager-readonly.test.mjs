@@ -27,6 +27,13 @@ test("built Manager read-only summary keeps private persona data out of evidence
     if (request.pathname === "/api/speech/messages") {
       return jsonResponse({ data: { records: [{ text: "private transcript" }] } });
     }
+    if (request.pathname === "/api/scan/message-adapters") {
+      return jsonResponse({
+        adapters: { napcat: {}, weixin: {} },
+        repair: { changed: false, messages: [] },
+        scan: { partial: false, durationMs: 42 }
+      });
+    }
     if (request.pathname.endsWith("/voice-identities")) {
       return jsonResponse({ data: { identities: [{ displayName: "private person", isUser: true }] } });
     }
@@ -45,6 +52,7 @@ test("built Manager read-only summary keeps private persona data out of evidence
     personaManifestIndexFiles: 2,
     personaSyncConflicts: 1,
     returnedSpeechMessages: 1,
+    scannedMessageAdapters: 2,
     personaVoiceIdentities: 1,
     matchedPersonaVoiceTranscripts: 4,
     returnedPersonaVoiceTranscripts: 1
@@ -72,6 +80,13 @@ test("built Manager read-only summary fails persona-scoped coverage when no pers
     if (request.pathname === "/api/persona-sync/conflicts") return jsonResponse({ data: { conflicts: [] } });
     if (request.pathname === "/api/persona-sync/index-status") return jsonResponse({ data: { state: "ready", watchMode: "disabled", files: 0 } });
     if (request.pathname === "/api/speech/messages") return jsonResponse({ data: { records: [] } });
+    if (request.pathname === "/api/scan/message-adapters") {
+      return jsonResponse({
+        adapters: { napcat: {} },
+        repair: { changed: false, messages: [] },
+        scan: { partial: true, durationMs: 6500 }
+      });
+    }
     throw new Error(`Unexpected URL: ${url}`);
   };
 
@@ -92,6 +107,13 @@ test("built Manager read-only failures redact the persona id from boundary error
     if (request.pathname === "/api/persona-sync/conflicts") return jsonResponse({ data: { conflicts: [] } });
     if (request.pathname === "/api/persona-sync/index-status") return jsonResponse({ data: { state: "ready", watchMode: "disabled", files: 0 } });
     if (request.pathname === "/api/speech/messages") return jsonResponse({ data: { records: [] } });
+    if (request.pathname === "/api/scan/message-adapters") {
+      return jsonResponse({
+        adapters: { napcat: {} },
+        repair: { changed: false, messages: [] },
+        scan: { partial: false, durationMs: 12 }
+      });
+    }
     throw new Error("one-shot timeout");
   };
 

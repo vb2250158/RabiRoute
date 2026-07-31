@@ -35,7 +35,8 @@ import androidx.core.app.NotificationCompat;
 
 import com.rabi.link.modules.rokid.RabiGlassPcBackend;
 import com.rabi.link.modules.rokid.RokidCxrController;
-import com.rabi.link.modules.rokid.RokidNativeVoiceBridge;
+import com.rabi.link.modules.rokid.RabiGlassBridge;
+import com.rabi.link.modules.rokid.RabiGlassBridgeFactory;
 import com.rabi.link.modules.conversation.RabiPhoneAudioCapture;
 import com.rabi.link.modules.conversation.RabiBoundedAudioCache;
 import com.rabi.link.modules.conversation.RabiMobileSpeechArchive;
@@ -55,8 +56,6 @@ public final class RabiConversationService extends Service {
     private static final String CHANNEL = "rabi_conversation";
     private static final String MESSAGE_CHANNEL = "rabi_messages";
     private static final int NOTIFICATION_ID = 7421;
-    private static final int REVIEW_NOTIFICATION_ID = 7422;
-    private static final long REVIEW_NOTIFICATION_REFRESH_MS = 6L * 60L * 60L * 1000L;
     private static final long NETWORK_EVENT_FALLBACK_CHECK_MS = 5L * 60L * 1000L;
     private static final String EXTRA_ROUTE_PROFILE_ID = "route_profile_id";
     private static final String EXTRA_CLIENT_MESSAGE_ID = "client_message_id";
@@ -70,7 +69,7 @@ public final class RabiConversationService extends Service {
     private RabiGlassPcBackend backend;
     private RabiChatStore chatStore;
     private RokidCxrController glassController;
-    private RokidNativeVoiceBridge glassBridge;
+    private RabiGlassBridge glassBridge;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private boolean shutdownComplete;
@@ -80,12 +79,6 @@ public final class RabiConversationService extends Service {
     private final Set<String> pendingTtsReplayIds = Collections.synchronizedSet(new HashSet<>());
     private RabiConversationSettings.InputMode inputMode = RabiConversationSettings.InputMode.PAUSED;
     private final android.os.Handler notificationHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable reviewNotificationRefresh = new Runnable() {
-        @Override public void run() {
-            postReviewShortcut();
-            notificationHandler.postDelayed(this, REVIEW_NOTIFICATION_REFRESH_MS);
-        }
-    };
     private final Runnable networkEventFallbackCheck = new Runnable() {
         @Override public void run() {
             networkFallbackCheckScheduled = false;
@@ -238,6 +231,19 @@ public final class RabiConversationService extends Service {
                 return new RabiGlassPcBackend.ReplyDeliveryResult(true, playbackRequested, played,
                         outputDeviceKind, playbackFailure);
             }
+            @Override public void onPersonaAvatarChanged(String roleId, String avatarVersion, String avatarUrl) {
+                String role = roleId == null ? "" : roleId.trim();
+                if (role.isEmpty()) return;
+                String version = avatarVersion == null ? "" : avatarVersion.trim();
+                getSharedPreferences("rabi_persona_avatars", MODE_PRIVATE).edit()
+                        .putString("version:" + role, version)
+                        .putBoolean("configured:" + role, !version.isEmpty()).apply();
+                sendBroadcast(new Intent(RabiPersonaAvatarEvents.ACTION_CHANGED)
+                        .setPackage(getPackageName())
+                        .putExtra(RabiPersonaAvatarEvents.EXTRA_ROLE_ID, role)
+                        .putExtra(RabiPersonaAvatarEvents.EXTRA_AVATAR_VERSION, version)
+                        .putExtra(RabiPersonaAvatarEvents.EXTRA_AVATAR_URL, avatarUrl == null ? "" : avatarUrl.trim()));
+            }
             @Override public void onError(String message) {
                 updateRuntime("error", friendlyError(message));
                 updateStatus("错误 · " + friendlyError(message));
@@ -333,7 +339,6 @@ public final class RabiConversationService extends Service {
         }
         if (ACTION_RESTORE.equals(action)) {
             promote("已恢复 Rabi 消息连接", false);
-            showReviewShortcut();
             if (configureBackend()) {
                 backend.start();
                 updateStatus("消息连接已恢复 · 打开 App 恢复持续聆听");
@@ -344,7 +349,6 @@ public final class RabiConversationService extends Service {
         }
         if (ACTION_PREFERENCE.equals(action)) {
             promote("正在保存主动性偏好", false);
-            showReviewShortcut();
             if (configureBackend()) backend.start();
             backend.submitProactivityPreference(intent.getStringExtra(EXTRA_PROACTIVITY_PREFERENCE));
             return START_STICKY;
@@ -373,7 +377,7 @@ public final class RabiConversationService extends Service {
             return START_STICKY;
         }
         if (ACTION_TEXT.equals(action) || ACTION_CONFIG.equals(action)) {
-            promote("正在发送文本消息", false); showReviewShortcut(); if (configureBackend()) backend.start();
+            promote("正在发送文本消息", false); if (configureBackend()) backend.start();
             String text = intent.getStringExtra("text");
             String routeProfileId = intent.getStringExtra(EXTRA_ROUTE_PROFILE_ID);
             if (routeProfileId == null || routeProfileId.trim().isEmpty()) routeProfileId = RabiConversationTarget.load(this);
@@ -388,11 +392,10 @@ public final class RabiConversationService extends Service {
             return START_STICKY;
         }
         if (ACTION_RETRY.equals(action)) {
-            promote("正在重试失败消息", false); showReviewShortcut(); if (configureBackend()) backend.start(); backend.retryFailedItems();
+            promote("正在重试失败消息", false); if (configureBackend()) backend.start(); backend.retryFailedItems();
             return START_STICKY;
         }
         promote("正在连接 Rabi PC", false);
-        showReviewShortcut();
         startConversation();
         return START_STICKY;
     }
@@ -468,7 +471,7 @@ public final class RabiConversationService extends Service {
             updateStatus("眼镜模式不可用 · 请从设置打开眼镜后端并完成授权");
             return;
         }
-        glassBridge = new RokidNativeVoiceBridge(this, new RokidNativeVoiceBridge.Listener() {
+        glassBridge = RabiGlassBridgeFactory.create(this, new RabiGlassBridge.Listener() {
             @Override public void onNativeVoiceLog(String line) { }
             @Override public void onNativeAsrText(String text, String channel, String clientId) { }
             @Override public void onNativeTtsAck(String text, String channel, String clientId) { }
@@ -482,7 +485,11 @@ public final class RabiConversationService extends Service {
             }
             @Override public void onGlassReviewRequested() { backend.requestConversationReview(RabiGlassPcBackend.SOURCE_GLASSES); }
         }, values.getString("native_voice_access_key", ""), values.getString("native_voice_secret_key", ""));
-        glassBridge.start();
+        if (glassBridge != null) {
+            glassBridge.start();
+        } else {
+            updateRuntime("glasses-bridge", "手机精简包未加载可选 Rokid Phone SDK；RabiPC 语音主链不受影响");
+        }
         glassController = new RokidCxrController(this, new RokidCxrController.Listener() {
             @Override public void onLog(String line) { }
             @Override public void onCxrConnectionChanged(boolean connected) {
@@ -658,6 +665,9 @@ public final class RabiConversationService extends Service {
                 pendingTtsReplayIds.remove(safeId);
                 chatStore.updatePlayback(safeId, played ? "played" : "failed", failure);
                 updateRuntime("ttsPlayback", played ? "语音重播完成" : "语音重播失败 · " + failure);
+                // A foreground service must remain visible, but its transient replay
+                // label must not get stuck after AudioTrack reaches its marker.
+                notificationHandler.post(() -> promote("持续会话就绪", false));
             }
         }, "rabi-phone-tts-replay").start();
     }
@@ -783,24 +793,6 @@ public final class RabiConversationService extends Service {
                 .build();
     }
 
-    private void showReviewShortcut() {
-        postReviewShortcut();
-        notificationHandler.removeCallbacks(reviewNotificationRefresh);
-        notificationHandler.postDelayed(reviewNotificationRefresh, REVIEW_NOTIFICATION_REFRESH_MS);
-    }
-
-    private void postReviewShortcut() {
-        PendingIntent action = PendingIntent.getService(this, 7422,
-                new Intent(this, RabiConversationService.class).setAction(ACTION_REVIEW),
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification value = new NotificationCompat.Builder(this, CHANNEL)
-                .setSmallIcon(com.rabi.link.R.drawable.rabiroute_icon).setContentTitle("提示 Rabi")
-                .setContentText("点一下立即让 Agent 审阅当前会话").setContentIntent(action)
-                .setOngoing(true).setOnlyAlertOnce(true).build();
-        NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager != null) manager.notify(REVIEW_NOTIFICATION_ID, value);
-    }
-
     private void showAgentMessage(String messageId, String routeProfileId, String text) {
         Intent destination = new Intent(this, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -838,7 +830,6 @@ public final class RabiConversationService extends Service {
     private void shutdown(boolean explicitStop) {
         if (shutdownComplete) return;
         shutdownComplete = true;
-        notificationHandler.removeCallbacks(reviewNotificationRefresh);
         unregisterNetworkEvents();
         if (phoneAudioCapture != null) {
             phoneAudioCapture.close(explicitStop);
@@ -848,7 +839,6 @@ public final class RabiConversationService extends Service {
         inputMode = RabiConversationSettings.InputMode.PAUSED;
         stopForeground(STOP_FOREGROUND_REMOVE);
         NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager != null) manager.cancel(REVIEW_NOTIFICATION_ID);
         if (explicitStop) stopSelf();
     }
 

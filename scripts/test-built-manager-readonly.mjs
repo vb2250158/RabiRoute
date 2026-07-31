@@ -163,17 +163,40 @@ export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = gl
     requestJson(fetchImpl, baseUrl, "/api/speech/messages?limit=1")
   ]);
   const manifestIndex = await requestJson(fetchImpl, baseUrl, "/api/persona-sync/index-status");
+  const messageAdapterScan = await requestJson(
+    fetchImpl,
+    baseUrl,
+    "/api/scan/message-adapters",
+    "message_adapter_read_only_scan"
+  );
   const managers = Array.isArray(gateways.body?.data?.manager) ? gateways.body.data.manager : [];
   const roles = Array.isArray(manifest.body?.data?.roles) ? manifest.body.data.roles : [];
   const personaFileCount = roles.reduce((total, role) => total + (Array.isArray(role?.files) ? role.files.length : 0), 0);
   const conflictRows = Array.isArray(conflicts.body?.data?.conflicts) ? conflicts.body.data.conflicts : [];
   const speechRows = Array.isArray(speechMessages.body?.data?.records) ? speechMessages.body.data.records : [];
   const manifestIndexFiles = Number(manifestIndex.body?.data?.files || 0);
+  const scannedAdapters = messageAdapterScan.body?.adapters && typeof messageAdapterScan.body.adapters === "object"
+    ? Object.keys(messageAdapterScan.body.adapters)
+    : [];
+  const scanDurationMs = Number(messageAdapterScan.body?.scan?.durationMs || 0);
   const checks = [
     endpointCheck("gateway_summary", gateways, managers.length),
     endpointCheck("persona_sync_manifest", manifest, roles.length),
     endpointCheck("persona_sync_conflicts", conflicts, conflictRows.length),
     endpointCheck("host_speech_messages", speechMessages, speechRows.length),
+    {
+      id: "message_adapter_read_only_scan",
+      method: "GET",
+      status: messageAdapterScan.status,
+      count: scannedAdapters.length,
+      partial: messageAdapterScan.body?.scan?.partial === true,
+      durationMs: scanDurationMs,
+      passed: messageAdapterScan.status === 200
+        && scannedAdapters.length > 0
+        && messageAdapterScan.body?.repair?.changed === false
+        && typeof messageAdapterScan.body?.scan?.partial === "boolean"
+        && scanDurationMs <= 8_000
+    },
     {
       id: "persona_sync_manifest_index",
       method: "GET",
@@ -231,6 +254,7 @@ export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = gl
       personaManifestIndexFiles: manifestIndexFiles,
       personaSyncConflicts: conflictRows.length,
       returnedSpeechMessages: speechRows.length,
+      scannedMessageAdapters: scannedAdapters.length,
       personaVoiceIdentities: identityCount,
       matchedPersonaVoiceTranscripts: transcriptMatchedCount,
       returnedPersonaVoiceTranscripts: transcriptReturnedCount

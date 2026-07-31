@@ -32,6 +32,7 @@
 | 角色面板 | 已验证 | 托盘和本地角色消息 | Manager / 托盘入口 |
 | NapCat / OneBot | 已验证 | QQ 群聊和私聊 | NapCat、QQNT、OneBot 配置 |
 | 企业微信 / WeCom | 实验 | 企业微信群聊 | Bot ID、Secret、真实环境验收 |
+| 飞书 / Feishu | 实验 | 飞书应用群聊文本收发 | App ID/Secret、Verification Token、Encrypt Key、公网 HTTPS 事件订阅 |
 | 远端 Agent | 实验 | 连接独立 bridge 设备 | 远端 bridge 和密码挑战 |
 | FenneNote / 小爱 | 实验 | 语音转写 | 对应桥接程序或设备 |
 | RabiLink | 实验 | Relay、眼镜和主动下行 | Relay 配置和真机验收 |
@@ -69,7 +70,9 @@ NapCat 通过两条连接与 RabiRoute 协作：
 - WebSocket Client：把 QQ 事件送到 RabiRoute，常用地址为 `ws://127.0.0.1:8789`。
 - OneBot HTTP Server：供状态查询和回复，常用地址为 `http://127.0.0.1:3000`。
 
-在 Route 的 NapCat 面板中确认实例、RabiRoute WS 端口、HTTP 地址和 WebUI 地址。扫描只读取状态；启动、登录和修复只会在明确点击相关按钮后执行。
+在 Route 的 NapCat 面板中确认实例、RabiRoute WS 端口、HTTP 地址和 WebUI 地址。扫描只读取状态；启动、登录和修复只会在明确点击相关按钮后执行。各消息端探针并行执行并共享本轮截止时间；单个探针超时会保留其他入口的部分结果，不会被解释成离线。
+
+QQ / NapCat 与个人微信拥有完全独立的登录态。QQ 的“可用”只由 OneBot 实际连接和健康结果支持；NapCat WebUI 可打开只说明诊断/配置页面可访问，不能证明 QQ 已登录或可收发。个人微信未登录时只标记个人微信，不会把已在线的 QQ 或全部消息端显示成离线。
 
 <div class="screenshot-placeholder">
   <strong>截图占位 08｜NapCat 实例与连接状态</strong>
@@ -91,7 +94,7 @@ RabiRoute 不保存或绕过 QQ 密码、验证码、设备确认和风控。首
 
 已存在专用适配器的平台应优先使用专用入口。它们通常能保留更准确的状态、日志、模板变量和回传语义。
 
-通用 Webhook 适合尚未命名的外部 POST。公开配置只应使用 localhost、占位域名和脱敏 token。
+通用 Webhook 适合尚未命名的外部 POST。飞书必须使用独立 `feishu` adapter 和应用事件订阅，群机器人 Webhook 不能作为替代。公开配置只应使用 localhost、占位域名和脱敏 token。
 
 需要在原生灵珠智能体、AIUI 和原生 App 之间选择时，查看 [RabiLink 眼镜端三条路线对比](../rabilink-glasses-route-comparison.md)。
 

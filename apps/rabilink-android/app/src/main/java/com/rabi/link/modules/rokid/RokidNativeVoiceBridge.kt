@@ -41,27 +41,10 @@ import org.json.JSONObject
 
 final class RokidNativeVoiceBridge(
     context: Context,
-    private val listener: Listener,
+    private val listener: RabiGlassBridge.Listener,
     initialAccessKey: String,
     initialSecretKey: String
-) {
-    interface Listener {
-        fun onNativeVoiceLog(line: String)
-
-        fun onNativeAsrText(text: String, channel: String, clientId: String)
-
-        fun onNativeTtsAck(text: String, channel: String, clientId: String)
-
-        fun onNativeCommandAck(kind: String, text: String, channel: String, clientId: String)
-
-        fun onNativeStatus(text: String, channel: String, clientId: String)
-
-        fun onNativeVoiceError(kind: String, text: String, channel: String, clientId: String)
-
-        fun onGlassAudioPcm(pcm: ByteArray)
-
-        fun onGlassReviewRequested()
-    }
+) : RabiGlassBridge {
 
     private val appContext = context.applicationContext
     private var listenerRegistered = false
@@ -357,12 +340,12 @@ final class RokidNativeVoiceBridge(
         }
     }
 
-    fun start() {
+    override fun start() {
         initPhoneSdk()
         registerMessageListener()
     }
 
-    fun stop() {
+    override fun stop() {
         synchronized(glassPlaybackLock) {
             if (pendingGlassPlaybackId.isNotEmpty() && pendingGlassPlaybackState.isEmpty()) {
                 pendingGlassPlaybackState = "playback_failed"
@@ -424,7 +407,7 @@ final class RokidNativeVoiceBridge(
         sendPayload(ASR_STOP_CMD, "native ASR stop")
     }
 
-    fun sendAudioPcmToGlass(messageId: String, pcm: ByteArray): Boolean {
+    override fun sendAudioPcmToGlass(messageId: String, pcm: ByteArray): Boolean {
         if (pcm.isEmpty()) return false
         val stableMessageId = messageId.trim().take(200)
         if (stableMessageId.isEmpty()) return false
@@ -485,23 +468,23 @@ final class RokidNativeVoiceBridge(
         }
     }
 
-    fun sendGlassAudioStatus(status: String) {
+    override fun sendGlassAudioStatus(status: String) {
         sendPayload(RabiGlassAudioProtocol.PREFIX_STATUS + status, "glasses audio status")
     }
 
-    fun sendGlassTranscript(text: String) {
+    override fun sendGlassTranscript(text: String) {
         sendPayload(RabiGlassAudioProtocol.PREFIX_TRANSCRIPT + text.replace('\n', ' ').take(320), "glasses transcript")
     }
 
-    fun sendGlassReplyText(text: String) {
+    override fun sendGlassReplyText(text: String) {
         sendPayload(RabiGlassAudioProtocol.PREFIX_REPLY + text.replace('\n', ' ').take(320), "glasses reply")
     }
 
-    fun sendGlassDeviceState(batteryLevel: Int, charging: Boolean) {
+    override fun sendGlassDeviceState(batteryLevel: Int, charging: Boolean) {
         sendPayload(RabiGlassAudioProtocol.PREFIX_DEVICE + "$batteryLevel:${if (charging) 1 else 0}", "glasses device state")
     }
 
-    fun handleIncomingProtocol(channel: String, msg: String, clientId: String) {
+    override fun handleIncomingProtocol(channel: String, msg: String, clientId: String) {
         handleTextMessage(channel, msg, clientId)
     }
 

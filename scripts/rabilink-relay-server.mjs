@@ -2891,7 +2891,8 @@ function handlePortableMessageReceipt(req, url, res, body) {
       deviceId,
       deviceKind,
       state,
-      receiptAt: now
+      receiptAt: now,
+      routeProfileId: stringValue(message.routeProfileId)
     }
   });
   writeEvent("outbox_message_receipt", {
@@ -3420,6 +3421,11 @@ function handleWorkerWebguiEvent(req, url, res, body) {
     return sendJson(res, 400, { code: -1, ok: false, message: "A non-ready WebGUI event type is required." });
   }
   const data = body?.data && typeof body.data === "object" && !Array.isArray(body.data) ? body.data : {};
+  if (eventType === "persona_avatar_changed") {
+    // The phone receives only role id + opaque version + Relay-relative URL; no NAS path escapes this boundary.
+    relayEventHub.publish(eventType, { appId: auth.app.id, data });
+    return sendJson(res, 202, { code: 0, ok: true });
+  }
   webguiEventHub.publish(eventType, {
     appId: auth.app.id,
     targetDeviceId: worker.guid || worker.id,
@@ -4721,9 +4727,46 @@ function rewriteWebguiText(text, externalPrefix, contentType) {
   return next;
 }
 
+function webguiProxyFailurePayload(request) {
+  const timedOut = request.status !== "failed";
+  return {
+    statusCode: timedOut ? 504 : 502,
+    body: {
+      code: -1,
+      ok: false,
+      error: timedOut ? "RABI_PC_WEBGUI_TIMEOUT" : "RABI_PC_WEBGUI_UNAVAILABLE",
+      stage: "pc_webgui_proxy",
+      retryable: true,
+      request_id: request.id,
+      message: timedOut
+        ? "Rabi PC 未在时限内返回 Manager/WebGUI 请求。请确认目标 PC 在线并检查 Relay worker 后重试。"
+        : "Rabi PC 本机 Manager/WebGUI 未能返回请求。请检查 PC 健康守护和 Manager 诊断后重试。"
+    }
+  };
+}
+
 function sendWebguiProxyResponse(res, request, externalPrefix) {
   if (request.status !== "done" || !request.response) {
-    return sendText(res, request.status === "failed" ? 502 : 504, request.error || "Rabi PC WebGUI request timed out.");
+    const failure = webguiProxyFailurePayload(request);
+    const headers = {
+      "cache-control": "no-store",
+      "retry-after": "3",
+      "x-rabiroute-error-code": failure.body.error,
+      "x-rabiroute-request-id": request.id
+    };
+    const accept = String(request.headers?.accept || "").toLowerCase();
+    if (String(request.path || "").startsWith("/api/") || accept.includes("application/json")) {
+      return sendJson(res, failure.statusCode, failure.body, headers);
+    }
+    const requestId = String(request.id || "").replace(/[^A-Za-z0-9_-]/g, "");
+    const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RabiRoute PC 暂不可用</title></head><body style="font-family:system-ui,sans-serif;max-width:42rem;margin:12vh auto;padding:0 1.5rem;line-height:1.6"><h1>Rabi PC 暂时没有返回控制台</h1><p>${failure.body.message}</p><p>诊断编号：<code>${requestId}</code></p><p>此错误可以重试；页面不会把空白 502 当作成功。</p></body></html>`;
+    res.writeHead(failure.statusCode, {
+      ...headers,
+      "content-type": "text/html; charset=utf-8",
+      "content-length": String(Buffer.byteLength(html))
+    });
+    res.end(html);
+    return;
   }
   const headers = normalizeProxyResponseHeaders(request.response.headers);
   const contentType = headers["content-type"] || "application/octet-stream";
@@ -4851,6 +4894,11 @@ function selectedMobileWorker(app, workers = mobileWorkersForApp(app)) {
     const selected = workers.find((worker) => worker.id === app.targetDeviceId || worker.guid === app.targetDeviceId);
     if (selected) return selected;
   }
+  // A first-run phone must not require a manual picker when exactly one
+  // eligible, online Rabi PC exists for this app.  Do not guess when there
+  // are multiple candidates; that still requires an explicit selection.
+  const online = workers.filter((worker) => worker.online);
+  if (!app.targetDeviceId && online.length === 1) return online[0];
   return null;
 }
 
@@ -5092,7 +5140,7 @@ function mobileWorkerTarget(app, url, body = {}) {
   const worker = requested
     ? workers.find((item) => item.id === requested || item.guid === requested)
     : selectedMobileWorker(app, workers);
-  if (!requested && !app.targetDeviceId) {
+  if (!requested && !app.targetDeviceId && !worker) {
     const error = new Error("No Rabi PC is selected for this app token.");
     error.statusCode = 409;
     throw error;
@@ -5126,6 +5174,21 @@ async function mobileProxyJson(app, worker, method, localPath, body = null) {
     parsed = { code: -1, message: responseBody };
   }
   return { statusCode: finalRequest.response.statusCode || 200, body: parsed };
+}
+
+async function mobileProxyRaw(app, worker, method, localPath) {
+  const request = createMobileWebguiRequest(app, worker, method, localPath, null);
+  const finalRequest = await waitForWebguiRequest(request, webguiRequestWaitMs);
+  if (finalRequest.status !== "done" || !finalRequest.response) {
+    const error = new Error(finalRequest.error || "Rabi PC media proxy timed out.");
+    error.statusCode = finalRequest.status === "failed" ? 502 : 504;
+    throw error;
+  }
+  return {
+    statusCode: finalRequest.response.statusCode || 200,
+    headers: finalRequest.response.headers || {},
+    body: Buffer.from(finalRequest.response.bodyBase64 || "", "base64")
+  };
 }
 
 function normalizeMobileWebguiPath(value) {
@@ -5202,6 +5265,20 @@ async function handleMobileApi(req, url, res, body) {
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   if (!auth.app) return sendRabiLinkError(res, 401, "请使用 RabiLink服务器控制台里对应应用的 token。");
   const app = auth.app;
+  const avatarMatch = url.pathname.match(/^\/api\/rabilink\/mobile\/personas\/([^/]+)\/avatar$/);
+  if (req.method === "GET" && avatarMatch) {
+    const roleId = decodeURIComponent(avatarMatch[1]).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 96);
+    if (!roleId) return sendJson(res, 400, { code: -1, ok: false, message: "Invalid persona id." });
+    const worker = mobileWorkerTarget(app, url, body);
+    const result = await mobileProxyRaw(app, worker, "GET", `/api/roles/${encodeURIComponent(roleId)}/avatar${url.search || ""}`);
+    const contentType = String(result.headers["content-type"] || "image/jpeg");
+    res.writeHead(result.statusCode, {
+      "content-type": contentType,
+      "cache-control": "private, max-age=3600",
+      "x-content-type-options": "nosniff"
+    });
+    return res.end(result.body);
+  }
   if (req.method === "GET" && url.pathname === "/api/rabilink/mobile/state") {
     return sendJson(res, 200, mobileStatePayload(app));
   }
@@ -5236,7 +5313,7 @@ async function handleMobileApi(req, url, res, body) {
   const routeId = routeMatch[1] ? decodeURIComponent(routeMatch[1]) : "";
   const action = routeMatch[2] || "";
   if (req.method === "GET" && !routeId && !action) {
-    const result = await mobileProxyJson(app, worker, "GET", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes?includeProfiles=true`);
+    const result = await mobileProxyJson(app, worker, "GET", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes?includeProfiles=true&presentation=mobile`);
     return sendJson(res, result.statusCode, result.body);
   }
   if (req.method === "GET" && routeId && action === "agent-options") {

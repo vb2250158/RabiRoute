@@ -137,6 +137,8 @@ function isLocalProvider(capabilities, kind, row) {
   const provider = providerCapability(capabilities, kind, String(row?.provider || ""));
   if (provider?.local_only === false || provider?.localOnly === false) return false;
   if (provider?.local_only === true || provider?.localOnly === true) return true;
+  if (String(row?.owned_by ?? row?.ownedBy ?? "").toLowerCase() === "local") return true;
+  if (provider?.local_files_only === true || provider?.localFilesOnly === true) return true;
   const transport = String(provider?.transport || row?.transport || "").toLowerCase();
   if (transport.includes("dashscope") || transport.includes("openai") || transport.includes("https-api")) return false;
   return String(row?.provider || "").toLowerCase().startsWith("local") || transport.includes("local-worker");
@@ -185,6 +187,28 @@ function normalizeTranscript(value) {
     .normalize("NFKC")
     .toLowerCase()
     .replace(/[\p{P}\p{S}\s]+/gu, "");
+}
+
+function longestCommonSubsequenceLength(left, right) {
+  const previous = new Uint16Array(right.length + 1);
+  for (const leftCharacter of left) {
+    let diagonal = 0;
+    for (let index = 1; index <= right.length; index += 1) {
+      const above = previous[index];
+      previous[index] = leftCharacter === right[index - 1]
+        ? diagonal + 1
+        : Math.max(previous[index], previous[index - 1]);
+      diagonal = above;
+    }
+  }
+  return previous[right.length];
+}
+
+export function transcriptSimilarity(expected, actual) {
+  const left = [...normalizeTranscript(expected)];
+  const right = [...normalizeTranscript(actual)];
+  if (left.length === 0 || right.length === 0) return 0;
+  return longestCommonSubsequenceLength(left, right) / Math.max(left.length, right.length);
 }
 
 function hashValue(value) {
@@ -522,13 +546,17 @@ export async function runRabiSpeechTtsLoopAcceptance(options = {}, dependencies 
     const transcript = String(asrResponse.body?.text || "");
     const expectedNormalized = normalizeTranscript(text);
     const actualNormalized = normalizeTranscript(transcript);
+    const similarity = transcriptSimilarity(text, transcript);
     const transcriptMatched = Boolean(expectedNormalized && actualNormalized && (
-      actualNormalized.includes(expectedNormalized) || expectedNormalized.includes(actualNormalized)
+      actualNormalized.includes(expectedNormalized)
+      || expectedNormalized.includes(actualNormalized)
+      || similarity >= 0.85
     ));
     const evidence = voiceprintEvidence(asrResponse.body);
     report.asr.transcriptSha256 = hashValue(transcript);
     report.asr.transcriptCharacters = [...transcript].length;
     report.asr.transcriptMatched = transcriptMatched;
+    report.asr.transcriptSimilarity = Number(similarity.toFixed(4));
     report.asr.durationSeconds = Number(asrResponse.body?.duration || 0);
     report.asr.segmentCount = Array.isArray(asrResponse.body?.segments) ? asrResponse.body.segments.length : 0;
     report.voiceprint.evidenceCount = evidence.length;

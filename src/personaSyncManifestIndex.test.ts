@@ -45,6 +45,50 @@ function oneShotEvent(
   };
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail("Timed out waiting for the persona manifest index condition.");
+}
+
+test("persona manifest index survives a transient persistence failure and retries the rebuildable cache", async (t) => {
+  const data = fixture();
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  let persistAttempts = 0;
+  const service = new PersonaSyncService(() => data.rolesRoot, data.stateRoot, {
+    watch: false,
+    reconcileOnQueryFallback: false,
+    persistSettleMs: 5,
+    persistRetryBaseMs: 5,
+    persistRetryMaxMs: 20,
+    writePersistedIndex: (filePath, content) => {
+      persistAttempts += 1;
+      if (persistAttempts === 1) {
+        const error = new Error("injected SMB rename interruption") as NodeJS.ErrnoException;
+        error.code = "EPERM";
+        throw error;
+      }
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, content);
+    }
+  });
+  t.after(() => service.stopManifestIndex());
+
+  const manifest = await service.manifest("Rabi");
+  assert.equal(manifest.roles[0]?.files.length, 3);
+  await waitFor(() => persistAttempts >= 2);
+
+  const status = service.manifestIndexStatus();
+  assert.equal(status.state, "ready");
+  assert.equal(status.persistence?.consecutiveFailures, 0);
+  assert.equal(status.persistence?.totalFailures, 1);
+  assert.ok(status.persistence?.lastPersistedAt);
+  assert.equal(status.persistence?.lastError, undefined);
+});
+
 test("persona manifest index persists hashes and reuses them after restart", async (t) => {
   const data = fixture(128);
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
@@ -71,6 +115,30 @@ test("persona manifest index persists hashes and reuses them after restart", asy
   assert.equal(secondManifest.roles[0]?.files.length, 128);
   assert.equal(second.manifestIndexStatus().lastReconcile?.hashedFiles, 0);
   assert.equal(second.manifestIndexStatus().lastReconcile?.reusedFiles, 128);
+});
+
+test("read-only persona manifest uses the persisted snapshot without walking an unavailable NAS root", async (t) => {
+  const data = fixture(4);
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  const seed = new PersonaSyncService(() => data.rolesRoot, data.stateRoot, {
+    watch: false,
+    reconcileOnQueryFallback: false
+  });
+  await seed.manifest("Rabi");
+  seed.stopManifestIndex();
+  fs.renameSync(data.rolesRoot, `${data.rolesRoot}-offline`);
+
+  const readOnly = new PersonaSyncService(() => data.rolesRoot, data.stateRoot, {
+    readOnly: true,
+    watch: false,
+    reconcileOnQueryFallback: false
+  });
+  t.after(() => readOnly.stopManifestIndex());
+  const startedAt = Date.now();
+  const manifest = await readOnly.manifest("Rabi");
+  assert.ok(Date.now() - startedAt < 250);
+  assert.equal(manifest.roles[0]?.files.length, 4);
+  assert.equal(readOnly.manifestIndexStatus().lastReconcile, undefined);
 });
 
 test("persona manifest index hashes one changed file from a filesystem event", async (t) => {

@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-mobile-slim-persona-cache",
+  "title": "手机常驻包与眼镜诊断实现必须显式隔离",
+  "focus": "RabiLink Android 轻量包和人格缓存的运行边界",
+  "content": "RabiLink Android 的 `mobileSlim` 包只保留 arm64-v8a，排除眼镜测试 Activity、Rokid SDK、桌面 ABI 与本地 ASR/TTS 模型；导出验证体积、zipalign、v2/v3 签名和 SHA-256。手机通过显式 bridge 与眼镜实现隔离，只负责采集、重连、通知和播放。人格头像按版本/ETag 缓存并由 Relay 事件失效，Route 显示名称和连接元数据持久保存，使离线会话仍保持稳定身份。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：Android 轻量包、眼镜隔离与人格缓存"
+  },
+  "createdAt": "2026-07-31T14:30:00+08:00",
+  "updatedAt": "2026-07-31T14:30:00+08:00",
+  "keywords": ["RabiLink Android", "mobileSlim", "arm64-v8a", "Rokid", "bridge", "模型隔离", "25 MiB", "v2/v3 签名", "头像缓存", "ETag", "Route 元数据", "离线身份"]
+}

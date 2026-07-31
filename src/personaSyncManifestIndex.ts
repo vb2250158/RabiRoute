@@ -26,10 +26,19 @@ type PersistedManifestIndex = {
 };
 
 export type PersonaSyncManifestIndexEvent = {
-  kind: "ready" | "created" | "updated" | "deleted" | "reconciled" | "watch_unavailable";
+  kind: "ready" | "created" | "updated" | "deleted" | "reconciled" | "watch_unavailable" | "persistence_failed";
   roleId?: string;
   path?: string;
   generation: number;
+};
+
+export type PersonaSyncManifestIndexPersistenceStatus = {
+  consecutiveFailures: number;
+  totalFailures: number;
+  lastPersistedAt?: string;
+  lastFailureAt?: string;
+  nextRetryAt?: string;
+  lastError?: string;
 };
 
 export type PersonaSyncManifestIndexStatus = {
@@ -45,6 +54,7 @@ export type PersonaSyncManifestIndexStatus = {
     reusedFiles: number;
     completedAt: string;
   };
+  persistence: PersonaSyncManifestIndexPersistenceStatus;
   error?: string;
 };
 
@@ -53,6 +63,10 @@ export type PersonaSyncManifestIndexOptions = {
   watch?: boolean;
   reconcileOnQueryFallback?: boolean;
   onEvent?: (event: PersonaSyncManifestIndexEvent) => void;
+  persistSettleMs?: number;
+  persistRetryBaseMs?: number;
+  persistRetryMaxMs?: number;
+  writePersistedIndex?: (filePath: string, content: string | Buffer) => void;
 };
 
 type PendingPath = { roleId?: string; relativePath?: string };
@@ -200,8 +214,16 @@ async function readStableEntry(
 
 export class PersonaSyncManifestIndex {
   private readonly indexPath: string;
-  private readonly options: Required<Pick<PersonaSyncManifestIndexOptions, "readOnly" | "watch" | "reconcileOnQueryFallback">>
-    & Pick<PersonaSyncManifestIndexOptions, "onEvent">;
+  private readonly options: {
+    readOnly: boolean;
+    watch: boolean;
+    reconcileOnQueryFallback: boolean;
+    onEvent?: (event: PersonaSyncManifestIndexEvent) => void;
+    persistSettleMs: number;
+    persistRetryBaseMs: number;
+    persistRetryMaxMs: number;
+    writePersistedIndex: (filePath: string, content: string | Buffer) => void;
+  };
   private readonly rolesCache = new Set<string>();
   private readonly filesCache = new Map<string, CachedPersonaSyncFile>();
   private readonly pendingPaths = new Map<string, PendingPath>();
@@ -218,6 +240,12 @@ export class PersonaSyncManifestIndex {
   private state: PersonaSyncManifestIndexStatus["state"] = "idle";
   private lastReconcile: PersonaSyncManifestIndexStatus["lastReconcile"];
   private lastError = "";
+  private persistConsecutiveFailures = 0;
+  private persistTotalFailures = 0;
+  private lastPersistedAt = "";
+  private lastPersistFailureAt = "";
+  private nextPersistRetryAt = "";
+  private lastPersistError = "";
 
   constructor(
     readonly rolesRoot: () => string,
@@ -229,8 +257,13 @@ export class PersonaSyncManifestIndex {
       readOnly: options.readOnly === true,
       watch: options.watch !== false,
       reconcileOnQueryFallback: options.reconcileOnQueryFallback !== false,
-      onEvent: options.onEvent
+      onEvent: options.onEvent,
+      persistSettleMs: Math.max(0, Math.floor(options.persistSettleMs ?? INDEX_PERSIST_SETTLE_MS)),
+      persistRetryBaseMs: Math.max(1, Math.floor(options.persistRetryBaseMs ?? 250)),
+      persistRetryMaxMs: Math.max(1, Math.floor(options.persistRetryMaxMs ?? 30_000)),
+      writePersistedIndex: options.writePersistedIndex ?? atomicWriteFileSync
     };
+    this.options.persistRetryMaxMs = Math.max(this.options.persistRetryBaseMs, this.options.persistRetryMaxMs);
     this.loadPersistedIndex();
   }
 
@@ -247,8 +280,7 @@ export class PersonaSyncManifestIndex {
   }
 
   async manifest(roleId?: string): Promise<PersonaSyncManifest> {
-    const requested = roleId ? sanitizeRoleId(roleId) : "";
-    if (roleId && !requested) throw new Error("Invalid persona id.");
+    const requested = this.requestedRoleId(roleId);
     await this.start();
     if (this.watcher && !this.fallbackRequired) {
       // fs.watch delivery is asynchronous. A one-shot barrier lets an edit that
@@ -260,6 +292,11 @@ export class PersonaSyncManifestIndex {
     if (this.fallbackRequired && this.options.reconcileOnQueryFallback) {
       await this.reconcileAll("query_fallback");
     }
+    return this.snapshot(requested || undefined);
+  }
+
+  snapshot(roleId?: string): PersonaSyncManifest {
+    const requested = this.requestedRoleId(roleId);
     const roleIds = requested ? [requested] : [...this.rolesCache].sort((left, right) => left.localeCompare(right));
     return {
       schemaVersion: 1,
@@ -282,6 +319,12 @@ export class PersonaSyncManifestIndex {
     };
   }
 
+  private requestedRoleId(roleId?: string): string {
+    const requested = roleId ? sanitizeRoleId(roleId) : "";
+    if (roleId && !requested) throw new Error("Invalid persona id.");
+    return requested;
+  }
+
   notePathChanged(roleId: string, relativePath: string): void {
     const safeRoleId = sanitizeRoleId(roleId);
     const safePath = normalizedRelativePath(relativePath);
@@ -301,6 +344,14 @@ export class PersonaSyncManifestIndex {
       files: this.filesCache.size,
       totalHashedFiles: this.totalHashedFiles,
       lastReconcile: this.lastReconcile,
+      persistence: {
+        consecutiveFailures: this.persistConsecutiveFailures,
+        totalFailures: this.persistTotalFailures,
+        lastPersistedAt: this.lastPersistedAt || undefined,
+        lastFailureAt: this.lastPersistFailureAt || undefined,
+        nextRetryAt: this.nextPersistRetryAt || undefined,
+        lastError: this.lastPersistError || undefined
+      },
       error: this.lastError || undefined
     };
   }
@@ -318,6 +369,13 @@ export class PersonaSyncManifestIndex {
   }
 
   private async initialize(): Promise<void> {
+    if (this.options.readOnly && !this.options.watch && !this.options.reconcileOnQueryFallback) {
+      // Read-only acceptance and diagnostics must never block the Manager on a
+      // fresh NAS walk. They use the persisted, rebuildable index snapshot.
+      this.state = "ready";
+      this.emit({ kind: "ready", generation: this.generation });
+      return;
+    }
     await this.reconcileAll("startup");
     if (this.options.watch) {
       this.startWatcher();
@@ -596,18 +654,18 @@ export class PersonaSyncManifestIndex {
     }
   }
 
-  private schedulePersist(): void {
+  private schedulePersist(delayMs = this.options.persistSettleMs): void {
     if (this.options.readOnly || this.stopped) return;
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
       this.persistNow();
-    }, INDEX_PERSIST_SETTLE_MS);
+    }, Math.max(0, delayMs));
     this.persistTimer.unref();
   }
 
-  private persistNow(): void {
-    if (this.options.readOnly) return;
+  private persistNow(): boolean {
+    if (this.options.readOnly) return true;
     const payload: PersistedManifestIndex = {
       schemaVersion: INDEX_SCHEMA_VERSION,
       generatedAt: new Date().toISOString(),
@@ -616,7 +674,32 @@ export class PersonaSyncManifestIndex {
         left.roleId.localeCompare(right.roleId) || left.path.localeCompare(right.path)
       )
     };
-    atomicWriteFileSync(this.indexPath, `${JSON.stringify(payload, null, 2)}\n`);
+    try {
+      this.options.writePersistedIndex(this.indexPath, `${JSON.stringify(payload, null, 2)}\n`);
+      this.persistConsecutiveFailures = 0;
+      this.lastPersistedAt = new Date().toISOString();
+      this.nextPersistRetryAt = "";
+      this.lastPersistError = "";
+      return true;
+    } catch (error) {
+      this.persistConsecutiveFailures += 1;
+      this.persistTotalFailures += 1;
+      this.lastPersistFailureAt = new Date().toISOString();
+      const code = String((error as NodeJS.ErrnoException).code || "").trim();
+      const message = error instanceof Error ? error.message : String(error);
+      this.lastPersistError = `${code ? `${code}: ` : ""}${message}`;
+      const retryDelay = Math.min(
+        this.options.persistRetryMaxMs,
+        this.options.persistRetryBaseMs * (2 ** Math.min(16, this.persistConsecutiveFailures - 1))
+      );
+      this.nextPersistRetryAt = new Date(Date.now() + retryDelay).toISOString();
+      console.error(
+        `Persona sync manifest index persistence failed; the rebuildable cache remains in memory and will retry in ${retryDelay}ms: ${this.lastPersistError}`
+      );
+      this.emit({ kind: "persistence_failed", generation: this.generation });
+      this.schedulePersist(retryDelay);
+      return false;
+    }
   }
 
   private loadPersistedIndex(): void {

@@ -100,6 +100,11 @@
             android:launchMode="singleTop" />
 
         <activity
+            android:name=".modules.rokid.RokidProbeFullActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+
+        <activity
             android:name=".modules.rabiroute.RabiRouteSdkProbeActivity"
             android:exported="true" />
 

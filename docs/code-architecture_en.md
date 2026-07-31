@@ -58,7 +58,8 @@ Protocol translation for live gateway inputs:
 
 - NapCat/OneBot, including non-blocking `get_msg` fallback through `napcatReplyMessages.ts` when a referenced QQ message is missing from local history.
 - WeCom smart-bot WebSocket.
-- Experimental personal-Weixin OpenClaw/iLink QR login, long-poll ingress, and source-session text or allowlisted local-file replies. Runtime tokens stay under `data/`; inbound media is record-only and real-account longevity remains unverified.
+- Experimental personal-Weixin OpenClaw/iLink explicit QR login, long-poll ingress, protected restart recovery, and source-session text or allowlisted local-file replies. Windows protects session material with current-user DPAPI; other platforms use an access-restricted local key with AES-256-GCM. Temporary network/5xx failures retain the session; only explicit `-14` or HTTP 401/403 rejection invalidates it. Inbound media is record-only and real-account longevity remains unverified.
+- Feishu enterprise-app callbacks with URL challenge handling, raw-body signature and Verification Token checks, Encrypt Key decryption, durable `event_id` deduplication, `chat_id` context isolation, and source-chat text replies. Missing credentials or event-subscription enablement fails closed without falling back to the generic Webhook.
 - Webhook-like inputs such as XiaoAI, plus legacy-only FenneNote parsing. New PC speech uses RabiSpeech.
 - RabiLink compatibility/input paths.
 - heartbeat/manual and other internal adapters.
@@ -169,6 +170,8 @@ Starts the loopback Manager, loads route/role configuration, serves WebGUI/API, 
 ### `src/manager/controlPlaneRoutes.ts`
 
 The current broad HTTP control-plane router. It handles gateway operations, scans, Agent replies/threads, role knowledge, shutdown, and endpoint-specific actions. Continue extracting stable domain helpers instead of growing unrelated inline logic indefinitely.
+
+GET scans remain pure read models. `/api/scan/message-adapters` must not reuse startup, login, configuration-migration, or repair commands; those actions belong only to explicit POST control paths. `manager/scanController.ts` starts independent probes concurrently under one shared deadline and returns timeout/error fallbacks, `messageEndpoints/napcatHealthScan.ts` performs read-only per-runtime/per-instance NapCat observation, and `manager/messageAdapterHealth.ts` keeps QQ, personal Weixin, RabiLink, and speech operational states independent instead of promoting one endpoint failure to global offline.
 
 It also selects loopback or LAN listening from `data/Config.json.webguiLan` and applies one non-local WebGUI-token gate at the HTTP boundary. The static shell may load without authorization, but Manager status, actions, SSE, and private resources remain inaccessible without the key.
 

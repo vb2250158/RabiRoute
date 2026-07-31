@@ -51,6 +51,7 @@ public final class RabiGlassPcBackend {
         void onTranscript(String text, String routeProfileId);
         void onDeliveryState(String clientMessageId, String routeProfileId, String state, String failure);
         ReplyDeliveryResult onReply(String messageId, String routeProfileId, String text, byte[] pcm, JSONArray attachments);
+        void onPersonaAvatarChanged(String roleId, String avatarVersion, String avatarUrl);
         void onError(String message);
     }
 
@@ -355,7 +356,7 @@ public final class RabiGlassPcBackend {
             desiredAudioStreamRoute = route;
         }
         String suffix = SOURCE_GLASSES.equals(sourceDeviceKind) ? "glasses" : "phone";
-        String streamId = safeStreamId(deviceId + "-" + suffix + "-audio");
+        String streamId = safeStreamId(deviceId + "-" + suffix + "-audio-" + UUID.randomUUID());
         boolean glasses = SOURCE_GLASSES.equals(sourceDeviceKind);
         String deviceModel = glasses ? "" : clean(Build.MODEL);
         String deviceLabel = deviceLabel(deviceId, glasses, deviceModel);
@@ -797,13 +798,23 @@ public final class RabiGlassPcBackend {
                 requestDrain(0);
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
                     String event = "message";
+                    StringBuilder eventData = new StringBuilder();
                     String line;
                     while (running && (line = reader.readLine()) != null) {
                         if (line.startsWith("event:")) {
                             event = line.substring(6).trim();
+                        } else if (line.startsWith("data:")) {
+                            eventData.append(line.substring(5).trim());
                         } else if (line.isEmpty()) {
                             if ("ready".equals(event) || "outbox_available".equals(event)) fetchAvailableReplies();
+                            if ("persona_avatar_changed".equals(event)) {
+                                try {
+                                    JSONObject data = new JSONObject(eventData.toString());
+                                    listener.onPersonaAvatarChanged(data.optString("roleId", ""), data.optString("avatarVersion", ""), data.optString("avatarUrl", ""));
+                                } catch (Throwable ignored) { }
+                            }
                             event = "message";
+                            eventData.setLength(0);
                         }
                     }
                 }

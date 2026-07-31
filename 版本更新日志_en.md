@@ -6,7 +6,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## Unreleased - 2026-07-30
+## Unreleased - 2026-07-31
 
 ### Durable Agent-reply idempotency receipts and controlled ordinary inquiries
 
@@ -24,6 +24,26 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Manager now derives the shared Awaiting approval, Awaiting QA, Executing, external-wait, and Awaiting shared package stages together with ordering and counts. WebGUI and the Qt tray consume this DTO without reclassifying business state.
 - A paused plan must retain exactly one in-progress resume step addressed by `currentStepId`; plan writes, work-cycle finish preflight, and strict audit consistently fail closed on missing, mismatched, or multiple resume points.
 - Thread reconciliation reuses Manager presentation and real send receipts to classify idle work as `terminal / blocked / actionable / frozen / waiting_result`, avoiding duplicate inquiries after a verified delivery that is waiting only for a result.
+
+### Manager single-instance protection, failure evidence, and independent endpoint health
+
+- Manager acquires a workspace-level file lock before loading its control plane. Concurrent starts through a mapped drive, UNC path, the tray, or direct Node execution now reject the later instance with an explicit exit code, while stale PID locks remain safely reclaimable.
+- NapCat start, restart, and stop operations are serialized by the bound QQ account and recheck the live OneBot login before spawning. Concurrent actions for one account reuse a ready instance instead of creating a second QQNT/NapCat process tree.
+- Message-endpoint scans are now read-only, concurrent, and bounded by one shared deadline. A stalled probe returns partial results from the other endpoints without starting a process, changing configuration, or triggering login. QQ availability requires OneBot health, never just a reachable NapCat WebUI; personal Weixin, RabiLink, speech, and other endpoints retain independent states, so one endpoint cannot become a global-offline claim.
+- Manager runtime crashes are recorded in daily JSONL evidence. Persona-index persistence and configuration-snapshot probe failures degrade into diagnosable state instead of taking down the control plane. The watchdog adds a mutex, exponential recovery backoff, a recovery ledger, an installer, and a bounded soak-acceptance entry point.
+- The watchdog summarizes an isolated message-endpoint error as `degraded`; only system-level Manager, Route, or Agent-delivery failures use `error`.
+- RabiLink Relay remote-WebGUI 502/504 failures now return JSON or HTML with a stable error code, retry signal, `Retry-After`, and diagnostic request ID without exposing local exceptions or paths.
+
+### Independent Feishu endpoint and protected personal-Weixin recovery
+
+- Added a Feishu enterprise-app endpoint with raw-body signature and Verification Token checks, Encrypt Key decryption, URL challenge handling, `im.message.receive_v1` text events, durable `event_id` deduplication, `chat_id` context isolation, and source-chat text replies. Ingress and egress fail closed until credentials and event-subscription enablement are explicit.
+- Personal-Weixin session material uses current-user DPAPI on Windows and an access-restricted local key with AES-256-GCM elsewhere; legacy plaintext migrates on the next canonical write. QR creation requires an explicit user request. Network timeouts and 5xx responses retain recoverable credentials, while only server `-14` or HTTP 401/403 rejection requires a new scan.
+
+### RabiLink Android slim package and persona presentation
+
+- Added a `mobileSlim` resident-phone build and independent export validation. It keeps only `arm64-v8a`, excludes glass diagnostics, the Rokid SDK, desktop ABIs, and local ASR/TTS models, then verifies the 25 MiB limit, zipalign, v2/v3 signatures, and SHA-256. The phone remains responsible only for capture, reconnect, notifications, and playback; RabiPC continues to own inference.
+- Android caches persona avatars by version/ETag, invalidates them through Relay events, and persists Route display names and connection metadata. Persona lists, conversation titles, and notifications retain stable identity while offline. Explicit bridge separation prevents the slim phone build from packaging the glass diagnostic implementation.
+- Relay auto-selects a target only when exactly one processing PC is online and fails closed when several are available. Persona avatars and mobile Route lists use constrained proxy reads, while retryable failures preserve stable error codes without exposing local paths.
 
 ## 0.1.23 - 2026-07-30
 

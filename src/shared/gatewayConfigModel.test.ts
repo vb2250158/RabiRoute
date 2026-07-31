@@ -644,3 +644,23 @@ test("backend normalization owns speech Route defaults", () => {
   assert.equal(normalized.routeVariables?.custom, "kept");
   assert.deepEqual(normalized.routeProfiles?.[0]?.routeVariables, normalized.routeVariables);
 });
+
+test("Feishu owns an independent recent-message budget and text-only default output policy", () => {
+  assert.equal(RECENT_MESSAGE_ENDPOINTS.includes("feishu"), true);
+  const definition = gateway({
+    messageAdapters: ["feishu"],
+    feishuWebhookPort: 8891,
+    feishuWebhookPath: " /feishu-events ",
+    feishuEventSubscriptionEnabled: false
+  });
+  const normalized = normalizeGatewayDefinition(definition);
+  assert.deepEqual(messageAdapterPolicyFor(normalized, "feishu").supportedOutputs, ["text"]);
+  assert.equal(normalized.feishuWebhookPath, "/feishu-events");
+  assert.equal(normalized.feishuEventSubscriptionEnabled, false);
+  assert.equal(
+    collectGatewayPortClaims([normalized]).some((claim) =>
+      claim.kind === "feishu-webhook" && claim.port === 8891
+    ),
+    true
+  );
+});

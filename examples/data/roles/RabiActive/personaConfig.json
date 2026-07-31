@@ -11,7 +11,8 @@
     "wearable": 12,
     "webhook": 12,
     "wecom": 12,
-    "weixin": 12
+    "weixin": 12,
+    "feishu": 12
   },
   "speechTriggerKeywords": [],
   "notificationRules": [

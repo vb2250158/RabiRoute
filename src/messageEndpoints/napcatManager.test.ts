@@ -4,7 +4,13 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ensureNapcatInstanceReady, launchNapcatInstance, resolveNapcatLaunchPlan } from "./napcatManager.js";
+import {
+  ensureNapcatInstanceReady,
+  launchNapcatInstance,
+  napcatStatusHasUsableConnection,
+  resolveNapcatLaunchPlan,
+  restartNapcatInstance
+} from "./napcatManager.js";
 
 async function listen(server: http.Server): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -28,6 +34,22 @@ function createOuterShellFixture(): { root: string; shellDir: string; launcher: 
   fs.writeFileSync(launcher, "@echo off\r\n", "utf8");
   return { root, shellDir, launcher };
 }
+
+test("NapCat scan does not treat a configured bot id as a live OneBot connection", () => {
+  assert.equal(napcatStatusHasUsableConnection({
+    napcatInstances: {
+      qq: { connected: false, botUserId: "10000" }
+    }
+  }), false);
+  assert.equal(napcatStatusHasUsableConnection({
+    napcatInstances: {
+      qq: { connected: true, online: true, good: true, botUserId: "10000" }
+    }
+  }), true);
+  assert.equal(napcatStatusHasUsableConnection({
+    napcat: { connected: true, online: false, botUserId: "10000" }
+  }), false);
+});
 
 test("NapCat launch plan redirects outer Shell to inner launcher with bot quick login", () => {
   const fixture = createOuterShellFixture();
@@ -383,6 +405,186 @@ test("direct launch also refuses to start a duplicate account owner", async () =
   }
 });
 
+test("concurrent direct launches for one QQ execute one process launch and reuse the ready instance", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-single-launch-"));
+  let ready = false;
+  let launchCount = 0;
+  const onebot = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain request body */ }
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.setHeader("connection", "close");
+    if (!ready) {
+      response.statusCode = 502;
+      response.end(JSON.stringify({ status: "failed", retcode: 1400 }));
+      return;
+    }
+    if (request.url === "/get_status") {
+      response.end(JSON.stringify({ status: "ok", retcode: 0, data: { online: true, good: true } }));
+      return;
+    }
+    response.end(JSON.stringify({ status: "ok", retcode: 0, data: { user_id: 10000, nickname: "Bot" } }));
+  });
+  const onebotPort = await listen(onebot);
+  const instance = {
+    id: "bot",
+    name: "QQ bot",
+    gatewayPort: 8789,
+    httpUrl: `http://127.0.0.1:${onebotPort}`,
+    launchCommand: "unused.exe",
+    botUserId: "10000"
+  };
+  const runtime = { definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } };
+  const context = {
+    rootDir: root,
+    getRuntimes: () => [runtime],
+    normalizeNapCatInstances: () => [instance],
+    appendLog: () => undefined,
+    checkHttpEndpoint: async () => false,
+    // The fixture's HTTP listener stands in for the future NapCat process, so
+    // do not let the Windows port preflight mistake it for a live process tree.
+    findNapcatInstanceProcessPids: async () => ready ? ["4242"] : [],
+    launchNapcatProcess: () => {
+      launchCount += 1;
+      ready = true;
+    }
+  };
+  try {
+    const [first, second] = await Promise.all([
+      launchNapcatInstance(context, { gatewayId: "route", instanceId: "bot" }),
+      launchNapcatInstance(context, { gatewayId: "route", instanceId: "bot" })
+    ]);
+
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(launchCount, 1);
+    assert.ok([first.state, second.state].includes("already-running"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    await close(onebot);
+  }
+});
+
+test("launch suppresses a duplicate process tree when both configured endpoints are unreachable", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-existing-process-"));
+  let launchCount = 0;
+  const instance = {
+    id: "bot",
+    name: "QQ bot",
+    gatewayPort: 8789,
+    httpUrl: "http://127.0.0.1:39991",
+    webuiUrl: "http://127.0.0.1:39992/webui",
+    launchCommand: "must-not-run.exe",
+    workingDir: path.join(root, "NapCat.Shell"),
+    botUserId: "10000"
+  };
+  const runtime = { definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } };
+  try {
+    const result = await launchNapcatInstance({
+      rootDir: root,
+      getRuntimes: () => [runtime],
+      normalizeNapCatInstances: () => [instance],
+      appendLog: () => undefined,
+      checkHttpEndpoint: async () => false,
+      findNapcatInstanceProcessPids: async () => ["4242"],
+      launchNapcatProcess: () => { launchCount += 1; }
+    }, { gatewayId: "route", instanceId: "bot" });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.state, "process-or-port-already-present");
+    assert.equal(launchCount, 0);
+    assert.match(String(result.message), /避免重复启动/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("launch reports WebUI-only readiness as onebot-not-ready instead of success", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-webui-only-"));
+  let launchCount = 0;
+  const instance = {
+    id: "bot",
+    name: "QQ bot",
+    gatewayPort: 8789,
+    httpUrl: "http://127.0.0.1:39991",
+    webuiUrl: "http://127.0.0.1:39992/webui",
+    launchCommand: "unused.exe",
+    botUserId: "10000"
+  };
+  const runtime = { definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } };
+  try {
+    const result = await launchNapcatInstance({
+      rootDir: root,
+      getRuntimes: () => [runtime],
+      normalizeNapCatInstances: () => [instance],
+      appendLog: () => undefined,
+      checkHttpEndpoint: async (url) => url === instance.webuiUrl,
+      findNapcatInstanceProcessPids: async () => [],
+      launchNapcatProcess: () => { launchCount += 1; }
+    }, { gatewayId: "route", instanceId: "bot" });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.state, "onebot-not-ready");
+    assert.equal(result.needsUserAction, true);
+    assert.equal(launchCount, 1);
+    assert.match(String(result.message), /OneBot 尚未就绪/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("restart falls back to launchCommand when the NapCat WebUI connection is refused", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-webui-refused-"));
+  let ready = false;
+  let launchCount = 0;
+  const onebot = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain request body */ }
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.setHeader("connection", "close");
+    if (!ready) {
+      response.statusCode = 502;
+      response.end(JSON.stringify({ status: "failed", retcode: 1400 }));
+      return;
+    }
+    if (request.url === "/get_status") {
+      response.end(JSON.stringify({ status: "ok", retcode: 0, data: { online: true, good: true } }));
+      return;
+    }
+    response.end(JSON.stringify({ status: "ok", retcode: 0, data: { user_id: 10000, nickname: "Bot" } }));
+  });
+  const onebotPort = await listen(onebot);
+  const instance = {
+    id: "bot",
+    name: "QQ bot",
+    gatewayPort: 8789,
+    httpUrl: `http://127.0.0.1:${onebotPort}`,
+    webuiUrl: "http://127.0.0.1:39992/webui",
+    launchCommand: "unused.exe",
+    botUserId: "10000"
+  };
+  const runtime = { definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } };
+  try {
+    const result = await restartNapcatInstance({
+      rootDir: root,
+      getRuntimes: () => [runtime],
+      normalizeNapCatInstances: () => [instance],
+      appendLog: () => undefined,
+      checkHttpEndpoint: async () => false,
+      findNapcatInstanceProcessPids: async () => [],
+      launchNapcatProcess: () => {
+        launchCount += 1;
+        ready = true;
+      }
+    }, { gatewayId: "route", instanceId: "bot" });
+
+    assert.equal(result.ok, true);
+    assert.equal(launchCount, 1);
+    assert.match((result.steps as string[]).join("\n"), /改用进程级恢复/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    await close(onebot);
+  }
+});
+
 test("ensure ready reports an expired quick-login identity as a distinct quick-login state", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-expired-"));
   const onebot = http.createServer(async (request, response) => {
@@ -537,6 +739,9 @@ test("ensure ready ignores other QQ quick-login entries and requests a QR login 
     assert.equal(result.ok, false);
     assert.equal(result.state, "qr-login-required");
     assert.equal(result.needsUserAction, true);
+    const health = result.health as Record<string, unknown>;
+    assert.equal(health.state, "qr-login-required");
+    assert.equal(health.needsUserAction, true);
     assert.equal(quickLoginCount, 0);
     assert.match(String(result.message), /扫码/);
   } finally {

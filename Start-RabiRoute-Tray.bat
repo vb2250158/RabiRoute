@@ -9,12 +9,15 @@ param(
   [string]$DefaultRouteName = "default-main",
   [switch]$NoOpen,
   [switch]$NoBuild,
+  [switch]$UseExistingBuild,
+  [switch]$ReuseHealthyManager,
   [switch]$NoTray,
   [switch]$PauseAtEnd
 )
 
 
 $ErrorActionPreference = "Stop"
+[System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
 
 function Write-Info {
   param([string]$Message)
@@ -382,6 +385,11 @@ function Invoke-NpmScript {
 function Resolve-NodeExe {
   param([string]$ProjectRoot)
 
+  $portableNode = Join-Path $ProjectRoot "node.exe"
+  if (Test-Path -LiteralPath $portableNode) {
+    return [pscustomobject]@{ Source = (Resolve-Path -LiteralPath $portableNode).Path; Reason = "project portable node" }
+  }
+
   if ($env:RABIROUTE_NODE -and (Test-Path -LiteralPath $env:RABIROUTE_NODE)) {
     return [pscustomobject]@{ Source = (Resolve-Path -LiteralPath $env:RABIROUTE_NODE).Path; Reason = "RABIROUTE_NODE" }
   }
@@ -392,7 +400,6 @@ function Resolve-NodeExe {
   }
 
   $candidates = @(
-    [pscustomobject]@{ Path = (Join-Path $ProjectRoot "node.exe"); Reason = "project portable node" },
     [pscustomobject]@{ Path = (Join-Path $ProjectRoot ".node\node.exe"); Reason = "project .node" },
     [pscustomobject]@{ Path = (Join-Path $ProjectRoot "tools\node\node.exe"); Reason = "project tools/node" },
     [pscustomobject]@{ Path = (Join-Path $ProjectRoot "tools\nodejs\node.exe"); Reason = "project tools/nodejs" },
@@ -450,7 +457,8 @@ try {
   $manager = Test-ManagerStable -Url $ManagerUrl
   if ($manager) {
     $owner = Get-TcpPortOwner -Port $managerPort
-    $runningOldBuild = (Test-ProjectManagerProcess -Process $owner -DistManager $distManager) `
+    $runningOldBuild = (-not $ReuseHealthyManager) `
+      -and (Test-ProjectManagerProcess -Process $owner -DistManager $distManager) `
       -and (Test-Path -LiteralPath $distManager) `
       -and ((Get-Item -LiteralPath $distManager).LastWriteTime -gt $owner.CreationDate)
     if ($runningOldBuild) {
@@ -519,11 +527,15 @@ try {
   }
 
   if (Test-NeedsBuild -ProjectRoot $projectRoot -DistManager $distManager) {
-    if ($NoBuild) {
+    if ($UseExistingBuild -and (Test-Path -LiteralPath $distManager)) {
+      Write-Info "Source is newer than the last successful backend build; recovery is using the existing build."
+      Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Build needed, but recovery reused the existing dist\manager.js."
+    } elseif ($NoBuild) {
       throw "dist\manager.js or the RibiWebGUI build is missing/stale. Run npm.cmd run build first, or rerun without -NoBuild."
+    } else {
+      Write-Info "Backend or RibiWebGUI build is missing/stale; running npm.cmd run build."
+      Invoke-NpmScript -ProjectRoot $projectRoot -ScriptName "build" -LauncherLog $launcherLog
     }
-    Write-Info "Backend or RibiWebGUI build is missing/stale; running npm.cmd run build."
-    Invoke-NpmScript -ProjectRoot $projectRoot -ScriptName "build" -LauncherLog $launcherLog
   }
 
   $node = Resolve-NodeExe -ProjectRoot $projectRoot

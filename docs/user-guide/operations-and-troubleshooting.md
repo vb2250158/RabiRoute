@@ -80,6 +80,12 @@
 
 OneBot HTTP 可访问不代表 QQ 核心一定能发送。检查登录状态、quick login、设备验证、Windows 时间和 NapCat 日志。
 
+## 消息端扫描超时或显示“部分可用”
+
+`GET /api/scan/message-adapters` 是纯只读诊断：不会启动 Route/NapCat、不会补写配置、不会触发扫码或自动修复。所有独立探针并行起跑并受共享截止时间约束；响应中的 `scan.partial=true` 表示至少一个探针超时或失败，其他已完成结果仍然可信。
+
+状态按入口和实例分别解释。`QQ 可用` 以 OneBot 健康为准，不能用 WebUI 可打开替代；个人微信未登录只影响个人微信。Watchdog 中单一消息端的错误汇总为 `degraded`，只有 Manager、Route 或 Agent 投递等系统级错误才把整轮巡检标为 `error`。
+
 Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自动重试队列；修复登录后需要明确重试，避免重复发送。
 
 ## Codex 没收到消息
@@ -100,7 +106,11 @@ Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自�
 
 重新运行 `Start-RabiRoute-Tray.bat`。启动器会核对端口 owner 的命令行，只对精确指向本项目 `dist/manager.js` 的旧实例执行有界接管：先请求优雅关闭，超时后才终止已核实的进程树。未知进程不会被停止。如果当前 `dist` 比健康运行实例更新，启动器也会重载当前构建。
 
+Manager 自身还会在加载控制面前取得工作区级实例锁。若第二条启动链返回退出码 `17`，说明已有同工作区 Manager 持有有效锁；不要反复拉起。先用 `/meta` 和端口 owner 确认现有实例，只有锁中 PID 已不存在时，下一次启动才会安全回收陈旧锁。
+
 恢复后分别验证：本机或局域网 `/meta` 可用；Relay 状态可在稍后恢复为在线；远程 `/api/events` 与 `/api/speech/events` 可重连；媒体 `Range` 请求仍返回 `206`。Relay 暂时离线时，本机和局域网仍应可用，不需要反复重启 Manager。
+
+远程 WebGUI 无法联系对应 PC Manager 时，API 会返回结构化 `RABI_PC_WEBGUI_UNAVAILABLE`，等待超时则返回 `RABI_PC_WEBGUI_TIMEOUT`；响应同时包含 `retryable`、`Retry-After` 和诊断请求 ID。浏览器页面会显示相同诊断 ID，而不是空白或静默 502。用该 ID 对照 Relay 日志，再检查 PC 的 `/meta` 与 Manager 日志；不要把 502 当成成功或立即重复写请求。
 
 如果计划页提交审批意见时正好遇到 Manager 重启或短暂断网，页面会明确提示无法连接，并保留本次文字、附件和同一条幂等 `feedbackId`。先确认页面右上角恢复为“Manager 已连接”或 `/meta` 已响应，再直接重试；不要因为看到旧版浏览器错误 `Failed to fetch` 而重新输入或重复创建另一条审批意见。
 

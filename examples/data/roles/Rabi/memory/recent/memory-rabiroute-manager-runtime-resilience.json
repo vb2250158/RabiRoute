@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-manager-runtime-resilience",
+  "title": "Manager 运行稳定性依赖单实例、故障证据和有界恢复",
+  "focus": "Manager 启动、持久化和 watchdog 的失败关闭边界",
+  "content": "Manager 在控制面加载前取得按规范工作区身份计算的单实例锁，后到实例拒绝启动，陈旧 PID 锁只在确认 owner 已不存在时回收。运行时崩溃写入按日 JSONL；人格索引或配置快照探测失败降级为可诊断状态，不拖垮控制面。Watchdog 使用互斥锁、指数退避和恢复账本，安装与浸泡验收都保持显式入口。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：Manager 单实例、故障证据与有界恢复"
+  },
+  "createdAt": "2026-07-31T14:30:00+08:00",
+  "updatedAt": "2026-07-31T14:30:00+08:00",
+  "keywords": ["Manager", "单实例", "workspace identity", "PID 锁", "崩溃日志", "配置快照", "人格索引", "watchdog", "指数退避", "浸泡验收", "失败关闭"]
+}

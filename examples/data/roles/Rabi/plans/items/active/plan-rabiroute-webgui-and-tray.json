@@ -6,8 +6,8 @@
   "priority": "medium",
   "kind": "ui",
   "currentStepId": "add-real-screenshots",
-  "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的待审批、待 QA、正在执行、外部等待和待统一打包阶段、状态色板与计数，不再本地重做分类；语音服务页现在既按稳定设备展示传输、处理、转写与回执证据，也能在确认当前工作区进程归属后启停正式 RabiSpeech，并仅在真实健康后展开参数。Route 页能区分 NapCat 账号归属并采用已有在线实例，打包托盘优先使用项目便携 Node。当前补齐真实脱敏截图和实体环境证据。",
-  "nextAction": "为 NapCat 采用流程、消息端默认规则和语音设备事件/转写回听补齐真实脱敏截图，在双实体 PC 与长时间语音会话中复核分页、过期状态、菜单响应、错误恢复和跨端排障；自然打断继续等待真实 AEC 证据。",
+  "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的计划展示阶段、状态色板与计数；语音服务页按真实进程归属和健康状态启停 RabiSpeech；Route 页把 QQ、个人微信、RabiLink、语音和飞书等消息端作为独立健康状态展示，扫描保持只读、有界并可返回部分结果，个人微信二维码只在用户明确请求后生成。当前补齐真实脱敏截图和实体环境证据。",
+  "nextAction": "为 NapCat 账号归属、独立消息端健康、个人微信恢复/重新扫码、飞书待凭据状态、语音设备事件与原声回听补齐真实脱敏截图，并在双实体 PC、真实账号和长时间语音会话中复核分页、错误恢复与跨端排障；自然打断继续等待真实 AEC 证据。",
   "steps": [
     { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
     { "id": "speech-monitor", "title": "统一语音页与 Route 监视器状态读取", "status": "已完成" },
@@ -22,6 +22,7 @@
     { "id": "speech-device-observability", "title": "按稳定设备展示语音收发事件、公共转写、Route 回执和短期原声", "status": "已完成" },
     { "id": "manager-presentation-stages", "title": "统一 Manager 计划展示阶段、排序、计数与暂停恢复合同", "status": "已完成" },
     { "id": "speech-runtime-toggle", "title": "按当前工作区进程归属与真实健康启停 RabiSpeech", "status": "已完成" },
+    { "id": "independent-message-endpoint-health", "title": "独立展示各消息端健康并保持扫描只读、有界和可部分返回", "status": "已完成" },
     { "id": "add-real-screenshots", "title": "补齐真实脱敏界面截图", "status": "进行中" },
     { "id": "persona-route-preview", "title": "完善人格路由预览与跨端排障入口", "status": "未开始" },
     { "id": "cross-pc-speech", "title": "完成跨电脑、不同声卡与自然打断的真实语音重测", "status": "未开始" }
@@ -39,6 +40,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-30T00:00:00+08:00",
-  "keywords": ["RibiWebGUI", "Manager API", "NapCat 账号归属", "快速登录", "默认 Route", "便携 Node", "计划反馈", "审批执行合同", "待统一打包", "待外部", "摘要分页", "完整内容搜索", "人格名称", "Route 作用域导航", "暂停恢复合同", "状态色板", "阶段计数", "人格声纹", "人格同步", "事件驱动", "音频流事件", "公共转写", "Route 回执", "ASR 原声", "RabiSpeech 运行时归属", "结构化计划", "使用手册", "语音服务", "自然打断", "AEC", "托盘"]
+  "updatedAt": "2026-07-31T14:30:00+08:00",
+  "keywords": ["RibiWebGUI", "Manager API", "NapCat 账号归属", "独立消息端健康", "只读扫描", "共享截止时间", "部分结果", "个人微信恢复", "显式二维码", "飞书待凭据", "计划反馈", "审批执行合同", "待统一打包", "暂停恢复合同", "状态色板", "阶段计数", "音频流事件", "Route 回执", "ASR 原声", "RabiSpeech 运行时归属", "语音服务", "自然打断", "AEC", "托盘"]
 }

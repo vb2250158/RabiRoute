@@ -73,15 +73,19 @@ export function personaAvatarPresentation(roleId: string, roleDir: string): Pers
   const url = avatarUrl(roleId, avatar.version);
   return {
     avatarConfigured: avatar.configured,
-    ...(url ? { avatarUrl: url } : {})
+    ...(url ? { avatarUrl: url } : {}),
+    ...(avatar.version ? { avatarVersion: avatar.version } : {})
   };
 }
+
+export type PersonaAvatarChanged = { roleId: string; avatarUrl?: string; avatarVersion?: string };
 
 export function handlePersonaAvatarApi(
   request: http.IncomingMessage,
   pathname: string,
   response: http.ServerResponse,
-  rolesRoot: string
+  rolesRoot: string,
+  onChanged?: (change: PersonaAvatarChanged) => void
 ): boolean {
   const match = pathname.match(/^\/api\/roles\/([^/]+)\/avatar$/);
   if (!match) return false;
@@ -116,7 +120,11 @@ export function handlePersonaAvatarApi(
     const contentType = String(request.headers["content-type"] || "");
     void readLimitedBody(request)
       .then(body => savePersonaAvatar(roleDir, contentType, body))
-      .then(avatar => jsonResponse(response, 200, { code: 0, data: mutationResult(roleId, avatar.version) }))
+      .then(avatar => {
+        const url = avatarUrl(roleId, avatar.version);
+        onChanged?.({ roleId, ...(url ? { avatarUrl: url } : {}), ...(avatar.version ? { avatarVersion: avatar.version } : {}) });
+        jsonResponse(response, 200, { code: 0, data: mutationResult(roleId, avatar.version) });
+      })
       .catch(error => jsonResponse(response, error instanceof PersonaAvatarRouteError ? error.statusCode : 400, {
         code: -1,
         message: error instanceof Error ? error.message : String(error)
@@ -127,6 +135,7 @@ export function handlePersonaAvatarApi(
   if (request.method === "DELETE") {
     try {
       removePersonaAvatar(roleDir);
+      onChanged?.({ roleId });
       jsonResponse(response, 200, { code: 0, data: mutationResult(roleId, undefined) });
     } catch (error) {
       jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });

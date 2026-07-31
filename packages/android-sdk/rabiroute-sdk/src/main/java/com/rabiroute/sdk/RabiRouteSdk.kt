@@ -125,10 +125,13 @@ data class RabiRouteInfo(
     val enabled: Boolean,
     val running: Boolean,
     val agentRoleId: String,
+    val personaDisplayName: String,
     val messageAdapters: List<String>,
     val agentAdapters: List<String>,
     val codexCwd: String,
     val codexThreadName: String,
+    val avatarConfigured: Boolean,
+    val avatarVersion: String,
     val rawJson: JSONObject
 )
 
@@ -241,10 +244,13 @@ class RabiRouteSdk @JvmOverloads constructor(
                 enabled = item.optBoolean("enabled"),
                 running = item.optBoolean("running"),
                 agentRoleId = item.optString("agentRoleId"),
+                personaDisplayName = item.optString("personaDisplayName"),
                 messageAdapters = item.optJSONArray("messageAdapters").toStringList(),
                 agentAdapters = item.optJSONArray("agentAdapters").toStringList(),
                 codexCwd = item.optString("codexCwd"),
                 codexThreadName = item.optString("codexThreadName"),
+                avatarConfigured = item.optBoolean("avatarConfigured"),
+                avatarVersion = item.optString("avatarVersion"),
                 rawJson = item
             )
         }
@@ -674,10 +680,13 @@ class RabiRouteSdk @JvmOverloads constructor(
             enabled = item.optBoolean("enabled"),
             running = item.optBoolean("running"),
             agentRoleId = item.optString("agentRoleId"),
+            personaDisplayName = item.optString("personaDisplayName"),
             messageAdapters = item.optJSONArray("messageAdapters").toStringList(),
             agentAdapters = item.optJSONArray("agentAdapters").toStringList(),
             codexCwd = item.optString("codexCwd"),
             codexThreadName = item.optString("codexThreadName"),
+            avatarConfigured = item.optBoolean("avatarConfigured"),
+            avatarVersion = item.optString("avatarVersion"),
             rawJson = item
         )
 

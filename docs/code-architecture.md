@@ -105,7 +105,8 @@ skills/
 
 - `napcatAdapter.ts`：接 OneBot / NapCat WebSocket，处理 QQ 群聊、私聊、回复链和 @ 识别；引用消息未落盘时，通过 `napcatReplyMessages.ts` 调用 `get_msg` 递归补齐并缓存，查询失败不阻塞当前路由。
 - `wecomAdapter.ts`：接企业微信智能机器人 WebSocket 长连接，处理企业微信群聊消息、写企业微信消息日志，并把回传目标交给 outbox。当前成熟度仍是 experimental，企业微信群聊字段尽量对齐 NapCat，专用字段只作为补充。
-- `weixinAdapter.ts` + `weixinOpenClaw.ts`：个人微信实验原型，负责 iLink 二维码登录、长轮询、context token 持久化、文本投递，以及来源会话的文本或受控本地文件回复。文件先经过 Outbox 的 `allowedFileRoots` 真实路径校验，再按 iLink 协议加密上传微信 CDN。运行 token 只写 `data/`；入站媒体仍只记录，尚未完成真实账号长期验收。
+- `weixinAdapter.ts` + `weixinOpenClaw.ts`：个人微信实验原型，负责显式请求后的 iLink 二维码登录、长轮询、安全会话恢复、文本投递，以及来源会话的文本或受控本地文件回复。Windows 使用当前用户 DPAPI 保护 token、同步游标、账号标识和 context token；非 Windows 使用权限受限的本机随机密钥与 AES-256-GCM。网络超时或 5xx 只进入“暂时不可达、凭据保留”，仅服务端 `-14` 或 HTTP 401/403 明确拒绝才标记失效。历史消息不参与当前登录判断；入站媒体仍只记录，尚未完成真实账号长期验收。
+- `feishuAdapter.ts` + `feishu.ts`：飞书企业自建应用消息端，负责 URL challenge、原始请求体签名与 Verification Token 校验、Encrypt Key 解密、`event_id` 持久去重、`chat_id` 上下文隔离和来源 chat 文本回传。凭据或事件订阅确认缺失时监听与出站都失败关闭，不回退到通用 Webhook。
 - `webhookAdapter.ts`：接通用 Webhook、小爱及旧 FenneNote 兼容回调，并转成语音转写事件；显式命中 record-first 白名单时交给 `rabilinkObservationRecorder.ts` 写统一观察账本，不逐句投递 Agent。新本机语音入口使用 RabiSpeech。
 - `rabilinkAdapter.ts` / `rabilinkRelayWorker.ts`：本地兼容入口与 Relay worker；observation 可先写统一会话账本，主动下行走独立消息流。
 - `heartbeatAdapter.ts`：定时触发心跳消息。
@@ -336,6 +337,7 @@ startManager();
 
 - 启动 manager HTTP server。
 - 提供 `/gateways`、`/api/scan/*`、`/api/message/*`、`/api/agent/*` 等控制面路径。
+- 保持 GET 扫描为纯 read model：`/api/scan/message-adapters` 不能复用启动、登录、配置迁移或修复命令；动作只允许进入显式 POST 控制路径。
 - 启停 Gateway 子进程。
 - 服务 WebGUI 静态文件。
 - 根据 `data/Config.json.webguiLan` 选择回环或局域网监听，并在 HTTP 入口统一校验非本机 WebGUI token；静态壳可公开加载，但没有 token 不能读取 Manager 状态或调用动作。
@@ -414,6 +416,9 @@ Gateway 配置的事实源 Module。
 `src/messageEndpoints/` 放消息端的管理和扫描能力。
 
 - `napcatManager.ts`：NapCat Shell 准备、WebUI token、OneBot 配置、健康检查、启动/停止、扫描。
+- `napcatHealthScan.ts`：按 runtime/instance 并行执行纯只读 NapCat 健康观察，在共享截止时间内返回部分结果。
+- `manager/scanController.ts`：为独立消息端探针提供并发起跑、共享截止时间、超时/错误诊断和 fallback 结果。
+- `manager/messageAdapterHealth.ts`：把 QQ、个人微信、RabiLink、语音等入口汇总为彼此独立的 operational health；不把单入口故障提升成全局离线。
 - `webhookLikeScans.ts`：Webhook / XiaoAi 与旧 FenneNote 兼容 HTTP callback 端点扫描。
 - `wecomManager.ts`：企业微信主动 WebSocket 长连接的扫描 read model，检查 SDK、bot id/secret、连接认证状态和最近消息。
 - `remoteAgentManager.ts`：远端 Agent 设备发现、密码挑战、连接、任务、事件和文件回传。

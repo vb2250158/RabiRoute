@@ -33,6 +33,7 @@ import {
   isHeartbeatRecord,
   isManualTriggerRecord,
   isPlanFeedbackRecord,
+  isFeishuRecord,
   isRolePanelRecord,
   isWeComRecord,
   isWeixinRecord,
@@ -638,6 +639,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
   if (routeKind === "wearable_health_alert") return "智能手表/手环健康告警";
   if (routeKind === "wecom_message") return "企业微信群聊消息提醒";
   if (routeKind === "weixin_message") return "个人微信消息提醒";
+  if (routeKind === "feishu_message") return "飞书群聊消息提醒";
   return "RabiRoute 消息提醒";
 }
 
@@ -689,6 +691,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const isRolePanel = isRolePanelRecord(record);
   const isPlanFeedback = isPlanFeedbackRecord(record);
   const isWeCom = isWeComRecord(record);
+  const isFeishu = isFeishuRecord(record);
   const isWeixin = isWeixinRecord(record);
   const localReplyContext = (isRolePanel || isPlanFeedback) && record.replyContext && typeof record.replyContext === "object"
     ? record.replyContext
@@ -702,14 +705,15 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     : localRoleId ?? "plan_feedback";
   const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isPlanFeedback ? planFeedbackTargetId : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
   const wecomGroupId = isWeCom ? record.groupId ?? record.chatId ?? record.conversationId : undefined;
-  const targetType = isGroup || isWeCom ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isPlanFeedback || isRolePanel ? localTargetType : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
+  const feishuChatId = isFeishu ? record.chatId : undefined;
+  const targetType = isGroup || isWeCom || isFeishu ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isPlanFeedback || isRolePanel ? localTargetType : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
   const pipeline = outputPipelineForDecision(decision);
   const replyApiPath = "/api/agent/replies";
   const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
   const dataDirPath = relativeWorkspacePath(roleContext.dataDir);
   const roleDirPath = relativeWorkspacePath(roleContext.roleDir);
   const rolePath = relativeWorkspacePath(roleContext.rolePath);
-  const groupLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : "group-messages.jsonl"));
+  const groupLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : isFeishu ? "feishu-messages.jsonl" : "group-messages.jsonl"));
   const privateLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, isWeixin ? "weixin-messages.jsonl" : "private-messages.jsonl"));
   const heartbeatLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "heartbeat-events.jsonl"));
   const manualTriggerLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "manual-trigger-events.jsonl"));
@@ -736,7 +740,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     routeKind: decision.routeKind,
     targetType,
     messageId: record.messageId,
-    groupId: isGroup ? record.groupId : wecomGroupId,
+    groupId: isGroup ? record.groupId : wecomGroupId ?? feishuChatId,
     userId: "userId" in record ? record.userId : undefined,
     targetGroupId: config.targetGroupId || undefined,
     instanceId: "instanceId" in record ? record.instanceId : undefined,
@@ -765,6 +769,8 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     wecomChatId: isWeCom ? record.chatId : undefined,
     wecomSenderId: isWeCom ? record.senderId ?? record.userId : undefined,
     wecomMessageType: isWeCom ? record.messageType : undefined,
+    feishuChatId,
+    feishuMessageId: isFeishu ? record.messageId : undefined,
     weixinSessionId: isWeixin ? record.sessionId : undefined,
     weixinUserId: isWeixin ? record.userId : undefined,
     weixinMessageType: isWeixin ? record.messageType : undefined,
@@ -786,10 +792,10 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     sender,
     senderName: record.senderName,
     userId: "userId" in record ? record.userId : undefined,
-    groupId: isGroup ? record.groupId : wecomGroupId,
+    groupId: isGroup ? record.groupId : wecomGroupId ?? feishuChatId,
     targetType,
-    targetId: isWeCom ? wecomGroupId : targetId,
-    messageTarget: isWeixin ? `个人微信会话 ${record.sessionId}` : isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isPlanFeedback ? `计划反馈 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
+    targetId: isWeCom ? wecomGroupId : isFeishu ? feishuChatId : targetId,
+    messageTarget: isWeixin ? `个人微信会话 ${record.sessionId}` : isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isFeishu ? `飞书群 ${feishuChatId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isPlanFeedback ? `计划反馈 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText: decision.routeText,
@@ -865,6 +871,8 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     wecomChatId: isWeCom ? record.chatId : undefined,
     wecomSenderId: isWeCom ? record.senderId ?? record.userId : undefined,
     wecomMessageType: isWeCom ? record.messageType : undefined,
+    feishuChatId,
+    feishuMessageId: isFeishu ? record.messageId : undefined,
     weixinSessionId: isWeixin ? record.sessionId : undefined,
     weixinUserId: isWeixin ? record.userId : undefined,
     weixinMessageType: isWeixin ? record.messageType : undefined

@@ -5,6 +5,7 @@ import { isCodexMonitorThreadActive } from "./codexRuntime.js";
 import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
 import {
   appendAgentPacketToDir,
+  appendFeishuMessageToDir,
   appendAdapterLogToDir,
   appendGroupMessageToDir,
   appendHeartbeatEventToDir,
@@ -21,6 +22,7 @@ import {
   isHeartbeatRecord,
   isManualTriggerRecord,
   isWeComRecord,
+  isFeishuRecord,
   isWeixinRecord,
   isVoiceTranscriptRecord
 } from "./routing/routeDecision.js";
@@ -158,6 +160,7 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   if (routeKind === "weixin_message") {
     return "weixin_message";
   }
+  if (routeKind === "feishu_message") return "feishu_message";
   return routeKind === "private" ? "private" : "group_mention";
 }
 
@@ -286,6 +289,8 @@ function summarizeDeliveryResult(routeKind: ForwardRouteKind, record: ForwardRec
 function appendRecordToRoleDataDir(record: ForwardRecord, dataDir: string): void {
   if (isWeComRecord(record)) {
     appendWeComMessageToDir(record, dataDir);
+  } else if (isFeishuRecord(record)) {
+    appendFeishuMessageToDir(record, dataDir);
   } else if (isWeixinRecord(record)) {
     appendWeixinMessageToDir(record, dataDir);
   } else if (isGroupRecord(record)) {

@@ -19,6 +19,7 @@ export function messageContextHistoryKindForRouteKind(routeKind: ForwardRouteKin
   if (["group_message", "direct_at", "direct_reply", "indirect_reply"].includes(routeKind)) return "group";
   if (routeKind === "wecom_message") return "wecom";
   if (routeKind === "weixin_message") return "private";
+  if (routeKind === "feishu_message") return "feishu";
   if (routeKind === "heartbeat") return "heartbeat";
   if (routeKind === "manual_trigger") return "manual_trigger";
   if (routeKind === "role_panel_message") return "role_panel";
@@ -31,6 +32,7 @@ export function logicalMessageAdapterForRecord(routeKind: ForwardRouteKind, reco
   if (routeKind === "role_panel_message") return "rolePanel";
   if (routeKind === "wecom_message") return "wecom";
   if (routeKind === "weixin_message") return "weixin";
+  if (routeKind === "feishu_message") return "feishu";
   if (["group_message", "direct_at", "direct_reply", "indirect_reply", "private"].includes(routeKind)) return "napcat";
   return undefined;
 }

@@ -79,8 +79,12 @@ test("a touchpad review request guides the current turn immediately even without
     gatewayManagerUrl: "http://127.0.0.1:8790",
     autoReviewEnabled: false,
     settleMs: 60000,
+    now: () => Date.parse("2026-07-13T10:01:00.000Z"),
     notifyWhenIdle: async () => ({ status: "busy", thread: mockThread }),
-    notifyNow: async (prompt) => { guided.push(prompt); }
+    notifyNow: async (prompt) => {
+      guided.push(prompt);
+      return mockThread;
+    }
   });
 
   const result = await reviewer.check();
@@ -93,6 +97,14 @@ test("a touchpad review request guides the current turn immediately even without
   assert.match(guided[0], /"targetType":"rabilink"/);
   assert.match(guided[0], /"proactive":true/);
   assert.match(guided[0], /ok=true 且 status=sent/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, "rabilink-conversation-review-state.json"), "utf8")), {
+    schemaVersion: 1,
+    lastHandledReviewRequestId: "rabilink-control:review-1",
+    lastScheduledAt: "2026-07-13T10:01:00.000Z",
+    lastDeliveryThreadId: mockThread.id,
+    lastDeliveryThreadName: mockThread.threadName,
+    lastDeliveryKind: "manual"
+  });
 });
 
 test("a touchpad wake arriving during another review is checked again immediately", async () => {
@@ -330,7 +342,10 @@ test("conversation review state replaces a corrupt cursor atomically", async () 
   assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")), {
     schemaVersion: 1,
     lastScheduledUserEntryId: "rabilink-user:state-recovery",
-    lastScheduledAt: "2026-07-13T10:01:00.000Z"
+    lastScheduledAt: "2026-07-13T10:01:00.000Z",
+    lastDeliveryThreadId: mockThread.id,
+    lastDeliveryThreadName: mockThread.threadName,
+    lastDeliveryKind: "automatic"
   });
   assert.equal(
     fs.readdirSync(dataDir).some((file) => file.startsWith("rabilink-conversation-review-state.json.") && file.endsWith(".tmp")),

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { sendGroupMessage, sendPrivateMessage, uploadGroupFile, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
+import { sendFeishuText, type FeishuEndpoint } from "./feishu.js";
 import { sendWeixinFile, sendWeixinImage, sendWeixinText } from "./weixinOpenClaw.js";
 import {
   appendRolePanelTimelineMessage,
@@ -66,6 +67,8 @@ export type AgentReplyRequest = {
   wecomChatId?: unknown;
   wecomSenderId?: unknown;
   wecomMessageType?: unknown;
+  feishuChatId?: unknown;
+  feishuMessageId?: unknown;
   weixinSessionId?: unknown;
   weixinUserId?: unknown;
   weixinMessageType?: unknown;
@@ -113,6 +116,9 @@ export type AgentReplyRuntime = {
   wecomBotId?: string;
   wecomBotSecret?: string;
   wecomWsUrl?: string;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+  feishuEventSubscriptionEnabled?: boolean;
   routeProfiles?: AgentReplyRouteProfile[];
   messageAdapterPolicies?: MessageAdapterPolicies;
   rabiLinkRelay?: {
@@ -477,13 +483,24 @@ function findSourceRecord(options: AgentReplyOptions, route: ResolvedRoute, mess
       ["fennenote-voice-transcripts.jsonl", "voice_transcript"],
       ["rabilink-voice-transcripts.jsonl", "rabilink"],
       ["wecom-messages.jsonl", "group"],
-      ["weixin-messages.jsonl", "private"]
+      ["weixin-messages.jsonl", "private"],
+      ["feishu-messages.jsonl", "group"]
     ] as const) {
       const found = readJsonl(path.join(dir, fileName))
         .reverse()
         .find((record) => String(record.messageId ?? record.message_id ?? "") === messageId);
       if (found) {
-        return sourceRecordFromLog(found, targetType, fileName === "wecom-messages.jsonl" ? "wecom" : fileName === "weixin-messages.jsonl" ? "weixin" : undefined);
+        return sourceRecordFromLog(
+          found,
+          targetType,
+          fileName === "wecom-messages.jsonl"
+            ? "wecom"
+            : fileName === "weixin-messages.jsonl"
+              ? "weixin"
+              : fileName === "feishu-messages.jsonl"
+                ? "feishu"
+                : undefined
+        );
       }
     }
   }
@@ -520,6 +537,15 @@ function runtimeCanUseWeCom(runtime: AgentReplyRuntime): boolean {
   return Boolean(runtime.wecomBotId?.trim() || process.env.WECOM_BOT_ID?.trim());
 }
 
+function runtimeCanUseFeishu(runtime: AgentReplyRuntime): boolean {
+  return Boolean(
+    (runtime.feishuAppId?.trim() || process.env.FEISHU_APP_ID?.trim())
+    && (runtime.feishuAppSecret?.trim() || process.env.FEISHU_APP_SECRET?.trim())
+    && (runtime.feishuEventSubscriptionEnabled === true
+      || process.env.FEISHU_EVENT_SUBSCRIPTION_ENABLED?.trim().toLowerCase() === "true")
+  );
+}
+
 function resolveExplicitTargetRoute(options: AgentReplyOptions, contextTarget?: SourceRecord): ResolvedReplyRoute | undefined {
   if (!contextTarget?.targetType || (!contextTarget.groupId && !contextTarget.userId)) {
     return undefined;
@@ -527,6 +553,11 @@ function resolveExplicitTargetRoute(options: AgentReplyOptions, contextTarget?: 
 
   if (contextTarget.adapterType === "wecom") {
     const runtime = options.runtimes.find(runtimeCanUseWeCom) ?? options.runtimes[0];
+    return runtime ? { runtime, profile: runtime.routeProfiles?.[0] } : undefined;
+  }
+
+  if (contextTarget.adapterType === "feishu") {
+    const runtime = options.runtimes.find(runtimeCanUseFeishu);
     return runtime ? { runtime, profile: runtime.routeProfiles?.[0] } : undefined;
   }
 
@@ -737,6 +768,15 @@ function wecomPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "wecom");
 }
 
+function feishuPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
+  return messageAdapterPolicyFor({
+    id: route.runtime.id,
+    gatewayPort: 0,
+    messageAdapters: ["feishu"],
+    messageAdapterPolicies: route.runtime.messageAdapterPolicies
+  }, "feishu");
+}
+
 function rabiLinkPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   return messageAdapterPolicyFor({
     id: route.runtime.id,
@@ -754,6 +794,15 @@ function wecomEndpoint(route: ResolvedRoute): WeComEndpoint | undefined {
     secret,
     wsUrl: route.runtime.wecomWsUrl?.trim() || process.env.WECOM_WS_URL?.trim() || undefined
   };
+}
+
+function feishuEndpoint(route: ResolvedRoute): FeishuEndpoint | undefined {
+  const subscriptionEnabled = route.runtime.feishuEventSubscriptionEnabled === true
+    || process.env.FEISHU_EVENT_SUBSCRIPTION_ENABLED?.trim().toLowerCase() === "true";
+  if (!subscriptionEnabled) return undefined;
+  const appId = route.runtime.feishuAppId?.trim() || process.env.FEISHU_APP_ID?.trim() || "";
+  const appSecret = route.runtime.feishuAppSecret?.trim() || process.env.FEISHU_APP_SECRET?.trim() || "";
+  return appId && appSecret ? { appId, appSecret } : undefined;
 }
 
 function appendAdapterReply(
@@ -1164,7 +1213,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     roleId: requestField(request, "roleId"),
     reqId: requestField(request, "wecomReqId"),
     conversationId: requestField(request, "wecomConversationId"),
-    chatId: requestField(request, "wecomChatId"),
+    chatId: requestField(request, "wecomChatId") || requestField(request, "feishuChatId"),
     messageType: requestField(request, "wecomMessageType")
       || requestField(request, "weixinMessageType"),
     sessionId: requestField(request, "weixinSessionId") || requestField(request, "sessionId")
@@ -1492,6 +1541,32 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   }
 
   const shouldUseWeCom = pipeline.outputAdapter === "wecom" || target.adapterType === "wecom" || contextTarget.adapterType === "wecom";
+  const shouldUseFeishu = pipeline.outputAdapter === "feishu" || target.adapterType === "feishu" || contextTarget.adapterType === "feishu";
+  if (shouldUseFeishu) {
+    const policy = feishuPolicy(route);
+    if (!policy.outputEnabled || !policy.supportedOutputs.includes(content.kind)) {
+      const result: AgentReplyResult = { ...draft("Feishu message sending is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    const endpoint = feishuEndpoint(route);
+    const chatId = valueString(request.feishuChatId) || valueString(contextObject(request).feishuChatId) || target.chatId || target.groupId;
+    if (!endpoint || !chatId) {
+      const result: AgentReplyResult = { ...draft(!endpoint ? "Feishu sending requires App ID/App Secret and an explicitly confirmed event subscription for this route." : "No Feishu source chat is available for this reply.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    try {
+      const sent = await sendFeishuText(endpoint, chatId, text);
+      const result: AgentReplyResult = { ok: true, status: "sent", reason: "Sent to Feishu source chat.", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: chatId, userId: target.userId, instanceId: target.instanceId, sentMessageId: sent.messageId };
+      appendOutboxLog(options, route, "info", "feishu_reply_sent", text.slice(0, 500), withConversation({ ...result, sent }));
+      return result;
+    } catch (error) {
+      const result: AgentReplyResult = { ok: false, status: "failed", reason: error instanceof Error ? error.message : String(error), routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: chatId, userId: target.userId, instanceId: target.instanceId, draft: { text, targetType: "group", groupId: chatId, userId: target.userId } };
+      appendOutboxLog(options, route, "error", "feishu_reply_failed", result.reason ?? "failed", result);
+      return result;
+    }
+  }
   if (shouldUseWeCom) {
     const policy = wecomPolicy(route);
     if (!policy.outputEnabled) {

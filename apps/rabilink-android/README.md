@@ -30,10 +30,11 @@ RabiLink Relay
 ```
 
 - 眼镜默认入口是 `GlassAudioClientActivity`；`glass-app/` 是眼镜应用模块，眼镜主链只负责音频、媒体、状态与 HUD，不在本地运行 ASR/TTS。
-- 手机日常首页是会话列表，点一个启用了 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
+- 手机日常首页是会话列表；所有已配置人格都会显示，未启用或尚无聊天能力的人格保留配置引导而不会消失。点一个已启用 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
 - 手机后端通过受限 `audio-streams/rabilink/start|chunk|stop` 接口把手机/眼镜的连续 16 kHz mono PCM 送到所选 Rabi PC。Android 不做 VAD、切句、ASR 或声纹；RabiSpeech 在 PC 端切句和识别后自动写主机通用语音库，再按固定的 `routeProfileId` 投给 RabiLink/手机消息端。启动请求分别提交稳定 `source_device_id` 与临时 `stream_id`，普通回复只回稳定设备，不会发给带音频后缀的流 ID。`/api/rabilink/speech/messages` 只保留兼容与调试用途；需要播报时再由 Rabi PC TTS 合成并以 PCM 发回。
 - 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标。手机通过同一条有序 Classic BT 通道发送 `PLAYBACK_BEGIN → PCM → PLAYBACK_END`；眼镜必须先在主线程确认暂停采集，播放线程才接受 PCM，避免 TTS 开头被麦克风回录。它会核对消息 ID/PCM 长度，并且只有 `AudioTrack` 播放头到达 marker 后才回 `played` 并恢复聆听；Activity 销毁会把未完成播放明确回为 `playback_failed`。旧版没有 BEGIN/END 的 PCM 仍可兼容播放，但不会冒充已确认播放。
 - 照片已接入消息附件上行；Relay/worker 支持视频文件附件，但真眼镜视频回调尚待接线，不代表实时视频已完成。
+- 人格头像通过 Manager 的受控头像接口提供给 Relay；手机只缓存 Relay 代理的二进制和不透明版本号。会话元数据和本地消息缓存先立即渲染，头像再独立异步加载，并明确显示加载中、缓存校验中、旧缓存或不可用。头像变化由 `persona_avatar_changed` SSE 事件只刷新对应人格；前台重连后的列表读取仅作恢复，不以轮询作为正确性机制。
 - `RabiConversationService` 持有消息 cursor、通知和手机/眼镜 I/O；发送目标在入队时固定，切换会话不会把排队消息改投给别人。手机录音由独立 `RabiPhoneAudioCapture` 管理 WakeLock、卡死检测、受控重启和运行指标。文字、控制、媒体以及 `delivered/played/playback_failed` 回执都先写磁盘；可靠队列达到上限时拒绝新项目并明确报错，不再静默删除尚未确认的旧项目。连续 PCM 只保留待确认块和有界最新缓冲，不保存隐蔽的离线原始录音。回执代码和自动补传已闭环，但手机与眼镜真实扬声器仍需真机验收。
 - 设置页以一个持久化真源提供 `已暂停 / 手机模式 / 眼镜模式`。切到眼镜模式时先暂停手机麦克风；只有真实眼镜蓝牙连接事件到达后才启动眼镜 PCM，连接前或断线后保持暂停并显示原因，不会静默回退成双路采集。运行卡片由服务广播事件刷新，显示连接、目标 Route/人格、采集、眼镜、可靠队列和最近错误，不运行一秒一次的业务状态轮询。
 - 用户可设置“由 Agent 人格综合决定 / 偏安静 / 均衡 / 偏主动”。该值作为明确偏好 observation 可靠入队，并附在手机文字、控制、媒体和音频流元数据中；App 与 Relay 不把它解释成固定介入规则。最终不打扰、准备、提示、建议、请求确认或行动仍由 PC 状态/情景上下文、Route 安全边界和目标 Agent 人格共同决定。
@@ -68,8 +69,8 @@ RabiLink Relay
 
 ### 日常聊天与导航
 
-- 首页只列出带 `rabilink` 消息端的 Route。智能手表/手环健康 Route 不会再被误当成聊天人格；未启用的 RabiLink Route 会给出原因和修复入口。
-- 会话行显示头像、名称、最后消息、时间和未读数；点击进入独立聊天详情，系统返回和页内“返回”都回到原会话列表位置。
+- 首页列出 Rabi PC 返回的全部已配置人格，不再按 Route 是否启用或是否已有 `rabilink` 聊天能力隐藏。智能手表/手环健康 Route 不会被误当成人格；未启用聊天的人格会给出原因和修复入口。
+- 会话行先从端点隔离的本机缓存显示人格名、最后消息、时间和未读数；头像独立异步加载。点击可聊天的人格进入独立聊天详情，系统返回和页内“返回”都回到原会话列表位置。
 - 每个会话独立保存草稿和已读位置。打开一个人格不会清除其他人格的未读；旧版无 Route 消息只迁移到一个确定会话。
 - 普通聊天不再放“人格下拉”和“配置助手模式”。知道字段时在设置/远程 WebGUI 的对应位置修改，不知道字段名时从设置进入独立配置助手。
 - 通知按会话聚合并携带 `routeProfileId`，冷启动或热启动都直达正确聊天；返回后仍可选其他人格。
@@ -370,6 +371,27 @@ cd <repo>\apps\rabilink-android
 ```text
 out\apk\RabiLinkProbe-v<versionName>+<versionCode>-<yyyyMMdd-HHmmss>-debug.apk
 ```
+
+手机常驻采集使用不含本地 ASR/TTS 模型的精简包。这个导出入口会先运行单元测试和完整 APK 构建，再强制检查 `arm64-v8a`、25 MiB 体积上限、模型资源缺失、zipalign，以及 Android v2 + v3 双签名：
+
+```powershell
+cd <repo>\apps\rabilink-android
+.\scripts\Export-RabiLinkMobileSlimApk.ps1 -JavaHome "<JDK 17>"
+```
+
+如完整构建刚刚已经成功，只需要对同一份 `app-debug.apk` 重做独立导出验证，可以显式使用：
+
+```powershell
+.\scripts\Export-RabiLinkMobileSlimApk.ps1 -SkipBuild -JavaHome "<JDK 17>"
+```
+
+验收通过的文件固定输出为：
+
+```text
+app\build\outputs\apk\debug\RabiLink-Android-<versionName>-verified.apk
+```
+
+脚本最后输出结构化 JSON，包含版本号、ABI、模型资源检查、常驻服务与可选 Rokid SDK 的 DEX 隔离、双签名、文件大小与 SHA-256。手机包只负责采集、网络重连、通知与播放；ASR/TTS 推理继续由 RabiPC 唯一承担。
 
 ## ADB 读取真实心率
 

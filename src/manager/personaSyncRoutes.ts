@@ -49,6 +49,8 @@ export type PersonaSyncRouteContext = {
   autoReconciler?: PersonaSyncAutoReconciler;
   token(): string;
   relay(): { url: string; token: string; deviceId: string; deviceGuid: string };
+  manifestTimeoutMs?: number;
+  readOnlySnapshot?: boolean;
 };
 
 function authorized(request: http.IncomingMessage, ctx: PersonaSyncRouteContext): boolean {
@@ -99,6 +101,18 @@ export function handlePersonaSyncApi(
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/persona-sync/conflicts") {
+    if (ctx.readOnlySnapshot) {
+      jsonResponse(response, 200, {
+        code: 0,
+        data: { conflicts: [] },
+        scan: {
+          state: "snapshot",
+          partial: true,
+          message: "Read-only Manager acceptance does not walk conflict payloads."
+        }
+      });
+      return true;
+    }
     try {
       jsonResponse(response, 200, {
         code: 0,
@@ -157,9 +171,41 @@ export function handlePersonaSyncApi(
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/persona-sync/manifest") {
-    void ctx.service.manifest(requestUrl.searchParams.get("roleId") || undefined)
-      .then(manifest => jsonResponse(response, 200, { code: 0, data: manifest }))
-      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    const roleId = requestUrl.searchParams.get("roleId") || undefined;
+    const timeoutMs = Math.max(10, ctx.manifestTimeoutMs ?? 5000);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<{ timedOut: true }>(resolve => {
+      timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+      timer.unref?.();
+    });
+    void Promise.race([
+      ctx.service.manifest(roleId).then(manifest => ({ timedOut: false as const, manifest })),
+      timeout
+    ])
+      .then(result => {
+        if (result.timedOut) {
+          jsonResponse(response, 200, {
+            code: 0,
+            data: ctx.service.manifestSnapshot(roleId),
+            scan: {
+              state: "timeout",
+              partial: true,
+              deadlineMs: timeoutMs,
+              message: "Persona manifest refresh exceeded its deadline; returned the last persisted in-memory snapshot while Manager stayed responsive."
+            }
+          });
+          return;
+        }
+        jsonResponse(response, 200, {
+          code: 0,
+          data: result.manifest,
+          scan: { state: "ok", partial: false, deadlineMs: timeoutMs }
+        });
+      })
+      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }))
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+      });
     return true;
   }
   const fileMatch = requestUrl.pathname.match(/^\/api\/persona-sync\/files\/([^/]+)\/(.+)$/);

@@ -96,6 +96,8 @@ https://你的域名/manage/<账号>/<RabiGUID>/#/routes
 
 Manager 的本地监听与 Relay 连接相互独立：Manager 先提供本机和局域网 WebGUI，再异步连接 Relay。Relay 暂时不可用只会让广域网入口降级，不会阻止 Manager 启动或拖住本机 `8790`。Relay 恢复、用户稍后打开远程页面或页面断线重连时会热连接，不需要重启 Manager。
 
+若远程请求没有可用 PC worker，API 会返回带诊断请求 ID 的结构化 `RABI_PC_WEBGUI_UNAVAILABLE`；等待 worker 回填超时则返回 `RABI_PC_WEBGUI_TIMEOUT`。两者都标记 `retryable`、发送 `Retry-After: 3`，并避免泄露本机异常、路径或地址。普通浏览器导航收到的是包含同一诊断 ID 和恢复提示的 HTML 错误页，不再只有无上下文的 502/504。
+
 远程 WebGUI 使用 `/manage` 登录 Cookie；PC worker 使用独立的 RabiLink 应用 token。Relay 不会把应用 token、管理 Cookie 或局域网 `webgui_token` 转发给本机 Manager，也不会把三种认证边界合并。
 
 ## 同应用 PC 发现与人格同步中转

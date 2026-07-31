@@ -7,6 +7,7 @@ import { scanAgentAdapters } from "../agentAdapters/managerApi.js";
 import { gatewayAdapterTypes, type GatewayDefinition, type GatewayConfigFile } from "../shared/gatewayConfigModel.js";
 import { sanitizeConfigName } from "../shared/routeIdentity.js";
 import { routeFolderPath } from "../shared/routePaths.js";
+import { personaAvatarPresentation } from "./personaAvatarRoutes.js";
 import type { RabiGlobalConfigStore, RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
 
@@ -131,15 +132,150 @@ function identityPayload(ctx: RabiApiContext, request: http.IncomingMessage): { 
   };
 }
 
-function routeSummary(runtime: GatewayRuntime, runtimeStatus: Record<string, unknown>): Record<string, unknown> {
+type MobileAdapterState = {
+  type: string;
+  label: string;
+  state: "connected" | "ready" | "login_required" | "waiting" | "stopped" | "disabled" | "attention";
+  summary: string;
+};
+
+type MobileRouteStatusInput = {
+  enabled?: boolean;
+  running: boolean;
+  messageAdapters?: string[];
+  messageAdaptersDisabled?: string[];
+  runtimeStatus?: Record<string, unknown>;
+};
+
+function recordValue(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function adapterLabel(type: string): string {
+  return ({
+    napcat: "QQ",
+    weixin: "个人微信",
+    wecom: "企业微信",
+    feishu: "飞书",
+    rabilink: "手机消息",
+    speech: "语音",
+    wearable: "穿戴设备",
+    heartbeat: "定时触发",
+    webhook: "Webhook",
+    rolePanel: "角色面板"
+  } as Record<string, string>)[type] ?? type;
+}
+
+/**
+ * Builds the deliberately small status contract used by mobile clients.
+ * It never forwards account ids, paths, message samples, raw errors, logs,
+ * ports, URLs, process ids, or other diagnostics from gatewayStatus.
+ */
+export function mobileAdapterStates(input: MobileRouteStatusInput): MobileAdapterState[] {
+  const adapters = [...new Set((input.messageAdapters ?? []).map((value) => String(value || "").trim().toLowerCase()).filter(Boolean))];
+  const disabled = new Set((input.messageAdaptersDisabled ?? []).map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
+  const runtimeStatus = recordValue(input.runtimeStatus);
+  const gatewayStatus = recordValue(runtimeStatus.gatewayStatus);
+  const liveAdapters = recordValue(gatewayStatus.messageAdapters);
+  const napcatInstancesValue = gatewayStatus.napcatInstances;
+  const napcatInstances = Array.isArray(napcatInstancesValue)
+    ? napcatInstancesValue.map(recordValue)
+    : Object.values(recordValue(napcatInstancesValue)).map(recordValue);
+
+  return adapters.map((type): MobileAdapterState => {
+    const label = adapterLabel(type);
+    if (input.enabled === false || disabled.has(type)) {
+      return { type, label, state: "disabled", summary: "已停用" };
+    }
+    if (!input.running) {
+      return { type, label, state: "stopped", summary: "等待 Rabi PC 启动" };
+    }
+
+    const live = recordValue(liveAdapters[type]);
+    if (type === "weixin") {
+      return live.loggedIn === true
+        ? { type, label, state: "connected", summary: "已登录" }
+        : { type, label, state: "login_required", summary: "未登录" };
+    }
+    if (type === "napcat") {
+      const legacy = recordValue(gatewayStatus.napcat);
+      const connected = napcatInstances.some((item) => item.connected === true)
+        || legacy.connected === true
+        || live.connected === true;
+      return connected
+        ? { type, label, state: "connected", summary: "已连接" }
+        : { type, label, state: "waiting", summary: "等待 QQ 连接" };
+    }
+    if (type === "wecom") {
+      const connected = live.connected === true && live.authenticated !== false;
+      return connected
+        ? { type, label, state: "connected", summary: "已连接" }
+        : { type, label, state: "waiting", summary: "等待连接" };
+    }
+    if (type === "feishu") {
+      return live.connected === true
+        ? { type, label, state: "connected", summary: "已连接" }
+        : { type, label, state: "waiting", summary: "等待连接" };
+    }
+    if (String(live.status || "").toLowerCase() === "error") {
+      return { type, label, state: "attention", summary: "需要在 Rabi PC 检查" };
+    }
+    return {
+      type,
+      label,
+      state: "ready",
+      summary: type === "rabilink" ? "已就绪" : "运行中"
+    };
+  });
+}
+
+function routeSummary(
+  runtime: GatewayRuntime,
+  runtimeStatus: Record<string, unknown>,
+  defaultRolesRoot: string,
+  mobilePresentation = false
+): Record<string, unknown> {
   const definition = runtime.definition;
+  const roleId = definition.agentRoleId ?? "";
+  const rolesRoot = String(definition.rolesDir || "").trim() || defaultRolesRoot;
+  const avatar = roleId ? personaAvatarPresentation(roleId, path.join(rolesRoot, roleId)) : {};
+  const enabled = definition.enabled !== false;
+  const running = Boolean(runtime.process);
+  const messageAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
+  const messageAdaptersDisabled = definition.messageAdaptersDisabled ?? [];
+  const normalizedMessageAdapters = new Set(messageAdapters.map((type) => String(type).toLowerCase()));
+  const normalizedDisabledAdapters = new Set(messageAdaptersDisabled.map((type) => String(type).toLowerCase()));
+  if (mobilePresentation) {
+    const adapterStates = mobileAdapterStates({
+      enabled,
+      running,
+      messageAdapters,
+      messageAdaptersDisabled,
+      runtimeStatus
+    });
+    return {
+      id: definition.id,
+      name: definition.name,
+      enabled,
+      running,
+      messageAdapters,
+      messageAdaptersDisabled,
+      agentRoleId: roleId,
+      personaDisplayName: personaDisplayName(rolesRoot, roleId),
+      chatAvailable: enabled
+        && normalizedMessageAdapters.has("rabilink")
+        && !normalizedDisabledAdapters.has("rabilink"),
+      adapterStates,
+      ...avatar
+    };
+  }
   return {
     id: definition.id,
     name: definition.name,
     configName: sanitizeConfigName(definition.configName) || definition.id,
     routeName: definition.routeName,
-    enabled: definition.enabled !== false,
-    running: Boolean(runtime.process),
+    enabled,
+    running,
     agentAdapters: definition.agentAdapters ?? ["codex"],
     codexCwd: definition.codexCwd ?? "",
     codexThreadId: definition.codexThreadId ?? "",
@@ -151,24 +287,68 @@ function routeSummary(runtime: GatewayRuntime, runtimeStatus: Record<string, unk
     astrbotUrl: definition.astrbotUrl ?? "",
     astrbotProjectId: definition.astrbotProjectId ?? "",
     astrbotSessionId: definition.astrbotSessionId ?? "",
-    messageAdapters: definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"],
-    agentRoleId: definition.agentRoleId ?? "",
+    messageAdapters,
+    messageAdaptersDisabled,
+    agentRoleId: roleId,
+    personaDisplayName: personaDisplayName(rolesRoot, roleId),
+    ...avatar,
     runtimeStatus
   };
 }
 
-function personaDisplayName(rolesRoot: string, roleId: string): string {
+function safePersonaDisplayName(value: string, fallback: string): string {
+  const compact = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  // Persona source files sometimes use a heading such as “呆猫人格提示词”.
+  // The phone should show the person, not that authoring label.
+  return compact.replace(/(?:\s*[-—–:：]\s*)?(?:人格提示词|人格)$/u, "").trim().slice(0, 80) || fallback;
+}
+
+export function personaDisplayName(rolesRoot: string, roleId: string): string {
   if (roleId === "YeYu") return "夜雨";
   const personaPath = path.join(rolesRoot, roleId, "persona.md");
   try {
     const heading = fs.readFileSync(personaPath, "utf8").match(/^#\s+(.+)$/m)?.[1]?.trim();
-    if (heading) return heading;
+    if (heading) return safePersonaDisplayName(heading, roleId);
   } catch { /* A role without a persona document still has a useful stable id. */ }
   return roleId;
 }
 
-function localRoutes(ctx: RabiApiContext, includeProfiles = false): Record<string, unknown> {
-  const routes = [...ctx.runtimes()].map((runtime) => routeSummary(runtime, ctx.runtimeStatus(runtime)));
+/**
+ * A roles root also contains lifecycle folders such as `old/`.  Only an
+ * actual persona document is publishable to mobile clients.
+ */
+export function personaProfileIds(rolesRoots: Iterable<string>, boundRoleIds: Iterable<string>): Array<{ roleId: string; personaDisplayName: string; rolesRoot: string }> {
+  const known = new Set([...boundRoleIds].map((value) => String(value || "").trim()).filter(Boolean));
+  const profiles: Array<{ roleId: string; personaDisplayName: string; rolesRoot: string }> = [];
+  for (const rolesRoot of rolesRoots) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(rolesRoot, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const item of entries) {
+      if (!item.isDirectory() || known.has(item.name)) continue;
+      const personaPath = path.join(rolesRoot, item.name, "persona.md");
+      try {
+        if (!fs.statSync(personaPath).isFile()) continue;
+      } catch {
+        continue;
+      }
+      known.add(item.name);
+      profiles.push({
+        roleId: item.name,
+        personaDisplayName: personaDisplayName(rolesRoot, item.name),
+        rolesRoot
+      });
+    }
+  }
+  return profiles;
+}
+
+function localRoutes(ctx: RabiApiContext, includeProfiles = false, mobilePresentation = false): Record<string, unknown> {
+  const defaultRolesRoot = path.join(ctx.rootDir, "data", "roles");
+  const routes = [...ctx.runtimes()].map((runtime) => routeSummary(runtime, ctx.runtimeStatus(runtime), defaultRolesRoot, mobilePresentation));
   if (includeProfiles) {
     const boundRoleIds = new Set(routes.map((route) => String(route.agentRoleId || "").trim()).filter(Boolean));
     const rolesRoots = new Set<string>([path.join(ctx.rootDir, "data", "roles")]);
@@ -176,30 +356,25 @@ function localRoutes(ctx: RabiApiContext, includeProfiles = false): Record<strin
       const configuredRoot = String(gateway.rolesDir || "").trim();
       if (configuredRoot) rolesRoots.add(configuredRoot);
     }
-    for (const rolesRoot of rolesRoots) {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(rolesRoot, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const item of entries) {
-        if (!item.isDirectory() || boundRoleIds.has(item.name)) continue;
-        boundRoleIds.add(item.name);
+    for (const profile of personaProfileIds(rolesRoots, boundRoleIds)) {
         routes.push({
-          id: `role:${item.name}`,
-          name: personaDisplayName(rolesRoot, item.name),
+          id: `role:${profile.roleId}`,
+          name: profile.personaDisplayName,
           configName: "",
           routeName: "",
           enabled: false,
           running: false,
           agentAdapters: [],
           messageAdapters: [],
-          agentRoleId: item.name,
+          messageAdaptersDisabled: [],
+          agentRoleId: profile.roleId,
+          personaDisplayName: profile.personaDisplayName,
+          ...personaAvatarPresentation(profile.roleId, path.join(profile.rolesRoot, profile.roleId)),
+          chatAvailable: false,
+          adapterStates: [],
           isPersonaOnly: true,
-          runtimeStatus: {}
+          ...(mobilePresentation ? {} : { runtimeStatus: {} })
         });
-      }
     }
   }
   return { code: 0, data: { routes } };
@@ -464,7 +639,11 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
 
   if (request.method === "GET" && !routeId && !action) {
     if (isSelfGuid(ctx, guid)) {
-      jsonResponse(response, 200, localRoutes(ctx, requestUrl.searchParams.get("includeProfiles") === "true"));
+      jsonResponse(response, 200, localRoutes(
+        ctx,
+        requestUrl.searchParams.get("includeProfiles") === "true",
+        requestUrl.searchParams.get("presentation") === "mobile"
+      ));
       return true;
     }
     void findInstance(ctx, request, requestUrl, guid)

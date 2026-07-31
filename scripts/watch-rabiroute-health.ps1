@@ -2,6 +2,11 @@ param(
   [string]$ManagerUrl = "http://127.0.0.1:8790",
   [string]$DefaultRouteName = "default-main",
   [int]$IntervalSeconds = 1800,
+  [int]$ManagerStartTimeoutSeconds = 30,
+  [int]$ManagerRecoveryBaseDelaySeconds = 15,
+  [int]$ManagerRecoveryMaxDelaySeconds = 300,
+  [int]$ManagerProbeAttempts = 3,
+  [int]$ManagerProbeRetryDelayMilliseconds = 500,
   [switch]$Once,
   [switch]$NoRepair,
   [switch]$IncludeDisabled,
@@ -11,14 +16,19 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$localBypassHosts = @("127.0.0.1", "localhost", "::1")
+$existingNoProxy = @(([string]$env:NO_PROXY -split ",") + ([string]$env:no_proxy -split ",")) |
+  ForEach-Object { $_.Trim() } |
+  Where-Object { $_ }
+$env:NO_PROXY = (@($existingNoProxy + $localBypassHosts) | Select-Object -Unique) -join ","
+$env:no_proxy = $env:NO_PROXY
+[System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
 $LogsDir = Join-Path $ProjectRoot "data\route\$DefaultRouteName\logs"
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 
 $TextLogPath = Join-Path $LogsDir "rabiroute-health-watch.log"
 $JsonlLogPath = Join-Path $LogsDir "rabiroute-health-watch.jsonl"
 $LatestSummaryPath = Join-Path $LogsDir "rabiroute-health-latest.md"
-$ManagerOutLog = Join-Path $ProjectRoot "rabiroute-manager-health.out.log"
-$ManagerErrLog = Join-Path $ProjectRoot "rabiroute-manager-health.err.log"
 
 function Write-HealthLog {
   param([string]$Message)
@@ -35,11 +45,16 @@ function Add-Issue {
     [string]$Message,
     [string]$Action = "",
     [bool]$Repaired = $false,
-    [bool]$NeedsUser = $false
+    [bool]$NeedsUser = $false,
+    [ValidateSet("system", "adapter")]
+    [string]$Impact = "system",
+    [string]$Adapter = ""
   )
   $Issues.Add([pscustomobject]@{
     scope = $Scope
     severity = $Severity
+    impact = $Impact
+    adapter = $Adapter
     message = $Message
     action = $Action
     repaired = $Repaired
@@ -118,24 +133,213 @@ function Test-Manager {
   }
 }
 
+function Test-ManagerListener {
+  try {
+    $uri = [uri]$ManagerUrl
+    if ($uri.Host -notin @("127.0.0.1", "localhost", "::1")) { return $null }
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+      $pending = $client.BeginConnect($uri.Host, $uri.Port, $null, $null)
+      if (-not $pending.AsyncWaitHandle.WaitOne(500)) { return $false }
+      $client.EndConnect($pending)
+      return $true
+    } finally {
+      $client.Dispose()
+    }
+  } catch {
+    return $false
+  }
+}
+
+function Test-ManagerWithRetry {
+  $attemptLimit = [Math]::Max(1, $ManagerProbeAttempts)
+  $attempt = 0
+  $meta = $null
+  while ($attempt -lt $attemptLimit) {
+    $attempt += 1
+    $meta = Test-Manager
+    if ($meta) { break }
+    if ($attempt -lt $attemptLimit) {
+      Start-Sleep -Milliseconds ([Math]::Max(0, $ManagerProbeRetryDelayMilliseconds))
+    }
+  }
+  $listener = if ($meta) { $true } else { Test-ManagerListener }
+  return [pscustomobject]@{
+    meta = $meta
+    attempts = $attempt
+    transientFailure = [bool]($meta -and $attempt -gt 1)
+    listenerPresent = $listener
+    classification = if ($meta) {
+      if ($attempt -gt 1) { "transient_control_plane_failure" } else { "healthy" }
+    } elseif ($listener -eq $true) {
+      "control_plane_unresponsive"
+    } else {
+      "process_or_listener_absent"
+    }
+  }
+}
+
+function Get-ManagerRecoveryState {
+  $files = @(Get-ChildItem -LiteralPath $LogsDir -Filter "manager-recovery-*.jsonl" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 2)
+  foreach ($file in $files) {
+    $lines = @(Get-Content -LiteralPath $file.FullName -Tail 200 -ErrorAction SilentlyContinue)
+    for ($index = $lines.Count - 1; $index -ge 0; $index--) {
+      try {
+        $record = $lines[$index] | ConvertFrom-Json
+        if ($null -ne $record.consecutiveFailures) {
+          return [pscustomobject]@{
+            consecutiveFailures = [int]$record.consecutiveFailures
+            nextAttemptAt = [string]$record.nextAttemptAt
+          }
+        }
+      } catch {
+      }
+    }
+  }
+  return [pscustomobject]@{
+    consecutiveFailures = 0
+    nextAttemptAt = ""
+  }
+}
+
+function Write-ManagerRecoveryEvent {
+  param(
+    [string]$Event,
+    [int]$ConsecutiveFailures,
+    [string]$NextAttemptAt = "",
+    [Nullable[int]]$LauncherPid = $null,
+    [Nullable[int]]$LauncherExitCode = $null,
+    [string]$StdoutLog = "",
+    [string]$StderrLog = "",
+    [string]$Message = ""
+  )
+  $record = [ordered]@{
+    schemaVersion = 1
+    eventId = [guid]::NewGuid().ToString()
+    time = (Get-Date).ToString("o")
+    event = $Event
+    consecutiveFailures = $ConsecutiveFailures
+    nextAttemptAt = if ($NextAttemptAt) { $NextAttemptAt } else { $null }
+    launcherPid = $LauncherPid
+    launcherExitCode = $LauncherExitCode
+    stdoutLog = if ($StdoutLog) { Split-Path -Leaf $StdoutLog } else { $null }
+    stderrLog = if ($StderrLog) { Split-Path -Leaf $StderrLog } else { $null }
+    message = if ($Message) { $Message } else { $null }
+  }
+  $recoveryLog = Join-Path $LogsDir ("manager-recovery-{0}.jsonl" -f (Get-Date -Format "yyyy-MM-dd"))
+  Add-Content -LiteralPath $recoveryLog -Encoding UTF8 -Value ($record | ConvertTo-Json -Compress)
+}
+
+function Reset-ManagerRecoveryBackoff {
+  $state = Get-ManagerRecoveryState
+  if ($state.consecutiveFailures -gt 0 -or $state.nextAttemptAt) {
+    Write-ManagerRecoveryEvent -Event "manager_healthy" -ConsecutiveFailures 0
+  }
+}
+
 function Start-ManagerIfNeeded {
   param([System.Collections.Generic.List[object]]$Issues)
   if ($NoRepair) { return }
   $managerJs = Join-Path $ProjectRoot "dist\manager.js"
+  $launcher = Join-Path $ProjectRoot "Start-RabiRoute-Tray.bat"
   if (-not (Test-Path $managerJs)) {
     Add-Issue $Issues "manager" "error" "Manager is unreachable and dist\manager.js is missing." "Cannot auto-start before build." $false $true
     return
   }
-  try {
-    Start-Process -FilePath "node" -ArgumentList @($managerJs) -WorkingDirectory $ProjectRoot -RedirectStandardOutput $ManagerOutLog -RedirectStandardError $ManagerErrLog -WindowStyle Hidden | Out-Null
-    Start-Sleep -Seconds 5
-    if (Test-Manager) {
-      Add-Issue $Issues "manager" "error" "Manager was unreachable." "Auto-started node dist\manager.js." $true $false
-    } else {
-      Add-Issue $Issues "manager" "error" "Manager stayed unreachable after auto-start." "Check rabiroute-manager-health.err.log." $false $true
+  if (-not (Test-Path $launcher)) {
+    Add-Issue $Issues "manager" "error" "Manager is unreachable and the Windows launcher is missing." "Cannot perform a guarded recovery." $false $true
+    return
+  }
+  $state = Get-ManagerRecoveryState
+  if ($state.nextAttemptAt) {
+    try {
+      $nextAttempt = [datetimeoffset]::Parse($state.nextAttemptAt)
+      if ($nextAttempt -gt [datetimeoffset]::Now) {
+        $remaining = [Math]::Max(1, [Math]::Ceiling(($nextAttempt - [datetimeoffset]::Now).TotalSeconds))
+        Write-ManagerRecoveryEvent `
+          -Event "recovery_backoff_skipped" `
+          -ConsecutiveFailures $state.consecutiveFailures `
+          -NextAttemptAt $state.nextAttemptAt `
+          -Message "Recovery is deferred for ${remaining}s."
+        Add-Issue $Issues "manager" "warning" "Manager recovery is in backoff for ${remaining}s." "The next scheduled health cycle will retry." $false $false
+        return
+      }
+    } catch {
     }
+  }
+
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+  $managerOutLog = Join-Path $LogsDir "manager-recovery-$stamp.stdout.log"
+  $managerErrLog = Join-Path $LogsDir "manager-recovery-$stamp.stderr.log"
+  try {
+    $recovery = Start-Process `
+      -FilePath $launcher `
+      -ArgumentList @("-NoTray", "-NoOpen", "-NoBuild", "-UseExistingBuild", "-ReuseHealthyManager") `
+      -WorkingDirectory $ProjectRoot `
+      -RedirectStandardOutput $managerOutLog `
+      -RedirectStandardError $managerErrLog `
+      -WindowStyle Hidden `
+      -PassThru
+    Write-ManagerRecoveryEvent `
+      -Event "recovery_started" `
+      -ConsecutiveFailures $state.consecutiveFailures `
+      -LauncherPid $recovery.Id `
+      -StdoutLog $managerOutLog `
+      -StderrLog $managerErrLog
+    $deadline = (Get-Date).AddSeconds([Math]::Max(5, $ManagerStartTimeoutSeconds))
+    do {
+      if (Test-Manager) {
+        $exitCode = if ($recovery.HasExited) { [Nullable[int]]$recovery.ExitCode } else { $null }
+        Write-ManagerRecoveryEvent `
+          -Event "recovery_succeeded" `
+          -ConsecutiveFailures 0 `
+          -LauncherPid $recovery.Id `
+          -LauncherExitCode $exitCode `
+          -StdoutLog $managerOutLog `
+          -StderrLog $managerErrLog
+        Add-Issue $Issues "manager" "error" "Manager was unreachable." "Recovered through the guarded Windows launcher (pid=$($recovery.Id))." $true $false
+        return
+      }
+      if ($recovery.HasExited -and $recovery.ExitCode -ne 0) {
+        break
+      }
+      Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+
+    $failureCount = $state.consecutiveFailures + 1
+    $delaySeconds = [Math]::Min(
+      [Math]::Max(1, $ManagerRecoveryMaxDelaySeconds),
+      [Math]::Max(1, $ManagerRecoveryBaseDelaySeconds) * [Math]::Pow(2, [Math]::Min(10, $failureCount - 1))
+    )
+    $nextAttemptAt = [datetimeoffset]::Now.AddSeconds($delaySeconds).ToString("o")
+    $exitCode = if ($recovery.HasExited) { [Nullable[int]]$recovery.ExitCode } else { $null }
+    Write-ManagerRecoveryEvent `
+      -Event "recovery_failed" `
+      -ConsecutiveFailures $failureCount `
+      -NextAttemptAt $nextAttemptAt `
+      -LauncherPid $recovery.Id `
+      -LauncherExitCode $exitCode `
+      -StdoutLog $managerOutLog `
+      -StderrLog $managerErrLog `
+      -Message "Manager did not become healthy within the guarded recovery window."
+    Add-Issue $Issues "manager" "error" "Manager stayed unreachable after guarded recovery." "Retry backoff=${delaySeconds}s. Check $([IO.Path]::GetFileName($managerOutLog)), $([IO.Path]::GetFileName($managerErrLog)), and the newest launcher log." $false $true
   } catch {
-    Add-Issue $Issues "manager" "error" "Manager auto-start failed: $($_.Exception.Message)" "" $false $true
+    $failureCount = $state.consecutiveFailures + 1
+    $delaySeconds = [Math]::Min(
+      [Math]::Max(1, $ManagerRecoveryMaxDelaySeconds),
+      [Math]::Max(1, $ManagerRecoveryBaseDelaySeconds) * [Math]::Pow(2, [Math]::Min(10, $failureCount - 1))
+    )
+    $nextAttemptAt = [datetimeoffset]::Now.AddSeconds($delaySeconds).ToString("o")
+    Write-ManagerRecoveryEvent `
+      -Event "recovery_failed" `
+      -ConsecutiveFailures $failureCount `
+      -NextAttemptAt $nextAttemptAt `
+      -StdoutLog $managerOutLog `
+      -StderrLog $managerErrLog `
+      -Message $_.Exception.Message
+    Add-Issue $Issues "manager" "error" "Manager guarded recovery failed: $($_.Exception.Message)" "Retry backoff=${delaySeconds}s; the watchdog did not fall back to PATH node." $false $true
   }
 }
 
@@ -232,7 +436,7 @@ function Ensure-Tray {
   }
 
   try {
-    Start-Process -FilePath $launcher -ArgumentList @("-NoOpen", "-NoBuild") -WorkingDirectory $ProjectRoot -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath $launcher -ArgumentList @("-NoOpen", "-NoBuild", "-UseExistingBuild", "-ReuseHealthyManager") -WorkingDirectory $ProjectRoot -WindowStyle Hidden | Out-Null
     $afterStart = @()
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
@@ -320,39 +524,39 @@ function Repair-Napcat {
   $instanceId = [string](Get-Prop $Instance "id")
   $scope = "$gatewayId/$instanceId"
 
-  $ignoredChanged = $false
-  try {
-    $ignoredChanged = Remove-IgnoredNapcatKeys -Gateway $Gateway -Instance $Instance
-  } catch {
-    Add-Issue $Issues $scope "warning" "Failed to clear NapCat ignored keys: $($_.Exception.Message)" "" $false $false
-  }
-  if ($ignoredChanged) {
-    Add-Issue $Issues $scope "warning" "NapCat instance was blocked by ignoredNapcatInstanceIds." "Removed matching ignored keys from adapterConfig.json; waiting for manager reload." $true $false
-    Start-Sleep -Seconds 2
-  }
-
   $webui = Get-Prop $Health "webui"
   $loginInfo = Get-Prop $webui "loginInfo"
   $currentUserId = [string](Get-Prop $loginInfo "userId")
   $http = Get-Prop $Health "http"
   $httpOk = (Get-Prop $http "ok") -eq $true
   if (-not $httpOk -and -not $currentUserId -and (Get-Prop $webui "reachable") -eq $true) {
-    Add-Issue $Issues $scope "error" "NapCat WebUI is reachable, but current QQ login info is empty." "Manual login is required in WebUI/QQ; restart cannot replace authentication." $false $true
+    Add-Issue $Issues $scope "error" "NapCat WebUI is reachable, but current QQ login info is empty." "Manual login is required in WebUI/QQ; restart cannot replace authentication." $false $true -Impact "adapter" -Adapter "napcat"
     return
   }
 
   if ($NoRepair) {
-    Add-Issue $Issues $scope "error" "NapCat is unhealthy." "NoRepair mode; skipped repair." $false $false
+    Add-Issue $Issues $scope "error" "NapCat is unhealthy." "NoRepair mode; skipped repair." $false $false -Impact "adapter" -Adapter "napcat"
     return
+  }
+
+  $ignoredChanged = $false
+  try {
+    $ignoredChanged = Remove-IgnoredNapcatKeys -Gateway $Gateway -Instance $Instance
+  } catch {
+    Add-Issue $Issues $scope "warning" "Failed to clear NapCat ignored keys: $($_.Exception.Message)" "" $false $false -Impact "adapter" -Adapter "napcat"
+  }
+  if ($ignoredChanged) {
+    Add-Issue $Issues $scope "warning" "NapCat instance was blocked by ignoredNapcatInstanceIds." "Removed matching ignored keys from adapterConfig.json; waiting for manager reload." $true $false -Impact "adapter" -Adapter "napcat"
+    Start-Sleep -Seconds 2
   }
 
   $body = New-NapcatBody -Gateway $Gateway -Instance $Instance
   if ((Get-Prop $Health "fixAvailable") -eq $true) {
     try {
       Invoke-Json -Path "/api/message/napcat-configure-onebot" -Method "Post" -Body $body -TimeoutSec 45 | Out-Null
-      Add-Issue $Issues $scope "error" "NapCat OneBot config is missing or inactive." "Tried to write and apply OneBot HTTP/WS config." $true $false
+      Add-Issue $Issues $scope "error" "NapCat OneBot config is missing or inactive." "Tried to write and apply OneBot HTTP/WS config." $true $false -Impact "adapter" -Adapter "napcat"
     } catch {
-      Add-Issue $Issues $scope "error" "NapCat OneBot config repair failed: $($_.Exception.Message)" "" $false $false
+      Add-Issue $Issues $scope "error" "NapCat OneBot config repair failed: $($_.Exception.Message)" "" $false $false -Impact "adapter" -Adapter "napcat"
     }
   }
 
@@ -361,10 +565,30 @@ function Repair-Napcat {
       gatewayId = $gatewayId
       instanceId = $instanceId
     } -TimeoutSec 70 -AllowHttpError
-    $ok = (Get-Prop $result.body "ok") -eq $true
-    Add-Issue $Issues $scope "error" "NapCat is unhealthy." "Requested NapCat restart, ok=${ok}: $((Get-Prop $result.body 'message'))" $ok $false
+    # The lifecycle endpoint can legitimately report that its launcher started
+    # once WebUI appears, while OneBot HTTP is still offline.  Do not turn that
+    # into a false recovery in the watchdog summary; read the live endpoints
+    # back after the bounded restart/launch operation completes.
+    $reportedOk = (Get-Prop $result.body "ok") -eq $true
+    $after = $null
+    try {
+      $after = Test-Napcat -Gateway $Gateway -Instance $Instance
+    } catch {
+      Add-Issue $Issues $scope "error" "NapCat restart finished but post-restart health read-back failed." "Manager reported launcher result=$reportedOk; endpoint verification could not complete." $false $false -Impact "adapter" -Adapter "napcat"
+      return
+    }
+    $ok = (Get-Prop $after "ok") -eq $true
+    if ($ok) {
+      Add-Issue $Issues $scope "error" "NapCat is unhealthy." "Restart/launch completed and live OneBot health read-back is now healthy." $true $false -Impact "adapter" -Adapter "napcat"
+    } else {
+      $afterHttp = Get-Prop $after "http"
+      $afterWebui = Get-Prop $after "webui"
+      $httpReachable = (Get-Prop $afterHttp "ok") -eq $true
+      $webuiReachable = (Get-Prop $afterWebui "reachable") -eq $true
+      Add-Issue $Issues $scope "error" "NapCat remains unhealthy after guarded restart/launch." "Post-restart read-back: onebot=$httpReachable webui=$webuiReachable; no success was inferred from the launch command alone." $false $false -Impact "adapter" -Adapter "napcat"
+    }
   } catch {
-    Add-Issue $Issues $scope "error" "NapCat restart request failed: $($_.Exception.Message)" "" $false $false
+    Add-Issue $Issues $scope "error" "NapCat restart request failed: $($_.Exception.Message)" "" $false $false -Impact "adapter" -Adapter "napcat"
   }
 }
 
@@ -422,10 +646,10 @@ function Check-Gateways {
             $http = Get-Prop $health "http"
             $message = [string](Get-Prop $http "message")
           }
-          Add-Issue $Issues $scope "error" "NapCat health check failed: $message" "Starting repair decision." $false $false
+          Add-Issue $Issues $scope "error" "NapCat health check failed: $message" "Starting repair decision." $false $false -Impact "adapter" -Adapter "napcat"
           Repair-Napcat -Gateway $gateway -Instance $instance -Health $health -Issues $Issues
         } catch {
-          Add-Issue $Issues $scope "error" "NapCat health check threw: $($_.Exception.Message)" "" $false $false
+          Add-Issue $Issues $scope "error" "NapCat health check threw: $($_.Exception.Message)" "" $false $false -Impact "adapter" -Adapter "napcat"
         }
       }
     }
@@ -448,19 +672,33 @@ function Save-Summary {
   param(
     [datetime]$StartedAt,
     [object]$Meta,
+    [object]$ManagerProbe,
     [object[]]$Gateways,
     [System.Collections.Generic.List[object]]$Issues
   )
 
   $finishedAt = Get-Date
-  $status = if ($Issues.Count -eq 0) { "ok" } elseif (@($Issues | Where-Object { $_.severity -eq "error" }).Count -gt 0) { "error" } else { "warning" }
+  $systemErrors = @($Issues | Where-Object { $_.severity -eq "error" -and $_.impact -ne "adapter" })
+  $adapterErrors = @($Issues | Where-Object { $_.severity -eq "error" -and $_.impact -eq "adapter" })
+  $status = if ($Issues.Count -eq 0) {
+    "ok"
+  } elseif ($systemErrors.Count -gt 0) {
+    "error"
+  } elseif ($adapterErrors.Count -gt 0) {
+    "degraded"
+  } else {
+    "warning"
+  }
   $record = [pscustomobject]@{
     time = [int][double]::Parse((Get-Date -UFormat %s))
     startedAt = $StartedAt.ToString("o")
     finishedAt = $finishedAt.ToString("o")
     status = $status
     manager = $Meta
+    managerProbe = $ManagerProbe
     gatewayCount = @($Gateways).Count
+    systemErrorCount = $systemErrors.Count
+    adapterErrorCount = $adapterErrors.Count
     issues = @($Issues)
   }
   Add-Content -LiteralPath $JsonlLogPath -Encoding UTF8 -Value ($record | ConvertTo-Json -Depth 20 -Compress)
@@ -501,15 +739,22 @@ function Invoke-HealthCycle {
   $issues = [System.Collections.Generic.List[object]]::new()
   Write-HealthLog "Health cycle started. interval=${IntervalSeconds}s once=$Once noRepair=$NoRepair"
 
-  $meta = Test-Manager
+  $managerProbe = Test-ManagerWithRetry
+  $meta = $managerProbe.meta
   if (-not $meta) {
-    Add-Issue $issues "manager" "error" "Manager is unreachable: $ManagerUrl/meta." "Trying manager auto-start." $false $false
+    $detail = if ($managerProbe.classification -eq "control_plane_unresponsive") {
+      "Manager listener is present but /meta failed after $($managerProbe.attempts) bounded probes."
+    } else {
+      "Manager process/listener is absent after $($managerProbe.attempts) bounded probes."
+    }
+    Add-Issue $issues "manager" "error" $detail "Trying guarded manager recovery." $false $false
     Start-ManagerIfNeeded -Issues $issues
     $meta = Test-Manager
   }
 
   $gateways = @()
   if ($meta) {
+    Reset-ManagerRecoveryBackoff
     Ensure-Tray -Issues $issues
     try {
       $gateways = Get-Gateways
@@ -519,21 +764,50 @@ function Invoke-HealthCycle {
     }
   }
 
-  Save-Summary -StartedAt $startedAt -Meta $meta -Gateways $gateways -Issues $issues
+  Save-Summary -StartedAt $startedAt -Meta $meta -ManagerProbe $managerProbe -Gateways $gateways -Issues $issues
 }
 
-Write-HealthLog "RabiRoute health watchdog started. manager=$ManagerUrl interval=${IntervalSeconds}s once=$Once noRepair=$NoRepair noTrayRepair=$NoTrayRepair"
-
-do {
+function Get-WatchdogMutexName {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
   try {
-    Invoke-HealthCycle
-  } catch {
-    Write-HealthLog "Health cycle crashed: $($_.Exception.Message)"
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($ProjectRoot.ToLowerInvariant())
+    $hash = ([System.BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").Substring(0, 20)
+    return "Local\RabiRouteHealthWatchdog-$hash"
+  } finally {
+    $sha.Dispose()
+  }
+}
+
+$watchdogMutex = New-Object System.Threading.Mutex($false, (Get-WatchdogMutexName))
+$ownsWatchdogMutex = $false
+try {
+  try {
+    $ownsWatchdogMutex = $watchdogMutex.WaitOne(0)
+  } catch [System.Threading.AbandonedMutexException] {
+    $ownsWatchdogMutex = $true
+  }
+  if (-not $ownsWatchdogMutex) {
+    Write-HealthLog "Another watchdog for this project is already running; duplicate invocation exited."
+    exit 0
   }
 
-  if (-not $Once) {
-    Start-Sleep -Seconds $IntervalSeconds
-  }
-} while (-not $Once)
+  Write-HealthLog "RabiRoute health watchdog started. manager=$ManagerUrl interval=${IntervalSeconds}s once=$Once noRepair=$NoRepair noTrayRepair=$NoTrayRepair"
 
-Write-HealthLog "RabiRoute health watchdog stopped."
+  do {
+    try {
+      Invoke-HealthCycle
+    } catch {
+      Write-HealthLog "Health cycle crashed: $($_.Exception.Message)"
+    }
+
+    if (-not $Once) {
+      Start-Sleep -Seconds $IntervalSeconds
+    }
+  } while (-not $Once)
+} finally {
+  if ($ownsWatchdogMutex) {
+    $watchdogMutex.ReleaseMutex()
+  }
+  $watchdogMutex.Dispose()
+  Write-HealthLog "RabiRoute health watchdog stopped."
+}

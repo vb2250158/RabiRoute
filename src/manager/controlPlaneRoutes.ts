@@ -21,6 +21,7 @@ import {
 } from "../agentAdapters/managerApi.js";
 import type { MessageAdapterType } from "../adapters/messageAdapter.js";
 import type { ForwardRouteKind } from "../forwarding.js";
+import { appendAdapterLogToDir } from "../history.js";
 import { listDeliveryReplayAttempts } from "../deliveryReplayLedger.js";
 import {
   configureNapcatOneBot,
@@ -34,6 +35,10 @@ import {
   testNapcatHealth as testNapcatHealthEndpoint
 } from "../messageEndpoints/napcatManager.js";
 import {
+  scanNapcatHealthReadOnly,
+  type NapcatHealthScanPayload
+} from "../messageEndpoints/napcatHealthScan.js";
+import {
   scanFenneNoteEndpoint,
   scanRabiLinkEndpoint,
   scanWearableEndpoint,
@@ -44,6 +49,8 @@ import { scanWeComEndpoint } from "../messageEndpoints/wecomManager.js";
 import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../messageEndpoints/remoteAgentManager.js";
 import { appendMessageContextToDir } from "../messageContextStore.js";
 import { SpeechIngressStore } from "../speechIngressStore.js";
+import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
+import { requestWeixinLogin } from "../weixinLoginRequest.js";
 import { PersonaSyncService } from "../personaSync.js";
 import { PersonaSyncCoordinator } from "../personaSyncCoordinator.js";
 import { PersonaSyncAutoReconciler } from "../personaSyncAutoReconciler.js";
@@ -95,6 +102,7 @@ import {
   personaConfigPath as resolvePersonaConfigPath
 } from "../shared/routePaths.js";
 import { ManagerConfigRepository } from "./configRepository.js";
+import { collectWatchedConfigFiles, configFilesSnapshot } from "./configWatchSnapshot.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
 import { proxySpeechEventStream } from "./speechEventProxy.js";
 import { CodexHookContextService, type CodexHookContextRequest, type PlanTaskCompletionDelivery } from "./codexHookContext.js";
@@ -128,6 +136,8 @@ import { BilibiliHistoryBridge } from "./bilibiliHistoryBridge.js";
 import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
 import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
+import { summarizeIndependentAdapterHealth, type AdapterOperationalHealth } from "./messageAdapterHealth.js";
+import { runBoundedScans, type ScanDiagnostic } from "./scanController.js";
 import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
 import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
@@ -255,6 +265,13 @@ type GatewayDefinition = {
   wecomWsUrl?: string;
   weixinBaseUrl?: string;
   weixinBotType?: string;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+  feishuVerificationToken?: string;
+  feishuEncryptKey?: string;
+  feishuEventSubscriptionEnabled?: boolean;
+  feishuWebhookPort?: number;
+  feishuWebhookPath?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   heartbeatSkipWhenAgentBusy?: boolean;
@@ -458,6 +475,8 @@ type MessageAdapterScanResult = {
   endpoints?: AdapterEndpoint[];
   requirements?: AdapterRequirement[];
   warnings?: string[];
+  scan?: ScanDiagnostic;
+  health?: AdapterOperationalHealth;
 };
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -504,12 +523,62 @@ function openManagerEventStream(request: http.IncomingMessage, response: http.Se
 }
 
 let personaSyncAutoReconciler: PersonaSyncAutoReconciler | undefined;
+
+function relayReceiptText(value: unknown, maxLength = 160): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function relayReceiptAuditData(data: Record<string, unknown>): Record<string, unknown> | undefined {
+  const state = relayReceiptText(data.state, 32);
+  if (!new Set(["delivered", "played", "playback_failed"]).has(state)) return undefined;
+  const deliveryId = relayReceiptText(data.deliveryId);
+  const messageId = relayReceiptText(data.messageId);
+  const deviceId = relayReceiptText(data.deviceId);
+  if ((!deliveryId && !messageId) || !deviceId) return undefined;
+  const receiptAt = Number(data.receiptAt);
+  return {
+    ...(messageId ? { messageId } : {}),
+    ...(deliveryId ? { deliveryId } : {}),
+    deviceId,
+    deviceKind: relayReceiptText(data.deviceKind, 64),
+    state,
+    ...(Number.isFinite(receiptAt) && receiptAt > 0 ? { receiptAt } : {}),
+    routeProfileId: relayReceiptText(data.routeProfileId)
+  };
+}
+
+function routeOwnsRabiLinkReceipt(definition: GatewayDefinition, routeProfileId: string): boolean {
+  const adapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
+  if (!adapters.includes("rabilink")) return false;
+  if (!routeProfileId) return definition.enabled !== false;
+  return definition.id === routeProfileId
+    || (definition.routeProfiles ?? []).some((profile) => profile.id === routeProfileId);
+}
+
+function recordRabiLinkRelayReceipt(data: Record<string, unknown>): void {
+  const receipt = relayReceiptAuditData(data);
+  if (!receipt) return;
+  const routeProfileId = String(receipt.routeProfileId || "");
+  for (const runtime of runtimes.values()) {
+    if (!routeOwnsRabiLinkReceipt(runtime.definition, routeProfileId)) continue;
+    appendAdapterLogToDir("rabilink", {
+      event: "outbox_receipt",
+      message: `RabiLink device reported ${String(receipt.state)}.`,
+      data: receipt
+    }, dataDirFor(runtime.definition));
+  }
+  publishManagerEvent("rabilink_outbox_receipt", receipt);
+}
+
 const rabiLinkRelayRuntime = new RabiLinkRelayRuntime({
   onStatus: status => {
     publishManagerEvent("rabilink_status", status);
     personaSyncAutoReconciler?.noteRelayStatus(status.state);
   },
-  onEvent: eventType => personaSyncAutoReconciler?.noteRelayEvent(eventType)
+  onEvent: (eventType, data) => {
+    personaSyncAutoReconciler?.noteRelayEvent(eventType);
+    if (eventType === "outbox_receipt") recordRabiLinkRelayReceipt(data);
+  }
 });
 
 type ManagerConfig = { routeDir?: string; rolesDir?: string };
@@ -589,6 +658,7 @@ function personaSyncRouteContext(): PersonaSyncRouteContext {
     service: personaSyncService,
     coordinator: personaSyncCoordinator,
     autoReconciler: personaSyncAutoReconciler!,
+    readOnlySnapshot: managerReadOnly,
     token: () => rabiLinkRelayConfigForMeta().token,
     relay: () => {
       const config = rabiGlobalConfig.read();
@@ -948,6 +1018,13 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     rabiLinkWebhookPort: definition.rabiLinkWebhookPort,
     rabiLinkWebhookPath: definition.rabiLinkWebhookPath,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost,
+    feishuAppId: definition.feishuAppId,
+    feishuAppSecret: definition.feishuAppSecret,
+    feishuVerificationToken: definition.feishuVerificationToken,
+    feishuEncryptKey: definition.feishuEncryptKey,
+    feishuEventSubscriptionEnabled: definition.feishuEventSubscriptionEnabled === true,
+    feishuWebhookPort: definition.feishuWebhookPort,
+    feishuWebhookPath: definition.feishuWebhookPath,
     napcatHttpUrl: definition.napcatHttpUrl,
     napcatWebuiUrl: definition.napcatWebuiUrl,
     napcatAccessToken: definition.napcatAccessToken,
@@ -1447,41 +1524,6 @@ function syncRunningGateways(): void {
   }
 }
 
-function watchedRouteFiles(): string[] {
-  // Startup and explicit config mutations own initialization and legacy migration.
-  // Polling must stay read-only; repeatedly migrating a NAS-backed tree can exhaust
-  // Windows SMB handles and terminate the Manager with EMFILE.
-  const files = new Set<string>();
-  for (const entry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
-      continue;
-    }
-    files.add(adapterConfigPath(entry.name));
-  }
-  for (const entry of fs.readdirSync(rolesRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !sanitizeRoleId(entry.name)) {
-      continue;
-    }
-    const roleConfig = personaConfigPath(entry.name);
-    if (fs.existsSync(roleConfig)) {
-      files.add(roleConfig);
-    }
-  }
-
-  return [...files].sort((left, right) => left.localeCompare(right));
-}
-
-function configSnapshot(): string {
-  return watchedRouteFiles().map((file) => {
-    try {
-      const stat = fs.statSync(file);
-      return `${file}|${stat.mtimeMs}|${stat.size}`;
-    } catch {
-      return `${file}|missing`;
-    }
-  }).join("\n");
-}
-
 function reloadChangedConfig(reason: string): void {
   try {
     loadRuntimes();
@@ -1496,16 +1538,17 @@ function reloadChangedConfig(reason: string): void {
 type ConfigWatcher = { close(): void };
 
 function startConfigWatcher(): ConfigWatcher {
-  watchedConfigSnapshot = configSnapshot();
   const watchers = new Map<string, fs.FSWatcher>();
   let debounceTimer: NodeJS.Timeout | null = null;
   let closed = false;
+  let initialized = false;
+  let refreshInFlight = false;
 
-  const armDirectories = (): void => {
+  const armDirectories = (files: string[]): void => {
     const directories = new Set([
       routeRoot,
       rolesRoot,
-      ...watchedRouteFiles().map(file => path.dirname(file))
+      ...files.map(file => path.dirname(file))
     ].map(directory => path.resolve(directory)));
     for (const [directory, watcher] of watchers) {
       if (directories.has(directory)) continue;
@@ -1513,19 +1556,14 @@ function startConfigWatcher(): ConfigWatcher {
       watchers.delete(directory);
     }
     for (const directory of directories) {
-      if (closed || watchers.has(directory) || !fs.existsSync(directory)) continue;
+      if (closed || watchers.has(directory)) continue;
       try {
         const watcher = fs.watch(directory, () => {
           if (debounceTimer) clearTimeout(debounceTimer);
           debounceTimer = setTimeout(() => {
             debounceTimer = null;
             if (closed) return;
-            const nextSnapshot = configSnapshot();
-            if (nextSnapshot !== watchedConfigSnapshot) {
-              watchedConfigSnapshot = nextSnapshot;
-              reloadChangedConfig("after config file event");
-            }
-            armDirectories();
+            void refreshSnapshot("after config file event");
           }, 120);
         });
         watcher.on("error", error => console.warn(`Config watch failed for ${directory}:`, error));
@@ -1535,7 +1573,39 @@ function startConfigWatcher(): ConfigWatcher {
       }
     }
   };
-  armDirectories();
+
+  const refreshSnapshot = async (reason: string): Promise<void> => {
+    if (closed || refreshInFlight) return;
+    refreshInFlight = true;
+    try {
+      const discovered = await collectWatchedConfigFiles({
+        routeRoot,
+        rolesRoot,
+        timeoutMs: 1500,
+        adapterConfigPath,
+        personaConfigPath,
+        includeDirectory: name => Boolean(sanitizeRoleId(name))
+      });
+      const snapshot = await configFilesSnapshot(discovered.files, 1500);
+      const partialErrors = [...discovered.errors, ...snapshot.errors];
+      if (partialErrors.length) {
+        console.warn(`Config watch snapshot is partial (${partialErrors.length} unavailable path(s)); Manager remains online.`);
+      }
+      if (initialized && snapshot.snapshot !== watchedConfigSnapshot) {
+        watchedConfigSnapshot = snapshot.snapshot;
+        reloadChangedConfig(reason);
+      } else {
+        watchedConfigSnapshot = snapshot.snapshot;
+        initialized = true;
+      }
+      armDirectories(discovered.files);
+    } catch (error) {
+      console.warn("Config watch refresh failed; Manager remains online.", error);
+    } finally {
+      refreshInFlight = false;
+    }
+  };
+  void refreshSnapshot("during config watch initialization");
   return {
     close(): void {
       closed = true;
@@ -1630,6 +1700,13 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     WECOM_WS_URL: definition.wecomWsUrl?.trim() || process.env.WECOM_WS_URL || "",
     WEIXIN_BASE_URL: definition.weixinBaseUrl?.trim() || process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com",
     WEIXIN_BOT_TYPE: definition.weixinBotType?.trim() || process.env.WEIXIN_BOT_TYPE || "3",
+    FEISHU_APP_ID: definition.feishuAppId?.trim() || process.env.FEISHU_APP_ID || "",
+    FEISHU_APP_SECRET: definition.feishuAppSecret?.trim() || process.env.FEISHU_APP_SECRET || "",
+    FEISHU_VERIFICATION_TOKEN: definition.feishuVerificationToken?.trim() || process.env.FEISHU_VERIFICATION_TOKEN || "",
+    FEISHU_ENCRYPT_KEY: definition.feishuEncryptKey?.trim() || process.env.FEISHU_ENCRYPT_KEY || "",
+    FEISHU_EVENT_SUBSCRIPTION_ENABLED: definition.feishuEventSubscriptionEnabled === true ? "true" : "false",
+    FEISHU_WEBHOOK_PORT: String(definition.feishuWebhookPort ?? definition.gatewayPort),
+    FEISHU_WEBHOOK_PATH: definition.feishuWebhookPath ?? "/feishu",
     CODEX_THREAD_ID: definition.codexThreadId?.trim() || "",
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
@@ -2042,21 +2119,38 @@ function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: bool
   return { changed, messages };
 }
 
-function ensureGatewayRunningForScan(targetGatewayId?: string): string[] {
-  const targetId = sanitizeRoleId(targetGatewayId);
-  if (!targetId) return [];
-  const runtime = runtimes.get(targetId);
-  if (!runtime || !definitionUsesNapcat(runtime.definition)) return [];
-  if (runtime.definition.enabled === false) return [];
-  const messages: string[] = [];
-  if (!runtime.process) {
-    startGateway(runtime.definition.id);
-    messages.push(`已启动当前路由监听进程：${runtime.definition.id}。`);
-  }
-  return messages;
+const MESSAGE_ADAPTER_SCAN_DEADLINE_MS = 6_000;
+const NAPCAT_HEALTH_SCAN_DEADLINE_MS = 6_500;
+
+function messageAdapterScanFallback(
+  type: Exclude<MessageAdapterType, "disabled">,
+  label: string,
+  maturity: AgentMaturity,
+  diagnostic: ScanDiagnostic
+): MessageAdapterScanResult {
+  return {
+    type,
+    label,
+    maturity,
+    installed: false,
+    scan: diagnostic,
+    warnings: [
+      diagnostic.state === "timeout"
+        ? `${label} 检查超过本轮 ${MESSAGE_ADAPTER_SCAN_DEADLINE_MS} ms 截止时间；没有把超时推断为离线。`
+        : `${label} 检查失败：${diagnostic.message || "未知错误"}`
+    ]
+  };
 }
 
-async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterScanResult>> {
+type MessageAdapterScanBundle = {
+  adapters: Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterScanResult>;
+  diagnostics: Record<string, ScanDiagnostic>;
+  partial: boolean;
+  durationMs: number;
+  deadlineMs: number;
+};
+
+async function messageAdapterScanPayload(): Promise<MessageAdapterScanBundle> {
   const webhookLikeScanCtx = {
     rootDir,
     adapterRuntimes,
@@ -2065,28 +2159,89 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
     checkHttpEndpoint,
     fenneNotePlaybackUrl
   };
-  const [napcat, fennenote, xiaoai, rabilink, wearable, webhook, wecom, speechStatus] = await Promise.all([
-    scanNapcatEndpoint(napcatManagerCtx()),
-    scanFenneNoteEndpoint(webhookLikeScanCtx),
-    scanXiaoAiEndpoint(webhookLikeScanCtx),
-    scanRabiLinkEndpoint(webhookLikeScanCtx),
-    scanWearableEndpoint(webhookLikeScanCtx),
-    scanWebhookEndpoint(webhookLikeScanCtx),
-    scanWeComEndpoint({
-      rootDir,
-      adapterRuntimes,
-      routeHasRecentMessages
-    }),
-    speechControl.status()
-  ]);
+  const bounded = await runBoundedScans([
+    {
+      key: "napcat",
+      run: () => scanNapcatEndpoint(napcatManagerCtx()),
+      fallback: (diagnostic) => messageAdapterScanFallback("napcat", "NapCat / OneBot", "verified", diagnostic)
+    },
+    {
+      key: "fennenote",
+      run: () => scanFenneNoteEndpoint(webhookLikeScanCtx),
+      fallback: (diagnostic) => messageAdapterScanFallback("fennenote", "FenneNote / 芬妮笔记", "experimental", diagnostic)
+    },
+    {
+      key: "xiaoai",
+      run: () => scanXiaoAiEndpoint(webhookLikeScanCtx),
+      fallback: (diagnostic) => messageAdapterScanFallback("xiaoai", "小米音箱 / 小爱", "experimental", diagnostic)
+    },
+    {
+      key: "rabilink",
+      run: () => scanRabiLinkEndpoint(webhookLikeScanCtx),
+      fallback: (diagnostic) => messageAdapterScanFallback("rabilink", "RabiLink / Relay 直连", "experimental", diagnostic)
+    },
+    {
+      key: "wearable",
+      run: () => scanWearableEndpoint(webhookLikeScanCtx),
+      fallback: (diagnostic) => messageAdapterScanFallback("wearable", "智能手表/手环", "experimental", diagnostic)
+    },
+    {
+      key: "webhook",
+      run: () => scanWebhookEndpoint(webhookLikeScanCtx),
+      fallback: (diagnostic) => messageAdapterScanFallback("webhook", "通用 Webhook", "experimental", diagnostic)
+    },
+    {
+      key: "wecom",
+      run: () => scanWeComEndpoint({
+        rootDir,
+        adapterRuntimes,
+        routeHasRecentMessages
+      }),
+      fallback: (diagnostic) => messageAdapterScanFallback("wecom", "企业微信 / WeCom", "experimental", diagnostic)
+    },
+    {
+      key: "speech",
+      run: async (): Promise<MessageAdapterScanResult> => {
+        const speechStatus = await speechControl.status();
+        return {
+          type: "speech",
+          label: "语音消息端",
+          maturity: "verified",
+          installed: speechStatus.state === "online",
+          endpoints: [{ label: "RabiSpeech 本机服务", url: speechStatus.configuredUrl, healthy: speechStatus.state === "online" }],
+          requirements: [
+            { id: "builtin", label: "RabiPC 内置语音消息端", required: true, ok: true, detail: "麦克风、阈值、常驻转录和 Route 投递由 RabiPC 提供。" },
+            { id: "runtime", label: "RabiSpeech 本地模型服务", required: true, ok: speechStatus.state === "online", detail: speechStatus.error || `${speechStatus.providers.tts.length} 个 TTS provider，${speechStatus.providers.asr.length} 个 ASR provider。` },
+            { id: "provider-mode", label: "语音 Provider 模式", required: true, ok: true, detail: speechStatus.localOnly === true ? "当前仅启用本地 TTS/ASR Provider。" : "已显式启用 API Provider；密钥由 RabiSpeech 进程环境持有。" }
+          ],
+          warnings: speechStatus.state === "online" ? [] : ["先启动 RabiSpeech，再做麦克风实机 ASR 和 TTS 排队播放测试。"]
+        };
+      },
+      fallback: (diagnostic) => messageAdapterScanFallback("speech", "语音消息端", "verified", diagnostic)
+    }
+  ] as const, { deadlineMs: MESSAGE_ADAPTER_SCAN_DEADLINE_MS });
+  const { napcat, fennenote, xiaoai, rabilink, wearable, webhook, wecom, speech } = bounded.values;
   const weixinRuntimes = adapterRuntimes("weixin");
-  const weixinLoggedIn = weixinRuntimes.some((runtime) => {
+  const feishuRuntimes = adapterRuntimes("feishu");
+  const weixinStatuses = weixinRuntimes.map(runtime => {
     const status = readGatewayStatus(runtime.definition) as Record<string, any>;
-    return status.messageAdapters?.weixin?.loggedIn === true;
+    return status.messageAdapters?.weixin ?? {};
   });
+  const weixinLoggedIn = weixinStatuses.some(status => status.loggedIn === true && status.sessionPhase === "restored");
+  const weixinRestoring = weixinStatuses.some(status => status.sessionPhase === "restoring");
+  const weixinCredentialsRetained = weixinStatuses.some(status =>
+    status.credentialsRetained === true
+    && (status.sessionPhase === "restoring" || status.sessionPhase === "temporarily_unreachable"));
+  const weixinLoginDetail = weixinLoggedIn
+    ? "当前个人微信会话已由服务端确认并完成恢复。"
+    : weixinRestoring
+      ? "正在从安全存储恢复会话；这不影响 Manager 或其它消息入口。"
+      : weixinCredentialsRetained
+        ? "外部 API 暂时不可达，但会话凭据仍保留，不要求扫码。"
+        : "当前没有可用会话；请明确点击生成二维码后扫码。";
   const weixinHasRecentMessages = weixinRuntimes.some((runtime) => routeHasRecentMessages(runtime, "weixin"));
 
-  return {
+  const adapters: Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterScanResult> = {
     napcat,
     remoteAgent: remoteAgentHub.localScanResult(),
     heartbeat: {
@@ -2111,19 +2266,7 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
       ],
       warnings: ["角色面板是固定内置消息端，不能删除或禁用；自由聊天使用 role_panel_message 路由类型。"]
     },
-    speech: {
-      type: "speech",
-      label: "语音消息端",
-      maturity: "verified",
-      installed: speechStatus.state === "online",
-      endpoints: [{ label: "RabiSpeech 本机服务", url: speechStatus.configuredUrl, healthy: speechStatus.state === "online" }],
-      requirements: [
-        { id: "builtin", label: "RabiPC 内置语音消息端", required: true, ok: true, detail: "麦克风、阈值、常驻转录和 Route 投递由 RabiPC 提供。" },
-        { id: "runtime", label: "RabiSpeech 本地模型服务", required: true, ok: speechStatus.state === "online", detail: speechStatus.error || `${speechStatus.providers.tts.length} 个 TTS provider，${speechStatus.providers.asr.length} 个 ASR provider。` },
-        { id: "provider-mode", label: "语音 Provider 模式", required: true, ok: true, detail: speechStatus.localOnly === true ? "当前仅启用本地 TTS/ASR Provider。" : "已显式启用 API Provider；密钥由 RabiSpeech 进程环境持有。" }
-      ],
-      warnings: speechStatus.state === "online" ? [] : ["先启动 RabiSpeech，再做麦克风实机 ASR 和 TTS 排队播放测试。"]
-    },
+    speech,
     fennenote,
     xiaoai,
     rabilink,
@@ -2137,108 +2280,78 @@ async function messageAdapterScanPayload(): Promise<Record<Exclude<MessageAdapte
       endpoints: [{ label: "OpenClaw iLink API", url: weixinRuntimes[0]?.definition.weixinBaseUrl || process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com", healthy: weixinLoggedIn }],
       requirements: [
         { id: "route", label: "已配置个人微信消息端", required: true, ok: weixinRuntimes.length > 0, detail: weixinRuntimes.length > 0 ? "已存在使用 weixin adapter 的 Route。" : "在 Route 中启用个人微信消息端。" },
-        { id: "login", label: "手机微信扫码登录", required: true, ok: weixinLoggedIn, detail: weixinLoggedIn ? "当前 Route 已保存有效登录状态。" : "启动 Route 后使用状态中的二维码扫码。" },
-        { id: "recent-message", label: "最近收到个人微信消息", required: false, ok: weixinHasRecentMessages, detail: weixinHasRecentMessages ? "已记录过个人微信消息。" : "尚未收到消息；扫码后从另一账号发一条文本验证。" }
+        { id: "login", label: "个人微信当前会话", required: true, ok: weixinLoggedIn, detail: weixinLoginDetail },
+        { id: "recent-message", label: "历史个人微信消息证据", required: false, ok: weixinHasRecentMessages, detail: weixinHasRecentMessages ? "存在历史消息记录；它不代表当前登录。" : "尚无历史消息记录；它与当前登录状态相互独立。" }
       ],
-      warnings: ["个人微信接入仍是实验能力，依赖 OpenClaw iLink API；尚未完成长期在线与账号风险验收。", "首版仅把文本消息投递给 Agent；媒体消息只记录，自动回复仅支持已建立 context token 的来源会话文本。"]
+      warnings: [
+        "个人微信接入仍是实验能力，依赖 OpenClaw iLink API；单入口故障不会升级为 Manager 或 QQ 全局故障。",
+        "二维码只在管理面明确请求后生成；临时网络失败会保留安全会话，不要求重新扫码。"
+      ]
+    },
+    feishu: {
+      type: "feishu",
+      label: "飞书 / Feishu",
+      maturity: "experimental",
+      installed: feishuRuntimes.length > 0,
+      requirements: [
+        { id: "route", label: "已配置飞书消息端", required: true, ok: feishuRuntimes.length > 0, detail: feishuRuntimes.length > 0 ? "Route 已启用独立 feishu adapter。" : "在 Route 中启用 feishu adapter。" },
+        { id: "app", label: "飞书应用凭据", required: true, ok: feishuRuntimes.some((runtime) => Boolean(runtime.definition.feishuAppId && runtime.definition.feishuAppSecret)), detail: "需要 App ID 和 App Secret，群机器人 webhook 不能替代。" },
+        { id: "event", label: "事件订阅与签名", required: true, ok: feishuRuntimes.some((runtime) => runtime.definition.feishuEventSubscriptionEnabled === true && Boolean(runtime.definition.feishuVerificationToken && runtime.definition.feishuEncryptKey)), detail: "需要配置公网 HTTPS 回调、Verification Token、Encrypt Key，订阅 im.message.receive_v1 后再显式确认。" }
+      ],
+      warnings: ["飞书是独立消息端；通用 webhook 不会作为飞书入站或出站替代。"]
     },
     webhook
   };
+  for (const [type, diagnostic] of Object.entries(bounded.diagnostics)) {
+    const adapter = adapters[type as Exclude<MessageAdapterType, "disabled">];
+    if (adapter) adapter.scan = diagnostic;
+  }
+  return {
+    adapters,
+    diagnostics: bounded.diagnostics,
+    partial: bounded.partial,
+    durationMs: bounded.durationMs,
+    deadlineMs: bounded.deadlineMs
+  };
 }
 
-async function napcatScanHealthPayload(): Promise<Record<string, { instances: Record<string, unknown> }>> {
+async function napcatScanHealthPayload(): Promise<{
+  payload: NapcatHealthScanPayload;
+  diagnostics: Record<string, ScanDiagnostic>;
+  partial: boolean;
+  durationMs: number;
+  deadlineMs: number;
+}> {
   const ctx = napcatManagerCtx();
-  const result: Record<string, { instances: Record<string, unknown> }> = {};
-  for (const runtime of runtimes.values()) {
-    if (!definitionUsesNapcat(runtime.definition)) continue;
-    const instances = runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition);
-    const rows = await Promise.all(instances.map(async (instance) => {
-      let health = await testNapcatHealthEndpoint(ctx, {
+  const napcatRuntimes = [...runtimes.values()].filter((runtime) => definitionUsesNapcat(runtime.definition));
+  return scanNapcatHealthReadOnly({
+    runtimes: napcatRuntimes,
+    gatewayId: (runtime) => runtime.definition.id,
+    instances: (runtime) => runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition),
+    instanceId: (instance) => instance.id,
+    instanceEnabled: (instance) => instance.enabled !== false,
+    instanceMetadata: (instance) => ({
+      gatewayPort: instance.gatewayPort,
+      instanceName: instance.name || instance.id,
+      webui: {
+        url: instance.webuiUrl,
+        configuredUrl: instance.webuiUrl
+      }
+    }),
+    testHealth: (runtime, instance) => testNapcatHealthEndpoint(ctx, {
+        gatewayId: runtime.definition.id,
+        instanceId: instance.id,
         httpUrl: instance.httpUrl,
         webuiUrl: instance.webuiUrl,
         accessToken: instance.accessToken,
         webuiToken: instance.webuiToken,
-        gatewayPort: instance.gatewayPort
-      }) as Record<string, unknown>;
-      const scannedWebui = (health.webui ?? {}) as Record<string, unknown>;
-      const scannedCorrectedWebuiUrl = correctedNapcatWebuiUrlFromHealth(health);
-      const backfilledWebuiUrl = backfillNapcatInstanceWebuiUrl(runtime.definition, instance.id, scannedCorrectedWebuiUrl);
-      if (backfilledWebuiUrl) {
-        instance.webuiUrl = backfilledWebuiUrl;
-        health = addHealthDiagnostic(health, `已根据 NapCat webui.json 自动修正 WebUI 地址：${backfilledWebuiUrl}`);
-      }
-      const scannedToken = scannedWebui.token;
-      const backfilledToken = backfillNapcatInstanceWebuiToken(runtime.definition, instance.id, scannedToken);
-      if (backfilledToken) {
-        instance.webuiToken = backfilledToken;
-        const diagnostics = Array.isArray(health.diagnostics) ? health.diagnostics : [];
-        health = {
-          ...health,
-          diagnostics: [
-            ...diagnostics,
-            "已从 NapCat webui.json 读取 WebUI token 并回填到服务器配置。"
-          ]
-        };
-      }
-      const webui = (health.webui ?? {}) as Record<string, unknown>;
-      if (instance.enabled !== false && instance.launchCommand?.trim() && webui.reachable !== true) {
-        const autoLaunchSteps: string[] = [];
-        try {
-          const launch = await launchNapcatInstanceEndpoint(ctx, {
-            gatewayId: runtime.definition.id,
-            instanceId: instance.id
-          }) as Record<string, unknown>;
-          autoLaunchSteps.push(String(launch.message || "已自动尝试后台启动 NapCat。"));
-          for (let i = 0; i < 10; i += 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            const reachable = await checkHttpEndpoint(instance.webuiUrl || "", 900);
-            if (reachable) break;
-          }
-          const afterLaunch = await testNapcatHealthEndpoint(ctx, {
-            httpUrl: instance.httpUrl,
-            webuiUrl: instance.webuiUrl,
-            accessToken: instance.accessToken,
-            webuiToken: instance.webuiToken,
-            gatewayPort: instance.gatewayPort
-          }) as Record<string, unknown>;
-          const diagnostics = Array.isArray(afterLaunch.diagnostics) ? afterLaunch.diagnostics : [];
-          const afterWebui = (afterLaunch.webui ?? {}) as Record<string, unknown>;
-          const afterBackfilled = backfillNapcatInstanceWebuiToken(runtime.definition, instance.id, afterWebui.token);
-          if (afterBackfilled) instance.webuiToken = afterBackfilled;
-          health = {
-            ...afterLaunch,
-            diagnostics: [
-              ...autoLaunchSteps,
-              ...(afterBackfilled ? ["已从 NapCat webui.json 读取 WebUI token 并回填到服务器配置。"] : []),
-              ...diagnostics
-            ],
-            autoLaunch: {
-              ok: ((afterLaunch.webui ?? {}) as Record<string, unknown>).reachable === true,
-              steps: autoLaunchSteps
-            }
-          };
-        } catch (error) {
-          const diagnostics = Array.isArray(health.diagnostics) ? health.diagnostics : [];
-          health = {
-            ...health,
-            diagnostics: [
-              ...diagnostics,
-              `自动后台启动 NapCat 失败：${error instanceof Error ? error.message : String(error)}`
-            ],
-            autoLaunch: {
-              ok: false,
-              steps: [error instanceof Error ? error.message : String(error)]
-            }
-          };
-        }
-      }
-      return [instance.id, health] as const;
-    }));
-    result[runtime.definition.id] = {
-      instances: Object.fromEntries(rows)
-    };
-  }
-  return result;
+        gatewayPort: instance.gatewayPort,
+        botUserId: (instance as NapCatInstanceDefinition & { botUserId?: string | number }).botUserId,
+        botNickname: (instance as NapCatInstanceDefinition & { botNickname?: string }).botNickname,
+        readWebuiLoginInfo: true,
+        inspectProcesses: false
+      }) as Promise<Record<string, unknown>>
+  }, { deadlineMs: NAPCAT_HEALTH_SCAN_DEADLINE_MS });
 }
 
 type NapcatHealthRequest = {
@@ -2883,6 +2996,13 @@ function runtimeStatusWithRoleInfoCache(
     wecomBotId: runtime.definition.wecomBotId,
     wecomBotSecret: runtime.definition.wecomBotSecret,
     wecomWsUrl: runtime.definition.wecomWsUrl,
+    feishuAppId: runtime.definition.feishuAppId ? "********" : "",
+    feishuAppSecret: runtime.definition.feishuAppSecret ? "********" : "",
+    feishuVerificationToken: runtime.definition.feishuVerificationToken ? "********" : "",
+    feishuEncryptKey: runtime.definition.feishuEncryptKey ? "********" : "",
+    feishuEventSubscriptionEnabled: runtime.definition.feishuEventSubscriptionEnabled === true,
+    feishuWebhookPort: runtime.definition.feishuWebhookPort,
+    feishuWebhookPath: runtime.definition.feishuWebhookPath,
     weixinBaseUrl: runtime.definition.weixinBaseUrl,
     weixinBotType: runtime.definition.weixinBotType,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
@@ -4752,6 +4872,13 @@ function metaPayload(): Record<string, unknown> {
   const globalConfig = rabiGlobalConfig.read();
   return {
     version,
+    health: {
+      state: "healthy",
+      scope: "manager_control_plane",
+      checkedAt: new Date().toISOString(),
+      pid: process.pid,
+      message: "Manager 控制面可响应；消息入口健康在独立层级报告。"
+    },
     githubUrl: "https://github.com/vb2250158/RabiRoute",
     managerPort,
     managerAutostart: managerShouldAutostart,
@@ -4765,6 +4892,7 @@ function metaPayload(): Record<string, unknown> {
     },
     rabiLinkRelay: publicRabiLinkRelayConfig(rabiLinkRelayConfigForMeta()),
     rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
+    managerRuntime: managerRuntimeDiagnosticsSummary(),
     personaSyncLan: personaSyncLanServer.status(),
     computerName: os.hostname()
   };
@@ -4872,6 +5000,34 @@ function handleAction(pathname: string, response: http.ServerResponse): boolean 
   }
 
   jsonResponse(response, 200, { code: 0, message: `requested ${action}`, data: [...runtimes.values()].map(runtimeStatus) });
+  return true;
+}
+
+function handleWeixinLoginAction(pathname: string, response: http.ServerResponse): boolean {
+  const match = pathname.match(/^\/gateways\/([^/]+)\/weixin-login$/);
+  if (!match) return false;
+  const id = decodeURIComponent(match[1]);
+  const runtime = runtimes.get(id);
+  if (!runtime) {
+    jsonResponse(response, 404, { code: -1, message: `Gateway not found: ${id}` });
+    return true;
+  }
+  if (!sharedGatewayAdapterTypes(runtime.definition).includes("weixin")) {
+    jsonResponse(response, 400, { code: -1, message: "该 Route 未启用个人微信消息端。" });
+    return true;
+  }
+  try {
+    requestWeixinLogin(dataDirFor(runtime.definition));
+    jsonResponse(response, 202, {
+      code: 0,
+      message: "已明确请求生成个人微信登录二维码；不会发送消息或修改账号配置。"
+    });
+  } catch (error) {
+    jsonResponse(response, 500, {
+      code: -1,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
   return true;
 }
 
@@ -4997,7 +5153,10 @@ export function handleManagerPersonaDomainApi(
 ): boolean {
   const activeRolesRoot = context.rolesRoot ?? rolesRoot;
   const resolveRoleDir = context.roleDir ?? roleDirForApi;
-  if (handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot)) return true;
+  if (handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot, change => {
+    // This is presentation metadata only: version plus a Manager-relative URL, never a role directory path.
+    publishManagerEvent("persona_avatar_changed", change);
+  })) return true;
   if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
   if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
   if (handleSpeechApi(request, requestUrl, response)) return true;
@@ -5005,7 +5164,10 @@ export function handleManagerPersonaDomainApi(
 }
 
 export async function startManager(): Promise<void> {
-  loadRuntimes();
+  // Built-artifact acceptance is a control-plane liveness/read-boundary check.
+  // Do not let a transient NAS route scan delay the isolated Manager listener;
+  // normal installed runtime still loads and owns its configured Routes.
+  if (!managerReadOnly) loadRuntimes();
   personaSyncAutoReconciler?.start();
   void personaSyncService.startManifestIndex()
     .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
@@ -5055,6 +5217,9 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (request.method === "POST" && handleAction(requestUrl.pathname, response)) {
+        return;
+      }
+      if (request.method === "POST" && handleWeixinLoginAction(requestUrl.pathname, response)) {
         return;
       }
       if (request.method === "POST" && handleTriggerAction(request, requestUrl.pathname, response)) {
@@ -5149,15 +5314,36 @@ export async function startManager(): Promise<void> {
         void Promise.resolve()
           .then(async () => {
             const gatewayId = requestUrl.searchParams.get("gatewayId") || undefined;
-            const repair = repairGatewayConfigsForScan(gatewayId);
-            const startMessages = ensureGatewayRunningForScan(gatewayId);
-            if (startMessages.length > 0) {
-              repair.changed = true;
-              repair.messages.push(...startMessages);
+            const [adapterScan, napcatScan] = await Promise.all([
+              messageAdapterScanPayload(),
+              napcatScanHealthPayload()
+            ]);
+            const health = summarizeIndependentAdapterHealth({
+              adapters: adapterScan.adapters,
+              napcatHealth: napcatScan.payload
+            });
+            for (const [type, adapterHealth] of Object.entries(health.adapters)) {
+              const adapter = adapterScan.adapters[type as Exclude<MessageAdapterType, "disabled">];
+              if (adapter) adapter.health = adapterHealth;
             }
-            const adapters = await messageAdapterScanPayload();
-            const napcatHealth = await napcatScanHealthPayload();
-            return { adapters, repair, napcatHealth, gatewayPayload: standaloneGatewayPayload() };
+            return {
+              adapters: adapterScan.adapters,
+              health,
+              scan: {
+                requestedGatewayId: gatewayId,
+                partial: adapterScan.partial || napcatScan.partial,
+                durationMs: Math.max(adapterScan.durationMs, napcatScan.durationMs),
+                deadlineMs: Math.max(adapterScan.deadlineMs, napcatScan.deadlineMs),
+                adapters: adapterScan.diagnostics,
+                napcatInstances: napcatScan.diagnostics
+              },
+              repair: {
+                changed: false,
+                messages: ["本轮扫描只读取状态；未启动进程、未修改配置、未触发登录或修复。"]
+              },
+              napcatHealth: napcatScan.payload,
+              gatewayPayload: standaloneGatewayPayload()
+            };
           })
           .then((payload) => {
             jsonResponse(response, 200, payload);
@@ -5273,7 +5459,9 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (requestUrl.pathname === "/api/gateways") {
-        jsonResponse(response, 200, [...runtimes.values()].map(runtimeStatus));
+        const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
+        jsonResponse(response, 200, [...runtimes.values()]
+          .map((runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache)));
         return;
       }
       if (requestUrl.pathname === "/api/scan/agents" && request.method === "GET") {
@@ -5425,7 +5613,7 @@ export async function startManager(): Promise<void> {
             ok: true,
             repair: scanRepair,
             results,
-            napcatHealth: await napcatScanHealthPayload(),
+            napcatHealth: (await napcatScanHealthPayload()).payload,
             gatewayPayload: standaloneGatewayPayload()
           });
         })().catch((error) => {

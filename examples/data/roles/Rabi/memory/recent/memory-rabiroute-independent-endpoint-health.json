@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-independent-endpoint-health",
+  "title": "消息端健康扫描必须独立、只读且有界",
+  "focus": "消息端扫描 read model 与独立健康汇总",
+  "content": "GET 扫描只观察状态，不启动进程、不登录、不迁移配置也不修复。各消息端探针并发起跑并共享截止时间，单个超时或错误只产生本入口诊断，其他入口继续返回部分结果。QQ 可用性以 OneBot 健康为准，NapCat WebUI 可达不能冒充已登录；单一消息端故障汇总为 degraded，不得升级成全部消息端离线。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：独立消息端健康与无副作用扫描"
+  },
+  "createdAt": "2026-07-31T14:30:00+08:00",
+  "updatedAt": "2026-07-31T14:30:00+08:00",
+  "keywords": ["消息端", "health", "read model", "只读扫描", "共享截止时间", "部分结果", "OneBot", "NapCat WebUI", "degraded", "无副作用"]
+}

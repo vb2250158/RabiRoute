@@ -12,8 +12,15 @@ import {
   textFromWeixinItems,
   weixinApiError,
   weixinApiSucceeded,
-  writeWeixinState
+  writeWeixinState,
+  type WeixinStateProtector
 } from "./weixinOpenClaw.js";
+
+const testProtector: WeixinStateProtector = {
+  scheme: "test-protector",
+  protect: plaintext => Buffer.from(plaintext, "utf8").toString("base64"),
+  unprotect: protectedValue => Buffer.from(protectedValue, "base64").toString("utf8")
+};
 
 test("personal Weixin image input decrypts into private image storage", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-weixin-image-"));
@@ -46,7 +53,7 @@ test("personal Weixin item parsing preserves text, media markers, and reply evid
   assert.equal(parsed.repliedMessageId, "source-1");
 });
 
-test("personal Weixin state round-trips runtime tokens only in the runtime directory", () => {
+test("personal Weixin state survives restart without writing plaintext credentials", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-weixin-"));
   try {
     writeWeixinState(tempDir, {
@@ -56,12 +63,82 @@ test("personal Weixin state round-trips runtime tokens only in the runtime direc
       baseUrl: "https://example.invalid",
       syncBuf: "cursor-1",
       contextTokens: { "session-1": "context-1" },
+      authState: "recoverable",
+      credentialsRetained: true,
       updatedAt: new Date(0).toISOString()
-    });
-    const state = readWeixinState(tempDir);
+    }, testProtector);
+    const persisted = fs.readFileSync(path.join(tempDir, "weixin-openclaw-state.json"), "utf8");
+    assert.doesNotMatch(persisted, /runtime-token|account-1|user-1|cursor-1|context-1/);
+
+    const state = readWeixinState(tempDir, undefined, testProtector);
     assert.equal(state.token, "runtime-token");
+    assert.equal(state.accountId, "account-1");
+    assert.equal(state.userId, "user-1");
+    assert.equal(state.syncBuf, "cursor-1");
     assert.equal(state.contextTokens["session-1"], "context-1");
     assert.equal(state.baseUrl, "https://example.invalid");
+    assert.equal(state.authState, "recoverable");
+    assert.equal(state.credentialsRetained, true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("personal Weixin distinguishes never logged in from an explicitly invalidated session", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-weixin-empty-"));
+  try {
+    assert.equal(readWeixinState(tempDir, undefined, testProtector).authState, "never_logged_in");
+    writeWeixinState(tempDir, {
+      baseUrl: "https://example.invalid",
+      contextTokens: {},
+      authState: "invalid",
+      credentialsRetained: false,
+      invalidatedAt: "2026-07-31T00:00:00.000Z",
+      updatedAt: new Date(0).toISOString()
+    }, testProtector);
+    assert.equal(readWeixinState(tempDir, undefined, testProtector).authState, "invalid");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("legacy plaintext personal Weixin state migrates into the protected envelope", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-weixin-legacy-"));
+  try {
+    fs.writeFileSync(path.join(tempDir, "weixin-openclaw-state.json"), JSON.stringify({
+      token: "legacy-secret",
+      baseUrl: "https://example.invalid",
+      contextTokens: { session: "legacy-context" },
+      updatedAt: new Date(0).toISOString()
+    }), "utf8");
+    const legacy = readWeixinState(tempDir, undefined, testProtector);
+    assert.equal(legacy.storageFormat, "legacy_plaintext");
+    writeWeixinState(tempDir, legacy, testProtector);
+    const persisted = fs.readFileSync(path.join(tempDir, "weixin-openclaw-state.json"), "utf8");
+    assert.doesNotMatch(persisted, /legacy-secret|legacy-context/);
+    assert.equal(readWeixinState(tempDir, undefined, testProtector).token, "legacy-secret");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Windows default personal Weixin storage uses current-user DPAPI", {
+  skip: process.platform !== "win32"
+}, () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-weixin-dpapi-"));
+  try {
+    writeWeixinState(tempDir, {
+      token: "dpapi-dummy-secret",
+      baseUrl: "https://example.invalid",
+      contextTokens: {},
+      authState: "recoverable",
+      credentialsRetained: true,
+      updatedAt: new Date(0).toISOString()
+    });
+    const persisted = fs.readFileSync(path.join(tempDir, "weixin-openclaw-state.json"), "utf8");
+    assert.doesNotMatch(persisted, /dpapi-dummy-secret/);
+    assert.match(persisted, /windows-dpapi-current-user/);
+    assert.equal(readWeixinState(tempDir).token, "dpapi-dummy-secret");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

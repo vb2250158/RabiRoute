@@ -191,6 +191,44 @@ test("remote WebGUI proxies authenticated media ranges and isolated hot SSE chan
       body: JSON.stringify({ bodyBase64: "A".repeat(3 * 1024 * 1024) })
     });
     assert.equal(oversizedResponse.status, 413);
+
+    const failedProxyPromise = fetch(`${remotePrefix}/api/meta`, {
+      headers: { cookie, accept: "application/json" }
+    });
+    const failedClaimResponse = await fetch(
+      `${baseUrl}/worker/webgui-requests?deviceId=pc-proxy&deviceGuid=guid-proxy&deviceName=Proxy%20PC&waitMs=1000&capabilities=webgui`,
+      { headers: workerHeaders }
+    );
+    const failedClaim = (await failedClaimResponse.json()).requests[0];
+    assert.ok(failedClaim);
+    const failedFinishResponse = await fetch(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(failedClaim.id)}/response`, {
+      method: "POST",
+      headers: { ...workerHeaders, "content-type": "application/json" },
+      body: JSON.stringify({
+        ok: false,
+        statusCode: 502,
+        error: "connect ECONNREFUSED 127.0.0.1:8790",
+        deviceId: "pc-proxy",
+        deviceGuid: "guid-proxy"
+      })
+    });
+    assert.equal(failedFinishResponse.status, 200);
+
+    const failedProxyResponse = await failedProxyPromise;
+    assert.equal(failedProxyResponse.status, 502);
+    assert.match(failedProxyResponse.headers.get("content-type") || "", /application\/json/);
+    assert.equal(failedProxyResponse.headers.get("x-rabiroute-error-code"), "RABI_PC_WEBGUI_UNAVAILABLE");
+    assert.equal(failedProxyResponse.headers.get("retry-after"), "3");
+    const failedProxyBody = await failedProxyResponse.json();
+    assert.deepEqual(failedProxyBody, {
+      code: -1,
+      ok: false,
+      error: "RABI_PC_WEBGUI_UNAVAILABLE",
+      stage: "pc_webgui_proxy",
+      retryable: true,
+      request_id: failedClaim.id,
+      message: "Rabi PC 本机 Manager/WebGUI 未能返回请求。请检查 PC 健康守护和 Manager 诊断后重试。"
+    });
   } finally {
     child.kill();
     await new Promise((resolve) => {

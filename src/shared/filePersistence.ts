@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 export type FileLockOptions = {
   timeoutMs?: number;
   staleMs?: number;
+};
+
+export type AtomicWriteFileOptions = {
+  maxRenameAttempts?: number;
+  retryDelayMs?: number;
+  renameSync?: (source: string, destination: string) => void;
 };
 
 export function withFileLockSync<T>(
@@ -60,15 +67,43 @@ export function withFileLockSync<T>(
   }
 }
 
-export function atomicWriteFileSync(filePath: string, content: string | Buffer): void {
+function transientRenameError(error: unknown): boolean {
+  return new Set(["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"]).has(
+    String((error as NodeJS.ErrnoException).code || "")
+  );
+}
+
+export function atomicWriteFileSync(
+  filePath: string,
+  content: string | Buffer,
+  options: AtomicWriteFileOptions = {}
+): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const temporary = path.join(
     path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   );
+  const maxRenameAttempts = Math.max(1, Math.floor(options.maxRenameAttempts ?? 8));
+  const retryDelayMs = Math.max(1, Math.floor(options.retryDelayMs ?? 25));
+  const renameSync = options.renameSync ?? fs.renameSync;
   try {
-    fs.writeFileSync(temporary, content);
-    fs.renameSync(temporary, filePath);
+    const descriptor = fs.openSync(temporary, "wx");
+    try {
+      fs.writeFileSync(descriptor, content);
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        renameSync(temporary, filePath);
+        break;
+      } catch (error) {
+        if (attempt >= maxRenameAttempts || !transientRenameError(error)) throw error;
+        const delay = Math.min(250, retryDelayMs * (2 ** Math.min(6, attempt - 1)));
+        Atomics.wait(lockWaitBuffer, 0, 0, delay);
+      }
+    }
   } finally {
     if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
   }

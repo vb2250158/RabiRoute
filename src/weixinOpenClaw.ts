@@ -1,10 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
 
 export const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com";
 export const DEFAULT_WEIXIN_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 export const WEIXIN_SESSION_TIMEOUT_ERRCODE = -14;
+
+export class WeixinHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    method: string,
+    endpoint: string
+  ) {
+    super(`个人微信 API 明确拒绝请求（HTTP ${status}，${method} ${endpoint}）。`);
+    this.name = "WeixinHttpError";
+  }
+}
 
 export type WeixinOpenClawState = {
   token?: string;
@@ -13,6 +25,30 @@ export type WeixinOpenClawState = {
   baseUrl: string;
   syncBuf?: string;
   contextTokens: Record<string, string>;
+  authState?: "never_logged_in" | "recoverable" | "invalid";
+  credentialsRetained?: boolean;
+  lastConfirmedAt?: string;
+  invalidatedAt?: string;
+  storageFormat?: "protected" | "legacy_plaintext";
+  storageError?: string;
+  updatedAt: string;
+};
+
+export type WeixinStateProtector = {
+  scheme: string;
+  protect(plaintext: string): string;
+  unprotect(protectedValue: string): string;
+};
+
+type PersistedWeixinState = {
+  schemaVersion: 2;
+  protection?: string;
+  protectedSession?: string;
+  baseUrl: string;
+  authState: "never_logged_in" | "recoverable" | "invalid";
+  credentialsRetained: boolean;
+  lastConfirmedAt?: string;
+  invalidatedAt?: string;
   updatedAt: string;
 };
 
@@ -121,13 +157,168 @@ export function weixinStatePath(dataDir: string): string {
   return path.join(dataDir, "weixin-openclaw-state.json");
 }
 
-export function readWeixinState(dataDir: string, baseUrl = DEFAULT_WEIXIN_BASE_URL): WeixinOpenClawState {
+function powerShellDpapi(script: string, input: string): string {
+  const executable = path.join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe"
+  );
+  const result = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-Command", script], {
+    input,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 5000,
+    maxBuffer: 4 * 1024 * 1024
+  });
+  if (result.status !== 0 || result.error || !String(result.stdout || "").trim()) {
+    throw new Error("Windows DPAPI operation failed.");
+  }
+  return String(result.stdout).trim();
+}
+
+function windowsStateProtector(): WeixinStateProtector {
+  const protectScript = [
+    "Add-Type -AssemblyName System.Security",
+    "$plain=[Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd())",
+    "$cipher=[Security.Cryptography.ProtectedData]::Protect($plain,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)",
+    "[Console]::Out.Write([Convert]::ToBase64String($cipher))"
+  ].join(";");
+  const unprotectScript = [
+    "Add-Type -AssemblyName System.Security",
+    "$cipher=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())",
+    "$plain=[Security.Cryptography.ProtectedData]::Unprotect($cipher,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)",
+    "[Console]::Out.Write([Convert]::ToBase64String($plain))"
+  ].join(";");
+  return {
+    scheme: "windows-dpapi-current-user",
+    protect: plaintext => powerShellDpapi(protectScript, plaintext),
+    unprotect: protectedValue => Buffer.from(powerShellDpapi(unprotectScript, protectedValue), "base64").toString("utf8")
+  };
+}
+
+function localKeyStateProtector(dataDir: string): WeixinStateProtector {
+  const keyPath = path.join(dataDir, ".weixin-session.key");
+  const readKey = (): Buffer => {
+    fs.mkdirSync(dataDir, { recursive: true });
+    if (!fs.existsSync(keyPath)) {
+      try {
+        fs.writeFileSync(keyPath, randomBytes(32), { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        if (!fs.existsSync(keyPath)) throw error;
+      }
+    }
+    const key = fs.readFileSync(keyPath);
+    if (key.length !== 32) throw new Error("Local Weixin session key is invalid.");
+    return key;
+  };
+  return {
+    scheme: "local-aes-256-gcm-v1",
+    protect: plaintext => {
+      const iv = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", readKey(), iv);
+      const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+      return [iv, cipher.getAuthTag(), encrypted].map(value => value.toString("base64")).join(".");
+    },
+    unprotect: protectedValue => {
+      const [ivText, tagText, encryptedText] = protectedValue.split(".");
+      if (!ivText || !tagText || !encryptedText) throw new Error("Protected Weixin session payload is invalid.");
+      const decipher = createDecipheriv("aes-256-gcm", readKey(), Buffer.from(ivText, "base64"));
+      decipher.setAuthTag(Buffer.from(tagText, "base64"));
+      return Buffer.concat([
+        decipher.update(Buffer.from(encryptedText, "base64")),
+        decipher.final()
+      ]).toString("utf8");
+    }
+  };
+}
+
+function defaultStateProtector(dataDir: string): WeixinStateProtector {
+  return process.platform === "win32" ? windowsStateProtector() : localKeyStateProtector(dataDir);
+}
+
+export function readWeixinState(
+  dataDir: string,
+  baseUrl = DEFAULT_WEIXIN_BASE_URL,
+  protector = defaultStateProtector(dataDir)
+): WeixinOpenClawState {
   const filePath = weixinStatePath(dataDir);
   if (!fs.existsSync(filePath)) {
-    return { baseUrl, contextTokens: {}, updatedAt: new Date(0).toISOString() };
+    return {
+      baseUrl,
+      contextTokens: {},
+      authState: "never_logged_in",
+      credentialsRetained: false,
+      updatedAt: new Date(0).toISOString()
+    };
   }
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<WeixinOpenClawState>;
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<WeixinOpenClawState> & Partial<PersistedWeixinState>;
+    if (parsed.schemaVersion === 2) {
+      const persistedBaseUrl = typeof parsed.baseUrl === "string" && parsed.baseUrl.trim()
+        ? parsed.baseUrl.replace(/\/$/, "")
+        : baseUrl;
+      const authState = parsed.authState === "recoverable" || parsed.authState === "invalid"
+        ? parsed.authState
+        : "never_logged_in";
+      if (typeof parsed.protectedSession === "string" && parsed.protectedSession) {
+        if (parsed.protection !== protector.scheme) {
+          return {
+            baseUrl: persistedBaseUrl,
+            contextTokens: {},
+            authState: "recoverable",
+            credentialsRetained: true,
+            storageFormat: "protected",
+            storageError: "个人微信安全会话无法由当前系统账户解密。",
+            lastConfirmedAt: parsed.lastConfirmedAt,
+            updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date(0).toISOString()
+          };
+        }
+        try {
+          const secret = JSON.parse(protector.unprotect(parsed.protectedSession)) as Partial<WeixinOpenClawState>;
+          const token = typeof secret.token === "string" && secret.token.trim() ? secret.token.trim() : undefined;
+          return {
+            token,
+            accountId: typeof secret.accountId === "string" && secret.accountId.trim() ? secret.accountId.trim() : undefined,
+            userId: typeof secret.userId === "string" && secret.userId.trim() ? secret.userId.trim() : undefined,
+            baseUrl: persistedBaseUrl,
+            syncBuf: typeof secret.syncBuf === "string" ? secret.syncBuf : undefined,
+            contextTokens: secret.contextTokens && typeof secret.contextTokens === "object" && !Array.isArray(secret.contextTokens)
+              ? Object.fromEntries(Object.entries(secret.contextTokens).filter((entry): entry is [string, string] =>
+                Boolean(entry[0].trim() && typeof entry[1] === "string" && entry[1].trim())))
+              : {},
+            authState: token ? "recoverable" : authState,
+            credentialsRetained: Boolean(token || parsed.credentialsRetained),
+            lastConfirmedAt: parsed.lastConfirmedAt,
+            invalidatedAt: parsed.invalidatedAt,
+            storageFormat: "protected",
+            updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date(0).toISOString()
+          };
+        } catch {
+          return {
+            baseUrl: persistedBaseUrl,
+            contextTokens: {},
+            authState: "recoverable",
+            credentialsRetained: true,
+            storageFormat: "protected",
+            storageError: "个人微信安全会话解密失败；凭据文件已保留，未要求重新扫码。",
+            lastConfirmedAt: parsed.lastConfirmedAt,
+            updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date(0).toISOString()
+          };
+        }
+      }
+      return {
+        baseUrl: persistedBaseUrl,
+        contextTokens: {},
+        authState,
+        credentialsRetained: false,
+        invalidatedAt: parsed.invalidatedAt,
+        lastConfirmedAt: parsed.lastConfirmedAt,
+        storageFormat: "protected",
+        updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date(0).toISOString()
+      };
+    }
     return {
       token: typeof parsed.token === "string" && parsed.token.trim() ? parsed.token.trim() : undefined,
       accountId: typeof parsed.accountId === "string" && parsed.accountId.trim() ? parsed.accountId.trim() : undefined,
@@ -140,18 +331,52 @@ export function readWeixinState(dataDir: string, baseUrl = DEFAULT_WEIXIN_BASE_U
           return key.trim() && token ? [[key.trim(), token]] : [];
         }))
         : {},
+      authState: typeof parsed.token === "string" && parsed.token.trim() ? "recoverable" : "invalid",
+      credentialsRetained: Boolean(typeof parsed.token === "string" && parsed.token.trim()),
+      storageFormat: "legacy_plaintext",
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date(0).toISOString()
     };
   } catch {
-    return { baseUrl, contextTokens: {}, updatedAt: new Date(0).toISOString() };
+    return {
+      baseUrl,
+      contextTokens: {},
+      authState: "invalid",
+      credentialsRetained: false,
+      storageError: "个人微信会话状态文件无法读取。",
+      updatedAt: new Date(0).toISOString()
+    };
   }
 }
 
-export function writeWeixinState(dataDir: string, state: WeixinOpenClawState): void {
+export function writeWeixinState(
+  dataDir: string,
+  state: WeixinOpenClawState,
+  protector = defaultStateProtector(dataDir)
+): void {
   fs.mkdirSync(dataDir, { recursive: true });
   const filePath = weixinStatePath(dataDir);
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2), "utf8");
+  const now = new Date().toISOString();
+  const authState = state.token ? "recoverable" : state.authState === "never_logged_in" ? "never_logged_in" : "invalid";
+  const secret = state.token ? {
+    token: state.token,
+    accountId: state.accountId,
+    userId: state.userId,
+    syncBuf: state.syncBuf,
+    contextTokens: state.contextTokens
+  } : undefined;
+  const persisted: PersistedWeixinState = {
+    schemaVersion: 2,
+    protection: secret ? protector.scheme : undefined,
+    protectedSession: secret ? protector.protect(JSON.stringify(secret)) : undefined,
+    baseUrl: state.baseUrl,
+    authState,
+    credentialsRetained: Boolean(secret),
+    lastConfirmedAt: state.lastConfirmedAt,
+    invalidatedAt: state.invalidatedAt,
+    updatedAt: now
+  };
+  fs.writeFileSync(tempPath, JSON.stringify(persisted, null, 2), "utf8");
   fs.renameSync(tempPath, filePath);
 }
 
@@ -187,7 +412,7 @@ async function requestJson(
       signal: controller.signal
     });
     const text = await response.text();
-    if (!response.ok) throw new Error(`${method} ${endpoint} failed: HTTP ${response.status}`);
+    if (!response.ok) throw new WeixinHttpError(response.status, method, endpoint);
     return text ? JSON.parse(text) as Record<string, unknown> : {};
   } finally {
     clearTimeout(timeout);

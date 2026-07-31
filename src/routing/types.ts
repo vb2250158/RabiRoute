@@ -5,6 +5,7 @@ import type {
   PlanFeedbackMessageRecord,
   PrivateMessageRecord,
   RolePanelMessageRecord,
+  FeishuMessageRecord,
   WeComMessageRecord,
   WeixinMessageRecord,
   VoiceTranscriptEventRecord
@@ -24,9 +25,10 @@ export type ForwardRouteKind =
   | "rabilink"
   | "wearable_health_alert"
   | "wecom_message"
-  | "weixin_message";
+  | "weixin_message"
+  | "feishu_message";
 
-export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message";
+export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message";
 
 export type ForwardRecord =
   | GroupMessageRecord
@@ -36,6 +38,7 @@ export type ForwardRecord =
   | RolePanelMessageRecord
   | PlanFeedbackMessageRecord
   | WeComMessageRecord
+  | FeishuMessageRecord
   | WeixinMessageRecord
   | VoiceTranscriptEventRecord;
 

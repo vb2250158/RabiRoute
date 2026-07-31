@@ -93,6 +93,7 @@ export type MessageContextHistoryKind =
   | "group"
   | "private"
   | "wecom"
+  | "feishu"
   | "voice"
   | "heartbeat"
   | "manual_trigger"
@@ -375,6 +376,9 @@ export function resolveMessageConversationKey(input: {
   }
   if (adapter === "wecom") {
     return `${scope}:${optionalText(input.conversationId ?? input.chatId ?? input.groupId ?? input.userId ?? input.target) || "default"}`;
+  }
+  if (adapter === "feishu") {
+    return `${scope}:chat:${optionalText(input.chatId ?? input.groupId ?? input.target) || "default"}`;
   }
   if (adapter === "weixin") {
     return `${scope}:session:${optionalText(input.sessionId ?? input.userId ?? input.target) || "default"}`;
@@ -809,6 +813,14 @@ export function messageContextFromHistoryRecord(
       kind: optionalText(item.messageType) || "message", status: self ? "sent" : "accepted", sender: optionalText(item.senderName ?? item.senderId ?? item.userId),
       target, text, messageId, replyToMessageId, attachments: safeAttachments(item.attachments ?? item.segments) });
   }
+  if (historyKind === "feishu") {
+    const target = optionalText(item.chatId ?? item.groupId);
+    return normalizeRecord({ time, direction: self ? "outbound" : "inbound", adapter: "feishu", transport: transport || "feishu",
+      gatewayId, instanceId, channel: "feishu",
+      conversationKey: resolveMessageConversationKey({ adapter: "feishu", gatewayId, instanceId, chatId: item.chatId, groupId: item.groupId }),
+      kind: optionalText(item.messageType) || "message", status: self ? "sent" : "accepted", sender: optionalText(item.senderName ?? item.userId),
+      target, text, messageId, replyToMessageId, attachments: safeAttachments(item.attachments ?? item.segments) });
+  }
   if (historyKind === "voice") {
     const outbound = self || item.kind === "tts";
     const adapter = optionalText(item.adapterType) || adapterOverride || "speech";
@@ -844,7 +856,7 @@ export function messageContextFromHistoryRecord(
 }
 
 const successfulOutboxEvents = new Set([
-  "reply_sent", "group_file_uploaded", "group_file_caption_sent", "wecom_reply_sent", "weixin_reply_sent", "rabispeech_tts_sent",
+  "reply_sent", "group_file_uploaded", "group_file_caption_sent", "wecom_reply_sent", "weixin_reply_sent", "feishu_reply_sent", "rabispeech_tts_sent",
   "fennenote_playback_sent", "fennenote_reply_sent", "role_panel_reply_sent", "rabilink_reply_queued",
   "rabilink_proactive_queued", "agent_reply_retained"
 ]);
@@ -852,6 +864,7 @@ const successfulOutboxEvents = new Set([
 function outboxAdapter(event: string, data: Record<string, unknown>): string {
   if (event.startsWith("wecom_")) return "wecom";
   if (event.startsWith("weixin_")) return "weixin";
+  if (event.startsWith("feishu_")) return "feishu";
   if (event.startsWith("rabispeech_")) return "speech";
   if (event.startsWith("fennenote_")) return "fennenote";
   if (event.startsWith("role_panel_")) return "rolePanel";
@@ -894,7 +907,7 @@ function legacyHistoryItems(dataDir: string): MessageContextRecord[] {
     return record ? [record] : [];
   });
   return [
-    ...read("group-messages.jsonl", "group"), ...read("private-messages.jsonl", "private"), ...read("wecom-messages.jsonl", "wecom"), ...read("weixin-messages.jsonl", "private", "weixin"),
+    ...read("group-messages.jsonl", "group"), ...read("private-messages.jsonl", "private"), ...read("wecom-messages.jsonl", "wecom"), ...read("weixin-messages.jsonl", "private", "weixin"), ...read("feishu-messages.jsonl", "feishu"),
     ...read("voice-transcripts.jsonl", "voice"), ...read("heartbeat-events.jsonl", "heartbeat"), ...read("manual-trigger-events.jsonl", "manual_trigger")
   ];
 }

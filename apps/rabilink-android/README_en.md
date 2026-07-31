@@ -28,10 +28,11 @@ RabiLink Relay
 ```
 
 - `GlassAudioClientActivity` is the default glasses entry. `glass-app/` is the glasses application module; the primary path handles audio, media, status, and HUD presentation without running ASR/TTS locally.
-- The normal phone home is a conversation list. Tapping a persona with an enabled RabiLink message adapter opens chat; Back returns to choose another persona. Settings, health, and glasses remain separate surfaces.
+- The normal phone home is a conversation list. Every configured persona remains visible even when its Route or chat capability is disabled; such rows retain configuration guidance instead of disappearing. Tapping a persona with an enabled RabiLink message adapter opens chat; Back returns to choose another persona. Settings, health, and glasses remain separate surfaces.
 - The phone sends continuous 16 kHz mono phone/glasses PCM through the restricted `audio-streams/rabilink/start|chunk|stop` endpoints to the selected Rabi PC. Android owns no VAD, utterance segmentation, ASR, or voiceprint logic. RabiSpeech segments and recognizes on the PC, then automatically writes the host-wide speech store and the RabiLink/mobile endpoint frozen by `routeProfileId`. Stream start submits stable `source_device_id` separately from transient `stream_id`, so normal replies target the real device rather than an audio-suffixed stream identity. `/api/rabilink/speech/messages` remains compatibility/debug only; spoken output is synthesized by Rabi PC TTS and streamed back as PCM when requested.
 - The glasses HUD shows explicit Connect / Listen / Upload / Speak / Paused / Error states. The phone sends `PLAYBACK_BEGIN → PCM → PLAYBACK_END` over the same ordered Classic-BT channel. The playback worker does not accept PCM until the main thread has confirmed capture is paused, preventing the beginning of TTS from being recorded back into the microphone. Glasses validate message identity and PCM length and return `played` only after the `AudioTrack` playback head reaches its marker; Activity destruction reports an unfinished playback as `playback_failed`. Legacy PCM without BEGIN/END may still play for compatibility but is never reported as confirmed playback.
 - Photos are wired as message attachments. Relay/worker accept video-file attachments, but the physical glasses video callback is not yet wired and live video is not complete.
+- Persona avatars are served through the Manager's controlled avatar endpoint and proxied by Relay. The phone caches only the proxied binary and opaque version. Conversation metadata and local messages render immediately; avatars load independently and expose loading, cache-validation, stale-cache, and unavailable states. A `persona_avatar_changed` SSE event refreshes only the matching persona.
 - `RabiConversationService` owns the message cursor, notifications, and phone/glasses I/O. A target is frozen when work is queued, so later navigation cannot retarget it. A dedicated `RabiPhoneAudioCapture` owns the wake lock, stall detection, bounded restart, and health metrics. Text, control, media, and `delivered/played/playback_failed` receipts are persisted before transmission. A full reliable queue rejects new work with a visible error instead of silently deleting unconfirmed older items. Continuous PCM retains only one acknowledgement-sensitive chunk plus a bounded newest-audio buffer and never creates a hidden offline raw recording. Receipt generation and automatic replay are implemented, while real phone/glasses speaker acceptance remains required.
 - Settings exposes one persisted `Paused / Phone mode / Glasses mode` source of truth. Switching to glasses pauses the phone microphone first. Glasses PCM starts only after a real glasses Bluetooth connection event; before connection or after disconnect, capture stays paused with a visible reason and never silently falls back to dual capture. The runtime card refreshes from service broadcasts and shows connection, selected Route/persona, capture, glasses, reliable queues, and the latest error without one-second business-state polling.
 - Users can choose `Agent decides / Quiet / Balanced / Proactive`. The value is durably queued as an explicit preference observation and attached to phone text, control, media, and audio-stream metadata. Neither the App nor Relay converts it into a fixed intervention rule. No interruption, preparation, prompt, recommendation, confirmation, or action remains a PC context/Route safety/target-Agent decision.
@@ -66,8 +67,8 @@ The phone home screen also exposes Wearable Health settings with a Health Connec
 
 ### Everyday chat and navigation
 
-- Home lists only Routes with a `rabilink` message adapter. Wearable-health Routes are never presented as chat personas; a disabled RabiLink Route explains the problem and links to the fix.
-- Each row shows avatar, name, latest message, time, and unread count. Page and system Back return from detail to the same list position.
+- Home lists every configured persona returned by Rabi PC without filtering it out by Route-enabled or current `rabilink` chat capability. Wearable-health Routes are not mistaken for personas; a persona without enabled chat explains the problem and links to the fix.
+- Each row renders the persona name, latest message, time, and unread count immediately from an endpoint-scoped on-device cache while its avatar loads independently. Page and system Back return from detail to the same list position.
 - Draft and read position are scoped per conversation. Opening one persona never clears another; legacy messages without a Route migrate to one deterministic conversation.
 - Normal chat no longer contains a persona dropdown or Configuration Assistant mode. Known fields are edited where they belong in Settings/remote WebGUI; unknown fields use a separate assistant launched from Settings.
 - Notifications aggregate per conversation, carry `routeProfileId`, and deep-link cold or warm launches to the correct detail. Back still returns to the list.
@@ -108,6 +109,20 @@ Use JDK 17 and the repository Gradle wrapper:
 ```
 
 The wrapper pins Gradle 8.6, downloads it from a public China-accessible mirror, and verifies the official distribution SHA-256. Outputs are `app/build/outputs/apk/debug/app-debug.apk` and `glass-app/build/outputs/apk/debug/glass-app-debug.apk`.
+
+The always-on phone build uses the slim package without local ASR/TTS model assets. This export entry runs JVM unit tests and a complete APK build, then verifies arm64-v8a, the 25 MiB size ceiling, absent model assets, zip alignment, and Android v2 + v3 signatures:
+
+```powershell
+.\scripts\Export-RabiLinkMobileSlimApk.ps1 -JavaHome "<JDK 17>"
+```
+
+After the same `app-debug.apk` has already completed a full build, repeat only the independent package checks with:
+
+```powershell
+.\scripts\Export-RabiLinkMobileSlimApk.ps1 -SkipBuild -JavaHome "<JDK 17>"
+```
+
+The verified output is `app/build/outputs/apk/debug/RabiLink-Android-<versionName>-verified.apk`. The script prints structured JSON containing package/version metadata, ABI, model-asset and optional-SDK-isolation checks, signatures, size, SHA-256, and the absolute output path.
 
 Some RokidAiSdk experiments expect local AARs or assets under ignored `out/reference/` paths. Missing proprietary assets may prevent those variants from building or becoming ready. Do not commit credentials or licensed binaries without redistribution permission.
 

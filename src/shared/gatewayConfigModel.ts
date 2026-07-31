@@ -36,9 +36,9 @@ export {
   type BuiltinPersonaRulePolicy
 } from "./personaRulePolicy.js";
 
-export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "disabled";
+export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "feishu" | "disabled";
 export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
-export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "none";
+export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "feishu" | "none";
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
@@ -67,7 +67,8 @@ export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
   "wearable",
   "webhook",
   "wecom",
-  "weixin"
+  "weixin",
+  "feishu"
 ];
 export const DEFAULT_RECENT_MESSAGE_LIMIT = 12;
 export const MAX_RECENT_MESSAGE_LIMIT = 200;
@@ -208,6 +209,13 @@ export type GatewayDefinition = {
   wecomWsUrl?: string;
   weixinBaseUrl?: string;
   weixinBotType?: string;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+  feishuVerificationToken?: string;
+  feishuEncryptKey?: string;
+  feishuEventSubscriptionEnabled?: boolean;
+  feishuWebhookPort?: number;
+  feishuWebhookPath?: string;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   heartbeatSkipWhenAgentBusy?: boolean;
@@ -278,7 +286,8 @@ export type GatewayPortClaimKind =
   | "webhook"
   | "fennenote-webhook"
   | "xiaoai-webhook"
-  | "rabilink-webhook";
+  | "rabilink-webhook"
+  | "feishu-webhook";
 
 export type GatewayPortClaim = {
   port: number;
@@ -296,7 +305,7 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "weixin", "disabled"]);
+const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu", "disabled"]);
 const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
@@ -349,6 +358,7 @@ function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string
   if (adapter === "wearable") return ["wearable_health_alert"];
   if (adapter === "wecom") return ["wecom_message"];
   if (adapter === "weixin") return ["weixin_message"];
+  if (adapter === "feishu") return ["feishu_message"];
   return [];
 }
 
@@ -363,6 +373,7 @@ function defaultRuleNameForMessageAdapter(adapter: MessageAdapterType): string {
   if (adapter === "wearable") return "智能手表/手环健康告警";
   if (adapter === "wecom") return "企业微信默认消息";
   if (adapter === "weixin") return "个人微信默认消息";
+  if (adapter === "feishu") return "飞书默认消息";
   if (adapter === "webhook") return "Webhook 默认消息";
   return "默认消息";
 }
@@ -465,12 +476,13 @@ function normalizeOptionalMessageAdapters(items: unknown): MessageAdapterType[] 
     .filter((item): item is MessageAdapterType => messageAdapterValues.has(item as MessageAdapterType) && item !== "disabled"))];
 }
 
-function normalizePayloadKinds(value: unknown): MessagePayloadKind[] {
-  if (!Array.isArray(value)) return defaultSupportedOutputs;
+function normalizePayloadKinds(value: unknown, adapterType: Exclude<MessageAdapterType, "disabled">): MessagePayloadKind[] {
+  const defaults = adapterType === "feishu" ? ["text"] as MessagePayloadKind[] : defaultSupportedOutputs;
+  if (!Array.isArray(value)) return defaults;
   const kinds = [...new Set(value
     .map(item => String(item || "").trim())
     .filter((item): item is MessagePayloadKind => messagePayloadKindValues.has(item as MessagePayloadKind)))];
-  return kinds.length > 0 ? kinds : defaultSupportedOutputs;
+  return kinds.length > 0 ? kinds : defaults;
 }
 
 function normalizePathList(value: unknown): string[] {
@@ -489,7 +501,7 @@ export function normalizeMessageAdapterPolicy(
   return {
     inputEnabled: raw.inputEnabled ?? !options.legacyInputDisabled,
     outputEnabled: raw.outputEnabled ?? true,
-    supportedOutputs: normalizePayloadKinds(raw.supportedOutputs),
+    supportedOutputs: normalizePayloadKinds(raw.supportedOutputs, adapterType),
     allowedFileRoots: normalizePathList(raw.allowedFileRoots)
   };
 }
@@ -789,6 +801,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   if (definition.fenneNoteWebhookPort != null) assertValidPort(definition.fenneNoteWebhookPort, `FenneNote webhook port for ${definition.id}`);
   if (definition.xiaoaiWebhookPort != null) assertValidPort(definition.xiaoaiWebhookPort, `XiaoAI webhook port for ${definition.id}`);
   if (definition.rabiLinkWebhookPort != null) assertValidPort(definition.rabiLinkWebhookPort, `RabiLink webhook port for ${definition.id}`);
+  if (definition.feishuWebhookPort != null) assertValidPort(definition.feishuWebhookPort, `Feishu webhook port for ${definition.id}`);
 
   const identity = resolveRouteIdentity(definition);
   const agentRoleId = identity.roleId;
@@ -865,6 +878,13 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     rabiLinkRelayDeviceId: definition.rabiLinkRelayDeviceId?.trim() || runtimeId,
     rabiLinkRelayClaimWaitMs: normalizePositiveNumber(definition.rabiLinkRelayClaimWaitMs, 60000),
     rabiLinkRelayReplyIdleTimeoutMs: normalizePositiveNumber(definition.rabiLinkRelayReplyIdleTimeoutMs, 60000),
+    feishuAppId: definition.feishuAppId?.trim() || "",
+    feishuAppSecret: definition.feishuAppSecret?.trim() || "",
+    feishuVerificationToken: definition.feishuVerificationToken?.trim() || "",
+    feishuEncryptKey: definition.feishuEncryptKey?.trim() || "",
+    feishuEventSubscriptionEnabled: definition.feishuEventSubscriptionEnabled === true,
+    feishuWebhookPort: definition.feishuWebhookPort ?? definition.gatewayPort,
+    feishuWebhookPath: definition.feishuWebhookPath?.trim() || "/feishu",
     napcatHttpUrl: primaryNapcat?.httpUrl ?? definition.napcatHttpUrl,
     napcatWebuiUrl: primaryNapcat?.webuiUrl ?? definition.napcatWebuiUrl,
     napcatAccessToken: primaryNapcat?.accessToken ?? definition.napcatAccessToken,
@@ -952,6 +972,7 @@ export function collectGatewayPortClaims(
     if (activeAdapters.has("fennenote")) claim(gateway.fenneNoteWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} FenneNote webhook`, "fennenote-webhook", gateway.id);
     if (activeAdapters.has("xiaoai")) claim(gateway.xiaoaiWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} XiaoAI webhook`, "xiaoai-webhook", gateway.id);
     if (activeAdapters.has("rabilink")) claim(gateway.rabiLinkWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} RabiLink webhook`, "rabilink-webhook", gateway.id);
+    if (activeAdapters.has("feishu")) claim(gateway.feishuWebhookPort ?? gateway.gatewayPort, `${gateway.id} Feishu webhook`, "feishu-webhook", gateway.id);
     for (const instance of enabledNapcatInstances) {
       const prefix = `${gateway.id}/${instance.id}`;
       claim(instance.gatewayPort, `${prefix} RabiRoute WS`, "napcat-ws", gateway.id, instance.id);
@@ -1042,6 +1063,9 @@ export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPor
     }
     if (activeAdapters.has("rabilink")) {
       gateway.rabiLinkWebhookPort = assignIngress(gateway.rabiLinkWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+    }
+    if (activeAdapters.has("feishu")) {
+      gateway.feishuWebhookPort = assignIngress(gateway.feishuWebhookPort, Number(gateway.gatewayPort || 8790) + 1);
     }
   }
 }

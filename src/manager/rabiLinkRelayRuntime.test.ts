@@ -27,13 +27,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
   }
 }
 
-function openRelayEvents(response: http.ServerResponse): void {
+function openRelayEvents(response: http.ServerResponse, extra = ""): void {
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-store",
     connection: "keep-alive"
   });
   response.write("event: ready\ndata: {}\n\n");
+  if (extra) response.write(extra);
 }
 
 test("global Relay runtime registers the PC and proxies remote WebGUI requests", async (t) => {
@@ -50,7 +51,10 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   const relay = http.createServer((request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     if (request.method === "GET" && url.pathname === "/api/rabilink/events") {
-      openRelayEvents(response);
+      openRelayEvents(
+        response,
+        "event: outbox_receipt\ndata: {\"deliveryId\":\"delivery-a\",\"deviceId\":\"phone-a\",\"state\":\"played\",\"routeProfileId\":\"route-a\"}\n\n"
+      );
       return;
     }
     if (request.method === "GET" && url.pathname === "/worker/webgui-requests") {
@@ -88,8 +92,8 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   const relayPort = await listen(relay);
   t.after(() => close(relay));
 
-  const relayEvents: string[] = [];
-  const runtime = new RabiLinkRelayRuntime({ onEvent: eventType => relayEvents.push(eventType) });
+  const relayEvents: Array<{ eventType: string; data: Record<string, unknown> }> = [];
+  const runtime = new RabiLinkRelayRuntime({ onEvent: (eventType, data) => relayEvents.push({ eventType, data }) });
   t.after(() => runtime.stop());
   runtime.sync({
     enabled: true,
@@ -109,7 +113,11 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   const finishedBody = relayState.finishedBody;
   assert.ok(finishedBody);
   assert.equal(runtime.status().state, "online");
-  assert.ok(relayEvents.includes("ready"));
+  assert.ok(relayEvents.some((event) => event.eventType === "ready"));
+  assert.deepEqual(
+    relayEvents.find((event) => event.eventType === "outbox_receipt")?.data,
+    { deliveryId: "delivery-a", deviceId: "phone-a", state: "played", routeProfileId: "route-a" }
+  );
   assert.deepEqual(claimedIdentity, {
     token: "app-token",
     deviceId: "pc-a",

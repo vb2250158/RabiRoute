@@ -814,6 +814,89 @@ test("explicit WeCom group target sends through the WeCom SDK wrapper", async ()
   }
 });
 
+test("Feishu output fails closed until event subscription is explicitly confirmed", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-outbox-"));
+  const result = await handleAgentReply({
+    text: "must stay local",
+    adapterType: "feishu",
+    targetType: "group",
+    groupId: "oc-source-chat",
+    feishuChatId: "oc-source-chat"
+  }, {
+    rootDir,
+    routeRoot: "data/route",
+    rolesRoot: "data/roles",
+    runtimes: [{
+      id: "feishu-route",
+      pipeline: { inputAdapter: "feishu", outputAdapter: "feishu" },
+      feishuAppId: "test-app-id",
+      feishuAppSecret: "test-app-secret",
+      feishuEventSubscriptionEnabled: false,
+      messageAdapterPolicies: {
+        feishu: { inputEnabled: true, outputEnabled: true, supportedOutputs: ["text"] }
+      }
+    }]
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "blocked");
+  assert.match(result.reason ?? "", /event subscription/i);
+});
+
+test("Feishu source reply resolves the durable event log and sends to the original chat", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-source-"));
+  const routeRoot = path.join(rootDir, "data", "route");
+  const routeDir = path.join(routeRoot, "feishu-route");
+  fs.mkdirSync(routeDir, { recursive: true });
+  fs.writeFileSync(path.join(routeDir, "feishu-messages.jsonl"), `${JSON.stringify({
+    time: 1,
+    rawMessage: "source",
+    eventId: "evt-source",
+    messageId: "om-source",
+    adapterType: "feishu",
+    chatId: "oc-original-chat",
+    groupId: "oc-original-chat",
+    userId: "ou-user",
+    messageType: "text"
+  })}\n`, "utf8");
+
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    calls.push({ url: String(url), body });
+    return new Response(JSON.stringify(calls.length === 1
+      ? { code: 0, tenant_access_token: "test-token" }
+      : { code: 0, data: { message_id: "om-reply" } }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const result = await handleAgentReply({
+      text: "reply to source",
+      messageId: "om-source"
+    }, {
+      rootDir,
+      routeRoot,
+      rolesRoot: path.join(rootDir, "data", "roles"),
+      runtimes: [{
+        id: "feishu-route",
+        pipeline: { inputAdapter: "feishu", outputAdapter: "feishu" },
+        feishuAppId: "test-app-id",
+        feishuAppSecret: "test-app-secret",
+        feishuEventSubscriptionEnabled: true,
+        messageAdapterPolicies: {
+          feishu: { inputEnabled: true, outputEnabled: true, supportedOutputs: ["text"] }
+        }
+      }]
+    });
+    assert.equal(result.status, "sent");
+    assert.equal(result.groupId, "oc-original-chat");
+    assert.equal(calls[1].body.receive_id, "oc-original-chat");
+    assert.match(calls[1].url, /receive_id_type=chat_id/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("WeCom source reply resolves chat id from wecom message log", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-wecom-"));
   const routeDir = path.join(rootDir, "data", "route", "wecom-route");

@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runRabiSpeechTtsLoopAcceptance } from "./test-rabispeech-tts-loop.mjs";
+import {
+  runRabiSpeechTtsLoopAcceptance,
+  transcriptSimilarity
+} from "./test-rabispeech-tts-loop.mjs";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -33,13 +36,18 @@ function testWave() {
   return output;
 }
 
-function fakeSpeechRuntime({ apiProviders = false, emitEvents = true, staleManagerEvents = false } = {}) {
+function fakeSpeechRuntime({
+  apiProviders = false,
+  emitEvents = true,
+  staleManagerEvents = false,
+  fasterWhisperMetadata = false
+} = {}) {
   const encoder = new TextEncoder();
   const rows = [];
   let eventController = null;
   const calls = [];
   const provider = apiProviders ? "dashscope-qwen" : "local-tts";
-  const asrProvider = apiProviders ? "dashscope-qwen" : "local-asr";
+  const asrProvider = apiProviders ? "dashscope-qwen" : fasterWhisperMetadata ? "faster-whisper" : "local-asr";
   const emit = (kind, sessionId, id) => {
     if (!emitEvents || !eventController) return;
     eventController.enqueue(encoder.encode(
@@ -73,13 +81,18 @@ function fakeSpeechRuntime({ apiProviders = false, emitEvents = true, staleManag
       },
       {
         id: `${asrProvider}/test-asr`, capability: "asr", provider: asrProvider, model: "test-asr",
-        available: true, enabled: true, installed: true, status: "ready"
+        available: true, enabled: true, installed: true, status: "ready",
+        ...(fasterWhisperMetadata ? { owned_by: "local" } : {})
       }
     ] });
     if (request.pathname === "/v1/capabilities") return jsonResponse({
       providers: {
         tts: { [provider]: { transport: apiProviders ? "dashscope" : "local-worker-http", local_only: !apiProviders } },
-        asr: { [asrProvider]: { transport: apiProviders ? "dashscope" : "local-worker-http", local_only: !apiProviders } }
+        asr: {
+          [asrProvider]: fasterWhisperMetadata
+            ? { local_files_only: true, loaded: true, loaded_device: "cuda" }
+            : { transport: apiProviders ? "dashscope" : "local-worker-http", local_only: !apiProviders }
+        }
       },
       speaker_identity: { voiceprint: { available: true, supported: false, validated: false, model: "speaker-test" } }
     });
@@ -168,6 +181,29 @@ test("API providers require explicit authorization", async () => {
     timeoutMs: 2_000
   }, { fetchImpl: fakeSpeechRuntime({ apiProviders: true }).fetchImpl });
   assert.equal(allowed.exitCode, 0);
+});
+
+test("faster-whisper local-files-only metadata is accepted as a local provider", async () => {
+  const runtime = fakeSpeechRuntime({ fasterWhisperMetadata: true });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabispeech-tts-loop-faster-whisper-"));
+  const result = await runRabiSpeechTtsLoopAcceptance({
+    outputPath: path.join(root, "report.json"),
+    timeoutMs: 2_000
+  }, { fetchImpl: runtime.fetchImpl });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.report.asr.localProvider, true);
+});
+
+test("transcript similarity tolerates a small ASR substitution without accepting unrelated text", () => {
+  assert.ok(transcriptSimilarity(
+    "今天天气很好，我们测试本地语音识别。",
+    "今天天气很好我们测试本地语音实别"
+  ) >= 0.85);
+  assert.ok(transcriptSimilarity(
+    "今天天气很好，我们测试本地语音识别。",
+    "完全不同的内容不会通过验收"
+  ) < 0.85);
 });
 
 test("missing records_changed events fail by one-shot deadline without record polling", async () => {

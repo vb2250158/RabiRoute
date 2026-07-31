@@ -163,10 +163,26 @@ export type WeixinMessageRecord = {
   segments?: unknown[];
 };
 
+/** A Feishu chat event. Kept separate from generic webhooks and WeCom records. */
+export type FeishuMessageRecord = {
+  time: number;
+  rawMessage: string;
+  messageId: string;
+  /** Feishu v2 event id. This is the durable callback idempotency key. */
+  eventId: string;
+  senderName?: string;
+  adapterType: "feishu";
+  chatId: string;
+  groupId: string;
+  userId: string;
+  messageType: string;
+  raw?: unknown;
+};
+
 export type AgentPacketRecord = {
   id: string;
   time: number;
-  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message";
+  kind: "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message";
   text: string;
 };
 
@@ -334,6 +350,43 @@ export function appendWeComMessage(record: WeComMessageRecord): void {
 
 export function appendWeComMessageToDir(record: WeComMessageRecord, dataDir: string): void {
   fs.appendFileSync(wecomLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+function feishuLogPath(dataDir = config.memoryDataDir): string {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return path.join(dataDir, "feishu-messages.jsonl");
+}
+
+function feishuEventIdentity(record: Pick<FeishuMessageRecord, "eventId" | "messageId">): string {
+  return String(record.eventId || record.messageId || "").trim();
+}
+
+function appendFeishuMessageOnce(filePath: string, record: FeishuMessageRecord): boolean {
+  const identity = feishuEventIdentity(record);
+  const lockPath = `${filePath}.lock`;
+  return withFileLockSync(lockPath, () => {
+    if (identity && fs.existsSync(filePath)) {
+      const duplicate = fs.readFileSync(filePath, "utf8").split(/\r?\n/).some((line) => {
+        if (!line.trim()) return false;
+        try {
+          return feishuEventIdentity(JSON.parse(line) as FeishuMessageRecord) === identity;
+        } catch {
+          return false;
+        }
+      });
+      if (duplicate) return false;
+    }
+    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+    return true;
+  });
+}
+
+export function appendFeishuMessage(record: FeishuMessageRecord): boolean {
+  return appendFeishuMessageOnce(feishuLogPath(), record);
+}
+
+export function appendFeishuMessageToDir(record: FeishuMessageRecord, dataDir: string): boolean {
+  return appendFeishuMessageOnce(feishuLogPath(dataDir), record);
 }
 
 function weixinLogPath(dataDir = config.memoryDataDir): string {

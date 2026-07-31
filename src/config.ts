@@ -31,7 +31,7 @@ export const defaultPrivateNotificationTemplate = "";
 export const defaultHeartbeatNotificationTemplate = "";
 export const defaultVoiceTranscriptNotificationTemplate = "";
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message";
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message";
 
 export type NotificationRule = {
   id: string;
@@ -132,7 +132,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 export function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "weixin" || raw === "remoteAgent" || raw === "speech" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "weixin" || raw === "feishu" || raw === "remoteAgent" || raw === "speech" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -149,13 +149,14 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "rabilink"
     || kind === "wearable_health_alert"
     || kind === "wecom_message"
-    || kind === "weixin_message";
+    || kind === "weixin_message"
+    || kind === "feishu_message";
 }
 
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
     .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "wearable" || item === "webhook" || item === "wecom" || item === "weixin" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "wearable" || item === "webhook" || item === "wecom" || item === "weixin" || item === "feishu" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
   if (adapters.includes("disabled")) {
     return ["disabled"];
   }
@@ -468,6 +469,13 @@ export const config = {
   wecomBotId: process.env.WECOM_BOT_ID?.trim() || "",
   wecomBotSecret: process.env.WECOM_BOT_SECRET?.trim() || "",
   wecomWsUrl: process.env.WECOM_WS_URL?.trim() || "",
+  feishuAppId: process.env.FEISHU_APP_ID?.trim() || "",
+  feishuAppSecret: process.env.FEISHU_APP_SECRET?.trim() || "",
+  feishuVerificationToken: process.env.FEISHU_VERIFICATION_TOKEN?.trim() || "",
+  feishuEncryptKey: process.env.FEISHU_ENCRYPT_KEY?.trim() || "",
+  feishuEventSubscriptionEnabled: parseBoolean(process.env.FEISHU_EVENT_SUBSCRIPTION_ENABLED, false),
+  feishuWebhookPath: process.env.FEISHU_WEBHOOK_PATH?.trim() || "/feishu",
+  feishuWebhookPort: Number(process.env.FEISHU_WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   agentAdapters: parseAgentAdapters(process.env.AGENT_ADAPTERS),
   agentModel,
   codexThreadId: process.env.CODEX_THREAD_ID?.trim() || "",

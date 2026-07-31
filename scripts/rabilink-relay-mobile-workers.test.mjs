@@ -150,3 +150,47 @@ test("mobile PC picker exposes only processing workers", async () => {
   }
   assert.equal(stderr.includes("SyntaxError"), false, stderr);
 });
+
+test("mobile state auto-selects one online processing PC but never guesses between several", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-relay-mobile-autoselect-"));
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [path.resolve("scripts/rabilink-relay-server.mjs")], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1", PORT: String(port), RABILINK_RELAY_DATA_DIR: directory,
+      RABILINK_RELAY_WEBGUI_DIST_DIR: path.join(directory, "missing-webgui")
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stderr = "";
+  child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+  const subscriptions = [];
+  try {
+    await waitForHealth(baseUrl, child);
+    const { token } = await createApp(baseUrl);
+    subscriptions.push(await subscribe(baseUrl, token, {
+      deviceId: "only-pc", deviceGuid: "guid-only", deviceName: "Only PC", capabilities: "webgui"
+    }));
+    let stateResponse = await fetch(`${baseUrl}/api/rabilink/mobile/state`, { headers: { "x-rabilink-token": token } });
+    assert.equal(stateResponse.status, 200);
+    assert.equal((await stateResponse.json()).selectedWorker?.id, "only-pc");
+
+    subscriptions.push(await subscribe(baseUrl, token, {
+      deviceId: "other-pc", deviceGuid: "guid-other", deviceName: "Other PC", capabilities: "webgui"
+    }));
+    stateResponse = await fetch(`${baseUrl}/api/rabilink/mobile/state`, { headers: { "x-rabilink-token": token } });
+    assert.equal(stateResponse.status, 200);
+    assert.equal((await stateResponse.json()).selectedWorker, null);
+  } finally {
+    await Promise.allSettled(subscriptions.map(response => response.body?.cancel()));
+    child.kill();
+    await new Promise(resolve => {
+      if (child.exitCode != null) return resolve();
+      child.once("exit", resolve); setTimeout(resolve, 2_000);
+    });
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  assert.equal(stderr.includes("SyntaxError"), false, stderr);
+});

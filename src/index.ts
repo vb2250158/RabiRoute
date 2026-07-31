@@ -7,6 +7,7 @@ import { createRabiLinkAdapter } from "./adapters/rabilinkAdapter.js";
 import { createWearableAdapter } from "./adapters/wearableAdapter.js";
 import { createWeComAdapter } from "./adapters/wecomAdapter.js";
 import { createWeixinAdapter } from "./adapters/weixinAdapter.js";
+import { createFeishuAdapter } from "./adapters/feishuAdapter.js";
 import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
@@ -384,7 +385,7 @@ function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdap
   }, null, 2), "utf8");
 }
 
-function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "heartbeat">): MessageAdapter {
+function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "feishu" | "heartbeat">): MessageAdapter {
   return {
     type,
     start() {
@@ -432,6 +433,7 @@ function createMessageAdapter(): MessageAdapter {
   if (config.messageAdapterType === "weixin") {
     return createWeixinAdapter();
   }
+  if (config.messageAdapterType === "feishu") return createFeishuAdapter();
 
   return createPlaceholderAdapter(config.messageAdapterType);
 }
@@ -464,6 +466,7 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   if (type === "weixin") {
     return createWeixinAdapter();
   }
+  if (type === "feishu") return createFeishuAdapter();
   return createPlaceholderAdapter(type);
 }
 

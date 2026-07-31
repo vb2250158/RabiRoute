@@ -13,7 +13,6 @@ import {
   readWeixinState,
   requestWeixinQrSession,
   textFromWeixinItems,
-  WEIXIN_SESSION_TIMEOUT_ERRCODE,
   weixinApiError,
   weixinApiSucceeded,
   writeWeixinState,
@@ -22,6 +21,16 @@ import {
   type WeixinQrSession
 } from "../weixinOpenClaw.js";
 import type { MessageAdapter } from "./messageAdapter.js";
+import {
+  applyWeixinPollFailure,
+  applyWeixinPollSuccess,
+  describeWeixinStartup,
+  type WeixinSessionStatus
+} from "./weixinSessionLifecycle.js";
+import {
+  clearWeixinLoginRequest,
+  hasActiveWeixinLoginRequest
+} from "../weixinLoginRequest.js";
 
 type GatewayStatus = { messageAdapters?: Record<string, Record<string, unknown>> };
 const statusPath = path.join(config.dataDir, "gateway-status.json");
@@ -109,8 +118,26 @@ async function recordFromInbound(message: WeixinInboundMessage): Promise<WeixinM
   };
 }
 
-function clearLoginState(state: WeixinOpenClawState): WeixinOpenClawState {
-  return { baseUrl: state.baseUrl, contextTokens: {}, updatedAt: new Date().toISOString() };
+function statusPatch(status: WeixinSessionStatus): Record<string, unknown> {
+  const message = status.phase === "restoring"
+    ? "正在从安全存储恢复个人微信会话。"
+    : status.phase === "restored"
+      ? "个人微信会话已恢复，正在接收消息。"
+      : status.phase === "temporarily_unreachable"
+        ? "个人微信暂时不可达；会话凭据已保留，不需要重新扫码。"
+        : status.phase === "invalid"
+          ? "个人微信会话已由服务端判定失效，需要重新扫码。"
+          : "个人微信从未登录，需要扫码后才能接收消息。";
+  return {
+    status: status.phase === "temporarily_unreachable" ? "degraded" : "running",
+    sessionPhase: status.phase,
+    loggedIn: status.loggedIn,
+    credentialsRetained: status.credentialsRetained,
+    loginRequired: status.loginRequired,
+    polling: status.phase === "restored",
+    lastError: status.error || "",
+    message
+  };
 }
 
 async function processInbound(state: WeixinOpenClawState, message: WeixinInboundMessage): Promise<boolean> {
@@ -150,6 +177,9 @@ function applyConfirmedLogin(state: WeixinOpenClawState, data: Record<string, un
   const token = String(data.bot_token || "").trim();
   if (!token) throw new Error("微信扫码已确认，但响应没有 bot_token。 ");
   state.token = token;
+  state.authState = "recoverable";
+  state.credentialsRetained = true;
+  state.lastConfirmedAt = new Date().toISOString();
   state.accountId = String(data.ilink_bot_id || "").trim() || undefined;
   state.userId = String(data.ilink_user_id || "").trim() || undefined;
   const baseUrl = String(data.baseurl || "").trim();
@@ -159,10 +189,35 @@ function applyConfirmedLogin(state: WeixinOpenClawState, data: Record<string, un
 async function runWeixinAdapter(): Promise<void> {
   loadRecentMessageIds();
   let state = readWeixinState(config.dataDir, config.weixinBaseUrl);
+  if (state.token && state.storageFormat === "legacy_plaintext") {
+    writeWeixinState(config.dataDir, state);
+    state = readWeixinState(config.dataDir, config.weixinBaseUrl);
+  }
+  patchWeixinStatus(statusPatch(describeWeixinStartup(state)));
   let qrSession: WeixinQrSession | undefined;
   while (true) {
     try {
       if (!state.token) {
+        const startup = describeWeixinStartup(state);
+        if (!startup.loginRequired) {
+          patchWeixinStatus(statusPatch(startup));
+          await sleep(5000);
+          state = readWeixinState(config.dataDir, config.weixinBaseUrl);
+          continue;
+        }
+        if (!hasActiveWeixinLoginRequest(config.dataDir)) {
+          patchWeixinStatus({
+            ...statusPatch(startup),
+            qrStatus: "not_requested",
+            qrCode: "",
+            qrCodeImageContent: "",
+            qrCodeDataUrl: "",
+            qrExpiresAt: "",
+            message: `${String(statusPatch(startup).message)} 请在管理面明确点击“生成登录二维码”。`
+          });
+          await sleep(2000);
+          continue;
+        }
         if (!qrSession || Date.now() - qrSession.startedAt >= 5 * 60 * 1000) {
           qrSession = await requestWeixinQrSession(state.baseUrl, config.weixinBotType);
           const qrCodeDataUrl = await QRCode.toDataURL(qrSession.qrcodeImageContent, {
@@ -190,6 +245,7 @@ async function runWeixinAdapter(): Promise<void> {
         if (status === "confirmed") {
           applyConfirmedLogin(state, login);
           writeWeixinState(config.dataDir, state);
+          clearWeixinLoginRequest(config.dataDir);
           qrSession = undefined;
           patchWeixinStatus({
             status: "running",
@@ -205,6 +261,7 @@ async function runWeixinAdapter(): Promise<void> {
           appendAdapterLog("weixin", { event: "login_confirmed", message: "Weixin login confirmed." });
         } else if (status === "expired") {
           qrSession = undefined;
+          clearWeixinLoginRequest(config.dataDir);
         } else {
           await sleep(1000);
         }
@@ -213,16 +270,18 @@ async function runWeixinAdapter(): Promise<void> {
 
       const updates = await pollWeixinUpdates(state);
       if (!weixinApiSucceeded(updates)) {
-        const error = weixinApiError(updates);
-        if (Number(updates.errcode || 0) === WEIXIN_SESSION_TIMEOUT_ERRCODE) {
-          state = clearLoginState(state);
+        const failure = applyWeixinPollFailure(state, updates);
+        state = failure.state;
+        if (failure.status.phase === "invalid") {
           writeWeixinState(config.dataDir, state);
           qrSession = undefined;
-          patchWeixinStatus({ status: "running", loggedIn: false, lastError: error, message: "个人微信登录已过期，请重新扫码。" });
+          patchWeixinStatus(statusPatch(failure.status));
           continue;
         }
-        throw new Error(error);
+        throw new Error(failure.status.error || weixinApiError(updates));
       }
+      const restored = applyWeixinPollSuccess(state);
+      state = restored.state;
       if (updates.get_updates_buf != null) state.syncBuf = String(updates.get_updates_buf);
       let changed = updates.get_updates_buf != null;
       const messages = Array.isArray(updates.msgs) ? updates.msgs : [];
@@ -230,11 +289,16 @@ async function runWeixinAdapter(): Promise<void> {
         if (!item || typeof item !== "object" || Array.isArray(item)) continue;
         changed = await processInbound(state, item as WeixinInboundMessage) || changed;
       }
-      if (changed) writeWeixinState(config.dataDir, state);
-      patchWeixinStatus({ status: "running", loggedIn: true, polling: true, lastPollAt: new Date().toISOString(), lastError: "" });
+      if (changed || restored.status.phase === "restored") writeWeixinState(config.dataDir, state);
+      patchWeixinStatus({
+        ...statusPatch(restored.status),
+        lastPollAt: new Date().toISOString()
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      patchWeixinStatus({ status: "error", loggedIn: Boolean(state.token), polling: false, lastError: message, message });
+      const failure = applyWeixinPollFailure(state, error);
+      state = failure.state;
+      const message = failure.status.error || (error instanceof Error ? error.message : String(error));
+      patchWeixinStatus(statusPatch(failure.status));
       appendAdapterLog("weixin", { level: "error", event: "poll_failed", message });
       await sleep(5000);
     }
@@ -245,7 +309,11 @@ export function createWeixinAdapter(): MessageAdapter {
   return {
     type: "weixin",
     start() {
-      patchWeixinStatus({ status: "running", maturity: "experimental", loggedIn: false, message: "个人微信消息端启动中。" });
+      const state = readWeixinState(config.dataDir, config.weixinBaseUrl);
+      patchWeixinStatus({
+        ...statusPatch(describeWeixinStartup(state)),
+        maturity: "experimental"
+      });
       void runWeixinAdapter();
     }
   };

@@ -30,6 +30,8 @@ const personaAvatarUrl = computed(() => (runtime.value.roleInfo?.options || [])
 const speechDefaultVariables = applySpeechRouteVariableDefaults(undefined);
 const speechAdapterActionBusy = ref(false);
 const speechAdapterActionError = ref("");
+const weixinLoginBusy = ref(false);
+const weixinLoginError = ref("");
 let speechConfigSaveTimer = 0;
 const adapterQuery = ref("");
 const configNameError = ref("");
@@ -48,7 +50,9 @@ const agentScan = ref({
 
 const messageAdapterScan = ref({
   adapters: {} as Partial<Record<MessageAdapterType, MessageAdapterScanResult>>,
-  loading: false
+  loading: false,
+  error: "",
+  overall: null as null | { state: "healthy" | "degraded" | "unknown"; message: string }
 });
 type RemoteAgentDeviceStatus = {
   deviceId: string;
@@ -103,13 +107,16 @@ const napcatWebuiOpenHealthPatch = { readWebuiLoginInfo: false, inspectProcesses
 async function runMessageAdapterScan(): Promise<void> {
   if (messageAdapterScan.value.loading) return;
   messageAdapterScan.value.loading = true;
+  messageAdapterScan.value.error = "";
   try {
     const params = new URLSearchParams();
     if (gateway.value?.id) params.set("gatewayId", gateway.value.id);
     const res = await fetch(`/api/scan/message-adapters${params.toString() ? `?${params}` : ""}`);
     const data = await res.json();
+    if (!res.ok) throw new Error(data.message || `消息端扫描失败（HTTP ${res.status}）`);
     messageAdapterScan.value.adapters = data.adapters ?? {};
-    if (data.repair?.changed || data.gatewayPayload?.data?.config) {
+    messageAdapterScan.value.overall = data.health?.overall ?? null;
+    if (data.repair?.changed) {
       await store.load();
     }
     await applyNapcatScanHealth(data.napcatHealth);
@@ -118,12 +125,16 @@ async function runMessageAdapterScan(): Promise<void> {
         ...napcatAutoSteps.value,
         backendScan: {
           ok: true,
-          message: data.repair.changed ? "后端扫描自测完成，已自动修复基础配置。" : "后端扫描自测完成。",
+          message: data.repair.changed ? "后端检查完成，已修复基础配置。" : "只读扫描完成，未启动、登录或修复任何消息端。",
           steps: data.repair.messages
         }
       };
     }
-  } catch { /* ignore */ }
+  } catch (error) {
+    messageAdapterScan.value.adapters = {};
+    messageAdapterScan.value.overall = null;
+    messageAdapterScan.value.error = error instanceof Error ? error.message : String(error);
+  }
   finally { messageAdapterScan.value.loading = false; }
 }
 
@@ -223,6 +234,7 @@ const adapterParamOpen = ref<Record<string, boolean>>({
   napcat: false,
   wecom: false,
   weixin: false,
+  feishu: false,
   remoteAgent: false,
   heartbeat: false,
   fennenote: false,
@@ -247,7 +259,8 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     choices: [
       { type: "napcat", title: "NapCat / OneBot", note: "接收 QQ 群聊和私聊实时消息", icon: "mdi-message-badge-outline" },
       { type: "wecom", title: "企业微信 / WeCom", note: "接收企业微信群聊并支持回发消息", icon: "mdi-domain" },
-      { type: "weixin", title: "个人微信 / Weixin", note: "RabiRoute 原生扫码登录，接收个人微信私聊，并向来源会话回传文本或受控本地文件", icon: "mdi-wechat" }
+      { type: "weixin", title: "个人微信 / Weixin", note: "RabiRoute 原生扫码登录，接收个人微信私聊，并向来源会话回传文本或受控本地文件", icon: "mdi-wechat" },
+      { type: "feishu", title: "飞书 / Feishu", note: "独立应用事件订阅，按来源 chat 收发文本", icon: "mdi-message-text-outline" }
     ]
   },
   {
@@ -319,8 +332,36 @@ const messageAdapterInactive = computed(() => Boolean(gateway.value?.enabled ===
 const napcatState = computed(() => runtime.value.gatewayStatus?.napcat || {} as Record<string, any>);
 const wecomState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.wecom || runtime.value.gatewayStatus?.wecom || {} as Record<string, any>);
 const weixinState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.weixin || {} as Record<string, any>);
+const feishuState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.feishu || runtime.value.gatewayStatus?.feishu || {} as Record<string, any>);
 const heartbeatState = computed(() => runtime.value.gatewayStatus?.heartbeat || {} as Record<string, any>);
 const adapterErrors = (type: MessageAdapterType) => gateway.value ? adapterErrorsFor(type, gateway.value, runtime.value) : [];
+
+async function requestPersonalWeixinLogin(): Promise<void> {
+  if (!gateway.value || weixinLoginBusy.value) return;
+  weixinLoginBusy.value = true;
+  weixinLoginError.value = "";
+  try {
+    const response = await fetch(`/gateways/${encodeURIComponent(gateway.value.id)}/weixin-login`, { method: "POST" });
+    const payload = await response.json().catch(() => ({})) as { message?: string };
+    if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
+    await store.load();
+  } catch (error) {
+    weixinLoginError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    weixinLoginBusy.value = false;
+  }
+}
+
+function weixinSessionPhaseLabel(value: unknown): string {
+  const labels: Record<string, string> = {
+    never_logged_in: "从未登录",
+    restoring: "正在恢复",
+    restored: "已恢复",
+    temporarily_unreachable: "暂时不可达（凭据保留）",
+    invalid: "会话已失效"
+  };
+  return labels[String(value || "")] || "未知";
+}
 const visibleActiveAdapters = computed<MessageAdapterType[]>(() => uniqueAdapters(adapters.value));
 const activeAdapterCount = computed(() => visibleActiveAdapters.value.length);
 const selectedRemoteAgentDeviceId = computed({
@@ -475,7 +516,7 @@ function scheduleSpeechConfigSave(): void {
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "speech" || type === "napcat" || type === "wecom" || type === "weixin" || type === "remoteAgent" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
+  return type === "speech" || type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu" || type === "remoteAgent" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
 }
 
 function speechVariable(name: string, fallback = ""): string {
@@ -570,7 +611,7 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "remoteAgent", "speech", "heartbeat", "xiaoai", "rabilink", "wearable", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "feishu", "remoteAgent", "speech", "heartbeat", "xiaoai", "rabilink", "wearable", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
 
@@ -1034,6 +1075,7 @@ function webhookPortFor(type: MessageAdapterType): number {
   if (type === "fennenote") return Number(gateway.value?.fenneNoteWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
   if (type === "xiaoai") return Number(gateway.value?.xiaoaiWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
   if (type === "rabilink") return Number(gateway.value?.rabiLinkWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
+  if (type === "feishu") return Number(gateway.value?.feishuWebhookPort || gateway.value?.gatewayPort || 8790);
   return Number(gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790);
 }
 
@@ -1041,6 +1083,7 @@ function webhookPathFor(type: MessageAdapterType): string {
   if (type === "fennenote") return gateway.value?.fenneNoteWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "xiaoai") return gateway.value?.xiaoaiWebhookPath || adapterDefaultWebhookPath(type);
   if (type === "rabilink") return gateway.value?.rabiLinkWebhookPath || adapterDefaultWebhookPath(type);
+  if (type === "feishu") return gateway.value?.feishuWebhookPath || adapterDefaultWebhookPath(type);
   return gateway.value?.webhookPath || adapterDefaultWebhookPath(type);
 }
 
@@ -1073,6 +1116,7 @@ function setWebhookPort(type: MessageAdapterType, value: unknown): void {
   if (type === "fennenote") gateway.value.fenneNoteWebhookPort = port;
   else if (type === "xiaoai") gateway.value.xiaoaiWebhookPort = port;
   else if (type === "rabilink") gateway.value.rabiLinkWebhookPort = port;
+  else if (type === "feishu") gateway.value.feishuWebhookPort = port;
   else gateway.value.webhookPort = port;
   touch();
 }
@@ -1083,6 +1127,7 @@ function setWebhookPath(type: MessageAdapterType, value: unknown): void {
   if (type === "fennenote") gateway.value.fenneNoteWebhookPath = path;
   else if (type === "xiaoai") gateway.value.xiaoaiWebhookPath = path;
   else if (type === "rabilink") gateway.value.rabiLinkWebhookPath = path;
+  else if (type === "feishu") gateway.value.feishuWebhookPath = path;
   else gateway.value.webhookPath = path;
   touch();
 }
@@ -1262,16 +1307,28 @@ function requirementLabel(requirement: { ok?: boolean; required?: boolean }): st
 
 function scanConnectionLabel(scan?: MessageAdapterScanResult): string {
   if (!scan) return messageAdapterScan.value.loading ? "扫描中" : "未扫描";
+  const labels: Record<NonNullable<MessageAdapterScanResult["health"]>["state"], string> = {
+    healthy: "可用",
+    degraded: "部分可用",
+    offline: scan.type === "napcat" ? "QQ 离线" : "未连接",
+    needs_login: scan.type === "napcat" ? "QQ 未登录" : "未登录",
+    unconfigured: "未配置",
+    unknown: "待确认",
+    timeout: "检查超时",
+    error: "检查失败"
+  };
+  if (scan.health) return labels[scan.health.state];
   const required = scan.requirements?.filter(item => item.required) ?? [];
   if (required.some(item => item.ok === false)) return "缺配置";
-  if (scan.endpoints?.some(endpoint => endpoint.healthy === false)) return "未连接";
+  if (scan.endpoints?.length && scan.endpoints.every(endpoint => endpoint.healthy === false)) return "未连接";
   return scan.installed ? "已发现" : "未安装";
 }
 
 function scanConnectionColor(scan?: MessageAdapterScanResult): string {
   const label = scanConnectionLabel(scan);
-  if (label === "已发现") return "success";
+  if (label === "可用" || label === "已发现") return "success";
   if (label === "扫描中" || label === "未扫描") return "secondary";
+  if (label === "检查失败") return "error";
   return "warning";
 }
 
@@ -3678,11 +3735,29 @@ watch(
                           {{ scanConnectionLabel(messageScanFor(choice.type)) }}
                         </v-chip>
                         <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="messageAdapterScan.loading" @click="choice.type === 'napcat' ? rescanNapcatInstances() : runMessageAdapterScan()">
-                          {{ choice.type === "napcat" ? "后端自测" : "重新扫描" }}
+                          {{ choice.type === "napcat" ? "只读扫描" : "重新扫描" }}
                         </v-btn>
                       </div>
                     </div>
+                    <v-alert
+                      v-if="messageAdapterScan.error"
+                      type="warning"
+                      variant="tonal"
+                      density="compact"
+                      class="mb-3"
+                    >
+                      {{ messageAdapterScan.error }}
+                    </v-alert>
                     <template v-if="messageScanFor(choice.type)">
+                      <v-alert
+                        v-if="messageScanFor(choice.type)?.health?.message"
+                        :type="messageScanFor(choice.type)?.health?.state === 'healthy' ? 'success' : 'warning'"
+                        variant="tonal"
+                        density="compact"
+                        class="mb-3"
+                      >
+                        {{ messageScanFor(choice.type)?.health?.message }}
+                      </v-alert>
                       <div v-if="messageScanFor(choice.type)?.requirements?.length" class="dependency-list">
                         <div
                           v-for="requirement in messageScanFor(choice.type)?.requirements"
@@ -4387,6 +4462,36 @@ watch(
                       </div>
                     </div>
                   </template>
+                  <div v-else-if="choice.type === 'feishu'" class="catalog-param-grid">
+                    <v-text-field v-model="gateway.feishuAppId" label="飞书 App ID" placeholder="cli_xxx" @update:model-value="touch" />
+                    <v-text-field v-model="gateway.feishuAppSecret" type="password" label="飞书 App Secret" @update:model-value="touch" />
+                    <v-text-field v-model="gateway.feishuVerificationToken" type="password" label="Verification Token" @update:model-value="touch" />
+                    <v-text-field v-model="gateway.feishuEncryptKey" type="password" label="Encrypt Key" @update:model-value="touch" />
+                    <v-text-field :model-value="webhookPortFor('feishu')" type="number" label="本机回调端口" @update:model-value="value => setWebhookPort('feishu', value)" />
+                    <v-text-field :model-value="webhookPathFor('feishu')" label="独立回调路径" placeholder="/feishu" @update:model-value="value => setWebhookPath('feishu', value)" />
+                    <v-switch
+                      v-model="gateway.feishuEventSubscriptionEnabled"
+                      class="full-span"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      label="已在飞书应用中配置公网 HTTPS 回调并订阅 im.message.receive_v1"
+                      @update:model-value="touch"
+                    />
+                    <v-alert type="warning" variant="tonal" density="compact" class="full-span">
+                      这里仅接受飞书应用凭据与事件订阅配置。群机器人 Webhook 属于通用 Webhook 预留，不能作为飞书消息端。
+                    </v-alert>
+                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
+                      未同时配置 App ID、App Secret、Verification Token、Encrypt Key，并勾选事件订阅确认时，监听和出站都会保持关闭。
+                    </v-alert>
+                  </div>
+                  <template v-if="choice.type === 'feishu' && runtime.running !== undefined">
+                    <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
+                    <div class="status-row"><span>回调监听</span><b :class="feishuState.listenerReady ? 'text-success' : 'text-warning'">{{ feishuState.listenerReady ? "已监听" : feishuState.message || "保持关闭" }}</b></div>
+                    <div class="status-row"><span>订阅验证</span><b :class="feishuState.subscriptionVerified ? 'text-success' : 'text-warning'">{{ feishuState.subscriptionVerified ? "已收到验证/事件" : "尚未验证" }}</b></div>
+                    <div class="status-row"><span>最近消息</span><b>{{ feishuState.lastMessageAt || "-" }}</b></div>
+                    <div class="status-row"><span>最近事件 ID</span><b>{{ feishuState.lastEventId || "-" }}</b></div>
+                  </template>
                   <div v-else-if="choice.type === 'wecom'" class="catalog-param-grid">
                     <v-text-field v-model="gateway.wecomBotId" label="企业微信 Bot ID" placeholder="可留空使用 WECOM_BOT_ID" @update:model-value="touch" />
                     <v-text-field v-model="gateway.wecomBotSecret" type="password" label="企业微信 Bot Secret" placeholder="可留空使用 WECOM_BOT_SECRET" @update:model-value="touch" />
@@ -4467,7 +4572,9 @@ watch(
                   </div>
                   <template v-if="choice.type === 'weixin' && runtime.running !== undefined">
                     <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>登录</span><b :class="weixinState.loggedIn ? 'text-success' : 'text-warning'">{{ weixinState.loggedIn ? "已登录" : weixinState.message || "等待扫码" }}</b></div>
+                    <div class="status-row"><span>会话</span><b :class="weixinState.loggedIn ? 'text-success' : 'text-warning'">{{ weixinState.message || "状态未知" }}</b></div>
+                    <div class="status-row"><span>恢复状态</span><b>{{ weixinSessionPhaseLabel(weixinState.sessionPhase) }}</b></div>
+                    <div class="status-row"><span>凭据保留</span><b>{{ weixinState.credentialsRetained ? "是" : "否" }}</b></div>
                     <div class="status-row"><span>扫码状态</span><b>{{ weixinState.qrStatus || "-" }}</b></div>
                     <div class="status-row"><span>最近消息</span><b>{{ weixinState.lastMessageAt || "-" }}</b></div>
                     <div class="status-row"><span>消息数</span><b>{{ weixinState.messageCount ?? 0 }}</b></div>
@@ -4478,9 +4585,23 @@ watch(
                     <v-alert v-if="weixinState.lastError" type="error" variant="tonal" density="compact" class="mt-2 full-span">
                       {{ weixinState.lastError }}
                     </v-alert>
+                    <v-alert v-if="weixinLoginError" type="error" variant="tonal" density="compact" class="mt-2 full-span">
+                      {{ weixinLoginError }}
+                    </v-alert>
                     <div class="agent-action-bar full-span mt-2">
                       <div class="agent-action-status"><span class="section-note">登录态只保存在当前 Route 的运行期 data 目录，不写进公开配置。</span></div>
                       <div class="d-flex ga-2 flex-wrap">
+                        <v-btn
+                          v-if="weixinState.loginRequired && !weixinState.qrCodeDataUrl"
+                          size="small"
+                          color="warning"
+                          variant="tonal"
+                          prepend-icon="mdi-qrcode"
+                          :loading="weixinLoginBusy"
+                          @click="requestPersonalWeixinLogin"
+                        >
+                          生成登录二维码
+                        </v-btn>
                         <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" @click="store.load">刷新状态</v-btn>
                         <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">打开日志</v-btn>
                       </div>

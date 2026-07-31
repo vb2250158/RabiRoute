@@ -56,6 +56,7 @@ Start-RabiRoute-Tray.bat
 - 如果健康 Manager 正在运行但早于当前 `dist/manager.js` 构建，先受控关闭旧实例，再加载当前构建。
 - 如果 `8790` 被无响应进程占用，只在命令行精确指向本项目绝对 `dist/manager.js`，或发布包/旧启动方式使用的相对 `dist/manager.js` 时接管：先调用 `/manager/shutdown`，超时后才终止这棵已核实的进程树；Node 进程、端口 owner 与 Manager 探活门禁仍须同时成立。
 - 如果端口 `8790` 属于非本项目进程或无法核实的进程，直接退出，不停止它，也不启动重复 Manager。
+- Manager 在加载控制面前还会独占 `data/.runtime/manager-instance.lock`。同一工作区从映射盘、UNC、启动器或直接 `node dist/manager.js` 并发启动时，后到实例以退出码 `17` 拒绝启动；锁中 PID 已不存在时才回收陈旧锁。
 - 如果 `dist/manager.js` 缺失，或比后端源码更旧，会运行 `npm.cmd run build`，除非传入 `-NoBuild`。
 - 如果 RibiWebGUI 前端产物 `ribiwebgui/dist/index.html` 或 `ribiwebgui/dist/assets` 缺失，或比前端源码更旧，会自动补构建；manager 已运行时只跑 `npm.cmd run webgui:build`，manager 未运行时跑完整 `npm.cmd run build`。
 - 没有 manager 运行时，在后台启动 `node dist\manager.js`。
@@ -205,7 +206,7 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 
 - `dist/manager.js` 和 `dist/index.js` 已构建。
 - `ribiwebgui/dist/index.html` 存在。
-- 运行机有 Node.js，或发布包中按统一约定放置了可被启动器发现的 `node.exe`。
+- 运行机有 Node.js，或发布包中按统一约定放置了可被启动器发现的 `node.exe`；项目根的便携 `node.exe` 优先于 `RABIROUTE_NODE` 和 PATH，确保本机包不会意外依赖源码盘运行时。
 - npm 依赖已经安装，或发布包包含可运行的 `node_modules`。
 - `data/route/<configName>/adapterConfig.json` 和 `data/roles/<RoleId>/personaConfig.json` 仍是可写的运行期文件。
 - 日志写在 bundled resources 外部。

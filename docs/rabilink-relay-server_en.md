@@ -77,6 +77,8 @@ The server queues ordinary WebGUI HTTP requests for that PC worker. The worker c
 
 Local Manager listening is independent from Relay connectivity. Manager serves local and LAN WebGUI first, then connects to Relay asynchronously. A Relay outage degrades only WAN access and cannot block Manager startup or hold local port `8790` hostage. Relay recovery, a remote page opened later, and page reconnects are hot connections and do not require a Manager restart.
 
+If no PC worker can serve a remote request, API callers receive structured `RABI_PC_WEBGUI_UNAVAILABLE` with a diagnostic request ID; a worker response deadline returns `RABI_PC_WEBGUI_TIMEOUT`. Both are marked `retryable`, send `Retry-After: 3`, and omit local exceptions, paths, and addresses. Ordinary browser navigation receives an HTML error page with the same diagnostic ID and recovery guidance instead of a context-free 502/504.
+
 Remote WebGUI uses the `/manage` login cookie, while the PC worker uses a separate RabiLink application token. Relay never forwards that application token, the management cookie, or a LAN `webgui_token` to the local Manager, and these authentication boundaries are not merged.
 
 ## Same-application PC discovery and persona-sync transit

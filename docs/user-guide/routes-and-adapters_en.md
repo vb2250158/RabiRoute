@@ -69,7 +69,9 @@ NapCat uses two connections:
 - WebSocket Client sends QQ events to RabiRoute, commonly `ws://127.0.0.1:8789`.
 - OneBot HTTP Server supports health and replies, commonly `http://127.0.0.1:3000`.
 
-In the Route's NapCat panel, verify the instance, RabiRoute WS port, HTTP address, and WebUI address. Scans are read-only; start, login, and repair actions require an explicit click.
+In the Route's NapCat panel, verify the instance, RabiRoute WS port, HTTP address, and WebUI address. Scans are read-only; start, login, and repair actions require an explicit click. Endpoint probes start concurrently under one scan deadline. A timed-out probe preserves partial results from other endpoints and is not interpreted as offline.
+
+QQ/NapCat and personal Weixin have completely independent login states. QQ is marked usable only from a live OneBot connection and health result. A reachable NapCat WebUI proves only that the diagnostic/configuration surface is reachable; it does not prove that QQ is logged in or can send and receive. A logged-out personal-Weixin adapter affects only that adapter and never turns an online QQ or every message endpoint into an offline state.
 
 <div class="screenshot-placeholder">
   <strong>Screenshot placeholder 08 | NapCat instance and connection</strong>

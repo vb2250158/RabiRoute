@@ -199,6 +199,10 @@ export class PersonaSyncService {
     return this.manifestIndex.manifest(roleId);
   }
 
+  manifestSnapshot(roleId?: string): PersonaSyncManifest {
+    return this.manifestIndex.snapshot(roleId);
+  }
+
   startManifestIndex(): Promise<void> {
     return this.manifestIndex.start();
   }

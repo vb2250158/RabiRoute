@@ -14,6 +14,8 @@ export const PERSONA_AVATAR_ACCEPT = PERSONA_AVATAR_CONTENT_TYPES.join(",");
 export type PersonaAvatarPresentation = {
   avatarConfigured: boolean;
   avatarUrl?: string;
+  /** Opaque cache validator; never a local path. */
+  avatarVersion?: string;
 };
 
 export type PersonaAvatarMutationResult = {
