@@ -143,7 +143,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /class="knowledge-approval-record"/);
   assert.match(page, /expanded && \(planAcceptsGuidance\(plan\) \|\| plan\.presentation\.approval\.state !== "none"\)[\s\S]*?refreshPlanApproval\(plan\.id\)/);
   assert.doesNotMatch(page, /v-if="plan\.approval\.latest" class="knowledge-approval-latest"/);
-  assert.match(client, /latest:\s*data\.latest \|\| records\[0\],[\s\S]*?\n\s*records\n/);
+  assert.match(client, /latest:\s*data\.latest \|\| records\[0\],[\s\S]*?\r?\n\s*records\r?\n/);
   assert.match(styles, /\.knowledge-approval-history\s*\{[\s\S]*?display:\s*grid[\s\S]*?gap:\s*8px/);
   assert.match(styles, /\.knowledge-approval-record\s*\{[\s\S]*?display:\s*grid[\s\S]*?border-left:\s*3px solid/);
   assert.match(page, /openApprovalAttachmentPicker\(plan\.id\)/);
@@ -186,6 +186,7 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /tabindex="-1"/);
   assert.doesNotMatch(page, /knowledge-plan-directory-index/);
   assert.match(page, /class="knowledge-plan-directory-status"/);
+  assert.match(page, /<v-chip[^>]*>\{\{ t\(plan\.presentation\.status\) \}\}<\/v-chip>/);
   assert.match(page, /planTitleForDirectory\(plan\.title\)/);
   assert.doesNotMatch(page, /knowledge-plan-toc|jumpToPlanStep|planStepDomId|activePlanSteps/);
   assert.match(styles, /\.knowledge-browser-layout\.has-plan-directory\s*\{[\s\S]*?grid-template-columns:\s*minmax\(324px, 360px\) minmax\(0, 1fr\)/);

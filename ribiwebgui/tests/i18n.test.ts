@@ -119,7 +119,8 @@ test("translates plan directory and step-local approval copy", () => {
   assert.equal(translateText("计划项", "en"), "Plan item");
   assert.equal(translateText("步骤进度", "en"), "Step progress");
   assert.equal(translateText("执行计划", "en"), "Execution plan");
-  assert.equal(translateText("正在执行", "en"), "In progress");
+  assert.equal(translateText("正在执行", "en"), "Executing");
+  assert.equal(translateText("等待 QA 验收", "en"), "Awaiting QA acceptance");
   assert.equal(
     translateText("核对本步骤的执行边界后提交审批意见", "en"),
     "Review this step's execution boundaries before submitting approval feedback"

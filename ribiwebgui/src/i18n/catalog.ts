@@ -49,6 +49,7 @@ export const englishCatalog: Record<string, string> = {
   "正在执行": "Executing",
   "待审批": "Awaiting approval",
   "待 QA": "Awaiting QA",
+  "等待 QA 验收": "Awaiting QA acceptance",
   "待统一打包": "Awaiting shared package",
   "待环境": "Awaiting environment",
   "待素材": "Awaiting assets",

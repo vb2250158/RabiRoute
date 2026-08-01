@@ -26,7 +26,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### Manager-owned plan presentation and paused-resume contract
 
-- Manager now derives the shared Awaiting approval, Awaiting QA, Executing, external-wait, and Awaiting shared package stages together with ordering and counts. WebGUI and the Qt tray consume this DTO without reclassifying business state.
+- Manager now derives the shared Awaiting approval, Awaiting QA acceptance, Executing, external-wait, and Awaiting shared package stages together with ordering and counts. The QA tone keeps its existing purple palette, while WebGUI and the Qt tray consume this DTO without reclassifying business state.
+- The `implementation/development validation → Awaiting shared package → Awaiting QA acceptance → complete on QA pass; return to implementation on failure` lifecycle is required only for plans that change project content such as code, prefabs, assets, or configuration. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance keep their real steps and wait reasons; Agents and batch jobs must not manufacture package or QA steps for them.
 - A paused plan must retain exactly one in-progress resume step addressed by `currentStepId`; plan writes, work-cycle finish preflight, and strict audit consistently fail closed on missing, mismatched, or multiple resume points.
 - Thread reconciliation reuses Manager presentation and real send receipts to classify idle work as `terminal / blocked / actionable / frozen / waiting_result`, avoiding duplicate inquiries after a verified delivery that is waiting only for a result.
 
@@ -355,9 +356,9 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Persona `personaConfig.json` now accepts an optional `avatar` filename. The RibiWebGUI persona page can upload or remove PNG, JPEG, WebP, and GIF images up to 5 MB. Manager uses content-addressed files and an atomic configuration switch, retains the old avatar when replacement fails, and fails closed on malformed configuration. It serves images through `/api/roles/:roleId/avatar`, accepts only simple filenames inside the persona directory, and rejects path traversal.
 - Avatars now appear in persona binding, Quick Setup, the Route overview, speech persona selection, the local Qt role-panel header, and Agent message bubbles. Missing or failed images consistently fall back to the first character of the persona ID without changing Route, Agent-adapter, or runtime persona semantics.
 
-### Awaiting-QA state for Qt plan cards
+### Awaiting-QA-acceptance state for Qt plan cards
 
-- Plan cards derive the purple `Awaiting QA` badge only from the structured current `qa-* / verify-*` step. QA words inside implementation prose do not change the badge early, and the source plan status remains unchanged.
+- Plan cards derive the purple `Awaiting QA acceptance` badge only from the structured current `qa-* / verify-*` step. QA words inside implementation prose do not change the badge early, and the source plan status remains unchanged.
 
 ### Qt tray right-click latency
 

@@ -35,3 +35,22 @@ test("WebGUI preserves Manager stages and does not derive a second stage when pr
   assert.equal(missingPresentation.presentation.status, "状态未知");
   assert.equal(missingPresentation.presentation.tone, "unknown");
 });
+
+test("WebGUI preserves the Manager-owned QA acceptance label, tone, and palette", () => {
+  const qa = normalizeRolePlanFromManager(plan({
+    status: "等待 QA 验收",
+    tone: "qa",
+    sortBucket: 1,
+    views: ["current", "plans"],
+    palette: { accent: "#8e63c7", background: "#f3e8ff", foreground: "#7e22ce" },
+    approval: { state: "none", enabled: false, label: "无需审批", helper: "", missing: [] }
+  }));
+
+  assert.equal(qa.presentation.status, "等待 QA 验收");
+  assert.equal(qa.presentation.tone, "qa");
+  assert.deepEqual(qa.presentation.palette, {
+    accent: "#8e63c7",
+    background: "#f3e8ff",
+    foreground: "#7e22ce"
+  });
+});

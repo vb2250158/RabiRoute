@@ -143,7 +143,7 @@ export function planPresentation(plan: PlanItem): PlanPresentation {
     if (planIsBlocked(plan)) {
       return buildPlanPresentation("待审批", "blocked", views, approval);
     }
-    if (isWaitingForQa(plan)) return buildPlanPresentation("待 QA", "qa", views, approval);
+    if (isWaitingForQa(plan)) return buildPlanPresentation("等待 QA 验收", "qa", views, approval);
     if (planIsWaitingForPackage(plan)) return buildPlanPresentation("待统一打包", "waiting_package", views, approval);
     const waitingStatus = approval.state === "incomplete" ? "" : externalWaitingStatus(plan);
     if (waitingStatus) return buildPlanPresentation(waitingStatus, "waiting_external", views, approval);

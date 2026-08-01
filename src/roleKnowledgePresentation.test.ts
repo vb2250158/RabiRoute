@@ -171,7 +171,7 @@ test("plan presentation blocks only complete pending approvals and keeps other o
   assert.equal(planPresentation(awaitingOwnerAnswer).status, "待审批");
   assert.equal(planPresentation(awaitingOwnerAnswer).tone, "blocked");
   assert.equal(planPresentation(awaitingOwnerAnswer).approval.state, "ready");
-  assert.equal(planPresentation(qa).status, "待 QA");
+  assert.equal(planPresentation(qa).status, "等待 QA 验收");
   assert.equal(planPresentation(qa).tone, "qa");
   assert.deepEqual(planPresentation(qa).palette, {
     accent: "#8e63c7",
@@ -180,7 +180,7 @@ test("plan presentation blocks only complete pending approvals and keeps other o
   });
   assert.equal(planPresentation(qa).approval.state, "none");
   assert.equal(planPresentation(qa).approval.enabled, false);
-  assert.equal(planPresentation(qaWithLegacyBlocker).status, "待 QA");
+  assert.equal(planPresentation(qaWithLegacyBlocker).status, "等待 QA 验收");
   assert.equal(planPresentation(qaWithLegacyBlocker).tone, "qa");
   assert.equal(planPresentation(qaWithLegacyBlocker).approval.enabled, false);
   assert.equal(planPresentation(approvedImplementation).status, "正在执行");
@@ -294,6 +294,66 @@ test("plan presentation uses external receipt as the fallback for an explicit or
 
   assert.equal(planPresentation(item).status, "待外部回执");
   assert.equal(planPresentation(item).tone, "waiting_external");
+});
+
+test("non-content-changing plans keep their real workflow instead of entering package or QA stages", () => {
+  const cases = [
+    plan({
+      id: "investigation",
+      title: "Investigation",
+      kind: "investigation",
+      currentStepId: "investigate-root-cause",
+      steps: [{ id: "investigate-root-cause", title: "调查根因并整理证据", status: "进行中" }]
+    }),
+    plan({
+      id: "design-review",
+      title: "Design review",
+      kind: "design-review",
+      currentStepId: "review-design",
+      waitingFor: "等待负责人回传设计评审结论",
+      steps: [{ id: "review-design", title: "完成设计评审", status: "进行中", waitingFor: "等待负责人回传设计评审结论" }]
+    }),
+    plan({
+      id: "operations",
+      title: "Operations",
+      kind: "operations",
+      currentStepId: "operate-campaign",
+      steps: [{ id: "operate-campaign", title: "执行运营安排", status: "进行中" }]
+    }),
+    plan({
+      id: "information",
+      title: "Information collection",
+      kind: "research",
+      currentStepId: "collect-information",
+      waitingFor: "等待补充文档、日志和证据",
+      steps: [{ id: "collect-information", title: "收集资料", status: "进行中", waitingFor: "等待补充文档、日志和证据" }]
+    }),
+    plan({
+      id: "external-dependency",
+      title: "External dependency",
+      kind: "coordination",
+      currentStepId: "await-external-result",
+      waitingFor: "等待外部负责人回传结果",
+      steps: [{ id: "await-external-result", title: "跟进外部依赖", status: "进行中", waitingFor: "等待外部负责人回传结果" }]
+    }),
+    plan({
+      id: "control-plane",
+      title: "Control-plane maintenance",
+      kind: "control-plane",
+      currentStepId: "maintain-control-plane",
+      steps: [{ id: "maintain-control-plane", title: "维护控制面记录", status: "进行中" }]
+    })
+  ];
+
+  assert.deepEqual(cases.map((item) => planPresentation(item).status), [
+    "正在执行",
+    "待外部回执",
+    "正在执行",
+    "待资料",
+    "待外部回执",
+    "正在执行"
+  ]);
+  assert.equal(cases.some((item) => ["qa", "waiting_package"].includes(planPresentation(item).tone)), false);
 });
 
 test("approval capability is Manager-owned and follows the current human gate", () => {

@@ -38,7 +38,7 @@ Plan and memory entries share one expandable read-only row pattern. While collap
 
 Expanded plans use a complete-steps-first hierarchy. When the source plan contains `steps`, the UI first shows completed progress and the `currentStepId` execution point as `Current: step N`, then renders every step and highlights the only in-progress row. Because the complete list already expresses what comes next, structured plans do not repeat `nextAction`. The status, callout, and row become blocked only when Manager returns `presentation.tone=blocked`; raw `blockedBy` text does not create a second classifier. Priority, kind, project, due date, and update time become one compact summary; source, creation time, and file move behind a plan-details toggle. This presentation remains read-only. Legacy plans without `steps` show an explicit missing-structure notice and retain the old current/next compatibility area.
 
-The card shows a purple `Awaiting QA` badge only when Manager identifies the structured current step as an in-progress `qa-* / verify-*` step. A future QA step, or QA wording inside an implementation step, does not trigger the badge; the tray does not scan free text.
+The card shows a purple `Awaiting QA acceptance` badge only when Manager identifies the structured current step as an in-progress `qa-* / verify-*` step. A future QA step, or QA wording inside an implementation step, does not trigger the badge; the tray does not scan free text. The implementation/package/QA lifecycle applies only to plans that change project content such as code, prefabs, assets, or configuration; investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance retain their real workflows.
 
 ## Write boundary
 

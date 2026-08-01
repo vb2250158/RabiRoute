@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-content-change-plan-lifecycle",
+  "title": "实施、打包和 QA 生命周期只服务于内容变更计划",
+  "focus": "计划生产边界、Manager 展示阶段、等待 QA 验收与原任务恢复",
+  "content": "Manager 根据真实的结构化当前步骤统一派生展示阶段：进行中的 qa-* / verify-* 步骤显示“等待 QA 验收”，前序完成且明确等待包产物的 package/build 步骤显示“待统一打包”，WebGUI 和 Qt 只消费、翻译并展示同一 DTO。实施/开发验证 → 打包 → QA 的流程只适用于代码、Prefab、资源、配置等会改变项目内容的计划；调查、设计评审、运营、资料收集、外部依赖和控制面维护必须保留自己的真实步骤与 waitingFor，计划生产者不得为了套状态而补造 package 或 QA 步骤。Manager 也不会按标题、正文或 kind 猜测流程。QA 失败时继续原计划并复用原 taskBinding，只有明确通过才完成验收。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：内容变更计划的实施、打包和 QA 生命周期边界"
+  },
+  "createdAt": "2026-08-01T00:00:00+08:00",
+  "updatedAt": "2026-08-01T00:00:00+08:00",
+  "keywords": ["计划生产边界", "内容变更", "等待 QA 验收", "待统一打包", "qa-*", "verify-*", "package", "Manager 展示", "真实步骤", "waitingFor", "taskBinding", "QA 失败回退"]
+}

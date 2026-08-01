@@ -449,7 +449,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         plan = PlanItem(
             title="等待 QA 的计划",
             status="进行中",
-            display_status="待 QA",
+            display_status="等待 QA 验收",
             display_tone="qa",
             current_step="修复已完成，等待 QA 真机结果",
             current_step_id="verify",
@@ -462,7 +462,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：待 QA")
+        self.assertEqual(card.status_label.text(), "状态：等待 QA 验收")
         self.assertEqual(card.status_label.property("statusTone"), "qa")
         card.close()
 

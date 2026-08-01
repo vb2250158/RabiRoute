@@ -50,7 +50,7 @@ class _ApiManager:
                 "title": "API QA plan",
                 "status": "进行中",
                 "presentation": {
-                    "status": "待 QA",
+                    "status": "等待 QA 验收",
                     "tone": "qa",
                     "views": ["current", "plans"],
                     "palette": {
@@ -190,6 +190,7 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertTrue(qa_plan and qa_plan.approval_enabled)
         self.assertEqual(qa_plan and qa_plan.approval_state, "ready")
         self.assertEqual(qa_plan and qa_plan.approval_step_id, "verify")
+        self.assertEqual(qa_plan and qa_plan.display_status, "等待 QA 验收")
         self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.request, "批准运行验收。")
         self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.commands[0].command, "npm test")
         self.assertEqual(qa_plan and qa_plan.latest_approval_text, "补充回归范围")

@@ -1757,7 +1757,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   <h2 data-no-i18n>{{ plan.title }}</h2>
                 </div>
               </div>
-              <v-chip :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ plan.presentation.status }}</v-chip>
+              <v-chip :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.presentation.status) }}</v-chip>
             </div>
 
             <div v-if="planDetailsLoading[plan.id]" class="knowledge-plan-detail-loading" aria-live="polite">

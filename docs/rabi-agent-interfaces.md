@@ -507,7 +507,9 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。写入 API 仍只接受上方五种顶层生命周期状态；`presentation.status / tone / sortBucket / views / palette` 和列表响应的 `counts.stages` 都由 Manager 派生，Agent 与客户端不得手写。等待审批、方案确认或授权的当前步骤保持 `进行中`，并补齐结构化 `approvalRequest` 与 `waitingFor`；只有合同完整、可提交且 `responseStatus=pending` 时，Manager 才自动派生 `isBlocked=true` 兼容投影与“待审批”。结构化 `qa-* / verify-*` 当前步骤显示“待 QA”；权威等待字段可派生“待环境 / 待素材 / 待资料 / 待外部回执”；前序工作完成且明确等待合包、构建、进包或目标包身份的 package/build 当前步骤显示“待统一打包”；其它进行中计划显示“正在执行”。Agent 不得手写 `isBlocked` 或展示阶段。审批合同缺项时 Manager 返回 `incomplete/enabled=false`，计划保持进行中并禁止正式审批。
+新增计划必须提供有序的 `steps`。写入 API 仍只接受上方五种顶层生命周期状态；`presentation.status / tone / sortBucket / views / palette` 和列表响应的 `counts.stages` 都由 Manager 派生，Agent 与客户端不得手写。等待审批、方案确认或授权的当前步骤保持 `进行中`，并补齐结构化 `approvalRequest` 与 `waitingFor`；只有合同完整、可提交且 `responseStatus=pending` 时，Manager 才自动派生 `isBlocked=true` 兼容投影与“待审批”。结构化 `qa-* / verify-*` 当前步骤显示“等待 QA 验收”；权威等待字段可派生“待环境 / 待素材 / 待资料 / 待外部回执”；前序工作完成且明确等待合包、构建、进包或目标包身份的 package/build 当前步骤显示“待统一打包”；其它进行中计划显示“正在执行”。Agent 不得手写 `isBlocked` 或展示阶段。审批合同缺项时 Manager 返回 `incomplete/enabled=false`，计划保持进行中并禁止正式审批。
+
+只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应强制采用“实施/开发验证 → 待统一打包 → 等待 QA 验收 → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 `qa-* / verify-*` 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 
 `attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
 

@@ -56,7 +56,7 @@ data/route/<RouteName>/
 已归档
 ```
 
-`暂停` 表示用户或负责人明确要求暂时停止推进，但仍保留恢复位置。等待审批、方案确认或授权的当前步骤保持 `进行中`，并写完整的 `approvalRequest` 与 `waitingFor`；当合同完整、可提交且 `responseStatus=pending` 时，Manager 自动派生阻塞，秘书继续追问但不得续投合同外实施。待 QA、资料、执行失败或外部产物都不是阻塞，必须继续询问、重试、改道、拆分或补证据。顶层状态不新增“阻塞”。
+`暂停` 表示用户或负责人明确要求暂时停止推进，但仍保留恢复位置。等待审批、方案确认或授权的当前步骤保持 `进行中`，并写完整的 `approvalRequest` 与 `waitingFor`；当合同完整、可提交且 `responseStatus=pending` 时，Manager 自动派生阻塞，秘书继续追问但不得续投合同外实施。等待 QA 验收、资料、执行失败或外部产物都不是阻塞，必须继续询问、重试、改道、拆分或补证据。顶层状态不新增“阻塞”。
 
 推荐目录：
 
@@ -592,9 +592,11 @@ Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视�
 
 Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批门真源：合同完整、可提交且 `responseStatus=pending` 时，同时派生 `presentation.approval.state=ready`、`enabled=true`、内部 `blocked` tone 和用户可见“待审批”；因此每个待审批项都存在可用审批入口。合同缺项时派生 `incomplete`，计划保持进行中，由 Agent 继续调查和补齐。旧 `isBlocked` 仅为兼容投影，`blockedBy` 仅为说明，二者都不能独立制造展示阶段。
 
-进行中计划的真实展示阶段由 Manager 按优先级统一派生：结构化 `qa-* / verify-*` 当前步骤显示“待 QA”；结构化 package/build 当前步骤只有在前序工作全部完成且 `waitingFor` 明确等待合包、构建、进包、目标包身份或用户开始打包时，才显示蓝色“待统一打包”；其余权威 `waitingFor` 按内容显示“待环境”“待素材”“待资料”或“待外部回执”；没有真实等待时显示“正在执行”。实施步骤正文里的 QA 字样、旧 `blockedBy`、未来步骤和普通说明不会自行改变阶段。顶层 `status` 仍只保存 `未开始 / 进行中 / 暂停 / 已完成 / 已归档` 生命周期。
+进行中计划的真实展示阶段由 Manager 按优先级统一派生：结构化 `qa-* / verify-*` 当前步骤显示“等待 QA 验收”；结构化 package/build 当前步骤只有在前序工作全部完成且 `waitingFor` 明确等待合包、构建、进包、目标包身份或用户开始打包时，才显示蓝色“待统一打包”；其余权威 `waitingFor` 按内容显示“待环境”“待素材”“待资料”或“待外部回执”；没有真实等待时显示“正在执行”。实施步骤正文里的 QA 字样、旧 `blockedBy`、未来步骤和普通说明不会自行改变阶段。顶层 `status` 仍只保存 `未开始 / 进行中 / 暂停 / 已完成 / 已归档` 生命周期。
 
-`presentation` 返回 `status`、`tone`、`sortBucket`、统一色板和审批合同；分页摘要额外返回 `counts.stages`，汇总 `executing / qa / waitingPackage / waitingExternal / approval / pending / paused / completed / archived`。除暂停外，`ready` 待审批计划优先，`incomplete` 合同其次，再按“待审批 → 待 QA → 正在执行 → 待环境/素材/资料/外部回执 → 待统一打包 → 未开始 → 完成 → 已归档”与 `updatedAt` 排序；暂停绝对末尾。
+“实施/开发验证 → 待统一打包 → 等待 QA 验收 → QA 通过完成；QA 失败回到同一计划继续调查和实施”只适用于代码、Prefab、资源、配置等会产生项目内容变动的计划。调查、设计评审、运营、资料收集、外部依赖和控制面维护必须保留自身真实步骤与 `waitingFor`，不得为了套用四步状态机而补造 package 或 `qa-* / verify-*` 步骤。Manager 只呈现结构化当前步骤，不按标题、正文或 `kind` 猜测并强制补齐流程。
+
+`presentation` 返回 `status`、`tone`、`sortBucket`、统一色板和审批合同；分页摘要额外返回 `counts.stages`，汇总 `executing / qa / waitingPackage / waitingExternal / approval / pending / paused / completed / archived`。除暂停外，`ready` 待审批计划优先，`incomplete` 合同其次，再按“待审批 → 等待 QA 验收 → 正在执行 → 待环境/素材/资料/外部回执 → 待统一打包 → 未开始 → 完成 → 已归档”与 `updatedAt` 排序；暂停绝对末尾。
 
 秘书执行 `reconcile-thread-statuses` 时也消费同一份 Manager `presentation`，再与问题账本和最近闭环中的结构化发送/环境证据交叉核对。终态与完整待审批分别归为 `terminal / blocked`；暂停计划归为 `frozen + paused`，且固定 `implementationDispatchAllowed=false`；`waiting_package` 和具有当前、未被同一 PID/工程权威 release 证据覆盖的 `waiting_environment* + environment-owner` 唯一环境占用归为 `frozen`。QA 或普通询问已有真实 `status=sent / sentMessageId` 回执，且 issue/cycle 明确当前只等待结果、无独立本地动作并禁止重发时，归为稳定 `waiting_result`；回执可来自结构化 issue evidence 或最近 cycle summary，不受后续计划更新时间和普通去重窗口影响。普通询问仅有近期发送证据时仍使用 `waiting_result_dedup`。只有仍有本地动作、缺真实发送/回执、已到追问时间且明确需要追问、可重试或存在替代路径的空闲计划保留为 `actionable`；已发送但仍有本地动作时不重复询问。对账结果分别返回 `frozenIdle`、`waitingResultIdle` 和 `actionableIdle`。除暂停外，`implementationDispatchAllowed` 表达“非终态且非审批阻塞”的治理授权，不等于本轮必须续投；实际调度还必须要求 `idleClassification=actionable`，从而避免展示阶段、授权门与后台推进判断形成冲突状态体系。
 
