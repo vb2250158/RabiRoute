@@ -570,6 +570,8 @@ class MainActivity : Activity() {
     private fun bindPersonaAvatar(route: RabiRouteInfo, image: ImageView, avatarStatus: TextView?, register: Boolean = true) {
         val role = route.agentRoleId.trim()
         val title = personaTitle(route)
+        val avatarPreferences = getSharedPreferences("rabi_persona_avatars", MODE_PRIVATE)
+        val configured = route.avatarConfigured || avatarPreferences.getBoolean("configured:$role", false)
         if (register && role.isNotBlank()) {
             avatarTargets.getOrPut(role) { mutableListOf() }
                 .add(AvatarTarget(route.id, role, title, image, avatarStatus))
@@ -578,17 +580,28 @@ class MainActivity : Activity() {
         val url = personaAvatarUrl(route)
         if (role.isBlank() || version.isBlank() || url.isBlank()) {
             image.tag = "unavailable\u0000$role\u0000$version"
-            avatarStatus?.text = "头像暂不可用"
+            image.setImageResource(R.drawable.ic_persona_avatar_placeholder)
+            image.contentDescription = RabiAvatarLoadRules.placeholderContentDescription(title, configured)
+            avatarStatus?.text = RabiAvatarLoadRules.unavailableLabel(configured)
             return
         }
         val relay = RabiLinkRelaySettings.load(this)
         RabiPersonaAvatarCache.load(this, image, url, relay.token, role, version) { state ->
+            image.contentDescription = when (state) {
+                RabiAvatarLoadRules.State.READY, RabiAvatarLoadRules.State.VALIDATING -> "$title 头像"
+                RabiAvatarLoadRules.State.STALE -> "$title 头像（旧缓存）"
+                RabiAvatarLoadRules.State.LOADING -> "$title 头像加载中"
+                RabiAvatarLoadRules.State.UNAVAILABLE -> RabiAvatarLoadRules.placeholderContentDescription(title, configured = true)
+            }
+            if (state == RabiAvatarLoadRules.State.UNAVAILABLE) {
+                image.setImageResource(R.drawable.ic_persona_avatar_placeholder)
+            }
             avatarStatus?.text = when (state) {
                 RabiAvatarLoadRules.State.LOADING -> "头像加载中"
                 RabiAvatarLoadRules.State.VALIDATING -> "头像校验中"
                 RabiAvatarLoadRules.State.READY -> ""
                 RabiAvatarLoadRules.State.STALE -> "头像暂为旧缓存"
-                RabiAvatarLoadRules.State.UNAVAILABLE -> "头像暂不可用"
+                RabiAvatarLoadRules.State.UNAVAILABLE -> RabiAvatarLoadRules.unavailableLabel(configured = true)
             }
         }
     }

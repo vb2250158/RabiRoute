@@ -8,6 +8,7 @@ import {
   SPEECH_EXIT_NOT_DELIVERED,
   SPEECH_EXIT_RECORDED,
   speechForwardProcessOutcome,
+  speechQuarantinedProcessOutcome,
   speechRecordedProcessOutcome
 } from "./speechMessageDelivery.js";
 
@@ -45,4 +46,16 @@ test("speech process result marker round-trips the terminal receipt", () => {
     detail: "stored"
   });
   assert.equal(parseSpeechProcessResult("ordinary log only"), undefined);
+});
+
+test("quality-gate quarantine is a successful record-only receipt without persona delivery", () => {
+  const outcome = speechQuarantinedProcessOutcome(
+    "speaker_unverified",
+    'Quality gate: {"speakerDecisions":["voiceprint_unknown_cluster"]}'
+  );
+  assert.equal(outcome.exitCode, SPEECH_EXIT_RECORDED);
+  assert.equal(outcome.result.status, "recorded");
+  assert.equal(outcome.result.reason, "speaker_unverified");
+  assert.match(outcome.result.detail || "", /host speech ingress audit store/);
+  assert.match(outcome.result.detail || "", /voiceprint_unknown_cluster/);
 });

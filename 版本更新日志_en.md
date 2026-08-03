@@ -18,6 +18,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Persona Sync scanning, recursive watching, explicit change notifications, reads, merges, and Coordinator transport now share exclusions for work-cycle history/input/lock directories and temporary files. Even an older peer advertising those paths cannot cause cross-PC transfer or deletion propagation; real persona, plan, and memory content continues to synchronize.
 
+### Pull request submission security gates
+
+- Pull requests targeting `main` now run parallel security gates: Gitleaks checks commit history for suspected secrets, `npm audit --omit=dev --audit-level=high` blocks High or Critical production dependency vulnerabilities, and CodeQL performs lightweight JavaScript / TypeScript static security analysis.
+- The workflow uses a least-privilege `GITHUB_TOKEN`, the `pull_request` event instead of `pull_request_target`, non-persistent checkout credentials, and full commit-SHA pins for every external action. The PR security workflow neither installs dependencies nor executes contributor-branch build or install scripts.
+- A bilingual maintainer guide now states that real credentials must be rotated, CI never auto-fixes dependencies, false-positive handling must stay narrowly scoped, and all three checks must still be marked required in the GitHub ruleset after the workflow is deployed.
+- Pre-submission dependency review pins the development toolchain's `brace-expansion`, `esbuild`, `postcss`, and related `nanoid` packages to fixed releases. Both the production-only and full `npm audit` now report zero vulnerabilities, without running an automatic fix or install scripts.
+
 ### Durable Agent-reply idempotency receipts and controlled ordinary inquiries
 
 - `/api/agent/replies` now accepts an optional stable `deliveryId`. Manager persists a reservation before Outbox delivery. Duplicate clicks, concurrent calls, lost responses, and process restarts for the same ID/payload execute once and read back the original result; changed payloads conflict, and uncertain sends are never auto-replayed.

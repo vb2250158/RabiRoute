@@ -109,10 +109,8 @@ includes(sdk, ["agentRoleId: String", "messageAdapters: List<String>"], "Android
 
 includes(service, [
   "NOTIFICATION_ID = 7421",
-  "REVIEW_NOTIFICATION_ID = 7422",
   "ACTION_REVIEW",
   "ACTION_RESTORE",
-  "点一下立即让 Agent 审阅当前会话",
   "showAgentMessage(messageId, routeProfileId",
   "EXTRA_ROUTE_PROFILE_ID",
   "EXTRA_CLIENT_MESSAGE_ID",
@@ -225,6 +223,7 @@ includes(backend, [
   "/api/rabilink/devices/messages",
   "/api/rabilink/devices/media",
   "/api/rabilink/speech/v1/audio-streams/rabilink/start",
+  "/api/rabilink/speech/v1/audio-streams/rabilink/keepalive",
   "/api/rabilink/speech/v1/audio-streams/rabilink/chunk",
   "/api/rabilink/speech/v1/audio-streams/rabilink/stop",
   "/api/rabilink/speech/v1/audio/speech",
@@ -245,11 +244,10 @@ includes(backend, [
   'put("sourceDeviceId", deviceId)',
   'put("sessionId", deviceId)',
   "pendingAudioSequence",
-  "MAX_AUDIO_STREAM_QUEUE_CHUNKS",
-  "ArrayBlockingQueue",
-  "audioStreamOverflowRecoveryScheduled",
+  "RabiSingleDrainGate",
+  "audioStreamDrainGate",
   "audioStreamRecoveryGeneration",
-  "enqueueAudioChunk",
+  "requestAudioStreamDrain",
   "resetAudioStreamTransportForRetry",
   "scheduleAudioStreamRecovery",
   "onNetworkAvailable",
@@ -264,6 +262,8 @@ includes(backend, [
   '"&chunkId=" + encode(pending.id)',
   "normalizedSourceKind"
 ], "phone-owned backend");
+assert(!backend.includes("ArrayBlockingQueue"),
+  "phone-owned backend must coalesce PCM wakeups instead of queueing one task per chunk");
 includes(backend, [
   "submitProactivityPreference",
   'put("proactivityPreference", settings.proactivityPreference.wireValue)',
@@ -300,12 +300,12 @@ assert(!backend.includes("/api/rabilink/speech/v1/audio/transcriptions")
   "Android production backend must use the host PCM stream instead of a whole-utterance ASR bypass");
 assert.match(backend, /RabiPcmUploadBuffer\.PendingChunk pending = audioUploadBuffer\.preparePending\(\);[\s\S]*request\("POST", path, "application\/octet-stream", pending\.pcm, 60000\);\s*audioStreamSequence = pendingAudioSequence;\s*audioUploadBuffer\.acknowledgePending\(\);/s,
   "Android must commit a chunk sequence and clear pending PCM only after the PC acknowledges it");
-assert(!backend.includes("audioStreamExecutor = Executors.newSingleThreadExecutor()"),
-  "PCM uploads must use a bounded executor instead of an unbounded single-thread queue");
-assert.match(backend, /audioStreamExecutor\.getQueue\(\)\.clear\(\);[\s\S]*resetAudioStreamTransportForRetry\(\);[\s\S]*已丢弃过期 PCM 并重新建立连接/,
-  "PCM queue overflow must discard stale queued callbacks while retaining the acknowledgement-sensitive chunk");
-assert.match(backend, /safeStreamId\(deviceId \+ "-" \+ suffix \+ "-audio-"[\s\S]*UUID\.randomUUID\(\)/,
-  "each PCM connection must receive a transient stream id instead of reusing the reply-device identity");
+assert.match(backend, /ScheduledExecutorService audioStreamExecutor = Executors\.newSingleThreadScheduledExecutor\(\);[\s\S]*RabiSingleDrainGate audioStreamDrainGate/,
+  "PCM uploads must coalesce producer wakeups into one scheduled drain instead of an unbounded task queue");
+assert.match(backend, /int droppedBytes = audioUploadBuffer\.append\(copy\);[\s\S]*audioUploadBuffer\.ready\(\)[\s\S]*requestAudioStreamDrain\(\)/,
+  "PCM pressure must remain bounded in the newest-audio buffer while preserving the acknowledgement-sensitive chunk");
+assert.match(backend, /safeStreamId\(deviceId \+ "-" \+ suffix \+ "-audio"\)/,
+  "each physical input source must reuse a stable stream id so retries can resume the server sequence");
 assert(!backend.includes('glasses ? "rabi-glass" : deviceId'),
   "glasses input must target replies to its companion owner instead of a shared synthetic device id");
 assert(!backend.includes('SOURCE_GLASSES.equals(sourceDeviceKind) ? "rabi-glass" : deviceId'),

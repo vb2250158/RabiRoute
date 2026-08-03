@@ -208,6 +208,10 @@ def test_rabilink_virtual_audio_chunk_id_deduplicates_after_stream_rebuild(tmp_p
     assert len(received) == 2
     assert hub.snapshot()["clients"][0]["received_bytes"] == len(first_payload) + len(second_payload)
     assert hub.snapshot()["clients"][0]["accepted_chunks"] == 2
+    with pytest.raises(ValueError, match="retried with different PCM bytes"):
+        hub.feed_virtual_client(
+            "phone-stream-a", b"\x00\x00", sequence=2, chunk_id="stable-chunk-two"
+        )
 
     hub.start_virtual_client(
         client_id="phone-stream-a",
@@ -216,7 +220,7 @@ def test_rabilink_virtual_audio_chunk_id_deduplicates_after_stream_rebuild(tmp_p
         message_adapter_type="rabilink",
         source_device_id="phone-one",
     )
-    with pytest.raises(ValueError, match="retried with different PCM bytes"):
+    with pytest.raises(ValueError, match="sequence mismatch: expected 3, received 1"):
         hub.feed_virtual_client(
             "phone-stream-a", b"\x00\x00", sequence=1, chunk_id="stable-chunk-two"
         )
@@ -287,3 +291,94 @@ def test_rabilink_virtual_audio_clients_connect_concurrently_but_only_selected_d
         route_profile_id="route-two",
     )
     assert hub.snapshot()["selected_online"] is True
+
+
+def test_rabilink_rebuilt_stream_atomically_takes_over_selected_source_before_old_stream_stops(
+    tmp_path: Path,
+) -> None:
+    hub = RemoteAudioHub(
+        RemoteAudioServerConfig(
+            enabled=False,
+            host="127.0.0.1",
+            port=8782,
+            token="",
+            settings_path=tmp_path / "selection.json",
+            discovery_port=8783,
+            service_name="test-host",
+        ),
+        local_player=lambda _path, _volume, _cancel: None,
+        local_stopper=lambda: None,
+    )
+    hub.start_virtual_client(
+        client_id="phone-one-audio-old",
+        name="Phone One",
+        kind="mobile",
+        message_adapter_type="rabilink",
+        source_device_id="phone-one",
+    )
+    asyncio.run(hub.select("remote", "phone-one-audio-old"))
+
+    hub.start_virtual_client(
+        client_id="phone-one-audio-new",
+        name="Phone One",
+        kind="mobile",
+        message_adapter_type="rabilink",
+        source_device_id="phone-one",
+    )
+
+    during_handoff = hub.snapshot()
+    assert during_handoff["selected_client_id"] == "phone-one-audio-new"
+    assert during_handoff["selected_online"] is True
+    hub.stop_virtual_client("phone-one-audio-old")
+    after_old_stop = hub.snapshot()
+    assert after_old_stop["selected_client_id"] == "phone-one-audio-new"
+    assert after_old_stop["selected_online"] is True
+
+
+def test_rabilink_repeated_start_for_same_stable_stream_preserves_transport_state(
+    tmp_path: Path,
+) -> None:
+    hub = RemoteAudioHub(
+        RemoteAudioServerConfig(
+            enabled=False,
+            host="127.0.0.1",
+            port=8782,
+            token="",
+            settings_path=tmp_path / "selection.json",
+            discovery_port=8783,
+            service_name="test-host",
+        ),
+        local_player=lambda _path, _volume, _cancel: None,
+        local_stopper=lambda: None,
+    )
+    received: list[np.ndarray] = []
+    hub.set_feed(lambda _client_id, samples: received.append(samples))
+    hub.start_virtual_client(
+        client_id="phone-one-audio",
+        name="Phone One",
+        kind="mobile",
+        message_adapter_type="rabilink",
+        source_device_id="phone-one",
+        route_profile_id="mobile-main",
+    )
+    asyncio.run(hub.select("remote", "phone-one-audio"))
+    asyncio.run(hub.start_capture(16_000, 100))
+    payload = np.array([0, 16_384, -16_384], dtype="<i2").tobytes()
+    assert hub.feed_virtual_client("phone-one-audio", payload, sequence=1, chunk_id="chunk-one")
+    before = hub.snapshot()["clients"][0]
+
+    hub.start_virtual_client(
+        client_id="phone-one-audio",
+        name="Phone One Renamed",
+        kind="mobile",
+        message_adapter_type="rabilink",
+        source_device_id="phone-one",
+        route_profile_id="mobile-main",
+    )
+
+    after = hub.snapshot()["clients"][0]
+    assert after["connected_at"] == before["connected_at"]
+    assert after["last_sequence"] == 1
+    assert after["received_bytes"] == len(payload)
+    assert after["accepted_chunks"] == 1
+    assert len([event for event in hub.list_events(limit=20) if event["kind"] == "client_connected"]) == 1

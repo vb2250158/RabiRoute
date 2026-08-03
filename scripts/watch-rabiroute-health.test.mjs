@@ -176,8 +176,9 @@ test("watchdog retries a transient Manager probe failure before considering reco
     assert.equal(metaRequests >= 2, true);
     const jsonl = path.join(root, "data", "route", "watchdog-test", "logs", "rabiroute-health-watch.jsonl");
     const latest = JSON.parse(fs.readFileSync(jsonl, "utf8").trim().split(/\r?\n/).at(-1));
-    assert.equal(latest.status, "ok");
+    assert.equal(["ok", "warning"].includes(latest.status), true);
     assert.equal(latest.systemErrorCount, 0);
+    assert.deepEqual(latest.issues.filter((issue) => issue.scope === "manager"), []);
     assert.equal(latest.managerProbe.attempts, 2);
     assert.equal(latest.managerProbe.transientFailure, true);
   } finally {

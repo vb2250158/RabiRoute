@@ -52,7 +52,7 @@ from .tts_audio_store import TtsAudioStoreRegistry
 from .windows_audio_session import WindowsAudioSessionKeepalive
 
 
-_RABILINK_AUDIO_STALE_TIMEOUT_SECONDS = 15.0
+_RABILINK_AUDIO_STALE_TIMEOUT_SECONDS = 90.0
 _TTS_CLEANUP_RETRY_SECONDS = 60.0
 
 
@@ -217,7 +217,9 @@ def create_app(
             provider=None,
             language=config.language,
             prompt=config.prompt,
-            word_timestamps=False,
+            # Hot-delivery quality decisions require auditable word confidence.
+            # Providers without it remain fail-closed and record-only.
+            word_timestamps=True,
         )
         result = speaker_recognizer.analyze(
             audio_path,
@@ -639,6 +641,16 @@ def create_app(
             raise HTTPException(status_code=409, detail="RabiLink audio stream is not active or capture is not ready.")
         arm_virtual_audio_expiry(stream_id)
         return {"ok": True, "accepted_bytes": len(payload), "sequence": sequence}
+
+    @api.post("/v1/audio-streams/rabilink/keepalive")
+    async def rabilink_audio_stream_keepalive(request: Request) -> dict[str, object]:
+        _require_loopback(request)
+        stream_id = str(request.query_params.get("streamId") or "").strip()
+        async with virtual_audio_lock:
+            if not stream_id or not remote_audio.has_virtual_client(stream_id):
+                raise HTTPException(status_code=409, detail="RabiLink audio stream is not active.")
+            arm_virtual_audio_expiry(stream_id)
+        return {"ok": True, "received_bytes": 0}
 
     @api.post("/v1/audio-streams/rabilink/stop")
     async def rabilink_audio_stream_stop(request: Request, body: RabiLinkAudioStreamBody) -> dict[str, object]:

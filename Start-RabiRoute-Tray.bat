@@ -106,6 +106,41 @@ function Test-ProjectManagerProcess {
     -or $commandLine -match $relativeDistManagerPattern
 }
 
+function Test-ExactProjectManagerProcess {
+  param(
+    $Process,
+    [string]$DistManager
+  )
+  if (-not $Process -or -not $Process.CommandLine -or $Process.Name -ine "node.exe") {
+    return $false
+  }
+  $expected = [System.IO.Path]::GetFullPath($DistManager).ToLowerInvariant()
+  $commandLine = $Process.CommandLine.ToLowerInvariant()
+  return $commandLine.Contains('"' + $expected + '"') `
+    -or $commandLine.Contains(" $expected")
+}
+
+function Stop-OrphanedProjectManager {
+  param(
+    [string]$DistManager,
+    [string]$LauncherLog
+  )
+  $orphaned = @(
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+      Test-ExactProjectManagerProcess -Process $_ -DistManager $DistManager
+    }
+  )
+  foreach ($process in $orphaned) {
+    $pidValue = [int]$process.ProcessId
+    $message = "Verified RabiRoute Manager pid=$pidValue has no healthy listener; terminating its process tree before restart."
+    Write-Info $message
+    Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
+    & taskkill.exe /PID $pidValue /T /F 2>&1 |
+      ForEach-Object { Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] taskkill: $_" }
+  }
+  return $orphaned.Count
+}
+
 function Stop-StaleProjectManager {
   param(
     $Process,
@@ -524,6 +559,14 @@ try {
       Wait-ForEnter
       exit 2
     }
+  }
+
+  # A manager can hold its instance lock before it ever binds the HTTP port.
+  # In that state a normal launcher retry only receives exit 17 forever.  Do
+  # not touch arbitrary Node processes: terminate only a command line that
+  # has already passed the exact project-manager ownership check.
+  if (-not (Test-TcpPort -HostName $uri.Host -Port $managerPort)) {
+    Stop-OrphanedProjectManager -DistManager $distManager -LauncherLog $launcherLog | Out-Null
   }
 
   if (Test-NeedsBuild -ProjectRoot $projectRoot -DistManager $distManager) {

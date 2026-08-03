@@ -1,0 +1,4 @@
+interface:
+  display_name: "计划与任务会话编排"
+  short_description: "为 RabiRoute 计划查重、绑定唯一任务会话并持续推进到验收"
+  default_prompt: "使用 $plan-task-orchestration 为一个 RabiRoute 计划查重、绑定并安全续接唯一 Codex 任务会话。"

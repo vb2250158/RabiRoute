@@ -433,24 +433,44 @@ class RemoteAudioHub:
             (0, 0),
         )
         previous_virtual = self._virtual_clients.get(normalized_id)
-        self._virtual_clients[normalized_id] = _VirtualClient(
-            id=normalized_id,
-            name=str(name or normalized_id).strip()[:100] or normalized_id,
-            kind=_safe_kind(kind),
-            device_model=str(device_model or "").strip()[:100],
-            source_device_id=normalized_source_device_id,
-            message_adapter_type=_message_adapter_type(message_adapter_type, _safe_kind(kind)),
-            route_profile_id=str(route_profile_id or "").strip()[:200],
-            session_id=str(session_id or "").strip()[:200],
-            connected_at=time.time(),
-            received_bytes=received_bytes,
-            accepted_chunks=accepted_chunks,
-            resume_client_id=previous_virtual.resume_client_id if previous_virtual is not None else None,
-            resume_running=previous_virtual.resume_running if previous_virtual is not None else resume_running,
-        )
+        if previous_virtual is not None and previous_virtual.source_device_id != normalized_source_device_id:
+            raise ValueError("RabiLink stable stream id is already owned by another source device.")
+        repeated_start = previous_virtual is not None
+        if previous_virtual is not None:
+            previous_virtual.name = str(name or normalized_id).strip()[:100] or normalized_id
+            previous_virtual.kind = _safe_kind(kind)
+            previous_virtual.device_model = str(device_model or "").strip()[:100]
+            previous_virtual.message_adapter_type = _message_adapter_type(message_adapter_type, previous_virtual.kind)
+            previous_virtual.route_profile_id = str(route_profile_id or "").strip()[:200]
+            previous_virtual.session_id = str(session_id or "").strip()[:200]
+        else:
+            self._virtual_clients[normalized_id] = _VirtualClient(
+                id=normalized_id,
+                name=str(name or normalized_id).strip()[:100] or normalized_id,
+                kind=_safe_kind(kind),
+                device_model=str(device_model or "").strip()[:100],
+                source_device_id=normalized_source_device_id,
+                message_adapter_type=_message_adapter_type(message_adapter_type, _safe_kind(kind)),
+                route_profile_id=str(route_profile_id or "").strip()[:200],
+                session_id=str(session_id or "").strip()[:200],
+                connected_at=time.time(),
+                received_bytes=received_bytes,
+                accepted_chunks=accepted_chunks,
+                resume_running=resume_running,
+            )
         if self._selected_client_id is None:
             # Preserve the single-phone zero-configuration experience. Later
             # phones register without stealing the explicit/persisted choice.
+            self._selected_client_id = normalized_id
+            self._write_selection()
+        elif (
+            self._selected_client_id != normalized_id
+            and isinstance(self._virtual_clients.get(self._selected_client_id), _VirtualClient)
+            and self._virtual_clients[self._selected_client_id].source_device_id == normalized_source_device_id
+        ):
+            # A rebuilt stream registers before the old stream is stopped. Move
+            # selection while both records exist so the same physical source
+            # stays online through the handoff.
             self._selected_client_id = normalized_id
             self._write_selection()
         elif (
@@ -463,12 +483,13 @@ class RemoteAudioHub:
             # stable stream id without allowing an unrelated phone to steal it.
             self._selected_client_id = normalized_id
             self._write_selection()
-        self._append_event(
-            direction="system",
-            kind="client_connected",
-            message="RabiLink 远端音频设备已连接",
-            client_id=normalized_id,
-        )
+        if not repeated_start:
+            self._append_event(
+                direction="system",
+                kind="client_connected",
+                message="RabiLink 远端音频设备已连接",
+                client_id=normalized_id,
+            )
         result = self.snapshot()
         self._emit_changed()
         return result

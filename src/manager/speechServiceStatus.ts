@@ -121,13 +121,14 @@ export async function inspectLocalSpeechService(
   const fetchImpl = options.fetchImpl ?? fetch;
   const startedAt = performance.now();
   try {
+    const capabilitiesRequest = requestJson(
+      fetchImpl,
+      `${baseUrl}/v1/capabilities`,
+      options.timeoutMs ?? 5000
+    ).catch((): Record<string, unknown> => ({}));
     const health = await requestJson(fetchImpl, `${baseUrl}/health`, options.timeoutMs ?? 5000);
-    let capabilities: Record<string, unknown> = {};
-    try {
-      capabilities = await requestJson(fetchImpl, `${baseUrl}/v1/capabilities`, options.timeoutMs ?? 5000);
-    } catch {
-      // Older RabiSpeech versions expose the same provider data from /health.
-    }
+    // Older RabiSpeech versions expose the same provider data from /health.
+    const capabilities = await capabilitiesRequest;
     const providers = asRecord(health.providers || capabilities.providers);
     const defaults = asRecord(providers.defaults);
     return {

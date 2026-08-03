@@ -41,7 +41,7 @@ final class RabiPcmUploadBuffer {
         this.idSupplier = idSupplier;
     }
 
-    int append(byte[] pcm) {
+    synchronized int append(byte[] pcm) {
         if (pcm == null || pcm.length == 0) return 0;
         int combinedLength = buffered.length + pcm.length;
         byte[] combined = new byte[combinedLength];
@@ -52,23 +52,23 @@ final class RabiPcmUploadBuffer {
         return dropped;
     }
 
-    boolean ready() {
+    synchronized boolean ready() {
         return pending != null || buffered.length >= chunkBytes;
     }
 
-    boolean hasData() {
+    synchronized boolean hasData() {
         return pending != null || buffered.length > 0;
     }
 
-    boolean hasPending() {
+    synchronized boolean hasPending() {
         return pending != null;
     }
 
-    int bufferedBytes() {
+    synchronized int bufferedBytes() {
         return buffered.length;
     }
 
-    PendingChunk preparePending() {
+    synchronized PendingChunk preparePending() {
         if (pending != null) return pending;
         if (buffered.length == 0) return null;
         String id = idSupplier.get();
@@ -78,11 +78,11 @@ final class RabiPcmUploadBuffer {
         return pending;
     }
 
-    void acknowledgePending() {
+    synchronized void acknowledgePending() {
         pending = null;
     }
 
-    void clear() {
+    synchronized void clear() {
         pending = null;
         buffered = new byte[0];
     }

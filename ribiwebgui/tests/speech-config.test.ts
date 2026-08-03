@@ -15,7 +15,11 @@ import {
   SPEECH_ROUTE_AUTO_SUBMIT,
   speechPushModeForHotDelivery
 } from "../src/speech/speechDeliveryMode";
-import { voiceprintPresentation } from "../src/speech/speechSpeakerPresentation";
+import {
+  transcriptSpeakerPresentation,
+  unknownVoiceprintGroupLabel,
+  voiceprintPresentation
+} from "../src/speech/speechSpeakerPresentation";
 import {
   speechHistoryDeliveryPresentation,
   speechMessageResultText
@@ -47,7 +51,8 @@ test("exposes one recent-context limit for every message endpoint", () => {
     "wearable",
     "webhook",
     "wecom",
-    "weixin"
+    "weixin",
+    "feishu"
   ]);
 });
 
@@ -69,6 +74,17 @@ test("speech workbench exposes exact VAD inputs and one host playback volume con
   assert.match(monitorSource, /主机语音链路/);
   assert.match(monitorSource, /运行日志与转写预览/);
   assert.match(monitorSource, /广播投递/);
+});
+
+test("speech workbench renders one mode switch and keeps device logs collapsed by default", () => {
+  const source = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
+  assert.equal(source.match(/aria-label="切换 TTS 与 ASR"/g)?.length, 1);
+  assert.ok(source.indexOf("speech-audio-stream-card") < source.indexOf('aria-label="切换 TTS 与 ASR"'));
+  assert.match(source, /const audioLogExpanded = ref\(loadAudioLogExpanded\(\)\)/);
+  assert.match(source, /localStorage\.getItem\(AUDIO_LOG_EXPANDED_STORAGE_KEY\) === "true"/);
+  assert.match(source, /:aria-expanded="audioLogExpanded"/);
+  assert.match(source, /aria-controls="speech-device-log-panel"/);
+  assert.match(source, /v-if="audioLogExpanded"[\s\S]*id="speech-device-log-panel"[\s\S]*role="region"/);
 });
 
 test("persona route variables hide speech settings owned by dedicated controls", () => {
@@ -104,6 +120,29 @@ test("never presents an unsupported voiceprint capability as available or experi
 
   assert.deepEqual(presentation, { label: "自动声纹识别不可用", color: "grey" });
   assert.doesNotMatch(presentation.label, /实验/);
+});
+
+test("presents unknown and tentative voiceprints as unverified instead of a definite identity", () => {
+  assert.equal(unknownVoiceprintGroupLabel("opaque-B843"), "未知声纹（未验证） B843");
+  for (const speakerDecision of ["voiceprint_unknown_cluster", "voiceprint_tentative_known", "voiceprint_overlapping_speech"]) {
+    assert.equal(transcriptSpeakerPresentation([{
+      id: 0,
+      start: 0,
+      end: 1,
+      text: "测试",
+      speakerName: "可能的姓名",
+      voiceprintId: "opaque-cluster",
+      speakerDecision
+    }]), "未知声纹（未验证）");
+  }
+  assert.equal(transcriptSpeakerPresentation([{
+    id: 0,
+    start: 0,
+    end: 1,
+    text: "测试",
+    speakerName: "已确认姓名",
+    speakerDecision: "voiceprint_auto_match"
+  }]), "已确认姓名");
 });
 
 test("distinguishes clustering from explicitly enabled experimental auto assignment", () => {

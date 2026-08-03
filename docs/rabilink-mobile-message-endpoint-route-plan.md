@@ -616,3 +616,15 @@ RabiRoute 的 Persona 上下文可以跨 Route 共享，但审阅调度状态必
 - 消息端全局配置只有一份。
 - Route、Persona、设备、语音、主动策略和安全策略各有唯一真源。
 - 离线、失败和未就绪状态可解释、可恢复。
+
+## 17. ASR 热投递质量门与隔离记录合同
+
+RabiLink 通用音频流的转写先进入主机 speech ingress 审计存储，再决定是否通知 Agent。低质量、缺少词级置信度、未知/暂定/冲突声纹，以及没有明确唤醒词或指令的片段，只生成 `recorded` Route 回执；它们不会复制到 Persona 会话账本、不会触发 Agent，也不会写入身份记忆。
+
+- 记录类别：原始 ASR 事实与投递审计，不是角色记忆。
+- 真源与稳定 ID：主机 speech ingress store，以 RabiSpeech 生成的 `recordId` 为稳定 ID，以 `ingestedAt` 为接收顺序与活动时间。
+- 质量证据：词级 `probability/confidence`、声纹 `speakerDecision`、命中的 Route 唤醒词与明确指令判定；缺项时默认闭合。
+- 隔离动作：保留原始 ingress 记录和 Route `recorded` 回执，回执 reason 写明门控原因；不创建 Agent packet 或 Persona 账本副本。
+- 幂等与并发：同一 `recordId + routeId` 复用既有 delivery receipt；Manager 现有 single-flight 保证并发提交只产生一个终态回执。
+- 保留策略：本阶段不新增归档、分卷、过期或删除；原始音频仍沿用 RabiSpeech 现有短期缓存策略，不因隔离状态延长或缩短。
+- 恢复：服务重启后 ingress 与 delivery receipt 仍可读取；重复提交返回原终态，不把隔离记录升级成热投递。

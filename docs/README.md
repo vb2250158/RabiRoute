@@ -47,6 +47,7 @@
 - [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
+- [PR 安全门禁](maintainer-security-gates.md) — **现行维护指南**。秘钥扫描、生产依赖审计、CodeQL、最小权限和合并保护要求。
 - [Windows 启动与打包](windows-launcher-and-packaging.md) — **现行指南**。Node/WebGUI 基线与 Qt/Windows 便利层。
 - [Manager 运行稳定性与故障证据](manager-runtime-resilience.md) — **现行指南**。崩溃日志、单实例、人格索引非致命持久化、watchdog 退避恢复与浸泡验收。
 - [NapCat 无值守](napcat-unattended.md) — **现行指南**。登录态、quick login、Manager 一键恢复和守护边界。

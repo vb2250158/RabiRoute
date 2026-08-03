@@ -4,8 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class RabiAvatarLoadRulesTest {
-    @Test fun exactCacheIsShownWhileTheRelayCopyIsValidated() {
-        assertEquals(RabiAvatarLoadRules.State.VALIDATING, RabiAvatarLoadRules.cachedState(true, true))
+    @Test fun exactVersionCacheIsReadyWhileRelayRefreshContinuesSilently() {
+        assertEquals(RabiAvatarLoadRules.State.READY, RabiAvatarLoadRules.cachedState(true, true))
     }
 
     @Test fun anOlderAvatarRemainsVisibleUntilTheNewVersionLoads() {
@@ -16,5 +16,11 @@ class RabiAvatarLoadRulesTest {
     @Test fun missingAndFailedAvatarsHaveExplicitStates() {
         assertEquals(RabiAvatarLoadRules.State.LOADING, RabiAvatarLoadRules.cachedState(false, false))
         assertEquals(RabiAvatarLoadRules.State.UNAVAILABLE, RabiAvatarLoadRules.failureState(false))
+    }
+
+    @Test fun aMissingResourceIsNotPresentedAsAnotherPersonaAvatar() {
+        assertEquals("未配置头像", RabiAvatarLoadRules.unavailableLabel(configured = false))
+        assertEquals("头像暂不可用", RabiAvatarLoadRules.unavailableLabel(configured = true))
+        assertEquals("夜雨 未配置头像", RabiAvatarLoadRules.placeholderContentDescription("夜雨"))
     }
 }

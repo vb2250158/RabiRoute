@@ -1,11 +1,12 @@
 import { createRouter, createWebHashHistory } from "vue-router";
-import OverviewPage from "./pages/OverviewPage.vue";
-import RouteConfigPage from "./pages/RouteConfigPage.vue";
-import PersonaTemplatePage from "./pages/PersonaTemplatePage.vue";
-import ProjectDocsPage from "./pages/ProjectDocsPage.vue";
-import RoleKnowledgePage from "./pages/RoleKnowledgePage.vue";
-import RuntimeLogPage from "./pages/RuntimeLogPage.vue";
-import SpeechServicePage from "./pages/SpeechServicePage.vue";
+
+const OverviewPage = () => import("./pages/OverviewPage.vue");
+const RouteConfigPage = () => import("./pages/RouteConfigPage.vue");
+const PersonaTemplatePage = () => import("./pages/PersonaTemplatePage.vue");
+const ProjectDocsPage = () => import("./pages/ProjectDocsPage.vue");
+const RoleKnowledgePage = () => import("./pages/RoleKnowledgePage.vue");
+const RuntimeLogPage = () => import("./pages/RuntimeLogPage.vue");
+const SpeechServicePage = () => import("./pages/SpeechServicePage.vue");
 
 export const router = createRouter({
   history: createWebHashHistory(),

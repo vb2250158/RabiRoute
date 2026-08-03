@@ -238,9 +238,9 @@ object RabiMobileUi {
 
     @JvmStatic
     fun avatar(context: Context, label: String): ImageView = ImageView(context).apply {
-        setImageResource(R.drawable.rabiroute_icon)
+        setImageResource(R.drawable.ic_persona_avatar_placeholder)
         scaleType = ImageView.ScaleType.CENTER_CROP
-        contentDescription = "$label 头像"
+        contentDescription = RabiAvatarLoadRules.placeholderContentDescription(label)
         background = panel(context, Color.rgb(239, 253, 255), Color.rgb(183, 231, 232), 14)
         setPadding(dp(context, 3), dp(context, 3), dp(context, 3), dp(context, 3))
     }

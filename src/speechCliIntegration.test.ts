@@ -100,7 +100,7 @@ test("speech CLI reads the host record once and writes one RabiLink persona even
   const completedAt = Date.now();
   fixture.ingressStore.append({
     recordId: "cli-mobile-one",
-    text: "从真实子进程进入。",
+    text: "请从真实子进程进入。",
     sessionId: "cli-phone-session",
     messageAdapterType: "rabilink",
     routeProfileId: "mobile-main",
@@ -127,9 +127,11 @@ test("speech CLI reads the host record once and writes one RabiLink persona even
       id: 0,
       start: 0,
       end: 2,
-      text: "从真实子进程进入。",
+      text: "请从真实子进程进入。",
       voiceprintId: "voiceprint-cli",
-      speakerClusterId: "voiceprint-cli"
+      speakerClusterId: "voiceprint-cli",
+      speakerDecision: "voiceprint_auto_match",
+      words: [{ word: "请从真实子进程进入", probability: 0.94 }]
     }]
   });
 
@@ -179,7 +181,7 @@ test("speech CLI keeps the PC microphone on the independent voice endpoint", asy
   const completedAt = Date.now();
   fixture.ingressStore.append({
     recordId: "cli-pc-one",
-    text: "这是电脑麦克风。",
+    text: "请确认这是电脑麦克风。",
     sessionId: "cli-pc-session",
     messageAdapterType: "speech",
     routeProfileId: "voice-main",
@@ -203,9 +205,11 @@ test("speech CLI keeps the PC microphone on the independent voice endpoint", asy
       id: 0,
       start: 0,
       end: 2,
-      text: "这是电脑麦克风。",
+      text: "请确认这是电脑麦克风。",
       voiceprintId: "voiceprint-pc",
-      speakerClusterId: "voiceprint-pc"
+      speakerClusterId: "voiceprint-pc",
+      speakerDecision: "voiceprint_auto_match",
+      words: [{ word: "请确认这是电脑麦克风", probability: 0.95 }]
     }]
   });
   const routeProfiles = [{

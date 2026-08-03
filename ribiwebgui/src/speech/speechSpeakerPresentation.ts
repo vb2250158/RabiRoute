@@ -1,4 +1,7 @@
-import type { SpeechSpeakerIdentityCapability } from "@shared/speechControlContract";
+import type {
+  SpeechSpeakerIdentityCapability,
+  SpeechTranscriptSegment
+} from "@shared/speechControlContract";
 
 export type VoiceprintPresentation = {
   label: string;
@@ -18,4 +21,25 @@ export function voiceprintPresentation(
   }
   if (!capability.voiceprint.supported) return { label: "自动声纹识别不可用", color: "grey" };
   return { label: "自动声纹识别不可用", color: "grey" };
+}
+
+const VERIFIED_SPEAKER_DECISIONS = new Set([
+  "manual_record_binding",
+  "manual_session_binding",
+  "voiceprint_auto_match"
+]);
+
+export function unknownVoiceprintGroupLabel(clusterId?: string): string {
+  const suffix = clusterId?.trim().slice(-4).toUpperCase();
+  return suffix ? `未知声纹（未验证） ${suffix}` : "未知声纹（未验证）";
+}
+
+export function transcriptSpeakerPresentation(segments: SpeechTranscriptSegment[]): string {
+  if (!segments.length || segments.some(segment => !VERIFIED_SPEAKER_DECISIONS.has(segment.speakerDecision || ""))) {
+    return "未知声纹（未验证）";
+  }
+  const names = [...new Set(segments.map(segment => (
+    segment.speakerName || segment.speakerLabel || segment.speaker || ""
+  )).filter(Boolean))];
+  return names.length ? names.join(" / ") : "未知声纹（未验证）";
 }

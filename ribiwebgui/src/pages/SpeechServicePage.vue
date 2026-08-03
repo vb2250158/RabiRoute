@@ -21,6 +21,7 @@ import { gatewayAdapterTypes } from "../utils/gatewayHelpers";
 import { copyTextToClipboard } from "../clipboard";
 import { personaOptionDisplayName } from "../personaPresentation";
 import { speechControlClient } from "../speech/speechControlClient";
+import { transcriptSpeakerPresentation } from "../speech/speechSpeakerPresentation";
 
 type AudioInput = { title: string; value: number; default?: boolean };
 
@@ -37,6 +38,8 @@ const {
   loading
 } = storeToRefs(speech);
 const activeKind = ref<"tts" | "asr">("tts");
+const AUDIO_LOG_EXPANDED_STORAGE_KEY = "rabiroute:speech:audio-log-expanded";
+const audioLogExpanded = ref(loadAudioLogExpanded());
 const requestError = ref("");
 const ttsModel = ref("");
 const asrModel = ref("");
@@ -87,6 +90,24 @@ let pendingPlaybackVolume: number | null = null;
 let microphoneSettingsTimer = 0;
 let microphoneSettingsPending = false;
 let applyingMicrophoneConfig = false;
+
+function loadAudioLogExpanded(): boolean {
+  try {
+    return window.localStorage.getItem(AUDIO_LOG_EXPANDED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function toggleAudioLog(): void {
+  audioLogExpanded.value = !audioLogExpanded.value;
+  try {
+    window.localStorage.setItem(AUDIO_LOG_EXPANDED_STORAGE_KEY, String(audioLogExpanded.value));
+  } catch {
+    // The control remains usable when storage is unavailable.
+  }
+  if (audioLogExpanded.value) void loadAudioHistory();
+}
 
 const providers = computed(() => status.value?.providers[activeKind.value] ?? []);
 const computerName = computed(() => store.meta.rabiName || store.meta.computerName || "当前电脑");
@@ -275,10 +296,7 @@ function transcriptTime(record: SpeechIngressRecord): string {
 }
 
 function transcriptSpeaker(record: SpeechIngressRecord): string {
-  const names = [...new Set(record.segments.map(segment => (
-    segment.speakerName || segment.speakerLabel || segment.speaker || segment.voiceprintId || segment.speakerClusterId || ""
-  )).filter(Boolean))];
-  return names.length ? names.join(" / ") : "未标注说话人";
+  return transcriptSpeakerPresentation(record.segments);
 }
 
 function deliverySummary(recordId: string): string {
@@ -348,7 +366,7 @@ async function toggleRuntime(enabled: boolean | null): Promise<void> {
   try {
     if (enabled) {
       const result = await speech.startRuntime();
-      await hydrateRuntimeUi();
+      await syncRuntimeUiFromStore();
       actionMessage.value = result.action === "already_online"
         ? "RabiSpeech 已经在线。"
         : "RabiSpeech 已启动，语音服务页面已展开。";
@@ -366,8 +384,7 @@ async function toggleRuntime(enabled: boolean | null): Promise<void> {
   }
 }
 
-async function refreshModels(): Promise<void> {
-  await speech.refreshModels();
+function syncModelSelections(): void {
   if (!ttsModels.value.some(item => item.id === ttsModel.value)) {
     ttsModel.value = ttsModels.value.find(item => item.available && item.id.endsWith("/gpt-sovits"))?.id
       || ttsModels.value.find(item => item.available)?.id
@@ -383,9 +400,18 @@ async function refreshModels(): Promise<void> {
   }
 }
 
+async function refreshModels(): Promise<void> {
+  await speech.refreshModels();
+  syncModelSelections();
+}
+
+function syncPersonaSelection(): void {
+  if (!personas.value.some(item => item.id === voice.value) && personas.value[0]) voice.value = personas.value[0].id;
+}
+
 async function refreshPersonas(): Promise<void> {
   await speech.refreshPersonas();
-  if (!personas.value.some(item => item.id === voice.value) && personas.value[0]) voice.value = personas.value[0].id;
+  syncPersonaSelection();
 }
 
 async function refreshPlayback(): Promise<void> {
@@ -470,8 +496,7 @@ async function onAudioFile(event: Event): Promise<void> {
   }
 }
 
-async function refreshAudioInputs(): Promise<void> {
-  await speech.refreshAudioInputs();
+function syncAudioInputsFromStore(): void {
   audioInputs.value = speech.audioInputs.map(device => ({
     title: `${device.name || `麦克风 ${device.index}`}${device.isDefault ? " · 系统默认" : ""}`,
     value: device.index,
@@ -480,6 +505,11 @@ async function refreshAudioInputs(): Promise<void> {
   if (!audioInputs.value.some(item => item.value === selectedAudioInput.value)) {
     selectedAudioInput.value = audioInputs.value.find(item => item.default)?.value ?? audioInputs.value[0]?.value ?? null;
   }
+}
+
+async function refreshAudioInputs(): Promise<void> {
+  await speech.refreshAudioInputs();
+  syncAudioInputsFromStore();
 }
 
 function applyMicrophoneConfig(config: SpeechMicrophoneConfig): void {
@@ -497,24 +527,35 @@ function applyMicrophoneConfig(config: SpeechMicrophoneConfig): void {
   bargeInMode.value = config.bargeInMode === "echo_protected" ? "echo_protected" : "off";
 }
 
+async function syncMicrophoneFromStore(): Promise<void> {
+  const next = microphoneStatus.value;
+  if (!next) return;
+  if (!microphoneConfigLoaded.value || next.running) {
+    applyingMicrophoneConfig = true;
+    applyMicrophoneConfig(next.config);
+    await nextTick();
+    applyingMicrophoneConfig = false;
+    microphoneConfigLoaded.value = true;
+  }
+  transcriptHistory.value = (next.history || []).slice(0, 20).map(item => ({
+    time: new Date(item.time * 1000).toLocaleTimeString(),
+    text: item.text,
+    model: `${item.provider}/${item.model}`
+  }));
+  if (next.history?.[0]?.text && transcript.value !== next.history[0].text) transcript.value = next.history[0].text;
+}
+
+async function syncRuntimeUiFromStore(): Promise<void> {
+  syncModelSelections();
+  syncPersonaSelection();
+  syncAudioInputsFromStore();
+  await syncMicrophoneFromStore();
+}
+
 async function refreshMicrophone(): Promise<void> {
   try {
     await speech.refreshMicrophone();
-    const next = microphoneStatus.value;
-    if (!next) return;
-    if (!microphoneConfigLoaded.value || next.running) {
-      applyingMicrophoneConfig = true;
-      applyMicrophoneConfig(next.config);
-      await nextTick();
-      applyingMicrophoneConfig = false;
-      microphoneConfigLoaded.value = true;
-    }
-    transcriptHistory.value = (next.history || []).slice(0, 20).map(item => ({
-      time: new Date(item.time * 1000).toLocaleTimeString(),
-      text: item.text,
-      model: `${item.provider}/${item.model}`
-    }));
-    if (next.history?.[0]?.text && transcript.value !== next.history[0].text) transcript.value = next.history[0].text;
+    await syncMicrophoneFromStore();
   } catch (error) {
     applyingMicrophoneConfig = false;
     if (listening.value) requestError.value = error instanceof Error ? error.message : String(error);
@@ -665,7 +706,9 @@ watch(selectedPersona, persona => {
 });
 watch(
   () => selectedAudioStreamClient.value?.sourceDeviceId || "",
-  () => { void loadAudioHistory(); },
+  () => {
+    if (audioLogExpanded.value) void loadAudioHistory();
+  },
   { immediate: true }
 );
 watch(
@@ -674,7 +717,9 @@ watch(
     if (audioStream.value?.events?.length) mergeAudioEvents(audioStream.value.events, true);
   }
 );
-watch(recordsVersion, () => { void loadAudioHistory(); });
+watch(recordsVersion, () => {
+  if (audioLogExpanded.value) void loadAudioHistory();
+});
 watch([
   asrModel,
   asrLanguage,
@@ -692,9 +737,7 @@ watch([
 let releaseSpeech: (() => void) | undefined;
 onMounted(async () => {
   releaseSpeech = await speech.acquire();
-  if (serviceEnabled.value) await hydrateRuntimeUi().catch(error => {
-      requestError.value = error instanceof Error ? error.message : String(error);
-    });
+  await syncRuntimeUiFromStore();
 });
 onBeforeUnmount(() => {
   window.clearTimeout(playbackVolumeTimer);
@@ -737,13 +780,6 @@ onBeforeUnmount(() => {
     <v-alert v-if="actionMessage" class="mb-4" type="success" variant="tonal" closable @click:close="actionMessage = ''">{{ actionMessage }}</v-alert>
 
     <template v-if="serviceEnabled">
-    <v-card class="app-card glass-card speech-mode-tabs">
-      <v-tabs v-model="activeKind" color="primary" grow class="speech-tabs" aria-label="切换 TTS 与 ASR">
-        <v-tab value="tts" prepend-icon="mdi-account-voice">TTS 语音合成</v-tab>
-        <v-tab value="asr" prepend-icon="mdi-waveform">ASR 语音识别</v-tab>
-      </v-tabs>
-    </v-card>
-
     <v-card class="app-card glass-card speech-audio-stream-card">
       <div class="speech-audio-stream-copy">
         <div class="speech-audio-stream-icon"><v-icon>mdi-access-point</v-icon></div>
@@ -773,7 +809,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="speech-audio-stream-log">
         <div class="speech-audio-log-head">
-          <div>
+          <div class="speech-audio-log-copy">
             <strong>当前设备收发日志</strong>
             <span v-if="selectedAudioStreamClient">
               {{ selectedAudioStreamClient.deviceModel ? `设备型号 ${selectedAudioStreamClient.deviceModel} · ` : "" }}
@@ -783,116 +819,138 @@ onBeforeUnmount(() => {
             </span>
             <span v-else>本机音频不经过远端客户端传输。</span>
           </div>
-          <v-chip size="small" :color="audioStream?.selectedOnline ? 'success' : 'warning'" variant="tonal">
-            {{ audioStream?.selectedOnline ? "通道在线" : "所选设备离线" }}
-          </v-chip>
-        </div>
-        <div v-if="selectedAudioStreamClient" class="speech-pipeline-summary">
-          <span><b>{{ currentPipelineSummary.captured }}</b> 段进入切句</span>
-          <span><b>{{ currentPipelineSummary.recognized }}</b> 段识别成功</span>
-          <span><b>{{ currentPipelineSummary.empty }}</b> 段无有效文字</span>
-          <span><b>{{ currentPipelineSummary.delivered }}</b> 次投递 Agent</span>
-          <span><b>{{ currentPipelineSummary.recorded }}</b> 次仅记录</span>
-          <span v-if="currentPipelineSummary.failed"><b>{{ currentPipelineSummary.failed }}</b> 次失败</span>
-        </div>
-        <div class="section-note">
-          PCM 字节/块数只证明声音数据到达电脑；只有经过 VAD 切句、ASR 得到有效文本后，才会出现在下方公共转写记录里。
-        </div>
-        <div v-if="selectedAudioStreamEvents.length" class="speech-audio-log-rows">
-          <div v-for="event in selectedAudioStreamEvents" :key="event.sequence" class="speech-audio-log-row">
-            <time>{{ audioEventTime(event.time) }}</time>
-            <v-chip
-              size="x-small"
-              :color="audioEventDirection(event).color"
-              variant="tonal"
-              :prepend-icon="audioEventDirection(event).icon"
-            >
-              {{ audioEventDirection(event).label }}
+          <div class="speech-audio-log-actions">
+            <v-chip size="small" :color="audioStream?.selectedOnline ? 'success' : 'warning'" variant="tonal">
+              {{ audioStream?.selectedOnline ? "通道在线" : "所选设备离线" }}
             </v-chip>
-            <span>{{ event.message }}</span>
-            <code>
-              <template v-if="event.bytes">{{ audioBytesLabel(event.bytes) }}</template>
-              <template v-if="event.streamSequence != null"> · seq {{ event.streamSequence }}</template>
-              <template v-if="event.totalBytes"> · 累计 {{ audioBytesLabel(event.totalBytes) }}</template>
-            </code>
+            <v-btn
+              size="small"
+              variant="text"
+              :prepend-icon="audioLogExpanded ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+              :aria-expanded="audioLogExpanded"
+              aria-controls="speech-device-log-panel"
+              @click="toggleAudioLog"
+            >
+              {{ audioLogExpanded ? "收起收发日志" : "展开收发日志" }}
+            </v-btn>
           </div>
-          <v-btn
-            v-if="audioEventsHaveMore"
-            size="small"
-            variant="text"
-            prepend-icon="mdi-history"
-            :loading="audioHistoryLoading"
-            @click="loadAudioHistory({ earlierEvents: true })"
+        </div>
+        <v-expand-transition>
+          <div
+            v-if="audioLogExpanded"
+            id="speech-device-log-panel"
+            class="speech-audio-log-panel"
+            role="region"
+            aria-label="当前设备收发日志详情"
           >
-            加载更早的收发与处理日志
-          </v-btn>
-        </div>
-        <div v-else class="speech-audio-log-empty">
-          <v-icon>mdi-text-box-search-outline</v-icon>
-          <span>{{ selectedAudioStreamClient ? "等待这台设备产生新的连接、PCM 接收、音频发送或播放回执。" : "选择远端设备后显示该设备的收发事件。" }}</span>
-        </div>
-        <div v-if="selectedAudioStreamClient?.messageAdapterType === 'rabilink'" class="section-note">
-          RabiLink 手机的麦克风 PCM 在这里记录为“接收”；Agent 人格 TTS 使用独立 Relay 下行与终端播放回执，不会把本机播放误记成远端“发送成功”。
-        </div>
-        <div class="speech-device-transcripts">
-          <div class="speech-device-transcript-head">
-            <div>
-              <strong>公共 ASR 转写与 Route 回执</strong>
-              <span>从主机通用转写账本按稳定 record ID 解析；它与夜雨人格会话记录分开保存。</span>
+            <div v-if="selectedAudioStreamClient" class="speech-pipeline-summary">
+              <span><b>{{ currentPipelineSummary.captured }}</b> 段进入切句</span>
+              <span><b>{{ currentPipelineSummary.recognized }}</b> 段识别成功</span>
+              <span><b>{{ currentPipelineSummary.empty }}</b> 段无有效文字</span>
+              <span><b>{{ currentPipelineSummary.delivered }}</b> 次投递 Agent</span>
+              <span><b>{{ currentPipelineSummary.recorded }}</b> 次仅记录</span>
+              <span v-if="currentPipelineSummary.failed"><b>{{ currentPipelineSummary.failed }}</b> 次失败</span>
             </div>
-            <v-btn
-              size="small"
-              variant="text"
-              prepend-icon="mdi-refresh"
-              :loading="audioHistoryLoading"
-              @click="loadAudioHistory()"
-            >
-              刷新历史
-            </v-btn>
-          </div>
-          <div v-if="selectedDeviceTranscripts.length" class="speech-device-transcript-list">
-            <article v-for="record in selectedDeviceTranscripts" :key="record.id">
-              <div class="speech-device-transcript-meta">
-                <time>{{ transcriptTime(record) }}</time>
-                <v-chip size="x-small" color="primary" variant="tonal">{{ transcriptSpeaker(record) }}</v-chip>
-                <span>{{ record.provider || "ASR" }}/{{ record.model || "默认模型" }}</span>
-                <span>{{ deliverySummary(record.id) }}</span>
+            <div class="section-note">
+              PCM 字节/块数只证明声音数据到达电脑；只有经过 VAD 切句、ASR 得到有效文本后，才会出现在下方公共转写记录里。
+            </div>
+            <div v-if="selectedAudioStreamEvents.length" class="speech-audio-log-rows">
+              <div v-for="event in selectedAudioStreamEvents" :key="event.sequence" class="speech-audio-log-row">
+                <time>{{ audioEventTime(event.time) }}</time>
+                <v-chip
+                  size="x-small"
+                  :color="audioEventDirection(event).color"
+                  variant="tonal"
+                  :prepend-icon="audioEventDirection(event).icon"
+                >
+                  {{ audioEventDirection(event).label }}
+                </v-chip>
+                <span>{{ event.message }}</span>
+                <code>
+                  <template v-if="event.bytes">{{ audioBytesLabel(event.bytes) }}</template>
+                  <template v-if="event.streamSequence != null"> · seq {{ event.streamSequence }}</template>
+                  <template v-if="event.totalBytes"> · 累计 {{ audioBytesLabel(event.totalBytes) }}</template>
+                </code>
               </div>
-              <p>{{ record.text }}</p>
-              <audio
-                v-if="retainedAudioAvailable(record.id)"
-                controls
-                preload="none"
-                :src="`/api/speech/records/${encodeURIComponent(record.id)}/audio`"
-              />
-              <small v-else>
-                {{ retainedAudio(record.id)?.audioExpiresAt ? "这条原声缓存已过期或不可用。" : "旧记录没有短期原声缓存；新转写会保留 24 小时。" }}
-              </small>
-            </article>
-            <v-btn
-              v-if="audioTranscriptsHaveMore"
-              size="small"
-              variant="text"
-              prepend-icon="mdi-history"
-              :loading="audioHistoryLoading"
-              @click="loadAudioHistory({ earlierTranscripts: true })"
-            >
-              加载更早的公共转写
-            </v-btn>
-          </div>
-          <div v-else class="speech-audio-log-empty">
-            <v-icon>mdi-waveform</v-icon>
-            <span>当前稳定设备还没有有效公共转写；收到 PCM 不代表已经越过 VAD/ASR 阈值。</span>
-          </div>
-          <details v-if="unlinkedRabiTranscripts.length" class="speech-unlinked-transcripts">
-            <summary>另有 {{ unlinkedRabiTranscripts.length }} 条旧设备或其他 RabiLink 设备转写</summary>
-            <div v-for="record in unlinkedRabiTranscripts" :key="record.id">
-              <time>{{ transcriptTime(record) }}</time>
-              <span>{{ record.sourceDeviceName || record.sourceDeviceId || "旧 RabiLink 设备" }}</span>
-              <p>{{ record.text }}</p>
+              <v-btn
+                v-if="audioEventsHaveMore"
+                size="small"
+                variant="text"
+                prepend-icon="mdi-history"
+                :loading="audioHistoryLoading"
+                @click="loadAudioHistory({ earlierEvents: true })"
+              >
+                加载更早的收发与处理日志
+              </v-btn>
             </div>
-          </details>
-        </div>
+            <div v-else class="speech-audio-log-empty">
+              <v-icon>mdi-text-box-search-outline</v-icon>
+              <span>{{ selectedAudioStreamClient ? "等待这台设备产生新的连接、PCM 接收、音频发送或播放回执。" : "选择远端设备后显示该设备的收发事件。" }}</span>
+            </div>
+            <div v-if="selectedAudioStreamClient?.messageAdapterType === 'rabilink'" class="section-note">
+              RabiLink 手机的麦克风 PCM 在这里记录为“接收”；Agent 人格 TTS 使用独立 Relay 下行与终端播放回执，不会把本机播放误记成远端“发送成功”。
+            </div>
+            <div class="speech-device-transcripts">
+              <div class="speech-device-transcript-head">
+                <div>
+                  <strong>公共 ASR 转写与 Route 回执</strong>
+                  <span>从主机通用转写账本按稳定 record ID 解析；它与夜雨人格会话记录分开保存。</span>
+                </div>
+                <v-btn
+                  size="small"
+                  variant="text"
+                  prepend-icon="mdi-refresh"
+                  :loading="audioHistoryLoading"
+                  @click="loadAudioHistory()"
+                >
+                  刷新历史
+                </v-btn>
+              </div>
+              <div v-if="selectedDeviceTranscripts.length" class="speech-device-transcript-list">
+                <article v-for="record in selectedDeviceTranscripts" :key="record.id">
+                  <div class="speech-device-transcript-meta">
+                    <time>{{ transcriptTime(record) }}</time>
+                    <v-chip size="x-small" color="primary" variant="tonal">{{ transcriptSpeaker(record) }}</v-chip>
+                    <span>{{ record.provider || "ASR" }}/{{ record.model || "默认模型" }}</span>
+                    <span>{{ deliverySummary(record.id) }}</span>
+                  </div>
+                  <p>{{ record.text }}</p>
+                  <audio
+                    v-if="retainedAudioAvailable(record.id)"
+                    controls
+                    preload="none"
+                    :src="`/api/speech/records/${encodeURIComponent(record.id)}/audio`"
+                  />
+                  <small v-else>
+                    {{ retainedAudio(record.id)?.audioExpiresAt ? "这条原声缓存已过期或不可用。" : "旧记录没有短期原声缓存；新转写会保留 24 小时。" }}
+                  </small>
+                </article>
+                <v-btn
+                  v-if="audioTranscriptsHaveMore"
+                  size="small"
+                  variant="text"
+                  prepend-icon="mdi-history"
+                  :loading="audioHistoryLoading"
+                  @click="loadAudioHistory({ earlierTranscripts: true })"
+                >
+                  加载更早的公共转写
+                </v-btn>
+              </div>
+              <div v-else class="speech-audio-log-empty">
+                <v-icon>mdi-waveform</v-icon>
+                <span>当前稳定设备还没有有效公共转写；收到 PCM 不代表已经越过 VAD/ASR 阈值。</span>
+              </div>
+              <details v-if="unlinkedRabiTranscripts.length" class="speech-unlinked-transcripts">
+                <summary>另有 {{ unlinkedRabiTranscripts.length }} 条旧设备或其他 RabiLink 设备转写</summary>
+                <div v-for="record in unlinkedRabiTranscripts" :key="record.id">
+                  <time>{{ transcriptTime(record) }}</time>
+                  <span>{{ record.sourceDeviceName || record.sourceDeviceId || "旧 RabiLink 设备" }}</span>
+                  <p>{{ record.text }}</p>
+                </div>
+              </details>
+            </div>
+          </div>
+        </v-expand-transition>
       </div>
     </v-card>
 
@@ -1169,9 +1227,11 @@ onBeforeUnmount(() => {
 .speech-audio-stream-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
 .speech-audio-stream-log { display: grid; grid-column: 1 / -1; gap: 10px; padding-top: 14px; border-top: 1px solid rgba(17, 32, 51, .08); }
 .speech-audio-log-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.speech-audio-log-head > div { display: grid; gap: 3px; min-width: 0; }
+.speech-audio-log-copy { display: grid; gap: 3px; min-width: 0; }
+.speech-audio-log-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 .speech-audio-log-head strong { color: #193b57; font-size: 13px; }
 .speech-audio-log-head span { color: #6b7f91; font-size: 12px; overflow-wrap: anywhere; }
+.speech-audio-log-panel { display: grid; gap: 10px; }
 .speech-audio-log-rows { display: grid; overflow: auto; max-height: 520px; border: 1px solid rgba(17, 32, 51, .08); border-radius: 12px; background: rgba(248, 251, 253, .72); }
 .speech-audio-log-row { display: grid; grid-template-columns: 72px 76px minmax(180px, 1fr) minmax(140px, auto); gap: 10px; align-items: center; min-height: 38px; padding: 7px 11px; border-bottom: 1px solid rgba(17, 32, 51, .06); }
 .speech-audio-log-row:last-child { border-bottom: 0; }

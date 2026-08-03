@@ -12,7 +12,7 @@ import {
   formatSpeechEpochSeconds,
   speechAudioCacheReferenceKind
 } from "../speech/speechRecordPresentation";
-import { voiceprintPresentation } from "../speech/speechSpeakerPresentation";
+import { unknownVoiceprintGroupLabel, voiceprintPresentation } from "../speech/speechSpeakerPresentation";
 import { useSpeechStore } from "../stores/speechStore";
 
 const props = withDefaults(defineProps<{
@@ -130,11 +130,7 @@ function previewGroups(known: boolean): SpeakerPreviewGroup[] {
     known,
     title: known
       ? (lines[0]?.speakerName || "已知说话人")
-      : lines[0]?.speakerSuggestionName
-        ? `可能是 ${lines[0].speakerSuggestionName}`
-        : lines[0]?.speakerClusterId
-          ? `未知声纹 ${lines[0].speakerClusterId.slice(-4).toUpperCase()}`
-          : (lines[0]?.speakerLabel || "未知说话人"),
+      : unknownVoiceprintGroupLabel(lines[0]?.speakerClusterId),
     total: lines.length,
     sessionIds: [...new Set(lines.map(line => line.sessionId))],
     speakerLabels: [...new Set(lines.map(line => line.speakerLabel))],

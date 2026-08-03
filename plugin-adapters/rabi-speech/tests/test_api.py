@@ -14,7 +14,7 @@ from typing import Callable
 import pytest
 from fastapi.testclient import TestClient
 
-from rabispeech.app import create_app
+from rabispeech.app import _RABILINK_AUDIO_STALE_TIMEOUT_SECONDS, create_app
 from rabispeech.config import load_settings
 from rabispeech.contracts import (
     SpeechAudioArtifact,
@@ -40,6 +40,10 @@ class FakeTts:
 
     def capabilities(self) -> dict[str, object]:
         return {"kind": "tts", "enabled": True}
+
+
+def test_default_rabilink_audio_stale_timeout_covers_relay_request_deadline() -> None:
+    assert _RABILINK_AUDIO_STALE_TIMEOUT_SECONDS >= 75.0
 
 
 class FakeAsr:
@@ -289,6 +293,30 @@ def test_rabilink_audio_stream_expiry_is_rearmed_by_pcm_events(tmp_path: Path) -
         expired = client.get("/v1/audio-streams").json()
         assert expired["selected_client_id"] == "phone-event-audio"
         assert expired["selected_online"] is False
+
+
+def test_rabilink_audio_stream_keepalive_preserves_online_selection_without_fake_pcm(tmp_path: Path) -> None:
+    client, _tts, _asr = fixture(tmp_path, rabilink_audio_stale_timeout_seconds=0.3)
+    with client:
+        started = client.post("/v1/audio-streams/rabilink/start", json={
+            "stream_id": "phone-keepalive-audio",
+            "source_device_id": "phone-keepalive",
+            "route_profile_id": "mobile-main",
+            "session_id": "phone-keepalive",
+        })
+        assert started.status_code == 200
+        time.sleep(0.2)
+        kept_alive = client.post(
+            "/v1/audio-streams/rabilink/keepalive?streamId=phone-keepalive-audio",
+        )
+        assert kept_alive.status_code == 200
+        assert kept_alive.json()["received_bytes"] == 0
+        time.sleep(0.2)
+        snapshot = client.get("/v1/audio-streams").json()
+        assert snapshot["selected_online"] is True
+        assert snapshot["clients"][0]["received_bytes"] == 0
+        time.sleep(0.2)
+        assert client.get("/v1/audio-streams").json()["selected_online"] is False
 
 
 def test_host_playback_volume_api_persists_and_supports_put_and_patch(tmp_path: Path) -> None:

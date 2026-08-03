@@ -27,12 +27,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Comparator;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -41,7 +40,6 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class RabiGlassPcBackend {
     public static final String SOURCE_PHONE = "phone";
     public static final String SOURCE_GLASSES = "glasses";
-    private static final int MAX_AUDIO_STREAM_QUEUE_CHUNKS = 64;
     private static final int MAX_CONTROL_QUEUE_ITEMS = 2000;
     private static final int MAX_MEDIA_QUEUE_ITEMS = 500;
     private static final int EVENT_STREAM_READ_TIMEOUT_MS = 45_000;
@@ -74,12 +72,9 @@ public final class RabiGlassPcBackend {
 
     private final ScheduledExecutorService uploadExecutor = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService eventExecutor = Executors.newSingleThreadExecutor();
-    private final ThreadPoolExecutor audioStreamExecutor = new ThreadPoolExecutor(
-            1, 1, 0L, TimeUnit.MILLISECONDS,
-            new ArrayBlockingQueue<>(MAX_AUDIO_STREAM_QUEUE_CHUNKS),
-            new ThreadPoolExecutor.AbortPolicy());
+    private final ScheduledExecutorService audioStreamExecutor = Executors.newSingleThreadScheduledExecutor();
     private final Object audioStreamQueueLock = new Object();
-    private final AtomicBoolean audioStreamOverflowRecoveryScheduled = new AtomicBoolean();
+    private final RabiSingleDrainGate audioStreamDrainGate = new RabiSingleDrainGate();
     private final AtomicBoolean eventLoopActive = new AtomicBoolean();
     private final AtomicBoolean eventReconnectRequested = new AtomicBoolean();
     private final AtomicLong audioStreamRecoveryGeneration = new AtomicLong();
@@ -112,6 +107,8 @@ public final class RabiGlassPcBackend {
     private int audioStreamChunkFailures;
     private boolean audioStreamRetryWaiting;
     private boolean audioBufferOverflowReported;
+    private volatile boolean audioStreamKeepaliveUnsupported;
+    private ScheduledFuture<?> audioStreamKeepaliveFuture;
     private int eventReconnectAttempt;
 
     public RabiGlassPcBackend(android.content.Context context, Listener listener) {
@@ -167,6 +164,9 @@ public final class RabiGlassPcBackend {
     }
 
     public void configure(String baseUrl, String token, String deviceId) {
+        if (!this.baseUrl.equals(trimSlash(baseUrl)) || !this.token.equals(clean(token))) {
+            audioStreamKeepaliveUnsupported = false;
+        }
         this.baseUrl = trimSlash(baseUrl);
         this.token = clean(token);
         this.deviceId = clean(deviceId).isEmpty() ? "rabi-glass" : clean(deviceId);
@@ -196,6 +196,7 @@ public final class RabiGlassPcBackend {
     public void stop() {
         running = false;
         networkWakeGate.close();
+        cancelAudioStreamKeepalive();
         HttpURLConnection current = eventConnection;
         if (current != null) current.disconnect();
         enqueueAudioControl(this::stopActiveAudioStream);
@@ -207,7 +208,8 @@ public final class RabiGlassPcBackend {
     public void beginAudioStream(String sourceDeviceKind) {
         String source = normalizedSourceKind(sourceDeviceKind);
         String route = routeProfileId();
-        enqueueAudioChunk(() -> beginOrResumeAudioStream(source, route));
+        updateDesiredAudioStream(source, route);
+        requestAudioStreamDrain();
     }
 
     public void streamPcmFromSource(byte[] pcm, String sourceDeviceKind) {
@@ -215,7 +217,15 @@ public final class RabiGlassPcBackend {
         if (copy.length == 0) return;
         String source = normalizedSourceKind(sourceDeviceKind);
         String route = routeProfileId();
-        enqueueAudioChunk(() -> appendAudioStream(copy, source, route));
+        updateDesiredAudioStream(source, route);
+        int droppedBytes = audioUploadBuffer.append(copy);
+        if (droppedBytes > 0 && !audioBufferOverflowReported) {
+            audioBufferOverflowReported = true;
+            listener.onError("音频流离线缓冲已满，已丢弃过期 PCM，保留当前待确认块和最新音频");
+        }
+        if (activeAudioStreamId.isEmpty() || audioUploadBuffer.ready()) {
+            requestAudioStreamDrain();
+        }
     }
 
     public void onNetworkAvailable() {
@@ -227,9 +237,10 @@ public final class RabiGlassPcBackend {
     public void onNetworkUnavailable() {
         networkWakeGate.setAvailable(false);
         audioStreamRecoveryGeneration.incrementAndGet();
+        cancelAudioStreamKeepalive();
         HttpURLConnection current = eventConnection;
         if (current != null) current.disconnect();
-        enqueueAudioChunk(() -> {
+        enqueueAudioControl(() -> {
             audioStreamRetryWaiting = true;
             listener.onStatus("网络已断开 · 当前待确认 PCM 将在联网后自动续传");
         });
@@ -240,59 +251,34 @@ public final class RabiGlassPcBackend {
     }
 
     private void enqueueAudioControl(Runnable command) {
-        synchronized (audioStreamQueueLock) {
-            if (audioStreamExecutor.isShutdown()) return;
-            audioStreamExecutor.getQueue().clear();
-            try {
-                audioStreamExecutor.execute(command);
-            } catch (RejectedExecutionException ignored) {
-            }
-        }
-    }
-
-    private void enqueueAudioChunk(Runnable command) {
-        synchronized (audioStreamQueueLock) {
-            if (audioStreamExecutor.isShutdown()) return;
-            try {
-                audioStreamExecutor.execute(command);
-                return;
-            } catch (RejectedExecutionException ignored) {
-                if (!audioStreamOverflowRecoveryScheduled.compareAndSet(false, true)) return;
-                audioStreamExecutor.getQueue().clear();
-                try {
-                    audioStreamExecutor.execute(() -> {
-                        try {
-                            resetAudioStreamTransportForRetry();
-                            audioStreamRetryWaiting = true;
-                            listener.onError("音频流网络阻塞，已丢弃过期 PCM 并重新建立连接");
-                            if (networkWakeGate.isAvailable()) scheduleAudioStreamRecovery(0);
-                        } finally {
-                            audioStreamOverflowRecoveryScheduled.set(false);
-                        }
-                    });
-                } catch (RejectedExecutionException recoveryRejected) {
-                    audioStreamOverflowRecoveryScheduled.set(false);
-                }
-            }
-        }
-    }
-
-    private void appendAudioStream(byte[] pcm, String sourceDeviceKind, String routeProfileId) {
-        desiredAudioStreamSource = sourceDeviceKind;
-        desiredAudioStreamRoute = clean(routeProfileId);
-        int droppedBytes = audioUploadBuffer.append(pcm);
-        if (droppedBytes > 0 && !audioBufferOverflowReported) {
-            audioBufferOverflowReported = true;
-            listener.onError("音频流离线缓冲已满，已丢弃过期 PCM，保留当前待确认块和最新音频");
-        }
-        if (audioStreamRetryWaiting || !networkWakeGate.isAvailable()) return;
+        if (audioStreamExecutor.isShutdown()) return;
         try {
-            ensureAudioStream(sourceDeviceKind, routeProfileId);
-            if (!audioUploadBuffer.ready()) return;
-            flushAudioStreamChunk();
-        } catch (Throwable error) {
-            handleAudioStreamFailure(error);
+            audioStreamExecutor.execute(command);
+        } catch (RejectedExecutionException ignored) {
         }
+    }
+
+    private void updateDesiredAudioStream(String sourceDeviceKind, String routeProfileId) {
+        synchronized (audioStreamQueueLock) {
+            desiredAudioStreamSource = sourceDeviceKind;
+            desiredAudioStreamRoute = clean(routeProfileId);
+        }
+    }
+
+    private void requestAudioStreamDrain() {
+        if (audioStreamExecutor.isShutdown()) return;
+        audioStreamDrainGate.request(audioStreamExecutor, this::drainAudioStream);
+    }
+
+    private void drainAudioStream() {
+        String source;
+        String route;
+        synchronized (audioStreamQueueLock) {
+            source = desiredAudioStreamSource;
+            route = desiredAudioStreamRoute;
+        }
+        if (source.isEmpty()) return;
+        beginOrResumeAudioStream(source, route);
     }
 
     private void beginOrResumeAudioStream(String sourceDeviceKind, String routeProfileId) {
@@ -306,7 +292,7 @@ public final class RabiGlassPcBackend {
             boolean recovering = audioStreamRetryWaiting || audioUploadBuffer.hasData();
             audioStreamRetryWaiting = false;
             ensureAudioStream(desiredAudioStreamSource, desiredAudioStreamRoute);
-            while (audioUploadBuffer.hasData()) flushAudioStreamChunk();
+            while (audioUploadBuffer.ready()) flushAudioStreamChunk();
             if (recovering) listener.onStatus("网络已恢复 · 待确认 PCM 已续传并追上实时流");
         } catch (Throwable error) {
             handleAudioStreamFailure(error);
@@ -322,15 +308,13 @@ public final class RabiGlassPcBackend {
     }
 
     private void scheduleAudioStreamRecovery(long delayMs) {
-        if (uploadExecutor.isShutdown()) return;
+        if (audioStreamExecutor.isShutdown()) return;
         long generation = audioStreamRecoveryGeneration.incrementAndGet();
         try {
-            uploadExecutor.schedule(() -> {
+            audioStreamExecutor.schedule(() -> {
                 if (generation != audioStreamRecoveryGeneration.get() || !networkWakeGate.isAvailable()) return;
-                enqueueAudioChunk(() -> {
-                    if (generation != audioStreamRecoveryGeneration.get() || desiredAudioStreamSource.isEmpty()) return;
-                    beginOrResumeAudioStream(desiredAudioStreamSource, desiredAudioStreamRoute);
-                });
+                if (generation != audioStreamRecoveryGeneration.get() || desiredAudioStreamSource.isEmpty()) return;
+                audioStreamDrainGate.request(audioStreamExecutor, this::drainAudioStream);
             }, Math.max(0, delayMs), TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException ignored) {
         }
@@ -356,7 +340,7 @@ public final class RabiGlassPcBackend {
             desiredAudioStreamRoute = route;
         }
         String suffix = SOURCE_GLASSES.equals(sourceDeviceKind) ? "glasses" : "phone";
-        String streamId = safeStreamId(deviceId + "-" + suffix + "-audio-" + UUID.randomUUID());
+        String streamId = safeStreamId(deviceId + "-" + suffix + "-audio");
         boolean glasses = SOURCE_GLASSES.equals(sourceDeviceKind);
         String deviceModel = glasses ? "" : clean(Build.MODEL);
         String deviceLabel = deviceLabel(deviceId, glasses, deviceModel);
@@ -371,16 +355,17 @@ public final class RabiGlassPcBackend {
                 .put("proactivity_preference", settings.proactivityPreference.wireValue)
                 .put("route_profile_id", route)
                 .put("session_id", deviceId);
-        jsonRequest("POST", "/api/rabilink/speech/v1/audio-streams/rabilink/start",
+        JSONObject streamState = jsonRequest("POST", "/api/rabilink/speech/v1/audio-streams/rabilink/start",
                 "application/json; charset=utf-8", body.toString().getBytes(StandardCharsets.UTF_8), 60000);
         activeAudioStreamId = streamId;
         activeAudioStreamSource = sourceDeviceKind;
         activeAudioStreamRoute = route;
-        audioStreamSequence = 0;
-        pendingAudioSequence = audioUploadBuffer.hasPending() ? 1 : 0;
+        audioStreamSequence = resumeAudioStreamSequence(findAudioStreamSequence(streamState, streamId));
+        pendingAudioSequence = nextPendingAudioSequence(audioStreamSequence, audioUploadBuffer.hasPending());
         audioStreamChunkFailures = 0;
         audioStreamRetryWaiting = false;
         audioBufferOverflowReported = false;
+        armAudioStreamKeepalive();
         listener.onStatus("手机音频流已接入 Rabi PC");
     }
 
@@ -393,6 +378,25 @@ public final class RabiGlassPcBackend {
         String model = clean(deviceModel);
         if (!model.isEmpty()) base += " · " + model;
         return suffix.isEmpty() ? base : base + " · " + suffix;
+    }
+
+    private static long findAudioStreamSequence(JSONObject streamState, String streamId) {
+        JSONArray clients = streamState == null ? null : streamState.optJSONArray("clients");
+        for (int index = 0; clients != null && index < clients.length(); index++) {
+            JSONObject client = clients.optJSONObject(index);
+            if (client != null && clean(streamId).equals(clean(client.optString("id", "")))) {
+                return client.optLong("last_sequence", 0L);
+            }
+        }
+        return 0L;
+    }
+
+    static long resumeAudioStreamSequence(long serverSequence) {
+        return Math.max(0L, serverSequence);
+    }
+
+    static long nextPendingAudioSequence(long serverSequence, boolean hasPending) {
+        return hasPending ? resumeAudioStreamSequence(serverSequence) + 1L : 0L;
     }
 
     private void flushAudioStreamChunk() throws Exception {
@@ -411,9 +415,63 @@ public final class RabiGlassPcBackend {
         pendingAudioSequence = 0;
         audioStreamChunkFailures = 0;
         audioStreamRetryWaiting = false;
+        armAudioStreamKeepalive();
+    }
+
+    static long audioStreamKeepaliveDelayMs() {
+        return 5_000L;
+    }
+
+    private synchronized void armAudioStreamKeepalive() {
+        cancelAudioStreamKeepaliveLocked();
+        if (audioStreamExecutor.isShutdown() || activeAudioStreamId.isEmpty()
+                || audioStreamKeepaliveUnsupported || !networkWakeGate.isAvailable()) return;
+        try {
+            audioStreamKeepaliveFuture = audioStreamExecutor.schedule(
+                    () -> enqueueAudioControl(this::sendAudioStreamKeepalive),
+                    audioStreamKeepaliveDelayMs(),
+                    TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException ignored) {
+        }
+    }
+
+    private void sendAudioStreamKeepalive() {
+        if (activeAudioStreamId.isEmpty() || !networkWakeGate.isAvailable()) return;
+        String streamId = activeAudioStreamId;
+        try {
+            request("POST",
+                    "/api/rabilink/speech/v1/audio-streams/rabilink/keepalive?streamId=" + encode(streamId),
+                    "application/octet-stream", new byte[0], 60_000);
+            audioStreamChunkFailures = 0;
+            audioStreamRetryWaiting = false;
+            if (streamId.equals(activeAudioStreamId)) armAudioStreamKeepalive();
+        } catch (Throwable error) {
+            if (shouldDisableAudioStreamKeepalive(error)) {
+                audioStreamKeepaliveUnsupported = true;
+                cancelAudioStreamKeepalive();
+                listener.onStatus("当前 Relay 版本不支持音频保活，继续按 PCM 事件自动恢复");
+                return;
+            }
+            handleAudioStreamFailure(error);
+        }
+    }
+
+    static boolean shouldDisableAudioStreamKeepalive(Throwable error) {
+        return clean(error == null ? "" : error.getMessage()).startsWith("Relay HTTP 404:");
+    }
+
+    private synchronized void cancelAudioStreamKeepalive() {
+        cancelAudioStreamKeepaliveLocked();
+    }
+
+    private void cancelAudioStreamKeepaliveLocked() {
+        ScheduledFuture<?> current = audioStreamKeepaliveFuture;
+        audioStreamKeepaliveFuture = null;
+        if (current != null) current.cancel(false);
     }
 
     private void stopActiveAudioStream() {
+        cancelAudioStreamKeepalive();
         if (activeAudioStreamId.isEmpty()) {
             resetAudioStream();
             return;
@@ -431,6 +489,7 @@ public final class RabiGlassPcBackend {
     }
 
     private void resetAudioStream() {
+        cancelAudioStreamKeepalive();
         activeAudioStreamId = "";
         activeAudioStreamSource = "";
         activeAudioStreamRoute = "";
@@ -446,6 +505,7 @@ public final class RabiGlassPcBackend {
     }
 
     private void resetAudioStreamTransportForRetry() {
+        cancelAudioStreamKeepalive();
         activeAudioStreamId = "";
         activeAudioStreamSource = "";
         activeAudioStreamRoute = "";
@@ -890,9 +950,11 @@ public final class RabiGlassPcBackend {
             } catch (Throwable error) {
                 int failures = preferences.getInt("replyFailures:" + deviceId + ":" + messageId, 0) + 1;
                 preferences.edit().putInt("replyFailures:" + deviceId + ":" + messageId, failures).apply();
-                if (failures < 3) throw error;
-                persistDeferredReply(item, failures, System.currentTimeMillis() + 30000);
-                listener.onError("该回复连续失败 3 次，已让出队首并保留重试");
+                if (!shouldDeferReplyDelivery(failures)) throw error;
+                long retryDelayMs = deferredReplyRetryDelayMs(failures);
+                persistDeferredReply(item, failures, System.currentTimeMillis() + retryDelayMs);
+                requestDrain(retryDelayMs);
+                listener.onStatus(deferredReplyNotice());
             }
         }
         if (!next.isEmpty()) preferences.edit().putString("cursor:" + deviceId, next).apply();
@@ -923,19 +985,43 @@ public final class RabiGlassPcBackend {
         }
         JSONArray attachments = materializeIncomingAttachments(sourceAttachments, messageId);
         ReplyDeliveryResult delivery = listener.onReply(messageId, routeProfileId, text, pcm, attachments);
-        if (delivery == null || !delivery.delivered) throw new IllegalStateException("回复尚未被当前输出设备确认");
-        queueMessageReceipt(item, delivery.outputDeviceKind, "delivered", "", !delivery.playbackRequested);
-        if (delivery.playbackRequested && !delivery.played) {
+        if (shouldRetryReplyDelivery(delivery)) throw new IllegalStateException("回复尚未被当前输出设备确认");
+        // Text/attachments reaching the local ledger is the delivery terminal.
+        // Playback is a separate observable outcome and must never re-deliver
+        // the already visible reply.
+        queueMessageReceipt(item, delivery.outputDeviceKind, "delivered", "", true);
+        boolean playbackFailed = delivery.playbackRequested && !delivery.played;
+        if (playbackFailed) {
             queueMessageReceipt(item, delivery.outputDeviceKind, "playback_failed",
                     delivery.playbackFailure.isEmpty() ? "输出设备未确认播放完成" : delivery.playbackFailure, false);
             requestDrain(0);
-            throw new IllegalStateException(delivery.playbackFailure.isEmpty() ? "输出设备未确认播放完成" : delivery.playbackFailure);
         }
         if (delivery.played) queueMessageReceipt(item, delivery.outputDeviceKind, "played", "", true);
         markDelivered(messageId);
         cleanupCompletedReply(messageId);
         requestDrain(0);
-        listener.onStatus("Rabi 回复已投递到移动设备消息端");
+        listener.onStatus(playbackFailed ? playbackFailureNotice() : "Rabi 回复已投递到移动设备消息端");
+    }
+
+    static boolean shouldRetryReplyDelivery(ReplyDeliveryResult delivery) {
+        return delivery == null || !delivery.delivered;
+    }
+
+    static boolean shouldDeferReplyDelivery(int failures) {
+        return failures >= 3;
+    }
+
+    static long deferredReplyRetryDelayMs(int failures) {
+        if (failures <= 3) return 30_000L;
+        return Math.min(10L * 60L * 1000L, 30_000L * failures);
+    }
+
+    static String deferredReplyNotice() {
+        return "回复暂未送达 · 连续尝试 3 次后已暂缓，网络恢复后自动重试";
+    }
+
+    static String playbackFailureNotice() {
+        return "回复已收到 · 语音播放未完成，可在会话中点按重播";
     }
 
     private void cleanupCompletedReply(String messageId) {
@@ -1030,7 +1116,7 @@ public final class RabiGlassPcBackend {
             try { deliverReply(item); }
             catch (Throwable error) {
                 int failures = item.optInt("failures", 3) + 1;
-                persistDeferredReply(item, failures, System.currentTimeMillis() + Math.min(10 * 60 * 1000L, 30000L * failures));
+                persistDeferredReply(item, failures, System.currentTimeMillis() + deferredReplyRetryDelayMs(failures));
             }
             } catch (Throwable error) { listener.onError(shortError(error)); }
         }

@@ -47,6 +47,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Architecture](architecture_en.md) — **Current fact**. Product boundaries, the Codex Desktop owner, current Outbox, and future Action Queue are separated.
 - [Code architecture](code-architecture_en.md) — **Current fact**. Backend, Manager, endpoint, Role Knowledge, WebGUI, and desktop module map.
 - [Project function map](project-function-map_en.md) — **Current fact**. Locate behavior by maturity, side effect, API, and code owner.
+- [Pull request security gates](maintainer-security-gates_en.md) — **Current maintainer guide** for secret scanning, production dependency auditing, CodeQL, least privilege, and merge protection.
 - [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — **Current guide** for the Node/WebGUI baseline and Qt/Windows convenience layer.
 - [Manager runtime resilience and incident evidence](manager-runtime-resilience_en.md) — **Current guide** for crash logs, single-instance protection, non-fatal persona-index persistence, watchdog backoff, and soak acceptance.
 - [Unattended NapCat](napcat-unattended_en.md) — **Current guide** for login state, quick login, Manager recovery, and supervision boundaries.

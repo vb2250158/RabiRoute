@@ -53,6 +53,38 @@ test("speech status exposes only normalized runtime capabilities", async () => {
   assert.equal(result.speakerIdentity?.storesRawEnrollmentAudio, false);
 });
 
+test("speech status probes health and capabilities concurrently", async () => {
+  let capabilityRequested = false;
+  let releaseHealth = (_response: Response) => {};
+  const healthResponse = new Promise<Response>(resolve => {
+    releaseHealth = resolve;
+  });
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/health")) return healthResponse;
+    capabilityRequested = true;
+    return new Response(JSON.stringify({ relay_safe: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+
+  const inspection = inspectLocalSpeechService("http://127.0.0.1:8781", { fetchImpl });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const capabilityStartedBeforeHealthResolved = capabilityRequested;
+  releaseHealth(new Response(JSON.stringify({
+    ok: true,
+    service: "RabiSpeech",
+    providers: { tts: {}, asr: {}, defaults: {} }
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" }
+  }));
+  await inspection;
+
+  assert.equal(capabilityStartedBeforeHealthResolved, true);
+});
+
 test("speech status keeps offline state inspectable", async () => {
   const fetchImpl = (async () => { throw new Error("connect refused"); }) as typeof fetch;
   const result = await inspectLocalSpeechService("http://127.0.0.1:8781", { fetchImpl });

@@ -237,7 +237,7 @@ export async function runSpeechIngressSeparationAcceptance(
     const ingress = new SpeechIngressStore(ingressDir);
     ingress.append({
       recordId: "acceptance-pc-record",
-      text: "PC microphone acceptance phrase.",
+      text: "Please verify the PC microphone acceptance phrase.",
       sessionId: "acceptance-pc-session",
       messageAdapterType: "speech",
       routeProfileId: "acceptance-pc-route",
@@ -259,9 +259,11 @@ export async function runSpeechIngressSeparationAcceptance(
         id: 0,
         start: 0,
         end: 2,
-        text: "PC microphone acceptance phrase.",
+        text: "Please verify the PC microphone acceptance phrase.",
         voiceprintId: "acceptance-pc-voiceprint",
         speakerClusterId: "acceptance-pc-voiceprint",
+        speakerDecision: "voiceprint_auto_match",
+        words: [{ word: "Please verify the PC microphone acceptance phrase", probability: 0.96 }],
         speakerName: "Host Guess",
         speakerId: "host-profile",
         speakerSuggestionName: "Host Candidate",
@@ -270,7 +272,7 @@ export async function runSpeechIngressSeparationAcceptance(
     });
     ingress.append({
       recordId: "acceptance-mobile-record",
-      text: "Mobile audio acceptance phrase.",
+      text: "Please verify the mobile audio acceptance phrase.",
       sessionId: "acceptance-mobile-session",
       messageAdapterType: "rabilink",
       routeProfileId: "acceptance-mobile-route",
@@ -295,9 +297,11 @@ export async function runSpeechIngressSeparationAcceptance(
         id: 0,
         start: 0,
         end: 3,
-        text: "Mobile audio acceptance phrase.",
+        text: "Please verify the mobile audio acceptance phrase.",
         voiceprintId: "acceptance-mobile-voiceprint",
         speakerClusterId: "acceptance-mobile-voiceprint",
+        speakerDecision: "voiceprint_auto_match",
+        words: [{ word: "Please verify the mobile audio acceptance phrase", probability: 0.95 }],
         speakerName: "Host Guess",
         speakerId: "host-profile",
         speakerSuggestionName: "Host Candidate",

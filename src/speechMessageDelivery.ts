@@ -70,6 +70,21 @@ export function speechRecordedProcessOutcome(recordedRoutes: number, reason: str
   };
 }
 
+/** The host ingress record is the quarantine source of truth; unsafe ASR is not copied to persona ledgers. */
+export function speechQuarantinedProcessOutcome(reason: string, auditDetail?: string): SpeechProcessOutcome {
+  return {
+    exitCode: SPEECH_EXIT_RECORDED,
+    result: {
+      status: "recorded",
+      reason,
+      detail: [
+        "Transcript retained in the host speech ingress audit store without Agent or persona-memory delivery.",
+        auditDetail?.trim()
+      ].filter(Boolean).join(" ")
+    }
+  };
+}
+
 export function formatSpeechProcessResult(result: SpeechProcessResult): string {
   return `${SPEECH_PROCESS_RESULT_MARKER}${JSON.stringify(result)}`;
 }

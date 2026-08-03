@@ -86,6 +86,7 @@ const speechProxyPaths = new Map([
   ["POST /v1/audio/transcriptions", "/v1/audio/transcriptions"],
   ["POST /v1/audio-streams/rabilink/start", "/v1/audio-streams/rabilink/start"],
   ["POST /v1/audio-streams/rabilink/chunk", "/v1/audio-streams/rabilink/chunk"],
+  ["POST /v1/audio-streams/rabilink/keepalive", "/v1/audio-streams/rabilink/keepalive"],
   ["POST /v1/audio-streams/rabilink/stop", "/v1/audio-streams/rabilink/stop"],
   ["POST /messages", "/api/speech/messages"],
   ["POST /api/v1/services/audio/tts/SpeechSynthesizer", "/api/v1/services/audio/tts/SpeechSynthesizer"],
@@ -5555,6 +5556,7 @@ const server = http.createServer(async (req, res) => {
       || url.pathname === "/api/rabilink/mobile/proofs"
       || url.pathname === "/api/rabilink/mobile/target"
       || url.pathname === "/api/rabilink/mobile/webgui"
+      || url.pathname.startsWith("/api/rabilink/mobile/personas/")
       || url.pathname.startsWith("/api/rabilink/mobile/routes")) {
       return await handleMobileApi(req, url, res, body);
     }

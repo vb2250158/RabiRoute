@@ -178,6 +178,37 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
     assert.equal(chunkResult.status, 200);
     assert.equal((await chunkResult.json()).sequence, 1);
 
+    const pendingKeepalive = fetch(`${baseUrl}/api/rabilink/speech/v1/audio-streams/rabilink/keepalive?streamId=phone-a-audio`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream", "x-rabilink-token": token },
+      body: Buffer.alloc(0)
+    });
+    let claimedKeepalive;
+    for (let attempt = 0; attempt < 50 && !claimedKeepalive; attempt += 1) {
+      const response = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
+        headers: { "x-rabilink-token": token }
+      });
+      claimedKeepalive = (await response.json()).requests?.[0];
+      if (!claimedKeepalive) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(claimedKeepalive.path, "/v1/audio-streams/rabilink/keepalive?streamId=phone-a-audio");
+    assert.equal(Buffer.from(claimedKeepalive.bodyBase64, "base64").length, 0);
+    await fetch(`${baseUrl}/worker/speech-requests/${encodeURIComponent(claimedKeepalive.id)}/response`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-rabilink-token": token },
+      body: JSON.stringify({
+        deviceId: "pc-a",
+        deviceGuid: "guid-a",
+        ok: true,
+        statusCode: 200,
+        headers: { "content-type": "application/json" },
+        bodyBase64: Buffer.from(JSON.stringify({ ok: true, received_bytes: 0 })).toString("base64")
+      })
+    });
+    const keepaliveResult = await pendingKeepalive;
+    assert.equal(keepaliveResult.status, 200);
+    assert.equal((await keepaliveResult.json()).received_bytes, 0);
+
     const pendingStop = fetch(`${baseUrl}/api/rabilink/speech/v1/audio-streams/rabilink/stop`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-rabilink-token": token },

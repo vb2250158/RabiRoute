@@ -1626,9 +1626,14 @@ function childCommand(extraArgs: string[] = []) {
 }
 
 function reconcileSpeechMicrophone(reason: string): void {
-  void speechControl.reconcileMicrophone().catch(error => {
-    console.warn(`Speech microphone reconciliation failed after ${reason}:`, error instanceof Error ? error.message : String(error));
-  });
+  void speechRuntimeControl.start()
+    .then(() => speechControl.reconcileMicrophone())
+    .catch(error => {
+      console.warn(
+        `Speech runtime/microphone reconciliation failed after ${reason}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    });
 }
 
 function resolveWingetCopilot(): string | null {

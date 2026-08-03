@@ -20,9 +20,11 @@ import {
 } from "./history.js";
 import { SpeechIngressStore } from "./speechIngressStore.js";
 import { createSpeechIngressForwarding } from "./routing/speechIngressForwarding.js";
+import { decideSpeechHotDeliveryQuality } from "./routing/speechHotDeliveryQuality.js";
 import { decideSpeechPush } from "./routing/speechPushPolicy.js";
 import {
   speechForwardProcessOutcome,
+  speechQuarantinedProcessOutcome,
   speechRecordedProcessOutcome,
   writeSpeechProcessResult
 } from "./speechMessageDelivery.js";
@@ -285,6 +287,22 @@ if (speechMessageArg) {
   const adapterType = record.adapterType || ingress.messageAdapterType;
   try {
     appendVoiceTranscriptEventForAdapter(adapterType, record);
+    const route = requestedRouteProfileId
+      ? config.routeProfiles.find((item) => item.id === requestedRouteProfileId)
+      : config.routeProfiles[0];
+    const quality = decideSpeechHotDeliveryQuality(ingress, route?.speechTriggerKeywords);
+    if (!quality.shouldNotifyAgent) {
+      const audit = JSON.stringify({
+        averageWordConfidence: quality.averageWordConfidence,
+        matchedWakeWord: quality.matchedWakeWord,
+        explicitInstruction: quality.explicitInstruction,
+        speakerDecisions: quality.speakerDecisions
+      });
+      const outcome = speechQuarantinedProcessOutcome(quality.reason, `Quality gate: ${audit}`);
+      console.log(`RabiRoute speech message quarantined: ${messageId} reason=${quality.reason}`);
+      writeSpeechProcessResult(outcome.result);
+      process.exit(outcome.exitCode);
+    }
     if (routeKind === "rabilink") {
       const result = await forwardMessageAndWait(routeKind, record);
       const summary = deliverySummary(result);
@@ -299,9 +317,6 @@ if (speechMessageArg) {
       writeSpeechProcessResult(outcome.result);
       process.exit(outcome.exitCode);
     }
-    const route = requestedRouteProfileId
-      ? config.routeProfiles.find((item) => item.id === requestedRouteProfileId)
-      : config.routeProfiles[0];
     const push = decideSpeechPush(text, route?.speechPushMode, route?.speechTriggerKeywords);
     if (!push.shouldNotifyAgent) {
       const recordedRoutes = recordMessageContextOnly(routeKind, record);

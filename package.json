@@ -23,6 +23,7 @@
     "record:active-intelligence:physical": "node scripts/record-active-intelligence-physical-observation.mjs",
     "check:built-manager": "node scripts/test-built-manager-readonly.mjs",
     "check:rabispeech:tts-loop": "node scripts/test-rabispeech-tts-loop.mjs",
+    "check:webgui:speech-performance": "node scripts/check-speech-webgui-performance.mjs",
     "check:speech-ingress-separation": "node scripts/test-speech-ingress-separation.mjs",
     "export:speech-transcript": "node scripts/export-speech-transcript.mjs",
     "check:persona-sync:dual-node": "node scripts/test-persona-sync-dual-node.mjs",

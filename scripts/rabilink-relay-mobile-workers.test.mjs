@@ -77,6 +77,11 @@ test("mobile PC picker exposes only processing workers", async () => {
   try {
     await waitForHealth(baseUrl, child);
     const { token, cookie } = await createApp(baseUrl);
+    const avatarWithoutWorker = await fetch(`${baseUrl}/api/rabilink/mobile/personas/YeYu/avatar?v=test-version`, {
+      headers: { "x-rabilink-token": token }
+    });
+    assert.equal(avatarWithoutWorker.status, 409);
+    assert.match(String((await avatarWithoutWorker.json()).message || ""), /No Rabi PC is selected/);
     subscriptions.push(await subscribe(baseUrl, token, {
       deviceId: "elysia-pc",
       deviceGuid: "guid-elysia",

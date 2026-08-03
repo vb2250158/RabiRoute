@@ -361,6 +361,7 @@ $remoteSetup = @"
 `$ErrorActionPreference = "Stop"
 `$remoteRoot = "$RemoteRoot"
 `$zipPath = "C:\Windows\Temp\rabilink-relay.zip"
+`$stagingRoot = Join-Path `$env:TEMP ("rabilink-relay-stage-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path `$remoteRoot | Out-Null
 `$backupRoot = Join-Path `$remoteRoot ("backups\code-" + [DateTime]::Now.ToString("yyyyMMdd-HHmmss"))
 New-Item -ItemType Directory -Force -Path `$backupRoot | Out-Null
@@ -373,7 +374,17 @@ foreach (`$name in @("rabilink-relay-server.mjs", "rabilink-device-log-store.mjs
 if (Test-Path -LiteralPath (Join-Path `$remoteRoot "ribiwebgui")) {
     Copy-Item -LiteralPath (Join-Path `$remoteRoot "ribiwebgui") -Destination (Join-Path `$backupRoot "ribiwebgui") -Recurse -Force
 }
-Expand-Archive -Path `$zipPath -DestinationPath `$remoteRoot -Force
+try {
+    New-Item -ItemType Directory -Path `$stagingRoot | Out-Null
+    Expand-Archive -Path `$zipPath -DestinationPath `$stagingRoot
+    Get-ChildItem -LiteralPath `$stagingRoot -Force | ForEach-Object {
+        Copy-Item -LiteralPath `$_.FullName -Destination `$remoteRoot -Recurse -Force
+    }
+} finally {
+    if (Test-Path -LiteralPath `$stagingRoot) {
+        Remove-Item -LiteralPath `$stagingRoot -Recurse -Force
+    }
+}
 New-Item -ItemType Directory -Force -Path "`$remoteRoot\logs" | Out-Null
 
 if (Get-Service W3SVC -ErrorAction SilentlyContinue) {
