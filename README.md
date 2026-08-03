@@ -21,30 +21,27 @@ English | <a href="./README_zh.md">简体中文</a>
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute is an **agent-neutral message gateway, policy router, and action gate**. It turns events from chat, webhooks, schedules, voice, and devices into structured work for the right agent, workflow, script, or human queue.
+RabiRoute is an **agent-neutral message gateway, policy router, and action gate**. It turns events from chat, webhooks, schedules, voice, and devices into structured work for the right handler.
 
 Handlers solve the task. RabiRoute decides **where it goes, which portable context travels with it, whether an outbound action is allowed, and where the result returns**.
 
-[Highlights](#highlights) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Current capabilities](#current-capabilities) · [Documentation](#documentation)
+[Use cases](#what-you-can-build) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Capabilities](#what-works-today) · [Documentation](#learn-more)
 
-## Highlights
+## What you can build
 
-- 🔌 **Bring many signals into one routing layer.** Verified inputs include NapCat / OneBot, heartbeat, and the built-in role panel; other platforms and devices can use dedicated or experimental adapters.
-- 🧭 **Route by policy, not hard-wired integrations.** Route profiles, personas, notification rules, schedules, keywords, regexes, and reply context decide which handler receives each event.
-- 🧳 **Send context that can travel.** A persona-scoped bidirectional conversation ledger records inbound and outbound messages; `AgentPacket` injects only the configured recent slice for the current persona, logical endpoint, and conversation.
-- 🖥️ **Operate from a local control plane.** The Node.js Manager and RibiWebGUI manage routes, adapters, personas, runtime status, logs, diagnostics, and process lifecycle.
-- 🛡️ **Keep outbound actions explicit.** Replies pass through route-specific Outbox policy instead of bypassing the gateway, with observable `sent`, `draft`, `blocked`, or `failed` results.
-- 🔍 **Keep evidence you can inspect and replay.** JSONL records cover inbound events, packets, deliveries, heartbeats, adapter activity, replies, and delivery replay.
+- 💬 **Chat-to-Agent routes.** Send QQ, role-panel, or scheduled events to a selected handler. Codex is the first end-to-end verified handler.
+- ⏱️ **Proactive routines.** Combine heartbeat schedules, persona rules, and project context to wake the right Desktop task for inspection, follow-up, or maintenance.
+- 🧳 **Context-aware handoffs.** Keep a persona-scoped conversation ledger, build focused `AgentPacket` payloads, and return through route-owned Outbox policies.
 
-> RabiRoute is in active `0.1.x` development. Check the [capability and maturity matrix](docs/current-capabilities_en.md) before relying on an external platform or device path.
+The router stays independent from the handler. You can change the Agent, workflow, script, or human queue without giving it ownership of channel credentials or gateway policy.
 
 ## Quick start
 
 ### Windows installer
 
-Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest). The installer includes the Node.js runtime, Manager, RibiWebGUI, production dependencies, and tray app. It installs per user, creates a Start menu entry, and keeps local `data/` writable and outside the packaged resources.
+Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest). It includes Node.js, Manager, RibiWebGUI, production dependencies, and the tray app.
 
-The release page also provides a portable ZIP and `SHA256SUMS.txt`. Windows packages are currently unsigned, so SmartScreen may show an unknown-publisher warning; verify the checksum before running the installer.
+The release also provides a portable ZIP and `SHA256SUMS.txt`. Windows packages are currently unsigned, so verify the checksum before accepting a SmartScreen unknown-publisher warning.
 
 ### Source installation
 
@@ -58,19 +55,17 @@ npm run build
 npm run start:manager
 ```
 
-Open the local address `http://127.0.0.1:8790/` to enter RibiWebGUI. On first run, the Manager initializes a sanitized local configuration from `examples/data/` when no runtime data exists.
+Open [http://127.0.0.1:8790/](http://127.0.0.1:8790/). If no runtime data exists, Manager creates a sanitized local configuration from `examples/data/`.
 
-LAN access is disabled by default. From the local Console, enable **LAN WebGUI access** and generate an access key; after restarting Manager, another device can open one Route's Console at `http://<Rabi-PC-LAN-IP>:8790/#/routes/<Route-config-name>/overview?webgui_token=<key>`. Every Route-aware sidebar page has the same stable form: replace the final segment with `adapters`, `persona`, `knowledge`, `speech`, or `runtime`. Once Manager is actually listening on the LAN, a WebGUI opened locally through `localhost/127.0.0.1` automatically redirects to the preferred LAN IP while preserving the current Route and page; changing **Current Route** in the sidebar also immediately redirects the current Route-scoped page URL. `127.0.0.1` always means the device opening the browser, so it cannot be used from another phone or PC. The key protects Manager APIs, SSE, and private WebGUI resources; Windows Firewall may still need an explicit rule for port `8790`.
+Create your first Route:
 
-The selected Route's live speech page uses `http://127.0.0.1:8790/#/routes/<Route-config-name>/speech`. Its provider, model, and device status still comes from the current PC. The bundled [benchmark report](ribiwebgui/public/reports/rabispeech-model-benchmark.html) applies only to the test hardware identified in that report; see [Remote TTS / ASR](docs/user-guide/speech-api_en.md) when calling from another device.
+1. Open **Quick setup** and choose Heartbeat as the message input.
+2. Select Codex, then bind a project directory and a Desktop task.
+3. Save the Route, open **Log diagnostics**, and run one manual trigger.
 
-For the shortest verified path:
+> Success means the trigger completes and the selected Codex/ChatGPT Desktop task receives a RabiRoute message. This is a real delivery, not a side-effect-free preview.
 
-1. Open **Quick setup** and choose Heartbeat as the input.
-2. Select Codex, then bind the project directory and a Desktop task.
-3. Save the route, open **Log diagnostics**, and trigger one message.
-
-External adapters still require their own accounts and local configuration. Continue with [Getting started](docs/getting-started_en.md) when you are ready to connect NapCat, WeCom, RabiLink, or another source.
+Continue with the [first Route guide](docs/user-guide/first-route_en.md). LAN access, external adapters, and remote speech each have separate setup and security steps.
 
 ## How it works
 
@@ -96,59 +91,59 @@ flowchart TB
     H -. "audit + result" .-> C
 ```
 
-Each route keeps ingress, policy, portable context, handler delivery, and outbound control separate. A handler can change without taking ownership of channel credentials or redefining gateway behavior.
+Each Route separates ingress, policy, portable context, handler delivery, and outbound control. Events and delivery outcomes remain inspectable instead of disappearing inside one integration.
 
-## Current capabilities
+## What works today
 
-| Area | Implemented capability |
+| Area | Current capability |
 | --- | --- |
-| Message inputs | Verified: NapCat / OneBot, Heartbeat, and the built-in role panel. Experimental: Remote Agent, the RabiSpeech message endpoint, XiaoAI, RabiLink, generic Webhook, WeCom, and a developer-only personal-Weixin OpenClaw/iLink prototype. FenneNote is retired and remains readable only for legacy configuration compatibility. Manual trigger is a Manager action, not an adapter. |
-| Routing | Route profiles, persona-owned rules, direct `@`, reply chains, private messages, keywords, regexes, schedules, and per-route templates |
-| Context | Persona-scoped bidirectional conversation ledgers, separate `0–200` auto-injection limits for ordinary logical endpoints (default `12`), history-free heartbeat packets, focused plan/memory/skill summaries, compact persona instructions, reply context, and safe attachment metadata |
-| Handlers | Verified: Codex. Experimental: Copilot CLI and AstrBot. Manual handoff: Marvis. |
-| Control plane | Node.js Manager and RibiWebGUI for route lifecycle, configuration, status, logs, personas, and diagnostics |
-| Local speech | Experimental RabiSpeech TTS/ASR. One host VAD/ASR chain records rich source and voiceprint evidence, while logical endpoints stay separate: host/ordinary remote microphones reach `speech` Routes; Android phone/glasses continuously stream PCM into the same host pipeline but reach `rabilink` Routes. Android does not segment utterances or run ASR/voiceprint logic. Mobile recovery is event-first with one cursor catch-up query; while already known offline, a five-minute OS-connectivity safety check covers vendor callback loss without polling Relay or business data. Reliable text/media/receipt facts persist until acknowledged, while bounded PCM drops obsolete audio to catch the live stream. `delivered` is distinct from device-owned AudioTrack-marker `played`. Phone replies default to the originating device; persona TTS and the host FIFO remain on RabiSpeech. When a routed user request asks who spoke across a day or time range, AgentPacket supplies the current persona's classification/query/update contract without letting the host decide identity. |
-| Persona synchronization | Experimental same-application PC discovery and persona-folder merge. A dedicated token-protected LAN data-plane listener is preferred; restricted Relay transit is the fallback, without exposing the full Manager/WebGUI for P2P. JSONL is union-merged, ordinary files fast-forward from a common base, known-base one-sided deletions propagate, and unsafe divergence retains conflict evidence. A persistent event-driven reconciler reacts to local file changes, peer availability, and Relay reconnection, then performs one manifest catch-up query; pending scope survives disconnects and Manager restarts, with no fixed business polling. The persona page exposes peer state, manual sync, evidence preview, and basic conflict resolution. AgentPacket still supplies the loopback contract only when a routed task explicitly asks the Agent to handle synchronization. |
-| Safety | Outbox policy, source binding, adapter policy, NapCat file allowlists, and fail-closed Codex Runtime approval; a universal approval center is not implemented |
-| Observability | JSONL message history, adapter logs, handler packets, delivery records, heartbeat records, reply records, and delivery replay |
+| Verified inputs | NapCat / OneBot, Heartbeat, and the built-in role panel. Manual trigger is a Manager action, not an adapter. |
+| Routing | Route profiles, persona rules, direct mentions, reply chains, private messages, keywords, regexes, schedules, and per-Route templates. |
+| Context | Persona-scoped bidirectional ledgers, bounded recent-message injection, plan/memory/skill references, reply context, and safe attachment metadata. |
+| Verified handler | Codex through the selected Codex/ChatGPT Desktop task owner. |
+| Control plane | Node.js Manager and RibiWebGUI for Routes, adapters, personas, runtime status, logs, diagnostics, and process lifecycle. |
+| Safety and evidence | Route-owned Outbox policy plus JSONL records for events, packets, deliveries, replies, heartbeats, and replay evidence. |
+| Experimental integrations | Remote Agent, RabiSpeech, RabiLink, XiaoAI, Webhook, WeCom, Feishu, personal Weixin, wearables, Copilot CLI, and AstrBot. |
 
-Each platform still owns its credentials and login state. Public examples use placeholders and sanitized paths; runtime `data/`, logs, tokens, recordings, and transcripts stay out of Git.
+RabiRoute is in active `0.1.x` development. External platforms and device paths need environment-specific acceptance; see the [capability and maturity matrix](docs/current-capabilities_en.md).
 
-## Architecture and boundaries
+The project does **not** claim a universal approval center, a persistent Action Queue, side-effect-free Route previews, or production closure for every phone, glasses, and wearable path.
+
+## Boundaries and safety
 
 | RabiRoute owns | The handler owns |
 | --- | --- |
 | Message ingress and normalization | Answering the question |
-| Event and delivery records | Planning task execution |
+| Event and delivery records | Planning and executing the task |
 | Route matching and handler selection | Calling tools and editing code |
 | Context templates and `AgentPacket` construction | Private runtime state and deep memory |
 | Session delivery policy | Domain-specific reasoning |
-| Draft, approval, reply, and audit boundaries | Producing a result or action request |
+| Draft, reply, and audit boundaries | Producing a result or action request |
 
 Put another way: **RabiRoute does not own the Agent. It owns the context and the gates.**
 
-RabiRoute is not a full Agent OS, a replacement chatbot framework, a workflow platform, or a wrapper around one model provider. New platforms belong in `src/adapters/`; handler integrations remain behind agent-adapter interfaces.
+RabiRoute is not a full Agent OS, a replacement chatbot framework, a workflow platform, or a wrapper around one model provider. New message platforms belong in `src/adapters/`; handler integrations stay behind agent-adapter interfaces.
 
-The code-backed boundary and maturity map lives in [Current capabilities and maturity](docs/current-capabilities_en.md).
-
-[Architecture](docs/architecture_en.md) and [Code architecture](docs/code-architecture_en.md) describe the Desktop-owner runtime and module boundaries in more detail.
+- Platform credentials and login state remain with each platform.
+- Desktop task approvals and RabiRoute business-action policy are separate security gates.
+- Runtime `data/`, logs, tokens, recordings, transcripts, and private paths stay out of Git.
+- Unsupported ownership, workspace, or permission states fail closed.
 
 ## Codex integration
 
-Codex is RabiRoute's first fully verified handler, but it is not the product boundary.
+Codex is the first fully verified handler, not the product boundary.
 
-- Real messages travel only through Desktop IPC to the selected Codex/ChatGPT Desktop task owner. RabiRoute does not run a second execution Runtime or a hidden fallback.
-- The saved task ID is the stable identity. A stale SQLite title, Desktop rename, or completed goal does not invalidate it or create a duplicate. Name lookup/creation happens only when the ID is cleared or missing.
-- If the target task is not loaded, RabiRoute opens `codex://threads/<id>` and retries briefly. Desktop absence, workspace mismatch, or owner load failure fails closed.
-- Model, tools, sandbox, and approvals remain owned by the target Desktop task. The compatibility field `agentModel` does not override them.
-- The project-pinned `codex app-server` is limited to short-lived metadata work such as creating and naming an empty task; it never receives a real routed prompt.
-- Runtime permission and RabiRoute's business Action Gate remain separate security boundaries.
+- Real messages travel only through Desktop IPC to the selected Codex/ChatGPT Desktop task owner.
+- The saved task ID plus workspace is the stable identity; a rename or completed goal does not create a duplicate.
+- If Desktop is absent, the task cannot load, or the workspace differs, delivery fails closed instead of starting a fallback Runtime.
+- The target Desktop task owns its model, tools, sandbox, and approvals.
+- The project-pinned `codex app-server` may create or name an empty task, but it never executes a routed prompt.
 
-This separation lets the router evolve without becoming a Codex-specific shell, while still supporting maintainer workflows that need reliable thread delivery and observable handoffs.
+This keeps the router independent while preserving reliable task delivery and visible ownership.
 
 ## Configuration model
 
-Runtime configuration separates message routes from persona behavior:
+Runtime configuration keeps message routing separate from persona behavior:
 
 ```text
 data/route/<configName>/adapterConfig.json
@@ -156,54 +151,43 @@ data/roles/<RoleId>/persona.md
 data/roles/<RoleId>/personaConfig.json
 ```
 
-- `adapterConfig.json` defines inputs, handler adapters, working directories, pipeline presets, and persona binding.
-- `persona.md` contains the persona or handler-facing role guidance.
-- `personaConfig.json` contains the optional persona avatar filename, notification rules, message templates, persona speech-trigger keywords, and separate recent bidirectional-message limits for ordinary logical endpoints. Heartbeat always omits history. RibiWebGUI can upload a PNG, JPEG, WebP, or GIF avatar (up to 5 MB) into the persona directory.
+- `adapterConfig.json` defines message inputs, handler adapters, working directories, pipeline presets, and persona binding.
+- `persona.md` contains persona or handler-facing guidance.
+- `personaConfig.json` contains notification rules, message templates, avatar metadata, speech keywords, and recent-message limits.
 
-Complete runtime conversation evidence lives under `data/roles/<RoleId>/conversation/`. `current.jsonl` has no entry-count cap. When an archive check finds a record older than 72 hours, the complete contiguous prefix older than 24 hours moves to `archive/<n>~<m>.jsonl`; automatic context reads only `current.jsonl`.
+Conversation evidence lives under `data/roles/<RoleId>/conversation/`. Public, copyable examples live under [`examples/data/`](examples/data/); local runtime data remains private.
 
-Buildable clients live in [apps](apps/), while shared client-side contracts live in [packages](packages/). Copyable public examples live in [examples/data](examples/data/). Reusable project skills, including persona creation and safe update workflows, live in [skills](skills/).
+Buildable clients live in [`apps/`](apps/), shared client contracts in [`packages/`](packages/), and reusable project guides in [`skills/`](skills/).
 
-## Project status
-
-RabiRoute is an early-stage project under active development. The current `0.1.x` line already runs the complete ingress-to-handler-to-reply path, while configuration schemas and advanced integrations may continue to evolve.
-
-The Node.js manager and WebGUI are the cross-platform baseline. The Qt tray and Windows launcher are convenience layers, not a separate backend or a single-file distribution.
-
-Breaking configuration changes and migration notes are recorded in the [version changelog](版本更新日志.md).
-
-## Documentation
-
-The status-aware documentation index is in [docs/README_en.md](docs/README_en.md).
+## Learn more
 
 | Goal | Guide |
 | --- | --- |
-| Use RibiWebGUI and complete the first delivery | [RibiWebGUI User Guide](docs/user-guide/README_en.md) |
-| See what is actually implemented | [Current capabilities and maturity](docs/current-capabilities_en.md) |
+| Complete the first delivery | [RibiWebGUI User Guide](docs/user-guide/README_en.md) |
+| Check what is really implemented | [Current capabilities and maturity](docs/current-capabilities_en.md) |
 | Browse current, experimental, planned, and historical docs | [Documentation index](docs/README_en.md) |
-| Build the phone or glasses clients | [Client applications](apps/README_en.md) |
-| Copy a Route/persona pack or inspect sample integrations | [Examples](examples/README_en.md) |
-| Install and verify the first route | [Getting started](docs/getting-started_en.md) |
-| Inspect the code ownership map | [Project function map](docs/project-function-map_en.md) |
-| Run or extend local TTS / ASR | [RabiSpeech local TTS / ASR service](docs/rabispeech-plugin_en.md) |
-| Call TTS / ASR on the target PC from another device | [Remote TTS / ASR](docs/user-guide/speech-api_en.md) |
-| Install a meeting-room remote microphone / speaker | [Rabi Voice Client](desktop/rabi-voice-client/README_en.md) |
+| Understand product and code boundaries | [Architecture](docs/architecture_en.md) · [Code architecture](docs/code-architecture_en.md) |
+| Find a feature's code owner | [Project function map](docs/project-function-map_en.md) |
+| Configure LAN access safely | [RibiWebGUI interface and status](docs/user-guide/interface-and-status_en.md) |
+| Build phone or glasses clients | [Client applications](apps/README_en.md) |
+| Run local or remote TTS / ASR | [RabiSpeech](docs/rabispeech-plugin_en.md) · [Remote speech](docs/user-guide/speech-api_en.md) |
+| Review configuration migrations | [Version changelog](版本更新日志_en.md) |
 
 ## Development and contribution
 
 ```bash
-npm run manager          # run the manager from TypeScript
-npm run webgui:dev       # run the Vue/Vuetify frontend in development
-npm run test             # run backend tests
-npm run build            # type-check and build backend + WebGUI
-npm run check:config     # detect malformed public/runtime JSON text
+npm run manager          # run Manager from TypeScript
+npm run webgui:dev       # run the Vue/Vuetify frontend
+npm run test             # run backend and contract tests
+npm run build            # build backend and WebGUI
+npm run check:config     # validate public/runtime JSON text
 ```
 
-Before a larger change, read [Current capabilities and maturity](docs/current-capabilities_en.md), then inspect the relevant code and tests.
+Before a larger change, read [Current capabilities and maturity](docs/current-capabilities_en.md), then inspect the relevant code, tests, and documentation.
 
 Issues and pull requests are welcome through the [GitHub repository](https://github.com/vb2250158/RabiRoute).
 
-Please never commit real account identifiers, chat content, tokens, cookies, private paths, or runtime `data/`. The repository is maintained as a public, reproducible project.
+Never commit real account identifiers, chat content, tokens, cookies, private paths, or runtime `data/`. The repository is maintained as a public, reproducible project.
 
 ## License
 

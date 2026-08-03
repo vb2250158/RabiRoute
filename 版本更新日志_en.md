@@ -8,6 +8,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased - 2026-07-31
 
+### README first-reading path
+
+- Reordered both README languages around use cases, first delivery, system flow, current capability, boundaries, and deeper guides while preserving the hero, Slogan, and message-gateway / policy-router / action-gate identity.
+- Quick start now states a verifiable first-success signal. LAN, speech, and complex runtime details move to focused guides. The compact capability table separates verified and experimental paths and names the approval, preview, and device closures that are not complete.
+- This is a public-documentation-only change. It does not alter code, configuration schemas, runtime behavior, or local `data/`, so no runtime migration is required.
+
 ### Persona Sync runtime isolation
 
 - Persona Sync scanning, recursive watching, explicit change notifications, reads, merges, and Coordinator transport now share exclusions for work-cycle history/input/lock directories and temporary files. Even an older peer advertising those paths cannot cause cross-PC transfer or deletion propagation; real persona, plan, and memory content continues to synchronize.
