@@ -48,6 +48,7 @@
   "agentAdapters": [
     "codex"
   ],
+  "primaryAgentAdapter": "codex",
   "dataDir": "./data/route/wecom",
   "configName": "wecom",
   "agentRoleId": "Rabi",

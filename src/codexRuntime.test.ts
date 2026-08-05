@@ -3,11 +3,43 @@ import path from "node:path";
 import test from "node:test";
 import {
   buildCodexBootstrapEnv,
+  codexThreadDiscoveryRequestForTest,
+  codexThreadIsActiveFromSourcesForTest,
   codexThreadDeliveryTargetIsStaleForTest,
   codexThreadMatchesConfiguredTargetForTest,
   mergeCodexDesktopThreadsWithMetadataForTest,
   waitForCodexDesktopThreadForTest
 } from "./codexRuntime.js";
+
+test("durable rollout completion clears an older Desktop IPC active marker", () => {
+  assert.equal(codexThreadIsActiveFromSourcesForTest(100, {
+    state: "inactive",
+    observedAtMs: 200
+  }), false);
+  assert.equal(codexThreadIsActiveFromSourcesForTest(300, {
+    state: "inactive",
+    observedAtMs: 200
+  }), true);
+  assert.equal(codexThreadIsActiveFromSourcesForTest(null, {
+    state: "active",
+    observedAtMs: 200
+  }), true);
+});
+
+test("system-owned Desktop task discovery can use the bounded app-server state index", () => {
+  const search = codexThreadDiscoveryRequestForTest("星海 协助处理消息1", null, ["C:/Projects/PangHu"], true);
+  assert.equal(search.method, "thread/list");
+  assert.equal(search.params.searchTerm, "星海 协助处理消息1");
+  assert.equal(search.params.useStateDbOnly, true);
+  assert.deepEqual(search.params.cwd, ["C:/Projects/PangHu"]);
+
+  const list = codexThreadDiscoveryRequestForTest("", "next-page", ["C:/Projects/PangHu"]);
+  assert.equal(list.method, "thread/list");
+  assert.equal(list.params.searchTerm, undefined);
+  assert.equal(list.params.useStateDbOnly, false);
+  assert.deepEqual(list.params.cwd, ["C:/Projects/PangHu"]);
+  assert.equal(list.params.cursor, "next-page");
+});
 
 test("Codex task bootstrap cannot inherit a stale desktop WebSocket override", () => {
   const env = buildCodexBootstrapEnv({

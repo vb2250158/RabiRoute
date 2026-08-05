@@ -57,15 +57,15 @@ When Plans & Memory opens, it first requests eight lightweight plan summaries an
 
 For a running plan outside approval, expanding the card exposes whole-plan guidance. It is associated only with `planId`, not one step; the Agent uses it to continue the plan and adjust not-started steps when needed, then writes a `guidance_response` without `stepId`. Approval plans continue to use the owning step's approval contract and `approval_response`.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 05 | RibiWebGUI layout</strong>
-  <span>Suggested frame: the full desktop console with sidebar, top bar, and main content visible.</span>
-  <span>Callouts: current Route, six areas, Manager status, Refresh, Add Route, Save.</span>
-</div>
+![The RibiWebGUI console header showing the current Route and Manager connection](../../assets/screenshots/webgui-overview-en.png)
+
+Choose the current Route in the sidebar, then check the Manager connection in the top bar. Use the Console or Log diagnostics runtime state to decide whether that Route is running.
 
 The **Plans & Memory** page never reads `data/` directly or reinterprets categories, ordering, status colors, or contract completeness in the browser. Manager supplies shared `Current / Plans / Recent Memory / Archived` membership plus `status / tone / sortBucket / palette`, `counts.stages`, and approval details used by both RibiWebGUI and the Qt tray. Except for paused plans, complete approval contracts sort first and incomplete contracts next, followed by `Awaiting approval → Awaiting QA acceptance → Executing → Awaiting environment/assets/information/external response → Awaiting shared package → Not started → Completed → Archived` and update time. External waits use the amber presentation, while blue `Awaiting shared package` remains current work but sorts below execution and other external waits. Paused plans appear only under Plans with the shared slate palette and always sort last. RibiWebGUI shows a plan's non-duplicate `focus`, and search matches step details, current actions, waiting notes, approval contracts, attachment metadata, memory bodies, and source summaries. Multiple plans remain independently framed, with a sticky external directory that follows the current tab and search result. Running plans outside approval expose whole-plan guidance at the top of expanded details; approval plans instead keep the approval contract inside the Manager-identified step card. User feedback, Agent replies, and system records remain ordered from oldest to newest. Incomplete details are labeled `Approval information incomplete / approval disabled`; approval input, attachments, and submission stay disabled until `ready/enabled=true`.
 
 A step waiting for approval, plan confirmation, or authorization carries a complete `approvalRequest`. Only a complete actionable contract with `responseStatus=pending` makes Manager show `Awaiting approval` and enable the approval entry. An incomplete contract disables formal approval but leaves the presentation at `Executing` for Agent investigation and repair. `Awaiting QA acceptance` requires the current structured `qa-* / verify-*` step. Authoritative `waitingFor` fields may derive `Awaiting environment`, `Awaiting assets`, `Awaiting information`, or `Awaiting external response`; a qualifying current package/build step whose prior work is complete becomes blue `Awaiting shared package`. These are presentation stages and do not add top-level plan lifecycle states.
+
+More specifically, Manager shows `Waiting for test environment` only when a real runner, MCP service, device, or listener is unavailable and no executable alternative remains. Available CLI, static-check, fallback-validation, or retry work stays `Executing`. An explicit prohibition on Unity GUI, MCP, menus, or PlayMode becomes `Waiting for renewed authorization`, not an environment failure. `Awaiting QA acceptance` also requires a real receipt for the current send; a missing receipt with a send or repair action stays `Executing`. A completed development gate that only lacks target-package identity or inclusion proof remains blue `Awaiting shared package`. Assets, documents, and owner replies remain separate external waits.
 
 The `implementation/development validation → Awaiting shared package → Awaiting QA acceptance → complete on QA pass; return to implementation on failure` lifecycle applies only to plans that change project content such as code, prefabs, assets, or configuration. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance continue to show their real steps and wait reasons instead of being forced into package or QA stages.
 
@@ -103,11 +103,6 @@ The footer contains four supporting actions:
 
 When the unsaved-changes notice appears, save before switching Routes or leaving. Refresh is not Save, and Restart does not save form edits.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 06 | Top-bar status and unsaved notice</strong>
-  <span>Suggested frame: a close view of the unsaved notice, locale menu, Manager state, Refresh, and Save.</span>
-  <span>Callouts: connection is not Route health; Refresh is not Save.</span>
-</div>
 
 ## Common runtime states
 

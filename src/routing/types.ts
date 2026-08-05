@@ -30,7 +30,12 @@ export type ForwardRouteKind =
 
 export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message";
 
-export type ForwardRecord =
+export interface MessageGroupForwardMetadata {
+  messageGroupId?: string;
+  messageGroupMessageIds?: string[];
+}
+
+export type ForwardRecord = (
   | GroupMessageRecord
   | PrivateMessageRecord
   | HeartbeatEventRecord
@@ -40,6 +45,7 @@ export type ForwardRecord =
   | WeComMessageRecord
   | FeishuMessageRecord
   | WeixinMessageRecord
-  | VoiceTranscriptEventRecord;
+  | VoiceTranscriptEventRecord
+) & MessageGroupForwardMetadata;
 
 export type ForwardTemplateValues = Record<string, string | number | undefined>;

@@ -18,11 +18,9 @@ Open **Log Diagnostics**. **Diagnosis Summary** places known connection and conf
 
 `Path healthy` only means no known break was detected. If delivery still fails, continue through connection details and recent logs.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 12 | Diagnosis and connections</strong>
-  <span>Suggested frame: Diagnosis Summary, runtime, message connection, and Codex Desktop task cards.</span>
-  <span>Callouts: checks, runtime, source, binding, last success, last error.</span>
-</div>
+![Log diagnostics showing the diagnosis summary before runtime, message-input, and handler states](../../assets/screenshots/webgui-diagnostics-en.png)
+
+The documentation sample is not running and is not bound to a real Desktop task, so its cards clearly show **Disabled** and **Not bound**. Fix visible breaks like these before moving to the connection details and recent logs below.
 
 ## Locate the break with evidence
 
@@ -54,11 +52,6 @@ It does not simulate an external QQ event and is not a side-effect-free preview.
 
 **Recent logs** shows the current Route's latest gateway output. Find the newest time boundary and the first error in that run; do not let a historical startup error mislead you.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 13 | Recent logs and time boundary</strong>
-  <span>Suggested frame: one trigger's start, delivery, and result with clear timestamps.</span>
-  <span>Callouts: current startup, first error, target Route, delivery protocol.</span>
-</div>
 
 After an upgrade, rebuild and restart the Manager and Route, then verify the startup directory and `dist/` timestamp. Historical logs can remain for audit but do not define current state.
 
@@ -99,6 +92,14 @@ Check in order:
 5. A `no-client-found` wake-and-retry still fails.
 
 Do not use fixed port 4510, `CODEX_APP_SERVER_WS_URL`, or a separate stdio Runtime for real delivery. They are not the current transport.
+
+## Tray missing while Manager remains online
+
+A full desktop runtime launched by `Start-RabiRoute-Tray.bat` or the packaged tray records `running` in `data/runtime/desktop-lifecycle-intent.json` and starts one `watch-rabiroute-desktop-lifecycle.ps1` owner per workspace. The supervisor checks only this project's Manager `/meta` and tray process. After two consecutive misses on either side, it restores the pair through the original launcher's port-owner, PID, and single-instance gates. A tray that temporarily loses Manager remains visible and keeps reconnecting.
+
+Run `Start-RabiRoute-Tray.bat -NoOpen` once, then inspect `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`. A healthy record has `desiredState=running`, `managerConnected=true`, and `trayCount>0`. `desiredState=stopped` means the previous exit was intentional and requires an explicit user start. Missing or malformed intent fails closed. Do not substitute the half-hour business-health patrol for this lightweight owner or create a separate tray relaunch loop.
+
+`Exit RabiRoute` persists `stopped` before shutting down Manager and tray, so supervision cannot undo a deliberate exit. Ordinary Manager build reloads, installer upgrades, and `SIGTERM` preserve desktop intent; when it remains `running`, supervision restores the tray after the reload.
 
 ## Port 8790 held by a stale Manager
 

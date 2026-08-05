@@ -33,11 +33,11 @@ Adapters provide role, message or tool signal, session/turn/event identity, and 
 
 Default injection is lightweight:
 
-- Essential event fields.
+- Essential event fields. A cross-persona message also carries source/target personas, both Routes, conversation correlation, the replied-to message, and the current hop count.
 - CQ `reply` / `at` explanations for QQ messages. Reply chains are expanded from message records, while at mappings are collected together.
 - Recent bidirectional messages allowed by the current endpoint's persona-owned `recentMessageLimits` value. The current event is excluded from this window because it already has its own section. `heartbeat` and the independent `plan_feedback` event are fixed exceptions and never read or inject message history.
 - Role, route, and workspace-relative paths plus a compact persona core.
-- A link to the Rabi Agent interface guide.
+- A link to the Rabi Agent interface guide plus compact persona-discovery and explicit cross-persona delivery instructions.
 - Up to three highly relevant plan, memory, and skill summaries by default.
 - On-demand paths for complete plan, memory, and skill indexes.
 - Log paths.
@@ -146,6 +146,13 @@ Conversation archive index: <conversationArchiveIndexPath>
 Reply API: <replyApiUrl>
 Current reply context: <replyContextJson>
 
+[Cross-persona contact]
+Discover: GET /api/personas?addressable=true
+Deliver: POST /api/personas/{personaId}/messages
+Source Route: replyContext.runtimeRouteId
+Source capability: replyContext.personaMessagingCapability
+Requirement: use one stable unique deliveryId per business delivery; replies reuse personaConversationId, reference the current messageId, increment personaMessageHopCount, and never exceed personaMessageMaxHops
+
 [Reply delivery requirements]
 <instructions derived from outputAdapter, source, and replyToSource>
 
@@ -157,6 +164,10 @@ Current reply context: <replyContextJson>
 ```
 
 For `heartbeat` and `plan_feedback`, the entire recent-message section is omitted. `{recentMessageLimit}` is `0` and `{recentMessages}` is an empty string, so a custom template cannot reintroduce historical message bodies. Heartbeat audit logs and the unified ledger continue to be recorded for explicit on-demand inspection. Plan feedback keeps only its dedicated feedback audit, AgentPacket, and delivery logs; it is not duplicated into the role-panel timeline or unified conversation ledger.
+
+Codex final text is only a record in the current handler task. It does not prove that the source user, Primary Persona, or another Agent received anything. A reply to the source must follow `[Reply delivery requirements]`, call the normal reply API, and obtain an Outbox receipt. A handoff to the Primary Persona, Secretary, or Plan Agent must use the Manager thread bridge with the sender's complete task ID and Agent type. A reply draft, approval question, or progress summary that never enters one of these exits cannot be marked replied or notified.
+
+The cross-persona capability proves only the Route and persona that own the current AgentPacket. It is never returned by `GET /api/personas`, the target timeline, or delivery receipts. `sourceRouteId` alone does not authenticate a sender. After a target persona receives a cross-persona message, an ordinary reply does not return to the source automatically; it must explicitly POST back with the received conversation, reply-reference, and hop fields.
 
 `[Message code parsing]` appears only when the current message or its reply chain contains parseable CQ codes. RabiRoute follows `CQ:reply` by `messageId` through the current route's group/private message records, while AgentPacket also accepts successful Outbox sends as a local fallback. When the live NapCat path sees a referenced ID that has not been stored, the adapter calls OneBot `get_msg` before routing, caches the returned group/private record with `lookupSource=onebot_get_msg`, and continues with the next reply level. API failures are logged as warnings and do not block the current message. Expansion stops when no reply remains, the reference still cannot be resolved, a cycle is detected, or the safety depth limit is reached. Each referenced preview is capped at 200 characters and then uses `……(更多信息调用接口查看)`. Any `CQ:at` found during the walk is deduplicated and emitted together as `[CQ:at,qq=xxxx] : group card or nickname`. This section does not add the current message ID and does not repeat the plain text body.
 

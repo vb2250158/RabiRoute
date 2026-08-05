@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentAdapterSupportsManagedTaskFeature,
   autoAssignGatewayPorts,
   collectGatewayPortClaims,
   DEFAULT_RECENT_MESSAGE_LIMIT,
@@ -71,6 +72,93 @@ test("message adapter policies control input while keeping output defaults enabl
   assert.equal(messageAdapterPolicyFor(normalized, "heartbeat").outputEnabled, false);
   assert.deepEqual(messageAdapterPolicyFor(normalized, "heartbeat").supportedOutputs, ["text", "image", "voice", "file"]);
   assert.deepEqual(messageAdapterPolicyFor(normalized, "heartbeat").allowedFileRoots, []);
+  assert.deepEqual(messageAdapterPolicyFor(normalized, "napcat").messageGrouping, {
+    enabled: true,
+    settleSeconds: 6,
+    incompleteSettleSeconds: 12,
+    maxWaitSeconds: 20
+  });
+  assert.equal(messageAdapterPolicyFor(normalized, "heartbeat").messageGrouping.enabled, false);
+});
+
+test("chat grouping is automatic while ASR stays direct and wait values remain configurable", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    messageAdapters: ["speech", "weixin"],
+    messageAdapterPolicies: {
+      speech: {},
+      weixin: {
+        messageGrouping: {
+          enabled: false,
+          settleSeconds: 10,
+          incompleteSettleSeconds: 4,
+          maxWaitSeconds: 5
+        }
+      }
+    }
+  }));
+
+  assert.deepEqual(messageAdapterPolicyFor(normalized, "speech").messageGrouping, {
+    enabled: false,
+    settleSeconds: 3,
+    incompleteSettleSeconds: 8,
+    maxWaitSeconds: 15
+  });
+  assert.deepEqual(messageAdapterPolicyFor(normalized, "weixin").messageGrouping, {
+    enabled: true,
+    settleSeconds: 10,
+    incompleteSettleSeconds: 10,
+    maxWaitSeconds: 10
+  });
+});
+
+test("managed task capabilities keep Codex-only settings off unsupported Agent adapters", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    agentModel: "gpt-5.6-sol",
+    agentAdapters: ["codex", "copilotCli"],
+    messageProcessingAgents: {
+      codex: { enabled: true },
+      copilotCli: { enabled: false, model: "custom-model", reasoningEffort: "high" }
+    }
+  }));
+
+  assert.equal(normalized.agentModel, "gpt-5.6-sol");
+  assert.deepEqual(normalized.messageProcessingAgents, {
+    codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" }
+  });
+});
+
+test("managed task capability layer exposes the three Codex task features independently", () => {
+  assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "messageProcessingAgent"), true);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "planAssistantSessions"), true);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "hooks"), true);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("copilotCli", "messageProcessingAgent"), false);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("astrbot", "planAssistantSessions"), false);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("marvis", "hooks"), false);
+});
+
+test("Codex managed-task settings are removed when a route has no Codex adapter", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    agentAdapters: ["copilotCli"],
+    messageProcessingAgents: {
+      codex: { enabled: true },
+      copilotCli: { enabled: true, model: "custom-model", reasoningEffort: "high" }
+    },
+    codexPlanAssistantSessions: [{
+      threadId: "019f0000-0000-7000-8000-000000000001",
+      threadName: "Plan assistant",
+      workspace: "C:/Project",
+      index: 1
+    }],
+    codexHooks: {
+      sessionContextEnabled: true,
+      reasoningContextEnabled: true,
+      planTaskCompletionEnabled: true
+    }
+  }));
+
+  assert.deepEqual(normalized.messageProcessingAgents, {});
+  assert.equal(normalized.codexPlanAssistantSessions, undefined);
+  assert.equal(normalized.codexHooks, undefined);
 });
 
 test("message adapter policies normalize allowed outbound file roots", () => {
@@ -150,6 +238,26 @@ test("shared config normalization accepts canonical Agent adapter ids only", () 
   assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["codexApp", "copilotCli"] as any })).agentAdapters, ["copilotCli"]);
   assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: ["unknown"] as any })).agentAdapters, []);
   assert.deepEqual(normalizeGatewayDefinition(gateway({ agentAdapters: [] })).agentAdapters, []);
+});
+
+test("primary Agent defaults to the first configured adapter and must remain configured", () => {
+  const defaulted = normalizeGatewayDefinition(gateway({
+    agentAdapters: ["codex", "copilotCli"]
+  }));
+  assert.equal(defaulted.primaryAgentAdapter, "codex");
+
+  const selected = normalizeGatewayDefinition(gateway({
+    agentAdapters: ["codex", "copilotCli"],
+    primaryAgentAdapter: "copilotCli"
+  }));
+  assert.equal(selected.primaryAgentAdapter, "copilotCli");
+
+  const repaired = normalizeGatewayDefinition(gateway({
+    agentAdapters: ["codex"],
+    primaryAgentAdapter: "copilotCli"
+  }));
+  assert.equal(repaired.primaryAgentAdapter, "codex");
+  assert.equal(normalizeGatewayDefinition(gateway({ agentAdapters: [] })).primaryAgentAdapter, undefined);
 });
 
 test("route names accidentally stored as Codex task ids migrate back to names", () => {
@@ -388,6 +496,7 @@ test("legacy message adapter target restrictions are ignored", () => {
   assert.deepEqual(Object.keys(messageAdapterPolicyFor(normalized, "napcat")).sort(), [
     "allowedFileRoots",
     "inputEnabled",
+    "messageGrouping",
     "outputEnabled",
     "supportedOutputs"
   ].sort());
@@ -492,7 +601,7 @@ test("auto assignment skips the manager port", () => {
   assert.equal(items[0].gatewayPort, 8791);
 });
 
-test("auto assignment allocates unique NapCat instance ports and syncs primary", () => {
+test("auto assignment allocates unique Route listener ports and preserves NapCat endpoints", () => {
   const items = [
     gateway({
       id: "Rabi__a",
@@ -516,16 +625,17 @@ test("auto assignment allocates unique NapCat instance ports and syncs primary",
   autoAssignGatewayPorts(items, 8790);
 
   const claims = collectGatewayPortClaims(items, { managerPort: 8790 });
-  assert.equal(new Set(claims.map((claim) => claim.port)).size, claims.length);
+  const listenerClaims = claims.filter((claim) => claim.kind !== "napcat-http");
+  assert.equal(new Set(listenerClaims.map((claim) => claim.port)).size, listenerClaims.length);
   assert.equal(items[0].gatewayPort, items[0].napcatInstances?.[0].gatewayPort);
   assert.equal(items[0].napcatHttpUrl, items[0].napcatInstances?.[0].httpUrl);
   assert.equal(items[0].napcatAccessToken, "a1");
   assert.notEqual(items[0].napcatInstances?.[0].gatewayPort, items[0].napcatInstances?.[1].gatewayPort);
-  assert.notEqual(items[0].napcatInstances?.[0].httpUrl, items[0].napcatInstances?.[1].httpUrl);
+  assert.equal(items[0].napcatInstances?.[0].httpUrl, items[0].napcatInstances?.[1].httpUrl);
   validateGatewayPortConflicts(items);
 });
 
-test("port claims expose NapCat WS and HTTP ownership", () => {
+test("port claims expose NapCat WS listeners and HTTP endpoints", () => {
   const claims = collectGatewayPortClaims([
     gateway({
       id: "Rabi__a",
@@ -543,7 +653,7 @@ test("port claims expose NapCat WS and HTTP ownership", () => {
   ]);
 });
 
-test("port conflicts are detected across gateway, webhook and NapCat HTTP ports", () => {
+test("port conflicts are detected across Route-owned listeners", () => {
   assert.throws(
     () => validateGatewayPortConflicts([
       gateway({ id: "Rabi__main", gatewayPort: 8789, messageAdapters: ["napcat"], napcatInstances: [] }),
@@ -551,14 +661,27 @@ test("port conflicts are detected across gateway, webhook and NapCat HTTP ports"
     ]),
     /Port conflict/
   );
+});
 
-  assert.throws(
-    () => validateGatewayPortConflicts([
-      gateway({ id: "Rabi__a", gatewayPort: 8791, napcatInstances: [{ id: "a", gatewayPort: 8791, httpUrl: localUrl(3000) }] }),
-      gateway({ id: "Rabi__b", gatewayPort: 8792, napcatInstances: [{ id: "b", gatewayPort: 8792, httpUrl: localUrl(3000) }] })
-    ]),
-    /NapCat HTTP/
-  );
+test("shared NapCat HTTP endpoints stay unchanged across routes", () => {
+  const gateways = [
+    gateway({
+      id: "Rabi__a",
+      gatewayPort: 8791,
+      napcatInstances: [{ id: "a", gatewayPort: 8791, httpUrl: localUrl(3000) }]
+    }),
+    gateway({
+      id: "Rabi__b",
+      gatewayPort: 8792,
+      napcatInstances: [{ id: "b", gatewayPort: 8792, httpUrl: localUrl(3000) }]
+    })
+  ];
+
+  assert.doesNotThrow(() => validateGatewayPortConflicts(gateways));
+  autoAssignGatewayPorts(gateways);
+
+  assert.equal(gateways[0].napcatInstances?.[0].httpUrl, localUrl(3000));
+  assert.equal(gateways[1].napcatInstances?.[0].httpUrl, localUrl(3000));
 });
 
 test("notification rules and escaped newlines are normalized", () => {

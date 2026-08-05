@@ -21,18 +21,26 @@
 
 ## 先看这里
 
-- [RibiWebGUI 使用手册](user-guide/README.md) — **现行指南**。面向软件使用者，按首次投递、界面状态、消息端、处理端、人格规则、排障和安全组织，并在关键操作点保留截图位。
-- [当前能力与成熟度](current-capabilities.md) — **当前事实**。按 `verified / experimental / stub / planned / historical` 区分真实能力，是目前最可靠的功能入口。
-- [快速上手](getting-started.md) — **现行指南**。安装、启动 Manager、打开 RibiWebGUI 和验证第一条 route。
-- [配置与接入](configuration.md) — **现行指南**。配置字段、消息端和处理端成熟度已按当前 Schema 与扫描结果校准。
-- [排障](troubleshooting.md) — **现行指南**。覆盖 NapCat、编码、Codex Desktop owner、任务桥、模型与审批边界。
+- [RibiWebGUI 使用手册](user-guide/README.md) — **现行指南**。第一次使用时从这里开始，完成一条真实投递，并学会看状态、改规则和处理常见失败。
+- [快速上手](getting-started.md) — **现行指南**。完成安装，启动 Manager，并确认浏览器能打开控制台。
+- [界面与状态](user-guide/interface-and-status.md) — **现行指南**。看懂当前 Route、Manager 连接、未保存修改和运行状态。
+- [运行、日志与排障](user-guide/operations-and-troubleshooting.md) — **现行指南**。消息没有送达时，从诊断摘要开始逐项找到断点。
+- [安全、回传与数据](user-guide/safety-and-data.md) — **现行指南**。在启用外部回复或共享诊断材料前，确认权限和隐私边界。
+- [当前能力与成熟度](current-capabilities.md) — **当前事实**。核对哪些能力已经验证，哪些仍需要真实账号、网络或设备验收。
+
+## 本机安装、配置与恢复
+
+- [配置与接入](configuration.md) — 配置字段、消息端和处理端的现行说明。
+- [排障](troubleshooting.md) — NapCat、编码、Codex Desktop 任务归属、模型与审批边界。
+- [Windows 启动与打包](windows-launcher-and-packaging.md) — Windows 安装、启动和打包方式。
+- [NapCat 无值守](napcat-unattended.md) — QQ 登录状态、快速登录、Manager 恢复和守护边界。
 
 ## 路由、人格与处理端
 
 - [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
 - [路由与人格](routing-and-personas.md) — **现行指南**。route 与 role 的边界、人格包和消息模板判断框架。
-- [Agent 上下文注入](agent-context-injection.md) — **现行指南**。人格级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的角色知识、路径和回复上下文。
-- [Rabi Agent 接口](rabi-agent-interfaces.md) — **现行指南**。回复、thread bridge、计划、记忆、Remote Agent 和多实例 API。
+- [Agent 上下文注入](agent-context-injection.md) — **现行指南**。人格级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的人格目录、跨人格投递凭据、路径和回复上下文。
+- [Rabi Agent 接口](rabi-agent-interfaces.md) — **当前合同**。处理端如何回复、查询可联系人格、进行带幂等回执的单向跨人格投递，以及使用 thread bridge、计划、记忆、Remote Agent 和多实例 API。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
 - [动态整理记录统一规范](dynamic-record-lifecycle.md) — **现行指南**。统一归档、记忆沉淀、物理分卷、保留策略和 24/72 小时动态窗口的边界与验收。
 - [Pipeline presets](pipeline-presets.md) — Agent 会话、明确外部目标和 Outbox 状态；其中 FenneNote 输出章节仅为归档兼容说明。
@@ -79,6 +87,7 @@
 ## 设计与历史
 
 - [主动智能系统设计总纲](../主动智能设计思路.md) — **设计中**。描述持续感知、用户性格与偏好、心理状态、情景识别、主动行动、记忆和设备分工；当前实现范围以“当前能力与成熟度”为准。
+- [对话消息收集、消息组与四类 Agent 协作](group-message-batching-and-triage-plan.md)（[HTML 架构预览](group-message-batching-and-triage-plan.html)）— **实验支持**。自然语言消息可先立即记录并等待合并，再按原始回复、会话、说话人和消息端熟悉度交给动态 Codex 消息处理 Agent；真实群聊/私聊和四类 Agent完整联调仍待验收。
 - [人格路由工作台计划](persona-route-workbench-plan.md) — **部分实现**。语音关键词和分端上下文控件已实现；Dry-run RouteDecision / AgentPacket 预览尚未实现。
 - [Windows 托盘任务窗口计划](rabiroute-windows-tray-task-window-plan.md) — 设计记录；实际实现以 `desktop/tray-task-window/` 和打包文档为准。
 - [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。

@@ -24,12 +24,14 @@
 
 多个 Route 可以复用同一个人格。不要只因为消息入口不同就复制一份人格目录。
 
+跨人格投递也不需要新增 Route 类型或消息端。它从 Manager 的人格目录选择目标，再复用目标现有 Route 的内置人格消息链；两端 Route 都必须已启用。
+
 ## 消息端成熟度
 
 | 消息端 | 状态 | 适合用途 | 额外依赖 |
 | --- | --- | --- | --- |
 | 定时触发 | 已验证 | 周期巡检和首次闭环 | 无外部账号 |
-| 角色面板 | 已验证 | 托盘和本地角色消息 | Manager / 托盘入口 |
+| 角色面板 | 已验证 | 托盘、本地人格消息和经过身份校验的跨人格投递 | Manager / 托盘入口；不是网络 listener |
 | NapCat / OneBot | 已验证 | QQ 群聊和私聊 | NapCat、QQNT、OneBot 配置 |
 | 企业微信 / WeCom | 实验 | 企业微信群聊 | Bot ID、Secret、真实环境验收 |
 | 飞书 / Feishu | 实验 | 飞书应用群聊文本收发 | App ID/Secret、Verification Token、Encrypt Key、公网 HTTPS 事件订阅 |
@@ -46,11 +48,9 @@
 
 每个消息端会显示成熟度、连接状态、依赖检查和自己的配置面板。先让一个入口稳定，再增加第二个。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 07｜消息端目录与成熟度</strong>
-  <span>建议画面：添加消息端目录展开，显示分组、入口名称、成熟度和连接标签。</span>
-  <span>标注重点：已验证、实验、连接状态、添加按钮。</span>
-</div>
+![消息适配器页显示当前 Route 的启用状态、消息入口和主 Agent](../../assets/screenshots/webgui-adapters-zh.png)
+
+截图时暂时停用了文档示例 Route，但 NapCat 和定时触发仍清楚列在消息入口中。启用 Route 前，先确认入口和主 Agent 与预期一致。
 
 ## 接收与回传是两个开关
 
@@ -74,12 +74,6 @@ NapCat 通过两条连接与 RabiRoute 协作：
 
 QQ / NapCat 与个人微信拥有完全独立的登录态。QQ 的“可用”只由 OneBot 实际连接和健康结果支持；NapCat WebUI 可打开只说明诊断/配置页面可访问，不能证明 QQ 已登录或可收发。个人微信未登录时只标记个人微信，不会把已在线的 QQ 或全部消息端显示成离线。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 08｜NapCat 实例与连接状态</strong>
-  <span>建议画面：一个已配置 QQ 实例，实例卡片、WS、HTTP、账号状态和“打开 NapCat”按钮可见。</span>
-  <span>标注重点：实例账号、WS 端口、HTTP 地址、登录状态、扫描与打开动作。</span>
-</div>
-
 RabiRoute 不保存或绕过 QQ 密码、验证码、设备确认和风控。首次登录与异常验证必须在 NapCat / QQNT 中完成。
 
 完整恢复流程见 [NapCat 无值守与登录稳定性](../napcat-unattended.md)。
@@ -88,7 +82,7 @@ RabiRoute 不保存或绕过 QQ 密码、验证码、设备确认和风控。首
 
 启用“定时触发”后，还需要在人格规则中配置 `heartbeat` 的触发计划。计划支持间隔、每天指定时间和一次性指定时间。
 
-“会话工作中时跳过心跳”只影响固定 Codex 任务仍忙碌时的 heartbeat。它不会丢弃 QQ、私聊或其他实时消息。
+未开启 Codex“消息处理 Agent 模式”时，“会话工作中时跳过心跳”只影响固定 Codex 任务仍忙碌时的 heartbeat。开启消息处理 Agent 后，heartbeat 会立即交给独立消息处理任务，这个忙碌跳过选项不再显示；QQ、私聊和其他实时消息不会因此被丢弃。
 
 ## Webhook 和命名适配器
 

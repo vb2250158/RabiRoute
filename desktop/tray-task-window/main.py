@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import time
+import json
 import urllib.request
 from pathlib import Path
 
@@ -29,6 +30,46 @@ def _manager_alive(manager_url: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _mark_desktop_running(project_root: Path, manager_url: str) -> bool:
+    try:
+        data = json.dumps({"source": "packaged-tray"}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{manager_url}/manager/desktop-lifecycle/start",
+            data=data,
+            method="POST",
+            headers={"content-type": "application/json; charset=utf-8"},
+        )
+        with urllib.request.urlopen(request, timeout=3):
+            return True
+    except Exception as error:
+        _append_startup_log(project_root, f"Unable to persist desktop running intent: {error}")
+        return False
+
+
+def _start_desktop_lifecycle_supervisor(project_root: Path, manager_url: str) -> bool:
+    script = project_root / "scripts" / "watch-rabiroute-desktop-lifecycle.ps1"
+    powershell = shutil.which("powershell.exe")
+    if sys.platform != "win32" or not powershell or not script.exists():
+        _append_startup_log(project_root, f"Desktop lifecycle supervisor is unavailable: {script}")
+        return False
+    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    subprocess.Popen(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", str(script),
+            "-ManagerUrl", manager_url,
+        ],
+        cwd=str(project_root),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=flags,
+    )
+    return True
 
 
 def _append_startup_log(project_root: Path, message: str) -> None:
@@ -207,6 +248,10 @@ def main() -> int:
     proc: "subprocess.Popen[bytes] | None" = None
     if getattr(sys, "frozen", False) and not manager_running:
         proc = _start_manager(project_root, args.manager_url)
+
+    if getattr(sys, "frozen", False) and _manager_alive(args.manager_url):
+        if _mark_desktop_running(project_root, args.manager_url):
+            _start_desktop_lifecycle_supervisor(project_root, args.manager_url)
 
     try:
         from rabiroute_tray.tray_app import run

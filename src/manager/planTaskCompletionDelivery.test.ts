@@ -91,6 +91,10 @@ test("plan task completion reminder keeps assistants control-only and continues 
   const text = planTaskCompletionAgentText(delivery("C:\\role"));
 
   assert.match(text, /不是只需确认收到的通知/);
+  assert.match(text, /\[Agent 任务投递来源\]/);
+  assert.match(text, /来源 Agent：计划执行 Agent/);
+  assert.match(text, /来源会话 ID：source-session/);
+  assert.match(text, /\[投递内容\]/);
   assert.match(text, /同一轮/);
   assert.match(text, /action=send/);
   assert.match(text, /plan\.taskBinding\.sessionId=source-session/);

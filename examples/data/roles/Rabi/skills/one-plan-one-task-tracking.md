@@ -120,7 +120,7 @@ status: active
 
 1. 读取提醒对应的完整计划、记忆、当前步骤以及绑定任务真实状态，消费已经完成的结果，避免重复安排同一工作。
 2. PATCH 更新计划步骤、顶层状态、`currentStepId`、`nextAction`、`waitingFor`、必要的 `approvalRequest` 和同一条恢复记忆；不要手写 `isBlocked`。
-3. 计划未终态、未暂停且没有真实阻塞时，立即通过 `/api/agent/threads` 的 `action=send`，向该计划自身 `taskBinding.sessionId + workspace` 精确续投一个可验证的下一步；不能按“协助处理计划1/2”的名称猜测，也不能等下一次 heartbeat。
+3. 计划未终态、未暂停且没有真实阻塞时，立即通过 `/api/agent/threads` 的 `action=send`，向该计划自身 `taskBinding.sessionId + workspace` 精确续投一个可验证的下一步；Agent 互投还要填写发送任务自己的 `sourceThreadId` 和职责对应的 `sourceAgentType`，由 Manager 核对并显示真实来源；不能按“协助处理计划1/2”的名称猜测，也不能等下一次 heartbeat。
 4. 计划暂停或计划管理秘书轮转时保留业务 `taskBinding`；只有业务任务确实失效并完成受控迁移时才改绑。计划完成后也可以保留绑定作为历史证据。
 5. 多条计划可以独立推进时，使用全部可用秘书槽并行管理不同分片；同一 `planId` 仍只允许一个秘书写。秘书只负责计划、记忆、任务查重、状态核对、结果消费和续投；不得做业务调查、实现、测试或修改业务文件。
 6. 秘书可以创建临时子 Agent 加速计划盘点、任务查重、状态核对和结果摘要，但秘书及其子 Agent都不是业务 owner。实际工作始终由计划 `taskBinding` 指向的独立业务任务负责。

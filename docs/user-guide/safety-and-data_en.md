@@ -28,11 +28,9 @@ Desktop file-read approval does not permit sending that file to a group. QQ text
 
 There is no generic persistent Action Queue for approving external actions item by item in WebGUI. The Plans page's approval feedback only records user guidance on an Agent plan and notifies the Agent; it neither approves Outbox delivery nor advances the plan directly. `draft` is an output and audit result, not a complete pending-approval center.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 14 | Input and output policy</strong>
-  <span>Suggested frame: a NapCat or other adapter policy with input, output, payload types, and file roots visible.</span>
-  <span>Callouts: separate gates, supported types, allowed file roots, Save to apply.</span>
-</div>
+![Message Adapters separating message inputs and the handler for the current Route](../../assets/screenshots/webgui-adapters-en.png)
+
+Input and reply permissions belong to the current Route's adapter settings. Expand the relevant adapter to check output types and allowed file roots, then use **Save configuration** to apply changes.
 
 ## Source replies and proactive sends
 

@@ -37,11 +37,9 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 
 完整步骤见[跑通第一条 Route](first-route.md)。需要接 QQ 时，再阅读[Route 与消息端](routes-and-adapters.md)。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 01｜RibiWebGUI 控制台全貌</strong>
-  <span>建议画面：首次打开后的桌面宽屏控制台，保留左侧导航、当前 Route、顶部连接状态、核心状态卡和快速配置按钮。</span>
-  <span>标注重点：当前 Route、Manager 连接、运行状态、快速配置、保存配置、日志诊断入口。</span>
-</div>
+![控制台显示当前消息路线、Manager 连接和运行状态](../../assets/screenshots/webgui-overview-zh.png)
+
+截图时暂时停用了 Route，避免产生真实投递。实际使用时，先确认顶栏显示“Manager 已连接”，再保存并启动自己的 Route。
 
 ## 按目标找文档
 

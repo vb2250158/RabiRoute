@@ -39,6 +39,7 @@
   "agentAdapters": [
     "codex"
   ],
+  "primaryAgentAdapter": "codex",
   "dataDir": "./data/route/xiaoai",
   "configName": "xiaoai",
   "agentRoleId": "Rabi",

@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
+import { parse as parseSfc } from "@vue/compiler-sfc";
+import { NodeTypes, parse as parseTemplate } from "@vue/compiler-dom";
+import * as ts from "typescript";
 import { translateText } from "../src/i18n/index";
 
 test("translates exact interface copy and preserves surrounding whitespace", () => {
@@ -99,6 +103,83 @@ test("translates Codex Hook management copy", () => {
   );
 });
 
+test("translates primary Agent selection copy", () => {
+  assert.equal(translateText("主控 Agent", "en"), "Primary Agent");
+  assert.equal(
+    translateText("命中规则的消息只投递给主控 Agent；其他 Agent 保留配置，不会收到默认消息。", "en"),
+    "Messages that match a rule are delivered only to the Primary Agent. Other Agent configurations remain available but do not receive default deliveries."
+  );
+});
+
+test("translates Quick setup copy across all three steps", () => {
+  const copy = new Map<string, string>([
+    ["可以组合多个入口；单个入口可在消息适配器页继续停用或调整权限。", "You can combine multiple inputs. Disable an individual input or adjust its permissions later on the Message adapters page."],
+    ["QQ 群聊、私聊实时入口", "Real-time QQ group and private messages"],
+    ["企业微信群聊双向入口", "Two-way WeCom group messages"],
+    ["下游 Agent 设备入口，支持局域网发现和任务投递", "Downstream Agent device input with LAN discovery and task delivery"],
+    ["桌面语音笔记转写入口", "Desktop voice-note transcription input"],
+    ["小爱音箱语音转写入口", "XiaoAI speaker transcription input"],
+    ["眼镜是消息来源；系统内置 RabiLink 负责转接", "Glasses are the message source; the built-in RabiLink service handles forwarding"],
+    ["保存后可在运行日志里手动触发一次，用来验证 Agent 端是否能收到心跳。", "After saving, trigger one heartbeat from Runtime logs to verify that the Agent receives it."],
+    ["远端 Agent 是下游 Agent 设备入口；远端设备只运行独立 bridge，无人值守等待 RabiGUI 扫描。保存后在“消息适配器”页扫描局域网，选择设备并输入密码连接。", "Remote Agent is an input for downstream Agent devices. The remote device runs only the standalone bridge and waits unattended for RabiGUI discovery. After saving, scan the LAN on Message adapters, select the device, and enter its password."],
+    ["快速配置只绑定一个 Agent；先确定处理端和项目目录，再选择会话。", "Quick setup binds one Agent. Choose the handler and project directory first, then select a task."],
+    ["Codex/ChatGPT Desktop 是真实消息的唯一 owner。RabiRoute 读取 Desktop 可见任务目录并通过 Desktop IPC 投递；Codex CLI 是独立 Runtime，不作为 Desktop 投递的备用路径。", "Codex/ChatGPT Desktop is the sole owner of real messages. RabiRoute reads Desktop-visible tasks and delivers through Desktop IPC. Codex CLI is a separate runtime and is not a fallback for Desktop delivery."],
+    ["人格可选与配置确认", "Optional persona and configuration review"],
+    ["不配置人格时，只按消息入口默认模板把来源和回传 API 投递给 Agent。", "Without a persona, the default input template sends only the source and reply API to the Agent."],
+    ["会话名 + 最后会话时间", "Task name + last activity"],
+    ["选择已有会话，或输入新会话名", "Select an existing task or enter a new task name"]
+  ]);
+
+  for (const [source, expected] of copy) {
+    assert.equal(translateText(source, "en"), expected, source);
+  }
+  assert.equal(translateText("人格 ID · XinghaiBuilder", "en"), "Persona ID · XinghaiBuilder");
+  assert.equal(translateText("自动：RabiRoute", "en"), "Automatic: RabiRoute");
+  assert.equal(translateText("已复制 RabiLink 回调地址", "en"), "RabiLink callback URL copied");
+});
+
+test("Quick setup has no untranslated static component copy", () => {
+  const filename = new URL("../src/components/QuickSetupDialog.vue", import.meta.url);
+  const source = fs.readFileSync(filename, "utf8");
+  const { descriptor } = parseSfc(source, { filename: filename.pathname });
+  assert.ok(descriptor.template, "QuickSetupDialog.vue should contain a template");
+  const template = parseTemplate(descriptor.template.content);
+  const untranslated: string[] = [];
+  const inspect = (value: string): void => {
+    const normalized = value.trim();
+    if (/[\u3400-\u9fff]/u.test(normalized) && translateText(normalized, "en") === normalized) {
+      untranslated.push(normalized);
+    }
+  };
+  const walk = (node: any): void => {
+    if (node.type === NodeTypes.TEXT) inspect(node.content);
+    if (node.type === NodeTypes.ELEMENT) {
+      for (const prop of node.props) {
+        if (prop.type === NodeTypes.ATTRIBUTE && prop.value) inspect(prop.value.content);
+      }
+    }
+    if (node.children) for (const child of node.children) walk(child);
+    if (node.branches) for (const branch of node.branches) walk(branch);
+  };
+  walk(template);
+
+  assert.ok(descriptor.scriptSetup, "QuickSetupDialog.vue should contain script setup");
+  const script = ts.createSourceFile(
+    filename.pathname,
+    descriptor.scriptSetup.content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const walkScript = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node)) inspect(node.text);
+    ts.forEachChild(node, walkScript);
+  };
+  walkScript(script);
+
+  assert.deepEqual(untranslated, []);
+});
+
 test("translates plan directory and step-local approval copy", () => {
   assert.equal(translateText("计划描述", "en"), "Plan description");
   assert.equal(translateText("计划附件", "en"), "Plan attachments");
@@ -168,6 +249,14 @@ test("translates dynamic diagnostic copy without changing runtime values", () =>
   assert.equal(
     translateText("已触发「Rabi 看板娘成长自检」，请在最近日志和通知数里确认投递结果。", "en"),
     "Triggered “Rabi 看板娘成长自检”. Check Recent logs and Delivery count for the result."
+  );
+  assert.equal(
+    translateText("已接受「Rabi 看板娘成长自检」，正在后台投递；请在最近日志中确认最终结果。", "en"),
+    "Accepted “Rabi 看板娘成长自检”. Delivery continues in the background; check Recent logs for the final result."
+  );
+  assert.equal(
+    translateText("「Rabi 看板娘成长自检」已经在后台投递中，没有重复启动；请在最近日志中确认最终结果。", "en"),
+    "“Rabi 看板娘成长自检” is already being delivered in the background, so no duplicate was started. Check Recent logs for the final result."
   );
 });
 

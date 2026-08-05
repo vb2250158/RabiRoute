@@ -12,6 +12,7 @@ param(
   [switch]$UseExistingBuild,
   [switch]$ReuseHealthyManager,
   [switch]$NoTray,
+  [switch]$NoDesktopSupervisor,
   [switch]$PauseAtEnd
 )
 
@@ -189,10 +190,11 @@ function Stop-StaleProjectManager {
 function Get-ExistingTrayProcesses {
   param([string]$ProjectRoot)
   $needle = (Join-Path $ProjectRoot "desktop\tray-task-window\main.py").ToLowerInvariant()
+  $packagedTray = (Join-Path $ProjectRoot "RabiRoute-Tray.exe").ToLowerInvariant()
   try {
     $matches = @(Get-CimInstance Win32_Process | Where-Object {
-      $_.CommandLine -and
-      $_.CommandLine.ToLowerInvariant().Contains($needle)
+      ($_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($needle)) -or
+      ($_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant() -eq $packagedTray)
     })
     $matchedPids = @{}
     foreach ($process in $matches) {
@@ -330,6 +332,82 @@ function Start-TrayWindow {
   Write-Info "Qt tray desktop entry process started: pid=$($tray.Id)"
   Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Tray pid=$($tray.Id), exitClosesManager=true"
   return $tray
+}
+
+function Start-DesktopLifecycleSupervisor {
+  param(
+    [string]$ProjectRoot,
+    [string]$ManagerUrl,
+    [string]$DefaultRouteName,
+    [string]$LauncherLog
+  )
+  $supervisorScript = Join-Path $ProjectRoot "scripts\watch-rabiroute-desktop-lifecycle.ps1"
+  if (-not (Test-Path -LiteralPath $supervisorScript)) {
+    throw "Desktop lifecycle supervisor is missing: $supervisorScript"
+  }
+  $arguments = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $supervisorScript,
+    "-ManagerUrl", $ManagerUrl,
+    "-DefaultRouteName", $DefaultRouteName
+  )
+  $supervisor = Start-Process `
+    -FilePath "powershell.exe" `
+    -ArgumentList $arguments `
+    -WorkingDirectory $ProjectRoot `
+    -WindowStyle Hidden `
+    -PassThru
+  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Desktop lifecycle supervisor candidate pid=$($supervisor.Id); workspace mutex will keep one owner."
+}
+
+function Start-DesktopPair {
+  param(
+    [string]$ProjectRoot,
+    [string]$ManagerUrl,
+    [string]$DefaultRouteName,
+    [string]$LauncherLog,
+    [string]$TrayOutLog,
+    [string]$TrayErrLog,
+    [bool]$SkipSupervisor
+  )
+  $body = @{ source = "windows-launcher" } | ConvertTo-Json -Compress
+  $intentMarked = $false
+  $lastIntentError = $null
+  for ($attempt = 1; $attempt -le 8; $attempt++) {
+    try {
+      Invoke-RestMethod `
+        -Uri "$ManagerUrl/manager/desktop-lifecycle/start" `
+        -Method Post `
+        -ContentType "application/json; charset=utf-8" `
+        -Body $body `
+        -TimeoutSec 3 | Out-Null
+      $intentMarked = $true
+      break
+    } catch {
+      $lastIntentError = $_.Exception.Message
+      if ($attempt -lt 8) { Start-Sleep -Milliseconds 750 }
+    }
+  }
+  if (-not $intentMarked) {
+    throw "Manager did not persist the desktop running intent after bounded retries: $lastIntentError"
+  }
+  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Desktop desired state=running was persisted by Manager."
+
+  Start-TrayWindow `
+    -ProjectRoot $ProjectRoot `
+    -ManagerUrl $ManagerUrl `
+    -LauncherLog $LauncherLog `
+    -TrayOutLog $TrayOutLog `
+    -TrayErrLog $TrayErrLog | Out-Null
+
+  if (-not $SkipSupervisor) {
+    Start-DesktopLifecycleSupervisor `
+      -ProjectRoot $ProjectRoot `
+      -ManagerUrl $ManagerUrl `
+      -DefaultRouteName $DefaultRouteName `
+      -LauncherLog $LauncherLog
+  }
 }
 
 function Test-NeedsBuild {
@@ -524,12 +602,14 @@ try {
       }
     }
     if (-not $NoTray) {
-      Start-TrayWindow `
+      Start-DesktopPair `
         -ProjectRoot $projectRoot `
         -ManagerUrl $ManagerUrl `
+        -DefaultRouteName $DefaultRouteName `
         -LauncherLog $launcherLog `
         -TrayOutLog $trayOutLog `
-        -TrayErrLog $trayErrLog | Out-Null
+        -TrayErrLog $trayErrLog `
+        -SkipSupervisor ([bool]$NoDesktopSupervisor)
     }
     if (-not $NoOpen) {
       Start-Process $ManagerUrl
@@ -634,12 +714,14 @@ try {
   }
 
   if (-not $NoTray) {
-    Start-TrayWindow `
+    Start-DesktopPair `
       -ProjectRoot $projectRoot `
       -ManagerUrl $ManagerUrl `
+      -DefaultRouteName $DefaultRouteName `
       -LauncherLog $launcherLog `
       -TrayOutLog $trayOutLog `
-      -TrayErrLog $trayErrLog | Out-Null
+      -TrayErrLog $trayErrLog `
+      -SkipSupervisor ([bool]$NoDesktopSupervisor)
   }
 
   Wait-ForEnter

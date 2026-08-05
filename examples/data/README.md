@@ -12,8 +12,8 @@
 
 用途：
 
-- 提供一份完整的 `data/route/main/adapterConfig.json` 示例。
-- 给默认路由配置提供角色 `roles/Rabi`，并提供 RabiLink 专用的 `roles/RabiActive`。
+- 提供一份名为“Rabi Demo”的完整 `data/route/main/adapterConfig.json` 示例；它通过 `agentRoleId: "Rabi"` 绑定 Rabi 本体。
+- 给默认路由配置提供人格 `roles/Rabi`，并提供 RabiLink 专用的 `roles/RabiActive`。
 - 给默认人格提供 `roles/Rabi/personaConfig.json` 消息模板规则和最近消息投递数量。
 - 给默认人格提供 `roles/Rabi/plans` 和 `roles/Rabi/memory` 的公开示例结构。
 - 给默认人格提供“一计划一任务”跟踪 Skill 范例；它不绑定具体聊天平台、审批人或项目规范。

@@ -56,11 +56,9 @@ The sidebar brand area displays the running version. You can also inspect the ro
 4. Check separately for a message record, AgentPacket, and Outbox result.
 5. Remove identities, tokens, cookies, private chat, and private absolute paths.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 15 | Sanitized diagnostic screenshot</strong>
-  <span>Suggested frame: sidebar version, current Route, Diagnosis Summary, and last error with accounts, tokens, private tasks, and paths hidden.</span>
-  <span>Callouts: version, Route type, source, handler, error time; include no secrets.</span>
-</div>
+![An example Log diagnostics screenshot without accounts, tokens, or private messages](../../assets/screenshots/webgui-diagnostics-en.png)
+
+Check your own screenshot before sharing it. Crop or cover real Route names, accounts, task names, absolute paths, and message text if they appear.
 
 ## Issue template
 

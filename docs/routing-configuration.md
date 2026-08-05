@@ -94,7 +94,7 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 - `private`：私聊消息。
 - `heartbeat`：定时触发消息。
 - `manual_trigger`：手动触发事件，例如托盘菜单主动触发某条任务/规则。它不是消息 adapter 类型，也不会伪装成 heartbeat；是否投递仍由规则的 `enabled` 和 `routeKinds` 勾选决定。
-- `role_panel_message`：角色面板的本地消息。Manager/托盘写入角色 timeline 后进入真实 forwarding；内置规则会自动存在，不能当成普通可删除规则。
+- `role_panel_message`：Manager 内置的人格消息。它同时承载本地角色面板和经过身份校验的跨人格投递，不是可配置网络 listener。两种入口共用同一投递服务：处理端接收后才写 `sent`，失败写 `failed`；内置规则会自动存在，不能当成普通可删除规则。
 - `plan_feedback`：Manager 在计划审批意见落盘后生成的独立系统事件。它由明确的 `roleId / gatewayId / planId` 定位，不依赖可编辑消息规则，不写角色面板 timeline 或统一会话账本，也不注入最近消息。
 - `voice_transcript`：Webhook / 语音转写文本。
 - `rabilink`：RabiLink 显式消息或本地兼容入口事件。AIUI observation 的主链通常先 record-first 写统一账本，不会让每条 observation 都直接成为该 route kind 的 Agent 任务。
@@ -103,7 +103,7 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 ## 普通投递、心跳与语音的例外
 
 - 普通消息端事件一旦命中规则，默认直接投递：当前 Desktop turn 活跃时 `steer`，空闲时 `start`。
-- Heartbeat 有独立 `heartbeatSkipWhenAgentBusy`。开启后只在会话工作中跳过 heartbeat，不影响普通消息。Heartbeat 固定不注入历史消息；旧配置里的 `recentMessageLimits.heartbeat` 会保留兼容读取，但运行时按 `0` 处理。
+- Heartbeat 固定不注入历史消息，也不进入聊天消息的等待合并。启用 Codex 消息处理 Agent 后，它会立即交给独立消息处理任务，不受主人格忙碌状态影响；未启用时才使用 `heartbeatSkipWhenAgentBusy`，在固定任务工作中跳过 heartbeat。旧配置里的 `recentMessageLimits.heartbeat` 会保留兼容读取，但运行时按 `0` 处理。
 - `plan_feedback` 是 Manager 已明确绑定计划和 Route 后产生的系统事件，固定投递专用内置规则；它不读取或写入聊天历史，最近消息模板变量始终为空。
 - 语音有 Route 级 `speechPushMode`：`hot` 每段 ASR 完成即投递；`keyword` 仍记录所有 ASR，仅命中人格 `speechTriggerKeywords` 时投递。空关键词不回退 `hot`。
 - `recentMessageLimits` 也归人格，普通消息端分别设置 `0–200`，默认 `12`；只控制自动注入，不控制记录。Heartbeat 与 `plan_feedback` 不提供可调额度，始终不注入历史。

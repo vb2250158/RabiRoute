@@ -26,6 +26,7 @@ export function planMemoryApiHint(roleId: unknown): string[] {
   const base = roleApiBase(roleId);
   return [
     "可用 API 提示：",
+    "- 查询可联系人格：GET /api/personas?addressable=true；向其它人格投递：POST /api/personas/{personaId}/messages。请求必须带唯一 deliveryId，sourceRouteId 使用当前 replyContext.runtimeRouteId，sourceCapability 原样使用 replyContext.personaMessagingCapability；目标有多个已启用 Route 时必须明确提供 targetRouteId。回复时沿用 personaConversationId、把当前 messageId 写入 inReplyToMessageId，并将 personaMessageHopCount 加 1；不得超过 personaMessageMaxHops",
     `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
       "- 待审批计划如有实际效果图、演示视频、设计稿、报告或其它相关文件，应通过计划 POST/PATCH 的 attachments 一并提交：本机文件使用 path，内存内容使用 name/mimeType/contentBase64；不要只把文件路径写进标题、focus 或审批说明",
     "- 用户要求暂停计划时，PATCH 顶层 status=暂停，保留当前进行中步骤和 currentStepId 作为恢复位置，并停止继续驱动绑定任务；恢复时把顶层 status 改回进行中",
@@ -47,6 +48,7 @@ function focusedApiHint(roleId: unknown): string[] {
   return [
     "计划、记忆和技能默认只注入与当前输入高相关的摘要；长历史与完整内容按需查询。",
     `按需查询/维护：${base}/plans、${base}/memory、${base}/skills；执行写入前仍须遵守对应接口校验与 Action Gate。`,
+    "需要联系其它人格时，先 GET /api/personas?addressable=true，再 POST /api/personas/{personaId}/messages；请求带唯一 deliveryId，sourceRouteId 使用当前 replyContext.runtimeRouteId，sourceCapability 原样使用 personaMessagingCapability。多目标 Route 必须明确选择；回复沿用会话 ID、引用当前消息并增加 hopCount，不得超过注入上限。",
       "待审批计划如果已有实际效果图、演示视频、设计稿、报告或其它文件，应写入计划 attachments；可传本机 path 或 name/mimeType/contentBase64，页面会展示附件并支持图片、视频预览。"
   ];
 }

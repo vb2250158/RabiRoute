@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalizeAgentAdapters, type AgentAdapterType } from "../agentAdapters/types.js";
-import { normalizeCodexHookSettings, type CodexHookSettings } from "../shared/gatewayConfigModel.js";
+import { normalizeCodexHookSettings, resolvePrimaryAgentAdapter, type CodexHookSettings } from "../shared/gatewayConfigModel.js";
 import {
   appendRolePanelTimelineMessage,
   readRolePanelTimeline,
@@ -13,6 +13,7 @@ export type PlanTaskCompletionRuntime = {
     id: string;
     agentRoleId?: string;
     agentAdapters?: AgentAdapterType[];
+    primaryAgentAdapter?: AgentAdapterType;
     codexThreadId?: string;
     codexHooks?: CodexHookSettings;
     routeProfiles?: Array<{ id: string }>;
@@ -34,11 +35,19 @@ export type PlanTaskCompletionDeliveryOptions<TRuntime extends PlanTaskCompletio
 
 export function planTaskCompletionAgentText(delivery: PlanTaskCompletionDelivery): string {
   const boundWorkspace = String(delivery.plan.taskBinding?.workspace || delivery.sourceCwd || "").trim();
+  const sourceTitle = String(delivery.plan.taskBinding?.sessionTitle || delivery.sourceSessionId).trim();
   return [
+    "[Agent 任务投递来源]",
+    "来源 Agent：计划执行 Agent",
+    `来源任务：${sourceTitle}`,
+    `来源会话 ID：${delivery.sourceSessionId}`,
+    delivery.sourceCwd ? `来源工作目录：${delivery.sourceCwd}` : "",
+    "",
+    "[投递内容]",
     "[计划会话任务完成提醒]",
     `计划：${delivery.plan.title}`,
     `计划 ID：${delivery.plan.id}`,
-    `执行会话：${delivery.plan.taskBinding?.sessionTitle || delivery.sourceSessionId}`,
+    `执行会话：${sourceTitle}`,
     `执行会话 ID：${delivery.sourceSessionId}`,
     `Turn ID：${delivery.sourceTurnId}`,
     delivery.sourceCwd ? `工作目录：${delivery.sourceCwd}` : "",
@@ -79,7 +88,11 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
 
   return async (delivery: PlanTaskCompletionDelivery): Promise<void> => {
     const runtime = runtimeForRoleDelivery(delivery.roleId, String(delivery.gatewayId || "").trim());
-    const targetUsesCodex = normalizeAgentAdapters(runtime.definition.agentAdapters).includes("codex");
+    const targetAdapters = normalizeAgentAdapters(runtime.definition.agentAdapters);
+    const targetUsesCodex = resolvePrimaryAgentAdapter(
+      targetAdapters,
+      runtime.definition.primaryAgentAdapter
+    ) === "codex";
     if (normalizeCodexHookSettings(runtime.definition.codexHooks).planTaskCompletionEnabled === false) {
       throw new Error(`Gateway ${runtime.definition.id} has disabled plan task completion notifications.`);
     }

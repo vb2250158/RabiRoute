@@ -31,11 +31,9 @@ npm run start:manager
 
 在“选择消息入口”中选择“定时触发”。先不要同时接入 QQ、Webhook 或实验适配器；第一轮只验证一条最短链路。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 02｜快速配置：选择消息入口</strong>
-  <span>建议画面：快速配置第一步，选中“定时触发”，保留三步进度条和入口说明。</span>
-  <span>标注重点：定时触发、会话工作中时跳过心跳、下一步。</span>
-</div>
+![消息适配器页显示当前 Route 的消息入口和 Codex 处理端](../../assets/screenshots/webgui-adapters-zh.png)
+
+快速配置完成后，可以在“消息适配器”页复核：定时触发应出现在消息入口列表，主 Agent 应指向 Codex。
 
 ## 第 2 步：绑定 Codex 任务
 
@@ -49,11 +47,6 @@ npm run start:manager
 
 RabiRoute 内部保存完整任务 ID。任务在 Desktop 中改名或完成 goal 后，只要 ID 和工作目录仍有效，就会继续复用，不会因为名称变化重复创建。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 03｜快速配置：绑定 Codex</strong>
-  <span>建议画面：Codex Agent 已选中，扫描状态、项目目录和任务选择器同时可见。</span>
-  <span>标注重点：已验证、项目目录、任务名与最后会话时间、重新扫描。</span>
-</div>
 
 ## 第 3 步：确认人格
 
@@ -78,11 +71,9 @@ RabiRoute 内部保存完整任务 ID。任务在 Desktop 中改名或完成 goa
 
 手动触发会进入真实投递链，不是预览。它会写运行记录，并向已绑定处理端开始一次真实投递。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 04｜日志诊断：首次成功投递</strong>
-  <span>建议画面：诊断摘要、运行状态、Codex Desktop 任务和手动触发结果处于同一画面。</span>
-  <span>标注重点：链路正常、Codex Desktop IPC、最后成功时间、触发成功。</span>
-</div>
+![日志诊断页从诊断摘要开始显示运行状态和消息端状态](../../assets/screenshots/webgui-diagnostics-zh.png)
+
+截图使用了未启动、未绑定真实任务的文档示例，所以图中显示“禁用中”和“未绑定”。你的首次投递完成后，这些位置应显示实际运行状态、已绑定任务和最近成功时间。
 
 ## 如何判断成功
 

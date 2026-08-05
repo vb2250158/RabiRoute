@@ -296,6 +296,89 @@ test("AgentPacket omits persona voice identity paths from non-audio role panel m
   assert.equal(packet.templateValues.voiceIdentitiesPath, undefined);
 });
 
+test("AgentPacket excludes every fragment already merged into the current message group", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-group-"));
+  appendGroupMessage(dataDir, {
+    time: 1,
+    groupId: 9001,
+    userId: 10001,
+    rawMessage: "更早但仍然相关的背景",
+    messageId: 3000,
+    senderName: "小明"
+  });
+  appendGroupMessage(dataDir, {
+    time: 2,
+    groupId: 9001,
+    userId: 10001,
+    rawMessage: "这个按钮",
+    messageId: 3001,
+    senderName: "小明"
+  });
+  appendGroupMessage(dataDir, {
+    time: 3,
+    groupId: 9001,
+    userId: 10001,
+    rawMessage: "再往下挪一点",
+    messageId: 3002,
+    senderName: "小明"
+  });
+
+  const record = {
+    time: 3,
+    groupId: 9001,
+    userId: 10001,
+    rawMessage: "这个按钮\n再往下挪一点",
+    messageId: 3002,
+    senderName: "小明",
+    messageGroupId: "message-group-1",
+    messageGroupMessageIds: ["3001", "3002"]
+  } satisfies GroupMessageRecord & {
+    messageGroupId: string;
+    messageGroupMessageIds: string[];
+  };
+  const rule: NotificationRule = {
+    id: "group-message",
+    name: "group message",
+    enabled: true,
+    routeKinds: ["group_message"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "route-1",
+    name: "main",
+    enabled: true,
+    recentMessageLimit: 12,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleFile: "",
+    rolesDir: dataDir,
+    dataDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "group_message",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, {
+    roleId: "",
+    roleDir: "",
+    rolePath: "",
+    dataDir
+  });
+
+  assert.match(String(packet.templateValues.recentMessages), /更早但仍然相关的背景/);
+  assert.doesNotMatch(String(packet.templateValues.recentMessages), /这个按钮/);
+  assert.doesNotMatch(String(packet.templateValues.recentMessages), /再往下挪一点/);
+  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+  assert.equal(replyContext.messageGroupId, "message-group-1");
+  assert.deepEqual(replyContext.messageGroupMessageIds, ["3001", "3002"]);
+});
+
 test("AgentPacket exposes exact plan secretary sessions without replacing business task ownership", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-assistant-"));
   const previousSessions = config.codexPlanAssistantSessions;

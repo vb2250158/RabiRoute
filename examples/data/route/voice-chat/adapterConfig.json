@@ -55,6 +55,7 @@
   "agentAdapters": [
     "codex"
   ],
+  "primaryAgentAdapter": "codex",
   "dataDir": "./data/route/voice-chat",
   "configName": "voice-chat",
   "agentRoleId": "Rabi",

@@ -9,6 +9,7 @@ import {
   CodexDesktopBridge,
   listCodexDesktopThreads,
   readCodexDesktopThread,
+  type CodexDesktopReasoningEffort,
   type CodexDesktopThread
 } from "./codexDesktopBridge.js";
 import { canonicalCodexWorkspacePath, isCodexTaskId, sameCodexWorkspace } from "./codexTaskIdentity.js";
@@ -18,6 +19,10 @@ import {
   resolveCodexSession,
   type CodexSessionResolverDependencies
 } from "./codexSessionResolver.js";
+import {
+  readCodexRolloutActivity,
+  type CodexRolloutActivity
+} from "./codexRolloutActivity.js";
 import { rabiRoutePackageVersion } from "./packageInfo.js";
 
 export type CodexMonitorThread = {
@@ -171,6 +176,31 @@ type CodexAppServerThreadListResult = {
   nextCursor?: string | null;
 };
 
+export function codexThreadDiscoveryRequestForTest(
+  query: string,
+  cursor: string | null,
+  allowedWorkspaces: string[] = [],
+  stateDbOnly = false
+): { method: "thread/list"; params: Record<string, unknown> } {
+  const common = {
+    cursor,
+    limit: 100,
+    sortKey: "recency_at",
+    sortDirection: "desc",
+    sourceKinds: codexThreadSourceKinds,
+    archived: false
+  };
+  return {
+    method: "thread/list",
+    params: {
+      ...common,
+      searchTerm: stateDbOnly && query.trim() ? query.trim() : undefined,
+      useStateDbOnly: stateDbOnly,
+      cwd: allowedWorkspaces.length ? allowedWorkspaces : undefined
+    }
+  };
+}
+
 const codexThreadSourceKinds = [
   "cli",
   "vscode",
@@ -229,6 +259,7 @@ async function listCodexDesktopThreadsWithMetadata(options: {
   limit?: number;
   offset?: number;
   allowedWorkspaces?: string[];
+  stateDbOnly?: boolean;
 } = {}): Promise<CodexDesktopThread[]> {
   const client = createCodexMetadataClient(config.codexCwd || process.cwd());
   const metadataThreads: CodexAppServerThreadMetadata[] = [];
@@ -237,16 +268,13 @@ async function listCodexDesktopThreadsWithMetadata(options: {
   try {
     let cursor: string | null = null;
     for (let page = 0; page < 100; page += 1) {
-      const result = await client.request("thread/list", {
+      const discovery = codexThreadDiscoveryRequestForTest(
+        query,
         cursor,
-        limit: 100,
-        sortKey: "recency_at",
-        sortDirection: "desc",
-        sourceKinds: codexThreadSourceKinds,
-        archived: false,
-        useStateDbOnly: false,
-        cwd: options.allowedWorkspaces?.length ? options.allowedWorkspaces : undefined
-      }) as CodexAppServerThreadListResult;
+        options.allowedWorkspaces,
+        options.stateDbOnly === true
+      );
+      const result = await client.request(discovery.method, discovery.params) as CodexAppServerThreadListResult;
       metadataThreads.push(...(Array.isArray(result.data) ? result.data : []));
       cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
       const eligibleCount = query
@@ -339,13 +367,17 @@ async function deliverDesktopMessage(params: {
   thread: CodexDesktopThread;
   prompt: string;
   sandbox: CodexTurnSandbox;
+  model?: string;
+  reasoningEffort?: CodexDesktopReasoningEffort;
 }): Promise<string | null> {
   const preserveEmptyTaskTitle = !params.thread.firstUserMessage;
   await desktopBridge.deliver({
     threadId: params.thread.id,
     prompt: params.prompt,
     cwd: params.thread.cwd,
-    sandbox: params.sandbox
+    sandbox: params.sandbox,
+    model: params.model,
+    reasoningEffort: params.reasoningEffort
   });
   if (preserveEmptyTaskTitle) {
     try {
@@ -367,6 +399,7 @@ export async function listCodexThreads(options: {
   limit?: number;
   offset?: number;
   allowedWorkspaces: string[];
+  stateDbOnly?: boolean;
 }): Promise<CodexThreadSummary[]> {
   return (await listCodexDesktopThreadsWithMetadata(options)).map(asSummary);
 }
@@ -374,6 +407,7 @@ export async function listCodexThreads(options: {
 export async function readCodexThread(threadId: string): Promise<unknown> {
   const thread = readCodexDesktopThread(threadId);
   if (!thread) throw new Error(`Codex Desktop task was not found: ${threadId}`);
+  const active = await codexDesktopThreadIsActive(thread);
   return {
     id: thread.id,
     title: thread.title,
@@ -381,8 +415,26 @@ export async function readCodexThread(threadId: string): Promise<unknown> {
     updatedAt: thread.updatedAt,
     archived: thread.archived,
     source: "Codex Desktop state",
-    rolloutPath: thread.rolloutPath
+    rolloutPath: thread.rolloutPath,
+    active
   };
+}
+
+export function codexThreadIsActiveFromSourcesForTest(
+  desktopActiveSinceMs: number | null,
+  rollout: CodexRolloutActivity
+): boolean {
+  if (rollout.state === "active") return true;
+  if (desktopActiveSinceMs == null) return false;
+  if (rollout.state === "unknown") return true;
+  return desktopActiveSinceMs > rollout.observedAtMs;
+}
+
+async function codexDesktopThreadIsActive(thread: CodexDesktopThread): Promise<boolean> {
+  const rollout = thread.rolloutPath
+    ? await readCodexRolloutActivity(thread.rolloutPath)
+    : { state: "unknown", observedAtMs: 0 } satisfies CodexRolloutActivity;
+  return codexThreadIsActiveFromSourcesForTest(desktopBridge.threadActiveSince(thread.id), rollout);
 }
 
 export async function renameCodexThread(params: {
@@ -470,9 +522,17 @@ export async function sendCodexThreadMessage(params: {
   prompt: string;
   cwd: string;
   sandbox: CodexTurnSandbox;
+  model?: string;
+  reasoningEffort?: CodexDesktopReasoningEffort;
 }): Promise<void> {
   const thread = await waitForCodexDesktopThreadForTest({ threadId: params.threadId, cwd: params.cwd });
-  await deliverDesktopMessage({ thread, prompt: params.prompt, sandbox: params.sandbox });
+  await deliverDesktopMessage({
+    thread,
+    prompt: params.prompt,
+    sandbox: params.sandbox,
+    model: params.model,
+    reasoningEffort: params.reasoningEffort
+  });
 }
 
 function monitorThreadFromDesktop(thread: CodexDesktopThread): CodexMonitorThread {
@@ -483,39 +543,6 @@ function monitorThreadFromDesktop(thread: CodexDesktopThread): CodexMonitorThrea
     source: "Codex Desktop state + Desktop IPC",
     cwd: thread.cwd
   };
-}
-
-function rolloutShowsActive(rolloutPath: string): boolean {
-  if (!rolloutPath || !fs.existsSync(rolloutPath)) return false;
-  let latestTurnId = "";
-  const terminalTurnIds = new Set<string>();
-  try {
-    for (const line of fs.readFileSync(rolloutPath, "utf8").split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      try {
-        const record = JSON.parse(line) as {
-          type?: unknown;
-          payload?: { type?: unknown; turn_id?: unknown };
-        };
-        if (record.type === "turn_context" && typeof record.payload?.turn_id === "string") {
-          latestTurnId = record.payload.turn_id;
-          continue;
-        }
-        const eventType = record.type === "event_msg" ? record.payload?.type : record.type;
-        const turnId = record.payload?.turn_id;
-        if (typeof turnId === "string" && (
-          eventType === "task_complete"
-          || eventType === "turn_aborted"
-          || eventType === "task_failed"
-        )) terminalTurnIds.add(turnId);
-      } catch {
-        // Ignore an incomplete last JSONL record while Desktop is writing it.
-      }
-    }
-  } catch {
-    return false;
-  }
-  return Boolean(latestTurnId) && !terminalTurnIds.has(latestTurnId);
 }
 
 function bindDesktopThread(thread: CodexDesktopThread): CodexMonitorThread {
@@ -543,9 +570,9 @@ function currentCodexThreadId(): string {
 function codexSessionDependencies(): CodexSessionResolverDependencies<CodexDesktopThread> {
   return {
     scope: desktopBridge,
-    // Return the Desktop record as-is. The canonical resolver validates the
-    // saved id + visible name + workspace together, then falls back to a name
-    // lookup/create when any part is stale.
+    // readCodexDesktopThread is the canonical Desktop task read model: opaque
+    // identity/workspace come from owner state, while the displayed title is
+    // overlaid from the same index used by Desktop's left sidebar.
     read: async (candidateId) => readCodexDesktopThread(candidateId),
     list: async ({ title, cwd }) => listCodexDesktopThreadsWithMetadata({
       query: title,
@@ -590,7 +617,7 @@ export async function isCodexMonitorThreadActive(): Promise<boolean> {
   const thread = await resolveMonitorThread(false);
   if (!thread) return false;
   bindDesktopThread(thread);
-  return desktopBridge.isThreadActive(thread.id) || rolloutShowsActive(thread.rolloutPath);
+  return codexDesktopThreadIsActive(thread);
 }
 
 function recordDeliveredNotification(thread: CodexDesktopThread, now: Date, deliveryId: string): CodexMonitorThread {
@@ -656,7 +683,7 @@ export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNot
     const thread = await resolveMonitorThread(true);
     if (!thread) throw new Error("Codex Desktop task could not be resolved.");
     bindDesktopThread(thread);
-    if (desktopBridge.isThreadActive(thread.id) || rolloutShowsActive(thread.rolloutPath)) {
+    if (await codexDesktopThreadIsActive(thread)) {
       return { status: "busy", thread: monitorThreadFromDesktop(thread) } satisfies CodexIdleNotificationResult;
     }
     const deliveryId = randomUUID();

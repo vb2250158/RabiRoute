@@ -25,6 +25,11 @@ test("AgentPacket plan hints explain shared guidance and approval feedback workf
   assert.match(hints, /currentStepId/);
   assert.match(hints, /计划 POST\/PATCH 的 attachments/);
   assert.match(hints, /name\/mimeType\/contentBase64/);
+  assert.match(hints, /GET \/api\/personas\?addressable=true/);
+  assert.match(hints, /sourceRouteId/);
+  assert.match(hints, /sourceCapability/);
+  assert.match(hints, /deliveryId/);
+  assert.match(hints, /personaMessageMaxHops/);
 });
 
 test("focused AgentPacket hints keep plan attachment discovery available", () => {
@@ -42,4 +47,5 @@ test("focused AgentPacket hints keep plan attachment discovery available", () =>
     assert.match(hints, /待审批计划/);
     assert.match(hints, /计划 attachments/);
     assert.match(hints, /图片、视频预览/);
+    assert.match(hints, /POST \/api\/personas\/\{personaId\}\/messages/);
   });

@@ -19,6 +19,7 @@ import {
 import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
 import {
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
+  resolvePrimaryAgentAdapter,
   validateGatewayPortConflicts
 } from "@shared/gatewayConfigModel";
 import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
@@ -101,7 +102,7 @@ function validateGatewayPorts(items: GatewayDefinition[], managerPort: number): 
     for (const instance of activeNapcatInstances) {
       const name = `${configNameFor(gateway)} / ${instance.name || instance.id}`;
       claim(instance.gatewayPort, `${name} RabiRoute WS`);
-      claim(portFromUrl(instance.httpUrl, `${name} HTTP 地址`), `${name} NapCat HTTP`);
+      portFromUrl(instance.httpUrl, `${name} HTTP 地址`);
     }
   }
 }
@@ -116,22 +117,8 @@ function nextAvailablePort(used: Set<number>, preferred: number): number {
   return port;
 }
 
-function nextAvailableLocalUrl(baseUrl: string | undefined, used: Set<number>, fallbackPort: number): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl || `http://127.0.0.1:${fallbackPort}`);
-  } catch {
-    parsed = new URL(`http://127.0.0.1:${fallbackPort}`);
-  }
-  const current = Number(parsed.port || 0);
-  const nextPort = nextAvailablePort(used, current || fallbackPort);
-  parsed.port = String(nextPort);
-  return parsed.toString().replace(/\/$/, "");
-}
-
 function autoAssignGatewayPorts(items: GatewayDefinition[], managerPort: number): void {
   const usedIngress = new Set<number>();
-  const usedHttp = new Set<number>();
   if (managerPort) usedIngress.add(assertValidPort(managerPort, "RibiWebGUI manager"));
 
   const assignIngress = (value: unknown, fallback: number): number => {
@@ -152,12 +139,8 @@ function autoAssignGatewayPorts(items: GatewayDefinition[], managerPort: number)
     if (adapters.includes("napcat") && activeNapcatInstances.length > 0) {
       for (const instance of activeNapcatInstances) {
         instance.gatewayPort = assignIngress(instance.gatewayPort, Number(gateway.gatewayPort || 8790) + 1);
-        const httpPort = portFromUrl(instance.httpUrl, `${configNameFor(gateway)} / ${instance.name || instance.id} HTTP 地址`);
-        if (!httpPort || usedHttp.has(httpPort)) {
-          instance.httpUrl = nextAvailableLocalUrl(instance.httpUrl || gateway.napcatHttpUrl, usedHttp, 3000);
-        } else {
-          usedHttp.add(httpPort);
-        }
+        instance.httpUrl = instance.httpUrl || gateway.napcatHttpUrl || "http://127.0.0.1:3000";
+        portFromUrl(instance.httpUrl, `${configNameFor(gateway)} / ${instance.name || instance.id} HTTP 地址`);
       }
       const primary = activeNapcatInstances[0];
       gateway.gatewayPort = Number(primary.gatewayPort);
@@ -289,6 +272,10 @@ export const useGatewayStore = defineStore("gateway", () => {
         .map(normalizeAgentAdapterType)
         .filter((item): item is AgentAdapterType => Boolean(item));
       gateway.agentAdapters = [...new Set(agentAdapters)];
+      gateway.primaryAgentAdapter = resolvePrimaryAgentAdapter(
+        gateway.agentAdapters,
+        gateway.primaryAgentAdapter
+      );
       if (Array.isArray(gateway.notificationRules)) {
         gateway.notificationRules = gateway.notificationRules.map((rule, index) => normalizeRule(rule, index));
       }
@@ -391,6 +378,13 @@ export const useGatewayStore = defineStore("gateway", () => {
       }
       sharedAutoAssignGatewayPorts(gateways.value, Number(meta.value.managerPort || 0));
       validateGatewayPortConflicts(gateways.value);
+      const expectedEnabledMessageAgents = gateways.value
+        .filter(gateway => gateway.messageProcessingAgents?.codex?.enabled === true)
+        .map(gateway => ({
+          id: gateway.id,
+          configName: gateway.configName,
+          policy: gateway.messageProcessingAgents?.codex
+        }));
       const savedEditVersion = editVersion.value;
       const response = await fetch(`${apiBase}/gateways`, {
         method: "POST",
@@ -400,6 +394,21 @@ export const useGatewayStore = defineStore("gateway", () => {
       const body = await response.json();
       if (!response.ok || body.code !== 0) {
         throw new Error(body.message || body.error || "保存配置失败");
+      }
+      const savedGateways = body?.data?.config?.gateways;
+      if (Array.isArray(savedGateways)) {
+        const messageAgentSettingWasDropped = expectedEnabledMessageAgents.some(expected => {
+          const saved = savedGateways.find((gateway: GatewayDefinition) => (
+            gateway.id === expected.id || gateway.configName === expected.configName
+          ));
+          const policy = saved?.messageProcessingAgents?.codex;
+          return policy?.enabled !== true
+            || policy.model !== expected.policy?.model
+            || policy.reasoningEffort !== expected.policy?.reasoningEffort;
+        });
+        if (messageAgentSettingWasDropped) {
+          throw new Error("Manager 版本过旧，未保存消息处理 Agent 设置。请重启 Manager 后再次保存。");
+        }
       }
       if (editVersion.value === savedEditVersion) {
         dirty.value = false;
@@ -435,7 +444,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     message?: string;
     routeKind?: "manual_trigger" | "heartbeat";
     ruleId?: string;
-  }): Promise<void> {
+  }): Promise<{ accepted: true; alreadyRunning: boolean }> {
     const response = await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/manual-trigger`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -445,7 +454,10 @@ export const useGatewayStore = defineStore("gateway", () => {
     if (!response.ok || body.code !== 0) {
       throw new Error(body.message || body.error || "manual trigger failed");
     }
-    await load();
+    return {
+      accepted: true,
+      alreadyRunning: body.data?.alreadyRunning === true
+    };
   }
 
   async function openConfigFile(type: string, gatewayId = "", roleId = ""): Promise<void> {
@@ -646,6 +658,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     adapters?: MessageAdapterType[];
     messageInputsDisabled?: boolean;
     agentAdapters?: AgentAdapterType[];
+    primaryAgentAdapter?: AgentAdapterType;
     heartbeatIntervalSeconds?: number;
     heartbeatMessage?: string;
     heartbeatSkipWhenAgentBusy?: boolean;
@@ -674,6 +687,10 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway.agentModel = values.agentModel?.trim() || "";
     gateway.codexCwd = values.codexCwd;
     gateway.agentAdapters = values.agentAdapters?.length ? values.agentAdapters : gateway.agentAdapters;
+    gateway.primaryAgentAdapter = resolvePrimaryAgentAdapter(
+      gateway.agentAdapters,
+      values.primaryAgentAdapter ?? gateway.primaryAgentAdapter
+    );
     if (gateway.agentAdapters?.includes("codex")) {
       gateway.codexThreadId = values.codexThreadId;
       gateway.codexThreadName = values.codexThreadName;

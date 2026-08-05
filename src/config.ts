@@ -7,9 +7,12 @@ import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, 
 import {
   normalizeRecentMessageLimits,
   normalizeRecentMessageLimit,
+  normalizeMessageAdapterPolicies,
+  normalizeMessageProcessingAgentPolicies,
   normalizeScheduleDefinitions,
   normalizeSpeechPushMode,
   normalizeSpeechTriggerKeywords,
+  resolvePrimaryAgentAdapter,
   type NotificationScheduleDefinition,
   type RecentMessageLimits,
   type SpeechPushMode
@@ -410,6 +413,16 @@ const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES, {
 const pipelinePreset = process.env.PIPELINE_PRESET?.trim() || undefined;
 const pipeline = parsePipelineDefinition(process.env.PIPELINE);
 const agentModel = normalizeOptionalString(process.env.AGENT_MODEL);
+const agentAdapters = parseAgentAdapters(process.env.AGENT_ADAPTERS);
+const messageProcessingAgents = normalizeMessageProcessingAgentPolicies(
+  parseJsonEnvironmentValue(process.env.MESSAGE_PROCESSING_AGENTS, "MESSAGE_PROCESSING_AGENTS"),
+  agentAdapters
+);
+const messageAdapterTypes = parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE);
+const messageAdapterPolicies = normalizeMessageAdapterPolicies(
+  parseJsonEnvironmentValue(process.env.MESSAGE_ADAPTER_POLICIES, "MESSAGE_ADAPTER_POLICIES"),
+  messageAdapterTypes
+);
 const defaultNapCatInstance: NapCatInstanceConfig = {
   id: "default",
   name: "默认 NapCat",
@@ -427,13 +440,15 @@ const primaryNapcatInstance = napcatInstances.find((item) => item.enabled) ?? na
 
 export const config = {
   messageAdapterType: parseMessageAdapterType(process.env.MESSAGE_ADAPTER_TYPE),
-  messageAdapterTypes: parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE),
+  messageAdapterTypes,
+  messageAdapterPolicies,
   heartbeatIntervalSeconds: parsePositiveNumber(process.env.HEARTBEAT_INTERVAL_SECONDS, 900),
   heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
   heartbeatSkipWhenAgentBusy: parseBoolean(process.env.HEARTBEAT_SKIP_WHEN_AGENT_BUSY, false),
   remoteAgentDefaultDeviceId: process.env.REMOTE_AGENT_DEFAULT_DEVICE_ID?.trim() || "",
   remoteAgentDefaultCwd: process.env.REMOTE_AGENT_DEFAULT_CWD?.trim() || "",
   remoteAgentDefaultThreadName: process.env.REMOTE_AGENT_DEFAULT_THREAD_NAME?.trim() || "",
+  personaMessagingCapability: process.env.PERSONA_MESSAGING_CAPABILITY?.trim() || "",
   napcatInstances,
   napcatHttpUrl: primaryNapcatInstance.httpUrl,
   napcatWebuiUrl: primaryNapcatInstance.webuiUrl,
@@ -476,7 +491,12 @@ export const config = {
   feishuEventSubscriptionEnabled: parseBoolean(process.env.FEISHU_EVENT_SUBSCRIPTION_ENABLED, false),
   feishuWebhookPath: process.env.FEISHU_WEBHOOK_PATH?.trim() || "/feishu",
   feishuWebhookPort: Number(process.env.FEISHU_WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
-  agentAdapters: parseAgentAdapters(process.env.AGENT_ADAPTERS),
+  agentAdapters,
+  primaryAgentAdapter: resolvePrimaryAgentAdapter(
+    agentAdapters,
+    process.env.PRIMARY_AGENT_ADAPTER
+  ),
+  messageProcessingAgents,
   agentModel,
   codexThreadId: process.env.CODEX_THREAD_ID?.trim() || "",
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",

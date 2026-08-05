@@ -21,18 +21,26 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Start here
 
-- [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Task-based product instructions for first delivery, status, adapters, handlers, persona rules, troubleshooting, and safety, with screenshot placeholders at key actions.
-- [Current Capabilities and Maturity](current-capabilities_en.md) — **Current fact**. The most reliable feature entry, separating `verified`, `experimental`, `stub`, `planned`, and `historical` capabilities.
-- [Getting Started](getting-started_en.md) — **Current guide**. Install, start the Manager, open RibiWebGUI, and verify the first route.
-- [Configuration](configuration_en.md) — **Current guide**. Current fields, endpoint maturity, Codex Desktop IPC delivery, and handler configuration.
-- [Troubleshooting](troubleshooting_en.md) — **Current guide**. NapCat, encoding, Codex Desktop ownership, task bridging, models, and approval boundaries.
+- [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Start here on your first use to complete a real delivery, read status, change rules, and recover from common failures.
+- [Getting Started](getting-started_en.md) — **Current guide**. Install RabiRoute, start Manager, and confirm that the console opens.
+- [Interface and status](user-guide/interface-and-status_en.md) — **Current guide**. Understand the current Route, Manager connection, unsaved changes, and runtime state.
+- [Runtime, logs, and troubleshooting](user-guide/operations-and-troubleshooting_en.md) — **Current guide**. When a message does not arrive, start with the diagnosis summary and locate the break.
+- [Safety, replies, and data](user-guide/safety-and-data_en.md) — **Current guide**. Check permissions and privacy before enabling external replies or sharing diagnostics.
+- [Current Capabilities and Maturity](current-capabilities_en.md) — **Current fact**. Check what is verified and what still needs a real account, network, or device acceptance run.
+
+## Local installation, configuration, and recovery
+
+- [Configuration](configuration_en.md) — Current fields, message inputs, and handler settings.
+- [Troubleshooting](troubleshooting_en.md) — NapCat, encoding, Codex Desktop task ownership, models, and approval boundaries.
+- [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — Windows installation, startup, and packaging.
+- [Unattended NapCat](napcat-unattended_en.md) — QQ login state, quick login, Manager recovery, and supervision boundaries.
 
 ## Routing, personas, and handlers
 
 - [Routing configuration](routing-configuration_en.md) — **Current guide** for `personaConfig.json`, route kinds, regex, pipelines, and template variables.
 - [Routing and personas](routing-and-personas_en.md) — **Current guide** for route/role boundaries and persona decision templates.
-- [Agent context injection](agent-context-injection_en.md) — **Current guide** for the persona-scoped bidirectional ledger, per-endpoint/conversation recent-message budgets, archival boundaries, role knowledge, paths, and reply context inside `AgentPacket`.
-- [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current guide** for replies, thread bridge, plans, memory, Remote Agent, and role skills.
+- [Agent context injection](agent-context-injection_en.md) — **Current guide** for the persona-scoped bidirectional ledger, per-endpoint/conversation recent-message budgets, archival boundaries, persona-directory and cross-persona credentials, paths, and reply context inside `AgentPacket`.
+- [Rabi Agent interfaces](rabi-agent-interfaces_en.md) — **Current contract** for handler replies, persona discovery, idempotent one-way cross-persona delivery, receipts, thread bridge, plans, memory, Remote Agent, and role skills.
 - [Plans and memory](plan-and-memory-model_en.md) — **Current guide** for Role Knowledge sources, recall, explicit consolidation, and side effects.
 - [Unified dynamic record lifecycle](dynamic-record-lifecycle_en.md) — **Current guide** for archival, memory consolidation, physical sharding, retention, and the 24/72-hour dynamic windows.
 - [Pipeline presets](pipeline-presets_en.md) — Agent-session defaults, explicit external targets, and Outbox statuses; FenneNote output is archival compatibility only.
@@ -79,6 +87,7 @@ This directory contains current guides, experimental integrations, designs, rese
 ## Designs and history
 
 - [Proactive-intelligence system design overview](../主动智能设计思路_en.md) — **Planned**. Covers user modeling, scenarios, proactive action, memory, and device responsibilities. See Current Capabilities for implementation status.
+- [Conversational message collection, message groups, and four-Agent collaboration](group-message-batching-and-triage-plan_en.md) — **Experimental**. Natural-language traffic may be recorded immediately, settled into batches, and sent to dynamic Codex Message Agents by explicit reply, conversation, speaker, and endpoint familiarity. Live group/DM and complete four-Agent acceptance remain pending.
 - [Persona route workbench plan](persona-route-workbench-plan_en.md) — **Partially implemented**. Speech-keyword and per-endpoint context controls are live; side-effect-free RouteDecision/AgentPacket preview is not implemented.
 - [Windows tray task-window plan](rabiroute-windows-tray-task-window-plan_en.md) — design record; use `desktop/tray-task-window/` and the packaging guide for the actual implementation.
 - [UE/UX audit and refactor](rabiroute-ue-ux-audit-and-refactor_en.md) — phase audit.

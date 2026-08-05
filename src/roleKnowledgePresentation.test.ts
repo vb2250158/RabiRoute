@@ -81,13 +81,14 @@ test("plan presentation blocks only complete pending approvals and keeps other o
     id: "qa",
     title: "QA",
     currentStepId: "verify",
-    steps: [{ id: "verify", title: "等待 QA 验收", status: "进行中" }]
+    currentStep: "目标包已确认，QA 请求已真实发送，sentMessageId=1355668300，只等待验收结论。",
+    steps: [{ id: "verify", title: "等待 QA 验收", status: "进行中", detail: "status=sent, sentMessageId=1355668300" }]
   });
   const qaWithLegacyBlocker = plan({
     id: "qa-with-legacy-blocker",
     title: "QA with legacy blocker",
     currentStepId: "verify",
-    currentStep: "专项 QA 已真实发送，等待实机结果。",
+    currentStep: "专项 QA 已真实发送，sentMessageId=1355668301，等待实机结果。",
     waitingFor: "QA 回传专项结果",
     blockedBy: "QA 尚未回传",
     steps: [{
@@ -231,7 +232,7 @@ test("plan presentation derives an environment wait from the authoritative curre
     }]
   });
 
-  assert.equal(planPresentation(item).status, "待环境");
+  assert.equal(planPresentation(item).status, "等待测试环境");
   assert.equal(planPresentation(item).tone, "waiting_external");
 });
 
@@ -249,7 +250,7 @@ test("plan presentation keeps a busy Unity owner in the environment wait stage",
     }]
   });
 
-  assert.equal(planPresentation(item).status, "待环境");
+  assert.equal(planPresentation(item).status, "等待测试环境");
   assert.equal(planPresentation(item).tone, "waiting_external");
 });
 
@@ -293,6 +294,103 @@ test("plan presentation uses external receipt as the fallback for an explicit or
   });
 
   assert.equal(planPresentation(item).status, "待外部回执");
+  assert.equal(planPresentation(item).tone, "waiting_external");
+});
+
+test("plan presentation does not treat historical sent screenshot evidence as a current action", () => {
+  const item = plan({
+    id: "guild-review-sent",
+    title: "Guild review sent",
+    currentStepId: "waiting-result-car-ui-review",
+    currentStep: "运行截图和校对消息均已发送，当前只等待车的校对结果。",
+    nextAction: "仅核对 sentMessageId 的回复链；禁止重复发送。",
+    waitingFor: "等待车回复两条已发送校对消息的结果",
+    steps: [{
+      id: "waiting-result-car-ui-review",
+      title: "等待车校对公会界面",
+      status: "进行中",
+      detail: "运行截图已发送，sentMessageId=1060040854，禁止重复发送。",
+      waitingFor: "等待车回复已发送消息"
+    }]
+  });
+
+  assert.equal(planPresentation(item).status, "待外部回执");
+  assert.equal(planPresentation(item).tone, "waiting_external");
+});
+
+test("plan presentation keeps an explicit run-and-send instruction actionable", () => {
+  const item = plan({
+    id: "run-and-send-action",
+    title: "Run and send action",
+    currentStepId: "run-and-send",
+    nextAction: "先运行 CLI 检查并发送校对请求，取得 sentMessageId 后再等待结果。",
+    waitingFor: "等待负责人提供校对结果",
+    steps: [{
+      id: "run-and-send",
+      title: "运行 CLI 并发送校对请求",
+      status: "进行中",
+      waitingFor: "等待负责人提供校对结果"
+    }]
+  });
+
+  assert.equal(planPresentation(item).status, "正在执行");
+  assert.equal(planPresentation(item).tone, "running");
+});
+
+test("plan presentation keeps a QA step actionable until a real send receipt exists", () => {
+  const item = plan({
+    id: "qa-send-missing",
+    title: "QA send is still actionable",
+    currentStepId: "verify",
+    currentStep: "目标包已完成，但尚未取得本轮 QA 发送回执。",
+    nextAction: "修复引用锚点后发送 QA 请求并回读 sentMessageId。",
+    waitingFor: "等待可引用消息锚点",
+    steps: [{
+      id: "verify",
+      title: "发送 QA 验收请求",
+      status: "进行中",
+      waitingFor: "等待可引用消息锚点"
+    }]
+  });
+
+  assert.equal(planPresentation(item).status, "正在执行");
+  assert.equal(planPresentation(item).tone, "running");
+});
+
+test("plan presentation keeps an available CLI fallback actionable instead of calling it an environment wait", () => {
+  const item = plan({
+    id: "cli-fallback",
+    title: "CLI fallback remains available",
+    currentStepId: "verify-with-cli",
+    waitingFor: "Unity MCP runner 当前不可用",
+    nextAction: "先运行 node --import tsx --test 完成 CLI 合同验证；MCP 恢复后再补编辑器检查",
+    steps: [{
+      id: "verify-with-cli",
+      title: "先完成 CLI 验证并等待编辑器补充检查",
+      status: "进行中",
+      waitingFor: "Unity MCP runner 当前不可用"
+    }]
+  });
+
+  assert.equal(planPresentation(item).status, "正在执行");
+  assert.equal(planPresentation(item).tone, "running");
+});
+
+test("plan presentation describes an explicit Unity prohibition as waiting for renewed authorization", () => {
+  const item = plan({
+    id: "unity-authorization",
+    title: "Unity use requires renewed authorization",
+    currentStepId: "await-unity-authorization",
+    waitingFor: "用户明确禁止 Unity GUI、MCP、菜单和 PlayMode；等待用户重新授权后再执行",
+    steps: [{
+      id: "await-unity-authorization",
+      title: "等待重新授权 Unity 操作",
+      status: "进行中",
+      waitingFor: "等待用户重新授权 Unity GUI、MCP、菜单和 PlayMode"
+    }]
+  });
+
+  assert.equal(planPresentation(item).status, "等待重新授权");
   assert.equal(planPresentation(item).tone, "waiting_external");
 });
 
@@ -442,7 +540,7 @@ test("plans awaiting approval sort first, then by Manager presentation status an
       id: "qa-old",
       title: "QA old",
       currentStepId: "verify",
-      currentStep: "待 QA 测试",
+      currentStep: "QA 已真实发送，sentMessageId=1001，只等待验收结论。",
       steps: [{ id: "verify", title: "待 QA 测试", status: "进行中", approvalRequest: approvalRequest() }],
       updatedAt: "2026-07-22T03:00:00.000Z"
     }),
@@ -451,7 +549,7 @@ test("plans awaiting approval sort first, then by Manager presentation status an
       id: "qa-new",
       title: "QA new",
       currentStepId: "qa-regression",
-      waitingFor: "等待验收",
+      waitingFor: "等待 sentMessageId=1002 的验收结论",
       steps: [{ id: "qa-regression", title: "等待验收", status: "进行中" }],
       updatedAt: "2026-07-23T03:00:00.000Z"
     }),
@@ -509,7 +607,7 @@ test("presented plans expose attachment metadata without local filesystem paths"
 test("plan pages preserve Manager ordering and expose stable counts while advancing the cursor", () => {
   const presented = presentPlans([
     plan({ id: "running", title: "Running" }),
-    plan({ id: "qa", title: "QA", currentStepId: "qa", steps: [{ id: "qa", title: "等待 QA 验收", status: "进行中" }] }),
+    plan({ id: "qa", title: "QA", currentStepId: "qa", currentStep: "QA 已真实发送，sentMessageId=1003。", steps: [{ id: "qa", title: "等待 QA 验收", status: "进行中" }] }),
     plan({ id: "done", title: "Done", status: "已完成" }),
     plan({ id: "archived", title: "Archived", status: "已归档" })
   ]);
@@ -547,7 +645,7 @@ test("plan pages preserve Manager ordering and expose stable counts while advanc
 test("plan page counts summarize the Manager-derived presentation stages", () => {
   const presented = presentPlans([
     plan({ id: "executing", title: "Executing" }),
-    plan({ id: "qa", title: "QA", currentStepId: "qa", steps: [{ id: "qa", title: "QA", status: "进行中" }] }),
+    plan({ id: "qa", title: "QA", currentStepId: "qa", currentStep: "QA 已真实发送，sentMessageId=1004。", steps: [{ id: "qa", title: "QA", status: "进行中" }] }),
     plan({
       id: "package",
       title: "Package",

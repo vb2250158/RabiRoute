@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { canonicalCodexWorkspacePath } from "./codexTaskIdentity.js";
 
 export type CodexDesktopSandbox = "read-only" | "workspace-write" | "danger-full-access";
+export type CodexDesktopReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type CodexDesktopThread = {
   id: string;
@@ -73,6 +74,12 @@ export type CodexDesktopBridgeOptions = {
   onBroadcast?: (message: Extract<IpcMessage, { type: "broadcast" }>) => void;
 };
 
+type CodexSidebarTaskIndexRow = {
+  id?: unknown;
+  thread_name?: unknown;
+  updated_at?: unknown;
+};
+
 function nonEmptyString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -86,6 +93,60 @@ function rowUpdatedAtMs(row: CodexDesktopThreadRow): number {
     || numericTime(row.updated_at_ms)
     || numericTime(row.recency_at) * 1000
     || numericTime(row.updated_at) * 1000;
+}
+
+function codexDesktopSessionIndexPath(): string {
+  const codexHome = process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
+  return path.join(codexHome, "session_index.jsonl");
+}
+
+/**
+ * Applies the task names shown by Codex Desktop's left sidebar. SQLite
+ * `threads.title` is only owner state metadata and may contain the first
+ * prompt, so it must never overwrite the sidebar name exposed to callers.
+ */
+export function applyCodexSidebarTaskNamesForTest(
+  threads: CodexDesktopThread[],
+  sessionIndexContent: string
+): CodexDesktopThread[] {
+  const latestById = new Map<string, { title: string; updatedAt: string }>();
+  for (const line of sessionIndexContent.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line) as CodexSidebarTaskIndexRow;
+      const id = nonEmptyString(row.id);
+      const title = nonEmptyString(row.thread_name);
+      const updatedAt = nonEmptyString(row.updated_at);
+      if (!id || !title) continue;
+      const current = latestById.get(id);
+      const candidateTime = Date.parse(updatedAt);
+      const currentTime = current ? Date.parse(current.updatedAt) : Number.NEGATIVE_INFINITY;
+      if (!current
+        || !Number.isFinite(currentTime)
+        || (Number.isFinite(candidateTime) && candidateTime >= currentTime)) {
+        latestById.set(id, { title, updatedAt });
+      }
+    } catch {
+      // Ignore incomplete records while Desktop is appending the index.
+    }
+  }
+  return threads.map((thread) => {
+    const sidebar = latestById.get(thread.id);
+    if (!sidebar) return thread;
+    return {
+      ...thread,
+      title: sidebar.title,
+      updatedAt: sidebar.updatedAt || thread.updatedAt
+    };
+  });
+}
+
+function applyCodexSidebarTaskNames(
+  threads: CodexDesktopThread[],
+  sessionIndexPath = codexDesktopSessionIndexPath()
+): CodexDesktopThread[] {
+  if (!fs.existsSync(sessionIndexPath)) return threads;
+  return applyCodexSidebarTaskNamesForTest(threads, fs.readFileSync(sessionIndexPath, "utf8"));
 }
 
 export function listCodexDesktopThreadsFromRowsForTest(
@@ -170,13 +231,26 @@ export function listCodexDesktopThreads(options: {
   offset?: number;
   allowedWorkspaces?: string[];
   databasePath?: string;
+  sessionIndexPath?: string;
 } = {}): CodexDesktopThread[] {
   const databasePath = options.databasePath ?? findCodexDesktopStateDatabase();
   if (!databasePath) return [];
-  return listCodexDesktopThreadsFromRowsForTest(readDesktopThreadRows(databasePath), options);
+  const query = options.query?.trim().toLocaleLowerCase() ?? "";
+  const limit = Math.max(1, Math.min(10_000, Math.floor(options.limit ?? 20) || 20));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0) || 0);
+  return applyCodexSidebarTaskNames(listCodexDesktopThreadsFromRowsForTest(
+    readDesktopThreadRows(databasePath),
+    { ...options, query: "", limit: 10_000, offset: 0 }
+  ), options.sessionIndexPath)
+    .filter((thread) => !query || thread.title.toLocaleLowerCase().includes(query))
+    .slice(offset, offset + limit);
 }
 
-export function readCodexDesktopThread(threadId: string, databasePath = findCodexDesktopStateDatabase()): CodexDesktopThread | null {
+export function readCodexDesktopThread(
+  threadId: string,
+  databasePath = findCodexDesktopStateDatabase(),
+  sessionIndexPath = codexDesktopSessionIndexPath()
+): CodexDesktopThread | null {
   if (!databasePath) return null;
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
@@ -185,7 +259,9 @@ export function readCodexDesktopThread(threadId: string, databasePath = findCode
              recency_at, recency_at_ms, archived, first_user_message
       FROM threads WHERE id = ? LIMIT 1
     `).get(threadId) as CodexDesktopThreadRow | undefined;
-    return row ? listCodexDesktopThreadsFromRowsForTest([row], { limit: 1, includeArchived: true })[0] ?? null : null;
+    if (!row) return null;
+    const thread = listCodexDesktopThreadsFromRowsForTest([row], { limit: 1, includeArchived: true })[0] ?? null;
+    return thread ? applyCodexSidebarTaskNames([thread], sessionIndexPath)[0] ?? null : null;
   } finally {
     database.close();
   }
@@ -247,6 +323,7 @@ export class CodexDesktopBridge {
   private nextFrameLength: number | null = null;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly activeThreads = new Set<string>();
+  private readonly activeThreadSinceMs = new Map<string, number>();
   private readonly deliveryQueues = new Map<string, Promise<CodexDesktopDelivery>>();
 
   constructor(options: CodexDesktopBridgeOptions = {}) {
@@ -305,6 +382,7 @@ export class CodexDesktopBridge {
         const change = JSON.stringify(params.change ?? params);
         if (threadId && (change.includes('"threadRuntimeStatus":{"type":"active"') || change.includes('"status":"inProgress"'))) {
           this.activeThreads.add(threadId);
+          this.activeThreadSinceMs.set(threadId, Date.now());
         } else if (threadId && (
           change.includes('"threadRuntimeStatus":{"type":"idle"')
           || change.includes('"status":"completed"')
@@ -312,6 +390,7 @@ export class CodexDesktopBridge {
           || change.includes('"status":"interrupted"')
         )) {
           this.activeThreads.delete(threadId);
+          this.activeThreadSinceMs.delete(threadId);
         }
       }
       this.options.onBroadcast?.(message);
@@ -351,6 +430,8 @@ export class CodexDesktopBridge {
         socket.on("close", () => {
           if (this.socket === socket) this.socket = null;
           this.clientId = "initializing-client";
+          this.activeThreads.clear();
+          this.activeThreadSinceMs.clear();
           this.rejectPending(new Error("Codex Desktop IPC connection closed"));
         });
         resolve();
@@ -422,6 +503,10 @@ export class CodexDesktopBridge {
     return this.activeThreads.has(threadId);
   }
 
+  threadActiveSince(threadId: string): number | null {
+    return this.activeThreadSinceMs.get(threadId) ?? null;
+  }
+
   private async steer(params: { threadId: string; prompt: string; cwd: string }): Promise<void> {
     const response = await this.request("thread-follower-steer-turn", {
       conversationId: params.threadId,
@@ -445,14 +530,33 @@ export class CodexDesktopBridge {
     if (error) throw error;
   }
 
-  private async start(params: { threadId: string; prompt: string }): Promise<void> {
+  private async start(params: {
+    threadId: string;
+    prompt: string;
+    model?: string;
+    reasoningEffort?: CodexDesktopReasoningEffort;
+  }): Promise<void> {
+    const turnStartParams: Record<string, unknown> = {
+      input: [{ type: "text", text: params.prompt, text_elements: [] }],
+      attachments: [],
+      commentAttachments: []
+    };
+    if (params.model) {
+      const effort = params.reasoningEffort ?? "medium";
+      turnStartParams.model = params.model;
+      turnStartParams.effort = effort;
+      turnStartParams.collaborationMode = {
+        mode: "default",
+        settings: {
+          model: params.model,
+          reasoning_effort: effort,
+          developer_instructions: ""
+        }
+      };
+    }
     const response = await this.request("thread-follower-start-turn", {
       conversationId: params.threadId,
-      turnStartParams: {
-        input: [{ type: "text", text: params.prompt, text_elements: [] }],
-        attachments: [],
-        commentAttachments: []
-      }
+      turnStartParams
     });
     const error = responseError(response, "thread-follower-start-turn");
     if (error) throw error;
@@ -463,6 +567,8 @@ export class CodexDesktopBridge {
     prompt: string;
     cwd: string;
     sandbox: CodexDesktopSandbox;
+    model?: string;
+    reasoningEffort?: CodexDesktopReasoningEffort;
   }): Promise<"started" | "steered"> {
     try {
       await this.steer(params);
@@ -479,13 +585,17 @@ export class CodexDesktopBridge {
     prompt: string;
     cwd: string;
     sandbox: CodexDesktopSandbox;
+    model?: string;
+    reasoningEffort?: CodexDesktopReasoningEffort;
   }): Promise<CodexDesktopDelivery> {
     let openedThread = false;
     let lastError: unknown;
+    const deliveryStartedAtMs = Date.now();
     for (let attempt = 0; attempt < this.options.loadRetryAttempts; attempt += 1) {
       try {
         const action = await this.deliverToOwner(params);
         this.activeThreads.add(params.threadId);
+        this.activeThreadSinceMs.set(params.threadId, deliveryStartedAtMs);
         return { threadId: params.threadId, action, openedThread, transport: "desktop-ipc" };
       } catch (error) {
         lastError = error;
@@ -505,6 +615,8 @@ export class CodexDesktopBridge {
     prompt: string;
     cwd: string;
     sandbox: CodexDesktopSandbox;
+    model?: string;
+    reasoningEffort?: CodexDesktopReasoningEffort;
   }): Promise<CodexDesktopDelivery> {
     const key = `${params.threadId}\n${canonicalCodexWorkspacePath(params.cwd)}`;
     const previous = this.deliveryQueues.get(key);
@@ -522,6 +634,8 @@ export class CodexDesktopBridge {
     this.socket?.destroy();
     this.socket = null;
     this.clientId = "initializing-client";
+    this.activeThreads.clear();
+    this.activeThreadSinceMs.clear();
     this.rejectPending(new Error("Codex Desktop bridge closed"));
   }
 }

@@ -83,7 +83,7 @@ export const templateVars = [
   { name: "manualTriggerLogPath", description: "手动触发事件 JSONL 记录路径。" },
   { name: "rolePanelLogPath", description: "角色面板聊天记录 JSONL 路径。" },
   { name: "heartbeatIntervalSeconds", description: "定时触发间隔，单位秒。" },
-  { name: "heartbeatSkipWhenAgentBusy", description: "为 true 时，仅在 Agent 会话工作中跳过本次 heartbeat；普通消息不受影响。" },
+  { name: "heartbeatSkipWhenAgentBusy", description: "未开启消息处理 Agent 模式时，为 true 会在主人格会话工作中跳过本次 heartbeat；开启该模式后 heartbeat 改由独立消息处理 Agent 立即处理。" },
   { name: "scheduleId", description: "当前定时计划 ID；仅定时触发时填充。" },
   { name: "scheduleName", description: "当前定时计划显示名称；仅定时触发时填充。" },
   { name: "triggerId", description: "手动触发 ID。" },
@@ -661,7 +661,12 @@ export function createDefaultGateway(next: number): GatewayDefinition {
       napcat: {
         inputEnabled: true,
         outputEnabled: true,
-        supportedOutputs: ["text", "image", "voice", "file"]
+        supportedOutputs: ["text", "image", "voice", "file"],
+        messageGrouping: {
+          settleSeconds: 6,
+          incompleteSettleSeconds: 12,
+          maxWaitSeconds: 20
+        }
       }
     },
     gatewayPort: 8789 + next,
@@ -677,6 +682,14 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     agentRoleId: "",
     agentRoleFile: "persona.md",
     agentAdapters: ["codex"],
+    primaryAgentAdapter: "codex",
+    messageProcessingAgents: {
+      codex: {
+        enabled: false,
+        model: "gpt-5.6-luna",
+        reasoningEffort: "medium"
+      }
+    },
     notificationRules: []
   };
 }

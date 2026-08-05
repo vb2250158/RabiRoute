@@ -21,17 +21,21 @@ English | <a href="./README_zh.md">简体中文</a>
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute is an **agent-neutral message gateway, policy router, and action gate**. It turns events from chat, webhooks, schedules, voice, and devices into structured work for the right handler.
+RabiRoute is an **agent-neutral message gateway, policy router, and action gate**. It receives messages from chat, webhooks, schedules, voice, and devices, then sends each message to the right Agent or program according to your rules.
 
-Handlers solve the task. RabiRoute decides **where it goes, which portable context travels with it, whether an outbound action is allowed, and where the result returns**.
+The Agent or program answers and performs the task. RabiRoute decides **who receives the message, which recent messages travel with it, whether an external reply is allowed, and where the result returns**.
 
 [Use cases](#what-you-can-build) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Capabilities](#what-works-today) · [Documentation](#learn-more)
+
+![A paused documentation sample Route in RibiWebGUI showing the current route, connection state, and message inputs](assets/screenshots/webgui-overview-en.png)
+
+<p align="center"><sub>The Route was paused for the screenshot to prevent a real delivery. After you save and start a Route, the top bar and diagnostics page show its actual runtime state.</sub></p>
 
 ## What you can build
 
 - 💬 **Chat-to-Agent routes.** Send QQ, role-panel, or scheduled events to a selected handler. Codex is the first end-to-end verified handler.
 - ⏱️ **Proactive routines.** Combine heartbeat schedules, persona rules, and project context to wake the right Desktop task for inspection, follow-up, or maintenance.
-- 🧳 **Context-aware handoffs.** Keep a persona-scoped conversation ledger, build focused `AgentPacket` payloads, and return through route-owned Outbox policies.
+- 🧳 **Handoffs with recent messages.** Keep message history per persona, attach only what the current task needs, and follow that Route's sending rules for any reply.
 
 The router stays independent from the handler. You can change the Agent, workflow, script, or human queue without giving it ownership of channel credentials or gateway policy.
 
@@ -57,7 +61,7 @@ npm run start:manager
 
 Open [http://127.0.0.1:8790/](http://127.0.0.1:8790/). If no runtime data exists, Manager creates a sanitized local configuration from `examples/data/`.
 
-Create your first Route:
+Create your first message route (Route):
 
 1. Open **Quick setup** and choose Heartbeat as the message input.
 2. Select Codex, then bind a project directory and a Desktop task.
@@ -98,6 +102,7 @@ Each Route separates ingress, policy, portable context, handler delivery, and ou
 | Area | Current capability |
 | --- | --- |
 | Verified inputs | NapCat / OneBot, Heartbeat, and the built-in role panel. Manual trigger is a Manager action, not an adapter. |
+| Persona collaboration | An Agent can discover reachable personas and explicitly send a one-way message to another enabled Route. Delivery is idempotent and authenticated; a real two-persona Desktop acceptance run is still pending. |
 | Routing | Route profiles, persona rules, direct mentions, reply chains, private messages, keywords, regexes, schedules, and per-Route templates. |
 | Context | Persona-scoped bidirectional ledgers, bounded recent-message injection, plan/memory/skill references, reply context, and safe attachment metadata. |
 | Verified handler | Codex through the selected Codex/ChatGPT Desktop task owner. |

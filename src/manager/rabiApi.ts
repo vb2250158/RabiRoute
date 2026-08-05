@@ -277,6 +277,7 @@ function routeSummary(
     enabled,
     running,
     agentAdapters: definition.agentAdapters ?? ["codex"],
+    primaryAgentAdapter: definition.primaryAgentAdapter,
     codexCwd: definition.codexCwd ?? "",
     codexThreadId: definition.codexThreadId ?? "",
     codexThreadName: definition.codexThreadName ?? "",
@@ -394,6 +395,7 @@ function routeOptionsFromAgentScan(route: GatewayDefinition, scan: Record<string
       configName: sanitizeConfigName(route.configName) || route.id,
       routeName: route.routeName,
       agentAdapters: activeAdapters,
+      primaryAgentAdapter: route.primaryAgentAdapter,
       codexCwd: route.codexCwd ?? "",
       codexThreadId: route.codexThreadId ?? "",
       codexThreadName: route.codexThreadName ?? "",
@@ -471,6 +473,7 @@ function setLocalAgentBinding(ctx: RabiApiContext, routeId: string, patch: Agent
       return { code: -1, message: `Unsupported agent adapter: ${patch.agentAdapter}` };
     }
     route.agentAdapters = [patch.agentAdapter];
+    route.primaryAgentAdapter = patch.agentAdapter;
   }
   if (patch.codexCwd !== undefined) route.codexCwd = String(patch.codexCwd || "");
   if (patch.codexThreadId !== undefined) route.codexThreadId = String(patch.codexThreadId || "");

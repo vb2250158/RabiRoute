@@ -67,6 +67,10 @@ export type PersonaSyncManifestIndexOptions = {
   persistRetryBaseMs?: number;
   persistRetryMaxMs?: number;
   writePersistedIndex?: (filePath: string, content: string | Buffer) => void;
+  watchFactory?: (
+    root: string,
+    listener: (eventType: fs.WatchEventType, filename: string | Buffer | null) => void
+  ) => fs.FSWatcher;
 };
 
 type PendingPath = { roleId?: string; relativePath?: string };
@@ -236,6 +240,10 @@ export class PersonaSyncManifestIndex {
     persistRetryBaseMs: number;
     persistRetryMaxMs: number;
     writePersistedIndex: (filePath: string, content: string | Buffer) => void;
+    watchFactory: (
+      root: string,
+      listener: (eventType: fs.WatchEventType, filename: string | Buffer | null) => void
+    ) => fs.FSWatcher;
   };
   private readonly rolesCache = new Set<string>();
   private readonly filesCache = new Map<string, CachedPersonaSyncFile>();
@@ -274,7 +282,12 @@ export class PersonaSyncManifestIndex {
       persistSettleMs: Math.max(0, Math.floor(options.persistSettleMs ?? INDEX_PERSIST_SETTLE_MS)),
       persistRetryBaseMs: Math.max(1, Math.floor(options.persistRetryBaseMs ?? 250)),
       persistRetryMaxMs: Math.max(1, Math.floor(options.persistRetryMaxMs ?? 30_000)),
-      writePersistedIndex: options.writePersistedIndex ?? atomicWriteFileSync
+      writePersistedIndex: options.writePersistedIndex ?? atomicWriteFileSync,
+      watchFactory: options.watchFactory ?? ((watchRoot, listener) => fs.watch(
+        watchRoot,
+        { recursive: true, encoding: "utf8" },
+        listener
+      ))
     };
     this.options.persistRetryMaxMs = Math.max(this.options.persistRetryBaseMs, this.options.persistRetryMaxMs);
     this.loadPersistedIndex();
@@ -407,11 +420,10 @@ export class PersonaSyncManifestIndex {
       return;
     }
     try {
-      this.watcher = fs.watch(root, { recursive: true, encoding: "utf8" }, (_eventType, filename) => {
+      this.watcher = this.options.watchFactory(root, (_eventType, filename) => {
         if (this.stopped) return;
         if (!filename) {
-          this.pendingPaths.set("*", {});
-          this.armEventTimer();
+          this.enableFallback("Persona file watching did not identify the changed path; explicit sync queries will reconcile the persisted index.");
           return;
         }
         const relative = normalizedRelativePath(String(filename));
@@ -494,7 +506,7 @@ export class PersonaSyncManifestIndex {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     if (stat?.isDirectory() && !stat.isSymbolicLink()) {
-      await this.reconcileRole(roleId, "directory_event");
+      await this.reconcileDirectory(roleId, relativePath, "directory_event");
       return;
     }
     const key = cacheKey(roleId, relativePath);
@@ -567,6 +579,28 @@ export class PersonaSyncManifestIndex {
     if (changed) this.changed("reconciled", roleId);
   }
 
+  private async reconcileDirectory(roleId: string, relativePath: string, reason: string): Promise<void> {
+    const normalized = normalizedRelativePath(relativePath);
+    const keyPrefix = `${cacheKey(roleId, normalized)}/`;
+    const previous = new Map([...this.filesCache].filter(([key]) => key.startsWith(keyPrefix)));
+    const { files, hashedFiles, reusedFiles } = await this.scanDirectory(roleId, normalized, previous);
+    let changed = false;
+    for (const key of previous.keys()) {
+      if (!files.has(key)) {
+        this.filesCache.delete(key);
+        changed = true;
+      }
+    }
+    for (const [key, file] of files) {
+      if (!sameEntry(this.filesCache.get(key), file)) changed = true;
+      this.filesCache.set(key, file);
+    }
+    this.rolesCache.add(roleId);
+    this.totalHashedFiles += hashedFiles;
+    this.lastReconcile = { reason, hashedFiles, reusedFiles, completedAt: new Date().toISOString() };
+    if (changed) this.changed("reconciled", roleId, normalized);
+  }
+
   private reconcileAll(reason: string): Promise<void> {
     if (this.reconcileFlight) return this.reconcileFlight;
     this.reconcileFlight = this.performReconcileAll(reason).finally(() => {
@@ -614,7 +648,15 @@ export class PersonaSyncManifestIndex {
     roleId: string,
     previous: Map<string, CachedPersonaSyncFile>
   ): Promise<{ files: Map<string, CachedPersonaSyncFile>; hashedFiles: number; reusedFiles: number }> {
-    const root = path.join(this.rolesRoot(), roleId);
+    return this.scanDirectory(roleId, "", previous);
+  }
+
+  private async scanDirectory(
+    roleId: string,
+    relativeRoot: string,
+    previous: Map<string, CachedPersonaSyncFile>
+  ): Promise<{ files: Map<string, CachedPersonaSyncFile>; hashedFiles: number; reusedFiles: number }> {
+    const root = path.join(this.rolesRoot(), roleId, relativeRoot);
     const candidates: Array<{ relativePath: string; filePath: string }> = [];
     const visit = async (directory: string, current: string): Promise<void> => {
       let entries: fs.Dirent[];
@@ -635,7 +677,7 @@ export class PersonaSyncManifestIndex {
         if (entry.isFile()) candidates.push({ relativePath, filePath: target });
       }
     };
-    await visit(root, "");
+    await visit(root, relativeRoot);
     const files = new Map<string, CachedPersonaSyncFile>();
     let hashedFiles = 0;
     let reusedFiles = 0;

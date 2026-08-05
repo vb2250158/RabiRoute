@@ -32,6 +32,8 @@ data/roles/<RoleId>/personaConfig.json
 
 `adapterConfig.json` owns endpoints, ports, handler selection, cwd, pipeline, role binding, and Route-local delivery policy. `personaConfig.json` owns notification rules, speech-trigger keywords, and per-endpoint recent-context budgets. A role can be reused by several routes.
 
+`rolePanel` is a compatibility name for Manager's built-in message path, not a configurable Gateway listener. Local role-panel input and authenticated cross-persona delivery share the fixed `role_panel_message` rule and one delivery service. Success is recorded only after handler acceptance; a failed entry records an attempt.
+
 On a clean start, the Manager copies the public `examples/data` package when available. Only the main example is enabled. Missing examples are not a runtime failure; the Manager can create a minimal NapCat-to-Codex setup.
 
 ## Representative route
@@ -45,7 +47,12 @@ On a clean start, the Manager copies the public `examples/data` package when ava
       "inputEnabled": true,
       "outputEnabled": true,
       "supportedOutputs": ["text", "image", "voice", "file"],
-      "allowedFileRoots": ["C:/Path/To/Your/Project/ReleasePkg"]
+      "allowedFileRoots": ["C:/Path/To/Your/Project/ReleasePkg"],
+      "messageGrouping": {
+        "settleSeconds": 6,
+        "incompleteSettleSeconds": 12,
+        "maxWaitSeconds": 20
+      }
     }
   },
   "gatewayPort": 8789,
@@ -60,6 +67,14 @@ On a clean start, the Manager copies the public `examples/data` package when ava
   },
   "agentModel": "",
   "agentAdapters": ["codex"],
+  "primaryAgentAdapter": "codex",
+  "messageProcessingAgents": {
+    "codex": {
+      "enabled": true,
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "medium"
+    }
+  },
   "heartbeatSkipWhenAgentBusy": true,
   "dataDir": "./data/route/main",
   "rolesDir": "./data/roles",
@@ -72,21 +87,24 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 ## Core fields
 
 - `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `wecom`, and `weixin`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
-- `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
+- `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. QQ, Weixin, Feishu, WeCom, role-panel, and RabiLink text chats use message groups automatically without an off switch. `messageGrouping` exposes only ordinary settle, unfinished-fragment settle, and maximum wait values, defaulting to `6 / 12 / 20` seconds. ASR/voice transcripts, heartbeat, commands, approvals, health alerts, and structured events continue direct delivery without this wait. Chat dispatch changes only when Codex Message Agent mode is also enabled; otherwise delivery remains per-message. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
 - `allowedFileRoots`: real-path allowlist for local file output. A local QQ group-file upload is blocked when this is empty or the resolved file leaves the allowlist.
 - `gatewayPort`: NapCat WebSocket Client target port.
-- `napcatHttpUrl`: OneBot HTTP endpoint.
+- `napcatHttpUrl`: OneBot HTTP endpoint called by RabiRoute. Multiple Routes may explicitly share one NapCat instance and the same HTTP URL. Automatic port assignment applies only to listeners owned by RabiRoute and does not move an existing NapCat endpoint to an unstarted port.
 - `webhookPort` / `webhookPath`: generic webhook endpoint; the port falls back to `gatewayPort`, and the default path is `/webhook`.
 - `agentAdapters`: handler IDs. Codex is verified; Copilot CLI and AstrBot are experimental; Marvis is a manual handoff.
-- `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. An archived saved ID first rebinds to the unique latest active same-name task in the same workspace; if none exists it blocks and requires restore/reselection. It never permits replacement creation. Typing a new name explicitly clears the old ID before name lookup. One or more exact same-name/workspace matches bind the unique latest `updatedAt`; only zero matches for an empty, invalid, or missing ID may create, and a tied or unusable maximum requires selection.
+- `primaryAgentAdapter`: the Route's Primary Agent. It must be one of `agentAdapters`. A matched message is delivered only to this handler, not broadcast to the other configured Agents. Older configurations use the first listed Agent; removing the current Primary Agent selects the first remaining Agent.
+- Agent handlers use a base capability layer for installation, authentication, project, task, and delivery support, then explicitly opt into managed-task extensions. Codex is currently the only handler declaring **Message Agent mode**, **Plan assistant tasks**, and **Hook management**. WebGUI shows them only on the Codex card, and normalization discards these settings from non-Codex Routes. A future handler with equivalent capabilities may opt into the individual features; a platform with its own Agent orchestration does not need to.
+- `messageProcessingAgents.codex`: Codex Message Agent eligibility and its independent model. It defaults off. When enabled, chat messages automatically form groups and reuse or dynamically create Message Agent tasks for distinct topics. ASR and structured events continue direct delivery. `heartbeat` is one continuing inspection responsibility: the first tick selects or creates one Message Agent task, and every later tick is steered back to the most recent heartbeat worker even when that task is still active, so scheduled ticks cannot grow one task each. Task titles use the persona name as a stable prefix: one worker is named `<persona name> 协助处理消息`; when the pool expands, tasks use numbered titles such as `<persona name> 协助处理消息1` and `...消息2`. Renaming preserves the original Desktop task ID and workspace. The default model and reasoning effort are `gpt-5.6-luna` / `medium`, affecting Message Agent turns only, not Primary, Secretary, or Plan Agents.
+- `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. An archived saved ID first rebinds to the unique latest active same-name task in the same workspace; if none exists it blocks and requires restore/reselection. It never permits replacement creation. Typing a new name explicitly clears the old ID before complete name lookup. Only system-owned Message Agent tasks with stable generated names use the app-server state index's name filter, avoiding a full-catalog scan on first delivery; ordinary task binding retains complete lookup. One or more exact same-name/workspace matches bind the unique latest `updatedAt`; only zero matches for an empty, invalid, or missing ID may create, and a tied or unusable maximum requires selection.
 - `codexPlanAssistantSessions`: exact persistent Desktop-task bindings used as plan-management secretary slots. Each entry keeps the full task ID, visible name, workspace, one-based slot index, and initialization time. One slot is named `<main task name> 协助处理计划`; multiple slots use numbered suffixes. Expanding renames the original slot; shrinking detaches extra tasks without deleting them. Secretary slots are control-plane sessions and are never stored in a plan's `taskBinding`. They maintain plans and memory, deduplicate business tasks, inspect status, consume results, and continue the independent business task; they do not investigate, implement, test, or modify business files. Real multi-task Desktop acceptance is still pending, so the feature remains experimental.
 - `codexHooks.sessionContextEnabled`: defaults to `true`. Controls `SessionStart` / `UserPromptSubmit`, triggered when a Codex task starts, resumes, clears, or compacts and when the user submits a new message.
 - `codexHooks.reasoningContextEnabled`: defaults to `true`. Controls `PreToolUse` / `PostToolUse`, triggered before and after tool calls and returning only newly matched plan, memory, or skill context for the turn.
 - `codexHooks.planTaskCompletionEnabled`: defaults to `true`. Controls `Stop` completion reminders after a plan-bound execution task outputs its final answer for the turn. Delivery uses role-panel, Forwarding, AgentPacket, and the target persona Route's handler task. Turning it off only makes Manager ignore or reject the Hook; it does not unregister or rewrite the Codex plugin Hook.
 - `copilotThreadName` / `copilotCwd`: independent Copilot CLI session configuration.
 - `agentModel`: legacy compatibility only. The Codex Desktop path ignores it; the target Desktop task owns its model.
-- `heartbeatSkipWhenAgentBusy`: skip a heartbeat while the fixed Codex thread is still active. Other message kinds are unaffected.
+- `heartbeatSkipWhenAgentBusy`: applies only while Codex Message Agent mode is off. With Message Agent mode on, heartbeat goes immediately to an independent Message Agent and is not skipped because the Primary task is active. Other message kinds are unaffected.
 - `speechPushMode`: Route-owned speech delivery mode. `hot` delivers every completed ASR segment immediately. `keyword` records every segment but wakes the Agent only after a persona-keyword match. WebGUI's **Hot delivery** switch maps On to `hot` and Off to `keyword`.
 - `speechTriggerKeywords`: persona-owned names, common addresses, and wake phrases in `personaConfig.json`. When the list is empty and Hot delivery is off, ASR remains recorded and never silently falls back to `hot`.
 - `recentMessageLimits`: persona-owned `0–200` auto-injection budgets for `napcat`, `remoteAgent`, `heartbeat`, `rolePanel`, `speech`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `webhook`, `wecom`, and `weixin`. The schema default is `12`; `0` disables only automatic injection. Legacy `recentMessageLimit` and explicit endpoint values remain effective.
@@ -100,7 +118,7 @@ Windows paths may use either slash style in WebUI. Only hand-written JSON requir
 | Adapter | Maturity | Notes |
 | --- | --- | --- |
 | `napcat` | verified | Inbound OneBot WebSocket and outbound OneBot HTTP. |
-| `heartbeat` | verified | Internal scheduled events. |
+| `heartbeat` | verified | Internal scheduled events. **Trigger now** waits only for Manager acceptance and releases the button immediately; the adapter log reports the final Agent delivery result. A repeated request for the same Route and rule is not started again while the first delivery remains active. |
 | `speech` | experimental | RabiPC/RabiSpeech resident ASR. Hot delivery sends every segment; keyword mode records all segments and sends only persona-keyword matches. Successful same-session TTS joins ASR in the bidirectional persona context. |
 | `rolePanel` | verified | Built-in Manager/Qt role conversation capability. It is available by default, hidden from WebGUI's configurable adapter list, and is not a network listener. |
 | Plan approval | verified system event | Not a message adapter. Manager emits `plan_feedback` after persisting the feedback audit; it has no configurable recent-message budget and does not enter the role timeline or unified conversation ledger. |
@@ -155,7 +173,7 @@ Record-first sources such as FenneNote can be selected through `routeVariables.r
 
 Each folder under `data/route` is independently startable and may have its own endpoints and handler workspace. Several Routes may bind the same `agentRoleId`; they reuse that persona's root-level rules, speech keywords, and context budgets while retaining their own endpoint, pipeline, hot-delivery, and handler configuration.
 
-Once an ordinary message matches a rule, delivery is direct: `steer` the active Desktop turn or `start` an idle task. Ordinary endpoints do not need another hot-push toggle. Heartbeat's busy-skip switch and speech's hot/keyword mode are explicit exceptions.
+Once an ordinary message matches a rule, it is delivered directly to the Route's Primary Agent. When Codex is primary, RabiRoute uses `steer` for an active Desktop turn or `start` for an idle task. Ordinary endpoints do not need another hot-push toggle. Heartbeat's busy-skip switch and speech's hot/keyword mode are explicit exceptions.
 
 The automatic recent-context source is `data/roles/<RoleId>/conversation/current.jsonl`, scoped to the current persona, logical endpoint, and conversation. Inbound and outbound records count together. Time-based archives live under `conversation/archive/` and are not injected automatically.
 

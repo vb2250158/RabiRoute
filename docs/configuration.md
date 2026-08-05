@@ -41,7 +41,12 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
       "inputEnabled": true,
       "outputEnabled": true,
       "supportedOutputs": ["text", "image", "voice", "file"],
-      "allowedFileRoots": ["C:/Path/To/Your/Project/ReleasePkg"]
+      "allowedFileRoots": ["C:/Path/To/Your/Project/ReleasePkg"],
+      "messageGrouping": {
+        "settleSeconds": 6,
+        "incompleteSettleSeconds": 12,
+        "maxWaitSeconds": 20
+      }
     }
   },
   "gatewayPort": 8789,
@@ -56,6 +61,14 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
   },
   "agentModel": "",
   "agentAdapters": ["codex"],
+  "primaryAgentAdapter": "codex",
+  "messageProcessingAgents": {
+    "codex": {
+      "enabled": true,
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "medium"
+    }
+  },
   "heartbeatSkipWhenAgentBusy": true,
   "dataDir": "./data/route/main",
   "rolesDir": "./data/roles",
@@ -68,10 +81,11 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 重要字段：
 
 - `messageAdapters`：可配置消息入口列表。支持 `napcat`、`remoteAgent`、`heartbeat`、`speech`、`webhook`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`wecom`、`weixin`、`feishu`；旧配置中的 `rolePanel` 仍兼容，但 WebGUI 不再把它显示为可配置消息端，因为角色面板消息由 Manager 默认提供，Gateway 子进程不另开 listener。
-- `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。NapCat 默认允许 Agent 通过 RabiRoute 主动发送到明确目标。旧配置里的 `allowedGroups` / `allowedUsers` / `outputMode` / `enabledPipelines` / `disabledPipelines` 不再作为过滤条件生效。
+- `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。QQ、微信、飞书、企业微信、角色面板和 RabiLink 文字聊天默认使用消息组，不提供关闭开关；可用 `messageGrouping` 的三个秒数调整普通停顿、疑似半句话停顿和最长等待，默认 `6 / 12 / 20` 秒。ASR / 语音转写、heartbeat、命令、审批、健康告警和结构化事件照常直接投递，不进入这段等待。只有 Codex Agent 同时开启消息处理模式时，聊天消息才交给消息处理 Agent；否则保持原有逐条路由。
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
 - `allowedFileRoots`：本地文件出站白名单目录，仅在 `payloadType=file` 且使用本地路径时生效。文件必须真实存在、是普通文件，并且解析真实路径后仍位于其中一个目录内；未配置时本地群文件上传会被阻止。公开示例只能使用占位路径，运行期按角色实际构建产物目录配置。
 - `gatewayPort`：NapCat WebSocket Client 连接的端口。
+- `napcatHttpUrl`：RabiRoute 调用的 OneBot HTTP 服务地址。多个 Route 可以明确共用同一个 NapCat 实例和同一个 HTTP 地址；自动端口分配只处理 RabiRoute 自己监听的端口，不会把已经配置的 NapCat 地址改到一个未启动的端口。
 - `webhookPort`：Webhook 监听端口。未配置时回退到 `gatewayPort`。
 - `webhookPath`：Webhook 入口路径，默认 `/webhook`。
 - `rabiLinkWebhookPort` / `rabiLinkWebhookPath`：RabiLink 本地兼容入口端口和路径，默认路径 `/rabilink`。局域网脚本或手工调试可直接 POST 到这里；正式 AIUI 链路由电脑端 RabiLink worker 直连公网 Relay，接收 observation 输入并消费独立的主动下行队列。
@@ -85,7 +99,10 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `feishuAppId` / `feishuAppSecret` / `feishuVerificationToken` / `feishuEncryptKey`：飞书企业自建应用的独立凭据。`feishuWebhookPort` / `feishuWebhookPath` 配置本机回调；只有平台侧 HTTPS 回调和 `im.message.receive_v1` 已完成配置后，才设置 `feishuEventSubscriptionEnabled: true`。群机器人 Webhook 不能替代这些字段；详见 [飞书独立消息端接入](feishu-integration.md)。
 - `napcatHttpUrl`：OneBot HTTP API 地址。
 - `agentAdapters`：Agent 端适配器列表。当前支持 `codex`、`copilotCli`、`astrbot`、`marvis`。成熟度分别是：Codex 已验证；Copilot CLI、AstrBot 实验支持；Marvis 仅人工接力。
-- `codexThreadId` / `codexThreadName`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID 与可见名称。有效且同工作目录的未归档 ID 是稳定身份；保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录查找；一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
+- `primaryAgentAdapter`：当前 Route 的主控 Agent，必须是 `agentAdapters` 中的一项。消息命中规则后只投递给主控，不会广播给列表里的其他 Agent。旧配置没有该字段时使用列表第一项；删除主控后自动改用仍存在的第一项。
+- Agent 端先使用基础能力层描述安装、认证、项目、会话和投递，再按真实支持情况声明托管任务扩展。当前只有 Codex 声明“消息处理 Agent 模式”“计划协助会话”和“Hook 管理”三项；WebGUI 只在 Codex 卡片显示，读取非 Codex Route 时也会丢弃这三类误配。以后能力等同的处理端可以逐项声明并复用相应界面；自带 Agent 编排的平台不需要声明。
+- `messageProcessingAgents.codex`：Codex 消息处理 Agent 的调度资格和独立模型。默认关闭；开启后，聊天消息默认形成消息组并按不同话题复用或动态创建消息处理任务，ASR 和结构化事件照常直接投递。`heartbeat` 是持续进行的同一项巡检职责：第一次选择或创建一个消息处理任务，此后的定时触发始终补充到最近处理 heartbeat 的同一任务，即使该任务仍在运行也不会为下一次 heartbeat 新建任务。任务使用人格名称作为稳定前缀：只有 1 个时命名为“`<人格名> 协助处理消息`”，扩展到多个时依次改为“`<人格名> 协助处理消息1`”“…消息2”；改名保留原 Desktop 任务 ID 和 workspace。默认模型与推理强度为 `gpt-5.6-luna` / `medium`，只影响消息处理轮次，不改主人格、秘书或计划 Agent。
+- `codexThreadId` / `codexThreadName`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID 与可见名称。有效且同工作目录的未归档 ID 是稳定身份；保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录完整查找。只有 RabiRoute 自己按稳定名称动态建立的消息处理任务使用 app-server 状态库的名称过滤，避免首次投递扫描完整任务目录；普通会话绑定仍保留完整查找。一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
 - `codexCwd`：目标 Desktop 任务的项目目录。它用于校验已保存 ID、同名任务消歧和新建位置；选择已有任务时自动采用任务自己的目录。
 - `codexPlanAssistantSessions`：当前 Route 精确绑定的持久计划管理秘书列表，保存完整任务 ID、可见名称、workspace、槽位序号和初始化时间。1 个时命名为“`<主会话名> 协助处理计划`”；多个时命名为“`<主会话名> 协助处理计划1`”“…计划2”。从 1 个扩容时会把原任务改名为“…计划1”；缩容只从 Route 解绑多余任务，不删除 Desktop 任务。秘书槽属于控制面，不写入计划 `taskBinding`；秘书负责计划/记忆、业务任务查重与续投，禁止执行调查、实现、测试或修改业务文件。该多任务能力尚未完成真实 Desktop 纵向验收，当前按实验能力展示。
 - `codexHooks.sessionContextEnabled`：默认 `true`。控制 `SessionStart` / `UserPromptSubmit`；打开、恢复、清空或压缩 Codex 任务，以及用户提交新消息时触发。
@@ -94,7 +111,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `copilotThreadName`：Copilot CLI 独立会话名。它不再复用 `codexThreadName`；旧的 Copilot-only 配置会在读取边界迁移一次并以新字段保存。
 - `copilotCwd`：Copilot CLI 独立工作目录，不与 `codexCwd` 共享真源。
 - `agentModel`：旧配置兼容字段。Codex Desktop 主链不读取它；模型由目标 Desktop 任务自己选择。
-- `heartbeatSkipWhenAgentBusy`：可选，默认 `false`。启用后，如果当前 Codex 固定任务仍处于 active / in-progress 状态，本次 `heartbeat` 会记录为 `skipped` 且原因是 `agent_busy`，不会继续投递；群聊、私聊和其他消息类型不受影响。忙碌状态由 Desktop IPC 广播与当前任务状态共同确认。
+- `heartbeatSkipWhenAgentBusy`：可选，默认 `false`。只在未启用 Codex 消息处理 Agent 模式时生效；启用消息处理 Agent 后，`heartbeat` 会立即交给独立消息处理任务，不因主人格任务忙碌而跳过。未启用消息处理 Agent 时，如果当前 Codex 固定任务仍处于 active / in-progress 状态，本次 `heartbeat` 会记录为 `skipped` 且原因是 `agent_busy`。群聊、私聊和其他消息类型不受影响。
 - `speechPushMode`：Route 拥有的语音投递模式。`hot` 表示每段 ASR 完成后立即投递；`keyword` 表示转写仍全部记录，只在命中人格关键词时唤醒 Agent。WebGUI 中“热投递”开关的开对应 `hot`，关对应 `keyword`。
 - `speechTriggerKeywords`：归人格 `personaConfig.json`，用于人格名、常用称呼和唤醒词。列表为空且 Route 关闭热投递时，ASR 只记录、永不暗中回退 `hot`。
 - `recentMessageLimits`：归人格 `personaConfig.json`，分别配置 `napcat`、`remoteAgent`、`heartbeat`、`rolePanel`、`speech`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`webhook`、`wecom`、`weixin` 的自动注入条数。每项 `0–200`，未设置时默认 `12`；`0` 不删记录，只关自动注入。旧 `recentMessageLimit` 和显式分端值继续生效。
@@ -112,8 +129,8 @@ Windows 路径在 WebUI 里写 `C:\Path\To\Project` 或 `C:/Path/To/Project`；�
 当前可用：
 
 - `napcat`：通过 OneBot WebSocket 接收 QQ 事件，通过 OneBot HTTP 预留主动调用能力。
-- `heartbeat`：按固定间隔生成内部 `heartbeat` 路由事件，适合周期巡检；可用 `heartbeatSkipWhenAgentBusy` 避免固定 Codex 会话尚未完成上一轮任务时继续堆叠心跳。
-- `rolePanel`：Manager/托盘默认提供的内置本地消息能力，使用固定 `role_panel_message` 规则并写角色 timeline；它不显示在 WebGUI 的可配置消息端列表中，不是 Gateway 网络 listener，也不能从人格规则中删除。
+- `heartbeat`：按固定间隔生成内部 `heartbeat` 路由事件，适合周期巡检。启用 Codex 消息处理 Agent 后立即投给独立消息处理任务；否则可用 `heartbeatSkipWhenAgentBusy` 避免固定 Codex 会话尚未完成上一轮任务时继续堆叠心跳。WebGUI 的“立即触发”只等待 Manager 接受请求，随后立即结束按钮等待；Agent 最终接收成功或失败继续显示在适配器日志中。同一路由、同一触发规则仍在后台投递时，重复点击不会再启动一份。
+- `rolePanel`：Manager/托盘默认提供的内置消息能力，本地面板和经过身份校验的跨人格投递共用固定 `role_panel_message` 规则与统一投递服务；它不显示在 WebGUI 的可配置消息端列表中，不是 Gateway 网络 listener，也不能从人格规则中删除。服务只在处理端接收后记录成功，失败记录只表示尝试。
 - 计划审批不是另一个消息 adapter。Manager 在 feedback 审计落盘后直接生成 `plan_feedback` 系统事件；该事件没有可配置最近消息额度，也不进入角色 timeline 或统一会话账本。
 - `remoteAgent`：Manager 级实验入口。RabiGUI 扫描并连接远端 bridge，支持密码挑战、任务、事件和文件；Gateway 子进程只显示状态占位。
 - `speech`：RabiPC / RabiSpeech 语音消息端。总开关同时控制当前 Route 的常驻录音；热投递开时每段 ASR 直接投递，关时仅命中人格关键词投递。无论是否唤醒，ASR 都保留；成功 TTS 回传与同 `sessionId` ASR 共用双向上下文。
@@ -154,7 +171,7 @@ data/roles/Rabi/personaConfig.json
 
 多条 Route 绑定同一人格时，共用该人格根级 `personaConfig.json` 的消息模板规则、语音关键词和上下文额度；Route 自己仍保留消息端、pipeline、热投递模式和处理端等运行配置。绑定人格但没有匹配外部消息规则时，外部消息只记录不投递；内置角色面板规则仍存在。显式无人格 route 会按已启用消息入口生成默认规则。
 
-一旦普通消息命中规则，会直接进入 Desktop owner：当前 turn 活跃时 `steer`，空闲时 `start`。不需要给每个普通消息端另配“热推送”开关。Heartbeat 的忙碌跳过和语音的热/关键词模式是两个明确例外。
+一旦普通消息命中规则，会直接进入 Route 选定的主控 Agent。主控是 Codex 时，当前 turn 活跃则 `steer`，空闲则 `start`。不需要给每个普通消息端另配“热推送”开关。Heartbeat 的忙碌跳过和语音的热/关键词模式是两个明确例外。
 
 具体的 route kind、`regex` 和模板写法见 [路由配置](routing-configuration.md)。
 
@@ -182,6 +199,7 @@ Codex adapter 的默认安全边界：
 
 ```json
 "agentAdapters": ["codex"],
+"primaryAgentAdapter": "codex",
 "codexThreadId": "<由 WebGUI 保存的任务 ID>",
 "codexThreadName": "Rabi",
 "codexCwd": "C:/Path/To/Your/Project",

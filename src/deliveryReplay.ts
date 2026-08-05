@@ -3,7 +3,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { appendAdapterLogToDir } from "./history.js";
 import {
-  deliverPacketToAgentAdapters,
+  deliverPacketToPrimaryAgentAdapter,
   forwardMessageAndWait,
   type ForwardAdapterOutcome,
   type ForwardDeliveryResult
@@ -163,7 +163,7 @@ async function replayMergedDeliveryAttempts(dataDir: string, attempts: DeliveryR
   }
 
   const message = buildMergedReplayMessage(attempts);
-  const outcomes = await deliverPacketToAgentAdapters("delivery-replay", "merged", message);
+  const outcomes = await deliverPacketToPrimaryAgentAdapter("delivery-replay", "merged", message);
   const failed = outcomes.some((outcome) => outcome.status === "failed");
   const delivered = outcomes.some((outcome) => outcome.status === "delivered");
   const status: ForwardDeliveryResult["status"] = failed ? "failed" : delivered ? "delivered" : "routed";

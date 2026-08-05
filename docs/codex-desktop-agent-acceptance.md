@@ -58,13 +58,14 @@ flowchart TD
 
 - 用户界面显示 `任务名称 + 最后会话时间`，不要求用户查看或输入 UUID。
 - 内部身份是 `完整任务 ID + workspace`；可见名称用于显示、无 ID 时查找和用户显式切换目标。
-- Codex 的用户可见名称以 Desktop app-server `thread/list` 返回的 `thread.name` 为准；本地状态库只补充精确 ID、cwd、归档、更新时间和 owner/rollout 定位。SQLite `threads.title` 可能是首条 prompt，不能用于下拉名称或同名查找。
+- Codex 的用户可见名称以 Desktop 左侧聊天栏为准：全量扫描使用 app-server `thread/list` 的 `thread.name`，按 ID 读取使用同一侧边栏会话索引；两者都通过 `codexDesktopBridge.ts` 的统一任务读取模型对外提供。SQLite `threads.title` 可能是首条 prompt，只能补充 owner 状态，不能成为任务名、下拉名称或同名查找依据。
 - 最后时间仅用于展示；不能用“最新任务”替代精确绑定。
 - 列表必须支持全部任务或可靠分页，不能只展示前 20/100 条却声称是全部。
 - 同名且同 workspace 的多个任务必须按可解析的 `updatedAt` 自动取唯一最新者，不能依赖数据库返回顺序；最大时间并列或都无有效时间时才要求选择。
 - 创建成功、首投失败属于“已创建、待重试投递”，不是“不存在会话”。
 - 投递状态必须区分：内部过渡态 `accepted` 只表示 RabiRoute 已开始走 Desktop 主链；只有目标 Desktop owner 的 `start/steer` 返回成功后才能记为 `delivered`；解析、owner 加载或 IPC 失败记为 `failed`。不得用 Route 受理记录冒充 Desktop 已接收。
 - 已匹配的普通消息端事件应直接投递：先尝试 `steer` 当前活跃 turn，只在 turn 已结束/不存在时 `start`。Heartbeat 可由专用忙碌跳过开关例外；语音可由专用热/关键词策略例外。
+- 任务是否仍在运行不能只看 Desktop IPC 内存集合。Manager 按时间合并连接内活跃标记与 rollout 最近生命周期事件：较新的完成/中止/失败事件覆盖旧活跃标记，新一轮 IPC 活跃时间晚于旧 terminal 时仍保持运行；连接断开立即清空该连接的活跃标记。
 
 ### 语音消息端的公开 HTTP 终态
 
@@ -103,7 +104,7 @@ flowchart TD
 | 名称不存在 | 创建一个、保存 ID、投递到该任务 |
 | 创建后 Desktop 索引延迟 | 有限等待同一 ID；不创建第二个 |
 | 并发两次首次投递 | single-flight；只创建一个任务 |
-| Desktop 改名 | 旧配对失效；按保存名称查找/创建 |
+| Desktop 改名 | 完整 ID + workspace 继续绑定原任务；后续显示采用左侧聊天栏新名称；任务数不变 |
 | Rabi 改名并保存 | 按新名称查找/创建；旧任务不再接收 |
 | 多个同名任务 | 绑定 `updatedAt` 唯一最新者；最大时间并列才展示候选 |
 | 初始化消息首次失败 | 保留已创建 ID；只重试消息 |

@@ -286,10 +286,12 @@ test("repository upgrades legacy Codex agent adapters on read and write", () => 
   const config = repo.readConfig();
 
   assert.deepEqual(config.gateways[0].agentAdapters, ["codex", "copilotCli"]);
+  assert.equal(config.gateways[0].primaryAgentAdapter, "codex");
 
   repo.writeConfig(config);
   const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as GatewayDefinition;
   assert.deepEqual(saved.agentAdapters, ["codex", "copilotCli"]);
+  assert.equal(saved.primaryAgentAdapter, "codex");
 });
 
 test("repository migrates a Copilot-only legacy thread name and saves only the new field", () => {

@@ -33,7 +33,7 @@ class DesktopRefreshService:
         self,
         previous_manager: ManagerSnapshot,
         selected_gateway_id: str,
-        include_role_messages: bool,
+        include_role_details: bool,
     ) -> DesktopRefreshResult:
         try:
             incoming = self.manager.snapshot()
@@ -45,14 +45,15 @@ class DesktopRefreshService:
             if selected_gateway is None:
                 return DesktopRefreshResult(manager_snapshot, None, None, None, None)
 
+            if not include_role_details:
+                return DesktopRefreshResult(manager_snapshot, selected_gateway, None, None, None)
+
             role_id = role_id_from_gateway(selected_gateway)
             try:
                 raw_plans = self.manager.role_plans(role_id)
                 raw_memory = self.manager.role_memory(role_id)
-                role_messages = (
-                    self.manager.role_panel_messages_snapshot(role_id) if include_role_messages else None
-                )
-                avatar_data = self.manager.role_avatar(role_id) if include_role_messages else None
+                role_messages = self.manager.role_panel_messages_snapshot(role_id)
+                avatar_data = self.manager.role_avatar(role_id)
             except Exception as error:
                 return DesktopRefreshResult(
                     manager=_with_refresh_error(manager_snapshot, f"Manager desktop data unavailable: {error}"),

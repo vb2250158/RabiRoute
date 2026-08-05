@@ -42,6 +42,7 @@
   "agentAdapters": [
     "codex"
   ],
+  "primaryAgentAdapter": "codex",
   "dataDir": "./data/route/RabiLink",
   "configName": "RabiLink",
   "agentRoleId": "RabiActive",

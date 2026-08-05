@@ -14,6 +14,7 @@ RabiRoute 的 Windows 完整桌面运行包不是单文件 exe，而是一组协
 
 ```text
 RabiRoute-Tray.exe          托盘/任务面板入口，负责桌面体验和启动监督
+scripts/watch-rabiroute-desktop-lifecycle.ps1  Manager/托盘进程配对监督器
 dist/manager.js             Node manager 后端入口
 dist/**/*.js                gateway、adapter、routing 等后端编译产物
 ribiwebgui/dist/            RibiWebGUI 前端静态产物
@@ -26,7 +27,7 @@ node_modules/ 或等价依赖     manager 运行需要的 npm 依赖
 
 RabiRoute 仍然从可移植的 Node manager 启动。Windows 启动器只是桌面便利入口：它会检测已有 manager，只在需要时启动一个新的 manager，把日志写到路由数据目录，打开 RibiWebGUI，并启动 PySide6/Qt 计划与记忆面板。
 
-Windows 启动器是“1+1”桌面体验的监督者：
+Windows 启动器建立“Manager + 托盘”配对，并把长期进程修复交给唯一的轻量监督器：
 
 ```text
 Start-RabiRoute-Tray.bat 或 RabiRoute-Tray.exe
@@ -35,9 +36,12 @@ Start-RabiRoute-Tray.bat 或 RabiRoute-Tray.exe
      -> manager 提供 RibiWebGUI 静态文件和 HTTP API
      -> manager 管理 gateway 子进程
   -> Qt 托盘/任务面板连接 http://127.0.0.1:8790
+  -> data/runtime/desktop-lifecycle-intent.json = running
+  -> watch-rabiroute-desktop-lifecycle.ps1
+     -> 任一侧缺失时通过同一启动器补齐 Manager + 托盘
 ```
 
-托盘里的 `退出 RabiRoute` 始终表示退出本地 RabiRoute 桌面运行态。它会调用本地 manager 关闭 API；manager 停止受管 gateway 子进程、关闭 HTTP server 并退出；随后托盘入口退出。
+托盘里的 `退出 RabiRoute` 始终表示退出本地 RabiRoute 桌面运行态。Manager 会先原子写入 `desiredState=stopped`，再停止受管 gateway、关闭 HTTP server 并退出，随后托盘退出。监督器看到 `stopped` 后自行结束，不能把用户明确关闭的进程重新拉起。普通 Manager 重载不改变该意图。
 
 ## 双击启动
 
@@ -63,6 +67,8 @@ Start-RabiRoute-Tray.bat
 - manager 响应后打开 RibiWebGUI。
 - 除非传入 `-NoTray`，否则启动 PySide6/Qt 计划与记忆面板。
 - 如果 Qt 面板已经运行，会复用已有面板，不创建重复托盘窗口。
+- 完整桌面启动会由 Manager 原子记录 `running` 意图，并启动工作区唯一的轻量监督器。监督器每 5 秒只检查 Manager `/meta` 和本项目托盘进程，连续两次缺失才走同一启动器的 PID、端口和单实例门禁补齐；它不扫描或修复 QQ、NapCat、Route、Adapter 等业务状态。
+- 托盘探测到 Manager 暂时离线时保持运行并显示离线状态，不再因连续超时自行退出；Manager 或托盘任一侧真正消失时，由监督器恢复配对。
 
 日志写入：
 
@@ -78,6 +84,8 @@ manager-YYYYMMDD-HHMMSS.stdout.log
 manager-YYYYMMDD-HHMMSS.stderr.log
 tray-YYYYMMDD-HHMMSS.stdout.log
 tray-YYYYMMDD-HHMMSS.stderr.log
+desktop-lifecycle-supervisor.log
+desktop-lifecycle-supervisor.jsonl
 ```
 
 常用直接命令：
@@ -102,13 +110,21 @@ tray-YYYYMMDD-HHMMSS.stderr.log
 POST http://127.0.0.1:8790/manager/shutdown
 ```
 
-这个端点让 Windows 托盘可以停止本地 manager，而不需要使用 Windows-only 的杀进程方式。manager 已经绑定在 `127.0.0.1`；这个端点不应该暴露到网络。它会停止受管 gateway 子进程、关闭 HTTP server 并退出。`SIGINT` 和 `SIGTERM` 也使用同一条关闭路径。
+这个端点只接受本机请求。托盘发送 `{ "desktopExit": true }` 时，Manager 必须先持久化 `stopped` 意图；持久化失败则拒绝退出并让托盘继续显示。安装、升级或受控重载使用普通空请求，只关闭 Manager 而不把桌面意图改成 `stopped`。两种请求最终都使用与 `SIGINT`、`SIGTERM` 相同的 Manager 关闭路径。
+
+完整桌面启动使用另一个仅本机端点写入运行意图：
+
+```text
+POST http://127.0.0.1:8790/manager/desktop-lifecycle/start
+```
+
+`data/runtime/desktop-lifecycle-intent.json` 是私有运行期事实源，不提交到仓库。文件缺失、损坏或不是 `running` 时监督器失败关闭，绝不自行猜测应当启动桌面运行态。
 
 曾考虑但暂不采用的方案：
 
 - 从托盘直接杀 manager PID：MVP 阶段拒绝，因为它是 Windows 专属行为，也更容易留下子进程或不完整日志。
 - signal file：后续可以考虑，但观察延迟更高，也不如已有本地 HTTP API 直接。
-- 让托盘成为长期父进程：暂不采用，让 Node manager 保持可移植核心，Windows 托盘只做便利层。
+- 让托盘成为长期父进程：不采用。Node manager 保持可移植核心；Windows 的长期 owner 是只负责进程配对的独立监督器，托盘仍是表现层。
 
 ## macOS 和 Linux
 
@@ -201,6 +217,7 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 - frozen 模式下，`desktop/tray-task-window/main.py` 会从 `Path(sys.executable).parent` 解析项目根目录。
 - 如果 manager 已经运行，exe 会复用它；如果 WebGUI 前端产物缺失或过期，exe 会尝试运行 `npm run webgui:build` 修复。
 - 如果 manager 没有运行，exe 会先确认/补齐后端和前端构建产物，再启动 `node dist/manager.js`，并拥有该进程的关闭权。
+- exe 确认 Manager 健康后会写入 `packaged-tray` 运行意图并启动同一个生命周期监督器；发布包中的托盘缺失时，监督器重新启动 packaged exe，而不是依赖系统 Python。
 
 真实发布 Windows 桌面包前，需要确认：
 

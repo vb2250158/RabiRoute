@@ -14,6 +14,7 @@ import {
 } from "./codexTaskIdentity.js";
 import { resolveCodexSession } from "./codexSessionResolver.js";
 import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
+import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 
 const maxQueryLength = 240;
 const maxTitleInputLength = 200_000;
@@ -32,8 +33,20 @@ export type AgentThreadRequest = {
   prompt?: string;
   cwd?: string;
   createIfMissing?: boolean;
+  lookupMode?: "complete" | "state_db";
   sandbox?: CodexTurnSandbox;
+  model?: string;
+  reasoningEffort?: CodexReasoningEffort;
+  sourceThreadId?: string;
+  sourceAgentType?: AgentThreadSourceType;
 };
+
+export type AgentThreadSourceType =
+  | "primary_persona"
+  | "message_processing"
+  | "plan_secretary"
+  | "plan_agent"
+  | "agent";
 
 export type AgentThreadSummary = {
   id: string;
@@ -44,7 +57,13 @@ export type AgentThreadSummary = {
 };
 
 export type AgentThreadDriver = {
-  list?: (params: { query: string; limit: number; offset: number; allowedWorkspaces: string[] }) => Promise<AgentThreadSummary[]>;
+  list?: (params: {
+    query: string;
+    limit: number;
+    offset: number;
+    allowedWorkspaces: string[];
+    stateDbOnly?: boolean;
+  }) => Promise<AgentThreadSummary[]>;
   read: (threadId: string) => Promise<unknown>;
   create: (params: {
     title: string;
@@ -54,7 +73,14 @@ export type AgentThreadDriver = {
     sandbox: CodexTurnSandbox;
   }) => Promise<CodexThreadCreateResult>;
   rename?: (params: { threadId: string; title: string; cwd: string }) => Promise<AgentThreadSummary>;
-  send: (params: { threadId: string; prompt: string; cwd: string; sandbox: CodexTurnSandbox }) => Promise<void>;
+  send: (params: {
+    threadId: string;
+    prompt: string;
+    cwd: string;
+    sandbox: CodexTurnSandbox;
+    model?: string;
+    reasoningEffort?: CodexReasoningEffort;
+  }) => Promise<void>;
 };
 
 export type AgentThreadRequestOptions = {
@@ -81,6 +107,40 @@ function normalizeSandbox(value: unknown, fallback: CodexTurnSandbox = "workspac
     return value;
   }
   return fallback;
+}
+
+function normalizeReasoningEffort(value: unknown): CodexReasoningEffort | undefined {
+  return value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max"
+    ? value
+    : undefined;
+}
+
+const agentThreadSourceLabels: Record<AgentThreadSourceType, string> = {
+  primary_persona: "主人格 Agent",
+  message_processing: "消息处理 Agent",
+  plan_secretary: "计划秘书 Agent",
+  plan_agent: "计划执行 Agent",
+  agent: "Agent"
+};
+
+function normalizeAgentThreadSourceType(value: unknown): AgentThreadSourceType {
+  const normalized = optionalText(value, "sourceAgentType", 40) || "agent";
+  if (normalized in agentThreadSourceLabels) return normalized as AgentThreadSourceType;
+  throw new Error("Invalid sourceAgentType. Expected primary_persona, message_processing, plan_secretary, plan_agent, or agent.");
+}
+
+const forbiddenAgentHandoffRoleMarkers = [
+  "[消息处理 Agent 初始化]",
+  "你是专职消息处理 Agent",
+  "[计划协助会话恢复初始化]",
+  "[计划秘书初始化]"
+];
+
+export function validateAgentThreadHandoffPromptForTest(prompt: string): void {
+  if (/^\s*\[rabi:bind\b/im.test(prompt)
+    || forbiddenAgentHandoffRoleMarkers.some((marker) => prompt.includes(marker))) {
+    throw new Error("Agent-to-Agent handoff must contain only the newly composed handoff content, not another task's role initialization or complete injected prompt.");
+  }
 }
 
 function requiredText(value: unknown, name: string, maxLength: number): string {
@@ -204,6 +264,68 @@ function threadSummary(value: unknown): AgentThreadSummary | null {
   };
 }
 
+async function readAgentThread(
+  threadId: string,
+  driver: AgentThreadDriver
+): Promise<{ value: unknown; summary: AgentThreadSummary | null }> {
+  const value = await driver.read(threadId);
+  const summary = threadSummary(value);
+  return { value, summary };
+}
+
+async function resolveAgentThreadSendSource(
+  request: AgentThreadRequest,
+  options: AgentThreadRequestOptions,
+  driver: AgentThreadDriver
+): Promise<{
+  promptPrefix: string;
+  source: {
+    agentType: AgentThreadSourceType;
+    agentLabel: string;
+    threadId: string;
+    threadName: string;
+    workspace?: string;
+  };
+} | null> {
+  const rawSourceThreadId = optionalText(request.sourceThreadId, "sourceThreadId", 80);
+  if (!rawSourceThreadId) {
+    if (request.sourceAgentType != null) {
+      throw new Error("sourceAgentType requires sourceThreadId.");
+    }
+    return null;
+  }
+
+  const sourceThreadId = normalizeThreadId(rawSourceThreadId);
+  const agentType = normalizeAgentThreadSourceType(request.sourceAgentType);
+  let sourceThread: AgentThreadSummary | null = null;
+  try {
+    sourceThread = (await readAgentThread(sourceThreadId, driver)).summary;
+  } catch (error) {
+    if (!missingThreadError(error)) throw error;
+  }
+  if (!sourceThread || sourceThread.id !== sourceThreadId || sourceThread.archived) {
+    throw new Error(`无法核对来源任务：${sourceThreadId}`);
+  }
+
+  const source = {
+    agentType,
+    agentLabel: agentThreadSourceLabels[agentType],
+    threadId: sourceThreadId,
+    threadName: sourceThread.title,
+    ...(sourceThread.cwd ? { workspace: sourceThread.cwd } : {})
+  };
+  const promptPrefix = [
+    "[Agent 任务投递来源]",
+    `来源 Agent：${source.agentLabel}`,
+    `来源任务：${source.threadName}`,
+    `来源会话 ID：${source.threadId}`,
+    source.workspace ? `来源工作目录：${source.workspace}` : undefined,
+    "",
+    "[投递内容]"
+  ].filter((line): line is string => line !== undefined).join("\n");
+  return { promptPrefix, source };
+}
+
 function missingThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /not found|was not found|no rollout found/i.test(message);
@@ -239,9 +361,18 @@ async function listThreads(
   offset: number,
   allowedWorkspaces: string[],
   options: AgentThreadRequestOptions,
-  driver: AgentThreadDriver
+  driver: AgentThreadDriver,
+  stateDbOnly = false
 ): Promise<AgentThreadSummary[]> {
-  if (driver.list) return driver.list({ query, limit, offset, allowedWorkspaces });
+  if (driver.list) {
+    return driver.list({
+      query,
+      limit,
+      offset,
+      allowedWorkspaces,
+      ...(stateDbOnly ? { stateDbOnly: true } : {})
+    });
+  }
   if (!options.sessionIndexPath) return [];
   return listAgentThreads(query, limit + offset, options.sessionIndexPath).slice(offset, offset + limit);
 }
@@ -271,9 +402,10 @@ export async function handleAgentThreadRequest(
 
   if (action === "read") {
     const threadId = normalizeThreadId(request.threadId);
+    const thread = await readAgentThread(threadId, driver);
     return {
       statusCode: 200,
-      data: { action, threadId, thread: await driver.read(threadId) }
+      data: { action, threadId, thread: thread.value }
     };
   }
 
@@ -303,7 +435,8 @@ export async function handleAgentThreadRequest(
         0,
         [cwd],
         options,
-        driver
+        driver,
+        request.lookupMode === "state_db"
       ),
       create: () => createThread({ ...request, title, cwd: requestedWorkspace }, options, driver, title)
     });
@@ -370,11 +503,35 @@ export async function handleAgentThreadRequest(
 
   if (action === "send") {
     const threadId = normalizeThreadId(request.threadId);
-    const prompt = requiredText(request.prompt, "prompt", maxPromptLength);
+    const rawPrompt = requiredText(request.prompt, "prompt", maxPromptLength);
+    const sendSource = await resolveAgentThreadSendSource(request, options, driver);
+    if (sendSource) {
+      if (sendSource.source.threadId === threadId) {
+        throw new Error("Agent-to-Agent handoff source and target task must be different.");
+      }
+      validateAgentThreadHandoffPromptForTest(rawPrompt);
+    }
+    const prompt = sendSource ? `${sendSource.promptPrefix}\n${rawPrompt}` : rawPrompt;
     const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const sandbox = normalizeSandbox(request.sandbox);
-    await driver.send({ threadId, prompt, cwd, sandbox });
-    return { statusCode: 202, data: { action, threadId, status: "started", sandbox } };
+    const model = optionalText(request.model, "model", 120) || undefined;
+    const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort);
+    const delivery = { threadId, prompt, cwd, sandbox } as Parameters<AgentThreadDriver["send"]>[0];
+    if (model) delivery.model = model;
+    if (reasoningEffort) delivery.reasoningEffort = reasoningEffort;
+    await driver.send(delivery);
+    return {
+      statusCode: 202,
+      data: {
+        action,
+        threadId,
+        status: "started",
+        sandbox,
+        model,
+        reasoningEffort,
+        ...(sendSource ? { source: sendSource.source } : {})
+      }
+    };
   }
 
   throw new Error("Unsupported Agent thread action. Expected list, read, resolve, create, rename, or send.");

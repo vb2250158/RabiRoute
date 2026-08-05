@@ -81,12 +81,14 @@ weixin_message
 wearable_health_alert
 ```
 
+`role_panel_message` is Manager's built-in persona-message kind. It serves both local role-panel input and authenticated cross-persona delivery; it is not a configurable network listener. Both entry points use one delivery service, which records `sent` only after handler acceptance and records `failed` on rejection. The built-in rule cannot be removed as an ordinary custom rule.
+
 Use the narrowest kind that represents the source event. `group_message` is normally combined with `regex`; explicit mentions/replies use their dedicated kinds.
 
 ## Ordinary delivery and endpoint-specific exceptions
 
 - Once an ordinary endpoint message matches a rule, it is delivered directly: `steer` the active Desktop turn or `start` an idle task.
-- Heartbeat owns the separate `heartbeatSkipWhenAgentBusy` exception; it does not suppress ordinary messages. Heartbeat never injects message history; a legacy `recentMessageLimits.heartbeat` value remains readable for compatibility but is treated as `0` at runtime.
+- Heartbeat never injects message history and does not enter conversational settling. With Codex Message Agent mode enabled, it goes immediately to an independent Message Agent and ignores Primary-task busyness. Otherwise `heartbeatSkipWhenAgentBusy` may skip heartbeat while the fixed task is active. A legacy `recentMessageLimits.heartbeat` value remains readable for compatibility but is treated as `0` at runtime.
 - `plan_feedback` is a Manager system event emitted only after the plan and Route are explicitly bound. It uses a dedicated built-in rule, neither reads nor writes chat history, and always exposes empty recent-message template values.
 - Speech owns Route `speechPushMode`: `hot` delivers every completed ASR segment, while `keyword` records all segments and delivers only after a persona `speechTriggerKeywords` match. An empty list never falls back to hot.
 - `weixin_message` is the experimental personal-Weixin OpenClaw/iLink source. Text exposes `weixinSessionId`, `weixinUserId`, and `weixinMessageType`; media is record-only, and replies require the source session's context token.

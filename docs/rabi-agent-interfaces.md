@@ -98,6 +98,46 @@ POST  /api/roles/:roleId/health/observations
 
 `state` 和 `summary` 都包含时效信息；`unknown` 或 `stale` 不得解释成确定的睡着、醒来或健康状态。经 RabiLink Relay 输入并命中心率/睡眠规则的观测会形成 `wearable_health_alert` Agent 事件。认证秘钥、Relay token 和原始敏感元数据不得作为观测字段传入。完整字段、配置和验收边界见 [`rabilink-wearable-health.md`](./rabilink-wearable-health.md)。
 
+### 查询其它人格并投递消息
+
+“人格”是面向用户和 Agent 的正式名称；现有 `roleId`、`/api/roles/*` 和 `data/roles/` 是兼容保留的内部名称。人格列表提供专用接口，不需要从 Route 管理结果中拆解：
+
+```http
+GET /api/personas
+GET /api/personas?addressable=true
+GET /api/personas/:personaId
+```
+
+列表返回人格的 `personaId`、显示名称、是否可以接收消息，以及绑定的 Route。`addressable=true` 只返回至少绑定一个已启用 Route 的人格；只有一个已启用 Route 时会同时返回 `defaultRouteId`。
+
+当前人格需要联系另一个人格时，使用目标人格路径，并从当前 `AgentPacket.replyContext` 读取 `runtimeRouteId` 和 `personaMessagingCapability`。凭据同时绑定 Route 与人格，不能用另一个 Route 或人格的身份复用：
+
+```http
+POST /api/personas/:targetPersonaId/messages
+Content-Type: application/json
+
+{
+  "deliveryId": "stable-unique-delivery-id",
+  "sourceRouteId": "source-route",
+  "sourceCapability": "value-from-replyContext.personaMessagingCapability",
+  "targetRouteId": "optional-when-target-has-one-enabled-route",
+  "conversationId": "optional-stable-conversation-id",
+  "inReplyToMessageId": "optional-message-id-being-answered",
+  "hopCount": 0,
+  "text": "请检查今天的构建状态。"
+}
+```
+
+`deliveryId` 必填，并由调用方为一次业务投递稳定生成。相同 ID 与相同请求只执行一次，重试返回同一完成结果；相同 ID 携带不同内容返回 `409`。请求结果不明确时先查询回执，不要直接生成新 ID 重发：
+
+```http
+GET /api/personas/messages/receipts/:deliveryId
+```
+
+发送 Route 和接收 Route 都必须已启用；目标人格有多个已启用 Route 时必须提供 `targetRouteId`，不能猜测；不能通过这个接口给自己发送消息。`hopCount` 必须是非负整数，最大为 `8`。成功响应为 HTTP `202` 且 `status=delivered`，表示消息已经沿目标 Route 的现有 `role_panel_message` 路径交给目标处理端。服务只在处理端接收后记录 `status=sent`；失败记录只代表一次尝试。
+
+跨人格投递是显式的单向消息，不会自动建立双向聊天。目标人格的普通回复只留在自己的角色面板。需要回复来源人格时，目标人格必须再次调用 POST：把新的 `deliveryId` 用于本次回复，沿用收到的 `personaConversationId`，令 `inReplyToMessageId` 等于当前消息 ID，并把 `personaMessageHopCount` 加一。超过 `personaMessageMaxHops` 时停止继续互投。
+
 普通回复上下文会一并注入：
 
 ```text
@@ -369,7 +409,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 线程桥提供六个动作：
 
 - `list`：从 Desktop 状态按标题查询本机任务，使用 `offset` / `limit` 分页访问全部结果。
-- `read`：通过完整 `threadId` 只读读取 Desktop 任务元数据。
+- `read`：通过完整 `threadId` 只读读取 Desktop 任务元数据。返回的任务名统一来自 Codex 左侧聊天栏索引；SQLite `threads.title`、首轮初始化提示和 Route 中缓存的旧名称都不能覆盖它。
 - `resolve`：先读取精确 ID。有效 ID、cwd 一致且未归档时直接绑定，不比较可变的 Desktop/SQLite 标题，也不会因展示标题超过新建上限而否定绑定；保存 ID 指向已归档任务时返回 `409 archived`。只有 ID 为空、非法或确实失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列时返回候选。
 - `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。Codex 任务名上限为 240 个 JavaScript 字符单元；更长的输入会由 RabiRoute 安全截断并加省略号，响应和后续配置保存实际创建的名称。
 - `rename`：按完整 `threadId` 和已配置 cwd 修改 Desktop 任务名称，不改变任务身份；用于持久计划协助槽从单个扩容为多个时，把原“协助处理计划”任务改名为“协助处理计划1”。
@@ -429,13 +469,19 @@ POST http://127.0.0.1:8790/api/agent/threads
   "threadId": "019f0000-0000-7000-8000-000000000001",
   "cwd": "C:\\Path\\To\\Your\\Project",
   "sandbox": "workspace-write",
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000002",
+  "sourceAgentType": "plan_secretary",
   "prompt": "补充新的约束和验证证据，请续接原任务。"
 }
 ```
 
+Agent 向另一个 Agent 任务发送消息时必须提供自己的完整 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`。Manager 先按来源 ID 读取 Desktop 状态并核对任务存在、ID 一致且未归档，再通过 `codexDesktopBridge.ts` 的统一任务读取模型取得左侧聊天栏当前名称。`agentThreads.ts`、消息处理 Agent、心跳和来源模板不得各自读取或覆盖另一份任务名。正文前会显示“来源 Agent、来源任务、来源会话 ID、来源工作目录”；任务名不由发送方填写。RabiRoute 自己产生的普通消息、初始化消息和系统通知不属于 Agent 互投，可以不带这两个字段。
+
 安全边界：
 
 - `create` / `send` 的 `cwd` 必须属于当前 RabiRoute 配置中已有的 Codex 工作区；不能用该接口在任意路径启动任务。
+- Agent 互投必须提供可核对的来源任务 ID；`sourceAgentType` 只声明发送方当前职责，任务名和会话 ID 仍以 Desktop 查询结果为准。
+- Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主人格 ID相同，消息池会拒绝初始化和投递。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
 - `create` 返回 `initialTurnStatus`。若线程已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名线程。
@@ -508,6 +554,8 @@ POST /roles/:roleId/plans
 ```
 
 新增计划必须提供有序的 `steps`。写入 API 仍只接受上方五种顶层生命周期状态；`presentation.status / tone / sortBucket / views / palette` 和列表响应的 `counts.stages` 都由 Manager 派生，Agent 与客户端不得手写。等待审批、方案确认或授权的当前步骤保持 `进行中`，并补齐结构化 `approvalRequest` 与 `waitingFor`；只有合同完整、可提交且 `responseStatus=pending` 时，Manager 才自动派生 `isBlocked=true` 兼容投影与“待审批”。结构化 `qa-* / verify-*` 当前步骤显示“等待 QA 验收”；权威等待字段可派生“待环境 / 待素材 / 待资料 / 待外部回执”；前序工作完成且明确等待合包、构建、进包或目标包身份的 package/build 当前步骤显示“待统一打包”；其它进行中计划显示“正在执行”。Agent 不得手写 `isBlocked` 或展示阶段。审批合同缺项时 Manager 返回 `incomplete/enabled=false`，计划保持进行中并禁止正式审批。
+
+展示细分由 Manager 继续统一判断：真实 runner、MCP、设备或监听不可用且没有 CLI、替代验证或重试路径时返回“等待测试环境”；明确禁止 Unity GUI、MCP、菜单或 PlayMode 时返回“等待重新授权”。QA 阶段还需要本轮真实发送回执且只等待结论；缺回执但仍可发送或修复时保持“正在执行”。目标包身份或纳入证明继续返回蓝色“待统一打包”，素材、资料和负责人答复不会被归入测试环境。
 
 只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应强制采用“实施/开发验证 → 待统一打包 → 等待 QA 验收 → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 `qa-* / verify-*` 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 

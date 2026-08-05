@@ -199,7 +199,7 @@ test("insufficient account QA evidence becomes an actionable inquiry and later e
   assert.match(plan.waitingFor || "", /前后状态/);
   assert.doesNotMatch(plan.waitingFor || "", /版本|渠道|截图|视频|日志/);
   assert.equal(planPresentation(plan).tone, "waiting_external");
-  assert.equal(planPresentation(plan).status, "待环境");
+  assert.equal(planPresentation(plan).status, "等待测试环境");
   assert.equal(sendCount, 0);
 
   const evidence = appendPlanFeedback(roleDir, createPlanFeedbackRecord({

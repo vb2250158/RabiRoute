@@ -21,7 +21,7 @@ Qt 面板本身尽量保持跨平台。Windows 启动器与打包边界以 [`doc
 - 在左侧切换 Route，并显示 `聊天`、`当前`、`计划`、`近期记忆`、`已归档` 和 `诊断` 六个视图。
 - 六个视图都在一级导航中直接可见；`当前` 按“进行中计划 / 近期记忆”分区，`诊断` 使用只读表格展示状态和目录。
 - 托盘视觉主题与 RibiWebGUI 的 `RabiLight` 保持一致：使用雾蓝页面背景、白色表面、深海军蓝正文、青绿色交互强调、8px 圆角和轻量边框；托盘菜单与面板“更多操作”共用同一套配色。Windows 不再注册 Qt 隐式 `setContextMenu`；表现层 `TrayMenuController` 统一接收左键 `Trigger` 和右键 `Context`，直接调用非阻塞 `QMenu.popup()`，因此两种点击都会立即打开同一个已预热菜单。角色面板也会在托盘图标可点击前完成不可见的 QWidget/原生布局预热，避免首次点击额外承担数百毫秒构造成本；人格菜单项在用户点击回调内先同步显示、置顶并请求激活面板，再于下一轮事件循环应用缓存 DTO 和重建内容，保留 Windows 前台用户手势。菜单内容重建同样延迟到菜单关闭后执行。托盘菜单会把当前人格和最多 5 个人格聊天入口直接展开，其余人格在展开“更多人格”时按需创建；运行、警告和离线状态继续使用独立语义色。
-- 托盘与 RibiWebGUI 共用同一个 Rabi Manager 后端。Route 摘要与人格展示信息来自 `/gateways?summary=1`，计划、记忆、角色聊天和头像分别来自 `/api/roles/:roleId/plans`、`/memory`、`/role-panel/messages` 和 `/avatar`；计划审批意见通过 `/api/roles/:roleId/plans/:planId/feedback` 记录。托盘不直接读取 `data/` 或人格文件。完整 API 快照由无 Qt 依赖的 `DesktopRefreshService` 组织，再通过通用 Qt 线程池异步执行；刷新、聊天发送、审批提交、手动触发和退出请求中的 Manager I/O 都不占用主线程，主线程只应用 DTO 和表现结果。隐藏面板不请求聊天或头像、不重建 QWidget；托盘菜单显示期间延迟应用刷新结果；Manager DTO 的表现签名没有变化时不重建人格菜单或重复渲染面板，避免无关后台字段和 10 秒刷新与点击竞争。同一时间只保留一个刷新任务，但不会丢失手动刷新。短暂超时时保留并标记上次快照，Manager 真正离线时仍清空运行状态。
+- 托盘与 RibiWebGUI 共用同一个 Rabi Manager 后端。Route 摘要与人格展示信息来自 `/gateways?summary=1`，计划、记忆、角色聊天和头像分别来自 `/api/roles/:roleId/plans`、`/memory`、`/role-panel/messages` 和 `/avatar`；计划审批意见通过 `/api/roles/:roleId/plans/:planId/feedback` 记录。托盘不直接读取 `data/` 或人格文件。API 快照由无 Qt 依赖的 `DesktopRefreshService` 组织，再通过通用 Qt 线程池异步执行；刷新、聊天发送、审批提交、手动触发和退出请求中的 Manager I/O 都不占用主线程。隐藏面板只请求轻量 Manager/Route 摘要，不请求计划、记忆、聊天或头像，也不重建 QWidget，避免 10 秒托盘刷新反复触发大角色数据读取；托盘菜单显示期间延迟应用刷新结果；Manager DTO 的表现签名没有变化时不重建人格菜单或重复渲染面板。同一时间只保留一个刷新任务，但不会丢失手动刷新。短暂超时时保留并标记上次快照，Manager 真正离线时仍清空运行状态。
 - `/gateways?summary=1` 只含人格标识、路径、头像和从文件开头提取的轻量标题等展示元数据，不读取或传输完整 persona Markdown 正文，避免 10 秒刷新重复搬运大块 persona 内容。
 - 计划卡片折叠时按“标题 / 当前步骤 / 触发关键词”三层展示，其中当前步骤优先显示结构化的“第 N 步 · 步骤名”；计划和记忆的触发关键词压缩为动态单行，窗口变宽会显示更多，剩余项只显示为 `……`。展开卡片后隐藏折叠态当前步骤摘要，并显示全部关键词和完整计划详情。
 - 计划卡片展开后优先完整列出 `steps`，显示完成数量和进度条，并用“当前执行：第 N 步”及高亮步骤行明确当前位置；步骤不再截断为前 6 项。有步骤时不重复展示 `nextAction`。只有 Manager 返回 `presentation.tone=blocked` 时，顶部状态、当前位置和当前步骤行才统一切换为“阻塞中 / 当前阻塞 / 已阻塞”并显示原因；原始 `blockedBy` 文本不会让托盘自行标红。旧计划没有 `steps` 时才保留旧版当前/下一步兼容区。
@@ -103,9 +103,11 @@ data/roles/<RoleId>/memory/consolidated/*.json
 
 ## 生命周期
 
-托盘菜单的 `退出 RabiRoute` 会请求 `POST /manager/shutdown`。Manager 负责停止受管 Gateway 并关闭 HTTP 服务，随后托盘退出。
+托盘菜单的 `退出 RabiRoute` 会请求 `POST /manager/shutdown` 并携带明确的桌面退出标记。Manager 先把私有运行期意图原子写成 `stopped`，再停止受管 Gateway 并关闭 HTTP 服务，随后托盘退出。写入失败时面板保持可见，不能留下仍标记为 `running` 的监督器去反向复活进程。
 
-如果优雅关闭失败，面板不会静默消失。由 Windows 启动器创建且无法响应的 Manager 进程可以由启动器持有的进程句柄结束；独立外部 Manager 不由面板强杀。
+Manager 暂时离线时，面板保留托盘图标、显示离线状态并继续重连，不再因连续探测失败自行退出。由 Windows 启动器或打包版托盘建立的完整桌面运行态会同时启动 `scripts/watch-rabiroute-desktop-lifecycle.ps1`；它只维护 Manager 与托盘的进程配对，连续确认任一侧缺失后通过现有安全启动门禁补齐。QQ、NapCat、Route 和 Adapter 的巡检不属于这个监督器。
+
+如果优雅关闭失败，面板不会静默消失，也不会强杀 Manager。普通 `npm run start:manager` 仍是独立核心路径，不会隐式创建托盘或监督器。
 
 ## 代码布局
 
@@ -115,9 +117,9 @@ data/roles/<RoleId>/memory/consolidated/*.json
 - `DesktopRefreshService`：无 Qt 依赖的 API 快照编排，只产出只读 DTO，不读取本地角色文件。
 - `desktop_models` / `desktop_read_model`：Manager DTO 到托盘表现模型的转换与可重建缓存。
 - `qt_async`：通用 Qt 线程池桥，只负责后台 callable 和主线程结果通知，不包含 Manager 或角色业务逻辑。
-- `LifecycleController`：退出决策。
+- `LifecycleController`：只处理用户明确退出；Manager 在线状态属于展示快照，不决定托盘生死。
 - `TaskWindow`：Route 导航、六个视图、聊天输入和渲染。
 - `DesktopAdapter`：通过 Qt 打开 URL、文件和目录。
 - `tray_app`：纯表现组合根，负责托盘菜单、窗口装配、缓存应用与用户事件。
 
-平台层包含 Windows 启动器、打包和应用身份。未来 macOS/Linux 入口应复用相同的 Manager HTTP 协议和 Qt 面板，而不是另建一套业务逻辑。
+平台层包含 Windows 启动器、生命周期意图与监督器、打包和应用身份。未来 macOS/Linux 入口应复用相同的 Manager HTTP 协议和 Qt 面板，而不是另建一套业务逻辑。

@@ -222,6 +222,8 @@ WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles
 
 计划管理写入按 `planId` 隔离：同一计划同时只有一个控制面 writer，不同计划可以并行。共享 ledger、问题账本和发送回执在短文件锁内读取最新状态、只合并目标记录并原子替换，不能用旧的全量快照覆盖其它计划。锁元数据先完整写入候选文件，再以同卷 hard-link 原子发布；运行热路径不自动删除 stale 或损坏锁，遇到此类锁时失败关闭，只允许在已暂停 writer、确认 quiescent 的维护窗口显式修复。`claim` / `clarify` 以来源消息和稳定 key 获取独立 lease，并在外发前保存 reservation；发送结果不明确或已发送但验证失败时保留 `uncertain` / `sent_unverified`，禁止自动重发。
 
+新一轮 `work-cycle begin` 在生成业务任务历史快照和保存 cycle 之前，先读取计划与近期记忆。Manager 的幂等 GET 使用带超时的有界重试；POST、PATCH 等可能产生副作用的请求不自动重放。近期记忆读取在重试耗尽后失败时，begin 释放计划 lease，并且不留下已启动 cycle 或本轮历史快照；错误继续返回给秘书，不能把稍后一次直接 GET 成功当成本轮 begin 已完成。
+
 全局 strict audit 是观察视图：它对 ledger 使用前后双快照，只有 cycle 身份稳定时才把校验错误列为 `invalid`；审计期间出现、消失或变化的 cycle 只列为 `incomplete`。活动 cycle 或 plan lease 会显示 `quiescent=false`，但不会阻止其它计划；单计划完成门使用 plan-scoped strict audit。只有明确维护或最终 drain 才要求全局 quiescent。线程状态 reconcile 同样只跳过 active 计划并继续处理其它计划。
 
 目标 Codex Route 必须已有精确任务 ID，且不得与执行会话相同。一个执行会话绑定多个计划、workspace 不一致、执行会话上下文人格与计划人格不一致、指定 gateway 不存在或未绑定该人格、同人格存在多个 gateway 却未指定 `gatewayId` 时都失败关闭。此能力在双真实 Desktop 任务验收前保持实验状态。
@@ -594,11 +596,17 @@ Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批门真
 
 进行中计划的真实展示阶段由 Manager 按优先级统一派生：结构化 `qa-* / verify-*` 当前步骤显示“等待 QA 验收”；结构化 package/build 当前步骤只有在前序工作全部完成且 `waitingFor` 明确等待合包、构建、进包、目标包身份或用户开始打包时，才显示蓝色“待统一打包”；其余权威 `waitingFor` 按内容显示“待环境”“待素材”“待资料”或“待外部回执”；没有真实等待时显示“正在执行”。实施步骤正文里的 QA 字样、旧 `blockedBy`、未来步骤和普通说明不会自行改变阶段。顶层 `status` 仍只保存 `未开始 / 进行中 / 暂停 / 已完成 / 已归档` 生命周期。
 
+当前细分规则是：真实 runner、MCP、设备或监听不可用且没有 CLI、替代验证或重试路径时派生“等待测试环境”；明确禁止 Unity GUI、MCP、菜单或 PlayMode 时派生“等待重新授权”。结构化 QA 步骤还必须有本轮真实发送回执且只等待结论；缺回执但仍可发送或修复时保持“正在执行”。目标包身份或纳入证明仍属于 `waiting_package`，素材、文档和负责人答复不与测试环境混用。
+
+展示层只把 `nextAction` 和当前步骤标题中的明确执行句当作当前替代动作。`currentStep` 或步骤 `detail` 中“运行截图已发送”“测试已完成”“禁止重复发送”等历史完成证据不能把只等结果的计划重新显示为“正在执行”；相反，“先运行 CLI 并发送校对请求”这类仍未完成的明确动作继续保持可执行。
+
 “实施/开发验证 → 待统一打包 → 等待 QA 验收 → QA 通过完成；QA 失败回到同一计划继续调查和实施”只适用于代码、Prefab、资源、配置等会产生项目内容变动的计划。调查、设计评审、运营、资料收集、外部依赖和控制面维护必须保留自身真实步骤与 `waitingFor`，不得为了套用四步状态机而补造 package 或 `qa-* / verify-*` 步骤。Manager 只呈现结构化当前步骤，不按标题、正文或 `kind` 猜测并强制补齐流程。
 
 `presentation` 返回 `status`、`tone`、`sortBucket`、统一色板和审批合同；分页摘要额外返回 `counts.stages`，汇总 `executing / qa / waitingPackage / waitingExternal / approval / pending / paused / completed / archived`。除暂停外，`ready` 待审批计划优先，`incomplete` 合同其次，再按“待审批 → 等待 QA 验收 → 正在执行 → 待环境/素材/资料/外部回执 → 待统一打包 → 未开始 → 完成 → 已归档”与 `updatedAt` 排序；暂停绝对末尾。
 
-秘书执行 `reconcile-thread-statuses` 时也消费同一份 Manager `presentation`，再与问题账本和最近闭环中的结构化发送/环境证据交叉核对。终态与完整待审批分别归为 `terminal / blocked`；暂停计划归为 `frozen + paused`，且固定 `implementationDispatchAllowed=false`；`waiting_package` 和具有当前、未被同一 PID/工程权威 release 证据覆盖的 `waiting_environment* + environment-owner` 唯一环境占用归为 `frozen`。QA 或普通询问已有真实 `status=sent / sentMessageId` 回执，且 issue/cycle 明确当前只等待结果、无独立本地动作并禁止重发时，归为稳定 `waiting_result`；回执可来自结构化 issue evidence 或最近 cycle summary，不受后续计划更新时间和普通去重窗口影响。普通询问仅有近期发送证据时仍使用 `waiting_result_dedup`。只有仍有本地动作、缺真实发送/回执、已到追问时间且明确需要追问、可重试或存在替代路径的空闲计划保留为 `actionable`；已发送但仍有本地动作时不重复询问。对账结果分别返回 `frozenIdle`、`waitingResultIdle` 和 `actionableIdle`。除暂停外，`implementationDispatchAllowed` 表达“非终态且非审批阻塞”的治理授权，不等于本轮必须续投；实际调度还必须要求 `idleClassification=actionable`，从而避免展示阶段、授权门与后台推进判断形成冲突状态体系。
+秘书执行 `reconcile-thread-statuses` 时也消费同一份 Manager `presentation`，再与问题账本和最近闭环中的结构化发送/环境证据交叉核对。终态与完整待审批分别归为 `terminal / blocked`；暂停计划归为 `frozen + paused`，且固定 `implementationDispatchAllowed=false`；`waiting_package` 和具有当前、未被同一 PID/工程权威 release 证据覆盖的 `waiting_environment* + environment-owner` 唯一环境占用归为 `frozen`。结构化 dependency 当前步骤或 tracking 状态只有在明确等待其它计划原 owner 完成、同时 plan/issue/cycle 明确当前没有独立 CLI、控制面或业务动作时，才进入 `frozen_until_dependencies`；仍需联系或协调 owner、补合同、取得回复，或仍有 CLI、重试和替代路径时继续 `actionable`。QA 或普通询问已有真实 `status=sent / sentMessageId` 回执，且 issue/cycle 明确当前只等待结果、无独立本地动作、没有另一个待发送或待结果的校对/确认请求并禁止重发时，归为稳定 `waiting_result`；旧 QA 回执不能覆盖后来新增的负责人校对或位置确认。回执可来自结构化 issue evidence 或最近 cycle summary，不受后续计划更新时间和普通去重窗口影响。普通询问仅有近期发送证据时仍使用 `waiting_result_dedup`。只有仍有本地动作、缺真实发送/回执、已到追问时间且明确需要追问、存在另一项独立询问、可重试或存在替代路径的空闲计划保留为 `actionable`；已发送但仍有本地动作时不重复询问。对账结果分别返回 `frozenIdle`、`waitingResultIdle` 和 `actionableIdle`。`implementationDispatchAllowed` 只在当前仍允许实施任务继续运行时为 `true`；终态、暂停、审批阻塞以及没有实施动作可做的包、跨计划依赖、测试环境、重新授权和 QA 结论等待都返回 `false`。
+
+对新增细分状态，`waiting_package` 返回 `frozen_until_package + wait_for_target_package`，无独立动作的跨计划依赖返回 `frozen_until_dependencies` 且 `requiredAction=null`，真实测试环境等待返回 `frozen_until_test_environment + wait_for_test_environment`，等待重新授权返回 `waiting_for_authorization + request_authorization`；这些等待的 `implementationDispatchAllowed` 都是 `false`。已有真实 QA 回执且只等结论时返回 `waiting_result + wait_for_qa_result` 并禁止实施投递；缺回执但仍可发送或修复时返回 `actionable + send_qa_request`。CLI 或替代验证仍可执行时保持 `actionable`；普通外部资料继续使用 `inquire_until_result`。
 
 Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶段汇总、视图分类、状态色板和既有顺序。两端重叠分类统一为“当前 / 计划 / 近期记忆 / 已归档”：当前包含进行中计划与近期记忆，暂停计划只进入计划分类，已归档包含归档计划与沉淀记忆。两端不直接读取 `data/`，也不各自维护状态识别、分类、状态颜色或排序规则；缺失 `presentation` 时只显示中性“状态未知”，不根据生命周期字段猜测真实阶段。
 

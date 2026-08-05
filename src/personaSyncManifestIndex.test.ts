@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PersonaSyncService } from "./personaSync.js";
-import type { PersonaSyncManifestIndexEvent } from "./personaSyncManifestIndex.js";
+import {
+  PersonaSyncManifestIndex,
+  type PersonaSyncManifestIndexEvent
+} from "./personaSyncManifestIndex.js";
 
 function fixture(fileCount = 3): { root: string; rolesRoot: string; roleRoot: string; stateRoot: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-index-"));
@@ -208,6 +212,66 @@ test("persona manifest index hashes one changed file from a filesystem event", a
   const afterHash = manifest.roles[0]?.files.find(file => file.path === "memory/1.md")?.sha256;
   assert.notEqual(afterHash, beforeHash);
   assert.equal(service.manifestIndexStatus().totalHashedFiles - beforeCount, 1);
+});
+
+test("persona manifest directory events reconcile only the changed subtree", async (t) => {
+  const data = fixture(40);
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  const plansRoot = path.join(data.roleRoot, "plans", "items", "active");
+  fs.mkdirSync(plansRoot, { recursive: true });
+  for (let index = 0; index < 60; index += 1) {
+    fs.writeFileSync(path.join(plansRoot, `plan-${index}.json`), `{"id":"plan-${index}"}\n`, "utf8");
+  }
+
+  const index = new PersonaSyncManifestIndex(() => data.rolesRoot, data.stateRoot, {
+    watch: false,
+    reconcileOnQueryFallback: false
+  });
+  t.after(() => index.stop());
+  await index.start();
+  assert.equal(index.status().files, 100);
+
+  fs.rmSync(path.join(data.roleRoot, "memory", "0.md"));
+  index.notePathChanged("Rabi", "memory");
+  const manifest = await index.manifest("Rabi");
+  const files = manifest.roles[0]?.files.map(file => file.path) ?? [];
+
+  assert.equal(index.status().lastReconcile?.reason, "directory_event");
+  assert.equal(index.status().lastReconcile?.reusedFiles, 39);
+  assert.equal(index.status().files, 99);
+  assert.equal(files.includes("memory/0.md"), false);
+  assert.equal(files.includes("plans/items/active/plan-59.json"), true);
+});
+
+test("persona manifest stops unreliable watching when Windows omits the changed path", async (t) => {
+  const data = fixture(12);
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  let listener: ((eventType: fs.WatchEventType, filename: string | Buffer | null) => void) | undefined;
+  const watcher = new EventEmitter() as fs.FSWatcher;
+  watcher.close = () => undefined;
+  watcher.unref = () => watcher;
+  const events: PersonaSyncManifestIndexEvent[] = [];
+  const index = new PersonaSyncManifestIndex(() => data.rolesRoot, data.stateRoot, {
+    watch: true,
+    watchFactory: (_root, callback) => {
+      listener = callback;
+      return watcher;
+    },
+    onEvent: event => events.push(event)
+  });
+  t.after(() => index.stop());
+  await index.start();
+  const before = index.status();
+  assert.equal(before.watchMode, "recursive");
+
+  listener?.("change", null);
+
+  const after = index.status();
+  assert.equal(after.state, "fallback");
+  assert.equal(after.watchMode, "query_reconcile");
+  assert.equal(after.totalHashedFiles, before.totalHashedFiles);
+  assert.equal(after.lastReconcile?.reason, "post_watch");
+  assert.equal(events.at(-1)?.kind, "watch_unavailable");
 });
 
 test("persona manifest watcher ignores runtime history events but observes portable knowledge changes", async (t) => {

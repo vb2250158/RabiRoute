@@ -44,6 +44,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | NapCat / OneBot | 已验证 | Gateway 子进程通过 WebSocket 接收 QQ 群聊和私聊；Manager 可扫描、添加、启动、重启、移除和修复多个 NapCat 实例；OneBot HTTP 用于状态查询和外发；合并转发消息会展开为文本/媒体证据。 |
 | Heartbeat | 已验证 | Gateway 子进程产生内部定时事件；规则支持间隔、时间窗口、每天指定时间和单次指定时间；可选在固定 Codex 线程忙碌时跳过。 |
 | 角色面板 | 已验证 | Manager/托盘提供的内置本地入口，不是独立网络 listener；使用固定 `role_panel_message` 规则，记录写入角色目录的 timeline。 |
+| 跨人格消息 | 自动化合同已验证；待真实双人格 Desktop 验收 | `GET /api/personas` 提供不含正文和本机目录的人格列表；`POST /api/personas/:personaId/messages` 校验 AgentPacket 注入的 Route + 人格绑定凭据，并复用目标 Route 的固定 `role_panel_message` 链。请求必须带稳定 `deliveryId`；同 ID 同内容复用回执，内容变化返回冲突。目标有多个已启用 Route 时必须明确选择，给自己发送和超过 8 跳都会拒绝。普通回复不会自动返回来源人格，回复时必须显式反向投递并沿用会话关联字段。 |
 | 计划审批事件 | 已验证 | 审批意见落盘后由 Manager 生成独立 `plan_feedback` 系统事件；不依赖可编辑消息规则，不写聊天 timeline/会话账本，不注入最近消息。 |
 | Manual trigger | 已验证 | Manager API 和日志诊断页可真实触发 `manual_trigger` 或 heartbeat 规则；它不是消息适配器。 |
 | Remote Agent | 实验支持 | Manager 作为 v3 出站控制端扫描并连接远端 bridge，使用密码挑战握手，支持任务、事件和双向文件；Gateway 子进程只显示占位状态，不另开 listener。 |
@@ -63,13 +64,14 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 
 - 一条 route 可以配置多个消息适配器、每适配器输入/输出 policy、多个 Agent adapter、pipeline、工作目录和人格绑定。
 - 路由规则保存在人格根级 `personaConfig.json` 中；多条 Route 绑定同一人格时复用同一套规则、语音关键词和上下文额度。无人格 route 会生成默认规则；角色面板规则始终存在。
-- 当前 route kind：`private`、`group_message`、`direct_at`、`direct_reply`、`indirect_reply`、`heartbeat`、`manual_trigger`、`role_panel_message`、`plan_feedback`、`voice_transcript`、`rabilink`、`wearable_health_alert`、`wecom_message`、`weixin_message`。
+- 当前 route kind：`private`、`group_message`、`direct_at`、`direct_reply`、`indirect_reply`、`heartbeat`、`manual_trigger`、`role_panel_message`、`plan_feedback`、`voice_transcript`、`rabilink`、`wearable_health_alert`、`wecom_message`、`weixin_message`、`feishu_message`。
 - `RouteDecision` 只负责规则匹配；`forwarding.ts` 遍历 active route profile、写审计并投递每一条命中规则。
-- `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`；配置了持久计划协助任务时，还注入每个槽位的完整 ID、名称、workspace 和分配规则。Heartbeat 与 `plan_feedback` 固定省略历史段。
+- `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`；当前 Route 启用时，`replyContext` 还包含只绑定该 Route 与人格的跨人格投递凭据。配置了持久计划协助任务时，还注入每个槽位的完整 ID、名称、workspace 和分配规则。Heartbeat 与 `plan_feedback` 固定省略历史段。
 - 持久“协助处理计划”任务是计划管理秘书，不是业务执行 owner。秘书维护计划/记忆、查重与绑定业务任务、读取状态、消费结果和续投；计划 `taskBinding` 始终指向独立业务任务。秘书及其临时子 Agent不得修改业务文件，实际调查、实现和验证由业务任务完成。主人格收到阶段结果后必须同轮推动秘书更新控制面并按 `taskBinding` 精确续投业务任务；多个秘书并行管理不同计划分片。代码、配置和契约测试已覆盖，真实 Desktop 多任务纵向验收仍未完成，因此该能力仍为实验状态。
 - Codex Desktop 投递按完整 `threadId + workspace` 分片调度：不同任务可以并发进入 Desktop IPC，同一任务的投递保持顺序，避免两个请求同时尝试启动新 turn。Manager 读取或更新单个计划时按计划 ID 直达标准文件，只在兼容旧的非标准文件名时回退到目录扫描；不同秘书不再因为单计划操作重复读取全部计划和全部审批记录。
+- 消息组处理为实验能力。Codex Agent 开启 `messageProcessingAgents.codex.enabled` 后，聊天消息默认先写入原始记录和人格会话记录，再按停顿形成可恢复消息组，不提供逐消息端关闭开关；ASR/语音转写和结构化事件仍直接投递。调度优先使用明确回复命中的旧消息 Agent，其次按同消息端、同会话、同说话人熟悉度复用，均未命中时动态创建 Desktop 任务；任务以人格名称稳定命名为“协助处理消息”，多任务时使用从 1 开始的编号，已有旧名称按原任务 ID 改名，不改变 owner。消息处理轮次使用 `gpt-5.6-luna` / `medium`。交付期间新到的片段会保留为同组补充，不随上一批确认而删除。恢复时会重新校验磁盘状态；缺少可推导的运行字段时使用安全默认值，缺少消息身份、会话或内容等必要字段的分组不会进入调度。“消息处理 Agent 模式”“计划协助会话”和“Hook 管理”由处理端能力声明控制，当前只有 Codex 支持；其他 Agent 卡片不显示这些设置，非 Codex 配置也不会保留。自动化测试已覆盖恢复、去重、并发补充和 HTTP 投递；真实群聊/私聊及四类 Agent 联调仍待验收，因此不是已验证能力。
 - 人格 `recentMessageLimits` 对普通消息端分别限制 `0–200` 条，默认 `12`；`0` 只关闭注入。Heartbeat 始终按 `0` 处理。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
-- 已匹配的普通消息直接 `steer/start` Desktop owner；Heartbeat 可专门配置忙碌跳过，语音可专门配置热/关键词投递。
+- 一条 Route 可以保存多个 Agent 端，但已匹配的普通消息只投递给 `primaryAgentAdapter` 指定的主控 Agent；主控是 Codex 时直接 `steer/start` Desktop owner。主控失败时不会自动切换到其他 Agent。Heartbeat 可专门配置忙碌跳过，语音可专门配置热/关键词投递。
 - Delivery replay 已实现：真实投递会写 `delivery-replay-ledger.jsonl`，可按 attempt 或消息记录重新进入投递链。
 - 人格路由 dry-run / AgentPacket 预览仍是设计中功能，当前 WebGUI 没有无副作用预览 API。
 
@@ -109,7 +111,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - WebGUI 当前有：控制台、消息适配器、Rabi 人格、计划与记忆、日志诊断、使用手册六类页面；快速配置向导可以选择消息入口、处理端和人格。
 - “计划与记忆”页先按 Manager 排序读取首批 8 条标题、类型、状态等轻量摘要，首屏摘要返回后才启动较大的记忆读取；页面无需滚动就会用更大的后台分页快速补齐后续摘要，每页之间只让出一个渲染帧，不等待正文水合。右侧正文从当前目录目标开始挂载有界的向后窗口，后续批次只追加到阅读位置下方，不把更早卡片插回视口上方。正文、步骤、审批和附件元数据只对真正接近视口的卡片补充，每轮提升最近 2 张且最多 2 个并发请求，完整内容搜索时才按需补齐全部详情。记忆卡片分批渲染，图片/视频附件继续使用浅色加载与失败占位及低优先级懒加载，避免大知识库阻塞首屏。
 - 控制台管理 Rabi 实例名/GUID、全局 RabiLink Relay 连接、route/role 目录和 route 启停。
-- 消息适配器页包含 NapCat 多实例管理、Remote Agent 扫描连接、外部适配器诊断、Agent 扫描和 pipeline/工作目录配置。
+- 消息适配器页包含 NapCat 多实例管理、Remote Agent 扫描连接、外部适配器诊断、Agent 扫描、主控 Agent 选择和 pipeline/工作目录配置。
 - 人格页管理 persona、route variables、规则、route kind、regex、定时计划和模板；没有实现设计稿中的 dry-run 预览。
 - 日志页展示连接状态、Codex 投递通道和最近日志，并能执行手动触发。Delivery replay 已有 Manager API 和 ledger，但当前页面没有回放按钮。
 - 顶栏支持简体中文 / English 运行时切换。语言状态统一保存在浏览器 `localStorage` 的 `rabiroute:webgui:locale`，并同步 `<html lang>`；它只是 UI 偏好，不写入 route、role 或 Manager 配置。

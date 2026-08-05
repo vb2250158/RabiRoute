@@ -1,6 +1,6 @@
 ---
 name: create-rabiroute-persona
-description: 创建或修改通用 RabiRoute 人格配置。用于根据用户指定的角色和材料忠实写成 persona.md 和 roleMessageConfig.json，尤其适用于用户希望“就是那个角色”、要求按文本、图片、对白、音频、设定集、网页等材料一比一还原，或希望角色从指定时间点分叉到平行世界继续生活的场景；也适用于现实职业、陪伴角色、世界观角色、非人角色、拟人角色、地点/物品人格或其他自定义角色，并检查人格是否忠实、路由触发是否清楚、模板是否没有双重转义。
+description: 创建或修改通用 RabiRoute 人格配置。用于根据用户指定的角色和材料忠实写成 persona.md 和 personaConfig.json，尤其适用于用户希望“就是那个角色”、要求按文本、图片、对白、音频、设定集、网页等材料一比一还原，或希望角色从指定时间点分叉到平行世界继续生活的场景；也适用于现实职业、陪伴角色、世界观角色、非人角色、拟人角色、地点/物品人格或其他自定义角色，并检查人格是否忠实、路由触发是否清楚、模板是否没有双重转义。
 ---
 
 # 创建 RabiRoute 路由人格
@@ -79,7 +79,7 @@ RabiRoute 人格是一个角色包，不是 Agent OS，也不是固定业务流�
 <role-id>/
 ├── README.md
 ├── persona.md
-└── roleMessageConfig.json
+└── personaConfig.json
 ```
 
 成长型人格可以额外包含：
@@ -94,7 +94,7 @@ RabiRoute 人格是一个角色包，不是 Agent OS，也不是固定业务流�
 
 `persona.md` 定义角色身份、语气、行为边界、上下文使用方式和输出原则。
 
-`roleMessageConfig.json` 定义这套人格在不同 `configName` 下关心哪些消息场景，以及命中后交给下游 agent 的模板。
+`personaConfig.json` 在文件根级定义 `notificationRules`、`speechTriggerKeywords`、`recentMessageLimits` 和上下文策略。规则可用 `configName` 限定服务的 Route；不要恢复旧的 `configs` 嵌套或 `roleMessageConfig.json` 真源。
 
 `README.md` 是给人看的角色入口，也可以被人格自己参考。它应该用自然语言说明这个人格是谁、适合什么场景、目录里有哪些文件、如何复制到 `data/roles/<RoleId>/` 使用；如果这个人格有设定、小传、成长记录或世界观投射，也可以写在这里。
 
@@ -179,6 +179,8 @@ data/roles/<RoleId>/
 
 不需要每一类都写很长，但必须清楚说明：哪些场景要回应，哪些只记录，哪些需要补问，哪些要交给下游 agent 继续处理。
 
+`role_panel_message` 是系统内置的人格消息入口，本地角色面板和跨人格投递共用，不能当成普通规则删除。只有用户明确希望人格主动联系其它人格时，才在 `persona.md` 写协作方式，并同时说明：先查询可联系人格；只使用 AgentPacket 注入的当前 Route + 人格凭据；一次业务投递使用稳定 `deliveryId`；投递是单向的，回复必须显式反向发送并沿用会话/引用字段；每次回复增加跳数，达到上限就停止。不要让人格自行构造来源身份、自动无限互投或在结果不明确时换新 ID 重发。
+
 成长可以发生在任何路由之后，不限于 `heartbeat`。直接 @、回复、私聊、Webhook 或心跳都可以让角色在完成当前任务后顺手复盘：这次是否更好地扮演了角色，是否需要补充技巧、资料、skill 或提示词。`heartbeat` 只是一个常见的低频自检触发。
 
 ### 4. 编写 persona.md
@@ -257,7 +259,7 @@ data/roles/<RoleId>/
 ## 目录内容
 
 - `persona.md`：...
-- `roleMessageConfig.json`：...
+- `personaConfig.json`：...
 - `growth.md`：...
 - `skills.md`：...
 - `prompts/`：...
@@ -273,19 +275,20 @@ data/roles/<RoleId>/
 
 陪伴型、NPC、看板娘或强设定角色尤其适合在 `README.md` 里写一段小故事。故事可以参考项目提交记录、功能演进或用户给定素材，但要服务于角色理解，不要替代 `persona.md` 的行为规则。
 
-### 6. 编写 roleMessageConfig.json
+### 6. 编写 personaConfig.json
 
 最小结构：
 
 ```json
 {
-  "configs": [
-    {
-      "configName": "<route-config-name>",
-      "routeVariables": {},
-      "notificationRules": []
-    }
-  ]
+  "contextInjection": {
+    "mode": "focused",
+    "relevantKnowledgeLimit": 3,
+    "personaMaxChars": 1600
+  },
+  "recentMessageLimits": {},
+  "speechTriggerKeywords": [],
+  "notificationRules": []
 }
 ```
 
@@ -303,7 +306,7 @@ data/roles/<RoleId>/
 }
 ```
 
-不要让用户直接手写复杂 `template` JSON 字符串。先按 `references/message-template-structure.md` 写真实换行模板正文，再保存到 WebUI 或由程序序列化到 `roleMessageConfig.json`。
+不要让用户直接手写复杂 `template` JSON 字符串。先按 `references/message-template-structure.md` 写真实换行模板正文，再保存到 WebUI 或由程序序列化到 `personaConfig.json`。
 
 支持的 route kind：
 
@@ -314,7 +317,15 @@ direct_reply
 indirect_reply
 group_message
 heartbeat
+manual_trigger
+role_panel_message
+plan_feedback
 voice_transcript
+rabilink
+wearable_health_alert
+wecom_message
+weixin_message
+feishu_message
 ```
 
 常用模板变量：
@@ -342,7 +353,7 @@ voice_transcript
 
 - 在 WebUI 文本框中，模板必须使用真实换行，不要输入字面量 `\n`。
 - 在 `persona.md` 中，写正常 Markdown 段落和列表，不要给每个引号、斜杠或换行加转义。
-- 在生成 `roleMessageConfig.json` 前，先把模板正文作为独立 text block 写好；保存 JSON 时才允许由编辑器/序列化器按 JSON 格式转义。
+- 在生成 `personaConfig.json` 前，先把模板正文作为独立 text block 写好；保存 JSON 时才允许由编辑器/序列化器按 JSON 格式转义。
 - 不要手写一整条 `"template": "...\\n..."` 给用户复制到 WebUI；这会诱导出现可见 `\n`。
 - 路径占位优先使用 `C:/Path/To/Project` 或 `/path/to/project`。除非专门演示 JSON 转义，否则不要在示例里写 `C:\\Path\\To\\Project`。
 
@@ -363,7 +374,7 @@ QQ 消息提醒：有人 @ 了你。\n时间：{time}\n消息：{message}
 {message}
 ```
 
-生成 `roleMessageConfig.json` 时，只按 JSON 要求转义一次。如果 WebUI 显示出可见的 `\n`，说明模板被双重转义，必须改成真实换行。创建人格时优先输出可读模板正文，不要输出让人直接复制的 JSON 转义字符串。
+生成 `personaConfig.json` 时，只按 JSON 要求转义一次。如果 WebUI 显示出可见的 `\n`，说明模板被双重转义，必须改成真实换行。创建人格时优先输出可读模板正文，不要输出让人直接复制的 JSON 转义字符串。
 
 ## 好人格与坏人格
 
@@ -398,8 +409,8 @@ QQ 消息提醒：有人 @ 了你。\n时间：{time}\n消息：{message}
 
 - 确认 `persona.md` 作为独立角色提示词是可读的。
 - 确认 `README.md` 能让使用者理解这个人格是谁、怎么放到 `data/roles/<RoleId>/` 使用。
-- 确认 `roleMessageConfig.json` 是合法 JSON。
-- 确认角色目录可以复制到 `data/roles/<RoleId>/`，并可被 `data/route/<配置名>/routeConfig.json` 的 `agentRoleId` 指向。
+- 确认 `personaConfig.json` 是合法 JSON，且当前规则位于根级 `notificationRules`，没有旧 `configs` 嵌套。
+- 确认角色目录可以复制到 `data/roles/<RoleId>/`，并可被 `data/route/<配置名>/adapterConfig.json` 的 `agentRoleId` 指向。
 - 确认人格能忠实扮演用户指定角色，而不是滑向默认职业或旧模板。
 - 如果用户提供了材料，确认所有可访问材料都已读取，关键身份、关系、经历、表达和边界都有材料依据，推断与未知没有伪装成材料事实。
 - 确认人格按材料实现一比一还原，没有故意淡化、替换、泛化或重新解释已经明确的角色内容。
@@ -407,5 +418,6 @@ QQ 消息提醒：有人 @ 了你。\n时间：{time}\n消息：{message}
 - 如果用户点名已有角色，确认 `persona.md` 直接以“你是 `<角色名>`”建立身份；除非用户明确要求，否则没有擅自改成“基于/受启发于/项目适配版”。
 - 确认 role ID 只用于技术引用，没有被用来否认材料中的角色身份；人格标题、自我认知和对外称呼采用材料中的角色身份。
 - 确认独立目录、role ID、route 和项目能力只改变配置或使用场景，没有改变角色是谁。
+- 如果人格会联系其它人格，确认它只使用当前 AgentPacket 的来源凭据，使用稳定投递 ID，明确单向回复和会话关联，并设置防循环边界。
 - 如果写了成长机制，确认它不依赖单一路由；角色可以在合适时机自我更新，但必须先把被修改文件备份到 `old/`。
 - 总结这个人格的角色身份、安全边界，以及新增或修改的路由规则。

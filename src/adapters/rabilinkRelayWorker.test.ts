@@ -8,6 +8,7 @@ import {
   rabiLinkRelayTaskDisposition,
   rabiLinkRelayTaskNeedsReviewWake
 } from "./rabilinkRelayWorker.js";
+import type { ForwardRecord, ForwardRouteKind, ForwardTemplateValues } from "../routing/types.js";
 
 test("RabiLink observations are record-only while explicit messages remain direct", () => {
   assert.equal(rabiLinkRelayTaskDisposition({
@@ -47,7 +48,7 @@ test("RabiLink touchpad review requests wake the reviewer without becoming direc
 
 test("wearable heart-rate thresholds create one Agent delivery and deduplicate retries", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-worker-health-"));
-  const deliveries: Array<{ kind: string; record: Record<string, unknown>; extra: Record<string, unknown> }> = [];
+  const deliveries: Array<{ kind: ForwardRouteKind; record: ForwardRecord; extra: ForwardTemplateValues }> = [];
   const recordedAt = new Date().toISOString();
   const task = {
     id: "relay-health-task-1",
@@ -76,7 +77,7 @@ test("wearable heart-rate thresholds create one Agent delivery and deduplicate r
     agentRoleId: "YeYu",
     managerPort: 8790,
     appendLog: () => undefined,
-    forward: (kind: string, record: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+    forward: (kind: ForwardRouteKind, record: ForwardRecord, extra: ForwardTemplateValues = {}) => {
       deliveries.push({ kind, record, extra });
     }
   };
@@ -84,7 +85,7 @@ test("wearable heart-rate thresholds create one Agent delivery and deduplicate r
     assert.equal(handleWearableHealthRelayTask(task, task.id, options), true);
     assert.equal(deliveries.length, 1);
     assert.equal(deliveries[0].kind, "wearable_health_alert");
-    assert.equal(deliveries[0].record.adapterType, "wearable");
+    assert.equal("adapterType" in deliveries[0].record ? deliveries[0].record.adapterType : undefined, "wearable");
     assert.match(String(deliveries[0].record.rawMessage), /135 bpm/);
     assert.equal(deliveries[0].extra.inputAdapter, "wearable");
     assert.equal(deliveries[0].extra.heartRateBpm, 135);
@@ -98,14 +99,14 @@ test("wearable heart-rate thresholds create one Agent delivery and deduplicate r
 
 test("wearable sleep-state changes are recorded and delivered to the Agent", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-worker-sleep-"));
-  const deliveries: Array<{ kind: string; record: Record<string, unknown>; extra: Record<string, unknown> }> = [];
+  const deliveries: Array<{ kind: ForwardRouteKind; record: ForwardRecord; extra: ForwardTemplateValues }> = [];
   const options = {
     enabled: true,
     memoryDataDir: directory,
     agentRoleId: "YeYu",
     managerPort: 8790,
     appendLog: () => undefined,
-    forward: (kind: string, record: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+    forward: (kind: ForwardRouteKind, record: ForwardRecord, extra: ForwardTemplateValues = {}) => {
       deliveries.push({ kind, record, extra });
     }
   };
@@ -150,7 +151,7 @@ test("wearable sleep-state changes are recorded and delivered to the Agent", () 
     assert.equal(handleWearableHealthRelayTask(sleepingTask, sleepingTask.id, options), true);
     assert.equal(deliveries.length, 1);
     assert.equal(deliveries[0].kind, "wearable_health_alert");
-    assert.equal(deliveries[0].record.adapterType, "wearable");
+    assert.equal("adapterType" in deliveries[0].record ? deliveries[0].record.adapterType : undefined, "wearable");
     assert.match(String(deliveries[0].record.rawMessage), /进入睡眠/);
     assert.equal(deliveries[0].extra.inputAdapter, "wearable");
     assert.equal(deliveries[0].extra.sleepState, "sleeping");

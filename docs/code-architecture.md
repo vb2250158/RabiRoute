@@ -258,9 +258,12 @@ Agent 端 Adapter 在 `src/agentAdapters/`：
 其他处理端在根目录还有：
 
 - `codexRuntime.ts`：Codex 业务适配层，负责固定线程身份、thread/turn 选择、运行中 steer 和运行状态上报。
-- `codexDesktopBridge.ts`：从 Desktop 状态只读发现任务，并通过 Desktop IPC 向目标任务 owner start/steer。
+- `codexRolloutActivity.ts`：从 Desktop 任务记录末尾向前分块读取，只检查最近一轮是否结束；读取异步执行，并按文件版本缓存结果。
+- `codexDesktopBridge.ts`：Codex 任务只读模型的唯一入口。完整 ID、cwd、归档和 rollout 定位来自 Desktop 状态；对外显示名称统一覆盖为左侧聊天栏索引中的当前名称；随后通过 Desktop IPC 向目标任务 owner start/steer。
 - `codexAppServerClient.ts`：仅供创建、命名空任务的短生命周期元数据驱动；不得执行真实 prompt。
 - `agentThreads.ts`：受控的本机任务桥，提供 list/read/resolve/create/rename/send；`rename` 只改 Desktop 可见名称，不改变完整 ID + workspace 身份。
+
+Codex 任务有两个不同但唯一归口的事实：身份只由完整任务 ID + workspace 决定；当前显示名只由 Desktop 左侧聊天栏决定。SQLite `threads.title`、首轮 prompt、Route 的 `codexThreadName` 和运行状态里的 `monitorThreadName` 都不是新的名称真源。`codexThreadName` 只在没有有效 ID 时作为首次查找/创建提示；一旦 ID 有效，改名不会改变绑定，也不会触发重建。
 - `copilotCli.ts`
 - `marvis.ts`
 
@@ -282,6 +285,8 @@ AgentPacket
 - Host 是必需的 Codex/ChatGPT Desktop。任务未加载时只允许通过 `codex://threads/<id>` 唤醒 Desktop；加载失败就停止投递。
 - Model、工具、沙箱和审批由目标 Desktop 任务拥有。兼容字段 `agentModel` 不再覆盖 Desktop 任务设置。
 - 已匹配的普通消息不经过另一层忙碌队列：Desktop owner 先尝试 `steer` 活跃 turn，只在没有活跃 turn 时 `start`。Heartbeat 的忙碌跳过和语音的关键词唤醒是各自消息端的显式例外。
+- Heartbeat 判断目标任务是否仍在工作时，只读取任务记录末尾附近的数据，不得同步读取或拆分整个 JSONL 文件。文件正在追加时忽略末尾未写完的一行；超大的无关记录会跳过，避免任务长期运行后拖住 Manager 或 Route 子进程。
+- Codex 活跃状态按时间合并两类证据：Desktop IPC 只提供当前连接内的临时活跃标记，rollout 的最近 turn/terminal 事件提供可持久查证的生命周期。较新的 terminal 会清除较旧的 IPC 活跃标记；若新一轮 IPC 活跃时间晚于已写入的旧 terminal，则在 rollout 追上前仍保持活跃。IPC 断开时清空连接内标记，不能让旧连接把已完成任务长期显示为运行中。
 - Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 计划管理秘书槽。秘书槽不写入计划 `taskBinding`；`taskBinding` 始终绑定独立业务任务。秘书负责计划/记忆维护、任务查重与绑定、状态核对、结果消费和续投，禁止执行调查、实现、测试或业务文件修改。控制面写入按 `planId` keyed lease 隔离：同计划单 writer、不同计划并行，共享 JSON 采用锁内最新值合并与原子替换。锁通过完整候选文件和原子 hard-link 发布，stale/损坏锁在热路径失败关闭，只能在 quiescent 维护窗口显式修复；同 key 的认领/澄清 lease 覆盖 reservation、外发、验证和终态回执，结果不明确时禁止自动重发。全局 audit 使用前后 ledger 快照，只把身份稳定的错误判为 invalid；plan-scoped strict audit 才是单计划收口门，reconcile 只跳过 active 计划。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
 `codexDesktopBridge.ts` 必须保持 transport-only：它不读取 route rule、不拼 AgentPacket、不决定业务外发。`codexAppServerClient.ts` 只保留“创建空任务、恢复用户名称”的元数据能力，不得接收真实 prompt 或执行 turn；元数据操作完成后立即退出。
 
@@ -353,6 +358,11 @@ startManager();
 - `messageEndpoints/*`
 - `outbox`
 - `roleKnowledge`
+- `manager/personaCatalog`：统一人格目录扫描、Markdown 标题解析、回退文件选择和缓存；Route 摘要与跨人格目录不得各自建立名称真源。
+- `manager/personaMessageAuthority`：生成并校验同时绑定 Route 与人格的 HMAC 凭据；密钥只保存在本机运行数据中，目录、timeline 和投递回执均不返回凭据。
+- `manager/personaMessagingRoutes`：保持为薄 HTTP 层，提供不暴露人格正文和本机目录的人格列表，校验来源凭据、目标 Route、跳数和持久幂等状态，再调用统一投递服务。
+- `manager/rolePanelDelivery`：本地角色面板与跨人格入口共享的唯一投递语义。处理端接收成功后才写 `status=sent`；失败写 `status=failed`，不能留下错误的成功记录。
+- `manager/durableDeliveryIdempotency`：Agent 普通回复和跨人格消息共用的持久 reservation/receipt 机制；同 ID 同请求只执行一次，内容变化冲突，结果不确定时不自动重放。
 
 后续收敛方向：
 
@@ -387,8 +397,8 @@ Gateway 配置的事实源 Module。
 - NapCat instances normalize。
 - template / rule normalize。
 - GatewayDefinition normalize。
-- 端口冲突校验。
-- 自动分配端口。
+- 校验并自动分配 RabiRoute 自己监听的端口。
+- NapCat HTTP 是出站依赖地址，不是 Route 拥有的 listener；多个 Route 可以共用同一地址，配置归一化不得为了消除所谓端口冲突而改写它。
 
 凡是“Route 配置不变量”，优先放这里。
 
@@ -436,7 +446,7 @@ Gateway 配置的事实源 Module。
 - role skills
 - Agent 上下文快照
 
-`src/roleKnowledge.ts` 同时定义五种计划顶层生命周期状态和步骤级 `approvalRequest` 执行合同，并通过 `planApprovalGate()` 统一解释审批准备与待决门禁。只有当前合同完整、可提交且 `responseStatus=pending` 时，`planIsBlocked()` 才返回真；`isBlocked` 由读取/写入归一化生成，只是旧客户端兼容投影，`blockedBy` 仅为说明。旧文件手写的非审批阻塞会在读取时降级为进行中，并在下一次规范写入时清理。审批合同缺字段不阻断计划保存，而是进入 `preparing/incomplete`，要求 Agent 继续调查和补齐。`src/planPackageWaiting.ts` 只根据结构化 package/build 当前步骤、已完成前序步骤和明确包依赖派生统一打包等待。`src/roleKnowledgePresentation.ts` 生成 Manager 对外的只读展示 DTO：完整待决审批显示“待审批”，结构化 `qa-* / verify-*` 当前步骤显示“等待 QA 验收”，符合包等待合同的计划显示蓝色“待统一打包”，其余权威 `waitingFor` 再区分“待环境 / 待素材 / 待资料 / 待外部回执”，没有真实等待时显示“正在执行”。QA 四步流程只由会产生代码、Prefab、资源、配置等项目内容变动的计划生产者写入；调查、设计评审、运营、资料收集、外部依赖和控制面维护保留真实步骤，不补造 package 或 QA 步骤，展示层也不按标题、正文或 `kind` 猜测流程。`src/roleKnowledgePagination.ts` 从同一 tone 汇总 `counts.stages`。XinghaiBuilder 的 `work-cycle-parallelism.mjs` 复用该 DTO，并把 issue/cycle 中的 `status=sent / sentMessageId` 回执、只等结果/无本地动作证据、环境 owner 与同 PID/工程 release 证据交叉核对，再将 idle 分成 `terminal / blocked / actionable / frozen / waiting_result`。计划更新时间不能废弃真实发送回执，旧环境 owner 也不能越过后来的权威 release；展示 tone 不能单独制造环境冻结，泛化外部等待也不能自动排除 actionable。WebGUI 和 Qt 必须原样消费 Manager 返回的 `presentation`、分类、色板、合同、阶段计数与列表顺序；缺失 DTO 时只能显示中性未知状态，不能根据生命周期或原始文本复制识别规则。
+`src/roleKnowledge.ts` 同时定义五种计划顶层生命周期状态和步骤级 `approvalRequest` 执行合同，并通过 `planApprovalGate()` 统一解释审批准备与待决门禁。只有当前合同完整、可提交且 `responseStatus=pending` 时，`planIsBlocked()` 才返回真；`isBlocked` 由读取/写入归一化生成，只是旧客户端兼容投影，`blockedBy` 仅为说明。旧文件手写的非审批阻塞会在读取时降级为进行中，并在下一次规范写入时清理。审批合同缺字段不阻断计划保存，而是进入 `preparing/incomplete`，要求 Agent 继续调查和补齐。`src/planPackageWaiting.ts` 只根据结构化 package/build 当前步骤、已完成前序步骤和明确包依赖派生统一打包等待。`src/roleKnowledgePresentation.ts` 生成 Manager 对外的只读展示 DTO：完整待决审批显示“待审批”，结构化 `qa-* / verify-*` 当前步骤显示“等待 QA 验收”，符合包等待合同的计划显示蓝色“待统一打包”，其余权威 `waitingFor` 再区分“待环境 / 待素材 / 待资料 / 待外部回执”，没有真实等待时显示“正在执行”。QA 四步流程只由会产生代码、Prefab、资源、配置等项目内容变动的计划生产者写入；调查、设计评审、运营、资料收集、外部依赖和控制面维护保留真实步骤，不补造 package 或 QA 步骤，展示层也不按标题、正文或 `kind` 猜测流程。`src/roleKnowledgePagination.ts` 从同一 tone 汇总 `counts.stages`。XinghaiBuilder 的 `work-cycle-parallelism.mjs` 复用该 DTO，并把 issue/cycle 中的 `status=sent / sentMessageId` 回执、只等结果/无本地动作证据、环境 owner 与同 PID/工程 release 证据交叉核对，再将 idle 分成 `terminal / blocked / actionable / frozen / waiting_result`。结构化跨计划依赖只有同时证明“等待其它计划原 owner 完成”且“当前没有独立动作”时才进入 `frozen_until_dependencies`；协调 owner、缺合同或存在 CLI、重试、替代路径时仍为 actionable。计划更新时间不能废弃真实发送回执，旧环境 owner 也不能越过后来的权威 release；展示 tone 不能单独制造环境冻结，泛化外部等待也不能自动排除 actionable。WebGUI 和 Qt 必须原样消费 Manager 返回的 `presentation`、分类、色板、合同、阶段计数与列表顺序；缺失 DTO 时只能显示中性未知状态，不能根据生命周期或原始文本复制识别规则。
 
 `src/planAttachments.ts` 拥有计划本体附件的数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希和人格私有目录落盘。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
 
@@ -552,6 +562,8 @@ RabiSpeech 的 `speech_records.py` 是 ASR/TTS 文本记录唯一真源，参考
 RibiWebGUI 通过 `personaVoiceIdentityClient.ts` 复用这两个 API，不新增浏览器声纹仓库。人格页的最近 24 小时面板使用 `includeDetails=false`，只接收 summary 和独立关系列表，不接收转写正文；加载、按钮忙碌、错误和提示属于短暂表现状态。`personaVoiceConfirmation.ts` 只维护一次用户主动确认会话的开始时间、开始时未解决声纹的 `lastSeenAt` 基线、等待/找到状态和候选复合键；候选来自下一次语音记录事件后相对基线新出现或再次出现、且有稳定主机标识的未解决声纹，只改变排序与标记，不产生或保存身份结论。页面进入、人格切换和人工操作后查询一次，并监听 RabiSpeech `records_changed`、Manager `persona_voice_identity_changed` 与 `persona_sync_manifest_changed` 事件。SSE 重连只补查一次，不运行覆盖率轮询。
 
 `src/personaSync.ts` 只负责本地人格文件读取、归档、合并与显式冲突解决；`src/personaSyncManifestIndex.ts` 拥有可重建的持久化 manifest 索引、启动一次性校准和运行期递归文件事件。校准以大小、mtime、ctime 和文件标识复用未变化 SHA-256，明确文件事件只重算单路径；索引变化经 Manager SSE 发出 `persona_sync_manifest_changed`。manifest 查询只读索引，只有宿主无法提供可靠文件事件时才在查询前做一次校准，不运行固定周期扫描。`src/personaSyncCoordinator.ts` 负责 peer 发现、传输编排和已解决版本发布；`src/personaSyncAutoReconciler.ts` 只拥有事件调度和 `auto-sync-state.json` 待对账标记，不复制任何合并规则。它把本机文件变化、Relay `ready` 和 `persona_sync_peer_changed` 当作唤醒信号，短时间事件合并后调用 Coordinator 做一次全量或单人格 manifest 对账；peer 离线时等待下一事件，在线临时失败时只做有界一次性退避。`src/manager/personaSyncRoutes.ts` 维护受控 HTTP 合同，并通过仅回环 `index-status/auto-status` 暴露不含正文的诊断；`src/manager/personaSyncLanServer.ts` 是默认绑定私有 IPv4 的独立数据面 listener，只允许远端访问 manifest、file 和 merge，不暴露完整 Manager/WebGUI。同步器优先访问 Relay 登记的这个专用 LAN URL，失败后调用 Relay 的 `/api/rabilink/persona-sync/proxy`，复用全局 worker 把受限请求送到目标 PC 回环 Manager。Relay 不保存主人格。JSONL 使用集合合并，普通文件使用按应用 token 哈希作用域与稳定 peer GUID 分域的共同哈希做快进；已有共同基线的单边缺失作为删除双向传播并先归档旧文件，删除与编辑并发则携带 `remoteDeleted`、peer 和基线哈希进入 `data/persona-sync/conflicts/`。列表、证据读取与 `keep_local/use_remote/use_merged` 解决 API 只允许回环访问；解决时校验当前本地哈希，`use_remote` 对删除冲突表示确认删除，旧证据与元数据进入 `resolved-conflicts/` 并留下审计记录。随后 Coordinator 以冲突远端哈希为新发布基线，把解决结果经 LAN/Relay 发回来源 peer；远端或本地已变化时返回 `not_published`，保留新的待对账标记而不声称收敛。同 peer/人格并发同步 single-flight，文件与基线状态锁定后原子写。`conversation/` 合并复用消息上下文锁，语音记录和人格声纹关系复用各自文件锁，避免同步覆盖与在线追加交错。读取和 merge 检查完整父路径链并拒绝符号链接/Windows junction。锁、manifest 索引、临时文件和可再生 TTS 缓存不参与同步。
+
+Windows 只报告目录变化时，manifest 索引只重新检查该目录及其子目录，不得扩大为整个人格目录。这个规则既要识别目录内的文件删除，也要保留其他目录的既有索引。如果 Windows 完全不提供变化路径，当前递归监听会停止并切换为“查询时校准”；不能在路径未知时反复扫描全部人格并拖住 Manager。
 
 `ribiwebgui/src/components/PersonaSyncCard.vue` 只维护页面加载、预览、按钮忙碌、提示等可重建表现状态。它通过 `personaSyncClient.ts` 读取 peer、索引、自动状态与冲突，并提交显式同步或基础解决命令；同步、删除、冲突、重试和最终收敛含义仍全部由后端拥有。页面监听 `persona_sync_manifest_changed`、`persona_sync_auto_status`、Relay/LAN 状态事件后各补查一次，不设置业务轮询。
 

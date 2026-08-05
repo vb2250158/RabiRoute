@@ -59,6 +59,11 @@ const form = reactive({
   wecomWsUrl: ""
 });
 
+const quickMessageAgentModeEnabled = computed(() => (
+  form.agentAdapters.includes("codex")
+  && store.selectedGateway?.messageProcessingAgents?.codex?.enabled === true
+));
+
 const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> = [
   { type: "napcat", title: "NapCat / OneBot", note: "QQ 群聊、私聊实时入口", icon: "mdi-message-badge-outline" },
   { type: "wecom", title: "企业微信 / WeCom", note: "企业微信群聊双向入口", icon: "mdi-domain" },
@@ -810,7 +815,11 @@ async function apply() {
         };
       });
     }
-    store.applyQuickSetup({ ...form, agentRoleId: String(form.agentRoleId || "") });
+    store.applyQuickSetup({
+      ...form,
+      primaryAgentAdapter: selectedAgent.value,
+      agentRoleId: String(form.agentRoleId || "")
+    });
     await store.save();
     open.value = false;
   } catch (error: unknown) {
@@ -1010,10 +1019,14 @@ async function apply() {
                     </div>
                   </template>
                   <template v-if="form.adapters.includes('heartbeat')">
-                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
+                    <v-alert v-if="quickMessageAgentModeEnabled" type="success" variant="tonal" density="compact" class="full-span">
+                      Codex 消息处理 Agent 模式已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
+                    </v-alert>
+                    <v-alert v-else type="info" variant="tonal" density="compact" class="full-span">
                       定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
                     </v-alert>
                     <v-switch
+                      v-if="!quickMessageAgentModeEnabled"
                       v-model="form.heartbeatSkipWhenAgentBusy"
                       class="full-span"
                       color="primary"

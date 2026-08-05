@@ -28,11 +28,9 @@ Desktop 允许 Agent 读取文件，不等于允许把文件发到群里。RabiR
 
 当前没有通用、持久化、可在 WebGUI 中逐条审批外部动作的 Action Queue。计划页的“审批建议”只记录 Agent 计划上的用户意见并通知 Agent，不批准 Outbox 外发，也不直接推进计划。`draft` 是结果和审计状态，不是一个等待处理的完整审批中心。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 14｜消息端接收与回传策略</strong>
-  <span>建议画面：NapCat 或其他消息端的 policy 区域，接收、回传、输出类型和文件目录限制可见。</span>
-  <span>标注重点：输入与输出分离、支持类型、允许文件目录、保存后生效。</span>
-</div>
+![消息适配器页按当前 Route 分开显示消息入口和处理端](../../assets/screenshots/webgui-adapters-zh.png)
+
+接收和回传都属于当前 Route 的消息端配置。展开具体入口后再检查允许的输出类型和文件目录；修改完成后必须点击顶栏“保存配置”。
 
 ## 来源回复与主动发送
 

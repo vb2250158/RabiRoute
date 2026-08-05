@@ -37,11 +37,11 @@ Manager 或 UI 预览
 
 默认注入只放轻量信息：
 
-- 当前事件的必要信息。
+- 当前事件的必要信息；跨人格消息还会带来源/目标人格、两端 Route、会话关联、被回复消息和当前跳数。
 - QQ 消息里的 CQ reply / at 代码解析；引用链会按消息记录递归展开，at 映射集中显示。
 - 当前人格、逻辑消息端和会话下，由 `recentMessageLimits` 允许的最近双向消息；当前事件自身不会再在窗口中重复。`heartbeat` 与独立 `plan_feedback` 事件是固定例外，不读取或注入历史消息。
 - 角色和路由路径，以及精简人格核心指令。
-- Agent 需要关注的接口文档链接。
+- Agent 需要关注的接口文档链接，以及查询可联系人格和显式跨人格投递的简短提示。
 - 当前输入高相关的少量计划、记忆和技能摘要，默认最多 3 项。
 - 全量计划、记忆和技能的按需查询路径。
 
@@ -295,6 +295,13 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 普通回复 API：<replyApiUrl>
 当前回复上下文：<replyContextJson>
 
+[跨人格联系]
+查询：GET /api/personas?addressable=true
+投递：POST /api/personas/{personaId}/messages
+来源 Route：replyContext.runtimeRouteId
+来源凭据：replyContext.personaMessagingCapability
+要求：每次业务投递使用稳定且唯一的 deliveryId；回复时沿用 personaConversationId、引用当前 messageId，并增加 personaMessageHopCount，不得超过 personaMessageMaxHops
+
 [回复回传要求]
 <按 outputAdapter、replyToSource 和来源消息生成的回传说明>
 
@@ -306,6 +313,10 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 ```
 
 `heartbeat` 和 `plan_feedback` 包都会省略整个 `[最近消息]` 段，并把模板变量 `{recentMessageLimit}` 设为 `0`、`{recentMessages}` 设为空字符串，避免自定义模板重新携带历史正文。心跳日志和统一会话账本仍照常记录；计划审批则只保留专用 feedback 审计、AgentPacket 和投递日志，不重复写角色面板时间线或统一会话账本。
+
+处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主人格或另一个 Agent 已经收到。需要回复来源消息时，处理端必须按 `[回复回传要求]` 调用普通回复 API 并取得 Outbox 回执；需要交给主人格、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
+
+跨人格能力凭据只证明“当前 AgentPacket 所属 Route 与人格”，不会出现在 `GET /api/personas`、目标 timeline 或投递回执中。`sourceRouteId` 不能单独证明发送身份。目标人格收到跨人格消息后，普通回复不会自动返回来源；需要回复时必须显式反向 POST，并使用收到的会话、引用和跳数字段。
 
 `[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`；AgentPacket 也会把成功外发的 Outbox 记录作为本地兜底。NapCat 实时入口发现引用 ID 尚未落盘时，会在路由投递前调用 OneBot `get_msg`，把查到的群聊/私聊消息标记为 `lookupSource=onebot_get_msg` 后缓存，再继续追溯下一层引用。接口失败只记录 warning，不阻塞当前消息。展开持续到没有引用、仍无法解析、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。
 

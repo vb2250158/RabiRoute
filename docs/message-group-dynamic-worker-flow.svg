@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 2920" role="img" aria-labelledby="title desc">
+  <title id="title">RabiRoute 消息组与四类 Agent 协作流程</title>
+  <desc id="desc">消息端按配置进入消息组，按熟悉度选择消息处理 Agent，再与主人格、秘书和计划 Agent 协作，最后由 Outbox 发送。</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#14202a" flood-opacity="0.09"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#63717d"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#1261d7"/>
+    </marker>
+    <style>
+      .phase{fill:#fffdf7;fill-opacity:.72;stroke:#14202a;stroke-opacity:.12}
+      .phase-title{fill:#63717d;font:700 13px Bahnschrift,"Microsoft YaHei UI",sans-serif;letter-spacing:1.5px}
+      .shape{stroke-width:1.5;filter:url(#shadow)}
+      .start{fill:#fffdf7;stroke:#14202a;stroke-width:2}
+      .system{fill:#f4f1e9;stroke:#63717d}
+      .state{fill:#e8f6f1;stroke:#13745d}
+      .decision{fill:#fff8ec;stroke:#d5661e}
+      .agent{fill:#1261d7;stroke:#0a388b}
+      .send{fill:#fff0e6;stroke:#d5661e}
+      .title{fill:#14202a;font:700 15px "Microsoft YaHei UI","PingFang SC",sans-serif;text-anchor:middle}
+      .note{fill:#63717d;font:12px "Microsoft YaHei UI","PingFang SC",sans-serif;text-anchor:middle}
+      .agent-title{fill:#fff;font:700 15px "Microsoft YaHei UI","PingFang SC",sans-serif;text-anchor:middle}
+      .agent-note{fill:#dbe9ff;font:12px "Microsoft YaHei UI","PingFang SC",sans-serif;text-anchor:middle}
+      .line{fill:none;stroke:#63717d;stroke-width:1.8;marker-end:url(#arrow)}
+      .return{fill:none;stroke:#1261d7;stroke-width:1.8;stroke-dasharray:7 6;marker-end:url(#arrowBlue)}
+      .label{fill:#63717d;font:700 11px "Microsoft YaHei UI",sans-serif;paint-order:stroke;stroke:#fffdf7;stroke-width:5;stroke-linejoin:round}
+      .side-note{fill:#1261d7;font:700 12px "Microsoft YaHei UI",sans-serif}
+    </style>
+  </defs>
+
+  <rect class="phase" x="20" y="20" width="1240" height="590" rx="18"/>
+  <text class="phase-title" x="48" y="56">01 · RECORD &amp; BATCH / 记录并形成消息包</text>
+  <ellipse class="shape start" cx="640" cy="100" rx="130" ry="36"/>
+  <text class="title" x="640" y="106">任意消息端收到消息</text>
+  <path class="line" d="M640 136V175"/>
+  <rect class="shape state" x="470" y="175" width="340" height="74" rx="8"/>
+  <text class="title" x="640" y="205">立即保存原始消息</text>
+  <text class="note" x="640" y="227">保留 messageId、回复链、附件和原始事件</text>
+  <path class="line" d="M640 249V285"/>
+  <polygon class="shape decision" points="640,285 805,365 640,445 475,365"/>
+  <text class="title" x="640" y="359">这是聊天消息？</text>
+  <text class="note" x="640" y="382">程序按 route kind 判断，不提供开关</text>
+  <path class="line" d="M475 365H375"/>
+  <text class="label" x="425" y="352">否</text>
+  <rect class="shape system" x="65" y="329" width="310" height="72" rx="8"/>
+  <text class="title" x="220" y="359">按原有 Route 直接处理</text>
+  <text class="note" x="220" y="381">ASR 和结构化事件不增加等待</text>
+  <path class="line" d="M805 365H905"/>
+  <text class="label" x="852" y="352">是</text>
+  <rect class="shape state" x="905" y="329" width="310" height="72" rx="8"/>
+  <text class="title" x="1060" y="359">等待停顿并合并片段</text>
+  <text class="note" x="1060" y="381">默认 6/12/20 秒，可在聊天消息端调整</text>
+  <path class="line" d="M1060 401V510H810"/>
+  <rect class="shape state" x="470" y="475" width="340" height="78" rx="8"/>
+  <text class="title" x="640" y="506">形成消息包</text>
+  <text class="note" x="640" y="529">原始消息 ID + 回复链 + 附件 + 有限上下文</text>
+
+  <rect class="phase" x="20" y="630" width="1240" height="950" rx="18"/>
+  <text class="phase-title" x="48" y="666">02 · RESOLVE &amp; SELECT / 匹配消息组并选择 Agent</text>
+  <path class="line" d="M640 553V710"/>
+  <rect class="shape system" x="445" y="710" width="390" height="82" rx="8"/>
+  <text class="title" x="640" y="741">匹配已有消息组</text>
+  <text class="note" x="640" y="764">回复关系、消息 ID、计划和长期消息组摘要</text>
+  <path class="line" d="M640 792V830"/>
+  <rect class="shape state" x="445" y="830" width="390" height="82" rx="8"/>
+  <text class="title" x="640" y="861">进入消息组待处理队列</text>
+  <text class="note" x="640" y="884">不确定时使用暂定消息组；原始证据不丢失</text>
+  <path class="line" d="M640 912V950"/>
+  <polygon class="shape decision" points="640,950 805,1030 640,1110 475,1030"/>
+  <text class="title" x="640" y="1024">原消息组已有处理 Agent？</text>
+  <text class="note" x="640" y="1047">同组只允许一个处理者</text>
+  <path class="line" d="M475 1030H375"/>
+  <text class="label" x="420" y="1018">是</text>
+  <rect class="shape state" x="65" y="991" width="310" height="78" rx="8"/>
+  <text class="title" x="220" y="1022">优先交给原 Agent</text>
+  <text class="note" x="220" y="1045">忙碌时只追加队列，不启动第二个</text>
+  <path class="line" d="M805 1030H905"/>
+  <text class="label" x="850" y="1018">否</text>
+  <rect class="shape system" x="905" y="975" width="310" height="110" rx="8"/>
+  <text class="title" x="1060" y="1006">按熟悉度选择</text>
+  <text class="note" x="1060" y="1030">同端同会话同人 → 同端同会话</text>
+  <text class="note" x="1060" y="1054">→ 同端 → 动态创建</text>
+  <path class="line" d="M220 1069V1190H455"/>
+  <path class="line" d="M1060 1085V1190H825"/>
+  <polygon class="shape decision" points="640,1150 805,1230 640,1310 475,1230"/>
+  <text class="title" x="640" y="1224">Agent 卡片开启消息处理模式？</text>
+  <text class="note" x="640" y="1247">未开启的主人格、秘书和计划 Agent 不参与匹配</text>
+  <path class="line" d="M475 1230H375"/>
+  <text class="label" x="420" y="1218">否</text>
+  <rect class="shape system" x="65" y="1191" width="310" height="78" rx="8"/>
+  <text class="title" x="220" y="1222">继续匹配或动态创建</text>
+  <text class="note" x="220" y="1245">使用启用该模式的消息 Agent 模板</text>
+  <path class="line" d="M805 1230H905"/>
+  <text class="label" x="850" y="1218">是</text>
+  <rect class="shape agent" x="905" y="1175" width="310" height="110" rx="10"/>
+  <text class="agent-title" x="1060" y="1212">消息处理 Agent</text>
+  <text class="agent-note" x="1060" y="1238">处理消息组、关联计划、决定回复</text>
+  <text class="agent-note" x="1060" y="1261">证据不足时扩大查询或追问</text>
+  <path class="line" d="M220 1269V1405H480"/>
+  <path class="line" d="M1060 1285V1405H800"/>
+  <rect class="shape agent" x="480" y="1365" width="320" height="90" rx="10"/>
+  <text class="agent-title" x="640" y="1400">消息处理 Agent 处理本轮</text>
+  <text class="agent-note" x="640" y="1425">读取短状态和增量，不默认读取完整聊天历史</text>
+
+  <rect class="phase" x="20" y="1600" width="1240" height="800" rx="18"/>
+  <text class="phase-title" x="48" y="1636">03 · COLLABORATE / 四类 Agent 协作</text>
+  <path class="line" d="M640 1455V1685"/>
+  <polygon class="shape decision" points="640,1685 815,1770 640,1855 465,1770"/>
+  <text class="title" x="640" y="1764">消息处理结果是什么？</text>
+  <text class="note" x="640" y="1787">日常回复、计划事项或重要判断</text>
+
+  <path class="line" d="M465 1770H340V1900"/>
+  <text class="label" x="370" y="1758">新需求 / 计划维护</text>
+  <rect class="shape agent" x="70" y="1900" width="300" height="100" rx="10"/>
+  <text class="agent-title" x="220" y="1937">秘书 Agent</text>
+  <text class="agent-note" x="220" y="1962">查重、建计划、维护计划和安排执行者</text>
+
+  <path class="line" d="M640 1855V1900"/>
+  <text class="label" x="654" y="1886">已有计划</text>
+  <rect class="shape agent" x="490" y="1900" width="300" height="100" rx="10"/>
+  <text class="agent-title" x="640" y="1937">计划 Agent</text>
+  <text class="agent-note" x="640" y="1962">一计划一 Agent，调查、实现和验证</text>
+
+  <path class="line" d="M815 1770H940V1900"/>
+  <text class="label" x="825" y="1758">重要 / 跨计划 / 不确定</text>
+  <rect class="shape agent" x="910" y="1900" width="300" height="100" rx="10"/>
+  <text class="agent-title" x="1060" y="1937">主人格 Agent</text>
+  <text class="agent-note" x="1060" y="1962">长期人格、重要对话和跨计划判断</text>
+
+  <path class="line" d="M220 2000V2090H480"/>
+  <path class="line" d="M640 2000V2090"/>
+  <path class="line" d="M1060 2000V2090H800"/>
+  <rect class="shape state" x="480" y="2050" width="320" height="92" rx="8"/>
+  <text class="title" x="640" y="2083">结果返回原消息组</text>
+  <text class="note" x="640" y="2107">计划 ID、进展、判断或建议回复</text>
+  <path class="return" d="M480 2096H405V1410H475"/>
+  <text class="side-note" x="70" y="2165">结果由消息处理 Agent 结合最新群聊决定是否通知</text>
+  <path class="line" d="M640 2142V2200"/>
+  <polygon class="shape decision" points="640,2200 795,2275 640,2350 485,2275"/>
+  <text class="title" x="640" y="2269">需要对外回复？</text>
+  <text class="note" x="640" y="2291">普通回复也必须经过发送规则</text>
+
+  <rect class="phase" x="20" y="2420" width="1240" height="470" rx="18"/>
+  <text class="phase-title" x="48" y="2456">04 · SEND &amp; WAIT / 发送、回执与等待</text>
+  <path class="line" d="M795 2275H940V2505"/>
+  <text class="label" x="835" y="2263">是</text>
+  <rect class="shape send" x="890" y="2505" width="320" height="82" rx="8"/>
+  <text class="title" x="1050" y="2537">Outbox 按权限发送</text>
+  <text class="note" x="1050" y="2561">草稿、去重、重试和平台回执</text>
+  <path class="line" d="M1050 2587V2680H800"/>
+  <path class="line" d="M640 2350V2680"/>
+  <text class="label" x="653" y="2380">否</text>
+  <rect class="shape state" x="480" y="2640" width="320" height="84" rx="8"/>
+  <text class="title" x="640" y="2672">更新消息组状态和回执</text>
+  <text class="note" x="640" y="2696">成功回执不自动唤醒 Agent</text>
+  <path class="line" d="M640 2724V2770"/>
+  <polygon class="shape decision" points="640,2770 770,2830 640,2890 510,2830"/>
+  <text class="title" x="640" y="2825">又有新消息或需继续？</text>
+  <text class="note" x="640" y="2846">有则回到原消息组队列</text>
+  <path class="return" d="M770 2830H1235V870H840"/>
+  <text class="label" x="1010" y="2818">是</text>
+  <path class="line" d="M510 2830H370"/>
+  <text class="label" x="420" y="2818">否</text>
+  <ellipse class="shape start" cx="230" cy="2830" rx="140" ry="36"/>
+  <text class="title" x="230" y="2836">等待下一批消息</text>
+</svg>

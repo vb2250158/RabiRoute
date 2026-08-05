@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
+import { createHash } from "node:crypto";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { isCodexMonitorThreadActive } from "./codexRuntime.js";
 import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
@@ -41,6 +42,24 @@ import {
   appendMessageContextToDir,
 } from "./messageContextStore.js";
 import { messageContextScopeForForward } from "./routing/messageContextScope.js";
+import { logicalMessageAdapterForRecord } from "./routing/messageContextScope.js";
+import {
+  MessageGroupingQueue,
+  messageGroupingStatePath,
+  type PendingMessageGroup
+} from "./messageGrouping.js";
+import {
+  mergePendingMessageGroup,
+  messageGroupEnqueueInputForForward
+} from "./routing/messageGroupingForward.js";
+import { MessageAgentPool, messageAgentPoolStatePath } from "./messageAgentPool.js";
+import {
+  DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
+  DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
+  normalizeMessageGroupingPolicy,
+  type MessageGroupingPolicy,
+  type RecentMessageEndpoint
+} from "./shared/gatewayConfigModel.js";
 
 export type {
   ForwardRouteKind,
@@ -85,7 +104,128 @@ export type ForwardMessageOptions = {
   appendRoleRecord?: boolean;
   logReplayAttempt?: boolean;
   replayOfAttemptId?: string;
+  recordInbound?: boolean;
+  messageGroup?: PendingMessageGroup;
 };
+
+let messageAgentPool: MessageAgentPool | undefined;
+let messageGroupingQueue: MessageGroupingQueue | undefined;
+
+/** Clears process-local grouping workers so tests and runtime reconfiguration do not reuse stale gateway settings. */
+export function resetMessageProcessingRuntime(): void {
+  messageGroupingQueue?.close();
+  messageGroupingQueue = undefined;
+  messageAgentPool = undefined;
+}
+
+function codexMessageAgentPolicy() {
+  return config.messageProcessingAgents.codex;
+}
+
+function messageAgentModeEnabled(): boolean {
+  return config.agentAdapters.includes("codex")
+    && codexMessageAgentPolicy()?.enabled === true
+    && Boolean(config.codexThreadId && config.codexCwd);
+}
+
+function activeMessageAgentPool(): MessageAgentPool {
+  if (messageAgentPool) return messageAgentPool;
+  const policy = codexMessageAgentPolicy();
+  if (!policy?.enabled) throw new Error("Codex Message Agent mode is not enabled.");
+  messageAgentPool = new MessageAgentPool({
+    statePath: messageAgentPoolStatePath(config.dataDir),
+    managerBaseUrl: process.env.GATEWAY_MANAGER_URL?.trim() || "http://127.0.0.1:8790",
+    sourceThreadName: config.codexThreadName,
+    sourceThreadId: config.codexThreadId,
+    workspace: config.codexCwd,
+    roleId: config.agentRoleId,
+    rolePath: config.agentRolePath,
+    model: policy.model || DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
+    reasoningEffort: policy.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT
+  });
+  return messageAgentPool;
+}
+
+function messageGroupPrompt(group: PendingMessageGroup, packet: string): string {
+  return [
+    `[消息组 ${group.groupId}]`,
+    `消息端：${group.endpoint}`,
+    `会话：${group.conversationKey}`,
+    `说话人：${group.sender}`,
+    group.replyToMessageId ? `回复消息：${group.replyToMessageId}` : "",
+    `本组新增消息：${group.items.length} 条`,
+    "",
+    packet
+  ].filter((line) => line !== "").join("\n");
+}
+
+async function deliverPacketToMessageAgent(
+  routeId: string,
+  ruleId: string,
+  packet: string,
+  group: PendingMessageGroup
+): Promise<ForwardAdapterOutcome[]> {
+  try {
+    await activeMessageAgentPool().deliver(group, messageGroupPrompt(group, packet));
+    return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
+  } catch (error) {
+    return [{
+      routeId,
+      ruleId,
+      adapter: "codex",
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error)
+    }];
+  }
+}
+
+function activeMessageGroupingQueue(): MessageGroupingQueue {
+  if (messageGroupingQueue) return messageGroupingQueue;
+  messageGroupingQueue = new MessageGroupingQueue(
+    messageGroupingStatePath(config.dataDir),
+    async (group) => {
+      const merged = mergePendingMessageGroup(group);
+      const result = await forwardMessageAndWait(
+        merged.routeKind,
+        merged.record,
+        merged.extraValues,
+        { appendRoleRecord: false, recordInbound: false, messageGroup: group }
+      );
+      if (result.status === "failed") {
+        const errors = result.adapterOutcomes.map((outcome) => outcome.error).filter(Boolean).join("; ");
+        throw new Error(errors || `Message group ${group.groupId} delivery failed.`);
+      }
+    }
+  );
+  return messageGroupingQueue;
+}
+
+const automaticMessageGroupingRouteKinds = new Set<ForwardRouteKind>([
+  "private",
+  "group_message",
+  "direct_at",
+  "direct_reply",
+  "indirect_reply",
+  "role_panel_message",
+  "rabilink",
+  "wecom_message",
+  "weixin_message",
+  "feishu_message"
+]);
+
+export function routeKindUsesAutomaticMessageGrouping(routeKind: ForwardRouteKind): boolean {
+  return automaticMessageGroupingRouteKinds.has(routeKind);
+}
+
+function groupingPolicyForRecord(routeKind: ForwardRouteKind, record: ForwardRecord): Required<MessageGroupingPolicy> | undefined {
+  if (!routeKindUsesAutomaticMessageGrouping(routeKind)) {
+    return undefined;
+  }
+  const endpoint = logicalMessageAdapterForRecord(routeKind, record) as RecentMessageEndpoint | undefined;
+  if (!endpoint) return undefined;
+  const configured = config.messageAdapterPolicies[endpoint]?.messageGrouping;
+  return configured ? normalizeMessageGroupingPolicy(configured, endpoint) : undefined;
+}
 
 function logDeliveryResult(result: ForwardDeliveryResult): void {
   const failed = result.status === "failed";
@@ -98,25 +238,33 @@ function logDeliveryResult(result: ForwardDeliveryResult): void {
   }, config.dataDir);
 }
 
-function configuredAgentAdapters(): AgentAdapterType[] {
-  return config.agentAdapters;
+function configuredPrimaryAgentAdapter(): AgentAdapterType | undefined {
+  return config.primaryAgentAdapter;
 }
 
 export function shouldSkipHeartbeatDelivery(
   routeKind: ForwardRouteKind,
   skipWhenAgentBusy: boolean,
   agentAdapters: AgentAdapterType[],
-  codexThreadActive: boolean
+  codexThreadActive: boolean,
+  messageProcessingAgentEnabled = false
 ): boolean {
   return routeKind === "heartbeat"
     && skipWhenAgentBusy
+    && !messageProcessingAgentEnabled
     && agentAdapters.includes("codex")
     && codexThreadActive;
 }
 
 async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind): Promise<boolean> {
-  const adapters = configuredAgentAdapters();
-  if (!shouldSkipHeartbeatDelivery(routeKind, config.heartbeatSkipWhenAgentBusy, adapters, true)) {
+  const adapters = config.primaryAgentAdapter ? [config.primaryAgentAdapter] : [];
+  if (!shouldSkipHeartbeatDelivery(
+    routeKind,
+    config.heartbeatSkipWhenAgentBusy,
+    adapters,
+    true,
+    messageAgentModeEnabled()
+  )) {
     return false;
   }
   try {
@@ -169,26 +317,75 @@ function dispatchToAgentAdapter(type: AgentAdapterType, message: string): Promis
   return adapter.deliver(message);
 }
 
-export async function deliverPacketToAgentAdapters(routeId: string, ruleId: string, message: string): Promise<ForwardAdapterOutcome[]> {
-  return Promise.all(configuredAgentAdapters().map(async (adapter) => {
-    try {
-      await dispatchToAgentAdapter(adapter, message);
-      return {
-        routeId,
-        ruleId,
-        adapter,
-        status: "delivered" as const
-      };
-    } catch (error) {
-      return {
-        routeId,
-        ruleId,
-        adapter,
-        status: "failed" as const,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
-  }));
+export async function deliverPacketToPrimaryAgentAdapter(
+  routeId: string,
+  ruleId: string,
+  message: string,
+  dispatch: (type: AgentAdapterType, message: string) => Promise<void> = dispatchToAgentAdapter
+): Promise<ForwardAdapterOutcome[]> {
+  const adapter = configuredPrimaryAgentAdapter();
+  if (!adapter) return [];
+  try {
+    await dispatch(adapter, message);
+    return [{
+      routeId,
+      ruleId,
+      adapter,
+      status: "delivered"
+    }];
+  } catch (error) {
+    return [{
+      routeId,
+      ruleId,
+      adapter,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error)
+    }];
+  }
+}
+
+function immediateMessageAgentGroup(
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  extraValues: ForwardTemplateValues
+): PendingMessageGroup {
+  const now = Date.now();
+  const scope = messageContextScopeForForward(routeKind, record, {
+    gatewayId: process.env.GATEWAY_ID
+  });
+  const endpoint = scope?.endpoint || routeKind;
+  const conversationKey = scope?.record.conversationKey || `${endpoint}:internal`;
+  const sender = String(scope?.record.sender || "RabiRoute");
+  const messageId = recordId(record);
+  const groupId = `message-group-${createHash("sha256")
+    .update(`${routeKind}|${messageId}`)
+    .digest("hex")
+    .slice(0, 24)}`;
+  const baseKey = `${endpoint}|${conversationKey}|sender:${sender}`;
+  return {
+    groupId,
+    key: `${baseKey}|message:${messageId}`,
+    baseKey,
+    endpoint,
+    conversationKey,
+    sender,
+    createdAt: now,
+    updatedAt: now,
+    deadlineAt: now,
+    maxDeadlineAt: now,
+    status: "pending",
+    attempts: 0,
+    items: [{
+      identity: `${endpoint}|${conversationKey}|message:${messageId}`,
+      receivedAt: now,
+      incomplete: false,
+      payload: {
+        routeKind,
+        record: record as unknown as Record<string, unknown>,
+        extraValues
+      }
+    }]
+  };
 }
 
 function activeRouteProfiles(): RouteProfile[] {
@@ -432,6 +629,10 @@ async function forwardMessageToRoute(
   }
 
   const roleContext = rolePathsForRoute(route);
+  const messageAgentGroup = options.messageGroup
+    ?? (routeKind === "heartbeat" && messageAgentModeEnabled()
+      ? immediateMessageAgentGroup(routeKind, record, extraValues)
+      : undefined);
 
   const adapterOutcomes: ForwardAdapterOutcome[] = [];
   let sentPacketCount = 0;
@@ -451,7 +652,9 @@ async function forwardMessageToRoute(
     }, roleContext.dataDir);
 
     sentPacketCount += 1;
-    adapterOutcomes.push(...await deliverPacketToAgentAdapters(route.id, rule.id, packet.message));
+    adapterOutcomes.push(...(messageAgentGroup
+      ? await deliverPacketToMessageAgent(route.id, rule.id, packet.message, messageAgentGroup)
+      : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.message)));
   }
 
   const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");
@@ -481,7 +684,7 @@ export async function forwardMessageAndWait(
     }
     return result;
   }
-  recordInboundForRoutes(routes, routeKind, record, options);
+  if (options.recordInbound !== false) recordInboundForRoutes(routes, routeKind, record, options);
   const results: ForwardRouteDeliveryResult[] = [];
   for (const route of routes) {
     results.push(await forwardMessageToRoute(route, routeKind, record, extraValues, options, packets));
@@ -520,6 +723,36 @@ export function forwardMessage(
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
 ): void {
+  const groupingPolicy = groupingPolicyForRecord(routeKind, record);
+  if (groupingPolicy && messageAgentModeEnabled()) {
+    const input = messageGroupEnqueueInputForForward(
+      routeKind,
+      record,
+      extraValues,
+      groupingPolicy,
+      process.env.GATEWAY_ID
+    );
+    if (input) {
+      recordMessageContextOnly(routeKind, record);
+      const queued = activeMessageGroupingQueue().enqueue(input);
+      appendAdapterLogToDir("router", {
+        event: queued.accepted ? "message_group_queued" : "message_group_duplicate",
+        level: "info",
+        message: queued.accepted
+          ? `Queued messageId=${recordId(record)} in ${queued.groupId} items=${queued.itemCount}`
+          : `Ignored duplicate grouped messageId=${recordId(record)}`,
+        data: {
+          routeKind,
+          messageId: recordId(record),
+          groupId: queued.groupId,
+          itemCount: queued.itemCount,
+          endpoint: input.endpoint,
+          conversationKey: input.conversationKey
+        }
+      }, config.dataDir);
+      return;
+    }
+  }
   void forwardMessageAndWait(routeKind, record, extraValues)
     .catch((error) => {
       appendAdapterLogToDir("router", {

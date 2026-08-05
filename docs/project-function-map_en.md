@@ -20,7 +20,7 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 | Event/history stores | Protocol/audit JSONL plus the persona-scoped bidirectional conversation ledger | Route or business decisions, or using archives as automatic context | `src/history.ts`, `src/messageContextStore.ts` |
 | RouteDecision | Match rules inside one route profile | Role selection, memory reads, handler delivery | `src/routing/routeDecision.ts` |
 | AgentPacket | Generated handler context and reply instructions | Route matching or platform send | `src/routing/agentPacket.ts` |
-| Handler adapter | Deliver packet to Codex/other handler | Platform route semantics or external output policy | `src/agentAdapters/*`, runtime modules |
+| Handler adapter | Deliver a packet to the Route's selected Primary Agent | Platform route semantics, external output policy, or fallback to another Agent | `src/agentAdapters/*`, runtime modules |
 | Outbox | Resolve reply target, policy, payload, and sender | Handler reasoning | `src/outbox.ts` |
 | Manager | Configuration, processes, scans, APIs, shared services | Platform-specific live parsing | `src/manager.ts`, `src/manager/*` |
 | Role knowledge | Plans, memories, skills, recall, validation, and Manager-owned presentation ordering | Decide whether an event matches a route | `src/roleKnowledge.ts`, `src/roleKnowledgePresentation.ts` |
@@ -30,9 +30,10 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 | Function | Maturity | Source / trigger | Side effects | API / UI | Main code |
 | --- | --- | --- | --- | --- | --- |
 | NapCat inbound/outbound | verified; one-click recovery with single-account ownership guard | OneBot WS/HTTP | message logs and external QQ sends; explicit recovery first probes other local OneBot endpoints, preserves an existing live owner, blocks duplicate startup, and distinguishes expired quick login from QR-required authentication | route config, message scan, and **Open NapCat** | `src/adapters/napcatAdapter.ts`, `src/napcat.ts`, `src/outbox.ts`, `src/messageEndpoints/napcatManager.ts` |
-| Heartbeat | verified | interval | heartbeat log and possible handler turn | route message-adapter config | heartbeat adapter/forwarding |
+| Heartbeat | verified | interval | heartbeat log; with Codex Message Agent mode enabled, immediate independent Message Agent delivery without recent chat history; otherwise optional busy-Primary skip | route message-adapter and Agent-card config | heartbeat adapter, forwarding, and Message Agent pool |
 | Manual trigger | verified | Manager/WebGUI action | manual-trigger log and handler turn | Manager control plane | `src/manualTrigger.ts`, `src/manager/controlPlaneRoutes.ts` |
 | Role panel | verified | Qt/Manager local message | role timeline and handler turn/reply | Manager/Qt | role-panel modules and Outbox |
+| Persona directory and cross-persona messaging | automated contract verified; real two-persona Desktop acceptance pending | shared persona catalog, Manager runtime registry, Route-and-persona-bound capabilities, and durable receipts | directory reads; POST uses the shared role-panel service, records success only after handler acceptance, and does not repeat one `deliveryId` | `/api/personas*`, `/api/personas/messages/receipts/:deliveryId` | `src/manager/personaCatalog.ts`, `personaMessageAuthority.ts`, `personaMessagingRoutes.ts`, `rolePanelDelivery.ts` |
 | Idempotent Agent reply | current | `POST /api/agent/replies` with a stable `deliveryId` | persists a reservation before Outbox, executes the same ID/payload once across concurrency and restart recovery, returns conflicts for changed payloads, and never auto-replays uncertain work | `POST /api/agent/replies`, `GET /api/agent/replies/receipts/:deliveryId` | `src/manager/agentReplyIdempotency.ts`, `src/outbox.ts` |
 | Windows tray | current | packaged Qt frontend and the same Manager HTTP backend as RibiWebGUI | starts/connects/exits Manager and asynchronously renders Manager DTOs; never reads runtime `data/` directly | `/gateways?summary=1`, `/api/roles/:roleId/*`, tray executable | `desktop/tray-task-window/`, `scripts/build-tray-exe.ps1` |
 | Remote Agent | experimental | discovered bridge and explicit task | connection/task/event/file runtime data | `/api/remote-agent/*` | `src/messageEndpoints/remoteAgentManager.ts` |
@@ -72,8 +73,8 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 
 ## Boundary rules
 
-- `adapterConfig.json` owns route runtime settings; `personaConfig.json` owns the optional avatar reference, role notification rules, speech keywords, and recent-message limits.
-- Matched ordinary endpoint messages are delivered immediately: `steer` while a turn is active, otherwise `start`. Only explicit endpoint policy creates an exception, such as Heartbeat's busy-skip switch or speech keyword wake-up.
+- `adapterConfig.json` owns route runtime settings, the Agent list, and `primaryAgentAdapter`; normalization guarantees that the Primary Agent remains in the configured list. `personaConfig.json` owns the optional avatar reference, role notification rules, speech keywords, and recent-message limits.
+- Matched ordinary endpoint messages are delivered immediately to the Primary Agent. When Codex is primary, delivery uses `steer` while a turn is active and `start` otherwise. A primary failure does not fall back to another Agent. Only explicit endpoint policy creates an exception, such as Heartbeat's busy-skip switch or speech keyword wake-up.
 - `speechPushMode=hot` delivers every completed ASR segment. `keyword` still records every segment and delivers only when `speechTriggerKeywords` matches; an empty keyword list stays record-only.
 - `recentMessageLimits` is persona-owned and independently configures ordinary logical endpoints. A zero value never disables recording; Heartbeat always omits history regardless of a legacy stored value.
 - `agentRoleId` binds one route to one reusable role. A rule does not choose another role.

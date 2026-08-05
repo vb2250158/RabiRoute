@@ -18,11 +18,9 @@
 
 摘要显示“链路正常”只表示没有发现已知断点。如果消息仍未到达，继续检查下方连接详情和最近日志。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 12｜诊断摘要与连接详情</strong>
-  <span>建议画面：诊断摘要、运行状态、消息端连接和 Codex Desktop 任务卡片。</span>
-  <span>标注重点：待检查项、运行状态、消息端、任务绑定、最后成功、最后错误。</span>
-</div>
+![日志诊断页先显示诊断摘要，再显示运行状态、消息端和处理端状态](../../assets/screenshots/webgui-diagnostics-zh.png)
+
+图中的文档示例没有启动，也没有绑定真实 Desktop 任务，因此状态卡明确显示“禁用中”和“未绑定”。排障时应先处理这类可见断点，再查看更下方的连接详情和最近日志。
 
 ## 用证据判断停在哪一段
 
@@ -54,11 +52,6 @@
 
 “最近日志”显示当前 Route 的最近 gateway 输出。先找最新时间，再看第一条错误，不要被旧启动周期的历史错误误导。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 13｜最近日志与时间边界</strong>
-  <span>建议画面：最近日志区域包含一次触发的开始、投递和结果，时间戳清晰。</span>
-  <span>标注重点：本次启动时间、第一条错误、目标 Route、投递协议。</span>
-</div>
 
 升级代码后如果仍看到旧行为，重新构建并重启 Manager 与 Route，再核对启动目录和 `dist/` 时间。历史日志可以保留，但不能代表本次运行状态。
 
@@ -99,6 +92,14 @@ Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自�
 5. `no-client-found` 自动唤醒后是否仍失败。
 
 不要用固定 4510、`CODEX_APP_SERVER_WS_URL` 或独立 stdio Runtime 修复真实投递；这些不是当前主链。
+
+## 托盘消失但 Manager 仍在
+
+从 `Start-RabiRoute-Tray.bat` 或打包版托盘启动的完整桌面运行态，会在 `data/runtime/desktop-lifecycle-intent.json` 记录 `running`，并启动工作区唯一的 `watch-rabiroute-desktop-lifecycle.ps1`。监督器只检查本项目 Manager `/meta` 和托盘进程；连续两次确认任一侧缺失后，才通过原启动器的端口 owner、PID 和单实例门禁恢复配对。托盘遇到 Manager 暂时离线时会保持图标并继续重连。
+
+先重新运行一次 `Start-RabiRoute-Tray.bat -NoOpen`。然后检查 `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`：正常记录应同时满足 `desiredState=running`、`managerConnected=true`、`trayCount>0`。如果 `desiredState=stopped`，说明上次是明确退出，应由用户重新启动；文件缺失或损坏时监督器也会失败关闭，不会自行猜测。不要用半小时业务健康巡检替代这个轻量监督器，也不要单独循环拉起托盘。
+
+托盘菜单的 `退出 RabiRoute` 会先把意图写成 `stopped` 再关闭 Manager 和托盘，因此监督器不会反向复活。普通 Manager 构建重载、安装升级和 `SIGTERM` 不修改桌面意图；如果桌面仍标记 `running`，监督器会在重载后补齐托盘。
 
 ## 8790 被旧 Manager 占用
 

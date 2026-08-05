@@ -35,6 +35,13 @@ class _RecordingManagerClient(ManagerClient):
 
 
 class ManagerSnapshotTest(unittest.TestCase):
+    def test_shutdown_marks_an_explicit_desktop_exit(self) -> None:
+        client = _RecordingManagerClient()
+
+        self.assertTrue(client.shutdown())
+
+        self.assertEqual(client.posts, [("/manager/shutdown", {"desktopExit": True})])
+
     def test_snapshot_requests_lightweight_gateway_summary(self) -> None:
         client = _RecordingManagerClient()
 

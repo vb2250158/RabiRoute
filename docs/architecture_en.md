@@ -55,9 +55,9 @@ Codex/ChatGPT Desktop is both the visible host and the required task owner. Rabi
 
 Protocol-specific code converts a NapCat, WeCom, webhook, RabiSpeech, XiaoAI, RabiLink, role-panel, heartbeat, or Remote Agent input into the common event vocabulary. FenneNote parsing remains legacy-only.
 
-Verified inputs: NapCat/OneBot, heartbeat, role panel, and manual trigger. Other external endpoints are experimental until their real environment has passed acceptance.
+Verified inputs: NapCat/OneBot, heartbeat, role panel, and manual trigger. Persona discovery and cross-persona delivery have automated contract coverage, but real two-persona Desktop acceptance is still pending. Other external endpoints are experimental until their real environment has passed acceptance.
 
-New platforms belong under `src/adapters/` or a dedicated Manager-level endpoint module. Do not grow the NapCat adapter into a universal integration file.
+New platforms belong under `src/adapters/` or a dedicated Manager-level endpoint module. Remote Agent, role panel, and `/api/personas` are Manager-level endpoints, not Gateway child listeners. Cross-persona messages reuse the same fixed `role_panel_message` delivery service as the local role panel. A Route-and-persona-bound capability authenticates the sender, so request text alone cannot declare that identity. Do not grow the NapCat adapter into a universal integration file.
 
 ### 2. Event store
 

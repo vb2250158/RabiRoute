@@ -19,6 +19,14 @@ The message adapter decides where an event enters. The Agent adapter decides whi
 
 Maturity in the selector comes from the current scan. Installed does not mean authenticated, and authenticated does not mean bound to the correct task.
 
+## Select the Primary Agent
+
+A Route may keep configurations for several different Agents, but a matched message is delivered to only one Primary Agent. Choose it above the Agent handler list. Other project, task, and service settings remain saved, but those Agents do not receive default deliveries.
+
+For an older Route without a saved primary selection, RabiRoute uses the first Agent in the list. Removing the current Primary Agent selects the first remaining Agent. With no Agent configured, matching and packet records are retained without handler delivery.
+
+If Primary Agent delivery fails, RabiRoute records the failure and does not switch to another Agent. This prevents two handlers from replying or performing the same external action.
+
 ## Three requirements for Codex
 
 The Codex path needs all three:
@@ -35,11 +43,6 @@ Open **Message Adapters**, expand **Agent handler**, select Codex, and run Scan 
 
 The scan lists available workspaces and unarchived tasks. The selector shows task name and last activity time instead of exposing internal IDs for recognition.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 09 | Codex scan and task binding</strong>
-  <span>Suggested frame: expanded Codex card with environment status, maturity, workspace, and task selector.</span>
-  <span>Callouts: Verified, Desktop status, workspace, task and activity time, Rescan.</span>
-</div>
 
 ## Select the workspace
 

@@ -24,12 +24,14 @@ Separate Routes are useful when:
 
 Several Routes can reuse one persona. Do not duplicate a persona only because the message source changes.
 
+Cross-persona delivery does not require another Route kind or message adapter. It selects a target from Manager's persona directory and reuses the target's existing built-in persona-message path. Both source and target Routes must be enabled.
+
 ## Adapter maturity
 
 | Message adapter | Status | Good for | Additional dependency |
 | --- | --- | --- | --- |
 | Scheduled trigger | Verified | Periodic checks and first-run validation | No external account |
-| Role panel | Verified | Tray and local role messages | Manager/tray entry |
+| Role panel | Verified | Tray, local persona messages, and authenticated cross-persona delivery | Manager/tray entry; not a network listener |
 | NapCat / OneBot | Verified | QQ groups and private messages | NapCat, QQNT, OneBot setup |
 | WeCom | Experimental | WeCom groups | Bot ID, Secret, environment acceptance |
 | Remote Agent | Experimental | Independent bridge devices | Remote bridge and password challenge |
@@ -45,11 +47,9 @@ Open **Message Adapters** and add an entry under **Message sources**. The catalo
 
 Each adapter shows maturity, connection state, dependency checks, and its own settings. Stabilize one source before adding another.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 07 | Message-adapter catalog</strong>
-  <span>Suggested frame: the open catalog with groups, adapter names, maturity, and connection badges.</span>
-  <span>Callouts: Verified, Experimental, connection state, Add.</span>
-</div>
+![Message Adapters showing the current Route state, message inputs, and primary Agent](../../assets/screenshots/webgui-adapters-en.png)
+
+The documentation sample Route was paused for the screenshot, while NapCat and Scheduled trigger remain visible in its input list. Confirm the inputs and primary Agent before enabling a Route.
 
 ## Input and output are separate gates
 
@@ -73,12 +73,6 @@ In the Route's NapCat panel, verify the instance, RabiRoute WS port, HTTP addres
 
 QQ/NapCat and personal Weixin have completely independent login states. QQ is marked usable only from a live OneBot connection and health result. A reachable NapCat WebUI proves only that the diagnostic/configuration surface is reachable; it does not prove that QQ is logged in or can send and receive. A logged-out personal-Weixin adapter affects only that adapter and never turns an online QQ or every message endpoint into an offline state.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 08 | NapCat instance and connection</strong>
-  <span>Suggested frame: one configured QQ instance with its WS, HTTP, account state, and Open NapCat action.</span>
-  <span>Callouts: account, WS port, HTTP address, login state, Scan, Open.</span>
-</div>
-
 RabiRoute does not store or bypass QQ passwords, CAPTCHA, device confirmation, or risk controls. Complete first login and exceptional verification in NapCat/QQNT.
 
 See [Unattended NapCat and login stability](../napcat-unattended_en.md) for the recovery flow.
@@ -87,7 +81,7 @@ See [Unattended NapCat and login stability](../napcat-unattended_en.md) for the 
 
 After enabling Scheduled trigger, add a `heartbeat` schedule in persona rules. Schedules can use intervals, daily times, or a one-off date and time.
 
-**Skip heartbeat while task is busy** affects only heartbeat when the fixed Codex task is active. It does not discard QQ, private, or other real-time messages.
+While Codex Message Agent mode is off, **Skip heartbeat while task is busy** affects only heartbeat when the fixed Codex task is active. With Message Agent mode on, heartbeat goes immediately to an independent Message Agent and the busy-skip option is hidden. QQ, private, and other real-time messages are not discarded by this setting.
 
 ## Webhook and named adapters
 

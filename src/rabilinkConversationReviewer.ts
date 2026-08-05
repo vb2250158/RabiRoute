@@ -432,11 +432,11 @@ export class RabiLinkConversationReviewer {
 let defaultReviewer: RabiLinkConversationReviewer | null = null;
 
 export function startDefaultRabiLinkConversationReviewer(): RabiLinkConversationReviewer | null {
-  if (!config.agentAdapters.includes("codex")) {
+  if (config.primaryAgentAdapter !== "codex") {
     appendAdapterLog("rabilink", {
       level: "warning",
       event: "conversation_reviewer_disabled",
-      message: "RabiLink conversation review currently requires the Codex Desktop adapter."
+      message: "RabiLink conversation review currently requires Codex Desktop as the primary Agent."
     });
     return null;
   }

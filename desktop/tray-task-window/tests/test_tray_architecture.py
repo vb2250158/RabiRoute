@@ -67,6 +67,13 @@ class TrayArchitectureTest(unittest.TestCase):
         self.assertIn("_start_manual_trigger(", source)
         self.assertIn("_start_manager_shutdown(", source)
 
+    def test_packaged_tray_never_kills_manager_outside_the_graceful_api(self) -> None:
+        source = (TRAY_ROOT / "rabiroute_tray" / "tray_app.py").read_text(encoding="utf-8")
+
+        quit_helper = source[source.index("def _quit("):source.index("def _show_message(")]
+        self.assertNotIn(".terminate()", quit_helper)
+        self.assertNotIn("taskkill", quit_helper)
+
     def test_role_panel_is_prewarmed_before_the_tray_becomes_clickable(self) -> None:
         source = (TRAY_ROOT / "rabiroute_tray" / "tray_app.py").read_text(encoding="utf-8")
 

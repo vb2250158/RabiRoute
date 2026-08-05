@@ -86,7 +86,7 @@ class ManagerClient:
 
     def shutdown(self) -> bool:
         try:
-            self._post_json("/manager/shutdown")
+            self._post_json("/manager/shutdown", {"desktopExit": True})
             return True
         except (OSError, URLError, TimeoutError, json.JSONDecodeError):
             return False

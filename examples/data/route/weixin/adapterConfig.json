@@ -12,6 +12,7 @@
     }
   },
   "agentAdapters": ["codex"],
+  "primaryAgentAdapter": "codex",
   "pipelinePreset": "weixin_chat",
   "pipeline": {
     "inputAdapter": "weixin",

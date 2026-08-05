@@ -122,7 +122,7 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
   triggeringRuleId.value = rule.id;
   triggerResult.value = null;
   try {
-    await store.manualTriggerGateway(gateway.value.id, {
+    const result = await store.manualTriggerGateway(gateway.value.id, {
       triggerId: rule.id,
       ruleId: rule.id,
       triggerName: rule.displayName,
@@ -131,7 +131,9 @@ async function triggerRule(rule: { id: string; displayName: string; routeKind: "
     });
     triggerResult.value = {
       ok: true,
-      message: t(`已触发「${rule.displayName}」，请在最近日志和通知数里确认投递结果。`)
+      message: t(result.alreadyRunning
+        ? `「${rule.displayName}」已经在后台投递中，没有重复启动；请在最近日志中确认最终结果。`
+        : `已接受「${rule.displayName}」，正在后台投递；请在最近日志中确认最终结果。`)
     };
   } catch (error) {
     triggerResult.value = {

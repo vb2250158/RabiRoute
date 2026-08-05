@@ -62,13 +62,14 @@ Creating a task and delivering its first prompt are separate operations. A short
 
 - The UI shows task name and last activity; users do not type UUIDs.
 - Internally, identity is the complete task ID plus workspace. The visible name is display and no-ID lookup metadata.
-- For Codex, the user-visible name comes from Desktop app-server `thread/list` as `thread.name`. The local state database supplements exact ID, cwd, archive state, timestamps, and owner/rollout location. SQLite `threads.title` may contain the first prompt and must not drive dropdown labels or same-name lookup.
+- For Codex, the user-visible name comes from the Desktop left sidebar: full scans use app-server `thread/list` `thread.name`, while exact-ID reads use the same sidebar session index. Both are exposed through the single task read model in `codexDesktopBridge.ts`. SQLite `threads.title` may contain the first prompt and can supplement owner state only; it must not become the task name or drive dropdown labels and same-name lookup.
 - Last activity is display/sorting data, not identity.
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
 - For same-name tasks in one workspace, sort by parseable `updatedAt` and bind the unique maximum; never use database return order. Require selection only when the maximum time is tied or all candidate times are unusable.
 - “Task created, initial delivery failed” is a recoverable delivery state, not a missing task.
 - Delivery state is explicit: internal transitional `accepted` means only that RabiRoute entered the Desktop path; `delivered` is set only after the target Desktop owner's `start/steer` succeeds; resolver, owner-loading, or IPC failures are `failed`. Route acceptance must never impersonate Desktop receipt.
 - A matched ordinary endpoint event is delivered directly: first attempt `steer` against the active turn, then `start` only when that turn is inactive or absent. Heartbeat may use its dedicated busy-skip exception, while speech may use its dedicated hot/keyword exception.
+- Manager must not decide task activity from the Desktop IPC memory set alone. It timestamp-merges the connection-scoped active marker with the latest rollout lifecycle event: a newer completion, abort, or failure supersedes an older active marker; a genuinely newer IPC start remains active until rollout catches up; disconnect clears that connection's markers immediately.
 
 ### Public HTTP terminal state for speech
 

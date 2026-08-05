@@ -21,8 +21,19 @@ import {
   type CodexPlanAssistantSession
 } from "./codexPlanAssistantSessions.js";
 import { applySpeechRouteVariableDefaults } from "./speechControlContract.js";
+import {
+  agentAdapterSupportsManagedTaskFeature,
+  type AgentAdapterType
+} from "./agentAdapterCapabilities.js";
 
 export type { CodexPlanAssistantSession } from "./codexPlanAssistantSessions.js";
+export {
+  agentAdapterCapabilities,
+  agentAdapterSupportsManagedTaskFeature,
+  type AgentAdapterCapabilities,
+  type AgentAdapterType,
+  type ManagedTaskAgentFeature
+} from "./agentAdapterCapabilities.js";
 
 export {
   builtinRolePanelRouteKind,
@@ -37,11 +48,11 @@ export {
 } from "./personaRulePolicy.js";
 
 export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "feishu" | "disabled";
-export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
 export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "feishu" | "none";
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
+export type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type SpeechPushMode = "hot" | "keyword";
 export type CodexHookSettings = {
   sessionContextEnabled: boolean;
@@ -73,14 +84,33 @@ export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
 export const DEFAULT_RECENT_MESSAGE_LIMIT = 12;
 export const MAX_RECENT_MESSAGE_LIMIT = 200;
 
+export const DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL = "gpt-5.6-luna";
+export const DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT: CodexReasoningEffort = "medium";
+
+export type MessageGroupingPolicy = {
+  enabled?: boolean;
+  settleSeconds?: number;
+  incompleteSettleSeconds?: number;
+  maxWaitSeconds?: number;
+};
+
 export type MessageAdapterPolicy = {
   inputEnabled?: boolean;
   outputEnabled?: boolean;
   supportedOutputs?: MessagePayloadKind[];
   allowedFileRoots?: string[];
+  messageGrouping?: MessageGroupingPolicy;
 };
 
 export type MessageAdapterPolicies = Partial<Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterPolicy>>;
+
+export type MessageProcessingAgentPolicy = {
+  enabled?: boolean;
+  model?: string;
+  reasoningEffort?: CodexReasoningEffort;
+};
+
+export type MessageProcessingAgentPolicies = Partial<Record<AgentAdapterType, MessageProcessingAgentPolicy>>;
 
 export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
   const raw = value && typeof value === "object" && !Array.isArray(value)
@@ -254,6 +284,8 @@ export type GatewayDefinition = {
   agentRoleId?: string;
   agentRoleFile?: string;
   agentAdapters?: AgentAdapterType[];
+  primaryAgentAdapter?: AgentAdapterType;
+  messageProcessingAgents?: MessageProcessingAgentPolicies;
   routeProfiles?: RouteProfileDefinition[];
   dataDir?: string;
   groupNotificationTemplate?: string;
@@ -309,6 +341,84 @@ const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent
 const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
+const codexReasoningEffortValues = new Set<CodexReasoningEffort>(["low", "medium", "high", "xhigh", "max"]);
+
+export function messageAdapterUsesAutomaticGrouping(adapterType: Exclude<MessageAdapterType, "disabled">): boolean {
+  return adapterType === "napcat"
+    || adapterType === "rolePanel"
+    || adapterType === "rabilink"
+    || adapterType === "wecom"
+    || adapterType === "weixin"
+    || adapterType === "feishu";
+}
+
+function defaultMessageGroupingPolicy(adapterType: Exclude<MessageAdapterType, "disabled">): Required<MessageGroupingPolicy> {
+  const speechLike = adapterType === "speech"
+    || adapterType === "fennenote"
+    || adapterType === "xiaoai";
+  const conversational = messageAdapterUsesAutomaticGrouping(adapterType);
+  return speechLike
+    ? { enabled: conversational, settleSeconds: 3, incompleteSettleSeconds: 8, maxWaitSeconds: 15 }
+    : { enabled: conversational, settleSeconds: 6, incompleteSettleSeconds: 12, maxWaitSeconds: 20 };
+}
+
+export function normalizeMessageGroupingPolicy(
+  value: unknown,
+  adapterType: Exclude<MessageAdapterType, "disabled">
+): Required<MessageGroupingPolicy> {
+  const defaults = defaultMessageGroupingPolicy(adapterType);
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as MessageGroupingPolicy
+    : {};
+  const positive = (candidate: unknown, fallback: number): number => {
+    const number = Number(candidate);
+    return Number.isFinite(number) && number > 0 ? Math.min(300, Math.max(1, number)) : fallback;
+  };
+  const settleSeconds = positive(raw.settleSeconds, defaults.settleSeconds);
+  const incompleteSettleSeconds = Math.max(
+    settleSeconds,
+    positive(raw.incompleteSettleSeconds, defaults.incompleteSettleSeconds)
+  );
+  const maxWaitSeconds = Math.max(
+    incompleteSettleSeconds,
+    positive(raw.maxWaitSeconds, defaults.maxWaitSeconds)
+  );
+  return {
+    // Kept in the normalized shape for compatibility with existing config files.
+    // Endpoint classification owns this value; an old per-endpoint switch cannot
+    // disable grouping for chat or enable extra settling for ASR/system events.
+    enabled: defaults.enabled,
+    settleSeconds,
+    incompleteSettleSeconds,
+    maxWaitSeconds
+  };
+}
+
+export function normalizeMessageProcessingAgentPolicies(
+  value: unknown,
+  adapters: readonly AgentAdapterType[]
+): MessageProcessingAgentPolicies {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as MessageProcessingAgentPolicies
+    : {};
+  const result: MessageProcessingAgentPolicies = {};
+  for (const adapter of adapters) {
+    if (!agentAdapterSupportsManagedTaskFeature(adapter, "messageProcessingAgent")) continue;
+    const policy = raw[adapter];
+    const model = typeof policy?.model === "string" && policy.model.trim()
+      ? policy.model.trim()
+      : DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL;
+    const reasoningEffort = codexReasoningEffortValues.has(policy?.reasoningEffort as CodexReasoningEffort)
+      ? policy?.reasoningEffort as CodexReasoningEffort
+      : DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT;
+    result[adapter] = {
+      enabled: policy?.enabled === true,
+      model,
+      reasoningEffort
+    };
+  }
+  return result;
+}
 
 export function normalizeTemplateText(value: unknown): string {
   return String(value || "")
@@ -502,7 +612,8 @@ export function normalizeMessageAdapterPolicy(
     inputEnabled: raw.inputEnabled ?? !options.legacyInputDisabled,
     outputEnabled: raw.outputEnabled ?? true,
     supportedOutputs: normalizePayloadKinds(raw.supportedOutputs, adapterType),
-    allowedFileRoots: normalizePathList(raw.allowedFileRoots)
+    allowedFileRoots: normalizePathList(raw.allowedFileRoots),
+    messageGrouping: normalizeMessageGroupingPolicy(raw.messageGrouping, adapterType)
   };
 }
 
@@ -743,6 +854,17 @@ function normalizeAgentAdaptersFallback(adapters: AgentAdapterType[] | undefined
   return unique;
 }
 
+export function resolvePrimaryAgentAdapter(
+  agentAdapters: readonly AgentAdapterType[] | undefined,
+  requestedPrimary: unknown
+): AgentAdapterType | undefined {
+  const adapters = agentAdapters ?? ["codex"];
+  const requested = agentAdapterValues.has(requestedPrimary as AgentAdapterType)
+    ? requestedPrimary as AgentAdapterType
+    : undefined;
+  return requested && adapters.includes(requested) ? requested : adapters[0];
+}
+
 function normalizePipelineFallback(pipeline: PipelineDefinition | undefined): PipelineDefinition | undefined {
   if (!pipeline) return undefined;
   return {
@@ -830,6 +952,8 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const normalizeAgentAdapters = options.normalizeAgentAdapters ?? normalizeAgentAdaptersFallback;
   const normalizePipeline = options.normalizePipeline ?? normalizePipelineFallback;
   const agentAdapters = normalizeAgentAdapters(definition.agentAdapters);
+  const primaryAgentAdapter = resolvePrimaryAgentAdapter(agentAdapters, definition.primaryAgentAdapter);
+  const messageProcessingAgents = normalizeMessageProcessingAgentPolicies(definition.messageProcessingAgents, agentAdapters);
   const pipelinePreset = typeof definition.pipelinePreset === "string" && definition.pipelinePreset.trim()
     ? definition.pipelinePreset.trim()
     : activeMessageAdapters.includes("speech") ? "voice_chat" : undefined;
@@ -862,6 +986,8 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     messageInputsDisabled,
     messageAdapterPolicies,
     agentAdapters,
+    primaryAgentAdapter,
+    messageProcessingAgents,
     agentModel: definition.agentModel?.trim() || "",
     pipelinePreset,
     pipeline,
@@ -986,6 +1112,9 @@ export function collectGatewayPortClaims(
 export function validateGatewayPortConflicts(gateways: GatewayDefinition[]): void {
   const ports = new Map<number, GatewayPortClaim>();
   for (const claim of collectGatewayPortClaims(gateways)) {
+    // NapCat HTTP is an outbound service endpoint, not a listener owned by a
+    // Route. Multiple Routes may intentionally use the same NapCat instance.
+    if (claim.kind === "napcat-http") continue;
     const existing = ports.get(claim.port);
     if (existing) {
       throw new Error(`Port conflict: ${claim.label} uses ${claim.port}, already used by ${existing.label}.`);
@@ -1006,7 +1135,6 @@ export function nextAvailablePort(used: Set<number>, preferred: number): number 
 
 export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPort = 8790): void {
   const usedIngress = new Set<number>();
-  const usedHttp = new Set<number>();
   if (Number.isInteger(managerPort) && managerPort >= 1 && managerPort <= 65535) {
     usedIngress.add(managerPort);
   }
@@ -1020,19 +1148,13 @@ export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPor
     return nextAvailablePort(usedIngress, Math.max(1, Math.min(65535, Number(fallback) || 8790)));
   };
 
-  const assignHttpUrl = (value: string | undefined, fallbackPort: number): string => {
+  const normalizeHttpUrl = (value: string | undefined, fallbackPort: number): string => {
     let parsed: URL;
     try {
       parsed = new URL(value || `http://127.0.0.1:${fallbackPort}`);
     } catch {
       parsed = new URL(`http://127.0.0.1:${fallbackPort}`);
     }
-    const current = portFromUrl(parsed.toString());
-    if (current && !usedHttp.has(current)) {
-      usedHttp.add(current);
-      return parsed.toString().replace(/\/$/, "");
-    }
-    parsed.port = String(nextAvailablePort(usedHttp, current || fallbackPort));
     return parsed.toString().replace(/\/$/, "");
   };
 
@@ -1045,7 +1167,7 @@ export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPor
     if (activeAdapters.has("napcat") && enabledNapcatInstances.length > 0) {
       for (const instance of enabledNapcatInstances) {
         instance.gatewayPort = assignIngress(instance.gatewayPort, Number(gateway.gatewayPort || 8790) + 1);
-        instance.httpUrl = assignHttpUrl(instance.httpUrl || gateway.napcatHttpUrl, 3000);
+        instance.httpUrl = normalizeHttpUrl(instance.httpUrl || gateway.napcatHttpUrl, 3000);
       }
       syncPrimaryNapCatInstanceFields(gateway, gateway.napcatInstances ?? enabledNapcatInstances);
     } else if (activeAdapters.has("napcat")) {

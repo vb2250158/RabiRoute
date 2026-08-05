@@ -87,10 +87,10 @@ Codex/ChatGPT Desktop 同时是用户可见宿主和任务 owner；Codex 是 age
 
 当前实现：
 
-- 已验证：NapCat / OneBot、Heartbeat、Manager 内置角色面板和 Manual trigger。
+- 已验证：NapCat / OneBot、Heartbeat、Manager 内置角色面板和 Manual trigger。人格目录与跨人格投递已通过自动化合同测试，但尚未完成真实双人格 Desktop 验收。
 - 实验支持：Remote Agent、RabiSpeech 语音消息端、小爱、RabiLink、通用 Webhook 和 WeCom。FenneNote 已退役，只保留旧配置兼容。
 - NapCat HTTP Server 用于状态查询和外发；NapCat 插件只负责页面入口、配置桥接和启动 Manager。
-- Remote Agent 与角色面板是 Manager 级入口，不应被误写成 Gateway 子进程 listener。
+- Remote Agent、角色面板和 `/api/personas` 是 Manager 级入口，不应被误写成 Gateway 子进程 listener。跨人格消息经过与本地角色面板相同的固定 `role_panel_message` 投递服务；发送身份由当前 Route 与人格共同绑定的凭据校验，Manager 不让调用方只靠正文声明发送者。
 
 未来可扩展：
 

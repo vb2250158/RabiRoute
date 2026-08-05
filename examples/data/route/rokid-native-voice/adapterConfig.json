@@ -44,6 +44,7 @@
   "agentAdapters": [
     "codex"
   ],
+  "primaryAgentAdapter": "codex",
   "dataDir": "./data/route/rokid-native-voice",
   "configName": "rokid-native-voice",
   "agentRoleId": "Rabi",

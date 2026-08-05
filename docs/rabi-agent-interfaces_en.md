@@ -82,6 +82,46 @@ POST  /api/roles/:roleId/health/observations
 
 `state` and `summary` include staleness. An Agent must not interpret `unknown` or stale data as a definite sleeping, awake, or medical state. Relay observations that match heart-rate or sleep rules become `wearable_health_alert` Agent events. Wearable authentication keys, Relay tokens, and raw sensitive metadata must never be submitted as observation fields. See [`rabilink-wearable-health_en.md`](./rabilink-wearable-health_en.md) for the full contract and acceptance boundary.
 
+### Discovering and messaging other personas
+
+“Persona” is the user-facing and Agent-facing term. Existing `roleId`, `/api/roles/*`, and `data/roles/` names remain as compatibility-oriented internal identifiers. Call the dedicated directory instead of decoding Route-management payloads:
+
+```http
+GET /api/personas
+GET /api/personas?addressable=true
+GET /api/personas/:personaId
+```
+
+The directory returns each persona's `personaId`, display name, reachability, and bound Routes. `addressable=true` keeps only personas with at least one enabled Route. A persona with exactly one enabled Route also exposes `defaultRouteId`.
+
+To contact another persona, address the target persona and read `runtimeRouteId` plus `personaMessagingCapability` from the current `AgentPacket.replyContext`. The capability is bound to both the Route and persona and cannot be reused as another identity:
+
+```http
+POST /api/personas/:targetPersonaId/messages
+Content-Type: application/json
+
+{
+  "deliveryId": "stable-unique-delivery-id",
+  "sourceRouteId": "source-route",
+  "sourceCapability": "value-from-replyContext.personaMessagingCapability",
+  "targetRouteId": "optional-when-target-has-one-enabled-route",
+  "conversationId": "optional-stable-conversation-id",
+  "inReplyToMessageId": "optional-message-id-being-answered",
+  "hopCount": 0,
+  "text": "Please check today's build status."
+}
+```
+
+`deliveryId` is required and must remain stable for one business delivery. The same ID and request execute once and retries return the completed result; the same ID with changed content returns `409`. If the outcome is uncertain, query the receipt before creating a new ID:
+
+```http
+GET /api/personas/messages/receipts/:deliveryId
+```
+
+Both source and target Routes must be enabled. If the target persona has multiple enabled Routes, `targetRouteId` is required and Manager does not guess. Self-delivery is rejected. `hopCount` must be a non-negative integer and cannot exceed `8`. HTTP `202` with `status=delivered` means the target handler accepted the message through that Route's existing `role_panel_message` path. The service records `status=sent` only after handler acceptance; a failed timeline entry records an attempt only.
+
+Cross-persona delivery is explicitly one-way and does not create an automatic two-way chat. The target persona's ordinary reply remains in its own role panel. To answer the source persona, it must POST again with a new reply `deliveryId`, reuse the received `personaConversationId`, set `inReplyToMessageId` to the current message ID, and increment `personaMessageHopCount`. Stop when `personaMessageMaxHops` would be exceeded.
+
 ## Normal reply API
 
 Handlers should return user-facing chat replies through RabiRoute:
@@ -266,7 +306,7 @@ POST /api/agent/threads
 POST actions:
 
 - `list`: list matching threads, optionally restricted by a configured cwd.
-- `read`: read a thread by `threadId`.
+- `read`: read a thread by `threadId`. The returned task name always comes from the Codex left-sidebar index; SQLite `threads.title`, an initialization prompt, or a stale Route-cached name cannot override it.
 - `resolve`: reuse a valid saved ID when its workspace matches and the task is unarchived; mutable Desktop/SQLite title metadata is not identity, and an overlong display title cannot invalidate that binding. An archived saved binding returns `409 archived` and never creates a replacement. Only when the ID is empty, invalid, or genuinely missing, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied maximum returns candidates for selection.
 - `create`: bootstrap an empty task in a configured workspace, then deliver any initial prompt to that task's Desktop owner through Desktop IPC. Codex task names are limited to 240 JavaScript code units; RabiRoute safely truncates longer inputs with an ellipsis and returns the actual created name for persistence.
 - `rename`: rename a Desktop task by full `threadId` plus configured cwd without changing its identity. Persistent plan-assistant slots use this when expanding from one unnumbered assistant to multiple numbered assistants.
@@ -299,12 +339,18 @@ Callers must not edit UUIDs manually. Selecting a different task supplies its ID
   "action": "send",
   "threadId": "019f0000-0000-7000-8000-000000000001",
   "cwd": "C:/Path/To/Your/Project",
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000002",
+  "sourceAgentType": "plan_secretary",
   "prompt": "Continue with the new constraints and evidence.",
   "sandbox": "workspace-write"
 }
 ```
 
-`create` and `send` accept only a workspace already configured in RabiRoute. The `sandbox` field remains for interface compatibility; it does not override the target Desktop task's model, tools, sandbox, or approvals. Those capabilities belong to the Desktop owner. If Desktop is unavailable, IPC is not ready, or the task cannot be loaded, the call fails closed and does not fall back to app-server, CLI, or another Runtime.
+An Agent sending to another Agent task must provide its own complete `sourceThreadId`. `sourceAgentType` accepts `primary_persona`, `message_processing`, `plan_secretary`, `plan_agent`, or the generic `agent`. Manager first verifies that Desktop still has the same unarchived task ID, then obtains the current left-sidebar name through the single task read model in `codexDesktopBridge.ts`. `agentThreads.ts`, Message Agents, heartbeat, and provenance templates must not read or override another task-name copy. It prepends the source Agent, task name, session ID, and workspace to the delivered text. The sender never supplies the source task name. Ordinary RabiRoute messages, initialization turns, and system notices are not Agent-to-Agent sends and may omit both fields.
+
+`create` and `send` accept only a workspace already configured in RabiRoute. Agent-to-Agent sends also require a verifiable source task ID; `sourceAgentType` declares the sender's current responsibility, while Desktop remains authoritative for the task name and session ID. The `sandbox` field remains for interface compatibility; it does not override the target Desktop task's model, tools, sandbox, or approvals. Those capabilities belong to the Desktop owner. If Desktop is unavailable, IPC is not ready, or the task cannot be loaded, the call fails closed and does not fall back to app-server, CLI, or another Runtime.
+
+Agent-to-Agent prompt text must be a newly composed handoff for the target task. Manager rejects bodies containing `[rabi:bind]`, Message Agent initialization, or Plan Secretary initialization, and rejects a handoff whose source and target IDs are identical. A complete injected prompt must never be copied across tasks. The Message Agent pool also refuses to initialize or deliver when task resolution returns the Primary Persona task ID.
 
 ## Plan API
 
@@ -364,6 +410,8 @@ PATCH /api/roles/:roleId/plans/:planId
 ```
 
 New plans must provide an ordered `steps` array. Write APIs still accept only the five top-level lifecycle states above; Manager derives `presentation.status / tone / sortBucket / views / palette` and list-level `counts.stages`, so Agents and clients must not write presentation stages. A current step waiting for approval, plan confirmation, or authorization remains in progress and carries a structured `approvalRequest` plus `waitingFor`. Only a complete actionable contract with `responseStatus=pending` makes Manager derive the `isBlocked=true` compatibility projection and `Awaiting approval`. A structured current `qa-* / verify-*` step becomes `Awaiting QA acceptance`; authoritative wait fields may become `Awaiting environment`, `Awaiting assets`, `Awaiting information`, or `Awaiting external response`; a package/build current step with completed prior work and an explicit package wait becomes `Awaiting shared package`; other in-progress plans become `Executing`. Missing contract fields produce `incomplete/enabled=false`; the plan remains in progress and formal approval stays disabled.
+
+Manager also owns the refined display rules. A real runner, MCP service, device, or listener outage becomes `Waiting for test environment` only when no CLI, fallback validation, or retry remains. An explicit prohibition on Unity GUI, MCP, menus, or PlayMode becomes `Waiting for renewed authorization`. A QA stage additionally requires a real receipt for the current send and no remaining action except the verdict; a missing receipt with a send or repair path stays `Executing`. Target-package identity or inclusion evidence remains blue `Awaiting shared package`, while assets, information, and owner replies do not become test-environment waits.
 
 Only plans that change project content, such as code, prefabs, assets, or configuration, should be forced through `implementation/development validation → Awaiting shared package → Awaiting QA acceptance → complete on QA pass; return to implementation on failure`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or `qa-* / verify-*` steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 

@@ -352,17 +352,7 @@ def run(
         previous_context = state["context"]
         previous_role_messages = state["role_messages"]
         state["manager"] = result.manager
-        if lifecycle.observe(state["manager"]):
-            status_action.setText("状态：Manager 已离线，正在退出 RabiRoute 桌面入口")
-            _show_message(
-                tray,
-                tray_available,
-                "RabiRoute / 当前人格",
-                "RabiRoute manager 已离线，桌面入口将退出。",
-                QSystemTrayIcon.Warning,
-                3000,
-            )
-            QTimer.singleShot(1500, app.quit)
+        lifecycle.observe(state["manager"])
         selected_gateway = result.selected_gateway
         if result.plan_snapshot is not None:
             state["plans"] = result.plan_snapshot
@@ -535,10 +525,6 @@ def _quit(
         2500,
     )
     def completed(_task: QtAsyncTask, shutdown_requested: bool) -> None:
-        if manager_proc is not None and manager_proc.poll() is None:
-            # HTTP shutdown may be slow or fail for the manager started by this process.
-            manager_proc.terminate()
-            shutdown_requested = True
         if not shutdown_requested:
             app.setProperty("rabirouteQuitPending", False)
             _show_message(

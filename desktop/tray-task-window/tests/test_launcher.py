@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 TRAY_ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +19,21 @@ SPEC.loader.exec_module(LAUNCHER)
 
 
 class LauncherNodeResolutionTest(unittest.TestCase):
+    def test_packaged_tray_marks_running_before_starting_supervision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            response = MagicMock()
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+
+            with patch.object(LAUNCHER.urllib.request, "urlopen", return_value=response) as urlopen:
+                result = LAUNCHER._mark_desktop_running(project_root, "http://127.0.0.1:8790")
+
+            self.assertTrue(result)
+            request = urlopen.call_args.args[0]
+            self.assertEqual(request.full_url, "http://127.0.0.1:8790/manager/desktop-lifecycle/start")
+            self.assertIn(b'"source": "packaged-tray"', request.data)
+
     def test_packaged_runtime_prefers_project_portable_node_over_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)

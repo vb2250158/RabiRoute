@@ -62,6 +62,14 @@ A role is not a handler process. Codex, Copilot CLI, AstrBot, and Marvis are han
 
 Do not place NapCat connection logic into the persona, or make an Agent adapter define what counts as a route.
 
+## How personas contact each other
+
+Use **persona** as the public term for a reusable identity, behavior, and memory owner. Existing `roleId`, `/api/roles/*`, and `data/roles/` names remain compatibility internals and are not migrated by this feature.
+
+An Agent may query `/api/personas?addressable=true` and then explicitly deliver to another persona through one of its enabled Routes. The sender is not a free request-body claim: Manager verifies the capability supplied by the current AgentPacket and bound to both its Route and persona. Directory responses contain display names and Route reachability, never persona bodies, local paths, or capabilities.
+
+This is one-way delivery, not an automatically created two-way chat. The target persona's ordinary reply stays in its role panel. To answer the source, it must explicitly deliver back, reuse the conversation ID, reference the received message, and increment the hop count. A stable `deliveryId` prevents retries from creating duplicate work. Self-delivery, more than eight hops, or an ambiguous target Route is rejected.
+
 ## Persona routing templates
 
 Templates should add decision guidance, not reconstruct the entire event. RabiRoute already injects event fields, role/log paths, recent context, role-knowledge indexes, and reply instructions.

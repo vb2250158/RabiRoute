@@ -506,6 +506,12 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
   const limit = decision.route.recentMessageLimits
     ? recentMessageLimitFor(decision.route.recentMessageLimits, scope.endpoint)
     : Math.max(0, Math.min(200, Math.floor(Number(decision.route.recentMessageLimit) || 0)));
+  const excludedMessageIds = new Set<string>();
+  if (decision.record.messageId != null) excludedMessageIds.add(String(decision.record.messageId));
+  for (const messageId of decision.record.messageGroupMessageIds ?? []) {
+    const normalized = String(messageId).trim();
+    if (normalized) excludedMessageIds.add(normalized);
+  }
   return {
     endpoint: scope.endpoint,
     transport: scope.record.transport,
@@ -515,7 +521,7 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
       limit,
       adapter: scope.endpoint,
       conversationKey: scope.record.conversationKey,
-      excludedMessageIds: decision.record.messageId == null ? [] : [String(decision.record.messageId)]
+      excludedMessageIds: [...excludedMessageIds]
     })
   };
 }
@@ -740,6 +746,8 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     routeKind: decision.routeKind,
     targetType,
     messageId: record.messageId,
+    messageGroupId: record.messageGroupId,
+    messageGroupMessageIds: record.messageGroupMessageIds,
     groupId: isGroup ? record.groupId : wecomGroupId ?? feishuChatId,
     userId: "userId" in record ? record.userId : undefined,
     targetGroupId: config.targetGroupId || undefined,
@@ -747,6 +755,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     logicalAdapter: recentContext.endpoint,
     transport: recentContext.transport,
     conversationKey: recentContext.conversationKey,
+    personaMessagingCapability: config.personaMessagingCapability || undefined,
     adapterType: isPlanFeedback ? "planFeedback" : isRolePanel ? "rolePanel" : "adapterType" in record ? record.adapterType : undefined,
     voiceprintId: isVoiceTranscript ? record.voiceprintId : undefined,
     voiceprintIds: isVoiceTranscript ? voiceprintIds : undefined,

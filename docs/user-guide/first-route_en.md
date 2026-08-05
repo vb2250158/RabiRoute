@@ -31,11 +31,9 @@ Select **Quick setup** at the bottom of the sidebar. RibiWebGUI also opens this 
 
 Under **Select a message source**, choose **Scheduled trigger**. Do not add QQ, Webhook, or experimental adapters yet; the first run should test one short path.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 02 | Quick setup: message source</strong>
-  <span>Suggested frame: step one with Scheduled trigger selected and the three-step progress indicator visible.</span>
-  <span>Callouts: Scheduled trigger, skip heartbeat while task is busy, Next.</span>
-</div>
+![Message Adapters showing the current Route's message inputs and Codex handler](../../assets/screenshots/webgui-adapters-en.png)
+
+After Quick setup, use **Message Adapters** to confirm that Scheduled trigger appears in the input list and the primary Agent is Codex.
 
 ## Step 2: bind a Codex task
 
@@ -49,11 +47,6 @@ Complete these fields:
 
 RabiRoute stores the complete task ID. A Desktop rename or completed goal does not create a duplicate while the ID and workspace remain valid.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 03 | Quick setup: bind Codex</strong>
-  <span>Suggested frame: Codex selected with scan status, project directory, and task selector visible.</span>
-  <span>Callouts: Verified, project directory, task name and activity time, Rescan.</span>
-</div>
 
 ## Step 3: confirm the persona
 
@@ -78,11 +71,9 @@ Open **Log Diagnostics**. Under **Manual trigger**, find a `heartbeat` or `manua
 
 A manual trigger enters the real delivery path. It is not a preview: it writes runtime records and performs a real handler delivery.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 04 | First successful delivery</strong>
-  <span>Suggested frame: diagnosis summary, runtime, Codex Desktop task, and manual-trigger result together.</span>
-  <span>Callouts: Path healthy, Codex Desktop IPC, last success, trigger succeeded.</span>
-</div>
+![Log diagnostics starting with the diagnosis summary, runtime state, and message-input state](../../assets/screenshots/webgui-diagnostics-en.png)
+
+The screenshot uses a documentation sample that is stopped and not bound to a real task, so it shows **Disabled** and **Not bound**. After your first delivery, these areas should show the real runtime state, bound task, and most recent success time.
 
 ## Verify success
 

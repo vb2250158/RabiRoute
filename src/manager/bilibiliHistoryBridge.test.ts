@@ -16,8 +16,20 @@ async function fixture() {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    await fetch(baseUrl);
+  } catch (error) {
+    const cause = (error as { cause?: { message?: unknown } }).cause;
+    if (String(cause?.message || "").toLowerCase() === "bad port") {
+      await new Promise<void>((resolve, reject) => server.close(closeError => closeError ? reject(closeError) : resolve()));
+      fs.rmSync(dir, { recursive: true, force: true });
+      return fixture();
+    }
+    throw error;
+  }
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     dir,
     close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   };

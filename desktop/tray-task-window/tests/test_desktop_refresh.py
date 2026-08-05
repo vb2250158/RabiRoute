@@ -172,7 +172,7 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         result = service.load(
             ManagerSnapshot(False, manager.manager_url, {}, []),
             "route-1",
-            include_role_messages=True,
+            include_role_details=True,
         )
 
         self.assertTrue(result.manager.connected)
@@ -219,19 +219,20 @@ class DesktopRefreshServiceTest(unittest.TestCase):
             ],
         )
 
-    def test_hidden_panel_skips_chat_api(self) -> None:
+    def test_hidden_panel_requests_only_the_lightweight_manager_snapshot(self) -> None:
         manager = _ApiManager()
         service = DesktopRefreshService(manager, Path("C:/repo"))  # type: ignore[arg-type]
 
         result = service.load(
             ManagerSnapshot(False, manager.manager_url, {}, []),
             "route-1",
-            include_role_messages=False,
+            include_role_details=False,
         )
 
         self.assertIsNone(result.role_messages)
-        self.assertNotIn(("messages", "Rabi"), manager.calls)
-        self.assertNotIn(("avatar", "Rabi"), manager.calls)
+        self.assertIsNone(result.plan_snapshot)
+        self.assertIsNone(result.context_snapshot)
+        self.assertEqual(manager.calls, [("snapshot", "")])
 
     def test_role_api_failure_keeps_manager_online_and_preserves_cached_ui_data(self) -> None:
         manager = _ApiManager()
@@ -241,7 +242,7 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         result = service.load(
             ManagerSnapshot(False, manager.manager_url, {}, []),
             "route-1",
-            include_role_messages=True,
+            include_role_details=True,
         )
 
         self.assertTrue(result.manager.connected)

@@ -16,7 +16,12 @@
       ],
       "allowedFileRoots": [
         "C:/Path/To/Your/Project/ReleasePkg"
-      ]
+      ],
+      "messageGrouping": {
+        "settleSeconds": 6,
+        "incompleteSettleSeconds": 12,
+        "maxWaitSeconds": 20
+      }
     },
     "heartbeat": {
       "inputEnabled": true,
@@ -41,8 +46,17 @@
   "agentAdapters": [
     "codex"
   ],
+  "primaryAgentAdapter": "codex",
+  "messageProcessingAgents": {
+    "codex": {
+      "enabled": false,
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "medium"
+    }
+  },
   "dataDir": "./data/route/main",
   "configName": "main",
+  "name": "Rabi Demo",
   "agentRoleId": "Rabi",
   "rolesDir": "./data/roles"
 }

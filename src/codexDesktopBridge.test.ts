@@ -5,9 +5,29 @@ import path from "node:path";
 import test from "node:test";
 import {
   CodexDesktopBridge,
+  applyCodexSidebarTaskNamesForTest,
   codexDesktopDeepLinkForTest,
   listCodexDesktopThreadsFromRowsForTest
 } from "./codexDesktopBridge.js";
+
+test("Desktop left sidebar is the only displayed task-name source", () => {
+  const id = "019f0000-0000-7000-8000-000000000065";
+  const result = applyCodexSidebarTaskNamesForTest([{
+    id,
+    title: "[rabi:bind XinghaiBuilder]\n[消息处理 Agent 初始化]",
+    cwd: "C:\\Work\\PangHu",
+    rolloutPath: "task.jsonl",
+    firstUserMessage: "[rabi:bind XinghaiBuilder]",
+    updatedAt: "2026-08-04T08:00:00.000Z"
+  }], [
+    JSON.stringify({ id, thread_name: "星海建造师 策划 程序 协助处理消息3", updated_at: "2026-08-04T08:01:00.000Z" }),
+    JSON.stringify({ id, thread_name: "旧侧栏名称", updated_at: "2026-08-04T07:59:00.000Z" })
+  ].join("\n"));
+
+  assert.equal(result[0]?.id, id);
+  assert.equal(result[0]?.title, "星海建造师 策划 程序 协助处理消息3");
+  assert.equal(result[0]?.updatedAt, "2026-08-04T08:01:00.000Z");
+});
 
 type IpcRequest = {
   type?: string;
@@ -15,6 +35,7 @@ type IpcRequest = {
   method?: string;
   params?: {
     conversationId?: string;
+    turnStartParams?: Record<string, any>;
   };
 };
 
@@ -201,6 +222,75 @@ test("Desktop bridge starts a new turn when the task is idle", async () => {
       "thread-follower-steer-turn",
       "thread-follower-start-turn"
     ]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Desktop bridge drops connection-scoped active state when it closes", async () => {
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+  const threadId = "019f0000-0000-7000-8000-000000000053";
+
+  try {
+    await bridge.deliver({
+      threadId,
+      prompt: "start then close",
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    });
+    assert.equal(bridge.isThreadActive(threadId), true);
+    bridge.close();
+    assert.equal(bridge.isThreadActive(threadId), false);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Desktop bridge starts a message processing turn with the configured Luna model", async () => {
+  let turnStartParams: Record<string, any> | undefined;
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    if (request.method === "thread-follower-start-turn") turnStartParams = request.params?.turnStartParams;
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+
+  try {
+    await bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000052",
+      prompt: "message group",
+      cwd: process.cwd(),
+      sandbox: "workspace-write",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium"
+    });
+
+    assert.equal(turnStartParams?.model, "gpt-5.6-luna");
+    assert.equal(turnStartParams?.effort, "medium");
+    assert.deepEqual(turnStartParams?.collaborationMode, {
+      mode: "default",
+      settings: {
+        model: "gpt-5.6-luna",
+        reasoning_effort: "medium",
+        developer_instructions: ""
+      }
+    });
   } finally {
     bridge.close();
     await router.close();

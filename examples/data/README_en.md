@@ -12,7 +12,7 @@ When either `data/route` or `data/roles` is missing, the Manager copies the corr
 
 The pack provides:
 
-- A complete `route/main/adapterConfig.json` for QQ/NapCat and heartbeat input.
+- A complete `route/main/adapterConfig.json` named **Rabi Demo** for QQ/NapCat and heartbeat input. Its `agentRoleId: "Rabi"` binds the Rabi persona.
 - The default `roles/Rabi` persona and the RabiLink-specific `roles/RabiActive` persona.
 - `personaConfig.json` message rules and recent-message limits.
 - Public plan and memory directory structures.

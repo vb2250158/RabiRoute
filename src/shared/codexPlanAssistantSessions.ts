@@ -67,6 +67,8 @@ export function codexPlanAssistantInitializationPrompt(input: {
   roleId: string;
   sourceThreadId: string;
   sourceThreadName: string;
+  assistantThreadId: string;
+  assistantThreadName: string;
   workspace: string;
   count: number;
   index: number;
@@ -80,6 +82,8 @@ export function codexPlanAssistantInitializationPrompt(input: {
     "[计划协助会话初始化]",
     `主会话：${input.sourceThreadName}`,
     `主会话 ID：${input.sourceThreadId}`,
+    `本秘书任务：${input.assistantThreadName}`,
+    `本秘书会话 ID：${input.assistantThreadId}`,
     `工作目录：${input.workspace}`,
     `协助槽位：${index}/${count}`,
     `Rabi Manager：${managerBaseUrl}`,
@@ -91,6 +95,9 @@ export function codexPlanAssistantInitializationPrompt(input: {
     "为提高控制面效率，你可以为计划盘点、任务查重、状态核对和结果摘要创建临时子 Agent；这些子 Agent 同样不得执行业务工作或修改业务文件。真正的业务任务可以在自身权限和审批边界内创建业务子 Agent。",
     "同一时间可以管理主会话分配的一组计划：同一 planId 同时只有一个控制面 writer，不同计划可以并行；一个计划的 active cycle 不得阻塞其它计划。共享账本只在锁内合并目标记录并原子写入。每个计划仍只有一个独立业务 taskBinding。",
     "阶段回传必须让主会话可以直接跟进：明确写出已更新的计划与记忆、业务 taskBinding 的真实状态、已发送的续投、下一个可验证动作、剩余风险和等待对象。",
+    `本秘书向主人格或业务 Agent 投递时，必须通过 Manager 线程桥填写 sourceThreadId=${input.assistantThreadId}、sourceAgentType=plan_secretary。Manager 会按会话 ID 核对并显示真实来源任务。委托业务 Agent 时，还要明确要求对方回传时填写业务任务自己的 sourceThreadId 和 sourceAgentType=plan_agent。`,
+    `本秘书任务的 Codex 最终输出只供内部查看，主人格和用户不会自动看到。需要主人格复核、向用户提问、执行外发或继续调度时，必须实际调用 Manager 线程桥回传到 threadId=${input.sourceThreadId}，并取得接受回执；不得把待确认问题只留在最终输出。`,
+    "如果本轮没有需要主人格或用户处理的内容，最终输出明确写“处理结果：仅更新控制面，无需外部通知”，不要生成像是已经对用户说过的话。",
     "回传阶段结果不代表本秘书任务永久结束。主会话会继续向本秘书槽分配控制面工作；收到后继续管理计划和业务任务，不把业务实现迁入秘书会话。",
     `计划接口：${managerBaseUrl}/api/roles/${encodeURIComponent(input.roleId)}/plans`,
     `主会话续投接口：${managerBaseUrl}/api/agent/threads（action=send，threadId=${input.sourceThreadId}）`,

@@ -12,6 +12,7 @@ This is the source of truth for Windows desktop startup and packaging. A complet
 
 ```text
 RabiRoute-Tray.exe          tray/task-panel entry and startup supervisor
+scripts/watch-rabiroute-desktop-lifecycle.ps1  Manager/tray process-pair supervisor
 dist/manager.js             Node Manager entry
 dist/**/*.js                gateway, adapter, routing, and backend output
 ribiwebgui/dist/            RibiWebGUI static build
@@ -31,9 +32,12 @@ Start-RabiRoute-Tray.bat or RabiRoute-Tray.exe
      -> static WebGUI and HTTP API
      -> managed gateway subprocesses
   -> Qt tray/task panel connects to http://127.0.0.1:8790
+  -> data/runtime/desktop-lifecycle-intent.json = running
+  -> watch-rabiroute-desktop-lifecycle.ps1
+     -> repairs the Manager + tray pair through the same launcher
 ```
 
-Choosing **Exit RabiRoute** asks the local Manager to shut down. The Manager stops managed gateways, closes its HTTP server, and exits before the tray process exits.
+Choosing **Exit RabiRoute** first makes Manager atomically persist `desiredState=stopped`, then stops managed gateways, closes HTTP, and exits before the tray exits. The supervisor observes `stopped` and terminates without resurrecting an intentional exit. An ordinary Manager reload does not change that intent.
 
 ## Double-click startup
 
@@ -57,6 +61,8 @@ The batch/PowerShell hybrid launcher:
 - Opens RibiWebGUI unless `-NoOpen` is passed.
 - Starts the Qt panel unless `-NoTray` is passed.
 - Reuses an existing Qt panel instead of creating a duplicate.
+- Persists a `running` desktop intent and starts one lightweight supervisor per workspace. It checks only Manager `/meta` and this project's tray process every five seconds, requires two consecutive misses, and then reuses the launcher's PID, port-ownership, and single-instance gates to restore the pair. It does not scan or repair QQ, NapCat, Routes, or adapters.
+- Keeps the tray alive and visibly offline during a transient Manager outage. A genuinely missing Manager or tray is repaired by the supervisor instead of one process silently outliving the other.
 
 Logs are written under:
 
@@ -72,6 +78,8 @@ manager-YYYYMMDD-HHMMSS.stdout.log
 manager-YYYYMMDD-HHMMSS.stderr.log
 tray-YYYYMMDD-HHMMSS.stdout.log
 tray-YYYYMMDD-HHMMSS.stderr.log
+desktop-lifecycle-supervisor.log
+desktop-lifecycle-supervisor.jsonl
 ```
 
 Useful commands:
@@ -92,9 +100,17 @@ The launcher does not start or stop QQ, NapCat, or unrelated processes. An unkno
 POST http://127.0.0.1:8790/manager/shutdown
 ```
 
-The endpoint is loopback-only because the Manager binds to `127.0.0.1`. It stops managed gateways, closes the server, and exits. `SIGINT` and `SIGTERM` use the same shutdown path.
+The endpoint is loopback-only. A tray request includes `{ "desktopExit": true }`; Manager persists `stopped` before acknowledging it, and a persistence failure leaves both the Manager and tray running. Installer, upgrade, and controlled-reload calls use an empty body, shutting down only Manager without changing the desktop intent. Both eventually use the same shutdown path as `SIGINT` and `SIGTERM`.
 
-The tray does not kill an arbitrary PID or become the Manager's permanent parent process. The portable Node core remains independently runnable.
+Full desktop startup records its intent through another loopback-only endpoint:
+
+```http
+POST http://127.0.0.1:8790/manager/desktop-lifecycle/start
+```
+
+The private `data/runtime/desktop-lifecycle-intent.json` file is the single runtime source of truth and is never committed. Missing, malformed, or non-`running` state makes the supervisor fail closed.
+
+The tray does not kill an arbitrary PID or become the Manager's permanent parent. A separate Windows supervisor owns only process pairing; the portable Node core remains independently runnable.
 
 ## macOS and Linux baseline
 
@@ -148,6 +164,7 @@ Packaging boundaries:
 - Frozen mode resolves the project root from `Path(sys.executable).parent`.
 - It reuses a running Manager and may rebuild a stale WebGUI.
 - If no Manager is running, it verifies/builds backend and frontend output before starting `node dist/manager.js`.
+- Once Manager is healthy, it records a `packaged-tray` running intent and starts the same lifecycle supervisor. Package recovery relaunches the packaged executable and does not depend on system Python.
 
 Before publishing a Windows package, verify that the backend and WebGUI are built, Node and dependencies are available, runtime data remains writable and external, and the binary has passed a separate privacy review for embedded build-machine paths. The desktop entry must never become the only supported startup path.
 

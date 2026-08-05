@@ -47,6 +47,8 @@ test("plan assistant initialization keeps the secretary control-only and preserv
     roleId: "XinghaiBuilder",
     sourceThreadId: "019fa314-2c07-7523-896f-9bb6b638054c",
     sourceThreadName: "建造师 策划 程序",
+    assistantThreadId: "019fa314-2c07-7523-896f-9bb6b638054d",
+    assistantThreadName: "建造师 策划 程序 协助处理计划1",
     workspace: "C:\\Data\\CottonProject\\RabiRoute",
     count: 2,
     index: 1
@@ -64,4 +66,10 @@ test("plan assistant initialization keeps the secretary control-only and preserv
   assert.match(prompt, /active cycle 不得阻塞其它计划/);
   assert.match(prompt, /同样不得执行业务工作/);
   assert.match(prompt, /业务 taskBinding 的真实状态/);
+  assert.match(prompt, /本秘书任务：建造师 策划 程序 协助处理计划1/);
+  assert.match(prompt, /sourceThreadId=019fa314-2c07-7523-896f-9bb6b638054d/);
+  assert.match(prompt, /sourceAgentType=plan_secretary/);
+  assert.match(prompt, /本秘书任务的 Codex 最终输出只供内部查看/);
+  assert.match(prompt, /必须实际调用 Manager 线程桥回传/);
+  assert.match(prompt, /不得把待确认问题只留在最终输出/);
 });

@@ -67,8 +67,6 @@ import {
 } from "./agentReplyIdempotency.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
-  appendRolePanelTimelineMessage,
-  createRolePanelMessageId,
   normalizeRolePanelAttachments,
   readRolePanelTimeline,
   type RolePanelAttachment
@@ -84,6 +82,7 @@ import {
   type CodexHookSettings,
   type CodexPlanAssistantSession,
   type MessageAdapterPolicies,
+  type MessageProcessingAgentPolicies,
   type RecentMessageLimits,
   type SpeechPushMode
 } from "../shared/gatewayConfigModel.js";
@@ -103,12 +102,18 @@ import {
 } from "../shared/routePaths.js";
 import { ManagerConfigRepository } from "./configRepository.js";
 import { collectWatchedConfigFiles, configFilesSnapshot } from "./configWatchSnapshot.js";
+import { configWatchDirectoryRules, configWatchEventMatches } from "./configWatchPolicy.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
+import { handleDesktopLifecycleApi } from "./desktopLifecycleRoutes.js";
 import { proxySpeechEventStream } from "./speechEventProxy.js";
 import { CodexHookContextService, type CodexHookContextRequest, type PlanTaskCompletionDelivery } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
 import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.js";
 import { deliverPlanApprovalFeedback } from "./planApprovalFeedbackDelivery.js";
+import {
+  ManualTriggerProcessRegistry,
+  type ManualTriggerLaunchResult
+} from "./manualTriggerProcess.js";
 import { consumePlanQaFeedback, type PlanQaTaskRequest } from "./planQaFeedback.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
@@ -141,6 +146,10 @@ import { runBoundedScans, type ScanDiagnostic } from "./scanController.js";
 import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
 import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
+import { handlePersonaMessagingApi } from "./personaMessagingRoutes.js";
+import { PersonaCatalog } from "./personaCatalog.js";
+import { loadPersonaMessageAuthority, type PersonaMessageAuthority } from "./personaMessageAuthority.js";
+import { deliverRolePanelMessage, RolePanelDeliveryError } from "./rolePanelDelivery.js";
 import { hostOwnedSpeechMessageCommand } from "./speechMessageIngress.js";
 import {
   ManagerSpeechControl,
@@ -310,6 +319,8 @@ type GatewayDefinition = {
   agentRoleId?: string;
   agentRoleFile?: string;
   agentAdapters?: AgentAdapterType[];
+  primaryAgentAdapter?: AgentAdapterType;
+  messageProcessingAgents?: MessageProcessingAgentPolicies;
   routeProfiles?: RouteProfileDefinition[];
   dataDir?: string;
   groupNotificationTemplate?: string;
@@ -591,10 +602,18 @@ function writeManagerConfig(cfg: ManagerConfig): void {
   configRepository.writeManagerConfig(cfg);
   routeRoot = configRepository.routeRoot;
   rolesRoot = configRepository.rolesRoot;
+  personaCatalog.invalidate();
 }
 
 let rolesRoot = configRepository.rolesRoot;
 let routeRoot = configRepository.routeRoot;
+const personaCatalog = new PersonaCatalog();
+let personaMessageAuthority: PersonaMessageAuthority | undefined;
+
+function currentPersonaMessageAuthority(): PersonaMessageAuthority {
+  personaMessageAuthority ??= loadPersonaMessageAuthority(rootDir);
+  return personaMessageAuthority;
+}
 const codexHookContextService = new CodexHookContextService({
   rolesRoot: () => rolesRoot,
   storePath: path.join(rootDir, "data", "codex-hook", "sessions.json"),
@@ -1048,6 +1067,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     codexCwd: configPathValue(definition.codexCwd),
     codexPlanAssistantSessions: definition.codexPlanAssistantSessions,
     codexHooks: definition.codexHooks,
+    messageProcessingAgents: definition.messageProcessingAgents,
     copilotThreadName: definition.copilotThreadName,
     copilotCwd: configPathValue(definition.copilotCwd),
     copilotCliBin: definition.copilotCliBin,
@@ -1061,6 +1081,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     agentRoleId: definition.agentRoleId,
     agentRoleFile: definition.agentRoleFile,
     agentAdapters: definition.agentAdapters,
+    primaryAgentAdapter: definition.primaryAgentAdapter,
     speechPushMode: definition.speechPushMode,
     routeVariables: definition.routeVariables
   };
@@ -1526,6 +1547,7 @@ function syncRunningGateways(): void {
 
 function reloadChangedConfig(reason: string): void {
   try {
+    personaCatalog.invalidate(rolesRoot);
     loadRuntimes();
     syncRunningGateways();
     reconcileSpeechMicrophone(reason);
@@ -1538,27 +1560,28 @@ function reloadChangedConfig(reason: string): void {
 type ConfigWatcher = { close(): void };
 
 function startConfigWatcher(): ConfigWatcher {
-  const watchers = new Map<string, fs.FSWatcher>();
+  const watchers = new Map<string, { watcher: fs.FSWatcher; signature: string }>();
   let debounceTimer: NodeJS.Timeout | null = null;
   let closed = false;
   let initialized = false;
   let refreshInFlight = false;
 
   const armDirectories = (files: string[]): void => {
-    const directories = new Set([
-      routeRoot,
-      rolesRoot,
-      ...files.map(file => path.dirname(file))
-    ].map(directory => path.resolve(directory)));
-    for (const [directory, watcher] of watchers) {
-      if (directories.has(directory)) continue;
-      watcher.close();
+    const rules = configWatchDirectoryRules(routeRoot, rolesRoot, files);
+    for (const [directory, entry] of watchers) {
+      if (rules.has(directory)) continue;
+      entry.watcher.close();
       watchers.delete(directory);
     }
-    for (const directory of directories) {
-      if (closed || watchers.has(directory)) continue;
+    for (const [directory, rule] of rules) {
+      if (closed) continue;
+      const signature = `${rule.discovery}|${[...rule.fileNames].sort().join("|")}`;
+      const existing = watchers.get(directory);
+      if (existing?.signature === signature) continue;
+      existing?.watcher.close();
       try {
-        const watcher = fs.watch(directory, () => {
+        const watcher = fs.watch(directory, (eventType, fileName) => {
+          if (!configWatchEventMatches(rule, eventType, fileName)) return;
           if (debounceTimer) clearTimeout(debounceTimer);
           debounceTimer = setTimeout(() => {
             debounceTimer = null;
@@ -1567,7 +1590,7 @@ function startConfigWatcher(): ConfigWatcher {
           }, 120);
         });
         watcher.on("error", error => console.warn(`Config watch failed for ${directory}:`, error));
-        watchers.set(directory, watcher);
+        watchers.set(directory, { watcher, signature });
       } catch (error) {
         console.warn(`Unable to watch config directory ${directory}:`, error);
       }
@@ -1610,7 +1633,7 @@ function startConfigWatcher(): ConfigWatcher {
     close(): void {
       closed = true;
       if (debounceTimer) clearTimeout(debounceTimer);
-      for (const watcher of watchers.values()) watcher.close();
+      for (const entry of watchers.values()) entry.watcher.close();
       watchers.clear();
     }
   };
@@ -1665,9 +1688,12 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     RABI_GUID: globalConfig.rabiGuid,
     GATEWAY_MANAGER_PORT: String(managerPort),
     GATEWAY_MANAGER_URL: `http://127.0.0.1:${managerPort}`,
+    PERSONA_MESSAGING_CAPABILITY: currentPersonaMessageAuthority().issue(definition.id, roleIdForDefinition(definition)),
     MESSAGE_ADAPTER_TYPE: runtimeAdapters[0] ?? "napcat",
     MESSAGE_ADAPTER_TYPES: JSON.stringify(runtimeAdapters),
+    MESSAGE_ADAPTER_POLICIES: JSON.stringify(definition.messageAdapterPolicies ?? {}),
     AGENT_MODEL: definition.agentModel?.trim() || "",
+    MESSAGE_PROCESSING_AGENTS: JSON.stringify(definition.messageProcessingAgents ?? {}),
     PIPELINE_PRESET: definition.pipelinePreset ?? "",
     PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
@@ -1729,6 +1755,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     AGENT_ROLE_ID: sanitizeRoleId(definition.agentRoleId),
     AGENT_ROLE_FILE: definition.agentRoleFile ?? "persona.md",
     AGENT_ADAPTERS: Array.isArray(definition.agentAdapters) ? definition.agentAdapters.join(",") : process.env.AGENT_ADAPTERS ?? "",
+    PRIMARY_AGENT_ADAPTER: definition.primaryAgentAdapter ?? "",
     TARGET_GROUP_ID: definition.targetGroupId ?? "",
     BOT_NICKNAME: process.env.BOT_NICKNAME ?? "QQ小助手",
     ROUTE_VARIABLES: definition.routeVariables ? JSON.stringify(definition.routeVariables) : "",
@@ -1847,7 +1874,7 @@ function roleInfoFor(
   includeContents = true,
   catalogCache?: Map<string, Array<Record<string, unknown>>>
 ): Record<string, unknown> {
-  return roleInfoPayload(rootDir, definition, { includeContents, catalogCache });
+  return roleInfoPayload(rootDir, definition, { includeContents, catalogCache, personaCatalog });
 }
 
 function readAgentStates(definition: GatewayDefinition): Record<string, unknown> {
@@ -2979,6 +3006,8 @@ function runtimeStatusWithRoleInfoCache(
     messageInputsDisabled: runtime.definition.messageInputsDisabled === true,
     messageAdapterPolicies: runtime.definition.messageAdapterPolicies ?? {},
     agentAdapters: runtime.definition.agentAdapters ?? ["codex"],
+    primaryAgentAdapter: runtime.definition.primaryAgentAdapter,
+    messageProcessingAgents: runtime.definition.messageProcessingAgents ?? {},
     pipelinePreset: runtime.definition.pipelinePreset,
     pipeline: runtime.definition.pipeline,
     gatewayPort: runtime.definition.gatewayPort,
@@ -3193,7 +3222,9 @@ type PlanFeedbackRequest = {
   notifyAgent?: boolean;
 };
 
-function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): Promise<void> {
+const manualTriggerProcesses = new ManualTriggerProcessRegistry();
+
+function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): ManualTriggerLaunchResult {
   const runtime = runtimes.get(id);
   if (!runtime) {
     throw new Error(`Gateway not found: ${id}`);
@@ -3214,35 +3245,45 @@ function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}
     args.push(`--manual-rule=${ruleId}`);
   }
   const command = childCommand(args);
-  appendLog(runtime, `manual trigger requested: ${triggerName}`);
-  return new Promise((resolve, reject) => {
-    const child = spawn(command.command, command.args, {
-      cwd: rootDir,
-      env: envFor(runtime.definition),
-      shell: command.shell,
-      windowsHide: true
-    });
-
-    child.stdout.on("data", (data) => {
-      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
-        appendLog(runtime, `manual trigger: ${line}`);
+  const processKey = `${id}:${routeKind}:${triggerId}`;
+  const result = manualTriggerProcesses.launch(
+    processKey,
+    () => {
+      appendLog(runtime, `manual trigger requested: ${triggerName}`);
+      return spawn(command.command, command.args, {
+        cwd: rootDir,
+        env: envFor(runtime.definition),
+        shell: command.shell,
+        windowsHide: true
+      });
+    },
+    {
+      onStdout: (text) => {
+        for (const line of text.split(/\r?\n/).filter(Boolean)) {
+          appendLog(runtime, `manual trigger: ${line}`);
+        }
+      },
+      onStderr: (text) => {
+        for (const line of text.split(/\r?\n/).filter(Boolean)) {
+          appendLog(runtime, `manual trigger error: ${line}`);
+        }
+      },
+      onError: (error) => {
+        appendLog(runtime, `manual trigger process error: ${error.message}`);
+      },
+      onExit: (code, signal) => {
+        if (code === 0) {
+          appendLog(runtime, `manual trigger completed: ${triggerName}`);
+          return;
+        }
+        appendLog(runtime, `manual trigger failed: code=${code ?? "null"} signal=${signal ?? "null"}`);
       }
-    });
-    child.stderr.on("data", (data) => {
-      for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
-        appendLog(runtime, `manual trigger error: ${line}`);
-      }
-    });
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      if (code === 0) {
-        appendLog(runtime, `manual trigger completed: ${triggerName}`);
-        resolve();
-        return;
-      }
-      reject(new Error(`manual trigger failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
-    });
-  });
+    }
+  );
+  if (result.alreadyRunning) {
+    appendLog(runtime, `manual trigger already running: ${triggerName}`);
+  }
+  return result;
 }
 
 function normalizeManualRouteKind(value: unknown): ForwardRouteKind {
@@ -3878,36 +3919,23 @@ function handleRolePanelApi(
         if (!text && attachments.length === 0) throw new Error("Missing role panel message text or attachment.");
         const roleId = roleIdForDefinition(runtime.definition);
         const roleDir = roleDirForDefinition(runtime.definition);
-        const messageId = createRolePanelMessageId("role-panel-user");
-        const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
-        const replyContext = {
-          runtimeRouteId: runtime.definition.id,
-          gatewayId: runtime.definition.id,
-          routeProfileId,
-          routeKind: "role_panel_message",
-          targetType: "role_panel",
-          adapterType: "rolePanel",
-          messageId,
-          roleId
-        };
-        const message = appendRolePanelTimelineMessage(roleDir, {
-          id: messageId,
-          time: Math.floor(Date.now() / 1000),
+        return deliverRolePanelMessage({
+          runtime,
           roleId,
-          gatewayId: runtime.definition.id,
-          routeProfileId,
-          direction: "user",
+          roleDir,
           sender: "本地用户",
           text,
           attachments,
-          status: "sent",
-          replyContext
+          messageIdPrefix: "role-panel-user",
+          deliver: triggerGatewayRolePanelMessage
         });
-        await triggerGatewayRolePanelMessage(runtime, messageId, text, attachments, replyContext);
-        return { roleId, message };
       })
       .then((payload) => jsonResponse(response, 202, { code: 0, ...payload }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      .catch((error) => jsonResponse(
+        response,
+        error instanceof RolePanelDeliveryError ? error.statusCode : 400,
+        { code: -1, status: "failed", message: error instanceof Error ? error.message : String(error) }
+      ));
     return true;
   }
 
@@ -5044,9 +5072,13 @@ function handleTriggerAction(request: http.IncomingMessage, pathname: string, re
 
   const [, id] = match;
   void readJsonBody<ManualTriggerRequest>(request)
-    .then((body) => triggerGatewayManualRule(decodeURIComponent(id), body))
-    .then(() => {
-      jsonResponse(response, 202, { code: 0, message: "manual trigger completed", data: [...runtimes.values()].map(runtimeStatus) });
+    .then((body) => {
+      const result = triggerGatewayManualRule(decodeURIComponent(id), body);
+      jsonResponse(response, 202, {
+        code: 0,
+        message: result.alreadyRunning ? "manual trigger already running" : "manual trigger accepted",
+        data: result
+      });
     })
     .catch((error) => {
       jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
@@ -5158,6 +5190,14 @@ export function handleManagerPersonaDomainApi(
 ): boolean {
   const activeRolesRoot = context.rolesRoot ?? rolesRoot;
   const resolveRoleDir = context.roleDir ?? roleDirForApi;
+  if (handlePersonaMessagingApi(request, requestUrl, response, {
+    rootDir,
+    rolesRoot: activeRolesRoot,
+    catalog: personaCatalog,
+    runtimes: () => [...runtimes.values()],
+    authorizeSource: (routeId, personaId, capability) => currentPersonaMessageAuthority().verify(routeId, personaId, capability),
+    deliver: triggerGatewayRolePanelMessage
+  })) return true;
   if (handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot, change => {
     // This is presentation metadata only: version plus a Manager-relative URL, never a role directory path.
     publishManagerEvent("persona_avatar_changed", change);
@@ -5458,9 +5498,7 @@ export async function startManager(): Promise<void> {
         jsonResponse(response, 200, { code: 0, message: "manager is already running" });
         return;
       }
-      if (request.method === "POST" && requestUrl.pathname === "/manager/shutdown") {
-        jsonResponse(response, 200, { code: 0, message: "manager shutdown requested" });
-        setTimeout(() => shutdownManager("api"), 20);
+      if (handleDesktopLifecycleApi(request, requestUrl, response, { rootDir, shutdownManager })) {
         return;
       }
       if (requestUrl.pathname === "/api/gateways") {

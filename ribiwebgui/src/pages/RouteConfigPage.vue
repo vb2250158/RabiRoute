@@ -7,10 +7,10 @@ import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { managerEventSource } from "../managerApi";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
-import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, setGatewayAdapters, toggleAdapterDisabled } from "../utils/gatewayHelpers";
+import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
-import { DEFAULT_CODEX_HOOK_SETTINGS } from "@shared/gatewayConfigModel";
+import { agentAdapterSupportsManagedTaskFeature, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
 import {
   codexPlanAssistantInitializationPrompt,
   codexPlanAssistantSessionTitles,
@@ -516,7 +516,25 @@ function scheduleSpeechConfigSave(): void {
 }
 
 function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type === "speech" || type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu" || type === "remoteAgent" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
+  return type !== "disabled";
+}
+
+function messageGroupingPolicy(type: MessageAdapterType) {
+  if (!gateway.value || type === "disabled") return undefined;
+  return messageAdapterPolicyFor(gateway.value, type).messageGrouping;
+}
+
+function usesAutomaticMessageGrouping(type: MessageAdapterType): boolean {
+  return type !== "disabled" && messageAdapterUsesAutomaticGrouping(type);
+}
+
+function setMessageGroupingPolicy(type: MessageAdapterType, patch: Record<string, unknown>): void {
+  if (!gateway.value || type === "disabled") return;
+  const current = messageAdapterPolicyFor(gateway.value, type);
+  setMessageAdapterPolicy(gateway.value, type, {
+    messageGrouping: { ...current.messageGrouping, ...patch }
+  });
+  store.touch();
 }
 
 function speechVariable(name: string, fallback = ""): string {
@@ -727,7 +745,6 @@ function allocateAvailablePort(used: Set<number>, base: number): number {
 
 function autoAssignNapcatPortsForAllGateways(): boolean {
   const usedWs = new Set<number>();
-  const usedHttp = new Set<number>();
   const usedWebui = new Set<number>();
   const claim = (value: unknown): void => {
     const port = Number(value || 0);
@@ -744,10 +761,6 @@ function autoAssignNapcatPortsForAllGateways(): boolean {
   }
 
   let changed = false;
-  const claimHttp = (url: string | undefined): void => {
-    const port = portFromLocalUrl(url);
-    if (Number.isInteger(port) && port >= 1 && port <= 65535) usedHttp.add(port);
-  };
   const claimWebui = (url: string | undefined): void => {
     const port = portFromLocalUrl(url);
     if (Number.isInteger(port) && port >= 1 && port <= 65535) usedWebui.add(port);
@@ -777,12 +790,12 @@ function autoAssignNapcatPortsForAllGateways(): boolean {
         usedWs.add(current);
       }
 
-      const httpPort = portFromLocalUrl(instance.httpUrl);
-      if (!httpPort || usedHttp.has(httpPort)) {
-        instance.httpUrl = nextAvailableLocalUrl(instance.httpUrl || item.napcatHttpUrl || "http://127.0.0.1:3000", usedHttp, 3000);
+      if (!portFromLocalUrl(instance.httpUrl)) {
+        const configuredHttpUrl = item.napcatHttpUrl;
+        instance.httpUrl = configuredHttpUrl && portFromLocalUrl(configuredHttpUrl)
+          ? configuredHttpUrl
+          : "http://127.0.0.1:3000";
         changed = true;
-      } else {
-        claimHttp(instance.httpUrl);
       }
 
       const webuiPort = portFromLocalUrl(instance.webuiUrl);
@@ -2632,13 +2645,18 @@ async function triggerHeartbeatNow(): Promise<void> {
   triggeringHeartbeat.value = true;
   heartbeatTriggerResult.value = null;
   try {
-    await store.manualTriggerGateway(gateway.value.id, {
+    const result = await store.manualTriggerGateway(gateway.value.id, {
       triggerId: "heartbeat-now",
       triggerName: "立即触发心跳",
       routeKind: "heartbeat",
       message: gateway.value.heartbeatMessage || "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。"
     });
-    heartbeatTriggerResult.value = { ok: true, message: "已提交一次心跳触发，请到运行日志查看投递结果。" };
+    heartbeatTriggerResult.value = {
+      ok: true,
+      message: result.alreadyRunning
+        ? "这次心跳已经在后台投递中，没有重复启动；请到运行日志查看最终结果。"
+        : "心跳已接受，正在后台投递；请到运行日志查看最终结果。"
+    };
   } catch (e: unknown) {
     heartbeatTriggerResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
   } finally {
@@ -3032,6 +3050,37 @@ const astrbotLoginResult = ref<{ ok: boolean; message: string } | null>(null);
 const agentTypes = computed(() => gateway.value?.agentAdapters ?? []);
 const visibleAgentItems = computed(() => agentDefs.filter(a => agentTypes.value.includes(a.type)));
 const availableAgentsToAdd = computed(() => agentDefs.filter(a => !agentTypes.value.includes(a.type)));
+const primaryAgentType = computed(() => resolvePrimaryAgentAdapter(
+  agentTypes.value,
+  gateway.value?.primaryAgentAdapter
+));
+const primaryAgentItems = computed(() => visibleAgentItems.value.map(agent => ({
+  title: agent.title,
+  value: agent.type
+})));
+
+function messageProcessingAgentPolicy(type: AgentAdapterType) {
+  const policy = gateway.value?.messageProcessingAgents?.[type];
+  return {
+    enabled: policy?.enabled === true,
+    model: policy?.model || (type === "codex" ? DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL : ""),
+    reasoningEffort: policy?.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT
+  };
+}
+
+function supportsManagedTaskFeature(type: AgentAdapterType, feature: "messageProcessingAgent" | "planAssistantSessions" | "hooks"): boolean {
+  return agentAdapterSupportsManagedTaskFeature(type, feature);
+}
+
+function setMessageProcessingAgentPolicy(type: AgentAdapterType, patch: Record<string, unknown>): void {
+  if (!gateway.value) return;
+  gateway.value.messageProcessingAgents = gateway.value.messageProcessingAgents ?? {};
+  gateway.value.messageProcessingAgents[type] = {
+    ...messageProcessingAgentPolicy(type),
+    ...patch
+  };
+  store.touch();
+}
 
 function agentStateFor(type: AgentAdapterType): Record<string, any> {
   return runtime.value.agentStates?.[type] ?? {};
@@ -3350,6 +3399,10 @@ function agentWarnings(type: AgentAdapterType): string[] {
 function addAgent(type: AgentAdapterType): void {
   if (!gateway.value) return;
   gateway.value.agentAdapters = [...agentTypes.value, type];
+  gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(
+    gateway.value.agentAdapters,
+    gateway.value.primaryAgentAdapter
+  );
   agentParamOpen.value[type] = true;
   if (type === "codex" && !gateway.value.codexHooks) {
     gateway.value.codexHooks = { ...DEFAULT_CODEX_HOOK_SETTINGS };
@@ -3433,6 +3486,8 @@ async function initializeCodexPlanAssistants(): Promise<void> {
           roleId: current.agentRoleId || "",
           sourceThreadId: current.codexThreadId,
           sourceThreadName,
+          assistantThreadId: session.threadId,
+          assistantThreadName: session.threadName,
           workspace: current.codexCwd,
           count,
           index: session.index
@@ -3463,7 +3518,17 @@ async function initializeCodexPlanAssistants(): Promise<void> {
 function removeAgent(type: AgentAdapterType): void {
   if (!gateway.value) return;
   gateway.value.agentAdapters = agentTypes.value.filter(t => t !== type);
+  gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(
+    gateway.value.agentAdapters,
+    gateway.value.primaryAgentAdapter
+  );
   agentParamOpen.value[type] = false;
+  store.touch();
+}
+
+function selectPrimaryAgent(value: unknown): void {
+  if (!gateway.value) return;
+  gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(agentTypes.value, value);
   store.touch();
 }
 
@@ -3816,6 +3881,45 @@ watch(
                       </v-alert>
                     </template>
                     <div v-else class="section-note">尚未扫描。展开面板后会自动扫描，也可以手动刷新。</div>
+                  </div>
+                  <div v-if="usesAutomaticMessageGrouping(choice.type)" class="dependency-panel mb-3">
+                    <div class="section-title small-title">消息组等待</div>
+                    <div class="section-note">聊天消息默认使用消息组，不需要单独开启。这里仅调整等待一句话说完的时间。</div>
+                    <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
+                      Codex Agent 开启消息处理模式后，聊天消息会先立即记录，再按这些参数合并。ASR、心跳和结构化事件不在这里等待。
+                    </v-alert>
+                    <div class="catalog-param-grid mt-2">
+                      <v-text-field
+                        type="number"
+                        :min="1"
+                        :max="300"
+                        :model-value="messageGroupingPolicy(choice.type)?.settleSeconds"
+                        label="普通停顿（秒）"
+                        hint="连续片段在这段时间内到达时先合并。"
+                        persistent-hint
+                        @update:model-value="value => setMessageGroupingPolicy(choice.type, { settleSeconds: Number(value) })"
+                      />
+                      <v-text-field
+                        type="number"
+                        :min="1"
+                        :max="300"
+                        :model-value="messageGroupingPolicy(choice.type)?.incompleteSettleSeconds"
+                        label="未说完等待（秒）"
+                        hint="“还有、然后、这个”等明显未说完的片段使用更长等待。"
+                        persistent-hint
+                        @update:model-value="value => setMessageGroupingPolicy(choice.type, { incompleteSettleSeconds: Number(value) })"
+                      />
+                      <v-text-field
+                        type="number"
+                        :min="1"
+                        :max="300"
+                        :model-value="messageGroupingPolicy(choice.type)?.maxWaitSeconds"
+                        label="最长等待（秒）"
+                        hint="达到上限后先形成消息组；半小时后的相关消息仍可依靠回复关系和历史摘要续接。"
+                        persistent-hint
+                        @update:model-value="value => setMessageGroupingPolicy(choice.type, { maxWaitSeconds: Number(value) })"
+                      />
+                    </div>
                   </div>
                   <div v-if="choice.type === 'napcat'" class="catalog-param-grid napcat-manager-panel">
                     <div class="full-span napcat-setup-strip">
@@ -4362,10 +4466,14 @@ watch(
                     </div>
                   </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
-                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
+                    <v-alert v-if="messageProcessingAgentPolicy('codex').enabled" class="full-span" type="success" variant="tonal" density="compact">
+                      Codex 消息处理 Agent 模式已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
+                    </v-alert>
+                    <v-alert v-else class="full-span" type="info" variant="tonal" density="compact">
                       定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
                     </v-alert>
                     <v-switch
+                      v-if="!messageProcessingAgentPolicy('codex').enabled"
                       v-model="gateway.heartbeatSkipWhenAgentBusy"
                       class="full-span"
                       color="primary"
@@ -4753,6 +4861,20 @@ watch(
           </div>
         </div>
 
+        <div v-if="primaryAgentType" class="catalog-param-grid mb-4">
+          <v-select
+            class="full-span"
+            :model-value="primaryAgentType"
+            :items="primaryAgentItems"
+            item-title="title"
+            item-value="value"
+            label="主控 Agent"
+            hint="命中规则的消息只投递给主控 Agent；其他 Agent 保留配置，不会收到默认消息。"
+            persistent-hint
+            @update:model-value="selectPrimaryAgent"
+          />
+        </div>
+
         <div class="catalog-list mb-2">
           <div v-for="agent in visibleAgentItems" :key="agent.type" class="catalog-item">
             <div
@@ -4883,6 +5005,45 @@ watch(
                 >
                   {{ warning }}
                 </v-alert>
+                <div v-if="supportsManagedTaskFeature(agent.type, 'messageProcessingAgent')" class="dependency-panel mb-3">
+                  <div class="section-title-row compact-row">
+                    <div>
+                      <div class="section-title small-title">消息处理 Agent 模式</div>
+                      <div class="section-note">开启后，这个 Agent 端可以接收合并后的消息组。主人格、计划秘书和一计划一 Agent 的绑定不会改变。</div>
+                    </div>
+                    <v-switch
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      inset
+                      label="启用"
+                      :model-value="messageProcessingAgentPolicy(agent.type).enabled"
+                      @update:model-value="value => setMessageProcessingAgentPolicy(agent.type, { enabled: value === true })"
+                    />
+                  </div>
+                  <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
+                    开启后，聊天消息默认形成消息组，并动态创建或复用 Codex 消息处理 Agent；ASR 和结构化事件照常直接投递。
+                  </v-alert>
+                  <div v-if="messageProcessingAgentPolicy(agent.type).enabled" class="catalog-param-grid mt-2">
+                    <v-text-field
+                      :model-value="messageProcessingAgentPolicy(agent.type).model"
+                      label="消息处理模型"
+                      hint="默认使用 GPT-5.6 Luna；只影响消息处理 Agent 的新轮次。"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="value => setMessageProcessingAgentPolicy(agent.type, { model: String(value || DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL) })"
+                    />
+                    <v-select
+                      :model-value="messageProcessingAgentPolicy(agent.type).reasoningEffort"
+                      :items="['low', 'medium', 'high', 'xhigh', 'max']"
+                      label="推理强度"
+                      hint="默认 medium；同一消息组的后续补充沿用已开始的轮次。"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="value => setMessageProcessingAgentPolicy(agent.type, { reasoningEffort: value })"
+                    />
+                  </div>
+                </div>
                 <!-- Codex -->
                 <template v-if="agent.type === 'codex'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
@@ -4927,7 +5088,7 @@ watch(
                   <v-alert v-else-if="codexBinding.pending" type="info" variant="tonal" density="compact" class="mt-2 mb-1">
                     尚无同名 Desktop 会话；点击保存时会创建任务、写入完整 ID 并切换绑定。
                   </v-alert>
-                  <div class="dependency-panel mt-3">
+                  <div v-if="supportsManagedTaskFeature(agent.type, 'planAssistantSessions')" class="dependency-panel mt-3">
                     <div class="section-title-row compact-row">
                       <div>
                         <div class="section-title small-title">计划协助会话</div>
@@ -4980,7 +5141,7 @@ watch(
                       {{ codexPlanAssistants.message }}
                     </v-alert>
                   </div>
-                  <div class="dependency-panel mt-3">
+                  <div v-if="supportsManagedTaskFeature(agent.type, 'hooks')" class="dependency-panel mt-3">
                     <div class="section-title-row compact-row">
                       <div>
                         <div class="section-title small-title">Hook 管理</div>

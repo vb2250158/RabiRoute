@@ -30,6 +30,7 @@ import {
 } from "./speechMessageDelivery.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
 import { rolePanelDeliveryExitCode } from "./rolePanelDelivery.js";
+import { personaMessageSenderName } from "./shared/rolePanelMessage.js";
 import {
   buildWearableHealthAlertRecord,
   wearableHealthAlertTemplateValues,
@@ -232,11 +233,12 @@ if (localMessageSpec) {
       replyContext = undefined;
     }
   }
+  const senderName = personaMessageSenderName(replyContext);
   const localRecord = {
     time: Math.floor(Date.now() / 1000),
     rawMessage: text,
     messageId,
-    senderName: "本地用户",
+    senderName,
     roleId,
     gatewayId,
     routeProfileId,
@@ -351,13 +353,13 @@ if (speechMessageArg) {
 const directAgentMessageArg = process.argv.find((arg) => arg.startsWith("--direct-agent-message="));
 if (directAgentMessageArg) {
   const message = decodeURIComponent(directAgentMessageArg.slice("--direct-agent-message=".length));
-  const adapters = config.agentAdapters;
-  if (adapters.length === 0) {
+  const adapter = config.primaryAgentAdapter;
+  if (!adapter) {
     console.error("RabiRoute direct agent message failed: no agent adapters configured");
     process.exit(1);
   }
   try {
-    await Promise.all(adapters.map((adapter) => createAgentAdapter(adapter).deliver(message)));
+    await createAgentAdapter(adapter).deliver(message);
     console.log("RabiRoute direct agent message completed");
     process.exit(0);
   } catch (error) {

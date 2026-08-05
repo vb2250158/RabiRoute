@@ -56,11 +56,9 @@ Codex Desktop 任务拥有模型、工具、沙箱和审批。RabiRoute 的兼�
 4. 确认消息记录、AgentPacket 和 Outbox 分别是否存在。
 5. 删除真实身份、token、Cookie、私聊和绝对私有路径。
 
-<div class="screenshot-placeholder">
-  <strong>截图占位 15｜适合提交的脱敏诊断截图</strong>
-  <span>建议画面：侧栏版本、当前 Route、诊断摘要和最后错误；所有账号、token、任务隐私和路径已遮挡。</span>
-  <span>标注重点：版本、Route 类型、消息端、处理端、错误时间；不要包含秘密。</span>
-</div>
+![不含账号、令牌和私聊内容的日志诊断截图示例](../../assets/screenshots/webgui-diagnostics-zh.png)
+
+分享前仍要逐项检查自己的截图：如果出现真实 Route 名、账号、任务名、绝对路径或消息正文，请裁掉或遮挡后再提交。
 
 ## Issue 模板
 

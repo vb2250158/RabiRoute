@@ -6,8 +6,8 @@ import path from "node:path";
 import test from "node:test";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, type RouteProfile } from "./config.js";
-import { forwardMessageAndWait, shouldSkipHeartbeatDelivery } from "./forwarding.js";
-import type { GroupMessageRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
+import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, shouldSkipHeartbeatDelivery } from "./forwarding.js";
+import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
 import { ManagerSpeechControl } from "./manager/speechControl.js";
 import { handleAgentReply } from "./outbox.js";
 import { resolvePipeline } from "./pipelines.js";
@@ -15,15 +15,23 @@ import { readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
 import { createSpeechIngressForwarding } from "./routing/speechIngressForwarding.js";
 import { SpeechIngressStore } from "./speechIngressStore.js";
+import type { PendingMessageGroup } from "./messageGrouping.js";
 
 type ForwardingConfigPatch = Partial<Pick<typeof config,
   "agentAdapters"
+  | "primaryAgentAdapter"
   | "agentRoleFile"
   | "agentRoleId"
   | "dataDir"
+  | "heartbeatSkipWhenAgentBusy"
+  | "messageProcessingAgents"
+  | "messageAdapterPolicies"
   | "memoryDataDir"
   | "routeProfiles"
   | "rolesDir"
+  | "codexThreadId"
+  | "codexThreadName"
+  | "codexCwd"
 >>;
 
 function tempDir(): string {
@@ -61,29 +69,324 @@ function routeProfile(root: string, patch: Partial<RouteProfile> = {}): RoutePro
 
 test("heartbeat busy guard only skips active Codex heartbeat delivery", () => {
   assert.equal(shouldSkipHeartbeatDelivery("heartbeat", true, ["codex"], true), true);
+  assert.equal(shouldSkipHeartbeatDelivery("heartbeat", true, ["codex"], true, true), false);
   assert.equal(shouldSkipHeartbeatDelivery("heartbeat", false, ["codex"], true), false);
   assert.equal(shouldSkipHeartbeatDelivery("private", true, ["codex"], true), false);
   assert.equal(shouldSkipHeartbeatDelivery("heartbeat", true, ["copilotCli"], true), false);
   assert.equal(shouldSkipHeartbeatDelivery("heartbeat", true, ["codex"], false), false);
 });
 
+test("chat routes group automatically while ASR and structured events stay direct", () => {
+  assert.equal(routeKindUsesAutomaticMessageGrouping("group_message"), true);
+  assert.equal(routeKindUsesAutomaticMessageGrouping("private"), true);
+  assert.equal(routeKindUsesAutomaticMessageGrouping("weixin_message"), true);
+  assert.equal(routeKindUsesAutomaticMessageGrouping("voice_transcript"), false);
+  assert.equal(routeKindUsesAutomaticMessageGrouping("heartbeat"), false);
+  assert.equal(routeKindUsesAutomaticMessageGrouping("wearable_health_alert"), false);
+});
+
+test("AgentPacket delivery targets only the configured primary Agent", async () => {
+  const dispatched: AgentAdapterType[] = [];
+  await withForwardingConfig({
+    agentAdapters: ["codex", "copilotCli"],
+    primaryAgentAdapter: "copilotCli"
+  }, async () => {
+    const outcomes = await deliverPacketToPrimaryAgentAdapter(
+      "main",
+      "direct",
+      "hello",
+      async (adapter) => { dispatched.push(adapter); }
+    );
+    assert.deepEqual(dispatched, ["copilotCli"]);
+    assert.deepEqual(outcomes, [{
+      routeId: "main",
+      ruleId: "direct",
+      adapter: "copilotCli",
+      status: "delivered"
+    }]);
+  });
+});
+
+test("primary Agent delivery reports a failure without trying another Agent", async () => {
+  const dispatched: AgentAdapterType[] = [];
+  await withForwardingConfig({
+    agentAdapters: ["codex", "copilotCli"],
+    primaryAgentAdapter: "copilotCli"
+  }, async () => {
+    const outcomes = await deliverPacketToPrimaryAgentAdapter(
+      "main",
+      "direct",
+      "hello",
+      async (adapter) => {
+        dispatched.push(adapter);
+        throw new Error("primary unavailable");
+      }
+    );
+    assert.deepEqual(dispatched, ["copilotCli"]);
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].status, "failed");
+    assert.match(outcomes[0].error ?? "", /primary unavailable/);
+  });
+});
+
 async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => Promise<T> | T): Promise<T> {
-  const previous: Required<ForwardingConfigPatch> = {
+  const previous: ForwardingConfigPatch = {
     agentAdapters: config.agentAdapters,
+    primaryAgentAdapter: config.primaryAgentAdapter,
     agentRoleFile: config.agentRoleFile,
     agentRoleId: config.agentRoleId,
     dataDir: config.dataDir,
+    heartbeatSkipWhenAgentBusy: config.heartbeatSkipWhenAgentBusy,
+    messageProcessingAgents: config.messageProcessingAgents,
+    messageAdapterPolicies: config.messageAdapterPolicies,
     memoryDataDir: config.memoryDataDir,
     routeProfiles: config.routeProfiles,
-    rolesDir: config.rolesDir
+    rolesDir: config.rolesDir,
+    codexThreadId: config.codexThreadId,
+    codexThreadName: config.codexThreadName,
+    codexCwd: config.codexCwd
   };
-  Object.assign(config, patch);
+  const effectivePatch = patch.agentAdapters !== undefined && !("primaryAgentAdapter" in patch)
+    ? { ...patch, primaryAgentAdapter: patch.agentAdapters[0] }
+    : patch;
+  Object.assign(config, effectivePatch);
   try {
     return await run();
   } finally {
+    resetMessageProcessingRuntime();
     Object.assign(config, previous);
   }
 }
+
+test("a grouped packet is delivered to a dynamically resolved Luna Message Agent instead of the primary Agent", async () => {
+  const root = tempDir();
+  const requests: Array<Record<string, any>> = [];
+  const manager = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, any>;
+      requests.push(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      if (body.action === "resolve") {
+        response.end(JSON.stringify({ thread: { id: "019f0000-0000-7000-8000-000000000099", title: body.title, cwd: root } }));
+      } else {
+        response.end(JSON.stringify({ ok: true }));
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    manager.once("error", reject);
+    manager.listen(0, "127.0.0.1", resolve);
+  });
+  const address = manager.address();
+  assert.ok(address && typeof address === "object");
+  const oldManagerUrl = process.env.GATEWAY_MANAGER_URL;
+  process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${address.port}`;
+  resetMessageProcessingRuntime();
+
+  const route = routeProfile(root, {
+    notificationRules: [{
+      id: "group",
+      name: "group",
+      enabled: true,
+      routeKinds: ["group_message"],
+      template: ""
+    }]
+  });
+  const record = groupMessage({ rawMessage: "这个按钮\n再往下挪一点", messageId: "msg-2" });
+  const messageGroup: PendingMessageGroup = {
+    groupId: "message-group-integration",
+    key: "napcat|group:10001|sender:42|reply:none",
+    baseKey: "napcat|group:10001|sender:42",
+    endpoint: "napcat",
+    conversationKey: "napcat:group:10001",
+    sender: "42",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    deadlineAt: Date.now(),
+    maxDeadlineAt: Date.now(),
+    status: "pending",
+    attempts: 0,
+    items: [{
+      identity: "napcat|group:10001|message:msg-2",
+      receivedAt: Date.now(),
+      incomplete: false,
+      payload: { routeKind: "group_message", record, extraValues: {} }
+    }]
+  };
+
+  try {
+    await withForwardingConfig({
+      agentAdapters: ["codex"],
+      primaryAgentAdapter: "codex",
+      messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
+      codexThreadId: "019f0000-0000-7000-8000-000000000001",
+      codexThreadName: "主人格",
+      codexCwd: root,
+      dataDir: path.join(root, "data"),
+      memoryDataDir: path.join(root, "memory"),
+      routeProfiles: [route]
+    }, async () => {
+      const result = await forwardMessageAndWait("group_message", record, {}, {
+        recordInbound: false,
+        messageGroup
+      });
+      assert.equal(result.status, "delivered");
+    });
+
+    assert.deepEqual(requests.map(item => item.action), ["read", "resolve", "send"]);
+    assert.equal(requests[2]?.model, "gpt-5.6-luna");
+    assert.equal(requests[2]?.reasoningEffort, "medium");
+    assert.match(String(requests[2]?.prompt), /\[消息组 message-group-integration\]/);
+    assert.match(String(requests[2]?.prompt), /你是专职消息处理 Agent/);
+  } finally {
+    if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
+    else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
+    await new Promise<void>((resolve) => manager.close(() => resolve()));
+    resetMessageProcessingRuntime();
+  }
+});
+
+test("heartbeat bypasses the busy-primary skip and goes immediately to a Message Agent when that mode is enabled", async () => {
+  const root = tempDir();
+  const requests: Array<Record<string, any>> = [];
+  const manager = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, any>;
+      requests.push(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(body.action === "resolve"
+        ? { thread: { id: "019f0000-0000-7000-8000-000000000101", title: body.title, cwd: root } }
+        : { ok: true }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    manager.once("error", reject);
+    manager.listen(0, "127.0.0.1", resolve);
+  });
+  const address = manager.address();
+  assert.ok(address && typeof address === "object");
+  const oldManagerUrl = process.env.GATEWAY_MANAGER_URL;
+  process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${address.port}`;
+  resetMessageProcessingRuntime();
+  const route = routeProfile(root, {
+    notificationRules: [{ id: "heartbeat", name: "heartbeat", enabled: true, routeKinds: ["heartbeat"], template: "" }]
+  });
+  const record: HeartbeatEventRecord = {
+    time: 1710000000,
+    rawMessage: "巡检当前计划和等待事项。",
+    messageId: "heartbeat-1",
+    senderName: "RabiRoute",
+    intervalSeconds: 900
+  };
+
+  try {
+    await withForwardingConfig({
+      agentAdapters: ["codex"],
+      primaryAgentAdapter: "codex",
+      messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
+      heartbeatSkipWhenAgentBusy: true,
+      codexThreadId: "019f0000-0000-7000-8000-000000000001",
+      codexThreadName: "主人格",
+      codexCwd: root,
+      dataDir: path.join(root, "data"),
+      memoryDataDir: path.join(root, "memory"),
+      routeProfiles: [route]
+    }, async () => {
+      const result = await forwardMessageAndWait("heartbeat", record);
+      assert.equal(result.status, "delivered");
+      assert.equal(result.reason, undefined);
+    });
+
+    assert.deepEqual(requests.map(item => item.action), ["read", "resolve", "send"]);
+    assert.equal(requests[2]?.model, "gpt-5.6-luna");
+    assert.match(String(requests[2]?.prompt), /事件：定时心跳提醒/);
+    assert.match(String(requests[2]?.prompt), /\[消息组 message-group-/);
+    assert.doesNotMatch(String(requests[2]?.prompt), /\[最近消息\]/);
+  } finally {
+    if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
+    else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
+    await new Promise<void>((resolve) => manager.close(() => resolve()));
+    resetMessageProcessingRuntime();
+  }
+});
+
+test("live chat messages are recorded immediately, batched once, then sent to one Message Agent", async () => {
+  const root = tempDir();
+  const requests: Array<Record<string, any>> = [];
+  let resolveSend!: () => void;
+  const sent = new Promise<void>((resolve) => { resolveSend = resolve; });
+  const manager = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, any>;
+      requests.push(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      if (body.action === "resolve") {
+        response.end(JSON.stringify({ thread: { id: "019f0000-0000-7000-8000-000000000100", title: body.title, cwd: root } }));
+      } else {
+        response.end(JSON.stringify({ ok: true }));
+        if (body.action === "send") resolveSend();
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    manager.once("error", reject);
+    manager.listen(0, "127.0.0.1", resolve);
+  });
+  const address = manager.address();
+  assert.ok(address && typeof address === "object");
+  const oldManagerUrl = process.env.GATEWAY_MANAGER_URL;
+  process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${address.port}`;
+  resetMessageProcessingRuntime();
+  const route = routeProfile(root, {
+    notificationRules: [{ id: "group", name: "group", enabled: true, routeKinds: ["group_message"], template: "" }]
+  });
+
+  try {
+    await withForwardingConfig({
+      agentAdapters: ["codex"],
+      primaryAgentAdapter: "codex",
+      messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
+      messageAdapterPolicies: {
+        napcat: { inputEnabled: true, outputEnabled: true, messageGrouping: { enabled: true, settleSeconds: 1, incompleteSettleSeconds: 1, maxWaitSeconds: 1 } }
+      },
+      codexThreadId: "019f0000-0000-7000-8000-000000000001",
+      codexThreadName: "主人格",
+      codexCwd: root,
+      dataDir: path.join(root, "data"),
+      memoryDataDir: path.join(root, "memory"),
+      routeProfiles: [route]
+    }, async () => {
+      forwardMessage("group_message", groupMessage({ rawMessage: "这个按钮", messageId: "fragment-1" }));
+      forwardMessage("group_message", groupMessage({ rawMessage: "再往下挪一点", messageId: "fragment-2" }));
+
+      assert.equal(requests.length, 0);
+      const rows = fs.readFileSync(path.join(route.rolesDir, route.agentRoleId!, "group-messages.jsonl"), "utf8")
+        .trim().split(/\r?\n/).map(line => JSON.parse(line) as Record<string, unknown>);
+      assert.equal(rows.length, 2);
+      assert.deepEqual(rows.map(row => row.messageId), ["fragment-1", "fragment-2"]);
+
+      await Promise.race([
+        sent,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Message Agent delivery timeout")), 4_000))
+      ]);
+    });
+
+    assert.deepEqual(requests.map(item => item.action), ["read", "resolve", "send"]);
+    assert.match(String(requests[2]?.prompt), /这个按钮[\s\S]*再往下挪一点/);
+    assert.equal(requests[2]?.model, "gpt-5.6-luna");
+  } finally {
+    if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
+    else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
+    await new Promise<void>((resolve) => manager.close(() => resolve()));
+    resetMessageProcessingRuntime();
+  }
+});
 
 test("forwardMessageAndWait returns missed when no route profile is active", async () => {
   const root = tempDir();

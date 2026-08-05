@@ -27,6 +27,14 @@ After selecting a persona, use the same configuration card to set or replace its
 
 Use **Open persona configuration** to edit the full text. Do not mechanically translate runtime-semantic files; language and wording changes can change Agent behavior.
 
+## Let personas contact each other
+
+After the relevant Routes are enabled, an Agent can discover which personas can receive messages and explicitly send a one-way message to another persona. You do not need to copy the target into local rules or add another network adapter. RabiRoute verifies that the message comes from the persona bound to the current Route and reports success only after the target handler accepts it.
+
+The target persona's ordinary reply does not return to the source automatically. To answer, it must explicitly send another cross-persona message. RabiRoute keeps correlation for that exchange and limits repeated back-and-forth hops. After a timeout, the Agent checks the result under the original delivery ID instead of blindly resending under a new one, preventing one lost response from creating duplicate target work.
+
+User-facing copy uses **persona**. Existing `roleId`, `/api/roles/*`, and `data/roles/` names remain compatibility internals; no directory migration is required.
+
 ## Synchronize the current persona across PCs
 
 After selecting a persona, **Multi-PC persona sync** lists other PCs using the same RabiLink application token. Automatic synchronization runs in the backend and does not require the page to remain open. A local persona-file change, peer availability change, or Relay reconnection triggers one manifest reconciliation. LAN is preferred, with restricted Relay transit only when direct access is unavailable. Unfinished scope is persisted, so disconnects and Manager restarts do not forget it; an offline target waits for a connection event instead of fixed-interval business queries.
@@ -53,12 +61,6 @@ The page requests only statistics, abbreviated voiceprints, duration, last-seen 
 
 On first use, an opaque voiceprint ID may be impossible to recognize. Select **Mark the next recording**, then speak one continuous sentence by yourself through the PC, phone, or glasses you want to classify, preferably in a quiet environment. When the next recording event completes, unresolved voiceprints newly observed during that attempt move to the front and receive an **Observed this time** marker. This only narrows the candidates: it starts no second recorder, performs no automatic identification, and never assigns the user merely because one candidate appeared. If other people spoke at the same time, confirm only a voiceprint you can identify confidently or capture again.
 
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 10 | Persona overview</strong>
-  <span>Suggested frame: persona binding, persona preview, Route variables, and rule list together.</span>
-  <span>Callouts: persona avatar, persona ID, preview, rule count, Open config, Add rule.</span>
-</div>
-
 ## Rule anatomy
 
 Common fields are:
@@ -69,12 +71,6 @@ Common fields are:
 - **Target group**: optional group restriction.
 - **Schedules**: timer creation for heartbeat rules.
 - **Agent wrapper template**: decision guidance for this situation.
-
-<div class="screenshot-placeholder">
-  <strong>Screenshot placeholder 11 | Edit a message rule</strong>
-  <span>Suggested frame: the rule dialog with Route kinds, regex, schedule, and template editor.</span>
-  <span>Callouts: Enable, Route kinds, Regex, Schedule, Agent wrapper template.</span>
-</div>
 
 ## Common Route kinds
 
@@ -87,13 +83,17 @@ Common fields are:
 | `group_message` | Ambient group messages, normally with a narrow regex |
 | `heartbeat` | Schedules and manual validation |
 | `manual_trigger` | Explicit UI or API triggers only |
-| `role_panel_message` | Built-in role-panel messages |
+| `role_panel_message` | Built-in persona messages shared by local role panel and cross-persona delivery |
 | `plan_feedback` | Independent plan-approval system events without recent messages |
 | `voice_transcript` | FenneNote, XiaoAI, and related transcripts |
 | `wecom_message` | WeCom group events |
 | `rabilink` | RabiLink events |
 
 The interface groups available kinds by adapters on the current Route. Selecting no kind may match every entry and is rarely a safe default.
+
+![Rabi Persona showing direct-reply, reply-chain, private-message, and scheduled rules](../../assets/screenshots/webgui-persona-rules-en.png)
+
+Each rule can be enabled and edited separately. Start with explicit private-message, direct-reply, or scheduled rules before adding broader group-message matches.
 
 ## Keep regex focused
 
