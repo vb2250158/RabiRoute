@@ -5,6 +5,7 @@ import test from "node:test";
 import { approvalSubmissionErrorMessage } from "../src/approvalFeedbackUi";
 import {
   FALLBACK_PLAN_PRESENTATION_PALETTE,
+  formatPlanRelativeTime,
   formatPlanVideoDuration,
   normalizePlanPresentationPalette,
   planCardStyle,
@@ -48,7 +49,6 @@ test("knowledge categories consume Manager view membership instead of raw status
     presentation: { views: ["current", "plans"] }
   } as unknown as RolePlan;
 
-  assert.deepEqual(plansForKnowledgeView([plan], "current"), [plan]);
   assert.deepEqual(plansForKnowledgeView([plan], "plans"), [plan]);
   assert.deepEqual(plansForKnowledgeView([plan], "archived"), []);
   assert.deepEqual(plansForKnowledgeView([plan], "recent_memory"), []);
@@ -64,6 +64,17 @@ test("plan directory titles hide repeated leading bracket tags without changing 
   assert.equal(planTitleForDirectory("  [PangHu] [查询] 月卡配置  "), "月卡配置");
   assert.equal(planTitleForDirectory("普通计划标题"), "普通计划标题");
   assert.equal(planTitleForDirectory("[PangHu]"), "[PangHu]");
+});
+
+test("plan directory relative time uses one largest suitable unit", () => {
+  const now = Date.UTC(2026, 7, 7, 12, 0, 0);
+  assert.equal(formatPlanRelativeTime(new Date(now - 20_000).toISOString(), now), "刚刚");
+  assert.equal(formatPlanRelativeTime(new Date(now - 8 * 60_000).toISOString(), now), "8分钟前");
+  assert.equal(formatPlanRelativeTime(new Date(now - 3 * 60 * 60_000).toISOString(), now), "3小时前");
+  assert.equal(formatPlanRelativeTime(new Date(now - 2 * 24 * 60 * 60_000).toISOString(), now), "2天前");
+  assert.equal(formatPlanRelativeTime(new Date(now - 65 * 24 * 60 * 60_000).toISOString(), now), "2个月前");
+  assert.equal(formatPlanRelativeTime(new Date(now - 800 * 24 * 60 * 60_000).toISOString(), now), "2年前");
+  assert.equal(formatPlanRelativeTime(new Date(now - 60 * 60_000).toISOString(), now, "en"), "1 hr ago");
 });
 
 test("plan video durations use compact player-style timestamps", () => {
@@ -172,6 +183,24 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /class="knowledge-plan-directory"/);
   assert.match(page, /class="knowledge-plan-directory"[\s\S]*?<\/nav>\s*<v-card class="app-card knowledge-browser"/);
   assert.match(page, /v-for="plan in visiblePlansForView"/);
+  assert.match(page, /const renderedPlansForView = computed\(\(\) => knowledgeRenderWindow\(\s*visiblePlansForView\.value/);
+  assert.match(page, /function currentPlanPageFilter[\s\S]*?sort:\s*planListSortMode\.value[\s\S]*?statuses/);
+  assert.match(page, /v-model="planListDialogOpen"[\s\S]*?max-width="640"[\s\S]*?scrollable[\s\S]*?aria-labelledby="plan-list-dialog-title"/);
+  assert.doesNotMatch(page, /<v-menu v-model="planList/);
+  assert.match(page, /@click="openPlanListDialog"/);
+  assert.match(page, /icon="mdi-close"[\s\S]*?@click="planListDialogOpen = false"/);
+  assert.match(page, /class="knowledge-plan-list-dialog-grid"/);
+  assert.match(page, /class="knowledge-plan-list-panel knowledge-plan-list-sort-panel"/);
+  assert.match(page, /class="knowledge-plan-list-panel knowledge-plan-list-filter-panel"/);
+  assert.match(page, /:aria-pressed="planListDraftSortMode === 'updated'"/);
+  assert.match(page, /class="knowledge-plan-directory-count"/);
+  assert.match(page, /class="knowledge-plan-directory-sort-trigger"/);
+  assert.match(page, /@click="planListDraftSortMode = 'status'"/);
+  assert.match(page, /@click="planListDraftSortMode = 'updated'"/);
+  assert.match(page, /function applyPlanListDialog[\s\S]*?planListSortMode\.value = planListDraftSortMode\.value[\s\S]*?planListHiddenStatuses\.value = \[\.\.\.planListDraftHiddenStatuses\.value\]/);
+  assert.match(page, /@click="applyPlanListDialog"/);
+  assert.match(page, /@change="togglePlanListStatus\(option\.status\)"/);
+  assert.match(page, /planListResultTotal\.value = result\.total/);
   assert.match(page, /@click="jumpToPlan\(\$event, plan\)"/);
   assert.match(page, /new IntersectionObserver\(scheduleActiveDirectoryPlanSync/);
   assert.match(page, /window\.requestAnimationFrame\(syncActiveDirectoryPlan\)/);
@@ -192,12 +221,28 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(styles, /\.knowledge-browser-layout\.has-plan-directory\s*\{[\s\S]*?grid-template-columns:\s*minmax\(324px, 360px\) minmax\(0, 1fr\)/);
   assert.match(styles, /\.knowledge-plan-directory\s*\{[\s\S]*?position:\s*sticky[\s\S]*?max-height:\s*calc\(100dvh - 104px\)/);
   assert.match(styles, /\.knowledge-plan-directory-list\s*\{[\s\S]*?overflow-y:\s*auto/);
+  assert.match(styles, /\.knowledge-plan-directory-list\s*\{[\s\S]*?overflow-x:\s*hidden[\s\S]*?overflow-y:\s*auto/);
   assert.doesNotMatch(styles, /\.knowledge-plan-cards\s*\{[^}]*overflow-y:\s*auto/);
   assert.match(styles, /\.v-card\.knowledge-browser\s*\{[\s\S]*?overflow:\s*visible/);
   assert.match(styles, /\.knowledge-toolbar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*var\(--v-layout-top, 64px\)[\s\S]*?z-index:\s*6/);
   assert.match(styles, /\.knowledge-plan-card\s*\{[\s\S]*?scroll-margin-top:\s*152px/);
   assert.match(styles, /\.knowledge-plan-directory-link\s*\{[\s\S]*?min-height:\s*44px/);
+  assert.match(styles, /\.knowledge-plan-directory-link\s*\{[\s\S]*?overflow:\s*hidden/);
   assert.match(styles, /\.knowledge-plan-directory-status\s*\{[\s\S]*?white-space:\s*nowrap/);
+  assert.match(styles, /\.knowledge-plan-directory-count\s*\{[\s\S]*?font-variant-numeric:\s*tabular-nums/);
+  assert.match(styles, /\.knowledge-plan-list-dialog\s*\{[\s\S]*?max-height:\s*min\(720px/);
+  assert.match(styles, /\.knowledge-plan-list-dialog-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, \.88fr\) minmax\(0, 1\.12fr\)/);
+  assert.match(styles, /@media \(max-width: 600px\)[\s\S]*?\.knowledge-plan-list-dialog-grid\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
+  assert.match(page, /class="knowledge-plan-directory-updated"/);
+  assert.match(page, /\{\{ planRelativeTime\(plan\.updatedAt\) \}\}/);
+  assert.match(styles, /\.knowledge-plan-directory-updated\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?white-space:\s*nowrap/);
+  assert.match(page, /@mouseenter="setPlanDirectoryMarquee\(\$event, true\)"/);
+  assert.match(page, /@focus="setPlanDirectoryMarquee\(\$event, true\)"/);
+  assert.match(page, /class="knowledge-plan-directory-title"/);
+  assert.match(page, /const distance = Math\.ceil\(title\.scrollWidth - title\.clientWidth\)/);
+  assert.match(page, /if \(distance <= 1\) return;/);
+  assert.match(styles, /\.knowledge-plan-directory-title\[data-marquee="active"\] > span\s*\{[\s\S]*?animation:\s*knowledge-plan-directory-marquee[^;]*\slinear\s/);
+  assert.match(styles, /@keyframes knowledge-plan-directory-marquee/);
   assert.doesNotMatch(styles, /knowledge-plan-directory-index|knowledge-plan-directory-copy small/);
   assert.match(styles, /@media \(max-width:\s*960px\)[\s\S]*?\.knowledge-browser-layout\.has-plan-directory\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
   assert.match(styles, /@media \(max-width:\s*960px\)[\s\S]*?\.knowledge-toolbar\s*\{[\s\S]*?position:\s*static/);

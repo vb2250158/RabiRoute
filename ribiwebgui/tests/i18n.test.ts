@@ -193,6 +193,14 @@ test("translates plan directory and step-local approval copy", () => {
   assert.equal(translateText("下载原文件", "en"), "Download source");
   assert.equal(translateText("计划目录", "en"), "Plan directory");
   assert.equal(translateText("点击计划快速跳转", "en"), "Select a plan to jump");
+  assert.equal(translateText("当前结果", "en"), "Current results");
+  assert.equal(translateText("状态排序", "en"), "Status order");
+  assert.equal(translateText("时间排序", "en"), "Update time");
+  assert.equal(translateText("筛选状态", "en"), "Filter statuses");
+  assert.equal(
+    translateText("点击完成后更新目录和计划卡片", "en"),
+    "Select Done to update the directory and plan cards"
+  );
   assert.equal(
     translateText("复制失败：当前浏览器不允许自动复制，请手动选择文本复制。", "en"),
     "Copy failed: This browser does not allow automatic copying. Select and copy the text manually."

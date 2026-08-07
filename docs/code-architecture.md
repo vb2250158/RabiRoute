@@ -57,6 +57,8 @@ skills/
   -> Agent 使用指南
 ```
 
+软件目录、公开示例、本机数据、运行状态和日志的完整归属见[路径与目录规范](path-and-directory-conventions.md)。项目级固定目录统一由 `src/shared/projectDirectoryLayout.ts` 给出，受限相对路径统一由 `src/shared/pathPolicy.ts` 校验。路线运行数据与人格资料分别使用 `routeDataDir` 和 `personaDataDir`；旧配置中的 `dataDir` 只在配置边界兼容读取。
+
 ## 客户端应用与共享 SDK
 
 - `apps/rabilink-android/`：同一工程内维护手机控制端和 `glass-app` 眼镜端模块。
@@ -287,10 +289,20 @@ AgentPacket
 - 已匹配的普通消息不经过另一层忙碌队列：Desktop owner 先尝试 `steer` 活跃 turn，只在没有活跃 turn 时 `start`。Heartbeat 的忙碌跳过和语音的关键词唤醒是各自消息端的显式例外。
 - Heartbeat 判断目标任务是否仍在工作时，只读取任务记录末尾附近的数据，不得同步读取或拆分整个 JSONL 文件。文件正在追加时忽略末尾未写完的一行；超大的无关记录会跳过，避免任务长期运行后拖住 Manager 或 Route 子进程。
 - Codex 活跃状态按时间合并两类证据：Desktop IPC 只提供当前连接内的临时活跃标记，rollout 的最近 turn/terminal 事件提供可持久查证的生命周期。较新的 terminal 会清除较旧的 IPC 活跃标记；若新一轮 IPC 活跃时间晚于已写入的旧 terminal，则在 rollout 追上前仍保持活跃。IPC 断开时清空连接内标记，不能让旧连接把已完成任务长期显示为运行中。
-- Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 计划管理秘书槽。秘书槽不写入计划 `taskBinding`；`taskBinding` 始终绑定独立业务任务。秘书负责计划/记忆维护、任务查重与绑定、状态核对、结果消费和续投，禁止执行调查、实现、测试或业务文件修改。控制面写入按 `planId` keyed lease 隔离：同计划单 writer、不同计划并行，共享 JSON 采用锁内最新值合并与原子替换。锁通过完整候选文件和原子 hard-link 发布，stale/损坏锁在热路径失败关闭，只能在 quiescent 维护窗口显式修复；同 key 的认领/澄清 lease 覆盖 reservation、外发、验证和终态回执，结果不明确时禁止自动重发。全局 audit 使用前后 ledger 快照，只把身份稳定的错误判为 invalid；plan-scoped strict audit 才是单计划收口门，reconcile 只跳过 active 计划。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
+- `src/messageAgentPool.ts` 不拥有 Codex 任务运行状态。`/api/agent/threads` 的精确读取把 Desktop 是否在线、当前连接的活跃事件和 Codex rollout 终态归一为 `active / idle / notLoaded / unavailable`；消息池只在一次分配期间用内存 reservation 防止并发抢占，不把这些状态写入文件。`agents.json` 只保存消息处理任务的完整 ID、左侧聊天栏名称、workspace、序号和初始化信息；`routing-affinity.json` 只保存消息组与消息端/会话/说话人的恢复线索。Desktop 离线或状态不可读时，消息组仍留在 `pending.json`，恢复后继续原任务，不能依据本地快照扩容。
+- 消息处理看板也不保存任务忙闲。每次读取看板时，Manager 按任务 ID 向 Codex 获取当前名称和 `active / idle / notLoaded / unavailable`，只在本次响应中显示；读取失败时显示“当前无法确认”，不沿用上一次空闲或繁忙。
+- Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 计划管理秘书槽，只负责任务身份和初始化记录；统一模型由 Manager 的 `codexPlanAssistantModel` 拥有，WebGUI 不在秘书条目中复制模型状态。秘书槽不写入计划 `taskBinding`；`taskBinding` 始终绑定独立业务任务。秘书负责计划/记忆维护、任务查重与绑定、状态核对、结果消费和续投，禁止执行调查、实现、测试或业务文件修改。控制面写入按 `planId` keyed lease 隔离：同计划单 writer、不同计划并行，共享 JSON 采用锁内最新值合并与原子替换。锁通过完整候选文件和原子 hard-link 发布，stale/损坏锁在热路径失败关闭，只能在 quiescent 维护窗口显式修复；同 key 的认领/澄清 lease 覆盖 reservation、外发、验证和终态回执，结果不明确时禁止自动重发。全局 audit 使用前后 ledger 快照，只把身份稳定的错误判为 invalid；plan-scoped strict audit 才是单计划收口门，reconcile 只跳过 active 计划。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
 `codexDesktopBridge.ts` 必须保持 transport-only：它不读取 route rule、不拼 AgentPacket、不决定业务外发。`codexAppServerClient.ts` 只保留“创建空任务、恢复用户名称”的元数据能力，不得接收真实 prompt 或执行 turn；元数据操作完成后立即退出。
 
 Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：前者控制 Agent 执行权限，后者控制 QQ、文档、设备和外部 API 等业务动作。任何代码都不能把一次任务审批传播成业务外发授权。
+
+## 消息处理需求状态
+
+`src/messageProcessing/board.ts` 是 Manager 拥有的消息处理状态机，`src/messageProcessing/persistence.ts` 负责把状态保存到运行期 `data/.runtime/message-processing-board.json`。业务规则不直接决定文件位置。Gateway 在消息组进入 Codex 消息处理任务前登记需求，投递成功后记录精确 Desktop 任务；消息处理 Agent 通过结果接口提交回复、不回复或结构化转交，Outbox 再用 `replyContext.messageProcessingRequirementId` 回写真实发送结果。直接 @、直接回复、私聊和计划进展是必须处理项；普通群讨论仍由 Agent 判断是否参与。
+
+Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.runtime/agent-requests.json`。`/api/agent/threads` 只在 Desktop owner 接受投递后把请求改为等待回复；回复必须带原 `requestId`、结果和下一步。Codex `Stop` 只记录目标轮次已经结束并安排五分钟后的提醒，不阻止最终回答；`PreToolUse` 在 Route 开启强制开关时拒绝绕过 Rabi 的持久任务投递工具。消息处理转交收到正式回复后，原发布任务重新进入 `processing`，继续决定外发、审批或下一次转交。
+
+计划关联只来自 `/api/agent/threads` 的结构化 `messageProcessing.planId`，不从标题或文本猜测。`roleKnowledge.updatePlan()` 成功写入后发布进程内更新事件；Manager 对已关联来源比较计划快照，并为状态、当前步骤、下一步、等待事项和步骤进度变化生成通知需求。看板通过 Manager SSE 事件读取同一状态，不轮询聊天日志或计划目录，也不建立第二个统计真源。
 
 ## Outbox / Action Gate
 
@@ -347,6 +359,8 @@ startManager();
 - 服务 WebGUI 静态文件。
 - 根据 `data/Config.json.webguiLan` 选择回环或局域网监听，并在 HTTP 入口统一校验非本机 WebGUI token；静态壳可公开加载，但没有 token 不能读取 Manager 状态或调用动作。
 - 聚合 runtime status。
+
+可能遍历大量历史文件的读操作不能直接占用 Manager 的 HTTP 主线程。`manager/managerReadWorkerPool.ts` 用有界工作线程池执行语音历史查询，并分别限制同时执行数、等待队列和执行时限；请求断开时终止对应 worker。范围相同且只要统计的并发语音请求共享一个扫描任务。`messageContextStore.ts` 先用归档索引的起止时间过滤文件，再读取可能命中的正文。冲突目录没有快照时立即返回 202，再交给独立的单 worker 目录池限速整理，避免占用语音名额或用满速目录遍历争抢磁盘。控制面诊断通过 `manager/jsonlTail.ts` 从文件尾部读取有限记录，同一次响应使用请求级缓存，避免不同卡片重复读取同一份日志。`/meta.readWorkers`、`/meta.catalogWorkers` 和 `/meta.httpLimits` 提供不含业务正文的运行诊断。
 
 它已经接入：
 
@@ -450,13 +464,13 @@ Gateway 配置的事实源 Module。
 
 `src/planAttachments.ts` 拥有计划本体附件的数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希和人格私有目录落盘。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
 
-`src/planFeedback.ts` 拥有计划反馈 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。`guidance` 只关联 `planId`，用于非审批中的进行中计划；`approval_suggestion` 关联审批步骤。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 先持久化，再由 `src/manager/planApprovalFeedbackDelivery.ts` 复用计划的精确 `taskBinding` 投递：绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务，绑定不完整时才交给人格 Agent。终态统一发布 `plan_feedback_changed`，事件不进入角色面板 timeline、兼容消息历史或统一会话账本。绑定业务任务收到引导后必须 PATCH 整个计划，并在需要时调整尚未开始的步骤，再写无 `stepId` 的 `guidance_response`；审批仍写 `approval_response`。反馈记录本身不自动修改计划 JSON。
+`src/planFeedback.ts` 拥有计划反馈 JSONL、同 `feedbackId` 投递状态折叠和读取摘要。`guidance` 只关联 `planId`，用于非审批中的进行中计划；`approval_suggestion` 关联审批步骤。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 先持久化，再由 `src/manager/planApprovalFeedbackDelivery.ts` 复用计划的精确业务 `taskBinding` 投递。`src/manager/planSecretaryAssignment.ts` 解析计划独立 `secretaryBinding`：已有有效绑定固定复用；未分配时按 planId 从当前启用秘书池稳定选一个并由 `controlPlaneRoutes.ts` 通过规范 `updatePlan()` 保存。启用秘书时，引导/审批正文直达业务任务，负责秘书同时收到控制通知；业务绑定不完整时完整反馈优先交给秘书。只有没有可用秘书时才走人格 Agent 回退。终态统一发布 `plan_feedback_changed`，事件不进入角色面板 timeline、兼容消息历史或统一会话账本。绑定业务任务收到引导后必须 PATCH 整个计划，并在需要时调整尚未开始的步骤，再写无 `stepId` 的 `guidance_response`；审批仍写 `approval_response`。反馈记录本身不自动推进计划状态。
 
 `src/context/rabiContextManager.ts` 是角色上下文触发的唯一归口。它把 `session_start`、`user_prompt`、`reasoning_pre_tool`、`reasoning_post_tool`、`message_delivery` 和无副作用 `preview` 映射为统一的召回、归档、`viewedAt` 与呈现策略，也是生产代码中 `roleKnowledgeSnapshot()` 的唯一调用方。
 
 `AgentPacket` 把正常路由事件适配为 `message_delivery`；`manager/codexHookContext.ts` 把 Codex lifecycle Hook 适配为 session、prompt、推理期触发和计划任务 `Stop` 完成事件。上下文事件通过 `routing/roleKnowledgeContext.ts` 生成同一份“记忆与计划”视图；`Stop` 不进入召回，而是按 `roleKnowledge.ts` 保存的计划 `taskBinding` 精确匹配执行会话，并在私有状态中按 `sessionId + turnId` 去重。
 
-计划完成提醒的实际交接由 `manager/planTaskCompletionDelivery.ts` 负责：选择同人格的唯一 gateway 或计划指定 gateway，拒绝未绑定目标 Codex 任务和源目标同会话，然后写角色面板 timeline 并调用控制面的 `triggerGatewayRolePanelMessage`。后续仍是现有 Forwarding、AgentPacket 和 Agent adapter 主链，目标 Desktop owner、模型、工具和审批没有第二真源。`manager/controlPlaneRoutes.ts` 只负责依赖接线和 HTTP 入口；插件只转发官方 Stop 字段，不能修改计划状态或读取 transcript 猜测完成。双真实 Desktop 任务验收前该能力保持实验状态。
+计划完成提醒的实际交接由 `manager/planTaskCompletionDelivery.ts` 负责：选择同人格的唯一 gateway 或计划指定 gateway；启用秘书时把官方 Stop 结果经 Manager 线程桥直接投给 `secretaryBinding`，携带业务任务自己的 `sourceThreadId` 和 `sourceAgentType=plan_agent`，不写主人格角色面板。只有没有可用秘书时才写角色面板 timeline 并调用原 `triggerGatewayRolePanelMessage` 回退链。源目标同会话会失败关闭，避免 Stop Hook 循环。真实 prompt 始终只走 Desktop IPC，目标 Desktop owner、统一秘书模型、工具和审批没有第二真源。`manager/controlPlaneRoutes.ts` 只负责分配持久化、依赖接线和 HTTP 入口；插件只转发官方 Stop 字段，不能修改计划状态或读取 transcript 猜测完成。双真实 Desktop 任务验收前该能力保持实验状态。
 
 注意：角色知识属于 Agent 上下文，不属于 RouteDecision。不要让路由是否命中依赖记忆内容。
 
@@ -466,16 +480,25 @@ Gateway 配置的事实源 Module。
 
 关键位置：
 
-- `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。
-- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片，只有 `ready/enabled=true` 可提交正式审批决定；没有审批状态的进行中计划在详情顶部显示计划级引导入口，引导只提交 `planId`，不提交 `stepId`。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；目录、渐进加载和无高度动画的详情展开保持现有边界。
+- `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。首屏使用 `/gateways?summary=1&includeConfig=1`，保留完整可编辑 Route 定义，但只取轻量运行状态；控制台、消息适配器和日志诊断页通过 `ensureDiagnostics()` 按需补取完整诊断，避免人格页和知识页反复扫描日志、消息文件与所有人格全文。
+- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读。`roleKnowledgeClient.ts` 的 `loadRolePlanPageWithPriorityDetails()` 先取首批 8 条摘要，再并行取首两张可见卡片的完整详情，页面一次性应用摘要与详情，避免目录批量渲染推迟首屏详情。随后在页面可见期间按最多 50 条自动补齐计划摘要；记忆先取当前可见分类的 24 条，随后按最多 100 条自动补齐。目录跳转仍只挂载以目标为起点的有界窗口，并把目标详情移到现有双并发队列最前；不新增浏览器侧正式数据源。隐藏浏览器标签页停止继续加载并关闭自己的 Manager 事件连接，重新可见后补查并继续。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片，只有 `ready/enabled=true` 可提交正式审批决定；没有审批状态的进行中计划在详情顶部显示计划级引导入口，引导只提交 `planId`，不提交 `stepId`。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；目录、渐进加载和无高度动画的详情展开保持现有边界。
+- 计划目录完成摘要加载并让出一次渲染后，通过 `manager/planAgentStatusRoutes.ts` 批量读取 `taskBinding` 与可选 `secretaryBinding` 的真实 Desktop 任务状态。`manager/planAgentStatus.ts` 负责 2.8 秒有界读取、同绑定请求去重、workspace 校验以及 Agent 工作状态与会话任务状态的分离；WebGUI 的 3 秒请求预算只决定何时显示未知。工作中的任务用转圈图标替代目录时间，其他结果继续保留时间。打开动作只调用 `openCodexDesktopThread()` 定位已核对的精确任务，不走 prompt、任务创建或备用 Runtime。
+- `src/roleKnowledge.ts` 为近期记忆列表生成并缓存沉淀投影。投影用 `updatedAt` / `recalledAt` 计算每条记忆的 24 小时候选时间和 72 小时触发时间，返回 `triggersNextConsolidation` 与 `willEnterNextConsolidation`；记忆目录写入或外部文件变化时与目录缓存一起失效。`src/manager/memoryConsolidationScheduler.ts` 读取最早截止时间并设置一次性任务，到点后重新核对活跃时间、创建 run 并投递 Manager 内置事件。最不活跃记忆到达 72 小时时，`recentMemoryConsolidationCohort()` 固定 `triggerAt` 与 `candidateCutoffAt`，列表投影和真实整理 request 共用该结果，避免晚执行时扩大候选范围。新记忆写入 `.md`，结构化字段保存在元数据区，正文保留标准 Markdown；旧 `.json` 继续读取，同 ID 时 `.md` 优先。`RoleKnowledgePage.vue` 只消费 Manager 结果，不在浏览器复制沉淀候选算法。
+- `src/memoryConsolidationAgent.ts` 只负责 Codex 独立记忆整理任务的精确 owner、持久绑定和 Desktop IPC 投递。配置开启时，`forwarding.ts` 只把 `manual_trigger + memory-consolidation` 投给“`<主人格任务名> 记忆整理`”；首次投递前确认主人格 Desktop 任务可读，默认模型为 `gpt-5.6-terra`。失败不回退给主人格或备用 Runtime。
+- `GET /api/roles/:roleId/memory?counts=1` 只返回记忆目录数量。`RoleKnowledgePage.vue` 在任何顶层标签首次进入时都让该请求与计划首屏并行，避免默认停留在“当前计划”时记忆标签长期显示 0；记忆正文仍只按当前可见分类分页读取。
+- 记忆卡片直接渲染安全 Markdown，卡片最高 512px 且裁剪溢出，完整内容通过详情打开。`markdownPreview.ts` 只允许 HTTP(S) 图片，禁止本机绝对路径、`data:` 和脚本协议。
 - `src/pages/OverviewPage.vue`：总览和运行状态。
 - `src/pages/RouteConfigPage.vue`：Route 配置编辑。
 - `src/pages/RuntimeLogPage.vue`：运行日志。
-- `src/pages/PersonaTemplatePage.vue`：人格和模板相关页面。
+- `src/pages/PersonaTemplatePage.vue`：人格和模板相关页面；`persona.md` 只在首屏显示最多 420 字的纯文本摘要。
+- `src/pages/PersonaDocumentPage.vue`：独立的完整人格 Markdown 阅读页。摘要页和正文页都通过受 WebGUI 访问控制保护的 `/api/roles/:roleId/persona-document` 读取当前人格文件；服务端只允许角色目录根部的单个 Markdown 文件，并限制为 2 MiB。安全 Markdown 渲染复用 `markdownPreview.ts`，链接协议受限、原始 HTML 转义、图片只显示占位。
 - `src/components/PersonaAvatar.vue`：WebGUI 统一头像展示与首字回退；上传和文件安全由 Manager 负责。
 - `src/utils/gatewayHelpers.ts`：前端配置辅助函数。
 - `src/speech/speechControlClient.ts`：浏览器语音 HTTP Adapter；唯一知道 `/api/speech/*` 路径和 `{ code, data }` envelope 的前端 Module。
 - `src/stores/speechStore.ts`：语音控制 read model、命令和共享事件流生命周期；RabiSpeech `/v1/events` 经 Manager `/api/speech/events` 推送麦克风、播放、音频流和记录落盘变化。每类事件只刷新自己的 read model，SSE 重连才做一次快照补漏，ASR 主机监视器与其他语音卡片不再周期请求后端。
+- `src/manager/speechModelManager.ts`：主机级语音环境和模型权重安装边界。它只读取 `plugin-adapters/rabi-speech/model-catalog.json` 的固定别名，串行启动仓库内安装脚本，不接受浏览器提供仓库、URL 或路径，也不向响应暴露私有绝对路径。
+- `src/shared/speechModelManagement.ts`、`src/pages/ModelManagementPage.vue` 与 `src/speech/speechModelManagementClient.ts`：模型管理 read model、弹窗内容和浏览器 Adapter。“语音服务”右上角按需加载该弹窗；即使 RabiSpeech 未运行，也能列出和下载权重。任务变化通过 Manager `/api/events` 的 `speech_model_management_changed` 推送，SSE 重连只补一次快照，不轮询安装状态。旧 `/#/models` 地址只兼容跳回语音服务，不再作为侧栏页面。
+- `src/lazyRouteRecovery.ts`：处理 WebGUI 重新构建后，长时间未刷新的浏览器标签页仍请求旧页面文件的情况。Vue Router 确认是动态导入或 chunk 加载失败后，保留用户刚才点击的目标页面和现有 `webgui_token`，只自动重新加载一次；会话级标记阻止连续失败形成刷新循环，其他页面错误不触发恢复。
 - `src/i18n/index.ts`：唯一 locale 状态、浏览器偏好持久化、`<html lang>` 和切换事件。
 - `src/i18n/catalog.ts`：人工校准的英文界面词条和动态文案规则。
 - `src/i18n/domLocalizer.ts`：把已登记界面文案应用到 Vue / Vuetify DOM；跳过 `data-no-i18n`、代码块、输入正文和可编辑内容。
@@ -503,6 +526,8 @@ SpeechServicePage / SpeechHostMonitor
 ```
 
 `src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/manager/speechControl.ts` 负责 Route policy、RabiSpeech payload 映射和 read model 正规化。`POST /api/speech/messages` 会等待 Gateway 子任务返回真实终态：Desktop owner `start/steer` 成功才是 `delivered`，关键词模式未命中则是 `recorded`，失败为 4xx/5xx；它不等 Agent 回答、Outbox 或 TTS 播放结束。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立的回环 Provider Runtime，不合并进 Manager。本地 Provider 默认启用；外部 API Provider 必须在本机配置显式启用、从环境变量取密钥，并通过 capability 的 `local_only` / `relay_safe` 暴露边界。
+
+模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。模型清单中的 `runtime=core|isolated` 只说明后续运行环境要求；“权重已下载”不能被展示为推理、波形或真实设备已经验收。
 
 `src/manager/speechEventProxy.ts` 单独拥有 Manager SSE 客户端与 RabiSpeech 上游流的一对一生命周期。浏览器或验收客户端断开时只中止对应的上游 fetch；由此产生的 `AbortError` 是正常终态，必须在代理层消费，不能变成未处理 Node stream error 或拖垮 Manager。上游不是 `text/event-stream` 时在写入 SSE 响应头之前失败关闭，不把旧 Manager/WebGUI HTML 冒充事件流。
 
@@ -561,7 +586,7 @@ RabiSpeech 的 `speech_records.py` 是 ASR/TTS 文本记录唯一真源，参考
 
 RibiWebGUI 通过 `personaVoiceIdentityClient.ts` 复用这两个 API，不新增浏览器声纹仓库。人格页的最近 24 小时面板使用 `includeDetails=false`，只接收 summary 和独立关系列表，不接收转写正文；加载、按钮忙碌、错误和提示属于短暂表现状态。`personaVoiceConfirmation.ts` 只维护一次用户主动确认会话的开始时间、开始时未解决声纹的 `lastSeenAt` 基线、等待/找到状态和候选复合键；候选来自下一次语音记录事件后相对基线新出现或再次出现、且有稳定主机标识的未解决声纹，只改变排序与标记，不产生或保存身份结论。页面进入、人格切换和人工操作后查询一次，并监听 RabiSpeech `records_changed`、Manager `persona_voice_identity_changed` 与 `persona_sync_manifest_changed` 事件。SSE 重连只补查一次，不运行覆盖率轮询。
 
-`src/personaSync.ts` 只负责本地人格文件读取、归档、合并与显式冲突解决；`src/personaSyncManifestIndex.ts` 拥有可重建的持久化 manifest 索引、启动一次性校准和运行期递归文件事件。校准以大小、mtime、ctime 和文件标识复用未变化 SHA-256，明确文件事件只重算单路径；索引变化经 Manager SSE 发出 `persona_sync_manifest_changed`。manifest 查询只读索引，只有宿主无法提供可靠文件事件时才在查询前做一次校准，不运行固定周期扫描。`src/personaSyncCoordinator.ts` 负责 peer 发现、传输编排和已解决版本发布；`src/personaSyncAutoReconciler.ts` 只拥有事件调度和 `auto-sync-state.json` 待对账标记，不复制任何合并规则。它把本机文件变化、Relay `ready` 和 `persona_sync_peer_changed` 当作唤醒信号，短时间事件合并后调用 Coordinator 做一次全量或单人格 manifest 对账；peer 离线时等待下一事件，在线临时失败时只做有界一次性退避。`src/manager/personaSyncRoutes.ts` 维护受控 HTTP 合同，并通过仅回环 `index-status/auto-status` 暴露不含正文的诊断；`src/manager/personaSyncLanServer.ts` 是默认绑定私有 IPv4 的独立数据面 listener，只允许远端访问 manifest、file 和 merge，不暴露完整 Manager/WebGUI。同步器优先访问 Relay 登记的这个专用 LAN URL，失败后调用 Relay 的 `/api/rabilink/persona-sync/proxy`，复用全局 worker 把受限请求送到目标 PC 回环 Manager。Relay 不保存主人格。JSONL 使用集合合并，普通文件使用按应用 token 哈希作用域与稳定 peer GUID 分域的共同哈希做快进；已有共同基线的单边缺失作为删除双向传播并先归档旧文件，删除与编辑并发则携带 `remoteDeleted`、peer 和基线哈希进入 `data/persona-sync/conflicts/`。列表、证据读取与 `keep_local/use_remote/use_merged` 解决 API 只允许回环访问；解决时校验当前本地哈希，`use_remote` 对删除冲突表示确认删除，旧证据与元数据进入 `resolved-conflicts/` 并留下审计记录。随后 Coordinator 以冲突远端哈希为新发布基线，把解决结果经 LAN/Relay 发回来源 peer；远端或本地已变化时返回 `not_published`，保留新的待对账标记而不声称收敛。同 peer/人格并发同步 single-flight，文件与基线状态锁定后原子写。`conversation/` 合并复用消息上下文锁，语音记录和人格声纹关系复用各自文件锁，避免同步覆盖与在线追加交错。读取和 merge 检查完整父路径链并拒绝符号链接/Windows junction。锁、manifest 索引、临时文件和可再生 TTS 缓存不参与同步。
+`src/personaSync.ts` 只负责本地人格文件读取、归档、合并与显式冲突解决；`src/personaSyncManifestIndex.ts` 拥有可重建的持久化 manifest 索引、启动一次性校准和运行期递归文件事件。校准以大小、mtime、ctime 和文件标识复用未变化 SHA-256，明确文件事件只重算单路径；索引变化经 Manager SSE 发出 `persona_sync_manifest_changed`。manifest 查询只读索引，只有宿主无法提供可靠文件事件时才在查询前做一次校准，不运行固定周期扫描。`src/personaSyncCoordinator.ts` 负责 peer 发现、传输编排和已解决版本发布；`src/personaSyncAutoReconciler.ts` 只拥有事件调度和 `auto-sync-state.json` 待对账标记，不复制任何合并规则。它把本机文件变化、Relay `ready` 和 `persona_sync_peer_changed` 当作唤醒信号，短时间事件合并后调用 Coordinator 做一次全量或单人格 manifest 对账；peer 离线时等待下一事件，在线临时失败时只做有界一次性退避。`src/manager/personaSyncRoutes.ts` 维护受控 HTTP 合同，并通过仅回环 `index-status/auto-status` 暴露不含正文的诊断；`src/manager/personaSyncLanServer.ts` 是默认绑定私有 IPv4 的独立数据面 listener，只允许远端访问 manifest、file 和 merge，不暴露完整 Manager/WebGUI。同步器优先访问 Relay 登记的这个专用 LAN URL，失败后调用 Relay 的 `/api/rabilink/persona-sync/proxy`，复用全局 worker 把受限请求送到目标 PC 回环 Manager。Relay 不保存主人格。JSONL 使用集合合并，普通文件使用按应用 token 哈希作用域与稳定 peer GUID 分域的共同哈希做快进；已有共同基线的单边缺失作为删除双向传播并先归档旧文件，删除与编辑并发则携带 `remoteDeleted`、peer 和基线哈希进入 `data/persona-sync/conflicts/`。同一人格、路径、peer、远端哈希、删除状态和基线哈希直接映射到固定 `evidence-<sha256>` 文件；自动对账通过一次文件定位复用证据，不再同步遍历旧冲突目录，任一身份或哈希不同仍保留独立证据。冲突列表按指定人格缩小目录范围，旧时间戳副本先按路径、peer 和内容证据归组，只读取每组代表项；首次目录整理使用异步目录迭代并缓存结果。列表、证据读取与 `keep_local/use_remote/use_merged` 解决 API 只允许回环访问；解决时校验当前本地哈希，`use_remote` 对删除冲突表示确认删除，同组旧证据与元数据一起进入 `resolved-conflicts/` 并留下审计记录。随后 Coordinator 以冲突远端哈希为新发布基线，把解决结果经 LAN/Relay 发回来源 peer；远端或本地已变化时返回 `not_published`，保留新的待对账标记而不声称收敛。同 peer/人格并发同步 single-flight，文件与基线状态锁定后原子写。`conversation/` 合并复用消息上下文锁，语音记录和人格声纹关系复用各自文件锁，避免同步覆盖与在线追加交错。读取和 merge 检查完整父路径链并拒绝符号链接/Windows junction。锁、manifest 索引、临时文件和可再生 TTS 缓存不参与同步。
 
 Windows 只报告目录变化时，manifest 索引只重新检查该目录及其子目录，不得扩大为整个人格目录。这个规则既要识别目录内的文件删除，也要保留其他目录的既有索引。如果 Windows 完全不提供变化路径，当前递归监听会停止并切换为“查询时校准”；不能在路径未知时反复扫描全部人格并拖住 Manager。
 

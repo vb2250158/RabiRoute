@@ -114,6 +114,7 @@ test("chat grouping is automatic while ASR stays direct and wait values remain c
 test("managed task capabilities keep Codex-only settings off unsupported Agent adapters", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     agentModel: "gpt-5.6-sol",
+    agentReasoningEffort: "high",
     agentAdapters: ["codex", "copilotCli"],
     messageProcessingAgents: {
       codex: { enabled: true },
@@ -122,6 +123,7 @@ test("managed task capabilities keep Codex-only settings off unsupported Agent a
   }));
 
   assert.equal(normalized.agentModel, "gpt-5.6-sol");
+  assert.equal(normalized.agentReasoningEffort, "high");
   assert.deepEqual(normalized.messageProcessingAgents, {
     codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" }
   });
@@ -130,6 +132,7 @@ test("managed task capabilities keep Codex-only settings off unsupported Agent a
 test("managed task capability layer exposes the three Codex task features independently", () => {
   assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "messageProcessingAgent"), true);
   assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "planAssistantSessions"), true);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "memoryConsolidationAgent"), true);
   assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "hooks"), true);
   assert.equal(agentAdapterSupportsManagedTaskFeature("copilotCli", "messageProcessingAgent"), false);
   assert.equal(agentAdapterSupportsManagedTaskFeature("astrbot", "planAssistantSessions"), false);
@@ -149,15 +152,22 @@ test("Codex managed-task settings are removed when a route has no Codex adapter"
       workspace: "C:/Project",
       index: 1
     }],
+    codexMemoryConsolidationAgentEnabled: true,
+    codexMemoryConsolidationAgentModel: "custom-memory-model",
     codexHooks: {
       sessionContextEnabled: true,
       reasoningContextEnabled: true,
-      planTaskCompletionEnabled: true
+      planTaskCompletionEnabled: true,
+      agentCommunicationEnforcementEnabled: true
     }
   }));
 
   assert.deepEqual(normalized.messageProcessingAgents, {});
+  assert.equal(normalized.codexPlanAssistantEnabled, undefined);
+  assert.equal(normalized.codexPlanAssistantModel, undefined);
   assert.equal(normalized.codexPlanAssistantSessions, undefined);
+  assert.equal(normalized.codexMemoryConsolidationAgentEnabled, undefined);
+  assert.equal(normalized.codexMemoryConsolidationAgentModel, undefined);
   assert.equal(normalized.codexHooks, undefined);
 });
 
@@ -286,19 +296,22 @@ test("Codex Hook settings default enabled and preserve explicit opt-out", () => 
   assert.deepEqual(normalizeCodexHookSettings(undefined), {
     sessionContextEnabled: true,
     reasoningContextEnabled: true,
-    planTaskCompletionEnabled: true
+    planTaskCompletionEnabled: true,
+    agentCommunicationEnforcementEnabled: true
   });
   const normalized = normalizeGatewayDefinition(gateway({
     codexHooks: {
       sessionContextEnabled: false,
       reasoningContextEnabled: true,
-      planTaskCompletionEnabled: false
+      planTaskCompletionEnabled: false,
+      agentCommunicationEnforcementEnabled: false
     }
   }));
   assert.deepEqual(normalized.codexHooks, {
     sessionContextEnabled: false,
     reasoningContextEnabled: true,
-    planTaskCompletionEnabled: false
+    planTaskCompletionEnabled: false,
+    agentCommunicationEnforcementEnabled: false
   });
 });
 
@@ -355,6 +368,74 @@ test("Codex plan assistant sessions keep exact Desktop task bindings", () => {
     index: 1,
     initializedAt: undefined
   }]);
+  assert.equal(normalized.codexPlanAssistantEnabled, true);
+  assert.equal(normalized.codexPlanAssistantModel, "gpt-5.6-terra");
+});
+
+test("Primary Agent reasoning effort rejects unsupported values", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    agentReasoningEffort: "unsupported" as never
+  }));
+  assert.equal(normalized.agentReasoningEffort, undefined);
+});
+
+test("Codex plan assistant model is one Manager-owned setting and overrides legacy per-session models", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    codexPlanAssistantModel: "gpt-5.6-terra",
+    codexPlanAssistantSessions: [{
+      threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
+      threadName: "主任务 协助处理计划",
+      workspace: "C:\\workspace\\project",
+      index: 1,
+      model: "legacy-session-model"
+    }]
+  }));
+
+  assert.equal(normalized.codexPlanAssistantModel, "gpt-5.6-terra");
+  assert.equal(normalized.codexPlanAssistantSessions?.[0]?.model, undefined);
+});
+
+test("legacy per-session secretary model migrates to the Manager-owned shared setting", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    codexPlanAssistantSessions: [{
+      threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
+      threadName: "主任务 协助处理计划",
+      workspace: "C:\\workspace\\project",
+      index: 1,
+      model: "legacy-shared-model"
+    }]
+  }));
+
+  assert.equal(normalized.codexPlanAssistantModel, "legacy-shared-model");
+  assert.equal(normalized.codexPlanAssistantSessions?.[0]?.model, undefined);
+});
+
+test("Codex plan assistant switch can disable existing task bindings without deleting them", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    codexPlanAssistantEnabled: false,
+    codexPlanAssistantSessions: [{
+      threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
+      threadName: "主任务 协助处理计划",
+      workspace: "C:\\workspace\\project",
+      index: 1
+    }]
+  }));
+
+  assert.equal(normalized.codexPlanAssistantEnabled, false);
+  assert.equal(normalized.codexPlanAssistantSessions?.length, 1);
+});
+
+test("Codex memory consolidation Agent is opt-in and defaults to GPT-5.6 Terra", () => {
+  const disabled = normalizeGatewayDefinition(gateway());
+  assert.equal(disabled.codexMemoryConsolidationAgentEnabled, false);
+  assert.equal(disabled.codexMemoryConsolidationAgentModel, "gpt-5.6-terra");
+
+  const enabled = normalizeGatewayDefinition(gateway({
+    codexMemoryConsolidationAgentEnabled: true,
+    codexMemoryConsolidationAgentModel: ""
+  }));
+  assert.equal(enabled.codexMemoryConsolidationAgentEnabled, true);
+  assert.equal(enabled.codexMemoryConsolidationAgentModel, "gpt-5.6-terra");
 });
 
 test("speech push mode belongs to the Route while trigger keywords are normalized as persona data", () => {

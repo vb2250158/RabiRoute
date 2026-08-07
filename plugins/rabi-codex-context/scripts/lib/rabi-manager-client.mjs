@@ -70,8 +70,25 @@ export async function handleHookInput(input, options = {}) {
       method: "POST",
       body: JSON.stringify(input)
     }, options);
+    if (eventName === "PreToolUse" && data?.toolDecision?.permissionDecision === "deny") {
+      const reason = String(data.toolDecision.reason || "RabiRoute blocked this direct Agent task delivery.");
+      return {
+        systemMessage: reason,
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: reason
+        }
+      };
+    }
     if (eventName === "Stop") {
       const completion = data?.planTaskCompletion;
+      const agentRequestStop = data?.agentRequestStop;
+      if (agentRequestStop?.status === "failed") {
+        return {
+          systemMessage: `Rabi Agent request Stop check failed: ${agentRequestStop.error || agentRequestStop.reason || "unknown error"}`
+        };
+      }
       if (completion?.status === "failed") {
         return {
           systemMessage: `Rabi plan-task completion reminder failed: ${completion.error || completion.reason || "unknown error"}`

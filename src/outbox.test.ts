@@ -386,6 +386,90 @@ test("QQ group local file upload is blocked outside allowedFileRoots", async () 
   assert.match(result.reason ?? "", /outside the configured allowedFileRoots/);
 });
 
+test("QQ group image replies keep explanatory text and a validated local image in one message", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-image-"));
+  const imageDir = path.join(rootDir, "outbound-images");
+  fs.mkdirSync(imageDir, { recursive: true });
+  const imagePath = path.join(imageDir, "acceptance.png");
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  let sentBody: Record<string, unknown> | undefined;
+
+  await withJsonServer((body) => {
+    sentBody = body;
+    return { status: "ok", retcode: 0, data: { message_id: "image-reply-1" } };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      payloadType: "image",
+      imagePath,
+      text: "【限时订单】图中标出了当前页面与待验收区域。",
+      replyContext: {
+        routeProfileId: "main",
+        targetType: "group",
+        groupId: "20002",
+        messageId: "source-22",
+        instanceId: "main-qq",
+        adapterType: "napcat",
+        replyToSource: true
+      }
+    }, {
+      rootDir,
+      routeRoot: "data/route",
+      rolesRoot: "data/roles",
+      runtimes: [{
+        id: "main",
+        pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: true },
+        messageAdapterPolicies: {
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image"], allowedFileRoots: [imageDir] }
+        },
+        napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+      }]
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "sent");
+    assert.equal(result.sentMessageId, "image-reply-1");
+  });
+
+  assert.deepEqual(sentBody?.message, [
+    { type: "reply", data: { id: "source-22" } },
+    { type: "text", data: { text: "【限时订单】图中标出了当前页面与待验收区域。" } },
+    { type: "image", data: { file: fs.realpathSync(imagePath) } }
+  ]);
+});
+
+test("QQ local image replies are blocked outside allowedFileRoots", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-image-blocked-"));
+  const allowedDir = path.join(rootDir, "allowed");
+  fs.mkdirSync(allowedDir, { recursive: true });
+  const privateImagePath = path.join(rootDir, "private.png");
+  fs.writeFileSync(privateImagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  const result = await handleAgentReply({
+    payloadType: "image",
+    imagePath: privateImagePath,
+    text: "这张图不应被发送。",
+    targetType: "group",
+    groupId: "20002",
+    routeProfileId: "main"
+  }, {
+    rootDir,
+    routeRoot: "data/route",
+    rolesRoot: "data/roles",
+    runtimes: [{
+      id: "main",
+      pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
+      messageAdapterPolicies: {
+        napcat: { outputEnabled: true, supportedOutputs: ["image"], allowedFileRoots: [allowedDir] }
+      },
+      napcatInstances: [{ id: "main-qq", httpUrl: "http://127.0.0.1:1", accessToken: "", enabled: true }]
+    }]
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "failed");
+  assert.match(result.reason ?? "", /outside the configured allowedFileRoots/);
+});
+
 test("explicit group target can proactively use NapCat even when pipeline stays in the Agent session", async () => {
   const result = await handleAgentReply({
     text: "项目进度提醒：请同步当前阻塞。",

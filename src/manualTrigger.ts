@@ -6,16 +6,18 @@ export async function triggerManualRule(
   message: string,
   triggerName = triggerId,
   routeKind: ForwardRouteKind = "manual_trigger",
-  triggerRuleId?: string
+  triggerRuleId?: string,
+  triggerSource: "manual" | "auto" = "manual"
 ): Promise<ForwardDeliveryResult> {
   const now = Math.floor(Date.now() / 1000);
   const record: ManualTriggerRecord = {
     time: now,
     rawMessage: message,
     messageId: `manual-trigger-${now}-${triggerId}`,
-    senderName: "RabiRoute 手动触发",
+    senderName: triggerSource === "auto" ? "RabiRoute 自动调度" : "RabiRoute 手动触发",
     triggerId,
     triggerName,
+    triggerSource,
     intervalSeconds: routeKind === "heartbeat" ? Number(process.env.HEARTBEAT_INTERVAL_SECONDS ?? "0") || undefined : undefined
   };
 

@@ -1,6 +1,22 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./local-speech-model-downloads_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # RabiSpeech 本地模型逐项下载与安装
 
 本文只覆盖本地模型。付费 TTS/ASR API 已归档；远程请求也不能触发下载、安装或修改模型白名单。
+
+## 从模型管理页按需下载
+
+打开 RibiWebGUI 左侧的“模型管理”，或直接访问 `/#/models`。页面会列出项目允许下载的 TTS、ASR 和说话人模型，并显示官方来源、已测量的权重大小、下载状态和运行环境要求。
+
+1. 第一次使用时点击“安装语音运行环境”。这一步只准备插件私有依赖和 Windows 语音宿主，不下载模型。
+2. 在模型卡片上点击“下载权重”。Manager 每次只执行一个安装或下载任务，页面通过事件接收状态变化，不定时查询。
+3. “权重已下载”只表示文件和安装清单一致。标为“还需要单独安装隔离运行环境”的模型，仍需按本文对应章节准备自己的代码和 Python 环境，才能由 RabiSpeech 加载。
+
+页面和命令行共用 `plugin-adapters/rabi-speech/model-catalog.json` 中的允许清单。浏览器不能提交任意仓库、URL 或本机路径；需要授权的 ONNX-VITS 模型包仍只能手动导入。
 
 ## 1. 目录约定
 

@@ -15,8 +15,8 @@ The Windows tray application is a lightweight frontend for viewing the selected 
 ```text
 data/roles/<RoleId>/plans/items/active/*.json
 data/roles/<RoleId>/plans/archive/*.json
-data/roles/<RoleId>/memory/recent/*.json
-data/roles/<RoleId>/memory/consolidated/*.json
+data/roles/<RoleId>/memory/recent/*.md
+data/roles/<RoleId>/memory/consolidated/*.md
 ```
 
 Manager owns the role files listed above. The tray never opens them directly; it consumes Manager API DTOs, does not reconstruct plans or memory from chat logs, and does not read the retired task-directory layout.

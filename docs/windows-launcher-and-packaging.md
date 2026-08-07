@@ -242,7 +242,15 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 .\scripts\build-windows-release.ps1
 ```
 
-需要 Node.js、Python 3.10+、PyInstaller 和 Inno Setup 6。脚本会同时生成托盘 EXE 和带产品名/图标/版本资源的 `plugin-adapters/rabi-speech/runtime/RabiSpeech.exe`，并把后者放入发布 payload；Windows 11 音量合成器依赖这个真实进程映像显示 `RabiSpeech`，仅修改 Core Audio 会话名仍会显示 `Python`。脚本只从 Git 跟踪文件复制公开运行资源和该生成宿主，不复制根目录 `data/`、日志、录音、转写、`.env` 或本机配置；然后嵌入固定版本的 Windows x64 Node.js，使用生产依赖启动临时 Manager 做 `/meta` 冒烟测试，最后生成安装器、便携 ZIP 和 SHA-256 清单。
+默认发布包只构建 RabiRoute 桌面运行所需的托盘、Manager、WebGUI、Node.js 和生产 npm 依赖，不构建或复制 RabiSpeech Windows 运行时，也不会安装 ASR/TTS Python 依赖或模型。语音插件的公开脚本仍保留在包内；需要语音功能的用户再进入 `plugin-adapters\rabi-speech` 运行 `scripts\install.ps1`，并按需选择模型。
+
+维护者只有在明确要制作包含 RabiSpeech Windows 进程宿主的专用包时才传入：
+
+```powershell
+.\scripts\build-windows-release.ps1 -IncludeSpeech
+```
+
+这个开关会额外生成并复制带产品名、图标和版本资源的 `plugin-adapters/rabi-speech/runtime/RabiSpeech.exe`。Windows 11 音量合成器依赖这个真实进程映像显示 `RabiSpeech`，仅修改 Core Audio 会话名仍会显示 `Python`。它仍不会把体积较大的 Python 依赖和语音模型塞进安装包；这些内容继续由用户显式安装。构建脚本只复制 Git 跟踪的公开运行资源和所选生成产物，不复制根目录 `data/`、日志、录音、转写、`.env` 或本机配置；然后嵌入固定版本的 Windows x64 Node.js，使用生产依赖启动临时 Manager 做 `/meta` 冒烟测试，最后生成安装器、便携 ZIP 和 SHA-256 清单。
 
 安装与升级边界：
 

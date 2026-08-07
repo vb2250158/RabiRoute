@@ -147,6 +147,15 @@ test("persona sync fast-forwards from a known base and preserves divergent files
   assert.equal(fs.readFileSync(path.join(roleRoot, "persona.md"), "utf8"), "local divergent\n");
   assert.ok(conflict.conflictPath);
   assert.equal(fs.existsSync(path.join(root, "sync-state", conflict.conflictPath!)), true);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  const duplicateConflict = service.merge({
+    roleId: "Rabi",
+    path: "persona.md",
+    contentBase64: Buffer.from("remote divergent\n").toString("base64"),
+    baseHash,
+    peerId: "pc-b"
+  });
+  assert.equal(duplicateConflict.conflictPath, conflict.conflictPath);
   const conflicts = service.listConflicts("Rabi");
   assert.equal(conflicts.length, 1);
   assert.equal(conflicts[0]?.path, "persona.md");
@@ -213,6 +222,121 @@ test("persona sync conflict resolution can retain local or publish explicit merg
   });
   assert.equal(merged.resultHash, hash("explicit merged\n"));
   assert.equal(fs.readFileSync(target, "utf8"), "explicit merged\n");
+});
+
+test("persona sync keeps different peer evidence as separate conflicts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-conflict-peer-"));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  fs.mkdirSync(roleRoot, { recursive: true });
+  fs.writeFileSync(path.join(roleRoot, "persona.md"), "local divergent\n", "utf8");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "sync-state"));
+  const remote = Buffer.from("remote divergent\n");
+  const command = {
+    roleId: "Rabi",
+    path: "persona.md",
+    contentBase64: remote.toString("base64"),
+    baseHash: hash("base\n")
+  };
+
+  const first = service.merge({ ...command, peerId: "pc-b" });
+  const second = service.merge({ ...command, peerId: "pc-c" });
+
+  assert.notEqual(first.conflictPath, second.conflictPath);
+  assert.equal(service.listConflicts("Rabi").length, 2);
+});
+
+test("persona sync reuses conflict evidence without scanning the legacy directory", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-conflict-direct-"));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  fs.mkdirSync(roleRoot, { recursive: true });
+  fs.writeFileSync(path.join(roleRoot, "persona.md"), "local divergent\n", "utf8");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "sync-state"));
+  const command = {
+    roleId: "Rabi",
+    path: "persona.md",
+    contentBase64: Buffer.from("remote divergent\n").toString("base64"),
+    baseHash: hash("base\n"),
+    peerId: "pc-b"
+  };
+  const first = service.merge(command);
+  const conflictDirectory = path.dirname(path.join(root, "sync-state", first.conflictPath!));
+  const originalReaddirSync = fs.readdirSync;
+  fs.readdirSync = ((target: fs.PathLike, options?: Parameters<typeof fs.readdirSync>[1]) => {
+    if (path.resolve(String(target)) === path.resolve(conflictDirectory)) {
+      throw new Error("legacy conflict directory must not be scanned");
+    }
+    return originalReaddirSync(target, options as never);
+  }) as typeof fs.readdirSync;
+  try {
+    const repeated = service.merge(command);
+    assert.equal(repeated.conflictPath, first.conflictPath);
+  } finally {
+    fs.readdirSync = originalReaddirSync;
+  }
+});
+
+test("persona sync collapses legacy duplicate evidence and resolves it as one conflict", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-conflict-legacy-"));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  fs.mkdirSync(roleRoot, { recursive: true });
+  fs.writeFileSync(path.join(roleRoot, "persona.md"), "local divergent\n", "utf8");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "sync-state"));
+  const conflict = service.merge({
+    roleId: "Rabi",
+    path: "persona.md",
+    contentBase64: Buffer.from("remote divergent\n").toString("base64"),
+    baseHash: hash("base\n"),
+    peerId: "pc-b"
+  });
+  const original = path.join(root, "sync-state", conflict.conflictPath!);
+  const duplicate = path.join(path.dirname(original), `legacy-copy-${path.basename(original)}`);
+  fs.copyFileSync(original, duplicate);
+  fs.copyFileSync(`${original}.meta.json`, `${duplicate}.meta.json`);
+
+  const listed = service.listConflicts("Rabi");
+  assert.equal(listed.length, 1);
+  service.resolveConflict({
+    conflictId: listed[0]!.conflictId,
+    action: "keep_local",
+    expectedLocalHash: hash("local divergent\n")
+  });
+  assert.equal(service.listConflicts("Rabi").length, 0);
+});
+
+test("persona sync builds a deduplicated legacy conflict catalog without blocking the event loop", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-conflict-catalog-"));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  fs.mkdirSync(roleRoot, { recursive: true });
+  fs.writeFileSync(path.join(roleRoot, "persona.md"), "local divergent\n", "utf8");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "sync-state"));
+  const remote = Buffer.from("remote divergent\n");
+  const conflict = service.merge({
+    roleId: "Rabi",
+    path: "persona.md",
+    contentBase64: remote.toString("base64"),
+    baseHash: hash("base\n"),
+    peerId: "pc-b"
+  });
+  const original = path.join(root, "sync-state", conflict.conflictPath!);
+  const directory = path.dirname(original);
+  const suffix = `pc-b-${hash(remote).slice(0, 12)}`;
+  for (let index = 0; index < 100; index += 1) {
+    const duplicate = path.join(directory, `2026-08-06T10-00-00-${String(index).padStart(3, "0")}Z-${suffix}`);
+    fs.copyFileSync(original, duplicate);
+    fs.copyFileSync(`${original}.meta.json`, `${duplicate}.meta.json`);
+  }
+
+  let yielded = false;
+  setImmediate(() => { yielded = true; });
+  const listed = await service.listConflictsAsync("Rabi");
+
+  assert.equal(yielded, true);
+  assert.equal(listed.length, 1);
+  assert.equal((await service.listConflictsAsync("Rabi"))[0]?.conflictId, listed[0]?.conflictId);
 });
 
 test("persona sync propagates a based deletion and preserves delete-versus-edit evidence", () => {

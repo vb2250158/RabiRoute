@@ -45,7 +45,7 @@ Windows 启动器、watchdog 和浸泡脚本都显式禁用自身进程的 Web �
 Manager 在以下目录按 UTC 日期追加 JSONL：
 
 ```text
-data/.runtime/manager-logs/manager-runtime-YYYY-MM-DD.jsonl
+logs/manager/manager-runtime-YYYY-MM-DD.jsonl
 ```
 
 记录包括：
@@ -58,6 +58,22 @@ data/.runtime/manager-logs/manager-runtime-YYYY-MM-DD.jsonl
 每条记录含 PID、父 PID、运行时间、Node 版本、平台和退出码。项目根路径会替换为 `<projectRoot>`；项目内错误路径保存为相对路径，外部路径只保留文件名。诊断写入失败不会改变原始崩溃语义。
 
 `GET /meta` 的 `managerRuntime` 提供当前 PID、启动时间、运行秒数、Node 版本和日志分片，不暴露本机绝对路径。
+
+## 并发读取与连接保护
+
+大范围语音历史查询由有界工作线程池执行，不阻塞 `/meta`、计划摘要和 Route 状态等轻量接口。线程池同时最多运行 2 项、等待最多 8 项、单项最长 30 秒；超出容量返回 503，超过时限返回 504，请求方断开时终止对应任务。归档查询先用索引时间范围排除不相关文件；范围相同且不需要正文的并发统计共享一个扫描任务。
+
+完整 Route 诊断只读取 JSONL 文件末尾的有限记录，并在一次响应内复用同一文件结果。人格冲突历史尚无快照时立即返回 202，再由独立的单 worker 目录池限速整理；该池最多等待 1 项、单项上限 5 分钟，不占用语音 worker。`GET /meta` 的 `readWorkers`、`catalogWorkers` 与 `httpLimits` 可查看这些上限。
+
+连接层默认在 10 秒内收完请求头、30 秒内收完请求、Keep-Alive 空闲 5 秒，并限制单连接最多 100 次请求。它们用于释放异常或长期空闲连接，不代替具体业务接口自己的工作时限。
+
+Manager 的日常操作另写入：
+
+```text
+logs/manager/manager-operations-YYYY-MM-DD.jsonl
+```
+
+它记录会改变状态的 HTTP 请求、失败或超过 2 秒的只读请求、Route 子进程启动/停止/退出，以及 Manager 开始监听和关闭请求。HTTP 响应头 `x-rabiroute-request-id` 与日志中的 `requestId` 一致，可以从浏览器网络面板或调用方错误信息定位一次操作。日志只保留方法、路径、状态码、耗时和受控运行标识；不保存查询参数、请求正文、Cookie、token 或聊天内容。
 
 ## 单实例与自动恢复
 
@@ -92,6 +108,7 @@ node --import tsx --test `
 
 curl.exe --noproxy "*" http://127.0.0.1:8790/meta
 curl.exe --noproxy "*" http://127.0.0.1:8790/api/persona-sync/index-status
+npm.cmd run check:manager-concurrency -- http://127.0.0.1:8790 XinghaiBuilder
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
   .\scripts\Test-RabiRoute-ManagerSoak.ps1 `
@@ -102,3 +119,5 @@ Get-ScheduledTaskInfo -TaskName RabiRouteHealthWatchdog
 ```
 
 浸泡通过条件是所有 `/meta` 样本成功且监听 PID 不变化。不要把一次临时重启或单次 200 响应视为稳定性验收。
+
+并发检查会同时发起三条归档语音查询、人格冲突、完整 Route 诊断和计划摘要请求，并穿插 50 次 `/meta`。通过条件是 `/meta` 全部成功、P95 不超过 500ms、最大值不超过 1000ms，且重请求在 30 秒内返回明确结果。

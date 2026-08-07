@@ -176,7 +176,15 @@ Build the complete Windows release locally with:
 .\scripts\build-windows-release.ps1
 ```
 
-The command requires Node.js, Python 3.10+, PyInstaller, and Inno Setup 6. It builds both the tray executable and `plugin-adapters/rabi-speech/runtime/RabiSpeech.exe` with RabiSpeech product, icon, and version resources, then includes that generated host in the payload. Windows 11 Volume Mixer uses the real process image for application identity, so changing only the Core Audio session label would still show `Python`. The script copies only Git-tracked public runtime resources plus generated backend/WebGUI/tray/speech-host outputs, embeds a pinned Windows x64 Node.js runtime, installs production-only npm dependencies, scans for private files and build-machine paths, smoke-tests the packaged Manager through `/meta`, and produces:
+The default release package builds only the tray, Manager, WebGUI, Node.js runtime, and production npm dependencies required by the RabiRoute desktop. It does not build or copy the RabiSpeech Windows runtime, and it does not install ASR/TTS Python dependencies or models. The public speech-plugin scripts remain in the package. Users who need speech can enter `plugin-adapters\rabi-speech`, run `scripts\install.ps1`, and then select only the models they need.
+
+Maintainers should opt in only when producing a package that includes the RabiSpeech Windows process host:
+
+```powershell
+.\scripts\build-windows-release.ps1 -IncludeSpeech
+```
+
+This switch additionally generates and copies `plugin-adapters/rabi-speech/runtime/RabiSpeech.exe` with RabiSpeech product, icon, and version resources. Windows 11 Volume Mixer uses the real process image for application identity, so changing only the Core Audio session label would still show `Python`. The switch still does not bundle the large Python dependency tree or speech models; users install those explicitly. The script copies only Git-tracked public runtime resources plus selected generated outputs, embeds a pinned Windows x64 Node.js runtime, installs production-only npm dependencies, scans for private files and build-machine paths, smoke-tests the packaged Manager through `/meta`, and produces:
 
 - `RabiRoute-<version>-windows-x64-setup.exe`
 - `RabiRoute-<version>-windows-x64-portable.zip`

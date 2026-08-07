@@ -266,6 +266,20 @@ export type RolePlan = {
   steps: RolePlanStep[];
   project?: { name?: string; path?: string };
   source?: { kind?: string; summary?: string };
+  secretaryBinding?: {
+    agentType: "codex";
+    sessionId: string;
+    sessionTitle?: string;
+    workspace: string;
+    assignedAt?: string;
+  };
+  taskBinding?: {
+    agentType: "codex";
+    sessionId: string;
+    sessionTitle?: string;
+    workspace?: string;
+    completionHook?: { enabled: boolean; gatewayId?: string };
+  };
   dueAt?: string;
   completedAt?: string;
   archivedAt?: string;
@@ -328,10 +342,20 @@ export type RoleMemory = {
   createdAt: string;
   updatedAt: string;
   viewedAt?: string;
+  recalledAt?: string;
   consolidatedAt?: string;
   consolidationRunId?: string;
   inputMemoryIds?: string[];
   keywords: string[];
+  lifecycle?: {
+    kind: "recent" | "consolidated";
+    state: "active" | "eligible" | "trigger_due" | "consolidated_source" | "consolidated";
+    activityAt: string;
+    consolidationEligibleAt?: string;
+    consolidationTriggerAt?: string;
+    triggersNextConsolidation?: boolean;
+    willEnterNextConsolidation?: boolean;
+  };
 };
 
 export type RoleMemoryPayload = {

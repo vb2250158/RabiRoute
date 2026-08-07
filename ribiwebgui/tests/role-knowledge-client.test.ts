@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RolePlan } from "../src/types.js";
-import { normalizeRolePlanFromManager } from "../src/roleKnowledgeClient.js";
+import {
+  loadPlanAgentStatuses,
+  loadRoleMemoryCounts,
+  loadRoleMemoryPage,
+  loadRolePlanPage,
+  loadRolePlanPageWithPriorityDetails,
+  normalizeRolePlanFromManager,
+  openPlanAgentTask
+} from "../src/roleKnowledgeClient.js";
 
 function plan(presentation?: RolePlan["presentation"]): RolePlan {
   return {
@@ -53,4 +61,288 @@ test("WebGUI preserves the Manager-owned QA acceptance label, tone, and palette"
     background: "#f3e8ff",
     foreground: "#7e22ce"
   });
+});
+
+test("WebGUI requests only the active plan view and current search query", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({
+      code: 0,
+      data: {
+        items: [],
+        total: 0,
+        nextCursor: "",
+        counts: {
+          total: 0,
+          current: 0,
+          plans: 0,
+          archived: 0,
+          blocked: 0,
+          qa: 0,
+          active: 0,
+          stages: {
+            executing: 0,
+            qa: 0,
+            waitingPackage: 0,
+            waitingExternal: 0,
+            approval: 0,
+            pending: 0,
+            paused: 0,
+            completed: 0,
+            archived: 0
+          }
+        }
+      }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await loadRolePlanPage("Rabi", "", 8, {
+      view: "current",
+      query: "掉线 性能",
+      sort: "updated",
+      statuses: ["正在执行", "待审批"]
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(requests.length, 1);
+  const requestUrl = new URL(requests[0]!, "http://127.0.0.1");
+  assert.equal(requestUrl.searchParams.get("view"), "current");
+  assert.equal(requestUrl.searchParams.get("query"), "掉线 性能");
+  assert.equal(requestUrl.searchParams.get("sort"), "updated");
+  assert.deepEqual(requestUrl.searchParams.getAll("status"), ["正在执行", "待审批"]);
+});
+
+test("WebGUI batches plan Agent status reads and opens only the selected bound role", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ url, init });
+    if (url.endsWith("/open")) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { opened: true, threadId: "thread-1", threadTitle: "Plan task", workspace: "C:/repo" }
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      code: 0,
+      data: {
+        items: [{
+          planId: "plan-1",
+          checkedAt: "2026-08-07T00:00:00.000Z",
+          taskAgent: {
+            role: "task",
+            configured: true,
+            agentType: "codex",
+            threadId: "thread-1",
+            threadTitle: "Plan task",
+            workspace: "C:/repo",
+            working: false,
+            agentStatus: "idle",
+            sessionStatus: "idle",
+            canOpen: true,
+            checkedAt: "2026-08-07T00:00:00.000Z"
+          }
+        }],
+        missingPlanIds: ["missing-plan"]
+      }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const status = await loadPlanAgentStatuses("Rabi Active", ["plan-1", "plan-1", "missing-plan"]);
+    assert.deepEqual(status.items.map((item) => item.planId), ["plan-1"]);
+    assert.deepEqual(status.missingPlanIds, ["missing-plan"]);
+    assert.deepEqual(status.failedPlanIds, []);
+    await openPlanAgentTask("Rabi Active", "plan-1", "secretary");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(requests.length, 2);
+  const statusUrl = new URL(requests[0]!.url, "http://127.0.0.1");
+  assert.equal(statusUrl.pathname, "/api/roles/Rabi%20Active/plan-agents/status");
+  assert.deepEqual(statusUrl.searchParams.getAll("planId"), ["plan-1", "missing-plan"]);
+  assert.equal(requests[1]!.init?.method, "POST");
+  assert.equal(requests[1]!.init?.body, JSON.stringify({ role: "secretary" }));
+});
+
+test("WebGUI hydrates the first visible plan details before returning the initial page", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const request = String(input);
+    requests.push(request);
+    const match = request.match(/\/plans\/(plan-[12])$/);
+    const data = match
+      ? {
+          ...plan(),
+          id: match[1],
+          title: match[1],
+          focus: `${match[1]} detail`,
+          steps: [{ id: "step-1", title: "Detail", status: "进行中" }]
+        }
+      : {
+          items: ["plan-1", "plan-2", "plan-3"].map((id) => ({
+            id,
+            title: id,
+            status: "进行中",
+            createdAt: "2026-07-30T00:00:00.000Z",
+            updatedAt: "2026-07-30T00:00:00.000Z",
+            keywords: [],
+            presentation: plan().presentation,
+            attachmentCount: 0,
+            stepCount: 1
+          })),
+          total: 3,
+          nextCursor: "",
+          counts: {
+            total: 3,
+            current: 3,
+            plans: 3,
+            archived: 0,
+            blocked: 0,
+            qa: 0,
+            active: 3,
+            stages: {
+              executing: 3,
+              qa: 0,
+              waitingPackage: 0,
+              waitingExternal: 0,
+              approval: 0,
+              pending: 0,
+              paused: 0,
+              completed: 0,
+              archived: 0
+            }
+          }
+        };
+    return new Response(JSON.stringify({ code: 0, data }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+  try {
+    const result = await loadRolePlanPageWithPriorityDetails("Rabi", "", 8, { view: "plans" }, 2);
+    assert.deepEqual(result.detailPlanIds, ["plan-1", "plan-2"]);
+    assert.equal(result.items[0]?.focus, "plan-1 detail");
+    assert.equal(result.items[1]?.focus, "plan-2 detail");
+    assert.equal(result.items[2]?.focus, "");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(requests.length, 3);
+  assert.match(requests[0]!, /detail=summary/);
+  assert.match(requests[1]!, /\/plans\/plan-1$/);
+  assert.match(requests[2]!, /\/plans\/plan-2$/);
+});
+
+test("WebGUI requests a bounded page for only the visible memory category", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({
+      code: 0,
+      data: {
+        items: [],
+        total: 0,
+        nextCursor: "",
+        counts: { recent: 182, consolidated: 4, consolidationRuns: 0 }
+      }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const page = await loadRoleMemoryPage("Rabi", "recent", "24", 24, "掉线");
+    assert.equal(page.counts.recent, 182);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(requests.length, 1);
+  const requestUrl = new URL(requests[0]!, "http://127.0.0.1");
+  assert.equal(requestUrl.pathname, "/api/roles/Rabi/memory");
+  assert.equal(requestUrl.searchParams.get("kind"), "recent");
+  assert.equal(requestUrl.searchParams.get("cursor"), "24");
+  assert.equal(requestUrl.searchParams.get("limit"), "24");
+  assert.equal(requestUrl.searchParams.get("query"), "掉线");
+});
+
+test("WebGUI can load memory tab counts without loading memory cards", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({
+      code: 0,
+      data: { recent: 188, consolidated: 31, consolidationRuns: 6 }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    assert.deepEqual(await loadRoleMemoryCounts("Rabi"), {
+      recent: 188,
+      consolidated: 31,
+      consolidationRuns: 6
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(requests.length, 1);
+  const requestUrl = new URL(requests[0]!, "http://127.0.0.1");
+  assert.equal(requestUrl.pathname, "/api/roles/Rabi/memory");
+  assert.equal(requestUrl.searchParams.get("counts"), "1");
+  assert.equal(requestUrl.searchParams.has("limit"), false);
+});
+
+test("memory count loading remains compatible with a Manager that returns the legacy full payload", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: 0,
+    data: {
+      recent: [
+        { id: "m1", title: "A", focus: "", content: "A", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z", keywords: [] },
+        { id: "m2", title: "B", focus: "", content: "B", createdAt: "2026-08-02T00:00:00.000Z", updatedAt: "2026-08-02T00:00:00.000Z", keywords: [] }
+      ],
+      consolidated: [
+        { id: "c1", title: "C", focus: "", content: "C", createdAt: "2026-08-03T00:00:00.000Z", updatedAt: "2026-08-03T00:00:00.000Z", keywords: [] }
+      ]
+    }
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    assert.deepEqual(await loadRoleMemoryCounts("Rabi"), {
+      recent: 2,
+      consolidated: 1,
+      consolidationRuns: 0
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("WebGUI accepts the legacy full-memory response until Manager reloads", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: 0,
+    data: {
+      recent: [
+        { id: "m1", title: "普通记录", focus: "", content: "其他内容", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z", keywords: [] },
+        { id: "m2", title: "掉线调查", focus: "", content: "Manager", createdAt: "2026-08-02T00:00:00.000Z", updatedAt: "2026-08-02T00:00:00.000Z", keywords: [] }
+      ],
+      consolidated: []
+    }
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    const page = await loadRoleMemoryPage("Rabi", "recent", "", 24, "掉线");
+    assert.deepEqual(page.items.map((item) => item.id), ["m2"]);
+    assert.equal(page.total, 1);
+    assert.equal(page.nextCursor, "");
+    assert.deepEqual(page.counts, { recent: 2, consolidated: 0, consolidationRuns: 0 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

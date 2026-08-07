@@ -3,6 +3,7 @@ import { createRouter, createWebHashHistory } from "vue-router";
 const OverviewPage = () => import("./pages/OverviewPage.vue");
 const RouteConfigPage = () => import("./pages/RouteConfigPage.vue");
 const PersonaTemplatePage = () => import("./pages/PersonaTemplatePage.vue");
+const PersonaDocumentPage = () => import("./pages/PersonaDocumentPage.vue");
 const ProjectDocsPage = () => import("./pages/ProjectDocsPage.vue");
 const RoleKnowledgePage = () => import("./pages/RoleKnowledgePage.vue");
 const RuntimeLogPage = () => import("./pages/RuntimeLogPage.vue");
@@ -14,8 +15,10 @@ export const router = createRouter({
     { path: "/", redirect: "/overview" },
     { path: "/overview", component: OverviewPage, meta: { title: "控制台" } },
     { path: "/speech", component: SpeechServicePage, meta: { title: "语音服务" } },
+    { path: "/models", redirect: "/speech" },
     { path: "/routes/:id/overview", component: OverviewPage, meta: { title: "控制台" } },
     { path: "/routes/:id/adapters", component: RouteConfigPage, meta: { title: "消息适配器" } },
+    { path: "/routes/:id/persona/document", component: PersonaDocumentPage, meta: { title: "人格正文" } },
     { path: "/routes/:id/persona", component: PersonaTemplatePage, meta: { title: "Rabi 人格" } },
     { path: "/routes/:id/knowledge", component: RoleKnowledgePage, meta: { title: "计划与记忆" } },
     { path: "/routes/:id/speech", component: SpeechServicePage, meta: { title: "语音服务" } },

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { listRecentMemories } from "../roleKnowledge.js";
 import {
   CodexHookContextService,
   parseCodexHookControl,
@@ -13,6 +14,8 @@ import {
 function fixture(options: {
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
+  isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
+  recordAgentRequestStop?: (request: CodexHookContextRequest) => { status: "scheduled"; reason: string; requestIds: string[]; turnId?: string };
 } = {}): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-"));
   const rolesRoot = path.join(root, "roles");
@@ -60,7 +63,9 @@ function fixture(options: {
       rolesRoot: () => rolesRoot,
       storePath,
       deliverPlanTaskCompletion: options.deliverPlanTaskCompletion,
-      hookEnabled: options.hookEnabled
+      hookEnabled: options.hookEnabled,
+      isManagedAgentSession: options.isManagedAgentSession,
+      recordAgentRequestStop: options.recordAgentRequestStop
     })
   };
 }
@@ -162,7 +167,8 @@ test("prompt recall uses roleKnowledgeSnapshot and refreshes memory viewedAt", (
   assert.match(result.additionalContext, /memory-hook/);
   assert.match(result.additionalContext, /GET \/api\/roles\/YeYu\/memory\/recent\/memory-hook/);
   assert.doesNotMatch(result.additionalContext, /\[人格工作集\]/);
-  const memory = JSON.parse(fs.readFileSync(path.join(roleDir, "memory", "recent", "memory-hook.json"), "utf8"));
+  const memory = listRecentMemories(roleDir).find((item) => item.id === "memory-hook");
+  assert.ok(memory);
   assert.equal(typeof memory.viewedAt, "string");
 });
 
@@ -197,7 +203,7 @@ test("reasoning hooks inject new keyword matches once per turn", (t) => {
   });
   assert.match(pre.additionalContext, /Rabi 推理期上下文刷新/);
   assert.match(pre.additionalContext, /memory-hook/);
-  const firstViewedAt = JSON.parse(fs.readFileSync(path.join(roleDir, "memory", "recent", "memory-hook.json"), "utf8")).viewedAt;
+  const firstViewedAt = listRecentMemories(roleDir).find((item) => item.id === "memory-hook")?.viewedAt;
   const duplicatePost = service.handleContext({
     sessionId: "session-reasoning",
     eventName: "PostToolUse",
@@ -209,7 +215,7 @@ test("reasoning hooks inject new keyword matches once per turn", (t) => {
   });
   assert.equal(duplicatePost.additionalContext, "");
   assert.equal(
-    JSON.parse(fs.readFileSync(path.join(roleDir, "memory", "recent", "memory-hook.json"), "utf8")).viewedAt,
+    listRecentMemories(roleDir).find((item) => item.id === "memory-hook")?.viewedAt,
     firstViewedAt
   );
   const nextTurn = service.handleContext({
@@ -327,6 +333,44 @@ test("paused plans do not deliver bound task completion reminders", async (t) =>
   assert.equal(result.planTaskCompletion?.status, "ignored");
   assert.equal(result.planTaskCompletion?.reason, "no_enabled_plan_task_binding");
   assert.equal(deliveryCount, 0);
+});
+
+test("managed Codex tasks cannot bypass the Rabi Agent bridge for persistent task delivery", async (t) => {
+  const { root, service } = fixture({ isManagedAgentSession: () => true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "PreToolUse",
+    toolName: "send_message_to_thread",
+    toolInput: { threadId: "other-task", message: "结果" },
+    cwd: root
+  });
+  assert.equal(result.toolDecision?.permissionDecision, "deny");
+  assert.match(result.toolDecision?.reason || "", /responsePolicy/);
+  assert.match(result.toolDecision?.reason || "", /inReplyToRequestId/);
+});
+
+test("Stop records unanswered Agent requests even when plan completion Hook delivery is disabled", async (t) => {
+  const stops: CodexHookContextRequest[] = [];
+  const { root, service } = fixture({
+    hookEnabled: () => false,
+    recordAgentRequestStop: (request) => {
+      stops.push(request);
+      return { status: "scheduled", reason: "target_turn_ended_without_response", requestIds: ["agent-request-1"], turnId: request.turnId };
+    }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-agent-request",
+    cwd: root,
+    lastAssistantMessage: "调查完成。"
+  });
+  assert.equal(stops.length, 1);
+  assert.equal(result.agentRequestStop?.status, "scheduled");
+  assert.deepEqual(result.agentRequestStop?.requestIds, ["agent-request-1"]);
+  assert.equal(result.planTaskCompletion?.reason, "hook_disabled_by_codex_endpoint");
 });
 
 test("completed plans suppress completion reminders while retaining business binding history", async (t) => {

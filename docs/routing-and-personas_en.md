@@ -74,6 +74,10 @@ This is one-way delivery, not an automatically created two-way chat. The target 
 
 Templates should add decision guidance, not reconstruct the entire event. RabiRoute already injects event fields, role/log paths, recent context, role-knowledge indexes, and reply instructions.
 
+The gateway supplies a default response expectation from structural evidence such as a DM, direct mention, direct reply, reply chain, or ambient group message. It does not write the answer for the Agent. The Agent still uses context to choose the content and the limited silence exceptions, while the persona template can further constrain tone, length, and channel behavior.
+
+Explicit DMs, direct mentions, and direct replies should normally receive a visible acknowledgement. Even when no plan is created or implementation is deferred, the role should state what it understood, who acts next, and what condition resumes the work. Pure closing phrases, emoji, duplicate messages, or a complete answer from another member may remain record-only.
+
 A companionship-oriented supplement may say:
 
 ```text
@@ -85,6 +89,8 @@ A work/PM-oriented supplement may say:
 ```text
 Classify the message as information, question, task, risk, or decision. Identify the owner, evidence, blocker, and next action. Update a focused plan or recent memory only when the message changes durable context. Use the reply API for user-facing chat output.
 ```
+
+Proactive does not mean replying to every ambient group message. Respond when a message assigns action, corrects direction, reports risk, or continues a commitment previously made by the role. For longer work, acknowledge the request and next step first, then update only on material progress, risk, waiting conditions, or decisions.
 
 ## Rule-selection guidance
 

@@ -9,7 +9,7 @@ import {
   type GatewayDefinition,
   type NotificationRuleDefinition
 } from "../shared/gatewayConfigModel.js";
-import { toProjectRelativePath } from "../shared/projectPaths.js";
+import { toPersistedProjectPath } from "../shared/projectPaths.js";
 import {
   routeRuntimeParts,
   sanitizeConfigName,
@@ -142,7 +142,7 @@ export class ManagerConfigRepository {
   }
 
   private configPathValue(value: unknown): string | undefined {
-    return toProjectRelativePath(value, this.rootDir);
+    return toPersistedProjectPath(value, this.rootDir);
   }
 
   migrateLegacyConfigs(): void {

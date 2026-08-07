@@ -1,6 +1,7 @@
-import type { RoleMemoryPayload, RolePlan, RolePlanFeedback } from "./types";
+import type { RoleMemory, RoleMemoryPayload, RolePlan, RolePlanFeedback } from "./types";
 import type { PlanFeedbackAttachmentUpload } from "@shared/planFeedbackContract";
 import { FALLBACK_PLAN_PRESENTATION_PALETTE, normalizePlanPresentationPalette } from "./planPresentationStyles";
+import { knowledgeItemMatchesQuery } from "./knowledgeSearch";
 
 export type RolePlanPageCounts = {
   total: number;
@@ -28,14 +29,87 @@ export type RolePlanPage = {
   total: number;
   nextCursor: string;
   counts: RolePlanPageCounts;
+  facets: {
+    statuses: Array<{
+      status: string;
+      count: number;
+      palette: RolePlan["presentation"]["palette"];
+    }>;
+  };
+};
+
+export type RolePlanPageWithPriorityDetails = RolePlanPage & {
+  detailPlanIds: string[];
+};
+
+export type PlanAgentRole = "task" | "secretary";
+export type PlanAgentWorkStatus = "working" | "idle" | "unknown";
+export type PlanAgentSessionStatus =
+  | "active"
+  | "idle"
+  | "not_loaded"
+  | "unavailable"
+  | "archived"
+  | "missing"
+  | "workspace_mismatch"
+  | "unbound"
+  | "unknown";
+
+export type PlanAgentBindingStatus = {
+  role: PlanAgentRole;
+  configured: boolean;
+  agentType: "codex";
+  threadId: string;
+  threadTitle: string;
+  workspace: string;
+  working: boolean;
+  agentStatus: PlanAgentWorkStatus;
+  sessionStatus: PlanAgentSessionStatus;
+  canOpen: boolean;
+  checkedAt: string;
+  message?: string;
+};
+
+export type PlanAgentStatus = {
+  planId: string;
+  checkedAt: string;
+  taskAgent: PlanAgentBindingStatus;
+  secretaryAgent?: PlanAgentBindingStatus;
+};
+
+export type PlanAgentStatusBatch = {
+  items: PlanAgentStatus[];
+  missingPlanIds: string[];
+  failedPlanIds: string[];
+};
+
+export type RoleMemoryPageCounts = {
+  recent: number;
+  consolidated: number;
+  consolidationRuns: number;
+};
+
+export type RoleMemoryPage = {
+  items: RoleMemory[];
+  total: number;
+  nextCursor: string;
+  counts: RoleMemoryPageCounts;
 };
 
 export const ROLE_PLAN_PAGE_SIZE = 8;
-export const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 32;
+export const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 50;
+export const ROLE_MEMORY_BACKGROUND_PAGE_SIZE = 100;
+
+export type RolePlanPageFilter = {
+  view?: "current" | "plans" | "archived";
+  query?: string;
+  sort?: "status" | "updated";
+  statuses?: string[];
+};
 
 type RolePlanSummary = Pick<
   RolePlan,
-  "id" | "title" | "status" | "priority" | "kind" | "project" | "createdAt" | "updatedAt" | "keywords" | "presentation"
+  "id" | "title" | "status" | "priority" | "kind" | "project" | "secretaryBinding" | "taskBinding" | "createdAt" | "updatedAt" | "keywords" | "presentation"
 > & {
   attachmentCount: number;
   stepCount: number;
@@ -47,8 +121,8 @@ type ManagerEnvelope<T> = {
   data?: T;
 };
 
-async function managerData<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+async function managerData<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
   const body = await response.json().catch(() => ({})) as ManagerEnvelope<T>;
   if (!response.ok || body.code !== 0 || body.data == null) {
     throw new Error(body.message || `Manager request failed (HTTP ${response.status}).`);
@@ -128,10 +202,15 @@ function summaryAsPlan(summary: RolePlanSummary): RolePlan {
 export async function loadRolePlanPage(
   roleId: string,
   cursor = "",
-  limit = ROLE_PLAN_PAGE_SIZE
+  limit = ROLE_PLAN_PAGE_SIZE,
+  filter: RolePlanPageFilter = {}
 ): Promise<RolePlanPage> {
   const params = new URLSearchParams({ limit: String(limit), detail: "summary" });
   if (cursor) params.set("cursor", cursor);
+  if (filter.view) params.set("view", filter.view);
+  if (filter.query?.trim()) params.set("query", filter.query.trim());
+  if (filter.sort && filter.sort !== "status") params.set("sort", filter.sort);
+  for (const status of filter.statuses || []) params.append("status", status);
   const page = await managerData<Omit<RolePlanPage, "items"> & { items: RolePlanSummary[] }>(
     `/api/roles/${encodeURIComponent(roleId)}/plans?${params.toString()}`
   );
@@ -147,8 +226,153 @@ export async function loadRolePlan(roleId: string, planId: string): Promise<Role
   ));
 }
 
+const PLAN_AGENT_STATUS_CHUNK_SIZE = 40;
+
+function planAgentStatusChunks(planIds: string[]): string[][] {
+  const unique = [...new Set(planIds.map((planId) => planId.trim()).filter(Boolean))];
+  const chunks: string[][] = [];
+  for (let index = 0; index < unique.length; index += PLAN_AGENT_STATUS_CHUNK_SIZE) {
+    chunks.push(unique.slice(index, index + PLAN_AGENT_STATUS_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+export async function loadPlanAgentStatuses(
+  roleId: string,
+  planIds: string[],
+  timeoutMs = 3_000
+): Promise<PlanAgentStatusBatch> {
+  const chunks = planAgentStatusChunks(planIds);
+  if (!chunks.length) return { items: [], missingPlanIds: [], failedPlanIds: [] };
+  const results = await Promise.allSettled(chunks.map(async (chunk) => {
+    const params = new URLSearchParams();
+    for (const planId of chunk) params.append("planId", planId);
+    const controller = new AbortController();
+    const timer = globalThis.setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+    try {
+      const data = await managerData<{ items: PlanAgentStatus[]; missingPlanIds?: string[] }>(
+        `/api/roles/${encodeURIComponent(roleId)}/plan-agents/status?${params.toString()}`,
+        { signal: controller.signal }
+      );
+      return {
+        planIds: chunk,
+        items: Array.isArray(data.items) ? data.items : [],
+        missingPlanIds: Array.isArray(data.missingPlanIds) ? data.missingPlanIds : []
+      };
+    } finally {
+      globalThis.clearTimeout(timer);
+    }
+  }));
+  const items: PlanAgentStatus[] = [];
+  const missingPlanIds: string[] = [];
+  const failedPlanIds: string[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      items.push(...result.value.items);
+      missingPlanIds.push(...result.value.missingPlanIds);
+    } else {
+      const index = results.indexOf(result);
+      failedPlanIds.push(...(chunks[index] || []));
+    }
+  }
+  return {
+    items,
+    missingPlanIds: [...new Set(missingPlanIds)],
+    failedPlanIds: [...new Set(failedPlanIds)]
+  };
+}
+
+export async function openPlanAgentTask(
+  roleId: string,
+  planId: string,
+  role: PlanAgentRole
+): Promise<{ opened: true; threadId: string; threadTitle: string; workspace: string }> {
+  return managerData(
+    `/api/roles/${encodeURIComponent(roleId)}/plan-agents/${encodeURIComponent(planId)}/open`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role })
+    }
+  );
+}
+
+export async function loadRolePlanPageWithPriorityDetails(
+  roleId: string,
+  cursor = "",
+  limit = ROLE_PLAN_PAGE_SIZE,
+  filter: RolePlanPageFilter = {},
+  priorityDetailCount = 2
+): Promise<RolePlanPageWithPriorityDetails> {
+  const page = await loadRolePlanPage(roleId, cursor, limit, filter);
+  const priorityItems = page.items.slice(0, Math.max(0, Math.floor(priorityDetailCount)));
+  const detailResults = await Promise.allSettled(
+    priorityItems.map((item) => loadRolePlan(roleId, item.id))
+  );
+  const details = new Map<string, RolePlan>();
+  for (const result of detailResults) {
+    if (result.status === "fulfilled") details.set(result.value.id, result.value);
+  }
+  return {
+    ...page,
+    items: page.items.map((item) => details.get(item.id) || item),
+    detailPlanIds: priorityItems.map((item) => item.id).filter((id) => details.has(id))
+  };
+}
+
 export async function loadRoleMemory(roleId: string): Promise<RoleMemoryPayload> {
   return managerData<RoleMemoryPayload>(`/api/roles/${encodeURIComponent(roleId)}/memory`);
+}
+
+export async function loadRoleMemoryCounts(roleId: string): Promise<RoleMemoryPageCounts> {
+  const data = await managerData<RoleMemoryPageCounts | RoleMemoryPayload>(
+    `/api/roles/${encodeURIComponent(roleId)}/memory?counts=1`
+  );
+  if (typeof data.recent === "number" && typeof data.consolidated === "number") {
+    const counts = data as RoleMemoryPageCounts;
+    return {
+      recent: counts.recent,
+      consolidated: counts.consolidated,
+      consolidationRuns: typeof counts.consolidationRuns === "number" ? counts.consolidationRuns : 0
+    };
+  }
+  const payload = data as RoleMemoryPayload;
+  return {
+    recent: payload.recent.length,
+    consolidated: payload.consolidated.length,
+    consolidationRuns: 0
+  };
+}
+
+export async function loadRoleMemoryPage(
+  roleId: string,
+  kind: "recent" | "consolidated",
+  cursor = "",
+  limit = 24,
+  query = ""
+): Promise<RoleMemoryPage> {
+  const params = new URLSearchParams({ kind, limit: String(limit) });
+  if (cursor) params.set("cursor", cursor);
+  if (query.trim()) params.set("query", query.trim());
+  const data = await managerData<RoleMemoryPage | RoleMemoryPayload>(
+    `/api/roles/${encodeURIComponent(roleId)}/memory?${params.toString()}`
+  );
+  if ("items" in data) return data;
+
+  const start = Math.max(0, Number.parseInt(cursor, 10) || 0);
+  const pageLimit = Math.min(100, Math.max(1, Math.floor(limit) || 24));
+  const items = data[kind].filter((item) => knowledgeItemMatchesQuery(item, query));
+  const end = Math.min(items.length, start + pageLimit);
+  return {
+    items: items.slice(start, end),
+    total: items.length,
+    nextCursor: end < items.length ? String(end) : "",
+    counts: {
+      recent: data.recent.length,
+      consolidated: data.consolidated.length,
+      consolidationRuns: 0
+    }
+  };
 }
 
 export async function submitPlanFeedback(input: {

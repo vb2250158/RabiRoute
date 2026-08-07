@@ -28,8 +28,8 @@ data/roles/<RoleId>/plans/archive/*.json
 记忆事实源：
 
 ```text
-data/roles/<RoleId>/memory/recent/*.json
-data/roles/<RoleId>/memory/consolidated/*.json
+data/roles/<RoleId>/memory/recent/*.md
+data/roles/<RoleId>/memory/consolidated/*.md
 ```
 
 托盘窗口不读取任何角色计划/记忆文件，也不读取旧任务目录；它不从聊天日志合成近期记忆，也不把路由运行态当作正式计划或记忆数据库。

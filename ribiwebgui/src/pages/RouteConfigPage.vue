@@ -4,14 +4,17 @@ import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
+import MessageProcessingBoard from "../components/MessageProcessingBoard.vue";
 import { managerEventSource } from "../managerApi";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
+import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL, codexMemoryConsolidationAgentTitle } from "@shared/codexMemoryConsolidationAgent";
 import { agentAdapterSupportsManagedTaskFeature, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
 import {
+  DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
   codexPlanAssistantInitializationPrompt,
   codexPlanAssistantSessionTitles,
   normalizeCodexPlanAssistantCount
@@ -3068,7 +3071,7 @@ function messageProcessingAgentPolicy(type: AgentAdapterType) {
   };
 }
 
-function supportsManagedTaskFeature(type: AgentAdapterType, feature: "messageProcessingAgent" | "planAssistantSessions" | "hooks"): boolean {
+function supportsManagedTaskFeature(type: AgentAdapterType, feature: "messageProcessingAgent" | "memoryConsolidationAgent" | "planAssistantSessions" | "hooks"): boolean {
   return agentAdapterSupportsManagedTaskFeature(type, feature);
 }
 
@@ -3287,6 +3290,7 @@ function setCodexHookSetting(key: keyof CodexHookSettings, enabled: boolean | nu
     sessionContextEnabled: gateway.value.codexHooks?.sessionContextEnabled !== false,
     reasoningContextEnabled: gateway.value.codexHooks?.reasoningContextEnabled !== false,
     planTaskCompletionEnabled: gateway.value.codexHooks?.planTaskCompletionEnabled !== false,
+    agentCommunicationEnforcementEnabled: gateway.value.codexHooks?.agentCommunicationEnforcementEnabled !== false,
     [key]: enabled === true
   };
   touch();
@@ -3482,6 +3486,7 @@ async function initializeCodexPlanAssistants(): Promise<void> {
         threadId: session.threadId,
         cwd: session.workspace,
         sandbox: "workspace-write",
+        model: current.codexPlanAssistantModel || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
         prompt: codexPlanAssistantInitializationPrompt({
           roleId: current.agentRoleId || "",
           sourceThreadId: current.codexThreadId,
@@ -5043,6 +5048,11 @@ watch(
                       @update:model-value="value => setMessageProcessingAgentPolicy(agent.type, { reasoningEffort: value })"
                     />
                   </div>
+                  <MessageProcessingBoard
+                    v-if="messageProcessingAgentPolicy(agent.type).enabled"
+                    :gateway-id="gateway.id"
+                    :enabled="true"
+                  />
                 </div>
                 <!-- Codex -->
                 <template v-if="agent.type === 'codex'">
@@ -5050,6 +5060,24 @@ watch(
                     实际消息只交给 Codex/ChatGPT Desktop 当前任务执行，因此桌面端会立即显示消息并沿用该任务的工具、模型与权限。Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime。
                   </v-alert>
                   <div class="catalog-param-grid">
+                    <v-text-field
+                      v-model="gateway.agentModel"
+                      label="主人格模型"
+                      hint="Manager 统一应用到当前 Route 主人格的新轮次；留空时沿用 Desktop 任务自己的模型。"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
+                    <v-select
+                      v-model="gateway.agentReasoningEffort"
+                      :items="['low', 'medium', 'high', 'xhigh', 'max']"
+                      label="主人格推理强度"
+                      hint="与主人格模型一起应用到 Desktop 新轮次；留空时沿用 Desktop 当前设置。"
+                      persistent-hint
+                      clearable
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
                     <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="用于同名任务的自动查找和新建；选择已有任务时会自动采用任务自己的目录" persistent-hint @update:model-value="touch">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
@@ -5088,17 +5116,66 @@ watch(
                   <v-alert v-else-if="codexBinding.pending" type="info" variant="tonal" density="compact" class="mt-2 mb-1">
                     尚无同名 Desktop 会话；点击保存时会创建任务、写入完整 ID 并切换绑定。
                   </v-alert>
+                  <div v-if="supportsManagedTaskFeature(agent.type, 'memoryConsolidationAgent')" class="dependency-panel mt-3">
+                    <div class="section-title-row compact-row">
+                      <div>
+                        <div class="section-title small-title">独立记忆整理 Agent</div>
+                        <div class="section-note">开启后，记忆沉淀请求交给独立的 Codex Desktop 任务，不占用主人格当前上下文。</div>
+                      </div>
+                      <v-switch
+                        color="primary"
+                        density="compact"
+                        hide-details
+                        inset
+                        :model-value="gateway.codexMemoryConsolidationAgentEnabled === true"
+                        @update:model-value="value => { gateway.codexMemoryConsolidationAgentEnabled = value === true; touch(); }"
+                      />
+                    </div>
+                    <v-alert v-if="gateway.codexMemoryConsolidationAgentEnabled" type="info" variant="tonal" density="compact" class="mt-2 mb-2">
+                      触发沉淀时会创建或复用“{{ codexMemoryConsolidationAgentTitle(gateway.codexThreadName || fallbackCodexThreadName()) }}”。请求不会再投给主人格；Desktop 不可用或任务投递失败时，本轮会明确失败，不会切换到备用处理端。
+                    </v-alert>
+                    <v-alert v-else type="info" variant="tonal" density="compact" class="mt-2 mb-0">
+                      关闭时，记忆沉淀请求仍由当前主人格处理。
+                    </v-alert>
+                    <div v-if="gateway.codexMemoryConsolidationAgentEnabled" class="catalog-param-grid mt-2">
+                      <v-text-field
+                        :model-value="gateway.codexMemoryConsolidationAgentModel || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL"
+                        label="记忆整理模型"
+                        hint="默认使用 GPT-5.6 Terra；只影响独立记忆整理 Agent 的新轮次。"
+                        persistent-hint
+                        @update:model-value="value => { gateway.codexMemoryConsolidationAgentModel = String(value || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL); touch(); }"
+                      />
+                    </div>
+                  </div>
                   <div v-if="supportsManagedTaskFeature(agent.type, 'planAssistantSessions')" class="dependency-panel mt-3">
                     <div class="section-title-row compact-row">
                       <div>
                         <div class="section-title small-title">计划协助会话</div>
-                        <div class="section-note">持久秘书任务负责计划推进和结果汇总；它们可以再开临时子 Agent，但不会随子 Agent 结束而失去 owner。</div>
+                        <div class="section-note">持久秘书任务负责计划推进和结果汇总；全部秘书统一使用 Manager 配置的模型，并且不会随临时子 Agent 结束而失去 owner。</div>
                       </div>
+                      <v-switch
+                        color="primary"
+                        density="compact"
+                        hide-details
+                        inset
+                        :model-value="gateway.codexPlanAssistantEnabled === true"
+                        @update:model-value="value => { gateway.codexPlanAssistantEnabled = value === true; touch(); }"
+                      />
                     </div>
-                    <v-alert type="warning" variant="tonal" density="compact" class="mt-2 mb-2">
+                    <v-alert v-if="gateway.codexPlanAssistantEnabled" type="warning" variant="tonal" density="compact" class="mt-2 mb-2">
                       实验能力：代码和契约测试已覆盖精确 ID、命名与复用；仍需在真实 Codex Desktop 中确认多任务可见、同 ID 续投和工具 owner。
                     </v-alert>
-                    <div class="catalog-param-grid mt-2">
+                    <v-alert v-else type="info" variant="tonal" density="compact" class="mt-2 mb-0">
+                      关闭后不再把计划交给秘书处理；已经绑定的秘书任务会保留，重新开启后继续复用。
+                    </v-alert>
+                    <div v-if="gateway.codexPlanAssistantEnabled" class="catalog-param-grid mt-2">
+                      <v-text-field
+                        :model-value="gateway.codexPlanAssistantModel || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL"
+                        label="计划秘书模型"
+                        hint="Manager 统一应用到当前 Route 的全部计划秘书；默认使用 GPT-5.6 Terra。"
+                        persistent-hint
+                        @update:model-value="value => { gateway.codexPlanAssistantModel = String(value || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL); touch(); }"
+                      />
                       <v-text-field
                         v-model.number="codexPlanAssistants.count"
                         type="number"
@@ -5122,7 +5199,7 @@ watch(
                         </v-btn>
                       </div>
                     </div>
-                    <div v-if="gateway.codexPlanAssistantSessions?.length" class="d-flex ga-2 flex-wrap mt-2">
+                    <div v-if="gateway.codexPlanAssistantEnabled && gateway.codexPlanAssistantSessions?.length" class="d-flex ga-2 flex-wrap mt-2">
                       <v-chip
                         v-for="session in gateway.codexPlanAssistantSessions"
                         :key="session.threadId"
@@ -5181,6 +5258,17 @@ watch(
                           @update:model-value="value => setCodexHookSetting('planTaskCompletionEnabled', value)"
                         />
                         <div class="section-note">绑定计划的执行任务输出本轮最终回答后触发，经 Rabi 投递到该人格 Route 绑定的会话。Hook：<code>Stop</code>；默认开启。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('agentCommunicationEnforcementEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="强制使用 RabiAgent 消息投递接口"
+                          @update:model-value="value => setCodexHookSetting('agentCommunicationEnforcementEnabled', value)"
+                        />
+                        <div class="section-note">开启后，本 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能绕过 Rabi 直接操作其它 Codex 持久任务。通过 Rabi 投递时，发送方必须明确是否要求回复；要求回复后，目标 Agent 每轮结束仍未正式回复，Manager 会在五分钟后提醒。Hook：<code>PreToolUse</code> / <code>Stop</code>；默认开启。</div>
                       </div>
                     </div>
                   </div>

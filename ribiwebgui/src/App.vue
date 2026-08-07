@@ -49,6 +49,17 @@ function writeDrawerPreferences(preferences: DrawerPreferences): void {
   }
 }
 
+function pageNeedsGatewayDiagnostics(path: string): boolean {
+  return path === "/overview"
+    || path === "/routes"
+    || path === "/runtime"
+    || /^\/routes\/[^/]+\/(?:overview|adapters|runtime)$/.test(path);
+}
+
+function ensurePageDiagnostics(path: string, force = false): Promise<void> {
+  return pageNeedsGatewayDiagnostics(path) ? store.ensureDiagnostics(force) : Promise.resolve();
+}
+
 const drawerPreferences = readDrawerPreferences();
 const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
@@ -77,7 +88,9 @@ const routeOptions = computed(() => store.gateways.map(gateway => {
   ].filter(Boolean).join(" · ");
   return { title, subtitle, value: gateway.id };
 }));
-const selectedGatewayName = computed(() => store.selectedGateway ? store.configNameFor(store.selectedGateway) : "未选择路由");
+const selectedGatewayName = computed(() => store.selectedGateway
+  ? store.configNameFor(store.selectedGateway)
+  : "未选择路由");
 const selectedGatewayAdapters = computed(() => {
   if (!store.selectedGateway) return "等待配置";
   const text = gatewayAdapterTypes(store.selectedGateway).map(adapterLabel).join(" + ");
@@ -97,12 +110,14 @@ onMounted(async () => {
     const scopedPath = routeScopedPathForCurrentPage(selectedRouteKey.value, route.path);
     if (scopedPath && scopedPath !== route.path) await router.replace(scopedPath);
   }
+  void ensurePageDiagnostics(route.path);
   window.addEventListener("beforeunload", beforeUnload);
 });
 
 watch(
   () => route.path,
   (path) => {
+    void ensurePageDiagnostics(path);
     if (path === "/docs") {
       drawer.value = false;
       return;
@@ -128,6 +143,7 @@ async function save() {
 
 async function refresh() {
   await store.load();
+  await ensurePageDiagnostics(route.path, true);
   snackbar.value = "状态已刷新";
 }
 

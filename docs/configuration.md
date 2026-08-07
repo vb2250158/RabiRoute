@@ -53,13 +53,18 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
   "napcatHttpUrl": "http://127.0.0.1:3000",
   "codexThreadName": "QQ 消息监听",
   "codexCwd": "C:/Path/To/Your/Project",
+  "codexPlanAssistantEnabled": false,
+  "codexPlanAssistantModel": "gpt-5.6-terra",
   "codexPlanAssistantSessions": [],
+  "codexMemoryConsolidationAgentEnabled": false,
+  "codexMemoryConsolidationAgentModel": "gpt-5.6-terra",
   "codexHooks": {
     "sessionContextEnabled": true,
     "reasoningContextEnabled": true,
     "planTaskCompletionEnabled": true
   },
-  "agentModel": "",
+  "agentModel": "gpt-5.6-terra",
+  "agentReasoningEffort": "high",
   "agentAdapters": ["codex"],
   "primaryAgentAdapter": "codex",
   "messageProcessingAgents": {
@@ -100,17 +105,23 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `napcatHttpUrl`：OneBot HTTP API 地址。
 - `agentAdapters`：Agent 端适配器列表。当前支持 `codex`、`copilotCli`、`astrbot`、`marvis`。成熟度分别是：Codex 已验证；Copilot CLI、AstrBot 实验支持；Marvis 仅人工接力。
 - `primaryAgentAdapter`：当前 Route 的主控 Agent，必须是 `agentAdapters` 中的一项。消息命中规则后只投递给主控，不会广播给列表里的其他 Agent。旧配置没有该字段时使用列表第一项；删除主控后自动改用仍存在的第一项。
-- Agent 端先使用基础能力层描述安装、认证、项目、会话和投递，再按真实支持情况声明托管任务扩展。当前只有 Codex 声明“消息处理 Agent 模式”“计划协助会话”和“Hook 管理”三项；WebGUI 只在 Codex 卡片显示，读取非 Codex Route 时也会丢弃这三类误配。以后能力等同的处理端可以逐项声明并复用相应界面；自带 Agent 编排的平台不需要声明。
-- `messageProcessingAgents.codex`：Codex 消息处理 Agent 的调度资格和独立模型。默认关闭；开启后，聊天消息默认形成消息组并按不同话题复用或动态创建消息处理任务，ASR 和结构化事件照常直接投递。`heartbeat` 是持续进行的同一项巡检职责：第一次选择或创建一个消息处理任务，此后的定时触发始终补充到最近处理 heartbeat 的同一任务，即使该任务仍在运行也不会为下一次 heartbeat 新建任务。任务使用人格名称作为稳定前缀：只有 1 个时命名为“`<人格名> 协助处理消息`”，扩展到多个时依次改为“`<人格名> 协助处理消息1`”“…消息2”；改名保留原 Desktop 任务 ID 和 workspace。默认模型与推理强度为 `gpt-5.6-luna` / `medium`，只影响消息处理轮次，不改主人格、秘书或计划 Agent。
+- Agent 端先使用基础能力层描述安装、认证、项目、会话和投递，再按真实支持情况声明托管任务扩展。当前只有 Codex 声明“消息处理 Agent 模式”“独立记忆整理 Agent”“计划协助会话”和“Hook 管理”；WebGUI 只在 Codex 卡片显示，读取非 Codex Route 时也会丢弃这些误配。以后能力等同的处理端可以逐项声明并复用相应界面；自带 Agent 编排的平台不需要声明。
+- `messageProcessingAgents.codex`：Codex 消息处理 Agent 的调度资格和独立模型。默认关闭；开启后，聊天消息默认形成消息组并按不同话题复用或动态创建消息处理任务，ASR 和结构化事件照常直接投递。`heartbeat` 是持续进行的同一项巡检职责：第一次选择或创建一个消息处理任务，此后的定时触发始终补充到最近处理 heartbeat 的同一任务，即使该任务仍在运行也不会为下一次 heartbeat 新建任务。任务使用人格名称作为稳定前缀：只有 1 个时命名为“`<人格名> 协助处理消息`”，扩展到多个时依次改为“`<人格名> 协助处理消息1`”“…消息2”；改名保留原 Desktop 任务 ID 和 workspace。普通调度只把 Codex 当前明确为 `idle` 的任务当作空闲候选；`notLoaded` 表示已有任务尚未加载，会复用并由正常 Desktop 链路打开，不会因此新建。Desktop 离线或状态不可读取时，消息组留在可恢复队列中重试，不创建替代任务。`agents.json` 只保存任务 ID、名称、workspace 和初始化信息；消息端/会话/说话人的熟悉度保存在独立的 `routing-affinity.json`，两者都不保存 active/idle 状态。默认模型与推理强度为 `gpt-5.6-luna` / `medium`，只影响消息处理轮次，不改主人格、秘书或计划 Agent。
+- 开启 `messageProcessingAgents.codex.enabled` 后，同一设置区域会显示消息处理看板。看板不是另一套统计：它读取 Manager 保存的消息发送需求，明确区分必须回复、由 Agent 判断、已转交、等待发送、等待审批、已发送、不需要回复和发送失败。直接 @、直接回复和私聊默认必须处理；普通群消息允许 Agent 主动参与讨论，也允许提交有原因的“不回复”。计划与来源消息完成结构化关联后，统一计划写入函数会在进展变化时生成通知需求，并复用原消息处理任务把结果发回来源群或私聊。看板通过 Manager 事件刷新，不定时扫描聊天或计划目录。
 - `codexThreadId` / `codexThreadName`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID 与可见名称。有效且同工作目录的未归档 ID 是稳定身份；保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录完整查找。只有 RabiRoute 自己按稳定名称动态建立的消息处理任务使用 app-server 状态库的名称过滤，避免首次投递扫描完整任务目录；普通会话绑定仍保留完整查找。一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
 - `codexCwd`：目标 Desktop 任务的项目目录。它用于校验已保存 ID、同名任务消歧和新建位置；选择已有任务时自动采用任务自己的目录。
-- `codexPlanAssistantSessions`：当前 Route 精确绑定的持久计划管理秘书列表，保存完整任务 ID、可见名称、workspace、槽位序号和初始化时间。1 个时命名为“`<主会话名> 协助处理计划`”；多个时命名为“`<主会话名> 协助处理计划1`”“…计划2”。从 1 个扩容时会把原任务改名为“…计划1”；缩容只从 Route 解绑多余任务，不删除 Desktop 任务。秘书槽属于控制面，不写入计划 `taskBinding`；秘书负责计划/记忆、业务任务查重与续投，禁止执行调查、实现、测试或修改业务文件。该多任务能力尚未完成真实 Desktop 纵向验收，当前按实验能力展示。
+- `codexMemoryConsolidationAgentEnabled`：是否把自动到点或手动发起的记忆沉淀交给独立 Codex Desktop 任务。默认关闭。关闭时仍按 72 小时自动触发，但由主人格处理；开启后任务名固定由主人格任务名派生为“`<主人格任务名> 记忆整理`”，主人格不再收到同一请求。独立任务投递失败时明确失败，不回退给主人格或备用 Runtime。
+- `codexMemoryConsolidationAgentModel`：独立记忆整理 Agent 的模型，默认 `gpt-5.6-terra`。只影响该独立任务的新轮次，不改变主人格、消息处理 Agent、计划秘书或计划执行 Agent。
+- `codexPlanAssistantEnabled`：是否启用当前 Route 的持久计划秘书。默认关闭；旧配置已经保存 `codexPlanAssistantSessions` 时按开启兼容读取。关闭后不再向人格提供秘书槽，也不再为这些任务自动套用秘书模型；已绑定任务仍保留，重新开启后继续复用。
+- `codexPlanAssistantModel`：Manager 为当前 Route 的全部计划秘书统一选择的模型，默认 `gpt-5.6-terra`。WebGUI 只编辑这一处；秘书任务数组不再分别保存模型。旧配置若只在秘书条目里保存模型，读取时迁移为统一值，之后按统一配置运行和保存。调用方明确指定某一轮模型时仍尊重该选择。
+- `codexPlanAssistantSessions`：当前 Route 精确绑定的持久计划管理秘书列表，只保存完整任务 ID、可见名称、workspace、槽位序号和初始化时间。该列表与启用开关、统一模型分开保存，关闭秘书或修改模型都不会删除绑定。1 个时命名为“`<主会话名> 协助处理计划`”；多个时命名为“`<主会话名> 协助处理计划1`”“…计划2”。从 1 个扩容时会把原任务改名为“…计划1”；缩容只从 Route 解绑多余任务，不删除 Desktop 任务。Manager 在计划的独立 `secretaryBinding` 中保存当前负责秘书；业务 `taskBinding` 始终只指向执行任务。秘书负责计划/记忆、业务任务查重与续投，禁止执行调查、实现、测试或修改业务文件。该多任务能力尚未完成真实 Desktop 纵向验收，当前按实验能力展示。
 - `codexHooks.sessionContextEnabled`：默认 `true`。控制 `SessionStart` / `UserPromptSubmit`；打开、恢复、清空或压缩 Codex 任务，以及用户提交新消息时触发。
 - `codexHooks.reasoningContextEnabled`：默认 `true`。控制 `PreToolUse` / `PostToolUse`；Codex 调用工具前后触发，只返回本轮新命中的计划、记忆或技能上下文。
-- `codexHooks.planTaskCompletionEnabled`：默认 `true`。控制 `Stop` 完成提醒；绑定计划的执行任务输出本轮最终回答后触发，经角色面板、Forwarding、AgentPacket 和 Agent adapter 投递到该人格 Route 绑定的会话。关闭只让 Manager 忽略或拒绝对应 Hook，不卸载或改写 Codex 插件 Hook。
+- `codexHooks.planTaskCompletionEnabled`：默认 `true`。控制 `Stop` 完成提醒；绑定计划的执行任务输出本轮最终回答后触发。启用计划秘书且存在有效秘书任务时，Manager 直接投递给计划 `secretaryBinding` 指向的负责秘书，不写入主人格角色面板，也不默认唤醒主人格；未启用或没有可用秘书时才回退到原主人格链路。关闭只让 Manager 忽略或拒绝对应 Hook，不卸载或改写 Codex 插件 Hook。
+- `codexHooks.agentCommunicationEnforcementEnabled`：WebGUI 显示为“强制使用 RabiAgent 消息投递接口”，默认 `true`，按 Route 保存。开启后，该 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能用 Codex 持久任务工具绕过 `/api/agent/threads`；`PreToolUse` 会在执行前拒绝并提示必须填写 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。使用 `required` 时还要填写 `responseInstruction`；目标任务每轮结束仍未通过 Rabi 正式回复时，Manager 从该轮结束起五分钟后提醒。关闭只停止绕过检查，已经建立的待回复请求仍继续跟进。
 - `copilotThreadName`：Copilot CLI 独立会话名。它不再复用 `codexThreadName`；旧的 Copilot-only 配置会在读取边界迁移一次并以新字段保存。
 - `copilotCwd`：Copilot CLI 独立工作目录，不与 `codexCwd` 共享真源。
-- `agentModel`：旧配置兼容字段。Codex Desktop 主链不读取它；模型由目标 Desktop 任务自己选择。
+- `agentModel` / `agentReasoningEffort`：Manager 统一应用到当前 Route 主人格的 Codex Desktop 新轮次。模型留空时沿用目标 Desktop 任务当前设置；推理强度留空时也不覆盖 Desktop 设置。支持的推理强度为 `low`、`medium`、`high`、`xhigh`、`max`。这两个字段只控制主人格，不覆盖消息处理 Agent、计划秘书或独立计划执行 Agent 的设置。
 - `heartbeatSkipWhenAgentBusy`：可选，默认 `false`。只在未启用 Codex 消息处理 Agent 模式时生效；启用消息处理 Agent 后，`heartbeat` 会立即交给独立消息处理任务，不因主人格任务忙碌而跳过。未启用消息处理 Agent 时，如果当前 Codex 固定任务仍处于 active / in-progress 状态，本次 `heartbeat` 会记录为 `skipped` 且原因是 `agent_busy`。群聊、私聊和其他消息类型不受影响。
 - `speechPushMode`：Route 拥有的语音投递模式。`hot` 表示每段 ASR 完成后立即投递；`keyword` 表示转写仍全部记录，只在命中人格关键词时唤醒 Agent。WebGUI 中“热投递”开关的开对应 `hot`，关对应 `keyword`。
 - `speechTriggerKeywords`：归人格 `personaConfig.json`，用于人格名、常用称呼和唤醒词。列表为空且 Route 关闭热投递时，ASR 只记录、永不暗中回退 `hot`。
@@ -131,7 +142,7 @@ Windows 路径在 WebUI 里写 `C:\Path\To\Project` 或 `C:/Path/To/Project`；�
 - `napcat`：通过 OneBot WebSocket 接收 QQ 事件，通过 OneBot HTTP 预留主动调用能力。
 - `heartbeat`：按固定间隔生成内部 `heartbeat` 路由事件，适合周期巡检。启用 Codex 消息处理 Agent 后立即投给独立消息处理任务；否则可用 `heartbeatSkipWhenAgentBusy` 避免固定 Codex 会话尚未完成上一轮任务时继续堆叠心跳。WebGUI 的“立即触发”只等待 Manager 接受请求，随后立即结束按钮等待；Agent 最终接收成功或失败继续显示在适配器日志中。同一路由、同一触发规则仍在后台投递时，重复点击不会再启动一份。
 - `rolePanel`：Manager/托盘默认提供的内置消息能力，本地面板和经过身份校验的跨人格投递共用固定 `role_panel_message` 规则与统一投递服务；它不显示在 WebGUI 的可配置消息端列表中，不是 Gateway 网络 listener，也不能从人格规则中删除。服务只在处理端接收后记录成功，失败记录只表示尝试。
-- 计划审批不是另一个消息 adapter。Manager 在 feedback 审计落盘后直接生成 `plan_feedback` 系统事件；该事件没有可配置最近消息额度，也不进入角色 timeline 或统一会话账本。
+- 计划审批不是另一个消息 adapter。Manager 在 feedback 审计记录后直接生成 `plan_feedback` 系统事件；启用计划秘书时，引导/审批正文直达业务 `taskBinding`，负责秘书同时收到控制面通知，主人格不再收到每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有未启用或没有可用秘书时才回退给主人格。该事件没有可配置最近消息额度，也不进入角色 timeline 或统一会话账本。
 - `remoteAgent`：Manager 级实验入口。RabiGUI 扫描并连接远端 bridge，支持密码挑战、任务、事件和文件；Gateway 子进程只显示状态占位。
 - `speech`：RabiPC / RabiSpeech 语音消息端。总开关同时控制当前 Route 的常驻录音；热投递开时每段 ASR 直接投递，关时仅命中人格关键词投递。无论是否唤醒，ASR 都保留；成功 TTS 回传与同 `sessionId` ASR 共用双向上下文。
 - `wecom`：通过企业微信智能机器人 WebSocket 长连接接入企业微信群聊，写入 `wecom-messages.jsonl`，并允许 Agent 通过 RabiRoute outbox 回发到企业微信。它的群聊模板变量尽量对齐 NapCat 的 `groupId`、`userId`、`sender`、`message`、`messageId`，额外补充 `wecomReqId`、`wecomConversationId`、`wecomChatId` 等字段；详见 [企业微信接入](wecom-integration.md)。

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PlanItem, RecentMemoryItem } from "./roleKnowledge.js";
-import { normalizeRolePlanPageLimit, paginateRolePlans, summarizeRolePlan } from "./roleKnowledgePagination.js";
+import {
+  normalizeRoleMemoryPageLimit,
+  normalizeRolePlanPageLimit,
+  paginateRoleMemory,
+  paginateRolePlans,
+  summarizeRolePlan
+} from "./roleKnowledgePagination.js";
 import { planPresentation, presentPlan, presentPlans, sortKnowledgeByUpdatedAt } from "./roleKnowledgePresentation.js";
 
 function approvalRequest() {
@@ -604,6 +610,20 @@ test("presented plans expose attachment metadata without local filesystem paths"
   assert.equal("path" in presented.attachments[0]!, false);
 });
 
+test("unchanged plan catalogs reuse their presented ordering across page requests", () => {
+  const source = [
+    plan({ id: "one", title: "One" }),
+    plan({ id: "two", title: "Two", status: "已完成" })
+  ];
+
+  const first = presentPlans(source);
+  const second = presentPlans(source);
+  const changedCatalog = presentPlans([...source]);
+
+  assert.equal(second, first);
+  assert.notEqual(changedCatalog, first);
+});
+
 test("plan pages preserve Manager ordering and expose stable counts while advancing the cursor", () => {
   const presented = presentPlans([
     plan({ id: "running", title: "Running" }),
@@ -640,6 +660,58 @@ test("plan pages preserve Manager ordering and expose stable counts while advanc
     }
   });
   assert.deepEqual(second.counts, first.counts);
+});
+
+test("plan pages filter by the requested view and full plan query before advancing the cursor", () => {
+  const presented = presentPlans([
+    plan({
+      id: "current-target",
+      title: "Current target",
+      steps: [{ id: "work", title: "Work", status: "进行中", detail: "knowledge latency regression" }]
+    }),
+    plan({ id: "current-other", title: "Current other" }),
+    plan({ id: "done-target", title: "Done target", status: "已完成", keywords: ["knowledge latency regression"] }),
+    plan({ id: "archived-target", title: "Archived target", status: "已归档", keywords: ["knowledge latency regression"] })
+  ]);
+
+  const current = paginateRolePlans(presented, "", 1, {
+    view: "current",
+    query: "KNOWLEDGE LATENCY"
+  });
+  const archived = paginateRolePlans(presented, "", 8, {
+    view: "archived",
+    query: "knowledge latency"
+  });
+
+  assert.deepEqual(current.items.map((item) => item.id), ["current-target"]);
+  assert.equal(current.total, 1);
+  assert.equal(current.nextCursor, "");
+  assert.equal(current.counts.total, 4);
+  assert.deepEqual(archived.items.map((item) => item.id), ["archived-target"]);
+  assert.equal(archived.total, 1);
+});
+
+test("plan pages apply Manager-side status filters and update-time sorting before pagination", () => {
+  const presented = presentPlans([
+    plan({ id: "running-old", title: "Running old", updatedAt: "2026-07-01T00:00:00.000Z" }),
+    plan({ id: "done-new", title: "Done new", status: "已完成", updatedAt: "2026-07-04T00:00:00.000Z" }),
+    plan({ id: "running-new", title: "Running new", updatedAt: "2026-07-03T00:00:00.000Z" })
+  ]);
+
+  const byTime = paginateRolePlans(presented, "", 8, { view: "plans", sort: "updated" });
+  const runningOnly = paginateRolePlans(presented, "", 8, {
+    view: "plans",
+    sort: "updated",
+    statuses: ["正在执行"]
+  });
+
+  assert.deepEqual(byTime.items.map((item) => item.id), ["done-new", "running-new", "running-old"]);
+  assert.deepEqual(runningOnly.items.map((item) => item.id), ["running-new", "running-old"]);
+  assert.equal(runningOnly.total, 2);
+  assert.deepEqual(byTime.facets.statuses.map((item) => [item.status, item.count]), [
+    ["正在执行", 2],
+    ["已完成", 1]
+  ]);
 });
 
 test("plan page counts summarize the Manager-derived presentation stages", () => {
@@ -750,4 +822,40 @@ test("memory lists are sorted by updatedAt without mutating the source array", (
 
   assert.deepEqual(sortKnowledgeByUpdatedAt(items).map((item) => item.id), ["newer", "older"]);
   assert.deepEqual(items.map((item) => item.id), ["older", "newer"]);
+});
+
+test("memory pages filter full memory content and return bounded cursors with stable category counts", () => {
+  const items: RecentMemoryItem[] = [
+    {
+      id: "newer",
+      title: "Newer",
+      focus: "Newer",
+      content: "knowledge performance target",
+      createdAt: "2026-07-02T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:00.000Z",
+      keywords: []
+    },
+    {
+      id: "older",
+      title: "Older",
+      focus: "Older",
+      content: "unrelated",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-01T00:00:00.000Z",
+      keywords: []
+    }
+  ];
+
+  const page = paginateRoleMemory(items, "", 1, "PERFORMANCE TARGET", {
+    recent: 2,
+    consolidated: 3,
+    consolidationRuns: 1
+  });
+
+  assert.deepEqual(page.items.map((item) => item.id), ["newer"]);
+  assert.equal(page.total, 1);
+  assert.equal(page.nextCursor, "");
+  assert.deepEqual(page.counts, { recent: 2, consolidated: 3, consolidationRuns: 1 });
+  assert.equal(normalizeRoleMemoryPageLimit(null), 24);
+  assert.equal(normalizeRoleMemoryPageLimit("999"), 100);
 });

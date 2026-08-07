@@ -79,6 +79,8 @@ test("role path resolution sanitizes persona file pointers", () => {
   assert.equal(resolved.roleId, "Rabi");
   assert.equal(resolved.roleDir, path.join(rolesRoot, "Rabi"));
   assert.equal(resolved.rolePath, path.join(rolesRoot, "Rabi", "persona.md"));
+  assert.equal(resolved.routeDataDir, "data/route/main");
+  assert.equal(resolved.personaDataDir, path.join(rolesRoot, "Rabi"));
 });
 
 test("role ids remain strict while route config names can be display-normalized", () => {

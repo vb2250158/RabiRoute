@@ -25,8 +25,8 @@ data/roles/<RoleId>/
   plans/archive/*.json
   plans/attachments/<planId>/*
   plans/feedback/*.jsonl
-  memory/recent/*.json
-  memory/consolidated/*.json
+  memory/recent/*.md
+  memory/consolidated/*.md
   memory/consolidation-runs/*.json
 ```
 
@@ -117,6 +117,13 @@ A plan describes one focused objective. Common fields:
     "kind": "agent",
     "summary": "Created during a documentation audit"
   },
+  "secretaryBinding": {
+    "agentType": "codex",
+    "sessionId": "exact-secretary-session-id",
+    "sessionTitle": "Primary Persona 协助处理计划1",
+    "workspace": "C:/Path/To/RabiRoute",
+    "assignedAt": "2026-06-08T00:00:00+08:00"
+  },
   "taskBinding": {
     "agentType": "codex",
     "sessionId": "exact-source-session-id",
@@ -143,11 +150,15 @@ A current step that requires approval should include a complete `approvalRequest
 
 Existing runtime plans need no bulk migration. Manager normalizes the gate at the read boundary: legacy `isBlocked=true` values without a complete pending approval contract are downgraded to running and cleaned on the next canonical POST/PATCH, while `blockedBy` remains available as context. The system never invents an approver, provenance, recommendation, alternatives, or request time; the Agent must fill those fields from real messages and investigation evidence.
 
-`taskBinding` is the optional exact plan-to-execution-session binding. The current implementation supports only `agentType=codex`. `sessionId` is the required complete execution-task ID; `sessionTitle` is display metadata and `workspace` is a Stop-Hook safety check. With `completionHook.enabled=true`, Manager forwards the official final answer through the existing role-panel path to the same persona's Route after that session finishes a turn. `gatewayId` disambiguates multiple Routes. Delivery is deduplicated by `sessionId + turnId` and records a stage-completion fact only; it does not advance steps, change plan status, or write memory automatically. A top-level paused plan receives no completion reminder, so the binding is not re-driven while paused.
+`secretaryBinding` is the plan's exact current control-plane owner and is separate from the business `taskBinding`. It currently supports persistent Codex Plan Secretaries and stores the complete Secretary task ID, display name, workspace, and assignment time. When control delivery first needs an owner, Manager selects one stable task from the enabled Route pool and persists it. A governance `begin/finish` updates the binding to the Secretary actually managing that plan. A still-configured binding is reused; reassignment happens only after the binding becomes unavailable or leaves the configured pool.
+
+`taskBinding` is the optional exact plan-to-execution-session binding. The current implementation supports only `agentType=codex`. `sessionId` is the required complete execution-task ID; `sessionTitle` is display metadata and `workspace` is a Stop-Hook safety check. With `completionHook.enabled=true`, Manager handles the official final answer after that session finishes a turn: when Plan Secretary is enabled and bound it delivers directly to `secretaryBinding` without writing the Primary Persona role-panel timeline; otherwise it falls back to the same persona's Route. `gatewayId` disambiguates multiple Routes. Delivery is deduplicated by `sessionId + turnId` and records a stage-completion fact only; it does not advance steps, change plan status, or write memory automatically. A top-level paused plan receives no completion reminder, so the binding is not re-driven while paused.
+
+Manager exposes the read-only batch endpoint `GET /api/roles/:roleId/plan-agents/status?planId=...`, resolving each `taskBinding` and optional `secretaryBinding` against the real Codex Desktop task by complete `sessionId + workspace`. Agent work state is returned separately from the task's `active / idle / not_loaded / unavailable / archived / missing / workspace_mismatch` state. A timeout or read failure is `unknown`; plan lifecycle state is never used as a substitute. `POST /api/roles/:roleId/plan-agents/:planId/open` opens only an exact verified, unarchived, workspace-matching binding. It sends no prompt, creates no task, and does not change the binding.
 
 `taskBinding` identifies the plan's independent business-execution task; it never points to a persistent plan secretary. Secretaries are control-plane workers: they maintain plans and memory, resolve and deduplicate business tasks, inspect real status, consume results, and continue the bound task. Investigation, implementation, testing, Unity/SVN/build/release work, and external-system changes belong to the business task. A secretary may create temporary child agents only for plan inventory, deduplication, status checks, and result summaries; neither the secretary nor those children modify business files.
 
-After a business-task completion reminder, the main-persona Agent must, in the same turn, assign a plan secretary to consume the result, PATCH the plan and memory, and continue the exact business `taskBinding.sessionId + workspace` when the plan remains actionable. Pausing a plan or rotating a secretary never clears the business binding. Rebinding is allowed only after the business task is genuinely unavailable and a controlled migration has completed; completed plans may retain the binding as historical evidence. Completion callbacks, heartbeats, and resume inspections should use all available secretary slots across management shards and end only when both `actionable plans without management = 0` and `actionable but idle business tasks = 0`. Already active business tasks are not sent duplicate turns. Authorized inquiry and evidence gathering continue without bypassing action gates.
+After a business-task completion reminder, the responsible Secretary directly consumes the result, PATCHes the plan and memory, and continues the exact business `taskBinding.sessionId + workspace` when the plan remains actionable. Ordinary progress, state changes, waiting conditions, and next actions remain with the Secretary. It escalates only decisions, approval, authorization, missing user input, cross-plan conflicts, complete closure, or safety-reviewed outbound communication to the Primary Persona. Pausing a plan or rotating a Secretary never clears the business binding. Rebinding is allowed only after the business task is genuinely unavailable and a controlled migration has completed; completed plans may retain the binding as historical evidence. Completion callbacks, heartbeats, and resume inspections should use all available Secretary slots across management shards and end only when both `actionable plans without management = 0` and `actionable but idle business tasks = 0`. Already active business tasks are not sent duplicate turns. Authorized inquiry and evidence gathering continue without bypassing action gates.
 
 Plan-management writes are isolated by `planId`: one control-plane writer per plan, with different plans allowed to proceed concurrently. Shared ledgers, issue mappings, and delivery receipts are read at the latest version inside short file locks, merged only at the target record, and atomically replaced; a stale whole-file snapshot must never overwrite another plan. Lock metadata is fully written to a candidate and atomically published with a same-volume hard link. The hot path never deletes a stale or corrupt lock automatically: it fails closed, and repair is allowed only during an explicitly quiescent maintenance window with writers paused. `claim` and `clarify` use a separate lease keyed by source message and stable operation key, persisting a reservation before delivery. An uncertain send or a sent-but-unverified result remains `uncertain` / `sent_unverified` and is never resent automatically.
 
@@ -246,11 +257,15 @@ Recent memory stores a focused fact, preference, conclusion, or unresolved quest
 
 `keywords` is required. RabiRoute's hot-path recall matches IDs, titles, and keywords rather than tokenizing every body.
 
-Memory activity uses the later of `updatedAt` and `viewedAt`:
+Memory now distinguishes direct viewing from a true recall hit:
 
 - Reading a recent or consolidated memory by ID refreshes `viewedAt`.
 - Updating recent memory refreshes both `updatedAt` and `viewedAt`.
-- A recall match placed in required reads refreshes `viewedAt`.
+- A recall match placed in required reads refreshes both `viewedAt` and `recalledAt`.
+
+The editable and default-context windows still use the later of `updatedAt` and `viewedAt`, so an Agent can explicitly read and then correct an old recent memory. The 24/72-hour consolidation clock instead uses the later of `updatedAt` and `recalledAt`; a direct read does not postpone consolidation, while a true recall hit or update does.
+
+New recent and consolidated memories are stored as Markdown files. Lifecycle, source, keyword, and trace fields stay in frontmatter, while the body is ordinary readable Markdown. Legacy `.json` memories remain readable. If both formats contain the same ID, Manager prefers `.md` and counts the item once. WebGUI renders headings, lists, tables, code, links, and mixed text/images; images load only from HTTP(S), while local absolute paths and dangerous protocols are blocked.
 
 ## Current memory windows
 
@@ -263,8 +278,12 @@ These are fixed defaults in the current implementation, not public persona confi
 
 - Recent memories active within 24 hours are listed directly in the packet.
 - Older unconsolidated memories are normally omitted but can still be recalled by ID, title, or keyword.
-- An explicit consolidation request is due when an unconsolidated recent memory has been inactive for more than 72 hours.
-- Consolidation input includes unconsolidated memories inactive for more than 24 hours.
+- An explicit consolidation request is due when an unconsolidated recent memory has not been updated or recalled for more than 72 hours.
+- When the least-active memory reaches 72 hours, Manager freezes that run's `triggerAt` and its candidate ceiling at `triggerAt - 24 hours`. A late execution does not add memories that crossed 24 hours after the original trigger. An update or true recall before execution can still remove an item by changing its activity time.
+
+Manager dynamically projects `triggersNextConsolidation` and `willEnterNextConsolidation` booleans onto recent-memory list items. The projection is cached with the memory catalog and invalidated after a create, update, or recall hit. WebGUI displays those booleans instead of recalculating the candidate set.
+
+The consolidation run stores `triggerMemoryId`, `triggerAt`, `candidateCutoffAt`, and `deliveredAt` after Desktop accepts the request. A Manager restart does not redeliver the same accepted run. The UI projection and the actual request use the same Manager-owned cohort function.
 
 The Manager API can override the two thresholds for one consolidation request.
 
@@ -274,12 +293,13 @@ Consolidated memory is a stable record produced from one or more recent memories
 
 If a consolidated fact is wrong, create a corrective recent memory. A later run can produce a new stable item without mutating history in place.
 
-## Explicit consolidation flow
+## Automatic and explicit consolidation flow
 
 Current entry points:
 
-1. The built-in `manual_trigger` with `triggerId=memory-consolidation`.
-2. `POST /api/roles/:roleId/memory/consolidation-requests`.
+1. Manager's one-shot deadline scheduler when the least-active memory reaches 72 hours.
+2. The built-in `manual_trigger` with `triggerId=memory-consolidation`.
+3. `POST /api/roles/:roleId/memory/consolidation-requests`.
 
 ```json
 {
@@ -291,7 +311,9 @@ Current entry points:
 
 When due, RabiRoute creates a run under `memory/consolidation-runs/` and supplies the eligible recent memories to the handler. `force=true` skips the due check but does not include items still inside the editable window.
 
-Time passing alone does not start a resident background job. Automatic scheduling remains future work.
+Manager schedules the earliest known 72-hour deadline without a resident polling loop. At the deadline it rereads current memory activity, so an update or true recall can postpone the run before delivery.
+
+A Codex Route may enable a dedicated Memory Consolidation Agent. Automatic or manual `manual_trigger + triggerId=memory-consolidation` delivery then goes only to the persistent Desktop task `<Primary Persona task name> 记忆整理`, using `gpt-5.6-terra` by default. The Primary Persona does not receive the same request. Missing Desktop ownership or delivery failure fails explicitly without a fallback Runtime or Primary-Persona retry. The switch chooses the handler; it does not enable or disable the 72-hour scheduler.
 
 The handler returns:
 
@@ -357,7 +379,11 @@ POST  /api/roles/:roleId/memory/consolidation-runs/:runId/result
 
 Both `/roles/...` and `/api/roles/...` prefixes are accepted. Public documentation prefers `/api/roles/...`.
 
-Long plan lists can call `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary` for lightweight cursor pages, then fetch body text, steps, approvals, and attachment metadata by ID through `GET /api/roles/:roleId/plans/:planId`. WebGUI reads eight summaries for the first screen and uses larger background pages for the remaining directory, reducing repeated list queries. The content area mounts a bounded window and appends forward while scrolling. Directory navigation moves that window to the selected plan, so it neither creates every preceding body nor inserts older cards above the current reading position later. WebGUI moves near-viewport details to the front of its bounded queue and yields one rendering frame before consuming another summary page without waiting for detail requests. Only cards with a real request in flight show the loading animation; off-screen cards use a compact pending state plus browser `content-visibility`, avoiding dozens of simultaneous Vuetify skeletons on the main thread. Manager uses a two-level incremental list cache: directory watchers coalesce short bursts of file-write events, while per-file `size + mtimeMs` entries asynchronously reread and normalize only the plan JSON files that changed. Summary requests keep serving the previous complete snapshot while disk I/O is in flight. Canonical POST/PATCH writes update the exact cache entries directly and remain immediately visible. Filesystems without watcher support fall back to a short-TTL validation path. These entries are derived read caches only; plan files remain the sole source of truth.
+Long plan lists can call `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary&view=<current|plans|archived>&query=<text>` for lightweight pages scoped to the visible category and search, then fetch body text, steps, approvals, and attachment metadata by ID through `GET /api/roles/:roleId/plans/:planId`. WebGUI reads only eight summaries for the first screen and no longer scans the remaining plans in the background; it requests the next page only when the user reaches the load boundary. The directory consumes returned summaries, while the content area mounts a bounded window and appends forward while scrolling. Directory navigation moves that window to the selected plan, so it neither creates every preceding body nor inserts older cards above the current reading position later. Near-viewport details use a queue capped at two concurrent requests. Only cards with a real request in flight show the loading animation; off-screen cards use a compact pending state plus browser `content-visibility`, avoiding dozens of simultaneous Vuetify skeletons on the main thread. Manager keeps its incremental file cache and also reuses the presented and sorted catalog while the underlying plan-list object is unchanged. Directory watchers coalesce file-write bursts, and per-file `size + mtimeMs` entries asynchronously reread only changed plan JSON. Canonical POST/PATCH writes update the exact cache entries immediately; filesystems without watcher support fall back to short-TTL validation. These are derived read caches only, and plan files remain the sole source of truth.
+
+Memory lists can call `GET /api/roles/:roleId/memory?kind=<recent|consolidated>&limit=24&cursor=<offset>&query=<text>`. WebGUI requests only the currently visible recent or consolidated category, returns at most 24 items for the first screen, and requests more on scroll instead of transferring every memory when the page opens. Manager reuses parsed recent and consolidated catalogs until their directory changes. When the browser tab is hidden, the knowledge page stops further loading, closes its Manager event connection, and ignores stale request results; becoming visible triggers one catch-up read for the current category.
+
+Plan pagination also accepts `sort=<status|updated>` and repeated `status=<presentation-status>` parameters. The default `sort=status` preserves Manager presentation ordering, while `sort=updated` orders by newest `updatedAt`; Manager applies status filters and sorting before pagination. The response includes `facets.statuses` with the available presentation labels, counts, and palettes for the current view and query, allowing WebGUI to render filters without losing hidden options.
 
 ## Plan guidance and approval feedback
 
@@ -365,7 +391,7 @@ Plan feedback is an independent JSONL audit record stored under `plans/feedback/
 
 The read endpoint returns complete `records` after collapsing delivery-state updates for the same `feedbackId`. RibiWebGUI loads them on demand when a guidable plan or approval step is expanded, and presents plan-guidance history separately from approval history. `latest` remains only a lightweight summary and delivery-state signal.
 
-RibiWebGUI submits plan guidance with `kind=guidance`, `author=user`, `source=webgui`, and `notifyAgent=true`, without `stepId`; Manager accepts it only for running plans that are not currently in an approval step. WebGUI and tray approval submissions continue to use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Approval input retains file, clipboard-image, and `@` plan-attachment support. Both feedback types are durably recorded before returning `deliveryStatus=pending`, then reuse the same exact `taskBinding` delivery chain: a complete binding goes through `/api/agent/threads` and Desktop IPC to the original business task, while only an incomplete binding sends the full feedback to the persona Agent. Retry, terminal status, and `plan_feedback_changed` semantics remain shared.
+RibiWebGUI submits plan guidance with `kind=guidance`, `author=user`, `source=webgui`, and `notifyAgent=true`, without `stepId`; Manager accepts it only for running plans that are not currently in an approval step. WebGUI and tray approval submissions continue to use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Approval input retains file, clipboard-image, and `@` plan-attachment support. Both feedback types are durably recorded before returning `deliveryStatus=pending`. A complete business binding goes through `/api/agent/threads` and Desktop IPC to the original task; with Plan Secretary enabled, the responsible `secretaryBinding` simultaneously receives the control notice and the Primary Persona is not notified for every automatic delivery. An incomplete business binding sends the full feedback to the Secretary first, falling back to the Primary Persona only when no usable Secretary is enabled. Retry, terminal status, and `plan_feedback_changed` semantics remain shared.
 
 After receiving `guidance`, the Agent first reads the current plan and feedback, treats the guidance as whole-plan direction, and explicitly `PATCH`es the plan plus any not-started steps affected by changed scope, priority, method, or path. It then writes `kind=guidance_response`, `author=agent`, and `notifyAgent=false` under the same `planId` without `stepId`. Approval feedback still updates the affected plan/step and approval receipt before writing `approval_response` under the same `planId / stepId`. Neither record advances a plan automatically.
 

@@ -12,19 +12,28 @@ export type PlanApprovalFeedbackPersonaRequest = {
   text: string;
 };
 
+export type PlanApprovalFeedbackSecretaryTarget = {
+  threadId: string;
+  threadName: string;
+  workspace: string;
+  model?: string;
+};
+
 export type DeliverPlanApprovalFeedbackOptions = {
   roleId: string;
   managerBaseUrl: string;
   plan: PlanItem;
   feedback: PlanFeedbackRecord;
+  secretary?: PlanApprovalFeedbackSecretaryTarget;
   sendToTask: (request: PlanApprovalFeedbackTaskRequest) => Promise<void>;
+  sendToSecretary?: (target: PlanApprovalFeedbackSecretaryTarget, request: PlanApprovalFeedbackPersonaRequest) => Promise<void>;
   sendToPersona: (request: PlanApprovalFeedbackPersonaRequest) => Promise<void>;
   directRetryAttempts?: number;
   directRetryDelayMs?: number;
 };
 
 export type PlanApprovalFeedbackDeliveryResult = {
-  mode: "bound_task" | "persona_fallback";
+  mode: "bound_task" | "secretary_fallback" | "persona_fallback";
   message?: string;
 };
 
@@ -93,6 +102,7 @@ function boundTaskPrompt(options: DeliverPlanApprovalFeedbackOptions): string {
       "[计划引导：已直接投递到绑定业务会话]",
       ...feedbackLines(options.feedback),
       "这是该计划绑定的原业务任务。请直接消费本次引导，不要等待人格 Agent 再次转发，也不要创建重复计划或替代会话。",
+      "系统会同时通知该计划绑定的秘书。业务进展、状态变化和本轮结果优先回到秘书，不要直接通知主人格；只有秘书判断确实需要用户或主人格决策、授权、补充输入，或计划已经完整收尾时，才由秘书升级给主人格。",
       "请先读取 Manager 中的当前计划与反馈记录，再结合用户引导继续推进。引导属于整个计划，不绑定某个步骤；若它改变了范围、优先级、执行方法或后续路径，请显式 PATCH 计划，并同步调整尚未开始的步骤。引导记录本身不自动改变计划状态，也不代表审批。",
       `处理完成后，向 ${feedbackApiUrl(options)} POST 一条 kind=${responseKind(options.feedback)}、author=agent、source=agent、notifyAgent=false 的处理说明，只回写当前 planId，不要携带 stepId；不要只在本任务里输出正文。`
     ].join("\n");
@@ -101,31 +111,33 @@ function boundTaskPrompt(options: DeliverPlanApprovalFeedbackOptions): string {
     "[计划审批：已直接投递到绑定业务会话]",
     ...feedbackLines(options.feedback),
     "这是该计划绑定的原业务任务。请直接消费本次审批，不要等待人格 Agent 再次转发，也不要创建重复计划或替代会话。",
+    "系统会同时通知该计划绑定的秘书。业务进展、状态变化和本轮结果优先回到秘书，不要直接通知主人格；只有秘书判断确实需要用户或主人格决策、授权、补充输入，或计划已经完整收尾时，才由秘书升级给主人格。",
     "请先读取 Manager 中的当前计划与审批记录，再按审批意见显式更新对应计划或步骤；审批记录本身不自动推进计划。",
     "计划说明必须写具体：实际文件与改动、完整命令及影响、配置/数据/外部变更、验证、回退和明确排除范围。",
     `处理完成后，向 ${feedbackApiUrl(options)} POST 一条 kind=${responseKind(options.feedback)}、author=agent、source=agent、notifyAgent=false 的处理说明，回写当前 planId / stepId；不要只在本任务里输出正文。`
   ].join("\n");
 }
 
-function personaFeedbackText(
+function controlFeedbackText(
   options: DeliverPlanApprovalFeedbackOptions,
   directFailure?: string
 ): string {
   const guidance = isGuidance(options.feedback);
+  const recipient = options.secretary ? "计划秘书" : "人格 Agent";
   return [
     guidance ? "[计划执行引导]" : "[计划审批建议]",
     ...feedbackLines(options.feedback),
     ...(directFailure ? [`绑定业务会话自动直投失败：${directFailure}`] : []),
     guidance
-      ? "当前引导没有成功直达绑定业务会话，人格 Agent 请按原流程处理、记录并续投对应业务任务。"
-      : "当前审批没有成功直达绑定业务会话，人格 Agent 请按原流程处理、记录并续投对应业务任务。",
+      ? `当前引导没有成功直达绑定业务会话，请由${recipient}按原流程处理、记录失败并继续原业务任务。`
+      : `当前审批没有成功直达绑定业务会话，请由${recipient}按原流程处理、记录失败并继续原业务任务。`,
     guidance
       ? "请先读取 Manager 中的当前计划与反馈记录，再结合引导继续推进；引导属于整个计划，必要时同步调整尚未开始的步骤。引导本身不自动改变计划状态，也不代表审批。"
       : "请先读取 Manager 中的当前计划与审批记录，再按意见更新计划或对应步骤；审批记录本身不自动推进计划。"
   ].join("\n");
 }
 
-function personaNoticeText(options: DeliverPlanApprovalFeedbackOptions): string {
+function controlNoticeText(options: DeliverPlanApprovalFeedbackOptions): string {
   const binding = options.plan.taskBinding!;
   const label = isGuidance(options.feedback) ? "计划引导" : "计划审批";
   return [
@@ -134,11 +146,13 @@ function personaNoticeText(options: DeliverPlanApprovalFeedbackOptions): string 
     `系统已自动投递到绑定业务会话：${binding.sessionTitle || binding.sessionId}`,
     `会话 ID：${binding.sessionId}`,
     `工作区：${binding.workspace}`,
-    "无需再次转发或代替业务会话重复处理；人格 Agent 只需知悉，并按既有计划闭环复核后续结果。"
+    options.secretary
+      ? "无需再次转发或代替业务会话重复处理。秘书负责跟进计划状态、消费后续结果，并且只在确需决策、授权、补充输入或计划完整收尾时通知主人格。"
+      : "无需再次转发或代替业务会话重复处理；人格 Agent 只需知悉，并按既有计划闭环复核后续结果。"
   ].join("\n");
 }
 
-function personaPendingNoticeText(options: DeliverPlanApprovalFeedbackOptions, failure: string): string {
+function controlPendingNoticeText(options: DeliverPlanApprovalFeedbackOptions, failure: string): string {
   const binding = options.plan.taskBinding!;
   const label = isGuidance(options.feedback) ? "计划引导" : "计划审批";
   return [
@@ -148,11 +162,11 @@ function personaPendingNoticeText(options: DeliverPlanApprovalFeedbackOptions, f
     `会话 ID：${binding.sessionId}`,
     `工作区：${binding.workspace}`,
     `Desktop owner 暂时未接管该任务，系统正在对同一会话自动重试：${failure}`,
-    `${label}仍保持 pending，尚未标记为 delivered。人格 Agent 无需代为转发、无需创建替代任务，也不要重复处理本次反馈。`
+    `${label}仍保持 pending，尚未标记为 delivered。${options.secretary ? "秘书" : "人格 Agent"}无需代为转发、无需创建替代任务，也不要重复处理本次反馈。`
   ].join("\n");
 }
 
-function personaFailedNoticeText(options: DeliverPlanApprovalFeedbackOptions, failure: string): string {
+function controlFailedNoticeText(options: DeliverPlanApprovalFeedbackOptions, failure: string): string {
   const binding = options.plan.taskBinding!;
   const label = isGuidance(options.feedback) ? "计划引导" : "计划审批";
   return [
@@ -162,8 +176,20 @@ function personaFailedNoticeText(options: DeliverPlanApprovalFeedbackOptions, fa
     `会话 ID：${binding.sessionId}`,
     `工作区：${binding.workspace}`,
     `系统完成有界重试后仍未成功交给 Desktop owner：${failure}`,
-    `本次${label}未标记为已投递，也没有启动备用 Runtime、创建替代任务或把完整反馈回退给人格 Agent。请保留原 taskBinding，等待 Desktop owner 可用后重试。`
+    `本次${label}未标记为已投递，也没有启动备用 Runtime、创建替代任务或改投其它任务。请保留原 taskBinding，等待 Desktop owner 可用后重试。`
   ].join("\n");
+}
+
+async function sendToControl(
+  options: DeliverPlanApprovalFeedbackOptions,
+  request: PlanApprovalFeedbackPersonaRequest
+): Promise<void> {
+  if (options.secretary) {
+    if (!options.sendToSecretary) throw new Error("Plan secretary delivery is configured without a secretary sender.");
+    await options.sendToSecretary(options.secretary, request);
+    return;
+  }
+  await options.sendToPersona(request);
 }
 
 export async function deliverPlanApprovalFeedback(
@@ -171,13 +197,13 @@ export async function deliverPlanApprovalFeedback(
 ): Promise<PlanApprovalFeedbackDeliveryResult> {
   const binding = options.plan.taskBinding;
   if (!binding?.sessionId?.trim() || !binding.workspace?.trim()) {
-    await options.sendToPersona({
+    await sendToControl(options, {
       kind: "full_feedback",
-      text: personaFeedbackText(options)
+      text: controlFeedbackText(options)
     });
     return {
-      mode: "persona_fallback",
-      message: "Plan taskBinding sessionId/workspace is incomplete; delivered to persona."
+      mode: options.secretary ? "secretary_fallback" : "persona_fallback",
+      message: `Plan taskBinding sessionId/workspace is incomplete; delivered to ${options.secretary ? "secretary" : "persona"}.`
     };
   }
 
@@ -201,9 +227,9 @@ export async function deliverPlanApprovalFeedback(
       const retryable = isRetryableBoundTaskDeliveryError(error);
       if (attempt === 0 && retryable) {
         try {
-          await options.sendToPersona({
+          await sendToControl(options, {
             kind: "auto_delivery_pending_notice",
-            text: personaPendingNoticeText(options, errorMessage(error))
+            text: controlPendingNoticeText(options, errorMessage(error))
           });
         } catch (noticeError) {
           pendingNoticeFailure = errorMessage(noticeError);
@@ -217,9 +243,9 @@ export async function deliverPlanApprovalFeedback(
   if (lastError !== undefined) {
     const message = errorMessage(lastError);
     try {
-      await options.sendToPersona({
+      await sendToControl(options, {
         kind: "auto_delivery_failed_notice",
-        text: personaFailedNoticeText(options, message)
+        text: controlFailedNoticeText(options, message)
       });
     } catch {
       // The bound-task delivery failure remains authoritative even if its control-plane notice also fails.
@@ -228,17 +254,17 @@ export async function deliverPlanApprovalFeedback(
   }
 
   try {
-    await options.sendToPersona({
+    await sendToControl(options, {
       kind: "auto_delivered_notice",
-      text: personaNoticeText(options)
+      text: controlNoticeText(options)
     });
     return pendingNoticeFailure
-      ? { mode: "bound_task", message: `Plan feedback reached the bound business task; pending persona notice failed earlier: ${pendingNoticeFailure}` }
+      ? { mode: "bound_task", message: `Plan feedback reached the bound business task; pending control notice failed earlier: ${pendingNoticeFailure}` }
       : { mode: "bound_task" };
   } catch (error) {
     return {
       mode: "bound_task",
-      message: `Plan feedback reached the bound business task, but persona notification failed: ${errorMessage(error)}`
+      message: `Plan feedback reached the bound business task, but ${options.secretary ? "secretary" : "persona"} notification failed: ${errorMessage(error)}`
     };
   }
 }

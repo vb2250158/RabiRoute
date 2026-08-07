@@ -53,6 +53,8 @@ import {
   messageGroupEnqueueInputForForward
 } from "./routing/messageGroupingForward.js";
 import { MessageAgentPool, messageAgentPoolStatePath } from "./messageAgentPool.js";
+import { MemoryConsolidationAgent, memoryConsolidationAgentStatePath } from "./memoryConsolidationAgent.js";
+import { sendMessageProcessingManagerCommand } from "./messageProcessing/managerClient.js";
 import {
   DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
   DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
@@ -109,6 +111,7 @@ export type ForwardMessageOptions = {
 };
 
 let messageAgentPool: MessageAgentPool | undefined;
+let memoryConsolidationAgent: MemoryConsolidationAgent | undefined;
 let messageGroupingQueue: MessageGroupingQueue | undefined;
 
 /** Clears process-local grouping workers so tests and runtime reconfiguration do not reuse stale gateway settings. */
@@ -116,6 +119,7 @@ export function resetMessageProcessingRuntime(): void {
   messageGroupingQueue?.close();
   messageGroupingQueue = undefined;
   messageAgentPool = undefined;
+  memoryConsolidationAgent = undefined;
 }
 
 function codexMessageAgentPolicy() {
@@ -146,9 +150,54 @@ function activeMessageAgentPool(): MessageAgentPool {
   return messageAgentPool;
 }
 
-function messageGroupPrompt(group: PendingMessageGroup, packet: string): string {
+function activeMemoryConsolidationAgent(): MemoryConsolidationAgent {
+  if (memoryConsolidationAgent) return memoryConsolidationAgent;
+  if (!config.codexThreadId || !config.codexCwd) {
+    throw new Error("Codex Primary Persona task id and workspace are required for the dedicated memory consolidation Agent.");
+  }
+  memoryConsolidationAgent = new MemoryConsolidationAgent({
+    statePath: memoryConsolidationAgentStatePath(config.dataDir),
+    managerBaseUrl: managerBaseUrl(),
+    sourceThreadName: config.codexThreadName,
+    sourceThreadId: config.codexThreadId,
+    workspace: config.codexCwd,
+    roleId: config.agentRoleId,
+    model: config.codexMemoryConsolidationAgentModel
+  });
+  return memoryConsolidationAgent;
+}
+
+function managerBaseUrl(): string {
+  return process.env.GATEWAY_MANAGER_URL?.trim() || "http://127.0.0.1:8790";
+}
+
+function messageProcessingRequirementId(group: PendingMessageGroup, routeId: string): string {
+  const deliveryFingerprint = createHash("sha256")
+    .update(group.items.map((item) => item.identity).join("\n"))
+    .digest("hex")
+    .slice(0, 16);
+  return `${group.groupId}:${routeId}:${deliveryFingerprint}`;
+}
+
+function messageGroupSummary(group: PendingMessageGroup): string {
+  return group.items
+    .map((item) => String(item.payload.record.rawMessage ?? item.payload.record.message ?? "").trim())
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 4_000);
+}
+
+function messageGroupIds(group: PendingMessageGroup): string[] {
+  return group.items
+    .map((item) => String(item.payload.record.messageId ?? "").trim())
+    .filter(Boolean)
+    .slice(-100);
+}
+
+function messageGroupPrompt(group: PendingMessageGroup, packet: string, requirementId?: string): string {
   return [
     `[消息组 ${group.groupId}]`,
+    requirementId ? `消息处理需求 ID：${requirementId}` : "",
     `消息端：${group.endpoint}`,
     `会话：${group.conversationKey}`,
     `说话人：${group.sender}`,
@@ -163,12 +212,96 @@ async function deliverPacketToMessageAgent(
   routeId: string,
   ruleId: string,
   packet: string,
+  replyContextJson: string,
+  roleId: string,
   group: PendingMessageGroup
 ): Promise<ForwardAdapterOutcome[]> {
+  if (group.endpoint === "heartbeat") {
+    try {
+      await activeMessageAgentPool().deliver(group, messageGroupPrompt(group, packet));
+      return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
+    } catch (error) {
+      return [{
+        routeId,
+        ruleId,
+        adapter: "codex",
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error)
+      }];
+    }
+  }
+  const requirementId = messageProcessingRequirementId(group, routeId);
+  let replyContext: Record<string, unknown> | undefined;
   try {
-    await activeMessageAgentPool().deliver(group, messageGroupPrompt(group, packet));
+    const parsed = JSON.parse(replyContextJson) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      replyContext = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // AgentPacket will expose the malformed context; board registration can still retain the source metadata.
+  }
+  try {
+    const registration = await sendMessageProcessingManagerCommand(managerBaseUrl(), {
+      action: "register_group",
+      requirementId,
+      messageGroupId: group.groupId,
+      source: {
+        routeId: process.env.GATEWAY_ID || routeId,
+        routeProfileId: routeId,
+        roleId,
+        endpoint: group.endpoint,
+        conversationKey: group.conversationKey,
+        sender: group.sender,
+        routeKinds: [...new Set(group.items.map((item) => item.payload.routeKind))],
+        messageIds: messageGroupIds(group),
+        summary: messageGroupSummary(group),
+        replyContext
+      }
+    });
+    const registered = registration.data && typeof registration.data === "object"
+      ? registration.data as Record<string, unknown>
+      : {};
+    const canonicalRequirementId = String(registered.id || requirementId);
+    const registeredStatus = String(registered.status || "pending_dispatch");
+    if (registeredStatus !== "pending_dispatch" && registeredStatus !== "send_failed") {
+      appendAdapterLogToDir("router", {
+        event: "message_processing_duplicate_suppressed",
+        level: "info",
+        message: `Duplicate message group reused requirementId=${canonicalRequirementId}; no second Agent delivery was created.`,
+        data: { requestedRequirementId: requirementId, canonicalRequirementId, status: registeredStatus }
+      }, config.dataDir);
+      return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
+    }
+    const worker = await activeMessageAgentPool().deliver(
+      group,
+      messageGroupPrompt(group, packet, canonicalRequirementId),
+      canonicalRequirementId
+    );
+    try {
+      await sendMessageProcessingManagerCommand(managerBaseUrl(), {
+        action: "dispatch",
+        requirementId: canonicalRequirementId,
+        worker: {
+          threadId: worker.threadId,
+          threadName: worker.threadName,
+          workspace: worker.workspace
+        }
+      });
+    } catch (error) {
+      appendAdapterLogToDir("router", {
+        event: "message_processing_board_update_failed",
+        level: "warning",
+        message: `Message group reached the Agent but its board dispatch state could not be updated requirementId=${canonicalRequirementId}`,
+        data: { requirementId: canonicalRequirementId, error: error instanceof Error ? error.message : String(error) }
+      }, config.dataDir);
+    }
     return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
   } catch (error) {
+    void sendMessageProcessingManagerCommand(managerBaseUrl(), {
+      action: "dispatch_failed",
+      requirementId,
+      error: error instanceof Error ? error.message : String(error)
+    }).catch(() => undefined);
     return [{
       routeId,
       ruleId,
@@ -240,6 +373,18 @@ function logDeliveryResult(result: ForwardDeliveryResult): void {
 
 function configuredPrimaryAgentAdapter(): AgentAdapterType | undefined {
   return config.primaryAgentAdapter;
+}
+
+export function memoryConsolidationAgentHandles(
+  routeKind: ForwardRouteKind,
+  triggerId: string | undefined,
+  enabled: boolean,
+  primaryAdapter: AgentAdapterType | undefined
+): boolean {
+  return routeKind === "manual_trigger"
+    && triggerId === "memory-consolidation"
+    && enabled
+    && primaryAdapter === "codex";
 }
 
 export function shouldSkipHeartbeatDelivery(
@@ -338,6 +483,25 @@ export async function deliverPacketToPrimaryAgentAdapter(
       routeId,
       ruleId,
       adapter,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error)
+    }];
+  }
+}
+
+async function deliverPacketToMemoryConsolidationAgent(
+  routeId: string,
+  ruleId: string,
+  message: string
+): Promise<ForwardAdapterOutcome[]> {
+  try {
+    await activeMemoryConsolidationAgent().deliver(message);
+    return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
+  } catch (error) {
+    return [{
+      routeId,
+      ruleId,
+      adapter: "codex",
       status: "failed",
       error: error instanceof Error ? error.message : String(error)
     }];
@@ -505,7 +669,7 @@ function appendRecordToRoleDataDir(record: ForwardRecord, dataDir: string): void
 
 function appendRecordToPersonaConversation(route: RouteProfile, routeKind: ForwardRouteKind, record: ForwardRecord): boolean {
   const roleContext = rolePathsForRoute(route);
-  const dataDir = roleContext.dataDir;
+  const dataDir = roleContext.personaDataDir;
   const scope = messageContextScopeForForward(routeKind, record, { gatewayId: process.env.GATEWAY_ID, routeProfileId: route.id });
   if (!scope) return false;
   try {
@@ -535,7 +699,7 @@ function recordInboundForRoutes(
   let conversationRecordCount = 0;
   for (const route of routes) {
     const roleContext = rolePathsForRoute(route);
-    const resolvedDataDir = path.resolve(roleContext.dataDir);
+    const resolvedDataDir = path.resolve(roleContext.personaDataDir);
     // Initialize/append the canonical conversation ledger before writing the
     // compatibility raw-history file. Otherwise a first write can be imported
     // immediately as legacy history and then appended again as the current event.
@@ -546,7 +710,7 @@ function recordInboundForRoutes(
     if (options.appendRoleRecord !== false
       && resolvedDataDir !== path.resolve(config.memoryDataDir)
       && !recordedRawDirs.has(resolvedDataDir)) {
-      appendRecordToRoleDataDir(record, roleContext.dataDir);
+      appendRecordToRoleDataDir(record, roleContext.personaDataDir);
       recordedRawDirs.add(resolvedDataDir);
     }
   }
@@ -606,7 +770,12 @@ async function forwardMessageToRoute(
     return routeResult(route, "skipped", { reason: "low_signal_voice_transcript" });
   }
 
-  const decision = createRouteDecision(route, routeKind, record, extraValues);
+  const processingRequirementId = options.messageGroup && options.messageGroup.endpoint !== "heartbeat"
+    ? messageProcessingRequirementId(options.messageGroup, route.id)
+    : undefined;
+  const decision = createRouteDecision(route, routeKind, record, processingRequirementId
+    ? { ...extraValues, messageProcessingRequirementId: processingRequirementId }
+    : extraValues);
   if (!decision) {
     logRouteMiss(routeKind, record, "no_matching_rule", route);
     return routeResult(route, "missed", { reason: "no_matching_rule" });
@@ -633,6 +802,12 @@ async function forwardMessageToRoute(
     ?? (routeKind === "heartbeat" && messageAgentModeEnabled()
       ? immediateMessageAgentGroup(routeKind, record, extraValues)
       : undefined);
+  const useMemoryConsolidationAgent = memoryConsolidationAgentHandles(
+    routeKind,
+    isManualTriggerRecord(record) ? record.triggerId : undefined,
+    config.codexMemoryConsolidationAgentEnabled,
+    configuredPrimaryAgentAdapter()
+  );
 
   const adapterOutcomes: ForwardAdapterOutcome[] = [];
   let sentPacketCount = 0;
@@ -649,12 +824,21 @@ async function forwardMessageToRoute(
       time: Math.floor(Date.now() / 1000),
       kind: logKindForRoute(routeKind),
       text: packet.message
-    }, roleContext.dataDir);
+    }, roleContext.personaDataDir);
 
     sentPacketCount += 1;
-    adapterOutcomes.push(...(messageAgentGroup
-      ? await deliverPacketToMessageAgent(route.id, rule.id, packet.message, messageAgentGroup)
-      : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.message)));
+    adapterOutcomes.push(...(useMemoryConsolidationAgent
+      ? await deliverPacketToMemoryConsolidationAgent(route.id, rule.id, packet.message)
+      : messageAgentGroup
+        ? await deliverPacketToMessageAgent(
+          route.id,
+          rule.id,
+          packet.message,
+          String(packet.templateValues.replyContextJson || "{}"),
+          roleContext.roleId,
+          messageAgentGroup
+        )
+        : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.message)));
   }
 
   const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");

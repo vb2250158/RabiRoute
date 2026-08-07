@@ -226,8 +226,12 @@ export function presentPlan(plan: PlanItem): PresentedPlanItem {
   };
 }
 
+const presentedPlanCatalogCache = new WeakMap<PlanItem[], PresentedPlanItem[]>();
+
 export function presentPlans(plans: PlanItem[]): PresentedPlanItem[] {
-  return plans
+  const cached = presentedPlanCatalogCache.get(plans);
+  if (cached) return cached;
+  const presented = plans
     .map(presentPlan)
     .sort((left, right) => {
       const pausedDelta = Number(left.presentation.tone === "paused") - Number(right.presentation.tone === "paused");
@@ -241,6 +245,8 @@ export function presentPlans(plans: PlanItem[]): PresentedPlanItem[] {
       if (dateDelta !== 0) return dateDelta;
       return left.id.localeCompare(right.id);
     });
+  presentedPlanCatalogCache.set(plans, presented);
+  return presented;
 }
 
 export function sortKnowledgeByUpdatedAt<T extends DatedKnowledgeItem>(items: T[]): T[] {

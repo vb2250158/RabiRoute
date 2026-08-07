@@ -77,6 +77,13 @@ export type PersonaSyncConflict = {
   baseHash?: string;
 };
 
+export type PersonaSyncConflictScan = {
+  state: "ready" | "building";
+  partial: boolean;
+  retryAfterMs?: number;
+  message?: string;
+};
+
 export type PersonaSyncConflictResolution = {
   status: "resolved";
   action: "keep_local" | "use_remote" | "use_merged";
@@ -136,7 +143,7 @@ export const personaSyncClient = {
     return jsonRequest("/api/persona-sync/auto-status");
   },
 
-  conflicts(roleId: string): Promise<{ conflicts: PersonaSyncConflict[] }> {
+  conflicts(roleId: string): Promise<{ conflicts: PersonaSyncConflict[]; scan?: PersonaSyncConflictScan }> {
     const query = new URLSearchParams({ roleId });
     return jsonRequest(`/api/persona-sync/conflicts?${query}`);
   },
@@ -149,10 +156,14 @@ export const personaSyncClient = {
     }, true);
   },
 
+  file(roleId: string, relativePath: string): Promise<PersonaSyncContent> {
+    const role = encodeURIComponent(roleId);
+    const path = encodeURIComponent(relativePath);
+    return binaryRequest(`/api/persona-sync/files/${role}/${path}`, ["x-rabi-sha256"]);
+  },
+
   localContent(conflict: PersonaSyncConflict): Promise<PersonaSyncContent> {
-    const role = encodeURIComponent(conflict.roleId);
-    const relativePath = encodeURIComponent(conflict.path);
-    return binaryRequest(`/api/persona-sync/files/${role}/${relativePath}`, ["x-rabi-sha256"]);
+    return this.file(conflict.roleId, conflict.path);
   },
 
   remoteContent(conflictId: string): Promise<PersonaSyncContent> {

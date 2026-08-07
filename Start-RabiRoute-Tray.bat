@@ -429,7 +429,14 @@ function Test-BackendNeedsBuild {
   if (-not (Test-Path $DistManager)) {
     return $true
   }
-  $distTime = (Get-Item $DistManager).LastWriteTimeUtc
+  # TypeScript emits manager.js before some later chunks. Comparing every source
+  # only with manager.js can therefore report a freshly completed build as stale.
+  # Use the newest emitted JavaScript file as the completed backend build time.
+  $distRoot = Split-Path -Parent $DistManager
+  $latestDist = Get-ChildItem -LiteralPath $distRoot -Recurse -File -Include *.js -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1
+  $distTime = if ($latestDist) { $latestDist.LastWriteTimeUtc } else { (Get-Item $DistManager).LastWriteTimeUtc }
   $sourceRoots = @((Join-Path $ProjectRoot "src"))
   foreach ($sourceRoot in $sourceRoots) {
     if (-not (Test-Path $sourceRoot)) {

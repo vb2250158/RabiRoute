@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, type RouteProfile } from "./config.js";
-import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, shouldSkipHeartbeatDelivery } from "./forwarding.js";
+import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, memoryConsolidationAgentHandles, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, shouldSkipHeartbeatDelivery } from "./forwarding.js";
 import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "./history.js";
 import { ManagerSpeechControl } from "./manager/speechControl.js";
 import { handleAgentReply } from "./outbox.js";
@@ -32,6 +32,8 @@ type ForwardingConfigPatch = Partial<Pick<typeof config,
   | "codexThreadId"
   | "codexThreadName"
   | "codexCwd"
+  | "codexMemoryConsolidationAgentEnabled"
+  | "codexMemoryConsolidationAgentModel"
 >>;
 
 function tempDir(): string {
@@ -83,6 +85,14 @@ test("chat routes group automatically while ASR and structured events stay direc
   assert.equal(routeKindUsesAutomaticMessageGrouping("voice_transcript"), false);
   assert.equal(routeKindUsesAutomaticMessageGrouping("heartbeat"), false);
   assert.equal(routeKindUsesAutomaticMessageGrouping("wearable_health_alert"), false);
+});
+
+test("the dedicated memory Agent handles only the exact Codex consolidation trigger", () => {
+  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", true, "codex"), true);
+  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", false, "codex"), false);
+  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "another-trigger", true, "codex"), false);
+  assert.equal(memoryConsolidationAgentHandles("heartbeat", "memory-consolidation", true, "codex"), false);
+  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", true, "copilotCli"), false);
 });
 
 test("AgentPacket delivery targets only the configured primary Agent", async () => {
@@ -144,7 +154,9 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     rolesDir: config.rolesDir,
     codexThreadId: config.codexThreadId,
     codexThreadName: config.codexThreadName,
-    codexCwd: config.codexCwd
+    codexCwd: config.codexCwd,
+    codexMemoryConsolidationAgentEnabled: config.codexMemoryConsolidationAgentEnabled,
+    codexMemoryConsolidationAgentModel: config.codexMemoryConsolidationAgentModel
   };
   const effectivePatch = patch.agentAdapters !== undefined && !("primaryAgentAdapter" in patch)
     ? { ...patch, primaryAgentAdapter: patch.agentAdapters[0] }
@@ -170,6 +182,8 @@ test("a grouped packet is delivered to a dynamically resolved Luna Message Agent
       response.writeHead(200, { "content-type": "application/json" });
       if (body.action === "resolve") {
         response.end(JSON.stringify({ thread: { id: "019f0000-0000-7000-8000-000000000099", title: body.title, cwd: root } }));
+      } else if (body.action === "read") {
+        response.end(JSON.stringify({ thread: { status: { type: "idle" }, active: false } }));
       } else {
         response.end(JSON.stringify({ ok: true }));
       }
@@ -235,11 +249,11 @@ test("a grouped packet is delivered to a dynamically resolved Luna Message Agent
       assert.equal(result.status, "delivered");
     });
 
-    assert.deepEqual(requests.map(item => item.action), ["read", "resolve", "send"]);
-    assert.equal(requests[2]?.model, "gpt-5.6-luna");
-    assert.equal(requests[2]?.reasoningEffort, "medium");
-    assert.match(String(requests[2]?.prompt), /\[消息组 message-group-integration\]/);
-    assert.match(String(requests[2]?.prompt), /你是专职消息处理 Agent/);
+    assert.deepEqual(requests.map(item => item.action), ["register_group", "read", "resolve", "send", "dispatch"]);
+    assert.equal(requests[3]?.model, "gpt-5.6-luna");
+    assert.equal(requests[3]?.reasoningEffort, "medium");
+    assert.match(String(requests[3]?.prompt), /\[消息组 message-group-integration\]/);
+    assert.match(String(requests[3]?.prompt), /你是专职消息处理 Agent/);
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
     else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
@@ -260,6 +274,8 @@ test("heartbeat bypasses the busy-primary skip and goes immediately to a Message
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(body.action === "resolve"
         ? { thread: { id: "019f0000-0000-7000-8000-000000000101", title: body.title, cwd: root } }
+        : body.action === "read"
+          ? { thread: { status: { type: "idle" }, active: false } }
         : { ok: true }));
     });
   });
@@ -305,7 +321,72 @@ test("heartbeat bypasses the busy-primary skip and goes immediately to a Message
     assert.equal(requests[2]?.model, "gpt-5.6-luna");
     assert.match(String(requests[2]?.prompt), /事件：定时心跳提醒/);
     assert.match(String(requests[2]?.prompt), /\[消息组 message-group-/);
+    assert.doesNotMatch(String(requests[2]?.prompt), /消息处理需求 ID：\S/);
     assert.doesNotMatch(String(requests[2]?.prompt), /\[最近消息\]/);
+  } finally {
+    if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
+    else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
+    await new Promise<void>((resolve) => manager.close(() => resolve()));
+    resetMessageProcessingRuntime();
+  }
+});
+
+test("replayed platform messages reuse the canonical requirement without a second Agent delivery", async () => {
+  const root = tempDir();
+  const requests: Array<Record<string, any>> = [];
+  const manager = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, any>;
+      requests.push(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        code: 0,
+        data: { id: "canonical-requirement", status: "processing" }
+      }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    manager.once("error", reject);
+    manager.listen(0, "127.0.0.1", resolve);
+  });
+  const address = manager.address();
+  assert.ok(address && typeof address === "object");
+  const oldManagerUrl = process.env.GATEWAY_MANAGER_URL;
+  process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${address.port}`;
+  resetMessageProcessingRuntime();
+  const route = routeProfile(root, {
+    notificationRules: [{ id: "group", name: "group", enabled: true, routeKinds: ["group_message"], template: "" }]
+  });
+  const record = groupMessage({ rawMessage: "重复投递", messageId: "same-platform-message" });
+  const messageGroup: PendingMessageGroup = {
+    groupId: "new-random-group-id",
+    key: "napcat|group:10001|sender:42|reply:none",
+    baseKey: "napcat|group:10001|sender:42",
+    endpoint: "napcat",
+    conversationKey: "napcat:group:10001",
+    sender: "42",
+    createdAt: Date.now(), updatedAt: Date.now(), deadlineAt: Date.now(), maxDeadlineAt: Date.now(),
+    status: "pending", attempts: 0,
+    items: [{
+      identity: "napcat|group:10001|message:same-platform-message",
+      receivedAt: Date.now(), incomplete: false,
+      payload: { routeKind: "group_message", record, extraValues: {} }
+    }]
+  };
+
+  try {
+    await withForwardingConfig({
+      agentAdapters: ["codex"], primaryAgentAdapter: "codex",
+      messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
+      codexThreadId: "019f0000-0000-7000-8000-000000000001", codexThreadName: "主人格", codexCwd: root,
+      dataDir: path.join(root, "data"), memoryDataDir: path.join(root, "memory"), routeProfiles: [route]
+    }, async () => {
+      const result = await forwardMessageAndWait("group_message", record, {}, { recordInbound: false, messageGroup });
+      assert.equal(result.status, "delivered");
+    });
+    assert.deepEqual(requests.map(item => item.action), ["register_group"]);
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
     else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
@@ -328,9 +409,11 @@ test("live chat messages are recorded immediately, batched once, then sent to on
       response.writeHead(200, { "content-type": "application/json" });
       if (body.action === "resolve") {
         response.end(JSON.stringify({ thread: { id: "019f0000-0000-7000-8000-000000000100", title: body.title, cwd: root } }));
+      } else if (body.action === "read") {
+        response.end(JSON.stringify({ thread: { status: { type: "idle" }, active: false } }));
       } else {
         response.end(JSON.stringify({ ok: true }));
-        if (body.action === "send") resolveSend();
+        if (body.action === "dispatch") resolveSend();
       }
     });
   });
@@ -377,9 +460,9 @@ test("live chat messages are recorded immediately, batched once, then sent to on
       ]);
     });
 
-    assert.deepEqual(requests.map(item => item.action), ["read", "resolve", "send"]);
-    assert.match(String(requests[2]?.prompt), /这个按钮[\s\S]*再往下挪一点/);
-    assert.equal(requests[2]?.model, "gpt-5.6-luna");
+    assert.deepEqual(requests.map(item => item.action), ["register_group", "read", "resolve", "send", "dispatch"]);
+    assert.match(String(requests[3]?.prompt), /这个按钮[\s\S]*再往下挪一点/);
+    assert.equal(requests[3]?.model, "gpt-5.6-luna");
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
     else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;

@@ -12,6 +12,8 @@
 /tmp-app-schema/
 /tmp-thread-*.cjs
 /tmp-update-*.cjs
+/ai_workflow_runs/
+/String(x.planId).startsWith(id)))
 
 # Private runtime state, live relay config, tokens, logs, and current import JSON.
 /data/

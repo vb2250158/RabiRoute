@@ -15,6 +15,10 @@ export function gatewayPayloadIncludesDiagnostics(searchParams: Pick<URLSearchPa
   return searchParams.get("summary") !== "1";
 }
 
+export function gatewayPayloadIncludesConfigDefinitions(searchParams: Pick<URLSearchParams, "get">): boolean {
+  return gatewayPayloadIncludesDiagnostics(searchParams) || searchParams.get("includeConfig") === "1";
+}
+
 export function standaloneGatewayPayload(
   ctx: StatusPayloadContext,
   options: StatusPayloadOptions = {}

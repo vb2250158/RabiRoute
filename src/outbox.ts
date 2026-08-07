@@ -355,6 +355,19 @@ function validatedOutboundFilePath(rootDir: string, filePath: string, allowedFil
   return realCandidate;
 }
 
+function validatedNapCatImageMessage(rootDir: string, message: OneBotMessage, allowedFileRoots: string[]): OneBotMessage {
+  if (typeof message === "string") return message;
+  return message.map((segment) => {
+    if (segment.type.toLowerCase() !== "image") return segment;
+    const file = valueString(segment.data.file);
+    if (!file) throw new Error("Missing image url/path.");
+    const validatedFile = isRemoteFileReference(file)
+      ? file
+      : validatedOutboundFilePath(rootDir, file, allowedFileRoots);
+    return { ...segment, data: { ...segment.data, file: validatedFile } };
+  });
+}
+
 function mobileAttachmentContentType(kind: MessagePayloadKind, filePath: string): string {
   if (kind === "image") {
     const ext = path.extname(filePath).toLowerCase();
@@ -1715,14 +1728,25 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       }
       const sent = await sendGroupMessage({
         groupId: target.groupId,
-        message: napcatGroupReplyMessage(content.message, target.messageId ?? messageId, pipeline.replyToSource)
+        message: napcatGroupReplyMessage(
+          content.kind === "image"
+            ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
+            : content.message,
+          target.messageId ?? messageId,
+          pipeline.replyToSource
+        )
       }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: target.groupId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
       appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation({ ...result }));
       return result;
     }
     if (target.targetType === "private" && target.userId) {
-      const sent = await sendPrivateMessage({ userId: target.userId, message: content.message }, endpoint);
+      const sent = await sendPrivateMessage({
+        userId: target.userId,
+        message: content.kind === "image"
+          ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
+          : content.message
+      }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "private", userId: target.userId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
       appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation({ ...result }));
       return result;

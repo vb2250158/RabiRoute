@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { RouteProfile } from "../config.js";
-import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
+import type { GroupMessageRecord, HeartbeatEventRecord, ManualTriggerRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import { resolvePipeline } from "../pipelines.js";
 import { buildAgentPacket } from "./agentPacket.js";
 import { createRouteDecision } from "./routeDecision.js";
@@ -44,6 +44,18 @@ function voiceTranscript(patch: Partial<VoiceTranscriptEventRecord> = {}): Voice
     senderName: "fennenote",
     adapterType: "fennenote",
     source: "fennenote",
+    ...patch
+  };
+}
+
+function manualTrigger(patch: Partial<ManualTriggerRecord> = {}): ManualTriggerRecord {
+  return {
+    time: 1710000000,
+    rawMessage: "记忆沉淀",
+    messageId: "manual-memory-consolidation",
+    senderName: "RabiRoute 自动调度",
+    triggerId: "memory-consolidation",
+    triggerName: "记忆沉淀",
     ...patch
   };
 }
@@ -143,6 +155,13 @@ test("RouteDecision respects manual trigger rule selection", () => {
 
   assert.ok(decision);
   assert.deepEqual(decision.matchedRules.map((rule) => rule.id), ["run"]);
+});
+
+test("memory consolidation is a Manager-owned trigger and does not require a user notification rule", () => {
+  const decision = createRouteDecision(routeProfile(), "manual_trigger", manualTrigger());
+
+  assert.ok(decision);
+  assert.deepEqual(decision.matchedRules.map((rule) => rule.id), ["memory-consolidation"]);
 });
 
 test("AgentPacket renders rule template and reply context from a decision", () => {

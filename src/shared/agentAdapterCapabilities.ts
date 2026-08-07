@@ -3,6 +3,7 @@ export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
 export type ManagedTaskAgentFeature =
   | "messageProcessingAgent"
   | "planAssistantSessions"
+  | "memoryConsolidationAgent"
   | "hooks";
 
 export type AgentAdapterCapabilities = {
@@ -15,6 +16,7 @@ const codexManagedTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
   managedTasks: Object.freeze({
     messageProcessingAgent: true,
     planAssistantSessions: true,
+    memoryConsolidationAgent: true,
     hooks: true
   })
 });

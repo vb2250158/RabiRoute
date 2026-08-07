@@ -27,6 +27,8 @@ const autoStatus = ref<PersonaSyncAutoStatus | null>(null);
 const syncResult = ref<PersonaSyncResult | null>(null);
 const peerLoading = ref(false);
 const localLoading = ref(false);
+const conflictLoading = ref(false);
+const conflictsLoaded = ref(false);
 const syncingPeerId = ref("");
 const resolvingConflictId = ref("");
 const peerError = ref("");
@@ -100,18 +102,34 @@ async function refreshLocalState(): Promise<void> {
   localLoading.value = true;
   localError.value = "";
   try {
-    const [status, automatic, conflictResult] = await Promise.all([
+    const [status, automatic] = await Promise.all([
       personaSyncClient.indexStatus(),
-      personaSyncClient.autoStatus(),
-      personaSyncClient.conflicts(props.roleId)
+      personaSyncClient.autoStatus()
     ]);
     indexStatus.value = status;
     autoStatus.value = automatic;
-    conflicts.value = conflictResult.conflicts;
   } catch (error) {
     localError.value = error instanceof Error ? error.message : String(error);
   } finally {
     localLoading.value = false;
+  }
+}
+
+async function refreshConflicts(): Promise<void> {
+  if (!props.roleId || conflictLoading.value) return;
+  conflictLoading.value = true;
+  localError.value = "";
+  try {
+    const result = await personaSyncClient.conflicts(props.roleId);
+    conflicts.value = result.conflicts;
+    conflictsLoaded.value = result.scan?.state !== "building";
+    if (result.scan?.state === "building") {
+      notice.value = "历史冲突正在后台整理，Manager 仍可正常使用；稍后再次点击“检查冲突”即可查看结果。";
+    }
+  } catch (error) {
+    localError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    conflictLoading.value = false;
   }
 }
 
@@ -131,7 +149,7 @@ async function syncPeer(peer: PersonaSyncPeer): Promise<void> {
     notice.value = syncResult.value.conflicts > 0
       ? "同步已完成传输，但仍有冲突需要确认。"
       : "当前人格已经和这台电脑收敛。";
-    await refreshLocalState();
+    await Promise.all([refreshLocalState(), refreshConflicts()]);
   } catch (error) {
     localError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -183,7 +201,7 @@ async function resolveConflict(action: "keep_local" | "use_remote"): Promise<voi
       ? `冲突已解决，并通过${result.publish.transport === "lan" ? "局域网" : " Relay"}发布回来源电脑。`
       : `本机冲突已解决；来源电脑暂未收敛：${result.publish.message || "稍后需要再次显式同步。"}`;
     previewOpen.value = false;
-    await refreshLocalState();
+    await Promise.all([refreshLocalState(), refreshConflicts()]);
   } catch (error) {
     previewError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -194,6 +212,7 @@ async function resolveConflict(action: "keep_local" | "use_remote"): Promise<voi
 watch(() => props.roleId, roleId => {
   peers.value = [];
   conflicts.value = [];
+  conflictsLoaded.value = false;
   indexStatus.value = null;
   autoStatus.value = null;
   syncResult.value = null;
@@ -202,7 +221,9 @@ watch(() => props.roleId, roleId => {
 }, { immediate: true });
 
 watch(() => props.manifestVersion, () => {
-  if (props.roleId) void refreshLocalState();
+  if (!props.roleId) return;
+  void refreshLocalState();
+  if (conflictsLoaded.value) void refreshConflicts();
 });
 
 watch(() => props.peerVersion, () => {
@@ -225,6 +246,7 @@ watch(() => props.peerVersion, () => {
           {{ autoStatusLabel }}
         </v-chip>
         <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="peerLoading || localLoading" @click="refreshAll">刷新设备</v-btn>
+        <v-btn size="small" variant="text" prepend-icon="mdi-file-alert-outline" :loading="conflictLoading" @click="refreshConflicts">检查冲突</v-btn>
       </div>
     </div>
 
@@ -241,7 +263,7 @@ watch(() => props.peerVersion, () => {
     <div class="sync-stat-strip">
       <div><span>可同步电脑</span><b>{{ syncablePeers.length }}</b></div>
       <div><span>本机人格文件</span><b>{{ indexStatus?.files ?? "-" }}</b></div>
-      <div><span>待解决文件冲突</span><b>{{ conflicts.length }}</b></div>
+      <div><span>待解决文件冲突</span><b>{{ conflictsLoaded ? conflicts.length : "未检查" }}</b></div>
     </div>
 
     <div v-if="peerLoading && peers.length === 0" class="sync-loading-row">

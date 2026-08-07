@@ -138,6 +138,9 @@ export type RecentMessageContextQuery = {
   maxChars?: number;
   /** Archives are full-fidelity evidence and are opt-in, never automatic Agent context. */
   includeArchives?: boolean;
+  /** Optional epoch-second window used to skip archive files before their bodies are read. */
+  from?: number;
+  to?: number;
 };
 
 type RecentMessageContextOptions = Omit<RecentMessageContextQuery, "limit">;
@@ -593,11 +596,11 @@ function archiveItemFromFile(filePath: string): MessageContextArchiveItem | unde
   };
 }
 
-function discoveredArchives(dataDir: string): MessageContextArchiveItem[] {
+function discoveredArchives(dataDir: string, knownFiles: ReadonlySet<string> = new Set()): MessageContextArchiveItem[] {
   const archiveDir = messageContextArchiveDir(dataDir);
   if (!fs.existsSync(archiveDir)) return [];
   return fs.readdirSync(archiveDir, { withFileTypes: true })
-    .filter((item) => item.isFile() && /^\d+~\d+\.jsonl$/i.test(item.name))
+    .filter((item) => item.isFile() && /^\d+~\d+\.jsonl$/i.test(item.name) && !knownFiles.has(item.name))
     .flatMap((item) => {
       try {
         const archive = archiveItemFromFile(path.join(archiveDir, item.name));
@@ -634,7 +637,7 @@ export function readMessageContextArchiveIndex(dataDir: string): MessageContextA
     ))
     : [];
   const byFile = new Map(indexed.map((item) => [path.basename(item.file), { ...item, file: path.basename(item.file) }]));
-  for (const item of discoveredArchives(dataDir)) if (!byFile.has(item.file)) byFile.set(item.file, item);
+  for (const item of discoveredArchives(dataDir, new Set(byFile.keys()))) byFile.set(item.file, item);
   const archives = sortArchives([...byFile.values()]);
   const currentLastSequence = Math.max(0, ...recordsFromFile(messageContextCurrentPath(dataDir))
     .map((item) => positiveInteger(item.sequence) || 0));
@@ -956,8 +959,18 @@ function legacyItems(dataDir: string): MessageContextRecord[] {
   ];
 }
 
-function archiveRecords(dataDir: string): MessageContextRecord[] {
-  return readMessageContextArchiveIndex(dataDir).archives.flatMap((item) => recordsFromFile(path.join(messageContextArchiveDir(dataDir), path.basename(item.file))));
+function archiveOverlapsQuery(item: MessageContextArchiveItem, query: RecentMessageContextQuery): boolean {
+  const startedAt = Date.parse(item.startedAt) / 1_000;
+  const endedAt = Date.parse(item.endedAt) / 1_000;
+  if (Number.isFinite(query.from) && Number.isFinite(endedAt) && endedAt < Number(query.from)) return false;
+  if (Number.isFinite(query.to) && Number.isFinite(startedAt) && startedAt > Number(query.to)) return false;
+  return true;
+}
+
+function archiveRecords(dataDir: string, query: RecentMessageContextQuery): MessageContextRecord[] {
+  return readMessageContextArchiveIndex(dataDir).archives
+    .filter(item => archiveOverlapsQuery(item, query))
+    .flatMap((item) => recordsFromFile(path.join(messageContextArchiveDir(dataDir), path.basename(item.file))));
 }
 
 function normalizeQuery(limitOrQuery: number | RecentMessageContextQuery, options: RecentMessageContextOptions): RecentMessageContextQuery {
@@ -978,12 +991,14 @@ export function recentMessageContextItems(dataDirs: string[], limitOrQuery: numb
     const indexExists = fs.existsSync(messageContextArchiveIndexPath(dataDir));
     const current = recordsFromFile(messageContextCurrentPath(dataDir));
     const compatibleCurrent = indexExists || current.length ? current : legacyItems(dataDir);
-    return query.includeArchives ? [...archiveRecords(dataDir), ...compatibleCurrent] : compatibleCurrent;
+    return query.includeArchives ? [...archiveRecords(dataDir, query), ...compatibleCurrent] : compatibleCurrent;
   });
   const filtered = dedupeRecords(all).filter((item) =>
     (!query.adapter || item.adapter === query.adapter)
     && (!query.channel || item.channel === query.channel)
     && (!query.conversationKey || item.conversationKey === query.conversationKey)
+    && (!Number.isFinite(query.from) || item.time >= Number(query.from))
+    && (!Number.isFinite(query.to) || item.time <= Number(query.to))
     && (!query.excludedMessageIds?.length || !query.excludedMessageIds.includes(String(item.messageId ?? "")))
   );
   const selected: MessageContextRecord[] = [];

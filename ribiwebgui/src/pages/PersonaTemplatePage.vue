@@ -6,6 +6,7 @@ import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaSyncCard from "../components/PersonaSyncCard.vue";
 import { managerEventSource } from "../managerApi";
 import { personaAvatarClient } from "../persona/personaAvatarClient";
+import { loadPersonaDocument } from "../persona/personaDocumentClient";
 import {
   personaVoiceIdentityClient,
   type PersonaVoiceIdentity,
@@ -33,7 +34,8 @@ import {
 import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
 import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
 import { copyTextToClipboard } from "../clipboard";
-import { routeScopedPersonaPath } from "../routeScopedNavigation";
+import { markdownPreviewExcerpt } from "../markdownPreview";
+import { routeScopedPersonaDocumentPath, routeScopedPersonaPath } from "../routeScopedNavigation";
 import {
   adapterLabel,
   configNameFor,
@@ -66,6 +68,7 @@ const avatarInput = ref<HTMLInputElement | null>(null);
 const avatarSaving = ref(false);
 const avatarError = ref("");
 const voiceIdentityLoading = ref(false);
+const voiceIdentityLoaded = ref(false);
 const voiceIdentityError = ref("");
 const voiceIdentityNotice = ref("");
 const voiceIdentitySummary = ref<PersonaVoiceTranscriptSummary | null>(null);
@@ -74,12 +77,17 @@ const voiceIdentityBusyKey = ref("");
 const voiceConfirmation = ref(idlePersonaVoiceConfirmation());
 const personaSyncManifestVersion = ref(0);
 const personaSyncPeerVersion = ref(0);
+const personaMarkdownContent = ref("");
+const personaMarkdownLoading = ref(false);
+const personaMarkdownLoadError = ref("");
 let releaseSpeech: (() => void) | null = null;
 let managerEvents: EventSource | null = null;
 let managerEventsReady = false;
 let voiceIdentityRefreshRunning = false;
 let voiceIdentityRefreshQueued = false;
 let voiceIdentityRefreshObserveQueued = false;
+let personaMarkdownRequestVersion = 0;
+const PERSONA_SUMMARY_MAX_CHARACTERS = 420;
 
 const recentMessageEndpoints: RecentMessageEndpoint[] = RECENT_MESSAGE_ENDPOINTS.filter(endpoint => endpoint !== "heartbeat");
 
@@ -98,6 +106,21 @@ const selectedRole = computed(() => {
   const roleId = gateway.value?.agentRoleId || "";
   return (runtime.value.roleInfo?.options || []).find(role => role.value === roleId);
 });
+const personaMarkdownSource = computed(() => personaMarkdownContent.value
+  || selectedRole.value?.roleContent
+  || runtime.value.roleInfo?.selectedRoleContent
+  || "");
+const personaMarkdownError = computed(() => personaMarkdownLoadError.value
+  || selectedRole.value?.roleError
+  || runtime.value.roleInfo?.selectedRoleError
+  || "");
+const personaMarkdownSummary = computed(() => markdownPreviewExcerpt(
+  personaMarkdownSource.value,
+  PERSONA_SUMMARY_MAX_CHARACTERS
+));
+const personaDocumentPath = computed(() => routeScopedPersonaDocumentPath(
+  gateway.value ? configNameFor(gateway.value) : ""
+));
 const voiceProfile = computed(() => {
   const roleId = gateway.value?.agentRoleId || "";
   return speech.personas.find(persona => persona.id === roleId);
@@ -334,6 +357,33 @@ async function copyVoiceProfilePath(): Promise<void> {
   }
 }
 
+async function loadPersonaMarkdown(): Promise<void> {
+  const roleId = gateway.value?.agentRoleId || "";
+  const fileName = gateway.value?.agentRoleFile || "persona.md";
+  const requestVersion = ++personaMarkdownRequestVersion;
+  personaMarkdownContent.value = "";
+  personaMarkdownLoadError.value = "";
+  if (!roleId) return;
+  const embedded = selectedRole.value?.roleContent || runtime.value.roleInfo?.selectedRoleContent || "";
+  if (embedded) {
+    personaMarkdownContent.value = embedded;
+    return;
+  }
+  personaMarkdownLoading.value = true;
+  try {
+    const result = await loadPersonaDocument(roleId, fileName);
+    if (requestVersion === personaMarkdownRequestVersion) {
+      personaMarkdownContent.value = result;
+    }
+  } catch (loadError) {
+    if (requestVersion === personaMarkdownRequestVersion) {
+      personaMarkdownLoadError.value = loadError instanceof Error ? loadError.message : String(loadError);
+    }
+  } finally {
+    if (requestVersion === personaMarkdownRequestVersion) personaMarkdownLoading.value = false;
+  }
+}
+
 function clearVoiceIdentityReview(): void {
   voiceIdentitySummary.value = null;
   voiceIdentities.value = [];
@@ -343,6 +393,7 @@ function clearVoiceIdentityReview(): void {
 }
 
 async function refreshVoiceIdentityReview(observeConfirmation = false): Promise<void> {
+  voiceIdentityLoaded.value = true;
   if (observeConfirmation) voiceIdentityRefreshObserveQueued = true;
   if (voiceIdentityRefreshRunning) {
     voiceIdentityRefreshQueued = true;
@@ -393,7 +444,8 @@ function voiceIdentityKey(sourceHostId: string | undefined, voiceprintId: string
   return personaVoiceprintEvidenceKey(sourceHostId, voiceprintId);
 }
 
-function startVoiceConfirmation(): void {
+async function startVoiceConfirmation(): Promise<void> {
+  if (!voiceIdentityLoaded.value) await refreshVoiceIdentityReview();
   voiceIdentityNotice.value = "";
   voiceIdentityError.value = "";
   voiceConfirmation.value = beginPersonaVoiceConfirmation(unresolvedVoiceprints.value);
@@ -499,18 +551,18 @@ function startPersonaEvents(): void {
     if (managerEventsReady) {
       personaSyncManifestVersion.value += 1;
       personaSyncPeerVersion.value += 1;
-      void refreshVoiceIdentityReview();
+      if (voiceIdentityLoaded.value) void refreshVoiceIdentityReview();
     }
     else managerEventsReady = true;
   });
   managerEvents.addEventListener("persona_voice_identity_changed", (raw) => {
-    if (relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
+    if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
   });
   managerEvents.addEventListener("persona_sync_manifest_changed", (raw) => {
     const data = personaSyncEventData(raw);
     const roleId = gateway.value?.agentRoleId || "";
     if (roleId && (!data?.roleId || data.roleId === roleId)) personaSyncManifestVersion.value += 1;
-    if (relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
+    if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
   });
   managerEvents.addEventListener("rabilink_status", () => {
     personaSyncPeerVersion.value += 1;
@@ -533,9 +585,10 @@ watch(() => gateway.value?.agentRoleId, (roleId) => {
   voiceProfileCopyResult.value = "";
   voiceIdentityNotice.value = "";
   voiceConfirmation.value = idlePersonaVoiceConfirmation();
+  voiceIdentityLoaded.value = false;
   if (roleId) {
     void refreshVoiceProfile();
-    void refreshVoiceIdentityReview();
+    clearVoiceIdentityReview();
   } else {
     voiceProfileError.value = "";
     clearVoiceIdentityReview();
@@ -543,8 +596,14 @@ watch(() => gateway.value?.agentRoleId, (roleId) => {
 }, { immediate: true });
 
 watch(() => speech.recordsVersion, () => {
-  if (hasPersona.value) void refreshVoiceIdentityReview(true);
+  if (hasPersona.value && voiceIdentityLoaded.value) void refreshVoiceIdentityReview(true);
 });
+
+watch(
+  [() => gateway.value?.agentRoleId, () => gateway.value?.agentRoleFile, () => selectedRole.value?.roleContent],
+  () => { void loadPersonaMarkdown(); },
+  { immediate: true }
+);
 
 onMounted(async () => {
   releaseSpeech = await speech.acquire();
@@ -661,17 +720,32 @@ watch(() => store.selectedGatewayId, (id) => {
           </v-alert>
         </v-card>
 
-        <v-card v-if="hasPersona" class="app-card glass-card section-card">
+        <v-card v-if="hasPersona" class="app-card glass-card section-card persona-summary-card">
           <div class="section-title-row">
             <div>
-              <div class="section-title">persona.md 预览</div>
+              <div class="section-title">persona.md 摘要</div>
               <div class="section-note" :data-no-i18n="selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath ? '' : undefined">{{ selectedRole?.rolePath || runtime.roleInfo?.selectedRolePath || "未读取到人格文件" }}</div>
             </div>
+            <v-btn
+              :to="personaDocumentPath"
+              color="secondary"
+              variant="tonal"
+              prepend-icon="mdi-file-document-outline"
+            >
+              查看完整正文
+            </v-btn>
           </div>
-          <v-alert v-if="selectedRole?.roleError || runtime.roleInfo?.selectedRoleError" type="error" variant="tonal">
-            {{ selectedRole?.roleError || runtime.roleInfo?.selectedRoleError }}
+          <v-alert v-if="personaMarkdownError" type="error" variant="tonal">
+            {{ personaMarkdownError }}
           </v-alert>
-          <pre v-else class="mono-box">{{ selectedRole?.roleContent || runtime.roleInfo?.selectedRoleContent || "角色文件为空或尚未刷新。" }}</pre>
+          <div v-else-if="personaMarkdownLoading" class="persona-summary-loading" aria-live="polite">
+            <v-progress-circular indeterminate color="secondary" size="24" />
+            <span>正在读取正文摘要…</span>
+          </div>
+          <div v-else-if="personaMarkdownSummary" class="persona-summary-preview" data-no-i18n>
+            {{ personaMarkdownSummary }}
+          </div>
+          <v-alert v-else type="info" variant="tonal" density="compact">角色文件为空或尚未刷新。</v-alert>
         </v-card>
         <v-card v-else class="app-card glass-card section-card">
           <div class="section-title-row">
@@ -840,7 +914,7 @@ watch(() => store.selectedGatewayId, (id) => {
         </div>
 
         <v-alert type="info" variant="tonal" density="compact" class="mb-3">
-          页面只读取统计、声纹缩写和人格关系，不读取或展示转写正文。新录音、声纹修正和多电脑人格同步会通过事件触发一次刷新。
+          点击“刷新归类”后才读取最近 24 小时统计；页面只读取统计、声纹缩写和人格关系，不读取或展示转写正文。读取过一次后，新录音、声纹修正和多电脑人格同步会通过事件触发刷新。
         </v-alert>
         <v-alert v-if="voiceIdentityError" type="error" variant="tonal" density="compact" class="mb-3">
           {{ voiceIdentityError }}

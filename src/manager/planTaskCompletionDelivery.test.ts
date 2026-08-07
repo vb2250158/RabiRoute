@@ -85,26 +85,70 @@ test("plan task completion writes the RolePanel timeline and invokes the selecte
   assert.equal(timeline[0].replyContext?.targetType, "plan_task_completion");
   assert.equal(events[0].type, "plan_task_completed");
   assert.equal(events[0].data.gatewayId, selected.definition.id);
+  assert.equal(events[0].data.recipient, "persona_fallback");
 });
 
-test("plan task completion reminder keeps assistants control-only and continues the business task", () => {
+test("enabled plan secretary receives the business result directly without waking the persona", async (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-delivery-secretary-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const selected = runtime("YeYu__reminder", "YeYu");
+  selected.definition.codexPlanAssistantEnabled = true;
+  selected.definition.codexPlanAssistantSessions = [{
+    threadId: "019f0000-0000-7000-8000-000000000091",
+    threadName: "夜雨 协助处理计划1",
+    workspace: "C:\\workspace\\route",
+    index: 1
+  }];
+  let personaHandoffs = 0;
+  const secretaryHandoffs: Array<{ threadId: string; prompt: string; sourceSessionId: string }> = [];
+  const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+  const deliver = createPlanTaskCompletionDelivery({
+    getRuntime: () => selected,
+    listRuntimes: () => [selected],
+    roleIdForDefinition: (definition) => definition.agentRoleId || "",
+    triggerRolePanelMessage: async () => { personaHandoffs += 1; },
+    sendToSecretary: async (_runtime, target, completion, prompt) => {
+      secretaryHandoffs.push({
+        threadId: target.threadId,
+        prompt,
+        sourceSessionId: completion.sourceSessionId
+      });
+    },
+    publishEvent: (type, data) => events.push({ type, data })
+  });
+
+  await deliver(delivery(roleDir, selected.definition.id));
+
+  assert.equal(personaHandoffs, 0);
+  assert.equal(readRolePanelTimeline(roleDir).length, 0);
+  assert.equal(secretaryHandoffs.length, 1);
+  assert.equal(secretaryHandoffs[0]?.sourceSessionId, "source-session");
+  assert.match(secretaryHandoffs[0]?.prompt || "", /已经直接投递给负责该计划的秘书/);
+  assert.match(secretaryHandoffs[0]?.prompt || "", /只有确实需要用户或主人格做决定/);
+  assert.equal(events[0]?.data.recipient, "secretary");
+  assert.equal(events[0]?.data.secretaryThreadId, selected.definition.codexPlanAssistantSessions[0]?.threadId);
+});
+
+test("plan task completion reminder keeps the secretary control-only and continues the business task", () => {
   const text = planTaskCompletionAgentText(delivery("C:\\role"));
 
-  assert.match(text, /不是只需确认收到的通知/);
+  assert.match(text, /已经直接投递给负责该计划的秘书/);
   assert.match(text, /\[Agent 任务投递来源\]/);
   assert.match(text, /来源 Agent：计划执行 Agent/);
   assert.match(text, /来源会话 ID：source-session/);
   assert.match(text, /\[投递内容\]/);
-  assert.match(text, /同一轮/);
+  assert.match(text, /同一轮完成控制面闭环/);
   assert.match(text, /action=send/);
   assert.match(text, /plan\.taskBinding\.sessionId=source-session/);
   assert.match(text, /原业务任务/);
   assert.match(text, /不得把任何“协助处理计划”秘书会话写入 taskBinding/);
   assert.match(text, /不得因秘书轮转或计划暂停清空业务 taskBinding/);
   assert.match(text, /禁止亲自执行调查、代码\/Prefab\/配置/);
-  assert.match(text, /可推进但无人管理的计划数 = 0/);
-  assert.match(text, /可推进但空闲的业务任务数 = 0/);
+  assert.match(text, /可推进但无人管理的计划/);
+  assert.match(text, /可推进但空闲的业务任务/);
   assert.match(text, /active\/in-progress 业务任务不要重复投递/);
+  assert.match(text, /普通进展、状态变化、等待条件和可继续执行的下一步由秘书直接处理/);
+  assert.match(text, /计划已经完整收尾/);
 });
 
 test("plan task completion fails closed for missing or conflicting route bindings", async (t) => {
@@ -158,7 +202,8 @@ test("plan task completion respects the target Codex endpoint Hook switch", asyn
   selected.definition.codexHooks = {
     sessionContextEnabled: true,
     reasoningContextEnabled: true,
-    planTaskCompletionEnabled: false
+    planTaskCompletionEnabled: false,
+    agentCommunicationEnforcementEnabled: true
   };
   let handoffCount = 0;
   const deliver = createPlanTaskCompletionDelivery({

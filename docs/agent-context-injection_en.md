@@ -208,9 +208,9 @@ It does not tokenize or scan every body on the hot path. The top relevant items,
 
 Matching a recent or consolidated memory refreshes its `viewedAt`. Reading a memory by ID also refreshes `viewedAt`; updating recent memory refreshes both `updatedAt` and `viewedAt`.
 
-## Explicit memory consolidation
+## Automatic or explicit memory consolidation
 
-Memory consolidation uses a `manual_trigger` event with `triggerId=memory-consolidation`, or an explicit Manager API request. The request evaluates the current 72/24-hour thresholds and creates a pending run when due. Time passing alone does not start a resident background consolidation job.
+Memory consolidation uses a `manual_trigger` event with `triggerId=memory-consolidation`, produced automatically at the earliest 72-hour deadline or requested manually, plus an explicit Manager API request. The trigger reevaluates the current 72/24-hour thresholds before creating a pending run.
 
 When a pending run is attached, the wrapper includes:
 

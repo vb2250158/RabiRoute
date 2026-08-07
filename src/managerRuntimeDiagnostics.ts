@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { projectDirectoryLayout } from "./shared/projectDirectoryLayout.js";
 
 type RuntimeEventKind =
   | "process_start"
@@ -100,7 +101,7 @@ export function createManagerRuntimeDiagnostics(
   options: ManagerRuntimeDiagnosticsOptions
 ): ManagerRuntimeDiagnostics {
   const projectRoot = path.resolve(options.rootDir);
-  const logDirectory = path.join(projectRoot, "data", ".runtime", "manager-logs");
+  const logDirectory = projectDirectoryLayout(projectRoot).managerLogRoot;
   const now = options.now ?? (() => new Date());
   const pid = options.pid ?? process.pid;
   const parentPid = options.parentPid ?? process.ppid;

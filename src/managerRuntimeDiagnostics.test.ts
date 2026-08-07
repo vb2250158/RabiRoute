@@ -21,6 +21,7 @@ test("Manager runtime diagnostics append privacy-bounded daily crash events", ()
     uptime: () => 2.5
   });
   try {
+    assert.equal(diagnostics.logDirectory, path.join(root, "logs", "manager"));
     const error = new Error(`rename failed under ${root}`) as NodeJS.ErrnoException & { path: string };
     error.code = "EPERM";
     error.syscall = "rename";

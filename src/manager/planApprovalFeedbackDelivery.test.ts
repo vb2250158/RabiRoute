@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deliverPlanApprovalFeedback,
-  type PlanApprovalFeedbackPersonaRequest
+  type PlanApprovalFeedbackPersonaRequest,
+  type PlanApprovalFeedbackSecretaryTarget
 } from "./planApprovalFeedbackDelivery.js";
 import type { PlanFeedbackRecord } from "../planFeedback.js";
 import type { PlanItem } from "../roleKnowledge.js";
@@ -50,6 +51,63 @@ const guidance: PlanFeedbackRecord = {
   text: "先确认整体入口体验，再调整后续未开始步骤。"
 };
 
+const secretary: PlanApprovalFeedbackSecretaryTarget = {
+  threadId: "019f0000-0000-7000-8000-000000000091",
+  threadName: "主人格 协助处理计划1",
+  workspace: "C:\\Data\\CottonProject\\RabiRoute",
+  model: "gpt-5.6-terra"
+};
+
+test("enabled plan secretary receives the control notice while the bound task receives the full approval", async () => {
+  const taskRequests: Array<{ threadId: string; cwd: string; prompt: string }> = [];
+  const secretaryRequests: PlanApprovalFeedbackPersonaRequest[] = [];
+  const personaRequests: PlanApprovalFeedbackPersonaRequest[] = [];
+  const result = await deliverPlanApprovalFeedback({
+    roleId: "XinghaiBuilder",
+    managerBaseUrl: "http://127.0.0.1:8790",
+    plan: plan({
+      agentType: "codex",
+      sessionId: "019f0000-0000-7000-8000-000000000001",
+      sessionTitle: "原业务任务",
+      workspace: "C:\\Data\\CottonProject\\PangHu"
+    }),
+    feedback,
+    secretary,
+    sendToTask: async (request) => { taskRequests.push(request); },
+    sendToSecretary: async (target, request) => {
+      assert.equal(target.threadId, secretary.threadId);
+      secretaryRequests.push(request);
+    },
+    sendToPersona: async (request) => { personaRequests.push(request); }
+  });
+
+  assert.equal(result.mode, "bound_task");
+  assert.equal(taskRequests.length, 1);
+  assert.match(taskRequests[0]?.prompt || "", /业务进展、状态变化和本轮结果优先回到秘书/);
+  assert.deepEqual(secretaryRequests.map((request) => request.kind), ["auto_delivered_notice"]);
+  assert.match(secretaryRequests[0]?.text || "", /只在确需决策、授权、补充输入或计划完整收尾时通知主人格/);
+  assert.equal(personaRequests.length, 0);
+});
+
+test("missing business binding falls back to the assigned secretary instead of the persona", async () => {
+  const secretaryRequests: PlanApprovalFeedbackPersonaRequest[] = [];
+  const personaRequests: PlanApprovalFeedbackPersonaRequest[] = [];
+  const result = await deliverPlanApprovalFeedback({
+    roleId: "XinghaiBuilder",
+    managerBaseUrl: "http://127.0.0.1:8790",
+    plan: plan(undefined),
+    feedback,
+    secretary,
+    sendToTask: async () => { throw new Error("must not send"); },
+    sendToSecretary: async (_target, request) => { secretaryRequests.push(request); },
+    sendToPersona: async (request) => { personaRequests.push(request); }
+  });
+
+  assert.equal(result.mode, "secretary_fallback");
+  assert.deepEqual(secretaryRequests.map((request) => request.kind), ["full_feedback"]);
+  assert.equal(personaRequests.length, 0);
+});
+
 test("approval is delivered to the bound Codex task and persona only receives an auto-delivered notice", async () => {
   const taskRequests: Array<{ threadId: string; cwd: string; prompt: string }> = [];
   const personaRequests: PlanApprovalFeedbackPersonaRequest[] = [];
@@ -95,7 +153,7 @@ test("approval falls back to the persona when the plan has no complete task bind
   assert.equal(taskCalls, 0);
   assert.equal(personaRequests.length, 1);
   assert.equal(personaRequests[0]?.kind, "full_feedback");
-  assert.match(personaRequests[0]?.text || "", /请按原流程处理/);
+  assert.match(personaRequests[0]?.text || "", /按原流程处理/);
 });
 
 test("plan guidance reaches the bound task without pretending to approve a step", async () => {

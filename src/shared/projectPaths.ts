@@ -1,8 +1,5 @@
 import path from "node:path";
-
-function slashPath(value: string): string {
-  return value.replace(/\\/g, "/");
-}
+import { slashPath } from "./pathPolicy.js";
 
 function isOutsideRelativePath(value: string): boolean {
   return value === ".." || value.startsWith(`..${path.sep}`) || path.isAbsolute(value);
@@ -22,7 +19,7 @@ function sameParts(left: string[], right: string[]): boolean {
   return left.every((part, index) => part.toLowerCase() === right[index].toLowerCase());
 }
 
-function rebaseProjectLikeAbsolutePath(value: string, projectRoot: string): string | null {
+export function migrateLegacyProjectAbsolutePath(value: string, projectRoot: string): string | null {
   const rootParts = pathPartsWithoutRoot(projectRoot);
   const valueParts = pathPartsWithoutRoot(value);
   if (rootParts.length === 0 || valueParts.length === 0) return null;
@@ -54,7 +51,7 @@ export function toProjectRelativePath(value: unknown, projectRoot = process.cwd(
     return slashPath(relative) || ".";
   }
 
-  return rebaseProjectLikeAbsolutePath(trimmed, projectRoot) ?? slashPath(trimmed);
+  return slashPath(trimmed);
 }
 
 export function resolveProjectPath(value: unknown, projectRoot = process.cwd()): string | undefined {
@@ -63,11 +60,24 @@ export function resolveProjectPath(value: unknown, projectRoot = process.cwd()):
   if (!relativeOrAbsolute) return undefined;
   if (trimmed && path.isAbsolute(trimmed)) {
     const relative = path.relative(projectRoot, trimmed);
-    if (isOutsideRelativePath(relative) && !rebaseProjectLikeAbsolutePath(trimmed, projectRoot)) {
+    if (isOutsideRelativePath(relative)) {
       return trimmed;
     }
   }
   return path.isAbsolute(relativeOrAbsolute)
     ? relativeOrAbsolute
     : path.resolve(projectRoot, relativeOrAbsolute);
+}
+
+export function toPersistedProjectPath(value: unknown, projectRoot = process.cwd()): string | undefined {
+  if (typeof value !== "string") return toProjectRelativePath(value, projectRoot);
+  const trimmed = value.trim();
+  if (!trimmed || !path.isAbsolute(trimmed)) return toProjectRelativePath(value, projectRoot);
+  return migrateLegacyProjectAbsolutePath(trimmed, projectRoot) ?? toProjectRelativePath(trimmed, projectRoot);
+}
+
+export function resolvePersistedProjectPath(value: unknown, projectRoot = process.cwd()): string | undefined {
+  const persisted = toPersistedProjectPath(value, projectRoot);
+  if (!persisted) return undefined;
+  return path.isAbsolute(persisted) ? persisted : path.resolve(projectRoot, persisted);
 }

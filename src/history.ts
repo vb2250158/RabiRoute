@@ -55,6 +55,7 @@ export type ManualTriggerRecord = {
   senderName?: string;
   triggerId?: string;
   triggerName?: string;
+  triggerSource?: "manual" | "auto";
   intervalSeconds?: number;
 };
 

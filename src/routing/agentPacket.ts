@@ -11,6 +11,7 @@ import {
 import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
 import { recentMessageLimitFor } from "../shared/gatewayConfigModel.js";
+import { communicationModeForRouteKind, proactiveCommunicationPolicyLines } from "../shared/agentCommunicationPolicy.js";
 import {
   currentPlanStep,
   getPlan,
@@ -40,12 +41,20 @@ import {
   isVoiceTranscriptRecord
 } from "./routeDecision.js";
 
-export type AgentRoleContext = {
+type AgentRoleContextIdentity = {
   roleId: string;
   roleDir: string;
   rolePath: string;
-  dataDir: string;
 };
+
+export type AgentRoleContext = AgentRoleContextIdentity & (
+  | { routeDataDir: string; personaDataDir: string; dataDir?: never }
+  | { /** @deprecated Legacy fixture/config boundary. */ dataDir: string; routeDataDir?: never; personaDataDir?: never }
+);
+
+function personaDataDirFor(roleContext: AgentRoleContext): string {
+  return roleContext.personaDataDir ?? roleContext.dataDir;
+}
 
 export type AgentPacket = {
   rule: NotificationRule;
@@ -169,6 +178,10 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   const targetType = String(values.targetType ?? "");
   const replyApiUrl = String(values.replyApiUrl ?? "");
   const replyContextJson = String(values.replyContextJson ?? "");
+  const messageProcessingRequirementId = String(values.messageProcessingRequirementId ?? "").trim();
+  const messageProcessingOutcomeUrl = messageProcessingRequirementId
+    ? `${replyApiUrl.replace(/\/api\/agent\/replies$/, "")}/api/message-processing/requirements/${encodeURIComponent(messageProcessingRequirementId)}/outcome`
+    : "";
   const replyToSource = String(values.replyToSource ?? "").toLowerCase() === "true";
   const characterTtsDialogue = outputAdapter === "tts" && routeKind === "voice_transcript";
   let planFeedbackKind = "";
@@ -186,6 +199,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   const isPlanGuidance = isPlanFeedback && planFeedbackKind === "guidance";
   const shouldExplainReplyApi = isPlanFeedback
     || forceMessagePipeline
+    || Boolean(messageProcessingRequirementId)
     || replyToSource
     || characterTtsDialogue
     || (outputAdapter === "fennenote" && routeKind === "voice_transcript")
@@ -229,6 +243,19 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
           "如果判断需要回应消息来源，请把回复 POST 到普通回复 API；RabiRoute 会按当前管道投递。"
         ];
 
+  const processingOutcomeLines = messageProcessingRequirementId
+    ? [
+        `本消息组的处理需求 ID 是 ${messageProcessingRequirementId}。RabiManager 会在消息处理看板中持续跟踪它。`,
+        `先 GET ${messageProcessingOutcomeUrl.replace(/\/outcome$/, "")} 读取本需求的 knowledgeMatches；不要只依赖提示词里可能被截断的召回摘要。`,
+        `关闭或准备回复前，必须 POST ${messageProcessingOutcomeUrl}。由消息处理 Agent 提交 projectFactAssessment：status=none/critical、reviewedMessageIds、replyChainChecked=true、具体 evidence、assessedAt、assessedByThreadId；critical 时还要提交 facts，并在完成计划/记忆/文档记录后提交 criticalFactDisposition。`,
+        "消息处理需求中如有 knowledgeMatches，必须逐项读取并提交 knowledgeMatchDispositions：相关性、证据和实际 actions。相关命中不能只写 no_action；更新或新建计划/记忆必须提供真实 recordId、核对时间，并让目标记录包含原消息 ID。回复或讨论必须进入实际发送流程。RabiManager 负责召回、校验和跟踪，不替 Agent 决定语义。",
+        "如果 knowledgeMatches 为空，Agent 仍须根据原消息、附件和回复链自行提取对象与同义词，至少用两组关键词查询计划/记忆；不能把“未命中”当成“无需响应”。",
+        `如果最终决定不回复，还要提交 decision=no_reply、reasonCode 和具体 reason。明确 @、直接回复、私聊等必须回复消息只允许使用结束语、重复、自身消息、他人已完整回答、消息撤回或来源失效作为免回复原因。`,
+        `如果需要转交秘书、计划 Agent 或主人格，调用线程桥时同时传 messageProcessing={"requirementId":"${messageProcessingRequirementId}","outcome":"handoff","targetAgentType":"实际类型","planId":"如已关联计划"}。线程桥接受不代表本需求完成；结果仍要返回当前消息处理任务。`,
+        "如果需要回复，普通回复 API 的实际 sent 回执会自动完成这项发送需求；只在 Codex 最终文本中写了回复不算完成。"
+      ]
+    : [];
+
   return [
     ...intro,
     "请求体必须包含 text 和 replyContext，其中 replyContext 使用上方“当前回复上下文”的 JSON 原样传入。",
@@ -239,6 +266,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
       replyContext: JSON.parse(replyContextJson)
     }, null, 2),
     "```",
+    ...processingOutcomeLines,
     isPlanFeedback
       ? "API 调用成功后，Codex 可见最终文本只需简短说明计划已更新且回复已回写；不要重复输出计划回复正文。"
       : characterTtsDialogue
@@ -517,7 +545,7 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
     transport: scope.record.transport,
     conversationKey: scope.record.conversationKey,
     limit,
-    text: recentMessageContextText([roleContext.dataDir], {
+    text: recentMessageContextText([personaDataDirFor(roleContext)], {
       limit,
       adapter: scope.endpoint,
       conversationKey: scope.record.conversationKey,
@@ -630,14 +658,17 @@ function remoteAgentApiHint(values: ForwardTemplateValues): string[] {
   ];
 }
 
-function eventTitleForRoute(routeKind: RouteDecision["routeKind"]): string {
+function eventTitleForRoute(routeKind: RouteDecision["routeKind"], record?: RouteDecision["record"]): string {
   if (routeKind === "private") return "QQ 私聊消息提醒";
   if (routeKind === "group_message") return "QQ 群聊消息提醒";
   if (routeKind === "direct_at") return "QQ 群聊直接提醒";
   if (routeKind === "direct_reply") return "QQ 直接回复提醒";
   if (routeKind === "indirect_reply") return "QQ 回复链提醒";
   if (routeKind === "heartbeat") return "定时心跳提醒";
-  if (routeKind === "manual_trigger") return "手动触发提醒";
+  if (routeKind === "manual_trigger") {
+    const manualRecord = record && isManualTriggerRecord(record) ? record : undefined;
+    return manualRecord?.triggerSource === "auto" ? "自动到点触发" : "手动触发提醒";
+  }
   if (routeKind === "role_panel_message") return "角色面板消息";
   if (routeKind === "plan_feedback") return "计划反馈";
   if (routeKind === "voice_transcript") return "语音转写提醒";
@@ -716,19 +747,20 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const pipeline = outputPipelineForDecision(decision);
   const replyApiPath = "/api/agent/replies";
   const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
-  const dataDirPath = relativeWorkspacePath(roleContext.dataDir);
+  const personaDataDir = personaDataDirFor(roleContext);
+  const dataDirPath = relativeWorkspacePath(personaDataDir);
   const roleDirPath = relativeWorkspacePath(roleContext.roleDir);
   const rolePath = relativeWorkspacePath(roleContext.rolePath);
-  const groupLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, isWeCom ? "wecom-messages.jsonl" : isFeishu ? "feishu-messages.jsonl" : "group-messages.jsonl"));
-  const privateLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, isWeixin ? "weixin-messages.jsonl" : "private-messages.jsonl"));
-  const heartbeatLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "heartbeat-events.jsonl"));
-  const manualTriggerLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "manual-trigger-events.jsonl"));
-  const rolePanelLogPath = relativeWorkspacePath(path.join(roleContext.roleDir || roleContext.dataDir, "role-panel", "messages.jsonl"));
-  const voiceTranscriptLogPath = relativeWorkspacePath(path.join(roleContext.dataDir, "voice-transcripts.jsonl"));
-  const voiceIdentitiesPath = relativeWorkspacePath(path.join(roleContext.roleDir || roleContext.dataDir, "voice", "voice-identities.jsonl"));
-  const conversationCurrentPath = relativeWorkspacePath(messageContextCurrentPath(roleContext.dataDir));
-  const conversationArchiveDir = relativeWorkspacePath(messageContextArchiveDir(roleContext.dataDir));
-  const conversationArchiveIndexPath = relativeWorkspacePath(messageContextArchiveIndexPath(roleContext.dataDir));
+  const groupLogPath = relativeWorkspacePath(path.join(personaDataDir, isWeCom ? "wecom-messages.jsonl" : isFeishu ? "feishu-messages.jsonl" : "group-messages.jsonl"));
+  const privateLogPath = relativeWorkspacePath(path.join(personaDataDir, isWeixin ? "weixin-messages.jsonl" : "private-messages.jsonl"));
+  const heartbeatLogPath = relativeWorkspacePath(path.join(personaDataDir, "heartbeat-events.jsonl"));
+  const manualTriggerLogPath = relativeWorkspacePath(path.join(personaDataDir, "manual-trigger-events.jsonl"));
+  const rolePanelLogPath = relativeWorkspacePath(path.join(roleContext.roleDir || personaDataDir, "role-panel", "messages.jsonl"));
+  const voiceTranscriptLogPath = relativeWorkspacePath(path.join(personaDataDir, "voice-transcripts.jsonl"));
+  const voiceIdentitiesPath = relativeWorkspacePath(path.join(roleContext.roleDir || personaDataDir, "voice", "voice-identities.jsonl"));
+  const conversationCurrentPath = relativeWorkspacePath(messageContextCurrentPath(personaDataDir));
+  const conversationArchiveDir = relativeWorkspacePath(messageContextArchiveDir(personaDataDir));
+  const conversationArchiveIndexPath = relativeWorkspacePath(messageContextArchiveIndexPath(personaDataDir));
   const recentContext = recentMessageContextForDecision(decision, roleContext);
   const voiceprintIds = isVoiceTranscript ? voiceprintIdsForRecord(record) : [];
   const personaVoiceIdentities = isVoiceTranscript && roleContext.roleDir && record.sourceHostId && voiceprintIds.length > 0
@@ -748,6 +780,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     messageId: record.messageId,
     messageGroupId: record.messageGroupId,
     messageGroupMessageIds: record.messageGroupMessageIds,
+    messageProcessingRequirementId: decision.extraValues?.messageProcessingRequirementId,
     groupId: isGroup ? record.groupId : wecomGroupId ?? feishuChatId,
     userId: "userId" in record ? record.userId : undefined,
     targetGroupId: config.targetGroupId || undefined,
@@ -911,8 +944,7 @@ function buildAgentMessage(
         roleDir,
         signalText: String(values.message || ""),
         includePendingConsolidation: shouldAttachMemoryConsolidation,
-        consolidationTrigger: shouldAttachMemoryConsolidation ? "manual" : undefined,
-        forceConsolidation: shouldAttachMemoryConsolidation
+        consolidationTrigger: shouldAttachMemoryConsolidation ? "manual" : undefined
       })
     : null;
   const knowledge = contextResolution?.knowledge ?? null;
@@ -957,7 +989,7 @@ function buildAgentMessage(
 
   const blocks = [
     section("RabiRoute 事件", [
-      `事件：${eventTitleForRoute(routeKind)}`,
+      `事件：${eventTitleForRoute(routeKind, record)}`,
       `路由类型：${routeKind}`,
       optionalLine("事件时间", values.time),
       optionalLine("当前时间", values.currentTime),
@@ -1021,12 +1053,13 @@ function buildAgentMessage(
     ]) : "",
     hasPersona && planAssistantLines.length > 0 ? section("计划协助会话", [
       "下列 Codex Desktop 任务是当前主会话的持久计划管理秘书槽，属于控制面，不是一次性子 Agent，也不是计划的业务执行任务。",
-      "主人格使用 /api/agent/threads 的 send 动作向秘书的精确 threadId 分配计划管理队列；不得把秘书 ID 写入任何计划的 taskBinding。",
+      `全部秘书统一使用 Manager 配置的模型：${config.codexPlanAssistantModel}`,
+      "Manager 为每个计划单独保存 secretaryBinding，记录当前负责秘书；业务 taskBinding 仍只指向独立业务任务。主人格分配新计划时使用 /api/agent/threads 的 send 动作投给秘书的精确 threadId，不得把秘书 ID 写入 taskBinding。Agent 间投递必须填写 sourceThreadId、sourceAgentType 和 responsePolicy=required 或 none；要求回复时填写 responseInstruction，回复已有请求时填写 inReplyToRequestId、result 和 nextAction。",
       "每个计划的 taskBinding.sessionId + workspace 必须指向独立业务任务会话。调查、实现、测试、Unity/SVN/构建/发布和外部系统操作只能在业务任务中执行。",
       "秘书负责计划/记忆维护、业务任务查重与绑定、真实状态巡检、结果消费、提醒和续投。秘书可以开临时子 Agent 做控制面盘点，但秘书及其子 Agent不得直接修改业务文件。",
-      "主人格是秘书槽调度者，不是计划管理员。新反馈、业务任务完成提醒、heartbeat 巡检或秘书阶段报告到达时，先把控制面工作精确投给秘书；主人格不得亲自展开全量计划读取、任务查重、绑定迁移、状态对账、问题账本/记忆写入或批量续投。",
+      "主人格是秘书槽调度者和关键决策者，不是计划管理员。WebGUI 提交的计划引导/审批会同时投给业务 taskBinding 和负责秘书；业务任务完成提醒、计划进展和状态变化也优先直达负责秘书，不再默认唤醒主人格。",
       "发出秘书消息不等于委派完成。主人格必须核对精确 threadId + workspace、秘书真实任务状态和阶段回执；秘书开始后等待其结果，不得并行执行同一份日志/截图读取、查重、计划 PATCH、记忆/账本写入或任务续投，也不得先自己做一遍再只把剩余部分交给秘书。",
-      "秘书必须在同一轮消费结果、更新计划和记忆，并按计划自身 taskBinding 精确续投业务任务；主人格随后复核秘书摘要和关键决策。不允许只回复“已收到”、由主人格自己长时间处理，或等下一次 heartbeat。",
+      "秘书必须在同一轮消费结果、更新计划和记忆，并按计划自身 taskBinding 精确续投业务任务。普通进展、状态变化和等待条件由秘书直接处理；只有需要用户/主人格做决定、批准、授权、补充输入，或者计划完整收尾需要最终复核/对外说明时，秘书才升级给主人格。",
       "计划暂停或秘书轮转不能清空业务 taskBinding；只有业务任务确实失效并完成受控迁移时才改绑。计划完成后仍可保留 taskBinding 作为历史证据。",
       "有多个计划时并行使用秘书槽管理不同计划分片；同一 planId 同时只能有一个控制面 writer，不同计划不能被某个 active cycle 全局阻塞。共享账本只合并目标记录并原子写入。本轮结束前校验：可推进但无人管理的计划数 = 0，且可推进但空闲的业务任务数 = 0。active/in-progress 业务任务不要重复投递。",
       "只有当前步骤具有完整、可提交且 responseStatus=pending 的 approvalRequest 时，Manager 才自动派生审批阻塞；isBlocked 是兼容投影，不得手写。审批合同不完整时计划保持进行中，由秘书继续调查、补证据和补齐合同；待 QA、缺资料、执行失败、工具超时、外部产物或普通负责人等待必须通过询问、重试、改道、拆分、升级或替代路径继续推进，不能占用阻塞。",
@@ -1050,6 +1083,7 @@ function buildAgentMessage(
       optionalLine("普通回复 API", values.replyApiUrl),
       optionalLine("当前回复上下文", values.replyContextJson)
     ]),
+    section("主动协作要求", proactiveCommunicationPolicyLines(communicationModeForRouteKind(routeKind))),
     section("回复回传要求", replyDeliveryLines(values, !hasPersona)),
     config.messageAdapterTypes.includes("remoteAgent")
       ? section("远端 Agent 设备", remoteAgentApiHint(values))
@@ -1058,7 +1092,9 @@ function buildAgentMessage(
     referencedPlanSummaries.length > 0 ? section("指定计划内容", referencedPlanSummaries) : "",
     routeKind === "manual_trigger" || routeKind === "heartbeat" ? section("事件执行要求", [
       routeKind === "manual_trigger"
-        ? "这是一条人工点击的手动触发，不要只把消息写入线程后结束。"
+        ? isManualTriggerRecord(record) && record.triggerSource === "auto"
+          ? "这是近期记忆到达 72 小时后的自动沉淀触发，不要只把消息写入线程后结束。"
+          : "这是一条人工点击的手动触发，不要只把消息写入线程后结束。"
         : "这是一条定时心跳触发，不要只把消息写入线程后结束。",
       "请在当前 Codex 会话中按事件和模板执行，并输出可见结果。",
       "如果没有需要继续处理的新事项，也请明确说明已检查范围、当前无新事项和下一步。",
@@ -1083,6 +1119,6 @@ export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule
   return {
     rule,
     templateValues,
-    message: buildAgentMessage(decision, templateValues, userTemplateText, rolePath, roleDir, roleContext.dataDir)
+    message: buildAgentMessage(decision, templateValues, userTemplateText, rolePath, roleDir, personaDataDirFor(roleContext))
   };
 }

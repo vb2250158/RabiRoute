@@ -1,0 +1,13 @@
+{
+  "id": "memory-rabiroute-control-plane-and-knowledge-lifecycle",
+  "title": "RabiRoute 0.1.23 的控制面和知识生命周期边界",
+  "focus": "消息处理结果、计划秘书、记忆整理与公开路径的 Manager 真源",
+  "content": "这次公开版本把消息处理看板、计划秘书与业务任务分离、Agent 必须回传结构化结果、关键项目事实的类型化计划/记忆/文档引用和 Outbox/任务交接回执统一放进 Manager 控制面。近期与沉淀记忆由 Manager 按 updatedAt/recalledAt 的 24/72 小时窗口计算；新记录使用 Markdown 元数据区，旧 JSON 继续读取且同 ID 由 Markdown 优先；可选的独立记忆整理 Agent 只投给同一个 Desktop 任务，不回退到主人格或备用 Runtime。WebGUI 只消费 Manager 返回的分页、状态和生命周期，公开示例使用占位路径，运行期 data、日志和凭据不进入仓库。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：RabiRoute 0.1.23 控制面与知识生命周期边界"
+  },
+  "createdAt": "2026-08-07T00:00:00+08:00",
+  "updatedAt": "2026-08-07T00:00:00+08:00",
+  "keywords": ["消息处理", "关键项目事实", "计划秘书", "业务任务", "结构化响应", "Outbox 回执", "24/72 小时", "recalledAt", "Markdown 记忆", "旧 JSON", "独立记忆整理 Agent", "Manager 真源", "公开示例脱敏"]
+}

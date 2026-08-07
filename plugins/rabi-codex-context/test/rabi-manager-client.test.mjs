@@ -94,6 +94,29 @@ test("PreToolUse injects Manager context without unsupported continue output", a
   assert.equal(output.hookSpecificOutput.additionalContext, "reasoning delta");
 });
 
+test("PreToolUse returns the supported deny shape for direct Agent task delivery", async (t) => {
+  const mock = await server((_request, response) => json(response, 200, {
+    code: 0,
+    data: {
+      toolDecision: {
+        permissionDecision: "deny",
+        reason: "请改用 RabiRoute Agent 任务桥并填写 responsePolicy。"
+      }
+    }
+  }));
+  t.after(() => mock.close());
+  const output = await handleHookInput({
+    hook_event_name: "PreToolUse",
+    session_id: "session-rabi-agent",
+    tool_name: "send_message_to_thread",
+    tool_input: { threadId: "target" }
+  }, { managerUrl: mock.url });
+  assert.equal(output.hookSpecificOutput.hookEventName, "PreToolUse");
+  assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(output.hookSpecificOutput.permissionDecisionReason, /responsePolicy/);
+  assert.equal(output.continue, undefined);
+});
+
 test("Stop forwards the final assistant message but emits no hook output", async (t) => {
   let received;
   const mock = await server(async (request, response) => {
@@ -126,6 +149,24 @@ test("Stop surfaces a non-blocking system warning when reminder delivery fails",
     last_assistant_message: "阶段结果"
   }, { managerUrl: mock.url });
   assert.match(output.systemMessage, /reminder gateway offline/);
+  assert.equal(output.continue, undefined);
+});
+
+test("Stop surfaces an Agent request scheduling failure without continuing the turn", async (t) => {
+  const mock = await server((_request, response) => json(response, 200, {
+    code: 0,
+    data: {
+      planTaskCompletion: { status: "ignored" },
+      agentRequestStop: { status: "failed", error: "request store unavailable" }
+    }
+  }));
+  t.after(() => mock.close());
+  const output = await handleHookInput({
+    hook_event_name: "Stop",
+    session_id: "session-agent",
+    turn_id: "turn-agent-1"
+  }, { managerUrl: mock.url });
+  assert.match(output.systemMessage, /request store unavailable/);
   assert.equal(output.continue, undefined);
 });
 

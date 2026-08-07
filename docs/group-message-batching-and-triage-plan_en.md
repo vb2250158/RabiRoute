@@ -27,6 +27,7 @@ With Message Agent mode enabled:
 - Different message groups in one conversation may still run in parallel.
 - The Primary Persona, Secretary, and Plan Agents remain available with separate responsibilities.
 - Agents create reply intents; RabiRoute Outbox and the platform adapter still own delivery, deduplication, retries, and receipts.
+- Message Agents may join ordinary group discussion, offer ideas, and point out risks without mechanically replying to every line. Manager creates required delivery items for explicit mentions, direct replies, private messages, and plan-progress notifications.
 
 ## Four Agent types
 
@@ -183,8 +184,9 @@ After group resolution, select a Message Agent in this order:
 2. Same endpoint + same group/conversation + same speaker.
 3. Same endpoint + same group/conversation.
 4. Same endpoint.
-5. When no affinity matches, reuse the currently idle least-recently-used Message Agent.
-6. Dynamically create a Message Agent only when every registered Message Agent is active, reserved for another allocation, or cannot be read safely.
+5. When no affinity matches, prefer the least-recently-used Message Agent that Codex currently reports as `idle`.
+6. `notLoaded` means an existing task is not loaded yet. RabiRoute reuses it and lets Desktop open it through the normal owner path instead of treating it as a reason to create.
+7. Dynamically create a Message Agent only while Desktop is currently online and every registered task is explicitly `active` or reserved by the current allocation. When Desktop is offline, status cannot be read, or the owner is not ready, the message group remains in the recoverable queue and the pool must not expand.
 
 Candidates must be Codex handlers with **Message Agent mode** enabled, be available, and have permission for the Route. Dynamic creation uses a Codex Message Agent template with that mode enabled; it never converts the Primary Persona, Secretary, or a Plan Agent into a Message Agent.
 
@@ -194,7 +196,7 @@ Affinity is a preference, not a permanent binding:
 - If it is busy, send same-group continuation directly to the original task and do not start another Agent on that group.
 - A different group uses another idle Agent first. Dynamic creation happens only when all existing Agents are unavailable; unfamiliarity with a group is not a reason to skip an idle task.
 - Selection, reservation, and creation run in one serialized allocation section. Persisted workers are deduplicated by complete task ID so concurrent batches cannot create the same index or register one task repeatedly.
-- If an Agent is unavailable for recovery, another Message Agent receives the group's short summary and cursor, and RabiRoute records the takeover reason.
+- When Codex or Desktop exits, RabiRoute retains the original task ID, message group, and undelivered content, but it does not persist or guess the previous busy state. After Desktop returns it prefers the original task. Controlled takeover begins only when the task is explicitly missing or archived, and the reason is recorded.
 
 ## Bounded context and long-range continuation
 
@@ -257,6 +259,16 @@ Acceptance measures latency, Agent starts, input tokens, correct grouping, plan-
 A reply intent or polished Codex final text is not proof of delivery. Only the platform receipt proves an external send; Agent-to-Agent handoff requires a Manager acceptance receipt.
 
 ## WebGUI configuration
+
+When Message Agent mode is enabled, the Route configuration page also shows the Message Processing Board. It shares Manager state with message grouping, handoffs, and Outbox instead of inferring status from logs. Each item shows its stage, worker task, active state, handoff, reason for waiting or no reply, real send receipt, failure, and overdue duration.
+
+The board separates three concerns:
+
+- **Required**: explicit mentions, direct replies, private messages, and progress notifications for linked plans. A generic Agent no-reply judgment cannot close these items; only explainable cases such as duplicate, already answered, withdrawn, or invalid source may do so.
+- **Agent decision**: ordinary group discussion. The Agent may answer, join design discussion, point out risk, or offer an idea. If it should not speak, it submits a reason through the outcome API instead of ending silently.
+- **Anomalies**: an idle worker without a submitted outcome, a handoff that has not returned, reply text without an Outbox `sent` receipt, send failure, or timeout. These remain visible for heartbeat or manual follow-up.
+
+Plan notifications do not depend on heartbeat polling. A Message Agent handoff to a Secretary or Plan Agent includes the requirement ID and `planId`. Manager retains the source group/private conversation, original reply context, and original Message Agent task. Later canonical plan writes that change status, current step, next action, wait state, or step progress immediately create a notification requirement and send it back to that Message Agent, which writes a contextual human-facing update and returns it through Outbox.
 
 Entry policy and Agent eligibility are configured separately:
 

@@ -5,11 +5,24 @@ import {
   buildCodexBootstrapEnv,
   codexThreadDiscoveryRequestForTest,
   codexThreadIsActiveFromSourcesForTest,
+  codexThreadRuntimeStatusFromSourcesForTest,
   codexThreadDeliveryTargetIsStaleForTest,
   codexThreadMatchesConfiguredTargetForTest,
   mergeCodexDesktopThreadsWithMetadataForTest,
+  resolvePrimaryCodexTurnOptions,
   waitForCodexDesktopThreadForTest
 } from "./codexRuntime.js";
+
+test("Primary Codex turns apply the Route model and reasoning effort together", () => {
+  assert.deepEqual(resolvePrimaryCodexTurnOptions({
+    agentModel: " gpt-5.6-terra ",
+    agentReasoningEffort: "high"
+  }), {
+    model: "gpt-5.6-terra",
+    reasoningEffort: "high"
+  });
+  assert.deepEqual(resolvePrimaryCodexTurnOptions({ agentModel: "" }), {});
+});
 
 test("durable rollout completion clears an older Desktop IPC active marker", () => {
   assert.equal(codexThreadIsActiveFromSourcesForTest(100, {
@@ -24,6 +37,25 @@ test("durable rollout completion clears an older Desktop IPC active marker", () 
     state: "active",
     observedAtMs: 200
   }), true);
+});
+
+test("Codex task runtime status comes from the live Desktop host plus Codex rollout state", () => {
+  assert.equal(codexThreadRuntimeStatusFromSourcesForTest(false, null, {
+    state: "active",
+    observedAtMs: 200
+  }), "unavailable");
+  assert.equal(codexThreadRuntimeStatusFromSourcesForTest(true, null, {
+    state: "active",
+    observedAtMs: 200
+  }), "active");
+  assert.equal(codexThreadRuntimeStatusFromSourcesForTest(true, null, {
+    state: "inactive",
+    observedAtMs: 200
+  }), "idle");
+  assert.equal(codexThreadRuntimeStatusFromSourcesForTest(true, null, {
+    state: "unknown",
+    observedAtMs: 0
+  }), "notLoaded");
 });
 
 test("system-owned Desktop task discovery can use the bounded app-server state index", () => {

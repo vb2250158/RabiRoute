@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "validate-codex-plugin",
-  "currentStep": "AgentPacket 与 Codex Hook 已共用 Manager 的 RabiContextManager，并默认采用聚焦上下文：当前会话窗口、最多 3 条高相关摘要和精简人格工作集；全量索引按需查询。当前继续验证真实 Codex 安装、重新绑定和完整会话生命周期。",
-  "nextAction": "在可安装插件的 Codex 环境验证安装、Manager 离线失败开放、use/status/refresh/off、SessionStart、UserPromptSubmit、PreToolUse/PostToolUse 和同 turn 去重，再为 RabiRoute 人格路由工作台补无副作用 packet preview。",
+  "currentStep": "AgentPacket、Codex Hook 与 Manager 现在共用聚焦知识生命周期；消息投递要求 sourceThreadId、sourceAgentType 和 responsePolicy，required response 由 Stop Hook 跟踪提醒；消息处理 Agent 用结构化 outcome、knowledge callback、criticalFactDisposition，并把成功外发或 Desktop 交接分别以真实回执收口。Codex Desktop 仍是唯一真实消息 owner。当前继续验证真实 Codex 安装、重新绑定和完整会话生命周期。",
+  "nextAction": "在可安装插件的 Codex 环境验证安装、Manager 离线失败开放、use/status/refresh/off、SessionStart、UserPromptSubmit、PreToolUse/PostToolUse 和同 turn 去重；再验证同一计划的 taskBinding 与 secretaryBinding 分离、消息处理看板回写、失败关闭和无副作用 packet preview。",
   "steps": [
     { "id": "inject-agent-packet", "title": "注入事件、角色路径、计划、记忆、技能和接口索引", "status": "已完成" },
     { "id": "add-required-read", "title": "增加处理前高相关必读项和按 ID 读取协议", "status": "已完成" },
@@ -31,6 +31,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-25T00:00:00+08:00",
-  "keywords": ["AgentPacket", "上下文注入", "contextInjection", "focused", "CQ reply", "CQ at", "引用链", "OneBot get_msg", "Gateway 历史", "Outbox", "Codex 插件", "session ID", "Hook", "RabiContextManager", "PreToolUse", "PostToolUse", "人格绑定", "packet preview"]
+  "updatedAt": "2026-08-07T00:00:00+08:00",
+  "keywords": ["AgentPacket", "上下文注入", "contextInjection", "focused", "CQ reply", "CQ at", "引用链", "OneBot get_msg", "Gateway 历史", "Outbox", "Codex 插件", "session ID", "Hook", "RabiContextManager", "PreToolUse", "PostToolUse", "人格绑定", "packet preview", "sourceThreadId", "sourceAgentType", "responsePolicy", "required response", "消息处理 Agent", "criticalFactDisposition", "taskBinding", "secretaryBinding", "任务交接回执"]
 }

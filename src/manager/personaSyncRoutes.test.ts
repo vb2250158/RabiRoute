@@ -194,3 +194,66 @@ test("persona manifest endpoint returns a bounded partial snapshot while refresh
     message: "Persona manifest refresh exceeded its deadline; returned the last persisted in-memory snapshot while Manager stayed responsive."
   });
 });
+
+test("persona conflict catalog returns a bounded building state instead of holding the HTTP connection", async (t) => {
+  const service = {
+    listConflictsAsync: () => new Promise(() => undefined),
+    conflictListSnapshot: () => []
+  } as unknown as PersonaSyncService;
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!handlePersonaSyncApi(request, requestUrl, response, {
+      service,
+      coordinator: {} as PersonaSyncCoordinator,
+      token: () => "",
+      relay: () => ({ url: "", token: "", deviceId: "", deviceGuid: "" }),
+      conflictListDeadlineMs: 20
+    })) response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+
+  const startedAt = Date.now();
+  const response = await request(port, "/api/persona-sync/conflicts?roleId=Rabi");
+  assert.ok(Date.now() - startedAt < 250);
+  assert.equal(response.status, 202);
+  const body = JSON.parse(response.text) as { data: { conflicts: unknown[]; scan: { state: string; partial: boolean; retryAfterMs: number } } };
+  assert.deepEqual(body.data.conflicts, []);
+  assert.deepEqual(body.data.scan, {
+    state: "building",
+    partial: true,
+    retryAfterMs: 1_000,
+    message: "Conflict history is being organized in the background; Manager remains available."
+  });
+});
+
+test("persona conflict worker scans start after the HTTP building response", async (t) => {
+  let scans = 0;
+  const service = {
+    conflictListSnapshot: () => undefined
+  } as unknown as PersonaSyncService;
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!handlePersonaSyncApi(request, requestUrl, response, {
+      service,
+      coordinator: {} as PersonaSyncCoordinator,
+      token: () => "",
+      relay: () => ({ url: "", token: "", deviceId: "", deviceGuid: "" }),
+      conflictScheduleDelayMs: 10,
+      listConflicts: async () => {
+        scans += 1;
+        return [];
+      }
+    })) response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+
+  const startedAt = Date.now();
+  const response = await request(port, "/api/persona-sync/conflicts?roleId=Rabi");
+  assert.ok(Date.now() - startedAt < 250);
+  assert.equal(response.status, 202);
+  assert.equal(scans, 0);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(scans, 1);
+});

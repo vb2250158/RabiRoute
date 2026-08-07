@@ -679,6 +679,8 @@ export function createDefaultGateway(next: number): GatewayDefinition {
     codexThreadName: `路由配置 ${next}`,
     copilotThreadName: `路由配置 ${next}`,
     codexCwd: "",
+    codexMemoryConsolidationAgentEnabled: false,
+    codexMemoryConsolidationAgentModel: "gpt-5.6-terra",
     agentRoleId: "",
     agentRoleFile: "persona.md",
     agentAdapters: ["codex"],

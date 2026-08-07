@@ -23,6 +23,7 @@ import {
   validateGatewayPortConflicts
 } from "@shared/gatewayConfigModel";
 import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
+import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
 
 const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
 const isPluginShell = window.location.pathname.startsWith("/plugin/");
@@ -192,6 +193,8 @@ export const useGatewayStore = defineStore("gateway", () => {
   const configFiles = ref<Record<string, string>>({});
   const selectedGatewayId = ref("");
   const loading = ref(false);
+  const diagnosticsLoading = ref(false);
+  const diagnosticsLoaded = ref(false);
   const saving = ref(false);
   const dirty = ref(false);
   const editVersion = ref(0);
@@ -324,13 +327,14 @@ export const useGatewayStore = defineStore("gateway", () => {
     error.value = "";
     try {
       await Promise.all([loadMeta(), loadNetworkOptions()]);
-      const response = await fetch(`${apiBase}/gateways`);
+      const response = await fetch(`${apiBase}/gateways?summary=1&includeConfig=1`);
       const body = await response.json() as GatewayPayload;
       if (!response.ok || body.code !== 0 || !body.data?.config) {
         throw new Error(body.message || "插件 API 没有返回 gateway 配置");
       }
       managerRows.value = asManagerRows(body.data.manager);
       managerError.value = managerErrorOf(body.data.manager);
+      diagnosticsLoaded.value = false;
       if (!dirty.value || options.replaceDirtyConfig) {
         gateways.value = body.data.config.gateways || [];
         configFiles.value = body.data.configFiles || {};
@@ -355,6 +359,25 @@ export const useGatewayStore = defineStore("gateway", () => {
       managerError.value = error.value;
     } finally {
       loading.value = false;
+    }
+  }
+
+  async function ensureDiagnostics(force = false): Promise<void> {
+    if (diagnosticsLoading.value || (diagnosticsLoaded.value && !force)) return;
+    diagnosticsLoading.value = true;
+    try {
+      const response = await fetch(`${apiBase}/gateways`);
+      const body = await response.json() as GatewayPayload;
+      if (!response.ok || body.code !== 0 || !body.data) {
+        throw new Error(body.message || "Manager 没有返回运行诊断");
+      }
+      managerRows.value = asManagerRows(body.data.manager);
+      managerError.value = managerErrorOf(body.data.manager);
+      diagnosticsLoaded.value = true;
+    } catch (diagnosticsError) {
+      managerError.value = diagnosticsError instanceof Error ? diagnosticsError.message : String(diagnosticsError);
+    } finally {
+      diagnosticsLoading.value = false;
     }
   }
 
@@ -385,6 +408,30 @@ export const useGatewayStore = defineStore("gateway", () => {
           configName: gateway.configName,
           policy: gateway.messageProcessingAgents?.codex
         }));
+      const expectedPlanAssistantSettings = gateways.value
+        .filter(gateway => gateway.agentAdapters?.includes("codex"))
+        .map(gateway => ({
+          id: gateway.id,
+          configName: gateway.configName,
+          enabled: gateway.codexPlanAssistantEnabled === true,
+          model: gateway.codexPlanAssistantModel
+        }));
+      const expectedMemoryConsolidationAgentSettings = gateways.value
+        .filter(gateway => gateway.agentAdapters?.includes("codex"))
+        .map(gateway => ({
+          id: gateway.id,
+          configName: gateway.configName,
+          enabled: gateway.codexMemoryConsolidationAgentEnabled === true,
+          model: gateway.codexMemoryConsolidationAgentModel || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL
+        }));
+      const expectedPrimaryAgentSettings = gateways.value
+        .filter(gateway => gateway.agentAdapters?.includes("codex"))
+        .map(gateway => ({
+          id: gateway.id,
+          configName: gateway.configName,
+          model: gateway.agentModel?.trim() || "",
+          reasoningEffort: gateway.agentReasoningEffort
+        }));
       const savedEditVersion = editVersion.value;
       const response = await fetch(`${apiBase}/gateways`, {
         method: "POST",
@@ -408,6 +455,36 @@ export const useGatewayStore = defineStore("gateway", () => {
         });
         if (messageAgentSettingWasDropped) {
           throw new Error("Manager 版本过旧，未保存消息处理 Agent 设置。请重启 Manager 后再次保存。");
+        }
+        const planAssistantSettingWasDropped = expectedPlanAssistantSettings.some(expected => {
+          const saved = savedGateways.find((gateway: GatewayDefinition) => (
+            gateway.id === expected.id || gateway.configName === expected.configName
+          ));
+          return saved?.codexPlanAssistantEnabled !== expected.enabled
+            || saved?.codexPlanAssistantModel !== expected.model;
+        });
+        if (planAssistantSettingWasDropped) {
+          throw new Error("Manager 版本过旧，未保存计划秘书设置。请重启 Manager 后再次保存。");
+        }
+        const memoryConsolidationAgentSettingWasDropped = expectedMemoryConsolidationAgentSettings.some(expected => {
+          const saved = savedGateways.find((gateway: GatewayDefinition) => (
+            gateway.id === expected.id || gateway.configName === expected.configName
+          ));
+          return saved?.codexMemoryConsolidationAgentEnabled !== expected.enabled
+            || saved?.codexMemoryConsolidationAgentModel !== expected.model;
+        });
+        if (memoryConsolidationAgentSettingWasDropped) {
+          throw new Error("Manager 版本过旧，未保存独立记忆整理 Agent 设置。请重启 Manager 后再次保存。");
+        }
+        const primaryAgentSettingWasDropped = expectedPrimaryAgentSettings.some(expected => {
+          const saved = savedGateways.find((gateway: GatewayDefinition) => (
+            gateway.id === expected.id || gateway.configName === expected.configName
+          ));
+          return (saved?.agentModel?.trim() || "") !== expected.model
+            || saved?.agentReasoningEffort !== expected.reasoningEffort;
+        });
+        if (primaryAgentSettingWasDropped) {
+          throw new Error("Manager 版本过旧，未保存主人格模型或推理强度。请重启 Manager 后再次保存。");
         }
       }
       if (editVersion.value === savedEditVersion) {
@@ -765,6 +842,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     selectedGateway,
     selectedRuntime,
     loading,
+    diagnosticsLoading,
+    diagnosticsLoaded,
     saving,
     dirty,
     error,
@@ -777,6 +856,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     openQuickSetup,
     closeQuickSetup,
     load,
+    ensureDiagnostics,
     save,
     startManager,
     actionGateway,

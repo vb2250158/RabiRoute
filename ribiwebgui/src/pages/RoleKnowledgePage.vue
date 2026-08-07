@@ -15,6 +15,7 @@ import {
 } from "@shared/planAttachmentMentions";
 import { useI18n } from "../i18n";
 import { knowledgeItemMatchesQuery, normalizeKnowledgeQuery } from "../knowledgeSearch";
+import { knowledgePageShouldWork } from "../knowledgePageActivity";
 import { managerEventSource, managerResourceUrl } from "../managerApi";
 import {
   isPlanMarkdownAttachment,
@@ -22,10 +23,12 @@ import {
   PLAN_MARKDOWN_TEASER_READ_BYTES,
   planMarkdownPreviewExcerpt,
   responseTextByByteLimit,
+  renderMemoryMarkdownPreview,
   renderPlanMarkdownPreview
 } from "../markdownPreview";
 import { activePlanIdAtAnchor, directoryScrollTopForItem } from "../planDirectoryScrollSync";
 import {
+  drainKnowledgePages,
   hasMoreKnowledgeAfterWindow,
   knowledgeRenderWindow,
   mergeKnowledgePage,
@@ -34,16 +37,27 @@ import {
 } from "../knowledgePagination";
 import {
   loadPlanFeedback,
-  loadRoleMemory,
+  loadPlanAgentStatuses,
+  loadRoleMemoryCounts,
+  loadRoleMemoryPage,
   loadRolePlan,
   loadRolePlanPage,
+  loadRolePlanPageWithPriorityDetails,
+  ROLE_MEMORY_BACKGROUND_PAGE_SIZE,
   ROLE_PLAN_BACKGROUND_PAGE_SIZE,
+  openPlanAgentTask,
   submitPlanFeedback,
-  type RolePlanPageCounts
+  type PlanAgentBindingStatus,
+  type PlanAgentRole,
+  type PlanAgentSessionStatus,
+  type PlanAgentStatus,
+  type RoleMemoryPageCounts,
+  type RolePlanPageCounts,
+  type RolePlanPageFilter
 } from "../roleKnowledgeClient";
 import { planFeedbackSubmissionErrorMessage } from "../approvalFeedbackUi";
-import { formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
-import type { PlanKnowledgeView } from "../planPresentationStyles";
+import { formatPlanRelativeTime, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
+import type { PlanKnowledgeView, PlanListSortMode } from "../planPresentationStyles";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { PlanAttachmentPresentation } from "@shared/planAttachmentContract";
 import type { RoleMemory, RolePlan, RolePlanApprovalContract, RolePlanFeedback, RolePlanStep } from "../types";
@@ -57,11 +71,22 @@ const loading = ref(false);
 const loadingMorePlans = ref(false);
 const memoryLoading = ref(false);
 const error = ref("");
-const activeView = ref<PlanKnowledgeView>("current");
+const activeView = ref<PlanKnowledgeView>("plans");
 const query = ref<string | null>("");
 const expandedPlans = reactive<Record<string, boolean>>({});
 const planVideoDurations = reactive<Record<string, number>>({});
 const activeDirectoryPlanId = ref("");
+const planListSortMode = ref<PlanListSortMode>("status");
+const planListHiddenStatuses = ref<string[]>([]);
+const planListDraftSortMode = ref<PlanListSortMode>("status");
+const planListDraftHiddenStatuses = ref<string[]>([]);
+const planListDialogOpen = ref(false);
+const planListResultTotal = ref(0);
+const planListStatusOptions = ref<Array<{
+  status: string;
+  count: number;
+  palette: RolePlan["presentation"]["palette"];
+}>>([]);
 const approvalDrafts = reactive<Record<string, string>>({});
 const approvalPending = reactive<Record<string, boolean>>({});
 const approvalDeliveryPending = reactive<Record<string, boolean>>({});
@@ -92,12 +117,17 @@ const approvalMentionMenus = reactive<Record<string, ApprovalMentionMenuState>>(
 const approvalTextareaElements = new Map<string, HTMLTextAreaElement>();
 const planAttachmentPreview = ref<{ name: string; url: string; kind: "image" | "video" } | null>(null);
 const planMarkdownPreview = ref<{ name: string; url: string; html: string; error: string; loading: boolean } | null>(null);
+const memoryDetailPreview = ref<{ memory: RoleMemory; kind: "recent" | "consolidated" } | null>(null);
 type PlanMarkdownTeaserState = { text: string; loading: boolean };
 const planMarkdownTeasers = reactive<Record<string, PlanMarkdownTeaserState>>({});
 type PlanMediaLoadState = "loading" | "loaded" | "error";
 const planMediaLoadStates = reactive<Record<string, PlanMediaLoadState>>({});
 const planDetailsLoaded = reactive<Record<string, boolean>>({});
 const planDetailsLoading = reactive<Record<string, boolean>>({});
+const planAgentStatuses = reactive<Record<string, PlanAgentStatus>>({});
+const planAgentStatusLoading = reactive<Record<string, boolean>>({});
+const planAgentOpenPending = reactive<Record<string, boolean>>({});
+const planAgentNotices = reactive<Record<string, { tone: "success" | "error"; text: string }>>({});
 const planPageCounts = ref<RolePlanPageCounts>({
   total: 0,
   current: 0,
@@ -119,9 +149,13 @@ const planPageCounts = ref<RolePlanPageCounts>({
   }
 });
 const planNextCursor = ref("");
+const memoryNextCursor = ref("");
+const memoryPageCounts = ref<RoleMemoryPageCounts>({ recent: 0, consolidated: 0, consolidationRuns: 0 });
+const pendingMemoryConsolidationRuns = ref(0);
 const planRenderStart = ref(0);
 const planRenderLimit = ref(8);
 const memoryRenderLimit = ref(24);
+const memoryClock = ref(Date.now());
 const knowledgeToolbar = ref<HTMLElement | null>(null);
 const planDirectoryList = ref<HTMLElement | null>(null);
 const planLoadMoreSentinel = ref<HTMLElement | null>(null);
@@ -143,9 +177,14 @@ let planMarkdownPreviewAbort: AbortController | null = null;
 let planMarkdownTeaserAbort: AbortController | null = null;
 let planDetailQueue: Array<{ planId: string; request: number }> = [];
 const queuedPlanDetailIds = new Set<string>();
+const pendingPlanAgentStatusIds = new Set<string>();
 let activePlanDetailRequests = 0;
 const MAX_CONCURRENT_PLAN_DETAILS = 2;
+let knowledgeFilterTimer = 0;
+let memoryClockTimer = 0;
 let planPageBackgroundRequest = 0;
+let memoryPageBackgroundRequest = 0;
+let planAgentStatusGeneration = 0;
 
 const roleId = computed(() => String(store.selectedGateway?.agentRoleId || "").trim());
 const gatewayId = computed(() => String(store.selectedGateway?.id || "").trim());
@@ -159,22 +198,38 @@ const dateFormatter = computed(() => new Intl.DateTimeFormat(isEnglish.value ? "
 
 const planCounts = computed(() => planPageCounts.value);
 const normalizedQuery = computed(() => normalizeKnowledgeQuery(query.value));
+const planRequestView = computed<RolePlanPageFilter["view"]>(() =>
+  activeView.value === "plans" || activeView.value === "archived"
+    ? activeView.value
+    : undefined
+);
+
+function currentPlanPageFilter(): RolePlanPageFilter {
+  const statuses = planListHiddenStatuses.value.length
+    ? planListStatusOptions.value
+      .filter((option) => !planListHiddenStatuses.value.includes(option.status))
+      .map((option) => option.status)
+    : undefined;
+  return {
+    view: planRequestView.value,
+    query: normalizedQuery.value,
+    sort: planListSortMode.value,
+    statuses
+  };
+}
 
 function matchesQuery(item: RolePlan | RoleMemory): boolean {
   return knowledgeItemMatchesQuery(item, normalizedQuery.value);
 }
 
 const activePlans = computed(() => plansForKnowledgeView(plans.value, "plans"));
-const currentPlans = computed(() => plansForKnowledgeView(plans.value, "current"));
 const archivedPlans = computed(() => plansForKnowledgeView(plans.value, "archived"));
 const visiblePlansForView = computed(() => {
-  const source = activeView.value === "current"
-    ? currentPlans.value
-    : activeView.value === "plans"
-      ? activePlans.value
-      : activeView.value === "archived"
-        ? archivedPlans.value
-        : [];
+  const source = activeView.value === "plans"
+    ? activePlans.value
+    : activeView.value === "archived"
+      ? archivedPlans.value
+      : [];
   return source.filter(matchesQuery);
 });
 const renderedPlansForView = computed(() => knowledgeRenderWindow(
@@ -195,16 +250,39 @@ const hasMoreRenderedPlans = computed(() => hasMoreKnowledgeAfterWindow(
   planRenderLimit.value
 ));
 const hasPendingPlanDetails = computed(() => Object.values(planDetailsLoading).some(Boolean));
-const hasMoreMemory = computed(() => renderedMemoryForView.value.length < visibleMemoryForView.value.length);
-const totalPlansForView = computed(() => activeView.value === "current"
-  ? planPageCounts.value.current
-  : activeView.value === "plans"
-    ? planPageCounts.value.plans
-    : activeView.value === "archived"
-      ? planPageCounts.value.archived
-      : 0);
-const showsPlanList = computed(() => ["current", "plans", "archived"].includes(activeView.value));
-const showsMemoryList = computed(() => ["current", "recent_memory", "archived"].includes(activeView.value));
+const hasMoreMemory = computed(() => Boolean(memoryNextCursor.value));
+const hasMoreRenderedMemory = computed(() => renderedMemoryForView.value.length < visibleMemoryForView.value.length);
+const showsPlanList = computed(() => ["plans", "archived"].includes(activeView.value));
+const showsMemoryList = computed(() => ["recent_memory", "archived"].includes(activeView.value));
+const totalMemoryForView = computed(() => activeView.value === "archived"
+  ? memoryPageCounts.value.consolidated
+  : memoryPageCounts.value.recent);
+const knowledgeListLoading = computed(() => loading.value || loadingMorePlans.value || memoryLoading.value || hasMorePlans.value || hasMoreMemory.value);
+const knowledgeListStatus = computed(() => {
+  const counts: string[] = [];
+  if (showsPlanList.value) counts.push(isEnglish.value
+    ? `${visiblePlansForView.value.length} / ${planListResultTotal.value} plans`
+    : `计划 ${visiblePlansForView.value.length} / ${planListResultTotal.value}`);
+  if (showsMemoryList.value) counts.push(isEnglish.value
+    ? `${visibleMemoryForView.value.length} / ${totalMemoryForView.value} memories`
+    : `记忆 ${visibleMemoryForView.value.length} / ${totalMemoryForView.value}`);
+  const prefix = knowledgeListLoading.value
+    ? (isEnglish.value ? "Automatically loading list data" : "正在自动加载列表数据")
+    : (isEnglish.value ? "List data loaded" : "列表数据已加载");
+  const detailHint = showsPlanList.value
+    ? (isEnglish.value
+      ? "Plan bodies and attachments load near the reading position."
+      : "计划正文和附件按阅读位置加载。")
+    : (isEnglish.value
+      ? "Memory cards render in bounded batches while scrolling."
+      : "记忆卡片随滚动分批显示。");
+  return `${prefix}: ${counts.join(", ")}. ${detailHint}`;
+});
+
+function knowledgePageWorkAllowed(): boolean {
+  return typeof document === "undefined"
+    || knowledgePageShouldWork(document.visibilityState, planDirectoryMounted);
+}
 
 function planReadingAnchorTop(): number {
   if (typeof window === "undefined") return 0;
@@ -316,6 +394,22 @@ function keepActiveDirectoryLinkVisible(): void {
   if (nextScrollTop !== null) list.scrollTop = nextScrollTop;
 }
 
+function setPlanDirectoryMarquee(event: Event, active: boolean): void {
+  const link = event.currentTarget as HTMLElement | null;
+  const title = link?.querySelector<HTMLElement>(".knowledge-plan-directory-title");
+  if (!title) return;
+  if (!active && link?.matches(":hover, :focus")) return;
+  title.dataset.marquee = "";
+  title.style.removeProperty("--directory-marquee-distance");
+  title.style.removeProperty("--directory-marquee-duration");
+  if (!active) return;
+  const distance = Math.ceil(title.scrollWidth - title.clientWidth);
+  if (distance <= 1) return;
+  title.style.setProperty("--directory-marquee-distance", `-${distance}px`);
+  title.style.setProperty("--directory-marquee-duration", `${distance / (26 * 0.76)}s`);
+  title.dataset.marquee = "active";
+}
+
 watch(
   () => visiblePlansForView.value.map((plan) => plan.id).join("\u001f"),
   () => {
@@ -328,9 +422,24 @@ watch(
   { immediate: true }
 );
 
-watch([activeView, query], () => {
+watch(
+  () => planListStatusOptions.value.map((option) => option.status).join("\u001f"),
+  () => {
+    const available = new Set(planListStatusOptions.value.map((option) => option.status));
+    planListHiddenStatuses.value = planListHiddenStatuses.value.filter((status) => available.has(status));
+    planListDraftHiddenStatuses.value = planListDraftHiddenStatuses.value.filter((status) => available.has(status));
+  }
+);
+
+watch(activeView, () => {
+  planListHiddenStatuses.value = [];
+  planListDialogOpen.value = false;
+});
+
+watch([activeView, query, planListSortMode, () => planListHiddenStatuses.value.join("\u001f")], () => {
   planRenderStart.value = 0;
   planRenderLimit.value = 8;
+  memoryRenderLimit.value = 24;
   schedulePlanDetailObserverRefresh();
   scheduleProgressiveSentinelRefresh();
 });
@@ -369,7 +478,195 @@ function resetPlanDetailHydration(): void {
   for (const key of Object.keys(planDetailsLoading)) delete planDetailsLoading[key];
 }
 
+function resetPlanAgentStatusState(): void {
+  planAgentStatusGeneration += 1;
+  pendingPlanAgentStatusIds.clear();
+  for (const key of Object.keys(planAgentStatuses)) delete planAgentStatuses[key];
+  for (const key of Object.keys(planAgentStatusLoading)) delete planAgentStatusLoading[key];
+  for (const key of Object.keys(planAgentOpenPending)) delete planAgentOpenPending[key];
+  for (const key of Object.keys(planAgentNotices)) delete planAgentNotices[key];
+}
+
+function planAgentBinding(plan: RolePlan, role: PlanAgentRole): RolePlan["taskBinding"] | RolePlan["secretaryBinding"] | undefined {
+  return role === "secretary" ? plan.secretaryBinding : plan.taskBinding;
+}
+
+function fallbackPlanAgentBindingStatus(
+  plan: RolePlan,
+  role: PlanAgentRole,
+  message = ""
+): PlanAgentBindingStatus {
+  const binding = planAgentBinding(plan, role);
+  return {
+    role,
+    configured: Boolean(binding?.sessionId),
+    agentType: "codex",
+    threadId: String(binding?.sessionId || ""),
+    threadTitle: String(binding?.sessionTitle || ""),
+    workspace: String(binding?.workspace || ""),
+    working: false,
+    agentStatus: "unknown",
+    sessionStatus: binding?.sessionId ? "unknown" : "unbound",
+    canOpen: false,
+    checkedAt: new Date().toISOString(),
+    ...(message ? { message } : {})
+  };
+}
+
+function unknownPlanAgentStatus(plan: RolePlan, message: string): PlanAgentStatus {
+  const checkedAt = new Date().toISOString();
+  const taskAgent = { ...fallbackPlanAgentBindingStatus(plan, "task", message), checkedAt };
+  const secretaryAgent = plan.secretaryBinding
+    ? { ...fallbackPlanAgentBindingStatus(plan, "secretary", message), checkedAt }
+    : undefined;
+  return {
+    planId: plan.id,
+    checkedAt,
+    taskAgent,
+    ...(secretaryAgent ? { secretaryAgent } : {})
+  };
+}
+
+async function refreshPlanAgentStatuses(planIds: string[], force = false): Promise<void> {
+  const selectedRoleId = roleId.value;
+  const request = requestVersion;
+  const generation = planAgentStatusGeneration;
+  if (!selectedRoleId || !knowledgePageWorkAllowed()) return;
+  const ids = [...new Set(planIds)]
+    .filter((planId) => plans.value.some((plan) => plan.id === planId))
+    .filter((planId) => !pendingPlanAgentStatusIds.has(planId))
+    .filter((planId) => force || !planAgentStatuses[planId]);
+  if (!ids.length) return;
+  for (const planId of ids) {
+    pendingPlanAgentStatusIds.add(planId);
+    planAgentStatusLoading[planId] = true;
+  }
+  try {
+    const batch = await loadPlanAgentStatuses(selectedRoleId, ids, 3_000);
+    if (request !== requestVersion || generation !== planAgentStatusGeneration || selectedRoleId !== roleId.value) return;
+    for (const status of batch.items) planAgentStatuses[status.planId] = status;
+    for (const planId of [...batch.failedPlanIds, ...batch.missingPlanIds]) {
+      const plan = plans.value.find((item) => item.id === planId);
+      if (plan) planAgentStatuses[planId] = unknownPlanAgentStatus(plan, isEnglish.value
+        ? "The Agent status could not be confirmed within 3 seconds."
+        : "未能在 3 秒内确认 Agent 状态。"
+      );
+    }
+  } catch (statusError) {
+    if (request !== requestVersion || generation !== planAgentStatusGeneration || selectedRoleId !== roleId.value) return;
+    const message = statusError instanceof Error ? statusError.message : String(statusError);
+    for (const planId of ids) {
+      const plan = plans.value.find((item) => item.id === planId);
+      if (plan) planAgentStatuses[planId] = unknownPlanAgentStatus(plan, message);
+    }
+  } finally {
+    if (generation === planAgentStatusGeneration) {
+      for (const planId of ids) {
+        pendingPlanAgentStatusIds.delete(planId);
+        planAgentStatusLoading[planId] = false;
+      }
+    }
+  }
+}
+
+function planAgentStatusFor(plan: RolePlan): PlanAgentStatus {
+  return planAgentStatuses[plan.id] || unknownPlanAgentStatus(plan, "");
+}
+
+function planAgentBindingStatus(plan: RolePlan, role: PlanAgentRole): PlanAgentBindingStatus | undefined {
+  const status = planAgentStatusFor(plan);
+  return role === "secretary" ? status.secretaryAgent : status.taskAgent;
+}
+
+function planTaskAgentWorking(plan: RolePlan): boolean {
+  return planAgentStatuses[plan.id]?.taskAgent.working === true;
+}
+
+function planAgentStatusIsFresh(planId: string): boolean {
+  const checkedAt = Date.parse(planAgentStatuses[planId]?.checkedAt || "");
+  return Number.isFinite(checkedAt) && Date.now() - checkedAt < 5_000;
+}
+
+function planAgentOpenKey(planId: string, role: PlanAgentRole): string {
+  return `${planId}:${role}`;
+}
+
+function planAgentRoleLabel(role: PlanAgentRole): string {
+  if (isEnglish.value) return role === "secretary" ? "Plan Secretary" : "Task Agent";
+  return role === "secretary" ? "协助秘书" : "任务 Agent";
+}
+
+function planAgentWorkLabel(status: PlanAgentBindingStatus | undefined): string {
+  if (!status || status.agentStatus === "unknown") return isEnglish.value ? "Unknown" : "未知";
+  if (status.agentStatus === "working") return isEnglish.value ? "Working" : "工作中";
+  return isEnglish.value ? "Not working" : "未工作";
+}
+
+function planAgentSessionLabel(status: PlanAgentSessionStatus | undefined): string {
+  const labels: Record<PlanAgentSessionStatus, [string, string]> = {
+    active: ["会话任务正在运行", "Task is running"],
+    idle: ["会话任务空闲", "Task is idle"],
+    not_loaded: ["会话任务未载入", "Task is not loaded"],
+    unavailable: ["Codex Desktop 未就绪", "Codex Desktop is unavailable"],
+    archived: ["会话任务已归档", "Task is archived"],
+    missing: ["会话任务不存在", "Task is missing"],
+    workspace_mismatch: ["会话任务工作目录不一致", "Task workspace does not match"],
+    unbound: ["未关联会话任务", "No task is linked"],
+    unknown: ["会话任务状态未知", "Task status is unknown"]
+  };
+  const label = labels[status || "unknown"];
+  return label[isEnglish.value ? 1 : 0];
+}
+
+function planAgentStatusTone(status: PlanAgentBindingStatus | undefined): string {
+  if (status?.sessionStatus === "missing" || status?.sessionStatus === "workspace_mismatch") return "danger";
+  if (status?.working) return "working";
+  if (status?.agentStatus === "idle") return "idle";
+  return "unknown";
+}
+
+function planAgentRoles(plan: RolePlan): PlanAgentRole[] {
+  const status = planAgentStatuses[plan.id];
+  return status?.secretaryAgent || plan.secretaryBinding ? ["task", "secretary"] : ["task"];
+}
+
+function planAgentTitle(plan: RolePlan, role: PlanAgentRole): string {
+  const status = planAgentBindingStatus(plan, role);
+  return status?.threadTitle || status?.threadId || (isEnglish.value ? "Not linked" : "未关联任务");
+}
+
+function planAgentShouldRetry(plan: RolePlan): boolean {
+  return planAgentRoles(plan).some((role) => {
+    const status = planAgentBindingStatus(plan, role);
+    return status?.sessionStatus === "unknown" || status?.sessionStatus === "unavailable";
+  });
+}
+
+async function openPlanAgent(plan: RolePlan, role: PlanAgentRole): Promise<void> {
+  const status = planAgentBindingStatus(plan, role);
+  if (!status?.canOpen || status.working) return;
+  const key = planAgentOpenKey(plan.id, role);
+  planAgentOpenPending[key] = true;
+  delete planAgentNotices[key];
+  try {
+    await openPlanAgentTask(roleId.value, plan.id, role);
+    planAgentNotices[key] = {
+      tone: "success",
+      text: isEnglish.value ? "Opened the bound task in Codex." : "已在 Codex 中定位并唤醒绑定任务。"
+    };
+  } catch (openError) {
+    planAgentNotices[key] = {
+      tone: "error",
+      text: openError instanceof Error ? openError.message : String(openError)
+    };
+    void refreshPlanAgentStatuses([plan.id], true);
+  } finally {
+    planAgentOpenPending[key] = false;
+  }
+}
+
 function drainPlanDetailQueue(): void {
+  if (!knowledgePageWorkAllowed()) return;
   while (activePlanDetailRequests < MAX_CONCURRENT_PLAN_DETAILS && planDetailQueue.length) {
     const task = planDetailQueue.shift()!;
     queuedPlanDetailIds.delete(task.planId);
@@ -455,7 +752,7 @@ function applyPlanSnapshots(nextPlans: RolePlan[], replace: boolean, request: nu
 function observeProgressiveSentinels(): void {
   planPageObserver?.disconnect();
   memoryPageObserver?.disconnect();
-  if (typeof IntersectionObserver === "undefined") return;
+  if (typeof IntersectionObserver === "undefined" || !knowledgePageWorkAllowed()) return;
   if (planLoadMoreSentinel.value && (hasMorePlans.value || hasMoreRenderedPlans.value)) {
     planPageObserver = new IntersectionObserver((entries) => {
       if (!shouldAutoLoadNextKnowledgeBatch(
@@ -463,13 +760,15 @@ function observeProgressiveSentinels(): void {
         Boolean(directoryJumpTargetId)
       )) return;
       if (hasMoreRenderedPlans.value) loadMoreRenderedPlans();
-      if (hasMorePlans.value && planPageBackgroundRequest !== requestVersion) void loadMorePlans();
+      if (hasMorePlans.value) void loadMorePlans();
     }, { rootMargin: "700px 0px" });
     planPageObserver.observe(planLoadMoreSentinel.value);
   }
-  if (memoryLoadMoreSentinel.value && hasMoreMemory.value) {
+  if (memoryLoadMoreSentinel.value && (hasMoreMemory.value || hasMoreRenderedMemory.value)) {
     memoryPageObserver = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) loadMoreMemory();
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      if (hasMoreRenderedMemory.value) loadMoreRenderedMemory();
+      if (hasMoreMemory.value) void loadMoreMemory();
     }, { rootMargin: "700px 0px" });
     memoryPageObserver.observe(memoryLoadMoreSentinel.value);
   }
@@ -479,13 +778,35 @@ function scheduleProgressiveSentinelRefresh(): void {
   void nextTick(observeProgressiveSentinels);
 }
 
-function loadMoreMemory(): void {
-  memoryRenderLimit.value = nextKnowledgeRenderLimit(
-    memoryRenderLimit.value,
-    visibleMemoryForView.value.length,
-    24
-  );
-  scheduleProgressiveSentinelRefresh();
+function currentMemoryKind(): "recent" | "consolidated" {
+  return activeView.value === "archived" ? "consolidated" : "recent";
+}
+
+function resetMemoryPageCounts(): void {
+  memoryPageCounts.value = { recent: 0, consolidated: 0, consolidationRuns: 0 };
+  pendingMemoryConsolidationRuns.value = 0;
+}
+
+async function loadMoreMemory(limit = 24): Promise<void> {
+  const selectedRoleId = roleId.value;
+  const cursor = memoryNextCursor.value;
+  const currentRequest = requestVersion;
+  if (!selectedRoleId || !cursor || memoryLoading.value || !showsMemoryList.value || !knowledgePageWorkAllowed()) return;
+  memoryLoading.value = true;
+  try {
+    const kind = currentMemoryKind();
+    const page = await loadRoleMemoryPage(selectedRoleId, kind, cursor, limit, normalizedQuery.value);
+    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value || kind !== currentMemoryKind()) return;
+    if (kind === "recent") recentMemory.value = mergeKnowledgePage(recentMemory.value, page.items);
+    else consolidatedMemory.value = mergeKnowledgePage(consolidatedMemory.value, page.items);
+    memoryNextCursor.value = page.nextCursor;
+    memoryPageCounts.value = page.counts;
+  } catch (loadError) {
+    if (currentRequest === requestVersion) error.value = loadError instanceof Error ? loadError.message : String(loadError);
+  } finally {
+    if (currentRequest === requestVersion) memoryLoading.value = false;
+    scheduleProgressiveSentinelRefresh();
+  }
 }
 
 function loadMoreRenderedPlans(): void {
@@ -504,13 +825,15 @@ async function loadMorePlans(limit = 8): Promise<void> {
   const selectedRoleId = roleId.value;
   const cursor = planNextCursor.value;
   const currentRequest = requestVersion;
-  if (!selectedRoleId || !cursor || loadingMorePlans.value) return;
+  if (!selectedRoleId || !cursor || loadingMorePlans.value || !knowledgePageWorkAllowed()) return;
   loadingMorePlans.value = true;
   try {
-    const page = await loadRolePlanPage(selectedRoleId, cursor, limit);
+    const page = await loadRolePlanPage(selectedRoleId, cursor, limit, currentPlanPageFilter());
     if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(page.items, false, currentRequest);
     planPageCounts.value = page.counts;
+    planListResultTotal.value = page.total;
+    planListStatusOptions.value = page.facets?.statuses || [];
     planNextCursor.value = page.nextCursor;
   } catch (loadError) {
     if (currentRequest === requestVersion) {
@@ -522,25 +845,13 @@ async function loadMorePlans(limit = 8): Promise<void> {
   }
 }
 
-async function loadAllRemainingPlans(): Promise<void> {
-  const backgroundRequest = requestVersion;
-  if (planPageBackgroundRequest === backgroundRequest) return;
-  planPageBackgroundRequest = backgroundRequest;
-  try {
-    while (planNextCursor.value && requestVersion === backgroundRequest) {
-      await yieldToKnowledgePaint();
-      if (loadingMorePlans.value) {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 32));
-        continue;
-      }
-      const cursor = planNextCursor.value;
-      await loadMorePlans(ROLE_PLAN_BACKGROUND_PAGE_SIZE);
-      if (planNextCursor.value === cursor) break;
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 24));
-    }
-  } finally {
-    if (planPageBackgroundRequest === backgroundRequest) planPageBackgroundRequest = 0;
-  }
+function loadMoreRenderedMemory(): void {
+  memoryRenderLimit.value = nextKnowledgeRenderLimit(
+    memoryRenderLimit.value,
+    visibleMemoryForView.value.length,
+    24
+  );
+  scheduleProgressiveSentinelRefresh();
 }
 
 async function yieldToKnowledgePaint(): Promise<void> {
@@ -554,53 +865,148 @@ async function yieldToKnowledgePaint(): Promise<void> {
   });
 }
 
+async function waitForKnowledgePageRequestIdle(request: number, requestInProgress: () => boolean): Promise<void> {
+  while (request === requestVersion && knowledgePageWorkAllowed() && requestInProgress()) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+  }
+}
+
+async function loadAllRemainingPlans(): Promise<void> {
+  const backgroundRequest = requestVersion;
+  if (planPageBackgroundRequest === backgroundRequest) return;
+  planPageBackgroundRequest = backgroundRequest;
+  try {
+    await drainKnowledgePages({
+      nextCursor: () => planNextCursor.value,
+      shouldContinue: () => backgroundRequest === requestVersion && knowledgePageWorkAllowed(),
+      yieldToUi: yieldToKnowledgePaint,
+      loadNextPage: async () => {
+        await waitForKnowledgePageRequestIdle(backgroundRequest, () => loadingMorePlans.value);
+        if (backgroundRequest !== requestVersion || !knowledgePageWorkAllowed()) return;
+        await loadMorePlans(ROLE_PLAN_BACKGROUND_PAGE_SIZE);
+      }
+    });
+    if (backgroundRequest === requestVersion && !planNextCursor.value && knowledgePageWorkAllowed()) {
+      await yieldToKnowledgePaint();
+      void refreshPlanAgentStatuses(plans.value.map((plan) => plan.id));
+    }
+  } finally {
+    if (planPageBackgroundRequest === backgroundRequest) planPageBackgroundRequest = 0;
+  }
+}
+
+async function loadAllRemainingMemory(): Promise<void> {
+  const backgroundRequest = requestVersion;
+  if (memoryPageBackgroundRequest === backgroundRequest) return;
+  memoryPageBackgroundRequest = backgroundRequest;
+  try {
+    await drainKnowledgePages({
+      nextCursor: () => memoryNextCursor.value,
+      shouldContinue: () => backgroundRequest === requestVersion && showsMemoryList.value && knowledgePageWorkAllowed(),
+      yieldToUi: yieldToKnowledgePaint,
+      loadNextPage: async () => {
+        await waitForKnowledgePageRequestIdle(backgroundRequest, () => memoryLoading.value);
+        if (backgroundRequest !== requestVersion || !knowledgePageWorkAllowed()) return;
+        await loadMoreMemory(ROLE_MEMORY_BACKGROUND_PAGE_SIZE);
+      }
+    });
+  } finally {
+    if (memoryPageBackgroundRequest === backgroundRequest) memoryPageBackgroundRequest = 0;
+  }
+}
+
 async function refreshKnowledge(): Promise<void> {
   const selectedRoleId = roleId.value;
+  if (!knowledgePageWorkAllowed()) return;
   if (!selectedRoleId) {
     resetPlanMarkdownTeasers();
     resetPlanMediaLoadStates();
     resetPlanDetailHydration();
+    resetPlanAgentStatusState();
     plans.value = [];
     recentMemory.value = [];
     consolidatedMemory.value = [];
     planNextCursor.value = "";
+    planListResultTotal.value = 0;
+    planListStatusOptions.value = [];
+    memoryNextCursor.value = "";
     planRenderStart.value = 0;
     resetPlanPageCounts();
+    resetMemoryPageCounts();
     error.value = "";
     return;
   }
   const currentRequest = ++requestVersion;
+  resetPlanAgentStatusState();
   loading.value = true;
   memoryLoading.value = false;
   loadingMorePlans.value = false;
   error.value = "";
   planNextCursor.value = "";
+  memoryNextCursor.value = "";
   planRenderStart.value = 0;
   planRenderLimit.value = 8;
   memoryRenderLimit.value = 24;
   resetPlanMediaLoadStates();
   resetPlanDetailHydration();
-  try {
-    const result = await loadRolePlanPage(selectedRoleId);
-    if (currentRequest !== requestVersion) return;
-    applyPlanSnapshots(result.items, true, currentRequest);
-    planPageCounts.value = result.counts;
-    planNextCursor.value = result.nextCursor;
-    if (planNextCursor.value) void loadAllRemainingPlans();
-  } catch (loadError) {
-    if (currentRequest !== requestVersion) return;
-    error.value = loadError instanceof Error ? loadError.message : String(loadError);
-  } finally {
-    if (currentRequest === requestVersion) loading.value = false;
-    scheduleProgressiveSentinelRefresh();
+  void loadRoleMemoryCounts(selectedRoleId)
+    .then((counts) => {
+      if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+      memoryPageCounts.value = counts;
+    })
+    .catch(() => undefined);
+  void refreshPendingMemoryConsolidationRuns(selectedRoleId).catch(() => undefined);
+  if (showsPlanList.value) {
+    try {
+      const result = await loadRolePlanPageWithPriorityDetails(selectedRoleId, "", 8, currentPlanPageFilter(), 2);
+      if (currentRequest !== requestVersion) return;
+      applyPlanSnapshots(result.items, true, currentRequest);
+      const detailPlanIds = new Set(result.detailPlanIds);
+      const hydratedPlans = result.items.filter((plan) => detailPlanIds.has(plan.id));
+      for (const plan of hydratedPlans) {
+        planDetailsLoaded[plan.id] = true;
+        applyFeedbackDeliveryState(plan.id, plan.approval.latest);
+      }
+      void refreshPlanMarkdownTeasers(hydratedPlans, currentRequest);
+      planPageCounts.value = result.counts;
+      planListResultTotal.value = result.total;
+      planListStatusOptions.value = result.facets?.statuses || [];
+      planNextCursor.value = result.nextCursor;
+    } catch (loadError) {
+      if (currentRequest !== requestVersion) return;
+      error.value = loadError instanceof Error ? loadError.message : String(loadError);
+    } finally {
+      if (currentRequest === requestVersion) loading.value = false;
+      scheduleProgressiveSentinelRefresh();
+    }
+    if (currentRequest === requestVersion && planNextCursor.value) void loadAllRemainingPlans();
+    else if (currentRequest === requestVersion) void refreshPlanAgentStatuses(plans.value.map((plan) => plan.id));
+  } else {
+    plans.value = [];
+    planListResultTotal.value = 0;
+    planListStatusOptions.value = [];
+    loading.value = false;
   }
   if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+  if (!showsMemoryList.value) {
+    recentMemory.value = [];
+    consolidatedMemory.value = [];
+    return;
+  }
   memoryLoading.value = true;
   try {
-    const memory = await loadRoleMemory(selectedRoleId);
-    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
-    recentMemory.value = memory.recent;
-    consolidatedMemory.value = memory.consolidated;
+    const kind = currentMemoryKind();
+    const memory = await loadRoleMemoryPage(selectedRoleId, kind, "", 24, normalizedQuery.value);
+    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value || kind !== currentMemoryKind()) return;
+    if (kind === "recent") {
+      recentMemory.value = memory.items;
+      consolidatedMemory.value = [];
+    } else {
+      consolidatedMemory.value = memory.items;
+      recentMemory.value = [];
+    }
+    memoryNextCursor.value = memory.nextCursor;
+    memoryPageCounts.value = memory.counts;
   } catch (loadError) {
     if (currentRequest === requestVersion) {
       error.value = loadError instanceof Error ? loadError.message : String(loadError);
@@ -609,23 +1015,25 @@ async function refreshKnowledge(): Promise<void> {
     if (currentRequest === requestVersion) memoryLoading.value = false;
     scheduleProgressiveSentinelRefresh();
   }
+  if (currentRequest === requestVersion && memoryNextCursor.value) void loadAllRemainingMemory();
 }
 
 watch([activeView, query], () => {
-  memoryRenderLimit.value = normalizedQuery.value ? Number.MAX_SAFE_INTEGER : 24;
-  if (normalizedQuery.value) {
-    queuePlanDetails(plans.value, requestVersion);
-    if (hasMorePlans.value) void loadAllRemainingPlans();
-  } else {
-    planDetailQueue = [];
-    queuedPlanDetailIds.clear();
-    schedulePlanDetailObserverRefresh();
-  }
+  requestVersion += 1;
+  loading.value = false;
+  loadingMorePlans.value = false;
+  memoryLoading.value = false;
+  planNextCursor.value = "";
+  memoryNextCursor.value = "";
+  planDetailQueue = [];
+  queuedPlanDetailIds.clear();
+  schedulePlanDetailObserverRefresh();
   scheduleProgressiveSentinelRefresh();
+  if (knowledgeFilterTimer) window.clearTimeout(knowledgeFilterTimer);
+  knowledgeFilterTimer = window.setTimeout(() => void refreshKnowledge(), 180);
 });
 
 watch([planNextCursor, hasMoreMemory], () => {
-  if (normalizedQuery.value && planNextCursor.value) void loadAllRemainingPlans();
   scheduleProgressiveSentinelRefresh();
 });
 
@@ -636,9 +1044,16 @@ watch(
     const previousRoleId = previous?.[0];
     const previousManagerLoading = previous?.[1];
     if (previous && nextRoleId !== previousRoleId) {
+      planListSortMode.value = "status";
+      planListHiddenStatuses.value = [];
+      planListDraftSortMode.value = "status";
+      planListDraftHiddenStatuses.value = [];
+      planListDialogOpen.value = false;
       resetApprovalAttachmentState();
+      resetMemoryPageCounts();
       closePlanMediaPreview();
       closePlanMarkdownPreview();
+      closeMemoryDetail();
     }
     if (!nextRoleId || managerLoading) return;
     if (!previous || nextRoleId !== previousRoleId || previousManagerLoading === true) void refreshKnowledge();
@@ -685,6 +1100,55 @@ function formatDate(value: string | undefined): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return dateFormatter.value.format(date);
+}
+
+function formatMemoryRemaining(milliseconds: number): string {
+  const totalMinutes = Math.max(0, Math.ceil(milliseconds / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return isEnglish.value ? `${minutes} min` : `${minutes} 分钟`;
+  if (minutes === 0) return isEnglish.value ? `${hours} hr` : `${hours} 小时`;
+  return isEnglish.value ? `${hours} hr ${minutes} min` : `${hours} 小时 ${minutes} 分钟`;
+}
+
+const nextMemoryConsolidationTriggerMemory = computed(() => {
+  if (activeView.value !== "recent_memory" || normalizedQuery.value || memoryLoading.value || hasMoreMemory.value) return undefined;
+  return recentMemory.value.find((memory) => memory.lifecycle?.triggersNextConsolidation === true);
+});
+
+const nextMemoryConsolidationTriggerAt = computed(() => {
+  const memory = nextMemoryConsolidationTriggerMemory.value;
+  return memory ? Date.parse(memory.lifecycle?.consolidationTriggerAt || "") : Number.NaN;
+});
+
+const memoryIdsEnteringNextConsolidation = computed(() => {
+  const triggerAt = nextMemoryConsolidationTriggerAt.value;
+  if (!Number.isFinite(triggerAt)) return new Set<string>();
+  const remaining = triggerAt - memoryClock.value;
+  if (remaining >= 24 * 60 * 60_000) return new Set<string>();
+  return new Set(recentMemory.value
+    .filter((memory) => memory.lifecycle?.willEnterNextConsolidation === true)
+    .map((memory) => memory.id));
+});
+
+const recentMemoryConsolidationNotice = computed(() => {
+  const nextTriggerAt = nextMemoryConsolidationTriggerAt.value;
+  if (!Number.isFinite(nextTriggerAt)) return "";
+  const remaining = nextTriggerAt - memoryClock.value;
+  if (remaining <= 0 && pendingMemoryConsolidationRuns.value > 0) return isEnglish.value
+    ? "Triggered; consolidation is in progress"
+    : "已触发，正在沉淀";
+  if (remaining <= 0) return isEnglish.value
+    ? "Time until trigger: 0 min (trigger time reached)"
+    : "距离触发还剩 0 分钟（已到触发时间）";
+  if (remaining >= 24 * 60 * 60_000) return "";
+  return isEnglish.value
+    ? `Time until trigger: ${formatMemoryRemaining(remaining)}`
+    : `距离触发还剩 ${formatMemoryRemaining(remaining)}`;
+});
+
+function planRelativeTime(value: string): string {
+  return formatPlanRelativeTime(value, Date.now(), isEnglish.value ? "en" : "zh");
 }
 
 function planAttachmentUrl(planId: string, attachmentId: string): string {
@@ -890,6 +1354,9 @@ function planCardDomId(planId: string): string {
 function togglePlan(plan: RolePlan): void {
   const expanded = !expandedPlans[plan.id];
   expandedPlans[plan.id] = expanded;
+  if (expanded && !planAgentStatusIsFresh(plan.id)) {
+    void refreshPlanAgentStatuses([plan.id], true);
+  }
   if (expanded && (planAcceptsGuidance(plan) || plan.presentation.approval.state !== "none")) {
     void refreshPlanApproval(plan.id);
   }
@@ -897,6 +1364,46 @@ function togglePlan(plan: RolePlan): void {
 
 function planDirectoryStyle(plan: RolePlan): Record<string, string> {
   return { "--plan-tone": plan.presentation.palette.accent };
+}
+
+const planListSortLabel = computed(() => t(planListSortMode.value === "status" ? "状态排序" : "时间排序"));
+const planListHasFilters = computed(() => planListHiddenStatuses.value.length > 0);
+const planListDraftSortLabel = computed(() => t(planListDraftSortMode.value === "status" ? "状态排序" : "时间排序"));
+const planListDraftHasFilters = computed(() => planListDraftHiddenStatuses.value.length > 0);
+
+function openPlanListDialog(): void {
+  planListDraftSortMode.value = planListSortMode.value;
+  planListDraftHiddenStatuses.value = [...planListHiddenStatuses.value];
+  planListDialogOpen.value = true;
+}
+
+function applyPlanListDialog(): void {
+  planListSortMode.value = planListDraftSortMode.value;
+  planListHiddenStatuses.value = [...planListDraftHiddenStatuses.value];
+  planListDialogOpen.value = false;
+  if (knowledgeFilterTimer) {
+    window.clearTimeout(knowledgeFilterTimer);
+    knowledgeFilterTimer = 0;
+  }
+  void refreshKnowledge();
+}
+
+function togglePlanListStatus(status: string): void {
+  const isVisible = !planListDraftHiddenStatuses.value.includes(status);
+  const visibleCount = planListStatusOptions.value.length - planListDraftHiddenStatuses.value.length;
+  if (isVisible && visibleCount <= 1) return;
+  planListDraftHiddenStatuses.value = planListDraftHiddenStatuses.value.includes(status)
+    ? planListDraftHiddenStatuses.value.filter((item) => item !== status)
+    : [...planListDraftHiddenStatuses.value, status];
+}
+
+function clearPlanListFilters(): void {
+  planListDraftHiddenStatuses.value = [];
+}
+
+function planListStatusIsOnlyVisible(status: string): boolean {
+  return !planListDraftHiddenStatuses.value.includes(status)
+    && planListStatusOptions.value.length - planListDraftHiddenStatuses.value.length <= 1;
 }
 
 function jumpToPlan(event: MouseEvent, plan: RolePlan): void {
@@ -1506,8 +2013,101 @@ async function refreshPlanApproval(planId: string): Promise<void> {
   }
 }
 
+function openMemoryDetail(memory: RoleMemory): void {
+  memoryDetailPreview.value = {
+    memory,
+    kind: activeView.value === "archived" ? "consolidated" : "recent"
+  };
+}
+
+function closeMemoryDetail(): void {
+  memoryDetailPreview.value = null;
+}
+
+function handlePlanFeedbackChanged(raw: Event): void {
+  try {
+    const data = JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string; planId?: string };
+    if (data.roleId === roleId.value && data.planId) void refreshPlanApproval(data.planId);
+  } catch {
+    // Ignore malformed event payloads and keep the latest valid plan snapshot.
+  }
+}
+
+async function refreshPendingMemoryConsolidationRuns(expectedRoleId = roleId.value): Promise<void> {
+  if (!expectedRoleId) {
+    pendingMemoryConsolidationRuns.value = 0;
+    return;
+  }
+  const response = await fetch(managerResourceUrl(`/api/roles/${encodeURIComponent(expectedRoleId)}/memory/consolidation-runs`), {
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json() as { data?: Array<{ status?: string }> };
+  if (expectedRoleId !== roleId.value) return;
+  pendingMemoryConsolidationRuns.value = Array.isArray(payload.data)
+    ? payload.data.filter((run) => run?.status === "requested").length
+    : 0;
+}
+
+function handleMemoryConsolidationChanged(raw: Event): void {
+  try {
+    const data = JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string; status?: string };
+    if (data.roleId !== roleId.value) return;
+    void refreshPendingMemoryConsolidationRuns();
+    if (data.status === "completed") void refreshKnowledge();
+  } catch {
+    // Ignore malformed event payloads and keep the latest valid memory snapshot.
+  }
+}
+
+function connectManagerEvents(): void {
+  if (managerEvents || !knowledgePageWorkAllowed()) return;
+  managerEvents = managerEventSource("/api/events");
+  managerEvents.addEventListener("plan_feedback_changed", handlePlanFeedbackChanged);
+  managerEvents.addEventListener("memory_consolidation_changed", handleMemoryConsolidationChanged);
+}
+
+function disconnectManagerEvents(): void {
+  managerEvents?.close();
+  managerEvents = null;
+}
+
+function scheduleMemoryClockDeadline(): void {
+  if (memoryClockTimer) window.clearTimeout(memoryClockTimer);
+  memoryClockTimer = 0;
+  if (!knowledgePageWorkAllowed()) return;
+  const now = Date.now();
+  const delay = 60_000 - (now % 60_000) + 25;
+  memoryClockTimer = window.setTimeout(() => {
+    memoryClock.value = Date.now();
+    scheduleMemoryClockDeadline();
+  }, delay);
+}
+
+function handleKnowledgeVisibilityChange(): void {
+  if (!knowledgePageShouldWork(document.visibilityState, planDirectoryMounted)) {
+    requestVersion += 1;
+    loading.value = false;
+    loadingMorePlans.value = false;
+    memoryLoading.value = false;
+    resetPlanAgentStatusState();
+    planPageObserver?.disconnect();
+    memoryPageObserver?.disconnect();
+    planDetailObserver?.disconnect();
+    disconnectManagerEvents();
+    if (memoryClockTimer) window.clearTimeout(memoryClockTimer);
+    memoryClockTimer = 0;
+    return;
+  }
+  connectManagerEvents();
+  memoryClock.value = Date.now();
+  scheduleMemoryClockDeadline();
+  void refreshKnowledge();
+}
+
 onMounted(() => {
   planDirectoryMounted = true;
+  document.addEventListener("visibilitychange", handleKnowledgeVisibilityChange);
   window.addEventListener("resize", schedulePlanCardObserverRefresh, { passive: true });
   if (typeof ResizeObserver !== "undefined" && knowledgeToolbar.value) {
     toolbarResizeObserver = new ResizeObserver(schedulePlanCardObserverRefresh);
@@ -1516,19 +2116,14 @@ onMounted(() => {
   schedulePlanCardObserverRefresh();
   schedulePlanDetailObserverRefresh();
   scheduleProgressiveSentinelRefresh();
-  managerEvents = managerEventSource("/api/events");
-  managerEvents.addEventListener("plan_feedback_changed", (raw) => {
-    try {
-      const data = JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string; planId?: string };
-      if (data.roleId === roleId.value && data.planId) void refreshPlanApproval(data.planId);
-    } catch {
-      // Ignore malformed event payloads and keep the latest valid plan snapshot.
-    }
-  });
+  connectManagerEvents();
+  scheduleMemoryClockDeadline();
+  void refreshKnowledge();
 });
 
 onBeforeUnmount(() => {
   planDirectoryMounted = false;
+  document.removeEventListener("visibilitychange", handleKnowledgeVisibilityChange);
   releaseDirectoryJumpTarget(false, false);
   planCardObserver?.disconnect();
   toolbarResizeObserver?.disconnect();
@@ -1539,8 +2134,12 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", schedulePlanCardObserverRefresh);
   if (planDirectorySyncFrame) window.cancelAnimationFrame(planDirectorySyncFrame);
   if (planObserverRefreshFrame) window.cancelAnimationFrame(planObserverRefreshFrame);
-  managerEvents?.close();
+  if (knowledgeFilterTimer) window.clearTimeout(knowledgeFilterTimer);
+  if (memoryClockTimer) window.clearTimeout(memoryClockTimer);
+  resetPlanAgentStatusState();
+  disconnectManagerEvents();
   closePlanMarkdownPreview();
+  closeMemoryDetail();
   resetPlanMarkdownTeasers();
   resetApprovalAttachmentState();
 });
@@ -1648,24 +2247,145 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       <div class="knowledge-metric blocked"><span>阻塞中</span><b>{{ planCounts.blocked }}</b><small>需要先解除依赖</small></div>
       <div class="knowledge-metric qa"><span>待QA测试</span><b>{{ planCounts.qa }}</b><small>等待验证或验收</small></div>
       <div class="knowledge-metric active"><span>活跃计划</span><b>{{ planCounts.active }}</b><small>当前仍在推进</small></div>
-      <div class="knowledge-metric memory"><span>可读记忆</span><b>{{ recentMemory.length + consolidatedMemory.length }}</b><small>近期与沉淀合计</small></div>
+      <div class="knowledge-metric memory"><span>可读记忆</span><b>{{ memoryPageCounts.recent + memoryPageCounts.consolidated }}</b><small>近期与沉淀合计</small></div>
     </div>
 
     <div
       class="knowledge-browser-layout"
-      :class="{ 'has-plan-directory': roleId && showsPlanList && visiblePlansForView.length }"
+      :class="{ 'has-plan-directory': roleId && showsPlanList && (visiblePlansForView.length || planListStatusOptions.length) }"
     >
       <nav
-        v-if="roleId && showsPlanList && visiblePlansForView.length"
+        v-if="roleId && showsPlanList && (visiblePlansForView.length || planListStatusOptions.length)"
         class="knowledge-plan-directory"
         :aria-label="t('计划目录')"
       >
         <div class="knowledge-plan-directory-head">
-          <div>
+          <div class="knowledge-plan-directory-heading">
             <v-icon size="18">mdi-format-list-bulleted-square</v-icon>
             <b>计划目录</b>
+            <span class="knowledge-plan-directory-count">{{ visiblePlansForView.length }} / {{ planListResultTotal }}</span>
           </div>
-          <span>{{ visiblePlansForView.length }} / {{ totalPlansForView }}</span>
+          <v-btn
+            class="knowledge-plan-directory-sort-trigger"
+            :class="{ filtered: planListHasFilters }"
+            size="x-small"
+            variant="tonal"
+            :prepend-icon="planListSortMode === 'status' ? 'mdi-sort-variant' : 'mdi-clock-outline'"
+            append-icon="mdi-tune-variant"
+            :aria-label="isEnglish ? `Open plan list sorting and filters: ${planListSortLabel}` : `打开列表排序与筛选：${planListSortLabel}`"
+            @click="openPlanListDialog"
+          >
+            {{ planListSortLabel }}
+          </v-btn>
+          <v-dialog
+            v-model="planListDialogOpen"
+            max-width="640"
+            scrollable
+            scrim="rgba(9, 22, 36, 0.56)"
+            aria-labelledby="plan-list-dialog-title"
+          >
+            <v-card class="knowledge-plan-list-dialog" elevation="18">
+              <div class="knowledge-plan-list-dialog-title">
+                <div class="knowledge-plan-list-dialog-heading">
+                  <span class="knowledge-plan-list-dialog-icon" aria-hidden="true">
+                    <v-icon size="20">mdi-tune-variant</v-icon>
+                  </span>
+                  <span>
+                    <b id="plan-list-dialog-title">{{ t("列表排序与筛选") }}</b>
+                    <small>{{ t("目录和计划卡片保持一致") }}</small>
+                  </span>
+                </div>
+                <v-btn
+                  class="knowledge-plan-list-dialog-close"
+                  icon="mdi-close"
+                  size="small"
+                  variant="text"
+                  :aria-label="t('关闭')"
+                  @click="planListDialogOpen = false"
+                />
+              </div>
+              <v-card-text class="knowledge-plan-list-dialog-content">
+                <div class="knowledge-plan-list-summary">
+                  <div>
+                    <span>{{ t("当前结果") }}</span>
+                    <b>{{ visiblePlansForView.length }} / {{ planListResultTotal }}</b>
+                  </div>
+                  <span class="knowledge-plan-list-current-mode">
+                    <v-icon size="15">{{ planListDraftSortMode === "status" ? "mdi-sort-variant" : "mdi-clock-outline" }}</v-icon>
+                    {{ planListDraftSortLabel }}
+                  </span>
+                </div>
+                <div class="knowledge-plan-list-dialog-grid">
+                  <fieldset class="knowledge-plan-list-panel knowledge-plan-list-sort-panel">
+                    <legend>{{ t("排序方式") }}</legend>
+                    <p>{{ t("选择整个计划列表的排列方式") }}</p>
+                    <div class="knowledge-plan-list-sort-options">
+                      <button
+                        type="button"
+                        :class="{ selected: planListDraftSortMode === 'status' }"
+                        :aria-pressed="planListDraftSortMode === 'status'"
+                        @click="planListDraftSortMode = 'status'"
+                      >
+                        <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-sort-variant</v-icon></span>
+                        <span><b>{{ t("状态排序") }}</b><small>{{ t("相同工作阶段集中显示") }}</small></span>
+                        <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "status" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                      </button>
+                      <button
+                        type="button"
+                        :class="{ selected: planListDraftSortMode === 'updated' }"
+                        :aria-pressed="planListDraftSortMode === 'updated'"
+                        @click="planListDraftSortMode = 'updated'"
+                      >
+                        <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-clock-outline</v-icon></span>
+                        <span><b>{{ t("时间排序") }}</b><small>{{ t("最近更新的计划优先") }}</small></span>
+                        <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "updated" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                      </button>
+                    </div>
+                  </fieldset>
+                  <fieldset class="knowledge-plan-list-panel knowledge-plan-list-filter-panel">
+                    <legend>{{ t("筛选状态") }}</legend>
+                    <div class="knowledge-plan-list-filter-head">
+                      <p>{{ t("选择需要同时显示的计划状态") }}</p>
+                      <v-btn
+                        class="knowledge-plan-list-show-all"
+                        size="small"
+                        variant="text"
+                        :disabled="!planListDraftHasFilters"
+                        @click="clearPlanListFilters"
+                      >
+                        {{ t("显示全部") }}
+                      </v-btn>
+                    </div>
+                    <div class="knowledge-plan-list-filter-options">
+                      <label
+                        v-for="option in planListStatusOptions"
+                        :key="option.status"
+                        :class="{
+                          disabled: planListStatusIsOnlyVisible(option.status),
+                          selected: !planListDraftHiddenStatuses.includes(option.status)
+                        }"
+                      >
+                        <input
+                          type="checkbox"
+                          :checked="!planListDraftHiddenStatuses.includes(option.status)"
+                          :disabled="planListStatusIsOnlyVisible(option.status)"
+                          @change="togglePlanListStatus(option.status)"
+                        >
+                        <span class="knowledge-plan-list-filter-swatch" :style="{ backgroundColor: option.palette.accent }" />
+                        <span>{{ t(option.status) }}</span>
+                        <b>{{ option.count }}</b>
+                      </label>
+                    </div>
+                  </fieldset>
+                </div>
+              </v-card-text>
+              <v-divider />
+              <v-card-actions class="knowledge-plan-list-dialog-actions">
+                <span>{{ t("点击完成后更新目录和计划卡片") }}</span>
+                <v-btn color="primary" variant="flat" size="large" @click="applyPlanListDialog">{{ t("完成") }}</v-btn>
+              </v-card-actions>
+            </v-card>
+          </v-dialog>
         </div>
         <p>点击计划快速跳转</p>
         <div ref="planDirectoryList" class="knowledge-plan-directory-list">
@@ -1680,6 +2400,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
             :aria-current="activeDirectoryPlanId === plan.id ? 'location' : undefined"
             :data-plan-directory-id="plan.id"
             @click="jumpToPlan($event, plan)"
+            @mouseenter="setPlanDirectoryMarquee($event, true)"
+            @mouseleave="setPlanDirectoryMarquee($event, false)"
+            @focus="setPlanDirectoryMarquee($event, true)"
+            @blur="setPlanDirectoryMarquee($event, false)"
           >
             <span
               class="knowledge-plan-directory-status"
@@ -1687,19 +2411,40 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               :title="t(plan.presentation.status)"
             >{{ t(plan.presentation.status) }}</span>
             <span class="knowledge-plan-directory-copy">
-              <b :title="plan.title" data-no-i18n>{{ planTitleForDirectory(plan.title) }}</b>
+              <b class="knowledge-plan-directory-title" :title="plan.title" data-no-i18n>
+                <span>{{ planTitleForDirectory(plan.title) }}</span>
+              </b>
             </span>
+            <span
+              v-if="planTaskAgentWorking(plan)"
+              class="knowledge-plan-directory-working"
+              :title="isEnglish ? 'Task Agent is working' : '任务 Agent 工作中'"
+              role="status"
+              :aria-label="isEnglish ? 'Task Agent is working' : '任务 Agent 工作中'"
+            >
+              <v-icon size="14" aria-hidden="true">mdi-loading</v-icon>
+            </span>
+            <time
+              v-else
+              class="knowledge-plan-directory-updated"
+              :datetime="plan.updatedAt"
+              :title="formatDate(plan.updatedAt)"
+              :aria-label="isEnglish ? `Last updated ${planRelativeTime(plan.updatedAt)}` : `最后更新：${planRelativeTime(plan.updatedAt)}`"
+              data-no-i18n
+            >{{ planRelativeTime(plan.updatedAt) }}</time>
           </a>
+          <div v-if="!visiblePlansForView.length" class="knowledge-plan-directory-empty">
+            {{ t("没有符合当前筛选的计划") }}
+          </div>
         </div>
       </nav>
 
       <v-card class="app-card knowledge-browser" variant="flat">
       <div ref="knowledgeToolbar" class="knowledge-toolbar">
         <v-btn-toggle v-model="activeView" mandatory color="primary" density="comfortable" class="knowledge-tabs">
-          <v-btn value="current" prepend-icon="mdi-clock-fast"><span>{{ isEnglish ? "Current" : "当前" }}</span><b>{{ planPageCounts.current }}</b></v-btn>
-          <v-btn value="plans" prepend-icon="mdi-clipboard-text-clock-outline"><span>{{ isEnglish ? "Plans" : "计划" }}</span><b>{{ planPageCounts.plans }}</b></v-btn>
-          <v-btn value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ recentMemory.length }}</b></v-btn>
-          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ planPageCounts.archived + consolidatedMemory.length }}</b></v-btn>
+          <v-btn value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ planPageCounts.plans }}</b></v-btn>
+          <v-btn value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ memoryPageCounts.recent }}</b></v-btn>
+          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ planPageCounts.archived + memoryPageCounts.consolidated }}</b></v-btn>
         </v-btn-toggle>
         <div class="knowledge-tools">
           <v-text-field
@@ -1714,18 +2459,19 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         </div>
       </div>
 
-      <v-progress-linear v-if="loading || loadingMorePlans || memoryLoading || hasMorePlans || hasPendingPlanDetails" indeterminate color="secondary" />
-      <div v-if="hasMorePlans || hasPendingPlanDetails" class="knowledge-progressive-status">
-        <v-progress-circular indeterminate size="16" width="2" color="primary" />
-        <span>{{ t(hasMorePlans ? "正在持续加载更多计划…" : "正在加载计划详情…") }}</span>
+      <v-progress-linear v-if="knowledgeListLoading || hasPendingPlanDetails" indeterminate color="secondary" />
+      <div v-if="roleId && (showsPlanList || showsMemoryList)" class="knowledge-progressive-status" aria-live="polite">
+        <v-progress-circular v-if="knowledgeListLoading" indeterminate size="16" width="2" color="primary" />
+        <v-icon v-else size="16" color="success">mdi-check-circle-outline</v-icon>
+        <span data-no-i18n>{{ knowledgeListStatus }}</span>
       </div>
       <v-alert v-if="error" type="error" variant="tonal" class="ma-5">{{ error }}</v-alert>
       <v-alert v-else-if="!roleId" type="warning" variant="tonal" class="ma-5">当前 Route 尚未绑定人格。</v-alert>
 
       <div v-if="roleId && showsPlanList" class="knowledge-list">
-        <div v-if="activeView === 'current' || activeView === 'archived'" class="knowledge-subsection-heading">
-          <v-icon size="20">{{ activeView === "current" ? "mdi-clipboard-play-outline" : "mdi-archive-outline" }}</v-icon>
-          <b>{{ activeView === "current" ? (isEnglish ? "In-progress plans" : "进行中计划") : (isEnglish ? "Archived plans" : "已归档计划") }}</b>
+        <div v-if="activeView === 'archived'" class="knowledge-subsection-heading">
+          <v-icon size="20">mdi-archive-outline</v-icon>
+          <b>{{ isEnglish ? "Archived plans" : "已归档计划" }}</b>
         </div>
         <div v-if="loading && !plans.length" class="knowledge-plan-skeletons" aria-live="polite">
           <div v-for="index in 3" :key="index" class="knowledge-plan-skeleton">
@@ -1757,7 +2503,31 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   <h2 data-no-i18n>{{ plan.title }}</h2>
                 </div>
               </div>
-              <v-chip :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.presentation.status) }}</v-chip>
+              <div class="knowledge-plan-head-actions">
+                <v-chip :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.presentation.status) }}</v-chip>
+                <v-btn
+                  v-if="planAgentBindingStatus(plan, 'task')?.canOpen && !planTaskAgentWorking(plan)"
+                  class="knowledge-plan-open-task"
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                  prepend-icon="mdi-open-in-new"
+                  :loading="planAgentOpenPending[planAgentOpenKey(plan.id, 'task')]"
+                  :aria-label="isEnglish ? `Open ${planAgentTitle(plan, 'task')} in Codex` : `在 Codex 中打开${planAgentTitle(plan, 'task')}`"
+                  @click.stop="openPlanAgent(plan, 'task')"
+                >
+                  {{ isEnglish ? "Open task" : "打开任务" }}
+                </v-btn>
+              </div>
+            </div>
+
+            <div
+              v-if="planAgentNotices[planAgentOpenKey(plan.id, 'task')]"
+              class="knowledge-plan-agent-inline-notice"
+              :data-tone="planAgentNotices[planAgentOpenKey(plan.id, 'task')]?.tone"
+              role="status"
+            >
+              {{ planAgentNotices[planAgentOpenKey(plan.id, "task")]?.text }}
             </div>
 
             <div v-if="planDetailsLoading[plan.id]" class="knowledge-plan-detail-loading" aria-live="polite">
@@ -1941,17 +2711,100 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
             </div>
 
             <button
-              v-if="planDetailsLoaded[plan.id] && (plan.steps.length || plan.presentation.approval.state !== 'none')"
+              v-if="planDetailsLoaded[plan.id]"
               class="knowledge-expand"
               type="button"
               :aria-expanded="Boolean(expandedPlans[plan.id])"
               @click="togglePlan(plan)"
             >
-              <span>{{ expandedPlans[plan.id] ? "收起计划详情" : plan.presentation.approval.state === "ready" ? "查看执行合同并审批" : plan.presentation.approval.state === "incomplete" ? "查看缺失的审批信息" : planAcceptsGuidance(plan) ? "查看计划详情并引导" : `查看全部 ${plan.steps.length} 个步骤` }}</span>
+              <span>{{ expandedPlans[plan.id] ? t("收起计划详情") : plan.presentation.approval.state === "ready" ? t("查看执行合同并审批") : plan.presentation.approval.state === "incomplete" ? t("查看缺失的审批信息") : planAcceptsGuidance(plan) ? t("查看计划详情并引导") : plan.steps.length ? `${t("查看全部")} ${plan.steps.length} ${t("个步骤")}` : t("查看计划详情") }}</span>
               <v-icon size="18">{{ expandedPlans[plan.id] ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
             </button>
 
             <div v-if="planDetailsLoaded[plan.id] && expandedPlans[plan.id]" class="knowledge-plan-details">
+              <section class="knowledge-plan-agents" :aria-label="t('计划关联 Agent')">
+                <div class="knowledge-plan-agents-head">
+                  <div>
+                    <span><v-icon size="17">mdi-robot-outline</v-icon>{{ t("计划关联 Agent") }}</span>
+                    <small>{{ t("状态来自对应 Codex Desktop 会话任务") }}</small>
+                  </div>
+                  <v-btn
+                    v-if="planAgentShouldRetry(plan)"
+                    size="small"
+                    variant="text"
+                    prepend-icon="mdi-refresh"
+                    :loading="planAgentStatusLoading[plan.id]"
+                    @click="refreshPlanAgentStatuses([plan.id], true)"
+                  >
+                    {{ t("重试状态") }}
+                  </v-btn>
+                </div>
+                <div v-if="planAgentStatusLoading[plan.id]" class="knowledge-plan-agent-query" role="status">
+                  <v-progress-circular indeterminate size="18" width="2" />
+                  <span>{{ t("正在确认 Agent 与会话任务状态…") }}</span>
+                </div>
+                <div class="knowledge-plan-agent-list">
+                  <button
+                    v-for="agentRole in planAgentRoles(plan)"
+                    :key="`${plan.id}-${agentRole}`"
+                    type="button"
+                    class="knowledge-plan-agent-row"
+                    :class="{ actionable: planAgentBindingStatus(plan, agentRole)?.canOpen && !planAgentBindingStatus(plan, agentRole)?.working }"
+                    :data-tone="planAgentStatusTone(planAgentBindingStatus(plan, agentRole))"
+                    :disabled="!planAgentBindingStatus(plan, agentRole)?.canOpen || planAgentBindingStatus(plan, agentRole)?.working"
+                    :aria-label="planAgentBindingStatus(plan, agentRole)?.canOpen && !planAgentBindingStatus(plan, agentRole)?.working
+                      ? (isEnglish ? `Open ${planAgentTitle(plan, agentRole)} in Codex` : `在 Codex 中打开${planAgentTitle(plan, agentRole)}`)
+                      : undefined"
+                    @click="openPlanAgent(plan, agentRole)"
+                  >
+                    <span class="knowledge-plan-agent-identity">
+                      <span class="knowledge-plan-agent-icon" aria-hidden="true">
+                        <v-icon size="20">{{ agentRole === "secretary" ? "mdi-account-tie-outline" : "mdi-robot-outline" }}</v-icon>
+                      </span>
+                      <span class="knowledge-plan-agent-copy">
+                        <small>{{ planAgentRoleLabel(agentRole) }}</small>
+                        <b data-no-i18n :title="planAgentTitle(plan, agentRole)">{{ planAgentTitle(plan, agentRole) }}</b>
+                        <em v-if="planAgentBindingStatus(plan, agentRole)?.workspace" data-no-i18n :title="planAgentBindingStatus(plan, agentRole)?.workspace">
+                          {{ planAgentBindingStatus(plan, agentRole)?.workspace }}
+                        </em>
+                      </span>
+                    </span>
+                    <span class="knowledge-plan-agent-states">
+                      <span class="knowledge-plan-agent-work-state">
+                        <v-icon v-if="planAgentBindingStatus(plan, agentRole)?.working" class="knowledge-plan-agent-working-icon" size="14">mdi-loading</v-icon>
+                        <v-icon v-else size="14">{{ planAgentBindingStatus(plan, agentRole)?.agentStatus === "idle" ? "mdi-pause-circle-outline" : "mdi-help-circle-outline" }}</v-icon>
+                        {{ planAgentWorkLabel(planAgentBindingStatus(plan, agentRole)) }}
+                      </span>
+                      <span class="knowledge-plan-agent-session-state">
+                        {{ planAgentSessionLabel(planAgentBindingStatus(plan, agentRole)?.sessionStatus) }}
+                      </span>
+                      <span
+                        v-if="planAgentBindingStatus(plan, agentRole)?.sessionStatus === 'missing'"
+                        class="knowledge-plan-agent-missing"
+                      >
+                        <v-icon size="14">mdi-alert-circle-outline</v-icon>
+                        {{ isEnglish ? "Task Agent session is missing" : "会话任务 Agent 已丢失" }}
+                      </span>
+                      <v-icon
+                        v-if="planAgentBindingStatus(plan, agentRole)?.canOpen && !planAgentBindingStatus(plan, agentRole)?.working"
+                        class="knowledge-plan-agent-open-icon"
+                        size="18"
+                      >mdi-open-in-new</v-icon>
+                    </span>
+                  </button>
+                </div>
+                <div
+                  v-for="agentRole in planAgentRoles(plan)"
+                  v-show="planAgentNotices[planAgentOpenKey(plan.id, agentRole)]"
+                  :key="`${plan.id}-${agentRole}-notice`"
+                  class="knowledge-plan-agent-notice"
+                  :data-tone="planAgentNotices[planAgentOpenKey(plan.id, agentRole)]?.tone"
+                  role="status"
+                >
+                  {{ planAgentNotices[planAgentOpenKey(plan.id, agentRole)]?.text }}
+                </div>
+              </section>
+
               <section v-if="planAcceptsGuidance(plan)" class="knowledge-approval-panel" data-state="guidance">
                 <div class="knowledge-approval-head">
                   <div>
@@ -2373,19 +3226,34 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         <div v-if="!loading && !loadingMorePlans && !hasMorePlans && !visiblePlansForView.length" class="knowledge-empty">
           <v-icon size="32">mdi-clipboard-text-off-outline</v-icon>
           <b>没有匹配的计划</b>
-          <span>{{ activeView === "current" ? t("当前没有匹配的进行中计划。") : activeView === "archived" ? t("当前没有匹配的已归档计划。") : t("可以清空搜索，或等待 Agent 通过 Manager 写入计划。") }}</span>
+          <span>{{ planListHasFilters ? t("可以调整状态筛选，恢复其它计划。") : activeView === "archived" ? t("当前没有匹配的已归档计划。") : t("可以清空搜索，或等待 Agent 通过 Manager 写入计划。") }}</span>
         </div>
       </div>
 
       <div v-if="roleId && showsMemoryList" class="knowledge-memory-grid">
-        <div v-if="activeView === 'current' || activeView === 'archived'" class="knowledge-subsection-heading knowledge-memory-heading">
-          <v-icon size="20">{{ activeView === "current" ? "mdi-memory" : "mdi-bookshelf" }}</v-icon>
-          <b>{{ activeView === "current" ? t("近期记忆") : t("沉淀记忆") }}</b>
+        <div v-if="activeView === 'archived'" class="knowledge-subsection-heading knowledge-memory-heading">
+          <v-icon size="20">mdi-bookshelf</v-icon>
+          <b>{{ t("沉淀记忆") }}</b>
+        </div>
+        <div v-if="recentMemoryConsolidationNotice" class="knowledge-memory-consolidation-panel">
+          <div class="knowledge-memory-consolidation-icon">
+            <v-icon size="22">mdi-timer-sand</v-icon>
+          </div>
+          <div>
+            <small>{{ t("近期记忆沉淀") }}</small>
+            <b>{{ recentMemoryConsolidationNotice }}</b>
+            <strong v-if="nextMemoryConsolidationTriggerMemory">
+              {{ t("最不活跃记忆") }}：<span data-no-i18n>{{ nextMemoryConsolidationTriggerMemory.title }}</span>
+            </strong>
+            <em>{{ isEnglish ? `${memoryIdsEnteringNextConsolidation.size} memories will enter this consolidation` : `预计 ${memoryIdsEnteringNextConsolidation.size} 条记忆进入本次沉淀` }}</em>
+          </div>
+          <span>{{ t("24 / 72 小时规则") }}</span>
         </div>
         <article
           v-for="memory in renderedMemoryForView"
           :key="memory.id"
           class="knowledge-memory-card"
+          :class="{ 'will-consolidate': memoryIdsEnteringNextConsolidation.has(memory.id) }"
         >
           <div class="knowledge-memory-icon">
             <v-icon>{{ activeView === "archived" ? "mdi-bookshelf" : "mdi-memory" }}</v-icon>
@@ -2393,27 +3261,50 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <div class="knowledge-memory-copy">
             <div class="knowledge-memory-head">
               <div>
-                <div class="knowledge-kicker">{{ activeView === "archived" ? "CONSOLIDATED" : "RECENT" }}</div>
+                <div class="knowledge-memory-kicker-row">
+                  <div class="knowledge-kicker">{{ activeView === "archived" ? "CONSOLIDATED" : "RECENT" }}</div>
+                  <span v-if="memoryIdsEnteringNextConsolidation.has(memory.id)">{{ t("将进入本次沉淀") }}</span>
+                </div>
                 <h2 data-no-i18n>{{ memory.title }}</h2>
               </div>
-              <time data-no-i18n>{{ formatDate(memory.updatedAt) }}</time>
+              <div class="knowledge-memory-times">
+                <span>
+                  <small>{{ t("记录时间") }}</small>
+                  <time data-no-i18n :datetime="memory.createdAt">{{ formatDate(memory.createdAt) }}</time>
+                </span>
+                <span>
+                  <small>{{ t("上次命中召回") }}</small>
+                  <time v-if="memory.recalledAt" data-no-i18n :datetime="memory.recalledAt">{{ formatDate(memory.recalledAt) }}</time>
+                  <b v-else>{{ t("尚未命中召回") }}</b>
+                </span>
+              </div>
             </div>
-            <p data-no-i18n>{{ memory.content }}</p>
-            <div v-if="memory.source?.summary" class="knowledge-source" data-no-i18n>{{ memory.source.summary }}</div>
-            <div v-if="memory.keywords.length" class="knowledge-keywords">
-              <v-chip v-for="keyword in memory.keywords" :key="keyword" data-no-i18n size="x-small" variant="outlined">{{ keyword }}</v-chip>
+            <div class="knowledge-memory-body">
+              <div class="knowledge-memory-markdown" data-no-i18n v-html="renderMemoryMarkdownPreview(memory.content)"></div>
+              <div v-if="memory.source?.summary" class="knowledge-source" data-no-i18n>{{ memory.source.summary }}</div>
+              <div v-if="memory.keywords.length" class="knowledge-keywords">
+                <v-chip v-for="keyword in memory.keywords" :key="keyword" data-no-i18n size="x-small" variant="outlined">{{ keyword }}</v-chip>
+              </div>
+            </div>
+            <div class="knowledge-memory-actions">
+              <v-btn
+                size="small"
+                variant="text"
+                prepend-icon="mdi-book-open-page-variant-outline"
+                @click="openMemoryDetail(memory)"
+              >{{ t("查看详情") }}</v-btn>
             </div>
           </div>
         </article>
 
         <div
-          v-if="hasMoreMemory"
+          v-if="hasMoreMemory || hasMoreRenderedMemory"
           ref="memoryLoadMoreSentinel"
           class="knowledge-load-more memory"
           aria-live="polite"
         >
-          <span>{{ t("继续向下滚动加载更多记忆") }}</span>
-          <v-btn size="small" variant="text" @click="loadMoreMemory">{{ t("加载更多") }}</v-btn>
+          <span>{{ t(hasMoreRenderedMemory ? "继续向下滚动加载更多记忆" : "正在持续加载更多记忆…") }}</span>
+          <v-btn size="small" variant="text" @click="hasMoreRenderedMemory ? loadMoreRenderedMemory() : loadMoreMemory()">{{ t("加载更多") }}</v-btn>
         </div>
 
         <div
@@ -2427,6 +3318,50 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       </div>
       </v-card>
     </div>
+
+    <v-dialog
+      :model-value="Boolean(memoryDetailPreview)"
+      max-width="min(820px, 94vw)"
+      @update:model-value="(open) => { if (!open) closeMemoryDetail(); }"
+    >
+      <v-card v-if="memoryDetailPreview" class="knowledge-memory-detail" variant="flat">
+        <div class="knowledge-memory-detail-head">
+          <div>
+            <span>{{ t(memoryDetailPreview.kind === "consolidated" ? "沉淀记忆" : "近期记忆") }}</span>
+            <b data-no-i18n>{{ memoryDetailPreview.memory.title }}</b>
+          </div>
+          <v-btn icon="mdi-close" variant="text" :aria-label="t('关闭预览')" @click="closeMemoryDetail" />
+        </div>
+        <div class="knowledge-memory-detail-times">
+          <span>
+            <small>{{ t("记录时间") }}</small>
+            <time data-no-i18n :datetime="memoryDetailPreview.memory.createdAt">{{ formatDate(memoryDetailPreview.memory.createdAt) }}</time>
+          </span>
+          <span>
+            <small>{{ t("上次命中召回") }}</small>
+            <time
+              v-if="memoryDetailPreview.memory.recalledAt"
+              data-no-i18n
+              :datetime="memoryDetailPreview.memory.recalledAt"
+            >{{ formatDate(memoryDetailPreview.memory.recalledAt) }}</time>
+            <b v-else>{{ t("尚未命中召回") }}</b>
+          </span>
+        </div>
+        <div class="knowledge-memory-detail-body">
+          <div class="knowledge-memory-markdown" data-no-i18n v-html="renderMemoryMarkdownPreview(memoryDetailPreview.memory.content)"></div>
+          <div v-if="memoryDetailPreview.memory.source?.summary" class="knowledge-source" data-no-i18n>{{ memoryDetailPreview.memory.source.summary }}</div>
+          <div v-if="memoryDetailPreview.memory.keywords.length" class="knowledge-keywords">
+            <v-chip
+              v-for="keyword in memoryDetailPreview.memory.keywords"
+              :key="keyword"
+              data-no-i18n
+              size="small"
+              variant="outlined"
+            >{{ keyword }}</v-chip>
+          </div>
+        </div>
+      </v-card>
+    </v-dialog>
 
     <v-dialog
       :model-value="Boolean(planAttachmentPreview)"

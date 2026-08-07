@@ -87,6 +87,20 @@ test("speech workbench renders one mode switch and keeps device logs collapsed b
   assert.match(source, /v-if="audioLogExpanded"[\s\S]*id="speech-device-log-panel"[\s\S]*role="region"/);
 });
 
+test("speech workbench owns model management in a lazy dialog instead of the sidebar", () => {
+  const page = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
+  const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+  const router = fs.readFileSync(new URL("../src/router.ts", import.meta.url), "utf8");
+
+  assert.match(page, /defineAsyncComponent\(\(\) => import\("\.\/ModelManagementPage\.vue"\)\)/);
+  assert.match(page, /prepend-icon="mdi-package-variant-closed"[^>]+@click="modelManagementDialog = true"[^>]*>模型管理<\/v-btn>/);
+  assert.match(page, /<v-dialog v-model="modelManagementDialog"[^>]+scrollable>/);
+  assert.match(page, /<ModelManagementPage v-if="modelManagementDialog" \/>/);
+  assert.doesNotMatch(app, /title: "模型管理"[^\n]+to: "\/models"/);
+  assert.match(router, /\{ path: "\/models", redirect: "\/speech" \}/);
+  assert.doesNotMatch(router, /const ModelManagementPage/);
+});
+
 test("persona route variables hide speech settings owned by dedicated controls", () => {
   assert.ok(SPEECH_ROUTE_VARIABLE_KEYS.includes("speechAutoSubmit"));
   assert.ok(SPEECH_ROUTE_VARIABLE_KEYS.includes("speechAutoPlay"));

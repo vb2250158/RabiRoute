@@ -4,6 +4,7 @@ param(
     [string]$OutputRoot,
     [switch]$SkipBuild,
     [switch]$SkipTrayBuild,
+    [switch]$IncludeSpeech,
     [switch]$SkipInstaller,
     [switch]$SkipSmokeTest
 )
@@ -67,18 +68,21 @@ if (-not $SkipTrayBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Tray build failed." }
 }
 
-if (-not $SkipBuild) {
+if ($IncludeSpeech -and -not $SkipBuild) {
     Write-Step "Building the RabiSpeech Windows process host"
     & (Join-Path $repo "plugin-adapters\rabi-speech\scripts\build-windows-host.ps1")
     if ($LASTEXITCODE -ne 0) { throw "RabiSpeech Windows host build failed." }
+} elseif (-not $IncludeSpeech) {
+    Write-Step "Skipping optional RabiSpeech runtime; use -IncludeSpeech to add it"
 }
 
 $required = @(
     "dist\manager.js",
     "ribiwebgui\dist\index.html",
-    "RabiRoute-Tray.exe",
-    "plugin-adapters\rabi-speech\runtime\RabiSpeech.exe"
+    "RabiRoute-Tray.exe"
 )
+$speechHostRelative = "plugin-adapters\rabi-speech\runtime\RabiSpeech.exe"
+if ($IncludeSpeech) { $required += $speechHostRelative }
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $repo $relative))) {
         throw "Required build output is missing: $relative"
@@ -120,10 +124,11 @@ foreach ($tree in @("assets", "docs", "examples\data", "plugin-adapters", "scrip
     Copy-TrackedTree $tree
 }
 
-$speechHostRelative = "plugin-adapters\rabi-speech\runtime\RabiSpeech.exe"
-$speechHostDestination = Join-Path $payload $speechHostRelative
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $speechHostDestination) | Out-Null
-Copy-Item -LiteralPath (Join-Path $repo $speechHostRelative) -Destination $speechHostDestination -Force
+if ($IncludeSpeech) {
+    $speechHostDestination = Join-Path $payload $speechHostRelative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $speechHostDestination) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo $speechHostRelative) -Destination $speechHostDestination -Force
+}
 
 Write-Step "Installing production-only npm dependencies into the payload"
 & npm.cmd ci --omit=dev --ignore-scripts --prefix $payload

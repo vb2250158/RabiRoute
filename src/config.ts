@@ -9,16 +9,23 @@ import {
   normalizeRecentMessageLimit,
   normalizeMessageAdapterPolicies,
   normalizeMessageProcessingAgentPolicies,
+  normalizeCodexReasoningEffort,
   normalizeScheduleDefinitions,
   normalizeSpeechPushMode,
   normalizeSpeechTriggerKeywords,
   resolvePrimaryAgentAdapter,
   type NotificationScheduleDefinition,
   type RecentMessageLimits,
+  type CodexReasoningEffort,
   type SpeechPushMode
 } from "./shared/gatewayConfigModel.js";
-import { normalizeCodexPlanAssistantSessions } from "./shared/codexPlanAssistantSessions.js";
-import { resolveProjectPath } from "./shared/projectPaths.js";
+import {
+  normalizeCodexPlanAssistantModel,
+  normalizeCodexPlanAssistantSessions,
+  type CodexPlanAssistantSession
+} from "./shared/codexPlanAssistantSessions.js";
+import { normalizeCodexMemoryConsolidationAgentModel } from "./shared/codexMemoryConsolidationAgent.js";
+import { resolvePersistedProjectPath } from "./shared/projectPaths.js";
 import { resolveRouteIdentity, sanitizeRoleId } from "./shared/routeIdentity.js";
 import { resolveRolePaths, roleFilePath, roleFolderPath } from "./shared/routePaths.js";
 
@@ -386,7 +393,7 @@ function normalizeTemplateText(value: string): string {
 }
 
 function normalizeCodexCwd(value: string | undefined): string | undefined {
-  return resolveProjectPath(value, rootDir);
+  return resolvePersistedProjectPath(value, rootDir);
 }
 
 const botNickname = process.env.BOT_NICKNAME ?? "QQ小助手";
@@ -413,11 +420,32 @@ const routeProfiles = parseRouteProfiles(process.env.ROUTE_PROFILES, {
 const pipelinePreset = process.env.PIPELINE_PRESET?.trim() || undefined;
 const pipeline = parsePipelineDefinition(process.env.PIPELINE);
 const agentModel = normalizeOptionalString(process.env.AGENT_MODEL);
+const agentReasoningEffort: CodexReasoningEffort | undefined = normalizeCodexReasoningEffort(
+  process.env.AGENT_REASONING_EFFORT
+);
 const agentAdapters = parseAgentAdapters(process.env.AGENT_ADAPTERS);
 const messageProcessingAgents = normalizeMessageProcessingAgentPolicies(
   parseJsonEnvironmentValue(process.env.MESSAGE_PROCESSING_AGENTS, "MESSAGE_PROCESSING_AGENTS"),
   agentAdapters
 );
+const configuredCodexPlanAssistantSessions = normalizeCodexPlanAssistantSessions(
+  parseJsonEnvironmentValue(process.env.CODEX_PLAN_ASSISTANT_SESSIONS, "CODEX_PLAN_ASSISTANT_SESSIONS")
+);
+const codexPlanAssistantModel = normalizeCodexPlanAssistantModel(process.env.CODEX_PLAN_ASSISTANT_MODEL);
+const codexPlanAssistantEnabled = parseBoolean(
+  process.env.CODEX_PLAN_ASSISTANT_ENABLED,
+  configuredCodexPlanAssistantSessions.length > 0
+);
+const codexMemoryConsolidationAgentEnabled = parseBoolean(
+  process.env.CODEX_MEMORY_CONSOLIDATION_AGENT_ENABLED,
+  false
+);
+const codexMemoryConsolidationAgentModel = normalizeCodexMemoryConsolidationAgentModel(
+  process.env.CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL
+);
+const activeCodexPlanAssistantSessions: CodexPlanAssistantSession[] = codexPlanAssistantEnabled
+  ? configuredCodexPlanAssistantSessions.map((session) => ({ ...session, model: codexPlanAssistantModel }))
+  : [];
 const messageAdapterTypes = parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE);
 const messageAdapterPolicies = normalizeMessageAdapterPolicies(
   parseJsonEnvironmentValue(process.env.MESSAGE_ADAPTER_POLICIES, "MESSAGE_ADAPTER_POLICIES"),
@@ -498,12 +526,15 @@ export const config = {
   ),
   messageProcessingAgents,
   agentModel,
+  agentReasoningEffort,
   codexThreadId: process.env.CODEX_THREAD_ID?.trim() || "",
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",
   codexCwd: normalizeCodexCwd(process.env.CODEX_CWD) ?? process.cwd(),
-  codexPlanAssistantSessions: normalizeCodexPlanAssistantSessions(
-    parseJsonEnvironmentValue(process.env.CODEX_PLAN_ASSISTANT_SESSIONS, "CODEX_PLAN_ASSISTANT_SESSIONS")
-  ),
+  codexPlanAssistantEnabled,
+  codexPlanAssistantModel,
+  codexPlanAssistantSessions: activeCodexPlanAssistantSessions,
+  codexMemoryConsolidationAgentEnabled,
+  codexMemoryConsolidationAgentModel,
   copilotThreadName: process.env.COPILOT_THREAD_NAME?.trim() || "Copilot CLI",
   targetGroupId: process.env.TARGET_GROUP_ID ?? "",
   botNickname,
@@ -543,7 +574,7 @@ export function setBotProfile(profile: { nickname?: string; userId?: string | nu
   }
 }
 
-export function rolePathsFor(agentRoleId: string | undefined): { roleId: string; roleDir: string; rolePath: string; dataDir: string } {
+export function rolePathsFor(agentRoleId: string | undefined): { roleId: string; roleDir: string; rolePath: string; routeDataDir: string; personaDataDir: string } {
   return rolePathsForRoute({
     agentRoleId,
     agentRoleFile: config.agentRoleFile,
@@ -552,7 +583,7 @@ export function rolePathsFor(agentRoleId: string | undefined): { roleId: string;
   });
 }
 
-export function rolePathsForRoute(route: Pick<RouteProfile, "agentRoleId" | "agentRoleFile" | "rolesDir" | "dataDir">): { roleId: string; roleDir: string; rolePath: string; dataDir: string } {
+export function rolePathsForRoute(route: Pick<RouteProfile, "agentRoleId" | "agentRoleFile" | "rolesDir" | "dataDir">): { roleId: string; roleDir: string; rolePath: string; routeDataDir: string; personaDataDir: string } {
   return resolveRolePaths({
     agentRoleId: route.agentRoleId,
     agentRoleFile: route.agentRoleFile,

@@ -6,7 +6,7 @@
   "priority": "medium",
   "kind": "ui",
   "currentStepId": "add-real-screenshots",
-  "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的计划展示阶段、状态色板与计数；语音服务页按真实进程归属和健康状态启停 RabiSpeech；Route 页把 QQ、个人微信、RabiLink、语音和飞书等消息端作为独立健康状态展示，扫描保持只读、有界并可返回部分结果，个人微信二维码只在用户明确请求后生成。当前补齐真实脱敏截图和实体环境证据。",
+  "currentStep": "RibiWebGUI 与托盘已共用 Manager 派生的计划展示阶段、状态色板与计数；计划/记忆页支持摘要分页、后台补齐和生命周期状态，Persona 页显示有界摘要并可打开安全 Markdown，模型管理通过按需弹窗只消费 Manager 的模型状态，消息处理板展示阶段、Worker、结构化结果、关键事实和 Outbox/任务交接回执。语音服务页按真实进程归属和健康状态启停 RabiSpeech；Route 页继续把各消息端作为独立健康状态展示，扫描保持只读、有界并可返回部分结果。当前补齐真实脱敏截图和实体环境证据。",
   "nextAction": "为 NapCat 账号归属、独立消息端健康、个人微信恢复/重新扫码、飞书待凭据状态、语音设备事件与原声回听补齐真实脱敏截图，并在双实体 PC、真实账号和长时间语音会话中复核分页、错误恢复与跨端排障；自然打断继续等待真实 AEC 证据。",
   "steps": [
     { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
@@ -40,6 +40,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-31T14:30:00+08:00",
-  "keywords": ["RibiWebGUI", "Manager API", "NapCat 账号归属", "独立消息端健康", "只读扫描", "共享截止时间", "部分结果", "个人微信恢复", "显式二维码", "飞书待凭据", "计划反馈", "审批执行合同", "待统一打包", "暂停恢复合同", "状态色板", "阶段计数", "音频流事件", "Route 回执", "ASR 原声", "RabiSpeech 运行时归属", "语音服务", "自然打断", "AEC", "托盘"]
+  "updatedAt": "2026-08-07T00:00:00+08:00",
+  "keywords": ["RibiWebGUI", "Manager API", "NapCat 账号归属", "独立消息端健康", "只读扫描", "共享截止时间", "部分结果", "个人微信恢复", "显式二维码", "飞书待凭据", "计划反馈", "审批执行合同", "待统一打包", "暂停恢复合同", "状态色板", "阶段计数", "音频流事件", "Route 回执", "ASR 原声", "RabiSpeech 运行时归属", "语音服务", "自然打断", "AEC", "托盘", "模型管理", "Persona Markdown", "消息处理看板", "Outbox 回执", "Agent 状态"]
 }

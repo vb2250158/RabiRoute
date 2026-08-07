@@ -179,7 +179,10 @@ export function createRouteDecision(
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
 ): RouteDecision | null {
-  const systemRule = systemEventRuleForRouteKind(routeKind);
+  const systemRule = systemEventRuleForRouteKind(
+    routeKind,
+    isManualTriggerRecord(record) ? record.triggerId : undefined
+  );
   const matchedRules = systemRule
     ? [systemRule]
     : route.notificationRules.filter((item) => ruleMatches(item, routeKind, record, extraValues, route));

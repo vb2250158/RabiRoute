@@ -1,6 +1,7 @@
 import { Marked } from "marked";
 
 export const PLAN_MARKDOWN_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+export const PERSONA_DOCUMENT_MAX_BYTES = PLAN_MARKDOWN_PREVIEW_MAX_BYTES;
 export const PLAN_MARKDOWN_TEASER_READ_BYTES = 12 * 1024;
 
 export async function responseTextByByteLimit(
@@ -69,6 +70,12 @@ export function safeMarkdownHref(value: string): string {
   return protocol && ["http", "https", "mailto"].includes(protocol) ? href : "";
 }
 
+function safeMarkdownImageHref(value: string): string {
+  const href = String(value || "").trim();
+  const protocol = href.match(/^([a-z][a-z0-9+.-]*):/i)?.[1]?.toLowerCase();
+  return protocol && ["http", "https"].includes(protocol) ? href : "";
+}
+
 export function isPlanMarkdownAttachment(name: string, mimeType?: string): boolean {
   const normalizedMimeType = String(mimeType || "").trim().toLowerCase();
   return /\.(?:md|markdown|mdown|mkd)$/i.test(String(name || "").trim())
@@ -76,7 +83,7 @@ export function isPlanMarkdownAttachment(name: string, mimeType?: string): boole
     || normalizedMimeType === "text/x-markdown";
 }
 
-export function planMarkdownPreviewExcerpt(source: string, maxLength = 180): string {
+export function markdownPreviewExcerpt(source: string, maxLength = 180): string {
   const normalized = String(source || "")
     .replace(/^\uFEFF/, "")
     .replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "")
@@ -91,6 +98,8 @@ export function planMarkdownPreviewExcerpt(source: string, maxLength = 180): str
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
+
+export const planMarkdownPreviewExcerpt = markdownPreviewExcerpt;
 
 const planMarkdownRenderer = new Marked({
   gfm: true,
@@ -113,6 +122,36 @@ const planMarkdownRenderer = new Marked({
   }
 });
 
-export function renderPlanMarkdownPreview(source: string): string {
+const memoryMarkdownRenderer = new Marked({
+  gfm: true,
+  breaks: false,
+  renderer: {
+    html({ text }) {
+      return escapeHtml(text);
+    },
+    link({ href, title, tokens }) {
+      const label = this.parser.parseInline(tokens);
+      const safeHref = safeMarkdownHref(href);
+      if (!safeHref) return `<span class="markdown-preview-disabled-link">${label}</span>`;
+      const titleAttribute = title ? ` title="${escapeHtml(title)}"` : "";
+      return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer"${titleAttribute}>${label}</a>`;
+    },
+    image({ href, title, text }) {
+      const label = escapeHtml(String(text || "image"));
+      const safeHref = safeMarkdownImageHref(href);
+      if (!safeHref) return `<span class="markdown-preview-image-placeholder">IMAGE · ${label}</span>`;
+      const titleAttribute = title ? ` title="${escapeHtml(title)}"` : "";
+      return `<img src="${escapeHtml(safeHref)}" alt="${label}" loading="lazy" referrerpolicy="no-referrer"${titleAttribute}>`;
+    }
+  }
+});
+
+export function renderMarkdownPreview(source: string): string {
   return planMarkdownRenderer.parse(String(source || ""), { async: false });
 }
+
+export function renderMemoryMarkdownPreview(source: string): string {
+  return memoryMarkdownRenderer.parse(String(source || ""), { async: false });
+}
+
+export const renderPlanMarkdownPreview = renderMarkdownPreview;

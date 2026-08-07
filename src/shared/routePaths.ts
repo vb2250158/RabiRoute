@@ -1,27 +1,21 @@
 import path from "node:path";
 import { sanitizeConfigName, sanitizeRoleId } from "./routeIdentity.js";
+import { assertPathWithinRoot } from "./pathPolicy.js";
 
 export type ResolvedRolePaths = {
   roleId: string;
   roleDir: string;
   rolePath: string;
-  dataDir: string;
+  routeDataDir: string;
+  personaDataDir: string;
 };
-
-function assertChildPath(root: string, target: string): void {
-  const relative = path.relative(root, target);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Resolved path escapes configured root: ${target}`);
-  }
-}
 
 export function routeFolderPath(routeRoot: string, configName: unknown): string {
   const safeConfigName = sanitizeConfigName(configName);
   if (!safeConfigName) throw new Error("Missing route folder name");
   const root = path.resolve(routeRoot);
   const target = path.resolve(root, safeConfigName);
-  assertChildPath(root, target);
-  return target;
+  return assertPathWithinRoot(root, target, { allowRoot: false, label: "Route folder" });
 }
 
 export function adapterConfigPath(routeRoot: string, configName: unknown): string {
@@ -33,8 +27,7 @@ export function roleFolderPath(rolesRoot: string, roleId: unknown): string {
   if (!safeRoleId) throw new Error("Missing role folder name");
   const root = path.resolve(rolesRoot);
   const target = path.resolve(root, safeRoleId);
-  assertChildPath(root, target);
-  return target;
+  return assertPathWithinRoot(root, target, { allowRoot: false, label: "Persona folder" });
 }
 
 export function personaConfigPath(rolesRoot: string, roleId: unknown): string {
@@ -63,8 +56,7 @@ export function normalizePersonaFile(value: unknown, fallback = "persona.md"): s
 export function roleFilePath(rolesRoot: string, roleId: unknown, roleFile: unknown = "persona.md"): string {
   const roleDir = roleFolderPath(rolesRoot, roleId);
   const target = path.resolve(roleDir, normalizePersonaFile(roleFile));
-  assertChildPath(roleDir, target);
-  return target;
+  return assertPathWithinRoot(roleDir, target, { allowRoot: false, label: "Persona file" });
 }
 
 export function resolveRolePaths(input: {
@@ -85,6 +77,7 @@ export function resolveRolePaths(input: {
     roleId,
     roleDir,
     rolePath,
-    dataDir: roleDir || input.dataDir || input.fallbackDataDir
+    routeDataDir: input.dataDir || input.fallbackDataDir,
+    personaDataDir: roleDir || input.dataDir || input.fallbackDataDir
   };
 }

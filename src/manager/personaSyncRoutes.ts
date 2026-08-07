@@ -1,13 +1,16 @@
 import http from "node:http";
 import type {
+  PersonaSyncConflict,
   PersonaSyncConflictResolutionCommand,
   PersonaSyncMergeCommand,
   PersonaSyncService
 } from "../personaSync.js";
 import type { PersonaSyncCoordinator } from "../personaSyncCoordinator.js";
 import type { PersonaSyncAutoReconciler } from "../personaSyncAutoReconciler.js";
+import { ManagerReadWorkerError } from "./managerReadWorkerPool.js";
 
 function jsonResponse(response: http.ServerResponse, status: number, body: unknown): void {
+  if (response.destroyed || response.writableEnded) return;
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(body, null, 2));
 }
@@ -43,6 +46,23 @@ function loopback(request: http.IncomingMessage): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
+const scheduledConflictScans = new WeakMap<PersonaSyncService, Set<string>>();
+
+function scheduleConflictScan(ctx: PersonaSyncRouteContext, roleId?: string): void {
+  if (!ctx.listConflicts) return;
+  const key = roleId || "*";
+  const scheduled = scheduledConflictScans.get(ctx.service) ?? new Set<string>();
+  scheduledConflictScans.set(ctx.service, scheduled);
+  if (scheduled.has(key)) return;
+  scheduled.add(key);
+  const timer = setTimeout(() => {
+    void ctx.listConflicts!(roleId)
+      .catch(error => console.warn(`Persona conflict history scan failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => scheduled.delete(key));
+  }, Math.max(0, ctx.conflictScheduleDelayMs ?? 1_000));
+  timer.unref?.();
+}
+
 export type PersonaSyncRouteContext = {
   service: PersonaSyncService;
   coordinator: PersonaSyncCoordinator;
@@ -50,6 +70,9 @@ export type PersonaSyncRouteContext = {
   token(): string;
   relay(): { url: string; token: string; deviceId: string; deviceGuid: string };
   manifestTimeoutMs?: number;
+  conflictListDeadlineMs?: number;
+  conflictScheduleDelayMs?: number;
+  listConflicts?(roleId?: string): Promise<PersonaSyncConflict[]>;
   readOnlySnapshot?: boolean;
 };
 
@@ -113,14 +136,79 @@ export function handlePersonaSyncApi(
       });
       return true;
     }
-    try {
-      jsonResponse(response, 200, {
+    const roleId = requestUrl.searchParams.get("roleId") || undefined;
+    if (ctx.listConflicts) {
+      const snapshot = ctx.service.conflictListSnapshot(roleId);
+      if (snapshot) {
+        jsonResponse(response, 200, {
+          code: 0,
+          data: {
+            conflicts: snapshot,
+            scan: { state: "ready", partial: false }
+          }
+        });
+        return true;
+      }
+      scheduleConflictScan(ctx, roleId);
+      jsonResponse(response, 202, {
         code: 0,
-        data: { conflicts: ctx.service.listConflicts(requestUrl.searchParams.get("roleId") || undefined) }
+        data: {
+          conflicts: [],
+          scan: {
+            state: "building",
+            partial: true,
+            retryAfterMs: 1_000,
+            message: "Conflict history is being organized in the background; Manager remains available."
+          }
+        }
       });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      return true;
     }
+    const deadlineMs = Math.max(50, ctx.conflictListDeadlineMs ?? 750);
+    let timer: NodeJS.Timeout | undefined;
+    const scan = ctx.service.listConflictsAsync(roleId).then(
+      conflicts => ({ state: "complete" as const, conflicts }),
+      error => ({ state: "failed" as const, error })
+    );
+    const deadline = new Promise<{ state: "building" }>(resolve => {
+      timer = setTimeout(() => resolve({ state: "building" }), deadlineMs);
+      timer.unref?.();
+    });
+    void Promise.race([scan, deadline])
+      .then(result => {
+        if (result.state === "failed") throw result.error;
+        if (result.state === "building") {
+          jsonResponse(response, 202, {
+            code: 0,
+            data: {
+              conflicts: ctx.service.conflictListSnapshot(roleId) || [],
+              scan: {
+                state: "building",
+                partial: true,
+                retryAfterMs: 1_000,
+                message: "Conflict history is being organized in the background; Manager remains available."
+              }
+            }
+          });
+          return;
+        }
+        jsonResponse(response, 200, {
+          code: 0,
+          data: {
+            conflicts: result.conflicts,
+            scan: { state: "ready", partial: false }
+          }
+        });
+      })
+      .catch(error => {
+        const status = error instanceof ManagerReadWorkerError && error.code === "busy" ? 503
+          : error instanceof ManagerReadWorkerError && error.code === "timeout" ? 504
+            : 400;
+        jsonResponse(response, status, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      })
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+      });
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/persona-sync/conflicts/content") {

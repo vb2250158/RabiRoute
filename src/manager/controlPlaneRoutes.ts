@@ -6,7 +6,9 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
-import { handleAgentThreadRequest, type AgentThreadRequest } from "../agentThreads.js";
+import { agentThreadRequestFailureData, handleAgentThreadRequest, type AgentThreadRequest } from "../agentThreads.js";
+import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/store.js";
+import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { listCodexDesktopThreads } from "../codexDesktopBridge.js";
 import { agentStateReportDecision } from "../agentAdapters/stateReportOrder.js";
 import {
@@ -50,6 +52,8 @@ import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type R
 import { appendMessageContextToDir } from "../messageContextStore.js";
 import { SpeechIngressStore } from "../speechIngressStore.js";
 import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
+import { createManagerOperationalLog, managerOperationalError } from "./operationalLog.js";
+import { readJsonlTail } from "./jsonlTail.js";
 import { requestWeixinLogin } from "../weixinLoginRequest.js";
 import { PersonaSyncService } from "../personaSync.js";
 import { PersonaSyncCoordinator } from "../personaSyncCoordinator.js";
@@ -61,6 +65,18 @@ import {
   type PersonaVoiceIdentityPatch
 } from "../personaVoiceIdentities.js";
 import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
+import {
+  MessageProcessingBoardStore,
+  type MessageProcessingOutcomeInput,
+  type KnowledgeMatchCallbackInput,
+  type KnowledgeRecallMatch,
+  type MessageProcessingRequirement,
+  type MessageProcessingWorkerRuntimeObservation,
+  type MessageProcessingWorkerRuntimeStatus,
+  type RegisterMessageGroupRequirementInput
+} from "../messageProcessing/board.js";
+import { messageProcessingBoardStatePath } from "../messageProcessing/persistence.js";
+import { normalizeCodexMemoryConsolidationAgentModel } from "../shared/codexMemoryConsolidationAgent.js";
 import {
   agentReplyReceiptResponse,
   executeIdempotentAgentReply
@@ -81,12 +97,22 @@ import {
   validateGatewayPortConflicts as sharedValidateGatewayPortConflicts,
   type CodexHookSettings,
   type CodexPlanAssistantSession,
+  type CodexReasoningEffort,
   type MessageAdapterPolicies,
   type MessageProcessingAgentPolicies,
   type RecentMessageLimits,
   type SpeechPushMode
 } from "../shared/gatewayConfigModel.js";
-import { resolveProjectPath, toProjectRelativePath } from "../shared/projectPaths.js";
+import {
+  normalizeCodexPlanAssistantModel,
+  resolveCodexPlanAssistantTurnModel
+} from "../shared/codexPlanAssistantSessions.js";
+import {
+  resolvePersistedProjectPath,
+  resolveProjectPath,
+  toPersistedProjectPath
+} from "../shared/projectPaths.js";
+import { normalizePathForComparison } from "../shared/pathPolicy.js";
 import { rabiRoutePackageVersion } from "../packageInfo.js";
 import {
   routeRuntimeParts,
@@ -106,15 +132,31 @@ import { configWatchDirectoryRules, configWatchEventMatches } from "./configWatc
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
 import { handleDesktopLifecycleApi } from "./desktopLifecycleRoutes.js";
 import { proxySpeechEventStream } from "./speechEventProxy.js";
-import { CodexHookContextService, type CodexHookContextRequest, type PlanTaskCompletionDelivery } from "./codexHookContext.js";
+import {
+  CodexHookContextService,
+  type AgentRequestStopResult,
+  type CodexHookContextRequest,
+  type PlanTaskCompletionDelivery
+} from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
 import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.js";
-import { deliverPlanApprovalFeedback } from "./planApprovalFeedbackDelivery.js";
+import {
+  deliverPlanApprovalFeedback,
+  type PlanApprovalFeedbackPersonaRequest,
+  type PlanApprovalFeedbackSecretaryTarget
+} from "./planApprovalFeedbackDelivery.js";
+import { resolvePlanSecretaryAssignment, type PlanSecretaryTarget } from "./planSecretaryAssignment.js";
 import {
   ManualTriggerProcessRegistry,
   type ManualTriggerLaunchResult
 } from "./manualTriggerProcess.js";
+import {
+  MemoryConsolidationScheduler,
+  type DueMemoryConsolidationRun,
+  type MemoryConsolidationScheduleTarget
+} from "./memoryConsolidationScheduler.js";
 import { consumePlanQaFeedback, type PlanQaTaskRequest } from "./planQaFeedback.js";
+import { handlePlanAgentStatusApi } from "./planAgentStatusRoutes.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
@@ -146,6 +188,7 @@ import { runBoundedScans, type ScanDiagnostic } from "./scanController.js";
 import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
 import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
+import { managerCatalogWorkerPool, managerReadWorkerPool } from "./managerReadWorkerPool.js";
 import { handlePersonaMessagingApi } from "./personaMessagingRoutes.js";
 import { PersonaCatalog } from "./personaCatalog.js";
 import { loadPersonaMessageAuthority, type PersonaMessageAuthority } from "./personaMessageAuthority.js";
@@ -162,6 +205,10 @@ import {
   SpeechRuntimeControl,
   SpeechRuntimeControlError
 } from "./speechRuntimeControl.js";
+import {
+  SpeechModelManager,
+  SpeechModelManagerError
+} from "./speechModelManager.js";
 import {
   parseSpeechProcessResult,
   SPEECH_EXIT_DELIVERED,
@@ -183,9 +230,11 @@ import type {
 } from "../shared/speechControlContract.js";
 import type { LocalSpeechResponse } from "../speech/localSpeechClient.js";
 import {
+  gatewayPayloadIncludesConfigDefinitions,
   gatewayPayloadIncludesDiagnostics,
   standaloneGatewayPayload as buildStandaloneGatewayPayload
 } from "./statusPayload.js";
+import { handlePersonaDocumentApi } from "./personaDocumentRoutes.js";
 import {
   applyMemoryConsolidationResult,
   createPlan,
@@ -200,7 +249,15 @@ import {
   listPlans,
   listRecentMemories,
   listRoleSkills,
+  markMemoryConsolidationRunDelivered,
+  nextMemoryConsolidationTriggerAt,
   pendingMemoryConsolidation,
+  presentRoleMemory,
+  presentRoleMemories,
+  roleMemoryCounts,
+  roleKnowledgeSnapshot,
+  subscribePlanUpdates,
+  type PlanItem,
   updatePlan,
   updateRecentMemory,
   validateRoleKnowledge
@@ -210,7 +267,14 @@ import {
   presentPlans,
   sortKnowledgeByUpdatedAt
 } from "../roleKnowledgePresentation.js";
-import { normalizeRolePlanPageLimit, paginateRolePlans, summarizeRolePlan } from "../roleKnowledgePagination.js";
+import {
+  normalizeRoleMemoryPageLimit,
+  normalizeRolePlanPageLimit,
+  paginateRoleMemory,
+  paginateRolePlans,
+  summarizeRolePlan
+} from "../roleKnowledgePagination.js";
+import { verifyCriticalProjectFactRecord } from "../messageProcessing/criticalFactRecord.js";
 import {
   appendPlanFeedback,
   createPlanFeedbackRecord,
@@ -299,10 +363,15 @@ type GatewayDefinition = {
   routeVariables?: Record<string, string>;
   routeName?: string;
   agentModel?: string;
+  agentReasoningEffort?: CodexReasoningEffort;
   codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  codexPlanAssistantEnabled?: boolean;
+  codexPlanAssistantModel?: string;
   codexPlanAssistantSessions?: CodexPlanAssistantSession[];
+  codexMemoryConsolidationAgentEnabled?: boolean;
+  codexMemoryConsolidationAgentModel?: string;
   codexHooks?: CodexHookSettings;
   copilotThreadName?: string;
   copilotCwd?: string;
@@ -492,6 +561,22 @@ type MessageAdapterScanResult = {
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
+const managerHttpLimits = {
+  requestTimeoutMs: 30_000,
+  headersTimeoutMs: 10_000,
+  keepAliveTimeoutMs: 5_000,
+  maxRequestsPerSocket: 100
+} as const;
+const managerOperationalLog = createManagerOperationalLog({ rootDir });
+const messageProcessingBoard = new MessageProcessingBoardStore(messageProcessingBoardStatePath(rootDir));
+const agentRequests = new AgentRequestStore(agentRequestStatePath(rootDir));
+const agentRequestReminderTimers = new Map<string, NodeJS.Timeout>();
+const managerRequestContexts = new WeakMap<http.ServerResponse, {
+  requestId: string;
+  method: string;
+  pathname: () => string;
+  startedAt: number;
+}>();
 const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
 const managerReadOnly = managerReadOnlyEnabled();
 const managerHostOverride = process.env.GATEWAY_MANAGER_HOST?.trim() || "";
@@ -618,7 +703,9 @@ const codexHookContextService = new CodexHookContextService({
   rolesRoot: () => rolesRoot,
   storePath: path.join(rootDir, "data", "codex-hook", "sessions.json"),
   deliverPlanTaskCompletion,
-  hookEnabled: codexHookEnabled
+  hookEnabled: codexHookEnabled,
+  isManagedAgentSession,
+  recordAgentRequestStop
 });
 const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback";
 const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
@@ -626,11 +713,14 @@ const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
 const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlaybackToken;
 const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
 const runtimes = new RuntimeRegistry();
+let memoryConsolidationScheduler: MemoryConsolidationScheduler | undefined;
 const planTaskCompletionDelivery = createPlanTaskCompletionDelivery<GatewayRuntime>({
   getRuntime: gatewayId => runtimes.get(gatewayId),
   listRuntimes: () => [...runtimes.values()],
   roleIdForDefinition,
   triggerRolePanelMessage: triggerGatewayRolePanelMessage,
+  assignSecretary: (runtime, delivery) => ensurePlanSecretaryTarget(runtime, delivery.roleDir, delivery.plan).target,
+  sendToSecretary: sendPlanTaskCompletionToSecretary,
   publishEvent: publishManagerEvent
 });
 const speechIngressStore = new SpeechIngressStore(
@@ -677,6 +767,12 @@ function personaSyncRouteContext(): PersonaSyncRouteContext {
     service: personaSyncService,
     coordinator: personaSyncCoordinator,
     autoReconciler: personaSyncAutoReconciler!,
+    listConflicts: roleId => personaSyncService.listConflictsUsing(roleId, requestedRoleId =>
+      managerCatalogWorkerPool.queryPersonaSyncConflicts(
+        rolesRoot,
+        path.join(rootDir, "data", "persona-sync"),
+        requestedRoleId
+      )),
     readOnlySnapshot: managerReadOnly,
     token: () => rabiLinkRelayConfigForMeta().token,
     relay: () => {
@@ -966,7 +1062,7 @@ function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstance
 }
 
 function normalizeCodexCwd(value: unknown): string | undefined {
-  return resolveProjectPath(value, rootDir);
+  return resolvePersistedProjectPath(value, rootDir);
 }
 
 function resolveCodexThreadName(definition: GatewayDefinition): string {
@@ -1011,7 +1107,7 @@ function definitionUsesNapcat(definition: GatewayDefinition): boolean {
 }
 
 function configPathValue(value: unknown): string | undefined {
-  return toProjectRelativePath(value, rootDir);
+  return toPersistedProjectPath(value, rootDir);
 }
 
 function adapterConfigItem(definition: GatewayDefinition): Record<string, unknown> {
@@ -1062,10 +1158,15 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     remoteAgentDefaultCwd: configPathValue(definition.remoteAgentDefaultCwd),
     remoteAgentDefaultThreadName: definition.remoteAgentDefaultThreadName,
     agentModel: definition.agentModel,
+    agentReasoningEffort: definition.agentReasoningEffort,
     codexThreadId: definition.codexThreadId,
     codexThreadName: definition.codexThreadName,
     codexCwd: configPathValue(definition.codexCwd),
+    codexPlanAssistantEnabled: definition.codexPlanAssistantEnabled,
+    codexPlanAssistantModel: definition.codexPlanAssistantModel,
     codexPlanAssistantSessions: definition.codexPlanAssistantSessions,
+    codexMemoryConsolidationAgentEnabled: definition.codexMemoryConsolidationAgentEnabled,
+    codexMemoryConsolidationAgentModel: definition.codexMemoryConsolidationAgentModel,
     codexHooks: definition.codexHooks,
     messageProcessingAgents: definition.messageProcessingAgents,
     copilotThreadName: definition.copilotThreadName,
@@ -1526,6 +1627,7 @@ function loadRuntimes(): void {
       runtimes.delete(id);
     }
   }
+  memoryConsolidationScheduler?.reschedule();
 }
 
 function syncRunningGateways(): void {
@@ -1693,6 +1795,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     MESSAGE_ADAPTER_TYPES: JSON.stringify(runtimeAdapters),
     MESSAGE_ADAPTER_POLICIES: JSON.stringify(definition.messageAdapterPolicies ?? {}),
     AGENT_MODEL: definition.agentModel?.trim() || "",
+    AGENT_REASONING_EFFORT: definition.agentReasoningEffort ?? "",
     MESSAGE_PROCESSING_AGENTS: JSON.stringify(definition.messageProcessingAgents ?? {}),
     PIPELINE_PRESET: definition.pipelinePreset ?? "",
     PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
@@ -1741,10 +1844,14 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     CODEX_THREAD_ID: definition.codexThreadId?.trim() || "",
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
+    CODEX_PLAN_ASSISTANT_ENABLED: definition.codexPlanAssistantEnabled === true ? "true" : "false",
+    CODEX_PLAN_ASSISTANT_MODEL: normalizeCodexPlanAssistantModel(definition.codexPlanAssistantModel),
     CODEX_PLAN_ASSISTANT_SESSIONS: JSON.stringify(definition.codexPlanAssistantSessions ?? []),
+    CODEX_MEMORY_CONSOLIDATION_AGENT_ENABLED: definition.codexMemoryConsolidationAgentEnabled === true ? "true" : "false",
+    CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL: normalizeCodexMemoryConsolidationAgentModel(definition.codexMemoryConsolidationAgentModel),
     COPILOT_THREAD_NAME: resolveCopilotThreadName(definition),
     COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
-    COPILOT_CWD: resolveProjectPath(definition.copilotCwd, rootDir) ?? resolveProjectPath(process.env.COPILOT_CWD, rootDir) ?? rootDir,
+    COPILOT_CWD: resolvePersistedProjectPath(definition.copilotCwd, rootDir) ?? resolveProjectPath(process.env.COPILOT_CWD, rootDir) ?? rootDir,
     MARVIS_APP_ID: definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis",
     ASTRBOT_URL: definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185",
     ASTRBOT_USERNAME: definition.astrbotUsername?.trim() || process.env.ASTRBOT_USERNAME || "",
@@ -1806,6 +1913,11 @@ function startGateway(id: string): void {
   runtime.startedAt = new Date().toISOString();
   runtime.stoppedAt = null;
   appendLog(runtime, `started pid=${child.pid ?? "unknown"} port=${runtime.definition.gatewayPort}`);
+  managerOperationalLog.record("info", "gateway_started", {
+    routeId: runtime.definition.id,
+    childPid: child.pid,
+    result: "started"
+  });
 
   child.stdout.on("data", (data) => {
     for (const line of data.toString().split(/\r?\n/).filter(Boolean)) {
@@ -1830,6 +1942,11 @@ function startGateway(id: string): void {
       at: runtime.stoppedAt
     };
     appendLog(runtime, `exited code=${code ?? ""} signal=${signal ?? ""}`);
+    managerOperationalLog.record(code === 0 ? "info" : "warn", "gateway_exited", {
+      routeId: runtime.definition.id,
+      childPid: child.pid,
+      result: `code=${code ?? "null"}; signal=${signal ?? "null"}`
+    });
     if (runtime.needsRestart && runtime.definition.enabled) {
       startGateway(runtime.definition.id);
     }
@@ -1846,6 +1963,11 @@ function stopGateway(id: string): void {
   }
 
   appendLog(runtime, "stopping");
+  managerOperationalLog.record("info", "gateway_stop_requested", {
+    routeId: runtime.definition.id,
+    childPid: runtime.process.pid,
+    result: "requested"
+  });
   runtime.agentStateGeneration = undefined;
   agentStateByGateway.delete(runtime.definition.id);
   runtime.process.kill();
@@ -2542,31 +2664,6 @@ function gatewayStatusForRuntime(runtime: GatewayRuntime, startedNapcatInstances
   };
 }
 
-function readJsonlTail(filePath: string, limit = 8): Array<Record<string, unknown>> {
-  if (!fs.existsSync(filePath)) {
-    return [];
-  }
-
-  try {
-    return fs.readFileSync(filePath, "utf8")
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .slice(-limit)
-      .map((line) => {
-        try {
-          return JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          return { rawLine: line };
-        }
-      });
-  } catch (error) {
-    return [{
-      error: error instanceof Error ? error.message : String(error),
-      path: filePath
-    }];
-  }
-}
-
 function messageFileCandidateDirs(definition: GatewayDefinition): string[] {
   const dirs = new Set<string>();
   dirs.add(dataDirFor(definition));
@@ -2801,11 +2898,30 @@ function adapterLogEntry(filePath: string, record: Record<string, unknown>): Rec
   };
 }
 
-function readMessageFiles(definition: GatewayDefinition): Record<string, unknown> {
+type JsonlTailCache = Map<string, Array<Record<string, unknown>>>;
+
+function cachedJsonlTail(
+  cache: JsonlTailCache | undefined,
+  filePath: string,
+  limit: number
+): Array<Record<string, unknown>> {
+  if (!cache) return readJsonlTail(filePath, limit);
+  const key = `${filePath}\0${limit}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const records = readJsonlTail(filePath, limit);
+  cache.set(key, records);
+  return records;
+}
+
+function readMessageFiles(
+  definition: GatewayDefinition,
+  tailCache?: JsonlTailCache
+): Record<string, unknown> {
   const dirs = messageFileCandidateDirs(definition);
   const readEntries = (source: string, fileName: string) => dirs.flatMap((dir) => {
     const filePath = path.join(dir, fileName);
-    return readJsonlTail(filePath, 8).map((record) => messageFileEntry(source, filePath, record));
+    return cachedJsonlTail(tailCache, filePath, 8).map((record) => messageFileEntry(source, filePath, record));
   });
   const sortTail = (items: Array<Record<string, unknown>>) => items
     .sort((left, right) => Number(left.timeMs || 0) - Number(right.timeMs || 0))
@@ -2819,7 +2935,7 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
   const heartbeatEntries = sortTail(readEntries("定时触发", "heartbeat-events.jsonl"));
   const rolePanelEntries = sortTail(dirs.flatMap((dir) => {
     const filePath = path.join(dir, "role-panel", "messages.jsonl");
-    return readJsonlTail(filePath, 8).map((record) => messageFileEntry("角色面板", filePath, record));
+    return cachedJsonlTail(tailCache, filePath, 8).map((record) => messageFileEntry("角色面板", filePath, record));
   }));
   const speechEntries = sortTail([
     ...readEntries("语音消息端", "speech-voice-transcripts.jsonl"),
@@ -2850,7 +2966,7 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
     }
   });
   const wearableEntries = sortTail(wearableHealthFiles.flatMap((filePath) =>
-    readJsonlTail(filePath, 8).map((record) => wearableHealthMessageFileEntry(filePath, record))));
+    cachedJsonlTail(tailCache, filePath, 8).map((record) => wearableHealthMessageFileEntry(filePath, record))));
   const webhookEntries = sortTail(readEntries("通用 Webhook", "voice-transcripts.jsonl")
     .filter((entry) => {
       const adapterType = String((entry.raw as Record<string, unknown>)?.adapterType ?? "").toLowerCase();
@@ -2922,11 +3038,14 @@ function readMessageFiles(definition: GatewayDefinition): Record<string, unknown
   };
 }
 
-function readAdapterLogs(definition: GatewayDefinition): Record<string, unknown> {
+function readAdapterLogs(
+  definition: GatewayDefinition,
+  tailCache?: JsonlTailCache
+): Record<string, unknown> {
   const dir = dataDirFor(definition);
   const readEntries = (adapter: MessageAdapterType | "outbox") => {
     const filePath = path.join(dir, `${adapter}-adapter.log.jsonl`);
-    return readJsonlTail(filePath, 12)
+    return cachedJsonlTail(tailCache, filePath, 12)
       .map((record) => adapterLogEntry(filePath, record))
       .sort((left, right) => Number(left.timeMs || 0) - Number(right.timeMs || 0))
       .reverse();
@@ -2990,7 +3109,8 @@ function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
 
 function runtimeStatusWithRoleInfoCache(
   runtime: GatewayRuntime,
-  roleInfoCatalogCache?: Map<string, Array<Record<string, unknown>>>
+  roleInfoCatalogCache?: Map<string, Array<Record<string, unknown>>>,
+  tailCache?: JsonlTailCache
 ): Record<string, unknown> {
   const usesNapcat = definitionUsesNapcat(runtime.definition);
   const gatewayStatus = gatewayStatusForRuntime(runtime);
@@ -3053,10 +3173,16 @@ function runtimeStatusWithRoleInfoCache(
     routeVariables: runtime.definition.routeVariables,
     routeName: runtime.definition.routeName,
     routeProfiles: runtime.definition.routeProfiles ?? [],
+    agentModel: runtime.definition.agentModel ?? "",
+    agentReasoningEffort: runtime.definition.agentReasoningEffort,
     codexThreadId: runtime.definition.codexThreadId,
     codexThreadName: resolveCodexThreadName(runtime.definition),
     codexCwd: runtime.definition.codexCwd,
+    codexPlanAssistantEnabled: runtime.definition.codexPlanAssistantEnabled === true,
+    codexPlanAssistantModel: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel),
     codexPlanAssistantSessions: runtime.definition.codexPlanAssistantSessions ?? [],
+    codexMemoryConsolidationAgentEnabled: runtime.definition.codexMemoryConsolidationAgentEnabled === true,
+    codexMemoryConsolidationAgentModel: normalizeCodexMemoryConsolidationAgentModel(runtime.definition.codexMemoryConsolidationAgentModel),
     codexHooks: normalizeCodexHookSettings(runtime.definition.codexHooks),
     copilotThreadName: resolveCopilotThreadName(runtime.definition),
     copilotCwd: runtime.definition.copilotCwd,
@@ -3089,8 +3215,8 @@ function runtimeStatusWithRoleInfoCache(
     stoppedAt: runtime.stoppedAt,
     lastExit: runtime.lastExit,
     gatewayStatus,
-    adapterLogs: readAdapterLogs(runtime.definition),
-    messageFiles: readMessageFiles(runtime.definition),
+    adapterLogs: readAdapterLogs(runtime.definition, tailCache),
+    messageFiles: readMessageFiles(runtime.definition, tailCache),
     agentStates: readAgentStates(runtime.definition),
     log: runtime.log.slice(-30)
   };
@@ -3136,6 +3262,20 @@ function runtimeSummaryStatusWithRoleInfoCache(
 }
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  if (statusCode >= 400) {
+    const context = managerRequestContexts.get(response);
+    const responseBody = body as { message?: unknown; error?: unknown } | null;
+    const failure = responseBody?.message ?? responseBody?.error ?? `HTTP ${statusCode}`;
+    managerOperationalLog.record(statusCode >= 500 ? "error" : "warn", "http_response_error", {
+      requestId: context?.requestId,
+      method: context?.method,
+      pathname: context?.pathname(),
+      statusCode,
+      durationMs: context ? Math.max(0, Date.now() - context.startedAt) : undefined,
+      result: "failed",
+      error: managerOperationalError(failure, rootDir)
+    });
+  }
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body, null, 2));
 }
@@ -3193,6 +3333,7 @@ type ManualTriggerRequest = {
   message?: string;
   routeKind?: string;
   ruleId?: string;
+  triggerSource?: "manual" | "auto";
 };
 
 type DeliveryReplayRequest = {
@@ -3224,7 +3365,16 @@ type PlanFeedbackRequest = {
 
 const manualTriggerProcesses = new ManualTriggerProcessRegistry();
 
-function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}): ManualTriggerLaunchResult {
+type ManualTriggerCompletionCallbacks = {
+  onSuccess?: () => void;
+  onFailure?: (error: Error) => void;
+};
+
+function triggerGatewayManualRule(
+  id: string,
+  request: ManualTriggerRequest = {},
+  completion: ManualTriggerCompletionCallbacks = {}
+): ManualTriggerLaunchResult {
   const runtime = runtimes.get(id);
   if (!runtime) {
     throw new Error(`Gateway not found: ${id}`);
@@ -3234,12 +3384,14 @@ function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}
   const triggerName = request.triggerName?.trim() || triggerId;
   const message = request.message?.trim() || triggerName;
   const routeKind = normalizeManualRouteKind(request.routeKind);
+  const triggerSource = request.triggerSource === "auto" ? "auto" : "manual";
   const ruleId = sanitizeRoleId(request.ruleId) || (routeKind === "heartbeat" ? "" : triggerId);
   const args = [
     `--manual-trigger=${triggerId}`,
     `--manual-name=${encodeURIComponent(triggerName)}`,
     `--manual-message=${encodeURIComponent(message)}`,
-    `--manual-route-kind=${routeKind}`
+    `--manual-route-kind=${routeKind}`,
+    `--manual-source=${triggerSource}`
   ];
   if (ruleId) {
     args.push(`--manual-rule=${ruleId}`);
@@ -3270,13 +3422,17 @@ function triggerGatewayManualRule(id: string, request: ManualTriggerRequest = {}
       },
       onError: (error) => {
         appendLog(runtime, `manual trigger process error: ${error.message}`);
+        completion.onFailure?.(error);
       },
       onExit: (code, signal) => {
         if (code === 0) {
           appendLog(runtime, `manual trigger completed: ${triggerName}`);
+          completion.onSuccess?.();
           return;
         }
-        appendLog(runtime, `manual trigger failed: code=${code ?? "null"} signal=${signal ?? "null"}`);
+        const error = new Error(`manual trigger failed: code=${code ?? "null"} signal=${signal ?? "null"}`);
+        appendLog(runtime, error.message);
+        completion.onFailure?.(error);
       }
     }
   );
@@ -3399,27 +3555,144 @@ function roleDirForDefinition(definition: GatewayDefinition): string {
   return roleFolderPath(rolesDir, roleId);
 }
 
+function memoryConsolidationScheduleTargets(): MemoryConsolidationScheduleTarget[] {
+  return runtimes.values()
+    .filter((runtime) => runtime.definition.enabled !== false)
+    .map((runtime) => {
+      const roleDir = roleDirForDefinition(runtime.definition);
+      return {
+        gatewayId: runtime.definition.id,
+        roleKey: path.resolve(roleDir).toLowerCase(),
+        roleDir
+      };
+    });
+}
+
+function deliverAutomaticMemoryConsolidation(
+  target: MemoryConsolidationScheduleTarget,
+  run: DueMemoryConsolidationRun
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const result = triggerGatewayManualRule(target.gatewayId, {
+      triggerId: "memory-consolidation",
+      triggerName: "记忆沉淀",
+      message: `近期记忆已到达 72 小时触发时间，请处理沉淀批次 ${run.runId}。`,
+      routeKind: "manual_trigger",
+      ruleId: "memory-consolidation",
+      triggerSource: "auto"
+    }, {
+      onSuccess: () => {
+        try {
+          markMemoryConsolidationRunDelivered(target.roleDir, run.runId);
+          const runtime = runtimes.get(target.gatewayId);
+          publishManagerEvent("memory_consolidation_changed", {
+            gatewayId: target.gatewayId,
+            roleId: runtime ? roleIdForDefinition(runtime.definition) : "",
+            runId: run.runId,
+            status: "requested"
+          });
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      },
+      onFailure: reject
+    });
+    if (result.alreadyRunning) resolve();
+  });
+}
+
+function createMemoryConsolidationScheduler(): MemoryConsolidationScheduler {
+  return new MemoryConsolidationScheduler({
+    listTargets: memoryConsolidationScheduleTargets,
+    requestDueRun: (target) => {
+      const request = pendingMemoryConsolidation(target.roleDir, "auto");
+      return request ? { runId: request.run.id, delivered: Boolean(request.run.deliveredAt) } : null;
+    },
+    nextTriggerAt: (target) => nextMemoryConsolidationTriggerAt(target.roleDir),
+    deliver: deliverAutomaticMemoryConsolidation,
+    onError: (target, error) => {
+      const runtime = runtimes.get(target.gatewayId);
+      const message = error instanceof Error ? error.message : String(error);
+      if (runtime) appendLog(runtime, `automatic memory consolidation failed: ${message}`);
+      managerOperationalLog.record("error", "memory_consolidation_auto_failed", {
+        result: `gatewayId=${target.gatewayId}; ${message}`
+      });
+    }
+  });
+}
+
 function roleIdForDefinition(definition: GatewayDefinition): string {
   return sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId || "Rabi";
 }
 
-function codexHookSettingsForSession(sessionId: string): CodexHookSettings {
+function roleIdsForPlanBoundSession(sessionId: string, cwd?: string): Set<string> {
+  const roleIds = new Set<string>();
+  try {
+    for (const entry of fs.readdirSync(rolesRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const roleDir = path.join(rolesRoot, entry.name);
+      for (const plan of listPlans(roleDir)) {
+        const bindings = [plan.taskBinding, plan.secretaryBinding];
+        if (bindings.some((binding) => binding?.sessionId === sessionId && hookWorkspaceMatches(binding.workspace, cwd))) {
+          roleIds.add(sanitizeRoleId(entry.name) || entry.name);
+          break;
+        }
+      }
+    }
+  } catch {
+    return roleIds;
+  }
+  return roleIds;
+}
+
+function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<string> {
   const exactSessionId = String(sessionId || "").trim();
+  const gatewayIds = new Set<string>();
+  for (const runtime of runtimes.values()) {
+    if (
+      String(runtime.definition.codexThreadId || "").trim() === exactSessionId
+      && hookWorkspaceMatches(runtime.definition.codexCwd, cwd)
+    ) {
+      gatewayIds.add(runtime.definition.id);
+    }
+  }
+  for (const requirement of messageProcessingBoard.list({ limit: 10_000 })) {
+    if (
+      (requirement.worker?.threadId === exactSessionId && hookWorkspaceMatches(requirement.worker.workspace, cwd))
+      || requirement.handoff?.targetThreadId === exactSessionId
+    ) {
+      gatewayIds.add(requirement.source.routeId);
+    }
+  }
+  const roleIds = roleIdsForPlanBoundSession(exactSessionId, cwd);
+  if (roleIds.size > 0) {
+    for (const runtime of runtimes.values()) {
+      if (roleIds.has(roleIdForDefinition(runtime.definition))) gatewayIds.add(runtime.definition.id);
+    }
+  }
+  return gatewayIds;
+}
+
+function codexHookSettingsForSession(sessionId: string, cwd?: string): CodexHookSettings {
+  const exactSessionId = String(sessionId || "").trim();
+  const managedGatewayIds = gatewayIdsForManagedSession(exactSessionId, cwd);
   const matches = [...runtimes.values()].filter((runtime) => (
     normalizeAgentAdapters(runtime.definition.agentAdapters).includes("codex")
-    && String(runtime.definition.codexThreadId || "").trim() === exactSessionId
+    && managedGatewayIds.has(runtime.definition.id)
   ));
   if (matches.length === 0) return { ...DEFAULT_CODEX_HOOK_SETTINGS };
   const settings = matches.map((runtime) => normalizeCodexHookSettings(runtime.definition.codexHooks));
   return {
     sessionContextEnabled: settings.every((item) => item.sessionContextEnabled),
     reasoningContextEnabled: settings.every((item) => item.reasoningContextEnabled),
-    planTaskCompletionEnabled: settings.every((item) => item.planTaskCompletionEnabled)
+    planTaskCompletionEnabled: settings.every((item) => item.planTaskCompletionEnabled),
+    agentCommunicationEnforcementEnabled: settings.every((item) => item.agentCommunicationEnforcementEnabled)
   };
 }
 
 function codexHookEnabled(request: CodexHookContextRequest): boolean {
-  const settings = codexHookSettingsForSession(request.sessionId);
+  const settings = codexHookSettingsForSession(request.sessionId, request.cwd);
   if (request.eventName === "SessionStart" || request.eventName === "UserPromptSubmit") {
     return settings.sessionContextEnabled;
   }
@@ -3427,6 +3700,128 @@ function codexHookEnabled(request: CodexHookContextRequest): boolean {
     return settings.reasoningContextEnabled;
   }
   return settings.planTaskCompletionEnabled;
+}
+
+function hookWorkspaceMatches(expected: string | undefined, actual: string | undefined): boolean {
+  if (!expected || !actual) return true;
+  return normalizePathForComparison(expected) === normalizePathForComparison(actual);
+}
+
+function isManagedAgentSession(request: CodexHookContextRequest): boolean {
+  const sessionId = String(request.sessionId || "").trim();
+  if (!sessionId) return false;
+  const managed = agentRequests.hasManagedSession(sessionId, request.cwd)
+    || gatewayIdsForManagedSession(sessionId, request.cwd).size > 0;
+  if (!managed) return false;
+  return codexHookSettingsForSession(sessionId, request.cwd).agentCommunicationEnforcementEnabled;
+}
+
+function recordAgentRequestStop(request: CodexHookContextRequest): AgentRequestStopResult {
+  if (managerReadOnly) return { status: "ignored", reason: "manager_read_only", turnId: request.turnId };
+  const turnId = String(request.turnId || "").trim();
+  if (!turnId) return { status: "ignored", reason: "missing_turn_id" };
+  const scheduled = agentRequests.recordTargetTurnEnded(request.sessionId, request.cwd, turnId);
+  for (const item of scheduled) scheduleAgentRequestReminder(item);
+  if (!scheduled.length) {
+    return { status: "ignored", reason: "no_unanswered_agent_requests", turnId };
+  }
+  publishManagerEvent("agent_requests_changed", {
+    requestIds: scheduled.map((item) => item.id),
+    status: "awaiting_response",
+    nextReminderAt: scheduled[0]?.nextReminderAt
+  });
+  return {
+    status: "scheduled",
+    reason: "target_turn_ended_without_response",
+    requestIds: scheduled.map((item) => item.id),
+    turnId
+  };
+}
+
+function agentRequestReminderPrompt(request: AgentRequestRecord): string {
+  const sourceWorkspace = request.source.workspace || "<原请求任务工作目录>";
+  return [
+    "[Rabi Agent 请求回复提醒]",
+    `requestId：${request.id}`,
+    `原请求任务：${request.source.threadName || request.source.threadId}`,
+    `原请求任务 ID：${request.source.threadId}`,
+    `需要回答：${request.responseInstruction}`,
+    "上一轮迭代结束时没有检测到通过 RabiRoute 接口提交的正式回复。普通 Codex 最终文字不算回复。",
+    "请完成判断后调用 POST /api/agent/threads，并填写：",
+    `action=send、threadId=${request.source.threadId}、cwd=${sourceWorkspace}、sourceThreadId=当前任务完整 ID、sourceAgentType=当前 Agent 类型、inReplyToRequestId=${request.id}、result=结果或决定、nextAction=下一步、responsePolicy=required 或 none、prompt=重新编写的回复内容。`,
+    "如果下一步仍要求原请求方处理完再返回，填写 responsePolicy=required 和 responseInstruction；如果本次回复结束往返，填写 responsePolicy=none。"
+  ].join("\n");
+}
+
+function scheduleAgentRequestReminder(request: AgentRequestRecord): void {
+  const existing = agentRequestReminderTimers.get(request.id);
+  if (existing) clearTimeout(existing);
+  agentRequestReminderTimers.delete(request.id);
+  if (request.status !== "awaiting_response" || !request.nextReminderAt) return;
+  const delay = Math.max(0, Date.parse(request.nextReminderAt) - Date.now());
+  const timer = setTimeout(() => {
+    agentRequestReminderTimers.delete(request.id);
+    void deliverAgentRequestReminder(request.id);
+  }, Math.min(delay, 2_147_000_000));
+  timer.unref();
+  agentRequestReminderTimers.set(request.id, timer);
+}
+
+async function deliverAgentRequestReminder(requestId: string): Promise<void> {
+  const request = agentRequests.get(requestId);
+  if (!request || request.status !== "awaiting_response" || !request.nextReminderAt) return;
+  if (Date.parse(request.nextReminderAt) > Date.now()) {
+    scheduleAgentRequestReminder(request);
+    return;
+  }
+  try {
+    const result = await handleAgentThreadRequest({
+      action: "send",
+      threadId: request.target.threadId,
+      cwd: request.target.workspace,
+      prompt: agentRequestReminderPrompt(request)
+    }, {
+      allowedWorkspaces: agentThreadAllowedWorkspaces(),
+      defaultWorkspace: rootDir,
+      agentRequests
+    });
+    if (result.data.status !== "delivered") {
+      throw new Error(String(result.data.warning || result.data.message || "Agent request reminder was not accepted."));
+    }
+    const updated = agentRequests.recordReminderResult(requestId, true);
+    publishManagerEvent("agent_requests_changed", {
+      requestId,
+      status: updated.status,
+      reminderCount: updated.reminderCount,
+      lastReminderAt: updated.lastReminderAt
+    });
+  } catch (error) {
+    const updated = agentRequests.recordReminderResult(requestId, false, error);
+    managerOperationalLog.record("warn", "agent_request_reminder_failed", {
+      result: "failed",
+      requestId,
+      error: managerOperationalError(error, rootDir)
+    });
+    publishManagerEvent("agent_requests_changed", {
+      requestId,
+      status: updated.status,
+      reminderCount: updated.reminderCount,
+      lastReminderError: updated.lastReminderError,
+      nextReminderAt: updated.nextReminderAt
+    });
+    scheduleAgentRequestReminder(updated);
+  }
+}
+
+function refreshAgentRequestReminderTimers(): void {
+  const current = new Map(agentRequests.list().map((request) => [request.id, request]));
+  for (const [requestId, timer] of agentRequestReminderTimers) {
+    const request = current.get(requestId);
+    if (request?.status === "awaiting_response" && request.nextReminderAt) continue;
+    clearTimeout(timer);
+    agentRequestReminderTimers.delete(requestId);
+  }
+  for (const request of current.values()) scheduleAgentRequestReminder(request);
 }
 
 function agentThreadAllowedWorkspaces(): string[] {
@@ -3448,6 +3843,243 @@ function agentThreadAllowedWorkspaces(): string[] {
   ])];
 }
 
+const speechModelManager = new SpeechModelManager({
+  rootDir,
+  onChange: snapshot => publishManagerEvent("speech_model_management_changed", {
+    activeJob: snapshot.activeJob,
+    lastJob: snapshot.lastJob
+  })
+});
+
+function applyManagedAgentThreadDefaults(request: AgentThreadRequest): AgentThreadRequest {
+  if (request.action !== "send") return request;
+  const model = resolveCodexPlanAssistantTurnModel(
+    [...runtimes.values()].flatMap((runtime) => runtime.definition.codexPlanAssistantEnabled === true
+      ? (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => ({
+          ...session,
+          model: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel)
+        }))
+      : []),
+    request.threadId,
+    request.model
+  );
+  return model && !request.model?.trim() ? { ...request, model } : request;
+}
+
+function messageProcessingRequirementIdFromReply(request: AgentReplyRequest): string | undefined {
+  const context = (() => {
+    if (request.replyContext && typeof request.replyContext === "object" && !Array.isArray(request.replyContext)) {
+      return request.replyContext as Record<string, unknown>;
+    }
+    if (typeof request.replyContext === "string" && request.replyContext.trim()) {
+      try {
+        const parsed = JSON.parse(request.replyContext) as unknown;
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed as Record<string, unknown>
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  })();
+  const value = String(context?.messageProcessingRequirementId || "").trim();
+  return value || undefined;
+}
+
+function recordMessageProcessingReply(request: AgentReplyRequest, result: Awaited<ReturnType<typeof handleAgentReply>>): void {
+  const requirementId = messageProcessingRequirementIdFromReply(request);
+  if (!requirementId) return;
+  try {
+    messageProcessingBoard.recordReply(requirementId, result, String(request.deliveryId || "").trim() || undefined);
+    publishManagerEvent("message_processing_board_changed", { requirementId, status: result.status });
+  } catch (error) {
+    managerOperationalLog.record("warn", "message_processing_reply_board_update_failed", {
+      action: requirementId,
+      result: result.status,
+      error: managerOperationalError(error, rootDir)
+    });
+  }
+}
+
+async function dispatchPlanNotificationRequirement(requirement: MessageProcessingRequirement): Promise<void> {
+  if (requirement.kind !== "plan_progress_notification") return;
+  if (!requirement.worker?.threadId || !requirement.worker.workspace) {
+    messageProcessingBoard.recordDispatchFailure(requirement.id, "原消息没有绑定可复用的消息处理 Agent；等待 heartbeat 或人工重新分配。");
+    publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "send_failed" });
+    return;
+  }
+  const outcomeUrl = `http://127.0.0.1:${managerPort}/api/message-processing/requirements/${encodeURIComponent(requirement.id)}/outcome`;
+  const replyApiUrl = `http://127.0.0.1:${managerPort}/api/agent/replies`;
+  const prompt = [
+    "[计划进展通知需求]",
+    `消息处理需求 ID：${requirement.id}`,
+    `计划：${requirement.plan?.planTitle || requirement.plan?.planId}`,
+    `计划 ID：${requirement.plan?.planId}`,
+    `原消息端：${requirement.source.endpoint}`,
+    `原会话：${requirement.source.conversationKey}`,
+    `原说话人：${requirement.source.sender}`,
+    `原消息编号：${requirement.source.messageIds.join(", ") || "无"}`,
+    "本次变化：",
+    ...(requirement.plan?.changes || []).map((change) => `- ${change}`),
+    "",
+    "RabiManager 已自动生成一项必须发送的计划进展通知。请结合计划当前内容整理简短、可理解的进展，不要把内部 taskBinding、路径或控制面字段原样发给群成员。",
+    `使用 POST ${replyApiUrl}，把上方来源保存的 replyContext 原样传回；只有 Outbox 返回 sent 才算完成。`,
+    `当前 replyContext：${JSON.stringify(requirement.source.replyContext || {})}`,
+    `如果来源已经失效或同一进展已由别人完整通知，POST ${outcomeUrl} 提交 decision=no_reply 和受支持的原因；其它情况不能静默关闭。`,
+    "普通问题和讨论仍由你判断是否参与；这条计划进展通知本身不是可选讨论。"
+  ].join("\n");
+  try {
+    await handleAgentThreadRequest({
+      action: "send",
+      threadId: requirement.worker.threadId,
+      cwd: requirement.worker.workspace,
+      sandbox: "workspace-write",
+      prompt
+    }, {
+      allowedWorkspaces: agentThreadAllowedWorkspaces(),
+      defaultWorkspace: rootDir
+    });
+    messageProcessingBoard.recordDispatch(requirement.id, requirement.worker);
+    publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "processing" });
+  } catch (error) {
+    messageProcessingBoard.recordDispatchFailure(requirement.id, error);
+    publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "send_failed" });
+  }
+}
+
+const knowledgeCallbackReminderTimers = new Map<string, NodeJS.Timeout>();
+
+export function buildKnowledgeCallbackReminderPrompt(
+  requirement: MessageProcessingRequirement,
+  pending: KnowledgeRecallMatch[],
+  port = managerPort
+): string {
+  const base = `http://127.0.0.1:${port}/api/message-processing/requirements/${encodeURIComponent(requirement.id)}`;
+  return [
+    "[计划与记忆命中回调提醒]",
+    `消息处理需求 ID：${requirement.id}`,
+    `原消息 ID：${requirement.source.messageIds.join(", ") || "无"}`,
+    `原消息摘要：${requirement.source.summary || "无"}`,
+    "RabiManager 在投递消息后一小时仍未收到以下计划或记忆的最终回调：",
+    ...pending.map((item) => `- ${item.type} ${item.id}：${item.title}（GET ${item.endpoint}）`),
+    "请逐项读取并处理，然后 POST 对应 knowledge-callback。即使没有变化，也必须回调 result=unchanged 并说明核对依据。",
+    "需要更新时先调用计划或记忆 PATCH/POST 接口，再回调 result=updated/created、recordType、recordId、verifiedAt，并确保记录包含原消息 ID。误命中使用 not_relevant；尚需别人处理使用 deferred，并继续跟进。",
+    `需求详情：GET ${base}`,
+    `回调接口：POST ${base}/knowledge-callback`,
+    "群内需要确认或讨论时仍要实际发送并取得 Outbox 回执；不要只完成内部回调。"
+  ].join("\n");
+}
+
+function scheduleKnowledgeCallbackReminder(requirement: MessageProcessingRequirement): void {
+  const existing = knowledgeCallbackReminderTimers.get(requirement.id);
+  if (existing) clearTimeout(existing);
+  knowledgeCallbackReminderTimers.delete(requirement.id);
+  const pending = messageProcessingBoard.pendingKnowledgeMatches(requirement.id);
+  if (!pending.length || !requirement.knowledgeCallbackDueAt) return;
+  const delay = Math.max(1_000, Date.parse(requirement.knowledgeCallbackDueAt) - Date.now());
+  const timer = setTimeout(() => { void sendKnowledgeCallbackReminder(requirement.id); }, delay);
+  timer.unref?.();
+  knowledgeCallbackReminderTimers.set(requirement.id, timer);
+}
+
+async function sendKnowledgeCallbackReminder(requirementId: string): Promise<void> {
+  knowledgeCallbackReminderTimers.delete(requirementId);
+  const requirement = messageProcessingBoard.getRequirement(requirementId);
+  if (!requirement) return;
+  const pending = messageProcessingBoard.pendingKnowledgeMatches(requirementId);
+  if (!pending.length) return;
+  if (!requirement.worker?.threadId || !requirement.worker.workspace) {
+    scheduleKnowledgeCallbackReminder(messageProcessingBoard.recordKnowledgeReminder(requirementId));
+    return;
+  }
+  const prompt = buildKnowledgeCallbackReminderPrompt(requirement, pending);
+  try {
+    await handleAgentThreadRequest({
+      action: "send",
+      threadId: requirement.worker.threadId,
+      cwd: requirement.worker.workspace,
+      prompt,
+      sandbox: "workspace-write"
+    }, {
+      allowedWorkspaces: agentThreadAllowedWorkspaces(),
+      defaultWorkspace: rootDir
+    });
+  } catch (error) {
+    managerOperationalLog.record("warn", "knowledge_callback_reminder_failed", {
+      action: requirementId,
+      error: managerOperationalError(error, rootDir)
+    });
+  } finally {
+    scheduleKnowledgeCallbackReminder(messageProcessingBoard.recordKnowledgeReminder(requirementId));
+  }
+}
+
+async function messageProcessingBoardPayload(routeId?: string, limit?: number): Promise<Record<string, unknown>> {
+  if (managerReadOnly) return messageProcessingBoard.board({ routeId, limit });
+  const openStatuses = new Set(["pending_dispatch", "processing", "handed_off", "awaiting_send", "awaiting_approval", "fact_record_pending", "send_failed"]);
+  const candidates = messageProcessingBoard.list({ routeId, limit }).filter((item) => item.worker && openStatuses.has(item.status));
+  const byThread = new Map<string, MessageProcessingRequirement[]>();
+  const workerRuntime = new Map<string, MessageProcessingWorkerRuntimeObservation>();
+  for (const item of candidates) {
+    const threadId = item.worker!.threadId;
+    const current = byThread.get(threadId) || [];
+    current.push(item);
+    byThread.set(threadId, current);
+  }
+  await Promise.all([...byThread.entries()].map(async ([threadId, items]) => {
+    try {
+      const result = await handleAgentThreadRequest({ action: "read", threadId }, {
+        allowedWorkspaces: agentThreadAllowedWorkspaces(),
+        defaultWorkspace: rootDir
+      });
+      const thread = result.data.thread as Record<string, unknown> | undefined;
+      const rawStatus = String((thread?.status as Record<string, unknown> | undefined)?.type || "").trim();
+      const status: MessageProcessingWorkerRuntimeStatus = new Set(["active", "idle", "notLoaded", "unavailable"]).has(rawStatus)
+        ? rawStatus as MessageProcessingWorkerRuntimeStatus
+        : thread?.active === true
+          ? "active"
+          : thread?.active === false
+            ? "idle"
+            : "unavailable";
+      workerRuntime.set(threadId, {
+        threadName: String(thread?.title || "").trim() || undefined,
+        workspace: String(thread?.cwd || "").trim() || undefined,
+        status,
+        observedAt: new Date().toISOString()
+      });
+    } catch {
+      workerRuntime.set(threadId, { status: "unavailable", observedAt: new Date().toISOString() });
+    }
+  }));
+  return messageProcessingBoard.board({ routeId, limit }, workerRuntime);
+}
+
+function setMessageProcessingPlanBaseline(item: MessageProcessingRequirement, roleIdInput?: string, planIdInput?: string): void {
+  const roleId = String(roleIdInput || item.source.roleId || "").trim();
+  const planId = String(planIdInput || item.plan?.planId || "").trim();
+  if (!roleId || !planId) return;
+  try {
+    const plan = getPlan(roleDirForApi(roleId), planId);
+    if (plan) messageProcessingBoard.setPlanBaseline(roleId, plan);
+  } catch {
+    // The linked requirement remains visible; the next plan update can establish the baseline.
+  }
+}
+
+async function handleMessageProcessingPlanUpdate(roleDir: string, plan: ReturnType<typeof getPlan>): Promise<void> {
+  if (!plan) return;
+  const normalizedRoleDir = path.resolve(roleDir);
+  for (const origin of messageProcessingBoard.planOriginList()) {
+    if (origin.planId !== plan.id) continue;
+    if (path.resolve(roleDirForApi(origin.roleId)) !== normalizedRoleDir) continue;
+    const requirement = messageProcessingBoard.reconcilePlan(origin.key, plan);
+    if (!requirement) continue;
+    publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: requirement.status });
+    await dispatchPlanNotificationRequirement(requirement);
+  }
+}
+
 async function sendPlanQaFeedbackToTask(request: PlanQaTaskRequest): Promise<void> {
   const result = await handleAgentThreadRequest({
     action: "send",
@@ -3461,6 +4093,73 @@ async function sendPlanQaFeedbackToTask(request: PlanQaTaskRequest): Promise<voi
   });
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw new Error(String(result.data.message || "QA task continuation failed with HTTP " + result.statusCode + "."));
+  }
+}
+
+function ensurePlanSecretaryTarget(
+  runtime: GatewayRuntime,
+  roleDir: string,
+  plan: PlanItem
+): { plan: PlanItem; target?: PlanSecretaryTarget } {
+  if (runtime.definition.codexPlanAssistantEnabled !== true) return { plan };
+  const assignment = resolvePlanSecretaryAssignment(plan, runtime.definition.codexPlanAssistantSessions);
+  if (!assignment) return { plan };
+  const assignedPlan = assignment.changed
+    ? updatePlan(roleDir, plan.id, { secretaryBinding: assignment.binding })
+    : plan;
+  return {
+    plan: assignedPlan,
+    target: {
+      ...assignment.target,
+      model: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel)
+    }
+  };
+}
+
+async function sendPlanFeedbackToSecretary(
+  target: PlanApprovalFeedbackSecretaryTarget,
+  request: PlanApprovalFeedbackPersonaRequest
+): Promise<void> {
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    threadId: target.threadId,
+    cwd: target.workspace,
+    prompt: request.text,
+    model: target.model,
+    sandbox: "workspace-write"
+  }, {
+    allowedWorkspaces: agentThreadAllowedWorkspaces(),
+    defaultWorkspace: rootDir
+  });
+  if (result.statusCode < 200 || result.statusCode >= 300) {
+    throw new Error(String(result.data.message || "Plan secretary feedback delivery failed with HTTP " + result.statusCode + "."));
+  }
+}
+
+async function sendPlanTaskCompletionToSecretary(
+  _runtime: GatewayRuntime,
+  target: PlanSecretaryTarget,
+  delivery: PlanTaskCompletionDelivery,
+  prompt: string
+): Promise<void> {
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    threadId: target.threadId,
+    cwd: target.workspace,
+    prompt,
+    model: target.model,
+    sandbox: "workspace-write",
+    sourceThreadId: delivery.sourceSessionId,
+    sourceAgentType: "plan_agent",
+    responsePolicy: "required",
+    responseInstruction: "消费本次阶段结果后，回复计划状态、已采取的下一步和仍需决定的事项"
+  }, {
+    allowedWorkspaces: agentThreadAllowedWorkspaces(),
+    defaultWorkspace: rootDir,
+    agentRequests
+  });
+  if (result.statusCode < 200 || result.statusCode >= 300) {
+    throw new Error(String(result.data.message || "Plan task completion delivery to secretary failed with HTTP " + result.statusCode + "."));
   }
 }
 
@@ -3501,15 +4200,25 @@ function schedulePlanFeedbackDelivery(
 
   try {
     activePlanFeedbackDeliveries.add(deliveryKey);
+    const runtime = runtimeForRoleDelivery(roleId, gatewayId || String(record.gatewayId || "").trim());
+    const secretaryAssignment = ensurePlanSecretaryTarget(runtime, roleDir, plan);
     publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
     void deliverPlanApprovalFeedback({
       roleId,
       managerBaseUrl: `http://127.0.0.1:${managerPort}`,
-      plan,
+      plan: secretaryAssignment.plan,
       feedback: record,
+      secretary: secretaryAssignment.target
+        ? {
+            threadId: secretaryAssignment.target.threadId,
+            threadName: secretaryAssignment.target.threadName,
+            workspace: secretaryAssignment.target.workspace,
+            model: secretaryAssignment.target.model
+          }
+        : undefined,
       sendToTask: sendPlanQaFeedbackToTask,
+      sendToSecretary: sendPlanFeedbackToSecretary,
       sendToPersona: async (request) => {
-        const runtime = runtimeForRoleDelivery(roleId, gatewayId || String(record.gatewayId || "").trim());
         const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
         const isNotice = request.kind !== "full_feedback";
         const messageId = isNotice
@@ -3981,6 +4690,21 @@ function writeSpeechRuntimeJson(
     }));
 }
 
+function writeSpeechModelManagerJson(
+  response: http.ServerResponse,
+  operation: () => unknown,
+  successStatus = 200
+): void {
+  try {
+    jsonResponse(response, successStatus, { code: 0, data: operation() });
+  } catch (error) {
+    jsonResponse(response, error instanceof SpeechModelManagerError ? error.status : 500, {
+      code: -1,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
 function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/events") {
     proxySpeechEventStream(response, {
@@ -3999,6 +4723,23 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/speech/runtime/stop") {
     writeSpeechRuntimeJson(response, speechRuntimeControl.stop());
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/model-management") {
+    writeSpeechModelManagerJson(response, () => speechModelManager.snapshot());
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/model-management/runtime/install") {
+    writeSpeechModelManagerJson(response, () => speechModelManager.installRuntime(), 202);
+    return true;
+  }
+  const modelInstallMatch = requestUrl.pathname.match(/^\/api\/speech\/model-management\/models\/([^/]+)\/install$/);
+  if (request.method === "POST" && modelInstallMatch) {
+    writeSpeechModelManagerJson(
+      response,
+      () => speechModelManager.installModel(decodeURIComponent(modelInstallMatch[1] || "")),
+      202
+    );
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/models") {
@@ -4264,6 +5005,34 @@ function roleDirForApi(roleId: string): string {
     throw new Error("Missing role id.");
   }
   return roleFolderPath(rolesRoot, safeRoleId);
+}
+
+function recalledKnowledgeForMessage(source: RegisterMessageGroupRequirementInput["source"]): KnowledgeRecallMatch[] {
+  const roleId = String(source?.roleId || "").trim();
+  if (!roleId) return [];
+  try {
+    return roleKnowledgeSnapshot(roleDirForApi(roleId), String(source.summary || ""), {
+      roleId,
+      archiveCompletedPlans: false,
+      includePendingConsolidation: false
+    }).requiredReadItems
+      .filter((item): item is typeof item & { type: "plan" | "recent_memory" | "consolidated_memory" } =>
+        item.type === "plan" || item.type === "recent_memory" || item.type === "consolidated_memory")
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        type: item.type,
+        endpoint: item.endpoint,
+        score: item.score,
+        revisionAt: item.revisionAt
+      }));
+  } catch (error) {
+    managerOperationalLog.record("warn", "message_knowledge_recall_failed", {
+      action: roleId,
+      error: managerOperationalError(error, rootDir)
+    });
+    return [];
+  }
 }
 
 function wearableHealthMetrics(requestUrl: URL): WearableHealthMetric[] | undefined {
@@ -4570,7 +5339,12 @@ function handleRoleKnowledgeApi(
       if (request.method === "POST") {
         void readJsonBody<Record<string, unknown>>(request)
           .then((body) => applyMemoryConsolidationResult(roleDir, runId, body))
-          .then((data) => jsonResponse(response, 200, { code: 0, data }))
+          .then((data) => {
+            memoryConsolidationScheduler?.noteRunCompleted(runId);
+            memoryConsolidationScheduler?.reschedule();
+            publishManagerEvent("memory_consolidation_changed", { roleId, runId, status: "completed" });
+            jsonResponse(response, 200, { code: 0, data });
+          })
           .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
         return true;
       }
@@ -4602,10 +5376,24 @@ function handleRoleKnowledgeApi(
         })()
         : wantsPage
           ? (() => {
+            const requestedView = requestUrl.searchParams.get("view")?.trim() || undefined;
+            if (requestedView && !["current", "plans", "archived"].includes(requestedView)) {
+              throw new Error("Invalid plan page view.");
+            }
+            const requestedSort = requestUrl.searchParams.get("sort")?.trim() || "status";
+            if (!["status", "updated"].includes(requestedSort)) {
+              throw new Error("Invalid plan page sort.");
+            }
             const page = paginateRolePlans(
               presentPlans(listPlans(roleDir)),
               requestUrl.searchParams.get("cursor")?.trim() || "",
-              normalizeRolePlanPageLimit(requestUrl.searchParams.get("limit"))
+              normalizeRolePlanPageLimit(requestUrl.searchParams.get("limit")),
+              {
+                view: requestedView,
+                query: requestUrl.searchParams.get("query") || "",
+                sort: requestedSort as "status" | "updated",
+                statuses: requestUrl.searchParams.getAll("status").map((value) => value.trim()).filter(Boolean)
+              }
             );
             return {
               ...page,
@@ -4638,11 +5426,34 @@ function handleRoleKnowledgeApi(
       return true;
     }
     if (request.method === "GET" && resource === "memory" && !itemId) {
+      const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
+      if (requestUrl.searchParams.get("counts") === "1") {
+        jsonResponse(response, 200, { code: 0, data: roleMemoryCounts(roleDir) });
+        return true;
+      }
+      if (requestUrl.searchParams.has("limit")) {
+        const kind = requestUrl.searchParams.get("kind")?.trim() || "recent";
+        if (kind !== "recent" && kind !== "consolidated") throw new Error("Invalid memory page kind.");
+        const items = kind === "recent"
+          ? presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listRecentMemories(roleDir)), "recent")
+          : presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated");
+        jsonResponse(response, 200, {
+          code: 0,
+          data: paginateRoleMemory(
+            items,
+            requestUrl.searchParams.get("cursor")?.trim() || "",
+            normalizeRoleMemoryPageLimit(requestUrl.searchParams.get("limit")),
+            requestUrl.searchParams.get("query") || "",
+            roleMemoryCounts(roleDir)
+          )
+        });
+        return true;
+      }
       jsonResponse(response, 200, {
         code: 0,
         data: {
-          recent: sortKnowledgeByUpdatedAt(listRecentMemories(roleDir)),
-          consolidated: sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)),
+          recent: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listRecentMemories(roleDir)), "recent"),
+          consolidated: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated"),
           consolidationRuns: listConsolidationRuns(roleDir)
         }
       });
@@ -4663,7 +5474,11 @@ function handleRoleKnowledgeApi(
       return true;
     }
     if (request.method === "GET" && resource === "memory/recent") {
-      const data = itemId ? getRecentMemory(roleDir, itemId) : sortKnowledgeByUpdatedAt(listRecentMemories(roleDir));
+      const memory = itemId ? getRecentMemory(roleDir, itemId) : undefined;
+      const presented = presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listRecentMemories(roleDir)), "recent");
+      const data = itemId
+        ? (memory ? presented.find((item) => item.id === memory.id) : undefined)
+        : presented;
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Memory not found: ${itemId}` });
         return true;
@@ -4672,7 +5487,10 @@ function handleRoleKnowledgeApi(
       return true;
     }
     if (request.method === "GET" && resource === "memory/consolidated") {
-      const data = itemId ? getConsolidatedMemory(roleDir, itemId) : sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir));
+      const memory = itemId ? getConsolidatedMemory(roleDir, itemId) : undefined;
+      const data = itemId
+        ? (memory ? presentRoleMemory(memory, "consolidated") : undefined)
+        : presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated");
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Consolidated memory not found: ${itemId}` });
         return true;
@@ -4683,14 +5501,28 @@ function handleRoleKnowledgeApi(
     if (request.method === "POST" && resource === "memory/recent" && !itemId) {
       void readJsonBody<Record<string, unknown>>(request)
         .then((body) => createRecentMemory(roleDir, body))
-        .then((data) => jsonResponse(response, 201, { code: 0, data }))
+        .then((data) => {
+          memoryConsolidationScheduler?.reschedule();
+          jsonResponse(response, 201, {
+            code: 0,
+            data: presentRoleMemories(roleDir, listRecentMemories(roleDir), "recent").find((item) => item.id === data.id)
+              ?? presentRoleMemory(data, "recent")
+          });
+        })
         .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
     if (request.method === "PATCH" && resource === "memory/recent" && itemId) {
       void readJsonBody<Record<string, unknown>>(request)
         .then((body) => updateRecentMemory(roleDir, itemId, body))
-        .then((data) => jsonResponse(response, 200, { code: 0, data }))
+        .then((data) => {
+          memoryConsolidationScheduler?.reschedule();
+          jsonResponse(response, 200, {
+            code: 0,
+            data: presentRoleMemories(roleDir, listRecentMemories(roleDir), "recent").find((item) => item.id === data.id)
+              ?? presentRoleMemory(data, "recent")
+          });
+        })
         .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
@@ -4771,18 +5603,22 @@ async function forwardFenneNoteReply(body: unknown): Promise<Record<string, unkn
   return forwardFenneNoteRequest(body, fenneNoteReplyUrl, fenneNoteReplyToken);
 }
 
-function standaloneGatewayPayload(includeDiagnostics = true): Record<string, unknown> {
+function standaloneGatewayPayload(
+  includeDiagnostics = true,
+  includeConfigDefinitions = includeDiagnostics
+): Record<string, unknown> {
   const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
+  const tailCache: JsonlTailCache = new Map();
   return buildStandaloneGatewayPayload(
     {
       runtimes: runtimes.values(),
       runtimeStatus: includeDiagnostics
-        ? (runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache)
+        ? (runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache)
         : (runtime) => runtimeSummaryStatusWithRoleInfoCache(runtime, roleInfoCatalogCache),
       routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
       rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
     },
-    { includeConfigDefinitions: includeDiagnostics }
+    { includeConfigDefinitions }
   );
 }
 
@@ -4926,6 +5762,9 @@ function metaPayload(): Record<string, unknown> {
     rabiLinkRelay: publicRabiLinkRelayConfig(rabiLinkRelayConfigForMeta()),
     rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
     managerRuntime: managerRuntimeDiagnosticsSummary(),
+    readWorkers: managerReadWorkerPool.status(),
+    catalogWorkers: managerCatalogWorkerPool.status(),
+    httpLimits: managerHttpLimits,
     personaSyncLan: personaSyncLanServer.status(),
     computerName: os.hostname()
   };
@@ -5202,6 +6041,8 @@ export function handleManagerPersonaDomainApi(
     // This is presentation metadata only: version plus a Manager-relative URL, never a role directory path.
     publishManagerEvent("persona_avatar_changed", change);
   })) return true;
+  if (handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
+  if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
   if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
   if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
   if (handleSpeechApi(request, requestUrl, response)) return true;
@@ -5213,6 +6054,7 @@ export async function startManager(): Promise<void> {
   // Do not let a transient NAS route scan delay the isolated Manager listener;
   // normal installed runtime still loads and owns its configured Routes.
   if (!managerReadOnly) loadRuntimes();
+  if (!managerReadOnly) memoryConsolidationScheduler = createMemoryConsolidationScheduler();
   personaSyncAutoReconciler?.start();
   void personaSyncService.startManifestIndex()
     .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
@@ -5228,10 +6070,44 @@ export async function startManager(): Promise<void> {
   } else {
     reconcileSpeechMicrophone("manager startup");
   }
+  const unsubscribeMessageProcessingPlanUpdates = managerReadOnly
+    ? undefined
+    : subscribePlanUpdates((event) => { void handleMessageProcessingPlanUpdate(event.roleDir, event.after); });
+  if (!managerReadOnly) {
+    for (const requirement of messageProcessingBoard.list({ limit: 500 })) scheduleKnowledgeCallbackReminder(requirement);
+    refreshAgentRequestReminderTimers();
+  }
 
   const server = http.createServer((request, response) => {
+    const requestId = randomUUID();
+    const requestStartedAt = Date.now();
+    const method = request.method ?? "UNKNOWN";
+    let pathname = "/";
+    managerRequestContexts.set(response, {
+      requestId,
+      method,
+      pathname: () => pathname,
+      startedAt: requestStartedAt
+    });
+    response.setHeader("x-rabiroute-request-id", requestId);
+    response.once("finish", () => {
+      const durationMs = Math.max(0, Date.now() - requestStartedAt);
+      const mutating = !["GET", "HEAD", "OPTIONS"].includes(method);
+      const failed = response.statusCode >= 400;
+      const slow = durationMs >= 2_000;
+      if (!mutating && !failed && !slow) return;
+      managerOperationalLog.record(failed ? "warn" : slow ? "warn" : "info", "http_request_completed", {
+        requestId,
+        method,
+        pathname,
+        statusCode: response.statusCode,
+        durationMs,
+        result: failed ? "failed" : "completed"
+      });
+    });
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+      pathname = requestUrl.pathname;
       if (!webguiLanRequestAllowed(request, requestUrl)) {
         response.setHeader("cache-control", "no-store");
         response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute WebGUI\"");
@@ -5307,7 +6183,10 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/gateways") {
-        jsonResponse(response, 200, standaloneGatewayPayload(gatewayPayloadIncludesDiagnostics(requestUrl.searchParams)));
+        jsonResponse(response, 200, standaloneGatewayPayload(
+          gatewayPayloadIncludesDiagnostics(requestUrl.searchParams),
+          gatewayPayloadIncludesConfigDefinitions(requestUrl.searchParams)
+        ));
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/gateways") {
@@ -5420,6 +6299,165 @@ export async function startManager(): Promise<void> {
           });
         return;
       }
+      if (request.method === "GET" && requestUrl.pathname === "/api/message-processing/board") {
+        const routeId = requestUrl.searchParams.get("routeId")?.trim() || undefined;
+        const limit = Number(requestUrl.searchParams.get("limit") || "100");
+        void messageProcessingBoardPayload(routeId, limit)
+          .then((data) => jsonResponse(response, 200, { code: 0, data }))
+          .catch((error) => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return;
+      }
+      const messageProcessingRequirementMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)$/);
+      if (request.method === "GET" && messageProcessingRequirementMatch) {
+        const requirementId = decodeURIComponent(messageProcessingRequirementMatch[1]);
+        const requirement = messageProcessingBoard.getRequirement(requirementId);
+        if (!requirement) {
+          jsonResponse(response, 404, { code: -1, message: `Message processing requirement not found: ${requirementId}` });
+          return;
+        }
+        jsonResponse(response, 200, { code: 0, data: requirement });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/message-processing/requirements") {
+        void readJsonBody<{
+          action?: "register_group" | "dispatch" | "dispatch_failed";
+          requirementId?: string;
+          messageGroupId?: string;
+          source?: RegisterMessageGroupRequirementInput["source"];
+          worker?: MessageProcessingRequirement["worker"];
+          error?: string;
+        }>(request)
+          .then((body) => {
+            const requirementId = String(body.requirementId || "").trim();
+            if (!requirementId) throw new Error("Missing requirementId.");
+            const item = body.action === "register_group"
+              ? messageProcessingBoard.registerMessageGroup({
+                  requirementId,
+                  messageGroupId: String(body.messageGroupId || "").trim(),
+                  source: body.source as RegisterMessageGroupRequirementInput["source"],
+                  knowledgeMatches: recalledKnowledgeForMessage(body.source as RegisterMessageGroupRequirementInput["source"])
+                })
+              : body.action === "dispatch"
+                ? messageProcessingBoard.recordDispatch(requirementId, body.worker as NonNullable<MessageProcessingRequirement["worker"]>)
+                : body.action === "dispatch_failed"
+                  ? messageProcessingBoard.recordDispatchFailure(requirementId, body.error || "Message Agent dispatch failed.")
+                  : (() => { throw new Error("Unsupported message-processing action."); })();
+            scheduleKnowledgeCallbackReminder(item);
+            publishManagerEvent("message_processing_board_changed", { requirementId: item.id, status: item.status });
+            return item;
+          })
+          .then((data) => jsonResponse(response, 200, { code: 0, data }))
+          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return;
+      }
+      const messageProcessingOutcomeMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)\/outcome$/);
+      if (request.method === "POST" && messageProcessingOutcomeMatch) {
+        const requirementId = decodeURIComponent(messageProcessingOutcomeMatch[1]);
+        void readJsonBody<MessageProcessingOutcomeInput>(request)
+          .then((body) => {
+            const requirement = messageProcessingBoard.getRequirement(requirementId);
+            const roleId = String(body.roleId || requirement?.source.roleId || "").trim();
+            const assessedRequirement = requirement && body.projectFactAssessment?.status === "critical"
+              ? { ...requirement, criticalFacts: body.projectFactAssessment.facts }
+              : requirement;
+            for (const disposition of body.knowledgeMatchDispositions || []) {
+              for (const action of disposition.actions || []) {
+                if (!action.recordType || !action.recordId || !action.verifiedAt) continue;
+                verifyCriticalProjectFactRecord({
+                  workspaceRoot: rootDir,
+                  roleDir: roleId ? roleDirForApi(roleId) : undefined,
+                  requirement: requirement ? { ...requirement, criticalFacts: [{ kind: "scope", evidence: action.evidence }] } : requirement,
+                  disposition: {
+                    status: "recorded",
+                    record: action.recordType === "memory"
+                      ? { type: "memory", memoryId: action.recordId }
+                      : { type: "plan", planId: action.recordId },
+                    evidence: action.evidence,
+                    verifiedAt: action.verifiedAt
+                  }
+                });
+              }
+            }
+            verifyCriticalProjectFactRecord({
+              workspaceRoot: rootDir,
+              roleDir: roleId ? roleDirForApi(roleId) : undefined,
+              requirement: assessedRequirement,
+              disposition: body.criticalFactDisposition
+            });
+            return { body, data: messageProcessingBoard.submitOutcome(requirementId, body) };
+          })
+          .then(({ body, data }) => {
+            setMessageProcessingPlanBaseline(data, body.roleId, body.planId);
+            scheduleKnowledgeCallbackReminder(data);
+            publishManagerEvent("message_processing_board_changed", { requirementId: data.id, status: data.status });
+            jsonResponse(response, 200, { code: 0, data });
+          })
+          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return;
+      }
+      const knowledgeCallbackMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)\/knowledge-callback$/);
+      if (request.method === "POST" && knowledgeCallbackMatch) {
+        const requirementId = decodeURIComponent(knowledgeCallbackMatch[1]);
+        void readJsonBody<KnowledgeMatchCallbackInput>(request)
+          .then((body) => {
+            const requirement = messageProcessingBoard.getRequirement(requirementId);
+            if (!requirement) throw new Error(`Message processing requirement not found: ${requirementId}`);
+            const roleId = String(requirement.source.roleId || "").trim();
+            if ((body.result === "updated" || body.result === "created") && body.recordType && body.recordId) {
+              verifyCriticalProjectFactRecord({
+                workspaceRoot: rootDir,
+                roleDir: roleId ? roleDirForApi(roleId) : undefined,
+                requirement: { ...requirement, criticalFacts: [{ kind: "scope", evidence: body.evidence }] },
+                disposition: {
+                  status: "recorded",
+                  record: body.recordType === "memory"
+                    ? { type: "memory", memoryId: body.recordId }
+                    : { type: "plan", planId: body.recordId },
+                  evidence: body.evidence,
+                  verifiedAt: body.verifiedAt
+                }
+              });
+            }
+            return messageProcessingBoard.recordKnowledgeCallback(requirementId, body);
+          })
+          .then((data) => {
+            scheduleKnowledgeCallbackReminder(data);
+            publishManagerEvent("message_processing_board_changed", { requirementId: data.id, status: data.status });
+            jsonResponse(response, 200, { code: 0, data });
+          })
+          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/agent/requests") {
+        const status = requestUrl.searchParams.get("status")?.trim();
+        const requests = agentRequests.list().filter((item) => !status || item.status === status);
+        jsonResponse(response, 200, { code: 0, data: { requests } });
+        return;
+      }
+      const agentRequestMatch = requestUrl.pathname.match(/^\/api\/agent\/requests\/([^/]+)$/);
+      if (request.method === "GET" && agentRequestMatch) {
+        const requestId = decodeURIComponent(agentRequestMatch[1]);
+        const item = agentRequests.get(requestId);
+        if (!item) {
+          jsonResponse(response, 404, { code: -1, message: `Agent request not found: ${requestId}` });
+          return;
+        }
+        jsonResponse(response, 200, { code: 0, data: item });
+        return;
+      }
+      const agentRequestCancelMatch = requestUrl.pathname.match(/^\/api\/agent\/requests\/([^/]+)\/cancel$/);
+      if (request.method === "POST" && agentRequestCancelMatch) {
+        const requestId = decodeURIComponent(agentRequestCancelMatch[1]);
+        void readJsonBody<{ reason?: string }>(request)
+          .then((body) => agentRequests.cancel(requestId, body.reason))
+          .then((data) => {
+            refreshAgentRequestReminderTimers();
+            publishManagerEvent("agent_requests_changed", { requestId: data.id, status: data.status });
+            jsonResponse(response, 200, { code: 0, data });
+          })
+          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return;
+      }
       if (requestUrl.pathname === "/api/agent/threads" && (request.method === "GET" || request.method === "POST")) {
         const requestBody = request.method === "GET"
           ? Promise.resolve<AgentThreadRequest>({
@@ -5430,15 +6468,85 @@ export async function startManager(): Promise<void> {
             })
           : readJsonBody<AgentThreadRequest>(request);
         void requestBody
-          .then((body) => handleAgentThreadRequest(body, {
-            allowedWorkspaces: agentThreadAllowedWorkspaces(),
-            defaultWorkspace: rootDir
-          }))
-          .then((result) => {
-            jsonResponse(response, result.statusCode, { code: 0, ...result.data });
+          .then(async (body) => {
+            const managedBody = applyManagedAgentThreadDefaults(body);
+            try {
+              const result = await handleAgentThreadRequest(managedBody, {
+                allowedWorkspaces: agentThreadAllowedWorkspaces(),
+                defaultWorkspace: rootDir,
+                agentRequests,
+                onMessageProcessingHandoff: (event) => {
+                  const item = messageProcessingBoard.submitOutcome(event.requirementId, {
+                    decision: "handoff",
+                    decidedByThreadId: event.sourceThreadId,
+                    targetAgentType: event.targetAgentType,
+                    targetThreadId: event.targetThreadId,
+                    planId: event.planId,
+                    planTitle: event.planTitle
+                  });
+                  setMessageProcessingPlanBaseline(item, item.source.roleId, event.planId);
+                  publishManagerEvent("message_processing_board_changed", { requirementId: item.id, status: item.status });
+                }
+              });
+              const communication = result.data.communication && typeof result.data.communication === "object"
+                ? result.data.communication as Record<string, unknown>
+                : undefined;
+              const repliedRequestId = String(communication?.inReplyToRequestId || "").trim();
+              let handoffReturnWarning = "";
+              if (repliedRequestId) {
+                const repliedRequest = agentRequests.get(repliedRequestId);
+                if (repliedRequest?.status === "responded" && repliedRequest.messageProcessingRequirementId) {
+                  try {
+                    const item = messageProcessingBoard.recordHandoffReturned(
+                      repliedRequest.messageProcessingRequirementId,
+                      repliedRequest.target.threadId
+                    );
+                    publishManagerEvent("message_processing_board_changed", { requirementId: item.id, status: item.status });
+                  } catch (error) {
+                    handoffReturnWarning = `Agent response was accepted, but the message-processing publisher could not be resumed: ${error instanceof Error ? error.message : String(error)}`;
+                    managerOperationalLog.record("warn", "agent_response_handoff_return_failed", {
+                      result: "tracking_failed",
+                      requestId: repliedRequestId,
+                      action: repliedRequest.messageProcessingRequirementId,
+                      error: managerOperationalError(error, rootDir)
+                    });
+                  }
+                }
+              }
+              refreshAgentRequestReminderTimers();
+              if (communication) publishManagerEvent("agent_requests_changed", communication);
+              if (handoffReturnWarning) {
+                result.data.ok = false;
+                result.data.status = "delivered_tracking_failed";
+                result.data.warning = [String(result.data.warning || "").trim(), handoffReturnWarning].filter(Boolean).join(" ");
+                result.data.handoffReturn = {
+                  status: "tracking_failed",
+                  error: {
+                    stage: "message_processing_return_tracking",
+                    message: handoffReturnWarning,
+                    retryable: true
+                  }
+                };
+              }
+              jsonResponse(response, result.statusCode, {
+                code: result.data.ok === false ? -1 : 0,
+                ...result.data
+              });
+            } catch (error) {
+              jsonResponse(response, 400, { code: -1, ...agentThreadRequestFailureData(error, managedBody) });
+            }
           })
           .catch((error) => {
-            jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+            jsonResponse(response, 400, {
+              code: -1,
+              status: "failed",
+              message: error instanceof Error ? error.message : String(error),
+              error: {
+                stage: "request_body",
+                message: error instanceof Error ? error.message : String(error),
+                retryable: false
+              }
+            });
           });
         return;
       }
@@ -5471,12 +6579,15 @@ export async function startManager(): Promise<void> {
             });
             if (body.deliveryId == null || !String(body.deliveryId).trim()) {
               const result = await deliver();
+              recordMessageProcessingReply(body, result);
               return {
                 statusCode: result.status === "sent" ? 202 : result.status === "draft" ? 200 : result.status === "failed" ? 502 : 403,
                 body: result
               };
             }
-            return executeIdempotentAgentReply(body, { rootDir, deliver });
+            const result = await executeIdempotentAgentReply(body, { rootDir, deliver });
+            recordMessageProcessingReply(body, result.body);
+            return result;
           })
           .then((result) => {
             jsonResponse(response, result.statusCode, { code: result.body.ok ? 0 : -1, ...result.body });
@@ -5503,8 +6614,9 @@ export async function startManager(): Promise<void> {
       }
       if (requestUrl.pathname === "/api/gateways") {
         const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
+        const tailCache: JsonlTailCache = new Map();
         jsonResponse(response, 200, [...runtimes.values()]
-          .map((runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache)));
+          .map((runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache)));
         return;
       }
       if (requestUrl.pathname === "/api/scan/agents" && request.method === "GET") {
@@ -5811,11 +6923,24 @@ export async function startManager(): Promise<void> {
       }
       htmlResponse(requestUrl.pathname, response);
     } catch (error) {
+      managerOperationalLog.record("error", "http_request_exception", {
+        requestId,
+        method,
+        pathname,
+        statusCode: 500,
+        durationMs: Math.max(0, Date.now() - requestStartedAt),
+        result: "exception",
+        error: managerOperationalError(error, rootDir)
+      });
       jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }
   });
 
   remoteAgentHub.attach(server);
+  server.requestTimeout = managerHttpLimits.requestTimeoutMs;
+  server.headersTimeout = managerHttpLimits.headersTimeoutMs;
+  server.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
+  server.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
   if (managerShouldAutostart && remoteAgentDiscoverable) {
     remoteAgentHub.startDiscoveryResponder();
   } else if (!managerShouldAutostart) {
@@ -5828,7 +6953,11 @@ export async function startManager(): Promise<void> {
     console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
     console.log(`roles: ${rolesRoot}`);
     console.log(`route: ${routeRoot}`);
+    managerOperationalLog.record("info", "manager_listening", {
+      result: `host=${managerHost}; port=${managerPort}; readOnly=${managerReadOnly}`
+    });
     syncRabiLinkRelayRuntime();
+    memoryConsolidationScheduler?.start();
   });
 
   const configWatcher = managerShouldAutostart && managerConfigWatcherEnabled() ? startConfigWatcher() : null;
@@ -5844,11 +6973,19 @@ export async function startManager(): Promise<void> {
     }
     shuttingDown = true;
     console.log(`gateway-manager shutting down: ${reason}`);
+    managerOperationalLog.record("info", "manager_shutdown_requested", { result: reason });
+    unsubscribeMessageProcessingPlanUpdates?.();
+    for (const timer of knowledgeCallbackReminderTimers.values()) clearTimeout(timer);
+    knowledgeCallbackReminderTimers.clear();
+    for (const timer of agentRequestReminderTimers.values()) clearTimeout(timer);
+    agentRequestReminderTimers.clear();
+    memoryConsolidationScheduler?.stop();
     configWatcher?.close();
     personaSyncAutoReconciler?.stop();
     personaSyncService.stopManifestIndex();
     personaSyncLanServer.stop();
     rabiLinkRelayRuntime.stop();
+    speechModelManager.stop();
     stopAllGateways();
     server.close(() => {
       process.exit(0);

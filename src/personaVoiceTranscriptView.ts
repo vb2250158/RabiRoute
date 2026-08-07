@@ -271,7 +271,9 @@ export function queryPersonaVoiceTranscriptViews(
   if (from != null && to != null && from > to) throw new Error("from must not be later than to.");
   const records = recentMessageContextItems([roleDir], {
     limit: Number.MAX_SAFE_INTEGER,
-    includeArchives: query.includeArchives === true
+    includeArchives: query.includeArchives === true,
+    from,
+    to
   });
   const index = identityIndex(roleDir);
   const matched = records

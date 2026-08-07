@@ -16,6 +16,10 @@ RabiSpeech 是 Rabi 的独立本机服务插件，也是只绑定回环地址的
 
 ## 安装与启动
 
+RabiRoute 标准安装不包含 ASR/TTS 依赖和模型。只有需要语音功能时才运行以下命令；依赖写入插件私有 `.deps`，不会改动系统 Python 环境，模型继续单独按需安装。
+
+也可以在 RibiWebGUI 的“模型管理”页（`/#/models`）先安装语音运行环境，再从允许清单逐个下载权重。页面只启动仓库内固定脚本和模型别名，不接受任意 URL 或路径；下载完成不代表需要独立 Python 环境的模型已经可以运行。
+
 ```powershell
 cd plugin-adapters\rabi-speech
 .\scripts\install.ps1

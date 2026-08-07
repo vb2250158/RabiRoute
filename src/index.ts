@@ -162,12 +162,14 @@ if (manualTriggerArg) {
   const nameArg = process.argv.find((arg) => arg.startsWith("--manual-name="));
   const routeKindArg = process.argv.find((arg) => arg.startsWith("--manual-route-kind="));
   const ruleArg = process.argv.find((arg) => arg.startsWith("--manual-rule="));
+  const sourceArg = process.argv.find((arg) => arg.startsWith("--manual-source="));
   const message = messageArg ? decodeURIComponent(messageArg.slice("--manual-message=".length)) : triggerId;
   const triggerName = nameArg ? decodeURIComponent(nameArg.slice("--manual-name=".length)) : triggerId;
   const routeKind = routeKindArg?.slice("--manual-route-kind=".length) === "heartbeat" ? "heartbeat" : "manual_trigger";
   const triggerRuleId = ruleArg ? ruleArg.slice("--manual-rule=".length).trim() || undefined : routeKind === "heartbeat" ? undefined : triggerId;
+  const triggerSource = sourceArg?.slice("--manual-source=".length) === "auto" ? "auto" : "manual";
   try {
-    const result = await triggerManualRule(triggerId, message, triggerName, routeKind, triggerRuleId);
+    const result = await triggerManualRule(triggerId, message, triggerName, routeKind, triggerRuleId, triggerSource);
     const summary = deliverySummary(result);
     if (result.status === "failed") {
       console.error(`RabiRoute manual trigger failed: ${triggerId} ${summary}`);

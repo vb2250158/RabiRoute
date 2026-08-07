@@ -17,9 +17,11 @@ import {
 } from "./personaRulePolicy.js";
 import { isCodexTaskId } from "./codexTaskId.js";
 import {
+  normalizeCodexPlanAssistantModel,
   normalizeCodexPlanAssistantSessions,
   type CodexPlanAssistantSession
 } from "./codexPlanAssistantSessions.js";
+import { normalizeCodexMemoryConsolidationAgentModel } from "./codexMemoryConsolidationAgent.js";
 import { applySpeechRouteVariableDefaults } from "./speechControlContract.js";
 import {
   agentAdapterSupportsManagedTaskFeature,
@@ -58,11 +60,13 @@ export type CodexHookSettings = {
   sessionContextEnabled: boolean;
   reasoningContextEnabled: boolean;
   planTaskCompletionEnabled: boolean;
+  agentCommunicationEnforcementEnabled: boolean;
 };
 export const DEFAULT_CODEX_HOOK_SETTINGS: CodexHookSettings = {
   sessionContextEnabled: true,
   reasoningContextEnabled: true,
-  planTaskCompletionEnabled: true
+  planTaskCompletionEnabled: true,
+  agentCommunicationEnforcementEnabled: true
 };
 export type RecentMessageEndpoint = Exclude<MessageAdapterType, "disabled">;
 export type RecentMessageLimits = Partial<Record<RecentMessageEndpoint, number>>;
@@ -119,7 +123,8 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
   return {
     sessionContextEnabled: raw.sessionContextEnabled !== false,
     reasoningContextEnabled: raw.reasoningContextEnabled !== false,
-    planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false
+    planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false,
+    agentCommunicationEnforcementEnabled: raw.agentCommunicationEnforcementEnabled !== false
   };
 }
 
@@ -264,10 +269,15 @@ export type GatewayDefinition = {
   routeVariables?: Record<string, string>;
   routeName?: string;
   agentModel?: string;
+  agentReasoningEffort?: CodexReasoningEffort;
   codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  codexPlanAssistantEnabled?: boolean;
+  codexPlanAssistantModel?: string;
   codexPlanAssistantSessions?: CodexPlanAssistantSession[];
+  codexMemoryConsolidationAgentEnabled?: boolean;
+  codexMemoryConsolidationAgentModel?: string;
   codexHooks?: CodexHookSettings;
   copilotThreadName?: string;
   copilotCwd?: string;
@@ -343,6 +353,12 @@ const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
 const codexReasoningEffortValues = new Set<CodexReasoningEffort>(["low", "medium", "high", "xhigh", "max"]);
 
+export function normalizeCodexReasoningEffort(value: unknown): CodexReasoningEffort | undefined {
+  return codexReasoningEffortValues.has(value as CodexReasoningEffort)
+    ? value as CodexReasoningEffort
+    : undefined;
+}
+
 export function messageAdapterUsesAutomaticGrouping(adapterType: Exclude<MessageAdapterType, "disabled">): boolean {
   return adapterType === "napcat"
     || adapterType === "rolePanel"
@@ -408,9 +424,8 @@ export function normalizeMessageProcessingAgentPolicies(
     const model = typeof policy?.model === "string" && policy.model.trim()
       ? policy.model.trim()
       : DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL;
-    const reasoningEffort = codexReasoningEffortValues.has(policy?.reasoningEffort as CodexReasoningEffort)
-      ? policy?.reasoningEffort as CodexReasoningEffort
-      : DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT;
+    const reasoningEffort = normalizeCodexReasoningEffort(policy?.reasoningEffort)
+      ?? DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT;
     result[adapter] = {
       enabled: policy?.enabled === true,
       model,
@@ -974,6 +989,15 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const legacyCodexThreadName = rawCodexThreadId && !isCodexTaskId(rawCodexThreadId)
     ? rawCodexThreadId
     : "";
+  const normalizedCodexPlanAssistantSessions = normalizeCodexPlanAssistantSessions(definition.codexPlanAssistantSessions);
+  const codexPlanAssistantModel = normalizeCodexPlanAssistantModel(
+    definition.codexPlanAssistantModel
+      ?? normalizedCodexPlanAssistantSessions.find((session) => session.model)?.model
+  );
+  const codexPlanAssistantSessions = normalizedCodexPlanAssistantSessions.map(({ model: _legacyModel, ...session }) => session);
+  const codexPlanAssistantEnabled = definition.codexPlanAssistantEnabled == null
+    ? codexPlanAssistantSessions.length > 0
+    : definition.codexPlanAssistantEnabled === true;
   return {
     ...cleanDefinition,
     id: runtimeId,
@@ -989,6 +1013,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     primaryAgentAdapter,
     messageProcessingAgents,
     agentModel: definition.agentModel?.trim() || "",
+    agentReasoningEffort: normalizeCodexReasoningEffort(definition.agentReasoningEffort),
     pipelinePreset,
     pipeline,
     routeVariables,
@@ -1020,8 +1045,20 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
     codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
     codexCwd: normalizeCodexCwd(definition.codexCwd),
+    codexPlanAssistantEnabled: agentAdapters.includes("codex")
+      ? codexPlanAssistantEnabled
+      : undefined,
+    codexPlanAssistantModel: agentAdapters.includes("codex")
+      ? codexPlanAssistantModel
+      : undefined,
     codexPlanAssistantSessions: agentAdapters.includes("codex")
-      ? normalizeCodexPlanAssistantSessions(definition.codexPlanAssistantSessions)
+      ? codexPlanAssistantSessions
+      : undefined,
+    codexMemoryConsolidationAgentEnabled: agentAdapters.includes("codex")
+      ? definition.codexMemoryConsolidationAgentEnabled === true
+      : undefined,
+    codexMemoryConsolidationAgentModel: agentAdapters.includes("codex")
+      ? normalizeCodexMemoryConsolidationAgentModel(definition.codexMemoryConsolidationAgentModel)
       : undefined,
     codexHooks: agentAdapters.includes("codex") ? normalizeCodexHookSettings(definition.codexHooks) : undefined,
     copilotThreadName: definition.copilotThreadName?.trim() || undefined,

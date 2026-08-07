@@ -12,36 +12,31 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-MODEL_REPOSITORIES = {
-    "tts-qwen3-0.6b": ("tts/qwen3-tts-0.6b-base", "Qwen/Qwen3-TTS-12Hz-0.6B-Base"),
-    "tts-qwen3-1.7b": ("tts/qwen3-tts-1.7b-base", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"),
-    "tts-cosyvoice3-0.5b": ("tts/cosyvoice3-0.5b-2512", "FunAudioLLM/Fun-CosyVoice3-0.5B-2512"),
-    "tts-gpt-sovits": ("tts/gpt-sovits-pretrained", "lj1995/GPT-SoVITS"),
-    "tts-indextts2": ("tts/indextts2", "IndexTeam/IndexTTS-2"),
-    "asr-whisper-tiny": ("asr/faster-whisper-cache", "Systran/faster-whisper-tiny"),
-    "asr-whisper-small": ("asr/faster-whisper-cache", "Systran/faster-whisper-small"),
-    "asr-qwen3-0.6b": ("asr/qwen3-asr-0.6b", "Qwen/Qwen3-ASR-0.6B"),
-    "asr-qwen3-1.7b": ("asr/qwen3-asr-1.7b", "Qwen/Qwen3-ASR-1.7B"),
-    "asr-sensevoice-small": ("asr/sensevoice-small", "FunAudioLLM/SenseVoiceSmall"),
-    "asr-fireredasr2-aed": ("asr/fireredasr2-aed", "FireRedTeam/FireRedASR2-AED"),
-    "asr-whisper-large-v3-turbo": (
-        "asr/faster-whisper-large-v3-turbo",
-        "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-    ),
-}
+CATALOG_PATH = Path(__file__).resolve().parents[1] / "model-catalog.json"
 
-FILE_MODELS = {
-    "speaker-eres2netv2-zh": (
-        "speaker/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
-        "bf1a75b9930474cf3389ef415e6e5d38ca96fea4a3a00f7e301d080a58ee2239",
-    ),
-    "speaker-campplus-zh": (
-        "speaker/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
-        "f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11",
-    ),
-}
+
+def load_catalog() -> list[dict[str, object]]:
+    payload = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    models = payload.get("models")
+    if not isinstance(models, list) or not models:
+        raise RuntimeError("RabiSpeech model catalog is empty or invalid.")
+    aliases: set[str] = set()
+    normalized: list[dict[str, object]] = []
+    for raw in models:
+        if not isinstance(raw, dict):
+            raise RuntimeError("RabiSpeech model catalog contains a non-object entry.")
+        alias = str(raw.get("alias") or "").strip()
+        kind = str(raw.get("kind") or "").strip()
+        target = str(raw.get("target") or "").strip()
+        if not alias or alias in aliases or kind not in {"huggingface", "file"} or not target:
+            raise RuntimeError(f"Invalid RabiSpeech model catalog entry: {alias or '<missing alias>'}")
+        aliases.add(alias)
+        normalized.append(raw)
+    return normalized
+
+
+MODEL_CATALOG = load_catalog()
+MODEL_BY_ALIAS = {str(item["alias"]): item for item in MODEL_CATALOG}
 
 
 @dataclass
@@ -64,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         action="append",
-        choices=[*MODEL_REPOSITORIES, *FILE_MODELS, "all"],
+        choices=[*MODEL_BY_ALIAS, "all"],
         help="Model alias to install. Repeat the option or use all.",
     )
     parser.add_argument("--max-workers", type=int, default=4)
@@ -77,14 +72,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.list:
-        for alias, (relative, repository) in MODEL_REPOSITORIES.items():
-            print(f"{alias}\t{repository}\t{relative}")
-        for alias, (relative, url, _checksum) in FILE_MODELS.items():
-            print(f"{alias}\t{url}\t{relative}")
+        for model in MODEL_CATALOG:
+            source = model.get("repository") or model.get("download_url") or ""
+            print(f"{model['alias']}\t{source}\t{model['target']}")
         return 0
 
     selected = list(args.model or ["all"])
-    aliases = [*MODEL_REPOSITORIES, *FILE_MODELS] if "all" in selected else list(dict.fromkeys(selected))
+    aliases = [*MODEL_BY_ALIAS] if "all" in selected else list(dict.fromkeys(selected))
     root = Path(args.root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
 
@@ -95,7 +89,7 @@ def main() -> int:
     os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", str(max(10, args.etag_timeout)))
 
     snapshot_download = None
-    if any(alias in MODEL_REPOSITORIES for alias in aliases):
+    if any(str(MODEL_BY_ALIAS[alias].get("kind")) == "huggingface" for alias in aliases):
         try:
             from huggingface_hub import snapshot_download as huggingface_snapshot_download
         except ImportError as exc:
@@ -104,8 +98,11 @@ def main() -> int:
 
     results: list[InstallResult] = []
     for alias in aliases:
-        if alias in FILE_MODELS:
-            relative, url, checksum = FILE_MODELS[alias]
+        model = MODEL_BY_ALIAS[alias]
+        relative = str(model["target"])
+        if model.get("kind") == "file":
+            url = str(model.get("download_url") or "")
+            checksum = str(model.get("sha256") or "")
             target = root / relative
             started = time.perf_counter()
             print(f"INSTALLING {alias} from {url} -> {target}", flush=True)
@@ -131,7 +128,7 @@ def main() -> int:
             print(json.dumps(asdict(result), ensure_ascii=False), flush=True)
             write_manifest(root, results)
             continue
-        relative, repository = MODEL_REPOSITORIES[alias]
+        repository = str(model.get("repository") or "")
         target = root / relative
         target.mkdir(parents=True, exist_ok=True)
         started = time.perf_counter()
@@ -141,7 +138,7 @@ def main() -> int:
                 "repo_id": repository,
                 "max_workers": max(1, args.max_workers),
             }
-            if alias in {"asr-whisper-tiny", "asr-whisper-small"}:
+            if model.get("download_mode") == "cache":
                 download_options["cache_dir"] = str(target)
             else:
                 download_options["local_dir"] = str(target)
@@ -188,7 +185,7 @@ def write_manifest(root: Path, results: list[InstallResult]) -> None:
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
-        "models": [merged[key] for key in [*MODEL_REPOSITORIES, *FILE_MODELS] if key in merged],
+        "models": [merged[key] for key in MODEL_BY_ALIAS if key in merged],
     }
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

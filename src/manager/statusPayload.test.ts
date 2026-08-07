@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gatewayPayloadIncludesDiagnostics, standaloneGatewayPayload } from "./statusPayload.js";
+import {
+  gatewayPayloadIncludesConfigDefinitions,
+  gatewayPayloadIncludesDiagnostics,
+  standaloneGatewayPayload
+} from "./statusPayload.js";
 
 test("gateway summary requests omit diagnostic payload work", () => {
   assert.equal(gatewayPayloadIncludesDiagnostics(new URLSearchParams("summary=1")), false);
   assert.equal(gatewayPayloadIncludesDiagnostics(new URLSearchParams()), true);
+});
+
+test("the fast WebGUI payload can include editable config without runtime diagnostics", () => {
+  assert.equal(gatewayPayloadIncludesConfigDefinitions(new URLSearchParams("summary=1&includeConfig=1")), true);
+  assert.equal(gatewayPayloadIncludesConfigDefinitions(new URLSearchParams("summary=1")), false);
+  assert.equal(gatewayPayloadIncludesConfigDefinitions(new URLSearchParams()), true);
 });
 
 test("gateway payload delegates status detail selection to its status provider", () => {

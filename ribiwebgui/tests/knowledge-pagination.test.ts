@@ -3,12 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {
+  drainKnowledgePages,
   hasMoreKnowledgeAfterWindow,
   knowledgeRenderWindow,
   mergeKnowledgePage,
   nextKnowledgeRenderLimit,
   shouldAutoLoadNextKnowledgeBatch
 } from "../src/knowledgePagination";
+import { knowledgePageShouldWork } from "../src/knowledgePageActivity";
 
 test("progressive knowledge pages append in Manager order and replace duplicate snapshots", () => {
   const merged = mergeKnowledgePage(
@@ -46,6 +48,58 @@ test("directory jumps render a bounded forward window instead of inserting old c
   assert.equal(hasMoreKnowledgeAfterWindow(ids.length, 65, 18), false);
 });
 
+test("hidden knowledge tabs suspend requests and resume only after becoming visible", () => {
+  assert.equal(knowledgePageShouldWork("visible", true), true);
+  assert.equal(knowledgePageShouldWork("hidden", true), false);
+  assert.equal(knowledgePageShouldWork("visible", false), false);
+});
+
+test("visible knowledge pages keep requesting background pages until the active result set is complete", async () => {
+  let cursor = "8";
+  const requested: string[] = [];
+  await drainKnowledgePages({
+    nextCursor: () => cursor,
+    shouldContinue: () => true,
+    yieldToUi: async () => {},
+    loadNextPage: async () => {
+      requested.push(cursor);
+      cursor = cursor === "8" ? "58" : cursor === "58" ? "108" : "";
+    }
+  });
+
+  assert.deepEqual(requested, ["8", "58", "108"]);
+});
+
+test("background knowledge loading stops when the page is hidden or a cursor cannot advance", async () => {
+  let cursor = "24";
+  let visible = true;
+  let requests = 0;
+  await drainKnowledgePages({
+    nextCursor: () => cursor,
+    shouldContinue: () => visible,
+    yieldToUi: async () => {},
+    loadNextPage: async () => {
+      requests += 1;
+      visible = false;
+      cursor = "124";
+    }
+  });
+  assert.equal(requests, 1);
+
+  visible = true;
+  cursor = "124";
+  requests = 0;
+  await drainKnowledgePages({
+    nextCursor: () => cursor,
+    shouldContinue: () => visible,
+    yieldToUi: async () => {},
+    loadNextPage: async () => {
+      requests += 1;
+    }
+  });
+  assert.equal(requests, 1);
+});
+
 test("knowledge page requests bounded plan pages and progressively renders plans and memory", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
@@ -53,12 +107,23 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 
   assert.match(client, /ROLE_PLAN_PAGE_SIZE = 8/);
-  assert.match(client, /ROLE_PLAN_BACKGROUND_PAGE_SIZE = 32/);
+  assert.match(client, /ROLE_PLAN_BACKGROUND_PAGE_SIZE = 50/);
+  assert.match(client, /ROLE_MEMORY_BACKGROUND_PAGE_SIZE = 100/);
   assert.match(client, /detail: "summary"/);
   assert.match(client, /\/plans\?\$\{params\.toString\(\)\}/);
-  assert.match(page, /const result = await loadRolePlanPage\(selectedRoleId\)/);
-  assert.ok(page.indexOf("await loadRolePlanPage(selectedRoleId)") < page.indexOf("await loadRoleMemory(selectedRoleId)"));
-  assert.match(page, /if \(planNextCursor\.value\) void loadAllRemainingPlans\(\)/);
+  assert.match(page, /const planRequestView = computed/);
+  assert.match(page, /loadRolePlanPageWithPriorityDetails\(selectedRoleId, "", 8, currentPlanPageFilter\(\), 2\)/);
+  const initialPlanPage = page.indexOf('const result = await loadRolePlanPageWithPriorityDetails(selectedRoleId, "", 8, currentPlanPageFilter(), 2)');
+  const initialPlanDetails = page.indexOf('const detailPlanIds = new Set(result.detailPlanIds)', initialPlanPage);
+  const backgroundPlanDrain = page.indexOf('planNextCursor.value) void loadAllRemainingPlans()', initialPlanPage);
+  assert.ok(initialPlanPage >= 0 && initialPlanDetails > initialPlanPage && initialPlanDetails < backgroundPlanDrain);
+  assert.match(page, /loadRolePlanPage\(selectedRoleId, cursor, limit, currentPlanPageFilter\(\)\)/);
+  assert.ok(page.indexOf("const result = await loadRolePlanPage(selectedRoleId") < page.indexOf("const memory = await loadRoleMemoryPage(selectedRoleId"));
+  assert.match(page, /function loadAllRemainingPlans\(\)/);
+  assert.match(page, /function loadAllRemainingMemory\(\)/);
+  assert.match(page, /drainKnowledgePages\(/);
+  assert.match(page, /planNextCursor\.value\) void loadAllRemainingPlans\(\)/);
+  assert.match(page, /memoryNextCursor\.value\) void loadAllRemainingMemory\(\)/);
   assert.match(page, /MAX_CONCURRENT_PLAN_DETAILS = 2/);
   assert.match(page, /loadRolePlan\(roleId\.value, task\.planId\)/);
   assert.match(page, /function queuePlanDetails\(nextPlans: RolePlan\[\], request: number, priority = false\)/);
@@ -67,14 +132,50 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(page, /queuePlanDetails\(pendingPlans\.filter\(\(plan\) => visibleIds\.has\(plan\.id\)\), requestVersion, true\)/);
   assert.match(page, /const planRenderLimit = ref\(8\)/);
   assert.match(page, /const planRenderStart = ref\(0\)/);
+  assert.match(page, /const memoryRenderLimit = ref\(24\)/);
+  assert.match(page, /loadRoleMemoryCounts\(selectedRoleId\)/);
+  const memoryCountsRequest = page.indexOf("void loadRoleMemoryCounts(selectedRoleId)");
+  const activeListBranch = page.indexOf("if (showsPlanList.value)", memoryCountsRequest);
+  assert.ok(memoryCountsRequest >= 0 && activeListBranch > memoryCountsRequest);
+  assert.match(page, /renderMemoryMarkdownPreview\(memory\.content\)/);
+  assert.match(page, /renderMemoryMarkdownPreview\(memoryDetailPreview\.memory\.content\)/);
+  assert.match(styles, /\.knowledge-memory-card\s*\{[\s\S]*?max-height:\s*512px;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(styles, /\.knowledge-memory-markdown img\s*\{[\s\S]*?max-width:\s*100%;/);
+  const currentTab = page.indexOf('value="plans"');
+  const recentMemoryTab = page.indexOf('value="recent_memory"');
+  const archivedTab = page.indexOf('value="archived"');
+  assert.ok(currentTab >= 0 && currentTab < recentMemoryTab && recentMemoryTab < archivedTab);
+  assert.match(page, /value="plans"[^>]*>[\s\S]{0,160}t\("当前计划"\)/);
+  assert.doesNotMatch(page, /<v-btn value="current"/);
+  assert.match(page, /const showsMemoryList = computed\(\(\) => \["recent_memory", "archived"\]/);
+  assert.doesNotMatch(page, /activeView === 'current' \|\| activeView === 'archived'[\s\S]{0,180}knowledge-memory-heading/);
+  assert.match(page, /t\("记录时间"\)/);
+  assert.match(page, /t\("上次命中召回"\)/);
+  assert.match(page, /memory\.recalledAt/);
+  assert.match(page, /@click="openMemoryDetail\(memory\)"/);
+  assert.match(page, /Boolean\(memoryDetailPreview\)/);
+  assert.match(styles, /\.knowledge-memory-card\s*\{[\s\S]*?max-height:\s*512px;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(styles, /\.knowledge-memory-body\s*\{[\s\S]*?overflow:\s*hidden;/);
+  assert.match(page, /class="knowledge-memory-consolidation-panel"/);
+  assert.match(page, /nextMemoryConsolidationTriggerMemory\.title/);
+  assert.match(page, /memory\.lifecycle\?\.willEnterNextConsolidation === true/);
+  assert.match(page, /memory\.lifecycle\?\.triggersNextConsolidation === true/);
+  assert.doesNotMatch(page, /Date\.parse\(memory\.lifecycle\?\.consolidationEligibleAt/);
+  assert.match(page, /remaining >= 24 \* 60 \* 60_000/);
+  assert.match(page, /距离触发还剩 0 分钟（已到触发时间）/);
+  assert.match(page, /已触发，正在沉淀/);
+  assert.match(page, /memory_consolidation_changed/);
+  assert.match(page, /status === "requested"/);
+  assert.match(page, /距离触发还剩 \$\{formatMemoryRemaining\(remaining\)\}/);
+  assert.doesNotMatch(page, /已满足 72 小时沉淀触发条件/);
+  assert.ok(page.indexOf('class="knowledge-memory-consolidation-panel"') < page.indexOf('v-for="memory in renderedMemoryForView"'));
   assert.match(page, /const renderedPlansForView = computed/);
   assert.match(page, /v-for="plan in renderedPlansForView"/);
   assert.match(page, /planRenderStart\.value = Math\.max\(0, targetIndex\)/);
   assert.match(page, /function releaseDirectoryJumpTarget[\s\S]{0,700}scheduleProgressiveSentinelRefresh\(\)/);
   assert.match(page, /function loadMoreRenderedPlans\(\)/);
-  assert.match(page, /hasMorePlans\.value && planPageBackgroundRequest !== requestVersion/);
-  assert.match(page, /await loadMorePlans\(ROLE_PLAN_BACKGROUND_PAGE_SIZE\)/);
-  assert.match(page, /await yieldToKnowledgePaint\(\)/);
+  assert.match(page, /function loadMoreRenderedMemory\(\)/);
+  assert.match(page, /if \(hasMorePlans\.value\) void loadMorePlans\(\)/);
   assert.doesNotMatch(page, /yieldToPlanDetailHydration/);
   assert.doesNotMatch(page, /v-for="\(plan, planIndex\) in visiblePlansForView"/);
   assert.match(page, /v-if="planDetailsLoading\[plan\.id\]" class="knowledge-plan-detail-loading"/);
@@ -84,7 +185,28 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(page, /正在持续加载更多计划/);
   assert.match(page, /正在加载计划详情/);
   assert.match(page, /ref="planLoadMoreSentinel"/);
+  assert.match(page, /const memoryNextCursor = ref\(""\)/);
+  assert.match(page, /const kind = currentMemoryKind\(\)/);
+  assert.match(page, /loadRoleMemoryPage\(selectedRoleId, kind, "", 24, normalizedQuery\.value\)/);
+  assert.match(page, /loadRoleMemoryPage\(selectedRoleId, kind, cursor, limit, normalizedQuery\.value\)/);
+  assert.doesNotMatch(page, /loadRoleMemory\(selectedRoleId\)/);
+  assert.match(page, /knowledgePageShouldWork\(document\.visibilityState, planDirectoryMounted\)/);
+  assert.match(page, /document\.addEventListener\("visibilitychange", handleKnowledgeVisibilityChange\)/);
+  assert.match(page, /document\.removeEventListener\("visibilitychange", handleKnowledgeVisibilityChange\)/);
   assert.match(page, /v-for="memory in renderedMemoryForView"/);
-  assert.match(page, /normalizedQuery\.value && planNextCursor\.value/);
+  assert.match(page, /visibleMemoryForView\.value\.slice\(0, memoryRenderLimit\.value\)/);
+  assert.match(page, /列表数据已加载/);
   assert.doesNotMatch(page, /query\.value\.trim\(\)/);
+  assert.match(page, /function applyPlanListDialog\(\): void[\s\S]{0,500}planListDialogOpen\.value = false;[\s\S]{0,500}void refreshKnowledge\(\);/);
+  assert.match(page, /watch\(\[activeView, query\], \(\) => \{[\s\S]{0,300}requestVersion \+= 1;/);
+  assert.match(page, /refreshPlanAgentStatuses\(plans\.value\.map\(\(plan\) => plan\.id\)\)/);
+  assert.match(page, /class="knowledge-plan-directory-working"/);
+  assert.match(page, /v-else[\s\S]{0,240}class="knowledge-plan-directory-updated"/);
+  assert.match(page, /class="knowledge-plan-agents"/);
+  assert.match(page, /会话任务 Agent 已丢失/);
+  assert.match(page, /openPlanAgent\(plan, agentRole\)/);
+  assert.match(styles, /knowledge-plan-directory-marquee var\(--directory-marquee-duration\) linear/);
+  assert.match(styles, /knowledge-plan-agent-spin \.9s linear infinite/);
+  assert.match(styles, /prefers-reduced-motion: reduce[\s\S]*?knowledge-plan-agent-working-icon[\s\S]*?animation: none/);
+  assert.match(styles, /\.knowledge-plan-agent-row\s*\{[\s\S]*?min-width:\s*0;/);
 });

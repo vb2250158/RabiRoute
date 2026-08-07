@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import {
   normalizeStoredPlanAttachments,
   storePlanAttachments
@@ -93,6 +94,14 @@ export type PlanTaskBinding = {
   completionHook?: PlanTaskCompletionHook;
 };
 
+export type PlanSecretaryBinding = {
+  agentType: "codex";
+  sessionId: string;
+  sessionTitle?: string;
+  workspace: string;
+  assignedAt?: string;
+};
+
 export type PlanItem = {
   id: string;
   title: string;
@@ -115,6 +124,8 @@ export type PlanItem = {
     path?: string;
   };
   source?: KnowledgeSource;
+  /** Control-plane owner. This is separate from the business taskBinding. */
+  secretaryBinding?: PlanSecretaryBinding;
   taskBinding?: PlanTaskBinding;
   dueAt?: string;
   completedAt?: string;
@@ -123,6 +134,29 @@ export type PlanItem = {
   updatedAt: string;
   keywords: string[];
 };
+
+export type PlanUpdatedEvent = {
+  roleDir: string;
+  before: PlanItem;
+  after: PlanItem;
+};
+
+const planUpdatedListeners = new Set<(event: PlanUpdatedEvent) => void>();
+
+export function subscribePlanUpdates(listener: (event: PlanUpdatedEvent) => void): () => void {
+  planUpdatedListeners.add(listener);
+  return () => planUpdatedListeners.delete(listener);
+}
+
+function notifyPlanUpdated(event: PlanUpdatedEvent): void {
+  for (const listener of planUpdatedListeners) {
+    try {
+      listener(event);
+    } catch {
+      // Plan persistence already succeeded. Observers report their own delivery failures.
+    }
+  }
+}
 
 export type RecentMemoryItem = {
   id: string;
@@ -133,6 +167,7 @@ export type RecentMemoryItem = {
   createdAt: string;
   updatedAt: string;
   viewedAt?: string;
+  recalledAt?: string;
   consolidatedAt?: string;
   consolidationRunId?: string;
   keywords: string[];
@@ -147,6 +182,7 @@ export type ConsolidatedMemoryItem = {
   createdAt: string;
   updatedAt: string;
   viewedAt?: string;
+  recalledAt?: string;
   inputMemoryIds?: string[];
   consolidationRunId?: string;
   keywords: string[];
@@ -173,10 +209,14 @@ export type MemoryConsolidationRun = {
   id: string;
   roleDir: string;
   requestedAt: string;
+  deliveredAt?: string;
   completedAt?: string;
   trigger: "auto" | "manual" | "api";
   recentEditableHours: number;
   recentConsolidationHours: number;
+  triggerMemoryId?: string;
+  triggerAt?: string;
+  candidateCutoffAt?: string;
   inputMemoryIds: string[];
   outputMemoryIds?: string[];
   status: "requested" | "completed";
@@ -424,6 +464,212 @@ function memoryActivityAt(memory: { updatedAt: string; viewedAt?: string }): str
   return laterIso(memory.updatedAt, memory.viewedAt);
 }
 
+function parseMemoryMarkdown(filePath: string): Record<string, unknown> | null {
+  try {
+    const source = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
+    const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    if (!match) return null;
+    const metadata: Record<string, unknown> = {};
+    for (const line of match[1].split(/\r?\n/)) {
+      const pair = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
+      if (!pair) continue;
+      const rawValue = pair[2].trim();
+      try {
+        metadata[pair[1]] = JSON.parse(rawValue);
+      } catch {
+        metadata[pair[1]] = rawValue.replace(/^["']|["']$/g, "");
+      }
+    }
+    metadata.content = source.slice(match[0].length).trim();
+    return metadata;
+  } catch {
+    return null;
+  }
+}
+
+function memoryMarkdown(value: RecentMemoryItem | ConsolidatedMemoryItem): string {
+  const { content, ...metadata } = value;
+  const frontmatter = Object.entries(metadata)
+    .filter(([, field]) => field !== undefined)
+    .map(([key, field]) => `${key}: ${JSON.stringify(field)}`)
+    .join("\n");
+  return `---\n${frontmatter}\n---\n\n${content.trim()}\n`;
+}
+
+function writeMemoryMarkdown(filePath: string, value: RecentMemoryItem | ConsolidatedMemoryItem): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, memoryMarkdown(value), "utf8");
+}
+
+function memoryConsolidationActivityAt(memory: { updatedAt: string; recalledAt?: string }): string {
+  return laterIso(memory.updatedAt, memory.recalledAt);
+}
+
+export type MemoryLifecyclePresentation = {
+  kind: "recent" | "consolidated";
+  state: "active" | "eligible" | "trigger_due" | "consolidated_source" | "consolidated";
+  activityAt: string;
+  consolidationEligibleAt?: string;
+  consolidationTriggerAt?: string;
+  triggersNextConsolidation?: boolean;
+  willEnterNextConsolidation?: boolean;
+};
+
+type RecentMemoryConsolidationProjectionItem = {
+  activityAt: string;
+  consolidationEligibleAt: string;
+  consolidationTriggerAt: string;
+  triggersNextConsolidation: boolean;
+  willEnterNextConsolidation: boolean;
+};
+
+type RecentMemoryConsolidationProjection = Map<string, RecentMemoryConsolidationProjectionItem>;
+
+type RecentMemoryConsolidationScheduleItem = {
+  memory: RecentMemoryItem;
+  activityAt: string;
+  consolidationEligibleAt: string;
+  consolidationTriggerAt: string;
+};
+
+type RecentMemoryConsolidationCohort = {
+  schedule: RecentMemoryConsolidationScheduleItem[];
+  trigger?: RecentMemoryConsolidationScheduleItem;
+  candidateCutoffAt?: string;
+  candidates: RecentMemoryItem[];
+};
+
+type RecentMemoryConsolidationProjectionCacheEntry = {
+  validUntil: number;
+  projection: RecentMemoryConsolidationProjection;
+};
+
+const recentMemoryConsolidationProjectionCache = new Map<string, RecentMemoryConsolidationProjectionCacheEntry>();
+
+function isoAfterHours(value: string, hours: number): string {
+  const parsed = Date.parse(value);
+  return new Date((Number.isFinite(parsed) ? parsed : Date.now()) + hours * 3_600_000).toISOString();
+}
+
+function recentMemoryConsolidationCohort(
+  memories: RecentMemoryItem[],
+  recentEditableHours = DEFAULT_RECENT_EDITABLE_HOURS,
+  recentConsolidationHours = DEFAULT_RECENT_CONSOLIDATION_HOURS
+): RecentMemoryConsolidationCohort {
+  const schedule = memories
+    .filter((memory) => !memory.consolidatedAt)
+    .map((memory) => {
+      const activityAt = memoryConsolidationActivityAt(memory);
+      return {
+        memory,
+        activityAt,
+        consolidationEligibleAt: isoAfterHours(activityAt, recentEditableHours),
+        consolidationTriggerAt: isoAfterHours(activityAt, recentConsolidationHours)
+      };
+    })
+    .sort((left, right) => {
+      const timeDifference = Date.parse(left.consolidationTriggerAt) - Date.parse(right.consolidationTriggerAt);
+      return timeDifference || left.memory.id.localeCompare(right.memory.id);
+    });
+  const trigger = schedule[0];
+  const triggerAt = Date.parse(trigger?.consolidationTriggerAt || "");
+  if (!Number.isFinite(triggerAt)) return { schedule, trigger, candidates: [] };
+  const candidateCutoffAt = new Date(triggerAt - recentEditableHours * 3_600_000).toISOString();
+  return {
+    schedule,
+    trigger,
+    candidateCutoffAt,
+    candidates: schedule
+      .filter((item) => Date.parse(item.activityAt) < Date.parse(candidateCutoffAt))
+      .map((item) => item.memory)
+  };
+}
+
+export function presentRoleMemory<T extends RecentMemoryItem | ConsolidatedMemoryItem>(
+  memory: T,
+  kind: "recent" | "consolidated",
+  now = Date.now(),
+  consolidationProjection?: RecentMemoryConsolidationProjection
+): T & { lifecycle: MemoryLifecyclePresentation } {
+  const activityAt = kind === "recent"
+    ? memoryConsolidationActivityAt(memory)
+    : memoryActivityAt(memory);
+  if (kind === "consolidated") {
+    return {
+      ...memory,
+      lifecycle: { kind, state: "consolidated", activityAt }
+    };
+  }
+  if ("consolidatedAt" in memory && memory.consolidatedAt) {
+    return {
+      ...memory,
+      lifecycle: { kind, state: "consolidated_source", activityAt }
+    };
+  }
+  const projection = consolidationProjection?.get(memory.id);
+  const consolidationEligibleAt = projection?.consolidationEligibleAt
+    ?? isoAfterHours(activityAt, DEFAULT_RECENT_EDITABLE_HOURS);
+  const consolidationTriggerAt = projection?.consolidationTriggerAt
+    ?? isoAfterHours(activityAt, DEFAULT_RECENT_CONSOLIDATION_HOURS);
+  const state = now >= Date.parse(consolidationTriggerAt)
+    ? "trigger_due"
+    : now >= Date.parse(consolidationEligibleAt)
+      ? "eligible"
+      : "active";
+  return {
+    ...memory,
+    lifecycle: {
+      kind,
+      state,
+      activityAt,
+      consolidationEligibleAt,
+      consolidationTriggerAt,
+      triggersNextConsolidation: projection?.triggersNextConsolidation,
+      willEnterNextConsolidation: projection?.willEnterNextConsolidation
+    }
+  };
+}
+
+function recentMemoryConsolidationProjection(
+  roleDir: string,
+  memories: RecentMemoryItem[]
+): RecentMemoryConsolidationProjection {
+  const cacheKey = memoryCatalogDirectory(roleDir, "recent");
+  const cached = recentMemoryConsolidationProjectionCache.get(cacheKey);
+  if (cached && cached.validUntil > Date.now()) return cached.projection;
+
+  const cohort = recentMemoryConsolidationCohort(memories);
+  const nextTrigger = cohort.trigger;
+  const candidateIds = new Set(cohort.candidates.map((memory) => memory.id));
+  const projection = new Map<string, RecentMemoryConsolidationProjectionItem>();
+  for (const item of cohort.schedule) {
+    projection.set(item.memory.id, {
+      activityAt: item.activityAt,
+      consolidationEligibleAt: item.consolidationEligibleAt,
+      consolidationTriggerAt: item.consolidationTriggerAt,
+      triggersNextConsolidation: item.memory.id === nextTrigger?.memory.id,
+      willEnterNextConsolidation: candidateIds.has(item.memory.id)
+    });
+  }
+  recentMemoryConsolidationProjectionCache.set(cacheKey, {
+    validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS,
+    projection
+  });
+  return projection;
+}
+
+export function presentRoleMemories<T extends RecentMemoryItem | ConsolidatedMemoryItem>(
+  roleDir: string,
+  memories: T[],
+  kind: "recent" | "consolidated",
+  now = Date.now()
+): Array<T & { lifecycle: MemoryLifecyclePresentation }> {
+  const projection = kind === "recent"
+    ? recentMemoryConsolidationProjection(roleDir, memories as RecentMemoryItem[])
+    : undefined;
+  return memories.map((memory) => presentRoleMemory(memory, kind, now, projection));
+}
+
 function normalizeKeywords(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
@@ -558,6 +804,11 @@ function planTextTotal(plan: PlanItem): number {
     plan.project?.path,
     plan.source?.kind,
     plan.source?.summary,
+    plan.secretaryBinding?.agentType,
+    plan.secretaryBinding?.sessionId,
+    plan.secretaryBinding?.sessionTitle,
+    plan.secretaryBinding?.workspace,
+    plan.secretaryBinding?.assignedAt,
     plan.taskBinding?.agentType,
     plan.taskBinding?.sessionId,
     plan.taskBinding?.sessionTitle,
@@ -978,6 +1229,32 @@ function validatePlanTaskBindingInput(value: unknown): void {
   }
 }
 
+function validatePlanSecretaryBindingInput(value: unknown): void {
+  if (value == null) return;
+  const raw = recordValue(value);
+  if (Object.keys(raw).length === 0) throw new Error("Plan secretaryBinding must identify a configured Codex secretary task.");
+  if (raw.agentType != null && raw.agentType !== "codex") {
+    throw new Error(`Unsupported plan secretaryBinding agentType: ${String(raw.agentType)}`);
+  }
+  if (!String(raw.sessionId || "").trim()) throw new Error("Plan secretaryBinding.sessionId is required.");
+  if (!String(raw.workspace || "").trim()) throw new Error("Plan secretaryBinding.workspace is required.");
+}
+
+function normalizePlanSecretaryBinding(value: unknown): PlanSecretaryBinding | undefined {
+  if (value == null) return undefined;
+  const raw = recordValue(value);
+  const sessionId = String(raw.sessionId || "").trim();
+  const workspace = String(raw.workspace || "").trim();
+  if (!sessionId || !workspace) return undefined;
+  return {
+    agentType: "codex",
+    sessionId,
+    sessionTitle: typeof raw.sessionTitle === "string" ? raw.sessionTitle.trim() || undefined : undefined,
+    workspace,
+    assignedAt: typeof raw.assignedAt === "string" ? raw.assignedAt.trim() || undefined : undefined
+  };
+}
+
 function normalizePlanTaskBinding(value: unknown): PlanTaskBinding | undefined {
   if (value == null) return undefined;
   const raw = recordValue(value);
@@ -1020,6 +1297,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     steps: normalizePlanSteps(raw.steps),
     project: raw.project && typeof raw.project === "object" && !Array.isArray(raw.project) ? raw.project as PlanItem["project"] : undefined,
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
+    secretaryBinding: normalizePlanSecretaryBinding(raw.secretaryBinding),
     taskBinding: normalizePlanTaskBinding(raw.taskBinding),
     dueAt: typeof raw.dueAt === "string" ? raw.dueAt : undefined,
     completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
@@ -1044,6 +1322,7 @@ function normalizeRecentMemory(raw: Partial<RecentMemoryItem> & Record<string, u
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
     viewedAt: typeof raw.viewedAt === "string" ? raw.viewedAt : undefined,
+    recalledAt: typeof raw.recalledAt === "string" ? raw.recalledAt : undefined,
     consolidatedAt: typeof raw.consolidatedAt === "string" ? raw.consolidatedAt : undefined,
     consolidationRunId: typeof raw.consolidationRunId === "string" ? raw.consolidationRunId : undefined,
     keywords: normalizeKeywords(raw.keywords)
@@ -1064,6 +1343,7 @@ function normalizeConsolidatedMemory(raw: Partial<ConsolidatedMemoryItem> & Reco
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
     viewedAt: typeof raw.viewedAt === "string" ? raw.viewedAt : undefined,
+    recalledAt: typeof raw.recalledAt === "string" ? raw.recalledAt : undefined,
     inputMemoryIds: Array.isArray(raw.inputMemoryIds) ? raw.inputMemoryIds.map(String) : undefined,
     consolidationRunId: typeof raw.consolidationRunId === "string" ? raw.consolidationRunId : undefined,
     keywords: normalizeKeywords(raw.keywords)
@@ -1125,11 +1405,11 @@ function planFile(roleDir: string, plan: PlanItem): string {
 }
 
 function recentMemoryFile(roleDir: string, memory: RecentMemoryItem): string {
-  return path.join(memoryDir(roleDir), "recent", `${safeIdPart(memory.id) || "memory"}.json`);
+  return path.join(memoryDir(roleDir), "recent", `${safeIdPart(memory.id) || "memory"}.md`);
 }
 
 function consolidatedMemoryFile(roleDir: string, memory: ConsolidatedMemoryItem): string {
-  return path.join(memoryDir(roleDir), "consolidated", `${safeIdPart(memory.id) || "consolidated-memory"}.json`);
+  return path.join(memoryDir(roleDir), "consolidated", `${safeIdPart(memory.id) || "consolidated-memory"}.md`);
 }
 
 function consolidationRunFile(roleDir: string, runId: string): string {
@@ -1417,6 +1697,7 @@ function ensurePlanListWatchers(roleDir: string): boolean {
         if (!relativeName.toLowerCase().endsWith(".json")) return;
         markPlanListCacheDirty(roleDir, path.join(directory, relativeName));
       });
+      watcher.unref();
       watcher.on("error", () => {
         watcher.close();
         watchers?.delete(directory);
@@ -1497,34 +1778,146 @@ export function getPlan(roleDir: string, planId: string): PlanItem | null {
   return findPlanRecord(roleDir, planId)?.plan ?? null;
 }
 
-export function listRecentMemories(roleDir: string): RecentMemoryItem[] {
-  return jsonFiles(path.join(memoryDir(roleDir), "recent")).flatMap((file) => {
-    const raw = readJson<Record<string, unknown>>(file);
-    const item = raw ? normalizeRecentMemory(raw, path.basename(file, ".json")) : null;
-    return item ? [item] : [];
+type MemoryCatalogItem = RecentMemoryItem | ConsolidatedMemoryItem;
+type MemoryCatalogCacheEntry = { validUntil: number; items: MemoryCatalogItem[] };
+const MEMORY_CATALOG_CACHE_TTL_MS = 500;
+const memoryCatalogCache = new Map<string, MemoryCatalogCacheEntry>();
+const memoryCatalogWatchers = new Map<string, fs.FSWatcher>();
+
+function memoryCatalogDirectory(roleDir: string, kind: "recent" | "consolidated"): string {
+  return path.resolve(memoryDir(roleDir), kind);
+}
+
+function invalidateMemoryCatalog(directory: string): void {
+  const cacheKey = path.resolve(directory);
+  memoryCatalogCache.delete(cacheKey);
+  recentMemoryConsolidationProjectionCache.delete(cacheKey);
+}
+
+function ensureMemoryCatalogWatcher(directory: string): boolean {
+  const cacheKey = path.resolve(directory);
+  if (memoryCatalogWatchers.has(cacheKey)) return true;
+  if (!fs.existsSync(cacheKey)) return false;
+  try {
+    const watcher = fs.watch(cacheKey, { persistent: false }, (_eventType, fileName) => {
+      if (!fs.existsSync(cacheKey)) {
+        watcher.close();
+        memoryCatalogWatchers.delete(cacheKey);
+        invalidateMemoryCatalog(cacheKey);
+        return;
+      }
+      if (fileName && !/\.(?:json|md)$/i.test(fileName.toString())) return;
+      invalidateMemoryCatalog(cacheKey);
+    });
+    watcher.unref();
+    watcher.on("error", () => {
+      watcher.close();
+      memoryCatalogWatchers.delete(cacheKey);
+      invalidateMemoryCatalog(cacheKey);
+    });
+    memoryCatalogWatchers.set(cacheKey, watcher);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function listMemoryCatalog<T extends MemoryCatalogItem>(
+  directory: string,
+  normalize: (raw: Record<string, unknown>, fallbackId: string) => T | null
+): T[] {
+  const cacheKey = path.resolve(directory);
+  const cached = memoryCatalogCache.get(cacheKey);
+  const watchBacked = ensureMemoryCatalogWatcher(cacheKey);
+  if (cached && (watchBacked || cached.validUntil > Date.now())) return cached.items as T[];
+  const items: T[] = [];
+  const seen = new Set<string>();
+  for (const file of [...markdownFiles(cacheKey), ...jsonFiles(cacheKey)]) {
+    const markdown = file.toLowerCase().endsWith(".md");
+    const raw = markdown ? parseMemoryMarkdown(file) : readJson<Record<string, unknown>>(file);
+    const item = raw ? normalize(raw, path.basename(file, path.extname(file))) : null;
+    if (!item || seen.has(item.id)) continue;
+    seen.add(item.id);
+    items.push(item);
+  }
+  memoryCatalogCache.set(cacheKey, { validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS, items });
+  return items;
+}
+
+function writeMemoryCatalog(filePath: string, value: RecentMemoryItem | ConsolidatedMemoryItem): void {
+  writeMemoryMarkdown(filePath, value);
+  invalidateMemoryCatalog(path.dirname(filePath));
+}
+
+type MemoryCatalogWrite = {
+  filePath: string;
+  value: RecentMemoryItem | ConsolidatedMemoryItem;
+};
+
+const MEMORY_CATALOG_WRITE_WORKER_SOURCE = `
+const fs = require("node:fs");
+const path = require("node:path");
+const { parentPort, workerData } = require("node:worker_threads");
+try {
+  for (const directory of new Set(workerData.map((entry) => path.dirname(entry.filePath)))) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  for (const entry of workerData) fs.writeFileSync(entry.filePath, entry.content, "utf8");
+  parentPort.postMessage({ ok: true });
+} catch (error) {
+  parentPort.postMessage({ ok: false, message: error instanceof Error ? error.message : String(error) });
+}
+`;
+
+async function writeMemoryCatalogBatch(entries: MemoryCatalogWrite[]): Promise<void> {
+  if (entries.length === 0) return;
+  const directories = [...new Set(entries.map((entry) => path.dirname(entry.filePath)))];
+  const writes = entries.map((entry) => ({ filePath: entry.filePath, content: memoryMarkdown(entry.value) }));
+  await new Promise<void>((resolve, reject) => {
+    const worker = new Worker(MEMORY_CATALOG_WRITE_WORKER_SOURCE, { eval: true, workerData: writes });
+    let settled = false;
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    worker.once("message", (message: { ok?: boolean; message?: string }) => {
+      if (message?.ok !== true) {
+        fail(new Error(message?.message || "Memory catalog write worker failed."));
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      resolve();
+    });
+    worker.once("error", fail);
+    worker.once("exit", (code) => {
+      if (code !== 0) fail(new Error(`Memory catalog write worker exited with code ${code}.`));
+    });
   });
+  for (const directory of directories) invalidateMemoryCatalog(directory);
+}
+
+export function listRecentMemories(roleDir: string): RecentMemoryItem[] {
+  return listMemoryCatalog(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory);
 }
 
 export function getRecentMemory(roleDir: string, memoryId: string): RecentMemoryItem | undefined {
   const memory = listRecentMemories(roleDir).find((item) => item.id === memoryId);
   if (!memory) return undefined;
   const viewed = { ...memory, viewedAt: nowIso() };
-  writeJson(recentMemoryFile(roleDir, viewed), viewed);
+  writeMemoryCatalog(recentMemoryFile(roleDir, viewed), viewed);
   return viewed;
 }
 
 function touchRecentMemoryView(roleDir: string, memory: RecentMemoryItem, viewedAt = nowIso()): RecentMemoryItem {
-  const viewed = { ...memory, viewedAt };
-  writeJson(recentMemoryFile(roleDir, viewed), viewed);
+  const viewed = { ...memory, viewedAt, recalledAt: viewedAt };
+  writeMemoryCatalog(recentMemoryFile(roleDir, viewed), viewed);
   return viewed;
 }
 
 export function listConsolidatedMemories(roleDir: string): ConsolidatedMemoryItem[] {
-  return jsonFiles(path.join(memoryDir(roleDir), "consolidated")).flatMap((file) => {
-    const raw = readJson<Record<string, unknown>>(file);
-    const item = raw ? normalizeConsolidatedMemory(raw, path.basename(file, ".json")) : null;
-    return item ? [item] : [];
-  });
+  return listMemoryCatalog(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory);
 }
 
 export function listRoleSkillDetails(roleDir: string): RoleSkillDetail[] {
@@ -1550,13 +1943,13 @@ export function getConsolidatedMemory(roleDir: string, memoryId: string): Consol
   const memory = listConsolidatedMemories(roleDir).find((item) => item.id === memoryId);
   if (!memory) return undefined;
   const viewed = { ...memory, viewedAt: nowIso() };
-  writeJson(consolidatedMemoryFile(roleDir, viewed), viewed);
+  writeMemoryCatalog(consolidatedMemoryFile(roleDir, viewed), viewed);
   return viewed;
 }
 
 function touchConsolidatedMemoryView(roleDir: string, memory: ConsolidatedMemoryItem, viewedAt = nowIso()): ConsolidatedMemoryItem {
-  const viewed = { ...memory, viewedAt };
-  writeJson(consolidatedMemoryFile(roleDir, viewed), viewed);
+  const viewed = { ...memory, viewedAt, recalledAt: viewedAt };
+  writeMemoryCatalog(consolidatedMemoryFile(roleDir, viewed), viewed);
   return viewed;
 }
 
@@ -1567,8 +1960,17 @@ export function listConsolidationRuns(roleDir: string): MemoryConsolidationRun[]
   });
 }
 
+export function roleMemoryCounts(roleDir: string): { recent: number; consolidated: number; consolidationRuns: number } {
+  return {
+    recent: listRecentMemories(roleDir).length,
+    consolidated: listConsolidatedMemories(roleDir).length,
+    consolidationRuns: jsonFiles(path.join(memoryDir(roleDir), "consolidation-runs")).length
+  };
+}
+
 export function createPlan(roleDir: string, input: Record<string, unknown>): PlanItem {
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
+  validatePlanSecretaryBindingInput(input.secretaryBinding);
   validatePlanTaskBindingInput(input.taskBinding);
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("plan", String(input.title || ""));
   const recordedAt = nowIso();
@@ -1590,6 +1992,7 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
   const record = findPlanRecord(roleDir, planId);
   if (!record) throw new Error(`Plan not found: ${planId}`);
   const existing = record.plan;
+  if (Object.prototype.hasOwnProperty.call(patch, "secretaryBinding")) validatePlanSecretaryBindingInput(patch.secretaryBinding);
   if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
   const recordedAt = nowIso();
   const next = normalizePlan({ ...existing, ...patch, attachments: existing.attachments, id: existing.id, createdAt: existing.createdAt, updatedAt: recordedAt });
@@ -1617,6 +2020,7 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
     next,
     [destination, record.filePath, ...planCandidateFiles(roleDir, planId)]
   );
+  notifyPlanUpdated({ roleDir: path.resolve(roleDir), before: existing, after: next });
   return next;
 }
 
@@ -1627,7 +2031,7 @@ export function createRecentMemory(roleDir: string, input: Record<string, unknow
   if (!memory) throw new Error("Memory title and content are required.");
   requireKeywords(memory.keywords, "Memory");
   validateMemoryWrite(roleDir, memory);
-  writeJson(recentMemoryFile(roleDir, memory), memory);
+  writeMemoryCatalog(recentMemoryFile(roleDir, memory), memory);
   return memory;
 }
 
@@ -1644,7 +2048,7 @@ export function updateRecentMemory(roleDir: string, memoryId: string, patch: Rec
   if (!next) throw new Error("Memory title and content are required.");
   requireKeywords(next.keywords, "Memory");
   validateMemoryWrite(roleDir, next);
-  writeJson(recentMemoryFile(roleDir, next), next);
+  writeMemoryCatalog(recentMemoryFile(roleDir, next), next);
   return next;
 }
 
@@ -1667,10 +2071,14 @@ export function pendingMemoryConsolidation(
   force = false
 ): MemoryConsolidationRequest | null {
   const memories = listRecentMemories(roleDir).filter((item) => !item.consolidatedAt);
-  const shouldTrigger = force || memories.some((item) => ageHours(memoryActivityAt(item)) > recentConsolidationHours);
+  const cohort = recentMemoryConsolidationCohort(memories, recentEditableHours, recentConsolidationHours);
+  const triggerAt = Date.parse(cohort.trigger?.consolidationTriggerAt || "");
+  const shouldTrigger = force || (Number.isFinite(triggerAt) && Date.now() >= triggerAt);
   if (!shouldTrigger) return null;
 
-  const input = memories.filter((item) => ageHours(memoryActivityAt(item)) > recentEditableHours);
+  const input = force
+    ? memories.filter((item) => ageHours(memoryConsolidationActivityAt(item)) > recentEditableHours)
+    : cohort.candidates;
   if (input.length === 0) return null;
 
   const inputIds = input.map((item) => item.id).sort();
@@ -1691,12 +2099,41 @@ export function pendingMemoryConsolidation(
     trigger,
     recentEditableHours,
     recentConsolidationHours,
+    triggerMemoryId: cohort.trigger?.memory.id,
+    triggerAt: cohort.trigger?.consolidationTriggerAt,
+    candidateCutoffAt: force
+      ? new Date(Date.now() - recentEditableHours * 3_600_000).toISOString()
+      : cohort.candidateCutoffAt,
     inputMemoryIds: inputIds,
     status: "requested",
     instruction: "请将以下近期记忆整理为稳定、简洁、可长期保留的沉淀记忆，只返回沉淀记忆内容。"
   };
   writeJson(consolidationRunFile(roleDir, run.id), run);
   return { run, memories: input };
+}
+
+export function nextMemoryConsolidationTriggerAt(
+  roleDir: string,
+  recentEditableHours = DEFAULT_RECENT_EDITABLE_HOURS,
+  recentConsolidationHours = DEFAULT_RECENT_CONSOLIDATION_HOURS
+): number | undefined {
+  const memories = listRecentMemories(roleDir).filter((item) => !item.consolidatedAt);
+  const cohort = recentMemoryConsolidationCohort(memories, recentEditableHours, recentConsolidationHours);
+  const triggerAt = Date.parse(cohort.trigger?.consolidationTriggerAt || "");
+  return Number.isFinite(triggerAt) ? triggerAt : undefined;
+}
+
+export function markMemoryConsolidationRunDelivered(
+  roleDir: string,
+  runId: string,
+  deliveredAt = nowIso()
+): MemoryConsolidationRun {
+  const run = readJson<MemoryConsolidationRun>(consolidationRunFile(roleDir, runId));
+  if (!run) throw new Error(`Memory consolidation run not found: ${runId}`);
+  if (run.deliveredAt || run.status === "completed") return run;
+  const delivered = { ...run, deliveredAt };
+  writeJson(consolidationRunFile(roleDir, runId), delivered);
+  return delivered;
 }
 
 export function createMemoryConsolidationRequest(
@@ -1716,10 +2153,18 @@ export function createMemoryConsolidationRequest(
   return request;
 }
 
-export function completeMemoryConsolidation(roleDir: string, runId: string, rawItems: unknown): {
+type MemoryConsolidationCompletionResult = {
   run: MemoryConsolidationRun;
   memories: ConsolidatedMemoryItem[];
-} {
+};
+
+const memoryConsolidationCompletions = new Map<string, Promise<MemoryConsolidationCompletionResult>>();
+
+async function completeMemoryConsolidationUnlocked(
+  roleDir: string,
+  runId: string,
+  rawItems: unknown
+): Promise<MemoryConsolidationCompletionResult> {
   const run = readJson<MemoryConsolidationRun>(consolidationRunFile(roleDir, runId));
   if (!run) throw new Error(`Memory consolidation run not found: ${runId}`);
   if (run.status === "completed") {
@@ -1756,18 +2201,23 @@ export function completeMemoryConsolidation(roleDir: string, runId: string, rawI
     validateMemoryWrite(roleDir, memory, "Consolidated memory");
   }
 
-  for (const memory of output) {
-    writeJson(consolidatedMemoryFile(roleDir, memory), memory);
-  }
-
   const completedAt = nowIso();
-  for (const memory of listRecentMemories(roleDir).filter((item) => run.inputMemoryIds.includes(item.id))) {
-    writeJson(recentMemoryFile(roleDir, memory), {
+  const inputMemoryIds = new Set(run.inputMemoryIds);
+  const recentWrites = listRecentMemories(roleDir)
+    .filter((item) => inputMemoryIds.has(item.id))
+    .map((memory) => ({
+      filePath: recentMemoryFile(roleDir, memory),
+      value: {
       ...memory,
       consolidatedAt: completedAt,
       consolidationRunId: run.id
-    });
-  }
+      }
+    } satisfies MemoryCatalogWrite));
+  const outputWrites = output.map((memory) => ({
+    filePath: consolidatedMemoryFile(roleDir, memory),
+    value: memory
+  } satisfies MemoryCatalogWrite));
+  await writeMemoryCatalogBatch([...outputWrites, ...recentWrites]);
 
   const completedRun: MemoryConsolidationRun = {
     ...run,
@@ -1778,6 +2228,24 @@ export function completeMemoryConsolidation(roleDir: string, runId: string, rawI
   writeJson(consolidationRunFile(roleDir, run.id), completedRun);
 
   return { run: completedRun, memories: output };
+}
+
+export function completeMemoryConsolidation(
+  roleDir: string,
+  runId: string,
+  rawItems: unknown
+): Promise<MemoryConsolidationCompletionResult> {
+  const key = `${path.resolve(roleDir)}\u0000${runId}`;
+  const active = memoryConsolidationCompletions.get(key);
+  if (active) return active;
+  const completion = completeMemoryConsolidationUnlocked(roleDir, runId, rawItems)
+    .finally(() => {
+      if (memoryConsolidationCompletions.get(key) === completion) {
+        memoryConsolidationCompletions.delete(key);
+      }
+    });
+  memoryConsolidationCompletions.set(key, completion);
+  return completion;
 }
 
 export function validateRoleKnowledge(roleDir: string): RoleKnowledgeValidationResult {
@@ -1809,10 +2277,10 @@ export function validateRoleKnowledge(roleDir: string): RoleKnowledgeValidationR
   return { ok: issues.length === 0, limits: roleKnowledgeWriteLimits(roleDir), issues };
 }
 
-export function applyMemoryConsolidationResult(roleDir: string, runId: string, body: Record<string, unknown>): {
+export function applyMemoryConsolidationResult(roleDir: string, runId: string, body: Record<string, unknown>): Promise<{
   run: MemoryConsolidationRun;
   memories: ConsolidatedMemoryItem[];
-} {
+}> {
   const items = Array.isArray(body.memories)
     ? body.memories
     : Array.isArray(body.consolidatedMemories)

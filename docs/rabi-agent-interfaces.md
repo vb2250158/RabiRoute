@@ -10,7 +10,7 @@
 
 本文说明 Agent 在处理 RabiRoute 消息时需要关注的 Rabi 内置接口。它不是普通用户操作手册，而是给 Agent 注入上下文后使用的接口说明。
 
-这些接口用于让 Agent 主动维护计划和记忆，并把普通回复交回 RabiRoute。RabiRoute 负责存储、权限边界、已完成计划的延迟归档、显式记忆整理请求、上下文注入和回复回传；Agent 需要关注的是：什么时候新增或更新计划、什么时候记录近期记忆、收到记忆整理请求时如何返回沉淀记忆，以及需要普通聊天回复时把内容交给回传接口。
+这些接口用于让 Agent 主动维护计划和记忆，并把普通回复交回 RabiRoute。RabiRoute 负责存储、权限边界、已完成计划的延迟归档、到点或显式发起的记忆整理请求、上下文注入和回复回传；Agent 需要关注的是：什么时候新增或更新计划、什么时候记录近期记忆、收到记忆整理请求时如何返回沉淀记忆，以及需要普通聊天回复时把内容交给回传接口。
 
 ## 上下文注入
 
@@ -36,7 +36,7 @@ docs/rabi-agent-interfaces.md
 - memory-001：计划和记忆由 Agent 主动维护
 ```
 
-近期记忆统一指 `memory/recent/` 里的记忆。默认配置下，最近 24 小时内活跃过的近期记忆会直接注入；超过 24 小时且尚未沉淀的近期记忆不默认显示，只有用户消息命中标题或 `keywords` 时才会被召回。活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个；按 ID 查询记忆、更新近期记忆、关键词命中召回都会刷新对应时间。
+近期记忆统一指 `memory/recent/` 里的记忆。默认配置下，最近 24 小时内更新或查看过的近期记忆会直接注入；超过 24 小时且尚未沉淀的近期记忆不默认显示，只有用户消息命中标题或 `keywords` 时才会被召回。默认注入和可编辑窗口取 `updatedAt` / `viewedAt` 中较新的时间；沉淀窗口取 `updatedAt` / `recalledAt` 中较新的时间。按 ID 查询只刷新 `viewedAt`，更新刷新 `updatedAt` 和 `viewedAt`，关键词命中召回同时刷新 `viewedAt` 和 `recalledAt`。
 
 RabiRoute 还会注入 `[处理前上下文确认]`。它会从未归档计划、近期记忆和沉淀记忆中按 ID、标题和 `keywords` 做轻量打分，列出默认最多 5 条高相关必读项。Agent 在回复、发布任务、更新计划、写入记忆或执行外部动作之前，必须先按该小节里的 GET 路径读取内容；不能只凭标题行动。若必读项无法读取或内容不足以确认，应说明上下文无法确认，或先向用户追问。
 
@@ -174,6 +174,133 @@ RabiRoute 只会在满足以下条件时自动发送：
 - 请求带有明确聊天目标：`targetType=group` 加 `groupId`，或 `targetType=private` 加 `userId`。
 - 或请求带有原始消息上下文，RabiRoute 能从消息日志中定位来源群聊或私聊。
 - 对应路由的消息端发送管道未关闭，且 payload 类型在 `supportedOutputs` 内。
+
+### 消息处理需求与看板接口
+
+启用消息处理 Agent 后，Manager 会给每个已投递的消息组分配 `messageProcessingRequirementId`，并把它放进 AgentPacket 的 `replyContext` 和消息处理任务说明。Agent 必须通过结构化接口结束本轮，不能只在 Codex 最终输出里说“已处理”。
+
+```http
+POST /api/message-processing/requirements/:requirementId/outcome
+```
+
+直接回复时先提交决定，再调用普通回复接口；Outbox 返回 `sent` 后，Manager 会用同一个 `replyContext.messageProcessingRequirementId` 自动关闭看板项：
+
+```json
+{
+  "decision": "reply",
+  "reason": "用户明确要求确认命名和预制位置"
+}
+```
+
+普通群讨论可以决定不回复，但必须说明原因。直接 @、直接回复、私聊和计划进展通知不能用泛化的 `agent_judgement` 关闭，只接受重复、他人已回答、消息撤回、来源无效等受限原因：
+
+```json
+{
+  "decision": "no_reply",
+  "reasonCode": "answered_by_other",
+  "reason": "群内已有成员给出完整答案"
+}
+```
+
+如果后续同题消息已经改变或补全原消息，可以使用 `reasonCode=superseded_by_followup`，但原因中必须写明取代它的后续消息 ID 或真实发送回执，不能只写“后面处理了”。
+
+只有图片、视频或文件而没有文字问题的消息，在附件已经下载核对并写入关联计划后，可以使用 `reasonCode=attachment_consumed`；必须同时提交 `planId`，并在原因里保留原 `sourceMessageId`。含有文字问题的消息不能使用这个原因跳过回复。
+
+Manager 不判断群消息的业务含义。每个新消息需求在关闭或准备回复前，消息处理 Agent 都必须核对原消息、附件和必要的回复链，并提交 `projectFactAssessment`：
+
+先通过 `GET /api/message-processing/requirements/{requirementId}` 读取需求。响应里的 `knowledgeMatches` 是 Manager 根据角色计划和记忆的标题、ID、关键词生成的候选关联。Agent 必须读取每个候选项，并逐项调用 `POST /api/message-processing/requirements/{requirementId}/knowledge-callback`。
+
+回调的 `result` 可使用 `unchanged`、`updated`、`created`、`not_relevant`、`deferred`；`responseAction` 可使用 `none`、`reply`、`discuss`、`handoff`。`unchanged` 也必须提供具体核对依据。`updated/created` 必须提供 `recordType`、`recordId`、`verifiedAt`，而且目标计划或记忆必须包含原消息 ID，Manager 才会接受。`deferred` 不是最终结果。
+
+Manager 从投递时起为未完成回调设置一小时期限。到期后，它会把缺失项再次投给原消息处理 Agent，并重新设置一小时期限。若 `knowledgeMatches` 为空，Agent 仍须从附件、回复链和消息对象提取至少两组同义关键词主动查询，不能把未命中直接当成无需处理。
+
+```json
+{
+  "projectFactAssessment": {
+    "status": "critical",
+    "reviewedMessageIds": ["msg-schedule-1"],
+    "replyChainChecked": true,
+    "evidence": "原文是内部上线目标，措辞为大概按照，不是公开定档。",
+    "assessedAt": "2026-08-05T06:00:00.000Z",
+    "assessedByThreadId": "完整消息处理任务ID",
+    "facts": [{ "kind": "schedule", "evidence": "示例项目暂以2030年10月15日为内部目标，尚未正式定档" }]
+  }
+}
+```
+
+`status=none` 表示 Agent 已核对并判断没有需要长期保存的项目事实；此时不能携带 `facts`。`status=critical` 必须携带至少一条 `facts`。Manager 只校验结构、消息 ID 覆盖和状态，不使用关键词替 Agent 判断。
+
+当 Agent 判断消息包含上线/公测排期、版本范围、批准/否决、负责人变更、取消/延期或发布版本等项目事实时，即使无需群内回复，也不能直接关闭。Agent 应把事实写入计划、绑定记忆或明确的项目文档；随后在 outcome 中同时提交记录证据：
+
+```json
+{
+  "decision": "no_reply",
+  "reason": "群内无需重复发言，但内部上线目标已经写入统一包计划。",
+  "criticalFactDisposition": {
+    "status": "recorded",
+    "record": {
+      "type": "plan",
+      "planId": "plan-example-release"
+    },
+    "evidence": "messageId=msg-schedule-1；已核对原文和回复链，并更新计划与绑定记忆。",
+    "verifiedAt": "2026-08-05T06:00:00.000Z"
+  }
+}
+```
+
+已有同一记录时使用 `status=duplicate` 并提供带类型的 `record`、证据和核对时间。计划使用 `{ "type": "plan", "planId": "..." }`，记忆使用 `{ "type": "memory", "memoryId": "..." }`，项目文档使用 `{ "type": "document", "relativePath": "docs/..." }`。文档路径必须相对于当前项目，绝对路径和跳出项目目录的路径会被拒绝。尚未完成判断或记录时只能 `handoff` 给秘书、计划 Agent 或主人格，`reply` 和 `no_reply` 都会被 Manager 拒绝。消息处理看板的 `factAssessmentOpen` 用于发现尚未完成 Agent 语义判断的需求，`criticalFactOpen` 用于发现已判断为项目事实但尚未登记完成的需求。
+
+Manager 还会按 `record` 的类型读取对应计划、记忆或项目文档，确认记录真实存在并至少包含一个原始群消息 ID。仅提交一个看似有效的业务 ID、路径，或只在 `evidence` 中自述“已更新”，都不能关闭事项。
+
+转交秘书、计划 Agent 或主人格时，调用 `/api/agent/threads` 的 `send` 动作，并增加结构化字段。Manager 只在目标 Desktop owner 接受后把看板改为“已转交”；如已确定计划，应同时传 `planId`，让后续计划进展能够回到原群或私聊：
+
+```json
+{
+  "action": "send",
+  "threadId": "<target-task-id>",
+  "sourceThreadId": "<message-agent-task-id>",
+  "sourceAgentType": "message_processing",
+  "cwd": "C:/Path/To/Project",
+  "prompt": "请处理这个计划事项，并把结果返回来源消息处理任务。",
+  "messageProcessing": {
+    "requirementId": "<requirement-id>",
+    "outcome": "handoff",
+    "targetAgentType": "plan_agent",
+    "planId": "<plan-id>",
+    "planTitle": "<plan-title>"
+  }
+}
+```
+
+不需要额外接口。上述请求会直接返回投递结果。只有下面三个值同时成立，才表示目标 Codex Desktop 任务已经接收消息；这不表示对方已经完成业务：
+
+```json
+{
+  "code": 0,
+  "status": "delivered",
+  "delivery": {
+    "status": "delivered",
+    "targetThreadId": "<target-task-id>",
+    "acceptedBy": "codex_desktop_owner",
+    "action": "started",
+    "transport": "desktop-ipc"
+  },
+  "handoff": {
+    "status": "recorded",
+    "requirementId": "<requirement-id>"
+  }
+}
+```
+
+缺少 `prompt`、`sourceThreadId` 等参数时，同一次响应返回 `code=-1`、`status=failed`，并在 `error.field`、`error.message` 和 `error.retryable` 中说明原因。目标任务已经接收、但消息处理看板记录失败时，响应为 `status=delivered_tracking_failed`：此时不得再次向目标任务发送同一内容，只处理或上报 `handoff.status=tracking_failed`。
+
+维护者和 WebGUI 可读取同一份状态：
+
+```http
+GET /api/message-processing/board?routeId=<gateway-id>&limit=100
+```
+
+返回项包含处理阶段、来源消息组、处理任务、转交、决定、发送回执、失败、超时和“Agent 已空闲但没有提交结果”标记。该接口是 Manager 状态的只读视图，不从日志重新推断业务状态。
 
 ### 受控外发幂等回执
 
@@ -471,11 +598,34 @@ POST http://127.0.0.1:8790/api/agent/threads
   "sandbox": "workspace-write",
   "sourceThreadId": "019f0000-0000-7000-8000-000000000002",
   "sourceAgentType": "plan_secretary",
+  "responsePolicy": "required",
+  "responseInstruction": "完成下一步后返回结果、验证证据和后续动作",
   "prompt": "补充新的约束和验证证据，请续接原任务。"
 }
 ```
 
-Agent 向另一个 Agent 任务发送消息时必须提供自己的完整 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`。Manager 先按来源 ID 读取 Desktop 状态并核对任务存在、ID 一致且未归档，再通过 `codexDesktopBridge.ts` 的统一任务读取模型取得左侧聊天栏当前名称。`agentThreads.ts`、消息处理 Agent、心跳和来源模板不得各自读取或覆盖另一份任务名。正文前会显示“来源 Agent、来源任务、来源会话 ID、来源工作目录”；任务名不由发送方填写。RabiRoute 自己产生的普通消息、初始化消息和系统通知不属于 Agent 互投，可以不带这两个字段。
+Agent 向另一个 Agent 任务发送消息时，必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
+
+正式回复仍使用同一个 `send` 动作。回复方必须把 `inReplyToRequestId`、`result` 和 `nextAction` 送回原请求任务，并再次填写 `responsePolicy`：如果新的下一步还要求原请求方处理后返回，使用 `required` 并填写新的 `responseInstruction`；如果本次往返到此结束，使用 `none`。
+
+```json
+{
+  "action": "send",
+  "threadId": "019f0000-0000-7000-8000-000000000002",
+  "cwd": "C:\\Path\\To\\Your\\Project",
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000001",
+  "sourceAgentType": "plan_agent",
+  "inReplyToRequestId": "请求中给出的 requestId",
+  "result": "已经完成调查并核对证据",
+  "nextAction": "由秘书更新计划并决定是否继续实现",
+  "responsePolicy": "none",
+  "prompt": "调查结果和证据摘要。"
+}
+```
+
+普通 Codex 最终回答不算正式回复。目标 Agent 每轮结束时，`Stop` Hook 会检查待回复请求；仍未回复时，从该轮结束起五分钟后向同一个精确任务投递提醒。提醒触发的新一轮结束后仍未回复，会再从该轮结束起等待五分钟。请求状态可通过 `GET /api/agent/requests` 或 `GET /api/agent/requests/:requestId` 查询；维护者可用 `POST /api/agent/requests/:requestId/cancel` 取消不再需要的请求。
+
+Manager 先按来源 ID 读取 Desktop 状态并核对任务存在、ID 一致且未归档，再通过 `codexDesktopBridge.ts` 的统一任务读取模型取得左侧聊天栏当前名称。`agentThreads.ts`、消息处理 Agent、心跳和来源模板不得各自读取或覆盖另一份任务名。正文前会显示“来源 Agent、来源任务、来源会话 ID、来源工作目录”；任务名不由发送方填写。RabiRoute 自己产生的普通消息、初始化消息、提醒和系统通知不属于 Agent 互投，可以不带来源与回复字段。
 
 安全边界：
 
@@ -484,8 +634,10 @@ Agent 向另一个 Agent 任务发送消息时必须提供自己的完整 `sourc
 - Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主人格 ID相同，消息池会拒绝初始化和投递。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
+- `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束，包括没有来源 Agent 字段的普通续投：未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。PangHu 没有任务级例外，只能使用正式 Main、Release 和 Art，旧任务或历史记录里的隔离、稀疏、clean working copy 安排已经撤销。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
 - `create` 返回 `initialTurnStatus`。若线程已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名线程。
-- 连接器工具可用时可以直接使用连接器；Manager 线程桥只是另一种调用入口，最终仍投给同一个 Desktop owner，不是执行 fallback，也不是 multi-agent 子 Agent。
+- 当前 Route 开启“强制使用 RabiAgent 消息投递接口”后，主人格、计划 Agent、计划秘书和消息处理 Agent 使用 `send_message_to_thread`、`handoff_thread`、`create_thread` 或 `fork_thread` 等 Codex 持久任务工具时，`PreToolUse` Hook 会在执行前拒绝并说明上述 Rabi 参数。临时子 Agent 的协作工具不属于这项限制。关闭开关只停止这项绕过检查；已经通过 Rabi 建立的待回复请求仍继续检查和提醒。
+- Manager 线程桥最终仍投给同一个 Desktop owner，不是执行 fallback，也不是另一个 Runtime。
 - Desktop 未启动、IPC 不可用或目标任务无法加载时必须返回失败；不得转给隔离 app-server、Codex CLI 或共享端口继续执行。
 
 ## 计划接口
@@ -657,7 +809,10 @@ PATCH /roles/:roleId/plans/:planId
 ```http
 GET /roles/:roleId/memory/recent
 GET /roles/:roleId/memory/recent/:memoryId
+GET /api/roles/:roleId/memory?counts=1
 ```
+
+`counts=1` 只返回近期记忆、沉淀记忆和沉淀记录的数量，不读取或返回记忆卡片正文；WebGUI 直达“计划与记忆”页面时用它填充标签计数。
 
 新增近期记忆：
 
@@ -688,9 +843,11 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 近期记忆可以通过 ID 修改，用于修正、补充、合并或降噪。近期记忆是否允许修改由 RabiRoute 按当前固定的 24 小时可编辑窗口判断；目前这个窗口还不是 `personaConfig.json` 的公开配置字段。
 
-记忆时间窗口以活跃时间为准。活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个。Agent 按 ID 查询近期记忆时，RabiRoute 会刷新 `viewedAt`；Agent 更新近期记忆时，RabiRoute 会刷新 `updatedAt` 和 `viewedAt`；只有距离最后活跃时间超过可编辑窗口的记忆才会进入待沉淀范围。
+近期记忆的可编辑窗口取 `updatedAt` 和 `viewedAt` 中较新的时间。Agent 按 ID 查询近期记忆时，RabiRoute 会刷新 `viewedAt`；Agent 更新近期记忆时会刷新 `updatedAt` 和 `viewedAt`。沉淀的 24/72 小时窗口另取 `updatedAt` 和 `recalledAt` 中较新的时间，普通按 ID 查询不会推迟沉淀。
 
-Agent 新增或更新近期记忆时，应主动填写 `keywords`。RabiRoute 在消息投递前只使用标题和 `keywords` 做轻量召回，不对记忆内容进行实时智能分词。当前消息命中近期记忆标题或 `keywords` 时，RabiRoute 会刷新该条记忆的 `viewedAt`。
+Agent 新增或更新近期记忆时，应主动填写 `keywords`。RabiRoute 在消息投递前只使用标题和 `keywords` 做轻量召回，不对记忆内容进行实时智能分词。当前消息命中近期记忆标题或 `keywords` 时，RabiRoute 会同时刷新该条记忆的 `viewedAt` 和 `recalledAt`。
+
+近期记忆列表的 `lifecycle` 由 Manager 动态返回：`triggersNextConsolidation` 标记最早到达 72 小时的记忆，`willEnterNextConsolidation` 表示该记忆在同一触发时刻是否已经超过 24 小时输入窗口。该结果随记忆目录缓存，记忆新增、修改或命中召回后重新计算；调用端不得根据本地时钟另算候选范围。
 
 `keywords` 是必填项。新增近期记忆时必须提供至少一个关键词；更新近期记忆时如果改写 `keywords`，也必须保留至少一个关键词。
 

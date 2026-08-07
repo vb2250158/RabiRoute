@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AgentAdapterType } from "./types.js";
-import { resolveProjectPath } from "../shared/projectPaths.js";
+import { resolvePersistedProjectPath } from "../shared/projectPaths.js";
 import { CodexDesktopBridge } from "../codexDesktopBridge.js";
 import { listCodexThreads } from "../codexRuntime.js";
 
@@ -501,8 +501,8 @@ function collectCwdOptions(rootDir: string, runtimes: RuntimeLike[], copilotSess
   const cwdSet = new Set<string>(copilotCwds);
   if (fs.existsSync(rootDir)) cwdSet.add(rootDir);
   for (const rt of runtimes) {
-    const codexCwd = resolveProjectPath(rt.definition.codexCwd, rootDir) ?? "";
-    const copilotCwd = resolveProjectPath(rt.definition.copilotCwd, rootDir) ?? "";
+    const codexCwd = resolvePersistedProjectPath(rt.definition.codexCwd, rootDir) ?? "";
+    const copilotCwd = resolvePersistedProjectPath(rt.definition.copilotCwd, rootDir) ?? "";
     if (codexCwd && fs.existsSync(codexCwd)) cwdSet.add(codexCwd);
     if (copilotCwd && fs.existsSync(copilotCwd)) cwdSet.add(copilotCwd);
   }

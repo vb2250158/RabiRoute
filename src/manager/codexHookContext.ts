@@ -6,6 +6,7 @@ import { listPlans, type PlanItem } from "../roleKnowledge.js";
 import { buildRoleKnowledgeContextView } from "../routing/roleKnowledgeContext.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
+import { agentCommunicationToolDenial } from "./agentCommunicationHookPolicy.js";
 
 const STORE_VERSION = 4;
 const MAX_CONTEXT_CHARS = 6200;
@@ -30,6 +31,14 @@ export type PlanTaskCompletionResult = {
   planId?: string;
   turnId?: string;
   gatewayId?: string;
+  error?: string;
+};
+
+export type AgentRequestStopResult = {
+  status: "ignored" | "scheduled" | "failed";
+  reason: string;
+  requestIds?: string[];
+  turnId?: string;
   error?: string;
 };
 
@@ -89,6 +98,8 @@ export type CodexHookContextResult = {
   binding: CodexHookSessionBinding | null;
   additionalContext: string;
   planTaskCompletion?: PlanTaskCompletionResult;
+  agentRequestStop?: AgentRequestStopResult;
+  toolDecision?: { permissionDecision: "deny"; reason: string };
 };
 
 export type CodexHookControl =
@@ -100,6 +111,8 @@ export type CodexHookContextServiceOptions = {
   storePath: string;
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
+  isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
+  recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
 };
 
 function nowIso(): string {
@@ -206,12 +219,16 @@ export class CodexHookContextService {
   private readonly storePath: string;
   private readonly deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
   private readonly hookEnabled?: (request: CodexHookContextRequest) => boolean;
+  private readonly isManagedAgentSession?: (request: CodexHookContextRequest) => boolean;
+  private readonly recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
 
   constructor(options: CodexHookContextServiceOptions) {
     this.rolesRoot = options.rolesRoot;
     this.storePath = path.resolve(options.storePath);
     this.deliverPlanTaskCompletion = options.deliverPlanTaskCompletion;
     this.hookEnabled = options.hookEnabled;
+    this.isManagedAgentSession = options.isManagedAgentSession;
+    this.recordAgentRequestStop = options.recordAgentRequestStop;
   }
 
   listRoles(): string[] {
@@ -263,22 +280,28 @@ export class CodexHookContextService {
   }
 
   async handleHook(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
-    if (this.hookEnabled && !this.hookEnabled(request)) {
+    const toolDecision = agentCommunicationToolDenial(
+      request,
+      this.isManagedAgentSession?.(request) === true
+    );
+    if (toolDecision) {
+      return {
+        action: "none",
+        binding: this.getBinding(request.sessionId),
+        additionalContext: "",
+        toolDecision
+      };
+    }
+    const enabled = !this.hookEnabled || this.hookEnabled(request);
+    if (request.eventName === "Stop") return this.handleStop(request, enabled);
+    if (!enabled) {
       const binding = this.getBinding(request.sessionId);
       return {
         action: "none",
         binding,
-        additionalContext: "",
-        planTaskCompletion: request.eventName === "Stop"
-          ? {
-              status: "ignored",
-              reason: "hook_disabled_by_codex_endpoint",
-              turnId: request.turnId
-            }
-          : undefined
+        additionalContext: ""
       };
     }
-    if (request.eventName === "Stop") return this.handleStop(request);
     return this.handleContext(request);
   }
 
@@ -468,7 +491,40 @@ export class CodexHookContextService {
     };
   }
 
-  private async handleStop(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
+  private async handleStop(request: CodexHookContextRequest, planCompletionEnabled: boolean): Promise<CodexHookContextResult> {
+    const agentRequestStop = await this.recordAgentRequestStopResult(request);
+    const planResult = planCompletionEnabled
+      ? await this.handlePlanStop(request)
+      : {
+          action: "none" as const,
+          binding: this.getBinding(request.sessionId),
+          additionalContext: "",
+          planTaskCompletion: {
+            status: "ignored" as const,
+            reason: "hook_disabled_by_codex_endpoint",
+            turnId: request.turnId
+          }
+        };
+    return { ...planResult, agentRequestStop };
+  }
+
+  private async recordAgentRequestStopResult(request: CodexHookContextRequest): Promise<AgentRequestStopResult> {
+    if (!this.recordAgentRequestStop) {
+      return { status: "ignored", reason: "agent_request_stop_not_configured", turnId: request.turnId };
+    }
+    try {
+      return await this.recordAgentRequestStop(request);
+    } catch (error) {
+      return {
+        status: "failed",
+        reason: "agent_request_stop_failed",
+        turnId: request.turnId,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  private async handlePlanStop(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
     const sessionId = this.requireSessionId(request.sessionId);
     const binding = this.getBinding(sessionId);
     const matches = this.listRoles().flatMap((roleId) => {

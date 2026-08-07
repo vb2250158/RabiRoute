@@ -50,6 +50,10 @@ Paraformer 文件转写的官方协议只承诺 `file_urls` 使用可公网访�
 
 ## 安装和运行
 
+RabiRoute 的标准 Windows 安装包默认不安装语音识别、语音合成依赖或模型。只有需要语音功能时才执行下面的命令；`install.ps1` 会在插件私有目录安装依赖并生成 Windows 运行时，模型仍由 `install_models.ps1` 按需选择。
+
+普通使用者也可以打开 RibiWebGUI 的“模型管理”页（`/#/models`）：先安装语音运行环境，再从项目允许清单中逐个下载模型权重。页面不会接受任意下载地址或本机路径，并明确区分“权重已下载”和“模型已具备可运行环境”；需要独立 Python 环境的模型仍要按下载说明完成后续配置。
+
 ```powershell
 cd plugin-adapters\rabi-speech
 .\scripts\install.ps1

@@ -271,7 +271,7 @@ export function codexDesktopDeepLinkForTest(threadId: string): string {
   return `codex://threads/${encodeURIComponent(threadId)}`;
 }
 
-async function openCodexDesktopThread(threadId: string): Promise<void> {
+export async function openCodexDesktopThread(threadId: string): Promise<void> {
   const deepLink = codexDesktopDeepLinkForTest(threadId);
   const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
   const child = spawn(command, [deepLink], {

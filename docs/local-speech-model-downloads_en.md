@@ -1,6 +1,22 @@
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./local-speech-model-downloads.md">简体中文</a>
+</div>
+<!-- /docs-language-switch -->
+
 # RabiSpeech local model downloads and setup
 
 This guide covers local models only. Paid speech APIs are archived, and remote callers cannot install models or mutate the local allowlist.
+
+## On-demand downloads from Model Management
+
+Open **Model Management** in the RibiWebGUI sidebar, or go directly to `/#/models`. The page lists the allowlisted TTS, ASR, and speaker models with official sources, measured weight sizes where available, download state, and runtime requirements.
+
+1. Select **Install speech environment** the first time. This prepares plugin-private dependencies and the Windows speech host without downloading weights.
+2. Select **Download weights** on one model card. Manager runs only one install or download job at a time, and the page receives state changes through events instead of periodic queries.
+3. **Weights downloaded** confirms only the files and install manifest. Models marked as requiring an isolated runtime still need the matching source checkout and Python environment described below before RabiSpeech can load them.
+
+The page and command line share the allowlist in `plugin-adapters/rabi-speech/model-catalog.json`. A browser cannot provide an arbitrary repository, URL, or local path. Licensed ONNX-VITS packages remain manual imports.
 
 ## Common downloader
 

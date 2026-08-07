@@ -181,6 +181,13 @@ completedArchiveAfterHours = 72
     "kind": "manual",
     "summary": "用户要求说明计划和记忆机制"
   },
+  "secretaryBinding": {
+    "agentType": "codex",
+    "sessionId": "exact-secretary-session-id",
+    "sessionTitle": "主人格 协助处理计划1",
+    "workspace": "C:/Path/To/RabiRoute",
+    "assignedAt": "2026-06-08T00:00:00+08:00"
+  },
   "taskBinding": {
     "agentType": "codex",
     "sessionId": "exact-source-session-id",
@@ -214,11 +221,15 @@ WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles
 
 旧计划无需批量迁移：Manager 在读取边界重新归一化阻塞事实。旧文件中没有完整待决审批合同的 `isBlocked=true` 会自动降级为进行中，并在下一次规范 POST/PATCH 时清理；已有 `blockedBy` 继续作为待确认说明保留。系统不会猜测审批人、来源、推荐方案、备选或请求时间，Agent 必须根据真实消息和调查结果补齐合同。
 
-`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。目前只支持 `agentType=codex`。`sessionId` 是必填的完整执行任务 ID；`sessionTitle` 只用于展示，`workspace` 用于 Stop Hook 的安全校验。`completionHook.enabled=true` 时，Manager 在该会话完成一轮后把官方最终回答经现有角色面板链投给同人格 Route；`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划顶层为 `暂停` 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
+`secretaryBinding` 是计划当前控制面负责人的精确绑定，和业务 `taskBinding` 分开。目前只支持 Codex 持久计划秘书，保存完整秘书任务 ID、展示名称、workspace 和分配时间。Manager 首次需要投递计划控制通知时从当前 Route 已启用的秘书池稳定选择一个并保存；秘书执行治理 `begin/finish` 时会把实际负责者更新为自己。已绑定秘书仍在当前池中时固定复用，只有绑定失效或秘书被移出配置后才重新分配。
+
+`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。目前只支持 `agentType=codex`。`sessionId` 是必填的完整执行任务 ID；`sessionTitle` 只用于展示，`workspace` 用于 Stop Hook 的安全校验。`completionHook.enabled=true` 时，Manager 在该会话完成一轮后处理官方最终回答：启用并绑定计划秘书时直接投给 `secretaryBinding`，不写主人格角色面板；没有可用秘书时才回退到同人格 Route。`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划顶层为 `暂停` 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
+
+Manager 提供只读批量状态接口 `GET /api/roles/:roleId/plan-agents/status?planId=...`，用完整 `sessionId + workspace` 查询 `taskBinding` 和可选 `secretaryBinding` 对应的真实 Codex Desktop 任务。结果把 Agent 是否工作与会话任务的 `active / idle / not_loaded / unavailable / archived / missing / workspace_mismatch` 分开返回；超时或读取失败是 `unknown`，不能从计划生命周期状态猜测。`POST /api/roles/:roleId/plan-agents/:planId/open` 只允许打开已核对、未归档且 workspace 一致的精确绑定；它不发送 prompt、不创建任务，也不切换绑定。
 
 `taskBinding` 只绑定计划的独立业务执行会话，不绑定“协助处理计划”秘书。计划管理秘书属于控制面：维护计划与记忆、查重和绑定业务任务、读取真实状态、消费结果、提醒并续投；调查、实现、测试、Unity/SVN/构建/发布和外部系统操作由业务任务负责。秘书可以开临时子 Agent 做计划盘点、查重、状态核对和结果摘要，但秘书及其子 Agent不得修改业务文件。
 
-收到业务任务完成提醒后，主人格 Agent 负责在同一轮安排计划管理秘书消费结果、PATCH 计划步骤与记忆，并在计划仍可推进时通过 `/api/agent/threads` 的 `action=send` 向该计划自身 `taskBinding.sessionId + workspace` 精确续投业务任务。计划暂停或秘书轮转不能清空业务 `taskBinding`；只有业务任务确实失效并完成受控迁移时才改绑，计划完成后可保留绑定作为历史证据。每次完成回传、heartbeat 或恢复巡检都应并行使用秘书槽管理不同计划分片，并在结束前满足 `可推进但无人管理的计划数 = 0` 与 `可推进但空闲的业务任务数 = 0`；已处于 `active/in-progress` 的业务任务不重复投递。等待审批或负责人时只执行已有授权范围内的询问、追问和补证据，不越过动作门禁。
+收到业务任务完成提醒后，负责秘书直接消费结果、PATCH 计划步骤与记忆，并在计划仍可推进时通过 `/api/agent/threads` 的 `action=send` 向该计划自身 `taskBinding.sessionId + workspace` 精确续投业务任务。普通进展、状态变化、等待条件和下一步由秘书直接处理；只有需要用户/主人格决策、批准、授权、补充输入、跨计划裁决、完整收尾或安全外发复核时才升级给主人格。计划暂停或秘书轮转不能清空业务 `taskBinding`；只有业务任务确实失效并完成受控迁移时才改绑，计划完成后可保留绑定作为历史证据。每次完成回传、heartbeat 或恢复巡检都应并行使用秘书槽管理不同计划分片，并在结束前满足 `可推进但无人管理的计划数 = 0` 与 `可推进但空闲的业务任务数 = 0`；已处于 `active/in-progress` 的业务任务不重复投递。等待审批或负责人时只执行已有授权范围内的询问、追问和补证据，不越过动作门禁。
 
 计划管理写入按 `planId` 隔离：同一计划同时只有一个控制面 writer，不同计划可以并行。共享 ledger、问题账本和发送回执在短文件锁内读取最新状态、只合并目标记录并原子替换，不能用旧的全量快照覆盖其它计划。锁元数据先完整写入候选文件，再以同卷 hard-link 原子发布；运行热路径不自动删除 stale 或损坏锁，遇到此类锁时失败关闭，只允许在已暂停 writer、确认 quiescent 的维护窗口显式修复。`claim` / `clarify` 以来源消息和稳定 key 获取独立 lease，并在外发前保存 reservation；发送结果不明确或已发送但验证失败时保留 `uncertain` / `sent_unverified`，禁止自动重发。
 
@@ -309,7 +320,7 @@ data/roles/<RoleId>/memory/
 近期记忆：
 
 ```text
-memory/recent/*.json
+memory/recent/*.md
 ```
 
 近期记忆由 Agent 主动新增或更新。它记录最近一段时间里 Agent 认为值得保留的事实、偏好、判断、阶段性结论或上下文摘要。近期记忆可以通过记忆 ID 修改。
@@ -317,7 +328,7 @@ memory/recent/*.json
 沉淀记忆：
 
 ```text
-memory/consolidated/*.json
+memory/consolidated/*.md
 ```
 
 沉淀记忆由 RabiRoute 的定时总结流程生成。它是近期记忆经过总结后的稳定记录。沉淀记忆生成后，Agent 不能直接修改已有条目；如果需要修正，只能新增近期记忆说明修正原因，再由下一轮沉淀流程生成新的沉淀记录。
@@ -329,6 +340,8 @@ memory/consolidation-runs/*.json
 ```
 
 用于记录每次总结的输入范围、触发时间、Agent 返回结果和写入的沉淀记忆 ID，方便排障和审计。
+
+近期记忆和沉淀记忆的新写入使用 Markdown：生命周期、来源、关键词和追踪 ID 保存在文件开头的元数据区，正文就是可直接阅读的 Markdown。旧 `.json` 记忆继续可读；同一 ID 同时存在 `.md` 和 `.json` 时，Manager 以 `.md` 为准并只计数一次。WebGUI 支持标题、列表、表格、代码、链接和图文混排；图片只加载 HTTP(S) 地址，本机绝对路径和危险协议不会进入页面。
 
 ## 近期记忆和沉淀记忆
 
@@ -355,13 +368,15 @@ recentConsolidationHours = 72
 
 这两个窗口目前不是 `personaConfig.json` 的公开配置字段。创建一次 Manager API request 时可以用请求参数覆盖本轮阈值。
 
-记忆窗口以近期记忆的活跃时间为准，不以 `createdAt` 为准。活跃时间取 `updatedAt` 和 `viewedAt` 中较新的一个。近期记忆只要被 Agent 更新、按 ID 查看，或被当前消息通过标题/`keywords` 命中召回，就重新进入活跃窗口。
+近期记忆现在区分“查看”和“命中召回”：按 ID 查看会刷新 `viewedAt`，当前消息通过标题或 `keywords` 真正命中并进入读取队列时会同时刷新 `viewedAt` 和 `recalledAt`。更新近期记忆会刷新 `updatedAt` 和 `viewedAt`，但不会伪造一次命中召回。
 
-上下文默认显示的记忆也是按 `recentEditableHours` 判断。默认配置下，`[记忆与计划]` 中默认列出最近 24 小时内活跃过的近期记忆。距离最后活跃时间超过 24 小时、且尚未沉淀的近期记忆，不默认显示；只有用户消息命中标题或 `keywords` 时，才作为命中召回临时列入上下文，并刷新 `viewedAt`。
+可编辑窗口和默认上下文仍按 `updatedAt` / `viewedAt` 中较新的时间判断，因此 Agent 明确读取一条旧记忆后仍可在本轮修正它。24/72 小时沉淀判断改用 `updatedAt` / `recalledAt` 中较新的时间；普通按 ID 查看不会推迟沉淀，真正命中召回或修改记忆才会重新计算沉淀时间。
 
-记忆整理的输入范围和到期判断由 RabiRoute 处理，不由 Agent 判断。当前必须先由用户触发 `memory-consolidation` 手动项，或调用 Manager API 创建 request；仅仅经过时间不会自行启动后台整理任务。
+上下文默认显示的记忆也是按 `recentEditableHours` 判断。默认配置下，`[记忆与计划]` 中默认列出最近 24 小时内更新或查看过的近期记忆。超过 24 小时、且尚未沉淀的近期记忆不默认显示；只有用户消息命中标题或 `keywords` 时，才作为命中召回临时列入上下文，并刷新 `viewedAt` 和 `recalledAt`。
 
-默认判断策略是：显式请求到来后，若存在最后活跃时间超过 `recentConsolidationHours` 的近期记忆，就创建一次整理 run。输入范围是所有最后活跃时间超过 `recentEditableHours` 且尚未沉淀的近期记忆。`force=true` 可以跳过到期判断，但仍只收集超过可编辑窗口的输入。
+记忆整理的输入范围和到期判断由 RabiRoute 处理，不由 Agent 判断。Manager 启动后会读取每个人格最早的 72 小时触发时间，并设置一次性到点任务；记忆在到点前发生更新或真实召回时，实际触发会重新核对并按新的活跃时间安排。用户仍可手动触发 `memory-consolidation`，也可调用 Manager API 创建 request。
+
+默认判断策略是：最不活跃且尚未沉淀的记忆到达 72 小时时，Manager 固定本轮 `triggerAt`，并把 `triggerAt - 24 小时` 固定为候选上限。即使实际执行晚于触发时间，也不会把触发以后才跨过 24 小时边界的记忆追加进本轮；触发前发生更新或真实召回的记忆会按新的活跃时间退出候选。整理 run 保存 `triggerMemoryId`、`triggerAt`、`candidateCutoffAt` 和成功投递后的 `deliveredAt`；Manager 重启时不会重复投递已经由 Desktop 接收的同一 run。列表投影与真实 request 共用这一套算法。Manager 动态返回 `triggersNextConsolidation` 和 `willEnterNextConsolidation` 布尔值；结果随记忆目录缓存，并在新增、修改或命中召回后失效重算。WebGUI 只显示这些结果，不自行重算候选范围。`force=true` 可以跳过到期判断，但仍只收集当前超过输入窗口的记忆。
 
 这条消息属于一种内置手动触发消息。它不是额外开一条特殊私有通道，而是作为 RabiRoute 内置的 `manual_trigger` 进入同一套模板、投递和 Agent 接收流程。
 
@@ -370,7 +385,9 @@ recentConsolidationHours = 72
 - 用户主动触发 `triggerId=memory-consolidation` 的内置手动触发项。
 - 调用 `POST /api/roles/:roleId/memory/consolidation-requests`。
 
-API 可在单次请求中覆盖 `triggerOlderThanHours`、`includeOlderThanHours` 和 `force`；默认仍为 72/24 小时。后台自动调度属于后续能力，不能写成已经完成。进入 Agent 端的消息结构保持一致，区别只体现在触发来源元信息里。
+API 可在单次请求中覆盖 `triggerOlderThanHours`、`includeOlderThanHours` 和 `force`；默认仍为 72/24 小时。自动到点、用户手动触发和 API request 共用同一套候选算法；进入 Agent 端的消息结构保持一致，触发来源记录为 `auto`、`manual` 或 `api`。
+
+Codex Route 可以开启独立记忆整理 Agent。开启后，自动或手动产生的 `manual_trigger + triggerId=memory-consolidation` 只投递到持久 Desktop 任务“`<主人格任务名> 记忆整理`”，默认模型为 `gpt-5.6-terra`；主人格不再接收同一请求。Desktop 不可用、owner 无法确认或投递失败时本轮明确失败，不启动备用 Runtime，也不回退给主人格。该开关只决定由独立任务还是主人格处理，不决定是否按 72 小时自动触发。
 
 Agent 在这次交互里只需要返回沉淀后的记忆，不需要解释触发原因，不需要决定哪些记忆进入本轮整理，也不需要修改原始近期记忆。
 
@@ -510,11 +527,13 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 这些接口已由 Manager 实现。Agent adapter、角色面板或其它本机工作台可以按需查询和更新；`/roles/...` 与 `/api/roles/...` 两种路径前缀均可解析，公开示例优先使用 `/api/roles/...`。
 
-长计划列表可使用 `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary` 分页读取轻量摘要，再按 ID 调用 `GET /api/roles/:roleId/plans/:planId` 获取正文、步骤、审批与附件元数据。WebGUI 首屏读取 8 条摘要，后续使用更大的后台页减少重复列表查询；左侧目录消费全部已返回摘要，右侧正文只挂载一个有界窗口并随滚动向后追加。目录跳转会把窗口起点移到目标计划，既不要求先创建全部前置正文，也不在后续加载时把旧卡片插回当前阅读位置上方。WebGUI 让视口附近详情进入并发队列最前，并在继续消费摘要页前只让出一个渲染帧，不等待详情请求完成；只有真实请求中的卡片显示加载动画，离屏卡片使用紧凑未加载状态和浏览器 `content-visibility`，避免几十个 Vuetify 骨架同时占用主线程。Manager 对计划列表使用两层增量缓存：目录 watcher 合并短时间内连续的文件写入事件，逐文件缓存再按 `size + mtimeMs` 在后台异步读取和归一化发生变化的计划 JSON，摘要 API 在磁盘读取期间继续返回上一份完整快照；规范的 POST/PATCH 写入会直接写穿对应缓存项并立即可见。文件系统不支持 watcher 时回退到短 TTL 校验。缓存只保存派生读取结果，计划文件仍是唯一事实源。
+长计划列表可使用 `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary&view=<current|plans|archived>&query=<text>` 分页读取当前分类和搜索条件下的轻量摘要，再按 ID 调用 `GET /api/roles/:roleId/plans/:planId` 获取正文、步骤、审批与附件元数据。WebGUI 首屏只读取 8 条摘要，不再在后台自动扫完其余计划；用户滚动到加载位置时才继续取下一页。左侧目录消费已经返回的摘要，右侧正文只挂载一个有界窗口并随滚动向后追加。目录跳转会把窗口起点移到目标计划，既不要求先创建全部前置正文，也不在后续加载时把旧卡片插回当前阅读位置上方。WebGUI 让视口附近详情进入最多两个并发请求的队列；只有真实请求中的卡片显示加载动画，离屏卡片使用紧凑未加载状态和浏览器 `content-visibility`，避免几十个 Vuetify 骨架同时占用主线程。Manager 对计划列表使用两层增量缓存，并对同一份未变化的计划目录复用已经整理和排序的展示结果；目录 watcher 合并短时间内连续的文件写入事件，逐文件缓存按 `size + mtimeMs` 在后台异步读取和归一化发生变化的计划 JSON。规范的 POST/PATCH 写入会直接更新对应缓存项并立即可见；文件系统不支持 watcher 时回退到短 TTL 校验。缓存只保存派生读取结果，计划文件仍是唯一事实源。
+
+记忆列表可使用 `GET /api/roles/:roleId/memory?kind=<recent|consolidated>&limit=24&cursor=<offset>&query=<text>` 分页读取。WebGUI 只请求当前可见的近期记忆或沉淀记忆，首屏最多 24 条，滚动后再继续读取；不会在打开页面时同时传回全部记忆。Manager 对未变化的近期记忆和沉淀记忆目录复用解析结果，文件变化后立即使对应缓存失效。浏览器标签页隐藏时，知识页停止继续加载、断开自己的 Manager 事件连接并忽略旧请求结果；标签页重新可见后只补查一次当前分类。
 
 计划接口可以新增计划、更新已有计划、修改状态、更新下一步或归档。记忆接口可以新增近期记忆，也可以通过记忆 ID 修改近期记忆。沉淀记忆不提供直接修改接口。
 
-近期记忆新增和更新都要求保留 `keywords`。RabiRoute 在消息投递前只匹配 ID、标题和 `keywords`，不做智能分词。按 ID 查看近期记忆或沉淀记忆会刷新 `viewedAt`；更新近期记忆会刷新 `updatedAt` 和 `viewedAt`；近期记忆或沉淀记忆进入处理前确认队列时也会刷新该条记忆的 `viewedAt`。
+近期记忆新增和更新都要求保留 `keywords`。RabiRoute 在消息投递前只匹配 ID、标题和 `keywords`，不做智能分词。按 ID 查看近期记忆或沉淀记忆会刷新 `viewedAt`；更新近期记忆会刷新 `updatedAt` 和 `viewedAt`；近期记忆或沉淀记忆真正命中并进入处理前确认队列时会同时刷新该条记忆的 `viewedAt` 和 `recalledAt`。
 
 ## 注入时机
 
@@ -553,7 +572,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 近期记忆可以修改。Agent 通过记忆 ID 更新已有近期记忆，用于修正措辞、补充上下文或合并重复记录。
 
-查看记忆也是一次活跃行为。按 ID 查看近期记忆或沉淀记忆时，RabiRoute 自动刷新 `viewedAt`；更新近期记忆时，RabiRoute 自动刷新 `updatedAt` 和 `viewedAt`。近期记忆的默认注入、关键词命中召回和沉淀窗口都按 `updatedAt` / `viewedAt` 中较新的时间判断。
+查看记忆也是一次可编辑活跃行为。按 ID 查看近期记忆或沉淀记忆时，RabiRoute 自动刷新 `viewedAt`；更新近期记忆时自动刷新 `updatedAt` 和 `viewedAt`；真正命中召回时再刷新 `recalledAt`。近期记忆的默认注入和可编辑窗口按 `updatedAt` / `viewedAt` 中较新的时间判断，沉淀窗口按 `updatedAt` / `recalledAt` 中较新的时间判断。
 
 沉淀记忆不可直接修改。沉淀记忆来自总结流程，生成后只作为稳定记录读取。如果后来发现沉淀记忆不准确，Agent 应新增一条近期记忆说明修正，等待下一轮沉淀生成新的稳定结论。
 
@@ -573,6 +592,8 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 对没有进入审批步骤的进行中计划额外提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和未开始步骤。审批和引导都只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。
 
+计划分页接口还支持 `sort=<status|updated>` 和可重复的 `status=<展示状态>`。默认 `sort=status` 保持 Manager 统一展示顺序，`sort=updated` 按 `updatedAt` 从新到旧排列；状态筛选与排序都在分页前执行。响应的 `facets.statuses` 返回当前分类和搜索条件下可选的展示状态、数量与色板，供 WebGUI 在不丢失其它筛选项的情况下绘制筛选菜单。
+
 ## 计划引导与审批意见
 
 计划反馈是保存在 `plans/feedback/<planId>.jsonl` 的独立 JSONL 审计记录。`kind=guidance` 表示只关联 `planId` 的计划级引导，不能携带 `stepId`；`kind=approval_suggestion` 表示关联审批步骤的正式审批意见。它们都不是计划 JSON 的第二份副本，也不是通用 Outbox Action Queue。
@@ -584,7 +605,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。审批输入继续支持文件、剪贴板图片和 `@` 计划附件引用；新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步落盘并立即返回 `deliveryStatus=pending`，再复用同一 `taskBinding` 投递链：绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务，绑定不完整时才交给人格 Agent。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
+RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。审批输入继续支持文件、剪贴板图片和 `@` 计划附件引用；新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
 
 Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视为整个计划的方向输入；如果范围、优先级、方法或后续路径变化，显式 `PATCH` 计划并同步调整尚未开始的步骤，随后以 `kind=guidance_response`、`author=agent`、`notifyAgent=false` 回写同一 `planId`，且不带 `stepId`。收到 `approval_suggestion` 时仍更新对应计划/步骤与审批回执，并以 `approval_response` 回写同一 `planId / stepId`。两种记录本身都不会自动推进计划。
 

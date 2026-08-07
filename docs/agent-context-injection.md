@@ -383,9 +383,9 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 需要回应时给短而自然的群聊草稿。
 ```
 
-## 示例：显式记忆整理触发
+## 示例：自动或显式记忆整理触发
 
-记忆整理入口属于 `manual_trigger` 类消息，投递方式和普通手动触发一致。当前代码会在收到 `triggerId=memory-consolidation` 的显式手动触发时评估时间窗口并创建待整理 run；也可以由 Manager API 显式创建 request。仅仅经过一段时间不会自行启动后台整理任务。
+记忆整理入口属于 `manual_trigger` 类消息，投递方式和普通手动触发一致。Manager 会在最不活跃记忆到达 72 小时时自动产生 `triggerId=memory-consolidation`，也接受用户手动触发；两者都会重新评估时间窗口并创建待整理 run。Manager API 仍可显式创建 request。
 
 当前实现先创建可查询的 consolidation request 和 pending run；负责 outbox 或回复发送的链路可以随后把 request 投递给 Agent。Agent 返回结果后，RabiRoute 通过 result 接口落盘沉淀记忆并标记输入近期记忆。
 

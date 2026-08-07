@@ -145,6 +145,107 @@ POST /api/agent/replies
 
 The safest path is to pass the injected `replyContextJson` back unchanged. RabiRoute resolves the route, source record, output pipeline, adapter policy, and target.
 
+### Message-processing requirements and board API
+
+With Message Agent mode enabled, Manager assigns each delivered message group a `messageProcessingRequirementId` and includes it in AgentPacket `replyContext` and the worker instructions. The Agent closes a turn through a structured interface; a Codex final message alone is not a processing outcome.
+
+```http
+POST /api/message-processing/requirements/:requirementId/outcome
+```
+
+For a reply, submit the decision and then call the normal reply API. When Outbox returns `sent`, Manager uses the same `replyContext.messageProcessingRequirementId` to complete the board item automatically:
+
+```json
+{
+  "decision": "reply",
+  "reason": "The user explicitly requested confirmation of the name and prefab location."
+}
+```
+
+Ordinary group discussion may use `no_reply` with a reason. Explicit mentions, direct replies, private messages, and plan-progress notifications cannot be closed by a generic `agent_judgement`; only constrained reasons such as duplicate, already answered, withdrawn, or invalid source are accepted.
+
+Before replying or closing any new requirement, the Message Agent must inspect the source messages, attachments, and necessary reply chain and submit `projectFactAssessment`. First read `GET /api/message-processing/requirements/{requirementId}`. Its `knowledgeMatches` are plan and memory candidates derived by Manager; the Agent reads each candidate and reports the result through `POST /api/message-processing/requirements/{requirementId}/knowledge-callback`. An `updated` or `created` callback still carries `recordType`, `recordId`, and `verifiedAt`, and the referenced plan or memory must contain the original message ID.
+
+When the source contains a durable schedule, scope, approval, ownership, or release fact, `criticalFactDisposition` uses a typed record reference:
+
+```json
+{
+  "decision": "no_reply",
+  "reason": "No repeated group reply is needed, but the internal release target was recorded in the shared plan.",
+  "projectFactAssessment": {
+    "status": "critical",
+    "reviewedMessageIds": ["msg-schedule-1"],
+    "replyChainChecked": true,
+    "evidence": "The source describes an internal target, not a public launch commitment.",
+    "assessedAt": "2026-08-05T06:00:00.000Z",
+    "facts": [
+      { "kind": "schedule", "evidence": "The team is currently targeting 2030-10-15 internally." }
+    ]
+  },
+  "criticalFactDisposition": {
+    "status": "recorded",
+    "record": {
+      "type": "plan",
+      "planId": "plan-example-release"
+    },
+    "evidence": "messageId=msg-schedule-1; source and reply chain verified.",
+    "verifiedAt": "2026-08-05T06:00:00.000Z"
+  }
+}
+```
+
+Plan references use `{ "type": "plan", "planId": "..." }`; memory references use `{ "type": "memory", "memoryId": "..." }`; project documents use `{ "type": "document", "relativePath": "docs/..." }`. Document paths are relative to the current project. Absolute paths, parent traversal, and filesystem-link escapes are rejected. Manager reads the typed target and verifies that it exists and contains at least one original source message ID. A plausible ID, path, or self-reported evidence alone cannot close the item. Existing records use `status=duplicate`; incomplete assessment or recording must remain a structured handoff.
+
+A handoff to a Secretary, Plan Agent, or Primary Persona uses `/api/agent/threads` action `send` with a structured field. Manager marks the board as handed off only after the target Desktop owner accepts the request. Include `planId` when known so later progress can return to the source group or private conversation:
+
+```json
+{
+  "action": "send",
+  "threadId": "<target-task-id>",
+  "sourceThreadId": "<message-agent-task-id>",
+  "sourceAgentType": "message_processing",
+  "cwd": "C:/Path/To/Project",
+  "prompt": "Handle this plan item and return the result to the source Message Agent task.",
+  "messageProcessing": {
+    "requirementId": "<requirement-id>",
+    "outcome": "handoff",
+    "targetAgentType": "plan_agent",
+    "planId": "<plan-id>",
+    "planTitle": "<plan-title>"
+  }
+}
+```
+
+No extra endpoint is required. The same request returns the delivery result directly. The target Codex Desktop task has accepted the message only when all three values below are present; this does not mean the target has completed the work:
+
+```json
+{
+  "code": 0,
+  "status": "delivered",
+  "delivery": {
+    "status": "delivered",
+    "targetThreadId": "<target-task-id>",
+    "acceptedBy": "codex_desktop_owner",
+    "action": "started",
+    "transport": "desktop-ipc"
+  },
+  "handoff": {
+    "status": "recorded",
+    "requirementId": "<requirement-id>"
+  }
+}
+```
+
+If `prompt`, `sourceThreadId`, or another required value is missing, the same response returns `code=-1`, `status=failed`, and actionable `error.field`, `error.message`, and `error.retryable` values. If the target task accepted the message but the message-processing board update failed, the response uses `status=delivered_tracking_failed`. Do not resend the same content to the target; handle or report `handoff.status=tracking_failed` instead.
+
+Maintainers and WebGUI read the same Manager-owned state:
+
+```http
+GET /api/message-processing/board?routeId=<gateway-id>&limit=100
+```
+
+Items expose the stage, source message group, worker task, handoff, decision, send receipt, failure, overdue duration, and an idle-worker-without-outcome flag. This is a read-only view of Manager state, not a reconstruction from logs.
+
 ### Controlled outbound idempotency receipts
 
 Callers that must survive duplicate clicks, request timeouts, lost responses, Manager restarts, or concurrent requests may provide a stable `deliveryId`. Before entering Outbox, Manager persists a reservation under runtime `data/agent-reply-idempotency/`. The same `deliveryId` with the same payload executes once, and later POSTs return the original `sent/draft/blocked/failed` result. Reusing the ID with a different payload returns `409 conflict`; `reserved/sending/uncertain` states also fail closed and are never auto-replayed.
@@ -341,16 +442,43 @@ Callers must not edit UUIDs manually. Selecting a different task supplies its ID
   "cwd": "C:/Path/To/Your/Project",
   "sourceThreadId": "019f0000-0000-7000-8000-000000000002",
   "sourceAgentType": "plan_secretary",
+  "responsePolicy": "required",
+  "responseInstruction": "Return the result, verification evidence, and next action after completing the next step.",
   "prompt": "Continue with the new constraints and evidence.",
   "sandbox": "workspace-write"
 }
 ```
 
-An Agent sending to another Agent task must provide its own complete `sourceThreadId`. `sourceAgentType` accepts `primary_persona`, `message_processing`, `plan_secretary`, `plan_agent`, or the generic `agent`. Manager first verifies that Desktop still has the same unarchived task ID, then obtains the current left-sidebar name through the single task read model in `codexDesktopBridge.ts`. `agentThreads.ts`, Message Agents, heartbeat, and provenance templates must not read or override another task-name copy. It prepends the source Agent, task name, session ID, and workspace to the delivered text. The sender never supplies the source task name. Ordinary RabiRoute messages, initialization turns, and system notices are not Agent-to-Agent sends and may omit both fields.
+An Agent sending to another Agent task must provide its own complete `sourceThreadId`, `sourceAgentType`, and `responsePolicy`. `sourceAgentType` accepts `primary_persona`, `message_processing`, `plan_secretary`, `plan_agent`, or the generic `agent`. `responsePolicy` must be `required` or `none`. A required response also needs `responseInstruction`; Manager creates a `requestId` and includes the formal reply parameters in the target task's delivery. `none` means the target does not have to return a result for this delivery.
+
+A formal response uses the same `send` action. The responder must send `inReplyToRequestId`, `result`, and `nextAction` back to the original requester and choose `responsePolicy` again. Use `required` plus a new `responseInstruction` when the requester must act and report back; use `none` when the exchange ends with this response.
+
+```json
+{
+  "action": "send",
+  "threadId": "019f0000-0000-7000-8000-000000000002",
+  "cwd": "C:/Path/To/Your/Project",
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000001",
+  "sourceAgentType": "plan_agent",
+  "inReplyToRequestId": "requestId from the incoming delivery",
+  "result": "The investigation and evidence checks are complete.",
+  "nextAction": "The secretary updates the plan and decides whether implementation continues.",
+  "responsePolicy": "none",
+  "prompt": "Investigation result and evidence summary."
+}
+```
+
+Ordinary Codex final text is not a formal response. At the end of each target turn, the `Stop` Hook checks unanswered requests. If the response is still missing, Manager reminds the same exact target task five minutes after that turn ends. If the reminder-triggered turn also ends without a response, the next reminder is scheduled five minutes after that later turn. Request state is available through `GET /api/agent/requests` and `GET /api/agent/requests/:requestId`; maintainers can cancel an obsolete request with `POST /api/agent/requests/:requestId/cancel`.
+
+Manager first verifies that Desktop still has the same unarchived source task ID, then obtains the current left-sidebar name through the single task read model in `codexDesktopBridge.ts`. It prepends the source Agent, task name, session ID, and workspace to the delivered text. The sender never supplies the source task name. Ordinary RabiRoute messages, initialization turns, reminders, and system notices are not Agent-to-Agent sends and may omit source and response fields.
 
 `create` and `send` accept only a workspace already configured in RabiRoute. Agent-to-Agent sends also require a verifiable source task ID; `sourceAgentType` declares the sender's current responsibility, while Desktop remains authoritative for the task name and session ID. The `sandbox` field remains for interface compatibility; it does not override the target Desktop task's model, tools, sandbox, or approvals. Those capabilities belong to the Desktop owner. If Desktop is unavailable, IPC is not ready, or the task cannot be loaded, the call fails closed and does not fall back to app-server, CLI, or another Runtime.
 
 Agent-to-Agent prompt text must be a newly composed handoff for the target task. Manager rejects bodies containing `[rabi:bind]`, Message Agent initialization, or Plan Secretary initialization, and rejects a handoff whose source and target IDs are identical. A complete injected prompt must never be copied across tasks. The Message Agent pool also refuses to initialize or deliver when task resolution returns the Primary Persona task ID.
+
+The fixed developer instructions for `create` and every `send` follow-up add a workspace-delivery guard, including ordinary follow-ups without source-Agent fields. Unless the current user explicitly authorizes it, the Agent must not create an additional working copy, sparse checkout, copied project, or side workspace; stricter rules in the workspace `AGENTS.md` take precedence. PangHu has no task-level exception: only the official Main, Release, and Art working copies may be used, and old isolated, sparse, or clean-working-copy instructions are revoked. The Agent may say “fixed” or “ready for acceptance” only after the change is present in the workspace the user actually runs or reviews and the applicable resource binding, build or compilation, and runtime checks are complete.
+
+When the current Route enables **Require the RabiAgent message delivery API**, the `PreToolUse` Hook denies persistent Codex task tools such as `send_message_to_thread`, `handoff_thread`, `create_thread`, and `fork_thread` for that Route's Primary Persona, Plan Agents, Plan Secretaries, and Message Agents, and directs them to the Rabi parameters above. Ephemeral subagent collaboration tools are not covered. Turning the switch off disables only this bypass check; already tracked required-response requests continue their Stop checks and reminders. The bridge still reaches the same Desktop owner and is not a fallback Runtime.
 
 ## Plan API
 
@@ -490,9 +618,12 @@ Completed plans are archived by a role-knowledge snapshot after their latest `up
 ```http
 GET   /api/roles/:roleId/memory/recent
 GET   /api/roles/:roleId/memory/recent/:memoryId
+GET   /api/roles/:roleId/memory?counts=1
 POST  /api/roles/:roleId/memory/recent
 PATCH /api/roles/:roleId/memory/recent/:memoryId
 ```
+
+`counts=1` returns only recent-memory, consolidated-memory, and consolidation-run counts. It does not read or return memory card bodies; WebGUI uses it to populate tab counts when Plans & Memory is opened directly.
 
 ```json
 {
@@ -507,7 +638,9 @@ PATCH /api/roles/:roleId/memory/recent/:memoryId
 }
 ```
 
-`focus` must be a single line and `keywords` must contain at least one item. Reading by ID refreshes `viewedAt`; updating refreshes both `updatedAt` and `viewedAt`. Recent memory can be edited only inside the current fixed 24-hour activity window. That window is not yet a public persona configuration field.
+`focus` must be a single line and `keywords` must contain at least one item. Reading by ID refreshes `viewedAt`; updating refreshes both `updatedAt` and `viewedAt`. A true title/keyword recall hit refreshes both `viewedAt` and `recalledAt`. Recent-memory editing uses the later of `updatedAt` and `viewedAt` inside the current fixed 24-hour window. Consolidation instead uses the later of `updatedAt` and `recalledAt`, so a direct read does not postpone the 24/72-hour clock. These windows are not yet public persona configuration fields.
+
+For recent-memory lists, Manager dynamically supplies `lifecycle.triggersNextConsolidation` for the memory that reaches 72 hours first and `lifecycle.willEnterNextConsolidation` for each memory that will be older than the 24-hour input threshold at that same trigger time. The projection is cached with the memory catalog and invalidated after a create, update, or recall hit. Clients must not derive the candidate set from their local clocks.
 
 ## Write limits and validation
 
@@ -530,7 +663,7 @@ GET /api/roles/:roleId/memory/consolidated/:memoryId
 
 Consolidated memories have no normal PATCH endpoint. If a stable memory is wrong, write a corrective recent memory and let a later consolidation produce a new stable record. Reading a consolidated item by ID refreshes `viewedAt`.
 
-## Explicit memory consolidation
+## Automatic or explicit memory consolidation
 
 Current entry points:
 
@@ -549,7 +682,7 @@ POST /api/roles/:roleId/memory/consolidation-requests
 }
 ```
 
-The default request is due only when an unconsolidated recent memory has been inactive for more than 72 hours. Its input contains unconsolidated memories inactive for more than 24 hours. `force` skips the due check but does not include memories still inside the editable window. Time passing alone does not launch a resident background job.
+The default request is due only when an unconsolidated recent memory has not been updated or recalled for 72 hours. Its input contains unconsolidated memories whose latest update or recall is more than 24 hours old. `force` skips the due check but does not include memories still inside the input window. Manager automatically arms the earliest deadline and reevaluates activity when it fires.
 
 Submit the handler result to:
 

@@ -55,6 +55,7 @@
 - [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
+- [路径与目录规范](path-and-directory-conventions.md) — **当前维护规范**。区分软件目录、公开示例、本机运行数据和日志，并规定 API 中相对路径与业务 ID 的写法。
 - [PR 安全门禁](maintainer-security-gates.md) — **现行维护指南**。秘钥扫描、生产依赖审计、CodeQL、最小权限和合并保护要求。
 - [Windows 启动与打包](windows-launcher-and-packaging.md) — **现行指南**。Node/WebGUI 基线与 Qt/Windows 便利层。
 - [Manager 运行稳定性与故障证据](manager-runtime-resilience.md) — **现行指南**。崩溃日志、单实例、人格索引非致命持久化、watchdog 退避恢复与浸泡验收。
@@ -68,7 +69,7 @@
 - [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、热投递/人格关键词唤醒、人格声线与语言、双向 ASR/TTS 记录、不透明声纹/聚类证据和 RabiLink 中转。
 - [远端调用 TTS 与 ASR](user-guide/speech-api.md) — 应用 token、目标 PC、可复制命令、验收与错误恢复。
 - [Rabi 语音客户端](../desktop/rabi-voice-client/README.md) — 把会议室 Windows 电脑作为局域网远程麦克风和喇叭，切句与模型仍留在 RabiSpeech 主机。
-- [本地语音模型下载说明](local-speech-model-downloads.md) — 每个 TTS/ASR 模型的来源、下载、隔离环境与验证。
+- [本地语音模型下载说明](local-speech-model-downloads.md) — 使用模型管理页按需下载，并查看每个 TTS/ASR 模型的来源、隔离环境与验证要求。
 - [RabiSpeech 性能与功能报告](rabispeech-performance-report.md) — 六个 TTS、五个主要 ASR 的冷/热态、效果、硬件与 CUDA 问题。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。
@@ -78,7 +79,7 @@
 - [RabiLink 智能手表 / 手环健康消息端](rabilink-wearable-health.md) — **实验集成**。手机配置、结构化健康时间线、Agent 查询 API、阈值告警和小米 ADB 过渡桥。
 - [AIUI 到手机 / 原生眼镜方案的功能等价清单](rabilink-aiui-native-parity.md) — 按代码、自动化与真机证据逐项记录迁移完成度。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。
-- [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 用户状态、情景识别、用户个体模型和主动介入的目标合同与实施追踪，不等同于全部完成。
+- [RabiLink 主动智能需求](rabilink-active-intelligence-requirements.md) — 用户状态、情景识别、群消息命中计划/记忆后的处理闭环和主动介入的目标合同与实施追踪，不等同于全部完成。
 - [RabiLink 原生应用设计](rabilink-glasses-app-design.md) — 手机/眼镜体验设计。
 - [小爱接入技术路线](xiaoai-integration/xiaoai-rabiroute-intercept-route.md) — 小爱桥接方案，包含未实现 API 和未来路线。
 - [红外网关调研](xiaoai-integration/ir-remote-gateway-research.md) — 调研资料。

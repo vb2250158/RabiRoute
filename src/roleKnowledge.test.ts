@@ -6,19 +6,27 @@ import test from "node:test";
 import {
   createPlan,
   createRecentMemory,
+  completeMemoryConsolidation,
   getPlan,
   getRecentMemory,
   getRoleSkill,
+  listConsolidatedMemories,
   listPlans,
+  listRecentMemories,
   listRoleSkills,
+  markMemoryConsolidationRunDelivered,
   normalizeRoleContextInjection,
+  nextMemoryConsolidationTriggerAt,
   pendingMemoryConsolidation,
   planAcceptsGuidance,
   planApprovalGate,
   planIsBlocked,
+  presentRoleMemory,
+  presentRoleMemories,
   roleContextInjectionPolicy,
   planRequiresApproval,
   roleKnowledgeSnapshot,
+  subscribePlanUpdates,
   updatePlan,
   updateRecentMemory,
   validateRoleKnowledge
@@ -67,6 +75,79 @@ test("plan list cache is invalidated by canonical create and update writes", () 
   assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "Updated cache plan");
 });
 
+test("new memories use Markdown files while legacy JSON remains readable without duplication", () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "legacy-memory",
+    title: "Legacy memory",
+    focus: "Legacy compatibility",
+    content: "Legacy JSON content",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    keywords: ["legacy"]
+  });
+
+  const created = createRecentMemory(roleDir, {
+    id: "markdown-memory",
+    title: "Markdown memory",
+    focus: "Markdown storage",
+    content: "## Evidence\n\n![diagram](https://example.com/memory.png)\n\n- Stable fact",
+    source: { kind: "conversation", summary: "Memory source" },
+    keywords: ["markdown", "image"]
+  });
+  const markdownPath = path.join(roleDir, "memory", "recent", `${created.id}.md`);
+  assert.equal(fs.existsSync(markdownPath), true);
+  assert.equal(fs.existsSync(path.join(roleDir, "memory", "recent", `${created.id}.json`)), false);
+  const source = fs.readFileSync(markdownPath, "utf8");
+  assert.match(source, /^---\r?\n/);
+  assert.match(source, /title: "Markdown memory"/);
+  assert.match(source, /## Evidence/);
+  assert.match(source, /!\[diagram\]\(https:\/\/example\.com\/memory\.png\)/);
+
+  fs.writeFileSync(path.join(roleDir, "memory", "recent", `${created.id}.json`), JSON.stringify({
+    ...created,
+    title: "Stale JSON duplicate",
+    content: "This duplicate must lose to Markdown."
+  }), "utf8");
+  const memories = listRecentMemories(roleDir);
+  assert.equal(memories.length, 2);
+  assert.equal(memories.find((memory) => memory.id === created.id)?.title, "Markdown memory");
+  assert.equal(memories.find((memory) => memory.id === "legacy-memory")?.content, "Legacy JSON content");
+});
+
+test("canonical plan updates publish one event after persistence", () => {
+  const roleDir = makeRoleDir();
+  const created = createPlan(roleDir, {
+    id: "plan-update-event",
+    title: "Plan update event",
+    focus: "Notify Manager after the canonical plan write",
+    status: "进行中",
+    currentStepId: "work",
+    steps: [{ id: "work", title: "Work", status: "进行中" }],
+    keywords: ["event"]
+  });
+  const events: Array<{ roleDir: string; beforeTitle: string; afterTitle: string; persistedTitle?: string }> = [];
+  const unsubscribe = subscribePlanUpdates((event) => {
+    events.push({
+      roleDir: event.roleDir,
+      beforeTitle: event.before.title,
+      afterTitle: event.after.title,
+      persistedTitle: getPlan(event.roleDir, event.after.id)?.title
+    });
+  });
+  try {
+    updatePlan(roleDir, created.id, { title: "Updated through canonical writer" });
+  } finally {
+    unsubscribe();
+  }
+  assert.deepEqual(events, [{
+    roleDir: path.resolve(roleDir),
+    beforeTitle: "Plan update event",
+    afterTitle: "Updated through canonical writer",
+    persistedTitle: "Updated through canonical writer"
+  }]);
+});
+
 test("plan list cache observes direct external plan-file changes", async () => {
   const roleDir = makeRoleDir();
   const created = createPlan(roleDir, {
@@ -92,6 +173,53 @@ test("plan list cache observes direct external plan-file changes", async () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.equal(observedTitle, "Externally updated cache plan");
+});
+
+test("memory catalogs reuse unchanged reads and observe direct external file changes", async () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-cache-one",
+    title: "Memory cache one",
+    focus: "Cache memory reads",
+    content: "First memory",
+    createdAt: "2026-08-06T00:00:00.000Z",
+    updatedAt: "2026-08-06T00:00:00.000Z",
+    keywords: ["cache"]
+  });
+  writeConsolidatedMemory(roleDir, {
+    id: "consolidated-cache-one",
+    title: "Consolidated cache one",
+    focus: "Cache consolidated memory reads",
+    content: "First consolidated memory",
+    createdAt: "2026-08-06T00:00:00.000Z",
+    updatedAt: "2026-08-06T00:00:00.000Z",
+    keywords: ["cache"]
+  });
+
+  const firstRecent = listRecentMemories(roleDir);
+  const firstConsolidated = listConsolidatedMemories(roleDir);
+  assert.equal(listRecentMemories(roleDir), firstRecent);
+  assert.equal(listConsolidatedMemories(roleDir), firstConsolidated);
+
+  writeRecentMemory(roleDir, {
+    id: "memory-cache-two",
+    title: "Memory cache two",
+    focus: "Observe external memory writes",
+    content: "Second memory",
+    createdAt: "2026-08-06T00:01:00.000Z",
+    updatedAt: "2026-08-06T00:01:00.000Z",
+    keywords: ["cache"]
+  });
+
+  let refreshed = firstRecent;
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    refreshed = listRecentMemories(roleDir);
+    if (refreshed.length === 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(refreshed.length, 2);
+  assert.notEqual(refreshed, firstRecent);
 });
 
 test("plan list cache reparses only the externally changed plan file", { concurrency: false }, async () => {
@@ -421,14 +549,14 @@ test("context injection defaults focused and keeps a legacy rollback mode", () =
 });
 
 function readRecentMemory(roleDir: string, id: string): Record<string, unknown> {
-  return JSON.parse(fs.readFileSync(path.join(roleDir, "memory", "recent", `${id}.json`), "utf8")) as Record<string, unknown>;
+  return listRecentMemories(roleDir).find((memory) => memory.id === id) as unknown as Record<string, unknown>;
 }
 
 function readConsolidatedMemory(roleDir: string, id: string): Record<string, unknown> {
-  return JSON.parse(fs.readFileSync(path.join(roleDir, "memory", "consolidated", `${id}.json`), "utf8")) as Record<string, unknown>;
+  return listConsolidatedMemories(roleDir).find((memory) => memory.id === id) as unknown as Record<string, unknown>;
 }
 
-test("keyword recall touches memory viewedAt and delays consolidation", () => {
+test("keyword recall records recalledAt and delays consolidation", () => {
   const roleDir = makeRoleDir();
   writeRecentMemory(roleDir, {
     id: "memory-keyword",
@@ -447,6 +575,7 @@ test("keyword recall touches memory viewedAt and delays consolidation", () => {
   const touched = readRecentMemory(roleDir, "memory-keyword");
   assert.equal(touched.updatedAt, "2026-01-01T00:00:00.000Z");
   assert.equal(typeof touched.viewedAt, "string");
+  assert.equal(touched.recalledAt, touched.viewedAt);
   assert.equal(pendingMemoryConsolidation(roleDir, "api", 24, 72, false), null);
 });
 
@@ -464,10 +593,181 @@ test("reading or updating a recent memory refreshes viewedAt", () => {
   const read = getRecentMemory(roleDir, "memory-read");
   assert.equal(read?.updatedAt, "2026-01-01T00:00:00.000Z");
   assert.equal(typeof read?.viewedAt, "string");
+  assert.equal(read?.recalledAt, undefined);
 
   const updated = updateRecentMemory(roleDir, "memory-read", { content: "新内容" });
   assert.equal(updated.content, "新内容");
   assert.equal(updated.viewedAt, updated.updatedAt);
+  assert.equal(updated.recalledAt, undefined);
+});
+
+test("memory lifecycle presentation exposes Manager-owned 24 and 72 hour boundaries", () => {
+  const memory = {
+    id: "memory-lifecycle",
+    title: "生命周期",
+    focus: "显示近期记忆生命周期",
+    content: "生命周期内容",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    viewedAt: "2026-08-01T10:00:00.000Z",
+    recalledAt: "2026-08-01T06:00:00.000Z",
+    keywords: ["生命周期"]
+  };
+  const active = presentRoleMemory(memory, "recent", Date.parse("2026-08-02T05:59:59.000Z"));
+  assert.equal(active.lifecycle.activityAt, memory.recalledAt);
+  assert.equal(active.lifecycle.consolidationEligibleAt, "2026-08-02T06:00:00.000Z");
+  assert.equal(active.lifecycle.consolidationTriggerAt, "2026-08-04T06:00:00.000Z");
+  assert.equal(active.lifecycle.state, "active");
+
+  const eligible = presentRoleMemory(memory, "recent", Date.parse("2026-08-03T12:00:00.000Z"));
+  assert.equal(eligible.lifecycle.state, "eligible");
+  const due = presentRoleMemory(memory, "recent", Date.parse("2026-08-04T06:00:00.000Z"));
+  assert.equal(due.lifecycle.state, "trigger_due");
+});
+
+test("Manager projects the next consolidation trigger and cached candidate booleans from recall activity", () => {
+  const roleDir = makeRoleDir();
+  const memories = [
+    {
+      id: "memory-trigger",
+      title: "最不活跃",
+      focus: "触发下一次沉淀",
+      content: "最早到达 72 小时",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      recalledAt: "2026-08-01T06:00:00.000Z",
+      viewedAt: "2026-08-03T00:00:00.000Z",
+      keywords: ["触发"]
+    },
+    {
+      id: "memory-enters",
+      title: "会进入",
+      focus: "届时超过 24 小时",
+      content: "预计进入同一次沉淀",
+      createdAt: "2026-08-02T05:00:00.000Z",
+      updatedAt: "2026-08-02T05:00:00.000Z",
+      keywords: ["进入"]
+    },
+    {
+      id: "memory-stays",
+      title: "暂不进入",
+      focus: "届时不足 24 小时",
+      content: "不会进入同一次沉淀",
+      createdAt: "2026-08-03T07:00:00.000Z",
+      updatedAt: "2026-08-03T07:00:00.000Z",
+      keywords: ["暂不进入"]
+    }
+  ];
+
+  const presented = presentRoleMemories(roleDir, memories, "recent", Date.parse("2026-08-03T12:00:00.000Z"));
+  const trigger = presented.find((memory) => memory.id === "memory-trigger");
+  assert.equal(trigger?.lifecycle.activityAt, "2026-08-01T06:00:00.000Z");
+  assert.equal(trigger?.lifecycle.triggersNextConsolidation, true);
+  assert.equal(trigger?.lifecycle.willEnterNextConsolidation, true);
+  assert.equal(presented.find((memory) => memory.id === "memory-enters")?.lifecycle.willEnterNextConsolidation, true);
+  assert.equal(presented.find((memory) => memory.id === "memory-stays")?.lifecycle.willEnterNextConsolidation, false);
+});
+
+test("Manager exposes the exact next consolidation deadline for automatic scheduling", () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-deadline",
+    title: "自动沉淀截止时间",
+    focus: "Manager 安排下一次沉淀",
+    content: "到达 72 小时后自动触发。",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    recalledAt: "2026-08-01T06:00:00.000Z",
+    keywords: ["自动沉淀"]
+  });
+
+  assert.equal(
+    nextMemoryConsolidationTriggerAt(roleDir),
+    Date.parse("2026-08-04T06:00:00.000Z")
+  );
+});
+
+test("an overdue consolidation keeps the candidate ceiling from its original 72-hour trigger", () => {
+  const roleDir = makeRoleDir();
+  const now = Date.now();
+  const hoursAgo = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+  for (const memory of [
+    {
+      id: "memory-trigger",
+      title: "最早触发记忆",
+      focus: "固定逾期批次触发时刻",
+      content: "这条记忆在一百小时前停止活跃。",
+      createdAt: hoursAgo(100),
+      updatedAt: hoursAgo(100),
+      keywords: ["触发"]
+    },
+    {
+      id: "memory-original-candidate",
+      title: "原批次候选",
+      focus: "在原触发时刻已经超过二十四小时",
+      content: "这条记忆在六十小时前停止活跃。",
+      createdAt: hoursAgo(60),
+      updatedAt: hoursAgo(60),
+      keywords: ["原候选"]
+    },
+    {
+      id: "memory-late-candidate",
+      title: "后来才变旧",
+      focus: "执行延迟期间不得补入旧批次",
+      content: "现在已经超过二十四小时，但原触发时刻还没有。",
+      createdAt: hoursAgo(30),
+      updatedAt: hoursAgo(30),
+      keywords: ["后到"]
+    }
+  ]) {
+    writeRecentMemory(roleDir, memory);
+  }
+
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, false);
+  assert.ok(request);
+  assert.deepEqual(request.memories.map((memory) => memory.id).sort(), [
+    "memory-original-candidate",
+    "memory-trigger"
+  ]);
+  assert.deepEqual(request.run.inputMemoryIds, [
+    "memory-original-candidate",
+    "memory-trigger"
+  ]);
+  const delivered = markMemoryConsolidationRunDelivered(roleDir, request.run.id, "2026-08-07T10:00:00.000Z");
+  assert.equal(delivered.deliveredAt, "2026-08-07T10:00:00.000Z");
+  assert.equal(pendingMemoryConsolidation(roleDir, "auto")?.run.deliveredAt, delivered.deliveredAt);
+});
+
+test("memory writes invalidate the cached consolidation projection while a direct read does not change its trigger", () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-oldest",
+    title: "原最不活跃记忆",
+    focus: "验证沉淀投影缓存失效",
+    content: "最初先到达 72 小时",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    keywords: ["缓存失效"]
+  });
+  writeRecentMemory(roleDir, {
+    id: "memory-second",
+    title: "第二不活跃记忆",
+    focus: "验证沉淀投影缓存失效",
+    content: "更新第一条后成为触发项",
+    createdAt: "2026-08-02T00:00:00.000Z",
+    updatedAt: "2026-08-02T00:00:00.000Z",
+    keywords: ["缓存失效"]
+  });
+
+  const triggerId = () => presentRoleMemories(roleDir, listRecentMemories(roleDir), "recent")
+    .find((memory) => memory.lifecycle.triggersNextConsolidation)?.id;
+  assert.equal(triggerId(), "memory-oldest");
+
+  getRecentMemory(roleDir, "memory-oldest");
+  assert.equal(triggerId(), "memory-oldest");
+
+  updateRecentMemory(roleDir, "memory-oldest", { content: "已更新并重新计算沉淀时间" });
+  assert.equal(triggerId(), "memory-second");
 });
 
 test("updating a stale recent memory requires an explicit read first", () => {
@@ -513,6 +813,82 @@ test("consolidated memories can enter required read items and refresh viewedAt",
   const touched = readConsolidatedMemory(roleDir, "memory-stable");
   assert.equal(touched.updatedAt, "2026-01-01T00:00:00.000Z");
   assert.equal(typeof touched.viewedAt, "string");
+  assert.equal(touched.recalledAt, touched.viewedAt);
+});
+
+test("consolidated sources are not consolidated again while consolidated output remains recallable", () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-source",
+    title: "已沉淀来源",
+    focus: "已完成沉淀的来源记忆",
+    content: "来源内容",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    consolidatedAt: "2026-01-05T00:00:00.000Z",
+    consolidationRunId: "run-completed",
+    keywords: ["稳定结论"]
+  });
+  writeConsolidatedMemory(roleDir, {
+    id: "memory-output",
+    title: "已沉淀结论",
+    focus: "可继续召回的沉淀结论",
+    content: "沉淀后的稳定内容",
+    createdAt: "2026-01-05T00:00:00.000Z",
+    updatedAt: "2026-01-05T00:00:00.000Z",
+    inputMemoryIds: ["memory-source"],
+    consolidationRunId: "run-completed",
+    keywords: ["稳定结论"]
+  });
+
+  assert.equal(pendingMemoryConsolidation(roleDir, "api", 24, 72, true), null);
+  const snapshot = roleKnowledgeSnapshot(roleDir, "请读取稳定结论");
+  assert.equal(snapshot.requiredReadItems.some((item) => item.id === "memory-source"), false);
+  assert.equal(snapshot.requiredReadItems.some((item) => item.id === "memory-output" && item.type === "consolidated_memory"), true);
+  const recalled = readConsolidatedMemory(roleDir, "memory-output");
+  assert.equal(typeof recalled.recalledAt, "string");
+});
+
+test("large consolidation writes yield to the Manager event loop", async () => {
+  const roleDir = makeRoleDir();
+  for (let index = 0; index < 48; index += 1) {
+    writeRecentMemory(roleDir, {
+      id: `memory-batch-${index}`,
+      title: `批量记忆 ${index}`,
+      focus: `批量沉淀主题 ${index}`,
+      content: `需要沉淀的内容 ${index}`,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      keywords: ["批量沉淀"]
+    });
+  }
+
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+
+  let managerTurnRan = false;
+  setTimeout(() => {
+    managerTurnRan = true;
+  }, 0);
+
+  const completion = completeMemoryConsolidation(roleDir, request.run.id, [{
+    id: "memory-batch-output",
+    title: "批量沉淀结果",
+    focus: "验证批量写入不会阻塞 Manager",
+    content: "批量记忆已经整理完成。",
+    inputMemoryIds: request.run.inputMemoryIds,
+    keywords: ["批量沉淀"]
+  }]);
+  const duplicateCompletion = completeMemoryConsolidation(roleDir, request.run.id, []);
+  assert.equal(duplicateCompletion, completion);
+  const result = await completion;
+
+  assert.equal(managerTurnRan, true);
+  assert.equal(result.run.status, "completed");
+  assert.equal(
+    listRecentMemories(roleDir).filter((memory) => memory.consolidationRunId === request.run.id).length,
+    48
+  );
 });
 
 test("active recent memories get a small boost without overwhelming explicit matches", () => {
@@ -883,6 +1259,37 @@ test("plans persist an exact Codex task binding and completion hook target", () 
   assert.throws(() => updatePlan(roleDir, plan.id, {
     taskBinding: { agentType: "remote", sessionId: "remote-session" }
   }), /Unsupported plan taskBinding agentType/);
+});
+
+test("plans persist the responsible secretary separately from the business task binding", () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    title: "秘书与业务任务分离",
+    focus: "秘书与业务任务分离",
+    status: "未开始",
+    steps: [{ id: "run", title: "运行绑定任务", status: "未开始" }],
+    secretaryBinding: {
+      agentType: "codex",
+      sessionId: "session-plan-secretary",
+      sessionTitle: "主人格 协助处理计划1",
+      workspace: "C:\\workspace\\route",
+      assignedAt: "2026-08-06T00:00:00.000Z"
+    },
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "session-plan-worker",
+      sessionTitle: "计划执行任务",
+      workspace: "C:\\workspace\\project"
+    },
+    keywords: ["会话任务"]
+  });
+
+  assert.equal(plan.secretaryBinding?.sessionId, "session-plan-secretary");
+  assert.equal(plan.taskBinding?.sessionId, "session-plan-worker");
+  assert.notEqual(plan.secretaryBinding?.sessionId, plan.taskBinding?.sessionId);
+  assert.throws(() => updatePlan(roleDir, plan.id, {
+    secretaryBinding: { agentType: "codex", sessionId: "missing-workspace" }
+  }), /secretaryBinding\.workspace is required/);
 });
 
 test("role knowledge validation reports legacy items that exceed current limits", () => {

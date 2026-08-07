@@ -9,6 +9,7 @@ import {
   CodexDesktopBridge,
   listCodexDesktopThreads,
   readCodexDesktopThread,
+  type CodexDesktopDelivery,
   type CodexDesktopReasoningEffort,
   type CodexDesktopThread
 } from "./codexDesktopBridge.js";
@@ -40,6 +41,17 @@ export type CodexIdleNotificationResult = {
 
 export type CodexTurnSandbox = "read-only" | "workspace-write" | "danger-full-access";
 
+export function resolvePrimaryCodexTurnOptions(settings: {
+  agentModel?: string;
+  agentReasoningEffort?: CodexDesktopReasoningEffort;
+}): { model?: string; reasoningEffort?: CodexDesktopReasoningEffort } {
+  const model = settings.agentModel?.trim();
+  return {
+    ...(model ? { model } : {}),
+    ...(settings.agentReasoningEffort ? { reasoningEffort: settings.agentReasoningEffort } : {})
+  };
+}
+
 export type CodexThreadSummary = {
   id: string;
   title: string;
@@ -47,6 +59,8 @@ export type CodexThreadSummary = {
   cwd?: string;
   archived?: boolean;
 };
+
+export type CodexThreadRuntimeStatus = "active" | "idle" | "notLoaded" | "unavailable";
 
 export type CodexThreadCreateParams = {
   title: string;
@@ -369,9 +383,9 @@ async function deliverDesktopMessage(params: {
   sandbox: CodexTurnSandbox;
   model?: string;
   reasoningEffort?: CodexDesktopReasoningEffort;
-}): Promise<string | null> {
+}): Promise<CodexDesktopDelivery & { warning?: string }> {
   const preserveEmptyTaskTitle = !params.thread.firstUserMessage;
-  await desktopBridge.deliver({
+  const delivery = await desktopBridge.deliver({
     threadId: params.thread.id,
     prompt: params.prompt,
     cwd: params.thread.cwd,
@@ -384,10 +398,13 @@ async function deliverDesktopMessage(params: {
       await waitForDesktopFirstMessage(params.thread.id);
       await setCodexTaskName(params.thread.id, params.thread.title, params.thread.cwd);
     } catch (error) {
-      return `Desktop 已接收消息，但任务名恢复失败：${errorMessage(error)}`;
+      return {
+        ...delivery,
+        warning: `Desktop 已接收消息，但任务名恢复失败：${errorMessage(error)}`
+      };
     }
   }
-  return null;
+  return delivery;
 }
 
 function asSummary(thread: CodexDesktopThread): CodexThreadSummary {
@@ -407,7 +424,7 @@ export async function listCodexThreads(options: {
 export async function readCodexThread(threadId: string): Promise<unknown> {
   const thread = readCodexDesktopThread(threadId);
   if (!thread) throw new Error(`Codex Desktop task was not found: ${threadId}`);
-  const active = await codexDesktopThreadIsActive(thread);
+  const status = await codexDesktopThreadRuntimeStatus(thread);
   return {
     id: thread.id,
     title: thread.title,
@@ -416,8 +433,23 @@ export async function readCodexThread(threadId: string): Promise<unknown> {
     archived: thread.archived,
     source: "Codex Desktop state",
     rolloutPath: thread.rolloutPath,
-    active
+    active: status === "active",
+    status: { type: status }
   };
+}
+
+export function codexThreadRuntimeStatusFromSourcesForTest(
+  desktopReady: boolean,
+  desktopActiveSinceMs: number | null,
+  rollout: CodexRolloutActivity
+): CodexThreadRuntimeStatus {
+  if (!desktopReady) return "unavailable";
+  if (rollout.state === "active") return "active";
+  if (desktopActiveSinceMs != null && (rollout.state === "unknown" || desktopActiveSinceMs > rollout.observedAtMs)) {
+    return "active";
+  }
+  if (rollout.state === "inactive") return "idle";
+  return "notLoaded";
 }
 
 export function codexThreadIsActiveFromSourcesForTest(
@@ -431,10 +463,15 @@ export function codexThreadIsActiveFromSourcesForTest(
 }
 
 async function codexDesktopThreadIsActive(thread: CodexDesktopThread): Promise<boolean> {
+  return (await codexDesktopThreadRuntimeStatus(thread)) === "active";
+}
+
+async function codexDesktopThreadRuntimeStatus(thread: CodexDesktopThread): Promise<CodexThreadRuntimeStatus> {
+  const desktopReady = await desktopBridge.isReady();
   const rollout = thread.rolloutPath
     ? await readCodexRolloutActivity(thread.rolloutPath)
     : { state: "unknown", observedAtMs: 0 } satisfies CodexRolloutActivity;
-  return codexThreadIsActiveFromSourcesForTest(desktopBridge.threadActiveSince(thread.id), rollout);
+  return codexThreadRuntimeStatusFromSourcesForTest(desktopReady, desktopBridge.threadActiveSince(thread.id), rollout);
 }
 
 export async function renameCodexThread(params: {
@@ -524,9 +561,9 @@ export async function sendCodexThreadMessage(params: {
   sandbox: CodexTurnSandbox;
   model?: string;
   reasoningEffort?: CodexDesktopReasoningEffort;
-}): Promise<void> {
+}): Promise<CodexDesktopDelivery & { warning?: string }> {
   const thread = await waitForCodexDesktopThreadForTest({ threadId: params.threadId, cwd: params.cwd });
-  await deliverDesktopMessage({
+  return deliverDesktopMessage({
     thread,
     prompt: params.prompt,
     sandbox: params.sandbox,
@@ -649,6 +686,7 @@ function recordDeliveredNotification(thread: CodexDesktopThread, now: Date, deli
 }
 
 async function deliverNotification(message: string, deliveryId: string): Promise<CodexMonitorThread> {
+  const turnOptions = resolvePrimaryCodexTurnOptions(config);
   const resolution = await resolveAndDeliverCodexSession({
     threadId: currentCodexThreadId(),
     title: config.codexThreadName,
@@ -656,7 +694,12 @@ async function deliverNotification(message: string, deliveryId: string): Promise
     prompt: message
   }, {
     ...codexSessionDependencies(),
-    deliver: ({ thread, prompt }) => deliverDesktopMessage({ thread, prompt, sandbox: "workspace-write" }).then(() => undefined)
+    deliver: ({ thread, prompt }) => deliverDesktopMessage({
+      thread,
+      prompt,
+      sandbox: "workspace-write",
+      ...turnOptions
+    }).then(() => undefined)
   }, ({ thread }) => {
     bindDesktopThread(thread);
   });
@@ -689,7 +732,12 @@ export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNot
     const deliveryId = randomUUID();
     recordAcceptedDelivery(deliveryId);
     try {
-      await deliverDesktopMessage({ thread, prompt: message, sandbox: "workspace-write" });
+      await deliverDesktopMessage({
+        thread,
+        prompt: message,
+        sandbox: "workspace-write",
+        ...resolvePrimaryCodexTurnOptions(config)
+      });
       return {
         status: "delivered",
         thread: recordDeliveredNotification(thread, new Date(), deliveryId)

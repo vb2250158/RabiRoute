@@ -18,7 +18,14 @@ test("primary Agent selector belongs to the Agent section before the Agent list"
 
 test("Codex managed-task controls are rendered through capability gates", () => {
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'messageProcessingAgent'\)/);
+  assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'memoryConsolidationAgent'\)/);
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'planAssistantSessions'\)/);
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'hooks'\)/);
   assert.doesNotMatch(source, /此 Agent 类型暂时只保存配置/);
+});
+
+test("Codex exposes an opt-in dedicated memory consolidation Agent with the Terra default", () => {
+  assert.match(source, /gateway\.codexMemoryConsolidationAgentEnabled === true/);
+  assert.match(source, /DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL/);
+  assert.match(source, /记忆整理/);
 });

@@ -9,6 +9,7 @@ import {
   routeScopedOverviewUrl,
   routeScopedPageFromPath,
   routeScopedPathForCurrentPage,
+  routeScopedPersonaDocumentPath,
   routeScopedPersonaPath,
   routeScopedRuntimePath,
   routeScopedSpeechPath
@@ -22,6 +23,7 @@ test("builds Route-scoped overview and knowledge paths from a config name", () =
   assert.equal(routeScopedKnowledgePath(""), "/knowledge");
   assert.equal(routeScopedAdaptersPath("main route"), "/routes/main%20route/adapters");
   assert.equal(routeScopedPersonaPath("main route"), "/routes/main%20route/persona");
+  assert.equal(routeScopedPersonaDocumentPath("main route"), "/routes/main%20route/persona/document");
   assert.equal(routeScopedSpeechPath("main route"), "/routes/main%20route/speech");
   assert.equal(routeScopedRuntimePath("main route"), "/routes/main%20route/runtime");
   assert.equal(routeScopedAdaptersPath(""), "/routes");
@@ -31,9 +33,11 @@ test("builds Route-scoped overview and knowledge paths from a config name", () =
 test("maps every Route-aware sidebar page to a stable scoped URL", () => {
   assert.equal(routeScopedPageFromPath("/routes/main/adapters"), "adapters");
   assert.equal(routeScopedPageFromPath("/persona/main"), "persona");
+  assert.equal(routeScopedPageFromPath("/routes/main/persona/document"), "persona");
   assert.equal(routeScopedPageFromPath("/speech"), "speech");
   assert.equal(routeScopedPageFromPath("/runtime"), "runtime");
   assert.equal(routeScopedPathForCurrentPage("next route", "/routes/main/persona"), "/routes/next%20route/persona");
+  assert.equal(routeScopedPathForCurrentPage("next route", "/routes/main/persona/document"), "/routes/next%20route/persona/document");
   assert.equal(routeScopedPathForCurrentPage("next route", "/docs"), "");
 });
 
@@ -44,6 +48,7 @@ test("recognizes the selected Route on scoped overview, configuration, persona, 
   assert.equal(routeKeyFromWebguiHash("#/persona/%E6%98%9F%E6%B5%B7"), "星海");
   assert.equal(routeKeyFromWebguiHash("#/routes/main/adapters"), "main");
   assert.equal(routeKeyFromWebguiHash("#/routes/main/persona"), "main");
+  assert.equal(routeKeyFromWebguiHash("#/routes/main/persona/document"), "main");
   assert.equal(routeKeyFromWebguiHash("#/routes/main/speech"), "main");
   assert.equal(routeKeyFromWebguiHash("#/routes/main/runtime"), "main");
   assert.equal(routeKeyFromWebguiHash("#/knowledge"), "");

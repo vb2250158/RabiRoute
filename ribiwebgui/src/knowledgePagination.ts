@@ -36,3 +36,19 @@ export function shouldAutoLoadNextKnowledgeBatch(
 ): boolean {
   return sentinelIsIntersecting && !directoryJumpInProgress;
 }
+
+export async function drainKnowledgePages(options: {
+  nextCursor: () => string;
+  shouldContinue: () => boolean;
+  loadNextPage: () => Promise<void>;
+  yieldToUi?: () => Promise<void>;
+}): Promise<void> {
+  while (options.shouldContinue()) {
+    const cursor = options.nextCursor();
+    if (!cursor) return;
+    await options.yieldToUi?.();
+    if (!options.shouldContinue()) return;
+    await options.loadNextPage();
+    if (options.nextCursor() === cursor) return;
+  }
+}

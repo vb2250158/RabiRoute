@@ -24,6 +24,10 @@ The published Paraformer file-transcription contract accepts publicly reachable 
 
 ## Install
 
+The standard RabiRoute Windows package does not install speech-recognition, speech-synthesis dependencies, or models by default. Run the commands below only when speech is needed. `install.ps1` installs dependencies into the plugin-private directory and creates the Windows runtime; `install_models.ps1` still installs only the models selected by the user.
+
+Regular users can instead open **Model Management** in RibiWebGUI (`/#/models`): prepare the speech environment once, then download individual weights from the project allowlist. The page accepts no arbitrary download URL or local path and distinguishes **weights downloaded** from **runtime ready**. Model families that require isolated Python environments still need the setup described in the download guide.
+
 ```powershell
 cd plugin-adapters\rabi-speech
 .\scripts\install.ps1

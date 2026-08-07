@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { listRecentMemories } from "../roleKnowledge.js";
 import { RabiContextManager, requiredReadContextKey } from "./rabiContextManager.js";
 
 function fixture(): { root: string; roleDir: string; memoryPath: string; completedPlanPath: string } {
@@ -68,7 +69,7 @@ test("message delivery performs the normal viewedAt and archive lifecycle", (t) 
     signalText: "统一管理"
   });
   assert.equal(resolution.knowledge.requiredReadItems[0]?.id, "memory-hook");
-  assert.equal(typeof JSON.parse(fs.readFileSync(data.memoryPath, "utf8")).viewedAt, "string");
+  assert.equal(typeof listRecentMemories(data.roleDir).find((memory) => memory.id === "memory-hook")?.viewedAt, "string");
   assert.equal(fs.existsSync(data.completedPlanPath), false);
 });
 
@@ -109,7 +110,7 @@ test("seen reasoning context does not refresh viewedAt again", (t) => {
   });
   const item = first.knowledge.requiredReadItems[0];
   assert.ok(item);
-  const firstViewedAt = JSON.parse(fs.readFileSync(data.memoryPath, "utf8")).viewedAt;
+  const firstViewedAt = listRecentMemories(data.roleDir).find((memory) => memory.id === "memory-hook")?.viewedAt;
   const second = manager.resolve({
     kind: "reasoning_post_tool",
     source: "codex_hook",
@@ -119,5 +120,5 @@ test("seen reasoning context does not refresh viewedAt again", (t) => {
     seenContextKeys: [requiredReadContextKey(item)]
   });
   assert.equal(second.knowledge.requiredReadItems[0]?.id, "memory-hook");
-  assert.equal(JSON.parse(fs.readFileSync(data.memoryPath, "utf8")).viewedAt, firstViewedAt);
+  assert.equal(listRecentMemories(data.roleDir).find((memory) => memory.id === "memory-hook")?.viewedAt, firstViewedAt);
 });

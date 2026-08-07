@@ -1065,7 +1065,7 @@
           <div class="section-index">01 / FLOW</div>
           <div class="section-title">
             <h2 id="architecture-title">消息从进入到回复的完整架构</h2>
-            <p>消息组保存待处理队列和短工作状态。调度器优先复用处理过原消息组、同端同会话同人、同端同会话或同端的消息处理 Agent。</p>
+            <p>消息组保存待处理队列和短工作状态。调度器优先复用处理过原消息组、同端同会话同人、同端同会话或同端的消息处理 Agent。只有 Codex 当前明确为空闲的任务才作为普通空闲候选；尚未加载的已有任务会直接恢复使用。</p>
           </div>
         </div>
 
@@ -1148,7 +1148,7 @@
                   <h3>消息处理 Agent</h3>
                   <p>Agent 卡片开启消息处理模式后，才能被选择或动态创建。</p>
                 </article>
-                <div class="inline-note">同一消息组同一时间只由一个消息处理 Agent 消费；只是同群或同消息端、但属于另一消息组时，可以使用其它 Agent 并行处理。</div>
+                <div class="inline-note">同一消息组同一时间只由一个消息处理 Agent 消费；只是同群或同消息端、但属于另一消息组时，可以使用其它 Agent 并行处理。Desktop 离线或当前状态不可读取时，消息留在队列中等待恢复，不会依据本地 JSON 继续创建任务。</div>
               </div>
             </div>
 
@@ -1305,9 +1305,9 @@
           </article>
           <article class="policy-card custom">
             <span class="policy-id">P-03 / CUSTOM</span>
-            <h3>两个独立开关</h3>
-            <p>消息端卡片开启消息组；Agent 卡片开启消息处理 Agent 模式。</p>
-            <div class="timing"><strong>WebGUI</strong><span>入口规则与 Agent 资格分开</span></div>
+            <h3>消息组默认开启</h3>
+            <p>聊天消息自动使用消息组；Codex 卡片只控制是否交给专职消息处理 Agent，并显示处理看板。</p>
+            <div class="timing"><strong>WebGUI</strong><span>等待参数、Agent 资格和看板分开</span></div>
           </article>
           <article class="policy-card custom">
             <span class="policy-id">P-04 / MODEL</span>
@@ -1323,7 +1323,7 @@
           <div class="section-index">04 / DELIVERY</div>
           <div class="section-title">
             <h2 id="delivery-title">Agent 写回复，RabiRoute 发送</h2>
-            <p>四类 Agent 都只生成结果或回复请求。发送成功只更新状态；失败、需要继续处理或对方又回复时，才把新情况交回原消息组。</p>
+            <p>消息处理 Agent 可以参与普通群讨论、提出建议和补充风险。直接 @、直接回复、私聊和计划进展由 Manager 建立必须处理项；普通群消息仍由 Agent 判断是否适合参与。</p>
           </div>
         </div>
 
@@ -1336,6 +1336,7 @@
               <li>同一消息组同时只由一个消息处理 Agent 消费</li>
               <li>熟悉度匹配只使用卡片已开启消息处理模式的 Agent</li>
               <li>计划实施仍由原 taskBinding 对应的计划 Agent 负责</li>
+              <li>不适合插话时也要通过接口提交原因，不能让任务安静结束</li>
             </ul>
           </article>
           <article class="responsibility-card">
@@ -1345,6 +1346,16 @@
               <li>回复请求不等于已经发送</li>
               <li>只有平台回执证明发送结果</li>
               <li>失败恢复不依赖 Agent 记住重试次数</li>
+            </ul>
+          </article>
+          <article class="responsibility-card">
+            <h3>看板：Manager 负责跟踪</h3>
+            <p>同一份状态记录消息组停在哪一步、谁在处理、是否转交、为什么没回复、是否发送失败和已超时多久。</p>
+            <ul class="check-list">
+              <li>只有 Outbox status=sent 才算外部消息完成</li>
+              <li>Agent 空闲但没有提交结果会显示为异常</li>
+              <li>一个计划可以保留多个来源群或私聊，并分别通知</li>
+              <li>计划写入事件直接生成通知，不定时扫描目录</li>
             </ul>
           </article>
         </div>

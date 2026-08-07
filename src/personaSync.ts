@@ -63,6 +63,11 @@ export type PersonaSyncConflict = {
   baseHash?: string;
 };
 
+export type PersonaSyncConflictScanOptions = {
+  pauseEveryEntries?: number;
+  pauseMs?: number;
+};
+
 export type PersonaSyncConflictResolutionCommand = {
   conflictId: string;
   action: "keep_local" | "use_remote" | "use_merged";
@@ -90,6 +95,31 @@ function sha256(value: Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function conflictEvidenceIdentity(
+  roleId: string,
+  relativePath: string,
+  peerId: string | undefined,
+  metadata: { remoteDeleted?: boolean; remoteHash: string; baseHash?: string }
+): string {
+  return JSON.stringify([
+    roleId,
+    relativePath,
+    String(peerId || ""),
+    metadata.remoteDeleted === true,
+    metadata.remoteHash,
+    String(metadata.baseHash || "")
+  ]);
+}
+
+function canonicalConflictFileName(
+  roleId: string,
+  relativePath: string,
+  peerId: string | undefined,
+  metadata: { remoteDeleted?: boolean; remoteHash: string; baseHash?: string }
+): string {
+  return `evidence-${sha256(Buffer.from(conflictEvidenceIdentity(roleId, relativePath, peerId, metadata), "utf8"))}`;
+}
+
 function safeRelativePath(value: unknown): string {
   const normalized = String(value ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
   if (!normalized || normalized.length > 1_000) throw new Error("Persona sync path is required.");
@@ -111,6 +141,49 @@ function walkConflictFiles(root: string, current = ""): string[] {
       ? [relative.replace(/\\/g, "/")]
       : [];
   });
+}
+
+const LEGACY_CONFLICT_TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-/;
+
+async function latestConflictCandidateIds(
+  root: string,
+  options: PersonaSyncConflictScanOptions = {}
+): Promise<string[]> {
+  const candidates = new Map<string, string>();
+  const pauseEveryEntries = Math.max(0, Math.floor(options.pauseEveryEntries ?? 0));
+  const pauseMs = Math.max(0, Math.floor(options.pauseMs ?? 0));
+  let visitedEntries = 0;
+  async function visit(current = ""): Promise<void> {
+    const directory = path.join(root, current);
+    let entries: fs.Dir;
+    try {
+      entries = await fs.promises.opendir(directory, { bufferSize: 256 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
+      throw error;
+    }
+    for await (const entry of entries) {
+      visitedEntries += 1;
+      if (pauseEveryEntries > 0 && pauseMs > 0 && visitedEntries % pauseEveryEntries === 0) {
+        await new Promise<void>(resolve => setTimeout(resolve, pauseMs));
+      }
+      if (entry.isSymbolicLink()) continue;
+      const relative = current ? `${current}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await visit(relative);
+        continue;
+      }
+      if (!entry.isFile() || entry.name.endsWith(".meta.json")) continue;
+      const parent = current.replace(/\\/g, "/");
+      const evidenceName = entry.name.replace(LEGACY_CONFLICT_TIMESTAMP_PREFIX, "");
+      const key = `${parent}\u0000${evidenceName}`;
+      const normalized = relative.replace(/\\/g, "/");
+      const previous = candidates.get(key);
+      if (!previous || normalized.localeCompare(previous) > 0) candidates.set(key, normalized);
+    }
+  }
+  await visit();
+  return [...candidates.values()];
 }
 
 function assertNoSymbolicLinks(root: string, target: string): void {
@@ -186,6 +259,9 @@ function mergeJsonl(local: Buffer, remote: Buffer): { content?: Buffer; conflict
 
 export class PersonaSyncService {
   private readonly manifestIndex: PersonaSyncManifestIndex;
+  private readonly conflictListCache = new Map<string, PersonaSyncConflict[]>();
+  private readonly conflictListInFlight = new Map<string, Promise<PersonaSyncConflict[]>>();
+  private conflictCatalogGeneration = 0;
 
   constructor(
     readonly rolesRoot: () => string,
@@ -245,14 +321,81 @@ export class PersonaSyncService {
     const requestedRoleId = roleId ? sanitizeRoleId(roleId) : "";
     if (roleId && !requestedRoleId) throw new Error("Invalid persona id.");
     const root = path.join(this.stateRoot, "conflicts");
-    return walkConflictFiles(root).flatMap(conflictId => {
+    const conflictIds = requestedRoleId
+      ? walkConflictFiles(path.join(root, requestedRoleId)).map(conflictId => `${requestedRoleId}/${conflictId}`)
+      : walkConflictFiles(root);
+    const seenEvidence = new Set<string>();
+    return conflictIds.sort().reverse().flatMap(conflictId => {
       try {
+        const evidenceKey = this.conflictEvidenceKey(conflictId) || `conflict:${conflictId}`;
+        if (seenEvidence.has(evidenceKey)) return [];
+        seenEvidence.add(evidenceKey);
         const conflict = this.conflictEntry(conflictId);
         return !requestedRoleId || conflict.roleId === requestedRoleId ? [conflict] : [];
       } catch {
         return [];
       }
     }).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.conflictId.localeCompare(right.conflictId));
+  }
+
+  listConflictsAsync(
+    roleId?: string,
+    options: PersonaSyncConflictScanOptions = {}
+  ): Promise<PersonaSyncConflict[]> {
+    return this.listConflictsUsing(roleId, async requestedRoleId => {
+      const conflictsRoot = path.join(this.stateRoot, "conflicts");
+      const scanRoot = requestedRoleId ? path.join(conflictsRoot, requestedRoleId) : conflictsRoot;
+      const prefix = requestedRoleId ? `${requestedRoleId}/` : "";
+      const candidateIds = (await latestConflictCandidateIds(scanRoot, options)).map(conflictId => `${prefix}${conflictId}`);
+      const seenEvidence = new Set<string>();
+      const conflicts: PersonaSyncConflict[] = [];
+      for (let index = 0; index < candidateIds.length; index += 1) {
+        if (index > 0 && index % 4 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+        if (options.pauseEveryEntries && options.pauseMs && index > 0 && index % options.pauseEveryEntries === 0) {
+          await new Promise<void>(resolve => setTimeout(resolve, options.pauseMs));
+        }
+        const conflictId = candidateIds[index]!;
+        try {
+          const evidenceKey = this.conflictEvidenceKey(conflictId) || `conflict:${conflictId}`;
+          if (seenEvidence.has(evidenceKey)) continue;
+          seenEvidence.add(evidenceKey);
+          conflicts.push(this.conflictEntry(conflictId));
+        } catch {
+          continue;
+        }
+      }
+      return conflicts;
+    });
+  }
+
+  listConflictsUsing(
+    roleId: string | undefined,
+    load: (requestedRoleId?: string) => Promise<PersonaSyncConflict[]>
+  ): Promise<PersonaSyncConflict[]> {
+    const requestedRoleId = roleId ? sanitizeRoleId(roleId) : "";
+    if (roleId && !requestedRoleId) return Promise.reject(new Error("Invalid persona id."));
+    const cacheKey = requestedRoleId || "*";
+    const cached = this.conflictListCache.get(cacheKey);
+    if (cached) return Promise.resolve(cached);
+    const inFlight = this.conflictListInFlight.get(cacheKey);
+    if (inFlight) return inFlight;
+    const generation = this.conflictCatalogGeneration;
+    const scan = (async () => {
+      const conflicts = await load(requestedRoleId || undefined);
+      conflicts.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.conflictId.localeCompare(right.conflictId));
+      if (generation === this.conflictCatalogGeneration) this.conflictListCache.set(cacheKey, conflicts);
+      return conflicts;
+    })().finally(() => {
+      this.conflictListInFlight.delete(cacheKey);
+    });
+    this.conflictListInFlight.set(cacheKey, scan);
+    return scan;
+  }
+
+  conflictListSnapshot(roleId?: string): PersonaSyncConflict[] | undefined {
+    const requestedRoleId = roleId ? sanitizeRoleId(roleId) : "";
+    if (roleId && !requestedRoleId) throw new Error("Invalid persona id.");
+    return this.conflictListCache.get(requestedRoleId || "*");
   }
 
   readConflict(conflictId: string): { conflict: PersonaSyncConflict; content: Buffer } {
@@ -274,6 +417,15 @@ export class PersonaSyncService {
     const resolution: PersonaSyncConflictResolution = withFileLockSync(lockPath, () =>
       withFileLockSync(contentLockPath(roleRoot, entry.path, target), () => {
         const refreshed = this.conflictEntry(entry.conflictId);
+        const duplicateConflicts = this.matchingConflictIds(refreshed)
+          .filter(conflictId => conflictId !== refreshed.conflictId)
+          .map(conflictId => {
+            const conflict = this.conflictEntry(conflictId);
+            return {
+              conflict,
+              target: path.join(this.stateRoot, "conflicts", conflict.conflictId)
+            };
+          });
         assertNoSymbolicLinks(roleRoot, target);
         const local = fs.existsSync(target) ? fs.readFileSync(target) : null;
         const localHash = local ? sha256(local) : undefined;
@@ -305,6 +457,9 @@ export class PersonaSyncService {
           else if (local) fs.rmSync(target);
         }
         const resolutionPath = this.archiveResolvedConflict(refreshed, conflictTarget, action, localHash, resultHash);
+        for (const duplicate of duplicateConflicts) {
+          this.archiveResolvedConflict(duplicate.conflict, duplicate.target, action, localHash, resultHash);
+        }
         return {
           status: "resolved",
           action,
@@ -322,6 +477,7 @@ export class PersonaSyncService {
         };
       })
     );
+    this.invalidateConflictCatalog(entry.roleId);
     this.manifestIndex.notePathChanged(entry.roleId, entry.path);
     return resolution;
   }
@@ -437,18 +593,114 @@ export class PersonaSyncService {
     peerId?: string,
     metadata: { remoteDeleted?: boolean; remoteHash: string; baseHash?: string } = { remoteHash: sha256(content) }
   ): string {
-    const peer = String(peerId || "peer").replace(/[^\p{L}\p{N}_-]+/gu, "-").slice(0, 80) || "peer";
-    const evidenceHash = metadata.remoteDeleted ? PERSONA_SYNC_DELETED_HASH : sha256(content).slice(0, 12);
-    const target = path.join(this.stateRoot, "conflicts", roleId, relativePath, `${new Date().toISOString().replace(/[:.]/g, "-")}-${peer}-${evidenceHash}`);
-    atomicWriteFileSync(target, content);
-    atomicWriteFileSync(`${target}.meta.json`, `${JSON.stringify({
+    const target = path.join(
+      this.stateRoot,
+      "conflicts",
+      roleId,
+      relativePath,
+      canonicalConflictFileName(roleId, relativePath, peerId, metadata)
+    );
+    const metadataTarget = `${target}.meta.json`;
+    const encodedMetadata = `${JSON.stringify({
       schemaVersion: 1,
       peerId: String(peerId || ""),
       remoteDeleted: metadata.remoteDeleted === true,
       remoteHash: metadata.remoteHash,
       baseHash: metadata.baseHash || ""
-    }, null, 2)}\n`);
+    }, null, 2)}\n`;
+    if (fs.existsSync(target)) {
+      const existingContent = fs.readFileSync(target);
+      const contentMatches = metadata.remoteDeleted === true
+        ? existingContent.byteLength === 0
+        : sha256(existingContent) === metadata.remoteHash;
+      if (!contentMatches) throw new Error("Persona sync canonical conflict evidence is corrupted.");
+    } else {
+      atomicWriteFileSync(target, content);
+    }
+    if (fs.existsSync(metadataTarget)) {
+      let existingMetadata: {
+        peerId?: string;
+        remoteDeleted?: boolean;
+        remoteHash?: string;
+        baseHash?: string;
+      };
+      try {
+        existingMetadata = JSON.parse(fs.readFileSync(metadataTarget, "utf8")) as typeof existingMetadata;
+      } catch {
+        throw new Error("Persona sync canonical conflict metadata is corrupted.");
+      }
+      if (conflictEvidenceIdentity(roleId, relativePath, existingMetadata.peerId, {
+        remoteDeleted: existingMetadata.remoteDeleted,
+        remoteHash: String(existingMetadata.remoteHash || ""),
+        baseHash: existingMetadata.baseHash
+      }) !== conflictEvidenceIdentity(roleId, relativePath, peerId, metadata)) {
+        throw new Error("Persona sync canonical conflict metadata does not match its evidence key.");
+      }
+    } else {
+      atomicWriteFileSync(metadataTarget, encodedMetadata);
+    }
+    this.invalidateConflictCatalog(roleId);
     return path.relative(this.stateRoot, target).replace(/\\/g, "/");
+  }
+
+  private invalidateConflictCatalog(roleId?: string): void {
+    this.conflictCatalogGeneration += 1;
+    this.conflictListCache.delete("*");
+    if (roleId) this.conflictListCache.delete(roleId);
+    else this.conflictListCache.clear();
+  }
+
+  private conflictEvidenceKey(conflictId: string): string | undefined {
+    const safeId = safeRelativePath(conflictId).replace(/^conflicts\//, "");
+    const segments = safeId.split("/");
+    if (segments.length < 3) return undefined;
+    const roleId = sanitizeRoleId(segments[0]);
+    if (!roleId || roleId !== segments[0]) return undefined;
+    const relativePath = safeRelativePath(segments.slice(1, -1).join("/"));
+    const conflictsRoot = path.resolve(this.stateRoot, "conflicts");
+    const target = path.join(conflictsRoot, safeId);
+    const metadataTarget = `${target}.meta.json`;
+    assertNoSymbolicLinks(conflictsRoot, target);
+    assertNoSymbolicLinks(conflictsRoot, metadataTarget);
+    if (!fs.existsSync(target) || !fs.lstatSync(target).isFile()
+      || !fs.existsSync(metadataTarget) || !fs.lstatSync(metadataTarget).isFile()) {
+      return undefined;
+    }
+    const metadata = JSON.parse(fs.readFileSync(metadataTarget, "utf8")) as {
+      peerId?: string;
+      remoteDeleted?: boolean;
+      remoteHash?: string;
+      baseHash?: string;
+    };
+    const remoteHash = String(metadata.remoteHash || "");
+    if (!remoteHash) return undefined;
+    return conflictEvidenceIdentity(roleId, relativePath, metadata.peerId, {
+      remoteDeleted: metadata.remoteDeleted,
+      remoteHash,
+      baseHash: metadata.baseHash
+    });
+  }
+
+  private matchingConflictIds(conflict: PersonaSyncConflict): string[] {
+    const root = path.join(this.stateRoot, "conflicts", conflict.roleId, conflict.path);
+    const prefix = `${conflict.roleId}/${conflict.path}`;
+    const expected = JSON.stringify([
+      conflict.roleId,
+      conflict.path,
+      String(conflict.peerId || ""),
+      conflict.remoteDeleted === true,
+      conflict.remoteHash,
+      String(conflict.baseHash || "")
+    ]);
+    return walkConflictFiles(root)
+      .map(conflictId => `${prefix}/${conflictId}`)
+      .filter(conflictId => {
+        try {
+          return this.conflictEvidenceKey(conflictId) === expected;
+        } catch {
+          return false;
+        }
+      });
   }
 
   private conflictEntry(conflictId: string): PersonaSyncConflict {

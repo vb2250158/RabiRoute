@@ -1,7 +1,12 @@
 import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveProjectPath, toProjectRelativePath } from "./projectPaths.js";
+import {
+  resolvePersistedProjectPath,
+  resolveProjectPath,
+  toPersistedProjectPath,
+  toProjectRelativePath
+} from "./projectPaths.js";
 
 test("toProjectRelativePath keeps paths inside the project portable", () => {
   const rootDir = path.resolve("C:/Projects/RabiRoute");
@@ -11,14 +16,16 @@ test("toProjectRelativePath keeps paths inside the project portable", () => {
   assert.equal(resolveProjectPath("data/route", rootDir), path.join(rootDir, "data", "route"));
 });
 
-test("toProjectRelativePath rebases stale same-workspace absolute paths", () => {
+test("persisted project paths explicitly rebase stale same-workspace absolute paths", () => {
   const rootDir = path.resolve("C:/Projects/RabiRoute");
 
-  assert.equal(toProjectRelativePath("D:/Projects/RabiRoute", rootDir), ".");
-  assert.equal(toProjectRelativePath("D:/Projects/RabiRoute/data/route", rootDir), "data/route");
-  assert.equal(toProjectRelativePath("D:/Projects", rootDir), "..");
-  assert.equal(resolveProjectPath("D:/Projects/RabiRoute", rootDir), rootDir);
-  assert.equal(resolveProjectPath("D:/Projects", rootDir), path.dirname(rootDir));
+  assert.equal(toPersistedProjectPath("D:/Projects/RabiRoute", rootDir), ".");
+  assert.equal(toPersistedProjectPath("D:/Projects/RabiRoute/data/route", rootDir), "data/route");
+  assert.equal(toPersistedProjectPath("D:/Projects", rootDir), "..");
+  assert.equal(resolvePersistedProjectPath("D:/Projects/RabiRoute", rootDir), rootDir);
+  assert.equal(resolvePersistedProjectPath("D:/Projects", rootDir), path.dirname(rootDir));
+  assert.equal(toProjectRelativePath("D:/Projects/RabiRoute", rootDir), "D:/Projects/RabiRoute");
+  assert.equal(resolveProjectPath("D:/Projects/RabiRoute", rootDir), "D:/Projects/RabiRoute");
 });
 
 test("toProjectRelativePath leaves unrelated absolute paths absolute", () => {

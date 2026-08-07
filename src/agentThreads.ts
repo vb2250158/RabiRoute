@@ -14,7 +14,14 @@ import {
 } from "./codexTaskIdentity.js";
 import { resolveCodexSession } from "./codexSessionResolver.js";
 import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
+import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
+import { normalizePathForComparison } from "./shared/pathPolicy.js";
+import {
+  AgentRequestStore,
+  type AgentCommunicationPreparation,
+  type AgentResponsePolicy
+} from "./agentRequests/store.js";
 
 const maxQueryLength = 240;
 const maxTitleInputLength = 200_000;
@@ -39,6 +46,18 @@ export type AgentThreadRequest = {
   reasoningEffort?: CodexReasoningEffort;
   sourceThreadId?: string;
   sourceAgentType?: AgentThreadSourceType;
+  responsePolicy?: AgentResponsePolicy;
+  responseInstruction?: string;
+  inReplyToRequestId?: string;
+  result?: string;
+  nextAction?: string;
+  messageProcessing?: {
+    requirementId?: string;
+    outcome?: "handoff";
+    targetAgentType?: AgentThreadSourceType;
+    planId?: string;
+    planTitle?: string;
+  };
 };
 
 export type AgentThreadSourceType =
@@ -80,19 +99,82 @@ export type AgentThreadDriver = {
     sandbox: CodexTurnSandbox;
     model?: string;
     reasoningEffort?: CodexReasoningEffort;
-  }) => Promise<void>;
+  }) => Promise<void | {
+    threadId: string;
+    action: "started" | "steered";
+    openedThread: boolean;
+    transport: "desktop-ipc";
+    warning?: string;
+  }>;
 };
 
 export type AgentThreadRequestOptions = {
   allowedWorkspaces: string[];
   defaultWorkspace?: string;
   sessionIndexPath?: string;
+  agentRequests?: AgentRequestStore;
+  onMessageProcessingHandoff?: (event: {
+    requirementId: string;
+    sourceThreadId: string;
+    targetThreadId: string;
+    targetAgentType: AgentThreadSourceType;
+    planId?: string;
+    planTitle?: string;
+  }) => void | Promise<void>;
 };
 
 export type AgentThreadRequestResult = {
   statusCode: number;
   data: Record<string, unknown>;
 };
+
+class AgentThreadDeliveryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentThreadDeliveryError";
+  }
+}
+
+export function agentThreadRequestFailureData(
+  error: unknown,
+  request: Pick<AgentThreadRequest, "action"> = {}
+): Record<string, unknown> {
+  const message = error instanceof Error ? error.message : String(error);
+  const missingField = /^Missing ([^.]+)\.$/.exec(message)?.[1];
+  const relatedField = missingField
+    || (message === "sourceAgentType requires sourceThreadId." ? "sourceThreadId" : undefined)
+    || (/^responsePolicy /.test(message) ? "responsePolicy" : undefined)
+    || (/^responseInstruction /.test(message) ? "responseInstruction" : undefined)
+    || (/^result /.test(message) ? "result" : undefined)
+    || (/^nextAction /.test(message) ? "nextAction" : undefined)
+    || (/inReplyToRequestId/.test(message) ? "inReplyToRequestId" : undefined)
+    || (/^Invalid threadId\.$/.test(message) ? "threadId" : undefined)
+    || (/^messageProcessing\.outcome /.test(message) ? "messageProcessing.outcome" : undefined)
+    || (/verified message_processing source task/.test(message) ? "sourceAgentType" : undefined);
+  const sourceVerification = /来源任务|sourceAgentType requires sourceThreadId|verified .* source task/i.test(message);
+  const deliveryFailure = error instanceof AgentThreadDeliveryError;
+  const validationFailure = Boolean(missingField)
+    || Boolean(relatedField)
+    || /^(Invalid |Unsupported |Workspace |No Codex workspaces)| must | requires |too long|must contain only|Agent request (?:not found|is not awaiting|already has)|Agent response /i.test(message);
+  const stage = deliveryFailure
+    ? "target_delivery"
+    : sourceVerification
+      ? "source_verification"
+      : validationFailure
+        ? "validation"
+        : "request";
+  return {
+    action: request.action ?? null,
+    status: "failed",
+    message,
+    error: {
+      stage,
+      ...(relatedField ? { field: relatedField } : {}),
+      message,
+      retryable: deliveryFailure
+    }
+  };
+}
 
 const defaultDriver: AgentThreadDriver = {
   list: listCodexThreads,
@@ -122,6 +204,22 @@ const agentThreadSourceLabels: Record<AgentThreadSourceType, string> = {
   plan_agent: "计划执行 Agent",
   agent: "Agent"
 };
+
+const workspaceDeliveryPolicyLines = [
+  "除非当前用户明确授权，禁止新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区中的 AGENTS.md 如有更严格限制，以其为准。",
+  "只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”；临时目录、其他分支、服务器提交或测试工程结果不能替代用户入口。",
+  "PangHu 任务没有创建旁路工作副本的例外：只使用正式 Main、Release 和 Art；旧任务或历史记录中的隔离、稀疏、clean working copy 安排已经撤销。"
+];
+
+function standaloneWorkspacePolicyPrompt(rawPrompt: string): string {
+  return [
+    "[协作要求]",
+    ...workspaceDeliveryPolicyLines,
+    "",
+    "[投递内容]",
+    rawPrompt
+  ].join("\n");
+}
 
 function normalizeAgentThreadSourceType(value: unknown): AgentThreadSourceType {
   const normalized = optionalText(value, "sourceAgentType", 40) || "agent";
@@ -170,8 +268,41 @@ function normalizeThreadId(value: unknown): string {
 }
 
 function canonicalWorkspace(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  return normalizePathForComparison(value);
+}
+
+function normalizeAgentResponsePolicy(value: unknown): AgentResponsePolicy {
+  if (value === "required" || value === "none") return value;
+  throw new Error("responsePolicy is required for Agent-to-Agent delivery and must be required or none.");
+}
+
+function agentResponseContractLines(preparation: AgentCommunicationPreparation): string[] {
+  const sourceWorkspace = preparation.source.workspace || "<原发送任务的工作目录>";
+  const lines = [
+    "[Agent 回复合同]",
+    `本次投递 deliveryId：${preparation.deliveryId}`,
+    `是否要求回复：${preparation.responsePolicy === "required" ? "是" : "否"}`
+  ];
+  if (preparation.inReplyToRequestId) {
+    lines.push(
+      `本次消息已经正式回复请求：${preparation.inReplyToRequestId}`,
+      `回复结果：${preparation.result}`,
+      `下一步：${preparation.nextAction}`
+    );
+  }
+  if (preparation.requestId) {
+    lines.push(
+      `必须回复的 requestId：${preparation.requestId}`,
+      `需要回答：${preparation.responseInstruction}`,
+      "回复必须通过 RabiRoute Agent 任务桥 POST /api/agent/threads，不能只写在 Codex 最终回答里。",
+      `回复时填写 action=send、threadId=${preparation.source.threadId}、cwd=${sourceWorkspace}、sourceThreadId=当前任务完整 ID、sourceAgentType=当前 Agent 类型、inReplyToRequestId=${preparation.requestId}、result=本次结果、nextAction=下一步，并且仍须显式填写 responsePolicy=required 或 none。`,
+      "如果新的下一步还需要对方完成后返回结果，填写 responsePolicy=required 和 responseInstruction；如果这次回复结束往返，填写 responsePolicy=none。",
+      "本轮迭代结束仍未正式回复时，Manager 会在五分钟后向本任务投递提醒，并在后续每轮结束后继续检查。"
+    );
+  } else {
+    lines.push("本次投递不要求回复；如果你之后向其它 Agent 投递消息，仍必须显式填写 responsePolicy=required 或 none。");
+  }
+  return lines;
 }
 
 export function resolveAgentThreadWorkspaceForTest(
@@ -321,7 +452,10 @@ async function resolveAgentThreadSendSource(
     `来源会话 ID：${source.threadId}`,
     source.workspace ? `来源工作目录：${source.workspace}` : undefined,
     "",
-    "[投递内容]"
+    "[协作要求]",
+    ...proactiveCommunicationPolicyLines("internal"),
+    ...workspaceDeliveryPolicyLines,
+    ""
   ].filter((line): line is string => line !== undefined).join("\n");
   return { promptPrefix, source };
 }
@@ -349,7 +483,10 @@ async function createThread(
       "这是由 RabiRoute 会话管理层创建的独立 Codex 任务。",
       "严格按初始任务和用户后续消息处理，并遵守工作区中的 AGENTS.md 与任务明确引用的 Skill。",
       "运行沙箱权限不等于业务修改授权；没有明确授权时，只做读取、调查、证据整理和方案输出。",
-      "开始工作前先读取当前任务的完整相关历史和已有结论，不得只看标题、摘要或最后一条消息。"
+      "开始工作前先读取当前任务的完整相关历史和已有结论，不得只看标题、摘要或最后一条消息。",
+      ...proactiveCommunicationPolicyLines("internal"),
+      ...workspaceDeliveryPolicyLines,
+      "多步任务开始后要让当前任务中的人看得出你准备做什么；取得阶段结果、遇到风险或进入等待时主动更新，不要等别人追问。"
     ].join("\n"),
     sandbox
   });
@@ -511,25 +648,175 @@ export async function handleAgentThreadRequest(
       }
       validateAgentThreadHandoffPromptForTest(rawPrompt);
     }
-    const prompt = sendSource ? `${sendSource.promptPrefix}\n${rawPrompt}` : rawPrompt;
     const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const sandbox = normalizeSandbox(request.sandbox);
     const model = optionalText(request.model, "model", 120) || undefined;
     const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort);
+    const messageProcessing = request.messageProcessing;
+    let agentCommunication: AgentCommunicationPreparation | undefined;
+    if (sendSource) {
+      const responsePolicy = normalizeAgentResponsePolicy(request.responsePolicy);
+      if (messageProcessing && responsePolicy !== "required") {
+        throw new Error("messageProcessing handoff requires responsePolicy=required.");
+      }
+      const responseInstruction = optionalText(request.responseInstruction, "responseInstruction", 4_000) || undefined;
+      const inReplyToRequestId = optionalText(request.inReplyToRequestId, "inReplyToRequestId", 100) || undefined;
+      const result = optionalText(request.result, "result", 12_000) || undefined;
+      const nextAction = optionalText(request.nextAction, "nextAction", 4_000) || undefined;
+      if ((responsePolicy === "required" || inReplyToRequestId) && !options.agentRequests) {
+        throw new Error("Agent request tracking is unavailable for this Agent-to-Agent delivery.");
+      }
+      agentCommunication = options.agentRequests
+        ? options.agentRequests.prepare({
+            source: {
+              threadId: sendSource.source.threadId,
+              agentType: sendSource.source.agentType,
+              threadName: sendSource.source.threadName,
+              workspace: sendSource.source.workspace
+            },
+            target: {
+              threadId,
+              agentType: "agent",
+              workspace: cwd
+            },
+            responsePolicy,
+            responseInstruction,
+            inReplyToRequestId,
+            result,
+            nextAction,
+            messageProcessingRequirementId: messageProcessing?.requirementId,
+            planId: messageProcessing?.planId
+          })
+        : {
+            deliveryId: `untracked-${Date.now()}`,
+            responsePolicy,
+            responseInstruction,
+            inReplyToRequestId,
+            result,
+            nextAction,
+            source: {
+              threadId: sendSource.source.threadId,
+              agentType: sendSource.source.agentType,
+              threadName: sendSource.source.threadName,
+              workspace: sendSource.source.workspace
+            },
+            target: { threadId, agentType: "agent", workspace: cwd }
+          };
+    }
+    const prompt = sendSource && agentCommunication
+      ? `${sendSource.promptPrefix}${agentResponseContractLines(agentCommunication).join("\n")}\n\n[投递内容]\n${rawPrompt}`
+      : standaloneWorkspacePolicyPrompt(rawPrompt);
+    let messageProcessingEvent: {
+      requirementId: string;
+      sourceThreadId: string;
+      targetThreadId: string;
+      targetAgentType: AgentThreadSourceType;
+      planId?: string;
+      planTitle?: string;
+    } | undefined;
+    if (messageProcessing != null) {
+      if (!sendSource || sendSource.source.agentType !== "message_processing") {
+        throw new Error("messageProcessing handoff requires a verified message_processing source task.");
+      }
+      const requirementId = requiredText(messageProcessing.requirementId, "messageProcessing.requirementId", 300);
+      if (messageProcessing.outcome !== "handoff") {
+        throw new Error("messageProcessing.outcome must be handoff for Agent thread delivery.");
+      }
+      messageProcessingEvent = {
+        requirementId,
+        sourceThreadId: sendSource.source.threadId,
+        targetThreadId: threadId,
+        targetAgentType: normalizeAgentThreadSourceType(requiredText(messageProcessing.targetAgentType, "messageProcessing.targetAgentType", 40)),
+        planId: optionalText(messageProcessing.planId, "messageProcessing.planId", 300) || undefined,
+        planTitle: optionalText(messageProcessing.planTitle, "messageProcessing.planTitle", 500) || undefined
+      };
+    }
     const delivery = { threadId, prompt, cwd, sandbox } as Parameters<AgentThreadDriver["send"]>[0];
     if (model) delivery.model = model;
     if (reasoningEffort) delivery.reasoningEffort = reasoningEffort;
-    await driver.send(delivery);
+    let acceptedDelivery: Awaited<ReturnType<AgentThreadDriver["send"]>>;
+    try {
+      acceptedDelivery = await driver.send(delivery);
+    } catch (error) {
+      if (agentCommunication && options.agentRequests) options.agentRequests.abort(agentCommunication);
+      throw new AgentThreadDeliveryError(error instanceof Error ? error.message : String(error));
+    }
+    const acceptedReceipt = acceptedDelivery && typeof acceptedDelivery === "object"
+      ? acceptedDelivery
+      : undefined;
+    let messageProcessingWarning: string | undefined;
+    let agentRequestWarning: string | undefined;
+    let committedAgentRequest: ReturnType<AgentRequestStore["commit"]> | undefined;
+    if (agentCommunication && options.agentRequests) {
+      try {
+        committedAgentRequest = options.agentRequests.commit(agentCommunication, {
+          action: acceptedReceipt?.action,
+          transport: acceptedReceipt?.transport
+        });
+      } catch (error) {
+        agentRequestWarning = `Agent delivery was accepted, but request tracking failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    if (messageProcessingEvent && options.onMessageProcessingHandoff) {
+      try {
+        await options.onMessageProcessingHandoff(messageProcessingEvent);
+      } catch (error) {
+        messageProcessingWarning = `Agent handoff was accepted, but the message-processing board update failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
     return {
       statusCode: 202,
       data: {
         action,
+        ok: !messageProcessingWarning && !agentRequestWarning,
         threadId,
-        status: "started",
+        status: messageProcessingWarning || agentRequestWarning ? "delivered_tracking_failed" : "delivered",
+        delivery: {
+          status: "delivered",
+          targetThreadId: threadId,
+          acceptedBy: "codex_desktop_owner",
+          action: acceptedReceipt?.action ?? "accepted",
+          transport: acceptedReceipt?.transport ?? "desktop-ipc",
+          ...(acceptedReceipt ? { openedThread: acceptedReceipt.openedThread } : {}),
+          ...(acceptedReceipt?.warning ? { warning: acceptedReceipt.warning } : {})
+        },
         sandbox,
         model,
         reasoningEffort,
-        ...(sendSource ? { source: sendSource.source } : {})
+        ...(sendSource ? { source: sendSource.source } : {}),
+        ...(agentCommunication ? {
+          communication: {
+            deliveryId: agentCommunication.deliveryId,
+            responsePolicy: agentCommunication.responsePolicy,
+            ...(agentCommunication.requestId ? {
+              requestId: agentCommunication.requestId,
+              requestStatus: committedAgentRequest?.request?.status ?? "tracking_failed"
+            } : {}),
+            ...(agentCommunication.inReplyToRequestId ? {
+              inReplyToRequestId: agentCommunication.inReplyToRequestId,
+              responseStatus: committedAgentRequest?.repliedRequest?.status ?? "tracking_failed"
+            } : {})
+          }
+        } : {}),
+        ...(messageProcessing ? { messageProcessing } : {}),
+        ...(messageProcessingEvent ? {
+          handoff: {
+            status: messageProcessingWarning ? "tracking_failed" : "recorded",
+            requirementId: messageProcessingEvent.requirementId,
+            targetAgentType: messageProcessingEvent.targetAgentType,
+            targetThreadId: messageProcessingEvent.targetThreadId,
+            ...(messageProcessingWarning ? {
+              error: {
+                stage: "message_processing_tracking",
+                message: messageProcessingWarning,
+                retryable: true
+              }
+            } : {})
+          }
+        } : {}),
+        ...((messageProcessingWarning || agentRequestWarning) ? {
+          warning: [messageProcessingWarning, agentRequestWarning].filter(Boolean).join(" ")
+        } : {})
       }
     };
   }

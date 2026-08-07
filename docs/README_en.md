@@ -55,6 +55,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Architecture](architecture_en.md) — **Current fact**. Product boundaries, the Codex Desktop owner, current Outbox, and future Action Queue are separated.
 - [Code architecture](code-architecture_en.md) — **Current fact**. Backend, Manager, endpoint, Role Knowledge, WebGUI, and desktop module map.
 - [Project function map](project-function-map_en.md) — **Current fact**. Locate behavior by maturity, side effect, API, and code owner.
+- [Path and directory conventions](path-and-directory-conventions_en.md) — **Current maintainer guide**. Separates software, public samples, local runtime data, and logs, and defines relative-path and business-ID interfaces.
 - [Pull request security gates](maintainer-security-gates_en.md) — **Current maintainer guide** for secret scanning, production dependency auditing, CodeQL, least privilege, and merge protection.
 - [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — **Current guide** for the Node/WebGUI baseline and Qt/Windows convenience layer.
 - [Manager runtime resilience and incident evidence](manager-runtime-resilience_en.md) — **Current guide** for crash logs, single-instance protection, non-fatal persona-index persistence, watchdog backoff, and soak acceptance.
@@ -68,7 +69,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, hot/persona-keyword delivery, persona voice and language, bidirectional ASR/TTS records, opaque voiceprint/cluster evidence, RabiPC, and RabiLink relay.
 - [Call TTS and ASR remotely](user-guide/speech-api_en.md) — application token, target PC, copyable commands, acceptance, and error recovery.
 - [Rabi Voice Client](../desktop/rabi-voice-client/README_en.md) — use a meeting-room Windows PC as a LAN microphone and speaker while segmentation and models stay on the RabiSpeech host.
-- [Local speech model downloads](local-speech-model-downloads_en.md) — per-model sources, downloads, isolated environments, and validation.
+- [Local speech model downloads](local-speech-model-downloads_en.md) — use Model Management for on-demand weights and review each TTS/ASR model's source, isolated runtime, and validation requirements.
 - [RabiSpeech performance report](rabispeech-performance-report_en.md) — six TTS and five main ASR models, cold/warm timing, quality indicators, hardware, and CUDA issues.
 - [RabiLink Relay](rabilink-relay-server_en.md)
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker_en.md)
@@ -78,7 +79,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [RabiLink wearable health endpoint](rabilink-wearable-health_en.md) — **Experimental integration** for phone settings, structured health history, Agent queries, alert thresholds, and the Xiaomi ADB fallback.
 - [AIUI-to-phone/native-glasses parity checklist](rabilink-aiui-native-parity_en.md) — migration status separated by code, automation, and real-device evidence.
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)
-- [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md) — target contract and implementation tracker for user state, scenario recognition, the individual user model, and intervention decisions.
+- [RabiLink proactive-intelligence requirements](rabilink-active-intelligence-requirements_en.md) — target contract and implementation tracker for user state, scenario recognition, plan/memory closure after group-message recall, and intervention decisions.
 - [RabiLink native app design](rabilink-glasses-app-design_en.md)
 - [XiaoAI integration route](xiaoai-integration/xiaoai-rabiroute-intercept-route_en.md)
 - [IR gateway research](xiaoai-integration/ir-remote-gateway-research_en.md)

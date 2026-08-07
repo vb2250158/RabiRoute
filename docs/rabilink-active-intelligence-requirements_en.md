@@ -8,6 +8,8 @@ English | <a href="./rabilink-active-intelligence-requirements.md">简体中文<
 
 > Status: implementation tracker for the phone-backed native-glasses route. AIUI feature development was paused on 2026-07-18; retained AIUI code is historical evidence only.
 
+This document uses the RabiLink device path as its primary scenario, but its proactive-message principles apply to every Route input. Group messages from QQ, Weixin, Feishu, and other adapters are evidence that may change plans, memory, and follow-up work, just like device observations. They must not be ignored merely because nobody directly mentioned the Agent.
+
 ## Final architecture decision
 
 ```text
@@ -58,12 +60,75 @@ It must not reread ledgers or query coverage on an interval to discover changes.
 12. Each persona maintains an inspectable, correctable, deletable, and synchronized user model that separates trait hypotheses, learned preferences, and current psychological state.
 13. The Companion App exposes one persisted `PAUSED / PHONE / GLASSES` mode state. A transition releases the old capture path before enabling the new one, and glasses mode remains paused with a visible reason until a physical glasses connection exists.
 14. A user may submit an explicit proactivity preference, but the App and Relay carry it only as an observation and message metadata. Final intervention remains a PC-context, Route-action-gate, and target-Agent decision.
+15. Every group message enters a recoverable processing record. “No group reply is needed” does not replace plan, memory, and project-fact review.
+16. Every recalled plan or memory receives a final callback. The Agent may explicitly report no change or a false-positive match, but it may not finish silently without a result.
+
+## Plan and Memory Closure Triggered by Group Messages
+
+> Status: in implementation. Manager-side message requirements, plan/memory recall candidates, per-item callbacks, and the one-hour reminder are progressing with the Message Agent path. Real group chats, four-Agent collaboration, long-running behavior, and platform receipts still require acceptance.
+
+“Do not miss any group message” does not mean mechanically replying to every sentence. It means that every message has an inspectable disposition: the message is recorded, the Agent decides whether to join the discussion, every recalled plan and memory is handled, important project facts are written to the correct record, and any external reply has a real delivery receipt.
+
+See the [group-message batching and intelligent triage plan](group-message-batching-and-triage-plan_en.md) for message grouping, the four Agent roles, and the processing board. This section describes how that path becomes an active-intelligence event source and how plan and memory handling must finish for the current message.
+
+### A recall match is not a completed action
+
+Manager uses plan and memory IDs, titles, and keywords to produce candidate associations and attaches them to the message-processing requirement. Keywords only help retrieve material: a match may be a false positive, and no match does not mean the message has no value. The Agent must open each candidate and the source message, then decide whether the message supplements, corrects, confirms, discusses, leaves unchanged, or is unrelated to that item.
+
+Every recalled plan or memory must return one of these results through the message requirement callback API:
+
+| Callback result | Required Agent action or explanation |
+| --- | --- |
+| `unchanged` | Confirm that the current record was checked and explain why no plan or memory change is needed. |
+| `updated` | Update the plan or memory first, then return the record type, record ID, verification time, and evidence containing the source message ID. |
+| `created` | Create a new plan or recent memory first, then return its type, ID, verification time, and source evidence. |
+| `not_relevant` | Explain why the keyword match is a false positive and do not treat it as a business association. |
+| `deferred` | Identify the Agent type or original plan task that will continue the work. This is temporary and still requires a later final callback. |
+
+The callback separately states whether the group needs a reply, discussion, handoff, or no external response. Knowledge handling and group participation are different decisions: the Agent may stay silent after completing the record work, or briefly reply even when the plan is unchanged. Anything that group members must see goes through Outbox and counts as sent only with `status=sent` plus a platform receipt.
+
+### Important facts must not remain only in chat history
+
+Dates, release scope, approval or rejection, ownership, cancellation, delay, release versions, and direction changes to an existing plan may change later work. The Agent first reads the source message, attachments, and reply relationship, then distinguishes an internal target, formal decision, public commitment, ordinary discussion, or misunderstanding.
+
+When the Agent identifies an important project fact, it must write the fact to the associated plan, recent memory, or project document, or verify that the same fact already exists. The record preserves the source message ID, verification evidence, and verification time. If evidence is incomplete, the Agent hands the item to the original Plan Agent, Plan Secretary, or primary persona for confirmation instead of closing it as “no reply needed.”
+
+### The Agent makes the semantic decision when recall finds nothing
+
+When there is no plan or memory candidate, RabiRoute does not invent an association. The delivery to the Agent should include the source message group, reply relationships, the necessary bounded recent chat, plan and memory indexes, query endpoints, and explicit handling duties. The Agent then decides whether to:
+
+- reply or join the discussion;
+- create a plan;
+- create a recent memory;
+- append the message to a semantically related older record that keyword recall missed; or
+- confirm that the message is ordinary chat with no follow-up action.
+
+No automatic match therefore means only that retrieval found no candidate. It does not authorize the Agent to skip review.
+
+### Reminder and hook boundary
+
+A handler with a reliable task-end hook may warn the Agent immediately when it is about to finish with unresolved callbacks. RabiRoute does not currently treat that specialized hook as a universal handler capability. The current fallback keeps unresolved callbacks in Manager and sends another prompt after one hour. Even when nothing changed, the Agent must call the API with `result=unchanged` and verification evidence.
+
+The reminder targets only recall items without a final callback. It must not periodically reread every group log, plan, or memory. Heartbeat audits omissions, overdue callbacks, and unfinished handoffs; it does not replace the original Message Agent's semantic decision or turn a reminder into a claim that a record was updated or a reply was sent.
+
+### Acceptance criteria
+
+1. Every group message has a message-processing record that survives restart, and replay does not create a second requirement.
+2. Every candidate plan and memory has a final callback; `deferred` is not final.
+3. Records named by `updated` or `created` exist and contain the source message ID, verification evidence, and time.
+4. An Agent that chooses not to reply still completes plan, memory, and project-fact review.
+5. A reply or discussion counts as complete only after a real Outbox delivery receipt.
+6. If no final callback arrives within one hour, Manager prompts the original Message Agent again without creating duplicate plans or replies.
+7. When automatic recall finds nothing, the Agent can still create a new record or discover a missed semantic association.
 
 ## Sources of truth
 
 | Data | Owner |
 | --- | --- |
 | Route, role, policy, speech provider, and Agent configuration | PC RabiRoute |
+| Group-message bodies, reply relationships, and unified chat history | The message endpoint's event records and the target persona's `conversation/current.jsonl`; the processing board does not become a second chat source of truth |
+| Message requirements, candidate plans/memories, callback deadlines, and dispositions | Manager runtime `data/.runtime/message-processing-board.json`; it stores processing state and record references, not plan or memory bodies |
+| Plan and memory bodies | The target persona's Role Knowledge directory; writes go through Manager plan/memory APIs |
 | Raw speech and processing evidence | Host-wide PC `data/speech/messages/YYYY-MM-DD.jsonl`, one record per utterance |
 | Persona speech records and unified conversation context | Each persona's `voice-transcripts.jsonl` and `conversation/current.jsonl` |
 | Who a voiceprint is and whether it is that persona's user | Each persona's own `voice/voice-identities.jsonl`; host and Route do not decide |
@@ -177,6 +242,26 @@ State and scenario changes must be driven by new events, user corrections, or ex
 
 The current snapshot is a rebuildable read model, not a second event truth.
 
+## Visual Support and Mixed Text-Image Messages
+
+Active intelligence decides not only whether to speak, but also how to make the result easiest to understand. Before every user-visible response, the Agent should choose a presentation plan: text, speech, mixed text and images, a file, or silence. The target Agent persona still owns the conclusion. RabiRoute only enforces endpoint capability, safety policy, and attachment permissions; it must not choose arbitrary images on the Agent's behalf.
+
+When an image, screenshot, diagram, or document page materially reduces explanation, comparison, or acceptance effort, mixed text-image output is the default. Typical cases include UI or art results, before-and-after differences, configuration screens, runtime state, error evidence, build results, device behavior, operation steps, and choices among visible alternatives. Short acknowledgements, one-decision approval questions, permission-only questions, cases without a trustworthy visual source, and endpoints without image support remain text or speech. Images are not added merely as decoration.
+
+Choose visual material in this order:
+
+1. Images, screenshots, and attachments already present in the current message.
+2. Screenshots, test captures, or deliverables produced and actually reviewed by the current formal task.
+3. Existing local project mockups, reference images, documentation images, and runtime captures.
+4. Online document pages that the current session is authorized to access, such as a Modao prototype. The page must be opened and inspected; a link title is not evidence of its contents.
+5. Only when no suitable existing material exists and a diagram would materially help, create a simple explanatory or annotated image and label it as an illustration rather than runtime evidence.
+
+The accompanying text must say what the image is, where to look, and what it proves. Reference art, design mockups, current implementation captures, post-change captures, and final acceptance screenshots use distinct labels. Visual material supplements evidence; it does not replace automated tests, device receipts, target-build identity, revision evidence, backend readback, or QA results.
+
+Local images must pass the endpoint's `allowedFileRoots` check. The Agent may send only files it has actually inspected, that match the message, and that contain no sensitive information. Cropping or annotation must preserve context that can change the conclusion. If an online source is unavailable, unauthorized, or cannot be turned into a sendable attachment, the Agent states which visual evidence is missing and completes the communication with the evidence currently available.
+
+Endpoints degrade by capability. QQ, Weixin, role panels, and companion apps with screen and image support should prefer mixed text-image output. Speech-only glasses provide the most important spoken conclusion and retain the image in a connected companion surface. Mixed-media delivery is complete only when Outbox reports success and platform readback confirms that the image segment or attachment actually exists.
+
 ## Queue contracts
 
 ### Uplink audio
@@ -220,6 +305,7 @@ Phone-private text, control, media, receipt, and downlink queues share fsync plu
 6. The phone backend has moved to a visible Foreground Service in code; continue with system-reclaim, reboot, and notification-interaction acceptance.
 7. Text/control, media, and device receipts use disk-backed reliable queues. Unconfirmed entries are no longer silently age-pruned; capacity exhaustion rejects new work explicitly. Continue validating weak-network backoff, the product choice for brief PCM across process death, and actual phone/glasses speaker output.
 8. Wire physical-device video-file capture; assess live video only after reliable file messages.
+9. On an image-capable endpoint, verify one proactive mixed text-image message whose image comes from an authorized root or authenticated attachment, whose text identifies the focus, and whose platform readback confirms real delivery. On a speech-only endpoint, verify that the same conclusion degrades to speech while the companion surface retains the image.
 
 ## Current completion audit (2026-07-24)
 

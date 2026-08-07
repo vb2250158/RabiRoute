@@ -13,6 +13,7 @@ test("WebGUI route pages are split into lazy chunks", () => {
     "OverviewPage",
     "RouteConfigPage",
     "PersonaTemplatePage",
+    "PersonaDocumentPage",
     "ProjectDocsPage",
     "RoleKnowledgePage",
     "RuntimeLogPage",

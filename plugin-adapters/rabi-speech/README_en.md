@@ -16,6 +16,10 @@ RabiSpeech is Rabi's independent host-local service plugin and a TTS/ASR provide
 
 ## Install and start
 
+The standard RabiRoute installation does not include ASR/TTS dependencies or models. Run these commands only when speech is needed. Dependencies stay in the plugin-private `.deps` directory without changing the system Python environment, and models remain separate opt-in downloads.
+
+You can also use RibiWebGUI **Model Management** (`/#/models`) to prepare the speech environment and download one allowlisted weight set at a time. The page starts only repository-owned scripts with fixed aliases and accepts no arbitrary URL or path. A completed download does not make an isolated-runtime model ready to run.
+
 ```powershell
 cd plugin-adapters\rabi-speech
 .\scripts\install.ps1

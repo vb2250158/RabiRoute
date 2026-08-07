@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   isPlanMarkdownAttachment,
   planMarkdownPreviewExcerpt,
+  renderMemoryMarkdownPreview,
   responseTextByByteLimit,
   renderPlanMarkdownPreview,
   safeMarkdownHref
@@ -13,6 +14,22 @@ test("recognizes Markdown plan attachments by extension or MIME", () => {
   assert.equal(isPlanMarkdownAttachment("README.MARKDOWN"), true);
   assert.equal(isPlanMarkdownAttachment("notes.txt", "text/markdown"), true);
   assert.equal(isPlanMarkdownAttachment("report.pdf", "application/pdf"), false);
+});
+
+test("memory Markdown renders mixed text and safe remote images without local-path access", () => {
+  const html = renderMemoryMarkdownPreview(`## Evidence
+
+![diagram](https://example.com/memory.png)
+
+![local](file:///C:/secret.png)
+
+![unsafe](javascript:alert(1))`);
+  assert.match(html, /<h2>Evidence<\/h2>/);
+  assert.match(html, /<img src="https:\/\/example\.com\/memory\.png" alt="diagram" loading="lazy" referrerpolicy="no-referrer">/);
+  assert.match(html, /markdown-preview-image-placeholder">IMAGE · local/);
+  assert.match(html, /markdown-preview-image-placeholder">IMAGE · unsafe/);
+  assert.doesNotMatch(html, /file:\/\//i);
+  assert.doesNotMatch(html, /javascript:/i);
 });
 
 test("renders useful GFM while neutralizing active attachment content", () => {

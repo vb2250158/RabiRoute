@@ -62,6 +62,46 @@ test("message context archives an exact old prefix only after the 72h trigger", 
   ]);
 });
 
+test("message context time windows do not read indexed archives outside the requested range", () => {
+  const dir = temporaryDir("message-context-archive-window");
+  const now = Date.UTC(2026, 6, 21, 12, 0, 0);
+  const hour = 60 * 60;
+  appendMessageContextToDir(dir, {
+    time: now / 1_000 - 80 * hour,
+    direction: "inbound",
+    adapter: "speech",
+    kind: "asr",
+    text: "历史语音"
+  }, { archiveCheck: false, now });
+  appendMessageContextToDir(dir, {
+    time: now / 1_000,
+    direction: "inbound",
+    adapter: "speech",
+    kind: "asr",
+    text: "当前语音"
+  }, { now });
+  const archiveFile = path.join(dir, "conversation", "archive", "1~1.jsonl");
+  assert.equal(fs.existsSync(archiveFile), true);
+  const originalReadFileSync = fs.readFileSync;
+  let archiveReads = 0;
+  fs.readFileSync = ((target: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (typeof target === "string" && path.resolve(target) === path.resolve(archiveFile)) {
+      archiveReads += 1;
+    }
+    return originalReadFileSync(target, ...(args as [never]));
+  }) as typeof fs.readFileSync;
+  try {
+    assert.deepEqual(recentMessageContextItems([dir], {
+      limit: 10,
+      includeArchives: true,
+      from: now / 1_000 - 2 * hour
+    }).map(item => item.text), ["当前语音"]);
+    assert.equal(archiveReads, 0);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+});
+
 test("message context does not archive a 24h-old prefix until a record exceeds 72h", () => {
   const dir = temporaryDir("message-context-no-archive");
   const now = Date.UTC(2026, 6, 21, 12, 0, 0);
