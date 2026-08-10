@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaSyncCard from "../components/PersonaSyncCard.vue";
+import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
 import { managerEventSource } from "../managerApi";
 import { personaAvatarClient } from "../persona/personaAvatarClient";
 import { loadPersonaDocument } from "../persona/personaDocumentClient";
@@ -77,6 +78,7 @@ const voiceIdentityBusyKey = ref("");
 const voiceConfirmation = ref(idlePersonaVoiceConfirmation());
 const personaSyncManifestVersion = ref(0);
 const personaSyncPeerVersion = ref(0);
+const identityRelationsVersion = ref(0);
 const personaMarkdownContent = ref("");
 const personaMarkdownLoading = ref(false);
 const personaMarkdownLoadError = ref("");
@@ -558,10 +560,14 @@ function startPersonaEvents(): void {
   managerEvents.addEventListener("persona_voice_identity_changed", (raw) => {
     if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
   });
+  managerEvents.addEventListener("identity_relation_changed", (raw) => {
+    if (relevantPersonaSyncEvent(raw)) identityRelationsVersion.value += 1;
+  });
   managerEvents.addEventListener("persona_sync_manifest_changed", (raw) => {
     const data = personaSyncEventData(raw);
     const roleId = gateway.value?.agentRoleId || "";
     if (roleId && (!data?.roleId || data.roleId === roleId)) personaSyncManifestVersion.value += 1;
+    if (roleId && (!data?.roleId || data.roleId === roleId)) identityRelationsVersion.value += 1;
     if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
   });
   managerEvents.addEventListener("rabilink_status", () => {
@@ -757,7 +763,7 @@ watch(() => store.selectedGatewayId, (id) => {
           <div class="empty-state compact-empty">
             <div>
               <strong>回复必须走 RabiRoute 回传 API</strong>
-              <span>Agent 会看到来源、发送者、消息目标和 `/api/agent/replies`，需要发回消息端的文本都应通过该 API 投递。</span>
+              <span>Agent 会看到来源、发送者、消息目标和 `/api/agent/send`，需要发回消息端的文本都应通过该 API 投递。</span>
             </div>
           </div>
         </v-card>
@@ -894,6 +900,12 @@ watch(() => store.selectedGatewayId, (id) => {
         :role-id="gateway.agentRoleId || ''"
         :manifest-version="personaSyncManifestVersion"
         :peer-version="personaSyncPeerVersion"
+      />
+
+      <PersonaIdentityRelationsCard
+        v-if="hasPersona"
+        :role-id="gateway.agentRoleId || ''"
+        :version="identityRelationsVersion"
       />
 
       <v-card v-if="hasPersona" class="app-card glass-card section-card">

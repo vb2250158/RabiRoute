@@ -90,7 +90,7 @@ function replyContextForRole(roleDir: string): Record<string, unknown> {
   const packetRows = fs.readFileSync(path.join(roleDir, "agent-packets.jsonl"), "utf8").trim().split(/\r?\n/);
   assert.equal(packetRows.length, 1);
   const packet = JSON.parse(packetRows[0]) as { text: string };
-  const contextMatch = packet.text.match(/当前回复上下文：(\{[^\r\n]+\})/);
+  const contextMatch = packet.text.match(/来源上下文（只用于核对来源，不可直接作为发送参数）：(\{[^\r\n]+\})/);
   assert.ok(contextMatch?.[1]);
   return JSON.parse(contextMatch[1]) as Record<string, unknown>;
 }

@@ -8,6 +8,19 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased - 2026-07-31
 
+### Identity relations and conversation-situation context (experimental)
+
+- A persona can now maintain participants, endpoint-account mappings, and relation cards scoped to specific conversations or projects by the exact key `platform + endpoint identity namespace + stable sender ID`. Candidate relations are not treated as confirmed facts, and concurrent sync branches remain conflicted until an explicit review supersedes them.
+- Ordinary message delivery can inject confirmed identity relations and a conversation-situation assessment that excludes chat text. The persona page provides a review surface. A situation only explains whether the Agent may participate in a discussion; it never grants project ownership, delegation, decision authority, or permission to modify project records.
+- Unit and Manager API integration tests cover exact identity keys, candidate/confirmed/corrected states, conflict resolution, bounded situation storage, and AgentPacket injection. Live multi-endpoint maintenance, human conflict review across synced peers, and long-running acceptance remain pending.
+
+### One explicit API for Agent outbound messages
+
+- Removed legacy `POST /api/agent/replies`. Agents can only call `POST /api/agent/send` and must provide a stable `deliveryId`, exact `routeId`, `channel`, channel-specific `params`, and `payload`; source `replyContext` no longer selects the destination.
+- The explicit channel overrides the Route's default pipeline. A `channel=napcat` request cannot be redirected to TTS by Route configuration; QQ, WeCom, RabiLink, speech, and other channels validate their own target parameters.
+- The Message Processing board closes a send requirement only when the sent channel matches the source endpoint, the result is `sent`, and platforms such as QQ return a real platform identifier. Successful TTS synthesis cannot impersonate a QQ send.
+- Durable idempotency receipts now use `data/agent-send-idempotency/` and `GET /api/agent/send/receipts/:deliveryId`; uncertain results for the same ID still fail closed and are never auto-resent.
+
 ### Manager-owned Primary Persona model settings
 
 - Route configuration now includes Primary Persona reasoning effort, and the existing Primary Persona model setting is applied to new Codex Desktop turns. WebGUI edits both values in the Codex Agent section. They affect only the Primary Persona and do not override Message Agents, Plan Secretaries, or independently bound Plan Agents.

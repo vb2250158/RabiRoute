@@ -103,7 +103,7 @@
       "targetGroupId": "",
       "allowedSpeakerNames": [],
       "regex": "",
-      "template": "WeCom group message\nTarget: {messageTarget}\nGroup: {groupId}\nSender: {sender} ({userId})\nMessageId: {messageId}\nReqId: {wecomReqId}\nChatId: {wecomChatId}\n\n{message}\n\nReply through {replyApiUrl} with replyContextJson when a WeCom response is allowed."
+      "template": "WeCom group message\nTarget: {messageTarget}\nGroup: {groupId}\nSender: {sender} ({userId})\nMessageId: {messageId}\nReqId: {wecomReqId}\nChatId: {wecomChatId}\n\n{message}\n\nWhen a WeCom response is allowed, POST {sendRequestJson} to {sendApiUrl}; keep channel=wecom and the explicit chatId."
     },
     {
       "id": "role-panel-message",

@@ -66,11 +66,11 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 路由规则保存在人格根级 `personaConfig.json` 中；多条 Route 绑定同一人格时复用同一套规则、语音关键词和上下文额度。无人格 route 会生成默认规则；角色面板规则始终存在。
 - 当前 route kind：`private`、`group_message`、`direct_at`、`direct_reply`、`indirect_reply`、`heartbeat`、`manual_trigger`、`role_panel_message`、`plan_feedback`、`voice_transcript`、`rabilink`、`wearable_health_alert`、`wecom_message`、`weixin_message`、`feishu_message`。
 - `RouteDecision` 只负责规则匹配；`forwarding.ts` 遍历 active route profile、写审计并投递每一条命中规则。
-- `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、回复 API 和 `replyContext`；当前 Route 启用时，`replyContext` 还包含只绑定该 Route 与人格的跨人格投递凭据。持久计划秘书开关开启且已经绑定任务时，还注入每个槽位的完整 ID、名称、workspace 和分配规则。Heartbeat 与 `plan_feedback` 固定省略历史段。
+- `AgentPacket` 会注入事件、普通消息端在当前人格/逻辑消息端/会话下的最近双向消息、角色与相对路径、计划/记忆/技能索引、必要读取项、日志路径、明确发送 API、`sendRequestJson` 和只读来源 `replyContext`。发送模板包含精确 Route、渠道和目标参数；来源上下文不参与目标推断。当前 Route 启用时，`replyContext` 还包含只绑定该 Route 与人格的跨人格投递凭据。持久计划秘书开关开启且已经绑定任务时，还注入每个槽位的完整 ID、名称、workspace 和分配规则。Heartbeat 与 `plan_feedback` 固定省略历史段。
 - 持久“协助处理计划”任务是计划管理秘书，不是业务执行 owner。Route 可以用独立勾选开关启用或暂停秘书；暂停时保留完整任务绑定，但不再向人格注入秘书槽，也不自动套用秘书模型。Manager 通过 `codexPlanAssistantModel` 为当前 Route 的全部秘书维护一个统一模型，默认 `gpt-5.6-terra`，秘书数组不再各自保存模型；显式指定某一轮模型时仍尊重调用方选择。计划用独立 `secretaryBinding` 保存负责秘书，`taskBinding` 始终只指向业务任务。WebGUI 引导/审批同时投给业务任务和负责秘书；业务任务完成、普通进展和状态变化优先直达秘书，不再默认唤醒主人格。秘书消费结果、更新计划/记忆并续投业务任务；只有需要决策、批准、授权、补充输入、跨计划裁决、完整收尾或安全外发复核时才升级给主人格。秘书及其临时子 Agent不得修改业务文件，实际调查、实现和验证由业务任务完成。代码、配置和契约测试已覆盖，真实 Desktop 多任务纵向验收仍未完成，因此该能力仍为实验状态。
 - Codex Desktop 投递按完整 `threadId + workspace` 分片调度：不同任务可以并发进入 Desktop IPC，同一任务的投递保持顺序，避免两个请求同时尝试启动新 turn。Manager 读取或更新单个计划时按计划 ID 直达标准文件，只在兼容旧的非标准文件名时回退到目录扫描；不同秘书不再因为单计划操作重复读取全部计划和全部审批记录。
 - 消息组处理为实验能力。Codex Agent 开启 `messageProcessingAgents.codex.enabled` 后，聊天消息默认先写入原始记录和人格会话记录，再按停顿形成可恢复消息组，不提供逐消息端关闭开关；ASR/语音转写和结构化事件仍直接投递。调度优先使用明确回复命中的旧消息 Agent，其次按同消息端、同会话、同说话人熟悉度复用。只有 Codex 当前明确为 `idle` 的任务参与普通空闲复用；`notLoaded` 的已有任务会由 Desktop 正常加载并继续使用。Desktop 离线或当前状态无法读取时，消息组保留并重试，不会因为旧本地状态继续创建任务；只有 Desktop 在线且所有已登记任务都明确正在运行或已被本次分配占用时才扩容。任务以人格名称稳定命名为“协助处理消息”，多任务时使用从 1 开始的编号，已有旧名称按原任务 ID 改名，不改变 owner。`agents.json` 只保存任务身份和初始化信息，熟悉度恢复线索另存 `routing-affinity.json`，active/idle/notLoaded 始终来自 Codex 当前状态。消息处理轮次使用 `gpt-5.6-luna` / `medium`。交付期间新到的片段会保留为同组补充，不随上一批确认而删除。明确私聊、直接 @ 和直接回复默认需要给对方一个可见回应，即使本轮不建计划或暂不实施，也要说明已经理解的安排、下一步由谁做和继续处理的条件；“不需要计划操作”不能替代“是否需要回复”的判断。普通群消息仍按行动分配、方向纠正、风险和既有承诺选择性回应，避免逐条刷屏。恢复时会重新校验磁盘状态；缺少可推导的运行字段时使用安全默认值，缺少消息身份、会话或内容等必要字段的分组不会进入调度。“消息处理 Agent 模式”“计划协助会话”和“Hook 管理”由处理端能力声明控制，当前只有 Codex 支持；其他 Agent 卡片不显示这些设置，非 Codex 配置也不会保留。自动化测试已覆盖恢复、去重、离线等待、`notLoaded` 复用、并发补充和 HTTP 投递；真实群聊/私聊及四类 Agent 联调仍待验收，因此不是已验证能力。
-- 启用 Codex 消息处理 Agent 后，Manager 会保存独立的消息发送需求状态，并在 Route 配置页显示消息处理看板。直接 @、直接回复、私聊和计划进展通知属于必须处理项；普通群讨论仍由消息处理 Agent 判断是否参与。看板直接读取同一份 Manager 状态，显示消息组停在哪一步、当前处理任务、转交目标、不回复原因、Outbox 发送回执、失败和超时；只有 `status=sent` 的发送结果才算完成。计划与来源消息通过结构化转交中的 `planId` 关联，之后通过统一计划写入接口产生的状态、当前步骤、下一步、等待事项或步骤进度变化会自动生成通知需求。该状态机、接口和 WebGUI 已通过单元测试与构建，真实平台发送与长时间运行仍待验收。
+- 启用 Codex 消息处理 Agent 后，Manager 会保存独立的消息发送需求状态，并在 Route 配置页显示消息处理看板。直接 @、直接回复、私聊和计划进展通知属于必须处理项；普通群讨论仍由消息处理 Agent 判断是否参与。看板直接读取同一份 Manager 状态，显示消息组停在哪一步、当前处理任务、转交目标、不回复原因、Outbox 发送回执、失败和超时。只有 `status=sent`、发送渠道与原消息端一致，且 QQ 等渠道带真实平台标识时才算完成；TTS 成功不能关闭 QQ 发送需求。计划与来源消息通过结构化转交中的 `planId` 关联，之后通过统一计划写入接口产生的状态、当前步骤、下一步、等待事项或步骤进度变化会自动生成通知需求。该状态机、接口和 WebGUI 已通过单元测试与构建，真实平台发送与长时间运行仍待验收。
 - 人格 `recentMessageLimits` 对普通消息端分别限制 `0–200` 条，默认 `12`；`0` 只关闭注入。Heartbeat 始终按 `0` 处理。统一账本 `conversation/current.jsonl` 没有条数上限，时间归档位于 `archive/<n>~<m>.jsonl`，自动上下文不读归档。
 - 一条 Route 可以保存多个 Agent 端，但已匹配的普通消息只投递给 `primaryAgentAdapter` 指定的主控 Agent；主控是 Codex 时直接 `steer/start` Desktop owner。主控失败时不会自动切换到其他 Agent。Heartbeat 可专门配置忙碌跳过，语音可专门配置热/关键词投递。
 - Delivery replay 已实现：真实投递会写 `delivery-replay-ledger.jsonl`，可按 attempt 或消息记录重新进入投递链。
@@ -87,19 +87,18 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 
 目标 Desktop 任务的命令、文件、网络、权限和工具审批与 RabiRoute 的外部消息 Outbox policy 是两层不同边界。
 
-## Outbox 与回复
+## Outbox 与明确发送
 
-`POST /api/agent/replies` 已实现，返回状态为 `sent`、`draft`、`blocked` 或 `failed`。
+`POST /api/agent/send` 是唯一 Agent 外发接口，必须提交稳定 `deliveryId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload`；旧 `/api/agent/replies` 已删除。接口返回 `sent`、`draft`、`blocked` 或 `failed`。
 
 | 输出 | 当前行为 |
 | --- | --- |
-| Agent 本地会话 | 默认 legacy pipeline 使用 `outputAdapter=agent`；没有明确外部目标时，回复保留在 Agent 会话，不创建草稿。 |
-| QQ / NapCat | 支持来源回复和明确群/私聊目标；支持 text/image/voice/file；群文件必须通过 `allowedFileRoots`，使用 `upload_group_file`；可生成真实引用回复段。 |
-| WeCom | 支持来源群聊回复和明确 chat/group 目标；使用 SDK 发送，受 adapter policy 限制。 |
+| QQ / NapCat | 必须明确群/私聊目标；支持 text/image/voice/file；群文件必须通过 `allowedFileRoots`，使用 `upload_group_file`；只有提供 `params.replyToMessageId` 才生成引用回复段。 |
+| WeCom | 必须提供明确 `params.chatId`；使用 SDK 发送，受 adapter policy 限制。 |
 | 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话；可发送文本，或发送消息端策略允许且位于 `allowedFileRoots` 内的本地文件。不能主动向任意联系人发消息；图片、语音和视频的专用发送类型未实现。 |
 | 飞书 | 仅支持文本，回复到原始 `chat_id`；要求应用凭据、事件订阅确认和 adapter 出站 policy。不会回退到通用 Webhook。 |
 | FenneNote | 已退役；只为旧 Route 保留 reply/playback 兼容，不作为新输出方案。 |
-| RabiLink | 受 route policy 控制，回复或主动文本进入连续 Relay 消息流；主动下行不需要伪造一个来源任务。 |
+| RabiLink | 受 Route policy 控制；必须明确设备 ID 或设备类型，非主动发送还需 `sourceMessageId`。主动下行不需要伪造来源任务。 |
 | 角色面板 | 直接追加角色 timeline，可带附件描述。 |
 
 计划页已经支持与 `planId/stepId` 关联的审批意见记录，并可通过独立 `plan_feedback` 系统事件通知 Agent；这只服务于 Agent 维护的计划，不会直接推进计划，也不等于通用、持久化的 Outbox Action Queue。`draft` 仍是 Outbox 的结果和审计状态，不应写成已经完成的统一审批中心。

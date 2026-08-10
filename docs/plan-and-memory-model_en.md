@@ -28,9 +28,22 @@ data/roles/<RoleId>/
   memory/recent/*.md
   memory/consolidated/*.md
   memory/consolidation-runs/*.json
+  identity-relations/events.jsonl
 ```
 
 The filesystem is the source of truth. The Manager API reads and writes these files. Qt and WebGUI keep plan content read-only; approval feedback stays on Manager-declared approval steps, while RibiWebGUI also accepts whole-plan guidance for running plans outside approval.
+
+### Identity-relation memory
+
+Identity-relation memory has the `identity_relation` knowledge type. It is persona-private material alongside plans and recent memory, but it never enters the 24/72-hour recent-memory consolidation flow. It stores endpoint accounts, participant entities, and relation cards as append-only events:
+
+```text
+data/roles/<RoleId>/identity-relations/events.jsonl
+```
+
+An account key is exactly `platform + endpointIdentityNamespace + senderStableId`. Route configuration IDs, display names, avatars, and the current topic are not identity keys. One account may have candidate or confirmed participant mappings, while one participant may have multiple accounts. A relation card records collaboration, reporting, or decision scope between people, organizations, and projects, with `candidate`, `confirmed`, `corrected`, or `retired` state, group/project scope, and minimal evidence references.
+
+This data resolves participants only. It must not turn platform privileges, a temporary speaking role, or one discussion into business authority. Candidate relations cannot support naming, authorization, project attribution, or execution. Delivery places project relation cards that apply to the current conversation into the Conversation situation (shadow assessment), but that means only that the Agent may participate in the discussion; it never grants management of that project's plans, tasks, or long-term memory. Multi-PC synchronization unions events; when concurrent heads for one record disagree, the current view explicitly marks a conflict and stops automatic confirmation instead of choosing one by file order. One persona correction containing every material field supersedes all current heads and lets later synchronization converge. A handler confirms or corrects identity relations explicitly through the API; identity context on a delivery does not require a plan/memory callback.
 
 ## Plans
 

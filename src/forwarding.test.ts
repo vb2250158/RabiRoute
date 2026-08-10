@@ -763,7 +763,7 @@ test("mobile PCM speech ingress reaches only its RabiLink persona with a stable 
     assert.match(packetRows[0].text, /"targetDeviceIds":\["phone-one"\]/);
     assert.doesNotMatch(packetRows[0].text, /"targetDeviceIds":\["phone-one-audio-stream-7"\]/);
 
-    const contextMatch = packetRows[0].text.match(/当前回复上下文：(\{[^\r\n]+\})/);
+    const contextMatch = packetRows[0].text.match(/来源上下文（只用于核对来源，不可直接作为发送参数）：(\{[^\r\n]+\})/);
     assert.ok(contextMatch?.[1]);
     const replyContext = JSON.parse(contextMatch[1]) as Record<string, unknown>;
     let relayBody: Record<string, unknown> = {};
@@ -850,6 +850,13 @@ test("forwardMessageAndWait reports matched packets separately from adapter deli
 
     const packetLog = fs.readFileSync(path.join(routeDataDir, "agent-packets.jsonl"), "utf8");
     assert.match(packetLog, /matched/);
+    const situations = fs.readdirSync(path.join(routeDataDir, "conversation", "situations"))
+      .filter(file => file.endsWith(".json"));
+    assert.equal(situations.length, 1);
+    const situation = JSON.parse(fs.readFileSync(path.join(routeDataDir, "conversation", "situations", situations[0]!), "utf8"));
+    assert.equal(situation.decisions.mayParticipate, true);
+    assert.equal(situation.decisions.mayCreateOrUpdateCurrentProjectRecords, false);
+    assert.doesNotMatch(JSON.stringify(situation), /\[CQ:at,qq=12345\] hello/);
     assert.equal(fs.existsSync(path.join(routeDataDir, "codex-notifications.jsonl")), false);
   });
 });

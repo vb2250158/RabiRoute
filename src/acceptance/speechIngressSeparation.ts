@@ -76,7 +76,7 @@ function replyContext(roleDir: string): Record<string, unknown> {
   const packets = readJsonl(path.join(roleDir, "agent-packets.jsonl"));
   if (packets.length !== 1) throw new Error(`Expected exactly one isolated AgentPacket, received ${packets.length}.`);
   const text = String(packets[0]?.text || "");
-  const match = text.match(/当前回复上下文：(\{[^\r\n]+\})/);
+  const match = text.match(/来源上下文（只用于核对来源，不可直接作为发送参数）：(\{[^\r\n]+\})/);
   if (!match?.[1]) throw new Error("Isolated AgentPacket did not contain replyContext.");
   const value = JSON.parse(match[1]) as unknown;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid replyContext payload.");

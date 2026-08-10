@@ -52,7 +52,7 @@ AIUI foreground ASR
   -> review later through the Desktop task owner
 
 Codex / scheduler / planner
-  -> POST /api/agent/replies
+  -> POST /api/agent/send
   -> RabiLink Outbox policy
   -> persistent Relay downlink
   -> GET /rokid/rabilink/messages?stream=1&after=<cursor>

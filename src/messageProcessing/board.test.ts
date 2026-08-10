@@ -437,6 +437,25 @@ test("Outbox sent receipt is the terminal proof for a reply requirement", () => 
   assert.equal(item?.delivery?.sentMessageId, "qq-500");
 });
 
+test("a speech send cannot close a NapCat reply requirement", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-channel-"));
+  const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
+  store.registerMessageGroup({ requirementId: "req-channel-mismatch", messageGroupId: "group-channel-mismatch", source: source(["direct_reply"]) });
+  store.submitOutcome("req-channel-mismatch", { decision: "reply", projectFactAssessment: noneAssessment(), reason: "Answer in QQ." });
+  store.recordSend("req-channel-mismatch", {
+    ok: true,
+    status: "sent",
+    channel: "speech",
+    routeId: "main",
+    target: { sessionId: "speech-1" },
+    sentMessageId: "tts-job-1"
+  }, "delivery-speech-1");
+  const item = store.get("req-channel-mismatch");
+  assert.equal(item?.status, "awaiting_send");
+  assert.equal(item?.delivery?.channel, "speech");
+  assert.match(item?.lastError || "", /expects napcat/);
+});
+
 test("linked plans generate required notifications only for communication-relevant changes", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-plan-"));
   const store = new MessageProcessingBoardStore(path.join(root, "board.json"));

@@ -21,7 +21,7 @@ examples/data/roles/RabiActive -> data/roles/RabiActive
 
 这条 Route 的 `rabilink` 输入策略允许 worker 接收 AIUI observation。observation 先写入 `RabiActive/rabilink-conversation.jsonl`，不会逐句直接投递 Codex；审阅器等待已绑定 Desktop 任务空闲，或在触摸板单击后启动/steer 审阅。
 
-Codex 主动下行通过 `/api/agent/replies` 使用 `targetType=rabilink`、`proactive=true`，与上行 observation 使用独立队列。真实 prompt 只有 Desktop IPC 一个 owner；目标任务未加载时失败关闭。
+Codex 主动下行通过 `/api/agent/send` 使用精确 `routeId`、`channel=rabilink`，并在 `params` 中明确 `proactive=true`、目标设备和呈现方式；它与上行 observation 使用独立队列。真实 prompt 只有 Desktop IPC 一个 owner；目标任务未加载时失败关闭。
 
 如果还要把 FenneNote 这类电脑常驻转写作为补充观察源，可在同一条 Route 中增加 `fennenote` 消息端，给它单独设置未占用的 `fenneNoteWebhookPort`，把该消息端设为“允许输入、禁止输出”，并把 `routeVariables.rabilinkRecordFirstSources` 设为 `fennenote`。这些转写会进入同一个会话账本并等待空闲审阅，不会逐句创建 Codex 任务。模板默认把该变量留空，因为 PC 麦克风不等于眼镜麦克风，而且持续录音必须由用户显式开启。
 

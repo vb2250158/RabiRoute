@@ -125,7 +125,7 @@ test("translates Quick setup copy across all three steps", () => {
     ["快速配置只绑定一个 Agent；先确定处理端和项目目录，再选择会话。", "Quick setup binds one Agent. Choose the handler and project directory first, then select a task."],
     ["Codex/ChatGPT Desktop 是真实消息的唯一 owner。RabiRoute 读取 Desktop 可见任务目录并通过 Desktop IPC 投递；Codex CLI 是独立 Runtime，不作为 Desktop 投递的备用路径。", "Codex/ChatGPT Desktop is the sole owner of real messages. RabiRoute reads Desktop-visible tasks and delivers through Desktop IPC. Codex CLI is a separate runtime and is not a fallback for Desktop delivery."],
     ["人格可选与配置确认", "Optional persona and configuration review"],
-    ["不配置人格时，只按消息入口默认模板把来源和回传 API 投递给 Agent。", "Without a persona, the default input template sends only the source and reply API to the Agent."],
+    ["不配置人格时，只按消息入口默认模板把来源和回传 API 投递给 Agent。", "Without a persona, the default input template sends only the source and send API to the Agent."],
     ["会话名 + 最后会话时间", "Task name + last activity"],
     ["选择已有会话，或输入新会话名", "Select an existing task or enter a new task name"]
   ]);

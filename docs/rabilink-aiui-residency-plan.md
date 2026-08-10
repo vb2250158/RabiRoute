@@ -63,8 +63,8 @@ FenneNote 或未来 Android foreground service
   -> Codex 固定线程空闲审阅 / 周期反思 / 触摸板引导
 
 Codex / 定时器 / 规划器
-  -> RabiRoute /api/agent/replies 输出安全门
-  -> targetType=rabilink, proactive=true
+  -> RabiRoute /api/agent/send 输出安全门
+  -> routeId=<exact>, channel=rabilink, params.proactive=true, params.targetDeviceKinds=[glasses]
   -> Relay 持久 outbox
   -> /rokid/rabilink/messages?stream=1
   -> AIUI 持久待播队列

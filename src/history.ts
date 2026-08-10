@@ -142,6 +142,8 @@ export type WeComMessageRecord = {
   groupId?: string;
   userId?: string;
   senderId?: string;
+  /** Stable non-secret identity of the configured message endpoint, when available. */
+  identityNamespace?: string;
   messageType?: string;
   repliedMessageId?: string;
   isSelf?: boolean;
@@ -157,6 +159,8 @@ export type WeixinMessageRecord = {
   adapterType: "weixin";
   sessionId: string;
   userId: string;
+  /** Stable non-secret identity of the configured message endpoint, when available. */
+  identityNamespace?: string;
   messageType: string;
   repliedMessageId?: string;
   quotedText?: string;
@@ -176,6 +180,8 @@ export type FeishuMessageRecord = {
   chatId: string;
   groupId: string;
   userId: string;
+  /** Stable non-secret identity of the configured message endpoint, when available. */
+  identityNamespace?: string;
   messageType: string;
   raw?: unknown;
 };

@@ -80,6 +80,10 @@ export type AgentReplyRequest = {
   presentation?: unknown;
   priority?: unknown;
   sessionId?: unknown;
+  /** Internal-only marker used by the strict /api/agent/send contract. */
+  explicitTarget?: unknown;
+  /** Internal-only explicit channel selected by the strict send contract. */
+  sendChannel?: unknown;
 };
 
 export type AgentReplyNapCatInstance = NapCatEndpoint & {
@@ -608,6 +612,22 @@ function resolveRouteById(options: AgentReplyOptions, routeProfileId?: string, r
   return undefined;
 }
 
+function resolveExplicitSendRoute(options: AgentReplyOptions, routeId?: string): ResolvedRoute | undefined {
+  if (!routeId) return undefined;
+  for (const runtime of options.runtimes) {
+    if (runtime.enabled === false) continue;
+    const profile = runtime.routeProfiles?.find(item => item.id === routeId && item.enabled !== false);
+    if (profile) return { runtime, profile };
+    if (runtime.id === routeId || runtime.configName === routeId) {
+      if ((runtime.routeProfiles?.length ?? 0) > 1) return undefined;
+      const onlyProfile = runtime.routeProfiles?.[0];
+      if (onlyProfile?.enabled === false) return undefined;
+      return { runtime, profile: onlyProfile };
+    }
+  }
+  return undefined;
+}
+
 function resolveRoute(options: AgentReplyOptions, routeProfileId?: string, messageId?: string, contextTarget?: SourceRecord, runtimeRouteId?: string): ResolvedReplyRoute | undefined {
   const sourceRoute = findSourceRoute(options, messageId, contextTarget);
   if (sourceRoute) return sourceRoute;
@@ -694,6 +714,28 @@ function routePipeline(route: ResolvedRoute): ResolvedPipeline {
 function replyPipeline(route: ResolvedRoute, request: AgentReplyRequest, target: SourceRecord): ResolvedPipeline {
   const pipeline = routePipeline(route);
   const context = contextObject(request);
+  const explicitChannel = valueString(request.sendChannel);
+  const explicitOutputAdapter = explicitChannel === "napcat"
+    ? "qq"
+    : explicitChannel === "speech"
+      ? "tts"
+      : explicitChannel === "fennenote"
+        ? "fennenote"
+        : explicitChannel === "wecom"
+          ? "wecom"
+          : explicitChannel === "feishu"
+            ? "feishu"
+            : explicitChannel === "weixin"
+              ? "weixin"
+              : undefined;
+  if (request.explicitTarget === true && explicitOutputAdapter) {
+    return {
+      ...pipeline,
+      outputAdapter: explicitOutputAdapter,
+      outputPipeline: explicitOutputAdapter,
+      replyToSource: context.replyToSource === true
+    };
+  }
   const characterTtsDialogue = context.characterTtsDialogue === true
     && target.targetType === "voice_transcript"
     && (target.adapterType === "speech" || valueString(context.adapterType) === "speech");
@@ -1193,8 +1235,9 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   const content = requestContent(request);
   const text = content.text;
   const context = contextObject(request);
+  const explicitTarget = request.explicitTarget === true;
   const routeProfileId = requestField(request, "routeProfileId");
-  const runtimeRouteId = valueString(context.runtimeRouteId ?? context.gatewayId);
+  const runtimeRouteId = explicitTarget ? undefined : valueString(context.runtimeRouteId ?? context.gatewayId);
   const messageId = requestField(request, "messageId");
   const contextTarget: SourceRecord = {
     messageId,
@@ -1231,23 +1274,28 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
       || requestField(request, "weixinMessageType"),
     sessionId: requestField(request, "weixinSessionId") || requestField(request, "sessionId")
   };
-  const route = resolveRoute(options, routeProfileId, messageId, contextTarget, runtimeRouteId);
+  const route = explicitTarget
+    ? resolveExplicitSendRoute(options, routeProfileId)
+    : resolveRoute(options, routeProfileId, messageId, contextTarget, runtimeRouteId);
   const withConversation = (data: Record<string, unknown>): Record<string, unknown> => route
     ? outboundConversationData(route, contextTarget, context, text, data)
     : data;
-  appendOutboxLog(options, route, "info", "reply_requested", text.slice(0, 500), { routeProfileId, messageId, payloadKind: content.kind, request });
+  appendOutboxLog(options, route, "info", explicitTarget ? "send_requested" : "reply_requested", text.slice(0, 500), { routeProfileId, messageId, payloadKind: content.kind, request });
 
   if (!route) {
-    const result: AgentReplyResult = { ok: false, status: "blocked", reason: "Route source context is required when multiple routes are configured.", routeProfileId, messageId, draft: { text } };
+    const result: AgentReplyResult = { ok: false, status: "blocked", reason: explicitTarget ? "An exact enabled routeId is required for sending." : "Route source context is required when multiple routes are configured.", routeProfileId, messageId, draft: { text } };
     appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
     return result;
   }
 
-  const loggedTarget = route.sourceRecord ?? findSourceRecord(options, route, messageId);
-  const target = contextTarget.targetType === "plan_feedback"
-    ? { ...loggedTarget, ...contextTarget }
-    : { ...contextTarget, ...loggedTarget };
-  if (target.targetType === "group" && !target.groupId && route.runtime.targetGroupId) {
+  const routeSourceRecord = "sourceRecord" in route ? route.sourceRecord : undefined;
+  const loggedTarget = explicitTarget ? undefined : routeSourceRecord ?? findSourceRecord(options, route, messageId);
+  const target = explicitTarget
+    ? { ...contextTarget }
+    : contextTarget.targetType === "plan_feedback"
+      ? { ...loggedTarget, ...contextTarget }
+      : { ...contextTarget, ...loggedTarget };
+  if (!explicitTarget && target.targetType === "group" && !target.groupId && route.runtime.targetGroupId) {
     target.groupId = String(route.runtime.targetGroupId);
   }
   if (target.targetType === "plan_feedback") {

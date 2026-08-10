@@ -54,28 +54,28 @@ Pipeline values available to route templates include:
 {promptOutputMode}
 {ttsProvider} {ttsVoice} {ttsWorkerUrl} {ttsPlay}
 {preventFeedbackLoop} {replyToSource}
-{replyApiUrl} {replyContextJson}
+{sendApiPath} {sendApiUrl} {sendRequestJson}
 ```
 
 RabiRoute also injects a generated reply-delivery section. Users normally do not need to encode all policy logic into the route template.
 
-## Handler replies
+## Explicit Agent sends
 
 Use:
 
 ```http
-POST /api/agent/replies
+POST /api/agent/send
 ```
 
-with the injected `replyContext`. Outbox resolves the active route and pipeline and returns `sent`, `draft`, `blocked`, or `failed`.
+with the injected `sendRequestJson` template. Every request must provide a stable `deliveryId`, an exact `routeId`, one `channel`, channel-specific `params`, and a `payload`. The source `replyContext` is audit context and is not a send target. Outbox returns `sent`, `draft`, `blocked`, or `failed`.
 
-An explicit QQ/WeCom/RabiLink target can select the corresponding endpoint even when the compatibility pipeline is still `legacy`, but the adapter policy must allow output and the target must be unambiguous.
+The explicit `channel` selects QQ/NapCat, WeCom, RabiLink, speech, or another supported endpoint even when the Route's default pipeline differs. The adapter policy must allow output, and required target parameters must be present.
 
 There is no generic persistent Action Queue, WebGUI approval center, or automatic retry queue. `draft` is a result/audit state, not a pending item in a finished approval product.
 
 ## RabiSpeech speech message endpoint
 
-A `voice_transcript` from the `speech` message endpoint is forced to `voice_chat` in `AgentPacket`, even if the Route's general preset is still QQ or the Agent-session fallback. Its reply context contains `characterTtsDialogue=true`; the handler must POST a short spoken line, semantically identical to its visible reply, to `/api/agent/replies` instead of leaving text only in the Codex task.
+A `voice_transcript` from the `speech` message endpoint is forced to `voice_chat` in `AgentPacket`, even if the Route's general preset is still QQ or the Agent-session fallback. Its source context contains `characterTtsDialogue=true`, and the packet injects a send template with `channel=speech` plus the exact `sessionId`; the handler must POST a short spoken line, semantically identical to its visible reply, to `/api/agent/send` instead of leaving text only in the Codex task.
 
 Outbox revalidates the source record and `messageAdapterPolicies.speech`, then sends the Route persona ID, playback policy, and original `sessionId` to local `POST /v1/audio/speech`. RabiSpeech reads the TTS model, voice binding, language, speed, and speaking instructions from `data/roles/<RoleId>/voice/voice-profile.json`; legacy Route TTS fields are compatibility fallbacks only when persona configuration is missing. With `speechAutoPlay=true`, the completed audio enters the host-wide FIFO. A successful API result means accepted or queued, not that speaker playback has already completed.
 

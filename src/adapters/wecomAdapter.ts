@@ -102,6 +102,7 @@ function recordFromFrame(frame: WsFrame<BaseMessage>): WeComMessageRecord | null
     groupId: chatId,
     userId: senderId,
     senderId,
+    identityNamespace: config.wecomBotId ? `bot:${config.wecomBotId}` : undefined,
     senderName: from?.name || senderId,
     messageType: body.msgtype,
     repliedMessageId: quote?.msgid,

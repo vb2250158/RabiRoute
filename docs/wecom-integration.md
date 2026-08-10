@@ -20,9 +20,9 @@
   -> RabiRoute wecom adapter
   -> wecom-messages.jsonl / wecom-adapter.log.jsonl
   -> forwarding / RouteDecision
-  -> AgentPacket / replyContextJson
+  -> AgentPacket / sendRequestJson
   -> Agent adapter
-  -> POST /api/agent/replies
+  -> POST /api/agent/send
   -> outbox
   -> 企业微信群聊
 ```
@@ -92,7 +92,7 @@ WECOM_WS_URL=<可选：私有部署或调试 WebSocket 地址>
 {botNickname} {routeProfileId} {routeProfileName}
 {agentRoleId} {agentRolePath} {agentRoleDir}
 {dataDir} {groupLogPath} {privateLogPath}
-{replyApiUrl} {replyContextJson}
+{sendApiUrl} {sendRequestJson}
 {inputAdapter} {outputAdapter} {outputPipeline} {replyToSource}
 ```
 
@@ -145,11 +145,11 @@ WECOM_WS_URL=<可选：私有部署或调试 WebSocket 地址>
 回复来源：{replyToSource}
 
 [回传]
-普通回复 API：{replyApiUrl}
-当前回复上下文：{replyContextJson}
+明确发送 API：{sendApiUrl}
+发送请求模板：{sendRequestJson}
 
 [行动]
-请按 persona.md 中的角色身份判断是否需要回应、记录、追问或行动。需要普通聊天回复时，把回复交给 RabiRoute 普通回复 API，不要直接调用企业微信 SDK。
+请按 persona.md 中的角色身份判断是否需要回应、记录、追问或行动。需要普通聊天回复时，把回复交给 RabiRoute 明确发送 API，不要直接调用企业微信 SDK。
 ```
 
 ## Route Kind
@@ -176,33 +176,27 @@ wecom_message
 
 `targetGroupId` 对企业微信同样使用 `{groupId}` 的值。这样规则过滤群聊时可以和 NapCat 群号过滤保持同一套语义。
 
-## 回复与主动发送
+## 明确发送
 
-Agent 不直接调用企业微信 SDK。普通回复仍然走 RabiRoute 的统一回传接口：
+Agent 不直接调用企业微信 SDK。无论是回应当前消息还是主动发送，都必须明确填写 Route、企业微信渠道和目标群：
 
 ```http
-POST /api/agent/replies
+POST /api/agent/send
 ```
 
-回复当前来源消息：
+发送到当前来源群：
 
 ```json
 {
-  "text": "收到，我来整理一下。",
-  "replyContext": {
-    "adapterType": "wecom",
-    "routeKind": "wecom_message",
-    "targetType": "group",
-    "messageId": "wecom-msg-001",
-    "groupId": "wrCHATID",
+  "deliveryId": "wecom-msg-001-response",
+  "routeId": "wecom",
+  "channel": "wecom",
+  "params": {
+    "chatId": "wrCHATID",
     "userId": "zhangsan",
-    "wecomReqId": "REQ_ID",
-    "wecomConversationId": "CONVERSATION_ID",
-    "wecomChatId": "wrCHATID",
-    "outputAdapter": "wecom",
-    "outputPipeline": "wecom",
-    "replyToSource": true
-  }
+    "reqId": "REQ_ID"
+  },
+  "payload": { "type": "text", "text": "收到，我来整理一下。" }
 }
 ```
 
@@ -210,19 +204,15 @@ POST /api/agent/replies
 
 ```json
 {
-  "text": "项目提醒：今天 18:00 前请同步阻塞项。",
-  "targetType": "group",
-  "groupId": "wrCHATID",
-  "adapterType": "wecom",
-  "replyContext": {
-    "outputAdapter": "wecom",
-    "outputPipeline": "wecom",
-    "replyToSource": false
-  }
+  "deliveryId": "wecom-reminder-2026-08-10-1800",
+  "routeId": "wecom",
+  "channel": "wecom",
+  "params": { "chatId": "wrCHATID" },
+  "payload": { "type": "text", "text": "项目提醒：今天 18:00 前请同步阻塞项。" }
 }
 ```
 
-发送前必须检查当前路由的 `messageAdapterPolicies.wecom.outputEnabled` 和 `supportedOutputs`。关闭发送、缺少明确目标、缺少企业微信 bot secret、SDK 返回发送限制或目标不可达时，outbox 返回 `blocked` / `failed`，并写入 `outbox-adapter.log.jsonl`。
+`routeId` 必须精确指向启用中的 Route，`params.chatId` 必须明确。回应当前消息时可带 `params.reqId`，主动发送时省略。发送前仍会检查 `messageAdapterPolicies.wecom.outputEnabled` 和 `supportedOutputs`。关闭发送、缺少明确目标、缺少企业微信 bot secret、SDK 返回发送限制或目标不可达时，outbox 返回 `blocked` / `failed`，并写入 `outbox-adapter.log.jsonl`。
 
 ## 日志与状态
 
@@ -275,6 +265,6 @@ data/route/<configName>/outbox-adapter.log.jsonl
 - `wecom` 是独立消息端，不复用 `webhook`。
 - 企业微信群聊变量要尽量对齐 NapCat 群聊变量，专用字段只作为补充。
 - Adapter 只做协议翻译、日志和入口判断，不拼 Agent prompt。
-- Prompt 和 `replyContextJson` 仍由 `src/routing/agentPacket.ts` 生成。
+- Prompt 和 `sendRequestJson` 仍由 `src/routing/agentPacket.ts` 生成；来源上下文只用于审计，不作为发送目标。
 - 出站发送必须走 `src/outbox.ts`，不能从 adapter 收消息 handler 里直接发。
 - 公开文档和示例不能包含真实企业微信 secret、企业内部人员 ID 或真实群聊内容。

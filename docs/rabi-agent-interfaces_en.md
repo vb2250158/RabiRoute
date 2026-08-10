@@ -18,7 +18,7 @@ The packet normally includes:
 
 ```text
 Rabi interface guide: docs/rabi-agent-interfaces.md
-Reply API: http://127.0.0.1:8790/api/agent/replies
+Send API: http://127.0.0.1:8790/api/agent/send
 Current reply context: {...}
 ```
 
@@ -122,28 +122,80 @@ Both source and target Routes must be enabled. If the target persona has multipl
 
 Cross-persona delivery is explicitly one-way and does not create an automatic two-way chat. The target persona's ordinary reply remains in its own role panel. To answer the source persona, it must POST again with a new reply `deliveryId`, reuse the received `personaConversationId`, set `inReplyToMessageId` to the current message ID, and increment `personaMessageHopCount`. Stop when `personaMessageMaxHops` would be exceeded.
 
-## Normal reply API
+## Identity-relation memory API
 
-Handlers should return user-facing chat replies through RabiRoute:
+Identity relations record which participant an endpoint account may represent and which long-lived relations are confirmed or unresolved. They are not chat history, plans, or a speaker's temporary stance. They are persona-private and are never learned automatically from a nickname, group privilege, or one utterance. An account lookup requires all of `platform`, `endpointIdentityNamespace`, and `senderStableId`; do not substitute a Route ID for any of them.
+
+```text
+GET /api/roles/:roleId/identity-relations
+GET /api/roles/:roleId/identity-relations?platform=<platform>&endpointIdentityNamespace=<namespace>&senderStableId=<id>&conversationKey=<optional>
+PUT /api/roles/:roleId/identity-relations
+```
+
+`GET` without query parameters returns the current account, participant, and relation-card views. With a complete account key, it returns that account's resolution context. A `PUT` writes exactly one `endpoint_account`, `participant`, or `relation_card`. Include minimal evidence references such as a message ID, endpoint, conversation, or short verification note; never copy a private chat body in full. After multi-PC synchronization, a record with disagreeing concurrent event heads is marked with `conflicted`, exposes `conflictEventIds`, and retains each complete candidate record in `conflictCandidates` for the persona page to compare before correction; it cannot take part in automatic confirmation. To converge it, a `PUT` must explicitly provide every material field for that record, and its new event replaces all current heads.
+
+The Persona page's **Identity relations** card uses the same interface to view, create, and correct participants, endpoint-account mappings, and relation cards. It refreshes after an identity correction or persona-sync event. Candidates and conflicts remain verification material only; the page must not present them as project ownership or execution authorization.
+
+### Conversation-situation shadow records
+
+```text
+GET /api/roles/:roleId/conversation-situations?limit=20
+GET /api/roles/:roleId/conversation-situations/:situationId
+```
+
+Actual message delivery creates this read-only record. It contains no chat text: only conversation and message identifiers, project leads derived from relation cards, attachment or identity ambiguity, and `mayParticipate=true` with `mayCreateOrUpdateCurrentProjectRecords=false`. It lets a reviewer see whether proactive intelligence confused “may join a discussion” with “should manage the current project.” The interface cannot create, confirm, or authorize a project action.
+
+```json
+{
+  "kind": "endpoint_account",
+  "platform": "napcat",
+  "endpointIdentityNamespace": "instance:qq-main",
+  "senderStableId": "example-user-id",
+  "participantLinks": [
+    {
+      "participantId": "participant-example",
+      "status": "confirmed",
+      "confidence": 1,
+      "evidenceRefs": [{ "messageId": "example-message-id" }]
+    }
+  ]
+}
+```
+
+A candidate is for verification only and cannot support real-name address, authorization, project attribution, or execution. `confirmed` establishes only the identity or relation itself; it never bypasses explicit delegation, project scope, or approval for external action. Identity relations do not enter `knowledgeMatches` and do not need a `knowledge-callback` for every message.
+
+## Explicit send API
+
+All outbound endpoint messages use one API. The legacy `/api/agent/replies` endpoint is removed. `/api/agent/send` does not accept an unchanged `replyContext` and infer a destination from it.
 
 ```http
-POST /api/agent/replies
+POST /api/agent/send
 ```
 
 ```json
 {
-  "text": "Received. I will investigate.",
-  "replyContext": {
-    "routeProfileId": "main",
-    "targetType": "group",
-    "messageId": "example-message-id",
+  "deliveryId": "send-example-001",
+  "routeId": "main",
+  "channel": "napcat",
+  "params": {
+    "target": "group",
     "groupId": "example-group-id",
-    "instanceId": "default"
+    "instanceId": "default",
+    "replyToMessageId": "example-message-id"
+  },
+  "payload": {
+    "type": "text",
+    "text": "Received. I will investigate."
+  },
+  "tracking": {
+    "requirementId": "message-requirement-001"
   }
 }
 ```
 
-The safest path is to pass the injected `replyContextJson` back unchanged. RabiRoute resolves the route, source record, output pipeline, adapter policy, and target.
+`deliveryId` and the exact enabled `routeId` are required. `channel` selects the only delivery adapter, while `params` carries the channel-specific destination. Supported channels are `napcat`, `wecom`, `weixin`, `feishu`, `rabilink`, `speech`, `fennenote`, `role_panel`, and `plan_feedback`. The injected request template contains the correct shape for the current source. Source context remains available for auditing, but it cannot override `channel` or `params`.
+
+For NapCat, use `target=group + groupId` or `target=private + userId`; add `replyToMessageId` only for a real QQ reply reference. WeCom and Feishu require `chatId`; Weixin requires `sessionId`; RabiLink requires `targetDeviceIds` or `targetDeviceKinds`; speech explicitly selects RabiSpeech and never proves a QQ send.
 
 ### Message-processing requirements and board API
 
@@ -153,7 +205,7 @@ With Message Agent mode enabled, Manager assigns each delivered message group a 
 POST /api/message-processing/requirements/:requirementId/outcome
 ```
 
-For a reply, submit the decision and then call the normal reply API. When Outbox returns `sent`, Manager uses the same `replyContext.messageProcessingRequirementId` to complete the board item automatically:
+For a reply, submit the decision and then call the explicit send API with `tracking.requirementId`. Manager completes the board item only when the selected channel matches the source endpoint and the result contains the receipt required by that channel:
 
 ```json
 {
@@ -248,19 +300,19 @@ Items expose the stage, source message group, worker task, handoff, decision, se
 
 ### Controlled outbound idempotency receipts
 
-Callers that must survive duplicate clicks, request timeouts, lost responses, Manager restarts, or concurrent requests may provide a stable `deliveryId`. Before entering Outbox, Manager persists a reservation under runtime `data/agent-reply-idempotency/`. The same `deliveryId` with the same payload executes once, and later POSTs return the original `sent/draft/blocked/failed` result. Reusing the ID with a different payload returns `409 conflict`; `reserved/sending/uncertain` states also fail closed and are never auto-replayed.
+`deliveryId` is required. Before entering Outbox, Manager persists a reservation under runtime `data/agent-send-idempotency/`. The same ID with the same request executes once, and later POSTs return the original `sent/draft/blocked/failed` result. Reusing the ID with a different request returns `409 conflict`; `reserved/sending/uncertain` states also fail closed and are never auto-replayed.
 
 After a POST timeout or an empty receipt, query the original ID first:
 
 ```http
-GET /api/agent/replies/receipts/:deliveryId
+GET /api/agent/send/receipts/:deliveryId
 ```
 
 The caller may mark delivery only when the receipt returns `status=sent` with the real identifier required by the target channel (`sentMessageId` for QQ text), followed by any required platform readback. `deliveryId` provides Outbox request idempotency; it does not replace NapCat/external-platform existence verification and is not an automatic retry queue. Public examples use placeholders, and runtime receipt files stay out of Git.
 
 ### Character reply for the speech message endpoint
 
-When injected `replyContext` contains `routeKind=voice_transcript`, `adapterType=speech`, and `characterTtsDialogue=true`, the turn came from the RabiPC speech message endpoint. The handler must not leave the answer only in the Codex task. It should POST readable speech text, semantically identical to its visible final reply, together with the unchanged `replyContext` to `/api/agent/replies`. Outbox rebinds the source Route and reads its persona, voice, TTS model, language, instructions, `sessionId`, and `speechAutoPlay`. A successful `sent` result with playback enabled means the audio entered the host-wide RabiSpeech FIFO; it does not claim that speaker playback has already finished.
+When source context contains `routeKind=voice_transcript`, `adapterType=speech`, and `characterTtsDialogue=true`, the turn came from the RabiPC speech endpoint. Use the injected send template with `channel=speech`, the exact `routeId`, `params.sessionId`, and a text payload. A successful result means the request reached RabiSpeech synthesis or its host-wide FIFO; it does not claim speaker playback and cannot complete a QQ requirement.
 
 Only `speech` / RabiSpeech transcript ingress injects this state. Do not mark QQ, role-panel, or ordinary text requests as speech dialogue, and do not bypass Outbox to call a worker directly, because that loses source binding, policy enforcement, and session isolation.
 
@@ -275,7 +327,7 @@ failed  a real delivery attempt failed
 
 There is no generic persistent approval center or automatic retry queue. Callers must inspect the returned status; a supplied `deliveryId` adds fail-closed request deduplication and receipt lookup only.
 
-Phone audio may reuse the same RabiSpeech ASR chain, but it enters the Agent as `routeKind=rabilink`, `adapterType=rabilink`, with stable `sourceDeviceId/sourceDeviceKind`, transient `sourceStreamId`, and `channelType=rabilink.mobile_audio`. The Agent still POSTs the complete `replyContext` to `/api/agent/replies`; Outbox converts only the stable originating `sourceDeviceId` into `targetDeviceIds`, never the current PCM stream ID, so the reply returns only to that phone. This is not the standalone `speech` endpoint and does not use its persona-TTS/FIFO reply policy.
+Phone audio may reuse the same RabiSpeech ASR chain, but its outbound channel is `rabilink`. The send request explicitly carries `params.sourceMessageId` and stable `targetDeviceIds`; the transient PCM `sourceStreamId` is never a downlink target. This cannot be redirected into the standalone `speech` channel.
 
 ### Voiceprint evidence and persona identity interpretation
 
@@ -361,39 +413,40 @@ Content-Type: application/json
 }
 ```
 
-Omit `roleId` to synchronize every persona. The coordinator prefers direct LAN transfer and falls back to restricted Relay transit. The Agent must inspect per-file results, `fileConflicts`, and `semanticConflicts`. The latter is returned by the same sync request when JSONL union succeeds but persona voice relationships still have concurrent branches, including processing host, voiceprint, fields, and candidate events; no follow-up coverage polling is required. `conflicts > 0` or HTTP `409` means unresolved conflict remains and completion must not be claimed.
+Omit `roleId` to synchronize every persona. The coordinator prefers direct LAN transfer and falls back to restricted Relay transit. The Agent must inspect per-file results, `fileConflicts`, and `semanticConflicts`. The latter is returned by the same sync request when JSONL union succeeds but voice relationships or identity relations still have concurrent branches. Voice items include host, voiceprint, fields, and candidate events; identity-relation items include record kind, record ID, and candidate events. No follow-up coverage polling is required. `conflicts > 0` or HTTP `409` means unresolved conflict remains and completion must not be claimed.
 
 A local Agent resolves ordinary-file conflicts through `GET /api/persona-sync/conflicts`, `GET /api/persona-sync/conflicts/content`, and `POST /api/persona-sync/conflicts/resolve`. Actions are `keep_local`, `use_remote`, and `use_merged`; resolution should include the listed `expectedLocalHash` to avoid overwriting a newer local edit. These three control endpoints are loopback-only and are not exposed through the LAN listener or Relay. See [Multi-PC persona data synchronization](persona-data-sync_en.md) for complete manifest, file, merge, and resolution contracts.
 
 When the current routed message explicitly mentions multiple PCs, persona/role synchronization, or persona sync, AgentPacket injects these loopback URLs, the current `roleId`, the one-shot execution rule, and terminal-conflict criteria into the bound persona's current task. Ordinary conversation receives no such capability prompt. The default scope is the current persona; omit `roleId` only when the user explicitly requests every persona. If peer discovery is not unique, the Agent must confirm the target instead of guessing or polling for coverage.
 
-### NapCat source reply
+### NapCat send with an explicit reply reference
 
-Set `replyToSource: true` with the source `messageId` to add a OneBot reply segment for group messages. RabiRoute avoids adding a duplicate reply segment.
+Set `channel=napcat`, name the group, and provide `params.replyToMessageId` only when the outgoing message should quote a specific source message. RabiRoute avoids adding a duplicate reply segment.
 
 ```json
 {
-  "text": "I have taken the issue and will update this thread.",
-  "replyContext": {
-    "routeProfileId": "main",
-    "targetType": "group",
+  "deliveryId": "send-qq-progress-001",
+  "routeId": "main",
+  "channel": "napcat",
+  "params": {
+    "target": "group",
     "groupId": "example-group-id",
-    "messageId": "example-message-id",
     "instanceId": "default",
-    "replyToSource": true
-  }
+    "replyToMessageId": "example-message-id"
+  },
+  "payload": { "type": "text", "text": "I have taken the issue and will update this thread." }
 }
 ```
 
-Local QQ group-file upload uses the same endpoint with `payloadType: "file"`, an allowed `filePath`, and a route policy whose NapCat `supportedOutputs` includes `file`. The real path must stay under `messageAdapterPolicies.napcat.allowedFileRoots`.
+Local QQ group-file upload uses the same endpoint with `payload.type: "file"`, an allowed `payload.path`, and a route policy whose NapCat `supportedOutputs` includes `file`. The real path must stay under `messageAdapterPolicies.napcat.allowedFileRoots`.
 
 ### WeCom
 
-For a source reply, preserve WeCom fields such as `adapterType`, `wecomConversationId`, and `wecomChatId`. For a proactive group send, provide an explicit `adapterType=wecom`, `targetType=group`, and `groupId`/chat ID. The WeCom adapter remains experimental.
+Use `channel=wecom` and provide the exact `params.chatId`. A source response may also include `params.reqId`; a proactive send omits it. Source context does not select the channel. The WeCom adapter remains experimental.
 
 ### RabiLink proactive output
 
-An explicit `targetType: "rabilink"` and `proactive: true` can enqueue a device message when the selected route enables RabiLink output and has a Relay configured. The local handler still goes through Outbox; it must not bypass RabiRoute and call the Relay directly.
+Use `channel=rabilink`, `params.proactive=true`, and at least one explicit `targetDeviceIds` or `targetDeviceKinds` selector to enqueue a proactive device message when the selected Route enables RabiLink output and has a Relay configured. A non-proactive send also requires `params.sourceMessageId`. The local handler still goes through Outbox; it must not bypass RabiRoute and call the Relay directly.
 
 ## Codex thread bridge
 
@@ -736,4 +789,4 @@ The list returns metadata; the item endpoint returns the complete Markdown body.
 
 ## Error boundary
 
-Handlers should not directly modify consolidated memory, copy raw chat logs into memory, fetch all historical context without need, bypass Outbox, or treat RabiRoute as an Agent OS or executor queue. They should maintain focused plans and recent memories, read required evidence by ID, return consolidation results through the run API, and submit ordinary replies through `/api/agent/replies`.
+Handlers should not directly modify consolidated memory, copy raw chat logs into memory, fetch all historical context without need, bypass Outbox, or treat RabiRoute as an Agent OS or executor queue. They should maintain focused plans and recent memories, read required evidence by ID, return consolidation results through the run API, and submit ordinary replies through `/api/agent/send`.

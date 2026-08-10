@@ -448,7 +448,7 @@ function workerHandoffPrompt(
     "[本轮可见性与结束条件]",
     "当前消息处理任务的 Codex 最终输出只供内部查看；原群成员、私聊对象和主人格都不会自动看到。",
     "不得把“请用户确认”或待审批问题只写在当前任务的最终输出里，也不得把准备发送的群聊/私聊文案当成已经送达。",
-    "如果当前人格允许直接使用注入的回复接口，必须实际调用并取得 Outbox 回执；如果人格规则要求主人格复核或使用专用发送 Skill，则必须把消息组 ID、原消息目标、引用消息 ID、计划 ID、拟发送正文和所需决定实际投递给主人格。Heartbeat 必须先满足上面的专用例外条件，不能因为巡检本身无法直接发群就提前唤醒主人格。",
+    "如果当前人格允许直接使用注入的明确发送接口，必须按注入模板填写 channel、params 和 payload，实际调用并取得对应渠道的发送回执；如果人格规则要求主人格复核或使用专用发送 Skill，则必须把消息组 ID、原消息目标、引用消息 ID、计划 ID、拟发送正文和所需决定实际投递给主人格。Heartbeat 必须先满足上面的专用例外条件，不能因为巡检本身无法直接发群就提前唤醒主人格。",
     `投递给主人格时调用 POST ${threadsApi}，填写 action=send、threadId=${options.sourceThreadId}、cwd=${options.workspace}、sourceThreadId=${worker.threadId}、sourceAgentType=message_processing、responsePolicy=required、responseInstruction=执行外发或取得用户决定后把回执或决定返回消息处理任务${requirementId ? `、messageProcessing={"requirementId":"${requirementId}","outcome":"handoff","targetAgentType":"primary_persona"}` : ""}；prompt 必须是重新编写的“主人格交接”，只保留消息组 ID、原消息目标、引用消息 ID、计划 ID、变化证据、需要决定的问题或拟发送正文，本轮存在消息处理需求 ID 时一并保留，并明确写出“这不是让你只在 Codex 输出，请按原消息端发送规则执行或向当前主人格用户提问，并把发送回执或用户决定送回消息处理任务”。禁止复制消息处理 Agent 初始化、当前消息处理归属或整份注入上下文。投递给主人格并取得 Manager 接受回执后，才可以结束本轮。`,
     "如果不需要任何人看到或回答，最终输出必须明确写“处理结果：无需对外回复”，再写明命中了纯结束语/重复消息/机器人自身消息/他人已完整回答且无新增价值中的哪一种；不得只写“无需计划操作”或“暂无实施动作”。",
     "秘书、计划 Agent 或主人格返回的新结果也必须重新经过本段判断；不能把它改写成一段面向用户的话后只留在当前 Codex 最终输出。"
@@ -469,7 +469,7 @@ export function messageAgentInitializationPrompt(options: MessageAgentPoolOption
     "明确 @、直接回复、私聊和其它明确面向本角色的消息默认需要可见回应；是否需要计划操作与是否需要回复必须分开判断。",
     "Heartbeat 是例外：定时巡检本身不算需要主人格处理的“重要、跨计划事项”。收到 heartbeat 时由你完成增量群消息与计划的只读比对，并汇总自上次通知后的真实进展；具体遗漏交秘书或原计划 Agent，只有最终出现需要人决定或已经准备好对外发送的内容才找主人格。",
     "不要自己实施计划业务，不要把本消息处理任务写入计划 taskBinding，不要代替计划秘书维护计划，也不要为了速度猜测不确定的计划关联。信息不足时扩大查询或向原消息端澄清。",
-    "你负责判断并准备沟通，但只有回复接口的 Outbox 回执或 Manager 线程桥接受回执能证明消息已进入正确出口。Codex 最终文本不等于消息已经发出。",
+    "你负责判断并准备沟通，但只有明确发送接口返回的目标渠道回执或 Manager 线程桥接受回执能证明消息已进入正确出口。语音合成成功不能证明 QQ 已发送，Codex 最终文本也不等于消息已经发出。",
     "Manager 线程桥的成功回执必须同时包含 code=0、status=delivered 和 delivery.status=delivered；缺参数或投递失败会在同一响应的 error.field、error.message、error.retryable 中说明。不要把 HTTP 请求已发起或 Codex 命令已执行当成投递成功。",
     "你向其它 Agent 任务投递消息时，必须填写 sourceThreadId=当前消息处理任务的完整 ID、sourceAgentType=message_processing 和 responsePolicy=required 或 none。要求对方回复时还必须填写 responseInstruction；回复已有请求时必须填写 inReplyToRequestId、result 和 nextAction。Manager 会按 ID 核对并显示真实的来源任务名和会话 ID。",
     "同一消息组的后续补充可能在当前轮次工作中到达；把它作为同一上下文的新增材料处理。若收到的消息组明显与当前事项无关，明确返回需要重新分配，不要混入原结论。"

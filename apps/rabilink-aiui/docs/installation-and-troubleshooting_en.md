@@ -64,7 +64,7 @@ The global PC "Connect to Server" control only registers the computer and proxie
 4. After confirming that no local port conflicts exist, enable and save the Route.
 5. Under the global "Rabi Instances" settings, configure the Relay address, application token, and PC identifier, enable "Connect to Server," then use Relay `/manage` to select this communications PC for the application.
 
-The Relay address and token belong only in local global configuration and the Agent variable `rabilinkToken`; do not put them in the Route template. A running Route is required for input to reach the ledger. Proactive downlink also passes through the Rabi output policy and Action Gate at `/api/agent/replies`.
+The Relay address and token belong only in local global configuration and the Agent variable `rabilinkToken`; do not put them in the Route template. A running Route is required for input to reach the ledger. Proactive downlink also passes through the Rabi output policy and Action Gate at `/api/agent/send`.
 
 ### 2.3 Upload to Craft
 
@@ -215,21 +215,24 @@ Unified conversation data on the PC:
 Proactive producers reuse the RabiRoute output safety gate:
 
 ```http
-POST /api/agent/replies
+POST /api/agent/send
 Content-Type: application/json
 
 {
-  "routeProfileId": "RabiLink",
-  "targetType": "rabilink",
-  "proactive": true,
-  "source": "scheduler",
-  "targetDeviceKinds": ["glasses"],
-  "presentation": ["text", "tts"],
-  "text": "Time to take a break."
+  "deliveryId": "rabilink-break-reminder-001",
+  "routeId": "RabiLink",
+  "channel": "rabilink",
+  "params": {
+    "proactive": true,
+    "source": "scheduler",
+    "targetDeviceKinds": ["glasses"],
+    "presentation": ["text", "tts"]
+  },
+  "payload": { "type": "text", "text": "Time to take a break." }
 }
 ```
 
-After policy checks, the message is written directly to the continuous queue and recorded in the unified conversation ledger as `agent_to_user`. `targetDeviceKinds` and `presentation` are optional. Omitting both broadcasts within the application; explicitly setting `glasses` + `tts` presents it only on glasses through TTS. It does not require a preceding user utterance and does not create a task for the glasses to poll.
+After policy checks, the message is written directly to the continuous queue and recorded in the unified conversation ledger as `agent_to_user`. At least one of `params.targetDeviceIds` or `params.targetDeviceKinds` is required. `presentation` is optional; explicitly setting `glasses` + `tts` presents it only on glasses through TTS. It does not require a preceding user utterance and does not create a task for the glasses to poll.
 
 Upstream and downstream are independent queues. Once PC Rabi records glasses input, it releases the upstream item; Codex reviews the record while the thread is idle or when guided by the touchpad. A timer, planner, or Codex can also write proactive downlink at any time without upstream input. Downlink uses a stable `deliveryId`, so retry after a lost network response does not duplicate TTS. `taskId` remains only for legacy direct-message compatibility and does not participate in record-only upstream, proactive delivery, blocking, or stream closure.
 

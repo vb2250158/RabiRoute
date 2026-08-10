@@ -51,7 +51,7 @@ Mobile App
 
 ```text
 Agent 回复
-  -> POST /api/agent/replies
+  -> POST /api/agent/send
   -> RabiRoute outbox
   -> mobile message queue
   -> WebSocket push
@@ -438,7 +438,7 @@ location /api/mobile/ws {
 
 - 入站 adapter 负责规范化事件和写入消息日志。
 - 路由规则决定是否投递给 Agent。
-- Agent 收到 `replyContextJson` 后通过 `/api/agent/replies` 回传结果。
+- Agent 收到 `sendRequestJson` 后，通过 `/api/agent/send` 明确提交 `routeId`、手机渠道、设备或会话目标参数和 `payload`；来源上下文只用于核对，不参与目标推断。
 - RabiRoute outbox 决定是否发送、写草稿、阻止或记录失败。
 - mobile outbox 只负责把允许发送给手机的结果排队和投递。
 

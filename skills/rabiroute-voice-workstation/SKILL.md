@@ -93,7 +93,7 @@ RabiSpeech 是唯一播放所有者。所有 Route、会话、Agent、人格和�
 
 主机播放音量同样只归 RabiSpeech：范围 `0–100`，唯一运行时真源是 `output/playback-settings.json`，WebGUI 只能经 Manager 的滑条加精确输入更新。每条音频开始播放时冻结当时音量，因此修改从下一条开始播放的音频生效。Windows 使用 SoundFile / PortAudio 解码和播放，不能回退到会误读流式 WAV 头的 `winsound`。Windows 11 音量合成器按进程映像展示应用身份，因此安装/启动链必须使用带 RabiSpeech 版本资源的真实 `runtime/RabiSpeech.exe`。服务运行期间保持一个持续无声的共享输出会话：启动时把历史 Core Audio 倍率只归一一次到 `100%`，之后只保活、不回写，保证系统滑条一直可调。无声保活不得进入 FIFO，也不得触发麦克风防回流。
 
-TTS 记录保留生成文本、Provider、模型、人格、会话、Route、播放状态、安全相对缓存引用和预计到期时间。音频缓存按每条记录自己的文件时间戳保留 24 小时，不按自然日整批删除；服务启动时扫描一次，之后只维护最早到期的一次性 cleanup deadline，新成品仅在更早到期时重排。预计到期仍不是硬实时承诺，因为进程停机和系统调度可能延后删除。Manager/WebGUI 只可暴露 POSIX 风格逻辑相对路径：人格记录使用 `<RoleId>/voice/cache/tts-audio/<file>`，fallback 使用 `output/tts-audio/<file>`，旧记录兼容单文件名；绝对路径、`..`、反斜杠越界必须省略。语音消息端触发的 Agent 回复必须走普通回复 API，由 Outbox 冻结当前 Route 的人格与语音参数后入队；Agent 不直接调用 worker。
+TTS 记录保留生成文本、Provider、模型、人格、会话、Route、播放状态、安全相对缓存引用和预计到期时间。音频缓存按每条记录自己的文件时间戳保留 24 小时，不按自然日整批删除；服务启动时扫描一次，之后只维护最早到期的一次性 cleanup deadline，新成品仅在更早到期时重排。预计到期仍不是硬实时承诺，因为进程停机和系统调度可能延后删除。Manager/WebGUI 只可暴露 POSIX 风格逻辑相对路径：人格记录使用 `<RoleId>/voice/cache/tts-audio/<file>`，fallback 使用 `output/tts-audio/<file>`，旧记录兼容单文件名；绝对路径、`..`、反斜杠越界必须省略。语音消息端触发的 Agent 回复必须走明确发送 API，由 Outbox 冻结当前 Route 的人格与语音参数后入队；Agent 不直接调用 worker。
 
 ## 双向上下文与说话人
 

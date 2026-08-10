@@ -14,6 +14,7 @@ import {
   listPersonaVoiceIdentities,
   type PersonaVoiceIdentityConflictField
 } from "./personaVoiceIdentities.js";
+import { listIdentityRelationConflicts } from "./identityRelations.js";
 import { atomicWriteFileSync, withFileLockSync } from "./shared/filePersistence.js";
 
 export type PersonaSyncPeer = {
@@ -42,16 +43,25 @@ export type PersonaSyncResult = {
   conflicts: number;
 };
 
-export type PersonaSyncSemanticConflict = {
-  kind: "persona_voice_identity";
-  roleId: string;
-  path: "voice/voice-identities.jsonl";
-  identityKey: string;
-  sourceHostId: string;
-  voiceprintId: string;
-  fields: PersonaVoiceIdentityConflictField[];
-  candidateEventIds: string[];
-};
+export type PersonaSyncSemanticConflict =
+  | {
+      kind: "persona_voice_identity";
+      roleId: string;
+      path: "voice/voice-identities.jsonl";
+      identityKey: string;
+      sourceHostId: string;
+      voiceprintId: string;
+      fields: PersonaVoiceIdentityConflictField[];
+      candidateEventIds: string[];
+    }
+  | {
+      kind: "identity_relation";
+      roleId: string;
+      path: "identity-relations/events.jsonl";
+      recordKind: "endpoint_account" | "participant" | "relation_card";
+      recordId: string;
+      candidateEventIds: string[];
+    };
 
 export type PersonaSyncResolutionPublishResult = {
   status: "published" | "not_published";
@@ -333,7 +343,7 @@ export class PersonaSyncCoordinator {
     const manifest = await this.service.manifest(roleId);
     return manifest.roles.flatMap(role => {
       const roleDir = path.join(this.service.rolesRoot(), role.roleId);
-      return listPersonaVoiceIdentities(roleDir).flatMap(identity => identity.conflicted ? [{
+      const voiceConflicts: PersonaSyncSemanticConflict[] = listPersonaVoiceIdentities(roleDir).flatMap(identity => identity.conflicted ? [{
         kind: "persona_voice_identity" as const,
         roleId: role.roleId,
         path: "voice/voice-identities.jsonl" as const,
@@ -343,6 +353,15 @@ export class PersonaSyncCoordinator {
         fields: identity.conflictFields ?? [],
         candidateEventIds: identity.conflictCandidates?.map(candidate => candidate.eventId).sort() ?? []
       }] : []);
+      const identityConflicts: PersonaSyncSemanticConflict[] = listIdentityRelationConflicts(roleDir).map(conflict => ({
+        kind: "identity_relation" as const,
+        roleId: role.roleId,
+        path: "identity-relations/events.jsonl" as const,
+        recordKind: conflict.recordKind,
+        recordId: conflict.recordId,
+        candidateEventIds: conflict.candidateEventIds
+      }));
+      return [...voiceConflicts, ...identityConflicts];
     });
   }
 

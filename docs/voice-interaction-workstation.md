@@ -133,7 +133,7 @@ FenneNote 或其他转录端应向 RabiRoute 提交结构化 JSON。当前 adapt
 4. RabiRoute 把事件投递给固定 Codex/Agent thread；空闲时 start，运行中 steer。
 5. Agent 根据角色包生成 `visibleText` 和可选 `ttsText`，并严格遵守目标回复面。
 6. OumuQ 只接收已经确认可朗读的 `ttsText`。
-7. 外发必须经过 `/api/agent/replies` 和对应消息端 policy；信息不足时返回 `blocked`/draft 数据，由用户或上层流程补齐后重新提交。
+7. 外发必须经过 `/api/agent/send` 和对应消息端 policy；信息不足时返回 `blocked`/draft 数据，由用户或上层流程补齐后重新提交。
 
 上面是“每段转写直接成为 Agent 输入”的普通语音工作站。如果 FenneNote 只作为 RabiLink 主动智能的常驻观察源，应把它与 `rabilink` 放在承载 `RabiActive` 的同一条 Route，并将 `routeVariables.rabilinkRecordFirstSources` 设为 `fennenote`。此时转写仍会留普通日志，但只追加到统一会话账本，等待空闲/周期/触摸板审阅，不执行第 4 步的逐段直接投递。两种模式不要同时配置在不同 Route 上消费同一个 webhook。
 

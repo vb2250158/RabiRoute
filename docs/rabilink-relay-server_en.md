@@ -191,10 +191,10 @@ Persist `nextCursor` verbatim as an opaque value and reuse it only for reconnect
 PC-side producers publish through RabiRoute when possible:
 
 ```http
-POST /api/agent/replies
+POST /api/agent/send
 ```
 
-with `targetType=rabilink`, an appropriate route, and `proactive=true` for task-free messages. After route policy passes, RabiRoute publishes to:
+with a stable `deliveryId`, an exact `routeId`, `channel=rabilink`, `params.proactive=true`, an explicit device selector, and a text `payload` for task-free messages. After route policy passes, RabiRoute publishes to:
 
 ```http
 POST /worker/messages

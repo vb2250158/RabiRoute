@@ -26,6 +26,7 @@ data/roles/<RoleId>/
   personaConfig.json
   plans/
   memory/
+  identity-relations/events.jsonl
   private-messages.jsonl
   group-messages.jsonl
   voice-transcripts.jsonl
@@ -41,6 +42,18 @@ data/route/<RouteName>/
 ```
 
 角色目录保存“这个角色长期应该知道和关注什么”。路由目录保存“这条航线当前运行成什么样”。
+
+### 身份关系记忆
+
+身份关系记忆的知识类型是 `identity_relation`。它与计划和近期记忆并列、人格私有，但不参与近期记忆的 24/72 小时整理。它保存消息端账号、参与者实体和关系卡三层资料，并使用追加事件而不是改写历史：
+
+```text
+data/roles/<RoleId>/identity-relations/events.jsonl
+```
+
+账号的身份键固定为 `platform + endpointIdentityNamespace + senderStableId`；Route 配置 ID、显示名、头像和当前讨论主题都不是身份键。一个账号可以有候选或已确认的参与者映射；一个参与者可以关联多个账号。关系卡表达人与人、人与组织或人与项目之间的协作、汇报、决策范围等关系，并带有 `candidate`、`confirmed`、`corrected` 或 `retired` 状态、适用群/项目范围和最小证据引用。
+
+该资料只用于参与者解析，不能把平台权限、临时发言角色或一次讨论自动变成业务决策权。候选关系不能用于称呼、授权、项目归属或执行判断。消息投递会把适用于当前会话的项目关系卡列入“对话情境（影子判断）”，但这只表示可以参与讨论，不表示可管理该项目的计划、任务或长期记忆。多电脑同步会并集合并事件；同一记录出现不一致的并发事件头时，当前视图明确标记冲突并停止自动确认，不能按文件顺序任选一条。人格提交包含全部关键字段的一次修正，会 supersede 当前全部事件头并让后续同步收敛。处理端可通过身份关系 API 显式确认或纠正；消息投递时的身份关系上下文不要求提交计划/记忆回调。
 
 ## 计划机制
 

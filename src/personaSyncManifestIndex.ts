@@ -142,6 +142,7 @@ const EXCLUDED_RUNTIME_DIRECTORIES = new Set([
   "state/work-cycle-inputs",
   "state/work-cycle-plan-locks",
   "state/work-cycle-receipt-locks",
+  "conversation/situations",
   "voice/cache/tts-audio"
 ]);
 

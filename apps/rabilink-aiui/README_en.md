@@ -42,8 +42,8 @@ Touchpad review
 -> does not pause ASR or switch modes
 
 Agent downstream
--> Codex, a scheduler, or a planner POSTs /api/agent/replies
-   targetType=rabilink, proactive=true, routeProfileId=<target-route>
+-> Codex, a scheduler, or a planner POSTs /api/agent/send
+   routeId=<target-route>, channel=rabilink, params.proactive=true, params.targetDeviceKinds=[glasses]
 -> RabiRoute output safety gate
 -> Relay /worker/messages persistent outbox
 -> the delivered Agent record is appended to the same conversation ledger

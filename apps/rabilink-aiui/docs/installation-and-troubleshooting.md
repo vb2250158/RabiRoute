@@ -64,7 +64,7 @@ PC 全局“连接服务器”只负责登记电脑和代理远程 WebGUI。要�
 4. 检查本地端口无冲突后启用并保存 Route。
 5. 在全局“Rabi 实例”中配置 Relay 地址、应用 token 和 PC 标识并打开“连接服务器”，再到 Relay `/manage` 为应用选择这台通讯 PC。
 
-Relay 地址和 token 只属于本机全局配置及智能体变量 `rabilinkToken`，不要写入 Route 模板。Route 运行中只是输入可落账的必要条件；主动下行还会经过 `/api/agent/replies` 的 Rabi 输出策略和 Action Gate。
+Relay 地址和 token 只属于本机全局配置及智能体变量 `rabilinkToken`，不要写入 Route 模板。Route 运行中只是输入可落账的必要条件；主动下行还会经过 `/api/agent/send` 的 Rabi 输出策略和 Action Gate。
 
 ### 2.3 上传到 Craft
 
@@ -215,21 +215,24 @@ PC 端统一会话数据：
 主动生产者复用 RabiRoute 的输出安全门：
 
 ```http
-POST /api/agent/replies
+POST /api/agent/send
 Content-Type: application/json
 
 {
-  "routeProfileId": "RabiLink",
-  "targetType": "rabilink",
-  "proactive": true,
-  "source": "scheduler",
-  "targetDeviceKinds": ["glasses"],
-  "presentation": ["text", "tts"],
-  "text": "该休息一下了。"
+  "deliveryId": "rabilink-break-reminder-001",
+  "routeId": "RabiLink",
+  "channel": "rabilink",
+  "params": {
+    "proactive": true,
+    "source": "scheduler",
+    "targetDeviceKinds": ["glasses"],
+    "presentation": ["text", "tts"]
+  },
+  "payload": { "type": "text", "text": "该休息一下了。" }
 }
 ```
 
-消息通过策略检查后直接写入持续队列，并以 `agent_to_user` 写回统一会话账本。`targetDeviceKinds` 和 `presentation` 可省略；都省略时是应用内广播，显式写 `glasses` + `tts` 时只让眼镜端按 TTS 方式呈现。它不要求用户刚刚说过话，也不会创建一个供眼镜查询的任务。
+消息通过策略检查后直接写入持续队列，并以 `agent_to_user` 写回统一会话账本。`params.targetDeviceIds` 和 `params.targetDeviceKinds` 至少填写一项；`presentation` 可省略，显式写 `glasses` + `tts` 时只让眼镜端按 TTS 方式呈现。它不要求用户刚刚说过话，也不会创建一个供眼镜查询的任务。
 
 上行和下行是两条独立队列：眼镜输入被 PC Rabi 记录后就释放上行项；Codex 在线程空闲审阅记录，或被触摸板引导审阅。定时器、规划器或 Codex 也可以完全没有上行输入，随时主动写入下行。下行写入带稳定 `deliveryId`，网络响应丢失时重试不会造成重复 TTS。`taskId` 只保留旧的直接消息兼容关系，不参与 record-only 上行、主动投递、阻塞或关流。
 

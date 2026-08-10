@@ -310,7 +310,7 @@ X-RabiLink-Token: <app-token>
 
 record-first 审阅结果和其他主动消息不带 `taskId`，使用 `proactive=true`。旧的直接消息兼容路径仍可带原输入 `taskId` 和 `proactive=false`；`taskId` 只提供关联，不会让下行等待上行任务。`deliveryId` 是幂等键：如果服务器已经创建队列项但响应丢失，生产者可用同一个值重试，Relay 会返回原消息而不会再次排队。
 
-RabiRoute 内部更推荐复用动作安全门：向 `/api/agent/replies` 发送 `routeProfileId`、`targetType=rabilink`、`proactive=true`、`source` 和 `text`。通过路由输出策略后，RabiRoute 才会调用 `/worker/messages`。这样定时器、计划器和其他 Agent 不需要绕过现有审计边界。
+RabiRoute 内部更推荐复用动作安全门：向 `/api/agent/send` 发送稳定 `deliveryId`、精确 `routeId`、`channel=rabilink`、包含 `proactive=true` 和目标设备的 `params`，以及文本 `payload`。通过路由输出策略后，RabiRoute 才会调用 `/worker/messages`。这样定时器、计划器和其他 Agent 不需要绕过现有审计边界。
 
 ### 手机、手表和其他便携端
 
@@ -371,7 +371,7 @@ Content-Type: application/json
 
 `delivered` 只表示终端已经接收并呈现，不能当作 `played`。`played` 必须由实际输出设备在自己的播放完成事件后产生；Relay 只幂等保存每设备的第一次成功时间、写入 `runtime-state.json` 并发布 `outbox_receipt`，不会按 PCM 写入、估算时长或连接状态猜测播放成功。
 
-通用接口必须带 `deviceId` 或 `deviceKind`。`/rokid/rabilink/messages` 保持兼容，并隐式使用 `deviceKind=glasses`。生产者可以在 `/worker/messages` 或 `/api/agent/replies` 增加：
+通用接口必须带 `deviceId` 或 `deviceKind`。`/rokid/rabilink/messages` 保持兼容，并隐式使用 `deviceKind=glasses`。生产者可以在 `/worker/messages` 或 `/api/agent/send` 增加：
 
 ```json
 {
@@ -411,7 +411,7 @@ Content-Type: application/json
 | `rabilinkReflectionIntervalMinutes` | `30` | 连续反思最小间隔，范围 1 分钟到 24 小时。反思可以静默完成，不强制下行。 |
 | `rabilinkConversationSplitAfterHours` | `6` | 无活动达到该时长后，下一次写入前机械切分当前 JSONL。跨本地日期也会切分。 |
 
-`rabilinkAutoReview=false` 只关闭“新 observation 自动唤醒 Codex”；它不会关闭 `/api/agent/replies`。只要 Route 的 RabiLink 输出策略允许文本，Codex、定时器或规划器仍可随时提交 `targetType=rabilink, proactive=true`。发送动作不要求眼镜当时正在录音或停留在连接对话；Relay 先持久排队，眼镜恢复连接对话后按 cursor 顺序消费。
+`rabilinkAutoReview=false` 只关闭“新 observation 自动唤醒 Codex”；它不会关闭 `/api/agent/send`。只要 Route 的 RabiLink 输出策略允许文本，Codex、定时器或规划器仍可随时提交 `channel=rabilink`、`params.proactive=true` 和明确设备目标。发送动作不要求眼镜当时正在录音或停留在连接对话；Relay 先持久排队，眼镜恢复连接对话后按 cursor 顺序消费。
 
 ### 旧任务接口（仅兼容和调试）
 

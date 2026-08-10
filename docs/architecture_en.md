@@ -20,7 +20,7 @@ Message endpoints
   -> RouteDecision
   -> AgentPacket/context
   -> handler adapter
-  -> Outbox / Action Gate / reply route
+  -> explicit send contract / Outbox / Action Gate
 ```
 
 A persistent generic Action Queue and WebGUI approval center are planned capabilities, not part of the current flow.
@@ -73,7 +73,7 @@ Role knowledge does not decide whether a route matches. It is attached after a r
 
 ### 4. Prompt / context template
 
-The packet wrapper injects event fields, recent messages, role-relative paths, plan/memory/skill indexes, required reads, logs, reply context, and delivery instructions. The user rule template is a small supplement.
+The packet wrapper injects event fields, recent messages, role-relative paths, plan/memory/skill indexes, required reads, logs, an explicit send template, read-only source context, and delivery instructions. The user rule template is a small supplement.
 
 ### 5. Handler registry
 
@@ -97,7 +97,7 @@ The local `/api/agent/threads` bridge exposes controlled list/read/resolve/creat
 sent | draft | blocked | failed
 ```
 
-Supported current outputs include NapCat, WeCom, RabiLink, and role panel. FenneNote remains only for old Route compatibility. Legacy/default `outputAdapter=agent` retains a response in the Agent session when no external target is requested.
+`POST /api/agent/send` requires a stable `deliveryId`, exact `routeId`, `channel`, channel-specific `params`, and `payload`. Source context never selects the destination, and a Route's default pipeline cannot rewrite the explicit channel. Current outputs include NapCat, WeCom, personal Weixin, Feishu, RabiLink, speech, and role panel. FenneNote remains only for old Route compatibility.
 
 There is no generic persistent approval queue or automatic retry queue. A future Action Queue should extend this policy/audit layer rather than reimplement platform sending.
 
@@ -110,7 +110,7 @@ RibiWebGUI / Qt panel / CLI
 Manager on 127.0.0.1:8790
   |-- configuration and scan APIs
   |-- gateway subprocess lifecycle
-  |-- role knowledge and Agent reply APIs
+  |-- role knowledge and Agent send APIs
   |-- Remote Agent and role-panel endpoints
   |-- Codex Desktop IPC bridge
   |

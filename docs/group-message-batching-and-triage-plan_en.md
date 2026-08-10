@@ -234,7 +234,7 @@ The Message Agent does not create plans directly, replace the Secretary, or exec
 - The Primary Persona returns its decision or proposed reply for important matters.
 - The Message Agent combines that result with the original audience, latest conversation, and send permission to choose immediate notification, continued waiting, or a pending draft.
 
-Codex final text in these Agent tasks is internal task output. It is not automatically visible to a group member, private-chat peer, or the Primary Persona. User-visible content must enter the current endpoint reply API and Outbox. When the Primary Persona must decide or send on behalf of the Message Agent, the result must be delivered through the Manager thread bridge with the sender's verified task ID. An Outbox platform receipt or Manager acceptance receipt is required to prove that the result entered the correct exit.
+Codex final text in these Agent tasks is internal task output. It is not automatically visible to a group member, private-chat peer, or the Primary Persona. User-visible content must enter the current endpoint send API and Outbox. When the Primary Persona must decide or send on behalf of the Message Agent, the result must be delivered through the Manager thread bridge with the sender's verified task ID. An Outbox platform receipt or Manager acceptance receipt is required to prove that the result entered the correct exit.
 
 A successful delivery receipt updates group state without automatically waking another Agent. Failures, new messages, plan results that require an external update, or changed decisions re-enter the group queue.
 
@@ -268,7 +268,7 @@ The board separates three concerns:
 - **Agent decision**: ordinary group discussion. The Agent may answer, join design discussion, point out risk, or offer an idea. If it should not speak, it submits a reason through the outcome API instead of ending silently.
 - **Anomalies**: an idle worker without a submitted outcome, a handoff that has not returned, reply text without an Outbox `sent` receipt, send failure, or timeout. These remain visible for heartbeat or manual follow-up.
 
-Plan notifications do not depend on heartbeat polling. A Message Agent handoff to a Secretary or Plan Agent includes the requirement ID and `planId`. Manager retains the source group/private conversation, original reply context, and original Message Agent task. Later canonical plan writes that change status, current step, next action, wait state, or step progress immediately create a notification requirement and send it back to that Message Agent, which writes a contextual human-facing update and returns it through Outbox.
+Plan notifications do not depend on heartbeat polling. A Message Agent handoff to a Secretary or Plan Agent includes the requirement ID and `planId`. Manager retains the source group/private conversation, read-only source context, and original Message Agent task. Later canonical plan writes that change status, current step, next action, wait state, or step progress immediately create a notification requirement and send it back to that Message Agent, which writes a contextual human-facing update and submits an explicit channel and target through Outbox.
 
 Entry policy and Agent eligibility are configured separately:
 

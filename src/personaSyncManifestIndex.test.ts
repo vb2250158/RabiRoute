@@ -158,6 +158,7 @@ test("persona manifest excludes work-cycle runtime state while preserving portab
     ["state/work-cycle-history-locks/digest.lock", "{\"pid\":1}\n"],
     ["state/work-cycle-plan-locks/plan-1/owner.json", "{\"pid\":1}\n"],
     ["state/work-cycle-receipt-locks/receipt.lock.json", "{\"pid\":1}\n"],
+    ["conversation/situations/situation-1.json", "{\"schemaVersion\":1}\n"],
     ["tmp/persona-sync-upload.json", "{\"temporary\":true}\n"],
     ["plans/items/active/plan-1.json.tmp", "temporary\n"],
     ["memory/recent/memory-1.json.lock", "locked\n"],

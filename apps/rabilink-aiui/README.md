@@ -39,8 +39,8 @@ RabiLink AIUI 是 Rokid 眼镜上的 Agent 消息端。首页只有两个可滑�
 -> 单击不暂停 ASR，也不切换模式
 
 Agent 下行
--> Codex / 定时器 / 规划器随时 POST /api/agent/replies
-   targetType=rabilink, proactive=true, routeProfileId=<目标 Route>
+-> Codex / 定时器 / 规划器随时 POST /api/agent/send
+   routeId=<目标 Route>, channel=rabilink, params.proactive=true, params.targetDeviceKinds=[glasses]
 -> RabiRoute 输出安全门 -> Relay /worker/messages
 -> 成功排队的 Agent 消息也写入同一个 rabilink-conversation.jsonl
 -> AIX 按 cursor 持续消费 /rokid/rabilink/messages?stream=1

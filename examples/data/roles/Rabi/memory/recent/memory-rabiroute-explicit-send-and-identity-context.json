@@ -1,0 +1,12 @@
+{
+  "id": "memory-rabiroute-explicit-send-and-identity-context",
+  "title": "明确发送与身份关系上下文必须分开处理目标、事实和权限",
+  "content": "RabiRoute 的 Agent 外发统一使用 POST /api/agent/send，并明确填写稳定 deliveryId、精确 routeId、channel、渠道专用 params 和 payload；来源 replyContext 只用于审计，不能推断发送目标。人格身份关系按平台、消息端命名空间和稳定发送者 ID 精确匹配，可保存参与者、账号映射和限定范围的关系卡。候选关系只用于核对，已确认身份也不自动建立项目归属、委托、决策或修改记录的权限。对话情境可以帮助 Agent 判断是否适合参与讨论，但不包含聊天正文，也不能代替后续授权判断。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：明确发送、身份关系和对话情境的安全边界"
+  },
+  "createdAt": "2026-08-10T15:20:00+08:00",
+  "updatedAt": "2026-08-10T15:20:00+08:00",
+  "keywords": ["/api/agent/send", "deliveryId", "routeId", "身份关系", "消息端命名空间", "稳定发送者 ID", "候选关系", "对话情境", "项目权限", "AgentPacket"]
+}

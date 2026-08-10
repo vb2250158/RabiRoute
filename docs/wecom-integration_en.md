@@ -20,9 +20,9 @@ WeCom group
   -> RabiRoute wecom adapter
   -> wecom-messages.jsonl / wecom-adapter.log.jsonl
   -> forwarding / RouteDecision
-  -> AgentPacket / replyContextJson
+  -> AgentPacket / sendRequestJson
   -> handler adapter
-  -> POST /api/agent/replies
+  -> POST /api/agent/send
   -> Outbox
   -> WeCom group
 ```
@@ -90,7 +90,7 @@ The adapter maps WeCom group data to the common routing vocabulary:
 {botNickname} {routeProfileId} {routeProfileName}
 {agentRoleId} {agentRolePath} {agentRoleDir}
 {dataDir} {groupLogPath} {privateLogPath}
-{replyApiUrl} {replyContextJson}
+{sendApiUrl} {sendRequestJson}
 {inputAdapter} {outputAdapter} {outputPipeline} {replyToSource}
 ```
 
@@ -120,33 +120,27 @@ wecom_message
 
 Text, mixed, voice, image, and file messages are eligible for routing. The rule layer may use `regex` and `targetGroupId` just as it does for other message sources.
 
-## Reply and proactive send
+## Explicit sends
 
-Handlers must not call the WeCom SDK directly. Use:
+Handlers must not call the WeCom SDK directly. Both a response and a proactive message must name the exact Route, WeCom channel, and target chat:
 
 ```http
-POST /api/agent/replies
+POST /api/agent/send
 ```
 
-Reply to the source group:
+Send to the source group:
 
 ```json
 {
-  "text": "Received. I will summarize it.",
-  "replyContext": {
-    "adapterType": "wecom",
-    "routeKind": "wecom_message",
-    "targetType": "group",
-    "messageId": "wecom-msg-001",
-    "groupId": "wrCHATID",
+  "deliveryId": "wecom-msg-001-response",
+  "routeId": "wecom",
+  "channel": "wecom",
+  "params": {
+    "chatId": "wrCHATID",
     "userId": "example-user",
-    "wecomReqId": "REQ_ID",
-    "wecomConversationId": "CONVERSATION_ID",
-    "wecomChatId": "wrCHATID",
-    "outputAdapter": "wecom",
-    "outputPipeline": "wecom",
-    "replyToSource": true
-  }
+    "reqId": "REQ_ID"
+  },
+  "payload": { "type": "text", "text": "Received. I will summarize it." }
 }
 ```
 
@@ -154,19 +148,15 @@ Proactive group send:
 
 ```json
 {
-  "text": "Project reminder: please report blockers before 18:00.",
-  "targetType": "group",
-  "groupId": "wrCHATID",
-  "adapterType": "wecom",
-  "replyContext": {
-    "outputAdapter": "wecom",
-    "outputPipeline": "wecom",
-    "replyToSource": false
-  }
+  "deliveryId": "wecom-reminder-2026-08-10-1800",
+  "routeId": "wecom",
+  "channel": "wecom",
+  "params": { "chatId": "wrCHATID" },
+  "payload": { "type": "text", "text": "Project reminder: please report blockers before 18:00." }
 }
 ```
 
-Outbox checks `messageAdapterPolicies.wecom.outputEnabled`, `supportedOutputs`, credentials, and an explicit/current group target. It returns `blocked` or `failed` when policy or delivery prevents sending and records the result in `outbox-adapter.log.jsonl`.
+`routeId` must select an enabled Route exactly, and `params.chatId` is mandatory. A source response may include `params.reqId`; a proactive send omits it. Outbox still checks `messageAdapterPolicies.wecom.outputEnabled`, `supportedOutputs`, and credentials. It returns `blocked` or `failed` when policy or delivery prevents sending and records the result in `outbox-adapter.log.jsonl`.
 
 ## Logs and health
 
@@ -183,6 +173,6 @@ data/route/<configName>/gateway-status.json
 
 - `wecom` is an independent adapter, not an alias for the generic webhook.
 - The adapter translates protocol data, logs messages, and calls forwarding; it does not assemble handler prompts.
-- `src/routing/agentPacket.ts` creates the prompt and `replyContextJson`.
+- `src/routing/agentPacket.ts` creates the prompt and `sendRequestJson`; source context remains audit-only and is not a send destination.
 - All outbound delivery goes through `src/outbox.ts`.
 - Real tenant acceptance remains required before treating WeCom as verified.

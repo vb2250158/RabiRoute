@@ -320,7 +320,7 @@ Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.ru
 
 当前 Outbox 已是 QQ、WeCom、个人微信来源会话文本/受控文件、RabiLink 和角色面板的真实回传层，并为旧 FenneNote Route 保留兼容，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
 
-`src/manager/agentReplyIdempotency.ts` 位于 Manager HTTP 边界与 Outbox 之间。调用方显式提供稳定 `deliveryId` 时，它先在运行期 `data/agent-reply-idempotency/` 持久化 reservation，再允许唯一请求进入 `handleAgentReply()`；同 ID 同 payload 的并发与重启恢复只回读原结果，不同 payload 冲突，`reserved/sending/uncertain` 失败关闭。`GET /api/agent/replies/receipts/:deliveryId` 只返回该持久回执；它不猜测外部平台成功，也不自动重发，QQ 等通道仍需使用 `sentMessageId` 做真实平台回读。
+`src/agentSend.ts` 在 Manager HTTP 边界先校验明确发送合同：稳定 `deliveryId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload` 都是必填结构，来源 `replyContext` 不参与目标选择。`src/manager/agentSendIdempotency.ts` 随后在运行期 `data/agent-send-idempotency/` 持久化 reservation，再允许唯一请求进入 Outbox；同 ID 同 payload 的并发与重启恢复只回读原结果，不同 payload 冲突，`reserved/sending/uncertain` 失败关闭。`GET /api/agent/send/receipts/:deliveryId` 只返回该持久回执；它不猜测外部平台成功，也不自动重发，QQ 等通道仍需使用 `sentMessageId` 做真实平台回读。
 
 ```text
 Agent output

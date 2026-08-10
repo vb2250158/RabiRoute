@@ -94,7 +94,7 @@
 - 连接对话始终按 cursor 消费 `/rokid/rabilink/messages?stream=1`。首次连接从空 cursor 读取 Relay 保留期内的 backlog；即使没有刚刚提交的语音，也必须继续等待主动消息。
 - Relay 下行 outbox 独立于 task 生命周期，默认保留 48 小时。AIUI 收到消息批次时必须先按 token 持久化待播报项，再保存 `nextCursor`；页面隐藏、切模式或 TTS 中断不得删除未播完消息。
 - 普通回复和主动投递进入同一条有序 TTS 队列，并在成功进入 Relay 后写回同一会话账本。TTS 开始前释放 ASR；成功播报后才移除持久消息；当前播报结束后，如连接会话仍在前台且未暂停，再恢复下一轮 ASR。
-- 主动智能通过现有 `/api/agent/replies` 输出门投递：指定 `targetType=rabilink`、`proactive=true` 和目标 `routeProfileId`。RabiRoute 会直接写入持续下行队列，不需要伪造用户任务。
+- 主动智能通过 `/api/agent/send` 输出门投递：指定精确 `routeId`、`channel=rabilink`，并在 `params` 中填写 `proactive=true`、目标设备与呈现方式。RabiRoute 会直接写入持续下行队列，不需要伪造用户任务，也不会从上行来源猜测目标。
 - 不需要额外导入 RabiLinkMessage MCP/插件；AIX、Relay 和 RabiRoute 输出门已经覆盖输入、持续下行和主动投递。
 - AIUI 只在页面前台续接原生 ASR，不保存原始音频。离线文本队列最多保留 48 小时、2000 段待同步；不得声称退出页面、锁屏或进入后台后仍像 FenneNote/Android 前台服务一样持续录音。
 

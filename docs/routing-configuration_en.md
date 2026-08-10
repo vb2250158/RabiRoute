@@ -144,7 +144,7 @@ Do not use an extremely broad ambient-group regex when a direct mention or dedic
 {recentMessages} {recentMessageLimit} {recentMessageEndpoint}
 {recentConversationKey} {conversationCurrentPath}
 {conversationArchiveDir} {conversationArchiveIndexPath}
-{replyApiUrl} {replyContextJson}
+{sendApiUrl} {sendRequestJson} {replyContextJson}
 {pipelinePreset} {inputAdapter} {outputAdapter} {outputPipeline}
 {promptOutputMode} {replyToSource}
 ```

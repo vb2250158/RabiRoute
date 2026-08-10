@@ -289,23 +289,18 @@ class RabiRouteSdk @JvmOverloads constructor(
     }
 
     fun sendRabiLinkReply(instance: RabiInstance, routeId: String, messageId: String, text: String): JSONObject {
-        val replyContext = JSONObject()
-            .put("runtimeRouteId", routeId)
-            .put("gatewayId", routeId)
-            .put("routeProfileId", routeId)
-            .put("routeProfileName", routeId)
-            .put("routeKind", "rabilink")
-            .put("targetType", "rabilink")
-            .put("messageId", messageId)
-            .put("adapterType", "rabilink")
-            .put("replyApiUrl", "${instance.baseUrl}/api/agent/replies")
-            .put("outputAdapter", "codex")
-            .put("outputPipeline", "codex")
-            .put("replyToSource", false)
         val payload = JSONObject()
-            .put("text", text)
-            .put("replyContext", replyContext)
-        return requestJson("${instance.baseUrl}/api/agent/replies", "POST", payload.toString())
+            .put("deliveryId", "rabilink-$routeId-$messageId-${text.hashCode()}")
+            .put("routeId", routeId)
+            .put("channel", "rabilink")
+            .put("params", JSONObject()
+                .put("proactive", false)
+                .put("sourceMessageId", messageId)
+                .put("targetDeviceKinds", JSONArray().put("phone")))
+            .put("payload", JSONObject()
+                .put("type", "text")
+                .put("text", text))
+        return requestJson("${instance.baseUrl}/api/agent/send", "POST", payload.toString())
     }
 
     fun getRabiLinkReplies(instance: RabiInstance, routeId: String, limit: Int = 10, afterId: String = ""): JSONObject {

@@ -225,8 +225,8 @@ async function waitForUpstreamRelease(taskId, timeoutMs) {
   throw new Error(`Upstream Relay task did not release in time; last status=${lastStatus || "unknown"}.`);
 }
 
-async function postAgentReply(body) {
-  return fetchJson(`${managerBaseUrl}/api/agent/replies`, {
+async function postAgentSend(body) {
+  return fetchJson(`${managerBaseUrl}/api/agent/send`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
@@ -332,12 +332,17 @@ async function main() {
   const proactiveMarker = nonce("RABILINK_PROACTIVE_E2E");
   const proactiveCursor = await streamTail();
   const proactivePostedAt = Date.now();
-  const proactiveGate = await postAgentReply({
-    text: proactiveMarker,
-    routeProfileId: "RabiLink",
-    targetType: "rabilink",
-    proactive: true,
-    source: "Codex active intelligence E2E"
+  const proactiveGate = await postAgentSend({
+    deliveryId: nonce("rabilink-send"),
+    routeId: "RabiLink",
+    channel: "rabilink",
+    params: {
+      proactive: true,
+      source: "Codex active intelligence E2E",
+      targetDeviceKinds: ["glasses"],
+      presentation: ["tts"]
+    },
+    payload: { type: "text", text: proactiveMarker }
   });
   assert.equal(proactiveGate.body?.ok, true, "The Rabi output gate must accept proactive delivery.");
   assert.equal(proactiveGate.body?.status, "sent", "The Rabi output gate must report proactive delivery as sent.");

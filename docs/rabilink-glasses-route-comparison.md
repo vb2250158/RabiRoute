@@ -139,7 +139,7 @@ PC Agent -> Outbox 下行文本 -> 手机请求 Rabi PC TTS -> PCM -> 眼镜扬�
 - PC RabiRoute 拥有配置真源、统一会话账本、路由策略和外发安全门。
 - Relay 提供按应用隔离、可重试的双向邮箱，不承担 Agent 推理。
 - 手机后端保存必要的设备状态、Relay 凭据、cursor 和待处理队列；眼镜只保存前端 UI 状态，两端都不复制人格、长期记忆或完整 PC 配置。
-- 主动外发继续经过 `/api/agent/replies` 和 Outbox 策略。
+- 主动外发继续经过 `/api/agent/send` 和 Outbox 策略。
 - 任何常驻采集都必须显式开启、持续可见，并分别控制转写、原始数据保存、外发和删除权限。
 
 ## 相关文档

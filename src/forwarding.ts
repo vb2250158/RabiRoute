@@ -17,6 +17,7 @@ import {
   appendWeixinMessageToDir
 } from "./history.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
+import { recordConversationSituation } from "./conversationSituationStore.js";
 import {
   createRouteDecision,
   isGroupRecord,
@@ -811,8 +812,22 @@ async function forwardMessageToRoute(
 
   const adapterOutcomes: ForwardAdapterOutcome[] = [];
   let sentPacketCount = 0;
+  let situationRecorded = false;
   for (const rule of decision.matchedRules) {
     const packet = buildAgentPacket(decision, rule, roleContext);
+    if (packet.conversationSituation && !situationRecorded) {
+      try {
+        recordConversationSituation(roleContext.personaDataDir, route.id, routeKind, packet.conversationSituation);
+        situationRecorded = true;
+      } catch (error) {
+        appendAdapterLogToDir("router", {
+          event: "conversation_situation_record_failed",
+          level: "warning",
+          message: `Could not retain a conversation situation for route=${route.id}`,
+          data: { routeId: route.id, routeKind, error: error instanceof Error ? error.message : String(error) }
+        }, roleContext.personaDataDir);
+      }
+    }
     packets.push({
       routeId: route.id,
       ruleId: rule.id,

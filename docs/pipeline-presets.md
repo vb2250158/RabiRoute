@@ -48,7 +48,7 @@ pipeline 字段会作为通知模板变量提供：
 {inputAdapter} {outputAdapter} {outputPipeline} {promptOutputMode}
 {ttsProvider} {ttsVoice} {ttsWorkerUrl} {ttsPlay}
 {preventFeedbackLoop} {replyToSource}
-{replyApiPath} {replyApiUrl} {replyContextJson}
+{sendApiPath} {sendApiUrl} {sendRequestJson}
 ```
 
 可以用这些变量让 Agent 生成正确形态的输出：
@@ -58,41 +58,42 @@ pipeline 字段会作为通知模板变量提供：
 - `promptOutputMode=markdown`：适合写入文件的 Markdown。
 - `promptOutputMode=json`：给 webhook consumer 使用的结构化 JSON 或约定字段。
 
-## Agent 回复回传
+## Agent 明确发送
 
 Agent 需要外部回传时应把回复 POST 到：
 
 ```text
-POST /api/agent/replies
+POST /api/agent/send
 ```
 
-使用注入的 `replyContextJson` 作为 `replyContext`：
+使用注入的 `sendRequestJson` 作为请求模板。下面以 NapCat 群聊为例：
 
 ```json
 {
-  "text": "好的，我看到了。",
-  "replyContext": {
-    "routeProfileId": "main",
-    "targetType": "group",
-    "messageId": 123,
-    "groupId": 456,
-    "userId": 789,
-    "instanceId": "default"
-  }
+  "deliveryId": "qq-group-456-message-123",
+  "routeId": "main",
+  "channel": "napcat",
+  "params": {
+    "target": "group",
+    "groupId": "456",
+    "instanceId": "default",
+    "replyToMessageId": "123"
+  },
+  "payload": { "type": "text", "text": "好的，我看到了。" }
 }
 ```
 
-如果 pipeline 使用 `qq`、`wecom`、`tts`，或者请求带有明确来源/目标，Outbox 会进入相应消息端；否则 legacy `agent` 输出只记录“结果保留在 Agent 会话”。自动发送仍经过对应 `messageAdapterPolicies`。NapCat 使用 `messageAdapterPolicies.napcat`，企业微信使用 `messageAdapterPolicies.wecom`，本机语音使用 `messageAdapterPolicies.speech`。
+`channel` 决定唯一发送渠道，`params` 决定该渠道的具体目标；Route 的默认 pipeline 不再替请求猜测或改写渠道。发送仍经过对应 `messageAdapterPolicies`。NapCat 使用 `messageAdapterPolicies.napcat`，企业微信使用 `messageAdapterPolicies.wecom`，本机语音使用 `messageAdapterPolicies.speech`。
 
 旧配置如果手写了 `allowedGroups` / `allowedUsers`、`outputMode`、`enabledPipelines` 或 `disabledPipelines`，这些具体过滤字段不再生效。发送关闭或消息类型不在 `supportedOutputs` 内时，会返回 `blocked`，不会调用对应消息端。
 
-允许发送时，RabiRoute 使用对应消息端的发送封装：NapCat 调用 OneBot HTTP，企业微信调用智能机器人 SDK。请求可以是旧的纯文本 `text/message/content`，也可以传 `payloadType=image|voice|file` 搭配 `imageUrl/imagePath`、`voiceUrl/voicePath`、`fileUrl/filePath` 等字段。NapCat 群聊的本地 `filePath` 会经过 `allowedFileRoots` 校验后调用 `upload_group_file`；上传成功后再发送可选的引用说明文本，说明文本失败不会把已经上传的文件误判为整体失败并重复上传。回复请求、成功、失败、草稿和拦截记录都会写入路由数据目录下的 `outbox-adapter.log.jsonl`。
+允许发送时，RabiRoute 使用对应消息端的发送封装：NapCat 调用 OneBot HTTP，企业微信调用智能机器人 SDK。`payload.type` 支持 `text|image|voice|file`；非文本内容必须在 `payload.path` 或 `payload.url` 中给出来源。NapCat 群聊的本地文件会经过 `allowedFileRoots` 校验后调用 `upload_group_file`；上传成功后再发送可选说明文本，说明文本失败不会把已经上传的文件误判为整体失败并重复上传。发送请求、成功、失败、草稿和拦截记录都会写入路由数据目录下的 `outbox-adapter.log.jsonl`。
 
-企业微信群聊回传推荐带上 `replyContextJson` 中的 `adapterType=wecom`、`groupId`、`wecomReqId`、`wecomConversationId` 和 `wecomChatId`。没有 `reqId` 但有明确 `groupId` / `chatId` 时，RabiRoute 可按主动发送处理；缺少明确目标时返回 `blocked` 并附带 draft 数据。
+企业微信群聊发送必须使用 `channel=wecom`，并在 `params.chatId` 中填写目标群。若需要引用当前企业微信回调，可同时传 `params.reqId`；没有 `reqId` 时按主动发送处理。缺少明确 `chatId` 时请求会被拒绝。
 
 ## RabiSpeech 语音消息端
 
-来自 `speech` 消息端的 `voice_transcript` 会在 `AgentPacket` 中强制解析成 `voice_chat`，即使 Route 的通用 preset 仍是 QQ 或 Agent session。回复上下文包含 `characterTtsDialogue=true`；Agent 必须把与屏幕文本同义的语音短句 POST 到 `/api/agent/replies`，不能只在 Codex 线程里显示文字。
+来自 `speech` 消息端的 `voice_transcript` 会在 `AgentPacket` 中强制解析成 `voice_chat`，即使 Route 的通用 preset 仍是 QQ 或 Agent session。来源上下文包含 `characterTtsDialogue=true`，同时注入 `channel=speech` 和对应 `sessionId` 的发送模板；Agent 必须把与屏幕文本同义的语音短句 POST 到 `/api/agent/send`，不能只在 Codex 线程里显示文字。
 
 Outbox 会重新验证来源记录与 `messageAdapterPolicies.speech`，把 Route 的人格 ID、播放策略与原始 `sessionId` 传给本机 `POST /v1/audio/speech`。RabiSpeech 从 `data/roles/<RoleId>/voice/voice-profile.json` 读取 TTS 模型、声线、语言、语速和表达指令；旧 Route TTS 字段只在缺少人格配置时作为兼容回退。`speechAutoPlay=true` 表示生成结果进入主机级 FIFO；接口成功只代表请求或队列已受理，不代表扬声器已经播放完毕。
 

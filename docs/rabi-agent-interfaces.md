@@ -1,4 +1,4 @@
-﻿<!-- docs-language-switch -->
+<!-- docs-language-switch -->
 <div align="center">
 <a href="./rabi-agent-interfaces_en.md">English</a> | 简体中文
 </div>
@@ -25,6 +25,48 @@ Agent 需要关注的 Rabi 接口：{agentInterfaceDocPath}
 ```text
 docs/rabi-agent-interfaces.md
 ```
+
+### 身份关系记忆接口
+
+身份关系记录“这个消息端账号对应谁，以及哪些长期关系已确认或待确认”，不等同于聊天记录、计划或当前发言立场。它由人格私有保存，不自动从昵称、群权限或一次发言中学习。账号查询键必须同时提供 `platform`、`endpointIdentityNamespace` 和 `senderStableId`；不要使用 Route ID 代替其中任何一项。
+
+```text
+GET /api/roles/:roleId/identity-relations
+GET /api/roles/:roleId/identity-relations?platform=<platform>&endpointIdentityNamespace=<namespace>&senderStableId=<id>&conversationKey=<optional>
+PUT /api/roles/:roleId/identity-relations
+```
+
+`GET` 不带查询参数时返回账号、参与者和关系卡的当前视图；带完整账号键时返回该账号的解析上下文。`PUT` 一次只写一种记录：`endpoint_account`、`participant` 或 `relation_card`。写入要附最小化证据引用，例如消息 ID、消息端、群/私聊会话或简短核对说明；不要复制整段私人聊天正文。多电脑同步后，若同一记录存在不一致的并发事件头，视图会标记 `conflicted`，给出 `conflictEventIds`，并在 `conflictCandidates` 中保留每个候选的完整记录，供人格页比较后修正；这类记录不会参与自动确认。要收敛冲突，`PUT` 必须明确提供该记录的全部关键字段，新的事件会替代所有当前事件头。
+
+人格页的“身份关系”卡片使用同一接口查看、新建和修正参与者、消息端账号映射与关系卡。它会在身份修正或人格同步事件后刷新；候选和冲突仍只能作为核对材料，不能在页面中被当作项目归属或执行授权。
+
+### 对话情境影子记录
+
+```text
+GET /api/roles/:roleId/conversation-situations?limit=20
+GET /api/roles/:roleId/conversation-situations/:situationId
+```
+
+消息实际投递时会生成这份只读记录。它没有聊天正文，只保留会话和消息标识、关系卡派生的项目线索、附件/身份歧义以及 `mayParticipate=true`、`mayCreateOrUpdateCurrentProjectRecords=false`。它用于人工审阅主动智能是否把“可参与讨论”误解成“应负责当前项目”；接口不能用来创建、确认或授权项目动作。
+
+```json
+{
+  "kind": "endpoint_account",
+  "platform": "napcat",
+  "endpointIdentityNamespace": "instance:qq-main",
+  "senderStableId": "example-user-id",
+  "participantLinks": [
+    {
+      "participantId": "participant-example",
+      "status": "confirmed",
+      "confidence": 1,
+      "evidenceRefs": [{ "messageId": "example-message-id" }]
+    }
+  ]
+}
+```
+
+候选映射只用于核对，不能用于真实称呼、授权、项目归属或执行。`confirmed` 也只说明身份或关系本身；它不能绕过明确委托、项目范围和外部动作审批。身份关系不进入 `knowledgeMatches`，也不需要为每条消息提交 `knowledge-callback`。
 
 同时默认注入轻量索引：
 
@@ -138,42 +180,69 @@ GET /api/personas/messages/receipts/:deliveryId
 
 跨人格投递是显式的单向消息，不会自动建立双向聊天。目标人格的普通回复只留在自己的角色面板。需要回复来源人格时，目标人格必须再次调用 POST：把新的 `deliveryId` 用于本次回复，沿用收到的 `personaConversationId`，令 `inReplyToMessageId` 等于当前消息 ID，并把 `personaMessageHopCount` 加一。超过 `personaMessageMaxHops` 时停止继续互投。
 
-普通回复上下文会一并注入：
+需要向消息端发送内容时，AgentPacket 会同时给出明确发送接口、已经按当前来源生成的请求模板，以及只读来源上下文：
 
 ```text
-普通回复 API：http://127.0.0.1:8790/api/agent/replies
-当前回复上下文：{"gatewayId":"main","runtimeRouteId":"main","routeProfileId":"main","routeKind":"direct_at","targetType":"group","messageId":123,"groupId":456,"userId":789,"targetGroupId":456,"instanceId":"default","replyApiUrl":"http://127.0.0.1:8790/api/agent/replies","groupLogPath":"data/route/main/group-messages.jsonl","privateLogPath":"data/route/main/private-messages.jsonl","outputAdapter":"agent","outputPipeline":"agent","replyToSource":false}
+明确发送 API：http://127.0.0.1:8790/api/agent/send
+明确发送请求模板：{"deliveryId":"<stable-id>","routeId":"main","channel":"napcat","params":{"target":"group","groupId":"456","instanceId":"default"},"payload":{"type":"text","text":"<正文>"}}
+来源上下文（只用于核对来源，不可直接作为发送参数）：{"routeKind":"direct_at","messageId":"123","groupId":"456"}
 ```
 
-## 普通回复回传接口
+## 明确发送接口
 
-Agent 的普通聊天回复应默认交给 RabiRoute，而不是直接调用 NapCat 或其他消息平台。
+Agent 的外部消息统一使用一个发送接口。旧 `/api/agent/replies` 已取消；`/api/agent/send` 不接受“把 replyContext 原样传回后自动猜目标”的用法。
 
 ```http
-POST /api/agent/replies
+POST /api/agent/send
 ```
 
-请求体示例：
+请求体固定包含：
+
+- `deliveryId`：本次业务发送的稳定 ID，重试时保持不变；
+- `routeId`：精确的已启用 Route ID；
+- `channel`：发送渠道；
+- `params`：该渠道的目标参数；
+- `payload`：`text`、`image`、`voice` 或 `file`；
+- `tracking.requirementId`：可选，仅用于关联消息处理看板，不能决定发送目标。
+
+QQ 群文本示例：
 
 ```json
 {
-  "text": "收到，我来处理。",
-  "replyContext": {
-    "routeProfileId": "main",
-    "targetType": "group",
-    "messageId": 123,
-    "groupId": 456,
-    "userId": 789,
-    "instanceId": "default"
+  "deliveryId": "send-example-001",
+  "routeId": "main",
+  "channel": "napcat",
+  "params": {
+    "target": "group",
+    "groupId": "456",
+    "instanceId": "default",
+    "replyToMessageId": "123"
+  },
+  "payload": {
+    "type": "text",
+    "text": "收到，我来处理。"
+  },
+  "tracking": {
+    "requirementId": "message-requirement-001"
   }
 }
 ```
 
-RabiRoute 只会在满足以下条件时自动发送：
+当前渠道和必填目标：
 
-- 请求带有明确聊天目标：`targetType=group` 加 `groupId`，或 `targetType=private` 加 `userId`。
-- 或请求带有原始消息上下文，RabiRoute 能从消息日志中定位来源群聊或私聊。
-- 对应路由的消息端发送管道未关闭，且 payload 类型在 `supportedOutputs` 内。
+| `channel` | `params` 必填目标 |
+| --- | --- |
+| `napcat` | `target=group + groupId`，或 `target=private + userId`；引用原消息时另填 `replyToMessageId` |
+| `wecom` | `chatId` |
+| `feishu` | `chatId` |
+| `weixin` | `sessionId` |
+| `rabilink` | `targetDeviceIds` 或 `targetDeviceKinds`；非主动发送还要 `sourceMessageId` |
+| `speech` | 可选 `sessionId`；该渠道只代表 RabiSpeech 合成/播放，不代表 QQ 已发送 |
+| `fennenote` | `sessionId`、`mode=message/playback` |
+| `role_panel` | `roleId` |
+| `plan_feedback` | `roleId`、`planId`、`kind=guidance/approval` |
+
+Route 的消息端输出策略仍会检查开关、支持的 payload 和允许的文件根目录。请求中的 `channel` 是唯一发送管道；Route 原有 `outputAdapter`、来源消息类型和 `replyContext` 都不能把它改成另一渠道。
 
 ### 消息处理需求与看板接口
 
@@ -183,7 +252,7 @@ RabiRoute 只会在满足以下条件时自动发送：
 POST /api/message-processing/requirements/:requirementId/outcome
 ```
 
-直接回复时先提交决定，再调用普通回复接口；Outbox 返回 `sent` 后，Manager 会用同一个 `replyContext.messageProcessingRequirementId` 自动关闭看板项：
+直接回复时先提交决定，再调用明确发送接口，并把需求 ID 写入 `tracking.requirementId`。Manager 只有在 `channel` 与原消息端一致、结果为 `sent`，且 QQ 等渠道带真实发送标识时才关闭看板项：
 
 ```json
 {
@@ -304,23 +373,23 @@ GET /api/message-processing/board?routeId=<gateway-id>&limit=100
 
 ### 受控外发幂等回执
 
-调用方需要抵抗重复点击、请求超时、响应丢失、Manager 重启或并发请求时，可以在请求体中提供稳定 `deliveryId`。Manager 会在进入 Outbox 前把 reservation 持久化到运行期 `data/agent-reply-idempotency/`；同一个 `deliveryId` 和相同 payload 只执行一次，完成后重复 POST 返回原 `sent/draft/blocked/failed` 结果。相同 ID 携带不同 payload 返回 `409 conflict`，`reserved/sending/uncertain` 状态也失败关闭，不会自动重发。
+`deliveryId` 是发送接口的必填字段。Manager 会在进入 Outbox 前把 reservation 持久化到运行期 `data/agent-send-idempotency/`；同一个 `deliveryId` 和相同请求只执行一次，完成后重复 POST 返回原 `sent/draft/blocked/failed` 结果。相同 ID 携带不同请求返回 `409 conflict`，`reserved/sending/uncertain` 状态也失败关闭，不会自动重发。
 
 调用方在 POST 超时或收到空回执后，应先查询原 ID：
 
 ```http
-GET /api/agent/replies/receipts/:deliveryId
+GET /api/agent/send/receipts/:deliveryId
 ```
 
 只有回执返回 `status=sent` 且包含目标通道要求的真实标识（QQ 文本为 `sentMessageId`）时，调用方才能继续做平台回读并把业务状态标成已发送。`deliveryId` 只提供 Outbox 请求幂等，不代替 NapCat/外部平台的真实存在验证，也不是自动重试队列。公开示例应使用占位 ID，不把运行期回执文件提交到仓库。
 
 ### 语音消息端人格回复
 
-当注入的 `replyContext` 同时包含 `routeKind=voice_transcript`、`adapterType=speech` 和 `characterTtsDialogue=true` 时，本轮来自 RabiPC 语音消息端。Agent 不能只在 Codex 线程里显示文字：应把适合朗读、与最终可见回复同义的 `text` 连同完整 `replyContext` POST 到 `/api/agent/replies`。Outbox 只接受文本，按来源消息重新绑定 Route，并从 Route 读取人格、声线、TTS 模型、语言、情绪指令、`sessionId` 和 `speechAutoPlay`；成功时返回 `sent`，开启播放时表示音频已进入 RabiSpeech 主机级 FIFO，而不是扬声器已经播放完毕。
+当来源上下文显示 `routeKind=voice_transcript`、`adapterType=speech` 和 `characterTtsDialogue=true` 时，本轮来自 RabiPC 语音消息端。Agent 使用注入模板调用 `/api/agent/send`，明确填写 `channel=speech`、当前 `routeId`、`params.sessionId` 和文本 payload。Outbox 从 Route 读取人格、声线、TTS 模型、语言和自动播放设置；成功时表示请求进入 RabiSpeech 合成或主机级 FIFO，不表示 QQ、企业微信或其它渠道已经发送。
 
 这个状态只由 `speech` / RabiSpeech 消息端的转写事件注入。不要把 QQ、角色面板或其它文字入口手工标记成语音状态，也不要绕过 Outbox 直连 worker，否则会丢失来源绑定、策略检查和会话隔离。
 
-手机音频流虽然复用同一套 RabiSpeech ASR，但注入的是 `routeKind=rabilink`、`adapterType=rabilink`，并携带稳定的 `sourceDeviceId/sourceDeviceKind`、临时 `sourceStreamId` 和 `channelType=rabilink.mobile_audio`。Agent 仍把完整 `replyContext` POST 到 `/api/agent/replies`；Outbox 只把稳定 `sourceDeviceId` 转成 `targetDeviceIds`，不会把本次 PCM 流 ID 当设备，因此回复只回到原始手机。它不是 `speech` 消息端，也不触发独立语音端的人格 TTS/FIFO 规则。
+手机音频流虽然复用同一套 RabiSpeech ASR，但来源是 `rabilink`。发送回原设备时必须明确填写 `channel=rabilink`、`params.sourceMessageId` 和 `params.targetDeviceIds`；注入模板只使用稳定 `sourceDeviceId`，不会把临时 `sourceStreamId` 当设备。它不是 `speech` 发送，因此不会误触发独立语音端的 TTS/FIFO 规则。
 
 ### 声纹证据与人格身份解释
 
@@ -406,88 +475,77 @@ Content-Type: application/json
 }
 ```
 
-省略 `roleId` 表示同步全部人格。同步器优先局域网直连，失败后经 Relay 受限中转。Agent 必须检查逐文件结果、`fileConflicts` 和 `semanticConflicts`；后者会在同一次同步响应中列出已成功并集合并、但人格声纹关系仍有并发分支的处理主机、声纹、字段和事件候选，不需要另行轮询覆盖率。`conflicts > 0` 或 HTTP `409` 表示仍有待处理冲突，不能声称同步完成。
+省略 `roleId` 表示同步全部人格。同步器优先局域网直连，失败后经 Relay 受限中转。Agent 必须检查逐文件结果、`fileConflicts` 和 `semanticConflicts`；后者会在同一次同步响应中列出已成功并集合并、但仍有并发分支的声纹关系或身份关系。声纹项包含处理主机、声纹、字段和事件候选；身份关系项包含记录类型、记录 ID 和事件候选，不需要另行轮询覆盖率。`conflicts > 0` 或 HTTP `409` 表示仍有待处理冲突，不能声称同步完成。
 
 普通文件冲突由本机 Agent 使用 `GET /api/persona-sync/conflicts`、`GET /api/persona-sync/conflicts/content` 和 `POST /api/persona-sync/conflicts/resolve` 处理。解决动作支持 `keep_local`、`use_remote`、`use_merged`，并应携带列表返回的 `expectedLocalHash` 防止覆盖刚发生的新修改。三条冲突控制接口仅允许回环调用，不经 LAN listener 或 Relay 暴露。底层 manifest、文件读取、单文件 merge 和完整请求字段见 [多电脑人格数据同步](persona-data-sync.md)。
 
 当当前路由消息明确提到多台电脑、人格/角色同步或 persona sync 时，AgentPacket 会把上述回环地址、当前 `roleId`、一次性执行要求和冲突判定直接注入绑定人格的当前任务；普通聊天不注入这段能力说明。默认只同步当前人格，只有用户明确要求时才允许省略 `roleId` 同步全部人格；peer 不唯一时必须先确认目标，不能猜测，也不能用轮询等待覆盖率。
 
-NapCat 群聊需要真实引用原消息时，在 `replyContext` 中同时提供源 `messageId` 和 `replyToSource: true`：
+NapCat 群聊需要真实引用原消息时，在 `params.replyToMessageId` 中明确提供源消息 ID：
 
 ```json
 {
-  "text": "【工会入口无响应】我先接手调查，有结论后继续引用这里同步。",
-  "replyContext": {
-    "routeProfileId": "main",
-    "targetType": "group",
-    "groupId": 456,
-    "messageId": 123,
+  "deliveryId": "send-qq-progress-001",
+  "routeId": "main",
+  "channel": "napcat",
+  "params": {
+    "target": "group",
+    "groupId": "456",
     "instanceId": "default",
-    "replyToSource": true
-  }
+    "replyToMessageId": "123"
+  },
+  "payload": { "type": "text", "text": "【工会入口无响应】我先接手调查，有结论后继续引用这里同步。" }
 }
 ```
 
-Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息段数组前插入 `reply` 段。正文已经包含 CQ reply 或结构化 reply 段时不会重复添加。`replyToSource=false`、没有 `messageId`、私聊和主动无源群消息都不会自动添加引用。
+Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息段数组前插入 `reply` 段。没有 `replyToMessageId`、私聊和主动无源群消息都不会自动添加引用。
 
-发送本地 QQ 群文件时使用同一个回复接口：
+发送本地 QQ 群文件时仍使用同一个发送接口：
 
 ```json
 {
-  "text": "【构建包】版本、渠道和签名已确认，文件已上传。",
-  "payloadType": "file",
-  "filePath": "C:/Path/To/Allowed/ReleasePkg/build.apk",
-  "fileName": "build.apk",
-  "replyContext": {
-    "routeProfileId": "main",
-    "targetType": "group",
-    "groupId": 456,
-    "messageId": 123,
-    "instanceId": "default",
-    "replyToSource": true
+  "deliveryId": "send-qq-file-001",
+  "routeId": "main",
+  "channel": "napcat",
+  "params": { "target": "group", "groupId": "456", "instanceId": "default", "replyToMessageId": "123" },
+  "payload": {
+    "type": "file",
+    "path": "C:/Path/To/Allowed/ReleasePkg/build.apk",
+    "fileName": "build.apk",
+    "text": "【构建包】版本、渠道和签名已确认，文件已上传。"
   }
 }
 ```
 
 对应 NapCat 策略必须允许 `file`，并配置 `messageAdapterPolicies.napcat.allowedFileRoots`。RabiRoute 会校验文件存在、类型和真实路径，再调用 `upload_group_file`；成功结果包含 `sentFileName`，NapCat 返回稳定标识时还包含 `sentFileId`。如果文件上传成功但跟随的说明文本失败，返回仍为 `status=sent` 并在 `reason` 中说明文本失败，调用方只能补发文本，不能重复上传文件。
 
-Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发送推进消息，不需要 `messageId`、`replyToSource=true` 或固定某个 output adapter。RabiRoute 不再按群号、私聊账号或具体 pipeline ID 做细粒度过滤；是否能发由消息端发送开关、消息端可用性和明确目标决定。
+Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发送推进消息，不需要引用原消息，但必须明确 `channel` 和目标参数。是否能发由消息端发送开关、消息端可用性和 payload 策略决定。
 
 主动投递到 RabiLink 眼镜也使用同一个动作安全门，不要直接绕过到 Relay：
 
 ```json
 {
-  "routeProfileId": "RabiLink",
-  "targetType": "rabilink",
-  "proactive": true,
-  "source": "scheduler",
-  "text": "该休息一下了。"
+  "deliveryId": "send-rabilink-active-001",
+  "routeId": "RabiLink",
+  "channel": "rabilink",
+  "params": { "proactive": true, "source": "scheduler", "targetDeviceKinds": ["glasses"] },
+  "payload": { "type": "text", "text": "该休息一下了。" }
 }
 ```
 
-`routeProfileId` 必须指向启用了 RabiLink 输出策略且已配置 Relay 的 Route。该请求不需要 `messageId`；通过策略后，RabiRoute 会把消息写入应用级持续下行队列，眼镜即使刚才没有说话也能收到。普通 RabiLink 来源回复仍保留来源关联，不会走主动分支，从而避免重复投递。
+`routeId` 必须指向启用了 RabiLink 输出策略且已配置 Relay 的 Route。主动发送必须明确 `targetDeviceIds` 或 `targetDeviceKinds`；普通来源回复还要提供 `sourceMessageId`。
 
-企业微信群聊消息使用同一个回复接口。企业微信的 `replyContext` 会尽量和 NapCat 群聊保持一致：`targetType=group`、`groupId` 表示企业微信群聊或 chat id，`userId` 表示发送者企业微信用户 ID；同时补充 `adapterType=wecom`、`wecomReqId`、`wecomConversationId`、`wecomChatId`、`outputAdapter=wecom`。Agent 回复当前企业微信群聊时，应原样带回 `replyContextJson`；主动发送到企业微信群时，至少提供 `adapterType=wecom`、`targetType=group` 和 `groupId`。
+企业微信群聊也使用同一个发送接口。Agent 必须填写 `channel=wecom` 和 `params.chatId`；来源上下文里的 `wecomReqId` 只用于可选关联，不再决定渠道。
 
 企业微信回复示例：
 
 ```json
 {
-  "text": "收到，我来整理一下。",
-  "replyContext": {
-    "adapterType": "wecom",
-    "routeKind": "wecom_message",
-    "targetType": "group",
-    "messageId": "wecom-msg-001",
-    "groupId": "wrCHATID",
-    "userId": "zhangsan",
-    "wecomReqId": "REQ_ID",
-    "wecomConversationId": "CONVERSATION_ID",
-    "wecomChatId": "wrCHATID",
-    "outputAdapter": "wecom",
-    "outputPipeline": "wecom",
-    "replyToSource": true
-  }
+  "deliveryId": "send-wecom-001",
+  "routeId": "main",
+  "channel": "wecom",
+  "params": { "chatId": "wrCHATID", "userId": "zhangsan", "reqId": "REQ_ID" },
+  "payload": { "type": "text", "text": "收到，我来整理一下。" }
 }
 ```
 
@@ -498,8 +556,8 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
   "code": 0,
   "ok": true,
   "status": "sent",
-  "routeProfileId": "main",
-  "messageId": "123",
+  "channel": "napcat",
+  "routeId": "main",
   "targetType": "group",
   "groupId": "456",
   "instanceId": "default",
@@ -1051,7 +1109,7 @@ POST /api/remote-agent/tasks
 - 同一“规范 cwd + 线程名”的任务会一直串行到 terminal；恢复到仍有活跃 turn 的线程时先有限等待，无法安全复用就创建独立线程，不把不同任务 steer 进同一个 turn。
 - Manager 会把回传文件保存到 `data/remote-agent-files/<taskId>/`，并在任务事件的 `savedFiles` 中记录本机保存路径、大小和 sha256。
 
-远端结果会先回到本机 RabiRoute，再投递回发起任务的本机人格线程。远端 Agent 不应直接回复 QQ；是否回复 QQ 仍由本机人格通过普通回复接口决定。
+远端结果会先回到本机 RabiRoute，再投递回发起任务的本机人格线程。远端 Agent 不应直接回复 QQ；是否回复 QQ 仍由本机人格通过明确发送接口决定。
 
 查询整理轮次：
 

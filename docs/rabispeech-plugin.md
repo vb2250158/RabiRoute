@@ -152,7 +152,7 @@ Windows 会按 EXE 记住上一次 Core Audio 会话倍率。RabiSpeech 启动�
 
 芬妮笔记风格的主机链路面板统一放在“语音服务 → ASR”，按 `主机麦克风 → VAD 切句 → ASR 转写 → 广播投递 → 回复与播放` 展示真实状态、计数器、最近事件和转写预览。Route 的“消息适配器 → 语音消息端”只保留当前 Route 的热投递/人格关键词策略、人格 TTS 摘要和回复自动播放开关，不再显示主机波形、计数器、运行日志或最近转写。语音消息端总开关仍是当前 Route 的订阅真源；关闭当前 Route 只取消自身订阅，最后一个订阅关闭后才停止主机麦克风。
 
-语音消息端投递的 `voice_transcript` 会让该 Agent 回合进入 `character-tts-dialogue` 状态。`AgentPacket` 注入 `characterTtsDialogue=true` 和强制回传说明；Agent 把与屏幕回复同义的短句交回 `/api/agent/replies` 后，Outbox 绑定当前 Route 的人格 ID 和 `sessionId`，RabiSpeech 再从该人格的 `voice-profile.json` 解析模型、声线、语言、语速和表达指令，最后进入主机级 FIFO。这个自动状态只针对 `speech` / RabiSpeech 来源，不会让 QQ、角色面板或普通文字消息自动发声。
+语音消息端投递的 `voice_transcript` 会让该 Agent 回合进入 `character-tts-dialogue` 状态。`AgentPacket` 注入 `characterTtsDialogue=true`，并生成带精确 `routeId`、`channel=speech` 和当前 `params.sessionId` 的发送模板；Agent 把与屏幕回复同义的短句交回 `/api/agent/send` 后，Outbox 绑定当前 Route 的人格 ID 和 `sessionId`，RabiSpeech 再从该人格的 `voice-profile.json` 解析模型、声线、语言、语速和表达指令，最后进入主机级 FIFO。这个自动状态只针对 `speech` / RabiSpeech 来源，不会让 QQ、角色面板或普通文字消息自动发声。
 
 ### 热投递与人格关键词
 
@@ -188,7 +188,7 @@ RibiWebGUI 的“人格配置 → 人格声纹归类”使用上述汇总模式�
 
 主机通用消息的 `recordId` 检查与追加使用同一把跨进程锁，因此相同 ASR 的并发请求、HTTP 重试或 RabiSpeech 补交只会生成一条原始消息。Manager 还会在 `data/speech/deliveries/YYYY-MM-DD.jsonl` 为每个 `recordId + Route` 保存成功或仅记录的终态 receipt；receipt 的日文件追加同样串行，不会产生交错 JSONL。已有 receipt 会被直接复用，不再次唤醒同一人格；失败终态不落成功 receipt，修复 owner/IPC 后仍可安全重试。
 
-本机/独立语音消息端的自动最近上下文按当前人格、`speech` 逻辑消息端和同一 `sessionId` 过滤；手机音频流按当前人格、`rabilink` 逻辑消息端和来源设备过滤。两类入口使用各自的 `recentMessageLimits` 额度，`0` 只关闭自动注入，不停止记录。AgentPacket 和 `replyContext` 保留 Route、消息端、`sourceDeviceId/sourceDeviceKind` 与 `channelType`；手机来源的普通回复经 `/api/agent/replies` 回到 RabiLink 下行流，未显式改目标时只投递给原始手机设备。
+本机/独立语音消息端的自动最近上下文按当前人格、`speech` 逻辑消息端和同一 `sessionId` 过滤；手机音频流按当前人格、`rabilink` 逻辑消息端和来源设备过滤。两类入口使用各自的 `recentMessageLimits` 额度，`0` 只关闭自动注入，不停止记录。AgentPacket 的来源上下文保留 Route、消息端、`sourceDeviceId/sourceDeviceKind` 与 `channelType`，同时生成明确发送模板。手机来源的消息要回到 RabiLink 下行流时，调用方必须提交 `channel=rabilink`，并在 `params.targetDeviceIds` 中明确填写原始稳定设备 ID；来源设备不会再被接口自动当作发送目标。
 
 当前默认值沿用旧 FenneNote 本机配置：`faster-whisper/small`、中文、系统默认麦克风、16 kHz、自适应 RMS 阈值、录音线 `0.01`、转写线 `0.015`、阈值以下持续 `500 ms` 切句、最短 `1000 ms`、最长 `60000 ms`、前置缓存 `1500 ms`、输入增益 `1.0`。RabiSpeech 保留原有自适应系数 `2.5` 和余量 `0.004`。这些是本机起点，不是所有麦克风的通用最优值。
 

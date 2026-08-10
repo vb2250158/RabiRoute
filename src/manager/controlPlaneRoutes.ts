@@ -64,7 +64,17 @@ import {
   updatePersonaVoiceIdentity,
   type PersonaVoiceIdentityPatch
 } from "../personaVoiceIdentities.js";
-import { handleAgentReply, type AgentReplyRequest } from "../outbox.js";
+import {
+  listIdentityEndpointAccounts,
+  listIdentityParticipants,
+  listIdentityRelationCards,
+  resolveIdentityRelationContext,
+  updateIdentityRelation,
+  type IdentityRelationPatch
+} from "../identityRelations.js";
+import { listConversationSituations } from "../conversationSituationStore.js";
+import { handleAgentSend, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
+import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
 import {
   MessageProcessingBoardStore,
   type MessageProcessingOutcomeInput,
@@ -78,9 +88,9 @@ import {
 import { messageProcessingBoardStatePath } from "../messageProcessing/persistence.js";
 import { normalizeCodexMemoryConsolidationAgentModel } from "../shared/codexMemoryConsolidationAgent.js";
 import {
-  agentReplyReceiptResponse,
-  executeIdempotentAgentReply
-} from "./agentReplyIdempotency.js";
+  agentSendReceiptResponse,
+  executeIdempotentAgentSend
+} from "./agentSendIdempotency.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
   normalizeRolePanelAttachments,
@@ -3866,35 +3876,29 @@ function applyManagedAgentThreadDefaults(request: AgentThreadRequest): AgentThre
   return model && !request.model?.trim() ? { ...request, model } : request;
 }
 
-function messageProcessingRequirementIdFromReply(request: AgentReplyRequest): string | undefined {
-  const context = (() => {
-    if (request.replyContext && typeof request.replyContext === "object" && !Array.isArray(request.replyContext)) {
-      return request.replyContext as Record<string, unknown>;
-    }
-    if (typeof request.replyContext === "string" && request.replyContext.trim()) {
-      try {
-        const parsed = JSON.parse(request.replyContext) as unknown;
-        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-          ? parsed as Record<string, unknown>
-          : undefined;
-      } catch {
-        return undefined;
-      }
-    }
-    return undefined;
-  })();
-  const value = String(context?.messageProcessingRequirementId || "").trim();
+function messageProcessingRequirementIdFromSend(request: AgentSendRequest): string | undefined {
+  const tracking = request.tracking && typeof request.tracking === "object" && !Array.isArray(request.tracking)
+    ? request.tracking as Record<string, unknown>
+    : undefined;
+  const value = String(tracking?.requirementId || "").trim();
   return value || undefined;
 }
 
-function recordMessageProcessingReply(request: AgentReplyRequest, result: Awaited<ReturnType<typeof handleAgentReply>>): void {
-  const requirementId = messageProcessingRequirementIdFromReply(request);
+function recordMessageProcessingSend(request: AgentSendRequest, result: AgentSendResult): void {
+  const requirementId = messageProcessingRequirementIdFromSend(request);
   if (!requirementId) return;
   try {
-    messageProcessingBoard.recordReply(requirementId, result, String(request.deliveryId || "").trim() || undefined);
+    const requirement = messageProcessingBoard.recordSend(requirementId, result, String(request.deliveryId || "").trim() || undefined);
     publishManagerEvent("message_processing_board_changed", { requirementId, status: result.status });
+    if (requirement.status === "awaiting_send" && result.status === "sent") {
+      managerOperationalLog.record("warn", "message_processing_send_channel_mismatch", {
+        action: requirementId,
+        result: `${result.status}:${result.channel || "unknown"}->${requirement.source.endpoint}`,
+        error: requirement.lastError ? { name: "SendChannelMismatch", message: requirement.lastError } : undefined
+      });
+    }
   } catch (error) {
-    managerOperationalLog.record("warn", "message_processing_reply_board_update_failed", {
+    managerOperationalLog.record("warn", "message_processing_send_board_update_failed", {
       action: requirementId,
       result: result.status,
       error: managerOperationalError(error, rootDir)
@@ -3910,7 +3914,12 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     return;
   }
   const outcomeUrl = `http://127.0.0.1:${managerPort}/api/message-processing/requirements/${encodeURIComponent(requirement.id)}/outcome`;
-  const replyApiUrl = `http://127.0.0.1:${managerPort}/api/agent/replies`;
+  const sendApiUrl = `http://127.0.0.1:${managerPort}/api/agent/send`;
+  const sendRequestTemplate = agentSendRequestTemplateForSource({
+    ...(requirement.source.replyContext || {}),
+    routeProfileId: requirement.source.routeProfileId || requirement.source.routeId,
+    messageProcessingRequirementId: requirement.id
+  });
   const prompt = [
     "[计划进展通知需求]",
     `消息处理需求 ID：${requirement.id}`,
@@ -3924,7 +3933,8 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     ...(requirement.plan?.changes || []).map((change) => `- ${change}`),
     "",
     "RabiManager 已自动生成一项必须发送的计划进展通知。请结合计划当前内容整理简短、可理解的进展，不要把内部 taskBinding、路径或控制面字段原样发给群成员。",
-    `使用 POST ${replyApiUrl}，把上方来源保存的 replyContext 原样传回；只有 Outbox 返回 sent 才算完成。`,
+    `使用 POST ${sendApiUrl}，明确填写 routeId、channel、params、payload、deliveryId，并在 tracking.requirementId 填 ${requirement.id}。不要把来源 replyContext 原样当发送参数。`,
+    `发送请求模板：${JSON.stringify(sendRequestTemplate || { error: "当前来源无法生成明确发送目标，请提交 invalid_source，不要猜测。" })}`,
     `当前 replyContext：${JSON.stringify(requirement.source.replyContext || {})}`,
     `如果来源已经失效或同一进展已由别人完整通知，POST ${outcomeUrl} 提交 decision=no_reply 和受支持的原因；其它情况不能静默关闭。`,
     "普通问题和讨论仍由你判断是否参与；这条计划进展通知本身不是可选讨论。"
@@ -5159,6 +5169,83 @@ function handleRoleKnowledgeApi(
     response,
     { roleDir: resolveRoleDir }
   )) return true;
+  const conversationSituationsMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/conversation-situations(?:\/([^/]+))?$/);
+  if (conversationSituationsMatch) {
+    const roleId = decodeURIComponent(conversationSituationsMatch[1]);
+    const situationId = conversationSituationsMatch[2] ? decodeURIComponent(conversationSituationsMatch[2]) : "";
+    try {
+      const roleDir = resolveRoleDir(roleId);
+      if (request.method !== "GET") {
+        jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+        return true;
+      }
+      const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
+      const situations = listConversationSituations(roleDir, Number(requestUrl.searchParams.get("limit") || 20));
+      const data = situationId ? situations.find(item => item.id === situationId) : situations;
+      if (situationId && !data) {
+        jsonResponse(response, 404, { code: -1, message: `Conversation situation not found: ${situationId}` });
+        return true;
+      }
+      jsonResponse(response, 200, { code: 0, data });
+      return true;
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      return true;
+    }
+  }
+  const identityRelationsMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/identity-relations$/);
+  if (identityRelationsMatch) {
+    const roleId = decodeURIComponent(identityRelationsMatch[1]);
+    try {
+      const roleDir = resolveRoleDir(roleId);
+      if (request.method === "GET") {
+        const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
+        const platform = requestUrl.searchParams.get("platform")?.trim() || "";
+        const endpointIdentityNamespace = requestUrl.searchParams.get("endpointIdentityNamespace")?.trim() || "";
+        const senderStableId = requestUrl.searchParams.get("senderStableId")?.trim() || "";
+        if (platform || endpointIdentityNamespace || senderStableId) {
+          if (!platform || !endpointIdentityNamespace || !senderStableId) {
+            throw new Error("platform, endpointIdentityNamespace, and senderStableId must be provided together.");
+          }
+          jsonResponse(response, 200, {
+            code: 0,
+            data: {
+              path: "identity-relations/events.jsonl",
+              context: resolveIdentityRelationContext(roleDir, { platform, endpointIdentityNamespace, senderStableId,
+                conversationKey: requestUrl.searchParams.get("conversationKey")?.trim() || undefined,
+                projectId: requestUrl.searchParams.get("projectId")?.trim() || undefined })
+            }
+          });
+          return true;
+        }
+        jsonResponse(response, 200, {
+          code: 0,
+          data: {
+            path: "identity-relations/events.jsonl",
+            endpointAccounts: listIdentityEndpointAccounts(roleDir),
+            participants: listIdentityParticipants(roleDir),
+            relationCards: listIdentityRelationCards(roleDir)
+          }
+        });
+        return true;
+      }
+      if (request.method === "PUT") {
+        void readJsonBody<IdentityRelationPatch>(request)
+          .then(body => ({ data: updateIdentityRelation(roleDir, body), kind: body.kind }))
+          .then(({ data, kind }) => {
+            publishManagerEvent("identity_relation_changed", { roleId, kind, recordId: data.record.id });
+            jsonResponse(response, data.appended ? 201 : 200, { code: 0, data });
+          })
+          .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        return true;
+      }
+      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+      return true;
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      return true;
+    }
+  }
   const voiceIdentityMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/voice-identities$/);
   if (voiceIdentityMatch) {
     try {
@@ -6550,16 +6637,16 @@ export async function startManager(): Promise<void> {
           });
         return;
       }
-      const agentReplyReceiptMatch = requestUrl.pathname.match(/^\/api\/agent\/replies\/receipts\/([^/]+)$/);
-      if (request.method === "GET" && agentReplyReceiptMatch) {
-        const receipt = agentReplyReceiptResponse(rootDir, decodeURIComponent(agentReplyReceiptMatch[1]));
+      const agentSendReceiptMatch = requestUrl.pathname.match(/^\/api\/agent\/send\/receipts\/([^/]+)$/);
+      if (request.method === "GET" && agentSendReceiptMatch) {
+        const receipt = agentSendReceiptResponse(rootDir, decodeURIComponent(agentSendReceiptMatch[1]));
         jsonResponse(response, receipt.statusCode, { code: receipt.statusCode < 400 ? 0 : -1, ...receipt.body });
         return;
       }
-      if (request.method === "POST" && requestUrl.pathname === "/api/agent/replies") {
-        void readJsonBody<AgentReplyRequest>(request)
+      if (request.method === "POST" && requestUrl.pathname === "/api/agent/send") {
+        void readJsonBody<AgentSendRequest>(request)
           .then(async (body) => {
-            const deliver = () => handleAgentReply(body, {
+            const deliver = () => handleAgentSend(body, {
               rootDir,
               routeRoot,
               rolesRoot,
@@ -6577,16 +6664,8 @@ export async function startManager(): Promise<void> {
                 };
               })
             });
-            if (body.deliveryId == null || !String(body.deliveryId).trim()) {
-              const result = await deliver();
-              recordMessageProcessingReply(body, result);
-              return {
-                statusCode: result.status === "sent" ? 202 : result.status === "draft" ? 200 : result.status === "failed" ? 502 : 403,
-                body: result
-              };
-            }
-            const result = await executeIdempotentAgentReply(body, { rootDir, deliver });
-            recordMessageProcessingReply(body, result.body);
+            const result = await executeIdempotentAgentSend(body, { rootDir, deliver });
+            recordMessageProcessingSend(body, result.body);
             return result;
           })
           .then((result) => {

@@ -92,7 +92,7 @@ sequenceDiagram
     participant P as 手机 / 便携端
     participant E as 眼镜
 
-    C->>G: POST /api/agent/replies
+    C->>G: POST /api/agent/send
     G->>R: POST /worker/messages + deliveryId + targets
     R-->>G: queued / deduplicated
     P->>R: GET /api/rabilink/devices/messages?after=...
@@ -132,7 +132,7 @@ Content-Type: application/json
 
 ### 下行目标信封
 
-Agent 或经过安全门的调用方可以在 `/worker/messages` 或 `/api/agent/replies` 中附带：
+Agent 或经过安全门的调用方可以在 `/worker/messages` 或 `/api/agent/send` 中附带：
 
 ```json
 {
@@ -207,7 +207,7 @@ GET /rokid/rabilink/messages?after=<cursor>&stream=1
 - 手机只保存当前 RabiLink 应用 token，不保存 PC 的 Agent 凭证。
 - token 只访问所属应用；不同应用的 task、outbox、设备状态和 PC worker 隔离。
 - 设备目标过滤不是新的授权边界。知道同一应用 token 的客户端仍属于同一信任域。
-- Codex/计划器的主动消息应先调用 `/api/agent/replies`，经过 Route 输出策略和审计，再由 RabiRoute 写 `/worker/messages`。
+- Codex/计划器的主动消息应先调用 `/api/agent/send`，经过 Route 输出策略和审计，再由 RabiRoute 写 `/worker/messages`。
 - 公开示例只使用占位 URL、占位 token 和虚构设备 ID。
 
 ## 当前完成度

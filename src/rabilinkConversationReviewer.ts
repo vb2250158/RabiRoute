@@ -153,13 +153,21 @@ export function buildRabiLinkConversationReviewPrompt(input: {
 }): string {
   const first = input.pendingUserEntries[0];
   const last = latestEntry(input.pendingUserEntries);
-  const replyApiUrl = `${input.gatewayManagerUrl.replace(/\/+$/, "")}/api/agent/replies`;
-  const proactiveReplyBody = JSON.stringify({
-    routeProfileId: input.routeProfileId,
-    targetType: "rabilink",
-    proactive: true,
-    source: "RabiLink active intelligence",
-    text: "<给用户的一句简短自然文本>"
+  const sendApiUrl = `${input.gatewayManagerUrl.replace(/\/+$/, "")}/api/agent/send`;
+  const proactiveSendBody = JSON.stringify({
+    deliveryId: "<为本次发送生成稳定 ID；重试时保持不变>",
+    routeId: input.routeProfileId,
+    channel: "rabilink",
+    params: {
+      proactive: true,
+      source: "RabiLink active intelligence",
+      targetDeviceKinds: ["glasses"],
+      presentation: ["tts"]
+    },
+    payload: {
+      type: "text",
+      text: "<给用户的一句简短自然文本>"
+    }
   });
   return [
     "[RabiLink 主动智能会话审阅]",
@@ -189,7 +197,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     "5. 想尽可用办法减轻用户负担。可以主动读取相关本地文件、计划和项目状态，做低风险分析、检索、草稿或预备工作；有价值时给出结果或最小下一步，不要只问泛泛的“需要我帮忙吗”。",
     "6. 只有在能带来明确帮助时才主动打断：直接问题、时间敏感提醒、风险、重要遗漏、可立即推进的下一步，或用户明确要求你介入。普通闲聊、重复、背景音和低置信片段保持安静。",
     "7. 任何外发、删除、购买、设备控制或配置高风险动作仍需遵守 RabiRoute 安全门；不要因为旁听到一句话就擅自执行。",
-    `8. 需要对眼镜说话时，以 Content-Type=application/json POST ${replyApiUrl}。请求体示例：${proactiveReplyBody}。下行不依赖上行 taskId，眼镜会按队列调用原生 TTS。若本次涉及多个 Route，必须根据对应记录的 routeProfileId 分别投递，不能把一个人格的结论发到另一个 Route。`,
+    `8. 需要对眼镜说话时，以 Content-Type=application/json POST ${sendApiUrl}。请求体示例：${proactiveSendBody}。必须明确 channel=rabilink、目标设备和呈现方式；下行不依赖上行 taskId，眼镜会按队列调用原生 TTS。若本次涉及多个 Route，必须根据对应记录的 routeProfileId 分别投递，不能把一个人格的结论发到另一个 Route。`,
     "9. 只有接口返回 ok=true 且 status=sent 才视为已投递；成功下行会自动写回同一账本。不要复述内部路径、entryId、JSON 字段或审阅过程，也不要重复已经投递过的内容。",
     input.manual
       ? "10. 这是用户手动要求审阅：即使暂时没有要执行的动作，也应给眼镜一句很短的自然确认，说明你已经看过并给出最有用的一点结论。"

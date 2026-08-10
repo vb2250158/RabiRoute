@@ -21,7 +21,7 @@ The template is disabled by default. Configure the Relay URL, application token,
 
 AIUI observations are written to `RabiActive/rabilink-conversation.jsonl` before review; they are not forwarded to Codex one line at a time. Review waits for the bound Desktop task to become idle or is steered by a touchpad click.
 
-Proactive Codex replies use `/api/agent/replies` with `targetType=rabilink` and `proactive=true`. Upstream observations and downstream replies have separate queues. Desktop IPC is the sole owner of real prompt delivery, and an unloaded target task fails closed.
+Proactive Codex sends use `/api/agent/send` with an exact `routeId`, `channel=rabilink`, and explicit `params.proactive=true`, device target, and presentation. Upstream observations and downstream sends have separate queues. Desktop IPC is the sole owner of real prompt delivery, and an unloaded target task fails closed.
 
 FenneNote can be added as an explicit record-first source with its own unoccupied port, input-only policy, and `routeVariables.rabilinkRecordFirstSources=fennenote`. The sample leaves this empty because PC and glasses microphones are different consent surfaces.
 

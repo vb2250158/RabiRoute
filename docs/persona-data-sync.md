@@ -42,7 +42,7 @@ Relay fallback 是请求中转，不是服务器人格仓库。文件内容只�
 | `voice/cache/tts-audio/` | 可再生语音缓存，不同步。 |
 | 超过 16 MiB 的单文件 | 当前拒绝同步。 |
 
-人格自己的声纹关系真源 `voice/voice-identities.jsonl` 也使用追加事件和 tombstone，因此可按 JSONL 并集合并。每个身份由 `sourceHostId + voiceprintId` 定位；RabiSpeech/Manager 的主机诊断人名不会进入这个文件。新关系事件自动记录所收敛的父事件头；两台 PC 并发修改同一身份时会保留多个头并通过 `conflicted/conflictFields/conflictCandidates` 暴露，不做最后写入者覆盖。人格再次提交最终解释会 supersede 全部当前头，使后续同步收敛。
+人格自己的声纹关系真源 `voice/voice-identities.jsonl` 与身份关系真源 `identity-relations/events.jsonl` 都使用追加事件，因此可按 JSONL 并集合并。声纹身份由 `sourceHostId + voiceprintId` 定位；身份关系记录由其账号、参与者或关系卡 ID 定位。新事件自动记录所收敛的父事件头；两台 PC 并发修改同一记录时会保留多个头并显式暴露冲突，不做最后写入者覆盖。声纹关系返回 `conflicted/conflictFields/conflictCandidates`；身份关系返回 `conflicted/conflictEventIds/conflictCandidates`，并停止自动确认。人格再次提交完整的最终解释会 supersede 全部当前头，使后续同步收敛。
 
 自动覆盖或删除前会把旧文件归档到运行期 `data/persona-sync/archive/`。不能安全合并的远端内容或删除意图写入 `data/persona-sync/conflicts/`，不会污染正式人格文件；本机 Agent 或用户确认后可选择保留本地、采用远端（删除冲突时表示确认删除），或提交明确的合并内容。处理时会校验本地文件哈希，避免基于过期版本覆盖；原冲突证据与元数据移入 `data/persona-sync/resolved-conflicts/`，并留下 `.resolution.json` 解决记录。
 
@@ -80,7 +80,7 @@ POST /api/persona-sync/conflicts/resolve
 }
 ```
 
-省略 `roleId` 时同步全部人格。返回结果会逐文件标明 `pull`、`push`、`converged` 和 `conflict`；`fileConflicts` 统计文件级冲突，`semanticConflicts` 同步返回已合并 JSONL 中仍存在的人格声纹关系分支，`conflicts` 是两者总数。语义冲突项包含人格、处理主机、声纹 ID、冲突字段和候选事件 ID，因此发起同步的 Agent 可在同一次响应里处理，不需要事后轮询。`conflicts > 0` 时 HTTP 返回 `409`，Agent 不应宣称同步完成。
+省略 `roleId` 时同步全部人格。返回结果会逐文件标明 `pull`、`push`、`converged` 和 `conflict`；`fileConflicts` 统计文件级冲突，`semanticConflicts` 同步返回已合并 JSONL 中仍存在的声纹关系或身份关系分支，`conflicts` 是两者总数。声纹项包含人格、处理主机、声纹 ID、冲突字段和候选事件 ID；身份关系项包含人格、记录类型、记录 ID 和候选事件 ID。因此发起同步的 Agent 可在同一次响应里处理，不需要事后轮询。`conflicts > 0` 时 HTTP 返回 `409`，Agent 不应宣称同步完成。
 
 冲突查询与解决接口只允许回环地址调用，不会暴露给专用 LAN listener，也不在 Relay proxy allowlist 中。读取列表后，先保存返回的 `localHash`，查看对应远端证据，再提交其中一种动作：
 

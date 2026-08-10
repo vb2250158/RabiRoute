@@ -260,7 +260,7 @@ AgentPacket 只注入与当前情景相关的最小用户模型切片、来源�
 
 ### 下行
 
-用户可见文本经过 `/api/agent/replies`、输出策略、Relay Outbox 和持久消息端。Relay 通过 `/api/rabilink/events` 推送 `outbox_available`；手机收到事件后用 cursor 读取一次增量，断线重连时也只按 cursor 补漏，然后调用 `/api/rabilink/speech/v1/audio/speech`，从 WAV 提取 PCM 并发给眼镜。手机把 `delivered/played/playback_failed` 先写本地回执队列再补传；Relay 持久化回执并发出 `outbox_receipt`。`played` 只能来自手机或眼镜自己的 `AudioTrack` marker，不能由 Relay、估算时长或“PCM 已写入通道”推断。
+用户可见文本经过 `/api/agent/send`、输出策略、Relay Outbox 和持久消息端。Relay 通过 `/api/rabilink/events` 推送 `outbox_available`；手机收到事件后用 cursor 读取一次增量，断线重连时也只按 cursor 补漏，然后调用 `/api/rabilink/speech/v1/audio/speech`，从 WAV 提取 PCM 并发给眼镜。手机把 `delivered/played/playback_failed` 先写本地回执队列再补传；Relay 持久化回执并发出 `outbox_receipt`。`played` 只能来自手机或眼镜自己的 `AudioTrack` marker，不能由 Relay、估算时长或“PCM 已写入通道”推断。
 
 手机私有文字、控制、媒体、回执与下行队列统一使用 fsync 后原子替换。启动时清理未完成临时文件；坏 JSON、缺失媒体二进制和孤立附件移入隔离目录并形成可见错误，不能让毒化项目永久堵住后续队列。可靠事实保留到成功确认或用户明确处理；实时 PCM 单独使用待确认块与有界最新缓冲，断网恢复后追上实时而不是重放全部过期声音。
 

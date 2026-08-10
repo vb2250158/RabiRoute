@@ -26,6 +26,13 @@ import {
   recentMessageContextText
 } from "../messageContextStore.js";
 import { resolvePersonaVoiceIdentities, type PersonaVoiceIdentity } from "../personaVoiceIdentities.js";
+import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
+import { identityContextForForward, identityContextLines } from "./identityContext.js";
+import {
+  conversationSituationForDelivery,
+  conversationSituationLines,
+  type ConversationSituation
+} from "./conversationSituation.js";
 import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
 import { messageContextScopeForForward } from "./messageContextScope.js";
@@ -60,6 +67,8 @@ export type AgentPacket = {
   rule: NotificationRule;
   templateValues: ForwardTemplateValues;
   message: string;
+  /** Shadow assessment persisted only after this packet enters the delivery path. */
+  conversationSituation?: ConversationSituation;
 };
 
 type MessageCodeRecord = {
@@ -176,11 +185,12 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   const outputAdapter = String(values.outputAdapter ?? "");
   const routeKind = String(values.routeKind ?? "");
   const targetType = String(values.targetType ?? "");
-  const replyApiUrl = String(values.replyApiUrl ?? "");
+  const sendApiUrl = String(values.sendApiUrl ?? "");
+  const sendRequestJson = String(values.sendRequestJson ?? "");
   const replyContextJson = String(values.replyContextJson ?? "");
   const messageProcessingRequirementId = String(values.messageProcessingRequirementId ?? "").trim();
   const messageProcessingOutcomeUrl = messageProcessingRequirementId
-    ? `${replyApiUrl.replace(/\/api\/agent\/replies$/, "")}/api/message-processing/requirements/${encodeURIComponent(messageProcessingRequirementId)}/outcome`
+    ? `${sendApiUrl.replace(/\/api\/agent\/send$/, "")}/api/message-processing/requirements/${encodeURIComponent(messageProcessingRequirementId)}/outcome`
     : "";
   const replyToSource = String(values.replyToSource ?? "").toLowerCase() === "true";
   const characterTtsDialogue = outputAdapter === "tts" && routeKind === "voice_transcript";
@@ -191,56 +201,56 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
     // The replyContext JSON is rendered below and will surface the invalid payload to the handler.
   }
 
-  if (!replyApiUrl || !replyContextJson) {
+  if (!sendApiUrl || !sendRequestJson || !replyContextJson) {
     return [];
   }
 
   const isPlanFeedback = targetType === "plan_feedback";
   const isPlanGuidance = isPlanFeedback && planFeedbackKind === "guidance";
-  const shouldExplainReplyApi = isPlanFeedback
+  const shouldExplainSendApi = isPlanFeedback
     || forceMessagePipeline
     || Boolean(messageProcessingRequirementId)
     || replyToSource
     || characterTtsDialogue
     || (outputAdapter === "fennenote" && routeKind === "voice_transcript")
     || routeKind === "rabilink";
-  if (!shouldExplainReplyApi) return [];
+  if (!shouldExplainSendApi) return [];
 
   const intro = isPlanGuidance
     ? [
         "本次是计划引导处理，面向用户的回复必须回到当前计划记录，不能只在 Codex 任务里输出正文。",
         "先读取当前计划与反馈记录，再根据引导继续推进。引导属于整个计划，不绑定某个步骤；如果范围、优先级、执行方式或后续路径变化，必须 PATCH 计划并同步调整尚未开始的步骤。引导本身不代表审批，也不自动改变计划状态。",
-        "更新完成后，把处理说明 POST 到普通回复 API；RabiRoute 会将其保存为当前 planId 下、不带 stepId 的 guidance_response。"
+        "更新完成后，把处理说明 POST 到明确发送 API；RabiRoute 会将其保存为当前 planId 下、不带 stepId 的 guidance_response。"
       ]
     : isPlanFeedback
     ? [
         "本次是计划审批意见处理，面向用户的回复必须回到当前计划记录，不能只在 Codex 任务里输出正文。",
         "先按审批意见读取并 PATCH 更新对应计划或步骤；批准、否决、要求调整或取消后必须同轮更新 approvalRequest.responseStatus。isBlocked 由 Manager 根据完整且待决的审批合同自动派生，不要手写。计划说明要具体到审批人、决定、推荐与备选、reason、实际文件、完整命令、外部变更、验证、回退、排除范围、附件、请求来源和回执状态。",
-        "更新完成后，把处理说明 POST 到普通回复 API；RabiRoute 会将其保存为当前 planId / stepId 的 approval_response。"
+        "更新完成后，把处理说明 POST 到明确发送 API；RabiRoute 会将其保存为当前 planId / stepId 的 approval_response。"
       ]
     : forceMessagePipeline
     ? [
-        "当前路由未绑定人格。凡是要对消息来源说出的自然语言回复，都必须先 POST 到普通回复 API，由 RabiRoute 投递到对应消息管道；不能只在 Codex 线程里写最终文本。",
+        "当前路由未绑定人格。凡是要对消息来源说出的自然语言回复，都必须先 POST 到明确发送 API，并填写渠道与目标参数；不能只在 Codex 线程里写最终文本。",
         "不要扮演角色，也不要把当前 Codex 可见最终文本当成已经发回消息端。"
       ]
     : routeKind === "rabilink"
       ? [
           "本次来自 RabiLink Relay，不能只在 Codex 线程里写最终文本。",
-          "如果判断需要回应，请把要写回 Rokid/灵珠侧的短句 POST 到普通回复 API；RabiRoute 会把它放入 RabiLink 下行消息队列。"
+          "如果判断需要回应，请把要写回 Rokid/灵珠侧的短句 POST 到明确发送 API，并指定 channel=rabilink 与目标设备；RabiRoute 会把它放入 RabiLink 下行消息队列。"
         ]
       : characterTtsDialogue
       ? [
           "本次由语音消息端触发，进入 character-tts-dialogue 回复状态；不能只在 Codex 线程里写最终文本。",
           "请生成同义的屏幕文本与适合朗读的语音文本，并保持当前 Rabi 人格；普通情况下两者使用同一句短而自然的回复。",
-          "把要播出的语音文本 POST 到普通回复 API；RabiRoute 会冻结当前 Route 的人格、声线、模型和 sessionId，并交给 RabiSpeech 主机级 FIFO 播放队列。不要绕过 Outbox 直连 worker，也不要重复调用 TTS。"
+          "把要播出的语音文本 POST 到明确发送 API，并指定 channel=speech 与 sessionId；RabiRoute 会冻结当前 Route 的人格、声线和模型，再交给 RabiSpeech 主机级 FIFO 播放队列。不要绕过 Outbox 直连 worker，也不要重复调用 TTS。"
         ]
       : outputAdapter === "fennenote" && routeKind === "voice_transcript"
       ? [
           "本次是语音对话回复，不能只在 Codex 线程里写最终文本。",
-          "如果判断需要回应，请把要播出的短句 POST 到普通回复 API；RabiRoute 会转给 FenneNote/OumuQ 播放，并写入转写预览。"
+          "如果判断需要回应，请把要播出的短句 POST 到明确发送 API，并指定 channel=fennenote、sessionId 和 mode；RabiRoute 会转给 FenneNote/OumuQ。"
         ]
       : [
-          "如果判断需要回应消息来源，请把回复 POST 到普通回复 API；RabiRoute 会按当前管道投递。"
+          "如果判断需要回应消息来源，请把正文 POST 到明确发送 API，并使用下面给出的 channel 与 params；RabiRoute 只向这个明确目标投递。"
         ];
 
   const processingOutcomeLines = messageProcessingRequirementId
@@ -252,19 +262,17 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
         "如果 knowledgeMatches 为空，Agent 仍须根据原消息、附件和回复链自行提取对象与同义词，至少用两组关键词查询计划/记忆；不能把“未命中”当成“无需响应”。",
         `如果最终决定不回复，还要提交 decision=no_reply、reasonCode 和具体 reason。明确 @、直接回复、私聊等必须回复消息只允许使用结束语、重复、自身消息、他人已完整回答、消息撤回或来源失效作为免回复原因。`,
         `如果需要转交秘书、计划 Agent 或主人格，调用线程桥时同时传 messageProcessing={"requirementId":"${messageProcessingRequirementId}","outcome":"handoff","targetAgentType":"实际类型","planId":"如已关联计划"}。线程桥接受不代表本需求完成；结果仍要返回当前消息处理任务。`,
-        "如果需要回复，普通回复 API 的实际 sent 回执会自动完成这项发送需求；只在 Codex 最终文本中写了回复不算完成。"
+        "如果需要回复，明确发送 API 只有在渠道与原消息端一致且带该渠道回执时才会完成发送需求；只在 Codex 最终文本中写了回复不算完成。"
       ]
     : [];
 
   return [
     ...intro,
-    "请求体必须包含 text 和 replyContext，其中 replyContext 使用上方“当前回复上下文”的 JSON 原样传入。",
+    "请求体必须使用下面的明确发送模板。不要把来源上下文原样传入，也不要让 RabiRoute 根据来源猜测渠道。",
+    `POST ${sendApiUrl}`,
     "示例：",
     "```json",
-    JSON.stringify({
-      text: isPlanGuidance ? "这里填写计划引导的处理说明。" : "这里填写夜雨要说的话。",
-      replyContext: JSON.parse(replyContextJson)
-    }, null, 2),
+    sendRequestJson,
     "```",
     ...processingOutcomeLines,
     isPlanFeedback
@@ -284,7 +292,7 @@ function directMessageModeLines(values: ForwardTemplateValues): string[] {
     optionalLine("输入适配器", values.inputAdapter),
     optionalLine("输出适配器", values.outputAdapter),
     "只根据本次消息、日志路径和路由变量处理任务。",
-    "需要对消息来源说出的每一句话，都通过“回传”里的普通回复 API 投递到 RabiRoute；RabiRoute 会按 replyContext 送回对应消息管道。"
+    "需要对消息来源说出的每一句话，都通过“发送”里的明确发送 API 投递到 RabiRoute；必须使用给出的 channel 与 params，不能让系统根据来源上下文猜测目标。"
   ];
 }
 
@@ -745,8 +753,8 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const feishuChatId = isFeishu ? record.chatId : undefined;
   const targetType = isGroup || isWeCom || isFeishu ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isPlanFeedback || isRolePanel ? localTargetType : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
   const pipeline = outputPipelineForDecision(decision);
-  const replyApiPath = "/api/agent/replies";
-  const replyApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${replyApiPath}`;
+  const sendApiPath = "/api/agent/send";
+  const sendApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${sendApiPath}`;
   const personaDataDir = personaDataDirFor(roleContext);
   const dataDirPath = relativeWorkspacePath(personaDataDir);
   const roleDirPath = relativeWorkspacePath(roleContext.roleDir);
@@ -819,7 +827,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     dataDir: dataDirPath,
     groupLogPath,
     privateLogPath,
-    replyApiUrl,
+    sendApiUrl,
     outputAdapter: pipeline.outputAdapter,
     outputPipeline: pipeline.outputPipeline,
     characterTtsDialogue: isVoiceTranscript
@@ -862,9 +870,10 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     plansDir: relativeWorkspacePath(roleContext.roleDir ? path.join(roleContext.roleDir, "plans") : undefined),
     memoryDir: relativeWorkspacePath(roleContext.roleDir ? path.join(roleContext.roleDir, "memory") : undefined),
     agentInterfaceDocPath: relativeWorkspacePath(path.join(process.cwd(), "docs", "rabi-agent-interfaces.md")),
-    replyApiPath,
-    replyApiUrl,
+    sendApiPath,
+    sendApiUrl,
     replyContextJson: JSON.stringify(replyContext),
+    sendRequestJson: JSON.stringify(agentSendRequestTemplateForSource(replyContext), null, 2),
     dataDir: dataDirPath,
     pipelinePreset: pipeline.id,
     channelPreset: pipeline.id,
@@ -928,7 +937,7 @@ function buildAgentMessage(
   rolePath: string,
   roleDir: string,
   dataDir: string
-): string {
+): { message: string; conversationSituation?: ConversationSituation } {
   const record = decision.record;
   const routeKind = decision.routeKind;
   const shouldAttachMemoryConsolidation = routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation";
@@ -972,6 +981,28 @@ function buildAgentMessage(
   const voiceIdentityReviewHint = hasPersona
     ? voiceIdentityReviewCapabilityHint(capabilityIntentText, capabilityContext)
     : null;
+  const identityContext = hasPersona
+    ? identityContextForForward(roleDir, routeKind, record, {
+        gatewayId: process.env.GATEWAY_ID,
+        routeProfileId: decision.route.id
+      })
+    : undefined;
+  const situationScope = hasPersona
+    ? messageContextScopeForForward(routeKind, record, {
+        gatewayId: process.env.GATEWAY_ID,
+        routeProfileId: decision.route.id
+      })
+    : undefined;
+  const messageIds = [
+    ...(record.messageGroupMessageIds ?? []),
+    "messageId" in record ? record.messageId : undefined
+  ].map(value => String(value ?? "").trim()).filter(Boolean);
+  const conversationSituation = hasPersona
+    ? conversationSituationForDelivery(identityContext, routeKind, record, {
+        conversationId: situationScope?.record.conversationKey,
+        messageIds
+      })
+    : undefined;
   const pendingConsolidationLines = pendingConsolidation
     ? [
         `runId：${pendingConsolidation.run.id}`,
@@ -1011,6 +1042,11 @@ function buildAgentMessage(
       String(values.personaVoiceIdentitySummary || "- 当前人格尚未记录这些声纹的身份关系。"),
       "需要确认或修正时调用 PUT /api/roles/:roleId/voice-identities，追加到当前人格自己的 voice/voice-identities.jsonl。"
     ]) : "",
+    hasPersona ? section("身份关系", [
+      ...identityContextLines(identityContext),
+      "身份关系查询与计划/记忆关键词召回相互独立，不需要为它提交 knowledge-callback。需要新增、确认或纠正时，使用 Agent 接口文档中的 identity-relations API，并保留消息 ID 等最小证据引用。"
+    ]) : "",
+    hasPersona && conversationSituation ? section("对话情境（影子判断）", conversationSituationLines(conversationSituation)) : "",
     routeKind === "plan_feedback" ? "" : section("消息代码解析", [messageCodeParseText(record, dataDir)]),
     String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [
       "这是用户从 Rabi 移动设备消息端明确发起的自然语言配置请求。",
@@ -1079,12 +1115,13 @@ function buildAgentMessage(
       optionalLine("历史会话归档", values.conversationArchiveDir),
       optionalLine("会话归档索引", values.conversationArchiveIndexPath)
     ]),
-    section("回传", [
-      optionalLine("普通回复 API", values.replyApiUrl),
-      optionalLine("当前回复上下文", values.replyContextJson)
+    section("发送", [
+      optionalLine("明确发送 API", values.sendApiUrl),
+      optionalLine("明确发送请求模板", values.sendRequestJson),
+      optionalLine("来源上下文（只用于核对来源，不可直接作为发送参数）", values.replyContextJson)
     ]),
     section("主动协作要求", proactiveCommunicationPolicyLines(communicationModeForRouteKind(routeKind))),
-    section("回复回传要求", replyDeliveryLines(values, !hasPersona)),
+    section("发送要求", replyDeliveryLines(values, !hasPersona)),
     config.messageAdapterTypes.includes("remoteAgent")
       ? section("远端 Agent 设备", remoteAgentApiHint(values))
       : "",
@@ -1103,7 +1140,10 @@ function buildAgentMessage(
     userTemplateText.trim() ? section("用户模板补充", [userTemplateText.trim()]) : ""
   ];
 
-  return appendAgentRoleReference(blocks.filter(Boolean).join("\n\n"), hasPersona ? rolePath : "");
+  return {
+    message: appendAgentRoleReference(blocks.filter(Boolean).join("\n\n"), hasPersona ? rolePath : ""),
+    conversationSituation
+  };
 }
 
 export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule, roleContext: AgentRoleContext): AgentPacket {
@@ -1116,9 +1156,11 @@ export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule
   const rolePath = relativeWorkspacePath(roleContext.rolePath) || "";
   const roleDir = relativeWorkspacePath(roleContext.roleDir) || "";
 
+  const built = buildAgentMessage(decision, templateValues, userTemplateText, rolePath, roleDir, personaDataDirFor(roleContext));
   return {
     rule,
     templateValues,
-    message: buildAgentMessage(decision, templateValues, userTemplateText, rolePath, roleDir, personaDataDirFor(roleContext))
+    message: built.message,
+    conversationSituation: built.conversationSituation
   };
 }

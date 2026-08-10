@@ -263,9 +263,10 @@ test("AgentPacket migrates legacy FenneNote transcripts to RabiSpeech TTS output
   assert.equal(replyContext.outputPipeline, "rabispeech");
   assert.equal(replyContext.replyToSource, false);
   assert.equal(packet.templateValues.promptOutputMode, "voice_short");
-  assert.match(packet.message, /回复回传要求/);
+  assert.match(packet.message, /发送要求/);
   assert.match(packet.message, /不能只在 Codex 线程里写最终文本/);
-  assert.match(packet.message, /普通回复 API/);
+  assert.match(packet.message, /明确发送 API/);
+  assert.match(packet.message, /"channel": "speech"/);
 });
 
 test("AgentPacket enters character TTS dialogue for RabiSpeech message endpoint transcripts", () => {
@@ -317,7 +318,8 @@ test("AgentPacket enters character TTS dialogue for RabiSpeech message endpoint 
   assert.match(packet.message, /character-tts-dialogue/);
   assert.match(packet.message, /不能只在 Codex 线程里写最终文本/);
   assert.match(packet.message, /主机级 FIFO/);
-  assert.match(packet.message, /普通回复 API/);
+  assert.match(packet.message, /明确发送 API/);
+  assert.match(packet.message, /"sessionId": "speech-main"/);
 });
 
 test("AgentPacket injects processing-time context confirmation protocol", () => {

@@ -30,7 +30,7 @@ Agent 普通回复和主动投递使用按会话稳定聚合的普通消息通�
 
 ## 手机与眼镜模式
 
-- 手机模式：Android 麦克风前台服务持续采集 16 kHz 单声道 PCM，并通过受限 `audio-streams/rabilink/start|chunk|stop` 接口按序上传约 500 ms chunk。Android 不做 VAD、切句、ASR 或声纹；目标 PC RabiSpeech 把该流作为虚拟远程麦克风，统一完成 VAD、切句、ASR、声纹和自动消息提交。完成结果标记为 `messageAdapterType=rabilink`、`channelType=rabilink.mobile_audio`，只投递给启用了 RabiLink/手机消息端的 Route，不会混进独立 `speech` 语音消息端。回复继续由 `/api/agent/replies` 进入 RabiLink 下行并在手机显示或播放。Android 不保存一条 24 小时原始录音；PC 端完成切句的 ASR 输入和 Agent TTS 按逐文件时间戳滚动缓存 24 小时。chunk 必须连续递增，15 秒无 PCM 时 PC 自动停止失活流并恢复之前的音频输入。
+- 手机模式：Android 麦克风前台服务持续采集 16 kHz 单声道 PCM，并通过受限 `audio-streams/rabilink/start|chunk|stop` 接口按序上传约 500 ms chunk。Android 不做 VAD、切句、ASR 或声纹；目标 PC RabiSpeech 把该流作为虚拟远程麦克风，统一完成 VAD、切句、ASR、声纹和自动消息提交。完成结果标记为 `messageAdapterType=rabilink`、`channelType=rabilink.mobile_audio`，只投递给启用了 RabiLink/手机消息端的 Route，不会混进独立 `speech` 语音消息端。回复继续由 `/api/agent/send` 进入 RabiLink 下行并在手机显示或播放。Android 不保存一条 24 小时原始录音；PC 端完成切句的 ASR 输入和 Agent TTS 按逐文件时间戳滚动缓存 24 小时。chunk 必须连续递增，15 秒无 PCM 时 PC 自动停止失活流并恢复之前的音频输入。
 - 眼镜模式：前台服务在后台持有 CXR 和原生消息桥，启动眼镜 App。眼镜 App 配置完成后自动持续录音；默认焦点为“立即推送”，单击触摸板提示 Agent。TTS 使用同一条有序 Classic BT 通道传送 `PLAYBACK_BEGIN → PCM → PLAYBACK_END`；眼镜暂停采集、校验消息 ID 与字节数，并只在 `AudioTrack` marker 到达后回 `played` 和恢复录音。手机消息服务断开后按 1.5–30 秒指数退避自动重连，同时保留手动重连入口。
 - 两种模式共享路由人格、文字/control/媒体可靠队列、cursor、聊天记录、下行 TTS 设置和动作安全门，切换眼镜不会创建第二套账号或会话。ASR/VAD/切句/语言设置只归目标 PC RabiSpeech，不在 Android 保存第二份真源。
 - 手机/眼镜 PCM 与远程 Rabi TTS/ASR 客户端遵守同一宿主边界：远端只提交音频流，目标 PC 负责处理并把 `sourceHostId/sourceHostName`、不透明声纹 ID 和判定证据写入通用消息。主机不判断谁是谁或谁是用户；每个接通人格在自己的 `conversation/current.jsonl` 中保留会话，并可独立维护 `voice/voice-identities.jsonl`。

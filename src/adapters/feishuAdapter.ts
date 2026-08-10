@@ -143,6 +143,8 @@ export function handleFeishuCallback(input: {
   encryptKey: string;
   nowSeconds?: number;
   persist?: (record: FeishuMessageRecord) => boolean;
+  /** App ID identifies this configured endpoint without exposing its secret. */
+  identityNamespace?: string;
 }): FeishuCallbackResult {
   let envelope: Record<string, unknown>;
   try {
@@ -220,6 +222,7 @@ export function handleFeishuCallback(input: {
     chatId,
     groupId: chatId,
     userId: stringValue(senderId.open_id) || stringValue(senderId.user_id),
+    identityNamespace: stringValue(input.identityNamespace),
     messageType: "text",
     // Never persist the callback token, encrypted blob, or full raw body.
     raw: {
@@ -299,7 +302,8 @@ export function createFeishuAdapter(): MessageAdapter {
             signature: request.headers["x-lark-signature"] as string | undefined
           },
           verificationToken: config.feishuVerificationToken,
-          encryptKey: config.feishuEncryptKey
+          encryptKey: config.feishuEncryptKey,
+          identityNamespace: config.feishuAppId
         });
         if (result.disposition === "challenge") {
           patchFeishuStatus({

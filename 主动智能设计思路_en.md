@@ -1055,6 +1055,122 @@ Scenario recognition should measure:
 - User correction rate.
 - Recovery after disconnects, restart, and replay.
 - Whether scenario recognition improves the value of proactive help.
+- Attribution in multi-party conversation: whether the system distinguishes speakers, addressees, reply chains, and business relationships instead of treating a platform owner, administrator, or display name as a business identity.
+- Project boundaries: whether it identifies the project under discussion and prevents discussion, facts, or memory for another project from being written into the project currently owned by the Agent.
+- Conversational value: whether proactive participation adds understanding, connection, or advice instead of translating every conversation into task state.
+
+### 8.14 Context Integrity in Multi-Party Conversation
+
+The hard part of a group conversation is not only whether somebody mentioned the Agent. One group can contain several projects, spontaneous ideas, personal conversation, and active delivery work at once. One person can also have completely different roles in different projects. If the system flattens every new message into input for the current workspace, it mistakes being able to join a conversation for needing to take ownership of work.
+
+Active intelligence should first derive a revisable conversation-context card, then decide whether to speak, prepare help, or create any project-side effect:
+
+| Dimension | Question to answer |
+| --- | --- |
+| People and relationships | Who is speaking, who are they addressing, and who is replying to whom? Is an identity confirmed or inferred, and does the business role differ from platform permissions? |
+| Topic and project | Which project, cross-project concept, or non-work topic is being discussed? What candidates, evidence, confidence, and alternatives exist? |
+| Speech act | Is this a question, idea, disagreement, report, joke, explicit request, or a supplement to another speaker? |
+| Agent position | Is the Agent observing, an informed peer who may offer an opinion, a requested helper, a project owner, or an executor? |
+| Evidence boundary | What comes from text, reply chain, attachments, or historical interaction? Which attachments are unread and which conclusions remain inference? |
+
+The current workspace, latest plan, group name, and keyword similarity are weak candidates only. They cannot independently establish project ownership. Unknown or conflicted project attribution must remain unknown or candidate rather than being forced into the current project to keep a workflow moving.
+
+#### 8.14.1 Participation, Assistance, and Ownership Are Independent Choices
+
+The system should distinguish at least four action levels instead of following one path where speaking always creates a plan:
+
+| Level | Meaning | Cross-project allowed? | Changes project control plane? |
+| --- | --- | --- | --- |
+| Understand | Recover speaker, project, reply chain, intent, and evidence | Yes | No |
+| Participate | Answer an open question, add a perspective, connect disagreement, or identify an overlooked risk | Yes | No |
+| Assist | The person explicitly asks for research, analysis, organization, or a proposal | Depends on scope and permission | Only when clearly needed |
+| Own | Maintain plans, tasks, memory, external coordination, and delivery for a project the Agent owns | No, unless responsibility is explicitly expanded | Yes |
+
+An Agent can therefore provide a high-quality suggestion in another project's creative discussion without registering that discussion as its own project. It can also understand a conversation silently without treating it as a message that requires a reply. Project ownership determines whether the Agent may manage work; it does not determine whether the Agent may participate naturally.
+
+#### 8.14.2 Structured Conversation-Context Card
+
+An implementation can use a rebuildable read model such as the following. It is shared input to routing and persona reasoning, not a second project source of truth:
+
+```json
+{
+  "conversationId": "platform:group:example",
+  "messageIds": ["m-1", "m-2"],
+  "speaker": {
+    "stableId": "platform-user-id",
+    "relationship": "company_founder",
+    "relationshipStatus": "confirmed"
+  },
+  "addressing": {
+    "target": "group",
+    "addressesAgent": false,
+    "replyToMessageId": null
+  },
+  "topic": {
+    "kind": "project_discussion",
+    "projectCandidates": [
+      { "projectId": "another-project", "confidence": 0.87, "evidenceRefs": ["m-2"] }
+    ],
+    "currentProjectRelation": "outside_responsibility"
+  },
+  "intent": "open_question",
+  "agentPosition": "informed_peer",
+  "evidence": {
+    "attachmentState": "reviewed",
+    "unresolved": []
+  },
+  "decisions": {
+    "mayParticipate": true,
+    "mayCreateOrUpdateCurrentProjectRecords": false,
+    "reason": "The group is openly asking for an opinion, but the topic is outside the project currently owned by the Agent"
+  }
+}
+```
+
+Identity, project, and relationship all need source, confidence, scope, and expiry/correction status. Public information, a nickname, or one utterance can create a candidate only. An identity mapping that will affect routing, permission, or long-term memory needs owner confirmation. User correction, project switching, a completed reply chain, or attachment readback should append evidence and derive the card again rather than overwrite raw records.
+
+#### 8.14.3 Identity-Relation Knowledge Across Message Endpoints
+
+Identity relation is not a contact list built from display names. It is the foundational knowledge by which a persona resolves participants across message endpoints. In this design it becomes an independent `identity_relation` knowledge type alongside plans, recent memory, and consolidated memory, but outside the recent-memory time window and consolidation flow. These relations need to last, yet remain correctable after a user correction, staffing change, or account migration; they must not become immutable through consolidation.
+
+The model separates at least three layers:
+
+| Layer | Meaning | What must not be conflated |
+| --- | --- | --- |
+| Endpoint account | A stably identifiable sender address at one actual message endpoint. Its key is `platform + endpointIdentityNamespace + senderStableId`; a Route configuration ID is event provenance only, never the identity key. | A QQ number, enterprise-messaging user, RabiLink peer, and voice speaker label are not naturally the same person. |
+| Participant entity | A person, organization, shared account, automated program, or unknown participant known by the persona. One participant may have several accounts, and one account may have several candidate participants. | Cross-endpoint accounts must not merge merely because their names, avatars, or topics look alike. |
+| Relation card | One directed relationship from a subject to another participant, organization, or project, such as collaboration, reporting, decision scope, trial use, or review. | A platform owner/administrator, a temporary speaking role, and business decision authority are different relations. |
+
+Each relation card contains one verifiable assertion with `candidate`, `confirmed`, `corrected`, or `retired` status, scope, validity period, evidence event references, and confirmation/correction provenance. One utterance, public web material, a display name, or an avatar can create a candidate only. A candidate cannot be used to address someone by a real name externally, grant project-side-effect authority, or upgrade discussion into an instruction. Temporary voice speakers, anonymous visitors, and endpoints without stable identification receive session-local participants with an expiry.
+
+Identity relations are shared by a persona's own message endpoints by default, but never across personas by default. The persona's own outbound accounts must also be marked `self`, so that cross-endpoint echoes, bot echoes, or forwarded messages are not mistaken for new external speakers. Each evidence reference includes Route, endpoint, conversation key, and message ID; a relation card does not copy private chat text in full.
+
+When a message reaches a processing Agent, the system first performs exact lookup by endpoint account and then injects a small `identityContext`: confirmed participant, candidate/conflicting mappings, directly relevant relations in the current group or project, and unresolved ambiguity. This must not join the existing title/keyword-based `knowledgeMatches` mechanism or require a plan/memory `knowledge-callback` on every message. The processing Agent records its resolution and temporary speaking roles for the current message in an auditable `identityAssessment`; short-lived roles such as proposal author, experience dissenter, or replied-to speaker do not thereby become permanent facts about a person.
+
+Identity relation answers only “who is speaking with what relationship.” Project attribution, speech act, whether the Agent participates, and whether plans, memory, sends, or execution are permitted remain separate later decisions. Even a confirmed identity and decision scope cannot bypass explicit delegation, project scope, or action authorization.
+
+#### 8.14.4 Separate External Conversation from the Internal Control Plane
+
+An external reply and an internal side effect must be independent outcomes:
+
+- When an open question, disagreement, or creative discussion has a genuinely valuable new perspective, the Agent may participate naturally. The reply stays about the work, viewpoint, or question being discussed; it does not expose plan, task, approval, acceptance, or routing language.
+- Only when a message clearly requests work in a project the Agent owns, and project, addressee, scope, and expected result are sufficiently clear, may it query that project's plans, memory, and business tasks and enter the assist or own level under policy.
+- Discussion of a project the Agent does not own may retain short-lived conversation context and confirmed people/project indexes, but it must not write into plans, task memory, issue ledgers, or background queues for the current project.
+- When an image, file, or replied-to message is unavailable, the Agent must not treat its contents as known fact. It may offer a limited text-based opinion, ask for context, or stay quiet; it must not invent visual or reply-chain detail.
+
+The purpose of this separation is not to make the Agent speak less. It lets the Agent sound like a colleague who understands the room when it should speak, without claiming ownership of work it does not own.
+
+#### 8.14.5 Regression Validation and Shadow Mode
+
+First generate context cards and proposed actions in shadow mode for real messages, without changing sends, plans, or memory writes. Compare with human judgment, then gradually enable control-plane gates. Regression coverage must include:
+
+- A group member presents another project's prototype in a cross-project group and asks for feedback: participation is allowed; querying, creating, or updating the current project's plans is not.
+- A confirmed owner explicitly asks the Agent to assist the current project: scoped retrieval and handoff are allowed, but one discussion sentence must not become an unauthorized execution commitment.
+- A group owner or administrator gives a personal opinion: platform permission does not automatically become business decision authority.
+- Matching display names, unconfirmed identities, or similar project names: keep candidates and uncertainty; do not merge people, projects, or plans.
+- One participant speaks through several message endpoints: merge them only when there is confirmation evidence; a Route rename or migration must not create a new identity.
+- A shared account, temporary voice label, or cross-endpoint echo: keep multiple candidates or a session-local identity, and do not treat the Agent's own outbound message as an external speaker.
+- Missing attachment, reply chain, or key context: do not claim it was seen or understood; do not create facts before verification.
 
 ---
 
@@ -1066,17 +1182,20 @@ After every event, the AI should process it in this order:
 
 ```text
 1. What new event happened?
-2. Which user-state dimensions should change?
-3. What are the evidence, confidence, and validity windows?
-4. What are the primary and secondary scenarios? Are there alternatives or conflicts?
-5. What are the current psychological state, cognitive load, and situation characteristics?
-6. Which confirmed preferences or trait hypotheses in the user model apply here?
-7. What are the user's task, obstacle, opportunity, and likely intent?
-8. What value can proactive participation provide now?
-9. What intensity and interaction style do Agent persona, user model, and explicit instruction allow?
-10. What is the action risk, and is confirmation required?
-11. Should the AI prepare, ask, recommend, remind, or execute?
-12. Should the result update current state, scenario, preference hypotheses, or trait evidence?
+2. What people, reply chains, addressees, and business relationships are present? Which are confirmed and which are candidates?
+3. Which project, cross-project concept, or non-work topic is being discussed, and how does it relate to the Agent's responsibility?
+4. Is the speech act a question, discussion, disagreement, report, joke, or explicit request?
+5. Which user-state dimensions need updating, and what evidence, confidence, and expiry belong to each judgment?
+6. What are the primary and secondary scenarios, and are there candidates or conflicts?
+7. What are the user's current psychological state, cognitive load, and situation characteristics?
+8. Which confirmed preferences or trait hypotheses are relevant in the user model?
+9. Is the Agent observing, an informed peer, a helper, an owner, or an executor in this situation?
+10. What are the user's current task, obstacle, opportunity, and likely intent?
+11. What new understanding, connection, or help could proactive participation provide now?
+12. What initiative level and interaction mode do Agent persona, user model, and current explicit instruction allow?
+13. May the Agent create project records, coordinate externally, or execute? How high is action risk, and is confirmation required?
+14. Should the system prepare silently, participate naturally, ask, suggest, remind, or execute directly?
+15. Should the result, correction, and feedback update current state, scenario, people/project candidates, preference hypothesis, or stable-trait evidence?
 ```
 
 ---
@@ -1431,19 +1550,20 @@ For example:
 
 ---
 
-### 13.5 Relationship Memory
+### 13.5 Identity-Relation Memory
 
-Stores information about people.
+Stores a persona's confirmed or unresolved participant resolution across message endpoints, plus long-lived relationships between people, organizations, and projects. It is distinct from chat history, pending replies, and temporary conversation roles; see “8.14.3 Identity-Relation Knowledge Across Message Endpoints” for its structure and use order.
 
 For example:
 
-* Who a person is.
-* Their relationship to the user.
-* What they discussed last time.
-* The other person's preferences.
-* Whether a reply is pending.
+* Whether an endpoint account corresponds to a participant.
+* Long-lived collaboration, reporting, or decision relationships between a person and the user, persona, organization, or project.
+* The project, group, or period in which a relationship applies.
+* Whether a relation is candidate, confirmed, corrected, or retired, and its evidence.
 
-This category requires particular care with privacy and permission controls.
+What was discussed last time, immediate preferences, pending replies, and temporary roles such as “proposal author this turn” or “the person objecting this turn” belong respectively to short-lived conversation context, preference/task memory, or message-group assessment. They must not be mixed into identity relation.
+
+This memory must remain persona-private, inspectable and correctable, avoid retaining unnecessary raw chat text, and receive particular privacy and permission protection.
 
 ---
 

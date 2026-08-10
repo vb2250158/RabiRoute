@@ -137,7 +137,7 @@ All routes keep the same invariants:
 - PC RabiRoute owns configuration truth, the unified conversation ledger, route policy, and outbound safety gates.
 - Relay provides an application-isolated, retryable bidirectional mailbox and does not own Agent reasoning.
 - The phone backend retains required device state, Relay credentials, cursor, and pending queues. The glasses keep only frontend UI state; neither side copies persona, long-term memory, or complete PC configuration.
-- Proactive external output still passes through `/api/agent/replies` and Outbox policy.
+- Proactive external output still passes through `/api/agent/send` and Outbox policy.
 - Any resident capture must be explicitly enabled and visibly indicated, with separate controls for transcription, raw-data retention, outbound use, and deletion.
 
 ## Related documents

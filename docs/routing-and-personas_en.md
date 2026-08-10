@@ -81,13 +81,13 @@ Explicit DMs, direct mentions, and direct replies should normally receive a visi
 A companionship-oriented supplement may say:
 
 ```text
-Respond only when the message genuinely calls for this role. Preserve the role's tone and relationship. Keep a group-chat response natural and concise. Return any external reply through the injected RabiRoute reply API.
+Respond only when the message genuinely calls for this role. Preserve the role's tone and relationship. Keep a group-chat response natural and concise. Return any external reply through the injected RabiRoute send API.
 ```
 
 A work/PM-oriented supplement may say:
 
 ```text
-Classify the message as information, question, task, risk, or decision. Identify the owner, evidence, blocker, and next action. Update a focused plan or recent memory only when the message changes durable context. Use the reply API for user-facing chat output.
+Classify the message as information, question, task, risk, or decision. Identify the owner, evidence, blocker, and next action. Update a focused plan or recent memory only when the message changes durable context. Use the send API for user-facing chat output.
 ```
 
 Proactive does not mean replying to every ambient group message. Respond when a message assigns action, corrects direction, reports risk, or continues a commitment previously made by the role. For longer work, acknowledge the request and next step first, then update only on material progress, risk, waiting conditions, or decisions.

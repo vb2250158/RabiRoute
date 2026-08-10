@@ -105,7 +105,7 @@ Public examples must not contain real accounts, group IDs, user IDs, cookies, to
 4. Deliver the packet to the fixed Codex/handler thread; start when idle and steer when active.
 5. Generate role-faithful visible text and optional speech text.
 6. Send only approved speech text to OumuQ/FenneNote playback.
-7. Route any external response through `/api/agent/replies` and the corresponding message-adapter policy.
+7. Route any external response through `/api/agent/send` and the corresponding message-adapter policy.
 
 For RabiLink record-first observation, place FenneNote and `rabilink` on the same route and set `routeVariables.rabilinkRecordFirstSources` to include `fennenote`. That mode writes the shared conversation ledger and waits for idle/periodic/touchpad review instead of delivering every transcript directly. Do not configure another route to consume the same webhook simultaneously.
 

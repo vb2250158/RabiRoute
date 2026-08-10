@@ -219,11 +219,12 @@ routes:
 
 这里有两道不同的门：app-server approval 管 Codex runtime 内的命令、文件、网络和工具权限；RabiRoute Action Gate 管 QQ、文档、设备和外部 API 等业务外发。两者都默认 fail closed，不能用其中一道门的允许结果替代另一道。
 
-当前 `POST /api/agent/replies` 和 `src/outbox.ts` 已经提供真实回传链路：
+当前 `POST /api/agent/send`、`src/agentSend.ts` 和 `src/outbox.ts` 已经提供真实明确发送链路：
 
 - 返回状态为 `sent`、`draft`、`blocked` 或 `failed`。
-- 当前输出支持 QQ/NapCat、WeCom、RabiLink 和角色面板；FenneNote 仅保留旧 Route 兼容。默认 legacy pipeline 的 `outputAdapter=agent` 会把结果保留在 Agent 会话。
-- QQ 支持来源回复、明确群/私聊目标、图片/语音/文件，以及 `allowedFileRoots` 文件白名单。
+- 请求必须包含稳定 `deliveryId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload`；来源上下文不能作为目标，Route 默认 pipeline 也不能改写显式渠道。
+- 当前输出支持 QQ/NapCat、WeCom、个人微信、飞书、RabiLink、speech 和角色面板；FenneNote 仅保留旧 Route 兼容。
+- QQ 支持明确群/私聊目标、图片/语音/文件，以及 `allowedFileRoots` 文件白名单；只有显式 `replyToMessageId` 才引用来源消息。
 - 外发失败会保留 draft 数据并写 Outbox 日志。
 
 当前还没有通用、持久化、可由 WebGUI 审批的 Action Queue，也没有统一的自动补发队列。后续若扩展到文档、Issue、设备或其它外部系统，应在现有 Outbox policy 之上增加可审计的 action request / approval / commit 状态机。

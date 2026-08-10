@@ -855,7 +855,7 @@ export const rabiLinkAiuiDocPages: RabiLinkAiuiDocPage[] = [
     bullets: [
       "首次连接从空 cursor 消费 Relay 保留期内的 backlog；Relay outbox 默认独立保留 48 小时，因此眼镜尚未打开时的主动消息也能在连接后到达。",
       "stream=1 空闲超时返回 idle 与 shouldContinue=true，它表示当前没有新消息，不是任务失败。",
-      "PC Agent、定时器或规划器通过 /api/agent/replies 指定 routeProfileId、targetType=rabilink 和 proactive=true，继续经过现有输出策略与审计门。",
+      "PC Agent、定时器或规划器通过 /api/agent/send 指定精确 routeId、channel=rabilink，并在 params 中明确 proactive=true、目标设备和呈现方式，继续经过现有输出策略与审计门。",
       "Relay 的 /worker/messages 是队列追加原语；主动消息没有 taskId，但仍携带全局 seq、message id、source 和 proactive 标记。",
       "AIUI 先把每批下行写入按 token 隔离的本地待播报队列，再保存 nextCursor；页面隐藏、切模式或 TTS 中断后仍会按序恢复，成功播报后才删除。",
       "用户 observation 与已成功排队的 Agent 下行写入同一个 rabilink-conversation.jsonl；跨日期或长空档只机械归档，不生成摘要，待审阅游标会跨归档继续。",

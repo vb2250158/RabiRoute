@@ -137,7 +137,7 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 - `voice_chat`：RabiSpeech 语音输入和人格 TTS 意图，适合短句口语化回复。模型、声线、语言、语速和发声说明以人格 `voice/voice-profile.json` 为唯一真源。
 - `webhook_task`：Webhook 输入和文件/Markdown 输出意图，适合任务触发。
 
-模板可以读取 `{outputPipeline}`、`{promptOutputMode}`、`{ttsProvider}`、`{ttsVoice}`、`{preventFeedbackLoop}` 和 `{replyToSource}`。现行语音主链由 `AgentPacket` 注入 `character-tts-dialogue` 回传要求，Agent 通过普通回复 API 交回口语短句，Outbox 再调用 RabiSpeech；不需要在人格模板里手写 FenneNote/OumuQ 调用。
+模板可以读取 `{outputPipeline}`、`{promptOutputMode}`、`{ttsProvider}`、`{ttsVoice}`、`{preventFeedbackLoop}` 和 `{replyToSource}`。现行语音主链由 `AgentPacket` 注入 `character-tts-dialogue` 发送要求，以及带 `channel=speech` 和当前 `sessionId` 的明确请求模板；Agent 通过发送 API 交回口语短句，Outbox 再调用 RabiSpeech。人格模板不需要手写 FenneNote/OumuQ 调用，也不能用来源上下文代替发送目标。
 
 一条规则可以匹配多个 route kind；同一条事件可以命中多条已启用规则，RabiRoute 会逐条投递，不会只取第一条：
 

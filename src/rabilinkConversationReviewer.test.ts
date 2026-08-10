@@ -56,7 +56,8 @@ test("automatic conversation review waits for an idle Codex thread and then adva
   assert.match(prompts.at(-1) || "", /统一会话账本/);
   assert.match(prompts.at(-1) || "", /历史会话索引/);
   assert.match(prompts.at(-1) || "", /本次涉及 Route：Ilias/);
-  assert.match(prompts.at(-1) || "", /"routeProfileId":"Ilias"/);
+  assert.match(prompts.at(-1) || "", /"routeId":"Ilias"/);
+  assert.match(prompts.at(-1) || "", /"channel":"rabilink"/);
   assert.doesNotMatch(prompts.at(-1) || "", /这句话只应该先进入账本/);
   const third = await reviewer.check();
   assert.equal(third.status, "idle");
@@ -92,10 +93,11 @@ test("a touchpad review request guides the current turn immediately even without
   assert.equal(result.manual, true);
   assert.equal(guided.length, 1);
   assert.match(guided[0], /当前 turn 正在执行/);
-  assert.match(guided[0], /http:\/\/127\.0\.0\.1:8790\/api\/agent\/replies/);
-  assert.match(guided[0], /"routeProfileId":"RabiLink"/);
-  assert.match(guided[0], /"targetType":"rabilink"/);
+  assert.match(guided[0], /http:\/\/127\.0\.0\.1:8790\/api\/agent\/send/);
+  assert.match(guided[0], /"routeId":"RabiLink"/);
+  assert.match(guided[0], /"channel":"rabilink"/);
   assert.match(guided[0], /"proactive":true/);
+  assert.match(guided[0], /"targetDeviceKinds":\["glasses"\]/);
   assert.match(guided[0], /ok=true 且 status=sent/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, "rabilink-conversation-review-state.json"), "utf8")), {
     schemaVersion: 1,

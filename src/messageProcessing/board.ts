@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AgentSendResult } from "../agentSend.js";
 import type { AgentReplyResult } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import {
@@ -172,7 +173,10 @@ export type MessageProcessingHandoff = {
 export type MessageProcessingDelivery = {
   deliveryId?: string;
   status: AgentReplyResult["status"];
+  channel?: string;
   sentMessageId?: string;
+  sentFileId?: string;
+  sentFileName?: string;
   reason?: string;
   updatedAt: string;
 };
@@ -952,6 +956,54 @@ export class MessageProcessingBoardStore {
     requirement.lastError = result.status === "failed" || result.status === "blocked"
       ? cleanText(result.reason, 4_000) || `Outbox ${result.status}.`
       : undefined;
+    requirement.updatedAt = updatedAt;
+    this.persist();
+    return structuredClone(requirement);
+  }
+
+  recordSend(requirementId: string, result: AgentSendResult, deliveryId?: string): MessageProcessingRequirement {
+    const requirement = this.required(requirementId);
+    const updatedAt = nowIso(this.now);
+    const endpoint = requirement.source.endpoint.trim().toLowerCase();
+    const expectedChannel = endpoint === "qq"
+      ? "napcat"
+      : endpoint === "rolepanel"
+        ? "role_panel"
+        : endpoint === "planfeedback"
+          ? "plan_feedback"
+          : endpoint.split(":", 1)[0];
+    const channelMatches = Boolean(result.channel && result.channel === expectedChannel);
+    const hasChannelReceipt = result.channel !== "napcat"
+      || Boolean(result.sentMessageId || result.sentFileId || result.sentFileName);
+    requirement.delivery = {
+      deliveryId: cleanText(deliveryId, 300),
+      status: result.status,
+      channel: cleanText(result.channel, 80),
+      sentMessageId: cleanText(result.sentMessageId, 300),
+      sentFileId: cleanText(result.sentFileId, 300),
+      sentFileName: cleanText(result.sentFileName, 500),
+      reason: cleanText(result.reason, 2_000),
+      updatedAt
+    };
+    if (result.status === "sent" && (!channelMatches || !hasChannelReceipt)) {
+      requirement.status = "awaiting_send";
+      requirement.lastError = !channelMatches
+        ? `The send reached channel ${result.channel || "unknown"}, but this requirement expects ${expectedChannel}.`
+        : "NapCat reported sent without a QQ message or file receipt.";
+    } else {
+      requirement.status = result.status === "sent"
+        ? requirement.factAssessmentRequired && !requirement.projectFactAssessment
+          ? "fact_assessment_pending"
+          : requirement.criticalFacts?.length && !requirement.criticalFactDisposition
+            ? "fact_record_pending"
+            : "sent"
+        : result.status === "draft"
+          ? "awaiting_approval"
+          : "send_failed";
+      requirement.lastError = result.status === "failed" || result.status === "blocked"
+        ? cleanText(result.reason, 4_000) || `Outbox ${result.status}.`
+        : undefined;
+    }
     requirement.updatedAt = updatedAt;
     this.persist();
     return structuredClone(requirement);

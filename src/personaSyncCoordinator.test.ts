@@ -8,6 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import { PersonaSyncService } from "./personaSync.js";
 import { PersonaSyncCoordinator } from "./personaSyncCoordinator.js";
+import { identityRelationsPath, updateIdentityRelation } from "./identityRelations.js";
 import { findPersonaVoiceIdentity, personaVoiceIdentitiesPath, updatePersonaVoiceIdentity } from "./personaVoiceIdentities.js";
 import { listPersonaVoiceTranscriptViews } from "./personaVoiceTranscriptView.js";
 import { handlePersonaSyncApi } from "./manager/personaSyncRoutes.js";
@@ -88,6 +89,23 @@ test("persona sync coordinator uses Relay discovery and converges peer JSONL ove
     personaVoiceIdentitiesPath(path.join(rolesA, "Rabi")),
     personaVoiceIdentitiesPath(path.join(rolesB, "Rabi"))
   );
+  updateIdentityRelation(path.join(rolesA, "Rabi"), {
+    kind: "participant", participantId: "participant-sync-conflict", participantKind: "person",
+    displayName: "原始身份", status: "confirmed", aliases: [], evidenceRefs: []
+  });
+  fs.mkdirSync(path.dirname(identityRelationsPath(path.join(rolesB, "Rabi"))), { recursive: true });
+  fs.copyFileSync(
+    identityRelationsPath(path.join(rolesA, "Rabi")),
+    identityRelationsPath(path.join(rolesB, "Rabi"))
+  );
+  updateIdentityRelation(path.join(rolesA, "Rabi"), {
+    kind: "participant", participantId: "participant-sync-conflict", participantKind: "person",
+    displayName: "本机身份", status: "confirmed", aliases: [], evidenceRefs: [{ messageId: "local" }]
+  });
+  updateIdentityRelation(path.join(rolesB, "Rabi"), {
+    kind: "participant", participantId: "participant-sync-conflict", participantKind: "person",
+    displayName: "远端身份", status: "confirmed", aliases: [], evidenceRefs: [{ messageId: "remote" }]
+  });
   updatePersonaVoiceIdentity(path.join(rolesA, "Rabi"), {
     sourceHostId: "host-shared",
     voiceprintId: "cluster-conflict",
@@ -162,11 +180,14 @@ test("persona sync coordinator uses Relay discovery and converges peer JSONL ove
     coordinator.sync("pc-b", "Rabi")
   ]);
   assert.equal(result.fileConflicts, 0);
-  assert.equal(result.conflicts, 1);
-  assert.equal(result.semanticConflicts.length, 1);
-  assert.equal(result.semanticConflicts[0]?.kind, "persona_voice_identity");
-  assert.equal(result.semanticConflicts[0]?.voiceprintId, "cluster-conflict");
-  assert.ok(result.semanticConflicts[0]?.fields.includes("isUser"));
+  assert.equal(result.conflicts, 2);
+  assert.equal(result.semanticConflicts.length, 2);
+  const voiceConflict = result.semanticConflicts.find(item => item.kind === "persona_voice_identity");
+  assert.equal(voiceConflict?.voiceprintId, "cluster-conflict");
+  assert.ok(voiceConflict?.fields.includes("isUser"));
+  const identityConflict = result.semanticConflicts.find(item => item.kind === "identity_relation");
+  assert.equal(identityConflict?.recordKind, "participant");
+  assert.equal(identityConflict?.recordId, "participant-sync-conflict");
   assert.deepEqual(duplicateResult, result);
   assert.equal(discoveryRequests, 1);
   const localRows = fs.readFileSync(path.join(rolesA, "Rabi", "conversation", "current.jsonl"), "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line));

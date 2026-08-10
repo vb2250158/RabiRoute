@@ -1044,7 +1044,7 @@ Rokid Glass ASR
   -> Start-RokidNativeVoiceWebhookBridge.ps1
   -> RabiRoute webhook voice_transcript
   -> Agent
-  -> RabiRoute /api/agent/replies
+  -> RabiRoute /api/agent/send
   -> FENNOTE_PLAYBACK_URL
   -> Start-RokidNativeTtsPlaybackServer.ps1
   -> Send-RokidNativeVoiceCommand.ps1

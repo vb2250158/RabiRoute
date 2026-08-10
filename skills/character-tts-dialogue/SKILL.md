@@ -1,6 +1,6 @@
 ---
 name: character-tts-dialogue
-description: Write, return, validate, or troubleshoot character-faithful spoken replies for RabiRoute's current RabiSpeech workflow. Use when an AgentPacket contains characterTtsDialogue=true, when a delivered speech/voice_transcript turn must reach the host playback FIFO, or when checking visible/spoken wording, replyContext, persona voice, local or explicitly enabled API TTS, 24-hour cache records, and safe non-QQ speech boundaries. Do not use retired OumuQ/FenneNote paths.
+description: Write, return, validate, or troubleshoot character-faithful spoken replies for RabiRoute's current RabiSpeech workflow. Use when an AgentPacket contains characterTtsDialogue=true, when a delivered speech/voice_transcript turn must reach the host playback FIFO, or when checking visible/spoken wording, the injected send request, persona voice, local or explicitly enabled API TTS, 24-hour cache records, and safe non-QQ speech boundaries. Do not use retired OumuQ/FenneNote paths.
 ---
 
 # Character TTS Dialogue
@@ -10,7 +10,7 @@ description: Write, return, validate, or troubleshoot character-faithful spoken 
 ```text
 RabiPC speech endpoint -> voice_transcript -> AgentPacket
   -> character-faithful reply text
-  -> POST /api/agent/replies with the complete replyContext
+  -> POST /api/agent/send with channel=speech and an explicit sessionId
   -> Outbox freezes Route persona, voice, model, language, instructions, sessionId
   -> RabiSpeech host-wide FIFO
 ```
@@ -40,21 +40,27 @@ Do not add this state to QQ, the role panel, ordinary text, or unrelated voice t
 
 ## Return through Outbox
 
-POST the spoken text and the complete injected context to the Manager URL supplied by `replyApiUrl`, normally:
+POST the spoken text with the injected explicit send template to the Manager URL supplied by `sendApiUrl`, normally:
 
 ```http
-POST http://127.0.0.1:8790/api/agent/replies
+POST http://127.0.0.1:8790/api/agent/send
 Content-Type: application/json; charset=utf-8
 ```
 
 ```json
 {
-  "text": "好呀，我听见了。我们慢慢来。",
-  "replyContext": { "...": "copy the complete injected object unchanged" }
+  "deliveryId": "speech-<stable-id-for-this-send>",
+  "routeId": "<exact-route-id>",
+  "channel": "speech",
+  "params": { "sessionId": "<speech-session-id>" },
+  "payload": {
+    "type": "text",
+    "text": "好呀，我听见了。我们慢慢来。"
+  }
 }
 ```
 
-Do not rebuild a partial context, invent a target, or call a worker directly. Submit once. A `sent` result with autoplay means the audio entered the host FIFO; it does not prove speaker playback has finished.
+Use the injected `sendRequestJson` as the starting point. Keep its exact `routeId`, `channel=speech`, and `params.sessionId`; replace only the placeholder delivery ID and payload text. The source `replyContext` is audit context and must not be submitted as a destination. Do not invent another target or call a worker directly. Submit once. A `sent` result with autoplay means the audio entered the host FIFO; it does not prove speaker playback has finished.
 
 Interpret other results explicitly:
 
@@ -97,9 +103,9 @@ The WebGUI keeps the corresponding human entry under **Speech Service → ASR �
 
 ## Troubleshooting
 
-1. Confirm the packet contains the three speech-state fields above and a complete `replyContext`.
+1. Confirm the packet contains the three speech-state fields above plus `sendApiUrl` and `sendRequestJson` with `channel=speech`.
 2. Check `GET /api/speech/status`, then model and persona discovery.
-3. Check the `/api/agent/replies` result before inspecting workers.
+3. Check the `/api/agent/send` result before inspecting workers.
 4. Check the host FIFO and playback error state; avoid retrying blindly because the first request may already be queued.
 5. If Windows emits only an error chime while the FIFO says `done`, inspect the cached WAV with SoundFile. Streamed WAV headers can advertise a placeholder length that `winsound` misreads; RabiSpeech playback must stay on SoundFile / PortAudio.
 6. Check `/api/speech/records` with the same `sessionId` to distinguish synthesis, cache retention, queue acceptance, and actual playback state.

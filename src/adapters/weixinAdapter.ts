@@ -91,7 +91,7 @@ export function dispatchWeixinRecord(
   return "forwarded";
 }
 
-async function recordFromInbound(message: WeixinInboundMessage): Promise<WeixinMessageRecord | null> {
+async function recordFromInbound(state: WeixinOpenClawState, message: WeixinInboundMessage): Promise<WeixinMessageRecord | null> {
   const sessionId = String(message.from_user_id || "").trim();
   if (!sessionId) return null;
   const parsed = textFromWeixinItems(message.item_list);
@@ -107,6 +107,7 @@ async function recordFromInbound(message: WeixinInboundMessage): Promise<WeixinM
     adapterType: "weixin",
     sessionId,
     userId: sessionId,
+    identityNamespace: state.accountId ? `bot:${state.accountId}` : state.userId ? `user:${state.userId}` : undefined,
     senderName: sessionId,
     messageId,
     messageType: parsed.messageType,
@@ -145,7 +146,7 @@ async function processInbound(state: WeixinOpenClawState, message: WeixinInbound
   if (!sessionId) return false;
   const contextToken = String(message.context_token || "").trim();
   if (contextToken) state.contextTokens[sessionId] = contextToken;
-  const record = await recordFromInbound(message);
+  const record = await recordFromInbound(state, message);
   if (!record || recentMessageIds.has(String(record.messageId))) return Boolean(contextToken);
   rememberMessageId(String(record.messageId));
   appendWeixinMessage(record);

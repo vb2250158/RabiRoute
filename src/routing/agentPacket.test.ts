@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { config, type NotificationRule, type RouteProfile } from "../config.js";
 import { updatePersonaVoiceIdentity } from "../personaVoiceIdentities.js";
+import { updateIdentityRelation } from "../identityRelations.js";
 import { resolvePipeline } from "../pipelines.js";
 import type { GroupMessageRecord, PlanFeedbackMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
@@ -116,6 +117,53 @@ test("AgentPacket expands CQ reply chains and centralizes at mappings", () => {
   assert.match(packet.message, /无需新建计划/);
   assert.doesNotMatch(packet.message, /当前消息 messageId/);
   assert.doesNotMatch(packet.message, /纯文本/);
+});
+
+test("AgentPacket keeps an explicit NapCat send target when a QQ route defaults to TTS", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-explicit-send-"));
+  const record: GroupMessageRecord = {
+    time: 1,
+    groupId: 9001,
+    userId: 10001,
+    rawMessage: "请在群里确认收到。",
+    messageId: 2001,
+    senderName: "测试用户"
+  };
+  const rule: NotificationRule = {
+    id: "rule-explicit-send",
+    name: "group message",
+    enabled: true,
+    routeKinds: ["group_message"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "route-tts-default",
+    name: "tts default",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("voice_chat"),
+    agentRoleFile: "",
+    rolesDir: dataDir,
+    dataDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "group_message",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, { roleId: "", roleDir: "", rolePath: "", dataDir });
+
+  const sendRequest = JSON.parse(String(packet.templateValues.sendRequestJson));
+  assert.equal(sendRequest.routeId, "route-tts-default");
+  assert.equal(sendRequest.channel, "napcat");
+  assert.deepEqual(sendRequest.params, { target: "group", groupId: 9001 });
+  assert.match(packet.message, /"channel": "napcat"/);
+  assert.doesNotMatch(packet.message, /"channel": "speech"/);
 });
 
 test("AgentPacket reads a NapCat get_msg reply cached in the gateway history for a role-bound route", () => {
@@ -771,7 +819,7 @@ test("AgentPacket treats an auto-delivered approval as a persona notice without 
   assert.match(packet.message, /已自动投递到绑定业务会话/);
   assert.match(packet.message, /无需再次转发/);
   assert.doesNotMatch(packet.message, /先按审批意见读取并 PATCH 更新对应计划或步骤/);
-  assert.doesNotMatch(packet.message, /把处理说明 POST 到普通回复 API/);
+  assert.doesNotMatch(packet.message, /把处理说明 POST 到明确发送 API/);
   assert.equal(packet.templateValues.recentMessageLimit, 0);
 });
 
@@ -1041,4 +1089,41 @@ test("AgentPacket exposes one-shot persona capabilities only for explicit curren
   assert.match(voiceReviewPacket.message, /PUT http:\/\/127\.0\.0\.1:8790\/api\/roles\/Rabi\/voice-identities/);
   assert.match(voiceReviewPacket.message, /证据不足时保持 unknown/);
   assert.doesNotMatch(ordinaryPacket.message, /\[全天语音与声纹归类\]/);
+});
+
+test("AgentPacket injects identity context without turning another project's discussion into current-project ownership", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-identity-"));
+  updateIdentityRelation(roleDir, {
+    kind: "participant", participantId: "participant-cotton", participantKind: "person", displayName: "COTTON",
+    status: "confirmed", aliases: [], evidenceRefs: [{ messageId: "identity-confirmed" }]
+  });
+  updateIdentityRelation(roleDir, {
+    kind: "endpoint_account", platform: "napcat", endpointIdentityNamespace: "instance:qq-main", senderStableId: "200",
+    participantLinks: [{ participantId: "participant-cotton", status: "confirmed", confidence: 1, evidenceRefs: [{ messageId: "identity-confirmed" }] }]
+  });
+  updateIdentityRelation(roleDir, {
+    kind: "relation_card", relationId: "relation-edge-space", subjectParticipantId: "participant-cotton",
+    targetKind: "project", targetId: "edge-space", relationship: "参与讨论", status: "confirmed",
+    scope: { conversationKeys: ["napcat:instance:qq-main:group:100"], projectIds: [] }, evidenceRefs: [{ messageId: "message-other-project" }]
+  });
+  const rule: NotificationRule = { id: "identity", name: "identity", enabled: true, routeKinds: ["group_message"], template: "" };
+  const route: RouteProfile = {
+    id: "identity-route", name: "identity", enabled: true, recentMessageLimit: 0, resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Xinghai", agentRoleFile: "persona.md", rolesDir: path.dirname(roleDir), dataDir: roleDir, routeVariables: {}, notificationRules: [rule]
+  };
+  const record: GroupMessageRecord = {
+    time: Date.now() / 1_000, groupId: 100, userId: 200, messageId: "message-other-project", senderName: "COTTON",
+    instanceId: "qq-main", rawMessage: "边缘空间的原型可以先这样试。"
+  };
+  const packet = buildAgentPacket({ route, routeKind: "group_message", record, extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: record.rawMessage }, rule, {
+    roleId: "Xinghai", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir
+  });
+  assert.match(packet.message, /\[身份关系\]/);
+  assert.match(packet.message, /已确认参与者：COTTON/);
+  assert.match(packet.message, /不能单独证明项目归属、委托、决策权或执行授权/);
+  assert.match(packet.message, /identity-relations API/);
+  assert.match(packet.message, /\[对话情境（影子判断）\]/);
+  assert.match(packet.message, /已确认项目关系：edge-space（参与讨论）/);
+  assert.match(packet.message, /可以自然参与有价值的讨论、澄清问题或提出建议/);
+  assert.match(packet.message, /不得据此查询、创建、更新或转交任何项目计划、任务或长期项目记忆/);
 });

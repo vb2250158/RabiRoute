@@ -1,4 +1,4 @@
-﻿<!-- docs-language-switch -->
+<!-- docs-language-switch -->
 <div align="center">
 <a href="./agent-context-injection_en.md">English</a> | 简体中文
 </div>
@@ -55,6 +55,16 @@ Manager 或 UI 预览
 - 诊断详情。
 
 Agent 需要更多内容时，应根据上下文里的路径、ID 或接口文档按需查询。
+
+## 身份关系上下文
+
+群聊里的显示名、群主/管理员标记、当前 Route、当前工作目录和关键词相似度都不能单独说明“谁是谁”或“这是谁负责的项目”。人格可维护独立的身份关系记忆；消息投递时，RabiRoute 只按 `platform + endpointIdentityNamespace + senderStableId` 精确查找当前账号。Route 配置 ID 只记录投递来源，不参与身份键；NapCat 有机器人 QQ 号时优先用它作为消息端命名空间，实例名只在缺少该标识时回退使用。企业微信、飞书和微信只有在消息记录带有稳定的消息端命名空间时才查询；缺少该标识时宁可不匹配，也不把不同账号下的同名 ID 合并。因此同一个账号换 Route 不会被拆成不同的人，也不会把两个消息端误当成一个账号。
+
+命中时，`[身份关系]` 只注入当前账号、已确认参与者、候选参与者、当前群或项目范围内的关系卡，以及尚未解决的冲突。追加事件在多台电脑同步后若形成并发分支，会明确标为冲突；冲突记录不能自动确认身份，需由人格提交一次完整修正来收敛。它不复制聊天正文，也不进入计划/近期记忆的关键词召回和回调流程。候选映射只能用于核对；不能据此称呼真人、授予权限、推断项目归属，或把讨论变成当前项目的计划。
+
+身份关系只回答“谁在说话、已有何种长期关系”。随后会生成一张 `[对话情境（影子判断）]`：它只读取已经适用于当前会话的项目关系卡，把项目列为讨论线索；不会从 Route、当前工作目录、昵称或关键词推断项目。情境卡明确允许 Agent 自然参与有价值的讨论、澄清问题或提出建议，但默认禁止据此查询、创建、更新或转交项目计划、任务和长期项目记忆。只有另外拿到明确的项目范围、请求和授权，处理端才可以进入项目管理或执行流程。
+
+当这份 AgentPacket 进入实际投递链路后，RabiRoute 会把不含聊天正文的情境卡作为人格本机的影子记录保存。记录只保留会话键、消息 ID、路由、身份/项目线索、未解决证据和“可参与 / 不可管理”的判断；人格页可回看最近记录，供人工发现误判。它不改变发送结果，也不自动写计划、任务或记忆；每个人格最多保留最近 200 条。情境卡是可从原始会话和关系卡重建的派生物，不参加多电脑人格同步；原始聊天记录仍以统一会话记录为准。
 
 ## 统一双向会话账本
 
@@ -292,8 +302,9 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 会话归档索引：<conversationArchiveIndexPath>
 
 [回传]
-普通回复 API：<replyApiUrl>
-当前回复上下文：<replyContextJson>
+明确发送 API：<sendApiUrl>
+发送请求模板：<sendRequestJson>
+来源上下文（仅供审计和跨人格联系，不可作为发送参数）：<replyContextJson>
 
 [跨人格联系]
 查询：GET /api/personas?addressable=true
@@ -302,7 +313,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 来源凭据：replyContext.personaMessagingCapability
 要求：每次业务投递使用稳定且唯一的 deliveryId；回复时沿用 personaConversationId、引用当前 messageId，并增加 personaMessageHopCount，不得超过 personaMessageMaxHops
 
-[回复回传要求]
+[发送要求]
 <按 outputAdapter、replyToSource 和来源消息生成的回传说明>
 
 [远端 Agent 设备]
@@ -314,13 +325,13 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 `heartbeat` 和 `plan_feedback` 包都会省略整个 `[最近消息]` 段，并把模板变量 `{recentMessageLimit}` 设为 `0`、`{recentMessages}` 设为空字符串，避免自定义模板重新携带历史正文。心跳日志和统一会话账本仍照常记录；计划审批则只保留专用 feedback 审计、AgentPacket 和投递日志，不重复写角色面板时间线或统一会话账本。
 
-处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主人格或另一个 Agent 已经收到。需要回复来源消息时，处理端必须按 `[回复回传要求]` 调用普通回复 API 并取得 Outbox 回执；需要交给主人格、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
+处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主人格或另一个 Agent 已经收到。需要向消息端发送时，处理端必须从 `sendRequestJson` 开始，明确提交 `routeId`、`channel`、渠道专用 `params` 和 `payload`，并取得该渠道回执；不得把 `replyContextJson` 原样提交，也不得根据来源自动猜测目标。需要交给主人格、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
 
 跨人格能力凭据只证明“当前 AgentPacket 所属 Route 与人格”，不会出现在 `GET /api/personas`、目标 timeline 或投递回执中。`sourceRouteId` 不能单独证明发送身份。目标人格收到跨人格消息后，普通回复不会自动返回来源；需要回复时必须显式反向 POST，并使用收到的会话、引用和跳数字段。
 
 `[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`；AgentPacket 也会把成功外发的 Outbox 记录作为本地兜底。NapCat 实时入口发现引用 ID 尚未落盘时，会在路由投递前调用 OneBot `get_msg`，把查到的群聊/私聊消息标记为 `lookupSource=onebot_get_msg` 后缓存，再继续追溯下一层引用。接口失败只记录 warning，不阻塞当前消息。展开持续到没有引用、仍无法解析、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。
 
-当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，并在 `replyContext` 写入 `characterTtsDialogue=true`。`[回复回传要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到普通回复 API；Outbox 再按当前人格 `voice/voice-profile.json` 的声线、模型、语言、语速、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。同一 `sessionId` 的 ASR 与 TTS 会作为双向上下文共用 `speech` 额度。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
+当 `voice_transcript` 明确来自 RabiPC 的 `speech` 消息端或 RabiSpeech 时，`AgentPacket` 会把本轮输出收敛为 `voice_chat`，在来源上下文写入 `characterTtsDialogue=true`，并生成 `channel=speech`、带当前 `sessionId` 的发送模板。`[发送要求]` 会明确要求 Agent 进入 `character-tts-dialogue` 状态，把与屏幕回复同义的短句 POST 到明确发送 API；Outbox 再按当前人格 `voice/voice-profile.json` 的声线、模型、语言、语速、`sessionId` 和自动播放设置进入 RabiSpeech 主机级 FIFO。同一 `sessionId` 的 ASR 与 TTS 会作为双向上下文共用 `speech` 额度。QQ、角色面板、普通文字和其它 `voice_transcript` 来源不受这个自动切换影响。
 
 语音是唯一有这类“先记录、再决定是否唤醒”的专用策略之一：Route `speechPushMode=hot` 时每段 ASR 立即投递；`keyword` 时只在命中人格 `speechTriggerKeywords` 时投递，其他转写仍在账本中。空关键词不回退 `hot`。普通已匹配消息端则直接进入 Desktop `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
 
@@ -375,9 +386,10 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 角色面板记录：data/roles/Rabi/role-panel/messages.jsonl
 语音转写日志：data/route/default-main/voice-transcripts.jsonl
 
-[回传]
-普通回复 API：http://127.0.0.1:8790/api/agent/replies
-当前回复上下文：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id","outputAdapter":"agent","outputPipeline":"agent","replyToSource":false}
+[发送]
+明确发送 API：http://127.0.0.1:8790/api/agent/send
+发送请求模板：{"deliveryId":"<稳定发送 ID>","routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id"},"payload":{"type":"text","text":"<发送正文>"}}
+来源上下文（仅供审计）：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id"}
 
 [用户模板补充]
 需要回应时给短而自然的群聊草稿。
@@ -433,7 +445,8 @@ Agent 需要关注的 Rabi 接口：docs/rabi-agent-interfaces.md
 {conversationCurrentPath}
 {conversationArchiveDir}
 {conversationArchiveIndexPath}
-{replyApiUrl}
+{sendApiUrl}
+{sendRequestJson}
 {replyContextJson}
 {rolePanelLogPath}
 ```
