@@ -120,7 +120,7 @@ function routeMatchText(record: ForwardRecord, variables: Record<string, string>
   return parts.join("\n");
 }
 
-function ruleMatches(
+export function notificationRuleMatches(
   rule: NotificationRule,
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
@@ -181,11 +181,12 @@ export function createRouteDecision(
 ): RouteDecision | null {
   const systemRule = systemEventRuleForRouteKind(
     routeKind,
-    isManualTriggerRecord(record) ? record.triggerId : undefined
+    isManualTriggerRecord(record) ? record.triggerId : undefined,
+    extraValues
   );
   const matchedRules = systemRule
     ? [systemRule]
-    : route.notificationRules.filter((item) => ruleMatches(item, routeKind, record, extraValues, route));
+    : route.notificationRules.filter((item) => notificationRuleMatches(item, routeKind, record, extraValues, route));
   if (matchedRules.length === 0) {
     return null;
   }

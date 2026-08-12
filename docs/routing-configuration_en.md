@@ -22,7 +22,7 @@ Reusable role rules:
 data/roles/<RoleId>/personaConfig.json
 ```
 
-The route points to the role with `agentRoleId`. The current persona file keeps root-level `notificationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Several Routes may reuse the same role-owned policy. When an endpoint is added and enabled, Manager adds an empty fallback template for any of that endpoint's route kinds not already covered by a rule. Existing custom rules are preserved, and an explicitly disabled matching rule is not re-enabled. This prevents a working ingress from silently dropping messages merely because its rule list was empty.
+The route points to the role with `agentRoleId`. The current persona file keeps root-level `automationRules`, `speechTriggerKeywords`, and `recentMessageLimits`; it does not require a nested `configs` collection. Legacy `notificationRules` remain readable and migrate into automation rules. Several Routes may reuse the same persona-owned policy.
 
 ## `personaConfig.json`
 
@@ -44,21 +44,27 @@ A representative shape:
     "wecom": 100
   },
   "speechTriggerKeywords": ["Rabi", "assistant"],
-  "notificationRules": [
+  "automationRules": [
     {
       "id": "main-direct",
       "name": "Direct messages",
       "enabled": true,
-      "routeKinds": ["private", "direct_at", "direct_reply"],
-      "regex": "",
-      "targetGroupId": "",
-      "template": "Keep the reply concise and return it through RabiRoute."
+      "trigger": {
+        "type": "message",
+        "routeKinds": ["private", "direct_at", "direct_reply"],
+        "regex": "",
+        "targetGroupId": ""
+      },
+      "action": {
+        "type": "deliver_agent",
+        "template": "Keep the reply concise and return it through RabiRoute."
+      }
     }
   ]
 }
 ```
 
-Rules are evaluated inside one route profile. They do not select an arbitrary role or start an independent process. The active route already selected the role through `agentRoleId`.
+Each rule combines one trigger (`message` or `schedule`) and one action (`deliver_agent` or `run_script`). Rules stay inside the active Route profile and cannot select an arbitrary persona. Script actions require Route-local permission and remain inside the bound persona's `scripts/` directory.
 
 ## Route kinds
 
@@ -85,10 +91,10 @@ wearable_health_alert
 
 Use the narrowest kind that represents the source event. `group_message` is normally combined with `regex`; explicit mentions/replies use their dedicated kinds.
 
-## Ordinary delivery and endpoint-specific exceptions
+## Ordinary delivery, scheduled tasks, and endpoint-specific exceptions
 
 - Once an ordinary endpoint message matches a rule, it is delivered directly: `steer` the active Desktop turn or `start` an idle task.
-- Heartbeat never injects message history and does not enter conversational settling. With Codex Message Agent mode enabled, it goes immediately to an independent Message Agent and ignores Primary-task busyness. Otherwise `heartbeatSkipWhenAgentBusy` may skip heartbeat while the fixed task is active. A legacy `recentMessageLimits.heartbeat` value remains readable for compatibility but is treated as `0` at runtime.
+- Scheduled triggers never inject message history and do not enter conversational settling. Agent actions use the heartbeat compatibility event: with Codex Message Agent mode enabled they go immediately to an independent Message Agent, otherwise `heartbeatSkipWhenAgentBusy` may skip them while the fixed task is active. Script actions bypass Agent delivery and require `personaAutomationScriptsEnabled=true` on the local Route.
 - `plan_feedback` is a Manager system event emitted only after the plan and Route are explicitly bound. It uses a dedicated built-in rule, neither reads nor writes chat history, and always exposes empty recent-message template values.
 - Speech owns Route `speechPushMode`: `hot` delivers every completed ASR segment, while `keyword` records all segments and delivers only after a persona `speechTriggerKeywords` match. An empty list never falls back to hot.
 - `weixin_message` is the experimental personal-Weixin OpenClaw/iLink source. Text exposes `weixinSessionId`, `weixinUserId`, and `weixinMessageType`; media is record-only, and replies require the source session's context token.
@@ -104,13 +110,19 @@ The default compatibility pipeline retains output in the Agent session unless th
 
 `regex` is matched against the route text produced for the event. Keep expressions understandable and testable. A blank regex means the rule does not require a keyword match.
 
-Example:
+Message-to-Agent example:
 
 ```json
 {
-  "routeKinds": ["group_message"],
-  "regex": "build failed|release blocker|please record",
-  "template": "Triage the issue and identify evidence, owner, and next action."
+  "trigger": {
+    "type": "message",
+    "routeKinds": ["group_message"],
+    "regex": "build failed|release blocker|please record"
+  },
+  "action": {
+    "type": "deliver_agent",
+    "template": "Triage the issue and identify evidence, owner, and next action."
+  }
 }
 ```
 

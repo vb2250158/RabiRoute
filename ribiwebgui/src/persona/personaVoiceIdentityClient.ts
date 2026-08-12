@@ -33,6 +33,7 @@ export type PersonaVoiceIdentity = {
   sourceHostId: string;
   sourceHostName?: string;
   voiceprintId: string;
+  participantId?: string;
   displayName?: string;
   relationship?: string;
   isUser?: boolean;
@@ -60,7 +61,8 @@ export type PersonaVoiceIdentityPatch = {
   sourceHostId: string;
   sourceHostName?: string;
   voiceprintId: string;
-  isUser: boolean | null;
+  participantId?: string | null;
+  isUser?: boolean | null;
 };
 
 export type PersonaVoiceIdentityMutationResult = {

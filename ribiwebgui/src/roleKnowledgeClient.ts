@@ -86,8 +86,11 @@ export type PlanAgentStatusBatch = {
 export type RoleMemoryPageCounts = {
   recent: number;
   consolidated: number;
+  archived: number;
   consolidationRuns: number;
 };
+
+export type RoleMemoryKind = "recent" | "consolidated" | "archived";
 
 export type RoleMemoryPage = {
   items: RoleMemory[];
@@ -333,20 +336,24 @@ export async function loadRoleMemoryCounts(roleId: string): Promise<RoleMemoryPa
     return {
       recent: counts.recent,
       consolidated: counts.consolidated,
+      archived: typeof counts.archived === "number" ? counts.archived : 0,
       consolidationRuns: typeof counts.consolidationRuns === "number" ? counts.consolidationRuns : 0
     };
   }
   const payload = data as RoleMemoryPayload;
+  const archived = payload.archived || payload.recent.filter((memory) => Boolean(memory.consolidatedAt));
+  const recent = payload.archived ? payload.recent : payload.recent.filter((memory) => !memory.consolidatedAt);
   return {
-    recent: payload.recent.length,
+    recent: recent.length,
     consolidated: payload.consolidated.length,
+    archived: archived.length,
     consolidationRuns: 0
   };
 }
 
 export async function loadRoleMemoryPage(
   roleId: string,
-  kind: "recent" | "consolidated",
+  kind: RoleMemoryKind,
   cursor = "",
   limit = 24,
   query = ""
@@ -357,19 +364,31 @@ export async function loadRoleMemoryPage(
   const data = await managerData<RoleMemoryPage | RoleMemoryPayload>(
     `/api/roles/${encodeURIComponent(roleId)}/memory?${params.toString()}`
   );
-  if ("items" in data) return data;
+  if ("items" in data) {
+    return {
+      ...data,
+      counts: {
+        ...data.counts,
+        archived: typeof data.counts.archived === "number" ? data.counts.archived : 0
+      }
+    };
+  }
 
   const start = Math.max(0, Number.parseInt(cursor, 10) || 0);
   const pageLimit = Math.min(100, Math.max(1, Math.floor(limit) || 24));
-  const items = data[kind].filter((item) => knowledgeItemMatchesQuery(item, query));
+  const archived = data.archived || data.recent.filter((memory) => Boolean(memory.consolidatedAt));
+  const recent = data.archived ? data.recent : data.recent.filter((memory) => !memory.consolidatedAt);
+  const source = kind === "archived" ? archived : kind === "consolidated" ? data.consolidated : recent;
+  const items = source.filter((item) => knowledgeItemMatchesQuery(item, query));
   const end = Math.min(items.length, start + pageLimit);
   return {
     items: items.slice(start, end),
     total: items.length,
     nextCursor: end < items.length ? String(end) : "",
     counts: {
-      recent: data.recent.length,
+      recent: recent.length,
       consolidated: data.consolidated.length,
+      archived: archived.length,
       consolidationRuns: 0
     }
   };

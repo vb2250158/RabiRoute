@@ -1,14 +1,18 @@
-import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, NotificationRule, NotificationScheduleDefinition, RuntimeStatus } from "../types";
+import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
 import {
   defaultRolePanelNotificationRule,
   defaultMessageAdapterNotificationRules,
   ensureDefaultPersonaRules,
+  ensureMessageAdapterAutomationRules,
   ensureMessageAdapterNotificationRules,
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
   isBuiltinRolePanelNotificationRule,
   messageAdapterPolicyFor as sharedMessageAdapterPolicyFor,
   normalizeMessageAdapterPolicies,
+  normalizePersonaAutomationRules,
   normalizeRuleDefinitions,
+  notificationRulesFromPersonaAutomations,
+  personaAutomationRulesFromNotificationRules,
   normalizeTemplateText as sharedNormalizeTemplateText,
   sanitizeConfigName as sharedSanitizeConfigName,
   setGatewayAdapters as sharedSetGatewayAdapters
@@ -86,6 +90,8 @@ export const templateVars = [
   { name: "heartbeatSkipWhenAgentBusy", description: "未开启消息处理 Agent 模式时，为 true 会在主人格会话工作中跳过本次 heartbeat；开启该模式后 heartbeat 改由独立消息处理 Agent 立即处理。" },
   { name: "scheduleId", description: "当前定时计划 ID；仅定时触发时填充。" },
   { name: "scheduleName", description: "当前定时计划显示名称；仅定时触发时填充。" },
+  { name: "automationRuleId", description: "当前人格自动化规则 ID。" },
+  { name: "automationRuleName", description: "当前人格自动化规则名称。" },
   { name: "triggerId", description: "手动触发 ID。" },
   { name: "triggerName", description: "手动触发显示名称。" },
   { name: "voiceTranscriptLogPath", description: "语音转写 JSONL 记录路径。" },
@@ -185,7 +191,7 @@ export function isMessageInputsDisabled(gateway: GatewayDefinition): boolean {
 
 export function setGatewayAdapters(gateway: GatewayDefinition, adapters: MessageAdapterType[]): void {
   sharedSetGatewayAdapters(gateway, adapters);
-  gateway.notificationRules = ensureMessageAdapterNotificationRules(gateway.notificationRules, gatewayAdapterTypes(gateway));
+  automationRulesForGateway(gateway);
 }
 
 export function messageAdapterPolicyFor(gateway: GatewayDefinition, type: MessageAdapterType): Required<MessageAdapterPolicy> {
@@ -391,30 +397,34 @@ export function defaultHeartbeatSchedule(gateway: GatewayDefinition, name = "定
 }
 
 export function migrateLegacyHeartbeatSchedules(gateway: GatewayDefinition): void {
-  const rules = notificationRulesForGateway(gateway);
-  for (const rule of rules) {
-    if (!Array.isArray(rule.routeKinds) || !rule.routeKinds.includes("heartbeat")) continue;
-    if (Array.isArray(rule.schedules) && rule.schedules.length > 0) continue;
-    rule.schedules = [defaultHeartbeatSchedule(gateway, rule.name || rule.id || "定时触发")];
-  }
+  automationRulesForGateway(gateway);
+}
+
+export function automationRulesForGateway(gateway: GatewayDefinition): PersonaAutomationRuleDefinition[] {
+  const configured = normalizePersonaAutomationRules(gateway.automationRules);
+  const migrated = configured.length > 0
+    ? configured
+    : personaAutomationRulesFromNotificationRules(
+      gateway.notificationRules,
+      Number(gateway.heartbeatIntervalSeconds || 900)
+    );
+  gateway.automationRules = ensureMessageAdapterAutomationRules(migrated, gatewayAdapterTypes(gateway), {
+    includeRolePanel: Boolean(gateway.agentRoleId)
+  });
+  gateway.notificationRules = notificationRulesFromPersonaAutomations(gateway.automationRules)
+    .map((rule, index) => normalizeRule(rule, index));
+  return gateway.automationRules;
+}
+
+export function syncAutomationRuleProjection(gateway: GatewayDefinition): void {
+  gateway.automationRules = normalizePersonaAutomationRules(gateway.automationRules);
+  gateway.notificationRules = notificationRulesFromPersonaAutomations(gateway.automationRules)
+    .map((rule, index) => normalizeRule(rule, index));
 }
 
 export function notificationRulesForGateway(gateway: GatewayDefinition): NotificationRule[] {
-  if (gateway.agentRoleId) {
-    gateway.notificationRules = ensureDefaultPersonaRules(gateway.notificationRules);
-  } else if (
-    !Array.isArray(gateway.notificationRules)
-    || gateway.notificationRules.length === 0
-    || gateway.notificationRules.some(isBuiltinRolePanelNotificationRule)
-  ) {
-    gateway.notificationRules = defaultMessageAdapterNotificationRules(gatewayAdapterTypes(gateway))
-      .map((rule, index) => normalizeRule(rule, index));
-  }
-  gateway.notificationRules = ensureMessageAdapterNotificationRules(
-    gateway.notificationRules,
-    gatewayAdapterTypes(gateway)
-  ).map((rule, index) => normalizeRule(rule, index));
-  return gateway.notificationRules;
+  automationRulesForGateway(gateway);
+  return gateway.notificationRules ?? [];
 }
 
 export function defaultRolePanelRule(): NotificationRule {

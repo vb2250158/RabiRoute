@@ -6,14 +6,15 @@
   "priority": "medium",
   "kind": "documentation",
   "currentStepId": "keep-contracts-aligned",
-  "currentStep": "计划与记忆已支持结构化步骤、暂停恢复、Manager 派生审批门、计划引导、QA 回退和反馈审计；Manager 现在统一维护分页、Markdown 与旧 JSON 兼容、24/72 小时沉淀投影和自动触发。独立记忆整理 Agent 只复用持久 Desktop 任务；消息处理看板通过结构化结果、关键项目事实记录和真实 Outbox/任务交接回执收口，Persona Sync 只同步可移植知识。当前持续校准双语文档、Agent 提示和公开示例人格。",
-  "nextAction": "用真实脱敏数据验证 24/72 小时边界、自动触发不重复、Markdown/旧 JSON 同 ID 不重复计数和独立整理任务回执；再验证计划引导、审批直达业务任务与 QA 失败续投。",
+  "currentStep": "计划与记忆页现在明确分为当前计划、近期记忆、沉淀记忆和已归档。带 consolidatedAt 的来源记忆移出近期列表并进入已归档，整理生成且仍可召回的稳定记录保留在沉淀记忆；Manager 分页和计数接口同步提供 archived 分类。旧文件不需要迁移，现有字段决定分类。",
+  "nextAction": "用真实脱敏数据验证 recent、consolidated、archived 三类记忆的分页、计数、搜索和详情一致性，确认旧 JSON 与 Markdown 同 ID 不重复，并复核 Persona Sync 不把运行期归档记录误当作新记忆。",
   "steps": [
     { "id": "define-file-model", "title": "定义计划、近期记忆、沉淀记忆和整理记录的文件模型", "status": "已完成" },
     { "id": "structured-steps", "title": "实现有序 steps 与唯一 currentStepId", "status": "已完成" },
     { "id": "pause-and-approval", "title": "实现暂停恢复、审批执行合同与计划反馈审计", "status": "已完成" },
     { "id": "guidance-and-qa-recovery", "title": "实现计划级引导、审批直投、QA 失败恢复与等待打包派生状态", "status": "已完成" },
     { "id": "dynamic-record-lifecycle", "title": "统一归档、沉淀、分卷、过期和可重建视图合同", "status": "已完成" },
+    { "id": "separate-memory-categories", "title": "把近期、沉淀和已归档记忆分开展示与计数", "status": "已完成", "completedAt": "2026-08-12T00:00:00+08:00" },
     { "id": "persona-sync-runtime-boundary", "title": "让 Persona Sync 统一隔离 work-cycle 运行态与临时文件", "status": "已完成" },
     { "id": "keep-contracts-aligned", "title": "持续校准双语文档、Agent 提示和公开示例", "status": "进行中" },
     { "id": "live-lifecycle-validation", "title": "用真实脱敏计划验证完整生命周期", "status": "未开始" }
@@ -31,6 +32,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-08T00:00:00+08:00",
-  "updatedAt": "2026-08-07T00:00:00+08:00",
-  "keywords": ["计划", "记忆", "上下文", "接口", "沉淀", "动态归档", "24/72 小时", "语音导出", "Persona Sync", "运行态隔离", "steps", "currentStepId", "暂停", "approvalRequest", "审批反馈", "计划引导", "QA 回退", "等待打包", "消息处理", "关键项目事实", "Markdown", "旧 JSON", "recalledAt", "自动整理", "记忆整理 Agent", "任务交接回执"]
+  "updatedAt": "2026-08-12T20:21:06+08:00",
+  "keywords": ["计划", "记忆", "近期记忆", "沉淀记忆", "已归档", "archived", "consolidatedAt", "分页", "计数", "Markdown", "旧 JSON", "Persona Sync", "运行态隔离", "记忆整理 Agent"]
 }

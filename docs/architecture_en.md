@@ -97,7 +97,7 @@ The local `/api/agent/threads` bridge exposes controlled list/read/resolve/creat
 sent | draft | blocked | failed
 ```
 
-`POST /api/agent/send` requires a stable `deliveryId`, exact `routeId`, `channel`, channel-specific `params`, and `payload`. Source context never selects the destination, and a Route's default pipeline cannot rewrite the explicit channel. Current outputs include NapCat, WeCom, personal Weixin, Feishu, RabiLink, speech, and role panel. FenneNote remains only for old Route compatibility.
+`POST /api/agent/send` requires a stable `deliveryId`, `sender.agentType + sender.sessionId`, exact `routeId`, `channel`, channel-specific `params`, and `payload`. Completed receipts preserve the calling Agent type and session. Source context never selects the destination, and a Route's default pipeline cannot rewrite the explicit channel. NapCat group sends must explicitly provide `replyToMessageId`: a real source ID requests a quote, while `""` deliberately selects an unquoted message. Current outputs include NapCat, WeCom, personal Weixin, Feishu, RabiLink, speech, and role panel. FenneNote remains only for old Route compatibility.
 
 There is no generic persistent approval queue or automatic retry queue. A future Action Queue should extend this policy/audit layer rather than reimplement platform sending.
 

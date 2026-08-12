@@ -8,6 +8,8 @@ import {
   type PersonaSyncContent,
   type PersonaSyncIndexStatus,
   type PersonaSyncPeer,
+  type PersonaSyncPreview,
+  type PersonaSyncPreviewFile,
   type PersonaSyncResult
 } from "../persona/personaSyncClient";
 
@@ -25,8 +27,11 @@ const conflicts = ref<PersonaSyncConflict[]>([]);
 const indexStatus = ref<PersonaSyncIndexStatus | null>(null);
 const autoStatus = ref<PersonaSyncAutoStatus | null>(null);
 const syncResult = ref<PersonaSyncResult | null>(null);
+const comparison = ref<PersonaSyncPreview | null>(null);
+const selectedPeerId = ref("");
 const peerLoading = ref(false);
 const localLoading = ref(false);
+const comparisonLoading = ref(false);
 const conflictLoading = ref(false);
 const conflictsLoaded = ref(false);
 const syncingPeerId = ref("");
@@ -42,6 +47,8 @@ const localPreview = ref("");
 const remotePreview = ref("");
 
 const syncablePeers = computed(() => peers.value.filter(peer => peer.online && peer.capabilities.includes("persona-sync")));
+const selectedPeer = computed(() => peers.value.find(peer => peer.id === selectedPeerId.value || peer.guid === selectedPeerId.value) || null);
+const changedPreviewFiles = computed(() => comparison.value?.files.filter(file => file.operation !== "unchanged") || []);
 const semanticConflicts = computed(() => syncResult.value?.semanticConflicts || []);
 const changedFiles = computed(() => syncResult.value?.files.filter(file => file.status !== "unchanged").length || 0);
 const autoStatusLabel = computed(() => {
@@ -82,6 +89,27 @@ function previewText(content: PersonaSyncContent, relativePath: string): string 
   return new TextDecoder().decode(content.bytes);
 }
 
+function operationMeta(file: PersonaSyncPreviewFile): { marker: string; label: string; note: string; color: string; icon: string } {
+  switch (file.operation) {
+    case "pull_create": return { marker: "A", label: "从对方拉取", note: "本机将新增", color: "success", icon: "mdi-cloud-download-outline" };
+    case "pull_update": return { marker: "M", label: "从对方更新", note: "本机将更新", color: "info", icon: "mdi-cloud-download-outline" };
+    case "pull_delete": return { marker: "D", label: "采用对方删除", note: "本机将删除", color: "warning", icon: "mdi-delete-outline" };
+    case "push_create": return { marker: "A", label: "推送到对方", note: "对方将新增", color: "secondary", icon: "mdi-cloud-upload-outline" };
+    case "push_update": return { marker: "M", label: "推送本机更新", note: "对方将更新", color: "secondary", icon: "mdi-cloud-upload-outline" };
+    case "push_delete": return { marker: "D", label: "推送本机删除", note: "对方将删除", color: "warning", icon: "mdi-delete-outline" };
+    case "auto_merge": return { marker: "M", label: "自动合并记录", note: "两边都会收敛", color: "primary", icon: "mdi-source-merge" };
+    case "conflict": return { marker: "!", label: "需要确认", note: "同步时不会覆盖", color: "error", icon: "mdi-alert-circle-outline" };
+    default: return { marker: "✓", label: "已经一致", note: "无需处理", color: "success", icon: "mdi-check-circle-outline" };
+  }
+}
+
+function compactBytes(value?: number): string {
+  if (value == null) return "-";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
 async function refreshPeers(): Promise<void> {
   if (!props.roleId) return;
   peerLoading.value = true;
@@ -89,11 +117,32 @@ async function refreshPeers(): Promise<void> {
   try {
     const result = await personaSyncClient.peers();
     peers.value = result.peers;
+    if (!peers.value.some(peer => peer.id === selectedPeerId.value || peer.guid === selectedPeerId.value)) {
+      selectedPeerId.value = syncablePeers.value[0]?.id || "";
+    }
   } catch (error) {
     peers.value = [];
     peerError.value = error instanceof Error ? error.message : String(error);
   } finally {
     peerLoading.value = false;
+  }
+}
+
+async function refreshPreview(): Promise<void> {
+  const peerId = selectedPeerId.value;
+  if (!props.roleId || !peerId || comparisonLoading.value) {
+    if (!peerId) comparison.value = null;
+    return;
+  }
+  comparisonLoading.value = true;
+  localError.value = "";
+  try {
+    comparison.value = await personaSyncClient.preview(peerId, props.roleId);
+  } catch (error) {
+    comparison.value = null;
+    localError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    comparisonLoading.value = false;
   }
 }
 
@@ -137,6 +186,7 @@ async function refreshAll(): Promise<void> {
   notice.value = "";
   syncResult.value = null;
   await Promise.all([refreshPeers(), refreshLocalState()]);
+  await refreshPreview();
 }
 
 async function syncPeer(peer: PersonaSyncPeer): Promise<void> {
@@ -150,6 +200,7 @@ async function syncPeer(peer: PersonaSyncPeer): Promise<void> {
       ? "同步已完成传输，但仍有冲突需要确认。"
       : "当前人格已经和这台电脑收敛。";
     await Promise.all([refreshLocalState(), refreshConflicts()]);
+    await refreshPreview();
   } catch (error) {
     localError.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -216,6 +267,8 @@ watch(() => props.roleId, roleId => {
   indexStatus.value = null;
   autoStatus.value = null;
   syncResult.value = null;
+  comparison.value = null;
+  selectedPeerId.value = "";
   notice.value = "";
   if (roleId) void refreshAll();
 }, { immediate: true });
@@ -223,120 +276,187 @@ watch(() => props.roleId, roleId => {
 watch(() => props.manifestVersion, () => {
   if (!props.roleId) return;
   void refreshLocalState();
+  void refreshPreview();
   if (conflictsLoaded.value) void refreshConflicts();
 });
 
 watch(() => props.peerVersion, () => {
-  if (props.roleId) void refreshPeers();
+  if (!props.roleId) return;
+  void refreshPeers().then(() => refreshPreview());
+});
+
+watch(selectedPeerId, () => {
+  comparison.value = null;
+  void refreshPreview();
 });
 </script>
 
 <template>
-  <v-card class="app-card glass-card section-card persona-sync-card">
-    <div class="section-title-row">
-      <div>
-        <div class="section-title">多电脑人格同步</div>
-        <div class="section-note">同一应用 token 自动发现电脑；文件变化、电脑上线和 Relay 重连会自动对账，手动同步仍可立即执行。</div>
-      </div>
-      <div class="d-flex ga-2 flex-wrap">
-        <v-chip v-if="indexStatus" size="small" :color="indexStatus.state === 'ready' ? 'success' : indexStatus.state === 'fallback' ? 'warning' : undefined" variant="tonal">
-          {{ indexStatus.watchMode === "recursive" ? "文件事件索引" : indexStatus.watchMode === "query_reconcile" ? "查询时校准" : "索引只读" }}
-        </v-chip>
-        <v-chip v-if="autoStatus" size="small" :color="autoStatusColor" variant="tonal">
-          {{ autoStatusLabel }}
-        </v-chip>
-        <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="peerLoading || localLoading" @click="refreshAll">刷新设备</v-btn>
-        <v-btn size="small" variant="text" prepend-icon="mdi-file-alert-outline" :loading="conflictLoading" @click="refreshConflicts">检查冲突</v-btn>
-      </div>
-    </div>
-
-    <v-alert v-if="peerError" type="warning" variant="tonal" density="compact" class="mb-3">
-      {{ peerError }}
-      <div class="mt-1">请先在全局设置中启用 RabiLink Relay，并让其它电脑使用同一个应用 token。</div>
-    </v-alert>
-    <v-alert v-if="localError" type="error" variant="tonal" density="compact" class="mb-3">{{ localError }}</v-alert>
-    <v-alert v-if="autoStatus?.lastError" type="warning" variant="tonal" density="compact" class="mb-3">
-      自动对账保留了待同步标记，将在连接事件或有界重试时继续：{{ autoStatus.lastError }}
-    </v-alert>
-    <v-alert v-if="notice" :type="syncResult?.conflicts ? 'warning' : 'success'" variant="tonal" density="compact" class="mb-3">{{ notice }}</v-alert>
-
-    <div class="sync-stat-strip">
+  <div class="persona-sync-workbench">
+    <div class="sync-status-strip">
+      <div><span>当前人格</span><b data-no-i18n>{{ roleId }}</b></div>
       <div><span>可同步电脑</span><b>{{ syncablePeers.length }}</b></div>
       <div><span>本机人格文件</span><b>{{ indexStatus?.files ?? "-" }}</b></div>
-      <div><span>待解决文件冲突</span><b>{{ conflictsLoaded ? conflicts.length : "未检查" }}</b></div>
+      <div><span>待解决冲突</span><b>{{ conflictsLoaded ? conflicts.length : "未检查" }}</b></div>
     </div>
 
-    <div v-if="peerLoading && peers.length === 0" class="sync-loading-row">
-      <v-progress-circular indeterminate size="22" width="2" />
-      <span>正在发现同应用电脑…</span>
-    </div>
-    <div v-else-if="peers.length === 0 && !peerError" class="empty-state compact-empty mt-3">
-      <div>
-        <strong>暂未发现其它电脑</strong>
-        <span>设备上线或 Relay 重连后会事件刷新；也可以手动点击“刷新设备”补查一次。</span>
-      </div>
-    </div>
-    <div v-else class="sync-peer-list mt-3">
-      <article v-for="peer in peers" :key="peer.guid || peer.id" class="sync-peer-row">
-        <div class="sync-peer-mark" :class="{ online: peer.online }"><v-icon size="18">mdi-laptop</v-icon></div>
-        <div class="sync-peer-copy">
-          <strong data-no-i18n>{{ peer.name }}</strong>
-          <span>{{ peer.online ? (peer.capabilities.includes("persona-sync") ? "在线 · 支持人格同步" : "在线 · 客户端版本不支持同步") : "离线" }}</span>
+    <div class="sync-workbench-layout">
+      <v-card class="app-card glass-card sync-peer-panel">
+        <div class="sync-panel-heading">
+          <div><strong>其它电脑</strong><span>选择要比较的人格文件夹</span></div>
+          <v-btn icon="mdi-refresh" size="small" variant="text" :loading="peerLoading" aria-label="刷新设备" @click="refreshAll" />
         </div>
-        <v-btn
-          size="small"
-          color="secondary"
-          variant="tonal"
-          prepend-icon="mdi-folder-sync-outline"
-          :loading="syncingPeerId === peer.id"
-          :disabled="!peer.online || !peer.capabilities.includes('persona-sync') || Boolean(syncingPeerId)"
-          @click="syncPeer(peer)"
-        >
-          同步当前人格
-        </v-btn>
-      </article>
+
+        <v-alert v-if="peerError" type="warning" variant="tonal" density="compact" class="sync-peer-error ma-3">
+          {{ peerError }}
+          <div class="mt-1">请让其它电脑使用同一个 RabiLink 应用 token。</div>
+        </v-alert>
+        <div v-if="peerLoading && peers.length === 0" class="sync-loading-row compact">
+          <v-progress-circular indeterminate size="22" width="2" />
+          <span>正在发现电脑…</span>
+        </div>
+        <div v-else-if="peers.length === 0 && !peerError" class="sync-peer-empty">
+          <v-icon size="34">mdi-laptop-off</v-icon>
+          <strong>暂未发现其它电脑</strong>
+          <span>电脑上线或 Relay 重连后会自动刷新。</span>
+        </div>
+        <div v-else class="sync-peer-list">
+          <button
+            v-for="peer in peers"
+            :key="peer.guid || peer.id"
+            type="button"
+            class="sync-peer-choice"
+            :class="{ selected: selectedPeer?.id === peer.id, disabled: !peer.online || !peer.capabilities.includes('persona-sync') }"
+            :disabled="!peer.online || !peer.capabilities.includes('persona-sync')"
+            @click="selectedPeerId = peer.id"
+          >
+            <span class="sync-peer-mark" :class="{ online: peer.online }"><v-icon size="18">mdi-laptop</v-icon></span>
+            <span class="sync-peer-copy">
+              <strong data-no-i18n>{{ peer.name }}</strong>
+              <small>{{ peer.online ? (peer.capabilities.includes("persona-sync") ? "在线 · 可比较" : "版本不支持人格同步") : "离线" }}</small>
+            </span>
+            <v-icon size="18">mdi-chevron-right</v-icon>
+          </button>
+        </div>
+
+        <div class="sync-peer-panel-foot">
+          <v-chip v-if="indexStatus" size="small" :color="indexStatus.state === 'ready' ? 'success' : indexStatus.state === 'fallback' ? 'warning' : undefined" variant="tonal">
+            {{ indexStatus.watchMode === "recursive" ? "文件变化已监听" : indexStatus.watchMode === "query_reconcile" ? "比较时重新检查" : "索引只读" }}
+          </v-chip>
+          <v-chip v-if="autoStatus" size="small" :color="autoStatusColor" variant="tonal">{{ autoStatusLabel }}</v-chip>
+        </div>
+      </v-card>
+
+      <v-card class="app-card glass-card sync-files-panel">
+        <div class="sync-files-toolbar">
+          <div>
+            <span class="sync-eyebrow">CHANGED FILES</span>
+            <h2>人格文件变化</h2>
+            <p v-if="selectedPeer" data-no-i18n>{{ roleId }} ↔ {{ selectedPeer.name }}</p>
+            <p v-else>先从左侧选择一台电脑。</p>
+          </div>
+          <div class="d-flex ga-2 flex-wrap justify-end">
+            <v-chip v-if="comparison" size="small" :color="comparison.conflicts ? 'warning' : comparison.changedFiles ? 'info' : 'success'" variant="tonal">
+              {{ comparison.changedFiles }} 个变化 · {{ comparison.conflicts }} 个冲突
+            </v-chip>
+            <v-chip v-if="comparison" size="small" variant="tonal">{{ comparison.transport === "lan" ? "局域网直连" : "Relay 中转" }}</v-chip>
+            <v-btn size="small" variant="text" prepend-icon="mdi-source-branch-sync" :loading="comparisonLoading" :disabled="!selectedPeer" @click="refreshPreview">重新比较</v-btn>
+          </div>
+        </div>
+
+        <div class="sync-files-body">
+          <v-alert v-if="localError" type="error" variant="tonal" density="compact" class="ma-4">{{ localError }}</v-alert>
+          <v-alert v-if="autoStatus?.lastError" type="warning" variant="tonal" density="compact" class="ma-4">
+            自动同步仍保留待处理标记：{{ autoStatus.lastError }}
+          </v-alert>
+          <v-alert v-if="notice" :type="syncResult?.conflicts ? 'warning' : 'success'" variant="tonal" density="compact" class="ma-4">{{ notice }}</v-alert>
+
+          <div v-if="comparisonLoading" class="sync-loading-row">
+            <v-progress-circular indeterminate size="26" width="2" />
+            <span>正在比较两台电脑的人格文件夹…</span>
+          </div>
+          <div v-else-if="!selectedPeer" class="sync-files-empty">
+            <v-icon size="42">mdi-folder-search-outline</v-icon>
+            <strong>选择一台电脑开始比较</strong>
+            <span>这里只读取文件清单和哈希，不会在比较时修改任何人格文件。</span>
+          </div>
+          <div v-else-if="comparison && changedPreviewFiles.length === 0" class="sync-files-empty">
+            <v-icon color="success" size="42">mdi-check-decagram-outline</v-icon>
+            <strong>人格文件夹已经一致</strong>
+            <span>本机和所选电脑没有待拉取、待推送或待确认的文件。</span>
+          </div>
+          <div v-else-if="comparison" class="changed-files-list">
+            <article v-for="file in changedPreviewFiles" :key="`${file.roleId}/${file.path}`" class="changed-file-row">
+              <span class="changed-file-marker" :class="`is-${operationMeta(file).color}`">{{ operationMeta(file).marker }}</span>
+              <v-icon :color="operationMeta(file).color" size="19">{{ operationMeta(file).icon }}</v-icon>
+              <div class="changed-file-copy">
+                <strong data-no-i18n>{{ file.path }}</strong>
+                <span>{{ operationMeta(file).label }} · {{ operationMeta(file).note }}</span>
+              </div>
+              <div class="changed-file-size">
+                <span>本机 {{ compactBytes(file.localSize) }}</span>
+                <span>对方 {{ compactBytes(file.remoteSize) }}</span>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div class="sync-files-footer">
+          <div>
+            <strong>{{ comparison?.conflicts ? "存在冲突，安全文件仍可同步" : comparison?.changedFiles ? "准备同步人格文件夹" : "等待文件变化" }}</strong>
+            <span>同步会按共同基线拉取、推送或合并；冲突文件不会被最后写入者直接覆盖。</span>
+          </div>
+          <v-btn
+            color="secondary"
+            size="large"
+            prepend-icon="mdi-folder-sync-outline"
+            :loading="Boolean(selectedPeer && syncingPeerId === selectedPeer.id)"
+            :disabled="!selectedPeer || Boolean(syncingPeerId) || comparisonLoading"
+            @click="selectedPeer && syncPeer(selectedPeer)"
+          >拉取并同步</v-btn>
+        </div>
+      </v-card>
     </div>
 
-    <div v-if="syncResult" class="sync-result mt-3">
-      <div class="sync-result-head">
+    <v-card class="app-card glass-card section-card sync-conflict-panel">
+      <div class="section-title-row">
         <div>
-          <strong>{{ syncResult.transport === "lan" ? "局域网直连" : "Relay 中转" }}</strong>
-          <span data-no-i18n>{{ syncResult.peer.name }}</span>
+          <div class="section-title">文件冲突</div>
+          <div class="section-note">只有点击检查后才读取历史冲突证据；比较文件夹不会遍历这部分历史。</div>
         </div>
-        <v-chip size="small" :color="syncResult.conflicts ? 'warning' : 'success'" variant="tonal">
-          {{ changedFiles }} 个变化 · {{ syncResult.conflicts }} 个冲突
-        </v-chip>
+        <v-btn size="small" variant="text" prepend-icon="mdi-file-alert-outline" :loading="conflictLoading" @click="refreshConflicts">检查冲突</v-btn>
       </div>
-      <div class="sync-direction-grid">
-        <div><span>拉取</span><b>{{ syncResult.files.filter(file => file.direction === "pull").length }}</b></div>
-        <div><span>推送</span><b>{{ syncResult.files.filter(file => file.direction === "push").length }}</b></div>
-        <div><span>已一致</span><b>{{ syncResult.files.filter(file => file.direction === "converged").length }}</b></div>
+      <div v-if="conflicts.length || semanticConflicts.length" class="sync-conflicts">
+        <button v-for="conflict in conflicts" :key="conflict.conflictId" type="button" class="sync-conflict-row" @click="openConflict(conflict)">
+          <v-icon color="warning" size="20">mdi-file-alert-outline</v-icon>
+          <span class="sync-conflict-copy">
+            <strong data-no-i18n>{{ conflict.path }}</strong>
+            <small>{{ conflict.remoteDeleted ? "对方删除 / 本机保留" : "双方文件都发生了修改" }} · {{ compactTime(conflict.createdAt) }}</small>
+          </span>
+          <v-icon size="18">mdi-chevron-right</v-icon>
+        </button>
+        <div
+          v-for="conflict in semanticConflicts"
+          :key="conflict.kind === 'persona_voice_identity' ? `voice:${conflict.identityKey}` : `identity:${conflict.recordKind}:${conflict.recordId}`"
+          class="sync-conflict-row semantic-row"
+        >
+          <v-icon color="warning" size="20">{{ conflict.kind === "persona_voice_identity" ? "mdi-account-voice" : "mdi-account-search-outline" }}</v-icon>
+          <span v-if="conflict.kind === 'persona_voice_identity'" class="sync-conflict-copy">
+            <strong>语音账号归类存在多电脑分支</strong>
+            <small>返回人格配置，在“身份关系”的语音消息端账号中重新确认。</small>
+          </span>
+          <span v-else class="sync-conflict-copy">
+            <strong>身份关系存在多电脑分支</strong>
+            <small>返回人格配置，在“身份关系”中比较候选记录并保存完整修正。</small>
+          </span>
+        </div>
       </div>
-    </div>
+      <div v-else-if="conflictsLoaded" class="sync-inline-empty"><v-icon color="success">mdi-check-circle-outline</v-icon><span>没有待解决的文件冲突。</span></div>
+      <div v-else class="sync-inline-empty"><v-icon>mdi-file-question-outline</v-icon><span>尚未检查历史冲突。</span></div>
+    </v-card>
 
-    <div v-if="conflicts.length || semanticConflicts.length" class="sync-conflicts mt-4">
-      <div class="sync-subtitle">
-        <div><strong>需要人工确认</strong><span>不会使用最后写入者覆盖，也不会后台自动决定。</span></div>
-      </div>
-      <button v-for="conflict in conflicts" :key="conflict.conflictId" type="button" class="sync-conflict-row" @click="openConflict(conflict)">
-        <v-icon color="warning" size="20">mdi-file-alert-outline</v-icon>
-        <span class="sync-conflict-copy">
-          <strong data-no-i18n>{{ conflict.path }}</strong>
-          <small>{{ conflict.remoteDeleted ? "对方删除 / 本机保留" : "双方文件都发生了修改" }} · {{ compactTime(conflict.createdAt) }}</small>
-        </span>
-        <v-icon size="18">mdi-chevron-right</v-icon>
-      </button>
-      <div v-for="conflict in semanticConflicts" :key="`${conflict.sourceHostId}:${conflict.voiceprintId}`" class="sync-conflict-row semantic-row">
-        <v-icon color="warning" size="20">mdi-account-voice</v-icon>
-        <span class="sync-conflict-copy">
-          <strong>声纹关系存在多电脑分支</strong>
-          <small>请在下方“人格声纹归类”中重新确认，这是收敛身份分支的唯一入口。</small>
-        </span>
-      </div>
-    </div>
-
-    <v-alert class="mt-3" type="info" variant="tonal" density="compact">
-      本机文件变化、同应用电脑上下线和 Relay 重连会触发一次自动对账；事件只负责唤醒，随后按 manifest 查询补漏。没有固定后台轮询，也不会把 Relay 当作服务器端主人格仓库。
+    <v-alert type="info" variant="tonal" density="compact">
+      同步对象是当前人格的整个文件夹，不是头像。人格正文、计划、可同步记忆、技能和配置会按文件规则比较；运行期历史、锁文件和临时文件不会加入同步。
     </v-alert>
 
     <v-dialog v-model="previewOpen" max-width="1120">
@@ -372,55 +492,87 @@ watch(() => props.peerVersion, () => {
         </v-card-actions>
       </v-card>
     </v-dialog>
-  </v-card>
+  </div>
 </template>
 
 <style scoped>
-.persona-sync-card {
-  position: relative;
-  overflow: hidden;
-}
-
-.persona-sync-card::after {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto auto;
-  width: 180px;
-  height: 180px;
-  background: radial-gradient(circle at top right, rgba(var(--v-theme-secondary), .13), transparent 68%);
-  pointer-events: none;
-}
-
-.sync-stat-strip,
-.sync-direction-grid {
+.persona-sync-workbench {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.sync-status-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
-.sync-stat-strip > div,
-.sync-direction-grid > div {
+.sync-status-strip > div {
   padding: 12px 14px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 14px;
   background: rgba(var(--v-theme-surface), .48);
 }
 
-.sync-stat-strip span,
-.sync-direction-grid span,
-.sync-peer-copy span,
-.sync-result-head span,
-.sync-subtitle span {
+.sync-status-strip span,
+.sync-peer-copy small,
+.sync-panel-heading span,
+.sync-files-toolbar p,
+.sync-files-footer span {
   display: block;
   color: rgba(var(--v-theme-on-surface), .62);
   font-size: 12px;
 }
 
-.sync-stat-strip b,
-.sync-direction-grid b {
+.sync-status-strip b {
   display: block;
   margin-top: 4px;
   font-size: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-workbench-layout {
+  display: grid;
+  grid-template-columns: minmax(250px, 310px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.sync-peer-panel,
+.sync-files-panel {
+  overflow: hidden;
+}
+
+.sync-peer-panel {
+  display: flex;
+  min-height: 570px;
+  flex-direction: column;
+}
+
+.sync-panel-heading,
+.sync-files-toolbar,
+.sync-files-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.sync-panel-heading {
+  padding: 16px;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.sync-panel-heading > div,
+.sync-files-footer > div {
+  min-width: 0;
+}
+
+.sync-panel-heading strong,
+.sync-files-footer strong {
+  display: block;
 }
 
 .sync-loading-row {
@@ -432,19 +584,40 @@ watch(() => props.peerVersion, () => {
   color: rgba(var(--v-theme-on-surface), .66);
 }
 
-.sync-peer-list {
-  display: grid;
-  gap: 8px;
+.sync-loading-row.compact {
+  min-height: 160px;
 }
 
-.sync-peer-row {
+.sync-peer-list {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.sync-peer-choice {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  border-radius: 15px;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sync-peer-choice:hover,
+.sync-peer-choice.selected {
+  border-color: rgba(var(--v-theme-secondary), .28);
+  background: rgba(var(--v-theme-secondary), .09);
+}
+
+.sync-peer-choice.disabled {
+  cursor: not-allowed;
+  opacity: .55;
 }
 
 .sync-peer-mark {
@@ -466,33 +639,143 @@ watch(() => props.peerVersion, () => {
   min-width: 0;
 }
 
-.sync-peer-copy strong {
+.sync-peer-copy strong,
+.sync-peer-copy small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sync-result {
-  padding: 14px;
-  border: 1px solid rgba(var(--v-theme-secondary), .28);
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(var(--v-theme-secondary), .09), rgba(var(--v-theme-surface), .35));
+.sync-peer-empty,
+.sync-files-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  min-height: 250px;
+  padding: 24px;
+  color: rgba(var(--v-theme-on-surface), .62);
+  text-align: center;
 }
 
-.sync-result-head,
-.sync-subtitle {
+.sync-peer-panel-foot {
+  display: flex;
+  gap: 7px;
+  margin-top: auto;
+  padding: 12px;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  flex-wrap: wrap;
+}
+
+.sync-peer-error {
+  flex: 0 0 auto;
+}
+
+.sync-files-panel {
+  display: flex;
+  min-height: 570px;
+  flex-direction: column;
+}
+
+.sync-files-toolbar {
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.sync-eyebrow {
+  color: rgb(var(--v-theme-secondary));
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .14em;
+}
+
+.sync-files-toolbar h2 {
+  margin: 2px 0 0;
+  font-size: 20px;
+}
+
+.sync-files-toolbar p {
+  margin: 2px 0 0;
+}
+
+.sync-files-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.changed-files-list {
+  display: grid;
+}
+
+.changed-file-row {
+  display: grid;
+  grid-template-columns: 28px 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 58px;
+  padding: 9px 16px;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.changed-file-marker {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  font: 800 12px/1 "Cascadia Mono", Consolas, monospace;
+  background: rgba(var(--v-theme-on-surface), .07);
+}
+
+.changed-file-marker.is-success { color: rgb(var(--v-theme-success)); background: rgba(var(--v-theme-success), .12); }
+.changed-file-marker.is-info { color: rgb(var(--v-theme-info)); background: rgba(var(--v-theme-info), .12); }
+.changed-file-marker.is-secondary { color: rgb(var(--v-theme-secondary)); background: rgba(var(--v-theme-secondary), .12); }
+.changed-file-marker.is-primary { color: rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), .12); }
+.changed-file-marker.is-warning { color: rgb(var(--v-theme-warning)); background: rgba(var(--v-theme-warning), .12); }
+.changed-file-marker.is-error { color: rgb(var(--v-theme-error)); background: rgba(var(--v-theme-error), .12); }
+
+.changed-file-copy {
+  min-width: 0;
+}
+
+.changed-file-copy strong,
+.changed-file-copy span,
+.changed-file-size span {
+  display: block;
+}
+
+.changed-file-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changed-file-copy span,
+.changed-file-size {
+  color: rgba(var(--v-theme-on-surface), .58);
+  font-size: 11px;
+}
+
+.changed-file-size {
+  min-width: 108px;
+  text-align: right;
+}
+
+.sync-files-footer {
+  padding: 14px 16px;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgba(var(--v-theme-surface), .76);
+}
+
+.sync-inline-empty {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.sync-result-head strong,
-.sync-result-head span {
-  display: inline;
-  margin-right: 8px;
+  gap: 8px;
+  min-height: 70px;
+  color: rgba(var(--v-theme-on-surface), .62);
 }
 
 .sync-conflicts {
@@ -578,18 +861,29 @@ button.sync-conflict-row:hover {
 }
 
 @media (max-width: 820px) {
-  .sync-stat-strip,
-  .sync-direction-grid,
+  .sync-status-strip,
+  .sync-workbench-layout,
   .sync-preview-grid {
     grid-template-columns: 1fr;
   }
 
-  .sync-peer-row {
-    grid-template-columns: auto minmax(0, 1fr);
+  .sync-peer-panel,
+  .sync-files-panel {
+    min-height: auto;
   }
 
-  .sync-peer-row .v-btn {
-    grid-column: 1 / -1;
+  .sync-files-toolbar,
+  .sync-files-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .changed-file-row {
+    grid-template-columns: 28px 24px minmax(0, 1fr);
+  }
+
+  .changed-file-size {
+    display: none;
   }
 }
 </style>

@@ -46,9 +46,29 @@ test("Manager identity-relation API stores a confirmed endpoint mapping and reso
   assert.equal(body.data.path, "identity-relations/events.jsonl");
   assert.equal(body.data.context.confirmedParticipant.displayName, "COTTON");
   assert.equal(body.data.context.endpoint.senderStableId, "200");
+
+  await put({ kind: "participant", participantId: "participant-new", participantKind: "unknown", displayName: "新群友", status: "candidate", aliases: [], evidenceRefs: [{ messageId: "m-new" }] });
+  await put({ kind: "endpoint_account", platform: "napcat", endpointIdentityNamespace: "instance:qq-main", senderStableId: "201", participantLinks: [{ participantId: "participant-new", status: "candidate", confidence: 0.1, evidenceRefs: [{ messageId: "m-new" }] }] });
+  const observationResponse = await fetch(`${endpoint}/observations`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      platform: "napcat",
+      endpointIdentityNamespace: "instance:qq-main",
+      senderStableId: "201",
+      participantId: "participant-new",
+      participantKind: "person",
+      participantDisplayName: "小林",
+      evidenceRefs: [{ conversationKey: "napcat:group:100", messageId: "m-introduce", note: "对方明确自称小林。" }]
+    })
+  });
+  assert.equal(observationResponse.status, 201);
+  const observationBody = await observationResponse.json() as Record<string, any>;
+  assert.equal(observationBody.data.participant.displayName, "小林");
+  assert.equal(observationBody.data.participant.status, "candidate");
 });
 
-test("Manager returns persisted conversation-situation shadow assessments for the persona page", async (t) => {
+test("Manager returns persisted conversation situation records for the persona page", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-conversation-situations-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   recordConversationSituation(path.join(root, "Xinghai"), "route-xinghai", "group_message", conversationSituationForIdentity(undefined, {

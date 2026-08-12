@@ -194,7 +194,7 @@ PC-side producers publish through RabiRoute when possible:
 POST /api/agent/send
 ```
 
-with a stable `deliveryId`, an exact `routeId`, `channel=rabilink`, `params.proactive=true`, an explicit device selector, and a text `payload` for task-free messages. After route policy passes, RabiRoute publishes to:
+with a stable `deliveryId`, caller `sender.agentType + sender.sessionId`, an exact `routeId`, `channel=rabilink`, `params.proactive=true`, an explicit device selector, and a text `payload` for task-free messages. After route policy passes, RabiRoute publishes to:
 
 ```http
 POST /worker/messages

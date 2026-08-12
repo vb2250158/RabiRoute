@@ -90,6 +90,7 @@ export const MAX_RECENT_MESSAGE_LIMIT = 200;
 
 export const DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL = "gpt-5.6-luna";
 export const DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT: CodexReasoningEffort = "medium";
+export const MAX_MESSAGE_PROCESSING_AGENTS = 32;
 
 export type MessageGroupingPolicy = {
   enabled?: boolean;
@@ -112,6 +113,7 @@ export type MessageProcessingAgentPolicy = {
   enabled?: boolean;
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
+  maxAgents?: number;
 };
 
 export type MessageProcessingAgentPolicies = Partial<Record<AgentAdapterType, MessageProcessingAgentPolicy>>;
@@ -170,6 +172,40 @@ export type NotificationScheduleDefinition = {
   onceAt?: string;
 };
 
+export type PersonaAutomationTriggerDefinition =
+  | {
+    type: "message";
+    routeKinds?: string[];
+    targetGroupId?: string;
+    allowedSpeakerNames?: string[];
+    regex?: string;
+  }
+  | {
+    type: "schedule";
+    schedule: NotificationScheduleDefinition;
+  };
+
+export type PersonaAutomationActionDefinition =
+  | {
+    type: "deliver_agent";
+    message?: string;
+    template?: string;
+  }
+  | {
+    type: "run_script";
+    scriptPath?: string;
+    arguments?: string[];
+    timeoutSeconds?: number;
+  };
+
+export type PersonaAutomationRuleDefinition = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  trigger: PersonaAutomationTriggerDefinition;
+  action: PersonaAutomationActionDefinition;
+};
+
 export type RouteProfileDefinition = {
   id: string;
   name?: string;
@@ -185,6 +221,8 @@ export type RouteProfileDefinition = {
   rolesDir?: string;
   dataDir?: string;
   routeVariables?: Record<string, string>;
+  automationRules?: PersonaAutomationRuleDefinition[];
+  personaAutomationScriptsEnabled?: boolean;
   notificationRules?: NotificationRuleDefinition[];
 };
 
@@ -254,6 +292,7 @@ export type GatewayDefinition = {
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   heartbeatSkipWhenAgentBusy?: boolean;
+  personaAutomationScriptsEnabled?: boolean;
   remoteAgentDefaultDeviceId?: string;
   remoteAgentDefaultCwd?: string;
   remoteAgentDefaultThreadName?: string;
@@ -311,6 +350,7 @@ export type GatewayDefinition = {
   recentMessageLimits?: RecentMessageLimits;
   speechPushMode?: SpeechPushMode;
   speechTriggerKeywords?: string[];
+  automationRules?: PersonaAutomationRuleDefinition[];
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
   roleRouteNames?: Record<string, string>;
@@ -426,10 +466,15 @@ export function normalizeMessageProcessingAgentPolicies(
       : DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL;
     const reasoningEffort = normalizeCodexReasoningEffort(policy?.reasoningEffort)
       ?? DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT;
+    const parsedMaxAgents = Math.floor(Number(policy?.maxAgents));
+    const maxAgents = Number.isFinite(parsedMaxAgents) && parsedMaxAgents > 0
+      ? Math.min(MAX_MESSAGE_PROCESSING_AGENTS, parsedMaxAgents)
+      : undefined;
     result[adapter] = {
       enabled: policy?.enabled === true,
       model,
-      reasoningEffort
+      reasoningEffort,
+      ...(maxAgents ? { maxAgents } : {})
     };
   }
   return result;
@@ -584,6 +629,191 @@ export function normalizeScheduleDefinitions(schedules: unknown): NotificationSc
       onceAt: type === "once_at" ? normalizeOptionalTimeString(raw.onceAt) : undefined
     };
   });
+}
+
+function normalizeAutomationAction(value: unknown): PersonaAutomationActionDefinition {
+  const raw = value && typeof value === "object"
+    ? value as Partial<PersonaAutomationActionDefinition> & Record<string, unknown>
+    : {};
+  if (raw.type === "run_script") {
+    return {
+      type: "run_script",
+      scriptPath: typeof raw.scriptPath === "string" ? raw.scriptPath.trim() : "",
+      arguments: Array.isArray(raw.arguments) ? raw.arguments.map(String) : [],
+      timeoutSeconds: Math.min(3600, Math.max(5, normalizePositiveNumber(raw.timeoutSeconds, 300)))
+    };
+  }
+  return {
+    type: "deliver_agent",
+    message: typeof raw.message === "string" ? normalizeTemplateText(raw.message) : "",
+    template: typeof raw.template === "string" ? normalizeTemplateText(raw.template) : ""
+  };
+}
+
+function normalizeAutomationTrigger(value: unknown, index: number): PersonaAutomationTriggerDefinition {
+  const raw = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  if (raw.type === "schedule") {
+    const schedule = normalizeScheduleDefinitions([raw.schedule])?.[0];
+    return {
+      type: "schedule",
+      schedule: schedule ?? {
+        id: `schedule-${index + 1}`,
+        enabled: true,
+        type: "interval",
+        intervalSeconds: 900
+      }
+    };
+  }
+  return {
+    type: "message",
+    routeKinds: Array.isArray(raw.routeKinds) ? raw.routeKinds.map(String) : [],
+    targetGroupId: typeof raw.targetGroupId === "string" ? raw.targetGroupId : "",
+    allowedSpeakerNames: Array.isArray(raw.allowedSpeakerNames)
+      ? raw.allowedSpeakerNames.map((item) => String(item).trim()).filter(Boolean)
+      : [],
+    regex: typeof raw.regex === "string" ? raw.regex : ""
+  };
+}
+
+export function normalizePersonaAutomationRules(value: unknown): PersonaAutomationRuleDefinition[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item, index) => {
+    const raw = item && typeof item === "object"
+      ? item as Partial<PersonaAutomationRuleDefinition>
+      : {};
+    return {
+      id: typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `automation-${index + 1}`,
+      name: typeof raw.name === "string" ? raw.name : undefined,
+      enabled: raw.enabled !== false,
+      trigger: normalizeAutomationTrigger(raw.trigger, index),
+      action: normalizeAutomationAction(raw.action)
+    };
+  });
+}
+
+export function mergePersonaAutomationRules(
+  ...ruleSets: Array<PersonaAutomationRuleDefinition[] | undefined>
+): PersonaAutomationRuleDefinition[] {
+  const merged: PersonaAutomationRuleDefinition[] = [];
+  const seen = new Set<string>();
+  for (const rules of ruleSets) {
+    for (const rule of rules ?? []) {
+      if (seen.has(rule.id)) continue;
+      seen.add(rule.id);
+      merged.push(rule);
+    }
+  }
+  return merged;
+}
+
+function notificationRuleAutomation(rule: NotificationRuleDefinition): PersonaAutomationRuleDefinition {
+  return {
+    id: rule.id,
+    name: rule.name,
+    enabled: rule.enabled !== false,
+    trigger: {
+      type: "message",
+      routeKinds: rule.routeKinds ?? [],
+      targetGroupId: rule.targetGroupId ?? "",
+      allowedSpeakerNames: rule.allowedSpeakerNames ?? [],
+      regex: rule.regex ?? ""
+    },
+    action: {
+      type: "deliver_agent",
+      template: rule.template ?? ""
+    }
+  };
+}
+
+export function personaAutomationRulesFromNotificationRules(
+  rules: NotificationRuleDefinition[] | undefined,
+  legacyIntervalSeconds = 900,
+  options: { includeSchedules?: boolean } = {}
+): PersonaAutomationRuleDefinition[] {
+  const normalizedRules = normalizeRuleDefinitions(rules) ?? [];
+  const automations = normalizedRules.map(notificationRuleAutomation);
+  if (options.includeSchedules === false) return automations;
+
+  for (const rule of normalizedRules) {
+    if (rule.enabled === false || !(rule.routeKinds ?? []).includes("heartbeat")) continue;
+    const schedules = rule.schedules?.length
+      ? rule.schedules
+      : [{
+        id: "legacy-interval",
+        name: rule.name || rule.id,
+        enabled: true,
+        type: "interval" as const,
+        intervalSeconds: normalizePositiveNumber(legacyIntervalSeconds, 900)
+      }];
+    for (const schedule of schedules) {
+      automations.push({
+        id: `scheduled-${rule.id}-${schedule.id}`,
+        name: schedule.name || rule.name || rule.id,
+        enabled: schedule.enabled !== false,
+        trigger: { type: "schedule", schedule },
+        action: {
+          type: "deliver_agent",
+          message: `定时计划触发：${rule.name || rule.id} / ${schedule.name || schedule.id}`,
+          template: rule.template ?? ""
+        }
+      });
+    }
+  }
+  return automations;
+}
+
+export function notificationRulesFromPersonaAutomations(
+  automations: PersonaAutomationRuleDefinition[] | undefined
+): NotificationRuleDefinition[] {
+  const rules: NotificationRuleDefinition[] = [];
+  for (const automation of normalizePersonaAutomationRules(automations)) {
+    if (automation.trigger.type !== "message" || automation.action.type !== "deliver_agent") continue;
+    rules.push({
+      id: automation.id,
+      name: automation.name,
+      enabled: automation.enabled !== false,
+      routeKinds: automation.trigger.routeKinds ?? [],
+      targetGroupId: automation.trigger.targetGroupId ?? "",
+      allowedSpeakerNames: automation.trigger.allowedSpeakerNames ?? [],
+      regex: automation.trigger.regex ?? "",
+      template: automation.action.template ?? ""
+    });
+  }
+  return rules;
+}
+
+export function ensureDefaultPersonaAutomations(
+  automations: PersonaAutomationRuleDefinition[] | undefined
+): PersonaAutomationRuleDefinition[] {
+  const normalized = normalizePersonaAutomationRules(automations);
+  if (!normalized.some((rule) => rule.id === "role-panel-message")) {
+    normalized.push(notificationRuleAutomation(defaultRolePanelNotificationRule()));
+  }
+  const rolePanelIndex = normalized.findIndex((rule) => rule.id === "role-panel-message");
+  if (rolePanelIndex >= 0 && rolePanelIndex < normalized.length - 1) {
+    const [rolePanelRule] = normalized.splice(rolePanelIndex, 1);
+    normalized.push(rolePanelRule);
+  }
+  return normalized;
+}
+
+export function ensureMessageAdapterAutomationRules(
+  automations: PersonaAutomationRuleDefinition[] | undefined,
+  adapters: MessageAdapterType[],
+  options: { includeRolePanel?: boolean } = {}
+): PersonaAutomationRuleDefinition[] {
+  const normalized = options.includeRolePanel === false
+    ? normalizePersonaAutomationRules(automations)
+    : ensureDefaultPersonaAutomations(automations);
+  const currentMessageRules = notificationRulesFromPersonaAutomations(normalized);
+  const ensuredMessageRules = ensureMessageAdapterNotificationRules(currentMessageRules, adapters);
+  const missing = ensuredMessageRules.filter((rule) => !currentMessageRules.some((current) => current.id === rule.id));
+  return mergePersonaAutomationRules(
+    normalized,
+    personaAutomationRulesFromNotificationRules(missing, 900, { includeSchedules: false })
+  );
 }
 
 export function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
@@ -899,11 +1129,14 @@ function normalizeRouteProfile(
 ): RouteProfileDefinition | null {
   const roleId = sanitizeRoleId(profile.agentRoleId);
   const id = sanitizeRoleId(profile.id) || roleId || `route-${index + 1}`;
-  const baseRules = normalizeRuleDefinitions(profile.notificationRules) ?? [];
+  const profileAutomations = normalizePersonaAutomationRules(profile.automationRules ?? definition.automationRules);
+  const baseRules = profileAutomations.length > 0
+    ? notificationRulesFromPersonaAutomations(profileAutomations)
+    : normalizeRuleDefinitions(profile.notificationRules) ?? [];
   const rules = gatewayAdapterTypes(definition).includes("speech")
     ? ensureSpeechRouteNotificationRule(baseRules)
     : baseRules;
-  if (rules.length === 0) {
+  if (rules.length === 0 && profileAutomations.length === 0) {
     return null;
   }
 
@@ -925,6 +1158,8 @@ function normalizeRouteProfile(
     rolesDir: profile.rolesDir?.trim() || rolesDir,
     dataDir: profile.dataDir?.trim() || dataDir,
     routeVariables: profile.routeVariables ?? definition.routeVariables ?? {},
+    automationRules: profileAutomations,
+    personaAutomationScriptsEnabled: profile.personaAutomationScriptsEnabled ?? definition.personaAutomationScriptsEnabled === true,
     notificationRules: rules
   };
 }
@@ -977,11 +1212,21 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     ? applySpeechRouteVariableDefaults(definition.routeVariables, agentRoleId || "Rabi")
     : definition.routeVariables;
   const configuredNotificationRules = normalizeRuleDefinitions(definition.notificationRules) ?? [];
+  const configuredAutomations = normalizePersonaAutomationRules(definition.automationRules);
   const hasPersonaOnlyRules = !agentRoleId && configuredNotificationRules.some(sharedIsBuiltinRolePanelRule);
   const baseNotificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
     ? configuredNotificationRules
     : defaultMessageAdapterNotificationRules(activeMessageAdapters);
-  const notificationRules = ensureMessageAdapterNotificationRules(baseNotificationRules, activeMessageAdapters);
+  const baseAutomations = configuredAutomations.length > 0
+    ? configuredAutomations
+    : personaAutomationRulesFromNotificationRules(
+      baseNotificationRules,
+      normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900)
+    );
+  const automationRules = ensureMessageAdapterAutomationRules(baseAutomations, activeMessageAdapters, {
+    includeRolePanel: false
+  });
+  const notificationRules = notificationRulesFromPersonaAutomations(automationRules);
   const recentMessageLimits = normalizeRecentMessageLimits(definition.recentMessageLimits, definition.recentMessageLimit);
   const speechPushMode = normalizeSpeechPushMode(definition.speechPushMode);
   const speechTriggerKeywords = normalizeSpeechTriggerKeywords(definition.speechTriggerKeywords);
@@ -1021,6 +1266,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     heartbeatIntervalSeconds: normalizePositiveNumber(definition.heartbeatIntervalSeconds, 900),
     heartbeatMessage: definition.heartbeatMessage ?? "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
     heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy === true,
+    personaAutomationScriptsEnabled: definition.personaAutomationScriptsEnabled === true,
     gatewayPort: primaryNapcat?.gatewayPort ?? definition.gatewayPort,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
     rabiLinkRelayEnabled: definition.rabiLinkRelayEnabled ?? Boolean(definition.rabiLinkRelayUrl?.trim()),
@@ -1075,6 +1321,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     recentMessageLimits,
     speechPushMode,
     speechTriggerKeywords,
+    automationRules,
     notificationRules,
     dataDir,
     rolesDir,
@@ -1097,6 +1344,8 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
       pipelinePreset,
       pipeline,
       routeVariables,
+      automationRules,
+      personaAutomationScriptsEnabled: definition.personaAutomationScriptsEnabled === true,
       notificationRules
     }, 0, definition, dataDir, rolesDir, options)].filter((profile): profile is RouteProfileDefinition => Boolean(profile))
   };

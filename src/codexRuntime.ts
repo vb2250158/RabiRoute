@@ -68,6 +68,7 @@ export type CodexThreadCreateParams = {
   cwd: string;
   developerInstructions: string;
   sandbox: CodexTurnSandbox;
+  onCreationStage?: (state: "thread_created" | "naming" | "initial_turn", threadId: string) => void;
 };
 
 export type CodexThreadCreateResult = CodexThreadSummary & {
@@ -344,6 +345,8 @@ async function bootstrapEmptyDesktopThread(params: CodexThreadCreateParams): Pro
     }) as { thread?: { id?: string } };
     const threadId = result.thread?.id;
     if (!threadId) throw new Error(`thread/start did not return thread id: ${JSON.stringify(result)}`);
+    params.onCreationStage?.("thread_created", threadId);
+    params.onCreationStage?.("naming", threadId);
     await client.request("thread/name/set", { threadId, name: params.title });
     return { client, threadId };
   } catch (error) {
@@ -383,6 +386,7 @@ async function deliverDesktopMessage(params: {
   sandbox: CodexTurnSandbox;
   model?: string;
   reasoningEffort?: CodexDesktopReasoningEffort;
+  imagePaths?: string[];
 }): Promise<CodexDesktopDelivery & { warning?: string }> {
   const preserveEmptyTaskTitle = !params.thread.firstUserMessage;
   const delivery = await desktopBridge.deliver({
@@ -391,7 +395,8 @@ async function deliverDesktopMessage(params: {
     cwd: params.thread.cwd,
     sandbox: params.sandbox,
     model: params.model,
-    reasoningEffort: params.reasoningEffort
+    reasoningEffort: params.reasoningEffort,
+    imagePaths: params.imagePaths
   });
   if (preserveEmptyTaskTitle) {
     try {
@@ -418,6 +423,14 @@ export async function listCodexThreads(options: {
   allowedWorkspaces: string[];
   stateDbOnly?: boolean;
 }): Promise<CodexThreadSummary[]> {
+  if (options.stateDbOnly) {
+    return listCodexDesktopThreads({
+      query: options.query,
+      limit: options.limit,
+      offset: options.offset,
+      allowedWorkspaces: options.allowedWorkspaces
+    }).map(asSummary);
+  }
   return (await listCodexDesktopThreadsWithMetadata(options)).map(asSummary);
 }
 
@@ -511,6 +524,7 @@ export async function createCodexThread(params: CodexThreadCreateParams): Promis
   };
   try {
     if (!normalizedParams.prompt.trim()) return created;
+    normalizedParams.onCreationStage?.("initial_turn", bootstrap.threadId);
     await desktopBridge.deliver({
       threadId: bootstrap.threadId,
       prompt: normalizedParams.prompt,
@@ -561,6 +575,7 @@ export async function sendCodexThreadMessage(params: {
   sandbox: CodexTurnSandbox;
   model?: string;
   reasoningEffort?: CodexDesktopReasoningEffort;
+  imagePaths?: string[];
 }): Promise<CodexDesktopDelivery & { warning?: string }> {
   const thread = await waitForCodexDesktopThreadForTest({ threadId: params.threadId, cwd: params.cwd });
   return deliverDesktopMessage({
@@ -568,7 +583,8 @@ export async function sendCodexThreadMessage(params: {
     prompt: params.prompt,
     sandbox: params.sandbox,
     model: params.model,
-    reasoningEffort: params.reasoningEffort
+    reasoningEffort: params.reasoningEffort,
+    imagePaths: params.imagePaths
   });
 }
 

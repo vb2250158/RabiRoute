@@ -53,7 +53,7 @@ data/roles/<RoleId>/identity-relations/events.jsonl
 
 账号的身份键固定为 `platform + endpointIdentityNamespace + senderStableId`；Route 配置 ID、显示名、头像和当前讨论主题都不是身份键。一个账号可以有候选或已确认的参与者映射；一个参与者可以关联多个账号。关系卡表达人与人、人与组织或人与项目之间的协作、汇报、决策范围等关系，并带有 `candidate`、`confirmed`、`corrected` 或 `retired` 状态、适用群/项目范围和最小证据引用。
 
-该资料只用于参与者解析，不能把平台权限、临时发言角色或一次讨论自动变成业务决策权。候选关系不能用于称呼、授权、项目归属或执行判断。消息投递会把适用于当前会话的项目关系卡列入“对话情境（影子判断）”，但这只表示可以参与讨论，不表示可管理该项目的计划、任务或长期记忆。多电脑同步会并集合并事件；同一记录出现不一致的并发事件头时，当前视图明确标记冲突并停止自动确认，不能按文件顺序任选一条。人格提交包含全部关键字段的一次修正，会 supersede 当前全部事件头并让后续同步收敛。处理端可通过身份关系 API 显式确认或纠正；消息投递时的身份关系上下文不要求提交计划/记忆回调。
+该资料只用于参与者解析，不能把平台权限、临时发言角色或一次讨论自动变成业务决策权。候选关系不能用于称呼、授权、项目归属或执行判断。消息投递会把适用于当前会话的项目关系卡列入“情景记录”，但这只表示可以参与讨论，不表示可管理该项目的计划、任务或长期记忆。多电脑同步会并集合并事件；同一记录出现不一致的并发事件头时，当前视图明确标记冲突并停止自动确认，不能按文件顺序任选一条。人格提交包含全部关键字段的一次修正，会 supersede 当前全部事件头并让后续同步收敛。处理端可通过身份关系 API 显式确认或纠正；消息投递时的身份关系上下文不要求提交计划/记忆回调。
 
 ## 计划机制
 
@@ -319,7 +319,7 @@ GET /api/roles/:roleId/knowledge-validation
 
 聊天记录、语音转写和心跳事件属于原始事件日志。Agent 本身可以按路径或工具查询这些日志，所以托盘面板不需要把聊天记录伪装成记忆展示。记忆应该是 Agent 看过上下文之后，认为以后仍有价值而主动写入的内容。
 
-记忆不需要计划状态。记忆不是待办事项，不需要 `未开始`、`进行中`、`暂停`、`已完成` 或 `已归档`。记忆可以有来源、记录时间、更新时间、适用范围或置信度，但这些只是元信息，不表示生命周期。
+记忆不使用计划的五种状态。页面按记忆自身的生命周期分成三类：尚未沉淀的近期记忆、整理后仍可召回的沉淀记忆，以及已经作为沉淀输入的归档来源。归档来源以 `consolidatedAt` 为准，不新增一套计划状态字段。
 
 推荐目录：
 
@@ -336,7 +336,7 @@ data/roles/<RoleId>/memory/
 memory/recent/*.md
 ```
 
-近期记忆由 Agent 主动新增或更新。它记录最近一段时间里 Agent 认为值得保留的事实、偏好、判断、阶段性结论或上下文摘要。近期记忆可以通过记忆 ID 修改。
+近期记忆由 Agent 主动新增或更新。它记录最近一段时间里 Agent 认为值得保留的事实、偏好、判断、阶段性结论或上下文摘要。近期记忆可以通过记忆 ID 修改。写入 `consolidatedAt` 后，来源文件继续保留在 `memory/recent/` 供审计追溯，但 Manager 会把它归入“已归档”，不再计入或显示为近期记忆。
 
 沉淀记忆：
 
@@ -344,7 +344,7 @@ memory/recent/*.md
 memory/consolidated/*.md
 ```
 
-沉淀记忆由 RabiRoute 的定时总结流程生成。它是近期记忆经过总结后的稳定记录。沉淀记忆生成后，Agent 不能直接修改已有条目；如果需要修正，只能新增近期记忆说明修正原因，再由下一轮沉淀流程生成新的沉淀记录。
+沉淀记忆由 RabiRoute 的定时总结流程生成。它是近期记忆经过总结后的稳定记录，在页面中使用独立的“沉淀记忆”标签并继续参与正常召回。沉淀记忆生成后，Agent 不能直接修改已有条目；如果需要修正，只能新增近期记忆说明修正原因，再由下一轮沉淀流程生成新的沉淀记录。
 
 记忆总结记录：
 
@@ -542,7 +542,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 长计划列表可使用 `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary&view=<current|plans|archived>&query=<text>` 分页读取当前分类和搜索条件下的轻量摘要，再按 ID 调用 `GET /api/roles/:roleId/plans/:planId` 获取正文、步骤、审批与附件元数据。WebGUI 首屏只读取 8 条摘要，不再在后台自动扫完其余计划；用户滚动到加载位置时才继续取下一页。左侧目录消费已经返回的摘要，右侧正文只挂载一个有界窗口并随滚动向后追加。目录跳转会把窗口起点移到目标计划，既不要求先创建全部前置正文，也不在后续加载时把旧卡片插回当前阅读位置上方。WebGUI 让视口附近详情进入最多两个并发请求的队列；只有真实请求中的卡片显示加载动画，离屏卡片使用紧凑未加载状态和浏览器 `content-visibility`，避免几十个 Vuetify 骨架同时占用主线程。Manager 对计划列表使用两层增量缓存，并对同一份未变化的计划目录复用已经整理和排序的展示结果；目录 watcher 合并短时间内连续的文件写入事件，逐文件缓存按 `size + mtimeMs` 在后台异步读取和归一化发生变化的计划 JSON。规范的 POST/PATCH 写入会直接更新对应缓存项并立即可见；文件系统不支持 watcher 时回退到短 TTL 校验。缓存只保存派生读取结果，计划文件仍是唯一事实源。
 
-记忆列表可使用 `GET /api/roles/:roleId/memory?kind=<recent|consolidated>&limit=24&cursor=<offset>&query=<text>` 分页读取。WebGUI 只请求当前可见的近期记忆或沉淀记忆，首屏最多 24 条，滚动后再继续读取；不会在打开页面时同时传回全部记忆。Manager 对未变化的近期记忆和沉淀记忆目录复用解析结果，文件变化后立即使对应缓存失效。浏览器标签页隐藏时，知识页停止继续加载、断开自己的 Manager 事件连接并忽略旧请求结果；标签页重新可见后只补查一次当前分类。
+记忆列表可使用 `GET /api/roles/:roleId/memory?kind=<recent|consolidated|archived>&limit=24&cursor=<offset>&query=<text>` 分页读取。WebGUI 只请求当前可见的近期、沉淀或已归档记忆分类，首屏最多 24 条，滚动后再继续读取；不会在打开页面时同时传回全部记忆。Manager 对未变化的记忆目录复用解析结果，文件变化后立即使对应缓存失效。浏览器标签页隐藏时，知识页停止继续加载、断开自己的 Manager 事件连接并忽略旧请求结果；标签页重新可见后只补查一次当前分类。
 
 计划接口可以新增计划、更新已有计划、修改状态、更新下一步或归档。记忆接口可以新增近期记忆，也可以通过记忆 ID 修改近期记忆。沉淀记忆不提供直接修改接口。
 
@@ -618,7 +618,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。审批输入继续支持文件、剪贴板图片和 `@` 计划附件引用；新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
+RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批输入复用同一套附件上传能力：可以选择文件，也可以从剪贴板粘贴文件或图片；审批正文继续支持使用 `@` 引用计划已有附件。新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
 
 Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视为整个计划的方向输入；如果范围、优先级、方法或后续路径变化，显式 `PATCH` 计划并同步调整尚未开始的步骤，随后以 `kind=guidance_response`、`author=agent`、`notifyAgent=false` 回写同一 `planId`，且不带 `stepId`。收到 `approval_suggestion` 时仍更新对应计划/步骤与审批回执，并以 `approval_response` 回写同一 `planId / stepId`。两种记录本身都不会自动推进计划。
 
@@ -642,7 +642,7 @@ Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批门真
 
 对新增细分状态，`waiting_package` 返回 `frozen_until_package + wait_for_target_package`，无独立动作的跨计划依赖返回 `frozen_until_dependencies` 且 `requiredAction=null`，真实测试环境等待返回 `frozen_until_test_environment + wait_for_test_environment`，等待重新授权返回 `waiting_for_authorization + request_authorization`；这些等待的 `implementationDispatchAllowed` 都是 `false`。已有真实 QA 回执且只等结论时返回 `waiting_result + wait_for_qa_result` 并禁止实施投递；缺回执但仍可发送或修复时返回 `actionable + send_qa_request`。CLI 或替代验证仍可执行时保持 `actionable`；普通外部资料继续使用 `inquire_until_result`。
 
-Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶段汇总、视图分类、状态色板和既有顺序。两端重叠分类统一为“当前 / 计划 / 近期记忆 / 已归档”：当前包含进行中计划与近期记忆，暂停计划只进入计划分类，已归档包含归档计划与沉淀记忆。两端不直接读取 `data/`，也不各自维护状态识别、分类、状态颜色或排序规则；缺失 `presentation` 时只显示中性“状态未知”，不根据生命周期字段猜测真实阶段。
+Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶段汇总、视图分类、状态色板和既有顺序。RibiWebGUI 使用“当前计划 / 近期记忆 / 沉淀记忆 / 已归档”四个标签；已归档同时包含归档计划和带 `consolidatedAt` 的来源记忆。Qt 托盘继续使用自身的紧凑分类，但两端都不直接读取 `data/`，也不各自维护状态识别、状态颜色或排序规则；缺失 `presentation` 时只显示中性“状态未知”，不根据生命周期字段猜测真实阶段。
 
 ## 托盘视图
 

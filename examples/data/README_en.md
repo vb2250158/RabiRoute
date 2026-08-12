@@ -14,7 +14,7 @@ The pack provides:
 
 - A complete `route/main/adapterConfig.json` named **Rabi Demo** for QQ/NapCat and heartbeat input. Its `agentRoleId: "Rabi"` binds the Rabi persona.
 - The default `roles/Rabi` persona and the RabiLink-specific `roles/RabiActive` persona.
-- `personaConfig.json` message rules and recent-message limits.
+- `personaConfig.json` automation rules and recent-message limits. The example includes message-to-Agent and schedule-to-Agent rules and does not run scripts by default.
 - Public plan and memory directory structures.
 - A platform-neutral one-plan/one-task tracking skill example.
 - A disabled RabiLink Route that demonstrates a record-first observation ledger, idle or periodic review, and proactive downstream replies.

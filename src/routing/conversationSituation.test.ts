@@ -6,6 +6,7 @@ test("conversation situation exposes scoped project discussion without granting 
   const situation = conversationSituationForIdentity({
     endpoint: { id: "account", platform: "napcat", endpointIdentityNamespace: "bot:1", senderStableId: "200" },
     confirmedParticipant: { id: "participant-cotton", kind: "person", displayName: "COTTON", aliases: [], status: "confirmed", evidenceRefs: [], updatedAt: "2026-08-10T00:00:00.000Z" },
+    possibleParticipants: [],
     candidateParticipants: [],
     relevantRelations: [{
       id: "relation-edge-space", subjectParticipantId: "participant-cotton", targetKind: "project", targetId: "edge-space",

@@ -98,6 +98,37 @@ test("RabiLink explicit proactivity preference stays an observation fact instead
   assert.equal(result.entry.routeProfileId, "route-companion");
 });
 
+test("RabiLink ledger reads sanitize malformed persisted identity endpoints", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-rabilink-ledger-identity-sanitize-"));
+  fs.writeFileSync(rabiLinkConversationLedgerPath(dataDir), `${JSON.stringify({
+    schemaVersion: 1,
+    entryId: "rabilink-user:malformed-identity",
+    recordedAt: "2026-07-24T10:00:00.000Z",
+    direction: "user_to_agent",
+    kind: "voice_transcript",
+    text: "旧记录里混入了损坏的身份端点",
+    requiresReview: true,
+    identityEndpoints: [
+      null,
+      { platform: "voice" },
+      {
+        platform: "rabilink",
+        endpointIdentityNamespace: "relay:rabilink",
+        senderStableId: "phone-one",
+        displayName: "Phone"
+      }
+    ]
+  })}\n`, "utf8");
+
+  assert.deepEqual(readRabiLinkConversationEntries(dataDir)[0]?.identityEndpoints, [{
+    platform: "rabilink",
+    endpointIdentityNamespace: "relay:rabilink",
+    senderStableId: "phone-one",
+    displayName: "Phone",
+    conversationKey: undefined
+  }]);
+});
+
 test("RabiLink conversation ledger mechanically archives an old session by date without summaries", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-rabilink-ledger-archive-"));
   const splitAfterMs = 2 * 60 * 60 * 1000;

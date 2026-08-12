@@ -102,6 +102,74 @@ test("message context time windows do not read indexed archives outside the requ
   }
 });
 
+test("message context archive index drops contained snapshots without rereading their bodies", () => {
+  const dir = temporaryDir("message-context-contained-archives");
+  const archiveDir = path.join(dir, "conversation", "archive");
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const first = path.join(archiveDir, "1~2.jsonl");
+  const covering = path.join(archiveDir, "1~3.jsonl");
+  fs.writeFileSync(first, "invalid legacy snapshot that must not be read\n", "utf8");
+  fs.writeFileSync(covering, "invalid covering snapshot that must not be read\n", "utf8");
+  fs.writeFileSync(messageContextArchiveIndexPath(dir), `${JSON.stringify({
+    schemaVersion: 1,
+    nextSequence: 4,
+    archives: [
+      { file: "1~2.jsonl", startedAt: "2026-08-01T00:00:00.000Z", endedAt: "2026-08-01T00:01:00.000Z", entryCount: 2, firstSequence: 1, lastSequence: 2 },
+      { file: "1~3.jsonl", startedAt: "2026-08-01T00:00:00.000Z", endedAt: "2026-08-01T00:02:00.000Z", entryCount: 3, firstSequence: 1, lastSequence: 3 }
+    ]
+  })}\n`, "utf8");
+
+  const originalReadFileSync = fs.readFileSync;
+  const archiveReads: string[] = [];
+  fs.readFileSync = ((target: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (typeof target === "string" && /^\d+~\d+\.jsonl$/i.test(path.basename(target)) && path.dirname(path.resolve(target)) === path.resolve(archiveDir)) {
+      archiveReads.push(path.basename(target));
+    }
+    return originalReadFileSync(target, ...(args as [never]));
+  }) as typeof fs.readFileSync;
+  try {
+    const index = readMessageContextArchiveIndex(dir);
+    assert.deepEqual(index.archives.map(item => item.file), ["1~3.jsonl"]);
+    assert.deepEqual(archiveReads, []);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+});
+
+test("message context archive discovery reads only maximal snapshots when the index is missing", () => {
+  const dir = temporaryDir("message-context-discovered-overlap");
+  const archiveDir = path.join(dir, "conversation", "archive");
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const records = [1, 2, 3].map(sequence => JSON.stringify({
+    schemaVersion: 1,
+    id: `record-${sequence}`,
+    sequence,
+    recordedAt: `2026-08-01T00:0${sequence}:00.000Z`,
+    time: Date.UTC(2026, 7, 1, 0, sequence, 0) / 1_000,
+    direction: "inbound",
+    adapter: "napcat",
+    text: `record ${sequence}`
+  }));
+  fs.writeFileSync(path.join(archiveDir, "1~2.jsonl"), `${records.slice(0, 2).join("\n")}\n`, "utf8");
+  fs.writeFileSync(path.join(archiveDir, "1~3.jsonl"), `${records.join("\n")}\n`, "utf8");
+
+  const originalReadFileSync = fs.readFileSync;
+  const archiveReads: string[] = [];
+  fs.readFileSync = ((target: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (typeof target === "string" && /^\d+~\d+\.jsonl$/i.test(path.basename(target)) && path.dirname(path.resolve(target)) === path.resolve(archiveDir)) {
+      archiveReads.push(path.basename(target));
+    }
+    return originalReadFileSync(target, ...(args as [never]));
+  }) as typeof fs.readFileSync;
+  try {
+    const index = readMessageContextArchiveIndex(dir);
+    assert.deepEqual(index.archives.map(item => item.file), ["1~3.jsonl"]);
+    assert.deepEqual(archiveReads, ["1~3.jsonl"]);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+});
+
 test("message context does not archive a 24h-old prefix until a record exceeds 72h", () => {
   const dir = temporaryDir("message-context-no-archive");
   const now = Date.UTC(2026, 6, 21, 12, 0, 0);

@@ -16,6 +16,8 @@ import {
   rabiLinkConversationLedgerPath,
   type RabiLinkConversationEntry
 } from "./rabilinkConversationLedger.js";
+import { observeIdentityEndpoint, resolveIdentityRelationContext, type IdentityEndpointLookup } from "./identityRelations.js";
+import { identityContextLines } from "./routing/identityContext.js";
 
 const DEFAULT_REVIEW_INTERVAL_MS = 5000;
 const DEFAULT_REVIEW_SETTLE_MS = 4000;
@@ -40,6 +42,7 @@ export type RabiLinkConversationReviewerOptions = {
   routeProfileId: string;
   gatewayManagerUrl: string;
   agentRolePath?: string;
+  agentRoleId?: string;
   autoReviewEnabled?: boolean;
   continuousReflectionEnabled?: boolean;
   intervalMs?: number;
@@ -148,6 +151,8 @@ export function buildRabiLinkConversationReviewPrompt(input: {
   reviewPolicyPath?: string;
   pendingUserEntries: RabiLinkConversationEntry[];
   pendingRouteProfileIds?: string[];
+  identityLines?: string[];
+  identityObservationUrl?: string;
   manual: boolean;
   reflection?: boolean;
 }): string {
@@ -185,6 +190,10 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     `新增范围：${first?.entryId || "无新增用户记录"} -> ${last?.entryId || "无新增用户记录"}`,
     `本次涉及 Route：${input.pendingRouteProfileIds?.join(", ") || input.routeProfileId}`,
     `当前人格：${input.agentRolePath || "使用当前线程已绑定人格"}`,
+    input.identityLines?.length ? `[身份定位]\n${input.identityLines.join("\n")}` : "",
+    input.identityObservationUrl
+      ? `本次若出现新的、可核对身份线索，只能 POST ${input.identityObservationUrl} 追加候选观察；说话习惯一致性可以辅助共用账号的本条消息归因，但不能单独确认身份。`
+      : "",
     input.reviewPolicyPath ? `主动审阅策略：${input.reviewPolicyPath}` : "主动审阅策略：使用本提示中的默认策略",
     "",
     "必须执行：",
@@ -210,6 +219,7 @@ export class RabiLinkConversationReviewer {
   private readonly routeProfileId: string;
   private readonly gatewayManagerUrl: string;
   private readonly agentRolePath: string;
+  private readonly agentRoleId: string;
   private readonly autoReviewEnabled: boolean;
   private readonly continuousReflectionEnabled: boolean;
   private readonly intervalMs: number;
@@ -229,6 +239,7 @@ export class RabiLinkConversationReviewer {
     this.routeProfileId = options.routeProfileId;
     this.gatewayManagerUrl = options.gatewayManagerUrl.replace(/\/+$/, "");
     this.agentRolePath = options.agentRolePath ? path.resolve(options.agentRolePath) : "";
+    this.agentRoleId = options.agentRoleId?.trim() || "";
     this.autoReviewEnabled = options.autoReviewEnabled !== false;
     this.continuousReflectionEnabled = options.continuousReflectionEnabled !== false;
     this.intervalMs = boundedNumber(options.intervalMs, DEFAULT_REVIEW_INTERVAL_MS, 1000, 60000);
@@ -372,6 +383,24 @@ export class RabiLinkConversationReviewer {
       return { status: "settling", pendingUserCount: pendingUserEntries.length, manual: false, reflection: false };
     }
 
+    const identityEndpoints = new Map<string, IdentityEndpointLookup>();
+    for (const entry of pendingUserEntries) for (const endpoint of entry.identityEndpoints ?? []) {
+      identityEndpoints.set(`${endpoint.platform}\0${endpoint.endpointIdentityNamespace}\0${endpoint.senderStableId}`, endpoint);
+    }
+    const identityLines: string[] = [];
+    if (this.agentRolePath && identityEndpoints.size > 0) {
+      const roleDir = path.dirname(this.agentRolePath);
+      let index = 0;
+      for (const endpoint of identityEndpoints.values()) {
+        observeIdentityEndpoint(roleDir, endpoint);
+        const context = resolveIdentityRelationContext(roleDir, endpoint);
+        if (!context) continue;
+        index += 1;
+        if (identityEndpoints.size > 1) identityLines.push(`消息端账号 ${index}：`);
+        identityLines.push(...identityContextLines(context));
+      }
+    }
+
     const reviewPolicyPath = this.agentRolePath
       ? path.join(path.dirname(this.agentRolePath), "prompts", "rabilink-proactive-review.md")
       : "";
@@ -389,6 +418,10 @@ export class RabiLinkConversationReviewer {
       reviewPolicyPath: reviewPolicyPath && fs.existsSync(reviewPolicyPath) ? reviewPolicyPath : undefined,
       pendingUserEntries,
       pendingRouteProfileIds,
+      identityLines,
+      identityObservationUrl: this.agentRoleId
+        ? `${this.gatewayManagerUrl}/api/roles/${encodeURIComponent(this.agentRoleId)}/identity-relations/observations`
+        : undefined,
       manual,
       reflection
     });
@@ -456,6 +489,7 @@ export function startDefaultRabiLinkConversationReviewer(): RabiLinkConversation
     routeProfileId: process.env.GATEWAY_ID?.trim() || config.routeProfiles[0]?.id || "rabilink",
     gatewayManagerUrl: process.env.GATEWAY_MANAGER_URL?.trim() || "http://127.0.0.1:8790",
     agentRolePath: config.agentRolePath,
+    agentRoleId: config.agentRoleId,
     autoReviewEnabled,
     continuousReflectionEnabled: optionalBoolean(variables.rabilinkContinuousReflection, autoReviewEnabled),
     intervalMs: boundedNumber(variables.rabilinkReviewIntervalMs, DEFAULT_REVIEW_INTERVAL_MS, 1000, 60000),

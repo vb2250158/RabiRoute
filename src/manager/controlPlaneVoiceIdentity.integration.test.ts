@@ -8,6 +8,7 @@ import {
   handleManagerEventApi,
   handleManagerPersonaDomainApi
 } from "./controlPlaneRoutes.js";
+import { updateIdentityRelation } from "../identityRelations.js";
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -87,6 +88,38 @@ test("Manager persona-domain HTTP route accepts voice identity PUT and publishes
   const baseUrl = `http://127.0.0.1:${port}`;
   const roleId = "Rabi-A";
   const rolePath = encodeURIComponent(roleId);
+  updateIdentityRelation(path.join(root, roleId), {
+    kind: "participant",
+    participantId: "participant-owner",
+    participantKind: "person",
+    displayName: "Current user",
+    status: "confirmed"
+  });
+
+  const invalidParticipantResponse = await fetch(`${baseUrl}/api/roles/${rolePath}/voice-identities`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      sourceHostId: "host-one",
+      voiceprintId: "voiceprint-invalid",
+      participantId: "missing-participant"
+    })
+  });
+  assert.equal(invalidParticipantResponse.status, 400);
+  assert.match(String((await invalidParticipantResponse.json() as Record<string, unknown>).message), /confirmed identity/);
+
+  const invalidParticipantTypeResponse = await fetch(`${baseUrl}/api/roles/${rolePath}/voice-identities`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      sourceHostId: "host-one",
+      voiceprintId: "voiceprint-invalid-type",
+      participantId: 42
+    })
+  });
+  assert.equal(invalidParticipantTypeResponse.status, 400);
+  assert.match(String((await invalidParticipantTypeResponse.json() as Record<string, unknown>).message), /string, null, or omitted/);
+
   let putStatus = 0;
   let putBody: Record<string, any> = {};
   const event = await waitForManagerEvent<{ roleId: string; appended: boolean; deleted: boolean }>(
@@ -100,6 +133,7 @@ test("Manager persona-domain HTTP route accepts voice identity PUT and publishes
           sourceHostId: "host-one",
           sourceHostName: "Workstation",
           voiceprintId: "voiceprint-one",
+          participantId: "participant-owner",
           displayName: "Current user",
           relationship: "self",
           isUser: true,
@@ -115,6 +149,7 @@ test("Manager persona-domain HTTP route accepts voice identity PUT and publishes
   assert.equal(putBody.code, 0);
   assert.equal(putBody.data.appended, true);
   assert.equal(putBody.data.identity.isUser, true);
+  assert.equal(putBody.data.identity.participantId, "participant-owner");
   assert.deepEqual(event, { roleId, appended: true, deleted: false });
 
   const listResponse = await fetch(`${baseUrl}/api/roles/${rolePath}/voice-identities`);
@@ -124,12 +159,50 @@ test("Manager persona-domain HTTP route accepts voice identity PUT and publishes
   assert.equal(listBody.data.identities.length, 1);
   assert.equal(listBody.data.identities[0].sourceHostId, "host-one");
   assert.equal(listBody.data.identities[0].voiceprintId, "voiceprint-one");
+  assert.equal(listBody.data.identities[0].participantId, "participant-owner");
   assert.equal(listBody.data.identities[0].isUser, true);
+
+  const identityRelationsResponse = await fetch(`${baseUrl}/api/roles/${rolePath}/identity-relations`);
+  assert.equal(identityRelationsResponse.status, 200);
+  const identityRelationsBody = await identityRelationsResponse.json() as Record<string, any>;
+  const voiceAccount = identityRelationsBody.data.endpointAccounts.find((item: Record<string, any>) =>
+    item.platform === "voice"
+    && item.endpointIdentityNamespace === "host:host-one"
+    && item.senderStableId === "voiceprint-one"
+  );
+  assert.ok(voiceAccount);
+  assert.deepEqual(voiceAccount.participantLinks.map((link: Record<string, any>) => ({
+    participantId: link.participantId,
+    status: link.status
+  })), [{ participantId: "participant-owner", status: "confirmed" }]);
 
   const filePath = path.join(root, roleId, "voice", "voice-identities.jsonl");
   const persisted = fs.readFileSync(filePath, "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line) as Record<string, unknown>);
   assert.equal(persisted.length, 1);
   assert.equal(persisted[0]?.sourceHostId, "host-one");
   assert.equal(persisted[0]?.voiceprintId, "voiceprint-one");
+  assert.equal(persisted[0]?.participantId, "participant-owner");
   assert.equal(persisted[0]?.isUser, true);
+
+  const unlinkResponse = await fetch(`${baseUrl}/api/roles/${rolePath}/voice-identities`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      sourceHostId: "host-one",
+      voiceprintId: "voiceprint-one",
+      participantId: null
+    })
+  });
+  assert.equal(unlinkResponse.status, 201);
+
+  const afterUnlinkResponse = await fetch(`${baseUrl}/api/roles/${rolePath}/identity-relations`);
+  assert.equal(afterUnlinkResponse.status, 200);
+  const afterUnlinkBody = await afterUnlinkResponse.json() as Record<string, any>;
+  const unlinkedVoiceAccount = afterUnlinkBody.data.endpointAccounts.find((item: Record<string, any>) =>
+    item.platform === "voice"
+    && item.endpointIdentityNamespace === "host:host-one"
+    && item.senderStableId === "voiceprint-one"
+  );
+  assert.ok(unlinkedVoiceAccount);
+  assert.deepEqual(unlinkedVoiceAccount.participantLinks.map((link: Record<string, any>) => link.status), ["retired"]);
 });

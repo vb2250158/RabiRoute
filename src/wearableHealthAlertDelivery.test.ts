@@ -40,6 +40,9 @@ test("wearable health alert delivery targets the configured role without leaking
   });
   assert.equal(record.routeProfileId, "YeYu");
   assert.equal(record.adapterType, "wearable");
+  assert.equal(record.identityNamespace, "relay:rabilink");
+  assert.equal(record.senderStableId, "watch-1");
+  assert.equal(record.senderIdentityTrusted, true);
   assert.match(record.rawMessage, /135 bpm/);
   assert.match(record.rawMessage, /\/api\/roles\/YeYu\/health\/history/);
   assert.deepEqual(wearableHealthAlertTemplateValues(alert), {

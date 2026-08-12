@@ -20,102 +20,159 @@
     "feishu": 12
   },
   "speechTriggerKeywords": [],
-  "notificationRules": [
+  "automationRules": [
     {
       "id": "rabi-group-keywords",
       "name": "Rabi 看板娘呼唤",
       "enabled": true,
-      "routeKinds": [
-        "group_message"
-      ],
-      "targetGroupId": "",
-      "allowedSpeakerNames": [],
-      "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒|怎么配|路由|人格|Agent|连接|状态",
-      "template": ""
+      "trigger": {
+        "type": "message",
+        "routeKinds": [
+          "group_message"
+        ],
+        "targetGroupId": "",
+        "allowedSpeakerNames": [],
+        "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒|怎么配|路由|人格|Agent|连接|状态"
+      },
+      "action": {
+        "type": "deliver_agent",
+        "message": "",
+        "template": ""
+      }
     },
     {
       "id": "rabi-direct-reply",
       "name": "Rabi 直接回复陪伴",
       "enabled": true,
-      "routeKinds": [
-        "direct_reply"
-      ],
-      "targetGroupId": "",
-      "allowedSpeakerNames": [],
-      "regex": "",
-      "template": ""
+      "trigger": {
+        "type": "message",
+        "routeKinds": [
+          "direct_reply"
+        ],
+        "targetGroupId": "",
+        "allowedSpeakerNames": [],
+        "regex": ""
+      },
+      "action": {
+        "type": "deliver_agent",
+        "message": "",
+        "template": ""
+      }
     },
     {
       "id": "rabi-indirect-reply",
       "name": "Rabi 回复链陪伴",
       "enabled": true,
-      "routeKinds": [
-        "indirect_reply"
-      ],
-      "targetGroupId": "",
-      "allowedSpeakerNames": [],
-      "regex": "",
-      "template": ""
+      "trigger": {
+        "type": "message",
+        "routeKinds": [
+          "indirect_reply"
+        ],
+        "targetGroupId": "",
+        "allowedSpeakerNames": [],
+        "regex": ""
+      },
+      "action": {
+        "type": "deliver_agent",
+        "message": "",
+        "template": ""
+      }
     },
     {
       "id": "rabi-private",
       "name": "Rabi 私聊陪伴",
       "enabled": true,
-      "routeKinds": [
-        "private"
-      ],
-      "targetGroupId": "",
-      "allowedSpeakerNames": [],
-      "regex": "",
-      "template": ""
+      "trigger": {
+        "type": "message",
+        "routeKinds": [
+          "private"
+        ],
+        "targetGroupId": "",
+        "allowedSpeakerNames": [],
+        "regex": ""
+      },
+      "action": {
+        "type": "deliver_agent",
+        "message": "",
+        "template": ""
+      }
     },
     {
       "id": "rabi-heartbeat",
       "name": "Rabi 看板娘成长自检",
       "enabled": true,
-      "routeKinds": [
-        "heartbeat"
-      ],
-      "targetGroupId": "",
-      "allowedSpeakerNames": [],
-      "regex": "",
-      "template": "这是全计划效率巡检。先完整读取角色目录 skills/one-plan-one-task-tracking.md；枚举全部未终态计划，读取每个绑定会话任务的真实状态。所有未暂停且没有 Manager 派生审批阻塞的计划都必须确保任务处于 starting/active/in-progress；idle、failed 或 systemError 时在本轮立即续接或恢复。先由领域 Skill 判定当前动作是否真的需要审批；确需审批时补齐完整 approvalRequest 并设 responseStatus=pending，由 Manager 自动派生阻塞，isBlocked 不得手写。待 QA、缺资料、执行失败、工具超时都必须继续询问、重试、改道、拆分、升级或补证据；目标产物身份、owner 回执或外部产物不自动变成审批。领域 Skill 确认命中默认授权时，必须同轮清除旧审批阻塞、更新回执并续投原任务；审批通过、否决、要求调整或取消后也同轮更新回执并推进。结束前校验可推进但空闲的计划数为 0，且所有等待项都有本轮推进动作或失败证据。"
+      "trigger": {
+        "type": "schedule",
+        "schedule": {
+          "id": "rabi-growth-check-interval",
+          "name": "每 15 分钟",
+          "enabled": true,
+          "type": "interval",
+          "intervalSeconds": 900
+        }
+      },
+      "action": {
+        "type": "deliver_agent",
+        "message": "执行全计划效率巡检。",
+        "template": "这是全计划效率巡检。先完整读取角色目录 skills/one-plan-one-task-tracking.md；枚举全部未终态计划，读取每个绑定会话任务的真实状态。所有未暂停且没有 Manager 派生审批阻塞的计划都必须确保任务处于 starting/active/in-progress；idle、failed 或 systemError 时在本轮立即续接或恢复。先由领域 Skill 判定当前动作是否真的需要审批；确需审批时补齐完整 approvalRequest 并设 responseStatus=pending，由 Manager 自动派生阻塞，isBlocked 不得手写。待 QA、缺资料、执行失败、工具超时都必须继续询问、重试、改道、拆分、升级或补证据；目标产物身份、owner 回执或外部产物不自动变成审批。领域 Skill 确认命中默认授权时，必须同轮清除旧审批阻塞、更新回执并续投原任务；审批通过、否决、要求调整或取消后也同轮更新回执并推进。结束前校验可推进但空闲的计划数为 0，且所有等待项都有本轮推进动作或失败证据。"
+      }
     },
     {
       "id": "rabi-manual-agent-recreate",
       "name": "重新创建 Agent",
       "enabled": true,
-      "routeKinds": [
-        "manual_trigger"
-      ],
-      "targetGroupId": "",
-      "allowedSpeakerNames": [],
-      "regex": "重新创建Agent|重新创建 Agent|重建Agent|重建 Agent|会话归档转接|archive-handoff|recreate-agent",
-      "template": ""
+      "trigger": {
+        "type": "message",
+        "routeKinds": [
+          "manual_trigger"
+        ],
+        "targetGroupId": "",
+        "allowedSpeakerNames": [],
+        "regex": "重新创建Agent|重新创建 Agent|重建Agent|重建 Agent|会话归档转接|archive-handoff|recreate-agent"
+      },
+      "action": {
+        "type": "deliver_agent",
+        "message": "",
+        "template": ""
+      }
     },
     {
       "id": "wecom-group-message",
       "name": "WeCom group message",
       "enabled": true,
-      "routeKinds": [
-        "wecom_message"
-      ],
-      "targetGroupId": "",
-      "allowedSpeakerNames": [],
-      "regex": "",
-      "template": "WeCom group message\nTarget: {messageTarget}\nGroup: {groupId}\nSender: {sender} ({userId})\nMessageId: {messageId}\nReqId: {wecomReqId}\nChatId: {wecomChatId}\n\n{message}\n\nWhen a WeCom response is allowed, POST {sendRequestJson} to {sendApiUrl}; keep channel=wecom and the explicit chatId."
+      "trigger": {
+        "type": "message",
+        "routeKinds": [
+          "wecom_message"
+        ],
+        "targetGroupId": "",
+        "allowedSpeakerNames": [],
+        "regex": ""
+      },
+      "action": {
+        "type": "deliver_agent",
+        "message": "",
+        "template": "WeCom group message\nTarget: {messageTarget}\nGroup: {groupId}\nSender: {sender} ({userId})\nMessageId: {messageId}\nReqId: {wecomReqId}\nChatId: {wecomChatId}\n\n{message}\n\nWhen a WeCom response is allowed, POST {sendRequestJson} to {sendApiUrl}; keep channel=wecom and the explicit chatId."
+      }
     },
     {
       "id": "role-panel-message",
       "name": "角色面板消息",
       "enabled": true,
-      "routeKinds": [
-        "role_panel_message"
-      ],
-      "targetGroupId": "",
-      "allowedSpeakerNames": [],
-      "regex": "",
-      "template": ""
+      "trigger": {
+        "type": "message",
+        "routeKinds": [
+          "role_panel_message"
+        ],
+        "targetGroupId": "",
+        "allowedSpeakerNames": [],
+        "regex": ""
+      },
+      "action": {
+        "type": "deliver_agent",
+        "message": "",
+        "template": ""
+      }
     }
   ]
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentSendResult } from "../agentSend.js";
 import type { AgentReplyResult } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
+import type { MessageProcessingSourceAttachmentEvidence } from "./sourceEvidence.js";
 import {
   JsonFileMessageProcessingBoardPersistence,
   type MessageProcessingBoardPersistence
@@ -38,6 +39,21 @@ export type ProjectFactAssessment = {
   assessedAt: string;
   assessedByThreadId?: string;
   facts?: CriticalProjectFactSignal[];
+};
+
+export type MessageSourceAttachmentReview = {
+  attachmentId: string;
+  status: "reviewed" | "unavailable";
+  observation: string;
+};
+
+export type MessageSourceEvidenceReview = {
+  reviewedMessageIds: string[];
+  replyChainChecked: boolean;
+  attachmentReviews: MessageSourceAttachmentReview[];
+  evidence: string;
+  reviewedAt: string;
+  reviewedByThreadId?: string;
 };
 
 export type KnowledgeRecallMatch = {
@@ -132,6 +148,9 @@ export type MessageProcessingSource = {
   sender: string;
   routeKinds: string[];
   messageIds: string[];
+  evidenceReviewRequired?: boolean;
+  replyChainMessageIds?: string[];
+  attachments?: MessageProcessingSourceAttachmentEvidence[];
   summary?: string;
   replyContext?: Record<string, unknown>;
 };
@@ -204,6 +223,7 @@ export type MessageProcessingRequirement = {
   delivery?: MessageProcessingDelivery;
   factAssessmentRequired?: boolean;
   projectFactAssessment?: ProjectFactAssessment;
+  sourceEvidenceReview?: MessageSourceEvidenceReview;
   knowledgeMatches?: KnowledgeRecallMatch[];
   knowledgeMatchDispositions?: KnowledgeMatchDisposition[];
   knowledgeCallbacks?: KnowledgeMatchCallback[];
@@ -268,6 +288,7 @@ export type MessageProcessingOutcomeInput = {
   planId?: string;
   planTitle?: string;
   projectFactAssessment?: ProjectFactAssessment;
+  sourceEvidenceReview?: MessageSourceEvidenceReview;
   knowledgeMatchDispositions?: KnowledgeMatchDisposition[];
   criticalFactDisposition?: CriticalProjectFactDisposition;
 };
@@ -312,6 +333,64 @@ function normalizeProjectFactAssessment(value: unknown): ProjectFactAssessment |
     assessedByThreadId: cleanText(item.assessedByThreadId, 100),
     facts: facts.length ? facts : undefined
   };
+}
+
+function normalizeSourceAttachmentReviews(value: unknown): MessageSourceAttachmentReview[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const item = raw as Partial<MessageSourceAttachmentReview>;
+    const attachmentId = cleanText(item.attachmentId, 300);
+    const observation = cleanText(item.observation, 2_000);
+    if (!attachmentId || !observation || (item.status !== "reviewed" && item.status !== "unavailable")) return [];
+    return [{ attachmentId, status: item.status, observation }];
+  });
+}
+
+function normalizeSourceEvidenceReview(value: unknown): MessageSourceEvidenceReview | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const item = value as Partial<MessageSourceEvidenceReview>;
+  return {
+    reviewedMessageIds: stringList(item.reviewedMessageIds, 200),
+    replyChainChecked: item.replyChainChecked === true,
+    attachmentReviews: normalizeSourceAttachmentReviews(item.attachmentReviews),
+    evidence: cleanText(item.evidence, 4_000) || "",
+    reviewedAt: cleanText(item.reviewedAt, 100) || "",
+    reviewedByThreadId: cleanText(item.reviewedByThreadId, 100)
+  };
+}
+
+function validateSourceEvidenceReview(
+  requirement: MessageProcessingRequirement,
+  input: MessageProcessingOutcomeInput
+): MessageSourceEvidenceReview | undefined {
+  if (requirement.kind !== "message_reply" || input.decision === "handoff" || !requirement.source.evidenceReviewRequired) return undefined;
+  const review = normalizeSourceEvidenceReview(input.sourceEvidenceReview) || requirement.sourceEvidenceReview;
+  if (!review) throw new Error("Message Agent must submit sourceEvidenceReview before closing or replying.");
+  const reviewed = new Set(review.reviewedMessageIds);
+  const requiredMessageIds = [...requirement.source.messageIds, ...(requirement.source.replyChainMessageIds || [])];
+  const missingMessages = requiredMessageIds.filter((messageId) => !reviewed.has(messageId));
+  if (missingMessages.length > 0) {
+    throw new Error(`sourceEvidenceReview must cover every source and reply-chain messageId. Missing: ${missingMessages.join(", ")}`);
+  }
+  if (!review.replyChainChecked || !review.evidence || !review.reviewedAt) {
+    throw new Error("sourceEvidenceReview requires replyChainChecked=true, evidence, and reviewedAt.");
+  }
+  const attachments = requirement.source.attachments || [];
+  const reviewById = new Map(review.attachmentReviews.map((item) => [item.attachmentId, item]));
+  const missingAttachments = attachments.filter((attachment) => !reviewById.has(attachment.id));
+  if (missingAttachments.length > 0) {
+    throw new Error(`sourceEvidenceReview must cover every attachment. Missing: ${missingAttachments.map((item) => item.id).join(", ")}`);
+  }
+  const unavailable = attachments.filter((attachment) => attachment.status !== "ready");
+  if (unavailable.length > 0) {
+    throw new Error(`Source attachment is unavailable and cannot be answered by inference. Handoff or retry attachment retrieval: ${unavailable.map((item) => item.id).join(", ")}`);
+  }
+  const notReviewed = attachments.filter((attachment) => reviewById.get(attachment.id)?.status !== "reviewed");
+  if (notReviewed.length > 0) {
+    throw new Error(`Readable source attachments must be marked reviewed with a concrete observation: ${notReviewed.map((item) => item.id).join(", ")}`);
+  }
+  return review;
 }
 
 function validateProjectFactAssessment(
@@ -579,6 +658,28 @@ function normalizeSource(value: unknown): MessageProcessingSource | undefined {
     sender,
     routeKinds: stringList(source.routeKinds, 20),
     messageIds: stringList(source.messageIds, 100),
+    evidenceReviewRequired: source.evidenceReviewRequired === true,
+    replyChainMessageIds: stringList(source.replyChainMessageIds, 100),
+    attachments: Array.isArray(source.attachments) ? source.attachments.flatMap((raw) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const item = raw as Partial<MessageProcessingSourceAttachmentEvidence>;
+      const id = cleanText(item.id, 300);
+      const messageId = cleanText(item.messageId, 300);
+      const name = cleanText(item.name, 500);
+      const kind = item.kind === "video" || item.kind === "audio" || item.kind === "file" ? item.kind : "image";
+      if (!id || !messageId || !name) return [];
+      return [{
+        id,
+        messageId,
+        kind,
+        name,
+        mimeType: cleanText(item.mimeType, 200),
+        size: Number.isFinite(Number(item.size)) ? Number(item.size) : undefined,
+        path: cleanText(item.path, 2_000),
+        status: item.status === "ready" ? "ready" as const : "unavailable" as const,
+        error: cleanText(item.error, 2_000)
+      }];
+    }) : undefined,
     summary: cleanText(source.summary, 4_000),
     replyContext: source.replyContext && typeof source.replyContext === "object" && !Array.isArray(source.replyContext)
       ? source.replyContext as Record<string, unknown>
@@ -846,6 +947,8 @@ export class MessageProcessingBoardStore {
     const alreadySent = requirement.status === "sent";
     if (alreadySent && !input.projectFactAssessment && !input.criticalFactDisposition) return structuredClone(requirement);
     const decidedAt = nowIso(this.now);
+    const sourceEvidenceReview = validateSourceEvidenceReview(requirement, input);
+    if (sourceEvidenceReview) requirement.sourceEvidenceReview = sourceEvidenceReview;
     const projectFactAssessment = validateProjectFactAssessment(requirement, input);
     if (projectFactAssessment) {
       requirement.projectFactAssessment = projectFactAssessment;
@@ -1154,6 +1257,18 @@ export class MessageProcessingBoardStore {
 
   get(requirementId: string): MessageProcessingRequirement | undefined {
     const value = this.requirements.get(requirementId);
+    return value ? structuredClone(value) : undefined;
+  }
+
+  findLatestBySourceMessage(routeId: string, messageId: string): MessageProcessingRequirement | undefined {
+    const normalizedRouteId = String(routeId || "").trim();
+    const normalizedMessageId = String(messageId || "").trim();
+    if (!normalizedRouteId || !normalizedMessageId) return undefined;
+    const value = [...this.requirements.values()]
+      .filter((item) =>
+        (item.source.routeId === normalizedRouteId || item.source.routeProfileId === normalizedRouteId)
+        && item.source.messageIds.includes(normalizedMessageId))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
     return value ? structuredClone(value) : undefined;
   }
 

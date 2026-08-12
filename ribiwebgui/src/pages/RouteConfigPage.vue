@@ -12,7 +12,7 @@ import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSour
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL, codexMemoryConsolidationAgentTitle } from "@shared/codexMemoryConsolidationAgent";
-import { agentAdapterSupportsManagedTaskFeature, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
+import { agentAdapterSupportsManagedTaskFeature, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
 import {
   DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
   codexPlanAssistantInitializationPrompt,
@@ -3067,7 +3067,8 @@ function messageProcessingAgentPolicy(type: AgentAdapterType) {
   return {
     enabled: policy?.enabled === true,
     model: policy?.model || (type === "codex" ? DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL : ""),
-    reasoningEffort: policy?.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT
+    reasoningEffort: policy?.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
+    maxAgents: policy?.maxAgents
   };
 }
 
@@ -5046,6 +5047,16 @@ watch(
                       persistent-hint
                       data-no-i18n
                       @update:model-value="value => setMessageProcessingAgentPolicy(agent.type, { reasoningEffort: value })"
+                    />
+                    <v-text-field
+                      :model-value="messageProcessingAgentPolicy(agent.type).maxAgents"
+                      type="number"
+                      min="1"
+                      :max="MAX_MESSAGE_PROCESSING_AGENTS"
+                      label="消息处理 Agent 上限"
+                      hint="留空时按忙碌情况动态扩容；达到上限后继续复用已有任务。设置为 1 时固定使用“协助处理消息1”。"
+                      persistent-hint
+                      @update:model-value="value => setMessageProcessingAgentPolicy(agent.type, { maxAgents: value === '' || value == null ? undefined : Number(value) })"
                     />
                   </div>
                   <MessageProcessingBoard

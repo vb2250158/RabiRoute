@@ -7,6 +7,7 @@ import {
   type AppendRabiLinkConversationResult
 } from "./rabilinkConversationLedger.js";
 import { startDefaultRabiLinkConversationReviewer } from "./rabilinkConversationReviewer.js";
+import { identityEndpointsForForward } from "./routing/identityContext.js";
 
 export type RabiLinkObservationRecordOptions = {
   dataDir?: string;
@@ -94,6 +95,7 @@ export function recordRabiLinkVoiceObservation(
   options: RabiLinkObservationRecordOptions = {}
 ): AppendRabiLinkConversationResult {
   const routeVariables = options.routeVariables ?? config.routeVariables;
+  const routeKind = record.adapterType === "rabilink" ? "rabilink" : "voice_transcript";
   const result = appendRabiLinkConversationEntry(options.dataDir ?? config.memoryDataDir, {
     entryId: observationEntryId(record),
     recordedAt: recordedAt(record),
@@ -111,6 +113,7 @@ export function recordRabiLinkVoiceObservation(
     sourceDeviceKind: record.sourceDeviceKind,
     transport: record.transport,
     capturedAt: capturedAt(record),
+    identityEndpoints: identityEndpointsForForward(routeKind, record, { routeProfileId: record.routeProfileId }),
     requiresReview: true
   }, { splitAfterMs: splitAfterMs(routeVariables) });
 

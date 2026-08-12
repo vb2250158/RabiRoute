@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { normalizePathForComparison } from "../shared/pathPolicy.js";
+import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import {
   JsonFileAgentRequestPersistence,
   type AgentRequestPersistence
@@ -98,7 +98,7 @@ function normalizedParty(value: AgentRequestParty): AgentRequestParty {
 
 function workspaceMatches(left?: string, right?: string): boolean {
   if (!left || !right) return true;
-  return normalizePathForComparison(left) === normalizePathForComparison(right);
+  return sameCodexWorkspace(left, right);
 }
 
 function parseRecord(value: unknown): AgentRequestRecord | undefined {

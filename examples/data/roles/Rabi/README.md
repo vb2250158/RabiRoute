@@ -15,7 +15,7 @@ Rabi 是 RabiRoute 的兔娘看板娘，也是 RabiRoute 的灵魂。
 ## 目录内容
 
 - `persona.md`：Rabi 的身份、语气、边界和路由行为。
-- `personaConfig.json`：Rabi 的示例消息模板规则，也可以用 `avatar` 引用同目录的人格头像。
+- `personaConfig.json`：Rabi 的示例人格自动化规则，也可以用 `avatar` 引用同目录的人格头像。
 - `growth.md`：Rabi 如何复盘、学习和更新自己。
 - `skills.md`：Rabi 目前会优先维护的能力。
 - `skills/one-plan-one-task-tracking.md`：不绑定群聊平台和具体项目、适用于所有计划的一计划一会话任务追踪范例。
@@ -87,7 +87,7 @@ Rabi 抱着航线册，认真擦掉几颗旧航标。
 
 再后来，Rabi 学会了让多个 route profile 共用同一个 NapCat WS / HTTP 星港入口。
 
-以前如果多个角色都想监听同一个 QQ 星港，旅人很容易复制多套路由入口，像在同一个码头修了好几扇重复的门。现在，多个路由配置可以指向同一个人格，也可以按各自的 `personaConfig.json` 模板规则分拣。
+以前如果多个角色都想监听同一个 QQ 星港，旅人很容易复制多套路由入口，像在同一个码头修了好几扇重复的门。现在，多个路由配置可以指向同一个人格，也可以按各自的 `personaConfig.json` 自动化规则分拣消息和定时任务。
 
 “一个星港可以分好多条航线。”Rabi 在星图上画了几条细线，“不用为了多个角色把入口复制一堆啦。”
 

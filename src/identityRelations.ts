@@ -12,6 +12,34 @@ export type IdentityRelationKnowledgeType = typeof IDENTITY_RELATION_KNOWLEDGE_T
 export type IdentityRelationStatus = "candidate" | "confirmed" | "corrected" | "retired";
 export type IdentityParticipantKind = "person" | "organization" | "shared_account" | "automated" | "unknown";
 export type IdentityRelationTargetKind = "participant" | "organization" | "project";
+export type IdentitySpeakingHabitDimension =
+  | "sentence_opening"
+  | "sentence_length"
+  | "stance_expression"
+  | "emotion_threshold"
+  | "analogy_source"
+  | "punctuation"
+  | "reader_relationship"
+  | "value_preference"
+  | "information_order"
+  | "avoidance"
+  | "imperfection"
+  | "scene_boundary";
+
+/** A corrected person or account mapping is authoritative; it is not a candidate. */
+export function isAuthoritativeIdentityStatus(value: IdentityRelationStatus): boolean {
+  return value === "confirmed" || value === "corrected";
+}
+
+/** Retired people and account mappings remain history and cannot drive current identity decisions. */
+export function isActiveIdentityStatus(value: IdentityRelationStatus): boolean {
+  return value === "candidate" || isAuthoritativeIdentityStatus(value);
+}
+
+/** A corrected relation card describes an old conclusion that was replaced, so it is not active. */
+export function isActiveIdentityRelationStatus(value: IdentityRelationStatus): boolean {
+  return value === "candidate" || value === "confirmed";
+}
 
 export type IdentityRelationConflictCandidate = {
   eventId: string;
@@ -32,6 +60,13 @@ export type IdentityEvidenceRef = {
   conversationKey?: string;
   messageId?: string;
   note?: string;
+};
+
+export type IdentitySpeakingHabit = {
+  dimension: IdentitySpeakingHabitDimension;
+  description: string;
+  confidence?: number;
+  evidenceRefs: IdentityEvidenceRef[];
 };
 
 export type IdentityScope = {
@@ -62,6 +97,7 @@ export type IdentityParticipant = IdentityRelationConflictState & {
   kind: IdentityParticipantKind;
   displayName?: string;
   aliases: string[];
+  speakingHabits?: IdentitySpeakingHabit[];
   status: IdentityRelationStatus;
   evidenceRefs: IdentityEvidenceRef[];
   updatedAt: string;
@@ -90,6 +126,7 @@ export type IdentityRelationPatch = {
   participantId?: unknown;
   participantKind?: unknown;
   aliases?: unknown;
+  speakingHabits?: unknown;
   relationId?: unknown;
   subjectParticipantId?: unknown;
   targetKind?: unknown;
@@ -103,6 +140,8 @@ export type IdentityRelationPatch = {
 export type IdentityRelationContext = {
   endpoint: Pick<IdentityEndpointAccount, "id" | "platform" | "endpointIdentityNamespace" | "senderStableId" | "displayName" | "isSelf">;
   confirmedParticipant?: IdentityParticipant;
+  /** Known people who may use this account, without claiming that the current message is uniquely theirs. */
+  possibleParticipants: Array<{ participant: IdentityParticipant; link: IdentityParticipantLink }>;
   candidateParticipants: Array<{ participant: IdentityParticipant; link: IdentityParticipantLink }>;
   relevantRelations: IdentityRelationCard[];
   unresolved: string[];
@@ -115,6 +154,31 @@ export type IdentityEndpointLookup = {
   displayName?: string;
   conversationKey?: string;
   projectId?: string;
+};
+
+export type IdentityCandidateRelationObservation = {
+  targetKind: IdentityRelationTargetKind;
+  targetId: string;
+  relationship: string;
+  scope?: Partial<IdentityScope>;
+  evidenceRefs?: IdentityEvidenceRef[];
+};
+
+export type IdentityCandidateObservation = IdentityEndpointLookup & {
+  participantId?: string;
+  participantKind?: IdentityParticipantKind;
+  participantDisplayName?: string;
+  aliases?: string[];
+  evidenceRefs?: IdentityEvidenceRef[];
+  relations?: IdentityCandidateRelationObservation[];
+};
+
+export type IdentityEndpointObservationResult = {
+  context?: IdentityRelationContext;
+  participantId?: string;
+  accountCreated: boolean;
+  participantCreated: boolean;
+  updated: boolean;
 };
 
 export type IdentityRelationConflict = {
@@ -211,6 +275,33 @@ function evidenceRefs(value: unknown): IdentityEvidenceRef[] {
   });
 }
 
+const SPEAKING_HABIT_DIMENSIONS = new Set<IdentitySpeakingHabitDimension>([
+  "sentence_opening", "sentence_length", "stance_expression", "emotion_threshold",
+  "analogy_source", "punctuation", "reader_relationship", "value_preference",
+  "information_order", "avoidance", "imperfection", "scene_boundary"
+]);
+
+function speakingHabits(value: unknown): IdentitySpeakingHabit[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error("Identity speakingHabits must be an array.");
+  return value.slice(0, 24).map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Each speaking habit must be an object.");
+    const raw = item as Record<string, unknown>;
+    const dimension = requiredText(raw.dimension, "speakingHabit.dimension", 60) as IdentitySpeakingHabitDimension;
+    if (!SPEAKING_HABIT_DIMENSIONS.has(dimension)) throw new Error("Invalid speaking-habit dimension.");
+    const refs = evidenceRefs(raw.evidenceRefs);
+    if (!refs.some(ref => ref.messageId)) {
+      throw new Error("Speaking-habit evidence requires at least one confirmed-author messageId.");
+    }
+    return {
+      dimension,
+      description: requiredText(raw.description, "speakingHabit.description", 600),
+      confidence: confidence(raw.confidence),
+      evidenceRefs: refs
+    };
+  });
+}
+
 function scope(value: unknown): IdentityScope {
   const raw = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   return {
@@ -240,6 +331,44 @@ function participantLinks(value: unknown): IdentityParticipantLink[] {
 function endpointAccountId(platform: string, namespace: string, senderStableId: string): string {
   const digest = createHash("sha256").update(platform).update("\0").update(namespace).update("\0").update(senderStableId).digest("hex").slice(0, 32);
   return `identity-account-${digest}`;
+}
+
+function observedParticipantId(accountId: string): string {
+  return `identity-participant-observed-${accountId.replace(/^identity-account-/, "")}`;
+}
+
+function observedRelationId(
+  participantId: string,
+  relation: Pick<IdentityCandidateRelationObservation, "targetKind" | "targetId" | "relationship"> & { scope: IdentityScope }
+): string {
+  const digest = createHash("sha256")
+    .update(participantId)
+    .update("\0")
+    .update(relation.targetKind)
+    .update("\0")
+    .update(relation.targetId)
+    .update("\0")
+    .update(relation.relationship)
+    .update("\0")
+    .update(JSON.stringify({
+      conversationKeys: [...relation.scope.conversationKeys].sort(),
+      projectIds: [...relation.scope.projectIds].sort()
+    }))
+    .digest("hex")
+    .slice(0, 32);
+  return `identity-relation-observed-${digest}`;
+}
+
+function uniqueEvidenceRefs(...groups: IdentityEvidenceRef[][]): IdentityEvidenceRef[] {
+  const seen = new Set<string>();
+  return groups.flat().flatMap(item => {
+    const normalized = evidenceRefs([item])[0];
+    if (!normalized) return [];
+    const key = JSON.stringify(normalized);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [normalized];
+  }).slice(-MAX_LIST);
 }
 
 function generatedId(prefix: string): string {
@@ -294,10 +423,65 @@ function comparableRecord(record: IdentityRelationRecord): string {
   return JSON.stringify(value);
 }
 
+function conflictComparableRecord(record: IdentityRelationRecord): string {
+  const {
+    updatedAt: _updatedAt,
+    conflicted: _conflicted,
+    conflictEventIds: _conflictEventIds,
+    conflictCandidates: _conflictCandidates,
+    ...value
+  } = record;
+  if ("platform" in value) {
+    const { displayName: _displayName, ...identityValue } = value;
+    return JSON.stringify(identityValue);
+  }
+  if ("kind" in value
+    && value.id.startsWith("identity-participant-observed-")
+    && value.kind === "unknown"
+    && value.status === "candidate") {
+    const {
+      displayName: _displayName,
+      aliases: _aliases,
+      evidenceRefs: _evidenceRefs,
+      ...identityValue
+    } = value;
+    return JSON.stringify(identityValue);
+  }
+  return JSON.stringify(value);
+}
+
+function mergedEquivalentRecord<T extends IdentityRelationRecord>(
+  heads: Array<IdentityRelationEvent & { record: T }>
+): T {
+  const byTime = [...heads].sort((left, right) =>
+    left.record.updatedAt.localeCompare(right.record.updatedAt) || left.id.localeCompare(right.id)
+  );
+  const selected = byTime.at(-1)!.record;
+  if ("platform" in selected) {
+    const endpoints = byTime.map(item => item.record).filter((record): record is T & IdentityEndpointAccount => "platform" in record);
+    const latestName = [...endpoints].reverse().find(record => record.displayName)?.displayName;
+    return { ...selected, displayName: latestName } as T;
+  }
+  if ("kind" in selected
+    && selected.id.startsWith("identity-participant-observed-")
+    && selected.kind === "unknown"
+    && selected.status === "candidate") {
+    const participants = byTime.map(item => item.record).filter((record): record is T & IdentityParticipant => "kind" in record);
+    const latestName = [...participants].reverse().find(record => record.displayName)?.displayName;
+    return {
+      ...selected,
+      displayName: latestName,
+      aliases: [...new Set(participants.flatMap(record => record.aliases))].slice(0, MAX_LIST),
+      evidenceRefs: uniqueEvidenceRefs(...participants.map(record => record.evidenceRefs))
+    } as T;
+  }
+  return selected;
+}
+
 function collapseRecordState<T extends IdentityRelationRecord>(heads: Array<IdentityRelationEvent & { record: T }>): T {
   const sorted = [...heads].sort((left, right) => left.id.localeCompare(right.id));
-  const selected = sorted.at(-1)!.record;
-  const different = new Set(sorted.map(item => comparableRecord(item.record))).size > 1;
+  const selected = mergedEquivalentRecord(sorted);
+  const different = new Set(sorted.map(item => conflictComparableRecord(item.record))).size > 1;
   if (!different) return {
     ...selected,
     conflicted: undefined,
@@ -394,6 +578,38 @@ function requireConflictResolutionFields(existing: IdentityRelationRecord | unde
   }
 }
 
+function requireCurrentParticipant(
+  current: IdentityRelationState,
+  participantId: string,
+  label: string,
+  authoritative = false
+): IdentityParticipant {
+  const participant = current.participants.get(participantId)?.record;
+  if (!participant) throw new Error(`${label} must reference an existing identity participant.`);
+  if (participant.conflicted) throw new Error(`${label} cannot reference a conflicted identity participant.`);
+  if (!isActiveIdentityStatus(participant.status)) throw new Error(`${label} cannot reference a retired identity participant.`);
+  if (authoritative && !isAuthoritativeIdentityStatus(participant.status)) {
+    throw new Error(`${label} must reference a confirmed or corrected identity participant.`);
+  }
+  return participant;
+}
+
+function validateParticipantLinks(current: IdentityRelationState, links: IdentityParticipantLink[]): void {
+  const authoritativeLinks = links.filter(link => isAuthoritativeIdentityStatus(link.status));
+  if (authoritativeLinks.length > 1) {
+    throw new Error("An endpoint account may contain at most one confirmed or corrected participant link.");
+  }
+  for (const link of links) {
+    if (!isActiveIdentityStatus(link.status)) continue;
+    requireCurrentParticipant(
+      current,
+      link.participantId,
+      "participantLink.participantId",
+      isAuthoritativeIdentityStatus(link.status)
+    );
+  }
+}
+
 export function updateIdentityRelation(roleDir: string, patch: IdentityRelationPatch): {
   record: IdentityRelationRecord;
   appended: boolean;
@@ -413,6 +629,8 @@ export function updateIdentityRelation(roleDir: string, patch: IdentityRelationP
       const existing = current.endpoints.get(id);
       requireConflictResolutionFields(existing?.record, patch);
       heads = existing?.heads ?? [];
+      const nextParticipantLinks = has(patch, "participantLinks") ? participantLinks(patch.participantLinks) : existing?.record.participantLinks ?? [];
+      validateParticipantLinks(current, nextParticipantLinks);
       record = {
         id,
         platform,
@@ -420,7 +638,7 @@ export function updateIdentityRelation(roleDir: string, patch: IdentityRelationP
         senderStableId,
         displayName: has(patch, "displayName") ? text(patch.displayName, 300) : existing?.record.displayName,
         isSelf: has(patch, "isSelf") ? (typeof patch.isSelf === "boolean" ? patch.isSelf : undefined) : existing?.record.isSelf,
-        participantLinks: has(patch, "participantLinks") ? participantLinks(patch.participantLinks) : existing?.record.participantLinks ?? [],
+        participantLinks: nextParticipantLinks,
         updatedAt: now
       };
     } else if (patch.kind === "participant") {
@@ -433,6 +651,7 @@ export function updateIdentityRelation(roleDir: string, patch: IdentityRelationP
         kind: participantKind(patch.participantKind, existing?.record.kind ?? "unknown"),
         displayName: has(patch, "displayName") ? text(patch.displayName, 300) : existing?.record.displayName,
         aliases: has(patch, "aliases") ? list(patch.aliases) : existing?.record.aliases ?? [],
+        speakingHabits: has(patch, "speakingHabits") ? speakingHabits(patch.speakingHabits) : existing?.record.speakingHabits ?? [],
         status: status(patch.status, existing?.record.status ?? "candidate"),
         evidenceRefs: has(patch, "evidenceRefs") ? evidenceRefs(patch.evidenceRefs) : existing?.record.evidenceRefs ?? [],
         updatedAt: now
@@ -453,6 +672,12 @@ export function updateIdentityRelation(roleDir: string, patch: IdentityRelationP
         evidenceRefs: has(patch, "evidenceRefs") ? evidenceRefs(patch.evidenceRefs) : existing?.record.evidenceRefs ?? [],
         updatedAt: now
       };
+      if (isActiveIdentityRelationStatus(record.status)) {
+        requireCurrentParticipant(current, record.subjectParticipantId, "subjectParticipantId");
+        if (record.targetKind === "participant") {
+          requireCurrentParticipant(current, record.targetId, "targetId");
+        }
+      }
     } else {
       throw new Error("Unsupported identity relation kind.");
     }
@@ -479,6 +704,201 @@ export function updateIdentityRelation(roleDir: string, patch: IdentityRelationP
   });
 }
 
+/**
+ * Creates a reversible candidate for a stable endpoint account. Display names are clues only:
+ * this function never confirms identity, merges accounts, or grants project authority.
+ */
+export function observeIdentityEndpoint(
+  roleDir: string,
+  lookup: IdentityEndpointLookup
+): IdentityEndpointObservationResult {
+  const platform = text(lookup.platform, 100);
+  const endpointIdentityNamespace = text(lookup.endpointIdentityNamespace, 300);
+  const senderStableId = text(lookup.senderStableId, 300);
+  if (!platform || !endpointIdentityNamespace || !senderStableId) {
+    return { accountCreated: false, participantCreated: false, updated: false };
+  }
+  const accountId = endpointAccountId(platform, endpointIdentityNamespace, senderStableId);
+  const before = state(roleDir);
+  const existingAccount = before.endpoints.get(accountId)?.record;
+  const authoritativeLink = existingAccount?.participantLinks.find(link => isAuthoritativeIdentityStatus(link.status));
+  if (existingAccount?.conflicted || existingAccount?.isSelf || authoritativeLink) {
+    return {
+      context: resolveIdentityRelationContext(roleDir, lookup),
+      participantId: authoritativeLink?.participantId,
+      accountCreated: false,
+      participantCreated: false,
+      updated: false
+    };
+  }
+
+  const endpoint = `${platform}/${endpointIdentityNamespace}/${senderStableId}`;
+  const automaticEvidence: IdentityEvidenceRef[] = [{
+    endpoint,
+    note: "系统首次看到此稳定消息端账号，身份仍待确认。"
+  }];
+  const candidateLinks = existingAccount?.participantLinks.filter(link => link.status === "candidate") ?? [];
+  const deterministicParticipantId = observedParticipantId(accountId);
+  const deterministicParticipant = before.participants.get(deterministicParticipantId)?.record;
+  const newCandidateParticipantId = deterministicParticipant
+    ? generatedId("identity-participant-observed")
+    : deterministicParticipantId;
+  const participantId = candidateLinks.length === 1
+    ? candidateLinks[0]!.participantId
+    : candidateLinks.length === 0
+      ? newCandidateParticipantId
+      : undefined;
+  if (!participantId) {
+    return {
+      context: resolveIdentityRelationContext(roleDir, lookup),
+      accountCreated: false,
+      participantCreated: false,
+      updated: false
+    };
+  }
+
+  const existingParticipant = before.participants.get(participantId)?.record;
+  const observedName = text(lookup.displayName, 300);
+  let participantCreated = false;
+  let updated = false;
+  if (!existingParticipant || (!existingParticipant.conflicted && existingParticipant.status === "candidate")) {
+    const aliases = [...new Set([
+      ...(existingParticipant?.aliases ?? []),
+      ...(observedName ? [observedName] : [])
+    ])].slice(0, MAX_LIST);
+    const participantResult = updateIdentityRelation(roleDir, {
+      kind: "participant",
+      participantId,
+      participantKind: existingParticipant?.kind ?? "unknown",
+      displayName: existingParticipant?.displayName ?? observedName,
+      aliases,
+      status: "candidate",
+      evidenceRefs: uniqueEvidenceRefs(existingParticipant?.evidenceRefs ?? [], automaticEvidence)
+    });
+    participantCreated = !existingParticipant && participantResult.appended;
+    updated ||= participantResult.appended;
+  }
+
+  const linkEvidence = candidateLinks.find(link => link.participantId === participantId)?.evidenceRefs ?? automaticEvidence;
+  const accountResult = updateIdentityRelation(roleDir, {
+    kind: "endpoint_account",
+    platform,
+    endpointIdentityNamespace,
+    senderStableId,
+    displayName: observedName ?? existingAccount?.displayName,
+    isSelf: existingAccount?.isSelf,
+    participantLinks: candidateLinks.some(link => link.participantId === participantId)
+      ? existingAccount?.participantLinks ?? []
+      : [
+          ...(existingAccount?.participantLinks ?? []),
+          { participantId, status: "candidate", confidence: 0.1, evidenceRefs: linkEvidence }
+        ]
+  });
+  updated ||= accountResult.appended;
+  return {
+    context: resolveIdentityRelationContext(roleDir, lookup),
+    participantId,
+    accountCreated: !existingAccount && accountResult.appended,
+    participantCreated,
+    updated
+  };
+}
+
+/**
+ * Adds evidence-backed clues to an existing candidate. Automatic learning is deliberately
+ * unable to confirm a person or attach authority; confirmation remains an explicit review action.
+ */
+export function recordIdentityCandidateObservation(
+  roleDir: string,
+  observation: IdentityCandidateObservation
+): {
+  participant: IdentityParticipant;
+  relations: IdentityRelationCard[];
+  appended: boolean;
+} {
+  const platform = requiredText(observation.platform, "platform", 100);
+  const endpointIdentityNamespace = requiredText(observation.endpointIdentityNamespace, "endpointIdentityNamespace", 300);
+  const senderStableId = requiredText(observation.senderStableId, "senderStableId", 300);
+  const current = state(roleDir);
+  const account = current.endpoints.get(endpointAccountId(platform, endpointIdentityNamespace, senderStableId))?.record;
+  if (!account) throw new Error("Observe the endpoint account before adding identity clues.");
+  if (account.conflicted) throw new Error("A conflicted endpoint account cannot learn identity clues automatically.");
+  if (account.isSelf) throw new Error("The persona's own endpoint account cannot be learned as an external participant.");
+  if (account.participantLinks.some(link => isAuthoritativeIdentityStatus(link.status))) {
+    throw new Error("A confirmed endpoint account no longer accepts automatic candidate learning.");
+  }
+  const requestedParticipantId = text(observation.participantId, 300);
+  const candidateLinks = account.participantLinks.filter(link => link.status === "candidate");
+  const link = requestedParticipantId
+    ? candidateLinks.find(item => item.participantId === requestedParticipantId)
+    : candidateLinks.length === 1 ? candidateLinks[0] : undefined;
+  if (!link) throw new Error("Identity clues require one existing candidate participant linked to this endpoint account.");
+  const existingParticipant = current.participants.get(link.participantId)?.record;
+  if (!existingParticipant || existingParticipant.conflicted || existingParticipant.status !== "candidate") {
+    throw new Error("Identity clues can update only an unconflicted candidate participant.");
+  }
+
+  const displayName = text(observation.participantDisplayName, 300) ?? existingParticipant.displayName;
+  const aliases = [...new Set([
+    ...existingParticipant.aliases,
+    ...(Array.isArray(observation.aliases) ? observation.aliases.flatMap(item => text(item, 300) ? [text(item, 300)!] : []) : []),
+    ...(displayName ? [displayName] : [])
+  ])].slice(0, MAX_LIST);
+  const observationEvidence = evidenceRefs(observation.evidenceRefs);
+  if (observationEvidence.length === 0) throw new Error("Candidate identity clues require at least one evidence reference.");
+  if (!observationEvidence.some(item => item.messageId)) {
+    throw new Error("Candidate identity clues require a source messageId.");
+  }
+  const preparedRelations = (observation.relations ?? []).slice(0, MAX_LIST).map(raw => {
+    const relationScope = scope(raw.scope ?? {
+      conversationKeys: observation.conversationKey ? [observation.conversationKey] : [],
+      projectIds: observation.projectId ? [observation.projectId] : []
+    });
+    const relation: IdentityCandidateRelationObservation & { scope: IdentityScope } = {
+      targetKind: targetKind(raw.targetKind),
+      targetId: requiredText(raw.targetId, "relation.targetId", 300),
+      relationship: requiredText(raw.relationship, "relation.relationship", 600),
+      scope: relationScope,
+      evidenceRefs: raw.evidenceRefs
+    };
+    const relationId = observedRelationId(existingParticipant.id, relation);
+    const existingRelation = current.relations.get(relationId)?.record;
+    if (existingRelation?.conflicted || (existingRelation && existingRelation.status !== "candidate")) {
+      throw new Error("Automatic identity learning cannot overwrite a conflicted or confirmed relation.");
+    }
+    return { relation, relationId, existingRelation };
+  });
+
+  const participantResult = updateIdentityRelation(roleDir, {
+    kind: "participant",
+    participantId: existingParticipant.id,
+    participantKind: observation.participantKind ?? existingParticipant.kind,
+    displayName,
+    aliases,
+    status: "candidate",
+    evidenceRefs: uniqueEvidenceRefs(existingParticipant.evidenceRefs, observationEvidence)
+  });
+
+  const relationResults = preparedRelations.map(({ relation, relationId, existingRelation }) => {
+    return updateIdentityRelation(roleDir, {
+      kind: "relation_card",
+      relationId,
+      subjectParticipantId: existingParticipant.id,
+      targetKind: relation.targetKind,
+      targetId: relation.targetId,
+      relationship: relation.relationship,
+      status: "candidate",
+      scope: relation.scope,
+      evidenceRefs: uniqueEvidenceRefs(existingRelation?.evidenceRefs ?? [], evidenceRefs(relation.evidenceRefs), observationEvidence)
+    });
+  });
+  return {
+    participant: participantResult.record as IdentityParticipant,
+    relations: relationResults.map(item => item.record as IdentityRelationCard),
+    appended: participantResult.appended || relationResults.some(item => item.appended)
+  };
+}
+
 function appliesToScope(card: IdentityRelationCard, lookup: IdentityEndpointLookup): boolean {
   if (card.scope.conversationKeys.length > 0 && (!lookup.conversationKey || !card.scope.conversationKeys.includes(lookup.conversationKey))) return false;
   if (card.scope.projectIds.length > 0 && (!lookup.projectId || !card.scope.projectIds.includes(lookup.projectId))) return false;
@@ -486,7 +906,7 @@ function appliesToScope(card: IdentityRelationCard, lookup: IdentityEndpointLook
 }
 
 function usableParticipant(item: IdentityParticipant | undefined): item is IdentityParticipant {
-  return Boolean(item && !item.conflicted && (item.status === "candidate" || item.status === "confirmed"));
+  return Boolean(item && !item.conflicted && isActiveIdentityStatus(item.status));
 }
 
 export function resolveIdentityRelationContext(roleDir: string, lookup: IdentityEndpointLookup): IdentityRelationContext | undefined {
@@ -513,32 +933,41 @@ export function resolveIdentityRelationContext(roleDir: string, lookup: Identity
         displayName: text(lookup.displayName, 300)
       };
   const links = account && !account.conflicted ? account.participantLinks : [];
-  const rawConfirmedLinks = links.filter(link => link.status === "confirmed");
+  const rawConfirmedLinks = links.filter(link => isAuthoritativeIdentityStatus(link.status));
   const confirmedMatches = rawConfirmedLinks.flatMap(link => {
     const participant = current.participants.get(link.participantId)?.record;
-    return usableParticipant(participant) && participant.status === "confirmed" ? [{ participant, link }] : [];
+    return usableParticipant(participant) && isAuthoritativeIdentityStatus(participant.status) ? [{ participant, link }] : [];
   });
   const confirmedParticipant = confirmedMatches.length === 1 && rawConfirmedLinks.length === 1 ? confirmedMatches[0]!.participant : undefined;
-  const candidateParticipants = links
+  const linkedCandidates = links
     .filter(link => link.status === "candidate")
     .flatMap(link => {
       const participant = current.participants.get(link.participantId)?.record;
       return usableParticipant(participant) ? [{ participant, link }] : [];
     });
-  const participantIds = new Set([confirmedParticipant?.id, ...candidateParticipants.map(item => item.participant.id)].filter(Boolean));
+  const possibleParticipants = linkedCandidates.filter(item => isAuthoritativeIdentityStatus(item.participant.status));
+  const candidateParticipants = linkedCandidates.filter(item => !isAuthoritativeIdentityStatus(item.participant.status));
+  const participantIds = new Set([
+    confirmedParticipant?.id,
+    ...possibleParticipants.map(item => item.participant.id),
+    ...candidateParticipants.map(item => item.participant.id)
+  ].filter(Boolean));
   const relevantRelations = [...current.relations.values()]
     .map(item => item.record)
     .filter(card => !card.conflicted
-      && (card.status === "candidate" || card.status === "confirmed")
+      && isActiveIdentityRelationStatus(card.status)
       && appliesToScope(card, lookup)
       && (participantIds.has(card.subjectParticipantId) || (card.targetKind === "participant" && participantIds.has(card.targetId))))
     .sort((a, b) => a.id.localeCompare(b.id));
   const unresolved: string[] = [];
   if (!account) unresolved.push("当前账号尚未建立身份关系记录。");
   if (account?.conflicted) unresolved.push("当前账号的身份映射存在并发冲突；在人工收敛前不得自动确认身份。");
-  if (rawConfirmedLinks.length !== 1 || !confirmedParticipant) {
-    unresolved.push(rawConfirmedLinks.length > 1 ? "当前账号存在多个已确认参与者映射，需人工纠正。" : "当前账号尚无唯一且有效的已确认参与者映射。");
+  if (rawConfirmedLinks.length > 1) {
+    unresolved.push("当前账号存在多个已确认参与者映射，需人工纠正。");
+  } else if (!confirmedParticipant && possibleParticipants.length === 0) {
+    unresolved.push("当前账号尚无唯一且有效的已确认参与者映射。");
   }
+  if (possibleParticipants.length > 0) unresolved.push("该账号与已识别人员存在非唯一关联；当前使用者需要结合本次对话另行判断。");
   if (candidateParticipants.length > 0) unresolved.push("候选参与者只能作为核对线索，不能用于称呼、授权或项目归属判断。");
-  return { endpoint, confirmedParticipant, candidateParticipants, relevantRelations, unresolved };
+  return { endpoint, confirmedParticipant, possibleParticipants, candidateParticipants, relevantRelations, unresolved };
 }

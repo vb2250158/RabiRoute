@@ -6,7 +6,7 @@
 
 # 人格路由工作台设计计划
 
-> 状态：部分实现。人格语音关键词和 11 端最近上下文控件已实现；单 route profile 的无副作用 RouteDecision / AgentPacket dry-run 预览尚未实现。
+> 状态：历史设计，部分内容已被现行人格自动化界面取代。当前真源使用 `automationRules`，界面按“收到消息时 / 定时任务”和“通知 Agent / 运行脚本”组织；本文保留的 `notificationRules` 字段说明只用于理解旧版迁移。单 Route 的无副作用 RouteDecision / AgentPacket dry-run 预览仍未实现。现行使用说明见 [人格与消息规则](user-guide/personas-and-rules.md)。
 
 本文设计 RibiWebGUI 的人格配置页改造。它不是竞品 Agent 编辑器复刻，也不是“智能选择人格”的产品方案；它是给当前 RabiRoute 模型补一个可解释、可预览、可排障的工作台。
 

@@ -14,7 +14,7 @@
 
 - 提供一份名为“Rabi Demo”的完整 `data/route/main/adapterConfig.json` 示例；它通过 `agentRoleId: "Rabi"` 绑定 Rabi 本体。
 - 给默认路由配置提供人格 `roles/Rabi`，并提供 RabiLink 专用的 `roles/RabiActive`。
-- 给默认人格提供 `roles/Rabi/personaConfig.json` 消息模板规则和最近消息投递数量。
+- 给默认人格提供 `roles/Rabi/personaConfig.json` 自动化规则和最近消息投递数量；示例包含消息通知 Agent 与定时通知 Agent，不默认运行脚本。
 - 给默认人格提供 `roles/Rabi/plans` 和 `roles/Rabi/memory` 的公开示例结构。
 - 给默认人格提供“一计划一任务”跟踪 Skill 范例；它不绑定具体聊天平台、审批人或项目规范。
 - 提供 `route/RabiLink` 与 `roles/RabiActive` 配套模板，演示 AIUI observation 的 record-first 账本、空闲/周期审阅和任务外主动下行；Relay 地址与 token 仍只在本机全局配置中填写。

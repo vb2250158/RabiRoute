@@ -8,6 +8,7 @@ import {
   type PrivateMessageRecord
 } from "./history.js";
 import { getMessage, type MessageInfo, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
+import { materializeNapCatAttachments } from "./napcatMedia.js";
 
 type ReplyChainError = {
   messageId: string;
@@ -73,11 +74,11 @@ function numberValue(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function appendResolvedMessage(
+async function appendResolvedMessage(
   info: MessageInfo,
   options: ResolveNapCatReplyChainOptions,
   dataDir: string
-): GroupMessageRecord | PrivateMessageRecord | null {
+): Promise<GroupMessageRecord | PrivateMessageRecord | null> {
   const messageId = info.messageId;
   const userId = numberValue(info.userId) ?? options.selfId ?? options.sourceUserId;
   if (messageId == null || userId == null) return null;
@@ -96,7 +97,13 @@ function appendResolvedMessage(
     botUserId: selfId == null ? undefined : String(selfId),
     botNickname: options.botNickname,
     isSelf,
-    lookupSource: "onebot_get_msg" as const
+    lookupSource: "onebot_get_msg" as const,
+    attachments: await materializeNapCatAttachments(info.message, info.rawMessage, {
+      dataDir,
+      instanceId: options.instanceId,
+      messageId
+    }),
+    segments: Array.isArray(info.message) ? info.message : undefined
   };
 
   const messageType = info.messageType === "group" || info.messageType === "private"
@@ -141,7 +148,7 @@ export async function resolveNapCatReplyChain(
     if (!record) {
       try {
         const info = await getMessageById(next.messageId, options.endpoint);
-        record = appendResolvedMessage(info, options, dataDir) ?? undefined;
+        record = await appendResolvedMessage(info, options, dataDir) ?? undefined;
         if (!record) {
           throw new Error("NapCat get_msg returned an incomplete message record");
         }

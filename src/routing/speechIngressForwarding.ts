@@ -39,6 +39,10 @@ export function createSpeechIngressForwarding(
       ? "RabiLink 手机音频流"
       : ingress.segments.length > 1 ? "RabiPC 多人语音" : "RabiPC 语音消息端",
     adapterType,
+    senderIdentityTrusted: adapterType === "rabilink" && Boolean(ingress.sourceDeviceId),
+    voiceIdentityTrusted: true,
+    identityNamespace: adapterType === "rabilink" && ingress.sourceDeviceId ? "relay:rabilink" : undefined,
+    senderStableId: adapterType === "rabilink" ? ingress.sourceDeviceId : undefined,
     gatewayId: optionalText(options.gatewayId),
     source: ingress.source,
     transport: ingress.transport,

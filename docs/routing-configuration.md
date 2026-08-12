@@ -8,7 +8,7 @@
 
 > 状态：现行指南。已按 `personaConfig.json` 读取逻辑、route kind、pipeline 和模板值核对。
 
-路由配置决定一条消息是否转发给处理端，以及用哪段模板把事件交给对应人格或 Agent。
+路由配置决定消息怎样进入、使用哪个人格和处理端；人格自动化决定何时触发，以及通知 Agent 还是运行脚本。
 
 ## 配置放在哪里
 
@@ -30,7 +30,7 @@ data/roles/QAReviewer/personaConfig.json
 data/roles/DevAssistant/personaConfig.json
 ```
 
-manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根级的 `notificationRules`、`speechTriggerKeywords` 和 `recentMessageLimits` 为真源，不再要求在人格文件里另建 `configs` 嵌套。
+Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根级的 `automationRules`、`speechTriggerKeywords` 和 `recentMessageLimits` 为真源，不再要求在人格文件里另建 `configs` 嵌套。旧 `notificationRules` 会兼容读取并转换。
 
 路由入口参数来自 `data/route/<配置名>/adapterConfig.json`。manager 用其中的 `agentRoleId` 找到对应人格；多条 Route 绑定同一人格时，复用同一套人格规则、语音关键词和分消息端上下文额度。新增并启用消息端时，Manager 会为尚未被现有规则覆盖的 route kind 自动补一条空白兜底模板，避免入口已经收到消息却因空规则静默丢失；现有自定义规则不会被覆盖，已明确禁用的对应规则也不会被重新启用。内置 `role_panel_message` 规则仍会保留。
 
@@ -54,30 +54,62 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
     "wecom": 100
   },
   "speechTriggerKeywords": ["Rabi", "看板娘"],
-  "notificationRules": [
+  "automationRules": [
     {
       "id": "rabi-private",
       "name": "Rabi 私聊",
       "enabled": true,
-      "routeKinds": ["private"],
-      "regex": "",
-      "template": ""
+      "trigger": {
+        "type": "message",
+        "routeKinds": ["private"],
+        "regex": ""
+      },
+      "action": {
+        "type": "deliver_agent",
+        "template": ""
+      }
     }
   ]
 }
 ```
 
-单条规则结构：
+收到消息后通知 Agent：
 
 ```json
 {
   "id": "rabi-group-keywords",
   "name": "Rabi 看板娘呼唤",
   "enabled": true,
-  "targetGroupId": "",
-  "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒",
-  "template": "<由真实换行模板正文保存得到>",
-  "routeKinds": ["group_message"]
+  "trigger": {
+    "type": "message",
+    "routeKinds": ["group_message"],
+    "targetGroupId": "",
+    "regex": "Rabi|RabiRoute|看板娘|兔娘|陪陪|聊聊|在吗|记一下|提醒"
+  },
+  "action": {
+    "type": "deliver_agent",
+    "template": "<由真实换行模板正文保存得到>"
+  }
+}
+```
+
+定时运行脚本：
+
+```json
+{
+  "id": "daily-check",
+  "name": "每天检查",
+  "enabled": true,
+  "trigger": {
+    "type": "schedule",
+    "schedule": { "id": "daily-check-time", "type": "daily_time", "timeOfDay": "09:00" }
+  },
+  "action": {
+    "type": "run_script",
+    "scriptPath": "daily-check.py",
+    "arguments": ["--summary"],
+    "timeoutSeconds": 300
+  }
 }
 ```
 
@@ -100,10 +132,10 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 - `rabilink`：RabiLink 显式消息或本地兼容入口事件。AIUI observation 的主链通常先 record-first 写统一账本，不会让每条 observation 都直接成为该 route kind 的 Agent 任务。
 - `wearable_health_alert`：穿戴健康样本命中阈值或睡眠状态变化后的告警；普通样本只记录。
 
-## 普通投递、心跳与语音的例外
+## 普通投递、定时任务与语音的例外
 
 - 普通消息端事件一旦命中规则，默认直接投递：当前 Desktop turn 活跃时 `steer`，空闲时 `start`。
-- Heartbeat 固定不注入历史消息，也不进入聊天消息的等待合并。启用 Codex 消息处理 Agent 后，它会立即交给独立消息处理任务，不受主人格忙碌状态影响；未启用时才使用 `heartbeatSkipWhenAgentBusy`，在固定任务工作中跳过 heartbeat。旧配置里的 `recentMessageLimits.heartbeat` 会保留兼容读取，但运行时按 `0` 处理。
+- 定时触发固定不注入历史消息，也不进入聊天消息的等待合并。通知 Agent 时仍使用 heartbeat 兼容事件；启用 Codex 消息处理 Agent 后会立即交给独立消息处理任务，未启用时才使用 `heartbeatSkipWhenAgentBusy`。运行脚本时不进入 Agent 投递链，且需要 Route 本机的 `personaAutomationScriptsEnabled=true`。
 - `plan_feedback` 是 Manager 已明确绑定计划和 Route 后产生的系统事件，固定投递专用内置规则；它不读取或写入聊天历史，最近消息模板变量始终为空。
 - 语音有 Route 级 `speechPushMode`：`hot` 每段 ASR 完成即投递；`keyword` 仍记录所有 ASR，仅命中人格 `speechTriggerKeywords` 时投递。空关键词不回退 `hot`。
 - `recentMessageLimits` 也归人格，普通消息端分别设置 `0–200`，默认 `12`；只控制自动注入，不控制记录。Heartbeat 与 `plan_feedback` 不提供可调额度，始终不注入历史。
@@ -139,10 +171,10 @@ manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 
 模板可以读取 `{outputPipeline}`、`{promptOutputMode}`、`{ttsProvider}`、`{ttsVoice}`、`{preventFeedbackLoop}` 和 `{replyToSource}`。现行语音主链由 `AgentPacket` 注入 `character-tts-dialogue` 发送要求，以及带 `channel=speech` 和当前 `sessionId` 的明确请求模板；Agent 通过发送 API 交回口语短句，Outbox 再调用 RabiSpeech。人格模板不需要手写 FenneNote/OumuQ 调用，也不能用来源上下文代替发送目标。
 
-一条规则可以匹配多个 route kind；同一条事件可以命中多条已启用规则，RabiRoute 会逐条投递，不会只取第一条：
+一条消息触发规则可以匹配多个 route kind；同一条事件可以命中多条已启用规则。通知 Agent 的规则会逐条投递；运行脚本的规则会分别执行并记录结果：
 
 ```json
-"routeKinds": ["direct_at", "direct_reply", "private"]
+"trigger": { "type": "message", "routeKinds": ["direct_at", "direct_reply", "private"] }
 ```
 
 ## 正则匹配 regex

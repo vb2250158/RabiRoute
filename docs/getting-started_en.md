@@ -56,7 +56,7 @@ In RibiWebGUI, check:
 - **Handler**: choose Codex, a fixed thread name, and the project workspace.
 - **Route**: verify WebSocket/HTTP ports, webhook settings, handler cwd, and role binding.
 - **Role**: select or create a role such as the public `Rabi` example.
-- **Notification rules**: confirm which route kinds are forwarded.
+- **Persona automation**: use **When a message arrives / Scheduled tasks** to choose the trigger, then notify the Agent or run a persona script.
 
 For manual `personaConfig.json` edits, see [Routing Configuration](routing-configuration_en.md).
 
@@ -70,7 +70,7 @@ xcopy examples\data data /E /I
 cp -R examples/data/. data/
 ```
 
-For a QQ-free smoke test, enable only `heartbeat` and trigger an internal event.
+For a QQ-free smoke test, enable Scheduled Tasks. Script actions also require the separate local Route permission.
 
 ## Codex setup
 

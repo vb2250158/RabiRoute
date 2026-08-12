@@ -33,6 +33,9 @@ export function buildWearableHealthAlertRecord(
     sourceDeviceName: context.sourceDeviceName,
     sourceDeviceKind: context.sourceDeviceKind || "wearable",
     transport: context.transport || "rabilink",
+    identityNamespace: context.sourceDeviceId ? "relay:rabilink" : undefined,
+    senderStableId: context.sourceDeviceId,
+    senderIdentityTrusted: Boolean(context.sourceDeviceId),
     routeProfileId: context.agentRoleId
   };
 }

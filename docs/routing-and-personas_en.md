@@ -21,6 +21,7 @@ RabiRoute is a dispatcher. A route represents one deployable message path; a rol
 - pipeline selection;
 - the `agentRoleId` binding;
 - route-local runtime data and logs.
+- Route-local permission to run persona automation scripts.
 
 ## Role-owned data
 
@@ -28,13 +29,14 @@ RabiRoute is a dispatcher. A route represents one deployable message path; a rol
 
 - `persona.md` and growth material;
 - optional `avatar.png` / `.jpg` / `.webp` / `.gif`, referenced by `personaConfig.json.avatar`;
-- `personaConfig.json` notification rules, `speechTriggerKeywords`, and ordinary-endpoint `recentMessageLimits`; Heartbeat always omits history;
+- `personaConfig.json` automation rules, `speechTriggerKeywords`, and ordinary-endpoint `recentMessageLimits`; scheduled Agent tasks always omit history;
 - `voice/voice-profile.json` as the only TTS model/voice/language/speed/instructions source;
 - plans, recent memory, consolidated memory, and skills;
+- optional `scripts/` containing automation `.cmd`, `.bat`, and `.py` files;
 - role-panel timeline data.
 - `conversation/current.jsonl` plus time-based archives for bidirectional endpoint evidence.
 
-One role can serve several routes. Those Routes reuse the same role-owned rules, speech keywords, voice profile, and per-endpoint context budgets instead of copying role facts into Route configuration.
+One role can serve several routes. Those Routes reuse the same role-owned automation rules, speech keywords, voice profile, and per-endpoint context budgets instead of copying role facts into Route configuration. Local script permission remains Route-owned and is not synchronized with the persona.
 
 ## Voice and context ownership
 
@@ -96,7 +98,7 @@ Proactive does not mean replying to every ambient group message. Respond when a 
 
 - Use `direct_at`, `direct_reply`, or `private` for explicit conversation with the role.
 - Use `group_message` with a narrow `regex` for ambient group triage.
-- Use `heartbeat` and `manual_trigger` for scheduled or explicit internal events.
+- Use a schedule trigger for timed work and `manual_trigger` for explicit internal events.
 - Use `voice_transcript`, `wecom_message`, `role_panel_message`, or `rabilink` only for the matching endpoint.
 - Keep external-action authorization in pipeline/message-adapter policy, not in conversational wording alone.
 

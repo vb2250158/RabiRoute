@@ -58,6 +58,8 @@ flowchart TD
 
 Creating a task and delivering its first prompt are separate operations. A short-lived project-pinned app-server may create and name an empty persistent task. It must not execute the prompt. The first and subsequent real prompts still go through Desktop IPC to the Desktop owner.
 
+The creation transaction must also persist a runtime Manager reservation. It records `reserved/creating` before `thread/start`, records `thread_created` as soon as the ID is known, and only then advances through naming and the initial turn. After a lost HTTP response, naming failure, or Manager restart, any outcome that cannot prove `thread/start` was never called remains `uncertain` and must not create automatically again. `state_db` readback supplies evidence; it is not the idempotency source of truth.
+
 ## Identity and state rules
 
 - The UI shows task name and last activity; users do not type UUIDs.
@@ -113,6 +115,7 @@ Do not deliver after a failed save. Do not roll back a successfully created task
 | Initial delivery fails after creation | Keep ID; retry the message only |
 | More than 100 tasks | All tasks remain discoverable through pagination/full scan |
 | Settings page sits idle or receives input/blur/save | Scan request count does not grow |
+| The Desktop system link selects only the project and does not load the target task owner | Request one open per delivery, wait for a bounded period, then fail with instructions to open the exact task in Desktop or reselect it in RabiRoute; do not repeatedly steal window focus |
 | Desktop is stopped | Clear failure; no alternate Runtime |
 | RabiRoute is stopped | Desktop cold-start remains normal |
 | Residual endpoint environment variable | RabiRoute child processes ignore it; installer does not write it |

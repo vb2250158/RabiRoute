@@ -27,10 +27,6 @@ Agent 或程序负责真正回答和执行任务。RabiRoute 负责决定**消�
 
 [可以构建什么](#可以构建什么) · [快速上手](#快速上手) · [工作方式](#工作方式) · [当前能力](#当前能力) · [深入了解](#深入了解)
 
-![RibiWebGUI 中暂停运行的文档示例 Route，显示当前路线、连接状态和消息入口](assets/screenshots/webgui-overview-zh.png)
-
-<p align="center"><sub>截图时暂时停用了 Route，避免产生真实投递；保存配置并启动后，顶栏和诊断页会显示实际运行状态。</sub></p>
-
 ## 可以构建什么
 
 - 💬 **聊天到 Agent 的路由。** 把 QQ、角色面板或定时事件交给选定的处理端；Codex 是第一条完成端到端验证的处理端。
@@ -158,7 +154,7 @@ data/roles/<RoleId>/personaConfig.json
 
 - `adapterConfig.json` 定义消息入口、处理端 adapter、工作目录、pipeline preset 和人格绑定。
 - `persona.md` 保存人格或面向处理端的角色说明。
-- `personaConfig.json` 保存通知规则、消息模板、头像信息、语音关键词和最近消息额度。
+- `personaConfig.json` 保存人格自动化规则、头像信息、语音关键词和最近消息额度。每条自动化规则由“收到消息或到达时间”与“通知 Agent 或运行本机人格脚本”组成。
 
 完整会话证据位于 `data/roles/<RoleId>/conversation/`。可公开复制的脱敏样板位于 [`examples/data/`](examples/data/)，本机运行数据保持私有。
 

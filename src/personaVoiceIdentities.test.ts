@@ -20,6 +20,7 @@ test("persona voice identities are scoped by processing host and remain merge-fr
     sourceHostId: "host-a",
     sourceHostName: "Studio PC",
     voiceprintId: "cluster-1",
+    participantId: "participant-owner",
     displayName: "老板",
     relationship: "我的用户",
     isUser: true,
@@ -37,6 +38,7 @@ test("persona voice identities are scoped by processing host and remain merge-fr
     sourceHostId: "host-a",
     sourceHostName: "Studio PC",
     voiceprintId: "cluster-1",
+    participantId: "participant-owner",
     displayName: "老板",
     relationship: "我的用户",
     isUser: true,
@@ -49,6 +51,7 @@ test("persona voice identities are scoped by processing host and remain merge-fr
   assert.equal(unchanged.appended, false);
   assert.equal(listPersonaVoiceIdentities(roleDir).length, 2);
   assert.equal(findPersonaVoiceIdentity(roleDir, "host-a", "cluster-1")?.isUser, true);
+  assert.equal(findPersonaVoiceIdentity(roleDir, "host-a", "cluster-1")?.participantId, "participant-owner");
   assert.equal(findPersonaVoiceIdentity(roleDir, "host-b", "cluster-1")?.displayName, "访客");
   assert.deepEqual(
     resolvePersonaVoiceIdentities(roleDir, "host-a", ["cluster-1", "cluster-missing"])
@@ -64,6 +67,7 @@ test("persona voice identities clear only the persona decision while preserving 
     sourceHostId: "host-a",
     sourceHostName: "Studio PC",
     voiceprintId: "voice-a",
+    participantId: "participant-owner",
     displayName: "我的用户",
     relationship: "主人",
     isUser: true,
@@ -79,6 +83,7 @@ test("persona voice identities clear only the persona decision while preserving 
   assert.equal(cleared.identity?.isUser, undefined);
   assert.equal(cleared.identity?.displayName, "我的用户");
   assert.equal(cleared.identity?.relationship, "主人");
+  assert.equal(cleared.identity?.participantId, "participant-owner");
   assert.equal(cleared.identity?.sourceHostName, "Studio PC");
   assert.equal(fs.readFileSync(personaVoiceIdentitiesPath(roleDir), "utf8").trim().split(/\r?\n/).length, 2);
 });
@@ -162,6 +167,7 @@ test("persona voice identities preserve concurrent PC branches until the persona
     sourceHostId: "host-audio",
     voiceprintId: "cluster-user",
     displayName: "老板",
+    participantId: "participant-owner",
     relationship: "当前人格的用户",
     isUser: true,
     aliases: ["老板"]
@@ -170,6 +176,7 @@ test("persona voice identities preserve concurrent PC branches until the persona
     sourceHostId: "host-audio",
     voiceprintId: "cluster-user",
     displayName: "访客",
+    participantId: "participant-visitor",
     relationship: "来访者",
     isUser: false,
     aliases: ["客人"]
@@ -186,7 +193,7 @@ test("persona voice identities preserve concurrent PC branches until the persona
 
   const conflicted = findPersonaVoiceIdentity(roleA, "host-audio", "cluster-user");
   assert.equal(conflicted?.conflicted, true);
-  assert.deepEqual(conflicted?.conflictFields?.sort(), ["aliases", "displayName", "isUser", "relationship"]);
+  assert.deepEqual(conflicted?.conflictFields?.sort(), ["aliases", "displayName", "isUser", "participantId", "relationship"]);
   assert.equal(conflicted?.isUser, undefined);
   assert.equal(conflicted?.conflictCandidates?.length, 2);
   appendMessageContextToDir(roleA, {
@@ -211,6 +218,7 @@ test("persona voice identities preserve concurrent PC branches until the persona
     sourceHostId: "host-audio",
     voiceprintId: "cluster-user",
     displayName: "老板",
+    participantId: "participant-owner",
     relationship: "当前人格的用户",
     isUser: true,
     aliases: ["老板"]
@@ -218,6 +226,7 @@ test("persona voice identities preserve concurrent PC branches until the persona
   assert.equal(resolved.appended, true);
   assert.equal(resolved.identity?.conflicted, undefined);
   assert.equal(resolved.identity?.isUser, true);
+  assert.equal(resolved.identity?.participantId, "participant-owner");
   assert.equal(listPersonaVoiceTranscriptViews(roleA, { limit: 10 })[0]?.personaClassification, "user");
   const rows = fs.readFileSync(personaVoiceIdentitiesPath(roleA), "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line));
   assert.equal(rows.at(-1)?.supersedes.length, 2);

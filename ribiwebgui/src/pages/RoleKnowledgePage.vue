@@ -51,6 +51,7 @@ import {
   type PlanAgentRole,
   type PlanAgentSessionStatus,
   type PlanAgentStatus,
+  type RoleMemoryKind,
   type RoleMemoryPageCounts,
   type RolePlanPageCounts,
   type RolePlanPageFilter
@@ -67,6 +68,7 @@ const { isEnglish, t } = useI18n();
 const plans = ref<RolePlan[]>([]);
 const recentMemory = ref<RoleMemory[]>([]);
 const consolidatedMemory = ref<RoleMemory[]>([]);
+const archivedMemory = ref<RoleMemory[]>([]);
 const loading = ref(false);
 const loadingMorePlans = ref(false);
 const memoryLoading = ref(false);
@@ -117,7 +119,7 @@ const approvalMentionMenus = reactive<Record<string, ApprovalMentionMenuState>>(
 const approvalTextareaElements = new Map<string, HTMLTextAreaElement>();
 const planAttachmentPreview = ref<{ name: string; url: string; kind: "image" | "video" } | null>(null);
 const planMarkdownPreview = ref<{ name: string; url: string; html: string; error: string; loading: boolean } | null>(null);
-const memoryDetailPreview = ref<{ memory: RoleMemory; kind: "recent" | "consolidated" } | null>(null);
+const memoryDetailPreview = ref<{ memory: RoleMemory; kind: RoleMemoryKind } | null>(null);
 type PlanMarkdownTeaserState = { text: string; loading: boolean };
 const planMarkdownTeasers = reactive<Record<string, PlanMarkdownTeaserState>>({});
 type PlanMediaLoadState = "loading" | "loaded" | "error";
@@ -150,7 +152,7 @@ const planPageCounts = ref<RolePlanPageCounts>({
 });
 const planNextCursor = ref("");
 const memoryNextCursor = ref("");
-const memoryPageCounts = ref<RoleMemoryPageCounts>({ recent: 0, consolidated: 0, consolidationRuns: 0 });
+const memoryPageCounts = ref<RoleMemoryPageCounts>({ recent: 0, consolidated: 0, archived: 0, consolidationRuns: 0 });
 const pendingMemoryConsolidationRuns = ref(0);
 const planRenderStart = ref(0);
 const planRenderLimit = ref(8);
@@ -239,9 +241,12 @@ const renderedPlansForView = computed(() => knowledgeRenderWindow(
 ));
 const visibleRecentMemory = computed(() => recentMemory.value.filter(matchesQuery));
 const visibleConsolidatedMemory = computed(() => consolidatedMemory.value.filter(matchesQuery));
-const visibleMemoryForView = computed(() => activeView.value === "archived"
+const visibleArchivedMemory = computed(() => archivedMemory.value.filter(matchesQuery));
+const visibleMemoryForView = computed(() => activeView.value === "consolidated_memory"
   ? visibleConsolidatedMemory.value
-  : visibleRecentMemory.value);
+  : activeView.value === "archived"
+    ? visibleArchivedMemory.value
+    : visibleRecentMemory.value);
 const renderedMemoryForView = computed(() => visibleMemoryForView.value.slice(0, memoryRenderLimit.value));
 const hasMorePlans = computed(() => Boolean(planNextCursor.value));
 const hasMoreRenderedPlans = computed(() => hasMoreKnowledgeAfterWindow(
@@ -253,10 +258,12 @@ const hasPendingPlanDetails = computed(() => Object.values(planDetailsLoading).s
 const hasMoreMemory = computed(() => Boolean(memoryNextCursor.value));
 const hasMoreRenderedMemory = computed(() => renderedMemoryForView.value.length < visibleMemoryForView.value.length);
 const showsPlanList = computed(() => ["plans", "archived"].includes(activeView.value));
-const showsMemoryList = computed(() => ["recent_memory", "archived"].includes(activeView.value));
-const totalMemoryForView = computed(() => activeView.value === "archived"
+const showsMemoryList = computed(() => ["recent_memory", "consolidated_memory", "archived"].includes(activeView.value));
+const totalMemoryForView = computed(() => activeView.value === "consolidated_memory"
   ? memoryPageCounts.value.consolidated
-  : memoryPageCounts.value.recent);
+  : activeView.value === "archived"
+    ? memoryPageCounts.value.archived
+    : memoryPageCounts.value.recent);
 const knowledgeListLoading = computed(() => loading.value || loadingMorePlans.value || memoryLoading.value || hasMorePlans.value || hasMoreMemory.value);
 const knowledgeListStatus = computed(() => {
   const counts: string[] = [];
@@ -778,12 +785,14 @@ function scheduleProgressiveSentinelRefresh(): void {
   void nextTick(observeProgressiveSentinels);
 }
 
-function currentMemoryKind(): "recent" | "consolidated" {
-  return activeView.value === "archived" ? "consolidated" : "recent";
+function currentMemoryKind(): RoleMemoryKind {
+  if (activeView.value === "consolidated_memory") return "consolidated";
+  if (activeView.value === "archived") return "archived";
+  return "recent";
 }
 
 function resetMemoryPageCounts(): void {
-  memoryPageCounts.value = { recent: 0, consolidated: 0, consolidationRuns: 0 };
+  memoryPageCounts.value = { recent: 0, consolidated: 0, archived: 0, consolidationRuns: 0 };
   pendingMemoryConsolidationRuns.value = 0;
 }
 
@@ -798,7 +807,8 @@ async function loadMoreMemory(limit = 24): Promise<void> {
     const page = await loadRoleMemoryPage(selectedRoleId, kind, cursor, limit, normalizedQuery.value);
     if (currentRequest !== requestVersion || selectedRoleId !== roleId.value || kind !== currentMemoryKind()) return;
     if (kind === "recent") recentMemory.value = mergeKnowledgePage(recentMemory.value, page.items);
-    else consolidatedMemory.value = mergeKnowledgePage(consolidatedMemory.value, page.items);
+    else if (kind === "consolidated") consolidatedMemory.value = mergeKnowledgePage(consolidatedMemory.value, page.items);
+    else archivedMemory.value = mergeKnowledgePage(archivedMemory.value, page.items);
     memoryNextCursor.value = page.nextCursor;
     memoryPageCounts.value = page.counts;
   } catch (loadError) {
@@ -926,6 +936,7 @@ async function refreshKnowledge(): Promise<void> {
     plans.value = [];
     recentMemory.value = [];
     consolidatedMemory.value = [];
+    archivedMemory.value = [];
     planNextCursor.value = "";
     planListResultTotal.value = 0;
     planListStatusOptions.value = [];
@@ -991,6 +1002,7 @@ async function refreshKnowledge(): Promise<void> {
   if (!showsMemoryList.value) {
     recentMemory.value = [];
     consolidatedMemory.value = [];
+    archivedMemory.value = [];
     return;
   }
   memoryLoading.value = true;
@@ -1001,9 +1013,15 @@ async function refreshKnowledge(): Promise<void> {
     if (kind === "recent") {
       recentMemory.value = memory.items;
       consolidatedMemory.value = [];
-    } else {
+      archivedMemory.value = [];
+    } else if (kind === "consolidated") {
       consolidatedMemory.value = memory.items;
       recentMemory.value = [];
+      archivedMemory.value = [];
+    } else {
+      archivedMemory.value = memory.items;
+      recentMemory.value = [];
+      consolidatedMemory.value = [];
     }
     memoryNextCursor.value = memory.nextCursor;
     memoryPageCounts.value = memory.counts;
@@ -1488,6 +1506,11 @@ function clipboardImageName(mimeType: string, index: number): string {
   return `clipboard-${stamp}${index > 0 ? `-${index + 1}` : ""}.${extension}`;
 }
 
+function clipboardAttachmentName(file: File, kind: "file" | "image", index: number): string {
+  if (kind === "image") return clipboardImageName(file.type, index);
+  return file.name || `clipboard-attachment-${index + 1}`;
+}
+
 function addApprovalFiles(planId: string, files: File[], fromClipboard = false): void {
   if (!files.length || approvalPending[planId]) return;
   const current = approvalAttachmentsFor(planId);
@@ -1518,7 +1541,9 @@ function addApprovalFiles(planId: string, files: File[], fromClipboard = false):
     return {
       id: attachmentDraftId(),
       file: markRaw(file),
-      name: fromClipboard ? clipboardImageName(file.type, index) : file.name || `attachment-${current.length + index + 1}`,
+      name: fromClipboard
+        ? clipboardAttachmentName(file, kind, index)
+        : file.name || `attachment-${current.length + index + 1}`,
       size: file.size,
       mimeType: file.type,
       kind,
@@ -1546,15 +1571,15 @@ function handleApprovalFileSelection(event: Event): void {
 }
 
 function handleApprovalPaste(planId: string, event: ClipboardEvent): void {
-  const images = Array.from(event.clipboardData?.items || [])
-    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+  const files = Array.from(event.clipboardData?.items || [])
+    .filter((item) => item.kind === "file")
     .flatMap((item) => {
       const file = item.getAsFile();
       return file ? [file] : [];
     });
-  if (!images.length) return;
+  if (!files.length) return;
   if (!event.clipboardData?.getData("text/plain")) event.preventDefault();
-  addApprovalFiles(planId, images, true);
+  addApprovalFiles(planId, files, true);
 }
 
 function releaseAttachmentDrafts(drafts: ApprovalAttachmentDraft[]): void {
@@ -2016,7 +2041,7 @@ async function refreshPlanApproval(planId: string): Promise<void> {
 function openMemoryDetail(memory: RoleMemory): void {
   memoryDetailPreview.value = {
     memory,
-    kind: activeView.value === "archived" ? "consolidated" : "recent"
+    kind: currentMemoryKind()
   };
 }
 
@@ -2167,8 +2192,8 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
   approvalPending[plan.id] = true;
   delete approvalNotices[plan.id];
   try {
-    const attachments = guidance ? [] : await approvalAttachmentUploads(plan.id);
-    const planAttachmentIds = guidance ? [] : referencedPlanAttachmentIds(text, allApprovalMentionCandidates(plan));
+    const attachments = await approvalAttachmentUploads(plan.id);
+    const planAttachmentIds = referencedPlanAttachmentIds(text, allApprovalMentionCandidates(plan));
     const result = await submitPlanFeedback({
       roleId: roleId.value,
       planId: plan.id,
@@ -2199,7 +2224,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       };
     } else if (result.deliveryStatus === "pending") {
       submittedApprovalTexts.set(plan.id, text);
-      if (!guidance) submittedApprovalAttachments.set(plan.id, takeApprovalAttachments(plan.id));
+      submittedApprovalAttachments.set(plan.id, takeApprovalAttachments(plan.id));
       approvalDeliveryPending[plan.id] = true;
       approvalDrafts[plan.id] = "";
       approvalNotices[plan.id] = { tone: "success", text: t(`${noticeName}已记录，正在后台通知 Agent。`) };
@@ -2444,7 +2469,8 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         <v-btn-toggle v-model="activeView" mandatory color="primary" density="comfortable" class="knowledge-tabs">
           <v-btn value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ planPageCounts.plans }}</b></v-btn>
           <v-btn value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ memoryPageCounts.recent }}</b></v-btn>
-          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ planPageCounts.archived + memoryPageCounts.consolidated }}</b></v-btn>
+          <v-btn value="consolidated_memory" prepend-icon="mdi-bookshelf"><span>{{ t("沉淀记忆") }}</span><b>{{ memoryPageCounts.consolidated }}</b></v-btn>
+          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ planPageCounts.archived + memoryPageCounts.archived }}</b></v-btn>
         </v-btn-toggle>
         <div class="knowledge-tools">
           <v-text-field
@@ -2823,6 +2849,31 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   >
                     <span>{{ feedbackRecordLabel(feedback) }} · <time data-no-i18n>{{ formatDate(feedback.createdAt) }}</time></span>
                     <b data-no-i18n>{{ feedback.text }}</b>
+                    <div v-if="(feedback.attachments || []).length" class="knowledge-approval-record-attachments">
+                      <v-chip
+                        v-for="attachment in feedback.attachments"
+                        :key="`${feedback.id}-${attachment.sha256}`"
+                        prepend-icon="mdi-paperclip"
+                        size="x-small"
+                        variant="tonal"
+                        data-no-i18n
+                      >
+                        {{ attachment.name }} · {{ formatAttachmentSize(attachment.size) }}
+                      </v-chip>
+                    </div>
+                    <div v-if="(feedback.planAttachments || []).length" class="knowledge-approval-record-attachments">
+                      <v-chip
+                        v-for="attachment in feedback.planAttachments"
+                        :key="`${feedback.id}-plan-${attachment.id}`"
+                        prepend-icon="mdi-at"
+                        size="x-small"
+                        variant="tonal"
+                        color="primary"
+                        data-no-i18n
+                      >
+                        {{ attachment.name }} · {{ formatAttachmentSize(attachment.size) }}
+                      </v-chip>
+                    </div>
                   </article>
                 </div>
                 <div
@@ -2852,7 +2903,46 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     :maxlength="2000"
                     :disabled="!canEditPlanGuidance(plan)"
                     @keydown.enter="handleGuidanceEnter($event, plan)"
+                    @paste="handleApprovalPaste(plan.id, $event)"
                   />
+                </div>
+                <div class="knowledge-approval-attachment-tools">
+                  <v-btn
+                    prepend-icon="mdi-paperclip-plus"
+                    variant="tonal"
+                    size="small"
+                    :disabled="!canEditPlanGuidance(plan)"
+                    @click="openApprovalAttachmentPicker(plan.id)"
+                  >
+                    {{ t("添加附件") }}
+                  </v-btn>
+                  <span>{{ t("支持选择文件，也可以在输入框中按 Ctrl+V 粘贴文件或图片。") }}</span>
+                  <small>{{ t("最多 8 个，单个不超过 10 MB，总计不超过 25 MB。") }}</small>
+                </div>
+                <div v-if="approvalAttachmentsFor(plan.id).length" class="knowledge-approval-attachments">
+                  <article
+                    v-for="attachment in approvalAttachmentsFor(plan.id)"
+                    :key="attachment.id"
+                    class="knowledge-approval-attachment"
+                    :class="{ image: attachment.kind === 'image' }"
+                  >
+                    <img v-if="attachment.previewUrl" :src="attachment.previewUrl" alt="">
+                    <div v-else class="knowledge-approval-attachment-icon">
+                      <v-icon size="22">mdi-file-outline</v-icon>
+                    </div>
+                    <div class="knowledge-approval-attachment-copy">
+                      <b data-no-i18n>{{ attachment.name }}</b>
+                      <span data-no-i18n>{{ formatAttachmentSize(attachment.size) }}</span>
+                    </div>
+                    <v-btn
+                      icon="mdi-close"
+                      variant="text"
+                      size="x-small"
+                      :aria-label="t('删除附件')"
+                      :disabled="approvalPending[plan.id]"
+                      @click="removeApprovalAttachment(plan.id, attachment.id)"
+                    />
+                  </article>
                 </div>
                 <v-alert
                   v-if="approvalNotices[plan.id]"
@@ -3153,10 +3243,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       :disabled="!canEditApprovalFeedback(plan)"
                       @click="openApprovalAttachmentPicker(plan.id)"
                     >
-                      添加附件
+                      {{ t("添加附件") }}
                     </v-btn>
-                    <span>支持选择文件，也可以在输入框中按 Ctrl+V 粘贴图片。</span>
-                    <small>最多 8 个，单个不超过 10 MB，总计不超过 25 MB。</small>
+                    <span>{{ t("支持选择文件，也可以在输入框中按 Ctrl+V 粘贴文件或图片。") }}</span>
+                    <small>{{ t("最多 8 个，单个不超过 10 MB，总计不超过 25 MB。") }}</small>
                   </div>
                   <div v-if="approvalAttachmentsFor(plan.id).length" class="knowledge-approval-attachments">
                     <article
@@ -3232,10 +3322,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
 
       <div v-if="roleId && showsMemoryList" class="knowledge-memory-grid">
         <div v-if="activeView === 'archived'" class="knowledge-subsection-heading knowledge-memory-heading">
-          <v-icon size="20">mdi-bookshelf</v-icon>
-          <b>{{ t("沉淀记忆") }}</b>
+          <v-icon size="20">mdi-archive-outline</v-icon>
+          <b>{{ t("已归档记忆") }}</b>
         </div>
-        <div v-if="recentMemoryConsolidationNotice" class="knowledge-memory-consolidation-panel">
+        <div v-if="activeView === 'recent_memory' && recentMemoryConsolidationNotice" class="knowledge-memory-consolidation-panel">
           <div class="knowledge-memory-consolidation-icon">
             <v-icon size="22">mdi-timer-sand</v-icon>
           </div>
@@ -3256,13 +3346,13 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           :class="{ 'will-consolidate': memoryIdsEnteringNextConsolidation.has(memory.id) }"
         >
           <div class="knowledge-memory-icon">
-            <v-icon>{{ activeView === "archived" ? "mdi-bookshelf" : "mdi-memory" }}</v-icon>
+            <v-icon>{{ activeView === "consolidated_memory" ? "mdi-bookshelf" : activeView === "archived" ? "mdi-archive-outline" : "mdi-memory" }}</v-icon>
           </div>
           <div class="knowledge-memory-copy">
             <div class="knowledge-memory-head">
               <div>
                 <div class="knowledge-memory-kicker-row">
-                  <div class="knowledge-kicker">{{ activeView === "archived" ? "CONSOLIDATED" : "RECENT" }}</div>
+                  <div class="knowledge-kicker">{{ activeView === "consolidated_memory" ? "CONSOLIDATED" : activeView === "archived" ? "ARCHIVED" : "RECENT" }}</div>
                   <span v-if="memoryIdsEnteringNextConsolidation.has(memory.id)">{{ t("将进入本次沉淀") }}</span>
                 </div>
                 <h2 data-no-i18n>{{ memory.title }}</h2>
@@ -3272,7 +3362,12 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   <small>{{ t("记录时间") }}</small>
                   <time data-no-i18n :datetime="memory.createdAt">{{ formatDate(memory.createdAt) }}</time>
                 </span>
-                <span>
+                <span v-if="activeView === 'archived'">
+                  <small>{{ t("归档时间") }}</small>
+                  <time v-if="memory.consolidatedAt" data-no-i18n :datetime="memory.consolidatedAt">{{ formatDate(memory.consolidatedAt) }}</time>
+                  <b v-else>—</b>
+                </span>
+                <span v-else>
                   <small>{{ t("上次命中召回") }}</small>
                   <time v-if="memory.recalledAt" data-no-i18n :datetime="memory.recalledAt">{{ formatDate(memory.recalledAt) }}</time>
                   <b v-else>{{ t("尚未命中召回") }}</b>
@@ -3327,7 +3422,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       <v-card v-if="memoryDetailPreview" class="knowledge-memory-detail" variant="flat">
         <div class="knowledge-memory-detail-head">
           <div>
-            <span>{{ t(memoryDetailPreview.kind === "consolidated" ? "沉淀记忆" : "近期记忆") }}</span>
+            <span>{{ t(memoryDetailPreview.kind === "consolidated" ? "沉淀记忆" : memoryDetailPreview.kind === "archived" ? "已归档记忆" : "近期记忆") }}</span>
             <b data-no-i18n>{{ memoryDetailPreview.memory.title }}</b>
           </div>
           <v-btn icon="mdi-close" variant="text" :aria-label="t('关闭预览')" @click="closeMemoryDetail" />
@@ -3337,7 +3432,16 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
             <small>{{ t("记录时间") }}</small>
             <time data-no-i18n :datetime="memoryDetailPreview.memory.createdAt">{{ formatDate(memoryDetailPreview.memory.createdAt) }}</time>
           </span>
-          <span>
+          <span v-if="memoryDetailPreview.kind === 'archived'">
+            <small>{{ t("归档时间") }}</small>
+            <time
+              v-if="memoryDetailPreview.memory.consolidatedAt"
+              data-no-i18n
+              :datetime="memoryDetailPreview.memory.consolidatedAt"
+            >{{ formatDate(memoryDetailPreview.memory.consolidatedAt) }}</time>
+            <b v-else>—</b>
+          </span>
+          <span v-else>
             <small>{{ t("上次命中召回") }}</small>
             <time
               v-if="memoryDetailPreview.memory.recalledAt"

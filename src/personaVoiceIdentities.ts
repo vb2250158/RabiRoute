@@ -11,6 +11,7 @@ type PersonaVoiceIdentityValue = {
   sourceHostId: string;
   sourceHostName?: string;
   voiceprintId: string;
+  participantId?: string;
   displayName?: string;
   relationship?: string;
   isUser?: boolean;
@@ -21,6 +22,7 @@ type PersonaVoiceIdentityValue = {
 
 export type PersonaVoiceIdentityConflictField =
   | "sourceHostName"
+  | "participantId"
   | "displayName"
   | "relationship"
   | "isUser"
@@ -55,6 +57,7 @@ export type PersonaVoiceIdentityPatch = {
   sourceHostId: unknown;
   sourceHostName?: unknown;
   voiceprintId: unknown;
+  participantId?: unknown;
   displayName?: unknown;
   relationship?: unknown;
   isUser?: unknown;
@@ -122,7 +125,7 @@ function conflictCandidate(event: PersonaVoiceIdentityEvent): PersonaVoiceIdenti
 
 function scalarConsensus<T extends string | boolean>(
   candidates: PersonaVoiceIdentityConflictCandidate[],
-  field: "sourceHostName" | "displayName" | "relationship" | "isUser" | "notes",
+  field: "sourceHostName" | "participantId" | "displayName" | "relationship" | "isUser" | "notes",
   conflicts: PersonaVoiceIdentityConflictField[]
 ): T | undefined {
   const values = new Map<string, T | undefined>();
@@ -152,6 +155,7 @@ function collapseIdentityState(heads: PersonaVoiceIdentityEvent[]): PersonaVoice
     sourceHostId: first.sourceHostId,
     sourceHostName: scalarConsensus<string>(active, "sourceHostName", conflicts),
     voiceprintId: first.voiceprintId,
+    participantId: scalarConsensus<string>(active, "participantId", conflicts),
     displayName: scalarConsensus<string>(active, "displayName", conflicts),
     relationship: scalarConsensus<string>(active, "relationship", conflicts),
     isUser: conflicts.includes("deleted") ? undefined : agreedIsUser,
@@ -243,6 +247,7 @@ export function updatePersonaVoiceIdentity(
       sourceHostId,
       sourceHostName: has(patch, "sourceHostName") ? text(patch.sourceHostName, 300) : existing?.sourceHostName,
       voiceprintId,
+      participantId: has(patch, "participantId") ? text(patch.participantId, 300) : existing?.participantId,
       displayName: has(patch, "displayName") ? text(patch.displayName, 300) : existing?.displayName,
       relationship: has(patch, "relationship") ? text(patch.relationship, 500) : existing?.relationship,
       isUser: has(patch, "isUser") ? (typeof patch.isUser === "boolean" ? patch.isUser : undefined) : existing?.isUser,

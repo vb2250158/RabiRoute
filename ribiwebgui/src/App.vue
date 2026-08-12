@@ -68,7 +68,7 @@ const selectedRouteKey = computed(() => store.selectedGateway ? configNameFor(st
 const navItems = computed(() => [
   { title: "控制台", icon: "mdi-view-dashboard-outline", to: routeScopedOverviewPath(selectedRouteKey.value) },
   { title: "消息适配器", icon: "mdi-puzzle-outline", to: routeScopedAdaptersPath(selectedRouteKey.value) },
-  { title: "Rabi 人格", icon: "mdi-account-heart-outline", to: routeScopedPersonaPath(selectedRouteKey.value) },
+  { title: "人格配置", icon: "mdi-account-heart-outline", to: routeScopedPersonaPath(selectedRouteKey.value) },
   { title: "计划与记忆", icon: "mdi-notebook-check-outline", to: routeScopedKnowledgePath(selectedRouteKey.value) },
   { title: "语音服务", icon: "mdi-waveform", to: routeScopedSpeechPath(selectedRouteKey.value) },
   { title: "日志诊断", icon: "mdi-console-line", to: routeScopedRuntimePath(selectedRouteKey.value) }

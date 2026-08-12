@@ -40,6 +40,7 @@ export type RolePlanPage<T> = {
 export type RoleMemoryPageCounts = {
   recent: number;
   consolidated: number;
+  archived: number;
   consolidationRuns: number;
 };
 

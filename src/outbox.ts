@@ -75,6 +75,10 @@ export type AgentReplyRequest = {
   proactive?: unknown;
   source?: unknown;
   deliveryId?: unknown;
+  /** Internal-only calling Agent type from the strict send contract. */
+  senderAgentType?: unknown;
+  /** Internal-only calling Agent session from the strict send contract. */
+  senderSessionId?: unknown;
   targetDeviceIds?: unknown;
   targetDeviceKinds?: unknown;
   presentation?: unknown;
@@ -773,18 +777,46 @@ function hasNapCatReplySegment(message: OneBotMessage): boolean {
   return message.some((segment) => segment.type.toLowerCase() === "reply");
 }
 
+function normalizedNapCatUserId(value: string | undefined): string | undefined {
+  const userId = value?.trim();
+  return userId && /^\d+$/.test(userId) ? userId : undefined;
+}
+
+function hasNapCatAtSegment(message: OneBotMessage, userId: string): boolean {
+  if (typeof message === "string") {
+    return new RegExp(`\\[CQ:at,qq=${userId}(?:[,\\]])`, "i").test(message);
+  }
+  return message.some((segment) => segment.type.toLowerCase() === "at" && String(segment.data.qq ?? "") === userId);
+}
+
 export function napcatGroupReplyMessage(
   message: OneBotMessage,
   sourceMessageId: string | undefined,
-  replyToSource: boolean
+  replyToSource: boolean,
+  sourceUserId?: string
 ): OneBotMessage {
-  if (!replyToSource || !sourceMessageId || hasNapCatReplySegment(message)) {
+  if (!replyToSource || !sourceMessageId) {
     return message;
   }
+  const userId = normalizedNapCatUserId(sourceUserId);
+  const shouldMentionSource = Boolean(userId && !hasNapCatAtSegment(message, userId));
   if (typeof message === "string") {
-    return `[CQ:reply,id=${sourceMessageId}]${message}`;
+    const reply = `[CQ:reply,id=${sourceMessageId}]`;
+    const mention = shouldMentionSource ? `[CQ:at,qq=${userId}]` : "";
+    if (!hasNapCatReplySegment(message)) return `${reply}${mention}${message}`;
+    if (!mention) return message;
+    return message.replace(/(\[CQ:reply\b[^\]]*\])/i, `$1${mention}`);
   }
-  return [{ type: "reply", data: { id: sourceMessageId } }, ...message];
+  const result = [...message];
+  let replyIndex = result.findIndex((segment) => segment.type.toLowerCase() === "reply");
+  if (replyIndex < 0) {
+    result.unshift({ type: "reply", data: { id: sourceMessageId } });
+    replyIndex = 0;
+  }
+  if (shouldMentionSource && userId) {
+    result.splice(replyIndex + 1, 0, { type: "at", data: { qq: userId } });
+  }
+  return result;
 }
 
 function napcatPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
@@ -879,6 +911,13 @@ function appendAdapterReply(
     adapterType,
     text: content.text,
     payloadType: content.kind,
+    deliveryId: requestField(request, "deliveryId"),
+    sender: requestField(request, "senderAgentType") && requestField(request, "senderSessionId")
+      ? {
+          agentType: requestField(request, "senderAgentType"),
+          sessionId: requestField(request, "senderSessionId")
+        }
+      : undefined,
     ...(adapterType === "rabilink" ? { final: true } : {}),
     replyContext: contextObject(request),
     payload: payloadObject(request)
@@ -1289,9 +1328,12 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   }
 
   const routeSourceRecord = "sourceRecord" in route ? route.sourceRecord : undefined;
-  const loggedTarget = explicitTarget ? undefined : routeSourceRecord ?? findSourceRecord(options, route, messageId);
+  const loggedTarget = routeSourceRecord ?? findSourceRecord(options, route, messageId);
+  const definedContextTarget = Object.fromEntries(
+    Object.entries(contextTarget).filter(([, value]) => value !== undefined)
+  ) as SourceRecord;
   const target = explicitTarget
-    ? { ...contextTarget }
+    ? { ...loggedTarget, ...definedContextTarget }
     : contextTarget.targetType === "plan_feedback"
       ? { ...loggedTarget, ...contextTarget }
       : { ...contextTarget, ...loggedTarget };
@@ -1763,7 +1805,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
           try {
             const caption = await sendGroupMessage({
               groupId: target.groupId,
-              message: napcatGroupReplyMessage(content.explicitText, target.messageId ?? messageId, pipeline.replyToSource)
+              message: napcatGroupReplyMessage(content.explicitText, target.messageId ?? messageId, pipeline.replyToSource, target.userId)
             }, endpoint);
             result.sentMessageId = valueString(caption.messageId);
             appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), withConversation({ ...result, text: content.explicitText }));
@@ -1781,7 +1823,8 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
             ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
             : content.message,
           target.messageId ?? messageId,
-          pipeline.replyToSource
+          pipeline.replyToSource,
+          target.userId
         )
       }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: target.groupId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };

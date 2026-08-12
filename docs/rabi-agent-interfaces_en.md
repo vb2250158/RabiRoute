@@ -124,26 +124,71 @@ Cross-persona delivery is explicitly one-way and does not create an automatic tw
 
 ## Identity-relation memory API
 
-Identity relations record which participant an endpoint account may represent and which long-lived relations are confirmed or unresolved. They are not chat history, plans, or a speaker's temporary stance. They are persona-private and are never learned automatically from a nickname, group privilege, or one utterance. An account lookup requires all of `platform`, `endpointIdentityNamespace`, and `senderStableId`; do not substitute a Route ID for any of them.
+Identity relations record which participant an endpoint account may represent and which person, organization, or project relations are confirmed or unresolved. Relation records do not split into long-term and short-term types; temporary roles in the current message belong to Situation records. Identity relations are persona-private. Automatic “getting to know” candidates are created only when a supported endpoint supplies a stable `senderStableId` and `endpointIdentityNamespace` from its actual sender fields and the message enters a real matched Route delivery. A nickname, group privilege, one self-description, or an identity claim quoted in message content can never trigger confirmation. An account lookup requires all of `platform`, `endpointIdentityNamespace`, and `senderStableId`; do not substitute a Route ID for any of them.
 
 ```text
 GET /api/roles/:roleId/identity-relations
 GET /api/roles/:roleId/identity-relations?platform=<platform>&endpointIdentityNamespace=<namespace>&senderStableId=<id>&conversationKey=<optional>
 PUT /api/roles/:roleId/identity-relations
+POST /api/roles/:roleId/identity-relations/observations
 ```
 
-`GET` without query parameters returns the current account, participant, and relation-card views. With a complete account key, it returns that account's resolution context. A `PUT` writes exactly one `endpoint_account`, `participant`, or `relation_card`. Include minimal evidence references such as a message ID, endpoint, conversation, or short verification note; never copy a private chat body in full. After multi-PC synchronization, a record with disagreeing concurrent event heads is marked with `conflicted`, exposes `conflictEventIds`, and retains each complete candidate record in `conflictCandidates` for the persona page to compare before correction; it cannot take part in automatic confirmation. To converge it, a `PUT` must explicitly provide every material field for that record, and its new event replaces all current heads.
+`GET` without query parameters returns the current account, participant, and relation-card views. With a complete account key, it returns that account's resolution context. A `PUT` writes exactly one `endpoint_account`, `participant`, or `relation_card` for explicit confirmation, correction, or conflict handling. `POST .../observations` is for new identity clues found by a processing Agent during conversation: it can update only the candidate participant and candidate relations already linked to that endpoint account, never write `confirmed`, and never overwrite a conflicted record. Include minimal evidence references such as a message ID, endpoint, conversation, or short verification note; never copy a private chat body in full. After multi-PC synchronization, a record with disagreeing concurrent event heads is marked with `conflicted`, exposes `conflictEventIds`, and retains each complete candidate record in `conflictCandidates` for the persona page to compare before correction; it cannot take part in automatic confirmation. To converge it, a `PUT` must explicitly provide every material field for that record, and its new event replaces all current heads.
 
-The Persona page's **Identity relations** card uses the same interface to view, create, and correct participants, endpoint-account mappings, and relation cards. It refreshes after an identity correction or persona-sync event. Candidates and conflicts remain verification material only; the page must not present them as project ownership or execution authorization.
+A stable account key proves only that messages came from the same endpoint account, not that one person always controlled it. A shared account or contradictory evidence may therefore retain several candidate `participantLinks`. When the endpoint account has exactly one candidate participant, an observation may omit `participantId`; with several candidates, the caller must first use `GET` with the complete account key and then name one returned candidate ID explicitly. The system never chooses from nickname similarity, recent activity, or the highest confidence value.
 
-### Conversation-situation shadow records
+Evidence has different roles. An explicit user correction, verifiable cross-endpoint ownership, and a persistent stable-account fact may support manual confirmation. A self-reported name, another person's claim, a display name, or consistency in vocabulary, sentence patterns, and response rhythm is supporting candidate evidence only. Repetition does not make those signals sufficient for a confirmed mapping. If the source cannot supply a stable sender identity, or the claim appears only inside forwarded, quoted, or attached content, the Agent must leave the identity unresolved and must not use the observation API to merge it into an existing person.
+
+A speaking-habit profile belongs to a participant record. It can be changed only through a reviewed `PUT`; the observation endpoint must not learn it automatically from unattributed messages. Each `speakingHabits` item contains a `dimension`, natural-language `description`, optional `confidence`, and `evidenceRefs`, with at least one `messageId` whose author has already been confirmed. Allowed dimensions are `sentence_opening`, `sentence_length`, `stance_expression`, `emotion_threshold`, `analogy_source`, `punctuation`, `reader_relationship`, `value_preference`, `information_order`, `avoidance`, `imperfection`, and `scene_boundary`. A message from a shared account must not enter anyone's profile while its author remains unresolved.
+
+```json
+{
+  "kind": "participant",
+  "participantId": "participant-example",
+  "speakingHabits": [
+    {
+      "dimension": "sentence_opening",
+      "description": "Usually states the current judgment before adding conditions and unknowns.",
+      "confidence": 0.75,
+      "evidenceRefs": [
+        { "messageId": "confirmed-author-message-id", "note": "The author was confirmed by review." }
+      ]
+    }
+  ]
+}
+```
+
+```json
+{
+  "platform": "napcat",
+  "endpointIdentityNamespace": "bot:example",
+  "senderStableId": "example-user",
+  "participantKind": "person",
+  "participantDisplayName": "a name explicitly stated by the speaker",
+  "aliases": ["a new form of address from this message"],
+  "conversationKey": "napcat:group:example",
+  "evidenceRefs": [
+    {
+      "messageId": "example-message-id",
+      "conversationKey": "napcat:group:example",
+      "note": "Keep only the identity clue and reasoning; do not copy the full chat."
+    }
+  ]
+}
+```
+
+The Persona page projects the same read model into **Recognized identities** and **Unrecognized identities**. A recognized person uses the whole card as its entry point, and one identity workspace displays and edits participant details, speaking habits, endpoint accounts, and relations. Participants, accounts, and relations still use separate `PUT` requests and do not form one transaction. An exclusive account appears for one person, while a shared account with a known user set appears for every possible user with a **Shared** marker even though resolution remains ambiguous. **Unrecognized identities** groups accounts by endpoint type when their people are still unknown, their candidates do not yet point to recognized people, or their evidence is conflicted. The page refreshes after an identity correction or persona-sync event. Per-message attribution for shared accounts, other candidates, and conflicts remain verification material only and must not appear as project ownership or execution authorization.
+
+Conceptually, a voiceprint is also an endpoint account. The current generic key uses `platform=voice`, `endpointIdentityNamespace=host:<processing-host-id>`, and `senderStableId=voiceprintId`; one multi-speaker recording may reference several accounts. The current UI places voice classification inside **Identity positioning**, while existing data still uses the compatibility `voice-identities` API and file described below. Do not write the same decision through both APIs. Until the data migration is complete, “This is me / Another person”, coverage, and conflict readback remain authoritative through the compatibility interface below.
+
+### Situation records
 
 ```text
 GET /api/roles/:roleId/conversation-situations?limit=20
 GET /api/roles/:roleId/conversation-situations/:situationId
 ```
 
-Actual message delivery creates this read-only record. It contains no chat text: only conversation and message identifiers, project leads derived from relation cards, attachment or identity ambiguity, and `mayParticipate=true` with `mayCreateOrUpdateCurrentProjectRecords=false`. It lets a reviewer see whether proactive intelligence confused “may join a discussion” with “should manage the current project.” The interface cannot create, confirm, or authorize a project action.
+Actual message delivery creates this read-only situation record. It contains no chat text: only conversation and message identifiers, project leads derived from relation cards, attachment or identity ambiguity, and `mayParticipate=true` with `mayCreateOrUpdateCurrentProjectRecords=false`. It lets a reviewer see whether proactive intelligence confused “may join a discussion” with “should manage the current project.” The interface cannot create, confirm, or authorize a project action.
 
 ```json
 {
@@ -175,27 +220,35 @@ POST /api/agent/send
 ```json
 {
   "deliveryId": "send-example-001",
+  "sender": {
+    "agentType": "codex",
+    "sessionId": "019f0000-0000-7000-8000-000000000001"
+  },
   "routeId": "main",
   "channel": "napcat",
   "params": {
     "target": "group",
     "groupId": "example-group-id",
     "instanceId": "default",
-    "replyToMessageId": "example-message-id"
+    "replyToMessageId": "example-message-id",
+    "replyImageDescriptions": [
+      "The image shows the background growing with a longer dynamic label, indicating that its width must follow the text."
+    ]
   },
   "payload": {
     "type": "text",
     "text": "Received. I will investigate."
   },
   "tracking": {
-    "requirementId": "message-requirement-001"
+    "requirementId": "message-requirement-001",
+    "sendContextReviewToken": "<token returned by POST send-context>"
   }
 }
 ```
 
-`deliveryId` and the exact enabled `routeId` are required. `channel` selects the only delivery adapter, while `params` carries the channel-specific destination. Supported channels are `napcat`, `wecom`, `weixin`, `feishu`, `rabilink`, `speech`, `fennenote`, `role_panel`, and `plan_feedback`. The injected request template contains the correct shape for the current source. Source context remains available for auditing, but it cannot override `channel` or `params`.
+`deliveryId`, `sender.agentType`, `sender.sessionId`, and the exact enabled `routeId` are required. `sender.agentType` names the calling Agent product, such as `codex`, while `sender.sessionId` is that Agent's complete session ID. `channel` selects the only delivery adapter, while `params` carries the channel-specific destination. Supported channels are `napcat`, `wecom`, `weixin`, `feishu`, `rabilink`, `speech`, `fennenote`, `role_panel`, and `plan_feedback`. The injected request template contains the correct shape for the current source. Source context remains available for auditing, but it cannot override `channel` or `params`. A reply associated with a message-processing requirement also carries `tracking.requirementId` and a short-lived `tracking.sendContextReviewToken` obtained for that exact sender session, destination, and payload.
 
-For NapCat, use `target=group + groupId` or `target=private + userId`; add `replyToMessageId` only for a real QQ reply reference. WeCom and Feishu require `chatId`; Weixin requires `sessionId`; RabiLink requires `targetDeviceIds` or `targetDeviceKinds`; speech explicitly selects RabiSpeech and never proves a QQ send.
+For NapCat, use `target=group + groupId` or `target=private + userId`. Every group send must explicitly include `replyToMessageId`: use the real source message ID whenever one is available, or use the empty string `""` for an intentional unquoted group message. When the quoted message contains images, `replyImageDescriptions` must contain one concrete description per image in original order, covering both visible content and intended meaning. A missing source record, unreadable image, count mismatch, empty description, or generic acknowledgement is rejected before idempotent delivery. WeCom and Feishu require `chatId`; Weixin requires `sessionId`; RabiLink requires `targetDeviceIds` or `targetDeviceKinds`; speech explicitly selects RabiSpeech and never proves a QQ send.
 
 ### Message-processing requirements and board API
 
@@ -205,7 +258,7 @@ With Message Agent mode enabled, Manager assigns each delivered message group a 
 POST /api/message-processing/requirements/:requirementId/outcome
 ```
 
-For a reply, submit the decision and then call the explicit send API with `tracking.requirementId`. Manager completes the board item only when the selected channel matches the source endpoint and the result contains the receipt required by that channel:
+For a reply, submit the decision first so the requirement enters `awaiting_send`, complete the pre-send context review, and then call the explicit send API. Manager completes the board item only when the selected channel matches the source endpoint and the result contains the receipt required by that channel:
 
 ```json
 {
@@ -214,9 +267,79 @@ For a reply, submit the decision and then call the explicit send API with `track
 }
 ```
 
+The Agent must not rely only on the recent messages captured when AgentPacket was created. During processing, another person or Agent may already have answered. Read Manager's current bounded bidirectional context first:
+
+```http
+GET /api/message-processing/requirements/:requirementId/send-context
+```
+
+The response contains `contextVersion`, all `requiredReviewIds`, the context items, prior Agent replies in `priorReplies`, and `alreadyReplied`. After deciding that the exact proposed reply still fits the conversation, submit that request for approval:
+
+```http
+POST /api/message-processing/requirements/:requirementId/send-context
+```
+
+```json
+{
+  "contextVersion": "<version returned by GET>",
+  "reviewedContextIds": ["<every requiredReviewId>"],
+  "reviewedByThreadId": "<complete current session ID>",
+  "reason": "No one has answered yet and the proposed text still addresses the current question.",
+  "proposedSend": {
+    "deliveryId": "send-example-001",
+    "sender": {
+      "agentType": "codex",
+      "sessionId": "019f0000-0000-7000-8000-000000000001"
+    },
+    "routeId": "main",
+    "channel": "napcat",
+    "params": {
+      "target": "group",
+      "groupId": "example-group-id",
+      "instanceId": "default",
+      "replyToMessageId": "example-message-id"
+    },
+    "payload": {
+      "type": "text",
+      "text": "Received. I will investigate."
+    },
+    "tracking": {
+      "requirementId": "message-requirement-001"
+    }
+  }
+}
+```
+
+Add the returned `sendContextReviewToken` to `tracking` and send the unchanged request. The token expires after two minutes. A new conversation item, a changed requirement state, sender session, destination, quoted message, or payload invalidates the approval and requires another read. A paraphrase is still a duplicate when another Agent already replied to the same source. A genuine follow-up with new facts must explicitly use `allowAdditionalReply=true` and explain why.
+
+This gate applies to every Agent type. When `replyToMessageId` points to the source of a known message-processing requirement, a Primary Persona or another Agent cannot omit `tracking.requirementId` to bypass the board and context review.
+
 Ordinary group discussion may use `no_reply` with a reason. Explicit mentions, direct replies, private messages, and plan-progress notifications cannot be closed by a generic `agent_judgement`; only constrained reasons such as duplicate, already answered, withdrawn, or invalid source are accepted.
 
 Before replying or closing any new requirement, the Message Agent must inspect the source messages, attachments, and necessary reply chain and submit `projectFactAssessment`. First read `GET /api/message-processing/requirements/{requirementId}`. Its `knowledgeMatches` are plan and memory candidates derived by Manager; the Agent reads each candidate and reports the result through `POST /api/message-processing/requirements/{requirementId}/knowledge-callback`. An `updated` or `created` callback still carries `recordType`, `recordId`, and `verifiedAt`, and the referenced plan or memory must contain the original message ID.
+
+New requirements also carry `source.evidenceReviewRequired=true`. Manager lists the mandatory source messages, reply ancestry, and attachments in `source.messageIds`, `source.replyChainMessageIds`, and `source.attachments`. NapCat images are saved immediately at ingress and delivered to the Desktop turn as `localImage` input. A CQ marker, filename, or URL alone is not an image review. Before reply or closure, the outcome also submits:
+
+```json
+{
+  "sourceEvidenceReview": {
+    "reviewedMessageIds": ["source-message-id", "quoted-message-id"],
+    "replyChainChecked": true,
+    "attachmentReviews": [
+      {
+        "attachmentId": "source-message-id:image:1",
+        "status": "reviewed",
+        "observation": "The image shows a dynamic-text backing panel whose current text is shorter than its maximum width."
+      }
+    ],
+    "evidence": "Reviewed the current message, quoted message, and image attached to the Desktop turn.",
+    "reviewedAt": "2026-08-11T12:00:00.000Z",
+    "reviewedByThreadId": "complete Message Agent task ID"
+  }
+}
+```
+
+`reviewedMessageIds` covers both source and reply-chain IDs, and every attachment needs a concrete observation. If an attachment is `unavailable`, missing locally, or failed to download, Manager rejects `reply` and `no_reply`; the Agent must retry retrieval or hand off instead of inferring image content. This source-evidence review is stored separately from project-fact classification.
 
 When the source contains a durable schedule, scope, approval, ownership, or release fact, `criticalFactDisposition` uses a typed record reference:
 
@@ -300,13 +423,21 @@ Items expose the stage, source message group, worker task, handoff, decision, se
 
 ### Controlled outbound idempotency receipts
 
-`deliveryId` is required. Before entering Outbox, Manager persists a reservation under runtime `data/agent-send-idempotency/`. The same ID with the same request executes once, and later POSTs return the original `sent/draft/blocked/failed` result. Reusing the ID with a different request returns `409 conflict`; `reserved/sending/uncertain` states also fail closed and are never auto-replayed.
+`deliveryId`, `sender.agentType`, and `sender.sessionId` are required. Before entering Outbox, Manager persists a reservation under runtime `data/agent-send-idempotency/`, and the completed result preserves the sender identity. The same ID with the same request executes once, and later POSTs return the original `sent/draft/blocked/failed` result. Reusing the ID with a different sender or any other changed request returns `409 conflict`; `reserved/sending/uncertain` states also fail closed and are never auto-replayed.
 
 After a POST timeout or an empty receipt, query the original ID first:
 
 ```http
 GET /api/agent/send/receipts/:deliveryId
 ```
+
+When only the endpoint receipt ID is available, query up to 100 matching records by channel:
+
+```http
+GET /api/agent/send/traces?channel=napcat&sentMessageId=:platformMessageId&routeId=:optionalRouteId
+```
+
+Each match includes the `deliveryId`, completion time, Route, target, and `sender.agentType + sender.sessionId`. Older receipts have no sender field, so this attribution applies only to sends created after this contract is enabled. The sender fields are caller-declared and durably recorded for audit; they are not cryptographic authentication of an Agent session.
 
 The caller may mark delivery only when the receipt returns `status=sent` with the real identifier required by the target channel (`sentMessageId` for QQ text), followed by any required platform readback. `deliveryId` provides Outbox request idempotency; it does not replace NapCat/external-platform existence verification and is not an automatic retry queue. Public examples use placeholders, and runtime receipt files stay out of Git.
 
@@ -413,7 +544,7 @@ Content-Type: application/json
 }
 ```
 
-Omit `roleId` to synchronize every persona. The coordinator prefers direct LAN transfer and falls back to restricted Relay transit. The Agent must inspect per-file results, `fileConflicts`, and `semanticConflicts`. The latter is returned by the same sync request when JSONL union succeeds but voice relationships or identity relations still have concurrent branches. Voice items include host, voiceprint, fields, and candidate events; identity-relation items include record kind, record ID, and candidate events. No follow-up coverage polling is required. `conflicts > 0` or HTTP `409` means unresolved conflict remains and completion must not be claimed.
+Omit `roleId` to synchronize every persona. The coordinator prefers direct LAN transfer and falls back to restricted Relay transit. The Agent must inspect per-file results, `fileConflicts`, and `semanticConflicts`. The latter is returned by the same sync request when JSONL union succeeds but compatibility voice-account classifications or general identity relations still have concurrent branches. Voice items include host, voiceprint, fields, and candidate events; identity-relation items include record kind, record ID, and candidate events. No follow-up coverage polling is required. `conflicts > 0` or HTTP `409` means unresolved conflict remains and completion must not be claimed.
 
 A local Agent resolves ordinary-file conflicts through `GET /api/persona-sync/conflicts`, `GET /api/persona-sync/conflicts/content`, and `POST /api/persona-sync/conflicts/resolve`. Actions are `keep_local`, `use_remote`, and `use_merged`; resolution should include the listed `expectedLocalHash` to avoid overwriting a newer local edit. These three control endpoints are loopback-only and are not exposed through the LAN listener or Relay. See [Multi-PC persona data synchronization](persona-data-sync_en.md) for complete manifest, file, merge, and resolution contracts.
 
@@ -421,22 +552,29 @@ When the current routed message explicitly mentions multiple PCs, persona/role s
 
 ### NapCat send with an explicit reply reference
 
-Set `channel=napcat`, name the group, and provide `params.replyToMessageId` only when the outgoing message should quote a specific source message. RabiRoute avoids adding a duplicate reply segment.
+Set `channel=napcat`, name the group, and always provide `params.replyToMessageId`. Use the source QQ message ID when the outgoing message can quote it, or `""` when the message is intentionally unquoted. RabiRoute avoids adding a duplicate reply segment. Omitting the field is rejected with guidance for the calling Agent.
 
 ```json
 {
   "deliveryId": "send-qq-progress-001",
+  "sender": { "agentType": "codex", "sessionId": "<current complete session ID>" },
   "routeId": "main",
   "channel": "napcat",
   "params": {
     "target": "group",
     "groupId": "example-group-id",
     "instanceId": "default",
-    "replyToMessageId": "example-message-id"
+    "replyToMessageId": "example-message-id",
+    "replyImageDescriptions": [
+      "The first image shows compact spacing for a short dynamic label.",
+      "The second image shows the background expanding with longer text, indicating that the width must adapt to content."
+    ]
   },
   "payload": { "type": "text", "text": "I have taken the issue and will update this thread." }
 }
 ```
+
+`replyImageDescriptions` must match the quoted message's image count and order. Each item states what the Agent actually saw and what the image communicates; `reviewed` or another generic acknowledgement is not sufficient. After a successful send, RabiRoute creates or appends a same-name `.md` beside every local image. It records the source message, image position, Agent type and complete session, delivery ID, QQ receipt ID, and description. The send receipt exposes only archive mappings rather than copying description text into operational trace results. An intentionally unquoted group send uses `replyToMessageId: ""` and `replyImageDescriptions: []`.
 
 Local QQ group-file upload uses the same endpoint with `payload.type: "file"`, an allowed `payload.path`, and a route policy whose NapCat `supportedOutputs` includes `file`. The real path must stay under `messageAdapterPolicies.napcat.allowedFileRoots`.
 
@@ -462,9 +600,12 @@ POST actions:
 - `list`: list matching threads, optionally restricted by a configured cwd.
 - `read`: read a thread by `threadId`. The returned task name always comes from the Codex left-sidebar index; SQLite `threads.title`, an initialization prompt, or a stale Route-cached name cannot override it.
 - `resolve`: reuse a valid saved ID when its workspace matches and the task is unarchived; mutable Desktop/SQLite title metadata is not identity, and an overlong display title cannot invalidate that binding. An archived saved binding returns `409 archived` and never creates a replacement. Only when the ID is empty, invalid, or genuinely missing, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied maximum returns candidates for selection.
-- `create`: bootstrap an empty task in a configured workspace, then deliver any initial prompt to that task's Desktop owner through Desktop IPC. Codex task names are limited to 240 JavaScript code units; RabiRoute safely truncates longer inputs with an ellipsis and returns the actual created name for persistence.
+- `create`: idempotently resolve by task name plus configured workspace, bootstrap one empty task only when no match exists, then deliver any initial prompt to that task's Desktop owner through Desktop IPC. Concurrent calls and retries after an HTTP timeout share or reuse the same creation result instead of creating duplicate tasks. The response uses `resolution=created` for a new task and `resolution=name` for an existing same-name task. Codex task names are limited to 240 JavaScript code units; RabiRoute safely truncates longer inputs with an ellipsis and returns the actual created name for persistence.
+- Manager persists the create reservation under runtime `data/.runtime/codex-thread-creations/`. It advances through `reserved → creating → thread_created → naming → initial_turn → completed`. If `thread/start` may have run but its result cannot be confirmed, the reservation becomes `uncertain`, later requests return `409`, and automatic recreation is forbidden. Only `failed_before_create`, which proves `thread/start` was not called, may retry creation.
 - `rename`: rename a Desktop task by full `threadId` plus configured cwd without changing its identity. Persistent plan-assistant slots use this when expanding from one unnumbered assistant to multiple numbered assistants.
 - `send`: ask the existing Desktop task owner to start or steer the real turn through Desktop IPC.
+
+`send` optionally accepts up to eight absolute `imagePaths`. Every file must exist inside the target `cwd` workspace and use a PNG, JPEG, GIF, WebP, or BMP extension. After validation, Manager sends each file as Desktop `localImage` input. This is intended for message adapters to pass already-materialized source images and cannot read files outside the target workspace.
 
 ```json
 {
@@ -477,6 +618,10 @@ POST actions:
 ```
 
 Callers must not edit UUIDs manually. Selecting a different task supplies its ID; typing a new name must explicitly clear the previous ID before `resolve` performs name lookup or creation. A valid ID plus workspace remains authoritative even when display metadata is longer than the creation limit.
+
+After a create call times out, first call `list` with the original title and `lookupMode=state_db`. This reads the local Desktop task database and sidebar index without starting the metadata app-server, so it can find an empty task whose first prompt has not started yet. Do not infer “no side effect” from an immediate complete-mode lookup and do not create the same title again.
+
+Formal Agent response workspace validation uses the same canonical identity rule as Codex tasks. Equivalent Windows drive, `\\?\` extended-drive, UNC, and extended UNC forms are not rejected merely because their string forms differ.
 
 ```json
 {
@@ -522,6 +667,8 @@ A formal response uses the same `send` action. The responder must send `inReplyT
 ```
 
 Ordinary Codex final text is not a formal response. At the end of each target turn, the `Stop` Hook checks unanswered requests. If the response is still missing, Manager reminds the same exact target task five minutes after that turn ends. If the reminder-triggered turn also ends without a response, the next reminder is scheduled five minutes after that later turn. Request state is available through `GET /api/agent/requests` and `GET /api/agent/requests/:requestId`; maintainers can cancel an obsolete request with `POST /api/agent/requests/:requestId/cancel`.
+
+Desktop can occasionally report a start/steer timeout after the message has already been written to the target task. Manager reads the target rollout using the unique `deliveryId` in the prompt: when that marker is present, it commits the delivery and request/response state as successful; only an absent marker remains a retryable failure. Callers must read the request state and the target task's latest turn before retrying a timeout.
 
 Manager first verifies that Desktop still has the same unarchived source task ID, then obtains the current left-sidebar name through the single task read model in `codexDesktopBridge.ts`. It prepends the source Agent, task name, session ID, and workspace to the delivered text. The sender never supplies the source task name. Ordinary RabiRoute messages, initialization turns, reminders, and system notices are not Agent-to-Agent sends and may omit source and response fields.
 
@@ -676,7 +823,7 @@ POST  /api/roles/:roleId/memory/recent
 PATCH /api/roles/:roleId/memory/recent/:memoryId
 ```
 
-`counts=1` returns only recent-memory, consolidated-memory, and consolidation-run counts. It does not read or return memory card bodies; WebGUI uses it to populate tab counts when Plans & Memory is opened directly.
+`counts=1` returns only recent-memory, consolidated-memory, archived-source-memory, and consolidation-run counts. It does not read or return memory card bodies; WebGUI uses it to populate tab counts when Plans & Memory is opened directly.
 
 ```json
 {

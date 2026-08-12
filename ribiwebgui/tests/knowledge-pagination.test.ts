@@ -143,12 +143,16 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(styles, /\.knowledge-memory-markdown img\s*\{[\s\S]*?max-width:\s*100%;/);
   const currentTab = page.indexOf('value="plans"');
   const recentMemoryTab = page.indexOf('value="recent_memory"');
+  const consolidatedMemoryTab = page.indexOf('value="consolidated_memory"');
   const archivedTab = page.indexOf('value="archived"');
-  assert.ok(currentTab >= 0 && currentTab < recentMemoryTab && recentMemoryTab < archivedTab);
+  assert.ok(currentTab >= 0 && currentTab < recentMemoryTab && recentMemoryTab < consolidatedMemoryTab && consolidatedMemoryTab < archivedTab);
   assert.match(page, /value="plans"[^>]*>[\s\S]{0,160}t\("当前计划"\)/);
+  assert.match(page, /value="consolidated_memory"[^>]*>[\s\S]{0,160}t\("沉淀记忆"\)/);
+  assert.match(page, /planPageCounts\.archived \+ memoryPageCounts\.archived/);
   assert.doesNotMatch(page, /<v-btn value="current"/);
-  assert.match(page, /const showsMemoryList = computed\(\(\) => \["recent_memory", "archived"\]/);
+  assert.match(page, /const showsMemoryList = computed\(\(\) => \["recent_memory", "consolidated_memory", "archived"\]/);
   assert.doesNotMatch(page, /activeView === 'current' \|\| activeView === 'archived'[\s\S]{0,180}knowledge-memory-heading/);
+  assert.match(page, /activeView === 'archived'[\s\S]{0,180}t\("已归档记忆"\)/);
   assert.match(page, /t\("记录时间"\)/);
   assert.match(page, /t\("上次命中召回"\)/);
   assert.match(page, /memory\.recalledAt/);

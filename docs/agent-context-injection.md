@@ -60,11 +60,11 @@ Agent 需要更多内容时，应根据上下文里的路径、ID 或接口文�
 
 群聊里的显示名、群主/管理员标记、当前 Route、当前工作目录和关键词相似度都不能单独说明“谁是谁”或“这是谁负责的项目”。人格可维护独立的身份关系记忆；消息投递时，RabiRoute 只按 `platform + endpointIdentityNamespace + senderStableId` 精确查找当前账号。Route 配置 ID 只记录投递来源，不参与身份键；NapCat 有机器人 QQ 号时优先用它作为消息端命名空间，实例名只在缺少该标识时回退使用。企业微信、飞书和微信只有在消息记录带有稳定的消息端命名空间时才查询；缺少该标识时宁可不匹配，也不把不同账号下的同名 ID 合并。因此同一个账号换 Route 不会被拆成不同的人，也不会把两个消息端误当成一个账号。
 
-命中时，`[身份关系]` 只注入当前账号、已确认参与者、候选参与者、当前群或项目范围内的关系卡，以及尚未解决的冲突。追加事件在多台电脑同步后若形成并发分支，会明确标为冲突；冲突记录不能自动确认身份，需由人格提交一次完整修正来收敛。它不复制聊天正文，也不进入计划/近期记忆的关键词召回和回调流程。候选映射只能用于核对；不能据此称呼真人、授予权限、推断项目归属，或把讨论变成当前项目的计划。
+第一次命中一个稳定但陌生的账号时，系统会自动创建一个独立的“待认识”候选参与者；同一稳定账号以后复用这条候选。显示名只作为候选别名。处理 Agent 发现明确自述、新称呼或可核对的关系时，可以通过候选观察接口追加最小证据；没有新线索时不重复写入。`[身份关系]` 只注入当前账号、已确认参与者、候选参与者、当前群或项目范围内的关系卡，以及尚未解决的冲突。追加事件在多台电脑同步后若形成并发分支，会明确标为冲突；冲突记录不能自动确认身份，需由人格提交一次完整修正来收敛。它不复制聊天正文，也不进入计划/近期记忆的关键词召回和回调流程。候选映射只能用于核对；不能据此称呼真人、授予权限、推断项目归属，或把讨论变成当前项目的计划。
 
-身份关系只回答“谁在说话、已有何种长期关系”。随后会生成一张 `[对话情境（影子判断）]`：它只读取已经适用于当前会话的项目关系卡，把项目列为讨论线索；不会从 Route、当前工作目录、昵称或关键词推断项目。情境卡明确允许 Agent 自然参与有价值的讨论、澄清问题或提出建议，但默认禁止据此查询、创建、更新或转交项目计划、任务和长期项目记忆。只有另外拿到明确的项目范围、请求和授权，处理端才可以进入项目管理或执行流程。
+身份关系只回答“谁在说话、已有何种已确认或候选关系”。随后会生成一条 `[情景记录]`：它只读取已经适用于当前会话的项目关系卡，把项目列为讨论线索；不会从 Route、当前工作目录、昵称或关键词推断项目。情景记录明确允许 Agent 自然参与有价值的讨论、澄清问题或提出建议，但默认禁止据此查询、创建、更新或转交项目计划、任务和长期项目记忆。只有另外拿到明确的项目范围、请求和授权，处理端才可以进入项目管理或执行流程。
 
-当这份 AgentPacket 进入实际投递链路后，RabiRoute 会把不含聊天正文的情境卡作为人格本机的影子记录保存。记录只保留会话键、消息 ID、路由、身份/项目线索、未解决证据和“可参与 / 不可管理”的判断；人格页可回看最近记录，供人工发现误判。它不改变发送结果，也不自动写计划、任务或记忆；每个人格最多保留最近 200 条。情境卡是可从原始会话和关系卡重建的派生物，不参加多电脑人格同步；原始聊天记录仍以统一会话记录为准。
+当这份 AgentPacket 进入实际投递链路后，RabiRoute 会在当前人格下保存一份不含聊天正文的情景记录。记录只保留会话键、消息 ID、路由、身份/项目线索、未解决证据和“可参与 / 不可管理”的判断；人格页可回看最近记录，供人工发现误判。它不改变发送结果，也不自动写计划、任务或记忆；每个人格最多保留最近 200 条。情景记录是可从原始会话和关系卡重建的派生物，不参加多电脑人格同步；原始聊天记录仍以统一会话记录为准。
 
 ## 统一双向会话账本
 
@@ -228,7 +228,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 ## 自动包装格式
 
-最终投递给 Agent 的消息由 RabiRoute 自动包装生成。每段用稳定标题，方便 Agent 识别，也方便不同 Agent adapter 做解析。下面是现行结构的概览；空字段、未启用能力和没有人格绑定的段落会被省略或替换。
+最终投递给 Agent 的消息由 RabiRoute 自动包装生成。每段用稳定标题，方便 Agent 识别，也方便不同 Agent adapter 做解析。普通消息先提供 `[最近消息]`，再提供本轮 `[消息]`；当前讨论片段、紧邻对话和引用解析继续跟在本轮消息后面。下面是现行结构的概览；空字段、未启用能力和没有人格绑定的段落会被省略或替换。
 
 现行结构：
 
@@ -241,6 +241,12 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 来源：<messageTarget>
 发送者：<sender>
 
+[最近消息]
+当前消息端：<recentMessageEndpoint>
+当前会话：<recentConversationKey>
+当前消息端、当前会话最近 <recentMessageLimit> 条双向消息：
+<recentMessages>
+
 [消息]
 <message>
 
@@ -248,12 +254,6 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 [CQ:reply,id=<messageId>] : <被引用消息摘要>
   [CQ:reply,id=<messageId>] : <更早的被引用消息摘要>
 [CQ:at,qq=<qq>] : <群名片或昵称>
-
-[最近消息]
-当前消息端：<recentMessageEndpoint>
-当前会话：<recentConversationKey>
-当前消息端、当前会话最近 <recentMessageLimit> 条双向消息：
-<recentMessages>
 
 [角色和路径]
 角色：<agentRoleId>
@@ -325,7 +325,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 `heartbeat` 和 `plan_feedback` 包都会省略整个 `[最近消息]` 段，并把模板变量 `{recentMessageLimit}` 设为 `0`、`{recentMessages}` 设为空字符串，避免自定义模板重新携带历史正文。心跳日志和统一会话账本仍照常记录；计划审批则只保留专用 feedback 审计、AgentPacket 和投递日志，不重复写角色面板时间线或统一会话账本。
 
-处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主人格或另一个 Agent 已经收到。需要向消息端发送时，处理端必须从 `sendRequestJson` 开始，明确提交 `routeId`、`channel`、渠道专用 `params` 和 `payload`，并取得该渠道回执；不得把 `replyContextJson` 原样提交，也不得根据来源自动猜测目标。需要交给主人格、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
+处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主人格或另一个 Agent 已经收到。需要向消息端发送时，处理端必须从 `sendRequestJson` 开始，填写 `sender.agentType` 和当前完整 `sender.sessionId`，再明确提交 `routeId`、`channel`、渠道专用 `params` 和 `payload`，并取得该渠道回执；不得把 `replyContextJson` 原样提交，也不得根据来源自动猜测目标。NapCat 群聊引用消息含图片时，必须按原图顺序填写 `params.replyImageDescriptions`，逐张写明实际内容和图片表达的意思；不能查看、缺少描述或数量不一致时不得发送。需要交给主人格、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
 
 跨人格能力凭据只证明“当前 AgentPacket 所属 Route 与人格”，不会出现在 `GET /api/personas`、目标 timeline 或投递回执中。`sourceRouteId` 不能单独证明发送身份。目标人格收到跨人格消息后，普通回复不会自动返回来源；需要回复时必须显式反向 POST，并使用收到的会话、引用和跳数字段。
 
@@ -335,7 +335,7 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 语音是唯一有这类“先记录、再决定是否唤醒”的专用策略之一：Route `speechPushMode=hot` 时每段 ASR 立即投递；`keyword` 时只在命中人格 `speechTriggerKeywords` 时投递，其他转写仍在账本中。空关键词不回退 `hot`。普通已匹配消息端则直接进入 Desktop `steer/start`；Heartbeat 的忙碌跳过由独立开关控制。
 
-语音处理主机、声纹 ID 和人格声纹关系文件路径只会出现在语音转写记录中。QQ、角色面板及其他非音频事件不会显示这些语音专属字段。
+语音处理主机、声纹 ID 和语音账号兼容数据文件路径只会出现在语音转写记录中。QQ、角色面板及其他非音频事件不会显示这些语音专属字段。
 
 ## 示例：QQ 群消息
 
@@ -388,7 +388,7 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 
 [发送]
 明确发送 API：http://127.0.0.1:8790/api/agent/send
-发送请求模板：{"deliveryId":"<稳定发送 ID>","routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id"},"payload":{"type":"text","text":"<发送正文>"}}
+发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"codex","sessionId":"<当前完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
 来源上下文（仅供审计）：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id"}
 
 [用户模板补充]

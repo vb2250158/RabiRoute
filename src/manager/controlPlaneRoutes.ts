@@ -49,7 +49,7 @@ import {
 } from "../messageEndpoints/webhookLikeScans.js";
 import { scanWeComEndpoint } from "../messageEndpoints/wecomManager.js";
 import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../messageEndpoints/remoteAgentManager.js";
-import { appendMessageContextToDir } from "../messageContextStore.js";
+import { appendMessageContextToDir, recentMessageContextItems } from "../messageContextStore.js";
 import { SpeechIngressStore } from "../speechIngressStore.js";
 import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
 import { createManagerOperationalLog, managerOperationalError } from "./operationalLog.js";
@@ -68,12 +68,19 @@ import {
   listIdentityEndpointAccounts,
   listIdentityParticipants,
   listIdentityRelationCards,
+  recordIdentityCandidateObservation,
   resolveIdentityRelationContext,
   updateIdentityRelation,
+  type IdentityCandidateObservation,
   type IdentityRelationPatch
 } from "../identityRelations.js";
 import { listConversationSituations } from "../conversationSituationStore.js";
-import { handleAgentSend, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
+import {
+  handleAgentSend,
+  validateAgentSendReplyImageDescriptions,
+  type AgentSendRequest,
+  type AgentSendResult
+} from "../agentSend.js";
 import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
 import {
   MessageProcessingBoardStore,
@@ -86,10 +93,16 @@ import {
   type RegisterMessageGroupRequirementInput
 } from "../messageProcessing/board.js";
 import { messageProcessingBoardStatePath } from "../messageProcessing/persistence.js";
+import {
+  MessageProcessingSendContextReview,
+  type MessageProcessingSendContextApprovalInput
+} from "../messageProcessing/sendContextReview.js";
 import { normalizeCodexMemoryConsolidationAgentModel } from "../shared/codexMemoryConsolidationAgent.js";
 import {
   agentSendReceiptResponse,
-  executeIdempotentAgentSend
+  executeIdempotentAgentSend,
+  findAgentSendTraces,
+  readAgentSendReceipt
 } from "./agentSendIdempotency.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
@@ -110,6 +123,7 @@ import {
   type CodexReasoningEffort,
   type MessageAdapterPolicies,
   type MessageProcessingAgentPolicies,
+  type PersonaAutomationRuleDefinition,
   type RecentMessageLimits,
   type SpeechPushMode
 } from "../shared/gatewayConfigModel.js";
@@ -253,6 +267,8 @@ import {
   getPlan,
   getRecentMemory,
   getRoleSkill,
+  listActiveRecentMemories,
+  listArchivedMemories,
   listConsolidatedMemories,
   listConsolidationRuns,
   planAcceptsGuidance,
@@ -358,6 +374,7 @@ type GatewayDefinition = {
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   heartbeatSkipWhenAgentBusy?: boolean;
+  personaAutomationScriptsEnabled?: boolean;
   remoteAgentDefaultDeviceId?: string;
   remoteAgentDefaultCwd?: string;
   remoteAgentDefaultThreadName?: string;
@@ -415,6 +432,7 @@ type GatewayDefinition = {
   recentMessageLimits?: RecentMessageLimits;
   speechPushMode?: SpeechPushMode;
   speechTriggerKeywords?: string[];
+  automationRules?: PersonaAutomationRuleDefinition[];
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
   roleRouteNames?: Record<string, string>;
@@ -435,6 +453,8 @@ type RouteProfileDefinition = {
   rolesDir?: string;
   dataDir?: string;
   routeVariables?: Record<string, string>;
+  automationRules?: PersonaAutomationRuleDefinition[];
+  personaAutomationScriptsEnabled?: boolean;
   notificationRules?: NotificationRuleDefinition[];
 };
 
@@ -704,6 +724,20 @@ let rolesRoot = configRepository.rolesRoot;
 let routeRoot = configRepository.routeRoot;
 const personaCatalog = new PersonaCatalog();
 let personaMessageAuthority: PersonaMessageAuthority | undefined;
+const messageProcessingSendContextReview = new MessageProcessingSendContextReview({
+  getRequirement: (requirementId) => messageProcessingBoard.getRequirement(requirementId),
+  findRequirementBySourceMessage: (routeId, messageId) => messageProcessingBoard.findLatestBySourceMessage(routeId, messageId),
+  loadContext: (requirement) => {
+    const roleId = String(requirement.source.roleId || "").trim();
+    if (!roleId) return [];
+    return recentMessageContextItems([roleDirForApi(roleId)], {
+      conversationKey: requirement.source.conversationKey,
+      limit: 80,
+      maxChars: 24_000,
+      includeArchives: true
+    });
+  }
+});
 
 function currentPersonaMessageAuthority(): PersonaMessageAuthority {
   personaMessageAuthority ??= loadPersonaMessageAuthority(rootDir);
@@ -772,7 +806,7 @@ personaSyncAutoReconciler = new PersonaSyncAutoReconciler(
     onStatus: status => publishManagerEvent("persona_sync_auto_status", status)
   }
 );
-function personaSyncRouteContext(): PersonaSyncRouteContext {
+function personaSyncRouteContext(controlPlaneAuthorized = false): PersonaSyncRouteContext {
   return {
     service: personaSyncService,
     coordinator: personaSyncCoordinator,
@@ -784,6 +818,7 @@ function personaSyncRouteContext(): PersonaSyncRouteContext {
         requestedRoleId
       )),
     readOnlySnapshot: managerReadOnly,
+    controlPlaneAuthorized,
     token: () => rabiLinkRelayConfigForMeta().token,
     relay: () => {
       const config = rabiGlobalConfig.read();
@@ -886,7 +921,10 @@ function remoteRequestUsesIndependentAuthorization(request: http.IncomingMessage
 }
 
 function webguiLanRequestAllowed(request: http.IncomingMessage, requestUrl: URL): boolean {
-  if (!managerListensOnLan(managerHost) || isLoopbackRemoteAddress(request.socket.remoteAddress)) return true;
+  if (
+    !managerListensOnLan(managerHost)
+    || isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address))
+  ) return true;
   if (isPublicWebguiStaticRequest(request.method, requestUrl.pathname)) return true;
   if (remoteRequestUsesIndependentAuthorization(request, requestUrl)) return true;
   return isWebguiLanRequestAuthorized(request, requestUrl, rabiGlobalConfig.read().webguiLan);
@@ -1164,6 +1202,7 @@ function adapterConfigItem(definition: GatewayDefinition): Record<string, unknow
     heartbeatIntervalSeconds: definition.heartbeatIntervalSeconds,
     heartbeatMessage: definition.heartbeatMessage,
     heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy,
+    personaAutomationScriptsEnabled: definition.personaAutomationScriptsEnabled,
     remoteAgentDefaultDeviceId: definition.remoteAgentDefaultDeviceId,
     remoteAgentDefaultCwd: configPathValue(definition.remoteAgentDefaultCwd),
     remoteAgentDefaultThreadName: definition.remoteAgentDefaultThreadName,
@@ -1505,6 +1544,7 @@ function writePersonaConfigFile(roleId: string, items: GatewayDefinition[]): voi
   // Persona fields have one owner even when several Routes bind the same persona.
   const source = items.find(item => Array.isArray(item.notificationRules) && item.notificationRules.length > 0) ?? items[0];
   configRepository.writePersonaConfig(roleId, {
+    automationRules: source?.automationRules,
     notificationRules: source?.notificationRules,
     recentMessageLimits: source?.recentMessageLimits,
     speechTriggerKeywords: source?.speechTriggerKeywords
@@ -1561,6 +1601,18 @@ function openConfigFilePayload(type: string | null, gatewayId: string | null, ro
     }
     openFileWithDefaultApp(rolePath);
     return { code: 0, data: { path: rolePath } };
+  }
+
+  if (type === "role-folder") {
+    const runtime = gatewayId ? runtimes.get(gatewayId) : null;
+    const safeRoleId = sanitizeRoleId(roleId ?? runtime?.definition.agentRoleId);
+    if (!safeRoleId) {
+      throw new Error("请先选择一个路由人格，再打开人格文件夹。");
+    }
+    const roleDirectory = path.join(rolesRoot, safeRoleId);
+    fs.mkdirSync(roleDirectory, { recursive: true });
+    openFileWithDefaultApp(roleDirectory);
+    return { code: 0, data: { path: roleDirectory } };
   }
 
   if (type === "role-message-config") {
@@ -1812,6 +1864,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     HEARTBEAT_INTERVAL_SECONDS: String(definition.heartbeatIntervalSeconds ?? 900),
     HEARTBEAT_MESSAGE: definition.heartbeatMessage ?? "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",
     HEARTBEAT_SKIP_WHEN_AGENT_BUSY: definition.heartbeatSkipWhenAgentBusy ? "1" : "0",
+    PERSONA_AUTOMATION_SCRIPTS_ENABLED: definition.personaAutomationScriptsEnabled ? "1" : "0",
     REMOTE_AGENT_DEFAULT_DEVICE_ID: definition.remoteAgentDefaultDeviceId?.trim() || "",
     REMOTE_AGENT_DEFAULT_CWD: configPathValue(definition.remoteAgentDefaultCwd) || "",
     REMOTE_AGENT_DEFAULT_THREAD_NAME: definition.remoteAgentDefaultThreadName?.trim() || "",
@@ -1887,6 +1940,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     RECENT_MESSAGE_LIMITS: definition.recentMessageLimits ? JSON.stringify(definition.recentMessageLimits) : "",
     SPEECH_PUSH_MODE: definition.speechPushMode ?? "hot",
     SPEECH_TRIGGER_KEYWORDS: Array.isArray(definition.speechTriggerKeywords) ? JSON.stringify(definition.speechTriggerKeywords) : "[]",
+    AUTOMATION_RULES: Array.isArray(definition.automationRules) ? JSON.stringify(definition.automationRules) : "[]",
     NOTIFICATION_RULES: Array.isArray(definition.notificationRules) ? JSON.stringify(definition.notificationRules) : "",
   };
 }
@@ -3171,6 +3225,7 @@ function runtimeStatusWithRoleInfoCache(
     weixinBotType: runtime.definition.weixinBotType,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
     heartbeatMessage: runtime.definition.heartbeatMessage ?? "",
+    personaAutomationScriptsEnabled: runtime.definition.personaAutomationScriptsEnabled === true,
     remoteAgentDefaultDeviceId: runtime.definition.remoteAgentDefaultDeviceId ?? "",
     remoteAgentDefaultCwd: runtime.definition.remoteAgentDefaultCwd ?? "",
     remoteAgentDefaultThreadName: runtime.definition.remoteAgentDefaultThreadName ?? "",
@@ -3217,6 +3272,7 @@ function runtimeStatusWithRoleInfoCache(
     groupNicknameNotificationTemplate: runtime.definition.groupNicknameNotificationTemplate,
     privateNotificationTemplate: runtime.definition.privateNotificationTemplate,
     notificationRules: runtime.definition.notificationRules,
+    automationRules: runtime.definition.automationRules,
     roleNotificationRules: runtime.definition.roleNotificationRules,
     roleRouteNames: runtime.definition.roleRouteNames,
     running: Boolean(runtime.process),
@@ -3914,6 +3970,7 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     return;
   }
   const outcomeUrl = `http://127.0.0.1:${managerPort}/api/message-processing/requirements/${encodeURIComponent(requirement.id)}/outcome`;
+  const sendContextUrl = `http://127.0.0.1:${managerPort}/api/message-processing/requirements/${encodeURIComponent(requirement.id)}/send-context`;
   const sendApiUrl = `http://127.0.0.1:${managerPort}/api/agent/send`;
   const sendRequestTemplate = agentSendRequestTemplateForSource({
     ...(requirement.source.replyContext || {}),
@@ -3933,7 +3990,8 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     ...(requirement.plan?.changes || []).map((change) => `- ${change}`),
     "",
     "RabiManager 已自动生成一项必须发送的计划进展通知。请结合计划当前内容整理简短、可理解的进展，不要把内部 taskBinding、路径或控制面字段原样发给群成员。",
-    `使用 POST ${sendApiUrl}，明确填写 routeId、channel、params、payload、deliveryId，并在 tracking.requirementId 填 ${requirement.id}。不要把来源 replyContext 原样当发送参数。`,
+    `先 POST ${outcomeUrl} 提交 decision=reply，再 GET ${sendContextUrl} 读取最新双向消息。确认没有他人已经通知、没有新消息改变结论后，POST 同一 send-context 地址审核确切 proposedSend，并把返回 token 写入 tracking.sendContextReviewToken。`,
+    `最后使用 POST ${sendApiUrl}，明确填写 routeId、channel、params、payload、deliveryId，并在 tracking.requirementId 填 ${requirement.id}。不要把来源 replyContext 原样当发送参数。`,
     `发送请求模板：${JSON.stringify(sendRequestTemplate || { error: "当前来源无法生成明确发送目标，请提交 invalid_source，不要猜测。" })}`,
     `当前 replyContext：${JSON.stringify(requirement.source.replyContext || {})}`,
     `如果来源已经失效或同一进展已由别人完整通知，POST ${outcomeUrl} 提交 decision=no_reply 和受支持的原因；其它情况不能静默关闭。`,
@@ -5193,6 +5251,32 @@ function handleRoleKnowledgeApi(
       return true;
     }
   }
+  const identityObservationMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/identity-relations\/observations$/);
+  if (identityObservationMatch) {
+    const roleId = decodeURIComponent(identityObservationMatch[1]);
+    if (request.method !== "POST") {
+      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+      return true;
+    }
+    try {
+      const roleDir = resolveRoleDir(roleId);
+      void readJsonBody<IdentityCandidateObservation>(request)
+        .then(body => recordIdentityCandidateObservation(roleDir, body))
+        .then(data => {
+          publishManagerEvent("identity_relation_changed", {
+            roleId,
+            kind: "candidate_observation",
+            recordId: data.participant.id
+          });
+          jsonResponse(response, data.appended ? 201 : 200, { code: 0, data });
+        })
+        .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      return true;
+    }
+  }
   const identityRelationsMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/identity-relations$/);
   if (identityRelationsMatch) {
     const roleId = decodeURIComponent(identityRelationsMatch[1]);
@@ -5272,8 +5356,73 @@ function handleRoleKnowledgeApi(
       }
       if (request.method === "PUT") {
         void readJsonBody<PersonaVoiceIdentityPatch>(request)
-          .then(body => updatePersonaVoiceIdentity(roleDir, body))
-          .then(data => {
+          .then(body => {
+            if (typeof body.sourceHostId !== "string" || !body.sourceHostId.trim()) {
+              throw new Error("sourceHostId must be a non-empty string.");
+            }
+            if (typeof body.voiceprintId !== "string" || !body.voiceprintId.trim()) {
+              throw new Error("voiceprintId must be a non-empty string.");
+            }
+            if (Object.prototype.hasOwnProperty.call(body, "participantId")
+              && body.participantId !== null
+              && typeof body.participantId !== "string") {
+              throw new Error("participantId must be a string, null, or omitted.");
+            }
+            const hasParticipantPatch = Object.prototype.hasOwnProperty.call(body, "participantId");
+            const participantId = typeof body.participantId === "string" ? body.participantId.trim() : "";
+            let participantStatus: "confirmed" | "corrected" = "confirmed";
+            if (participantId) {
+              const participant = listIdentityParticipants(roleDir).find(item => item.id === participantId);
+              if (!participant || participant.conflicted || !["confirmed", "corrected"].includes(participant.status)) {
+                throw new Error("participantId must reference a confirmed identity in the current persona.");
+              }
+              participantStatus = participant.status as "confirmed" | "corrected";
+            }
+            let identityRelationResult: ReturnType<typeof updateIdentityRelation> | undefined;
+            if (hasParticipantPatch) {
+              const sourceHostId = body.sourceHostId.trim();
+              const voiceprintId = body.voiceprintId.trim();
+              const endpointIdentityNamespace = `host:${sourceHostId}`;
+              const existingAccount = listIdentityEndpointAccounts(roleDir).find(item =>
+                item.platform === "voice"
+                && item.endpointIdentityNamespace === endpointIdentityNamespace
+                && item.senderStableId === voiceprintId
+              );
+              const retiredPreviousLinks = existingAccount?.participantLinks
+                .filter(link => link.participantId !== participantId)
+                .map(link => ({ ...link, status: "retired" as const })) ?? [];
+              const participantLinks = participantId
+                ? [
+                    ...retiredPreviousLinks,
+                    {
+                      participantId,
+                      status: participantStatus,
+                      confidence: 1,
+                      evidenceRefs: [{ note: "人格通过声纹确认界面显式关联到身份。" }]
+                    }
+                  ]
+                : existingAccount?.participantLinks.map(link => ({ ...link, status: "retired" as const })) ?? [];
+              if (participantId || existingAccount) {
+                identityRelationResult = updateIdentityRelation(roleDir, {
+                  kind: "endpoint_account",
+                  platform: "voice",
+                  endpointIdentityNamespace,
+                  senderStableId: voiceprintId,
+                  displayName: typeof body.displayName === "string" ? body.displayName.trim() : existingAccount?.displayName,
+                  participantLinks
+                });
+              }
+            }
+            return { data: updatePersonaVoiceIdentity(roleDir, body), identityRelationResult };
+          })
+          .then(({ data, identityRelationResult }) => {
+            if (identityRelationResult) {
+              publishManagerEvent("identity_relation_changed", {
+                roleId: decodeURIComponent(voiceIdentityMatch[1]),
+                kind: "endpoint_account",
+                recordId: identityRelationResult.record.id
+              });
+            }
             publishManagerEvent("persona_voice_identity_changed", {
               roleId: decodeURIComponent(voiceIdentityMatch[1]),
               appended: data.appended,
@@ -5520,10 +5669,16 @@ function handleRoleKnowledgeApi(
       }
       if (requestUrl.searchParams.has("limit")) {
         const kind = requestUrl.searchParams.get("kind")?.trim() || "recent";
-        if (kind !== "recent" && kind !== "consolidated") throw new Error("Invalid memory page kind.");
-        const items = kind === "recent"
-          ? presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listRecentMemories(roleDir)), "recent")
-          : presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated");
+        if (kind !== "recent" && kind !== "consolidated" && kind !== "archived") {
+          throw new Error("Invalid memory page kind.");
+        }
+        const items = kind === "consolidated"
+          ? presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated")
+          : presentRoleMemories(
+            roleDir,
+            sortKnowledgeByUpdatedAt(kind === "archived" ? listArchivedMemories(roleDir) : listActiveRecentMemories(roleDir)),
+            "recent"
+          );
         jsonResponse(response, 200, {
           code: 0,
           data: paginateRoleMemory(
@@ -5539,8 +5694,9 @@ function handleRoleKnowledgeApi(
       jsonResponse(response, 200, {
         code: 0,
         data: {
-          recent: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listRecentMemories(roleDir)), "recent"),
+          recent: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listActiveRecentMemories(roleDir)), "recent"),
           consolidated: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated"),
+          archived: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listArchivedMemories(roleDir)), "recent"),
           consolidationRuns: listConsolidationRuns(roleDir)
         }
       });
@@ -5562,9 +5718,9 @@ function handleRoleKnowledgeApi(
     }
     if (request.method === "GET" && resource === "memory/recent") {
       const memory = itemId ? getRecentMemory(roleDir, itemId) : undefined;
-      const presented = presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listRecentMemories(roleDir)), "recent");
+      const presented = presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listActiveRecentMemories(roleDir)), "recent");
       const data = itemId
-        ? (memory ? presented.find((item) => item.id === memory.id) : undefined)
+        ? (memory ? presentRoleMemory(memory, "recent") : undefined)
         : presented;
       if (itemId && !data) {
         jsonResponse(response, 404, { code: -1, message: `Memory not found: ${itemId}` });
@@ -6242,7 +6398,7 @@ export async function startManager(): Promise<void> {
       if (handleCodexHookApi(request, requestUrl, response, codexHookContextService)) {
         return;
       }
-      if (handlePersonaSyncApi(request, requestUrl, response, personaSyncRouteContext())) {
+      if (handlePersonaSyncApi(request, requestUrl, response, personaSyncRouteContext(true))) {
         return;
       }
       if (handleRabiApi(request, requestUrl, response, {
@@ -6403,6 +6559,34 @@ export async function startManager(): Promise<void> {
           return;
         }
         jsonResponse(response, 200, { code: 0, data: requirement });
+        return;
+      }
+      const messageProcessingSendContextMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)\/send-context$/);
+      if (request.method === "GET" && messageProcessingSendContextMatch) {
+        const requirementId = decodeURIComponent(messageProcessingSendContextMatch[1]);
+        try {
+          const data = messageProcessingSendContextReview.snapshot(requirementId);
+          jsonResponse(response, 200, { code: 0, data });
+        } catch (error) {
+          jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
+      if (request.method === "POST" && messageProcessingSendContextMatch) {
+        const requirementId = decodeURIComponent(messageProcessingSendContextMatch[1]);
+        void readJsonBody<MessageProcessingSendContextApprovalInput>(request)
+          .then((body) => messageProcessingSendContextReview.approve(requirementId, body))
+          .then((data) => {
+            managerOperationalLog.record("info", "message_processing_send_context_review_approved", {
+              action: requirementId,
+              result: `expiresAt=${data.expiresAt}`
+            });
+            jsonResponse(response, 200, { code: 0, data });
+          })
+          .catch((error) => jsonResponse(response, 400, {
+            code: -1,
+            message: error instanceof Error ? error.message : String(error)
+          }));
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/message-processing/requirements") {
@@ -6643,10 +6827,26 @@ export async function startManager(): Promise<void> {
         jsonResponse(response, receipt.statusCode, { code: receipt.statusCode < 400 ? 0 : -1, ...receipt.body });
         return;
       }
+      if (request.method === "GET" && requestUrl.pathname === "/api/agent/send/traces") {
+        try {
+          const matches = findAgentSendTraces(rootDir, {
+            channel: requestUrl.searchParams.get("channel"),
+            sentMessageId: requestUrl.searchParams.get("sentMessageId"),
+            routeId: requestUrl.searchParams.get("routeId")
+          });
+          jsonResponse(response, 200, { code: 0, data: { matches } });
+        } catch (error) {
+          jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/api/agent/send") {
         void readJsonBody<AgentSendRequest>(request)
           .then(async (body) => {
-            const deliver = () => handleAgentSend(body, {
+            if (!readAgentSendReceipt(rootDir, String(body.deliveryId || ""))) {
+              messageProcessingSendContextReview.validateSend(body);
+            }
+            const replyOptions = {
               rootDir,
               routeRoot,
               rolesRoot,
@@ -6663,8 +6863,18 @@ export async function startManager(): Promise<void> {
                   }))
                 };
               })
-            });
+            };
+            if (!readAgentSendReceipt(rootDir, String(body.deliveryId || ""))) {
+              validateAgentSendReplyImageDescriptions(body, replyOptions);
+            }
+            const deliver = () => handleAgentSend(body, replyOptions);
             const result = await executeIdempotentAgentSend(body, { rootDir, deliver });
+            if (result.body.replyImageDescriptionArchive && result.body.idempotency.duplicate === false) {
+              managerOperationalLog.record("info", "agent_reply_image_descriptions_archived", {
+                action: String(body.deliveryId || ""),
+                result: `sourceMessageId=${result.body.replyImageDescriptionArchive.sourceMessageId}; files=${result.body.replyImageDescriptionArchive.files.length}`
+              });
+            }
             recordMessageProcessingSend(body, result.body);
             return result;
           })

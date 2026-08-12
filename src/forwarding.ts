@@ -16,7 +16,16 @@ import {
   appendWeComMessageToDir,
   appendWeixinMessageToDir
 } from "./history.js";
+import {
+  automationRunId,
+  claimAutomationRun,
+  executeScriptAutomation,
+  finishAutomationRun,
+  matchingMessageScriptAutomations
+} from "./automation/personaAutomationRuntime.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
+import { observeIdentityEndpoint } from "./identityRelations.js";
+import { identityEndpointsForForward } from "./routing/identityContext.js";
 import { recordConversationSituation } from "./conversationSituationStore.js";
 import {
   createRouteDecision,
@@ -55,7 +64,12 @@ import {
 } from "./routing/messageGroupingForward.js";
 import { MessageAgentPool, messageAgentPoolStatePath } from "./messageAgentPool.js";
 import { MemoryConsolidationAgent, memoryConsolidationAgentStatePath } from "./memoryConsolidationAgent.js";
-import { sendMessageProcessingManagerCommand } from "./messageProcessing/managerClient.js";
+import {
+  findReferencedAgentSenders,
+  sendMessageProcessingManagerCommand
+} from "./messageProcessing/managerClient.js";
+import type { MessageAgentReferencedSender } from "./messageProcessing/referencedAgentSender.js";
+import { collectMessageGroupSourceEvidence, type MessageGroupSourceEvidence } from "./messageProcessing/sourceEvidence.js";
 import {
   DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
   DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
@@ -146,7 +160,8 @@ function activeMessageAgentPool(): MessageAgentPool {
     roleId: config.agentRoleId,
     rolePath: config.agentRolePath,
     model: policy.model || DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
-    reasoningEffort: policy.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT
+    reasoningEffort: policy.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
+    maxAgents: policy.maxAgents
   });
   return messageAgentPool;
 }
@@ -172,6 +187,43 @@ function managerBaseUrl(): string {
   return process.env.GATEWAY_MANAGER_URL?.trim() || "http://127.0.0.1:8790";
 }
 
+async function referencedAgentSendersForMessageGroup(
+  routeId: string,
+  group: PendingMessageGroup
+): Promise<MessageAgentReferencedSender[]> {
+  if (group.endpoint !== "napcat" || !group.replyToMessageId) return [];
+  try {
+    const senders = await findReferencedAgentSenders(managerBaseUrl(), {
+      channel: "napcat",
+      sentMessageId: group.replyToMessageId,
+      routeId
+    });
+    appendAdapterLogToDir("router", {
+      event: "message_processing_reply_sender_lookup_completed",
+      level: "info",
+      message: `Referenced message sender lookup completed with ${senders.length} Agent session match(es).`,
+      data: {
+        routeId,
+        replyToMessageId: group.replyToMessageId,
+        referencedSenders: senders
+      }
+    }, config.dataDir);
+    return senders;
+  } catch (error) {
+    appendAdapterLogToDir("router", {
+      event: "message_processing_reply_sender_lookup_failed",
+      level: "warning",
+      message: `Could not resolve the Agent sender for referenced message ${group.replyToMessageId}; routing continues without that preference.`,
+      data: {
+        routeId,
+        replyToMessageId: group.replyToMessageId,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }, config.dataDir);
+    return [];
+  }
+}
+
 function messageProcessingRequirementId(group: PendingMessageGroup, routeId: string): string {
   const deliveryFingerprint = createHash("sha256")
     .update(group.items.map((item) => item.identity).join("\n"))
@@ -195,7 +247,22 @@ function messageGroupIds(group: PendingMessageGroup): string[] {
     .slice(-100);
 }
 
-function messageGroupPrompt(group: PendingMessageGroup, packet: string, requirementId?: string): string {
+function messageGroupPrompt(
+  group: PendingMessageGroup,
+  packet: string,
+  requirementId?: string,
+  evidence?: MessageGroupSourceEvidence
+): string {
+  const evidenceLines = evidence ? [
+    "",
+    "[本轮必须核对的原始证据]",
+    `本组原消息 ID：${messageGroupIds(group).join(", ") || "无"}`,
+    `直接和递归引用链 ID：${evidence.replyChainMessageIds.join(", ") || "无"}`,
+    ...(evidence.attachments.length ? evidence.attachments.map((attachment) =>
+      `附件 ${attachment.id}｜消息 ${attachment.messageId}｜${attachment.status}｜${attachment.name}${attachment.path ? `｜本地文件 ${attachment.path}` : `｜${attachment.error || "不可读"}`}`
+    ) : ["附件：无"]),
+    "先围绕上面这组原消息、引用链和附件理解当前讨论；不要让较早的最近消息覆盖它。图片已作为本轮 Desktop 图片输入附带时，必须实际查看后再填写 sourceEvidenceReview；引用含图片的 QQ 消息回复时，还要按图片顺序填写 params.replyImageDescriptions。"
+  ] : [];
   return [
     `[消息组 ${group.groupId}]`,
     requirementId ? `消息处理需求 ID：${requirementId}` : "",
@@ -204,6 +271,7 @@ function messageGroupPrompt(group: PendingMessageGroup, packet: string, requirem
     `说话人：${group.sender}`,
     group.replyToMessageId ? `回复消息：${group.replyToMessageId}` : "",
     `本组新增消息：${group.items.length} 条`,
+    ...evidenceLines,
     "",
     packet
   ].filter((line) => line !== "").join("\n");
@@ -232,6 +300,7 @@ async function deliverPacketToMessageAgent(
     }
   }
   const requirementId = messageProcessingRequirementId(group, routeId);
+  const sourceEvidence = collectMessageGroupSourceEvidence(group, config.memoryDataDir);
   let replyContext: Record<string, unknown> | undefined;
   try {
     const parsed = JSON.parse(replyContextJson) as unknown;
@@ -255,6 +324,9 @@ async function deliverPacketToMessageAgent(
         sender: group.sender,
         routeKinds: [...new Set(group.items.map((item) => item.payload.routeKind))],
         messageIds: messageGroupIds(group),
+        evidenceReviewRequired: true,
+        replyChainMessageIds: sourceEvidence.replyChainMessageIds,
+        attachments: sourceEvidence.attachments,
         summary: messageGroupSummary(group),
         replyContext
       }
@@ -273,11 +345,27 @@ async function deliverPacketToMessageAgent(
       }, config.dataDir);
       return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
     }
+    const referencedSenders = await referencedAgentSendersForMessageGroup(routeId, group);
     const worker = await activeMessageAgentPool().deliver(
       group,
-      messageGroupPrompt(group, packet, canonicalRequirementId),
-      canonicalRequirementId
+      messageGroupPrompt(group, packet, canonicalRequirementId, sourceEvidence),
+      { requirementId: canonicalRequirementId, referencedSenders, imagePaths: sourceEvidence.readyImagePaths }
     );
+    if (referencedSenders.length > 0) {
+      appendAdapterLogToDir("router", {
+        event: "message_processing_reply_sender_weight_applied",
+        level: "info",
+        message: `Referenced Agent sender preference was included when selecting a Message Agent requirementId=${canonicalRequirementId}`,
+        data: {
+          requirementId: canonicalRequirementId,
+          routeId,
+          replyToMessageId: group.replyToMessageId,
+          referencedSenders,
+          selectedThreadId: worker.threadId,
+          selectedReferencedSession: referencedSenders.some((sender) => sender.sessionId === worker.threadId)
+        }
+      }, config.dataDir);
+    }
     try {
       await sendMessageProcessingManagerCommand(managerBaseUrl(), {
         action: "dispatch",
@@ -799,6 +887,30 @@ async function forwardMessageToRoute(
   }
 
   const roleContext = rolePathsForRoute(route);
+  if (roleContext.roleDir) {
+    const identityEndpoints = identityEndpointsForForward(routeKind, record, {
+      gatewayId: process.env.GATEWAY_ID,
+      routeProfileId: route.id
+    });
+    for (const identityEndpoint of identityEndpoints) {
+      try {
+        observeIdentityEndpoint(roleContext.roleDir, identityEndpoint);
+      } catch (error) {
+        appendAdapterLogToDir("router", {
+          event: "identity_endpoint_observation_failed",
+          level: "warning",
+          message: `Could not retain the stable sender as a candidate identity for route=${route.id}`,
+          data: {
+            routeId: route.id,
+            routeKind,
+            platform: identityEndpoint.platform,
+            endpointIdentityNamespace: identityEndpoint.endpointIdentityNamespace,
+            error: error instanceof Error ? error.message : String(error)
+          }
+        }, roleContext.personaDataDir);
+      }
+    }
+  }
   const messageAgentGroup = options.messageGroup
     ?? (routeKind === "heartbeat" && messageAgentModeEnabled()
       ? immediateMessageAgentGroup(routeKind, record, extraValues)
@@ -882,6 +994,40 @@ export async function forwardMessageAndWait(
       logDeliveryReplayAttempt(routeKind, record, extraValues, result, packets, options);
     }
     return result;
+  }
+  if (!options.replayOfAttemptId) {
+    for (const route of routes) {
+      for (const task of matchingMessageScriptAutomations(route, routeKind, record, extraValues)) {
+        const runId = automationRunId(route.id, task.rule.id, { record });
+        if (!claimAutomationRun(runId, {
+          routeId: route.id,
+          automationRuleId: task.rule.id,
+          triggerType: "message",
+          routeKind,
+          messageId: recordId(record)
+        })) continue;
+        appendAdapterLogToDir("automation", {
+          event: "script_started",
+          message: `Persona automation script started route=${route.id} rule=${task.rule.id}`,
+          data: { runId, routeId: route.id, automationRuleId: task.rule.id, routeKind, messageId: recordId(record) }
+        }, config.dataDir);
+        void executeScriptAutomation(task).then((result) => {
+          finishAutomationRun(runId, result.status, {
+            routeId: route.id,
+            automationRuleId: task.rule.id,
+            reason: result.reason,
+            exitCode: result.exitCode,
+            durationMs: result.durationMs
+          });
+          appendAdapterLogToDir("automation", {
+            event: "script_result",
+            level: result.status === "completed" ? "info" : result.status === "skipped" ? "warning" : "error",
+            message: `Persona automation script ${result.status} route=${route.id} rule=${task.rule.id}`,
+            data: { runId, routeId: route.id, automationRuleId: task.rule.id, routeKind, ...result }
+          }, config.dataDir);
+        });
+      }
+    }
   }
   if (options.recordInbound !== false) recordInboundForRoutes(routes, routeKind, record, options);
   const results: ForwardRouteDeliveryResult[] = [];

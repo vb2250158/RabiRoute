@@ -30,7 +30,7 @@ data/roles/<RoleId>/persona.md
 data/roles/<RoleId>/personaConfig.json
 ```
 
-`adapterConfig.json` owns endpoints, ports, handler selection, cwd, pipeline, role binding, and Route-local delivery policy. `personaConfig.json` owns notification rules, speech-trigger keywords, and per-endpoint recent-context budgets. A role can be reused by several routes.
+`adapterConfig.json` owns endpoints, ports, handler selection, cwd, pipeline, role binding, and Route-local delivery policy. `personaConfig.json` owns persona automation rules, speech-trigger keywords, and per-endpoint recent-context budgets. A role can be reused by several routes.
 
 `rolePanel` is a compatibility name for Manager's built-in message path, not a configurable Gateway listener. Local role-panel input and authenticated cross-persona delivery share the fixed `role_panel_message` rule and one delivery service. Success is recorded only after handler acceptance; a failed entry records an attempt.
 
@@ -77,10 +77,12 @@ On a clean start, the Manager copies the public `examples/data` package when ava
     "codex": {
       "enabled": true,
       "model": "gpt-5.6-luna",
-      "reasoningEffort": "medium"
+      "reasoningEffort": "medium",
+      "maxAgents": 4
     }
   },
   "heartbeatSkipWhenAgentBusy": true,
+  "personaAutomationScriptsEnabled": false,
   "dataDir": "./data/route/main",
   "rolesDir": "./data/roles",
   "configName": "main",
@@ -92,6 +94,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 ## Core fields
 
 - `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `wecom`, and `weixin`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
+- `personaAutomationScriptsEnabled`: Route-local permission for persona automation to run local scripts. It defaults to `false`, is not stored in or synchronized with the persona, and gates script actions triggered by either messages or schedules.
 - `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. QQ, Weixin, Feishu, WeCom, role-panel, and RabiLink text chats use message groups automatically without an off switch. `messageGrouping` exposes only ordinary settle, unfinished-fragment settle, and maximum wait values, defaulting to `6 / 12 / 20` seconds. ASR/voice transcripts, heartbeat, commands, approvals, health alerts, and structured events continue direct delivery without this wait. Chat dispatch changes only when Codex Message Agent mode is also enabled; otherwise delivery remains per-message. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
 - `allowedFileRoots`: real-path allowlist for local file output. A local QQ group-file upload is blocked when this is empty or the resolved file leaves the allowlist.
@@ -101,7 +104,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `agentAdapters`: handler IDs. Codex is verified; Copilot CLI and AstrBot are experimental; Marvis is a manual handoff.
 - `primaryAgentAdapter`: the Route's Primary Agent. It must be one of `agentAdapters`. A matched message is delivered only to this handler, not broadcast to the other configured Agents. Older configurations use the first listed Agent; removing the current Primary Agent selects the first remaining Agent.
 - Agent handlers use a base capability layer for installation, authentication, project, task, and delivery support, then explicitly opt into managed-task extensions. Codex is currently the only handler declaring **Message Agent mode**, **Dedicated Memory Consolidation Agent**, **Plan assistant tasks**, and **Hook management**. WebGUI shows them only on the Codex card, and normalization discards these settings from non-Codex Routes. A future handler with equivalent capabilities may opt into individual features; a platform with its own Agent orchestration does not need to.
-- `messageProcessingAgents.codex`: Codex Message Agent eligibility and its independent model. It defaults off. When enabled, chat messages automatically form groups and reuse or dynamically create Message Agent tasks for distinct topics. ASR and structured events continue direct delivery. `heartbeat` is one continuing inspection responsibility: the first tick selects or creates one Message Agent task, and every later tick is steered back to the most recent heartbeat worker even when that task is still active, so scheduled ticks cannot grow one task each. Task titles use the persona name as a stable prefix: one worker is named `<persona name> 协助处理消息`; when the pool expands, tasks use numbered titles such as `<persona name> 协助处理消息1` and `...消息2`. Renaming preserves the original Desktop task ID and workspace. Ordinary dispatch treats only a task that Codex currently reports as `idle` as an idle candidate. `notLoaded` means an existing task is not loaded yet; RabiRoute reuses it and lets the normal Desktop-owner path open it instead of creating another task. If Desktop is offline or current status cannot be read, the message group remains in the recoverable queue and no replacement task is created. `agents.json` stores task identity, workspace, and initialization metadata only; endpoint/conversation/speaker familiarity lives in `routing-affinity.json`, and neither file stores active/idle state. The default model and reasoning effort are `gpt-5.6-luna` / `medium`, affecting Message Agent turns only, not Primary, Secretary, or Plan Agents.
+- `messageProcessingAgents.codex`: Codex Message Agent eligibility, independent model, and task-count limit. It defaults off. When enabled, chat messages automatically form groups and reuse or dynamically create Message Agent tasks for distinct topics. ASR and structured events continue direct delivery. Optional `maxAgents` accepts `1–32`; leaving it unset preserves dynamic expansion, while reaching the limit reuses an existing task instead of creating another one. A value of `1` keeps and reuses the fixed task `<persona name> 协助处理消息1`, including while it is active. Lowering the limit detaches excess tasks from the current Route's Message Agent pool but does not delete Desktop tasks. `heartbeat` remains one continuing inspection responsibility and always returns to its selected worker. Without a configured limit, a single worker uses `<persona name> 协助处理消息`; multiple workers use numbered titles. Renaming preserves the original Desktop task ID and workspace. Ordinary dispatch treats only a task reported as `idle` as an idle candidate; `notLoaded` tasks are reused through the normal Desktop-owner path. If Desktop is offline or current status cannot be read, the group remains recoverable and no replacement task is created. `agents.json` stores identity, workspace, and initialization metadata only; routing familiarity lives in `routing-affinity.json`, and neither file stores active/idle state. Defaults remain `gpt-5.6-luna` / `medium`, affecting Message Agent turns only.
 - When `messageProcessingAgents.codex.enabled` is on, the same configuration area shows a Message Processing Board. It is not a second statistics system: it reads Manager-owned delivery requirements and distinguishes required replies, Agent decisions, handoffs, waiting-to-send, approval, sent, no-reply, and failed states. Explicit mentions, direct replies, and private messages are required by default. Ordinary group messages may receive proactive participation or a reasoned no-reply decision. Once a structured handoff links a plan to its source conversation, canonical plan writes generate progress-notification requirements and reuse the original Message Agent task to return the update. The board refreshes from Manager events instead of periodically scanning chat or plan files.
 - `codexThreadId` / `codexThreadName` / `codexCwd`: stable task binding by opaque ID plus workspace, with a visible saved name. An archived saved ID first rebinds to the unique latest active same-name task in the same workspace; if none exists it blocks and requires restore/reselection. It never permits replacement creation. Typing a new name explicitly clears the old ID before complete name lookup. Only system-owned Message Agent tasks with stable generated names use the app-server state index's name filter, avoiding a full-catalog scan on first delivery; ordinary task binding retains complete lookup. One or more exact same-name/workspace matches bind the unique latest `updatedAt`; only zero matches for an empty, invalid, or missing ID may create, and a tied or unusable maximum requires selection.
 - `codexMemoryConsolidationAgentEnabled`: sends automatic-deadline and manual memory-consolidation triggers to a dedicated Codex Desktop task. It defaults off. Automatic 72-hour scheduling still runs while off, but the Primary Persona handles the request. When enabled, the task name is derived as `<Primary Persona task name> 记忆整理`, the Primary Persona does not receive the same request, and delivery failure does not fall back to the Primary Persona or another Runtime.
@@ -118,9 +121,36 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `heartbeatSkipWhenAgentBusy`: applies only while Codex Message Agent mode is off. With Message Agent mode on, heartbeat goes immediately to an independent Message Agent and is not skipped because the Primary task is active. Other message kinds are unaffected.
 - `speechPushMode`: Route-owned speech delivery mode. `hot` delivers every completed ASR segment immediately. `keyword` records every segment but wakes the Agent only after a persona-keyword match. WebGUI's **Hot delivery** switch maps On to `hot` and Off to `keyword`.
 - `speechTriggerKeywords`: persona-owned names, common addresses, and wake phrases in `personaConfig.json`. When the list is empty and Hot delivery is off, ASR remains recorded and never silently falls back to `hot`.
+- `automationRules`: persona-owned rules in `personaConfig.json`. Each rule chooses a `message` or `schedule` trigger, then a `deliver_agent` or `run_script` action. Legacy `notificationRules` and nested heartbeat `schedules` migrate on read; later saves write only the new structure.
 - `recentMessageLimits`: persona-owned `0–200` auto-injection budgets for `napcat`, `remoteAgent`, `heartbeat`, `rolePanel`, `speech`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `webhook`, `wecom`, and `weixin`. The schema default is `12`; `0` disables only automatic injection. Legacy `recentMessageLimit` and explicit endpoint values remain effective.
 - `contextInjection`: persona-owned focused-context policy. It defaults to `{"mode":"focused","relevantKnowledgeLimit":3,"personaMaxChars":1600}`; `mode=legacy` restores full active indexes. The numeric ranges are `1–12` and `800–6000`.
 - `dataDir`, `rolesDir`, `configName`, `agentRoleId`, `agentRoleFile`: storage and role binding.
+
+Minimal example:
+
+```json
+{
+  "automationRules": [
+    {
+      "id": "private-agent",
+      "name": "Send private messages to the Agent",
+      "trigger": { "type": "message", "routeKinds": ["private"] },
+      "action": { "type": "deliver_agent", "template": "" }
+    },
+    {
+      "id": "daily-check",
+      "name": "Daily check",
+      "trigger": {
+        "type": "schedule",
+        "schedule": { "id": "daily-check-time", "type": "daily_time", "timeOfDay": "09:00" }
+      },
+      "action": { "type": "run_script", "scriptPath": "daily-check.py", "timeoutSeconds": 300 }
+    }
+  ]
+}
+```
+
+Script paths are restricted to the current persona's `scripts/` directory and may use `.cmd`, `.bat`, or `.py`. Manager tokens, passwords, and message bodies are not inherited by the process. Only the system variables needed to start the script are retained, with Route, automation, persona-directory, and script-path identifiers added. Arguments are a string array, timeouts range from 5 to 3600 seconds, and the same rule on the same Route cannot overlap. Local execution records are appended to `automation-executions.jsonl`.
 
 Windows paths may use either slash style in WebUI. Only hand-written JSON requires escaped backslashes.
 
@@ -129,7 +159,7 @@ Windows paths may use either slash style in WebUI. Only hand-written JSON requir
 | Adapter | Maturity | Notes |
 | --- | --- | --- |
 | `napcat` | verified | Inbound OneBot WebSocket and outbound OneBot HTTP. |
-| `heartbeat` | verified | Internal scheduled events. **Trigger now** waits only for Manager acceptance and releases the button immediately; the adapter log reports the final Agent delivery result. A repeated request for the same Route and rule is not started again while the first delivery remains active. |
+| `heartbeat` | verified | Compatibility runtime for scheduled persona automations. A due rule may notify the Agent or, with local permission, run a persona script. Agent delivery and script execution keep separate results. |
 | `speech` | experimental | RabiPC/RabiSpeech resident ASR. Hot delivery sends every segment; keyword mode records all segments and sends only persona-keyword matches. Successful same-session TTS joins ASR in the bidirectional persona context. |
 | `rolePanel` | verified | Built-in Manager/Qt role conversation capability. It is available by default, hidden from WebGUI's configurable adapter list, and is not a network listener. |
 | Plan approval | verified system event | Not a message adapter. After the feedback audit is persisted, Manager sends the guidance/approval body to the business `taskBinding` and, when Plan Secretary is enabled, sends the control notice to the responsible `secretaryBinding` instead of notifying the Primary Persona on every delivery. An incomplete business binding falls back to the Secretary first; the Primary Persona fallback is used only when no usable Secretary is enabled. The event has no configurable recent-message budget and does not enter the role timeline or unified conversation ledger. |
@@ -182,7 +212,7 @@ Record-first sources such as FenneNote can be selected through `routeVariables.r
 
 ## Multiple routes and shared roles
 
-Each folder under `data/route` is independently startable and may have its own endpoints and handler workspace. Several Routes may bind the same `agentRoleId`; they reuse that persona's root-level rules, speech keywords, and context budgets while retaining their own endpoint, pipeline, hot-delivery, and handler configuration.
+Each folder under `data/route` is independently startable and may have its own endpoints and handler workspace. Several Routes may bind the same `agentRoleId`; they reuse that persona's root-level automation rules, speech keywords, and context budgets while retaining their own endpoint, pipeline, hot-delivery, handler configuration, and local script permission.
 
 Once an ordinary message matches a rule, it is delivered directly to the Route's Primary Agent. When Codex is primary, RabiRoute uses `steer` for an active Desktop turn or `start` for an idle task. Ordinary endpoints do not need another hot-push toggle. Heartbeat's busy-skip switch and speech's hot/keyword mode are explicit exceptions.
 

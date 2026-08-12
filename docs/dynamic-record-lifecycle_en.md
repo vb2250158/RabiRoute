@@ -30,8 +30,9 @@ An item older than 72 hours triggers an organization pass. That pass selects the
 | --- | --- | --- | --- |
 | Persona bidirectional ledger | `data/roles/<RoleId>/conversation/current.jsonl` | Dynamic archival | Once any record exceeds 72 hours, move the maximal contiguous prefix older than 24 hours into sequence archives |
 | Ledger history | `conversation/archive/<first>~<last>.jsonl` and `index.json` | Retain | Query by stable sequence; never delete at a calendar boundary |
-| Recent memory | `memory/recent/*.md`, with legacy JSON compatibility | Consolidate | Edit/default visibility uses `updatedAt` and `viewedAt`; 24/72 consolidation uses `updatedAt` and `recalledAt` with the cohort frozen at the original trigger |
-| Consolidated memory | `memory/consolidated/*.md`, with legacy JSON compatibility | Stable retention | Created by an explicit consolidation run; source memories remain marked, and outputs remain recallable |
+| Recent memory | `memory/recent/*.md`, with legacy JSON compatibility | Consolidate | Only records without `consolidatedAt` are recent; edit/default visibility uses `updatedAt` and `viewedAt`; 24/72 consolidation uses `updatedAt` and `recalledAt` with the cohort frozen at the original trigger |
+| Archived memory sources | Records under `memory/recent/*.md` with `consolidatedAt` | Trace retention | No longer count as recent and never consolidate again; shown under Archived together with archived plans |
+| Consolidated memory | `memory/consolidated/*.md`, with legacy JSON compatibility | Stable retention | Created by a consolidation run, shown in its own category, and remains recallable |
 | Host-wide speech messages | `data/speech/messages/YYYY-MM-DD.jsonl` | Date-sharded audit stream | Calendar files are physical shards, not archival or consolidation |
 | Host-wide speech Markdown export | `data/speech/exports/transcript-*.md` | On-demand rebuilt view | Generated from public speech messages for an inclusive/exclusive time range; never a source of truth |
 | RabiSpeech diagnostic records | `plugin-adapters/rabi-speech/output/records/YYYY-MM-DD.jsonl` | Date-sharded diagnostics | Separate from persona routing records |
@@ -61,7 +62,7 @@ Memory organization must:
 3. Include unconsolidated recent memories older than 24 hours.
 4. Persist the run, input IDs, and output memories.
 5. Retain source memories and mark `consolidatedAt` plus `consolidationRunId`.
-6. Never move source memories into an archive or overwrite existing consolidated memories.
+6. Source files need not move directories, but after `consolidatedAt` they are classified as Archived by Manager and the UI; never overwrite existing consolidated memories.
 
 Manager arms a one-shot task for the earliest 72-hour deadline and rereads memory activity before creating and delivering the run. It does not use a resident polling loop.
 

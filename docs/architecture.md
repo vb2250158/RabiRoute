@@ -222,9 +222,9 @@ routes:
 当前 `POST /api/agent/send`、`src/agentSend.ts` 和 `src/outbox.ts` 已经提供真实明确发送链路：
 
 - 返回状态为 `sent`、`draft`、`blocked` 或 `failed`。
-- 请求必须包含稳定 `deliveryId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload`；来源上下文不能作为目标，Route 默认 pipeline 也不能改写显式渠道。
+- 请求必须包含稳定 `deliveryId`、`sender.agentType + sender.sessionId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload`；完成回执保存发送 Agent 类型与会话，来源上下文不能作为目标，Route 默认 pipeline 也不能改写显式渠道。
 - 当前输出支持 QQ/NapCat、WeCom、个人微信、飞书、RabiLink、speech 和角色面板；FenneNote 仅保留旧 Route 兼容。
-- QQ 支持明确群/私聊目标、图片/语音/文件，以及 `allowedFileRoots` 文件白名单；只有显式 `replyToMessageId` 才引用来源消息。
+- QQ 支持明确群/私聊目标、图片/语音/文件，以及 `allowedFileRoots` 文件白名单；群聊必须显式提交 `replyToMessageId`，真实 ID 引用来源消息，空字符串表示明确不引用。
 - 外发失败会保留 draft 数据并写 Outbox 日志。
 
 当前还没有通用、持久化、可由 WebGUI 审批的 Action Queue，也没有统一的自动补发队列。后续若扩展到文档、Issue、设备或其它外部系统，应在现有 Outbox policy 之上增加可审计的 action request / approval / commit 状态机。

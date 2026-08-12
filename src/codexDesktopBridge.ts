@@ -67,11 +67,23 @@ export type CodexDesktopDelivery = {
 export type CodexDesktopBridgeOptions = {
   pipePaths?: string[];
   requestTimeoutMs?: number;
+  deliveryReceiptGraceMs?: number;
+  deliveryReceiptPollMs?: number;
+  deliveryReceiptReader?: (threadId: string, marker: string) => boolean | Promise<boolean>;
   loadRetryAttempts?: number;
   loadRetryDelayMs?: number;
-  reopenThreadEveryAttempts?: number;
   openThread?: (threadId: string) => Promise<void>;
   onBroadcast?: (message: Extract<IpcMessage, { type: "broadcast" }>) => void;
+};
+
+type CodexDesktopTurnDelivery = {
+  threadId: string;
+  prompt: string;
+  cwd: string;
+  sandbox: CodexDesktopSandbox;
+  model?: string;
+  reasoningEffort?: CodexDesktopReasoningEffort;
+  imagePaths?: string[];
 };
 
 type CodexSidebarTaskIndexRow = {
@@ -313,9 +325,39 @@ function isInactiveTurn(error: unknown): boolean {
     || text.includes("not being streamed");
 }
 
+function isTurnDeliveryTimeout(error: unknown, method: "thread-follower-steer-turn" | "thread-follower-start-turn"): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes(`IPC request timed out: ${method}`)
+    || text.includes(`${method}-timeout`);
+}
+
+export function agentDeliveryMarkerForTest(prompt: string): string {
+  return /\bdeliveryId[：:]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i.exec(prompt)?.[1] ?? "";
+}
+
+function rolloutTailContainsMarker(filePath: string, marker: string, maxBytes = 4 * 1024 * 1024): boolean {
+  if (!marker || !fs.existsSync(filePath)) return false;
+  const stat = fs.statSync(filePath);
+  const length = Math.min(stat.size, maxBytes);
+  if (length <= 0) return false;
+  const handle = fs.openSync(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    fs.readSync(handle, buffer, 0, length, Math.max(0, stat.size - length));
+    return buffer.includes(Buffer.from(marker, "utf8"));
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function defaultDeliveryReceiptReader(threadId: string, marker: string): boolean {
+  const thread = readCodexDesktopThread(threadId);
+  return Boolean(thread?.rolloutPath && rolloutTailContainsMarker(thread.rolloutPath, marker));
+}
+
 export class CodexDesktopBridge {
   private readonly options: Required<Pick<CodexDesktopBridgeOptions,
-    "requestTimeoutMs" | "loadRetryAttempts" | "loadRetryDelayMs" | "reopenThreadEveryAttempts" | "openThread">> & CodexDesktopBridgeOptions;
+    "requestTimeoutMs" | "deliveryReceiptGraceMs" | "deliveryReceiptPollMs" | "deliveryReceiptReader" | "loadRetryAttempts" | "loadRetryDelayMs" | "openThread">> & CodexDesktopBridgeOptions;
   private socket: net.Socket | null = null;
   private connecting: Promise<void> | null = null;
   private clientId = "initializing-client";
@@ -330,9 +372,11 @@ export class CodexDesktopBridge {
     this.options = {
       ...options,
       requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
+      deliveryReceiptGraceMs: Math.max(0, options.deliveryReceiptGraceMs ?? 5_000),
+      deliveryReceiptPollMs: Math.max(10, options.deliveryReceiptPollMs ?? 250),
+      deliveryReceiptReader: options.deliveryReceiptReader ?? defaultDeliveryReceiptReader,
       loadRetryAttempts: Math.max(1, options.loadRetryAttempts ?? 24),
       loadRetryDelayMs: Math.max(1, options.loadRetryDelayMs ?? 1_000),
-      reopenThreadEveryAttempts: Math.max(1, options.reopenThreadEveryAttempts ?? 6),
       openThread: options.openThread ?? openCodexDesktopThread
     };
   }
@@ -507,37 +551,67 @@ export class CodexDesktopBridge {
     return this.activeThreadSinceMs.get(threadId) ?? null;
   }
 
-  private async steer(params: { threadId: string; prompt: string; cwd: string }): Promise<void> {
-    const response = await this.request("thread-follower-steer-turn", {
-      conversationId: params.threadId,
-      input: [{ type: "text", text: params.prompt, text_elements: [] }],
-      attachments: [],
-      restoreMessage: {
-        id: randomUUID(),
-        text: params.prompt,
-        context: {
-          prompt: params.prompt,
-          addedFiles: [],
-          fileAttachments: [],
-          imageAttachments: [],
-          workspaceRoots: [params.cwd]
-        },
-        cwd: params.cwd,
-        createdAt: Date.now()
-      }
-    });
-    const error = responseError(response, "thread-follower-steer-turn");
-    if (error) throw error;
+  private turnInput(prompt: string, imagePaths: string[] = []): Array<Record<string, unknown>> {
+    return [
+      { type: "text", text: prompt, text_elements: [] },
+      ...imagePaths.map((imagePath) => ({ type: "localImage", path: imagePath }))
+    ];
   }
 
-  private async start(params: {
-    threadId: string;
-    prompt: string;
-    model?: string;
-    reasoningEffort?: CodexDesktopReasoningEffort;
-  }): Promise<void> {
+  private imageAttachments(imagePaths: string[] = []): Array<Record<string, unknown>> {
+    return imagePaths.map((imagePath) => ({
+      id: randomUUID(),
+      src: imagePath,
+      localPath: imagePath,
+      filename: path.basename(imagePath),
+      uploadStatus: "idle"
+    }));
+  }
+
+  private async confirmTimedOutDelivery(params: CodexDesktopTurnDelivery): Promise<boolean> {
+    const marker = agentDeliveryMarkerForTest(params.prompt);
+    if (!marker) return false;
+    const deadline = Date.now() + this.options.deliveryReceiptGraceMs;
+    do {
+      if (await this.options.deliveryReceiptReader(params.threadId, marker)) return true;
+      if (Date.now() >= deadline) return false;
+      await wait(Math.min(this.options.deliveryReceiptPollMs, Math.max(1, deadline - Date.now())));
+    } while (true);
+  }
+
+  private async steer(params: CodexDesktopTurnDelivery): Promise<void> {
+    const imageAttachments = this.imageAttachments(params.imagePaths);
+    const method = "thread-follower-steer-turn";
+    try {
+      const response = await this.request(method, {
+        conversationId: params.threadId,
+        input: this.turnInput(params.prompt, params.imagePaths),
+        attachments: [],
+        restoreMessage: {
+          id: randomUUID(),
+          text: params.prompt,
+          context: {
+            prompt: params.prompt,
+            addedFiles: [],
+            fileAttachments: [],
+            imageAttachments,
+            workspaceRoots: [params.cwd]
+          },
+          cwd: params.cwd,
+          createdAt: Date.now()
+        }
+      });
+      const error = responseError(response, method);
+      if (error) throw error;
+    } catch (error) {
+      if (isTurnDeliveryTimeout(error, method) && await this.confirmTimedOutDelivery(params)) return;
+      throw error;
+    }
+  }
+
+  private async start(params: CodexDesktopTurnDelivery): Promise<void> {
     const turnStartParams: Record<string, unknown> = {
-      input: [{ type: "text", text: params.prompt, text_elements: [] }],
+      input: this.turnInput(params.prompt, params.imagePaths),
       attachments: [],
       commentAttachments: []
     };
@@ -554,22 +628,21 @@ export class CodexDesktopBridge {
         }
       };
     }
-    const response = await this.request("thread-follower-start-turn", {
-      conversationId: params.threadId,
-      turnStartParams
-    });
-    const error = responseError(response, "thread-follower-start-turn");
-    if (error) throw error;
+    const method = "thread-follower-start-turn";
+    try {
+      const response = await this.request(method, {
+        conversationId: params.threadId,
+        turnStartParams
+      });
+      const error = responseError(response, method);
+      if (error) throw error;
+    } catch (error) {
+      if (isTurnDeliveryTimeout(error, method) && await this.confirmTimedOutDelivery(params)) return;
+      throw error;
+    }
   }
 
-  private async deliverToOwner(params: {
-    threadId: string;
-    prompt: string;
-    cwd: string;
-    sandbox: CodexDesktopSandbox;
-    model?: string;
-    reasoningEffort?: CodexDesktopReasoningEffort;
-  }): Promise<"started" | "steered"> {
+  private async deliverToOwner(params: CodexDesktopTurnDelivery): Promise<"started" | "steered"> {
     try {
       await this.steer(params);
       return "steered";
@@ -580,14 +653,7 @@ export class CodexDesktopBridge {
     return "started";
   }
 
-  private async deliverNow(params: {
-    threadId: string;
-    prompt: string;
-    cwd: string;
-    sandbox: CodexDesktopSandbox;
-    model?: string;
-    reasoningEffort?: CodexDesktopReasoningEffort;
-  }): Promise<CodexDesktopDelivery> {
+  private async deliverNow(params: CodexDesktopTurnDelivery): Promise<CodexDesktopDelivery> {
     let openedThread = false;
     let lastError: unknown;
     const deliveryStartedAtMs = Date.now();
@@ -600,24 +666,17 @@ export class CodexDesktopBridge {
       } catch (error) {
         lastError = error;
         if (!isDesktopOwnerLoading(error)) throw error;
-        if (!openedThread || attempt % this.options.reopenThreadEveryAttempts === 0) {
+        if (!openedThread) {
           openedThread = true;
           await this.options.openThread(params.threadId);
         }
         if (attempt + 1 < this.options.loadRetryAttempts) await wait(this.options.loadRetryDelayMs);
       }
     }
-    throw new Error(`Codex Desktop 已打开任务 ${params.threadId}，但 Desktop owner 没有完成加载；消息未投递，也没有启动备用 Runtime。原始错误：${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    throw new Error(`Codex Desktop 只请求打开一次任务 ${params.threadId}，但当前窗口没有加载该任务 owner（工作目录：${params.cwd}）。消息未投递，也没有启动备用 Runtime。请在 Codex Desktop 左侧手动打开目标任务后重试；如果仍停在项目层，请回到 RabiRoute 重新选择任务。原始错误：${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
-  async deliver(params: {
-    threadId: string;
-    prompt: string;
-    cwd: string;
-    sandbox: CodexDesktopSandbox;
-    model?: string;
-    reasoningEffort?: CodexDesktopReasoningEffort;
-  }): Promise<CodexDesktopDelivery> {
+  async deliver(params: CodexDesktopTurnDelivery): Promise<CodexDesktopDelivery> {
     const key = `${params.threadId}\n${canonicalCodexWorkspacePath(params.cwd)}`;
     const previous = this.deliveryQueues.get(key);
     const scheduled = (previous ? previous.catch(() => undefined) : Promise.resolve())

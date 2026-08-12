@@ -1,8 +1,9 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import type { AgentAdapterType, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, RuntimeStatus } from "../types";
+import type { AgentAdapterType, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
 import {
   applyAdapterDefaults,
+  automationRulesForGateway,
   adaptersNeedGatewayRuntime,
   configNameFor,
   createDefaultGateway,
@@ -14,6 +15,7 @@ import {
   normalizeRule,
   sanitizeConfigName,
   saveActiveRoleRules,
+  syncAutomationRuleProjection,
   setGatewayAdapters
 } from "../utils/gatewayHelpers";
 import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
@@ -282,6 +284,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       if (Array.isArray(gateway.notificationRules)) {
         gateway.notificationRules = gateway.notificationRules.map((rule, index) => normalizeRule(rule, index));
       }
+      automationRulesForGateway(gateway);
       if (gateway.roleNotificationRules && typeof gateway.roleNotificationRules === "object" && !Array.isArray(gateway.roleNotificationRules)) {
         Object.keys(gateway.roleNotificationRules).forEach(roleId => {
           const rules = gateway.roleNotificationRules?.[roleId];
@@ -451,7 +454,8 @@ export const useGatewayStore = defineStore("gateway", () => {
           const policy = saved?.messageProcessingAgents?.codex;
           return policy?.enabled !== true
             || policy.model !== expected.policy?.model
-            || policy.reasoningEffort !== expected.policy?.reasoningEffort;
+            || policy.reasoningEffort !== expected.policy?.reasoningEffort
+            || policy.maxAgents !== expected.policy?.maxAgents;
         });
         if (messageAgentSettingWasDropped) {
           throw new Error("Manager 版本过旧，未保存消息处理 Agent 设置。请重启 Manager 后再次保存。");
@@ -633,7 +637,10 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway[field] = value;
     if (field === "id") selectedGatewayId.value = String(value || "");
     if (field === "agentRoleId") {
-      if (!String(value || "").trim()) gateway.notificationRules = [];
+      if (!String(value || "").trim()) {
+        gateway.automationRules = [];
+        gateway.notificationRules = [];
+      }
       ensureActiveRoleRules(gateway);
     }
     touch();
@@ -650,17 +657,17 @@ export const useGatewayStore = defineStore("gateway", () => {
   function addRule(): void {
     const gateway = selectedGateway.value;
     if (!gateway) return;
-    const rules = notificationRulesForGateway(gateway);
-    const next = rules.length + 1;
-    rules.push({
+    const automations = automationRulesForGateway(gateway);
+    const messageRules = automations.filter(rule => rule.trigger.type === "message" && rule.action.type === "deliver_agent");
+    const next = messageRules.length + 1;
+    automations.push({
       id: `rule-${Date.now().toString(36)}-${next}`,
       name: `规则 ${next}`,
       enabled: true,
-      routeKinds: [],
-      targetGroupId: "",
-      regex: "",
-      template: ""
+      trigger: { type: "message", routeKinds: [], targetGroupId: "", allowedSpeakerNames: [], regex: "" },
+      action: { type: "deliver_agent", template: "" }
     });
+    syncAutomationRuleProjection(gateway);
     saveActiveRoleRules(gateway);
     touch();
   }
@@ -668,9 +675,13 @@ export const useGatewayStore = defineStore("gateway", () => {
   function removeRule(ruleIndex: number): void {
     const gateway = selectedGateway.value;
     if (!gateway) return;
-    const rules = notificationRulesForGateway(gateway);
-    if (isBuiltinRolePanelRule(rules[ruleIndex])) return;
-    rules.splice(ruleIndex, 1);
+    const automations = automationRulesForGateway(gateway);
+    const entry = automations
+      .map((rule, index) => ({ rule, index }))
+      .filter(({ rule }) => rule.trigger.type === "message" && rule.action.type === "deliver_agent")[ruleIndex];
+    if (!entry || isBuiltinRolePanelRule(notificationRulesForGateway(gateway)[ruleIndex])) return;
+    automations.splice(entry.index, 1);
+    syncAutomationRuleProjection(gateway);
     saveActiveRoleRules(gateway);
     touch();
   }
@@ -678,9 +689,89 @@ export const useGatewayStore = defineStore("gateway", () => {
   function updateRule(ruleIndex: number, patch: Partial<NotificationRule>): void {
     const gateway = selectedGateway.value;
     if (!gateway) return;
-    const rules = notificationRulesForGateway(gateway);
-    rules[ruleIndex] = normalizeRule({ ...rules[ruleIndex], ...patch }, ruleIndex);
+    const automations = automationRulesForGateway(gateway);
+    const entry = automations
+      .map((rule, index) => ({ rule, index }))
+      .filter(({ rule }) => rule.trigger.type === "message" && rule.action.type === "deliver_agent")[ruleIndex];
+    if (!entry || entry.rule.trigger.type !== "message" || entry.rule.action.type !== "deliver_agent") return;
+    entry.rule = {
+      ...entry.rule,
+      name: patch.name ?? entry.rule.name,
+      enabled: patch.enabled ?? entry.rule.enabled,
+      trigger: {
+        ...entry.rule.trigger,
+        routeKinds: patch.routeKinds ?? entry.rule.trigger.routeKinds,
+        targetGroupId: patch.targetGroupId ?? entry.rule.trigger.targetGroupId,
+        allowedSpeakerNames: patch.allowedSpeakerNames ?? entry.rule.trigger.allowedSpeakerNames,
+        regex: patch.regex ?? entry.rule.trigger.regex
+      },
+      action: {
+        ...entry.rule.action,
+        template: patch.template ?? entry.rule.action.template
+      }
+    };
+    automations[entry.index] = entry.rule;
+    syncAutomationRuleProjection(gateway);
     saveActiveRoleRules(gateway);
+    touch();
+  }
+
+  function addAutomation(triggerType: "message" | "schedule", actionType: "deliver_agent" | "run_script"): string | undefined {
+    const gateway = selectedGateway.value;
+    if (!gateway) return undefined;
+    const automations = automationRulesForGateway(gateway);
+    const id = `automation-${Date.now().toString(36)}-${automations.length + 1}`;
+    const next: PersonaAutomationRuleDefinition = {
+      id,
+      name: triggerType === "schedule" ? "新定时任务" : "新消息动作",
+      enabled: true,
+      trigger: triggerType === "schedule"
+        ? {
+          type: "schedule",
+          schedule: {
+            id: `schedule-${Date.now().toString(36)}`,
+            name: "触发时间",
+            enabled: true,
+            type: "interval",
+            intervalSeconds: Number(gateway.heartbeatIntervalSeconds || 900)
+          }
+        }
+        : { type: "message", routeKinds: [], targetGroupId: "", allowedSpeakerNames: [], regex: "" },
+      action: actionType === "run_script"
+        ? { type: "run_script", scriptPath: "", arguments: [], timeoutSeconds: 300 }
+        : { type: "deliver_agent", message: "", template: "" }
+    };
+    automations.push(next);
+    syncAutomationRuleProjection(gateway);
+    touch();
+    return id;
+  }
+
+  function updateAutomation(ruleId: string, patch: Partial<PersonaAutomationRuleDefinition>): void {
+    const gateway = selectedGateway.value;
+    if (!gateway) return;
+    const automations = automationRulesForGateway(gateway);
+    const index = automations.findIndex(rule => rule.id === ruleId);
+    if (index < 0) return;
+    const current = automations[index];
+    automations[index] = {
+      ...current,
+      ...patch,
+      trigger: patch.trigger ?? current.trigger,
+      action: patch.action ?? current.action
+    };
+    syncAutomationRuleProjection(gateway);
+    touch();
+  }
+
+  function removeAutomation(ruleId: string): void {
+    const gateway = selectedGateway.value;
+    if (!gateway || ruleId === "role-panel-message") return;
+    const automations = automationRulesForGateway(gateway);
+    const index = automations.findIndex(rule => rule.id === ruleId);
+    if (index < 0) return;
+    automations.splice(index, 1);
+    syncAutomationRuleProjection(gateway);
     touch();
   }
 
@@ -760,7 +851,10 @@ export const useGatewayStore = defineStore("gateway", () => {
     }
     gateway.messageInputsDisabled = values.messageInputsDisabled === true;
     gateway.agentRoleId = values.agentRoleId;
-    if (!gateway.agentRoleId) gateway.notificationRules = [];
+    if (!gateway.agentRoleId) {
+      gateway.automationRules = [];
+      gateway.notificationRules = [];
+    }
     gateway.agentModel = values.agentModel?.trim() || "";
     gateway.codexCwd = values.codexCwd;
     gateway.agentAdapters = values.agentAdapters?.length ? values.agentAdapters : gateway.agentAdapters;
@@ -873,6 +967,9 @@ export const useGatewayStore = defineStore("gateway", () => {
     addRule,
     removeRule,
     updateRule,
+    addAutomation,
+    updateAutomation,
+    removeAutomation,
     addRouteVariable,
     updateRouteVariable,
     removeRouteVariable,

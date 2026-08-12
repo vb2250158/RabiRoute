@@ -22,7 +22,7 @@ Inspect `data/route/<configName>/`:
 
 - A group/private message JSONL means the QQ-to-RabiRoute path works.
 - `agent-packets.jsonl` means a rule matched and a packet was built.
-- No packet means you should check `personaConfig.json`, `configName`, `routeKinds`, `regex`, and target-group filters.
+- No packet means you should check enabled message-triggered `automationRules` in `personaConfig.json`, then `trigger.routeKinds`, `trigger.regex`, and target-group filters.
 
 ## `send_group_msg` fails with `EventChecker Failed` or `1006514`
 

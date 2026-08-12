@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   handleWearableHealthRelayTask,
+  rabiLinkRelayPayloadFromTask,
   rabiLinkRelayTaskDisposition,
   rabiLinkRelayTaskNeedsReviewWake
 } from "./rabilinkRelayWorker.js";
@@ -31,6 +32,25 @@ test("only review-owned RabiLink events wake the conversation reviewer", () => {
   assert.equal(rabiLinkRelayTaskNeedsReviewWake("record_only"), true);
   assert.equal(rabiLinkRelayTaskNeedsReviewWake("review_request"), true);
   assert.equal(rabiLinkRelayTaskNeedsReviewWake("direct"), false);
+});
+
+test("authenticated Relay tasks derive the sender account from the stable device instead of trusting claimed identity keys", () => {
+  const payload = rabiLinkRelayPayloadFromTask({
+    sourceDeviceId: "phone-one",
+    sourceDeviceName: "Phone",
+    identityNamespace: "forged:namespace",
+    senderStableId: "another-user",
+    sourceHostId: "speech-host",
+    voiceprintId: "voice-one",
+    segments: [{ speakerClusterId: "voice-two" }],
+    text: "message"
+  }, "relay-task-one");
+
+  assert.equal(payload.identityNamespace, "relay:rabilink");
+  assert.equal(payload.senderStableId, "phone-one");
+  assert.equal(payload.sourceHostId, "speech-host");
+  assert.equal(payload.voiceprintId, "voice-one");
+  assert.deepEqual(payload.segments, [{ speakerClusterId: "voice-two" }]);
 });
 
 test("RabiLink touchpad review requests wake the reviewer without becoming direct input", () => {

@@ -47,6 +47,7 @@ test("persona voice UI requests summary-only evidence and sends explicit persona
       sourceHostId: "host-one",
       sourceHostName: "Studio PC",
       voiceprintId: "voiceprint-one",
+      participantId: "participant-owner",
       isUser: null
     });
   } finally {
@@ -66,6 +67,7 @@ test("persona voice UI requests summary-only evidence and sends explicit persona
     sourceHostId: "host-one",
     sourceHostName: "Studio PC",
     voiceprintId: "voiceprint-one",
+    participantId: "participant-owner",
     isUser: null
   });
 });

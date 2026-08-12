@@ -6,7 +6,7 @@ English | <a href="./persona-route-workbench-plan.md">简体中文</a>
 
 # Persona Route Workbench Plan
 
-> Status: partially implemented. Persona speech-keyword editing and the 11 per-endpoint recent-context controls are implemented; the side-effect-free single-route-profile `RouteDecision`/`AgentPacket` dry-run preview is not.
+> Status: historical design, partially superseded by the current Persona Automation interface. The canonical schema is now `automationRules`, organized as message/schedule triggers and Agent/script actions. References to `notificationRules` below describe legacy migration only. Side-effect-free single-Route `RouteDecision`/`AgentPacket` preview remains unimplemented. See [Personas and message rules](user-guide/personas-and-rules_en.md) for current usage.
 
 The proposed workbench improves the RibiWebGUI persona page with an explainable preview and diagnostic tool. It is not a dynamic persona selector or a clone of a competing Agent editor.
 

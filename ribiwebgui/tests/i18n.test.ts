@@ -8,6 +8,8 @@ import { translateText } from "../src/i18n/index";
 
 test("translates exact interface copy and preserves surrounding whitespace", () => {
   assert.equal(translateText("人格配置", "en"), "Persona configuration");
+  assert.equal(translateText("人格文件变化", "en"), "Persona file changes");
+  assert.equal(translateText("拉取并同步", "en"), "Pull and synchronize");
   assert.equal(translateText("语音服务", "en"), "Speech service");
   assert.equal(translateText("当前 Route 已订阅主机 ASR", "en"), "Current Route is subscribed to host ASR");
   assert.equal(translateText("没有 Route 订阅语音消息", "en"), "No Route subscribes to speech messages");
@@ -43,7 +45,7 @@ test("translates speech delivery and persona configuration copy", () => {
   );
   assert.equal(translateText("语音唤醒关键词", "en"), "Speech wake-up keywords");
   assert.equal(translateText("最近消息上下文", "en"), "Recent message context");
-  assert.equal(translateText("人格声纹归类", "en"), "Persona voiceprint classification");
+  assert.equal(translateText("语音消息端账号归类", "en"), "Voice endpoint account classification");
   assert.equal(translateText("多电脑人格同步", "en"), "Multi-PC persona sync");
   assert.equal(translateText("同步当前人格", "en"), "Sync current persona");
   assert.equal(translateText("确认文件冲突", "en"), "Confirm file conflict");
@@ -224,8 +226,8 @@ test("translates plan directory and step-local approval copy", () => {
   );
   assert.equal(translateText("添加附件", "en"), "Add attachments");
   assert.equal(
-    translateText("支持选择文件，也可以在输入框中按 Ctrl+V 粘贴图片。", "en"),
-    "Choose files, or press Ctrl+V in the feedback field to paste an image."
+    translateText("支持选择文件，也可以在输入框中按 Ctrl+V 粘贴文件或图片。", "en"),
+    "Choose files, or press Ctrl+V in the feedback field to paste files or images."
   );
   assert.equal(
     translateText("上一条意见已记录，正在通知 Agent；你可以继续编辑下一条，通知完成后即可提交。", "en"),
@@ -247,6 +249,14 @@ test("translates rule metadata while preserving configured names and regex", () 
     "Heartbeat / rabi-heartbeat"
   );
   assert.equal(translateText("Rabi 看板娘呼唤", "en"), "Rabi 看板娘呼唤");
+});
+
+test("translates persona automation labels and generated summaries", () => {
+  assert.equal(translateText("人格自动化", "en"), "Persona automation");
+  assert.equal(translateText("使用基础消息内容，不附加额外说明", "en"), "Use the base message without additional guidance");
+  assert.equal(translateText("每 900 秒，09:00–18:00", "en"), "Every 900 seconds, 09:00–18:00");
+  assert.equal(translateText("运行 tools/check.cmd", "en"), "Run tools/check.cmd");
+  assert.equal(translateText("Rabi 看板娘成长自检", "en"), "Rabi 看板娘成长自检");
 });
 
 test("translates dynamic diagnostic copy without changing runtime values", () => {

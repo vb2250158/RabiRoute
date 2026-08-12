@@ -23,11 +23,12 @@ import {
   messageContextArchiveIndexPath,
   messageContextArchiveDir,
   messageContextCurrentPath,
+  recentMessageContextItems,
   recentMessageContextText
 } from "../messageContextStore.js";
 import { resolvePersonaVoiceIdentities, type PersonaVoiceIdentity } from "../personaVoiceIdentities.js";
 import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
-import { identityContextForForward, identityContextLines } from "./identityContext.js";
+import { identityContextsForForward, identityContextLines } from "./identityContext.js";
 import {
   conversationSituationForDelivery,
   conversationSituationLines,
@@ -107,6 +108,7 @@ function formatPersonaVoiceIdentity(voiceprintId: string, identity?: PersonaVoic
   const conflictCandidates = identity.conflictCandidates?.slice(0, 5).map(candidate => {
     const branch = [
       candidate.deleted ? "已删除" : "保留",
+      candidate.participantId ? `身份=${candidate.participantId}` : "",
       candidate.displayName ? `称呼=${candidate.displayName}` : "",
       candidate.relationship ? `关系=${candidate.relationship}` : "",
       candidate.isUser == null ? "isUser=未确认" : `isUser=${candidate.isUser}`
@@ -114,6 +116,7 @@ function formatPersonaVoiceIdentity(voiceprintId: string, identity?: PersonaVoic
     return `${candidate.eventId}:${branch}`;
   }).join(" | ");
   const facts = [
+    identity.participantId ? `身份=${identity.participantId}` : "",
     identity.displayName ? `称呼=${identity.displayName}` : "",
     identity.relationship ? `关系=${identity.relationship}` : "",
     identity.isUser == null ? "" : `isUser=${identity.isUser}`,
@@ -192,6 +195,9 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   const messageProcessingOutcomeUrl = messageProcessingRequirementId
     ? `${sendApiUrl.replace(/\/api\/agent\/send$/, "")}/api/message-processing/requirements/${encodeURIComponent(messageProcessingRequirementId)}/outcome`
     : "";
+  const messageProcessingSendContextUrl = messageProcessingRequirementId
+    ? `${sendApiUrl.replace(/\/api\/agent\/send$/, "")}/api/message-processing/requirements/${encodeURIComponent(messageProcessingRequirementId)}/send-context`
+    : "";
   const replyToSource = String(values.replyToSource ?? "").toLowerCase() === "true";
   const characterTtsDialogue = outputAdapter === "tts" && routeKind === "voice_transcript";
   let planFeedbackKind = "";
@@ -262,13 +268,18 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
         "如果 knowledgeMatches 为空，Agent 仍须根据原消息、附件和回复链自行提取对象与同义词，至少用两组关键词查询计划/记忆；不能把“未命中”当成“无需响应”。",
         `如果最终决定不回复，还要提交 decision=no_reply、reasonCode 和具体 reason。明确 @、直接回复、私聊等必须回复消息只允许使用结束语、重复、自身消息、他人已完整回答、消息撤回或来源失效作为免回复原因。`,
         `如果需要转交秘书、计划 Agent 或主人格，调用线程桥时同时传 messageProcessing={"requirementId":"${messageProcessingRequirementId}","outcome":"handoff","targetAgentType":"实际类型","planId":"如已关联计划"}。线程桥接受不代表本需求完成；结果仍要返回当前消息处理任务。`,
-        "如果需要回复，明确发送 API 只有在渠道与原消息端一致且带该渠道回执时才会完成发送需求；只在 Codex 最终文本中写了回复不算完成。"
+        `决定回复并完成 outcome 后，先 GET ${messageProcessingSendContextUrl}。它返回当前会话从来源消息和回复链开始的最新双向消息、contextVersion、requiredReviewIds、priorReplies 和 alreadyReplied；必须实际检查是否已经有人回复、是否出现了改变结论的新消息，以及拟发送正文是否仍适合当前上下文。`,
+        `然后 POST ${messageProcessingSendContextUrl}，提交 contextVersion、完整 reviewedContextIds、当前完整会话 ID reviewedByThreadId、具体 reason，以及不含真实 sendContextReviewToken 的 proposedSend。审核通过后，把返回的 sendContextReviewToken 写进 tracking，再原样发送同一目标和正文。`,
+        "如果审核结果显示已有回复，不要换一种说法重复发送；如果审核后群里又出现新消息、发送者会话变化、目标或正文变化，Manager 会拒绝发送并要求重新读取上下文。",
+        "如果 params.replyToMessageId 引用的 QQ 消息包含图片，必须按原图顺序在 params.replyImageDescriptions 中逐张写明实际看到的内容及图片想表达的意思。数组缺失、数量不符、图片不可读或只写‘已查看’时，发送接口会报错；发送成功后，RabiRoute 会在每张本机图片旁写入同名 .md 说明。",
+        "明确发送 API 只有在需求处于 awaiting_send、上下文审核仍是最新、渠道与原消息端一致且带该渠道回执时才会完成发送需求；只在 Codex 最终文本中写了回复不算完成。"
       ]
     : [];
 
   return [
     ...intro,
     "请求体必须使用下面的明确发送模板。不要把来源上下文原样传入，也不要让 RabiRoute 根据来源猜测渠道。",
+    "NapCat 群聊引用消息含图片时，params.replyImageDescriptions 必须与原消息图片逐张对应；没有图片时保持空数组。",
     `POST ${sendApiUrl}`,
     "示例：",
     "```json",
@@ -560,6 +571,101 @@ function recentMessageContextForDecision(decision: RouteDecision, roleContext: A
       excludedMessageIds: [...excludedMessageIds]
     })
   };
+}
+
+function compactConversationText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\[CQ:image\b[^\]]*\]/gi, "[图片]")
+    .replace(/\[CQ:at,qq=([^,\]]+)[^\]]*\]/gi, "@$1")
+    .replace(/\[CQ:reply,id=([^,\]]+)[^\]]*\]/gi, "[引用 $1]")
+    .replace(/\[CQ:([^,\]]+)[^\]]*\]/gi, "[$1]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
+function focusedConversationContextLines(
+  decision: RouteDecision,
+  roleContext: AgentRoleContext,
+  historyLimit: number
+): string[] {
+  const boundedHistoryLimit = Math.max(0, Math.min(12, Math.floor(historyLimit)));
+  if (boundedHistoryLimit === 0) return [];
+  const scope = messageContextScopeForForward(decision.routeKind, decision.record, {
+    gatewayId: process.env.GATEWAY_ID,
+    routeProfileId: decision.route.id
+  });
+  if (!scope?.endpoint || !scope.record.conversationKey) return [];
+  const currentTime = Number(decision.record.time) || Number.POSITIVE_INFINITY;
+  const excludedMessageIds = [
+    ...(decision.record.messageGroupMessageIds ?? []),
+    decision.record.messageId
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  const recent = recentMessageContextItems([personaDataDirFor(roleContext)], {
+    limit: boundedHistoryLimit,
+    adapter: scope.endpoint,
+    conversationKey: scope.record.conversationKey,
+    excludedMessageIds
+  }).filter((item) => !Number.isFinite(currentTime)
+    || (item.time <= currentTime && currentTime - item.time <= 5 * 60))
+    .slice(-Math.min(6, boundedHistoryLimit));
+  if (recent.length === 0) return [];
+  return [
+    "下面是当前消息之前五分钟内、最接近本轮的讨论片段。先用它确定代词、短句、纠正和追问指向；更早的“最近消息”只作补充。",
+    ...recent.map((item) => {
+      const direction = item.direction === "outbound" ? "本角色已发" : "群成员";
+      const sender = item.sender || "未知发送者";
+      const messageId = String(item.messageId || item.id || "").trim();
+      const replyTo = String(item.replyToMessageId || "").trim();
+      return `- ${direction}｜${sender}${messageId ? `｜messageId=${messageId}` : ""}${replyTo ? `｜replyTo=${replyTo}` : ""}：${compactConversationText(item.text) || "[无文字内容]"}`;
+    }),
+    "如果当前短句是在纠正上一条理解，例如“动态显示的”“不是这个”“具体内容是啥”，必须修正上一条讨论对象，不得另起一个假设问题。"
+  ];
+}
+
+function immediateAddressedContextLines(decision: RouteDecision, roleContext: AgentRoleContext): string[] {
+  if (!("userId" in decision.record)) return [];
+  const currentUserId = String(decision.record.userId ?? "").trim();
+  if (!currentUserId) return [];
+  const scope = messageContextScopeForForward(decision.routeKind, decision.record, {
+    gatewayId: process.env.GATEWAY_ID,
+    routeProfileId: decision.route.id
+  });
+  if (!scope?.endpoint || !scope.record.conversationKey) return [];
+  const excludedMessageIds = [
+    ...(decision.record.messageGroupMessageIds ?? []),
+    decision.record.messageId
+  ].map(value => String(value ?? "").trim()).filter(Boolean);
+  const currentTime = Number(decision.record.time) || Number.POSITIVE_INFINITY;
+  const recent = recentMessageContextItems([personaDataDirFor(roleContext)], {
+    limit: 8,
+    adapter: scope.endpoint,
+    conversationKey: scope.record.conversationKey,
+    to: currentTime,
+    excludedMessageIds
+  });
+  const mentionPattern = new RegExp(`\\[CQ:at,qq=${currentUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:[,\\]])`, "i");
+  const addressed = recent.at(-1);
+  if (!addressed || addressed.direction !== "inbound" || !mentionPattern.test(addressed.text)) return [];
+  if (Number.isFinite(currentTime) && currentTime - addressed.time > 60) return [];
+
+  const selected = [addressed];
+  for (let index = recent.length - 2; index >= 0 && selected.length < 3; index -= 1) {
+    const candidate = recent[index]!;
+    if (candidate.direction !== "inbound" || candidate.sender !== addressed.sender) break;
+    if (addressed.time - candidate.time > 30) break;
+    selected.unshift(candidate);
+  }
+  const lines = selected.map(item => {
+    const age = Number.isFinite(currentTime) ? Math.max(0, Math.round(currentTime - item.time)) : 0;
+    const sender = item.sender || "未知发送者";
+    return `- ${age} 秒前｜${sender}：${compactConversationText(item.text) || "[无文字内容]"}`;
+  });
+  return [
+    "当前发言者刚被明确 @；下面是紧接当前消息之前、来自同一人的连续消息：",
+    ...lines,
+    "当前消息很短或含义依赖上下文时，先按这段连续对话解释短回复。不要把数字、是/否、收到、可以等短回复单独拎出来理解；只有仍有多个同等合理指向，而且不同理解会改变后续动作时，才追问。"
+  ];
 }
 
 function extractPlanIds(text: string): string[] {
@@ -977,16 +1083,32 @@ function buildAgentMessage(
     managerPort: process.env.GATEWAY_MANAGER_PORT ?? "8790",
     roleId: String(values.agentRoleId || "").trim()
   };
+  const identityObservationUrl = capabilityContext.roleId
+    ? `http://127.0.0.1:${capabilityContext.managerPort}/api/roles/${encodeURIComponent(capabilityContext.roleId)}/identity-relations/observations`
+    : "";
   const personaSyncHint = hasPersona ? personaSyncCapabilityHint(capabilityIntentText, capabilityContext) : null;
   const voiceIdentityReviewHint = hasPersona
     ? voiceIdentityReviewCapabilityHint(capabilityIntentText, capabilityContext)
     : null;
-  const identityContext = hasPersona
-    ? identityContextForForward(roleDir, routeKind, record, {
+  const identityContexts = hasPersona
+    ? identityContextsForForward(roleDir, routeKind, record, {
         gatewayId: process.env.GATEWAY_ID,
         routeProfileId: decision.route.id
       })
-    : undefined;
+    : [];
+  const identityContext = identityContexts.length === 1 ? identityContexts[0] : undefined;
+  const identityContextSummaryLines = identityContexts.length > 0
+    ? identityContexts.flatMap((context, index) => [
+        ...(identityContexts.length > 1 ? [`消息端账号 ${index + 1}：`] : []),
+        ...identityContextLines(context)
+      ])
+    : identityContextLines(undefined);
+  const identityObservationHints = identityContexts.flatMap(context => {
+    if (context.confirmedParticipant || context.candidateParticipants.length !== 1 || !identityObservationUrl) return [];
+    return [
+      `如果本组消息为账号 ${context.endpoint.platform} / ${context.endpoint.endpointIdentityNamespace} / ${context.endpoint.senderStableId} 提供了新的、可核对的身份线索，主动 POST ${identityObservationUrl}。请求必须显式携带 platform、endpointIdentityNamespace、senderStableId，以及本组 messageId、conversationKey 和简短依据；只更新候选参与者或候选关系。没有新线索时不要重复写入。这个接口不能确认身份，也不能授予项目权限。`
+    ];
+  });
   const situationScope = hasPersona
     ? messageContextScopeForForward(routeKind, record, {
         gatewayId: process.env.GATEWAY_ID,
@@ -1003,6 +1125,18 @@ function buildAgentMessage(
         messageIds
       })
     : undefined;
+  const immediateAddressedContext = immediateAddressedContextLines(decision, {
+    roleId: String(values.agentRoleId || ""),
+    roleDir,
+    rolePath,
+    dataDir
+  });
+  const focusedConversationContext = immediateAddressedContext.length > 0 ? [] : focusedConversationContextLines(decision, {
+    roleId: String(values.agentRoleId || ""),
+    roleDir,
+    rolePath,
+    dataDir
+  }, recentMessageLimit);
   const pendingConsolidationLines = pendingConsolidation
     ? [
         `runId：${pendingConsolidation.run.id}`,
@@ -1029,36 +1163,41 @@ function buildAgentMessage(
       optionalLine("发送者", values.sender),
       optionalLine("声纹 ID", values.voiceprintId),
       optionalLine("本段声纹", values.voiceprintIds),
-      optionalLine("人格声纹关系文件", values.voiceIdentitiesPath),
+      optionalLine("语音账号兼容数据文件", values.voiceIdentitiesPath),
       optionalLine("语音推送模式", values.speechPushMode),
       optionalLine("命中人格关键词", values.speechTriggerKeyword),
       optionalLine("触发 ID", values.triggerId),
       optionalLine("触发名称", values.triggerName)
     ]),
-    section("消息", [String(values.message || record.rawMessage || "")]),
-    values.voiceprintIds || values.voiceprintId ? section("人格声纹关系", [
-      "RabiSpeech 和主机只提供不透明声纹 ID、处理主机与判定证据，不判断这个人是谁，也不判断谁是用户。",
-      "以下内容只来自当前人格自己已经写入的关系文件，不是主机推断：",
-      String(values.personaVoiceIdentitySummary || "- 当前人格尚未记录这些声纹的身份关系。"),
-      "需要确认或修正时调用 PUT /api/roles/:roleId/voice-identities，追加到当前人格自己的 voice/voice-identities.jsonl。"
-    ]) : "",
-    hasPersona ? section("身份关系", [
-      ...identityContextLines(identityContext),
-      "身份关系查询与计划/记忆关键词召回相互独立，不需要为它提交 knowledge-callback。需要新增、确认或纠正时，使用 Agent 接口文档中的 identity-relations API，并保留消息 ID 等最小证据引用。"
-    ]) : "",
-    hasPersona && conversationSituation ? section("对话情境（影子判断）", conversationSituationLines(conversationSituation)) : "",
-    routeKind === "plan_feedback" ? "" : section("消息代码解析", [messageCodeParseText(record, dataDir)]),
-    String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [
-      "这是用户从 Rabi 移动设备消息端明确发起的自然语言配置请求。",
-      "先读取当前真实配置；写入、删除、停止、覆盖或外部动作必须经过现有动作安全门和审批。",
-      "只允许调用 Rabi PC 已公开的远程 WebGUI/路由配置接口；不要索取、复述或猜测 token、密码等凭据。",
-      "只有接口返回成功并复核读回结果后才能声称配置完成；不明确时先向用户追问。"
-    ]) : "",
     recentMessageLimit > 0 ? section("最近消息", [
       optionalLine("当前消息端", values.recentMessageEndpoint),
       optionalLine("当前会话", values.recentConversationKey),
       `当前消息端、当前会话最近 ${recentMessageLimit} 条双向消息：`,
       String(values.recentMessages || "- 暂无")
+    ]) : "",
+    section("消息", [String(values.message || record.rawMessage || "")]),
+    focusedConversationContext.length > 0 ? section("当前讨论片段", focusedConversationContext) : "",
+    immediateAddressedContext.length > 0 ? section("紧邻对话", immediateAddressedContext) : "",
+    routeKind === "plan_feedback" ? "" : section("消息代码解析", [messageCodeParseText(record, dataDir)]),
+    values.voiceprintIds || values.voiceprintId ? section("身份定位：语音消息端账号", [
+      "RabiSpeech 和主机只提供不透明声纹 ID、处理主机与判定证据，不判断这个人是谁，也不判断谁是用户。",
+      "声纹与 QQ、微信账号一样进入通用身份定位：处理主机组成消息端命名空间，声纹 ID 是稳定账号 ID。多人录音会分别建立多个待认识账号。",
+      "以下内容来自当前人格保存的语音分类兼容数据，不是主机推断：",
+      String(values.personaVoiceIdentitySummary || "- 当前人格尚未记录这些声纹的身份说明。"),
+      "PUT /api/roles/:roleId/voice-identities 只用于维护“这是我 / 其他人”等语音分类兼容信息；认识具体是谁、补充称呼和关系线索，统一使用下方通用身份观察接口。"
+    ]) : "",
+    hasPersona ? section("身份定位", [
+      ...identityContextSummaryLines,
+      "系统已经为第一次出现的稳定消息端账号自动建立“待认识”的候选身份。显示名变化只会作为别名线索，不能据此确认是同一个人。",
+      ...identityObservationHints,
+      "身份定位查询与计划/记忆关键词召回相互独立，不需要为它提交 knowledge-callback。人工确认、纠正或处理冲突时，使用 Agent 接口文档中的 identity-relations API。"
+    ]) : "",
+    hasPersona && conversationSituation ? section("情景记录", conversationSituationLines(conversationSituation)) : "",
+    String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [
+      "这是用户从 Rabi 移动设备消息端明确发起的自然语言配置请求。",
+      "先读取当前真实配置；写入、删除、停止、覆盖或外部动作必须经过现有动作安全门和审批。",
+      "只允许调用 Rabi PC 已公开的远程 WebGUI/路由配置接口；不要索取、复述或猜测 token、密码等凭据。",
+      "只有接口返回成功并复核读回结果后才能声称配置完成；不明确时先向用户追问。"
     ]) : "",
     hasPersona ? section("角色和路径", [
       optionalLine("角色", values.agentRoleId),

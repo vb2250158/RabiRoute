@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import { forwardMessage } from "../forwarding.js";
-import { appendAdapterLog } from "../history.js";
+import { appendAdapterLog, type VoiceTranscriptEventRecord } from "../history.js";
 import {
   appendRabiLinkConversationEntry,
   DEFAULT_RABILINK_CONVERSATION_SPLIT_AFTER_MS
@@ -26,6 +26,7 @@ import {
   type WebhookAdapterProfile,
   type WebhookPayload
 } from "./webhookAdapter.js";
+import { identityEndpointsForForward } from "../routing/identityContext.js";
 
 type RelayTask = Record<string, unknown>;
 export type RabiLinkRelayTaskDisposition = "review_request" | "record_only" | "direct";
@@ -202,8 +203,9 @@ function relayTaskText(task: RelayTask): string {
     || nestedTextFromData(task.data);
 }
 
-function payloadFromRelayTask(task: RelayTask, taskId: string): WebhookPayload {
+export function rabiLinkRelayPayloadFromTask(task: Record<string, unknown>, taskId: string): WebhookPayload {
   const sender = stringPayloadField(task.sender) || relayTaskSender(task) || "RabiLink device";
+  const sourceDeviceId = stringPayloadField(task.sourceDeviceId) || stringPayloadField(task.deviceId);
   return {
     type: "rabilink",
     id: taskId,
@@ -213,12 +215,19 @@ function payloadFromRelayTask(task: RelayTask, taskId: string): WebhookPayload {
     context: stringPayloadField(task.context),
     sessionId: stringPayloadField(task.conversationId) || stringPayloadField(task.sessionId),
     routeProfileId: stringPayloadField(task.routeProfileId),
+    // The authenticated Relay worker owns this key. A device payload cannot choose another account's namespace or ID.
+    identityNamespace: sourceDeviceId ? "relay:rabilink" : undefined,
+    senderStableId: sourceDeviceId,
     configurationRequested: task.configurationRequested === true,
     text: relayTaskText(task),
     data: task,
-    sourceDeviceId: stringPayloadField(task.sourceDeviceId) || stringPayloadField(task.deviceId),
+    sourceDeviceId,
     sourceDeviceName: stringPayloadField(task.sourceDeviceName) || stringPayloadField(task.deviceName) || "RabiLink device",
     sourceDeviceKind: stringPayloadField(task.sourceDeviceKind),
+    sourceHostId: stringPayloadField(task.sourceHostId),
+    sourceHostName: stringPayloadField(task.sourceHostName),
+    voiceprintId: stringPayloadField(task.voiceprintId),
+    segments: Array.isArray(task.segments) ? task.segments : undefined,
     transport: stringPayloadField(task.transport)
   };
 }
@@ -492,6 +501,17 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
     const entryId = reviewRequested
       ? `rabilink-control:${clientMessageId || taskId}`
       : `rabilink-user:${clientMessageId || taskId}`;
+    let acceptedRecord: VoiceTranscriptEventRecord | undefined;
+    if (!reviewRequested) {
+      const payload = rabiLinkRelayPayloadFromTask(task, taskId);
+      acceptedRecord = acceptWebhookPayload(
+        profile,
+        webhookPath,
+        payload,
+        Buffer.byteLength(JSON.stringify(payload)),
+        { forward: !recordOnly, recordFirst: false, trustedSenderIdentity: true }
+      );
+    }
     appendRabiLinkConversationEntry(config.memoryDataDir, {
       entryId,
       recordedAt: relayTaskRecordedAt(task),
@@ -517,18 +537,11 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
       capturedAt: relayTaskNumber(task, "capturedAt"),
       requiresReview: !reviewRequested && recordOnly,
       reviewRequested,
+      identityEndpoints: acceptedRecord
+        ? identityEndpointsForForward(profile.routeKind, acceptedRecord, { routeProfileId: acceptedRecord.routeProfileId })
+        : undefined,
       attachments
     }, { splitAfterMs: conversationSplitAfterMs() });
-    if (!reviewRequested) {
-      const payload = payloadFromRelayTask(task, taskId);
-      acceptWebhookPayload(
-        profile,
-        webhookPath,
-        payload,
-        Buffer.byteLength(JSON.stringify(payload)),
-        { forward: !recordOnly }
-      );
-    }
     rememberAcceptedRelayTask(taskId);
     if (rabiLinkRelayTaskNeedsReviewWake(disposition)) {
       startDefaultRabiLinkConversationReviewer()?.wake();

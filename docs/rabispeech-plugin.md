@@ -152,7 +152,7 @@ Windows 会按 EXE 记住上一次 Core Audio 会话倍率。RabiSpeech 启动�
 
 芬妮笔记风格的主机链路面板统一放在“语音服务 → ASR”，按 `主机麦克风 → VAD 切句 → ASR 转写 → 广播投递 → 回复与播放` 展示真实状态、计数器、最近事件和转写预览。Route 的“消息适配器 → 语音消息端”只保留当前 Route 的热投递/人格关键词策略、人格 TTS 摘要和回复自动播放开关，不再显示主机波形、计数器、运行日志或最近转写。语音消息端总开关仍是当前 Route 的订阅真源；关闭当前 Route 只取消自身订阅，最后一个订阅关闭后才停止主机麦克风。
 
-语音消息端投递的 `voice_transcript` 会让该 Agent 回合进入 `character-tts-dialogue` 状态。`AgentPacket` 注入 `characterTtsDialogue=true`，并生成带精确 `routeId`、`channel=speech` 和当前 `params.sessionId` 的发送模板；Agent 把与屏幕回复同义的短句交回 `/api/agent/send` 后，Outbox 绑定当前 Route 的人格 ID 和 `sessionId`，RabiSpeech 再从该人格的 `voice-profile.json` 解析模型、声线、语言、语速和表达指令，最后进入主机级 FIFO。这个自动状态只针对 `speech` / RabiSpeech 来源，不会让 QQ、角色面板或普通文字消息自动发声。
+语音消息端投递的 `voice_transcript` 会让该 Agent 回合进入 `character-tts-dialogue` 状态。`AgentPacket` 注入 `characterTtsDialogue=true`，并生成带发送者占位、精确 `routeId`、`channel=speech` 和当前 `params.sessionId` 的发送模板；Agent 填写自己的 `sender.agentType` 与完整 `sender.sessionId`，再把与屏幕回复同义的短句交回 `/api/agent/send`。Outbox 绑定当前 Route 的人格 ID 和语音 `sessionId`，RabiSpeech 再从该人格的 `voice-profile.json` 解析模型、声线、语言、语速和表达指令，最后进入主机级 FIFO。这个自动状态只针对 `speech` / RabiSpeech 来源，不会让 QQ、角色面板或普通文字消息自动发声。
 
 ### 热投递与人格关键词
 
@@ -182,9 +182,9 @@ data/roles/<RoleId>/conversation/current.jsonl
 
 主机声纹层只提供不透明的稳定声纹 ID、未知簇、分段标签、分数和判定证据，不写入人名，也不判断声纹对应谁或谁是“用户”。当前人格应结合自己的关系、记忆和会话上下文解释某个声纹是谁、是否需要响应，并可通过 `/api/roles/:roleId/voice-identities` 写入自己追加式的 `voice/voice-identities.jsonl`。同一声纹字符串按 `sourceHostId` 分域，避免多台电脑的本地聚类碰撞。多人分段在进入人格上下文时保持原结构，Agent 不再只看到丢失说话人信息的平铺文本。
 
-人格可通过 `GET /api/roles/:roleId/voice-transcripts` 查询这些关系的只读联结结果。返回的 summary 从完整时间/说话人筛选集合计算用户、他人、未知、冲突的分段数和说话人时长，给出 `coverageRate` 与 `unresolvedVoiceprints`；明细 `limit` 不会截断 `matchedCount` 或 summary。只需要汇总时可传 `includeDetails=false`，此时仍从完整筛选集合计算 summary，但不把转写明细或正文发给调用端。该覆盖率只在读取时派生，不会回写主机原始消息、人格会话或声纹关系文件，也不会被主动智能周期查询。多 PC 对同一声纹产生并发 `isUser` 或删除分歧时，追加事件会保留多个分支头，查询明确返回 `conflict`；人格再次确认后由新事件同时收敛全部当前分支。
+人格可通过 `GET /api/roles/:roleId/voice-transcripts` 查询这些归类的只读联结结果。返回的 summary 从完整时间/说话人筛选集合计算用户、他人、未知、冲突的分段数和说话人时长，给出 `coverageRate` 与 `unresolvedVoiceprints`；明细 `limit` 不会截断 `matchedCount` 或 summary。只需要汇总时可传 `includeDetails=false`，此时仍从完整筛选集合计算 summary，但不把转写明细或正文发给调用端。该覆盖率只在读取时派生，不会回写主机原始消息、人格会话或语音账号兼容数据文件，也不会被主动智能周期查询。多 PC 对同一声纹产生并发 `isUser` 或删除分歧时，追加事件会保留多个分支头，查询明确返回 `conflict`；人格再次确认后由新事件同时收敛全部当前分支。
 
-RibiWebGUI 的“人格配置 → 人格声纹归类”使用上述汇总模式展示最近 24 小时覆盖率、用户/他人/未知/冲突统计、未解决声纹缩写和已归类关系，不读取或展示转写正文。按钮只调用人格 `voice-identities` API 追加明确的 `isUser=true/false/未判断` 事件，界面不维护第二份判断。第一次不知道哪个 ID 属于自己时，可主动开始“标记下一段”：界面只记住本次开始时间与当前未解决声纹的最后出现基线，等下一次 `records_changed` 后把基线之后新出现或再次出现、且具有稳定 `sourceHostId` 的未归类声纹标成候选；即使只有一个候选也不会自动写 `isUser`，多人同时说话时会同时保留多个候选供用户判断。页面进入、切换人格、人工操作后查询一次；新录音使用 RabiSpeech `records_changed`，人格关系写入和多 PC 文件合并使用 Manager SSE 事件触发一次刷新，不做覆盖率轮询。事件流重连后也会重新查询一次，补上断线期间可能错过的变化。
+RibiWebGUI 的“人格配置 → 身份关系 → 语音消息端账号”使用上述汇总模式展示最近 24 小时覆盖率、用户/他人/未知/冲突统计、未解决声纹缩写和已归类关系，不读取或展示转写正文。按钮只调用人格 `voice-identities` 兼容 API 追加明确的 `isUser=true/false/未判断` 事件，界面不维护第二份判断。第一次不知道哪个 ID 属于自己时，可主动开始“标记下一段”：界面只记住本次开始时间与当前未解决声纹的最后出现基线，等下一次 `records_changed` 后把基线之后新出现或再次出现、且具有稳定 `sourceHostId` 的未归类声纹标成候选；即使只有一个候选也不会自动写 `isUser`，多人同时说话时会同时保留多个候选供用户判断。页面进入、切换人格、人工操作后查询一次；新录音使用 RabiSpeech `records_changed`，人格关系写入和多 PC 文件合并使用 Manager SSE 事件触发一次刷新，不做覆盖率轮询。事件流重连后也会重新查询一次，补上断线期间可能错过的变化。
 
 主机通用消息的 `recordId` 检查与追加使用同一把跨进程锁，因此相同 ASR 的并发请求、HTTP 重试或 RabiSpeech 补交只会生成一条原始消息。Manager 还会在 `data/speech/deliveries/YYYY-MM-DD.jsonl` 为每个 `recordId + Route` 保存成功或仅记录的终态 receipt；receipt 的日文件追加同样串行，不会产生交错 JSONL。已有 receipt 会被直接复用，不再次唤醒同一人格；失败终态不落成功 receipt，修复 owner/IPC 后仍可安全重试。
 

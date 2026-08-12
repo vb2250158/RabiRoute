@@ -15,8 +15,11 @@ import {
   normalizeGatewayNapCatConfig,
   normalizeCodexHookSettings,
   normalizeNapCatInstances,
+  normalizePersonaAutomationRules,
   normalizeRecentMessageLimits,
   normalizeRuleDefinitions,
+  notificationRulesFromPersonaAutomations,
+  personaAutomationRulesFromNotificationRules,
   RECENT_MESSAGE_ENDPOINTS,
   resolvePrimaryNapCatInstance,
   sanitizeConfigName,
@@ -117,13 +120,26 @@ test("managed task capabilities keep Codex-only settings off unsupported Agent a
     agentReasoningEffort: "high",
     agentAdapters: ["codex", "copilotCli"],
     messageProcessingAgents: {
-      codex: { enabled: true },
+      codex: { enabled: true, maxAgents: 40 },
       copilotCli: { enabled: false, model: "custom-model", reasoningEffort: "high" }
     }
   }));
 
   assert.equal(normalized.agentModel, "gpt-5.6-sol");
   assert.equal(normalized.agentReasoningEffort, "high");
+  assert.deepEqual(normalized.messageProcessingAgents, {
+    codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium", maxAgents: 32 }
+  });
+});
+
+test("Message Agent limit is optional and ignores invalid values", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    agentAdapters: ["codex"],
+    messageProcessingAgents: {
+      codex: { enabled: true, maxAgents: 0 }
+    }
+  }));
+
   assert.deepEqual(normalized.messageProcessingAgents, {
     codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" }
   });
@@ -867,4 +883,41 @@ test("Feishu owns an independent recent-message budget and text-only default out
     ),
     true
   );
+});
+
+test("legacy heartbeat templates migrate into separate message and scheduled automations", () => {
+  const automations = personaAutomationRulesFromNotificationRules([{
+    id: "daily-check",
+    name: "Daily check",
+    enabled: true,
+    routeKinds: ["heartbeat"],
+    schedules: [{ id: "morning", type: "daily_time", timeOfDay: "09:30" }],
+    template: "inspect open work"
+  }]);
+
+  assert.deepEqual(automations.map(rule => [rule.id, rule.trigger.type, rule.action.type]), [
+    ["daily-check", "message", "deliver_agent"],
+    ["scheduled-daily-check-morning", "schedule", "deliver_agent"]
+  ]);
+  const scheduled = automations[1];
+  assert.equal(scheduled.trigger.type === "schedule" ? scheduled.trigger.schedule.timeOfDay : "", "09:30");
+  assert.equal(scheduled.action.type === "deliver_agent" ? scheduled.action.template : "", "inspect open work");
+});
+
+test("automation projection sends only message-to-Agent rules through RouteDecision", () => {
+  const automations = normalizePersonaAutomationRules([{
+    id: "message-script",
+    trigger: { type: "message", routeKinds: ["private"], regex: "build" },
+    action: { type: "run_script", scriptPath: "build.cmd" }
+  }, {
+    id: "message-agent",
+    trigger: { type: "message", routeKinds: ["private"] },
+    action: { type: "deliver_agent", template: "answer briefly" }
+  }, {
+    id: "scheduled-agent",
+    trigger: { type: "schedule", schedule: { id: "daily", type: "daily_time", timeOfDay: "10:00" } },
+    action: { type: "deliver_agent", message: "daily review" }
+  }]);
+
+  assert.deepEqual(notificationRulesFromPersonaAutomations(automations).map(rule => rule.id), ["message-agent"]);
 });

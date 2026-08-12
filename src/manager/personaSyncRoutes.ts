@@ -74,16 +74,21 @@ export type PersonaSyncRouteContext = {
   conflictScheduleDelayMs?: number;
   listConflicts?(roleId?: string): Promise<PersonaSyncConflict[]>;
   readOnlySnapshot?: boolean;
+  controlPlaneAuthorized?: boolean;
 };
 
 function authorized(request: http.IncomingMessage, ctx: PersonaSyncRouteContext): boolean {
-  if (loopback(request)) return true;
+  if (loopback(request) || ctx.controlPlaneAuthorized === true) return true;
   const expected = ctx.token().trim();
   if (!expected) return false;
   const header = String(request.headers["x-rabilink-token"] || "").trim();
   const authorization = String(request.headers.authorization || "");
   const bearer = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : "";
   return header === expected || bearer === expected;
+}
+
+function localControlAllowed(request: http.IncomingMessage, ctx: PersonaSyncRouteContext): boolean {
+  return loopback(request) || ctx.controlPlaneAuthorized === true;
 }
 
 export function handlePersonaSyncApi(
@@ -97,11 +102,11 @@ export function handlePersonaSyncApi(
     jsonResponse(response, 401, { code: -1, message: "Persona sync requires the same RabiLink application token." });
     return true;
   }
-  if (new Set(["/api/persona-sync/index-status", "/api/persona-sync/auto-status"]).has(requestUrl.pathname) && !loopback(request)) {
+  if (new Set(["/api/persona-sync/index-status", "/api/persona-sync/auto-status", "/api/persona-sync/preview"]).has(requestUrl.pathname) && !localControlAllowed(request, ctx)) {
     jsonResponse(response, 403, { code: -1, message: "Persona sync diagnostics are loopback-only." });
     return true;
   }
-  if (requestUrl.pathname.startsWith("/api/persona-sync/conflicts") && !loopback(request)) {
+  if (requestUrl.pathname.startsWith("/api/persona-sync/conflicts") && !localControlAllowed(request, ctx)) {
     jsonResponse(response, 403, { code: -1, message: "Persona sync conflict control is loopback-only." });
     return true;
   }
@@ -245,6 +250,18 @@ export function handlePersonaSyncApi(
     void ctx.coordinator.peers()
       .then(peers => jsonResponse(response, 200, { code: 0, data: { peers } }))
       .catch(error => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/persona-sync/preview") {
+    const peerId = String(requestUrl.searchParams.get("peerId") || "").trim();
+    const roleId = String(requestUrl.searchParams.get("roleId") || "").trim() || undefined;
+    if (!peerId) {
+      jsonResponse(response, 400, { code: -1, message: "Persona sync peerId is required." });
+      return true;
+    }
+    void ctx.coordinator.preview(peerId, roleId)
+      .then(result => jsonResponse(response, 200, { code: 0, data: result }))
+      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/persona-sync/sync") {

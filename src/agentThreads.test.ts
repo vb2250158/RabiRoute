@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -476,6 +478,35 @@ test("Agent thread send starts a follow-up turn through the driver", async () =>
   assert.match(sent.prompt, /\[投递内容\]\n补充新证据$/);
 });
 
+test("Agent thread send forwards validated workspace image paths to Desktop", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-image-"));
+  const imagePath = path.join(root, "message.png");
+  fs.writeFileSync(imagePath, Buffer.from([1, 2, 3]));
+  let delivered: Parameters<AgentThreadDriver["send"]>[0] | undefined;
+  const driver: AgentThreadDriver = {
+    read: async () => ({ id: "thread-1", title: "消息处理", cwd: root }),
+    create: async () => { throw new Error("not used"); },
+    send: async (params) => { delivered = params; }
+  };
+
+  await handleAgentThreadRequest({
+    action: "send",
+    threadId: "019f0000-0000-7000-8000-000000000091",
+    prompt: "查看图片",
+    cwd: root,
+    imagePaths: [imagePath]
+  }, { allowedWorkspaces: [root] }, driver);
+
+  assert.deepEqual(delivered?.imagePaths, [imagePath]);
+  await assert.rejects(handleAgentThreadRequest({
+    action: "send",
+    threadId: "019f0000-0000-7000-8000-000000000091",
+    prompt: "查看图片",
+    cwd: root,
+    imagePaths: [path.join(os.tmpdir(), "outside.png")]
+  }, { allowedWorkspaces: [root] }, driver), /inside the target workspace/);
+});
+
 test("system-owned task resolution requests the bounded Desktop state index", async () => {
   const listCalls: unknown[] = [];
   const driver: AgentThreadDriver = {
@@ -759,6 +790,112 @@ test("message-processing handoff returns a partial failure without hiding the ac
       retryable: true
     }
   });
+});
+
+test("Agent thread create reuses the same title and workspace instead of creating a duplicate", async () => {
+  const existing = {
+    id: "019f0000-0000-7000-8000-000000000071",
+    title: "[PangHu][Bug] 摆放系统 - 建筑或物件位置重叠",
+    updatedAt: "2026-08-11T12:36:03.891Z",
+    cwd: process.cwd(),
+    archived: false
+  };
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async ({ stateDbOnly }) => {
+      assert.equal(stateDbOnly, true);
+      return [existing];
+    },
+    read: async () => existing,
+    create: async () => {
+      createCount += 1;
+      throw new Error("must not create");
+    },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "create",
+    title: existing.title,
+    prompt: "只读调查。",
+    cwd: existing.cwd
+  }, {
+    allowedWorkspaces: [existing.cwd]
+  }, driver);
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.data.resolution, "name");
+  assert.equal((result.data.thread as { id: string }).id, existing.id);
+  assert.equal(createCount, 0);
+});
+
+test("Agent thread create shares one in-flight creation across caller retries", async () => {
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async ({ stateDbOnly }) => {
+      assert.equal(stateDbOnly, true);
+      return [];
+    },
+    read: async () => { throw new Error("not used"); },
+    create: async (params) => {
+      createCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return {
+        id: "019f0000-0000-7000-8000-000000000072",
+        title: params.title,
+        updatedAt: "2026-08-11T12:36:03.891Z",
+        source: "test",
+        initialTurnStatus: "started"
+      };
+    },
+    send: async () => undefined
+  };
+  const request = {
+    action: "create" as const,
+    title: "[PangHu][Bug] 摆放系统 - 建筑或物件位置重叠",
+    prompt: "只读调查。",
+    cwd: process.cwd()
+  };
+  const options = { allowedWorkspaces: [process.cwd()] };
+
+  const results = await Promise.all([
+    handleAgentThreadRequest(request, options, driver),
+    handleAgentThreadRequest(request, options, driver)
+  ]);
+
+  assert.equal(createCount, 1);
+  assert.equal(results[0].statusCode, 201);
+  assert.equal(results[1].statusCode, 201);
+  assert.equal(
+    (results[0].data.thread as { id: string }).id,
+    (results[1].data.thread as { id: string }).id
+  );
+});
+
+test("Agent thread list can use the fast local state index for timeout readback", async () => {
+  const calls: unknown[] = [];
+  const driver: AgentThreadDriver = {
+    list: async (params) => {
+      calls.push(params);
+      return [];
+    },
+    read: async () => ({}),
+    create: async () => { throw new Error("not used"); },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "list",
+    query: "摆放系统",
+    lookupMode: "state_db",
+    cwd: process.cwd()
+  }, {
+    allowedWorkspaces: [process.cwd()]
+  }, driver);
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(calls.length, 1);
+  assert.equal((calls[0] as { stateDbOnly?: boolean }).stateDbOnly, true);
 });
 
 test("Agent thread failures expose the action, missing field, and retry guidance", () => {

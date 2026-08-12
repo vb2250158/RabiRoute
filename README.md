@@ -27,10 +27,6 @@ The Agent or program answers and performs the task. RabiRoute decides **who rece
 
 [Use cases](#what-you-can-build) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Capabilities](#what-works-today) · [Documentation](#learn-more)
 
-![A paused documentation sample Route in RibiWebGUI showing the current route, connection state, and message inputs](assets/screenshots/webgui-overview-en.png)
-
-<p align="center"><sub>The Route was paused for the screenshot to prevent a real delivery. After you save and start a Route, the top bar and diagnostics page show its actual runtime state.</sub></p>
-
 ## What you can build
 
 - 💬 **Chat-to-Agent routes.** Send QQ, role-panel, or scheduled events to a selected handler. Codex is the first end-to-end verified handler.
@@ -158,7 +154,7 @@ data/roles/<RoleId>/personaConfig.json
 
 - `adapterConfig.json` defines message inputs, handler adapters, working directories, pipeline presets, and persona binding.
 - `persona.md` contains persona or handler-facing guidance.
-- `personaConfig.json` contains notification rules, message templates, avatar metadata, speech keywords, and recent-message limits.
+- `personaConfig.json` contains persona automation rules, avatar metadata, speech keywords, and recent-message limits. An automation combines a message or schedule trigger with either Agent delivery or a local persona script.
 
 Conversation evidence lives under `data/roles/<RoleId>/conversation/`. Public, copyable examples live under [`examples/data/`](examples/data/); local runtime data remains private.
 

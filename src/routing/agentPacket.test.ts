@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { config, type NotificationRule, type RouteProfile } from "../config.js";
 import { updatePersonaVoiceIdentity } from "../personaVoiceIdentities.js";
-import { updateIdentityRelation } from "../identityRelations.js";
+import { listIdentityEndpointAccounts, updateIdentityRelation } from "../identityRelations.js";
 import { resolvePipeline } from "../pipelines.js";
 import type { GroupMessageRecord, PlanFeedbackMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
@@ -159,9 +159,13 @@ test("AgentPacket keeps an explicit NapCat send target when a QQ route defaults 
   }, rule, { roleId: "", roleDir: "", rolePath: "", dataDir });
 
   const sendRequest = JSON.parse(String(packet.templateValues.sendRequestJson));
+  assert.deepEqual(sendRequest.sender, {
+    agentType: "<当前 Agent 类型，例如 codex>",
+    sessionId: "<当前 Agent 的完整会话 ID>"
+  });
   assert.equal(sendRequest.routeId, "route-tts-default");
   assert.equal(sendRequest.channel, "napcat");
-  assert.deepEqual(sendRequest.params, { target: "group", groupId: 9001 });
+  assert.deepEqual(sendRequest.params, { target: "group", groupId: 9001, replyToMessageId: "", replyImageDescriptions: [] });
   assert.match(packet.message, /"channel": "napcat"/);
   assert.doesNotMatch(packet.message, /"channel": "speech"/);
 });
@@ -227,6 +231,11 @@ test("AgentPacket reads a NapCat get_msg reply cached in the gateway history for
     });
 
     assert.match(packet.message, /\[CQ:reply,id=3000\] : 通过 OneBot get_msg 补齐的原始问题/);
+    const currentMessageSectionIndex = packet.message.indexOf("[消息]");
+    const messageCodeSectionIndex = packet.message.indexOf("[消息代码解析]");
+    const identitySectionIndex = packet.message.indexOf("[身份定位]");
+    assert.ok(messageCodeSectionIndex > currentMessageSectionIndex);
+    assert.ok(identitySectionIndex < 0 || messageCodeSectionIndex < identitySectionIndex);
   } finally {
     config.memoryDataDir = previousMemoryDataDir;
   }
@@ -342,7 +351,7 @@ test("AgentPacket omits persona voice identity paths from non-audio role panel m
     dataDir: roleDir
   });
 
-  assert.doesNotMatch(packet.message, /人格声纹关系文件/);
+  assert.doesNotMatch(packet.message, /语音账号兼容数据文件/);
   assert.doesNotMatch(packet.message, /voice[\\/]voice-identities\.jsonl/);
   assert.equal(packet.templateValues.voiceIdentitiesPath, undefined);
 });
@@ -425,9 +434,155 @@ test("AgentPacket excludes every fragment already merged into the current messag
   assert.match(String(packet.templateValues.recentMessages), /更早但仍然相关的背景/);
   assert.doesNotMatch(String(packet.templateValues.recentMessages), /这个按钮/);
   assert.doesNotMatch(String(packet.templateValues.recentMessages), /再往下挪一点/);
+  const recentMessagesSectionIndex = packet.message.indexOf("[最近消息]");
+  const currentMessageSectionIndex = packet.message.indexOf("[消息]");
+  assert.ok(recentMessagesSectionIndex >= 0);
+  assert.ok(currentMessageSectionIndex > recentMessagesSectionIndex);
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
   assert.equal(replyContext.messageGroupId, "message-group-1");
   assert.deepEqual(replyContext.messageGroupMessageIds, ["3001", "3002"]);
+});
+
+test("AgentPacket highlights the immediate addressed context before interpreting a short group reply", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-addressed-context-"));
+  appendGroupMessage(dataDir, {
+    time: 90,
+    groupId: 798776701,
+    userId: 30001,
+    rawMessage: "另一个较早的话题",
+    messageId: 8000,
+    senderName: "其他人"
+  });
+  appendGroupMessage(dataDir, {
+    time: 100,
+    groupId: 798776701,
+    userId: 2324411326,
+    rawMessage: "序号36自己操作测试一下，我无法搞定",
+    messageId: 870690296,
+    senderName: "QA_刘云云"
+  });
+  appendGroupMessage(dataDir, {
+    time: 106,
+    groupId: 798776701,
+    userId: 2324411326,
+    rawMessage: "[CQ:at,qq=1050739541]",
+    messageId: 2115680539,
+    senderName: "QA_刘云云"
+  });
+
+  const record: GroupMessageRecord = {
+    time: 112,
+    groupId: 798776701,
+    userId: 1050739541,
+    rawMessage: "1",
+    messageId: 828490779,
+    senderName: "秋雨Memories"
+  };
+  const rule: NotificationRule = {
+    id: "addressed-short-reply",
+    name: "addressed short reply",
+    enabled: true,
+    routeKinds: ["group_message"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "route-addressed-short-reply",
+    name: "addressed short reply",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleFile: "",
+    rolesDir: dataDir,
+    dataDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "group_message",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, { roleId: "", roleDir: "", rolePath: "", dataDir });
+
+  assert.match(packet.message, /\[紧邻对话\]/);
+  assert.match(packet.message, /序号36自己操作测试一下，我无法搞定/);
+  assert.match(packet.message, /QA_刘云云：@1050739541/);
+  assert.match(packet.message, /当前发言者刚被明确 @/);
+  assert.match(packet.message, /先按这段连续对话解释短回复/);
+  assert.doesNotMatch(packet.message, /另一个较早的话题/);
+});
+
+test("AgentPacket presents broad history before the current message and keeps focused corrections adjacent", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-focused-discussion-"));
+  appendGroupMessage(dataDir, {
+    time: 100,
+    groupId: 798776701,
+    userId: 10001,
+    rawMessage: "[CQ:image,file=dynamic.png] 改动原因是为了更长的底框？为啥？",
+    messageId: 1000,
+    senderName: "车"
+  });
+  appendGroupMessage(dataDir, {
+    time: 110,
+    groupId: 798776701,
+    userId: 99999,
+    rawMessage: "不是为了单纯把底框做长，而是文字可能超出。",
+    messageId: 1001,
+    senderName: "星海建造师",
+    isSelf: true
+  });
+  const record: GroupMessageRecord = {
+    time: 120,
+    groupId: 798776701,
+    userId: 10002,
+    rawMessage: "动态显示的",
+    messageId: 1002,
+    senderName: "秋雨Memories"
+  };
+  const rule: NotificationRule = {
+    id: "focused-discussion",
+    name: "focused discussion",
+    enabled: true,
+    routeKinds: ["group_message"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "route-focused-discussion",
+    name: "focused discussion",
+    enabled: true,
+    recentMessageLimit: 12,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleFile: "",
+    rolesDir: dataDir,
+    dataDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "group_message",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, { roleId: "", roleDir: "", rolePath: "", dataDir });
+
+  assert.match(packet.message, /\[当前讨论片段\]/);
+  assert.match(packet.message, /改动原因是为了更长的底框/);
+  assert.match(packet.message, /不是为了单纯把底框做长/);
+  assert.match(packet.message, /“动态显示的”/);
+  const recentMessagesSectionIndex = packet.message.indexOf("[最近消息]");
+  const currentMessageSectionIndex = packet.message.indexOf("[消息]");
+  const focusedDiscussionSectionIndex = packet.message.indexOf("[当前讨论片段]");
+  assert.ok(recentMessagesSectionIndex >= 0);
+  assert.ok(currentMessageSectionIndex > recentMessagesSectionIndex);
+  assert.ok(focusedDiscussionSectionIndex > currentMessageSectionIndex);
 });
 
 test("AgentPacket exposes exact plan secretary sessions without replacing business task ownership", () => {
@@ -828,6 +983,7 @@ test("AgentPacket exposes processing host and persona-owned voice identity file 
   updatePersonaVoiceIdentity(roleDir, {
     sourceHostId: "host-guid-one",
     voiceprintId: "unknown-cluster-7",
+    participantId: "participant-owner",
     displayName: "老板",
     relationship: "当前人格的用户",
     isUser: true,
@@ -886,10 +1042,11 @@ test("AgentPacket exposes processing host and persona-owned voice identity file 
   assert.match(packet.message, /声纹 ID：unknown-cluster-7/);
   assert.match(packet.message, /voice[\\/]voice-identities\.jsonl/);
   assert.match(packet.message, /不判断这个人是谁，也不判断谁是用户/);
-  assert.match(packet.message, /unknown-cluster-7：称呼=老板；关系=当前人格的用户；isUser=true/);
+  assert.match(packet.message, /unknown-cluster-7：身份=participant-owner；称呼=老板；关系=当前人格的用户；isUser=true/);
   assert.doesNotMatch(packet.message, /host-profile-user|主机资料里的用户/);
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
   assert.equal(replyContext.personaVoiceIdentities[0].identity.displayName, "老板");
+  assert.equal(replyContext.personaVoiceIdentities[0].identity.participantId, "participant-owner");
   assert.equal(replyContext.speakerId, undefined);
   assert.equal(replyContext.speakerName, undefined);
   assert.equal(replyContext.voiceprintId, "unknown-cluster-7");
@@ -1118,12 +1275,85 @@ test("AgentPacket injects identity context without turning another project's dis
   const packet = buildAgentPacket({ route, routeKind: "group_message", record, extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: record.rawMessage }, rule, {
     roleId: "Xinghai", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir
   });
-  assert.match(packet.message, /\[身份关系\]/);
+  assert.match(packet.message, /\[身份定位\]/);
   assert.match(packet.message, /已确认参与者：COTTON/);
   assert.match(packet.message, /不能单独证明项目归属、委托、决策权或执行授权/);
   assert.match(packet.message, /identity-relations API/);
-  assert.match(packet.message, /\[对话情境（影子判断）\]/);
+  assert.match(packet.message, /\[情景记录\]/);
   assert.match(packet.message, /已确认项目关系：edge-space（参与讨论）/);
   assert.match(packet.message, /可以自然参与有价值的讨论、澄清问题或提出建议/);
   assert.match(packet.message, /不得据此查询、创建、更新或转交任何项目计划、任务或长期项目记忆/);
+});
+
+test("AgentPacket preview does not create identity records", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-identity-preview-"));
+  const rule: NotificationRule = { id: "identity-preview", name: "identity-preview", enabled: true, routeKinds: ["group_message"], template: "" };
+  const route: RouteProfile = {
+    id: "identity-preview-route", name: "identity preview", enabled: true, recentMessageLimit: 0, resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "Xinghai", agentRoleFile: "persona.md", rolesDir: path.dirname(roleDir), dataDir: roleDir, routeVariables: {}, notificationRules: [rule]
+  };
+  const record: GroupMessageRecord = {
+    time: Date.now() / 1_000, groupId: 100, userId: 999, messageId: "preview-message", senderName: "陌生人",
+    botUserId: "888", rawMessage: "预览不应写入身份。"
+  };
+  buildAgentPacket({ route, routeKind: "group_message", record, extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: record.rawMessage }, rule, {
+    roleId: "Xinghai", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir
+  });
+  assert.equal(listIdentityEndpointAccounts(roleDir).length, 0);
+});
+
+test("AgentPacket requires a bound latest-context review before a message-processing reply", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-send-context-"));
+  const rule: NotificationRule = {
+    id: "message-processing-send-context",
+    name: "message processing send context",
+    enabled: true,
+    routeKinds: ["group_message"],
+    template: ""
+  };
+  const route: RouteProfile = {
+    id: "message-processing-route",
+    name: "message processing route",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "XinghaiBuilder",
+    agentRoleFile: path.join(roleDir, "persona.md"),
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const record: GroupMessageRecord = {
+    time: Date.now() / 1_000,
+    groupId: 100,
+    userId: 200,
+    messageId: "source-message-1",
+    senderName: "测试用户",
+    rawMessage: "请确认这条群消息。"
+  };
+
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "group_message",
+    record,
+    extraValues: { messageProcessingRequirementId: "requirement-1" },
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, {
+    roleId: "XinghaiBuilder",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  assert.match(packet.message, /requirements\/requirement-1\/send-context/);
+  assert.match(packet.message, /contextVersion、完整 reviewedContextIds/);
+  assert.match(packet.message, /priorReplies 和 alreadyReplied/);
+  assert.match(packet.message, /sendContextReviewToken/);
+  assert.match(packet.message, /发送者会话变化、目标或正文变化/);
+  assert.match(packet.message, /replyImageDescriptions/);
+  assert.match(packet.message, /逐张写明实际看到的内容及图片想表达的意思/);
+  assert.match(packet.message, /同名 \.md/);
 });

@@ -6,7 +6,7 @@ English | <a href="./persona-data-sync.md">简体中文</a>
 
 # Multi-PC persona data synchronization
 
-> Status: experimental. The code now provides same-application peer discovery, LAN-first transfer, restricted Relay fallback, manifests, bidirectional merge, archives, conflict evidence, a persona-page control panel, and event-driven automatic reconciliation. Real multi-PC, disconnect, and large-data endurance acceptance is still required.
+> Status: experimental. The code now provides same-application peer discovery, LAN-first transfer, restricted Relay fallback, read-only file comparison, bidirectional merge, archives, conflict evidence, a dedicated sync workspace, and event-driven automatic reconciliation. Real multi-PC, disconnect, and large-data endurance acceptance is still required.
 
 ## Boundary
 
@@ -42,7 +42,7 @@ Relay fallback is request transit, not server-side persona storage. File content
 | `voice/cache/tts-audio/` | Excluded because it is a rebuildable speech cache. |
 | Single file over 16 MiB | Rejected by the current implementation. |
 
-The persona-owned voice relationship source `voice/voice-identities.jsonl` and identity-relation source `identity-relations/events.jsonl` both use append events, so JSONL union merge applies to them. Voice identity is scoped by `sourceHostId + voiceprintId`; an identity relation is scoped by its account, participant, or relation-card ID. A new event records the parent heads it converges. Concurrent edits of one record on two PCs retain multiple heads and expose a conflict instead of applying last-writer-wins replacement. Voice relations expose `conflicted/conflictFields/conflictCandidates`; identity relations expose `conflicted/conflictEventIds/conflictCandidates` and stop automatic confirmation. A later persona update with a complete final interpretation supersedes all current heads and lets later synchronization converge.
+Existing voice endpoint classifications remain in the compatibility source `voice/voice-identities.jsonl`, while general identity relations use `identity-relations/events.jsonl`. Both use append events, so JSONL union merge applies to them. A voice account is scoped by `sourceHostId + voiceprintId`; a general identity relation is scoped by its account, participant, or relation-card ID. A new event records the parent heads it converges. Concurrent edits of one record on two PCs retain multiple heads and expose a conflict instead of applying last-writer-wins replacement. Voice-account classifications expose `conflicted/conflictFields/conflictCandidates`; identity relations expose `conflicted/conflictEventIds/conflictCandidates` and stop automatic confirmation. A later persona update with a complete final interpretation supersedes all current heads and lets later synchronization converge. If automatically created unfamiliar-account candidates differ only in display name, candidate aliases, or observation evidence, synchronization merges those non-authoritative clues; substantive differences in participant kind, confirmation state, or account mapping remain explicit conflicts.
 
 Before replacing or deleting a file, the old version is archived under runtime `data/persona-sync/archive/`. Unsafe divergent content or a deletion intent is written under `data/persona-sync/conflicts/` instead of contaminating the active persona folder. A local Agent or user can explicitly keep the local file, adopt the remote result (which confirms deletion for a deletion conflict), or submit merged content. Resolution checks the current local hash to prevent stale overwrites. Original evidence and metadata move to `data/persona-sync/resolved-conflicts/` with a `.resolution.json` audit record.
 
@@ -63,6 +63,7 @@ GET  /api/persona-sync/peers
 GET  /api/persona-sync/manifest?roleId=Rabi
 GET  /api/persona-sync/index-status
 GET  /api/persona-sync/auto-status
+GET  /api/persona-sync/preview?peerId=<peer>&roleId=Rabi
 GET  /api/persona-sync/files/<roleId>/<relativePath>
 POST /api/persona-sync/merge
 POST /api/persona-sync/sync
@@ -80,7 +81,7 @@ Synchronize with one PC:
 }
 ```
 
-Omit `roleId` to synchronize every persona. The response reports `pull`, `push`, `converged`, and `conflict` per file. `fileConflicts` counts file-level failures; `semanticConflicts` reports voice-relationship or identity-relation branches that remain after successful JSONL union, and `conflicts` is their combined total. Voice items include persona, processing host, voiceprint ID, conflicting fields, and candidate event IDs; identity-relation items include persona, record kind, record ID, and candidate event IDs. The initiating Agent receives them in the same response instead of polling afterward. HTTP returns `409` when `conflicts > 0`, and an Agent must not claim completion while conflicts remain.
+Omit `roleId` to synchronize every persona. The response reports `pull`, `push`, `converged`, and `conflict` per file. `fileConflicts` counts file-level failures; `semanticConflicts` reports voice-account classification or general identity-relation branches that remain after successful JSONL union, and `conflicts` is their combined total. Voice items include persona, processing host, voiceprint ID, conflicting fields, and candidate event IDs; identity-relation items include persona, record kind, record ID, and candidate event IDs. The initiating Agent receives them in the same response instead of polling afterward. HTTP returns `409` when `conflicts > 0`, and an Agent must not claim completion while conflicts remain.
 
 Conflict inspection and resolution are loopback-only. They are not exposed by the dedicated LAN listener and are not included in the Relay proxy allowlist. After listing conflicts, retain the returned `localHash`, inspect the remote evidence, and submit one resolution action:
 
@@ -98,19 +99,20 @@ After local resolution succeeds, Manager immediately uses the peer and remote ha
 
 ## WebGUI and automatic recovery
 
-The **Multi-PC persona sync** panel on the persona page can:
+The Persona settings header provides a **Multi-PC persona sync** button that opens a dedicated workspace. The workspace can:
 
 - show same-application PCs, online state, LAN/Relay capability, and the local manifest-index mode;
+- select one PC and compare both manifests without writing persona files, then list files that would be pulled, pushed, deleted, automatically merged, or treated as conflicts under Changed Files;
 - show whether automatic reconciliation is waiting for Relay, waiting for a peer, queued, syncing, converged, awaiting confirmation, or temporarily failed;
 - immediately synchronize the current persona and show pull, push, converged, transport, and conflict counts;
 - preview local and remote evidence, then keep local, accept remote, or confirm remote deletion; advanced `use_merged` content remains an Agent/API operation;
-- direct persona voice-relationship semantic branches back to **Persona voiceprint classification**, where the persona explicitly converges identity instead of letting synchronization decide who is the user.
+- direct voice-account classification branches back to **Voice endpoint accounts** under **Identity relations**, where the persona explicitly converges the classification instead of letting synchronization decide who is the user.
 
-Page entry, SSE reconnection, and synchronization-status events each perform only one presentation catch-up query. The backend durable reconciler owns real automatic convergence even when WebGUI is closed; Vue stores no peer, manifest, conflict, or pending-sync fact.
+Page entry, peer selection, SSE reconnection, and synchronization-status events each perform only one presentation catch-up query. The backend durable reconciler owns real automatic convergence even when WebGUI is closed; Vue stores no peer, manifest, common-baseline, conflict, or pending-sync fact.
 
 ## Built Manager read-only smoke test
 
-Before exercising two physical PCs, verify that the current TypeScript build actually exposes the persona-sync, voice-relationship, and host-speech read boundaries:
+Before exercising two physical PCs, verify that the current TypeScript build actually exposes the persona-sync, compatibility voice-account classification, and host-speech read boundaries:
 
 ```powershell
 npm run build:backend

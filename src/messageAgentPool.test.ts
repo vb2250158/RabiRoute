@@ -118,13 +118,16 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
     }
   });
 
-  const worker = await pool.deliver(group("g1"), "[消息组 g1]\n你好");
+  const imagePath = path.join(root, "message.png");
+  fs.writeFileSync(imagePath, Buffer.from([1, 2, 3]));
+  const worker = await pool.deliver(group("g1"), "[消息组 g1]\n你好", { imagePaths: [imagePath] });
   const resolveCall = calls.find((call) => call.action === "resolve");
   const sendCall = calls.find((call) => call.action === "send");
   assert.equal(worker.threadName, "星海建造师 策划 程序 协助处理消息");
   assert.equal(resolveCall?.lookupMode, "state_db");
   assert.equal(sendCall?.model, "gpt-5.6-luna");
   assert.equal(sendCall?.reasoningEffort, "medium");
+  assert.deepEqual(sendCall?.imagePaths, [imagePath]);
   assert.match(String(sendCall?.prompt), /你是专职消息处理 Agent/);
   assert.match(String(sendCall?.prompt), /\[消息组 g1\]/);
   assert.match(String(sendCall?.prompt), /\[当前消息处理归属\]/);
@@ -142,6 +145,12 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
   assert.match(String(sendCall?.prompt), /处理结果：无需对外回复/);
   assert.match(String(sendCall?.prompt), /是否需要计划操作与是否需要回复必须分开判断/);
   assert.match(String(sendCall?.prompt), /普通群聊不要求逐条发言/);
+  assert.match(String(sendCall?.prompt), /先完成调查，再回复查到的事实/);
+  assert.match(String(sendCall?.prompt), /实际查看附件内容/);
+  assert.match(String(sendCall?.prompt), /params\.replyImageDescriptions/);
+  assert.match(String(sendCall?.prompt), /按原图顺序逐张写明图片内容/);
+  assert.match(String(sendCall?.prompt), /“我这边改 ok”.*“ok”.*保持安静/);
+  assert.match(String(sendCall?.prompt), /群内可见回复默认只写一到两句/);
 });
 
 test("direct replies default to a visible acknowledgement even when no plan changes", async () => {
@@ -396,6 +405,74 @@ test("Message Agent pool reuses an idle unfamiliar worker before creating anothe
 
   assert.equal(selected.threadId, threadId);
   assert.equal(calls.some((call) => call.action === "resolve"), false);
+});
+
+test("Message Agent pool with a limit of one keeps task 1 and reuses it while active", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-limit-one-"));
+  const statePath = path.join(root, "agents.json");
+  const firstThreadId = "019f0000-0000-7000-8000-000000000081";
+  const secondThreadId = "019f0000-0000-7000-8000-000000000082";
+  fs.writeFileSync(statePath, JSON.stringify({
+    schemaVersion: 2,
+    updatedAt: "2026-08-12T06:00:00.000Z",
+    workers: [
+      {
+        threadId: firstThreadId,
+        threadName: "星海建造师 策划 程序 协助处理消息1",
+        workspace: process.cwd(),
+        index: 1,
+        createdAt: "2026-08-04T06:00:00.000Z",
+        initializedAt: "2026-08-04T06:00:01.000Z"
+      },
+      {
+        threadId: secondThreadId,
+        threadName: "星海建造师 策划 程序 协助处理消息2",
+        workspace: process.cwd(),
+        index: 2,
+        createdAt: "2026-08-04T06:05:00.000Z",
+        initializedAt: "2026-08-04T06:05:01.000Z"
+      }
+    ]
+  }), "utf8");
+  let resolveCount = 0;
+  const sent: string[] = [];
+  const pool = new MessageAgentPool({ ...options(statePath), maxAgents: 1 }, {
+    request: async (payload) => {
+      if (payload.action === "read") return { thread: { active: true } };
+      if (payload.action === "resolve") resolveCount += 1;
+      if (payload.action === "send") sent.push(String(payload.threadId));
+      return {};
+    }
+  });
+
+  const first = await pool.deliver(group("limited-one"), "one");
+  const second = await pool.deliver(group("limited-two", { conversationKey: "napcat:group:two" }), "two");
+
+  assert.equal(first.threadId, firstThreadId);
+  assert.equal(second.threadId, firstThreadId);
+  assert.equal(first.threadName, "星海建造师 策划 程序 协助处理消息1");
+  assert.equal(resolveCount, 0);
+  assert.deepEqual(sent, [firstThreadId, firstThreadId]);
+  assert.deepEqual(pool.snapshot().workers.map((worker) => worker.threadId), [firstThreadId]);
+});
+
+test("Message Agent pool creates a numbered task 1 when its configured limit is one", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-limit-one-create-"));
+  const resolvedTitles: string[] = [];
+  const pool = new MessageAgentPool({ ...options(path.join(root, "agents.json")), maxAgents: 1 }, {
+    request: async (payload) => {
+      if (payload.action === "read") return { thread: { status: { type: "idle" }, active: false } };
+      if (payload.action === "resolve") {
+        resolvedTitles.push(String(payload.title));
+        return { thread: { id: "019f0000-0000-7000-8000-000000000083", title: payload.title, cwd: process.cwd() } };
+      }
+      return {};
+    }
+  });
+
+  await pool.deliver(group("limited-create"), "create");
+
+  assert.deepEqual(resolvedTitles, ["星海建造师 策划 程序 协助处理消息1"]);
 });
 
 test("Message Agent prompt forces schedule decisions to be verified and recorded before closure", async () => {
@@ -702,4 +779,68 @@ test("an explicit reply to an older source message returns to its original activ
 
   assert.equal(reply.threadId, first.threadId);
   assert.equal(created, 1);
+});
+
+test("a reply to an Agent-sent message boosts that exact Message Agent session in the ranking", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-reply-sender-"));
+  const statePath = path.join(root, "agents.json");
+  const familiarThreadId = "019f0000-0000-7000-8000-000000000071";
+  const referencedThreadId = "019f0000-0000-7000-8000-000000000072";
+  fs.writeFileSync(statePath, JSON.stringify({
+    schemaVersion: 2,
+    updatedAt: "2026-08-11T08:00:00.000Z",
+    workers: [
+      {
+        threadId: familiarThreadId,
+        threadName: "星海建造师 策划 程序 协助处理消息1",
+        workspace: process.cwd(),
+        index: 1,
+        createdAt: "2026-08-11T07:00:00.000Z",
+        initializedAt: "2026-08-11T07:00:01.000Z",
+        affinities: [{
+          groupId: "familiar-old",
+          endpoint: "napcat",
+          conversationKey: "napcat:group:100",
+          sender: "200",
+          lastUsedAt: "2026-08-11T07:30:00.000Z"
+        }]
+      },
+      {
+        threadId: referencedThreadId,
+        threadName: "星海建造师 策划 程序 协助处理消息2",
+        workspace: process.cwd(),
+        index: 2,
+        createdAt: "2026-08-11T07:05:00.000Z",
+        initializedAt: "2026-08-11T07:05:01.000Z",
+        affinities: [{
+          groupId: "other-old",
+          endpoint: "napcat",
+          conversationKey: "napcat:group:999",
+          sender: "999",
+          lastUsedAt: "2026-08-11T07:20:00.000Z"
+        }]
+      }
+    ]
+  }), "utf8");
+  const sent: string[] = [];
+  const pool = new MessageAgentPool(options(statePath), {
+    request: async (payload) => {
+      if (payload.action === "read") return { thread: { status: { type: "idle" } } };
+      if (payload.action === "send") sent.push(String(payload.threadId));
+      return {};
+    }
+  });
+
+  const selected = await pool.deliver(group("reply-to-agent", {
+    replyToMessageId: "qq-outbound-7788"
+  }), "reply to Agent", {
+    referencedSenders: [{
+      deliveryId: "delivery-7788",
+      agentType: "message_processing",
+      sessionId: referencedThreadId
+    }]
+  });
+
+  assert.equal(selected.threadId, referencedThreadId);
+  assert.deepEqual(sent, [referencedThreadId]);
 });

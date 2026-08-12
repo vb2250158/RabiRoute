@@ -45,15 +45,25 @@ export type PersonaSyncFileResult = {
   remoteDeleted?: boolean;
 };
 
-export type PersonaSyncSemanticConflict = {
-  kind: "persona_voice_identity";
-  roleId: string;
-  path: "voice/voice-identities.jsonl";
-  sourceHostId: string;
-  voiceprintId: string;
-  fields: string[];
-  candidateEventIds: string[];
-};
+export type PersonaSyncSemanticConflict =
+  | {
+      kind: "persona_voice_identity";
+      roleId: string;
+      path: "voice/voice-identities.jsonl";
+      identityKey: string;
+      sourceHostId: string;
+      voiceprintId: string;
+      fields: string[];
+      candidateEventIds: string[];
+    }
+  | {
+      kind: "identity_relation";
+      roleId: string;
+      path: "identity-relations/events.jsonl";
+      recordKind: "endpoint_account" | "participant" | "relation_card";
+      recordId: string;
+      candidateEventIds: string[];
+    };
 
 export type PersonaSyncResult = {
   peer: PersonaSyncPeer;
@@ -61,6 +71,38 @@ export type PersonaSyncResult = {
   files: PersonaSyncFileResult[];
   fileConflicts: number;
   semanticConflicts: PersonaSyncSemanticConflict[];
+  conflicts: number;
+};
+
+export type PersonaSyncPreviewOperation =
+  | "unchanged"
+  | "pull_create"
+  | "pull_update"
+  | "pull_delete"
+  | "push_create"
+  | "push_update"
+  | "push_delete"
+  | "auto_merge"
+  | "conflict";
+
+export type PersonaSyncPreviewFile = {
+  roleId: string;
+  path: string;
+  operation: PersonaSyncPreviewOperation;
+  direction: "pull" | "push" | "merge" | "conflict" | "converged";
+  mergeStrategy: "jsonl-union" | "three-way-file";
+  localHash?: string;
+  remoteHash?: string;
+  baseHash?: string;
+  localSize?: number;
+  remoteSize?: number;
+};
+
+export type PersonaSyncPreview = {
+  peer: PersonaSyncPeer;
+  transport: "lan" | "relay";
+  files: PersonaSyncPreviewFile[];
+  changedFiles: number;
   conflicts: number;
 };
 
@@ -154,6 +196,11 @@ export const personaSyncClient = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ peerId, roleId })
     }, true);
+  },
+
+  preview(peerId: string, roleId: string): Promise<PersonaSyncPreview> {
+    const query = new URLSearchParams({ peerId, roleId });
+    return jsonRequest(`/api/persona-sync/preview?${query}`);
   },
 
   file(roleId: string, relativePath: string): Promise<PersonaSyncContent> {

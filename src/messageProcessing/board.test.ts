@@ -62,6 +62,107 @@ function plan(overrides: Partial<PlanItem> = {}): PlanItem {
   };
 }
 
+test("message requirements can be found by exact Route and source message without board paging", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-source-lookup-"));
+  const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
+  store.registerMessageGroup({ requirementId: "req-source-lookup", messageGroupId: "group-source-lookup", source: source(["direct_at"]) });
+
+  assert.equal(store.findLatestBySourceMessage("main", "300")?.id, "req-source-lookup");
+  assert.equal(store.findLatestBySourceMessage("other-route", "300"), undefined);
+  assert.equal(store.findLatestBySourceMessage("main", "missing"), undefined);
+});
+
+test("image-bearing requirements cannot reply until the exact source, reply chain, and attachment are reviewed", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-source-evidence-"));
+  const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
+  store.registerMessageGroup({
+    requirementId: "req-source-evidence",
+    messageGroupId: "group-source-evidence",
+    source: {
+      ...source(["direct_reply"]),
+      evidenceReviewRequired: true,
+      replyChainMessageIds: ["299"],
+      attachments: [{
+        id: "300:image:1",
+        messageId: "300",
+        kind: "image",
+        name: "ui.png",
+        path: path.join(root, "ui.png"),
+        status: "ready"
+      }]
+    }
+  });
+  assert.throws(() => store.submitOutcome("req-source-evidence", {
+    decision: "reply",
+    projectFactAssessment: noneAssessment()
+  }), /sourceEvidenceReview/);
+  assert.throws(() => store.submitOutcome("req-source-evidence", {
+    decision: "reply",
+    sourceEvidenceReview: {
+      reviewedMessageIds: ["300"],
+      replyChainChecked: true,
+      attachmentReviews: [{ attachmentId: "300:image:1", status: "reviewed", observation: "图中底框随动态文案宽度变化。" }],
+      evidence: "核对了当前消息和图片。",
+      reviewedAt: "2026-08-11T12:00:00.000Z",
+      reviewedByThreadId: "message-agent-1"
+    },
+    projectFactAssessment: noneAssessment()
+  }), /Missing: 299/);
+  const accepted = store.submitOutcome("req-source-evidence", {
+    decision: "reply",
+    sourceEvidenceReview: {
+      reviewedMessageIds: ["299", "300"],
+      replyChainChecked: true,
+      attachmentReviews: [{ attachmentId: "300:image:1", status: "reviewed", observation: "图中底框随动态文案宽度变化。" }],
+      evidence: "核对了原消息、被引用消息和图片中的动态底框。",
+      reviewedAt: "2026-08-11T12:00:00.000Z",
+      reviewedByThreadId: "message-agent-1"
+    },
+    projectFactAssessment: noneAssessment()
+  });
+  assert.equal(accepted.status, "awaiting_send");
+  assert.equal(accepted.sourceEvidenceReview?.attachmentReviews[0]?.attachmentId, "300:image:1");
+});
+
+test("an unavailable source image blocks an inferred reply and leaves handoff available", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-unavailable-image-"));
+  const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
+  store.registerMessageGroup({
+    requirementId: "req-unavailable-image",
+    messageGroupId: "group-unavailable-image",
+    source: {
+      ...source(["direct_reply"]),
+      evidenceReviewRequired: true,
+      attachments: [{
+        id: "300:image:1",
+        messageId: "300",
+        kind: "image",
+        name: "expired.png",
+        status: "unavailable",
+        error: "HTTP 403"
+      }]
+    }
+  });
+  assert.throws(() => store.submitOutcome("req-unavailable-image", {
+    decision: "reply",
+    sourceEvidenceReview: {
+      reviewedMessageIds: ["300"],
+      replyChainChecked: true,
+      attachmentReviews: [{ attachmentId: "300:image:1", status: "unavailable", observation: "图片链接已过期。" }],
+      evidence: "无法读取图片。",
+      reviewedAt: "2026-08-11T12:00:00.000Z",
+      reviewedByThreadId: "message-agent-1"
+    },
+    projectFactAssessment: noneAssessment()
+  }), /cannot be answered by inference/);
+  const handedOff = store.submitOutcome("req-unavailable-image", {
+    decision: "handoff",
+    targetAgentType: "primary_persona",
+    reason: "图片不可读，需要重新取图。"
+  });
+  assert.equal(handedOff.status, "handed_off");
+});
+
 test("explicit message requirements cannot be closed with a generic no-reply judgment", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-"));
   const store = new MessageProcessingBoardStore(path.join(root, "board.json"));

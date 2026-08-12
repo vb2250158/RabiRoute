@@ -11,6 +11,7 @@ import {
 import { codexThreadTitleMaxLength, normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 import type { PendingMessageGroup } from "./messageGrouping.js";
+import type { MessageAgentReferencedSender } from "./messageProcessing/referencedAgentSender.js";
 
 export const MESSAGE_AGENT_POOL_SCHEMA_VERSION = 2;
 export const MESSAGE_AGENT_AFFINITY_SCHEMA_VERSION = 1;
@@ -63,6 +64,7 @@ export type MessageAgentPoolOptions = {
   rolePath?: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  maxAgents?: number;
 };
 
 export type MessageAgentPoolDependencies = {
@@ -70,7 +72,14 @@ export type MessageAgentPoolDependencies = {
   now?: () => Date;
 };
 
+export type MessageAgentDeliveryRouting = {
+  requirementId?: string;
+  referencedSenders?: MessageAgentReferencedSender[];
+  imagePaths?: string[];
+};
+
 const managerResponseLimitBytes = 1024 * 1024;
+const REFERENCED_AGENT_SESSION_WEIGHT = 6_000;
 
 export function requestMessageAgentManager(
   managerBaseUrl: string,
@@ -155,8 +164,8 @@ export function requestMessageAgentManager(
   });
 }
 
-function workerTitle(baseTitle: string, index: number, count = index): string {
-  const suffix = count === 1 ? " 协助处理消息" : ` 协助处理消息${index}`;
+function workerTitle(baseTitle: string, index: number, count = index, numberSingleWorker = false): string {
+  const suffix = count === 1 && !numberSingleWorker ? " 协助处理消息" : ` 协助处理消息${index}`;
   const fallback = "RabiRoute";
   const base = String(baseTitle || fallback).trim() || fallback;
   return normalizeCodexThreadTitle(`${base.slice(0, Math.max(1, codexThreadTitleMaxLength - suffix.length))}${suffix}`);
@@ -306,8 +315,12 @@ function mergeWorkerAffinities(worker: MessageAgentWorker, affinities: MessageAg
     .slice(-100);
 }
 
-function affinityScore(worker: MessageAgentWorker, group: PendingMessageGroup): number {
-  return worker.affinities.reduce((best, affinity) => {
+function affinityScore(
+  worker: MessageAgentWorker,
+  group: PendingMessageGroup,
+  routing: MessageAgentDeliveryRouting = {}
+): number {
+  const affinityWeight = worker.affinities.reduce((best, affinity) => {
     if (group.replyToMessageId && affinity.messageIds?.includes(group.replyToMessageId)) return Math.max(best, 5_000);
     if (affinity.groupId === group.groupId) return Math.max(best, 4_000);
     if (affinity.endpoint === group.endpoint && affinity.conversationKey === group.conversationKey && affinity.sender === group.sender) {
@@ -317,6 +330,10 @@ function affinityScore(worker: MessageAgentWorker, group: PendingMessageGroup): 
     if (affinity.endpoint === group.endpoint) return Math.max(best, 1_000);
     return best;
   }, 0);
+  const referencedAgentWeight = routing.referencedSenders?.some((sender) => sender.sessionId === worker.threadId)
+    ? REFERENCED_AGENT_SESSION_WEIGHT
+    : 0;
+  return affinityWeight + referencedAgentWeight;
 }
 
 function latestAffinityTime(worker: MessageAgentWorker): number {
@@ -404,6 +421,12 @@ function workerHandoffPrompt(
     "普通群消息也适用这套处理：它可能只是需要简短确认或参与讨论，也可能是既有计划的新证据、范围调整、反馈或新的可复用记忆。不要把“不是关键事实”误解成“无需处理”。",
     "如果 knowledgeMatches 为空，不能直接认为无关。请从消息和回复链提取具体对象、功能名、页面名、人物、版本和动作，至少换两组同义关键词查询计划与记忆；仍无命中时，由你判断应当回复/讨论、创建新计划、形成新记忆，还是确属结束语/重复/他人已完整回答。",
     "对图片、文件或短句，先结合被回复消息和同组上下文理解；不能因为正文缺少关键词而跳过。无法取得附件或回复链时明确 handoff/追问，不得当作无事项。",
+    "消息要求“查一下”“核对”“定位”“谁写的”“是否实装”时，把它当作行动请求：先完成调查，再回复查到的事实。未完成调查不得发送猜测、调查步骤、验收模板或长篇说明；若消息直接 @ 且确需即时确认，最多一句“我去查具体位置和实现，查完回”。",
+    "消息含图片或附件时，准备外发前必须实际查看附件内容；只看到 [CQ:image]、文件名或下载链接不算已查看。无法查看时不要推断图片内容，先内部取图或转交。",
+    "需求 source.evidenceReviewRequired=true 时，关闭或准备回复前还必须提交 sourceEvidenceReview：reviewedMessageIds 要覆盖 source.messageIds 和 replyChainMessageIds；attachmentReviews 要逐个覆盖 source.attachments，并写明实际看到的内容。附件 status=unavailable 时只能重试取图或 handoff，Manager 不允许进入发送状态。",
+    "引用 QQ 图片消息回复时，明确发送请求还必须在 params.replyImageDescriptions 中按原图顺序逐张写明图片内容和它想表达的意思。缺少任一张、描述为空或只写‘已查看’都会被发送接口拒绝；发送成功后说明会保存到图片旁的同名 .md。",
+    "如果发起人和被询问者已经完成问答或确认，例如“我这边改 ok”后对方回复“ok”，该话题已闭合，本角色没有新增事实时必须保持安静，不得补总结、建议或验收要求。",
+    "群内可见回复默认只写一到两句，直接回答对方的问题；内部计划、任务归类、调查过程、代码层级和测试步骤只留在任务内，除非对方明确追问技术细节。",
     "项目事实包括但不限于：上线/公测的内部目标或正式日期、版本范围、批准/否决、负责人变化、取消/延期、发布版本。必须区分候选目标、正式决定和公开公告，不能只看到日期就自行定性。",
     "在关闭或准备回复前，先 POST 消息处理 outcome，并提交 projectFactAssessment：status=none/critical、reviewedMessageIds、replyChainChecked=true、具体 evidence、assessedAt、assessedByThreadId；critical 时还要提交 facts(kind/evidence)。",
     "判断为 critical 时，先交原计划秘书更新计划、绑定记忆或项目文档；没有唯一计划时交计划秘书查重，跨计划或无法判断时交给主人格。完成后再提交 criticalFactDisposition 的记录类型、记录 ID、核对证据和核对时间。",
@@ -488,13 +511,23 @@ export class MessageAgentPool {
   private sourceThreadName: string;
   private sourceThreadNameResolved = false;
   private sourceThreadAvailability: MessageAgentWorkerAvailability | undefined;
+  private readonly maxAgents: number;
 
   constructor(private readonly options: MessageAgentPoolOptions, dependencies: MessageAgentPoolDependencies = {}) {
     const restored = readPoolState(options.statePath);
     this.affinityStatePath = affinityStatePathForPoolState(options.statePath);
     const affinityByThreadId = readAffinityState(this.affinityStatePath);
-    this.workers = restored.workers.filter((worker) => worker.threadId !== options.sourceThreadId);
-    for (const worker of this.workers) mergeWorkerAffinities(worker, affinityByThreadId.get(worker.threadId) ?? []);
+    this.maxAgents = Number.isFinite(options.maxAgents) && Number(options.maxAgents) > 0
+      ? Math.max(1, Math.floor(Number(options.maxAgents)))
+      : Number.POSITIVE_INFINITY;
+    const restoredWorkers = restored.workers
+      .filter((worker) => worker.threadId !== options.sourceThreadId)
+      .sort((left, right) => left.index - right.index || (Date.parse(left.createdAt) || 0) - (Date.parse(right.createdAt) || 0));
+    for (const worker of restoredWorkers) mergeWorkerAffinities(worker, affinityByThreadId.get(worker.threadId) ?? []);
+    this.workers = restoredWorkers.slice(0, this.maxAgents);
+    if (this.workers.length === 1 && restoredWorkers.length > 1) {
+      for (const detached of restoredWorkers.slice(1)) mergeWorkerAffinities(this.workers[0], detached.affinities);
+    }
     this.now = dependencies.now ?? (() => new Date());
     this.request = dependencies.request ?? ((payload) => this.managerRequest(payload));
     this.sourceThreadName = options.sourceThreadName;
@@ -503,16 +536,20 @@ export class MessageAgentPool {
     this.persist();
   }
 
-  async deliver(group: PendingMessageGroup, prompt: string, requirementId?: string): Promise<MessageAgentWorker> {
+  async deliver(
+    group: PendingMessageGroup,
+    prompt: string,
+    routing: MessageAgentDeliveryRouting = {}
+  ): Promise<MessageAgentWorker> {
     const allocation = await this.withAllocationLock(async () => {
       await this.ensureSourceThreadName();
       await this.ensureWorkerTitles();
-      const selection = await this.selectWorker(group);
+      const selection = await this.selectWorker(group, routing);
       const worker = selection.worker;
       const currentOptions = { ...this.options, sourceThreadName: this.sourceThreadName };
-      const ownership = workerHandoffPrompt(worker, group, this.options.managerBaseUrl, currentOptions, requirementId);
+      const ownership = workerHandoffPrompt(worker, group, this.options.managerBaseUrl, currentOptions, routing.requirementId);
       const promptWithContinuationCheck = selection.activeCandidate
-        ? `${ownership}\n\n${continuationCheckPrompt(selection.activeCandidate, worker, this.options.managerBaseUrl, requirementId)}\n\n${prompt}`
+        ? `${ownership}\n\n${continuationCheckPrompt(selection.activeCandidate, worker, this.options.managerBaseUrl, routing.requirementId)}\n\n${prompt}`
         : `${ownership}\n\n${prompt}`;
       const shouldInitialize = !worker.initializedAt && !this.initializingWorkerIds.has(worker.threadId);
       if (shouldInitialize) this.initializingWorkerIds.add(worker.threadId);
@@ -535,7 +572,8 @@ export class MessageAgentPool {
         sandbox: "workspace-write",
         prompt: allocation.prompt,
         model: this.options.model,
-        reasoningEffort: this.options.reasoningEffort
+        reasoningEffort: this.options.reasoningEffort,
+        imagePaths: routing.imagePaths
       });
       if (allocation.shouldInitialize) allocation.worker.initializedAt = this.now().toISOString();
       this.persist();
@@ -565,12 +603,12 @@ export class MessageAgentPool {
     };
   }
 
-  private async selectWorker(group: PendingMessageGroup): Promise<{
+  private async selectWorker(group: PendingMessageGroup, routing: MessageAgentDeliveryRouting): Promise<{
     worker: MessageAgentWorker;
     activeCandidate?: ActiveContinuationCandidate;
   }> {
     const ranked = this.workers
-      .map((worker) => ({ worker, score: affinityScore(worker, group) }))
+      .map((worker) => ({ worker, score: affinityScore(worker, group, routing) }))
       .filter((candidate) => candidate.score > 0)
       .sort((left, right) => right.score - left.score || latestAffinityTime(right.worker) - latestAffinityTime(left.worker));
     // Heartbeat is one continuing control-plane responsibility, not a new
@@ -603,6 +641,14 @@ export class MessageAgentPool {
     }
     for (const worker of idleFallbacks) {
       if (availability.get(worker.threadId) === "notLoaded") return { worker, activeCandidate };
+    }
+
+    if (this.workers.length >= this.maxAgents && this.workers.length > 0) {
+      const cappedWorker = ranked[0]?.worker ?? idleFallbacks[0] ?? this.workers[0];
+      return {
+        worker: cappedWorker,
+        activeCandidate: activeCandidate?.worker.threadId === cappedWorker.threadId ? undefined : activeCandidate
+      };
     }
 
     const desktopAvailable = await this.desktopAvailableForCreation(availability);
@@ -641,6 +687,9 @@ export class MessageAgentPool {
   }
 
   private async createWorker(): Promise<MessageAgentWorker> {
+    if (this.workers.length >= this.maxAgents) {
+      throw new Error(`Message Agent pool reached its configured limit of ${this.maxAgents}.`);
+    }
     const index = this.workers.reduce((maximum, worker) => Math.max(maximum, worker.index), 0) + 1;
     const baseTitle = workerBaseTitle(this.options);
     if (this.workers.length === 1 && index === 2) {
@@ -655,7 +704,7 @@ export class MessageAgentPool {
       first.threadName = firstTitle;
       this.persist();
     }
-    const title = workerTitle(baseTitle, index, Math.max(1, this.workers.length + 1));
+    const title = workerTitle(baseTitle, index, Math.max(1, this.workers.length + 1), this.maxAgents === 1);
     const response = await this.request({
       action: "resolve",
       title,
@@ -688,7 +737,7 @@ export class MessageAgentPool {
     let changed = false;
     let allNormalized = true;
     for (const worker of this.workers) {
-      const title = workerTitle(baseTitle, worker.index, count);
+      const title = workerTitle(baseTitle, worker.index, count, this.maxAgents === 1);
       if (worker.threadName === title) continue;
       try {
         await this.request({

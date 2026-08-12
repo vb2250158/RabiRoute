@@ -28,26 +28,71 @@ docs/rabi-agent-interfaces.md
 
 ### 身份关系记忆接口
 
-身份关系记录“这个消息端账号对应谁，以及哪些长期关系已确认或待确认”，不等同于聊天记录、计划或当前发言立场。它由人格私有保存，不自动从昵称、群权限或一次发言中学习。账号查询键必须同时提供 `platform`、`endpointIdentityNamespace` 和 `senderStableId`；不要使用 Route ID 代替其中任何一项。
+身份关系记录“这个消息端账号可能对应谁，以及哪些人与人、组织或项目关系已确认或待确认”，不等同于聊天记录、计划或当前发言立场。关系记录本身不分长期或短期；当前消息里的临时角色由情景记录表示。身份关系由人格私有保存。只有受支持消息端从真实发送者字段提供稳定 `senderStableId` 与 `endpointIdentityNamespace`，并且消息实际进入命中的 Route 投递时，系统才会自动建立“待认识”的候选参与者。昵称、群权限、一次自报或正文里转述的身份都不能触发确认。账号查询键必须同时提供 `platform`、`endpointIdentityNamespace` 和 `senderStableId`；不要使用 Route ID 代替其中任何一项。
 
 ```text
 GET /api/roles/:roleId/identity-relations
 GET /api/roles/:roleId/identity-relations?platform=<platform>&endpointIdentityNamespace=<namespace>&senderStableId=<id>&conversationKey=<optional>
 PUT /api/roles/:roleId/identity-relations
+POST /api/roles/:roleId/identity-relations/observations
 ```
 
-`GET` 不带查询参数时返回账号、参与者和关系卡的当前视图；带完整账号键时返回该账号的解析上下文。`PUT` 一次只写一种记录：`endpoint_account`、`participant` 或 `relation_card`。写入要附最小化证据引用，例如消息 ID、消息端、群/私聊会话或简短核对说明；不要复制整段私人聊天正文。多电脑同步后，若同一记录存在不一致的并发事件头，视图会标记 `conflicted`，给出 `conflictEventIds`，并在 `conflictCandidates` 中保留每个候选的完整记录，供人格页比较后修正；这类记录不会参与自动确认。要收敛冲突，`PUT` 必须明确提供该记录的全部关键字段，新的事件会替代所有当前事件头。
+`GET` 不带查询参数时返回账号、参与者和关系卡的当前视图；带完整账号键时返回该账号的解析上下文。`PUT` 一次只写一种记录：`endpoint_account`、`participant` 或 `relation_card`，用于人工确认、纠正和冲突处理。`POST .../observations` 供处理 Agent 在对话中发现新身份线索时使用：它只能更新当前账号已经关联的候选参与者和候选关系，不能写成 `confirmed`，也不能覆盖冲突记录。写入要附最小化证据引用，例如消息 ID、消息端、群/私聊会话或简短核对说明；不要复制整段私人聊天正文。多电脑同步后，若同一记录存在不一致的并发事件头，视图会标记 `conflicted`，给出 `conflictEventIds`，并在 `conflictCandidates` 中保留每个候选的完整记录，供人格页比较后修正；这类记录不会参与自动确认。要收敛冲突，`PUT` 必须明确提供该记录的全部关键字段，新的事件会替代所有当前事件头。
 
-人格页的“身份关系”卡片使用同一接口查看、新建和修正参与者、消息端账号映射与关系卡。它会在身份修正或人格同步事件后刷新；候选和冲突仍只能作为核对材料，不能在页面中被当作项目归属或执行授权。
+稳定账号键只能证明“这是同一个消息端账号”，不能单独证明“始终是同一个人在使用”。共用账号或证据互相矛盾时，`participantLinks` 可以保留多个候选；当前账号只有一个候选参与者时，观察请求可以省略 `participantId`，存在多个候选时则必须先通过带完整账号键的 `GET` 读取候选 ID，再明确指定。系统不会根据昵称、最近发言或最高置信度自行选择。
 
-### 对话情境影子记录
+证据应区分作用。用户明确纠正、可核对的跨消息端归属和持续稳定的账号事实可以支持人工确认；自报姓名、别人转述、显示名以及词汇、句式、回复节奏等说话习惯一致性只能作为候选的辅助证据。即使多次表现一致，也不能单独创建确认映射。来源不能提供稳定发送者标识，或者自报只存在于转发、引用、附件文字等不可信上下文时，Agent 必须保持未识别，不得调用观察接口把它合并到既有人物。
+
+说话习惯档案属于参与者记录，只能通过受审阅的 `PUT` 更新，不能由观察接口从未归因消息中自动学习。`speakingHabits` 每项包含 `dimension`、自然语言 `description`、可选 `confidence` 和 `evidenceRefs`；证据至少要有一条作者已经确认的 `messageId`。允许的维度为 `sentence_opening`、`sentence_length`、`stance_expression`、`emotion_threshold`、`analogy_source`、`punctuation`、`reader_relationship`、`value_preference`、`information_order`、`avoidance`、`imperfection`、`scene_boundary`。共享账号中作者仍不确定的消息不得写入任何人的档案。
+
+```json
+{
+  "kind": "participant",
+  "participantId": "participant-example",
+  "speakingHabits": [
+    {
+      "dimension": "sentence_opening",
+      "description": "常先指出当前判断，再补条件和未确定项。",
+      "confidence": 0.75,
+      "evidenceRefs": [
+        { "messageId": "confirmed-author-message-id", "note": "作者已经人工确认。" }
+      ]
+    }
+  ]
+}
+```
+
+```json
+{
+  "platform": "napcat",
+  "endpointIdentityNamespace": "bot:example",
+  "senderStableId": "example-user",
+  "participantKind": "person",
+  "participantDisplayName": "对方明确自述的称呼",
+  "aliases": ["本轮出现的新称呼"],
+  "conversationKey": "napcat:group:example",
+  "evidenceRefs": [
+    {
+      "messageId": "example-message-id",
+      "conversationKey": "napcat:group:example",
+      "note": "只写身份线索和判断依据，不复制整段聊天。"
+    }
+  ]
+}
+```
+
+人格页把同一读取结果投影为“已识别身份”和“未识别身份”。已识别人物使用整张卡片作为入口，在同一个身份工作区内查看和编辑参与者资料、说话习惯、消息端账号与关系；参与者、账号和关系仍通过独立 `PUT` 保存，不构成一次事务。独占账号放在唯一人物中；已经知道使用者范围的共用账号同时出现在每个可能使用者中，并标记“共用”，但解析结果仍保持多人候选。“未识别身份”按 QQ、微信、声纹等消息端分类，容纳尚不知道对应人物、候选尚未指向已识别人物或存在冲突的账号。页面会在身份修正或人格同步事件后刷新；共用账号的单条消息归因、其他候选和冲突仍只能作为核对材料，不能被当作项目归属或执行授权。
+
+声纹在概念上也是消息端账号。当前通用账号键使用 `platform=voice`、`endpointIdentityNamespace=host:<处理主机 ID>` 和 `senderStableId=voiceprintId`；一段多人录音可以关联多个账号。当前版本已把语音归类工具放进同一个“身份定位”区域，但旧数据仍由下文的 `voice-identities` 兼容接口和文件保存。不要同时向两套接口重复写同一条判断；完成统一数据迁移前，声纹的“这是我 / 其他人”、覆盖率和冲突读回仍以下文接口为准。
+
+### 情景记录
 
 ```text
 GET /api/roles/:roleId/conversation-situations?limit=20
 GET /api/roles/:roleId/conversation-situations/:situationId
 ```
 
-消息实际投递时会生成这份只读记录。它没有聊天正文，只保留会话和消息标识、关系卡派生的项目线索、附件/身份歧义以及 `mayParticipate=true`、`mayCreateOrUpdateCurrentProjectRecords=false`。它用于人工审阅主动智能是否把“可参与讨论”误解成“应负责当前项目”；接口不能用来创建、确认或授权项目动作。
+消息实际投递时会生成这份只读情景记录。它没有聊天正文，只保留会话和消息标识、关系卡派生的项目线索、附件/身份歧义以及 `mayParticipate=true`、`mayCreateOrUpdateCurrentProjectRecords=false`。它用于人工审阅主动智能是否把“可参与讨论”误解成“应负责当前项目”；接口不能用来创建、确认或授权项目动作。
 
 ```json
 {
@@ -184,7 +229,7 @@ GET /api/personas/messages/receipts/:deliveryId
 
 ```text
 明确发送 API：http://127.0.0.1:8790/api/agent/send
-明确发送请求模板：{"deliveryId":"<stable-id>","routeId":"main","channel":"napcat","params":{"target":"group","groupId":"456","instanceId":"default"},"payload":{"type":"text","text":"<正文>"}}
+明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"codex","sessionId":"<当前完整会话 ID>"},"routeId":"main","channel":"napcat","params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
 来源上下文（只用于核对来源，不可直接作为发送参数）：{"routeKind":"direct_at","messageId":"123","groupId":"456"}
 ```
 
@@ -199,31 +244,42 @@ POST /api/agent/send
 请求体固定包含：
 
 - `deliveryId`：本次业务发送的稳定 ID，重试时保持不变；
+- `sender.agentType`：调用发送接口的 Agent 产品类型，例如 `codex`；
+- `sender.sessionId`：调用发送接口的 Agent 完整会话 ID；
 - `routeId`：精确的已启用 Route ID；
 - `channel`：发送渠道；
 - `params`：该渠道的目标参数；
 - `payload`：`text`、`image`、`voice` 或 `file`；
-- `tracking.requirementId`：可选，仅用于关联消息处理看板，不能决定发送目标。
+- `tracking.requirementId`：可选，用于关联消息处理看板，不能决定发送目标；回复已登记的消息处理需求时必须填写；
+- `tracking.sendContextReviewToken`：消息处理需求在发送前完成最新群聊上下文核对后取得的短期凭证，只对同一需求、发送者会话、目标和正文有效。
 
 QQ 群文本示例：
 
 ```json
 {
   "deliveryId": "send-example-001",
+  "sender": {
+    "agentType": "codex",
+    "sessionId": "019f0000-0000-7000-8000-000000000001"
+  },
   "routeId": "main",
   "channel": "napcat",
   "params": {
     "target": "group",
     "groupId": "456",
     "instanceId": "default",
-    "replyToMessageId": "123"
+    "replyToMessageId": "123",
+    "replyImageDescriptions": [
+      "图片展示动态文字变长后底框随内容扩展，想表达背景宽度需要跟随正文变化。"
+    ]
   },
   "payload": {
     "type": "text",
     "text": "收到，我来处理。"
   },
   "tracking": {
-    "requirementId": "message-requirement-001"
+    "requirementId": "message-requirement-001",
+    "sendContextReviewToken": "<POST send-context 返回的 token>"
   }
 }
 ```
@@ -232,7 +288,7 @@ QQ 群文本示例：
 
 | `channel` | `params` 必填目标 |
 | --- | --- |
-| `napcat` | `target=group + groupId`，或 `target=private + userId`；引用原消息时另填 `replyToMessageId` |
+| `napcat` | `target=group + groupId`，或 `target=private + userId`。群聊必须显式提交 `replyToMessageId`：能取得来源消息时尽量填写真实消息 ID；明确不引用时填写空字符串 `""`。引用消息含图片时，`replyImageDescriptions` 必须按原图顺序逐张填写图片内容和想表达的意思；缺失、数量不符、空泛描述、图片不可读或来源消息无法核对都会在进入幂等发送前报错。完全省略 `replyToMessageId` 也会在进入 Outbox 前返回可行动错误。同一来源消息在 10 分钟内已有成功回复时，新的改写默认返回 `409`；只有确有新增事实的后续回复才显式填写 `allowAdditionalReply=true`。 |
 | `wecom` | `chatId` |
 | `feishu` | `chatId` |
 | `weixin` | `sessionId` |
@@ -252,7 +308,7 @@ Route 的消息端输出策略仍会检查开关、支持的 payload 和允许�
 POST /api/message-processing/requirements/:requirementId/outcome
 ```
 
-直接回复时先提交决定，再调用明确发送接口，并把需求 ID 写入 `tracking.requirementId`。Manager 只有在 `channel` 与原消息端一致、结果为 `sent`，且 QQ 等渠道带真实发送标识时才关闭看板项：
+直接回复时先提交决定，使需求进入 `awaiting_send`，再完成“发送前上下文核对”，最后调用明确发送接口。Manager 只有在 `channel` 与原消息端一致、结果为 `sent`，且 QQ 等渠道带真实发送标识时才关闭看板项：
 
 ```json
 {
@@ -260,6 +316,53 @@ POST /api/message-processing/requirements/:requirementId/outcome
   "reason": "用户明确要求确认命名和预制位置"
 }
 ```
+
+发送前不能只依赖 AgentPacket 创建时附带的最近消息，因为处理期间群里可能已经有人回答，或者另一名 Agent 已经发过同义回复。先读取 Manager 当前保存的有界双向消息：
+
+```http
+GET /api/message-processing/requirements/:requirementId/send-context
+```
+
+响应会返回 `contextVersion`、必须逐条核对的 `requiredReviewIds`、上下文消息、已有 Agent 回复 `priorReplies` 和 `alreadyReplied`。Agent 判断拟发送内容仍合适后，把这次精确发送请求作为 `proposedSend` 提交审核：
+
+```http
+POST /api/message-processing/requirements/:requirementId/send-context
+```
+
+```json
+{
+  "contextVersion": "<GET 返回的版本>",
+  "reviewedContextIds": ["<requiredReviewIds 中的全部 ID>"],
+  "reviewedByThreadId": "<当前完整会话 ID>",
+  "reason": "群里尚无人回答，拟发送内容仍对应当前问题。",
+  "proposedSend": {
+    "deliveryId": "send-example-001",
+    "sender": {
+      "agentType": "codex",
+      "sessionId": "019f0000-0000-7000-8000-000000000001"
+    },
+    "routeId": "main",
+    "channel": "napcat",
+    "params": {
+      "target": "group",
+      "groupId": "456",
+      "instanceId": "default",
+      "replyToMessageId": "123"
+    },
+    "payload": {
+      "type": "text",
+      "text": "收到，我来处理。"
+    },
+    "tracking": {
+      "requirementId": "message-requirement-001"
+    }
+  }
+}
+```
+
+审核通过后，把返回的 `sendContextReviewToken` 加入 `tracking`，并原样发送同一请求。凭证两分钟后失效；审核后出现新消息、需求状态改变、发送者会话改变，或目标、引用消息、正文发生变化时，Manager 都会拒绝发送并要求重新读取上下文。已有 Agent 回复同一来源消息时，改写措辞仍视为重复；确有新增事实的后续说明必须显式填写 `allowAdditionalReply=true` 和原因。
+
+这项检查适用于所有 Agent 类型。只要 `replyToMessageId` 指向已登记消息处理需求的来源消息，主人格或其它 Agent 也不能省略 `tracking.requirementId` 绕过看板和发送前核对。
 
 普通群讨论可以决定不回复，但必须说明原因。直接 @、直接回复、私聊和计划进展通知不能用泛化的 `agent_judgement` 关闭，只接受重复、他人已回答、消息撤回、来源无效等受限原因：
 
@@ -276,6 +379,29 @@ POST /api/message-processing/requirements/:requirementId/outcome
 只有图片、视频或文件而没有文字问题的消息，在附件已经下载核对并写入关联计划后，可以使用 `reasonCode=attachment_consumed`；必须同时提交 `planId`，并在原因里保留原 `sourceMessageId`。含有文字问题的消息不能使用这个原因跳过回复。
 
 Manager 不判断群消息的业务含义。每个新消息需求在关闭或准备回复前，消息处理 Agent 都必须核对原消息、附件和必要的回复链，并提交 `projectFactAssessment`：
+
+新登记的消息需求还带有 `source.evidenceReviewRequired=true`。Manager 会在 `source.messageIds`、`source.replyChainMessageIds` 和 `source.attachments` 中列出必须核对的原消息、引用链和附件。NapCat 图片会在收到时立即保存到运行目录，并通过 Desktop IPC 作为 `localImage` 随当前任务输入；只看到 CQ 代码、文件名或 URL 不算看过图片。准备回复或关闭前，outcome 必须同时提交：
+
+```json
+{
+  "sourceEvidenceReview": {
+    "reviewedMessageIds": ["source-message-id", "quoted-message-id"],
+    "replyChainChecked": true,
+    "attachmentReviews": [
+      {
+        "attachmentId": "source-message-id:image:1",
+        "status": "reviewed",
+        "observation": "图中是动态文案底框，当前文字长度明显短于底框最大宽度。"
+      }
+    ],
+    "evidence": "已核对当前消息、引用消息和随任务附带的图片。",
+    "reviewedAt": "2026-08-11T12:00:00.000Z",
+    "reviewedByThreadId": "完整消息处理任务 ID"
+  }
+}
+```
+
+`reviewedMessageIds` 必须覆盖原消息和引用链；`attachmentReviews` 必须逐个覆盖附件并写实际观察。附件为 `unavailable`、本地文件不存在或下载失败时，Manager 拒绝 `reply` / `no_reply`，Agent 只能重试取图或 `handoff`，不能根据文字占位猜图片内容。这个证据核对与下面的项目事实判断分开保存：前者证明 Agent 看了什么，后者记录 Agent 如何判断长期项目事实。
 
 先通过 `GET /api/message-processing/requirements/{requirementId}` 读取需求。响应里的 `knowledgeMatches` 是 Manager 根据角色计划和记忆的标题、ID、关键词生成的候选关联。Agent 必须读取每个候选项，并逐项调用 `POST /api/message-processing/requirements/{requirementId}/knowledge-callback`。
 
@@ -373,13 +499,23 @@ GET /api/message-processing/board?routeId=<gateway-id>&limit=100
 
 ### 受控外发幂等回执
 
-`deliveryId` 是发送接口的必填字段。Manager 会在进入 Outbox 前把 reservation 持久化到运行期 `data/agent-send-idempotency/`；同一个 `deliveryId` 和相同请求只执行一次，完成后重复 POST 返回原 `sent/draft/blocked/failed` 结果。相同 ID 携带不同请求返回 `409 conflict`，`reserved/sending/uncertain` 状态也失败关闭，不会自动重发。
+`deliveryId`、`sender.agentType` 和 `sender.sessionId` 都是发送接口的必填字段。Manager 会在进入 Outbox 前把 reservation 持久化到运行期 `data/agent-send-idempotency/`；完成结果会原样保存发送者身份。同一个 `deliveryId` 和相同请求只执行一次，完成后重复 POST 返回原 `sent/draft/blocked/failed` 结果。相同 ID 携带不同发送者或其它不同请求返回 `409 conflict`，`reserved/sending/uncertain` 状态也失败关闭，不会自动重发。
+
+NapCat 群回复另按 `routeId + groupId + replyToMessageId` 做短时保护。某条被引用消息在 10 分钟内已经成功收到回复时，换 `deliveryId`、换 Agent 或换一种说法再次发送都会被拒绝；Manager 重启后仍从近期成功回执恢复这项判断。确有新证据必须补充时，调用方可以显式提交 `params.allowAdditionalReply=true`，并对这次额外回复负责。这个字段不能用于绕过普通重复发送保护。
 
 调用方在 POST 超时或收到空回执后，应先查询原 ID：
 
 ```http
 GET /api/agent/send/receipts/:deliveryId
 ```
+
+如果只有消息端回执 ID，可以按渠道反查最多 100 条匹配记录：
+
+```http
+GET /api/agent/send/traces?channel=napcat&sentMessageId=:platformMessageId&routeId=:optionalRouteId
+```
+
+返回项包含 `deliveryId`、完成时间、Route、目标和 `sender.agentType + sender.sessionId`。旧回执没有发送者字段，因此只能从启用本合同之后的新发送记录追溯。当前字段是调用方声明并由 RabiRoute 持久保存的来源；它用于审计，不等同于对 Agent 会话的加密认证。
 
 只有回执返回 `status=sent` 且包含目标通道要求的真实标识（QQ 文本为 `sentMessageId`）时，调用方才能继续做平台回读并把业务状态标成已发送。`deliveryId` 只提供 Outbox 请求幂等，不代替 NapCat/外部平台的真实存在验证，也不是自动重试队列。公开示例应使用占位 ID，不把运行期回执文件提交到仓库。
 
@@ -475,36 +611,44 @@ Content-Type: application/json
 }
 ```
 
-省略 `roleId` 表示同步全部人格。同步器优先局域网直连，失败后经 Relay 受限中转。Agent 必须检查逐文件结果、`fileConflicts` 和 `semanticConflicts`；后者会在同一次同步响应中列出已成功并集合并、但仍有并发分支的声纹关系或身份关系。声纹项包含处理主机、声纹、字段和事件候选；身份关系项包含记录类型、记录 ID 和事件候选，不需要另行轮询覆盖率。`conflicts > 0` 或 HTTP `409` 表示仍有待处理冲突，不能声称同步完成。
+省略 `roleId` 表示同步全部人格。同步器优先局域网直连，失败后经 Relay 受限中转。Agent 必须检查逐文件结果、`fileConflicts` 和 `semanticConflicts`；后者会在同一次同步响应中列出已成功并集合并、但仍有并发分支的语音账号兼容归类或通用身份关系。语音项包含处理主机、声纹、字段和事件候选；身份关系项包含记录类型、记录 ID 和事件候选，不需要另行轮询覆盖率。`conflicts > 0` 或 HTTP `409` 表示仍有待处理冲突，不能声称同步完成。
 
 普通文件冲突由本机 Agent 使用 `GET /api/persona-sync/conflicts`、`GET /api/persona-sync/conflicts/content` 和 `POST /api/persona-sync/conflicts/resolve` 处理。解决动作支持 `keep_local`、`use_remote`、`use_merged`，并应携带列表返回的 `expectedLocalHash` 防止覆盖刚发生的新修改。三条冲突控制接口仅允许回环调用，不经 LAN listener 或 Relay 暴露。底层 manifest、文件读取、单文件 merge 和完整请求字段见 [多电脑人格数据同步](persona-data-sync.md)。
 
 当当前路由消息明确提到多台电脑、人格/角色同步或 persona sync 时，AgentPacket 会把上述回环地址、当前 `roleId`、一次性执行要求和冲突判定直接注入绑定人格的当前任务；普通聊天不注入这段能力说明。默认只同步当前人格，只有用户明确要求时才允许省略 `roleId` 同步全部人格；peer 不唯一时必须先确认目标，不能猜测，也不能用轮询等待覆盖率。
 
-NapCat 群聊需要真实引用原消息时，在 `params.replyToMessageId` 中明确提供源消息 ID：
+NapCat 群聊始终需要提交 `params.replyToMessageId`。能取得来源消息时尽量填写真实消息 ID：
 
 ```json
 {
   "deliveryId": "send-qq-progress-001",
+  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
   "routeId": "main",
   "channel": "napcat",
   "params": {
     "target": "group",
     "groupId": "456",
     "instanceId": "default",
-    "replyToMessageId": "123"
+    "replyToMessageId": "123",
+    "replyImageDescriptions": [
+      "图片展示动态文字较短时底框保持紧凑，并保留图标和文字间距。",
+      "图片展示文字变长后底框随内容扩展，想表达背景需要自适应宽度。"
+    ]
   },
   "payload": { "type": "text", "text": "【工会入口无响应】我先接手调查，有结论后继续引用这里同步。" }
 }
 ```
 
-Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息段数组前插入 `reply` 段。没有 `replyToMessageId`、私聊和主动无源群消息都不会自动添加引用。
+Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息段数组前插入 `reply` 段。`replyImageDescriptions` 的数量必须与被引用消息的图片数量完全一致，并按消息中的图片顺序一一对应；每项都要写实际看到的内容和图片想表达的意思，不能只写“已查看”。发送成功后，RabiRoute 会在每张本机图片旁创建或追加图片同名的 `.md`，保存来源消息 ID、图片序号、Agent 类型、完整会话 ID、发送 ID、QQ 回执 ID 和本次描述。存档回执只返回映射文件，不把描述正文复制进运维追踪结果。
+
+主动无源群消息应明确填写 `"replyToMessageId":""`，并保持 `"replyImageDescriptions":[]`，表示有意不引用；这时不会添加引用段。完全省略 `replyToMessageId` 会拒绝请求，并提示 Agent：能引用时使用来源 QQ 消息 ID，确实不引用时传空字符串。私聊不要求该字段。
 
 发送本地 QQ 群文件时仍使用同一个发送接口：
 
 ```json
 {
   "deliveryId": "send-qq-file-001",
+  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
   "routeId": "main",
   "channel": "napcat",
   "params": { "target": "group", "groupId": "456", "instanceId": "default", "replyToMessageId": "123" },
@@ -526,6 +670,7 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 ```json
 {
   "deliveryId": "send-rabilink-active-001",
+  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
   "routeId": "RabiLink",
   "channel": "rabilink",
   "params": { "proactive": true, "source": "scheduler", "targetDeviceKinds": ["glasses"] },
@@ -542,6 +687,7 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 ```json
 {
   "deliveryId": "send-wecom-001",
+  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
   "routeId": "main",
   "channel": "wecom",
   "params": { "chatId": "wrCHATID", "userId": "zhangsan", "reqId": "REQ_ID" },
@@ -599,6 +745,8 @@ POST http://127.0.0.1:8790/api/agent/threads
 - `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。Codex 任务名上限为 240 个 JavaScript 字符单元；更长的输入会由 RabiRoute 安全截断并加省略号，响应和后续配置保存实际创建的名称。
 - `rename`：按完整 `threadId` 和已配置 cwd 修改 Desktop 任务名称，不改变任务身份；用于持久计划协助槽从单个扩容为多个时，把原“协助处理计划”任务改名为“协助处理计划1”。
 - `send`：通过 Desktop IPC 向已有任务 owner start/steer。
+
+`send` 可选传 `imagePaths`，最多 8 个图片绝对路径。每个文件必须存在、位于目标 `cwd` 工作区内，并使用 PNG/JPEG/GIF/WebP/BMP 扩展名。Manager 校验后把它们作为 Desktop `localImage` 输入发送；该字段主要供消息入口把已经保存的来源图片交给处理任务，不能用于读取工作区外文件。
 
 查询示例：
 
@@ -683,6 +831,8 @@ Agent 向另一个 Agent 任务发送消息时，必须提供自己的完整 `so
 
 普通 Codex 最终回答不算正式回复。目标 Agent 每轮结束时，`Stop` Hook 会检查待回复请求；仍未回复时，从该轮结束起五分钟后向同一个精确任务投递提醒。提醒触发的新一轮结束后仍未回复，会再从该轮结束起等待五分钟。请求状态可通过 `GET /api/agent/requests` 或 `GET /api/agent/requests/:requestId` 查询；维护者可用 `POST /api/agent/requests/:requestId/cancel` 取消不再需要的请求。
 
+Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认该标记已经写入时，仍按送达成功提交请求/回复状态；没有标记时才返回可重试失败。调用方遇到超时不得立即重复发送，应先读取请求状态和目标任务最近一轮。
+
 Manager 先按来源 ID 读取 Desktop 状态并核对任务存在、ID 一致且未归档，再通过 `codexDesktopBridge.ts` 的统一任务读取模型取得左侧聊天栏当前名称。`agentThreads.ts`、消息处理 Agent、心跳和来源模板不得各自读取或覆盖另一份任务名。正文前会显示“来源 Agent、来源任务、来源会话 ID、来源工作目录”；任务名不由发送方填写。RabiRoute 自己产生的普通消息、初始化消息、提醒和系统通知不属于 Agent 互投，可以不带来源与回复字段。
 
 安全边界：
@@ -693,7 +843,11 @@ Manager 先按来源 ID 读取 Desktop 状态并核对任务存在、ID 一致�
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
 - `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束，包括没有来源 Agent 字段的普通续投：未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。PangHu 没有任务级例外，只能使用正式 Main、Release 和 Art，旧任务或历史记录里的隔离、稀疏、clean working copy 安排已经撤销。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
-- `create` 返回 `initialTurnStatus`。若线程已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名线程。
+- `create` 按“任务名 + 工作目录”幂等解析。相同创建请求并发到达、调用方等待超时后重试，或任务刚创建但 Desktop 索引尚未及时显示时，都会复用同一次创建结果；不得因为第一次 HTTP 超时再次创建同名任务。返回 `resolution=created` 表示本次新建，`resolution=name` 表示复用了同名同工作目录任务。
+- Manager 在运行期 `data/.runtime/codex-thread-creations/` 持久保存创建 reservation。状态按 `reserved → creating → thread_created → naming → initial_turn → completed` 推进；一旦 `thread/start` 可能已经执行但结果无法确认，记录转为 `uncertain`，后续请求返回 `409` 并禁止自动再次创建。只有能够证明尚未调用 `thread/start` 的 `failed_before_create` 才允许重新创建。
+- `create` 返回 `initialTurnStatus`。若任务已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名任务。
+- 创建调用超时后，先用 `action=list + lookupMode=state_db + 原任务名` 从本地任务索引回读。这个模式不启动 app-server 元数据扫描，适合判断慢创建是否稍后产生了任务；完整任务列表仍使用默认 `lookupMode=complete`。
+- Agent 正式回复中的 workspace 使用与 Codex 任务身份相同的规范化规则比较；Windows 普通盘符路径、`\\?\` 扩展盘符路径、UNC 与扩展 UNC 的等价形式不会因为字符串写法不同而被误判为其它工作区。
 - 当前 Route 开启“强制使用 RabiAgent 消息投递接口”后，主人格、计划 Agent、计划秘书和消息处理 Agent 使用 `send_message_to_thread`、`handoff_thread`、`create_thread` 或 `fork_thread` 等 Codex 持久任务工具时，`PreToolUse` Hook 会在执行前拒绝并说明上述 Rabi 参数。临时子 Agent 的协作工具不属于这项限制。关闭开关只停止这项绕过检查；已经通过 Rabi 建立的待回复请求仍继续检查和提醒。
 - Manager 线程桥最终仍投给同一个 Desktop owner，不是执行 fallback，也不是另一个 Runtime。
 - Desktop 未启动、IPC 不可用或目标任务无法加载时必须返回失败；不得转给隔离 app-server、Codex CLI 或共享端口继续执行。
@@ -870,7 +1024,7 @@ GET /roles/:roleId/memory/recent/:memoryId
 GET /api/roles/:roleId/memory?counts=1
 ```
 
-`counts=1` 只返回近期记忆、沉淀记忆和沉淀记录的数量，不读取或返回记忆卡片正文；WebGUI 直达“计划与记忆”页面时用它填充标签计数。
+`counts=1` 只返回近期记忆、沉淀记忆、已归档记忆来源和沉淀记录的数量，不读取或返回记忆卡片正文；WebGUI 直达“计划与记忆”页面时用它填充标签计数。
 
 新增近期记忆：
 

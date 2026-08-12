@@ -164,6 +164,22 @@ test("memory consolidation is a Manager-owned trigger and does not require a use
   assert.deepEqual(decision.matchedRules.map((rule) => rule.id), ["memory-consolidation"]);
 });
 
+test("scheduled persona automation supplies its own Agent template without a heartbeat message rule", () => {
+  const record: HeartbeatEventRecord = {
+    time: 1710000000,
+    rawMessage: "review open plans",
+    messageId: "scheduled-review"
+  };
+  const decision = createRouteDecision(routeProfile(), "heartbeat", record, {
+    automationRuleId: "scheduled-review",
+    automationRuleName: "Daily review",
+    automationTemplate: "report only new blockers"
+  });
+
+  assert.equal(decision?.matchedRules[0]?.id, "scheduled-review");
+  assert.equal(decision?.matchedRules[0]?.template, "report only new blockers");
+});
+
 test("AgentPacket renders rule template and reply context from a decision", () => {
   const route = routeProfile({
     notificationRules: [{

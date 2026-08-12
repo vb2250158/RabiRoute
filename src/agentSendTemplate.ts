@@ -28,7 +28,8 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
         target: targetType,
         ...(targetType === "group" ? { groupId: context.groupId } : { userId: context.userId }),
         instanceId: context.instanceId,
-        replyToMessageId: context.replyToSource === true ? context.messageId : undefined
+        replyToMessageId: context.replyToSource === true && context.messageId != null ? context.messageId : "",
+        ...(targetType === "group" ? { replyImageDescriptions: [] } : {})
       }
     : channel === "wecom"
       ? { chatId: context.wecomChatId ?? context.groupId, userId: context.userId, reqId: context.wecomReqId }
@@ -58,12 +59,21 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
                     };
   return {
     deliveryId: "<为本次发送生成稳定 ID；重试时保持不变>",
+    sender: {
+      agentType: "<当前 Agent 类型，例如 codex>",
+      sessionId: "<当前 Agent 的完整会话 ID>"
+    },
     routeId,
     channel,
     params,
     payload: { type: "text", text: "<这里填写要发送的正文>" },
     ...(context.messageProcessingRequirementId
-      ? { tracking: { requirementId: context.messageProcessingRequirementId } }
+      ? {
+          tracking: {
+            requirementId: context.messageProcessingRequirementId,
+            sendContextReviewToken: "<发送前上下文审核通过后返回的 token>"
+          }
+        }
       : {})
   };
 }

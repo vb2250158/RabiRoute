@@ -54,6 +54,8 @@ flowchart TD
 
 新建任务与首条消息必须分开理解：允许短生命周期 bootstrap 只创建空任务元数据，但创建后必须等待 Desktop 索引识别同一个 ID；首条及后续真实消息仍由 Desktop owner 接收。等待期间不能因“暂时查不到”再次创建。
 
+创建事务还必须在 Manager 运行期保存持久 reservation。`thread/start` 前先记录 `reserved/creating`，取得 ID 后立即记录 `thread_created`，再进入命名和初始 turn；HTTP 回执丢失、命名失败或 Manager 重启后，只要无法证明 `thread/start` 尚未执行，就保持 `uncertain` 并禁止自动再次创建。`state_db` 回读负责补充证据，不能替代 reservation 成为幂等真源。
+
 ## 身份与状态规则
 
 - 用户界面显示 `任务名称 + 最后会话时间`，不要求用户查看或输入 UUID。
@@ -110,6 +112,7 @@ flowchart TD
 | 初始化消息首次失败 | 保留已创建 ID；只重试消息 |
 | 超过 100 个任务 | 仍可找到和选择全部任务 |
 | 设置页闲置、输入、失焦、保存 | 扫描请求数不增长 |
+| Desktop 系统链接只切到项目，没有加载目标任务 owner | 每次投递只请求打开一次；继续有限等待后明确失败，要求用户在 Desktop 左侧打开目标任务或回到 RabiRoute 重选；不得反复抢占窗口焦点 |
 | Desktop 未运行 | 明确失败；不启动备用 Runtime |
 | RabiRoute 未运行 | Desktop 独立正常启动 |
 | 残留 endpoint 环境变量 | Rabi 子进程忽略；安装器不写入 |

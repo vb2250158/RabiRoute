@@ -69,4 +69,32 @@ test("a continuous transcript source enters the shared ledger once without becom
   assert.equal(entries[0].transport, "phone-companion");
   assert.equal(entries[0].recordedAt, "2026-07-14T09:30:04.000Z");
   assert.equal(entries[0].capturedAt, Date.parse("2026-07-14T09:30:00.000Z"));
+  assert.equal(entries[0].identityEndpoints, undefined);
+});
+
+test("record-first keeps normalized trusted device and multi-speaker endpoints for later identity review", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-record-first-identities-"));
+  recordRabiLinkVoiceObservation({
+    time: 1,
+    rawMessage: "多人语音观察",
+    messageId: "mobile-audio-one",
+    adapterType: "rabilink",
+    senderName: "Phone",
+    senderIdentityTrusted: true,
+    voiceIdentityTrusted: true,
+    identityNamespace: "relay:rabilink",
+    senderStableId: "phone-one",
+    sourceHostId: "speech-host",
+    segments: [
+      { id: 1, start: 0, end: 1, text: "第一人", voiceprintId: "voice-a" },
+      { id: 2, start: 1, end: 2, text: "第二人", speakerClusterId: "voice-b" }
+    ]
+  }, { dataDir, wakeReviewer: false });
+
+  const endpoints = readRabiLinkConversationEntries(dataDir)[0]?.identityEndpoints ?? [];
+  assert.deepEqual(endpoints.map(item => [item.platform, item.endpointIdentityNamespace, item.senderStableId]), [
+    ["voice", "host:speech-host", "voice-a"],
+    ["voice", "host:speech-host", "voice-b"],
+    ["rabilink", "relay:rabilink", "phone-one"]
+  ]);
 });

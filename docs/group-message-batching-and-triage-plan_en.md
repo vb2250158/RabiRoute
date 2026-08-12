@@ -26,7 +26,7 @@ With Message Agent mode enabled:
 - If the Agent for a message group is busy, new batches enter that group's queue instead of starting a second Agent on the same context.
 - Different message groups in one conversation may still run in parallel.
 - The Primary Persona, Secretary, and Plan Agents remain available with separate responsibilities.
-- Agents create reply intents; RabiRoute Outbox and the platform adapter still own delivery, deduplication, retries, and receipts.
+- Agents create reply intents; RabiRoute Outbox and the platform adapter still own delivery, deduplication, retries, and receipts. Before a message-processing reply can be sent, Manager returns the latest bounded bidirectional context and binds approval to its version, prior replies, the sending session, and the exact payload. A new group message or another Agent reply invalidates the old approval.
 - Message Agents may join ordinary group discussion, offer ideas, and point out risks without mechanically replying to every line. Manager creates required delivery items for explicit mentions, direct replies, private messages, and plan-progress notifications.
 
 ## Four Agent types
@@ -82,7 +82,8 @@ flowchart TB
     P -->|"Progress or result"| H
     N -->|"Decision or reply"| H
 
-    K --> Q{"Send policy"}
+    K --> T0["Read latest conversation context and review this exact send"]
+    T0 --> Q{"Send policy"}
     Q -->|"Auto-send allowed"| R["Outbox"]
     Q -->|"Confirmation required"| S["Pending draft"]
     S --> R
@@ -180,13 +181,15 @@ The same person speaking in the same group is not sufficient to merge unrelated 
 
 After group resolution, select a Message Agent in this order:
 
-1. The Agent that previously handled this message group.
-2. Same endpoint + same group/conversation + same speaker.
-3. Same endpoint + same group/conversation.
-4. Same endpoint.
+1. When the inbound group message quotes a platform message sent by an Agent, RabiRoute looks up the send record by endpoint, platform message ID, and Route. If the record's complete Agent session ID belongs to the current Message Agent pool, that task receives `6000` points.
+2. The Agent that previously handled this message group receives `5000` points.
+3. Same endpoint + same group/conversation + same speaker adds `3000`; same endpoint + same group/conversation adds `2000`; same endpoint alone adds `1000`.
+4. RabiRoute ranks by the sum instead of treating the quoted send as a non-overridable route. A missing matching session, an older receipt without sender data, a lookup failure, or a disabled task only removes this extra preference; the other scores still apply.
 5. When no affinity matches, prefer the least-recently-used Message Agent that Codex currently reports as `idle`.
 6. `notLoaded` means an existing task is not loaded yet. RabiRoute reuses it and lets Desktop open it through the normal owner path instead of treating it as a reason to create.
 7. Dynamically create a Message Agent only while Desktop is currently online and every registered task is explicitly `active` or reserved by the current allocation. When Desktop is offline, status cannot be read, or the owner is not ready, the message group remains in the recoverable queue and the pool must not expand.
+
+The Agent type and session ID in a send record are caller-declared values preserved by RabiRoute. They support audit and routing preference, not session authentication. Each quoted-message lookup and whether the selected task matched that session are recorded in operational logs without chat text.
 
 Candidates must be Codex handlers with **Message Agent mode** enabled, be available, and have permission for the Route. Dynamic creation uses a Codex Message Agent template with that mode enabled; it never converts the Primary Persona, Secretary, or a Plan Agent into a Message Agent.
 
@@ -204,12 +207,17 @@ A Message Agent normally receives:
 
 1. The current batch with original IDs, senders, and attachments.
 2. The replied-to message and available reply ancestry.
-3. Bounded recent bidirectional traffic controlled by `recentMessageLimits`.
-4. The group summary, participants, unresolved questions, and processing cursor.
-5. Related-plan title, status, latest progress, and waits.
-6. The last reply actually sent and its Outbox receipt.
+3. The nearest discussion fragment from the five minutes before the current message, used first for corrections and short follow-ups such as “it is dynamic,” “not this one,” or “what is the actual content?”
+4. Bounded recent bidirectional traffic controlled by `recentMessageLimits`.
+5. The group summary, participants, unresolved questions, and processing cursor.
+6. Related-plan title, status, latest progress, and waits.
+7. The last reply actually sent and its Outbox receipt.
 
 Full chat logs, all plans, and full Agent histories are not default input. When evidence is insufficient, the Agent queries older records by message, group, or plan ID. Messages already present in the current batch are excluded from recent history to prevent duplication.
+
+NapCat images are downloaded into runtime storage as soon as the message arrives and recorded as `ready` or `unavailable`. Ready images, including saved images from the reply ancestry, are delivered as Desktop `localImage` inputs. Every new requirement lists mandatory source-message, reply-chain, and attachment IDs. The Agent must submit `sourceEvidenceReview` before reply or closure. An unreadable attachment blocks an inferred reply and permits only retrieval retry or handoff.
+
+When a Message Agent finally sends a quoted QQ reply, it must also provide `params.replyImageDescriptions`. The array follows the quoted message's image order and states what each image contains and communicates. The send boundary checks this again against the stored source instead of trusting `sourceEvidenceReview` alone. After a successful send, each description is appended to a same-name `.md` beside its image, allowing later work to trace the interpretation to a delivery and complete Agent session.
 
 Each message group maintains one replaced short working state: objective, confirmed conclusions, unresolved questions, linked plans, last reply, and cursor. It does not become a second transcript.
 

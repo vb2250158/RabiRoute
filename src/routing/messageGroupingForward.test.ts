@@ -28,9 +28,32 @@ test("forward records map to a stable endpoint, conversation, speaker, and reply
 
   assert.equal(input?.endpoint, "napcat");
   assert.match(input?.conversationKey ?? "", /group:10001/);
-  assert.match(input?.baseKey ?? "", /sender:小明/);
+  assert.doesNotMatch(input?.baseKey ?? "", /小明/);
+  assert.match(input?.baseKey ?? "", /sender:[a-f0-9]{24}/);
   assert.match(input?.key ?? "", /reply:29999/);
   assert.match(input?.identity ?? "", /message:30003/);
+});
+
+test("message grouping separates identical display names when their stable QQ accounts differ", () => {
+  const first = messageGroupEnqueueInputForForward("group_message", {
+    time: 1, groupId: 10001, userId: 20002, senderName: "QA", messageId: 1, rawMessage: "第一条"
+  }, {}, policy, "route-main");
+  const second = messageGroupEnqueueInputForForward("group_message", {
+    time: 2, groupId: 10001, userId: 20003, senderName: "QA", messageId: 2, rawMessage: "第二条"
+  }, {}, policy, "route-main");
+
+  assert.notEqual(first?.baseKey, second?.baseKey);
+});
+
+test("message grouping keeps one stable QQ account together after its display name changes", () => {
+  const first = messageGroupEnqueueInputForForward("group_message", {
+    time: 1, groupId: 10001, userId: 20002, senderName: "旧昵称", messageId: 1, rawMessage: "第一条"
+  }, {}, policy, "route-main");
+  const second = messageGroupEnqueueInputForForward("group_message", {
+    time: 2, groupId: 10001, userId: 20002, senderName: "新昵称", messageId: 2, rawMessage: "第二条"
+  }, {}, policy, "route-main");
+
+  assert.equal(first?.baseKey, second?.baseKey);
 });
 
 test("message-group merge keeps every fragment, attachment, message id, and strongest route", () => {

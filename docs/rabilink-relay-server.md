@@ -310,7 +310,7 @@ X-RabiLink-Token: <app-token>
 
 record-first 审阅结果和其他主动消息不带 `taskId`，使用 `proactive=true`。旧的直接消息兼容路径仍可带原输入 `taskId` 和 `proactive=false`；`taskId` 只提供关联，不会让下行等待上行任务。`deliveryId` 是幂等键：如果服务器已经创建队列项但响应丢失，生产者可用同一个值重试，Relay 会返回原消息而不会再次排队。
 
-RabiRoute 内部更推荐复用动作安全门：向 `/api/agent/send` 发送稳定 `deliveryId`、精确 `routeId`、`channel=rabilink`、包含 `proactive=true` 和目标设备的 `params`，以及文本 `payload`。通过路由输出策略后，RabiRoute 才会调用 `/worker/messages`。这样定时器、计划器和其他 Agent 不需要绕过现有审计边界。
+RabiRoute 内部更推荐复用动作安全门：向 `/api/agent/send` 发送稳定 `deliveryId`、调用方 `sender.agentType + sender.sessionId`、精确 `routeId`、`channel=rabilink`、包含 `proactive=true` 和目标设备的 `params`，以及文本 `payload`。通过路由输出策略后，RabiRoute 才会调用 `/worker/messages`。这样定时器、计划器和其他 Agent 不需要绕过现有审计边界。
 
 ### 手机、手表和其他便携端
 

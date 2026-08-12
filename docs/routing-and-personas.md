@@ -8,13 +8,13 @@
 
 > 状态：现行指南。说明 route、role/persona 和处理端的真实边界。
 
-路由入口参数见 [路由配置](routing-configuration.md)。这里专门讲人格包，以及跟随人格的消息模板规则。
+路由入口参数见 [路由配置](routing-configuration.md)。这里专门讲人格包，以及跟随人格的自动化规则。
 
 ## 路由人格
 
 RabiRoute 现在把路由配置和路由人格分开：
 
-- `data/route/<配置名>/`：路由配置包。放 `adapterConfig.json`，决定消息端、端口、Agent 端和指向哪个人格。
+- `data/route/<配置名>/`：路由配置包。放 `adapterConfig.json`，决定消息端、端口、Agent 端、指向哪个人格，以及本机是否允许人格自动化运行脚本。
 - `data/roles/<RoleId>/`：人格配置包。放 `persona.md`、`personaConfig.json`、成长记录、提示词和角色知识。
 
 一个角色目录通常包含：
@@ -30,6 +30,7 @@ RabiRoute 现在把路由配置和路由人格分开：
 │   ├── current.jsonl
 │   └── archive/
 ├── growth.md
+├── scripts/                # 可选；自动化可运行的 cmd/bat/py
 ├── skills.md
 ├── skills/
 └── prompts/
@@ -54,7 +55,7 @@ data/route/voice/adapterConfig.json
 data/route/dev-review/adapterConfig.json
 ```
 
-上面三套路由可以分别配置消息端、端口、热投递模式和 Agent 投递方式，也可以指向同一个人格。不要为了多个 Route 复制人格；同一个人格复用根级 `personaConfig.json` 中的消息模板规则、语音唤醒关键词和分消息端上下文额度。
+上面三套路由可以分别配置消息端、端口、热投递模式、Agent 投递方式和本机脚本权限，也可以指向同一个人格。不要为了多个 Route 复制人格；同一个人格复用根级 `personaConfig.json` 中的自动化规则、语音唤醒关键词和分消息端上下文额度。
 
 ## 人格之间怎样联系
 
@@ -163,13 +164,13 @@ cp -R examples/data/. data/
 xcopy examples\data data /E /I
 ```
 
-然后在 WebUI 的路由配置中把 `指向人格` 选择为 `Rabi`。选择人格后，转发给处理端的提示末尾会追加角色文件路径，消息模板规则从该角色的 `personaConfig.json` 读取。
+然后在 WebUI 的路由配置中把 `指向人格` 选择为 `Rabi`。选择人格后，转发给处理端的提示末尾会追加角色文件路径，自动化规则从该角色的 `personaConfig.json` 读取。
 
 项目内还提供了一个开源 skill，用来指导创建新人格：
 
 - `skills/create-rabiroute-persona/SKILL.md`
 
-它说明了如何一起设计 `persona.md` 和 `personaConfig.json`，让角色既有稳定气质，也有对应的消息模板规则。
+它说明了如何一起设计 `persona.md` 和 `personaConfig.json`，让角色既有稳定气质，也有对应的自动化规则。
 
 RabiPC 语音输入、人格回复与 RabiSpeech TTS 工作站可参考：
 

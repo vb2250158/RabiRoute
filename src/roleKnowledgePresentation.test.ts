@@ -849,13 +849,14 @@ test("memory pages filter full memory content and return bounded cursors with st
   const page = paginateRoleMemory(items, "", 1, "PERFORMANCE TARGET", {
     recent: 2,
     consolidated: 3,
+    archived: 4,
     consolidationRuns: 1
   });
 
   assert.deepEqual(page.items.map((item) => item.id), ["newer"]);
   assert.equal(page.total, 1);
   assert.equal(page.nextCursor, "");
-  assert.deepEqual(page.counts, { recent: 2, consolidated: 3, consolidationRuns: 1 });
+  assert.deepEqual(page.counts, { recent: 2, consolidated: 3, archived: 4, consolidationRuns: 1 });
   assert.equal(normalizeRoleMemoryPageLimit(null), 24);
   assert.equal(normalizeRoleMemoryPageLimit("999"), 100);
 });

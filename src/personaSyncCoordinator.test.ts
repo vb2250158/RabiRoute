@@ -175,6 +175,14 @@ test("persona sync coordinator uses Relay discovery and converges peer JSONL ove
     deviceId: "pc-a",
     deviceGuid: "guid-a"
   }));
+  const preview = await coordinator.preview("pc-b", "Rabi");
+  assert.equal(preview.peer.name, "Peer B");
+  assert.equal(preview.transport, "lan");
+  assert.equal(preview.files.find(file => file.path === "local.md")?.operation, "push_create");
+  assert.equal(preview.files.find(file => file.path === "remote.md")?.operation, "pull_create");
+  assert.equal(preview.files.find(file => file.path === "conversation/current.jsonl")?.operation, "auto_merge");
+  assert.equal(fs.existsSync(path.join(rolesA, "Rabi", "remote.md")), false);
+  assert.equal(fs.existsSync(path.join(rolesB, "Rabi", "local.md")), false);
   const [result, duplicateResult] = await Promise.all([
     coordinator.sync("pc-b", "Rabi"),
     coordinator.sync("pc-b", "Rabi")
@@ -189,7 +197,7 @@ test("persona sync coordinator uses Relay discovery and converges peer JSONL ove
   assert.equal(identityConflict?.recordKind, "participant");
   assert.equal(identityConflict?.recordId, "participant-sync-conflict");
   assert.deepEqual(duplicateResult, result);
-  assert.equal(discoveryRequests, 1);
+  assert.equal(discoveryRequests, 2);
   const localRows = fs.readFileSync(path.join(rolesA, "Rabi", "conversation", "current.jsonl"), "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line));
   const remoteRows = fs.readFileSync(path.join(rolesB, "Rabi", "conversation", "current.jsonl"), "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line));
   assert.deepEqual(localRows.map(row => row.id), ["a", "b", "voice-b"]);

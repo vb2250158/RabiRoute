@@ -10,11 +10,14 @@ import {
   normalizeMessageAdapterPolicies,
   normalizeMessageProcessingAgentPolicies,
   normalizeCodexReasoningEffort,
+  normalizePersonaAutomationRules,
   normalizeScheduleDefinitions,
   normalizeSpeechPushMode,
   normalizeSpeechTriggerKeywords,
   resolvePrimaryAgentAdapter,
+  notificationRulesFromPersonaAutomations,
   type NotificationScheduleDefinition,
+  type PersonaAutomationRuleDefinition,
   type RecentMessageLimits,
   type CodexReasoningEffort,
   type SpeechPushMode
@@ -72,6 +75,8 @@ export type RouteProfile = {
   rolesDir: string;
   dataDir?: string;
   routeVariables: Record<string, string>;
+  automationRules?: PersonaAutomationRuleDefinition[];
+  personaAutomationScriptsEnabled?: boolean;
   notificationRules: NotificationRule[];
 };
 
@@ -354,10 +359,13 @@ function normalizeRouteProfile(item: unknown, index: number, defaults: RouteProf
   });
   const roleId = identity.roleId;
   const id = identity.runtimeId;
-  const rules = parseNotificationRules(JSON.stringify(raw.notificationRules ?? [])) ?? [];
+  const automationRules = normalizePersonaAutomationRules(raw.automationRules);
+  const rules = automationRules.length > 0
+    ? parseNotificationRules(JSON.stringify(notificationRulesFromPersonaAutomations(automationRules))) ?? []
+    : parseNotificationRules(JSON.stringify(raw.notificationRules ?? [])) ?? [];
   const pipelinePreset = typeof raw.pipelinePreset === "string" && raw.pipelinePreset.trim() ? raw.pipelinePreset.trim() : undefined;
   const pipeline = normalizePipelineDefinition(raw.pipeline);
-  if (rules.length === 0) {
+  if (rules.length === 0 && automationRules.length === 0) {
     return null;
   }
 
@@ -382,6 +390,8 @@ function normalizeRouteProfile(item: unknown, index: number, defaults: RouteProf
     routeVariables: raw.routeVariables && typeof raw.routeVariables === "object" && !Array.isArray(raw.routeVariables)
       ? Object.fromEntries(Object.entries(raw.routeVariables).map(([key, value]) => [key, String(value)]))
       : {},
+    automationRules,
+    personaAutomationScriptsEnabled: raw.personaAutomationScriptsEnabled === true,
     notificationRules: rules
   };
 }
@@ -404,6 +414,9 @@ const agentRoleFile = process.env.AGENT_ROLE_FILE?.trim() || "persona.md";
 const agentRoleDir = agentRoleId ? roleFolderPath(rolesDir, agentRoleId) : "";
 const agentRolePath = agentRoleId ? roleFilePath(rolesDir, agentRoleId, agentRoleFile) : "";
 const notificationRules = parseNotificationRules(process.env.NOTIFICATION_RULES) ?? [];
+const automationRules = normalizePersonaAutomationRules(
+  parseJsonEnvironmentValue(process.env.AUTOMATION_RULES, "AUTOMATION_RULES")
+);
 const recentMessageLimits = normalizeRecentMessageLimits(
   parseJsonEnvironmentValue(process.env.RECENT_MESSAGE_LIMITS, "RECENT_MESSAGE_LIMITS"),
   process.env.RECENT_MESSAGE_LIMIT
@@ -557,10 +570,12 @@ export const config = {
   groupIndirectReplyNotificationTemplate: process.env.GROUP_INDIRECT_REPLY_NOTIFICATION_TEMPLATE || process.env.GROUP_NICKNAME_NOTIFICATION_TEMPLATE || process.env.GROUP_NOTIFICATION_TEMPLATE || defaultGroupIndirectReplyNotificationTemplate,
   privateNotificationTemplate: process.env.PRIVATE_NOTIFICATION_TEMPLATE || defaultPrivateNotificationTemplate,
   heartbeatNotificationTemplate: process.env.HEARTBEAT_NOTIFICATION_TEMPLATE || defaultHeartbeatNotificationTemplate,
+  personaAutomationScriptsEnabled: parseBoolean(process.env.PERSONA_AUTOMATION_SCRIPTS_ENABLED, false),
   voiceTranscriptNotificationTemplate: process.env.VOICE_TRANSCRIPT_NOTIFICATION_TEMPLATE || defaultVoiceTranscriptNotificationTemplate,
   recentMessageLimits,
   speechPushMode,
   speechTriggerKeywords,
+  automationRules,
   notificationRules,
   routeProfiles
 };

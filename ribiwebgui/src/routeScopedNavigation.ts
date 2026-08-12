@@ -35,6 +35,11 @@ export function routeScopedPersonaDocumentPath(routeKey: string): string {
   return normalized ? `${routeScopedPersonaPath(normalized)}/document` : "/persona";
 }
 
+export function routeScopedPersonaSyncPath(routeKey: string): string {
+  const normalized = routeKey.trim();
+  return normalized ? `${routeScopedPersonaPath(normalized)}/sync` : "/persona";
+}
+
 export function routeScopedSpeechPath(routeKey: string): string {
   return routeScopedPagePath(routeKey, "speech");
 }
@@ -46,7 +51,7 @@ export function routeScopedRuntimePath(routeKey: string): string {
 export function routeScopedPageFromPath(path: string): RouteScopedPage | "" {
   if (path === "/overview" || /^\/routes\/[^/]+\/overview$/.test(path)) return "overview";
   if (path === "/routes" || /^\/routes\/[^/]+(?:\/adapters)?$/.test(path)) return "adapters";
-  if (path === "/persona" || /^\/persona\/[^/]+$/.test(path) || /^\/routes\/[^/]+\/persona(?:\/document)?$/.test(path)) return "persona";
+  if (path === "/persona" || /^\/persona\/[^/]+$/.test(path) || /^\/routes\/[^/]+\/persona(?:\/(?:document|sync))?$/.test(path)) return "persona";
   if (path === "/knowledge" || /^\/routes\/[^/]+\/knowledge$/.test(path)) return "knowledge";
   if (path === "/speech" || /^\/routes\/[^/]+\/speech$/.test(path)) return "speech";
   if (path === "/runtime" || /^\/routes\/[^/]+\/runtime$/.test(path)) return "runtime";
@@ -57,12 +62,15 @@ export function routeScopedPathForCurrentPage(routeKey: string, currentPath: str
   if (/^\/routes\/[^/]+\/persona\/document$/.test(currentPath)) {
     return routeScopedPersonaDocumentPath(routeKey);
   }
+  if (/^\/routes\/[^/]+\/persona\/sync$/.test(currentPath)) {
+    return routeScopedPersonaSyncPath(routeKey);
+  }
   const page = routeScopedPageFromPath(currentPath);
   return page ? routeScopedPagePath(routeKey, page) : "";
 }
 
 export function routeKeyFromWebguiHash(hash: string): string {
-  const match = hash.match(/^#\/routes\/([^/?#]+)(?:\/(?:overview|adapters|persona(?:\/document)?|knowledge|speech|runtime))?(?:[/?#]|$)/)
+  const match = hash.match(/^#\/routes\/([^/?#]+)(?:\/(?:overview|adapters|persona(?:\/(?:document|sync))?|knowledge|speech|runtime))?(?:[/?#]|$)/)
     || hash.match(/^#\/persona\/([^/?#]+)(?:[/?#]|$)/);
   if (!match?.[1]) return "";
   try {

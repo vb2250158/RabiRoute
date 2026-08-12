@@ -1,14 +1,14 @@
 {
   "id": "memory-rabiroute-action-safety",
   "title": "外部消息必须通过 RabiRoute 明确发送安全门",
-  "content": "Agent 向外部消息端发送内容时统一 POST /api/agent/send，并明确填写稳定 deliveryId、精确 routeId、channel、渠道专用 params 和 payload。来源 replyContext 只用于审计，不能作为发送目标，也不能让 Route 默认管线改写明确渠道。RabiRoute 只在目标完整、消息端发送策略允许、payload 类型被 supportedOutputs 支持时发送；否则返回 draft、blocked 或 failed。本地群文件还必须位于 allowedFileRoots，上传与说明文本分别审计，避免说明文本失败后重复上传大文件。完整链路是 Agent output -> explicit send request -> policy -> send adapter -> external system -> receipt and audit log。",
+  "content": "Agent 向外部消息端发送内容时统一 POST /api/agent/send，并明确填写稳定 deliveryId、调用方 sender.agentType 与 sender.sessionId、精确 routeId、channel、渠道专用 params 和 payload。完成回执保存发送 Agent 类型和完整会话 ID，并可按渠道与 sentMessageId 反查；来源 replyContext 只用于审计，不能作为发送目标。NapCat 群消息必须明确 replyToMessageId：有来源时填真实 ID，主动无源时填空字符串。消息处理回复必须持有与最新上下文、发送会话、目标和正文一致的短时 send-context 审核；引用图片还需逐张提交具体描述，检查失败发生在幂等 reservation 和 Outbox 之前。RabiRoute 只在目标、证据、发送策略和 payload 类型都满足要求时发送，否则返回 draft、blocked 或 failed。",
   "source": {
     "kind": "example",
     "summary": "公开文档沉淀：Agent 回复与外部动作安全门"
   },
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-15T00:00:00+08:00",
+  "updatedAt": "2026-08-12T20:21:06+08:00",
   "inputMemoryIds": [],
   "consolidationRunId": "",
-  "keywords": ["send API", "/api/agent/send", "deliveryId", "routeId", "channel", "params", "replyContext", "draft", "Action Gate", "outbox", "allowedFileRoots", "group file"]
+  "keywords": ["send API", "/api/agent/send", "deliveryId", "sender.agentType", "sender.sessionId", "sentMessageId", "routeId", "channel", "replyToMessageId", "send-context", "sourceEvidenceReview", "replyImageDescriptions", "Action Gate", "outbox", "idempotency"]
 }

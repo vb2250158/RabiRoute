@@ -1,12 +1,12 @@
 {
   "id": "memory-rabiroute-explicit-send-and-identity-context",
   "title": "明确发送与身份关系上下文必须分开处理目标、事实和权限",
-  "content": "RabiRoute 的 Agent 外发统一使用 POST /api/agent/send，并明确填写稳定 deliveryId、精确 routeId、channel、渠道专用 params 和 payload；来源 replyContext 只用于审计，不能推断发送目标。人格身份关系按平台、消息端命名空间和稳定发送者 ID 精确匹配，可保存参与者、账号映射和限定范围的关系卡。候选关系只用于核对，已确认身份也不自动建立项目归属、委托、决策或修改记录的权限。对话情境可以帮助 Agent 判断是否适合参与讨论，但不包含聊天正文，也不能代替后续授权判断。",
+  "content": "RabiRoute 的 Agent 外发统一使用 POST /api/agent/send，并明确填写稳定 deliveryId、调用方 sender.agentType 与 sender.sessionId、精确 routeId、channel、渠道专用 params 和 payload；完成回执保存发送 Agent 类型与完整会话 ID，来源 replyContext 只用于审计，不能推断发送目标。消息处理回复还要先完成 send-context 审核并覆盖当前来源、递归引用链和附件；引用 QQ 图片时需按原顺序逐张说明图片内容和含义，未实际看到的附件不能猜测。人格身份关系按平台、消息端命名空间和稳定发送者 ID 精确匹配；共用账号的可能使用者与某条消息的实际发言者分开判断，候选或已确认身份都不自动授予项目权限。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：明确发送、身份关系和对话情境的安全边界"
   },
   "createdAt": "2026-08-10T15:20:00+08:00",
-  "updatedAt": "2026-08-10T15:20:00+08:00",
-  "keywords": ["/api/agent/send", "deliveryId", "routeId", "身份关系", "消息端命名空间", "稳定发送者 ID", "候选关系", "对话情境", "项目权限", "AgentPacket"]
+  "updatedAt": "2026-08-12T20:21:06+08:00",
+  "keywords": ["/api/agent/send", "deliveryId", "sender.agentType", "sender.sessionId", "routeId", "send-context", "sourceEvidenceReview", "replyImageDescriptions", "身份关系", "共用账号", "稳定发送者 ID", "候选关系", "项目权限", "AgentPacket"]
 }

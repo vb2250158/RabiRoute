@@ -5,6 +5,18 @@ import { withFileLockSync } from "./shared/filePersistence.js";
 import type { ResolvedForwardMessage } from "./napcatForwardMessages.js";
 import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
 
+export type MessageAttachmentRecord = {
+  id: string;
+  kind: "image" | "video" | "audio" | "file";
+  name: string;
+  mimeType?: string;
+  size?: number;
+  path?: string;
+  status: "ready" | "unavailable";
+  error?: string;
+  sourceMessageId?: string;
+};
+
 export type GroupMessageRecord = {
   time: number;
   groupId: number;
@@ -22,6 +34,8 @@ export type GroupMessageRecord = {
   botNickname?: string;
   isSelf?: boolean;
   lookupSource?: "onebot_get_msg";
+  attachments?: MessageAttachmentRecord[];
+  segments?: unknown[];
 };
 
 export type PrivateMessageRecord = {
@@ -38,6 +52,8 @@ export type PrivateMessageRecord = {
   botNickname?: string;
   isSelf?: boolean;
   lookupSource?: "onebot_get_msg";
+  attachments?: MessageAttachmentRecord[];
+  segments?: unknown[];
 };
 
 export type HeartbeatEventRecord = {
@@ -91,6 +107,14 @@ export type VoiceTranscriptEventRecord = {
   messageId?: number | string;
   senderName?: string;
   adapterType?: string;
+  /** Stable non-secret identity of the configured message endpoint, when supplied by a generic adapter. */
+  identityNamespace?: string;
+  /** Stable sender/account ID inside identityNamespace for non-voice generic messages. */
+  senderStableId?: string;
+  /** Set only by an authenticated adapter after it derives the sender account itself. */
+  senderIdentityTrusted?: boolean;
+  /** Set only by the host that performed voiceprint processing; remote payloads cannot grant this flag. */
+  voiceIdentityTrusted?: boolean;
   gatewayId?: string;
   instanceId?: string;
   source?: string;

@@ -1,6 +1,7 @@
 export type IdentityRelationStatus = "candidate" | "confirmed" | "corrected" | "retired";
 export type IdentityParticipantKind = "person" | "organization" | "shared_account" | "automated" | "unknown";
 export type IdentityRelationTargetKind = "participant" | "organization" | "project";
+export type IdentitySpeakingHabitDimension = "sentence_opening" | "sentence_length" | "stance_expression" | "emotion_threshold" | "analogy_source" | "punctuation" | "reader_relationship" | "value_preference" | "information_order" | "avoidance" | "imperfection" | "scene_boundary";
 
 export type IdentityEvidenceRef = {
   gatewayId?: string;
@@ -14,6 +15,13 @@ export type IdentityEvidenceRef = {
 export type IdentityParticipantLink = {
   participantId: string;
   status: IdentityRelationStatus;
+  confidence?: number;
+  evidenceRefs: IdentityEvidenceRef[];
+};
+
+export type IdentitySpeakingHabit = {
+  dimension: IdentitySpeakingHabitDimension;
+  description: string;
   confidence?: number;
   evidenceRefs: IdentityEvidenceRef[];
 };
@@ -45,6 +53,7 @@ export type IdentityParticipant = ConflictState & {
   kind: IdentityParticipantKind;
   displayName?: string;
   aliases: string[];
+  speakingHabits?: IdentitySpeakingHabit[];
   status: IdentityRelationStatus;
   evidenceRefs: IdentityEvidenceRef[];
   updatedAt: string;
@@ -73,6 +82,7 @@ export type IdentityRelationPatch = {
   participantId?: string;
   participantKind?: IdentityParticipantKind;
   aliases?: string[];
+  speakingHabits?: IdentitySpeakingHabit[];
   relationId?: string;
   subjectParticipantId?: string;
   targetKind?: IdentityRelationTargetKind;

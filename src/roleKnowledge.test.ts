@@ -10,6 +10,8 @@ import {
   getPlan,
   getRecentMemory,
   getRoleSkill,
+  listActiveRecentMemories,
+  listArchivedMemories,
   listConsolidatedMemories,
   listPlans,
   listRecentMemories,
@@ -24,6 +26,7 @@ import {
   presentRoleMemory,
   presentRoleMemories,
   roleContextInjectionPolicy,
+  roleMemoryCounts,
   planRequiresApproval,
   roleKnowledgeSnapshot,
   subscribePlanUpdates,
@@ -847,6 +850,51 @@ test("consolidated sources are not consolidated again while consolidated output 
   assert.equal(snapshot.requiredReadItems.some((item) => item.id === "memory-output" && item.type === "consolidated_memory"), true);
   const recalled = readConsolidatedMemory(roleDir, "memory-output");
   assert.equal(typeof recalled.recalledAt, "string");
+});
+
+test("memory catalogs expose recent, consolidated, and archived memories as separate categories", () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-active-category",
+    title: "仍属近期",
+    focus: "近期记忆分类",
+    content: "尚未沉淀。",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    keywords: ["分类"]
+  });
+  writeRecentMemory(roleDir, {
+    id: "memory-archived-category",
+    title: "已归档来源",
+    focus: "归档记忆分类",
+    content: "已经进入沉淀流程。",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    consolidatedAt: "2026-08-02T00:00:00.000Z",
+    consolidationRunId: "run-category",
+    keywords: ["分类"]
+  });
+  writeConsolidatedMemory(roleDir, {
+    id: "memory-consolidated-category",
+    title: "沉淀记忆",
+    focus: "沉淀记忆分类",
+    content: "整理后的稳定结论。",
+    createdAt: "2026-08-02T00:00:00.000Z",
+    updatedAt: "2026-08-02T00:00:00.000Z",
+    inputMemoryIds: ["memory-archived-category"],
+    consolidationRunId: "run-category",
+    keywords: ["分类"]
+  });
+
+  assert.deepEqual(listActiveRecentMemories(roleDir).map((memory) => memory.id), ["memory-active-category"]);
+  assert.deepEqual(listArchivedMemories(roleDir).map((memory) => memory.id), ["memory-archived-category"]);
+  assert.deepEqual(listConsolidatedMemories(roleDir).map((memory) => memory.id), ["memory-consolidated-category"]);
+  assert.deepEqual(roleMemoryCounts(roleDir), {
+    recent: 1,
+    consolidated: 1,
+    archived: 1,
+    consolidationRuns: 0
+  });
 });
 
 test("large consolidation writes yield to the Manager event loop", async () => {

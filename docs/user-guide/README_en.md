@@ -37,9 +37,7 @@ To prove that the software works, start with Heartbeat and Codex. This path does
 
 See [Run your first Route](first-route_en.md) for the full procedure. When you are ready for QQ, continue with [Routes and message adapters](routes-and-adapters_en.md).
 
-![The console showing the current message route, Manager connection, and runtime state](../../assets/screenshots/webgui-overview-en.png)
-
-The Route was paused for the screenshot to prevent a real delivery. In normal use, confirm **Manager connected**, then save and start your own Route.
+In normal use, confirm **Manager connected**, then save and start your own Route.
 
 ## Find a guide by goal
 

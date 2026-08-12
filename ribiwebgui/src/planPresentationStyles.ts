@@ -1,7 +1,7 @@
 import type { RolePlan } from "./types";
 
 export type PlanPresentationPalette = RolePlan["presentation"]["palette"];
-export type PlanKnowledgeView = "plans" | "recent_memory" | "archived";
+export type PlanKnowledgeView = "plans" | "recent_memory" | "consolidated_memory" | "archived";
 export type PlanListSortMode = "status" | "updated";
 
 export const FALLBACK_PLAN_PRESENTATION_PALETTE: PlanPresentationPalette = {
@@ -85,6 +85,6 @@ export function formatPlanVideoDuration(duration: number | undefined): string {
 }
 
 export function plansForKnowledgeView(plans: RolePlan[], view: PlanKnowledgeView): RolePlan[] {
-  if (view === "recent_memory") return [];
+  if (view === "recent_memory" || view === "consolidated_memory") return [];
   return plans.filter((plan) => plan.presentation.views.includes(view));
 }

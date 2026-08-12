@@ -67,7 +67,7 @@ Use:
 POST /api/agent/send
 ```
 
-with the injected `sendRequestJson` template. Every request must provide a stable `deliveryId`, an exact `routeId`, one `channel`, channel-specific `params`, and a `payload`. The source `replyContext` is audit context and is not a send target. Outbox returns `sent`, `draft`, `blocked`, or `failed`.
+with the injected `sendRequestJson` template. Every request must provide a stable `deliveryId`, the calling Agent's `sender.agentType + sender.sessionId`, an exact `routeId`, one `channel`, channel-specific `params`, and a `payload`. NapCat group sends must keep `replyToMessageId`: use the source ID when a quote is possible, or `""` for an intentional unquoted message; omission returns actionable guidance to the Agent. The source `replyContext` is audit context and is not a send target. Outbox returns `sent`, `draft`, `blocked`, or `failed`.
 
 The explicit `channel` selects QQ/NapCat, WeCom, RabiLink, speech, or another supported endpoint even when the Route's default pipeline differs. The adapter policy must allow output, and required target parameters must be present.
 

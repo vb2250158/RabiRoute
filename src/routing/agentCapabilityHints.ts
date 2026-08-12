@@ -42,8 +42,8 @@ export function voiceIdentityReviewCapabilityHint(
     "主机只保存不透明声纹、分段和模型证据，不判断是谁，也不判断谁是用户；归类结论只属于当前人格。",
     `- 查询当前人格语音归类：GET ${baseUrl}/api/roles/${rolePath}/voice-transcripts?from=<ISO>&to=<ISO>&speaker=<user|other|unknown|conflict>&limit=200`,
     "省略 speaker 可同时取得 user/other/unknown/conflict 汇总；matchedCount 和 summary 基于完整筛选结果，不受明细 limit 截断。",
-    `- 查询当前人格声纹关系：GET ${baseUrl}/api/roles/${rolePath}/voice-identities`,
-    `- 确认或修正关系：PUT ${baseUrl}/api/roles/${rolePath}/voice-identities`,
+    `- 查询语音消息端账号的兼容归类：GET ${baseUrl}/api/roles/${rolePath}/voice-identities`,
+    `- 确认或修正语音账号归类：PUT ${baseUrl}/api/roles/${rolePath}/voice-identities`,
     "关系写入示例：",
     JSON.stringify({
       sourceHostId: "<从语音记录取得>",

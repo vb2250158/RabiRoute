@@ -7,6 +7,7 @@ import { forwardMessage, recordMessageContextOnly, type ForwardRouteKind } from 
 import { appendAdapterLog, appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "../history.js";
 import { getLoginInfo, getStatus, sendGroupMessage, sendPrivateMessage, type NapCatEndpoint } from "../napcat.js";
 import { enrichNapCatMessage } from "../napcatForwardMessages.js";
+import { materializeNapCatAttachments } from "../napcatMedia.js";
 import { resolveNapCatReplyChain } from "../napcatReplyMessages.js";
 import type { MessageAdapter } from "./messageAdapter.js";
 
@@ -396,6 +397,20 @@ async function handleGroupMessage(event: OneBotEvent, instance: NapCatInstanceCo
   const selfMessage = isSelfMessage(event);
 
   const enriched = await enrichNapCatMessage(event.message, textFromEvent(event), endpointFor(instance));
+  const attachments = await materializeNapCatAttachments(event.message, textFromEvent(event), {
+    dataDir: config.memoryDataDir,
+    instanceId: instance.id,
+    messageId: event.message_id ?? `${event.time ?? Math.floor(Date.now() / 1000)}-${event.user_id}`
+  });
+  for (const attachment of attachments.filter((item) => item.status === "unavailable")) {
+    appendAdapterLog("napcat", {
+      level: "warning",
+      event: "message_attachment_unavailable",
+      instanceId: instance.id,
+      message: attachment.error || "NapCat image could not be materialized.",
+      data: { messageId: event.message_id, attachmentId: attachment.id, kind: attachment.kind }
+    });
+  }
   for (const error of enriched.errors) {
     appendAdapterLog("napcat", {
       level: "warning",
@@ -434,7 +449,9 @@ async function handleGroupMessage(event: OneBotEvent, instance: NapCatInstanceCo
     adapterType: "napcat",
     botUserId: event.self_id != null ? String(event.self_id) : undefined,
     botNickname: readGatewayStatus().napcatInstances?.[instance.id]?.botNickname,
-    isSelf: selfMessage
+    isSelf: selfMessage,
+    attachments: attachments.length ? attachments : undefined,
+    segments: messageSegments(event)
   };
 
   if (selfMessage) {
@@ -492,6 +509,20 @@ async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstance
   const selfMessage = isSelfMessage(event);
 
   const enriched = await enrichNapCatMessage(event.message, textFromEvent(event), endpointFor(instance));
+  const attachments = await materializeNapCatAttachments(event.message, textFromEvent(event), {
+    dataDir: config.memoryDataDir,
+    instanceId: instance.id,
+    messageId: event.message_id ?? `${event.time ?? Math.floor(Date.now() / 1000)}-${event.user_id}`
+  });
+  for (const attachment of attachments.filter((item) => item.status === "unavailable")) {
+    appendAdapterLog("napcat", {
+      level: "warning",
+      event: "message_attachment_unavailable",
+      instanceId: instance.id,
+      message: attachment.error || "NapCat image could not be materialized.",
+      data: { messageId: event.message_id, attachmentId: attachment.id, kind: attachment.kind }
+    });
+  }
   for (const error of enriched.errors) {
     appendAdapterLog("napcat", {
       level: "warning",
@@ -528,7 +559,9 @@ async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstance
     adapterType: "napcat",
     botUserId: event.self_id != null ? String(event.self_id) : undefined,
     botNickname: readGatewayStatus().napcatInstances?.[instance.id]?.botNickname,
-    isSelf: selfMessage
+    isSelf: selfMessage,
+    attachments: attachments.length ? attachments : undefined,
+    segments: messageSegments(event)
   };
 
   if (selfMessage) {

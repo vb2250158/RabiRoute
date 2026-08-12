@@ -102,3 +102,57 @@ test("responses fail closed when source, target, or required fields do not match
     responsePolicy: "none"
   }), /nextAction is required/);
 });
+
+test("responses accept equivalent normal and extended Windows workspace paths", () => {
+  const store = new AgentRequestStore(new MemoryPersistence());
+  const prepared = store.prepare({
+    source: { ...parties().source, workspace: "\\\\?\\C:\\Data\\CottonProject\\RabiRoute" },
+    target: { ...parties().target, workspace: "C:\\Data\\CottonProject\\RabiRoute" },
+    responsePolicy: "required",
+    responseInstruction: "请回复"
+  });
+  store.commit(prepared);
+
+  const response = store.prepare({
+    source: { ...parties().target, workspace: "\\\\?\\C:\\Data\\CottonProject\\RabiRoute" },
+    target: { ...parties().source, workspace: "C:\\Data\\CottonProject\\RabiRoute\\" },
+    inReplyToRequestId: prepared.requestId,
+    result: "done",
+    nextAction: "none",
+    responsePolicy: "none"
+  });
+  assert.equal(response.inReplyToRequestId, prepared.requestId);
+});
+
+test("equivalent workspace replies reserve, release, and commit pendingResponseDeliveryId", () => {
+  const store = new AgentRequestStore(new MemoryPersistence());
+  const request = store.prepare({
+    source: { ...parties().source, workspace: "\\\\?\\C:\\Data\\CottonProject\\RabiRoute" },
+    target: { ...parties().target, workspace: "C:\\Data\\CottonProject\\RabiRoute" },
+    responsePolicy: "required",
+    responseInstruction: "请回复"
+  });
+  store.commit(request);
+
+  const responseInput = {
+    source: { ...parties().target, workspace: "\\\\?\\C:\\Data\\CottonProject\\RabiRoute" },
+    target: { ...parties().source, workspace: "C:\\Data\\CottonProject\\RabiRoute\\" },
+    inReplyToRequestId: request.requestId,
+    result: "done",
+    nextAction: "none",
+    responsePolicy: "none" as const
+  };
+  const firstAttempt = store.prepare(responseInput);
+  assert.equal(store.get(request.requestId || "")?.pendingResponseDeliveryId, firstAttempt.deliveryId);
+  assert.throws(() => store.prepare(responseInput), /response delivery in progress/);
+
+  store.abort(firstAttempt);
+  assert.equal(store.get(request.requestId || "")?.pendingResponseDeliveryId, undefined);
+
+  const retry = store.prepare(responseInput);
+  store.commit(retry, { action: "steered", transport: "desktop-ipc" });
+  const completed = store.get(request.requestId || "");
+  assert.equal(completed?.status, "responded");
+  assert.equal(completed?.pendingResponseDeliveryId, undefined);
+  assert.equal(completed?.response?.deliveryId, retry.deliveryId);
+});

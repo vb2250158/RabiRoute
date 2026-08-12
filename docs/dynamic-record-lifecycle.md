@@ -30,8 +30,9 @@ triggerAfterHours = 72
 | --- | --- | --- | --- |
 | 人格统一双向账本 | `data/roles/<RoleId>/conversation/current.jsonl` | 动态归档 | 有记录超过 72 小时时，将超过 24 小时的最大连续前缀移入序号归档 |
 | 账本历史 | `conversation/archive/<first>~<last>.jsonl` 和 `index.json` | 保留 | 按稳定序号检索，不按自然日删除 |
-| 近期记忆 | `memory/recent/*.md`，兼容旧 JSON | 沉淀 | 可编辑/默认显示按 `updatedAt` 与 `viewedAt`；24/72 沉淀按 `updatedAt` 与 `recalledAt`，并固定原始触发时的候选上限 |
-| 沉淀记忆 | `memory/consolidated/*.md`，兼容旧 JSON | 稳定保留 | 显式整理触发后生成；来源近期记忆保留并标记 run，沉淀结果仍可召回 |
+| 近期记忆 | `memory/recent/*.md`，兼容旧 JSON | 沉淀 | 只有没有 `consolidatedAt` 的记录属于近期记忆；可编辑/默认显示按 `updatedAt` 与 `viewedAt`；24/72 沉淀按 `updatedAt` 与 `recalledAt`，并固定原始触发时的候选上限 |
+| 已归档记忆来源 | `memory/recent/*.md` 中带 `consolidatedAt` 的记录 | 追溯保留 | 不再计入近期记忆，也不再次沉淀；在“已归档”中与归档计划一起查看 |
+| 沉淀记忆 | `memory/consolidated/*.md`，兼容旧 JSON | 稳定保留 | 整理触发后生成，在独立“沉淀记忆”分类中继续参与召回 |
 | 公共语音消息 | `data/speech/messages/YYYY-MM-DD.jsonl` | 日期分卷的审计流水 | 当前按自然日物理分片；这本身不是归档或沉淀 |
 | 公共语音 Markdown 导出 | `data/speech/exports/transcript-*.md` | 按需重建的阅读视图 | 从公共语音消息按指定左闭右开时间段生成，不是真源 |
 | RabiSpeech 诊断记录 | `plugin-adapters/rabi-speech/output/records/YYYY-MM-DD.jsonl` | 日期分卷的诊断流水 | 与人格路由记录分离 |
@@ -61,7 +62,7 @@ triggerAfterHours = 72
 3. 收集超过 24 小时且尚未沉淀的近期记忆。
 4. 记录整理 run、输入 ID 和生成结果。
 5. 保留来源近期记忆，并写入 `consolidatedAt` 与 `consolidationRunId`。
-6. 不把来源移动到归档目录，不直接覆盖已有沉淀记忆。
+6. 来源文件不必移动目录，但写入 `consolidatedAt` 后在 Manager 和界面中归为“已归档”；不直接覆盖已有沉淀记忆。
 
 Manager 会为最早的 72 小时触发点设置一次性任务；到点时重新读取记忆活跃时间，再决定是否创建和投递沉淀 run。它不使用常驻轮询。
 

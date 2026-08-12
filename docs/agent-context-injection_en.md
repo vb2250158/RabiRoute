@@ -49,11 +49,11 @@ It does not inject every chat log, unrelated active indexes, complete plan body,
 
 A display name, group-owner or administrator flag, current Route, current workspace, and keyword similarity cannot independently establish who someone is or which project they own. A persona may keep separate identity-relation knowledge. On delivery, RabiRoute performs an exact lookup by `platform + endpointIdentityNamespace + senderStableId`. The Route configuration ID is delivery provenance only. For NapCat, a bot QQ ID takes precedence as the endpoint namespace; a renameable instance name is only the fallback. WeCom, Feishu, and Weixin are queried only when their message record carries a stable endpoint namespace; without one, the system declines to match rather than merge equal-looking IDs from different accounts. Moving the same account to another Route therefore does not create another person, and different endpoints are not silently treated as one account.
 
-When there is a match, `[Identity relations]` contains only the current account, confirmed participant, candidate mappings, relations scoped to the current conversation or project, and unresolved ambiguity. If append-only events form concurrent branches after multi-PC synchronization, the record is explicitly conflicted; it cannot confirm identity automatically until the persona submits one complete correction that supersedes those branches. It does not copy chat bodies or enter plan/recent-memory keyword recall and callback handling. A candidate is a verification lead only: it cannot be used to address a real person, grant authority, infer project ownership, or turn a discussion into a plan for the current project.
+When an unfamiliar stable account first appears, the system automatically creates a separate “getting to know” candidate participant, and later messages from the same stable account reuse it. A display name is only a candidate alias. When explicit self-description, a new form of address, or another reviewable relationship clue appears, the processing Agent may append minimal evidence through the candidate-observation API; it writes nothing when no new clue was learned. `[Identity relations]` contains only the current account, confirmed participant, candidate mappings, relations scoped to the current conversation or project, and unresolved ambiguity. If append-only events form concurrent branches after multi-PC synchronization, the record is explicitly conflicted; it cannot confirm identity automatically until the persona submits one complete correction that supersedes those branches. It does not copy chat bodies or enter plan/recent-memory keyword recall and callback handling. A candidate is a verification lead only: it cannot be used to address a real person, grant authority, infer project ownership, or turn a discussion into a plan for the current project.
 
-Identity relations answer only who is speaking and which long-lived relations are known. The next `[Conversation situation (shadow assessment)]` reads only project relation cards that already apply to this conversation and presents them as discussion leads; it never infers a project from the Route, current workspace, display name, or keywords. The card explicitly permits the Agent to join a useful discussion, clarify a question, or offer a suggestion, while defaulting to no query, creation, update, or handoff of project plans, tasks, or long-term project memory. A handler may enter project-management or execution flow only after it has separate, explicit project scope, request, and authorization.
+Identity relations answer only who is speaking and which confirmed or candidate relations are known. The next `[Situation record]` reads only project relation cards that already apply to this conversation and presents them as discussion leads; it never infers a project from the Route, current workspace, display name, or keywords. The record explicitly permits the Agent to join a useful discussion, clarify a question, or offer a suggestion, while defaulting to no query, creation, update, or handoff of project plans, tasks, or long-term project memory. A handler may enter project-management or execution flow only after it has separate, explicit project scope, request, and authorization.
 
-Once that AgentPacket enters the actual delivery path, RabiRoute retains the situation card as a persona-local shadow record without chat text. It contains only the conversation key, message IDs, Route, identity/project leads, unresolved evidence, and the participate-versus-manage decision. The Persona page can review recent records to find a mistaken assessment. This does not change send outcomes or automatically write plans, tasks, or memory. Each persona keeps the latest 200 records. Because a situation card is derived from the original conversation and relation cards, it does not join multi-PC persona synchronization; the canonical bidirectional conversation ledger remains the source for the original chat.
+Once that AgentPacket enters the actual delivery path, RabiRoute retains a persona-local situation record without chat text. It contains only the conversation key, message IDs, Route, identity/project leads, unresolved evidence, and the participate-versus-manage decision. The Persona page can review recent records to find a mistaken assessment. This does not change send outcomes or automatically write plans, tasks, or memory. Each persona keeps the latest 200 records. Because a situation record is derived from the original conversation and relation cards, it does not join multi-PC persona synchronization; the canonical bidirectional conversation record remains the source for the original chat.
 
 ## Canonical bidirectional conversation ledger
 
@@ -103,7 +103,7 @@ RabiRoute places this text in the `[User template supplement]` section. Event fi
 
 ## Current wrapper
 
-The exact output omits empty or disabled sections, but its shape is:
+For ordinary messages, the wrapper presents `[Recent messages]` before the current `[Message]`. Focused discussion, immediately addressed context, and reply parsing remain adjacent to the current message. The exact output omits empty or disabled sections, but its shape is:
 
 ```text
 [RabiRoute event]
@@ -114,6 +114,12 @@ Current time: <currentTime>
 Source: <messageTarget>
 Sender: <sender>
 
+[Recent messages]
+Current endpoint: <recentMessageEndpoint>
+Current conversation: <recentConversationKey>
+Latest <recentMessageLimit> bidirectional messages for this endpoint and conversation:
+<recentMessages>
+
 [Message]
 <message>
 
@@ -121,12 +127,6 @@ Sender: <sender>
 [CQ:reply,id=<messageId>] : <referenced-message preview>
   [CQ:reply,id=<messageId>] : <earlier referenced-message preview>
 [CQ:at,qq=<qq>] : <group card or nickname>
-
-[Recent messages]
-Current endpoint: <recentMessageEndpoint>
-Current conversation: <recentConversationKey>
-Latest <recentMessageLimit> bidirectional messages for this endpoint and conversation:
-<recentMessages>
 
 [Role and paths]
 Role: <agentRoleId>
@@ -176,7 +176,7 @@ Requirement: use one stable unique deliveryId per business delivery; replies reu
 
 For `heartbeat` and `plan_feedback`, the entire recent-message section is omitted. `{recentMessageLimit}` is `0` and `{recentMessages}` is an empty string, so a custom template cannot reintroduce historical message bodies. Heartbeat audit logs and the unified ledger continue to be recorded for explicit on-demand inspection. Plan feedback keeps only its dedicated feedback audit, AgentPacket, and delivery logs; it is not duplicated into the role-panel timeline or unified conversation ledger.
 
-Codex final text is only a record in the current handler task. It does not prove that the source user, Primary Persona, or another Agent received anything. A platform send must start from `sendRequestJson`, submit an exact `routeId`, `channel`, channel-specific `params`, and `payload`, and obtain that channel's receipt. The handler must not submit `replyContextJson` as the destination or infer a destination from the source. A handoff to the Primary Persona, Secretary, or Plan Agent must use the Manager thread bridge with the sender's complete task ID and Agent type. A draft, approval question, or progress summary that never enters one of these exits cannot be marked replied or notified.
+Codex final text is only a record in the current handler task. It does not prove that the source user, Primary Persona, or another Agent received anything. A platform send must start from `sendRequestJson`, fill `sender.agentType` and the current complete `sender.sessionId`, submit an exact `routeId`, `channel`, channel-specific `params`, and `payload`, and obtain that channel's receipt. A NapCat group request must keep `params.replyToMessageId`: use the source message ID whenever a quote is possible, or `""` for an intentional unquoted message. If the quoted message contains images, `params.replyImageDescriptions` must describe every image in original order, including what is visible and what it communicates; an unreadable image, missing description, or count mismatch blocks sending. The handler must not submit `replyContextJson` as the destination or infer a destination from the source. A handoff to the Primary Persona, Secretary, or Plan Agent must use the Manager thread bridge with the sender's complete task ID and Agent type. A draft, approval question, or progress summary that never enters one of these exits cannot be marked replied or notified.
 
 The cross-persona capability proves only the Route and persona that own the current AgentPacket. It is never returned by `GET /api/personas`, the target timeline, or delivery receipts. `sourceRouteId` alone does not authenticate a sender. After a target persona receives a cross-persona message, an ordinary reply does not return to the source automatically; it must explicitly POST back with the received conversation, reply-reference, and hop fields.
 
@@ -186,7 +186,7 @@ When a `voice_transcript` explicitly comes from the RabiPC `speech` message endp
 
 Speech also has an explicit record-before-wake policy. Route `speechPushMode=hot` delivers every completed ASR segment immediately. `keyword` records every segment and delivers only when the persona-owned `speechTriggerKeywords` matches; an empty keyword list never falls back to hot. Matched ordinary endpoint messages otherwise enter Desktop `steer/start` directly, while Heartbeat's busy skip remains a separate switch.
 
-The processing host, voiceprint IDs, and persona voice-identity file path appear only on voice-transcript records. QQ, role-panel, and other non-audio events omit these voice-specific fields.
+The processing host, voiceprint IDs, and compatibility voice-account data path appear only on voice-transcript records. QQ, role-panel, and other non-audio events omit these voice-specific fields.
 
 When no role is bound, RabiRoute uses a direct-message section instead of role knowledge. It still injects the event, logs, reply context, and delivery requirements.
 

@@ -4,6 +4,12 @@ import {
   type AgentReplyRequest,
   type AgentReplyResult
 } from "./outbox.js";
+import {
+  archiveReplyImageDescriptions,
+  prepareReplyImageDescriptions,
+  type ReplyImageDescriptionArchive,
+  type ReplyImageDescriptionPlan
+} from "./replyImageDescriptions.js";
 
 export type AgentSendChannel =
   | "napcat"
@@ -16,8 +22,14 @@ export type AgentSendChannel =
   | "role_panel"
   | "plan_feedback";
 
+export type AgentSendSender = {
+  agentType: string;
+  sessionId: string;
+};
+
 export type AgentSendRequest = {
   deliveryId?: unknown;
+  sender?: unknown;
   routeId?: unknown;
   channel?: unknown;
   params?: unknown;
@@ -26,15 +38,21 @@ export type AgentSendRequest = {
 };
 
 export type AgentSendResult = AgentReplyResult & {
+  deliveryId?: string;
+  sender?: AgentSendSender;
   channel?: AgentSendChannel;
   routeId?: string;
   target?: Record<string, unknown>;
+  replyImageDescriptionArchive?: ReplyImageDescriptionArchive;
 };
 
 type NormalizedAgentSend = {
   deliveryId: string;
+  sender: AgentSendSender;
   routeId: string;
   channel: AgentSendChannel;
+  allowAdditionalReply: boolean;
+  replyImageDescriptions: string[];
   target: Record<string, unknown>;
   internal: AgentReplyRequest;
 };
@@ -68,6 +86,20 @@ function textValue(value: unknown, field: string, required = true): string | und
   if (text) return text;
   if (!required) return undefined;
   throw new Error(`Missing ${field}.`);
+}
+
+function senderValue(value: unknown): AgentSendSender {
+  const sender = objectValue(value, "sender");
+  assertOnlyFields(sender, ["agentType", "sessionId"], "sender");
+  const agentType = textValue(sender.agentType, "sender.agentType") as string;
+  const sessionId = textValue(sender.sessionId, "sender.sessionId") as string;
+  if (agentType.length > 80 || !/^[A-Za-z][A-Za-z0-9._-]*$/.test(agentType)) {
+    throw new Error("sender.agentType must be a stable Agent type identifier.");
+  }
+  if (sessionId.length > 500 || /[\u0000-\u001f\u007f]/.test(sessionId)) {
+    throw new Error("sender.sessionId must be a stable session identifier without control characters.");
+  }
+  return { agentType, sessionId };
 }
 
 function booleanValue(value: unknown, field: string, fallback = false): boolean {
@@ -106,15 +138,16 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
 }
 
 function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
-  assertOnlyFields(request as Record<string, unknown>, ["deliveryId", "routeId", "channel", "params", "payload", "tracking"], "request");
+  assertOnlyFields(request as Record<string, unknown>, ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking"], "request");
   const deliveryId = textValue(request.deliveryId, "deliveryId") as string;
+  const sender = senderValue(request.sender);
   const routeId = textValue(request.routeId, "routeId") as string;
   const channel = textValue(request.channel, "channel") as AgentSendChannel;
   if (!SEND_CHANNELS.has(channel)) throw new Error(`Unsupported send channel: ${channel}.`);
   const params = objectValue(request.params, "params");
   const payload = payloadFields(objectValue(request.payload, "payload"));
   const tracking = objectValue(request.tracking, "tracking", false);
-  assertOnlyFields(tracking, ["requirementId"], "tracking");
+  assertOnlyFields(tracking, ["requirementId", "sendContextReviewToken"], "tracking");
   const requirementId = textValue(tracking.requirementId, "tracking.requirementId", false);
   const replyContext: Record<string, unknown> = requirementId
     ? { messageProcessingRequirementId: requirementId }
@@ -122,20 +155,40 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   const internal: AgentReplyRequest = {
     ...payload,
     deliveryId,
+    senderAgentType: sender.agentType,
+    senderSessionId: sender.sessionId,
     routeProfileId: routeId,
     explicitTarget: true,
     sendChannel: channel,
     replyContext
   };
+  let allowAdditionalReply = false;
+  let replyImageDescriptions: string[] = [];
   let target: Record<string, unknown>;
 
   if (channel === "napcat") {
-    assertOnlyFields(params, ["target", "groupId", "userId", "instanceId", "replyToMessageId"], "params");
+    assertOnlyFields(params, ["target", "groupId", "userId", "instanceId", "replyToMessageId", "replyImageDescriptions", "allowAdditionalReply"], "params");
     const targetType = textValue(params.target, "params.target") as "group" | "private";
     if (targetType !== "group" && targetType !== "private") throw new Error("params.target must be group or private for napcat.");
     const groupId = targetType === "group" ? textValue(params.groupId, "params.groupId") : undefined;
     const userId = targetType === "private" ? textValue(params.userId, "params.userId") : undefined;
+    const hasReplyToMessageId = Object.prototype.hasOwnProperty.call(params, "replyToMessageId");
+    if (targetType === "group" && !hasReplyToMessageId) {
+      throw new Error(
+        "NapCat group sends must include params.replyToMessageId. "
+        + "Use the source QQ message ID whenever the message can be quoted, "
+        + "or pass an empty string (\"\") for an intentional unquoted group message."
+      );
+    }
+    if (hasReplyToMessageId && typeof params.replyToMessageId !== "string" && typeof params.replyToMessageId !== "number") {
+      throw new Error("params.replyToMessageId must be a QQ message ID string/number, or an empty string for an intentional unquoted group message.");
+    }
     const replyToMessageId = textValue(params.replyToMessageId, "params.replyToMessageId", false);
+    replyImageDescriptions = stringList(params.replyImageDescriptions, "params.replyImageDescriptions");
+    allowAdditionalReply = booleanValue(params.allowAdditionalReply, "params.allowAdditionalReply");
+    if (targetType === "group" && sender.agentType === "message_processing" && !replyToMessageId) {
+      throw new Error("message_processing NapCat group sends require a non-empty params.replyToMessageId so the reply stays attached to its source message.");
+    }
     target = { target: targetType, groupId, userId, instanceId: textValue(params.instanceId, "params.instanceId", false), replyToMessageId };
     Object.assign(internal, {
       adapterType: "napcat",
@@ -222,20 +275,51 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     });
   }
 
-  return { deliveryId, routeId, channel, target, internal };
+  return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, internal };
 }
 
 export function prepareAgentSendRequest(request: AgentSendRequest): NormalizedAgentSend {
   return normalizeAgentSend(request);
 }
 
+function replyImageDescriptionPlan(
+  normalized: NormalizedAgentSend,
+  options: AgentReplyOptions
+): ReplyImageDescriptionPlan | undefined {
+  return prepareReplyImageDescriptions({
+    deliveryId: normalized.deliveryId,
+    sender: normalized.sender,
+    routeId: normalized.routeId,
+    channel: normalized.channel,
+    target: normalized.target,
+    replyImageDescriptions: normalized.replyImageDescriptions
+  }, options);
+}
+
+export function validateAgentSendReplyImageDescriptions(
+  request: AgentSendRequest,
+  options: AgentReplyOptions
+): void {
+  replyImageDescriptionPlan(normalizeAgentSend(request), options);
+}
+
 export async function handleAgentSend(request: AgentSendRequest, options: AgentReplyOptions): Promise<AgentSendResult> {
   const normalized = normalizeAgentSend(request);
+  const imageDescriptionPlan = replyImageDescriptionPlan(normalized, options);
   const result = await handleAgentReply(normalized.internal, options);
+  const replyImageDescriptionArchive = result.status === "sent" && imageDescriptionPlan
+    ? archiveReplyImageDescriptions(imageDescriptionPlan, {
+        rootDir: options.rootDir,
+        sentMessageId: result.sentMessageId
+      })
+    : undefined;
   return {
     ...result,
+    deliveryId: normalized.deliveryId,
+    sender: normalized.sender,
     channel: normalized.channel,
     routeId: normalized.routeId,
-    target: normalized.target
+    target: normalized.target,
+    replyImageDescriptionArchive
   };
 }

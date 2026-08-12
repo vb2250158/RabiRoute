@@ -3,11 +3,14 @@ import path from "node:path";
 import {
   autoAssignGatewayPorts,
   ensureDefaultPersonaRules,
+  ensureDefaultPersonaAutomations,
+  mergePersonaAutomationRules,
   normalizeGatewayDefinition,
   validateGatewayPortConflicts,
   type GatewayConfigFile,
   type GatewayDefinition,
-  type NotificationRuleDefinition
+  type NotificationRuleDefinition,
+  type PersonaAutomationRuleDefinition
 } from "../shared/gatewayConfigModel.js";
 import { toPersistedProjectPath } from "../shared/projectPaths.js";
 import {
@@ -130,11 +133,14 @@ export class ManagerConfigRepository {
     roleId: string,
     fragment: Pick<
       GatewayDefinition,
-      "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
+      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
     >
   ): void {
     writePersonaConfigFile(this.personaConfigPath(roleId), {
       ...fragment,
+      automationRules: fragment.automationRules === undefined
+        ? undefined
+        : ensureDefaultPersonaAutomations(fragment.automationRules),
       notificationRules: fragment.notificationRules === undefined
         ? undefined
         : ensureDefaultPersonaRules(mergeNotificationRules(fragment.notificationRules))
@@ -205,7 +211,7 @@ export class ManagerConfigRepository {
     const activeConfigNames = new Set<string>();
     const groupedByRole = new Map<string, Pick<
       GatewayDefinition,
-      "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
+      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
     >>();
     for (let i = 0; i < normalized.gateways.length; i += 1) {
       const definition = normalized.gateways[i];
@@ -229,6 +235,7 @@ export class ManagerConfigRepository {
           recentMessageLimit: previous?.recentMessageLimit ?? definition.recentMessageLimit,
           recentMessageLimits: previous?.recentMessageLimits ?? definition.recentMessageLimits,
           speechTriggerKeywords: previous?.speechTriggerKeywords ?? definition.speechTriggerKeywords,
+          automationRules: mergePersonaAutomationRules(previous?.automationRules, definition.automationRules),
           notificationRules: mergeNotificationRules(previous?.notificationRules, definition.notificationRules)
         });
       }
@@ -243,6 +250,7 @@ export class ManagerConfigRepository {
   private adapterConfigItem(definition: GatewayDefinition): Partial<GatewayDefinition> {
     const {
       notificationRules: _notificationRules,
+      automationRules: _automationRules,
       roleNotificationRules: _roleNotificationRules,
       roleRouteNames: _roleRouteNames,
       routeProfiles: _routeProfiles,

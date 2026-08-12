@@ -10,6 +10,7 @@ import type {
   NapCatInstanceDefinition,
   NotificationScheduleDefinition,
   NotificationRuleDefinition,
+  PersonaAutomationRuleDefinition,
   PipelineDefinition
 } from "@shared/gatewayConfigModel";
 import type { PersonaAvatarPresentation } from "@shared/personaAvatarContract";
@@ -26,6 +27,7 @@ export type {
   MessageAdapterType,
   MessagePayloadKind,
   NotificationScheduleDefinition,
+  PersonaAutomationRuleDefinition,
   PipelineDefinition
 } from "@shared/gatewayConfigModel";
 
@@ -361,4 +363,5 @@ export type RoleMemory = {
 export type RoleMemoryPayload = {
   recent: RoleMemory[];
   consolidated: RoleMemory[];
+  archived?: RoleMemory[];
 };

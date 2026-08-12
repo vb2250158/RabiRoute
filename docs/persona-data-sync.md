@@ -6,7 +6,7 @@
 
 # 多电脑人格数据同步
 
-> 状态：实验支持。当前代码已经具备同应用设备发现、局域网直连、Relay 受限中转、文件清单、双向合并、冲突留证、人格页操作面板和事件驱动自动对账；仍需真实多电脑、断线和大数据量长期验收。
+> 状态：实验支持。当前代码已经具备同应用设备发现、局域网直连、Relay 受限中转、只读文件比较、双向合并、冲突留证、独立同步工作台和事件驱动自动对账；仍需真实多电脑、断线和大数据量长期验收。
 
 ## 边界
 
@@ -42,7 +42,7 @@ Relay fallback 是请求中转，不是服务器人格仓库。文件内容只�
 | `voice/cache/tts-audio/` | 可再生语音缓存，不同步。 |
 | 超过 16 MiB 的单文件 | 当前拒绝同步。 |
 
-人格自己的声纹关系真源 `voice/voice-identities.jsonl` 与身份关系真源 `identity-relations/events.jsonl` 都使用追加事件，因此可按 JSONL 并集合并。声纹身份由 `sourceHostId + voiceprintId` 定位；身份关系记录由其账号、参与者或关系卡 ID 定位。新事件自动记录所收敛的父事件头；两台 PC 并发修改同一记录时会保留多个头并显式暴露冲突，不做最后写入者覆盖。声纹关系返回 `conflicted/conflictFields/conflictCandidates`；身份关系返回 `conflicted/conflictEventIds/conflictCandidates`，并停止自动确认。人格再次提交完整的最终解释会 supersede 全部当前头，使后续同步收敛。
+现有语音消息端账号归类仍以兼容数据 `voice/voice-identities.jsonl` 保存，通用身份关系以 `identity-relations/events.jsonl` 保存。两者都使用追加事件，因此可按 JSONL 并集合并。语音账号由 `sourceHostId + voiceprintId` 定位；通用身份关系记录由其账号、参与者或关系卡 ID 定位。新事件自动记录所收敛的父事件头；两台 PC 并发修改同一记录时会保留多个头并显式暴露冲突，不做最后写入者覆盖。语音账号归类返回 `conflicted/conflictFields/conflictCandidates`；身份关系返回 `conflicted/conflictEventIds/conflictCandidates`，并停止自动确认。人格再次提交完整的最终解释会 supersede 全部当前头，使后续同步收敛。自动创建的陌生账号候选若只在昵称、候选别名或观察证据上不同，会合并这些非权威线索；参与者类型、确认状态或账号映射等实质分歧仍保留为冲突。
 
 自动覆盖或删除前会把旧文件归档到运行期 `data/persona-sync/archive/`。不能安全合并的远端内容或删除意图写入 `data/persona-sync/conflicts/`，不会污染正式人格文件；本机 Agent 或用户确认后可选择保留本地、采用远端（删除冲突时表示确认删除），或提交明确的合并内容。处理时会校验本地文件哈希，避免基于过期版本覆盖；原冲突证据与元数据移入 `data/persona-sync/resolved-conflicts/`，并留下 `.resolution.json` 解决记录。
 
@@ -63,6 +63,7 @@ GET  /api/persona-sync/peers
 GET  /api/persona-sync/manifest?roleId=Rabi
 GET  /api/persona-sync/index-status
 GET  /api/persona-sync/auto-status
+GET  /api/persona-sync/preview?peerId=<peer>&roleId=Rabi
 GET  /api/persona-sync/files/<roleId>/<relativePath>
 POST /api/persona-sync/merge
 POST /api/persona-sync/sync
@@ -80,7 +81,7 @@ POST /api/persona-sync/conflicts/resolve
 }
 ```
 
-省略 `roleId` 时同步全部人格。返回结果会逐文件标明 `pull`、`push`、`converged` 和 `conflict`；`fileConflicts` 统计文件级冲突，`semanticConflicts` 同步返回已合并 JSONL 中仍存在的声纹关系或身份关系分支，`conflicts` 是两者总数。声纹项包含人格、处理主机、声纹 ID、冲突字段和候选事件 ID；身份关系项包含人格、记录类型、记录 ID 和候选事件 ID。因此发起同步的 Agent 可在同一次响应里处理，不需要事后轮询。`conflicts > 0` 时 HTTP 返回 `409`，Agent 不应宣称同步完成。
+省略 `roleId` 时同步全部人格。返回结果会逐文件标明 `pull`、`push`、`converged` 和 `conflict`；`fileConflicts` 统计文件级冲突，`semanticConflicts` 同步返回已合并 JSONL 中仍存在的语音账号归类或通用身份关系分支，`conflicts` 是两者总数。语音项包含人格、处理主机、声纹 ID、冲突字段和候选事件 ID；身份关系项包含人格、记录类型、记录 ID 和候选事件 ID。因此发起同步的 Agent 可在同一次响应里处理，不需要事后轮询。`conflicts > 0` 时 HTTP 返回 `409`，Agent 不应宣称同步完成。
 
 冲突查询与解决接口只允许回环地址调用，不会暴露给专用 LAN listener，也不在 Relay proxy allowlist 中。读取列表后，先保存返回的 `localHash`，查看对应远端证据，再提交其中一种动作：
 
@@ -98,19 +99,20 @@ POST /api/persona-sync/conflicts/resolve
 
 ## WebGUI 与自动恢复
 
-人格页的“多电脑人格同步”面板可以：
+人格配置页顶部提供“多电脑人格同步”按钮，打开独立工作台。这个工作台可以：
 
 - 查看同应用 PC、在线状态、LAN/Relay 能力和本机 manifest 索引模式。
+- 选择一台电脑后只读比较两端 manifest，在 Changed Files 中显示将要拉取、推送、删除、自动合并或进入冲突的文件；比较过程不写人格文件。
 - 读取自动对账当前是等待 Relay、等待 peer、已排队、同步中、已收敛、需要确认还是暂时失败。
 - 手动立即同步当前人格，并查看拉取、推送、一致、传输类型与冲突数量。
 - 预览本机/远端文件证据，选择保留本机、采用远端或确认远端删除；高级 `use_merged` 正文仍由本机 Agent/API 提交。
-- 将人格声纹关系的语义分支引导回“人格声纹归类”，由人格明确收敛，不在同步面板自动判断谁是用户。
+- 将语音账号归类的语义分支引导回“身份关系”中的语音消息端账号，由人格明确收敛，不在同步面板自动判断谁是用户。
 
-页面打开、SSE 重连和同步状态事件只各补查一次展示状态。真正的自动对账由后端持久补偿器拥有，即使 WebGUI 没有打开也会运行；Vue 不保存 peer、manifest、冲突或待同步事实。
+页面打开、切换所选电脑、SSE 重连和同步状态事件只各补查一次展示状态。真正的自动对账由后端持久补偿器拥有，即使 WebGUI 没有打开也会运行；Vue 不保存 peer、manifest、共同基线、冲突或待同步事实。
 
 ## 已构建 Manager 只读烟测
 
-在做两台实体 PC 同步前，先验证当前 TypeScript 构建产物真的公开了人格同步、声纹关系和通用语音读取边界：
+在做两台实体 PC 同步前，先验证当前 TypeScript 构建产物真的公开了人格同步、语音账号兼容归类和通用语音读取边界：
 
 ```powershell
 npm run build:backend

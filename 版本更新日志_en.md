@@ -6,13 +6,44 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## Unreleased - 2026-07-31
+## Unreleased - 2026-08-12
 
-### Identity relations and conversation-situation context (experimental)
+### Outbound messages are attributable to an Agent session
+
+- `/api/agent/send` now requires `sender.agentType` and `sender.sessionId` for every message channel. Completed results and idempotency receipts retain both fields, and requests missing either field are rejected before Outbox.
+- In addition to receipt lookup by `deliveryId`, maintainers can use `GET /api/agent/send/traces?channel=...&sentMessageId=...` to trace a real QQ, WeCom, speech, or other endpoint receipt back to the calling Agent type and complete session ID. Older receipts do not contain these fields and cannot be retroactively attributed.
+- With Codex Message Agent mode enabled, an inbound QQ group message that quotes an Agent-sent message traces the send session by endpoint, platform message ID, and Route, then gives the matching complete session ID in the pool the largest single scheduling preference. The final choice still ranks all affinity scores; an older receipt, no matching task, or a lookup failure only removes this preference and does not block delivery.
+- Every NapCat group send must explicitly include `params.replyToMessageId`. Agents should use the real source ID when one is available, or the empty string `""` for an intentional unquoted message. Omitting the field returns an actionable pre-send error that explains both choices.
+- Message-processing replies now use `GET/POST /api/message-processing/requirements/:id/send-context`. The Agent submits its reply decision first, then reviews the latest bidirectional messages, prior Agent replies, and the complete source chain. Manager binds a two-minute approval to the context version, sending session, destination, and payload. A new group message, another Agent reply, a changed requirement state, or changed request is rejected; Primary Persona and other Agents cannot bypass the gate with an untracked source quote.
+- NapCat now downloads inbound QQ images into the runtime directory immediately and passes each local file to Codex Desktop as a `localImage`. A failed download remains unavailable evidence; a Message Agent may retry or hand off but cannot guess from text and reply without inspecting the image.
+- Message-processing requirements now include `sourceEvidenceReview`. Outcomes must cover the current source message, recursive reply chain, and every attachment with an actual observation. The nearest five-minute discussion fragment stays adjacent to the current message so another participant's correction of the Agent's prior reply is not separated from the current issue.
+- Ordinary AgentPacket delivery now presents `[Recent messages]` before the current `[Message]`; focused discussion, immediately addressed context, and reply parsing remain adjacent to the current message. `heartbeat` and `plan_feedback` still omit recent messages.
+- When a quoted NapCat group message contains images, `/api/agent/send` now requires `params.replyImageDescriptions` with one concrete content-and-meaning description per image in original order. A missing source, unreadable image, count mismatch, empty description, or generic `reviewed` response is rejected before an idempotency reservation and does not create a failed-send receipt.
+- After the real QQ send succeeds, RabiRoute creates or appends a same-name `.md` beside every `napcat-media` image. It records the source message, image position, Agent type, complete session ID, `deliveryId`, QQ receipt ID, and description. The send result returns archive mappings without copying description text into operational trace lookups.
+
+### Removed the duplicate Console introduction card
+
+- The Console no longer starts with a large card that repeats the current Route, runtime state, and message inputs. It now opens directly on the status summary. Quick setup remains in the sidebar, Route restart remains in the Route list and Log diagnostics, and action failures appear inside the Route list.
+
+### Four Plans & Memory categories
+
+- The Plans & Memory page now has four tabs: Current Plans, Recent Memory, Consolidated Memory, and Archived. Source memories that completed consolidation no longer count as recent and appear under Archived with archived plans, while stable recallable outputs have their own Consolidated Memory tab.
+- Manager memory paging and counts now expose an `archived` category. Existing source files need no migration because their current `consolidatedAt` field defines archive membership.
+
+### Persona automation and scheduled scripts
+
+- Persona configuration now uses generic `automationRules`: triggers are message arrival or a schedule, and actions are Agent delivery or script execution. Legacy `notificationRules` and nested heartbeat schedules migrate on read and use the new structure after saving.
+- Schedules support fixed intervals, daily times, and one-off date-times. Message-triggered scripts reuse existing route-kind, regex, group, and speaker matching. Agent delivery and script execution keep separate results.
+- Local scripts are disabled by default and restricted to `.cmd`, `.bat`, and `.py` files inside the current persona's `scripts/` directory. Path escape, link escape, and arbitrary command text are rejected. Scripts do not inherit Manager tokens, passwords, or message bodies, and the same rule cannot overlap on the same Route.
+- The Persona page replaces the old message-template list with **When a message arrives / Scheduled tasks** tabs, groups message rules by source, and shows fields dynamically for the selected trigger and action. It reports disabled inputs, missing script permission, invalid regex, and missing schedule values inline.
+
+### Identity positioning and conversation-situation context (experimental)
 
 - A persona can now maintain participants, endpoint-account mappings, and relation cards scoped to specific conversations or projects by the exact key `platform + endpoint identity namespace + stable sender ID`. Candidate relations are not treated as confirmed facts, and concurrent sync branches remain conflicted until an explicit review supersedes them.
-- Ordinary message delivery can inject confirmed identity relations and a conversation-situation assessment that excludes chat text. The persona page provides a review surface. A situation only explains whether the Agent may participate in a discussion; it never grants project ownership, delegation, decision authority, or permission to modify project records.
-- Unit and Manager API integration tests cover exact identity keys, candidate/confirmed/corrected states, conflict resolution, bounded situation storage, and AgentPacket injection. Live multi-endpoint maintenance, human conflict review across synced peers, and long-running acceptance remain pending.
+- The Persona page projects this data into **Recognized identities / Unrecognized identities**. A company QA or other shared account may appear for several recognized people with a **Shared** marker. Who may use the account and who wrote one particular message remain separate conclusions, so an account nickname no longer needs a fictional person record.
+- A recognized person now uses the whole card to open one identity workspace. Basic details, endpoint accounts, speaking habits, and relations are viewed and edited in the same interface without a three-dot dropdown or long-term versus short-term relation types. Accounts and relations still save separately, so a partial success is not presented as one successful all-at-once update.
+- Ordinary delivery can inject confirmed people, possible users of a shared account, and a conversation-situation assessment without chat text. Reply chains, task continuity, explicit self-identification, and speaking-habit consistency may support per-message attribution, but they cannot confirm identity alone, overwrite the shared-account relationship, or grant project authority.
+- When a trusted endpoint supplies a stable sender or voiceprint identifier and the message actually matches a Route, the persona automatically creates a reusable **getting to know** candidate. Deferred review retains those endpoint clues. Client claims, forwarded or quoted content, and inputs without a stable account identifier continue to fail closed. Unit and Manager API integration tests cover exact identity keys, shared accounts, candidate/confirmed/corrected states, voice compatibility synchronization, malformed-record recovery, and AgentPacket injection. Human conflict review across synchronized peers and long-running acceptance remain pending.
 
 ### One explicit API for Agent outbound messages
 

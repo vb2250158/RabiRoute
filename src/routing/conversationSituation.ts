@@ -81,7 +81,9 @@ export function conversationSituationForIdentity(
     speaker: {
       stableId: identity?.endpoint.senderStableId,
       confirmedParticipantId: identity?.confirmedParticipant?.id,
-      candidateParticipantIds: identity?.candidateParticipants.map(item => item.participant.id) ?? []
+      candidateParticipantIds: identity
+        ? [...identity.possibleParticipants, ...identity.candidateParticipants].map(item => item.participant.id)
+        : []
     },
     addressing: {
       target,
@@ -101,7 +103,7 @@ export function conversationSituationForIdentity(
     decisions: {
       mayParticipate: true,
       mayCreateOrUpdateCurrentProjectRecords: false,
-      reason: "身份关系和当前对话范围只能提供讨论线索；没有单独的项目范围、明确请求与授权，不能据此管理项目记录。"
+      reason: "身份定位和当前对话范围只能提供讨论线索；没有单独的项目范围、明确请求与授权，不能据此管理项目记录。"
     }
   };
 }

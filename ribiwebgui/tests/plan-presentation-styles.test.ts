@@ -149,6 +149,8 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /来源消息 \/ Feedback/);
   assert.match(page, /当前回执状态/);
   assert.match(page, /@paste="handleApprovalPaste\(plan\.id, \$event\)"/);
+  assert.match(page, /function handleApprovalPaste[\s\S]*?\.filter\(\(item\) => item\.kind === "file"\)[\s\S]*?addApprovalFiles\(planId, files, true\)/);
+  assert.match(page, /function clipboardAttachmentName[\s\S]*?if \(kind === "image"\)[\s\S]*?return file\.name/);
   assert.match(page, /function approvalRecordsForDisplay[\s\S]*?feedback\.kind === "approval_suggestion"[\s\S]*?\.reverse\(\)/);
   assert.match(page, /v-for="feedback in approvalRecordsForDisplay\(plan\)"/);
   assert.match(page, /class="knowledge-approval-record"/);
@@ -170,6 +172,12 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /@keydown\.enter="handleGuidanceEnter\(\$event, plan\)"/);
   assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance"\)/);
   assert.match(page, /stepId: guidance \? undefined : plan\.presentation\.approval\.stepId/);
+  assert.match(page, /const attachments = await approvalAttachmentUploads\(plan\.id\)/);
+  assert.match(page, /const planAttachmentIds = referencedPlanAttachmentIds\(text, allApprovalMentionCandidates\(plan\)\)/);
+  assert.match(page, /submittedApprovalAttachments\.set\(plan\.id, takeApprovalAttachments\(plan\.id\)\)/);
+  assert.doesNotMatch(page, /guidance \? \[\] : await approvalAttachmentUploads/);
+  assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)"[\s\S]*?@paste="handleApprovalPaste\(plan\.id, \$event\)"[\s\S]*?openApprovalAttachmentPicker\(plan\.id\)[\s\S]*?approvalAttachmentsFor\(plan\.id\)\.length/);
+  assert.match(page, /v-for="feedback in guidanceRecordsForDisplay\(plan\)"[\s\S]*?feedback\.attachments[\s\S]*?feedback\.planAttachments/);
   assert.match(client, /kind: input\.kind/);
   assert.match(page, /提交计划引导/);
 });

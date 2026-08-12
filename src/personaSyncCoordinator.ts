@@ -43,6 +43,38 @@ export type PersonaSyncResult = {
   conflicts: number;
 };
 
+export type PersonaSyncPreviewOperation =
+  | "unchanged"
+  | "pull_create"
+  | "pull_update"
+  | "pull_delete"
+  | "push_create"
+  | "push_update"
+  | "push_delete"
+  | "auto_merge"
+  | "conflict";
+
+export type PersonaSyncPreviewFile = {
+  roleId: string;
+  path: string;
+  operation: PersonaSyncPreviewOperation;
+  direction: "pull" | "push" | "merge" | "conflict" | "converged";
+  mergeStrategy: PersonaSyncFile["mergeStrategy"];
+  localHash?: string;
+  remoteHash?: string;
+  baseHash?: string;
+  localSize?: number;
+  remoteSize?: number;
+};
+
+export type PersonaSyncPreview = {
+  peer: PersonaSyncPeer;
+  transport: "lan" | "relay";
+  files: PersonaSyncPreviewFile[];
+  changedFiles: number;
+  conflicts: number;
+};
+
 export type PersonaSyncSemanticConflict =
   | {
       kind: "persona_voice_identity";
@@ -85,6 +117,56 @@ function applicationScope(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 24);
 }
 
+function previewFile(
+  local: PersonaSyncFile | undefined,
+  remote: PersonaSyncFile | undefined,
+  baseHash: string | undefined
+): PersonaSyncPreviewFile | null {
+  const source = local || remote;
+  if (!source) return null;
+  const common = {
+    roleId: source.roleId,
+    path: source.path,
+    mergeStrategy: source.mergeStrategy,
+    localHash: local?.sha256,
+    remoteHash: remote?.sha256,
+    baseHash,
+    localSize: local?.size,
+    remoteSize: remote?.size
+  };
+  if (local && remote && local.sha256 === remote.sha256) {
+    return { ...common, operation: "unchanged", direction: "converged" };
+  }
+  if (local && !remote) {
+    if (baseHash && local.mergeStrategy === "three-way-file") {
+      return local.sha256 === baseHash
+        ? { ...common, operation: "pull_delete", direction: "pull" }
+        : { ...common, operation: "conflict", direction: "conflict" };
+    }
+    return { ...common, operation: "push_create", direction: "push" };
+  }
+  if (!local && remote) {
+    if (baseHash && remote.mergeStrategy === "three-way-file" && remote.sha256 === baseHash) {
+      return { ...common, operation: "push_delete", direction: "push" };
+    }
+    if (baseHash && baseHash !== PERSONA_SYNC_DELETED_HASH && remote.mergeStrategy === "three-way-file") {
+      return { ...common, operation: "conflict", direction: "conflict" };
+    }
+    return { ...common, operation: "pull_create", direction: "pull" };
+  }
+  if (!local || !remote) return null;
+  if (baseHash && local.sha256 === baseHash) {
+    return { ...common, operation: "pull_update", direction: "pull" };
+  }
+  if (baseHash && remote.sha256 === baseHash) {
+    return { ...common, operation: "push_update", direction: "push" };
+  }
+  if (local.mergeStrategy === "jsonl-union") {
+    return { ...common, operation: "auto_merge", direction: "merge" };
+  }
+  return { ...common, operation: "conflict", direction: "conflict" };
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 10_000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -125,6 +207,36 @@ export class PersonaSyncCoordinator {
     });
     this.syncFlights.set(key, flight);
     return flight;
+  }
+
+  async preview(peerId: string, roleId?: string): Promise<PersonaSyncPreview> {
+    const peers = await this.peers();
+    const peer = peers.find(item => item.id === peerId || item.guid === peerId);
+    if (!peer) throw new Error(`Persona sync peer was not found: ${peerId}`);
+    if (!peer.capabilities.includes("persona-sync")) throw new Error(`Peer ${peer.name} does not advertise persona-sync.`);
+    const relay = this.relayConfig();
+    const connection = await this.connect(peer, relay, roleId);
+    const localManifest = await this.service.manifest(roleId);
+    const localFiles = new Map(localManifest.roles
+      .flatMap(role => role.files)
+      .filter(file => personaSyncFileEligible(file.path, file.size))
+      .map(file => [fileKey(file), file]));
+    const remoteFiles = new Map(connection.manifest.roles
+      .flatMap(role => role.files)
+      .filter(file => personaSyncFileEligible(file.path, file.size))
+      .map(file => [fileKey(file), file]));
+    const state = this.readState(peer.guid || peer.id, relay.token);
+    const files = [...new Set([...localFiles.keys(), ...remoteFiles.keys()])]
+      .sort()
+      .map(key => previewFile(localFiles.get(key), remoteFiles.get(key), state.hashes[key]))
+      .filter((file): file is PersonaSyncPreviewFile => Boolean(file));
+    return {
+      peer,
+      transport: connection.transport,
+      files,
+      changedFiles: files.filter(file => file.operation !== "unchanged").length,
+      conflicts: files.filter(file => file.operation === "conflict").length
+    };
   }
 
   async publishConflictResolution(

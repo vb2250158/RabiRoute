@@ -6,6 +6,7 @@ import type {
   PendingMessageGroup
 } from "../messageGrouping.js";
 import type { MessageGroupingPolicy } from "../shared/gatewayConfigModel.js";
+import { identityEndpointsForForward } from "./identityContext.js";
 
 const conversationalRouteKinds = new Set<ForwardRouteKind>([
   "private",
@@ -48,6 +49,14 @@ function stableIdentity(endpoint: string, conversationKey: string, record: Forwa
     .slice(0, 24)}`;
 }
 
+function stableSenderGroupingKey(routeKind: ForwardRouteKind, record: ForwardRecord, gatewayId?: string): string | undefined {
+  const endpoints = identityEndpointsForForward(routeKind, record, { gatewayId })
+    .map(item => `${item.platform}\0${item.endpointIdentityNamespace}\0${item.senderStableId}`)
+    .sort();
+  if (endpoints.length === 0) return undefined;
+  return createHash("sha256").update(JSON.stringify(endpoints)).digest("hex").slice(0, 24);
+}
+
 export function messageGroupEnqueueInputForForward(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
@@ -61,10 +70,12 @@ export function messageGroupEnqueueInputForForward(
   const endpoint = scope.endpoint;
   const conversationKey = scope.record.conversationKey;
   const sender = String(scope.record.sender || "unknown").trim() || "unknown";
+  const senderKey = stableSenderGroupingKey(routeKind, record, gatewayId);
+  if (!senderKey) return undefined;
   const replyToMessageId = scope.record.replyToMessageId == null
     ? undefined
     : String(scope.record.replyToMessageId).trim() || undefined;
-  const baseKey = `${endpoint}|${conversationKey}|sender:${sender}`;
+  const baseKey = `${endpoint}|${conversationKey}|sender:${senderKey}`;
   return {
     key: `${baseKey}|reply:${replyToMessageId || "none"}`,
     baseKey,

@@ -1902,6 +1902,14 @@ export function listRecentMemories(roleDir: string): RecentMemoryItem[] {
   return listMemoryCatalog(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory);
 }
 
+export function listActiveRecentMemories(roleDir: string): RecentMemoryItem[] {
+  return listRecentMemories(roleDir).filter((memory) => !memory.consolidatedAt);
+}
+
+export function listArchivedMemories(roleDir: string): RecentMemoryItem[] {
+  return listRecentMemories(roleDir).filter((memory) => Boolean(memory.consolidatedAt));
+}
+
 export function getRecentMemory(roleDir: string, memoryId: string): RecentMemoryItem | undefined {
   const memory = listRecentMemories(roleDir).find((item) => item.id === memoryId);
   if (!memory) return undefined;
@@ -1960,10 +1968,17 @@ export function listConsolidationRuns(roleDir: string): MemoryConsolidationRun[]
   });
 }
 
-export function roleMemoryCounts(roleDir: string): { recent: number; consolidated: number; consolidationRuns: number } {
+export function roleMemoryCounts(roleDir: string): {
+  recent: number;
+  consolidated: number;
+  archived: number;
+  consolidationRuns: number;
+} {
+  const recentMemories = listRecentMemories(roleDir);
   return {
-    recent: listRecentMemories(roleDir).length,
+    recent: recentMemories.filter((memory) => !memory.consolidatedAt).length,
     consolidated: listConsolidatedMemories(roleDir).length,
+    archived: recentMemories.filter((memory) => Boolean(memory.consolidatedAt)).length,
     consolidationRuns: jsonFiles(path.join(memoryDir(roleDir), "consolidation-runs")).length
   };
 }

@@ -22,6 +22,14 @@ export type RabiLinkConversationAttachment = {
   localPath?: string;
 };
 
+export type RabiLinkConversationIdentityEndpoint = {
+  platform: string;
+  endpointIdentityNamespace: string;
+  senderStableId: string;
+  displayName?: string;
+  conversationKey?: string;
+};
+
 export type RabiLinkConversationEntry = {
   schemaVersion: 1;
   entryId: string;
@@ -57,6 +65,7 @@ export type RabiLinkConversationEntry = {
   final?: boolean;
   requiresReview?: boolean;
   reviewRequested?: boolean;
+  identityEndpoints?: RabiLinkConversationIdentityEndpoint[];
   attachments?: RabiLinkConversationAttachment[];
 };
 
@@ -106,6 +115,28 @@ function optionalTextList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const result = [...new Set(value.map(optionalText).filter((item): item is string => Boolean(item)))];
   return result.length > 0 ? result : undefined;
+}
+
+function identityEndpoints(value: unknown): RabiLinkConversationIdentityEndpoint[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const unique = new Map<string, RabiLinkConversationIdentityEndpoint>();
+  for (const item of value.slice(0, 50)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const raw = item as Record<string, unknown>;
+    const platform = optionalText(raw.platform)?.slice(0, 100);
+    const endpointIdentityNamespace = optionalText(raw.endpointIdentityNamespace)?.slice(0, 300);
+    const senderStableId = optionalText(raw.senderStableId)?.slice(0, 300);
+    if (!platform || !endpointIdentityNamespace || !senderStableId) continue;
+    const endpoint = {
+      platform,
+      endpointIdentityNamespace,
+      senderStableId,
+      displayName: optionalText(raw.displayName)?.slice(0, 300),
+      conversationKey: optionalText(raw.conversationKey)?.slice(0, 600)
+    };
+    unique.set(`${platform}\0${endpointIdentityNamespace}\0${senderStableId}`, endpoint);
+  }
+  return unique.size ? [...unique.values()] : undefined;
 }
 
 function fileSize(filePath: string): number {
@@ -170,7 +201,9 @@ function parseLedger(text: string): RabiLinkConversationEntry[] {
         const value = JSON.parse(line) as unknown;
         if (!value || typeof value !== "object" || Array.isArray(value)) return [];
         const entry = value as RabiLinkConversationEntry;
-        return typeof entry.entryId === "string" && typeof entry.text === "string" ? [entry] : [];
+        return typeof entry.entryId === "string" && typeof entry.text === "string"
+          ? [{ ...entry, identityEndpoints: identityEndpoints(entry.identityEndpoints) }]
+          : [];
       } catch {
         return [];
       }
@@ -468,6 +501,7 @@ export function appendRabiLinkConversationEntry(
       final: typeof input.final === "boolean" ? input.final : undefined,
       requiresReview: typeof input.requiresReview === "boolean" ? input.requiresReview : undefined,
       reviewRequested: typeof input.reviewRequested === "boolean" ? input.reviewRequested : undefined,
+      identityEndpoints: identityEndpoints(input.identityEndpoints),
       attachments: Array.isArray(input.attachments) ? input.attachments.slice(0, 8) as RabiLinkConversationAttachment[] : undefined
     };
     const line = `${JSON.stringify(entry)}\n`;

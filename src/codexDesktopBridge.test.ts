@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   CodexDesktopBridge,
+  agentDeliveryMarkerForTest,
   applyCodexSidebarTaskNamesForTest,
   codexDesktopDeepLinkForTest,
   listCodexDesktopThreadsFromRowsForTest
@@ -36,6 +37,8 @@ type IpcRequest = {
   params?: {
     conversationId?: string;
     turnStartParams?: Record<string, any>;
+    input?: Array<Record<string, unknown>>;
+    restoreMessage?: Record<string, any>;
   };
 };
 
@@ -221,6 +224,122 @@ test("Desktop bridge starts a new turn when the task is idle", async () => {
       "initialize",
       "thread-follower-steer-turn",
       "thread-follower-start-turn"
+    ]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Desktop bridge accepts a timed-out start when the exact Agent delivery marker reached the rollout", async () => {
+  const prompt = "[Agent 回复合同]\n本次投递 deliveryId：11111111-2222-4333-8444-555555555555\n\n[投递内容]\ncontinue";
+  const seen: Array<{ threadId: string; marker: string }> = [];
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    return { type: "response", requestId: request.requestId, resultType: "error", error: "thread-follower-start-turn-timeout" };
+  });
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath],
+    deliveryReceiptGraceMs: 0,
+    deliveryReceiptReader: (threadId, marker) => {
+      seen.push({ threadId, marker });
+      return marker === "11111111-2222-4333-8444-555555555555";
+    }
+  });
+
+  try {
+    const result = await bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000052",
+      prompt,
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    });
+    assert.equal(result.action, "started");
+    assert.deepEqual(seen, [{
+      threadId: "019f0000-0000-7000-8000-000000000052",
+      marker: "11111111-2222-4333-8444-555555555555"
+    }]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Desktop bridge keeps a timed-out Agent delivery failed when its marker is absent", async () => {
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    return { type: "response", requestId: request.requestId, resultType: "error", error: "thread-follower-start-turn-timeout" };
+  });
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath],
+    deliveryReceiptGraceMs: 0,
+    deliveryReceiptReader: () => false
+  });
+
+  try {
+    await assert.rejects(bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000053",
+      prompt: "本次投递 deliveryId：aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    }), /thread-follower-start-turn-timeout/);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Agent delivery marker extraction ignores ordinary prompts", () => {
+  assert.equal(agentDeliveryMarkerForTest("ordinary prompt"), "");
+  assert.equal(
+    agentDeliveryMarkerForTest("本次投递 deliveryId: ABCDEFAB-1234-4ABC-8DEF-ABCDEFABCDEF"),
+    "ABCDEFAB-1234-4ABC-8DEF-ABCDEFABCDEF"
+  );
+});
+
+test("Desktop bridge sends local images as model input for both start and restored message context", async () => {
+  const requests: IpcRequest[] = [];
+  const router = await createMockDesktopRouter((request) => {
+    requests.push(request);
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
+    }
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+  const imagePath = path.join(os.tmpdir(), "rabiroute-message-image.png");
+
+  try {
+    await bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000059",
+      prompt: "inspect the image",
+      cwd: process.cwd(),
+      sandbox: "workspace-write",
+      imagePaths: [imagePath]
+    });
+    const steer = requests.find((request) => request.method === "thread-follower-steer-turn");
+    const start = requests.find((request) => request.method === "thread-follower-start-turn");
+    assert.deepEqual(steer?.params?.input, [
+      { type: "text", text: "inspect the image", text_elements: [] },
+      { type: "localImage", path: imagePath }
+    ]);
+    assert.equal(steer?.params?.restoreMessage?.context.imageAttachments[0]?.localPath, imagePath);
+    assert.deepEqual(start?.params?.turnStartParams?.input, [
+      { type: "text", text: "inspect the image", text_elements: [] },
+      { type: "localImage", path: imagePath }
     ]);
   } finally {
     bridge.close();
@@ -443,7 +562,7 @@ test("Desktop bridge loads an unowned task and delivers through the Desktop owne
   }
 });
 
-test("Desktop bridge reopens a bound task while waiting for its owner to become available", async () => {
+test("Desktop bridge opens a bound task only once while waiting for its owner", async () => {
   let deliveryAttempt = 0;
   const router = await createMockDesktopRouter((request) => {
     if (request.method === "initialize") {
@@ -462,7 +581,6 @@ test("Desktop bridge reopens a bound task while waiting for its owner to become 
     pipePaths: [router.pipePath],
     loadRetryAttempts: 6,
     loadRetryDelayMs: 1,
-    reopenThreadEveryAttempts: 2,
     openThread: async (threadId) => { opened.push(threadId); }
   });
   const threadId = "019f0000-0000-7000-8000-000000000064";
@@ -476,7 +594,7 @@ test("Desktop bridge reopens a bound task while waiting for its owner to become 
     });
 
     assert.equal(result.action, "started");
-    assert.deepEqual(opened, [threadId, threadId, threadId]);
+    assert.deepEqual(opened, [threadId]);
     assert.equal(router.methods.filter((method) => method === "thread-follower-steer-turn").length, 6);
   } finally {
     bridge.close();
@@ -547,7 +665,7 @@ test("Desktop bridge fails closed when no Desktop owner loads the task", async (
       prompt: "must stay in Desktop",
       cwd: process.cwd(),
       sandbox: "workspace-write"
-    }), /Desktop.*加载|no-client-found/i);
+    }), /只请求打开一次.*手动打开目标任务.*no-client-found/i);
     assert.equal(openCount, 1);
     assert.equal(router.methods.filter((method) => method === "thread-follower-steer-turn").length, 2);
   } finally {

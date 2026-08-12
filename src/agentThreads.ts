@@ -12,7 +12,14 @@ import {
 import {
   isCodexTaskId
 } from "./codexTaskIdentity.js";
-import { resolveCodexSession } from "./codexSessionResolver.js";
+import {
+  resolveCodexSession,
+  type CodexSessionResolution
+} from "./codexSessionResolver.js";
+import {
+  CodexThreadCreationBlockedError,
+  createCodexThreadWithReservation
+} from "./codexThreadCreationReservations.js";
 import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
@@ -44,6 +51,7 @@ export type AgentThreadRequest = {
   sandbox?: CodexTurnSandbox;
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
+  imagePaths?: string[];
   sourceThreadId?: string;
   sourceAgentType?: AgentThreadSourceType;
   responsePolicy?: AgentResponsePolicy;
@@ -90,6 +98,7 @@ export type AgentThreadDriver = {
     cwd: string;
     developerInstructions: string;
     sandbox: CodexTurnSandbox;
+    onCreationStage?: (state: "thread_created" | "naming" | "initial_turn", threadId: string) => void;
   }) => Promise<CodexThreadCreateResult>;
   rename?: (params: { threadId: string; title: string; cwd: string }) => Promise<AgentThreadSummary>;
   send: (params: {
@@ -99,6 +108,7 @@ export type AgentThreadDriver = {
     sandbox: CodexTurnSandbox;
     model?: string;
     reasoningEffort?: CodexReasoningEffort;
+    imagePaths?: string[];
   }) => Promise<void | {
     threadId: string;
     action: "started" | "steered";
@@ -149,6 +159,7 @@ export function agentThreadRequestFailureData(
     || (/^nextAction /.test(message) ? "nextAction" : undefined)
     || (/inReplyToRequestId/.test(message) ? "inReplyToRequestId" : undefined)
     || (/^Invalid threadId\.$/.test(message) ? "threadId" : undefined)
+    || (/imagePaths|Image attachment|image attachment/.test(message) ? "imagePaths" : undefined)
     || (/^messageProcessing\.outcome /.test(message) ? "messageProcessing.outcome" : undefined)
     || (/verified message_processing source task/.test(message) ? "sourceAgentType" : undefined);
   const sourceVerification = /来源任务|sourceAgentType requires sourceThreadId|verified .* source task/i.test(message);
@@ -219,6 +230,28 @@ function standaloneWorkspacePolicyPrompt(rawPrompt: string): string {
     "[投递内容]",
     rawPrompt
   ].join("\n");
+}
+
+function imagePathsForDelivery(value: unknown, cwd: string): string[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error("imagePaths must be an array.");
+  if (value.length > 8) throw new Error("imagePaths supports at most 8 images per delivery.");
+  const workspace = path.resolve(cwd);
+  return [...new Set(value.map((item) => {
+    const raw = String(item ?? "").trim();
+    if (!raw || !path.isAbsolute(raw)) throw new Error("Every imagePaths item must be an absolute path.");
+    const imagePath = path.resolve(raw);
+    const relative = path.relative(workspace, imagePath);
+    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error("Every imagePaths item must stay inside the target workspace.");
+    }
+    if (!/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(imagePath)) {
+      throw new Error(`Unsupported image attachment type: ${path.extname(imagePath) || "no extension"}`);
+    }
+    const stat = fs.statSync(imagePath, { throwIfNoEntry: false });
+    if (!stat?.isFile()) throw new Error(`Image attachment does not exist: ${imagePath}`);
+    return imagePath;
+  }))];
 }
 
 function normalizeAgentThreadSourceType(value: unknown): AgentThreadSourceType {
@@ -469,13 +502,14 @@ async function createThread(
   request: AgentThreadRequest,
   options: AgentThreadRequestOptions,
   driver: AgentThreadDriver,
-  requestedTitle = requiredText(request.title, "title", maxTitleInputLength)
+  requestedTitle = requiredText(request.title, "title", maxTitleInputLength),
+  onCreationStage?: (state: "thread_created" | "naming" | "initial_turn", threadId: string) => void
 ): Promise<CodexThreadCreateResult> {
   const title = normalizeCodexThreadTitle(requestedTitle);
   const prompt = optionalText(request.prompt, "prompt", maxPromptLength);
   const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
   const sandbox = normalizeSandbox(request.sandbox);
-  return driver.create({
+  const createParams: Parameters<AgentThreadDriver["create"]>[0] = {
     title,
     prompt,
     cwd,
@@ -489,6 +523,25 @@ async function createThread(
       "多步任务开始后要让当前任务中的人看得出你准备做什么；取得阶段结果、遇到风险或进入等待时主动更新，不要等别人追问。"
     ].join("\n"),
     sandbox
+  };
+  if (onCreationStage) createParams.onCreationStage = onCreationStage;
+  return driver.create(createParams);
+}
+
+async function createThreadDurably(
+  request: AgentThreadRequest,
+  options: AgentThreadRequestOptions,
+  driver: AgentThreadDriver,
+  title: string,
+  cwd: string
+): Promise<CodexThreadCreateResult> {
+  const rootDir = options.defaultWorkspace;
+  if (!rootDir) return createThread({ ...request, title, cwd }, options, driver, title);
+  return createCodexThreadWithReservation({
+    rootDir,
+    title,
+    workspace: cwd,
+    create: (onStage) => createThread({ ...request, title, cwd }, options, driver, title, onStage)
   });
 }
 
@@ -528,7 +581,15 @@ export async function handleAgentThreadRequest(
       : defaultListLimit;
     const requestedOffset = Number(request.offset ?? 0);
     const offset = Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : 0;
-    const page = await listThreads(query, limit + 1, offset, options.allowedWorkspaces, options, driver);
+    const page = await listThreads(
+      query,
+      limit + 1,
+      offset,
+      options.allowedWorkspaces,
+      options,
+      driver,
+      request.lookupMode === "state_db"
+    );
     const hasMore = page.length > limit;
     const threads = page.slice(0, limit);
     return {
@@ -551,32 +612,46 @@ export async function handleAgentThreadRequest(
     const fallbackTitle = !isCodexTaskId(rawThreadId) ? rawThreadId : "";
     const title = requiredText(request.title || fallbackTitle, "title", maxTitleInputLength);
     const requestedWorkspace = resolveAgentThreadWorkspaceForTest(request.cwd, options);
-    const resolution = await resolveCodexSession({
-      threadId: rawThreadId,
-      title,
-      cwd: requestedWorkspace,
-      createIfMissing: request.createIfMissing !== false
-    }, {
-      scope: driver,
-      read: async (threadId) => {
-        try {
-          return threadSummary(await driver.read(threadId));
-        } catch (error) {
-          if (missingThreadError(error)) return null;
-          throw error;
+    let resolution: CodexSessionResolution<AgentThreadSummary>;
+    try {
+      resolution = await resolveCodexSession({
+        threadId: rawThreadId,
+        title,
+        cwd: requestedWorkspace,
+        createIfMissing: request.createIfMissing !== false
+      }, {
+        scope: driver,
+        read: async (threadId) => {
+          try {
+            return threadSummary(await driver.read(threadId));
+          } catch (error) {
+            if (missingThreadError(error)) return null;
+            throw error;
+          }
+        },
+        list: ({ title: query, cwd }) => listThreads(
+          query,
+          maxResolveCandidates,
+          0,
+          [cwd],
+          options,
+          driver,
+          request.lookupMode === "state_db"
+        ),
+        create: () => createThreadDurably(request, options, driver, title, requestedWorkspace)
+      });
+    } catch (error) {
+      if (!(error instanceof CodexThreadCreationBlockedError)) throw error;
+      return {
+        statusCode: 409,
+        data: {
+          action,
+          resolution: error.reservation.state,
+          message: error.message,
+          reservation: error.reservation
         }
-      },
-      list: ({ title: query, cwd }) => listThreads(
-        query,
-        maxResolveCandidates,
-        0,
-        [cwd],
-        options,
-        driver,
-        request.lookupMode === "state_db"
-      ),
-      create: () => createThread({ ...request, title, cwd: requestedWorkspace }, options, driver, title)
-    });
+      };
+    }
 
     if (resolution.kind === "workspace-mismatch") {
       return {
@@ -625,8 +700,95 @@ export async function handleAgentThreadRequest(
 
   if (action === "create") {
     const sandbox = normalizeSandbox(request.sandbox);
-    const thread = await createThread(request, options, driver);
-    return { statusCode: 201, data: { action, thread, sandbox } };
+    const title = normalizeCodexThreadTitle(requiredText(request.title, "title", maxTitleInputLength));
+    const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
+    let resolution: CodexSessionResolution<AgentThreadSummary>;
+    try {
+      resolution = await resolveCodexSession({
+        title,
+        cwd,
+        createIfMissing: true
+      }, {
+        scope: driver,
+        read: async (threadId) => {
+          try {
+            return threadSummary(await driver.read(threadId));
+          } catch (error) {
+            if (missingThreadError(error)) return null;
+            throw error;
+          }
+        },
+        list: ({ title: query, cwd: requestedWorkspace }) => listThreads(
+          query,
+          maxResolveCandidates,
+          0,
+          [requestedWorkspace],
+          options,
+          driver,
+          true
+        ),
+        create: () => createThreadDurably(request, options, driver, title, cwd)
+      });
+    } catch (error) {
+      if (!(error instanceof CodexThreadCreationBlockedError)) throw error;
+      return {
+        statusCode: 409,
+        data: {
+          action,
+          resolution: error.reservation.state,
+          message: error.message,
+          reservation: error.reservation,
+          sandbox
+        }
+      };
+    }
+
+    if (resolution.kind === "ambiguous") {
+      return {
+        statusCode: 409,
+        data: {
+          action,
+          resolution: "ambiguous",
+          message: `存在 ${resolution.candidates.length} 个同名 Codex Desktop 任务，请按最后会话时间选择。`,
+          candidates: resolution.candidates,
+          sandbox
+        }
+      };
+    }
+    if (resolution.kind === "archived") {
+      return {
+        statusCode: 409,
+        data: {
+          action,
+          resolution: "archived",
+          message: `同名 Codex Desktop 任务已归档，请恢复或改名后再创建：${title}`,
+          thread: resolution.thread,
+          sandbox
+        }
+      };
+    }
+    if (resolution.kind === "workspace-mismatch") {
+      return {
+        statusCode: 409,
+        data: {
+          action,
+          resolution: "workspace-mismatch",
+          message: `Codex Desktop task belongs to another workspace. Task: ${resolution.thread.cwd}; configured: ${cwd}`,
+          thread: resolution.thread,
+          sandbox
+        }
+      };
+    }
+    if (resolution.kind === "missing") {
+      return {
+        statusCode: 404,
+        data: { action, resolution: "missing", message: `没有找到或创建 Codex Desktop 任务：${title}`, sandbox }
+      };
+    }
+    return {
+      statusCode: resolution.kind === "created" ? 201 : 200,
+      data: { action, resolution: resolution.kind, thread: resolution.thread, sandbox }
+    };
   }
 
   if (action === "rename") {
@@ -652,6 +814,7 @@ export async function handleAgentThreadRequest(
     const sandbox = normalizeSandbox(request.sandbox);
     const model = optionalText(request.model, "model", 120) || undefined;
     const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort);
+    const imagePaths = imagePathsForDelivery(request.imagePaths, cwd);
     const messageProcessing = request.messageProcessing;
     let agentCommunication: AgentCommunicationPreparation | undefined;
     if (sendSource) {
@@ -734,6 +897,7 @@ export async function handleAgentThreadRequest(
     const delivery = { threadId, prompt, cwd, sandbox } as Parameters<AgentThreadDriver["send"]>[0];
     if (model) delivery.model = model;
     if (reasoningEffort) delivery.reasoningEffort = reasoningEffort;
+    if (imagePaths.length) delivery.imagePaths = imagePaths;
     let acceptedDelivery: Awaited<ReturnType<AgentThreadDriver["send"]>>;
     try {
       acceptedDelivery = await driver.send(delivery);

@@ -160,6 +160,7 @@ data/roles/<RoleId>/conversation/archive/index.json
 
 - 在低信号过滤和规则判断前，先把入站事件写入所有相关人格的统一账本。
 - 遍历启用的 RouteProfile。
+- 匹配“收到消息后运行脚本”的人格自动化，并交给受限脚本执行器；脚本结果不进入 AgentPacket。
 - 调用 RouteDecision 判断是否命中规则。
 - 按角色数据目录补写事件记录。
 - 调用 AgentPacket 构造处理端消息。
@@ -172,6 +173,14 @@ data/roles/<RoleId>/conversation/archive/index.json
 - 模板变量生成。
 - 角色记忆和计划注入。
 - replyContext 构造细节。
+
+### `src/automation/personaAutomationRuntime.ts`
+
+人格自动化运行时把“什么时候触发”和“触发后做什么”拆开。消息触发沿用 `RouteDecision` 的 route kind、正则、群和说话人匹配；定时触发由 `heartbeatAdapter.ts` 使用现有一次性调度器唤醒。通知 Agent 的动作回到 forwarding / AgentPacket 主链，运行脚本的动作留在本模块。
+
+脚本执行必须同时满足：Route 本机明确授权、脚本真实路径位于当前人格 `scripts/` 目录、扩展名为 `.cmd` / `.bat` / `.py`。进程只继承启动所需的系统环境变量，不继承 Manager token、密码和消息正文；同一路由同一规则不重叠运行，超时会停止进程树。`automation-executions.jsonl` 只记录本机执行状态，用于重复领取保护和排障，不属于人格同步数据。
+
+配置的通用结构和兼容迁移归 `src/shared/gatewayConfigModel.ts` 与 `src/manager/configMigration.ts`。旧消息模板规则只在读取边界转换，运行模块不维护第二套旧 Schema。
 
 这些已经拆到 `src/routing/`。
 
@@ -290,6 +299,7 @@ AgentPacket
 - Heartbeat 判断目标任务是否仍在工作时，只读取任务记录末尾附近的数据，不得同步读取或拆分整个 JSONL 文件。文件正在追加时忽略末尾未写完的一行；超大的无关记录会跳过，避免任务长期运行后拖住 Manager 或 Route 子进程。
 - Codex 活跃状态按时间合并两类证据：Desktop IPC 只提供当前连接内的临时活跃标记，rollout 的最近 turn/terminal 事件提供可持久查证的生命周期。较新的 terminal 会清除较旧的 IPC 活跃标记；若新一轮 IPC 活跃时间晚于已写入的旧 terminal，则在 rollout 追上前仍保持活跃。IPC 断开时清空连接内标记，不能让旧连接把已完成任务长期显示为运行中。
 - `src/messageAgentPool.ts` 不拥有 Codex 任务运行状态。`/api/agent/threads` 的精确读取把 Desktop 是否在线、当前连接的活跃事件和 Codex rollout 终态归一为 `active / idle / notLoaded / unavailable`；消息池只在一次分配期间用内存 reservation 防止并发抢占，不把这些状态写入文件。`agents.json` 只保存消息处理任务的完整 ID、左侧聊天栏名称、workspace、序号和初始化信息；`routing-affinity.json` 只保存消息组与消息端/会话/说话人的恢复线索。Desktop 离线或状态不可读时，消息组仍留在 `pending.json`，恢复后继续原任务，不能依据本地快照扩容。
+- `src/forwarding.ts` 在 NapCat 消息组带 `replyToMessageId` 时，通过 `src/messageProcessing/managerClient.ts` 按 `channel + sentMessageId + routeId` 查询 Agent 发送记录。匹配当前消息处理任务完整 ID 的发送会话会在 `src/messageAgentPool.ts` 获得可叠加的 `6000` 分；原消息组、消息端、会话和说话人熟悉度继续计分并按总分排序。查询完成会写 `message_processing_reply_sender_lookup_completed`，查询错误写 `message_processing_reply_sender_lookup_failed` 并取消这项加分；找到发送者后还会写不含正文的 `message_processing_reply_sender_weight_applied`，记录候选会话、最终任务及是否命中。
 - 消息处理看板也不保存任务忙闲。每次读取看板时，Manager 按任务 ID 向 Codex 获取当前名称和 `active / idle / notLoaded / unavailable`，只在本次响应中显示；读取失败时显示“当前无法确认”，不沿用上一次空闲或繁忙。
 - Route 的 `codexPlanAssistantSessions` 保存 1–8 个持久 Desktop 计划管理秘书槽，只负责任务身份和初始化记录；统一模型由 Manager 的 `codexPlanAssistantModel` 拥有，WebGUI 不在秘书条目中复制模型状态。秘书槽不写入计划 `taskBinding`；`taskBinding` 始终绑定独立业务任务。秘书负责计划/记忆维护、任务查重与绑定、状态核对、结果消费和续投，禁止执行调查、实现、测试或业务文件修改。控制面写入按 `planId` keyed lease 隔离：同计划单 writer、不同计划并行，共享 JSON 采用锁内最新值合并与原子替换。锁通过完整候选文件和原子 hard-link 发布，stale/损坏锁在热路径失败关闭，只能在 quiescent 维护窗口显式修复；同 key 的认领/澄清 lease 覆盖 reservation、外发、验证和终态回执，结果不明确时禁止自动重发。全局 audit 使用前后 ledger 快照，只把身份稳定的错误判为 invalid；plan-scoped strict audit 才是单计划收口门，reconcile 只跳过 active 计划。该层目前仍是实验能力，不能因为代码或 mock 通过就宣称真实 Desktop 多任务已验收。
 `codexDesktopBridge.ts` 必须保持 transport-only：它不读取 route rule、不拼 AgentPacket、不决定业务外发。`codexAppServerClient.ts` 只保留“创建空任务、恢复用户名称”的元数据能力，不得接收真实 prompt 或执行 turn；元数据操作完成后立即退出。
@@ -299,6 +309,12 @@ Desktop 任务审批与 `src/outbox.ts` 的 Action Gate 是两道不同边界：
 ## 消息处理需求状态
 
 `src/messageProcessing/board.ts` 是 Manager 拥有的消息处理状态机，`src/messageProcessing/persistence.ts` 负责把状态保存到运行期 `data/.runtime/message-processing-board.json`。业务规则不直接决定文件位置。Gateway 在消息组进入 Codex 消息处理任务前登记需求，投递成功后记录精确 Desktop 任务；消息处理 Agent 通过结果接口提交回复、不回复或结构化转交，Outbox 再用 `replyContext.messageProcessingRequirementId` 回写真实发送结果。直接 @、直接回复、私聊和计划进展是必须处理项；普通群讨论仍由 Agent 判断是否参与。
+
+`src/napcatMedia.ts` 在 NapCat 消息进入时把图片 URL 立即转成受限大小的本地运行文件，并把成功或失败写进消息附件记录；`src/messageProcessing/sourceEvidence.ts` 再从当前消息组和可追溯引用链生成必须核对的消息 ID、附件清单和可投递图片路径。`src/agentThreads.ts` 只接受目标工作区内、实际存在的受支持图片路径，`src/codexDesktopBridge.ts` 把它们转换成 Desktop `localImage` 输入。`board.ts` 单独保存 `sourceEvidenceReview`，要求覆盖原消息、引用链和每个附件；附件不可读时不能进入回复或静默关闭状态。`AgentPacket` 先给出宽泛最近消息，再给出当前消息；当前消息前五分钟内最接近的讨论片段和引用证据紧跟当前消息，供处理端结合已经读过的历史解释纠正和短追问。
+
+`src/replyImageDescriptions.ts` 在 NapCat 群聊引用发送进入幂等 reservation 前，按精确 Route、群、实例和 `replyToMessageId` 读取来源消息。来源含图片时，`params.replyImageDescriptions` 必须与图片数量和原顺序一一对应；来源找不到、图片不可读、描述缺失或空泛都会阻止发送。真实平台发送成功后，每张 `napcat-media` 图片旁会创建或追加图片同名 `.md`，记录来源消息、图片序号、发送 Agent 类型与完整会话、`deliveryId`、QQ 回执和本次理解。幂等回执只保存说明文件映射，不把描述正文复制进按平台消息 ID 查询的运维结果；Manager 另写不含正文和图片路径的 `agent_reply_image_descriptions_archived` 事件。
+
+`src/messageProcessing/sendContextReview.ts` 负责消息处理需求的发送前上下文核对。Manager 从人格双向消息记录读取以来源消息和回复链为起点的有界上下文，生成 `contextVersion`，并把两分钟内有效的审核凭证绑定到需求、完整发送会话和精确发送请求。`/api/agent/send` 在 Outbox 与幂等 reservation 前重新读取当前上下文；出现新消息、已有 Agent 回复、需求不再等待发送，或发送者、目标、引用消息、正文变化时失败关闭。凭证只保存在 Manager 内存中，进程重启后自动失效。任何 Agent 回复到某个已登记需求的来源消息时都必须携带对应 `tracking.requirementId`，不能通过主人格或另一 Agent 绕过看板。
 
 Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.runtime/agent-requests.json`。`/api/agent/threads` 只在 Desktop owner 接受投递后把请求改为等待回复；回复必须带原 `requestId`、结果和下一步。Codex `Stop` 只记录目标轮次已经结束并安排五分钟后的提醒，不阻止最终回答；`PreToolUse` 在 Route 开启强制开关时拒绝绕过 Rabi 的持久任务投递工具。消息处理转交收到正式回复后，原发布任务重新进入 `processing`，继续决定外发、审批或下一次转交。
 
@@ -320,7 +336,7 @@ Agent 任务间的回复责任由 `src/agentRequests/` 单独保存到 `data/.ru
 
 当前 Outbox 已是 QQ、WeCom、个人微信来源会话文本/受控文件、RabiLink 和角色面板的真实回传层，并为旧 FenneNote Route 保留兼容，但还没有通用持久化审批中心。长期方向是把它深化为通用 Action Gate：
 
-`src/agentSend.ts` 在 Manager HTTP 边界先校验明确发送合同：稳定 `deliveryId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload` 都是必填结构，来源 `replyContext` 不参与目标选择。`src/manager/agentSendIdempotency.ts` 随后在运行期 `data/agent-send-idempotency/` 持久化 reservation，再允许唯一请求进入 Outbox；同 ID 同 payload 的并发与重启恢复只回读原结果，不同 payload 冲突，`reserved/sending/uncertain` 失败关闭。`GET /api/agent/send/receipts/:deliveryId` 只返回该持久回执；它不猜测外部平台成功，也不自动重发，QQ 等通道仍需使用 `sentMessageId` 做真实平台回读。
+`src/agentSend.ts` 在 Manager HTTP 边界先校验明确发送合同：稳定 `deliveryId`、调用方声明的 `sender.agentType + sender.sessionId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload` 都是必填结构，来源 `replyContext` 不参与目标选择。消息处理回复还必须带与最新上下文核对绑定的 `tracking.requirementId + tracking.sendContextReviewToken`。`src/manager/agentSendIdempotency.ts` 随后在运行期 `data/agent-send-idempotency/` 持久化 reservation，再允许唯一请求进入 Outbox；同 ID 同请求的并发与重启恢复只回读原结果，不同发送者或其它字段冲突，`reserved/sending/uncertain` 失败关闭。`GET /api/agent/send/receipts/:deliveryId` 返回该持久回执，`GET /api/agent/send/traces?channel=...&sentMessageId=...` 可以从平台回执反查发送者会话。两者都不猜测外部平台成功，也不自动重发；QQ 等通道仍需使用 `sentMessageId` 做真实平台回读。
 
 ```text
 Agent output
@@ -384,7 +400,7 @@ startManager();
 - 避免在这里新增配置 normalize / validate。
 - 避免在这里新增具体平台扫描细节。
 
-`RABIROUTE_MANAGER_READ_ONLY=1` 是构建产物验收专用模式。它强制关闭 Gateway、Relay、LAN discovery、Route watcher 和人格文件 watcher 自动启动，跳过启动时的语音麦克风协调与配置目录迁移，并在 HTTP 入口拒绝 POST、PUT、PATCH、DELETE。`scripts/test-built-manager-readonly.mjs` 在临时回环端口启动当前 `dist/manager.js`，通过 stdout 就绪事件而非轮询等待，然后只读取 Gateway 摘要、人格同步 manifest/索引状态/冲突、主机通用语音消息，以及 manifest 中每个人格的声纹关系和语音会话视图。只读校准不写 manifest 缓存；证据只保存状态、索引模式、数量和构建哈希，不保存人格名、角色 ID、文件路径、转写正文、人物、token、Relay URL 或监听地址；现有 8790 Manager 不会被重启。
+`RABIROUTE_MANAGER_READ_ONLY=1` 是构建产物验收专用模式。它强制关闭 Gateway、Relay、LAN discovery、Route watcher 和人格文件 watcher 自动启动，跳过启动时的语音麦克风协调与配置目录迁移，并在 HTTP 入口拒绝 POST、PUT、PATCH、DELETE。`scripts/test-built-manager-readonly.mjs` 在临时回环端口启动当前 `dist/manager.js`，通过 stdout 就绪事件而非轮询等待，然后只读取 Gateway 摘要、人格同步 manifest/索引状态/冲突、主机通用语音消息，以及 manifest 中每个人格的语音账号兼容归类和语音会话视图。只读校准不写 manifest 缓存；证据只保存状态、索引模式、数量和构建哈希，不保存人格名、角色 ID、文件路径、转写正文、人物、token、Relay URL 或监听地址；现有 8790 Manager 不会被重启。
 
 ### `src/manager/configRepository.ts`
 
@@ -485,7 +501,7 @@ Gateway 配置的事实源 Module。
 - 计划目录完成摘要加载并让出一次渲染后，通过 `manager/planAgentStatusRoutes.ts` 批量读取 `taskBinding` 与可选 `secretaryBinding` 的真实 Desktop 任务状态。`manager/planAgentStatus.ts` 负责 2.8 秒有界读取、同绑定请求去重、workspace 校验以及 Agent 工作状态与会话任务状态的分离；WebGUI 的 3 秒请求预算只决定何时显示未知。工作中的任务用转圈图标替代目录时间，其他结果继续保留时间。打开动作只调用 `openCodexDesktopThread()` 定位已核对的精确任务，不走 prompt、任务创建或备用 Runtime。
 - `src/roleKnowledge.ts` 为近期记忆列表生成并缓存沉淀投影。投影用 `updatedAt` / `recalledAt` 计算每条记忆的 24 小时候选时间和 72 小时触发时间，返回 `triggersNextConsolidation` 与 `willEnterNextConsolidation`；记忆目录写入或外部文件变化时与目录缓存一起失效。`src/manager/memoryConsolidationScheduler.ts` 读取最早截止时间并设置一次性任务，到点后重新核对活跃时间、创建 run 并投递 Manager 内置事件。最不活跃记忆到达 72 小时时，`recentMemoryConsolidationCohort()` 固定 `triggerAt` 与 `candidateCutoffAt`，列表投影和真实整理 request 共用该结果，避免晚执行时扩大候选范围。新记忆写入 `.md`，结构化字段保存在元数据区，正文保留标准 Markdown；旧 `.json` 继续读取，同 ID 时 `.md` 优先。`RoleKnowledgePage.vue` 只消费 Manager 结果，不在浏览器复制沉淀候选算法。
 - `src/memoryConsolidationAgent.ts` 只负责 Codex 独立记忆整理任务的精确 owner、持久绑定和 Desktop IPC 投递。配置开启时，`forwarding.ts` 只把 `manual_trigger + memory-consolidation` 投给“`<主人格任务名> 记忆整理`”；首次投递前确认主人格 Desktop 任务可读，默认模型为 `gpt-5.6-terra`。失败不回退给主人格或备用 Runtime。
-- `GET /api/roles/:roleId/memory?counts=1` 只返回记忆目录数量。`RoleKnowledgePage.vue` 在任何顶层标签首次进入时都让该请求与计划首屏并行，避免默认停留在“当前计划”时记忆标签长期显示 0；记忆正文仍只按当前可见分类分页读取。
+- `GET /api/roles/:roleId/memory?counts=1` 只返回近期、沉淀、已归档来源和整理 run 的数量。`RoleKnowledgePage.vue` 在任何顶层标签首次进入时都让该请求与计划首屏并行，避免默认停留在“当前计划”时记忆标签长期显示 0；记忆正文仍只按当前可见分类分页读取。
 - 记忆卡片直接渲染安全 Markdown，卡片最高 512px 且裁剪溢出，完整内容通过详情打开。`markdownPreview.ts` 只允许 HTTP(S) 图片，禁止本机绝对路径、`data:` 和脚本协议。
 - `src/pages/OverviewPage.vue`：总览和运行状态。
 - `src/pages/RouteConfigPage.vue`：Route 配置编辑。
@@ -556,7 +572,7 @@ Gateway summary 只返回人格标识、路径、头像和从文件开头提取�
 
 ## Plugin Adapters
 
-语音原始消息把整段 RMS 与峰值作为 PCM 响度事实，从 RabiSpeech 贯穿 `SpeechIngressStore`、Route 事件、人格 `voice-transcripts.jsonl` 和 `conversation/current.jsonl`。两项字段只服务阈值、质量和故障诊断，不参与主机身份或“谁是用户”的判断；人格仍是声纹关系的唯一解释者。关闭前置缓冲也不改变音频归属：`pre_roll_ms=0` 时触发 VAD 的第一块 PCM 仍必须进入当前语段。
+语音原始消息把整段 RMS 与峰值作为 PCM 响度事实，从 RabiSpeech 贯穿 `SpeechIngressStore`、Route 事件、人格 `voice-transcripts.jsonl` 和 `conversation/current.jsonl`。两项字段只服务阈值、质量和故障诊断，不参与主机身份或“谁是用户”的判断；只有人格能解释某个语音账号是谁。关闭前置缓冲也不改变音频归属：`pre_roll_ms=0` 时触发 VAD 的第一块 PCM 仍必须进入当前语段。
 
 `plugin-adapters/` 放外部平台桥接示例：
 
@@ -580,9 +596,15 @@ RabiSpeech 的 `speech_records.py` 是 ASR/TTS 文本记录唯一真源，参考
 
 `src/acceptance/speechIngressSeparation.ts` 与 `scripts/test-speech-ingress-separation.mjs` 把上述边界组合成构建产物隔离验收。工具在临时数据根中向同一个主机原始库写入一条 PC 麦克风记录和一条手机记录，再分别调用真实 `dist/index.js --speech-message` 子进程；它要求主机库恰好保留两个逻辑消息端、两个不同人格各写一次语音历史与统一会话、PC 上下文不出现手机目标、手机回复只使用稳定 `sourceDeviceId` 而不使用临时 `sourceStreamId`，并验证主机人物猜测没有进入人格文件。子进程只使用不打开窗口/剪贴板的隔离 Agent adapter，不连接真实 Manager、Desktop、QQ 或 Relay；完成后删除临时目录，只留下脱敏数量、哈希和终态证据。
 
-`src/personaVoiceIdentities.ts` 拥有人格级声纹关系事件。主机语音消息与 AgentPacket 只提供 `sourceHostId/sourceHostName` 和不透明声纹证据；人格通过 `/api/roles/:roleId/voice-identities` 把自己的 `displayName/relationship/isUser/aliases/notes` 追加到 `voice/voice-identities.jsonl`。身份键由处理主机与声纹 ID 共同构成，避免多 PC 本地 cluster 碰撞。相同更新不重复追加，修正与删除使用新事件/tombstone，不产生 Manager 侧人物真源。新事件通过 `supersedes` 记录它收敛的当前事件头；多 PC 并发分支在 JSONL union 后仍同时存在，读取层派生冲突字段，后续人格 PUT 再显式收敛全部头，因此不会退化为文件顺序决定身份。
+`src/identityRelations.ts` 拥有人格级通用身份关系事件，分别记录消息端账号、参与者与带会话/项目范围的关系卡。`src/routing/identityContext.ts` 只从适配器已经核实的真实发送者字段提取 `platform + endpointIdentityNamespace + senderStableId`；实际命中的 Route 第一次投递稳定陌生账号时才创建确定性的“待认识”候选。没有稳定发送者标识、身份自报只存在于转发/引用/附件内容、AgentPacket 预览、读取接口和未命中 Route 都不自动创建或合并身份。这条失败关闭边界保证不可信上下文中的“我是某人”不会变成账号映射；同一稳定发送者在本轮明确自报的称呼仍只能由下述观察接口保存为候选证据。
 
-`src/personaVoiceTranscriptView.ts` 是人格语音关系的只读联结层，`src/manager/personaVoiceTranscriptRoutes.ts` 只负责稳定 HTTP 边界。`GET /api/roles/:roleId/voice-transcripts` 在查询时把会话账本的原始声纹证据与当前人格关系合成 `user/other/unknown/conflict` 分段视图；它支持时间、归档和说话人筛选，并从完整筛选集合派生分类时长、覆盖率和未解决声纹汇总，明细 `limit` 不截断 `matchedCount` 或 summary。该层不回写任何派生名称、`isUser` 或统计，因此原始消息与人格解释继续保持各自唯一真源。
+候选观察接口只追加新出现且带消息证据的自述、称呼或关系线索，不确认身份、不授予权限；账号已经存在确认映射后会拒绝继续修改旧候选。词汇、句式、回复节奏和长期话题等说话习惯一致性可以写成最小化辅助证据，但不能成为身份键，也不能单独把候选提升为确认。`participantLinks` 允许共用账号保留多个候选，解析层在没有唯一确认或纠正映射时保持歧义，不按置信度自动挑人。多 PC 同步时，自动候选的昵称、别名和观察证据属于可合并的非权威线索，参与者类型、确认状态、账号映射或关系卡内容的分歧仍显式保留为冲突。
+
+`ribiwebgui/src/components/PersonaIdentityRelationsCard.vue` 负责身份定位的界面投影和受控编辑入口，但不负责推断身份。“已识别身份”按确认或纠正后的参与者聚合消息端账号；一个账号如果以多个候选链接指向多个已识别人物，就作为“共用”账号出现在每个相关人物中，但不会产生唯一人物结论。人物卡整卡打开同一个身份工作区，在其中分别维护参与者资料与说话习惯、消息端账号和关系；三类记录仍按现有 Manager API 分别追加事件，界面不会把它们伪装成一次原子保存。“未识别身份”继续按 QQ、微信、声纹等消息端分组人物仍未知、候选尚未指向已识别人物或存在冲突的账号。浏览器不复制身份判断算法，也不保留第二份人物真源。
+
+`src/personaVoiceIdentities.ts` 拥有语音消息端账号的兼容归类事件。主机语音消息与 AgentPacket 只提供 `sourceHostId/sourceHostName` 和不透明声纹证据；人格通过 `/api/roles/:roleId/voice-identities` 把自己的 `participantId/displayName/relationship/isUser/aliases/notes` 追加到 `voice/voice-identities.jsonl`。`participantId` 只显式引用通用身份关系中已经确认或纠正的人物，不根据名字猜测归属；界面用它把声纹放入对应的“已识别身份”卡，也允许清除引用后回到按消息端分类的“未识别身份”。账号键由处理主机与声纹 ID 共同构成，避免多 PC 本地 cluster 碰撞。相同更新不重复追加，修正与删除使用新事件/tombstone，不产生 Manager 侧人物真源。新事件通过 `supersedes` 记录它收敛的当前事件头；多 PC 并发分支在 JSONL union 后仍同时存在，读取层派生冲突字段，后续人格 PUT 再显式收敛全部头，因此不会退化为文件顺序决定身份。数据尚未机械迁入通用身份关系：一段录音可能含多个声纹，而 `isUser=false` 只表示“不是当前人格”，不能安全指向某个具体参与者。
+
+`src/personaVoiceTranscriptView.ts` 是语音账号兼容归类的只读联结层，`src/manager/personaVoiceTranscriptRoutes.ts` 只负责稳定 HTTP 边界。`GET /api/roles/:roleId/voice-transcripts` 在查询时把会话记录的原始声纹证据与当前人格归类合成 `user/other/unknown/conflict` 分段视图；它支持时间、归档和说话人筛选，并从完整筛选集合派生分类时长、覆盖率和未解决声纹汇总，明细 `limit` 不截断 `matchedCount` 或 summary。该层不回写任何派生名称、`isUser` 或统计，因此原始消息与人格解释继续保持各自唯一真源。
 
 RibiWebGUI 通过 `personaVoiceIdentityClient.ts` 复用这两个 API，不新增浏览器声纹仓库。人格页的最近 24 小时面板使用 `includeDetails=false`，只接收 summary 和独立关系列表，不接收转写正文；加载、按钮忙碌、错误和提示属于短暂表现状态。`personaVoiceConfirmation.ts` 只维护一次用户主动确认会话的开始时间、开始时未解决声纹的 `lastSeenAt` 基线、等待/找到状态和候选复合键；候选来自下一次语音记录事件后相对基线新出现或再次出现、且有稳定主机标识的未解决声纹，只改变排序与标记，不产生或保存身份结论。页面进入、人格切换和人工操作后查询一次，并监听 RabiSpeech `records_changed`、Manager `persona_voice_identity_changed` 与 `persona_sync_manifest_changed` 事件。SSE 重连只补查一次，不运行覆盖率轮询。
 

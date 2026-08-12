@@ -3,14 +3,15 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
-import PersonaSyncCard from "../components/PersonaSyncCard.vue";
 import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
 import { managerEventSource } from "../managerApi";
 import { personaAvatarClient } from "../persona/personaAvatarClient";
 import { loadPersonaDocument } from "../persona/personaDocumentClient";
+import type { IdentityEndpointAccount, IdentityParticipant } from "../persona/personaIdentityRelationClient";
 import {
   personaVoiceIdentityClient,
   type PersonaVoiceIdentity,
+  type PersonaVoiceIdentityPatch,
   type PersonaVoiceTranscriptSummary
 } from "../persona/personaVoiceIdentityClient";
 import {
@@ -23,7 +24,7 @@ import {
 } from "../persona/personaVoiceConfirmation";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
-import type { NotificationRule, NotificationScheduleDefinition } from "../types";
+import type { NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition } from "../types";
 import {
   DEFAULT_RECENT_MESSAGE_LIMIT,
   MAX_RECENT_MESSAGE_LIMIT,
@@ -36,11 +37,13 @@ import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
 import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
 import { copyTextToClipboard } from "../clipboard";
 import { markdownPreviewExcerpt } from "../markdownPreview";
-import { routeScopedPersonaDocumentPath, routeScopedPersonaPath } from "../routeScopedNavigation";
+import { routeScopedPersonaDocumentPath, routeScopedPersonaPath, routeScopedPersonaSyncPath } from "../routeScopedNavigation";
 import {
   adapterLabel,
+  automationRulesForGateway,
   configNameFor,
   defaultHeartbeatSchedule,
+  gatewayAdapterTypes,
   isBuiltinRolePanelRule,
   notificationRulesForGateway,
   routeKindDefinitionsForGateway,
@@ -57,6 +60,9 @@ const speech = useSpeechStore();
 const route = useRoute();
 const router = useRouter();
 const ruleDialog = ref(false);
+const automationDialog = ref(false);
+const automationWorkspaceTab = ref<"messages" | "schedule">("messages");
+const activeAutomationId = ref("");
 const activeRuleIndex = ref(0);
 const ruleMatchParamsOpen = ref(true);
 const ruleRouteKindsOpen = ref(true);
@@ -75,10 +81,12 @@ const voiceIdentityNotice = ref("");
 const voiceIdentitySummary = ref<PersonaVoiceTranscriptSummary | null>(null);
 const voiceIdentities = ref<PersonaVoiceIdentity[]>([]);
 const voiceIdentityBusyKey = ref("");
+const voiceParticipantSelections = ref<Record<string, string>>({});
 const voiceConfirmation = ref(idlePersonaVoiceConfirmation());
-const personaSyncManifestVersion = ref(0);
-const personaSyncPeerVersion = ref(0);
 const identityRelationsVersion = ref(0);
+const identityParticipants = ref<IdentityParticipant[]>([]);
+const identityEndpointAccounts = ref<IdentityEndpointAccount[]>([]);
+const voiceToolsDialog = ref(false);
 const personaMarkdownContent = ref("");
 const personaMarkdownLoading = ref(false);
 const personaMarkdownLoadError = ref("");
@@ -128,7 +136,24 @@ const voiceProfile = computed(() => {
   return speech.personas.find(persona => persona.id === roleId);
 });
 const hasPersona = computed(() => Boolean(gateway.value?.agentRoleId));
-const unresolvedVoiceprints = computed(() => voiceIdentitySummary.value?.unresolvedVoiceprints || []);
+const authoritativeIdentityParticipantIds = computed(() => new Set(identityParticipants.value
+  .filter(item => !item.conflicted && (item.status === "confirmed" || item.status === "corrected"))
+  .map(item => item.id)));
+const genericVoiceAccountKeys = computed(() => new Set(identityEndpointAccounts.value
+  .filter(account => !account.conflicted && ["voice", "speech", "voiceprint"].includes(account.platform.trim().toLocaleLowerCase()))
+  .map(account => `${account.endpointIdentityNamespace}|${account.senderStableId}`)));
+function hasGenericVoiceAccount(sourceHostId: string | undefined, voiceprintId: string): boolean {
+  return Boolean(sourceHostId && genericVoiceAccountKeys.value.has(`host:${sourceHostId}|${voiceprintId}`));
+}
+const assignedVoiceIdentityKeys = computed(() => new Set(
+  voiceIdentities.value
+    .filter(identity => !identity.conflicted && identity.participantId && authoritativeIdentityParticipantIds.value.has(identity.participantId))
+    .map(identity => voiceIdentityKey(identity.sourceHostId, identity.voiceprintId))
+));
+const unresolvedVoiceprints = computed(() => (voiceIdentitySummary.value?.unresolvedVoiceprints || []).filter(item =>
+  !assignedVoiceIdentityKeys.value.has(voiceIdentityKey(item.sourceHostId, item.voiceprintId))
+  && !hasGenericVoiceAccount(item.sourceHostId, item.voiceprintId)
+));
 const orderedUnresolvedVoiceprints = computed(() => orderPersonaVoiceConfirmationCandidates(
   voiceConfirmation.value,
   unresolvedVoiceprints.value
@@ -138,7 +163,23 @@ const sortedVoiceIdentities = computed(() => [...voiceIdentities.value].sort((le
   if (Boolean(left.conflicted) !== Boolean(right.conflicted)) return left.conflicted ? -1 : 1;
   return right.updatedAt.localeCompare(left.updatedAt);
 }));
+const unassignedVoiceIdentities = computed(() => sortedVoiceIdentities.value.filter(identity =>
+  !identity.participantId || !authoritativeIdentityParticipantIds.value.has(identity.participantId)
+));
+const unresolvedVoiceIdentityKeys = computed(() => new Set(unresolvedVoiceprints.value.map(item =>
+  voiceIdentityKey(item.sourceHostId, item.voiceprintId)
+)));
+const storedUnassignedVoiceIdentities = computed(() => unassignedVoiceIdentities.value.filter(identity =>
+  !unresolvedVoiceIdentityKeys.value.has(voiceIdentityKey(identity.sourceHostId, identity.voiceprintId))
+  && !hasGenericVoiceAccount(identity.sourceHostId, identity.voiceprintId)
+));
+const unidentifiedVoiceCount = computed(() => unresolvedVoiceprints.value.length + storedUnassignedVoiceIdentities.value.length);
 const rules = computed(() => gateway.value ? notificationRulesForGateway(gateway.value) : []);
+const automations = computed(() => gateway.value ? automationRulesForGateway(gateway.value) : []);
+const messageAutomations = computed(() => automations.value.filter(rule => rule.trigger.type === "message"));
+const scheduledAutomations = computed(() => automations.value.filter(rule => rule.trigger.type === "schedule"));
+const activeAutomation = computed(() => automations.value.find(rule => rule.id === activeAutomationId.value) || null);
+const timerInputEnabled = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value).includes("heartbeat") : false);
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
 const variableEntries = computed(() => Object.entries(gateway.value?.routeVariables || {})
   .filter(([key]) => !isSpeechRouteVariableKey(key)));
@@ -163,6 +204,31 @@ const scheduleTypeOptions = [
   { title: "每天指定时间", value: "daily_time" },
   { title: "某一天指定时间", value: "once_at" }
 ];
+const actionTypeOptions = [
+  { title: "通知 Agent", value: "deliver_agent", icon: "mdi-message-arrow-right-outline", note: "把当前消息或定时说明交给这个人格处理" },
+  { title: "运行脚本", value: "run_script", icon: "mdi-console-line", note: "运行人格 scripts 目录中的 cmd、bat 或 py 文件" }
+];
+const messageAutomationGroups = computed(() => {
+  const definitions = [
+    { key: "chat", title: "聊天消息", note: "私聊、群聊、回复和 @", kinds: ["private", "group_message", "direct_at", "direct_reply", "indirect_reply", "wecom_message", "weixin_message", "feishu_message"] },
+    { key: "voice", title: "语音与设备", note: "语音转写、穿戴设备和 RabiLink", kinds: ["voice_transcript", "wearable_health_alert", "rabilink"] },
+    { key: "system", title: "手动与系统消息", note: "手动触发、角色面板和兼容事件", kinds: ["manual_trigger", "role_panel_message", "plan_feedback", "heartbeat"] },
+    { key: "other", title: "其他来源", note: "未归入以上分组的消息类型", kinds: [] as string[] }
+  ];
+  const assigned = new Set<string>();
+  return definitions.map(definition => {
+    const items = messageAutomations.value.filter(rule => {
+      if (assigned.has(rule.id) || rule.trigger.type !== "message") return false;
+      const routeKinds = rule.trigger.routeKinds ?? [];
+      const matches = definition.key === "other"
+        ? true
+        : routeKinds.some(kind => definition.kinds.includes(kind));
+      if (matches) assigned.add(rule.id);
+      return matches;
+    });
+    return { ...definition, items };
+  }).filter(group => group.items.length > 0);
+});
 const activeRuleHasHeartbeat = computed(() => activeRule.value?.routeKinds?.includes("heartbeat") === true);
 const visibleRouteKindDefinitions = computed(() => {
   const query = routeKindQuery.value.trim().toLowerCase();
@@ -276,10 +342,155 @@ function removeSchedule(index: number): void {
   patchRule({ schedules });
 }
 
+function openAutomation(ruleId: string): void {
+  activeAutomationId.value = ruleId;
+  automationDialog.value = true;
+  routeKindQuery.value = "";
+}
+
+function createAutomation(triggerType: "message" | "schedule", actionType: string): void {
+  const normalizedAction = actionType === "run_script" ? "run_script" : "deliver_agent";
+  const id = store.addAutomation(triggerType, normalizedAction);
+  if (!id) return;
+  automationWorkspaceTab.value = triggerType === "schedule" ? "schedule" : "messages";
+  openAutomation(id);
+}
+
+function patchAutomation(patch: Partial<PersonaAutomationRuleDefinition>): void {
+  if (!activeAutomation.value) return;
+  store.updateAutomation(activeAutomation.value.id, patch);
+}
+
+function setAutomationTriggerType(type: "message" | "schedule"): void {
+  if (!activeAutomation.value || !gateway.value || activeAutomation.value.trigger.type === type) return;
+  patchAutomation({
+    trigger: type === "schedule"
+      ? { type: "schedule", schedule: defaultHeartbeatSchedule(gateway.value, "触发时间") }
+      : { type: "message", routeKinds: [], targetGroupId: "", allowedSpeakerNames: [], regex: "" }
+  });
+  automationWorkspaceTab.value = type === "schedule" ? "schedule" : "messages";
+}
+
+function setAutomationActionType(type: "deliver_agent" | "run_script"): void {
+  if (!activeAutomation.value || activeAutomation.value.action.type === type) return;
+  patchAutomation({
+    action: type === "run_script"
+      ? { type: "run_script", scriptPath: "", arguments: [], timeoutSeconds: 300 }
+      : { type: "deliver_agent", message: "", template: "" }
+  });
+}
+
+function patchAutomationMessageTrigger(patch: Record<string, unknown>): void {
+  if (!activeAutomation.value || activeAutomation.value.trigger.type !== "message") return;
+  patchAutomation({ trigger: { ...activeAutomation.value.trigger, ...patch } as PersonaAutomationRuleDefinition["trigger"] });
+}
+
+function toggleAutomationRouteKind(kind: string): void {
+  if (!activeAutomation.value || activeAutomation.value.trigger.type !== "message") return;
+  const next = new Set(activeAutomation.value.trigger.routeKinds || []);
+  if (next.has(kind)) next.delete(kind);
+  else next.add(kind);
+  patchAutomationMessageTrigger({ routeKinds: [...next] });
+}
+
+function patchAutomationSchedule(patch: Partial<NotificationScheduleDefinition>): void {
+  if (!activeAutomation.value || activeAutomation.value.trigger.type !== "schedule") return;
+  patchAutomation({
+    trigger: {
+      type: "schedule",
+      schedule: { ...activeAutomation.value.trigger.schedule, ...patch }
+    }
+  });
+}
+
+function setAutomationScheduleType(type: string): void {
+  if (type !== "interval" && type !== "daily_time" && type !== "once_at") return;
+  patchAutomationSchedule({ type });
+}
+
+function patchAutomationAction(patch: Record<string, unknown>): void {
+  if (!activeAutomation.value) return;
+  patchAutomation({ action: { ...activeAutomation.value.action, ...patch } as PersonaAutomationRuleDefinition["action"] });
+}
+
+function automationSourceSummary(rule: PersonaAutomationRuleDefinition): string {
+  if (rule.trigger.type === "schedule") {
+    const schedule = rule.trigger.schedule;
+    if (schedule.type === "daily_time") return `每天 ${schedule.timeOfDay || "未设置时间"}`;
+    if (schedule.type === "once_at") return schedule.onceAt ? `一次：${schedule.onceAt.replace("T", " ")}` : "一次性时间未设置";
+    const window = schedule.windowStartTime && schedule.windowEndTime
+      ? `，${schedule.windowStartTime}–${schedule.windowEndTime}`
+      : "";
+    return `每 ${schedule.intervalSeconds || 0} 秒${window}`;
+  }
+  const kinds = rule.trigger.routeKinds || [];
+  return kinds.length > 0 ? kinds.map(kind => routeKindLabels[kind] || kind).join("、") : "所有收到的消息";
+}
+
+function automationActionSummary(rule: PersonaAutomationRuleDefinition): string {
+  if (rule.action.type === "run_script") return rule.action.scriptPath ? `运行 ${rule.action.scriptPath}` : "脚本路径未设置";
+  if (rule.trigger.type === "schedule") return rule.action.message?.trim() || "通知内容未填写";
+  return rule.action.template?.trim() ? rule.action.template.trim().replace(/\s+/g, " ").slice(0, 90) : "使用基础消息内容，不附加额外说明";
+}
+
+function automationDiagnostics(rule: PersonaAutomationRuleDefinition): string[] {
+  const issues: string[] = [];
+  if (rule.trigger.type === "message" && (rule.trigger.routeKinds?.length || 0) === 0) {
+    issues.push("没有选择消息来源时会匹配所有收到的消息。");
+  }
+  if (rule.trigger.type === "message" && rule.trigger.regex) {
+    try { new RegExp(rule.trigger.regex); } catch { issues.push("消息匹配正则无法解析。"); }
+  }
+  if (rule.trigger.type === "schedule") {
+    const schedule = rule.trigger.schedule;
+    if (schedule.type === "interval" && Number(schedule.intervalSeconds || 0) <= 0) issues.push("间隔必须大于 0 秒。");
+    if (schedule.type === "daily_time" && !schedule.timeOfDay) issues.push("还没有设置每天执行时间。");
+    if (schedule.type === "once_at" && !schedule.onceAt) issues.push("还没有设置执行日期和时间。");
+    if (!timerInputEnabled.value) issues.push("当前 Route 尚未启用定时任务入口。");
+  }
+  if (rule.action.type === "run_script") {
+    if (!rule.action.scriptPath?.trim()) issues.push("还没有选择人格 scripts 目录中的脚本。");
+    if (!gateway.value?.personaAutomationScriptsEnabled) issues.push("当前 Route 尚未允许运行人格脚本。");
+  }
+  return issues;
+}
+
+function automationActionLabel(rule: PersonaAutomationRuleDefinition): string {
+  return rule.action.type === "run_script" ? "运行脚本" : "通知 Agent";
+}
+
+function automationActionColor(rule: PersonaAutomationRuleDefinition): string {
+  return rule.action.type === "run_script" ? "warning" : "secondary";
+}
+
+function enableTimerInput(): void {
+  if (!gateway.value || timerInputEnabled.value) return;
+  store.updateAdapters([...gatewayAdapterTypes(gateway.value), "heartbeat"]);
+}
+
+function setScriptExecutionEnabled(value: boolean): void {
+  if (!gateway.value) return;
+  gateway.value.personaAutomationScriptsEnabled = value;
+  store.touch();
+}
+
+function scriptArgumentsText(rule: PersonaAutomationRuleDefinition): string {
+  return rule.action.type === "run_script" ? (rule.action.arguments || []).join("\n") : "";
+}
+
+function setScriptArguments(value: unknown): void {
+  patchAutomationAction({
+    arguments: String(value || "").split(/\r?\n/).map(item => item.trim()).filter(Boolean)
+  });
+}
+
 function setRole(value: string): void {
   if (!gateway.value) return;
   gateway.value.agentRoleId = value;
-  if (!value) gateway.value.notificationRules = [];
+  if (!value) {
+    gateway.value.automationRules = [];
+    gateway.value.notificationRules = [];
+  }
   store.touch();
 }
 
@@ -493,11 +704,47 @@ function voiceIdentityColor(identity: PersonaVoiceIdentity): string | undefined 
   return undefined;
 }
 
+function voiceParticipantOptions(items: IdentityParticipant[]): Array<{ title: string; value: string }> {
+  return items
+    .filter(item => !item.conflicted && (item.status === "confirmed" || item.status === "corrected"))
+    .map(item => ({ title: item.displayName || item.id, value: item.id }));
+}
+
+function voiceParticipantName(items: IdentityParticipant[], participantId: string | undefined): string {
+  if (!participantId) return "未关联身份";
+  const participant = items.find(item => item.id === participantId);
+  return participant?.displayName || participantId;
+}
+
+function updateIdentityParticipants(items: IdentityParticipant[]): void {
+  identityParticipants.value = items;
+}
+
+function updateIdentityEndpointAccounts(items: IdentityEndpointAccount[]): void {
+  identityEndpointAccounts.value = items;
+}
+
+function voiceIdentityAssignmentIssue(items: IdentityParticipant[], identity: PersonaVoiceIdentity): string {
+  if (!identity.participantId) return "";
+  const participant = items.find(item => item.id === identity.participantId);
+  if (!participant) return "原来关联的身份已不存在，需要重新确认。";
+  if (participant.conflicted) return "原来关联的身份存在冲突，需要重新确认。";
+  if (participant.status === "retired") return "原来关联的身份已停用，需要重新确认。";
+  if (participant.status === "candidate") return "原来关联的身份仍是候选，不能作为已识别身份。";
+  return "";
+}
+
+async function openVoiceTools(): Promise<void> {
+  voiceToolsDialog.value = true;
+  if (!voiceIdentityLoaded.value) await refreshVoiceIdentityReview();
+}
+
 async function setVoiceIdentity(
   sourceHostId: string | undefined,
   sourceHostName: string | undefined,
   voiceprintId: string,
-  isUser: boolean | null
+  isUser?: boolean | null,
+  participantId?: string | null
 ): Promise<void> {
   const roleId = gateway.value?.agentRoleId || "";
   if (!roleId || !sourceHostId) return;
@@ -506,13 +753,16 @@ async function setVoiceIdentity(
   voiceIdentityError.value = "";
   voiceIdentityNotice.value = "";
   try {
-    const result = await personaVoiceIdentityClient.update(roleId, {
+    const patch: PersonaVoiceIdentityPatch = {
       sourceHostId,
       sourceHostName,
-      voiceprintId,
-      isUser
-    });
-    voiceIdentityNotice.value = result.appended ? "人格声纹关系已更新。" : "当前人格已经是这个判断。";
+      voiceprintId
+    };
+    if (isUser !== undefined) patch.isUser = isUser;
+    if (participantId !== undefined) patch.participantId = participantId;
+    const result = await personaVoiceIdentityClient.update(roleId, patch);
+    voiceIdentityNotice.value = result.appended ? "语音消息端账号归类已更新。" : "当前人格已经是这个判断。";
+    if (participantId) delete voiceParticipantSelections.value[key];
     if (voiceConfirmation.value.candidateKeys.includes(key)) cancelVoiceConfirmation();
     await refreshVoiceIdentityReview();
   } catch (error) {
@@ -520,6 +770,25 @@ async function setVoiceIdentity(
   } finally {
     voiceIdentityBusyKey.value = "";
   }
+}
+
+
+async function linkVoiceIdentity(
+  sourceHostId: string | undefined,
+  sourceHostName: string | undefined,
+  voiceprintId: string
+): Promise<void> {
+  const key = voiceIdentityKey(sourceHostId, voiceprintId);
+  const participantId = voiceParticipantSelections.value[key];
+  if (!participantId) {
+    voiceIdentityError.value = "请先选择要关联的身份。";
+    return;
+  }
+  await setVoiceIdentity(sourceHostId, sourceHostName, voiceprintId, undefined, participantId);
+}
+
+async function unlinkVoiceIdentity(identity: PersonaVoiceIdentity): Promise<void> {
+  await setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, undefined, null);
 }
 
 function personaSyncEventData(raw: Event): { roleId?: string; path?: string } | null {
@@ -551,8 +820,6 @@ function startPersonaEvents(): void {
   managerEvents = managerEventSource("/api/events");
   managerEvents.addEventListener("ready", () => {
     if (managerEventsReady) {
-      personaSyncManifestVersion.value += 1;
-      personaSyncPeerVersion.value += 1;
       if (voiceIdentityLoaded.value) void refreshVoiceIdentityReview();
     }
     else managerEventsReady = true;
@@ -566,19 +833,8 @@ function startPersonaEvents(): void {
   managerEvents.addEventListener("persona_sync_manifest_changed", (raw) => {
     const data = personaSyncEventData(raw);
     const roleId = gateway.value?.agentRoleId || "";
-    if (roleId && (!data?.roleId || data.roleId === roleId)) personaSyncManifestVersion.value += 1;
     if (roleId && (!data?.roleId || data.roleId === roleId)) identityRelationsVersion.value += 1;
     if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
-  });
-  managerEvents.addEventListener("rabilink_status", () => {
-    personaSyncPeerVersion.value += 1;
-  });
-  managerEvents.addEventListener("persona_sync_lan_status", () => {
-    personaSyncPeerVersion.value += 1;
-  });
-  managerEvents.addEventListener("persona_sync_auto_status", () => {
-    personaSyncManifestVersion.value += 1;
-    personaSyncPeerVersion.value += 1;
   });
 }
 
@@ -592,6 +848,9 @@ watch(() => gateway.value?.agentRoleId, (roleId) => {
   voiceIdentityNotice.value = "";
   voiceConfirmation.value = idlePersonaVoiceConfirmation();
   voiceIdentityLoaded.value = false;
+  identityParticipants.value = [];
+  identityEndpointAccounts.value = [];
+  voiceToolsDialog.value = false;
   if (roleId) {
     void refreshVoiceProfile();
     clearVoiceIdentityReview();
@@ -646,9 +905,9 @@ watch(() => store.selectedGatewayId, (id) => {
         <div class="page-subtitle">人格可以留空；留空时只使用消息入口默认包装和回传 API。</div>
       </div>
       <div class="page-actions" v-if="gateway">
+        <v-btn v-if="hasPersona" :to="routeScopedPersonaSyncPath(configNameFor(gateway))" prepend-icon="mdi-folder-sync-outline" color="secondary" variant="tonal">多电脑人格同步</v-btn>
         <v-btn v-if="hasPersona" prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')">打开人格配置</v-btn>
-        <v-btn v-if="hasPersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开消息模板配置</v-btn>
-        <v-btn v-if="hasPersona" prepend-icon="mdi-plus" color="secondary" variant="tonal" @click="store.addRule">新增消息模板规则</v-btn>
+        <v-btn v-if="hasPersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开人格自动化配置</v-btn>
       </div>
     </div>
 
@@ -664,8 +923,12 @@ watch(() => store.selectedGatewayId, (id) => {
           </div>
         </div>
         <div class="summary-tile">
-          <span>消息模板</span>
-          <b>{{ hasPersona ? `${rules.length} 条规则` : "入口默认" }}</b>
+          <span>消息规则</span>
+          <b>{{ hasPersona ? `${messageAutomations.length} 条规则` : "入口默认" }}</b>
+        </div>
+        <div class="summary-tile">
+          <span>定时任务</span>
+          <b>{{ hasPersona ? `${scheduledAutomations.length} 条任务` : "未启用" }}</b>
         </div>
         <div class="summary-tile">
           <span>{{ hasPersona ? "角色目录" : "运行模式" }}</span>
@@ -895,229 +1158,109 @@ watch(() => store.selectedGatewayId, (id) => {
         </v-card>
       </div>
 
-      <PersonaSyncCard
-        v-if="hasPersona"
-        :role-id="gateway.agentRoleId || ''"
-        :manifest-version="personaSyncManifestVersion"
-        :peer-version="personaSyncPeerVersion"
-      />
-
       <PersonaIdentityRelationsCard
         v-if="hasPersona"
         :role-id="gateway.agentRoleId || ''"
         :version="identityRelationsVersion"
-      />
-
-      <v-card v-if="hasPersona" class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">人格声纹归类</div>
-            <div class="section-note">统计最近 24 小时。主机只提供不透明声纹证据，由当前人格明确判断“这是我”或“其他人”。</div>
-          </div>
-          <v-btn
-            size="small"
-            variant="text"
-            prepend-icon="mdi-refresh"
-            :loading="voiceIdentityLoading"
-            @click="refreshVoiceIdentityReview(true)"
-          >
-            刷新归类
-          </v-btn>
-        </div>
-
-        <v-alert type="info" variant="tonal" density="compact" class="mb-3">
-          点击“刷新归类”后才读取最近 24 小时统计；页面只读取统计、声纹缩写和人格关系，不读取或展示转写正文。读取过一次后，新录音、声纹修正和多电脑人格同步会通过事件触发刷新。
-        </v-alert>
-        <v-alert v-if="voiceIdentityError" type="error" variant="tonal" density="compact" class="mb-3">
-          {{ voiceIdentityError }}
-        </v-alert>
-        <v-alert v-if="voiceIdentityNotice" type="success" variant="tonal" density="compact" class="mb-3">
-          {{ voiceIdentityNotice }}
-        </v-alert>
-        <v-progress-linear v-if="voiceIdentityLoading" indeterminate color="secondary" class="mb-3" />
-
-        <div class="persona-speech-summary">
-          <div>
-            <span>归类覆盖率</span>
-            <b>{{ Math.round((voiceIdentitySummary?.coverageRate || 0) * 100) }}%</b>
-          </div>
-          <div>
-            <span>我的发言</span>
-            <b>{{ voiceIdentitySummary?.byClassification.user.segments || 0 }} 个分段</b>
-            <small data-no-i18n>{{ compactDuration(voiceIdentitySummary?.byClassification.user.speakerDurationSeconds || 0) }}</small>
-          </div>
-          <div>
-            <span>其他人</span>
-            <b>{{ voiceIdentitySummary?.byClassification.other.segments || 0 }} 个分段</b>
-            <small data-no-i18n>{{ compactDuration(voiceIdentitySummary?.byClassification.other.speakerDurationSeconds || 0) }}</small>
-          </div>
-          <div>
-            <span>未判断 / 冲突</span>
-            <b>{{ (voiceIdentitySummary?.byClassification.unknown.segments || 0) + (voiceIdentitySummary?.byClassification.conflict.segments || 0) }} 个分段</b>
-            <small data-no-i18n>{{ compactDuration((voiceIdentitySummary?.byClassification.unknown.speakerDurationSeconds || 0) + (voiceIdentitySummary?.byClassification.conflict.speakerDurationSeconds || 0)) }}</small>
-          </div>
-        </div>
-
-        <v-alert
-          class="mt-4"
-          :type="voiceConfirmation.status === 'found' ? 'success' : 'info'"
-          variant="tonal"
-          density="compact"
-        >
-          <div class="d-flex justify-space-between ga-3 align-center flex-wrap">
-            <div v-if="voiceConfirmation.status === 'idle'">
-              <strong>不知道哪个声纹是自己？</strong>
-              <div>开始后，用准备归类的电脑、手机或眼镜只让本人连续说一句；下一次录音事件会把本次新出现的未归类声纹标出来。</div>
+        :voice-identities="voiceIdentities"
+        :unidentified-voice-count="unidentifiedVoiceCount"
+        @unlink-voice="unlinkVoiceIdentity"
+        @participants-change="updateIdentityParticipants"
+        @accounts-change="updateIdentityEndpointAccounts"
+      >
+        <template #unidentified-actions>
+          <v-btn size="small" variant="text" prepend-icon="mdi-account-voice" @click="openVoiceTools">声纹工具</v-btn>
+        </template>
+        <template #voice-endpoint="{ participants }">
+          <div class="identity-voice-channel">
+            <div class="identity-channel-panel-head">
+              <div><strong>待确认声纹</strong><span>声纹只显示缩写、出现情况和处理主机；关联后会进入对应的人物卡。</span></div>
+              <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="voiceIdentityLoading" @click="refreshVoiceIdentityReview(true)">刷新声纹</v-btn>
             </div>
-            <div v-else-if="voiceConfirmation.status === 'waiting'">
-              <strong>正在等待下一段未归类声纹</strong>
-              <div>请尽量保持环境安静，只让本人说话。系统只标记本次候选，不会自动判断身份。</div>
-            </div>
-            <div v-else>
-              <strong>已找到 {{ voiceConfirmationCandidateCount }} 个本次候选</strong>
-              <div>如果同时出现多个声纹，只确认你能确定由本人说出的项；系统不会因候选唯一就自动设为用户。</div>
-            </div>
-            <div class="d-flex ga-2 flex-wrap">
-              <v-btn
-                v-if="voiceConfirmation.status !== 'waiting'"
-                size="small"
-                color="secondary"
-                variant="tonal"
-                prepend-icon="mdi-account-voice"
-                @click="startVoiceConfirmation"
+            <v-alert v-if="voiceIdentityError" type="error" variant="tonal" density="compact" class="mb-3">{{ voiceIdentityError }}</v-alert>
+            <v-alert v-if="voiceIdentityNotice" type="success" variant="tonal" density="compact" class="mb-3">{{ voiceIdentityNotice }}</v-alert>
+            <v-progress-linear v-if="voiceIdentityLoading" indeterminate color="secondary" class="mb-3" />
+
+            <div class="identity-unrecognized-grid">
+              <article
+                v-for="item in orderedUnresolvedVoiceprints"
+                :key="voiceIdentityKey(item.sourceHostId, item.voiceprintId)"
+                class="identity-endpoint-card identity-voice-card"
               >
-                {{ voiceConfirmation.status === "found" ? "重新捕获" : "标记下一段" }}
-              </v-btn>
-              <v-btn
-                v-if="voiceConfirmation.status !== 'idle'"
-                size="small"
-                variant="text"
-                @click="cancelVoiceConfirmation"
-              >取消</v-btn>
-            </div>
-          </div>
-        </v-alert>
+                <div class="identity-endpoint-card-main">
+                  <div class="min-w-0">
+                    <div class="d-flex ga-2 align-center flex-wrap">
+                      <strong data-no-i18n>{{ shortVoiceprint(item.voiceprintId) }}</strong>
+                      <v-chip size="x-small" :color="item.classification === 'conflict' ? 'warning' : 'secondary'" variant="tonal">{{ item.classification === "conflict" ? "有冲突" : "未判断" }}</v-chip>
+                      <v-chip v-if="isPersonaVoiceConfirmationCandidate(voiceConfirmation, item)" size="x-small" color="success" variant="tonal">本次出现</v-chip>
+                    </div>
+                    <div class="identity-endpoint-id">{{ item.segments }} 段 · <span data-no-i18n>{{ compactDuration(item.speakerDurationSeconds) }}</span> · <span data-no-i18n>{{ item.sourceHostName || shortHost(item.sourceHostId) }}</span></div>
+                    <div v-if="!item.sourceHostId" class="text-warning text-caption mt-1">旧记录缺少处理主机标识，不能建立稳定关联。</div>
+                  </div>
+                </div>
+                <div class="identity-voice-actions">
+                  <v-select v-model="voiceParticipantSelections[voiceIdentityKey(item.sourceHostId, item.voiceprintId)]" :items="voiceParticipantOptions(participants)" label="关联到身份" density="compact" hide-details :disabled="!item.sourceHostId" />
+                  <v-btn size="small" color="secondary" variant="tonal" :disabled="!item.sourceHostId || !voiceParticipantSelections[voiceIdentityKey(item.sourceHostId, item.voiceprintId)]" :loading="voiceIdentityBusyKey === voiceIdentityKey(item.sourceHostId, item.voiceprintId)" @click="linkVoiceIdentity(item.sourceHostId, item.sourceHostName, item.voiceprintId)">关联</v-btn>
+                  <v-btn size="small" variant="text" :disabled="!item.sourceHostId" :loading="voiceIdentityBusyKey === voiceIdentityKey(item.sourceHostId, item.voiceprintId)" @click="setVoiceIdentity(item.sourceHostId, item.sourceHostName, item.voiceprintId, true)">这是我</v-btn>
+                  <v-btn size="small" variant="text" :disabled="!item.sourceHostId" :loading="voiceIdentityBusyKey === voiceIdentityKey(item.sourceHostId, item.voiceprintId)" @click="setVoiceIdentity(item.sourceHostId, item.sourceHostName, item.voiceprintId, false)">其他人</v-btn>
+                </div>
+              </article>
 
-        <div class="section-title-row mt-5">
-          <div>
-            <div class="section-title">未解决声纹</div>
-            <div class="section-note">优先确认出现次数多、持续时间长或存在多电脑冲突的声纹。</div>
-          </div>
-          <v-chip color="warning" variant="tonal">{{ unresolvedVoiceprints.length }}</v-chip>
-        </div>
-        <div v-if="unresolvedVoiceprints.length === 0" class="empty-state compact-empty">
-          <div>
-            <strong>{{ voiceConfirmation.status === "waiting" ? "正在等待下一段未归类声纹" : "最近 24 小时没有待处理声纹" }}</strong>
-            <span>{{ voiceConfirmation.status === "waiting" ? "收到下一段录音事件后会自动刷新；也可以手动点击刷新归类补查一次。" : "没有录音时这里也会保持为空；归类关系仍保存在当前人格目录。" }}</span>
-          </div>
-        </div>
-        <div v-else class="rule-list">
-          <div
-            v-for="item in orderedUnresolvedVoiceprints"
-            :key="voiceIdentityKey(item.sourceHostId, item.voiceprintId)"
-            class="rule-card"
-          >
-            <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
-              <div class="min-w-0">
-                <div class="d-flex ga-2 align-center flex-wrap">
-                  <strong data-no-i18n>{{ shortVoiceprint(item.voiceprintId) }}</strong>
-                  <v-chip size="small" :color="item.classification === 'conflict' ? 'warning' : undefined" variant="tonal">
-                    {{ item.classification === "conflict" ? "有冲突" : "未判断" }}
-                  </v-chip>
-                  <v-chip
-                    v-if="isPersonaVoiceConfirmationCandidate(voiceConfirmation, item)"
-                    size="small"
-                    color="success"
-                    variant="tonal"
-                  >本次出现</v-chip>
+              <article v-for="identity in storedUnassignedVoiceIdentities" :key="identity.identityKey" class="identity-endpoint-card identity-voice-card">
+                <div class="identity-endpoint-card-main">
+                  <div class="min-w-0">
+                    <div class="d-flex ga-2 align-center flex-wrap">
+                      <strong data-no-i18n>{{ shortVoiceprint(identity.voiceprintId) }}</strong>
+                      <v-chip size="x-small" :color="voiceIdentityColor(identity)" variant="tonal">{{ voiceIdentityLabel(identity) }}</v-chip>
+                    </div>
+                    <div class="identity-endpoint-id"><span data-no-i18n>{{ identity.sourceHostName || shortHost(identity.sourceHostId) }}</span><template v-if="identity.displayName"> · <span data-no-i18n>{{ identity.displayName }}</span></template></div>
+                    <div v-if="voiceIdentityAssignmentIssue(participants, identity)" class="text-warning text-caption mt-1">{{ voiceIdentityAssignmentIssue(participants, identity) }}</div>
+                  </div>
                 </div>
-                <div class="section-note mt-1">
-                  {{ item.segments }} 个分段 · <span data-no-i18n>{{ compactDuration(item.speakerDurationSeconds) }}</span> · 最后出现
-                  <span data-no-i18n>{{ compactTime(item.lastSeenAt) }}</span>
+                <div class="identity-voice-actions">
+                  <v-select v-model="voiceParticipantSelections[voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)]" :items="voiceParticipantOptions(participants)" label="关联到身份" density="compact" hide-details />
+                  <v-btn size="small" color="secondary" variant="tonal" :disabled="!voiceParticipantSelections[voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)]" :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)" @click="linkVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId)">关联</v-btn>
+                  <v-btn size="small" variant="text" :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)" @click="setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, true)">这是我</v-btn>
+                  <v-btn size="small" variant="text" :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)" @click="setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, false)">其他人</v-btn>
                 </div>
-                <div class="section-note" data-no-i18n>{{ item.sourceHostName || shortHost(item.sourceHostId) }}</div>
-                <div v-if="!item.sourceHostId" class="text-warning text-caption mt-1">旧记录缺少处理主机标识，不能建立跨电脑稳定关系。</div>
-              </div>
-              <div class="rule-card-actions">
-                <v-btn
-                  size="small"
-                  color="success"
-                  variant="tonal"
-                  :disabled="!item.sourceHostId"
-                  :loading="voiceIdentityBusyKey === voiceIdentityKey(item.sourceHostId, item.voiceprintId)"
-                  @click="setVoiceIdentity(item.sourceHostId, item.sourceHostName, item.voiceprintId, true)"
-                >这是我</v-btn>
-                <v-btn
-                  size="small"
-                  color="secondary"
-                  variant="tonal"
-                  :disabled="!item.sourceHostId"
-                  :loading="voiceIdentityBusyKey === voiceIdentityKey(item.sourceHostId, item.voiceprintId)"
-                  @click="setVoiceIdentity(item.sourceHostId, item.sourceHostName, item.voiceprintId, false)"
-                >其他人</v-btn>
-              </div>
+              </article>
             </div>
           </div>
-        </div>
+        </template>
+      </PersonaIdentityRelationsCard>
 
-        <div class="section-title-row mt-5">
-          <div>
-            <div class="section-title">已归类关系</div>
-            <div class="section-note">关系事件属于当前人格，并随人格文件夹在多台电脑之间合并。</div>
-          </div>
-          <v-chip color="secondary" variant="tonal">{{ sortedVoiceIdentities.length }}</v-chip>
-        </div>
-        <div v-if="sortedVoiceIdentities.length === 0" class="empty-state compact-empty">
-          <div>
-            <strong>当前人格还没有声纹关系</strong>
-            <span>确认第一条声纹后会写入 <code>voice/voice-identities.jsonl</code>。</span>
-          </div>
-        </div>
-        <div v-else class="rule-list">
-          <div v-for="identity in sortedVoiceIdentities" :key="identity.identityKey" class="rule-card">
-            <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
-              <div class="min-w-0">
-                <div class="d-flex ga-2 align-center flex-wrap">
-                  <strong data-no-i18n>{{ shortVoiceprint(identity.voiceprintId) }}</strong>
-                  <v-chip size="small" :color="voiceIdentityColor(identity)" variant="tonal">{{ voiceIdentityLabel(identity) }}</v-chip>
-                </div>
-                <div class="section-note mt-1">
-                  <span v-if="identity.displayName" data-no-i18n>{{ identity.displayName }}</span>
-                  <span v-else>未设置称呼</span>
-                  <template v-if="identity.relationship"> · <span data-no-i18n>{{ identity.relationship }}</span></template>
-                </div>
-                <div class="section-note">
-                  <span data-no-i18n>{{ identity.sourceHostName || shortHost(identity.sourceHostId) }}</span> · 更新于
-                  <span data-no-i18n>{{ compactTime(identity.updatedAt) }}</span>
-                </div>
-              </div>
-              <div class="rule-card-actions">
-                <v-btn
-                  size="small"
-                  color="success"
-                  variant="text"
-                  :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)"
-                  @click="setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, true)"
-                >这是我</v-btn>
-                <v-btn
-                  size="small"
-                  color="secondary"
-                  variant="text"
-                  :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)"
-                  @click="setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, false)"
-                >其他人</v-btn>
-                <v-btn
-                  size="small"
-                  variant="text"
-                  :disabled="identity.isUser == null && !identity.conflicted"
-                  :loading="voiceIdentityBusyKey === voiceIdentityKey(identity.sourceHostId, identity.voiceprintId)"
-                  @click="setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, null)"
-                >清除判断</v-btn>
-              </div>
+      <v-dialog v-model="voiceToolsDialog" max-width="780">
+        <v-card class="app-card identity-support-dialog">
+          <v-card-title class="identity-dialog-title">
+            <div><strong>声纹识别工具</strong><span>辅助找到待确认声纹；统计和捕获结果都不会自动判断一个人是谁。</span></div>
+            <v-btn icon="mdi-close" variant="text" @click="voiceToolsDialog = false" />
+          </v-card-title>
+          <v-card-text>
+            <div class="d-flex justify-end mb-3"><v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="voiceIdentityLoading" @click="refreshVoiceIdentityReview(true)">刷新最近 24 小时</v-btn></div>
+            <v-alert v-if="voiceIdentityError" type="error" variant="tonal" density="compact" class="mb-3">{{ voiceIdentityError }}</v-alert>
+            <v-alert v-if="voiceIdentityNotice" type="success" variant="tonal" density="compact" class="mb-3">{{ voiceIdentityNotice }}</v-alert>
+            <v-progress-linear v-if="voiceIdentityLoading" indeterminate color="secondary" class="mb-3" />
+            <div class="persona-speech-summary">
+              <div><span>归类覆盖率</span><b>{{ Math.round((voiceIdentitySummary?.coverageRate || 0) * 100) }}%</b></div>
+              <div><span>我的发言</span><b>{{ voiceIdentitySummary?.byClassification.user.segments || 0 }} 个分段</b><small data-no-i18n>{{ compactDuration(voiceIdentitySummary?.byClassification.user.speakerDurationSeconds || 0) }}</small></div>
+              <div><span>其他人</span><b>{{ voiceIdentitySummary?.byClassification.other.segments || 0 }} 个分段</b><small data-no-i18n>{{ compactDuration(voiceIdentitySummary?.byClassification.other.speakerDurationSeconds || 0) }}</small></div>
+              <div><span>未判断 / 冲突</span><b>{{ (voiceIdentitySummary?.byClassification.unknown.segments || 0) + (voiceIdentitySummary?.byClassification.conflict.segments || 0) }} 个分段</b><small data-no-i18n>{{ compactDuration((voiceIdentitySummary?.byClassification.unknown.speakerDurationSeconds || 0) + (voiceIdentitySummary?.byClassification.conflict.speakerDurationSeconds || 0)) }}</small></div>
             </div>
-          </div>
-        </div>
-      </v-card>
+            <v-alert class="mt-4" :type="voiceConfirmation.status === 'found' ? 'success' : 'info'" variant="tonal" density="compact">
+              <div class="d-flex justify-space-between ga-3 align-center flex-wrap">
+                <div v-if="voiceConfirmation.status === 'idle'"><strong>不知道哪个声纹是自己？</strong><div>开始后，只让本人连续说一句；下一次录音会把本次新出现的未归类声纹标出来。</div></div>
+                <div v-else-if="voiceConfirmation.status === 'waiting'"><strong>正在等待下一段未归类声纹</strong><div>请尽量保持环境安静，只让本人说话。系统只标记候选，不会自动确认身份。</div></div>
+                <div v-else><strong>已找到 {{ voiceConfirmationCandidateCount }} 个本次候选</strong><div>返回“未识别身份”的声纹分类，只确认你能确定的项。</div></div>
+                <div class="d-flex ga-2 flex-wrap">
+                  <v-btn v-if="voiceConfirmation.status !== 'waiting'" size="small" color="secondary" variant="tonal" prepend-icon="mdi-account-voice" @click="startVoiceConfirmation">{{ voiceConfirmation.status === "found" ? "重新捕获" : "标记下一段" }}</v-btn>
+                  <v-btn v-if="voiceConfirmation.status !== 'idle'" size="small" variant="text" @click="cancelVoiceConfirmation">取消</v-btn>
+                </div>
+              </div>
+            </v-alert>
+            <div class="section-note mt-3">页面只读取统计、声纹缩写和人格关系，不读取或展示转写正文。</div>
+          </v-card-text>
+        </v-card>
+      </v-dialog>
 
       <v-card v-if="hasPersona" class="app-card glass-card section-card">
         <div class="section-title-row">
@@ -1189,73 +1332,146 @@ watch(() => store.selectedGatewayId, (id) => {
         </div>
       </v-card>
 
-      <v-card v-if="hasPersona" class="app-card glass-card section-card">
-        <div class="section-title-row">
+      <v-card v-if="hasPersona" class="app-card glass-card section-card automation-workspace">
+        <div class="section-title-row automation-workspace-head">
           <div>
-            <div class="section-title">消息模板规则</div>
-            <div class="section-note">命中消息后，按这些模板包装再发送给 Agent。</div>
+            <div class="section-title">人格自动化</div>
+            <div class="section-note">先选择什么时候触发，再选择通知 Agent 或运行脚本。</div>
           </div>
-          <div class="d-flex ga-2 flex-wrap">
-            <v-chip v-if="ruleDiagnosticsCount" color="warning" variant="tonal">{{ ruleDiagnosticsCount }} 个待检查项</v-chip>
-            <v-chip color="secondary" variant="tonal">{{ rules.length }} 条模板</v-chip>
-          </div>
+          <v-chip color="secondary" variant="tonal">{{ automations.length }} 条规则</v-chip>
         </div>
-        <v-alert v-if="ruleDiagnosticsCount" type="warning" variant="tonal" density="compact" class="mb-3">
-          有规则可能无法按预期命中。展开对应规则后可查看具体提示，修正后再保存。
-        </v-alert>
-        <div v-if="rules.length === 0" class="empty-state">
-          <div>
-            <strong>暂无消息模板规则</strong>
-            <span>新增消息模板规则后，RabiRoute 才知道命中的消息要怎样包装给 Agent。</span>
-          </div>
-        </div>
-        <div v-else class="rule-list">
-          <div v-for="(rule, index) in rules" :key="rule.id" class="rule-card">
-            <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
-              <div class="min-w-0">
-                <div class="font-weight-bold text-primary" data-no-i18n>{{ rule.name }}</div>
-                <div class="section-note">{{ routeKindSummary(rule) }} · {{ rule.regex ? `匹配：${rule.regex}` : "不限关键词" }}</div>
-                <div class="section-note mt-1" :data-no-i18n="rule.template ? '' : undefined">{{ ruleTemplateSnippet(rule) }}</div>
-                <div v-if="ruleDiagnostics(rule).length" class="mt-2 d-flex ga-2 flex-wrap">
-                  <v-chip
-                    v-for="issue in ruleDiagnostics(rule)"
-                    :key="issue"
-                    size="small"
-                    color="warning"
-                    variant="tonal"
-                  >
-                    {{ issue }}
-                  </v-chip>
-                </div>
-                <div v-if="ruleNotes(rule).length" class="mt-2 d-flex ga-2 flex-wrap">
-                  <v-chip
-                    v-for="note in ruleNotes(rule)"
-                    :key="note"
-                    size="small"
-                    color="secondary"
-                    variant="tonal"
-                  >
-                    {{ note }}
-                  </v-chip>
-                </div>
+
+        <v-tabs v-model="automationWorkspaceTab" class="automation-tabs" color="secondary" grow>
+          <v-tab value="messages" prepend-icon="mdi-message-processing-outline">收到消息时</v-tab>
+          <v-tab value="schedule" prepend-icon="mdi-calendar-clock-outline">定时任务</v-tab>
+        </v-tabs>
+
+        <v-window v-model="automationWorkspaceTab" class="automation-window">
+          <v-window-item value="messages">
+            <div class="automation-toolbar">
+              <div>
+                <strong>收到哪些消息后做什么</strong>
+                <span>规则按消息来源分组；只有选中的条件和动作参数会显示。</span>
               </div>
-              <div class="rule-card-actions">
-                <v-switch
-                  v-if="!isBuiltinRolePanelRule(rule)"
-                  :model-value="rule.enabled !== false"
-                  :label="rule.enabled !== false ? '启用规则' : '停用规则'"
-                  color="success"
-                  density="compact"
-                  inset
-                  hide-details
-                  @click.stop
-                  @update:model-value="value => store.updateRule(index, { enabled: Boolean(value) })"
-                />
-                <v-btn size="small" variant="tonal" @click="openRule(index)">编辑</v-btn>
+              <v-menu>
+                <template #activator="{ props }">
+                  <v-btn v-bind="props" color="secondary" variant="tonal" prepend-icon="mdi-plus">新增消息规则</v-btn>
+                </template>
+                <v-list>
+                  <v-list-item
+                    v-for="option in actionTypeOptions"
+                    :key="option.value"
+                    :prepend-icon="option.icon"
+                    :title="option.title"
+                    :subtitle="option.note"
+                    @click="createAutomation('message', option.value)"
+                  />
+                </v-list>
+              </v-menu>
+            </div>
+
+            <div v-if="messageAutomations.length === 0" class="empty-state">
+              <div>
+                <strong>还没有消息规则</strong>
+                <span>新增后，可以把指定消息交给 Agent，也可以运行人格脚本。</span>
               </div>
             </div>
-          </div>
-        </div>
+            <div v-else class="automation-groups">
+              <section v-for="group in messageAutomationGroups" :key="group.key" class="automation-group">
+                <div class="automation-group-head">
+                  <div>
+                    <strong>{{ group.title }}</strong>
+                    <span>{{ group.note }}</span>
+                  </div>
+                  <v-chip size="small" variant="tonal">{{ group.items.length }}</v-chip>
+                </div>
+                <div class="automation-card-grid">
+                  <button
+                    v-for="rule in group.items"
+                    :key="rule.id"
+                    type="button"
+                    class="automation-card"
+                    :class="{ disabled: rule.enabled === false, warning: automationDiagnostics(rule).length > 0 }"
+                    @click="openAutomation(rule.id)"
+                  >
+                    <span class="automation-card-topline">
+                      <strong data-no-i18n>{{ rule.name || rule.id }}</strong>
+                      <v-chip size="x-small" :color="automationActionColor(rule)" variant="tonal">{{ automationActionLabel(rule) }}</v-chip>
+                    </span>
+                    <span class="automation-card-source">{{ automationSourceSummary(rule) }}</span>
+                    <span class="automation-card-action">{{ automationActionSummary(rule) }}</span>
+                    <span v-if="automationDiagnostics(rule).length" class="automation-card-warning">
+                      <v-icon size="16">mdi-alert-circle-outline</v-icon>
+                      {{ automationDiagnostics(rule)[0] }}
+                    </span>
+                  </button>
+                </div>
+              </section>
+            </div>
+          </v-window-item>
+
+          <v-window-item value="schedule">
+            <div class="automation-toolbar">
+              <div>
+                <strong>按时间自动运行</strong>
+                <span>支持固定间隔、每天某时和一次性日期时间。</span>
+              </div>
+              <v-menu>
+                <template #activator="{ props }">
+                  <v-btn v-bind="props" color="secondary" variant="tonal" prepend-icon="mdi-plus">新增定时任务</v-btn>
+                </template>
+                <v-list>
+                  <v-list-item
+                    v-for="option in actionTypeOptions"
+                    :key="option.value"
+                    :prepend-icon="option.icon"
+                    :title="option.title"
+                    :subtitle="option.note"
+                    @click="createAutomation('schedule', option.value)"
+                  />
+                </v-list>
+              </v-menu>
+            </div>
+
+            <v-alert v-if="!timerInputEnabled" type="warning" variant="tonal" density="compact" class="mb-4">
+              <div class="d-flex align-center justify-space-between ga-3 flex-wrap">
+                <span>当前 Route 没有启用定时任务入口，保存任务后也不会自动运行。</span>
+                <v-btn size="small" color="warning" variant="tonal" @click="enableTimerInput">启用定时任务</v-btn>
+              </div>
+            </v-alert>
+
+            <div v-if="scheduledAutomations.length === 0" class="empty-state">
+              <div>
+                <strong>还没有定时任务</strong>
+                <span>新增后，RabiRoute 会在本机时间到达时通知 Agent 或运行脚本。</span>
+              </div>
+            </div>
+            <div v-else class="automation-card-grid scheduled-grid">
+              <button
+                v-for="rule in scheduledAutomations"
+                :key="rule.id"
+                type="button"
+                class="automation-card scheduled-card"
+                :class="{ disabled: rule.enabled === false, warning: automationDiagnostics(rule).length > 0 }"
+                @click="openAutomation(rule.id)"
+              >
+                <span class="automation-card-topline">
+                  <strong data-no-i18n>{{ rule.name || rule.id }}</strong>
+                  <v-chip size="x-small" :color="automationActionColor(rule)" variant="tonal">{{ automationActionLabel(rule) }}</v-chip>
+                </span>
+                <span class="automation-schedule-line">
+                  <v-icon size="18">mdi-clock-outline</v-icon>
+                  {{ automationSourceSummary(rule) }}
+                </span>
+                <span class="automation-card-action">{{ automationActionSummary(rule) }}</span>
+                <span v-if="automationDiagnostics(rule).length" class="automation-card-warning">
+                  <v-icon size="16">mdi-alert-circle-outline</v-icon>
+                  {{ automationDiagnostics(rule)[0] }}
+                </span>
+              </button>
+            </div>
+          </v-window-item>
+        </v-window>
       </v-card>
 
       <v-card class="app-card glass-card section-card">
@@ -1274,84 +1490,79 @@ watch(() => store.selectedGatewayId, (id) => {
       </v-card>
     </template>
 
-    <v-dialog v-model="ruleDialog" max-width="1080" class="editor-dialog">
-      <v-card v-if="activeRule && gateway" class="app-card editor-dialog-card">
-        <v-card-title class="d-flex justify-space-between align-center ga-3">
+    <v-dialog v-model="automationDialog" max-width="1040" class="editor-dialog">
+      <v-card v-if="activeAutomation && gateway" class="app-card editor-dialog-card automation-editor">
+        <v-card-title class="automation-editor-head">
           <div>
-            <div class="section-title">规则设置</div>
-            <div class="section-note">{{ gateway.agentRoleId || "未指向人格" }} · {{ activeRule.id }}</div>
+            <div class="section-title">自动化规则</div>
+            <div class="section-note" data-no-i18n>{{ gateway.agentRoleId }} · {{ activeAutomation.id }}</div>
           </div>
           <div class="rule-dialog-actions">
             <v-switch
-              v-if="!isBuiltinRolePanelRule(activeRule)"
-              :model-value="activeRule.enabled !== false"
-              label="启用规则"
+              v-if="activeAutomation.id !== 'role-panel-message'"
+              :model-value="activeAutomation.enabled !== false"
+              label="启用"
               color="success"
               inset
               hide-details
-              @update:model-value="value => patchRule({ enabled: Boolean(value) })"
+              @update:model-value="value => patchAutomation({ enabled: Boolean(value) })"
             />
-            <v-btn icon="mdi-close" variant="text" @click="ruleDialog = false" />
+            <v-btn icon="mdi-close" variant="text" @click="automationDialog = false" />
           </div>
         </v-card-title>
-        <v-card-text>
-          <v-alert v-if="activeRuleDiagnostics.length" type="warning" variant="tonal" density="compact" class="mb-3">
-            <div v-for="issue in activeRuleDiagnostics" :key="issue">{{ issue }}</div>
-          </v-alert>
-          <v-alert v-if="activeRuleNotes.length" type="info" variant="tonal" density="compact" class="mb-3">
-            <div v-for="note in activeRuleNotes" :key="note">{{ note }}</div>
-          </v-alert>
-          <section class="fold-section">
-            <button class="fold-section-head" type="button" @click="ruleMatchParamsOpen = !ruleMatchParamsOpen">
-              <span>
-                <strong>规则参数</strong>
-                <small>名称、匹配正则和目标群号</small>
-              </span>
-              <v-icon>{{ ruleMatchParamsOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
-            </button>
-            <v-expand-transition>
-              <div v-if="ruleMatchParamsOpen" class="fold-section-body">
-                <div class="form-grid">
-                  <v-text-field :model-value="activeRule.name" label="规则名称" @update:model-value="value => patchRule({ name: String(value || '') })" />
-                  <v-text-field :model-value="activeRule.regex" label="消息匹配正则" placeholder="例如：需求|报错|构建失败" @update:model-value="value => patchRule({ regex: String(value || '') })" />
-                  <v-text-field
-                    v-if="ruleHasGroupRoute(activeRule)"
-                    class="full-span"
-                    :model-value="activeRule.targetGroupId"
-                    label="目标群号"
-                    placeholder="留空=不限群"
-                    @update:model-value="value => patchRule({ targetGroupId: String(value || '') })"
-                  />
-                </div>
-              </div>
-            </v-expand-transition>
-          </section>
 
-          <section class="fold-section">
-            <button class="fold-section-head" type="button" @click="ruleRouteKindsOpen = !ruleRouteKindsOpen">
-              <span>
-                <strong>路由类型</strong>
-                <small>一条规则可以同时作用于多个管道</small>
-              </span>
-              <v-icon>{{ ruleRouteKindsOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
-            </button>
-            <v-expand-transition>
-              <div v-if="ruleRouteKindsOpen" class="fold-section-body">
-                <div class="config-toolbar">
+        <v-card-text>
+          <v-alert v-if="automationDiagnostics(activeAutomation).length" type="warning" variant="tonal" density="compact" class="mb-4">
+            <div v-for="issue in automationDiagnostics(activeAutomation)" :key="issue">{{ issue }}</div>
+          </v-alert>
+
+          <div class="automation-editor-section identity-section">
+            <span class="automation-step-number">1</span>
+            <div class="automation-editor-section-body">
+              <div class="automation-section-heading">
+                <strong>这条规则叫什么</strong>
+                <span>名称只用于在列表、日志和排障时辨认。</span>
+              </div>
+              <v-text-field
+                :model-value="activeAutomation.name"
+                label="规则名称"
+                @update:model-value="value => patchAutomation({ name: String(value || '') })"
+              />
+            </div>
+          </div>
+
+          <div class="automation-editor-section">
+            <span class="automation-step-number">2</span>
+            <div class="automation-editor-section-body">
+              <div class="automation-section-heading">
+                <strong>什么时候触发</strong>
+                <span>切换类型后，只显示这一类触发条件需要的参数。</span>
+              </div>
+              <v-btn-toggle
+                :model-value="activeAutomation.trigger.type"
+                color="secondary"
+                mandatory
+                divided
+                class="automation-type-toggle"
+                @update:model-value="value => setAutomationTriggerType(value === 'schedule' ? 'schedule' : 'message')"
+              >
+                <v-btn value="message" prepend-icon="mdi-message-processing-outline">收到消息</v-btn>
+                <v-btn value="schedule" prepend-icon="mdi-calendar-clock-outline">到达时间</v-btn>
+              </v-btn-toggle>
+
+              <template v-if="activeAutomation.trigger.type === 'message'">
+                <div class="config-toolbar mt-4">
                   <v-text-field
                     v-model="routeKindQuery"
                     density="compact"
                     prepend-inner-icon="mdi-magnify"
-                    label="搜索路由类型"
+                    label="搜索消息来源"
                     hide-details
                     clearable
                   />
-                  <div class="selected-pill-row">
-                    <v-chip size="small" color="secondary" variant="tonal">已选 {{ selectedRouteKindCount }}</v-chip>
-                    <v-btn size="small" variant="text" @click="setRouteKinds(activeRule.routeKinds || [], false)">清空</v-btn>
-                  </div>
+                  <v-chip size="small" color="secondary" variant="tonal">已选 {{ activeAutomation.trigger.routeKinds?.length || 0 }}</v-chip>
                 </div>
-                <div class="route-kind-catalog">
+                <div class="route-kind-catalog compact-catalog">
                   <section v-for="definition in visibleRouteKindDefinitions" :key="definition.adapter" class="catalog-section">
                     <div class="catalog-section-head">
                       <div>
@@ -1360,162 +1571,209 @@ watch(() => store.selectedGatewayId, (id) => {
                       </div>
                     </div>
                     <div v-for="group in definition.groups" :key="group.title" class="route-kind-group">
-                      <div class="route-kind-group-head">
-                        <span>{{ group.title }}</span>
-                        <div class="d-flex ga-1">
-                          <v-btn size="x-small" variant="text" @click="setRouteKinds(group.routeKinds, true)">全选</v-btn>
-                          <v-btn size="x-small" variant="text" @click="setRouteKinds(group.routeKinds, false)">清空</v-btn>
-                        </div>
-                      </div>
+                      <div class="route-kind-group-head"><span>{{ group.title }}</span></div>
                       <div class="route-kind-chip-grid">
                         <button
                           v-for="kind in group.routeKinds"
                           :key="kind"
                           class="route-kind-chip"
-                          :class="{ active: activeRule.routeKinds?.includes(kind) }"
+                          :class="{ active: activeAutomation.trigger.routeKinds?.includes(kind) }"
                           type="button"
-                          @click="toggleRouteKind(kind, !activeRule.routeKinds?.includes(kind))"
+                          @click="toggleAutomationRouteKind(kind)"
                         >
-                          <v-icon size="18">{{ activeRule.routeKinds?.includes(kind) ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                          <v-icon size="18">{{ activeAutomation.trigger.routeKinds?.includes(kind) ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
                           <span>{{ routeKindLabels[kind] || kind }}</span>
                           <code>{{ kind }}</code>
                         </button>
                       </div>
                     </div>
                   </section>
-                  <div v-if="visibleRouteKindDefinitions.length === 0" class="empty-state compact-empty">
-                    <div>
-                      <strong>没有匹配的路由类型</strong>
-                      <span>清空搜索后可以看到全部类型。</span>
-                    </div>
-                  </div>
                 </div>
-              </div>
-            </v-expand-transition>
-          </section>
 
-          <section v-if="activeRuleHasHeartbeat" class="fold-section">
-            <button class="fold-section-head" type="button" @click="ruleSchedulesOpen = !ruleSchedulesOpen">
-              <span>
-                <strong>定时计划</strong>
-                <small>一条 heartbeat 模板规则可以有多个触发计划</small>
-              </span>
-              <v-icon>{{ ruleSchedulesOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
-            </button>
-            <v-expand-transition>
-              <div v-if="ruleSchedulesOpen" class="fold-section-body">
-                <div class="section-title-row compact-row">
-                  <div>
-                    <div class="section-title small-title">触发计划</div>
-                    <div class="section-note">消息端只负责启用内部定时来源；这里决定什么时候触发这条模板。</div>
+                <div class="automation-subsection">
+                  <div class="automation-section-heading compact-heading">
+                    <strong>进一步筛选（可选）</strong>
+                    <span>不填写时，只按上面选择的消息来源判断。</span>
                   </div>
-                  <v-btn size="small" color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="addSchedule">新增计划</v-btn>
-                </div>
-                <div v-if="!activeRule.schedules?.length" class="empty-state compact-empty">
-                  <div>
-                    <strong>暂无定时计划</strong>
-                    <span>新增后，这条 heartbeat 模板才会被定时触发。</span>
-                  </div>
-                </div>
-                <div v-else class="rule-list">
-                  <div v-for="(schedule, scheduleIndex) in activeRule.schedules" :key="schedule.id" class="rule-card">
-                    <div class="d-flex justify-space-between ga-3 align-start flex-wrap">
-                      <div class="min-w-0 flex-grow-1">
-                        <div class="form-grid">
-                          <v-text-field
-                            :model-value="schedule.name"
-                            label="计划名称"
-                            @update:model-value="value => updateSchedule(scheduleIndex, { name: String(value || '') })"
-                          />
-                          <v-select
-                            :model-value="schedule.type"
-                            :items="scheduleTypeOptions"
-                            label="定时类型"
-                            @update:model-value="value => setScheduleType(scheduleIndex, String(value || 'interval'))"
-                          />
-                          <template v-if="schedule.type === 'interval'">
-                            <v-text-field
-                              :model-value="schedule.intervalSeconds"
-                              type="number"
-                              min="1"
-                              step="1"
-                              label="间隔秒数"
-                              @update:model-value="value => updateSchedule(scheduleIndex, { intervalSeconds: Number(value || 900) })"
-                            />
-                            <v-text-field
-                              :model-value="schedule.windowStartTime"
-                              label="时间段开始"
-                              placeholder="09:30"
-                              @update:model-value="value => updateSchedule(scheduleIndex, { windowStartTime: String(value || '') })"
-                            />
-                            <v-text-field
-                              :model-value="schedule.windowEndTime"
-                              label="时间段结束"
-                              placeholder="19:00"
-                              @update:model-value="value => updateSchedule(scheduleIndex, { windowEndTime: String(value || '') })"
-                            />
-                          </template>
-                          <v-text-field
-                            v-else-if="schedule.type === 'daily_time'"
-                            :model-value="schedule.timeOfDay"
-                            label="每天时间"
-                            placeholder="09:30"
-                            @update:model-value="value => updateSchedule(scheduleIndex, { timeOfDay: String(value || '') })"
-                          />
-                          <v-text-field
-                            v-else
-                            :model-value="schedule.onceAt"
-                            type="datetime-local"
-                            label="指定日期时间"
-                            @update:model-value="value => updateSchedule(scheduleIndex, { onceAt: String(value || '') })"
-                          />
-                        </div>
-                      </div>
-                      <div class="rule-card-actions">
-                        <v-switch
-                          :model-value="schedule.enabled !== false"
-                          :label="schedule.enabled !== false ? '启用计划' : '停用计划'"
-                          color="success"
-                          density="compact"
-                          inset
-                          hide-details
-                          @update:model-value="value => updateSchedule(scheduleIndex, { enabled: Boolean(value) })"
-                        />
-                        <v-btn size="small" color="error" variant="text" @click="removeSchedule(scheduleIndex)">删除</v-btn>
-                      </div>
-                    </div>
+                  <div class="form-grid">
+                    <v-text-field
+                      :model-value="activeAutomation.trigger.regex"
+                      label="消息包含或匹配"
+                      placeholder="例如：需求|报错|构建失败"
+                      @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
+                    />
+                    <v-text-field
+                      v-if="(activeAutomation.trigger.routeKinds || []).some(kind => ['group_message', 'direct_at', 'direct_reply', 'indirect_reply', 'wecom_message', 'feishu_message'].includes(kind))"
+                      :model-value="activeAutomation.trigger.targetGroupId"
+                      label="只限这个群"
+                      placeholder="留空表示不限群"
+                      @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
+                    />
+                    <v-combobox
+                      v-if="activeAutomation.trigger.routeKinds?.includes('voice_transcript')"
+                      class="full-span"
+                      :model-value="activeAutomation.trigger.allowedSpeakerNames || []"
+                      label="只限这些说话人"
+                      chips
+                      multiple
+                      closable-chips
+                      @update:model-value="value => patchAutomationMessageTrigger({ allowedSpeakerNames: Array.isArray(value) ? value.map(String) : [] })"
+                    />
                   </div>
                 </div>
-              </div>
-            </v-expand-transition>
-          </section>
+              </template>
 
-          <section class="fold-section">
-            <button class="fold-section-head" type="button" @click="ruleTemplateOpen = !ruleTemplateOpen">
-              <span>
-                <strong>Agent 消息包装模板</strong>
-                <small>命中后发送给 Agent 的正文</small>
-              </span>
-              <v-icon>{{ ruleTemplateOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
-            </button>
-            <v-expand-transition>
-              <div v-if="ruleTemplateOpen" class="fold-section-body">
+              <template v-else>
+                <div class="form-grid mt-4">
+                  <v-select
+                    :model-value="activeAutomation.trigger.schedule.type"
+                    :items="scheduleTypeOptions"
+                    label="时间类型"
+                    @update:model-value="value => setAutomationScheduleType(String(value || 'interval'))"
+                  />
+                  <template v-if="activeAutomation.trigger.schedule.type === 'interval'">
+                    <v-text-field
+                      :model-value="activeAutomation.trigger.schedule.intervalSeconds"
+                      type="number"
+                      min="1"
+                      step="1"
+                      label="间隔秒数"
+                      @update:model-value="value => patchAutomationSchedule({ intervalSeconds: Number(value || 900) })"
+                    />
+                    <v-text-field
+                      :model-value="activeAutomation.trigger.schedule.windowStartTime"
+                      label="每天从几点开始（可选）"
+                      placeholder="09:30"
+                      @update:model-value="value => patchAutomationSchedule({ windowStartTime: String(value || '') })"
+                    />
+                    <v-text-field
+                      :model-value="activeAutomation.trigger.schedule.windowEndTime"
+                      label="每天到几点结束（可选）"
+                      placeholder="19:00"
+                      @update:model-value="value => patchAutomationSchedule({ windowEndTime: String(value || '') })"
+                    />
+                  </template>
+                  <v-text-field
+                    v-else-if="activeAutomation.trigger.schedule.type === 'daily_time'"
+                    :model-value="activeAutomation.trigger.schedule.timeOfDay"
+                    type="time"
+                    label="每天执行时间"
+                    @update:model-value="value => patchAutomationSchedule({ timeOfDay: String(value || '') })"
+                  />
+                  <v-text-field
+                    v-else
+                    :model-value="activeAutomation.trigger.schedule.onceAt"
+                    type="datetime-local"
+                    label="执行日期和时间"
+                    @update:model-value="value => patchAutomationSchedule({ onceAt: String(value || '') })"
+                  />
+                </div>
+                <v-alert v-if="!timerInputEnabled" type="warning" variant="tonal" density="compact" class="mt-3">
+                  <div class="d-flex align-center justify-space-between ga-3 flex-wrap">
+                    <span>当前 Route 还没有启用定时任务入口。</span>
+                    <v-btn size="small" color="warning" variant="tonal" @click="enableTimerInput">现在启用</v-btn>
+                  </div>
+                </v-alert>
+              </template>
+            </div>
+          </div>
+
+          <div class="automation-editor-section">
+            <span class="automation-step-number">3</span>
+            <div class="automation-editor-section-body">
+              <div class="automation-section-heading">
+                <strong>触发后做什么</strong>
+                <span>Agent 投递和脚本执行分别记录结果，互不冒充成功。</span>
+              </div>
+              <v-btn-toggle
+                :model-value="activeAutomation.action.type"
+                color="secondary"
+                mandatory
+                divided
+                class="automation-type-toggle"
+                @update:model-value="value => setAutomationActionType(value === 'run_script' ? 'run_script' : 'deliver_agent')"
+              >
+                <v-btn value="deliver_agent" prepend-icon="mdi-message-arrow-right-outline">通知 Agent</v-btn>
+                <v-btn value="run_script" prepend-icon="mdi-console-line">运行脚本</v-btn>
+              </v-btn-toggle>
+
+              <template v-if="activeAutomation.action.type === 'deliver_agent'">
                 <v-textarea
-                  :model-value="activeRule.template"
-                  label="Agent 消息包装模板"
-                  rows="14"
+                  v-if="activeAutomation.trigger.type === 'schedule'"
+                  class="mt-4"
+                  :model-value="activeAutomation.action.message"
+                  label="到时间后交给 Agent 的任务"
+                  placeholder="例如：检查今天仍未完成的计划，并只报告新增阻塞。"
+                  rows="4"
+                  auto-grow
+                  @update:model-value="value => patchAutomationAction({ message: String(value || '') })"
+                />
+                <v-textarea
+                  class="mt-4"
+                  :model-value="activeAutomation.action.template"
+                  :label="activeAutomation.trigger.type === 'message' ? '给 Agent 的附加说明（可选）' : '额外处理要求（可选）'"
+                  placeholder="RabiRoute 已经附带消息来源、原文、人格路径和必要上下文；这里只写额外判断要求。"
+                  rows="7"
                   auto-grow
                   spellcheck="false"
-                  @update:model-value="value => patchRule({ template: String(value || '') })"
+                  @update:model-value="value => patchAutomationAction({ template: String(value || '') })"
                 />
-              </div>
-            </v-expand-transition>
-          </section>
+              </template>
+
+              <template v-else>
+                <v-alert type="warning" variant="tonal" density="compact" class="mt-4 mb-4">
+                  脚本只能来自当前人格的 <code>scripts/</code> 目录，支持 .cmd、.bat 和 .py。不会执行任意命令文本，也不会把 Manager 中的 token 和密码传给脚本。
+                </v-alert>
+                <div class="form-grid">
+                  <v-text-field
+                    :model-value="activeAutomation.action.scriptPath"
+                    label="脚本相对路径"
+                    placeholder="daily-check.py 或 scripts/daily-check.py"
+                    @update:model-value="value => patchAutomationAction({ scriptPath: String(value || '') })"
+                  />
+                  <v-text-field
+                    :model-value="activeAutomation.action.timeoutSeconds"
+                    type="number"
+                    min="5"
+                    max="3600"
+                    label="最长运行秒数"
+                    @update:model-value="value => patchAutomationAction({ timeoutSeconds: Number(value || 300) })"
+                  />
+                  <v-textarea
+                    class="full-span"
+                    :model-value="scriptArgumentsText(activeAutomation)"
+                    label="脚本参数（每行一个）"
+                    rows="3"
+                    @update:model-value="setScriptArguments"
+                  />
+                </div>
+                <div class="script-permission-row">
+                  <div>
+                    <strong>允许当前 Route 运行人格脚本</strong>
+                    <span>这是本机 Route 的权限，不会跟随人格同步到其他电脑。</span>
+                  </div>
+                  <v-switch
+                    :model-value="gateway.personaAutomationScriptsEnabled === true"
+                    color="warning"
+                    inset
+                    hide-details
+                    @update:model-value="value => setScriptExecutionEnabled(Boolean(value))"
+                  />
+                </div>
+              </template>
+            </div>
+          </div>
         </v-card-text>
+
         <v-card-actions class="px-6 pb-5">
-          <v-btn v-if="!isBuiltinRolePanelRule(activeRule)" color="error" variant="text" @click="store.removeRule(activeRuleIndex); ruleDialog = false">删除规则</v-btn>
+          <v-btn
+            v-if="activeAutomation.id !== 'role-panel-message'"
+            color="error"
+            variant="text"
+            @click="store.removeAutomation(activeAutomation.id); automationDialog = false"
+          >删除规则</v-btn>
           <v-spacer />
-          <v-btn color="primary" @click="ruleDialog = false">完成</v-btn>
+          <v-btn color="primary" @click="automationDialog = false">完成</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

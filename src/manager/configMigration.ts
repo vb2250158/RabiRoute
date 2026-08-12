@@ -2,8 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   ensureDefaultPersonaRules,
+  ensureDefaultPersonaAutomations,
+  mergePersonaAutomationRules,
+  normalizePersonaAutomationRules,
   normalizeRecentMessageLimits,
   normalizeSpeechTriggerKeywords,
+  notificationRulesFromPersonaAutomations,
+  personaAutomationRulesFromNotificationRules,
   type GatewayDefinition,
   type NotificationRuleDefinition,
   type RecentMessageLimits
@@ -29,7 +34,7 @@ type JsonObject = Record<string, unknown>;
 
 export type PersonaConfigFragment = Pick<
   GatewayDefinition,
-  "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
+  "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
 >;
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -85,7 +90,11 @@ function defaultPersonaRules(rules: NotificationRuleDefinition[] | undefined): N
 }
 
 export function readPersonaRules(personaConfigPath: string): NotificationRuleDefinition[] | undefined {
-  return extractNotificationRules(readJsonFile(personaConfigPath));
+  const parsed = readJsonFile(personaConfigPath);
+  if (isJsonObject(parsed) && Array.isArray(parsed.automationRules)) {
+    return notificationRulesFromPersonaAutomations(normalizePersonaAutomationRules(parsed.automationRules));
+  }
+  return extractNotificationRules(parsed);
 }
 
 export function readPersonaConfigFragment(personaConfigPath: string): Partial<GatewayDefinition> {
@@ -93,6 +102,10 @@ export function readPersonaConfigFragment(personaConfigPath: string): Partial<Ga
   const rules = readPersonaRules(personaConfigPath);
   const fragment: Partial<GatewayDefinition> = {};
   if (isJsonObject(parsed)) {
+    const configuredAutomations = normalizePersonaAutomationRules(parsed.automationRules);
+    fragment.automationRules = configuredAutomations.length > 0
+      ? ensureDefaultPersonaAutomations(configuredAutomations)
+      : ensureDefaultPersonaAutomations(personaAutomationRulesFromNotificationRules(rules));
     if (isJsonObject(parsed.recentMessageLimits) || parsed.recentMessageLimit != null) {
       fragment.recentMessageLimits = normalizeRecentMessageLimits(
         parsed.recentMessageLimits,
@@ -120,6 +133,7 @@ function normalizedPersonaConfigValue(
     recentMessageLimit: legacyRecentMessageLimit,
     recentMessageLimits: existingRecentMessageLimits,
     speechTriggerKeywords: existingSpeechTriggerKeywords,
+    automationRules: existingAutomationRules,
     notificationRules: existingNotificationRules,
     ...base
   } = raw;
@@ -128,6 +142,10 @@ function normalizedPersonaConfigValue(
   const recentMessageLimits = fragment.recentMessageLimits ?? existingRecentMessageLimits;
   const recentMessageLimit = fragment.recentMessageLimit ?? legacyRecentMessageLimit;
   const speechTriggerKeywords = fragment.speechTriggerKeywords ?? existingSpeechTriggerKeywords;
+  const configuredAutomations = normalizePersonaAutomationRules(fragment.automationRules ?? existingAutomationRules);
+  const automationRules = ensureDefaultPersonaAutomations(configuredAutomations.length > 0
+    ? configuredAutomations
+    : personaAutomationRulesFromNotificationRules(rules));
   const materializeDefaults = options.materializeDefaults !== false;
   return {
     ...base,
@@ -137,7 +155,7 @@ function normalizedPersonaConfigValue(
     ...(materializeDefaults || Array.isArray(speechTriggerKeywords)
       ? { speechTriggerKeywords: normalizeSpeechTriggerKeywords(speechTriggerKeywords) }
       : {}),
-    notificationRules: defaultPersonaRules(rules)
+    automationRules
   };
 }
 
@@ -186,6 +204,9 @@ function routeProfileFragmentsByRole(raw: JsonObject): Array<{ roleId: string; f
     result.push({
       roleId,
       fragment: {
+        automationRules: Array.isArray(profile.automationRules)
+          ? normalizePersonaAutomationRules(profile.automationRules)
+          : undefined,
         notificationRules: Array.isArray(profile.notificationRules)
           ? profile.notificationRules as NotificationRuleDefinition[]
           : undefined,
@@ -226,7 +247,11 @@ function mergeIntoPersona(rolesRoot: string, roleId: string, fragment: PersonaCo
   const hasCurrentLimits = isJsonObject(raw.recentMessageLimits) || raw.recentMessageLimit != null;
   const hasCurrentKeywords = Array.isArray(raw.speechTriggerKeywords);
   writePersonaConfig(filePath, {
-    notificationRules: mergeNotificationRules(current.notificationRules, fragment.notificationRules),
+    automationRules: mergePersonaAutomationRules(
+      current.automationRules,
+      fragment.automationRules,
+      personaAutomationRulesFromNotificationRules(fragment.notificationRules)
+    ),
     recentMessageLimits: hasCurrentLimits ? current.recentMessageLimits : fragment.recentMessageLimits,
     recentMessageLimit: hasCurrentLimits ? undefined : fragment.recentMessageLimit,
     speechTriggerKeywords: hasCurrentKeywords ? current.speechTriggerKeywords : fragment.speechTriggerKeywords
@@ -239,7 +264,10 @@ function migrateRoleConfig(rolesRoot: string, roleId: string, materializeDefault
   const legacy = legacyRoleRules(rolesRoot, roleId);
   writePersonaConfigValue(filePath, {
     ...current,
-    notificationRules: mergeNotificationRules(current.notificationRules, legacy)
+    automationRules: mergePersonaAutomationRules(
+      current.automationRules,
+      personaAutomationRulesFromNotificationRules(legacy)
+    )
   }, { materializeDefaults });
   for (const legacyPath of [roleMessageConfigPath(rolesRoot, roleId), routesConfigPath(rolesRoot, roleId)]) {
     if (fs.existsSync(legacyPath)) {
@@ -256,6 +284,9 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
   const fallbackRoleId = sanitizeRoleId(typeof parsed.agentRoleId === "string" ? parsed.agentRoleId : undefined);
   if (fallbackRoleId) {
     mergeIntoPersona(options.rolesRoot, fallbackRoleId, {
+      automationRules: Array.isArray(parsed.automationRules)
+        ? normalizePersonaAutomationRules(parsed.automationRules)
+        : undefined,
       notificationRules: Array.isArray(parsed.notificationRules)
         ? parsed.notificationRules as NotificationRuleDefinition[]
         : undefined,
@@ -277,7 +308,8 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
     mergeIntoPersona(options.rolesRoot, item.roleId, { notificationRules: item.rules });
   }
 
-  const hasLegacyRuleFields = Array.isArray(parsed.notificationRules)
+  const hasLegacyRuleFields = Array.isArray(parsed.automationRules)
+    || Array.isArray(parsed.notificationRules)
     || parsed.roleNotificationRules != null
     || parsed.roleRouteNames != null
     || Array.isArray(parsed.routeProfiles)
@@ -287,6 +319,7 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
   if (!hasLegacyRuleFields) return;
 
   const {
+    automationRules: _automationRules,
     notificationRules: _notificationRules,
     roleNotificationRules: _roleNotificationRules,
     roleRouteNames: _roleRouteNames,

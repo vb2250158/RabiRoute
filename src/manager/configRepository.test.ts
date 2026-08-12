@@ -119,7 +119,7 @@ test("repository migrates persona-owned fields out of legacy adapter and profile
   assert.equal(persona.recentMessageLimits?.napcat, 23);
   assert.equal(persona.recentMessageLimits?.speech, 23);
   assert.deepEqual(persona.speechTriggerKeywords, ["Rabi", "兔叽"]);
-  assert.deepEqual(persona.notificationRules?.map(rule => rule.id), ["existing", "speech", "role-panel-message"]);
+  assert.deepEqual(persona.automationRules?.filter(rule => rule.trigger.type === "message").map(rule => rule.id), ["existing", "speech", "role-panel-message"]);
   assert.equal(config.gateways[0].speechPushMode, "keyword");
   assert.equal(config.gateways[0].recentMessageLimits?.wecom, 23);
 });
@@ -174,7 +174,7 @@ test("repository migrates legacy role rules to personaConfig and keeps adapter c
   assert.equal(adapter.roleNotificationRules, undefined);
   assert.equal(adapter.roleRouteNames, undefined);
   const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition;
-  assert.deepEqual(persona.notificationRules?.map(rule => rule.id), [
+  assert.deepEqual(persona.automationRules?.filter(rule => rule.trigger.type === "message").map(rule => rule.id), [
     "legacy-role",
     "legacy-routes",
     "legacy-adapter",
@@ -196,7 +196,7 @@ test("repository migrates legacy role rules to personaConfig and keeps adapter c
     ["manual_trigger"]
   );
   const momoPersona = JSON.parse(fs.readFileSync(path.join(rootDir, "data", "roles", "Momo", "personaConfig.json"), "utf8")) as GatewayDefinition;
-  assert.deepEqual(momoPersona.notificationRules?.map(rule => rule.id), [
+  assert.deepEqual(momoPersona.automationRules?.filter(rule => rule.trigger.type === "message").map(rule => rule.id), [
     "momo-profile",
     "role-panel-message"
   ]);
@@ -226,7 +226,9 @@ test("repository migration preserves existing personaConfig fields and rules", (
 
   const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition & { routeVariables?: Record<string, string> };
   assert.deepEqual(persona.routeVariables, { tone: "warm" });
-  assert.deepEqual(persona.notificationRules?.map(rule => [rule.id, rule.template]), [
+  assert.deepEqual(persona.automationRules
+    ?.filter(rule => rule.trigger.type === "message" && rule.action.type === "deliver_agent")
+    .map(rule => [rule.id, rule.action.type === "deliver_agent" ? rule.action.template : ""]), [
     ["existing", "keep me"],
     ["adapter-new", "persona wins by id"],
     ["role-panel-message", ""]
@@ -238,7 +240,9 @@ test("repository migration preserves existing personaConfig fields and rules", (
   });
   const updated = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition & { routeVariables?: Record<string, string> };
   assert.deepEqual(updated.routeVariables, { tone: "warm" });
-  assert.deepEqual(updated.notificationRules?.map(rule => [rule.id, rule.template]), [
+  assert.deepEqual(updated.automationRules
+    ?.filter(rule => rule.trigger.type === "message" && rule.action.type === "deliver_agent")
+    .map(rule => [rule.id, rule.action.type === "deliver_agent" ? rule.action.template : ""]), [
     ["existing", "keep me"],
     ["adapter-new", "persona wins by id"],
     ["role-panel-message", ""]

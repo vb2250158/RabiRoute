@@ -51,7 +51,8 @@
     "codex": {
       "enabled": false,
       "model": "gpt-5.6-luna",
-      "reasoningEffort": "medium"
+      "reasoningEffort": "medium",
+      "maxAgents": 4
     }
   },
   "dataDir": "./data/route/main",

@@ -50,7 +50,7 @@ RabiRoute stores the complete task ID. A Desktop rename or completed goal does n
 
 ## Step 3: confirm the persona
 
-Use an existing example persona or leave the field empty. A persona-free Route receives basic rules; configure a persona later when you need role-specific behavior.
+Use an existing example persona or leave the field empty. A persona-free Route receives basic rules; when you need role-specific behavior, open **Persona Configuration** to edit its document and rules.
 
 Select **Save configuration**. Saving writes local Route configuration and may start or reload the current Route.
 

@@ -80,6 +80,21 @@ test("persona sync conflict control lets a local Agent inspect and resolve evide
     if (!handlePersonaSyncApi(request, requestUrl, response, {
       service,
       coordinator: {
+        preview: async () => ({
+          peer: { id: "pc-b", name: "Peer B", online: true, capabilities: ["persona-sync"], peerUrls: [] },
+          transport: "lan" as const,
+          files: [{
+            roleId: "Rabi",
+            path: "persona.md",
+            operation: "pull_update" as const,
+            direction: "pull" as const,
+            mergeStrategy: "three-way-file" as const,
+            localHash: "local",
+            remoteHash: "remote"
+          }],
+          changedFiles: 1,
+          conflicts: 0
+        }),
         publishConflictResolution: async () => ({ status: "published" as const, peerId: "pc-b", transport: "lan" as const })
       } as unknown as PersonaSyncCoordinator,
       token: () => "shared-app-token",
@@ -101,6 +116,12 @@ test("persona sync conflict control lets a local Agent inspect and resolve evide
   const autoStatusBody = JSON.parse(autoStatusResponse.text) as { data: { state: string; pending: boolean } };
   assert.equal(autoStatusBody.data.state, "stopped");
   assert.equal(autoStatusBody.data.pending, false);
+
+  const previewResponse = await request(port, "/api/persona-sync/preview?peerId=pc-b&roleId=Rabi");
+  assert.equal(previewResponse.status, 200);
+  const previewBody = JSON.parse(previewResponse.text) as { data: { changedFiles: number; files: Array<{ path: string; operation: string }> } };
+  assert.equal(previewBody.data.changedFiles, 1);
+  assert.deepEqual(previewBody.data.files.map(file => [file.path, file.operation]), [["persona.md", "pull_update"]]);
 
   const listResponse = await request(port, "/api/persona-sync/conflicts?roleId=Rabi");
   assert.equal(listResponse.status, 200);
@@ -193,6 +214,42 @@ test("persona manifest endpoint returns a bounded partial snapshot while refresh
     deadlineMs: 20,
     message: "Persona manifest refresh exceeded its deadline; returned the last persisted in-memory snapshot while Manager stayed responsive."
   });
+});
+
+test("authenticated WebGUI control plane may compare persona folders without opening diagnostics on the LAN data plane", async (t) => {
+  const service = {} as PersonaSyncService;
+  const coordinator = {
+    preview: async () => ({
+      peer: { id: "pc-b", name: "Peer B", online: true, capabilities: ["persona-sync"], peerUrls: [] },
+      transport: "lan" as const,
+      files: [],
+      changedFiles: 0,
+      conflicts: 0
+    })
+  } as unknown as PersonaSyncCoordinator;
+  const createServer = (controlPlaneAuthorized: boolean) => http.createServer((request, response) => {
+    Object.defineProperty(request.socket, "remoteAddress", { value: "192.168.1.20" });
+    const requestUrl = new URL(request.url || "/", "http://pc.local");
+    if (!handlePersonaSyncApi(request, requestUrl, response, {
+      service,
+      coordinator,
+      controlPlaneAuthorized,
+      token: () => "relay-secret",
+      relay: () => ({ url: "", token: "relay-secret", deviceId: "pc-a", deviceGuid: "guid-a" })
+    })) response.writeHead(404).end();
+  });
+
+  const webguiServer = createServer(true);
+  const webguiPort = await listen(webguiServer);
+  t.after(() => new Promise<void>(resolve => webguiServer.close(() => resolve())));
+  const allowed = await request(webguiPort, "/api/persona-sync/preview?peerId=pc-b&roleId=Rabi");
+  assert.equal(allowed.status, 200);
+
+  const lanServer = createServer(false);
+  const lanPort = await listen(lanServer);
+  t.after(() => new Promise<void>(resolve => lanServer.close(() => resolve())));
+  const denied = await request(lanPort, "/api/persona-sync/preview?peerId=pc-b&roleId=Rabi");
+  assert.equal(denied.status, 401);
 });
 
 test("persona conflict catalog returns a bounded building state instead of holding the HTTP connection", async (t) => {

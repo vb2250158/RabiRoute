@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { appendRabiLinkConversationEntry } from "./rabilinkConversationLedger.js";
 import { RabiLinkConversationReviewer } from "./rabilinkConversationReviewer.js";
+import { listIdentityEndpointAccounts, listIdentityParticipants } from "./identityRelations.js";
 
 const mockThread = {
   id: "thread-rabilink-review",
@@ -15,6 +16,7 @@ const mockThread = {
 
 test("automatic conversation review waits for an idle Codex thread and then advances its cursor", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-rabilink-reviewer-"));
+  const roleDir = path.join(dataDir, "roles", "Xinghai");
   appendRabiLinkConversationEntry(dataDir, {
     entryId: "rabilink-user:1",
     recordedAt: "2026-07-13T10:00:00.000Z",
@@ -22,6 +24,13 @@ test("automatic conversation review waits for an idle Codex thread and then adva
     kind: "voice_transcript",
     text: "这句话只应该先进入账本",
     routeProfileId: "Ilias",
+    messageId: "review-message-one",
+    identityEndpoints: [{
+      platform: "rabilink",
+      endpointIdentityNamespace: "relay:rabilink",
+      senderStableId: "phone-one",
+      displayName: "Phone"
+    }],
     requiresReview: true
   });
   appendRabiLinkConversationEntry(dataDir, {
@@ -38,6 +47,8 @@ test("automatic conversation review waits for an idle Codex thread and then adva
     dataDir,
     routeProfileId: "RabiLink",
     gatewayManagerUrl: "http://127.0.0.1:8790",
+    agentRolePath: path.join(roleDir, "persona.md"),
+    agentRoleId: "Xinghai",
     settleMs: 0,
     now: () => Date.parse("2026-07-13T10:01:00.000Z"),
     notifyWhenIdle: async (prompt) => {
@@ -49,6 +60,8 @@ test("automatic conversation review waits for an idle Codex thread and then adva
 
   const first = await reviewer.check();
   assert.equal(first.status, "busy");
+  assert.equal(listIdentityEndpointAccounts(roleDir).length, 1);
+  assert.equal(listIdentityParticipants(roleDir).length, 1);
   busy = false;
   const second = await reviewer.check();
   assert.equal(second.status, "delivered");
@@ -56,9 +69,14 @@ test("automatic conversation review waits for an idle Codex thread and then adva
   assert.match(prompts.at(-1) || "", /统一会话账本/);
   assert.match(prompts.at(-1) || "", /历史会话索引/);
   assert.match(prompts.at(-1) || "", /本次涉及 Route：Ilias/);
+  assert.match(prompts.at(-1) || "", /\[身份定位\]/);
+  assert.match(prompts.at(-1) || "", /relay:rabilink/);
+  assert.match(prompts.at(-1) || "", /identity-relations\/observations/);
   assert.match(prompts.at(-1) || "", /"routeId":"Ilias"/);
   assert.match(prompts.at(-1) || "", /"channel":"rabilink"/);
   assert.doesNotMatch(prompts.at(-1) || "", /这句话只应该先进入账本/);
+  assert.equal(listIdentityEndpointAccounts(roleDir).length, 1);
+  assert.equal(listIdentityParticipants(roleDir).length, 1);
   const third = await reviewer.check();
   assert.equal(third.status, "idle");
 });

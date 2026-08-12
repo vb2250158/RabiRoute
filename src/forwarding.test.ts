@@ -12,6 +12,7 @@ import { ManagerSpeechControl } from "./manager/speechControl.js";
 import { handleAgentReply } from "./outbox.js";
 import { resolvePipeline } from "./pipelines.js";
 import { readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
+import { listIdentityEndpointAccounts, listIdentityParticipants } from "./identityRelations.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
 import { createSpeechIngressForwarding } from "./routing/speechIngressForwarding.js";
 import { SpeechIngressStore } from "./speechIngressStore.js";
@@ -254,6 +255,147 @@ test("a grouped packet is delivered to a dynamically resolved Luna Message Agent
     assert.equal(requests[3]?.reasoningEffort, "medium");
     assert.match(String(requests[3]?.prompt), /\[消息组 message-group-integration\]/);
     assert.match(String(requests[3]?.prompt), /你是专职消息处理 Agent/);
+  } finally {
+    if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
+    else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
+    await new Promise<void>((resolve) => manager.close(() => resolve()));
+    resetMessageProcessingRuntime();
+  }
+});
+
+test("a grouped reply to an Agent-sent QQ message is routed with the referenced Agent session weight", async () => {
+  const root = tempDir();
+  const dataDir = path.join(root, "data");
+  const messageGroupDir = path.join(dataDir, "message-groups");
+  fs.mkdirSync(messageGroupDir, { recursive: true });
+  const familiarThreadId = "019f0000-0000-7000-8000-000000000081";
+  const referencedThreadId = "019f0000-0000-7000-8000-000000000082";
+  fs.writeFileSync(path.join(messageGroupDir, "agents.json"), JSON.stringify({
+    schemaVersion: 2,
+    updatedAt: "2026-08-11T08:00:00.000Z",
+    workers: [
+      {
+        threadId: familiarThreadId,
+        threadName: "Rabi 协助处理消息1",
+        workspace: root,
+        index: 1,
+        createdAt: "2026-08-11T07:00:00.000Z",
+        initializedAt: "2026-08-11T07:00:01.000Z",
+        affinities: [{
+          groupId: "familiar-old",
+          endpoint: "napcat",
+          conversationKey: "napcat:group:10001",
+          sender: "42",
+          lastUsedAt: "2026-08-11T07:30:00.000Z"
+        }]
+      },
+      {
+        threadId: referencedThreadId,
+        threadName: "Rabi 协助处理消息2",
+        workspace: root,
+        index: 2,
+        createdAt: "2026-08-11T07:05:00.000Z",
+        initializedAt: "2026-08-11T07:05:01.000Z",
+        affinities: [{
+          groupId: "other-old",
+          endpoint: "napcat",
+          conversationKey: "napcat:group:99999",
+          sender: "99",
+          lastUsedAt: "2026-08-11T07:20:00.000Z"
+        }]
+      }
+    ]
+  }), "utf8");
+  const sentThreadIds: string[] = [];
+  const traceQueries: URL[] = [];
+  const manager = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.method === "GET" && requestUrl.pathname === "/api/agent/send/traces") {
+      traceQueries.push(requestUrl);
+      response.end(JSON.stringify({
+        code: 0,
+        data: {
+          matches: [{
+            deliveryId: "delivery-7788",
+            result: {
+              sender: { agentType: "message_processing", sessionId: referencedThreadId }
+            }
+          }]
+        }
+      }));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    request.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, any>;
+      if (body.action === "send") sentThreadIds.push(String(body.threadId));
+      response.end(JSON.stringify(body.action === "read"
+        ? { thread: { status: { type: "idle" } } }
+        : body.action === "register_group"
+          ? { code: 0, data: { id: body.requirementId, status: "pending_dispatch" } }
+          : { code: 0, ok: true }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    manager.once("error", reject);
+    manager.listen(0, "127.0.0.1", resolve);
+  });
+  const address = manager.address();
+  assert.ok(address && typeof address === "object");
+  const oldManagerUrl = process.env.GATEWAY_MANAGER_URL;
+  process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${address.port}`;
+  resetMessageProcessingRuntime();
+  const route = routeProfile(root, {
+    notificationRules: [{ id: "group", name: "group", enabled: true, routeKinds: ["group_message"], template: "" }]
+  });
+  const record = groupMessage({ rawMessage: "[CQ:reply,id=qq-outbound-7788]继续说这个问题", messageId: "msg-reply-agent" });
+  const messageGroup: PendingMessageGroup = {
+    groupId: "message-group-reply-agent",
+    key: "napcat|group:10001|sender:42|reply:qq-outbound-7788",
+    baseKey: "napcat|group:10001|sender:42",
+    endpoint: "napcat",
+    conversationKey: "napcat:group:10001",
+    sender: "42",
+    replyToMessageId: "qq-outbound-7788",
+    createdAt: Date.now(), updatedAt: Date.now(), deadlineAt: Date.now(), maxDeadlineAt: Date.now(),
+    status: "pending", attempts: 0,
+    items: [{
+      identity: "napcat|group:10001|message:msg-reply-agent",
+      receivedAt: Date.now(), incomplete: false,
+      payload: { routeKind: "group_message", record, extraValues: {} }
+    }]
+  };
+
+  try {
+    await withForwardingConfig({
+      agentAdapters: ["codex"], primaryAgentAdapter: "codex",
+      messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
+      codexThreadId: "019f0000-0000-7000-8000-000000000001", codexThreadName: "主人格", codexCwd: root,
+      dataDir, memoryDataDir: path.join(root, "memory"), routeProfiles: [route]
+    }, async () => {
+      const result = await forwardMessageAndWait("group_message", record, {}, { recordInbound: false, messageGroup });
+      assert.equal(result.status, "delivered");
+    });
+
+    assert.equal(traceQueries.length, 1);
+    assert.equal(traceQueries[0]?.searchParams.get("channel"), "napcat");
+    assert.equal(traceQueries[0]?.searchParams.get("sentMessageId"), "qq-outbound-7788");
+    assert.equal(traceQueries[0]?.searchParams.get("routeId"), "main");
+    assert.deepEqual(sentThreadIds, [referencedThreadId]);
+    const routerEvents = fs.readFileSync(path.join(dataDir, "router-adapter.log.jsonl"), "utf8")
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as Record<string, any>);
+    assert.ok(routerEvents.some((entry) =>
+      entry.event === "message_processing_reply_sender_lookup_completed"
+      && entry.data?.replyToMessageId === "qq-outbound-7788"
+      && entry.data?.referencedSenders?.[0]?.sessionId === referencedThreadId));
+    assert.ok(routerEvents.some((entry) =>
+      entry.event === "message_processing_reply_sender_weight_applied"
+      && entry.data?.selectedThreadId === referencedThreadId
+      && entry.data?.selectedReferencedSession === true));
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
     else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
@@ -857,6 +999,9 @@ test("forwardMessageAndWait reports matched packets separately from adapter deli
     assert.equal(situation.decisions.mayParticipate, true);
     assert.equal(situation.decisions.mayCreateOrUpdateCurrentProjectRecords, false);
     assert.doesNotMatch(JSON.stringify(situation), /\[CQ:at,qq=12345\] hello/);
+    assert.equal(listIdentityEndpointAccounts(routeDataDir).length, 1);
+    assert.equal(listIdentityEndpointAccounts(routeDataDir)[0]?.senderStableId, "42");
+    assert.equal(listIdentityParticipants(routeDataDir)[0]?.status, "candidate");
     assert.equal(fs.existsSync(path.join(routeDataDir, "codex-notifications.jsonl")), false);
   });
 });

@@ -23,6 +23,8 @@ export type WebhookPayload = {
   area?: string;
   sessionId?: string;
   routeProfileId?: string;
+  identityNamespace?: string;
+  senderStableId?: string;
   configurationRequested?: boolean;
   text?: string;
   message?: string;
@@ -50,6 +52,10 @@ export type WebhookPayload = {
   speakerConfidence?: number;
   speaker_decision?: string;
   speakerDecision?: string;
+  sourceHostId?: string;
+  sourceHostName?: string;
+  voiceprintId?: string;
+  segments?: unknown[];
 };
 
 type GatewayStatus = {
@@ -309,15 +315,20 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
     messageId: payload.messageId ?? payload.id,
     senderName: payload.sender ?? payload.source ?? profile.label,
     adapterType: profile.type,
+    identityNamespace: payload.identityNamespace,
+    senderStableId: payload.senderStableId,
     source: payload.source ?? payload.sender ?? profile.source,
     speakerId: payload.speakerId ?? payload.speaker_id,
     speakerName: payload.speakerName ?? payload.speaker_name,
     speakerKind: payload.speakerKind ?? payload.speaker_kind,
     speakerConfidence: payload.speakerConfidence ?? payload.speaker_confidence,
     speakerDecision: payload.speakerDecision ?? payload.speaker_decision,
+    voiceprintId: payload.voiceprintId,
     sourceDeviceId: payload.sourceDeviceId ?? payload.deviceId,
     sourceDeviceName: payload.sourceDeviceName ?? payload.deviceName,
     sourceDeviceKind: payload.sourceDeviceKind,
+    sourceHostId: payload.sourceHostId,
+    sourceHostName: payload.sourceHostName,
     transport: payload.transport,
     sourceArea: payload.sourceArea ?? payload.area,
     sessionId: payload.sessionId ?? payload.context,
@@ -326,7 +337,8 @@ function recordFromPayload(payload: WebhookPayload, profile: WebhookAdapterProfi
     startedAt: payload.startedAt,
     endedAt: payload.endedAt,
     durationSeconds: payload.durationSeconds,
-    peak: payload.peak
+    peak: payload.peak,
+    segments: Array.isArray(payload.segments) ? payload.segments as VoiceTranscriptEventRecord["segments"] : undefined
   };
 }
 
@@ -335,7 +347,7 @@ export function acceptWebhookPayload(
   webhookPath: string,
   payload: WebhookPayload,
   bodyBytes: number,
-  options: { forward?: boolean; recordFirst?: boolean } = {}
+  options: { forward?: boolean; recordFirst?: boolean; trustedSenderIdentity?: boolean; trustedVoiceIdentity?: boolean } = {}
 ): VoiceTranscriptEventRecord {
   const eventType = payload.type ?? "voice_transcript";
   appendAdapterLog(profile.type, {
@@ -370,6 +382,8 @@ export function acceptWebhookPayload(
     });
     throw new Error("Missing text");
   }
+  if (options.trustedSenderIdentity === true) record.senderIdentityTrusted = true;
+  if (options.trustedVoiceIdentity === true) record.voiceIdentityTrusted = true;
 
   const recordFirst = options.recordFirst ?? isRabiLinkRecordFirstSource(profile.type, record.source);
   if (recordFirst) {

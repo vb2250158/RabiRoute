@@ -252,7 +252,7 @@ test("WebGUI requests a bounded page for only the visible memory category", asyn
         items: [],
         total: 0,
         nextCursor: "",
-        counts: { recent: 182, consolidated: 4, consolidationRuns: 0 }
+        counts: { recent: 182, consolidated: 4, archived: 36, consolidationRuns: 0 }
       }
     }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
@@ -279,13 +279,14 @@ test("WebGUI can load memory tab counts without loading memory cards", async () 
     requests.push(String(input));
     return new Response(JSON.stringify({
       code: 0,
-      data: { recent: 188, consolidated: 31, consolidationRuns: 6 }
+      data: { recent: 120, consolidated: 31, archived: 68, consolidationRuns: 6 }
     }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   try {
     assert.deepEqual(await loadRoleMemoryCounts("Rabi"), {
-      recent: 188,
+      recent: 120,
       consolidated: 31,
+      archived: 68,
       consolidationRuns: 6
     });
   } finally {
@@ -317,6 +318,7 @@ test("memory count loading remains compatible with a Manager that returns the le
     assert.deepEqual(await loadRoleMemoryCounts("Rabi"), {
       recent: 2,
       consolidated: 1,
+      archived: 0,
       consolidationRuns: 0
     });
   } finally {
@@ -341,7 +343,28 @@ test("WebGUI accepts the legacy full-memory response until Manager reloads", asy
     assert.deepEqual(page.items.map((item) => item.id), ["m2"]);
     assert.equal(page.total, 1);
     assert.equal(page.nextCursor, "");
-    assert.deepEqual(page.counts, { recent: 2, consolidated: 0, consolidationRuns: 0 });
+    assert.deepEqual(page.counts, { recent: 2, consolidated: 0, archived: 0, consolidationRuns: 0 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("legacy full-memory responses classify consolidated recent sources as archived", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: 0,
+    data: {
+      recent: [
+        { id: "m-active", title: "近期", focus: "", content: "A", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z", keywords: [] },
+        { id: "m-archived", title: "归档", focus: "", content: "B", createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z", consolidatedAt: "2026-08-02T00:00:00.000Z", keywords: [] }
+      ],
+      consolidated: []
+    }
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    const archived = await loadRoleMemoryPage("Rabi", "archived");
+    assert.deepEqual(archived.items.map((item) => item.id), ["m-archived"]);
+    assert.deepEqual(archived.counts, { recent: 1, consolidated: 0, archived: 1, consolidationRuns: 0 });
   } finally {
     globalThis.fetch = originalFetch;
   }

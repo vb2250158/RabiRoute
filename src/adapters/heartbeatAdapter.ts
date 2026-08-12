@@ -4,11 +4,17 @@ import { config } from "../config.js";
 import { forwardMessageAndWait, type ForwardDeliveryResult } from "../forwarding.js";
 import { appendAdapterLog, appendHeartbeatEvent, type HeartbeatEventRecord } from "../history.js";
 import {
-  collectHeartbeatScheduleTasks,
-  heartbeatScheduleLabel,
   nextHeartbeatScheduleTime,
-  type HeartbeatScheduleTask
 } from "../scheduling/heartbeatSchedules.js";
+import {
+  automationRunId,
+  claimAutomationRun,
+  collectScheduledAutomationTasks,
+  executeScriptAutomation,
+  finishAutomationRun,
+  type ScriptAutomationTask,
+  type ScheduledAutomationTask
+} from "../automation/personaAutomationRuntime.js";
 import type { MessageAdapter } from "./messageAdapter.js";
 
 type GatewayStatus = {
@@ -27,6 +33,9 @@ type GatewayStatus = {
     lastDeliveryMatchedRuleCount?: number;
     lastDeliverySentPacketCount?: number;
     lastDeliveryError?: string;
+    lastTaskId?: string;
+    lastTaskName?: string;
+    lastActionType?: string;
   }>;
   messageAdapter?: {
     type?: string;
@@ -50,10 +59,13 @@ type GatewayStatus = {
     lastDeliveryMatchedRuleCount?: number;
     lastDeliverySentPacketCount?: number;
     lastDeliveryError?: string;
+    lastTaskId?: string;
+    lastTaskName?: string;
+    lastActionType?: string;
   };
 };
 
-type RunningHeartbeatTask = HeartbeatScheduleTask & {
+type RunningHeartbeatTask = ScheduledAutomationTask & {
   nextAt?: Date;
   timer?: NodeJS.Timeout;
 };
@@ -120,10 +132,9 @@ function patchScheduleSummary(tasks: RunningHeartbeatTask[]): void {
 }
 
 function scheduleMessage(task: RunningHeartbeatTask): string {
-  if (task.schedule.id === "legacy-interval") {
-    return config.heartbeatMessage;
-  }
-  return `定时计划触发：${heartbeatScheduleLabel(task)}`;
+  if (task.rule.action.type !== "deliver_agent") return "";
+  return task.rule.action.message?.trim()
+    || `定时任务触发：${task.rule.name?.trim() || task.rule.id}`;
 }
 
 function deliveryLogLevel(result: ForwardDeliveryResult): "info" | "warning" | "error" {
@@ -175,16 +186,82 @@ function recordHeartbeatDeliveryError(record: HeartbeatEventRecord, error: unkno
 }
 
 function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: RunningHeartbeatTask[]): void {
+  const schedule = task.rule.trigger.schedule;
+  const routeId = task.route.id;
+  const routeName = task.route.name;
+  const taskName = task.rule.name?.trim() || task.rule.id;
+  const runId = automationRunId(routeId, task.rule.id, { scheduledAt });
+  if (!claimAutomationRun(runId, {
+    routeId,
+    automationRuleId: task.rule.id,
+    triggerType: "schedule",
+    scheduledAt: scheduledAt.toISOString(),
+    actionType: task.rule.action.type
+  })) {
+    appendAdapterLog("heartbeat", {
+      event: "automation_duplicate_skipped",
+      level: "warning",
+      message: `Scheduled automation already claimed route=${routeId} rule=${task.rule.id}`,
+      data: { runId, routeId, automationRuleId: task.rule.id, scheduledAt: scheduledAt.toISOString() }
+    });
+    return;
+  }
+
+  if (task.rule.action.type === "run_script") {
+    appendAdapterLog("heartbeat", {
+      event: "script_started",
+      message: `Scheduled persona script started route=${routeId} rule=${task.rule.id}`,
+      data: { runId, routeId, routeName, automationRuleId: task.rule.id, taskName, scheduledAt: scheduledAt.toISOString() }
+    });
+    patchHeartbeatStatus({
+      enabled: true,
+      lastTickAt: new Date().toISOString(),
+      lastScheduleId: schedule.id,
+      lastScheduleName: schedule.name?.trim() || schedule.id,
+      lastTaskId: task.rule.id,
+      lastTaskName: taskName,
+      lastActionType: task.rule.action.type,
+      scheduleCount: tasks.length
+    });
+    void executeScriptAutomation({ route: task.route, rule: task.rule as ScriptAutomationTask["rule"] }).then((result) => {
+      finishAutomationRun(runId, result.status, {
+        routeId,
+        automationRuleId: task.rule.id,
+        reason: result.reason,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs
+      });
+      appendAdapterLog("heartbeat", {
+        event: "script_result",
+        level: result.status === "completed" ? "info" : result.status === "skipped" ? "warning" : "error",
+        message: `Scheduled persona script ${result.status} route=${routeId} rule=${task.rule.id}`,
+        data: { runId, routeId, routeName, automationRuleId: task.rule.id, taskName, ...result }
+      });
+      patchHeartbeatStatus({
+        lastDeliveryAt: new Date().toISOString(),
+        lastDeliveryStatus: result.status,
+        lastDeliveryMessageId: runId,
+        lastDeliveryMatchedRuleCount: 1,
+        lastDeliverySentPacketCount: 0,
+        lastDeliveryError: result.status === "completed" ? "" : result.reason || "script_failed",
+        lastTaskId: task.rule.id,
+        lastTaskName: taskName,
+        lastActionType: task.rule.action.type
+      });
+    });
+    return;
+  }
+
   const now = Math.floor(Date.now() / 1000);
-  const scheduleName = task.schedule.name?.trim() || task.schedule.id;
+  const scheduleName = schedule.name?.trim() || schedule.id;
   const rawMessage = scheduleMessage(task);
   const status = readGatewayStatus().heartbeat;
   const record: HeartbeatEventRecord = {
     time: now,
     rawMessage,
-    messageId: `heartbeat-${task.routeId}-${task.ruleId}-${task.schedule.id}-${scheduledAt.getTime()}`,
+    messageId: `heartbeat-${routeId}-${task.rule.id}-${schedule.id}-${scheduledAt.getTime()}`,
     senderName: "RabiRoute 定时触发",
-    intervalSeconds: task.schedule.type === "interval" ? task.schedule.intervalSeconds : undefined
+    intervalSeconds: schedule.type === "interval" ? schedule.intervalSeconds : undefined
   };
 
   appendHeartbeatEvent(record);
@@ -193,39 +270,60 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
     message: rawMessage.slice(0, 500),
     data: {
       messageId: record.messageId,
-      routeId: task.routeId,
-      routeName: task.routeName,
-      ruleId: task.ruleId,
-      ruleName: task.ruleName,
-      scheduleId: task.schedule.id,
+      routeId,
+      routeName,
+      automationRuleId: task.rule.id,
+      taskName,
+      scheduleId: schedule.id,
       scheduleName,
-      scheduleType: task.schedule.type,
-      intervalSeconds: task.schedule.intervalSeconds
+      scheduleType: schedule.type,
+      intervalSeconds: schedule.intervalSeconds,
+      actionType: task.rule.action.type
     }
   });
   const tickCount = (status?.tickCount ?? 0) + 1;
   patchHeartbeatStatus({
     enabled: true,
-    intervalSeconds: task.schedule.type === "interval" ? task.schedule.intervalSeconds : undefined,
+    intervalSeconds: schedule.type === "interval" ? schedule.intervalSeconds : undefined,
     message: rawMessage,
     lastTickAt: new Date().toISOString(),
-    lastScheduleId: task.schedule.id,
+    lastScheduleId: schedule.id,
     lastScheduleName: scheduleName,
+    lastTaskId: task.rule.id,
+    lastTaskName: taskName,
+    lastActionType: task.rule.action.type,
     tickCount,
     scheduleCount: tasks.length
   });
   void forwardMessageAndWait("heartbeat", record, {
-    triggerRouteId: task.routeId,
-    triggerRuleId: task.ruleId,
-    scheduleId: task.schedule.id,
+    triggerRouteId: routeId,
+    automationRuleId: task.rule.id,
+    automationRuleName: taskName,
+    automationTemplate: task.rule.action.template || "",
+    scheduleId: schedule.id,
     scheduleName
   })
-    .then((result) => recordHeartbeatDelivery(record, result))
-    .catch((error) => recordHeartbeatDeliveryError(record, error));
+    .then((result) => {
+      finishAutomationRun(runId, result.status, {
+        routeId,
+        automationRuleId: task.rule.id,
+        matchedRuleCount: result.matchedRuleCount,
+        sentPacketCount: result.sentPacketCount
+      });
+      recordHeartbeatDelivery(record, result);
+    })
+    .catch((error) => {
+      finishAutomationRun(runId, "failed", {
+        routeId,
+        automationRuleId: task.rule.id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      recordHeartbeatDeliveryError(record, error);
+    });
 }
 
 function armTask(task: RunningHeartbeatTask, tasks: RunningHeartbeatTask[], lastScheduledAt?: Date): void {
-  const nextAt = nextHeartbeatScheduleTime(task.schedule, new Date(), { lastScheduledAt });
+  const nextAt = nextHeartbeatScheduleTime(task.rule.trigger.schedule, new Date(), { lastScheduledAt });
   task.nextAt = nextAt ?? undefined;
   if (!nextAt) {
     patchScheduleSummary(tasks);
@@ -248,7 +346,7 @@ export function createHeartbeatAdapter(): MessageAdapter {
   return {
     type: "heartbeat",
     start() {
-      const tasks = collectHeartbeatScheduleTasks(activeRouteProfiles(), config.heartbeatIntervalSeconds);
+      const tasks = collectScheduledAutomationTasks(activeRouteProfiles());
       patchHeartbeatStatus({
         enabled: true,
         intervalSeconds: config.heartbeatIntervalSeconds,
@@ -261,16 +359,18 @@ export function createHeartbeatAdapter(): MessageAdapter {
         data: {
           scheduleCount: tasks.length,
           schedules: tasks.map((task) => ({
-            routeId: task.routeId,
-            ruleId: task.ruleId,
-            scheduleId: task.schedule.id,
-            scheduleName: task.schedule.name,
-            scheduleType: task.schedule.type,
-            intervalSeconds: task.schedule.intervalSeconds,
-            windowStartTime: task.schedule.windowStartTime,
-            windowEndTime: task.schedule.windowEndTime,
-            timeOfDay: task.schedule.timeOfDay,
-            onceAt: task.schedule.onceAt
+            routeId: task.route.id,
+            automationRuleId: task.rule.id,
+            automationRuleName: task.rule.name,
+            actionType: task.rule.action.type,
+            scheduleId: task.rule.trigger.schedule.id,
+            scheduleName: task.rule.trigger.schedule.name,
+            scheduleType: task.rule.trigger.schedule.type,
+            intervalSeconds: task.rule.trigger.schedule.intervalSeconds,
+            windowStartTime: task.rule.trigger.schedule.windowStartTime,
+            windowEndTime: task.rule.trigger.schedule.windowEndTime,
+            timeOfDay: task.rule.trigger.schedule.timeOfDay,
+            onceAt: task.rule.trigger.schedule.onceAt
           }))
         }
       });

@@ -596,14 +596,46 @@ function archiveItemFromFile(filePath: string): MessageContextArchiveItem | unde
   };
 }
 
-function discoveredArchives(dataDir: string, knownFiles: ReadonlySet<string> = new Set()): MessageContextArchiveItem[] {
+type ArchiveSequenceRange = Pick<MessageContextArchiveItem, "file" | "firstSequence" | "lastSequence">;
+
+function archiveRangeFromFileName(file: string): ArchiveSequenceRange | undefined {
+  const match = path.basename(file).match(/^(\d+)~(\d+)\.jsonl$/i);
+  const firstSequence = positiveInteger(match?.[1]);
+  const lastSequence = positiveInteger(match?.[2]);
+  if (!firstSequence || !lastSequence || lastSequence < firstSequence) return undefined;
+  return { file: path.basename(file), firstSequence, lastSequence };
+}
+
+function archiveRangeContains(container: ArchiveSequenceRange, item: ArchiveSequenceRange): boolean {
+  return container.firstSequence <= item.firstSequence && container.lastSequence >= item.lastSequence;
+}
+
+function compactContainedArchives<T extends ArchiveSequenceRange>(items: T[]): T[] {
+  return items.filter((item, index) => !items.some((candidate, candidateIndex) => (
+    candidateIndex !== index
+    && archiveRangeContains(candidate, item)
+    && (
+      candidate.firstSequence < item.firstSequence
+      || candidate.lastSequence > item.lastSequence
+      || candidate.file.localeCompare(item.file) < 0
+    )
+  )));
+}
+
+function discoveredArchives(dataDir: string, knownArchives: readonly MessageContextArchiveItem[] = []): MessageContextArchiveItem[] {
   const archiveDir = messageContextArchiveDir(dataDir);
   if (!fs.existsSync(archiveDir)) return [];
-  return fs.readdirSync(archiveDir, { withFileTypes: true })
-    .filter((item) => item.isFile() && /^\d+~\d+\.jsonl$/i.test(item.name) && !knownFiles.has(item.name))
+  const knownFiles = new Set(knownArchives.map((item) => path.basename(item.file)));
+  const candidates = compactContainedArchives(fs.readdirSync(archiveDir, { withFileTypes: true })
+    .filter((item) => item.isFile() && !knownFiles.has(item.name))
     .flatMap((item) => {
+      const range = archiveRangeFromFileName(item.name);
+      if (!range || knownArchives.some((known) => archiveRangeContains(known, range))) return [];
+      return [range];
+    }));
+  return candidates.flatMap((item) => {
       try {
-        const archive = archiveItemFromFile(path.join(archiveDir, item.name));
+        const archive = archiveItemFromFile(path.join(archiveDir, item.file));
         return archive ? [archive] : [];
       } catch {
         return [];
@@ -612,7 +644,9 @@ function discoveredArchives(dataDir: string, knownFiles: ReadonlySet<string> = n
 }
 
 function sortArchives(items: MessageContextArchiveItem[]): MessageContextArchiveItem[] {
-  return [...items].sort((left, right) => left.firstSequence - right.firstSequence);
+  return compactContainedArchives(items).sort((left, right) => (
+    left.firstSequence - right.firstSequence || left.lastSequence - right.lastSequence
+  ));
 }
 
 function compareRecords(left: MessageContextRecord, right: MessageContextRecord): number {
@@ -637,7 +671,7 @@ export function readMessageContextArchiveIndex(dataDir: string): MessageContextA
     ))
     : [];
   const byFile = new Map(indexed.map((item) => [path.basename(item.file), { ...item, file: path.basename(item.file) }]));
-  for (const item of discoveredArchives(dataDir, new Set(byFile.keys()))) byFile.set(item.file, item);
+  for (const item of discoveredArchives(dataDir, [...byFile.values()])) byFile.set(item.file, item);
   const archives = sortArchives([...byFile.values()]);
   const currentLastSequence = Math.max(0, ...recordsFromFile(messageContextCurrentPath(dataDir))
     .map((item) => positiveInteger(item.sequence) || 0));

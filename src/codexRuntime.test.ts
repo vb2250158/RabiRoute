@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import {
   buildCodexBootstrapEnv,
@@ -9,6 +12,7 @@ import {
   codexThreadDeliveryTargetIsStaleForTest,
   codexThreadMatchesConfiguredTargetForTest,
   mergeCodexDesktopThreadsWithMetadataForTest,
+  listCodexThreads,
   resolvePrimaryCodexTurnOptions,
   waitForCodexDesktopThreadForTest
 } from "./codexRuntime.js";
@@ -162,4 +166,63 @@ test("freshly created Desktop tasks wait for the read index before first deliver
   assert.equal(actual.id, expected.id);
   assert.equal(readCount, 3);
   assert.equal(waitCount, 2);
+});
+
+test("local state lookup finds a bootstrapped task before it has a first message", async (t) => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-empty-bootstrap-"));
+  const previousCodexHome = process.env.CODEX_HOME;
+  t.after(() => {
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  });
+  process.env.CODEX_HOME = codexHome;
+
+  const database = new DatabaseSync(path.join(codexHome, "state_5.sqlite"));
+  database.exec(`
+    CREATE TABLE threads (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      cwd TEXT,
+      rollout_path TEXT,
+      updated_at INTEGER,
+      updated_at_ms INTEGER,
+      recency_at INTEGER,
+      recency_at_ms INTEGER,
+      archived INTEGER,
+      first_user_message TEXT
+    );
+  `);
+  const taskId = "019f0000-0000-7000-8000-000000000073";
+  const taskTitle = "[PangHu][Bug] 摆放系统 - 建筑或物件位置重叠";
+  database.prepare(`
+    INSERT INTO threads (
+      id, title, cwd, rollout_path, updated_at, updated_at_ms,
+      recency_at, recency_at_ms, archived, first_user_message
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    taskId,
+    taskTitle,
+    process.cwd(),
+    path.join(codexHome, "empty-rollout.jsonl"),
+    1_786_451_763,
+    1_786_451_763_866,
+    1_786_451_746,
+    1_786_451_746_925,
+    0,
+    ""
+  );
+  database.close();
+
+  const result = await listCodexThreads({
+    query: taskTitle,
+    limit: 20,
+    offset: 0,
+    allowedWorkspaces: [process.cwd()],
+    stateDbOnly: true
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.id, taskId);
+  assert.equal(result[0]?.title, taskTitle);
 });

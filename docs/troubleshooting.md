@@ -30,7 +30,7 @@
 
 - 有 `group-messages.jsonl` 或 `private-messages.jsonl`：说明 QQ 到 RabiRoute 已通。
 - 有 `agent-packets.jsonl`：说明路由规则已命中并构造了 AgentPacket。
-- 没有投递记录：检查角色 `personaConfig.json` 是否存在对应 `configName` 的有效 `notificationRules`，再检查 `routeKinds`、`regex` 和目标群过滤。
+- 没有投递记录：检查人格 `personaConfig.json` 是否存在启用的消息触发 `automationRules`，再检查 `trigger.routeKinds`、`trigger.regex` 和目标群过滤。
 
 ## `send_group_msg` 报 `EventChecker Failed` / `1006514`
 

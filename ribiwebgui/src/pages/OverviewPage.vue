@@ -391,17 +391,10 @@ const adapterHealth = computed(() => {
   if (adapters.includes("napcat") && napcat.loginInfoError) return "HTTP 异常";
   return "已启用";
 });
-const selectedGatewayName = computed(() => store.selectedGateway ? store.configNameFor(store.selectedGateway) : "等待创建路由");
 const selectedAdapters = computed(() => {
   if (!store.selectedGateway) return "尚未选择消息入口";
   const text = gatewayAdapterTypes(store.selectedGateway).map(adapterLabel).join(" + ");
   return isMessageInputsDisabled(store.selectedGateway) ? `已禁用 · ${text}` : text;
-});
-const selectedRuntimeLabel = computed(() => {
-  if (!store.selectedGateway) return "未配置";
-  if (store.selectedGateway.enabled === false || selectedRuntime.value.enabled === false) return "禁用中";
-  if (!gatewayNeedsRuntime(store.selectedGateway)) return "启用中";
-  return selectedRuntime.value.running ? "运行中" : "已停止";
 });
 const selectedAgentType = computed(() => store.selectedGateway?.agentAdapters?.[0]);
 const selectedConfiguredThreadName = computed(() => {
@@ -434,37 +427,6 @@ const selectedAgentNote = computed(() => {
 
 <template>
   <div class="page-shell">
-    <div class="overview-hero app-card">
-      <div>
-        <div class="eyebrow">RabiRoute Control Deck</div>
-        <h1 class="overview-hero-title">消息包裹正在排队分诊</h1>
-        <div class="overview-hero-copy">
-          RabiRoute 负责把来自 QQ、定时器和 Webhook 的消息补齐上下文，再投递给合适的 Agent。
-        </div>
-      </div>
-      <div class="overview-hero-panel">
-        <div class="status-row"><span>当前路由</span><b>{{ selectedGatewayName }}</b></div>
-        <div class="status-row"><span>运行状态</span><b>{{ selectedRuntimeLabel }}</b></div>
-        <div class="status-row"><span>消息入口</span><b>{{ selectedAdapters }}</b></div>
-        <div class="status-row"><span>Rabi 实例</span><b>{{ store.meta.rabiName || store.meta.computerName || "-" }}</b></div>
-        <div class="hero-actions">
-          <v-btn prepend-icon="mdi-lightning-bolt-outline" color="secondary" variant="tonal" @click="store.openQuickSetup">快速配置</v-btn>
-          <v-btn prepend-icon="mdi-play-circle-outline" variant="tonal" @click="store.startManager">启动 Manager</v-btn>
-          <v-btn
-            prepend-icon="mdi-restart"
-            variant="tonal"
-            color="primary"
-            :loading="gatewayActionId === `${store.selectedGatewayId}:restart`"
-            :disabled="!store.selectedGatewayId || Boolean(gatewayActionId)"
-            @click="runGatewayAction(store.selectedGatewayId, 'restart')"
-          >
-            重启当前路由
-          </v-btn>
-        </div>
-        <v-alert v-if="gatewayActionError" type="error" variant="tonal" density="compact" class="mt-3">{{ gatewayActionError }}</v-alert>
-      </div>
-    </div>
-
     <div class="overview-grid">
       <v-card class="app-card glass-card stat-card">
         <div class="stat-label">路由配置</div>
@@ -497,6 +459,7 @@ const selectedAgentNote = computed(() => {
           </div>
           <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="store.addGatewayAndOpenQuickSetup">新增</v-btn>
         </div>
+        <v-alert v-if="gatewayActionError" type="error" variant="tonal" density="compact" class="mb-3">{{ gatewayActionError }}</v-alert>
         <v-list bg-color="transparent">
           <v-list-item
             v-for="gw in store.gateways"

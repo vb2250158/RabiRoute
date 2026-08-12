@@ -245,6 +245,18 @@ test("NapCat group reply helper binds text and segment messages to the source me
       { type: "text", data: { text: "已接手。" } }
     ]
   );
+  assert.equal(
+    napcatGroupReplyMessage("【问题】请补充录屏。", "source-3", true, "10001"),
+    "[CQ:reply,id=source-3][CQ:at,qq=10001]【问题】请补充录屏。"
+  );
+  assert.deepEqual(
+    napcatGroupReplyMessage([{ type: "text", data: { text: "请补充录屏。" } }], "source-4", true, "10002"),
+    [
+      { type: "reply", data: { id: "source-4" } },
+      { type: "at", data: { qq: "10002" } },
+      { type: "text", data: { text: "请补充录屏。" } }
+    ]
+  );
 });
 
 test("NapCat group reply helper respects opt-out and does not duplicate an existing reply", () => {
@@ -256,6 +268,10 @@ test("NapCat group reply helper respects opt-out and does not duplicate an exist
   assert.deepEqual(
     napcatGroupReplyMessage([{ type: "reply", data: { id: "source-1" } }, { type: "text", data: { text: "继续跟进。" } }], "source-1", true),
     [{ type: "reply", data: { id: "source-1" } }, { type: "text", data: { text: "继续跟进。" } }]
+  );
+  assert.equal(
+    napcatGroupReplyMessage("[CQ:reply,id=source-1][CQ:at,qq=10001]继续跟进。", "source-1", true, "10001"),
+    "[CQ:reply,id=source-1][CQ:at,qq=10001]继续跟进。"
   );
 });
 

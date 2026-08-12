@@ -58,9 +58,9 @@ http://127.0.0.1:8790/
 - `Agent 端`：选择处理端配置，填写 Codex 监听线程名，并在 `Agent 工作目录` 下拉里选择对应项目目录；没有候选时在右侧手动填写一次。
 - `路由配置`：确认 NapCat WS 端口、NapCat HTTP 地址、Webhook 端口、Agent 工作目录和指向人格。
 - `人格配置`：选择或创建角色。普通陪伴示例使用 `Rabi`；眼镜 record-first 与主动下行示例使用配套的 `RabiLink` Route 和 `RabiActive` 人格。
-- `消息模板规则`：确认哪些 route kind 会转发给处理端。
+- `人格自动化`：在“收到消息时 / 定时任务”中确认触发条件，并选择通知 Agent 或运行人格脚本。
 
-需要手动写 `personaConfig.json`、关键词规则或消息模板时，看 [路由配置](routing-configuration.md)。
+需要手动写 `personaConfig.json`、关键词规则或自动化规则时，看 [路由配置](routing-configuration.md)。
 
 复制示例 data 包：
 
@@ -72,7 +72,7 @@ xcopy examples\data data /E /I
 cp -R examples/data/. data/
 ```
 
-如果只想本地试跑定时触发，可以把消息适配端设为 `heartbeat`，不用接 NapCat。
+如果只想本地试跑定时任务，可以启用“定时任务”入口，不用接 NapCat。运行脚本还要在当前 Route 单独打开本机脚本权限。
 
 ## 适配 Codex
 

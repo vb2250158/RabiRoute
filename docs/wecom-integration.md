@@ -189,6 +189,7 @@ POST /api/agent/send
 ```json
 {
   "deliveryId": "wecom-msg-001-response",
+  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
   "routeId": "wecom",
   "channel": "wecom",
   "params": {
@@ -205,6 +206,7 @@ POST /api/agent/send
 ```json
 {
   "deliveryId": "wecom-reminder-2026-08-10-1800",
+  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
   "routeId": "wecom",
   "channel": "wecom",
   "params": { "chatId": "wrCHATID" },
@@ -212,7 +214,7 @@ POST /api/agent/send
 }
 ```
 
-`routeId` 必须精确指向启用中的 Route，`params.chatId` 必须明确。回应当前消息时可带 `params.reqId`，主动发送时省略。发送前仍会检查 `messageAdapterPolicies.wecom.outputEnabled` 和 `supportedOutputs`。关闭发送、缺少明确目标、缺少企业微信 bot secret、SDK 返回发送限制或目标不可达时，outbox 返回 `blocked` / `failed`，并写入 `outbox-adapter.log.jsonl`。
+`sender.agentType` 和当前完整 `sender.sessionId`、`routeId` 都必须填写，`routeId` 必须精确指向启用中的 Route，`params.chatId` 必须明确。回应当前消息时可带 `params.reqId`，主动发送时省略。发送前仍会检查 `messageAdapterPolicies.wecom.outputEnabled` 和 `supportedOutputs`。关闭发送、缺少明确目标、缺少企业微信 bot secret、SDK 返回发送限制或目标不可达时，outbox 返回 `blocked` / `failed`，并写入 `outbox-adapter.log.jsonl`。
 
 ## 日志与状态
 
