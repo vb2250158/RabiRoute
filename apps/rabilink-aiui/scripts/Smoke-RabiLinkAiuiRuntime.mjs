@@ -364,6 +364,8 @@ try {
   assert(modelOptions.initialPrompts?.[0]?.role === "system", "Configuration LanguageModel must start with a bounded system instruction.");
   assert(modelOptions.tools?.[0]?.function?.name === CONFIGURATION_ACTION_TOOL, "Configuration LanguageModel must expose one whitelisted action tool.");
   assert(modelOptions.tools[0].function.parameters.properties.command.enum.length === expectedCommands.length, "Configuration LanguageModel tool enum must cover every executable command.");
+  assert(!("model" in modelOptions), "An empty Route model must preserve the native LanguageModel default.");
+  assert(configurationLanguageModelOptions("test-model").model === "test-model", "The selected Route model must reach the native LanguageModel options.");
   assert(configurationCommandFromToolCall({
     functionName: CONFIGURATION_ACTION_TOOL,
     arguments: JSON.stringify({ command: VOICE_COMMANDS.LOAD_CONFIG }),

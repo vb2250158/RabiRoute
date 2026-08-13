@@ -2,6 +2,11 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { sanitizeRoleId } from "../shared/routeIdentity.js";
+import {
+  BilibiliHistoryRecordStore,
+  type BilibiliHistoryApiItem
+} from "./bilibiliHistoryRecordStore.js";
 
 const API_ENDPOINT = "https://api.bilibili.com/x/web-interface/history/cursor";
 const MAX_PAGE_ITEMS = 30;
@@ -13,22 +18,6 @@ type Cursor = {
   max: number | string;
   view_at: number;
   business: string;
-};
-
-type BilibiliHistoryItem = {
-  title?: string;
-  view_at?: number;
-  progress?: number;
-  duration?: number;
-  tag_name?: string;
-  author_name?: string;
-  author_mid?: number | string;
-  history?: {
-    business?: string;
-    oid?: number | string;
-    kid?: number | string;
-    bvid?: string;
-  };
 };
 
 export type BilibiliHistorySummary = {
@@ -46,6 +35,7 @@ type HistoryJobStatus = "queued" | "running" | "completed" | "failed" | "paused"
 
 export type BilibiliHistoryJob = {
   id: string;
+  roleId?: string;
   createdAt: string;
   updatedAt: string;
   sinceEpoch: number;
@@ -58,6 +48,12 @@ export type BilibiliHistoryJob = {
   lastPageKey: string;
   lastError: string;
   summary: BilibiliHistorySummary;
+  persistence?: {
+    recordCount: number;
+    activeDays: Record<string, number>;
+    lastPersistedAt: string;
+    recordDates?: Record<string, string>;
+  };
 };
 
 type PersistedState = {
@@ -76,7 +72,7 @@ type PageSubmission = {
   pageKey?: string;
   code?: number;
   message?: string;
-  items?: BilibiliHistoryItem[];
+  items?: BilibiliHistoryApiItem[];
   nextCursor?: Partial<Cursor>;
 };
 
@@ -152,7 +148,7 @@ function increment(target: Record<string, number>, key: string, amount = 1): voi
   target[normalized] = (target[normalized] ?? 0) + amount;
 }
 
-function accumulate(summary: BilibiliHistorySummary, item: BilibiliHistoryItem, timezoneOffsetMinutes: number): void {
+function accumulate(summary: BilibiliHistorySummary, item: BilibiliHistoryApiItem, timezoneOffsetMinutes: number): void {
   const duration = Math.max(0, Number(item.duration) || 0);
   const progress = Number(item.progress);
   const consumed = progress === -1
@@ -166,9 +162,12 @@ function accumulate(summary: BilibiliHistorySummary, item: BilibiliHistoryItem, 
     const localEpoch = viewedAt - timezoneOffsetMinutes * 60;
     increment(summary.activeDays, new Date(localEpoch * 1000).toISOString().slice(0, 10));
   }
-  increment(summary.businessCounts, item.history?.business ?? "unknown");
-  increment(summary.tagCounts, item.tag_name ?? "unknown");
-  if (item.author_name) increment(summary.authorCounts, item.author_name);
+  const history = item.history && typeof item.history === "object" && !Array.isArray(item.history)
+    ? item.history as Record<string, unknown>
+    : {};
+  increment(summary.businessCounts, String(history.business ?? "unknown"));
+  increment(summary.tagCounts, String(item.tag_name ?? "unknown"));
+  if (item.author_name) increment(summary.authorCounts, String(item.author_name));
   const text = `${item.title ?? ""} ${item.tag_name ?? ""}`;
   const themes: Array<[string, RegExp]> = [
     ["二次元与游戏", /游戏|手游|主机|二游|绝区零|鸣潮|星穹铁道|崩坏|原神|妮姬|异环|终末地|卡厄思|动森/i],
@@ -183,9 +182,11 @@ function accumulate(summary: BilibiliHistorySummary, item: BilibiliHistoryItem, 
   }
 }
 
-function publicJob(job: BilibiliHistoryJob): Omit<BilibiliHistoryJob, "lastPageKey"> {
+function publicJob(job: BilibiliHistoryJob): Record<string, unknown> {
   const { lastPageKey: _privateIdempotencyKey, ...result } = job;
-  return result;
+  if (!result.persistence) return result;
+  const { recordDates: _privateRecordDates, ...persistence } = result.persistence;
+  return { ...result, persistence };
 }
 
 function isLoopback(request: http.IncomingMessage): boolean {
@@ -195,9 +196,31 @@ function isLoopback(request: http.IncomingMessage): boolean {
 
 export class BilibiliHistoryBridge {
   private state: PersistedState;
+  private readonly recordStore: BilibiliHistoryRecordStore;
 
-  constructor(private readonly statePath: string) {
+  constructor(
+    private readonly statePath: string,
+    rolesRoot: string | (() => string),
+    options: { readOnly?: boolean } = {}
+  ) {
+    this.recordStore = new BilibiliHistoryRecordStore(rolesRoot);
     this.state = this.load();
+    const migrated = this.pauseLegacyActiveJobs();
+    if (migrated && !options.readOnly) this.save();
+  }
+
+  private pauseLegacyActiveJobs(): boolean {
+    let changed = false;
+    const updatedAt = new Date().toISOString();
+    for (const job of this.state.jobs) {
+      if ((job.status === "queued" || job.status === "running") && !sanitizeRoleId(job.roleId)) {
+        job.status = "paused";
+        job.updatedAt = updatedAt;
+        job.lastError = "This legacy job has no roleId; choose a persona and create a replacement job.";
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   private load(): PersistedState {
@@ -302,8 +325,43 @@ export class BilibiliHistoryBridge {
       return;
     }
 
+    const roleDaysMatch = pathname.match(/^\/api\/bilibili-history\/roles\/([^/]+)\/days$/i);
+    if (request.method === "GET" && roleDaysMatch) {
+      const roleId = sanitizeRoleId(decodeURIComponent(roleDaysMatch[1]));
+      if (!roleId) {
+        json(response, 400, { code: -1, error: "INVALID_ROLE_ID" });
+        return;
+      }
+      const index = this.recordStore.readIndex(roleId);
+      json(response, 200, { code: 0, roleId, index });
+      return;
+    }
+
+    const roleDayMatch = pathname.match(/^\/api\/bilibili-history\/roles\/([^/]+)\/days\/(\d{4}-\d{2}-\d{2})$/i);
+    if (request.method === "GET" && roleDayMatch) {
+      const roleId = sanitizeRoleId(decodeURIComponent(roleDayMatch[1]));
+      if (!roleId) {
+        json(response, 400, { code: -1, error: "INVALID_ROLE_ID" });
+        return;
+      }
+      const records = this.recordStore.readDay(roleId, roleDayMatch[2]);
+      const offset = Math.max(0, Math.trunc(Number(requestUrl.searchParams.get("offset")) || 0));
+      const limit = Math.min(500, Math.max(1, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 100)));
+      json(response, 200, {
+        code: 0,
+        roleId,
+        date: roleDayMatch[2],
+        total: records.length,
+        offset,
+        limit,
+        records: records.slice(offset, offset + limit)
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/bilibili-history/jobs") {
       const body = await readJson<{
+        roleId?: unknown;
         since?: unknown;
         until?: unknown;
         pageDelayMs?: unknown;
@@ -315,9 +373,21 @@ export class BilibiliHistoryBridge {
         json(response, 400, { code: -1, error: "INVALID_TIME_RANGE" });
         return;
       }
+      const roleId = sanitizeRoleId(body.roleId);
+      if (!roleId) {
+        json(response, 400, { code: -1, error: "INVALID_ROLE_ID" });
+        return;
+      }
+      try {
+        this.recordStore.indexPath(roleId);
+      } catch (error) {
+        json(response, 404, { code: -1, error: error instanceof Error ? error.message : String(error) });
+        return;
+      }
       const now = new Date().toISOString();
       const job: BilibiliHistoryJob = {
         id: randomUUID(),
+        roleId,
         createdAt: now,
         updatedAt: now,
         sinceEpoch,
@@ -331,7 +401,13 @@ export class BilibiliHistoryBridge {
         pageDelayMs: Math.min(5000, Math.max(250, Number(body.pageDelayMs) || DEFAULT_PAGE_DELAY_MS)),
         lastPageKey: "",
         lastError: "",
-        summary: emptySummary()
+        summary: emptySummary(),
+        persistence: {
+          recordCount: 0,
+          activeDays: {},
+          lastPersistedAt: "",
+          recordDates: {}
+        }
       };
       this.state.jobs.push(job);
       this.state.jobs = this.state.jobs.slice(-100);
@@ -401,12 +477,36 @@ export class BilibiliHistoryBridge {
       const items = Array.isArray(body.items) ? body.items.slice(0, MAX_PAGE_ITEMS) : [];
       const pageKey = String(body.pageKey ?? "").slice(0, 256);
       if (!pageKey || pageKey !== job.lastPageKey) {
-        for (const item of items) {
+        const inRangeItems = items.filter(item => {
           const viewedAt = Number(item.view_at);
-          if (Number.isSafeInteger(viewedAt) && viewedAt >= job.sinceEpoch && viewedAt < job.untilEpoch) {
-            accumulate(job.summary, item, job.timezoneOffsetMinutes);
+          return Number.isSafeInteger(viewedAt) && viewedAt >= job.sinceEpoch && viewedAt < job.untilEpoch;
+        });
+        if (!job.roleId) throw new Error("BILIBILI_HISTORY_JOB_HAS_NO_ROLE");
+        const recordDates = job.persistence?.recordDates
+          ?? this.recordStore.recordDatesForJob(job.roleId, job.id);
+        const summarizedRecordIds = new Set(Object.keys(recordDates));
+        const persistedAt = new Date().toISOString();
+        const persisted = this.recordStore.persist(job.roleId, inRangeItems, {
+          jobId: job.id,
+          capturedAt: persistedAt,
+          timezoneOffsetMinutes: job.timezoneOffsetMinutes
+        });
+        for (let index = 0; index < persisted.acceptedRecords.length; index += 1) {
+          const record = persisted.acceptedRecords[index];
+          if (!summarizedRecordIds.has(record.recordId)) {
+            accumulate(job.summary, inRangeItems[index], job.timezoneOffsetMinutes);
+            summarizedRecordIds.add(record.recordId);
           }
+          recordDates[record.recordId] = record.localDate;
         }
+        const activeDays: Record<string, number> = {};
+        for (const date of Object.values(recordDates)) increment(activeDays, date);
+        job.persistence = {
+          recordCount: Object.keys(recordDates).length,
+          activeDays,
+          lastPersistedAt: persistedAt,
+          recordDates
+        };
         job.pagesProcessed += 1;
         job.lastPageKey = pageKey;
       }

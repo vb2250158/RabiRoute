@@ -177,13 +177,13 @@ const commandPatterns = [
 
 export const CONFIGURATION_ACTION_TOOL = "execute_configuration_action";
 
-export function configurationLanguageModelOptions() {
+export function configurationLanguageModelOptions(model = "") {
   const samples = voiceCommandSamples();
   const commandIds = samples.map((item) => item.command);
   const commandCatalog = samples
     .map((item) => `${item.command}=${item.text}`)
     .join("；");
-  return {
+  const options = {
     initialPrompts: [{
       role: "system",
       content: [
@@ -214,8 +214,10 @@ export function configurationLanguageModelOptions() {
           additionalProperties: false
         }
       }
-    }]
+    }],
+    ...(model && { model })
   };
+  return options;
 }
 
 export function configurationCommandFromToolCall(event = {}) {

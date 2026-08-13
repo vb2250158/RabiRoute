@@ -197,6 +197,7 @@ import { handleRabiApi, publicRabiLinkRelayConfig } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
+  gatewayRuntimeSyncAction,
   managerAutostartEnabled,
   managerConfigWatcherEnabled,
   managerReadOnlyEnabled,
@@ -616,7 +617,9 @@ const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.en
 const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
 const bilibiliHistoryBridge = new BilibiliHistoryBridge(
-  path.join(rootDir, "data", "runtime", "bilibili-history-bridge.json")
+  path.join(rootDir, "data", "runtime", "bilibili-history-bridge.json"),
+  () => configRepository.rolesRoot,
+  { readOnly: managerReadOnly }
 );
 const managerEventStreams = new Set<http.ServerResponse>();
 
@@ -1693,17 +1696,22 @@ function loadRuntimes(): void {
 }
 
 function syncRunningGateways(): void {
-  if (!managerShouldAutostart) return;
   for (const runtime of runtimes.values()) {
-    if (runtime.definition.enabled && runtime.process && runtime.needsRestart) {
+    const action = gatewayRuntimeSyncAction({
+      managerShouldAutostart,
+      enabled: runtime.definition.enabled === true,
+      running: Boolean(runtime.process),
+      needsRestart: runtime.needsRestart
+    });
+    if (action === "restart") {
       appendLog(runtime, "restarting because gateway config changed");
-      runtime.process.kill();
+      runtime.process?.kill();
       continue;
     }
-    if (runtime.definition.enabled && !runtime.process) {
+    if (action === "start") {
       startGateway(runtime.definition.id);
     }
-    if (!runtime.definition.enabled && runtime.process) {
+    if (action === "stop") {
       stopGateway(runtime.definition.id);
     }
   }

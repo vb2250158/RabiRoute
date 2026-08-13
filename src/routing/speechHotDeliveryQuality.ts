@@ -29,6 +29,7 @@ export type SpeechHotDeliveryQualityDecision = {
   matchedWakeWord?: string;
   explicitInstruction: boolean;
   speakerDecisions: string[];
+  trustedMobile?: boolean;
 };
 
 function normalizedSpeakerDecisions(segments: SpeechTranscriptSegment[]): string[] {
@@ -42,18 +43,27 @@ function wordConfidences(segments: SpeechTranscriptSegment[]): number[] {
   }));
 }
 
+function isTrustedPairedMobile(record: SpeechIngressRecord): boolean {
+  return record.messageAdapterType === "rabilink"
+    && (record.sourceDeviceKind === "mobile" || record.sourceDeviceKind === "phone")
+    && Boolean(record.sourceDeviceId?.trim())
+    && record.sourceDeviceTrust === "speech_runtime_record_binding";
+}
+
 export function decideSpeechHotDeliveryQuality(
   record: SpeechIngressRecord,
   wakeWordsValue: unknown
 ): SpeechHotDeliveryQualityDecision {
   const speakerDecisions = normalizedSpeakerDecisions(record.segments);
-  const speakersVerified = record.segments.length > 0
+  const trustedMobile = isTrustedPairedMobile(record);
+  const speakersVerified = trustedMobile || record.segments.length > 0
     && record.segments.every(segment => VERIFIED_SPEAKER_DECISIONS.has(String(segment.speakerDecision || "").trim()));
   const text = record.text.trim();
   const matchedWakeWord = matchSpeechTriggerKeyword(text, normalizeSpeechTriggerKeywords(wakeWordsValue));
   const explicitInstruction = EXPLICIT_INSTRUCTION.test(text);
+  const trustedMobileWakeBypass = trustedMobile && Boolean(matchedWakeWord);
   if (!speakersVerified) {
-    return { shouldNotifyAgent: false, reason: "speaker_unverified", matchedWakeWord, explicitInstruction, speakerDecisions };
+    return { shouldNotifyAgent: false, reason: "speaker_unverified", matchedWakeWord, explicitInstruction, speakerDecisions, trustedMobile };
   }
 
   const confidences = wordConfidences(record.segments);
@@ -63,18 +73,20 @@ export function decideSpeechHotDeliveryQuality(
       reason: "asr_quality_unavailable",
       matchedWakeWord,
       explicitInstruction,
-      speakerDecisions
+      speakerDecisions,
+      trustedMobile
     };
   }
   const averageWordConfidence = confidences.reduce((sum, value) => sum + value, 0) / confidences.length;
-  if (averageWordConfidence < MIN_WORD_CONFIDENCE) {
+  if (averageWordConfidence < MIN_WORD_CONFIDENCE && !trustedMobileWakeBypass) {
     return {
       shouldNotifyAgent: false,
       reason: "asr_quality_low",
       averageWordConfidence,
       matchedWakeWord,
       explicitInstruction,
-      speakerDecisions
+      speakerDecisions,
+      trustedMobile
     };
   }
   if (!matchedWakeWord && !explicitInstruction) {
@@ -83,7 +95,8 @@ export function decideSpeechHotDeliveryQuality(
       reason: "no_explicit_wake_or_instruction",
       averageWordConfidence,
       explicitInstruction,
-      speakerDecisions
+      speakerDecisions,
+      trustedMobile
     };
   }
   return {
@@ -92,6 +105,7 @@ export function decideSpeechHotDeliveryQuality(
     averageWordConfidence,
     matchedWakeWord,
     explicitInstruction,
-    speakerDecisions
+    speakerDecisions,
+    trustedMobile
   };
 }

@@ -9,6 +9,9 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.PowerManager;
 import android.os.SystemClock;
+import android.util.Log;
+
+import com.rabi.link.BuildConfig;
 
 import java.util.Locale;
 import java.util.concurrent.Executors;
@@ -121,9 +124,17 @@ public final class RabiPhoneAudioCapture {
             try {
                 int minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
                         AudioFormat.ENCODING_PCM_16BIT);
-                AudioRecord next = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE,
-                        AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                        Math.max(minimum * 2, 8192));
+                AudioFormat captureFormat = new AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(SAMPLE_RATE)
+                        .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                        .build();
+                AudioRecord next = new AudioRecord.Builder()
+                        .setAudioSource(MediaRecorder.AudioSource.MIC)
+                        .setAudioFormat(captureFormat)
+                        .setBufferSizeInBytes(Math.max(minimum * 2, 8192))
+                        .setPrivacySensitive(true)
+                        .build();
                 if (next.getState() != AudioRecord.STATE_INITIALIZED) {
                     next.release();
                     scheduleRestart("audio_record_not_initialized");
@@ -160,6 +171,7 @@ public final class RabiPhoneAudioCapture {
                 long now = SystemClock.elapsedRealtime();
                 lastReadElapsed = now;
                 totalBytes += read;
+                logPcmRms(buffer, read, totalBytes);
                 if (now - healthySinceElapsed >= HEALTHY_RESET_MS) consecutiveRestarts = 0;
                 if (now - lastMetricPersistElapsed >= METRIC_PERSIST_INTERVAL_MS) {
                     lastMetricPersistElapsed = now;
@@ -177,6 +189,20 @@ public final class RabiPhoneAudioCapture {
             exitReason = "audio_read_" + error.getClass().getSimpleName();
         }
         if (requested && recorder == source) scheduleRestart(exitReason);
+    }
+
+    private static void logPcmRms(byte[] data, int length, long totalBytes) {
+        long sumSquares = 0;
+        int samples = length / 2;
+        for (int i = 0; i + 1 < length; i += 2) {
+            short sample = (short) ((data[i] & 0xff) | (data[i + 1] << 8));
+            sumSquares += (long) sample * sample;
+        }
+        double rms = samples > 0 ? Math.sqrt((double) sumSquares / samples) / 32767.0 : 0.0;
+        boolean periodic = (totalBytes % (SAMPLE_RATE * 2L * 5L)) < length;
+        if (BuildConfig.DEBUG && periodic) {
+            Log.d("RabiPhoneAudioCapture", "pcm rms=" + rms + " bytes=" + length + " total=" + totalBytes);
+        }
     }
 
     private void scheduleStallDeadline(AudioRecord source, int generation, long delayMs) {

@@ -127,7 +127,7 @@ function Invoke-Json {
 
 function Test-Manager {
   try {
-    return Invoke-Json -Path "/meta" -TimeoutSec 4
+    return Invoke-Json -Path "/meta" -TimeoutSec 20
   } catch {
     return $null
   }

@@ -136,7 +136,7 @@ $env:RABIROUTE_MANAGER_AUTOSTART = "0"
 npm run manager
 ```
 
-此模式仍提供 `/meta`、计划、记忆和校验等 Manager HTTP 接口；`GET /meta` 会返回 `managerAutostart: false`。它只关闭自动启动和自动同步，不移除显式运行控制接口，因此调用方仍不得在没有相应授权时请求启动、重启、触发、回传或外发动作。生产托盘和正常消息路由不设置该变量，行为保持不变。
+此模式仍提供 `/meta`、计划、记忆和校验等 Manager HTTP 接口；`GET /meta` 会返回 `managerAutostart: false`。它关闭已停止 Route 的自动启动和文件监视器，不移除显式运行控制接口。若调用方已经显式启动某条 Route，之后又通过 Manager 保存配置，Manager 仍会重启该运行中 Route 以应用新的会话、模型和消息端设置；否则界面保存态会与真实投递态分叉。调用方仍不得在没有相应授权时请求启动、重启、触发、回传或外发动作。生产托盘和正常消息路由不设置该变量，行为保持不变。
 
 ### Codex Hook 上下文接口
 

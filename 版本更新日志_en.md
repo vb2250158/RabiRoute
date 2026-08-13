@@ -52,9 +52,26 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - The Message Processing board closes a send requirement only when the sent channel matches the source endpoint, the result is `sent`, and platforms such as QQ return a real platform identifier. Successful TTS synthesis cannot impersonate a QQ send.
 - Durable idempotency receipts now use `data/agent-send-idempotency/` and `GET /api/agent/send/receipts/:deliveryId`; uncertain results for the same ID still fail closed and are never auto-resent.
 
+### Persona-private Bilibili history shards
+
+- Bilibili history jobs now require a `roleId`, and item records inside the requested window are written only to that persona's `runtime/bilibili-history/daily/YYYY-MM-DD.jsonl`. Date files are physical shards of private facts, not archives, consolidated memory, or expiry. Stable IDs, atomic writes, a rebuildable index, and per-job deduplication keep page retries from duplicating records.
+- Read-only day-index queries scan shards in memory and do not write during GET or Manager read-only acceptance. Active legacy jobs without a `roleId` pause with recovery guidance instead of remaining permanently runnable.
+
+### Mobile hot-speech delivery now requires Manager-owned device trust
+
+- RabiLink mobile audio is now persisted by RabiSpeech before Manager delivery. Manager issues `speech_runtime_record_binding` trust evidence only when the submitted record ID, text, stable device ID, transient stream ID, and adapter type all match that persisted ASR record, and it replaces caller-provided recognition and speaker segments with the recorded evidence. Knowing an online device ID, forging trust metadata, or rewriting recognition segments cannot prove the current utterance; missing records, verification failures, and speech-runtime failures remain fail-closed.
+- When Manager starts read-only, the Bilibili history bridge now pauses legacy active jobs without a `roleId` only in memory and no longer writes that compatibility migration back to runtime state.
+- Android continuous capture remains privacy-sensitive. PCM RMS diagnostics are limited to debug builds and one sample every five seconds so release builds do not expose a continuous speech-activity signal or flood Logcat.
+
+### RabiLink resident interaction and model selection
+
+- Android foreground and message notifications use the active persona name, and the resident listening notification can request an immediate conversation review. Phone/glasses connection wording, notification channels, and recovery cues were aligned. Quick setup can select or enter the Primary Persona model, and the Rokid AIUI configuration assistant uses that selected model.
+- Tray startup and one-shot health checks allow longer Manager cold-start probes to avoid false failures on NAS or cold caches. The hidden-window wrapper still runs only the fixed local health-check command.
+
 ### Manager-owned Primary Persona model settings
 
 - Route configuration now includes Primary Persona reasoning effort, and the existing Primary Persona model setting is applied to new Codex Desktop turns. WebGUI edits both values in the Codex Agent section. They affect only the Primary Persona and do not override Message Agents, Plan Secretaries, or independently bound Plan Agents.
+- Fixed an explicitly started Route continuing to deliver through its stale Gateway child after a task-binding save while `RABIROUTE_MANAGER_AUTOSTART=0`. Disabling autostart now prevents stopped Routes from being launched automatically, while a changed running Route still restarts with the new full task ID, model, and reasoning effort; disabling a running Route also stops it for real.
 
 ### Lower Manager load on Plans & Memory
 

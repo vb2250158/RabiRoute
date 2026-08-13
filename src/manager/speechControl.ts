@@ -714,6 +714,36 @@ export class ManagerSpeechControl {
     return normalizeAudioStreamStatus(raw);
   }
 
+  private async recordBoundMobileEvidence(command: SpeechMessageCommand): Promise<SpeechRecord | undefined> {
+    const recordId = stringValue(command.recordId).trim();
+    const text = stringValue(command.text).trim();
+    const sourceDeviceId = stringValue(command.sourceDeviceId).trim();
+    const sourceDeviceKind = stringValue(command.sourceDeviceKind).trim().toLowerCase();
+    const sourceStreamId = stringValue(command.sourceStreamId).trim();
+    if (command.messageAdapterType !== "rabilink"
+      || (sourceDeviceKind !== "mobile" && sourceDeviceKind !== "phone")
+      || !recordId
+      || !text
+      || !sourceDeviceId
+      || !sourceStreamId) {
+      return undefined;
+    }
+    try {
+      const records = await this.records({ sourceDeviceId, limit: 50 });
+      return records.find(record => (
+        record.kind === "asr"
+        && record.id === recordId
+        && record.text.trim() === text
+        && record.messageAdapterType === "rabilink"
+        && record.sourceDeviceId === sourceDeviceId
+        && record.sourceStreamId === sourceStreamId
+        && (record.sourceDeviceKind === "mobile" || record.sourceDeviceKind === "phone")
+      ));
+    } catch {
+      return undefined;
+    }
+  }
+
   async audioStreamEvents(query: {
     limit?: number;
     clientId?: string;
@@ -1077,11 +1107,30 @@ export class ManagerSpeechControl {
     const text = stringValue(command?.text).trim();
     if (!text) throw new SpeechControlError("Missing speech transcript text.", 400);
     const sessionId = (stringValue(command?.sessionId) || `speech-${Date.now()}`).trim().slice(0, 200);
+    const mobileEvidence = await this.recordBoundMobileEvidence(command);
+    const trustedCommand: SpeechMessageCommand = mobileEvidence
+      ? {
+          ...command,
+          source: mobileEvidence.source,
+          channelType: "rabilink.mobile_audio",
+          messageAdapterType: "rabilink",
+          sourceDeviceId: mobileEvidence.sourceDeviceId,
+          sourceDeviceName: mobileEvidence.sourceDeviceName,
+          sourceDeviceKind: mobileEvidence.sourceDeviceKind,
+          sourceStreamId: mobileEvidence.sourceStreamId,
+          provider: mobileEvidence.provider,
+          model: mobileEvidence.model,
+          language: mobileEvidence.language,
+          duration: mobileEvidence.duration,
+          segments: mobileEvidence.segments,
+          sourceDeviceTrust: "speech_runtime_record_binding"
+        }
+      : { ...command, sourceDeviceTrust: undefined };
     const fallbackId = this.createMessageId();
     const ingress = this.dependencies.speechIngressStore
-      ? this.dependencies.speechIngressStore.append({ ...command, text, sessionId }, fallbackId)
+      ? this.dependencies.speechIngressStore.append({ ...trustedCommand, text, sessionId }, fallbackId)
       : {
-          record: normalizeSpeechIngressRecord({ ...command, text, sessionId }, fallbackId),
+          record: normalizeSpeechIngressRecord({ ...trustedCommand, text, sessionId }, fallbackId),
           appended: true
         };
     const record = ingress.record;

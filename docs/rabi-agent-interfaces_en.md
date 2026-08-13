@@ -33,7 +33,7 @@ $env:RABIROUTE_MANAGER_AUTOSTART = "0"
 npm run manager
 ```
 
-The Manager still serves `/meta`, plan, memory, and validation APIs; `GET /meta` reports `managerAutostart: false`. This mode disables automatic startup and synchronization only. Explicit runtime-control endpoints still exist, so a caller must not request start, restart, trigger, reply, or outbound actions without the corresponding authorization. Production tray startup and normal message routing remain unchanged when the variable is unset.
+The Manager still serves `/meta`, plan, memory, and validation APIs; `GET /meta` reports `managerAutostart: false`. This mode disables automatic startup for stopped Routes and disables the file watcher, but explicit runtime-control endpoints remain available. If a caller has explicitly started a Route and then saves its configuration through Manager, Manager still restarts that running Route so new task, model, and message-input settings become the real delivery state; otherwise the saved UI state could diverge from the live child process. A caller must not request start, restart, trigger, reply, or outbound actions without the corresponding authorization. Production tray startup and normal message routing remain unchanged when the variable is unset.
 
 ### Codex Hook context API
 

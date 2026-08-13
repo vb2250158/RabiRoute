@@ -33,6 +33,15 @@ function ingress(overrides: Partial<SpeechIngressRecord> = {}): SpeechIngressRec
   };
 }
 
+function trustedMobileIngress(overrides: Partial<SpeechIngressRecord> = {}): SpeechIngressRecord {
+  return ingress({
+    sourceDeviceKind: "mobile",
+    sourceDeviceId: "test-phone-device",
+    sourceDeviceTrust: "speech_runtime_record_binding",
+    ...overrides
+  });
+}
+
 test("quarantines unknown or conflicting voiceprints before hot Agent delivery", () => {
   for (const speakerDecision of ["voiceprint_unknown_cluster", "voiceprint_tentative_known", "voiceprint_overlapping_speech"]) {
     const decision = decideSpeechHotDeliveryQuality(ingress({
@@ -93,4 +102,158 @@ test("allows a verified high-quality wake phrase or explicit instruction", () =>
     }]
   });
   assert.equal(decideSpeechHotDeliveryQuality(instruction, ["夜雨"]).shouldNotifyAgent, true);
+});
+
+test("allows a trusted paired mobile stream with a wake word even when voiceprint is unknown", () => {
+  const decision = decideSpeechHotDeliveryQuality(ingress({
+    sourceDeviceKind: "mobile",
+    sourceDeviceId: "test-phone-device",
+    sourceDeviceTrust: "speech_runtime_record_binding",
+    segments: [{
+      ...ingress().segments[0],
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined
+    }]
+  }), ["夜雨", "秋雨", "听得见"]);
+  assert.equal(decision.shouldNotifyAgent, true);
+  assert.equal(decision.reason, "quality_gate_passed");
+  assert.equal(decision.trustedMobile, true);
+});
+
+test("does not let caller-controlled mobile metadata prove a paired device", () => {
+  const decision = decideSpeechHotDeliveryQuality(ingress({
+    sourceDeviceKind: "mobile",
+    sourceDeviceId: "spoofed-phone",
+    segments: [{
+      ...ingress().segments[0],
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined
+    }]
+  }), ["夜雨"]);
+  assert.equal(decision.shouldNotifyAgent, false);
+  assert.equal(decision.reason, "speaker_unverified");
+  assert.equal(decision.trustedMobile, false);
+});
+
+test("trusted mobile + wake word + low overall confidence + unknown voiceprint still notifies", () => {
+  const decision = decideSpeechHotDeliveryQuality(trustedMobileIngress({
+    text: "夜雨，听得见吗",
+    segments: [{
+      ...ingress().segments[0],
+      text: "夜雨，听得见吗",
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined,
+      words: [
+        { word: "夜雨", probability: 0.93 },
+        { word: "听得见", probability: 0.5 },
+        { word: "吗", probability: 0.3 }
+      ]
+    }]
+  }), ["夜雨", "秋雨", "听得见"]);
+  assert.equal(decision.shouldNotifyAgent, true);
+  assert.equal(decision.reason, "quality_gate_passed");
+  assert.equal(decision.trustedMobile, true);
+  assert.equal(decision.matchedWakeWord, "夜雨");
+});
+
+test("trusted mobile explicit instruction still requires overall confidence when no wake word matches", () => {
+  const decision = decideSpeechHotDeliveryQuality(trustedMobileIngress({
+    text: "请暂停录音推流。",
+    segments: [{
+      ...ingress().segments[0],
+      text: "请暂停录音推流。",
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined,
+      words: [
+        { word: "请", probability: 0.41 },
+        { word: "暂停", probability: 0.5 },
+        { word: "录音推流", probability: 0.3 }
+      ]
+    }]
+  }), ["夜雨", "秋雨", "听得见"]);
+  assert.equal(decision.shouldNotifyAgent, false);
+  assert.equal(decision.reason, "asr_quality_low");
+  assert.equal(decision.trustedMobile, true);
+});
+
+test("trusted mobile low-confidence ambient speech without a wake word remains blocked", () => {
+  const decision = decideSpeechHotDeliveryQuality(trustedMobileIngress({
+    text: "今天外面的天气看起来不错。",
+    segments: [{
+      ...ingress().segments[0],
+      text: "今天外面的天气看起来不错。",
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined,
+      words: [
+        { word: "今天", probability: 0.31 },
+        { word: "天气", probability: 0.42 },
+        { word: "不错", probability: 0.5 }
+      ]
+    }]
+  }), ["夜雨", "秋雨", "听得见"]);
+  assert.equal(decision.shouldNotifyAgent, false);
+  assert.equal(decision.reason, "asr_quality_low");
+});
+
+test("trusted mobile wake word without auditable word confidence remains unavailable", () => {
+  const decision = decideSpeechHotDeliveryQuality(trustedMobileIngress({
+    text: "夜雨",
+    segments: [{
+      ...ingress().segments[0],
+      text: "夜雨",
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined,
+      words: []
+    }]
+  }), ["夜雨"]);
+  assert.equal(decision.shouldNotifyAgent, false);
+  assert.equal(decision.reason, "asr_quality_unavailable");
+});
+
+test("still requires a wake word or explicit instruction for trusted mobile streams", () => {
+  const decision = decideSpeechHotDeliveryQuality(ingress({
+    sourceDeviceKind: "mobile",
+    sourceDeviceId: "test-phone-device",
+    sourceDeviceTrust: "speech_runtime_record_binding",
+    text: "听得见 听得见",
+    segments: [{
+      ...ingress().segments[0],
+      text: "听得见 听得见",
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined,
+      words: [
+        { word: "听", probability: 0.33 },
+        { word: "得", probability: 0.77 },
+        { word: "见", probability: 0.99 },
+        { word: "听", probability: 0.99 },
+        { word: "得", probability: 0.99 },
+        { word: "见", probability: 0.99 }
+      ]
+    }]
+  }), ["夜雨", "秋雨", "听得见"]);
+  assert.equal(decision.shouldNotifyAgent, true);
+});
+
+test("does not trust non-rabilink or non-mobile streams as verified speakers", () => {
+  const speech = decideSpeechHotDeliveryQuality(ingress({
+    messageAdapterType: "speech",
+    sourceDeviceKind: "mobile",
+    sourceDeviceId: "pc-mobile",
+    segments: [{
+      ...ingress().segments[0],
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined
+    }]
+  }), ["夜雨"]);
+  assert.equal(speech.reason, "speaker_unverified");
+  const desktop = decideSpeechHotDeliveryQuality(ingress({
+    sourceDeviceKind: "desktop",
+    sourceDeviceId: "rabi-pc",
+    segments: [{
+      ...ingress().segments[0],
+      speakerDecision: "voiceprint_unknown_cluster",
+      speakerId: undefined
+    }]
+  }), ["夜雨"]);
+  assert.equal(desktop.reason, "speaker_unverified");
 });

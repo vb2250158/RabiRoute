@@ -4610,13 +4610,15 @@ export default {
     if (this.configurationModel) return this.configurationModel;
     if (this.configurationModelPromise) return this.configurationModelPromise;
     if (typeof LanguageModel === "undefined") return null;
+    const gateway = this.selectedGatewayConfig();
+    const preferredModel = typeof gateway?.agentModel === "string" ? gateway.agentModel.trim() : "";
     const generation = Number(this.configurationModelGeneration || 0);
     const creation = (async () => {
       const availability = typeof LanguageModel.availability === "function"
         ? await LanguageModel.availability()
         : "available";
       if (availability !== "available") return null;
-      const session = await LanguageModel.create(configurationLanguageModelOptions());
+      const session = await LanguageModel.create(configurationLanguageModelOptions(preferredModel));
       if (generation !== this.configurationModelGeneration || this.destroyed) {
         if (session && typeof session.destroy === "function") session.destroy();
         return null;

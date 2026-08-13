@@ -82,6 +82,11 @@ const quickAgentChoices: Array<{ type: AgentAdapterType; title: string; note: st
   { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" }
 ];
 
+const agentModelChoices: string[] = [
+  "gpt-5.3",
+  "gpt-5.6"
+];
+
 const agentScan = ref({
   threadNames: [] as string[],
   cwdOptions: [] as string[],
@@ -715,7 +720,7 @@ const steps = computed(() => [
   {
     value: 3,
     title: "人格与保存",
-    note: form.agentRoleId || "不配置人格",
+    note: `${form.agentRoleId || "不配置人格"}${form.agentModel ? ` · ${form.agentModel}` : " · 默认模型"}`,
     done: personaReady.value,
     icon: "mdi-numeric-3"
   }
@@ -1405,12 +1410,21 @@ async function apply() {
                     </div>
                   </template>
                 </v-combobox>
+                <v-combobox
+                  v-model="form.agentModel"
+                  :items="agentModelChoices"
+                  label="Agent 模型（播放文字）"
+                  placeholder="留空使用默认"
+                  hint="额度不足时可切到 gpt-5.3。可手动输入自定义模型名。"
+                  clearable
+                />
                 <div class="quick-review">
                   <div class="status-row"><span>消息入口</span><b>{{ form.adapters.map(adapterLabel).join(" + ") }}</b></div>
                   <div class="status-row"><span>Agent</span><b>{{ quickAgentChoices.find(agent => agent.type === selectedAgent)?.title || selectedAgent }}</b></div>
                   <div class="status-row"><span>{{ agentPrimaryLabel() }}</span><b>{{ currentProject() || "未填写" }}</b></div>
                   <div class="status-row"><span>{{ agentSessionLabel() }}</span><b>{{ agentSessionSummary() }}</b></div>
                   <div class="status-row"><span>人格</span><b>{{ form.agentRoleId || "不配置人格" }}</b></div>
+                  <div class="status-row"><span>模型</span><b>{{ form.agentModel || "默认模型" }}</b></div>
                 </div>
                 <v-alert v-if="!canSave" class="mt-4" type="warning" variant="tonal">
                   {{ saveBlockReason || "还有必要字段没有填写，请回到对应步骤补全。" }}

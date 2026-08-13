@@ -30,6 +30,7 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
         stream = FakeStream()
         transcribed = asyncio.Event()
         submitted: list[tuple[str, str, object, object]] = []
+        lifecycle: list[str] = []
 
         async def transcribe(path: Path, config) -> TranscriptionResult:
             assert path.read_bytes()[:4] == b"RIFF"
@@ -38,6 +39,8 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
             return TranscriptionResult(text="常驻转录成功", language="zh", duration=0.3, provider="fake-asr", model="local")
 
         async def submit(result: TranscriptionResult, session_id: str, utterance, input_source) -> dict[str, object]:
+            assert lifecycle == ["persisted"]
+            lifecycle.append("submitted")
             submitted.append((result.text, session_id, utterance, input_source))
             return {
                 "status": "delivered",
@@ -45,12 +48,16 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
                 "deliveries": [{"routeId": "voice-route", "messageId": "route-one", "status": "delivered"}],
             }
 
+        def persist(_result, _config, _started_at, _audio_path, _input_source) -> None:
+            lifecycle.append("persisted")
+
         service = MicrophoneService(
             state_path=tmp_path / "microphone.json",
             temp_dir=tmp_path / "temp",
             transcriber=transcribe,
             submitter=submit,
             playback_active=lambda: False,
+            record_transcription=persist,
             stream_factory=lambda _config, _callback: stream,
         )
         await service.start(
@@ -112,6 +119,7 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
         ]
         assert all("text" not in item.get("details", {}) for item in snapshot["events"])
         assert len(submitted) == 1
+        assert lifecycle == ["persisted", "submitted"]
         assert submitted[0][:2] == ("常驻转录成功", "session-one")
         assert submitted[0][2].started_at > 0
         assert submitted[0][2].completed_at >= submitted[0][2].started_at
@@ -338,9 +346,9 @@ def test_record_persistence_failure_preserves_terminal_route_receipt(tmp_path: P
         assert snapshot["history"][0]["deliveries"][0]["reason"] == "keyword_not_matched"
         assert snapshot["stats"]["recorded"] == 1
         assert snapshot["stats"]["delivery_failed"] == 0
-        assert snapshot["events"][0]["kind"] == "record_persistence_failed"
-        assert snapshot["events"][0]["stage"] == "storage"
-        assert "disk full" in snapshot["events"][0]["details"]["error"]
+        persistence_event = next(item for item in snapshot["events"] if item["kind"] == "record_persistence_failed")
+        assert persistence_event["stage"] == "storage"
+        assert "disk full" in persistence_event["details"]["error"]
         assert all(item["kind"] != "transcription_failed" for item in snapshot["events"])
         await service.stop()
 

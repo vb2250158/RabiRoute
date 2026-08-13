@@ -35,7 +35,7 @@ function Wait-ForEnter {
 function Test-Manager {
   param([string]$Url)
   try {
-    return Invoke-RestMethod -Uri "$Url/meta" -Method Get -TimeoutSec 2
+    return Invoke-RestMethod -Uri "$Url/meta" -Method Get -TimeoutSec 20
   } catch {
     return $null
   }
@@ -157,7 +157,7 @@ function Stop-StaleProjectManager {
   Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
 
   try {
-    Invoke-RestMethod -Uri "$ManagerUrl/manager/shutdown" -Method Post -TimeoutSec 2 | Out-Null
+    Invoke-RestMethod -Uri "$ManagerUrl/manager/shutdown" -Method Post -TimeoutSec 10 | Out-Null
   } catch {
     Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Graceful shutdown did not complete: $($_.Exception.Message)"
   }
@@ -707,7 +707,7 @@ try {
 
   Write-Info "Manager is ready at $ManagerUrl."
   try {
-    $gatewayPayload = Invoke-RestMethod -Uri "$ManagerUrl/gateways" -Method Get -TimeoutSec 3
+    $gatewayPayload = Invoke-RestMethod -Uri "$ManagerUrl/gateways" -Method Get -TimeoutSec 10
     $runningCount = @($gatewayPayload.data.manager | Where-Object { $_.running }).Count
     Write-Info "Gateway rows online: $runningCount"
     Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Gateway rows online: $runningCount"

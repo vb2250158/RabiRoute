@@ -293,7 +293,7 @@ public final class RabiGlassPcBackend {
             audioStreamRetryWaiting = false;
             ensureAudioStream(desiredAudioStreamSource, desiredAudioStreamRoute);
             while (audioUploadBuffer.ready()) flushAudioStreamChunk();
-            if (recovering) listener.onStatus("网络已恢复 · 待确认 PCM 已续传并追上实时流");
+            if (recovering) listener.onStatus("网络连接正常 · 持续聆听中");
         } catch (Throwable error) {
             handleAudioStreamFailure(error);
         }

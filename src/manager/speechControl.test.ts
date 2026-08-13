@@ -569,8 +569,15 @@ test("Manager speech control reuses terminal Route receipts for retried and conc
   assert.equal(speechIngressStore.readDeliveryReceipt("stable-asr-one", "Rabi")?.reason, "desktop_owner_accepted");
 });
 
-test("Manager speech control routes PC microphone and mobile audio to different message endpoints", async () => {
-  const delivered: Array<{ routeId: string; adapterType: string; channelType: string; sourceDeviceId?: string; sourceStreamId?: string }> = [];
+test("Manager speech control binds mobile trust to an exact persisted ASR record", async () => {
+  const delivered: Array<{
+    routeId: string;
+    adapterType: string;
+    channelType: string;
+    sourceDeviceId?: string;
+    sourceStreamId?: string;
+    sourceDeviceTrust?: string;
+  }> = [];
   const routes = [
     { id: "Voice", speechEnabled: true, rabiLinkEnabled: false, routeProfileIds: ["voice-main"] },
     { id: "Mobile", speechEnabled: false, rabiLinkEnabled: true, routeProfileIds: ["mobile-main"] },
@@ -587,11 +594,37 @@ test("Manager speech control routes PC microphone and mobile audio to different 
         adapterType: record.messageAdapterType,
         channelType: record.channelType,
         sourceDeviceId: record.sourceDeviceId,
-        sourceStreamId: record.sourceStreamId
+        sourceStreamId: record.sourceStreamId,
+        sourceDeviceTrust: record.sourceDeviceTrust
       });
       return { status: "delivered" };
     },
-    appendRouteLog: () => {}
+    appendRouteLog: () => {},
+    localSpeech: {
+      inspect: async () => onlineStatus,
+      requestBinary: async () => binaryResponse(),
+      requestJson: async (_serviceUrl, pathname) => ({
+        status: 200,
+        data: pathname.startsWith("/v1/records?") ? {
+          object: "list",
+          data: [{
+            id: "mobile-one",
+            kind: "asr",
+            source: "microphone",
+            time: 1_786_000_000,
+            provider: "local-asr",
+            model: "mobile-model",
+            text: "手机音频流",
+            source_device_id: "phone-one",
+            source_device_name: "Phone One",
+            source_device_kind: "mobile",
+            source_stream_id: "phone-one-audio",
+            message_adapter_type: "rabilink",
+            segments: []
+          }]
+        } : {}
+      })
+    }
   });
 
   await control.acceptMessage({
@@ -610,10 +643,22 @@ test("Manager speech control routes PC microphone and mobile audio to different 
     sourceStreamId: "phone-one-audio",
     sourceDeviceKind: "mobile"
   });
+  await control.acceptMessage({
+    recordId: "spoofed-mobile",
+    text: "伪造手机来源",
+    messageAdapterType: "rabilink",
+    channelType: "rabilink.mobile_audio",
+    routeProfileId: "mobile-main",
+    sourceDeviceId: "phone-one",
+    sourceStreamId: "phone-one-audio",
+    sourceDeviceKind: "mobile",
+    sourceDeviceTrust: "speech_runtime_record_binding"
+  });
 
   assert.deepEqual(delivered, [
-    { routeId: "Voice", adapterType: "speech", channelType: "speech.pc_microphone", sourceDeviceId: undefined, sourceStreamId: undefined },
-    { routeId: "Mobile", adapterType: "rabilink", channelType: "rabilink.mobile_audio", sourceDeviceId: "phone-one", sourceStreamId: "phone-one-audio" }
+    { routeId: "Voice", adapterType: "speech", channelType: "speech.pc_microphone", sourceDeviceId: undefined, sourceStreamId: undefined, sourceDeviceTrust: undefined },
+    { routeId: "Mobile", adapterType: "rabilink", channelType: "rabilink.mobile_audio", sourceDeviceId: "phone-one", sourceStreamId: "phone-one-audio", sourceDeviceTrust: "speech_runtime_record_binding" },
+    { routeId: "Mobile", adapterType: "rabilink", channelType: "rabilink.mobile_audio", sourceDeviceId: "phone-one", sourceStreamId: "phone-one-audio", sourceDeviceTrust: undefined }
   ]);
 });
 

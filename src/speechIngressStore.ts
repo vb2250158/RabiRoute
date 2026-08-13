@@ -95,6 +95,9 @@ export function normalizeSpeechIngressRecord(
     sourceDeviceId: oneLine(command.sourceDeviceId) || undefined,
     sourceDeviceName: oneLine(command.sourceDeviceName) || undefined,
     sourceDeviceKind: oneLine(command.sourceDeviceKind) || undefined,
+    sourceDeviceTrust: command.sourceDeviceTrust === "speech_runtime_record_binding"
+      ? "speech_runtime_record_binding"
+      : undefined,
     sourceStreamId: oneLine(command.sourceStreamId) || undefined,
     sourceHostId: oneLine(command.sourceHostId) || undefined,
     sourceHostName: oneLine(command.sourceHostName) || undefined,

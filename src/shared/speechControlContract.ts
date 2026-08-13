@@ -277,6 +277,8 @@ export type SpeechAudioStreamSelectionCommand = {
 
 export type SpeechMessageStatus = "delivered" | "recorded" | "failed";
 
+export type SpeechSourceDeviceTrust = "speech_runtime_record_binding";
+
 export type SpeechHistoryItem = {
   time: number;
   text: string;
@@ -458,6 +460,8 @@ export type SpeechMessageCommand = {
   sourceDeviceId?: string | null;
   sourceDeviceName?: string | null;
   sourceDeviceKind?: string | null;
+  /** Manager-owned evidence. Caller input is ignored and recomputed from the persisted speech-runtime record. */
+  sourceDeviceTrust?: SpeechSourceDeviceTrust | null;
   /** Transient capture-stream identity, separate from the stable reply device. */
   sourceStreamId?: string | null;
   /** Rabi PC that owned VAD/ASR for this message. Manager overwrites caller input. */
@@ -492,6 +496,7 @@ export type SpeechIngressRecord = {
   sourceDeviceId?: string;
   sourceDeviceName?: string;
   sourceDeviceKind?: string;
+  sourceDeviceTrust?: SpeechSourceDeviceTrust;
   sourceStreamId?: string;
   sourceHostId?: string;
   sourceHostName?: string;

@@ -719,6 +719,20 @@ class MicrophoneService:
                     "sample_rate": input_source.sample_rate,
                     "submitted": False,
                 }
+                if self._record_transcription is not None:
+                    try:
+                        if target is None:
+                            raise RuntimeError("ASR source audio was not available for record persistence.")
+                        self._record_transcription(result, self.config, started_at, target, input_source)
+                    except Exception as exc:
+                        self._emit_event(
+                            "storage",
+                            "record_persistence_failed",
+                            "语音记录写入失败，本次转写将保持记录态并继续尝试安全投递",
+                            level="error",
+                            session_id=self.config.session_id,
+                            error=f"{type(exc).__name__}: {exc}"[:500],
+                        )
                 if self.config.auto_submit:
                     self._emit_event(
                         "route",
@@ -812,20 +826,6 @@ class MicrophoneService:
                             "语音广播失败",
                             level="error",
                             error=self._last_submit_error,
-                        )
-                if self._record_transcription is not None:
-                    try:
-                        if target is None:
-                            raise RuntimeError("ASR source audio was not available for record persistence.")
-                        self._record_transcription(result, self.config, started_at, target, input_source)
-                    except Exception as exc:
-                        self._emit_event(
-                            "storage",
-                            "record_persistence_failed",
-                            "语音记录写入失败，已保留本次转写与投递状态",
-                            level="error",
-                            session_id=self.config.session_id,
-                            error=f"{type(exc).__name__}: {exc}"[:500],
                         )
                 self._history.appendleft(item)
                 self._error = ""

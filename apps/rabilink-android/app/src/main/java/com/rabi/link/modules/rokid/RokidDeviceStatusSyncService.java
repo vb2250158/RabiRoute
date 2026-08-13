@@ -25,7 +25,7 @@ import java.util.concurrent.Executors;
 
 public final class RokidDeviceStatusSyncService extends Service implements RokidCxrController.Listener {
     private static final String TAG = "RabiLinkGlassStatus";
-    private static final String CHANNEL_ID = "rabilink_glass_status";
+    private static final String CHANNEL_ID = "rabilink_glass_status_v2";
     private static final int NOTIFICATION_ID = 1703;
     private static final long QUERY_INTERVAL_MS = 60_000L;
     private static final long RECONNECT_INTERVAL_MS = 15_000L;
@@ -176,11 +176,13 @@ public final class RokidDeviceStatusSyncService extends Service implements Rokid
 
     private void createNotificationChannel() {
         NotificationManager manager = getSystemService(NotificationManager.class);
-        manager.createNotificationChannel(new NotificationChannel(
+        NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "RabiLink 眼镜状态",
-                NotificationManager.IMPORTANCE_LOW
-        ));
+                NotificationManager.IMPORTANCE_DEFAULT
+        );
+        channel.setSound(null, null);
+        manager.createNotificationChannel(channel);
     }
 
     private Notification notification(String text) {
